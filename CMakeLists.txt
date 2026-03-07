@@ -208,6 +208,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/entry.o
   ${BUILD_DIR}/kernel.o
   ${BUILD_DIR}/memory.o
+  ${BUILD_DIR}/paging.o
   ${BUILD_DIR}/physmem.o
   ${BUILD_DIR}/ipc.o
   ${BUILD_DIR}/process.o
@@ -228,6 +229,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/arch/x86_64/entry.S
   ${KERNEL_DIR}/kernel.c
   ${KERNEL_DIR}/memory.c
+  ${KERNEL_DIR}/paging.c
   ${KERNEL_DIR}/physmem.c
   ${KERNEL_DIR}/ipc.c
   ${KERNEL_DIR}/process.c
@@ -244,7 +246,7 @@ target_sources(bootloader_sources INTERFACE ${BOOT_SOURCES} ${BOOT_DIR}/uefi.h $
 target_include_directories(bootloader_sources INTERFACE ${BOOT_DIR} ${KERNEL_DIR}/include)
 
 add_library(kernel_sources INTERFACE)
-target_sources(kernel_sources INTERFACE ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/include/ipc.h ${KERNEL_DIR}/include/process.h ${KERNEL_DIR}/include/spinlock.h ${KERNEL_DIR}/include/wasm_chardev.h ${WASM_DIR}/wamr_runtime.h)
+target_sources(kernel_sources INTERFACE ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/include/ipc.h ${KERNEL_DIR}/include/paging.h ${KERNEL_DIR}/include/process.h ${KERNEL_DIR}/include/spinlock.h ${KERNEL_DIR}/include/wasm_chardev.h ${WASM_DIR}/wamr_runtime.h)
 target_include_directories(kernel_sources INTERFACE ${KERNEL_DIR}/include ${WASM_DIR})
 
 # IDE aggregation targets: helps CLion mark files as part of the CMake project
@@ -260,6 +262,7 @@ add_custom_target(kernel_ide SOURCES
   ${KERNEL_SOURCES}
   ${KERNEL_DIR}/include/boot.h
   ${KERNEL_DIR}/include/ipc.h
+  ${KERNEL_DIR}/include/paging.h
   ${KERNEL_DIR}/include/process.h
   ${KERNEL_DIR}/include/spinlock.h
   ${KERNEL_DIR}/include/wasm_chardev.h
@@ -393,6 +396,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/entry.S -o ${BUILD_DIR}/entry.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel.c -o ${BUILD_DIR}/kernel.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory.c -o ${BUILD_DIR}/memory.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/paging.c -o ${BUILD_DIR}/paging.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/physmem.c -o ${BUILD_DIR}/physmem.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/ipc.c -o ${BUILD_DIR}/ipc.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process.c -o ${BUILD_DIR}/process.o

@@ -82,6 +82,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - A minimal physical frame allocator ingests the UEFI memory map (conventional + boot services memory).
 - The physical frame allocator supports freeing pages, and contexts can allocate regions from it.
 - `mm_init` scaffolds a root context with basic linear/stack/heap regions.
+- `mm_init` now sets up kernel-owned page tables, reloads `CR3`, and installs a higher-half alias mapping at `0xFFFFFFFF80000000`.
 - The root context also reserves placeholder IPC and device regions.
 - `mm_context_create` allocates a new context and default regions.
 - WAMR runtime init uses a fixed page pool and `wamr_context_bind` ties a context's regions to WAMR sizing.

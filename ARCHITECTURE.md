@@ -98,10 +98,10 @@ UEFI firmware
 ## Kernel Early Init
 Fixed:
 - Physical memory manager from UEFI memory map.
+- Page table setup with a kernel-owned root table and higher-half alias mapping.
 - Early console via COM1 serial.
 
 Remaining:
-- Page table setup and higher-half mapping (optional later).
 - Basic CPU init (GDT/IDT, exception handlers).
 - Framebuffer console path (serial is implemented; framebuffer is still pending).
 
@@ -112,6 +112,8 @@ Remaining:
 - A simple physical frame allocator scans the UEFI memory map and tracks usable ranges.
 - The frame allocator now supports freeing pages and backing context region allocation.
 - `mm_init` provisions a root context with basic linear/stack/heap regions plus placeholder IPC/device regions.
+- `mm_init` now installs kernel-owned x86_64 page tables and reloads `CR3`.
+- The paging scaffold keeps low-memory identity mapping and adds higher-half aliases at `0xFFFFFFFF80000000`.
 - `mm_context_create` can allocate new contexts with default linear/stack/heap regions.
 - WAMR initialization currently uses a fixed pool allocator and per-context bindings for linear/stack/heap sizing.
 - Early boot currently defers WAMR runtime initialization to avoid blocking process/scheduler bring-up while freestanding platform stubs are being hardened.

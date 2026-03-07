@@ -2,6 +2,7 @@
 #include "physmem.h"
 #include "serial.h"
 
+#define PAGE_SIZE 0x1000ULL
 static const boot_info_t *g_boot_info;
 static mm_context_t g_contexts[MM_MAX_CONTEXTS];
 static uint32_t g_context_count;
@@ -41,4 +42,15 @@ int mm_context_add_region(mm_context_t *ctx, uint64_t base, uint64_t size, uint3
     region->flags = flags;
     region->type = type;
     return 0;
+}
+
+int mm_context_alloc_region(mm_context_t *ctx, uint64_t pages, uint32_t flags, mem_region_type_t type) {
+    if (!ctx || pages == 0) {
+        return -1;
+    }
+    uint64_t base = pfa_alloc_pages(pages);
+    if (!base) {
+        return -1;
+    }
+    return mm_context_add_region(ctx, base, pages * PAGE_SIZE, flags, type);
 }

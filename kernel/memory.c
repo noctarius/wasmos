@@ -35,19 +35,6 @@ void mm_init(const boot_info_t *boot_info) {
     buf[19] = '\0';
     serial_write(buf);
 
-    mm_context_t *ctx1 = mm_context_create(1);
-    if (ctx1) {
-        serial_write("[mm] ctx1 regions=");
-        value = ctx1->region_count;
-        buf[0] = '0';
-        buf[1] = 'x';
-        for (int i = 0; i < 16; ++i) {
-            buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
-        }
-        buf[18] = '\n';
-        buf[19] = '\0';
-        serial_write(buf);
-    }
 }
 
 int mm_context_init(mm_context_t *ctx, uint32_t id) {

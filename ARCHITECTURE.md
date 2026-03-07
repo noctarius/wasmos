@@ -103,6 +103,7 @@ UEFI firmware
 - The frame allocator now supports freeing pages and backing context region allocation.
 - `mm_init` provisions a root context with basic linear/stack/heap regions plus placeholder IPC/device regions.
 - `mm_context_create` can allocate new contexts with default linear/stack/heap regions.
+- WAMR initialization currently uses a fixed pool allocator and per-context bindings for linear/stack/heap sizing.
 
 ## WAMR Integration (Planned)
 - WAMR is vendored via git subtree at `libs/wasm/wasm-micro-runtime`.

@@ -19,6 +19,7 @@ typedef struct wamr_module wamr_module_t;
 typedef struct wamr_instance wamr_instance_t;
 
 int wamr_runtime_init(void);
+int wamr_runtime_init_with_pool(void *heap_buf, uint32_t heap_size);
 void wamr_runtime_shutdown(void);
 
 int wamr_load_module(const uint8_t *buf, uint32_t size,

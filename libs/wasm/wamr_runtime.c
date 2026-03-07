@@ -3,8 +3,27 @@
 #if defined(WAMR_ENABLED)
 #include "wasm_export.h"
 
+static void memzero8(void *dst, uint32_t size) {
+    uint8_t *d = (uint8_t *)dst;
+    for (uint32_t i = 0; i < size; ++i) {
+        d[i] = 0;
+    }
+}
+
 int wamr_runtime_init(void) {
     return wasm_runtime_init() ? 1 : 0;
+}
+
+int wamr_runtime_init_with_pool(void *heap_buf, uint32_t heap_size) {
+    if (!heap_buf || heap_size == 0) {
+        return 0;
+    }
+    RuntimeInitArgs init_args;
+    memzero8(&init_args, sizeof(init_args));
+    init_args.mem_alloc_type = Alloc_With_Pool;
+    init_args.mem_alloc_option.pool.heap_buf = heap_buf;
+    init_args.mem_alloc_option.pool.heap_size = heap_size;
+    return wasm_runtime_full_init(&init_args) ? 1 : 0;
 }
 
 void wamr_runtime_shutdown(void) {
@@ -94,6 +113,12 @@ int wamr_call_function(wamr_instance_t *instance,
 #else
 
 int wamr_runtime_init(void) {
+    return 0;
+}
+
+int wamr_runtime_init_with_pool(void *heap_buf, uint32_t heap_size) {
+    (void)heap_buf;
+    (void)heap_size;
     return 0;
 }
 

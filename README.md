@@ -81,3 +81,4 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - `mm_init` scaffolds a root context with basic linear/stack/heap regions.
 - The root context also reserves placeholder IPC and device regions.
 - `mm_context_create` allocates a new context and default regions.
+- WAMR runtime init uses a fixed page pool and `wamr_context_bind` ties a context's regions to WAMR sizing.

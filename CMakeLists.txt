@@ -168,6 +168,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/kernel.o
   ${BUILD_DIR}/memory.o
   ${BUILD_DIR}/physmem.o
+  ${BUILD_DIR}/wamr_context.o
   ${BUILD_DIR}/serial.o
   ${BUILD_DIR}/wamr_runtime.o
 )
@@ -181,6 +182,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/kernel.c
   ${KERNEL_DIR}/memory.c
   ${KERNEL_DIR}/physmem.c
+  ${KERNEL_DIR}/wamr_context.c
   ${KERNEL_DIR}/serial.c
   ${WASM_DIR}/wamr_runtime.c
 )
@@ -220,6 +222,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel.c -o ${BUILD_DIR}/kernel.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory.c -o ${BUILD_DIR}/memory.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/physmem.c -o ${BUILD_DIR}/physmem.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wamr_context.c -o ${BUILD_DIR}/wamr_context.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/serial.c -o ${BUILD_DIR}/serial.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${WASM_DIR}/wamr_runtime.c -o ${BUILD_DIR}/wamr_runtime.o
   COMMAND ${LLD_PATH} ${LDFLAGS_KERNEL} -o ${BUILD_DIR}/kernel.elf ${KERNEL_OBJS}

@@ -121,6 +121,8 @@ UEFI firmware
 - Enumerate hardware via ACPI and PCI.
 - Provide driver registry and resource manager.
 - Expose driver APIs to WASM userland.
+- Current scaffold includes a minimal WASM-backed character device (`kernel/wasm_chardev.c`) with a tiny `chardev_t` interface.
+- The driver can attach to a WAMR module instance and dispatch byte I/O via exported WASM functions (`chardev_read_byte`, `chardev_write_byte`).
 
 ## Interfaces
 ### boot_info_t

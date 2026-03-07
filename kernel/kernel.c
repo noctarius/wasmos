@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "wamr_context.h"
 #include "wamr_runtime.h"
+#include "wasm_chardev.h"
 
 static void hang(void) {
     for (;;) {
@@ -21,6 +22,7 @@ void kmain(boot_info_t *boot_info) {
 
     // Placeholder: initialize memory management, drivers, then WAMR.
     wamr_context_init();
+    wasm_chardev_init();
 
     hang();
 }

@@ -87,3 +87,5 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - WAMR custom object builds propagate upstream runtime feature defines and compile third-party sources with `-Wno-error`.
 - `WAMR_DISABLE_APP_ENTRY=1` is set for the freestanding kernel profile.
 - The `wasmos` platform adapter includes WAMR's shared math implementation and provides freestanding libc/fortify shims (e.g. `__memcpy_chk`, `__memset_chk`).
+- A minimal WASM-backed chardev driver is initialized in `kmain` (`kernel/wasm_chardev.c`).
+- The WASM chardev expects optional exports `chardev_init`, `chardev_read_byte`, and `chardev_write_byte` on an attached module instance.

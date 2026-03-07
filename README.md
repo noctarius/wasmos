@@ -73,3 +73,4 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - Overlapping PT_LOAD segments reuse existing allocations instead of re-allocating pages.
 - The kernel entry receives a `boot_info_t` with framebuffer/memory map placeholders.
 - The kernel emits early serial output on COM1 (QEMU `-serial`).
+- Memory management scaffolding tracks per-WAMR-context memory regions (microkernel model).

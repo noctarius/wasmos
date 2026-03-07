@@ -86,7 +86,7 @@ UEFI firmware
 ## Kernel Entry Responsibilities
 - Establish a known stack.
 - Clear BSS for C runtime expectations.
-- Call `kmain(boot_info_t *)` with boot data.
+- Preserve incoming `boot_info_t *` and call `kmain(boot_info_t *)` with boot data.
 
 ## Kernel Early Init (Planned)
 - Physical memory manager from UEFI memory map.

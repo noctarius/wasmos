@@ -30,10 +30,15 @@ int mm_context_init(mm_context_t *ctx, uint32_t id) {
     if (!ctx || g_context_count >= MM_MAX_CONTEXTS) {
         return -1;
     }
-    ctx->id = id;
-    ctx->region_count = 0;
-    // Avoid libc memcpy in freestanding build.
-    g_contexts[g_context_count] = *ctx;
+    mm_context_t *slot = &g_contexts[g_context_count];
+    slot->id = id;
+    slot->region_count = 0;
+    for (uint32_t i = 0; i < MM_MAX_REGIONS; ++i) {
+        slot->regions[i].base = 0;
+        slot->regions[i].size = 0;
+        slot->regions[i].flags = 0;
+        slot->regions[i].type = MEM_REGION_WASM_LINEAR;
+    }
     g_context_count++;
     return 0;
 }

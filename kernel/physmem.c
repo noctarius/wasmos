@@ -66,15 +66,25 @@ void pfa_init(const boot_info_t *boot_info) {
         return;
     }
 
+    serial_write("[pfa] desc size=");
+    write_hex(boot_info->memory_desc_size);
+    serial_write("[pfa] map size=");
+    write_hex(boot_info->memory_map_size);
+
+    uint64_t desc_size = boot_info->memory_desc_size;
+    uint64_t count = boot_info->memory_map_size / desc_size;
+    if (count > 4096) {
+        serial_write("[pfa] map too large, capping descriptors\n");
+        count = 4096;
+    }
+
     uint8_t *cursor = (uint8_t *)boot_info->memory_map;
-    uint64_t remaining = boot_info->memory_map_size;
-    while (remaining >= boot_info->memory_desc_size) {
+    for (uint64_t i = 0; i < count; ++i) {
         efi_memory_descriptor_t *desc = (efi_memory_descriptor_t *)cursor;
         if (is_usable(desc->Type)) {
             add_range(desc->PhysicalStart, desc->NumberOfPages);
         }
-        cursor += boot_info->memory_desc_size;
-        remaining -= boot_info->memory_desc_size;
+        cursor += desc_size;
     }
 
     serial_write("[pfa] ranges=");

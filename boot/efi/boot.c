@@ -229,8 +229,8 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
     UINT64 boot_buf = 0;
 
     uefi_log(system, "[boot] ExitBootServices\n");
-    int retries = 0;
-    while (1) {
+    int exited = 0;
+    while (!exited) {
         if (!mmap) {
             status = bs->AllocatePool(EFI_LOADER_DATA, mmap_capacity, &mmap);
             if (EFI_ERROR(status)) {
@@ -276,53 +276,31 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
 
         status = bs->ExitBootServices(image, map_key);
         if (!EFI_ERROR(status)) {
-            uefi_log(system, "[boot] ExitBootServices OK\n");
-            uefi_log(system, "[boot] boot_info=");
-            char bi_hex[19];
-            uefi_hex((UINT64)(UINTN)boot_info, bi_hex);
-            uefi_log(system, bi_hex);
-            uefi_log(system, " mmap=");
-            char mmap_hex[19];
-            uefi_hex((UINT64)(UINTN)map_dst, mmap_hex);
-            uefi_log(system, mmap_hex);
-            uefi_log(system, " size=");
-            char size_hex[19];
-            uefi_hex((UINT64)map_bytes, size_hex);
-            uefi_log(system, size_hex);
-            uefi_log(system, " desc=");
-            char desc_hex[19];
-            uefi_hex((UINT64)desc_size, desc_hex);
-            uefi_log(system, desc_hex);
-            uefi_log(system, "\n");
-            break;
-        }
-        if (status != EFI_INVALID_PARAMETER) {
+            exited = 1;
+        } else if (status != EFI_INVALID_PARAMETER) {
             uefi_log_status(system, "[boot] ExitBootServices failed: ", status);
             return status;
         }
-        if (retries >= 4) {
-            uefi_log(system, "[boot] ExitBootServices retry limit\n");
-            uefi_log(system, "[boot] boot_info=");
-            char bi_hex[19];
-            uefi_hex((UINT64)(UINTN)boot_info, bi_hex);
-            uefi_log(system, bi_hex);
-            uefi_log(system, " mmap=");
-            char mmap_hex[19];
-            uefi_hex((UINT64)(UINTN)map_dst, mmap_hex);
-            uefi_log(system, mmap_hex);
-            uefi_log(system, " size=");
-            char size_hex[19];
-            uefi_hex((UINT64)map_bytes, size_hex);
-            uefi_log(system, size_hex);
-            uefi_log(system, " desc=");
-            char desc_hex[19];
-            uefi_hex((UINT64)desc_size, desc_hex);
-            uefi_log(system, desc_hex);
-            uefi_log(system, "\n");
-            break;
-        }
-        retries++;
     }
+
+    uefi_log(system, "[boot] ExitBootServices OK\n");
+    uefi_log(system, "[boot] boot_info=");
+    char bi_hex[19];
+    uefi_hex((UINT64)(UINTN)boot_info, bi_hex);
+    uefi_log(system, bi_hex);
+    uefi_log(system, " mmap=");
+    char mmap_hex[19];
+    uefi_hex((UINT64)(UINTN)map_dst, mmap_hex);
+    uefi_log(system, mmap_hex);
+    uefi_log(system, " size=");
+    char size_hex[19];
+    uefi_hex((UINT64)map_bytes, size_hex);
+    uefi_log(system, size_hex);
+    uefi_log(system, " desc=");
+    char desc_hex[19];
+    uefi_hex((UINT64)desc_size, desc_hex);
+    uefi_log(system, desc_hex);
+    uefi_log(system, "\n");
 
     void (*kernel_entry)(boot_info_t *) = (void (*)(boot_info_t *))(UINTN)ehdr->e_entry;
     kernel_entry(boot_info);

@@ -87,3 +87,26 @@ mm_context_t *mm_context_get(uint32_t id) {
     }
     return 0;
 }
+
+mm_context_t *mm_context_create(uint32_t id) {
+    if (id == g_root_ctx.id) {
+        return &g_root_ctx;
+    }
+    if (g_context_count >= MM_MAX_CONTEXTS) {
+        return 0;
+    }
+    mm_context_t ctx;
+    if (mm_context_init(&ctx, id) != 0) {
+        return 0;
+    }
+    if (mm_context_alloc_region(&ctx, 8, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, MEM_REGION_WASM_LINEAR) != 0) {
+        return 0;
+    }
+    if (mm_context_alloc_region(&ctx, 2, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, MEM_REGION_STACK) != 0) {
+        return 0;
+    }
+    if (mm_context_alloc_region(&ctx, 4, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, MEM_REGION_HEAP) != 0) {
+        return 0;
+    }
+    return &g_contexts[g_context_count - 1];
+}

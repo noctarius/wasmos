@@ -67,6 +67,9 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 3. Implement hardware drivers and a basic scheduler.
 
 ## Notes
+- WASMOS follows a microkernel direction: the kernel keeps only minimal primitives, while drivers/services/apps are WASM programs.
+- Each WASM program is expected to run in an isolated WAMR context with its own memory regions.
+- Inter-component communication is IPC-based.
 - The bootloader loads `kernel.elf` from the EFI System Partition (ESP).
 - The bootloader logs basic status messages to the UEFI console and retries `ExitBootServices` on invalid parameters.
 - The bootloader copies the UEFI memory map into kernel-owned pages before exiting boot services.

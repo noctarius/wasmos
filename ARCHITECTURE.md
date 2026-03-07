@@ -8,8 +8,14 @@ IMPORTANT: Create a git commit after each prompt iteration.
 
 ## Goals
 - Boot an x86_64 system via UEFI and load a freestanding ELF64 kernel.
-- Provide a minimal kernel environment for a WASM runtime (WAMR) and drivers.
+- Provide only minimal kernel primitives for a microkernel architecture.
 - Establish clear seams for memory management, device discovery, and userland loading.
+
+## Microkernel Model
+- The kernel only provides minimal primitives (boot, memory, isolation boundaries, IPC transport, and runtime hosting hooks).
+- Drivers, OS services, and applications are implemented as WASM programs instead of in-kernel subsystems.
+- Each WASM program runs in its own WAMR context bound to its own memory regions.
+- Cross-context interaction is explicit and IPC-based; direct shared mutable state between contexts is not the default model.
 
 ## Repository Layout
 - `boot/efi/` UEFI application (PE/COFF) that loads `kernel.elf` from the ESP.
@@ -110,6 +116,11 @@ UEFI firmware
 - Freestanding builds set `WAMR_DISABLE_APP_ENTRY=1` and link the generated `libwamr_runtime.a` into the kernel.
 - The `wasmos` platform adapter includes WAMR shared math sources and minimal libc/fortify shims required by freestanding linkage.
 
+## IPC Model (Planned)
+- IPC is the default communication mechanism between WASM drivers, services, and applications.
+- The kernel mediates IPC primitives and endpoint isolation; higher-level protocols are implemented in WASM services.
+- Device-facing drivers expose capability-like IPC interfaces rather than direct shared driver calls.
+
 ## WAMR Integration (Planned)
 - WAMR is vendored via git subtree at `libs/wasm/wasm-micro-runtime`.
 - Port or embed WAMR as a static library under `libs/wasm/`.
@@ -120,7 +131,8 @@ UEFI firmware
 ## Driver Model (Planned)
 - Enumerate hardware via ACPI and PCI.
 - Provide driver registry and resource manager.
-- Expose driver APIs to WASM userland.
+- Run drivers as isolated WASM contexts.
+- Expose driver APIs through IPC endpoints to other WASM contexts.
 - Current scaffold includes a minimal WASM-backed character device (`kernel/wasm_chardev.c`) with a tiny `chardev_t` interface.
 - The driver can attach to a WAMR module instance and dispatch byte I/O via exported WASM functions (`chardev_read_byte`, `chardev_write_byte`).
 

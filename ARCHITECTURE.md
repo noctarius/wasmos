@@ -80,6 +80,7 @@ UEFI firmware
 - Parse ELF64 header and PT_LOAD program headers.
 - Allocate pages and load segments at physical addresses.
 - Construct `boot_info_t` and capture the UEFI memory map.
+- Log basic status messages to the UEFI console.
 - Exit boot services and transfer control to kernel entry.
 
 ## Kernel Entry Responsibilities

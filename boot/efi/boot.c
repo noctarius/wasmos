@@ -288,11 +288,6 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         boot_info->memory_map_size = mmap_size;
         boot_info->memory_desc_size = desc_size;
         boot_info->memory_desc_version = desc_version;
-        uefi_log(system, "[boot] boot_info retry size=");
-        char size_hex_retry[19];
-        uefi_hex((UINT64)mmap_size, size_hex_retry);
-        uefi_log(system, size_hex_retry);
-        uefi_log(system, "\n");
         status = bs->ExitBootServices(image, map_key);
         if (!EFI_ERROR(status)) {
             break;

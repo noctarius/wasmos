@@ -87,7 +87,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - The root context also reserves placeholder IPC and device regions.
 - `mm_context_create` allocates a new context and default regions.
 - WAMR runtime init uses a fixed page pool and `wamr_context_bind` ties a context's regions to WAMR sizing.
-- WAMR runtime initialization is on-demand through the kernel wasm driver host layer and currently uses a kernel-owned static pool.
+- WAMR runtime initialization is on-demand through the kernel wasm driver host layer and currently uses a kernel-owned static pool (2 MiB).
 - WAMR is enabled by default and links the WAMR runtime library unless `-DWAMR_LINK=OFF` is set.
 - `WAMR_LINK` builds the WAMR runtime with a minimal `wasmos` platform in `platform/wasmos/`.
 - WAMR custom object builds propagate upstream runtime feature defines and compile third-party sources with `-Wno-error`.
@@ -99,6 +99,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - Blocked processes can now be resumed by context (`process_wake_by_context`) when IPC traffic arrives for owned endpoints.
 - IPC endpoint permissions are enforced by context-aware APIs (`ipc_send_from`, `ipc_recv_for`) for source-endpoint ownership and endpoint receive ownership.
 - The kernel now builds WASM driver modules from project-owned sources under `drivers/wasm/` and embeds them into the kernel image.
+- Driver wasm link settings currently constrain module stack/linear memory for low-footprint instantiation in the freestanding runtime pool.
 - A generic kernel wasm driver host (`kernel/wasm_driver.c`) loads embedded modules, instantiates them via WAMR, and dispatches IPC requests to exported driver handlers.
 - The WASM-backed chardev runs as an IPC service endpoint in a dedicated `chardev-server` process (`kernel/wasm_chardev.c`) using an embedded module from `drivers/wasm/chardev/chardev_server.c`.
 - The chardev server process blocks when its IPC queue is empty and is woken by incoming IPC messages.

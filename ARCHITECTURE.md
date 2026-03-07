@@ -115,7 +115,7 @@ Remaining:
 - `mm_init` now installs kernel-owned x86_64 page tables and reloads `CR3`.
 - The paging scaffold keeps low-memory identity mapping and adds higher-half aliases at `0xFFFFFFFF80000000`.
 - `mm_context_create` can allocate new contexts with default linear/stack/heap regions.
-- WAMR initialization uses a kernel-owned static pool allocator with per-context bindings for linear/stack/heap sizing.
+- WAMR initialization uses a kernel-owned static pool allocator (currently 2 MiB) with per-context bindings for linear/stack/heap sizing.
 - WAMR runtime initialization is performed on-demand by the kernel wasm driver host when the first wasm driver is started.
 - WAMR is enabled by default and links the runtime library unless `WAMR_LINK=OFF` is set.
 - The WAMR runtime build uses a minimal `wasmos` platform from `platform/wasmos/`.
@@ -164,6 +164,7 @@ Remaining:
 - Expose driver APIs through IPC endpoints to other WASM contexts.
 - Current scaffold includes a project-owned wasm driver source tree at `drivers/wasm/`.
 - The build compiles wasm drivers (for now: `drivers/wasm/chardev/chardev_server.c`) into `.wasm` binaries and embeds them into the kernel image as binary blobs.
+- Driver wasm binaries are linked with explicit stack and initial/max memory bounds to keep freestanding instantiation deterministic.
 - A kernel wasm driver host (`kernel/wasm_driver.c`) loads embedded modules, instantiates them with WAMR, allocates IPC endpoints, and dispatches IPC messages to a driver export.
 - The chardev service (`kernel/wasm_chardev.c`) runs in the spawned `chardev-server` process and bridges IPC request/response traffic to the wasm export `chardev_ipc_dispatch`.
 - The wasm chardev module also exports `chardev_init` and optional direct byte helpers (`chardev_read_byte`, `chardev_write_byte`).

@@ -51,6 +51,13 @@ static void add_range(uint64_t base, uint64_t pages) {
     if (pages == 0 || g_range_count >= (sizeof(g_ranges) / sizeof(g_ranges[0]))) {
         return;
     }
+    if (base == 0) {
+        if (pages <= 1) {
+            return;
+        }
+        base += PAGE_SIZE;
+        pages -= 1;
+    }
     if (g_range_count > 0) {
         pfa_range_t *prev = &g_ranges[g_range_count - 1];
         uint64_t prev_end = prev->base + prev->pages * PAGE_SIZE;

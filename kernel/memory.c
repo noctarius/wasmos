@@ -38,6 +38,28 @@ void mm_init(const boot_info_t *boot_info) {
         buf[18] = '\n';
         buf[19] = '\0';
         serial_write(buf);
+
+        serial_write("[mm] mmap ptr=");
+        uint64_t mmap_ptr = (uint64_t)g_boot_info->memory_map;
+        buf[0] = '0';
+        buf[1] = 'x';
+        for (int i = 0; i < 16; ++i) {
+            buf[2 + i] = hex[(mmap_ptr >> ((15 - i) * 4)) & 0xF];
+        }
+        buf[18] = '\n';
+        buf[19] = '\0';
+        serial_write(buf);
+
+        serial_write("[mm] desc size=");
+        uint64_t desc_value = g_boot_info->memory_desc_size;
+        buf[0] = '0';
+        buf[1] = 'x';
+        for (int i = 0; i < 16; ++i) {
+            buf[2 + i] = hex[(desc_value >> ((15 - i) * 4)) & 0xF];
+        }
+        buf[18] = '\n';
+        buf[19] = '\0';
+        serial_write(buf);
     }
 }
 

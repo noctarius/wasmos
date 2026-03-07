@@ -94,6 +94,11 @@ UEFI firmware
 - Early console (serial or framebuffer). Current scaffold uses COM1 serial.
 - Basic CPU init (GDT/IDT, exception handlers).
 
+## Memory Management Scaffold
+- Microkernel model: every driver/service/app runs in its own WAMR context.
+- Each context owns a bounded set of memory regions (linear memory, IPC, device, stack, heap, code).
+- Current scaffold tracks per-context regions and defers real allocation to later.
+
 ## WAMR Integration (Planned)
 - WAMR is vendored via git subtree at `libs/wasm/wasm-micro-runtime`.
 - Port or embed WAMR as a static library under `libs/wasm/`.

@@ -166,6 +166,7 @@ set(LDFLAGS_KERNEL -nostdlib -T ${KERNEL_DIR}/arch/x86_64/linker.ld)
 set(KERNEL_OBJS
   ${BUILD_DIR}/entry.o
   ${BUILD_DIR}/kernel.o
+  ${BUILD_DIR}/memory.o
   ${BUILD_DIR}/serial.o
   ${BUILD_DIR}/wamr_runtime.o
 )
@@ -177,6 +178,7 @@ set(BOOT_SOURCES
 set(KERNEL_SOURCES
   ${KERNEL_DIR}/arch/x86_64/entry.S
   ${KERNEL_DIR}/kernel.c
+  ${KERNEL_DIR}/memory.c
   ${KERNEL_DIR}/serial.c
   ${WASM_DIR}/wamr_runtime.c
 )
@@ -214,6 +216,7 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/entry.S -o ${BUILD_DIR}/entry.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel.c -o ${BUILD_DIR}/kernel.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory.c -o ${BUILD_DIR}/memory.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/serial.c -o ${BUILD_DIR}/serial.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${WASM_DIR}/wamr_runtime.c -o ${BUILD_DIR}/wamr_runtime.o
   COMMAND ${LLD_PATH} ${LDFLAGS_KERNEL} -o ${BUILD_DIR}/kernel.elf ${KERNEL_OBJS}

@@ -3,8 +3,6 @@
 .extern kmain
 .extern __bss_start
 .extern __bss_end
-.extern __data_start
-.extern __data_end
 .extern __stack_top
 
 _start:
@@ -19,17 +17,9 @@ _start:
     jz 1f
     rep stosb
 1:
-    lea __data_start(%rip), %rdi
-    lea __data_end(%rip), %rsi
-    sub %rdi, %rsi
-    test %rsi, %rsi
-    jz 2f
-    xor %rax, %rax
-    rep stosb
-2:
     mov %rbx, %rdi
     call kmain
 
-3:
+2:
     hlt
-    jmp 3b
+    jmp 2b

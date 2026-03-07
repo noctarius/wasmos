@@ -87,7 +87,6 @@ UEFI firmware
 - Establish a known stack.
 - Clear BSS for C runtime expectations.
 - Preserve incoming `boot_info_t *` (UEFI uses MS ABI; pointer arrives in `RCX`) and call `kmain(boot_info_t *)`.
-- Clear `.data` to avoid relying on loader-initialized data in early boot.
 
 ## Kernel Early Init (Planned)
 - Physical memory manager from UEFI memory map.

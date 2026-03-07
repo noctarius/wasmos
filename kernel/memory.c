@@ -1,4 +1,5 @@
 #include "memory.h"
+#include "paging.h"
 #include "physmem.h"
 #include "serial.h"
 
@@ -13,6 +14,11 @@ void mm_init(const boot_info_t *boot_info) {
     g_context_count = 0;
     serial_write("[mm] init\n");
     pfa_init(boot_info);
+    if (paging_init() != 0) {
+        serial_write("[mm] paging init failed\n");
+    } else {
+        serial_write("[mm] paging init\n");
+    }
 
     if (mm_context_init(&g_root_ctx, 0) == 0) {
         mm_context_alloc_region(&g_root_ctx, 16, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, MEM_REGION_WASM_LINEAR);

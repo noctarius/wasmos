@@ -230,6 +230,8 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
 
     uefi_log(system, "[boot] ExitBootServices\n");
     int exited = 0;
+    void *map_dst = 0;
+    UINTN map_bytes = 0;
     while (!exited) {
         if (!mmap) {
             status = bs->AllocatePool(EFI_LOADER_DATA, mmap_capacity, &mmap);
@@ -253,7 +255,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         }
 
         UINTN boot_bytes = sizeof(boot_info_t);
-        UINTN map_bytes = mmap_size;
+        map_bytes = mmap_size;
         UINTN total_bytes = boot_bytes + map_bytes;
         UINTN total_pages = (total_bytes + 0xFFF) / 0x1000;
         if (boot_capacity < total_pages) {
@@ -267,7 +269,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         }
 
         memset8(boot_info, 0, sizeof(boot_info_t));
-        void *map_dst = (void *)((UINT8 *)boot_info + boot_bytes);
+        map_dst = (void *)((UINT8 *)boot_info + boot_bytes);
         memcpy8(map_dst, mmap, map_bytes);
         boot_info->memory_map = map_dst;
         boot_info->memory_map_size = map_bytes;

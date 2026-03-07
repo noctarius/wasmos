@@ -22,7 +22,8 @@ This repository is intentionally minimal and may require toolchain adjustments f
 
 macOS note: Use Homebrew LLVM clang (AppleClang cannot build UEFI targets). Configure with
 `-DCLANG=/opt/homebrew/opt/llvm/bin/clang` and ensure `lld-link` is available. If it's elsewhere, pass
-`-DLLD_LINK=/path/to/lld-link`.
+`-DLLD_LINK=/path/to/lld-link`. If `lld-link` isn't available, CMake will fall back to `lld` with
+`-Wl,-flavor,link`.
 
 ### Dependencies
 - WAMR (wasm-micro-runtime) is vendored via git subtree at `libs/wasm/wasm-micro-runtime`.

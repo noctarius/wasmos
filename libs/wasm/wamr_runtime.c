@@ -94,7 +94,7 @@ int wamr_call_function(wamr_instance_t *instance,
     }
 
     wasm_function_inst_t func = wasm_runtime_lookup_function(
-        (wasm_module_inst_t)instance, func_name, NULL);
+        (wasm_module_inst_t)instance, func_name);
     if (!func) {
         return 0;
     }

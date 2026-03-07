@@ -87,7 +87,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - The root context also reserves placeholder IPC and device regions.
 - `mm_context_create` allocates a new context and default regions.
 - WAMR runtime init uses a fixed page pool and `wamr_context_bind` ties a context's regions to WAMR sizing.
-- Early boot now defers WAMR runtime initialization so scheduler/process bring-up is not blocked by incomplete platform runtime stubs.
+- WAMR runtime initialization is on-demand through the kernel wasm driver host layer and currently uses a kernel-owned static pool.
 - WAMR is enabled by default and links the WAMR runtime library unless `-DWAMR_LINK=OFF` is set.
 - `WAMR_LINK` builds the WAMR runtime with a minimal `wasmos` platform in `platform/wasmos/`.
 - WAMR custom object builds propagate upstream runtime feature defines and compile third-party sources with `-Wno-error`.
@@ -98,8 +98,10 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - Process lifecycle primitives now include `wait`, `kill`, and tracked `exit_status` via zombie processes until reaped.
 - Blocked processes can now be resumed by context (`process_wake_by_context`) when IPC traffic arrives for owned endpoints.
 - IPC endpoint permissions are enforced by context-aware APIs (`ipc_send_from`, `ipc_recv_for`) for source-endpoint ownership and endpoint receive ownership.
-- The WASM-backed chardev runs as an IPC service endpoint in a dedicated `chardev-server` process (`kernel/wasm_chardev.c`).
+- The kernel now builds WASM driver modules from project-owned sources under `drivers/wasm/` and embeds them into the kernel image.
+- A generic kernel wasm driver host (`kernel/wasm_driver.c`) loads embedded modules, instantiates them via WAMR, and dispatches IPC requests to exported driver handlers.
+- The WASM-backed chardev runs as an IPC service endpoint in a dedicated `chardev-server` process (`kernel/wasm_chardev.c`) using an embedded module from `drivers/wasm/chardev/chardev_server.c`.
 - The chardev server process blocks when its IPC queue is empty and is woken by incoming IPC messages.
 - The chardev service path uses permission-aware IPC send/receive calls tied to its owner context.
-- The WASM chardev expects optional exports `chardev_init`, `chardev_read_byte`, and `chardev_write_byte` on an attached module instance.
-- Chardev IPC protocol uses request/response message types for byte read/write (`WASM_CHARDEV_IPC_*` in `kernel/include/wasm_chardev.h`).
+- The chardev module export contract is `chardev_init` and `chardev_ipc_dispatch` (with optional direct `chardev_read_byte`/`chardev_write_byte` exports).
+- Chardev IPC protocol uses request/response message types for byte read/write (`WASM_CHARDEV_IPC_*` in `drivers/wasm/include/wasmos_driver_abi.h`).

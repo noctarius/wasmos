@@ -26,6 +26,7 @@ set(BOOT_DIR ${CMAKE_SOURCE_DIR}/boot/efi)
 set(KERNEL_DIR ${CMAKE_SOURCE_DIR}/kernel)
 set(WASM_DIR ${CMAKE_SOURCE_DIR}/libs/wasm)
 set(WAMR_DIR ${WASM_DIR}/wasm-micro-runtime)
+set(DRIVER_WASM_DIR ${CMAKE_SOURCE_DIR}/drivers/wasm)
 
 set(CLANG clang CACHE STRING "C compiler for freestanding/UEFI builds")
 if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
@@ -89,6 +90,12 @@ if (NOT CLANG_VERSION MATCHES "clang")
 endif ()
 
 get_filename_component(CLANG_BIN_DIR ${CLANG} DIRECTORY)
+find_program(OBJCOPY_PATH ${OBJCOPY} HINTS ${CLANG_BIN_DIR} /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin /opt/homebrew/bin /usr/local/bin)
+if (NOT OBJCOPY_PATH)
+  message(FATAL_ERROR "llvm-objcopy not found. Install LLVM and set -DOBJCOPY=/path/to/llvm-objcopy.")
+endif ()
+set(OBJCOPY ${OBJCOPY_PATH} CACHE STRING "Objcopy tool" FORCE)
+
 set(LLD_HINTS ${CLANG_BIN_DIR} /opt/homebrew/opt/lld/bin /usr/local/opt/lld/bin /opt/homebrew/bin /usr/local/bin)
 set(LLD_PATH "" CACHE FILEPATH "Resolved path to lld/ld.lld" FORCE)
 set(LLD_CANDIDATES
@@ -129,7 +136,7 @@ get_filename_component(LLD_DIR ${LLD_PATH} DIRECTORY)
 
 set(CFLAGS_COMMON -ffreestanding -fno-stack-protector -fno-builtin -Wall -Wextra -Werror -g)
 set(CFLAGS_EFI ${CFLAGS_COMMON} -target x86_64-unknown-uefi -fshort-wchar -mno-red-zone -B${CLANG_BIN_DIR})
-set(CFLAGS_KERNEL ${CFLAGS_COMMON} -target ${KERNEL_TARGET_TRIPLE} -mno-red-zone -mcmodel=kernel -m64 -I${WASM_DIR} -I${KERNEL_DIR}/include -B${LLD_DIR})
+set(CFLAGS_KERNEL ${CFLAGS_COMMON} -target ${KERNEL_TARGET_TRIPLE} -mno-red-zone -mcmodel=kernel -m64 -I${WASM_DIR} -I${KERNEL_DIR}/include -I${DRIVER_WASM_DIR}/include -B${LLD_DIR})
 if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   find_program(LLD_LINK_PATH ${LLD_LINK} HINTS ${LLD_HINTS})
   if (LLD_LINK_PATH)
@@ -215,6 +222,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/ipc.o
   ${BUILD_DIR}/process.o
   ${BUILD_DIR}/spinlock.o
+  ${BUILD_DIR}/wasm_driver.o
   ${BUILD_DIR}/wamr_context.o
   ${BUILD_DIR}/wasm_chardev.o
   ${BUILD_DIR}/serial.o
@@ -238,6 +246,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/ipc.c
   ${KERNEL_DIR}/process.c
   ${KERNEL_DIR}/spinlock.c
+  ${KERNEL_DIR}/wasm_driver.c
   ${KERNEL_DIR}/wamr_context.c
   ${KERNEL_DIR}/wasm_chardev.c
   ${KERNEL_DIR}/serial.c
@@ -251,7 +260,7 @@ target_include_directories(bootloader_sources INTERFACE ${BOOT_DIR} ${KERNEL_DIR
 
 add_library(kernel_sources INTERFACE)
 target_sources(kernel_sources INTERFACE ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/include/cpu.h ${KERNEL_DIR}/include/ipc.h ${KERNEL_DIR}/include/paging.h ${KERNEL_DIR}/include/process.h ${KERNEL_DIR}/include/spinlock.h ${KERNEL_DIR}/include/wasm_chardev.h ${WASM_DIR}/wamr_runtime.h)
-target_include_directories(kernel_sources INTERFACE ${KERNEL_DIR}/include ${WASM_DIR})
+target_include_directories(kernel_sources INTERFACE ${KERNEL_DIR}/include ${WASM_DIR} ${DRIVER_WASM_DIR}/include)
 
 # IDE aggregation targets: helps CLion mark files as part of the CMake project
 # even though the real build uses custom commands/targets.
@@ -270,9 +279,47 @@ add_custom_target(kernel_ide SOURCES
   ${KERNEL_DIR}/include/paging.h
   ${KERNEL_DIR}/include/process.h
   ${KERNEL_DIR}/include/spinlock.h
+  ${KERNEL_DIR}/include/wasm_driver.h
   ${KERNEL_DIR}/include/wasm_chardev.h
+  ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
   ${WASM_DIR}/wamr_runtime.h
 )
+
+set(WASM_CHARDEV_DRIVER_SRC ${DRIVER_WASM_DIR}/chardev/chardev_server.c)
+set(WASM_CHARDEV_DRIVER_WASM ${BUILD_DIR}/chardev_server.wasm)
+set(WASM_CHARDEV_DRIVER_BLOB ${BUILD_DIR}/chardev_server_blob.o)
+
+add_custom_command(
+  OUTPUT ${WASM_CHARDEV_DRIVER_WASM}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib
+          -Wl,--no-entry -Wl,--strip-all
+          -Wl,--export=chardev_init
+          -Wl,--export=chardev_read_byte
+          -Wl,--export=chardev_write_byte
+          -Wl,--export=chardev_ipc_dispatch
+          -I${DRIVER_WASM_DIR}/include
+          ${WASM_CHARDEV_DRIVER_SRC}
+          -o ${WASM_CHARDEV_DRIVER_WASM}
+  DEPENDS ${WASM_CHARDEV_DRIVER_SRC} ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Building wasm chardev driver module"
+  VERBATIM
+)
+
+add_custom_command(
+  OUTPUT ${WASM_CHARDEV_DRIVER_BLOB}
+  COMMAND ${OBJCOPY} --input-target=binary --output-target=elf64-x86-64
+          --binary-architecture=i386:x86-64
+          chardev_server.wasm chardev_server_blob.o
+  DEPENDS ${WASM_CHARDEV_DRIVER_WASM}
+  WORKING_DIRECTORY ${BUILD_DIR}
+  COMMENT "Embedding wasm chardev driver module"
+  VERBATIM
+)
+
+add_custom_target(wasm_driver_blobs DEPENDS ${WASM_CHARDEV_DRIVER_BLOB})
+list(APPEND KERNEL_OBJS ${WASM_CHARDEV_DRIVER_BLOB})
 
 # WAMR is vendored via git subtree at ${WAMR_DIR}.
 option(WAMR_ENABLE "Enable WAMR runtime integration (requires linking WAMR)" ON)
@@ -408,12 +455,13 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/ipc.c -o ${BUILD_DIR}/ipc.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process.c -o ${BUILD_DIR}/process.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/spinlock.c -o ${BUILD_DIR}/spinlock.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_driver.c -o ${BUILD_DIR}/wasm_driver.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wamr_context.c -o ${BUILD_DIR}/wamr_context.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_chardev.c -o ${BUILD_DIR}/wasm_chardev.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/serial.c -o ${BUILD_DIR}/serial.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${WASM_DIR}/wamr_runtime.c -o ${BUILD_DIR}/wamr_runtime.o
   COMMAND ${LLD_PATH} ${LDFLAGS_KERNEL} -o ${BUILD_DIR}/kernel.elf ${KERNEL_OBJS} ${KERNEL_LINK_LIBS}
-  DEPENDS ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/arch/x86_64/linker.ld
+  DEPENDS ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/arch/x86_64/linker.ld ${WASM_CHARDEV_DRIVER_BLOB}
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Building kernel"
   VERBATIM
@@ -422,6 +470,7 @@ add_custom_target(kernel ALL DEPENDS ${BUILD_DIR}/kernel.elf)
 if (WAMR_LINK)
   add_dependencies(kernel wamr_runtime_lib)
 endif ()
+add_dependencies(kernel wasm_driver_blobs)
 
 # QEMU helper
 if (OVMF_VARS)

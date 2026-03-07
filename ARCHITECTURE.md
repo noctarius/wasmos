@@ -100,6 +100,7 @@ UEFI firmware
 - Each context owns a bounded set of memory regions (linear memory, IPC, device, stack, heap, code).
 - Current scaffold tracks per-context regions and defers real allocation to later.
 - A simple physical frame allocator scans the UEFI memory map and tracks usable ranges.
+- The frame allocator now supports freeing pages and backing context region allocation.
 
 ## WAMR Integration (Planned)
 - WAMR is vendored via git subtree at `libs/wasm/wasm-micro-runtime`.

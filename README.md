@@ -77,3 +77,4 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - The kernel emits early serial output on COM1 (QEMU `-serial`).
 - Memory management scaffolding tracks per-WAMR-context memory regions (microkernel model).
 - A minimal physical frame allocator ingests the UEFI memory map (conventional + boot services memory).
+- The physical frame allocator supports freeing pages, and contexts can allocate regions from it.

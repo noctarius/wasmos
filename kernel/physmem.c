@@ -117,3 +117,50 @@ uint64_t pfa_alloc_pages(uint64_t pages) {
     }
     return 0;
 }
+
+void pfa_free_pages(uint64_t base, uint64_t pages) {
+    if (base == 0 || pages == 0) {
+        return;
+    }
+    uint64_t end = base + pages * PAGE_SIZE;
+
+    uint32_t insert = 0;
+    while (insert < g_range_count && g_ranges[insert].base < base) {
+        insert++;
+    }
+
+    if (g_range_count >= (sizeof(g_ranges) / sizeof(g_ranges[0]))) {
+        return;
+    }
+
+    for (uint32_t i = g_range_count; i > insert; --i) {
+        g_ranges[i] = g_ranges[i - 1];
+    }
+    g_ranges[insert].base = base;
+    g_ranges[insert].pages = pages;
+    g_range_count++;
+
+    if (insert > 0) {
+        pfa_range_t *prev = &g_ranges[insert - 1];
+        if (prev->base + prev->pages * PAGE_SIZE == g_ranges[insert].base) {
+            prev->pages += g_ranges[insert].pages;
+            for (uint32_t i = insert; i + 1 < g_range_count; ++i) {
+                g_ranges[i] = g_ranges[i + 1];
+            }
+            g_range_count--;
+            insert--;
+        }
+    }
+
+    if (insert + 1 < g_range_count) {
+        pfa_range_t *cur = &g_ranges[insert];
+        pfa_range_t *next = &g_ranges[insert + 1];
+        if (cur->base + cur->pages * PAGE_SIZE == next->base) {
+            cur->pages += next->pages;
+            for (uint32_t i = insert + 1; i + 1 < g_range_count; ++i) {
+                g_ranges[i] = g_ranges[i + 1];
+            }
+            g_range_count--;
+        }
+    }
+}

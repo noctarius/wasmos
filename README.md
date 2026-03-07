@@ -82,3 +82,4 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - The root context also reserves placeholder IPC and device regions.
 - `mm_context_create` allocates a new context and default regions.
 - WAMR runtime init uses a fixed page pool and `wamr_context_bind` ties a context's regions to WAMR sizing.
+- Enable WAMR with `-DWAMR_ENABLE=ON` and link the WAMR runtime library to activate real runtime init.

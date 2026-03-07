@@ -5,6 +5,8 @@
 
 #define WAMR_RUNTIME_HEAP_PAGES 128
 
+#ifdef WAMR_ENABLED
+
 static int find_region(const mm_context_t *ctx, mem_region_type_t type, mem_region_t *out) {
     if (!ctx || !out) {
         return 0;
@@ -56,3 +58,18 @@ int wamr_context_bind(mm_context_t *ctx, wamr_context_t *out_ctx) {
     out_ctx->heap_size = (uint32_t)heap.size;
     return 0;
 }
+
+#else
+
+int wamr_context_init(void) {
+    serial_write("[wamr] runtime disabled\n");
+    return 0;
+}
+
+int wamr_context_bind(mm_context_t *ctx, wamr_context_t *out_ctx) {
+    (void)ctx;
+    (void)out_ctx;
+    return -1;
+}
+
+#endif

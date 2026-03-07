@@ -250,7 +250,7 @@ if (WAMR_ENABLE AND WAMR_LINK)
 endif ()
 
 if (WAMR_LINK)
-  set(WAMR_BUILD_PLATFORM "linux" CACHE STRING "WAMR build platform")
+  set(WAMR_BUILD_PLATFORM "wasmos" CACHE STRING "WAMR build platform")
   set(WAMR_BUILD_TARGET "X86_64" CACHE STRING "WAMR build target")
   set(WAMR_BUILD_INTERP 1 CACHE BOOL "Enable WAMR interpreter")
   set(WAMR_BUILD_FAST_INTERP 0 CACHE BOOL "Disable WAMR fast interpreter")
@@ -263,6 +263,7 @@ if (WAMR_LINK)
   set(WAMR_BUILD_THREAD_MGR 0 CACHE BOOL "Disable WAMR thread mgr")
 
   set(WAMR_ROOT_DIR ${WAMR_DIR})
+  set(SHARED_PLATFORM_CONFIG ${CMAKE_SOURCE_DIR}/platform/wasmos/shared_platform.cmake)
   include(${WAMR_ROOT_DIR}/build-scripts/runtime_lib.cmake)
 
   if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND NOT MACOS_SDK_PATH)
@@ -282,8 +283,8 @@ if (WAMR_LINK)
     ${WAMR_ROOT_DIR}/core/iwasm/interpreter
     ${WAMR_ROOT_DIR}/core/iwasm/libraries/libc-builtin
     ${WAMR_ROOT_DIR}/core/iwasm/include
-    ${WAMR_ROOT_DIR}/core/shared/platform/${WAMR_BUILD_PLATFORM}
-    ${WAMR_ROOT_DIR}/core/shared/platform/${WAMR_BUILD_PLATFORM}/../include
+    ${CMAKE_SOURCE_DIR}/platform/wasmos
+    ${WAMR_ROOT_DIR}/core/shared/platform/include
     ${WAMR_ROOT_DIR}/core/shared/mem-alloc
     ${WAMR_ROOT_DIR}/core/iwasm/common
     ${WAMR_ROOT_DIR}/core/shared/utils

@@ -105,7 +105,7 @@ UEFI firmware
 - `mm_context_create` can allocate new contexts with default linear/stack/heap regions.
 - WAMR initialization currently uses a fixed pool allocator and per-context bindings for linear/stack/heap sizing.
 - WAMR is enabled by default and links the runtime library unless `WAMR_LINK=OFF` is set.
-- The WAMR runtime build uses `WAMR_BUILD_PLATFORM=linux` by default (override as needed).
+- The WAMR runtime build uses a minimal `wasmos` platform from `platform/wasmos/`.
 
 ## WAMR Integration (Planned)
 - WAMR is vendored via git subtree at `libs/wasm/wasm-micro-runtime`.

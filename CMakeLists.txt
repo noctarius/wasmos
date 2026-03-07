@@ -247,6 +247,25 @@ add_library(kernel_sources INTERFACE)
 target_sources(kernel_sources INTERFACE ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/include/ipc.h ${KERNEL_DIR}/include/process.h ${KERNEL_DIR}/include/spinlock.h ${KERNEL_DIR}/include/wasm_chardev.h ${WASM_DIR}/wamr_runtime.h)
 target_include_directories(kernel_sources INTERFACE ${KERNEL_DIR}/include ${WASM_DIR})
 
+# IDE aggregation targets: helps CLion mark files as part of the CMake project
+# even though the real build uses custom commands/targets.
+add_custom_target(bootloader_ide SOURCES
+  ${BOOT_SOURCES}
+  ${BOOT_DIR}/uefi.h
+  ${BOOT_DIR}/elf.h
+  ${KERNEL_DIR}/include/boot.h
+)
+
+add_custom_target(kernel_ide SOURCES
+  ${KERNEL_SOURCES}
+  ${KERNEL_DIR}/include/boot.h
+  ${KERNEL_DIR}/include/ipc.h
+  ${KERNEL_DIR}/include/process.h
+  ${KERNEL_DIR}/include/spinlock.h
+  ${KERNEL_DIR}/include/wasm_chardev.h
+  ${WASM_DIR}/wamr_runtime.h
+)
+
 # WAMR is vendored via git subtree at ${WAMR_DIR}.
 option(WAMR_ENABLE "Enable WAMR runtime integration (requires linking WAMR)" ON)
 option(WAMR_LINK "Link the WAMR runtime library" ON)

@@ -40,6 +40,12 @@ project(wasmos C ASM)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
+if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+  # Avoid host -arch injection from environment/defaults.
+  set(CMAKE_C_FLAGS "" CACHE STRING "Reset host C flags for freestanding build" FORCE)
+  set(CMAKE_ASM_FLAGS "" CACHE STRING "Reset host ASM flags for freestanding build" FORCE)
+endif ()
+
 execute_process(
   COMMAND ${CLANG} --version
   OUTPUT_VARIABLE CLANG_VERSION
@@ -239,7 +245,7 @@ if (WAMR_LINK)
   if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     set_target_properties(wamr_runtime_lib PROPERTIES OSX_ARCHITECTURES "")
   endif ()
-  target_compile_options(wamr_runtime_lib PRIVATE ${CFLAGS_KERNEL})
+  target_compile_options(wamr_runtime_lib PRIVATE ${CFLAGS_KERNEL} -Wno-unused-command-line-argument)
 endif ()
 
 # Bootloader (UEFI PE/COFF)

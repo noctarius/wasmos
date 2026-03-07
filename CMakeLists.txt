@@ -1,5 +1,13 @@
 cmake_minimum_required(VERSION 3.20)
 
+# Strip host toolchain flags that break freestanding builds on macOS.
+if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+  set(ENV{CFLAGS} "")
+  set(ENV{CXXFLAGS} "")
+  set(ENV{ASMFLAGS} "")
+  set(ENV{LDFLAGS} "")
+endif ()
+
 if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   set(CMAKE_OSX_ARCHITECTURES "" CACHE STRING "Disable -arch injection for freestanding builds" FORCE)
 endif ()

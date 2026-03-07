@@ -110,6 +110,7 @@ UEFI firmware
 - `mm_init` provisions a root context with basic linear/stack/heap regions plus placeholder IPC/device regions.
 - `mm_context_create` can allocate new contexts with default linear/stack/heap regions.
 - WAMR initialization currently uses a fixed pool allocator and per-context bindings for linear/stack/heap sizing.
+- Early boot currently defers WAMR runtime initialization to avoid blocking process/scheduler bring-up while freestanding platform stubs are being hardened.
 - WAMR is enabled by default and links the runtime library unless `WAMR_LINK=OFF` is set.
 - The WAMR runtime build uses a minimal `wasmos` platform from `platform/wasmos/`.
 - The custom WAMR object build path forwards upstream runtime feature defines and disables `-Werror` for third-party WAMR sources.

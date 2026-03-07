@@ -26,7 +26,7 @@ typedef struct { int dummy; } korp_rwlock;
 typedef struct { int count; } korp_sem;
 
 #define OS_THREAD_MUTEX_INITIALIZER {0}
-#define os_thread_local_attribute __thread
+#define os_thread_local_attribute
 
 #define bh_socket_t int
 

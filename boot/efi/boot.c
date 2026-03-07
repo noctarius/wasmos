@@ -229,9 +229,10 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
     UINT32 desc_version = 0;
     bs->GetMemoryMap(&mmap_size, 0, &map_key, &desc_size, &desc_version);
     mmap_size += desc_size * 2;
+    UINTN mmap_capacity = mmap_size;
 
     void *mmap = 0;
-    status = bs->AllocatePool(EFI_LOADER_DATA, mmap_size, &mmap);
+    status = bs->AllocatePool(EFI_LOADER_DATA, mmap_capacity, &mmap);
     if (EFI_ERROR(status)) {
         uefi_log_status(system, "[boot] AllocatePool(mmap) failed: ", status);
         return status;
@@ -267,7 +268,18 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
 
     uefi_log(system, "[boot] ExitBootServices\n");
     while (1) {
+        mmap_size = mmap_capacity;
         status = bs->GetMemoryMap(&mmap_size, mmap, &map_key, &desc_size, &desc_version);
+        if (status == EFI_BUFFER_TOO_SMALL) {
+            uefi_log(system, "[boot] mmap buffer too small, growing\n");
+            mmap_capacity = mmap_size + desc_size * 2;
+            status = bs->AllocatePool(EFI_LOADER_DATA, mmap_capacity, &mmap);
+            if (EFI_ERROR(status)) {
+                uefi_log_status(system, "[boot] AllocatePool(mmap grow) failed: ", status);
+                return status;
+            }
+            continue;
+        }
         if (EFI_ERROR(status)) {
             uefi_log_status(system, "[boot] GetMemoryMap retry failed: ", status);
             return status;

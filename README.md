@@ -49,12 +49,17 @@ If OVMF is not found on your system, set:
 ```
 cmake -S . -B build -DOVMF_CODE=/path/to/OVMF_CODE.fd
 ```
+For QEMU on macOS, we use `-drive if=pflash` with OVMF code/vars. If `OVMF_VARS.fd` is available,
+set `-DOVMF_VARS=/path/to/OVMF_VARS.fd` for persistent variables.
+Note: Homebrew QEMU may not ship an x86_64 vars file; if none is present, omit `OVMF_VARS`.
+
+The `run-qemu` target copies `scripts/startup.nsh` into the ESP to auto-run `BOOTX64.EFI`.
 On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 
 ### Targets
 - `cmake --build build --target bootloader` builds `build/BOOTX64.EFI`
 - `cmake --build build --target kernel` builds `build/kernel.elf`
-- `cmake --build build --target run-qemu` runs QEMU with an ESP image
+- `cmake --build build --target run-qemu` runs QEMU with an ESP image (serial console via `-nographic`)
 
 ### Next steps
 1. Verify the UEFI toolchain flags for your host.

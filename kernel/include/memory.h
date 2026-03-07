@@ -37,5 +37,6 @@ void mm_init(const boot_info_t *boot_info);
 int mm_context_init(mm_context_t *ctx, uint32_t id);
 int mm_context_add_region(mm_context_t *ctx, uint64_t base, uint64_t size, uint32_t flags, mem_region_type_t type);
 int mm_context_alloc_region(mm_context_t *ctx, uint64_t pages, uint32_t flags, mem_region_type_t type);
+mm_context_t *mm_context_get(uint32_t id);
 
 #endif

@@ -73,3 +73,15 @@ int mm_context_alloc_region(mm_context_t *ctx, uint64_t pages, uint32_t flags, m
     }
     return mm_context_add_region(ctx, base, pages * PAGE_SIZE, flags, type);
 }
+
+mm_context_t *mm_context_get(uint32_t id) {
+    if (id == g_root_ctx.id) {
+        return &g_root_ctx;
+    }
+    for (uint32_t i = 0; i < g_context_count; ++i) {
+        if (g_contexts[i].id == id) {
+            return &g_contexts[i];
+        }
+    }
+    return 0;
+}

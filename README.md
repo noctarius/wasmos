@@ -92,8 +92,11 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - The `wasmos` platform adapter includes WAMR's shared math implementation and provides freestanding libc/fortify shims (e.g. `__memcpy_chk`, `__memset_chk`).
 - Kernel primitives now include a minimal spinlock (`kernel/spinlock.c`) and IPC transport with per-endpoint queues (`kernel/ipc.c`).
 - Kernel primitives now include basic cooperative process management (`kernel/process.c`) with per-process memory-context binding.
+- Process lifecycle primitives now include `wait`, `kill`, and tracked `exit_status` via zombie processes until reaped.
 - Blocked processes can now be resumed by context (`process_wake_by_context`) when IPC traffic arrives for owned endpoints.
+- IPC endpoint permissions are enforced by context-aware APIs (`ipc_send_from`, `ipc_recv_for`) for source-endpoint ownership and endpoint receive ownership.
 - The WASM-backed chardev runs as an IPC service endpoint in a dedicated `chardev-server` process (`kernel/wasm_chardev.c`).
 - The chardev server process blocks when its IPC queue is empty and is woken by incoming IPC messages.
+- The chardev service path uses permission-aware IPC send/receive calls tied to its owner context.
 - The WASM chardev expects optional exports `chardev_init`, `chardev_read_byte`, and `chardev_write_byte` on an attached module instance.
 - Chardev IPC protocol uses request/response message types for byte read/write (`WASM_CHARDEV_IPC_*` in `kernel/include/wasm_chardev.h`).

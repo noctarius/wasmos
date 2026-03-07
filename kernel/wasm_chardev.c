@@ -21,6 +21,7 @@ static wasm_chardev_ctx_t g_wasm_ctx;
 static chardev_t g_wasm_dev;
 static spinlock_t g_wasm_lock;
 static uint32_t g_service_endpoint;
+static uint32_t g_owner_context_id;
 
 int chardev_read_byte(chardev_t *dev, uint8_t *out_byte) {
     if (!dev || !dev->read_byte || !out_byte) {
@@ -48,6 +49,7 @@ int wasm_chardev_init(uint32_t owner_context_id) {
     g_wasm_ctx.write_fn = "chardev_write_byte";
     spinlock_init(&g_wasm_lock);
     g_service_endpoint = 0;
+    g_owner_context_id = owner_context_id;
 
     if (ipc_endpoint_create(owner_context_id, &g_service_endpoint) != 0) {
         serial_write("[chardev] endpoint allocation failed\n");
@@ -90,7 +92,7 @@ int wasm_chardev_endpoint(uint32_t *out_endpoint) {
 
 int wasm_chardev_service_once(void) {
     ipc_message_t req;
-    int recv_result = ipc_recv(g_service_endpoint, &req);
+    int recv_result = ipc_recv_for(g_owner_context_id, g_service_endpoint, &req);
     if (recv_result != 0) {
         return recv_result;
     }
@@ -129,7 +131,8 @@ chardev_t *wasm_chardev_get(void) {
     return &g_wasm_dev;
 }
 
-int wasm_chardev_ipc_read_request(uint32_t chardev_endpoint,
+int wasm_chardev_ipc_read_request(uint32_t client_context_id,
+                                  uint32_t chardev_endpoint,
                                   uint32_t client_reply_endpoint,
                                   uint32_t request_id) {
     ipc_message_t req;
@@ -141,10 +144,11 @@ int wasm_chardev_ipc_read_request(uint32_t chardev_endpoint,
     req.arg1 = 0;
     req.arg2 = 0;
     req.arg3 = 0;
-    return ipc_send(chardev_endpoint, &req);
+    return ipc_send_from(client_context_id, chardev_endpoint, &req);
 }
 
-int wasm_chardev_ipc_write_request(uint32_t chardev_endpoint,
+int wasm_chardev_ipc_write_request(uint32_t client_context_id,
+                                   uint32_t chardev_endpoint,
                                    uint32_t client_reply_endpoint,
                                    uint32_t request_id,
                                    uint8_t byte) {
@@ -157,7 +161,7 @@ int wasm_chardev_ipc_write_request(uint32_t chardev_endpoint,
     req.arg1 = 0;
     req.arg2 = 0;
     req.arg3 = 0;
-    return ipc_send(chardev_endpoint, &req);
+    return ipc_send_from(client_context_id, chardev_endpoint, &req);
 }
 
 static int wasm_chardev_read_cb(void *ctx, uint8_t *out_byte) {
@@ -216,7 +220,7 @@ static void wasm_chardev_reply(uint32_t reply_endpoint,
     resp.arg1 = arg1;
     resp.arg2 = 0;
     resp.arg3 = 0;
-    if (ipc_send(reply_endpoint, &resp) != 0) {
+    if (ipc_send_from(g_owner_context_id, reply_endpoint, &resp) != 0) {
         serial_write("[chardev] reply dropped\n");
     }
 }

@@ -126,14 +126,19 @@ UEFI firmware
 - `ipc` primitive in `kernel/ipc.c` provides endpoint allocation and bounded per-endpoint message queues.
 - IPC messages carry basic routing and payload fields (`type`, `source`, `destination`, `request_id`, `arg0..arg3`).
 - Endpoints are associated with owner context IDs and protect queues via spinlocks.
+- IPC permissions are enforced by context-aware operations:
+- `ipc_send_from` requires non-kernel senders to use a source endpoint owned by their context.
+- `ipc_recv_for` requires non-kernel receivers to own the destination endpoint context.
 - IPC enqueue wakes blocked processes that own the destination endpoint context.
 - `process` primitive in `kernel/process.c` provides a small cooperative process table and scheduler.
 - `process_spawn` binds each process to a new memory context (`mm_context_create(pid)`), establishing per-process isolation boundaries.
+- Lifecycle primitives now include `process_wait`, `process_kill`, and `process_get_exit_status`.
 
 ## Process Model (Current Scaffold)
 - The scheduler is cooperative and tick-based (`process_schedule_once`), scanning for READY processes in round-robin order.
 - Process entries return run results (`YIELDED`, `IDLE`, `BLOCKED`, `EXITED`) to drive state transitions.
 - `PROCESS_RUN_BLOCKED` entries remain blocked until a kernel primitive wakes them; IPC uses `process_wake_by_context` on message enqueue.
+- Exited processes transition to a zombie state carrying `exit_status` until reaped by `process_wait`.
 - The kernel main loop schedules processes instead of invoking service handlers directly.
 - The current system starts a dedicated `chardev-server` process and assigns its context ID as the owner of the chardev IPC endpoint.
 - The chardev server returns `BLOCKED` when no IPC message is pending, reducing scheduler churn while idle.

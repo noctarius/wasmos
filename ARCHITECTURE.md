@@ -95,11 +95,15 @@ UEFI firmware
 - Clear BSS for C runtime expectations.
 - Preserve incoming `boot_info_t *` (UEFI uses MS ABI; pointer arrives in `RCX`) and call `kmain(boot_info_t *)`.
 
-## Kernel Early Init (Planned)
+## Kernel Early Init
+Fixed:
 - Physical memory manager from UEFI memory map.
+- Early console via COM1 serial.
+
+Remaining:
 - Page table setup and higher-half mapping (optional later).
-- Early console (serial or framebuffer). Current scaffold uses COM1 serial.
 - Basic CPU init (GDT/IDT, exception handlers).
+- Framebuffer console path (serial is implemented; framebuffer is still pending).
 
 ## Memory Management Scaffold
 - Microkernel model: every driver/service/app runs in its own WAMR context.

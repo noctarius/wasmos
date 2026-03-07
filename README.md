@@ -91,6 +91,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - `WAMR_DISABLE_APP_ENTRY=1` is set for the freestanding kernel profile.
 - The `wasmos` platform adapter includes WAMR's shared math implementation and provides freestanding libc/fortify shims (e.g. `__memcpy_chk`, `__memset_chk`).
 - Kernel primitives now include a minimal spinlock (`kernel/spinlock.c`) and IPC transport with per-endpoint queues (`kernel/ipc.c`).
-- The WASM-backed chardev runs as an IPC service endpoint in the kernel loop (`kernel/wasm_chardev.c`).
+- Kernel primitives now include basic cooperative process management (`kernel/process.c`) with per-process memory-context binding.
+- The WASM-backed chardev runs as an IPC service endpoint in a dedicated `chardev-server` process (`kernel/wasm_chardev.c`).
 - The WASM chardev expects optional exports `chardev_init`, `chardev_read_byte`, and `chardev_write_byte` on an attached module instance.
 - Chardev IPC protocol uses request/response message types for byte read/write (`WASM_CHARDEV_IPC_*` in `kernel/include/wasm_chardev.h`).

@@ -35,6 +35,23 @@ typedef struct {
     UINT32 Reserved;
 } EFI_TABLE_HEADER;
 
+typedef struct _EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL;
+
+struct _EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL {
+    void *Reset;
+    EFI_STATUS (EFIAPI *OutputString)(
+        EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *This,
+        CHAR16 *String
+    );
+    void *TestString;
+    void *QueryMode;
+    void *SetMode;
+    void *SetAttribute;
+    void *ClearScreen;
+    void *SetCursorPosition;
+    void *EnableCursor;
+};
+
 typedef struct {
     EFI_TABLE_HEADER Hdr;
     CHAR16 *FirmwareVendor;
@@ -42,7 +59,7 @@ typedef struct {
     EFI_HANDLE ConsoleInHandle;
     void *ConIn;
     EFI_HANDLE ConsoleOutHandle;
-    void *ConOut;
+    EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *ConOut;
     EFI_HANDLE StandardErrorHandle;
     void *StdErr;
     void *RuntimeServices;

@@ -206,7 +206,9 @@ set(LDFLAGS_KERNEL -nostdlib -T ${KERNEL_DIR}/arch/x86_64/linker.ld)
 
 set(KERNEL_OBJS
   ${BUILD_DIR}/entry.o
+  ${BUILD_DIR}/cpu_isr.o
   ${BUILD_DIR}/kernel.o
+  ${BUILD_DIR}/cpu.o
   ${BUILD_DIR}/memory.o
   ${BUILD_DIR}/paging.o
   ${BUILD_DIR}/physmem.o
@@ -227,7 +229,9 @@ set(BOOT_SOURCES
 
 set(KERNEL_SOURCES
   ${KERNEL_DIR}/arch/x86_64/entry.S
+  ${KERNEL_DIR}/arch/x86_64/cpu_isr.S
   ${KERNEL_DIR}/kernel.c
+  ${KERNEL_DIR}/cpu.c
   ${KERNEL_DIR}/memory.c
   ${KERNEL_DIR}/paging.c
   ${KERNEL_DIR}/physmem.c
@@ -246,7 +250,7 @@ target_sources(bootloader_sources INTERFACE ${BOOT_SOURCES} ${BOOT_DIR}/uefi.h $
 target_include_directories(bootloader_sources INTERFACE ${BOOT_DIR} ${KERNEL_DIR}/include)
 
 add_library(kernel_sources INTERFACE)
-target_sources(kernel_sources INTERFACE ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/include/ipc.h ${KERNEL_DIR}/include/paging.h ${KERNEL_DIR}/include/process.h ${KERNEL_DIR}/include/spinlock.h ${KERNEL_DIR}/include/wasm_chardev.h ${WASM_DIR}/wamr_runtime.h)
+target_sources(kernel_sources INTERFACE ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/include/cpu.h ${KERNEL_DIR}/include/ipc.h ${KERNEL_DIR}/include/paging.h ${KERNEL_DIR}/include/process.h ${KERNEL_DIR}/include/spinlock.h ${KERNEL_DIR}/include/wasm_chardev.h ${WASM_DIR}/wamr_runtime.h)
 target_include_directories(kernel_sources INTERFACE ${KERNEL_DIR}/include ${WASM_DIR})
 
 # IDE aggregation targets: helps CLion mark files as part of the CMake project
@@ -261,6 +265,7 @@ add_custom_target(bootloader_ide SOURCES
 add_custom_target(kernel_ide SOURCES
   ${KERNEL_SOURCES}
   ${KERNEL_DIR}/include/boot.h
+  ${KERNEL_DIR}/include/cpu.h
   ${KERNEL_DIR}/include/ipc.h
   ${KERNEL_DIR}/include/paging.h
   ${KERNEL_DIR}/include/process.h
@@ -394,7 +399,9 @@ add_custom_command(
   OUTPUT ${BUILD_DIR}/kernel.elf
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/entry.S -o ${BUILD_DIR}/entry.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/cpu_isr.S -o ${BUILD_DIR}/cpu_isr.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel.c -o ${BUILD_DIR}/kernel.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/cpu.c -o ${BUILD_DIR}/cpu.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory.c -o ${BUILD_DIR}/memory.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/paging.c -o ${BUILD_DIR}/paging.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/physmem.c -o ${BUILD_DIR}/physmem.o

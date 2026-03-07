@@ -12,6 +12,19 @@ void mm_init(const boot_info_t *boot_info) {
     serial_write("[mm] init\n");
     pfa_init(boot_info);
     if (g_boot_info) {
+        serial_write("[mm] boot_info=");
+        char ptr_buf[21];
+        static const char hex[] = "0123456789ABCDEF";
+        uint64_t ptr = (uint64_t)g_boot_info;
+        ptr_buf[0] = '0';
+        ptr_buf[1] = 'x';
+        for (int i = 0; i < 16; ++i) {
+            ptr_buf[2 + i] = hex[(ptr >> ((15 - i) * 4)) & 0xF];
+        }
+        ptr_buf[18] = '\n';
+        ptr_buf[19] = '\0';
+        serial_write(ptr_buf);
+
         serial_write("[mm] mmap size=");
         char buf[21];
         // Print size as hex without pulling in printf.

@@ -36,3 +36,4 @@ This repository uses Codex CLI to assist with development. Follow these conventi
 ## Git
 - Make a git commit after each prompt iteration when changes are made.
 - Do not amend commits unless explicitly requested.
+- `git add` and `git commit` are always allowed in this repository.

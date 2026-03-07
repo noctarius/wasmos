@@ -198,7 +198,8 @@ target_include_directories(kernel_sources INTERFACE ${KERNEL_DIR}/include ${WASM
 
 # WAMR is vendored via git subtree at ${WAMR_DIR}.
 option(WAMR_ENABLE "Enable WAMR runtime integration (requires linking WAMR)" ON)
-if (WAMR_ENABLE)
+option(WAMR_LINK "Link the WAMR runtime library" OFF)
+if (WAMR_ENABLE AND WAMR_LINK)
   set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -DWAMR_ENABLED=1 -I${WAMR_DIR}/core/iwasm/include)
 endif ()
 

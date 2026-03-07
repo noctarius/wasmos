@@ -88,17 +88,51 @@ typedef struct _EFI_BOOT_SERVICES {
     );
     EFI_STATUS (EFIAPI *AllocatePool)(UINTN PoolType, UINTN Size, void **Buffer);
     EFI_STATUS (EFIAPI *FreePool)(void *Buffer);
+    void *CreateEvent;
+    void *SetTimer;
+    void *WaitForEvent;
+    void *SignalEvent;
+    void *CloseEvent;
+    void *CheckEvent;
+    void *InstallProtocolInterface;
+    void *ReinstallProtocolInterface;
+    void *UninstallProtocolInterface;
     EFI_STATUS (EFIAPI *HandleProtocol)(
         EFI_HANDLE Handle,
         const EFI_GUID *Protocol,
         void **Interface
     );
+    void *Reserved;
+    void *RegisterProtocolNotify;
+    void *LocateHandle;
+    void *LocateDevicePath;
+    void *InstallConfigurationTable;
+    void *LoadImage;
+    void *StartImage;
+    void *Exit;
+    void *UnloadImage;
+    EFI_STATUS (EFIAPI *ExitBootServices)(EFI_HANDLE ImageHandle, UINTN MapKey);
+    void *GetNextMonotonicCount;
+    void *Stall;
+    void *SetWatchdogTimer;
+    void *ConnectController;
+    void *DisconnectController;
+    void *OpenProtocol;
+    void *CloseProtocol;
+    void *OpenProtocolInformation;
+    void *ProtocolsPerHandle;
+    void *LocateHandleBuffer;
     EFI_STATUS (EFIAPI *LocateProtocol)(
         const EFI_GUID *Protocol,
         void *Registration,
         void **Interface
     );
-    EFI_STATUS (EFIAPI *ExitBootServices)(EFI_HANDLE ImageHandle, UINTN MapKey);
+    void *InstallMultipleProtocolInterfaces;
+    void *UninstallMultipleProtocolInterfaces;
+    void *CalculateCrc32;
+    void *CopyMem;
+    void *SetMem;
+    void *CreateEventEx;
 } EFI_BOOT_SERVICES;
 
 typedef struct {

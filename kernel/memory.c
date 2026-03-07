@@ -29,7 +29,7 @@ void mm_init(const boot_info_t *boot_info) {
         char buf[21];
         // Print size as hex without pulling in printf.
         uint64_t value = g_boot_info->memory_map_size;
-        static const char hex[] = "0123456789ABCDEF";
+        // Reuse the same hex table.
         buf[0] = '0';
         buf[1] = 'x';
         for (int i = 0; i < 16; ++i) {

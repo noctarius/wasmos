@@ -8,13 +8,12 @@ set(BUILD_DIR ${CMAKE_BINARY_DIR})
 set(BOOT_DIR ${CMAKE_SOURCE_DIR}/boot/efi)
 set(KERNEL_DIR ${CMAKE_SOURCE_DIR}/kernel)
 set(WASM_DIR ${CMAKE_SOURCE_DIR}/libs/wasm)
+set(WAMR_DIR ${WASM_DIR}/wasm-micro-runtime)
 
 set(CLANG clang CACHE STRING "C compiler for freestanding/UEFI builds")
 set(LLD lld CACHE STRING "Linker")
 set(OBJCOPY llvm-objcopy CACHE STRING "Objcopy tool")
 set(OVMF_CODE /usr/share/OVMF/OVMF_CODE.fd CACHE FILEPATH "Path to OVMF_CODE.fd")
-set(WAMR_GIT_REPO https://github.com/bytecodealliance/wasm-micro-runtime CACHE STRING "WAMR git repo")
-set(WAMR_GIT_TAG main CACHE STRING "WAMR git tag/branch")
 
 set(CFLAGS_COMMON -ffreestanding -fno-stack-protector -fno-builtin -Wall -Wextra -Werror -g)
 set(CFLAGS_EFI ${CFLAGS_COMMON} -target x86_64-unknown-uefi -fshort-wchar -mno-red-zone)
@@ -32,14 +31,7 @@ set(KERNEL_SOURCES
   ${WASM_DIR}/wasm_stub.c
 )
 
-# Fetch WAMR (dependency only; integration will be wired later).
-include(FetchContent)
-FetchContent_Declare(
-  wamr
-  GIT_REPOSITORY ${WAMR_GIT_REPO}
-  GIT_TAG ${WAMR_GIT_TAG}
-)
-FetchContent_MakeAvailable(wamr)
+# WAMR is vendored via git subtree at ${WAMR_DIR}.
 
 # Bootloader (UEFI PE/COFF)
 add_custom_command(

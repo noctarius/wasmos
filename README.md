@@ -23,6 +23,10 @@ This repository is intentionally minimal and may require toolchain adjustments f
 ### Dependencies
 - WAMR (wasm-micro-runtime) is vendored via git subtree at `libs/wasm/wasm-micro-runtime`.
 
+### WAMR scaffold
+- `libs/wasm/wamr_runtime.c` provides a thin wrapper over the WAMR C API.
+- Enable with `-DWAMR_ENABLE=ON` once you wire the WAMR library into the kernel link.
+
 ### Configure
 ```\ncmake -S . -B build\n```
 

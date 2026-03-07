@@ -17,7 +17,7 @@ set(OVMF_CODE /usr/share/OVMF/OVMF_CODE.fd CACHE FILEPATH "Path to OVMF_CODE.fd"
 
 set(CFLAGS_COMMON -ffreestanding -fno-stack-protector -fno-builtin -Wall -Wextra -Werror -g)
 set(CFLAGS_EFI ${CFLAGS_COMMON} -target x86_64-unknown-uefi -fshort-wchar -mno-red-zone)
-set(CFLAGS_KERNEL ${CFLAGS_COMMON} -mno-red-zone -mcmodel=kernel -m64)
+set(CFLAGS_KERNEL ${CFLAGS_COMMON} -mno-red-zone -mcmodel=kernel -m64 -I${WASM_DIR})
 set(LDFLAGS_EFI -fuse-ld=lld -Wl,--subsystem,10 -Wl,--entry,efi_main)
 set(LDFLAGS_KERNEL -nostdlib -Wl,-T,${KERNEL_DIR}/arch/x86_64/linker.ld)
 
@@ -28,10 +28,14 @@ set(BOOT_SOURCES
 set(KERNEL_SOURCES
   ${KERNEL_DIR}/arch/x86_64/entry.S
   ${KERNEL_DIR}/kernel.c
-  ${WASM_DIR}/wasm_stub.c
+  ${WASM_DIR}/wamr_runtime.c
 )
 
 # WAMR is vendored via git subtree at ${WAMR_DIR}.
+option(WAMR_ENABLE "Enable WAMR runtime integration (requires linking WAMR)" OFF)
+if (WAMR_ENABLE)
+  set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -DWAMR_ENABLED=1 -I${WAMR_DIR}/core/iwasm/include)
+endif ()
 
 # Bootloader (UEFI PE/COFF)
 add_custom_command(

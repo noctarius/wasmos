@@ -96,6 +96,7 @@ UEFI firmware
 ## WAMR Integration (Planned)
 - WAMR is vendored via git subtree at `libs/wasm/wasm-micro-runtime`.
 - Port or embed WAMR as a static library under `libs/wasm/`.
+- `libs/wasm/wamr_runtime.c` provides a basic wrapper over the WAMR C API.
 - Provide WASI-like shims or custom syscalls for drivers.
 - Define a stable ABI between kernel and WASM modules.
 

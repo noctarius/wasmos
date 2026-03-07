@@ -51,19 +51,17 @@ void mm_init(const boot_info_t *boot_info) {
 }
 
 int mm_context_init(mm_context_t *ctx, uint32_t id) {
-    if (!ctx || g_context_count >= MM_MAX_CONTEXTS) {
+    if (!ctx) {
         return -1;
     }
-    mm_context_t *slot = &g_contexts[g_context_count];
-    slot->id = id;
-    slot->region_count = 0;
+    ctx->id = id;
+    ctx->region_count = 0;
     for (uint32_t i = 0; i < MM_MAX_REGIONS; ++i) {
-        slot->regions[i].base = 0;
-        slot->regions[i].size = 0;
-        slot->regions[i].flags = 0;
-        slot->regions[i].type = MEM_REGION_WASM_LINEAR;
+        ctx->regions[i].base = 0;
+        ctx->regions[i].size = 0;
+        ctx->regions[i].flags = 0;
+        ctx->regions[i].type = MEM_REGION_WASM_LINEAR;
     }
-    g_context_count++;
     return 0;
 }
 
@@ -109,18 +107,19 @@ mm_context_t *mm_context_create(uint32_t id) {
     if (g_context_count >= MM_MAX_CONTEXTS) {
         return 0;
     }
-    mm_context_t ctx;
-    if (mm_context_init(&ctx, id) != 0) {
+    mm_context_t *ctx = &g_contexts[g_context_count];
+    if (mm_context_init(ctx, id) != 0) {
         return 0;
     }
-    if (mm_context_alloc_region(&ctx, 8, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, MEM_REGION_WASM_LINEAR) != 0) {
+    if (mm_context_alloc_region(ctx, 8, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, MEM_REGION_WASM_LINEAR) != 0) {
         return 0;
     }
-    if (mm_context_alloc_region(&ctx, 2, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, MEM_REGION_STACK) != 0) {
+    if (mm_context_alloc_region(ctx, 2, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, MEM_REGION_STACK) != 0) {
         return 0;
     }
-    if (mm_context_alloc_region(&ctx, 4, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, MEM_REGION_HEAP) != 0) {
+    if (mm_context_alloc_region(ctx, 4, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, MEM_REGION_HEAP) != 0) {
         return 0;
     }
-    return &g_contexts[g_context_count - 1];
+    g_context_count++;
+    return ctx;
 }

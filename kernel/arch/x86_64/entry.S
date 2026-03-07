@@ -12,8 +12,9 @@ _start:
     lea __bss_start(%rip), %rdi
     lea __bss_end(%rip), %rsi
     sub %rdi, %rsi
+    mov %rsi, %rcx
     xor %rax, %rax
-    test %rsi, %rsi
+    test %rcx, %rcx
     jz 1f
     rep stosb
 1:

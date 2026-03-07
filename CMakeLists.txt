@@ -1,8 +1,4 @@
 cmake_minimum_required(VERSION 3.20)
-project(wasmos C ASM)
-
-set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED ON)
 
 set(BUILD_DIR ${CMAKE_BINARY_DIR})
 set(BOOT_DIR ${CMAKE_SOURCE_DIR}/boot/efi)
@@ -34,6 +30,11 @@ endif ()
 set(CLANG ${CLANG_PATH} CACHE STRING "C compiler for freestanding/UEFI builds" FORCE)
 set(CMAKE_C_COMPILER ${CLANG} CACHE FILEPATH "Use LLVM clang for all C builds" FORCE)
 set(CMAKE_ASM_COMPILER ${CLANG} CACHE FILEPATH "Use LLVM clang for all ASM builds" FORCE)
+
+project(wasmos C ASM)
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 
 execute_process(
   COMMAND ${CLANG} --version
@@ -231,6 +232,9 @@ if (WAMR_LINK)
     ${WAMR_ROOT_DIR}/core/iwasm/include
     ${WAMR_ROOT_DIR}/core/shared
   )
+  if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set_target_properties(wamr_runtime_lib PROPERTIES OSX_ARCHITECTURES "")
+  endif ()
   target_compile_options(wamr_runtime_lib PRIVATE ${CFLAGS_KERNEL})
 endif ()
 

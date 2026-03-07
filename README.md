@@ -24,6 +24,15 @@ macOS note: Use Homebrew LLVM clang (AppleClang cannot build UEFI targets). CMak
 `clang` and `lld/lld-link` in common Homebrew locations. If that fails, pass
 `-DCLANG=/path/to/llvm/bin/clang` and optionally `-DLLD_LINK=/path/to/lld-link` or `-DLLD=/path/to/lld`.
 
+macOS install (Homebrew):
+```
+brew install llvm lld qemu
+```
+
+Note: Homebrew does not provide an `edk2-ovmf` formula. QEMU often ships the firmware at
+`/opt/homebrew/share/qemu/edk2-x86_64-code.fd` (or `/usr/local/share/qemu/...` on Intel Macs).
+If it isn't present, download OVMF from edk2 and pass `-DOVMF_CODE=/path/to/OVMF_CODE.fd`.
+
 ### Dependencies
 - WAMR (wasm-micro-runtime) is vendored via git subtree at `libs/wasm/wasm-micro-runtime`.
 

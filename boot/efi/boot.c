@@ -150,6 +150,9 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
 
     uefi_log(system, "[boot] Loading PT_LOAD segments\n");
     Elf64_Phdr *phdrs = (Elf64_Phdr *)((UINT8 *)kernel_buf + ehdr->e_phoff);
+    UINT64 alloc_bases[16];
+    UINT64 alloc_pages[16];
+    UINTN alloc_count = 0;
     for (UINT16 i = 0; i < ehdr->e_phnum; ++i) {
         Elf64_Phdr *ph = &phdrs[i];
         if (ph->p_type != PT_LOAD) {
@@ -180,10 +183,28 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         uefi_hex(pages, pages_hex);
         uefi_log(system, pages_hex);
         uefi_log(system, "\n");
-        status = bs->AllocatePages(alloc_type, EFI_LOADER_DATA, pages, &dest);
-        if (EFI_ERROR(status)) {
-            uefi_log_status(system, "[boot] AllocatePages failed: ", status);
-            return status;
+        int already_allocated = 0;
+        for (UINTN j = 0; j < alloc_count; ++j) {
+            UINT64 base = alloc_bases[j];
+            UINT64 end = base + alloc_pages[j] * 0x1000;
+            if (dest >= base && dest < end) {
+                already_allocated = 1;
+                break;
+            }
+        }
+        if (!already_allocated) {
+            status = bs->AllocatePages(alloc_type, EFI_LOADER_DATA, pages, &dest);
+            if (EFI_ERROR(status)) {
+                uefi_log_status(system, "[boot] AllocatePages failed: ", status);
+                return status;
+            }
+            if (alloc_count < (sizeof(alloc_bases) / sizeof(alloc_bases[0]))) {
+                alloc_bases[alloc_count] = dest;
+                alloc_pages[alloc_count] = pages;
+                alloc_count++;
+            }
+        } else {
+            uefi_log(system, "[boot] PT_LOAD reuses allocated pages\n");
         }
 
         void *segment_src = (UINT8 *)kernel_buf + ph->p_offset;

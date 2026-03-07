@@ -78,7 +78,7 @@ UEFI firmware
 ## Bootloader Responsibilities
 - Locate `kernel.elf` in the ESP root.
 - Parse ELF64 header and PT_LOAD program headers.
-- Allocate page-aligned regions and load segments at physical addresses (handling misaligned paddr).
+- Allocate page-aligned regions and load segments at physical addresses (handling misaligned paddr and overlaps).
 - Construct `boot_info_t` and capture the UEFI memory map.
 - Log basic status messages to the UEFI console.
 - Exit boot services (retrying on invalid parameter) and transfer control to kernel entry.

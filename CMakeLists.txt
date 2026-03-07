@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
 
+if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+  set(CMAKE_OSX_ARCHITECTURES "" CACHE STRING "Disable -arch injection for freestanding builds" FORCE)
+endif ()
+
 set(BUILD_DIR ${CMAKE_BINARY_DIR})
 set(BOOT_DIR ${CMAKE_SOURCE_DIR}/boot/efi)
 set(KERNEL_DIR ${CMAKE_SOURCE_DIR}/kernel)
@@ -235,7 +239,7 @@ if (WAMR_LINK)
   if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     set_target_properties(wamr_runtime_lib PROPERTIES OSX_ARCHITECTURES "")
   endif ()
-  target_compile_options(wamr_runtime_lib PRIVATE ${CFLAGS_KERNEL} -arch x86_64)
+  target_compile_options(wamr_runtime_lib PRIVATE ${CFLAGS_KERNEL})
 endif ()
 
 # Bootloader (UEFI PE/COFF)

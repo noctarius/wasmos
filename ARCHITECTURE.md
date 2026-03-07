@@ -81,7 +81,7 @@ UEFI firmware
 - Allocate pages and load segments at physical addresses.
 - Construct `boot_info_t` and capture the UEFI memory map.
 - Log basic status messages to the UEFI console.
-- Exit boot services and transfer control to kernel entry.
+- Exit boot services (retrying on invalid parameter) and transfer control to kernel entry.
 
 ## Kernel Entry Responsibilities
 - Establish a known stack.

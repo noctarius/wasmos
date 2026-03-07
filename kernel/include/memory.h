@@ -16,6 +16,10 @@ typedef enum {
     MEM_REGION_CODE
 } mem_region_type_t;
 
+#define MEM_REGION_FLAG_READ   (1u << 0)
+#define MEM_REGION_FLAG_WRITE  (1u << 1)
+#define MEM_REGION_FLAG_EXEC   (1u << 2)
+
 typedef struct {
     uint64_t base;
     uint64_t size;

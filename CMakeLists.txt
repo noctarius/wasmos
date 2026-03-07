@@ -41,10 +41,18 @@ endif ()
 
 get_filename_component(CLANG_BIN_DIR ${CLANG} DIRECTORY)
 set(LLD_HINTS ${CLANG_BIN_DIR} /opt/homebrew/opt/lld/bin /usr/local/opt/lld/bin /opt/homebrew/bin /usr/local/bin)
+find_program(LLD_PATH ${LLD} HINTS ${LLD_HINTS})
+if (NOT LLD_PATH)
+  find_program(LLD_PATH ld.lld HINTS ${LLD_HINTS})
+endif ()
+if (NOT LLD_PATH)
+  message(FATAL_ERROR "lld/ld.lld not found. Install LLVM lld or set -DLLD=/path/to/lld.")
+endif ()
+get_filename_component(LLD_DIR ${LLD_PATH} DIRECTORY)
 
 set(CFLAGS_COMMON -ffreestanding -fno-stack-protector -fno-builtin -Wall -Wextra -Werror -g)
 set(CFLAGS_EFI ${CFLAGS_COMMON} -target x86_64-unknown-uefi -fshort-wchar -mno-red-zone -B${CLANG_BIN_DIR})
-set(CFLAGS_KERNEL ${CFLAGS_COMMON} -target ${KERNEL_TARGET_TRIPLE} -mno-red-zone -mcmodel=kernel -m64 -I${WASM_DIR} -I${KERNEL_DIR}/include)
+set(CFLAGS_KERNEL ${CFLAGS_COMMON} -target ${KERNEL_TARGET_TRIPLE} -mno-red-zone -mcmodel=kernel -m64 -I${WASM_DIR} -I${KERNEL_DIR}/include -B${LLD_DIR})
 if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   find_program(LLD_LINK_PATH ${LLD_LINK} HINTS ${LLD_HINTS})
   if (LLD_LINK_PATH)
@@ -54,14 +62,6 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     endif ()
     set(LDFLAGS_EFI -fuse-ld=lld-link -Wl,/subsystem:efi_application -Wl,/entry:efi_main)
   else ()
-    find_program(LLD_PATH ${LLD} HINTS ${LLD_HINTS})
-    if (NOT LLD_PATH)
-      find_program(LLD_PATH ld.lld HINTS ${LLD_HINTS})
-    endif ()
-    if (NOT LLD_PATH)
-      message(FATAL_ERROR "lld-link not found and lld/ld.lld not found. Install LLVM and ensure lld/lld-link/ld.lld is in PATH or set -DLLD_LINK=/path/to/lld-link -DLLD=/path/to/lld.")
-    endif ()
-    get_filename_component(LLD_DIR ${LLD_PATH} DIRECTORY)
     if (NOT LLD_DIR STREQUAL CLANG_BIN_DIR)
       set(CFLAGS_EFI ${CFLAGS_EFI} -B${LLD_DIR})
     endif ()
@@ -70,7 +70,13 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
 else ()
   set(LDFLAGS_EFI -fuse-ld=lld -Wl,--subsystem,10 -Wl,--entry,efi_main)
 endif ()
-set(LDFLAGS_KERNEL -fuse-ld=lld -nostdlib -Wl,-T,${KERNEL_DIR}/arch/x86_64/linker.ld)
+set(LDFLAGS_KERNEL -nostdlib -T ${KERNEL_DIR}/arch/x86_64/linker.ld)
+
+set(KERNEL_OBJS
+  ${BUILD_DIR}/entry.o
+  ${BUILD_DIR}/kernel.o
+  ${BUILD_DIR}/wamr_runtime.o
+)
 
 set(BOOT_SOURCES
   ${BOOT_DIR}/boot.c
@@ -112,8 +118,11 @@ add_custom_target(bootloader ALL DEPENDS ${BUILD_DIR}/BOOTX64.EFI)
 # Kernel (ELF64)
 add_custom_command(
   OUTPUT ${BUILD_DIR}/kernel.elf
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} ${KERNEL_SOURCES}
-          -o ${BUILD_DIR}/kernel.elf ${LDFLAGS_KERNEL}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/entry.S -o ${BUILD_DIR}/entry.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel.c -o ${BUILD_DIR}/kernel.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${WASM_DIR}/wamr_runtime.c -o ${BUILD_DIR}/wamr_runtime.o
+  COMMAND ${LLD_PATH} ${LDFLAGS_KERNEL} -o ${BUILD_DIR}/kernel.elf ${KERNEL_OBJS}
   DEPENDS ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/arch/x86_64/linker.ld
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Building kernel"

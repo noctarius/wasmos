@@ -223,50 +223,48 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
     bs->GetMemoryMap(&mmap_size, 0, &map_key, &desc_size, &desc_version);
     mmap_size += desc_size * 2;
     UINTN mmap_capacity = mmap_size;
+    UINTN boot_capacity = 0;
 
     void *mmap = 0;
-    status = bs->AllocatePool(EFI_LOADER_DATA, mmap_capacity, &mmap);
-    if (EFI_ERROR(status)) {
-        uefi_log_status(system, "[boot] AllocatePool(mmap) failed: ", status);
-        return status;
-    }
-
-    status = bs->GetMemoryMap(&mmap_size, mmap, &map_key, &desc_size, &desc_version);
-    if (EFI_ERROR(status)) {
-        uefi_log_status(system, "[boot] GetMemoryMap failed: ", status);
-        return status;
-    }
+    UINT64 boot_buf = 0;
 
     uefi_log(system, "[boot] ExitBootServices\n");
     while (1) {
+        if (!mmap) {
+            status = bs->AllocatePool(EFI_LOADER_DATA, mmap_capacity, &mmap);
+            if (EFI_ERROR(status)) {
+                uefi_log_status(system, "[boot] AllocatePool(mmap) failed: ", status);
+                return status;
+            }
+        }
+
         mmap_size = mmap_capacity;
         status = bs->GetMemoryMap(&mmap_size, mmap, &map_key, &desc_size, &desc_version);
         if (status == EFI_BUFFER_TOO_SMALL) {
             uefi_log(system, "[boot] mmap buffer too small, growing\n");
             mmap_capacity = mmap_size + desc_size * 2;
-            status = bs->AllocatePool(EFI_LOADER_DATA, mmap_capacity, &mmap);
-            if (EFI_ERROR(status)) {
-                uefi_log_status(system, "[boot] AllocatePool(mmap grow) failed: ", status);
-                return status;
-            }
+            mmap = 0;
             continue;
         }
         if (EFI_ERROR(status)) {
             uefi_log_status(system, "[boot] GetMemoryMap retry failed: ", status);
             return status;
         }
-        // Allocate a kernel-owned buffer for boot_info + memory map.
+
         UINTN boot_bytes = sizeof(boot_info_t);
         UINTN map_bytes = mmap_size;
         UINTN total_bytes = boot_bytes + map_bytes;
         UINTN total_pages = (total_bytes + 0xFFF) / 0x1000;
-        UINT64 boot_buf = 0;
-        status = bs->AllocatePages(EFI_ALLOCATE_ANY_PAGES, EFI_LOADER_DATA, total_pages, &boot_buf);
-        if (EFI_ERROR(status)) {
-            uefi_log_status(system, "[boot] AllocatePages(boot info) failed: ", status);
-            return status;
+        if (boot_capacity < total_pages) {
+            status = bs->AllocatePages(EFI_ALLOCATE_ANY_PAGES, EFI_LOADER_DATA, total_pages, &boot_buf);
+            if (EFI_ERROR(status)) {
+                uefi_log_status(system, "[boot] AllocatePages(boot info) failed: ", status);
+                return status;
+            }
+            boot_capacity = total_pages;
+            boot_info = (boot_info_t *)(UINTN)boot_buf;
         }
-        boot_info = (boot_info_t *)(UINTN)boot_buf;
+
         memset8(boot_info, 0, sizeof(boot_info_t));
         void *map_dst = (void *)((UINT8 *)boot_info + boot_bytes);
         memcpy8(map_dst, mmap, map_bytes);
@@ -291,6 +289,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         uefi_hex((UINT64)desc_size, desc_hex);
         uefi_log(system, desc_hex);
         uefi_log(system, "\n");
+
         status = bs->ExitBootServices(image, map_key);
         if (!EFI_ERROR(status)) {
             break;

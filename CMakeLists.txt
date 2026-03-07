@@ -11,7 +11,11 @@ set(WASM_DIR ${CMAKE_SOURCE_DIR}/libs/wasm)
 set(WAMR_DIR ${WASM_DIR}/wasm-micro-runtime)
 
 set(CLANG clang CACHE STRING "C compiler for freestanding/UEFI builds")
-set(LLD lld CACHE STRING "Linker (lld or ld.lld)")
+if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+  set(LLD ld.lld CACHE STRING "Linker (lld or ld.lld)")
+else ()
+  set(LLD lld CACHE STRING "Linker (lld or ld.lld)")
+endif ()
 set(LLD_LINK lld-link CACHE STRING "COFF linker (lld-link) for UEFI on macOS")
 set(OBJCOPY llvm-objcopy CACHE STRING "Objcopy tool")
 set(OVMF_CODE /usr/share/OVMF/OVMF_CODE.fd CACHE FILEPATH "Path to OVMF_CODE.fd")
@@ -41,9 +45,37 @@ endif ()
 
 get_filename_component(CLANG_BIN_DIR ${CLANG} DIRECTORY)
 set(LLD_HINTS ${CLANG_BIN_DIR} /opt/homebrew/opt/lld/bin /usr/local/opt/lld/bin /opt/homebrew/bin /usr/local/bin)
-find_program(LLD_PATH ${LLD} HINTS ${LLD_HINTS})
+set(LLD_PATH "" CACHE FILEPATH "Resolved path to lld/ld.lld" FORCE)
+set(LLD_CANDIDATES
+  ${CLANG_BIN_DIR}/ld.lld
+  /opt/homebrew/opt/lld/bin/ld.lld
+  /usr/local/opt/lld/bin/ld.lld
+  /opt/homebrew/bin/ld.lld
+  /usr/local/bin/ld.lld
+  ${CLANG_BIN_DIR}/lld
+  /opt/homebrew/opt/lld/bin/lld
+  /usr/local/opt/lld/bin/lld
+  /opt/homebrew/bin/lld
+  /usr/local/bin/lld
+)
+foreach(candidate IN LISTS LLD_CANDIDATES)
+  if (EXISTS ${candidate})
+    set(LLD_PATH ${candidate} CACHE FILEPATH "Resolved path to lld/ld.lld" FORCE)
+    break()
+  endif ()
+endforeach()
 if (NOT LLD_PATH)
-  find_program(LLD_PATH ld.lld HINTS ${LLD_HINTS})
+  if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    find_program(LLD_PATH ld.lld HINTS ${LLD_HINTS})
+    if (NOT LLD_PATH)
+      find_program(LLD_PATH ${LLD} HINTS ${LLD_HINTS})
+    endif ()
+  else ()
+    find_program(LLD_PATH ${LLD} HINTS ${LLD_HINTS})
+    if (NOT LLD_PATH)
+      find_program(LLD_PATH ld.lld HINTS ${LLD_HINTS})
+    endif ()
+  endif ()
 endif ()
 if (NOT LLD_PATH)
   message(FATAL_ERROR "lld/ld.lld not found. Install LLVM lld or set -DLLD=/path/to/lld.")

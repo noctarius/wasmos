@@ -66,6 +66,26 @@ process_t *process_get(uint32_t pid) {
     return 0;
 }
 
+uint32_t process_wake_by_context(uint32_t context_id) {
+    if (context_id == 0) {
+        return 0;
+    }
+
+    uint32_t woken = 0;
+    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        process_t *proc = &g_processes[i];
+        if (proc->context_id != context_id) {
+            continue;
+        }
+        if (proc->state != PROCESS_STATE_BLOCKED) {
+            continue;
+        }
+        proc->state = PROCESS_STATE_READY;
+        woken++;
+    }
+    return woken;
+}
+
 int process_schedule_once(void) {
     if (PROCESS_MAX_COUNT == 0) {
         return 1;

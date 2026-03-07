@@ -1,4 +1,5 @@
 #include "ipc.h"
+#include "process.h"
 #include "spinlock.h"
 
 typedef struct {
@@ -78,7 +79,9 @@ int ipc_send(uint32_t endpoint, const ipc_message_t *message) {
     ep->queue[ep->tail] = msg;
     ep->tail = (ep->tail + 1u) % IPC_QUEUE_DEPTH;
     ep->count++;
+    uint32_t owner_context_id = ep->owner_context_id;
     spinlock_unlock(&ep->lock);
+    process_wake_by_context(owner_context_id);
     return 0;
 }
 

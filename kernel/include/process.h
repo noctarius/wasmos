@@ -35,6 +35,7 @@ typedef struct process {
 void process_init(void);
 int process_spawn(const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
 process_t *process_get(uint32_t pid);
+uint32_t process_wake_by_context(uint32_t context_id);
 int process_schedule_once(void);
 uint32_t process_count_active(void);
 

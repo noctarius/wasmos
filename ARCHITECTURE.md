@@ -126,14 +126,17 @@ UEFI firmware
 - `ipc` primitive in `kernel/ipc.c` provides endpoint allocation and bounded per-endpoint message queues.
 - IPC messages carry basic routing and payload fields (`type`, `source`, `destination`, `request_id`, `arg0..arg3`).
 - Endpoints are associated with owner context IDs and protect queues via spinlocks.
+- IPC enqueue wakes blocked processes that own the destination endpoint context.
 - `process` primitive in `kernel/process.c` provides a small cooperative process table and scheduler.
 - `process_spawn` binds each process to a new memory context (`mm_context_create(pid)`), establishing per-process isolation boundaries.
 
 ## Process Model (Current Scaffold)
 - The scheduler is cooperative and tick-based (`process_schedule_once`), scanning for READY processes in round-robin order.
 - Process entries return run results (`YIELDED`, `IDLE`, `BLOCKED`, `EXITED`) to drive state transitions.
+- `PROCESS_RUN_BLOCKED` entries remain blocked until a kernel primitive wakes them; IPC uses `process_wake_by_context` on message enqueue.
 - The kernel main loop schedules processes instead of invoking service handlers directly.
 - The current system starts a dedicated `chardev-server` process and assigns its context ID as the owner of the chardev IPC endpoint.
+- The chardev server returns `BLOCKED` when no IPC message is pending, reducing scheduler churn while idle.
 
 ## WAMR Integration (Planned)
 - WAMR is vendored via git subtree at `libs/wasm/wasm-micro-runtime`.

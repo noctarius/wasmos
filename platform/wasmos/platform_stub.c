@@ -4,6 +4,145 @@
 
 // Minimal, non-functional stubs for freestanding builds.
 
+static void byte_swap(uint8_t *a, uint8_t *b, size_t size) {
+    while (size--) {
+        uint8_t t = *a;
+        *a++ = *b;
+        *b++ = t;
+    }
+}
+
+static void quicksort(uint8_t *base, size_t nmemb, size_t size,
+                      int (*compar)(const void *, const void *)) {
+    if (nmemb < 2) {
+        return;
+    }
+    size_t pivot = nmemb / 2;
+    uint8_t *pivot_ptr = base + pivot * size;
+    size_t i = 0;
+    size_t j = nmemb - 1;
+    while (i <= j) {
+        while (compar(base + i * size, pivot_ptr) < 0) {
+            i++;
+        }
+        while (compar(base + j * size, pivot_ptr) > 0) {
+            if (j == 0) {
+                break;
+            }
+            j--;
+        }
+        if (i <= j) {
+            byte_swap(base + i * size, base + j * size, size);
+            i++;
+            if (j == 0) {
+                break;
+            }
+            j--;
+        }
+    }
+    if (j + 1 > 0) {
+        quicksort(base, j + 1, size, compar);
+    }
+    quicksort(base + i * size, nmemb - i, size, compar);
+}
+
+void *memcpy(void *dst, const void *src, size_t n) {
+    uint8_t *d = (uint8_t *)dst;
+    const uint8_t *s = (const uint8_t *)src;
+    for (size_t i = 0; i < n; ++i) {
+        d[i] = s[i];
+    }
+    return dst;
+}
+
+void *memset(void *dst, int c, size_t n) {
+    uint8_t *d = (uint8_t *)dst;
+    for (size_t i = 0; i < n; ++i) {
+        d[i] = (uint8_t)c;
+    }
+    return dst;
+}
+
+int memcmp(const void *a, const void *b, size_t n) {
+    const uint8_t *pa = (const uint8_t *)a;
+    const uint8_t *pb = (const uint8_t *)b;
+    for (size_t i = 0; i < n; ++i) {
+        if (pa[i] != pb[i]) {
+            return (int)pa[i] - (int)pb[i];
+        }
+    }
+    return 0;
+}
+
+size_t strlen(const char *s) {
+    size_t n = 0;
+    if (!s) {
+        return 0;
+    }
+    while (s[n]) {
+        n++;
+    }
+    return n;
+}
+
+int strcmp(const char *a, const char *b) {
+    if (!a || !b) {
+        return (a == b) ? 0 : (a ? 1 : -1);
+    }
+    while (*a && (*a == *b)) {
+        a++;
+        b++;
+    }
+    return (int)(unsigned char)*a - (int)(unsigned char)*b;
+}
+
+int snprintf(char *buf, size_t n, const char *fmt, ...) {
+    (void)fmt;
+    if (buf && n) {
+        buf[0] = '\0';
+    }
+    return 0;
+}
+
+int vsnprintf(char *buf, size_t n, const char *fmt, va_list ap) {
+    (void)fmt;
+    (void)ap;
+    if (buf && n) {
+        buf[0] = '\0';
+    }
+    return 0;
+}
+
+void qsort(void *base, size_t nmemb, size_t size,
+           int (*compar)(const void *, const void *)) {
+    if (!base || !compar || size == 0) {
+        return;
+    }
+    quicksort((uint8_t *)base, nmemb, size, compar);
+}
+
+void *bsearch(const void *key, const void *base, size_t nmemb, size_t size,
+              int (*compar)(const void *, const void *)) {
+    if (!key || !base || !compar || size == 0) {
+        return NULL;
+    }
+    size_t low = 0;
+    size_t high = nmemb;
+    while (low < high) {
+        size_t mid = low + (high - low) / 2;
+        const uint8_t *elem = (const uint8_t *)base + mid * size;
+        int cmp = compar(key, elem);
+        if (cmp < 0) {
+            high = mid;
+        } else if (cmp > 0) {
+            low = mid + 1;
+        } else {
+            return (void *)elem;
+        }
+    }
+    return NULL;
+}
+
 void *os_malloc(unsigned size) {
     (void)size;
     return NULL;
@@ -262,15 +401,15 @@ int os_socket_init(bh_socket_t *sock, bool tcp, uint16 port) {
     return -1;
 }
 
-int os_socket_send(bh_socket_t sock, const char *buf, int len) {
-    (void)sock;
+int os_socket_send(bh_socket_t socket, const void *buf, unsigned int len) {
+    (void)socket;
     (void)buf;
     (void)len;
     return -1;
 }
 
-int os_socket_recv(bh_socket_t sock, char *buf, int len) {
-    (void)sock;
+int os_socket_recv(bh_socket_t socket, void *buf, unsigned int len) {
+    (void)socket;
     (void)buf;
     (void)len;
     return -1;

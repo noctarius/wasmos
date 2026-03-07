@@ -143,6 +143,10 @@ void *bsearch(const void *key, const void *base, size_t nmemb, size_t size,
     return NULL;
 }
 
+long labs(long n) {
+    return (n < 0) ? -n : n;
+}
+
 void *os_malloc(unsigned size) {
     (void)size;
     return NULL;

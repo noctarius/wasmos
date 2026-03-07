@@ -122,8 +122,6 @@ void pfa_free_pages(uint64_t base, uint64_t pages) {
     if (base == 0 || pages == 0) {
         return;
     }
-    uint64_t end = base + pages * PAGE_SIZE;
-
     uint32_t insert = 0;
     while (insert < g_range_count && g_ranges[insert].base < base) {
         insert++;

@@ -209,6 +209,8 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/kernel.o
   ${BUILD_DIR}/memory.o
   ${BUILD_DIR}/physmem.o
+  ${BUILD_DIR}/ipc.o
+  ${BUILD_DIR}/spinlock.o
   ${BUILD_DIR}/wamr_context.o
   ${BUILD_DIR}/wasm_chardev.o
   ${BUILD_DIR}/serial.o
@@ -226,6 +228,8 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/kernel.c
   ${KERNEL_DIR}/memory.c
   ${KERNEL_DIR}/physmem.c
+  ${KERNEL_DIR}/ipc.c
+  ${KERNEL_DIR}/spinlock.c
   ${KERNEL_DIR}/wamr_context.c
   ${KERNEL_DIR}/wasm_chardev.c
   ${KERNEL_DIR}/serial.c
@@ -238,7 +242,7 @@ target_sources(bootloader_sources INTERFACE ${BOOT_SOURCES} ${BOOT_DIR}/uefi.h $
 target_include_directories(bootloader_sources INTERFACE ${BOOT_DIR} ${KERNEL_DIR}/include)
 
 add_library(kernel_sources INTERFACE)
-target_sources(kernel_sources INTERFACE ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/include/wasm_chardev.h ${WASM_DIR}/wamr_runtime.h)
+target_sources(kernel_sources INTERFACE ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/include/ipc.h ${KERNEL_DIR}/include/spinlock.h ${KERNEL_DIR}/include/wasm_chardev.h ${WASM_DIR}/wamr_runtime.h)
 target_include_directories(kernel_sources INTERFACE ${KERNEL_DIR}/include ${WASM_DIR})
 
 # WAMR is vendored via git subtree at ${WAMR_DIR}.
@@ -369,6 +373,8 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel.c -o ${BUILD_DIR}/kernel.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory.c -o ${BUILD_DIR}/memory.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/physmem.c -o ${BUILD_DIR}/physmem.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/ipc.c -o ${BUILD_DIR}/ipc.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/spinlock.c -o ${BUILD_DIR}/spinlock.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wamr_context.c -o ${BUILD_DIR}/wamr_context.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_chardev.c -o ${BUILD_DIR}/wasm_chardev.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/serial.c -o ${BUILD_DIR}/serial.o

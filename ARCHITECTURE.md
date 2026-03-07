@@ -116,10 +116,16 @@ UEFI firmware
 - Freestanding builds set `WAMR_DISABLE_APP_ENTRY=1` and link the generated `libwamr_runtime.a` into the kernel.
 - The `wasmos` platform adapter includes WAMR shared math sources and minimal libc/fortify shims required by freestanding linkage.
 
-## IPC Model (Planned)
+## IPC Model
 - IPC is the default communication mechanism between WASM drivers, services, and applications.
 - The kernel mediates IPC primitives and endpoint isolation; higher-level protocols are implemented in WASM services.
 - Device-facing drivers expose capability-like IPC interfaces rather than direct shared driver calls.
+
+## Kernel Primitives (Current Scaffold)
+- `spinlock` primitive in `kernel/spinlock.c` provides low-level mutual exclusion for shared kernel objects.
+- `ipc` primitive in `kernel/ipc.c` provides endpoint allocation and bounded per-endpoint message queues.
+- IPC messages carry basic routing and payload fields (`type`, `source`, `destination`, `request_id`, `arg0..arg3`).
+- Endpoints are associated with owner context IDs and protect queues via spinlocks.
 
 ## WAMR Integration (Planned)
 - WAMR is vendored via git subtree at `libs/wasm/wasm-micro-runtime`.
@@ -133,8 +139,9 @@ UEFI firmware
 - Provide driver registry and resource manager.
 - Run drivers as isolated WASM contexts.
 - Expose driver APIs through IPC endpoints to other WASM contexts.
-- Current scaffold includes a minimal WASM-backed character device (`kernel/wasm_chardev.c`) with a tiny `chardev_t` interface.
-- The driver can attach to a WAMR module instance and dispatch byte I/O via exported WASM functions (`chardev_read_byte`, `chardev_write_byte`).
+- Current scaffold includes a minimal WASM-backed character device service (`kernel/wasm_chardev.c`).
+- The service exposes an IPC endpoint and handles read/write requests with request/response semantics.
+- Internally, the service dispatches byte I/O to exported WASM functions (`chardev_read_byte`, `chardev_write_byte`) and serializes runtime access with a spinlock.
 
 ## Interfaces
 ### boot_info_t

@@ -2,13 +2,17 @@
 #include "memory.h"
 #include "serial.h"
 #include <stdint.h>
+#include "ipc.h"
 #include "wamr_context.h"
 #include "wamr_runtime.h"
 #include "wasm_chardev.h"
 
-static void hang(void) {
+static void run_kernel_loop(void) {
     for (;;) {
-        __asm__ volatile("hlt");
+        int rc = wasm_chardev_service_once();
+        if (rc != 0) {
+            __asm__ volatile("pause");
+        }
     }
 }
 
@@ -19,10 +23,11 @@ void kmain(boot_info_t *boot_info) {
     serial_write("[kernel] kmain\n");
 
     mm_init(boot_info);
+    ipc_init();
 
     // Placeholder: initialize memory management, drivers, then WAMR.
     wamr_context_init();
-    wasm_chardev_init();
+    wasm_chardev_init(0);
 
-    hang();
+    run_kernel_loop();
 }

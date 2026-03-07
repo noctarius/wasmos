@@ -44,6 +44,17 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   # Avoid host -arch injection from environment/defaults.
   set(CMAKE_C_FLAGS "" CACHE STRING "Reset host C flags for freestanding build" FORCE)
   set(CMAKE_ASM_FLAGS "" CACHE STRING "Reset host ASM flags for freestanding build" FORCE)
+  foreach(flag_var
+          CMAKE_C_FLAGS CMAKE_ASM_FLAGS
+          CMAKE_C_FLAGS_DEBUG CMAKE_C_FLAGS_RELEASE CMAKE_C_FLAGS_RELWITHDEBINFO CMAKE_C_FLAGS_MINSIZEREL
+          CMAKE_ASM_FLAGS_DEBUG CMAKE_ASM_FLAGS_RELEASE CMAKE_ASM_FLAGS_RELWITHDEBINFO CMAKE_ASM_FLAGS_MINSIZEREL)
+    if (DEFINED ${flag_var})
+      string(REPLACE "-arch arm64" "" ${flag_var} "${${flag_var}}")
+      string(REPLACE "-arch;x86_64" "" ${flag_var} "${${flag_var}}")
+      string(REPLACE "-arch x86_64" "" ${flag_var} "${${flag_var}}")
+      set(${flag_var} "${${flag_var}}" CACHE STRING "Sanitized flags for freestanding build" FORCE)
+    endif ()
+  endforeach()
 endif ()
 
 execute_process(

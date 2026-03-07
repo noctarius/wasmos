@@ -216,7 +216,7 @@ set(KERNEL_OBJS
 
 set(KERNEL_LINK_LIBS "")
 if (WAMR_LINK)
-  set(KERNEL_LINK_LIBS ${KERNEL_LINK_LIBS} $<TARGET_FILE:wamr_runtime_lib>)
+  set(KERNEL_LINK_LIBS ${KERNEL_LINK_LIBS} ${WAMR_RUNTIME_LIB})
 endif ()
 
 set(BOOT_SOURCES
@@ -265,19 +265,66 @@ if (WAMR_LINK)
   set(WAMR_ROOT_DIR ${WAMR_DIR})
   include(${WAMR_ROOT_DIR}/build-scripts/runtime_lib.cmake)
 
-  add_library(wamr_runtime_lib STATIC ${WAMR_RUNTIME_LIB_SOURCE})
-  target_include_directories(wamr_runtime_lib PRIVATE
+  if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND NOT MACOS_SDK_PATH)
+    execute_process(
+      COMMAND xcrun --sdk macosx --show-sdk-path
+      OUTPUT_VARIABLE MACOS_SDK_PATH
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+  endif ()
+
+  find_program(LLVM_AR llvm-ar HINTS ${CLANG_BIN_DIR} /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin)
+  if (NOT LLVM_AR)
+    message(FATAL_ERROR "llvm-ar not found. Install LLVM and ensure llvm-ar is in PATH.")
+  endif ()
+
+  set(WAMR_INCLUDE_DIRS
+    ${WAMR_ROOT_DIR}/core/iwasm/interpreter
+    ${WAMR_ROOT_DIR}/core/iwasm/libraries/libc-builtin
     ${WAMR_ROOT_DIR}/core/iwasm/include
+    ${WAMR_ROOT_DIR}/core/shared/platform/${WAMR_BUILD_PLATFORM}
+    ${WAMR_ROOT_DIR}/core/shared/platform/${WAMR_BUILD_PLATFORM}/../include
+    ${WAMR_ROOT_DIR}/core/shared/mem-alloc
+    ${WAMR_ROOT_DIR}/core/iwasm/common
+    ${WAMR_ROOT_DIR}/core/shared/utils
     ${WAMR_ROOT_DIR}/core/shared
   )
-  if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
-    set_target_properties(wamr_runtime_lib PROPERTIES OSX_ARCHITECTURES "")
-  endif ()
+
+  set(WAMR_INC_FLAGS "")
+  foreach(dir IN LISTS WAMR_INCLUDE_DIRS)
+    list(APPEND WAMR_INC_FLAGS -I${dir})
+  endforeach()
   if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND MACOS_SDK_PATH)
-    target_compile_options(wamr_runtime_lib PRIVATE -isysroot ${MACOS_SDK_PATH})
-    target_compile_options(wamr_runtime_lib PRIVATE -isystem ${MACOS_SDK_PATH}/usr/include)
+    list(APPEND WAMR_INC_FLAGS -isysroot ${MACOS_SDK_PATH} -isystem ${MACOS_SDK_PATH}/usr/include)
   endif ()
-  target_compile_options(wamr_runtime_lib PRIVATE ${CFLAGS_KERNEL} -Wno-unused-command-line-argument)
+
+  set(WAMR_OBJ_DIR ${BUILD_DIR}/wamr_obj)
+  set(WAMR_OBJS "")
+  foreach(src IN LISTS WAMR_RUNTIME_LIB_SOURCE)
+    string(REPLACE "/" "_" obj_name ${src})
+    string(REPLACE "." "_" obj_name ${obj_name})
+    set(obj ${WAMR_OBJ_DIR}/${obj_name}.o)
+    add_custom_command(
+      OUTPUT ${obj}
+      COMMAND ${CMAKE_COMMAND} -E make_directory ${WAMR_OBJ_DIR}
+      COMMAND ${CLANG} ${CFLAGS_KERNEL} -Wno-unused-command-line-argument ${WAMR_INC_FLAGS}
+              -c ${src} -o ${obj}
+      DEPENDS ${src}
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+      VERBATIM
+    )
+    list(APPEND WAMR_OBJS ${obj})
+  endforeach()
+
+  set(WAMR_RUNTIME_LIB ${BUILD_DIR}/libwamr_runtime.a)
+  add_custom_command(
+    OUTPUT ${WAMR_RUNTIME_LIB}
+    COMMAND ${LLVM_AR} rcs ${WAMR_RUNTIME_LIB} ${WAMR_OBJS}
+    DEPENDS ${WAMR_OBJS}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    VERBATIM
+  )
+  add_custom_target(wamr_runtime_lib DEPENDS ${WAMR_RUNTIME_LIB})
 endif ()
 
 # Bootloader (UEFI PE/COFF)

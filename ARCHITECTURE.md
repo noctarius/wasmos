@@ -106,6 +106,9 @@ UEFI firmware
 - WAMR initialization currently uses a fixed pool allocator and per-context bindings for linear/stack/heap sizing.
 - WAMR is enabled by default and links the runtime library unless `WAMR_LINK=OFF` is set.
 - The WAMR runtime build uses a minimal `wasmos` platform from `platform/wasmos/`.
+- The custom WAMR object build path forwards upstream runtime feature defines and disables `-Werror` for third-party WAMR sources.
+- Freestanding builds set `WAMR_DISABLE_APP_ENTRY=1` and link the generated `libwamr_runtime.a` into the kernel.
+- The `wasmos` platform adapter includes WAMR shared math sources and minimal libc/fortify shims required by freestanding linkage.
 
 ## WAMR Integration (Planned)
 - WAMR is vendored via git subtree at `libs/wasm/wasm-micro-runtime`.

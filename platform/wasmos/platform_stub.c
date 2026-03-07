@@ -55,6 +55,11 @@ void *memcpy(void *dst, const void *src, size_t n) {
     return dst;
 }
 
+void *__memcpy_chk(void *dst, const void *src, size_t n, size_t dst_len) {
+    (void)dst_len;
+    return memcpy(dst, src, n);
+}
+
 void *memmove(void *dst, const void *src, size_t n) {
     uint8_t *d = (uint8_t *)dst;
     const uint8_t *s = (const uint8_t *)src;
@@ -73,12 +78,22 @@ void *memmove(void *dst, const void *src, size_t n) {
     return dst;
 }
 
+void *__memmove_chk(void *dst, const void *src, size_t n, size_t dst_len) {
+    (void)dst_len;
+    return memmove(dst, src, n);
+}
+
 void *memset(void *dst, int c, size_t n) {
     uint8_t *d = (uint8_t *)dst;
     for (size_t i = 0; i < n; ++i) {
         d[i] = (uint8_t)c;
     }
     return dst;
+}
+
+void *__memset_chk(void *dst, int c, size_t n, size_t dst_len) {
+    (void)dst_len;
+    return memset(dst, c, n);
 }
 
 int memcmp(const void *a, const void *b, size_t n) {
@@ -215,14 +230,6 @@ void abort(void) {
     }
 }
 
-void *wasm_runtime_malloc(unsigned int size) {
-    return os_malloc(size);
-}
-
-void wasm_runtime_free(void *ptr) {
-    os_free(ptr);
-}
-
 void *os_malloc(unsigned size) {
     (void)size;
     return NULL;
@@ -247,6 +254,13 @@ int os_vprintf(const char *format, va_list ap) {
     (void)format;
     (void)ap;
     return 0;
+}
+
+int os_dumps_proc_mem_info(char *out, unsigned int size) {
+    if (out && size) {
+        out[0] = '\0';
+    }
+    return -1;
 }
 
 uint64 os_time_get_boot_us(void) {

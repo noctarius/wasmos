@@ -215,9 +215,6 @@ set(KERNEL_OBJS
 )
 
 set(KERNEL_LINK_LIBS "")
-if (WAMR_LINK)
-  set(KERNEL_LINK_LIBS ${KERNEL_LINK_LIBS} ${WAMR_RUNTIME_LIB})
-endif ()
 
 set(BOOT_SOURCES
   ${BOOT_DIR}/boot.c
@@ -259,12 +256,33 @@ if (WAMR_LINK)
   set(WAMR_BUILD_LIBC_BUILTIN 0 CACHE BOOL "Disable WAMR builtin libc")
   set(WAMR_BUILD_LIBC_WASI 0 CACHE BOOL "Disable WAMR WASI libc")
   set(WAMR_BUILD_LIBC_UVWASI 0 CACHE BOOL "Disable WAMR uvwasi libc")
+  set(WAMR_DISABLE_APP_ENTRY 1 CACHE BOOL "Disable WAMR app entry helpers")
   set(WAMR_BUILD_LIB_PTHREAD 0 CACHE BOOL "Disable WAMR pthreads")
   set(WAMR_BUILD_THREAD_MGR 0 CACHE BOOL "Disable WAMR thread mgr")
 
   set(WAMR_ROOT_DIR ${WAMR_DIR})
   set(SHARED_PLATFORM_CONFIG ${CMAKE_SOURCE_DIR}/platform/wasmos/shared_platform.cmake)
   include(${WAMR_ROOT_DIR}/build-scripts/runtime_lib.cmake)
+
+  # runtime_lib.cmake configures required feature macros via add_definitions().
+  # Propagate them into our custom WAMR object build commands.
+  get_directory_property(WAMR_COMPILE_DEFINITIONS COMPILE_DEFINITIONS)
+  set(WAMR_DEF_NAMES "")
+  set(WAMR_DEF_VALUES "")
+  foreach(def IN LISTS WAMR_COMPILE_DEFINITIONS)
+    string(REGEX REPLACE "^([^=]+)=?.*$" "\\1" def_name "${def}")
+    list(FIND WAMR_DEF_NAMES "${def_name}" def_idx)
+    if (NOT def_idx EQUAL -1)
+      list(REMOVE_AT WAMR_DEF_NAMES ${def_idx})
+      list(REMOVE_AT WAMR_DEF_VALUES ${def_idx})
+    endif ()
+    list(APPEND WAMR_DEF_NAMES "${def_name}")
+    list(APPEND WAMR_DEF_VALUES "${def}")
+  endforeach()
+  set(WAMR_DEF_FLAGS "")
+  foreach(def IN LISTS WAMR_DEF_VALUES)
+    list(APPEND WAMR_DEF_FLAGS -D${def})
+  endforeach()
 
   if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND NOT MACOS_SDK_PATH)
     execute_process(
@@ -308,7 +326,7 @@ if (WAMR_LINK)
     add_custom_command(
       OUTPUT ${obj}
       COMMAND ${CMAKE_COMMAND} -E make_directory ${WAMR_OBJ_DIR}
-      COMMAND ${CLANG} ${CFLAGS_KERNEL} -Wno-unused-command-line-argument -Wno-error=unused-parameter ${WAMR_INC_FLAGS}
+      COMMAND ${CLANG} ${CFLAGS_KERNEL} ${WAMR_DEF_FLAGS} -Wno-error -Wno-unused-command-line-argument -Wno-error=unused-parameter ${WAMR_INC_FLAGS}
               -c ${src} -o ${obj}
       DEPENDS ${src}
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
@@ -326,6 +344,7 @@ if (WAMR_LINK)
     VERBATIM
   )
   add_custom_target(wamr_runtime_lib DEPENDS ${WAMR_RUNTIME_LIB})
+  set(KERNEL_LINK_LIBS ${KERNEL_LINK_LIBS} ${WAMR_RUNTIME_LIB})
 endif ()
 
 # Bootloader (UEFI PE/COFF)

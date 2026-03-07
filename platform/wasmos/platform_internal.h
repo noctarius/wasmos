@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdarg.h>
+#include <limits.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -67,6 +68,34 @@ void abort(void) __attribute__((noreturn));
 
 void *wasm_runtime_malloc(unsigned int size);
 void wasm_runtime_free(void *ptr);
+
+/* Minimal math surface used by WAMR runtime codepaths. */
+double sqrt(double x);
+double floor(double x);
+double ceil(double x);
+double fmin(double x, double y);
+double fmax(double x, double y);
+double rint(double x);
+double fabs(double x);
+double trunc(double x);
+float sqrtf(float x);
+float floorf(float x);
+float ceilf(float x);
+float fminf(float x, float y);
+float fmaxf(float x, float y);
+float rintf(float x);
+float fabsf(float x);
+float truncf(float x);
+int isnan_double(double x);
+int isnan_float(float x);
+int signbit_double(double x);
+int signbit_float(float x);
+#ifndef isnan
+#define isnan(x) (sizeof(x) == sizeof(double) ? isnan_double((double)(x)) : isnan_float((float)(x)))
+#endif
+#ifndef signbit
+#define signbit(x) (sizeof(x) == sizeof(double) ? signbit_double((double)(x)) : signbit_float((float)(x)))
+#endif
 
 #ifdef __cplusplus
 }

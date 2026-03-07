@@ -147,6 +147,12 @@ long labs(long n) {
     return (n < 0) ? -n : n;
 }
 
+void abort(void) {
+    for (;;) {
+        __asm__ volatile("hlt");
+    }
+}
+
 void *os_malloc(unsigned size) {
     (void)size;
     return NULL;

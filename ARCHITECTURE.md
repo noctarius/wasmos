@@ -126,6 +126,14 @@ UEFI firmware
 - `ipc` primitive in `kernel/ipc.c` provides endpoint allocation and bounded per-endpoint message queues.
 - IPC messages carry basic routing and payload fields (`type`, `source`, `destination`, `request_id`, `arg0..arg3`).
 - Endpoints are associated with owner context IDs and protect queues via spinlocks.
+- `process` primitive in `kernel/process.c` provides a small cooperative process table and scheduler.
+- `process_spawn` binds each process to a new memory context (`mm_context_create(pid)`), establishing per-process isolation boundaries.
+
+## Process Model (Current Scaffold)
+- The scheduler is cooperative and tick-based (`process_schedule_once`), scanning for READY processes in round-robin order.
+- Process entries return run results (`YIELDED`, `IDLE`, `BLOCKED`, `EXITED`) to drive state transitions.
+- The kernel main loop schedules processes instead of invoking service handlers directly.
+- The current system starts a dedicated `chardev-server` process and assigns its context ID as the owner of the chardev IPC endpoint.
 
 ## WAMR Integration (Planned)
 - WAMR is vendored via git subtree at `libs/wasm/wasm-micro-runtime`.
@@ -142,6 +150,7 @@ UEFI firmware
 - Current scaffold includes a minimal WASM-backed character device service (`kernel/wasm_chardev.c`).
 - The service exposes an IPC endpoint and handles read/write requests with request/response semantics.
 - Internally, the service dispatches byte I/O to exported WASM functions (`chardev_read_byte`, `chardev_write_byte`) and serializes runtime access with a spinlock.
+- The service is executed by the spawned `chardev-server` process through the cooperative scheduler.
 
 ## Interfaces
 ### boot_info_t

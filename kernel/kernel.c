@@ -56,9 +56,7 @@ void kmain(boot_info_t *boot_info) {
     ipc_init();
     process_init();
 
-    // Keep boot path non-blocking: WAMR init is deferred until platform stubs
-    // are complete enough for runtime initialization.
-    serial_write("[kernel] wamr init deferred\n");
+    serial_write("[kernel] wamr init on-demand\n");
 
     uint32_t chardev_pid = 0;
     if (process_spawn("chardev-server", chardev_server_entry, 0, &chardev_pid) != 0) {

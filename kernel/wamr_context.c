@@ -1,9 +1,10 @@
 #include "wamr_context.h"
-#include "physmem.h"
 #include "serial.h"
 #include "wamr_runtime.h"
 
-#define WAMR_RUNTIME_HEAP_PAGES 128
+#define WAMR_RUNTIME_HEAP_SIZE (512 * 1024)
+
+static uint8_t g_wamr_runtime_heap[WAMR_RUNTIME_HEAP_SIZE];
 
 #ifdef WAMR_ENABLED
 
@@ -22,15 +23,10 @@ static int find_region(const mm_context_t *ctx, mem_region_type_t type, mem_regi
 
 int wamr_context_init(void) {
     serial_write("[wamr] init enter\n");
-    uint64_t heap_base = pfa_alloc_pages(WAMR_RUNTIME_HEAP_PAGES);
     serial_write("[wamr] heap alloc done\n");
-    if (!heap_base) {
-        serial_write("[wamr] runtime heap alloc failed\n");
-        return -1;
-    }
-    uint32_t heap_size = (uint32_t)(WAMR_RUNTIME_HEAP_PAGES * 0x1000ULL);
     serial_write("[wamr] full init\n");
-    if (!wamr_runtime_init_with_pool((void *)(uintptr_t)heap_base, heap_size)) {
+    if (!wamr_runtime_init_with_pool(g_wamr_runtime_heap,
+                                     (uint32_t)WAMR_RUNTIME_HEAP_SIZE)) {
         serial_write("[wamr] runtime init failed\n");
         return -1;
     }

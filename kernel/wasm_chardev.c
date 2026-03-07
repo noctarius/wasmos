@@ -1,119 +1,123 @@
 #include "wasm_chardev.h"
 #include "serial.h"
-#include "spinlock.h"
+#include "wasm_driver.h"
 
-typedef struct {
-    wamr_instance_t *instance;
-    const char *init_fn;
-    const char *read_fn;
-    const char *write_fn;
-} wasm_chardev_ctx_t;
+extern const uint8_t _binary_chardev_server_wasm_start[];
+extern const uint8_t _binary_chardev_server_wasm_end[];
 
-static int wasm_chardev_read_cb(void *ctx, uint8_t *out_byte);
-static int wasm_chardev_write_cb(void *ctx, uint8_t byte);
-static void wasm_chardev_reply(uint32_t reply_endpoint,
-                               uint32_t type,
-                               uint32_t request_id,
-                               int status,
-                               uint32_t arg1);
-
-static wasm_chardev_ctx_t g_wasm_ctx;
-static chardev_t g_wasm_dev;
-static spinlock_t g_wasm_lock;
-static uint32_t g_service_endpoint;
+static wasm_driver_t g_chardev_driver;
 static uint32_t g_owner_context_id;
 
-int chardev_read_byte(chardev_t *dev, uint8_t *out_byte) {
-    if (!dev || !dev->read_byte || !out_byte) {
-        return -1;
-    }
-    return dev->read_byte(dev->ctx, out_byte);
+static uint32_t
+wasm_chardev_module_size(void)
+{
+    return (uint32_t)(
+        (uintptr_t)_binary_chardev_server_wasm_end -
+        (uintptr_t)_binary_chardev_server_wasm_start);
 }
 
-int chardev_write_string(chardev_t *dev, const char *str) {
-    if (!dev || !dev->write_byte || !str) {
-        return -1;
+static void
+wasm_chardev_reply(uint32_t reply_endpoint,
+                   uint32_t type,
+                   uint32_t request_id,
+                   int status,
+                   uint32_t arg1)
+{
+    uint32_t service_endpoint = IPC_ENDPOINT_NONE;
+    ipc_message_t resp;
+
+    if (wasm_driver_endpoint(&g_chardev_driver, &service_endpoint) != 0) {
+        return;
     }
-    for (const char *p = str; *p; ++p) {
-        if (dev->write_byte(dev->ctx, (uint8_t)*p) != 0) {
-            return -1;
-        }
+
+    resp.type = type;
+    resp.source = service_endpoint;
+    resp.destination = reply_endpoint;
+    resp.request_id = request_id;
+    resp.arg0 = (uint32_t)status;
+    resp.arg1 = arg1;
+    resp.arg2 = 0;
+    resp.arg3 = 0;
+    if (ipc_send_from(g_owner_context_id, reply_endpoint, &resp) != 0) {
+        serial_write("[chardev] reply dropped\n");
     }
-    return 0;
 }
 
-int wasm_chardev_init(uint32_t owner_context_id) {
-    g_wasm_ctx.instance = 0;
-    g_wasm_ctx.init_fn = "chardev_init";
-    g_wasm_ctx.read_fn = "chardev_read_byte";
-    g_wasm_ctx.write_fn = "chardev_write_byte";
-    spinlock_init(&g_wasm_lock);
-    g_service_endpoint = 0;
+int
+wasm_chardev_init(uint32_t owner_context_id)
+{
+    wasm_driver_manifest_t manifest;
+
+    manifest.name = "chardev-server";
+    manifest.module_bytes = _binary_chardev_server_wasm_start;
+    manifest.module_size = wasm_chardev_module_size();
+    manifest.init_export = "chardev_init";
+    manifest.dispatch_export = "chardev_ipc_dispatch";
+    manifest.stack_size = 16 * 1024;
+    manifest.heap_size = 16 * 1024;
+
     g_owner_context_id = owner_context_id;
-
-    if (ipc_endpoint_create(owner_context_id, &g_service_endpoint) != 0) {
-        serial_write("[chardev] endpoint allocation failed\n");
+    if (wasm_driver_start(&g_chardev_driver, &manifest, owner_context_id) != 0) {
+        serial_write("[chardev] wasm driver start failed\n");
         return -1;
     }
-
-    g_wasm_dev.name = "wasm.chardev0";
-    g_wasm_dev.read_byte = wasm_chardev_read_cb;
-    g_wasm_dev.write_byte = wasm_chardev_write_cb;
-    g_wasm_dev.ctx = &g_wasm_ctx;
 
     serial_write("[chardev] wasm chardev ready (ipc)\n");
     return 0;
 }
 
-int wasm_chardev_attach_instance(wamr_instance_t *instance) {
-    if (!instance) {
-        return -1;
-    }
-    spinlock_lock(&g_wasm_lock);
-    g_wasm_ctx.instance = instance;
-
-    uint32_t argv[1] = {0};
-    if (!wamr_call_function(instance, g_wasm_ctx.init_fn, 0, argv, 0)) {
-        serial_write("[chardev] wasm attach without chardev_init\n");
-    }
-    spinlock_unlock(&g_wasm_lock);
-
-    serial_write("[chardev] wasm chardev attached\n");
-    return 0;
+int
+wasm_chardev_endpoint(uint32_t *out_endpoint)
+{
+    return wasm_driver_endpoint(&g_chardev_driver, out_endpoint);
 }
 
-int wasm_chardev_endpoint(uint32_t *out_endpoint) {
-    if (!out_endpoint) {
-        return -1;
-    }
-    *out_endpoint = g_service_endpoint;
-    return 0;
-}
-
-int wasm_chardev_service_once(void) {
+int
+wasm_chardev_service_once(void)
+{
     ipc_message_t req;
-    int recv_result = ipc_recv_for(g_owner_context_id, g_service_endpoint, &req);
+    uint32_t service_endpoint = IPC_ENDPOINT_NONE;
+    int recv_result;
+
+    if (wasm_driver_endpoint(&g_chardev_driver, &service_endpoint) != 0) {
+        return -1;
+    }
+
+    recv_result = ipc_recv_for(g_owner_context_id, service_endpoint, &req);
     if (recv_result != 0) {
         return recv_result;
     }
 
     switch (req.type) {
         case WASM_CHARDEV_IPC_READ_REQ: {
-            uint8_t value = 0;
-            int status = chardev_read_byte(&g_wasm_dev, &value);
-            wasm_chardev_reply(req.source,
-                               WASM_CHARDEV_IPC_READ_RESP,
-                               req.request_id,
-                               status,
-                               (uint32_t)value);
+            int32_t value = -1;
+            int status = wasm_driver_dispatch(&g_chardev_driver, &req, &value);
+            if (status != 0 || value < 0 || value > 0xFF) {
+                wasm_chardev_reply(req.source,
+                                   WASM_CHARDEV_IPC_READ_RESP,
+                                   req.request_id,
+                                   -1,
+                                   0);
+            }
+            else {
+                wasm_chardev_reply(req.source,
+                                   WASM_CHARDEV_IPC_READ_RESP,
+                                   req.request_id,
+                                   0,
+                                   (uint32_t)value);
+            }
             return 0;
         }
         case WASM_CHARDEV_IPC_WRITE_REQ: {
-            int status = g_wasm_dev.write_byte(g_wasm_dev.ctx, (uint8_t)(req.arg0 & 0xFFu));
+            int32_t value = -1;
+            int status = wasm_driver_dispatch(&g_chardev_driver, &req, &value);
+            if (status != 0) {
+                value = -1;
+            }
             wasm_chardev_reply(req.source,
                                WASM_CHARDEV_IPC_WRITE_RESP,
                                req.request_id,
-                               status,
+                               (int)value,
                                req.arg0 & 0xFFu);
             return 0;
         }
@@ -127,14 +131,12 @@ int wasm_chardev_service_once(void) {
     }
 }
 
-chardev_t *wasm_chardev_get(void) {
-    return &g_wasm_dev;
-}
-
-int wasm_chardev_ipc_read_request(uint32_t client_context_id,
-                                  uint32_t chardev_endpoint,
-                                  uint32_t client_reply_endpoint,
-                                  uint32_t request_id) {
+int
+wasm_chardev_ipc_read_request(uint32_t client_context_id,
+                              uint32_t chardev_endpoint,
+                              uint32_t client_reply_endpoint,
+                              uint32_t request_id)
+{
     ipc_message_t req;
     req.type = WASM_CHARDEV_IPC_READ_REQ;
     req.source = client_reply_endpoint;
@@ -147,11 +149,13 @@ int wasm_chardev_ipc_read_request(uint32_t client_context_id,
     return ipc_send_from(client_context_id, chardev_endpoint, &req);
 }
 
-int wasm_chardev_ipc_write_request(uint32_t client_context_id,
-                                   uint32_t chardev_endpoint,
-                                   uint32_t client_reply_endpoint,
-                                   uint32_t request_id,
-                                   uint8_t byte) {
+int
+wasm_chardev_ipc_write_request(uint32_t client_context_id,
+                               uint32_t chardev_endpoint,
+                               uint32_t client_reply_endpoint,
+                               uint32_t request_id,
+                               uint8_t byte)
+{
     ipc_message_t req;
     req.type = WASM_CHARDEV_IPC_WRITE_REQ;
     req.source = client_reply_endpoint;
@@ -162,65 +166,4 @@ int wasm_chardev_ipc_write_request(uint32_t client_context_id,
     req.arg2 = 0;
     req.arg3 = 0;
     return ipc_send_from(client_context_id, chardev_endpoint, &req);
-}
-
-static int wasm_chardev_read_cb(void *ctx, uint8_t *out_byte) {
-    wasm_chardev_ctx_t *wasm_ctx = (wasm_chardev_ctx_t *)ctx;
-    if (!wasm_ctx || !out_byte) {
-        return -1;
-    }
-
-    spinlock_lock(&g_wasm_lock);
-    if (!wasm_ctx->instance) {
-        spinlock_unlock(&g_wasm_lock);
-        return -1;
-    }
-
-    uint32_t argv[1] = {0};
-    if (!wamr_call_function(wasm_ctx->instance, wasm_ctx->read_fn, 0, argv, 0)) {
-        spinlock_unlock(&g_wasm_lock);
-        return -1;
-    }
-    spinlock_unlock(&g_wasm_lock);
-
-    *out_byte = (uint8_t)(argv[0] & 0xFFu);
-    return 0;
-}
-
-static int wasm_chardev_write_cb(void *ctx, uint8_t byte) {
-    wasm_chardev_ctx_t *wasm_ctx = (wasm_chardev_ctx_t *)ctx;
-    if (!wasm_ctx) {
-        return -1;
-    }
-
-    spinlock_lock(&g_wasm_lock);
-    if (!wasm_ctx->instance) {
-        spinlock_unlock(&g_wasm_lock);
-        return -1;
-    }
-
-    uint32_t argv[1];
-    argv[0] = (uint32_t)byte;
-    int ok = wamr_call_function(wasm_ctx->instance, wasm_ctx->write_fn, 1, argv, 0) ? 0 : -1;
-    spinlock_unlock(&g_wasm_lock);
-    return ok;
-}
-
-static void wasm_chardev_reply(uint32_t reply_endpoint,
-                               uint32_t type,
-                               uint32_t request_id,
-                               int status,
-                               uint32_t arg1) {
-    ipc_message_t resp;
-    resp.type = type;
-    resp.source = g_service_endpoint;
-    resp.destination = reply_endpoint;
-    resp.request_id = request_id;
-    resp.arg0 = (uint32_t)status;
-    resp.arg1 = arg1;
-    resp.arg2 = 0;
-    resp.arg3 = 0;
-    if (ipc_send_from(g_owner_context_id, reply_endpoint, &resp) != 0) {
-        serial_write("[chardev] reply dropped\n");
-    }
 }

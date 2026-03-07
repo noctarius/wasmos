@@ -115,8 +115,8 @@ Remaining:
 - `mm_init` now installs kernel-owned x86_64 page tables and reloads `CR3`.
 - The paging scaffold keeps low-memory identity mapping and adds higher-half aliases at `0xFFFFFFFF80000000`.
 - `mm_context_create` can allocate new contexts with default linear/stack/heap regions.
-- WAMR initialization currently uses a fixed pool allocator and per-context bindings for linear/stack/heap sizing.
-- Early boot currently defers WAMR runtime initialization to avoid blocking process/scheduler bring-up while freestanding platform stubs are being hardened.
+- WAMR initialization uses a kernel-owned static pool allocator with per-context bindings for linear/stack/heap sizing.
+- WAMR runtime initialization is performed on-demand by the kernel wasm driver host when the first wasm driver is started.
 - WAMR is enabled by default and links the runtime library unless `WAMR_LINK=OFF` is set.
 - The WAMR runtime build uses a minimal `wasmos` platform from `platform/wasmos/`.
 - The custom WAMR object build path forwards upstream runtime feature defines and disables `-Werror` for third-party WAMR sources.
@@ -162,10 +162,11 @@ Remaining:
 - Provide driver registry and resource manager.
 - Run drivers as isolated WASM contexts.
 - Expose driver APIs through IPC endpoints to other WASM contexts.
-- Current scaffold includes a minimal WASM-backed character device service (`kernel/wasm_chardev.c`).
-- The service exposes an IPC endpoint and handles read/write requests with request/response semantics.
-- Internally, the service dispatches byte I/O to exported WASM functions (`chardev_read_byte`, `chardev_write_byte`) and serializes runtime access with a spinlock.
-- The service is executed by the spawned `chardev-server` process through the cooperative scheduler.
+- Current scaffold includes a project-owned wasm driver source tree at `drivers/wasm/`.
+- The build compiles wasm drivers (for now: `drivers/wasm/chardev/chardev_server.c`) into `.wasm` binaries and embeds them into the kernel image as binary blobs.
+- A kernel wasm driver host (`kernel/wasm_driver.c`) loads embedded modules, instantiates them with WAMR, allocates IPC endpoints, and dispatches IPC messages to a driver export.
+- The chardev service (`kernel/wasm_chardev.c`) runs in the spawned `chardev-server` process and bridges IPC request/response traffic to the wasm export `chardev_ipc_dispatch`.
+- The wasm chardev module also exports `chardev_init` and optional direct byte helpers (`chardev_read_byte`, `chardev_write_byte`).
 
 ## Interfaces
 ### boot_info_t

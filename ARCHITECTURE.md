@@ -91,7 +91,7 @@ UEFI firmware
 ## Kernel Early Init (Planned)
 - Physical memory manager from UEFI memory map.
 - Page table setup and higher-half mapping (optional later).
-- Early console (serial or framebuffer).
+- Early console (serial or framebuffer). Current scaffold uses COM1 serial.
 - Basic CPU init (GDT/IDT, exception handlers).
 
 ## WAMR Integration (Planned)

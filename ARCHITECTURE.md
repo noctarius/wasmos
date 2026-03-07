@@ -120,6 +120,7 @@ Fields (current scaffold):
 - `cmake --build build --target run-qemu` creates a FAT ESP for testing (requires OVMF).
 
 macOS note: Use Homebrew LLVM clang (AppleClang cannot build UEFI targets). Ensure `lld-link` is available.
+If auto-discovery fails, pass `-DCLANG=/path/to/llvm/bin/clang` and `-DLLD_LINK=/path/to/lld-link` or `-DLLD=/path/to/lld`.
 
 ## Future Diagrams
 - Memory layout (UEFI, kernel image, stack, heap)

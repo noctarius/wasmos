@@ -6,7 +6,7 @@
 .extern __stack_top
 
 _start:
-    mov %rdi, %rbx
+    mov %rcx, %rbx
     lea __stack_top(%rip), %rsp
 
     lea __bss_start(%rip), %rdi

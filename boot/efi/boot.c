@@ -79,7 +79,6 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
     EFI_STATUS status;
 
     uefi_log(system, "[boot] start\n");
-
     EFI_GUID lip_guid = EFI_LOADED_IMAGE_PROTOCOL_GUID;
     EFI_LOADED_IMAGE_PROTOCOL *loaded = 0;
     status = bs->HandleProtocol(image, &lip_guid, (void **)&loaded);
@@ -168,21 +167,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         if (dest == 0) {
             alloc_type = EFI_ALLOCATE_ANY_PAGES;
         }
-        uefi_log(system, "[boot] PT_LOAD dest=");
-        char dest_hex[19];
-        uefi_hex(dest, dest_hex);
-        uefi_log(system, dest_hex);
-        if (page_offset) {
-            uefi_log(system, " offset=");
-            char off_hex[19];
-            uefi_hex(page_offset, off_hex);
-            uefi_log(system, off_hex);
-        }
-        uefi_log(system, " pages=");
-        char pages_hex[19];
-        uefi_hex(pages, pages_hex);
-        uefi_log(system, pages_hex);
-        uefi_log(system, "\n");
+        // Keep PT_LOAD allocation quiet unless it fails.
         int already_allocated = 0;
         for (UINTN j = 0; j < alloc_count; ++j) {
             UINT64 base = alloc_bases[j];
@@ -203,8 +188,6 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
                 alloc_pages[alloc_count] = pages;
                 alloc_count++;
             }
-        } else {
-            uefi_log(system, "[boot] PT_LOAD reuses allocated pages\n");
         }
 
         void *segment_src = (UINT8 *)kernel_buf + ph->p_offset;
@@ -244,7 +227,6 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         mmap_size = mmap_capacity;
         status = bs->GetMemoryMap(&mmap_size, mmap, &map_key, &desc_size, &desc_version);
         if (status == EFI_BUFFER_TOO_SMALL) {
-            uefi_log(system, "[boot] mmap buffer too small, growing\n");
             mmap_capacity = mmap_size + desc_size * 2;
             mmap = 0;
             continue;
@@ -284,25 +266,6 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
             return status;
         }
     }
-
-    uefi_log(system, "[boot] ExitBootServices OK\n");
-    uefi_log(system, "[boot] boot_info=");
-    char bi_hex[19];
-    uefi_hex((UINT64)(UINTN)boot_info, bi_hex);
-    uefi_log(system, bi_hex);
-    uefi_log(system, " mmap=");
-    char mmap_hex[19];
-    uefi_hex((UINT64)(UINTN)map_dst, mmap_hex);
-    uefi_log(system, mmap_hex);
-    uefi_log(system, " size=");
-    char size_hex[19];
-    uefi_hex((UINT64)map_bytes, size_hex);
-    uefi_log(system, size_hex);
-    uefi_log(system, " desc=");
-    char desc_hex[19];
-    uefi_hex((UINT64)desc_size, desc_hex);
-    uefi_log(system, desc_hex);
-    uefi_log(system, "\n");
 
     void (*kernel_entry)(boot_info_t *) = (void (*)(boot_info_t *))(UINTN)ehdr->e_entry;
     kernel_entry(boot_info);

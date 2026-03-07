@@ -36,6 +36,11 @@ static void write_hex(uint64_t value) {
     serial_write(buf);
 }
 
+static void log_hex(const char *label, uint64_t value) {
+    serial_write(label);
+    write_hex(value);
+}
+
 static int is_usable(uint32_t type) {
     return type == EFI_MEMORY_TYPE_CONVENTIONAL ||
            type == EFI_MEMORY_TYPE_BOOT_SERVICES_CODE ||
@@ -66,10 +71,7 @@ void pfa_init(const boot_info_t *boot_info) {
         return;
     }
 
-    serial_write("[pfa] desc size=");
-    write_hex(boot_info->memory_desc_size);
-    serial_write("[pfa] map size=");
-    write_hex(boot_info->memory_map_size);
+    serial_write("[pfa] init\n");
 
     uint64_t desc_size = boot_info->memory_desc_size;
     uint64_t count = boot_info->memory_map_size / desc_size;
@@ -87,8 +89,10 @@ void pfa_init(const boot_info_t *boot_info) {
         cursor += desc_size;
     }
 
-    serial_write("[pfa] ranges=");
-    write_hex(g_range_count);
+    log_hex("[pfa] ranges=", g_range_count);
+
+    uint64_t test = pfa_alloc_pages(1);
+    log_hex("[pfa] test alloc=", test);
 }
 
 uint64_t pfa_alloc_pages(uint64_t pages) {

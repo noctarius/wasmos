@@ -11,56 +11,7 @@ void mm_init(const boot_info_t *boot_info) {
     g_context_count = 0;
     serial_write("[mm] init\n");
     pfa_init(boot_info);
-    if (g_boot_info) {
-        serial_write("[mm] boot_info=");
-        char ptr_buf[21];
-        static const char hex[] = "0123456789ABCDEF";
-        uint64_t ptr = (uint64_t)g_boot_info;
-        ptr_buf[0] = '0';
-        ptr_buf[1] = 'x';
-        for (int i = 0; i < 16; ++i) {
-            ptr_buf[2 + i] = hex[(ptr >> ((15 - i) * 4)) & 0xF];
-        }
-        ptr_buf[18] = '\n';
-        ptr_buf[19] = '\0';
-        serial_write(ptr_buf);
-
-        serial_write("[mm] mmap size=");
-        char buf[21];
-        // Print size as hex without pulling in printf.
-        uint64_t value = g_boot_info->memory_map_size;
-        // Reuse the same hex table.
-        buf[0] = '0';
-        buf[1] = 'x';
-        for (int i = 0; i < 16; ++i) {
-            buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
-        }
-        buf[18] = '\n';
-        buf[19] = '\0';
-        serial_write(buf);
-
-        serial_write("[mm] mmap ptr=");
-        uint64_t mmap_ptr = (uint64_t)g_boot_info->memory_map;
-        buf[0] = '0';
-        buf[1] = 'x';
-        for (int i = 0; i < 16; ++i) {
-            buf[2 + i] = hex[(mmap_ptr >> ((15 - i) * 4)) & 0xF];
-        }
-        buf[18] = '\n';
-        buf[19] = '\0';
-        serial_write(buf);
-
-        serial_write("[mm] desc size=");
-        uint64_t desc_value = g_boot_info->memory_desc_size;
-        buf[0] = '0';
-        buf[1] = 'x';
-        for (int i = 0; i < 16; ++i) {
-            buf[2 + i] = hex[(desc_value >> ((15 - i) * 4)) & 0xF];
-        }
-        buf[18] = '\n';
-        buf[19] = '\0';
-        serial_write(buf);
-    }
+    (void)g_boot_info;
 }
 
 int mm_context_init(mm_context_t *ctx, uint32_t id) {

@@ -272,26 +272,27 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         boot_info->memory_map_size = map_bytes;
         boot_info->memory_desc_size = desc_size;
         boot_info->memory_desc_version = desc_version;
-        uefi_log(system, "[boot] boot_info=");
-        char bi_hex[19];
-        uefi_hex((UINT64)(UINTN)boot_info, bi_hex);
-        uefi_log(system, bi_hex);
-        uefi_log(system, " mmap=");
-        char mmap_hex[19];
-        uefi_hex((UINT64)(UINTN)map_dst, mmap_hex);
-        uefi_log(system, mmap_hex);
-        uefi_log(system, " size=");
-        char size_hex[19];
-        uefi_hex((UINT64)map_bytes, size_hex);
-        uefi_log(system, size_hex);
-        uefi_log(system, " desc=");
-        char desc_hex[19];
-        uefi_hex((UINT64)desc_size, desc_hex);
-        uefi_log(system, desc_hex);
-        uefi_log(system, "\n");
 
         status = bs->ExitBootServices(image, map_key);
         if (!EFI_ERROR(status)) {
+            uefi_log(system, "[boot] ExitBootServices OK\n");
+            uefi_log(system, "[boot] boot_info=");
+            char bi_hex[19];
+            uefi_hex((UINT64)(UINTN)boot_info, bi_hex);
+            uefi_log(system, bi_hex);
+            uefi_log(system, " mmap=");
+            char mmap_hex[19];
+            uefi_hex((UINT64)(UINTN)map_dst, mmap_hex);
+            uefi_log(system, mmap_hex);
+            uefi_log(system, " size=");
+            char size_hex[19];
+            uefi_hex((UINT64)map_bytes, size_hex);
+            uefi_log(system, size_hex);
+            uefi_log(system, " desc=");
+            char desc_hex[19];
+            uefi_hex((UINT64)desc_size, desc_hex);
+            uefi_log(system, desc_hex);
+            uefi_log(system, "\n");
             break;
         }
         if (status != EFI_INVALID_PARAMETER) {

@@ -156,8 +156,11 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
             continue;
         }
 
-        UINT64 pages = (ph->p_memsz + 0xFFF) / 0x1000;
-        UINT64 dest = ph->p_paddr;
+        UINT64 page_offset = ph->p_paddr & 0xFFF;
+        UINT64 dest_base = ph->p_paddr - page_offset;
+        UINT64 total_mem = ph->p_memsz + page_offset;
+        UINT64 pages = (total_mem + 0xFFF) / 0x1000;
+        UINT64 dest = dest_base;
         UINTN alloc_type = EFI_ALLOCATE_ADDRESS;
         if (dest == 0) {
             alloc_type = EFI_ALLOCATE_ANY_PAGES;
@@ -166,6 +169,12 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         char dest_hex[19];
         uefi_hex(dest, dest_hex);
         uefi_log(system, dest_hex);
+        if (page_offset) {
+            uefi_log(system, " offset=");
+            char off_hex[19];
+            uefi_hex(page_offset, off_hex);
+            uefi_log(system, off_hex);
+        }
         uefi_log(system, " pages=");
         char pages_hex[19];
         uefi_hex(pages, pages_hex);
@@ -178,7 +187,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         }
 
         void *segment_src = (UINT8 *)kernel_buf + ph->p_offset;
-        void *segment_dst = (void *)(UINTN)dest;
+        void *segment_dst = (UINT8 *)(UINTN)dest + page_offset;
         memcpy8(segment_dst, segment_src, (UINTN)ph->p_filesz);
         if (ph->p_memsz > ph->p_filesz) {
             memset8((UINT8 *)segment_dst + ph->p_filesz, 0, (UINTN)(ph->p_memsz - ph->p_filesz));

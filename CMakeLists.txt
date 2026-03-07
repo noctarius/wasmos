@@ -210,6 +210,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/memory.o
   ${BUILD_DIR}/physmem.o
   ${BUILD_DIR}/wamr_context.o
+  ${BUILD_DIR}/wasm_chardev.o
   ${BUILD_DIR}/serial.o
   ${BUILD_DIR}/wamr_runtime.o
 )
@@ -226,6 +227,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/memory.c
   ${KERNEL_DIR}/physmem.c
   ${KERNEL_DIR}/wamr_context.c
+  ${KERNEL_DIR}/wasm_chardev.c
   ${KERNEL_DIR}/serial.c
   ${WASM_DIR}/wamr_runtime.c
 )
@@ -236,7 +238,7 @@ target_sources(bootloader_sources INTERFACE ${BOOT_SOURCES} ${BOOT_DIR}/uefi.h $
 target_include_directories(bootloader_sources INTERFACE ${BOOT_DIR} ${KERNEL_DIR}/include)
 
 add_library(kernel_sources INTERFACE)
-target_sources(kernel_sources INTERFACE ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${WASM_DIR}/wamr_runtime.h)
+target_sources(kernel_sources INTERFACE ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/include/wasm_chardev.h ${WASM_DIR}/wamr_runtime.h)
 target_include_directories(kernel_sources INTERFACE ${KERNEL_DIR}/include ${WASM_DIR})
 
 # WAMR is vendored via git subtree at ${WAMR_DIR}.
@@ -368,6 +370,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory.c -o ${BUILD_DIR}/memory.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/physmem.c -o ${BUILD_DIR}/physmem.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wamr_context.c -o ${BUILD_DIR}/wamr_context.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_chardev.c -o ${BUILD_DIR}/wasm_chardev.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/serial.c -o ${BUILD_DIR}/serial.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${WASM_DIR}/wamr_runtime.c -o ${BUILD_DIR}/wamr_runtime.o
   COMMAND ${LLD_PATH} ${LDFLAGS_KERNEL} -o ${BUILD_DIR}/kernel.elf ${KERNEL_OBJS} ${KERNEL_LINK_LIBS}

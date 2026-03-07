@@ -12,40 +12,6 @@ static void byte_swap(uint8_t *a, uint8_t *b, size_t size) {
     }
 }
 
-static void quicksort(uint8_t *base, size_t nmemb, size_t size,
-                      int (*compar)(const void *, const void *)) {
-    if (nmemb < 2) {
-        return;
-    }
-    size_t pivot = nmemb / 2;
-    uint8_t *pivot_ptr = base + pivot * size;
-    size_t i = 0;
-    size_t j = nmemb - 1;
-    while (i <= j) {
-        while (compar(base + i * size, pivot_ptr) < 0) {
-            i++;
-        }
-        while (compar(base + j * size, pivot_ptr) > 0) {
-            if (j == 0) {
-                break;
-            }
-            j--;
-        }
-        if (i <= j) {
-            byte_swap(base + i * size, base + j * size, size);
-            i++;
-            if (j == 0) {
-                break;
-            }
-            j--;
-        }
-    }
-    if (j + 1 > 0) {
-        quicksort(base, j + 1, size, compar);
-    }
-    quicksort(base + i * size, nmemb - i, size, compar);
-}
-
 void *memcpy(void *dst, const void *src, size_t n) {
     uint8_t *d = (uint8_t *)dst;
     const uint8_t *s = (const uint8_t *)src;
@@ -195,7 +161,16 @@ void qsort(void *base, size_t nmemb, size_t size,
     if (!base || !compar || size == 0) {
         return;
     }
-    quicksort((uint8_t *)base, nmemb, size, compar);
+    uint8_t *data = (uint8_t *)base;
+    for (size_t i = 0; i < nmemb; ++i) {
+        for (size_t j = i + 1; j < nmemb; ++j) {
+            uint8_t *a = data + i * size;
+            uint8_t *b = data + j * size;
+            if (compar(a, b) > 0) {
+                byte_swap(a, b, size);
+            }
+        }
+    }
 }
 
 void *bsearch(const void *key, const void *base, size_t nmemb, size_t size,

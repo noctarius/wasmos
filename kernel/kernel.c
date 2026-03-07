@@ -8,6 +8,19 @@
 #include "wamr_runtime.h"
 #include "wasm_chardev.h"
 
+static void serial_write_hex64(uint64_t value) {
+    char buf[21];
+    static const char hex[] = "0123456789ABCDEF";
+    buf[0] = '0';
+    buf[1] = 'x';
+    for (int i = 0; i < 16; ++i) {
+        buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
+    }
+    buf[18] = '\n';
+    buf[19] = '\0';
+    serial_write(buf);
+}
+
 static process_run_result_t chardev_server_entry(process_t *process, void *arg) {
     (void)process;
     (void)arg;
@@ -41,8 +54,9 @@ void kmain(boot_info_t *boot_info) {
     ipc_init();
     process_init();
 
-    // Placeholder: initialize memory management, then WAMR-hosted services.
-    wamr_context_init();
+    // Keep boot path non-blocking: WAMR init is deferred until platform stubs
+    // are complete enough for runtime initialization.
+    serial_write("[kernel] wamr init deferred\n");
 
     uint32_t chardev_pid = 0;
     if (process_spawn("chardev-server", chardev_server_entry, 0, &chardev_pid) != 0) {
@@ -51,6 +65,8 @@ void kmain(boot_info_t *boot_info) {
             __asm__ volatile("hlt");
         }
     }
+    serial_write("[kernel] chardev pid=");
+    serial_write_hex64(chardev_pid);
 
     process_t *chardev_proc = process_get(chardev_pid);
     if (!chardev_proc || wasm_chardev_init(chardev_proc->context_id) != 0) {
@@ -59,6 +75,7 @@ void kmain(boot_info_t *boot_info) {
             __asm__ volatile("hlt");
         }
     }
+    serial_write("[kernel] scheduler loop\n");
 
     run_kernel_loop();
 }

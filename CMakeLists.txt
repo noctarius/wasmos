@@ -15,6 +15,7 @@ set(LLD lld CACHE STRING "Linker (lld or ld.lld)")
 set(LLD_LINK lld-link CACHE STRING "COFF linker (lld-link) for UEFI on macOS")
 set(OBJCOPY llvm-objcopy CACHE STRING "Objcopy tool")
 set(OVMF_CODE /usr/share/OVMF/OVMF_CODE.fd CACHE FILEPATH "Path to OVMF_CODE.fd")
+set(KERNEL_TARGET_TRIPLE x86_64-elf CACHE STRING "Target triple for kernel build")
 
 set(LLVM_HINTS /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin /opt/homebrew/bin /usr/local/bin)
 
@@ -43,7 +44,7 @@ set(LLD_HINTS ${CLANG_BIN_DIR} /opt/homebrew/opt/lld/bin /usr/local/opt/lld/bin 
 
 set(CFLAGS_COMMON -ffreestanding -fno-stack-protector -fno-builtin -Wall -Wextra -Werror -g)
 set(CFLAGS_EFI ${CFLAGS_COMMON} -target x86_64-unknown-uefi -fshort-wchar -mno-red-zone -B${CLANG_BIN_DIR})
-set(CFLAGS_KERNEL ${CFLAGS_COMMON} -mno-red-zone -mcmodel=kernel -m64 -I${WASM_DIR})
+set(CFLAGS_KERNEL ${CFLAGS_COMMON} -target ${KERNEL_TARGET_TRIPLE} -mno-red-zone -mcmodel=kernel -m64 -I${WASM_DIR})
 if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   find_program(LLD_LINK_PATH ${LLD_LINK} HINTS ${LLD_HINTS})
   if (LLD_LINK_PATH)

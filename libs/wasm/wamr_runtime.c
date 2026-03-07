@@ -1,6 +1,7 @@
 #include "wamr_runtime.h"
 
 #if defined(WAMR_ENABLED)
+#include <stddef.h>
 #include "wasm_export.h"
 
 static void memzero8(void *dst, uint32_t size) {

@@ -23,7 +23,10 @@ set(KERNEL_TARGET_TRIPLE x86_64-elf CACHE STRING "Target triple for kernel build
 
 set(LLVM_HINTS /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin /opt/homebrew/bin /usr/local/bin)
 
-find_program(CLANG_PATH ${CLANG} HINTS ${LLVM_HINTS})
+find_program(CLANG_PATH ${CLANG} HINTS ${LLVM_HINTS} NO_DEFAULT_PATH)
+if (NOT CLANG_PATH)
+  find_program(CLANG_PATH ${CLANG})
+endif ()
 if (NOT CLANG_PATH)
   message(FATAL_ERROR "CLANG not found. Install LLVM clang and set -DCLANG=/path/to/llvm/bin/clang if needed.")
 endif ()
@@ -108,6 +111,8 @@ if (NOT OVMF_CODE)
     /usr/share/OVMF/OVMF_CODE.fd
     /opt/homebrew/share/OVMF/OVMF_CODE.fd
     /usr/local/share/OVMF/OVMF_CODE.fd
+    /opt/homebrew/share/edk2-ovmf/OVMF_CODE.fd
+    /usr/local/share/edk2-ovmf/OVMF_CODE.fd
     /opt/homebrew/share/edk2/OVMF/OVMF_CODE.fd
     /usr/local/share/edk2/OVMF/OVMF_CODE.fd
   )
@@ -120,7 +125,7 @@ if (NOT OVMF_CODE)
 endif ()
 
 if (NOT OVMF_CODE)
-  message(FATAL_ERROR "OVMF_CODE.fd not found. Install OVMF/edk2 and set -DOVMF_CODE=/path/to/OVMF_CODE.fd.")
+  message(WARNING "OVMF_CODE.fd not found. Install OVMF/edk2 and set -DOVMF_CODE=/path/to/OVMF_CODE.fd to use run-qemu.")
 endif ()
 set(LDFLAGS_KERNEL -nostdlib -T ${KERNEL_DIR}/arch/x86_64/linker.ld)
 

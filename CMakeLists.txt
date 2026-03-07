@@ -15,10 +15,38 @@ set(LLD lld CACHE STRING "Linker")
 set(OBJCOPY llvm-objcopy CACHE STRING "Objcopy tool")
 set(OVMF_CODE /usr/share/OVMF/OVMF_CODE.fd CACHE FILEPATH "Path to OVMF_CODE.fd")
 
+if (NOT EXISTS ${CLANG})
+  message(FATAL_ERROR "CLANG not found at '${CLANG}'. Set -DCLANG=/path/to/llvm/bin/clang.")
+endif ()
+
+execute_process(
+  COMMAND ${CLANG} --version
+  OUTPUT_VARIABLE CLANG_VERSION
+  ERROR_VARIABLE CLANG_VERSION
+)
+
+if (CLANG_VERSION MATCHES "Apple clang")
+  message(FATAL_ERROR "AppleClang cannot build UEFI targets. Install LLVM clang and set -DCLANG=/path/to/llvm/bin/clang.")
+endif ()
+
+if (NOT CLANG_VERSION MATCHES "clang")
+  message(FATAL_ERROR "Unsupported compiler for UEFI build. Use LLVM clang.")
+endif ()
+
+get_filename_component(CLANG_BIN_DIR ${CLANG} DIRECTORY)
+
 set(CFLAGS_COMMON -ffreestanding -fno-stack-protector -fno-builtin -Wall -Wextra -Werror -g)
-set(CFLAGS_EFI ${CFLAGS_COMMON} -target x86_64-unknown-uefi -fshort-wchar -mno-red-zone)
+set(CFLAGS_EFI ${CFLAGS_COMMON} -target x86_64-unknown-uefi -fshort-wchar -mno-red-zone -B${CLANG_BIN_DIR})
 set(CFLAGS_KERNEL ${CFLAGS_COMMON} -mno-red-zone -mcmodel=kernel -m64 -I${WASM_DIR})
-set(LDFLAGS_EFI -fuse-ld=lld -Wl,--subsystem,10 -Wl,--entry,efi_main)
+if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+  find_program(LLD_LINK lld-link HINTS ${CLANG_BIN_DIR})
+  if (NOT LLD_LINK)
+    message(FATAL_ERROR "lld-link not found. Install LLVM and ensure lld-link is in ${CLANG_BIN_DIR}.")
+  endif ()
+  set(LDFLAGS_EFI -fuse-ld=lld-link -Wl,--subsystem,10 -Wl,--entry,efi_main)
+else ()
+  set(LDFLAGS_EFI -fuse-ld=lld -Wl,--subsystem,10 -Wl,--entry,efi_main)
+endif ()
 set(LDFLAGS_KERNEL -nostdlib -Wl,-T,${KERNEL_DIR}/arch/x86_64/linker.ld)
 
 set(BOOT_SOURCES

@@ -20,6 +20,9 @@ This repository is intentionally minimal and may require toolchain adjustments f
 - `llvm-objcopy`
 - `cmake` (3.20+)
 
+macOS note: Use Homebrew LLVM clang (AppleClang cannot build UEFI targets). Configure with
+`-DCLANG=/opt/homebrew/opt/llvm/bin/clang` and ensure `lld-link` is available in the same bin dir.
+
 ### Dependencies
 - WAMR (wasm-micro-runtime) is vendored via git subtree at `libs/wasm/wasm-micro-runtime`.
 
@@ -28,7 +31,9 @@ This repository is intentionally minimal and may require toolchain adjustments f
 - Enable with `-DWAMR_ENABLE=ON` once you wire the WAMR library into the kernel link.
 
 ### Configure
-```\ncmake -S . -B build\n```
+```
+cmake -S . -B build
+```
 
 ### Targets
 - `cmake --build build --target bootloader` builds `build/BOOTX64.EFI`

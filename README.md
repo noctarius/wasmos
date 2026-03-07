@@ -69,6 +69,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 ## Notes
 - The bootloader loads `kernel.elf` from the EFI System Partition (ESP).
 - The bootloader logs basic status messages to the UEFI console and retries `ExitBootServices` on invalid parameters.
+- The bootloader copies the UEFI memory map into kernel-owned pages before exiting boot services.
 - PT_LOAD segments are loaded with page-aligned allocations (misaligned physical addresses are handled).
 - Overlapping PT_LOAD segments reuse existing allocations instead of re-allocating pages.
 - The kernel entry receives a `boot_info_t` with framebuffer/memory map placeholders.

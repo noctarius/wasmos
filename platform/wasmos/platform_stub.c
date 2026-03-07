@@ -55,6 +55,24 @@ void *memcpy(void *dst, const void *src, size_t n) {
     return dst;
 }
 
+void *memmove(void *dst, const void *src, size_t n) {
+    uint8_t *d = (uint8_t *)dst;
+    const uint8_t *s = (const uint8_t *)src;
+    if (d == s || n == 0) {
+        return dst;
+    }
+    if (d < s) {
+        for (size_t i = 0; i < n; ++i) {
+            d[i] = s[i];
+        }
+    } else {
+        for (size_t i = n; i > 0; --i) {
+            d[i - 1] = s[i - 1];
+        }
+    }
+    return dst;
+}
+
 void *memset(void *dst, int c, size_t n) {
     uint8_t *d = (uint8_t *)dst;
     for (size_t i = 0; i < n; ++i) {
@@ -94,6 +112,50 @@ int strcmp(const char *a, const char *b) {
         b++;
     }
     return (int)(unsigned char)*a - (int)(unsigned char)*b;
+}
+
+char *strtok_r(char *str, const char *delim, char **saveptr) {
+    if (!delim || !saveptr) {
+        return NULL;
+    }
+    char *s = str ? str : *saveptr;
+    if (!s) {
+        return NULL;
+    }
+    while (*s) {
+        const char *d = delim;
+        int is_delim = 0;
+        while (*d) {
+            if (*s == *d) {
+                is_delim = 1;
+                break;
+            }
+            d++;
+        }
+        if (!is_delim) {
+            break;
+        }
+        s++;
+    }
+    if (!*s) {
+        *saveptr = NULL;
+        return NULL;
+    }
+    char *token = s;
+    while (*s) {
+        const char *d = delim;
+        while (*d) {
+            if (*s == *d) {
+                *s = '\0';
+                *saveptr = s + 1;
+                return token;
+            }
+            d++;
+        }
+        s++;
+    }
+    *saveptr = NULL;
+    return token;
 }
 
 int snprintf(char *buf, size_t n, const char *fmt, ...) {
@@ -151,6 +213,14 @@ void abort(void) {
     for (;;) {
         __asm__ volatile("hlt");
     }
+}
+
+void *wasm_runtime_malloc(unsigned int size) {
+    return os_malloc(size);
+}
+
+void wasm_runtime_free(void *ptr) {
+    os_free(ptr);
 }
 
 void *os_malloc(unsigned size) {

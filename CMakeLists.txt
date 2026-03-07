@@ -173,6 +173,11 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/wamr_runtime.o
 )
 
+set(KERNEL_LINK_LIBS "")
+if (WAMR_LINK)
+  set(KERNEL_LINK_LIBS ${KERNEL_LINK_LIBS} $<TARGET_FILE:wamr_runtime_lib>)
+endif ()
+
 set(BOOT_SOURCES
   ${BOOT_DIR}/boot.c
 )
@@ -203,6 +208,30 @@ if (WAMR_ENABLE AND WAMR_LINK)
   set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -DWAMR_ENABLED=1 -I${WAMR_DIR}/core/iwasm/include)
 endif ()
 
+if (WAMR_LINK)
+  set(WAMR_BUILD_PLATFORM "linux" CACHE STRING "WAMR build platform")
+  set(WAMR_BUILD_TARGET "X86_64" CACHE STRING "WAMR build target")
+  set(WAMR_BUILD_INTERP 1 CACHE BOOL "Enable WAMR interpreter")
+  set(WAMR_BUILD_FAST_INTERP 0 CACHE BOOL "Disable WAMR fast interpreter")
+  set(WAMR_BUILD_AOT 0 CACHE BOOL "Disable WAMR AOT")
+  set(WAMR_BUILD_JIT 0 CACHE BOOL "Disable WAMR JIT")
+  set(WAMR_BUILD_LIBC_BUILTIN 1 CACHE BOOL "Enable WAMR builtin libc")
+  set(WAMR_BUILD_LIBC_WASI 0 CACHE BOOL "Disable WAMR WASI libc")
+  set(WAMR_BUILD_LIBC_UVWASI 0 CACHE BOOL "Disable WAMR uvwasi libc")
+  set(WAMR_BUILD_LIB_PTHREAD 0 CACHE BOOL "Disable WAMR pthreads")
+  set(WAMR_BUILD_THREAD_MGR 0 CACHE BOOL "Disable WAMR thread mgr")
+
+  set(WAMR_ROOT_DIR ${WAMR_DIR})
+  include(${WAMR_ROOT_DIR}/build-scripts/runtime_lib.cmake)
+
+  add_library(wamr_runtime_lib STATIC ${WAMR_RUNTIME_LIB_SOURCE})
+  target_include_directories(wamr_runtime_lib PRIVATE
+    ${WAMR_ROOT_DIR}/core/iwasm/include
+    ${WAMR_ROOT_DIR}/core/shared
+  )
+  target_compile_options(wamr_runtime_lib PRIVATE ${CFLAGS_KERNEL})
+endif ()
+
 # Bootloader (UEFI PE/COFF)
 add_custom_command(
   OUTPUT ${BUILD_DIR}/BOOTX64.EFI
@@ -226,13 +255,16 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wamr_context.c -o ${BUILD_DIR}/wamr_context.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/serial.c -o ${BUILD_DIR}/serial.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${WASM_DIR}/wamr_runtime.c -o ${BUILD_DIR}/wamr_runtime.o
-  COMMAND ${LLD_PATH} ${LDFLAGS_KERNEL} -o ${BUILD_DIR}/kernel.elf ${KERNEL_OBJS}
+  COMMAND ${LLD_PATH} ${LDFLAGS_KERNEL} -o ${BUILD_DIR}/kernel.elf ${KERNEL_OBJS} ${KERNEL_LINK_LIBS}
   DEPENDS ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/arch/x86_64/linker.ld
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Building kernel"
   VERBATIM
 )
 add_custom_target(kernel ALL DEPENDS ${BUILD_DIR}/kernel.elf)
+if (WAMR_LINK)
+  add_dependencies(kernel wamr_runtime_lib)
+endif ()
 
 # QEMU helper
 if (OVMF_VARS)

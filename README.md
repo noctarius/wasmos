@@ -72,5 +72,6 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - PT_LOAD segments are loaded with page-aligned allocations (misaligned physical addresses are handled).
 - Overlapping PT_LOAD segments reuse existing allocations instead of re-allocating pages.
 - The kernel entry receives a `boot_info_t` with framebuffer/memory map placeholders.
+- The kernel entry preserves the incoming `boot_info_t *` through early init.
 - The kernel emits early serial output on COM1 (QEMU `-serial`).
 - Memory management scaffolding tracks per-WAMR-context memory regions (microkernel model).

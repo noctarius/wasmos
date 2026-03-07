@@ -6,6 +6,7 @@
 .extern __stack_top
 
 _start:
+    mov %rdi, %rbx
     lea __stack_top(%rip), %rsp
 
     lea __bss_start(%rip), %rdi
@@ -16,6 +17,7 @@ _start:
     jz 1f
     rep stosb
 1:
+    mov %rbx, %rdi
     call kmain
 
 2:

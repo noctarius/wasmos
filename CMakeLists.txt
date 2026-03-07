@@ -235,7 +235,7 @@ if (WAMR_LINK)
   if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     set_target_properties(wamr_runtime_lib PROPERTIES OSX_ARCHITECTURES "")
   endif ()
-  target_compile_options(wamr_runtime_lib PRIVATE ${CFLAGS_KERNEL})
+  target_compile_options(wamr_runtime_lib PRIVATE ${CFLAGS_KERNEL} -arch x86_64)
 endif ()
 
 # Bootloader (UEFI PE/COFF)

@@ -10,6 +10,11 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   set(CMAKE_OSX_SYSROOT "" CACHE PATH "Disable macOS sysroot injection" FORCE)
   set(CMAKE_C_FLAGS_INIT "" CACHE STRING "Reset initial C flags" FORCE)
   set(CMAKE_ASM_FLAGS_INIT "" CACHE STRING "Reset initial ASM flags" FORCE)
+  execute_process(
+    COMMAND xcrun --sdk macosx --show-sdk-path
+    OUTPUT_VARIABLE MACOS_SDK_PATH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
 endif ()
 
 if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
@@ -267,6 +272,9 @@ if (WAMR_LINK)
   )
   if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     set_target_properties(wamr_runtime_lib PROPERTIES OSX_ARCHITECTURES "")
+  endif ()
+  if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND MACOS_SDK_PATH)
+    target_compile_options(wamr_runtime_lib PRIVATE -isysroot ${MACOS_SDK_PATH})
   endif ()
   target_compile_options(wamr_runtime_lib PRIVATE ${CFLAGS_KERNEL} -Wno-unused-command-line-argument)
 endif ()

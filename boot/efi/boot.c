@@ -2,9 +2,11 @@
 #include "elf.h"
 #include "boot.h"
 
+#define EFI_ALLOCATE_ANY_PAGES 0
 #define EFI_ALLOCATE_ADDRESS 2
 #define EFI_LOADER_DATA 2
 #define EFI_BUFFER_TOO_SMALL ((EFI_STATUS)0x8000000000000005ULL)
+#define EFI_INVALID_PARAMETER ((EFI_STATUS)0x8000000000000002ULL)
 
 static void *memcpy8(void *dst, const void *src, UINTN n) {
     UINT8 *d = (UINT8 *)dst;
@@ -156,7 +158,20 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
 
         UINT64 pages = (ph->p_memsz + 0xFFF) / 0x1000;
         UINT64 dest = ph->p_paddr;
-        status = bs->AllocatePages(EFI_ALLOCATE_ADDRESS, EFI_LOADER_DATA, pages, &dest);
+        UINTN alloc_type = EFI_ALLOCATE_ADDRESS;
+        if (dest == 0) {
+            alloc_type = EFI_ALLOCATE_ANY_PAGES;
+        }
+        uefi_log(system, "[boot] PT_LOAD dest=");
+        char dest_hex[19];
+        uefi_hex(dest, dest_hex);
+        uefi_log(system, dest_hex);
+        uefi_log(system, " pages=");
+        char pages_hex[19];
+        uefi_hex(pages, pages_hex);
+        uefi_log(system, pages_hex);
+        uefi_log(system, "\n");
+        status = bs->AllocatePages(alloc_type, EFI_LOADER_DATA, pages, &dest);
         if (EFI_ERROR(status)) {
             uefi_log_status(system, "[boot] AllocatePages failed: ", status);
             return status;
@@ -206,8 +221,27 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
     uefi_log(system, "[boot] ExitBootServices\n");
     status = bs->ExitBootServices(image, map_key);
     if (EFI_ERROR(status)) {
-        uefi_log_status(system, "[boot] ExitBootServices failed: ", status);
-        return status;
+        if (status == EFI_INVALID_PARAMETER) {
+            uefi_log(system, "[boot] ExitBootServices retrying\n");
+            mmap_size = 0;
+            bs->GetMemoryMap(&mmap_size, 0, &map_key, &desc_size, &desc_version);
+            mmap_size += desc_size * 2;
+            status = bs->AllocatePool(EFI_LOADER_DATA, mmap_size, &mmap);
+            if (EFI_ERROR(status)) {
+                uefi_log_status(system, "[boot] AllocatePool(mmap retry) failed: ", status);
+                return status;
+            }
+            status = bs->GetMemoryMap(&mmap_size, mmap, &map_key, &desc_size, &desc_version);
+            if (EFI_ERROR(status)) {
+                uefi_log_status(system, "[boot] GetMemoryMap retry failed: ", status);
+                return status;
+            }
+            status = bs->ExitBootServices(image, map_key);
+        }
+        if (EFI_ERROR(status)) {
+            uefi_log_status(system, "[boot] ExitBootServices failed: ", status);
+            return status;
+        }
     }
 
     void (*kernel_entry)(boot_info_t *) = (void (*)(boot_info_t *))(UINTN)ehdr->e_entry;

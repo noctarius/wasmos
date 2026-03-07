@@ -1,4 +1,5 @@
 #include "boot.h"
+#include "cpu.h"
 #include "memory.h"
 #include "serial.h"
 #include <stdint.h>
@@ -49,6 +50,7 @@ void kmain(boot_info_t *boot_info) {
 
     serial_init();
     serial_write("[kernel] kmain\n");
+    cpu_init();
 
     mm_init(boot_info);
     ipc_init();

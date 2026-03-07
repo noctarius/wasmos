@@ -99,10 +99,10 @@ UEFI firmware
 Fixed:
 - Physical memory manager from UEFI memory map.
 - Page table setup with a kernel-owned root table and higher-half alias mapping.
+- Basic CPU init with GDT/IDT installation and early exception handlers.
 - Early console via COM1 serial.
 
 Remaining:
-- Basic CPU init (GDT/IDT, exception handlers).
 - Framebuffer console path (serial is implemented; framebuffer is still pending).
 
 ## Memory Management Scaffold

@@ -78,6 +78,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - The kernel entry receives a `boot_info_t` with framebuffer/memory map placeholders.
 - The kernel entry preserves the incoming `boot_info_t *` (UEFI passes it in `RCX`) through early init.
 - The kernel emits early serial output on COM1 (QEMU `-serial`).
+- Basic CPU init now installs a minimal kernel GDT/IDT and exception stubs for vectors `0..31`.
 - Memory management scaffolding tracks per-WAMR-context memory regions (microkernel model).
 - A minimal physical frame allocator ingests the UEFI memory map (conventional + boot services memory).
 - The physical frame allocator supports freeing pages, and contexts can allocate regions from it.

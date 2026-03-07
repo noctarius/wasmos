@@ -31,6 +31,15 @@ set(KERNEL_SOURCES
   ${WASM_DIR}/wamr_runtime.c
 )
 
+# Editor/indexer targets for CLion so sources are part of a CMake target.
+add_library(bootloader_sources INTERFACE)
+target_sources(bootloader_sources INTERFACE ${BOOT_SOURCES} ${BOOT_DIR}/uefi.h ${BOOT_DIR}/elf.h ${KERNEL_DIR}/include/boot.h)
+target_include_directories(bootloader_sources INTERFACE ${BOOT_DIR} ${KERNEL_DIR}/include)
+
+add_library(kernel_sources INTERFACE)
+target_sources(kernel_sources INTERFACE ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${WASM_DIR}/wamr_runtime.h)
+target_include_directories(kernel_sources INTERFACE ${KERNEL_DIR}/include ${WASM_DIR})
+
 # WAMR is vendored via git subtree at ${WAMR_DIR}.
 option(WAMR_ENABLE "Enable WAMR runtime integration (requires linking WAMR)" OFF)
 if (WAMR_ENABLE)

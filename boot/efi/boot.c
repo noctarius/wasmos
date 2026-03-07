@@ -266,38 +266,38 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
     uefi_log(system, "\n");
 
     uefi_log(system, "[boot] ExitBootServices\n");
-    status = bs->ExitBootServices(image, map_key);
-    if (EFI_ERROR(status)) {
-        if (status == EFI_INVALID_PARAMETER) {
-            uefi_log(system, "[boot] ExitBootServices retrying\n");
-            mmap_size = 0;
-            bs->GetMemoryMap(&mmap_size, 0, &map_key, &desc_size, &desc_version);
-            mmap_size += desc_size * 2;
-            status = bs->AllocatePool(EFI_LOADER_DATA, mmap_size, &mmap);
-            if (EFI_ERROR(status)) {
-                uefi_log_status(system, "[boot] AllocatePool(mmap retry) failed: ", status);
-                return status;
-            }
-            status = bs->GetMemoryMap(&mmap_size, mmap, &map_key, &desc_size, &desc_version);
-            if (EFI_ERROR(status)) {
-                uefi_log_status(system, "[boot] GetMemoryMap retry failed: ", status);
-                return status;
-            }
-            boot_info->memory_map = mmap;
-            boot_info->memory_map_size = mmap_size;
-            boot_info->memory_desc_size = desc_size;
-            boot_info->memory_desc_version = desc_version;
-            uefi_log(system, "[boot] boot_info retry size=");
-            char size_hex_retry[19];
-            uefi_hex((UINT64)mmap_size, size_hex_retry);
-            uefi_log(system, size_hex_retry);
-            uefi_log(system, "\n");
-            status = bs->ExitBootServices(image, map_key);
+    while (1) {
+        status = bs->ExitBootServices(image, map_key);
+        if (!EFI_ERROR(status)) {
+            break;
         }
-        if (EFI_ERROR(status)) {
+        if (status != EFI_INVALID_PARAMETER) {
             uefi_log_status(system, "[boot] ExitBootServices failed: ", status);
             return status;
         }
+        uefi_log(system, "[boot] ExitBootServices retrying\n");
+        mmap_size = 0;
+        bs->GetMemoryMap(&mmap_size, 0, &map_key, &desc_size, &desc_version);
+        mmap_size += desc_size * 2;
+        status = bs->AllocatePool(EFI_LOADER_DATA, mmap_size, &mmap);
+        if (EFI_ERROR(status)) {
+            uefi_log_status(system, "[boot] AllocatePool(mmap retry) failed: ", status);
+            return status;
+        }
+        status = bs->GetMemoryMap(&mmap_size, mmap, &map_key, &desc_size, &desc_version);
+        if (EFI_ERROR(status)) {
+            uefi_log_status(system, "[boot] GetMemoryMap retry failed: ", status);
+            return status;
+        }
+        boot_info->memory_map = mmap;
+        boot_info->memory_map_size = mmap_size;
+        boot_info->memory_desc_size = desc_size;
+        boot_info->memory_desc_version = desc_version;
+        uefi_log(system, "[boot] boot_info retry size=");
+        char size_hex_retry[19];
+        uefi_hex((UINT64)mmap_size, size_hex_retry);
+        uefi_log(system, size_hex_retry);
+        uefi_log(system, "\n");
     }
 
     void (*kernel_entry)(boot_info_t *) = (void (*)(boot_info_t *))(UINTN)ehdr->e_entry;

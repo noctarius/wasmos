@@ -44,6 +44,23 @@ static inline int os_getpagesize(void) {
     return 4096;
 }
 
+static inline os_file_handle os_get_invalid_handle(void) {
+    return -1;
+}
+
+/* Minimal libc prototypes for freestanding build */
+void *memcpy(void *dst, const void *src, size_t n);
+void *memset(void *dst, int c, size_t n);
+int memcmp(const void *a, const void *b, size_t n);
+size_t strlen(const char *s);
+int strcmp(const char *a, const char *b);
+int snprintf(char *buf, size_t n, const char *fmt, ...);
+int vsnprintf(char *buf, size_t n, const char *fmt, va_list ap);
+void qsort(void *base, size_t nmemb, size_t size,
+           int (*compar)(const void *, const void *));
+void *bsearch(const void *key, const void *base, size_t nmemb, size_t size,
+              int (*compar)(const void *, const void *));
+
 #ifdef __cplusplus
 }
 #endif

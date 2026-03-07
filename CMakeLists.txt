@@ -308,7 +308,7 @@ if (WAMR_LINK)
     add_custom_command(
       OUTPUT ${obj}
       COMMAND ${CMAKE_COMMAND} -E make_directory ${WAMR_OBJ_DIR}
-      COMMAND ${CLANG} ${CFLAGS_KERNEL} -Wno-unused-command-line-argument ${WAMR_INC_FLAGS}
+      COMMAND ${CLANG} ${CFLAGS_KERNEL} -Wno-unused-command-line-argument -Wno-error=unused-parameter ${WAMR_INC_FLAGS}
               -c ${src} -o ${obj}
       DEPENDS ${src}
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

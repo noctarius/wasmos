@@ -40,6 +40,7 @@ If OVMF is not found on your system, set:
 ```
 cmake -S . -B build -DOVMF_CODE=/path/to/OVMF_CODE.fd
 ```
+On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 
 ### Targets
 - `cmake --build build --target bootloader` builds `build/BOOTX64.EFI`

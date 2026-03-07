@@ -75,3 +75,4 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - The kernel entry preserves the incoming `boot_info_t *` through early init.
 - The kernel emits early serial output on COM1 (QEMU `-serial`).
 - Memory management scaffolding tracks per-WAMR-context memory regions (microkernel model).
+- A minimal physical frame allocator ingests the UEFI memory map (conventional + boot services memory).

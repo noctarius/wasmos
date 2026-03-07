@@ -1,4 +1,5 @@
 #include "memory.h"
+#include "physmem.h"
 #include "serial.h"
 
 static const boot_info_t *g_boot_info;
@@ -9,6 +10,7 @@ void mm_init(const boot_info_t *boot_info) {
     g_boot_info = boot_info;
     g_context_count = 0;
     serial_write("[mm] init\n");
+    pfa_init(boot_info);
     if (g_boot_info) {
         serial_write("[mm] mmap size=");
         char buf[21];

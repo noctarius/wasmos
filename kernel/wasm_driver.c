@@ -4,6 +4,19 @@
 
 static uint8_t g_runtime_ready;
 
+static void
+log_wamr_error(const char *prefix, const char *error)
+{
+    serial_write(prefix);
+    if (error && error[0]) {
+        serial_write(error);
+    }
+    else {
+        serial_write("unknown");
+    }
+    serial_write("\n");
+}
+
 int
 wasm_driver_runtime_ensure(void)
 {
@@ -56,7 +69,7 @@ wasm_driver_start(wasm_driver_t *driver,
 
     if (!wamr_load_module(driver->manifest.module_bytes, driver->manifest.module_size,
                           &driver->module, error_buf, sizeof(error_buf))) {
-        serial_write("[wasm-driver] load failed\n");
+        log_wamr_error("[wasm-driver] load failed: ", error_buf);
         return -1;
     }
 
@@ -66,7 +79,7 @@ wasm_driver_start(wasm_driver_t *driver,
                                  &driver->instance,
                                  error_buf,
                                  sizeof(error_buf))) {
-        serial_write("[wasm-driver] instantiate failed\n");
+        log_wamr_error("[wasm-driver] instantiate failed: ", error_buf);
         wamr_unload_module(driver->module);
         driver->module = 0;
         return -1;

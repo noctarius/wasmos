@@ -294,6 +294,9 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
   COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib
           -Wl,--no-entry -Wl,--strip-all
+          -Wl,-z,stack-size=4096
+          -Wl,--initial-memory=65536
+          -Wl,--max-memory=65536
           -Wl,--export=chardev_init
           -Wl,--export=chardev_read_byte
           -Wl,--export=chardev_write_byte

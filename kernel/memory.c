@@ -32,7 +32,9 @@ int mm_context_init(mm_context_t *ctx, uint32_t id) {
     }
     ctx->id = id;
     ctx->region_count = 0;
-    g_contexts[g_context_count++] = *ctx;
+    // Avoid libc memcpy in freestanding build.
+    g_contexts[g_context_count] = *ctx;
+    g_context_count++;
     return 0;
 }
 

@@ -36,6 +36,11 @@ macOS note: Use Homebrew LLVM clang (AppleClang cannot build UEFI targets). CMak
 cmake -S . -B build
 ```
 
+If OVMF is not found on your system, set:
+```
+cmake -S . -B build -DOVMF_CODE=/path/to/OVMF_CODE.fd
+```
+
 ### Targets
 - `cmake --build build --target bootloader` builds `build/BOOTX64.EFI`
 - `cmake --build build --target kernel` builds `build/kernel.elf`

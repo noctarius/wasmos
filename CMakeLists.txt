@@ -18,7 +18,7 @@ else ()
 endif ()
 set(LLD_LINK lld-link CACHE STRING "COFF linker (lld-link) for UEFI on macOS")
 set(OBJCOPY llvm-objcopy CACHE STRING "Objcopy tool")
-set(OVMF_CODE /usr/share/OVMF/OVMF_CODE.fd CACHE FILEPATH "Path to OVMF_CODE.fd")
+set(OVMF_CODE "" CACHE FILEPATH "Path to OVMF_CODE.fd")
 set(KERNEL_TARGET_TRIPLE x86_64-elf CACHE STRING "Target triple for kernel build")
 
 set(LLVM_HINTS /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin /opt/homebrew/bin /usr/local/bin)
@@ -101,6 +101,26 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   endif ()
 else ()
   set(LDFLAGS_EFI -fuse-ld=lld -Wl,--subsystem,10 -Wl,--entry,efi_main)
+endif ()
+
+if (NOT OVMF_CODE)
+  set(OVMF_CANDIDATES
+    /usr/share/OVMF/OVMF_CODE.fd
+    /opt/homebrew/share/OVMF/OVMF_CODE.fd
+    /usr/local/share/OVMF/OVMF_CODE.fd
+    /opt/homebrew/share/edk2/OVMF/OVMF_CODE.fd
+    /usr/local/share/edk2/OVMF/OVMF_CODE.fd
+  )
+  foreach(candidate IN LISTS OVMF_CANDIDATES)
+    if (EXISTS ${candidate})
+      set(OVMF_CODE ${candidate} CACHE FILEPATH "Path to OVMF_CODE.fd" FORCE)
+      break()
+    endif ()
+  endforeach()
+endif ()
+
+if (NOT OVMF_CODE)
+  message(FATAL_ERROR "OVMF_CODE.fd not found. Install OVMF/edk2 and set -DOVMF_CODE=/path/to/OVMF_CODE.fd.")
 endif ()
 set(LDFLAGS_KERNEL -nostdlib -T ${KERNEL_DIR}/arch/x86_64/linker.ld)
 

@@ -70,3 +70,4 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - The bootloader loads `kernel.elf` from the EFI System Partition (ESP).
 - The bootloader logs basic status messages to the UEFI console and retries `ExitBootServices` on invalid parameters.
 - The kernel entry receives a `boot_info_t` with framebuffer/memory map placeholders.
+- The kernel emits early serial output on COM1 (QEMU `-serial`).

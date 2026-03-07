@@ -247,6 +247,23 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
     boot_info->memory_map_size = mmap_size;
     boot_info->memory_desc_size = desc_size;
     boot_info->memory_desc_version = desc_version;
+    uefi_log(system, "[boot] boot_info=");
+    char bi_hex[19];
+    uefi_hex((UINT64)(UINTN)boot_info, bi_hex);
+    uefi_log(system, bi_hex);
+    uefi_log(system, " mmap=");
+    char mmap_hex[19];
+    uefi_hex((UINT64)(UINTN)mmap, mmap_hex);
+    uefi_log(system, mmap_hex);
+    uefi_log(system, " size=");
+    char size_hex[19];
+    uefi_hex((UINT64)mmap_size, size_hex);
+    uefi_log(system, size_hex);
+    uefi_log(system, " desc=");
+    char desc_hex[19];
+    uefi_hex((UINT64)desc_size, desc_hex);
+    uefi_log(system, desc_hex);
+    uefi_log(system, "\n");
 
     uefi_log(system, "[boot] ExitBootServices\n");
     status = bs->ExitBootServices(image, map_key);
@@ -270,6 +287,11 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
             boot_info->memory_map_size = mmap_size;
             boot_info->memory_desc_size = desc_size;
             boot_info->memory_desc_version = desc_version;
+            uefi_log(system, "[boot] boot_info retry size=");
+            char size_hex_retry[19];
+            uefi_hex((UINT64)mmap_size, size_hex_retry);
+            uefi_log(system, size_hex_retry);
+            uefi_log(system, "\n");
             status = bs->ExitBootServices(image, map_key);
         }
         if (EFI_ERROR(status)) {

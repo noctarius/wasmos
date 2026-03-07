@@ -117,9 +117,10 @@ Fields (current scaffold):
 - `cmake -S . -B build`
 - `cmake --build build --target bootloader` -> `build/BOOTX64.EFI`
 - `cmake --build build --target kernel` -> `build/kernel.elf`
-- `cmake --build build --target run-qemu` creates a FAT ESP for testing (requires OVMF).
+- `cmake --build build --target run-qemu` creates a FAT ESP for testing (requires OVMF) and uses a serial console (`-nographic`).
 If OVMF isn't found, pass `-DOVMF_CODE=/path/to/OVMF_CODE.fd` at configure time.
 macOS/Homebrew: `brew install edk2-ovmf`.
+When running QEMU, we use `if=pflash` with OVMF code/vars; set `-DOVMF_VARS=/path/to/OVMF_VARS.fd` if available.
 
 macOS note: Use Homebrew LLVM clang (AppleClang cannot build UEFI targets). Ensure `lld-link` is available.
 If auto-discovery fails, pass `-DCLANG=/path/to/llvm/bin/clang` and `-DLLD_LINK=/path/to/lld-link` or `-DLLD=/path/to/lld`.

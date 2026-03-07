@@ -19,6 +19,7 @@ endif ()
 set(LLD_LINK lld-link CACHE STRING "COFF linker (lld-link) for UEFI on macOS")
 set(OBJCOPY llvm-objcopy CACHE STRING "Objcopy tool")
 set(OVMF_CODE "" CACHE FILEPATH "Path to OVMF_CODE.fd")
+set(OVMF_VARS "" CACHE FILEPATH "Path to OVMF_VARS.fd (optional)")
 set(KERNEL_TARGET_TRIPLE x86_64-elf CACHE STRING "Target triple for kernel build")
 
 set(LLVM_HINTS /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin /opt/homebrew/bin /usr/local/bin)
@@ -112,7 +113,11 @@ if (NOT OVMF_CODE)
     /opt/homebrew/share/OVMF/OVMF_CODE.fd
     /usr/local/share/OVMF/OVMF_CODE.fd
     /opt/homebrew/share/qemu/edk2-x86_64-code.fd
+    /opt/homebrew/share/qemu/edk2-i386-code.fd
     /usr/local/share/qemu/edk2-x86_64-code.fd
+    /usr/local/share/qemu/edk2-i386-code.fd
+    /opt/homebrew/share/qemu/edk2-x86_64-secure-code.fd
+    /usr/local/share/qemu/edk2-x86_64-secure-code.fd
     /opt/homebrew/share/edk2-ovmf/OVMF_CODE.fd
     /usr/local/share/edk2-ovmf/OVMF_CODE.fd
     /opt/homebrew/share/edk2/OVMF/OVMF_CODE.fd
@@ -128,6 +133,33 @@ endif ()
 
 if (NOT OVMF_CODE)
   message(WARNING "OVMF_CODE.fd not found. Install OVMF/edk2 and set -DOVMF_CODE=/path/to/OVMF_CODE.fd to use run-qemu.")
+endif ()
+
+if (NOT OVMF_VARS AND OVMF_CODE)
+  set(OVMF_VARS_CANDIDATES
+    /usr/share/OVMF/OVMF_VARS.fd
+    /opt/homebrew/share/OVMF/OVMF_VARS.fd
+    /usr/local/share/OVMF/OVMF_VARS.fd
+    /opt/homebrew/share/qemu/edk2-x86_64-vars.fd
+    /opt/homebrew/share/qemu/edk2-i386-vars.fd
+    /usr/local/share/qemu/edk2-x86_64-vars.fd
+    /usr/local/share/qemu/edk2-i386-vars.fd
+    /opt/homebrew/share/edk2-ovmf/OVMF_VARS.fd
+    /usr/local/share/edk2-ovmf/OVMF_VARS.fd
+    /opt/homebrew/share/edk2/OVMF/OVMF_VARS.fd
+    /usr/local/share/edk2/OVMF/OVMF_VARS.fd
+  )
+  foreach(candidate IN LISTS OVMF_VARS_CANDIDATES)
+    if (EXISTS ${candidate})
+      set(OVMF_VARS ${candidate} CACHE FILEPATH "Path to OVMF_VARS.fd (optional)" FORCE)
+      break()
+    endif ()
+  endforeach()
+endif ()
+
+if (OVMF_VARS AND NOT EXISTS ${OVMF_VARS})
+  message(WARNING "OVMF_VARS '${OVMF_VARS}' not found; continuing without vars.")
+  set(OVMF_VARS "" CACHE FILEPATH "Path to OVMF_VARS.fd (optional)" FORCE)
 endif ()
 set(LDFLAGS_KERNEL -nostdlib -T ${KERNEL_DIR}/arch/x86_64/linker.ld)
 
@@ -190,14 +222,33 @@ add_custom_command(
 add_custom_target(kernel ALL DEPENDS ${BUILD_DIR}/kernel.elf)
 
 # QEMU helper
-add_custom_target(run-qemu
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
-  COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
-  COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
-  COMMAND qemu-system-x86_64 -m 512M -bios ${OVMF_CODE}
-          -drive format=raw,file=fat:rw:${BUILD_DIR}/esp -serial stdio
-  DEPENDS bootloader kernel
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Running in QEMU"
-  VERBATIM
-)
+if (OVMF_VARS)
+  add_custom_target(run-qemu
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
+    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
+    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
+    COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
+            -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
+            -drive if=pflash,format=raw,file=${OVMF_VARS}
+            -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
+    DEPENDS bootloader kernel
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Running in QEMU"
+    VERBATIM
+  )
+else ()
+  add_custom_target(run-qemu
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
+    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
+    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
+    COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
+            -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
+            -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
+    DEPENDS bootloader kernel
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Running in QEMU"
+    VERBATIM
+  )
+endif ()

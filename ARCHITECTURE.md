@@ -4,6 +4,7 @@ This document captures the in-depth architecture for the UEFI bootloader and ker
 It is intended to evolve as the project grows (WAMR integration, drivers, scheduler, etc.).
 
 IMPORTANT: Keep this file and `README.md` up to date with every prompt execution and code iteration.
+IMPORTANT: Create a git commit after each prompt iteration.
 
 ## Goals
 - Boot an x86_64 system via UEFI and load a freestanding ELF64 kernel.
@@ -93,7 +94,7 @@ UEFI firmware
 - Basic CPU init (GDT/IDT, exception handlers).
 
 ## WAMR Integration (Planned)
-- WAMR is fetched as a dependency via CMake `FetchContent`.
+- WAMR is vendored via git subtree at `libs/wasm/wasm-micro-runtime`.
 - Port or embed WAMR as a static library under `libs/wasm/`.
 - Provide WASI-like shims or custom syscalls for drivers.
 - Define a stable ABI between kernel and WASM modules.

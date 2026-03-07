@@ -3,6 +3,7 @@
 Minimal x86_64 UEFI boot + C/ASM kernel scaffold intended to host a WASM runtime (WAMR) and hardware drivers.
 
 IMPORTANT: Keep this file and `ARCHITECTURE.md` up to date with every prompt execution and code iteration.
+IMPORTANT: Create a git commit after each prompt iteration.
 
 ## Layout
 - `boot/efi/` UEFI application (PE/COFF) that loads `kernel.elf` and jumps to its entry.
@@ -20,7 +21,7 @@ This repository is intentionally minimal and may require toolchain adjustments f
 - `cmake` (3.20+)
 
 ### Dependencies
-- WAMR (wasm-micro-runtime) is fetched via CMake `FetchContent`.
+- WAMR (wasm-micro-runtime) is vendored via git subtree at `libs/wasm/wasm-micro-runtime`.
 
 ### Configure
 ```\ncmake -S . -B build\n```

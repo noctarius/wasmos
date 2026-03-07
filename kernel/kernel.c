@@ -1,7 +1,6 @@
 #include "boot.h"
 #include <stdint.h>
-
-extern void wasm_runtime_init(void);
+#include "wamr_runtime.h"
 
 static void hang(void) {
     for (;;) {
@@ -13,7 +12,7 @@ void kmain(boot_info_t *boot_info) {
     (void)boot_info;
 
     // Placeholder: initialize memory management, drivers, then WAMR.
-    wasm_runtime_init();
+    wamr_runtime_init();
 
     hang();
 }

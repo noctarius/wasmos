@@ -70,7 +70,7 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
 else ()
   set(LDFLAGS_EFI -fuse-ld=lld -Wl,--subsystem,10 -Wl,--entry,efi_main)
 endif ()
-set(LDFLAGS_KERNEL -nostdlib -Wl,-T,${KERNEL_DIR}/arch/x86_64/linker.ld)
+set(LDFLAGS_KERNEL -fuse-ld=lld -nostdlib -Wl,-T,${KERNEL_DIR}/arch/x86_64/linker.ld)
 
 set(BOOT_SOURCES
   ${BOOT_DIR}/boot.c

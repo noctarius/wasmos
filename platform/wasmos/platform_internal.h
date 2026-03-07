@@ -50,10 +50,12 @@ static inline os_file_handle os_get_invalid_handle(void) {
 
 /* Minimal libc prototypes for freestanding build */
 void *memcpy(void *dst, const void *src, size_t n);
+void *memmove(void *dst, const void *src, size_t n);
 void *memset(void *dst, int c, size_t n);
 int memcmp(const void *a, const void *b, size_t n);
 size_t strlen(const char *s);
 int strcmp(const char *a, const char *b);
+char *strtok_r(char *str, const char *delim, char **saveptr);
 int snprintf(char *buf, size_t n, const char *fmt, ...);
 int vsnprintf(char *buf, size_t n, const char *fmt, va_list ap);
 void qsort(void *base, size_t nmemb, size_t size,
@@ -62,6 +64,9 @@ void *bsearch(const void *key, const void *base, size_t nmemb, size_t size,
               int (*compar)(const void *, const void *));
 long labs(long n);
 void abort(void) __attribute__((noreturn));
+
+void *wasm_runtime_malloc(unsigned int size);
+void wasm_runtime_free(void *ptr);
 
 #ifdef __cplusplus
 }

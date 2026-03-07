@@ -17,6 +17,7 @@ static process_run_result_t chardev_server_entry(process_t *process, void *arg) 
         return PROCESS_RUN_YIELDED;
     }
     if (rc == 1) {
+        process_block_on_ipc(process);
         return PROCESS_RUN_BLOCKED;
     }
     return PROCESS_RUN_IDLE;

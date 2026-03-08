@@ -79,6 +79,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - The privilege model (apps unprivileged, drivers privileged, services least-privileged) is defined in `ARCHITECTURE.md`.
 - CPU security and isolation features (NX, SMEP/SMAP, ring separation) are defined in `ARCHITECTURE.md`.
 - The WASMOS WASM application container format (WASMOS-APP) is defined in `ARCHITECTURE.md`.
+- The planned driver/service baseline (virtio + SATA + FAT32, PM, init, CLI) is defined in `ARCHITECTURE.md`.
 - The bootloader logs basic status messages to the UEFI console and retries `ExitBootServices` on invalid parameters.
 - The bootloader copies the UEFI memory map into kernel-owned pages before exiting boot services.
 - PT_LOAD segments are loaded with page-aligned allocations (misaligned physical addresses are handled).

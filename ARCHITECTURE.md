@@ -99,6 +99,8 @@ Policy (user space):
 Fault handling:
 - Page faults deliver a structured fault message (address, access type, context).
 - Kernel blocks the faulting thread and resumes after the memory service replies.
+- Current scaffold uses a kernel-hosted memory service and synchronous fault IPC
+  while scheduling/preemption and per-context page tables are brought up.
 
 ### CPU Security & Isolation Features
 Required CPU features for protection:
@@ -163,6 +165,7 @@ Tests: QEMU boot runs a bulk transfer test that exercises shared memory path.
 Scope: user-space memory service and page-fault protocol.
 Definition of Done: faults are delivered to memory service; mappings are installed on demand; kernel remains policy-free.
 Tests: QEMU boot runs a process that triggers page faults and continues successfully.
+Status: implemented with a kernel-hosted memory service and a pagefault-test process.
 
 6. Process Manager
 Scope: WASMOS-APP loading, WAMR context creation, process lifecycle management.
@@ -368,6 +371,15 @@ destination // destination endpoint ID
 request_id  // client-chosen correlation ID
 arg0..arg3  // payload words (use shared memory for bulk data)
 ```
+
+### IPC Message Types (Kernel Services)
+- `IPC_MEM_FAULT` (0x1000): page-fault request.
+  - `arg0..arg1` = fault address (low/high)
+  - `arg2` = page fault error code
+  - `arg3` = faulting context ID
+- `IPC_MEM_FAULT_REPLY` (0x1001): page-fault reply.
+  - `arg0` = status (`0` ok, negative on failure)
+  - `arg1..arg2` = mapped base (low/high)
 
 ### Notification Objects
 - Notifications are separate endpoints that carry a count (no payload).

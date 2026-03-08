@@ -1,6 +1,7 @@
 .section .text
 
 .extern x86_exception_panic
+.extern x86_page_fault_handler
 
 .macro DECL_EXC num
 .global isr_exception_\num
@@ -27,7 +28,47 @@ DECL_EXC 10
 DECL_EXC 11
 DECL_EXC 12
 DECL_EXC 13
-DECL_EXC 14
+ .global isr_exception_14
+isr_exception_14:
+    pushq %r15
+    pushq %r14
+    pushq %r13
+    pushq %r12
+    pushq %r11
+    pushq %r10
+    pushq %r9
+    pushq %r8
+    pushq %rdi
+    pushq %rsi
+    pushq %rbp
+    pushq %rdx
+    pushq %rcx
+    pushq %rbx
+    pushq %rax
+    mov 120(%rsp), %rdi
+    call x86_page_fault_handler
+    test %eax, %eax
+    jz 2f
+    mov $14, %rdi
+    call x86_exception_panic
+2:
+    popq %rax
+    popq %rbx
+    popq %rcx
+    popq %rdx
+    popq %rbp
+    popq %rsi
+    popq %rdi
+    popq %r8
+    popq %r9
+    popq %r10
+    popq %r11
+    popq %r12
+    popq %r13
+    popq %r14
+    popq %r15
+    add $8, %rsp
+    iretq
 DECL_EXC 15
 DECL_EXC 16
 DECL_EXC 17

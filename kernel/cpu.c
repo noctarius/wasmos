@@ -1,5 +1,7 @@
 #include "cpu.h"
 #include "serial.h"
+#include "process.h"
+#include "memory_service.h"
 #include <stdint.h>
 
 #define GDT_ENTRY_COUNT 3
@@ -127,6 +129,25 @@ x86_exception_panic(uint64_t vector)
     for (;;) {
         __asm__ volatile("hlt");
     }
+}
+
+int
+x86_page_fault_handler(uint64_t error_code)
+{
+    uint64_t cr2 = 0;
+    __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+
+    uint32_t pid = process_current_pid();
+    process_t *proc = process_get(pid);
+    if (!proc) {
+        return -1;
+    }
+
+    if (memory_service_handle_fault_ipc(proc->context_id, cr2, error_code) != 0) {
+        serial_write("[cpu] page fault not handled\n");
+        return -1;
+    }
+    return 0;
 }
 
 void

@@ -492,7 +492,7 @@ Design takeaways:
 - Exited processes transition to a zombie state carrying `exit_status` until reaped by `process_wait`.
 - The kernel main loop schedules processes instead of invoking service handlers directly.
 - The current system starts a dedicated `chardev-server` process and assigns its context ID as the owner of the chardev IPC endpoint.
-- The current system starts a kernel `init` process that spawns the `process-manager`, which owns the `proc` endpoint.
+- The current system starts a kernel `init` process that is the root parent for all kernel-spawned processes, and it spawns the `process-manager` (owner of the `proc` endpoint).
 - The process manager spawns a user-space `sysinit` WASMOS-APP boot module and passes the `proc` endpoint plus boot module metadata.
 - The user-space `sysinit` module spawns remaining boot modules via `proc`, and the chardev client uses imported IPC primitives to issue write/read requests.
 - A minimal PIO ATA block driver runs as a WASMOS-APP service (`drivers/wasm/ata`), and the process manager assigns it the `block` IPC endpoint.

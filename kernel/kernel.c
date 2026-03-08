@@ -809,7 +809,19 @@ kmain(boot_info_t *boot_info)
 
     serial_write("[kernel] wamr init on-demand\n");
 
-    if (process_spawn("mem-service", memory_service_entry, 0, &mem_service_pid) != 0) {
+    init_state.boot_info = boot_info;
+    init_state.started = 0;
+    if (process_spawn("init", init_entry, &init_state, &init_pid) != 0) {
+        serial_write("[kernel] init spawn failed\n");
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
+
+    serial_write("[kernel] init pid=");
+    serial_write_hex64(init_pid);
+
+    if (process_spawn_as(init_pid, "mem-service", memory_service_entry, 0, &mem_service_pid) != 0) {
         serial_write("[kernel] mem service spawn failed\n");
         for (;;) {
             __asm__ volatile("hlt");
@@ -835,7 +847,7 @@ kmain(boot_info_t *boot_info)
     memory_service_register(mem_service_proc->context_id, mem_service_endpoint, mem_reply_endpoint);
     serial_write("[kernel] mem service ready\n");
 
-    if (process_spawn("chardev-server", chardev_server_entry, 0, &chardev_pid) != 0) {
+    if (process_spawn_as(init_pid, "chardev-server", chardev_server_entry, 0, &chardev_pid) != 0) {
         serial_write("[kernel] chardev process spawn failed\n");
         for (;;) {
             __asm__ volatile("hlt");
@@ -869,21 +881,9 @@ kmain(boot_info_t *boot_info)
 
     wasmos_app_set_policy_hooks(wasmos_endpoint_resolve, wasmos_capability_grant);
 
-    init_state.boot_info = boot_info;
-    init_state.started = 0;
-    if (process_spawn("init", init_entry, &init_state, &init_pid) != 0) {
-        serial_write("[kernel] init spawn failed\n");
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
-    }
-
-    serial_write("[kernel] init pid=");
-    serial_write_hex64(init_pid);
-
     g_pf_test_state.addr = 0;
     g_pf_test_state.stage = 0;
-    if (process_spawn("pagefault-test", page_fault_test_entry, &g_pf_test_state, &pf_test_pid) != 0) {
+    if (process_spawn_as(init_pid, "pagefault-test", page_fault_test_entry, &g_pf_test_state, &pf_test_pid) != 0) {
         serial_write("[kernel] page fault test spawn failed\n");
         for (;;) {
             __asm__ volatile("hlt");

@@ -118,6 +118,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - `cmake --build build --target run-qemu-test` runs QEMU, waits for the CLI prompt, issues `halt`, and expects a clean shutdown
 - `cmake --build build --target run-qemu-cli-test` runs the CLI integration tests via the Python QEMU test framework (`python3 -m unittest discover -s tests`)
 - `run-qemu`, `run-qemu-test`, and `run-qemu-cli-test` copy `sysinit.wasmosapp` and `cli.wasmosapp` into `esp/system/services` in addition to `esp/apps`.
+- `ata.wasmosapp` and `fs_fat.wasmosapp` are now copied into `esp/system/drivers` for the bootloader to preload as drivers.
 
 Use `run-qemu-test` as the default compile+boot+halt check after code changes. Use `run-qemu-cli-test` for scripted CLI assertions (e.g. `ls` output).
 

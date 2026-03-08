@@ -609,6 +609,43 @@ native_proc_info(wasm_exec_env_t exec_env, int32_t index, char *buf, int32_t buf
     return (int32_t)pid;
 }
 
+static int32_t
+native_proc_info_ex(wasm_exec_env_t exec_env, int32_t index, char *buf, int32_t buf_len, int32_t parent_ptr)
+{
+    if (index < 0 || !buf || buf_len <= 0 || parent_ptr < 0) {
+        return -1;
+    }
+    uint32_t pid = 0;
+    uint32_t parent_pid = 0;
+    const char *name = 0;
+    if (process_info_at_ex((uint32_t)index, &pid, &parent_pid, &name) != 0) {
+        return -1;
+    }
+
+    wasm_module_inst_t module_inst = get_module_inst(exec_env);
+    if (!module_inst) {
+        return -1;
+    }
+    if (!wasm_runtime_validate_app_addr(module_inst, (uint64_t)parent_ptr, sizeof(uint32_t))) {
+        return -1;
+    }
+    uint32_t *parent_out = (uint32_t *)wasm_runtime_addr_app_to_native(module_inst, (uint64_t)parent_ptr);
+    if (!parent_out) {
+        return -1;
+    }
+    *parent_out = parent_pid;
+
+    int32_t i = 0;
+    if (name) {
+        while (name[i] && i < buf_len - 1) {
+            buf[i] = name[i];
+            i++;
+        }
+    }
+    buf[i] = '\0';
+    return (int32_t)pid;
+}
+
 static int
 register_wasm_ipc_natives(void)
 {
@@ -624,6 +661,7 @@ register_wasm_ipc_natives(void)
         { "console_read", native_console_read, "(*~)i", 0 },
         { "proc_count", native_proc_count, "()i", 0 },
         { "proc_info", native_proc_info, "(i*~)i", 0 },
+        { "proc_info_ex", native_proc_info_ex, "(i*~i)i", 0 },
         { "block_buffer_phys", native_block_buffer_phys, "()i", 0 },
         { "block_buffer_copy", native_block_buffer_copy, "(iiii)i", 0 },
         { "block_buffer_write", native_block_buffer_write, "(iiii)i", 0 },

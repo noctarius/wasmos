@@ -57,5 +57,6 @@ uint32_t process_wake_by_context(uint32_t context_id);
 int process_schedule_once(void);
 uint32_t process_count_active(void);
 int process_info_at(uint32_t index, uint32_t *out_pid, const char **out_name);
+int process_info_at_ex(uint32_t index, uint32_t *out_pid, uint32_t *out_parent_pid, const char **out_name);
 
 #endif

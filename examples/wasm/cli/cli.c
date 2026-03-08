@@ -31,8 +31,8 @@ extern int32_t wasmos_ipc_last_field(int32_t field)
     WASMOS_WASM_IMPORT("wasmos", "ipc_last_field");
 extern int32_t wasmos_proc_count(void)
     WASMOS_WASM_IMPORT("wasmos", "proc_count");
-extern int32_t wasmos_proc_info(int32_t index, int32_t ptr, int32_t len)
-    WASMOS_WASM_IMPORT("wasmos", "proc_info");
+extern int32_t wasmos_proc_info_ex(int32_t index, int32_t ptr, int32_t len, int32_t parent_ptr)
+    WASMOS_WASM_IMPORT("wasmos", "proc_info_ex");
 extern int32_t wasmos_system_halt(void)
     WASMOS_WASM_IMPORT("wasmos", "system_halt");
 extern int32_t wasmos_system_reboot(void)
@@ -45,6 +45,8 @@ typedef enum {
     CLI_PHASE_WAIT_FS,
     CLI_PHASE_FAILED
 } cli_phase_t;
+
+#define CLI_MAX_PROCS 16
 
 static cli_phase_t g_phase = CLI_PHASE_INIT;
 static char g_line[128];
@@ -133,6 +135,69 @@ console_write_num(const char *label, int32_t value)
 }
 
 static void
+console_write_u32(uint32_t value)
+{
+    char buf[16];
+    int pos = 0;
+    if (value == 0) {
+        buf[pos++] = '0';
+    } else {
+        uint32_t v = value;
+        char tmp[16];
+        int tpos = 0;
+        while (v > 0 && tpos < (int)sizeof(tmp)) {
+            tmp[tpos++] = (char)('0' + (v % 10));
+            v /= 10;
+        }
+        for (int i = tpos - 1; i >= 0; --i) {
+            buf[pos++] = tmp[i];
+        }
+    }
+    buf[pos] = '\0';
+    console_write(buf);
+}
+
+static int
+cli_find_index_by_pid(uint32_t count, const uint32_t *pids, uint32_t pid)
+{
+    for (uint32_t i = 0; i < count; ++i) {
+        if (pids[i] == pid) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+static void
+cli_print_tree(uint32_t index,
+               uint32_t count,
+               const uint32_t *pids,
+               const uint32_t *parents,
+               const char names[][32],
+               uint8_t *visited,
+               uint32_t depth)
+{
+    if (index >= count || depth > 16 || visited[index]) {
+        return;
+    }
+    visited[index] = 1;
+    for (uint32_t i = 0; i < depth; ++i) {
+        console_write("  ");
+    }
+    console_write(names[index]);
+    console_write(" (pid ");
+    console_write_u32(pids[index]);
+    console_write(")\n");
+
+    uint32_t pid = pids[index];
+    for (uint32_t i = 0; i < count; ++i) {
+        if (parents[i] == pid && i != index) {
+            cli_print_tree(i, count, pids, parents, names, visited, depth + 1);
+        }
+    }
+}
+
+static void
 cli_pack_name(const char *name, uint32_t out[4])
 {
     for (uint32_t i = 0; i < 4; ++i) {
@@ -206,18 +271,50 @@ cli_handle_line(void)
     if (g_line_len == 2 &&
         to_lower(g_line[0]) == 'p' &&
         to_lower(g_line[1]) == 's') {
+        uint32_t pids[CLI_MAX_PROCS];
+        uint32_t parents[CLI_MAX_PROCS];
+        char names[CLI_MAX_PROCS][32];
+        uint8_t visited[CLI_MAX_PROCS];
+
         int32_t count = wasmos_proc_count();
+        if (count <= 0) {
+            console_write("no processes\n");
+            return 0;
+        }
+        if (count > (int32_t)CLI_MAX_PROCS) {
+            count = (int32_t)CLI_MAX_PROCS;
+        }
         console_write_num("processes: ", count);
         for (int32_t i = 0; i < count; ++i) {
-            char name_buf[32];
-            int32_t pid = wasmos_proc_info(i, (int32_t)(uintptr_t)name_buf, (int32_t)sizeof(name_buf));
+            uint32_t parent = 0;
+            int32_t pid = wasmos_proc_info_ex(i,
+                                              (int32_t)(uintptr_t)names[i],
+                                              (int32_t)sizeof(names[i]),
+                                              (int32_t)(uintptr_t)&parent);
             if (pid <= 0) {
+                pids[i] = 0;
+                parents[i] = 0;
+                names[i][0] = '\0';
                 continue;
             }
-            console_write_num("pid: ", pid);
-            console_write("name: ");
-            console_write(name_buf);
-            console_write("\n");
+            pids[i] = (uint32_t)pid;
+            parents[i] = parent;
+            visited[i] = 0;
+        }
+        console_write("tree:\n");
+        for (int32_t i = 0; i < count; ++i) {
+            if (pids[i] == 0) {
+                continue;
+            }
+            int parent_index = cli_find_index_by_pid((uint32_t)count, pids, parents[i]);
+            if (parents[i] == 0 || parent_index < 0 || parents[i] == pids[i]) {
+                cli_print_tree((uint32_t)i, (uint32_t)count, pids, parents, names, visited, 0);
+            }
+        }
+        for (int32_t i = 0; i < count; ++i) {
+            if (pids[i] != 0 && !visited[i]) {
+                cli_print_tree((uint32_t)i, (uint32_t)count, pids, parents, names, visited, 0);
+            }
         }
         return 0;
     }

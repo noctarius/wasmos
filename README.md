@@ -59,6 +59,25 @@ The sample uses `asc` with release/size settings and the `stub` runtime (no GC).
 
 There is also a minimal C-based example at `examples/wasm/hello_c/hello_c.c`, packed as `hello_c.wasmosapp`.
 
+### Rust (optional)
+Rust can be used to write WASMOS drivers, services, and applications. Install Rust and the WebAssembly target:
+```
+rustup target add wasm32-unknown-unknown
+```
+
+Rust builds are enabled by default (`RUST_ENABLE=ON`). If `rustc` is missing, configure will fail.
+To disable Rust builds:
+```
+cmake -S . -B build -DRUST_ENABLE=OFF
+```
+
+Build the sample Rust WASMOS-APP:
+```
+cmake --build build --target rust_examples
+```
+
+The sample lives at `examples/wasm/hello_rust/hello_rust.rs` and is packed as `hello_rust.wasmosapp`.
+
 ### WAMR scaffold
 - `libs/wasm/wamr_runtime.c` provides a thin wrapper over the WAMR C API.
 - Enable with `-DWAMR_ENABLE=ON` once you wire the WAMR library into the kernel link.

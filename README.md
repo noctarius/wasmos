@@ -64,6 +64,8 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - `cmake --build build --target run-qemu` runs QEMU with an ESP image (serial console via `-nographic`)
 - `cmake --build build --target run-qemu-test` runs QEMU, waits for the CLI prompt, issues `halt`, and expects a clean shutdown
 
+Use `run-qemu-test` as the default compile+boot+halt check after code changes.
+
 ### Next steps
 1. Verify the UEFI toolchain flags for your host.
 2. Integrate WAMR into `libs/wasm/` and wire into `kernel/kernel.c`.

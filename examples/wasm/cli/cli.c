@@ -55,6 +55,15 @@ static int32_t g_reply_endpoint = -1;
 static int32_t g_fs_endpoint = -1;
 static int32_t g_fs_request_id = 1;
 static int32_t g_fs_pending_req = -1;
+static char g_cwd[64] = "/";
+static int32_t g_fs_pending_kind = 0;
+
+enum {
+    FS_PENDING_NONE = 0,
+    FS_PENDING_LIST,
+    FS_PENDING_CAT,
+    FS_PENDING_CD
+};
 
 static int32_t
 str_len(const char *s)
@@ -82,6 +91,13 @@ str_eq(const char *a, const char *b)
     return *a == '\0' && *b == '\0';
 }
 
+static void
+set_cwd_root(void)
+{
+    g_cwd[0] = '/';
+    g_cwd[1] = '\0';
+}
+
 static char
 to_lower(char c)
 {
@@ -104,6 +120,10 @@ console_write(const char *s)
 static void
 console_prompt(void)
 {
+    if (g_cwd[0]) {
+        console_write(g_cwd);
+        console_write(" ");
+    }
     console_write("wamos> ");
 }
 
@@ -235,6 +255,22 @@ cli_send_fs(int32_t type, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t 
     return 0;
 }
 
+static void
+set_cwd_name(const char *name)
+{
+    if (!name || !name[0]) {
+        set_cwd_root();
+        return;
+    }
+    g_cwd[0] = '/';
+    uint32_t i = 0;
+    while (name[i] && i < sizeof(g_cwd) - 2) {
+        g_cwd[i + 1] = name[i];
+        i++;
+    }
+    g_cwd[i + 1] = '\0';
+}
+
 static int
 cli_handle_line(void)
 {
@@ -247,8 +283,31 @@ cli_handle_line(void)
         to_lower(g_line[1]) == 'e' &&
         to_lower(g_line[2]) == 'l' &&
         to_lower(g_line[3]) == 'p') {
-        console_write("commands: help, ps, ls, cat <name>, halt, reboot\n");
+        console_write("commands: help, ps, ls, cat <name>, cd <path>, halt, reboot\n");
         return 0;
+    }
+    if (g_line_len > 3 &&
+        to_lower(g_line[0]) == 'c' &&
+        to_lower(g_line[1]) == 'd' &&
+        g_line[2] == ' ') {
+        const char *path = &g_line[3];
+        if (str_eq(path, "/") || str_eq(path, ".") || str_eq(path, "..")) {
+            set_cwd_root();
+            if (cli_send_fs(FS_IPC_CHDIR_REQ, 0, 0, 0, 0) != 0) {
+                console_write("cd failed\n");
+                return 0;
+            }
+            g_fs_pending_kind = FS_PENDING_CD;
+            return 1;
+        }
+        uint32_t packed[4];
+        cli_pack_name(path, packed);
+        if (cli_send_fs(FS_IPC_CHDIR_REQ, packed[0], packed[1], packed[2], packed[3]) != 0) {
+            console_write("cd failed\n");
+            return 0;
+        }
+        g_fs_pending_kind = FS_PENDING_CD;
+        return 1;
     }
     if (g_line_len == 4 &&
         to_lower(g_line[0]) == 'h' &&
@@ -325,6 +384,7 @@ cli_handle_line(void)
             console_write("ls failed\n");
             return 0;
         }
+        g_fs_pending_kind = FS_PENDING_LIST;
         return 1;
     }
     if (g_line_len > 4 && to_lower(g_line[0]) == 'c' && to_lower(g_line[1]) == 'a' &&
@@ -336,6 +396,7 @@ cli_handle_line(void)
             console_write("cat failed\n");
             return 0;
         }
+        g_fs_pending_kind = FS_PENDING_CAT;
         return 1;
     }
     console_write("unknown command\n");
@@ -356,8 +417,9 @@ cli_step(int32_t ignored_type,
     (void)ignored_arg3;
 
     if (g_phase == CLI_PHASE_INIT) {
-        const char *msg = "WAMOS CLI\ncommands: help, ps, ls, cat <name>, halt, reboot\n";
+        const char *msg = "WAMOS CLI\ncommands: help, ps, ls, cat <name>, cd <path>, halt, reboot\n";
         wasmos_console_write((int32_t)(uintptr_t)msg, str_len(msg));
+        set_cwd_root();
         g_reply_endpoint = wasmos_ipc_create_endpoint();
         if (g_reply_endpoint < 0) {
             g_phase = CLI_PHASE_FAILED;
@@ -435,8 +497,20 @@ cli_step(int32_t ignored_type,
         } else if (resp_type != FS_IPC_RESP) {
             g_phase = CLI_PHASE_FAILED;
             return WASMOS_WASM_STEP_FAILED;
+        } else if (g_fs_pending_kind == FS_PENDING_CD) {
+            if (g_line_len > 3) {
+                const char *path = &g_line[3];
+                if (str_eq(path, "/") || str_eq(path, ".") || str_eq(path, "..")) {
+                    set_cwd_root();
+                } else {
+                    set_cwd_name(path);
+                }
+            } else {
+                set_cwd_root();
+            }
         }
         g_fs_pending_req = -1;
+        g_fs_pending_kind = FS_PENDING_NONE;
         g_phase = CLI_PHASE_PROMPT;
         return WASMOS_WASM_STEP_YIELDED;
     }

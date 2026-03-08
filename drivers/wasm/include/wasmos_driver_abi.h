@@ -43,6 +43,7 @@ enum {
     FS_IPC_STAT_REQ = 0x403,
     FS_IPC_LIST_ROOT_REQ = 0x410,
     FS_IPC_CAT_ROOT_REQ = 0x411,
+    FS_IPC_CHDIR_REQ = 0x412,
     FS_IPC_RESP = 0x480,
     FS_IPC_ERROR = 0x4FF
 };

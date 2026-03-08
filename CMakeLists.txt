@@ -225,6 +225,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/spinlock.o
   ${BUILD_DIR}/memory_service.o
   ${BUILD_DIR}/irq.o
+  ${BUILD_DIR}/wasmos_app.o
   ${BUILD_DIR}/wasm_driver.o
   ${BUILD_DIR}/wamr_context.o
   ${BUILD_DIR}/wasm_chardev.o
@@ -251,6 +252,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/spinlock.c
   ${KERNEL_DIR}/memory_service.c
   ${KERNEL_DIR}/irq.c
+  ${KERNEL_DIR}/wasmos_app.c
   ${KERNEL_DIR}/wasm_driver.c
   ${KERNEL_DIR}/wamr_context.c
   ${KERNEL_DIR}/wasm_chardev.c
@@ -264,7 +266,7 @@ target_sources(bootloader_sources INTERFACE ${BOOT_SOURCES} ${BOOT_DIR}/uefi.h $
 target_include_directories(bootloader_sources INTERFACE ${BOOT_DIR} ${KERNEL_DIR}/include)
 
 add_library(kernel_sources INTERFACE)
-target_sources(kernel_sources INTERFACE ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/include/cpu.h ${KERNEL_DIR}/include/ipc.h ${KERNEL_DIR}/include/paging.h ${KERNEL_DIR}/include/process.h ${KERNEL_DIR}/include/spinlock.h ${KERNEL_DIR}/include/wasm_chardev.h ${KERNEL_DIR}/include/memory_service.h ${KERNEL_DIR}/include/irq.h ${WASM_DIR}/wamr_runtime.h)
+target_sources(kernel_sources INTERFACE ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/include/cpu.h ${KERNEL_DIR}/include/ipc.h ${KERNEL_DIR}/include/paging.h ${KERNEL_DIR}/include/process.h ${KERNEL_DIR}/include/spinlock.h ${KERNEL_DIR}/include/wasm_chardev.h ${KERNEL_DIR}/include/memory_service.h ${KERNEL_DIR}/include/irq.h ${KERNEL_DIR}/include/wasmos_app.h ${WASM_DIR}/wamr_runtime.h)
 target_include_directories(kernel_sources INTERFACE ${KERNEL_DIR}/include ${WASM_DIR} ${DRIVER_WASM_DIR}/include)
 
 # IDE aggregation targets: helps CLion mark files as part of the CMake project
@@ -285,6 +287,7 @@ add_custom_target(kernel_ide SOURCES
   ${KERNEL_DIR}/include/process.h
   ${KERNEL_DIR}/include/memory_service.h
   ${KERNEL_DIR}/include/irq.h
+  ${KERNEL_DIR}/include/wasmos_app.h
   ${KERNEL_DIR}/include/spinlock.h
   ${KERNEL_DIR}/include/wasm_driver.h
   ${KERNEL_DIR}/include/wasm_chardev.h
@@ -505,6 +508,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/spinlock.c -o ${BUILD_DIR}/spinlock.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory_service.c -o ${BUILD_DIR}/memory_service.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/irq.c -o ${BUILD_DIR}/irq.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_app.c -o ${BUILD_DIR}/wasmos_app.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_driver.c -o ${BUILD_DIR}/wasm_driver.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wamr_context.c -o ${BUILD_DIR}/wamr_context.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_chardev.c -o ${BUILD_DIR}/wasm_chardev.o

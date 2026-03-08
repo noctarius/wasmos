@@ -283,9 +283,7 @@ int process_schedule_once(void) {
 uint32_t process_count_active(void) {
     uint32_t count = 0;
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        if (g_processes[i].state == PROCESS_STATE_READY ||
-            g_processes[i].state == PROCESS_STATE_RUNNING ||
-            g_processes[i].state == PROCESS_STATE_BLOCKED) {
+        if (g_processes[i].state != PROCESS_STATE_UNUSED) {
             count++;
         }
     }

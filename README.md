@@ -83,7 +83,7 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes.
 - The privilege model (apps unprivileged, drivers privileged, services least-privileged) is defined in `ARCHITECTURE.md`.
 - CPU security and isolation features (NX, SMEP/SMAP, ring separation) are defined in `ARCHITECTURE.md`.
 - The WASMOS WASM application container format (WASMOS-APP) is defined in `ARCHITECTURE.md`.
-- The planned driver/service baseline (virtio + SATA + FAT32, PM, init, CLI) is defined in `ARCHITECTURE.md`.
+- The planned driver/service baseline (virtio + SATA + FAT32, PM, sysinit, CLI) is defined in `ARCHITECTURE.md`.
 - Init process responsibilities (root task bootstrap, config-driven startup) are outlined in `ARCHITECTURE.md`.
 - The driver framework (MMIO/PIO/DMA/IRQ access via capabilities) is defined in `ARCHITECTURE.md`.
 - Hardware discovery (`hw-discovery`) and driver lifecycle management (`driver-manager`) are defined in `ARCHITECTURE.md`.
@@ -128,8 +128,8 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes.
 - Blocked processes can now be resumed by context (`process_wake_by_context`) when IPC traffic arrives for owned endpoints.
 - A minimal init process runs in the kernel, spawns the process manager, and then blocks.
 - The process manager owns a `proc` IPC endpoint and can `spawn`, `wait`, `kill`, and `status` processes on behalf of callers.
-- The process manager spawns a user-space `init` WASMOS-APP boot module, passing the `proc` endpoint and boot module metadata.
-- The user-space `init` module iterates boot modules (excluding itself) and spawns them via `proc`.
+- The process manager spawns a user-space `sysinit` WASMOS-APP boot module, passing the `proc` endpoint and boot module metadata.
+- The user-space `sysinit` module iterates boot modules (excluding itself) and spawns them via `proc`.
 - A minimal PIO ATA block driver runs as a WASMOS-APP service (`drivers/wasm/ata`), exposes a `block` IPC endpoint, and supports identify/read requests.
 - A FAT12/16/32 filesystem driver runs as a WASMOS-APP service, uses the block IPC endpoint, and exposes the `fs` IPC endpoint.
 - A minimal user-space `cli` WASMOS-APP is loaded as a boot module, reads input from serial, and supports `help`, `ps`, `ls`, and `cat` via small native helpers.
@@ -138,7 +138,7 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes.
 - Driver wasm link settings currently constrain module stack/linear memory for low-footprint instantiation in the freestanding runtime pool.
 - A generic kernel wasm driver host (`kernel/wasm_driver.c`) loads embedded modules, instantiates them via WAMR, and dispatches IPC requests to exported driver handlers.
 - The WASM-backed chardev runs as an IPC service endpoint in a dedicated `chardev-server` process (`kernel/wasm_chardev.c`) using `drivers/wasm/chardev/chardev_server.c`.
-- Boot modules now include `init.wasmosapp` and `chardev_client.wasmosapp`; the chardev client performs one IPC write/read roundtrip via imported IPC primitives.
+- Boot modules now include `sysinit.wasmosapp` and `chardev_client.wasmosapp`; the chardev client performs one IPC write/read roundtrip via imported IPC primitives.
 - The chardev server process blocks when its IPC queue is empty and is woken by incoming IPC messages.
 - The chardev service path uses permission-aware IPC send/receive calls tied to its owner context.
 - The chardev module export contract is `chardev_init` and `chardev_ipc_dispatch` (with optional direct `chardev_read_byte`/`chardev_write_byte` exports).

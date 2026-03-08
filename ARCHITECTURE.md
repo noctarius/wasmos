@@ -36,7 +36,7 @@ UEFI protocol usage:
 - Raw block access can be done via `EFI_BLOCK_IO_PROTOCOL` for sector reads/writes.
 
 Design options for loading init/services:
-- Preferred: bootloader uses UEFI file or block protocols to load `init`, PM, and
+- Preferred: bootloader uses UEFI file or block protocols to load `sysinit`, PM, and
   boot config into memory and passes them to the kernel in `boot_info_t`.
 - Optional: kernel stays in UEFI environment temporarily and uses Boot Services
   (requires delaying `ExitBootServices()` and passing SystemTable/handles). This
@@ -171,13 +171,13 @@ Status: implemented with a kernel-hosted memory service and a pagefault-test pro
 Scope: WASMOS-APP loading, WAMR context creation, process lifecycle management.
 Definition of Done: PM loads a WASMOS-APP, resolves endpoints, starts entry export; lifecycle APIs (`spawn`, `wait`, `kill`) work.
 Tests: QEMU boot loads a WASMOS-APP via PM and exits cleanly with status.
-Status: implemented with a kernel init process that spawns a process manager service owning the `proc` endpoint, which loads the `init` WASMOS-APP boot module and supports IPC `spawn`, `wait`, `kill`, and `status`.
+Status: implemented with a kernel init process that spawns a process manager service owning the `proc` endpoint, which loads the `sysinit` WASMOS-APP boot module and supports IPC `spawn`, `wait`, `kill`, and `status`.
 
 7. Init + Service Startup
-Scope: init reads config from EFI disk, starts PM, drivers, FAT32, CLI.
-Definition of Done: init loads config, spawns core services in order, registers names.
-Tests: QEMU boot shows init-driven startup and CLI prompt.
-Status: user-space `init` WASMOS-APP spawns `chardev-client` via the `proc` endpoint; config/FS-driven startup is still pending.
+Scope: sysinit reads config from EFI disk, starts PM, drivers, FAT32, CLI.
+Definition of Done: sysinit loads config, spawns core services in order, registers names.
+Tests: QEMU boot shows sysinit-driven startup and CLI prompt.
+Status: user-space `sysinit` WASMOS-APP spawns `chardev-client` via the `proc` endpoint; config/FS-driven startup is still pending.
 
 8. Storage Stack
 Scope: virtio, ATA, SATA block driver + FAT32 filesystem service.
@@ -493,8 +493,8 @@ Design takeaways:
 - The kernel main loop schedules processes instead of invoking service handlers directly.
 - The current system starts a dedicated `chardev-server` process and assigns its context ID as the owner of the chardev IPC endpoint.
 - The current system starts a kernel `init` process that spawns the `process-manager`, which owns the `proc` endpoint.
-- The process manager spawns a user-space `init` WASMOS-APP boot module and passes the `proc` endpoint plus boot module metadata.
-- The user-space `init` module spawns remaining boot modules via `proc`, and the chardev client uses imported IPC primitives to issue write/read requests.
+- The process manager spawns a user-space `sysinit` WASMOS-APP boot module and passes the `proc` endpoint plus boot module metadata.
+- The user-space `sysinit` module spawns remaining boot modules via `proc`, and the chardev client uses imported IPC primitives to issue write/read requests.
 - A minimal PIO ATA block driver runs as a WASMOS-APP service (`drivers/wasm/ata`), and the process manager assigns it the `block` IPC endpoint.
 - A FAT12/16/32 filesystem driver runs as a WASMOS-APP service, uses the `block` IPC endpoint for sector reads, and exposes the `fs` IPC endpoint (root-only `ls`/`cat`).
 - A minimal user-space `cli` WASMOS-APP is loaded as a boot module, reads serial input, and supports `help`, `ps`, `ls`, and `cat` via small native helpers.
@@ -536,7 +536,7 @@ Hardware access model:
 
 Access control:
 - The kernel exposes minimal mechanisms: map/unmap, port access, IRQ registration.
-- A resource manager (or init/PM in early boot) grants capabilities to drivers.
+- A resource manager (or sysinit/PM in early boot) grants capabilities to drivers.
 - System services request privileged operations via driver IPC, not by direct hardware access.
 
 Driver IPC shape:
@@ -544,7 +544,7 @@ Driver IPC shape:
 - Requests are small control messages; bulk data uses shared memory plus notification.
 
 Early boot:
-- `init` (or a dedicated resource manager) enumerates devices (ACPI/PCI) and assigns
+- `sysinit` (or a dedicated resource manager) enumerates devices (ACPI/PCI) and assigns
   BARs/IRQs to the appropriate driver processes.
 
 Runtime device management:
@@ -560,14 +560,14 @@ Drivers:
 
 Services:
 - `process-manager` (PM): spawns processes, tracks lifecycle, owns PID namespace.
-  - Current scaffold: init spawns PM as a kernel process, which owns the `proc` endpoint and spawns the `init` WASMOS-APP boot module.
+  - Current scaffold: init spawns PM as a kernel process, which owns the `proc` endpoint and spawns the `sysinit` WASMOS-APP boot module.
   - Reads WASMOS-APP containers, validates headers and tables.
   - Copies WASM payload into managed memory and tracks lifetime.
   - Creates the process context (memory regions, IPC endpoints, permissions).
   - Instantiates WAMR context and binds linear/stack/heap sizes from hints.
   - Resolves required IPC endpoints/capabilities before start.
   - Starts the entry export and registers the process with the scheduler.
-- `init` (root task / init process): the first user-space task that bootstraps the system.
+- `sysinit` (root task / init process): the first user-space task that bootstraps the system.
   - Starts core services and drivers (PM, ATA, FAT, CLI).
 - `cli` (simple CLI): provides a basic command loop and service/status queries.
 
@@ -583,12 +583,12 @@ Services:
   - Emits hotplug notifications for new/removed devices.
 - `driver-manager`: starts, stops, and assigns drivers in response to hardware events.
   - Maps devices to driver images, allocates resources, and wires endpoints.
-- `init` extensions:
+- `sysinit` extensions:
   - Reads boot configuration from the EFI boot disk via FAT32.
   - Performs minimal namespace/service registration (names, endpoints).
   - Acts as a minimal loader for PM if the kernel does not spawn PM directly.
-    - Option A: PM is embedded as a WASMOS-APP blob and init parses/loads it.
-    - Option B: PM is a simpler boot module and init passes it to PM for re-load.
+    - Option A: PM is embedded as a WASMOS-APP blob and sysinit parses/loads it.
+    - Option B: PM is a simpler boot module and sysinit passes it to PM for re-load.
 
 IPC expectations (high level):
 - Disk drivers provide a `block` endpoint: `read(sector,count,reply_ep)` and `write(sector,count,reply_ep)`.
@@ -622,13 +622,13 @@ Common patterns in microkernel systems:
 - It reads a configuration or startup script to decide which services to start.
 
 WASMOS adaptation:
-- `init` receives the initial boot resources and is responsible for delegating them
+- `sysinit` receives the initial boot resources and is responsible for delegating them
   (capabilities/handles) to the PM and other core services.
-- `init` starts PM first, then disk drivers, FAT32, and CLI.
-- `init` loads configuration from EFI disk (FAT32) to determine service set and order.
-- `init` registers basic names/endpoints for service discovery.
-- `init` may host a minimal loader for PM if PM is not started by the kernel.
-  - If using a script-driven startup (analogous to `/etc/rc`), init remains minimal
+- `sysinit` starts PM first, then disk drivers, FAT32, and CLI.
+- `sysinit` loads configuration from EFI disk (FAT32) to determine service set and order.
+- `sysinit` registers basic names/endpoints for service discovery.
+- `sysinit` may host a minimal loader for PM if PM is not started by the kernel.
+- If using a script-driven startup (analogous to `/etc/rc`), sysinit remains minimal
     and only spawns what the config demands.
 
 ## Interfaces

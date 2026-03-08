@@ -399,6 +399,14 @@ arg0..arg3  // payload words (use shared memory for bulk data)
 - Receiver must own the destination endpoint (unless the receiver is the kernel).
 - Endpoint ownership is bound to a memory context; permissions are enforced in the kernel.
 
+### IRQ Handling and Delegation
+- IRQs are handled in the kernel and delegated to drivers via notification endpoints.
+- The kernel installs IRQ stubs for vectors `32..47` and remaps the legacy PIC.
+- Each IRQ line can be registered to a driver-owned notification endpoint.
+- The ISR performs minimal work: sends a notification and issues PIC EOI.
+- Drivers consume IRQ events by waiting on their notification endpoint.
+- The current scaffold uses the legacy PIC; APIC/IOAPIC support is a later step.
+
 ### Shared Memory IPC (Initial Mechanism)
 - Shared regions are created in kernel memory and mapped into multiple contexts.
 - `mm_shared_create(pages, flags)` returns a shared region ID + base.

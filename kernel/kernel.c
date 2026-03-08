@@ -537,6 +537,9 @@ kmain(boot_info_t *boot_info)
     serial_write("[kernel] page fault test pid=");
     serial_write_hex64(pf_test_pid);
 
+    serial_write("[kernel] interrupts on\n");
+    cpu_enable_interrupts();
+
     serial_write("[kernel] scheduler loop\n");
     run_kernel_loop();
 }

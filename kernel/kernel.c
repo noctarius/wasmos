@@ -31,6 +31,11 @@ typedef struct {
 } pf_test_state_t;
 static pf_test_state_t g_pf_test_state;
 
+typedef struct {
+    const boot_info_t *boot_info;
+    uint8_t started;
+} init_state_t;
+
 static void
 serial_write_hex64(uint64_t value)
 {
@@ -381,6 +386,33 @@ page_fault_test_entry(process_t *process, void *arg)
     return PROCESS_RUN_EXITED;
 }
 
+static process_run_result_t
+init_entry(process_t *process, void *arg)
+{
+    init_state_t *state = (init_state_t *)arg;
+    uint32_t pm_pid = 0;
+
+    if (!process || !state || !state->boot_info) {
+        return PROCESS_RUN_IDLE;
+    }
+
+    if (!state->started) {
+        process_manager_init(state->boot_info);
+        if (process_spawn("process-manager", process_manager_entry, 0, &pm_pid) != 0) {
+            serial_write("[init] process manager spawn failed\n");
+            process_set_exit_status(process, -1);
+            return PROCESS_RUN_EXITED;
+        }
+
+        serial_write("[init] process manager pid=");
+        serial_write_hex64(pm_pid);
+        state->started = 1;
+    }
+
+    process_block_on_ipc(process);
+    return PROCESS_RUN_BLOCKED;
+}
+
 static void
 run_kernel_loop(void)
 {
@@ -402,7 +434,8 @@ kmain(boot_info_t *boot_info)
     uint32_t mem_service_endpoint = IPC_ENDPOINT_NONE;
     uint32_t mem_reply_endpoint = IPC_ENDPOINT_NONE;
     uint32_t pf_test_pid = 0;
-    uint32_t pm_pid = 0;
+    uint32_t init_pid = 0;
+    init_state_t init_state;
 
     (void)boot_info;
 
@@ -486,17 +519,18 @@ kmain(boot_info_t *boot_info)
     }
     g_chardev_service_endpoint = chardev_endpoint;
     wasmos_app_set_policy_hooks(wasmos_endpoint_resolve, wasmos_capability_grant);
-    process_manager_init(boot_info);
 
-    if (process_spawn("process-manager", process_manager_entry, 0, &pm_pid) != 0) {
-        serial_write("[kernel] process manager spawn failed\n");
+    init_state.boot_info = boot_info;
+    init_state.started = 0;
+    if (process_spawn("init", init_entry, &init_state, &init_pid) != 0) {
+        serial_write("[kernel] init spawn failed\n");
         for (;;) {
             __asm__ volatile("hlt");
         }
     }
 
-    serial_write("[kernel] process manager pid=");
-    serial_write_hex64(pm_pid);
+    serial_write("[kernel] init pid=");
+    serial_write_hex64(init_pid);
 
     g_pf_test_state.addr = 0;
     g_pf_test_state.stage = 0;

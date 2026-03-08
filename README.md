@@ -122,7 +122,8 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - Kernel primitives now include basic cooperative process management (`kernel/process.c`) with per-process memory-context binding.
 - Process lifecycle primitives now include `wait`, `kill`, and tracked `exit_status` via zombie processes until reaped.
 - Blocked processes can now be resumed by context (`process_wake_by_context`) when IPC traffic arrives for owned endpoints.
-- A minimal process manager service runs as a kernel process, owns a `proc` IPC endpoint, and can `spawn`, `wait`, `kill`, and `status` processes on behalf of callers.
+- A minimal init process runs in the kernel, spawns the process manager, and then blocks.
+- The process manager owns a `proc` IPC endpoint and can `spawn`, `wait`, `kill`, and `status` processes on behalf of callers.
 - The process manager loads the first WASMOS-APP boot module and spawns it in a generic WASMOS-APP runner process.
 - IPC endpoint permissions are enforced by context-aware APIs (`ipc_send_from`, `ipc_recv_for`) for source-endpoint ownership and endpoint receive ownership.
 - The kernel now builds and embeds example WASM applications from `examples/wasm/` (including `chardev_server` and `chardev_client`).

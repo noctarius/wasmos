@@ -251,6 +251,9 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         }
 
         memset8(boot_info, 0, sizeof(boot_info_t));
+        boot_info->version = BOOT_INFO_VERSION;
+        boot_info->size = (uint32_t)sizeof(boot_info_t);
+        boot_info->flags = 0;
         map_dst = (void *)((UINT8 *)boot_info + boot_bytes);
         memcpy8(map_dst, mmap, map_bytes);
         boot_info->memory_map = map_dst;

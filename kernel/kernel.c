@@ -334,6 +334,17 @@ kmain(boot_info_t *boot_info)
 
     serial_init();
     serial_write("[kernel] kmain\n");
+    if (!boot_info || boot_info->version != BOOT_INFO_VERSION ||
+        boot_info->size < sizeof(boot_info_t)) {
+        serial_write("[kernel] invalid boot_info\n");
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
+    serial_write("[kernel] boot_info version=");
+    serial_write_hex64(boot_info->version);
+    serial_write("[kernel] boot_info size=");
+    serial_write_hex64(boot_info->size);
     cpu_init();
 
     mm_init(boot_info);

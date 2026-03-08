@@ -386,6 +386,10 @@ add_custom_command(
           chardev_client_step
           16
           16
+          chardev
+          1
+          ipc.basic
+          0
   DEPENDS ${WASM_CHARDEV_CLIENT_WASM} ${WASMOS_APP_PACKER}
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm chardev client as WASMOS-APP"

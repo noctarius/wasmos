@@ -31,6 +31,9 @@ typedef struct __attribute__((packed)) {
     uint32_t max_pages;
 } wasmos_mem_hint_t;
 
+static wasmos_app_endpoint_resolver_t g_endpoint_resolver;
+static wasmos_app_capability_granter_t g_capability_granter;
+
 static int
 check_u32_add(uint32_t a, uint32_t b, uint32_t *out)
 {
@@ -86,6 +89,13 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
             return -1;
         }
     }
+    if (hdr->req_ep_count > WASMOS_APP_MAX_REQUIRED_ENDPOINTS ||
+        hdr->cap_count > WASMOS_APP_MAX_CAP_REQUESTS) {
+        return -1;
+    }
+
+    out_desc->req_ep_count = 0;
+    out_desc->cap_count = 0;
 
     uint32_t off = hdr->header_size;
     if (check_bounds(off, hdr->name_len, blob_size) != 0) {
@@ -106,11 +116,14 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
         }
         const wasmos_req_endpoint_t *req = (const wasmos_req_endpoint_t *)&blob[off];
         off += sizeof(wasmos_req_endpoint_t);
-        (void)req->rights;
         if (check_bounds(off, req->name_len, blob_size) != 0) {
             return -1;
         }
+        out_desc->req_eps[i].name = &blob[off];
+        out_desc->req_eps[i].name_len = req->name_len;
+        out_desc->req_eps[i].rights = req->rights;
         off += req->name_len;
+        out_desc->req_ep_count++;
     }
 
     for (uint32_t i = 0; i < hdr->cap_count; ++i) {
@@ -119,11 +132,14 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
         }
         const wasmos_cap_request_t *cap = (const wasmos_cap_request_t *)&blob[off];
         off += sizeof(wasmos_cap_request_t);
-        (void)cap->flags;
         if (check_bounds(off, cap->name_len, blob_size) != 0) {
             return -1;
         }
+        out_desc->caps[i].name = &blob[off];
+        out_desc->caps[i].name_len = cap->name_len;
+        out_desc->caps[i].flags = cap->flags;
         off += cap->name_len;
+        out_desc->cap_count++;
     }
 
     uint32_t stack_pages_hint = 0;
@@ -171,6 +187,39 @@ wasmos_app_start(wasmos_app_instance_t *instance, const wasmos_app_desc_t *desc,
         return -1;
     }
 
+    instance->resolved_ep_count = 0;
+    for (uint32_t i = 0; i < desc->req_ep_count; ++i) {
+        if (!g_endpoint_resolver) {
+            serial_write("[wasmos-app] endpoint resolver missing\n");
+            return -1;
+        }
+        uint32_t endpoint = IPC_ENDPOINT_NONE;
+        if (g_endpoint_resolver(owner_context_id,
+                                desc->req_eps[i].name,
+                                desc->req_eps[i].name_len,
+                                desc->req_eps[i].rights,
+                                &endpoint) != 0 ||
+            endpoint == IPC_ENDPOINT_NONE) {
+            serial_write("[wasmos-app] endpoint resolve failed\n");
+            return -1;
+        }
+        instance->resolved_eps[instance->resolved_ep_count++] = endpoint;
+    }
+
+    for (uint32_t i = 0; i < desc->cap_count; ++i) {
+        if (!g_capability_granter) {
+            serial_write("[wasmos-app] capability granter missing\n");
+            return -1;
+        }
+        if (g_capability_granter(owner_context_id,
+                                 desc->caps[i].name,
+                                 desc->caps[i].name_len,
+                                 desc->caps[i].flags) != 0) {
+            serial_write("[wasmos-app] capability grant failed\n");
+            return -1;
+        }
+    }
+
     wasm_driver_manifest_t manifest;
     manifest.name = instance->name;
     manifest.module_bytes = desc->wasm_bytes;
@@ -210,4 +259,13 @@ wasmos_app_stop(wasmos_app_instance_t *instance)
     instance->active = 0;
     instance->flags = 0;
     instance->owner_context_id = 0;
+    instance->resolved_ep_count = 0;
+}
+
+void
+wasmos_app_set_policy_hooks(wasmos_app_endpoint_resolver_t endpoint_resolver,
+                            wasmos_app_capability_granter_t capability_granter)
+{
+    g_endpoint_resolver = endpoint_resolver;
+    g_capability_granter = capability_granter;
 }

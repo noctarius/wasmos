@@ -697,7 +697,8 @@ Current implementation (kernel scaffold):
 - `kernel/wasmos_app.c` provides the initial WASMOS-APP parser/loader.
 - Loader validates header/version/magic, all section bounds, and extracts wasm bytes.
 - Memory hints are parsed; stack/heap min-page hints are mapped to WAMR stack/heap sizes.
-- Required endpoints and capability tables are currently validated and skipped (not yet resolved).
+- Required endpoints and capability tables are enforced during `wasmos_app_start` via kernel policy hooks.
+- Startup fails if endpoint resolution or capability grant fails for any required entry.
 - The test client path now consumes a boot-preloaded WASMOS-APP module and starts it through the loader API.
 
 ## Build & Run Notes

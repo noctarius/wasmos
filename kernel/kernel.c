@@ -31,6 +31,7 @@ typedef struct {
 
 static wasm_ipc_last_slot_t g_wasm_last_slots[PROCESS_MAX_COUNT];
 static chardev_wasm_client_state_t g_chardev_wasm_client;
+static uint32_t g_chardev_service_endpoint = IPC_ENDPOINT_NONE;
 
 typedef struct {
     uint64_t addr;
@@ -75,6 +76,56 @@ find_boot_wasmos_app(const boot_info_t *boot_info, const uint8_t **out_blob, uin
         }
         *out_blob = (const uint8_t *)(uintptr_t)mod->base;
         *out_size = (uint32_t)mod->size;
+        return 0;
+    }
+    return -1;
+}
+
+static int
+bytes_eq(const uint8_t *a, uint32_t a_len, const char *b)
+{
+    if (!a || !b) {
+        return 0;
+    }
+    uint32_t i = 0;
+    while (b[i]) {
+        if (i >= a_len || a[i] != (uint8_t)b[i]) {
+            return 0;
+        }
+        i++;
+    }
+    return i == a_len;
+}
+
+static int
+wasmos_endpoint_resolve(uint32_t owner_context_id,
+                        const uint8_t *name,
+                        uint32_t name_len,
+                        uint32_t rights,
+                        uint32_t *out_endpoint)
+{
+    (void)owner_context_id;
+    (void)rights;
+    if (!out_endpoint) {
+        return -1;
+    }
+    if (bytes_eq(name, name_len, "chardev") &&
+        g_chardev_service_endpoint != IPC_ENDPOINT_NONE) {
+        *out_endpoint = g_chardev_service_endpoint;
+        return 0;
+    }
+    return -1;
+}
+
+static int
+wasmos_capability_grant(uint32_t owner_context_id,
+                        const uint8_t *name,
+                        uint32_t name_len,
+                        uint32_t flags)
+{
+    (void)owner_context_id;
+    (void)flags;
+    if (bytes_eq(name, name_len, "ipc.basic")) {
         return 0;
     }
     return -1;
@@ -531,6 +582,8 @@ kmain(boot_info_t *boot_info)
             __asm__ volatile("hlt");
         }
     }
+    g_chardev_service_endpoint = chardev_endpoint;
+    wasmos_app_set_policy_hooks(wasmos_endpoint_resolve, wasmos_capability_grant);
 
     if (find_boot_wasmos_app(boot_info, &app_blob, &app_blob_size) != 0) {
         serial_write("[kernel] no boot wasmos-app module\n");

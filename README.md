@@ -124,13 +124,14 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - Blocked processes can now be resumed by context (`process_wake_by_context`) when IPC traffic arrives for owned endpoints.
 - A minimal init process runs in the kernel, spawns the process manager, and then blocks.
 - The process manager owns a `proc` IPC endpoint and can `spawn`, `wait`, `kill`, and `status` processes on behalf of callers.
-- The process manager loads the first WASMOS-APP boot module and spawns it in a generic WASMOS-APP runner process.
+- The process manager spawns a user-space `init` WASMOS-APP boot module, passing the `proc` endpoint and boot module indices.
+- The user-space `init` module spawns the `chardev-client` WASMOS-APP via `proc`.
 - IPC endpoint permissions are enforced by context-aware APIs (`ipc_send_from`, `ipc_recv_for`) for source-endpoint ownership and endpoint receive ownership.
 - The kernel now builds and embeds example WASM applications from `examples/wasm/` (including `chardev_server` and `chardev_client`).
 - Driver wasm link settings currently constrain module stack/linear memory for low-footprint instantiation in the freestanding runtime pool.
 - A generic kernel wasm driver host (`kernel/wasm_driver.c`) loads embedded modules, instantiates them via WAMR, and dispatches IPC requests to exported driver handlers.
 - The WASM-backed chardev runs as an IPC service endpoint in a dedicated `chardev-server` process (`kernel/wasm_chardev.c`) using `examples/wasm/chardev_server/chardev_server.c`.
-- The boot WASMOS-APP module currently contains `examples/wasm/chardev_client/chardev_client.c` and performs one IPC write/read roundtrip via imported IPC primitives.
+- Boot modules now include `init.wasmosapp` and `chardev_client.wasmosapp`; the chardev client performs one IPC write/read roundtrip via imported IPC primitives.
 - The chardev server process blocks when its IPC queue is empty and is woken by incoming IPC messages.
 - The chardev service path uses permission-aware IPC send/receive calls tied to its owner context.
 - The chardev module export contract is `chardev_init` and `chardev_ipc_dispatch` (with optional direct `chardev_read_byte`/`chardev_write_byte` exports).

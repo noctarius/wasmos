@@ -2,6 +2,7 @@
 #include "ipc.h"
 #include "serial.h"
 #include "wasmos_app.h"
+#include "wasm_chardev.h"
 
 #define PM_MAX_MANAGED_APPS 8u
 #define PM_MAX_WAITERS 8u
@@ -12,6 +13,8 @@ typedef struct {
     const uint8_t *blob;
     uint32_t blob_size;
     uint8_t started;
+    uint32_t step_arg0;
+    uint32_t step_arg1;
     wasmos_app_instance_t app;
     char name[64];
 } pm_app_state_t;
@@ -27,6 +30,8 @@ typedef struct {
     const boot_info_t *boot_info;
     uint32_t proc_endpoint;
     uint8_t started;
+    uint32_t init_module_index;
+    uint32_t chardev_module_index;
     pm_app_state_t apps[PM_MAX_MANAGED_APPS];
     pm_wait_state_t waits[PM_MAX_WAITERS];
 } pm_state_t;
@@ -61,6 +66,22 @@ copy_name(char *dst, uint32_t dst_len, const uint8_t *src, uint32_t src_len)
     return 0;
 }
 
+static int
+name_eq(const char *a, const char *b)
+{
+    if (!a || !b) {
+        return 0;
+    }
+    while (*a && *b) {
+        if (*a != *b) {
+            return 0;
+        }
+        a++;
+        b++;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
 static const boot_module_t *
 pm_module_at(uint32_t index)
 {
@@ -87,6 +108,35 @@ pm_find_app_slot(void)
         }
     }
     return 0;
+}
+
+static uint32_t
+pm_find_module_index_by_name(const char *name)
+{
+    const boot_info_t *info = g_pm.boot_info;
+    if (!info || !name || !(info->flags & BOOT_INFO_FLAG_MODULES_PRESENT)) {
+        return 0xFFFFFFFFu;
+    }
+
+    for (uint32_t i = 0; i < info->module_count; ++i) {
+        const boot_module_t *mod = pm_module_at(i);
+        if (!mod || mod->type != BOOT_MODULE_TYPE_WASMOS_APP ||
+            mod->base == 0 || mod->size == 0 || mod->size > 0xFFFFFFFFULL) {
+            continue;
+        }
+        wasmos_app_desc_t desc;
+        if (wasmos_app_parse((const uint8_t *)(uintptr_t)mod->base, (uint32_t)mod->size, &desc) != 0) {
+            continue;
+        }
+        char temp[64];
+        if (copy_name(temp, sizeof(temp), desc.name, desc.name_len) != 0) {
+            continue;
+        }
+        if (name_eq(temp, name)) {
+            return i;
+        }
+    }
+    return 0xFFFFFFFFu;
 }
 
 static process_run_result_t
@@ -119,8 +169,8 @@ pm_app_entry(process_t *process, void *arg)
     step_msg.source = 0;
     step_msg.destination = 0;
     step_msg.request_id = 0;
-    step_msg.arg0 = 0;
-    step_msg.arg1 = 0;
+    step_msg.arg0 = state->step_arg0;
+    step_msg.arg1 = state->step_arg1;
     step_msg.arg2 = 0;
     step_msg.arg3 = 0;
 
@@ -172,7 +222,25 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     slot->blob = (const uint8_t *)(uintptr_t)mod->base;
     slot->blob_size = (uint32_t)mod->size;
     slot->started = 0;
+    slot->step_arg0 = 0;
+    slot->step_arg1 = 0;
     slot->in_use = 1;
+
+    if (name_eq(slot->name, "init")) {
+        if (g_pm.chardev_module_index == 0xFFFFFFFFu) {
+            slot->in_use = 0;
+            return -1;
+        }
+        slot->step_arg0 = g_pm.proc_endpoint;
+        slot->step_arg1 = g_pm.chardev_module_index;
+    } else if (name_eq(slot->name, "chardev-client")) {
+        uint32_t chardev_endpoint = IPC_ENDPOINT_NONE;
+        if (wasm_chardev_endpoint(&chardev_endpoint) != 0) {
+            slot->in_use = 0;
+            return -1;
+        }
+        slot->step_arg0 = chardev_endpoint;
+    }
 
     if (process_spawn_as(parent_pid, slot->name, pm_app_entry, slot, out_pid) != 0) {
         slot->in_use = 0;
@@ -365,19 +433,20 @@ pm_boot_spawn(void)
         return;
     }
 
-    for (uint32_t i = 0; i < info->module_count; ++i) {
-        const boot_module_t *mod = pm_module_at(i);
-        if (!mod || mod->type != BOOT_MODULE_TYPE_WASMOS_APP) {
-            continue;
-        }
-        uint32_t pid = 0;
-        if (pm_spawn_module(process_current_pid(), i, &pid) == 0) {
-            serial_write("[pm] spawned app pid=");
-            pm_write_hex64(pid);
-        } else {
-            serial_write("[pm] boot spawn failed\n");
-        }
-        break;
+    g_pm.init_module_index = pm_find_module_index_by_name("init");
+    g_pm.chardev_module_index = pm_find_module_index_by_name("chardev-client");
+
+    if (g_pm.init_module_index == 0xFFFFFFFFu) {
+        serial_write("[pm] init module not found\n");
+        return;
+    }
+
+    uint32_t pid = 0;
+    if (pm_spawn_module(process_current_pid(), g_pm.init_module_index, &pid) == 0) {
+        serial_write("[pm] spawned init pid=");
+        pm_write_hex64(pid);
+    } else {
+        serial_write("[pm] init spawn failed\n");
     }
 }
 
@@ -387,6 +456,8 @@ process_manager_init(const boot_info_t *boot_info)
     g_pm.boot_info = boot_info;
     g_pm.proc_endpoint = IPC_ENDPOINT_NONE;
     g_pm.started = 0;
+    g_pm.init_module_index = 0xFFFFFFFFu;
+    g_pm.chardev_module_index = 0xFFFFFFFFu;
     for (uint32_t i = 0; i < PM_MAX_MANAGED_APPS; ++i) {
         g_pm.apps[i].in_use = 0;
         g_pm.apps[i].pid = 0;

@@ -5,5 +5,6 @@
 
 void serial_init(void);
 void serial_write(const char *s);
+int serial_read_char(uint8_t *out_char);
 
 #endif

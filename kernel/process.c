@@ -43,6 +43,19 @@ static process_t *process_find_by_pid(uint32_t pid) {
     return 0;
 }
 
+static process_t *process_find_by_context_internal(uint32_t context_id) {
+    if (context_id == 0) {
+        return 0;
+    }
+    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        if (g_processes[i].context_id == context_id &&
+            g_processes[i].state != PROCESS_STATE_UNUSED) {
+            return &g_processes[i];
+        }
+    }
+    return 0;
+}
+
 static void process_wake_waiters(uint32_t target_pid) {
     if (target_pid == 0) {
         return;
@@ -89,6 +102,10 @@ void process_init(void) {
 }
 
 int process_spawn(const char *name, process_entry_t entry, void *arg, uint32_t *out_pid) {
+    return process_spawn_as(g_current_pid, name, entry, arg, out_pid);
+}
+
+int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid) {
     if (!entry || !out_pid) {
         return -1;
     }
@@ -105,7 +122,7 @@ int process_spawn(const char *name, process_entry_t entry, void *arg, uint32_t *
     }
 
     slot->pid = pid;
-    slot->parent_pid = g_current_pid;
+    slot->parent_pid = parent_pid;
     slot->context_id = ctx->id;
     slot->state = PROCESS_STATE_READY;
     slot->block_reason = PROCESS_BLOCK_NONE;
@@ -120,6 +137,10 @@ int process_spawn(const char *name, process_entry_t entry, void *arg, uint32_t *
 
 process_t *process_get(uint32_t pid) {
     return process_find_by_pid(pid);
+}
+
+process_t *process_find_by_context(uint32_t context_id) {
+    return process_find_by_context_internal(context_id);
 }
 
 uint32_t process_current_pid(void) {

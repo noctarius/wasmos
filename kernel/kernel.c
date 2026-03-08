@@ -5,6 +5,7 @@
 #include "memory_service.h"
 #include "paging.h"
 #include "process.h"
+#include "process_manager.h"
 #include "serial.h"
 #include "wasmos_app.h"
 #include "wamr_context.h"
@@ -21,16 +22,7 @@ typedef struct {
     ipc_message_t message;
 } wasm_ipc_last_slot_t;
 
-typedef struct {
-    uint32_t chardev_endpoint;
-    const uint8_t *app_blob;
-    uint32_t app_blob_size;
-    uint8_t started;
-    wasmos_app_instance_t app;
-} chardev_wasm_client_state_t;
-
 static wasm_ipc_last_slot_t g_wasm_last_slots[PROCESS_MAX_COUNT];
-static chardev_wasm_client_state_t g_chardev_wasm_client;
 static uint32_t g_chardev_service_endpoint = IPC_ENDPOINT_NONE;
 
 typedef struct {
@@ -52,33 +44,6 @@ serial_write_hex64(uint64_t value)
     buf[18] = '\n';
     buf[19] = '\0';
     serial_write(buf);
-}
-
-static int
-find_boot_wasmos_app(const boot_info_t *boot_info, const uint8_t **out_blob, uint32_t *out_size)
-{
-    if (!boot_info || !out_blob || !out_size) {
-        return -1;
-    }
-    if (!(boot_info->flags & BOOT_INFO_FLAG_MODULES_PRESENT) ||
-        !boot_info->modules ||
-        boot_info->module_entry_size < sizeof(boot_module_t) ||
-        boot_info->module_count == 0) {
-        return -1;
-    }
-
-    const uint8_t *mods = (const uint8_t *)boot_info->modules;
-    for (uint32_t i = 0; i < boot_info->module_count; ++i) {
-        const boot_module_t *mod = (const boot_module_t *)(mods + i * boot_info->module_entry_size);
-        if (mod->type != BOOT_MODULE_TYPE_WASMOS_APP || mod->base == 0 || mod->size == 0 ||
-            mod->size > 0xFFFFFFFFULL) {
-            continue;
-        }
-        *out_blob = (const uint8_t *)(uintptr_t)mod->base;
-        *out_size = (uint32_t)mod->size;
-        return 0;
-    }
-    return -1;
 }
 
 static int
@@ -384,67 +349,6 @@ chardev_server_entry(process_t *process, void *arg)
 }
 
 static process_run_result_t
-chardev_wasm_client_entry(process_t *process, void *arg)
-{
-    chardev_wasm_client_state_t *state = (chardev_wasm_client_state_t *)arg;
-    ipc_message_t step_msg;
-    int32_t step_result = WASMOS_WASM_STEP_FAILED;
-
-    if (!process || !state) {
-        return PROCESS_RUN_IDLE;
-    }
-
-    if (!state->started) {
-        wasmos_app_desc_t app_desc;
-        if (wasmos_app_parse(state->app_blob,
-                             state->app_blob_size,
-                             &app_desc) != 0) {
-            serial_write("[test] wasmos app parse failed\n");
-            process_set_exit_status(process, -1);
-            return PROCESS_RUN_EXITED;
-        }
-        if (wasmos_app_start(&state->app, &app_desc, process->context_id) != 0) {
-            serial_write("[test] wasm client start failed\n");
-            process_set_exit_status(process, -1);
-            return PROCESS_RUN_EXITED;
-        }
-        state->started = 1;
-    }
-
-    step_msg.type = 0;
-    step_msg.source = 0;
-    step_msg.destination = 0;
-    step_msg.request_id = 0;
-    step_msg.arg0 = state->chardev_endpoint;
-    step_msg.arg1 = 0;
-    step_msg.arg2 = 0;
-    step_msg.arg3 = 0;
-
-    if (wasmos_app_dispatch(&state->app, &step_msg, &step_result) != 0) {
-        serial_write("[test] wasm client dispatch failed\n");
-        process_set_exit_status(process, -1);
-        return PROCESS_RUN_EXITED;
-    }
-
-    if (step_result == WASMOS_WASM_STEP_BLOCKED) {
-        process_block_on_ipc(process);
-        return PROCESS_RUN_BLOCKED;
-    }
-    if (step_result == WASMOS_WASM_STEP_DONE) {
-        serial_write("[test] wasm chardev ipc roundtrip ok\n");
-        process_set_exit_status(process, 0);
-        return PROCESS_RUN_EXITED;
-    }
-    if (step_result == WASMOS_WASM_STEP_FAILED) {
-        serial_write("[test] wasm chardev ipc roundtrip failed\n");
-        process_set_exit_status(process, -1);
-        return PROCESS_RUN_EXITED;
-    }
-
-    return PROCESS_RUN_YIELDED;
-}
-
-static process_run_result_t
 page_fault_test_entry(process_t *process, void *arg)
 {
     pf_test_state_t *state = (pf_test_state_t *)arg;
@@ -497,10 +401,8 @@ kmain(boot_info_t *boot_info)
     process_t *mem_service_proc = 0;
     uint32_t mem_service_endpoint = IPC_ENDPOINT_NONE;
     uint32_t mem_reply_endpoint = IPC_ENDPOINT_NONE;
-    uint32_t test_pid = 0;
     uint32_t pf_test_pid = 0;
-    const uint8_t *app_blob = 0;
-    uint32_t app_blob_size = 0;
+    uint32_t pm_pid = 0;
 
     (void)boot_info;
 
@@ -584,28 +486,17 @@ kmain(boot_info_t *boot_info)
     }
     g_chardev_service_endpoint = chardev_endpoint;
     wasmos_app_set_policy_hooks(wasmos_endpoint_resolve, wasmos_capability_grant);
+    process_manager_init(boot_info);
 
-    if (find_boot_wasmos_app(boot_info, &app_blob, &app_blob_size) != 0) {
-        serial_write("[kernel] no boot wasmos-app module\n");
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
-    }
-    g_chardev_wasm_client.chardev_endpoint = chardev_endpoint;
-    g_chardev_wasm_client.started = 0;
-    g_chardev_wasm_client.app_blob = app_blob;
-    g_chardev_wasm_client.app_blob_size = app_blob_size;
-
-    if (process_spawn("chardev-test-client-wasm", chardev_wasm_client_entry,
-                      &g_chardev_wasm_client, &test_pid) != 0) {
-        serial_write("[kernel] wasm test process spawn failed\n");
+    if (process_spawn("process-manager", process_manager_entry, 0, &pm_pid) != 0) {
+        serial_write("[kernel] process manager spawn failed\n");
         for (;;) {
             __asm__ volatile("hlt");
         }
     }
 
-    serial_write("[kernel] chardev wasm test pid=");
-    serial_write_hex64(test_pid);
+    serial_write("[kernel] process manager pid=");
+    serial_write_hex64(pm_pid);
 
     g_pf_test_state.addr = 0;
     g_pf_test_state.stage = 0;

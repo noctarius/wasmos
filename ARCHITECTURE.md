@@ -384,6 +384,12 @@ Driver IPC shape:
 Early boot:
 - `init` (or a dedicated resource manager) enumerates devices (ACPI/PCI) and assigns
   BARs/IRQs to the appropriate driver processes.
+
+Runtime device management:
+- `hw-discovery` publishes device inventory and hotplug events.
+- `driver-manager` owns driver lifecycle, matches devices to drivers, and requests
+  resource grants for MMIO/PIO/DMA/IRQ.
+
 ## Drivers & Services (Planned)
 This list defines the next baseline drivers and services, their role, and IPC expectations.
 
@@ -407,6 +413,11 @@ Services:
   - Acts as a minimal loader for PM if the kernel does not spawn PM directly.
     - Option A: PM is embedded as a WASMOS-APP blob and init parses/loads it.
     - Option B: PM is a simpler boot module and init passes it to PM for re-load.
+- `hw-discovery` (udev-like): privileged service that detects hardware and emits events.
+  - Enumerates ACPI/PCI and publishes device inventory updates.
+  - Emits hotplug notifications for new/removed devices.
+- `driver-manager`: starts, stops, and assigns drivers in response to hardware events.
+  - Maps devices to driver images, allocates resources, and wires endpoints.
 - `cli` (simple CLI): provides a basic command loop and service/status queries.
 
 IPC expectations (high level):
@@ -415,6 +426,8 @@ IPC expectations (high level):
 - Process manager exports `proc` endpoint: `spawn`, `wait`, `kill`, `status`.
 - Init uses `fs` endpoints to read config and uses `proc` to spawn services.
 - CLI uses `proc` and `fs` for simple shell commands.
+- `hw-discovery` emits `device` events to `driver-manager`.
+- `driver-manager` requests resource grants and spawns drivers via `proc`.
 
 ### Init Process Responsibilities (Microkernel Practice)
 Common patterns in microkernel systems:

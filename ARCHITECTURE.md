@@ -11,6 +11,67 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - Provide only minimal kernel primitives for a microkernel architecture.
 - Establish clear seams for memory management, device discovery, and userland loading.
 
+## Bootloader & Kernel Architecture (Rework)
+This section restates the target architecture using the best-practice notes captured below. It is the baseline to follow before changing code.
+
+### Bootloader Design
+Intent: small, deterministic, and strict about inputs.
+
+Responsibilities:
+- Validate and load `kernel.elf` PT_LOAD segments with explicit alignment handling.
+- Construct `boot_info_t` with memory map and platform descriptors.
+- Preserve a clean handoff contract to `_start` without extra policy.
+- Provide minimal diagnostics to UEFI console only.
+
+Rules:
+- Do not embed policy (no allocation heuristics beyond ELF requirements).
+- Avoid dynamic dependencies; keep the loader deterministic and auditable.
+- Preserve forward compatibility by versioning `boot_info_t` and extending only at the end.
+
+### Kernel Design (Microkernel First)
+Intent: minimal kernel mechanisms, all policy in user space (WASM services).
+
+Kernel responsibilities:
+- IPC transport and endpoint isolation.
+- Basic scheduling and process lifecycle.
+- Memory management mechanisms (page tables, region mapping, allocation primitives).
+- Interrupt and timer dispatch to user space via nonblocking notifications.
+
+User-space responsibilities:
+- Drivers, filesystems, network stack, and services.
+- Policy layers (scheduling policy, resource management, naming, service discovery).
+
+### IPC Design Direction
+These principles are derived from the IPC notes in this document.
+- Request-reply semantics by default for kernel-bound calls.
+- One-way notifications for events and signals, separate from request/reply IPC.
+- Nonblocking IPC variants (polling send/recv) for latency-sensitive or re-entrant paths.
+- Send permissions via explicit allowlists (capability-like send masks) and per-endpoint badges.
+- Keep IPC messages small and register-sized where possible to enable a fast path.
+- Shared-memory fast paths for bulk data with explicit buffer ownership rules and message-based synchronization.
+- Unified notification path for asynchronous events to avoid deadlocks.
+- Build higher-level IPC services over the core message-passing primitive.
+
+### Memory Model Direction
+- Keep kernel mechanisms small; delegate policies to services.
+- Provide mapping primitives for shared memory regions and user-space paging.
+- Avoid kernel-internal copying for bulk data; use shared memory plus message-based synchronization.
+
+### Scheduling Direction
+- Keep a small core scheduler in kernel with pluggable policy hints.
+- Allow user-space services to set priorities and budgets via explicit calls.
+- Ensure IPC paths do not block kernel tasks.
+
+### Stepwise Plan
+1. Freeze the `boot_info_t` contract and document versioning rules.
+2. Specify IPC message formats, error codes, and permission rules.
+3. Add separate notification objects and nonblocking IPC semantics at the API level.
+4. Define shared-memory IPC protocol, buffer ownership rules, and synchronization points.
+5. Add a service registry and discovery protocol in user space.
+6. Introduce a supervisor service for crash recovery and restart policies.
+7. Extend scheduling with priorities and IPC-aware budgeting.
+8. Add tracing hooks for IPC latency and queue pressure.
+
 ## Kernel Architecture Guide
 This guide captures microkernel-informed design decisions and a stepwise plan for WASMOS. It is based on the general monolithic vs. microkernel overview in `monolithic-and-microkernel.txt`.
 
@@ -157,6 +218,55 @@ Remaining:
 - IPC is the default communication mechanism between WASM drivers, services, and applications.
 - The kernel mediates IPC primitives and endpoint isolation; higher-level protocols are implemented in WASM services.
 - Device-facing drivers expose capability-like IPC interfaces rather than direct shared driver calls.
+
+## IPC Best Practices (Herder Thesis Notes)
+Source: `herder_thesis.pdf` (MINIX 3 microkernel conversion).
+
+Design takeaways:
+- Favor structural deadlock prevention over detection. Enforce a directed message ordering with replies only in the reverse direction.
+- Avoid blocking kernel tasks. Require request-reply (`sendrec`) style interactions for kernel-bound calls.
+- Provide nonblocking IPC variants so services can poll when blocking is unsafe.
+- Validate IPC calls strictly: known call numbers, valid endpoints, and explicit error returns.
+- Enforce communication permissions via per-process send masks (policy/mechanism separation).
+- Handle asynchronous events via a unified notification construct that never blocks the caller and defers delivery until the receiver is ready.
+- Minimize IPC overhead by reducing context switches and data copying; small kernels help cache behavior.
+
+IPC improvement notes for WASMOS:
+- Add a directed IPC policy for service layers with explicit reply-only bottom-up flows.
+- Introduce nonblocking send/recv APIs and propagate `ENOTREADY`-style errors to callers.
+- Add per-process IPC allowlists (send masks) beyond endpoint ownership checks.
+- Add a notification path for asynchronous kernel-to-service events that is nonblocking and deferrable.
+- Tighten IPC validation and error codes for illegal calls, invalid endpoints, and dead destinations.
+
+## IPC Best Practices (Aigner PhD Notes)
+Source: `aigner_phd.pdf` (microkernel communication and stub generation).
+
+Design takeaways:
+- Treat IPC performance as a primary system concern: marshaling/unmarshaling overhead is significant even when kernel IPC is fast.
+- Optimize for two dominant cases: small messages (latency, setup/parse costs) and large transfers (throughput, copy avoidance).
+- Use in-place message buffers when possible to avoid extra copies.
+- Support one-way messages for notifications/synchronization alongside RPC-style request/response.
+- Prefer asynchronous server patterns when a server depends on lower-level services: store request state, issue async call, resume on reply.
+- Keep communication code resource-bounded (no unbounded heap/stack usage in low-level paths) to avoid DoS and latency spikes.
+- Use shared memory for bulk payloads, but establish long-lived regions; avoid per-call map/unmap costs.
+- Treat shared-memory policy as user-space policy: kernel provides only mechanisms to establish/revoke regions.
+
+IPC improvement notes for WASMOS:
+- Define distinct fast paths for small control messages vs. bulk data (shared memory + notification).
+- Add optional one-way notification messages to avoid forced request/response coupling.
+- Introduce async server helpers for multi-tier services (store state, reply-only continuation).
+- Ensure IPC APIs can be used without dynamic allocation in hot paths.
+
+## IPC Best Practices (seL4 and QNX Notes)
+Sources: seL4 documentation and QNX Neutrino microkernel documentation.
+
+Design takeaways:
+- Separate synchronous IPC endpoints from notification objects for asynchronous events.
+- Provide optional nonblocking receive/polling to decouple event handling from blocking IPC.
+- Use endpoint badges to identify the sender without exposing mutable shared state.
+- Keep IPC messages small for a fast path; avoid extra capabilities in the critical path.
+- Use message passing as the foundation for higher-level services; other IPC builds on it.
+- Pair shared memory with message passing for bulk data movement and synchronization.
 
 ## Kernel Primitives (Current Scaffold)
 - `spinlock` primitive in `kernel/spinlock.c` provides low-level mutual exclusion for shared kernel objects.

@@ -28,6 +28,7 @@ set(WASM_DIR ${CMAKE_SOURCE_DIR}/libs/wasm)
 set(WAMR_DIR ${WASM_DIR}/wasm-micro-runtime)
 set(DRIVER_WASM_DIR ${CMAKE_SOURCE_DIR}/drivers/wasm)
 set(EXAMPLES_WASM_DIR ${CMAKE_SOURCE_DIR}/examples/wasm)
+set(EXAMPLES_AS_DIR ${CMAKE_SOURCE_DIR}/examples/assemblyscript)
 
 set(CLANG clang CACHE STRING "C compiler for freestanding/UEFI builds")
 if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
@@ -578,9 +579,58 @@ add_custom_target(wasm_driver_blobs DEPENDS
 )
 list(APPEND KERNEL_OBJS ${WASM_CHARDEV_DRIVER_BLOB} ${WASM_CHARDEV_CLIENT_BLOB})
 
+if (AS_ENABLE)
+  find_program(ASC_EXECUTABLE asc HINTS ${CLANG_BIN_DIR})
+  if (NOT ASC_EXECUTABLE)
+    message(FATAL_ERROR "AssemblyScript compiler 'asc' not found. Install with: npm i -g assemblyscript")
+  endif ()
+
+  set(AS_HELLO_SRC ${EXAMPLES_AS_DIR}/hello/hello.ts)
+  set(AS_HELLO_WASM ${BUILD_DIR}/hello_as.wasm)
+  set(AS_HELLO_APP ${BUILD_DIR}/hello_as.wasmosapp)
+
+  add_custom_command(
+    OUTPUT ${AS_HELLO_WASM}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+    COMMAND ${ASC_EXECUTABLE}
+            ${AS_HELLO_SRC}
+            --target release
+            -Osize
+            --runtime stub
+            --noAssert
+            --outFile ${AS_HELLO_WASM}
+    DEPENDS ${AS_HELLO_SRC}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Building AssemblyScript hello module"
+    VERBATIM
+  )
+
+  add_custom_command(
+    OUTPUT ${AS_HELLO_APP}
+    COMMAND ${WASMOS_APP_PACKER}
+            ${AS_HELLO_WASM}
+            ${AS_HELLO_APP}
+            hello-as
+            hello_step
+            16
+            16
+            -
+            0
+            ipc.basic
+            0
+    DEPENDS ${AS_HELLO_WASM} ${WASMOS_APP_PACKER}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Packing AssemblyScript hello as WASMOS-APP"
+    VERBATIM
+  )
+
+  add_custom_target(assemblyscript_examples DEPENDS ${AS_HELLO_APP})
+endif ()
+
 # WAMR is vendored via git subtree at ${WAMR_DIR}.
 option(WAMR_ENABLE "Enable WAMR runtime integration (requires linking WAMR)" ON)
 option(WAMR_LINK "Link the WAMR runtime library" ON)
+option(AS_ENABLE "Enable AssemblyScript example builds" OFF)
 if (WAMR_ENABLE AND WAMR_LINK)
   set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -DWAMR_ENABLED=1 -I${WAMR_DIR}/core/iwasm/include)
 endif ()

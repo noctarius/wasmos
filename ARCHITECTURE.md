@@ -378,7 +378,13 @@ Services:
   - Instantiates WAMR context and binds linear/stack/heap sizes from hints.
   - Resolves required IPC endpoints/capabilities before start.
   - Starts the entry export and registers the process with the scheduler.
-- `init` (init process): loads a boot config from the EFI boot disk via FAT32 and starts core services.
+- `init` (root task / init process): the first user-space task that bootstraps the system.
+  - Starts core services and drivers (PM, disk, FAT32, CLI).
+  - Reads boot configuration from the EFI boot disk via FAT32.
+  - Performs minimal namespace/service registration (names, endpoints).
+  - Acts as a minimal loader for PM if the kernel does not spawn PM directly.
+    - Option A: PM is embedded as a WASMOS-APP blob and init parses/loads it.
+    - Option B: PM is a simpler boot module and init passes it to PM for re-load.
 - `cli` (simple CLI): provides a basic command loop and service/status queries.
 
 IPC expectations (high level):
@@ -387,6 +393,20 @@ IPC expectations (high level):
 - Process manager exports `proc` endpoint: `spawn`, `wait`, `kill`, `status`.
 - Init uses `fs` endpoints to read config and uses `proc` to spawn services.
 - CLI uses `proc` and `fs` for simple shell commands.
+
+### Init Process Responsibilities (Microkernel Practice)
+Common patterns in microkernel systems:
+- The initial user task/root task bootstraps the user-space system and launches core services.
+- It often serves as a resource/bootstrap coordinator (memory/IRQ/task IDs or namespaces).
+- It reads a configuration or startup script to decide which services to start.
+
+WASMOS adaptation:
+- `init` receives the initial boot resources and is responsible for delegating them
+  (capabilities/handles) to the PM and other core services.
+- `init` starts PM first, then disk drivers, FAT32, and CLI.
+- `init` loads configuration from EFI disk (FAT32) to determine service set and order.
+- `init` registers basic names/endpoints for service discovery.
+- `init` may host a minimal loader for PM if PM is not started by the kernel.
 
 ## Interfaces
 ### boot_info_t

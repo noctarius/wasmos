@@ -9,8 +9,11 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - `src/boot/` UEFI application (PE/COFF) that loads `kernel.elf` and jumps to its entry.
 - `src/kernel/` Freestanding kernel (C + ASM) with a tiny boot-time runtime.
 - `libs/wasm/` Placeholder for integrating WAMR.
-- `examples/wasm/` Example WASM applications (driver/server/client samples).
+- `examples/c/` Example C WASM applications.
+- `examples/go/` Example Go (TinyGo) WASM applications.
+- `examples/rust/` Example Rust WASM applications.
 - `src/drivers/` WASM driver sources and ABI headers (each driver lives in its own subdirectory).
+- `src/services/` System services (WASM-based).
 - `scripts/` Helper scripts (optional).
 - `ARCHITECTURE.md` In-depth architecture notes and boot process diagrams.
 
@@ -57,7 +60,7 @@ cmake --build build --target assemblyscript_examples
 
 The sample uses `asc` with release/size settings and the `stub` runtime (no GC).
 
-There is also a minimal C-based example at `examples/wasm/hello_c/hello_c.c`, packed as `hello_c.wasmosapp`.
+There is also a minimal C-based example at `examples/c/hello/hello_c.c`, packed as `hello_c.wasmosapp`.
 
 ### Rust (optional)
 Rust can be used to write WASMOS drivers, services, and applications. Install Rust and the WebAssembly target:
@@ -76,7 +79,7 @@ Build the sample Rust WASMOS-APP:
 cmake --build build --target rust_examples
 ```
 
-The sample lives at `examples/wasm/hello_rust/hello_rust.rs` and is packed as `hello_rust.wasmosapp`.
+The sample lives at `examples/rust/hello/hello_rust.rs` and is packed as `hello_rust.wasmosapp`.
 
 ### Go (TinyGo) (optional)
 Go can be used to write WASMOS applications via TinyGo. Install TinyGo and ensure it is in your PATH.
@@ -86,7 +89,7 @@ Build the sample Go WASMOS-APP:
 cmake --build build --target go_examples
 ```
 
-The sample lives at `examples/wasm/hello_go/hello_go.go` and is packed as `hello_go.wasmosapp`.
+The sample lives at `examples/go/hello/hello_go.go` and is packed as `hello_go.wasmosapp`.
 
 ### WAMR scaffold
 - `libs/wasm/wamr_runtime.c` provides a thin wrapper over the WAMR C API.
@@ -184,7 +187,7 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes.
 - A FAT12/16/32 filesystem driver runs as a WASMOS-APP service, uses the block IPC endpoint, and exposes the `fs` IPC endpoint (now includes VFAT LFN support for `ls`, `cd`, and `cat`).
 - A minimal user-space `cli` WASMOS-APP is loaded as a boot module, reads input from serial, and supports `help`, `ps`, `ls`, `cat`, `cd`, and `exec` (loads WASMOS-APPs from disk; drivers/services are rejected).
 - IPC endpoint permissions are enforced by context-aware APIs (`ipc_send_from`, `ipc_recv_for`) for source-endpoint ownership and endpoint receive ownership.
-- The kernel now builds and embeds example WASM applications from `examples/wasm/` (including `chardev_client`).
+- The kernel now builds and embeds example WASM applications from `examples/` (including `chardev_client`).
 - Driver wasm link settings currently constrain module stack/linear memory for low-footprint instantiation in the freestanding runtime pool.
 - A generic kernel wasm driver host (`src/kernel/wasm_driver.c`) loads embedded modules, instantiates them via WAMR, and dispatches IPC requests to exported driver handlers.
 - The WASM-backed chardev runs as an IPC service endpoint in a dedicated `chardev-server` process (`src/kernel/wasm_chardev.c`) using `src/drivers/chardev/chardev_server.c`.

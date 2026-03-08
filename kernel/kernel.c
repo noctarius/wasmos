@@ -15,9 +15,6 @@
 
 typedef struct WASMExecEnv *wasm_exec_env_t;
 
-extern const uint8_t _binary_chardev_client_wasm_start[];
-extern const uint8_t _binary_chardev_client_wasm_end[];
-
 typedef struct {
     uint32_t pid;
     uint8_t valid;
@@ -26,34 +23,14 @@ typedef struct {
 
 typedef struct {
     uint32_t chardev_endpoint;
+    const uint8_t *app_blob;
+    uint32_t app_blob_size;
     uint8_t started;
     wasmos_app_instance_t app;
 } chardev_wasm_client_state_t;
 
 static wasm_ipc_last_slot_t g_wasm_last_slots[PROCESS_MAX_COUNT];
 static chardev_wasm_client_state_t g_chardev_wasm_client;
-static uint8_t g_chardev_client_app_blob[128 * 1024];
-static uint32_t g_chardev_client_app_blob_size;
-
-typedef struct __attribute__((packed)) {
-    char magic[8];
-    uint16_t version;
-    uint16_t header_size;
-    uint32_t flags;
-    uint32_t name_len;
-    uint32_t entry_len;
-    uint32_t wasm_size;
-    uint32_t req_ep_count;
-    uint32_t cap_count;
-    uint32_t mem_hint_count;
-    uint32_t reserved;
-} kernel_wasmos_app_header_t;
-
-typedef struct __attribute__((packed)) {
-    uint32_t kind;
-    uint32_t min_pages;
-    uint32_t max_pages;
-} kernel_wasmos_mem_hint_t;
 
 typedef struct {
     uint64_t addr;
@@ -76,90 +53,31 @@ serial_write_hex64(uint64_t value)
     serial_write(buf);
 }
 
-static uint32_t
-wasm_blob_size(const uint8_t *start, const uint8_t *end)
-{
-    return (uint32_t)((uintptr_t)end - (uintptr_t)start);
-}
-
-static void
-mem_copy(uint8_t *dst, const uint8_t *src, uint32_t len)
-{
-    for (uint32_t i = 0; i < len; ++i) {
-        dst[i] = src[i];
-    }
-}
-
-static uint32_t
-str_len(const char *s)
-{
-    uint32_t len = 0;
-    while (s[len]) {
-        len++;
-    }
-    return len;
-}
-
 static int
-build_chardev_client_app_blob(void)
+find_boot_wasmos_app(const boot_info_t *boot_info, const uint8_t **out_blob, uint32_t *out_size)
 {
-    const char *name = "chardev-client";
-    const char *entry = "chardev_client_step";
-    const uint32_t name_len = str_len(name);
-    const uint32_t entry_len = str_len(entry);
-    const uint32_t wasm_size = wasm_blob_size(_binary_chardev_client_wasm_start,
-                                              _binary_chardev_client_wasm_end);
-    const uint32_t hint_count = 2;
-    const uint32_t need_size = (uint32_t)(sizeof(kernel_wasmos_app_header_t) +
-                                          name_len +
-                                          entry_len +
-                                          hint_count * sizeof(kernel_wasmos_mem_hint_t) +
-                                          wasm_size);
-    if (need_size > sizeof(g_chardev_client_app_blob)) {
+    if (!boot_info || !out_blob || !out_size) {
+        return -1;
+    }
+    if (!(boot_info->flags & BOOT_INFO_FLAG_MODULES_PRESENT) ||
+        !boot_info->modules ||
+        boot_info->module_entry_size < sizeof(boot_module_t) ||
+        boot_info->module_count == 0) {
         return -1;
     }
 
-    kernel_wasmos_app_header_t hdr;
-    for (uint32_t i = 0; i < 8; ++i) {
-        hdr.magic[i] = WASMOS_APP_MAGIC[i];
+    const uint8_t *mods = (const uint8_t *)boot_info->modules;
+    for (uint32_t i = 0; i < boot_info->module_count; ++i) {
+        const boot_module_t *mod = (const boot_module_t *)(mods + i * boot_info->module_entry_size);
+        if (mod->type != BOOT_MODULE_TYPE_WASMOS_APP || mod->base == 0 || mod->size == 0 ||
+            mod->size > 0xFFFFFFFFULL) {
+            continue;
+        }
+        *out_blob = (const uint8_t *)(uintptr_t)mod->base;
+        *out_size = (uint32_t)mod->size;
+        return 0;
     }
-    hdr.version = WASMOS_APP_VERSION;
-    hdr.header_size = sizeof(kernel_wasmos_app_header_t);
-    hdr.flags = WASMOS_APP_FLAG_APP;
-    hdr.name_len = name_len;
-    hdr.entry_len = entry_len;
-    hdr.wasm_size = wasm_size;
-    hdr.req_ep_count = 0;
-    hdr.cap_count = 0;
-    hdr.mem_hint_count = hint_count;
-    hdr.reserved = 0;
-
-    uint32_t off = 0;
-    mem_copy(&g_chardev_client_app_blob[off], (const uint8_t *)&hdr, sizeof(hdr));
-    off += sizeof(hdr);
-    mem_copy(&g_chardev_client_app_blob[off], (const uint8_t *)name, name_len);
-    off += name_len;
-    mem_copy(&g_chardev_client_app_blob[off], (const uint8_t *)entry, entry_len);
-    off += entry_len;
-
-    kernel_wasmos_mem_hint_t stack_hint;
-    stack_hint.kind = WASMOS_APP_MEM_HINT_STACK;
-    stack_hint.min_pages = 16;
-    stack_hint.max_pages = 0;
-    mem_copy(&g_chardev_client_app_blob[off], (const uint8_t *)&stack_hint, sizeof(stack_hint));
-    off += sizeof(stack_hint);
-
-    kernel_wasmos_mem_hint_t heap_hint;
-    heap_hint.kind = WASMOS_APP_MEM_HINT_HEAP;
-    heap_hint.min_pages = 16;
-    heap_hint.max_pages = 0;
-    mem_copy(&g_chardev_client_app_blob[off], (const uint8_t *)&heap_hint, sizeof(heap_hint));
-    off += sizeof(heap_hint);
-
-    mem_copy(&g_chardev_client_app_blob[off], _binary_chardev_client_wasm_start, wasm_size);
-    off += wasm_size;
-    g_chardev_client_app_blob_size = off;
-    return 0;
+    return -1;
 }
 
 static void
@@ -427,8 +345,8 @@ chardev_wasm_client_entry(process_t *process, void *arg)
 
     if (!state->started) {
         wasmos_app_desc_t app_desc;
-        if (wasmos_app_parse(g_chardev_client_app_blob,
-                             g_chardev_client_app_blob_size,
+        if (wasmos_app_parse(state->app_blob,
+                             state->app_blob_size,
                              &app_desc) != 0) {
             serial_write("[test] wasmos app parse failed\n");
             process_set_exit_status(process, -1);
@@ -530,6 +448,8 @@ kmain(boot_info_t *boot_info)
     uint32_t mem_reply_endpoint = IPC_ENDPOINT_NONE;
     uint32_t test_pid = 0;
     uint32_t pf_test_pid = 0;
+    const uint8_t *app_blob = 0;
+    uint32_t app_blob_size = 0;
 
     (void)boot_info;
 
@@ -612,14 +532,16 @@ kmain(boot_info_t *boot_info)
         }
     }
 
-    g_chardev_wasm_client.chardev_endpoint = chardev_endpoint;
-    g_chardev_wasm_client.started = 0;
-    if (build_chardev_client_app_blob() != 0) {
-        serial_write("[kernel] chardev client app blob failed\n");
+    if (find_boot_wasmos_app(boot_info, &app_blob, &app_blob_size) != 0) {
+        serial_write("[kernel] no boot wasmos-app module\n");
         for (;;) {
             __asm__ volatile("hlt");
         }
     }
+    g_chardev_wasm_client.chardev_endpoint = chardev_endpoint;
+    g_chardev_wasm_client.started = 0;
+    g_chardev_wasm_client.app_blob = app_blob;
+    g_chardev_wasm_client.app_blob_size = app_blob_size;
 
     if (process_spawn("chardev-test-client-wasm", chardev_wasm_client_entry,
                       &g_chardev_wasm_client, &test_pid) != 0) {

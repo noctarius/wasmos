@@ -25,6 +25,17 @@ static void *memset8(void *dst, UINT8 val, UINTN n) {
     return dst;
 }
 
+static void copy_cstr(char *dst, UINTN dst_size, const char *src) {
+    if (!dst || dst_size == 0) {
+        return;
+    }
+    UINTN i = 0;
+    for (; src && src[i] != '\0' && i + 1 < dst_size; ++i) {
+        dst[i] = src[i];
+    }
+    dst[i] = '\0';
+}
+
 static void uefi_hex(UINT64 value, char *out) {
     static const char hex[] = "0123456789ABCDEF";
     out[0] = '0';
@@ -74,6 +85,54 @@ static int elf_is_valid(const Elf64_Ehdr *ehdr) {
            ehdr->e_ident[3] == 'F';
 }
 
+static EFI_STATUS read_file_alloc(EFI_BOOT_SERVICES *bs,
+                                  EFI_FILE_PROTOCOL *root,
+                                  CHAR16 *path,
+                                  void **out_buf,
+                                  UINTN *out_size) {
+    if (!bs || !root || !path || !out_buf || !out_size) {
+        return 1;
+    }
+
+    EFI_STATUS status;
+    EFI_FILE_PROTOCOL *file = 0;
+    status = root->Open(root, &file, path, EFI_FILE_MODE_READ, 0);
+    if (EFI_ERROR(status)) {
+        return status;
+    }
+
+    EFI_GUID file_info_guid = EFI_FILE_INFO_GUID;
+    UINTN info_size = 0;
+    EFI_FILE_INFO *info = 0;
+    status = file->GetInfo(file, &file_info_guid, &info_size, info);
+    if (status == EFI_BUFFER_TOO_SMALL) {
+        status = bs->AllocatePool(EFI_LOADER_DATA, info_size, (void **)&info);
+        if (EFI_ERROR(status)) {
+            return status;
+        }
+        status = file->GetInfo(file, &file_info_guid, &info_size, info);
+    }
+    if (EFI_ERROR(status)) {
+        return status;
+    }
+
+    UINTN size = (UINTN)info->FileSize;
+    void *buf = 0;
+    status = bs->AllocatePool(EFI_LOADER_DATA, size, &buf);
+    if (EFI_ERROR(status)) {
+        return status;
+    }
+
+    status = file->Read(file, &size, buf);
+    if (EFI_ERROR(status)) {
+        return status;
+    }
+
+    *out_buf = buf;
+    *out_size = size;
+    return EFI_SUCCESS;
+}
+
 EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
     EFI_BOOT_SERVICES *bs = system->BootServices;
     EFI_STATUS status;
@@ -102,43 +161,25 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         return status;
     }
 
-    EFI_FILE_PROTOCOL *kernel = 0;
     static CHAR16 kernel_path[] = L"\\kernel.elf";
-    status = root->Open(root, &kernel, kernel_path, EFI_FILE_MODE_READ, 0);
-    if (EFI_ERROR(status)) {
-        uefi_log_status(system, "[boot] Open \\\\kernel.elf failed: ", status);
-        return status;
-    }
-
-    EFI_GUID file_info_guid = EFI_FILE_INFO_GUID;
-    UINTN info_size = 0;
-    EFI_FILE_INFO *info = 0;
-    status = kernel->GetInfo(kernel, &file_info_guid, &info_size, info);
-    if (status == EFI_BUFFER_TOO_SMALL) {
-        status = bs->AllocatePool(EFI_LOADER_DATA, info_size, (void **)&info);
-        if (EFI_ERROR(status)) {
-            uefi_log_status(system, "[boot] AllocatePool(file info) failed: ", status);
-            return status;
-        }
-        status = kernel->GetInfo(kernel, &file_info_guid, &info_size, info);
-    }
-    if (EFI_ERROR(status)) {
-        uefi_log_status(system, "[boot] GetInfo failed: ", status);
-        return status;
-    }
-
     void *kernel_buf = 0;
-    UINTN kernel_size = (UINTN)info->FileSize;
-    status = bs->AllocatePool(EFI_LOADER_DATA, kernel_size, &kernel_buf);
+    UINTN kernel_size = 0;
+    status = read_file_alloc(bs, root, kernel_path, &kernel_buf, &kernel_size);
     if (EFI_ERROR(status)) {
-        uefi_log_status(system, "[boot] AllocatePool(kernel) failed: ", status);
+        uefi_log_status(system, "[boot] Read \\\\kernel.elf failed: ", status);
         return status;
     }
 
-    status = kernel->Read(kernel, &kernel_size, kernel_buf);
+    static CHAR16 app_path[] = L"\\apps\\chardev_client.wasmosapp";
+    void *app_buf = 0;
+    UINTN app_size = 0;
+    status = read_file_alloc(bs, root, app_path, &app_buf, &app_size);
     if (EFI_ERROR(status)) {
-        uefi_log_status(system, "[boot] Read kernel failed: ", status);
-        return status;
+        app_buf = 0;
+        app_size = 0;
+        uefi_log(system, "[boot] optional module not found: \\\\apps\\\\chardev_client.wasmosapp\n");
+    } else {
+        uefi_log(system, "[boot] preloaded module: \\\\apps\\\\chardev_client.wasmosapp\n");
     }
 
     Elf64_Ehdr *ehdr = (Elf64_Ehdr *)kernel_buf;
@@ -207,6 +248,9 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
     mmap_size += desc_size * 2;
     UINTN mmap_capacity = mmap_size;
     UINTN boot_capacity = 0;
+    UINTN module_count = (app_buf && app_size > 0) ? 1 : 0;
+    UINTN module_table_bytes = module_count * sizeof(boot_module_t);
+    UINTN module_data_bytes = app_size;
 
     void *mmap = 0;
     UINT64 boot_buf = 0;
@@ -238,7 +282,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
 
         UINTN boot_bytes = sizeof(boot_info_t);
         map_bytes = mmap_size;
-        UINTN total_bytes = boot_bytes + map_bytes;
+        UINTN total_bytes = boot_bytes + map_bytes + module_table_bytes + module_data_bytes;
         UINTN total_pages = (total_bytes + 0xFFF) / 0x1000;
         if (boot_capacity < total_pages) {
             status = bs->AllocatePages(EFI_ALLOCATE_ANY_PAGES, EFI_LOADER_DATA, total_pages, &boot_buf);
@@ -260,6 +304,27 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         boot_info->memory_map_size = map_bytes;
         boot_info->memory_desc_size = desc_size;
         boot_info->memory_desc_version = desc_version;
+        boot_info->modules = 0;
+        boot_info->module_count = 0;
+        boot_info->module_entry_size = sizeof(boot_module_t);
+
+        UINT8 *cursor = (UINT8 *)map_dst + map_bytes;
+        if (module_count > 0) {
+            boot_module_t *mods = (boot_module_t *)cursor;
+            memset8(mods, 0, module_table_bytes);
+            cursor += module_table_bytes;
+
+            mods[0].base = (UINT64)(UINTN)cursor;
+            mods[0].size = app_size;
+            mods[0].type = BOOT_MODULE_TYPE_WASMOS_APP;
+            mods[0].reserved = 0;
+            copy_cstr(mods[0].name, sizeof(mods[0].name), "apps/chardev_client.wasmosapp");
+            memcpy8(cursor, app_buf, app_size);
+
+            boot_info->modules = mods;
+            boot_info->module_count = (uint32_t)module_count;
+            boot_info->flags |= BOOT_INFO_FLAG_MODULES_PRESENT;
+        }
 
         status = bs->ExitBootServices(image, map_key);
         if (!EFI_ERROR(status)) {

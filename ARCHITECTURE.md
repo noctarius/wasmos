@@ -608,11 +608,11 @@ Required commands:
 - `ps` — list processes via `proc`.
 - `help` — list built-in commands.
 - `halt` — request system shutdown via ACPI poweroff.
+- `reboot` — request system reboot via ACPI reset.
 
 Planned:
 - `cd <path>` — change working directory (client-side state).
 - `exec <path>` — load a WASMOS-APP from `fs` and ask `proc` to spawn it.
-- `reboot` — request system reboot via a privileged service.
 - `echo <args...>` — print arguments to console.
 
 ### Init Process Responsibilities (Microkernel Practice)

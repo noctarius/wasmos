@@ -35,6 +35,8 @@ extern int32_t wasmos_proc_info(int32_t index, int32_t ptr, int32_t len)
     WASMOS_WASM_IMPORT("wasmos", "proc_info");
 extern int32_t wasmos_system_halt(void)
     WASMOS_WASM_IMPORT("wasmos", "system_halt");
+extern int32_t wasmos_system_reboot(void)
+    WASMOS_WASM_IMPORT("wasmos", "system_reboot");
 
 typedef enum {
     CLI_PHASE_INIT = 0,
@@ -180,7 +182,7 @@ cli_handle_line(void)
         to_lower(g_line[1]) == 'e' &&
         to_lower(g_line[2]) == 'l' &&
         to_lower(g_line[3]) == 'p') {
-        console_write("commands: help, ps, ls, cat <name>, halt\n");
+        console_write("commands: help, ps, ls, cat <name>, halt, reboot\n");
         return 0;
     }
     if (g_line_len == 4 &&
@@ -189,6 +191,16 @@ cli_handle_line(void)
         to_lower(g_line[2]) == 'l' &&
         to_lower(g_line[3]) == 't') {
         wasmos_system_halt();
+        return 0;
+    }
+    if (g_line_len == 6 &&
+        to_lower(g_line[0]) == 'r' &&
+        to_lower(g_line[1]) == 'e' &&
+        to_lower(g_line[2]) == 'b' &&
+        to_lower(g_line[3]) == 'o' &&
+        to_lower(g_line[4]) == 'o' &&
+        to_lower(g_line[5]) == 't') {
+        wasmos_system_reboot();
         return 0;
     }
     if (g_line_len == 2 &&
@@ -247,7 +259,7 @@ cli_step(int32_t ignored_type,
     (void)ignored_arg3;
 
     if (g_phase == CLI_PHASE_INIT) {
-        const char *msg = "WASMOS CLI\ncommands: help, ps, ls, cat <name>, halt\n";
+        const char *msg = "WASMOS CLI\ncommands: help, ps, ls, cat <name>, halt, reboot\n";
         wasmos_console_write((int32_t)(uintptr_t)msg, str_len(msg));
         g_reply_endpoint = wasmos_ipc_create_endpoint();
         if (g_reply_endpoint < 0) {

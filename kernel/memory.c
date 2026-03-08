@@ -9,6 +9,19 @@ static mm_context_t g_contexts[MM_MAX_CONTEXTS];
 static uint32_t g_context_count;
 static mm_context_t g_root_ctx;
 
+#define MM_MAX_SHARED 16
+typedef struct {
+    uint32_t id;
+    uint8_t in_use;
+    uint32_t refcount;
+    uint64_t base;
+    uint64_t pages;
+    uint32_t flags;
+} mm_shared_region_t;
+
+static mm_shared_region_t g_shared[MM_MAX_SHARED];
+static uint32_t g_shared_next_id = 1;
+
 void mm_init(const boot_info_t *boot_info) {
     g_boot_info = boot_info;
     g_context_count = 0;
@@ -67,6 +80,113 @@ int mm_context_add_region(mm_context_t *ctx, uint64_t base, uint64_t size, uint3
     region->size = size;
     region->flags = flags;
     region->type = type;
+    return 0;
+}
+
+static mm_shared_region_t *mm_shared_find(uint32_t id) {
+    if (id == 0) {
+        return 0;
+    }
+    for (uint32_t i = 0; i < MM_MAX_SHARED; ++i) {
+        if (g_shared[i].in_use && g_shared[i].id == id) {
+            return &g_shared[i];
+        }
+    }
+    return 0;
+}
+
+int mm_shared_create(uint64_t pages, uint32_t flags, uint32_t *out_id, uint64_t *out_base) {
+    if (!out_id || !out_base || pages == 0) {
+        return -1;
+    }
+    uint32_t slot = MM_MAX_SHARED;
+    for (uint32_t i = 0; i < MM_MAX_SHARED; ++i) {
+        if (!g_shared[i].in_use) {
+            slot = i;
+            break;
+        }
+    }
+    if (slot == MM_MAX_SHARED) {
+        return -1;
+    }
+    uint64_t base = pfa_alloc_pages(pages);
+    if (!base) {
+        return -1;
+    }
+    uint32_t id = g_shared_next_id++;
+    if (id == 0) {
+        id = g_shared_next_id++;
+    }
+    g_shared[slot].id = id;
+    g_shared[slot].in_use = 1;
+    g_shared[slot].refcount = 0;
+    g_shared[slot].base = base;
+    g_shared[slot].pages = pages;
+    g_shared[slot].flags = flags;
+    *out_id = id;
+    *out_base = base;
+    return 0;
+}
+
+int mm_shared_map(mm_context_t *ctx, uint32_t id, uint32_t flags, uint64_t *out_base) {
+    if (!ctx) {
+        return -1;
+    }
+    mm_shared_region_t *region = mm_shared_find(id);
+    if (!region) {
+        return -1;
+    }
+    uint32_t effective_flags = region->flags;
+    if (flags) {
+        effective_flags &= flags;
+    }
+    if (mm_context_add_region(ctx, region->base, region->pages * PAGE_SIZE,
+                              effective_flags, MEM_REGION_SHARED) != 0) {
+        return -1;
+    }
+    region->refcount++;
+    if (out_base) {
+        *out_base = region->base;
+    }
+    return 0;
+}
+
+int mm_shared_unmap(mm_context_t *ctx, uint32_t id) {
+    if (!ctx) {
+        return -1;
+    }
+    mm_shared_region_t *region = mm_shared_find(id);
+    if (!region) {
+        return -1;
+    }
+
+    uint32_t found = 0;
+    for (uint32_t i = 0; i < ctx->region_count; ++i) {
+        mem_region_t *r = &ctx->regions[i];
+        if (r->type == MEM_REGION_SHARED && r->base == region->base &&
+            r->size == region->pages * PAGE_SIZE) {
+            for (uint32_t j = i; j + 1 < ctx->region_count; ++j) {
+                ctx->regions[j] = ctx->regions[j + 1];
+            }
+            ctx->region_count--;
+            found = 1;
+            break;
+        }
+    }
+    if (!found) {
+        return -1;
+    }
+    if (region->refcount > 0) {
+        region->refcount--;
+    }
+    if (region->refcount == 0) {
+        pfa_free_pages(region->base, region->pages);
+        region->in_use = 0;
+        region->id = 0;
+        region->base = 0;
+        region->pages = 0;
+        region->flags = 0;
+    }
     return 0;
 }
 

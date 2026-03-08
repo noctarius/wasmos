@@ -90,6 +90,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - `boot_info_t` now includes version/size/flags and is validated in the kernel.
 - IPC message format, error codes, and permission rules are documented in `ARCHITECTURE.md`.
 - IPC notification endpoints and nonblocking semantics are documented in `ARCHITECTURE.md`.
+- Shared memory IPC primitives are documented in `ARCHITECTURE.md`.
 - The bootloader logs basic status messages to the UEFI console and retries `ExitBootServices` on invalid parameters.
 - The bootloader copies the UEFI memory map into kernel-owned pages before exiting boot services.
 - PT_LOAD segments are loaded with page-aligned allocations (misaligned physical addresses are handled).

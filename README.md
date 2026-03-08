@@ -93,7 +93,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - Shared memory IPC primitives are documented in `ARCHITECTURE.md`.
 - Memory service + page-fault IPC (kernel-hosted scaffold) and pagefault-test are implemented and documented in `ARCHITECTURE.md`.
 - IRQ handling and notification-based delegation (PIC remap, IRQ stubs, IRQ routing) are implemented and documented in `ARCHITECTURE.md`.
-- WASMOS-APP loading scaffold is implemented (`kernel/wasmos_app.c`) and used by the chardev client test path.
+- WASMOS-APP loading scaffold is implemented (`kernel/wasmos_app.c`); the bootloader now preloads `esp/apps/chardev_client.wasmosapp` and passes it via boot modules.
 - The bootloader logs basic status messages to the UEFI console and retries `ExitBootServices` on invalid parameters.
 - The bootloader copies the UEFI memory map into kernel-owned pages before exiting boot services.
 - PT_LOAD segments are loaded with page-aligned allocations (misaligned physical addresses are handled).

@@ -326,6 +326,12 @@ Definition of Done:
 - Bootloader populates `version`, `size`, `flags` and memory map fields.
 - Kernel validates `version` and `size` before use.
 
+Current scaffold status:
+- `boot_info_t` now includes module list fields (`modules`, `module_count`, `module_entry_size`).
+- Bootloader optionally preloads `\apps\chardev_client.wasmosapp` from ESP and
+  passes it as `BOOT_MODULE_TYPE_WASMOS_APP`.
+- Kernel consumes boot modules when launching the test WASMOS-APP process.
+
 Test:
 - QEMU boot reaches `[kernel] kmain` and prints detected `boot_info_t` version/size.
 
@@ -611,6 +617,7 @@ Defined in `kernel/include/boot.h` and populated by the bootloader.
 
 Fields (current scaffold):
 - `memory_map`, `memory_map_size`, `memory_desc_size`, `memory_desc_version`
+- `modules`, `module_count`, `module_entry_size`
 - framebuffer fields (placeholders for future integration)
 
 ### WASMOS WASM Application Format (WASMOS-APP)
@@ -691,7 +698,7 @@ Current implementation (kernel scaffold):
 - Loader validates header/version/magic, all section bounds, and extracts wasm bytes.
 - Memory hints are parsed; stack/heap min-page hints are mapped to WAMR stack/heap sizes.
 - Required endpoints and capability tables are currently validated and skipped (not yet resolved).
-- The test client path now builds a WASMOS-APP container in memory and starts it through the loader API.
+- The test client path now consumes a boot-preloaded WASMOS-APP module and starts it through the loader API.
 
 ## Build & Run Notes
 - `cmake -S . -B build`

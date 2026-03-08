@@ -303,6 +303,8 @@ set(WASM_CHARDEV_DRIVER_BLOB ${BUILD_DIR}/chardev_server_blob.o)
 set(WASM_CHARDEV_CLIENT_SRC ${EXAMPLES_WASM_DIR}/chardev_client/chardev_client.c)
 set(WASM_CHARDEV_CLIENT_WASM ${BUILD_DIR}/chardev_client.wasm)
 set(WASM_CHARDEV_CLIENT_BLOB ${BUILD_DIR}/chardev_client_blob.o)
+set(WASM_CHARDEV_CLIENT_APP ${BUILD_DIR}/chardev_client.wasmosapp)
+set(WASMOS_APP_PACKER ${BUILD_DIR}/make_wasmos_app)
 
 add_custom_command(
   OUTPUT ${WASM_CHARDEV_DRIVER_WASM}
@@ -366,9 +368,34 @@ add_custom_command(
   VERBATIM
 )
 
+add_custom_command(
+  OUTPUT ${WASMOS_APP_PACKER}
+  COMMAND cc -O2 ${CMAKE_SOURCE_DIR}/scripts/make_wasmos_app.c -o ${WASMOS_APP_PACKER}
+  DEPENDS ${CMAKE_SOURCE_DIR}/scripts/make_wasmos_app.c
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Building WASMOS-APP packer tool"
+  VERBATIM
+)
+
+add_custom_command(
+  OUTPUT ${WASM_CHARDEV_CLIENT_APP}
+  COMMAND ${WASMOS_APP_PACKER}
+          ${WASM_CHARDEV_CLIENT_WASM}
+          ${WASM_CHARDEV_CLIENT_APP}
+          chardev-client
+          chardev_client_step
+          16
+          16
+  DEPENDS ${WASM_CHARDEV_CLIENT_WASM} ${WASMOS_APP_PACKER}
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Packing wasm chardev client as WASMOS-APP"
+  VERBATIM
+)
+
 add_custom_target(wasm_driver_blobs DEPENDS
   ${WASM_CHARDEV_DRIVER_BLOB}
   ${WASM_CHARDEV_CLIENT_BLOB}
+  ${WASM_CHARDEV_CLIENT_APP}
 )
 list(APPEND KERNEL_OBJS ${WASM_CHARDEV_DRIVER_BLOB} ${WASM_CHARDEV_CLIENT_BLOB})
 
@@ -530,8 +557,10 @@ add_dependencies(kernel wasm_driver_blobs)
 if (OVMF_VARS)
   add_custom_target(run-qemu
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
@@ -545,8 +574,10 @@ if (OVMF_VARS)
 else ()
   add_custom_target(run-qemu
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}

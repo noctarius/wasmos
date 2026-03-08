@@ -13,7 +13,8 @@ typedef enum {
     MEM_REGION_DEVICE,
     MEM_REGION_STACK,
     MEM_REGION_HEAP,
-    MEM_REGION_CODE
+    MEM_REGION_CODE,
+    MEM_REGION_SHARED
 } mem_region_type_t;
 
 #define MEM_REGION_FLAG_READ   (1u << 0)
@@ -39,5 +40,8 @@ int mm_context_add_region(mm_context_t *ctx, uint64_t base, uint64_t size, uint3
 int mm_context_alloc_region(mm_context_t *ctx, uint64_t pages, uint32_t flags, mem_region_type_t type);
 mm_context_t *mm_context_get(uint32_t id);
 mm_context_t *mm_context_create(uint32_t id);
+int mm_shared_create(uint64_t pages, uint32_t flags, uint32_t *out_id, uint64_t *out_base);
+int mm_shared_map(mm_context_t *ctx, uint32_t id, uint32_t flags, uint64_t *out_base);
+int mm_shared_unmap(mm_context_t *ctx, uint32_t id);
 
 #endif

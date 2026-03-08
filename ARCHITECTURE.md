@@ -387,6 +387,12 @@ arg0..arg3  // payload words (use shared memory for bulk data)
 - Receiver must own the destination endpoint (unless the receiver is the kernel).
 - Endpoint ownership is bound to a memory context; permissions are enforced in the kernel.
 
+### Shared Memory IPC (Initial Mechanism)
+- Shared regions are created in kernel memory and mapped into multiple contexts.
+- `mm_shared_create(pages, flags)` returns a shared region ID + base.
+- `mm_shared_map(ctx, id)` adds the region to a context; `mm_shared_unmap` detaches.
+- Bulk IPC uses shared memory for data and a small IPC message for synchronization.
+
 ## IPC Best Practices (Herder Thesis Notes)
 Source: `herder_thesis.pdf` (MINIX 3 microkernel conversion).
 

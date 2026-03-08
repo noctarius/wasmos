@@ -291,7 +291,31 @@ target_sources(bootloader_sources INTERFACE ${BOOT_SOURCES} ${BOOT_DIR}/uefi.h $
 target_include_directories(bootloader_sources INTERFACE ${BOOT_DIR} ${KERNEL_DIR}/include)
 
 add_library(kernel_sources INTERFACE)
-target_sources(kernel_sources INTERFACE ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/include/cpu.h ${KERNEL_DIR}/include/ipc.h ${KERNEL_DIR}/include/paging.h ${KERNEL_DIR}/include/process.h ${KERNEL_DIR}/include/spinlock.h ${KERNEL_DIR}/include/wasm_chardev.h ${KERNEL_DIR}/include/memory_service.h ${KERNEL_DIR}/include/irq.h ${KERNEL_DIR}/include/wasmos_app.h ${KERNEL_DIR}/include/io.h ${WASM_DIR}/wamr_runtime.h)
+target_sources(kernel_sources INTERFACE
+  ${KERNEL_SOURCES}
+  ${KERNEL_DIR}/include/boot.h
+  ${KERNEL_DIR}/include/cpu.h
+  ${KERNEL_DIR}/include/ipc.h
+  ${KERNEL_DIR}/include/memory.h
+  ${KERNEL_DIR}/include/memory_service.h
+  ${KERNEL_DIR}/include/paging.h
+  ${KERNEL_DIR}/include/physmem.h
+  ${KERNEL_DIR}/include/process.h
+  ${KERNEL_DIR}/include/process_manager.h
+  ${KERNEL_DIR}/include/irq.h
+  ${KERNEL_DIR}/include/serial.h
+  ${KERNEL_DIR}/include/spinlock.h
+  ${KERNEL_DIR}/include/wamr_context.h
+  ${KERNEL_DIR}/include/wasm_chardev.h
+  ${KERNEL_DIR}/include/wasm_driver.h
+  ${KERNEL_DIR}/include/wasmos_app.h
+  ${KERNEL_DIR}/include/io.h
+  ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
+  ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_init.c
+  ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_stub.c
+  ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_internal.h
+  ${WASM_DIR}/wamr_runtime.h
+)
 target_include_directories(kernel_sources INTERFACE ${KERNEL_DIR}/include ${WASM_DIR} ${DRIVER_WASM_DIR}/include)
 
 # IDE aggregation targets: helps CLion mark files as part of the CMake project
@@ -308,22 +332,31 @@ add_custom_target(kernel_ide SOURCES
   ${KERNEL_DIR}/include/boot.h
   ${KERNEL_DIR}/include/cpu.h
   ${KERNEL_DIR}/include/ipc.h
+  ${KERNEL_DIR}/include/memory.h
   ${KERNEL_DIR}/include/paging.h
+  ${KERNEL_DIR}/include/physmem.h
   ${KERNEL_DIR}/include/process.h
+  ${KERNEL_DIR}/include/process_manager.h
   ${KERNEL_DIR}/include/memory_service.h
   ${KERNEL_DIR}/include/irq.h
+  ${KERNEL_DIR}/include/serial.h
   ${KERNEL_DIR}/include/wasmos_app.h
   ${KERNEL_DIR}/include/spinlock.h
+  ${KERNEL_DIR}/include/wamr_context.h
   ${KERNEL_DIR}/include/wasm_driver.h
   ${KERNEL_DIR}/include/wasm_chardev.h
   ${KERNEL_DIR}/include/io.h
   ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
   ${DRIVER_WASM_DIR}/chardev/chardev_server.c
   ${EXAMPLES_C_DIR}/chardev_client/chardev_client.c
+  ${EXAMPLES_C_DIR}/hello/hello_c.c
   ${DRIVER_WASM_DIR}/ata/ata.c
   ${DRIVER_WASM_DIR}/fs_fat/fs_fat.c
   ${SERVICES_DIR}/sysinit/init.c
   ${SERVICES_DIR}/cli/cli.c
+  ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_init.c
+  ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_stub.c
+  ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_internal.h
   ${WASM_DIR}/wamr_runtime.h
 )
 

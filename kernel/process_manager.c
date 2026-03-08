@@ -233,7 +233,7 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     slot->step_arg3 = 0;
     slot->in_use = 1;
 
-    if (name_eq(slot->name, "init")) {
+    if (name_eq(slot->name, "sysinit")) {
         if (g_pm.chardev_module_index == 0xFFFFFFFFu) {
             slot->in_use = 0;
             return -1;
@@ -475,21 +475,21 @@ pm_boot_spawn(void)
         return;
     }
 
-    g_pm.init_module_index = pm_find_module_index_by_name("init");
+    g_pm.init_module_index = pm_find_module_index_by_name("sysinit");
     g_pm.chardev_module_index = pm_find_module_index_by_name("chardev-client");
     g_pm.module_count = info->module_count;
 
     if (g_pm.init_module_index == 0xFFFFFFFFu) {
-        serial_write("[pm] init module not found\n");
+        serial_write("[pm] sysinit module not found\n");
         return;
     }
 
     uint32_t pid = 0;
     if (pm_spawn_module(process_current_pid(), g_pm.init_module_index, &pid) == 0) {
-        serial_write("[pm] spawned init pid=");
+        serial_write("[pm] spawned sysinit pid=");
         pm_write_hex64(pid);
     } else {
-        serial_write("[pm] init spawn failed\n");
+        serial_write("[pm] sysinit spawn failed\n");
     }
 }
 

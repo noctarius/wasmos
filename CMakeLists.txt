@@ -319,7 +319,7 @@ set(WASM_FAT_DRIVER_WASM ${BUILD_DIR}/fs_fat.wasm)
 set(WASM_FAT_APP ${BUILD_DIR}/fs_fat.wasmosapp)
 set(WASM_INIT_APP_SRC ${EXAMPLES_WASM_DIR}/init/init.c)
 set(WASM_INIT_APP_WASM ${BUILD_DIR}/init.wasm)
-set(WASM_INIT_APP ${BUILD_DIR}/init.wasmosapp)
+set(WASM_INIT_APP ${BUILD_DIR}/sysinit.wasmosapp)
 set(WASM_CLI_APP_SRC ${EXAMPLES_WASM_DIR}/cli/cli.c)
 set(WASM_CLI_APP_WASM ${BUILD_DIR}/cli.wasm)
 set(WASM_CLI_APP ${BUILD_DIR}/cli.wasmosapp)
@@ -515,7 +515,7 @@ add_custom_command(
   COMMAND ${WASMOS_APP_PACKER}
           ${WASM_INIT_APP_WASM}
           ${WASM_INIT_APP}
-          init
+          sysinit
           init_step
           16
           16
@@ -740,7 +740,7 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/init.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/apps/ata.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/apps/fs_fat.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
@@ -760,7 +760,7 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/init.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/apps/ata.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/apps/fs_fat.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
@@ -781,7 +781,7 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/init.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/apps/ata.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/apps/fs_fat.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
@@ -800,7 +800,7 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/init.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/apps/ata.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/apps/fs_fat.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp

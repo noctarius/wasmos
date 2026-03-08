@@ -40,7 +40,41 @@ static pf_test_state_t g_pf_test_state;
 typedef struct {
     const boot_info_t *boot_info;
     uint8_t started;
+    uint8_t phase;
+    uint32_t reply_endpoint;
+    uint32_t request_id;
+    uint32_t sysinit_index;
 } init_state_t;
+
+static int
+bytes_eq(const uint8_t *a, uint32_t a_len, const char *b);
+
+static uint32_t
+boot_module_index_by_app_name(const boot_info_t *info, const char *name)
+{
+    if (!info || !name || !(info->flags & BOOT_INFO_FLAG_MODULES_PRESENT)) {
+        return 0xFFFFFFFFu;
+    }
+    if (!info->modules || info->module_entry_size < sizeof(boot_module_t)) {
+        return 0xFFFFFFFFu;
+    }
+    const uint8_t *mods = (const uint8_t *)info->modules;
+    for (uint32_t i = 0; i < info->module_count; ++i) {
+        const boot_module_t *mod = (const boot_module_t *)(mods + i * info->module_entry_size);
+        if (!mod || mod->type != BOOT_MODULE_TYPE_WASMOS_APP || mod->base == 0 ||
+            mod->size == 0 || mod->size > 0xFFFFFFFFULL) {
+            continue;
+        }
+        wasmos_app_desc_t desc;
+        if (wasmos_app_parse((const uint8_t *)(uintptr_t)mod->base, (uint32_t)mod->size, &desc) != 0) {
+            continue;
+        }
+        if (bytes_eq(desc.name, desc.name_len, name)) {
+            return i;
+        }
+    }
+    return 0xFFFFFFFFu;
+}
 
 static void
 serial_write_hex64(uint64_t value)
@@ -739,6 +773,7 @@ init_entry(process_t *process, void *arg)
 {
     init_state_t *state = (init_state_t *)arg;
     uint32_t pm_pid = 0;
+    ipc_message_t msg;
 
     if (!process || !state || !state->boot_info) {
         return PROCESS_RUN_IDLE;
@@ -746,7 +781,7 @@ init_entry(process_t *process, void *arg)
 
     if (!state->started) {
         process_manager_init(state->boot_info);
-        if (process_spawn("process-manager", process_manager_entry, 0, &pm_pid) != 0) {
+        if (process_spawn_as(process->pid, "process-manager", process_manager_entry, 0, &pm_pid) != 0) {
             serial_write("[init] process manager spawn failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
@@ -755,6 +790,59 @@ init_entry(process_t *process, void *arg)
         serial_write("[init] process manager pid=");
         serial_write_hex64(pm_pid);
         state->started = 1;
+        state->phase = 0;
+        state->reply_endpoint = IPC_ENDPOINT_NONE;
+        state->request_id = 1;
+        state->sysinit_index = boot_module_index_by_app_name(state->boot_info, "sysinit");
+        if (state->sysinit_index == 0xFFFFFFFFu) {
+            serial_write("[init] sysinit module not found\n");
+            process_set_exit_status(process, -1);
+            return PROCESS_RUN_EXITED;
+        }
+    }
+
+    if (state->phase == 0) {
+        uint32_t proc_ep = process_manager_endpoint();
+        if (proc_ep == IPC_ENDPOINT_NONE) {
+            return PROCESS_RUN_YIELDED;
+        }
+        if (ipc_endpoint_create(process->context_id, &state->reply_endpoint) != IPC_OK) {
+            serial_write("[init] reply endpoint create failed\n");
+            process_set_exit_status(process, -1);
+            return PROCESS_RUN_EXITED;
+        }
+        msg.type = PROC_IPC_SPAWN;
+        msg.source = state->reply_endpoint;
+        msg.destination = proc_ep;
+        msg.request_id = state->request_id;
+        msg.arg0 = state->sysinit_index;
+        msg.arg1 = 0;
+        msg.arg2 = 0;
+        msg.arg3 = 0;
+        if (ipc_send_from(process->context_id, proc_ep, &msg) != IPC_OK) {
+            serial_write("[init] sysinit spawn request failed\n");
+            process_set_exit_status(process, -1);
+            return PROCESS_RUN_EXITED;
+        }
+        state->phase = 1;
+        return PROCESS_RUN_YIELDED;
+    }
+
+    if (state->phase == 1) {
+        int recv_rc = ipc_recv_for(process->context_id, state->reply_endpoint, &msg);
+        if (recv_rc == IPC_EMPTY) {
+            process_block_on_ipc(process);
+            return PROCESS_RUN_BLOCKED;
+        }
+        if (recv_rc != IPC_OK) {
+            return PROCESS_RUN_YIELDED;
+        }
+        if (msg.request_id != state->request_id || msg.type == PROC_IPC_ERROR) {
+            serial_write("[init] sysinit spawn failed\n");
+            process_set_exit_status(process, -1);
+            return PROCESS_RUN_EXITED;
+        }
+        state->phase = 2;
     }
 
     process_block_on_ipc(process);

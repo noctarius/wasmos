@@ -35,7 +35,6 @@ typedef struct {
     uint32_t block_endpoint;
     uint8_t started;
     uint32_t init_module_index;
-    uint32_t chardev_module_index;
     uint32_t module_count;
     pm_app_state_t apps[PM_MAX_MANAGED_APPS];
     pm_wait_state_t waits[PM_MAX_WAITERS];
@@ -234,10 +233,6 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     slot->in_use = 1;
 
     if (name_eq(slot->name, "sysinit")) {
-        if (g_pm.chardev_module_index == 0xFFFFFFFFu) {
-            slot->in_use = 0;
-            return -1;
-        }
         slot->step_arg0 = g_pm.proc_endpoint;
         slot->step_arg1 = g_pm.module_count;
         slot->step_arg2 = g_pm.init_module_index;
@@ -466,44 +461,20 @@ pm_handle_wait(uint32_t pm_context_id, const ipc_message_t *msg)
     return -1;
 }
 
-static void
-pm_boot_spawn(void)
-{
-    const boot_info_t *info = g_pm.boot_info;
-    if (!info || !(info->flags & BOOT_INFO_FLAG_MODULES_PRESENT)) {
-        serial_write("[pm] no boot modules\n");
-        return;
-    }
-
-    g_pm.init_module_index = pm_find_module_index_by_name("sysinit");
-    g_pm.chardev_module_index = pm_find_module_index_by_name("chardev-client");
-    g_pm.module_count = info->module_count;
-
-    if (g_pm.init_module_index == 0xFFFFFFFFu) {
-        serial_write("[pm] sysinit module not found\n");
-        return;
-    }
-
-    uint32_t pid = 0;
-    if (pm_spawn_module(process_current_pid(), g_pm.init_module_index, &pid) == 0) {
-        serial_write("[pm] spawned sysinit pid=");
-        pm_write_hex64(pid);
-    } else {
-        serial_write("[pm] sysinit spawn failed\n");
-    }
-}
-
 int
 process_manager_init(const boot_info_t *boot_info)
 {
+    g_pm.init_module_index = 0xFFFFFFFFu;
+    g_pm.module_count = 0;
     g_pm.boot_info = boot_info;
     g_pm.proc_endpoint = IPC_ENDPOINT_NONE;
     g_pm.fs_endpoint = IPC_ENDPOINT_NONE;
     g_pm.block_endpoint = IPC_ENDPOINT_NONE;
     g_pm.started = 0;
-    g_pm.init_module_index = 0xFFFFFFFFu;
-    g_pm.chardev_module_index = 0xFFFFFFFFu;
-    g_pm.module_count = 0;
+    if (boot_info && (boot_info->flags & BOOT_INFO_FLAG_MODULES_PRESENT)) {
+        g_pm.module_count = boot_info->module_count;
+        g_pm.init_module_index = pm_find_module_index_by_name("sysinit");
+    }
     for (uint32_t i = 0; i < PM_MAX_MANAGED_APPS; ++i) {
         g_pm.apps[i].in_use = 0;
         g_pm.apps[i].pid = 0;
@@ -559,7 +530,6 @@ process_manager_entry(process_t *process, void *arg)
         g_pm.started = 1;
         serial_write("[pm] proc endpoint=");
         pm_write_hex64(g_pm.proc_endpoint);
-        pm_boot_spawn();
     }
 
     pm_check_waits(process->context_id);

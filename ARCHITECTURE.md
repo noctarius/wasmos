@@ -28,6 +28,20 @@ Rules:
 - Avoid dynamic dependencies; keep the loader deterministic and auditable.
 - Preserve forward compatibility by versioning `boot_info_t` and extending only at the end.
 
+UEFI protocol usage:
+- UEFI Boot Services are available only before `ExitBootServices()`; they are the
+  mechanism OS loaders use to access devices and allocate memory. (UEFI Spec 2.11)
+- File access can be done via `EFI_SIMPLE_FILE_SYSTEM_PROTOCOL` and
+  `EFI_FILE_PROTOCOL` (supports FAT12/16/32) to load configs and WASMOS-APP blobs.
+- Raw block access can be done via `EFI_BLOCK_IO_PROTOCOL` for sector reads/writes.
+
+Design options for loading init/services:
+- Preferred: bootloader uses UEFI file or block protocols to load `init`, PM, and
+  boot config into memory and passes them to the kernel in `boot_info_t`.
+- Optional: kernel stays in UEFI environment temporarily and uses Boot Services
+  (requires delaying `ExitBootServices()` and passing SystemTable/handles). This
+  complicates kernel init and is not the default plan.
+
 ### Kernel Design (Microkernel First)
 Intent: minimal kernel mechanisms, all policy in user space (WASM services).
 

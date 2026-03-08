@@ -16,6 +16,10 @@ static int serial_tx_ready(void) {
     return (inb(COM1_PORT + 5) & 0x20) != 0;
 }
 
+static int serial_rx_ready(void) {
+    return (inb(COM1_PORT + 5) & 0x01) != 0;
+}
+
 void serial_init(void) {
     outb(COM1_PORT + 1, 0x00); // Disable interrupts
     outb(COM1_PORT + 3, 0x80); // Enable DLAB
@@ -40,4 +44,15 @@ void serial_write(const char *s) {
         }
         outb(COM1_PORT, (uint8_t)*p);
     }
+}
+
+int serial_read_char(uint8_t *out_char) {
+    if (!out_char) {
+        return -1;
+    }
+    if (!serial_rx_ready()) {
+        return 0;
+    }
+    *out_char = inb(COM1_PORT);
+    return 1;
 }

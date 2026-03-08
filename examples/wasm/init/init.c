@@ -26,6 +26,7 @@ extern int32_t wasmos_ipc_last_field(int32_t field)
 
 typedef enum {
     INIT_PHASE_START = 0,
+    INIT_PHASE_SEND_SPAWN,
     INIT_PHASE_WAIT_SPAWN,
     INIT_PHASE_DONE,
     INIT_PHASE_FAILED
@@ -34,16 +35,20 @@ typedef enum {
 static init_phase_t g_phase = INIT_PHASE_START;
 static int32_t g_reply_endpoint = -1;
 static int32_t g_spawn_request_id = 1;
+static int32_t g_proc_endpoint = -1;
+static int32_t g_module_count = 0;
+static int32_t g_init_index = -1;
+static int32_t g_next_index = 0;
+static int32_t g_pending_index = -1;
 
 WASMOS_WASM_EXPORT int32_t
 init_step(int32_t ignored_type,
           int32_t proc_endpoint,
-          int32_t chardev_module_index,
-          int32_t ignored_arg2,
+          int32_t module_count,
+          int32_t init_index,
           int32_t ignored_arg3)
 {
     (void)ignored_type;
-    (void)ignored_arg2;
     (void)ignored_arg3;
 
     if (g_phase == INIT_PHASE_START) {
@@ -53,20 +58,39 @@ init_step(int32_t ignored_type,
             return WASMOS_WASM_STEP_FAILED;
         }
 
-        if (proc_endpoint < 0 || chardev_module_index < 0) {
+        if (proc_endpoint < 0 || module_count <= 0 || init_index < 0) {
             g_phase = INIT_PHASE_FAILED;
             return WASMOS_WASM_STEP_FAILED;
         }
 
-        if (wasmos_ipc_send(proc_endpoint, g_reply_endpoint,
+        g_proc_endpoint = proc_endpoint;
+        g_module_count = module_count;
+        g_init_index = init_index;
+        g_next_index = 0;
+        g_pending_index = -1;
+        g_phase = INIT_PHASE_SEND_SPAWN;
+        return WASMOS_WASM_STEP_YIELDED;
+    }
+
+    if (g_phase == INIT_PHASE_SEND_SPAWN) {
+        while (g_next_index < g_module_count && g_next_index == g_init_index) {
+            g_next_index++;
+        }
+        if (g_next_index >= g_module_count) {
+            g_phase = INIT_PHASE_DONE;
+            return WASMOS_WASM_STEP_DONE;
+        }
+
+        if (wasmos_ipc_send(g_proc_endpoint, g_reply_endpoint,
                             PROC_IPC_SPAWN,
                             g_spawn_request_id,
-                            chardev_module_index,
+                            g_next_index,
                             0) != 0) {
             g_phase = INIT_PHASE_FAILED;
             return WASMOS_WASM_STEP_FAILED;
         }
 
+        g_pending_index = g_next_index;
         g_phase = INIT_PHASE_WAIT_SPAWN;
         return WASMOS_WASM_STEP_YIELDED;
     }
@@ -96,8 +120,11 @@ init_step(int32_t ignored_type,
             return WASMOS_WASM_STEP_FAILED;
         }
 
-        g_phase = INIT_PHASE_DONE;
-        return WASMOS_WASM_STEP_DONE;
+        g_spawn_request_id++;
+        g_next_index = g_pending_index + 1;
+        g_pending_index = -1;
+        g_phase = INIT_PHASE_SEND_SPAWN;
+        return WASMOS_WASM_STEP_YIELDED;
     }
 
     if (g_phase == INIT_PHASE_DONE) {

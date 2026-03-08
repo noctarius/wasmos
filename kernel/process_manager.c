@@ -15,6 +15,8 @@ typedef struct {
     uint8_t started;
     uint32_t step_arg0;
     uint32_t step_arg1;
+    uint32_t step_arg2;
+    uint32_t step_arg3;
     wasmos_app_instance_t app;
     char name[64];
 } pm_app_state_t;
@@ -32,6 +34,7 @@ typedef struct {
     uint8_t started;
     uint32_t init_module_index;
     uint32_t chardev_module_index;
+    uint32_t module_count;
     pm_app_state_t apps[PM_MAX_MANAGED_APPS];
     pm_wait_state_t waits[PM_MAX_WAITERS];
 } pm_state_t;
@@ -171,8 +174,8 @@ pm_app_entry(process_t *process, void *arg)
     step_msg.request_id = 0;
     step_msg.arg0 = state->step_arg0;
     step_msg.arg1 = state->step_arg1;
-    step_msg.arg2 = 0;
-    step_msg.arg3 = 0;
+    step_msg.arg2 = state->step_arg2;
+    step_msg.arg3 = state->step_arg3;
 
     if (wasmos_app_dispatch(&state->app, &step_msg, &step_result) != 0) {
         serial_write("[pm] app dispatch failed\n");
@@ -224,6 +227,8 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     slot->started = 0;
     slot->step_arg0 = 0;
     slot->step_arg1 = 0;
+    slot->step_arg2 = 0;
+    slot->step_arg3 = 0;
     slot->in_use = 1;
 
     if (name_eq(slot->name, "init")) {
@@ -232,7 +237,9 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
             return -1;
         }
         slot->step_arg0 = g_pm.proc_endpoint;
-        slot->step_arg1 = g_pm.chardev_module_index;
+        slot->step_arg1 = g_pm.module_count;
+        slot->step_arg2 = g_pm.init_module_index;
+        slot->step_arg3 = 0;
     } else if (name_eq(slot->name, "chardev-client")) {
         uint32_t chardev_endpoint = IPC_ENDPOINT_NONE;
         if (wasm_chardev_endpoint(&chardev_endpoint) != 0) {
@@ -435,6 +442,7 @@ pm_boot_spawn(void)
 
     g_pm.init_module_index = pm_find_module_index_by_name("init");
     g_pm.chardev_module_index = pm_find_module_index_by_name("chardev-client");
+    g_pm.module_count = info->module_count;
 
     if (g_pm.init_module_index == 0xFFFFFFFFu) {
         serial_write("[pm] init module not found\n");
@@ -458,6 +466,7 @@ process_manager_init(const boot_info_t *boot_info)
     g_pm.started = 0;
     g_pm.init_module_index = 0xFFFFFFFFu;
     g_pm.chardev_module_index = 0xFFFFFFFFu;
+    g_pm.module_count = 0;
     for (uint32_t i = 0; i < PM_MAX_MANAGED_APPS; ++i) {
         g_pm.apps[i].in_use = 0;
         g_pm.apps[i].pid = 0;

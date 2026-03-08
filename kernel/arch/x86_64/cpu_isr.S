@@ -2,6 +2,43 @@
 
 .extern x86_exception_panic
 .extern x86_page_fault_handler
+.extern x86_irq_handler
+
+.macro PUSH_REGS
+    pushq %r15
+    pushq %r14
+    pushq %r13
+    pushq %r12
+    pushq %r11
+    pushq %r10
+    pushq %r9
+    pushq %r8
+    pushq %rdi
+    pushq %rsi
+    pushq %rbp
+    pushq %rdx
+    pushq %rcx
+    pushq %rbx
+    pushq %rax
+.endm
+
+.macro POP_REGS
+    popq %rax
+    popq %rbx
+    popq %rcx
+    popq %rdx
+    popq %rbp
+    popq %rsi
+    popq %rdi
+    popq %r8
+    popq %r9
+    popq %r10
+    popq %r11
+    popq %r12
+    popq %r13
+    popq %r14
+    popq %r15
+.endm
 
 .macro DECL_EXC num
 .global isr_exception_\num
@@ -30,21 +67,7 @@ DECL_EXC 12
 DECL_EXC 13
  .global isr_exception_14
 isr_exception_14:
-    pushq %r15
-    pushq %r14
-    pushq %r13
-    pushq %r12
-    pushq %r11
-    pushq %r10
-    pushq %r9
-    pushq %r8
-    pushq %rdi
-    pushq %rsi
-    pushq %rbp
-    pushq %rdx
-    pushq %rcx
-    pushq %rbx
-    pushq %rax
+    PUSH_REGS
     mov 120(%rsp), %rdi
     call x86_page_fault_handler
     test %eax, %eax
@@ -52,21 +75,7 @@ isr_exception_14:
     mov $14, %rdi
     call x86_exception_panic
 2:
-    popq %rax
-    popq %rbx
-    popq %rcx
-    popq %rdx
-    popq %rbp
-    popq %rsi
-    popq %rdi
-    popq %r8
-    popq %r9
-    popq %r10
-    popq %r11
-    popq %r12
-    popq %r13
-    popq %r14
-    popq %r15
+    POP_REGS
     add $8, %rsp
     iretq
 DECL_EXC 15
@@ -86,6 +95,33 @@ DECL_EXC 28
 DECL_EXC 29
 DECL_EXC 30
 DECL_EXC 31
+
+.macro DECL_IRQ num vec
+.global isr_irq_\num
+isr_irq_\num:
+    PUSH_REGS
+    mov $\vec, %rdi
+    call x86_irq_handler
+    POP_REGS
+    iretq
+.endm
+
+DECL_IRQ 0 32
+DECL_IRQ 1 33
+DECL_IRQ 2 34
+DECL_IRQ 3 35
+DECL_IRQ 4 36
+DECL_IRQ 5 37
+DECL_IRQ 6 38
+DECL_IRQ 7 39
+DECL_IRQ 8 40
+DECL_IRQ 9 41
+DECL_IRQ 10 42
+DECL_IRQ 11 43
+DECL_IRQ 12 44
+DECL_IRQ 13 45
+DECL_IRQ 14 46
+DECL_IRQ 15 47
 
 .global x86_exception_stub_table
 x86_exception_stub_table:
@@ -121,3 +157,22 @@ x86_exception_stub_table:
     .quad isr_exception_29
     .quad isr_exception_30
     .quad isr_exception_31
+
+.global x86_irq_stub_table
+x86_irq_stub_table:
+    .quad isr_irq_0
+    .quad isr_irq_1
+    .quad isr_irq_2
+    .quad isr_irq_3
+    .quad isr_irq_4
+    .quad isr_irq_5
+    .quad isr_irq_6
+    .quad isr_irq_7
+    .quad isr_irq_8
+    .quad isr_irq_9
+    .quad isr_irq_10
+    .quad isr_irq_11
+    .quad isr_irq_12
+    .quad isr_irq_13
+    .quad isr_irq_14
+    .quad isr_irq_15

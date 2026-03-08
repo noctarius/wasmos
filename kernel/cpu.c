@@ -2,6 +2,7 @@
 #include "serial.h"
 #include "process.h"
 #include "memory_service.h"
+#include "irq.h"
 #include <stdint.h>
 
 #define GDT_ENTRY_COUNT 3
@@ -29,6 +30,7 @@ typedef struct __attribute__((packed)) {
 } idt_entry_t;
 
 extern void *x86_exception_stub_table[];
+extern void *x86_irq_stub_table[];
 
 static uint64_t g_gdt[GDT_ENTRY_COUNT] = {
     0x0000000000000000ULL,
@@ -156,6 +158,23 @@ cpu_init(void)
     serial_write("[cpu] init\n");
     gdt_install();
     idt_install();
+    for (uint32_t i = 0; i < IRQ_COUNT; ++i) {
+        uintptr_t handler = (uintptr_t)x86_irq_stub_table[i];
+        idt_set_gate((uint8_t)(IRQ_VECTOR_BASE + i), handler, IDT_TYPE_INTERRUPT_GATE);
+    }
+    irq_init();
     serial_write("[cpu] gdt/idt ready\n");
     (void)KERNEL_DS_SELECTOR;
+}
+
+void
+cpu_enable_interrupts(void)
+{
+    __asm__ volatile("sti");
+}
+
+void
+cpu_disable_interrupts(void)
+{
+    __asm__ volatile("cli");
 }

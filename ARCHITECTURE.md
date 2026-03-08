@@ -372,6 +372,12 @@ Drivers:
 
 Services:
 - `process-manager` (PM): spawns processes, tracks lifecycle, owns PID namespace.
+  - Reads WASMOS-APP containers, validates headers and tables.
+  - Copies WASM payload into managed memory and tracks lifetime.
+  - Creates the process context (memory regions, IPC endpoints, permissions).
+  - Instantiates WAMR context and binds linear/stack/heap sizes from hints.
+  - Resolves required IPC endpoints/capabilities before start.
+  - Starts the entry export and registers the process with the scheduler.
 - `init` (init process): loads a boot config from the EFI boot disk via FAT32 and starts core services.
 - `cli` (simple CLI): provides a basic command loop and service/status queries.
 

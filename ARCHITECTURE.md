@@ -496,7 +496,7 @@ Design takeaways:
 - The user-space `init` module spawns remaining boot modules via `proc`, and the chardev client uses imported IPC primitives to issue write/read requests.
 - A minimal PIO ATA block driver runs as a kernel process and exposes a `block` IPC endpoint.
 - A FAT12/16/32 service runs as a kernel process on top of the block endpoint and logs the detected FAT variant on boot.
-- A minimal user-space `cli` WASMOS-APP is loaded as a boot module, reads serial input, and supports `help` and `ps` via `console_read`/`proc_count`.
+- A minimal user-space `cli` WASMOS-APP is loaded as a boot module, reads serial input, and supports `help`, `ps`, `ls`, and `cat` via small native helpers.
 - The chardev server returns `BLOCKED` when no IPC message is pending, reducing scheduler churn while idle.
 
 ## WAMR Integration (Planned)

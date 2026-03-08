@@ -124,6 +124,15 @@ ata_read_lba28(uint32_t lba, uint8_t count, void *buffer)
 }
 
 int
+block_ata_read_sync(uint32_t lba, uint32_t count, void *buffer)
+{
+    if (!g_ata_present || count == 0 || count > ATA_MAX_READ_SECTORS) {
+        return -1;
+    }
+    return ata_read_lba28(lba, (uint8_t)count, buffer);
+}
+
+int
 block_ata_init(uint32_t owner_context_id)
 {
     g_block_owner_context = owner_context_id;

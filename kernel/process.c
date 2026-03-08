@@ -291,3 +291,22 @@ uint32_t process_count_active(void) {
     }
     return count;
 }
+
+int process_info_at(uint32_t index, uint32_t *out_pid, const char **out_name) {
+    if (!out_pid || !out_name) {
+        return -1;
+    }
+    uint32_t current = 0;
+    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        if (g_processes[i].state == PROCESS_STATE_UNUSED) {
+            continue;
+        }
+        if (current == index) {
+            *out_pid = g_processes[i].pid;
+            *out_name = g_processes[i].name ? g_processes[i].name : "";
+            return 0;
+        }
+        current++;
+    }
+    return -1;
+}

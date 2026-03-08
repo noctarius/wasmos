@@ -391,6 +391,46 @@ native_proc_count(wasm_exec_env_t exec_env)
     return (int32_t)process_count_active();
 }
 
+static int32_t
+native_proc_info(wasm_exec_env_t exec_env, int32_t index, char *buf, int32_t buf_len)
+{
+    (void)exec_env;
+    if (index < 0 || !buf || buf_len <= 0) {
+        return -1;
+    }
+    uint32_t pid = 0;
+    const char *name = 0;
+    if (process_info_at((uint32_t)index, &pid, &name) != 0) {
+        return -1;
+    }
+    int32_t i = 0;
+    if (name) {
+        while (name[i] && i < buf_len - 1) {
+            buf[i] = name[i];
+            i++;
+        }
+    }
+    buf[i] = '\0';
+    return (int32_t)pid;
+}
+
+static int32_t
+native_fs_list_root(wasm_exec_env_t exec_env)
+{
+    (void)exec_env;
+    return fs_fat_list_root() == 0 ? 0 : -1;
+}
+
+static int32_t
+native_fs_cat_root(wasm_exec_env_t exec_env, char *ptr)
+{
+    (void)exec_env;
+    if (!ptr) {
+        return -1;
+    }
+    return fs_fat_cat_root(ptr) == 0 ? 0 : -1;
+}
+
 static int
 register_wasm_ipc_natives(void)
 {
@@ -405,6 +445,9 @@ register_wasm_ipc_natives(void)
         { "console_write", native_console_write, "(ii)i", 0 },
         { "console_read", native_console_read, "(*~)i", 0 },
         { "proc_count", native_proc_count, "()i", 0 },
+        { "proc_info", native_proc_info, "(i*~)i", 0 },
+        { "fs_list_root", native_fs_list_root, "()i", 0 },
+        { "fs_cat_root", native_fs_cat_root, "($)i", 0 },
     };
 
     if (!wamr_register_natives("wasmos", symbols,

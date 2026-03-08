@@ -513,7 +513,7 @@ Design takeaways:
 - Run drivers as isolated WASM contexts.
 - Expose driver APIs through IPC endpoints to other WASM contexts.
 - Current scaffold includes project-owned wasm application examples under `examples/wasm/`.
-- The build compiles the chardev server and chardev client examples into `.wasm` binaries and embeds them into the kernel image as binary blobs.
+- The build compiles the chardev server driver (`drivers/wasm/chardev`) and chardev client example into `.wasm` binaries and embeds them into the kernel image as binary blobs.
 - Driver wasm binaries are linked with explicit stack and initial/max memory bounds to keep freestanding instantiation deterministic.
 - A kernel wasm driver host (`kernel/wasm_driver.c`) loads embedded modules, instantiates them with WAMR, allocates IPC endpoints, and dispatches IPC messages to a driver export.
 - The chardev service (`kernel/wasm_chardev.c`) runs in the spawned `chardev-server` process and bridges IPC request/response traffic to the wasm export `chardev_ipc_dispatch`.

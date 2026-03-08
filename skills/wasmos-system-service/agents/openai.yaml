@@ -1,0 +1,4 @@
+interface:
+  display_name: "WASMOS System Service"
+  short_description: "Add and wire WASMOS system services"
+  default_prompt: "Create or update a WASMOS system service under src/services, wire build packaging to esp/system/services, and document integration."

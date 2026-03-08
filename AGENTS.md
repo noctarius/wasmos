@@ -33,6 +33,7 @@ This repository uses Codex CLI to assist with development. Follow these conventi
 - Build bootloader: `cmake --build build --target bootloader`
 - Build kernel: `cmake --build build --target kernel`
 - Run QEMU: `cmake --build build --target run-qemu`
+- Run QEMU halt test: `cmake --build build --target run-qemu-test` (default compile+boot+halt check after changes)
 
 ## Git
 - Make a git commit after each prompt iteration when changes are made.

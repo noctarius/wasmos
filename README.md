@@ -86,6 +86,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - The step-by-step roadmap with definition of done and tests is defined in `ARCHITECTURE.md`.
 - UEFI protocol usage and bootloader loading options are documented in `ARCHITECTURE.md`.
 - The minimal CLI command set is documented in `ARCHITECTURE.md`.
+- The boot contract freeze (versioned `boot_info_t`) is documented in `ARCHITECTURE.md`.
 - The bootloader logs basic status messages to the UEFI console and retries `ExitBootServices` on invalid parameters.
 - The bootloader copies the UEFI memory map into kernel-owned pages before exiting boot services.
 - PT_LOAD segments are loaded with page-aligned allocations (misaligned physical addresses are handled).

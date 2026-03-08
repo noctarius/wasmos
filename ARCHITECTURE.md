@@ -302,6 +302,30 @@ UEFI firmware
 - Clear BSS for C runtime expectations.
 - Preserve incoming `boot_info_t *` (UEFI uses MS ABI; pointer arrives in `RCX`) and call `kmain(boot_info_t *)`.
 
+## Boot Contract (Freeze Item 1)
+Definition:
+- `boot_info_t` is versioned and append-only. New fields are added at the end.
+- The bootloader and kernel must agree on `boot_info_t` size and version.
+
+Required fields:
+- `version` (uint32): boot info version, incremented on incompatible changes.
+- `size` (uint32): total size of the `boot_info_t` structure.
+- `flags` (uint32): feature flags (e.g., GOP present, modules present).
+- Memory map fields (current scaffold): `memory_map`, `memory_map_size`, `memory_desc_size`, `memory_desc_version`.
+
+Optional future fields:
+- Framebuffer/GOP descriptor.
+- Boot module list (for preloaded WASMOS-APP images).
+- RSDP/ACPI pointers.
+
+Definition of Done:
+- `boot_info_t` layout and versioning rules documented here.
+- Bootloader populates `version`, `size`, `flags` and memory map fields.
+- Kernel validates `version` and `size` before use.
+
+Test:
+- QEMU boot reaches `[kernel] kmain` and prints detected `boot_info_t` version/size.
+
 ## Kernel Early Init
 Fixed:
 - Physical memory manager from UEFI memory map.

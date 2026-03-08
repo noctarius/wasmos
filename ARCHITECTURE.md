@@ -41,6 +41,12 @@ User-space responsibilities:
 - Drivers, filesystems, network stack, and services.
 - Policy layers (scheduling policy, resource management, naming, service discovery).
 
+Privilege model:
+- Normal applications run unprivileged (user mode).
+- Drivers run privileged by default to access hardware directly.
+- System services should prefer unprivileged mode and request privileged operations
+  via drivers or kernel mechanisms when needed.
+
 ### IPC Design Direction
 These principles are derived from the IPC notes in this document.
 - Request-reply semantics by default for kernel-bound calls; blocking IPC provides implicit synchronization.

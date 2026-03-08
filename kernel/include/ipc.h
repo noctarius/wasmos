@@ -8,6 +8,14 @@
 #define IPC_CONTEXT_KERNEL 0u
 #define IPC_ENDPOINT_NONE ((uint32_t)~0u)
 
+typedef enum {
+    IPC_OK = 0,
+    IPC_EMPTY = 1,
+    IPC_ERR_INVALID = -1,
+    IPC_ERR_PERM = -2,
+    IPC_ERR_FULL = -3
+} ipc_result_t;
+
 typedef struct {
     uint32_t type;
     uint32_t source;

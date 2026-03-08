@@ -17,7 +17,9 @@ extern int32_t wasmos_ipc_send(int32_t destination_endpoint,
                                int32_t type,
                                int32_t request_id,
                                int32_t arg0,
-                               int32_t arg1)
+                               int32_t arg1,
+                               int32_t arg2,
+                               int32_t arg3)
     WASMOS_WASM_IMPORT("wasmos", "ipc_send");
 extern int32_t wasmos_ipc_recv(int32_t endpoint)
     WASMOS_WASM_IMPORT("wasmos", "ipc_recv");
@@ -59,7 +61,7 @@ chardev_client_step(int32_t ignored_type,
 
         if (wasmos_ipc_send(chardev_endpoint, g_reply_endpoint,
                             WASM_CHARDEV_IPC_WRITE_REQ,
-                            g_write_request_id, g_write_value, 0) != 0) {
+                            g_write_request_id, g_write_value, 0, 0, 0) != 0) {
             g_phase = CLIENT_PHASE_FAILED;
             return WASMOS_WASM_STEP_FAILED;
         }
@@ -92,7 +94,7 @@ chardev_client_step(int32_t ignored_type,
 
         if (wasmos_ipc_send(chardev_endpoint, g_reply_endpoint,
                             WASM_CHARDEV_IPC_READ_REQ,
-                            g_read_request_id, 0, 0) != 0) {
+                            g_read_request_id, 0, 0, 0, 0) != 0) {
             g_phase = CLIENT_PHASE_FAILED;
             return WASMOS_WASM_STEP_FAILED;
         }

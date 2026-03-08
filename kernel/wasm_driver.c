@@ -94,10 +94,21 @@ wasm_driver_start(wasm_driver_t *driver,
     }
 
     if (driver->manifest.init_export) {
-        uint32_t argv[1] = { 0 };
+        uint32_t argv[4] = { 0, 0, 0, 0 };
+        uint32_t argc = driver->manifest.init_argc;
+        if (argc > 4) {
+            serial_write("[wasm-driver] init args too large\n");
+            wamr_deinstantiate_module(driver->instance);
+            wamr_unload_module(driver->module);
+            wasm_driver_reset(driver);
+            return -1;
+        }
+        for (uint32_t i = 0; i < argc; ++i) {
+            argv[i] = driver->manifest.init_argv ? driver->manifest.init_argv[i] : 0;
+        }
         (void)wamr_call_function(driver->instance,
                                  driver->manifest.init_export,
-                                 0,
+                                 argc,
                                  argv,
                                  0);
     }

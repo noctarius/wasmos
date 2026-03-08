@@ -17,7 +17,9 @@ extern int32_t wasmos_ipc_send(int32_t destination_endpoint,
                                int32_t type,
                                int32_t request_id,
                                int32_t arg0,
-                               int32_t arg1)
+                               int32_t arg1,
+                               int32_t arg2,
+                               int32_t arg3)
     WASMOS_WASM_IMPORT("wasmos", "ipc_send");
 extern int32_t wasmos_ipc_recv(int32_t endpoint)
     WASMOS_WASM_IMPORT("wasmos", "ipc_recv");
@@ -85,6 +87,8 @@ init_step(int32_t ignored_type,
                             PROC_IPC_SPAWN,
                             g_spawn_request_id,
                             g_next_index,
+                            0,
+                            0,
                             0) != 0) {
             g_phase = INIT_PHASE_FAILED;
             return WASMOS_WASM_STEP_FAILED;

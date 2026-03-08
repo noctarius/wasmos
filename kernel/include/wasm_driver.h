@@ -14,6 +14,8 @@ typedef struct {
     const char *dispatch_export;
     uint32_t stack_size;
     uint32_t heap_size;
+    uint32_t init_argc;
+    const uint32_t *init_argv;
 } wasm_driver_manifest_t;
 
 typedef struct {

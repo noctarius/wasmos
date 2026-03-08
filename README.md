@@ -39,15 +39,15 @@ If it isn't present, download OVMF from edk2 and pass `-DOVMF_CODE=/path/to/OVMF
 - WAMR (wasm-micro-runtime) is vendored via git subtree at `libs/wasm/wasm-micro-runtime`.
 
 ### AssemblyScript (optional)
-AssemblyScript can be used to write WASMOS drivers, services, and applications. Install AssemblyScript via npm and ensure `asc` is available (e.g., using `npm install` + `npm link` in the AssemblyScript repo or a global install):
+AssemblyScript can be used to write WASMOS drivers, services, and applications. Install AssemblyScript via npm and ensure `asc` is available in your PATH (for example via a global install or `npm link`):
 ```
 npm install assemblyscript
 ```
-citeturn0search2turn0search1
 
-Enable AssemblyScript examples during configure:
+AssemblyScript builds are enabled by default (`AS_ENABLE=ON`). If `asc` is missing, configure will fail.
+To disable AssemblyScript builds:
 ```
-cmake -S . -B build -DAS_ENABLE=ON
+cmake -S . -B build -DAS_ENABLE=OFF
 ```
 
 Build the sample AssemblyScript WASMOS-APP:
@@ -55,7 +55,7 @@ Build the sample AssemblyScript WASMOS-APP:
 cmake --build build --target assemblyscript_examples
 ```
 
-The sample uses `asc` with release/size settings and the `stub` runtime (no GC). See the AssemblyScript compiler/runtime docs for available options. citeturn0search3turn0search0
+The sample uses `asc` with release/size settings and the `stub` runtime (no GC).
 
 ### WAMR scaffold
 - `libs/wasm/wamr_runtime.c` provides a thin wrapper over the WAMR C API.

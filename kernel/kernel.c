@@ -6,10 +6,10 @@
 #include "paging.h"
 #include "process.h"
 #include "serial.h"
+#include "wasmos_app.h"
 #include "wamr_context.h"
 #include "wamr_runtime.h"
 #include "wasm_chardev.h"
-#include "wasm_driver.h"
 
 #include <stdint.h>
 
@@ -27,11 +27,34 @@ typedef struct {
 typedef struct {
     uint32_t chardev_endpoint;
     uint8_t started;
-    wasm_driver_t driver;
+    wasmos_app_instance_t app;
 } chardev_wasm_client_state_t;
 
 static wasm_ipc_last_slot_t g_wasm_last_slots[PROCESS_MAX_COUNT];
 static chardev_wasm_client_state_t g_chardev_wasm_client;
+static uint8_t g_chardev_client_app_blob[128 * 1024];
+static uint32_t g_chardev_client_app_blob_size;
+
+typedef struct __attribute__((packed)) {
+    char magic[8];
+    uint16_t version;
+    uint16_t header_size;
+    uint32_t flags;
+    uint32_t name_len;
+    uint32_t entry_len;
+    uint32_t wasm_size;
+    uint32_t req_ep_count;
+    uint32_t cap_count;
+    uint32_t mem_hint_count;
+    uint32_t reserved;
+} kernel_wasmos_app_header_t;
+
+typedef struct __attribute__((packed)) {
+    uint32_t kind;
+    uint32_t min_pages;
+    uint32_t max_pages;
+} kernel_wasmos_mem_hint_t;
+
 typedef struct {
     uint64_t addr;
     uint8_t stage;
@@ -57,6 +80,86 @@ static uint32_t
 wasm_blob_size(const uint8_t *start, const uint8_t *end)
 {
     return (uint32_t)((uintptr_t)end - (uintptr_t)start);
+}
+
+static void
+mem_copy(uint8_t *dst, const uint8_t *src, uint32_t len)
+{
+    for (uint32_t i = 0; i < len; ++i) {
+        dst[i] = src[i];
+    }
+}
+
+static uint32_t
+str_len(const char *s)
+{
+    uint32_t len = 0;
+    while (s[len]) {
+        len++;
+    }
+    return len;
+}
+
+static int
+build_chardev_client_app_blob(void)
+{
+    const char *name = "chardev-client";
+    const char *entry = "chardev_client_step";
+    const uint32_t name_len = str_len(name);
+    const uint32_t entry_len = str_len(entry);
+    const uint32_t wasm_size = wasm_blob_size(_binary_chardev_client_wasm_start,
+                                              _binary_chardev_client_wasm_end);
+    const uint32_t hint_count = 2;
+    const uint32_t need_size = (uint32_t)(sizeof(kernel_wasmos_app_header_t) +
+                                          name_len +
+                                          entry_len +
+                                          hint_count * sizeof(kernel_wasmos_mem_hint_t) +
+                                          wasm_size);
+    if (need_size > sizeof(g_chardev_client_app_blob)) {
+        return -1;
+    }
+
+    kernel_wasmos_app_header_t hdr;
+    for (uint32_t i = 0; i < 8; ++i) {
+        hdr.magic[i] = WASMOS_APP_MAGIC[i];
+    }
+    hdr.version = WASMOS_APP_VERSION;
+    hdr.header_size = sizeof(kernel_wasmos_app_header_t);
+    hdr.flags = WASMOS_APP_FLAG_APP;
+    hdr.name_len = name_len;
+    hdr.entry_len = entry_len;
+    hdr.wasm_size = wasm_size;
+    hdr.req_ep_count = 0;
+    hdr.cap_count = 0;
+    hdr.mem_hint_count = hint_count;
+    hdr.reserved = 0;
+
+    uint32_t off = 0;
+    mem_copy(&g_chardev_client_app_blob[off], (const uint8_t *)&hdr, sizeof(hdr));
+    off += sizeof(hdr);
+    mem_copy(&g_chardev_client_app_blob[off], (const uint8_t *)name, name_len);
+    off += name_len;
+    mem_copy(&g_chardev_client_app_blob[off], (const uint8_t *)entry, entry_len);
+    off += entry_len;
+
+    kernel_wasmos_mem_hint_t stack_hint;
+    stack_hint.kind = WASMOS_APP_MEM_HINT_STACK;
+    stack_hint.min_pages = 16;
+    stack_hint.max_pages = 0;
+    mem_copy(&g_chardev_client_app_blob[off], (const uint8_t *)&stack_hint, sizeof(stack_hint));
+    off += sizeof(stack_hint);
+
+    kernel_wasmos_mem_hint_t heap_hint;
+    heap_hint.kind = WASMOS_APP_MEM_HINT_HEAP;
+    heap_hint.min_pages = 16;
+    heap_hint.max_pages = 0;
+    mem_copy(&g_chardev_client_app_blob[off], (const uint8_t *)&heap_hint, sizeof(heap_hint));
+    off += sizeof(heap_hint);
+
+    mem_copy(&g_chardev_client_app_blob[off], _binary_chardev_client_wasm_start, wasm_size);
+    off += wasm_size;
+    g_chardev_client_app_blob_size = off;
+    return 0;
 }
 
 static void
@@ -323,17 +426,15 @@ chardev_wasm_client_entry(process_t *process, void *arg)
     }
 
     if (!state->started) {
-        wasm_driver_manifest_t manifest;
-        manifest.name = "chardev-client";
-        manifest.module_bytes = _binary_chardev_client_wasm_start;
-        manifest.module_size = wasm_blob_size(_binary_chardev_client_wasm_start,
-                                              _binary_chardev_client_wasm_end);
-        manifest.init_export = 0;
-        manifest.dispatch_export = "chardev_client_step";
-        manifest.stack_size = 64 * 1024;
-        manifest.heap_size = 64 * 1024;
-
-        if (wasm_driver_start(&state->driver, &manifest, process->context_id) != 0) {
+        wasmos_app_desc_t app_desc;
+        if (wasmos_app_parse(g_chardev_client_app_blob,
+                             g_chardev_client_app_blob_size,
+                             &app_desc) != 0) {
+            serial_write("[test] wasmos app parse failed\n");
+            process_set_exit_status(process, -1);
+            return PROCESS_RUN_EXITED;
+        }
+        if (wasmos_app_start(&state->app, &app_desc, process->context_id) != 0) {
             serial_write("[test] wasm client start failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
@@ -350,7 +451,7 @@ chardev_wasm_client_entry(process_t *process, void *arg)
     step_msg.arg2 = 0;
     step_msg.arg3 = 0;
 
-    if (wasm_driver_dispatch(&state->driver, &step_msg, &step_result) != 0) {
+    if (wasmos_app_dispatch(&state->app, &step_msg, &step_result) != 0) {
         serial_write("[test] wasm client dispatch failed\n");
         process_set_exit_status(process, -1);
         return PROCESS_RUN_EXITED;
@@ -513,6 +614,12 @@ kmain(boot_info_t *boot_info)
 
     g_chardev_wasm_client.chardev_endpoint = chardev_endpoint;
     g_chardev_wasm_client.started = 0;
+    if (build_chardev_client_app_blob() != 0) {
+        serial_write("[kernel] chardev client app blob failed\n");
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
 
     if (process_spawn("chardev-test-client-wasm", chardev_wasm_client_entry,
                       &g_chardev_wasm_client, &test_pid) != 0) {

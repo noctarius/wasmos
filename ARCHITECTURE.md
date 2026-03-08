@@ -686,6 +686,13 @@ Notes:
 - IPC endpoint names resolve through the service registry; rights are enforced by
   kernel IPC permissions.
 
+Current implementation (kernel scaffold):
+- `kernel/wasmos_app.c` provides the initial WASMOS-APP parser/loader.
+- Loader validates header/version/magic, all section bounds, and extracts wasm bytes.
+- Memory hints are parsed; stack/heap min-page hints are mapped to WAMR stack/heap sizes.
+- Required endpoints and capability tables are currently validated and skipped (not yet resolved).
+- The test client path now builds a WASMOS-APP container in memory and starts it through the loader API.
+
 ## Build & Run Notes
 - `cmake -S . -B build`
 - `cmake --build build --target bootloader` -> `build/BOOTX64.EFI`

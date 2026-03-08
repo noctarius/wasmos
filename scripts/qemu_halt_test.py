@@ -54,7 +54,7 @@ def run_test(cmd, timeout_s):
             sys.stdout.buffer.write(chunk)
             sys.stdout.buffer.flush()
             buf += chunk
-            if not sent_halt and b"wasmos> " in buf:
+            if not sent_halt and b"wamos> " in buf:
                 try:
                     proc.stdin.write(b"halt\r\n")
                     proc.stdin.flush()

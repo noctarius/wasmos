@@ -102,7 +102,7 @@ console_write(const char *s)
 static void
 console_prompt(void)
 {
-    console_write("wasmos> ");
+    console_write("wamos> ");
 }
 
 static void
@@ -259,7 +259,7 @@ cli_step(int32_t ignored_type,
     (void)ignored_arg3;
 
     if (g_phase == CLI_PHASE_INIT) {
-        const char *msg = "WASMOS CLI\ncommands: help, ps, ls, cat <name>, halt, reboot\n";
+        const char *msg = "WAMOS CLI\ncommands: help, ps, ls, cat <name>, halt, reboot\n";
         wasmos_console_write((int32_t)(uintptr_t)msg, str_len(msg));
         g_reply_endpoint = wasmos_ipc_create_endpoint();
         if (g_reply_endpoint < 0) {

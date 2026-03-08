@@ -118,6 +118,34 @@ uint64_t pfa_alloc_pages(uint64_t pages) {
     return 0;
 }
 
+uint64_t pfa_alloc_pages_below(uint64_t pages, uint64_t max_addr) {
+    if (pages == 0 || max_addr == 0) {
+        return 0;
+    }
+    uint64_t limit = max_addr & ~(PAGE_SIZE - 1ULL);
+    for (uint32_t i = 0; i < g_range_count; ++i) {
+        pfa_range_t *range = &g_ranges[i];
+        if (range->pages < pages) {
+            continue;
+        }
+        uint64_t addr = range->base;
+        uint64_t end = addr + range->pages * PAGE_SIZE;
+        if (addr >= limit) {
+            continue;
+        }
+        if (end > limit) {
+            uint64_t usable_pages = (limit - addr) / PAGE_SIZE;
+            if (usable_pages < pages) {
+                continue;
+            }
+        }
+        range->base += pages * PAGE_SIZE;
+        range->pages -= pages;
+        return addr;
+    }
+    return 0;
+}
+
 void pfa_free_pages(uint64_t base, uint64_t pages) {
     if (base == 0 || pages == 0) {
         return;

@@ -3,6 +3,7 @@
 #include "serial.h"
 #include "wasmos_app.h"
 #include "wasm_chardev.h"
+#include "fs_fat.h"
 
 #define PM_MAX_MANAGED_APPS 8u
 #define PM_MAX_WAITERS 8u
@@ -247,6 +248,14 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
             return -1;
         }
         slot->step_arg0 = chardev_endpoint;
+    } else if (name_eq(slot->name, "cli")) {
+        uint32_t fs_endpoint = IPC_ENDPOINT_NONE;
+        if (fs_fat_endpoint(&fs_endpoint) != 0) {
+            slot->in_use = 0;
+            return -1;
+        }
+        slot->step_arg0 = g_pm.proc_endpoint;
+        slot->step_arg1 = fs_endpoint;
     }
 
     if (process_spawn_as(parent_pid, slot->name, pm_app_entry, slot, out_pid) != 0) {
@@ -293,7 +302,6 @@ pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t *msg)
     process_t *caller = 0;
     uint32_t parent_pid = 0;
     uint32_t pid = 0;
-
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
         return -1;
     }

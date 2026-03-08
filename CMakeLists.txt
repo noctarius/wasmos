@@ -225,6 +225,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/spinlock.o
   ${BUILD_DIR}/memory_service.o
   ${BUILD_DIR}/irq.o
+  ${BUILD_DIR}/process_manager.o
   ${BUILD_DIR}/wasmos_app.o
   ${BUILD_DIR}/wasm_driver.o
   ${BUILD_DIR}/wamr_context.o
@@ -252,6 +253,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/spinlock.c
   ${KERNEL_DIR}/memory_service.c
   ${KERNEL_DIR}/irq.c
+  ${KERNEL_DIR}/process_manager.c
   ${KERNEL_DIR}/wasmos_app.c
   ${KERNEL_DIR}/wasm_driver.c
   ${KERNEL_DIR}/wamr_context.c
@@ -539,6 +541,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/spinlock.c -o ${BUILD_DIR}/spinlock.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory_service.c -o ${BUILD_DIR}/memory_service.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/irq.c -o ${BUILD_DIR}/irq.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager.c -o ${BUILD_DIR}/process_manager.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_app.c -o ${BUILD_DIR}/wasmos_app.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_driver.c -o ${BUILD_DIR}/wasm_driver.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wamr_context.c -o ${BUILD_DIR}/wamr_context.o

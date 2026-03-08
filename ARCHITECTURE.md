@@ -171,6 +171,7 @@ Status: implemented with a kernel-hosted memory service and a pagefault-test pro
 Scope: WASMOS-APP loading, WAMR context creation, process lifecycle management.
 Definition of Done: PM loads a WASMOS-APP, resolves endpoints, starts entry export; lifecycle APIs (`spawn`, `wait`, `kill`) work.
 Tests: QEMU boot loads a WASMOS-APP via PM and exits cleanly with status.
+Status: implemented with a kernel process manager service that owns a `proc` endpoint, loads the first WASMOS-APP boot module, and supports IPC `spawn`, `wait`, `kill`, and `status`.
 
 7. Init + Service Startup
 Scope: init reads config from EFI disk, starts PM, drivers, FAT32, CLI.
@@ -489,7 +490,8 @@ Design takeaways:
 - Exited processes transition to a zombie state carrying `exit_status` until reaped by `process_wait`.
 - The kernel main loop schedules processes instead of invoking service handlers directly.
 - The current system starts a dedicated `chardev-server` process and assigns its context ID as the owner of the chardev IPC endpoint.
-- The current system also starts a `chardev-test-client-wasm` process that runs a wasm module and uses imported IPC primitives to create a reply endpoint and issue write/read requests.
+- The current system starts a `process-manager` process that owns the `proc` endpoint and spawns the first WASMOS-APP boot module.
+- The boot WASMOS-APP module currently contains the chardev test client, which runs as a generic WASMOS-APP runner process and uses imported IPC primitives to issue write/read requests.
 - The chardev server returns `BLOCKED` when no IPC message is pending, reducing scheduler churn while idle.
 
 ## WAMR Integration (Planned)
@@ -550,6 +552,7 @@ Drivers:
 
 Services:
 - `process-manager` (PM): spawns processes, tracks lifecycle, owns PID namespace.
+  - Current scaffold: PM runs as a kernel process, owns the `proc` endpoint, and spawns the first WASMOS-APP boot module.
   - Reads WASMOS-APP containers, validates headers and tables.
   - Copies WASM payload into managed memory and tracks lifetime.
   - Creates the process context (memory regions, IPC endpoints, permissions).

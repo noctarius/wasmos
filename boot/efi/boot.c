@@ -192,6 +192,18 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         uefi_log(system, "[boot] preloaded module: \\\\apps\\\\chardev_client.wasmosapp\n");
     }
 
+    static CHAR16 ata_path[] = L"\\apps\\ata.wasmosapp";
+    void *ata_buf = 0;
+    UINTN ata_size = 0;
+    status = read_file_alloc(bs, root, ata_path, &ata_buf, &ata_size);
+    if (EFI_ERROR(status)) {
+        ata_buf = 0;
+        ata_size = 0;
+        uefi_log(system, "[boot] optional module not found: \\\\apps\\\\ata.wasmosapp\n");
+    } else {
+        uefi_log(system, "[boot] preloaded module: \\\\apps\\\\ata.wasmosapp\n");
+    }
+
     static CHAR16 fat_path[] = L"\\apps\\fs_fat.wasmosapp";
     void *fat_buf = 0;
     UINTN fat_size = 0;
@@ -289,6 +301,9 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
     if (app_buf && app_size > 0) {
         module_count++;
     }
+    if (ata_buf && ata_size > 0) {
+        module_count++;
+    }
     if (fat_buf && fat_size > 0) {
         module_count++;
     }
@@ -296,7 +311,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         module_count++;
     }
     UINTN module_table_bytes = module_count * sizeof(boot_module_t);
-    UINTN module_data_bytes = init_size + app_size + fat_size + cli_size;
+    UINTN module_data_bytes = init_size + app_size + ata_size + fat_size + cli_size;
 
     void *mmap = 0;
     UINT64 boot_buf = 0;
@@ -380,6 +395,17 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
                 copy_cstr(mods[mod_index].name, sizeof(mods[mod_index].name), "apps/chardev_client.wasmosapp");
                 memcpy8(cursor, app_buf, app_size);
                 cursor += app_size;
+                mod_index++;
+            }
+
+            if (ata_buf && ata_size > 0) {
+                mods[mod_index].base = (UINT64)(UINTN)cursor;
+                mods[mod_index].size = ata_size;
+                mods[mod_index].type = BOOT_MODULE_TYPE_WASMOS_APP;
+                mods[mod_index].reserved = 0;
+                copy_cstr(mods[mod_index].name, sizeof(mods[mod_index].name), "apps/ata.wasmosapp");
+                memcpy8(cursor, ata_buf, ata_size);
+                cursor += ata_size;
                 mod_index++;
             }
 

@@ -11,8 +11,8 @@
 #include "wamr_context.h"
 #include "wamr_runtime.h"
 #include "wasm_chardev.h"
-#include "block_ata.h"
 #include "physmem.h"
+#include "io.h"
 
 #include <stdint.h>
 #include "wasm_export.h"
@@ -30,7 +30,6 @@ typedef struct {
 } wasm_block_slot_t;
 static wasm_block_slot_t g_wasm_block_slots[PROCESS_MAX_COUNT];
 static uint32_t g_chardev_service_endpoint = IPC_ENDPOINT_NONE;
-static uint32_t g_block_service_endpoint = IPC_ENDPOINT_NONE;
 
 typedef struct {
     uint64_t addr;
@@ -98,10 +97,12 @@ wasmos_endpoint_resolve(uint32_t owner_context_id,
             return 0;
         }
     }
-    if (bytes_eq(name, name_len, "block") &&
-        g_block_service_endpoint != IPC_ENDPOINT_NONE) {
-        *out_endpoint = g_block_service_endpoint;
-        return 0;
+    if (bytes_eq(name, name_len, "block")) {
+        uint32_t block_ep = process_manager_block_endpoint();
+        if (block_ep != IPC_ENDPOINT_NONE) {
+            *out_endpoint = block_ep;
+            return 0;
+        }
     }
     if (bytes_eq(name, name_len, "fs")) {
         uint32_t fs_ep = process_manager_fs_endpoint();
@@ -426,6 +427,82 @@ native_block_buffer_copy(wasm_exec_env_t exec_env, int32_t phys, int32_t ptr, in
 }
 
 static int32_t
+native_block_buffer_write(wasm_exec_env_t exec_env, int32_t phys, int32_t ptr, int32_t len, int32_t offset)
+{
+    if (ptr < 0 || len <= 0 || offset < 0 || phys <= 0) {
+        return -1;
+    }
+
+    wasm_module_inst_t module_inst = get_module_inst(exec_env);
+    if (!module_inst) {
+        return -1;
+    }
+    if (!wasm_runtime_validate_app_addr(module_inst, (uint64_t)ptr, (uint64_t)len)) {
+        return -1;
+    }
+    const uint8_t *src = (const uint8_t *)wasm_runtime_addr_app_to_native(module_inst, (uint64_t)ptr);
+    if (!src) {
+        return -1;
+    }
+
+    uint8_t *dst = (uint8_t *)(uintptr_t)((uint32_t)phys + (uint32_t)offset);
+    for (int32_t i = 0; i < len; ++i) {
+        dst[i] = src[i];
+    }
+    return 0;
+}
+
+static int32_t
+native_io_in8(wasm_exec_env_t exec_env, int32_t port)
+{
+    (void)exec_env;
+    if (port < 0 || port > 0xFFFF) {
+        return -1;
+    }
+    return (int32_t)inb((uint16_t)port);
+}
+
+static int32_t
+native_io_in16(wasm_exec_env_t exec_env, int32_t port)
+{
+    (void)exec_env;
+    if (port < 0 || port > 0xFFFF) {
+        return -1;
+    }
+    return (int32_t)inw((uint16_t)port);
+}
+
+static int32_t
+native_io_out8(wasm_exec_env_t exec_env, int32_t port, int32_t value)
+{
+    (void)exec_env;
+    if (port < 0 || port > 0xFFFF || value < 0 || value > 0xFF) {
+        return -1;
+    }
+    outb((uint16_t)port, (uint8_t)value);
+    return 0;
+}
+
+static int32_t
+native_io_out16(wasm_exec_env_t exec_env, int32_t port, int32_t value)
+{
+    (void)exec_env;
+    if (port < 0 || port > 0xFFFF || value < 0 || value > 0xFFFF) {
+        return -1;
+    }
+    outw((uint16_t)port, (uint16_t)value);
+    return 0;
+}
+
+static int32_t
+native_io_wait(wasm_exec_env_t exec_env)
+{
+    (void)exec_env;
+    io_wait();
+    return 0;
+}
+
+static int32_t
 native_console_write(wasm_exec_env_t exec_env, int32_t ptr, int32_t len)
 {
     if (ptr < 0 || len <= 0) {
@@ -523,6 +600,12 @@ register_wasm_ipc_natives(void)
         { "proc_info", native_proc_info, "(i*~)i", 0 },
         { "block_buffer_phys", native_block_buffer_phys, "()i", 0 },
         { "block_buffer_copy", native_block_buffer_copy, "(iiii)i", 0 },
+        { "block_buffer_write", native_block_buffer_write, "(iiii)i", 0 },
+        { "io_in8", native_io_in8, "(i)i", 0 },
+        { "io_in16", native_io_in16, "(i)i", 0 },
+        { "io_out8", native_io_out8, "(ii)i", 0 },
+        { "io_out16", native_io_out16, "(ii)i", 0 },
+        { "io_wait", native_io_wait, "()i", 0 },
     };
 
     if (!wamr_register_natives("wasmos", symbols,
@@ -586,23 +669,6 @@ page_fault_test_entry(process_t *process, void *arg)
 }
 
 static process_run_result_t
-block_ata_entry(process_t *process, void *arg)
-{
-    (void)process;
-    (void)arg;
-
-    int rc = block_ata_service_once();
-    if (rc == 0) {
-        return PROCESS_RUN_YIELDED;
-    }
-    if (rc == 1) {
-        process_block_on_ipc(process);
-        return PROCESS_RUN_BLOCKED;
-    }
-    return PROCESS_RUN_IDLE;
-}
-
-static process_run_result_t
 init_entry(process_t *process, void *arg)
 {
     init_state_t *state = (init_state_t *)arg;
@@ -652,8 +718,6 @@ kmain(boot_info_t *boot_info)
     uint32_t pf_test_pid = 0;
     uint32_t init_pid = 0;
     init_state_t init_state;
-    uint32_t ata_pid = 0;
-    process_t *ata_proc = 0;
 
     (void)boot_info;
 
@@ -736,26 +800,6 @@ kmain(boot_info_t *boot_info)
         }
     }
     g_chardev_service_endpoint = chardev_endpoint;
-
-    if (process_spawn("disk-ata", block_ata_entry, 0, &ata_pid) != 0) {
-        serial_write("[kernel] ata process spawn failed\n");
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
-    }
-    ata_proc = process_get(ata_pid);
-    if (!ata_proc || block_ata_init(ata_proc->context_id) != 0) {
-        serial_write("[kernel] ata init failed\n");
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
-    }
-    if (block_ata_endpoint(&g_block_service_endpoint) != 0) {
-        serial_write("[kernel] ata endpoint lookup failed\n");
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
-    }
 
     wasmos_app_set_policy_hooks(wasmos_endpoint_resolve, wasmos_capability_grant);
 

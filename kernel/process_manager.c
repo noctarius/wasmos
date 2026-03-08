@@ -3,7 +3,7 @@
 #include "serial.h"
 #include "wasmos_app.h"
 #include "wasm_chardev.h"
-#include "fs_fat.h"
+#include "wasm_fat.h"
 
 #define PM_MAX_MANAGED_APPS 8u
 #define PM_MAX_WAITERS 8u
@@ -250,7 +250,7 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
         slot->step_arg0 = chardev_endpoint;
     } else if (name_eq(slot->name, "cli")) {
         uint32_t fs_endpoint = IPC_ENDPOINT_NONE;
-        if (fs_fat_endpoint(&fs_endpoint) != 0) {
+        if (wasm_fat_endpoint(&fs_endpoint) != 0) {
             slot->in_use = 0;
             return -1;
         }

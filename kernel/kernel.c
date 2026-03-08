@@ -12,7 +12,7 @@
 #include "wamr_runtime.h"
 #include "wasm_chardev.h"
 #include "block_ata.h"
-#include "fs_fat.h"
+#include "wasm_fat.h"
 
 #include <stdint.h>
 #include "wasm_export.h"
@@ -210,7 +210,9 @@ native_ipc_send(wasm_exec_env_t exec_env,
                 int32_t type,
                 int32_t request_id,
                 int32_t arg0,
-                int32_t arg1)
+                int32_t arg1,
+                int32_t arg2,
+                int32_t arg3)
 {
     uint32_t context_id = 0;
     ipc_message_t req;
@@ -231,8 +233,8 @@ native_ipc_send(wasm_exec_env_t exec_env,
     req.request_id = (uint32_t)request_id;
     req.arg0 = (uint32_t)arg0;
     req.arg1 = (uint32_t)arg1;
-    req.arg2 = 0;
-    req.arg3 = 0;
+    req.arg2 = (uint32_t)arg2;
+    req.arg3 = (uint32_t)arg3;
 
     return ipc_send_from(context_id, (uint32_t)destination_endpoint, &req);
 }
@@ -334,6 +336,33 @@ native_ipc_last_field(wasm_exec_env_t exec_env, int32_t field)
 }
 
 static int32_t
+native_block_buffer_copy(wasm_exec_env_t exec_env, int32_t phys, int32_t ptr, int32_t len, int32_t offset)
+{
+    if (ptr < 0 || len <= 0 || offset < 0 || phys <= 0) {
+        return -1;
+    }
+
+    wasm_module_inst_t module_inst = get_module_inst(exec_env);
+    if (!module_inst) {
+        return -1;
+    }
+    if (!wasm_runtime_validate_app_addr(module_inst, (uint64_t)ptr, (uint64_t)len)) {
+        return -1;
+    }
+    uint8_t *dst = (uint8_t *)wasm_runtime_addr_app_to_native(module_inst,
+                                                             (uint64_t)ptr);
+    if (!dst) {
+        return -1;
+    }
+
+    const uint8_t *src = (const uint8_t *)(uintptr_t)((uint32_t)phys + (uint32_t)offset);
+    for (int32_t i = 0; i < len; ++i) {
+        dst[i] = src[i];
+    }
+    return 0;
+}
+
+static int32_t
 native_console_write(wasm_exec_env_t exec_env, int32_t ptr, int32_t len)
 {
     if (ptr < 0 || len <= 0) {
@@ -414,30 +443,13 @@ native_proc_info(wasm_exec_env_t exec_env, int32_t index, char *buf, int32_t buf
     return (int32_t)pid;
 }
 
-static int32_t
-native_fs_list_root(wasm_exec_env_t exec_env)
-{
-    (void)exec_env;
-    return fs_fat_list_root() == 0 ? 0 : -1;
-}
-
-static int32_t
-native_fs_cat_root(wasm_exec_env_t exec_env, char *ptr)
-{
-    (void)exec_env;
-    if (!ptr) {
-        return -1;
-    }
-    return fs_fat_cat_root(ptr) == 0 ? 0 : -1;
-}
-
 static int
 register_wasm_ipc_natives(void)
 {
     static const wamr_native_symbol_t symbols[] = {
         { "ipc_create_endpoint", native_ipc_create_endpoint, "()i", 0 },
         { "ipc_create_notification", native_ipc_create_notification, "()i", 0 },
-        { "ipc_send", native_ipc_send, "(iiiiii)i", 0 },
+        { "ipc_send", native_ipc_send, "(iiiiiiii)i", 0 },
         { "ipc_recv", native_ipc_recv, "(i)i", 0 },
         { "ipc_wait", native_ipc_wait, "(i)i", 0 },
         { "ipc_notify", native_ipc_notify, "(i)i", 0 },
@@ -446,8 +458,7 @@ register_wasm_ipc_natives(void)
         { "console_read", native_console_read, "(*~)i", 0 },
         { "proc_count", native_proc_count, "()i", 0 },
         { "proc_info", native_proc_info, "(i*~)i", 0 },
-        { "fs_list_root", native_fs_list_root, "()i", 0 },
-        { "fs_cat_root", native_fs_cat_root, "($)i", 0 },
+        { "block_buffer_copy", native_block_buffer_copy, "(iiii)i", 0 },
     };
 
     if (!wamr_register_natives("wasmos", symbols,
@@ -533,7 +544,7 @@ fs_fat_entry(process_t *process, void *arg)
     (void)process;
     (void)arg;
 
-    int rc = fs_fat_service_once();
+    int rc = wasm_fat_service_once();
     if (rc == 0) {
         return PROCESS_RUN_YIELDED;
     }
@@ -708,13 +719,13 @@ kmain(boot_info_t *boot_info)
         }
     }
     fat_proc = process_get(fat_pid);
-    if (!fat_proc || fs_fat_init(fat_proc->context_id, g_block_service_endpoint) != 0) {
+    if (!fat_proc || wasm_fat_init(fat_proc->context_id, g_block_service_endpoint) != 0) {
         serial_write("[kernel] fat init failed\n");
         for (;;) {
             __asm__ volatile("hlt");
         }
     }
-    if (fs_fat_endpoint(&g_fs_service_endpoint) != 0) {
+    if (wasm_fat_endpoint(&g_fs_service_endpoint) != 0) {
         serial_write("[kernel] fat endpoint lookup failed\n");
         for (;;) {
             __asm__ volatile("hlt");

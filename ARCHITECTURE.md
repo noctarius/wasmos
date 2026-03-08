@@ -171,7 +171,7 @@ Status: implemented with a kernel-hosted memory service and a pagefault-test pro
 Scope: WASMOS-APP loading, WAMR context creation, process lifecycle management.
 Definition of Done: PM loads a WASMOS-APP, resolves endpoints, starts entry export; lifecycle APIs (`spawn`, `wait`, `kill`) work.
 Tests: QEMU boot loads a WASMOS-APP via PM and exits cleanly with status.
-Status: implemented with a kernel init process that spawns a process manager service owning the `proc` endpoint, which loads the `sysinit` WASMOS-APP boot module and supports IPC `spawn`, `wait`, `kill`, and `status`.
+Status: implemented with a kernel init process that spawns a process manager service owning the `proc` endpoint, then requests it to load the `sysinit` WASMOS-APP boot module and supports IPC `spawn`, `wait`, `kill`, and `status`.
 
 7. Init + Service Startup
 Scope: sysinit reads config from EFI disk, starts PM, drivers, FAT32, CLI.
@@ -493,7 +493,7 @@ Design takeaways:
 - The kernel main loop schedules processes instead of invoking service handlers directly.
 - The current system starts a dedicated `chardev-server` process and assigns its context ID as the owner of the chardev IPC endpoint.
 - The current system starts a kernel `init` process that is the root parent for all kernel-spawned processes, and it spawns the `process-manager` (owner of the `proc` endpoint).
-- The process manager spawns a user-space `sysinit` WASMOS-APP boot module and passes the `proc` endpoint plus boot module metadata.
+- The process manager spawns the user-space `sysinit` WASMOS-APP boot module after a kernel-init request and passes the `proc` endpoint plus boot module metadata.
 - The user-space `sysinit` module spawns remaining boot modules via `proc`, and the chardev client uses imported IPC primitives to issue write/read requests.
 - A minimal PIO ATA block driver runs as a WASMOS-APP service (`drivers/wasm/ata`), and the process manager assigns it the `block` IPC endpoint.
 - A FAT12/16/32 filesystem driver runs as a WASMOS-APP service, uses the `block` IPC endpoint for sector reads, and exposes the `fs` IPC endpoint (root-only `ls`/`cat`).

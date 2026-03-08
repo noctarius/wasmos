@@ -128,7 +128,7 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes.
 - Blocked processes can now be resumed by context (`process_wake_by_context`) when IPC traffic arrives for owned endpoints.
 - A minimal init process runs in the kernel and is the root parent for all kernel-spawned processes (mem-service, chardev-server, pagefault-test, and the process manager).
 - The process manager owns a `proc` IPC endpoint and can `spawn`, `wait`, `kill`, and `status` processes on behalf of callers.
-- The process manager spawns a user-space `sysinit` WASMOS-APP boot module, passing the `proc` endpoint and boot module metadata.
+- The kernel `init` process requests the process manager to spawn the `sysinit` WASMOS-APP boot module, passing the `proc` endpoint and boot module metadata.
 - The user-space `sysinit` module iterates boot modules (excluding itself) and spawns them via `proc`.
 - A minimal PIO ATA block driver runs as a WASMOS-APP service (`drivers/wasm/ata`), exposes a `block` IPC endpoint, and supports identify/read requests.
 - A FAT12/16/32 filesystem driver runs as a WASMOS-APP service, uses the block IPC endpoint, and exposes the `fs` IPC endpoint.

@@ -500,16 +500,16 @@ Design takeaways:
 - A minimal user-space `cli` WASMOS-APP is loaded as a boot module, reads serial input, and supports `help`, `ps`, `ls`, and `cat` via small native helpers.
 - The chardev server returns `BLOCKED` when no IPC message is pending, reducing scheduler churn while idle.
 
-## WAMR Integration (Planned)
+## WAMR Integration (Current Scaffold)
 - WAMR is vendored via git subtree at `libs/wasm/wasm-micro-runtime`.
-- Port or embed WAMR as a static library under `libs/wasm/`.
+- WAMR is built as a static library and linked into the kernel.
 - `libs/wasm/wamr_runtime.c` provides a basic wrapper over the WAMR C API.
-- Provide WASI-like shims or custom syscalls for drivers.
-- Define a stable ABI between kernel and WASM modules.
+- A stable ABI is defined via `drivers/wasm/include/wasmos_driver_abi.h` and the WASMOS-APP container format.
 
-## Driver Model (Planned)
-- Enumerate hardware via ACPI and PCI.
-- Provide driver registry and resource manager.
+Planned:
+- Provide WASI-like shims or richer custom syscalls for drivers.
+
+## Driver Model (Current Scaffold)
 - Run drivers as isolated WASM contexts.
 - Expose driver APIs through IPC endpoints to other WASM contexts.
 - Current scaffold includes project-owned wasm application examples under `examples/wasm/`.
@@ -519,6 +519,10 @@ Design takeaways:
 - The chardev service (`kernel/wasm_chardev.c`) runs in the spawned `chardev-server` process and bridges IPC request/response traffic to the wasm export `chardev_ipc_dispatch`.
 - The wasm chardev module also exports `chardev_init` and optional direct byte helpers (`chardev_read_byte`, `chardev_write_byte`).
 - The wasm chardev test-client module exports `chardev_client_step` and consumes imported IPC APIs (`ipc_create_endpoint`, `ipc_send`, `ipc_recv`, `ipc_last_field`) from native module `wasmos`.
+
+Planned:
+- Enumerate hardware via ACPI and PCI.
+- Provide a driver registry and resource manager.
 
 ## Driver Framework (Planned)
 Drivers are privileged by default but remain isolated WASM processes with explicit
@@ -548,13 +552,11 @@ Runtime device management:
 - `driver-manager` owns driver lifecycle, matches devices to drivers, and requests
   resource grants for MMIO/PIO/DMA/IRQ.
 
-## Drivers & Services (Planned)
-This list defines the next baseline drivers and services, their role, and IPC expectations.
-
+## Drivers & Services (Current Scaffold)
 Drivers:
-- `disk-virtio` (virtio block): exposes block read/write and identify; privileged by default.
-- `disk-sata` (AHCI/SATA): exposes block read/write and identify; privileged by default.
-- `fs-fat32` (FAT32): mounts a block device, exposes file open/read/dir listing.
+- `ata` (PIO ATA block): exposes block read and identify via the `block` IPC endpoint.
+- `fs-fat` (FAT12/16/32): mounts a block device and exposes `fs` root list/cat.
+- `chardev` (IPC chardev): exposes byte read/write via chardev IPC messages.
 
 Services:
 - `process-manager` (PM): spawns processes, tracks lifecycle, owns PID namespace.
@@ -566,18 +568,27 @@ Services:
   - Resolves required IPC endpoints/capabilities before start.
   - Starts the entry export and registers the process with the scheduler.
 - `init` (root task / init process): the first user-space task that bootstraps the system.
-  - Starts core services and drivers (PM, disk, FAT32, CLI).
-  - Reads boot configuration from the EFI boot disk via FAT32.
-  - Performs minimal namespace/service registration (names, endpoints).
-  - Acts as a minimal loader for PM if the kernel does not spawn PM directly.
-    - Option A: PM is embedded as a WASMOS-APP blob and init parses/loads it.
-    - Option B: PM is a simpler boot module and init passes it to PM for re-load.
+  - Starts core services and drivers (PM, ATA, FAT, CLI).
+- `cli` (simple CLI): provides a basic command loop and service/status queries.
+
+Planned:
+Drivers:
+- `disk-virtio` (virtio block): exposes block read/write and identify; privileged by default.
+- `disk-sata` (AHCI/SATA): exposes block read/write and identify; privileged by default.
+- `fs-fat32` (FAT32): mounts a block device, exposes file open/read/dir listing.
+
+Services:
 - `hw-discovery` (udev-like): privileged service that detects hardware and emits events.
   - Enumerates ACPI/PCI and publishes device inventory updates.
   - Emits hotplug notifications for new/removed devices.
 - `driver-manager`: starts, stops, and assigns drivers in response to hardware events.
   - Maps devices to driver images, allocates resources, and wires endpoints.
-- `cli` (simple CLI): provides a basic command loop and service/status queries.
+- `init` extensions:
+  - Reads boot configuration from the EFI boot disk via FAT32.
+  - Performs minimal namespace/service registration (names, endpoints).
+  - Acts as a minimal loader for PM if the kernel does not spawn PM directly.
+    - Option A: PM is embedded as a WASMOS-APP blob and init parses/loads it.
+    - Option B: PM is a simpler boot module and init passes it to PM for re-load.
 
 IPC expectations (high level):
 - Disk drivers provide a `block` endpoint: `read(sector,count,reply_ep)` and `write(sector,count,reply_ep)`.
@@ -588,21 +599,21 @@ IPC expectations (high level):
 - `hw-discovery` emits `device` events to `driver-manager`.
 - `driver-manager` requests resource grants and spawns drivers via `proc`.
 
-### Minimal CLI (Planned)
+### Minimal CLI (Current Scaffold)
 The CLI is intentionally tiny and runs in user space on top of `fs` and `proc`.
 
 Required commands:
 - `ls` — list directory contents via `fs`.
+- `cat <path>` — print file contents.
+- `ps` — list processes via `proc`.
+- `help` — list built-in commands.
+
+Planned:
 - `cd <path>` — change working directory (client-side state).
 - `exec <path>` — load a WASMOS-APP from `fs` and ask `proc` to spawn it.
 - `halt` — request system halt via a privileged service.
 - `reboot` — request system reboot via a privileged service.
 - `echo <args...>` — print arguments to console.
-
-Optional commands (nice-to-have):
-- `cat <path>` — print file contents.
-- `ps` — list processes via `proc`.
-- `help` — list built-in commands.
 
 ### Init Process Responsibilities (Microkernel Practice)
 Common patterns in microkernel systems:

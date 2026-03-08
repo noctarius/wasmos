@@ -361,7 +361,7 @@ Remaining:
 - WAMR initialization uses a kernel-owned static pool allocator (currently 2 MiB) with per-context bindings for linear/stack/heap sizing.
 - WAMR runtime initialization is performed on-demand by the kernel wasm driver host when the first wasm driver is started.
 - WAMR is enabled by default and links the runtime library unless `WAMR_LINK=OFF` is set.
-- The WAMR runtime build uses a minimal `wasmos` platform from `platform/wasmos/`.
+- The WAMR runtime build uses a minimal `wasmos` platform from `src/wasm-micro-runtime/platform/wasmos/`.
 - The custom WAMR object build path forwards upstream runtime feature defines and disables `-Werror` for third-party WAMR sources.
 - Freestanding builds set `WAMR_DISABLE_APP_ENTRY=1` and link the generated `libwamr_runtime.a` into the kernel.
 - The `wasmos` platform adapter includes WAMR shared math sources and minimal libc/fortify shims required by freestanding linkage.

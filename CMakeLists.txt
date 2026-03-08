@@ -36,6 +36,12 @@ if (NOT DEFINED AS_ENABLE_INITIALIZED)
 endif ()
 option(AS_ENABLE "Enable AssemblyScript example builds" ON)
 
+if (NOT DEFINED RUST_ENABLE_INITIALIZED)
+  set(RUST_ENABLE ON CACHE BOOL "Enable Rust example builds" FORCE)
+  set(RUST_ENABLE_INITIALIZED ON CACHE BOOL "Set when RUST_ENABLE default is initialized" FORCE)
+endif ()
+option(RUST_ENABLE "Enable Rust example builds" ON)
+
 set(CLANG clang CACHE STRING "C compiler for freestanding/UEFI builds")
 if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   set(LLD ld.lld CACHE STRING "Linker (lld or ld.lld)")
@@ -333,6 +339,9 @@ set(WASM_CLI_APP ${BUILD_DIR}/cli.wasmosapp)
 set(WASM_HELLO_C_SRC ${EXAMPLES_WASM_DIR}/hello_c/hello_c.c)
 set(WASM_HELLO_C_WASM ${BUILD_DIR}/hello_c.wasm)
 set(WASM_HELLO_C_APP ${BUILD_DIR}/hello_c.wasmosapp)
+set(WASM_HELLO_RUST_SRC ${EXAMPLES_WASM_DIR}/hello_rust/hello_rust.rs)
+set(WASM_HELLO_RUST_WASM ${BUILD_DIR}/hello_rust.wasm)
+set(WASM_HELLO_RUST_APP ${BUILD_DIR}/hello_rust.wasmosapp)
 set(WASMOS_APP_PACKER ${BUILD_DIR}/make_wasmos_app)
 
 add_custom_command(
@@ -505,7 +514,7 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_HELLO_C_WASM}
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib
+  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
           -Wl,--no-entry -Wl,--strip-all
           -Wl,-z,stack-size=4096
           -Wl,--initial-memory=65536
@@ -621,7 +630,7 @@ add_custom_command(
   VERBATIM
 )
 
-add_custom_target(wasm_driver_blobs DEPENDS
+set(WASM_DRIVER_BLOBS
   ${WASM_CHARDEV_DRIVER_BLOB}
   ${WASM_CHARDEV_CLIENT_BLOB}
   ${WASM_ATA_APP}
@@ -631,6 +640,10 @@ add_custom_target(wasm_driver_blobs DEPENDS
   ${WASM_FAT_APP}
   ${WASM_CHARDEV_CLIENT_APP}
 )
+if (RUST_ENABLE)
+  list(APPEND WASM_DRIVER_BLOBS ${WASM_HELLO_RUST_APP})
+endif ()
+add_custom_target(wasm_driver_blobs DEPENDS ${WASM_DRIVER_BLOBS})
 list(APPEND KERNEL_OBJS ${WASM_CHARDEV_DRIVER_BLOB} ${WASM_CHARDEV_CLIENT_BLOB})
 
 if (AS_ENABLE)
@@ -680,6 +693,55 @@ if (AS_ENABLE)
   )
 
   add_custom_target(assemblyscript_examples DEPENDS ${AS_HELLO_APP})
+endif ()
+
+if (RUST_ENABLE)
+  find_program(RUSTC_EXECUTABLE rustc)
+  if (NOT RUSTC_EXECUTABLE)
+    message(FATAL_ERROR "Rust compiler 'rustc' not found. Install Rust and add the wasm32-unknown-unknown target (rustup target add wasm32-unknown-unknown).")
+  endif ()
+  add_custom_command(
+    OUTPUT ${WASM_HELLO_RUST_WASM}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+    COMMAND ${RUSTC_EXECUTABLE}
+            --target=wasm32-unknown-unknown
+            -O
+            -C opt-level=z
+            -C panic=abort
+            -C codegen-units=1
+            -C link-arg=--no-entry
+            -C link-arg=--export=hello_rust_step
+            -C link-arg=--strip-all
+            -C link-arg=--initial-memory=2097152
+            -C link-arg=--max-memory=2097152
+            --crate-type=cdylib
+            ${WASM_HELLO_RUST_SRC}
+            -o ${WASM_HELLO_RUST_WASM}
+    DEPENDS ${WASM_HELLO_RUST_SRC}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Building wasm hello-rust module"
+    VERBATIM
+  )
+  add_custom_command(
+    OUTPUT ${WASM_HELLO_RUST_APP}
+    COMMAND ${WASMOS_APP_PACKER}
+            ${WASM_HELLO_RUST_WASM}
+            ${WASM_HELLO_RUST_APP}
+            hello-rust
+            hello_rust_step
+            16
+            16
+            4
+            -
+            0
+            ipc.basic
+            0
+    DEPENDS ${WASM_HELLO_RUST_WASM} ${WASMOS_APP_PACKER}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Packing wasm hello-rust as WASMOS-APP"
+    VERBATIM
+  )
+  add_custom_target(rust_examples DEPENDS ${WASM_HELLO_RUST_APP})
 endif ()
 
 # WAMR is vendored via git subtree at ${WAMR_DIR}.
@@ -846,6 +908,11 @@ endif ()
 set(HELLO_C_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HELLO_C_APP} ${BUILD_DIR}/esp/apps/hello_c.wasmosapp
 )
+if (RUST_ENABLE)
+  set(RUST_HELLO_COPY_CMD
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HELLO_RUST_APP} ${BUILD_DIR}/esp/apps/hello_rust.wasmosapp
+  )
+endif ()
 
 if (OVMF_VARS)
   add_custom_target(run-qemu
@@ -860,6 +927,7 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
+    ${RUST_HELLO_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
@@ -885,6 +953,7 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
+    ${RUST_HELLO_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_halt_test.py
             --ovmf-code ${OVMF_CODE}
@@ -911,6 +980,7 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
+    ${RUST_HELLO_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
@@ -935,6 +1005,7 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
+    ${RUST_HELLO_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_halt_test.py
             --ovmf-code ${OVMF_CODE}
@@ -947,4 +1018,9 @@ else ()
   if (AS_ENABLE)
     add_dependencies(run-qemu-test assemblyscript_examples)
   endif ()
+endif ()
+
+if (RUST_ENABLE)
+  add_dependencies(run-qemu rust_examples)
+  add_dependencies(run-qemu-test rust_examples)
 endif ()

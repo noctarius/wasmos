@@ -407,6 +407,8 @@ WASMOS adaptation:
 - `init` loads configuration from EFI disk (FAT32) to determine service set and order.
 - `init` registers basic names/endpoints for service discovery.
 - `init` may host a minimal loader for PM if PM is not started by the kernel.
+  - If using a script-driven startup (analogous to `/etc/rc`), init remains minimal
+    and only spawns what the config demands.
 
 ## Interfaces
 ### boot_info_t

@@ -58,7 +58,7 @@ Add to `CMakeLists.txt`:
 
 ## Step 4: Kernel host glue
 
-Add a kernel wrapper like `kernel/wasm_foo.c` and header:
+Add a kernel wrapper like `src/kernel/wasm_foo.c` and header:
 - Start the driver with `wasm_driver_start`.
 - Provide `wasm_foo_endpoint()` and `wasm_foo_service_once()`.
 - Translate IPC into driver dispatch and reply.

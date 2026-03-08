@@ -207,6 +207,12 @@ class QemuSession:
             self._pump(0.2)
         return False
 
+    def tail(self, max_bytes: int = 2048) -> str:
+        if max_bytes <= 0:
+            return ""
+        data = self.buf[-max_bytes:]
+        return data.decode("utf-8", errors="replace")
+
 
 def main():
     parser = argparse.ArgumentParser(description="QEMU test framework smoke run.")

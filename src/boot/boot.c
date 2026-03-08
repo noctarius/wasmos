@@ -192,28 +192,28 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         uefi_log(system, "[boot] preloaded module: \\\\apps\\\\chardev_client.wasmosapp\n");
     }
 
-    static CHAR16 ata_path[] = L"\\apps\\ata.wasmosapp";
+    static CHAR16 ata_path[] = L"\\system\\drivers\\ata.wasmosapp";
     void *ata_buf = 0;
     UINTN ata_size = 0;
     status = read_file_alloc(bs, root, ata_path, &ata_buf, &ata_size);
     if (EFI_ERROR(status)) {
         ata_buf = 0;
         ata_size = 0;
-        uefi_log(system, "[boot] optional module not found: \\\\apps\\\\ata.wasmosapp\n");
+        uefi_log(system, "[boot] optional module not found: \\\\system\\\\drivers\\\\ata.wasmosapp\n");
     } else {
-        uefi_log(system, "[boot] preloaded module: \\\\apps\\\\ata.wasmosapp\n");
+        uefi_log(system, "[boot] preloaded module: \\\\system\\\\drivers\\\\ata.wasmosapp\n");
     }
 
-    static CHAR16 fat_path[] = L"\\apps\\fs_fat.wasmosapp";
+    static CHAR16 fat_path[] = L"\\system\\drivers\\fs_fat.wasmosapp";
     void *fat_buf = 0;
     UINTN fat_size = 0;
     status = read_file_alloc(bs, root, fat_path, &fat_buf, &fat_size);
     if (EFI_ERROR(status)) {
         fat_buf = 0;
         fat_size = 0;
-        uefi_log(system, "[boot] optional module not found: \\\\apps\\\\fs_fat.wasmosapp\n");
+        uefi_log(system, "[boot] optional module not found: \\\\system\\\\drivers\\\\fs_fat.wasmosapp\n");
     } else {
-        uefi_log(system, "[boot] preloaded module: \\\\apps\\\\fs_fat.wasmosapp\n");
+        uefi_log(system, "[boot] preloaded module: \\\\system\\\\drivers\\\\fs_fat.wasmosapp\n");
     }
 
     static CHAR16 cli_path[] = L"\\apps\\cli.wasmosapp";
@@ -403,7 +403,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
                 mods[mod_index].size = ata_size;
                 mods[mod_index].type = BOOT_MODULE_TYPE_WASMOS_APP;
                 mods[mod_index].reserved = 0;
-                copy_cstr(mods[mod_index].name, sizeof(mods[mod_index].name), "apps/ata.wasmosapp");
+                copy_cstr(mods[mod_index].name, sizeof(mods[mod_index].name), "system/drivers/ata.wasmosapp");
                 memcpy8(cursor, ata_buf, ata_size);
                 cursor += ata_size;
                 mod_index++;
@@ -414,7 +414,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
                 mods[mod_index].size = fat_size;
                 mods[mod_index].type = BOOT_MODULE_TYPE_WASMOS_APP;
                 mods[mod_index].reserved = 0;
-                copy_cstr(mods[mod_index].name, sizeof(mods[mod_index].name), "apps/fs_fat.wasmosapp");
+                copy_cstr(mods[mod_index].name, sizeof(mods[mod_index].name), "system/drivers/fs_fat.wasmosapp");
                 memcpy8(cursor, fat_buf, fat_size);
                 cursor += fat_size;
                 mod_index++;

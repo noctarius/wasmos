@@ -57,6 +57,11 @@ class CliIntegrationTests(unittest.TestCase):
         self._cmd_expect("ls", b"cli.wasmosapp")
         self._cmd_expect("cd /", b"/ wamos>")
 
+    def test_cd_nested_drivers(self):
+        self._cmd_expect("cd system/drivers", b"/system/drivers wamos>")
+        self._cmd_expect("ls", b"ata.wasmosapp")
+        self._cmd_expect("cd /", b"/ wamos>")
+
     def test_cat_startup(self):
         self._cmd_expect("cat startup.nsh", b"BOOTX64.EFI")
 

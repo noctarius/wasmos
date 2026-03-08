@@ -6,8 +6,8 @@ IMPORTANT: Keep this file and `ARCHITECTURE.md` up to date with every prompt exe
 IMPORTANT: Create a git commit after each prompt iteration.
 
 ## Layout
-- `boot/efi/` UEFI application (PE/COFF) that loads `kernel.elf` and jumps to its entry.
-- `kernel/` Freestanding kernel (C + ASM) with a tiny boot-time runtime.
+- `src/boot/` UEFI application (PE/COFF) that loads `kernel.elf` and jumps to its entry.
+- `src/kernel/` Freestanding kernel (C + ASM) with a tiny boot-time runtime.
 - `libs/wasm/` Placeholder for integrating WAMR.
 - `examples/wasm/` Example WASM applications (driver/server/client samples).
 - `drivers/wasm/` WASM driver sources and ABI headers (each driver lives in its own subdirectory).
@@ -118,7 +118,7 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes.
 
 ### Next steps
 1. Verify the UEFI toolchain flags for your host.
-2. Integrate WAMR into `libs/wasm/` and wire into `kernel/kernel.c`.
+2. Integrate WAMR into `libs/wasm/` and wire into `src/kernel/kernel.c`.
 3. Implement hardware drivers and a basic scheduler.
 
 ## Notes
@@ -147,7 +147,7 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes.
 - Shared memory IPC primitives are documented in `ARCHITECTURE.md`.
 - Memory service + page-fault IPC (kernel-hosted scaffold) and pagefault-test are implemented and documented in `ARCHITECTURE.md`.
 - IRQ handling and notification-based delegation (PIC remap, IRQ stubs, IRQ routing) are implemented and documented in `ARCHITECTURE.md`.
-- WASMOS-APP loading scaffold is implemented (`kernel/wasmos_app.c`); the bootloader now preloads `esp/apps/chardev_client.wasmosapp` and passes it via boot modules.
+- WASMOS-APP loading scaffold is implemented (`src/kernel/wasmos_app.c`); the bootloader now preloads `esp/apps/chardev_client.wasmosapp` and passes it via boot modules.
 - WASMOS-APP required endpoints and capability requests are now enforced during app start via kernel policy hooks.
 - The bootloader logs basic status messages to the UEFI console and retries `ExitBootServices` on invalid parameters.
 - The bootloader copies the UEFI memory map into kernel-owned pages before exiting boot services.
@@ -172,8 +172,8 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes.
 - `WAMR_DISABLE_APP_ENTRY=1` is set for the freestanding kernel profile.
 - The `wasmos` platform adapter includes WAMR's shared math implementation and provides freestanding libc/fortify shims (e.g. `__memcpy_chk`, `__memset_chk`).
 - The `wasmos` platform adapter now backs WAMR memory APIs (`os_mmap`/`os_mremap` and related allocators) with runtime allocator calls so module instantiation can map linear memory in freestanding mode.
-- Kernel primitives now include a minimal spinlock (`kernel/spinlock.c`) and IPC transport with per-endpoint queues (`kernel/ipc.c`).
-- Kernel primitives now include basic cooperative process management (`kernel/process.c`) with per-process memory-context binding.
+- Kernel primitives now include a minimal spinlock (`src/kernel/spinlock.c`) and IPC transport with per-endpoint queues (`src/kernel/ipc.c`).
+- Kernel primitives now include basic cooperative process management (`src/kernel/process.c`) with per-process memory-context binding.
 - Process lifecycle primitives now include `wait`, `kill`, and tracked `exit_status` via zombie processes until reaped.
 - Blocked processes can now be resumed by context (`process_wake_by_context`) when IPC traffic arrives for owned endpoints.
 - A minimal init process runs in the kernel and is the root parent for all kernel-spawned processes (mem-service, chardev-server, pagefault-test, and the process manager).
@@ -186,8 +186,8 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes.
 - IPC endpoint permissions are enforced by context-aware APIs (`ipc_send_from`, `ipc_recv_for`) for source-endpoint ownership and endpoint receive ownership.
 - The kernel now builds and embeds example WASM applications from `examples/wasm/` (including `chardev_client`).
 - Driver wasm link settings currently constrain module stack/linear memory for low-footprint instantiation in the freestanding runtime pool.
-- A generic kernel wasm driver host (`kernel/wasm_driver.c`) loads embedded modules, instantiates them via WAMR, and dispatches IPC requests to exported driver handlers.
-- The WASM-backed chardev runs as an IPC service endpoint in a dedicated `chardev-server` process (`kernel/wasm_chardev.c`) using `drivers/wasm/chardev/chardev_server.c`.
+- A generic kernel wasm driver host (`src/kernel/wasm_driver.c`) loads embedded modules, instantiates them via WAMR, and dispatches IPC requests to exported driver handlers.
+- The WASM-backed chardev runs as an IPC service endpoint in a dedicated `chardev-server` process (`src/kernel/wasm_chardev.c`) using `drivers/wasm/chardev/chardev_server.c`.
 - Boot modules now include `sysinit.wasmosapp` and `chardev_client.wasmosapp`; the chardev client performs one IPC write/read roundtrip via imported IPC primitives.
 - The chardev server process blocks when its IPC queue is empty and is woken by incoming IPC messages.
 - The chardev service path uses permission-aware IPC send/receive calls tied to its owner context.

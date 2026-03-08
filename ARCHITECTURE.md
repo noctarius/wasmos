@@ -229,8 +229,8 @@ This guide captures microkernel-informed design decisions and a stepwise plan fo
 - Cross-context interaction is explicit and IPC-based; direct shared mutable state between contexts is not the default model.
 
 ## Repository Layout
-- `boot/efi/` UEFI application (PE/COFF) that loads `kernel.elf` from the ESP.
-- `kernel/` Freestanding kernel (C + ASM).
+- `src/boot/` UEFI application (PE/COFF) that loads `kernel.elf` from the ESP.
+- `src/kernel/` Freestanding kernel (C + ASM).
 - `libs/wasm/` Placeholder integration point for WAMR.
 - `examples/wasm/` Example WASM applications used for driver/server/client bring-up.
 - `drivers/wasm/` WASM driver sources and ABI headers. Each driver lives in its own subdirectory.
@@ -259,7 +259,7 @@ UEFI firmware
          v
 +-----------------+
 | BOOTX64.EFI     |
-| (boot/efi/boot.c)|
+| (src/boot/boot.c)|
 +--------+--------+
          |
          | Open ESP volume
@@ -275,14 +275,14 @@ UEFI firmware
          v
 +------------------------+
 | Kernel entry (_start)  |
-| (kernel/arch/x86_64)   |
+| (src/kernel/arch/x86_64)   |
 +--------+---------------+
          |
          | Stack + BSS
          v
 +------------------------+
 | kmain                  |
-| (kernel/kernel.c)      |
+| (src/kernel/kernel.c)      |
 +--------+---------------+
          |
          | Memory manager
@@ -472,15 +472,15 @@ Design takeaways:
 - Pair shared memory with message passing for bulk data movement and synchronization.
 
 ## Kernel Primitives (Current Scaffold)
-- `spinlock` primitive in `kernel/spinlock.c` provides low-level mutual exclusion for shared kernel objects.
-- `ipc` primitive in `kernel/ipc.c` provides endpoint allocation and bounded per-endpoint message queues.
+- `spinlock` primitive in `src/kernel/spinlock.c` provides low-level mutual exclusion for shared kernel objects.
+- `ipc` primitive in `src/kernel/ipc.c` provides endpoint allocation and bounded per-endpoint message queues.
 - IPC messages carry basic routing and payload fields (`type`, `source`, `destination`, `request_id`, `arg0..arg3`).
 - Endpoints are associated with owner context IDs and protect queues via spinlocks.
 - IPC permissions are enforced by context-aware operations:
 - `ipc_send_from` requires non-kernel senders to use a source endpoint owned by their context.
 - `ipc_recv_for` requires non-kernel receivers to own the destination endpoint context.
 - IPC enqueue wakes blocked processes that own the destination endpoint context.
-- `process` primitive in `kernel/process.c` provides a small cooperative process table and scheduler.
+- `process` primitive in `src/kernel/process.c` provides a small cooperative process table and scheduler.
 - `process_spawn` binds each process to a new memory context (`mm_context_create(pid)`), establishing per-process isolation boundaries.
 - Lifecycle primitives now include `process_wait`, `process_kill`, and `process_get_exit_status`.
 - WAMR native IPC imports use the `exec_env` calling convention to align with WAMR native argument marshalling.
@@ -515,8 +515,8 @@ Planned:
 - Current scaffold includes project-owned wasm application examples under `examples/wasm/` (C, AssemblyScript, Rust, and Go).
 - The build compiles the chardev server driver (`drivers/wasm/chardev`) and chardev client example into `.wasm` binaries and embeds them into the kernel image as binary blobs.
 - Driver wasm binaries are linked with explicit stack and initial/max memory bounds to keep freestanding instantiation deterministic.
-- A kernel wasm driver host (`kernel/wasm_driver.c`) loads embedded modules, instantiates them with WAMR, allocates IPC endpoints, and dispatches IPC messages to a driver export.
-- The chardev service (`kernel/wasm_chardev.c`) runs in the spawned `chardev-server` process and bridges IPC request/response traffic to the wasm export `chardev_ipc_dispatch`.
+- A kernel wasm driver host (`src/kernel/wasm_driver.c`) loads embedded modules, instantiates them with WAMR, allocates IPC endpoints, and dispatches IPC messages to a driver export.
+- The chardev service (`src/kernel/wasm_chardev.c`) runs in the spawned `chardev-server` process and bridges IPC request/response traffic to the wasm export `chardev_ipc_dispatch`.
 - The wasm chardev module also exports `chardev_init` and optional direct byte helpers (`chardev_read_byte`, `chardev_write_byte`).
 - The wasm chardev test-client module exports `chardev_client_step` and consumes imported IPC APIs (`ipc_create_endpoint`, `ipc_send`, `ipc_recv`, `ipc_last_field`) from native module `wasmos`.
 
@@ -633,7 +633,7 @@ WASMOS adaptation:
 
 ## Interfaces
 ### boot_info_t
-Defined in `kernel/include/boot.h` and populated by the bootloader.
+Defined in `src/kernel/include/boot.h` and populated by the bootloader.
 
 Fields (current scaffold):
 - `memory_map`, `memory_map_size`, `memory_desc_size`, `memory_desc_version`
@@ -714,7 +714,7 @@ Notes:
   kernel IPC permissions.
 
 Current implementation (kernel scaffold):
-- `kernel/wasmos_app.c` provides the initial WASMOS-APP parser/loader.
+- `src/kernel/wasmos_app.c` provides the initial WASMOS-APP parser/loader.
 - Loader validates header/version/magic, all section bounds, and extracts wasm bytes.
 - Memory hints are parsed; stack/heap min-page hints are mapped to WAMR stack/heap sizes.
 - Required endpoints and capability tables are enforced during `wasmos_app_start` via kernel policy hooks.

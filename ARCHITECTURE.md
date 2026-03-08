@@ -360,6 +360,27 @@ Remaining:
 - The kernel mediates IPC primitives and endpoint isolation; higher-level protocols are implemented in WASM services.
 - Device-facing drivers expose capability-like IPC interfaces rather than direct shared driver calls.
 
+### IPC Message Format
+```
+type        // message type or opcode
+source      // source endpoint ID
+destination // destination endpoint ID
+request_id  // client-chosen correlation ID
+arg0..arg3  // payload words (use shared memory for bulk data)
+```
+
+### IPC Error Codes
+- `IPC_OK` = 0
+- `IPC_EMPTY` = 1 (no message available)
+- `IPC_ERR_INVALID` = -1 (bad endpoint/args)
+- `IPC_ERR_PERM` = -2 (permission denied)
+- `IPC_ERR_FULL` = -3 (queue full / no free endpoint)
+
+### IPC Permission Rules
+- Sender must own the `source` endpoint (unless the sender is the kernel).
+- Receiver must own the destination endpoint (unless the receiver is the kernel).
+- Endpoint ownership is bound to a memory context; permissions are enforced in the kernel.
+
 ## IPC Best Practices (Herder Thesis Notes)
 Source: `herder_thesis.pdf` (MINIX 3 microkernel conversion).
 

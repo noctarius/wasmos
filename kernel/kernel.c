@@ -111,7 +111,7 @@ native_ipc_create_endpoint(wasm_exec_env_t exec_env)
     if (current_process_context(&context_id) != 0) {
         return -1;
     }
-    if (ipc_endpoint_create(context_id, &endpoint) != 0) {
+    if (ipc_endpoint_create(context_id, &endpoint) != IPC_OK) {
         return -1;
     }
     return (int32_t)endpoint;
@@ -171,10 +171,10 @@ native_ipc_recv(wasm_exec_env_t exec_env, int32_t endpoint)
     }
 
     rc = ipc_recv_for(context_id, (uint32_t)endpoint, &slot->message);
-    if (rc == 1) {
+    if (rc == IPC_EMPTY) {
         return 0;
     }
-    if (rc != 0) {
+    if (rc != IPC_OK) {
         return -1;
     }
 

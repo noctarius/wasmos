@@ -38,7 +38,7 @@ wasm_chardev_reply(uint32_t reply_endpoint,
     resp.arg1 = arg1;
     resp.arg2 = 0;
     resp.arg3 = 0;
-    if (ipc_send_from(g_owner_context_id, reply_endpoint, &resp) != 0) {
+    if (ipc_send_from(g_owner_context_id, reply_endpoint, &resp) != IPC_OK) {
         serial_write("[chardev] reply dropped\n");
     }
 }
@@ -84,7 +84,7 @@ wasm_chardev_service_once(void)
     }
 
     recv_result = ipc_recv_for(g_owner_context_id, service_endpoint, &req);
-    if (recv_result != 0) {
+    if (recv_result != IPC_OK) {
         return recv_result;
     }
 

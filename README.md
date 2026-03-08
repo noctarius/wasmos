@@ -78,6 +78,16 @@ cmake --build build --target rust_examples
 
 The sample lives at `examples/wasm/hello_rust/hello_rust.rs` and is packed as `hello_rust.wasmosapp`.
 
+### Go (TinyGo) (optional)
+Go can be used to write WASMOS applications via TinyGo. Install TinyGo and ensure it is in your PATH.
+
+Build the sample Go WASMOS-APP:
+```
+cmake --build build --target go_examples
+```
+
+The sample lives at `examples/wasm/hello_go/hello_go.go` and is packed as `hello_go.wasmosapp`.
+
 ### WAMR scaffold
 - `libs/wasm/wamr_runtime.c` provides a thin wrapper over the WAMR C API.
 - Enable with `-DWAMR_ENABLE=ON` once you wire the WAMR library into the kernel link.

@@ -58,6 +58,35 @@ These principles are derived from the IPC notes in this document.
 - Provide mapping primitives for shared memory regions and user-space paging.
 - Avoid kernel-internal copying for bulk data; use shared memory plus message-based synchronization.
 
+### Virtual Memory Plan
+Goal: every process runs in a controlled virtual address space; the kernel stays mapped in the higher half.
+
+Address space layout:
+- Kernel higher-half mapping at `0xFFFFFFFF80000000` with shared kernel mappings in all contexts.
+- Identity map a minimal low-memory window for early boot and trampoline paths only.
+- User-space region below the kernel split with guard pages around stacks and heaps.
+
+Core mechanisms (kernel):
+- Per-context page tables with shared kernel mappings.
+- Map, unmap, and protect primitives with explicit permissions.
+- Frame allocation and reclamation via the physical frame allocator.
+- Explicit shared-memory mapping of the same frames into multiple contexts.
+
+Policy (user space):
+- Memory service decides address placement, growth, and reclamation.
+- Page-fault handler runs in user space and requests mappings as needed.
+
+Fault handling:
+- Page faults deliver a structured fault message (address, access type, context).
+- Kernel blocks the faulting thread and resumes after the memory service replies.
+
+### Memory Management Steps
+1. Freeze the kernel/user virtual address split and document the layout.
+2. Define page table ownership rules and a minimal map/unmap API.
+3. Add a user-space memory service and fault IPC protocol.
+4. Enable shared-memory regions with explicit lifetime and ownership rules.
+5. Add optional copy-on-write as a policy in user space (kernel supports refcounted frames).
+
 ### Scheduling Direction
 - Keep a small core scheduler in kernel with pluggable policy hints.
 - Allow user-space services to set priorities and budgets via explicit calls.

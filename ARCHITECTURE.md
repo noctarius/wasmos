@@ -232,7 +232,7 @@ This guide captures microkernel-informed design decisions and a stepwise plan fo
 - `src/boot/` UEFI application (PE/COFF) that loads `kernel.elf` from the ESP.
 - `src/kernel/` Freestanding kernel (C + ASM).
 - `libs/wasm/` Placeholder integration point for WAMR.
-- `examples/wasm/` Example WASM applications used for driver/server/client bring-up.
+- `examples/` Example WASM applications used for driver/server/client bring-up (grouped by language).
 - `src/drivers/` WASM driver sources and ABI headers. Each driver lives in its own subdirectory.
 - `scripts/` Optional helper scripts.
 
@@ -512,7 +512,7 @@ Planned:
 ## Driver Model (Current Scaffold)
 - Run drivers as isolated WASM contexts.
 - Expose driver APIs through IPC endpoints to other WASM contexts.
-- Current scaffold includes project-owned wasm application examples under `examples/wasm/` (C, AssemblyScript, Rust, and Go).
+- Current scaffold includes project-owned wasm application examples under `examples/` (C, AssemblyScript, Rust, and Go).
 - The build compiles the chardev server driver (`src/drivers/chardev`) and chardev client example into `.wasm` binaries and embeds them into the kernel image as binary blobs.
 - Driver wasm binaries are linked with explicit stack and initial/max memory bounds to keep freestanding instantiation deterministic.
 - A kernel wasm driver host (`src/kernel/wasm_driver.c`) loads embedded modules, instantiates them with WAMR, allocates IPC endpoints, and dispatches IPC messages to a driver export.

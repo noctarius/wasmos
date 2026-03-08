@@ -36,7 +36,7 @@ FOO_IPC_ERROR     = 0x5FF
 
 Location rule: **all wasm drivers live in subdirectories of `src/drivers/`**.
 
-Create `src/drivers/foo/foo.c` (or `examples/wasm/` only for test clients).
+Create `src/drivers/foo/foo.c` (or `examples/` only for test clients).
 
 Minimum exports:
 1. `foo_init(...)` — called once by the kernel host (use args for endpoints, buffers).

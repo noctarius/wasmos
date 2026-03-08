@@ -27,8 +27,11 @@ set(KERNEL_DIR ${CMAKE_SOURCE_DIR}/src/kernel)
 set(WASM_DIR ${CMAKE_SOURCE_DIR}/libs/wasm)
 set(WAMR_DIR ${WASM_DIR}/wasm-micro-runtime)
 set(DRIVER_WASM_DIR ${CMAKE_SOURCE_DIR}/src/drivers)
-set(EXAMPLES_WASM_DIR ${CMAKE_SOURCE_DIR}/examples/wasm)
+set(EXAMPLES_C_DIR ${CMAKE_SOURCE_DIR}/examples/c)
+set(EXAMPLES_GO_DIR ${CMAKE_SOURCE_DIR}/examples/go)
+set(EXAMPLES_RUST_DIR ${CMAKE_SOURCE_DIR}/examples/rust)
 set(EXAMPLES_AS_DIR ${CMAKE_SOURCE_DIR}/examples/assemblyscript)
+set(SERVICES_DIR ${CMAKE_SOURCE_DIR}/src/services)
 
 if (NOT DEFINED AS_ENABLE_INITIALIZED)
   set(AS_ENABLE ON CACHE BOOL "Enable AssemblyScript example builds" FORCE)
@@ -316,18 +319,18 @@ add_custom_target(kernel_ide SOURCES
   ${KERNEL_DIR}/include/io.h
   ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
   ${DRIVER_WASM_DIR}/chardev/chardev_server.c
-  ${EXAMPLES_WASM_DIR}/chardev_client/chardev_client.c
+  ${EXAMPLES_C_DIR}/chardev_client/chardev_client.c
   ${DRIVER_WASM_DIR}/ata/ata.c
   ${DRIVER_WASM_DIR}/fs_fat/fs_fat.c
-  ${EXAMPLES_WASM_DIR}/init/init.c
-  ${EXAMPLES_WASM_DIR}/cli/cli.c
+  ${SERVICES_DIR}/sysinit/init.c
+  ${SERVICES_DIR}/cli/cli.c
   ${WASM_DIR}/wamr_runtime.h
 )
 
 set(WASM_CHARDEV_DRIVER_SRC ${DRIVER_WASM_DIR}/chardev/chardev_server.c)
 set(WASM_CHARDEV_DRIVER_WASM ${BUILD_DIR}/chardev_server.wasm)
 set(WASM_CHARDEV_DRIVER_BLOB ${BUILD_DIR}/chardev_server_blob.o)
-set(WASM_CHARDEV_CLIENT_SRC ${EXAMPLES_WASM_DIR}/chardev_client/chardev_client.c)
+set(WASM_CHARDEV_CLIENT_SRC ${EXAMPLES_C_DIR}/chardev_client/chardev_client.c)
 set(WASM_CHARDEV_CLIENT_WASM ${BUILD_DIR}/chardev_client.wasm)
 set(WASM_CHARDEV_CLIENT_BLOB ${BUILD_DIR}/chardev_client_blob.o)
 set(WASM_CHARDEV_CLIENT_APP ${BUILD_DIR}/chardev_client.wasmosapp)
@@ -337,19 +340,19 @@ set(WASM_ATA_APP ${BUILD_DIR}/ata.wasmosapp)
 set(WASM_FAT_DRIVER_SRC ${DRIVER_WASM_DIR}/fs_fat/fs_fat.c)
 set(WASM_FAT_DRIVER_WASM ${BUILD_DIR}/fs_fat.wasm)
 set(WASM_FAT_APP ${BUILD_DIR}/fs_fat.wasmosapp)
-set(WASM_INIT_APP_SRC ${EXAMPLES_WASM_DIR}/init/init.c)
+set(WASM_INIT_APP_SRC ${SERVICES_DIR}/sysinit/init.c)
 set(WASM_INIT_APP_WASM ${BUILD_DIR}/init.wasm)
 set(WASM_INIT_APP ${BUILD_DIR}/sysinit.wasmosapp)
-set(WASM_CLI_APP_SRC ${EXAMPLES_WASM_DIR}/cli/cli.c)
+set(WASM_CLI_APP_SRC ${SERVICES_DIR}/cli/cli.c)
 set(WASM_CLI_APP_WASM ${BUILD_DIR}/cli.wasm)
 set(WASM_CLI_APP ${BUILD_DIR}/cli.wasmosapp)
-set(WASM_HELLO_C_SRC ${EXAMPLES_WASM_DIR}/hello_c/hello_c.c)
+set(WASM_HELLO_C_SRC ${EXAMPLES_C_DIR}/hello/hello_c.c)
 set(WASM_HELLO_C_WASM ${BUILD_DIR}/hello_c.wasm)
 set(WASM_HELLO_C_APP ${BUILD_DIR}/hello_c.wasmosapp)
-set(WASM_HELLO_RUST_SRC ${EXAMPLES_WASM_DIR}/hello_rust/hello_rust.rs)
+set(WASM_HELLO_RUST_SRC ${EXAMPLES_RUST_DIR}/hello/hello_rust.rs)
 set(WASM_HELLO_RUST_WASM ${BUILD_DIR}/hello_rust.wasm)
 set(WASM_HELLO_RUST_APP ${BUILD_DIR}/hello_rust.wasmosapp)
-set(WASM_HELLO_GO_SRC ${EXAMPLES_WASM_DIR}/hello_go/hello_go.go)
+set(WASM_HELLO_GO_SRC ${EXAMPLES_GO_DIR}/hello/hello_go.go)
 set(WASM_HELLO_GO_WASM ${BUILD_DIR}/hello_go.wasm)
 set(WASM_HELLO_GO_APP ${BUILD_DIR}/hello_go.wasmosapp)
 set(WASMOS_APP_PACKER ${BUILD_DIR}/make_wasmos_app)

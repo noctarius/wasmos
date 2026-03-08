@@ -14,21 +14,6 @@ static uint8_t g_has_pending;
 static uint64_t g_buffer_phys;
 static uint32_t g_reply_endpoint;
 
-static void
-fat_log_hex64(uint64_t value)
-{
-    char buf[21];
-    static const char hex[] = "0123456789ABCDEF";
-    buf[0] = '0';
-    buf[1] = 'x';
-    for (int i = 0; i < 16; ++i) {
-        buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
-    }
-    buf[18] = '\n';
-    buf[19] = '\0';
-    serial_write(buf);
-}
-
 static uint32_t
 wasm_fat_module_size(void)
 {

@@ -296,6 +296,7 @@ add_custom_target(kernel_ide SOURCES
   ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
   ${EXAMPLES_WASM_DIR}/chardev_server/chardev_server.c
   ${EXAMPLES_WASM_DIR}/chardev_client/chardev_client.c
+  ${EXAMPLES_WASM_DIR}/init/init.c
   ${WASM_DIR}/wamr_runtime.h
 )
 
@@ -306,6 +307,9 @@ set(WASM_CHARDEV_CLIENT_SRC ${EXAMPLES_WASM_DIR}/chardev_client/chardev_client.c
 set(WASM_CHARDEV_CLIENT_WASM ${BUILD_DIR}/chardev_client.wasm)
 set(WASM_CHARDEV_CLIENT_BLOB ${BUILD_DIR}/chardev_client_blob.o)
 set(WASM_CHARDEV_CLIENT_APP ${BUILD_DIR}/chardev_client.wasmosapp)
+set(WASM_INIT_APP_SRC ${EXAMPLES_WASM_DIR}/init/init.c)
+set(WASM_INIT_APP_WASM ${BUILD_DIR}/init.wasm)
+set(WASM_INIT_APP ${BUILD_DIR}/init.wasmosapp)
 set(WASMOS_APP_PACKER ${BUILD_DIR}/make_wasmos_app)
 
 add_custom_command(
@@ -360,6 +364,25 @@ add_custom_command(
 )
 
 add_custom_command(
+  OUTPUT ${WASM_INIT_APP_WASM}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib
+          -Wl,--no-entry -Wl,--strip-all
+          -Wl,-z,stack-size=4096
+          -Wl,--initial-memory=65536
+          -Wl,--max-memory=65536
+          -Wl,--allow-undefined
+          -Wl,--export=init_step
+          -I${DRIVER_WASM_DIR}/include
+          ${WASM_INIT_APP_SRC}
+          -o ${WASM_INIT_APP_WASM}
+  DEPENDS ${WASM_INIT_APP_SRC} ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Building wasm init module"
+  VERBATIM
+)
+
+add_custom_command(
   OUTPUT ${WASM_CHARDEV_CLIENT_BLOB}
   COMMAND ${OBJCOPY} --input-target=binary --output-target=elf64-x86-64
           --binary-architecture=i386:x86-64
@@ -376,6 +399,25 @@ add_custom_command(
   DEPENDS ${CMAKE_SOURCE_DIR}/scripts/make_wasmos_app.c
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Building WASMOS-APP packer tool"
+  VERBATIM
+)
+
+add_custom_command(
+  OUTPUT ${WASM_INIT_APP}
+  COMMAND ${WASMOS_APP_PACKER}
+          ${WASM_INIT_APP_WASM}
+          ${WASM_INIT_APP}
+          init
+          init_step
+          16
+          16
+          proc
+          1
+          ipc.basic
+          0
+  DEPENDS ${WASM_INIT_APP_WASM} ${WASMOS_APP_PACKER}
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Packing wasm init as WASMOS-APP"
   VERBATIM
 )
 
@@ -401,6 +443,7 @@ add_custom_command(
 add_custom_target(wasm_driver_blobs DEPENDS
   ${WASM_CHARDEV_DRIVER_BLOB}
   ${WASM_CHARDEV_CLIENT_BLOB}
+  ${WASM_INIT_APP}
   ${WASM_CHARDEV_CLIENT_APP}
 )
 list(APPEND KERNEL_OBJS ${WASM_CHARDEV_DRIVER_BLOB} ${WASM_CHARDEV_CLIENT_BLOB})
@@ -567,6 +610,7 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/init.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
@@ -584,6 +628,7 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/init.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio

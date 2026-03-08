@@ -170,6 +170,16 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         return status;
     }
 
+    static CHAR16 init_path[] = L"\\apps\\init.wasmosapp";
+    void *init_buf = 0;
+    UINTN init_size = 0;
+    status = read_file_alloc(bs, root, init_path, &init_buf, &init_size);
+    if (EFI_ERROR(status)) {
+        uefi_log_status(system, "[boot] Read \\\\apps\\\\init.wasmosapp failed: ", status);
+        return status;
+    }
+    uefi_log(system, "[boot] preloaded module: \\\\apps\\\\init.wasmosapp\n");
+
     static CHAR16 app_path[] = L"\\apps\\chardev_client.wasmosapp";
     void *app_buf = 0;
     UINTN app_size = 0;
@@ -248,9 +258,15 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
     mmap_size += desc_size * 2;
     UINTN mmap_capacity = mmap_size;
     UINTN boot_capacity = 0;
-    UINTN module_count = (app_buf && app_size > 0) ? 1 : 0;
+    UINTN module_count = 0;
+    if (init_buf && init_size > 0) {
+        module_count++;
+    }
+    if (app_buf && app_size > 0) {
+        module_count++;
+    }
     UINTN module_table_bytes = module_count * sizeof(boot_module_t);
-    UINTN module_data_bytes = app_size;
+    UINTN module_data_bytes = init_size + app_size;
 
     void *mmap = 0;
     UINT64 boot_buf = 0;
@@ -314,12 +330,28 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
             memset8(mods, 0, module_table_bytes);
             cursor += module_table_bytes;
 
-            mods[0].base = (UINT64)(UINTN)cursor;
-            mods[0].size = app_size;
-            mods[0].type = BOOT_MODULE_TYPE_WASMOS_APP;
-            mods[0].reserved = 0;
-            copy_cstr(mods[0].name, sizeof(mods[0].name), "apps/chardev_client.wasmosapp");
-            memcpy8(cursor, app_buf, app_size);
+            UINT32 mod_index = 0;
+            if (init_buf && init_size > 0) {
+                mods[mod_index].base = (UINT64)(UINTN)cursor;
+                mods[mod_index].size = init_size;
+                mods[mod_index].type = BOOT_MODULE_TYPE_WASMOS_APP;
+                mods[mod_index].reserved = 0;
+                copy_cstr(mods[mod_index].name, sizeof(mods[mod_index].name), "apps/init.wasmosapp");
+                memcpy8(cursor, init_buf, init_size);
+                cursor += init_size;
+                mod_index++;
+            }
+
+            if (app_buf && app_size > 0) {
+                mods[mod_index].base = (UINT64)(UINTN)cursor;
+                mods[mod_index].size = app_size;
+                mods[mod_index].type = BOOT_MODULE_TYPE_WASMOS_APP;
+                mods[mod_index].reserved = 0;
+                copy_cstr(mods[mod_index].name, sizeof(mods[mod_index].name), "apps/chardev_client.wasmosapp");
+                memcpy8(cursor, app_buf, app_size);
+                cursor += app_size;
+                mod_index++;
+            }
 
             boot_info->modules = mods;
             boot_info->module_count = (uint32_t)module_count;

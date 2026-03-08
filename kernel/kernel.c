@@ -84,6 +84,13 @@ wasmos_endpoint_resolve(uint32_t owner_context_id,
         *out_endpoint = g_chardev_service_endpoint;
         return 0;
     }
+    if (bytes_eq(name, name_len, "proc")) {
+        uint32_t proc_ep = process_manager_endpoint();
+        if (proc_ep != IPC_ENDPOINT_NONE) {
+            *out_endpoint = proc_ep;
+            return 0;
+        }
+    }
     return -1;
 }
 

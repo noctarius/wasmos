@@ -171,15 +171,16 @@ Status: implemented with a kernel-hosted memory service and a pagefault-test pro
 Scope: WASMOS-APP loading, WAMR context creation, process lifecycle management.
 Definition of Done: PM loads a WASMOS-APP, resolves endpoints, starts entry export; lifecycle APIs (`spawn`, `wait`, `kill`) work.
 Tests: QEMU boot loads a WASMOS-APP via PM and exits cleanly with status.
-Status: implemented with a kernel init process that spawns a process manager service owning the `proc` endpoint, which loads the first WASMOS-APP boot module and supports IPC `spawn`, `wait`, `kill`, and `status`.
+Status: implemented with a kernel init process that spawns a process manager service owning the `proc` endpoint, which loads the `init` WASMOS-APP boot module and supports IPC `spawn`, `wait`, `kill`, and `status`.
 
 7. Init + Service Startup
 Scope: init reads config from EFI disk, starts PM, drivers, FAT32, CLI.
 Definition of Done: init loads config, spawns core services in order, registers names.
 Tests: QEMU boot shows init-driven startup and CLI prompt.
+Status: user-space `init` WASMOS-APP spawns `chardev-client` via the `proc` endpoint; config/FS-driven startup is still pending.
 
 8. Storage Stack
-Scope: virtio or SATA block driver + FAT32 filesystem service.
+Scope: virtio, ATA, SATA block driver + FAT32 filesystem service.
 Definition of Done: FAT32 mounts EFI disk via block driver; files can be opened and read via IPC.
 Tests: QEMU boot loads a config file from FAT32 and prints a known line.
 
@@ -490,8 +491,9 @@ Design takeaways:
 - Exited processes transition to a zombie state carrying `exit_status` until reaped by `process_wait`.
 - The kernel main loop schedules processes instead of invoking service handlers directly.
 - The current system starts a dedicated `chardev-server` process and assigns its context ID as the owner of the chardev IPC endpoint.
-- The current system starts an `init` process that spawns the `process-manager`, which owns the `proc` endpoint and spawns the first WASMOS-APP boot module.
-- The boot WASMOS-APP module currently contains the chardev test client, which runs as a generic WASMOS-APP runner process and uses imported IPC primitives to issue write/read requests.
+- The current system starts a kernel `init` process that spawns the `process-manager`, which owns the `proc` endpoint.
+- The process manager spawns a user-space `init` WASMOS-APP boot module and passes the `proc` endpoint plus boot module indices.
+- The user-space `init` module spawns the chardev test client via `proc`, and the client uses imported IPC primitives to issue write/read requests.
 - The chardev server returns `BLOCKED` when no IPC message is pending, reducing scheduler churn while idle.
 
 ## WAMR Integration (Planned)
@@ -552,7 +554,7 @@ Drivers:
 
 Services:
 - `process-manager` (PM): spawns processes, tracks lifecycle, owns PID namespace.
-  - Current scaffold: init spawns PM as a kernel process, which owns the `proc` endpoint and spawns the first WASMOS-APP boot module.
+  - Current scaffold: init spawns PM as a kernel process, which owns the `proc` endpoint and spawns the `init` WASMOS-APP boot module.
   - Reads WASMOS-APP containers, validates headers and tables.
   - Copies WASM payload into managed memory and tracks lifetime.
   - Creates the process context (memory regions, IPC endpoints, permissions).

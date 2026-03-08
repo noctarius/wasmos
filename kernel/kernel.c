@@ -516,6 +516,19 @@ native_system_halt(wasm_exec_env_t exec_env)
 }
 
 static int32_t
+native_system_reboot(wasm_exec_env_t exec_env)
+{
+    (void)exec_env;
+    outb(0x64, 0xFE);
+    outb(0xCF9, 0x06);
+    outb(0xCF9, 0x0E);
+    for (;;) {
+        __asm__ volatile("hlt");
+    }
+    return 0;
+}
+
+static int32_t
 native_console_write(wasm_exec_env_t exec_env, int32_t ptr, int32_t len)
 {
     if (ptr < 0 || len <= 0) {
@@ -615,6 +628,7 @@ register_wasm_ipc_natives(void)
         { "block_buffer_copy", native_block_buffer_copy, "(iiii)i", 0 },
         { "block_buffer_write", native_block_buffer_write, "(iiii)i", 0 },
         { "system_halt", native_system_halt, "()i", 0 },
+        { "system_reboot", native_system_reboot, "()i", 0 },
         { "io_in8", native_io_in8, "(i)i", 0 },
         { "io_in16", native_io_in16, "(i)i", 0 },
         { "io_out8", native_io_out8, "(ii)i", 0 },

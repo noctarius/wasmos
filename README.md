@@ -62,6 +62,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - `cmake --build build --target bootloader` builds `build/BOOTX64.EFI`
 - `cmake --build build --target kernel` builds `build/kernel.elf`
 - `cmake --build build --target run-qemu` runs QEMU with an ESP image (serial console via `-nographic`)
+- `cmake --build build --target run-qemu-test` runs QEMU, waits for the CLI prompt, issues `halt`, and expects a clean shutdown
 
 ### Next steps
 1. Verify the UEFI toolchain flags for your host.

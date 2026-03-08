@@ -3,7 +3,6 @@
 #include "serial.h"
 #include "wasmos_app.h"
 #include "wasm_chardev.h"
-#include "block_ata.h"
 
 #define PM_MAX_MANAGED_APPS 8u
 #define PM_MAX_WAITERS 8u
@@ -33,6 +32,7 @@ typedef struct {
     const boot_info_t *boot_info;
     uint32_t proc_endpoint;
     uint32_t fs_endpoint;
+    uint32_t block_endpoint;
     uint8_t started;
     uint32_t init_module_index;
     uint32_t chardev_module_index;
@@ -258,13 +258,15 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
         slot->step_arg0 = g_pm.proc_endpoint;
         slot->step_arg1 = fs_endpoint;
     } else if (name_eq(slot->name, "fs-fat")) {
-        uint32_t block_endpoint = IPC_ENDPOINT_NONE;
-        if (block_ata_endpoint(&block_endpoint) != 0) {
+        uint32_t block_endpoint = g_pm.block_endpoint;
+        if (block_endpoint == IPC_ENDPOINT_NONE) {
             slot->in_use = 0;
             return -1;
         }
         slot->step_arg0 = block_endpoint;
         slot->step_arg1 = IPC_ENDPOINT_NONE;
+    } else if (name_eq(slot->name, "ata")) {
+        slot->step_arg0 = IPC_ENDPOINT_NONE;
     }
 
     if (process_spawn_as(parent_pid, slot->name, pm_app_entry, slot, out_pid) != 0) {
@@ -273,6 +275,14 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     }
 
     slot->pid = *out_pid;
+    if (name_eq(slot->name, "ata") && g_pm.block_endpoint == IPC_ENDPOINT_NONE) {
+        process_t *proc = process_get(*out_pid);
+        if (!proc || ipc_endpoint_create(proc->context_id, &g_pm.block_endpoint) != IPC_OK) {
+            slot->in_use = 0;
+            return -1;
+        }
+        slot->step_arg0 = g_pm.block_endpoint;
+    }
     if (name_eq(slot->name, "fs-fat") && g_pm.fs_endpoint == IPC_ENDPOINT_NONE) {
         process_t *proc = process_get(*out_pid);
         if (!proc || ipc_endpoint_create(proc->context_id, &g_pm.fs_endpoint) != IPC_OK) {
@@ -489,6 +499,7 @@ process_manager_init(const boot_info_t *boot_info)
     g_pm.boot_info = boot_info;
     g_pm.proc_endpoint = IPC_ENDPOINT_NONE;
     g_pm.fs_endpoint = IPC_ENDPOINT_NONE;
+    g_pm.block_endpoint = IPC_ENDPOINT_NONE;
     g_pm.started = 0;
     g_pm.init_module_index = 0xFFFFFFFFu;
     g_pm.chardev_module_index = 0xFFFFFFFFu;
@@ -520,6 +531,12 @@ uint32_t
 process_manager_fs_endpoint(void)
 {
     return g_pm.fs_endpoint;
+}
+
+uint32_t
+process_manager_block_endpoint(void)
+{
+    return g_pm.block_endpoint;
 }
 
 process_run_result_t

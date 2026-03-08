@@ -127,7 +127,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - The process manager owns a `proc` IPC endpoint and can `spawn`, `wait`, `kill`, and `status` processes on behalf of callers.
 - The process manager spawns a user-space `init` WASMOS-APP boot module, passing the `proc` endpoint and boot module metadata.
 - The user-space `init` module iterates boot modules (excluding itself) and spawns them via `proc`.
-- A minimal PIO ATA block driver runs as a kernel process, exposes a `block` IPC endpoint, and supports identify/read requests.
+- A minimal PIO ATA block driver runs as a WASMOS-APP service (`drivers/wasm/ata`), exposes a `block` IPC endpoint, and supports identify/read requests.
 - A FAT12/16/32 filesystem driver runs as a WASMOS-APP service, uses the block IPC endpoint, and exposes the `fs` IPC endpoint.
 - A minimal user-space `cli` WASMOS-APP is loaded as a boot module, reads input from serial, and supports `help`, `ps`, `ls`, and `cat` via small native helpers.
 - IPC endpoint permissions are enforced by context-aware APIs (`ipc_send_from`, `ipc_recv_for`) for source-endpoint ownership and endpoint receive ownership.

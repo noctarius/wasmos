@@ -226,7 +226,6 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/memory_service.o
   ${BUILD_DIR}/irq.o
   ${BUILD_DIR}/process_manager.o
-  ${BUILD_DIR}/block_ata.o
   ${BUILD_DIR}/wasmos_app.o
   ${BUILD_DIR}/wasm_driver.o
   ${BUILD_DIR}/wamr_context.o
@@ -255,7 +254,6 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/memory_service.c
   ${KERNEL_DIR}/irq.c
   ${KERNEL_DIR}/process_manager.c
-  ${KERNEL_DIR}/block_ata.c
   ${KERNEL_DIR}/wasmos_app.c
   ${KERNEL_DIR}/wasm_driver.c
   ${KERNEL_DIR}/wamr_context.c
@@ -270,7 +268,7 @@ target_sources(bootloader_sources INTERFACE ${BOOT_SOURCES} ${BOOT_DIR}/uefi.h $
 target_include_directories(bootloader_sources INTERFACE ${BOOT_DIR} ${KERNEL_DIR}/include)
 
 add_library(kernel_sources INTERFACE)
-target_sources(kernel_sources INTERFACE ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/include/cpu.h ${KERNEL_DIR}/include/ipc.h ${KERNEL_DIR}/include/paging.h ${KERNEL_DIR}/include/process.h ${KERNEL_DIR}/include/spinlock.h ${KERNEL_DIR}/include/wasm_chardev.h ${KERNEL_DIR}/include/memory_service.h ${KERNEL_DIR}/include/irq.h ${KERNEL_DIR}/include/wasmos_app.h ${KERNEL_DIR}/include/block_ata.h ${KERNEL_DIR}/include/io.h ${WASM_DIR}/wamr_runtime.h)
+target_sources(kernel_sources INTERFACE ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/include/cpu.h ${KERNEL_DIR}/include/ipc.h ${KERNEL_DIR}/include/paging.h ${KERNEL_DIR}/include/process.h ${KERNEL_DIR}/include/spinlock.h ${KERNEL_DIR}/include/wasm_chardev.h ${KERNEL_DIR}/include/memory_service.h ${KERNEL_DIR}/include/irq.h ${KERNEL_DIR}/include/wasmos_app.h ${KERNEL_DIR}/include/io.h ${WASM_DIR}/wamr_runtime.h)
 target_include_directories(kernel_sources INTERFACE ${KERNEL_DIR}/include ${WASM_DIR} ${DRIVER_WASM_DIR}/include)
 
 # IDE aggregation targets: helps CLion mark files as part of the CMake project
@@ -295,11 +293,11 @@ add_custom_target(kernel_ide SOURCES
   ${KERNEL_DIR}/include/spinlock.h
   ${KERNEL_DIR}/include/wasm_driver.h
   ${KERNEL_DIR}/include/wasm_chardev.h
-  ${KERNEL_DIR}/include/block_ata.h
   ${KERNEL_DIR}/include/io.h
   ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
   ${EXAMPLES_WASM_DIR}/chardev_server/chardev_server.c
   ${EXAMPLES_WASM_DIR}/chardev_client/chardev_client.c
+  ${DRIVER_WASM_DIR}/ata/ata.c
   ${DRIVER_WASM_DIR}/fs_fat/fs_fat.c
   ${EXAMPLES_WASM_DIR}/init/init.c
   ${EXAMPLES_WASM_DIR}/cli/cli.c
@@ -313,6 +311,9 @@ set(WASM_CHARDEV_CLIENT_SRC ${EXAMPLES_WASM_DIR}/chardev_client/chardev_client.c
 set(WASM_CHARDEV_CLIENT_WASM ${BUILD_DIR}/chardev_client.wasm)
 set(WASM_CHARDEV_CLIENT_BLOB ${BUILD_DIR}/chardev_client_blob.o)
 set(WASM_CHARDEV_CLIENT_APP ${BUILD_DIR}/chardev_client.wasmosapp)
+set(WASM_ATA_DRIVER_SRC ${DRIVER_WASM_DIR}/ata/ata.c)
+set(WASM_ATA_DRIVER_WASM ${BUILD_DIR}/ata.wasm)
+set(WASM_ATA_APP ${BUILD_DIR}/ata.wasmosapp)
 set(WASM_FAT_DRIVER_SRC ${DRIVER_WASM_DIR}/fs_fat/fs_fat.c)
 set(WASM_FAT_DRIVER_WASM ${BUILD_DIR}/fs_fat.wasm)
 set(WASM_FAT_APP ${BUILD_DIR}/fs_fat.wasmosapp)
@@ -392,6 +393,44 @@ add_custom_command(
   DEPENDS ${WASM_FAT_DRIVER_WASM} ${WASMOS_APP_PACKER}
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm FAT as WASMOS-APP"
+  VERBATIM
+)
+
+add_custom_command(
+  OUTPUT ${WASM_ATA_DRIVER_WASM}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -fno-builtin
+          -Wl,--no-entry -Wl,--strip-all
+          -Wl,-z,stack-size=4096
+          -Wl,--initial-memory=65536
+          -Wl,--max-memory=65536
+          -Wl,--allow-undefined
+          -Wl,--export=ata_step
+          -I${DRIVER_WASM_DIR}/include
+          ${WASM_ATA_DRIVER_SRC}
+          -o ${WASM_ATA_DRIVER_WASM}
+  DEPENDS ${WASM_ATA_DRIVER_SRC} ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Building wasm ATA driver module"
+  VERBATIM
+)
+
+add_custom_command(
+  OUTPUT ${WASM_ATA_APP}
+  COMMAND ${WASMOS_APP_PACKER}
+          ${WASM_ATA_DRIVER_WASM}
+          ${WASM_ATA_APP}
+          ata
+          ata_step
+          16
+          16
+          -
+          0
+          ipc.basic
+          0
+  DEPENDS ${WASM_ATA_DRIVER_WASM} ${WASMOS_APP_PACKER}
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Packing wasm ATA as WASMOS-APP"
   VERBATIM
 )
 add_custom_command(
@@ -531,6 +570,7 @@ add_custom_command(
 add_custom_target(wasm_driver_blobs DEPENDS
   ${WASM_CHARDEV_DRIVER_BLOB}
   ${WASM_CHARDEV_CLIENT_BLOB}
+  ${WASM_ATA_APP}
   ${WASM_INIT_APP}
   ${WASM_CLI_APP}
   ${WASM_FAT_APP}
@@ -675,7 +715,6 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory_service.c -o ${BUILD_DIR}/memory_service.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/irq.c -o ${BUILD_DIR}/irq.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager.c -o ${BUILD_DIR}/process_manager.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/block_ata.c -o ${BUILD_DIR}/block_ata.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_app.c -o ${BUILD_DIR}/wasmos_app.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_driver.c -o ${BUILD_DIR}/wasm_driver.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wamr_context.c -o ${BUILD_DIR}/wamr_context.o
@@ -702,6 +741,7 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/init.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/apps/ata.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/apps/fs_fat.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
@@ -722,6 +762,7 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/init.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/apps/ata.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/apps/fs_fat.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp

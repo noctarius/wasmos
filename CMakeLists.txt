@@ -827,7 +827,7 @@ if (WAMR_LINK)
   set(WAMR_BUILD_THREAD_MGR 0 CACHE BOOL "Disable WAMR thread mgr")
 
   set(WAMR_ROOT_DIR ${WAMR_DIR})
-  set(SHARED_PLATFORM_CONFIG ${CMAKE_SOURCE_DIR}/platform/wasmos/shared_platform.cmake)
+  set(SHARED_PLATFORM_CONFIG ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/shared_platform.cmake)
   include(${WAMR_ROOT_DIR}/build-scripts/runtime_lib.cmake)
 
   # runtime_lib.cmake configures required feature macros via add_definitions().
@@ -867,7 +867,7 @@ if (WAMR_LINK)
     ${WAMR_ROOT_DIR}/core/iwasm/interpreter
     ${WAMR_ROOT_DIR}/core/iwasm/libraries/libc-builtin
     ${WAMR_ROOT_DIR}/core/iwasm/include
-    ${CMAKE_SOURCE_DIR}/platform/wasmos
+    ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos
     ${WAMR_ROOT_DIR}/core/shared/platform/include
     ${WAMR_ROOT_DIR}/core/shared/mem-alloc
     ${WAMR_ROOT_DIR}/core/iwasm/common

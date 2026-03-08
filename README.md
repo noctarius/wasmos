@@ -167,7 +167,7 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes.
 - WAMR runtime init uses a fixed page pool and `wamr_context_bind` ties a context's regions to WAMR sizing.
 - WAMR runtime initialization is on-demand through the kernel wasm driver host layer and currently uses a kernel-owned static pool (2 MiB).
 - WAMR is enabled by default and links the WAMR runtime library unless `-DWAMR_LINK=OFF` is set.
-- `WAMR_LINK` builds the WAMR runtime with a minimal `wasmos` platform in `platform/wasmos/`.
+- `WAMR_LINK` builds the WAMR runtime with a minimal `wasmos` platform in `src/wasm-micro-runtime/platform/wasmos/`.
 - WAMR custom object builds propagate upstream runtime feature defines and compile third-party sources with `-Wno-error`.
 - `WAMR_DISABLE_APP_ENTRY=1` is set for the freestanding kernel profile.
 - The `wasmos` platform adapter includes WAMR's shared math implementation and provides freestanding libc/fortify shims (e.g. `__memcpy_chk`, `__memset_chk`).

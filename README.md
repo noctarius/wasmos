@@ -41,7 +41,7 @@ If it isn't present, download OVMF from edk2 and pass `-DOVMF_CODE=/path/to/OVMF
 ### AssemblyScript (optional)
 AssemblyScript can be used to write WASMOS drivers, services, and applications. Install AssemblyScript via npm and ensure `asc` is available in your PATH (for example via a global install or `npm link`):
 ```
-npm install assemblyscript
+npm install -g assemblyscript
 ```
 
 AssemblyScript builds are enabled by default (`AS_ENABLE=ON`). If `asc` is missing, configure will fail.

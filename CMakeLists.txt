@@ -330,6 +330,9 @@ set(WASM_INIT_APP ${BUILD_DIR}/sysinit.wasmosapp)
 set(WASM_CLI_APP_SRC ${EXAMPLES_WASM_DIR}/cli/cli.c)
 set(WASM_CLI_APP_WASM ${BUILD_DIR}/cli.wasm)
 set(WASM_CLI_APP ${BUILD_DIR}/cli.wasmosapp)
+set(WASM_HELLO_C_SRC ${EXAMPLES_WASM_DIR}/hello_c/hello_c.c)
+set(WASM_HELLO_C_WASM ${BUILD_DIR}/hello_c.wasm)
+set(WASM_HELLO_C_APP ${BUILD_DIR}/hello_c.wasmosapp)
 set(WASMOS_APP_PACKER ${BUILD_DIR}/make_wasmos_app)
 
 add_custom_command(
@@ -393,6 +396,7 @@ add_custom_command(
           fat_step
           16
           16
+          2
           block
           1
           ipc.basic
@@ -431,6 +435,7 @@ add_custom_command(
           ata_step
           16
           16
+          1
           -
           0
           ipc.basic
@@ -443,7 +448,7 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_CHARDEV_CLIENT_WASM}
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib
+  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
           -Wl,--no-entry -Wl,--strip-all
           -Wl,-z,stack-size=4096
           -Wl,--initial-memory=65536
@@ -498,6 +503,25 @@ add_custom_command(
 )
 
 add_custom_command(
+  OUTPUT ${WASM_HELLO_C_WASM}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib
+          -Wl,--no-entry -Wl,--strip-all
+          -Wl,-z,stack-size=4096
+          -Wl,--initial-memory=65536
+          -Wl,--max-memory=65536
+          -Wl,--allow-undefined
+          -Wl,--export=hello_c_step
+          -I${DRIVER_WASM_DIR}/include
+          ${WASM_HELLO_C_SRC}
+          -o ${WASM_HELLO_C_WASM}
+  DEPENDS ${WASM_HELLO_C_SRC} ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Building wasm hello-c module"
+  VERBATIM
+)
+
+add_custom_command(
   OUTPUT ${WASM_CHARDEV_CLIENT_BLOB}
   COMMAND ${OBJCOPY} --input-target=binary --output-target=elf64-x86-64
           --binary-architecture=i386:x86-64
@@ -526,6 +550,7 @@ add_custom_command(
           init_step
           16
           16
+          2
           proc
           1
           ipc.basic
@@ -545,6 +570,7 @@ add_custom_command(
           cli_step
           16
           16
+          4
           proc
           1
           ipc.basic
@@ -552,6 +578,26 @@ add_custom_command(
   DEPENDS ${WASM_CLI_APP_WASM} ${WASMOS_APP_PACKER}
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm CLI as WASMOS-APP"
+  VERBATIM
+)
+
+add_custom_command(
+  OUTPUT ${WASM_HELLO_C_APP}
+  COMMAND ${WASMOS_APP_PACKER}
+          ${WASM_HELLO_C_WASM}
+          ${WASM_HELLO_C_APP}
+          hello-c
+          hello_c_step
+          16
+          16
+          4
+          -
+          0
+          ipc.basic
+          0
+  DEPENDS ${WASM_HELLO_C_WASM} ${WASMOS_APP_PACKER}
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Packing wasm hello-c as WASMOS-APP"
   VERBATIM
 )
 
@@ -564,6 +610,7 @@ add_custom_command(
           chardev_client_step
           16
           16
+          4
           chardev
           1
           ipc.basic
@@ -580,6 +627,7 @@ add_custom_target(wasm_driver_blobs DEPENDS
   ${WASM_ATA_APP}
   ${WASM_INIT_APP}
   ${WASM_CLI_APP}
+  ${WASM_HELLO_C_APP}
   ${WASM_FAT_APP}
   ${WASM_CHARDEV_CLIENT_APP}
 )
@@ -620,6 +668,7 @@ if (AS_ENABLE)
             hello_step
             16
             16
+            4
             -
             0
             ipc.basic
@@ -789,6 +838,15 @@ endif ()
 add_dependencies(kernel wasm_driver_blobs)
 
 # QEMU helper
+if (AS_ENABLE)
+  set(AS_HELLO_COPY_CMD
+    COMMAND ${CMAKE_COMMAND} -E copy ${AS_HELLO_APP} ${BUILD_DIR}/esp/apps/hello_as.wasmosapp
+  )
+endif ()
+set(HELLO_C_COPY_CMD
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HELLO_C_APP} ${BUILD_DIR}/esp/apps/hello_c.wasmosapp
+)
+
 if (OVMF_VARS)
   add_custom_target(run-qemu
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
@@ -800,6 +858,8 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/apps/fs_fat.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
+    ${AS_HELLO_COPY_CMD}
+    ${HELLO_C_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
@@ -810,6 +870,9 @@ if (OVMF_VARS)
     COMMENT "Running in QEMU"
     VERBATIM
   )
+  if (AS_ENABLE)
+    add_dependencies(run-qemu assemblyscript_examples)
+  endif ()
   add_custom_target(run-qemu-test
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
@@ -820,6 +883,8 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/apps/fs_fat.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
+    ${AS_HELLO_COPY_CMD}
+    ${HELLO_C_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_halt_test.py
             --ovmf-code ${OVMF_CODE}
@@ -830,6 +895,9 @@ if (OVMF_VARS)
     COMMENT "Running QEMU halt test"
     VERBATIM
   )
+  if (AS_ENABLE)
+    add_dependencies(run-qemu-test assemblyscript_examples)
+  endif ()
 else ()
   add_custom_target(run-qemu
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
@@ -841,6 +909,8 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/apps/fs_fat.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
+    ${AS_HELLO_COPY_CMD}
+    ${HELLO_C_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
@@ -850,6 +920,9 @@ else ()
     COMMENT "Running in QEMU"
     VERBATIM
   )
+  if (AS_ENABLE)
+    add_dependencies(run-qemu assemblyscript_examples)
+  endif ()
   add_custom_target(run-qemu-test
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
@@ -860,6 +933,8 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/apps/fs_fat.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
+    ${AS_HELLO_COPY_CMD}
+    ${HELLO_C_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_halt_test.py
             --ovmf-code ${OVMF_CODE}
@@ -869,4 +944,7 @@ else ()
     COMMENT "Running QEMU halt test"
     VERBATIM
   )
+  if (AS_ENABLE)
+    add_dependencies(run-qemu-test assemblyscript_examples)
+  endif ()
 endif ()

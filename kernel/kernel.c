@@ -487,6 +487,42 @@ native_block_buffer_write(wasm_exec_env_t exec_env, int32_t phys, int32_t ptr, i
 }
 
 static int32_t
+native_fs_buffer_size(wasm_exec_env_t exec_env)
+{
+    (void)exec_env;
+    return (int32_t)process_manager_fs_buffer_size();
+}
+
+static int32_t
+native_fs_buffer_write(wasm_exec_env_t exec_env, int32_t ptr, int32_t len, int32_t offset)
+{
+    if (ptr < 0 || len <= 0 || offset < 0) {
+        return -1;
+    }
+    uint32_t max_len = process_manager_fs_buffer_size();
+    if ((uint32_t)offset + (uint32_t)len > max_len) {
+        return -1;
+    }
+
+    wasm_module_inst_t module_inst = get_module_inst(exec_env);
+    if (!module_inst) {
+        return -1;
+    }
+    if (!wasm_runtime_validate_app_addr(module_inst, (uint64_t)ptr, (uint64_t)len)) {
+        return -1;
+    }
+    const uint8_t *src = (const uint8_t *)wasm_runtime_addr_app_to_native(module_inst, (uint64_t)ptr);
+    if (!src) {
+        return -1;
+    }
+    uint8_t *dst = (uint8_t *)process_manager_fs_buffer();
+    for (int32_t i = 0; i < len; ++i) {
+        dst[offset + i] = src[i];
+    }
+    return 0;
+}
+
+static int32_t
 native_io_in8(wasm_exec_env_t exec_env, int32_t port)
 {
     (void)exec_env;
@@ -699,6 +735,8 @@ register_wasm_ipc_natives(void)
         { "block_buffer_phys", native_block_buffer_phys, "()i", 0 },
         { "block_buffer_copy", native_block_buffer_copy, "(iiii)i", 0 },
         { "block_buffer_write", native_block_buffer_write, "(iiii)i", 0 },
+        { "fs_buffer_size", native_fs_buffer_size, "()i", 0 },
+        { "fs_buffer_write", native_fs_buffer_write, "(iii)i", 0 },
         { "system_halt", native_system_halt, "()i", 0 },
         { "system_reboot", native_system_reboot, "()i", 0 },
         { "io_in8", native_io_in8, "(i)i", 0 },

@@ -5,7 +5,10 @@
 
 #define MAGIC "WASMOSAP"
 #define VERSION 1u
+#define FLAG_DRIVER (1u << 0)
+#define FLAG_SERVICE (1u << 1)
 #define FLAG_APP (1u << 2)
+#define FLAG_NEEDS_PRIV (1u << 3)
 
 #define MEM_HINT_STACK 1u
 #define MEM_HINT_HEAP 2u
@@ -51,8 +54,8 @@ static int parse_u32(const char *s, uint32_t *out) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 11) {
-        fprintf(stderr, "usage: %s <in.wasm> <out.wasmosapp> <name> <entry> <stack_pages> <heap_pages> <req_ep_name|- > <req_ep_rights> <cap_name|- > <cap_flags>\n", argv[0]);
+    if (argc != 12) {
+        fprintf(stderr, "usage: %s <in.wasm> <out.wasmosapp> <name> <entry> <stack_pages> <heap_pages> <flags> <req_ep_name|- > <req_ep_rights> <cap_name|- > <cap_flags>\n", argv[0]);
         return 1;
     }
 
@@ -60,18 +63,20 @@ int main(int argc, char **argv) {
     const char *out_path = argv[2];
     const char *name = argv[3];
     const char *entry = argv[4];
-    const char *req_ep_name = argv[7];
-    const char *cap_name = argv[9];
+    const char *req_ep_name = argv[8];
+    const char *cap_name = argv[10];
     uint32_t stack_pages = 0;
     uint32_t heap_pages = 0;
+    uint32_t flags = 0;
     uint32_t req_ep_rights = 0;
     uint32_t cap_flags = 0;
     if (parse_u32(argv[5], &stack_pages) != 0 || parse_u32(argv[6], &heap_pages) != 0) {
         fprintf(stderr, "invalid stack/heap page value\n");
         return 1;
     }
-    if (parse_u32(argv[8], &req_ep_rights) != 0 || parse_u32(argv[10], &cap_flags) != 0) {
-        fprintf(stderr, "invalid req_ep_rights/cap_flags value\n");
+    if (parse_u32(argv[7], &flags) != 0 ||
+        parse_u32(argv[9], &req_ep_rights) != 0 || parse_u32(argv[11], &cap_flags) != 0) {
+        fprintf(stderr, "invalid flags/req_ep_rights/cap_flags value\n");
         return 1;
     }
     int has_req_ep = !(req_ep_name[0] == '-' && req_ep_name[1] == '\0');
@@ -123,7 +128,7 @@ int main(int argc, char **argv) {
     memcpy(hdr.magic, MAGIC, 8);
     hdr.version = VERSION;
     hdr.header_size = sizeof(hdr);
-    hdr.flags = FLAG_APP;
+    hdr.flags = flags;
     hdr.name_len = (uint32_t)strlen(name);
     hdr.entry_len = (uint32_t)strlen(entry);
     hdr.wasm_size = (uint32_t)in_size;

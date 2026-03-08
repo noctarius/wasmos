@@ -57,6 +57,8 @@ cmake --build build --target assemblyscript_examples
 
 The sample uses `asc` with release/size settings and the `stub` runtime (no GC).
 
+There is also a minimal C-based example at `examples/wasm/hello_c/hello_c.c`, packed as `hello_c.wasmosapp`.
+
 ### WAMR scaffold
 - `libs/wasm/wamr_runtime.c` provides a thin wrapper over the WAMR C API.
 - Enable with `-DWAMR_ENABLE=ON` once you wire the WAMR library into the kernel link.
@@ -151,7 +153,7 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes.
 - The user-space `sysinit` module iterates boot modules (excluding itself) and spawns them via `proc`.
 - A minimal PIO ATA block driver runs as a WASMOS-APP service (`drivers/wasm/ata`), exposes a `block` IPC endpoint, and supports identify/read requests.
 - A FAT12/16/32 filesystem driver runs as a WASMOS-APP service, uses the block IPC endpoint, and exposes the `fs` IPC endpoint (now includes VFAT LFN support for `ls`, `cd`, and `cat`).
-- A minimal user-space `cli` WASMOS-APP is loaded as a boot module, reads input from serial, and supports `help`, `ps`, `ls`, and `cat` via small native helpers.
+- A minimal user-space `cli` WASMOS-APP is loaded as a boot module, reads input from serial, and supports `help`, `ps`, `ls`, `cat`, `cd`, and `exec` (loads WASMOS-APPs from disk; drivers/services are rejected).
 - IPC endpoint permissions are enforced by context-aware APIs (`ipc_send_from`, `ipc_recv_for`) for source-endpoint ownership and endpoint receive ownership.
 - The kernel now builds and embeds example WASM applications from `examples/wasm/` (including `chardev_client`).
 - Driver wasm link settings currently constrain module stack/linear memory for low-footprint instantiation in the freestanding runtime pool.

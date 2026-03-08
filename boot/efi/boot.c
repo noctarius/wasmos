@@ -192,6 +192,18 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         uefi_log(system, "[boot] preloaded module: \\\\apps\\\\chardev_client.wasmosapp\n");
     }
 
+    static CHAR16 cli_path[] = L"\\apps\\cli.wasmosapp";
+    void *cli_buf = 0;
+    UINTN cli_size = 0;
+    status = read_file_alloc(bs, root, cli_path, &cli_buf, &cli_size);
+    if (EFI_ERROR(status)) {
+        cli_buf = 0;
+        cli_size = 0;
+        uefi_log(system, "[boot] optional module not found: \\\\apps\\\\cli.wasmosapp\n");
+    } else {
+        uefi_log(system, "[boot] preloaded module: \\\\apps\\\\cli.wasmosapp\n");
+    }
+
     Elf64_Ehdr *ehdr = (Elf64_Ehdr *)kernel_buf;
     if (!elf_is_valid(ehdr)) {
         uefi_log(system, "[boot] Invalid ELF header\n");
@@ -265,8 +277,11 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
     if (app_buf && app_size > 0) {
         module_count++;
     }
+    if (cli_buf && cli_size > 0) {
+        module_count++;
+    }
     UINTN module_table_bytes = module_count * sizeof(boot_module_t);
-    UINTN module_data_bytes = init_size + app_size;
+    UINTN module_data_bytes = init_size + app_size + cli_size;
 
     void *mmap = 0;
     UINT64 boot_buf = 0;
@@ -350,6 +365,17 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
                 copy_cstr(mods[mod_index].name, sizeof(mods[mod_index].name), "apps/chardev_client.wasmosapp");
                 memcpy8(cursor, app_buf, app_size);
                 cursor += app_size;
+                mod_index++;
+            }
+
+            if (cli_buf && cli_size > 0) {
+                mods[mod_index].base = (UINT64)(UINTN)cursor;
+                mods[mod_index].size = cli_size;
+                mods[mod_index].type = BOOT_MODULE_TYPE_WASMOS_APP;
+                mods[mod_index].reserved = 0;
+                copy_cstr(mods[mod_index].name, sizeof(mods[mod_index].name), "apps/cli.wasmosapp");
+                memcpy8(cursor, cli_buf, cli_size);
+                cursor += cli_size;
                 mod_index++;
             }
 

@@ -93,6 +93,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - WAMR custom object builds propagate upstream runtime feature defines and compile third-party sources with `-Wno-error`.
 - `WAMR_DISABLE_APP_ENTRY=1` is set for the freestanding kernel profile.
 - The `wasmos` platform adapter includes WAMR's shared math implementation and provides freestanding libc/fortify shims (e.g. `__memcpy_chk`, `__memset_chk`).
+- The `wasmos` platform adapter now backs WAMR memory APIs (`os_mmap`/`os_mremap` and related allocators) with runtime allocator calls so module instantiation can map linear memory in freestanding mode.
 - Kernel primitives now include a minimal spinlock (`kernel/spinlock.c`) and IPC transport with per-endpoint queues (`kernel/ipc.c`).
 - Kernel primitives now include basic cooperative process management (`kernel/process.c`) with per-process memory-context binding.
 - Process lifecycle primitives now include `wait`, `kill`, and tracked `exit_status` via zombie processes until reaped.

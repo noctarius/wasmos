@@ -67,6 +67,7 @@ long labs(long n);
 void abort(void) __attribute__((noreturn));
 
 void *wasm_runtime_malloc(unsigned int size);
+void *wasm_runtime_realloc(void *ptr, unsigned int size);
 void wasm_runtime_free(void *ptr);
 
 /* Minimal math surface used by WAMR runtime codepaths. */

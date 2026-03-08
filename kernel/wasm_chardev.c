@@ -53,8 +53,8 @@ wasm_chardev_init(uint32_t owner_context_id)
     manifest.module_size = wasm_chardev_module_size();
     manifest.init_export = "chardev_init";
     manifest.dispatch_export = "chardev_ipc_dispatch";
-    manifest.stack_size = 16 * 1024;
-    manifest.heap_size = 16 * 1024;
+    manifest.stack_size = 64 * 1024;
+    manifest.heap_size = 64 * 1024;
 
     g_owner_context_id = owner_context_id;
     if (wasm_driver_start(&g_chardev_driver, &manifest, owner_context_id) != 0) {

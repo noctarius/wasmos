@@ -1099,7 +1099,7 @@ if (OVMF_VARS)
             WASMOS_OVMF_CODE=${OVMF_CODE}
             WASMOS_OVMF_VARS=${OVMF_VARS}
             WASMOS_ESP=${BUILD_DIR}/esp
-            python3 -m unittest tests/test_cli.py
+            python3 -m unittest discover -s tests
     DEPENDS bootloader kernel
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT \"Running QEMU CLI integration tests\"
@@ -1188,7 +1188,7 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E env
             WASMOS_OVMF_CODE=${OVMF_CODE}
             WASMOS_ESP=${BUILD_DIR}/esp
-            python3 -m unittest tests/test_cli.py
+            python3 -m unittest discover -s tests
     DEPENDS bootloader kernel
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT \"Running QEMU CLI integration tests\"

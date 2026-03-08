@@ -140,6 +140,15 @@ str_len(const char *s)
     return len;
 }
 
+static char
+to_upper(char c)
+{
+    if (c >= 'a' && c <= 'z') {
+        return (char)(c - ('a' - 'A'));
+    }
+    return c;
+}
+
 static void
 console_write(const char *s)
 {
@@ -381,7 +390,7 @@ fat_unpack_name(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char
                 out[pos] = '\0';
                 return;
             }
-            out[pos++] = c;
+            out[pos++] = to_upper(c);
             v >>= 8;
         }
     }
@@ -593,7 +602,7 @@ fat_handle_cat(void)
             }
             int match = 1;
             for (uint32_t k = 0; k <= pos; ++k) {
-                if (name[k] != g_target_name[k]) {
+                if (to_upper(name[k]) != to_upper(g_target_name[k])) {
                     match = 0;
                     break;
                 }

@@ -76,6 +76,15 @@ str_eq(const char *a, const char *b)
     return *a == '\0' && *b == '\0';
 }
 
+static char
+to_lower(char c)
+{
+    if (c >= 'A' && c <= 'Z') {
+        return (char)(c + ('a' - 'A'));
+    }
+    return c;
+}
+
 static void
 console_write(const char *s)
 {
@@ -164,11 +173,17 @@ cli_handle_line(void)
     if (g_line_len == 0) {
         return 0;
     }
-    if (str_eq(g_line, "help")) {
+    if (g_line_len == 4 &&
+        to_lower(g_line[0]) == 'h' &&
+        to_lower(g_line[1]) == 'e' &&
+        to_lower(g_line[2]) == 'l' &&
+        to_lower(g_line[3]) == 'p') {
         console_write("commands: help, ps, ls, cat <name>\n");
         return 0;
     }
-    if (str_eq(g_line, "ps")) {
+    if (g_line_len == 2 &&
+        to_lower(g_line[0]) == 'p' &&
+        to_lower(g_line[1]) == 's') {
         int32_t count = wasmos_proc_count();
         console_write_num("processes: ", count);
         for (int32_t i = 0; i < count; ++i) {
@@ -184,15 +199,17 @@ cli_handle_line(void)
         }
         return 0;
     }
-    if (str_eq(g_line, "ls")) {
+    if (g_line_len == 2 &&
+        to_lower(g_line[0]) == 'l' &&
+        to_lower(g_line[1]) == 's') {
         if (cli_send_fs(FS_IPC_LIST_ROOT_REQ, 0, 0, 0, 0) != 0) {
             console_write("ls failed\n");
             return 0;
         }
         return 1;
     }
-    if (g_line_len > 4 && g_line[0] == 'c' && g_line[1] == 'a' &&
-        g_line[2] == 't' && g_line[3] == ' ') {
+    if (g_line_len > 4 && to_lower(g_line[0]) == 'c' && to_lower(g_line[1]) == 'a' &&
+        to_lower(g_line[2]) == 't' && g_line[3] == ' ') {
         char *name = &g_line[4];
         uint32_t packed[4];
         cli_pack_name(name, packed);

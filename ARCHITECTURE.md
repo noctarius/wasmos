@@ -142,6 +142,7 @@ Remaining:
 - `process` primitive in `kernel/process.c` provides a small cooperative process table and scheduler.
 - `process_spawn` binds each process to a new memory context (`mm_context_create(pid)`), establishing per-process isolation boundaries.
 - Lifecycle primitives now include `process_wait`, `process_kill`, and `process_get_exit_status`.
+- WAMR native IPC imports use the `exec_env` calling convention to align with WAMR native argument marshalling.
 
 ## Process Model (Current Scaffold)
 - The scheduler is cooperative and tick-based (`process_schedule_once`), scanning for READY processes in round-robin order.

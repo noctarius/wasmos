@@ -11,6 +11,8 @@
 
 #include <stdint.h>
 
+typedef struct WASMExecEnv *wasm_exec_env_t;
+
 extern const uint8_t _binary_chardev_client_wasm_start[];
 extern const uint8_t _binary_chardev_client_wasm_end[];
 
@@ -99,10 +101,12 @@ current_process_context(uint32_t *out_context_id)
 }
 
 static int32_t
-native_ipc_create_endpoint(void)
+native_ipc_create_endpoint(wasm_exec_env_t exec_env)
 {
     uint32_t context_id = 0;
     uint32_t endpoint = IPC_ENDPOINT_NONE;
+
+    (void)exec_env;
 
     if (current_process_context(&context_id) != 0) {
         return -1;
@@ -114,7 +118,8 @@ native_ipc_create_endpoint(void)
 }
 
 static int32_t
-native_ipc_send(int32_t destination_endpoint,
+native_ipc_send(wasm_exec_env_t exec_env,
+                int32_t destination_endpoint,
                 int32_t source_endpoint,
                 int32_t type,
                 int32_t request_id,
@@ -123,6 +128,8 @@ native_ipc_send(int32_t destination_endpoint,
 {
     uint32_t context_id = 0;
     ipc_message_t req;
+
+    (void)exec_env;
 
     if (destination_endpoint < 0 || source_endpoint < 0) {
         return -1;
@@ -145,12 +152,14 @@ native_ipc_send(int32_t destination_endpoint,
 }
 
 static int32_t
-native_ipc_recv(int32_t endpoint)
+native_ipc_recv(wasm_exec_env_t exec_env, int32_t endpoint)
 {
     uint32_t context_id = 0;
     uint32_t pid = process_current_pid();
     wasm_ipc_last_slot_t *slot;
     int rc;
+
+    (void)exec_env;
 
     if (endpoint < 0 || current_process_context(&context_id) != 0) {
         return -1;
@@ -174,10 +183,12 @@ native_ipc_recv(int32_t endpoint)
 }
 
 static int32_t
-native_ipc_last_field(int32_t field)
+native_ipc_last_field(wasm_exec_env_t exec_env, int32_t field)
 {
     uint32_t pid = process_current_pid();
     wasm_ipc_last_slot_t *slot = wasm_ipc_slot_for_pid(pid);
+
+    (void)exec_env;
 
     if (!slot || !slot->valid) {
         return -1;

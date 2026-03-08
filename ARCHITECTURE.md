@@ -122,6 +122,59 @@ Isolation rules:
 7. Extend scheduling with priorities and IPC-aware budgeting.
 8. Add tracing hooks for IPC latency and queue pressure.
 
+## Roadmap (Step by Step)
+Each step includes a definition of done and a test plan to keep progress measurable.
+
+1. Boot Contract Freeze
+Scope: finalize `boot_info_t`, memory map handoff, and kernel entry contract.
+Definition of Done: `boot_info_t` versioning rules documented; loader and kernel agree on layout; no breaking changes without version bump.
+Tests: `cmake --build build --target bootloader` and `cmake --build build --target kernel` run; QEMU boot reaches `[kernel] kmain`.
+
+2. IPC Core API
+Scope: define IPC message schema, error codes, and permission rules.
+Definition of Done: IPC spec documented; kernel IPC implementation matches spec; invalid endpoints/permissions return defined errors.
+Tests: QEMU boot shows IPC smoke test (chardev roundtrip) success.
+
+3. Notification Objects
+Scope: add async notification mechanism separate from request/reply.
+Definition of Done: kernel delivers notifications without blocking; services can receive notifications while waiting on IPC.
+Tests: QEMU boot shows a driver or timer notification arriving while IPC waits.
+
+4. Shared Memory IPC
+Scope: shared memory mapping and synchronization for bulk payloads.
+Definition of Done: shared buffer lifetime rules documented; at least one driver/service uses shared memory for bulk transfer.
+Tests: QEMU boot runs a bulk transfer test that exercises shared memory path.
+
+5. Memory Service + Fault IPC
+Scope: user-space memory service and page-fault protocol.
+Definition of Done: faults are delivered to memory service; mappings are installed on demand; kernel remains policy-free.
+Tests: QEMU boot runs a process that triggers page faults and continues successfully.
+
+6. Process Manager
+Scope: WASMOS-APP loading, WAMR context creation, process lifecycle management.
+Definition of Done: PM loads a WASMOS-APP, resolves endpoints, starts entry export; lifecycle APIs (`spawn`, `wait`, `kill`) work.
+Tests: QEMU boot loads a WASMOS-APP via PM and exits cleanly with status.
+
+7. Init + Service Startup
+Scope: init reads config from EFI disk, starts PM, drivers, FAT32, CLI.
+Definition of Done: init loads config, spawns core services in order, registers names.
+Tests: QEMU boot shows init-driven startup and CLI prompt.
+
+8. Storage Stack
+Scope: virtio or SATA block driver + FAT32 filesystem service.
+Definition of Done: FAT32 mounts EFI disk via block driver; files can be opened and read via IPC.
+Tests: QEMU boot loads a config file from FAT32 and prints a known line.
+
+9. Hardware Discovery + Driver Manager
+Scope: `hw-discovery` publishes device inventory; `driver-manager` assigns drivers.
+Definition of Done: devices appear in discovery events; driver-manager starts and wires drivers based on events.
+Tests: QEMU boot shows discovery events and driver-manager spawn log.
+
+10. Privilege Separation + CPU Hardening
+Scope: ring-3 transition, NX, SMEP/SMAP where available.
+Definition of Done: user processes run unprivileged; kernel rejects forbidden memory access; NX enforced.
+Tests: QEMU boot runs a user app that attempts a prohibited access and receives a controlled fault.
+
 ## Kernel Architecture Guide
 This guide captures microkernel-informed design decisions and a stepwise plan for WASMOS. It is based on the general monolithic vs. microkernel overview in `monolithic-and-microkernel.txt`.
 

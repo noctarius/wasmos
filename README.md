@@ -83,6 +83,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - Init process responsibilities (root task bootstrap, config-driven startup) are outlined in `ARCHITECTURE.md`.
 - The driver framework (MMIO/PIO/DMA/IRQ access via capabilities) is defined in `ARCHITECTURE.md`.
 - Hardware discovery (`hw-discovery`) and driver lifecycle management (`driver-manager`) are defined in `ARCHITECTURE.md`.
+- The step-by-step roadmap with definition of done and tests is defined in `ARCHITECTURE.md`.
 - The bootloader logs basic status messages to the UEFI console and retries `ExitBootServices` on invalid parameters.
 - The bootloader copies the UEFI memory map into kernel-owned pages before exiting boot services.
 - PT_LOAD segments are loaded with page-aligned allocations (misaligned physical addresses are handled).

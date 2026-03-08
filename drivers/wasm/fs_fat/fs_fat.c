@@ -45,7 +45,10 @@ typedef enum {
 typedef enum {
     FAT_OP_NONE = 0,
     FAT_OP_LIST,
-    FAT_OP_CAT
+    FAT_OP_CAT,
+    FAT_OP_LIST_DIR,
+    FAT_OP_CAT_DIR,
+    FAT_OP_CHDIR
 } fat_op_t;
 
 typedef enum {
@@ -73,6 +76,11 @@ static uint32_t g_fat_size = 0;
 static uint32_t g_total_sectors = 0;
 static uint32_t g_root_dir_lba = 0;
 static uint32_t g_root_dir_sectors = 0;
+static uint32_t g_dir_lba = 0;
+static uint32_t g_dir_sectors = 0;
+static int32_t g_cwd_source = -1;
+static uint16_t g_cwd_cluster = 0;
+static uint8_t g_cwd_root = 1;
 
 static fat_op_t g_op = FAT_OP_NONE;
 static fat_cat_stage_t g_cat_stage = FAT_CAT_SCAN;
@@ -82,6 +90,7 @@ static uint32_t g_file_remaining = 0;
 static uint32_t g_file_lba = 0;
 static uint32_t g_file_sector = 0;
 static char g_target_name[16];
+static char g_dir_name[16];
 
 static int32_t g_waiting = 0;
 static uint32_t g_wait_lba = 0;
@@ -342,8 +351,12 @@ fat_ensure_ready(void)
 
     if (g_boot_phase == FAT_BOOT_WAIT) {
         int rc = fat_poll_block_read();
-        if (rc != 0) {
+        if (rc == WASMOS_WASM_STEP_BLOCKED) {
             return rc;
+        }
+        if (rc != 0) {
+            g_op = FAT_OP_NONE;
+            return -1;
         }
 
         uint16_t sig = (uint16_t)g_sector_buf[510] | ((uint16_t)g_sector_buf[511] << 8);
@@ -432,10 +445,129 @@ fat_emit_bytes(const uint8_t *data, uint32_t len)
     }
 }
 
+static int
+fat_name_eq(const char *a, const char *b)
+{
+    if (!a || !b) {
+        return 0;
+    }
+    uint32_t i = 0;
+    while (a[i] && b[i]) {
+        if (to_upper(a[i]) != to_upper(b[i])) {
+            return 0;
+        }
+        i++;
+    }
+    return a[i] == '\0' && b[i] == '\0';
+}
+
 static uint32_t
 fat_first_data_lba(void)
 {
     return g_root_dir_lba + g_root_dir_sectors;
+}
+
+static uint32_t
+fat_lba_for_cluster(uint16_t cluster)
+{
+    if (cluster < 2) {
+        return 0;
+    }
+    return fat_first_data_lba() + (uint32_t)(cluster - 2) * g_sectors_per_cluster;
+}
+
+static int
+fat_handle_chdir(void)
+{
+    if (g_root_entry_count == 0 || g_root_dir_sectors == 0) {
+        return -1;
+    }
+
+    if (g_op == FAT_OP_NONE) {
+        g_op = FAT_OP_CHDIR;
+        g_op_sector = 0;
+        g_op_entries_left = g_root_entry_count;
+        if (fat_send_block_read(g_root_dir_lba, 1) != 0) {
+            g_op = FAT_OP_NONE;
+            return -1;
+        }
+        return WASMOS_WASM_STEP_BLOCKED;
+    }
+
+    if (g_op != FAT_OP_CHDIR) {
+        return -1;
+    }
+
+    int rc = fat_poll_block_read();
+    if (rc == WASMOS_WASM_STEP_BLOCKED) {
+        return rc;
+    }
+    if (rc != 0) {
+        g_op = FAT_OP_NONE;
+        return -1;
+    }
+
+    uint32_t entries_per_sector = g_bytes_per_sector / 32u;
+    uint32_t entries_total = entries_per_sector;
+    if (g_op_entries_left < entries_total) {
+        entries_total = g_op_entries_left;
+    }
+
+    for (uint32_t i = 0; i < entries_total; ++i) {
+        uint8_t *ent = g_sector_buf + i * 32u;
+        if (ent[0] == 0x00) {
+            g_op = FAT_OP_NONE;
+            return -1;
+        }
+        if (ent[0] == 0xE5) {
+            continue;
+        }
+        if ((ent[11] & 0x0F) == 0x0F) {
+            continue;
+        }
+        if (!(ent[11] & 0x10)) {
+            continue;
+        }
+        char entry[13];
+        uint32_t pos = 0;
+        for (int j = 0; j < 8; ++j) {
+            if (ent[j] != ' ') {
+                entry[pos++] = (char)ent[j];
+            }
+        }
+        entry[pos] = '\0';
+        if (!fat_name_eq(entry, g_dir_name)) {
+            continue;
+        }
+        uint16_t cluster = (uint16_t)ent[26] | ((uint16_t)ent[27] << 8);
+        if (cluster < 2) {
+            g_op = FAT_OP_NONE;
+            return -1;
+        }
+        g_cwd_cluster = cluster;
+        g_dir_lba = fat_lba_for_cluster(cluster);
+        g_dir_sectors = g_sectors_per_cluster;
+        g_cwd_root = 0;
+        g_cwd_source = g_fs_req.source;
+        g_op = FAT_OP_NONE;
+        return 0;
+    }
+
+    if (g_op_entries_left <= entries_total) {
+        g_op = FAT_OP_NONE;
+        return -1;
+    }
+    g_op_entries_left -= entries_total;
+    g_op_sector++;
+    if (g_op_sector >= g_root_dir_sectors) {
+        g_op = FAT_OP_NONE;
+        return -1;
+    }
+    if (fat_send_block_read(g_root_dir_lba + g_op_sector, 1) != 0) {
+        g_op = FAT_OP_NONE;
+        return -1;
+    }
+    return WASMOS_WASM_STEP_BLOCKED;
 }
 
 static int
@@ -445,12 +577,18 @@ fat_handle_list(void)
         fat_log("root listing unsupported\n");
         return -1;
     }
+    if (!g_cwd_root && g_dir_lba == 0) {
+        fat_log("cwd invalid\n");
+        return -1;
+    }
 
     if (g_op == FAT_OP_NONE) {
-        g_op = FAT_OP_LIST;
+        g_op = g_cwd_root ? FAT_OP_LIST : FAT_OP_LIST_DIR;
         g_op_sector = 0;
-        g_op_entries_left = g_root_entry_count;
-        if (fat_send_block_read(g_root_dir_lba, 1) != 0) {
+        g_op_entries_left = g_cwd_root ? g_root_entry_count :
+                           (g_dir_sectors * g_bytes_per_sector) / 32u;
+        uint32_t start_lba = g_cwd_root ? g_root_dir_lba : g_dir_lba;
+        if (fat_send_block_read(start_lba, 1) != 0) {
             fat_log("root read send failed\n");
             g_op = FAT_OP_NONE;
             return -1;
@@ -458,13 +596,17 @@ fat_handle_list(void)
         return WASMOS_WASM_STEP_BLOCKED;
     }
 
-    if (g_op != FAT_OP_LIST) {
+    if (g_op != FAT_OP_LIST && g_op != FAT_OP_LIST_DIR) {
         return -1;
     }
 
     int rc = fat_poll_block_read();
-    if (rc != 0) {
+    if (rc == WASMOS_WASM_STEP_BLOCKED) {
         return rc;
+    }
+    if (rc != 0) {
+        g_op = FAT_OP_NONE;
+        return -1;
     }
 
     uint32_t entries_per_sector = g_bytes_per_sector / 32u;
@@ -480,6 +622,9 @@ fat_handle_list(void)
             return 0;
         }
         if (ent[0] == 0xE5) {
+            continue;
+        }
+        if ((ent[11] & 0x0F) == 0x0F) {
             continue;
         }
         if (ent[11] & 0x08) {
@@ -520,11 +665,13 @@ fat_handle_list(void)
 
     g_op_entries_left -= entries_total;
     g_op_sector++;
-    if (g_op_sector >= g_root_dir_sectors) {
+    uint32_t limit = g_cwd_root ? g_root_dir_sectors : g_dir_sectors;
+    if (g_op_sector >= limit) {
         g_op = FAT_OP_NONE;
         return 0;
     }
-    if (fat_send_block_read(g_root_dir_lba + g_op_sector, 1) != 0) {
+    uint32_t base = g_cwd_root ? g_root_dir_lba : g_dir_lba;
+    if (fat_send_block_read(base + g_op_sector, 1) != 0) {
         fat_log("root read send failed\n");
         g_op = FAT_OP_NONE;
         return -1;
@@ -538,13 +685,18 @@ fat_handle_cat(void)
     if (g_root_entry_count == 0 || g_root_dir_sectors == 0) {
         return -1;
     }
+    if (!g_cwd_root && g_dir_lba == 0) {
+        return -1;
+    }
 
     if (g_op == FAT_OP_NONE) {
-        g_op = FAT_OP_CAT;
+        g_op = g_cwd_root ? FAT_OP_CAT : FAT_OP_CAT_DIR;
         g_cat_stage = FAT_CAT_SCAN;
         g_op_sector = 0;
-        g_op_entries_left = g_root_entry_count;
-        if (fat_send_block_read(g_root_dir_lba, 1) != 0) {
+        g_op_entries_left = g_cwd_root ? g_root_entry_count :
+                           (g_dir_sectors * g_bytes_per_sector) / 32u;
+        uint32_t start_lba = g_cwd_root ? g_root_dir_lba : g_dir_lba;
+        if (fat_send_block_read(start_lba, 1) != 0) {
             fat_log("root read send failed\n");
             g_op = FAT_OP_NONE;
             return -1;
@@ -552,13 +704,17 @@ fat_handle_cat(void)
         return WASMOS_WASM_STEP_BLOCKED;
     }
 
-    if (g_op != FAT_OP_CAT) {
+    if (g_op != FAT_OP_CAT && g_op != FAT_OP_CAT_DIR) {
         return -1;
     }
 
     int rc = fat_poll_block_read();
-    if (rc != 0) {
+    if (rc == WASMOS_WASM_STEP_BLOCKED) {
         return rc;
+    }
+    if (rc != 0) {
+        g_op = FAT_OP_NONE;
+        return -1;
     }
 
     if (g_cat_stage == FAT_CAT_SCAN) {
@@ -575,6 +731,9 @@ fat_handle_cat(void)
                 return -1;
             }
             if (ent[0] == 0xE5) {
+                continue;
+            }
+            if ((ent[11] & 0x0F) == 0x0F) {
                 continue;
             }
             if (ent[11] & 0x08) {
@@ -611,6 +770,9 @@ fat_handle_cat(void)
                 continue;
             }
 
+            if (ent[11] & 0x10) {
+                continue;
+            }
             uint16_t first_cluster = (uint16_t)ent[26] | ((uint16_t)ent[27] << 8);
             if (first_cluster < 2) {
                 g_op = FAT_OP_NONE;
@@ -620,8 +782,7 @@ fat_handle_cat(void)
                                  ((uint32_t)ent[29] << 8) |
                                  ((uint32_t)ent[30] << 16) |
                                  ((uint32_t)ent[31] << 24);
-            g_file_lba = fat_first_data_lba() +
-                         (uint32_t)(first_cluster - 2) * g_sectors_per_cluster;
+            g_file_lba = fat_lba_for_cluster(first_cluster);
             g_file_remaining = file_size;
             g_file_sector = 0;
             g_cat_stage = FAT_CAT_FILE;
@@ -640,11 +801,13 @@ fat_handle_cat(void)
 
         g_op_entries_left -= entries_total;
         g_op_sector++;
-        if (g_op_sector >= g_root_dir_sectors) {
+        uint32_t limit = g_cwd_root ? g_root_dir_sectors : g_dir_sectors;
+        if (g_op_sector >= limit) {
             g_op = FAT_OP_NONE;
             return -1;
         }
-        if (fat_send_block_read(g_root_dir_lba + g_op_sector, 1) != 0) {
+        uint32_t base = g_cwd_root ? g_root_dir_lba : g_dir_lba;
+        if (fat_send_block_read(base + g_op_sector, 1) != 0) {
             fat_log("root read send failed\n");
             g_op = FAT_OP_NONE;
             return -1;
@@ -697,6 +860,9 @@ fat_ipc_dispatch(int32_t type,
     }
 
     if (type == FS_IPC_LIST_ROOT_REQ) {
+        if (g_fs_req.source != g_cwd_source) {
+            g_cwd_root = 1;
+        }
         return fat_handle_list();
     }
     if (type == FS_IPC_CAT_ROOT_REQ) {
@@ -704,7 +870,27 @@ fat_ipc_dispatch(int32_t type,
             fat_unpack_name((uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3,
                             g_target_name, sizeof(g_target_name));
         }
+        if (g_fs_req.source != g_cwd_source) {
+            g_cwd_root = 1;
+        }
         return fat_handle_cat();
+    }
+    if (type == FS_IPC_CHDIR_REQ) {
+        if (g_op != FAT_OP_NONE && g_op != FAT_OP_CHDIR) {
+            return -1;
+        }
+        if (g_op == FAT_OP_NONE) {
+            fat_unpack_name((uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3,
+                            g_dir_name, sizeof(g_dir_name));
+            if (g_dir_name[0] == '\0' || (g_dir_name[0] == '/' && g_dir_name[1] == '\0') ||
+                (g_dir_name[0] == '.' && g_dir_name[1] == '\0') ||
+                (g_dir_name[0] == '.' && g_dir_name[1] == '.' && g_dir_name[2] == '\0')) {
+                g_cwd_root = 1;
+                g_cwd_source = g_fs_req.source;
+                return 0;
+            }
+        }
+        return fat_handle_chdir();
     }
 
     return -1;
@@ -750,6 +936,11 @@ fat_step(int32_t ignored_type,
         g_op = FAT_OP_NONE;
         g_waiting = 0;
         g_fs_req.in_use = 0;
+        g_cwd_root = 1;
+        g_cwd_source = -1;
+        g_cwd_cluster = 0;
+        g_dir_lba = 0;
+        g_dir_sectors = 0;
         return WASMOS_WASM_STEP_YIELDED;
     }
 

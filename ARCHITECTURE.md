@@ -607,11 +607,11 @@ Required commands:
 - `cat <path>` — print file contents.
 - `ps` — list processes via `proc`.
 - `help` — list built-in commands.
+- `cd <path>` — change working directory (root or a single subdirectory).
 - `halt` — request system shutdown via ACPI poweroff.
 - `reboot` — request system reboot via ACPI reset.
 
 Planned:
-- `cd <path>` — change working directory (client-side state).
 - `exec <path>` — load a WASMOS-APP from `fs` and ask `proc` to spawn it.
 - `echo <args...>` — print arguments to console.
 

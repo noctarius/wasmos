@@ -303,7 +303,7 @@ add_custom_target(kernel_ide SOURCES
   ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
   ${EXAMPLES_WASM_DIR}/chardev_server/chardev_server.c
   ${EXAMPLES_WASM_DIR}/chardev_client/chardev_client.c
-  ${EXAMPLES_WASM_DIR}/fs_fat/fs_fat.c
+  ${DRIVER_WASM_DIR}/fs_fat/fs_fat.c
   ${EXAMPLES_WASM_DIR}/init/init.c
   ${EXAMPLES_WASM_DIR}/cli/cli.c
   ${WASM_DIR}/wamr_runtime.h
@@ -316,7 +316,7 @@ set(WASM_CHARDEV_CLIENT_SRC ${EXAMPLES_WASM_DIR}/chardev_client/chardev_client.c
 set(WASM_CHARDEV_CLIENT_WASM ${BUILD_DIR}/chardev_client.wasm)
 set(WASM_CHARDEV_CLIENT_BLOB ${BUILD_DIR}/chardev_client_blob.o)
 set(WASM_CHARDEV_CLIENT_APP ${BUILD_DIR}/chardev_client.wasmosapp)
-set(WASM_FAT_DRIVER_SRC ${EXAMPLES_WASM_DIR}/fs_fat/fs_fat.c)
+set(WASM_FAT_DRIVER_SRC ${DRIVER_WASM_DIR}/fs_fat/fs_fat.c)
 set(WASM_FAT_DRIVER_WASM ${BUILD_DIR}/fs_fat.wasm)
 set(WASM_FAT_DRIVER_BLOB ${BUILD_DIR}/fs_fat_blob.o)
 set(WASM_INIT_APP_SRC ${EXAMPLES_WASM_DIR}/init/init.c)

@@ -43,7 +43,7 @@ User-space responsibilities:
 
 ### IPC Design Direction
 These principles are derived from the IPC notes in this document.
-- Request-reply semantics by default for kernel-bound calls.
+- Request-reply semantics by default for kernel-bound calls; blocking IPC provides implicit synchronization.
 - One-way notifications for events and signals, separate from request/reply IPC.
 - Nonblocking IPC variants (polling send/recv) for latency-sensitive or re-entrant paths.
 - Send permissions via explicit allowlists (capability-like send masks) and per-endpoint badges.
@@ -51,6 +51,7 @@ These principles are derived from the IPC notes in this document.
 - Shared-memory fast paths for bulk data with explicit buffer ownership rules and message-based synchronization.
 - Unified notification path for asynchronous events to avoid deadlocks.
 - Build higher-level IPC services over the core message-passing primitive.
+- Support a bound-notification model so threads can receive signals while waiting on IPC.
 
 ### Memory Model Direction
 - Keep kernel mechanisms small; delegate policies to services.

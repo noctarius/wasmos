@@ -109,3 +109,4 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - The chardev service path uses permission-aware IPC send/receive calls tied to its owner context.
 - The chardev module export contract is `chardev_init` and `chardev_ipc_dispatch` (with optional direct `chardev_read_byte`/`chardev_write_byte` exports).
 - Chardev IPC protocol uses request/response message types for byte read/write (`WASM_CHARDEV_IPC_*` in `drivers/wasm/include/wasmos_driver_abi.h`).
+- WAMR native IPC imports now follow the WAMR `exec_env` calling convention for correct argument marshalling.

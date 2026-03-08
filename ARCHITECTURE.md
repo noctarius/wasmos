@@ -362,6 +362,28 @@ Design takeaways:
 - The wasm chardev module also exports `chardev_init` and optional direct byte helpers (`chardev_read_byte`, `chardev_write_byte`).
 - The wasm chardev test-client module exports `chardev_client_step` and consumes imported IPC APIs (`ipc_create_endpoint`, `ipc_send`, `ipc_recv`, `ipc_last_field`) from native module `wasmos`.
 
+## Driver Framework (Planned)
+Drivers are privileged by default but remain isolated WASM processes with explicit
+hardware access grants.
+
+Hardware access model:
+- MMIO: drivers request mapping of device BARs into their address space.
+- Port I/O: drivers request controlled access to specific I/O ports.
+- DMA: drivers request DMA-capable memory regions and IOMMU mappings if available.
+- IRQs: drivers register for interrupts and receive async notifications via IPC.
+
+Access control:
+- The kernel exposes minimal mechanisms: map/unmap, port access, IRQ registration.
+- A resource manager (or init/PM in early boot) grants capabilities to drivers.
+- System services request privileged operations via driver IPC, not by direct hardware access.
+
+Driver IPC shape:
+- Each driver exports a stable endpoint (e.g., `block`, `net`, `gpio`).
+- Requests are small control messages; bulk data uses shared memory plus notification.
+
+Early boot:
+- `init` (or a dedicated resource manager) enumerates devices (ACPI/PCI) and assigns
+  BARs/IRQs to the appropriate driver processes.
 ## Drivers & Services (Planned)
 This list defines the next baseline drivers and services, their role, and IPC expectations.
 

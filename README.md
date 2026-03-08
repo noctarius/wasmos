@@ -73,6 +73,8 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - Inter-component communication is IPC-based.
 - The bootloader loads `kernel.elf` from the EFI System Partition (ESP).
 - The Kernel Architecture Guide in `ARCHITECTURE.md` outlines microkernel design decisions and the stepwise roadmap.
+- The Bootloader & Kernel Architecture rework section in `ARCHITECTURE.md` is the current design baseline.
+- IPC guidance now incorporates seL4/QNX-style separation of synchronous IPC and asynchronous notifications.
 - The bootloader logs basic status messages to the UEFI console and retries `ExitBootServices` on invalid parameters.
 - The bootloader copies the UEFI memory map into kernel-owned pages before exiting boot services.
 - PT_LOAD segments are loaded with page-aligned allocations (misaligned physical addresses are handled).
@@ -111,3 +113,4 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - The chardev module export contract is `chardev_init` and `chardev_ipc_dispatch` (with optional direct `chardev_read_byte`/`chardev_write_byte` exports).
 - Chardev IPC protocol uses request/response message types for byte read/write (`WASM_CHARDEV_IPC_*` in `drivers/wasm/include/wasmos_driver_abi.h`).
 - WAMR native IPC imports now follow the WAMR `exec_env` calling convention for correct argument marshalling.
+- IPC best-practice notes and improvement targets (from Herder’s MINIX thesis and Aigner’s microkernel communication work) are tracked in `ARCHITECTURE.md`.

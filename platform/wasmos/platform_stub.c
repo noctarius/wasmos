@@ -205,19 +205,34 @@ void abort(void) {
     }
 }
 
+static unsigned clamp_size_to_uint(size_t size) {
+    if (size == 0 || size > (size_t)UINT_MAX) {
+        return 0;
+    }
+    return (unsigned)size;
+}
+
 void *os_malloc(unsigned size) {
-    (void)size;
-    return NULL;
+    if (size == 0) {
+        return NULL;
+    }
+    return wasm_runtime_malloc(size);
 }
 
 void *os_realloc(void *ptr, unsigned size) {
-    (void)ptr;
-    (void)size;
-    return NULL;
+    if (size == 0) {
+        if (ptr) {
+            wasm_runtime_free(ptr);
+        }
+        return NULL;
+    }
+    return wasm_runtime_realloc(ptr, size);
 }
 
 void os_free(void *ptr) {
-    (void)ptr;
+    if (ptr) {
+        wasm_runtime_free(ptr);
+    }
 }
 
 int os_printf(const char *format, ...) {
@@ -286,16 +301,21 @@ int os_mutex_unlock(korp_mutex *mutex) {
 
 void *os_mmap(void *hint, size_t size, int prot, int flags, os_file_handle file) {
     (void)hint;
-    (void)size;
     (void)prot;
     (void)flags;
     (void)file;
-    return NULL;
+    unsigned alloc_size = clamp_size_to_uint(size);
+    if (alloc_size == 0) {
+        return NULL;
+    }
+    return wasm_runtime_malloc(alloc_size);
 }
 
 void os_munmap(void *addr, size_t size) {
-    (void)addr;
     (void)size;
+    if (addr) {
+        wasm_runtime_free(addr);
+    }
 }
 
 int os_mprotect(void *addr, size_t size, int prot) {
@@ -306,10 +326,16 @@ int os_mprotect(void *addr, size_t size, int prot) {
 }
 
 void *os_mremap(void *old_addr, size_t old_size, size_t new_size) {
-    (void)old_addr;
     (void)old_size;
-    (void)new_size;
-    return NULL;
+    if (!old_addr) {
+        return os_mmap(NULL, new_size, MMAP_PROT_READ | MMAP_PROT_WRITE,
+                       MMAP_MAP_NONE, os_get_invalid_handle());
+    }
+    unsigned alloc_size = clamp_size_to_uint(new_size);
+    if (alloc_size == 0) {
+        return NULL;
+    }
+    return wasm_runtime_realloc(old_addr, alloc_size);
 }
 
 void os_dcache_flush(void) {

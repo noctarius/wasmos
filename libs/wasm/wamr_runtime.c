@@ -38,6 +38,9 @@ int wamr_load_module(const uint8_t *buf, uint32_t size,
         return 0;
     }
 
+    if (error_buf && error_buf_size > 0) {
+        error_buf[0] = '\0';
+    }
     wasm_module_t module = wasm_runtime_load((uint8_t *)buf, size,
                                              error_buf, error_buf_size);
     if (!module) {
@@ -57,6 +60,9 @@ int wamr_instantiate_module(wamr_module_t *module,
         return 0;
     }
 
+    if (error_buf && error_buf_size > 0) {
+        error_buf[0] = '\0';
+    }
     uint32_t stack = stack_size ? stack_size : WAMR_DEFAULT_STACK_SIZE;
     uint32_t heap = heap_size ? heap_size : WAMR_DEFAULT_HEAP_SIZE;
 

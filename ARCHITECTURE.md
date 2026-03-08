@@ -122,6 +122,7 @@ Remaining:
 - The custom WAMR object build path forwards upstream runtime feature defines and disables `-Werror` for third-party WAMR sources.
 - Freestanding builds set `WAMR_DISABLE_APP_ENTRY=1` and link the generated `libwamr_runtime.a` into the kernel.
 - The `wasmos` platform adapter includes WAMR shared math sources and minimal libc/fortify shims required by freestanding linkage.
+- The `wasmos` platform adapter now provides runtime-backed `os_mmap`/`os_mremap` allocation behavior required for interpreter linear-memory mapping during module instantiation.
 
 ## IPC Model
 - IPC is the default communication mechanism between WASM drivers, services, and applications.

@@ -1,15 +1,37 @@
 #include "boot.h"
 #include "cpu.h"
-#include "memory.h"
-#include "serial.h"
-#include <stdint.h>
 #include "ipc.h"
+#include "memory.h"
 #include "process.h"
+#include "serial.h"
 #include "wamr_context.h"
 #include "wamr_runtime.h"
 #include "wasm_chardev.h"
+#include "wasm_driver.h"
 
-static void serial_write_hex64(uint64_t value) {
+#include <stdint.h>
+
+extern const uint8_t _binary_chardev_client_wasm_start[];
+extern const uint8_t _binary_chardev_client_wasm_end[];
+
+typedef struct {
+    uint32_t pid;
+    uint8_t valid;
+    ipc_message_t message;
+} wasm_ipc_last_slot_t;
+
+typedef struct {
+    uint32_t chardev_endpoint;
+    uint8_t started;
+    wasm_driver_t driver;
+} chardev_wasm_client_state_t;
+
+static wasm_ipc_last_slot_t g_wasm_last_slots[PROCESS_MAX_COUNT];
+static chardev_wasm_client_state_t g_chardev_wasm_client;
+
+static void
+serial_write_hex64(uint64_t value)
+{
     char buf[21];
     static const char hex[] = "0123456789ABCDEF";
     buf[0] = '0';
@@ -22,24 +44,186 @@ static void serial_write_hex64(uint64_t value) {
     serial_write(buf);
 }
 
-typedef enum {
-    CHARDEV_TEST_PHASE_INIT = 0,
-    CHARDEV_TEST_PHASE_WAIT_WRITE,
-    CHARDEV_TEST_PHASE_WAIT_READ
-} chardev_test_phase_t;
+static uint32_t
+wasm_blob_size(const uint8_t *start, const uint8_t *end)
+{
+    return (uint32_t)((uintptr_t)end - (uintptr_t)start);
+}
 
-typedef struct {
-    uint32_t chardev_endpoint;
-    uint32_t reply_endpoint;
-    uint32_t write_request_id;
-    uint32_t read_request_id;
-    uint8_t write_value;
-    chardev_test_phase_t phase;
-} chardev_test_client_state_t;
+static void
+wasm_ipc_slots_init(void)
+{
+    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        g_wasm_last_slots[i].pid = 0;
+        g_wasm_last_slots[i].valid = 0;
+    }
+}
 
-static chardev_test_client_state_t g_chardev_test_client;
+static wasm_ipc_last_slot_t *
+wasm_ipc_slot_for_pid(uint32_t pid)
+{
+    wasm_ipc_last_slot_t *empty = 0;
 
-static process_run_result_t chardev_server_entry(process_t *process, void *arg) {
+    if (pid == 0) {
+        return 0;
+    }
+
+    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        if (g_wasm_last_slots[i].pid == pid) {
+            return &g_wasm_last_slots[i];
+        }
+        if (!empty && g_wasm_last_slots[i].pid == 0) {
+            empty = &g_wasm_last_slots[i];
+        }
+    }
+
+    if (empty) {
+        empty->pid = pid;
+        empty->valid = 0;
+    }
+    return empty;
+}
+
+static int
+current_process_context(uint32_t *out_context_id)
+{
+    uint32_t pid = process_current_pid();
+    process_t *proc = process_get(pid);
+
+    if (!proc || !out_context_id) {
+        return -1;
+    }
+
+    *out_context_id = proc->context_id;
+    return 0;
+}
+
+static int32_t
+native_ipc_create_endpoint(void)
+{
+    uint32_t context_id = 0;
+    uint32_t endpoint = IPC_ENDPOINT_NONE;
+
+    if (current_process_context(&context_id) != 0) {
+        return -1;
+    }
+    if (ipc_endpoint_create(context_id, &endpoint) != 0) {
+        return -1;
+    }
+    return (int32_t)endpoint;
+}
+
+static int32_t
+native_ipc_send(int32_t destination_endpoint,
+                int32_t source_endpoint,
+                int32_t type,
+                int32_t request_id,
+                int32_t arg0,
+                int32_t arg1)
+{
+    uint32_t context_id = 0;
+    ipc_message_t req;
+
+    if (destination_endpoint < 0 || source_endpoint < 0) {
+        return -1;
+    }
+
+    if (current_process_context(&context_id) != 0) {
+        return -1;
+    }
+
+    req.type = (uint32_t)type;
+    req.source = (uint32_t)source_endpoint;
+    req.destination = (uint32_t)destination_endpoint;
+    req.request_id = (uint32_t)request_id;
+    req.arg0 = (uint32_t)arg0;
+    req.arg1 = (uint32_t)arg1;
+    req.arg2 = 0;
+    req.arg3 = 0;
+
+    return ipc_send_from(context_id, (uint32_t)destination_endpoint, &req);
+}
+
+static int32_t
+native_ipc_recv(int32_t endpoint)
+{
+    uint32_t context_id = 0;
+    uint32_t pid = process_current_pid();
+    wasm_ipc_last_slot_t *slot;
+    int rc;
+
+    if (endpoint < 0 || current_process_context(&context_id) != 0) {
+        return -1;
+    }
+
+    slot = wasm_ipc_slot_for_pid(pid);
+    if (!slot) {
+        return -1;
+    }
+
+    rc = ipc_recv_for(context_id, (uint32_t)endpoint, &slot->message);
+    if (rc == 1) {
+        return 0;
+    }
+    if (rc != 0) {
+        return -1;
+    }
+
+    slot->valid = 1;
+    return 1;
+}
+
+static int32_t
+native_ipc_last_field(int32_t field)
+{
+    uint32_t pid = process_current_pid();
+    wasm_ipc_last_slot_t *slot = wasm_ipc_slot_for_pid(pid);
+
+    if (!slot || !slot->valid) {
+        return -1;
+    }
+
+    switch ((uint32_t)field) {
+        case WASMOS_IPC_FIELD_TYPE:
+            return (int32_t)slot->message.type;
+        case WASMOS_IPC_FIELD_REQUEST_ID:
+            return (int32_t)slot->message.request_id;
+        case WASMOS_IPC_FIELD_ARG0:
+            return (int32_t)slot->message.arg0;
+        case WASMOS_IPC_FIELD_ARG1:
+            return (int32_t)slot->message.arg1;
+        case WASMOS_IPC_FIELD_SOURCE:
+            return (int32_t)slot->message.source;
+        case WASMOS_IPC_FIELD_DESTINATION:
+            return (int32_t)slot->message.destination;
+        default:
+            return -1;
+    }
+}
+
+static int
+register_wasm_ipc_natives(void)
+{
+    static const wamr_native_symbol_t symbols[] = {
+        { "ipc_create_endpoint", native_ipc_create_endpoint, "()i", 0 },
+        { "ipc_send", native_ipc_send, "(iiiiii)i", 0 },
+        { "ipc_recv", native_ipc_recv, "(i)i", 0 },
+        { "ipc_last_field", native_ipc_last_field, "(i)i", 0 },
+    };
+
+    if (!wamr_register_natives("wasmos", symbols,
+                               (uint32_t)(sizeof(symbols) / sizeof(symbols[0])))) {
+        serial_write("[kernel] wasm native registration failed\n");
+        return -1;
+    }
+
+    serial_write("[kernel] wasm native registration ok\n");
+    return 0;
+}
+
+static process_run_result_t
+chardev_server_entry(process_t *process, void *arg)
+{
     (void)process;
     (void)arg;
 
@@ -54,91 +238,72 @@ static process_run_result_t chardev_server_entry(process_t *process, void *arg) 
     return PROCESS_RUN_IDLE;
 }
 
-static process_run_result_t chardev_test_client_entry(process_t *process, void *arg) {
-    chardev_test_client_state_t *state = (chardev_test_client_state_t *)arg;
-    ipc_message_t resp;
-    int rc;
+static process_run_result_t
+chardev_wasm_client_entry(process_t *process, void *arg)
+{
+    chardev_wasm_client_state_t *state = (chardev_wasm_client_state_t *)arg;
+    ipc_message_t step_msg;
+    int32_t step_result = WASMOS_WASM_STEP_FAILED;
 
     if (!process || !state) {
         return PROCESS_RUN_IDLE;
     }
 
-    if (state->phase == CHARDEV_TEST_PHASE_INIT) {
-        if (state->reply_endpoint == IPC_ENDPOINT_NONE &&
-            ipc_endpoint_create(process->context_id, &state->reply_endpoint) != 0) {
-            serial_write("[test] chardev client endpoint alloc failed\n");
-            process_set_exit_status(process, -1);
-            return PROCESS_RUN_EXITED;
-        }
+    if (!state->started) {
+        wasm_driver_manifest_t manifest;
+        manifest.name = "chardev-client";
+        manifest.module_bytes = _binary_chardev_client_wasm_start;
+        manifest.module_size = wasm_blob_size(_binary_chardev_client_wasm_start,
+                                              _binary_chardev_client_wasm_end);
+        manifest.init_export = 0;
+        manifest.dispatch_export = "chardev_client_step";
+        manifest.stack_size = 64 * 1024;
+        manifest.heap_size = 64 * 1024;
 
-        state->write_request_id = 1;
-        if (wasm_chardev_ipc_write_request(process->context_id,
-                                           state->chardev_endpoint,
-                                           state->reply_endpoint,
-                                           state->write_request_id,
-                                           state->write_value) != 0) {
-            serial_write("[test] chardev write req failed\n");
+        if (wasm_driver_start(&state->driver, &manifest, process->context_id) != 0) {
+            serial_write("[test] wasm client start failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
-        state->phase = CHARDEV_TEST_PHASE_WAIT_WRITE;
-        return PROCESS_RUN_YIELDED;
+        state->started = 1;
     }
 
-    if (state->phase == CHARDEV_TEST_PHASE_WAIT_WRITE) {
-        rc = ipc_recv_for(process->context_id, state->reply_endpoint, &resp);
-        if (rc == 1) {
-            process_block_on_ipc(process);
-            return PROCESS_RUN_BLOCKED;
-        }
-        if (rc != 0 || resp.type != WASM_CHARDEV_IPC_WRITE_RESP
-            || resp.request_id != state->write_request_id
-            || (int32_t)resp.arg0 != 0
-            || ((resp.arg1 & 0xFFu) != state->write_value)) {
-            serial_write("[test] chardev write resp invalid\n");
-            process_set_exit_status(process, -1);
-            return PROCESS_RUN_EXITED;
-        }
+    step_msg.type = 0;
+    step_msg.source = 0;
+    step_msg.destination = 0;
+    step_msg.request_id = 0;
+    step_msg.arg0 = state->chardev_endpoint;
+    step_msg.arg1 = 0;
+    step_msg.arg2 = 0;
+    step_msg.arg3 = 0;
 
-        state->read_request_id = 2;
-        if (wasm_chardev_ipc_read_request(process->context_id,
-                                          state->chardev_endpoint,
-                                          state->reply_endpoint,
-                                          state->read_request_id) != 0) {
-            serial_write("[test] chardev read req failed\n");
-            process_set_exit_status(process, -1);
-            return PROCESS_RUN_EXITED;
-        }
-
-        state->phase = CHARDEV_TEST_PHASE_WAIT_READ;
-        return PROCESS_RUN_YIELDED;
-    }
-
-    if (state->phase == CHARDEV_TEST_PHASE_WAIT_READ) {
-        rc = ipc_recv_for(process->context_id, state->reply_endpoint, &resp);
-        if (rc == 1) {
-            process_block_on_ipc(process);
-            return PROCESS_RUN_BLOCKED;
-        }
-        if (rc != 0 || resp.type != WASM_CHARDEV_IPC_READ_RESP
-            || resp.request_id != state->read_request_id
-            || (int32_t)resp.arg0 != 0
-            || ((resp.arg1 & 0xFFu) != state->write_value)) {
-            serial_write("[test] chardev read resp invalid\n");
-            process_set_exit_status(process, -1);
-            return PROCESS_RUN_EXITED;
-        }
-
-        serial_write("[test] chardev ipc roundtrip ok\n");
-        process_set_exit_status(process, 0);
+    if (wasm_driver_dispatch(&state->driver, &step_msg, &step_result) != 0) {
+        serial_write("[test] wasm client dispatch failed\n");
+        process_set_exit_status(process, -1);
         return PROCESS_RUN_EXITED;
     }
 
-    process_set_exit_status(process, -1);
-    return PROCESS_RUN_EXITED;
+    if (step_result == WASMOS_WASM_STEP_BLOCKED) {
+        process_block_on_ipc(process);
+        return PROCESS_RUN_BLOCKED;
+    }
+    if (step_result == WASMOS_WASM_STEP_DONE) {
+        serial_write("[test] wasm chardev ipc roundtrip ok\n");
+        process_set_exit_status(process, 0);
+        return PROCESS_RUN_EXITED;
+    }
+    if (step_result == WASMOS_WASM_STEP_FAILED) {
+        serial_write("[test] wasm chardev ipc roundtrip failed\n");
+        process_set_exit_status(process, -1);
+        return PROCESS_RUN_EXITED;
+    }
+
+    return PROCESS_RUN_YIELDED;
 }
 
-static void run_kernel_loop(void) {
+static void
+run_kernel_loop(void)
+{
     for (;;) {
         if (process_schedule_once() != 0) {
             __asm__ volatile("pause");
@@ -146,7 +311,14 @@ static void run_kernel_loop(void) {
     }
 }
 
-void kmain(boot_info_t *boot_info) {
+void
+kmain(boot_info_t *boot_info)
+{
+    uint32_t chardev_pid = 0;
+    process_t *chardev_proc;
+    uint32_t chardev_endpoint = IPC_ENDPOINT_NONE;
+    uint32_t test_pid = 0;
+
     (void)boot_info;
 
     serial_init();
@@ -156,20 +328,21 @@ void kmain(boot_info_t *boot_info) {
     mm_init(boot_info);
     ipc_init();
     process_init();
+    wasm_ipc_slots_init();
 
     serial_write("[kernel] wamr init on-demand\n");
 
-    uint32_t chardev_pid = 0;
     if (process_spawn("chardev-server", chardev_server_entry, 0, &chardev_pid) != 0) {
         serial_write("[kernel] chardev process spawn failed\n");
         for (;;) {
             __asm__ volatile("hlt");
         }
     }
+
     serial_write("[kernel] chardev pid=");
     serial_write_hex64(chardev_pid);
 
-    process_t *chardev_proc = process_get(chardev_pid);
+    chardev_proc = process_get(chardev_pid);
     if (!chardev_proc || wasm_chardev_init(chardev_proc->context_id) != 0) {
         serial_write("[kernel] chardev service init failed\n");
         for (;;) {
@@ -177,7 +350,12 @@ void kmain(boot_info_t *boot_info) {
         }
     }
 
-    uint32_t chardev_endpoint = IPC_ENDPOINT_NONE;
+    if (register_wasm_ipc_natives() != 0) {
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
+
     if (wasm_chardev_endpoint(&chardev_endpoint) != 0) {
         serial_write("[kernel] chardev endpoint lookup failed\n");
         for (;;) {
@@ -185,27 +363,20 @@ void kmain(boot_info_t *boot_info) {
         }
     }
 
-    g_chardev_test_client.chardev_endpoint = chardev_endpoint;
-    g_chardev_test_client.reply_endpoint = IPC_ENDPOINT_NONE;
-    g_chardev_test_client.write_request_id = 0;
-    g_chardev_test_client.read_request_id = 0;
-    g_chardev_test_client.write_value = 0x41u;
-    g_chardev_test_client.phase = CHARDEV_TEST_PHASE_INIT;
+    g_chardev_wasm_client.chardev_endpoint = chardev_endpoint;
+    g_chardev_wasm_client.started = 0;
 
-    uint32_t test_pid = 0;
-    if (process_spawn("chardev-test-client",
-                      chardev_test_client_entry,
-                      &g_chardev_test_client,
-                      &test_pid) != 0) {
-        serial_write("[kernel] chardev test process spawn failed\n");
+    if (process_spawn("chardev-test-client-wasm", chardev_wasm_client_entry,
+                      &g_chardev_wasm_client, &test_pid) != 0) {
+        serial_write("[kernel] wasm test process spawn failed\n");
         for (;;) {
             __asm__ volatile("hlt");
         }
     }
-    serial_write("[kernel] chardev test pid=");
+
+    serial_write("[kernel] chardev wasm test pid=");
     serial_write_hex64(test_pid);
 
     serial_write("[kernel] scheduler loop\n");
-
     run_kernel_loop();
 }

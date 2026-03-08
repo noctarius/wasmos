@@ -76,6 +76,17 @@ int wamr_instantiate_module(wamr_module_t *module,
     return 1;
 }
 
+int wamr_register_natives(const char *module_name,
+                          const wamr_native_symbol_t *symbols,
+                          uint32_t symbol_count) {
+    if (!module_name || !symbols || symbol_count == 0) {
+        return 0;
+    }
+    return wasm_runtime_register_natives(module_name,
+                                         (NativeSymbol *)symbols,
+                                         symbol_count) ? 1 : 0;
+}
+
 void wamr_deinstantiate_module(wamr_instance_t *instance) {
     if (!instance) {
         return;
@@ -154,6 +165,15 @@ int wamr_instantiate_module(wamr_module_t *module,
     (void)out_instance;
     (void)error_buf;
     (void)error_buf_size;
+    return 0;
+}
+
+int wamr_register_natives(const char *module_name,
+                          const wamr_native_symbol_t *symbols,
+                          uint32_t symbol_count) {
+    (void)module_name;
+    (void)symbols;
+    (void)symbol_count;
     return 0;
 }
 

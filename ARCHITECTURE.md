@@ -608,11 +608,11 @@ Required commands:
 - `ps` — list processes via `proc`.
 - `help` — list built-in commands.
 - `cd <path>` — change working directory (root or a single subdirectory).
+- `exec <app>` — load a WASMOS-APP from disk and ask `proc` to spawn it (applications only; drivers/services are rejected).
 - `halt` — request system shutdown via ACPI poweroff.
 - `reboot` — request system reboot via ACPI reset.
 
 Planned:
-- `exec <path>` — load a WASMOS-APP from `fs` and ask `proc` to spawn it.
 - `echo <args...>` — print arguments to console.
 
 ### Init Process Responsibilities (Microkernel Practice)

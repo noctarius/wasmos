@@ -31,6 +31,10 @@ extern int32_t wasmos_block_buffer_phys(void)
     WASMOS_WASM_IMPORT("wasmos", "block_buffer_phys");
 extern int32_t wasmos_block_buffer_copy(int32_t phys, int32_t ptr, int32_t len, int32_t offset)
     WASMOS_WASM_IMPORT("wasmos", "block_buffer_copy");
+extern int32_t wasmos_fs_buffer_size(void)
+    WASMOS_WASM_IMPORT("wasmos", "fs_buffer_size");
+extern int32_t wasmos_fs_buffer_write(int32_t ptr, int32_t len, int32_t offset)
+    WASMOS_WASM_IMPORT("wasmos", "fs_buffer_write");
 
 #define FAT_SECTOR_SIZE 512u
 #define FAT_MAX_SECTOR_BYTES 4096u
@@ -49,13 +53,20 @@ typedef enum {
     FAT_OP_CAT,
     FAT_OP_LIST_DIR,
     FAT_OP_CAT_DIR,
-    FAT_OP_CHDIR
+    FAT_OP_CHDIR,
+    FAT_OP_READ_APP
 } fat_op_t;
 
 typedef enum {
     FAT_CAT_SCAN = 0,
     FAT_CAT_FILE
 } fat_cat_stage_t;
+
+typedef enum {
+    FAT_READ_FIND_APPS = 0,
+    FAT_READ_FIND_FILE,
+    FAT_READ_FILE
+} fat_read_stage_t;
 
 static int32_t g_block_endpoint = -1;
 static int32_t g_fs_endpoint = -1;
@@ -92,6 +103,18 @@ static uint32_t g_file_lba = 0;
 static uint32_t g_file_sector = 0;
 static char g_target_name[16];
 static char g_dir_name[16];
+static char g_read_name[32];
+static char g_read_name_ext[32];
+static char g_read_name_alt[32];
+static char g_read_name_alt_ext[32];
+static uint32_t g_read_dir_lba = 0;
+static uint32_t g_read_dir_sectors = 0;
+static uint32_t g_read_sector = 0;
+static uint32_t g_read_entries_left = 0;
+static uint32_t g_read_offset = 0;
+static uint32_t g_read_size = 0;
+static uint32_t g_read_max = 0;
+static fat_read_stage_t g_read_stage = FAT_READ_FIND_APPS;
 static char g_lfn_buf[FAT_LFN_MAX + 1u];
 static uint8_t g_lfn_total = 0;
 static uint8_t g_lfn_seen = 0;
@@ -101,6 +124,8 @@ static int32_t g_waiting = 0;
 static uint32_t g_wait_lba = 0;
 static uint32_t g_wait_count = 0;
 static int32_t g_wait_req_id = 0;
+static int32_t g_fs_resp_override = 0;
+static int32_t g_fs_resp_arg0 = 0;
 
 typedef struct {
     uint8_t in_use;
@@ -596,6 +621,77 @@ fat_name_eq(const char *a, const char *b)
     return a[i] == '\0' && b[i] == '\0';
 }
 
+static int
+fat_name_has_dot(const char *name)
+{
+    uint32_t i = 0;
+    if (!name) {
+        return 0;
+    }
+    while (name[i]) {
+        if (name[i] == '.') {
+            return 1;
+        }
+        i++;
+    }
+    return 0;
+}
+
+static void
+fat_build_read_names(void)
+{
+    g_read_name_ext[0] = '\0';
+    g_read_name_alt[0] = '\0';
+    g_read_name_alt_ext[0] = '\0';
+    if (g_read_name[0] == '\0') {
+        return;
+    }
+    if (fat_name_has_dot(g_read_name)) {
+        return;
+    }
+    uint32_t has_dash = 0;
+    uint32_t pos = 0;
+    while (g_read_name[pos] && pos + 1 < sizeof(g_read_name_ext)) {
+        char c = g_read_name[pos];
+        if (c == '-') {
+            has_dash = 1;
+        }
+        g_read_name_ext[pos] = g_read_name[pos];
+        pos++;
+    }
+    g_read_name_ext[pos] = '\0';
+    if (has_dash) {
+        pos = 0;
+        while (g_read_name[pos] && pos + 1 < sizeof(g_read_name_alt)) {
+            char c = g_read_name[pos];
+            if (c == '-') {
+                c = '_';
+            }
+            g_read_name_alt[pos] = c;
+            pos++;
+        }
+        g_read_name_alt[pos] = '\0';
+    }
+    const char *suffix = ".WASMOSAPP";
+    uint32_t s = 0;
+    while (suffix[s] && pos + 1 < sizeof(g_read_name_ext)) {
+        g_read_name_ext[pos++] = suffix[s++];
+    }
+    g_read_name_ext[pos] = '\0';
+    if (g_read_name_alt[0]) {
+        pos = 0;
+        while (g_read_name_alt[pos] && pos + 1 < sizeof(g_read_name_alt_ext)) {
+            g_read_name_alt_ext[pos] = g_read_name_alt[pos];
+            pos++;
+        }
+        s = 0;
+        while (suffix[s] && pos + 1 < sizeof(g_read_name_alt_ext)) {
+            g_read_name_alt_ext[pos++] = suffix[s++];
+        }
+        g_read_name_alt_ext[pos] = '\0';
+    }
+}
+
 static uint32_t
 fat_first_data_lba(void)
 {
@@ -609,6 +705,228 @@ fat_lba_for_cluster(uint16_t cluster)
         return 0;
     }
     return fat_first_data_lba() + (uint32_t)(cluster - 2) * g_sectors_per_cluster;
+}
+
+static int
+fat_handle_read_app(void)
+{
+    if (g_root_entry_count == 0 || g_root_dir_sectors == 0) {
+        return -1;
+    }
+
+    if (g_op == FAT_OP_NONE) {
+        g_op = FAT_OP_READ_APP;
+        g_read_stage = FAT_READ_FIND_APPS;
+        g_read_dir_lba = g_root_dir_lba;
+        g_read_dir_sectors = g_root_dir_sectors;
+        g_read_sector = 0;
+        g_read_entries_left = g_root_entry_count;
+        g_read_offset = 0;
+        g_read_size = 0;
+        g_read_max = (uint32_t)wasmos_fs_buffer_size();
+        if (g_read_max == 0) {
+            g_op = FAT_OP_NONE;
+            return -1;
+        }
+        fat_build_read_names();
+        fat_lfn_reset();
+        if (fat_send_block_read(g_read_dir_lba, 1) != 0) {
+            g_op = FAT_OP_NONE;
+            return -1;
+        }
+        return WASMOS_WASM_STEP_BLOCKED;
+    }
+
+    if (g_op != FAT_OP_READ_APP) {
+        return -1;
+    }
+
+    int rc = fat_poll_block_read();
+    if (rc == WASMOS_WASM_STEP_BLOCKED) {
+        return rc;
+    }
+    if (rc != 0) {
+        g_op = FAT_OP_NONE;
+        return -1;
+    }
+
+    if (g_read_stage == FAT_READ_FIND_APPS || g_read_stage == FAT_READ_FIND_FILE) {
+        uint32_t entries_per_sector = g_bytes_per_sector / 32u;
+        uint32_t entries_total = entries_per_sector;
+        if (g_read_entries_left < entries_total) {
+            entries_total = g_read_entries_left;
+        }
+
+        for (uint32_t i = 0; i < entries_total; ++i) {
+            uint8_t *ent = g_sector_buf + i * 32u;
+            if (ent[0] == 0x00) {
+                g_op = FAT_OP_NONE;
+                fat_lfn_reset();
+                return -1;
+            }
+            if (ent[0] == 0xE5) {
+                fat_lfn_reset();
+                continue;
+            }
+            if ((ent[11] & 0x0F) == 0x0F) {
+                fat_lfn_collect(ent);
+                continue;
+            }
+            const char *entry_name = 0;
+            if (g_lfn_valid && g_lfn_seen == g_lfn_total && g_lfn_buf[0]) {
+                fat_lfn_finalize();
+                entry_name = g_lfn_buf;
+            }
+            if (ent[11] & 0x08) {
+                fat_lfn_reset();
+                continue;
+            }
+
+            if (!entry_name) {
+                char short_name[13];
+                uint32_t pos = 0;
+                for (int j = 0; j < 8; ++j) {
+                    if (ent[j] != ' ') {
+                        short_name[pos++] = (char)ent[j];
+                    }
+                }
+                if (ent[8] != ' ') {
+                    short_name[pos++] = '.';
+                    for (int j = 0; j < 3; ++j) {
+                        if (ent[8 + j] != ' ') {
+                            short_name[pos++] = (char)ent[8 + j];
+                        }
+                    }
+                }
+                short_name[pos] = '\0';
+                entry_name = short_name;
+            }
+
+            if (g_read_stage == FAT_READ_FIND_APPS) {
+                if (!(ent[11] & 0x10)) {
+                    fat_lfn_reset();
+                    continue;
+                }
+                if (!fat_name_eq(entry_name, "APPS")) {
+                    fat_lfn_reset();
+                    continue;
+                }
+                uint16_t cluster = (uint16_t)ent[26] | ((uint16_t)ent[27] << 8);
+                if (cluster < 2) {
+                    g_op = FAT_OP_NONE;
+                    fat_lfn_reset();
+                    return -1;
+                }
+                g_read_dir_lba = fat_lba_for_cluster(cluster);
+                g_read_dir_sectors = g_sectors_per_cluster;
+                g_read_entries_left = (g_read_dir_sectors * g_bytes_per_sector) / 32u;
+                g_read_sector = 0;
+                g_read_stage = FAT_READ_FIND_FILE;
+                fat_lfn_reset();
+                if (fat_send_block_read(g_read_dir_lba, 1) != 0) {
+                    g_op = FAT_OP_NONE;
+                    return -1;
+                }
+                return WASMOS_WASM_STEP_BLOCKED;
+            }
+
+            if (ent[11] & 0x10) {
+                fat_lfn_reset();
+                continue;
+            }
+            if (!fat_name_eq(entry_name, g_read_name) &&
+                !fat_name_eq(entry_name, g_read_name_ext) &&
+                (!g_read_name_alt[0] || !fat_name_eq(entry_name, g_read_name_alt)) &&
+                (!g_read_name_alt_ext[0] || !fat_name_eq(entry_name, g_read_name_alt_ext))) {
+                fat_lfn_reset();
+                continue;
+            }
+            uint16_t cluster = (uint16_t)ent[26] | ((uint16_t)ent[27] << 8);
+            if (cluster < 2) {
+                g_op = FAT_OP_NONE;
+                fat_lfn_reset();
+                return -1;
+            }
+            uint32_t file_size = (uint32_t)ent[28] |
+                                 ((uint32_t)ent[29] << 8) |
+                                 ((uint32_t)ent[30] << 16) |
+                                 ((uint32_t)ent[31] << 24);
+            uint32_t cluster_bytes = g_bytes_per_sector * g_sectors_per_cluster;
+            if (file_size == 0 || file_size > g_read_max || file_size > cluster_bytes) {
+                g_op = FAT_OP_NONE;
+                fat_lfn_reset();
+                return -1;
+            }
+            g_file_lba = fat_lba_for_cluster(cluster);
+            g_file_remaining = file_size;
+            g_file_sector = 0;
+            g_read_offset = 0;
+            g_read_size = file_size;
+            g_read_stage = FAT_READ_FILE;
+            fat_lfn_reset();
+            if (fat_send_block_read(g_file_lba, 1) != 0) {
+                g_op = FAT_OP_NONE;
+                return -1;
+            }
+            return WASMOS_WASM_STEP_BLOCKED;
+        }
+
+        if (g_read_entries_left <= entries_total) {
+            g_op = FAT_OP_NONE;
+            fat_lfn_reset();
+            return -1;
+        }
+        g_read_entries_left -= entries_total;
+        g_read_sector++;
+        if (g_read_sector >= g_read_dir_sectors) {
+            g_op = FAT_OP_NONE;
+            fat_lfn_reset();
+            return -1;
+        }
+        if (fat_send_block_read(g_read_dir_lba + g_read_sector, 1) != 0) {
+            g_op = FAT_OP_NONE;
+            return -1;
+        }
+        return WASMOS_WASM_STEP_BLOCKED;
+    }
+
+    if (g_read_stage == FAT_READ_FILE) {
+        if (g_file_remaining == 0) {
+            g_fs_resp_override = 1;
+            g_fs_resp_arg0 = (int32_t)g_read_size;
+            g_op = FAT_OP_NONE;
+            return 0;
+        }
+        uint32_t bytes = g_file_remaining > g_bytes_per_sector ? g_bytes_per_sector : g_file_remaining;
+        if (g_read_offset + bytes > g_read_max) {
+            g_op = FAT_OP_NONE;
+            return -1;
+        }
+        if (wasmos_fs_buffer_write((int32_t)(uintptr_t)g_sector_buf,
+                                   (int32_t)bytes,
+                                   (int32_t)g_read_offset) != 0) {
+            g_op = FAT_OP_NONE;
+            return -1;
+        }
+        g_read_offset += bytes;
+        g_file_remaining -= bytes;
+        g_file_sector++;
+        if (g_file_remaining == 0 ||
+            g_file_sector >= g_sectors_per_cluster) {
+            g_fs_resp_override = 1;
+            g_fs_resp_arg0 = (int32_t)g_read_size;
+            g_op = FAT_OP_NONE;
+            return 0;
+        }
+        if (fat_send_block_read(g_file_lba + g_file_sector, 1) != 0) {
+            g_op = FAT_OP_NONE;
+            return -1;
+        }
+        return WASMOS_WASM_STEP_BLOCKED;
+    }
+
+    g_op = FAT_OP_NONE;
+    return -1;
 }
 
 static int
@@ -1031,8 +1349,6 @@ fat_ipc_dispatch(int32_t type,
                  int32_t arg2,
                  int32_t arg3)
 {
-    (void)arg1;
-
     int rc = fat_ensure_ready();
     if (rc != 0) {
         return rc;
@@ -1071,6 +1387,17 @@ fat_ipc_dispatch(int32_t type,
         }
         return fat_handle_chdir();
     }
+    if (type == FS_IPC_READ_APP_REQ) {
+        if (g_op != FAT_OP_NONE && g_op != FAT_OP_READ_APP) {
+            return -1;
+        }
+        if (g_op == FAT_OP_NONE) {
+            fat_unpack_name((uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3,
+                            g_read_name, sizeof(g_read_name));
+            g_read_name_ext[0] = '\0';
+        }
+        return fat_handle_read_app();
+    }
 
     return -1;
 }
@@ -1079,11 +1406,16 @@ static int
 fat_send_fs_response(int32_t status)
 {
     int32_t type = status == 0 ? FS_IPC_RESP : FS_IPC_ERROR;
+    int32_t arg0 = status;
+    if (g_fs_resp_override && type == FS_IPC_RESP) {
+        arg0 = g_fs_resp_arg0;
+    }
+    g_fs_resp_override = 0;
     return wasmos_ipc_send(g_fs_req.source,
                            g_fs_endpoint,
                            type,
                            g_fs_req.request_id,
-                           status,
+                           arg0,
                            0,
                            0,
                            0);
@@ -1115,11 +1447,17 @@ fat_step(int32_t ignored_type,
         g_op = FAT_OP_NONE;
         g_waiting = 0;
         g_fs_req.in_use = 0;
+        g_fs_resp_override = 0;
+        g_fs_resp_arg0 = 0;
         g_cwd_root = 1;
         g_cwd_source = -1;
         g_cwd_cluster = 0;
         g_dir_lba = 0;
         g_dir_sectors = 0;
+        g_read_name[0] = '\0';
+        g_read_name_ext[0] = '\0';
+        g_read_name_alt[0] = '\0';
+        g_read_name_alt_ext[0] = '\0';
         return WASMOS_WASM_STEP_YIELDED;
     }
 

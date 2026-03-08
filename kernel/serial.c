@@ -1,4 +1,5 @@
 #include "serial.h"
+#include "spinlock.h"
 
 #define COM1_PORT 0x3F8
 
@@ -11,6 +12,8 @@ static inline uint8_t inb(uint16_t port) {
     __asm__ volatile("inb %1, %0" : "=a"(ret) : "Nd"(port));
     return ret;
 }
+
+static spinlock_t g_serial_lock = {0};
 
 static int serial_tx_ready(void) {
     return (inb(COM1_PORT + 5) & 0x20) != 0;
@@ -34,6 +37,7 @@ void serial_write(const char *s) {
     if (!s) {
         return;
     }
+    spinlock_lock(&g_serial_lock);
     for (const char *p = s; *p; ++p) {
         if (*p == '\n') {
             while (!serial_tx_ready()) {
@@ -44,6 +48,7 @@ void serial_write(const char *s) {
         }
         outb(COM1_PORT, (uint8_t)*p);
     }
+    spinlock_unlock(&g_serial_lock);
 }
 
 int serial_read_char(uint8_t *out_char) {

@@ -86,6 +86,20 @@ Fault handling:
 - Page faults deliver a structured fault message (address, access type, context).
 - Kernel blocks the faulting thread and resumes after the memory service replies.
 
+### CPU Security & Isolation Features
+Required CPU features for protection:
+- NX (IA32_EFER.NXE) to mark non-executable memory regions.
+- User/supervisor page permissions (U/S) and write protection (CR0.WP).
+- Ring 3 user mode for applications and most services; ring 0 for kernel and privileged drivers.
+- SMEP/SMAP if available to prevent accidental kernel access to user memory.
+- Separate user and kernel stacks with guard pages.
+- Syscall entry via `syscall/sysret` (or `sysenter`) with a controlled user->kernel ABI.
+
+Isolation rules:
+- Kernel mappings are shared but read-only where possible; data is non-executable.
+- User address spaces are isolated per context; shared memory is explicit and bounded.
+- Privileged services must be explicitly granted capabilities; default is least privilege.
+
 ### Memory Management Steps
 1. Freeze the kernel/user virtual address split and document the layout.
 2. Define page table ownership rules and a minimal map/unmap API.

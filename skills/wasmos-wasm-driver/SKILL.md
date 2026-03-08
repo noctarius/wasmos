@@ -13,7 +13,7 @@ driver module source, IPC ABI, kernel host glue, build/packaging, and boot-time 
 ## Workflow
 
 1. Define the driver’s IPC contract.
-2. Implement the wasm driver module under `drivers/wasm/<driver-name>/`.
+2. Implement the wasm driver module under `src/drivers/<driver-name>/`.
 3. Integrate build rules to compile the wasm and embed it.
 4. Add kernel host glue to start the driver and dispatch IPC.
 5. Wire endpoint resolution and boot sequencing.
@@ -21,7 +21,7 @@ driver module source, IPC ABI, kernel host glue, build/packaging, and boot-time 
 
 ## Step 1: Define the IPC contract
 
-- Add opcodes in `drivers/wasm/include/wasmos_driver_abi.h`.
+- Add opcodes in `src/drivers/include/wasmos_driver_abi.h`.
 - Keep requests small; use shared memory for bulk data if needed.
 - Use request/response pairs and set clear error codes.
 
@@ -34,9 +34,9 @@ FOO_IPC_ERROR     = 0x5FF
 
 ## Step 2: Implement the wasm driver
 
-Location rule: **all wasm drivers live in subdirectories of `drivers/wasm/`**.
+Location rule: **all wasm drivers live in subdirectories of `src/drivers/`**.
 
-Create `drivers/wasm/foo/foo.c` (or `examples/wasm/` only for test clients).
+Create `src/drivers/foo/foo.c` (or `examples/wasm/` only for test clients).
 
 Minimum exports:
 1. `foo_init(...)` — called once by the kernel host (use args for endpoints, buffers).

@@ -233,7 +233,7 @@ This guide captures microkernel-informed design decisions and a stepwise plan fo
 - `src/kernel/` Freestanding kernel (C + ASM).
 - `libs/wasm/` Placeholder integration point for WAMR.
 - `examples/wasm/` Example WASM applications used for driver/server/client bring-up.
-- `drivers/wasm/` WASM driver sources and ABI headers. Each driver lives in its own subdirectory.
+- `src/drivers/` WASM driver sources and ABI headers. Each driver lives in its own subdirectory.
 - `scripts/` Optional helper scripts.
 
 ## Boot Flow (High Level)
@@ -495,7 +495,7 @@ Design takeaways:
 - The current system starts a kernel `init` process that is the root parent for all kernel-spawned processes, and it spawns the `process-manager` (owner of the `proc` endpoint).
 - The process manager spawns the user-space `sysinit` WASMOS-APP boot module after a kernel-init request and passes the `proc` endpoint plus boot module metadata.
 - The user-space `sysinit` module spawns remaining boot modules via `proc`, and the chardev client uses imported IPC primitives to issue write/read requests.
-- A minimal PIO ATA block driver runs as a WASMOS-APP service (`drivers/wasm/ata`), and the process manager assigns it the `block` IPC endpoint.
+- A minimal PIO ATA block driver runs as a WASMOS-APP service (`src/drivers/ata`), and the process manager assigns it the `block` IPC endpoint.
 - A FAT12/16/32 filesystem driver runs as a WASMOS-APP service, uses the `block` IPC endpoint for sector reads, and exposes the `fs` IPC endpoint (root + single-subdir `ls`/`cat`/`cd` with VFAT LFN support).
 - A minimal user-space `cli` WASMOS-APP is loaded as a boot module, reads serial input, and supports `help`, `ps`, `ls`, and `cat` via small native helpers.
 - The chardev server returns `BLOCKED` when no IPC message is pending, reducing scheduler churn while idle.
@@ -504,7 +504,7 @@ Design takeaways:
 - WAMR is vendored via git subtree at `libs/wasm/wasm-micro-runtime`.
 - WAMR is built as a static library and linked into the kernel.
 - `libs/wasm/wamr_runtime.c` provides a basic wrapper over the WAMR C API.
-- A stable ABI is defined via `drivers/wasm/include/wasmos_driver_abi.h` and the WASMOS-APP container format.
+- A stable ABI is defined via `src/drivers/include/wasmos_driver_abi.h` and the WASMOS-APP container format.
 
 Planned:
 - Provide WASI-like shims or richer custom syscalls for drivers.
@@ -513,7 +513,7 @@ Planned:
 - Run drivers as isolated WASM contexts.
 - Expose driver APIs through IPC endpoints to other WASM contexts.
 - Current scaffold includes project-owned wasm application examples under `examples/wasm/` (C, AssemblyScript, Rust, and Go).
-- The build compiles the chardev server driver (`drivers/wasm/chardev`) and chardev client example into `.wasm` binaries and embeds them into the kernel image as binary blobs.
+- The build compiles the chardev server driver (`src/drivers/chardev`) and chardev client example into `.wasm` binaries and embeds them into the kernel image as binary blobs.
 - Driver wasm binaries are linked with explicit stack and initial/max memory bounds to keep freestanding instantiation deterministic.
 - A kernel wasm driver host (`src/kernel/wasm_driver.c`) loads embedded modules, instantiates them with WAMR, allocates IPC endpoints, and dispatches IPC messages to a driver export.
 - The chardev service (`src/kernel/wasm_chardev.c`) runs in the spawned `chardev-server` process and bridges IPC request/response traffic to the wasm export `chardev_ipc_dispatch`.

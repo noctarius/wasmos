@@ -149,6 +149,7 @@ Remaining:
 - Exited processes transition to a zombie state carrying `exit_status` until reaped by `process_wait`.
 - The kernel main loop schedules processes instead of invoking service handlers directly.
 - The current system starts a dedicated `chardev-server` process and assigns its context ID as the owner of the chardev IPC endpoint.
+- The current system also starts a `chardev-test-client` process that creates its own reply endpoint, issues a write/read request pair, and exits after validating response semantics.
 - The chardev server returns `BLOCKED` when no IPC message is pending, reducing scheduler churn while idle.
 
 ## WAMR Integration (Planned)

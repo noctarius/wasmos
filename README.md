@@ -103,6 +103,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - Driver wasm link settings currently constrain module stack/linear memory for low-footprint instantiation in the freestanding runtime pool.
 - A generic kernel wasm driver host (`kernel/wasm_driver.c`) loads embedded modules, instantiates them via WAMR, and dispatches IPC requests to exported driver handlers.
 - The WASM-backed chardev runs as an IPC service endpoint in a dedicated `chardev-server` process (`kernel/wasm_chardev.c`) using an embedded module from `drivers/wasm/chardev/chardev_server.c`.
+- Boot now also spawns a `chardev-test-client` process that performs one IPC write/read roundtrip against the chardev server to validate endpoint permissions, wakeups, and wasm dispatch in-process.
 - The chardev server process blocks when its IPC queue is empty and is woken by incoming IPC messages.
 - The chardev service path uses permission-aware IPC send/receive calls tied to its owner context.
 - The chardev module export contract is `chardev_init` and `chardev_ipc_dispatch` (with optional direct `chardev_read_byte`/`chardev_write_byte` exports).

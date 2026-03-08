@@ -116,6 +116,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - `cmake --build build --target kernel` builds `build/kernel.elf`
 - `cmake --build build --target run-qemu` runs QEMU with an ESP image (serial console via `-nographic`)
 - `cmake --build build --target run-qemu-test` runs QEMU, waits for the CLI prompt, issues `halt`, and expects a clean shutdown
+- `run-qemu` and `run-qemu-test` copy `sysinit.wasmosapp` and `cli.wasmosapp` into `esp/system/services` in addition to `esp/apps`.
 
 Use `run-qemu-test` as the default compile+boot+halt check after code changes.
 

@@ -11,6 +11,34 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - Provide only minimal kernel primitives for a microkernel architecture.
 - Establish clear seams for memory management, device discovery, and userland loading.
 
+## Kernel Architecture Guide
+This guide captures microkernel-informed design decisions and a stepwise plan for WASMOS. It is based on the general monolithic vs. microkernel overview in `monolithic-and-microkernel.txt`.
+
+### Design Decisions We Adopt
+- Keep the kernel minimal: IPC, basic memory management, scheduling, and foundational I/O only.
+- Run drivers and OS services as user-level WASM processes to isolate faults.
+- Use IPC as the primary interaction mechanism between services and applications.
+- Preserve modularity: add/remove services without kernel recompilation or reboot.
+- Favor isolation and least privilege with context-bound endpoints and capability-like IPC handles.
+- Prioritize maintainability via stable, versioned IPC protocols and clear ownership boundaries.
+- Optimize IPC early to avoid performance regressions from context switches and data copying.
+- Keep platform-specific code constrained to boot/arch layers to preserve portability.
+
+### Trade-offs to Track
+- IPC overhead and context switching cost can dominate performance if not tuned.
+- User-level service design increases system complexity; requires robust supervision.
+
+### Steps Forward (Bit by Bit)
+1. Define and freeze the kernel/user boundary: document IPC message formats, error codes, and endpoint ownership rules.
+2. Implement IPC fast paths: reduce copies, add reply matching, and define backpressure behavior for queue depth.
+3. Add shared-memory IPC for bulk payloads with explicit buffer ownership and lifecycle rules.
+4. Introduce a service supervisor: detect crashes, restart policy, and health checks for critical services.
+5. Build a service registry and discovery mechanism with stable names and capability distribution.
+6. Flesh out memory-context policy: user virtual layout, region permissions, and page-fault handling.
+7. Extend scheduling: priorities, service budgets, and latency caps for IPC-heavy services.
+8. Add observability: IPC tracing hooks, per-endpoint stats, and structured kernel logs.
+9. Harden security: audit IPC permission checks, fuzz message parsing, and lock down privileged paths.
+
 ## Microkernel Model
 - The kernel only provides minimal primitives (boot, memory, isolation boundaries, IPC transport, and runtime hosting hooks).
 - Drivers, OS services, and applications are implemented as WASM programs instead of in-kernel subsystems.

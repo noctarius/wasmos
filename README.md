@@ -72,6 +72,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - Each WASM program is expected to run in an isolated WAMR context with its own memory regions.
 - Inter-component communication is IPC-based.
 - The bootloader loads `kernel.elf` from the EFI System Partition (ESP).
+- The Kernel Architecture Guide in `ARCHITECTURE.md` outlines microkernel design decisions and the stepwise roadmap.
 - The bootloader logs basic status messages to the UEFI console and retries `ExitBootServices` on invalid parameters.
 - The bootloader copies the UEFI memory map into kernel-owned pages before exiting boot services.
 - PT_LOAD segments are loaded with page-aligned allocations (misaligned physical addresses are handled).

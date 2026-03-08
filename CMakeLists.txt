@@ -42,6 +42,13 @@ if (NOT DEFINED RUST_ENABLE_INITIALIZED)
 endif ()
 option(RUST_ENABLE "Enable Rust example builds" ON)
 
+if (NOT DEFINED GO_ENABLE_INITIALIZED)
+  set(GO_ENABLE ON CACHE BOOL "Enable Go (TinyGo) example builds" FORCE)
+  set(GO_ENABLE_INITIALIZED ON CACHE BOOL "Set when GO_ENABLE default is initialized" FORCE)
+endif ()
+option(GO_ENABLE "Enable Go (TinyGo) example builds" ON)
+set(GO_AVAILABLE OFF)
+
 set(CLANG clang CACHE STRING "C compiler for freestanding/UEFI builds")
 if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   set(LLD ld.lld CACHE STRING "Linker (lld or ld.lld)")
@@ -342,6 +349,9 @@ set(WASM_HELLO_C_APP ${BUILD_DIR}/hello_c.wasmosapp)
 set(WASM_HELLO_RUST_SRC ${EXAMPLES_WASM_DIR}/hello_rust/hello_rust.rs)
 set(WASM_HELLO_RUST_WASM ${BUILD_DIR}/hello_rust.wasm)
 set(WASM_HELLO_RUST_APP ${BUILD_DIR}/hello_rust.wasmosapp)
+set(WASM_HELLO_GO_SRC ${EXAMPLES_WASM_DIR}/hello_go/hello_go.go)
+set(WASM_HELLO_GO_WASM ${BUILD_DIR}/hello_go.wasm)
+set(WASM_HELLO_GO_APP ${BUILD_DIR}/hello_go.wasmosapp)
 set(WASMOS_APP_PACKER ${BUILD_DIR}/make_wasmos_app)
 
 add_custom_command(
@@ -643,8 +653,6 @@ set(WASM_DRIVER_BLOBS
 if (RUST_ENABLE)
   list(APPEND WASM_DRIVER_BLOBS ${WASM_HELLO_RUST_APP})
 endif ()
-add_custom_target(wasm_driver_blobs DEPENDS ${WASM_DRIVER_BLOBS})
-list(APPEND KERNEL_OBJS ${WASM_CHARDEV_DRIVER_BLOB} ${WASM_CHARDEV_CLIENT_BLOB})
 
 if (AS_ENABLE)
   find_program(ASC_EXECUTABLE asc HINTS ${CLANG_BIN_DIR})
@@ -743,6 +751,59 @@ if (RUST_ENABLE)
   )
   add_custom_target(rust_examples DEPENDS ${WASM_HELLO_RUST_APP})
 endif ()
+
+if (GO_ENABLE)
+  find_program(TINYGO_EXECUTABLE tinygo)
+  if (NOT TINYGO_EXECUTABLE)
+    message(WARNING "TinyGo compiler 'tinygo' not found. Go example builds are disabled.")
+  else ()
+    set(GO_AVAILABLE ON)
+  endif ()
+endif ()
+if (GO_AVAILABLE)
+  add_custom_command(
+    OUTPUT ${WASM_HELLO_GO_WASM}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+    COMMAND ${TINYGO_EXECUTABLE}
+            build
+            -target=wasm
+            -opt=z
+            -no-debug
+            -panic=trap
+            -scheduler=none
+            -gc=leaking
+            -o ${WASM_HELLO_GO_WASM}
+            ${WASM_HELLO_GO_SRC}
+    DEPENDS ${WASM_HELLO_GO_SRC}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Building wasm hello-go module"
+    VERBATIM
+  )
+  add_custom_command(
+    OUTPUT ${WASM_HELLO_GO_APP}
+    COMMAND ${WASMOS_APP_PACKER}
+            ${WASM_HELLO_GO_WASM}
+            ${WASM_HELLO_GO_APP}
+            hello-go
+            hello_go_step
+            16
+            16
+            4
+            -
+            0
+            ipc.basic
+            0
+    DEPENDS ${WASM_HELLO_GO_WASM} ${WASMOS_APP_PACKER}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Packing wasm hello-go as WASMOS-APP"
+    VERBATIM
+  )
+  add_custom_target(go_examples DEPENDS ${WASM_HELLO_GO_APP})
+  list(APPEND WASM_DRIVER_BLOBS ${WASM_HELLO_GO_APP})
+endif ()
+
+add_custom_target(wasm_driver_blobs DEPENDS ${WASM_DRIVER_BLOBS})
+list(APPEND KERNEL_OBJS ${WASM_CHARDEV_DRIVER_BLOB} ${WASM_CHARDEV_CLIENT_BLOB})
 
 # WAMR is vendored via git subtree at ${WAMR_DIR}.
 option(WAMR_ENABLE "Enable WAMR runtime integration (requires linking WAMR)" ON)
@@ -913,6 +974,11 @@ if (RUST_ENABLE)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HELLO_RUST_APP} ${BUILD_DIR}/esp/apps/hello_rust.wasmosapp
   )
 endif ()
+if (GO_AVAILABLE)
+  set(GO_HELLO_COPY_CMD
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HELLO_GO_APP} ${BUILD_DIR}/esp/apps/hello_go.wasmosapp
+  )
+endif ()
 
 if (OVMF_VARS)
   add_custom_target(run-qemu
@@ -928,6 +994,7 @@ if (OVMF_VARS)
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
+    ${GO_HELLO_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
@@ -954,6 +1021,7 @@ if (OVMF_VARS)
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
+    ${GO_HELLO_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_halt_test.py
             --ovmf-code ${OVMF_CODE}
@@ -981,6 +1049,7 @@ else ()
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
+    ${GO_HELLO_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
@@ -1006,6 +1075,7 @@ else ()
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
+    ${GO_HELLO_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_halt_test.py
             --ovmf-code ${OVMF_CODE}
@@ -1023,4 +1093,9 @@ endif ()
 if (RUST_ENABLE)
   add_dependencies(run-qemu rust_examples)
   add_dependencies(run-qemu-test rust_examples)
+endif ()
+
+if (GO_AVAILABLE)
+  add_dependencies(run-qemu go_examples)
+  add_dependencies(run-qemu-test go_examples)
 endif ()

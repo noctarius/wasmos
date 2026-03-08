@@ -30,6 +30,8 @@ typedef enum {
     INIT_PHASE_START = 0,
     INIT_PHASE_SEND_SPAWN,
     INIT_PHASE_WAIT_SPAWN,
+    INIT_PHASE_SEND_CLI,
+    INIT_PHASE_WAIT_CLI,
     INIT_PHASE_DONE,
     INIT_PHASE_FAILED
 } init_phase_t;
@@ -42,6 +44,23 @@ static int32_t g_module_count = 0;
 static int32_t g_init_index = -1;
 static int32_t g_next_index = 0;
 static int32_t g_pending_index = -1;
+
+static void
+init_pack_name(const char *name, uint32_t out[4])
+{
+    for (uint32_t i = 0; i < 4; ++i) {
+        out[i] = 0;
+    }
+    if (!name) {
+        return;
+    }
+    uint32_t idx = 0;
+    for (uint32_t i = 0; name[i] && idx < 16; ++i, ++idx) {
+        uint32_t slot = idx / 4;
+        uint32_t shift = (idx % 4) * 8;
+        out[slot] |= ((uint32_t)(uint8_t)name[i]) << shift;
+    }
+}
 
 WASMOS_WASM_EXPORT int32_t
 init_step(int32_t ignored_type,
@@ -79,8 +98,8 @@ init_step(int32_t ignored_type,
             g_next_index++;
         }
         if (g_next_index >= g_module_count) {
-            g_phase = INIT_PHASE_DONE;
-            return WASMOS_WASM_STEP_DONE;
+            g_phase = INIT_PHASE_SEND_CLI;
+            return WASMOS_WASM_STEP_YIELDED;
         }
 
         if (wasmos_ipc_send(g_proc_endpoint, g_reply_endpoint,
@@ -129,6 +148,53 @@ init_step(int32_t ignored_type,
         g_pending_index = -1;
         g_phase = INIT_PHASE_SEND_SPAWN;
         return WASMOS_WASM_STEP_YIELDED;
+    }
+
+    if (g_phase == INIT_PHASE_SEND_CLI) {
+        uint32_t name_args[4];
+        init_pack_name("cli", name_args);
+        if (wasmos_ipc_send(g_proc_endpoint, g_reply_endpoint,
+                            PROC_IPC_SPAWN_NAME,
+                            g_spawn_request_id,
+                            (int32_t)name_args[0],
+                            (int32_t)name_args[1],
+                            (int32_t)name_args[2],
+                            (int32_t)name_args[3]) != 0) {
+            g_phase = INIT_PHASE_FAILED;
+            return WASMOS_WASM_STEP_FAILED;
+        }
+        g_phase = INIT_PHASE_WAIT_CLI;
+        return WASMOS_WASM_STEP_YIELDED;
+    }
+
+    if (g_phase == INIT_PHASE_WAIT_CLI) {
+        int32_t recv_rc = wasmos_ipc_recv(g_reply_endpoint);
+        if (recv_rc == 0) {
+            return WASMOS_WASM_STEP_BLOCKED;
+        }
+        if (recv_rc < 0) {
+            g_phase = INIT_PHASE_FAILED;
+            return WASMOS_WASM_STEP_FAILED;
+        }
+
+        int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+        int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+        if (resp_req != g_spawn_request_id) {
+            g_phase = INIT_PHASE_FAILED;
+            return WASMOS_WASM_STEP_FAILED;
+        }
+        if (resp_type == PROC_IPC_ERROR) {
+            g_phase = INIT_PHASE_FAILED;
+            return WASMOS_WASM_STEP_FAILED;
+        }
+        if (resp_type != PROC_IPC_RESP) {
+            g_phase = INIT_PHASE_FAILED;
+            return WASMOS_WASM_STEP_FAILED;
+        }
+
+        g_spawn_request_id++;
+        g_phase = INIT_PHASE_DONE;
+        return WASMOS_WASM_STEP_DONE;
     }
 
     if (g_phase == INIT_PHASE_DONE) {

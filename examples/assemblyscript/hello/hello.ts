@@ -6,8 +6,11 @@ declare function console_write(ptr: i32, len: i32): i32;
 let printed = false;
 
 function writeLine(msg: string): void {
-  const ptr = changetype<i32>(String.UTF8.encode(msg, true));
-  console_write(ptr, msg.length);
+  const buf = new Uint8Array(1);
+  for (let i = 0; i < msg.length; i++) {
+    buf[0] = msg.charCodeAt(i) as u8;
+    console_write(buf.dataStart as i32, 1);
+  }
 }
 
 // Slightly more extensive AssemblyScript WASMOS-APP entry point.

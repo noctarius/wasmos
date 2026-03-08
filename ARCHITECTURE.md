@@ -492,8 +492,8 @@ Design takeaways:
 - The kernel main loop schedules processes instead of invoking service handlers directly.
 - The current system starts a dedicated `chardev-server` process and assigns its context ID as the owner of the chardev IPC endpoint.
 - The current system starts a kernel `init` process that spawns the `process-manager`, which owns the `proc` endpoint.
-- The process manager spawns a user-space `init` WASMOS-APP boot module and passes the `proc` endpoint plus boot module indices.
-- The user-space `init` module spawns the chardev test client via `proc`, and the client uses imported IPC primitives to issue write/read requests.
+- The process manager spawns a user-space `init` WASMOS-APP boot module and passes the `proc` endpoint plus boot module metadata.
+- The user-space `init` module spawns remaining boot modules via `proc`, and the chardev client uses imported IPC primitives to issue write/read requests.
 - The chardev server returns `BLOCKED` when no IPC message is pending, reducing scheduler churn while idle.
 
 ## WAMR Integration (Planned)

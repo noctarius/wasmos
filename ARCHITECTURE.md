@@ -726,7 +726,8 @@ Current implementation (kernel scaffold):
 - `cmake --build build --target bootloader` -> `build/BOOTX64.EFI`
 - `cmake --build build --target kernel` -> `build/kernel.elf`
 - `cmake --build build --target run-qemu` creates a FAT ESP for testing (requires OVMF) and uses a serial console (`-nographic`).
-- `run-qemu`/`run-qemu-test` copy `sysinit.wasmosapp` and `cli.wasmosapp` into `esp/system/services` in addition to `esp/apps`.
+- `run-qemu`, `run-qemu-test`, and `run-qemu-cli-test` copy `sysinit.wasmosapp` and `cli.wasmosapp` into `esp/system/services` in addition to `esp/apps`.
+- `run-qemu-cli-test` uses the Python QEMU test framework to execute CLI commands and assert output while the VM is running.
 - IDE indexing targets (`bootloader_ide`, `kernel_ide`) include all project C/H sources for CLion, including drivers/services/examples and WAMR platform stubs.
 If OVMF isn't found, pass `-DOVMF_CODE=/path/to/OVMF_CODE.fd` at configure time.
 macOS/Homebrew: `brew install edk2-ovmf`.

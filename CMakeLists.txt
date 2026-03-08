@@ -1077,6 +1077,37 @@ if (OVMF_VARS)
   if (AS_ENABLE)
     add_dependencies(run-qemu-test assemblyscript_examples)
   endif ()
+  add_custom_target(run-qemu-cli-test
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
+    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
+    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/apps/ata.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/apps/fs_fat.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
+    ${AS_HELLO_COPY_CMD}
+    ${HELLO_C_COPY_CMD}
+    ${RUST_HELLO_COPY_CMD}
+    ${GO_HELLO_COPY_CMD}
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
+    COMMAND ${CMAKE_COMMAND} -E env
+            WASMOS_OVMF_CODE=${OVMF_CODE}
+            WASMOS_OVMF_VARS=${OVMF_VARS}
+            WASMOS_ESP=${BUILD_DIR}/esp
+            python3 -m unittest tests/test_cli.py
+    DEPENDS bootloader kernel
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT \"Running QEMU CLI integration tests\"
+    VERBATIM
+  )
+  if (AS_ENABLE)
+    add_dependencies(run-qemu-cli-test assemblyscript_examples)
+  endif ()
 else ()
   add_custom_target(run-qemu
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
@@ -1136,14 +1167,46 @@ else ()
   if (AS_ENABLE)
     add_dependencies(run-qemu-test assemblyscript_examples)
   endif ()
+  add_custom_target(run-qemu-cli-test
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
+    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
+    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/apps/ata.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/apps/fs_fat.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
+    ${AS_HELLO_COPY_CMD}
+    ${HELLO_C_COPY_CMD}
+    ${RUST_HELLO_COPY_CMD}
+    ${GO_HELLO_COPY_CMD}
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
+    COMMAND ${CMAKE_COMMAND} -E env
+            WASMOS_OVMF_CODE=${OVMF_CODE}
+            WASMOS_ESP=${BUILD_DIR}/esp
+            python3 -m unittest tests/test_cli.py
+    DEPENDS bootloader kernel
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT \"Running QEMU CLI integration tests\"
+    VERBATIM
+  )
+  if (AS_ENABLE)
+    add_dependencies(run-qemu-cli-test assemblyscript_examples)
+  endif ()
 endif ()
 
 if (RUST_ENABLE)
   add_dependencies(run-qemu rust_examples)
   add_dependencies(run-qemu-test rust_examples)
+  add_dependencies(run-qemu-cli-test rust_examples)
 endif ()
 
 if (GO_AVAILABLE)
   add_dependencies(run-qemu go_examples)
   add_dependencies(run-qemu-test go_examples)
+  add_dependencies(run-qemu-cli-test go_examples)
 endif ()

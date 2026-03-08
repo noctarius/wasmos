@@ -1,0 +1,56 @@
+import os
+import sys
+import unittest
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+SCRIPTS = os.path.join(ROOT, "scripts")
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+if SCRIPTS not in sys.path:
+    sys.path.insert(0, SCRIPTS)
+
+from qemu_test_framework import QemuSession, default_config
+
+
+class CliIntegrationTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cfg = default_config()
+        cls.session = QemuSession(cfg, timeout_s=120, echo=True)
+        cls.session.start()
+        if not cls.session.expect(b"wamos> "):
+            cls.session.close()
+            raise RuntimeError("CLI prompt not detected")
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.session:
+            cls.session.send("halt")
+            cls.session.close()
+
+    def _cmd_expect(self, cmd: str, needle: bytes, timeout_s: int = 10) -> None:
+        mark = self.session.mark()
+        self.session.send(cmd)
+        self.assertTrue(self.session.expect_from(mark, needle, timeout_s=timeout_s))
+        self.assertTrue(self.session.expect_from(mark, b"wamos> ", timeout_s=timeout_s))
+
+    def test_help_lists_commands(self):
+        self._cmd_expect("help", b"commands:")
+
+    def test_ps_lists_processes(self):
+        self._cmd_expect("ps", b"pid")
+
+    def test_ls_lists_root(self):
+        self._cmd_expect("ls", b"apps")
+
+    def test_cd_and_ls_apps(self):
+        self._cmd_expect("cd apps", b"/apps wamos>")
+        self._cmd_expect("ls", b"ata.wasmosapp")
+        self._cmd_expect("cd /", b"/ wamos>")
+
+    def test_cat_startup(self):
+        self._cmd_expect("cat startup.nsh", b"BOOTX64.EFI")
+
+
+if __name__ == "__main__":
+    unittest.main()

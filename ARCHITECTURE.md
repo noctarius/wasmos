@@ -370,6 +370,79 @@ Fields (current scaffold):
 - `memory_map`, `memory_map_size`, `memory_desc_size`, `memory_desc_version`
 - framebuffer fields (placeholders for future integration)
 
+### WASMOS WASM Application Format (WASMOS-APP)
+Purpose: a minimal container for WASM modules with explicit metadata for boot-time
+loading, IPC wiring, and resource sizing. The container is a simple header followed by
+optional tables and the raw WASM bytes.
+
+Design goals:
+- Keep parsing trivial (fixed-size header + linear tables).
+- Make metadata explicit (name, exports, IPC endpoints, memory sizing).
+- Preserve the raw WASM object code verbatim.
+
+Binary layout (little-endian):
+```
+struct wasmos_app_header {
+    char     magic[8];      // "WASMOSAP"
+    uint16_t version;       // format version (start at 1)
+    uint16_t header_size;   // bytes from start to end of fixed header
+    uint32_t flags;         // bitfield (see below)
+    uint32_t name_len;      // bytes, UTF-8, not NUL-terminated
+    uint32_t entry_len;     // bytes, UTF-8 export name for entry
+    uint32_t wasm_size;     // bytes of WASM payload
+    uint32_t req_ep_count;  // number of required IPC endpoints
+    uint32_t cap_count;     // number of capability requests
+    uint32_t mem_hint_count;// number of memory hints
+    uint32_t reserved;      // must be zero
+    // followed by variable data sections in order:
+    // name bytes
+    // entry bytes
+    // required endpoints table
+    // capability requests table
+    // memory hints table
+    // wasm bytes
+};
+```
+
+Flags:
+- `WASMOS_APP_FLAG_DRIVER` (bit 0): module is a driver (privileged by default).
+- `WASMOS_APP_FLAG_SERVICE` (bit 1): module is a system service.
+- `WASMOS_APP_FLAG_APP` (bit 2): module is a normal application.
+- `WASMOS_APP_FLAG_NEEDS_PRIV` (bit 3): module requests privileged mode.
+
+Required endpoints table:
+```
+struct wasmos_req_endpoint {
+    uint32_t name_len;      // bytes of endpoint name
+    uint32_t rights;        // bitmask (send/recv/notify)
+    // name bytes (UTF-8)
+};
+```
+
+Capability requests table:
+```
+struct wasmos_cap_request {
+    uint32_t name_len;      // bytes of capability name
+    uint32_t flags;         // policy-defined
+    // name bytes (UTF-8)
+};
+```
+
+Memory hints table:
+```
+struct wasmos_mem_hint {
+    uint32_t kind;          // linear/stack/heap/ipc/device
+    uint32_t min_pages;     // minimum pages
+    uint32_t max_pages;     // maximum pages (0 = unspecified)
+};
+```
+
+Notes:
+- The loader validates sizes and bounds; tables are optional if counts are zero.
+- The `entry` name maps to the WASM export to call on start.
+- IPC endpoint names resolve through the service registry; rights are enforced by
+  kernel IPC permissions.
+
 ## Build & Run Notes
 - `cmake -S . -B build`
 - `cmake --build build --target bootloader` -> `build/BOOTX64.EFI`

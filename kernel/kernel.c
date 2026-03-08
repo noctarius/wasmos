@@ -2,6 +2,8 @@
 #include "cpu.h"
 #include "ipc.h"
 #include "memory.h"
+#include "memory_service.h"
+#include "paging.h"
 #include "process.h"
 #include "serial.h"
 #include "wamr_context.h"
@@ -30,6 +32,11 @@ typedef struct {
 
 static wasm_ipc_last_slot_t g_wasm_last_slots[PROCESS_MAX_COUNT];
 static chardev_wasm_client_state_t g_chardev_wasm_client;
+typedef struct {
+    uint64_t addr;
+    uint8_t stage;
+} pf_test_state_t;
+static pf_test_state_t g_pf_test_state;
 
 static void
 serial_write_hex64(uint64_t value)
@@ -367,6 +374,39 @@ chardev_wasm_client_entry(process_t *process, void *arg)
     return PROCESS_RUN_YIELDED;
 }
 
+static process_run_result_t
+page_fault_test_entry(process_t *process, void *arg)
+{
+    pf_test_state_t *state = (pf_test_state_t *)arg;
+    if (!process || !state) {
+        return PROCESS_RUN_IDLE;
+    }
+
+    if (state->stage == 0) {
+        mm_context_t *ctx = mm_context_get(process->context_id);
+        mem_region_t linear;
+        if (!ctx || mm_context_region_for_type(ctx, MEM_REGION_WASM_LINEAR, &linear) != 0) {
+            serial_write("[test] page fault region lookup failed\n");
+            process_set_exit_status(process, -1);
+            return PROCESS_RUN_EXITED;
+        }
+        state->addr = linear.base;
+        if (paging_unmap_4k(state->addr) != 0) {
+            serial_write("[test] page fault unmap failed\n");
+            process_set_exit_status(process, -1);
+            return PROCESS_RUN_EXITED;
+        }
+        state->stage = 1;
+    }
+
+    volatile uint8_t *ptr = (volatile uint8_t *)(uintptr_t)state->addr;
+    uint8_t value = *ptr;
+    *ptr = (uint8_t)(value + 1);
+    serial_write("[test] page fault recovered\n");
+    process_set_exit_status(process, 0);
+    return PROCESS_RUN_EXITED;
+}
+
 static void
 run_kernel_loop(void)
 {
@@ -383,7 +423,12 @@ kmain(boot_info_t *boot_info)
     uint32_t chardev_pid = 0;
     process_t *chardev_proc;
     uint32_t chardev_endpoint = IPC_ENDPOINT_NONE;
+    uint32_t mem_service_pid = 0;
+    process_t *mem_service_proc = 0;
+    uint32_t mem_service_endpoint = IPC_ENDPOINT_NONE;
+    uint32_t mem_reply_endpoint = IPC_ENDPOINT_NONE;
     uint32_t test_pid = 0;
+    uint32_t pf_test_pid = 0;
 
     (void)boot_info;
 
@@ -408,6 +453,32 @@ kmain(boot_info_t *boot_info)
     wasm_ipc_slots_init();
 
     serial_write("[kernel] wamr init on-demand\n");
+
+    if (process_spawn("mem-service", memory_service_entry, 0, &mem_service_pid) != 0) {
+        serial_write("[kernel] mem service spawn failed\n");
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
+
+    mem_service_proc = process_get(mem_service_pid);
+    if (!mem_service_proc) {
+        serial_write("[kernel] mem service lookup failed\n");
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
+
+    if (ipc_endpoint_create(mem_service_proc->context_id, &mem_service_endpoint) != IPC_OK ||
+        ipc_endpoint_create(IPC_CONTEXT_KERNEL, &mem_reply_endpoint) != IPC_OK) {
+        serial_write("[kernel] mem service endpoint create failed\n");
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
+
+    memory_service_register(mem_service_proc->context_id, mem_service_endpoint, mem_reply_endpoint);
+    serial_write("[kernel] mem service ready\n");
 
     if (process_spawn("chardev-server", chardev_server_entry, 0, &chardev_pid) != 0) {
         serial_write("[kernel] chardev process spawn failed\n");
@@ -453,6 +524,18 @@ kmain(boot_info_t *boot_info)
 
     serial_write("[kernel] chardev wasm test pid=");
     serial_write_hex64(test_pid);
+
+    g_pf_test_state.addr = 0;
+    g_pf_test_state.stage = 0;
+    if (process_spawn("pagefault-test", page_fault_test_entry, &g_pf_test_state, &pf_test_pid) != 0) {
+        serial_write("[kernel] page fault test spawn failed\n");
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
+
+    serial_write("[kernel] page fault test pid=");
+    serial_write_hex64(pf_test_pid);
 
     serial_write("[kernel] scheduler loop\n");
     run_kernel_loop();

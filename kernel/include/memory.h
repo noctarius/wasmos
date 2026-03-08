@@ -21,6 +21,11 @@ typedef enum {
 #define MEM_REGION_FLAG_WRITE  (1u << 1)
 #define MEM_REGION_FLAG_EXEC   (1u << 2)
 
+typedef enum {
+    IPC_MEM_FAULT = 0x1000,
+    IPC_MEM_FAULT_REPLY = 0x1001
+} memory_ipc_type_t;
+
 typedef struct {
     uint64_t base;
     uint64_t size;
@@ -38,6 +43,8 @@ void mm_init(const boot_info_t *boot_info);
 int mm_context_init(mm_context_t *ctx, uint32_t id);
 int mm_context_add_region(mm_context_t *ctx, uint64_t base, uint64_t size, uint32_t flags, mem_region_type_t type);
 int mm_context_alloc_region(mm_context_t *ctx, uint64_t pages, uint32_t flags, mem_region_type_t type);
+int mm_context_region_for_type(mm_context_t *ctx, mem_region_type_t type, mem_region_t *out_region);
+int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint64_t error_code, uint64_t *out_mapped_base);
 mm_context_t *mm_context_get(uint32_t id);
 mm_context_t *mm_context_create(uint32_t id);
 int mm_shared_create(uint64_t pages, uint32_t flags, uint32_t *out_id, uint64_t *out_base);

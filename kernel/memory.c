@@ -4,6 +4,9 @@
 #include "serial.h"
 
 #define PAGE_SIZE 0x1000ULL
+static const uint64_t pf_err_present = 1ULL << 0;
+static const uint64_t pf_err_write = 1ULL << 1;
+static const uint64_t pf_err_instr = 1ULL << 4;
 static const boot_info_t *g_boot_info;
 static mm_context_t g_contexts[MM_MAX_CONTEXTS];
 static uint32_t g_context_count;
@@ -83,6 +86,19 @@ int mm_context_add_region(mm_context_t *ctx, uint64_t base, uint64_t size, uint3
     return 0;
 }
 
+int mm_context_region_for_type(mm_context_t *ctx, mem_region_type_t type, mem_region_t *out_region) {
+    if (!ctx || !out_region) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < ctx->region_count; ++i) {
+        if (ctx->regions[i].type == type) {
+            *out_region = ctx->regions[i];
+            return 0;
+        }
+    }
+    return -1;
+}
+
 static mm_shared_region_t *mm_shared_find(uint32_t id) {
     if (id == 0) {
         return 0;
@@ -91,6 +107,54 @@ static mm_shared_region_t *mm_shared_find(uint32_t id) {
         if (g_shared[i].in_use && g_shared[i].id == id) {
             return &g_shared[i];
         }
+    }
+    return 0;
+}
+
+static mem_region_t *mm_find_region_for_addr(mm_context_t *ctx, uint64_t addr) {
+    if (!ctx) {
+        return 0;
+    }
+    for (uint32_t i = 0; i < ctx->region_count; ++i) {
+        mem_region_t *region = &ctx->regions[i];
+        uint64_t end = region->base + region->size;
+        if (addr >= region->base && addr < end) {
+            return region;
+        }
+    }
+    return 0;
+}
+
+int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint64_t error_code, uint64_t *out_mapped_base) {
+    mm_context_t *ctx = mm_context_get(context_id);
+    if (!ctx) {
+        return -1;
+    }
+
+    if (error_code & pf_err_present) {
+        return -1;
+    }
+
+    mem_region_t *region = mm_find_region_for_addr(ctx, addr);
+    if (!region) {
+        return -1;
+    }
+
+    if ((error_code & pf_err_write) && !(region->flags & MEM_REGION_FLAG_WRITE)) {
+        return -1;
+    }
+    if ((error_code & pf_err_instr) && !(region->flags & MEM_REGION_FLAG_EXEC)) {
+        return -1;
+    }
+
+    uint64_t page_base = addr & ~(PAGE_SIZE - 1ULL);
+    int rc = paging_map_4k(page_base, page_base, region->flags);
+    if (rc < 0) {
+        return -1;
+    }
+
+    if (out_mapped_base) {
+        *out_mapped_base = page_base;
     }
     return 0;
 }

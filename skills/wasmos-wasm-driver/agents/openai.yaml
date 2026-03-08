@@ -1,0 +1,4 @@
+interface:
+  display_name: "WASMOS WASM Driver"
+  short_description: "Add a WASM-based device driver in WASMOS"
+  default_prompt: "Create or convert a device driver to a WASMOS wasm driver, wire IPC, and integrate build/kernel host glue."

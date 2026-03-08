@@ -16,6 +16,12 @@ extern int32_t wasmos_console_read(int32_t ptr, int32_t len)
     WASMOS_WASM_IMPORT("wasmos", "console_read");
 extern int32_t wasmos_proc_count(void)
     WASMOS_WASM_IMPORT("wasmos", "proc_count");
+extern int32_t wasmos_proc_info(int32_t index, int32_t ptr, int32_t len)
+    WASMOS_WASM_IMPORT("wasmos", "proc_info");
+extern int32_t wasmos_fs_list_root(void)
+    WASMOS_WASM_IMPORT("wasmos", "fs_list_root");
+extern int32_t wasmos_fs_cat_root(int32_t ptr)
+    WASMOS_WASM_IMPORT("wasmos", "fs_cat_root");
 
 typedef enum {
     CLI_PHASE_INIT = 0,
@@ -105,12 +111,37 @@ cli_handle_line(void)
         return;
     }
     if (str_eq(g_line, "help")) {
-        console_write("commands: help, ps\n");
+        console_write("commands: help, ps, ls, cat <name>\n");
         return;
     }
     if (str_eq(g_line, "ps")) {
         int32_t count = wasmos_proc_count();
         console_write_num("processes: ", count);
+        for (int32_t i = 0; i < count; ++i) {
+            char name_buf[32];
+            int32_t pid = wasmos_proc_info(i, (int32_t)(uintptr_t)name_buf, (int32_t)sizeof(name_buf));
+            if (pid <= 0) {
+                continue;
+            }
+            console_write_num("pid: ", pid);
+            console_write("name: ");
+            console_write(name_buf);
+            console_write("\n");
+        }
+        return;
+    }
+    if (str_eq(g_line, "ls")) {
+        if (wasmos_fs_list_root() != 0) {
+            console_write("ls failed\n");
+        }
+        return;
+    }
+    if (g_line_len > 4 && g_line[0] == 'c' && g_line[1] == 'a' &&
+        g_line[2] == 't' && g_line[3] == ' ') {
+        char *name = &g_line[4];
+        if (wasmos_fs_cat_root((int32_t)(uintptr_t)name) != 0) {
+            console_write("cat failed\n");
+        }
         return;
     }
     console_write("unknown command\n");

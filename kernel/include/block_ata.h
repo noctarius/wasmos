@@ -7,5 +7,6 @@
 int block_ata_init(uint32_t owner_context_id);
 int block_ata_endpoint(uint32_t *out_endpoint);
 int block_ata_service_once(void);
+int block_ata_read_sync(uint32_t lba, uint32_t count, void *buffer);
 
 #endif

@@ -1,4 +1,5 @@
 #include "fs_fat.h"
+#include "block_ata.h"
 #include "physmem.h"
 #include "process.h"
 #include "serial.h"
@@ -22,6 +23,15 @@ typedef struct {
     fs_phase_t phase;
     uint32_t boot_lba;
     uint8_t tried_mbr;
+    uint16_t bytes_per_sector;
+    uint8_t sectors_per_cluster;
+    uint16_t reserved_sectors;
+    uint8_t fat_count;
+    uint16_t root_entry_count;
+    uint32_t fat_size;
+    uint32_t total_sectors;
+    uint32_t root_dir_lba;
+    uint32_t root_dir_sectors;
 } fs_fat_state_t;
 
 static fs_fat_state_t g_fat;
@@ -137,6 +147,16 @@ fat_parse_boot(void)
     uint32_t data_sectors = total_sectors - (bpb->reserved_sectors + (bpb->fat_count * fat_size) + root_dir_sectors);
     uint32_t cluster_count = data_sectors / bpb->sectors_per_cluster;
 
+    g_fat.bytes_per_sector = (uint16_t)bytes_per_sector;
+    g_fat.sectors_per_cluster = bpb->sectors_per_cluster;
+    g_fat.reserved_sectors = bpb->reserved_sectors;
+    g_fat.fat_count = bpb->fat_count;
+    g_fat.root_entry_count = bpb->root_entry_count;
+    g_fat.fat_size = fat_size;
+    g_fat.total_sectors = total_sectors;
+    g_fat.root_dir_sectors = root_dir_sectors;
+    g_fat.root_dir_lba = g_fat.boot_lba + bpb->reserved_sectors + (bpb->fat_count * fat_size);
+
     if (bpb->root_entry_count == 0) {
         fat_log("FAT32 detected\n");
     } else if (cluster_count < 4085) {
@@ -200,6 +220,15 @@ fs_fat_init(uint32_t owner_context_id, uint32_t block_endpoint)
     g_fat.phase = FS_PHASE_INIT;
     g_fat.boot_lba = 0;
     g_fat.tried_mbr = 0;
+    g_fat.bytes_per_sector = 0;
+    g_fat.sectors_per_cluster = 0;
+    g_fat.reserved_sectors = 0;
+    g_fat.fat_count = 0;
+    g_fat.root_entry_count = 0;
+    g_fat.fat_size = 0;
+    g_fat.total_sectors = 0;
+    g_fat.root_dir_lba = 0;
+    g_fat.root_dir_sectors = 0;
 
     if (ipc_endpoint_create(owner_context_id, &g_fat.fs_endpoint) != IPC_OK) {
         fat_log("endpoint create failed\n");
@@ -218,6 +247,193 @@ fs_fat_init(uint32_t owner_context_id, uint32_t block_endpoint)
     }
     g_fat.buffer_phys = phys;
     return 0;
+}
+
+static void
+fat_write_line(const char *s)
+{
+    serial_write(s);
+}
+
+static void
+fat_write_name(const char *name, uint32_t len)
+{
+    char buf[16];
+    uint32_t out = 0;
+    for (uint32_t i = 0; i < len && out < sizeof(buf) - 1; ++i) {
+        buf[out++] = name[i];
+    }
+    buf[out] = '\0';
+    serial_write(buf);
+}
+
+int
+fs_fat_list_root(void)
+{
+    if (g_fat.root_entry_count == 0 || g_fat.root_dir_sectors == 0) {
+        fat_log("root listing unsupported\n");
+        return -1;
+    }
+
+    uint32_t entries_per_sector = g_fat.bytes_per_sector / 32u;
+    uint32_t entries_total = g_fat.root_entry_count;
+    uint32_t lba = g_fat.root_dir_lba;
+
+    for (uint32_t sector = 0; sector < g_fat.root_dir_sectors; ++sector) {
+        if (block_ata_read_sync(lba + sector, 1, (void *)(uintptr_t)g_fat.buffer_phys) != 0) {
+            fat_log("root read failed\n");
+            return -1;
+        }
+        uint8_t *dir = (uint8_t *)(uintptr_t)g_fat.buffer_phys;
+        for (uint32_t i = 0; i < entries_per_sector && entries_total > 0; ++i, --entries_total) {
+            uint8_t *ent = dir + i * 32u;
+            if (ent[0] == 0x00) {
+                return 0;
+            }
+            if (ent[0] == 0xE5) {
+                continue;
+            }
+            if (ent[11] & 0x08) {
+                continue;
+            }
+            char name[12];
+            for (int j = 0; j < 8; ++j) {
+                name[j] = (char)ent[j];
+            }
+            name[8] = '\0';
+            char ext[4];
+            for (int j = 0; j < 3; ++j) {
+                ext[j] = (char)ent[8 + j];
+            }
+            ext[3] = '\0';
+
+            uint32_t name_len = 8;
+            while (name_len > 0 && name[name_len - 1] == ' ') {
+                name_len--;
+            }
+            uint32_t ext_len = 3;
+            while (ext_len > 0 && ext[ext_len - 1] == ' ') {
+                ext_len--;
+            }
+
+            fat_write_name(name, name_len);
+            if (ext_len > 0) {
+                fat_write_line(".");
+                fat_write_name(ext, ext_len);
+            }
+            fat_write_line("\n");
+        }
+    }
+    return 0;
+}
+
+static uint32_t
+fat_first_data_lba(void)
+{
+    return g_fat.root_dir_lba + g_fat.root_dir_sectors;
+}
+
+int
+fs_fat_cat_root(const char *filename)
+{
+    if (!filename || g_fat.root_entry_count == 0) {
+        return -1;
+    }
+
+    uint32_t entries_per_sector = g_fat.bytes_per_sector / 32u;
+    uint32_t entries_total = g_fat.root_entry_count;
+    uint32_t lba = g_fat.root_dir_lba;
+
+    char target[12];
+    uint32_t tlen = 0;
+    while (filename[tlen] && tlen < sizeof(target) - 1) {
+        target[tlen] = filename[tlen];
+        tlen++;
+    }
+    target[tlen] = '\0';
+
+    for (uint32_t sector = 0; sector < g_fat.root_dir_sectors; ++sector) {
+        if (block_ata_read_sync(lba + sector, 1, (void *)(uintptr_t)g_fat.buffer_phys) != 0) {
+            fat_log("root read failed\n");
+            return -1;
+        }
+        uint8_t *dir = (uint8_t *)(uintptr_t)g_fat.buffer_phys;
+        for (uint32_t i = 0; i < entries_per_sector && entries_total > 0; ++i, --entries_total) {
+            uint8_t *ent = dir + i * 32u;
+            if (ent[0] == 0x00) {
+                return -1;
+            }
+            if (ent[0] == 0xE5) {
+                continue;
+            }
+            if (ent[11] & 0x08) {
+                continue;
+            }
+            char name[13];
+            uint32_t pos = 0;
+            for (int j = 0; j < 8; ++j) {
+                if (ent[j] != ' ') {
+                    name[pos++] = (char)ent[j];
+                }
+            }
+            if (ent[8] != ' ') {
+                name[pos++] = '.';
+                for (int j = 0; j < 3; ++j) {
+                    if (ent[8 + j] != ' ') {
+                        name[pos++] = (char)ent[8 + j];
+                    }
+                }
+            }
+            name[pos] = '\0';
+
+            if (pos == 0) {
+                continue;
+            }
+            int match = 1;
+            for (uint32_t k = 0; k <= pos; ++k) {
+                if (name[k] != target[k]) {
+                    match = 0;
+                    break;
+                }
+            }
+            if (!match) {
+                continue;
+            }
+
+            uint16_t first_cluster = (uint16_t)ent[26] | ((uint16_t)ent[27] << 8);
+            if (first_cluster < 2) {
+                return -1;
+            }
+            uint32_t file_size = (uint32_t)ent[28] |
+                                 ((uint32_t)ent[29] << 8) |
+                                 ((uint32_t)ent[30] << 16) |
+                                 ((uint32_t)ent[31] << 24);
+            uint32_t data_lba = fat_first_data_lba() +
+                                (uint32_t)(first_cluster - 2) * g_fat.sectors_per_cluster;
+            uint32_t sectors = g_fat.sectors_per_cluster;
+            uint32_t remaining = file_size;
+
+            for (uint32_t s = 0; s < sectors && remaining > 0; ++s) {
+                if (block_ata_read_sync(data_lba + s, 1, (void *)(uintptr_t)g_fat.buffer_phys) != 0) {
+                    return -1;
+                }
+                uint8_t *data = (uint8_t *)(uintptr_t)g_fat.buffer_phys;
+                uint32_t bytes = remaining > g_fat.bytes_per_sector ? g_fat.bytes_per_sector : remaining;
+                for (uint32_t b = 0; b < bytes; ++b) {
+                    char c = (char)data[b];
+                    if (c < 0x20 || c > 0x7E) {
+                        c = '.';
+                    }
+                    char out[2] = { c, '\0' };
+                    serial_write(out);
+                }
+                remaining -= bytes;
+            }
+            serial_write("\n");
+            return 0;
+        }
+    }
+    return -1;
 }
 
 int

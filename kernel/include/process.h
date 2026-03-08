@@ -56,5 +56,6 @@ int process_get_exit_status(uint32_t pid, int32_t *out_exit_status);
 uint32_t process_wake_by_context(uint32_t context_id);
 int process_schedule_once(void);
 uint32_t process_count_active(void);
+int process_info_at(uint32_t index, uint32_t *out_pid, const char **out_name);
 
 #endif

@@ -48,7 +48,7 @@ def run_test(cmd, timeout_s):
 
         events = selector.select(timeout=0.1)
         for key, _ in events:
-            chunk = key.fileobj.read1(4096)
+            chunk = key.fileobj.read(4096)
             if not chunk:
                 continue
             sys.stdout.buffer.write(chunk)

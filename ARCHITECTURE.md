@@ -369,6 +369,12 @@ request_id  // client-chosen correlation ID
 arg0..arg3  // payload words (use shared memory for bulk data)
 ```
 
+### Notification Objects
+- Notifications are separate endpoints that carry a count (no payload).
+- `notify` increments the count and wakes the owning context.
+- `wait` decrements the count or returns `IPC_EMPTY` if none pending.
+- Only the kernel or the owning context may send notifications (initial rule).
+
 ### IPC Error Codes
 - `IPC_OK` = 0
 - `IPC_EMPTY` = 1 (no message available)

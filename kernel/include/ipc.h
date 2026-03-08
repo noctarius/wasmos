@@ -16,6 +16,11 @@ typedef enum {
     IPC_ERR_FULL = -3
 } ipc_result_t;
 
+typedef enum {
+    IPC_ENDPOINT_TYPE_MESSAGE = 0,
+    IPC_ENDPOINT_TYPE_NOTIFICATION = 1
+} ipc_endpoint_type_t;
+
 typedef struct {
     uint32_t type;
     uint32_t source;
@@ -29,10 +34,15 @@ typedef struct {
 
 void ipc_init(void);
 int ipc_endpoint_create(uint32_t owner_context_id, uint32_t *out_endpoint);
+int ipc_notification_create(uint32_t owner_context_id, uint32_t *out_endpoint);
 int ipc_endpoint_owner(uint32_t endpoint, uint32_t *out_owner_context_id);
 int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_message_t *message);
 int ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t *out_message);
+int ipc_notify_from(uint32_t sender_context_id, uint32_t endpoint);
+int ipc_wait_for(uint32_t receiver_context_id, uint32_t endpoint);
 int ipc_send(uint32_t endpoint, const ipc_message_t *message);
 int ipc_recv(uint32_t endpoint, ipc_message_t *out_message);
+int ipc_notify(uint32_t endpoint);
+int ipc_wait(uint32_t endpoint);
 
 #endif

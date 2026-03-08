@@ -362,6 +362,26 @@ Design takeaways:
 - The wasm chardev module also exports `chardev_init` and optional direct byte helpers (`chardev_read_byte`, `chardev_write_byte`).
 - The wasm chardev test-client module exports `chardev_client_step` and consumes imported IPC APIs (`ipc_create_endpoint`, `ipc_send`, `ipc_recv`, `ipc_last_field`) from native module `wasmos`.
 
+## Drivers & Services (Planned)
+This list defines the next baseline drivers and services, their role, and IPC expectations.
+
+Drivers:
+- `disk-virtio` (virtio block): exposes block read/write and identify; privileged by default.
+- `disk-sata` (AHCI/SATA): exposes block read/write and identify; privileged by default.
+- `fs-fat32` (FAT32): mounts a block device, exposes file open/read/dir listing.
+
+Services:
+- `process-manager` (PM): spawns processes, tracks lifecycle, owns PID namespace.
+- `init` (init process): loads a boot config from the EFI boot disk via FAT32 and starts core services.
+- `cli` (simple CLI): provides a basic command loop and service/status queries.
+
+IPC expectations (high level):
+- Disk drivers provide a `block` endpoint: `read(sector,count,reply_ep)` and `write(sector,count,reply_ep)`.
+- FAT32 consumes a `block` endpoint and exports `fs` endpoints for file and directory operations.
+- Process manager exports `proc` endpoint: `spawn`, `wait`, `kill`, `status`.
+- Init uses `fs` endpoints to read config and uses `proc` to spawn services.
+- CLI uses `proc` and `fs` for simple shell commands.
+
 ## Interfaces
 ### boot_info_t
 Defined in `kernel/include/boot.h` and populated by the bootloader.

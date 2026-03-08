@@ -103,6 +103,13 @@ static uint32_t g_file_lba = 0;
 static uint32_t g_file_sector = 0;
 static char g_target_name[16];
 static char g_dir_name[16];
+static char g_chdir_path[32];
+static uint32_t g_chdir_pos = 0;
+static char g_chdir_name[16];
+static uint16_t g_chdir_cluster = 0;
+static uint8_t g_chdir_root = 1;
+static uint32_t g_chdir_dir_lba = 0;
+static uint32_t g_chdir_dir_sectors = 0;
 static char g_read_name[32];
 static char g_read_name_ext[32];
 static char g_read_name_alt[32];
@@ -708,6 +715,60 @@ fat_lba_for_cluster(uint16_t cluster)
 }
 
 static int
+fat_chdir_next_component(void)
+{
+    while (g_chdir_path[g_chdir_pos] == '/') {
+        g_chdir_pos++;
+    }
+    if (!g_chdir_path[g_chdir_pos]) {
+        return 0;
+    }
+    uint32_t len = 0;
+    while (g_chdir_path[g_chdir_pos] && g_chdir_path[g_chdir_pos] != '/') {
+        if (len + 1 >= sizeof(g_chdir_name)) {
+            return -1;
+        }
+        g_chdir_name[len++] = g_chdir_path[g_chdir_pos++];
+    }
+    g_chdir_name[len] = '\0';
+    if (g_chdir_name[0] == '.' && g_chdir_name[1] == '\0') {
+        return fat_chdir_next_component();
+    }
+    if (g_chdir_name[0] == '.' && g_chdir_name[1] == '.' && g_chdir_name[2] == '\0') {
+        g_chdir_root = 1;
+        g_chdir_cluster = 0;
+        g_chdir_dir_lba = 0;
+        g_chdir_dir_sectors = 0;
+        return fat_chdir_next_component();
+    }
+    return 1;
+}
+
+static int
+fat_chdir_begin_dir(uint8_t root, uint16_t cluster)
+{
+    if (root) {
+        g_chdir_dir_lba = g_root_dir_lba;
+        g_chdir_dir_sectors = g_root_dir_sectors;
+        g_op_sector = 0;
+        g_op_entries_left = g_root_entry_count;
+    } else {
+        g_chdir_dir_lba = fat_lba_for_cluster(cluster);
+        if (g_chdir_dir_lba == 0) {
+            return -1;
+        }
+        g_chdir_dir_sectors = g_sectors_per_cluster;
+        g_op_sector = 0;
+        g_op_entries_left = (g_chdir_dir_sectors * g_bytes_per_sector) / 32u;
+    }
+    fat_lfn_reset();
+    if (fat_send_block_read(g_chdir_dir_lba, 1) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int
 fat_handle_read_app(void)
 {
     if (g_root_entry_count == 0 || g_root_dir_sectors == 0) {
@@ -937,11 +998,42 @@ fat_handle_chdir(void)
     }
 
     if (g_op == FAT_OP_NONE) {
+        uint32_t i = 0;
+        while (i + 1 < sizeof(g_chdir_path) && g_dir_name[i]) {
+            g_chdir_path[i] = g_dir_name[i];
+            i++;
+        }
+        g_chdir_path[i] = '\0';
+        g_chdir_pos = 0;
+        if (g_chdir_path[0] == '/') {
+            g_chdir_root = 1;
+            g_chdir_cluster = 0;
+            g_chdir_pos = 1;
+        } else {
+            g_chdir_root = g_cwd_root;
+            g_chdir_cluster = g_cwd_cluster;
+        }
+
+        int next = fat_chdir_next_component();
+        if (next < 0) {
+            return -1;
+        }
+        if (next == 0) {
+            g_cwd_root = g_chdir_root;
+            g_cwd_cluster = g_chdir_cluster;
+            if (g_cwd_root) {
+                g_dir_lba = 0;
+                g_dir_sectors = 0;
+            } else {
+                g_dir_lba = fat_lba_for_cluster(g_cwd_cluster);
+                g_dir_sectors = g_sectors_per_cluster;
+            }
+            g_cwd_source = g_fs_req.source;
+            return 0;
+        }
+
         g_op = FAT_OP_CHDIR;
-        g_op_sector = 0;
-        g_op_entries_left = g_root_entry_count;
-        fat_lfn_reset();
-        if (fat_send_block_read(g_root_dir_lba, 1) != 0) {
+        if (fat_chdir_begin_dir(g_chdir_root, g_chdir_cluster) != 0) {
             g_op = FAT_OP_NONE;
             return -1;
         }
@@ -1002,7 +1094,7 @@ fat_handle_chdir(void)
             entry[pos] = '\0';
             entry_name = entry;
         }
-        if (!fat_name_eq(entry_name, g_dir_name)) {
+        if (!fat_name_eq(entry_name, g_chdir_name)) {
             fat_lfn_reset();
             continue;
         }
@@ -1012,14 +1104,30 @@ fat_handle_chdir(void)
             fat_lfn_reset();
             return -1;
         }
-        g_cwd_cluster = cluster;
-        g_dir_lba = fat_lba_for_cluster(cluster);
-        g_dir_sectors = g_sectors_per_cluster;
-        g_cwd_root = 0;
-        g_cwd_source = g_fs_req.source;
-        g_op = FAT_OP_NONE;
-        fat_lfn_reset();
-        return 0;
+        g_chdir_root = 0;
+        g_chdir_cluster = cluster;
+        int next = fat_chdir_next_component();
+        if (next < 0) {
+            g_op = FAT_OP_NONE;
+            fat_lfn_reset();
+            return -1;
+        }
+        if (next == 0) {
+            g_cwd_cluster = g_chdir_cluster;
+            g_dir_lba = fat_lba_for_cluster(cluster);
+            g_dir_sectors = g_sectors_per_cluster;
+            g_cwd_root = 0;
+            g_cwd_source = g_fs_req.source;
+            g_op = FAT_OP_NONE;
+            fat_lfn_reset();
+            return 0;
+        }
+        if (fat_chdir_begin_dir(0, cluster) != 0) {
+            g_op = FAT_OP_NONE;
+            fat_lfn_reset();
+            return -1;
+        }
+        return WASMOS_WASM_STEP_BLOCKED;
     }
 
     if (g_op_entries_left <= entries_total) {
@@ -1028,11 +1136,11 @@ fat_handle_chdir(void)
     }
     g_op_entries_left -= entries_total;
     g_op_sector++;
-    if (g_op_sector >= g_root_dir_sectors) {
+    if (g_op_sector >= g_chdir_dir_sectors) {
         g_op = FAT_OP_NONE;
         return -1;
     }
-    if (fat_send_block_read(g_root_dir_lba + g_op_sector, 1) != 0) {
+    if (fat_send_block_read(g_chdir_dir_lba + g_op_sector, 1) != 0) {
         g_op = FAT_OP_NONE;
         return -1;
     }
@@ -1377,9 +1485,7 @@ fat_ipc_dispatch(int32_t type,
         if (g_op == FAT_OP_NONE) {
             fat_unpack_name((uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3,
                             g_dir_name, sizeof(g_dir_name));
-            if (g_dir_name[0] == '\0' || (g_dir_name[0] == '/' && g_dir_name[1] == '\0') ||
-                (g_dir_name[0] == '.' && g_dir_name[1] == '\0') ||
-                (g_dir_name[0] == '.' && g_dir_name[1] == '.' && g_dir_name[2] == '\0')) {
+            if (g_dir_name[0] == '\0' || (g_dir_name[0] == '/' && g_dir_name[1] == '\0')) {
                 g_cwd_root = 1;
                 g_cwd_source = g_fs_req.source;
                 return 0;

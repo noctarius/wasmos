@@ -630,7 +630,7 @@ endif ()
 # WAMR is vendored via git subtree at ${WAMR_DIR}.
 option(WAMR_ENABLE "Enable WAMR runtime integration (requires linking WAMR)" ON)
 option(WAMR_LINK "Link the WAMR runtime library" ON)
-option(AS_ENABLE "Enable AssemblyScript example builds" OFF)
+option(AS_ENABLE "Enable AssemblyScript example builds" ON)
 if (WAMR_ENABLE AND WAMR_LINK)
   set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -DWAMR_ENABLED=1 -I${WAMR_DIR}/core/iwasm/include)
 endif ()

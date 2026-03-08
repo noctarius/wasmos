@@ -233,6 +233,7 @@ This guide captures microkernel-informed design decisions and a stepwise plan fo
 - `kernel/` Freestanding kernel (C + ASM).
 - `libs/wasm/` Placeholder integration point for WAMR.
 - `examples/wasm/` Example WASM applications used for driver/server/client bring-up.
+- `drivers/wasm/` WASM driver sources and ABI headers. Each driver lives in its own subdirectory.
 - `scripts/` Optional helper scripts.
 
 ## Boot Flow (High Level)

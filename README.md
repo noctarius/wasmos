@@ -10,6 +10,7 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - `kernel/` Freestanding kernel (C + ASM) with a tiny boot-time runtime.
 - `libs/wasm/` Placeholder for integrating WAMR.
 - `examples/wasm/` Example WASM applications (driver/server/client samples).
+- `drivers/wasm/` WASM driver sources and ABI headers (each driver lives in its own subdirectory).
 - `scripts/` Helper scripts (optional).
 - `ARCHITECTURE.md` In-depth architecture notes and boot process diagrams.
 

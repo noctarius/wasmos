@@ -27,6 +27,8 @@ extern int32_t wasmos_ipc_last_field(int32_t field)
     WASMOS_WASM_IMPORT("wasmos", "ipc_last_field");
 extern int32_t wasmos_console_write(int32_t ptr, int32_t len)
     WASMOS_WASM_IMPORT("wasmos", "console_write");
+extern int32_t wasmos_block_buffer_phys(void)
+    WASMOS_WASM_IMPORT("wasmos", "block_buffer_phys");
 extern int32_t wasmos_block_buffer_copy(int32_t phys, int32_t ptr, int32_t len, int32_t offset)
     WASMOS_WASM_IMPORT("wasmos", "block_buffer_copy");
 
@@ -52,6 +54,7 @@ typedef enum {
 } fat_cat_stage_t;
 
 static int32_t g_block_endpoint = -1;
+static int32_t g_fs_endpoint = -1;
 static int32_t g_reply_endpoint = -1;
 static int32_t g_block_req_id = 1;
 static int32_t g_block_buf_phys = -1;
@@ -84,6 +87,19 @@ static int32_t g_waiting = 0;
 static uint32_t g_wait_lba = 0;
 static uint32_t g_wait_count = 0;
 static int32_t g_wait_req_id = 0;
+
+typedef struct {
+    uint8_t in_use;
+    int32_t type;
+    int32_t arg0;
+    int32_t arg1;
+    int32_t arg2;
+    int32_t arg3;
+    int32_t source;
+    int32_t request_id;
+} fat_fs_request_t;
+
+static fat_fs_request_t g_fs_req;
 
 #pragma pack(push, 1)
 typedef struct {
@@ -658,18 +674,6 @@ fat_handle_cat(void)
 }
 
 WASMOS_WASM_EXPORT int32_t
-fat_init(int32_t block_endpoint, int32_t reply_endpoint, int32_t buffer_phys)
-{
-    g_block_endpoint = block_endpoint;
-    g_reply_endpoint = reply_endpoint;
-    g_block_buf_phys = buffer_phys;
-    g_boot_phase = FAT_BOOT_INIT;
-    g_op = FAT_OP_NONE;
-    g_waiting = 0;
-    return 0;
-}
-
-WASMOS_WASM_EXPORT int32_t
 fat_ipc_dispatch(int32_t type,
                  int32_t arg0,
                  int32_t arg1,
@@ -695,4 +699,91 @@ fat_ipc_dispatch(int32_t type,
     }
 
     return -1;
+}
+
+static int
+fat_send_fs_response(int32_t status)
+{
+    int32_t type = status == 0 ? FS_IPC_RESP : FS_IPC_ERROR;
+    return wasmos_ipc_send(g_fs_req.source,
+                           g_fs_endpoint,
+                           type,
+                           g_fs_req.request_id,
+                           status,
+                           0,
+                           0,
+                           0);
+}
+
+WASMOS_WASM_EXPORT int32_t
+fat_step(int32_t ignored_type,
+         int32_t block_endpoint,
+         int32_t fs_endpoint,
+         int32_t ignored_arg2,
+         int32_t ignored_arg3)
+{
+    (void)ignored_type;
+    (void)ignored_arg2;
+    (void)ignored_arg3;
+
+    if (g_fs_endpoint < 0) {
+        g_block_endpoint = block_endpoint;
+        g_fs_endpoint = fs_endpoint;
+        g_reply_endpoint = wasmos_ipc_create_endpoint();
+        if (g_reply_endpoint < 0) {
+            return WASMOS_WASM_STEP_FAILED;
+        }
+        g_block_buf_phys = wasmos_block_buffer_phys();
+        if (g_block_buf_phys < 0) {
+            return WASMOS_WASM_STEP_FAILED;
+        }
+        g_boot_phase = FAT_BOOT_INIT;
+        g_op = FAT_OP_NONE;
+        g_waiting = 0;
+        g_fs_req.in_use = 0;
+        return WASMOS_WASM_STEP_YIELDED;
+    }
+
+    if (g_fs_req.in_use) {
+        int rc = fat_ipc_dispatch(g_fs_req.type,
+                                  g_fs_req.arg0,
+                                  g_fs_req.arg1,
+                                  g_fs_req.arg2,
+                                  g_fs_req.arg3);
+        if (rc == WASMOS_WASM_STEP_BLOCKED) {
+            return WASMOS_WASM_STEP_BLOCKED;
+        }
+        fat_send_fs_response(rc);
+        g_fs_req.in_use = 0;
+        return WASMOS_WASM_STEP_YIELDED;
+    }
+
+    int32_t recv_rc = wasmos_ipc_recv(g_fs_endpoint);
+    if (recv_rc == 0) {
+        return WASMOS_WASM_STEP_BLOCKED;
+    }
+    if (recv_rc < 0) {
+        return WASMOS_WASM_STEP_FAILED;
+    }
+
+    g_fs_req.type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+    g_fs_req.request_id = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+    g_fs_req.arg0 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+    g_fs_req.arg1 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+    g_fs_req.arg2 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
+    g_fs_req.arg3 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
+    g_fs_req.source = wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE);
+    g_fs_req.in_use = 1;
+
+    int rc = fat_ipc_dispatch(g_fs_req.type,
+                              g_fs_req.arg0,
+                              g_fs_req.arg1,
+                              g_fs_req.arg2,
+                              g_fs_req.arg3);
+    if (rc == WASMOS_WASM_STEP_BLOCKED) {
+        return WASMOS_WASM_STEP_BLOCKED;
+    }
+    fat_send_fs_response(rc);
+    g_fs_req.in_use = 0;
+    return WASMOS_WASM_STEP_YIELDED;
 }

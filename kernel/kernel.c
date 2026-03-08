@@ -118,6 +118,23 @@ native_ipc_create_endpoint(wasm_exec_env_t exec_env)
 }
 
 static int32_t
+native_ipc_create_notification(wasm_exec_env_t exec_env)
+{
+    uint32_t context_id = 0;
+    uint32_t endpoint = IPC_ENDPOINT_NONE;
+
+    (void)exec_env;
+
+    if (current_process_context(&context_id) != 0) {
+        return -1;
+    }
+    if (ipc_notification_create(context_id, &endpoint) != IPC_OK) {
+        return -1;
+    }
+    return (int32_t)endpoint;
+}
+
+static int32_t
 native_ipc_send(wasm_exec_env_t exec_env,
                 int32_t destination_endpoint,
                 int32_t source_endpoint,
@@ -183,6 +200,41 @@ native_ipc_recv(wasm_exec_env_t exec_env, int32_t endpoint)
 }
 
 static int32_t
+native_ipc_wait(wasm_exec_env_t exec_env, int32_t endpoint)
+{
+    uint32_t context_id = 0;
+    int rc;
+
+    (void)exec_env;
+
+    if (endpoint < 0 || current_process_context(&context_id) != 0) {
+        return -1;
+    }
+
+    rc = ipc_wait_for(context_id, (uint32_t)endpoint);
+    if (rc == IPC_EMPTY) {
+        return 0;
+    }
+    if (rc != IPC_OK) {
+        return -1;
+    }
+    return 1;
+}
+
+static int32_t
+native_ipc_notify(wasm_exec_env_t exec_env, int32_t endpoint)
+{
+    uint32_t context_id = 0;
+
+    (void)exec_env;
+
+    if (endpoint < 0 || current_process_context(&context_id) != 0) {
+        return -1;
+    }
+    return ipc_notify_from(context_id, (uint32_t)endpoint) == IPC_OK ? 0 : -1;
+}
+
+static int32_t
 native_ipc_last_field(wasm_exec_env_t exec_env, int32_t field)
 {
     uint32_t pid = process_current_pid();
@@ -217,8 +269,11 @@ register_wasm_ipc_natives(void)
 {
     static const wamr_native_symbol_t symbols[] = {
         { "ipc_create_endpoint", native_ipc_create_endpoint, "()i", 0 },
+        { "ipc_create_notification", native_ipc_create_notification, "()i", 0 },
         { "ipc_send", native_ipc_send, "(iiiiii)i", 0 },
         { "ipc_recv", native_ipc_recv, "(i)i", 0 },
+        { "ipc_wait", native_ipc_wait, "(i)i", 0 },
+        { "ipc_notify", native_ipc_notify, "(i)i", 0 },
         { "ipc_last_field", native_ipc_last_field, "(i)i", 0 },
     };
 

@@ -4,12 +4,14 @@
 
 typedef struct {
     uint32_t in_use;
+    ipc_endpoint_type_t type;
     uint32_t owner_context_id;
     spinlock_t lock;
     ipc_message_t queue[IPC_QUEUE_DEPTH];
     uint32_t head;
     uint32_t tail;
     uint32_t count;
+    uint32_t notify_count;
 } ipc_endpoint_t;
 
 static ipc_endpoint_t g_endpoints[IPC_MAX_ENDPOINTS];
@@ -27,11 +29,13 @@ static ipc_endpoint_t *ipc_endpoint_get(uint32_t endpoint) {
 void ipc_init(void) {
     for (uint32_t i = 0; i < IPC_MAX_ENDPOINTS; ++i) {
         g_endpoints[i].in_use = 0;
+        g_endpoints[i].type = IPC_ENDPOINT_TYPE_MESSAGE;
         g_endpoints[i].owner_context_id = 0;
         spinlock_init(&g_endpoints[i].lock);
         g_endpoints[i].head = 0;
         g_endpoints[i].tail = 0;
         g_endpoints[i].count = 0;
+        g_endpoints[i].notify_count = 0;
     }
 }
 
@@ -42,10 +46,32 @@ int ipc_endpoint_create(uint32_t owner_context_id, uint32_t *out_endpoint) {
     for (uint32_t i = 0; i < IPC_MAX_ENDPOINTS; ++i) {
         if (!g_endpoints[i].in_use) {
             g_endpoints[i].in_use = 1;
+            g_endpoints[i].type = IPC_ENDPOINT_TYPE_MESSAGE;
             g_endpoints[i].owner_context_id = owner_context_id;
             g_endpoints[i].head = 0;
             g_endpoints[i].tail = 0;
             g_endpoints[i].count = 0;
+            g_endpoints[i].notify_count = 0;
+            *out_endpoint = i;
+            return IPC_OK;
+        }
+    }
+    return IPC_ERR_FULL;
+}
+
+int ipc_notification_create(uint32_t owner_context_id, uint32_t *out_endpoint) {
+    if (!out_endpoint) {
+        return IPC_ERR_INVALID;
+    }
+    for (uint32_t i = 0; i < IPC_MAX_ENDPOINTS; ++i) {
+        if (!g_endpoints[i].in_use) {
+            g_endpoints[i].in_use = 1;
+            g_endpoints[i].type = IPC_ENDPOINT_TYPE_NOTIFICATION;
+            g_endpoints[i].owner_context_id = owner_context_id;
+            g_endpoints[i].head = 0;
+            g_endpoints[i].tail = 0;
+            g_endpoints[i].count = 0;
+            g_endpoints[i].notify_count = 0;
             *out_endpoint = i;
             return IPC_OK;
         }
@@ -65,6 +91,9 @@ int ipc_endpoint_owner(uint32_t endpoint, uint32_t *out_owner_context_id) {
 int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_message_t *message) {
     ipc_endpoint_t *ep = ipc_endpoint_get(endpoint);
     if (!ep || !message) {
+        return IPC_ERR_INVALID;
+    }
+    if (ep->type != IPC_ENDPOINT_TYPE_MESSAGE) {
         return IPC_ERR_INVALID;
     }
 
@@ -100,6 +129,9 @@ int ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t 
     if (!ep || !out_message) {
         return IPC_ERR_INVALID;
     }
+    if (ep->type != IPC_ENDPOINT_TYPE_MESSAGE) {
+        return IPC_ERR_INVALID;
+    }
 
     if (receiver_context_id != IPC_CONTEXT_KERNEL &&
         ep->owner_context_id != receiver_context_id) {
@@ -119,10 +151,63 @@ int ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t 
     return IPC_OK;
 }
 
+int ipc_notify_from(uint32_t sender_context_id, uint32_t endpoint) {
+    ipc_endpoint_t *ep = ipc_endpoint_get(endpoint);
+    if (!ep) {
+        return IPC_ERR_INVALID;
+    }
+    if (ep->type != IPC_ENDPOINT_TYPE_NOTIFICATION) {
+        return IPC_ERR_INVALID;
+    }
+    if (sender_context_id != IPC_CONTEXT_KERNEL &&
+        sender_context_id != ep->owner_context_id) {
+        return IPC_ERR_PERM;
+    }
+
+    spinlock_lock(&ep->lock);
+    if (ep->notify_count != UINT32_MAX) {
+        ep->notify_count++;
+    }
+    spinlock_unlock(&ep->lock);
+    process_wake_by_context(ep->owner_context_id);
+    return IPC_OK;
+}
+
+int ipc_wait_for(uint32_t receiver_context_id, uint32_t endpoint) {
+    ipc_endpoint_t *ep = ipc_endpoint_get(endpoint);
+    if (!ep) {
+        return IPC_ERR_INVALID;
+    }
+    if (ep->type != IPC_ENDPOINT_TYPE_NOTIFICATION) {
+        return IPC_ERR_INVALID;
+    }
+    if (receiver_context_id != IPC_CONTEXT_KERNEL &&
+        ep->owner_context_id != receiver_context_id) {
+        return IPC_ERR_PERM;
+    }
+
+    spinlock_lock(&ep->lock);
+    if (ep->notify_count == 0) {
+        spinlock_unlock(&ep->lock);
+        return IPC_EMPTY;
+    }
+    ep->notify_count--;
+    spinlock_unlock(&ep->lock);
+    return IPC_OK;
+}
+
 int ipc_send(uint32_t endpoint, const ipc_message_t *message) {
     return ipc_send_from(IPC_CONTEXT_KERNEL, endpoint, message);
 }
 
 int ipc_recv(uint32_t endpoint, ipc_message_t *out_message) {
     return ipc_recv_for(IPC_CONTEXT_KERNEL, endpoint, out_message);
+}
+
+int ipc_notify(uint32_t endpoint) {
+    return ipc_notify_from(IPC_CONTEXT_KERNEL, endpoint);
+}
+
+int ipc_wait(uint32_t endpoint) {
+    return ipc_wait_for(IPC_CONTEXT_KERNEL, endpoint);
 }

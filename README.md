@@ -75,6 +75,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - The Kernel Architecture Guide in `ARCHITECTURE.md` outlines microkernel design decisions and the stepwise roadmap.
 - The Bootloader & Kernel Architecture rework section in `ARCHITECTURE.md` is the current design baseline.
 - IPC guidance now incorporates seL4/QNX-style separation of synchronous IPC and asynchronous notifications.
+- The virtual memory plan (address space layout, page tables, fault handling) is defined in `ARCHITECTURE.md`.
 - The bootloader logs basic status messages to the UEFI console and retries `ExitBootServices` on invalid parameters.
 - The bootloader copies the UEFI memory map into kernel-owned pages before exiting boot services.
 - PT_LOAD segments are loaded with page-aligned allocations (misaligned physical addresses are handled).

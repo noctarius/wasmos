@@ -10,7 +10,7 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - `src/kernel/` Freestanding kernel (C + ASM) with a tiny boot-time runtime.
 - `libs/wasm/` Placeholder for integrating WAMR.
 - `examples/wasm/` Example WASM applications (driver/server/client samples).
-- `drivers/wasm/` WASM driver sources and ABI headers (each driver lives in its own subdirectory).
+- `src/drivers/` WASM driver sources and ABI headers (each driver lives in its own subdirectory).
 - `scripts/` Helper scripts (optional).
 - `ARCHITECTURE.md` In-depth architecture notes and boot process diagrams.
 
@@ -180,18 +180,18 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes.
 - The process manager owns a `proc` IPC endpoint and can `spawn`, `wait`, `kill`, and `status` processes on behalf of callers.
 - The kernel `init` process requests the process manager to spawn the `sysinit` WASMOS-APP boot module, passing the `proc` endpoint and boot module metadata.
 - The user-space `sysinit` module iterates boot modules (excluding itself) and spawns them via `proc`.
-- A minimal PIO ATA block driver runs as a WASMOS-APP service (`drivers/wasm/ata`), exposes a `block` IPC endpoint, and supports identify/read requests.
+- A minimal PIO ATA block driver runs as a WASMOS-APP service (`src/drivers/ata`), exposes a `block` IPC endpoint, and supports identify/read requests.
 - A FAT12/16/32 filesystem driver runs as a WASMOS-APP service, uses the block IPC endpoint, and exposes the `fs` IPC endpoint (now includes VFAT LFN support for `ls`, `cd`, and `cat`).
 - A minimal user-space `cli` WASMOS-APP is loaded as a boot module, reads input from serial, and supports `help`, `ps`, `ls`, `cat`, `cd`, and `exec` (loads WASMOS-APPs from disk; drivers/services are rejected).
 - IPC endpoint permissions are enforced by context-aware APIs (`ipc_send_from`, `ipc_recv_for`) for source-endpoint ownership and endpoint receive ownership.
 - The kernel now builds and embeds example WASM applications from `examples/wasm/` (including `chardev_client`).
 - Driver wasm link settings currently constrain module stack/linear memory for low-footprint instantiation in the freestanding runtime pool.
 - A generic kernel wasm driver host (`src/kernel/wasm_driver.c`) loads embedded modules, instantiates them via WAMR, and dispatches IPC requests to exported driver handlers.
-- The WASM-backed chardev runs as an IPC service endpoint in a dedicated `chardev-server` process (`src/kernel/wasm_chardev.c`) using `drivers/wasm/chardev/chardev_server.c`.
+- The WASM-backed chardev runs as an IPC service endpoint in a dedicated `chardev-server` process (`src/kernel/wasm_chardev.c`) using `src/drivers/chardev/chardev_server.c`.
 - Boot modules now include `sysinit.wasmosapp` and `chardev_client.wasmosapp`; the chardev client performs one IPC write/read roundtrip via imported IPC primitives.
 - The chardev server process blocks when its IPC queue is empty and is woken by incoming IPC messages.
 - The chardev service path uses permission-aware IPC send/receive calls tied to its owner context.
 - The chardev module export contract is `chardev_init` and `chardev_ipc_dispatch` (with optional direct `chardev_read_byte`/`chardev_write_byte` exports).
-- Chardev IPC protocol uses request/response message types for byte read/write (`WASM_CHARDEV_IPC_*` in `drivers/wasm/include/wasmos_driver_abi.h`).
+- Chardev IPC protocol uses request/response message types for byte read/write (`WASM_CHARDEV_IPC_*` in `src/drivers/include/wasmos_driver_abi.h`).
 - WAMR native IPC imports now follow the WAMR `exec_env` calling convention for correct argument marshalling.
 - IPC best-practice notes and improvement targets (from Herder’s MINIX thesis and Aigner’s microkernel communication work) are tracked in `ARCHITECTURE.md`.

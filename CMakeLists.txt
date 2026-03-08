@@ -26,7 +26,7 @@ set(BOOT_DIR ${CMAKE_SOURCE_DIR}/src/boot)
 set(KERNEL_DIR ${CMAKE_SOURCE_DIR}/src/kernel)
 set(WASM_DIR ${CMAKE_SOURCE_DIR}/libs/wasm)
 set(WAMR_DIR ${WASM_DIR}/wasm-micro-runtime)
-set(DRIVER_WASM_DIR ${CMAKE_SOURCE_DIR}/drivers/wasm)
+set(DRIVER_WASM_DIR ${CMAKE_SOURCE_DIR}/src/drivers)
 set(EXAMPLES_WASM_DIR ${CMAKE_SOURCE_DIR}/examples/wasm)
 set(EXAMPLES_AS_DIR ${CMAKE_SOURCE_DIR}/examples/assemblyscript)
 

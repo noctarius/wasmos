@@ -496,6 +496,22 @@ IPC expectations (high level):
 - `hw-discovery` emits `device` events to `driver-manager`.
 - `driver-manager` requests resource grants and spawns drivers via `proc`.
 
+### Minimal CLI (Planned)
+The CLI is intentionally tiny and runs in user space on top of `fs` and `proc`.
+
+Required commands:
+- `ls` — list directory contents via `fs`.
+- `cd <path>` — change working directory (client-side state).
+- `exec <path>` — load a WASMOS-APP from `fs` and ask `proc` to spawn it.
+- `halt` — request system halt via a privileged service.
+- `reboot` — request system reboot via a privileged service.
+- `echo <args...>` — print arguments to console.
+
+Optional commands (nice-to-have):
+- `cat <path>` — print file contents.
+- `ps` — list processes via `proc`.
+- `help` — list built-in commands.
+
 ### Init Process Responsibilities (Microkernel Practice)
 Common patterns in microkernel systems:
 - The initial user task/root task bootstraps the user-space system and launches core services.

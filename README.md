@@ -85,6 +85,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - Hardware discovery (`hw-discovery`) and driver lifecycle management (`driver-manager`) are defined in `ARCHITECTURE.md`.
 - The step-by-step roadmap with definition of done and tests is defined in `ARCHITECTURE.md`.
 - UEFI protocol usage and bootloader loading options are documented in `ARCHITECTURE.md`.
+- The minimal CLI command set is documented in `ARCHITECTURE.md`.
 - The bootloader logs basic status messages to the UEFI console and retries `ExitBootServices` on invalid parameters.
 - The bootloader copies the UEFI memory map into kernel-owned pages before exiting boot services.
 - PT_LOAD segments are loaded with page-aligned allocations (misaligned physical addresses are handled).

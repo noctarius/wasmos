@@ -150,7 +150,7 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes.
 - The kernel `init` process requests the process manager to spawn the `sysinit` WASMOS-APP boot module, passing the `proc` endpoint and boot module metadata.
 - The user-space `sysinit` module iterates boot modules (excluding itself) and spawns them via `proc`.
 - A minimal PIO ATA block driver runs as a WASMOS-APP service (`drivers/wasm/ata`), exposes a `block` IPC endpoint, and supports identify/read requests.
-- A FAT12/16/32 filesystem driver runs as a WASMOS-APP service, uses the block IPC endpoint, and exposes the `fs` IPC endpoint.
+- A FAT12/16/32 filesystem driver runs as a WASMOS-APP service, uses the block IPC endpoint, and exposes the `fs` IPC endpoint (now includes VFAT LFN support for `ls`, `cd`, and `cat`).
 - A minimal user-space `cli` WASMOS-APP is loaded as a boot module, reads input from serial, and supports `help`, `ps`, `ls`, and `cat` via small native helpers.
 - IPC endpoint permissions are enforced by context-aware APIs (`ipc_send_from`, `ipc_recv_for`) for source-endpoint ownership and endpoint receive ownership.
 - The kernel now builds and embeds example WASM applications from `examples/wasm/` (including `chardev_client`).

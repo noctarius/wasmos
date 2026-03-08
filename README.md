@@ -9,6 +9,7 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - `boot/efi/` UEFI application (PE/COFF) that loads `kernel.elf` and jumps to its entry.
 - `kernel/` Freestanding kernel (C + ASM) with a tiny boot-time runtime.
 - `libs/wasm/` Placeholder for integrating WAMR.
+- `examples/wasm/` Example WASM applications (driver/server/client samples).
 - `scripts/` Helper scripts (optional).
 - `ARCHITECTURE.md` In-depth architecture notes and boot process diagrams.
 
@@ -99,11 +100,11 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - Process lifecycle primitives now include `wait`, `kill`, and tracked `exit_status` via zombie processes until reaped.
 - Blocked processes can now be resumed by context (`process_wake_by_context`) when IPC traffic arrives for owned endpoints.
 - IPC endpoint permissions are enforced by context-aware APIs (`ipc_send_from`, `ipc_recv_for`) for source-endpoint ownership and endpoint receive ownership.
-- The kernel now builds WASM driver modules from project-owned sources under `drivers/wasm/` and embeds them into the kernel image.
+- The kernel now builds and embeds example WASM applications from `examples/wasm/` (including `chardev_server` and `chardev_client`).
 - Driver wasm link settings currently constrain module stack/linear memory for low-footprint instantiation in the freestanding runtime pool.
 - A generic kernel wasm driver host (`kernel/wasm_driver.c`) loads embedded modules, instantiates them via WAMR, and dispatches IPC requests to exported driver handlers.
-- The WASM-backed chardev runs as an IPC service endpoint in a dedicated `chardev-server` process (`kernel/wasm_chardev.c`) using an embedded module from `drivers/wasm/chardev/chardev_server.c`.
-- Boot now also spawns a `chardev-test-client` process that performs one IPC write/read roundtrip against the chardev server to validate endpoint permissions, wakeups, and wasm dispatch in-process.
+- The WASM-backed chardev runs as an IPC service endpoint in a dedicated `chardev-server` process (`kernel/wasm_chardev.c`) using `examples/wasm/chardev_server/chardev_server.c`.
+- Boot now also spawns a dedicated `chardev-test-client-wasm` process that loads `examples/wasm/chardev_client/chardev_client.c` and performs one IPC write/read roundtrip via imported IPC primitives.
 - The chardev server process blocks when its IPC queue is empty and is woken by incoming IPC messages.
 - The chardev service path uses permission-aware IPC send/receive calls tied to its owner context.
 - The chardev module export contract is `chardev_init` and `chardev_ipc_dispatch` (with optional direct `chardev_read_byte`/`chardev_write_byte` exports).

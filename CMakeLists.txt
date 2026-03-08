@@ -27,6 +27,7 @@ set(KERNEL_DIR ${CMAKE_SOURCE_DIR}/kernel)
 set(WASM_DIR ${CMAKE_SOURCE_DIR}/libs/wasm)
 set(WAMR_DIR ${WASM_DIR}/wasm-micro-runtime)
 set(DRIVER_WASM_DIR ${CMAKE_SOURCE_DIR}/drivers/wasm)
+set(EXAMPLES_WASM_DIR ${CMAKE_SOURCE_DIR}/examples/wasm)
 
 set(CLANG clang CACHE STRING "C compiler for freestanding/UEFI builds")
 if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
@@ -282,12 +283,17 @@ add_custom_target(kernel_ide SOURCES
   ${KERNEL_DIR}/include/wasm_driver.h
   ${KERNEL_DIR}/include/wasm_chardev.h
   ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
+  ${EXAMPLES_WASM_DIR}/chardev_server/chardev_server.c
+  ${EXAMPLES_WASM_DIR}/chardev_client/chardev_client.c
   ${WASM_DIR}/wamr_runtime.h
 )
 
-set(WASM_CHARDEV_DRIVER_SRC ${DRIVER_WASM_DIR}/chardev/chardev_server.c)
+set(WASM_CHARDEV_DRIVER_SRC ${EXAMPLES_WASM_DIR}/chardev_server/chardev_server.c)
 set(WASM_CHARDEV_DRIVER_WASM ${BUILD_DIR}/chardev_server.wasm)
 set(WASM_CHARDEV_DRIVER_BLOB ${BUILD_DIR}/chardev_server_blob.o)
+set(WASM_CHARDEV_CLIENT_SRC ${EXAMPLES_WASM_DIR}/chardev_client/chardev_client.c)
+set(WASM_CHARDEV_CLIENT_WASM ${BUILD_DIR}/chardev_client.wasm)
+set(WASM_CHARDEV_CLIENT_BLOB ${BUILD_DIR}/chardev_client_blob.o)
 
 add_custom_command(
   OUTPUT ${WASM_CHARDEV_DRIVER_WASM}
@@ -321,8 +327,41 @@ add_custom_command(
   VERBATIM
 )
 
-add_custom_target(wasm_driver_blobs DEPENDS ${WASM_CHARDEV_DRIVER_BLOB})
-list(APPEND KERNEL_OBJS ${WASM_CHARDEV_DRIVER_BLOB})
+add_custom_command(
+  OUTPUT ${WASM_CHARDEV_CLIENT_WASM}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib
+          -Wl,--no-entry -Wl,--strip-all
+          -Wl,-z,stack-size=4096
+          -Wl,--initial-memory=65536
+          -Wl,--max-memory=65536
+          -Wl,--allow-undefined
+          -Wl,--export=chardev_client_step
+          -I${DRIVER_WASM_DIR}/include
+          ${WASM_CHARDEV_CLIENT_SRC}
+          -o ${WASM_CHARDEV_CLIENT_WASM}
+  DEPENDS ${WASM_CHARDEV_CLIENT_SRC} ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Building wasm chardev client module"
+  VERBATIM
+)
+
+add_custom_command(
+  OUTPUT ${WASM_CHARDEV_CLIENT_BLOB}
+  COMMAND ${OBJCOPY} --input-target=binary --output-target=elf64-x86-64
+          --binary-architecture=i386:x86-64
+          chardev_client.wasm chardev_client_blob.o
+  DEPENDS ${WASM_CHARDEV_CLIENT_WASM}
+  WORKING_DIRECTORY ${BUILD_DIR}
+  COMMENT "Embedding wasm chardev client module"
+  VERBATIM
+)
+
+add_custom_target(wasm_driver_blobs DEPENDS
+  ${WASM_CHARDEV_DRIVER_BLOB}
+  ${WASM_CHARDEV_CLIENT_BLOB}
+)
+list(APPEND KERNEL_OBJS ${WASM_CHARDEV_DRIVER_BLOB} ${WASM_CHARDEV_CLIENT_BLOB})
 
 # WAMR is vendored via git subtree at ${WAMR_DIR}.
 option(WAMR_ENABLE "Enable WAMR runtime integration (requires linking WAMR)" ON)

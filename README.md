@@ -213,6 +213,7 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes. U
 - PIT timer init now programs IRQ0 and increments a kernel tick counter; the kernel logs a tick milestone via a deferred poll in the scheduler loop.
 - The scheduler now tracks per-process tick accounting and sets a reschedule flag when a time slice expires (preemption still pending).
 - READY processes are now managed via a simple run queue instead of a full scan each scheduling step.
+- Scheduler metrics (timer ticks, ready queue depth, current running PID) are exposed via wasm natives and shown in `ps`.
 - The scheduler now switches into process contexts via a minimal context-switch trampoline; timer-driven preemption is enabled.
 - Timer IRQ preemption now redirects the interrupted RIP to a kernel preempt trampoline before yielding to the scheduler.
 - Spinlocks now disable preemption while held to keep IPC and scheduler paths safe.

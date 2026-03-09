@@ -30,6 +30,7 @@ Implemented and tested in-tree. See “Current State” and “Phased Implementa
 - Context switch implemented in `src/kernel/arch/x86_64/context_switch.S`.
 - Timer preemption uses an IRQ preempt trampoline (`process_preempt_trampoline`) that yields to the scheduler.
 - Spinlocks disable preemption while held.
+- Scheduler metrics (timer ticks, ready queue depth, current running PID) are exposed via wasm natives and surfaced in `ps`.
 - Idle task exists and runs `hlt` when no READY tasks are available.
 - Process stacks are allocated from the physical frame allocator (not static BSS).
 - Kernel image range is reserved from the physical frame allocator at boot.

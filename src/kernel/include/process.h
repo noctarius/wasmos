@@ -129,6 +129,7 @@ void preempt_disable(void);
 void preempt_enable(void);
 int preempt_is_enabled(void);
 uint32_t process_count_active(void);
+uint32_t process_ready_count(void);
 int process_info_at(uint32_t index, uint32_t *out_pid, const char **out_name);
 int process_info_at_ex(uint32_t index, uint32_t *out_pid, uint32_t *out_parent_pid, const char **out_name);
 

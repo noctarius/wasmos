@@ -775,6 +775,27 @@ native_proc_count(wasm_exec_env_t exec_env)
 }
 
 static int32_t
+native_sched_ticks(wasm_exec_env_t exec_env)
+{
+    (void)exec_env;
+    return (int32_t)timer_ticks();
+}
+
+static int32_t
+native_sched_ready_count(wasm_exec_env_t exec_env)
+{
+    (void)exec_env;
+    return (int32_t)process_ready_count();
+}
+
+static int32_t
+native_sched_current_pid(wasm_exec_env_t exec_env)
+{
+    (void)exec_env;
+    return (int32_t)process_current_pid();
+}
+
+static int32_t
 native_proc_info(wasm_exec_env_t exec_env, int32_t index, char *buf, int32_t buf_len)
 {
     (void)exec_env;
@@ -848,6 +869,9 @@ register_wasm_ipc_natives(void)
         { "console_write", native_console_write, "(ii)i", 0 },
         { "console_read", native_console_read, "(*~)i", 0 },
         { "proc_count", native_proc_count, "()i", 0 },
+        { "sched_ticks", native_sched_ticks, "()i", 0 },
+        { "sched_ready_count", native_sched_ready_count, "()i", 0 },
+        { "sched_current_pid", native_sched_current_pid, "()i", 0 },
         { "proc_info", native_proc_info, "(i*~)i", 0 },
         { "proc_info_ex", native_proc_info_ex, "(i*~i)i", 0 },
         { "block_buffer_phys", native_block_buffer_phys, "()i", 0 },

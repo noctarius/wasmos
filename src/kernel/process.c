@@ -547,6 +547,10 @@ uint32_t process_count_active(void) {
     return count;
 }
 
+uint32_t process_ready_count(void) {
+    return g_ready_count;
+}
+
 int process_info_at(uint32_t index, uint32_t *out_pid, const char **out_name) {
     if (!out_pid || !out_name) {
         return -1;

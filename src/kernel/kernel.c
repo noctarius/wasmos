@@ -7,6 +7,7 @@
 #include "process.h"
 #include "process_manager.h"
 #include "serial.h"
+#include "timer.h"
 #include "wasmos_app.h"
 #include "wamr_context.h"
 #include "wamr_runtime.h"
@@ -997,6 +998,7 @@ run_kernel_loop(void)
         if (process_schedule_once() != 0) {
             __asm__ volatile("pause");
         }
+        timer_poll();
     }
 }
 
@@ -1123,6 +1125,7 @@ kmain(boot_info_t *boot_info)
     serial_write("[kernel] page fault test pid=");
     serial_write_hex64(pf_test_pid);
 
+    timer_init(250);
     serial_write("[kernel] interrupts on\n");
     cpu_enable_interrupts();
 

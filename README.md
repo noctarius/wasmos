@@ -139,6 +139,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - `cmake --build build --target run-qemu-test` runs QEMU, waits for the CLI prompt, issues `halt`, and expects a clean shutdown
 - `cmake --build build --target run-qemu-cli-test` runs the CLI integration tests via the Python QEMU test framework (`python3 -m unittest discover -s tests`)
 - CLI integration tests include per-app hello tests (`test_hello_*.py`).
+- QEMU smoke tests include a PIT timer tick marker check (`tests/test_timer_tick.py`).
 - The CLI tests include running `exec hello-zig` and asserting the Zig app prints its banner and returns to the prompt.
 - `cmake --build build --target zig_examples` builds the Zig hello WASMOS-APP when Zig is available
 - `run-qemu`, `run-qemu-test`, and `run-qemu-cli-test` copy `sysinit.wasmosapp`, `cli.wasmosapp`, and `hw_discovery.wasmosapp` into `esp/system/services` in addition to `esp/apps` (where applicable).
@@ -207,6 +208,7 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes. U
 - The `wasmos` platform adapter now backs WAMR memory APIs (`os_mmap`/`os_mremap` and related allocators) with runtime allocator calls so module instantiation can map linear memory in freestanding mode.
 - Kernel primitives now include a minimal spinlock (`src/kernel/spinlock.c`) and IPC transport with per-endpoint queues (`src/kernel/ipc.c`).
 - Kernel primitives now include basic cooperative process management (`src/kernel/process.c`) with per-process memory-context binding.
+- PIT timer init now programs IRQ0 and increments a kernel tick counter; the kernel logs a tick milestone via a deferred poll in the scheduler loop.
 - Process lifecycle primitives now include `wait`, `kill`, and tracked `exit_status` via zombie processes until reaped.
 - Blocked processes can now be resumed by context (`process_wake_by_context`) when IPC traffic arrives for owned endpoints.
 - A minimal init process runs in the kernel and is the root parent for all kernel-spawned processes (mem-service, chardev-server, pagefault-test, and the process manager).

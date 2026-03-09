@@ -744,6 +744,7 @@ Current implementation (kernel scaffold):
 - `run-qemu`, `run-qemu-test`, and `run-qemu-cli-test` copy `sysinit.wasmosapp` and `cli.wasmosapp` into `esp/system/services` in addition to `esp/apps`.
 - `run-qemu`, `run-qemu-test`, and `run-qemu-cli-test` copy driver WASMOS-APPs (`ata.wasmosapp`, `fs_fat.wasmosapp`) into `esp/system/drivers`, and the bootloader preloads them from that path.
 - `run-qemu-cli-test` uses the Python QEMU test framework to execute CLI commands and assert output while the VM is running via `python3 -m unittest discover -s tests`.
+- The QEMU test framework force-stops on timeouts using the monitor sequence (`Ctrl+A` then `x`) to terminate hung runs.
 - CLI integration tests include per-app hello tests (`test_hello_*.py`).
 - CMake is split across per-component `CMakeLists.txt` files (boot, kernel, drivers, services, and each example language).
 - CLI integration tests include executing `hello-zig` and asserting its banner output before returning to the prompt.

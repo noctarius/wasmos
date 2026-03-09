@@ -9,6 +9,7 @@ Preemptive scheduling is implemented and stable. The IRQ0 timer tick drives time
 - Ready queue is a ring buffer in `process.c`.
 - Idle task runs `hlt` when no READY tasks exist.
 - IPC queue operations are protected by spinlocks that disable preemption.
+- QEMU test framework force-stops hung runs via the monitor sequence (`Ctrl+A` then `x`) on timeout.
 - CLI `ps` shows scheduler metrics via wasm natives (`sched_ticks`, `sched_ready_count`, `sched_current_pid`).
 
 ## Tests (Last Run)

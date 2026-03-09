@@ -2,6 +2,7 @@ set(LDFLAGS_KERNEL -nostdlib -T ${KERNEL_DIR}/arch/x86_64/linker.ld)
 
 set(KERNEL_OBJS
   ${BUILD_DIR}/entry.o
+  ${BUILD_DIR}/context_switch.o
   ${BUILD_DIR}/cpu_isr.o
   ${BUILD_DIR}/kernel.o
   ${BUILD_DIR}/cpu.o
@@ -29,6 +30,7 @@ endif ()
 
 set(KERNEL_SOURCES
   ${KERNEL_DIR}/arch/x86_64/entry.S
+  ${KERNEL_DIR}/arch/x86_64/context_switch.S
   ${KERNEL_DIR}/arch/x86_64/cpu_isr.S
   ${KERNEL_DIR}/kernel.c
   ${KERNEL_DIR}/cpu.c
@@ -82,6 +84,7 @@ target_include_directories(kernel_sources INTERFACE ${KERNEL_DIR}/include ${WASM
 # IDE aggregation target for CLion indexing (not part of the build).
 add_library(kernel_ide OBJECT EXCLUDE_FROM_ALL
   ${KERNEL_SOURCES}
+  ${KERNEL_DIR}/arch/x86_64/context_switch.S
   ${KERNEL_DIR}/include/boot.h
   ${KERNEL_DIR}/include/cpu.h
   ${KERNEL_DIR}/include/ipc.h
@@ -130,6 +133,7 @@ endif ()
 add_custom_command(
   OUTPUT ${BUILD_DIR}/kernel.elf
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/entry.S -o ${BUILD_DIR}/entry.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/context_switch.S -o ${BUILD_DIR}/context_switch.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/cpu_isr.S -o ${BUILD_DIR}/cpu_isr.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel.c -o ${BUILD_DIR}/kernel.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/cpu.c -o ${BUILD_DIR}/cpu.o

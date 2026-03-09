@@ -485,6 +485,7 @@ Design takeaways:
 - `timer` primitive in `src/kernel/timer.c` programs PIT IRQ0 and tracks a tick counter; logging is deferred to the scheduler loop.
 - The scheduler tracks per-process tick accounting and sets a reschedule flag when a time slice expires (preemption is still pending).
 - READY processes are now managed via a small FIFO run queue instead of full table scans.
+- The scheduler now switches into per-process contexts via a trampoline and stack; preemption is still pending.
 - `process_spawn` binds each process to a new memory context (`mm_context_create(pid)`), establishing per-process isolation boundaries.
 - Lifecycle primitives now include `process_wait`, `process_kill`, and `process_get_exit_status`.
 - WAMR native IPC imports use the `exec_env` calling convention to align with WAMR native argument marshalling.

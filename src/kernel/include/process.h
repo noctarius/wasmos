@@ -5,6 +5,18 @@
 
 #define PROCESS_MAX_COUNT 16
 #define PROCESS_DEFAULT_SLICE_TICKS 5u
+#define PROCESS_STACK_SIZE 16384u
+
+typedef struct {
+    uint64_t r15;
+    uint64_t r14;
+    uint64_t r13;
+    uint64_t r12;
+    uint64_t rbx;
+    uint64_t rbp;
+    uint64_t rsp;
+    uint64_t rip;
+} process_context_t;
 
 typedef enum {
     PROCESS_STATE_UNUSED = 0,
@@ -42,6 +54,8 @@ typedef struct process {
     uint32_t ticks_remaining;
     uint64_t ticks_total;
     uint8_t in_ready_queue;
+    process_context_t ctx;
+    uintptr_t stack_top;
     process_entry_t entry;
     void *arg;
     const char *name;
@@ -60,6 +74,7 @@ int process_kill(uint32_t pid, int32_t exit_status);
 int process_get_exit_status(uint32_t pid, int32_t *out_exit_status);
 uint32_t process_wake_by_context(uint32_t context_id);
 int process_schedule_once(void);
+void process_yield(process_run_result_t result);
 void process_tick(void);
 int process_should_resched(void);
 void process_clear_resched(void);

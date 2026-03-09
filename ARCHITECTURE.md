@@ -732,6 +732,7 @@ Current implementation (kernel scaffold):
 - `run-qemu`, `run-qemu-test`, and `run-qemu-cli-test` copy driver WASMOS-APPs (`ata.wasmosapp`, `fs_fat.wasmosapp`) into `esp/system/drivers`, and the bootloader preloads them from that path.
 - `run-qemu-cli-test` uses the Python QEMU test framework to execute CLI commands and assert output while the VM is running via `python3 -m unittest discover -s tests`.
 - CLI integration tests include per-app hello tests (`test_hello_*.py`).
+- CMake is split across per-component `CMakeLists.txt` files (boot, kernel, drivers, services, and each example language).
 - CLI integration tests include executing `hello-zig` and asserting its banner output before returning to the prompt.
 - IDE indexing targets (`bootloader_ide`, `kernel_ide`) include all project C/H sources for CLion, including drivers/services/examples and WAMR platform stubs.
   - IDE targets also export include directories for kernel/drivers/WAMR headers to improve CLion resolution.

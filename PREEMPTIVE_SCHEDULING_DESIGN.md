@@ -205,7 +205,7 @@ Changes required in platform stubs:
 
 **Open Questions**
 - Exact tick rate tuning after initial implementation (start at 250 Hz).
-- How aggressive preemption should be inside kernel subsystems beyond IPC (audit needed).
+- Preemption aggressiveness: start conservative (safe-point-only), then audit toward moderate if needed.
 
 **Phased Implementation Plan**
 1. Add PIT + IRQ0 tick counter; no preemption.

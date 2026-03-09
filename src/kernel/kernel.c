@@ -48,6 +48,13 @@ typedef struct {
 static ipc_test_state_t g_ipc_test_state;
 
 typedef struct {
+    uint8_t observer_runs;
+    uint8_t done;
+} preempt_test_state_t;
+static preempt_test_state_t g_preempt_test_state;
+static const uint8_t g_preempt_test_enabled = 0;
+
+typedef struct {
     const boot_info_t *boot_info;
     uint8_t started;
     uint8_t phase;
@@ -994,6 +1001,38 @@ ipc_send_test_entry(process_t *process, void *arg)
 }
 
 static process_run_result_t
+preempt_busy_entry(process_t *process, void *arg)
+{
+    (void)process;
+    (void)arg;
+    for (;;) {
+        __asm__ volatile("pause");
+    }
+}
+
+static process_run_result_t
+preempt_observer_entry(process_t *process, void *arg)
+{
+    preempt_test_state_t *state = (preempt_test_state_t *)arg;
+
+    if (!process || !state) {
+        return PROCESS_RUN_IDLE;
+    }
+    if (state->done) {
+        return PROCESS_RUN_EXITED;
+    }
+
+    state->observer_runs++;
+    if (state->observer_runs >= 3) {
+        serial_write("[test] preempt ok\n");
+        state->done = 1;
+        process_set_exit_status(process, 0);
+        return PROCESS_RUN_EXITED;
+    }
+    return PROCESS_RUN_YIELDED;
+}
+
+static process_run_result_t
 init_entry(process_t *process, void *arg)
 {
     init_state_t *state = (init_state_t *)arg;
@@ -1100,6 +1139,8 @@ kmain(boot_info_t *boot_info)
     uint32_t ipc_send_pid = 0;
     process_t *ipc_wait_proc = 0;
     process_t *ipc_send_proc = 0;
+    uint32_t preempt_busy_pid = 0;
+    uint32_t preempt_observer_pid = 0;
     uint32_t init_pid = 0;
     init_state_t init_state;
 
@@ -1238,6 +1279,19 @@ kmain(boot_info_t *boot_info)
         serial_write("[kernel] ipc test endpoint create failed\n");
         for (;;) {
             __asm__ volatile("hlt");
+        }
+    }
+
+    if (g_preempt_test_enabled) {
+        g_preempt_test_state.observer_runs = 0;
+        g_preempt_test_state.done = 0;
+        if (process_spawn_as(init_pid, "preempt-busy", preempt_busy_entry, 0, &preempt_busy_pid) != 0 ||
+            process_spawn_as(init_pid, "preempt-observer", preempt_observer_entry, &g_preempt_test_state,
+                             &preempt_observer_pid) != 0) {
+            serial_write("[kernel] preempt test spawn failed\n");
+            for (;;) {
+                __asm__ volatile("hlt");
+            }
         }
     }
 

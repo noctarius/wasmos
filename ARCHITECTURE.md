@@ -494,6 +494,7 @@ Design takeaways:
 - Exited processes transition to a zombie state carrying `exit_status` until reaped by `process_wait`.
 - The kernel main loop schedules processes instead of invoking service handlers directly.
 - A kernel IPC wakeup smoke test spawns `ipc-wait-test` and `ipc-send-test` and logs `[test] ipc wake ok` on success.
+- A preemption smoke test is staged (busy-loop + observer) and will log `[test] preempt ok` once preemptive scheduling is enabled; it is currently disabled.
 - The current system starts a dedicated `chardev-server` process and assigns its context ID as the owner of the chardev IPC endpoint.
 - The current system starts a kernel `init` process that is the root parent for all kernel-spawned processes, and it spawns the `process-manager` (owner of the `proc` endpoint).
 - The process manager spawns the user-space `sysinit` WASMOS-APP boot module after a kernel-init request and passes the `proc` endpoint plus boot module metadata.

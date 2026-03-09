@@ -141,6 +141,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - CLI integration tests include per-app hello tests (`test_hello_*.py`).
 - QEMU smoke tests include a PIT timer tick marker check (`tests/test_timer_tick.py`).
 - QEMU smoke tests include an IPC wakeup marker check (`tests/test_ipc_wakeup.py`).
+- QEMU smoke tests include a preemption marker check (`tests/test_preempt_smoke.py`) once preemption is enabled (test currently skipped).
 - The CLI tests include running `exec hello-zig` and asserting the Zig app prints its banner and returns to the prompt.
 - `cmake --build build --target zig_examples` builds the Zig hello WASMOS-APP when Zig is available
 - `run-qemu`, `run-qemu-test`, and `run-qemu-cli-test` copy `sysinit.wasmosapp`, `cli.wasmosapp`, and `hw_discovery.wasmosapp` into `esp/system/services` in addition to `esp/apps` (where applicable).

@@ -212,6 +212,7 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes. U
 - Kernel primitives now include basic cooperative process management (`src/kernel/process.c`) with per-process memory-context binding.
 - PIT timer init now programs IRQ0 and increments a kernel tick counter; the kernel logs a tick milestone via a deferred poll in the scheduler loop.
 - The scheduler now tracks per-process tick accounting and sets a reschedule flag when a time slice expires (preemption still pending).
+- READY processes are now managed via a simple run queue instead of a full scan each scheduling step.
 - Process lifecycle primitives now include `wait`, `kill`, and tracked `exit_status` via zombie processes until reaped.
 - Blocked processes can now be resumed by context (`process_wake_by_context`) when IPC traffic arrives for owned endpoints.
 - A minimal init process runs in the kernel and is the root parent for all kernel-spawned processes (mem-service, chardev-server, pagefault-test, and the process manager).

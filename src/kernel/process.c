@@ -7,6 +7,49 @@ static uint32_t g_last_index;
 static uint32_t g_current_pid;
 static volatile uint8_t g_need_resched;
 
+static process_t *process_find_by_pid(uint32_t pid);
+static uint32_t g_ready_queue[PROCESS_MAX_COUNT];
+static uint32_t g_ready_head;
+static uint32_t g_ready_tail;
+static uint32_t g_ready_count;
+
+static void ready_queue_reset(void) {
+    g_ready_head = 0;
+    g_ready_tail = 0;
+    g_ready_count = 0;
+}
+
+static int ready_queue_enqueue(process_t *proc) {
+    if (!proc || proc->in_ready_queue) {
+        return 0;
+    }
+    if (g_ready_count >= PROCESS_MAX_COUNT) {
+        return -1;
+    }
+    g_ready_queue[g_ready_tail] = proc->pid;
+    g_ready_tail = (g_ready_tail + 1u) % PROCESS_MAX_COUNT;
+    g_ready_count++;
+    proc->in_ready_queue = 1;
+    return 0;
+}
+
+static process_t *ready_queue_dequeue(void) {
+    while (g_ready_count > 0) {
+        uint32_t pid = g_ready_queue[g_ready_head];
+        g_ready_head = (g_ready_head + 1u) % PROCESS_MAX_COUNT;
+        g_ready_count--;
+        process_t *proc = process_find_by_pid(pid);
+        if (!proc) {
+            continue;
+        }
+        proc->in_ready_queue = 0;
+        if (proc->state == PROCESS_STATE_READY) {
+            return proc;
+        }
+    }
+    return 0;
+}
+
 static void process_reset_slot(process_t *proc) {
     if (!proc) {
         return;
@@ -21,6 +64,7 @@ static void process_reset_slot(process_t *proc) {
     proc->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     proc->ticks_remaining = 0;
     proc->ticks_total = 0;
+    proc->in_ready_queue = 0;
     proc->entry = 0;
     proc->arg = 0;
     proc->name = 0;
@@ -78,6 +122,7 @@ static void process_wake_waiters(uint32_t target_pid) {
         proc->block_reason = PROCESS_BLOCK_NONE;
         proc->wait_target_pid = 0;
         proc->state = PROCESS_STATE_READY;
+        ready_queue_enqueue(proc);
     }
 }
 
@@ -101,6 +146,7 @@ void process_init(void) {
     g_last_index = 0;
     g_current_pid = 0;
     g_need_resched = 0;
+    ready_queue_reset();
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         process_reset_slot(&g_processes[i]);
     }
@@ -139,6 +185,7 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
     slot->entry = entry;
     slot->arg = arg;
     slot->name = name;
+    ready_queue_enqueue(slot);
     *out_pid = pid;
     return 0;
 }
@@ -246,6 +293,7 @@ uint32_t process_wake_by_context(uint32_t context_id) {
         }
         proc->block_reason = PROCESS_BLOCK_NONE;
         proc->state = PROCESS_STATE_READY;
+        ready_queue_enqueue(proc);
         woken++;
     }
     return woken;
@@ -256,40 +304,36 @@ int process_schedule_once(void) {
         return 1;
     }
 
-    for (uint32_t scan = 0; scan < PROCESS_MAX_COUNT; ++scan) {
-        uint32_t index = (g_last_index + scan) % PROCESS_MAX_COUNT;
-        process_t *proc = &g_processes[index];
-        if (proc->state != PROCESS_STATE_READY || !proc->entry) {
-            continue;
-        }
-
-        proc->state = PROCESS_STATE_RUNNING;
-        if (proc->ticks_remaining == 0) {
-            proc->ticks_remaining = proc->time_slice_ticks;
-        }
-        g_current_pid = proc->pid;
-        process_run_result_t result = proc->entry(proc, proc->arg);
-        g_current_pid = 0;
-
-        if (result == PROCESS_RUN_EXITED) {
-            process_mark_exited(proc, proc->exit_status);
-        } else if (result == PROCESS_RUN_BLOCKED) {
-            proc->state = PROCESS_STATE_BLOCKED;
-            if (proc->block_reason == PROCESS_BLOCK_NONE) {
-                proc->block_reason = PROCESS_BLOCK_IPC;
-            }
-        } else {
-            proc->state = PROCESS_STATE_READY;
-            proc->block_reason = PROCESS_BLOCK_NONE;
-            proc->wait_target_pid = 0;
-        }
-
-        g_last_index = (index + 1) % PROCESS_MAX_COUNT;
-        g_need_resched = 0;
-        return (result == PROCESS_RUN_YIELDED) ? 0 : 1;
+    process_t *proc = ready_queue_dequeue();
+    if (!proc || proc->state != PROCESS_STATE_READY || !proc->entry) {
+        return 1;
     }
 
-    return 1;
+    proc->state = PROCESS_STATE_RUNNING;
+    if (proc->ticks_remaining == 0) {
+        proc->ticks_remaining = proc->time_slice_ticks;
+    }
+    g_current_pid = proc->pid;
+    process_run_result_t result = proc->entry(proc, proc->arg);
+    g_current_pid = 0;
+
+    if (result == PROCESS_RUN_EXITED) {
+        process_mark_exited(proc, proc->exit_status);
+    } else if (result == PROCESS_RUN_BLOCKED) {
+        proc->state = PROCESS_STATE_BLOCKED;
+        if (proc->block_reason == PROCESS_BLOCK_NONE) {
+            proc->block_reason = PROCESS_BLOCK_IPC;
+        }
+    } else {
+        proc->state = PROCESS_STATE_READY;
+        proc->block_reason = PROCESS_BLOCK_NONE;
+        proc->wait_target_pid = 0;
+        ready_queue_enqueue(proc);
+    }
+
+    g_last_index = proc->pid;
+    g_need_resched = 0;
+    return (result == PROCESS_RUN_YIELDED) ? 0 : 1;
 }
 
 void process_tick(void) {

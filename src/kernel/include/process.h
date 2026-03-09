@@ -41,6 +41,7 @@ typedef struct process {
     uint32_t time_slice_ticks;
     uint32_t ticks_remaining;
     uint64_t ticks_total;
+    uint8_t in_ready_queue;
     process_entry_t entry;
     void *arg;
     const char *name;

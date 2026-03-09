@@ -2,16 +2,23 @@
 #include "memory.h"
 
 static process_t g_processes[PROCESS_MAX_COUNT];
+static uint8_t g_process_stacks[PROCESS_MAX_COUNT][PROCESS_STACK_SIZE] __attribute__((aligned(16)));
 static uint32_t g_next_pid;
 static uint32_t g_last_index;
 static uint32_t g_current_pid;
 static volatile uint8_t g_need_resched;
 
 static process_t *process_find_by_pid(uint32_t pid);
+static void process_trampoline(void);
 static uint32_t g_ready_queue[PROCESS_MAX_COUNT];
 static uint32_t g_ready_head;
 static uint32_t g_ready_tail;
 static uint32_t g_ready_count;
+static process_t *g_current_process;
+static process_run_result_t g_last_run_result;
+static process_context_t g_sched_ctx;
+
+extern void context_switch(process_context_t *out, process_context_t *in);
 
 static void ready_queue_reset(void) {
     g_ready_head = 0;
@@ -50,6 +57,17 @@ static process_t *ready_queue_dequeue(void) {
     return 0;
 }
 
+static void process_trampoline(void) {
+    for (;;) {
+        if (!g_current_process || !g_current_process->entry) {
+            g_last_run_result = PROCESS_RUN_IDLE;
+        } else {
+            g_last_run_result = g_current_process->entry(g_current_process, g_current_process->arg);
+        }
+        context_switch(&g_current_process->ctx, &g_sched_ctx);
+    }
+}
+
 static void process_reset_slot(process_t *proc) {
     if (!proc) {
         return;
@@ -65,6 +83,8 @@ static void process_reset_slot(process_t *proc) {
     proc->ticks_remaining = 0;
     proc->ticks_total = 0;
     proc->in_ready_queue = 0;
+    proc->ctx = (process_context_t){0};
+    proc->stack_top = 0;
     proc->entry = 0;
     proc->arg = 0;
     proc->name = 0;
@@ -147,6 +167,8 @@ void process_init(void) {
     g_current_pid = 0;
     g_need_resched = 0;
     ready_queue_reset();
+    g_current_process = 0;
+    g_last_run_result = PROCESS_RUN_IDLE;
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         process_reset_slot(&g_processes[i]);
     }
@@ -185,6 +207,10 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
     slot->entry = entry;
     slot->arg = arg;
     slot->name = name;
+    uint32_t index = (uint32_t)(slot - g_processes);
+    slot->stack_top = (uintptr_t)g_process_stacks[index] + PROCESS_STACK_SIZE;
+    slot->ctx.rsp = slot->stack_top - 8u;
+    slot->ctx.rip = (uint64_t)(uintptr_t)process_trampoline;
     ready_queue_enqueue(slot);
     *out_pid = pid;
     return 0;
@@ -207,6 +233,14 @@ void process_set_exit_status(process_t *process, int32_t exit_status) {
         return;
     }
     process->exit_status = exit_status;
+}
+
+void process_yield(process_run_result_t result) {
+    if (!g_current_process) {
+        return;
+    }
+    g_last_run_result = result;
+    context_switch(&g_current_process->ctx, &g_sched_ctx);
 }
 
 void process_block_on_ipc(process_t *process) {
@@ -314,7 +348,10 @@ int process_schedule_once(void) {
         proc->ticks_remaining = proc->time_slice_ticks;
     }
     g_current_pid = proc->pid;
-    process_run_result_t result = proc->entry(proc, proc->arg);
+    g_current_process = proc;
+    context_switch(&g_sched_ctx, &proc->ctx);
+    process_run_result_t result = g_last_run_result;
+    g_current_process = 0;
     g_current_pid = 0;
 
     if (result == PROCESS_RUN_EXITED) {

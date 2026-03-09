@@ -354,6 +354,7 @@ add_custom_target(kernel_ide SOURCES
   ${DRIVER_WASM_DIR}/fs_fat/fs_fat.c
   ${SERVICES_DIR}/sysinit/init.c
   ${SERVICES_DIR}/cli/cli.c
+  ${SERVICES_DIR}/hw_discovery/hw_discovery.c
   ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_init.c
   ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_stub.c
   ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_internal.h
@@ -379,6 +380,9 @@ set(WASM_INIT_APP ${BUILD_DIR}/sysinit.wasmosapp)
 set(WASM_CLI_APP_SRC ${SERVICES_DIR}/cli/cli.c)
 set(WASM_CLI_APP_WASM ${BUILD_DIR}/cli.wasm)
 set(WASM_CLI_APP ${BUILD_DIR}/cli.wasmosapp)
+set(WASM_HW_DISCOVERY_SRC ${SERVICES_DIR}/hw_discovery/hw_discovery.c)
+set(WASM_HW_DISCOVERY_WASM ${BUILD_DIR}/hw_discovery.wasm)
+set(WASM_HW_DISCOVERY_APP ${BUILD_DIR}/hw_discovery.wasmosapp)
 set(WASM_HELLO_C_SRC ${EXAMPLES_C_DIR}/hello/hello_c.c)
 set(WASM_HELLO_C_WASM ${BUILD_DIR}/hello_c.wasm)
 set(WASM_HELLO_C_APP ${BUILD_DIR}/hello_c.wasmosapp)
@@ -558,6 +562,25 @@ add_custom_command(
 )
 
 add_custom_command(
+  OUTPUT ${WASM_HW_DISCOVERY_WASM}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib
+          -Wl,--no-entry -Wl,--strip-all
+          -Wl,-z,stack-size=4096
+          -Wl,--initial-memory=65536
+          -Wl,--max-memory=65536
+          -Wl,--allow-undefined
+          -Wl,--export=hw_discovery_step
+          -I${DRIVER_WASM_DIR}/include
+          ${WASM_HW_DISCOVERY_SRC}
+          -o ${WASM_HW_DISCOVERY_WASM}
+  DEPENDS ${WASM_HW_DISCOVERY_SRC} ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Building wasm hw-discovery module"
+  VERBATIM
+)
+
+add_custom_command(
   OUTPUT ${WASM_HELLO_C_WASM}
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
   COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
@@ -637,6 +660,26 @@ add_custom_command(
 )
 
 add_custom_command(
+  OUTPUT ${WASM_HW_DISCOVERY_APP}
+  COMMAND ${WASMOS_APP_PACKER}
+          ${WASM_HW_DISCOVERY_WASM}
+          ${WASM_HW_DISCOVERY_APP}
+          hw-discovery
+          hw_discovery_step
+          16
+          16
+          2
+          proc
+          1
+          ipc.basic
+          0
+  DEPENDS ${WASM_HW_DISCOVERY_WASM} ${WASMOS_APP_PACKER}
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Packing wasm hw-discovery as WASMOS-APP"
+  VERBATIM
+)
+
+add_custom_command(
   OUTPUT ${WASM_HELLO_C_APP}
   COMMAND ${WASMOS_APP_PACKER}
           ${WASM_HELLO_C_WASM}
@@ -682,6 +725,7 @@ set(WASM_DRIVER_BLOBS
   ${WASM_ATA_APP}
   ${WASM_INIT_APP}
   ${WASM_CLI_APP}
+  ${WASM_HW_DISCOVERY_APP}
   ${WASM_HELLO_C_APP}
   ${WASM_FAT_APP}
   ${WASM_CHARDEV_CLIENT_APP}
@@ -1030,6 +1074,7 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HW_DISCOVERY_APP} ${BUILD_DIR}/esp/system/services/hw_discovery.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
@@ -1061,6 +1106,7 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HW_DISCOVERY_APP} ${BUILD_DIR}/esp/system/services/hw_discovery.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
@@ -1092,6 +1138,7 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HW_DISCOVERY_APP} ${BUILD_DIR}/esp/system/services/hw_discovery.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
@@ -1125,6 +1172,7 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HW_DISCOVERY_APP} ${BUILD_DIR}/esp/system/services/hw_discovery.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
@@ -1154,6 +1202,7 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HW_DISCOVERY_APP} ${BUILD_DIR}/esp/system/services/hw_discovery.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
@@ -1183,6 +1232,7 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HW_DISCOVERY_APP} ${BUILD_DIR}/esp/system/services/hw_discovery.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}

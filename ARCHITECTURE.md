@@ -322,7 +322,7 @@ Required fields:
 Optional future fields:
 - Framebuffer/GOP descriptor.
 - Boot module list (for preloaded WASMOS-APP images).
-- RSDP/ACPI pointers.
+- RSDP/ACPI pointers (implemented).
 
 Definition of Done:
 - `boot_info_t` layout and versioning rules documented here.
@@ -331,6 +331,7 @@ Definition of Done:
 
 Current scaffold status:
 - `boot_info_t` now includes module list fields (`modules`, `module_count`, `module_entry_size`).
+- `boot_info_t` now includes the ACPI RSDP pointer and length for early discovery.
 - Bootloader optionally preloads `\apps\chardev_client.wasmosapp` from ESP and
   passes it as `BOOT_MODULE_TYPE_WASMOS_APP`.
 - Kernel consumes boot modules when launching the test WASMOS-APP process.
@@ -569,6 +570,7 @@ Services:
   - Starts the entry export and registers the process with the scheduler.
 - `sysinit` (root task / init process): the first user-space task that bootstraps the system.
   - Starts core services and drivers (PM, ATA, FAT, CLI).
+- `hw-discovery` (udev-like): scans the ACPI RSDP and ensures core drivers are running.
 - `cli` (simple CLI): provides a basic command loop and service/status queries.
 
 Planned:
@@ -578,9 +580,7 @@ Drivers:
 - `fs-fat32` (FAT32): mounts a block device, exposes file open/read/dir listing.
 
 Services:
-- `hw-discovery` (udev-like): privileged service that detects hardware and emits events.
-  - Enumerates ACPI/PCI and publishes device inventory updates.
-  - Emits hotplug notifications for new/removed devices.
+- `hw-discovery` extensions: enumerate ACPI/PCI device inventory and emit hotplug events.
 - `driver-manager`: starts, stops, and assigns drivers in response to hardware events.
   - Maps devices to driver images, allocates resources, and wires endpoints.
 - `sysinit` extensions:
@@ -638,6 +638,7 @@ Defined in `src/kernel/include/boot.h` and populated by the bootloader.
 Fields (current scaffold):
 - `memory_map`, `memory_map_size`, `memory_desc_size`, `memory_desc_version`
 - `modules`, `module_count`, `module_entry_size`
+- `rsdp`, `rsdp_length` (ACPI RSDP pointer and length)
 - framebuffer fields (placeholders for future integration)
 
 ### WASMOS WASM Application Format (WASMOS-APP)

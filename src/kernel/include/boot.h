@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#define BOOT_INFO_VERSION 2u
+#define BOOT_INFO_VERSION 3u
 #define BOOT_INFO_FLAG_GOP_PRESENT (1u << 0)
 #define BOOT_INFO_FLAG_MODULES_PRESENT (1u << 1)
 
@@ -36,6 +36,8 @@ typedef struct {
     void *modules;
     uint32_t module_count;
     uint32_t module_entry_size;
+    void *rsdp;
+    uint32_t rsdp_length;
 } boot_info_t;
 
 #endif

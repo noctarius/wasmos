@@ -8,6 +8,72 @@
 #define EFI_BUFFER_TOO_SMALL ((EFI_STATUS)0x8000000000000005ULL)
 #define EFI_INVALID_PARAMETER ((EFI_STATUS)0x8000000000000002ULL)
 
+typedef struct __attribute__((packed)) {
+    char signature[8];
+    UINT8 checksum;
+    char oem_id[6];
+    UINT8 revision;
+    UINT32 rsdt_address;
+    UINT32 length;
+    UINT64 xsdt_address;
+    UINT8 ext_checksum;
+    UINT8 reserved[3];
+} acpi_rsdp_t;
+
+static int guid_eq(const EFI_GUID *a, const EFI_GUID *b) {
+    if (!a || !b) {
+        return 0;
+    }
+    if (a->Data1 != b->Data1 || a->Data2 != b->Data2 || a->Data3 != b->Data3) {
+        return 0;
+    }
+    for (UINTN i = 0; i < sizeof(a->Data4); ++i) {
+        if (a->Data4[i] != b->Data4[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void *find_acpi_rsdp(EFI_SYSTEM_TABLE *system, UINT32 *out_len) {
+    static const EFI_GUID acpi20_guid =
+        { 0x8868e871, 0xe4f1, 0x11d3, { 0xbc, 0x22, 0x00, 0x80, 0xc7, 0x3c, 0x88, 0x81 } };
+    static const EFI_GUID acpi10_guid =
+        { 0xeb9d2d30, 0x2d88, 0x11d3, { 0x9a, 0x16, 0x00, 0x90, 0x27, 0x3f, 0xc1, 0x4d } };
+
+    if (out_len) {
+        *out_len = 0;
+    }
+    if (!system || !system->ConfigurationTable || system->NumberOfTableEntries == 0) {
+        return 0;
+    }
+
+    EFI_CONFIGURATION_TABLE *tables = (EFI_CONFIGURATION_TABLE *)system->ConfigurationTable;
+    void *rsdp = 0;
+    for (UINTN i = 0; i < system->NumberOfTableEntries; ++i) {
+        if (guid_eq(&tables[i].VendorGuid, &acpi20_guid)) {
+            rsdp = tables[i].VendorTable;
+            break;
+        }
+        if (!rsdp && guid_eq(&tables[i].VendorGuid, &acpi10_guid)) {
+            rsdp = tables[i].VendorTable;
+        }
+    }
+
+    if (!rsdp) {
+        return 0;
+    }
+    if (out_len) {
+        acpi_rsdp_t *desc = (acpi_rsdp_t *)rsdp;
+        UINT32 len = 20;
+        if (desc->revision >= 2 && desc->length >= 20) {
+            len = desc->length;
+        }
+        *out_len = len;
+    }
+    return rsdp;
+}
+
 static void *memcpy8(void *dst, const void *src, UINTN n) {
     UINT8 *d = (UINT8 *)dst;
     const UINT8 *s = (const UINT8 *)src;
@@ -216,6 +282,18 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         uefi_log(system, "[boot] preloaded module: \\\\system\\\\drivers\\\\fs_fat.wasmosapp\n");
     }
 
+    static CHAR16 hw_discovery_path[] = L"\\system\\services\\hw_discovery.wasmosapp";
+    void *hw_discovery_buf = 0;
+    UINTN hw_discovery_size = 0;
+    status = read_file_alloc(bs, root, hw_discovery_path, &hw_discovery_buf, &hw_discovery_size);
+    if (EFI_ERROR(status)) {
+        hw_discovery_buf = 0;
+        hw_discovery_size = 0;
+        uefi_log(system, "[boot] optional module not found: \\\\system\\\\services\\\\hw_discovery.wasmosapp\n");
+    } else {
+        uefi_log(system, "[boot] preloaded module: \\\\system\\\\services\\\\hw_discovery.wasmosapp\n");
+    }
+
     static CHAR16 cli_path[] = L"\\apps\\cli.wasmosapp";
     void *cli_buf = 0;
     UINTN cli_size = 0;
@@ -285,6 +363,12 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         }
     }
 
+    UINT32 rsdp_length = 0;
+    void *rsdp = find_acpi_rsdp(system, &rsdp_length);
+    if (rsdp) {
+        uefi_log(system, "[boot] ACPI RSDP located\n");
+    }
+
     boot_info_t *boot_info = 0;
     UINTN mmap_size = 0;
     UINTN map_key = 0;
@@ -307,11 +391,15 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
     if (fat_buf && fat_size > 0) {
         module_count++;
     }
+    if (hw_discovery_buf && hw_discovery_size > 0) {
+        module_count++;
+    }
     if (cli_buf && cli_size > 0) {
         module_count++;
     }
     UINTN module_table_bytes = module_count * sizeof(boot_module_t);
-    UINTN module_data_bytes = init_size + app_size + ata_size + fat_size + cli_size;
+    UINTN module_data_bytes =
+        init_size + app_size + ata_size + fat_size + hw_discovery_size + cli_size;
 
     void *mmap = 0;
     UINT64 boot_buf = 0;
@@ -368,6 +456,8 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         boot_info->modules = 0;
         boot_info->module_count = 0;
         boot_info->module_entry_size = sizeof(boot_module_t);
+        boot_info->rsdp = rsdp;
+        boot_info->rsdp_length = rsdp_length;
 
         UINT8 *cursor = (UINT8 *)map_dst + map_bytes;
         if (module_count > 0) {
@@ -417,6 +507,18 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
                 copy_cstr(mods[mod_index].name, sizeof(mods[mod_index].name), "system/drivers/fs_fat.wasmosapp");
                 memcpy8(cursor, fat_buf, fat_size);
                 cursor += fat_size;
+                mod_index++;
+            }
+
+            if (hw_discovery_buf && hw_discovery_size > 0) {
+                mods[mod_index].base = (UINT64)(UINTN)cursor;
+                mods[mod_index].size = hw_discovery_size;
+                mods[mod_index].type = BOOT_MODULE_TYPE_WASMOS_APP;
+                mods[mod_index].reserved = 0;
+                copy_cstr(mods[mod_index].name, sizeof(mods[mod_index].name),
+                          "system/services/hw_discovery.wasmosapp");
+                memcpy8(cursor, hw_discovery_buf, hw_discovery_size);
+                cursor += hw_discovery_size;
                 mod_index++;
             }
 

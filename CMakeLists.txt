@@ -34,6 +34,44 @@ set(EXAMPLES_AS_DIR ${CMAKE_SOURCE_DIR}/examples/assemblyscript)
 set(EXAMPLES_ZIG_DIR ${CMAKE_SOURCE_DIR}/examples/zig)
 set(SERVICES_DIR ${CMAKE_SOURCE_DIR}/src/services)
 
+set(WASM_CHARDEV_DRIVER_SRC ${DRIVER_WASM_DIR}/chardev/chardev_server.c)
+set(WASM_CHARDEV_DRIVER_WASM ${BUILD_DIR}/chardev_server.wasm)
+set(WASM_CHARDEV_DRIVER_BLOB ${BUILD_DIR}/chardev_server_blob.o)
+set(WASM_CHARDEV_CLIENT_SRC ${EXAMPLES_C_DIR}/chardev_client/chardev_client.c)
+set(WASM_CHARDEV_CLIENT_WASM ${BUILD_DIR}/chardev_client.wasm)
+set(WASM_CHARDEV_CLIENT_BLOB ${BUILD_DIR}/chardev_client_blob.o)
+set(WASM_CHARDEV_CLIENT_APP ${BUILD_DIR}/chardev_client.wasmosapp)
+set(WASM_ATA_DRIVER_SRC ${DRIVER_WASM_DIR}/ata/ata.c)
+set(WASM_ATA_DRIVER_WASM ${BUILD_DIR}/ata.wasm)
+set(WASM_ATA_APP ${BUILD_DIR}/ata.wasmosapp)
+set(WASM_FAT_DRIVER_SRC ${DRIVER_WASM_DIR}/fs_fat/fs_fat.c)
+set(WASM_FAT_DRIVER_WASM ${BUILD_DIR}/fs_fat.wasm)
+set(WASM_FAT_APP ${BUILD_DIR}/fs_fat.wasmosapp)
+set(WASM_INIT_APP_SRC ${SERVICES_DIR}/sysinit/init.c)
+set(WASM_INIT_APP_WASM ${BUILD_DIR}/init.wasm)
+set(WASM_INIT_APP ${BUILD_DIR}/sysinit.wasmosapp)
+set(WASM_CLI_APP_SRC ${SERVICES_DIR}/cli/cli.c)
+set(WASM_CLI_APP_WASM ${BUILD_DIR}/cli.wasm)
+set(WASM_CLI_APP ${BUILD_DIR}/cli.wasmosapp)
+set(WASM_HW_DISCOVERY_SRC ${SERVICES_DIR}/hw_discovery/hw_discovery.c)
+set(WASM_HW_DISCOVERY_WASM ${BUILD_DIR}/hw_discovery.wasm)
+set(WASM_HW_DISCOVERY_APP ${BUILD_DIR}/hw_discovery.wasmosapp)
+set(WASM_HELLO_C_SRC ${EXAMPLES_C_DIR}/hello/hello_c.c)
+set(WASM_HELLO_C_WASM ${BUILD_DIR}/hello_c.wasm)
+set(WASM_HELLO_C_APP ${BUILD_DIR}/hello_c.wasmosapp)
+set(WASM_HELLO_RUST_SRC ${EXAMPLES_RUST_DIR}/hello/hello_rust.rs)
+set(WASM_HELLO_RUST_WASM ${BUILD_DIR}/hello_rust.wasm)
+set(WASM_HELLO_RUST_APP ${BUILD_DIR}/hello_rust.wasmosapp)
+set(WASM_HELLO_GO_SRC ${EXAMPLES_GO_DIR}/hello/hello_go.go)
+set(WASM_HELLO_GO_WASM ${BUILD_DIR}/hello_go.wasm)
+set(WASM_HELLO_GO_APP ${BUILD_DIR}/hello_go.wasmosapp)
+set(WASM_HELLO_ZIG_SRC ${EXAMPLES_ZIG_DIR}/hello/hello_zig.zig)
+set(WASM_HELLO_ZIG_WASM ${BUILD_DIR}/hello_zig.wasm)
+set(WASM_HELLO_ZIG_APP ${BUILD_DIR}/hello_zig.wasmosapp)
+set(AS_HELLO_SRC ${EXAMPLES_AS_DIR}/hello/hello.ts)
+set(AS_HELLO_WASM ${BUILD_DIR}/hello_as.wasm)
+set(AS_HELLO_APP ${BUILD_DIR}/hello_as.wasmosapp)
+
 if (NOT DEFINED AS_ENABLE_INITIALIZED)
   set(AS_ENABLE ON CACHE BOOL "Enable AssemblyScript example builds" FORCE)
   set(AS_ENABLE_INITIALIZED ON CACHE BOOL "Set when AS_ENABLE default is initialized" FORCE)
@@ -236,735 +274,19 @@ if (NOT OVMF_VARS AND OVMF_CODE)
   endforeach()
 endif ()
 
+
+add_executable(make_wasmos_app ${CMAKE_SOURCE_DIR}/scripts/make_wasmos_app.c)
+target_compile_options(make_wasmos_app PRIVATE -O2)
+set_target_properties(make_wasmos_app PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY ${BUILD_DIR}
+)
+set(WASMOS_APP_PACKER $<TARGET_FILE:make_wasmos_app>)
+
 if (OVMF_VARS AND NOT EXISTS ${OVMF_VARS})
   message(WARNING "OVMF_VARS '${OVMF_VARS}' not found; continuing without vars.")
   set(OVMF_VARS "" CACHE FILEPATH "Path to OVMF_VARS.fd (optional)" FORCE)
 endif ()
-set(LDFLAGS_KERNEL -nostdlib -T ${KERNEL_DIR}/arch/x86_64/linker.ld)
 
-set(KERNEL_OBJS
-  ${BUILD_DIR}/entry.o
-  ${BUILD_DIR}/cpu_isr.o
-  ${BUILD_DIR}/kernel.o
-  ${BUILD_DIR}/cpu.o
-  ${BUILD_DIR}/memory.o
-  ${BUILD_DIR}/paging.o
-  ${BUILD_DIR}/physmem.o
-  ${BUILD_DIR}/ipc.o
-  ${BUILD_DIR}/process.o
-  ${BUILD_DIR}/spinlock.o
-  ${BUILD_DIR}/memory_service.o
-  ${BUILD_DIR}/irq.o
-  ${BUILD_DIR}/process_manager.o
-  ${BUILD_DIR}/wasmos_app.o
-  ${BUILD_DIR}/wasm_driver.o
-  ${BUILD_DIR}/wamr_context.o
-  ${BUILD_DIR}/wasm_chardev.o
-  ${BUILD_DIR}/serial.o
-  ${BUILD_DIR}/wamr_runtime.o
-)
-
-set(KERNEL_LINK_LIBS "")
-
-set(BOOT_SOURCES
-  ${BOOT_DIR}/boot.c
-)
-
-set(KERNEL_SOURCES
-  ${KERNEL_DIR}/arch/x86_64/entry.S
-  ${KERNEL_DIR}/arch/x86_64/cpu_isr.S
-  ${KERNEL_DIR}/kernel.c
-  ${KERNEL_DIR}/cpu.c
-  ${KERNEL_DIR}/memory.c
-  ${KERNEL_DIR}/paging.c
-  ${KERNEL_DIR}/physmem.c
-  ${KERNEL_DIR}/ipc.c
-  ${KERNEL_DIR}/process.c
-  ${KERNEL_DIR}/spinlock.c
-  ${KERNEL_DIR}/memory_service.c
-  ${KERNEL_DIR}/irq.c
-  ${KERNEL_DIR}/process_manager.c
-  ${KERNEL_DIR}/wasmos_app.c
-  ${KERNEL_DIR}/wasm_driver.c
-  ${KERNEL_DIR}/wamr_context.c
-  ${KERNEL_DIR}/wasm_chardev.c
-  ${KERNEL_DIR}/serial.c
-  ${WASM_DIR}/wamr_runtime.c
-)
-
-# Editor/indexer targets for CLion so sources are part of a CMake target.
-add_library(bootloader_sources INTERFACE)
-target_sources(bootloader_sources INTERFACE ${BOOT_SOURCES} ${BOOT_DIR}/uefi.h ${BOOT_DIR}/elf.h ${KERNEL_DIR}/include/boot.h)
-target_include_directories(bootloader_sources INTERFACE ${BOOT_DIR} ${KERNEL_DIR}/include)
-
-add_library(kernel_sources INTERFACE)
-target_sources(kernel_sources INTERFACE
-  ${KERNEL_SOURCES}
-  ${KERNEL_DIR}/include/boot.h
-  ${KERNEL_DIR}/include/cpu.h
-  ${KERNEL_DIR}/include/ipc.h
-  ${KERNEL_DIR}/include/memory.h
-  ${KERNEL_DIR}/include/memory_service.h
-  ${KERNEL_DIR}/include/paging.h
-  ${KERNEL_DIR}/include/physmem.h
-  ${KERNEL_DIR}/include/process.h
-  ${KERNEL_DIR}/include/process_manager.h
-  ${KERNEL_DIR}/include/irq.h
-  ${KERNEL_DIR}/include/serial.h
-  ${KERNEL_DIR}/include/spinlock.h
-  ${KERNEL_DIR}/include/wamr_context.h
-  ${KERNEL_DIR}/include/wasm_chardev.h
-  ${KERNEL_DIR}/include/wasm_driver.h
-  ${KERNEL_DIR}/include/wasmos_app.h
-  ${KERNEL_DIR}/include/io.h
-  ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_init.c
-  ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_stub.c
-  ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_internal.h
-  ${WASM_DIR}/wamr_runtime.h
-)
-target_include_directories(kernel_sources INTERFACE ${KERNEL_DIR}/include ${WASM_DIR} ${DRIVER_WASM_DIR}/include)
-
-# IDE aggregation targets for CLion indexing (not part of the build).
-add_library(bootloader_ide OBJECT EXCLUDE_FROM_ALL
-  ${BOOT_SOURCES}
-  ${BOOT_DIR}/uefi.h
-  ${BOOT_DIR}/elf.h
-  ${KERNEL_DIR}/include/boot.h
-)
-target_include_directories(bootloader_ide PRIVATE
-  ${BOOT_DIR}
-  ${KERNEL_DIR}/include
-)
-
-add_library(kernel_ide OBJECT EXCLUDE_FROM_ALL
-  ${KERNEL_SOURCES}
-  ${KERNEL_DIR}/include/boot.h
-  ${KERNEL_DIR}/include/cpu.h
-  ${KERNEL_DIR}/include/ipc.h
-  ${KERNEL_DIR}/include/memory.h
-  ${KERNEL_DIR}/include/paging.h
-  ${KERNEL_DIR}/include/physmem.h
-  ${KERNEL_DIR}/include/process.h
-  ${KERNEL_DIR}/include/process_manager.h
-  ${KERNEL_DIR}/include/memory_service.h
-  ${KERNEL_DIR}/include/irq.h
-  ${KERNEL_DIR}/include/serial.h
-  ${KERNEL_DIR}/include/wasmos_app.h
-  ${KERNEL_DIR}/include/spinlock.h
-  ${KERNEL_DIR}/include/wamr_context.h
-  ${KERNEL_DIR}/include/wasm_driver.h
-  ${KERNEL_DIR}/include/wasm_chardev.h
-  ${KERNEL_DIR}/include/io.h
-  ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  ${DRIVER_WASM_DIR}/chardev/chardev_server.c
-  ${EXAMPLES_C_DIR}/chardev_client/chardev_client.c
-  ${EXAMPLES_C_DIR}/hello/hello_c.c
-  ${DRIVER_WASM_DIR}/ata/ata.c
-  ${DRIVER_WASM_DIR}/fs_fat/fs_fat.c
-  ${SERVICES_DIR}/sysinit/init.c
-  ${SERVICES_DIR}/cli/cli.c
-  ${SERVICES_DIR}/hw_discovery/hw_discovery.c
-  ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_init.c
-  ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_stub.c
-  ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_internal.h
-  ${WASM_DIR}/wamr_runtime.h
-)
-target_include_directories(kernel_ide PRIVATE
-  ${KERNEL_DIR}/include
-  ${DRIVER_WASM_DIR}/include
-  ${WAMR_DIR}/core/iwasm/include
-  ${WASM_DIR}
-  ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos
-)
-
-set(WASM_CHARDEV_DRIVER_SRC ${DRIVER_WASM_DIR}/chardev/chardev_server.c)
-set(WASM_CHARDEV_DRIVER_WASM ${BUILD_DIR}/chardev_server.wasm)
-set(WASM_CHARDEV_DRIVER_BLOB ${BUILD_DIR}/chardev_server_blob.o)
-set(WASM_CHARDEV_CLIENT_SRC ${EXAMPLES_C_DIR}/chardev_client/chardev_client.c)
-set(WASM_CHARDEV_CLIENT_WASM ${BUILD_DIR}/chardev_client.wasm)
-set(WASM_CHARDEV_CLIENT_BLOB ${BUILD_DIR}/chardev_client_blob.o)
-set(WASM_CHARDEV_CLIENT_APP ${BUILD_DIR}/chardev_client.wasmosapp)
-set(WASM_ATA_DRIVER_SRC ${DRIVER_WASM_DIR}/ata/ata.c)
-set(WASM_ATA_DRIVER_WASM ${BUILD_DIR}/ata.wasm)
-set(WASM_ATA_APP ${BUILD_DIR}/ata.wasmosapp)
-set(WASM_FAT_DRIVER_SRC ${DRIVER_WASM_DIR}/fs_fat/fs_fat.c)
-set(WASM_FAT_DRIVER_WASM ${BUILD_DIR}/fs_fat.wasm)
-set(WASM_FAT_APP ${BUILD_DIR}/fs_fat.wasmosapp)
-set(WASM_INIT_APP_SRC ${SERVICES_DIR}/sysinit/init.c)
-set(WASM_INIT_APP_WASM ${BUILD_DIR}/init.wasm)
-set(WASM_INIT_APP ${BUILD_DIR}/sysinit.wasmosapp)
-set(WASM_CLI_APP_SRC ${SERVICES_DIR}/cli/cli.c)
-set(WASM_CLI_APP_WASM ${BUILD_DIR}/cli.wasm)
-set(WASM_CLI_APP ${BUILD_DIR}/cli.wasmosapp)
-set(WASM_HW_DISCOVERY_SRC ${SERVICES_DIR}/hw_discovery/hw_discovery.c)
-set(WASM_HW_DISCOVERY_WASM ${BUILD_DIR}/hw_discovery.wasm)
-set(WASM_HW_DISCOVERY_APP ${BUILD_DIR}/hw_discovery.wasmosapp)
-set(WASM_HELLO_C_SRC ${EXAMPLES_C_DIR}/hello/hello_c.c)
-set(WASM_HELLO_C_WASM ${BUILD_DIR}/hello_c.wasm)
-set(WASM_HELLO_C_APP ${BUILD_DIR}/hello_c.wasmosapp)
-set(WASM_HELLO_RUST_SRC ${EXAMPLES_RUST_DIR}/hello/hello_rust.rs)
-set(WASM_HELLO_RUST_WASM ${BUILD_DIR}/hello_rust.wasm)
-set(WASM_HELLO_RUST_APP ${BUILD_DIR}/hello_rust.wasmosapp)
-set(WASM_HELLO_GO_SRC ${EXAMPLES_GO_DIR}/hello/hello_go.go)
-set(WASM_HELLO_GO_WASM ${BUILD_DIR}/hello_go.wasm)
-set(WASM_HELLO_GO_APP ${BUILD_DIR}/hello_go.wasmosapp)
-set(WASM_HELLO_ZIG_SRC ${EXAMPLES_ZIG_DIR}/hello/hello_zig.zig)
-set(WASM_HELLO_ZIG_WASM ${BUILD_DIR}/hello_zig.wasm)
-set(WASM_HELLO_ZIG_APP ${BUILD_DIR}/hello_zig.wasmosapp)
-set(WASMOS_APP_PACKER ${BUILD_DIR}/make_wasmos_app)
-
-add_custom_command(
-  OUTPUT ${WASM_CHARDEV_DRIVER_WASM}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -fno-builtin
-          -fno-builtin
-          -Wl,--no-entry -Wl,--strip-all
-          -Wl,-z,stack-size=4096
-          -Wl,--initial-memory=65536
-          -Wl,--max-memory=65536
-          -Wl,--export=chardev_init
-          -Wl,--export=chardev_read_byte
-          -Wl,--export=chardev_write_byte
-          -Wl,--export=chardev_ipc_dispatch
-          -I${DRIVER_WASM_DIR}/include
-          ${WASM_CHARDEV_DRIVER_SRC}
-          -o ${WASM_CHARDEV_DRIVER_WASM}
-  DEPENDS ${WASM_CHARDEV_DRIVER_SRC} ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building wasm chardev driver module"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_CHARDEV_DRIVER_BLOB}
-  COMMAND ${OBJCOPY} --input-target=binary --output-target=elf64-x86-64
-          --binary-architecture=i386:x86-64
-          chardev_server.wasm chardev_server_blob.o
-  DEPENDS ${WASM_CHARDEV_DRIVER_WASM}
-  WORKING_DIRECTORY ${BUILD_DIR}
-  COMMENT "Embedding wasm chardev driver module"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_FAT_DRIVER_WASM}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -fno-builtin
-          -Wl,--no-entry -Wl,--strip-all
-          -Wl,-z,stack-size=4096
-          -Wl,--initial-memory=65536
-          -Wl,--max-memory=65536
-          -Wl,--allow-undefined
-          -Wl,--export=fat_step
-          -I${DRIVER_WASM_DIR}/include
-          ${WASM_FAT_DRIVER_SRC}
-          -o ${WASM_FAT_DRIVER_WASM}
-  DEPENDS ${WASM_FAT_DRIVER_SRC} ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building wasm FAT driver module"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_FAT_APP}
-  COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_FAT_DRIVER_WASM}
-          ${WASM_FAT_APP}
-          fs-fat
-          fat_step
-          16
-          16
-          2
-          block
-          1
-          ipc.basic
-          0
-  DEPENDS ${WASM_FAT_DRIVER_WASM} ${WASMOS_APP_PACKER}
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Packing wasm FAT as WASMOS-APP"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_ATA_DRIVER_WASM}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -fno-builtin
-          -Wl,--no-entry -Wl,--strip-all
-          -Wl,-z,stack-size=4096
-          -Wl,--initial-memory=65536
-          -Wl,--max-memory=65536
-          -Wl,--allow-undefined
-          -Wl,--export=ata_step
-          -I${DRIVER_WASM_DIR}/include
-          ${WASM_ATA_DRIVER_SRC}
-          -o ${WASM_ATA_DRIVER_WASM}
-  DEPENDS ${WASM_ATA_DRIVER_SRC} ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building wasm ATA driver module"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_ATA_APP}
-  COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_ATA_DRIVER_WASM}
-          ${WASM_ATA_APP}
-          ata
-          ata_step
-          16
-          16
-          1
-          -
-          0
-          ipc.basic
-          0
-  DEPENDS ${WASM_ATA_DRIVER_WASM} ${WASMOS_APP_PACKER}
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Packing wasm ATA as WASMOS-APP"
-  VERBATIM
-)
-add_custom_command(
-  OUTPUT ${WASM_CHARDEV_CLIENT_WASM}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
-          -Wl,--no-entry -Wl,--strip-all
-          -Wl,-z,stack-size=4096
-          -Wl,--initial-memory=65536
-          -Wl,--max-memory=65536
-          -Wl,--allow-undefined
-          -Wl,--export=chardev_client_step
-          -I${DRIVER_WASM_DIR}/include
-          ${WASM_CHARDEV_CLIENT_SRC}
-          -o ${WASM_CHARDEV_CLIENT_WASM}
-  DEPENDS ${WASM_CHARDEV_CLIENT_SRC} ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building wasm chardev client module"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_INIT_APP_WASM}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib
-          -Wl,--no-entry -Wl,--strip-all
-          -Wl,-z,stack-size=4096
-          -Wl,--initial-memory=65536
-          -Wl,--max-memory=65536
-          -Wl,--allow-undefined
-          -Wl,--export=init_step
-          -I${DRIVER_WASM_DIR}/include
-          ${WASM_INIT_APP_SRC}
-          -o ${WASM_INIT_APP_WASM}
-  DEPENDS ${WASM_INIT_APP_SRC} ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building wasm init module"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_CLI_APP_WASM}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib
-          -Wl,--no-entry -Wl,--strip-all
-          -Wl,-z,stack-size=4096
-          -Wl,--initial-memory=65536
-          -Wl,--max-memory=65536
-          -Wl,--allow-undefined
-          -Wl,--export=cli_step
-          -I${DRIVER_WASM_DIR}/include
-          ${WASM_CLI_APP_SRC}
-          -o ${WASM_CLI_APP_WASM}
-  DEPENDS ${WASM_CLI_APP_SRC} ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building wasm CLI module"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_HW_DISCOVERY_WASM}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib
-          -Wl,--no-entry -Wl,--strip-all
-          -Wl,-z,stack-size=4096
-          -Wl,--initial-memory=65536
-          -Wl,--max-memory=65536
-          -Wl,--allow-undefined
-          -Wl,--export=hw_discovery_step
-          -I${DRIVER_WASM_DIR}/include
-          ${WASM_HW_DISCOVERY_SRC}
-          -o ${WASM_HW_DISCOVERY_WASM}
-  DEPENDS ${WASM_HW_DISCOVERY_SRC} ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building wasm hw-discovery module"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_HELLO_C_WASM}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
-          -Wl,--no-entry -Wl,--strip-all
-          -Wl,-z,stack-size=4096
-          -Wl,--initial-memory=65536
-          -Wl,--max-memory=65536
-          -Wl,--allow-undefined
-          -Wl,--export=hello_c_step
-          -I${DRIVER_WASM_DIR}/include
-          ${WASM_HELLO_C_SRC}
-          -o ${WASM_HELLO_C_WASM}
-  DEPENDS ${WASM_HELLO_C_SRC} ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building wasm hello-c module"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_CHARDEV_CLIENT_BLOB}
-  COMMAND ${OBJCOPY} --input-target=binary --output-target=elf64-x86-64
-          --binary-architecture=i386:x86-64
-          chardev_client.wasm chardev_client_blob.o
-  DEPENDS ${WASM_CHARDEV_CLIENT_WASM}
-  WORKING_DIRECTORY ${BUILD_DIR}
-  COMMENT "Embedding wasm chardev client module"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASMOS_APP_PACKER}
-  COMMAND cc -O2 ${CMAKE_SOURCE_DIR}/scripts/make_wasmos_app.c -o ${WASMOS_APP_PACKER}
-  DEPENDS ${CMAKE_SOURCE_DIR}/scripts/make_wasmos_app.c
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building WASMOS-APP packer tool"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_INIT_APP}
-  COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_INIT_APP_WASM}
-          ${WASM_INIT_APP}
-          sysinit
-          init_step
-          16
-          16
-          2
-          proc
-          1
-          ipc.basic
-          0
-  DEPENDS ${WASM_INIT_APP_WASM} ${WASMOS_APP_PACKER}
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Packing wasm init as WASMOS-APP"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_CLI_APP}
-  COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_CLI_APP_WASM}
-          ${WASM_CLI_APP}
-          cli
-          cli_step
-          16
-          16
-          4
-          proc
-          1
-          ipc.basic
-          0
-  DEPENDS ${WASM_CLI_APP_WASM} ${WASMOS_APP_PACKER}
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Packing wasm CLI as WASMOS-APP"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_HW_DISCOVERY_APP}
-  COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_HW_DISCOVERY_WASM}
-          ${WASM_HW_DISCOVERY_APP}
-          hw-discovery
-          hw_discovery_step
-          16
-          16
-          2
-          proc
-          1
-          ipc.basic
-          0
-  DEPENDS ${WASM_HW_DISCOVERY_WASM} ${WASMOS_APP_PACKER}
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Packing wasm hw-discovery as WASMOS-APP"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_HELLO_C_APP}
-  COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_HELLO_C_WASM}
-          ${WASM_HELLO_C_APP}
-          hello-c
-          hello_c_step
-          16
-          16
-          4
-          -
-          0
-          ipc.basic
-          0
-  DEPENDS ${WASM_HELLO_C_WASM} ${WASMOS_APP_PACKER}
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Packing wasm hello-c as WASMOS-APP"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_CHARDEV_CLIENT_APP}
-  COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_CHARDEV_CLIENT_WASM}
-          ${WASM_CHARDEV_CLIENT_APP}
-          chardev-client
-          chardev_client_step
-          16
-          16
-          4
-          chardev
-          1
-          ipc.basic
-          0
-  DEPENDS ${WASM_CHARDEV_CLIENT_WASM} ${WASMOS_APP_PACKER}
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Packing wasm chardev client as WASMOS-APP"
-  VERBATIM
-)
-
-set(WASM_DRIVER_BLOBS
-  ${WASM_CHARDEV_DRIVER_BLOB}
-  ${WASM_CHARDEV_CLIENT_BLOB}
-  ${WASM_ATA_APP}
-  ${WASM_INIT_APP}
-  ${WASM_CLI_APP}
-  ${WASM_HW_DISCOVERY_APP}
-  ${WASM_HELLO_C_APP}
-  ${WASM_FAT_APP}
-  ${WASM_CHARDEV_CLIENT_APP}
-)
-if (RUST_ENABLE)
-  list(APPEND WASM_DRIVER_BLOBS ${WASM_HELLO_RUST_APP})
-endif ()
-
-if (ZIG_ENABLE)
-  if (NOT ZIG_EXECUTABLE OR ZIG_EXECUTABLE MATCHES "NOTFOUND")
-    unset(ZIG_EXECUTABLE CACHE)
-    find_program(ZIG_EXECUTABLE zig HINTS
-      ${CLANG_BIN_DIR}
-      $ENV{HOME}/bin
-      $ENV{HOME}/.local/bin
-    )
-  endif ()
-  if (NOT ZIG_EXECUTABLE)
-    message(WARNING "zig not found; Zig examples will be skipped.")
-  else ()
-    set(ZIG_AVAILABLE ON)
-  endif ()
-endif ()
-
-if (AS_ENABLE)
-  find_program(ASC_EXECUTABLE asc HINTS ${CLANG_BIN_DIR})
-  if (NOT ASC_EXECUTABLE)
-    message(FATAL_ERROR "AssemblyScript compiler 'asc' not found. Install with: npm i -g assemblyscript")
-  endif ()
-
-  set(AS_HELLO_SRC ${EXAMPLES_AS_DIR}/hello/hello.ts)
-  set(AS_HELLO_WASM ${BUILD_DIR}/hello_as.wasm)
-  set(AS_HELLO_APP ${BUILD_DIR}/hello_as.wasmosapp)
-
-  add_custom_command(
-    OUTPUT ${AS_HELLO_WASM}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-    COMMAND ${ASC_EXECUTABLE}
-            ${AS_HELLO_SRC}
-            --target release
-            -Osize
-            --runtime stub
-            --noAssert
-            --outFile ${AS_HELLO_WASM}
-    DEPENDS ${AS_HELLO_SRC}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Building AssemblyScript hello module"
-    VERBATIM
-  )
-
-  add_custom_command(
-    OUTPUT ${AS_HELLO_APP}
-    COMMAND ${WASMOS_APP_PACKER}
-            ${AS_HELLO_WASM}
-            ${AS_HELLO_APP}
-            hello-as
-            hello_step
-            16
-            16
-            4
-            -
-            0
-            ipc.basic
-            0
-    DEPENDS ${AS_HELLO_WASM} ${WASMOS_APP_PACKER}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Packing AssemblyScript hello as WASMOS-APP"
-    VERBATIM
-  )
-
-  add_custom_target(assemblyscript_examples DEPENDS ${AS_HELLO_APP})
-endif ()
-
-if (RUST_ENABLE)
-  find_program(RUSTC_EXECUTABLE rustc)
-  if (NOT RUSTC_EXECUTABLE)
-    message(FATAL_ERROR "Rust compiler 'rustc' not found. Install Rust and add the wasm32-unknown-unknown target (rustup target add wasm32-unknown-unknown).")
-  endif ()
-  add_custom_command(
-    OUTPUT ${WASM_HELLO_RUST_WASM}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-    COMMAND ${RUSTC_EXECUTABLE}
-            --target=wasm32-unknown-unknown
-            -O
-            -C opt-level=z
-            -C panic=abort
-            -C codegen-units=1
-            -C link-arg=--no-entry
-            -C link-arg=--export=hello_rust_step
-            -C link-arg=--strip-all
-            -C link-arg=--initial-memory=2097152
-            -C link-arg=--max-memory=2097152
-            --crate-type=cdylib
-            ${WASM_HELLO_RUST_SRC}
-            -o ${WASM_HELLO_RUST_WASM}
-    DEPENDS ${WASM_HELLO_RUST_SRC}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Building wasm hello-rust module"
-    VERBATIM
-  )
-  add_custom_command(
-    OUTPUT ${WASM_HELLO_RUST_APP}
-    COMMAND ${WASMOS_APP_PACKER}
-            ${WASM_HELLO_RUST_WASM}
-            ${WASM_HELLO_RUST_APP}
-            hello-rust
-            hello_rust_step
-            16
-            16
-            4
-            -
-            0
-            ipc.basic
-            0
-    DEPENDS ${WASM_HELLO_RUST_WASM} ${WASMOS_APP_PACKER}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Packing wasm hello-rust as WASMOS-APP"
-    VERBATIM
-  )
-  add_custom_target(rust_examples DEPENDS ${WASM_HELLO_RUST_APP})
-endif ()
-
-if (ZIG_AVAILABLE)
-  add_custom_command(
-    OUTPUT ${WASM_HELLO_ZIG_WASM}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-    COMMAND ${ZIG_EXECUTABLE}
-            build-exe
-            -target wasm32-freestanding
-            -O ReleaseSmall
-            -fno-entry
-            -fstrip
-            --export=hello_zig_step
-            -femit-bin=${WASM_HELLO_ZIG_WASM}
-            ${WASM_HELLO_ZIG_SRC}
-    DEPENDS ${WASM_HELLO_ZIG_SRC}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Building Zig hello module"
-    VERBATIM
-  )
-
-  add_custom_command(
-    OUTPUT ${WASM_HELLO_ZIG_APP}
-    COMMAND ${WASMOS_APP_PACKER}
-            ${WASM_HELLO_ZIG_WASM}
-            ${WASM_HELLO_ZIG_APP}
-            hello-zig
-            hello_zig_step
-            2
-            2
-            4
-            -
-            0
-            ipc.basic
-            0
-    DEPENDS ${WASM_HELLO_ZIG_WASM} ${WASMOS_APP_PACKER}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Packing Zig hello as WASMOS-APP"
-    VERBATIM
-  )
-
-  add_custom_target(zig_examples DEPENDS ${WASM_HELLO_ZIG_APP})
-  list(APPEND WASM_DRIVER_BLOBS ${WASM_HELLO_ZIG_APP})
-endif ()
-
-if (GO_ENABLE)
-  find_program(TINYGO_EXECUTABLE tinygo)
-  if (NOT TINYGO_EXECUTABLE)
-    message(WARNING "TinyGo compiler 'tinygo' not found. Go example builds are disabled.")
-  else ()
-    set(GO_AVAILABLE ON)
-  endif ()
-endif ()
-if (GO_AVAILABLE)
-  add_custom_command(
-    OUTPUT ${WASM_HELLO_GO_WASM}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-    COMMAND ${TINYGO_EXECUTABLE}
-            build
-            -target=wasm
-            -opt=z
-            -no-debug
-            -panic=trap
-            -scheduler=none
-            -gc=leaking
-            -o ${WASM_HELLO_GO_WASM}
-            ${WASM_HELLO_GO_SRC}
-    DEPENDS ${WASM_HELLO_GO_SRC}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Building wasm hello-go module"
-    VERBATIM
-  )
-  add_custom_command(
-    OUTPUT ${WASM_HELLO_GO_APP}
-    COMMAND ${WASMOS_APP_PACKER}
-            ${WASM_HELLO_GO_WASM}
-            ${WASM_HELLO_GO_APP}
-            hello-go
-            hello_go_step
-            16
-            16
-            4
-            -
-            0
-            ipc.basic
-            0
-    DEPENDS ${WASM_HELLO_GO_WASM} ${WASMOS_APP_PACKER}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Packing wasm hello-go as WASMOS-APP"
-    VERBATIM
-  )
-  add_custom_target(go_examples DEPENDS ${WASM_HELLO_GO_APP})
-  list(APPEND WASM_DRIVER_BLOBS ${WASM_HELLO_GO_APP})
-endif ()
-
-add_custom_target(wasm_driver_blobs DEPENDS ${WASM_DRIVER_BLOBS})
-list(APPEND KERNEL_OBJS ${WASM_CHARDEV_DRIVER_BLOB} ${WASM_CHARDEV_CLIENT_BLOB})
-
-# WAMR is vendored via git subtree at ${WAMR_DIR}.
 option(WAMR_ENABLE "Enable WAMR runtime integration (requires linking WAMR)" ON)
 option(WAMR_LINK "Link the WAMR runtime library" ON)
 if (WAMR_ENABLE AND WAMR_LINK)
@@ -1072,52 +394,38 @@ if (WAMR_LINK)
   set(KERNEL_LINK_LIBS ${KERNEL_LINK_LIBS} ${WAMR_RUNTIME_LIB})
 endif ()
 
-# Bootloader (UEFI PE/COFF)
-add_custom_command(
-  OUTPUT ${BUILD_DIR}/BOOTX64.EFI
-  COMMAND ${CLANG} ${CFLAGS_EFI} -I${KERNEL_DIR}/include -I${BOOT_DIR}
-          ${BOOT_SOURCES} -o ${BUILD_DIR}/BOOTX64.EFI ${LDFLAGS_EFI}
-  DEPENDS ${BOOT_SOURCES} ${BOOT_DIR}/uefi.h ${BOOT_DIR}/elf.h ${KERNEL_DIR}/include/boot.h
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building UEFI bootloader"
-  VERBATIM
-)
-add_custom_target(bootloader ALL DEPENDS ${BUILD_DIR}/BOOTX64.EFI)
+add_subdirectory(src/boot)
+add_subdirectory(src/drivers)
+add_subdirectory(examples/c)
+add_subdirectory(src/services)
+add_subdirectory(examples/assemblyscript)
+add_subdirectory(examples/rust)
+add_subdirectory(examples/go)
+add_subdirectory(examples/zig)
+add_subdirectory(src/kernel)
 
-# Kernel (ELF64)
-add_custom_command(
-  OUTPUT ${BUILD_DIR}/kernel.elf
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/entry.S -o ${BUILD_DIR}/entry.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/cpu_isr.S -o ${BUILD_DIR}/cpu_isr.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel.c -o ${BUILD_DIR}/kernel.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/cpu.c -o ${BUILD_DIR}/cpu.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory.c -o ${BUILD_DIR}/memory.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/paging.c -o ${BUILD_DIR}/paging.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/physmem.c -o ${BUILD_DIR}/physmem.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/ipc.c -o ${BUILD_DIR}/ipc.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process.c -o ${BUILD_DIR}/process.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/spinlock.c -o ${BUILD_DIR}/spinlock.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory_service.c -o ${BUILD_DIR}/memory_service.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/irq.c -o ${BUILD_DIR}/irq.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager.c -o ${BUILD_DIR}/process_manager.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_app.c -o ${BUILD_DIR}/wasmos_app.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_driver.c -o ${BUILD_DIR}/wasm_driver.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wamr_context.c -o ${BUILD_DIR}/wamr_context.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_chardev.c -o ${BUILD_DIR}/wasm_chardev.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/serial.c -o ${BUILD_DIR}/serial.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${WASM_DIR}/wamr_runtime.c -o ${BUILD_DIR}/wamr_runtime.o
-  COMMAND ${LLD_PATH} ${LDFLAGS_KERNEL} -o ${BUILD_DIR}/kernel.elf ${KERNEL_OBJS} ${KERNEL_LINK_LIBS}
-  DEPENDS ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/arch/x86_64/linker.ld ${WASM_CHARDEV_DRIVER_BLOB} ${WASM_FAT_DRIVER_BLOB}
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building kernel"
-  VERBATIM
-)
-add_custom_target(kernel ALL DEPENDS ${BUILD_DIR}/kernel.elf)
+get_property(WASMOS_WASM_APP_TARGETS GLOBAL PROPERTY WASMOS_WASM_APP_TARGETS)
+get_property(WASMOS_KERNEL_BLOB_TARGETS GLOBAL PROPERTY WASMOS_KERNEL_BLOB_TARGETS)
+if (WASMOS_WASM_APP_TARGETS)
+  add_dependencies(${WASMOS_WASM_APP_TARGETS} make_wasmos_app)
+endif ()
+set(WASM_DRIVER_BLOB_DEPS "")
+list(APPEND WASM_DRIVER_BLOB_DEPS make_wasmos_app)
+if (WASMOS_WASM_APP_TARGETS)
+  list(APPEND WASM_DRIVER_BLOB_DEPS ${WASMOS_WASM_APP_TARGETS})
+endif ()
+if (WASMOS_KERNEL_BLOB_TARGETS)
+  list(APPEND WASM_DRIVER_BLOB_DEPS ${WASMOS_KERNEL_BLOB_TARGETS})
+endif ()
+if (WASM_DRIVER_BLOB_DEPS)
+  add_custom_target(wasm_driver_blobs DEPENDS ${WASM_DRIVER_BLOB_DEPS})
+else ()
+  add_custom_target(wasm_driver_blobs)
+endif ()
+add_dependencies(kernel wasm_driver_blobs)
 if (WAMR_LINK)
   add_dependencies(kernel wamr_runtime_lib)
 endif ()
-add_dependencies(kernel wasm_driver_blobs)
 
 # QEMU helper
 if (AS_ENABLE)
@@ -1175,9 +483,6 @@ if (OVMF_VARS)
     COMMENT "Running in QEMU"
     VERBATIM
   )
-  if (AS_ENABLE)
-    add_dependencies(run-qemu assemblyscript_examples)
-  endif ()
   add_custom_target(run-qemu-test
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
@@ -1209,7 +514,6 @@ if (OVMF_VARS)
     VERBATIM
   )
   if (AS_ENABLE)
-    add_dependencies(run-qemu-test assemblyscript_examples)
   endif ()
   add_custom_target(run-qemu-cli-test
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
@@ -1243,7 +547,6 @@ if (OVMF_VARS)
     VERBATIM
   )
   if (AS_ENABLE)
-    add_dependencies(run-qemu-cli-test assemblyscript_examples)
   endif ()
 else ()
   add_custom_target(run-qemu
@@ -1276,7 +579,6 @@ else ()
     VERBATIM
   )
   if (AS_ENABLE)
-    add_dependencies(run-qemu assemblyscript_examples)
   endif ()
   add_custom_target(run-qemu-test
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
@@ -1308,7 +610,6 @@ else ()
     VERBATIM
   )
   if (AS_ENABLE)
-    add_dependencies(run-qemu-test assemblyscript_examples)
   endif ()
   add_custom_target(run-qemu-cli-test
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
@@ -1340,24 +641,27 @@ else ()
     COMMENT \"Running QEMU CLI integration tests\"
     VERBATIM
   )
-  if (AS_ENABLE)
-    add_dependencies(run-qemu-cli-test assemblyscript_examples)
-  endif ()
 endif ()
+add_dependencies(run-qemu c_examples services drivers)
+add_dependencies(run-qemu-test c_examples services drivers)
+add_dependencies(run-qemu-cli-test c_examples services drivers)
 
-if (RUST_ENABLE)
+if (TARGET assemblyscript_examples)
+  add_dependencies(run-qemu assemblyscript_examples)
+  add_dependencies(run-qemu-test assemblyscript_examples)
+  add_dependencies(run-qemu-cli-test assemblyscript_examples)
+endif ()
+if (TARGET rust_examples)
   add_dependencies(run-qemu rust_examples)
   add_dependencies(run-qemu-test rust_examples)
   add_dependencies(run-qemu-cli-test rust_examples)
 endif ()
-
-if (GO_AVAILABLE)
+if (TARGET go_examples)
   add_dependencies(run-qemu go_examples)
   add_dependencies(run-qemu-test go_examples)
   add_dependencies(run-qemu-cli-test go_examples)
 endif ()
-
-if (ZIG_AVAILABLE)
+if (TARGET zig_examples)
   add_dependencies(run-qemu zig_examples)
   add_dependencies(run-qemu-test zig_examples)
   add_dependencies(run-qemu-cli-test zig_examples)

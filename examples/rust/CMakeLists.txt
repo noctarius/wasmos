@@ -1,0 +1,50 @@
+if (RUST_ENABLE)
+  find_program(RUSTC_EXECUTABLE rustc)
+  if (NOT RUSTC_EXECUTABLE)
+    message(FATAL_ERROR "Rust compiler 'rustc' not found. Install Rust and add the wasm32-unknown-unknown target (rustup target add wasm32-unknown-unknown).")
+  endif ()
+  add_custom_command(
+    OUTPUT ${WASM_HELLO_RUST_WASM}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+    COMMAND ${RUSTC_EXECUTABLE}
+            --target=wasm32-unknown-unknown
+            -O
+            -C opt-level=z
+            -C panic=abort
+            -C codegen-units=1
+            -C link-arg=--no-entry
+            -C link-arg=--export=hello_rust_step
+            -C link-arg=--strip-all
+            -C link-arg=--initial-memory=2097152
+            -C link-arg=--max-memory=2097152
+            --crate-type=cdylib
+            ${WASM_HELLO_RUST_SRC}
+            -o ${WASM_HELLO_RUST_WASM}
+    DEPENDS ${WASM_HELLO_RUST_SRC}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Building wasm hello-rust module"
+    VERBATIM
+  )
+  add_custom_command(
+    OUTPUT ${WASM_HELLO_RUST_APP}
+    COMMAND ${WASMOS_APP_PACKER}
+            ${WASM_HELLO_RUST_WASM}
+            ${WASM_HELLO_RUST_APP}
+            hello-rust
+            hello_rust_step
+            16
+            16
+            4
+            -
+            0
+            ipc.basic
+            0
+    DEPENDS ${WASM_HELLO_RUST_WASM} make_wasmos_app
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Packing wasm hello-rust as WASMOS-APP"
+    VERBATIM
+  )
+  add_custom_target(rust_examples DEPENDS ${WASM_HELLO_RUST_APP})
+  set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_HELLO_RUST_APP})
+  set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS rust_examples)
+endif ()

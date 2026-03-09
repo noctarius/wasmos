@@ -17,6 +17,7 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - `src/services/` System services (WASM-based).
 - `scripts/` Helper scripts (optional).
 - `ARCHITECTURE.md` In-depth architecture notes and boot process diagrams.
+- CMake is split across per-component `CMakeLists.txt` files (boot, kernel, drivers, services, and each example language).
 
 ## Build (scaffold)
 This repository is intentionally minimal and may require toolchain adjustments for your environment.

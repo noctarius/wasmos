@@ -138,6 +138,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - `cmake --build build --target run-qemu` runs QEMU with an ESP image (serial console via `-nographic`)
 - `cmake --build build --target run-qemu-test` runs QEMU, waits for the CLI prompt, issues `halt`, and expects a clean shutdown
 - `cmake --build build --target run-qemu-cli-test` runs the CLI integration tests via the Python QEMU test framework (`python3 -m unittest discover -s tests`)
+- The QEMU test framework force-stops hung runs via the monitor sequence (`Ctrl+A` then `x`) when a timeout is reached.
 - CLI integration tests include per-app hello tests (`test_hello_*.py`).
 - QEMU smoke tests include a PIT timer tick marker check (`tests/test_timer_tick.py`).
 - QEMU smoke tests include an IPC wakeup marker check (`tests/test_ipc_wakeup.py`).

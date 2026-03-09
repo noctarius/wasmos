@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #define PROCESS_MAX_COUNT 16
+#define PROCESS_DEFAULT_SLICE_TICKS 5u
 
 typedef enum {
     PROCESS_STATE_UNUSED = 0,
@@ -37,6 +38,9 @@ typedef struct process {
     process_block_reason_t block_reason;
     uint32_t wait_target_pid;
     int32_t exit_status;
+    uint32_t time_slice_ticks;
+    uint32_t ticks_remaining;
+    uint64_t ticks_total;
     process_entry_t entry;
     void *arg;
     const char *name;
@@ -55,6 +59,9 @@ int process_kill(uint32_t pid, int32_t exit_status);
 int process_get_exit_status(uint32_t pid, int32_t *out_exit_status);
 uint32_t process_wake_by_context(uint32_t context_id);
 int process_schedule_once(void);
+void process_tick(void);
+int process_should_resched(void);
+void process_clear_resched(void);
 uint32_t process_count_active(void);
 int process_info_at(uint32_t index, uint32_t *out_pid, const char **out_name);
 int process_info_at_ex(uint32_t index, uint32_t *out_pid, uint32_t *out_parent_pid, const char **out_name);

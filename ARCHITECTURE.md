@@ -483,6 +483,7 @@ Design takeaways:
 - IPC enqueue wakes blocked processes that own the destination endpoint context.
 - `process` primitive in `src/kernel/process.c` provides a small cooperative process table and scheduler.
 - `timer` primitive in `src/kernel/timer.c` programs PIT IRQ0 and tracks a tick counter; logging is deferred to the scheduler loop.
+- The scheduler tracks per-process tick accounting and sets a reschedule flag when a time slice expires (preemption is still pending).
 - `process_spawn` binds each process to a new memory context (`mm_context_create(pid)`), establishing per-process isolation boundaries.
 - Lifecycle primitives now include `process_wait`, `process_kill`, and `process_get_exit_status`.
 - WAMR native IPC imports use the `exec_env` calling convention to align with WAMR native argument marshalling.

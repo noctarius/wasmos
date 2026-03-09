@@ -1120,6 +1120,9 @@ run_kernel_loop(void)
         if (process_schedule_once() != 0) {
             __asm__ volatile("pause");
         }
+        if (process_should_resched()) {
+            process_clear_resched();
+        }
         timer_poll();
     }
 }

@@ -17,6 +17,7 @@ static uint32_t g_ready_count;
 static process_t *g_current_process;
 static process_run_result_t g_last_run_result;
 static process_context_t g_sched_ctx;
+static uint32_t g_preempt_disable_count;
 
 extern void context_switch(process_context_t *out, process_context_t *in);
 
@@ -169,6 +170,7 @@ void process_init(void) {
     ready_queue_reset();
     g_current_process = 0;
     g_last_run_result = PROCESS_RUN_IDLE;
+    g_preempt_disable_count = 0;
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         process_reset_slot(&g_processes[i]);
     }
@@ -211,6 +213,7 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
     slot->stack_top = (uintptr_t)g_process_stacks[index] + PROCESS_STACK_SIZE;
     slot->ctx.rsp = slot->stack_top - 8u;
     slot->ctx.rip = (uint64_t)(uintptr_t)process_trampoline;
+    slot->ctx.rflags = 0x200;
     ready_queue_enqueue(slot);
     *out_pid = pid;
     return 0;
@@ -396,6 +399,59 @@ int process_should_resched(void) {
 
 void process_clear_resched(void) {
     g_need_resched = 0;
+}
+
+process_context_t *process_preempt_from_irq(const irq_frame_t *frame) {
+    if (!frame) {
+        return 0;
+    }
+    if (!process_should_resched() || !preempt_is_enabled()) {
+        return 0;
+    }
+    if (!g_current_process || g_current_process->state != PROCESS_STATE_RUNNING) {
+        process_clear_resched();
+        return 0;
+    }
+
+    g_current_process->ctx.r15 = frame->r15;
+    g_current_process->ctx.r14 = frame->r14;
+    g_current_process->ctx.r13 = frame->r13;
+    g_current_process->ctx.r12 = frame->r12;
+    g_current_process->ctx.r11 = frame->r11;
+    g_current_process->ctx.r10 = frame->r10;
+    g_current_process->ctx.r9 = frame->r9;
+    g_current_process->ctx.r8 = frame->r8;
+    g_current_process->ctx.rdi = frame->rdi;
+    g_current_process->ctx.rsi = frame->rsi;
+    g_current_process->ctx.rbp = frame->rbp;
+    g_current_process->ctx.rdx = frame->rdx;
+    g_current_process->ctx.rcx = frame->rcx;
+    g_current_process->ctx.rbx = frame->rbx;
+    g_current_process->ctx.rax = frame->rax;
+    g_current_process->ctx.rsp = (uint64_t)((uintptr_t)frame + sizeof(irq_frame_t));
+    g_current_process->ctx.rip = frame->rip;
+    g_current_process->ctx.rflags = frame->rflags;
+
+    g_current_process->state = PROCESS_STATE_READY;
+    g_current_process->block_reason = PROCESS_BLOCK_NONE;
+    ready_queue_enqueue(g_current_process);
+    g_last_run_result = PROCESS_RUN_YIELDED;
+    process_clear_resched();
+    return &g_sched_ctx;
+}
+
+void preempt_disable(void) {
+    g_preempt_disable_count++;
+}
+
+void preempt_enable(void) {
+    if (g_preempt_disable_count > 0) {
+        g_preempt_disable_count--;
+    }
+}
+
+int preempt_is_enabled(void) {
+    return g_preempt_disable_count == 0;
 }
 
 uint32_t process_count_active(void) {

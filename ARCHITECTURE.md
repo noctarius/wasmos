@@ -727,6 +727,7 @@ Current implementation (kernel scaffold):
 - `cmake -S . -B build`
 - `cmake --build build --target bootloader` -> `build/BOOTX64.EFI`
 - `cmake --build build --target kernel` -> `build/kernel.elf`
+- `cmake --build build --target make_wasmos_app` -> `build/make_wasmos_app` (packer for `.wasmosapp`)
 - `cmake --build build --target run-qemu` creates a FAT ESP for testing (requires OVMF) and uses a serial console (`-nographic`).
 - `run-qemu`, `run-qemu-test`, and `run-qemu-cli-test` copy `sysinit.wasmosapp` and `cli.wasmosapp` into `esp/system/services` in addition to `esp/apps`.
 - `run-qemu`, `run-qemu-test`, and `run-qemu-cli-test` copy driver WASMOS-APPs (`ata.wasmosapp`, `fs_fat.wasmosapp`) into `esp/system/drivers`, and the bootloader preloads them from that path.

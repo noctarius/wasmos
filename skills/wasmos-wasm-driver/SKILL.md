@@ -50,11 +50,16 @@ Keep heap/stack tiny and avoid dynamic allocation.
 
 ## Step 3: Build integration (CMake)
 
-Add to `CMakeLists.txt`:
+Add to `src/drivers/<driver-name>/CMakeLists.txt`:
 - `WASM_FOO_DRIVER_SRC`, `WASM_FOO_DRIVER_WASM`, `WASM_FOO_DRIVER_BLOB`
 - A `clang --target=wasm32` build rule (similar to chardev or FAT)
-- An `llvm-objcopy` rule to embed the wasm as a blob
-- Add the blob to `wasm_driver_blobs` and to `KERNEL_OBJS`
+- An `llvm-objcopy` rule to embed the wasm as a blob (if it is kernel-embedded)
+- For disk-loaded drivers: pack with `make_wasmos_app` and register via `WASMOS_WASM_APPS`
+- For kernel-embedded blobs: register via `WASMOS_KERNEL_BLOBS`
+- Create a target (e.g. `foo_app` or `foo_blob`) and append it to `WASMOS_WASM_APP_TARGETS`
+  or `WASMOS_KERNEL_BLOB_TARGETS` so aggregate builds pull it in
+
+Add the subdirectory in `src/drivers/CMakeLists.txt` so the driver is built.
 
 ## Step 4: Kernel host glue
 

@@ -31,6 +31,7 @@ Draft. No code changes yet.
 **Timer Source**
 - Use PIT (IRQ0) initially, given current PIC setup.
 - Configure a fixed tick rate (250 Hz default, 4ms).
+- Make the tick rate a build-time knob (e.g., `-DTICK_HZ=250`).
 - Provide a `timer_init(hz)` that programs PIT channel 0.
 - Hook IRQ0 handler into IDT with `IRQ_TIMER_VECTOR` after PIC remap.
 - Keep PIT configuration in `src/kernel/timer.c` and `src/kernel/include/timer.h`.
@@ -204,7 +205,6 @@ Changes required in platform stubs:
 - Confirm IPC wakeups still work under tick-based preemption.
 
 **Open Questions**
-- Exact tick rate tuning after initial implementation (start at 250 Hz).
 - Preemption aggressiveness: start conservative (safe-point-only), then audit toward moderate if needed.
 
 **Phased Implementation Plan**

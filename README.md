@@ -134,6 +134,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 ### Targets
 - `cmake --build build --target bootloader` builds `build/BOOTX64.EFI`
 - `cmake --build build --target kernel` builds `build/kernel.elf`
+- `cmake --build build --target make_wasmos_app` builds the WASMOS-APP packer used by all `.wasmosapp` outputs
 - `cmake --build build --target run-qemu` runs QEMU with an ESP image (serial console via `-nographic`)
 - `cmake --build build --target run-qemu-test` runs QEMU, waits for the CLI prompt, issues `halt`, and expects a clean shutdown
 - `cmake --build build --target run-qemu-cli-test` runs the CLI integration tests via the Python QEMU test framework (`python3 -m unittest discover -s tests`)

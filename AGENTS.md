@@ -12,6 +12,7 @@ This repository uses Codex CLI to assist with development. Follow these conventi
 - Make small, focused changes that preserve the project’s minimalism.
 - Prefer `rg` for searching and `cmake` for build orchestration.
 - Use `clang`/`lld` for UEFI targets (AppleClang is insufficient).
+- Keep build logic in per-component `CMakeLists.txt` files (boot, kernel, drivers, services, and each example language).
 
 ## Never Do
 - Do not introduce large frameworks or heavy dependencies.
@@ -32,6 +33,7 @@ This repository uses Codex CLI to assist with development. Follow these conventi
 - Configure: `cmake -S . -B build`
 - Build bootloader: `cmake --build build --target bootloader`
 - Build kernel: `cmake --build build --target kernel`
+- Build app packer: `cmake --build build --target make_wasmos_app`
 - Run QEMU: `cmake --build build --target run-qemu`
 - Run QEMU halt test: `cmake --build build --target run-qemu-test` (default compile+boot+halt check after changes)
 

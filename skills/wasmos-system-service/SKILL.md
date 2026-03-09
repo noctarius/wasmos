@@ -51,11 +51,14 @@ Keep heap/stack small; avoid dynamic allocation.
 
 ## Step 3: Build integration (CMake)
 
-Add to `CMakeLists.txt`:
+Add to `src/services/<service-name>/CMakeLists.txt`:
 - `WASM_FOO_APP_SRC`, `WASM_FOO_APP_WASM`, `WASM_FOO_APP`
 - A `clang --target=wasm32` build rule (similar to `sysinit` or `cli`)
-- A `WASMOS_APP_PACKER` rule to package the `.wasm` into `.wasmosapp`
-- Add the app to the build target list so it is produced with the rest of the services
+- A pack step that invokes `make_wasmos_app` to package the `.wasm` into `.wasmosapp`
+- Register the app via `set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ...)`
+- Create a target (e.g. `foo_app`) and append it to `WASMOS_WASM_APP_TARGETS`
+
+Add the subdirectory in `src/services/CMakeLists.txt` so the service is built.
 
 ## Step 4: Disk placement (ESP)
 

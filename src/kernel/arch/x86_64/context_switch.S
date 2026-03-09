@@ -1,6 +1,8 @@
 .section .text
 .global context_switch
+.extern g_in_context_switch
 context_switch:
+    movb $1, g_in_context_switch(%rip)
     movq %r15, 0(%rdi)
     movq %r14, 8(%rdi)
     movq %r13, 16(%rdi)
@@ -32,20 +34,22 @@ context_switch:
     movq 40(%rdx), %r10
     movq 48(%rdx), %r9
     movq 56(%rdx), %r8
+    movq 64(%rdx), %rdi
+    movq 72(%rdx), %rsi
     movq 80(%rdx), %rbp
     movq 104(%rdx), %rbx
     movq 120(%rdx), %rsp
     movq 136(%rdx), %rax
-    pushq %rax
+    movq 128(%rdx), %rcx
+    subq $16, %rsp
+    movq %rax, (%rsp)
+    movq %rcx, 8(%rsp)
     popfq
     movq 112(%rdx), %rax
-    movq 64(%rdx), %rdi
-    movq 72(%rdx), %rsi
-    subq $8, %rsp
-    movq 128(%rdx), %rcx
-    movq %rcx, (%rsp)
     movq 96(%rdx), %rcx
     movq 88(%rdx), %rdx
+    movb $0, g_in_context_switch(%rip)
     ret
 1:
+    movb $0, g_in_context_switch(%rip)
     ret

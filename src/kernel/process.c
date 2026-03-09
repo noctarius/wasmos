@@ -1,8 +1,8 @@
 #include "process.h"
 #include "memory.h"
+#include "physmem.h"
 
 static process_t g_processes[PROCESS_MAX_COUNT];
-static uint8_t g_process_stacks[PROCESS_MAX_COUNT][PROCESS_STACK_SIZE] __attribute__((aligned(16)));
 static uint32_t g_next_pid;
 static uint32_t g_last_index;
 static uint32_t g_current_pid;
@@ -18,6 +18,10 @@ static process_t *g_current_process;
 static process_run_result_t g_last_run_result;
 static process_context_t g_sched_ctx;
 static uint32_t g_preempt_disable_count;
+static process_t *g_idle_process;
+volatile uint8_t g_in_context_switch;
+
+#define PAGE_SIZE 0x1000u
 
 extern void context_switch(process_context_t *out, process_context_t *in);
 
@@ -29,6 +33,9 @@ static void ready_queue_reset(void) {
 
 static int ready_queue_enqueue(process_t *proc) {
     if (!proc || proc->in_ready_queue) {
+        return 0;
+    }
+    if (proc->is_idle) {
         return 0;
     }
     if (g_ready_count >= PROCESS_MAX_COUNT) {
@@ -69,6 +76,15 @@ static void process_trampoline(void) {
     }
 }
 
+__attribute__((noreturn)) void
+process_preempt_trampoline(void)
+{
+    process_yield(PROCESS_RUN_YIELDED);
+    for (;;) {
+        __asm__ volatile("hlt");
+    }
+}
+
 static void process_reset_slot(process_t *proc) {
     if (!proc) {
         return;
@@ -84,8 +100,11 @@ static void process_reset_slot(process_t *proc) {
     proc->ticks_remaining = 0;
     proc->ticks_total = 0;
     proc->in_ready_queue = 0;
+    proc->is_idle = 0;
     proc->ctx = (process_context_t){0};
+    proc->stack_base = 0;
     proc->stack_top = 0;
+    proc->stack_pages = 0;
     proc->entry = 0;
     proc->arg = 0;
     proc->name = 0;
@@ -171,6 +190,7 @@ void process_init(void) {
     g_current_process = 0;
     g_last_run_result = PROCESS_RUN_IDLE;
     g_preempt_disable_count = 0;
+    g_idle_process = 0;
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         process_reset_slot(&g_processes[i]);
     }
@@ -209,12 +229,67 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
     slot->entry = entry;
     slot->arg = arg;
     slot->name = name;
-    uint32_t index = (uint32_t)(slot - g_processes);
-    slot->stack_top = (uintptr_t)g_process_stacks[index] + PROCESS_STACK_SIZE;
+    uint64_t stack_pages = (PROCESS_STACK_SIZE + PAGE_SIZE - 1u) / PAGE_SIZE;
+    uint64_t stack_base = pfa_alloc_pages(stack_pages);
+    if (!stack_base) {
+        return -1;
+    }
+    slot->stack_base = (uintptr_t)stack_base;
+    slot->stack_pages = (uint32_t)stack_pages;
+    slot->stack_top = (uintptr_t)stack_base + (stack_pages * PAGE_SIZE);
     slot->ctx.rsp = slot->stack_top - 8u;
     slot->ctx.rip = (uint64_t)(uintptr_t)process_trampoline;
     slot->ctx.rflags = 0x200;
     ready_queue_enqueue(slot);
+    *out_pid = pid;
+    return 0;
+}
+
+int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint32_t *out_pid) {
+    if (!entry || !out_pid) {
+        return -1;
+    }
+    if (g_idle_process) {
+        return -1;
+    }
+
+    process_t *slot = process_find_slot();
+    if (!slot) {
+        return -1;
+    }
+
+    uint32_t pid = g_next_pid++;
+    mm_context_t *ctx = mm_context_create(pid);
+    if (!ctx) {
+        return -1;
+    }
+
+    slot->pid = pid;
+    slot->parent_pid = 0;
+    slot->context_id = ctx->id;
+    slot->state = PROCESS_STATE_READY;
+    slot->block_reason = PROCESS_BLOCK_NONE;
+    slot->wait_target_pid = 0;
+    slot->exit_status = 0;
+    slot->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
+    slot->ticks_remaining = slot->time_slice_ticks;
+    slot->ticks_total = 0;
+    slot->entry = entry;
+    slot->arg = arg;
+    slot->name = name;
+    slot->is_idle = 1;
+    uint64_t stack_pages = (PROCESS_STACK_SIZE + PAGE_SIZE - 1u) / PAGE_SIZE;
+    uint64_t stack_base = pfa_alloc_pages(stack_pages);
+    if (!stack_base) {
+        return -1;
+    }
+    slot->stack_base = (uintptr_t)stack_base;
+    slot->stack_pages = (uint32_t)stack_pages;
+    slot->stack_top = (uintptr_t)stack_base + (stack_pages * PAGE_SIZE);
+    slot->ctx.rsp = slot->stack_top - 8u;
+    slot->ctx.rip = (uint64_t)(uintptr_t)process_trampoline;
+    slot->ctx.rflags = 0x200;
+    g_idle_process = slot;
     *out_pid = pid;
     return 0;
 }
@@ -343,7 +418,11 @@ int process_schedule_once(void) {
 
     process_t *proc = ready_queue_dequeue();
     if (!proc || proc->state != PROCESS_STATE_READY || !proc->entry) {
-        return 1;
+        if (g_idle_process && g_idle_process->state == PROCESS_STATE_READY) {
+            proc = g_idle_process;
+        } else {
+            return 1;
+        }
     }
 
     proc->state = PROCESS_STATE_RUNNING;
@@ -401,8 +480,11 @@ void process_clear_resched(void) {
     g_need_resched = 0;
 }
 
-process_context_t *process_preempt_from_irq(const irq_frame_t *frame) {
+int process_preempt_from_irq(irq_frame_t *frame) {
     if (!frame) {
+        return 0;
+    }
+    if (g_in_context_switch) {
         return 0;
     }
     if (!process_should_resched() || !preempt_is_enabled()) {
@@ -437,7 +519,8 @@ process_context_t *process_preempt_from_irq(const irq_frame_t *frame) {
     ready_queue_enqueue(g_current_process);
     g_last_run_result = PROCESS_RUN_YIELDED;
     process_clear_resched();
-    return &g_sched_ctx;
+    frame->rip = (uint64_t)(uintptr_t)process_preempt_trampoline;
+    return 1;
 }
 
 void preempt_disable(void) {

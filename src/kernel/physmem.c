@@ -23,6 +23,9 @@ typedef struct {
 static pfa_range_t g_ranges[128];
 static uint32_t g_range_count;
 
+extern uint8_t __kernel_start;
+extern uint8_t __kernel_end;
+
 static void write_hex(uint64_t value) {
     char buf[21];
     static const char hex[] = "0123456789ABCDEF";
@@ -71,6 +74,63 @@ static void add_range(uint64_t base, uint64_t pages) {
     g_range_count++;
 }
 
+static void reserve_range(uint64_t base, uint64_t size) {
+    if (size == 0) {
+        return;
+    }
+    uint64_t start = base & ~(PAGE_SIZE - 1ULL);
+    uint64_t end = (base + size + PAGE_SIZE - 1ULL) & ~(PAGE_SIZE - 1ULL);
+    if (end <= start) {
+        return;
+    }
+
+    uint32_t i = 0;
+    while (i < g_range_count) {
+        pfa_range_t *range = &g_ranges[i];
+        uint64_t range_start = range->base;
+        uint64_t range_end = range->base + range->pages * PAGE_SIZE;
+        if (end <= range_start || start >= range_end) {
+            i++;
+            continue;
+        }
+
+        if (start <= range_start && end >= range_end) {
+            for (uint32_t j = i; j + 1 < g_range_count; ++j) {
+                g_ranges[j] = g_ranges[j + 1];
+            }
+            g_range_count--;
+            continue;
+        }
+
+        if (start > range_start && end < range_end) {
+            if (g_range_count >= (sizeof(g_ranges) / sizeof(g_ranges[0]))) {
+                range->pages = (start - range_start) / PAGE_SIZE;
+                return;
+            }
+            uint64_t tail_pages = (range_end - end) / PAGE_SIZE;
+            for (uint32_t j = g_range_count; j > i + 1; --j) {
+                g_ranges[j] = g_ranges[j - 1];
+            }
+            g_ranges[i + 1].base = end;
+            g_ranges[i + 1].pages = tail_pages;
+            range->pages = (start - range_start) / PAGE_SIZE;
+            g_range_count++;
+            i += 2;
+            continue;
+        }
+
+        if (start <= range_start) {
+            range->base = end;
+            range->pages = (range_end - end) / PAGE_SIZE;
+            i++;
+            continue;
+        }
+
+        range->pages = (start - range_start) / PAGE_SIZE;
+        i++;
+    }
+}
+
 void pfa_init(const boot_info_t *boot_info) {
     g_range_count = 0;
     if (!boot_info || !boot_info->memory_map || boot_info->memory_desc_size == 0) {
@@ -95,6 +155,10 @@ void pfa_init(const boot_info_t *boot_info) {
         }
         cursor += desc_size;
     }
+
+    uint64_t kernel_base = (uint64_t)(uintptr_t)&__kernel_start;
+    uint64_t kernel_size = (uint64_t)(uintptr_t)&__kernel_end - kernel_base;
+    reserve_range(kernel_base, kernel_size);
 
     log_hex("[pfa] ranges=", g_range_count);
 

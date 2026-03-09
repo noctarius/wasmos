@@ -133,6 +133,7 @@ x86_exception_panic(uint64_t vector)
     }
 }
 
+
 int
 x86_page_fault_handler(uint64_t error_code)
 {

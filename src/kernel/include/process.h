@@ -2,10 +2,11 @@
 #define WASMOS_PROCESS_H
 
 #include <stdint.h>
+#include <stddef.h>
 
-#define PROCESS_MAX_COUNT 16
+#define PROCESS_MAX_COUNT 32
 #define PROCESS_DEFAULT_SLICE_TICKS 5u
-#define PROCESS_STACK_SIZE 16384u
+#define PROCESS_STACK_SIZE 32768u
 
 typedef struct {
     uint64_t r15;
@@ -28,26 +29,36 @@ typedef struct {
     uint64_t rflags;
 } process_context_t;
 
+_Static_assert(offsetof(process_context_t, r15) == 0, "process_context_t r15 offset mismatch");
+_Static_assert(offsetof(process_context_t, rdi) == 64, "process_context_t rdi offset mismatch");
+_Static_assert(offsetof(process_context_t, rsp) == 120, "process_context_t rsp offset mismatch");
+_Static_assert(offsetof(process_context_t, rip) == 128, "process_context_t rip offset mismatch");
+_Static_assert(offsetof(process_context_t, rflags) == 136, "process_context_t rflags offset mismatch");
+
 typedef struct {
-    uint64_t rax;
-    uint64_t rbx;
-    uint64_t rcx;
-    uint64_t rdx;
-    uint64_t rbp;
-    uint64_t rsi;
-    uint64_t rdi;
-    uint64_t r8;
-    uint64_t r9;
-    uint64_t r10;
-    uint64_t r11;
-    uint64_t r12;
-    uint64_t r13;
-    uint64_t r14;
     uint64_t r15;
+    uint64_t r14;
+    uint64_t r13;
+    uint64_t r12;
+    uint64_t r11;
+    uint64_t r10;
+    uint64_t r9;
+    uint64_t r8;
+    uint64_t rdi;
+    uint64_t rsi;
+    uint64_t rbp;
+    uint64_t rdx;
+    uint64_t rcx;
+    uint64_t rbx;
+    uint64_t rax;
     uint64_t rip;
     uint64_t cs;
     uint64_t rflags;
 } irq_frame_t;
+
+_Static_assert(offsetof(irq_frame_t, r15) == 0, "irq_frame_t r15 offset mismatch");
+_Static_assert(offsetof(irq_frame_t, rax) == 112, "irq_frame_t rax offset mismatch");
+_Static_assert(offsetof(irq_frame_t, rip) == 120, "irq_frame_t rip offset mismatch");
 
 typedef enum {
     PROCESS_STATE_UNUSED = 0,
@@ -85,8 +96,11 @@ typedef struct process {
     uint32_t ticks_remaining;
     uint64_t ticks_total;
     uint8_t in_ready_queue;
+    uint8_t is_idle;
     process_context_t ctx;
+    uintptr_t stack_base;
     uintptr_t stack_top;
+    uint32_t stack_pages;
     process_entry_t entry;
     void *arg;
     const char *name;
@@ -95,6 +109,7 @@ typedef struct process {
 void process_init(void);
 int process_spawn(const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
 int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
+int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
 process_t *process_get(uint32_t pid);
 process_t *process_find_by_context(uint32_t context_id);
 uint32_t process_current_pid(void);
@@ -109,7 +124,7 @@ void process_yield(process_run_result_t result);
 void process_tick(void);
 int process_should_resched(void);
 void process_clear_resched(void);
-process_context_t *process_preempt_from_irq(const irq_frame_t *frame);
+int process_preempt_from_irq(irq_frame_t *frame);
 void preempt_disable(void);
 void preempt_enable(void);
 int preempt_is_enabled(void);

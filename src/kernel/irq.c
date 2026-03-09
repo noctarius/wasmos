@@ -185,7 +185,7 @@ void x86_irq_handler(uint64_t vector) {
     pic_send_eoi(irq_line);
 }
 
-process_context_t *x86_timer_irq_handler(irq_frame_t *frame) {
+void x86_timer_irq_handler(irq_frame_t *frame) {
     x86_irq_handler(IRQ_VECTOR_BASE);
-    return process_preempt_from_irq(frame);
+    process_preempt_from_irq(frame);
 }

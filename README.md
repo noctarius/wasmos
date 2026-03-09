@@ -218,6 +218,7 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes. U
 - The scheduler now switches into process contexts via a minimal context-switch trampoline; timer-driven preemption is enabled.
 - Timer IRQ preemption now redirects the interrupted RIP to a kernel preempt trampoline before yielding to the scheduler.
 - Spinlocks now disable preemption while held to keep IPC and scheduler paths safe.
+- WASMOS apps can terminate themselves via a `proc_exit` wasm native; the process manager reaps exited apps and releases their WAMR instances.
 - An explicit idle task runs `hlt` when no READY tasks are available.
 - Process stacks are allocated from the physical frame allocator, and the kernel image range is reserved before handing out pages.
 - Process lifecycle primitives now include `wait`, `kill`, and tracked `exit_status` via zombie processes until reaped.

@@ -260,10 +260,16 @@ pm_app_entry(process_t *process, void *arg)
         return PROCESS_RUN_BLOCKED;
     }
     if (step_result == WASMOS_WASM_STEP_DONE) {
+        wasmos_app_stop(&state->app);
+        state->in_use = 0;
+        state->pid = 0;
         process_set_exit_status(process, 0);
         return PROCESS_RUN_EXITED;
     }
     if (step_result == WASMOS_WASM_STEP_FAILED) {
+        wasmos_app_stop(&state->app);
+        state->in_use = 0;
+        state->pid = 0;
         process_set_exit_status(process, -1);
         return PROCESS_RUN_EXITED;
     }
@@ -525,6 +531,24 @@ pm_check_waits(uint32_t pm_context_id)
         resp.arg3 = 0;
         ipc_send_from(pm_context_id, waiter->reply_endpoint, &resp);
         waiter->in_use = 0;
+    }
+}
+
+static void
+pm_reap_apps(void)
+{
+    for (uint32_t i = 0; i < PM_MAX_MANAGED_APPS; ++i) {
+        pm_app_state_t *app = &g_pm.apps[i];
+        if (!app->in_use || app->pid == 0) {
+            continue;
+        }
+        int32_t exit_status = 0;
+        if (process_get_exit_status(app->pid, &exit_status) != 0) {
+            continue;
+        }
+        wasmos_app_stop(&app->app);
+        app->in_use = 0;
+        app->pid = 0;
     }
 }
 
@@ -803,6 +827,7 @@ process_manager_entry(process_t *process, void *arg)
     }
 
     pm_check_waits(process->context_id);
+    pm_reap_apps();
     pm_poll_spawn(process->context_id);
 
     int recv_rc = ipc_recv_for(process->context_id, g_pm.proc_endpoint, &msg);

@@ -5,6 +5,7 @@ static process_t g_processes[PROCESS_MAX_COUNT];
 static uint32_t g_next_pid;
 static uint32_t g_last_index;
 static uint32_t g_current_pid;
+static volatile uint8_t g_need_resched;
 
 static void process_reset_slot(process_t *proc) {
     if (!proc) {
@@ -17,6 +18,9 @@ static void process_reset_slot(process_t *proc) {
     proc->block_reason = PROCESS_BLOCK_NONE;
     proc->wait_target_pid = 0;
     proc->exit_status = 0;
+    proc->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
+    proc->ticks_remaining = 0;
+    proc->ticks_total = 0;
     proc->entry = 0;
     proc->arg = 0;
     proc->name = 0;
@@ -96,6 +100,7 @@ void process_init(void) {
     g_next_pid = 1;
     g_last_index = 0;
     g_current_pid = 0;
+    g_need_resched = 0;
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         process_reset_slot(&g_processes[i]);
     }
@@ -128,6 +133,9 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
     slot->block_reason = PROCESS_BLOCK_NONE;
     slot->wait_target_pid = 0;
     slot->exit_status = 0;
+    slot->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
+    slot->ticks_remaining = slot->time_slice_ticks;
+    slot->ticks_total = 0;
     slot->entry = entry;
     slot->arg = arg;
     slot->name = name;
@@ -256,6 +264,9 @@ int process_schedule_once(void) {
         }
 
         proc->state = PROCESS_STATE_RUNNING;
+        if (proc->ticks_remaining == 0) {
+            proc->ticks_remaining = proc->time_slice_ticks;
+        }
         g_current_pid = proc->pid;
         process_run_result_t result = proc->entry(proc, proc->arg);
         g_current_pid = 0;
@@ -274,10 +285,36 @@ int process_schedule_once(void) {
         }
 
         g_last_index = (index + 1) % PROCESS_MAX_COUNT;
+        g_need_resched = 0;
         return (result == PROCESS_RUN_YIELDED) ? 0 : 1;
     }
 
     return 1;
+}
+
+void process_tick(void) {
+    if (g_current_pid == 0) {
+        return;
+    }
+    process_t *proc = process_find_by_pid(g_current_pid);
+    if (!proc || proc->state != PROCESS_STATE_RUNNING) {
+        return;
+    }
+    proc->ticks_total++;
+    if (proc->ticks_remaining > 0) {
+        proc->ticks_remaining--;
+        if (proc->ticks_remaining == 0) {
+            g_need_resched = 1;
+        }
+    }
+}
+
+int process_should_resched(void) {
+    return g_need_resched != 0;
+}
+
+void process_clear_resched(void) {
+    g_need_resched = 0;
 }
 
 uint32_t process_count_active(void) {

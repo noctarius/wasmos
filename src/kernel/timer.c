@@ -2,6 +2,7 @@
 #include "irq.h"
 #include "io.h"
 #include "serial.h"
+#include "process.h"
 
 #define PIT_CMD_PORT 0x43
 #define PIT_CH0_PORT 0x40
@@ -38,6 +39,7 @@ void timer_init(uint32_t hz) {
 
 void timer_handle_irq(void) {
     g_timer_ticks++;
+    process_tick();
     if (g_timer_ticks == g_timer_log_threshold) {
         g_timer_log_pending = 1;
     }

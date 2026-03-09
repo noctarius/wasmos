@@ -12,6 +12,7 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - `examples/c/` Example C WASM applications.
 - `examples/go/` Example Go (TinyGo) WASM applications.
 - `examples/rust/` Example Rust WASM applications.
+- `examples/zig/` Example Zig WASM applications.
 - `src/drivers/` WASM driver sources and ABI headers (each driver lives in its own subdirectory).
 - `src/services/` System services (WASM-based).
 - `scripts/` Helper scripts (optional).
@@ -91,6 +92,24 @@ cmake --build build --target go_examples
 
 The sample lives at `examples/go/hello/hello_go.go` and is packed as `hello_go.wasmosapp`.
 
+### Zig (optional)
+Zig can be used to write WASMOS applications. Install Zig and ensure it is in your PATH.
+
+Zig builds are enabled by default (`ZIG_ENABLE=ON`). If `zig` is missing, Zig examples are skipped with a warning.
+To disable Zig builds:
+```
+cmake -S . -B build -DZIG_ENABLE=OFF
+```
+
+Build the sample Zig WASMOS-APP:
+```
+cmake --build build --target zig_examples
+```
+
+The sample lives at `examples/zig/hello/hello_zig.zig` and is packed as `hello_zig.wasmosapp`.
+Note: Zig requires an explicit wasm export for the WASMOS entry; the build adds
+`--export=hello_zig_step` so the module retains the entry function.
+
 ### WAMR scaffold
 - `libs/wasm/wamr_runtime.c` provides a thin wrapper over the WAMR C API.
 - Enable with `-DWAMR_ENABLE=ON` once you wire the WAMR library into the kernel link.
@@ -117,6 +136,9 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - `cmake --build build --target run-qemu` runs QEMU with an ESP image (serial console via `-nographic`)
 - `cmake --build build --target run-qemu-test` runs QEMU, waits for the CLI prompt, issues `halt`, and expects a clean shutdown
 - `cmake --build build --target run-qemu-cli-test` runs the CLI integration tests via the Python QEMU test framework (`python3 -m unittest discover -s tests`)
+- CLI integration tests include per-app hello tests (`test_hello_*.py`).
+- The CLI tests include running `exec hello-zig` and asserting the Zig app prints its banner and returns to the prompt.
+- `cmake --build build --target zig_examples` builds the Zig hello WASMOS-APP when Zig is available
 - `run-qemu`, `run-qemu-test`, and `run-qemu-cli-test` copy `sysinit.wasmosapp`, `cli.wasmosapp`, and `hw_discovery.wasmosapp` into `esp/system/services` in addition to `esp/apps` (where applicable).
 - `ata.wasmosapp` and `fs_fat.wasmosapp` are now copied into `esp/system/drivers` for the bootloader to preload as drivers.
 
@@ -174,7 +196,7 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes. U
 - The root context also reserves placeholder IPC and device regions.
 - `mm_context_create` allocates a new context and default regions.
 - WAMR runtime init uses a fixed page pool and `wamr_context_bind` ties a context's regions to WAMR sizing.
-- WAMR runtime initialization is on-demand through the kernel wasm driver host layer and currently uses a kernel-owned static pool (2 MiB).
+- WAMR runtime initialization is on-demand through the kernel wasm driver host layer and currently uses a kernel-owned static pool (4 MiB).
 - WAMR is enabled by default and links the WAMR runtime library unless `-DWAMR_LINK=OFF` is set.
 - `WAMR_LINK` builds the WAMR runtime with a minimal `wasmos` platform in `src/wasm-micro-runtime/platform/wasmos/`.
 - WAMR custom object builds propagate upstream runtime feature defines and compile third-party sources with `-Wno-error`.

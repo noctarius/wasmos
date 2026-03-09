@@ -58,12 +58,15 @@ static int32_t g_request_id = 1;
 static int32_t g_pending_req = -1;
 static char g_cwd[64] = "/";
 static int32_t g_pending_kind = 0;
+static int32_t g_pending_cd_use_path = 0;
+static char g_pending_cd_path[32] = "/";
 
 enum {
     PENDING_NONE = 0,
     PENDING_LIST,
     PENDING_CAT,
     PENDING_CD,
+    PENDING_CD_CHAIN,
     PENDING_EXEC
 };
 
@@ -279,19 +282,53 @@ cli_send_proc(int32_t type, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_
 }
 
 static void
-set_cwd_name(const char *name)
+set_cwd_path(const char *path)
 {
-    if (!name || !name[0]) {
+    if (!path || !path[0] || str_eq(path, "/") || str_eq(path, ".") || str_eq(path, "..")) {
         set_cwd_root();
         return;
     }
-    g_cwd[0] = '/';
-    uint32_t i = 0;
-    while (name[i] && i < sizeof(g_cwd) - 2) {
-        g_cwd[i + 1] = name[i];
-        i++;
+
+    char old_cwd[64];
+    uint32_t old_len = 0;
+    while (g_cwd[old_len] && old_len + 1 < sizeof(old_cwd)) {
+        old_cwd[old_len] = g_cwd[old_len];
+        old_len++;
     }
-    g_cwd[i + 1] = '\0';
+    old_cwd[old_len] = '\0';
+
+    uint32_t out = 0;
+    g_cwd[0] = '\0';
+
+    if (path[0] == '/') {
+        g_cwd[out++] = '/';
+    } else if (old_cwd[0] == '/' && old_cwd[1] == '\0') {
+        g_cwd[out++] = '/';
+    } else {
+        uint32_t i = 0;
+        while (old_cwd[i] && out + 1 < sizeof(g_cwd)) {
+            g_cwd[out++] = old_cwd[i++];
+        }
+        if (out == 0) {
+            g_cwd[out++] = '/';
+        } else if (g_cwd[out - 1] != '/' && out + 1 < sizeof(g_cwd)) {
+            g_cwd[out++] = '/';
+        }
+    }
+
+    uint32_t i = 0;
+    while (path[i] && out + 1 < sizeof(g_cwd)) {
+        if (i == 0 && path[i] == '/') {
+            i++;
+            continue;
+        }
+        g_cwd[out++] = path[i++];
+    }
+
+    if (out > 1 && g_cwd[out - 1] == '/') {
+        out--;
+    }
+    g_cwd[out] = '\0';
 }
 
 static void
@@ -371,7 +408,23 @@ cli_handle_line(void)
                 console_write("cd failed\n");
                 return 0;
             }
+            g_pending_cd_use_path = 0;
             g_pending_kind = PENDING_CD;
+            return 1;
+        }
+        if (path[0] == '/' && str_len(path) >= 16) {
+            uint32_t i = 0;
+            while (path[i] && i + 1 < sizeof(g_pending_cd_path)) {
+                g_pending_cd_path[i] = path[i];
+                i++;
+            }
+            g_pending_cd_path[i] = '\0';
+            if (cli_send_fs(FS_IPC_CHDIR_REQ, 0, 0, 0, 0) != 0) {
+                console_write("cd failed\n");
+                return 0;
+            }
+            g_pending_cd_use_path = 1;
+            g_pending_kind = PENDING_CD_CHAIN;
             return 1;
         }
         uint32_t packed[4];
@@ -380,6 +433,7 @@ cli_handle_line(void)
             console_write("cd failed\n");
             return 0;
         }
+        g_pending_cd_use_path = 0;
         g_pending_kind = PENDING_CD;
         return 1;
     }
@@ -604,14 +658,30 @@ cli_step(int32_t ignored_type,
             console_write("spawned pid ");
             console_write_u32((uint32_t)resp_status);
             console_write("\n");
+        } else if (g_pending_kind == PENDING_CD_CHAIN) {
+            const char *tail = g_pending_cd_path;
+            if (tail[0] == '/') {
+                tail++;
+            }
+            uint32_t packed[4];
+            cli_pack_name(tail, packed);
+            if (cli_send_fs(FS_IPC_CHDIR_REQ, packed[0], packed[1], packed[2], packed[3]) != 0) {
+                console_write("cd failed\n");
+                g_pending_req = -1;
+                g_pending_kind = PENDING_NONE;
+                g_pending_cd_use_path = 0;
+                g_phase = CLI_PHASE_PROMPT;
+                return WASMOS_WASM_STEP_YIELDED;
+            }
+            g_pending_kind = PENDING_CD;
+            return WASMOS_WASM_STEP_YIELDED;
         } else if (g_pending_kind == PENDING_CD) {
-            if (g_line_len > 3) {
+            if (g_pending_cd_use_path) {
+                set_cwd_path(g_pending_cd_path);
+                g_pending_cd_use_path = 0;
+            } else if (g_line_len > 3) {
                 const char *path = &g_line[3];
-                if (str_eq(path, "/") || str_eq(path, ".") || str_eq(path, "..")) {
-                    set_cwd_root();
-                } else {
-                    set_cwd_name(path);
-                }
+                set_cwd_path(path);
             } else {
                 set_cwd_root();
             }

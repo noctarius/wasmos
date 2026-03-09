@@ -359,7 +359,7 @@ Remaining:
 - `mm_init` now installs kernel-owned x86_64 page tables and reloads `CR3`.
 - The paging scaffold keeps low-memory identity mapping and adds higher-half aliases at `0xFFFFFFFF80000000`.
 - `mm_context_create` can allocate new contexts with default linear/stack/heap regions.
-- WAMR initialization uses a kernel-owned static pool allocator (currently 2 MiB) with per-context bindings for linear/stack/heap sizing.
+- WAMR initialization uses a kernel-owned static pool allocator (currently 4 MiB) with per-context bindings for linear/stack/heap sizing.
 - WAMR runtime initialization is performed on-demand by the kernel wasm driver host when the first wasm driver is started.
 - WAMR is enabled by default and links the runtime library unless `WAMR_LINK=OFF` is set.
 - The WAMR runtime build uses a minimal `wasmos` platform from `src/wasm-micro-runtime/platform/wasmos/`.
@@ -513,7 +513,7 @@ Planned:
 ## Driver Model (Current Scaffold)
 - Run drivers as isolated WASM contexts.
 - Expose driver APIs through IPC endpoints to other WASM contexts.
-- Current scaffold includes project-owned wasm application examples under `examples/` (C, AssemblyScript, Rust, and Go).
+- Current scaffold includes project-owned wasm application examples under `examples/` (C, AssemblyScript, Rust, Go, and Zig).
 - The build compiles the chardev server driver (`src/drivers/chardev`) and chardev client example into `.wasm` binaries and embeds them into the kernel image as binary blobs.
 - Driver wasm binaries are linked with explicit stack and initial/max memory bounds to keep freestanding instantiation deterministic.
 - A kernel wasm driver host (`src/kernel/wasm_driver.c`) loads embedded modules, instantiates them with WAMR, allocates IPC endpoints, and dispatches IPC messages to a driver export.
@@ -731,8 +731,11 @@ Current implementation (kernel scaffold):
 - `run-qemu`, `run-qemu-test`, and `run-qemu-cli-test` copy `sysinit.wasmosapp` and `cli.wasmosapp` into `esp/system/services` in addition to `esp/apps`.
 - `run-qemu`, `run-qemu-test`, and `run-qemu-cli-test` copy driver WASMOS-APPs (`ata.wasmosapp`, `fs_fat.wasmosapp`) into `esp/system/drivers`, and the bootloader preloads them from that path.
 - `run-qemu-cli-test` uses the Python QEMU test framework to execute CLI commands and assert output while the VM is running via `python3 -m unittest discover -s tests`.
+- CLI integration tests include per-app hello tests (`test_hello_*.py`).
+- CLI integration tests include executing `hello-zig` and asserting its banner output before returning to the prompt.
 - IDE indexing targets (`bootloader_ide`, `kernel_ide`) include all project C/H sources for CLion, including drivers/services/examples and WAMR platform stubs.
   - IDE targets also export include directories for kernel/drivers/WAMR headers to improve CLion resolution.
+- Zig WASMOS-APP builds force-export the entry symbol (the build passes `--export=hello_zig_step`) so the entry function is retained.
 If OVMF isn't found, pass `-DOVMF_CODE=/path/to/OVMF_CODE.fd` at configure time.
 macOS/Homebrew: `brew install edk2-ovmf`.
 When running QEMU, we use `if=pflash` with OVMF code/vars; set `-DOVMF_VARS=/path/to/OVMF_VARS.fd` if available.

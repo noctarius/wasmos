@@ -117,7 +117,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - `cmake --build build --target run-qemu` runs QEMU with an ESP image (serial console via `-nographic`)
 - `cmake --build build --target run-qemu-test` runs QEMU, waits for the CLI prompt, issues `halt`, and expects a clean shutdown
 - `cmake --build build --target run-qemu-cli-test` runs the CLI integration tests via the Python QEMU test framework (`python3 -m unittest discover -s tests`)
-- `run-qemu`, `run-qemu-test`, and `run-qemu-cli-test` copy `sysinit.wasmosapp` and `cli.wasmosapp` into `esp/system/services` in addition to `esp/apps`.
+- `run-qemu`, `run-qemu-test`, and `run-qemu-cli-test` copy `sysinit.wasmosapp`, `cli.wasmosapp`, and `hw_discovery.wasmosapp` into `esp/system/services` in addition to `esp/apps` (where applicable).
 - `ata.wasmosapp` and `fs_fat.wasmosapp` are now copied into `esp/system/drivers` for the bootloader to preload as drivers.
 
 Use `run-qemu-test` as the default compile+boot+halt check after code changes. Use `run-qemu-cli-test` for scripted CLI assertions (e.g. `ls` output).
@@ -161,6 +161,8 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes. U
 - PT_LOAD segments are loaded with page-aligned allocations (misaligned physical addresses are handled).
 - Overlapping PT_LOAD segments reuse existing allocations instead of re-allocating pages.
 - The kernel entry receives a `boot_info_t` with framebuffer/memory map placeholders.
+- `boot_info_t` now includes the ACPI RSDP pointer and length for early hardware discovery.
+- A minimal `hw-discovery` service now scans the ACPI RSDP and ensures core drivers are running.
 - The kernel entry preserves the incoming `boot_info_t *` (UEFI passes it in `RCX`) through early init.
 - The kernel emits early serial output on COM1 (QEMU `-serial`).
 - Basic CPU init now installs a minimal kernel GDT/IDT and exception stubs for vectors `0..31`.

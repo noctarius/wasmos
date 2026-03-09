@@ -331,6 +331,12 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
         }
         slot->step_arg0 = block_endpoint;
         slot->step_arg1 = IPC_ENDPOINT_NONE;
+    } else if (name_eq(slot->name, "hw-discovery")) {
+        if (g_pm.proc_endpoint == IPC_ENDPOINT_NONE) {
+            slot->in_use = 0;
+            return -1;
+        }
+        slot->step_arg0 = g_pm.proc_endpoint;
     } else if (name_eq(slot->name, "ata")) {
         slot->step_arg0 = IPC_ENDPOINT_NONE;
     }

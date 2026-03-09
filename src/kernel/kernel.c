@@ -30,6 +30,7 @@ typedef struct {
 } wasm_block_slot_t;
 static wasm_block_slot_t g_wasm_block_slots[PROCESS_MAX_COUNT];
 static uint32_t g_chardev_service_endpoint = IPC_ENDPOINT_NONE;
+static const boot_info_t *g_boot_info;
 
 typedef struct {
     uint64_t addr;
@@ -599,6 +600,43 @@ native_system_reboot(wasm_exec_env_t exec_env)
 }
 
 static int32_t
+native_acpi_rsdp_info(wasm_exec_env_t exec_env, int32_t out_ptr, int32_t out_len_ptr, int32_t max_len)
+{
+    if (out_ptr < 0 || out_len_ptr < 0 || max_len <= 0) {
+        return -1;
+    }
+    if (!g_boot_info || !g_boot_info->rsdp || g_boot_info->rsdp_length == 0) {
+        return -1;
+    }
+    uint32_t len = g_boot_info->rsdp_length;
+    if (len > (uint32_t)max_len) {
+        return -1;
+    }
+
+    wasm_module_inst_t module_inst = get_module_inst(exec_env);
+    if (!module_inst) {
+        return -1;
+    }
+    if (!wasm_runtime_validate_app_addr(module_inst, (uint64_t)out_ptr, (uint64_t)len)) {
+        return -1;
+    }
+    if (!wasm_runtime_validate_app_addr(module_inst, (uint64_t)out_len_ptr, sizeof(uint32_t))) {
+        return -1;
+    }
+    uint8_t *dst = (uint8_t *)wasm_runtime_addr_app_to_native(module_inst, (uint64_t)out_ptr);
+    uint32_t *len_out = (uint32_t *)wasm_runtime_addr_app_to_native(module_inst, (uint64_t)out_len_ptr);
+    if (!dst || !len_out) {
+        return -1;
+    }
+    const uint8_t *src = (const uint8_t *)(uintptr_t)g_boot_info->rsdp;
+    for (uint32_t i = 0; i < len; ++i) {
+        dst[i] = src[i];
+    }
+    *len_out = len;
+    return 0;
+}
+
+static int32_t
 native_console_write(wasm_exec_env_t exec_env, int32_t ptr, int32_t len)
 {
     if (ptr < 0 || len <= 0) {
@@ -739,6 +777,7 @@ register_wasm_ipc_natives(void)
         { "fs_buffer_write", native_fs_buffer_write, "(iii)i", 0 },
         { "system_halt", native_system_halt, "()i", 0 },
         { "system_reboot", native_system_reboot, "()i", 0 },
+        { "acpi_rsdp_info", native_acpi_rsdp_info, "(iii)i", 0 },
         { "io_in8", native_io_in8, "(i)i", 0 },
         { "io_in16", native_io_in16, "(i)i", 0 },
         { "io_out8", native_io_out8, "(ii)i", 0 },
@@ -926,6 +965,7 @@ kmain(boot_info_t *boot_info)
     serial_write_hex64(boot_info->version);
     serial_write("[kernel] boot_info size=");
     serial_write_hex64(boot_info->size);
+    g_boot_info = boot_info;
     cpu_init();
 
     mm_init(boot_info);

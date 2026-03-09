@@ -491,6 +491,7 @@ Design takeaways:
 - Scheduler metrics (timer ticks, ready queue depth, current running PID) are exposed via wasm natives for diagnostics.
 - The scheduler now switches into per-process contexts via a trampoline and stack; timer-driven preemption is enabled.
 - Spinlocks disable preemption while held to keep IPC and scheduler paths safe under timer interrupts.
+- WASMOS apps can terminate via a `proc_exit` wasm native; the process manager reaps exited apps and releases their WAMR instances.
 - An explicit idle task runs `hlt` when no READY tasks are available.
 - `process_spawn` binds each process to a new memory context (`mm_context_create(pid)`), establishing per-process isolation boundaries.
 - Lifecycle primitives now include `process_wait`, `process_kill`, and `process_get_exit_status`.

@@ -775,6 +775,19 @@ native_proc_count(wasm_exec_env_t exec_env)
 }
 
 static int32_t
+native_proc_exit(wasm_exec_env_t exec_env, int32_t status)
+{
+    (void)exec_env;
+    process_t *proc = process_get(process_current_pid());
+    if (!proc) {
+        return -1;
+    }
+    process_set_exit_status(proc, status);
+    process_yield(PROCESS_RUN_EXITED);
+    return 0;
+}
+
+static int32_t
 native_sched_ticks(wasm_exec_env_t exec_env)
 {
     (void)exec_env;
@@ -869,6 +882,7 @@ register_wasm_ipc_natives(void)
         { "console_write", native_console_write, "(ii)i", 0 },
         { "console_read", native_console_read, "(*~)i", 0 },
         { "proc_count", native_proc_count, "()i", 0 },
+        { "proc_exit", native_proc_exit, "(i)i", 0 },
         { "sched_ticks", native_sched_ticks, "()i", 0 },
         { "sched_ready_count", native_sched_ready_count, "()i", 0 },
         { "sched_current_pid", native_sched_current_pid, "()i", 0 },

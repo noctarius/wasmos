@@ -337,6 +337,7 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
             return -1;
         }
         slot->step_arg0 = g_pm.proc_endpoint;
+        slot->step_arg1 = g_pm.module_count;
     } else if (name_eq(slot->name, "ata")) {
         slot->step_arg0 = IPC_ENDPOINT_NONE;
     }

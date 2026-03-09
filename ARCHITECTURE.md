@@ -569,8 +569,9 @@ Services:
   - Resolves required IPC endpoints/capabilities before start.
   - Starts the entry export and registers the process with the scheduler.
 - `sysinit` (root task / init process): the first user-space task that bootstraps the system.
-  - Starts core services and drivers (PM, ATA, FAT, CLI).
-- `hw-discovery` (udev-like): scans the ACPI RSDP and ensures core drivers are running.
+  - Starts core services (PM, hw-discovery).
+- `hw-discovery` (udev-like): scans the ACPI RSDP and starts core drivers (ATA, FAT) from boot modules.
+- `sysinit` launches the CLI after `fs-fat` is running.
 - `cli` (simple CLI): provides a basic command loop and service/status queries.
 
 Planned:

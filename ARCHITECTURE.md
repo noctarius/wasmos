@@ -485,7 +485,8 @@ Design takeaways:
 - `timer` primitive in `src/kernel/timer.c` programs PIT IRQ0 and tracks a tick counter; logging is deferred to the scheduler loop.
 - The scheduler tracks per-process tick accounting and sets a reschedule flag when a time slice expires (preemption is still pending).
 - READY processes are now managed via a small FIFO run queue instead of full table scans.
-- The scheduler now switches into per-process contexts via a trampoline and stack; preemption is still pending.
+- The scheduler now switches into per-process contexts via a trampoline and stack; timer-driven preemption is enabled.
+- Spinlocks disable preemption while held to keep IPC and scheduler paths safe under timer interrupts.
 - `process_spawn` binds each process to a new memory context (`mm_context_create(pid)`), establishing per-process isolation boundaries.
 - Lifecycle primitives now include `process_wait`, `process_kill`, and `process_get_exit_status`.
 - WAMR native IPC imports use the `exec_env` calling convention to align with WAMR native argument marshalling.
@@ -497,7 +498,7 @@ Design takeaways:
 - Exited processes transition to a zombie state carrying `exit_status` until reaped by `process_wait`.
 - The kernel main loop schedules processes instead of invoking service handlers directly.
 - A kernel IPC wakeup smoke test spawns `ipc-wait-test` and `ipc-send-test` and logs `[test] ipc wake ok` on success.
-- A preemption smoke test is staged (busy-loop + observer) and will log `[test] preempt ok` once preemptive scheduling is enabled; it is currently disabled.
+- A preemption smoke test (busy-loop + observer) logs `[test] preempt ok` when timer-driven preemption is active.
 - The current system starts a dedicated `chardev-server` process and assigns its context ID as the owner of the chardev IPC endpoint.
 - The current system starts a kernel `init` process that is the root parent for all kernel-spawned processes, and it spawns the `process-manager` (owner of the `proc` endpoint).
 - The process manager spawns the user-space `sysinit` WASMOS-APP boot module after a kernel-init request and passes the `proc` endpoint plus boot module metadata.

@@ -52,7 +52,7 @@ typedef struct {
     uint8_t done;
 } preempt_test_state_t;
 static preempt_test_state_t g_preempt_test_state;
-static const uint8_t g_preempt_test_enabled = 0;
+static const uint8_t g_preempt_test_enabled = 1;
 
 typedef struct {
     const boot_info_t *boot_info;
@@ -1117,6 +1117,7 @@ static void
 run_kernel_loop(void)
 {
     for (;;) {
+        __asm__ volatile("sti");
         if (process_schedule_once() != 0) {
             __asm__ volatile("pause");
         }

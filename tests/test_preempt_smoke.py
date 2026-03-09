@@ -29,7 +29,9 @@ class PreemptSmokeTests(unittest.TestCase):
             cls.session.close()
 
     def test_preempt_marker(self):
-        self.skipTest("Preemptive scheduling not enabled yet.")
+        ok = self.session.expect(b"[test] preempt ok", timeout_s=20)
+        if not ok:
+            self.fail(f"Preempt marker not found.\n--- tail ---\n{self.session.tail()}\n")
 
 
 if __name__ == "__main__":

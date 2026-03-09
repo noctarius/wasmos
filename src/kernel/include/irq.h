@@ -2,6 +2,7 @@
 #define WASMOS_IRQ_H
 
 #include <stdint.h>
+#include "process.h"
 
 #define IRQ_VECTOR_BASE 32
 #define IRQ_COUNT 16
@@ -12,5 +13,6 @@ int irq_unregister(uint32_t context_id, uint32_t irq_line);
 int irq_mask(uint32_t irq_line);
 int irq_unmask(uint32_t irq_line);
 void x86_irq_handler(uint64_t vector);
+process_context_t *x86_timer_irq_handler(irq_frame_t *frame);
 
 #endif

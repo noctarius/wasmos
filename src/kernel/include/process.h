@@ -12,11 +12,42 @@ typedef struct {
     uint64_t r14;
     uint64_t r13;
     uint64_t r12;
-    uint64_t rbx;
+    uint64_t r11;
+    uint64_t r10;
+    uint64_t r9;
+    uint64_t r8;
+    uint64_t rdi;
+    uint64_t rsi;
     uint64_t rbp;
+    uint64_t rdx;
+    uint64_t rcx;
+    uint64_t rbx;
+    uint64_t rax;
     uint64_t rsp;
     uint64_t rip;
+    uint64_t rflags;
 } process_context_t;
+
+typedef struct {
+    uint64_t rax;
+    uint64_t rbx;
+    uint64_t rcx;
+    uint64_t rdx;
+    uint64_t rbp;
+    uint64_t rsi;
+    uint64_t rdi;
+    uint64_t r8;
+    uint64_t r9;
+    uint64_t r10;
+    uint64_t r11;
+    uint64_t r12;
+    uint64_t r13;
+    uint64_t r14;
+    uint64_t r15;
+    uint64_t rip;
+    uint64_t cs;
+    uint64_t rflags;
+} irq_frame_t;
 
 typedef enum {
     PROCESS_STATE_UNUSED = 0,
@@ -78,6 +109,10 @@ void process_yield(process_run_result_t result);
 void process_tick(void);
 int process_should_resched(void);
 void process_clear_resched(void);
+process_context_t *process_preempt_from_irq(const irq_frame_t *frame);
+void preempt_disable(void);
+void preempt_enable(void);
+int preempt_is_enabled(void);
 uint32_t process_count_active(void);
 int process_info_at(uint32_t index, uint32_t *out_pid, const char **out_name);
 int process_info_at_ex(uint32_t index, uint32_t *out_pid, uint32_t *out_parent_pid, const char **out_name);

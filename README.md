@@ -141,7 +141,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - CLI integration tests include per-app hello tests (`test_hello_*.py`).
 - QEMU smoke tests include a PIT timer tick marker check (`tests/test_timer_tick.py`).
 - QEMU smoke tests include an IPC wakeup marker check (`tests/test_ipc_wakeup.py`).
-- QEMU smoke tests include a preemption marker check (`tests/test_preempt_smoke.py`) once preemption is enabled (test currently skipped).
+- QEMU smoke tests include a preemption marker check (`tests/test_preempt_smoke.py`).
 - The CLI tests include running `exec hello-zig` and asserting the Zig app prints its banner and returns to the prompt.
 - `cmake --build build --target zig_examples` builds the Zig hello WASMOS-APP when Zig is available
 - `run-qemu`, `run-qemu-test`, and `run-qemu-cli-test` copy `sysinit.wasmosapp`, `cli.wasmosapp`, and `hw_discovery.wasmosapp` into `esp/system/services` in addition to `esp/apps` (where applicable).
@@ -213,7 +213,8 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes. U
 - PIT timer init now programs IRQ0 and increments a kernel tick counter; the kernel logs a tick milestone via a deferred poll in the scheduler loop.
 - The scheduler now tracks per-process tick accounting and sets a reschedule flag when a time slice expires (preemption still pending).
 - READY processes are now managed via a simple run queue instead of a full scan each scheduling step.
-- The scheduler now switches into process contexts via a minimal context-switch trampoline; preemption is still pending.
+- The scheduler now switches into process contexts via a minimal context-switch trampoline; timer-driven preemption is enabled.
+- Spinlocks now disable preemption while held to keep IPC and scheduler paths safe.
 - Process lifecycle primitives now include `wait`, `kill`, and tracked `exit_status` via zombie processes until reaped.
 - Blocked processes can now be resumed by context (`process_wake_by_context`) when IPC traffic arrives for owned endpoints.
 - A minimal init process runs in the kernel and is the root parent for all kernel-spawned processes (mem-service, chardev-server, pagefault-test, and the process manager).

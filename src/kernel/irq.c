@@ -2,6 +2,7 @@
 #include "ipc.h"
 #include "serial.h"
 #include "timer.h"
+#include "process.h"
 
 #define PIC1_CMD 0x20
 #define PIC1_DATA 0x21
@@ -182,4 +183,9 @@ void x86_irq_handler(uint64_t vector) {
         ipc_notify_from(IPC_CONTEXT_KERNEL, route->endpoint);
     }
     pic_send_eoi(irq_line);
+}
+
+process_context_t *x86_timer_irq_handler(irq_frame_t *frame) {
+    x86_irq_handler(IRQ_VECTOR_BASE);
+    return process_preempt_from_irq(frame);
 }

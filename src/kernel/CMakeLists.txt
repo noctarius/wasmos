@@ -13,6 +13,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/spinlock.o
   ${BUILD_DIR}/memory_service.o
   ${BUILD_DIR}/irq.o
+  ${BUILD_DIR}/timer.o
   ${BUILD_DIR}/process_manager.o
   ${BUILD_DIR}/wasmos_app.o
   ${BUILD_DIR}/wasm_driver.o
@@ -39,6 +40,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/spinlock.c
   ${KERNEL_DIR}/memory_service.c
   ${KERNEL_DIR}/irq.c
+  ${KERNEL_DIR}/timer.c
   ${KERNEL_DIR}/process_manager.c
   ${KERNEL_DIR}/wasmos_app.c
   ${KERNEL_DIR}/wasm_driver.c
@@ -61,6 +63,7 @@ target_sources(kernel_sources INTERFACE
   ${KERNEL_DIR}/include/process.h
   ${KERNEL_DIR}/include/process_manager.h
   ${KERNEL_DIR}/include/irq.h
+  ${KERNEL_DIR}/include/timer.h
   ${KERNEL_DIR}/include/serial.h
   ${KERNEL_DIR}/include/spinlock.h
   ${KERNEL_DIR}/include/wamr_context.h
@@ -89,6 +92,7 @@ add_library(kernel_ide OBJECT EXCLUDE_FROM_ALL
   ${KERNEL_DIR}/include/process_manager.h
   ${KERNEL_DIR}/include/memory_service.h
   ${KERNEL_DIR}/include/irq.h
+  ${KERNEL_DIR}/include/timer.h
   ${KERNEL_DIR}/include/serial.h
   ${KERNEL_DIR}/include/wasmos_app.h
   ${KERNEL_DIR}/include/spinlock.h
@@ -137,6 +141,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/spinlock.c -o ${BUILD_DIR}/spinlock.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory_service.c -o ${BUILD_DIR}/memory_service.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/irq.c -o ${BUILD_DIR}/irq.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/timer.c -o ${BUILD_DIR}/timer.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager.c -o ${BUILD_DIR}/process_manager.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_app.c -o ${BUILD_DIR}/wasmos_app.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_driver.c -o ${BUILD_DIR}/wasm_driver.o
@@ -148,9 +153,10 @@ add_custom_command(
   DEPENDS ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/include/cpu.h
           ${KERNEL_DIR}/include/ipc.h ${KERNEL_DIR}/include/memory.h ${KERNEL_DIR}/include/paging.h
           ${KERNEL_DIR}/include/physmem.h ${KERNEL_DIR}/include/process.h ${KERNEL_DIR}/include/process_manager.h
-          ${KERNEL_DIR}/include/memory_service.h ${KERNEL_DIR}/include/irq.h ${KERNEL_DIR}/include/serial.h
-          ${KERNEL_DIR}/include/wasmos_app.h ${KERNEL_DIR}/include/spinlock.h ${KERNEL_DIR}/include/wamr_context.h
-          ${KERNEL_DIR}/include/wasm_driver.h ${KERNEL_DIR}/include/wasm_chardev.h ${KERNEL_DIR}/include/io.h
+          ${KERNEL_DIR}/include/memory_service.h ${KERNEL_DIR}/include/irq.h ${KERNEL_DIR}/include/timer.h
+          ${KERNEL_DIR}/include/serial.h ${KERNEL_DIR}/include/wasmos_app.h ${KERNEL_DIR}/include/spinlock.h
+          ${KERNEL_DIR}/include/wamr_context.h ${KERNEL_DIR}/include/wasm_driver.h ${KERNEL_DIR}/include/wasm_chardev.h
+          ${KERNEL_DIR}/include/io.h
           ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h ${WASM_DIR}/wamr_runtime.h
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Building kernel"

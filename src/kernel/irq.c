@@ -1,6 +1,7 @@
 #include "irq.h"
 #include "ipc.h"
 #include "serial.h"
+#include "timer.h"
 
 #define PIC1_CMD 0x20
 #define PIC1_DATA 0x21
@@ -174,6 +175,9 @@ void x86_irq_handler(uint64_t vector) {
     }
 
     irq_route_t *route = &g_irq_routes[irq_line];
+    if (irq_line == 0) {
+        timer_handle_irq();
+    }
     if (route->in_use) {
         ipc_notify_from(IPC_CONTEXT_KERNEL, route->endpoint);
     }

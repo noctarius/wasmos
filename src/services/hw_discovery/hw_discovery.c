@@ -31,6 +31,8 @@ extern int32_t wasmos_proc_count(void)
     WASMOS_WASM_IMPORT("wasmos", "proc_count");
 extern int32_t wasmos_proc_info(int32_t index, int32_t buf, int32_t buf_len)
     WASMOS_WASM_IMPORT("wasmos", "proc_info");
+extern int32_t wasmos_boot_module_name(int32_t index, int32_t buf, int32_t buf_len)
+    WASMOS_WASM_IMPORT("wasmos", "boot_module_name");
 extern int32_t wasmos_acpi_rsdp_info(int32_t out_ptr, int32_t out_len_ptr, int32_t max_len)
     WASMOS_WASM_IMPORT("wasmos", "acpi_rsdp_info");
 
@@ -65,10 +67,13 @@ static hw_spawn_target_t g_pending = HW_SPAWN_NONE;
 static int32_t g_reply_endpoint = -1;
 static int32_t g_proc_endpoint = -1;
 static int32_t g_request_id = 1;
+static int32_t g_module_count = 0;
 static uint8_t g_need_ata = 0;
 static uint8_t g_need_fat = 0;
 static uint8_t g_ata_retries = 0;
 static uint8_t g_fat_retries = 0;
+static int32_t g_ata_index = -1;
+static int32_t g_fat_index = -1;
 
 static uint32_t
 str_len(const char *s)
@@ -136,21 +141,23 @@ proc_running(const char *name)
     return 0;
 }
 
-static void
-pack_name_args(const char *name, uint32_t out[4])
+static int
+module_index_by_name(const char *name)
 {
-    out[0] = 0;
-    out[1] = 0;
-    out[2] = 0;
-    out[3] = 0;
-    if (!name) {
-        return;
+    if (!name || g_module_count <= 0) {
+        return -1;
     }
-    for (uint32_t i = 0; i < 16 && name[i]; ++i) {
-        uint32_t slot = i / 4u;
-        uint32_t shift = (i % 4u) * 8u;
-        out[slot] |= ((uint32_t)(uint8_t)name[i]) << shift;
+    for (int32_t i = 0; i < g_module_count; ++i) {
+        char buf[32];
+        buf[0] = '\0';
+        if (wasmos_boot_module_name(i, (int32_t)(uintptr_t)buf, (int32_t)sizeof(buf)) < 0) {
+            continue;
+        }
+        if (str_eq(buf, name)) {
+            return i;
+        }
     }
+    return -1;
 }
 
 static void
@@ -180,18 +187,19 @@ hw_scan_acpi(void)
 }
 
 static int
-hw_spawn_driver(const char *name)
+hw_spawn_driver_index(int32_t index)
 {
-    uint32_t packed[4];
-    pack_name_args(name, packed);
+    if (index < 0) {
+        return -1;
+    }
     if (wasmos_ipc_send(g_proc_endpoint,
                         g_reply_endpoint,
-                        PROC_IPC_SPAWN_NAME,
+                        PROC_IPC_SPAWN,
                         g_request_id,
-                        (int32_t)packed[0],
-                        (int32_t)packed[1],
-                        (int32_t)packed[2],
-                        (int32_t)packed[3]) != 0) {
+                        index,
+                        0,
+                        0,
+                        0) != 0) {
         return -1;
     }
     return 0;
@@ -212,12 +220,11 @@ next_spawn_target(void)
 WASMOS_WASM_EXPORT int32_t
 hw_discovery_step(int32_t ignored_type,
                   int32_t proc_endpoint,
-                  int32_t ignored_arg1,
+                  int32_t module_count,
                   int32_t ignored_arg2,
                   int32_t ignored_arg3)
 {
     (void)ignored_type;
-    (void)ignored_arg1;
     (void)ignored_arg2;
     (void)ignored_arg3;
 
@@ -227,14 +234,17 @@ hw_discovery_step(int32_t ignored_type,
             g_phase = HW_PHASE_FAILED;
             return WASMOS_WASM_STEP_FAILED;
         }
-        if (proc_endpoint < 0) {
+        if (proc_endpoint < 0 || module_count <= 0) {
             g_phase = HW_PHASE_FAILED;
             return WASMOS_WASM_STEP_FAILED;
         }
         g_proc_endpoint = proc_endpoint;
+        g_module_count = module_count;
         hw_scan_acpi();
-        g_need_ata = proc_running("ata") ? 0 : 1;
-        g_need_fat = proc_running("fs-fat") ? 0 : 1;
+        g_ata_index = module_index_by_name("ata");
+        g_fat_index = module_index_by_name("fs-fat");
+        g_need_ata = (g_ata_index >= 0 && !proc_running("ata")) ? 1 : 0;
+        g_need_fat = (g_fat_index >= 0 && !proc_running("fs-fat")) ? 1 : 0;
         g_phase = HW_PHASE_SPAWN;
         return WASMOS_WASM_STEP_YIELDED;
     }
@@ -246,12 +256,12 @@ hw_discovery_step(int32_t ignored_type,
             return WASMOS_WASM_STEP_BLOCKED;
         }
         if (target == HW_SPAWN_ATA) {
-            if (hw_spawn_driver("ata") != 0) {
+            if (hw_spawn_driver_index(g_ata_index) != 0) {
                 g_phase = HW_PHASE_FAILED;
                 return WASMOS_WASM_STEP_FAILED;
             }
         } else if (target == HW_SPAWN_FAT) {
-            if (hw_spawn_driver("fs-fat") != 0) {
+            if (hw_spawn_driver_index(g_fat_index) != 0) {
                 g_phase = HW_PHASE_FAILED;
                 return WASMOS_WASM_STEP_FAILED;
             }

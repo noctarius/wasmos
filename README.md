@@ -162,7 +162,7 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes. U
 - Overlapping PT_LOAD segments reuse existing allocations instead of re-allocating pages.
 - The kernel entry receives a `boot_info_t` with framebuffer/memory map placeholders.
 - `boot_info_t` now includes the ACPI RSDP pointer and length for early hardware discovery.
-- A minimal `hw-discovery` service now scans the ACPI RSDP and ensures core drivers are running.
+- A minimal `hw-discovery` service now scans the ACPI RSDP and starts core drivers (ATA + FAT) from boot modules; `sysinit` launches the CLI after `fs-fat` is running.
 - The kernel entry preserves the incoming `boot_info_t *` (UEFI passes it in `RCX`) through early init.
 - The kernel emits early serial output on COM1 (QEMU `-serial`).
 - Basic CPU init now installs a minimal kernel GDT/IDT and exception stubs for vectors `0..31`.

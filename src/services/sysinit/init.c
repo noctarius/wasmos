@@ -25,6 +25,12 @@ extern int32_t wasmos_ipc_recv(int32_t endpoint)
     WASMOS_WASM_IMPORT("wasmos", "ipc_recv");
 extern int32_t wasmos_ipc_last_field(int32_t field)
     WASMOS_WASM_IMPORT("wasmos", "ipc_last_field");
+extern int32_t wasmos_boot_module_name(int32_t index, int32_t buf, int32_t buf_len)
+    WASMOS_WASM_IMPORT("wasmos", "boot_module_name");
+extern int32_t wasmos_proc_count(void)
+    WASMOS_WASM_IMPORT("wasmos", "proc_count");
+extern int32_t wasmos_proc_info(int32_t index, int32_t buf, int32_t buf_len)
+    WASMOS_WASM_IMPORT("wasmos", "proc_info");
 
 typedef enum {
     INIT_PHASE_START = 0,
@@ -42,6 +48,60 @@ static int32_t g_module_count = 0;
 static int32_t g_init_index = -1;
 static int32_t g_next_index = 0;
 static int32_t g_pending_index = -1;
+
+static int
+str_eq(const char *a, const char *b)
+{
+    int i = 0;
+    if (!a || !b) {
+        return 0;
+    }
+    while (a[i] && b[i]) {
+        if (a[i] != b[i]) {
+            return 0;
+        }
+        i++;
+    }
+    return a[i] == '\0' && b[i] == '\0';
+}
+
+static int
+proc_running(const char *name)
+{
+    int32_t count = wasmos_proc_count();
+    if (count <= 0) {
+        return 0;
+    }
+    if (count > 64) {
+        count = 64;
+    }
+    for (int32_t i = 0; i < count; ++i) {
+        char buf[32];
+        buf[0] = '\0';
+        int32_t pid = wasmos_proc_info(i, (int32_t)(uintptr_t)buf, (int32_t)sizeof(buf));
+        if (pid <= 0) {
+            continue;
+        }
+        if (str_eq(buf, name)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int
+should_skip_module(int32_t index)
+{
+    char name[32];
+    name[0] = '\0';
+    if (wasmos_boot_module_name(index, (int32_t)(uintptr_t)name, (int32_t)sizeof(name)) < 0) {
+        return 0;
+    }
+    if (str_eq(name, "ata") || str_eq(name, "fs-fat")) {
+        return 1;
+    }
+    return 0;
+}
 
 WASMOS_WASM_EXPORT int32_t
 init_step(int32_t ignored_type,
@@ -75,12 +135,22 @@ init_step(int32_t ignored_type,
     }
 
     if (g_phase == INIT_PHASE_SEND_SPAWN) {
-        while (g_next_index < g_module_count && g_next_index == g_init_index) {
+        while (g_next_index < g_module_count &&
+               (g_next_index == g_init_index || should_skip_module(g_next_index))) {
             g_next_index++;
         }
         if (g_next_index >= g_module_count) {
             g_phase = INIT_PHASE_DONE;
             return WASMOS_WASM_STEP_DONE;
+        }
+
+        char name[32];
+        name[0] = '\0';
+        if (wasmos_boot_module_name(g_next_index,
+                                    (int32_t)(uintptr_t)name,
+                                    (int32_t)sizeof(name)) >= 0 &&
+            str_eq(name, "cli") && !proc_running("fs-fat")) {
+            return WASMOS_WASM_STEP_YIELDED;
         }
 
         if (wasmos_ipc_send(g_proc_endpoint, g_reply_endpoint,

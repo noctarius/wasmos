@@ -50,6 +50,9 @@ typedef struct {
 static int
 bytes_eq(const uint8_t *a, uint32_t a_len, const char *b);
 
+static int
+boot_module_name_at(uint32_t index, char *out, uint32_t out_len, uint32_t *out_name_len);
+
 static uint32_t
 boot_module_index_by_app_name(const boot_info_t *info, const char *name)
 {
@@ -106,6 +109,42 @@ bytes_eq(const uint8_t *a, uint32_t a_len, const char *b)
         i++;
     }
     return i == a_len;
+}
+
+static int
+boot_module_name_at(uint32_t index, char *out, uint32_t out_len, uint32_t *out_name_len)
+{
+    if (!g_boot_info || !out || out_len == 0 ||
+        !(g_boot_info->flags & BOOT_INFO_FLAG_MODULES_PRESENT) ||
+        !g_boot_info->modules ||
+        g_boot_info->module_entry_size < sizeof(boot_module_t)) {
+        return -1;
+    }
+    if (index >= g_boot_info->module_count) {
+        return -1;
+    }
+    const uint8_t *mods = (const uint8_t *)g_boot_info->modules;
+    const boot_module_t *mod = (const boot_module_t *)(mods + index * g_boot_info->module_entry_size);
+    if (!mod || mod->type != BOOT_MODULE_TYPE_WASMOS_APP || mod->base == 0 ||
+        mod->size == 0 || mod->size > 0xFFFFFFFFULL) {
+        return -1;
+    }
+    wasmos_app_desc_t desc;
+    if (wasmos_app_parse((const uint8_t *)(uintptr_t)mod->base, (uint32_t)mod->size, &desc) != 0) {
+        return -1;
+    }
+    uint32_t copy_len = desc.name_len;
+    if (copy_len >= out_len) {
+        copy_len = out_len - 1;
+    }
+    for (uint32_t i = 0; i < copy_len; ++i) {
+        out[i] = (char)desc.name[i];
+    }
+    out[copy_len] = '\0';
+    if (out_name_len) {
+        *out_name_len = desc.name_len;
+    }
+    return 0;
 }
 
 static int
@@ -637,6 +676,30 @@ native_acpi_rsdp_info(wasm_exec_env_t exec_env, int32_t out_ptr, int32_t out_len
 }
 
 static int32_t
+native_boot_module_name(wasm_exec_env_t exec_env, int32_t index, int32_t out_ptr, int32_t out_len)
+{
+    if (index < 0 || out_ptr < 0 || out_len <= 0) {
+        return -1;
+    }
+    wasm_module_inst_t module_inst = get_module_inst(exec_env);
+    if (!module_inst) {
+        return -1;
+    }
+    if (!wasm_runtime_validate_app_addr(module_inst, (uint64_t)out_ptr, (uint64_t)out_len)) {
+        return -1;
+    }
+    char *dst = (char *)wasm_runtime_addr_app_to_native(module_inst, (uint64_t)out_ptr);
+    if (!dst) {
+        return -1;
+    }
+    uint32_t name_len = 0;
+    if (boot_module_name_at((uint32_t)index, dst, (uint32_t)out_len, &name_len) != 0) {
+        return -1;
+    }
+    return (int32_t)name_len;
+}
+
+static int32_t
 native_console_write(wasm_exec_env_t exec_env, int32_t ptr, int32_t len)
 {
     if (ptr < 0 || len <= 0) {
@@ -778,6 +841,7 @@ register_wasm_ipc_natives(void)
         { "system_halt", native_system_halt, "()i", 0 },
         { "system_reboot", native_system_reboot, "()i", 0 },
         { "acpi_rsdp_info", native_acpi_rsdp_info, "(iii)i", 0 },
+        { "boot_module_name", native_boot_module_name, "(iii)i", 0 },
         { "io_in8", native_io_in8, "(i)i", 0 },
         { "io_in16", native_io_in16, "(i)i", 0 },
         { "io_out8", native_io_out8, "(ii)i", 0 },

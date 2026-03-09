@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "boot.h"
 
-#define MM_MAX_CONTEXTS 16
+#define MM_MAX_CONTEXTS 32
 #define MM_MAX_REGIONS 8
 
 typedef enum {

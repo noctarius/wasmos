@@ -50,6 +50,7 @@ static ipc_test_state_t g_ipc_test_state;
 typedef struct {
     uint8_t observer_runs;
     uint8_t done;
+    uint8_t stop_busy;
 } preempt_test_state_t;
 static preempt_test_state_t g_preempt_test_state;
 static const uint8_t g_preempt_test_enabled = 1;
@@ -1003,10 +1004,26 @@ ipc_send_test_entry(process_t *process, void *arg)
 static process_run_result_t
 preempt_busy_entry(process_t *process, void *arg)
 {
+    preempt_test_state_t *state = (preempt_test_state_t *)arg;
+    if (!process || !state) {
+        return PROCESS_RUN_IDLE;
+    }
+    for (;;) {
+        if (state->stop_busy) {
+            process_set_exit_status(process, 0);
+            return PROCESS_RUN_EXITED;
+        }
+        __asm__ volatile("pause");
+    }
+}
+
+static process_run_result_t
+idle_entry(process_t *process, void *arg)
+{
     (void)process;
     (void)arg;
     for (;;) {
-        __asm__ volatile("pause");
+        __asm__ volatile("hlt");
     }
 }
 
@@ -1026,6 +1043,7 @@ preempt_observer_entry(process_t *process, void *arg)
     if (state->observer_runs >= 3) {
         serial_write("[test] preempt ok\n");
         state->done = 1;
+        state->stop_busy = 1;
         process_set_exit_status(process, 0);
         return PROCESS_RUN_EXITED;
     }
@@ -1117,7 +1135,7 @@ static void
 run_kernel_loop(void)
 {
     for (;;) {
-        __asm__ volatile("sti");
+        __asm__ volatile("cli");
         if (process_schedule_once() != 0) {
             __asm__ volatile("pause");
         }
@@ -1145,6 +1163,7 @@ kmain(boot_info_t *boot_info)
     process_t *ipc_send_proc = 0;
     uint32_t preempt_busy_pid = 0;
     uint32_t preempt_observer_pid = 0;
+    uint32_t idle_pid = 0;
     uint32_t init_pid = 0;
     init_state_t init_state;
 
@@ -1172,6 +1191,13 @@ kmain(boot_info_t *boot_info)
     wasm_ipc_slots_init();
 
     serial_write("[kernel] wamr init on-demand\n");
+
+    if (process_spawn_idle("idle", idle_entry, 0, &idle_pid) != 0) {
+        serial_write("[kernel] idle spawn failed\n");
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
 
     init_state.boot_info = boot_info;
     init_state.started = 0;
@@ -1287,11 +1313,12 @@ kmain(boot_info_t *boot_info)
     }
 
     if (g_preempt_test_enabled) {
-        g_preempt_test_state.observer_runs = 0;
-        g_preempt_test_state.done = 0;
-        if (process_spawn_as(init_pid, "preempt-busy", preempt_busy_entry, 0, &preempt_busy_pid) != 0 ||
-            process_spawn_as(init_pid, "preempt-observer", preempt_observer_entry, &g_preempt_test_state,
-                             &preempt_observer_pid) != 0) {
+    g_preempt_test_state.observer_runs = 0;
+    g_preempt_test_state.done = 0;
+    g_preempt_test_state.stop_busy = 0;
+    if (process_spawn_as(init_pid, "preempt-busy", preempt_busy_entry, &g_preempt_test_state, &preempt_busy_pid) != 0 ||
+        process_spawn_as(init_pid, "preempt-observer", preempt_observer_entry, &g_preempt_test_state,
+                         &preempt_observer_pid) != 0) {
             serial_write("[kernel] preempt test spawn failed\n");
             for (;;) {
                 __asm__ volatile("hlt");

@@ -69,8 +69,10 @@ DECL_EXC 13
  .global isr_exception_14
 isr_exception_14:
     PUSH_REGS
-    mov 120(%rsp), %rdi
+    mov 144(%rsp), %rdi
+    subq $8, %rsp
     call x86_page_fault_handler
+    addq $8, %rsp
     test %eax, %eax
     jz 2f
     mov $14, %rdi
@@ -101,34 +103,9 @@ DECL_EXC 31
 isr_irq_0:
     PUSH_REGS
     mov %rsp, %rdi
-    call x86_timer_irq_handler
-    test %rax, %rax
-    jz 1f
-    movq %rax, %rdx
-    movq 0(%rdx), %r15
-    movq 8(%rdx), %r14
-    movq 16(%rdx), %r13
-    movq 24(%rdx), %r12
-    movq 32(%rdx), %r11
-    movq 40(%rdx), %r10
-    movq 48(%rdx), %r9
-    movq 56(%rdx), %r8
-    movq 80(%rdx), %rbp
-    movq 104(%rdx), %rbx
-    movq 120(%rdx), %rsp
-    movq 136(%rdx), %rax
-    pushq %rax
-    popfq
-    movq 112(%rdx), %rax
-    movq 64(%rdx), %rdi
-    movq 72(%rdx), %rsi
     subq $8, %rsp
-    movq 128(%rdx), %rcx
-    movq %rcx, (%rsp)
-    movq 96(%rdx), %rcx
-    movq 88(%rdx), %rdx
-    ret
-1:
+    call x86_timer_irq_handler
+    addq $8, %rsp
     POP_REGS
     iretq
 
@@ -137,7 +114,9 @@ isr_irq_0:
 isr_irq_\num:
     PUSH_REGS
     mov $\vec, %rdi
+    subq $8, %rsp
     call x86_irq_handler
+    addq $8, %rsp
     POP_REGS
     iretq
 .endm

@@ -77,6 +77,8 @@ These principles are derived from the IPC notes in this document.
 - Keep kernel mechanisms small; delegate policies to services.
 - Provide mapping primitives for shared memory regions and user-space paging.
 - Avoid kernel-internal copying for bulk data; use shared memory plus message-based synchronization.
+- Reserve the kernel image range from the physical frame allocator before allocating pages to contexts.
+- Process stacks are allocated from the physical frame allocator (not static BSS).
 
 ### Virtual Memory Plan
 Goal: every process runs in a controlled virtual address space; the kernel stays mapped in the higher half.
@@ -127,6 +129,7 @@ Isolation rules:
 - Keep a small core scheduler in kernel with pluggable policy hints.
 - Allow user-space services to set priorities and budgets via explicit calls.
 - Ensure IPC paths do not block kernel tasks.
+- Timer IRQ preemption now rewrites the interrupted RIP to a kernel preempt trampoline and yields back to the scheduler.
 
 ### Stepwise Plan
 1. Freeze the `boot_info_t` contract and document versioning rules.
@@ -487,6 +490,7 @@ Design takeaways:
 - READY processes are now managed via a small FIFO run queue instead of full table scans.
 - The scheduler now switches into per-process contexts via a trampoline and stack; timer-driven preemption is enabled.
 - Spinlocks disable preemption while held to keep IPC and scheduler paths safe under timer interrupts.
+- An explicit idle task runs `hlt` when no READY tasks are available.
 - `process_spawn` binds each process to a new memory context (`mm_context_create(pid)`), establishing per-process isolation boundaries.
 - Lifecycle primitives now include `process_wait`, `process_kill`, and `process_get_exit_status`.
 - WAMR native IPC imports use the `exec_env` calling convention to align with WAMR native argument marshalling.

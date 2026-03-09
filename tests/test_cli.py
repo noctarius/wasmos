@@ -48,23 +48,31 @@ class CliIntegrationTests(unittest.TestCase):
         self._cmd_expect("ls", b"apps")
 
     def test_cd_and_ls_apps(self):
+        self._cmd_expect("cd /", b"/ wamos>")
         self._cmd_expect("cd apps", b"/apps wamos>")
-        self._cmd_expect("ls", b"ata.wasmosapp")
+        self._cmd_expect("ls", b"hello_c.wasmosapp")
         self._cmd_expect("cd /", b"/ wamos>")
 
     def test_cd_nested_services(self):
-        self._cmd_expect("cd system/services", b"/system/services wamos>")
+        self._cmd_expect("cd /", b"/ wamos>")
+        self._cmd_expect("cd system", b"/system wamos>")
+        self._cmd_expect("cd services", b"/system/services wamos>")
+        self._cmd_expect("cd /", b"/ wamos>")
+        self._cmd_expect("cd /system/services", b"/system/services wamos>")
         self._cmd_expect("ls", b"cli.wasmosapp")
         self._cmd_expect("cd /", b"/ wamos>")
 
     def test_cd_nested_drivers(self):
-        self._cmd_expect("cd system/drivers", b"/system/drivers wamos>")
+        self._cmd_expect("cd /", b"/ wamos>")
+        self._cmd_expect("cd system", b"/system wamos>")
+        self._cmd_expect("cd drivers", b"/system/drivers wamos>")
+        self._cmd_expect("cd /", b"/ wamos>")
+        self._cmd_expect("cd /system/drivers", b"/system/drivers wamos>")
         self._cmd_expect("ls", b"ata.wasmosapp")
         self._cmd_expect("cd /", b"/ wamos>")
 
     def test_cat_startup(self):
         self._cmd_expect("cat startup.nsh", b"BOOTX64.EFI")
-
 
 if __name__ == "__main__":
     unittest.main()

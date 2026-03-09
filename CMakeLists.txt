@@ -31,6 +31,7 @@ set(EXAMPLES_C_DIR ${CMAKE_SOURCE_DIR}/examples/c)
 set(EXAMPLES_GO_DIR ${CMAKE_SOURCE_DIR}/examples/go)
 set(EXAMPLES_RUST_DIR ${CMAKE_SOURCE_DIR}/examples/rust)
 set(EXAMPLES_AS_DIR ${CMAKE_SOURCE_DIR}/examples/assemblyscript)
+set(EXAMPLES_ZIG_DIR ${CMAKE_SOURCE_DIR}/examples/zig)
 set(SERVICES_DIR ${CMAKE_SOURCE_DIR}/src/services)
 
 if (NOT DEFINED AS_ENABLE_INITIALIZED)
@@ -51,6 +52,12 @@ if (NOT DEFINED GO_ENABLE_INITIALIZED)
 endif ()
 option(GO_ENABLE "Enable Go (TinyGo) example builds" ON)
 set(GO_AVAILABLE OFF)
+if (NOT DEFINED ZIG_ENABLE_INITIALIZED)
+  set(ZIG_ENABLE ON CACHE BOOL "Enable Zig example builds" FORCE)
+  set(ZIG_ENABLE_INITIALIZED ON CACHE BOOL "Set when ZIG_ENABLE default is initialized" FORCE)
+endif ()
+option(ZIG_ENABLE "Enable Zig example builds" ON)
+set(ZIG_AVAILABLE OFF)
 
 set(CLANG clang CACHE STRING "C compiler for freestanding/UEFI builds")
 if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
@@ -402,6 +409,9 @@ set(WASM_HELLO_RUST_APP ${BUILD_DIR}/hello_rust.wasmosapp)
 set(WASM_HELLO_GO_SRC ${EXAMPLES_GO_DIR}/hello/hello_go.go)
 set(WASM_HELLO_GO_WASM ${BUILD_DIR}/hello_go.wasm)
 set(WASM_HELLO_GO_APP ${BUILD_DIR}/hello_go.wasmosapp)
+set(WASM_HELLO_ZIG_SRC ${EXAMPLES_ZIG_DIR}/hello/hello_zig.zig)
+set(WASM_HELLO_ZIG_WASM ${BUILD_DIR}/hello_zig.wasm)
+set(WASM_HELLO_ZIG_APP ${BUILD_DIR}/hello_zig.wasmosapp)
 set(WASMOS_APP_PACKER ${BUILD_DIR}/make_wasmos_app)
 
 add_custom_command(
@@ -744,6 +754,22 @@ if (RUST_ENABLE)
   list(APPEND WASM_DRIVER_BLOBS ${WASM_HELLO_RUST_APP})
 endif ()
 
+if (ZIG_ENABLE)
+  if (NOT ZIG_EXECUTABLE OR ZIG_EXECUTABLE MATCHES "NOTFOUND")
+    unset(ZIG_EXECUTABLE CACHE)
+    find_program(ZIG_EXECUTABLE zig HINTS
+      ${CLANG_BIN_DIR}
+      $ENV{HOME}/bin
+      $ENV{HOME}/.local/bin
+    )
+  endif ()
+  if (NOT ZIG_EXECUTABLE)
+    message(WARNING "zig not found; Zig examples will be skipped.")
+  else ()
+    set(ZIG_AVAILABLE ON)
+  endif ()
+endif ()
+
 if (AS_ENABLE)
   find_program(ASC_EXECUTABLE asc HINTS ${CLANG_BIN_DIR})
   if (NOT ASC_EXECUTABLE)
@@ -840,6 +866,49 @@ if (RUST_ENABLE)
     VERBATIM
   )
   add_custom_target(rust_examples DEPENDS ${WASM_HELLO_RUST_APP})
+endif ()
+
+if (ZIG_AVAILABLE)
+  add_custom_command(
+    OUTPUT ${WASM_HELLO_ZIG_WASM}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+    COMMAND ${ZIG_EXECUTABLE}
+            build-exe
+            -target wasm32-freestanding
+            -O ReleaseSmall
+            -fno-entry
+            -fstrip
+            --export=hello_zig_step
+            -femit-bin=${WASM_HELLO_ZIG_WASM}
+            ${WASM_HELLO_ZIG_SRC}
+    DEPENDS ${WASM_HELLO_ZIG_SRC}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Building Zig hello module"
+    VERBATIM
+  )
+
+  add_custom_command(
+    OUTPUT ${WASM_HELLO_ZIG_APP}
+    COMMAND ${WASMOS_APP_PACKER}
+            ${WASM_HELLO_ZIG_WASM}
+            ${WASM_HELLO_ZIG_APP}
+            hello-zig
+            hello_zig_step
+            2
+            2
+            4
+            -
+            0
+            ipc.basic
+            0
+    DEPENDS ${WASM_HELLO_ZIG_WASM} ${WASMOS_APP_PACKER}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Packing Zig hello as WASMOS-APP"
+    VERBATIM
+  )
+
+  add_custom_target(zig_examples DEPENDS ${WASM_HELLO_ZIG_APP})
+  list(APPEND WASM_DRIVER_BLOBS ${WASM_HELLO_ZIG_APP})
 endif ()
 
 if (GO_ENABLE)
@@ -1069,6 +1138,11 @@ if (GO_AVAILABLE)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HELLO_GO_APP} ${BUILD_DIR}/esp/apps/hello_go.wasmosapp
   )
 endif ()
+if (ZIG_AVAILABLE)
+  set(ZIG_HELLO_COPY_CMD
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HELLO_ZIG_APP} ${BUILD_DIR}/esp/apps/hello_zig.wasmosapp
+  )
+endif ()
 
 if (OVMF_VARS)
   add_custom_target(run-qemu
@@ -1090,6 +1164,7 @@ if (OVMF_VARS)
     ${HELLO_C_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
+    ${ZIG_HELLO_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
@@ -1122,6 +1197,7 @@ if (OVMF_VARS)
     ${HELLO_C_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
+    ${ZIG_HELLO_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_halt_test.py
             --ovmf-code ${OVMF_CODE}
@@ -1154,6 +1230,7 @@ if (OVMF_VARS)
     ${HELLO_C_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
+    ${ZIG_HELLO_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND ${CMAKE_COMMAND} -E env
             WASMOS_OVMF_CODE=${OVMF_CODE}
@@ -1188,6 +1265,7 @@ else ()
     ${HELLO_C_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
+    ${ZIG_HELLO_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
@@ -1204,11 +1282,12 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wasmosapp
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/apps/ata.wasmosapp
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/apps/fs_fat.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wasmosapp
@@ -1218,6 +1297,7 @@ else ()
     ${HELLO_C_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
+    ${ZIG_HELLO_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_halt_test.py
             --ovmf-code ${OVMF_CODE}
@@ -1234,11 +1314,12 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wasmosapp
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/apps/ata.wasmosapp
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/apps/fs_fat.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wasmosapp
@@ -1248,6 +1329,7 @@ else ()
     ${HELLO_C_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
+    ${ZIG_HELLO_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND ${CMAKE_COMMAND} -E env
             WASMOS_OVMF_CODE=${OVMF_CODE}
@@ -1273,4 +1355,10 @@ if (GO_AVAILABLE)
   add_dependencies(run-qemu go_examples)
   add_dependencies(run-qemu-test go_examples)
   add_dependencies(run-qemu-cli-test go_examples)
+endif ()
+
+if (ZIG_AVAILABLE)
+  add_dependencies(run-qemu zig_examples)
+  add_dependencies(run-qemu-test zig_examples)
+  add_dependencies(run-qemu-cli-test zig_examples)
 endif ()

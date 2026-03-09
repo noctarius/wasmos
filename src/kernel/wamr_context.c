@@ -2,7 +2,7 @@
 #include "serial.h"
 #include "wamr_runtime.h"
 
-#define WAMR_RUNTIME_HEAP_SIZE (2 * 1024 * 1024)
+#define WAMR_RUNTIME_HEAP_SIZE (4 * 1024 * 1024)
 
 static uint8_t g_wamr_runtime_heap[WAMR_RUNTIME_HEAP_SIZE];
 

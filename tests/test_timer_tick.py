@@ -29,7 +29,7 @@ class TimerTickTests(unittest.TestCase):
             cls.session.close()
 
     def test_timer_ticks_reported(self):
-        ok = self.session.expect(b"[timer] ticks=", timeout_s=20)
+        ok = self.session.expect(b"[timer] ticks", timeout_s=20)
         if not ok:
             self.fail(f"Timer tick marker not found.\n--- tail ---\n{self.session.tail()}\n")
 

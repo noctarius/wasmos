@@ -40,6 +40,14 @@ typedef struct {
 static pf_test_state_t g_pf_test_state;
 
 typedef struct {
+    uint32_t endpoint;
+    uint32_t sender_endpoint;
+    uint32_t sender_ticks;
+    uint8_t done;
+} ipc_test_state_t;
+static ipc_test_state_t g_ipc_test_state;
+
+typedef struct {
     const boot_info_t *boot_info;
     uint8_t started;
     uint8_t phase;
@@ -911,6 +919,81 @@ page_fault_test_entry(process_t *process, void *arg)
 }
 
 static process_run_result_t
+ipc_wait_test_entry(process_t *process, void *arg)
+{
+    ipc_test_state_t *state = (ipc_test_state_t *)arg;
+    ipc_message_t msg;
+
+    if (!process || !state) {
+        return PROCESS_RUN_IDLE;
+    }
+    if (state->done) {
+        return PROCESS_RUN_EXITED;
+    }
+    if (state->endpoint == IPC_ENDPOINT_NONE) {
+        serial_write("[test] ipc endpoint missing\n");
+        process_set_exit_status(process, -1);
+        return PROCESS_RUN_EXITED;
+    }
+
+    int rc = ipc_recv_for(process->context_id, state->endpoint, &msg);
+    if (rc == IPC_EMPTY) {
+        process_block_on_ipc(process);
+        return PROCESS_RUN_BLOCKED;
+    }
+    if (rc != IPC_OK) {
+        serial_write("[test] ipc recv failed\n");
+        process_set_exit_status(process, -1);
+        return PROCESS_RUN_EXITED;
+    }
+
+    serial_write("[test] ipc wake ok\n");
+    state->done = 1;
+    process_set_exit_status(process, 0);
+    return PROCESS_RUN_EXITED;
+}
+
+static process_run_result_t
+ipc_send_test_entry(process_t *process, void *arg)
+{
+    ipc_test_state_t *state = (ipc_test_state_t *)arg;
+    ipc_message_t msg;
+
+    if (!process || !state) {
+        return PROCESS_RUN_IDLE;
+    }
+    if (state->done) {
+        return PROCESS_RUN_EXITED;
+    }
+    if (state->endpoint == IPC_ENDPOINT_NONE || state->sender_endpoint == IPC_ENDPOINT_NONE) {
+        serial_write("[test] ipc sender endpoint missing\n");
+        process_set_exit_status(process, -1);
+        return PROCESS_RUN_EXITED;
+    }
+
+    if (state->sender_ticks < 3) {
+        state->sender_ticks++;
+        return PROCESS_RUN_YIELDED;
+    }
+
+    msg.type = 1;
+    msg.source = state->sender_endpoint;
+    msg.destination = IPC_ENDPOINT_NONE;
+    msg.request_id = 1;
+    msg.arg0 = 0x1234u;
+    msg.arg1 = 0;
+    msg.arg2 = 0;
+    msg.arg3 = 0;
+    if (ipc_send_from(process->context_id, state->endpoint, &msg) != IPC_OK) {
+        serial_write("[test] ipc send failed\n");
+        process_set_exit_status(process, -1);
+        return PROCESS_RUN_EXITED;
+    }
+
+    return PROCESS_RUN_EXITED;
+}
+
+static process_run_result_t
 init_entry(process_t *process, void *arg)
 {
     init_state_t *state = (init_state_t *)arg;
@@ -1013,6 +1096,10 @@ kmain(boot_info_t *boot_info)
     uint32_t mem_service_endpoint = IPC_ENDPOINT_NONE;
     uint32_t mem_reply_endpoint = IPC_ENDPOINT_NONE;
     uint32_t pf_test_pid = 0;
+    uint32_t ipc_wait_pid = 0;
+    uint32_t ipc_send_pid = 0;
+    process_t *ipc_wait_proc = 0;
+    process_t *ipc_send_proc = 0;
     uint32_t init_pid = 0;
     init_state_t init_state;
 
@@ -1124,6 +1211,35 @@ kmain(boot_info_t *boot_info)
 
     serial_write("[kernel] page fault test pid=");
     serial_write_hex64(pf_test_pid);
+
+    g_ipc_test_state.endpoint = IPC_ENDPOINT_NONE;
+    g_ipc_test_state.sender_endpoint = IPC_ENDPOINT_NONE;
+    g_ipc_test_state.sender_ticks = 0;
+    g_ipc_test_state.done = 0;
+    if (process_spawn_as(init_pid, "ipc-wait-test", ipc_wait_test_entry, &g_ipc_test_state, &ipc_wait_pid) != 0 ||
+        process_spawn_as(init_pid, "ipc-send-test", ipc_send_test_entry, &g_ipc_test_state, &ipc_send_pid) != 0) {
+        serial_write("[kernel] ipc test spawn failed\n");
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
+
+    ipc_wait_proc = process_get(ipc_wait_pid);
+    ipc_send_proc = process_get(ipc_send_pid);
+    if (!ipc_wait_proc || !ipc_send_proc) {
+        serial_write("[kernel] ipc test lookup failed\n");
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
+
+    if (ipc_endpoint_create(ipc_wait_proc->context_id, &g_ipc_test_state.endpoint) != IPC_OK ||
+        ipc_endpoint_create(ipc_send_proc->context_id, &g_ipc_test_state.sender_endpoint) != IPC_OK) {
+        serial_write("[kernel] ipc test endpoint create failed\n");
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
 
     timer_init(250);
     serial_write("[kernel] interrupts on\n");

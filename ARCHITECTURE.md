@@ -493,6 +493,7 @@ Design takeaways:
 - `PROCESS_RUN_BLOCKED` entries remain blocked until a kernel primitive wakes them; IPC uses `process_wake_by_context` on message enqueue.
 - Exited processes transition to a zombie state carrying `exit_status` until reaped by `process_wait`.
 - The kernel main loop schedules processes instead of invoking service handlers directly.
+- A kernel IPC wakeup smoke test spawns `ipc-wait-test` and `ipc-send-test` and logs `[test] ipc wake ok` on success.
 - The current system starts a dedicated `chardev-server` process and assigns its context ID as the owner of the chardev IPC endpoint.
 - The current system starts a kernel `init` process that is the root parent for all kernel-spawned processes, and it spawns the `process-manager` (owner of the `proc` endpoint).
 - The process manager spawns the user-space `sysinit` WASMOS-APP boot module after a kernel-init request and passes the `proc` endpoint plus boot module metadata.

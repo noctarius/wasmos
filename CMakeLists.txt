@@ -318,16 +318,19 @@ target_sources(kernel_sources INTERFACE
 )
 target_include_directories(kernel_sources INTERFACE ${KERNEL_DIR}/include ${WASM_DIR} ${DRIVER_WASM_DIR}/include)
 
-# IDE aggregation targets: helps CLion mark files as part of the CMake project
-# even though the real build uses custom commands/targets.
-add_custom_target(bootloader_ide SOURCES
+# IDE aggregation targets for CLion indexing (not part of the build).
+add_library(bootloader_ide OBJECT EXCLUDE_FROM_ALL
   ${BOOT_SOURCES}
   ${BOOT_DIR}/uefi.h
   ${BOOT_DIR}/elf.h
   ${KERNEL_DIR}/include/boot.h
 )
+target_include_directories(bootloader_ide PRIVATE
+  ${BOOT_DIR}
+  ${KERNEL_DIR}/include
+)
 
-add_custom_target(kernel_ide SOURCES
+add_library(kernel_ide OBJECT EXCLUDE_FROM_ALL
   ${KERNEL_SOURCES}
   ${KERNEL_DIR}/include/boot.h
   ${KERNEL_DIR}/include/cpu.h
@@ -359,6 +362,13 @@ add_custom_target(kernel_ide SOURCES
   ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_stub.c
   ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_internal.h
   ${WASM_DIR}/wamr_runtime.h
+)
+target_include_directories(kernel_ide PRIVATE
+  ${KERNEL_DIR}/include
+  ${DRIVER_WASM_DIR}/include
+  ${WAMR_DIR}/core/iwasm/include
+  ${WASM_DIR}
+  ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos
 )
 
 set(WASM_CHARDEV_DRIVER_SRC ${DRIVER_WASM_DIR}/chardev/chardev_server.c)

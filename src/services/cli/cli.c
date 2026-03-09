@@ -31,6 +31,12 @@ extern int32_t wasmos_ipc_last_field(int32_t field)
     WASMOS_WASM_IMPORT("wasmos", "ipc_last_field");
 extern int32_t wasmos_proc_count(void)
     WASMOS_WASM_IMPORT("wasmos", "proc_count");
+extern int32_t wasmos_sched_ticks(void)
+    WASMOS_WASM_IMPORT("wasmos", "sched_ticks");
+extern int32_t wasmos_sched_ready_count(void)
+    WASMOS_WASM_IMPORT("wasmos", "sched_ready_count");
+extern int32_t wasmos_sched_current_pid(void)
+    WASMOS_WASM_IMPORT("wasmos", "sched_current_pid");
 extern int32_t wasmos_proc_info_ex(int32_t index, int32_t ptr, int32_t len, int32_t parent_ptr)
     WASMOS_WASM_IMPORT("wasmos", "proc_info_ex");
 extern int32_t wasmos_system_halt(void)
@@ -498,6 +504,13 @@ cli_handle_line(void)
             count = (int32_t)CLI_MAX_PROCS;
         }
         console_write_num("processes: ", count);
+        console_write("sched: ticks ");
+        console_write_u32((uint32_t)wasmos_sched_ticks());
+        console_write(" ready ");
+        console_write_u32((uint32_t)wasmos_sched_ready_count());
+        console_write(" running ");
+        console_write_u32((uint32_t)wasmos_sched_current_pid());
+        console_write("\n");
         for (int32_t i = 0; i < count; ++i) {
             uint32_t parent = 0;
             int32_t pid = wasmos_proc_info_ex(i,

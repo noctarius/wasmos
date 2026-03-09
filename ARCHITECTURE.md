@@ -488,6 +488,7 @@ Design takeaways:
 - `timer` primitive in `src/kernel/timer.c` programs PIT IRQ0 and tracks a tick counter; logging is deferred to the scheduler loop.
 - The scheduler tracks per-process tick accounting and sets a reschedule flag when a time slice expires (preemption is still pending).
 - READY processes are now managed via a small FIFO run queue instead of full table scans.
+- Scheduler metrics (timer ticks, ready queue depth, current running PID) are exposed via wasm natives for diagnostics.
 - The scheduler now switches into per-process contexts via a trampoline and stack; timer-driven preemption is enabled.
 - Spinlocks disable preemption while held to keep IPC and scheduler paths safe under timer interrupts.
 - An explicit idle task runs `hlt` when no READY tasks are available.

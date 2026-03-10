@@ -1,3 +1,5 @@
+import os
+import shutil
 import unittest
 
 from scripts.qemu_test_framework import QemuSession, default_config
@@ -9,6 +11,13 @@ class BootSmokeTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cfg = default_config()
+        kernel_src = os.path.join("build", "kernel.elf")
+        kernel_dst = os.path.join(cfg.esp_dir, "kernel.elf")
+        if os.path.exists(kernel_src) and os.path.isdir(cfg.esp_dir):
+            try:
+                shutil.copyfile(kernel_src, kernel_dst)
+            except Exception:
+                pass
         cls.session = QemuSession(cfg, timeout_s=60)
         cls.session.start()
 
@@ -31,3 +40,5 @@ class BootSmokeTest(unittest.TestCase):
         self.assertTrue(ok, "second spawn index not observed")
         ok = self.session.expect(b"[pm] spawn index=0x0000000000000002", timeout_s=10)
         self.assertTrue(ok, "third spawn index not observed")
+        ok = self.session.expect(b"[pm] entry start hw-discovery", timeout_s=10)
+        self.assertTrue(ok, "hw-discovery entry not reached")

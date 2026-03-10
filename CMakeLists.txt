@@ -455,7 +455,7 @@ endif ()
 if (OVMF_VARS AND OVMF_CODE)
   if (OVMF_VARS MATCHES "i386" AND OVMF_CODE MATCHES "x86_64")
     message(WARNING "OVMF_VARS appears to be i386 while OVMF_CODE is x86_64; ignoring OVMF_VARS to avoid boot hangs.")
-    set(OVMF_VARS "")
+    set(OVMF_VARS "" CACHE FILEPATH "Path to OVMF_VARS.fd (optional)" FORCE)
   endif ()
 endif ()
 
@@ -641,6 +641,7 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND ${CMAKE_COMMAND} -E env
             WASMOS_OVMF_CODE=${OVMF_CODE}
+            WASMOS_OVMF_VARS=${OVMF_VARS}
             WASMOS_ESP=${BUILD_DIR}/esp
             python3 -m unittest discover -s tests
     DEPENDS bootloader kernel

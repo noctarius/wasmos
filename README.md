@@ -127,6 +127,8 @@ cmake -S . -B build -DOVMF_CODE=/path/to/OVMF_CODE.fd
 For QEMU on macOS, we use `-drive if=pflash` with OVMF code/vars. If `OVMF_VARS.fd` is available,
 set `-DOVMF_VARS=/path/to/OVMF_VARS.fd` for persistent variables.
 Note: Homebrew QEMU may not ship an x86_64 vars file; if none is present, omit `OVMF_VARS`.
+If an i386 vars file is detected while `OVMF_CODE` is x86_64, CMake ignores `OVMF_VARS`
+to avoid QEMU boot hangs.
 
 The `run-qemu` target copies `scripts/startup.nsh` into the ESP to auto-run `BOOTX64.EFI`.
 On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.

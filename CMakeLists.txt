@@ -428,6 +428,7 @@ if (WAMR_LINK)
 endif ()
 
 # QEMU helper
+set(QEMU_GDB_PORT 1234 CACHE STRING "QEMU gdb port for run-qemu-debug")
 if (AS_ENABLE)
   set(AS_HELLO_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${AS_HELLO_APP} ${BUILD_DIR}/esp/apps/hello_as.wasmosapp
@@ -487,6 +488,37 @@ if (OVMF_VARS)
     DEPENDS bootloader kernel
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU"
+    VERBATIM
+  )
+  add_custom_target(run-qemu-debug
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
+    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
+    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HW_DISCOVERY_APP} ${BUILD_DIR}/esp/system/services/hw_discovery.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
+    ${AS_HELLO_COPY_CMD}
+    ${HELLO_C_COPY_CMD}
+    ${RUST_HELLO_COPY_CMD}
+    ${GO_HELLO_COPY_CMD}
+    ${ZIG_HELLO_COPY_CMD}
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
+    COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
+            -S -gdb tcp::${QEMU_GDB_PORT}
+            -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
+            -drive if=pflash,format=raw,file=${OVMF_VARS}
+            -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
+    DEPENDS bootloader kernel
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Running in QEMU (paused for GDB on port ${QEMU_GDB_PORT})"
     VERBATIM
   )
   add_custom_target(run-qemu-test
@@ -585,6 +617,36 @@ else ()
     COMMENT "Running in QEMU"
     VERBATIM
   )
+  add_custom_target(run-qemu-debug
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
+    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
+    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HW_DISCOVERY_APP} ${BUILD_DIR}/esp/system/services/hw_discovery.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
+    ${AS_HELLO_COPY_CMD}
+    ${HELLO_C_COPY_CMD}
+    ${RUST_HELLO_COPY_CMD}
+    ${GO_HELLO_COPY_CMD}
+    ${ZIG_HELLO_COPY_CMD}
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
+    COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
+            -S -gdb tcp::${QEMU_GDB_PORT}
+            -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
+            -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
+    DEPENDS bootloader kernel
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Running in QEMU (paused for GDB on port ${QEMU_GDB_PORT})"
+    VERBATIM
+  )
   if (AS_ENABLE)
   endif ()
   add_custom_target(run-qemu-test
@@ -653,24 +715,29 @@ endif ()
 add_dependencies(run-qemu c_examples services drivers)
 add_dependencies(run-qemu-test c_examples services drivers)
 add_dependencies(run-qemu-cli-test c_examples services drivers)
+add_dependencies(run-qemu-debug c_examples services drivers)
 
 if (TARGET assemblyscript_examples)
   add_dependencies(run-qemu assemblyscript_examples)
   add_dependencies(run-qemu-test assemblyscript_examples)
   add_dependencies(run-qemu-cli-test assemblyscript_examples)
+  add_dependencies(run-qemu-debug assemblyscript_examples)
 endif ()
 if (TARGET rust_examples)
   add_dependencies(run-qemu rust_examples)
   add_dependencies(run-qemu-test rust_examples)
   add_dependencies(run-qemu-cli-test rust_examples)
+  add_dependencies(run-qemu-debug rust_examples)
 endif ()
 if (TARGET go_examples)
   add_dependencies(run-qemu go_examples)
   add_dependencies(run-qemu-test go_examples)
   add_dependencies(run-qemu-cli-test go_examples)
+  add_dependencies(run-qemu-debug go_examples)
 endif ()
 if (TARGET zig_examples)
   add_dependencies(run-qemu zig_examples)
   add_dependencies(run-qemu-test zig_examples)
   add_dependencies(run-qemu-cli-test zig_examples)
+  add_dependencies(run-qemu-debug zig_examples)
 endif ()

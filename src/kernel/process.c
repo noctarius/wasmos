@@ -2,6 +2,7 @@
 #include "memory.h"
 #include "physmem.h"
 #include "serial.h"
+#include "paging.h"
 
 static process_t g_processes[PROCESS_MAX_COUNT];
 static uint32_t g_next_pid;
@@ -27,6 +28,49 @@ extern uint8_t __kernel_start;
 extern uint8_t __kernel_end;
 
 #define PAGE_SIZE 0x1000u
+#define STACK_GUARD_PAGES 1u
+
+static int
+process_alloc_stack(process_t *slot, uint32_t stack_pages)
+{
+    if (!slot || stack_pages == 0) {
+        return -1;
+    }
+    uint64_t total_pages = (uint64_t)stack_pages + (STACK_GUARD_PAGES * 2u);
+    uint64_t base = pfa_alloc_pages(total_pages);
+    if (!base) {
+        return -1;
+    }
+
+    uint64_t guard_low = base;
+    uint64_t usable_base = base + ((uint64_t)STACK_GUARD_PAGES * PAGE_SIZE);
+    uint64_t guard_high = base + ((total_pages - STACK_GUARD_PAGES) * PAGE_SIZE);
+
+    for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
+        if (paging_unmap_4k(guard_low + ((uint64_t)i * PAGE_SIZE)) != 0) {
+            serial_write("[sched] guard unmap failed\n");
+            return -1;
+        }
+    }
+    for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
+        if (paging_unmap_4k(guard_high + ((uint64_t)i * PAGE_SIZE)) != 0) {
+            serial_write("[sched] guard unmap failed\n");
+            return -1;
+        }
+    }
+
+    slot->stack_base = (uintptr_t)usable_base;
+    slot->stack_pages = stack_pages;
+    slot->stack_top = (uintptr_t)guard_high;
+
+    if (slot->stack_base && slot->stack_top > slot->stack_base + sizeof(uint64_t)) {
+        uint64_t *base_canary = (uint64_t *)(uintptr_t)slot->stack_base;
+        uint64_t *top_canary = (uint64_t *)(uintptr_t)(slot->stack_top - sizeof(uint64_t));
+        *base_canary = 0xC0DEC0DEF00DFACEULL;
+        *top_canary = 0xC0DEC0DEF00DFACEULL;
+    }
+    return 0;
+}
 
 extern void context_switch(process_context_t *out, process_context_t *in);
 extern void context_switch_to(process_context_t *in);
@@ -311,19 +355,9 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
     slot->entry = entry;
     slot->arg = arg;
     slot->name = name;
-    uint64_t stack_pages = (PROCESS_STACK_SIZE + PAGE_SIZE - 1u) / PAGE_SIZE;
-    uint64_t stack_base = pfa_alloc_pages(stack_pages);
-    if (!stack_base) {
+    uint32_t stack_pages = (PROCESS_STACK_SIZE + PAGE_SIZE - 1u) / PAGE_SIZE;
+    if (process_alloc_stack(slot, stack_pages) != 0) {
         return -1;
-    }
-    slot->stack_base = (uintptr_t)stack_base;
-    slot->stack_pages = (uint32_t)stack_pages;
-    slot->stack_top = (uintptr_t)stack_base + (stack_pages * PAGE_SIZE);
-    if (slot->stack_base && slot->stack_top > slot->stack_base + sizeof(uint64_t)) {
-        uint64_t *base_canary = (uint64_t *)(uintptr_t)slot->stack_base;
-        uint64_t *top_canary = (uint64_t *)(uintptr_t)(slot->stack_top - sizeof(uint64_t));
-        *base_canary = 0xC0DEC0DEF00DFACEULL;
-        *top_canary = 0xC0DEC0DEF00DFACEULL;
     }
     slot->ctx.rsp = slot->stack_top - 8u;
     slot->ctx.rip = (uint64_t)(uintptr_t)process_trampoline;
@@ -376,19 +410,9 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
     slot->arg = arg;
     slot->name = name;
     slot->is_idle = 1;
-    uint64_t stack_pages = (PROCESS_STACK_SIZE + PAGE_SIZE - 1u) / PAGE_SIZE;
-    uint64_t stack_base = pfa_alloc_pages(stack_pages);
-    if (!stack_base) {
+    uint32_t stack_pages = (PROCESS_STACK_SIZE + PAGE_SIZE - 1u) / PAGE_SIZE;
+    if (process_alloc_stack(slot, stack_pages) != 0) {
         return -1;
-    }
-    slot->stack_base = (uintptr_t)stack_base;
-    slot->stack_pages = (uint32_t)stack_pages;
-    slot->stack_top = (uintptr_t)stack_base + (stack_pages * PAGE_SIZE);
-    if (slot->stack_base && slot->stack_top > slot->stack_base + sizeof(uint64_t)) {
-        uint64_t *base_canary = (uint64_t *)(uintptr_t)slot->stack_base;
-        uint64_t *top_canary = (uint64_t *)(uintptr_t)(slot->stack_top - sizeof(uint64_t));
-        *base_canary = 0xC0DEC0DEF00DFACEULL;
-        *top_canary = 0xC0DEC0DEF00DFACEULL;
     }
     slot->ctx.rsp = slot->stack_top - 8u;
     slot->ctx.rip = (uint64_t)(uintptr_t)process_trampoline;

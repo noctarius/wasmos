@@ -355,6 +355,7 @@ Fixed:
 - Basic CPU init with GDT/IDT installation and early exception handlers.
 - Early console via COM1 serial.
 - #GP exception handler logs err/rip/cs/rflags plus current PID/name and stack bounds to aid debugging.
+- Process stacks place canaries at base/top and check them on process entry.
 
 Remaining:
 - Framebuffer console path (serial is implemented; framebuffer is still pending).

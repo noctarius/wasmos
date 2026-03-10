@@ -304,6 +304,9 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     if (copy_name(slot->name, sizeof(slot->name), desc.name, desc.name_len) != 0) {
         return -1;
     }
+    serial_write("[pm] spawn module ");
+    serial_write(slot->name);
+    serial_write("\n");
 
     slot->blob = (const uint8_t *)(uintptr_t)mod->base;
     slot->blob_size = (uint32_t)mod->size;
@@ -359,6 +362,8 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     }
 
     slot->pid = *out_pid;
+    serial_write("[pm] spawn pid ");
+    pm_write_hex64(*out_pid);
     if (name_eq(slot->name, "ata") && g_pm.block_endpoint == IPC_ENDPOINT_NONE) {
         process_t *proc = process_get(*out_pid);
         if (!proc || ipc_endpoint_create(proc->context_id, &g_pm.block_endpoint) != IPC_OK) {

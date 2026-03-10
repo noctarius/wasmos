@@ -171,6 +171,7 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes. U
 - WASMOS follows a microkernel direction: the kernel keeps only minimal primitives, while drivers/services/apps are WASM programs.
 - Each WASM program is expected to run in an isolated WAMR context with its own memory regions.
 - Inter-component communication is IPC-based.
+- The #GP exception handler logs err/rip/cs/rflags for debugging non-canonical instruction pointers.
 - The bootloader loads `kernel.elf` from the EFI System Partition (ESP).
 - CLion IDE targets (`bootloader_ide`, `kernel_ide`) aggregate all project C/H sources and include directories (kernel, drivers, WAMR) for indexing.
 - The Kernel Architecture Guide in `ARCHITECTURE.md` outlines microkernel design decisions and the stepwise roadmap.

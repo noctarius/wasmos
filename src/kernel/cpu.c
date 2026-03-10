@@ -55,6 +55,21 @@ serial_write_hex64(uint64_t value)
 }
 
 static void
+serial_write_hex64_unlocked(uint64_t value)
+{
+    char buf[21];
+    static const char hex[] = "0123456789ABCDEF";
+    buf[0] = '0';
+    buf[1] = 'x';
+    for (int i = 0; i < 16; ++i) {
+        buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
+    }
+    buf[18] = '\n';
+    buf[19] = '\0';
+    serial_write_unlocked(buf);
+}
+
+static void
 gdt_install(void)
 {
     descriptor_ptr_t gdtr;
@@ -126,6 +141,38 @@ x86_exception_panic(uint64_t vector)
         serial_write("[cpu] page fault cr2=");
         serial_write_hex64(cr2);
     }
+
+    __asm__ volatile("cli");
+    for (;;) {
+        __asm__ volatile("hlt");
+    }
+}
+
+__attribute__((noreturn)) void
+x86_exception_panic_frame(uint64_t vector, const uint64_t *frame)
+{
+    uint64_t err = 0;
+    uint64_t rip = 0;
+    uint64_t cs = 0;
+    uint64_t rflags = 0;
+
+    if (frame) {
+        err = frame[0];
+        rip = frame[1];
+        cs = frame[2];
+        rflags = frame[3];
+    }
+
+    serial_write_unlocked("[cpu] exception vector=");
+    serial_write_hex64_unlocked(vector);
+    serial_write_unlocked("[cpu] err=");
+    serial_write_hex64_unlocked(err);
+    serial_write_unlocked("[cpu] rip=");
+    serial_write_hex64_unlocked(rip);
+    serial_write_unlocked("[cpu] cs=");
+    serial_write_hex64_unlocked(cs);
+    serial_write_unlocked("[cpu] rflags=");
+    serial_write_hex64_unlocked(rflags);
 
     __asm__ volatile("cli");
     for (;;) {

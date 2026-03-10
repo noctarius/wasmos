@@ -131,7 +131,9 @@ static process_t *ready_queue_dequeue(void) {
 static void process_trampoline(void) {
     for (;;) {
         g_in_scheduler = 0;
-        preempt_enable();
+        while (preempt_disable_depth() > 0) {
+            preempt_enable();
+        }
         if (!g_current_process || !g_current_process->entry) {
             g_last_run_result = PROCESS_RUN_IDLE;
         } else {

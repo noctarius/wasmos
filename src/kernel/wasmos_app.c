@@ -195,6 +195,27 @@ entry_is_initialize(const char *entry)
 }
 
 int
+wasmos_app_has_init_entry(const wasmos_app_instance_t *instance)
+{
+    if (!instance) {
+        return 0;
+    }
+    return instance->has_init_entry ? 1 : 0;
+}
+
+int
+wasmos_app_call_init(wasmos_app_instance_t *instance)
+{
+    if (!instance || !instance->active || !instance->has_init_entry) {
+        return -1;
+    }
+    return wasm_driver_call_unlocked(&instance->driver,
+                                     "initialize",
+                                     instance->init_argc,
+                                     instance->init_argv);
+}
+
+int
 wasmos_app_start(wasmos_app_instance_t *instance,
                  const wasmos_app_desc_t *desc,
                  uint32_t owner_context_id,
@@ -255,13 +276,18 @@ wasmos_app_start(wasmos_app_instance_t *instance,
     manifest.heap_size = desc->heap_pages_hint ? desc->heap_pages_hint * 4096u : 64u * 1024u;
 
     if (entry_is_initialize(instance->entry)) {
-        manifest.init_export = instance->entry;
-        manifest.dispatch_export = "dispatch";
+        instance->has_init_entry = 1;
         if (init_argc > 4) {
             init_argc = 4;
         }
-        manifest.init_argc = init_argc;
-        manifest.init_argv = init_argv;
+        instance->init_argc = init_argc;
+        for (uint32_t i = 0; i < 4; ++i) {
+            instance->init_argv[i] = init_argv ? init_argv[i] : 0;
+        }
+        manifest.dispatch_export = "dispatch";
+    } else {
+        instance->has_init_entry = 0;
+        instance->init_argc = 0;
     }
 
     if (wasm_driver_start(&instance->driver, &manifest, owner_context_id) != 0) {
@@ -295,6 +321,8 @@ wasmos_app_stop(wasmos_app_instance_t *instance)
     instance->flags = 0;
     instance->owner_context_id = 0;
     instance->resolved_ep_count = 0;
+    instance->has_init_entry = 0;
+    instance->init_argc = 0;
 }
 
 void

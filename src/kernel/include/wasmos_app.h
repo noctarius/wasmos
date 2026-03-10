@@ -65,12 +65,15 @@ typedef int (*wasmos_app_capability_granter_t)(uint32_t owner_context_id,
 typedef struct {
     wasm_driver_t driver;
     uint8_t active;
+    uint8_t has_init_entry;
     uint32_t flags;
     uint32_t owner_context_id;
     char name[64];
     char entry[64];
     uint32_t resolved_ep_count;
     uint32_t resolved_eps[WASMOS_APP_MAX_REQUIRED_ENDPOINTS];
+    uint32_t init_argc;
+    uint32_t init_argv[4];
 } wasmos_app_instance_t;
 
 int wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out_desc);
@@ -80,6 +83,8 @@ int wasmos_app_start(wasmos_app_instance_t *instance,
                      const uint32_t *init_argv,
                      uint32_t init_argc);
 int wasmos_app_dispatch(wasmos_app_instance_t *instance, const ipc_message_t *request, int32_t *out_value);
+int wasmos_app_has_init_entry(const wasmos_app_instance_t *instance);
+int wasmos_app_call_init(wasmos_app_instance_t *instance);
 void wasmos_app_stop(wasmos_app_instance_t *instance);
 void wasmos_app_set_policy_hooks(wasmos_app_endpoint_resolver_t endpoint_resolver,
                                  wasmos_app_capability_granter_t capability_granter);

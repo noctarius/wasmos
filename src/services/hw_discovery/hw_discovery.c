@@ -230,7 +230,7 @@ initialize(int32_t proc_endpoint,
     return 0;
 }
 
-static int32_t
+WASMOS_WASM_EXPORT int32_t
 hw_discovery_step(int32_t ignored_type,
                   int32_t proc_endpoint,
                   int32_t module_count,

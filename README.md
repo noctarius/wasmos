@@ -173,6 +173,7 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes. U
 - Inter-component communication is IPC-based.
 - The #GP exception handler logs err/rip/cs/rflags plus current PID/name and stack bounds for debugging non-canonical instruction pointers.
 - Process stacks carry canaries at base/top and are checked on each process entry to catch overflows early.
+- Process stacks reserve an unmapped guard page above and below the usable stack to catch overflows as page faults.
 - The bootloader loads `kernel.elf` from the EFI System Partition (ESP).
 - CLion IDE targets (`bootloader_ide`, `kernel_ide`) aggregate all project C/H sources and include directories (kernel, drivers, WAMR) for indexing.
 - The Kernel Architecture Guide in `ARCHITECTURE.md` outlines microkernel design decisions and the stepwise roadmap.

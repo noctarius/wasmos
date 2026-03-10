@@ -356,6 +356,7 @@ Fixed:
 - Early console via COM1 serial.
 - #GP exception handler logs err/rip/cs/rflags plus current PID/name and stack bounds to aid debugging.
 - Process stacks place canaries at base/top and check them on process entry.
+- Process stacks reserve guard pages above and below the usable stack to force overflows into page faults.
 
 Remaining:
 - Framebuffer console path (serial is implemented; framebuffer is still pending).

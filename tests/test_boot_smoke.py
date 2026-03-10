@@ -42,3 +42,5 @@ class BootSmokeTest(unittest.TestCase):
         self.assertTrue(ok, "third spawn index not observed")
         ok = self.session.expect(b"[pm] entry start hw-discovery", timeout_s=10)
         self.assertTrue(ok, "hw-discovery entry not reached")
+        ok = self.session.expect(b"[pm] app start ata", timeout_s=10)
+        self.assertTrue(ok, "ata start not reached")

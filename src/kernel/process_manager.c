@@ -252,6 +252,9 @@ pm_app_entry(process_t *process, void *arg)
             state->entry_arg2,
             state->entry_arg3
         };
+        serial_write_unlocked("[pm] app start ");
+        serial_write_unlocked(state->name);
+        serial_write_unlocked("\n");
         if (wasmos_app_start(&state->app,
                              &desc,
                              process->context_id,

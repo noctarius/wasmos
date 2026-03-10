@@ -1,6 +1,7 @@
 .section .text
 
 .extern x86_exception_panic
+.extern x86_exception_panic_frame
 .extern x86_page_fault_handler
 .extern x86_irq_handler
 .extern x86_timer_irq_handler
@@ -65,7 +66,15 @@ DECL_EXC 9
 DECL_EXC 10
 DECL_EXC 11
 DECL_EXC 12
-DECL_EXC 13
+ .global isr_exception_13
+isr_exception_13:
+    mov %rsp, %rsi
+    mov $13, %rdi
+    call x86_exception_panic_frame
+1:
+    cli
+    hlt
+    jmp 1b
  .global isr_exception_14
 isr_exception_14:
     PUSH_REGS

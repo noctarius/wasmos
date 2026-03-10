@@ -354,7 +354,7 @@ Fixed:
 - Page table setup with a kernel-owned root table and higher-half alias mapping.
 - Basic CPU init with GDT/IDT installation and early exception handlers.
 - Early console via COM1 serial.
-- #GP exception handler logs err/rip/cs/rflags to aid debugging.
+- #GP exception handler logs err/rip/cs/rflags plus current PID/name and stack bounds to aid debugging.
 
 Remaining:
 - Framebuffer console path (serial is implemented; framebuffer is still pending).

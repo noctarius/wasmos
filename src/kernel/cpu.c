@@ -155,6 +155,11 @@ x86_exception_panic_frame(uint64_t vector, const uint64_t *frame)
     uint64_t rip = 0;
     uint64_t cs = 0;
     uint64_t rflags = 0;
+    uint32_t pid = process_current_pid();
+    process_t *proc = process_get(pid);
+    const char *name = proc && proc->name ? proc->name : 0;
+    uint64_t stack_base = proc ? (uint64_t)proc->stack_base : 0;
+    uint64_t stack_top = proc ? (uint64_t)proc->stack_top : 0;
 
     if (frame) {
         err = frame[0];
@@ -173,6 +178,21 @@ x86_exception_panic_frame(uint64_t vector, const uint64_t *frame)
     serial_write_hex64_unlocked(cs);
     serial_write_unlocked("[cpu] rflags=");
     serial_write_hex64_unlocked(rflags);
+    serial_write_unlocked("[cpu] frame=");
+    serial_write_hex64_unlocked((uint64_t)(uintptr_t)frame);
+    serial_write_unlocked("[cpu] pid=");
+    serial_write_hex64_unlocked(pid);
+    serial_write_unlocked("[cpu] name=");
+    if (name) {
+        serial_write_unlocked(name);
+    } else {
+        serial_write_unlocked("(null)");
+    }
+    serial_write_unlocked("\n");
+    serial_write_unlocked("[cpu] stack base=");
+    serial_write_hex64_unlocked(stack_base);
+    serial_write_unlocked("[cpu] stack top=");
+    serial_write_hex64_unlocked(stack_top);
 
     __asm__ volatile("cli");
     for (;;) {

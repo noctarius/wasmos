@@ -36,11 +36,11 @@ chardev_write_byte(int32_t value)
 }
 
 WASMOS_WASM_EXPORT int32_t
-chardev_ipc_dispatch(int32_t type,
-                     int32_t arg0,
-                     int32_t arg1,
-                     int32_t arg2,
-                     int32_t arg3)
+dispatch(int32_t type,
+         int32_t arg0,
+         int32_t arg1,
+         int32_t arg2,
+         int32_t arg3)
 {
     (void)arg1;
     (void)arg2;

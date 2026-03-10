@@ -53,7 +53,7 @@ typedef struct {
     uint8_t stop_busy;
 } preempt_test_state_t;
 static preempt_test_state_t g_preempt_test_state;
-static const uint8_t g_preempt_test_enabled = 1;
+static const uint8_t g_preempt_test_enabled = 0;
 
 typedef struct {
     const boot_info_t *boot_info;
@@ -110,6 +110,21 @@ serial_write_hex64(uint64_t value)
     buf[18] = '\n';
     buf[19] = '\0';
     serial_write(buf);
+}
+
+static void
+serial_write_hex64_unlocked(uint64_t value)
+{
+    char buf[21];
+    static const char hex[] = "0123456789ABCDEF";
+    buf[0] = '0';
+    buf[1] = 'x';
+    for (int i = 0; i < 16; ++i) {
+        buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
+    }
+    buf[18] = '\n';
+    buf[19] = '\0';
+    serial_write_unlocked(buf);
 }
 
 static int
@@ -371,6 +386,7 @@ native_ipc_recv(wasm_exec_env_t exec_env, int32_t endpoint)
     uint32_t pid = process_current_pid();
     wasm_ipc_last_slot_t *slot;
     int rc;
+    process_t *process;
 
     (void)exec_env;
 
@@ -383,16 +399,24 @@ native_ipc_recv(wasm_exec_env_t exec_env, int32_t endpoint)
         return -1;
     }
 
-    rc = ipc_recv_for(context_id, (uint32_t)endpoint, &slot->message);
-    if (rc == IPC_EMPTY) {
-        return 0;
-    }
-    if (rc != IPC_OK) {
+    process = process_get(pid);
+    if (!process) {
         return -1;
     }
 
-    slot->valid = 1;
-    return 1;
+    for (;;) {
+        rc = ipc_recv_for(context_id, (uint32_t)endpoint, &slot->message);
+        if (rc == IPC_EMPTY) {
+            process_block_on_ipc(process);
+            process_yield(PROCESS_RUN_BLOCKED);
+            continue;
+        }
+        if (rc != IPC_OK) {
+            return -1;
+        }
+        slot->valid = 1;
+        return 1;
+    }
 }
 
 static int32_t
@@ -920,15 +944,9 @@ chardev_server_entry(process_t *process, void *arg)
     (void)process;
     (void)arg;
 
-    int rc = wasm_chardev_service_once();
-    if (rc == 0) {
-        return PROCESS_RUN_YIELDED;
-    }
-    if (rc == 1) {
-        process_block_on_ipc(process);
-        return PROCESS_RUN_BLOCKED;
-    }
-    return PROCESS_RUN_IDLE;
+    int rc = wasm_chardev_run();
+    process_set_exit_status(process, rc == 0 ? 0 : -1);
+    return PROCESS_RUN_EXITED;
 }
 
 static process_run_result_t
@@ -1139,10 +1157,44 @@ init_entry(process_t *process, void *arg)
         msg.arg1 = 0;
         msg.arg2 = 0;
         msg.arg3 = 0;
-        if (ipc_send_from(process->context_id, proc_ep, &msg) != IPC_OK) {
+        serial_write("[init] spawn sysinit\n");
+        serial_write("[init] proc ep=");
+        serial_write_hex64(proc_ep);
+        serial_write("[init] reply ep=");
+        serial_write_hex64(state->reply_endpoint);
+        serial_write("[init] ctx=");
+        serial_write_hex64(process->context_id);
+        uint32_t proc_owner = 0;
+        uint32_t reply_owner = 0;
+        if (ipc_endpoint_owner(proc_ep, &proc_owner) == IPC_OK) {
+            serial_write("[init] proc owner=");
+            serial_write_hex64(proc_owner);
+        }
+        if (ipc_endpoint_owner(state->reply_endpoint, &reply_owner) == IPC_OK) {
+            serial_write("[init] reply owner=");
+            serial_write_hex64(reply_owner);
+        }
+        serial_write_unlocked("[init] preempt depth=");
+        serial_write_hex64_unlocked(preempt_disable_depth());
+        serial_write_unlocked("[init] send enter\n");
+        int send_rc = ipc_send_from(process->context_id, proc_ep, &msg);
+        serial_write_unlocked("[init] send rc=");
+        serial_write_hex64_unlocked((uint64_t)(uint32_t)send_rc);
+        if (send_rc != IPC_OK) {
+            serial_write("[init] sysinit spawn request failed rc=");
+            serial_write_hex64((uint64_t)(uint32_t)send_rc);
             serial_write("[init] sysinit spawn request failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
+        }
+        uint32_t queued = 0;
+        int count_rc = ipc_endpoint_count(proc_ep, &queued);
+        if (count_rc == IPC_OK) {
+            serial_write_unlocked("[init] proc queue=");
+            serial_write_hex64_unlocked(queued);
+        } else {
+            serial_write_unlocked("[init] proc queue rc=");
+            serial_write_hex64_unlocked((uint64_t)(uint32_t)count_rc);
         }
         state->phase = 1;
         return PROCESS_RUN_YIELDED;
@@ -1162,6 +1214,7 @@ init_entry(process_t *process, void *arg)
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
+        serial_write("[init] sysinit spawn ok\n");
         state->phase = 2;
     }
 

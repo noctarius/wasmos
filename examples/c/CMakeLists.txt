@@ -7,7 +7,7 @@ add_custom_command(
           -Wl,--initial-memory=65536
           -Wl,--max-memory=65536
           -Wl,--allow-undefined
-          -Wl,--export=hello_c_step
+          -Wl,--export=main
           -I${DRIVER_WASM_DIR}/include
           ${WASM_HELLO_C_SRC}
           -o ${WASM_HELLO_C_WASM}
@@ -23,7 +23,7 @@ add_custom_command(
           ${WASM_HELLO_C_WASM}
           ${WASM_HELLO_C_APP}
           hello-c
-          hello_c_step
+          main
           16
           16
           4
@@ -46,7 +46,7 @@ add_custom_command(
           -Wl,--initial-memory=65536
           -Wl,--max-memory=65536
           -Wl,--allow-undefined
-          -Wl,--export=chardev_client_step
+          -Wl,--export=main
           -I${DRIVER_WASM_DIR}/include
           ${WASM_CHARDEV_CLIENT_SRC}
           -o ${WASM_CHARDEV_CLIENT_WASM}
@@ -73,7 +73,7 @@ add_custom_command(
           ${WASM_CHARDEV_CLIENT_WASM}
           ${WASM_CHARDEV_CLIENT_APP}
           chardev-client
-          chardev_client_step
+          main
           16
           16
           4
@@ -96,7 +96,7 @@ add_custom_command(
           -Wl,--initial-memory=65536
           -Wl,--max-memory=65536
           -Wl,--allow-undefined
-          -Wl,--export=chardev_preempt_step
+          -Wl,--export=main
           -I${DRIVER_WASM_DIR}/include
           ${WASM_CHARDEV_PREEMPT_SRC}
           -o ${WASM_CHARDEV_PREEMPT_WASM}
@@ -112,7 +112,7 @@ add_custom_command(
           ${WASM_CHARDEV_PREEMPT_WASM}
           ${WASM_CHARDEV_PREEMPT_APP}
           chardev-preempt
-          chardev_preempt_step
+          main
           16
           16
           4
@@ -126,10 +126,49 @@ add_custom_command(
   VERBATIM
 )
 
-add_custom_target(c_examples DEPENDS ${WASM_HELLO_C_APP} ${WASM_CHARDEV_CLIENT_APP} ${WASM_CHARDEV_PREEMPT_APP})
+add_custom_command(
+  OUTPUT ${WASM_INIT_SMOKE_WASM}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
+          -Wl,--no-entry -Wl,--strip-all
+          -Wl,-z,stack-size=4096
+          -Wl,--initial-memory=65536
+          -Wl,--max-memory=65536
+          -Wl,--allow-undefined
+          -Wl,--export=main
+          -I${DRIVER_WASM_DIR}/include
+          ${WASM_INIT_SMOKE_SRC}
+          -o ${WASM_INIT_SMOKE_WASM}
+  DEPENDS ${WASM_INIT_SMOKE_SRC} ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Building wasm init smoke module"
+  VERBATIM
+)
+
+add_custom_command(
+  OUTPUT ${WASM_INIT_SMOKE_APP}
+  COMMAND ${WASMOS_APP_PACKER}
+          ${WASM_INIT_SMOKE_WASM}
+          ${WASM_INIT_SMOKE_APP}
+          init-smoke
+          main
+          16
+          16
+          4
+          -
+          0
+          -
+          0
+  DEPENDS ${WASM_INIT_SMOKE_WASM} make_wasmos_app
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Packing wasm init smoke as WASMOS-APP"
+  VERBATIM
+)
+
+add_custom_target(c_examples DEPENDS ${WASM_HELLO_C_APP} ${WASM_CHARDEV_CLIENT_APP} ${WASM_CHARDEV_PREEMPT_APP} ${WASM_INIT_SMOKE_APP})
 add_custom_target(chardev_client_blob DEPENDS ${WASM_CHARDEV_CLIENT_BLOB})
 
-set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_HELLO_C_APP} ${WASM_CHARDEV_CLIENT_APP} ${WASM_CHARDEV_PREEMPT_APP})
+set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_HELLO_C_APP} ${WASM_CHARDEV_CLIENT_APP} ${WASM_CHARDEV_PREEMPT_APP} ${WASM_INIT_SMOKE_APP})
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS c_examples)
 set_property(GLOBAL APPEND PROPERTY WASMOS_KERNEL_BLOBS ${WASM_CHARDEV_CLIENT_BLOB})
 set_property(GLOBAL APPEND PROPERTY WASMOS_KERNEL_BLOB_TARGETS chardev_client_blob)

@@ -22,14 +22,12 @@ write_line(const char *s, int32_t len)
 }
 
 WASMOS_WASM_EXPORT int32_t
-hello_c_step(int32_t ignored_type,
-             int32_t ignored_arg0,
-             int32_t ignored_arg1,
-             int32_t ignored_arg2,
-             int32_t ignored_arg3)
+main(int32_t ignored_arg0,
+     int32_t ignored_arg1,
+     int32_t ignored_arg2,
+     int32_t ignored_arg3)
 {
     static int printed = 0;
-    (void)ignored_type;
     (void)ignored_arg0;
     (void)ignored_arg1;
     (void)ignored_arg2;
@@ -39,11 +37,11 @@ hello_c_step(int32_t ignored_type,
         printed = 1;
         static const char line1[] = "Hello from C on WASMOS!\n";
         static const char line2[] = "This is a tiny WASMOS-APP written in C.\n";
-        static const char line3[] = "Entry: hello_c_step\n";
+        static const char line3[] = "Entry: main\n";
         write_line(line1, (int32_t)(sizeof(line1) - 1));
         write_line(line2, (int32_t)(sizeof(line2) - 1));
         write_line(line3, (int32_t)(sizeof(line3) - 1));
     }
 
-    return WASMOS_WASM_STEP_YIELDED;
+    return 0;
 }

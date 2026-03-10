@@ -15,11 +15,11 @@ typedef struct {
     uint32_t blob_size;
     uint8_t blob_storage[PM_FS_BUFFER_SIZE];
     uint8_t started;
-    uint8_t init_called;
-    uint32_t step_arg0;
-    uint32_t step_arg1;
-    uint32_t step_arg2;
-    uint32_t step_arg3;
+    uint32_t entry_argc;
+    uint32_t entry_arg0;
+    uint32_t entry_arg1;
+    uint32_t entry_arg2;
+    uint32_t entry_arg3;
     wasmos_app_instance_t app;
     char name[64];
 } pm_app_state_t;
@@ -83,6 +83,21 @@ pm_write_hex64(uint64_t value)
     buf[18] = '\n';
     buf[19] = '\0';
     serial_write(buf);
+}
+
+static void
+pm_write_hex64_unlocked(uint64_t value)
+{
+    char buf[21];
+    static const char hex[] = "0123456789ABCDEF";
+    buf[0] = '0';
+    buf[1] = 'x';
+    for (int i = 0; i < 16; ++i) {
+        buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
+    }
+    buf[18] = '\n';
+    buf[19] = '\0';
+    serial_write_unlocked(buf);
 }
 
 static int
@@ -219,8 +234,6 @@ static process_run_result_t
 pm_app_entry(process_t *process, void *arg)
 {
     pm_app_state_t *state = (pm_app_state_t *)arg;
-    ipc_message_t step_msg;
-    int32_t step_result = WASMOS_WASM_STEP_FAILED;
 
     if (!process || !state) {
         return PROCESS_RUN_IDLE;
@@ -234,66 +247,33 @@ pm_app_entry(process_t *process, void *arg)
             return PROCESS_RUN_EXITED;
         }
         uint32_t init_args[4] = {
-            state->step_arg0,
-            state->step_arg1,
-            state->step_arg2,
-            state->step_arg3
+            state->entry_arg0,
+            state->entry_arg1,
+            state->entry_arg2,
+            state->entry_arg3
         };
-        if (wasmos_app_start(&state->app, &desc, process->context_id, init_args, 4) != 0) {
+        if (wasmos_app_start(&state->app,
+                             &desc,
+                             process->context_id,
+                             init_args,
+                             state->entry_argc) != 0) {
             serial_write("[pm] app start failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
         state->started = 1;
-        state->init_called = 0;
     }
 
-    if (wasmos_app_has_init_entry(&state->app) && !state->init_called) {
-        state->init_called = 1;
-        if (wasmos_app_call_init(&state->app) != 0) {
-            serial_write("[pm] app init failed\n");
-            process_set_exit_status(process, -1);
-            return PROCESS_RUN_EXITED;
-        }
-        process_set_exit_status(process, 0);
-        return PROCESS_RUN_EXITED;
-    }
-
-    step_msg.type = 0;
-    step_msg.source = 0;
-    step_msg.destination = 0;
-    step_msg.request_id = 0;
-    step_msg.arg0 = state->step_arg0;
-    step_msg.arg1 = state->step_arg1;
-    step_msg.arg2 = state->step_arg2;
-    step_msg.arg3 = state->step_arg3;
-
-    if (wasmos_app_dispatch(&state->app, &step_msg, &step_result) != 0) {
-        serial_write("[pm] app dispatch failed\n");
+    if (wasmos_app_call_entry(&state->app) != 0) {
+        serial_write("[pm] app entry failed\n");
         process_set_exit_status(process, -1);
-        return PROCESS_RUN_EXITED;
-    }
-
-    if (step_result == WASMOS_WASM_STEP_BLOCKED) {
-        process_block_on_ipc(process);
-        return PROCESS_RUN_BLOCKED;
-    }
-    if (step_result == WASMOS_WASM_STEP_DONE) {
-        wasmos_app_stop(&state->app);
-        state->in_use = 0;
-        state->pid = 0;
+    } else {
         process_set_exit_status(process, 0);
-        return PROCESS_RUN_EXITED;
     }
-    if (step_result == WASMOS_WASM_STEP_FAILED) {
-        wasmos_app_stop(&state->app);
-        state->in_use = 0;
-        state->pid = 0;
-        process_set_exit_status(process, -1);
-        return PROCESS_RUN_EXITED;
-    }
-
-    return PROCESS_RUN_YIELDED;
+    wasmos_app_stop(&state->app);
+    state->in_use = 0;
+    state->pid = 0;
+    return PROCESS_RUN_EXITED;
 }
 
 static int
@@ -322,50 +302,49 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     slot->blob = (const uint8_t *)(uintptr_t)mod->base;
     slot->blob_size = (uint32_t)mod->size;
     slot->started = 0;
-    slot->init_called = 0;
-    slot->step_arg0 = 0;
-    slot->step_arg1 = 0;
-    slot->step_arg2 = 0;
-    slot->step_arg3 = 0;
+    slot->entry_argc = 4;
+    slot->entry_arg0 = 0;
+    slot->entry_arg1 = 0;
+    slot->entry_arg2 = 0;
+    slot->entry_arg3 = 0;
     slot->in_use = 1;
 
     if (name_eq(slot->name, "sysinit")) {
-        slot->step_arg0 = g_pm.proc_endpoint;
-        slot->step_arg1 = g_pm.module_count;
-        slot->step_arg2 = g_pm.init_module_index;
-        slot->step_arg3 = 0;
+        slot->entry_arg0 = g_pm.proc_endpoint;
+        slot->entry_arg1 = g_pm.module_count;
+        slot->entry_arg2 = g_pm.init_module_index;
     } else if (name_eq(slot->name, "chardev-client")) {
         uint32_t chardev_endpoint = IPC_ENDPOINT_NONE;
         if (wasm_chardev_endpoint(&chardev_endpoint) != 0) {
             slot->in_use = 0;
             return -1;
         }
-        slot->step_arg0 = chardev_endpoint;
+        slot->entry_arg0 = chardev_endpoint;
     } else if (name_eq(slot->name, "cli")) {
         uint32_t fs_endpoint = g_pm.fs_endpoint;
         if (fs_endpoint == IPC_ENDPOINT_NONE) {
             slot->in_use = 0;
             return -1;
         }
-        slot->step_arg0 = g_pm.proc_endpoint;
-        slot->step_arg1 = fs_endpoint;
+        slot->entry_arg0 = g_pm.proc_endpoint;
+        slot->entry_arg1 = fs_endpoint;
     } else if (name_eq(slot->name, "fs-fat")) {
         uint32_t block_endpoint = g_pm.block_endpoint;
         if (block_endpoint == IPC_ENDPOINT_NONE) {
             slot->in_use = 0;
             return -1;
         }
-        slot->step_arg0 = block_endpoint;
-        slot->step_arg1 = IPC_ENDPOINT_NONE;
+        slot->entry_arg0 = block_endpoint;
+        slot->entry_arg1 = IPC_ENDPOINT_NONE;
     } else if (name_eq(slot->name, "hw-discovery")) {
         if (g_pm.proc_endpoint == IPC_ENDPOINT_NONE) {
             slot->in_use = 0;
             return -1;
         }
-        slot->step_arg0 = g_pm.proc_endpoint;
-        slot->step_arg1 = g_pm.module_count;
+        slot->entry_arg0 = g_pm.proc_endpoint;
+        slot->entry_arg1 = g_pm.module_count;
     } else if (name_eq(slot->name, "ata")) {
-        slot->step_arg0 = IPC_ENDPOINT_NONE;
+        slot->entry_arg0 = IPC_ENDPOINT_NONE;
     }
 
     if (process_spawn_as(parent_pid, slot->name, pm_app_entry, slot, out_pid) != 0) {
@@ -380,7 +359,7 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
             slot->in_use = 0;
             return -1;
         }
-        slot->step_arg0 = g_pm.block_endpoint;
+        slot->entry_arg0 = g_pm.block_endpoint;
     }
     if (name_eq(slot->name, "fs-fat") && g_pm.fs_endpoint == IPC_ENDPOINT_NONE) {
         process_t *proc = process_get(*out_pid);
@@ -388,7 +367,7 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
             slot->in_use = 0;
             return -1;
         }
-        slot->step_arg1 = g_pm.fs_endpoint;
+        slot->entry_arg1 = g_pm.fs_endpoint;
     }
     return 0;
 }
@@ -426,12 +405,22 @@ pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t *blob, uint32_t blob_siz
     slot->blob = slot->blob_storage;
     slot->blob_size = blob_size;
     slot->started = 0;
-    slot->init_called = 0;
-    slot->step_arg0 = 0;
-    slot->step_arg1 = 0;
-    slot->step_arg2 = 0;
-    slot->step_arg3 = 0;
+    slot->entry_argc = 4;
+    slot->entry_arg0 = 0;
+    slot->entry_arg1 = 0;
+    slot->entry_arg2 = 0;
+    slot->entry_arg3 = 0;
     slot->in_use = 1;
+
+    if (name_eq(slot->name, "chardev-client") || name_eq(slot->name, "chardev-preempt")) {
+        uint32_t chardev_endpoint = IPC_ENDPOINT_NONE;
+        if (wasm_chardev_endpoint(&chardev_endpoint) != 0) {
+            slot->in_use = 0;
+            return -1;
+        }
+        slot->entry_argc = 4;
+        slot->entry_arg0 = chardev_endpoint;
+    }
 
     if (process_spawn_as(parent_pid, slot->name, pm_app_entry, slot, out_pid) != 0) {
         slot->in_use = 0;
@@ -580,6 +569,8 @@ pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t *msg)
     process_t *caller = 0;
     uint32_t parent_pid = 0;
     uint32_t pid = 0;
+    serial_write("[pm] spawn index=");
+    pm_write_hex64(msg->arg0);
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
         return -1;
     }
@@ -790,7 +781,6 @@ process_manager_init(const boot_info_t *boot_info)
         g_pm.apps[i].blob = 0;
         g_pm.apps[i].blob_size = 0;
         g_pm.apps[i].started = 0;
-        g_pm.apps[i].init_called = 0;
         g_pm.apps[i].name[0] = '\0';
     }
     for (uint32_t i = 0; i < PM_MAX_WAITERS; ++i) {
@@ -825,6 +815,7 @@ process_run_result_t
 process_manager_entry(process_t *process, void *arg)
 {
     ipc_message_t msg;
+    static uint8_t logged_pending = 0;
 
     (void)arg;
 
@@ -846,20 +837,43 @@ process_manager_entry(process_t *process, void *arg)
         g_pm.started = 1;
         serial_write("[pm] proc endpoint=");
         pm_write_hex64(g_pm.proc_endpoint);
+        serial_write("[pm] context id=");
+        pm_write_hex64(process->context_id);
     }
 
     pm_check_waits(process->context_id);
     pm_reap_apps();
     pm_poll_spawn(process->context_id);
+    if (!logged_pending) {
+        uint32_t pending = 0;
+        if (ipc_endpoint_count(g_pm.proc_endpoint, &pending) == IPC_OK && pending > 0) {
+            logged_pending = 1;
+            serial_write_unlocked("[pm] pending queued\n");
+        }
+    }
 
     int recv_rc = ipc_recv_for(process->context_id, g_pm.proc_endpoint, &msg);
     if (recv_rc == IPC_EMPTY) {
-        process_block_on_ipc(process);
-        return PROCESS_RUN_BLOCKED;
-    }
-    if (recv_rc != IPC_OK) {
         return PROCESS_RUN_YIELDED;
     }
+    if (recv_rc != IPC_OK) {
+        static uint8_t logged_recv_fail = 0;
+        if (!logged_recv_fail) {
+            logged_recv_fail = 1;
+            serial_write("[pm] recv failed rc=");
+            pm_write_hex64((uint64_t)(uint32_t)recv_rc);
+            uint32_t owner = 0;
+            if (ipc_endpoint_owner(g_pm.proc_endpoint, &owner) == IPC_OK) {
+                serial_write("[pm] proc owner=");
+                pm_write_hex64(owner);
+            }
+            serial_write("[pm] ctx=");
+            pm_write_hex64(process->context_id);
+        }
+        return PROCESS_RUN_YIELDED;
+    }
+    serial_write_unlocked("[pm] recv type=");
+    pm_write_hex64_unlocked(msg.type);
 
     int rc = -1;
     switch (msg.type) {

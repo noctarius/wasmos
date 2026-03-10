@@ -8,9 +8,6 @@ add_custom_command(
           -Wl,--initial-memory=65536
           -Wl,--max-memory=65536
           -Wl,--export=initialize
-          -Wl,--export=chardev_read_byte
-          -Wl,--export=chardev_write_byte
-          -Wl,--export=dispatch
           -I${DRIVER_WASM_DIR}/include
           ${WASM_CHARDEV_DRIVER_SRC}
           -o ${WASM_CHARDEV_DRIVER_WASM}

@@ -75,6 +75,17 @@ static uint8_t g_fat_retries = 0;
 static int32_t g_ata_index = -1;
 static int32_t g_fat_index = -1;
 
+static void
+stall_forever(void)
+{
+    int32_t endpoint = wasmos_ipc_create_endpoint();
+    for (;;) {
+        if (endpoint >= 0) {
+            (void)wasmos_ipc_recv(endpoint);
+        }
+    }
+}
+
 static uint32_t
 str_len(const char *s)
 {
@@ -223,128 +234,108 @@ initialize(int32_t proc_endpoint,
            int32_t ignored_arg2,
            int32_t ignored_arg3)
 {
-    (void)proc_endpoint;
-    (void)module_count;
-    (void)ignored_arg2;
-    (void)ignored_arg3;
-    return 0;
-}
-
-WASMOS_WASM_EXPORT int32_t
-hw_discovery_step(int32_t ignored_type,
-                  int32_t proc_endpoint,
-                  int32_t module_count,
-                  int32_t ignored_arg2,
-                  int32_t ignored_arg3)
-{
-    (void)ignored_type;
     (void)ignored_arg2;
     (void)ignored_arg3;
 
-    if (g_phase == HW_PHASE_INIT) {
-        g_reply_endpoint = wasmos_ipc_create_endpoint();
-        if (g_reply_endpoint < 0) {
-            g_phase = HW_PHASE_FAILED;
-            return WASMOS_WASM_STEP_FAILED;
-        }
-        if (proc_endpoint < 0 || module_count <= 0) {
-            g_phase = HW_PHASE_FAILED;
-            return WASMOS_WASM_STEP_FAILED;
-        }
-        g_proc_endpoint = proc_endpoint;
-        g_module_count = module_count;
-        hw_scan_acpi();
-        g_ata_index = module_index_by_name("ata");
-        g_fat_index = module_index_by_name("fs-fat");
-        g_need_ata = (g_ata_index >= 0 && !proc_running("ata")) ? 1 : 0;
-        g_need_fat = (g_fat_index >= 0 && !proc_running("fs-fat")) ? 1 : 0;
-        g_phase = HW_PHASE_SPAWN;
-        return WASMOS_WASM_STEP_YIELDED;
+    g_reply_endpoint = wasmos_ipc_create_endpoint();
+    if (g_reply_endpoint < 0) {
+        g_phase = HW_PHASE_FAILED;
+        console_write("[hw-discovery] failed to create reply endpoint\n");
+        stall_forever();
     }
-
-    if (g_phase == HW_PHASE_SPAWN) {
-        hw_spawn_target_t target = next_spawn_target();
-        if (target == HW_SPAWN_NONE) {
-            g_phase = HW_PHASE_IDLE;
-            return WASMOS_WASM_STEP_BLOCKED;
-        }
-        if (target == HW_SPAWN_ATA) {
-            if (hw_spawn_driver_index(g_ata_index) != 0) {
-                g_phase = HW_PHASE_FAILED;
-                return WASMOS_WASM_STEP_FAILED;
-            }
-        } else if (target == HW_SPAWN_FAT) {
-            if (hw_spawn_driver_index(g_fat_index) != 0) {
-                g_phase = HW_PHASE_FAILED;
-                return WASMOS_WASM_STEP_FAILED;
-            }
-        }
-        g_pending = target;
-        g_phase = HW_PHASE_WAIT;
-        return WASMOS_WASM_STEP_YIELDED;
+    if (proc_endpoint < 0 || module_count <= 0) {
+        g_phase = HW_PHASE_FAILED;
+        console_write("[hw-discovery] invalid init args\n");
+        stall_forever();
     }
+    g_proc_endpoint = proc_endpoint;
+    g_module_count = module_count;
+    hw_scan_acpi();
+    g_ata_index = module_index_by_name("ata");
+    g_fat_index = module_index_by_name("fs-fat");
+    g_need_ata = (g_ata_index >= 0 && !proc_running("ata")) ? 1 : 0;
+    g_need_fat = (g_fat_index >= 0 && !proc_running("fs-fat")) ? 1 : 0;
+    g_phase = HW_PHASE_SPAWN;
 
-    if (g_phase == HW_PHASE_WAIT) {
-        int32_t recv_rc = wasmos_ipc_recv(g_reply_endpoint);
-        if (recv_rc == 0) {
-            return WASMOS_WASM_STEP_BLOCKED;
-        }
-        if (recv_rc < 0) {
-            g_phase = HW_PHASE_FAILED;
-            return WASMOS_WASM_STEP_FAILED;
-        }
-
-        int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
-        int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
-        if (resp_req != g_request_id) {
-            g_phase = HW_PHASE_FAILED;
-            return WASMOS_WASM_STEP_FAILED;
-        }
-        g_request_id++;
-        if (resp_type == PROC_IPC_RESP) {
-            if (g_pending == HW_SPAWN_ATA) {
-                g_need_ata = 0;
-            } else if (g_pending == HW_SPAWN_FAT) {
-                g_need_fat = 0;
+    for (;;) {
+        if (g_phase == HW_PHASE_SPAWN) {
+            hw_spawn_target_t target = next_spawn_target();
+            if (target == HW_SPAWN_NONE) {
+                g_phase = HW_PHASE_IDLE;
+                continue;
             }
-            g_pending = HW_SPAWN_NONE;
-            g_phase = HW_PHASE_SPAWN;
-            return WASMOS_WASM_STEP_YIELDED;
-        }
-        if (resp_type == PROC_IPC_ERROR) {
-            if (g_pending == HW_SPAWN_ATA) {
-                g_ata_retries++;
-                if (g_ata_retries > 8) {
-                    g_need_ata = 0;
+            if (target == HW_SPAWN_ATA) {
+                if (hw_spawn_driver_index(g_ata_index) != 0) {
+                    g_phase = HW_PHASE_FAILED;
+                    console_write("[hw-discovery] spawn ata failed\n");
+                    stall_forever();
                 }
-            } else if (g_pending == HW_SPAWN_FAT) {
-                g_fat_retries++;
-                if (g_fat_retries > 8) {
+            } else if (target == HW_SPAWN_FAT) {
+                if (hw_spawn_driver_index(g_fat_index) != 0) {
+                    g_phase = HW_PHASE_FAILED;
+                    console_write("[hw-discovery] spawn fs-fat failed\n");
+                    stall_forever();
+                }
+            }
+            g_pending = target;
+            g_phase = HW_PHASE_WAIT;
+            continue;
+        }
+
+        if (g_phase == HW_PHASE_WAIT) {
+            int32_t recv_rc = wasmos_ipc_recv(g_reply_endpoint);
+            if (recv_rc < 0) {
+                g_phase = HW_PHASE_FAILED;
+                console_write("[hw-discovery] spawn recv failed\n");
+                stall_forever();
+            }
+
+            int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+            int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+            if (resp_req != g_request_id) {
+                g_phase = HW_PHASE_FAILED;
+                console_write("[hw-discovery] spawn response mismatch\n");
+                stall_forever();
+            }
+            g_request_id++;
+            if (resp_type == PROC_IPC_RESP) {
+                if (g_pending == HW_SPAWN_ATA) {
+                    g_need_ata = 0;
+                } else if (g_pending == HW_SPAWN_FAT) {
                     g_need_fat = 0;
                 }
+                g_pending = HW_SPAWN_NONE;
+                g_phase = HW_PHASE_SPAWN;
+                continue;
             }
-            g_pending = HW_SPAWN_NONE;
-            g_phase = HW_PHASE_SPAWN;
-            return WASMOS_WASM_STEP_YIELDED;
+            if (resp_type == PROC_IPC_ERROR) {
+                if (g_pending == HW_SPAWN_ATA) {
+                    g_ata_retries++;
+                    if (g_ata_retries > 8) {
+                        g_need_ata = 0;
+                    }
+                } else if (g_pending == HW_SPAWN_FAT) {
+                    g_fat_retries++;
+                    if (g_fat_retries > 8) {
+                        g_need_fat = 0;
+                    }
+                }
+                g_pending = HW_SPAWN_NONE;
+                g_phase = HW_PHASE_SPAWN;
+                continue;
+            }
+
+            g_phase = HW_PHASE_FAILED;
+            console_write("[hw-discovery] spawn response invalid\n");
+            stall_forever();
         }
 
-        g_phase = HW_PHASE_FAILED;
-        return WASMOS_WASM_STEP_FAILED;
+        if (g_phase == HW_PHASE_IDLE) {
+            (void)wasmos_ipc_recv(g_reply_endpoint);
+            continue;
+        }
+
+        console_write("[hw-discovery] failed\n");
+        stall_forever();
     }
-
-    if (g_phase == HW_PHASE_IDLE) {
-        return WASMOS_WASM_STEP_BLOCKED;
-    }
-
-    return WASMOS_WASM_STEP_FAILED;
-}
-
-WASMOS_WASM_EXPORT int32_t
-dispatch(int32_t type,
-         int32_t arg0,
-         int32_t arg1,
-         int32_t arg2,
-         int32_t arg3)
-{
-    return hw_discovery_step(type, arg0, arg1, arg2, arg3);
 }

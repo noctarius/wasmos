@@ -19,8 +19,12 @@ void spinlock_lock(spinlock_t *lock) {
     if (!lock) {
         return;
     }
-    preempt_disable();
-    while (!spinlock_try_lock(lock)) {
+    for (;;) {
+        preempt_disable();
+        if (spinlock_try_lock(lock)) {
+            return;
+        }
+        preempt_enable();
         __asm__ volatile("pause");
     }
 }

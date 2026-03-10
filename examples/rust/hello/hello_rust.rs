@@ -3,8 +3,6 @@
 
 use core::panic::PanicInfo;
 
-const WASMOS_WASM_STEP_YIELDED: i32 = 0;
-
 #[link(wasm_import_module = "wasmos")]
 extern "C" {
     fn console_write(ptr: i32, len: i32) -> i32;
@@ -25,8 +23,7 @@ fn write_line(bytes: &[u8]) {
 }
 
 #[no_mangle]
-pub extern "C" fn hello_rust_step(
-    _type: i32,
+pub extern "C" fn main(
     _arg0: i32,
     _arg1: i32,
     _arg2: i32,
@@ -39,9 +36,9 @@ pub extern "C" fn hello_rust_step(
             PRINTED = true;
             write_line(b"Hello from Rust on WASMOS!\n");
             write_line(b"This is a tiny WASMOS-APP written in Rust.\n");
-            write_line(b"Entry: hello_rust_step\n");
+            write_line(b"Entry: main\n");
         }
     }
 
-    WASMOS_WASM_STEP_YIELDED
+    0
 }

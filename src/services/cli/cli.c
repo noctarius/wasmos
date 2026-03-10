@@ -67,6 +67,17 @@ static int32_t g_pending_kind = 0;
 static int32_t g_pending_cd_use_path = 0;
 static char g_pending_cd_path[32] = "/";
 
+static void
+stall_forever(void)
+{
+    int32_t endpoint = wasmos_ipc_create_endpoint();
+    for (;;) {
+        if (endpoint >= 0) {
+            (void)wasmos_ipc_recv(endpoint);
+        }
+    }
+}
+
 enum {
     PENDING_NONE = 0,
     PENDING_LIST,
@@ -571,139 +582,142 @@ cli_handle_line(void)
 }
 
 WASMOS_WASM_EXPORT int32_t
-cli_step(int32_t ignored_type,
-         int32_t proc_endpoint,
-         int32_t fs_endpoint,
-         int32_t ignored_arg2,
-         int32_t ignored_arg3)
+initialize(int32_t proc_endpoint,
+           int32_t fs_endpoint,
+           int32_t ignored_arg2,
+           int32_t ignored_arg3)
 {
-    (void)ignored_type;
-    (void)proc_endpoint;
-    (void)fs_endpoint;
     (void)ignored_arg2;
     (void)ignored_arg3;
 
-    if (g_phase == CLI_PHASE_INIT) {
-        const char *msg = "WAMOS CLI\ncommands: help, ps, ls, cat <name>, cd <path>, exec <app>, halt, reboot\n";
-        wasmos_console_write((int32_t)(uintptr_t)msg, str_len(msg));
-        set_cwd_root();
-        g_reply_endpoint = wasmos_ipc_create_endpoint();
-        if (g_reply_endpoint < 0) {
-            g_phase = CLI_PHASE_FAILED;
-            return WASMOS_WASM_STEP_FAILED;
-        }
-        g_proc_endpoint = proc_endpoint;
-        g_fs_endpoint = fs_endpoint;
-        g_phase = CLI_PHASE_PROMPT;
-        return WASMOS_WASM_STEP_YIELDED;
-    }
+    g_phase = CLI_PHASE_INIT;
 
-    if (g_phase == CLI_PHASE_PROMPT) {
-        console_prompt();
-        g_line_len = 0;
-        g_phase = CLI_PHASE_READ;
-        return WASMOS_WASM_STEP_YIELDED;
-    }
-
-    if (g_phase == CLI_PHASE_READ) {
-        if (g_line_len >= (int32_t)(sizeof(g_line) - 1)) {
-            console_write("\n");
-            g_line_len = 0;
+    for (;;) {
+        if (g_phase == CLI_PHASE_INIT) {
+            const char *msg = "WAMOS CLI\ncommands: help, ps, ls, cat <name>, cd <path>, exec <app>, halt, reboot\n";
+            wasmos_console_write((int32_t)(uintptr_t)msg, str_len(msg));
+            set_cwd_root();
+            g_reply_endpoint = wasmos_ipc_create_endpoint();
+            if (g_reply_endpoint < 0) {
+                g_phase = CLI_PHASE_FAILED;
+                console_write("[cli] failed to create reply endpoint\n");
+                stall_forever();
+            }
+            g_proc_endpoint = proc_endpoint;
+            g_fs_endpoint = fs_endpoint;
             g_phase = CLI_PHASE_PROMPT;
-            return WASMOS_WASM_STEP_YIELDED;
-        }
-        int32_t rc = wasmos_console_read((int32_t)(uintptr_t)&g_line[g_line_len], 1);
-        if (rc == 0) {
-            return WASMOS_WASM_STEP_YIELDED;
-        }
-        if (rc < 0) {
-            g_phase = CLI_PHASE_FAILED;
-            return WASMOS_WASM_STEP_FAILED;
+            continue;
         }
 
-        char ch = g_line[g_line_len];
-        if (ch == '\r' || ch == '\n') {
-            console_write("\n");
-            if (cli_handle_line()) {
-                g_phase = CLI_PHASE_WAIT_IPC;
-            } else {
+        if (g_phase == CLI_PHASE_PROMPT) {
+            console_prompt();
+            g_line_len = 0;
+            g_phase = CLI_PHASE_READ;
+            continue;
+        }
+
+        if (g_phase == CLI_PHASE_READ) {
+            if (g_line_len >= (int32_t)(sizeof(g_line) - 1)) {
+                console_write("\n");
+                g_line_len = 0;
                 g_phase = CLI_PHASE_PROMPT;
+                continue;
             }
-            return WASMOS_WASM_STEP_YIELDED;
-        }
-        if (ch == '\b' || ch == 0x7F) {
-            if (g_line_len > 0) {
-                g_line_len--;
-                console_write("\b \b");
+            int32_t rc = wasmos_console_read((int32_t)(uintptr_t)&g_line[g_line_len], 1);
+            if (rc == 0) {
+                continue;
             }
-            return WASMOS_WASM_STEP_YIELDED;
-        }
-        g_line_len++;
-        char echo_buf[2] = { ch, '\0' };
-        console_write(echo_buf);
-        return WASMOS_WASM_STEP_YIELDED;
-    }
+            if (rc < 0) {
+                g_phase = CLI_PHASE_FAILED;
+                console_write("[cli] console read failed\n");
+                stall_forever();
+            }
 
-    if (g_phase == CLI_PHASE_WAIT_IPC) {
-        int32_t recv_rc = wasmos_ipc_recv(g_reply_endpoint);
-        if (recv_rc == 0) {
-            return WASMOS_WASM_STEP_BLOCKED;
-        }
-        if (recv_rc < 0) {
-            g_phase = CLI_PHASE_FAILED;
-            return WASMOS_WASM_STEP_FAILED;
-        }
-        int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
-        int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
-        int32_t resp_status = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-        if (resp_req != g_pending_req) {
-            g_phase = CLI_PHASE_FAILED;
-            return WASMOS_WASM_STEP_FAILED;
-        }
-        if (resp_type == PROC_IPC_ERROR) {
-            console_write("exec failed\n");
-        } else if (resp_type == FS_IPC_ERROR || (resp_type == FS_IPC_RESP && resp_status != 0)) {
-            console_write("fs failed\n");
-        } else if (resp_type != FS_IPC_RESP && resp_type != PROC_IPC_RESP) {
-            g_phase = CLI_PHASE_FAILED;
-            return WASMOS_WASM_STEP_FAILED;
-        } else if (g_pending_kind == PENDING_EXEC && resp_type == PROC_IPC_RESP) {
-            console_write("spawned pid ");
-            console_write_u32((uint32_t)resp_status);
-            console_write("\n");
-        } else if (g_pending_kind == PENDING_CD_CHAIN) {
-            const char *tail = g_pending_cd_path;
-            if (tail[0] == '/') {
-                tail++;
+            char ch = g_line[g_line_len];
+            if (ch == '\r' || ch == '\n') {
+                console_write("\n");
+                if (cli_handle_line()) {
+                    g_phase = CLI_PHASE_WAIT_IPC;
+                } else {
+                    g_phase = CLI_PHASE_PROMPT;
+                }
+                continue;
             }
-            uint32_t packed[4];
-            cli_pack_name(tail, packed);
-            if (cli_send_fs(FS_IPC_CHDIR_REQ, packed[0], packed[1], packed[2], packed[3]) != 0) {
-                console_write("cd failed\n");
-                g_pending_req = -1;
-                g_pending_kind = PENDING_NONE;
-                g_pending_cd_use_path = 0;
-                g_phase = CLI_PHASE_PROMPT;
-                return WASMOS_WASM_STEP_YIELDED;
+            if (ch == '\b' || ch == 0x7F) {
+                if (g_line_len > 0) {
+                    g_line_len--;
+                    console_write("\b \b");
+                }
+                continue;
             }
-            g_pending_kind = PENDING_CD;
-            return WASMOS_WASM_STEP_YIELDED;
-        } else if (g_pending_kind == PENDING_CD) {
-            if (g_pending_cd_use_path) {
-                set_cwd_path(g_pending_cd_path);
-                g_pending_cd_use_path = 0;
-            } else if (g_line_len > 3) {
-                const char *path = &g_line[3];
-                set_cwd_path(path);
-            } else {
-                set_cwd_root();
-            }
+            g_line_len++;
+            char echo_buf[2] = { ch, '\0' };
+            console_write(echo_buf);
+            continue;
         }
-        g_pending_req = -1;
-        g_pending_kind = PENDING_NONE;
-        g_phase = CLI_PHASE_PROMPT;
-        return WASMOS_WASM_STEP_YIELDED;
-    }
 
-    return WASMOS_WASM_STEP_FAILED;
+        if (g_phase == CLI_PHASE_WAIT_IPC) {
+            int32_t recv_rc = wasmos_ipc_recv(g_reply_endpoint);
+            if (recv_rc < 0) {
+                g_phase = CLI_PHASE_FAILED;
+                console_write("[cli] ipc recv failed\n");
+                stall_forever();
+            }
+            int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+            int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+            int32_t resp_status = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+            if (resp_req != g_pending_req) {
+                g_phase = CLI_PHASE_FAILED;
+                console_write("[cli] ipc response mismatch\n");
+                stall_forever();
+            }
+            if (resp_type == PROC_IPC_ERROR) {
+                console_write("exec failed\n");
+            } else if (resp_type == FS_IPC_ERROR || (resp_type == FS_IPC_RESP && resp_status != 0)) {
+                console_write("fs failed\n");
+            } else if (resp_type != FS_IPC_RESP && resp_type != PROC_IPC_RESP) {
+                g_phase = CLI_PHASE_FAILED;
+                console_write("[cli] ipc response invalid\n");
+                stall_forever();
+            } else if (g_pending_kind == PENDING_EXEC && resp_type == PROC_IPC_RESP) {
+                console_write("spawned pid ");
+                console_write_u32((uint32_t)resp_status);
+                console_write("\n");
+            } else if (g_pending_kind == PENDING_CD_CHAIN) {
+                const char *tail = g_pending_cd_path;
+                if (tail[0] == '/') {
+                    tail++;
+                }
+                uint32_t packed[4];
+                cli_pack_name(tail, packed);
+                if (cli_send_fs(FS_IPC_CHDIR_REQ, packed[0], packed[1], packed[2], packed[3]) != 0) {
+                    console_write("cd failed\n");
+                    g_pending_req = -1;
+                    g_pending_kind = PENDING_NONE;
+                    g_pending_cd_use_path = 0;
+                    g_phase = CLI_PHASE_PROMPT;
+                    continue;
+                }
+                g_pending_kind = PENDING_CD;
+                continue;
+            } else if (g_pending_kind == PENDING_CD) {
+                if (g_pending_cd_use_path) {
+                    set_cwd_path(g_pending_cd_path);
+                    g_pending_cd_use_path = 0;
+                } else if (g_line_len > 3) {
+                    const char *path = &g_line[3];
+                    set_cwd_path(path);
+                } else {
+                    set_cwd_root();
+                }
+            }
+            g_pending_req = -1;
+            g_pending_kind = PENDING_NONE;
+            g_phase = CLI_PHASE_PROMPT;
+            continue;
+        }
+
+        console_write("[cli] failed\n");
+        stall_forever();
+    }
 }

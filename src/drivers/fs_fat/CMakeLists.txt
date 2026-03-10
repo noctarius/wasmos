@@ -7,7 +7,7 @@ add_custom_command(
           -Wl,--initial-memory=65536
           -Wl,--max-memory=65536
           -Wl,--allow-undefined
-          -Wl,--export=fat_step
+          -Wl,--export=initialize
           -I${DRIVER_WASM_DIR}/include
           ${WASM_FAT_DRIVER_SRC}
           -o ${WASM_FAT_DRIVER_WASM}
@@ -23,7 +23,7 @@ add_custom_command(
           ${WASM_FAT_DRIVER_WASM}
           ${WASM_FAT_APP}
           fs-fat
-          fat_step
+          initialize
           16
           16
           2

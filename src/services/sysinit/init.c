@@ -25,6 +25,8 @@ extern int32_t wasmos_ipc_recv(int32_t endpoint)
     WASMOS_WASM_IMPORT("wasmos", "ipc_recv");
 extern int32_t wasmos_ipc_last_field(int32_t field)
     WASMOS_WASM_IMPORT("wasmos", "ipc_last_field");
+extern int32_t wasmos_console_write(int32_t ptr, int32_t len)
+    WASMOS_WASM_IMPORT("wasmos", "console_write");
 extern int32_t wasmos_boot_module_name(int32_t index, int32_t buf, int32_t buf_len)
     WASMOS_WASM_IMPORT("wasmos", "boot_module_name");
 extern int32_t wasmos_proc_count(void)
@@ -32,15 +34,6 @@ extern int32_t wasmos_proc_count(void)
 extern int32_t wasmos_proc_info(int32_t index, int32_t buf, int32_t buf_len)
     WASMOS_WASM_IMPORT("wasmos", "proc_info");
 
-typedef enum {
-    INIT_PHASE_START = 0,
-    INIT_PHASE_SEND_SPAWN,
-    INIT_PHASE_WAIT_SPAWN,
-    INIT_PHASE_DONE,
-    INIT_PHASE_FAILED
-} init_phase_t;
-
-static init_phase_t g_phase = INIT_PHASE_START;
 static int32_t g_reply_endpoint = -1;
 static int32_t g_spawn_request_id = 1;
 static int32_t g_proc_endpoint = -1;
@@ -48,6 +41,17 @@ static int32_t g_module_count = 0;
 static int32_t g_init_index = -1;
 static int32_t g_next_index = 0;
 static int32_t g_pending_index = -1;
+
+static void
+stall_forever(void)
+{
+    int32_t endpoint = wasmos_ipc_create_endpoint();
+    for (;;) {
+        if (endpoint >= 0) {
+            (void)wasmos_ipc_recv(endpoint);
+        }
+    }
+}
 
 static int
 str_eq(const char *a, const char *b)
@@ -63,6 +67,21 @@ str_eq(const char *a, const char *b)
         i++;
     }
     return a[i] == '\0' && b[i] == '\0';
+}
+
+static void
+log_line(const char *s)
+{
+    if (!s) {
+        return;
+    }
+    int len = 0;
+    while (s[len]) {
+        len++;
+    }
+    if (len > 0) {
+        wasmos_console_write((int32_t)(uintptr_t)s, len);
+    }
 }
 
 static int
@@ -104,44 +123,39 @@ should_skip_module(int32_t index)
 }
 
 WASMOS_WASM_EXPORT int32_t
-init_step(int32_t ignored_type,
-          int32_t proc_endpoint,
-          int32_t module_count,
-          int32_t init_index,
-          int32_t ignored_arg3)
+initialize(int32_t proc_endpoint,
+           int32_t module_count,
+           int32_t init_index,
+           int32_t ignored_arg3)
 {
-    (void)ignored_type;
     (void)ignored_arg3;
 
-    if (g_phase == INIT_PHASE_START) {
-        g_reply_endpoint = wasmos_ipc_create_endpoint();
-        if (g_reply_endpoint < 0) {
-            g_phase = INIT_PHASE_FAILED;
-            return WASMOS_WASM_STEP_FAILED;
-        }
-
-        if (proc_endpoint < 0 || module_count <= 0 || init_index < 0) {
-            g_phase = INIT_PHASE_FAILED;
-            return WASMOS_WASM_STEP_FAILED;
-        }
-
-        g_proc_endpoint = proc_endpoint;
-        g_module_count = module_count;
-        g_init_index = init_index;
-        g_next_index = 0;
-        g_pending_index = -1;
-        g_phase = INIT_PHASE_SEND_SPAWN;
-        return WASMOS_WASM_STEP_YIELDED;
+    g_reply_endpoint = wasmos_ipc_create_endpoint();
+    if (g_reply_endpoint < 0) {
+        log_line("[sysinit] failed to create reply endpoint\n");
+        stall_forever();
     }
 
-    if (g_phase == INIT_PHASE_SEND_SPAWN) {
+    if (proc_endpoint < 0 || module_count <= 0 || init_index < 0) {
+        log_line("[sysinit] invalid init args\n");
+        stall_forever();
+    }
+
+    g_proc_endpoint = proc_endpoint;
+    g_module_count = module_count;
+    g_init_index = init_index;
+    g_next_index = 0;
+    g_pending_index = -1;
+    log_line("[sysinit] start\n");
+
+    for (;;) {
         while (g_next_index < g_module_count &&
                (g_next_index == g_init_index || should_skip_module(g_next_index))) {
             g_next_index++;
         }
         if (g_next_index >= g_module_count) {
-            g_phase = INIT_PHASE_DONE;
-            return WASMOS_WASM_STEP_DONE;
+            (void)wasmos_ipc_recv(g_reply_endpoint);
+            continue;
         }
 
         char name[32];
@@ -150,8 +164,12 @@ init_step(int32_t ignored_type,
                                     (int32_t)(uintptr_t)name,
                                     (int32_t)sizeof(name)) >= 0 &&
             str_eq(name, "cli") && !proc_running("fs-fat")) {
-            return WASMOS_WASM_STEP_YIELDED;
+            continue;
         }
+
+        log_line("[sysinit] spawn ");
+        log_line(name);
+        log_line("\n");
 
         if (wasmos_ipc_send(g_proc_endpoint, g_reply_endpoint,
                             PROC_IPC_SPAWN,
@@ -160,50 +178,31 @@ init_step(int32_t ignored_type,
                             0,
                             0,
                             0) != 0) {
-            g_phase = INIT_PHASE_FAILED;
-            return WASMOS_WASM_STEP_FAILED;
+            log_line("[sysinit] spawn send failed\n");
+            stall_forever();
         }
 
         g_pending_index = g_next_index;
-        g_phase = INIT_PHASE_WAIT_SPAWN;
-        return WASMOS_WASM_STEP_YIELDED;
-    }
 
-    if (g_phase == INIT_PHASE_WAIT_SPAWN) {
         int32_t recv_rc = wasmos_ipc_recv(g_reply_endpoint);
-        if (recv_rc == 0) {
-            return WASMOS_WASM_STEP_BLOCKED;
-        }
         if (recv_rc < 0) {
-            g_phase = INIT_PHASE_FAILED;
-            return WASMOS_WASM_STEP_FAILED;
+            log_line("[sysinit] spawn recv failed\n");
+            stall_forever();
         }
 
         int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
         int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
         if (resp_req != g_spawn_request_id) {
-            g_phase = INIT_PHASE_FAILED;
-            return WASMOS_WASM_STEP_FAILED;
-        }
-        if (resp_type == PROC_IPC_ERROR) {
-            g_phase = INIT_PHASE_FAILED;
-            return WASMOS_WASM_STEP_FAILED;
+            log_line("[sysinit] spawn response mismatch\n");
+            stall_forever();
         }
         if (resp_type != PROC_IPC_RESP) {
-            g_phase = INIT_PHASE_FAILED;
-            return WASMOS_WASM_STEP_FAILED;
+            log_line("[sysinit] spawn failed\n");
+            stall_forever();
         }
 
         g_spawn_request_id++;
         g_next_index = g_pending_index + 1;
         g_pending_index = -1;
-        g_phase = INIT_PHASE_SEND_SPAWN;
-        return WASMOS_WASM_STEP_YIELDED;
     }
-
-    if (g_phase == INIT_PHASE_DONE) {
-        return WASMOS_WASM_STEP_DONE;
-    }
-
-    return WASMOS_WASM_STEP_FAILED;
 }

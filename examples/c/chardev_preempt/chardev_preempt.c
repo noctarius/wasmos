@@ -36,127 +36,76 @@ write_line(const char *s, int32_t len)
     }
 }
 
-static int
-wait_for_response(int32_t endpoint,
-                  int32_t expected_type,
-                  int32_t expected_req,
-                  int32_t expected_value,
-                  int32_t *out_value)
-{
-    const uint32_t spin_limit = 5000000u;
-    for (uint32_t i = 0; i < spin_limit; ++i) {
-        int32_t rc = wasmos_ipc_recv(endpoint);
-        if (rc < 0) {
-            return -1;
-        }
-        if (rc == 0) {
-            continue;
-        }
-
-        int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
-        int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
-        int32_t resp_status = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-        int32_t resp_value = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
-        if (resp_type != expected_type || resp_req != expected_req || resp_status != 0) {
-            return -1;
-        }
-        if (out_value) {
-            *out_value = resp_value;
-        }
-        if (expected_value >= 0 && (resp_value & 0xFF) != (expected_value & 0xFF)) {
-            return -1;
-        }
-        return 0;
-    }
-    return -2;
-}
-
 WASMOS_WASM_EXPORT int32_t
-chardev_preempt_step(int32_t ignored_type,
-                     int32_t chardev_endpoint,
-                     int32_t ignored_arg1,
-                     int32_t ignored_arg2,
-                     int32_t ignored_arg3)
+main(int32_t chardev_endpoint,
+     int32_t ignored_arg1,
+     int32_t ignored_arg2,
+     int32_t ignored_arg3)
 {
-    static int phase = 0;
-    static int32_t reply_endpoint = -1;
-    static const int32_t write_req = 101;
-    static const int32_t read_req = 102;
-    static const int32_t write_value = 0x5A;
-
-    (void)ignored_type;
     (void)ignored_arg1;
     (void)ignored_arg2;
     (void)ignored_arg3;
 
-    if (phase == 0) {
-        reply_endpoint = wasmos_ipc_create_endpoint();
-        if (reply_endpoint < 0) {
-            return WASMOS_WASM_STEP_FAILED;
-        }
-        if (wasmos_ipc_send(chardev_endpoint,
-                            reply_endpoint,
-                            WASM_CHARDEV_IPC_WRITE_REQ,
-                            write_req,
-                            write_value,
-                            0,
-                            0,
-                            0) != 0) {
-            return WASMOS_WASM_STEP_FAILED;
-        }
-        phase = 1;
+    int32_t reply_endpoint = wasmos_ipc_create_endpoint();
+    if (reply_endpoint < 0) {
+        return -1;
     }
 
-    if (phase == 1) {
-        int rc = wait_for_response(reply_endpoint,
-                                   WASM_CHARDEV_IPC_WRITE_RESP,
-                                   write_req,
-                                   write_value,
-                                   0);
-        if (rc == -2) {
-            static const char msg[] = "chardev-preempt: write timeout\n";
-            write_line(msg, (int32_t)(sizeof(msg) - 1));
-            return WASMOS_WASM_STEP_FAILED;
-        }
-        if (rc != 0) {
-            return WASMOS_WASM_STEP_FAILED;
-        }
-        if (wasmos_ipc_send(chardev_endpoint,
-                            reply_endpoint,
-                            WASM_CHARDEV_IPC_READ_REQ,
-                            read_req,
-                            0,
-                            0,
-                            0,
-                            0) != 0) {
-            return WASMOS_WASM_STEP_FAILED;
-        }
-        phase = 2;
+    const int32_t write_req = 101;
+    const int32_t read_req = 102;
+    const int32_t write_value = 0x5A;
+
+    if (wasmos_ipc_send(chardev_endpoint,
+                        reply_endpoint,
+                        WASM_CHARDEV_IPC_WRITE_REQ,
+                        write_req,
+                        write_value,
+                        0,
+                        0,
+                        0) != 0) {
+        return -1;
     }
 
-    if (phase == 2) {
-        int32_t value = -1;
-        int rc = wait_for_response(reply_endpoint,
-                                   WASM_CHARDEV_IPC_READ_RESP,
-                                   read_req,
-                                   write_value,
-                                   &value);
-        if (rc == -2) {
-            static const char msg[] = "chardev-preempt: read timeout\n";
-            write_line(msg, (int32_t)(sizeof(msg) - 1));
-            return WASMOS_WASM_STEP_FAILED;
-        }
-        if (rc != 0) {
-            return WASMOS_WASM_STEP_FAILED;
-        }
-        static const char ok[] = "chardev-preempt: ok\n";
-        write_line(ok, (int32_t)(sizeof(ok) - 1));
-        phase = 3;
+    if (wasmos_ipc_recv(reply_endpoint) < 0) {
+        return -1;
+    }
+    int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+    int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+    int32_t resp_status = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+    int32_t resp_value = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+    if (resp_type != WASM_CHARDEV_IPC_WRITE_RESP
+        || resp_req != write_req
+        || resp_status != 0
+        || (resp_value & 0xFF) != (write_value & 0xFF)) {
+        return -1;
     }
 
-    if (phase == 3) {
-        return WASMOS_WASM_STEP_DONE;
+    if (wasmos_ipc_send(chardev_endpoint,
+                        reply_endpoint,
+                        WASM_CHARDEV_IPC_READ_REQ,
+                        read_req,
+                        0,
+                        0,
+                        0,
+                        0) != 0) {
+        return -1;
     }
 
-    return WASMOS_WASM_STEP_FAILED;
+    if (wasmos_ipc_recv(reply_endpoint) < 0) {
+        return -1;
+    }
+    resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+    resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+    resp_status = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+    resp_value = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+    if (resp_type != WASM_CHARDEV_IPC_READ_RESP
+        || resp_req != read_req
+        || resp_status != 0
+        || (resp_value & 0xFF) != (write_value & 0xFF)) {
+        return -1;
+    }
+
+    static const char ok[] = "chardev-preempt: ok\n";
+    write_line(ok, (int32_t)(sizeof(ok) - 1));
+    return 0;
 }

@@ -7,7 +7,7 @@ add_custom_command(
           -Wl,--initial-memory=65536
           -Wl,--max-memory=65536
           -Wl,--allow-undefined
-          -Wl,--export=ata_step
+          -Wl,--export=initialize
           -I${DRIVER_WASM_DIR}/include
           ${WASM_ATA_DRIVER_SRC}
           -o ${WASM_ATA_DRIVER_WASM}
@@ -23,7 +23,7 @@ add_custom_command(
           ${WASM_ATA_DRIVER_WASM}
           ${WASM_ATA_APP}
           ata
-          ata_step
+          initialize
           16
           16
           1

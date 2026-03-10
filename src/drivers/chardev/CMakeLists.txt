@@ -10,7 +10,7 @@ add_custom_command(
           -Wl,--export=initialize
           -Wl,--export=chardev_read_byte
           -Wl,--export=chardev_write_byte
-          -Wl,--export=chardev_ipc_dispatch
+          -Wl,--export=dispatch
           -I${DRIVER_WASM_DIR}/include
           ${WASM_CHARDEV_DRIVER_SRC}
           -o ${WASM_CHARDEV_DRIVER_WASM}

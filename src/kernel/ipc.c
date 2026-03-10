@@ -88,6 +88,15 @@ int ipc_endpoint_owner(uint32_t endpoint, uint32_t *out_owner_context_id) {
     return IPC_OK;
 }
 
+int ipc_endpoint_count(uint32_t endpoint, uint32_t *out_count) {
+    ipc_endpoint_t *ep = ipc_endpoint_get(endpoint);
+    if (!ep || !out_count) {
+        return IPC_ERR_INVALID;
+    }
+    *out_count = ep->count;
+    return IPC_OK;
+}
+
 int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_message_t *message) {
     ipc_endpoint_t *ep = ipc_endpoint_get(endpoint);
     if (!ep || !message) {

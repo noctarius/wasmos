@@ -50,7 +50,7 @@ Kernel responsibilities:
 - Basic scheduling and process lifecycle.
 - Memory management mechanisms (page tables, region mapping, allocation primitives).
 - Interrupt and timer dispatch to user space via nonblocking notifications.
-- Embedded WASM drivers use an `initialize` entry for one-time setup.
+- Embedded WASM drivers use an `initialize` entry as their long-running execution loop.
 
 ### Scheduler
 Current policy is round-robin with a fixed time slice (see `PROCESS_DEFAULT_SLICE_TICKS` in `src/kernel/include/process.h`).
@@ -514,11 +514,12 @@ Design takeaways:
 - The current system starts a dedicated `chardev-server` process and assigns its context ID as the owner of the chardev IPC endpoint.
 - The current system starts a kernel `init` process that is the root parent for all kernel-spawned processes, and it spawns the `process-manager` (owner of the `proc` endpoint).
 - The process manager spawns the user-space `sysinit` WASMOS-APP boot module after a kernel-init request and passes the `proc` endpoint plus boot module metadata.
+- WASMOS-APPs use `main` for applications and `initialize` for drivers/services; the process manager calls the entry once and expects drivers/services to loop internally while apps return on completion.
 - The user-space `sysinit` module spawns remaining boot modules via `proc`, and the chardev client uses imported IPC primitives to issue write/read requests.
 - A minimal PIO ATA block driver runs as a WASMOS-APP service (`src/drivers/ata`), and the process manager assigns it the `block` IPC endpoint.
 - A FAT12/16/32 filesystem driver runs as a WASMOS-APP service, uses the `block` IPC endpoint for sector reads, and exposes the `fs` IPC endpoint (root + single-subdir `ls`/`cat`/`cd` with VFAT LFN support).
 - A minimal user-space `cli` WASMOS-APP is loaded as a boot module, reads serial input, and supports `help`, `ps`, `ls`, and `cat` via small native helpers.
-- The chardev server returns `BLOCKED` when no IPC message is pending, reducing scheduler churn while idle.
+- The chardev server blocks in `ipc_recv` when no IPC message is pending, reducing scheduler churn while idle.
 
 ## WAMR Integration (Current Scaffold)
 - WAMR is vendored via git subtree at `libs/wasm/wasm-micro-runtime`.
@@ -535,10 +536,10 @@ Planned:
 - Current scaffold includes project-owned wasm application examples under `examples/` (C, AssemblyScript, Rust, Go, and Zig).
 - The build compiles the chardev server driver (`src/drivers/chardev`) and chardev client example into `.wasm` binaries and embeds them into the kernel image as binary blobs.
 - Driver wasm binaries are linked with explicit stack and initial/max memory bounds to keep freestanding instantiation deterministic.
-- A kernel wasm driver host (`src/kernel/wasm_driver.c`) loads embedded modules, instantiates them with WAMR, allocates IPC endpoints, and dispatches IPC messages to a driver export.
-- The chardev service (`src/kernel/wasm_chardev.c`) runs in the spawned `chardev-server` process and bridges IPC request/response traffic to the wasm export `chardev_ipc_dispatch`.
-- The wasm chardev module also exports `chardev_init` and optional direct byte helpers (`chardev_read_byte`, `chardev_write_byte`).
-- The wasm chardev test-client module exports `chardev_client_step` and consumes imported IPC APIs (`ipc_create_endpoint`, `ipc_send`, `ipc_recv`, `ipc_last_field`) from native module `wasmos`.
+- A kernel wasm driver host (`src/kernel/wasm_driver.c`) loads embedded modules, instantiates them with WAMR, allocates IPC endpoints, and starts a long-running driver entry.
+- The chardev service (`src/kernel/wasm_chardev.c`) runs in the spawned `chardev-server` process and lets the driver handle IPC request/response traffic directly.
+- The wasm chardev module exports `initialize` as its long-running entry.
+- The wasm chardev test-client module exports `main` and consumes imported IPC APIs (`ipc_create_endpoint`, `ipc_send`, `ipc_recv`, `ipc_last_field`) from native module `wasmos`.
 
 Planned:
 - Enumerate hardware via ACPI and PCI.
@@ -731,6 +732,7 @@ struct wasmos_mem_hint {
 Notes:
 - The loader validates sizes and bounds; tables are optional if counts are zero.
 - The `entry` name maps to the WASM export to call on start.
+- Applications export `main`; drivers and services export `initialize` as their long-running entry.
 - IPC endpoint names resolve through the service registry; rights are enforced by
   kernel IPC permissions.
 
@@ -758,7 +760,7 @@ Current implementation (kernel scaffold):
 - CLI integration tests include executing `hello-zig` and asserting its banner output before returning to the prompt.
 - IDE indexing targets (`bootloader_ide`, `kernel_ide`) include all project C/H sources for CLion, including drivers/services/examples and WAMR platform stubs.
   - IDE targets also export include directories for kernel/drivers/WAMR headers to improve CLion resolution.
-- Zig WASMOS-APP builds force-export the entry symbol (the build passes `--export=hello_zig_step`) so the entry function is retained.
+- Zig WASMOS-APP builds force-export the entry symbol (the build passes `--export=wasmos_entry`) so the entry function is retained.
 If OVMF isn't found, pass `-DOVMF_CODE=/path/to/OVMF_CODE.fd` at configure time.
 macOS/Homebrew: `brew install edk2-ovmf`.
 When running QEMU, we use `if=pflash` with OVMF code/vars; set `-DOVMF_VARS=/path/to/OVMF_VARS.fd` if available.

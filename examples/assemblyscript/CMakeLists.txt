@@ -26,7 +26,7 @@ if (AS_ENABLE)
             ${AS_HELLO_WASM}
             ${AS_HELLO_APP}
             hello-as
-            hello_step
+            main
             16
             16
             4

@@ -26,112 +26,66 @@ extern int32_t wasmos_ipc_recv(int32_t endpoint)
 extern int32_t wasmos_ipc_last_field(int32_t field)
     WASMOS_WASM_IMPORT("wasmos", "ipc_last_field");
 
-typedef enum {
-    CLIENT_PHASE_INIT = 0,
-    CLIENT_PHASE_WAIT_WRITE,
-    CLIENT_PHASE_WAIT_READ,
-    CLIENT_PHASE_DONE,
-    CLIENT_PHASE_FAILED
-} client_phase_t;
-
-static client_phase_t g_phase = CLIENT_PHASE_INIT;
-static int32_t g_reply_endpoint = -1;
-static int32_t g_write_request_id = 1;
-static int32_t g_read_request_id = 2;
-static int32_t g_write_value = 0x41;
-
 WASMOS_WASM_EXPORT int32_t
-chardev_client_step(int32_t ignored_type,
-                    int32_t chardev_endpoint,
-                    int32_t ignored_arg1,
-                    int32_t ignored_arg2,
-                    int32_t ignored_arg3)
+main(int32_t chardev_endpoint,
+     int32_t ignored_arg1,
+     int32_t ignored_arg2,
+     int32_t ignored_arg3)
 {
-    (void)ignored_type;
     (void)ignored_arg1;
     (void)ignored_arg2;
     (void)ignored_arg3;
 
-    if (g_phase == CLIENT_PHASE_INIT) {
-        g_reply_endpoint = wasmos_ipc_create_endpoint();
-        if (g_reply_endpoint < 0) {
-            g_phase = CLIENT_PHASE_FAILED;
-            return WASMOS_WASM_STEP_FAILED;
-        }
-
-        if (wasmos_ipc_send(chardev_endpoint, g_reply_endpoint,
-                            WASM_CHARDEV_IPC_WRITE_REQ,
-                            g_write_request_id, g_write_value, 0, 0, 0) != 0) {
-            g_phase = CLIENT_PHASE_FAILED;
-            return WASMOS_WASM_STEP_FAILED;
-        }
-
-        g_phase = CLIENT_PHASE_WAIT_WRITE;
-        return WASMOS_WASM_STEP_YIELDED;
+    int32_t reply_endpoint = wasmos_ipc_create_endpoint();
+    if (reply_endpoint < 0) {
+        return -1;
     }
 
-    if (g_phase == CLIENT_PHASE_WAIT_WRITE) {
-        int32_t recv_rc = wasmos_ipc_recv(g_reply_endpoint);
-        if (recv_rc == 0) {
-            return WASMOS_WASM_STEP_BLOCKED;
-        }
-        if (recv_rc < 0) {
-            g_phase = CLIENT_PHASE_FAILED;
-            return WASMOS_WASM_STEP_FAILED;
-        }
+    int32_t write_request_id = 1;
+    int32_t read_request_id = 2;
+    int32_t write_value = 0x41;
 
-        int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
-        int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
-        int32_t resp_status = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-        int32_t resp_value = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
-        if (resp_type != WASM_CHARDEV_IPC_WRITE_RESP
-            || resp_req != g_write_request_id
-            || resp_status != 0
-            || (resp_value & 0xFF) != (g_write_value & 0xFF)) {
-            g_phase = CLIENT_PHASE_FAILED;
-            return WASMOS_WASM_STEP_FAILED;
-        }
-
-        if (wasmos_ipc_send(chardev_endpoint, g_reply_endpoint,
-                            WASM_CHARDEV_IPC_READ_REQ,
-                            g_read_request_id, 0, 0, 0, 0) != 0) {
-            g_phase = CLIENT_PHASE_FAILED;
-            return WASMOS_WASM_STEP_FAILED;
-        }
-
-        g_phase = CLIENT_PHASE_WAIT_READ;
-        return WASMOS_WASM_STEP_YIELDED;
+    if (wasmos_ipc_send(chardev_endpoint, reply_endpoint,
+                        WASM_CHARDEV_IPC_WRITE_REQ,
+                        write_request_id, write_value, 0, 0, 0) != 0) {
+        return -1;
     }
 
-    if (g_phase == CLIENT_PHASE_WAIT_READ) {
-        int32_t recv_rc = wasmos_ipc_recv(g_reply_endpoint);
-        if (recv_rc == 0) {
-            return WASMOS_WASM_STEP_BLOCKED;
-        }
-        if (recv_rc < 0) {
-            g_phase = CLIENT_PHASE_FAILED;
-            return WASMOS_WASM_STEP_FAILED;
-        }
-
-        int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
-        int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
-        int32_t resp_status = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-        int32_t resp_value = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
-        if (resp_type != WASM_CHARDEV_IPC_READ_RESP
-            || resp_req != g_read_request_id
-            || resp_status != 0
-            || (resp_value & 0xFF) != (g_write_value & 0xFF)) {
-            g_phase = CLIENT_PHASE_FAILED;
-            return WASMOS_WASM_STEP_FAILED;
-        }
-
-        g_phase = CLIENT_PHASE_DONE;
-        return WASMOS_WASM_STEP_DONE;
+    if (wasmos_ipc_recv(reply_endpoint) < 0) {
+        return -1;
     }
 
-    if (g_phase == CLIENT_PHASE_DONE) {
-        return WASMOS_WASM_STEP_DONE;
+    int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+    int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+    int32_t resp_status = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+    int32_t resp_value = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+    if (resp_type != WASM_CHARDEV_IPC_WRITE_RESP
+        || resp_req != write_request_id
+        || resp_status != 0
+        || (resp_value & 0xFF) != (write_value & 0xFF)) {
+        return -1;
     }
 
-    return WASMOS_WASM_STEP_FAILED;
+    if (wasmos_ipc_send(chardev_endpoint, reply_endpoint,
+                        WASM_CHARDEV_IPC_READ_REQ,
+                        read_request_id, 0, 0, 0, 0) != 0) {
+        return -1;
+    }
+
+    if (wasmos_ipc_recv(reply_endpoint) < 0) {
+        return -1;
+    }
+
+    resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+    resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+    resp_status = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+    resp_value = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+    if (resp_type != WASM_CHARDEV_IPC_READ_RESP
+        || resp_req != read_request_id
+        || resp_status != 0
+        || (resp_value & 0xFF) != (write_value & 0xFF)) {
+        return -1;
+    }
+
+    return 0;
 }

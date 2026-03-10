@@ -12,7 +12,7 @@ if SCRIPTS not in sys.path:
 from qemu_test_framework import QemuSession, default_config
 
 
-class HelloRustTest(unittest.TestCase):
+class InitSmokeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cfg = default_config()
@@ -28,29 +28,18 @@ class HelloRustTest(unittest.TestCase):
             cls.session.send("halt")
             cls.session.close()
 
-    def _cmd_expect(self, cmd: str, needles: list[bytes], timeout_s: int = 20) -> None:
+    def _cmd_expect(self, cmd: str, needle: bytes, timeout_s: int = 10) -> None:
         mark = self.session.mark()
         self.session.send(cmd)
-        for needle in needles:
-            ok = self.session.expect_from(mark, needle, timeout_s=timeout_s)
-            if not ok:
-                self.fail(
-                    f"Expected output not found for '{cmd}': {needle!r}\n--- tail ---\n{self.session.tail()}\n"
-                )
+        ok = self.session.expect_from(mark, needle, timeout_s=timeout_s)
+        if not ok:
+            self.fail(f"Expected output not found for '{cmd}'.\n--- tail ---\n{self.session.tail()}\n")
         ok = self.session.expect_from(mark, b"wamos> ", timeout_s=timeout_s)
         if not ok:
             self.fail(f"Prompt not found after '{cmd}'.\n--- tail ---\n{self.session.tail()}\n")
 
-    def test_exec_hello_rust(self):
-        self._cmd_expect("cd apps", [b"/apps wamos>"])
-        self._cmd_expect(
-            "exec hello-rust",
-            [
-                b"spawned pid",
-                b"Hello from Rust on WASMOS!",
-                b"Entry: main",
-            ],
-        )
+    def test_init_smoke_runs(self):
+        self._cmd_expect("exec init-smoke", b"init-smoke: init done")
 
 
 if __name__ == "__main__":

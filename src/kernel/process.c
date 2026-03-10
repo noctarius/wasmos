@@ -1,6 +1,7 @@
 #include "process.h"
 #include "memory.h"
 #include "physmem.h"
+#include "serial.h"
 
 static process_t g_processes[PROCESS_MAX_COUNT];
 static uint32_t g_next_pid;
@@ -16,14 +17,76 @@ static uint32_t g_ready_tail;
 static uint32_t g_ready_count;
 static process_t *g_current_process;
 static process_run_result_t g_last_run_result;
-static process_context_t g_sched_ctx;
+process_context_t g_sched_ctx;
 static uint32_t g_preempt_disable_count;
 static process_t *g_idle_process;
 volatile uint8_t g_in_context_switch;
+volatile uint8_t g_in_scheduler;
+
+extern uint8_t __kernel_start;
+extern uint8_t __kernel_end;
 
 #define PAGE_SIZE 0x1000u
 
 extern void context_switch(process_context_t *out, process_context_t *in);
+extern void context_switch_to(process_context_t *in);
+
+static void process_log_hex64(uint64_t value) {
+    char buf[21];
+    static const char hex[] = "0123456789ABCDEF";
+    buf[0] = '0';
+    buf[1] = 'x';
+    for (int i = 0; i < 16; ++i) {
+        buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
+    }
+    buf[18] = '\n';
+    buf[19] = '\0';
+    serial_write(buf);
+}
+
+static int process_str_eq(const char *a, const char *b) {
+    if (!a || !b) {
+        return 0;
+    }
+    while (*a || *b) {
+        if (*a != *b) {
+            return 0;
+        }
+        if (*a == '\0') {
+            break;
+        }
+        ++a;
+        ++b;
+    }
+    return 1;
+}
+
+static void process_validate_context(process_t *proc, const char *where) {
+    if (!proc) {
+        return;
+    }
+    uint64_t rip = proc->ctx.rip;
+    uint64_t start = (uint64_t)(uintptr_t)&__kernel_start;
+    uint64_t end = (uint64_t)(uintptr_t)&__kernel_end;
+    if (rip >= start && rip < end) {
+        return;
+    }
+    serial_write("[sched] invalid rip in ");
+    if (where) {
+        serial_write(where);
+    }
+    serial_write(" pid=");
+    process_log_hex64(proc->pid);
+    serial_write("[sched] name=");
+    serial_write(proc->name ? proc->name : "(null)");
+    serial_write("\n[sched] rip=");
+    process_log_hex64(rip);
+    serial_write("[sched] rsp=");
+    process_log_hex64(proc->ctx.rsp);
+    for (;;) {
+        __asm__ volatile("hlt");
+    }
+}
 
 static void ready_queue_reset(void) {
     g_ready_head = 0;
@@ -67,23 +130,20 @@ static process_t *ready_queue_dequeue(void) {
 
 static void process_trampoline(void) {
     for (;;) {
+        g_in_scheduler = 0;
+        preempt_enable();
         if (!g_current_process || !g_current_process->entry) {
             g_last_run_result = PROCESS_RUN_IDLE;
         } else {
             g_last_run_result = g_current_process->entry(g_current_process, g_current_process->arg);
         }
+        critical_section_enter();
+        g_in_scheduler = 1;
         context_switch(&g_current_process->ctx, &g_sched_ctx);
     }
 }
 
-__attribute__((noreturn)) void
-process_preempt_trampoline(void)
-{
-    process_yield(PROCESS_RUN_YIELDED);
-    for (;;) {
-        __asm__ volatile("hlt");
-    }
-}
+extern void process_preempt_trampoline(void);
 
 static void process_reset_slot(process_t *proc) {
     if (!proc) {
@@ -191,6 +251,7 @@ void process_init(void) {
     g_last_run_result = PROCESS_RUN_IDLE;
     g_preempt_disable_count = 0;
     g_idle_process = 0;
+    g_in_scheduler = 1;
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         process_reset_slot(&g_processes[i]);
     }
@@ -240,6 +301,16 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
     slot->ctx.rsp = slot->stack_top - 8u;
     slot->ctx.rip = (uint64_t)(uintptr_t)process_trampoline;
     slot->ctx.rflags = 0x200;
+    if (process_str_eq(name, "preempt-busy")) {
+        serial_write("[sched] spawn preempt-busy rip=");
+        process_log_hex64(slot->ctx.rip);
+        serial_write("[sched] spawn preempt-busy rsp=");
+        process_log_hex64(slot->ctx.rsp);
+        serial_write("[sched] spawn preempt-busy stack base=");
+        process_log_hex64(slot->stack_base);
+        serial_write("[sched] spawn preempt-busy stack top=");
+        process_log_hex64(slot->stack_top);
+    }
     ready_queue_enqueue(slot);
     *out_pid = pid;
     return 0;
@@ -429,12 +500,17 @@ int process_schedule_once(void) {
     if (proc->ticks_remaining == 0) {
         proc->ticks_remaining = proc->time_slice_ticks;
     }
+    process_validate_context(proc, "schedule");
+    critical_section_enter();
     g_current_pid = proc->pid;
     g_current_process = proc;
+    critical_section_leave();
     context_switch(&g_sched_ctx, &proc->ctx);
     process_run_result_t result = g_last_run_result;
+    critical_section_enter();
     g_current_process = 0;
     g_current_pid = 0;
+    critical_section_leave();
 
     if (result == PROCESS_RUN_EXITED) {
         process_mark_exited(proc, proc->exit_status);
@@ -484,6 +560,9 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     if (!frame) {
         return 0;
     }
+    if (g_in_scheduler) {
+        return 0;
+    }
     if (g_in_context_switch) {
         return 0;
     }
@@ -495,21 +574,22 @@ int process_preempt_from_irq(irq_frame_t *frame) {
         return 0;
     }
 
-    g_current_process->ctx.r15 = frame->r15;
-    g_current_process->ctx.r14 = frame->r14;
-    g_current_process->ctx.r13 = frame->r13;
-    g_current_process->ctx.r12 = frame->r12;
-    g_current_process->ctx.r11 = frame->r11;
-    g_current_process->ctx.r10 = frame->r10;
-    g_current_process->ctx.r9 = frame->r9;
-    g_current_process->ctx.r8 = frame->r8;
-    g_current_process->ctx.rdi = frame->rdi;
-    g_current_process->ctx.rsi = frame->rsi;
-    g_current_process->ctx.rbp = frame->rbp;
-    g_current_process->ctx.rdx = frame->rdx;
-    g_current_process->ctx.rcx = frame->rcx;
-    g_current_process->ctx.rbx = frame->rbx;
+    process_validate_context(g_current_process, "preempt");
     g_current_process->ctx.rax = frame->rax;
+    g_current_process->ctx.rbx = frame->rbx;
+    g_current_process->ctx.rcx = frame->rcx;
+    g_current_process->ctx.rdx = frame->rdx;
+    g_current_process->ctx.rbp = frame->rbp;
+    g_current_process->ctx.rsi = frame->rsi;
+    g_current_process->ctx.rdi = frame->rdi;
+    g_current_process->ctx.r8 = frame->r8;
+    g_current_process->ctx.r9 = frame->r9;
+    g_current_process->ctx.r10 = frame->r10;
+    g_current_process->ctx.r11 = frame->r11;
+    g_current_process->ctx.r12 = frame->r12;
+    g_current_process->ctx.r13 = frame->r13;
+    g_current_process->ctx.r14 = frame->r14;
+    g_current_process->ctx.r15 = frame->r15;
     g_current_process->ctx.rsp = (uint64_t)((uintptr_t)frame + sizeof(irq_frame_t));
     g_current_process->ctx.rip = frame->rip;
     g_current_process->ctx.rflags = frame->rflags;
@@ -535,6 +615,18 @@ void preempt_enable(void) {
 
 int preempt_is_enabled(void) {
     return g_preempt_disable_count == 0;
+}
+
+uint32_t preempt_disable_depth(void) {
+    return g_preempt_disable_count;
+}
+
+void critical_section_enter(void) {
+    preempt_disable();
+}
+
+void critical_section_leave(void) {
+    preempt_enable();
 }
 
 uint32_t process_count_active(void) {

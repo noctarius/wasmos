@@ -7,7 +7,7 @@ add_custom_command(
           -Wl,--initial-memory=65536
           -Wl,--max-memory=65536
           -Wl,--allow-undefined
-          -Wl,--export=cli_step
+          -Wl,--export=initialize
           -I${DRIVER_WASM_DIR}/include
           ${WASM_CLI_APP_SRC}
           -o ${WASM_CLI_APP_WASM}
@@ -23,7 +23,7 @@ add_custom_command(
           ${WASM_CLI_APP_WASM}
           ${WASM_CLI_APP}
           cli
-          cli_step
+          initialize
           16
           16
           4

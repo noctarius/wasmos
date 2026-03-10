@@ -33,7 +33,7 @@ if (GO_AVAILABLE)
             ${WASM_HELLO_GO_WASM}
             ${WASM_HELLO_GO_APP}
             hello-go
-            hello_go_step
+            wasmos_entry
             16
             16
             4

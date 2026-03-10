@@ -37,28 +37,28 @@ _Static_assert(offsetof(process_context_t, rip) == 128, "process_context_t rip o
 _Static_assert(offsetof(process_context_t, rflags) == 136, "process_context_t rflags offset mismatch");
 
 typedef struct {
-    uint64_t r15;
-    uint64_t r14;
-    uint64_t r13;
-    uint64_t r12;
-    uint64_t r11;
-    uint64_t r10;
-    uint64_t r9;
-    uint64_t r8;
-    uint64_t rdi;
-    uint64_t rsi;
-    uint64_t rbp;
-    uint64_t rdx;
-    uint64_t rcx;
-    uint64_t rbx;
     uint64_t rax;
+    uint64_t rbx;
+    uint64_t rcx;
+    uint64_t rdx;
+    uint64_t rbp;
+    uint64_t rsi;
+    uint64_t rdi;
+    uint64_t r8;
+    uint64_t r9;
+    uint64_t r10;
+    uint64_t r11;
+    uint64_t r12;
+    uint64_t r13;
+    uint64_t r14;
+    uint64_t r15;
     uint64_t rip;
     uint64_t cs;
     uint64_t rflags;
 } irq_frame_t;
 
-_Static_assert(offsetof(irq_frame_t, r15) == 0, "irq_frame_t r15 offset mismatch");
-_Static_assert(offsetof(irq_frame_t, rax) == 112, "irq_frame_t rax offset mismatch");
+_Static_assert(offsetof(irq_frame_t, rax) == 0, "irq_frame_t rax offset mismatch");
+_Static_assert(offsetof(irq_frame_t, r15) == 112, "irq_frame_t r15 offset mismatch");
 _Static_assert(offsetof(irq_frame_t, rip) == 120, "irq_frame_t rip offset mismatch");
 
 typedef enum {
@@ -129,6 +129,9 @@ int process_preempt_from_irq(irq_frame_t *frame);
 void preempt_disable(void);
 void preempt_enable(void);
 int preempt_is_enabled(void);
+uint32_t preempt_disable_depth(void);
+void critical_section_enter(void);
+void critical_section_leave(void);
 uint32_t process_count_active(void);
 uint32_t process_ready_count(void);
 int process_info_at(uint32_t index, uint32_t *out_pid, const char **out_name);

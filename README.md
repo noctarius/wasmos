@@ -15,6 +15,7 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - `examples/zig/` Example Zig WASM applications.
 - `src/drivers/` WASM driver sources and ABI headers (each driver lives in its own subdirectory).
 - `src/services/` System services (WASM-based).
+- WASMOS-APPs export `main` for applications, while drivers and services export `initialize`.
 - Embedded WASM drivers (for example the chardev server) expose an `initialize` entry for setup.
 - `scripts/` Helper scripts (optional).
 - `ARCHITECTURE.md` In-depth architecture notes and boot process diagrams.
@@ -65,6 +66,7 @@ The sample uses `asc` with release/size settings and the `stub` runtime (no GC).
 
 There is also a minimal C-based example at `examples/c/hello/hello_c.c`, packed as `hello_c.wasmosapp`.
 `examples/c/chardev_preempt/chardev_preempt.c` is a small preemption stress test for the embedded chardev server. Run it from the CLI with `exec chardev-preempt`.
+`examples/c/init_smoke/init_smoke.c` is a tiny init-entry smoke test; run it from the CLI with `exec init-smoke`.
 
 ### Rust (optional)
 Rust can be used to write WASMOS drivers, services, and applications. Install Rust and the WebAssembly target:
@@ -94,6 +96,7 @@ cmake --build build --target go_examples
 ```
 
 The sample lives at `examples/go/hello/hello_go.go` and is packed as `hello_go.wasmosapp`.
+Note: TinyGo exports a small `wasmos_entry` wrapper that calls `main` to satisfy both the Go runtime and the WASMOS entry contract.
 
 ### Zig (optional)
 Zig can be used to write WASMOS applications. Install Zig and ensure it is in your PATH.
@@ -111,7 +114,7 @@ cmake --build build --target zig_examples
 
 The sample lives at `examples/zig/hello/hello_zig.zig` and is packed as `hello_zig.wasmosapp`.
 Note: Zig requires an explicit wasm export for the WASMOS entry; the build adds
-`--export=hello_zig_step` so the module retains the entry function.
+`--export=wasmos_entry` so the module retains the entry function.
 
 ### Scheduler
 The kernel uses a round-robin scheduler with a fixed time slice per process
@@ -242,12 +245,12 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes. U
 - IPC endpoint permissions are enforced by context-aware APIs (`ipc_send_from`, `ipc_recv_for`) for source-endpoint ownership and endpoint receive ownership.
 - The kernel now builds and embeds example WASM applications from `examples/` (including `chardev_client`).
 - Driver wasm link settings currently constrain module stack/linear memory for low-footprint instantiation in the freestanding runtime pool.
-- A generic kernel wasm driver host (`src/kernel/wasm_driver.c`) loads embedded modules, instantiates them via WAMR, and dispatches IPC requests to exported driver handlers.
-- The WASM-backed chardev runs as an IPC service endpoint in a dedicated `chardev-server` process (`src/kernel/wasm_chardev.c`) using `src/drivers/chardev/chardev_server.c`.
+- A generic kernel wasm driver host (`src/kernel/wasm_driver.c`) loads embedded modules, instantiates them via WAMR, and provides an entry call for long-running drivers.
+- The WASM-backed chardev runs as an IPC service in a dedicated `chardev-server` process (`src/kernel/wasm_chardev.c`) using `src/drivers/chardev/chardev_server.c`.
 - Boot modules now include `sysinit.wasmosapp` and `chardev_client.wasmosapp`; the chardev client performs one IPC write/read roundtrip via imported IPC primitives.
-- The chardev server process blocks when its IPC queue is empty and is woken by incoming IPC messages.
+- The chardev server process blocks in `ipc_recv` when its IPC queue is empty and is woken by incoming IPC messages.
 - The chardev service path uses permission-aware IPC send/receive calls tied to its owner context.
-- The chardev module export contract is `chardev_init` and `chardev_ipc_dispatch` (with optional direct `chardev_read_byte`/`chardev_write_byte` exports).
+- The chardev module export contract is `initialize` (the driver handles IPC internally).
 - Chardev IPC protocol uses request/response message types for byte read/write (`WASM_CHARDEV_IPC_*` in `src/drivers/include/wasmos_driver_abi.h`).
 - WAMR native IPC imports now follow the WAMR `exec_env` calling convention for correct argument marshalling.
 - IPC best-practice notes and improvement targets (from Herder’s MINIX thesis and Aigner’s microkernel communication work) are tracked in `ARCHITECTURE.md`.

@@ -215,45 +215,39 @@ ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t arg0, int32
 }
 
 WASMOS_WASM_EXPORT int32_t
-ata_step(int32_t ignored_type,
-         int32_t block_endpoint,
-         int32_t ignored_arg1,
-         int32_t ignored_arg2,
-         int32_t ignored_arg3)
+initialize(int32_t block_endpoint,
+           int32_t ignored_arg1,
+           int32_t ignored_arg2,
+           int32_t ignored_arg3)
 {
-    (void)ignored_type;
     (void)ignored_arg1;
     (void)ignored_arg2;
     (void)ignored_arg3;
 
-    if (g_block_endpoint < 0) {
-        g_block_endpoint = block_endpoint;
-        g_present = 0;
-        g_sector_count = 0;
-        uint16_t identify_words[256];
-        if (ata_identify(identify_words) == 0) {
-            uint32_t lba28 = ((uint32_t)identify_words[61] << 16) | identify_words[60];
-            g_sector_count = lba28;
-            g_present = 1;
+    g_block_endpoint = block_endpoint;
+    g_present = 0;
+    g_sector_count = 0;
+    uint16_t identify_words[256];
+    if (ata_identify(identify_words) == 0) {
+        uint32_t lba28 = ((uint32_t)identify_words[61] << 16) | identify_words[60];
+        g_sector_count = lba28;
+        g_present = 1;
+    }
+
+    for (;;) {
+        int32_t recv_rc = wasmos_ipc_recv(g_block_endpoint);
+        if (recv_rc < 0) {
+            continue;
         }
-        return WASMOS_WASM_STEP_YIELDED;
-    }
 
-    int32_t recv_rc = wasmos_ipc_recv(g_block_endpoint);
-    if (recv_rc == 0) {
-        return WASMOS_WASM_STEP_BLOCKED;
-    }
-    if (recv_rc < 0) {
-        return WASMOS_WASM_STEP_FAILED;
-    }
+        int32_t req_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+        int32_t req_id = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+        int32_t arg0 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+        int32_t arg1 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+        int32_t arg2 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
+        int32_t source = wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE);
 
-    int32_t req_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
-    int32_t req_id = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
-    int32_t arg0 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-    int32_t arg1 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
-    int32_t arg2 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
-    int32_t source = wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE);
-
-    ata_handle_ipc(req_type, source, req_id, arg0, arg1, arg2);
-    return WASMOS_WASM_STEP_YIELDED;
+        ata_handle_ipc(req_type, source, req_id, arg0, arg1, arg2);
+    }
+    return 0;
 }

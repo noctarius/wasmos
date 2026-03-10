@@ -44,6 +44,9 @@ set(WASM_CHARDEV_CLIENT_APP ${BUILD_DIR}/chardev_client.wasmosapp)
 set(WASM_CHARDEV_PREEMPT_SRC ${EXAMPLES_C_DIR}/chardev_preempt/chardev_preempt.c)
 set(WASM_CHARDEV_PREEMPT_WASM ${BUILD_DIR}/chardev_preempt.wasm)
 set(WASM_CHARDEV_PREEMPT_APP ${BUILD_DIR}/chardev_preempt.wasmosapp)
+set(WASM_INIT_SMOKE_SRC ${EXAMPLES_C_DIR}/init_smoke/init_smoke.c)
+set(WASM_INIT_SMOKE_WASM ${BUILD_DIR}/init_smoke.wasm)
+set(WASM_INIT_SMOKE_APP ${BUILD_DIR}/init_smoke.wasmosapp)
 set(WASM_ATA_DRIVER_SRC ${DRIVER_WASM_DIR}/ata/ata.c)
 set(WASM_ATA_DRIVER_WASM ${BUILD_DIR}/ata.wasm)
 set(WASM_ATA_APP ${BUILD_DIR}/ata.wasmosapp)
@@ -440,6 +443,9 @@ endif ()
 set(HELLO_C_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HELLO_C_APP} ${BUILD_DIR}/esp/apps/hello_c.wasmosapp
 )
+set(INIT_SMOKE_COPY_CMD
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_SMOKE_APP} ${BUILD_DIR}/esp/apps/init_smoke.wasmosapp
+)
 if (RUST_ENABLE)
   set(RUST_HELLO_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HELLO_RUST_APP} ${BUILD_DIR}/esp/apps/hello_rust.wasmosapp
@@ -480,6 +486,7 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
+    ${INIT_SMOKE_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
@@ -510,6 +517,7 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
+    ${INIT_SMOKE_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
@@ -541,6 +549,7 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
+    ${INIT_SMOKE_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
@@ -573,6 +582,7 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
+    ${INIT_SMOKE_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
@@ -608,6 +618,7 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
+    ${INIT_SMOKE_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
@@ -637,6 +648,7 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
+    ${INIT_SMOKE_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
@@ -669,6 +681,7 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
+    ${INIT_SMOKE_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
@@ -700,6 +713,7 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
+    ${INIT_SMOKE_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}

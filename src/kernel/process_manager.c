@@ -264,6 +264,9 @@ pm_app_entry(process_t *process, void *arg)
         state->started = 1;
     }
 
+    serial_write_unlocked("[pm] entry start ");
+    serial_write_unlocked(state->name);
+    serial_write_unlocked("\n");
     if (wasmos_app_call_entry(&state->app) != 0) {
         serial_write("[pm] app entry failed\n");
         process_set_exit_status(process, -1);

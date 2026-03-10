@@ -3,7 +3,7 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
   COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib
           -Wl,--no-entry -Wl,--strip-all
-          -Wl,-z,stack-size=4096
+          -Wl,-z,stack-size=16384
           -Wl,--initial-memory=65536
           -Wl,--max-memory=65536
           -Wl,--allow-undefined
@@ -24,8 +24,8 @@ add_custom_command(
           ${WASM_INIT_APP}
           sysinit
           initialize
-          16
-          16
+          64
+          64
           4
           proc
           1

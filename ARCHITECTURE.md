@@ -241,6 +241,7 @@ This guide captures microkernel-informed design decisions and a stepwise plan fo
 - `src/kernel/` Freestanding kernel (C + ASM).
 - `libs/wasm/` Placeholder integration point for WAMR.
 - `examples/` Example WASM applications used for driver/server/client bring-up (grouped by language).
+- `examples/c/chardev_preempt/` Small preemption stress test that exercises the embedded chardev server via IPC.
 - `src/drivers/` WASM driver sources and ABI headers. Each driver lives in its own subdirectory.
 - `scripts/` Optional helper scripts.
 

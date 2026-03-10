@@ -87,10 +87,49 @@ add_custom_command(
   VERBATIM
 )
 
-add_custom_target(c_examples DEPENDS ${WASM_HELLO_C_APP} ${WASM_CHARDEV_CLIENT_APP})
+add_custom_command(
+  OUTPUT ${WASM_CHARDEV_PREEMPT_WASM}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
+          -Wl,--no-entry -Wl,--strip-all
+          -Wl,-z,stack-size=4096
+          -Wl,--initial-memory=65536
+          -Wl,--max-memory=65536
+          -Wl,--allow-undefined
+          -Wl,--export=chardev_preempt_step
+          -I${DRIVER_WASM_DIR}/include
+          ${WASM_CHARDEV_PREEMPT_SRC}
+          -o ${WASM_CHARDEV_PREEMPT_WASM}
+  DEPENDS ${WASM_CHARDEV_PREEMPT_SRC} ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Building wasm chardev preempt module"
+  VERBATIM
+)
+
+add_custom_command(
+  OUTPUT ${WASM_CHARDEV_PREEMPT_APP}
+  COMMAND ${WASMOS_APP_PACKER}
+          ${WASM_CHARDEV_PREEMPT_WASM}
+          ${WASM_CHARDEV_PREEMPT_APP}
+          chardev-preempt
+          chardev_preempt_step
+          16
+          16
+          4
+          chardev
+          1
+          ipc.basic
+          0
+  DEPENDS ${WASM_CHARDEV_PREEMPT_WASM} make_wasmos_app
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Packing wasm chardev preempt as WASMOS-APP"
+  VERBATIM
+)
+
+add_custom_target(c_examples DEPENDS ${WASM_HELLO_C_APP} ${WASM_CHARDEV_CLIENT_APP} ${WASM_CHARDEV_PREEMPT_APP})
 add_custom_target(chardev_client_blob DEPENDS ${WASM_CHARDEV_CLIENT_BLOB})
 
-set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_HELLO_C_APP} ${WASM_CHARDEV_CLIENT_APP})
+set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_HELLO_C_APP} ${WASM_CHARDEV_CLIENT_APP} ${WASM_CHARDEV_PREEMPT_APP})
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS c_examples)
 set_property(GLOBAL APPEND PROPERTY WASMOS_KERNEL_BLOBS ${WASM_CHARDEV_CLIENT_BLOB})
 set_property(GLOBAL APPEND PROPERTY WASMOS_KERNEL_BLOB_TARGETS chardev_client_blob)

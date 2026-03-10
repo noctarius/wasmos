@@ -540,6 +540,7 @@ if (OVMF_VARS)
             WASMOS_OVMF_CODE=${OVMF_CODE}
             WASMOS_OVMF_VARS=${OVMF_VARS}
             WASMOS_ESP=${BUILD_DIR}/esp
+            PYTHONDONTWRITEBYTECODE=1
             python3 -m unittest discover -s tests
     DEPENDS bootloader kernel
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

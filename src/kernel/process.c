@@ -131,6 +131,25 @@ static process_t *ready_queue_dequeue(void) {
 static void process_trampoline(void) {
     for (;;) {
         g_in_scheduler = 0;
+        if (g_current_process) {
+            uint64_t *base = (uint64_t *)(uintptr_t)g_current_process->stack_base;
+            uint64_t *top = (uint64_t *)(uintptr_t)(g_current_process->stack_top - sizeof(uint64_t));
+            if (base && top) {
+                const uint64_t canary = 0xC0DEC0DEF00DFACEULL;
+                if (*base != canary || *top != canary) {
+                    serial_write_unlocked("[sched] stack canary tripped for ");
+                    if (g_current_process->name) {
+                        serial_write_unlocked(g_current_process->name);
+                    } else {
+                        serial_write_unlocked("(unknown)");
+                    }
+                    serial_write_unlocked("\n");
+                    for (;;) {
+                        __asm__ volatile("cli; hlt");
+                    }
+                }
+            }
+        }
         while (preempt_disable_depth() > 0) {
             preempt_enable();
         }
@@ -300,6 +319,12 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
     slot->stack_base = (uintptr_t)stack_base;
     slot->stack_pages = (uint32_t)stack_pages;
     slot->stack_top = (uintptr_t)stack_base + (stack_pages * PAGE_SIZE);
+    if (slot->stack_base && slot->stack_top > slot->stack_base + sizeof(uint64_t)) {
+        uint64_t *base_canary = (uint64_t *)(uintptr_t)slot->stack_base;
+        uint64_t *top_canary = (uint64_t *)(uintptr_t)(slot->stack_top - sizeof(uint64_t));
+        *base_canary = 0xC0DEC0DEF00DFACEULL;
+        *top_canary = 0xC0DEC0DEF00DFACEULL;
+    }
     slot->ctx.rsp = slot->stack_top - 8u;
     slot->ctx.rip = (uint64_t)(uintptr_t)process_trampoline;
     slot->ctx.rflags = 0x200;
@@ -359,6 +384,12 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
     slot->stack_base = (uintptr_t)stack_base;
     slot->stack_pages = (uint32_t)stack_pages;
     slot->stack_top = (uintptr_t)stack_base + (stack_pages * PAGE_SIZE);
+    if (slot->stack_base && slot->stack_top > slot->stack_base + sizeof(uint64_t)) {
+        uint64_t *base_canary = (uint64_t *)(uintptr_t)slot->stack_base;
+        uint64_t *top_canary = (uint64_t *)(uintptr_t)(slot->stack_top - sizeof(uint64_t));
+        *base_canary = 0xC0DEC0DEF00DFACEULL;
+        *top_canary = 0xC0DEC0DEF00DFACEULL;
+    }
     slot->ctx.rsp = slot->stack_top - 8u;
     slot->ctx.rip = (uint64_t)(uintptr_t)process_trampoline;
     slot->ctx.rflags = 0x200;

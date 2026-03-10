@@ -5,6 +5,7 @@
 #include <stddef.h>
 
 #define PROCESS_MAX_COUNT 32
+// Round-robin scheduler time slice (fixed ticks per run).
 #define PROCESS_DEFAULT_SLICE_TICKS 5u
 #define PROCESS_STACK_SIZE 32768u
 

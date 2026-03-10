@@ -52,6 +52,10 @@ Kernel responsibilities:
 - Interrupt and timer dispatch to user space via nonblocking notifications.
 - Embedded WASM drivers use an `initialize` entry for one-time setup.
 
+### Scheduler
+Current policy is round-robin with a fixed time slice (see `PROCESS_DEFAULT_SLICE_TICKS` in `src/kernel/include/process.h`).
+The ready queue is FIFO and each runnable process receives the same number of timer ticks before rescheduling.
+
 User-space responsibilities:
 - Drivers, filesystems, network stack, and services.
 - Policy layers (scheduling policy, resource management, naming, service discovery).

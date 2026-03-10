@@ -29,3 +29,5 @@ class BootSmokeTest(unittest.TestCase):
         self.assertTrue(ok, "sysinit spawn reply not received")
         ok = self.session.expect(b"[pm] spawn index=0x0000000000000001", timeout_s=10)
         self.assertTrue(ok, "second spawn index not observed")
+        ok = self.session.expect(b"[pm] spawn index=0x0000000000000002", timeout_s=10)
+        self.assertTrue(ok, "third spawn index not observed")

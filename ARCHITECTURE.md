@@ -50,6 +50,7 @@ Kernel responsibilities:
 - Basic scheduling and process lifecycle.
 - Memory management mechanisms (page tables, region mapping, allocation primitives).
 - Interrupt and timer dispatch to user space via nonblocking notifications.
+- Embedded WASM drivers use an `initialize` entry for one-time setup.
 
 User-space responsibilities:
 - Drivers, filesystems, network stack, and services.

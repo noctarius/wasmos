@@ -15,6 +15,7 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - `examples/zig/` Example Zig WASM applications.
 - `src/drivers/` WASM driver sources and ABI headers (each driver lives in its own subdirectory).
 - `src/services/` System services (WASM-based).
+- Embedded WASM drivers (for example the chardev server) expose an `initialize` entry for setup.
 - `scripts/` Helper scripts (optional).
 - `ARCHITECTURE.md` In-depth architecture notes and boot process diagrams.
 - CMake is split across per-component `CMakeLists.txt` files (boot, kernel, drivers, services, and each example language).

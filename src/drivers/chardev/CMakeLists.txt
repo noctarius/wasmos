@@ -7,7 +7,7 @@ add_custom_command(
           -Wl,-z,stack-size=4096
           -Wl,--initial-memory=65536
           -Wl,--max-memory=65536
-          -Wl,--export=chardev_init
+          -Wl,--export=initialize
           -Wl,--export=chardev_read_byte
           -Wl,--export=chardev_write_byte
           -Wl,--export=chardev_ipc_dispatch

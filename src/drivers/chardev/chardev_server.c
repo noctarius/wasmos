@@ -11,7 +11,7 @@ static uint8_t g_last_byte;
 static uint8_t g_has_data;
 
 WASMOS_WASM_EXPORT int32_t
-chardev_init(void)
+initialize(void)
 {
     g_last_byte = 0;
     g_has_data = 0;

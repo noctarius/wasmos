@@ -232,7 +232,13 @@ pm_app_entry(process_t *process, void *arg)
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
-        if (wasmos_app_start(&state->app, &desc, process->context_id) != 0) {
+        uint32_t init_args[4] = {
+            state->step_arg0,
+            state->step_arg1,
+            state->step_arg2,
+            state->step_arg3
+        };
+        if (wasmos_app_start(&state->app, &desc, process->context_id, init_args, 4) != 0) {
             serial_write("[pm] app start failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;

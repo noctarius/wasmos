@@ -504,7 +504,7 @@ Design takeaways:
 - WAMR native IPC imports use the `exec_env` calling convention to align with WAMR native argument marshalling.
 
 ## Process Model (Current Scaffold)
-- The scheduler is cooperative and tick-based (`process_schedule_once`), scanning for READY processes in round-robin order.
+- The scheduler is preemptive and time-sliced (`process_schedule_once`), using a FIFO ready queue for round-robin execution.
 - Process entries return run results (`YIELDED`, `IDLE`, `BLOCKED`, `EXITED`) to drive state transitions.
 - `PROCESS_RUN_BLOCKED` entries remain blocked until a kernel primitive wakes them; IPC uses `process_wake_by_context` on message enqueue.
 - Exited processes transition to a zombie state carrying `exit_status` until reaped by `process_wait`.

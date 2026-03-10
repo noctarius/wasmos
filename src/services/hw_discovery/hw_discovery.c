@@ -218,6 +218,19 @@ next_spawn_target(void)
 }
 
 WASMOS_WASM_EXPORT int32_t
+initialize(int32_t proc_endpoint,
+           int32_t module_count,
+           int32_t ignored_arg2,
+           int32_t ignored_arg3)
+{
+    (void)proc_endpoint;
+    (void)module_count;
+    (void)ignored_arg2;
+    (void)ignored_arg3;
+    return 0;
+}
+
+static int32_t
 hw_discovery_step(int32_t ignored_type,
                   int32_t proc_endpoint,
                   int32_t module_count,
@@ -324,4 +337,14 @@ hw_discovery_step(int32_t ignored_type,
     }
 
     return WASMOS_WASM_STEP_FAILED;
+}
+
+WASMOS_WASM_EXPORT int32_t
+dispatch(int32_t type,
+         int32_t arg0,
+         int32_t arg1,
+         int32_t arg2,
+         int32_t arg3)
+{
+    return hw_discovery_step(type, arg0, arg1, arg2, arg3);
 }

@@ -74,7 +74,11 @@ typedef struct {
 } wasmos_app_instance_t;
 
 int wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out_desc);
-int wasmos_app_start(wasmos_app_instance_t *instance, const wasmos_app_desc_t *desc, uint32_t owner_context_id);
+int wasmos_app_start(wasmos_app_instance_t *instance,
+                     const wasmos_app_desc_t *desc,
+                     uint32_t owner_context_id,
+                     const uint32_t *init_argv,
+                     uint32_t init_argc);
 int wasmos_app_dispatch(wasmos_app_instance_t *instance, const ipc_message_t *request, int32_t *out_value);
 void wasmos_app_stop(wasmos_app_instance_t *instance);
 void wasmos_app_set_policy_hooks(wasmos_app_endpoint_resolver_t endpoint_resolver,

@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include "wasmos_app.h"
 #include "serial.h"
 
@@ -175,8 +176,30 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
     return 0;
 }
 
+static int
+entry_is_initialize(const char *entry)
+{
+    const char *needle = "initialize";
+    if (!entry) {
+        return 0;
+    }
+    for (size_t i = 0; needle[i] != '\0' || entry[i] != '\0'; ++i) {
+        if (needle[i] != entry[i]) {
+            return 0;
+        }
+        if (needle[i] == '\0') {
+            break;
+        }
+    }
+    return 1;
+}
+
 int
-wasmos_app_start(wasmos_app_instance_t *instance, const wasmos_app_desc_t *desc, uint32_t owner_context_id)
+wasmos_app_start(wasmos_app_instance_t *instance,
+                 const wasmos_app_desc_t *desc,
+                 uint32_t owner_context_id,
+                 const uint32_t *init_argv,
+                 uint32_t init_argc)
 {
     if (!instance || !desc || owner_context_id == 0) {
         return -1;
@@ -226,8 +249,20 @@ wasmos_app_start(wasmos_app_instance_t *instance, const wasmos_app_desc_t *desc,
     manifest.module_size = desc->wasm_size;
     manifest.init_export = 0;
     manifest.dispatch_export = instance->entry;
+    manifest.init_argc = 0;
+    manifest.init_argv = 0;
     manifest.stack_size = desc->stack_pages_hint ? desc->stack_pages_hint * 4096u : 64u * 1024u;
     manifest.heap_size = desc->heap_pages_hint ? desc->heap_pages_hint * 4096u : 64u * 1024u;
+
+    if (entry_is_initialize(instance->entry)) {
+        manifest.init_export = instance->entry;
+        manifest.dispatch_export = "dispatch";
+        if (init_argc > 4) {
+            init_argc = 4;
+        }
+        manifest.init_argc = init_argc;
+        manifest.init_argv = init_argv;
+    }
 
     if (wasm_driver_start(&instance->driver, &manifest, owner_context_id) != 0) {
         serial_write("[wasmos-app] start failed\n");

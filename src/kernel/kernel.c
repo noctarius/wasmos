@@ -128,6 +128,37 @@ serial_write_hex64_unlocked(uint64_t value)
 }
 
 static int
+is_canonical_addr(uint64_t addr)
+{
+    uint64_t top = addr >> 47;
+    return (top == 0) || (top == 0x1FFFF);
+}
+
+static void
+log_bad_app_addr(const char *label, uint64_t addr, uint64_t len)
+{
+    uint32_t pid = process_current_pid();
+    process_t *proc = process_get(pid);
+    const char *name = proc && proc->name ? proc->name : "(unknown)";
+
+    serial_write_unlocked("[wasm] bad app addr ");
+    if (label) {
+        serial_write_unlocked(label);
+    } else {
+        serial_write_unlocked("(unknown)");
+    }
+    serial_write_unlocked(" pid=");
+    serial_write_hex64_unlocked(pid);
+    serial_write_unlocked("[wasm] name=");
+    serial_write_unlocked(name);
+    serial_write_unlocked("\n");
+    serial_write_unlocked("[wasm] addr=");
+    serial_write_hex64_unlocked(addr);
+    serial_write_unlocked("[wasm] len=");
+    serial_write_hex64_unlocked(len);
+}
+
+static int
 bytes_eq(const uint8_t *a, uint32_t a_len, const char *b)
 {
     if (!a || !b) {
@@ -526,6 +557,7 @@ native_block_buffer_copy(wasm_exec_env_t exec_env, int32_t phys, int32_t ptr, in
         return -1;
     }
     if (!wasm_runtime_validate_app_addr(module_inst, (uint64_t)ptr, (uint64_t)len)) {
+        log_bad_app_addr("block_buffer_copy", (uint64_t)ptr, (uint64_t)len);
         return -1;
     }
     uint8_t *dst = (uint8_t *)wasm_runtime_addr_app_to_native(module_inst,
@@ -553,6 +585,7 @@ native_block_buffer_write(wasm_exec_env_t exec_env, int32_t phys, int32_t ptr, i
         return -1;
     }
     if (!wasm_runtime_validate_app_addr(module_inst, (uint64_t)ptr, (uint64_t)len)) {
+        log_bad_app_addr("block_buffer_write", (uint64_t)ptr, (uint64_t)len);
         return -1;
     }
     const uint8_t *src = (const uint8_t *)wasm_runtime_addr_app_to_native(module_inst, (uint64_t)ptr);
@@ -590,6 +623,7 @@ native_fs_buffer_write(wasm_exec_env_t exec_env, int32_t ptr, int32_t len, int32
         return -1;
     }
     if (!wasm_runtime_validate_app_addr(module_inst, (uint64_t)ptr, (uint64_t)len)) {
+        log_bad_app_addr("fs_buffer_write", (uint64_t)ptr, (uint64_t)len);
         return -1;
     }
     const uint8_t *src = (const uint8_t *)wasm_runtime_addr_app_to_native(module_inst, (uint64_t)ptr);
@@ -698,9 +732,11 @@ native_acpi_rsdp_info(wasm_exec_env_t exec_env, int32_t out_ptr, int32_t out_len
         return -1;
     }
     if (!wasm_runtime_validate_app_addr(module_inst, (uint64_t)out_ptr, (uint64_t)len)) {
+        log_bad_app_addr("acpi_rsdp_info.out", (uint64_t)out_ptr, (uint64_t)len);
         return -1;
     }
     if (!wasm_runtime_validate_app_addr(module_inst, (uint64_t)out_len_ptr, sizeof(uint32_t))) {
+        log_bad_app_addr("acpi_rsdp_info.len", (uint64_t)out_len_ptr, sizeof(uint32_t));
         return -1;
     }
     uint8_t *dst = (uint8_t *)wasm_runtime_addr_app_to_native(module_inst, (uint64_t)out_ptr);
@@ -727,6 +763,7 @@ native_boot_module_name(wasm_exec_env_t exec_env, int32_t index, int32_t out_ptr
         return -1;
     }
     if (!wasm_runtime_validate_app_addr(module_inst, (uint64_t)out_ptr, (uint64_t)out_len)) {
+        log_bad_app_addr("boot_module_name", (uint64_t)out_ptr, (uint64_t)out_len);
         return -1;
     }
     char *dst = (char *)wasm_runtime_addr_app_to_native(module_inst, (uint64_t)out_ptr);
@@ -752,6 +789,7 @@ native_console_write(wasm_exec_env_t exec_env, int32_t ptr, int32_t len)
         return -1;
     }
     if (!wasm_runtime_validate_app_addr(module_inst, (uint64_t)ptr, (uint64_t)len)) {
+        log_bad_app_addr("console_write", (uint64_t)ptr, (uint64_t)len);
         return -1;
     }
 
@@ -780,6 +818,10 @@ native_console_read(wasm_exec_env_t exec_env, char *ptr, int32_t len)
 {
     (void)exec_env;
     if (!ptr || len <= 0) {
+        return -1;
+    }
+    if (!is_canonical_addr((uint64_t)(uintptr_t)ptr)) {
+        log_bad_app_addr("console_read.native", (uint64_t)(uintptr_t)ptr, (uint64_t)len);
         return -1;
     }
     uint8_t ch = 0;
@@ -839,6 +881,10 @@ native_proc_info(wasm_exec_env_t exec_env, int32_t index, char *buf, int32_t buf
     if (index < 0 || !buf || buf_len <= 0) {
         return -1;
     }
+    if (!is_canonical_addr((uint64_t)(uintptr_t)buf)) {
+        log_bad_app_addr("proc_info.native", (uint64_t)(uintptr_t)buf, (uint64_t)buf_len);
+        return -1;
+    }
     uint32_t pid = 0;
     const char *name = 0;
     if (process_info_at((uint32_t)index, &pid, &name) != 0) {
@@ -861,6 +907,10 @@ native_proc_info_ex(wasm_exec_env_t exec_env, int32_t index, char *buf, int32_t 
     if (index < 0 || !buf || buf_len <= 0 || parent_ptr < 0) {
         return -1;
     }
+    if (!is_canonical_addr((uint64_t)(uintptr_t)buf)) {
+        log_bad_app_addr("proc_info_ex.native", (uint64_t)(uintptr_t)buf, (uint64_t)buf_len);
+        return -1;
+    }
     uint32_t pid = 0;
     uint32_t parent_pid = 0;
     const char *name = 0;
@@ -873,6 +923,7 @@ native_proc_info_ex(wasm_exec_env_t exec_env, int32_t index, char *buf, int32_t 
         return -1;
     }
     if (!wasm_runtime_validate_app_addr(module_inst, (uint64_t)parent_ptr, sizeof(uint32_t))) {
+        log_bad_app_addr("proc_info_ex.parent", (uint64_t)parent_ptr, sizeof(uint32_t));
         return -1;
     }
     uint32_t *parent_out = (uint32_t *)wasm_runtime_addr_app_to_native(module_inst, (uint64_t)parent_ptr);

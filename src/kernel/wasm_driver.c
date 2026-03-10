@@ -176,3 +176,40 @@ wasm_driver_dispatch(wasm_driver_t *driver,
     *out_value = (int32_t)argv[0];
     return 0;
 }
+
+int
+wasm_driver_call(wasm_driver_t *driver,
+                 const char *export_name,
+                 uint32_t argc,
+                 uint32_t *argv)
+{
+    if (!driver || !export_name || !driver->active || !driver->instance) {
+        return -1;
+    }
+
+    spinlock_lock(&driver->lock);
+    int ok = wamr_call_function(driver->instance,
+                                export_name,
+                                argc,
+                                argv,
+                                0);
+    spinlock_unlock(&driver->lock);
+    return ok ? 0 : -1;
+}
+
+int
+wasm_driver_call_unlocked(wasm_driver_t *driver,
+                          const char *export_name,
+                          uint32_t argc,
+                          uint32_t *argv)
+{
+    if (!driver || !export_name || !driver->active || !driver->instance) {
+        return -1;
+    }
+    int ok = wamr_call_function(driver->instance,
+                                export_name,
+                                argc,
+                                argv,
+                                0);
+    return ok ? 0 : -1;
+}

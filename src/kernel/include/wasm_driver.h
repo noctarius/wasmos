@@ -37,5 +37,13 @@ int wasm_driver_endpoint(const wasm_driver_t *driver, uint32_t *out_endpoint);
 int wasm_driver_dispatch(wasm_driver_t *driver,
                          const ipc_message_t *request,
                          int32_t *out_value);
+int wasm_driver_call(wasm_driver_t *driver,
+                     const char *export_name,
+                     uint32_t argc,
+                     uint32_t *argv);
+int wasm_driver_call_unlocked(wasm_driver_t *driver,
+                              const char *export_name,
+                              uint32_t argc,
+                              uint32_t *argv);
 
 #endif

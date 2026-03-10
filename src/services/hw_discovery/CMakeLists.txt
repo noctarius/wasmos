@@ -9,6 +9,7 @@ add_custom_command(
           -Wl,--allow-undefined
           -Wl,--export=initialize
           -Wl,--export=dispatch
+          -Wl,--export=hw_discovery_step
           -I${DRIVER_WASM_DIR}/include
           ${WASM_HW_DISCOVERY_SRC}
           -o ${WASM_HW_DISCOVERY_WASM}
@@ -24,7 +25,7 @@ add_custom_command(
           ${WASM_HW_DISCOVERY_WASM}
           ${WASM_HW_DISCOVERY_APP}
           hw-discovery
-          initialize
+          hw_discovery_step
           16
           16
           2

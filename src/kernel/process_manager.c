@@ -15,6 +15,7 @@ typedef struct {
     uint32_t blob_size;
     uint8_t blob_storage[PM_FS_BUFFER_SIZE];
     uint8_t started;
+    uint8_t init_called;
     uint32_t step_arg0;
     uint32_t step_arg1;
     uint32_t step_arg2;
@@ -244,6 +245,18 @@ pm_app_entry(process_t *process, void *arg)
             return PROCESS_RUN_EXITED;
         }
         state->started = 1;
+        state->init_called = 0;
+    }
+
+    if (wasmos_app_has_init_entry(&state->app) && !state->init_called) {
+        state->init_called = 1;
+        if (wasmos_app_call_init(&state->app) != 0) {
+            serial_write("[pm] app init failed\n");
+            process_set_exit_status(process, -1);
+            return PROCESS_RUN_EXITED;
+        }
+        process_set_exit_status(process, 0);
+        return PROCESS_RUN_EXITED;
     }
 
     step_msg.type = 0;
@@ -309,6 +322,7 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     slot->blob = (const uint8_t *)(uintptr_t)mod->base;
     slot->blob_size = (uint32_t)mod->size;
     slot->started = 0;
+    slot->init_called = 0;
     slot->step_arg0 = 0;
     slot->step_arg1 = 0;
     slot->step_arg2 = 0;
@@ -412,6 +426,7 @@ pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t *blob, uint32_t blob_siz
     slot->blob = slot->blob_storage;
     slot->blob_size = blob_size;
     slot->started = 0;
+    slot->init_called = 0;
     slot->step_arg0 = 0;
     slot->step_arg1 = 0;
     slot->step_arg2 = 0;
@@ -775,6 +790,7 @@ process_manager_init(const boot_info_t *boot_info)
         g_pm.apps[i].blob = 0;
         g_pm.apps[i].blob_size = 0;
         g_pm.apps[i].started = 0;
+        g_pm.apps[i].init_called = 0;
         g_pm.apps[i].name[0] = '\0';
     }
     for (uint32_t i = 0; i < PM_MAX_WAITERS; ++i) {

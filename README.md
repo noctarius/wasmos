@@ -112,6 +112,10 @@ The sample lives at `examples/zig/hello/hello_zig.zig` and is packed as `hello_z
 Note: Zig requires an explicit wasm export for the WASMOS entry; the build adds
 `--export=hello_zig_step` so the module retains the entry function.
 
+### Scheduler
+The kernel uses a round-robin scheduler with a fixed time slice per process
+(see `PROCESS_DEFAULT_SLICE_TICKS` in `src/kernel/include/process.h`).
+
 ### WAMR scaffold
 - `libs/wasm/wamr_runtime.c` provides a thin wrapper over the WAMR C API.
 - Enable with `-DWAMR_ENABLE=ON` once you wire the WAMR library into the kernel link.

@@ -10,6 +10,7 @@ Preemptive scheduling is implemented and stable. The IRQ0 timer tick drives time
 - Idle task runs `hlt` when no READY tasks exist.
 - IPC queue operations are protected by spinlocks that disable preemption.
 - QEMU test framework force-stops hung runs via the monitor sequence (`Ctrl+A` then `x`) on timeout.
+- A `run-qemu-debug` target starts QEMU paused for GDB on port `1234` (override with `-DQEMU_GDB_PORT=1234`).
 - CLI `ps` shows scheduler metrics via wasm natives (`sched_ticks`, `sched_ready_count`, `sched_current_pid`).
 - `proc_exit` allows WASMOS apps to terminate themselves; PM reaps exited app instances.
 

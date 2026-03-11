@@ -18,6 +18,7 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - WASMOS-APPs export `main` for applications, while drivers and services export `initialize`.
 - Embedded WASM drivers (for example the chardev server) expose an `initialize` entry for setup.
 - `scripts/` Helper scripts (optional).
+- `scripts/wasm_inspect.py` inspects `.wasm` or `.wasmosapp` files to list imports/exports and basic section counts.
 - `ARCHITECTURE.md` In-depth architecture notes and boot process diagrams.
 - CMake is split across per-component `CMakeLists.txt` files (boot, kernel, drivers, services, and each example language).
 

@@ -27,6 +27,8 @@ extern int32_t wasmos_ipc_last_field(int32_t field)
     WASMOS_WASM_IMPORT("wasmos", "ipc_last_field");
 extern int32_t wasmos_console_write(int32_t ptr, int32_t len)
     WASMOS_WASM_IMPORT("wasmos", "console_write");
+extern int32_t wasmos_debug_mark(int32_t tag)
+    WASMOS_WASM_IMPORT("wasmos", "debug_mark");
 extern int32_t wasmos_boot_module_name(int32_t index, int32_t buf, int32_t buf_len)
     WASMOS_WASM_IMPORT("wasmos", "boot_module_name");
 extern int32_t wasmos_proc_count(void)
@@ -139,12 +141,14 @@ initialize(int32_t proc_endpoint,
 {
     (void)ignored_arg3;
 
+    (void)wasmos_debug_mark(0x1001);
     {
         char ch = 'S';
         wasmos_console_write((int32_t)(uintptr_t)&ch, 1);
     }
 
     g_reply_endpoint = wasmos_ipc_create_endpoint();
+    (void)wasmos_debug_mark(0x1002);
     if (g_reply_endpoint < 0) {
         log_line("[sysinit] failed to create reply endpoint\n");
         stall_forever();

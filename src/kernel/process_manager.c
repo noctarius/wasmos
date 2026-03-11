@@ -302,7 +302,11 @@ pm_app_entry(process_t *process, void *arg)
         pm_write_hex64(rsp);
         serial_write_unlocked("[pm] entry rip=");
         pm_write_hex64(rip);
-        if (wasmos_app_call_entry(&state->app) != 0) {
+        serial_write_unlocked("[pm] entry call begin\n");
+        int entry_rc = wasmos_app_call_entry(&state->app);
+        serial_write_unlocked("[pm] entry call rc=");
+        pm_write_hex64((uint64_t)(uint32_t)entry_rc);
+        if (entry_rc != 0) {
             serial_write("[pm] app entry failed\n");
             process_set_exit_status(process, -1);
         } else {

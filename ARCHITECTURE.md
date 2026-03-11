@@ -136,6 +136,9 @@ Isolation rules:
 - Ensure IPC paths do not block kernel tasks.
 - Timer IRQ preemption now rewrites the interrupted RIP to a kernel preempt trampoline and yields back to the scheduler.
 
+### Debugging
+- A debug-only wasm native `debug_mark(tag)` logs a tag and PID to the serial console to confirm user-space execution paths.
+
 ### Stepwise Plan
 1. Freeze the `boot_info_t` contract and document versioning rules.
 2. Specify IPC message formats, error codes, and permission rules.

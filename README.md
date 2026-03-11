@@ -171,6 +171,7 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes. U
 - WASMOS follows a microkernel direction: the kernel keeps only minimal primitives, while drivers/services/apps are WASM programs.
 - Each WASM program is expected to run in an isolated WAMR context with its own memory regions.
 - Inter-component communication is IPC-based.
+- Debugging: the `debug_mark(tag)` wasm native logs a tag and PID to serial to confirm app execution paths.
 - The #GP exception handler logs err/rip/cs/rflags plus current PID/name and stack bounds for debugging non-canonical instruction pointers.
 - Process stacks carry canaries at base/top and are checked on each process entry to catch overflows early.
 - Process stacks reserve an unmapped guard page above and below the usable stack to catch overflows as page faults.

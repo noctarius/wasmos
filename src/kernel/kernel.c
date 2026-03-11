@@ -834,6 +834,17 @@ native_console_write(wasm_exec_env_t exec_env, int32_t ptr, int32_t len)
 }
 
 static int32_t
+native_debug_mark(wasm_exec_env_t exec_env, int32_t tag)
+{
+    (void)exec_env;
+    serial_write_unlocked("[wasm] debug_mark tag=");
+    serial_write_hex64_unlocked((uint64_t)(uint32_t)tag);
+    serial_write_unlocked("[wasm] debug_mark pid=");
+    serial_write_hex64_unlocked((uint64_t)process_current_pid());
+    return 0;
+}
+
+static int32_t
 native_console_read(wasm_exec_env_t exec_env, char *ptr, int32_t len)
 {
     (void)exec_env;
@@ -975,6 +986,7 @@ register_wasm_ipc_natives(void)
         { "ipc_notify", native_ipc_notify, "(i)i", 0 },
         { "ipc_last_field", native_ipc_last_field, "(i)i", 0 },
         { "console_write", native_console_write, "(ii)i", 0 },
+        { "debug_mark", native_debug_mark, "(i)i", 0 },
         { "console_read", native_console_read, "(*~)i", 0 },
         { "proc_count", native_proc_count, "()i", 0 },
         { "proc_exit", native_proc_exit, "(i)i", 0 },

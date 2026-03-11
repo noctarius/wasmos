@@ -49,6 +49,8 @@ volatile void *wasmos_wamr_last_frame_lp;
 volatile void *wasmos_wamr_stack_top;
 volatile void *wasmos_wamr_last_native_ptr;
 volatile uint32_t wasmos_wamr_last_native_index;
+volatile uint32_t wasmos_wamr_native_calls;
+volatile uint32_t wasmos_wamr_bytecode_calls;
 volatile void *wasmos_wamr_bad_ip;
 volatile void *wasmos_wamr_bad_sp;
 volatile void *wasmos_wamr_bad_csp;
@@ -1362,6 +1364,8 @@ wasm_interp_call_func_native(WASMModuleInstance *module_inst,
         return;
     }
 
+    wasmos_wamr_native_calls++;
+
     if (func_import->call_conv_wasm_c_api) {
         ret = wasm_runtime_invoke_c_api_native(
             (WASMModuleInstanceCommon *)module_inst, native_func_pointer,
@@ -1739,6 +1743,7 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD)
     preempt_disable();
 #endif
+    wasmos_wamr_bytecode_calls++;
     WASMMemoryInstance *memory = wasm_get_default_memory(module);
 #if !defined(OS_ENABLE_HW_BOUND_CHECK)              \
     || WASM_CPU_SUPPORTS_UNALIGNED_ADDR_ACCESS == 0 \

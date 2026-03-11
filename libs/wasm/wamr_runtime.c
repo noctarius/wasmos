@@ -9,6 +9,11 @@
 #include "process.h"
 #endif
 
+extern volatile void *wasmos_wamr_last_native_ptr;
+extern volatile uint32_t wasmos_wamr_last_native_index;
+extern volatile uint32_t wasmos_wamr_native_calls;
+extern volatile uint32_t wasmos_wamr_bytecode_calls;
+
 static void memzero8(void *dst, uint32_t size) {
     uint8_t *d = (uint8_t *)dst;
     for (uint32_t i = 0; i < size; ++i) {
@@ -53,12 +58,50 @@ log_exec_env_layout(const char *label, wasm_exec_env_t exec_env)
 }
 
 int wamr_runtime_init(void) {
+    static int logged = 0;
+    if (!logged) {
+        logged = 1;
+#if WASM_ENABLE_FAST_INTERP != 0
+        serial_write("[wamr] config fast_interp=1\n");
+#else
+        serial_write("[wamr] config fast_interp=0\n");
+#endif
+#if WASM_ENABLE_AOT != 0
+        serial_write("[wamr] config aot=1\n");
+#else
+        serial_write("[wamr] config aot=0\n");
+#endif
+#if WASM_ENABLE_JIT != 0
+        serial_write("[wamr] config jit=1\n");
+#else
+        serial_write("[wamr] config jit=0\n");
+#endif
+    }
     return wasm_runtime_init() ? 1 : 0;
 }
 
 int wamr_runtime_init_with_pool(void *heap_buf, uint32_t heap_size) {
     if (!heap_buf || heap_size == 0) {
         return 0;
+    }
+    static int logged = 0;
+    if (!logged) {
+        logged = 1;
+#if WASM_ENABLE_FAST_INTERP != 0
+        serial_write("[wamr] config fast_interp=1\n");
+#else
+        serial_write("[wamr] config fast_interp=0\n");
+#endif
+#if WASM_ENABLE_AOT != 0
+        serial_write("[wamr] config aot=1\n");
+#else
+        serial_write("[wamr] config aot=0\n");
+#endif
+#if WASM_ENABLE_JIT != 0
+        serial_write("[wamr] config jit=1\n");
+#else
+        serial_write("[wamr] config jit=0\n");
+#endif
     }
     RuntimeInitArgs init_args;
     memzero8(&init_args, sizeof(init_args));
@@ -168,7 +211,19 @@ int wamr_call_function(wamr_instance_t *instance,
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD)
     preempt_disable();
 #endif
+    wasmos_wamr_last_native_ptr = 0;
+    wasmos_wamr_last_native_index = 0;
+    wasmos_wamr_native_calls = 0;
+    wasmos_wamr_bytecode_calls = 0;
     int ok = wasm_runtime_call_wasm(exec_env, func, argc, argv) ? 1 : 0;
+    serial_write("[wamr] last native ptr=");
+    serial_write_hex64_local((uint64_t)(uintptr_t)wasmos_wamr_last_native_ptr);
+    serial_write("[wamr] last native idx=");
+    serial_write_hex64_local((uint64_t)wasmos_wamr_last_native_index);
+    serial_write("[wamr] native call count=");
+    serial_write_hex64_local((uint64_t)wasmos_wamr_native_calls);
+    serial_write("[wamr] bytecode call count=");
+    serial_write_hex64_local((uint64_t)wasmos_wamr_bytecode_calls);
     const char *exc = wasm_runtime_get_exception((wasm_module_inst_t)instance);
     if (exc) {
         serial_write("[wamr] exception ");

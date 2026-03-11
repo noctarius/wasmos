@@ -61,6 +61,7 @@ typedef struct {
     uint8_t phase;
     uint32_t reply_endpoint;
     uint32_t request_id;
+    uint32_t smoke_index;
     uint32_t sysinit_index;
 } init_state_t;
 
@@ -1214,6 +1215,7 @@ init_entry(process_t *process, void *arg)
         state->phase = 0;
         state->reply_endpoint = IPC_ENDPOINT_NONE;
         state->request_id = 1;
+        state->smoke_index = boot_module_index_by_app_name(state->boot_info, "init-smoke");
         state->sysinit_index = boot_module_index_by_app_name(state->boot_info, "sysinit");
         if (state->sysinit_index == 0xFFFFFFFFu) {
             serial_write("[init] sysinit module not found\n");
@@ -1236,11 +1238,18 @@ init_entry(process_t *process, void *arg)
         msg.source = state->reply_endpoint;
         msg.destination = proc_ep;
         msg.request_id = state->request_id;
-        msg.arg0 = state->sysinit_index;
+        if (state->smoke_index != 0xFFFFFFFFu) {
+            serial_write("[init] spawn init-smoke\n");
+            msg.arg0 = state->smoke_index;
+            state->phase = 1;
+        } else {
+            serial_write("[init] spawn sysinit\n");
+            msg.arg0 = state->sysinit_index;
+            state->phase = 2;
+        }
         msg.arg1 = 0;
         msg.arg2 = 0;
         msg.arg3 = 0;
-        serial_write("[init] spawn sysinit\n");
         serial_write("[init] proc ep=");
         serial_write_hex64(proc_ep);
         serial_write("[init] reply ep=");
@@ -1264,9 +1273,9 @@ init_entry(process_t *process, void *arg)
         serial_write_unlocked("[init] send rc=");
         serial_write_hex64_unlocked((uint64_t)(uint32_t)send_rc);
         if (send_rc != IPC_OK) {
-            serial_write("[init] sysinit spawn request failed rc=");
+            serial_write("[init] spawn request failed rc=");
             serial_write_hex64((uint64_t)(uint32_t)send_rc);
-            serial_write("[init] sysinit spawn request failed\n");
+            serial_write("[init] spawn request failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
@@ -1279,11 +1288,46 @@ init_entry(process_t *process, void *arg)
             serial_write_unlocked("[init] proc queue rc=");
             serial_write_hex64_unlocked((uint64_t)(uint32_t)count_rc);
         }
-        state->phase = 1;
         return PROCESS_RUN_YIELDED;
     }
 
     if (state->phase == 1) {
+        int recv_rc = ipc_recv_for(process->context_id, state->reply_endpoint, &msg);
+        if (recv_rc == IPC_EMPTY) {
+            process_block_on_ipc(process);
+            return PROCESS_RUN_BLOCKED;
+        }
+        if (recv_rc != IPC_OK) {
+            return PROCESS_RUN_YIELDED;
+        }
+        if (msg.request_id != state->request_id || msg.type == PROC_IPC_ERROR) {
+            serial_write("[init] init-smoke spawn failed\n");
+            process_set_exit_status(process, -1);
+            return PROCESS_RUN_EXITED;
+        }
+        serial_write("[init] init-smoke spawn ok\n");
+        state->request_id++;
+        msg.type = PROC_IPC_SPAWN;
+        msg.source = state->reply_endpoint;
+        msg.destination = process_manager_endpoint();
+        msg.request_id = state->request_id;
+        msg.arg0 = state->sysinit_index;
+        msg.arg1 = 0;
+        msg.arg2 = 0;
+        msg.arg3 = 0;
+        serial_write("[init] spawn sysinit\n");
+        int send_rc = ipc_send_from(process->context_id, msg.destination, &msg);
+        if (send_rc != IPC_OK) {
+            serial_write("[init] sysinit spawn request failed rc=");
+            serial_write_hex64((uint64_t)(uint32_t)send_rc);
+            serial_write("[init] sysinit spawn request failed\n");
+            process_set_exit_status(process, -1);
+            return PROCESS_RUN_EXITED;
+        }
+        state->phase = 2;
+    }
+
+    if (state->phase == 2) {
         int recv_rc = ipc_recv_for(process->context_id, state->reply_endpoint, &msg);
         if (recv_rc == IPC_EMPTY) {
             process_block_on_ipc(process);
@@ -1298,7 +1342,7 @@ init_entry(process_t *process, void *arg)
             return PROCESS_RUN_EXITED;
         }
         serial_write("[init] sysinit spawn ok\n");
-        state->phase = 2;
+        state->phase = 3;
     }
 
     process_block_on_ipc(process);

@@ -348,12 +348,14 @@ native_ipc_create_endpoint(wasm_exec_env_t exec_env)
 
     (void)exec_env;
 
+    preempt_safepoint();
     if (current_process_context(&context_id) != 0) {
         return -1;
     }
     if (ipc_endpoint_create(context_id, &endpoint) != IPC_OK) {
         return -1;
     }
+    preempt_safepoint();
     return (int32_t)endpoint;
 }
 
@@ -365,12 +367,14 @@ native_ipc_create_notification(wasm_exec_env_t exec_env)
 
     (void)exec_env;
 
+    preempt_safepoint();
     if (current_process_context(&context_id) != 0) {
         return -1;
     }
     if (ipc_notification_create(context_id, &endpoint) != IPC_OK) {
         return -1;
     }
+    preempt_safepoint();
     return (int32_t)endpoint;
 }
 
@@ -390,6 +394,7 @@ native_ipc_send(wasm_exec_env_t exec_env,
 
     (void)exec_env;
 
+    preempt_safepoint();
     if (destination_endpoint < 0 || source_endpoint < 0) {
         return -1;
     }
@@ -407,7 +412,9 @@ native_ipc_send(wasm_exec_env_t exec_env,
     req.arg2 = (uint32_t)arg2;
     req.arg3 = (uint32_t)arg3;
 
-    return ipc_send_from(context_id, (uint32_t)destination_endpoint, &req);
+    int rc = ipc_send_from(context_id, (uint32_t)destination_endpoint, &req);
+    preempt_safepoint();
+    return rc;
 }
 
 static int32_t
@@ -435,17 +442,20 @@ native_ipc_recv(wasm_exec_env_t exec_env, int32_t endpoint)
         return -1;
     }
 
+    preempt_safepoint();
     for (;;) {
         rc = ipc_recv_for(context_id, (uint32_t)endpoint, &slot->message);
         if (rc == IPC_EMPTY) {
             process_block_on_ipc(process);
             process_yield(PROCESS_RUN_BLOCKED);
+            preempt_safepoint();
             continue;
         }
         if (rc != IPC_OK) {
             return -1;
         }
         slot->valid = 1;
+        preempt_safepoint();
         return 1;
     }
 }
@@ -458,17 +468,20 @@ native_ipc_wait(wasm_exec_env_t exec_env, int32_t endpoint)
 
     (void)exec_env;
 
+    preempt_safepoint();
     if (endpoint < 0 || current_process_context(&context_id) != 0) {
         return -1;
     }
 
     rc = ipc_wait_for(context_id, (uint32_t)endpoint);
     if (rc == IPC_EMPTY) {
+        preempt_safepoint();
         return 0;
     }
     if (rc != IPC_OK) {
         return -1;
     }
+    preempt_safepoint();
     return 1;
 }
 
@@ -479,10 +492,13 @@ native_ipc_notify(wasm_exec_env_t exec_env, int32_t endpoint)
 
     (void)exec_env;
 
+    preempt_safepoint();
     if (endpoint < 0 || current_process_context(&context_id) != 0) {
         return -1;
     }
-    return ipc_notify_from(context_id, (uint32_t)endpoint) == IPC_OK ? 0 : -1;
+    int rc = ipc_notify_from(context_id, (uint32_t)endpoint) == IPC_OK ? 0 : -1;
+    preempt_safepoint();
+    return rc;
 }
 
 static int32_t
@@ -788,6 +804,10 @@ native_console_write(wasm_exec_env_t exec_env, int32_t ptr, int32_t len)
     if (!module_inst) {
         return -1;
     }
+    serial_write_unlocked("[wasm] console_write ");
+    serial_write_hex64_unlocked((uint64_t)(uint32_t)ptr);
+    serial_write_unlocked("[wasm] console_write len ");
+    serial_write_hex64_unlocked((uint64_t)(uint32_t)len);
     if (!wasm_runtime_validate_app_addr(module_inst, (uint64_t)ptr, (uint64_t)len)) {
         log_bad_app_addr("console_write", (uint64_t)ptr, (uint64_t)len);
         return -1;

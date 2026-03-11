@@ -41,6 +41,7 @@ static int32_t g_module_count = 0;
 static int32_t g_init_index = -1;
 static int32_t g_next_index = 0;
 static int32_t g_pending_index = -1;
+static int32_t g_tick = 0;
 
 static void
 stall_forever(void)
@@ -80,7 +81,11 @@ log_line(const char *s)
         len++;
     }
     if (len > 0) {
-        wasmos_console_write((int32_t)(uintptr_t)s, len);
+        int32_t rc = wasmos_console_write((int32_t)(uintptr_t)s, len);
+        if (rc < 0) {
+            char ch = '!';
+            (void)wasmos_console_write((int32_t)(uintptr_t)&ch, 1);
+        }
     }
 }
 
@@ -94,6 +99,7 @@ proc_running(const char *name)
     if (count > 64) {
         count = 64;
     }
+    log_line("[sysinit] proc snapshot\n");
     for (int32_t i = 0; i < count; ++i) {
         char buf[32];
         buf[0] = '\0';
@@ -101,6 +107,9 @@ proc_running(const char *name)
         if (pid <= 0) {
             continue;
         }
+        log_line("[sysinit] proc ");
+        log_line(buf);
+        log_line("\n");
         if (str_eq(buf, name)) {
             return 1;
         }
@@ -130,6 +139,11 @@ initialize(int32_t proc_endpoint,
 {
     (void)ignored_arg3;
 
+    {
+        char ch = 'S';
+        wasmos_console_write((int32_t)(uintptr_t)&ch, 1);
+    }
+
     g_reply_endpoint = wasmos_ipc_create_endpoint();
     if (g_reply_endpoint < 0) {
         log_line("[sysinit] failed to create reply endpoint\n");
@@ -147,29 +161,115 @@ initialize(int32_t proc_endpoint,
     g_next_index = 0;
     g_pending_index = -1;
     log_line("[sysinit] start\n");
+    log_line("[sysinit] boot module list\n");
+    for (int32_t i = 0; i < g_module_count; ++i) {
+        char name[32];
+        name[0] = '\0';
+        if (wasmos_boot_module_name(i, (int32_t)(uintptr_t)name, (int32_t)sizeof(name)) >= 0) {
+            log_line("[sysinit] module ");
+            log_line(name);
+            log_line(" idx=");
+            {
+                char buf[12];
+                int n = i;
+                int k = 0;
+                if (n == 0) {
+                    buf[k++] = '0';
+                } else {
+                    int32_t tmp = n;
+                    char rev[12];
+                    int r = 0;
+                    while (tmp > 0 && r < (int)sizeof(rev)) {
+                        rev[r++] = (char)('0' + (tmp % 10));
+                        tmp /= 10;
+                    }
+                    while (r > 0) {
+                        buf[k++] = rev[--r];
+                    }
+                }
+                buf[k++] = '\n';
+                buf[k] = '\0';
+                log_line(buf);
+            }
+        } else {
+            log_line("[sysinit] module <name-error>\n");
+        }
+    }
 
     for (;;) {
+        g_tick++;
+        for (volatile int spin = 0; spin < 200000; ++spin) {
+        }
         while (g_next_index < g_module_count &&
                (g_next_index == g_init_index || should_skip_module(g_next_index))) {
+            log_line("[sysinit] skip index ");
+            char buf[12];
+            int n = g_next_index;
+            int i = 0;
+            if (n == 0) {
+                buf[i++] = '0';
+            } else {
+                int32_t tmp = n;
+                char rev[12];
+                int r = 0;
+                while (tmp > 0 && r < (int)sizeof(rev)) {
+                    rev[r++] = (char)('0' + (tmp % 10));
+                    tmp /= 10;
+                }
+                while (r > 0) {
+                    buf[i++] = rev[--r];
+                }
+            }
+            buf[i++] = '\n';
+            buf[i] = '\0';
+            log_line(buf);
             g_next_index++;
         }
         if (g_next_index >= g_module_count) {
+            log_line("[sysinit] idle wait\n");
             (void)wasmos_ipc_recv(g_reply_endpoint);
             continue;
         }
 
         char name[32];
         name[0] = '\0';
-        if (wasmos_boot_module_name(g_next_index,
-                                    (int32_t)(uintptr_t)name,
-                                    (int32_t)sizeof(name)) >= 0 &&
-            str_eq(name, "cli") && !proc_running("fs-fat")) {
+        int32_t name_rc = wasmos_boot_module_name(g_next_index,
+                                                  (int32_t)(uintptr_t)name,
+                                                  (int32_t)sizeof(name));
+        if (name_rc < 0) {
+            log_line("[sysinit] module name read failed\n");
+            stall_forever();
+        }
+        if (str_eq(name, "cli") && !proc_running("fs-fat")) {
+            log_line("[sysinit] defer cli until fs-fat\n");
             continue;
         }
 
         log_line("[sysinit] spawn ");
         log_line(name);
-        log_line("\n");
+        log_line(" idx=");
+        {
+            char buf[12];
+            int n = g_next_index;
+            int i = 0;
+            if (n == 0) {
+                buf[i++] = '0';
+            } else {
+                int32_t tmp = n;
+                char rev[12];
+                int r = 0;
+                while (tmp > 0 && r < (int)sizeof(rev)) {
+                    rev[r++] = (char)('0' + (tmp % 10));
+                    tmp /= 10;
+                }
+                while (r > 0) {
+                    buf[i++] = rev[--r];
+                }
+            }
+            buf[i++] = '\n';
+            buf[i] = '\0';
+            log_line(buf);
+        }
 
         if (wasmos_ipc_send(g_proc_endpoint, g_reply_endpoint,
                             PROC_IPC_SPAWN,
@@ -197,7 +297,29 @@ initialize(int32_t proc_endpoint,
             stall_forever();
         }
         if (resp_type != PROC_IPC_RESP) {
-            log_line("[sysinit] spawn failed\n");
+            log_line("[sysinit] spawn failed type=");
+            {
+                char buf[12];
+                int n = resp_type;
+                int i = 0;
+                if (n == 0) {
+                    buf[i++] = '0';
+                } else {
+                    int32_t tmp = n;
+                    char rev[12];
+                    int r = 0;
+                    while (tmp > 0 && r < (int)sizeof(rev)) {
+                        rev[r++] = (char)('0' + (tmp % 10));
+                        tmp /= 10;
+                    }
+                    while (r > 0) {
+                        buf[i++] = rev[--r];
+                    }
+                }
+                buf[i++] = '\n';
+                buf[i] = '\0';
+                log_line(buf);
+            }
             stall_forever();
         }
 

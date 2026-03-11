@@ -17,18 +17,48 @@ static uint32_t g_ready_head;
 static uint32_t g_ready_tail;
 static uint32_t g_ready_count;
 static process_t *g_current_process;
+
 static process_run_result_t g_last_run_result;
 process_context_t g_sched_ctx;
 static uint32_t g_preempt_disable_count;
 static process_t *g_idle_process;
 volatile uint8_t g_in_context_switch;
 volatile uint8_t g_in_scheduler;
+static uint64_t g_ctx_watch_logged;
+static uint64_t g_ctx_watch_last_logged_rip;
+static uint64_t g_ctx_watch_last_logged_rsp;
+static uint64_t g_ctx_watch_last_logged_rflags;
+static uint64_t g_ctx_watch_last_logged_reason;
+
+volatile uint64_t g_ctxsw_last_out_ctx;
+volatile uint64_t g_ctxsw_last_out_rip;
+volatile uint64_t g_ctxsw_last_out_rsp;
+volatile uint64_t g_ctxsw_last_out_rflags;
+volatile uint64_t g_ctxsw_last_in_ctx;
+volatile uint64_t g_ctxsw_last_in_rip;
+volatile uint64_t g_ctxsw_last_in_rsp;
+volatile uint64_t g_ctxsw_last_in_rflags;
+volatile uint64_t g_ctx_watch_ctx;
+volatile uint64_t g_ctx_watch_last_ctx;
+volatile uint64_t g_ctx_watch_last_rip;
+volatile uint64_t g_ctx_watch_last_rsp;
+volatile uint64_t g_ctx_watch_last_rflags;
+volatile uint64_t g_ctx_watch_hits;
+volatile uint64_t g_ctx_watch_reason;
+volatile uint64_t g_ctx_restore_ctx;
+volatile uint64_t g_ctx_restore_rip;
+volatile uint64_t g_ctx_restore_rsp;
+volatile uint64_t g_ctx_restore_rflags;
+volatile uint64_t *g_pm_stack_watch;
+static uint32_t g_pm_preempt_safe_depth;
 
 extern uint8_t __kernel_start;
 extern uint8_t __kernel_end;
 
 #define PAGE_SIZE 0x1000u
 #define STACK_GUARD_PAGES 1u
+#define STACK_REDZONE_BYTES 4096u
+#define STACK_CANARY_VALUE 0xC0DEC0DEF00DFACEULL
 
 static int
 process_alloc_stack(process_t *slot, uint32_t stack_pages)
@@ -66,8 +96,11 @@ process_alloc_stack(process_t *slot, uint32_t stack_pages)
     if (slot->stack_base && slot->stack_top > slot->stack_base + sizeof(uint64_t)) {
         uint64_t *base_canary = (uint64_t *)(uintptr_t)slot->stack_base;
         uint64_t *top_canary = (uint64_t *)(uintptr_t)(slot->stack_top - sizeof(uint64_t));
-        *base_canary = 0xC0DEC0DEF00DFACEULL;
-        *top_canary = 0xC0DEC0DEF00DFACEULL;
+        uintptr_t mid_addr = slot->stack_base + (slot->stack_top - slot->stack_base) / 2u;
+        uint64_t *mid_canary = (uint64_t *)(uintptr_t)(mid_addr & ~(uintptr_t)0x7u);
+        *base_canary = STACK_CANARY_VALUE;
+        *top_canary = STACK_CANARY_VALUE;
+        *mid_canary = STACK_CANARY_VALUE;
     }
     return 0;
 }
@@ -105,9 +138,85 @@ static int process_str_eq(const char *a, const char *b) {
     return 1;
 }
 
+static void process_log_ctx_watch(const char *where) {
+    serial_write("[sched] ctxwatch ");
+    if (where) {
+        serial_write(where);
+    }
+    serial_write(" ctx=");
+    process_log_hex64(g_ctx_watch_last_ctx);
+    serial_write("[sched] ctxwatch hits=");
+    process_log_hex64(g_ctx_watch_hits);
+    serial_write("[sched] ctxwatch reason=");
+    process_log_hex64(g_ctx_watch_reason);
+    serial_write("[sched] ctxwatch rip=");
+    process_log_hex64(g_ctx_watch_last_rip);
+    serial_write("[sched] ctxwatch rsp=");
+    process_log_hex64(g_ctx_watch_last_rsp);
+    serial_write("[sched] ctxwatch rflags=");
+    process_log_hex64(g_ctx_watch_last_rflags);
+}
+
+static void process_log_ctxsw_state(void) {
+    serial_write("[sched] ctxsw out ctx=");
+    process_log_hex64(g_ctxsw_last_out_ctx);
+    serial_write("[sched] ctxsw out rip=");
+    process_log_hex64(g_ctxsw_last_out_rip);
+    serial_write("[sched] ctxsw out rsp=");
+    process_log_hex64(g_ctxsw_last_out_rsp);
+    serial_write("[sched] ctxsw out rflags=");
+    process_log_hex64(g_ctxsw_last_out_rflags);
+    serial_write("[sched] ctxsw in ctx=");
+    process_log_hex64(g_ctxsw_last_in_ctx);
+    serial_write("[sched] ctxsw in rip=");
+    process_log_hex64(g_ctxsw_last_in_rip);
+    serial_write("[sched] ctxsw in rsp=");
+    process_log_hex64(g_ctxsw_last_in_rsp);
+    serial_write("[sched] ctxsw in rflags=");
+    process_log_hex64(g_ctxsw_last_in_rflags);
+    serial_write("[sched] ctxsw restore ctx=");
+    process_log_hex64(g_ctx_restore_ctx);
+    serial_write("[sched] ctxsw restore rip=");
+    process_log_hex64(g_ctx_restore_rip);
+    serial_write("[sched] ctxsw restore rsp=");
+    process_log_hex64(g_ctx_restore_rsp);
+    serial_write("[sched] ctxsw restore rflags=");
+    process_log_hex64(g_ctx_restore_rflags);
+}
+
+static void process_log_ctx_watch_if_changed(void) {
+    if (g_ctx_watch_last_rip == g_ctx_watch_last_logged_rip &&
+        g_ctx_watch_last_rsp == g_ctx_watch_last_logged_rsp &&
+        g_ctx_watch_last_rflags == g_ctx_watch_last_logged_rflags &&
+        g_ctx_watch_reason == g_ctx_watch_last_logged_reason) {
+        return;
+    }
+    g_ctx_watch_last_logged_rip = g_ctx_watch_last_rip;
+    g_ctx_watch_last_logged_rsp = g_ctx_watch_last_rsp;
+    g_ctx_watch_last_logged_rflags = g_ctx_watch_last_rflags;
+    g_ctx_watch_last_logged_reason = g_ctx_watch_reason;
+    process_log_ctx_watch("ctxsw");
+}
+
 static void process_validate_context(process_t *proc, const char *where) {
     if (!proc) {
         return;
+    }
+    if (proc->ctx_canary_pre != PROCESS_CTX_CANARY_VALUE ||
+        proc->ctx_canary_post != PROCESS_CTX_CANARY_VALUE) {
+        serial_write("[sched] ctx canary corrupt pid=");
+        process_log_hex64(proc->pid);
+        serial_write("[sched] name=");
+        serial_write(proc->name ? proc->name : "(null)");
+        serial_write("\n[sched] ctx canary pre=");
+        process_log_hex64(proc->ctx_canary_pre);
+        serial_write("[sched] ctx canary post=");
+        process_log_hex64(proc->ctx_canary_post);
+        process_log_ctxsw_state();
+        process_log_ctx_watch("canary");
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
     }
     uint64_t rip = proc->ctx.rip;
     uint64_t start = (uint64_t)(uintptr_t)&__kernel_start;
@@ -127,6 +236,8 @@ static void process_validate_context(process_t *proc, const char *where) {
     process_log_hex64(rip);
     serial_write("[sched] rsp=");
     process_log_hex64(proc->ctx.rsp);
+    process_log_ctxsw_state();
+    process_log_ctx_watch("invalid-rip");
     for (;;) {
         __asm__ volatile("hlt");
     }
@@ -178,9 +289,12 @@ static void process_trampoline(void) {
         if (g_current_process) {
             uint64_t *base = (uint64_t *)(uintptr_t)g_current_process->stack_base;
             uint64_t *top = (uint64_t *)(uintptr_t)(g_current_process->stack_top - sizeof(uint64_t));
-            if (base && top) {
-                const uint64_t canary = 0xC0DEC0DEF00DFACEULL;
-                if (*base != canary || *top != canary) {
+            uintptr_t mid_addr = g_current_process->stack_base
+                                 + (g_current_process->stack_top - g_current_process->stack_base) / 2u;
+            uint64_t *mid = (uint64_t *)(uintptr_t)(mid_addr & ~(uintptr_t)0x7u);
+            if (base && top && mid) {
+                const uint64_t canary = STACK_CANARY_VALUE;
+                if (*base != canary || *top != canary || *mid != canary) {
                     serial_write_unlocked("[sched] stack canary tripped for ");
                     if (g_current_process->name) {
                         serial_write_unlocked(g_current_process->name);
@@ -188,6 +302,18 @@ static void process_trampoline(void) {
                         serial_write_unlocked("(unknown)");
                     }
                     serial_write_unlocked("\n");
+                    serial_write_unlocked("[sched] base=");
+                    process_log_hex64((uint64_t)(uintptr_t)base);
+                    serial_write_unlocked("[sched] mid=");
+                    process_log_hex64((uint64_t)(uintptr_t)mid);
+                    serial_write_unlocked("[sched] top=");
+                    process_log_hex64((uint64_t)(uintptr_t)top);
+                    serial_write_unlocked("[sched] base val=");
+                    process_log_hex64(*base);
+                    serial_write_unlocked("[sched] mid val=");
+                    process_log_hex64(*mid);
+                    serial_write_unlocked("[sched] top val=");
+                    process_log_hex64(*top);
                     for (;;) {
                         __asm__ volatile("cli; hlt");
                     }
@@ -205,6 +331,10 @@ static void process_trampoline(void) {
         critical_section_enter();
         g_in_scheduler = 1;
         context_switch(&g_current_process->ctx, &g_sched_ctx);
+        if (g_ctx_watch_hits != g_ctx_watch_logged) {
+            g_ctx_watch_logged = g_ctx_watch_hits;
+            process_log_ctx_watch_if_changed();
+        }
     }
 }
 
@@ -227,6 +357,8 @@ static void process_reset_slot(process_t *proc) {
     proc->in_ready_queue = 0;
     proc->is_idle = 0;
     proc->ctx = (process_context_t){0};
+    proc->ctx_canary_pre = 0;
+    proc->ctx_canary_post = 0;
     proc->stack_base = 0;
     proc->stack_top = 0;
     proc->stack_pages = 0;
@@ -317,6 +449,24 @@ void process_init(void) {
     g_preempt_disable_count = 0;
     g_idle_process = 0;
     g_in_scheduler = 1;
+    g_ctx_watch_ctx = 0;
+    g_ctx_watch_last_ctx = 0;
+    g_ctx_watch_last_rip = 0;
+    g_ctx_watch_last_rsp = 0;
+    g_ctx_watch_last_rflags = 0;
+    g_ctx_watch_hits = 0;
+    g_ctx_watch_reason = 0;
+    g_ctx_watch_logged = 0;
+    g_ctx_watch_last_logged_rip = 0;
+    g_ctx_watch_last_logged_rsp = 0;
+    g_ctx_watch_last_logged_rflags = 0;
+    g_ctx_watch_last_logged_reason = 0;
+    g_ctx_restore_ctx = 0;
+    g_ctx_restore_rip = 0;
+    g_ctx_restore_rsp = 0;
+    g_ctx_restore_rflags = 0;
+    g_pm_stack_watch = 0;
+    g_pm_preempt_safe_depth = 0;
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         process_reset_slot(&g_processes[i]);
     }
@@ -352,6 +502,8 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
     slot->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     slot->ticks_remaining = slot->time_slice_ticks;
     slot->ticks_total = 0;
+    slot->ctx_canary_pre = PROCESS_CTX_CANARY_VALUE;
+    slot->ctx_canary_post = PROCESS_CTX_CANARY_VALUE;
     slot->entry = entry;
     slot->arg = arg;
     slot->name = name;
@@ -359,9 +511,22 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
     if (process_alloc_stack(slot, stack_pages) != 0) {
         return -1;
     }
-    slot->ctx.rsp = slot->stack_top - 8u;
+    slot->ctx.rsp = slot->stack_top - (STACK_REDZONE_BYTES + 8u);
     slot->ctx.rip = (uint64_t)(uintptr_t)process_trampoline;
     slot->ctx.rflags = 0x200;
+    if (process_str_eq(name, "process-manager")) {
+        g_ctx_watch_ctx = (uint64_t)(uintptr_t)&slot->ctx;
+        g_ctx_watch_last_ctx = g_ctx_watch_ctx;
+        g_ctx_watch_hits = 0;
+        g_ctx_watch_reason = 0;
+        serial_write("[sched] ctxwatch armed ctx=");
+        process_log_hex64(g_ctx_watch_ctx);
+        if (slot->stack_top >= sizeof(uint64_t)) {
+            g_pm_stack_watch = (uint64_t *)(uintptr_t)(slot->stack_top - sizeof(uint64_t));
+            serial_write("[sched] pm stack watch addr=");
+            process_log_hex64((uint64_t)(uintptr_t)g_pm_stack_watch);
+        }
+    }
     if (process_str_eq(name, "preempt-busy")) {
         serial_write("[sched] spawn preempt-busy rip=");
         process_log_hex64(slot->ctx.rip);
@@ -406,6 +571,8 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
     slot->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     slot->ticks_remaining = slot->time_slice_ticks;
     slot->ticks_total = 0;
+    slot->ctx_canary_pre = PROCESS_CTX_CANARY_VALUE;
+    slot->ctx_canary_post = PROCESS_CTX_CANARY_VALUE;
     slot->entry = entry;
     slot->arg = arg;
     slot->name = name;
@@ -414,7 +581,7 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
     if (process_alloc_stack(slot, stack_pages) != 0) {
         return -1;
     }
-    slot->ctx.rsp = slot->stack_top - 8u;
+    slot->ctx.rsp = slot->stack_top - (STACK_REDZONE_BYTES + 8u);
     slot->ctx.rip = (uint64_t)(uintptr_t)process_trampoline;
     slot->ctx.rflags = 0x200;
     g_idle_process = slot;
@@ -553,6 +720,23 @@ int process_schedule_once(void) {
         }
     }
 
+    if (proc->ctx_canary_pre != PROCESS_CTX_CANARY_VALUE ||
+        proc->ctx_canary_post != PROCESS_CTX_CANARY_VALUE) {
+        serial_write("[sched] ctx canary corrupt before restore pid=");
+        process_log_hex64(proc->pid);
+        serial_write("[sched] name=");
+        serial_write(proc->name ? proc->name : "(null)");
+        serial_write("\n[sched] ctx canary pre=");
+        process_log_hex64(proc->ctx_canary_pre);
+        serial_write("[sched] ctx canary post=");
+        process_log_hex64(proc->ctx_canary_post);
+        process_log_ctxsw_state();
+        process_log_ctx_watch("pre-restore-canary");
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
+
     proc->state = PROCESS_STATE_RUNNING;
     if (proc->ticks_remaining == 0) {
         proc->ticks_remaining = proc->time_slice_ticks;
@@ -623,12 +807,97 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     if (g_in_context_switch) {
         return 0;
     }
+    if (g_current_process && process_str_eq(g_current_process->name, "process-manager") &&
+        g_pm_preempt_safe_depth == 0) {
+        return 0;
+    }
     if (!process_should_resched() || !preempt_is_enabled()) {
         return 0;
     }
     if (!g_current_process || g_current_process->state != PROCESS_STATE_RUNNING) {
         process_clear_resched();
         return 0;
+    }
+
+    uint64_t start = (uint64_t)(uintptr_t)&__kernel_start;
+    uint64_t end = (uint64_t)(uintptr_t)&__kernel_end;
+    if (process_str_eq(g_current_process->name, "process-manager")) {
+        static uint8_t logged_frame_dump;
+        if (!logged_frame_dump) {
+            logged_frame_dump = 1;
+            serial_write("[irq] pm preempt frame dump\n");
+            serial_write("[irq] frame ptr=");
+            process_log_hex64((uint64_t)(uintptr_t)frame);
+            serial_write("[irq] frame rip=");
+            process_log_hex64(frame->rip);
+            serial_write("[irq] frame cs=");
+            process_log_hex64(frame->cs);
+            serial_write("[irq] frame rflags=");
+            process_log_hex64(frame->rflags);
+            uint64_t *raw = (uint64_t *)(uintptr_t)frame;
+            for (uint32_t i = 0; i < 8; ++i) {
+                serial_write("[irq] frame qword ");
+                process_log_hex64(i);
+                process_log_hex64(raw[i]);
+            }
+            uint64_t *tail = (uint64_t *)((uintptr_t)frame + 120);
+            for (uint32_t i = 0; i < 4; ++i) {
+                serial_write("[irq] iret qword ");
+                process_log_hex64(i);
+                process_log_hex64(tail[i]);
+            }
+        }
+    }
+    if ((frame->rip < start || frame->rip >= end) && process_str_eq(g_current_process->name, "process-manager")) {
+        static uint8_t logged_bad_frame;
+        if (!logged_bad_frame) {
+            logged_bad_frame = 1;
+            serial_write("[irq] bad frame rip for pm\n");
+            serial_write("[irq] frame ptr=");
+            process_log_hex64((uint64_t)(uintptr_t)frame);
+            serial_write("[irq] frame rip=");
+            process_log_hex64(frame->rip);
+            serial_write("[irq] frame cs=");
+            process_log_hex64(frame->cs);
+            serial_write("[irq] frame rflags=");
+            process_log_hex64(frame->rflags);
+            serial_write("[irq] frame rax=");
+            process_log_hex64(frame->rax);
+            serial_write("[irq] frame rbx=");
+            process_log_hex64(frame->rbx);
+            serial_write("[irq] frame rcx=");
+            process_log_hex64(frame->rcx);
+            serial_write("[irq] frame rdx=");
+            process_log_hex64(frame->rdx);
+            serial_write("[irq] frame rbp=");
+            process_log_hex64(frame->rbp);
+            serial_write("[irq] frame rsi=");
+            process_log_hex64(frame->rsi);
+            serial_write("[irq] frame rdi=");
+            process_log_hex64(frame->rdi);
+            serial_write("[irq] frame r8=");
+            process_log_hex64(frame->r8);
+            serial_write("[irq] frame r9=");
+            process_log_hex64(frame->r9);
+            serial_write("[irq] frame r10=");
+            process_log_hex64(frame->r10);
+            serial_write("[irq] frame r11=");
+            process_log_hex64(frame->r11);
+            serial_write("[irq] frame r12=");
+            process_log_hex64(frame->r12);
+            serial_write("[irq] frame r13=");
+            process_log_hex64(frame->r13);
+            serial_write("[irq] frame r14=");
+            process_log_hex64(frame->r14);
+            serial_write("[irq] frame r15=");
+            process_log_hex64(frame->r15);
+            uint64_t *raw = (uint64_t *)(uintptr_t)frame;
+            for (uint32_t i = 0; i < 8; ++i) {
+                serial_write("[irq] frame qword ");
+                process_log_hex64(i);
+                process_log_hex64(raw[i]);
+            }
+        }
     }
 
     process_validate_context(g_current_process, "preempt");
@@ -650,6 +919,24 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     g_current_process->ctx.rsp = (uint64_t)((uintptr_t)frame + sizeof(irq_frame_t));
     g_current_process->ctx.rip = frame->rip;
     g_current_process->ctx.rflags = frame->rflags;
+    if (g_ctx_watch_ctx == (uint64_t)(uintptr_t)&g_current_process->ctx) {
+        g_ctx_watch_last_ctx = g_ctx_watch_ctx;
+        g_ctx_watch_last_rip = g_current_process->ctx.rip;
+        g_ctx_watch_last_rsp = g_current_process->ctx.rsp;
+        g_ctx_watch_last_rflags = g_current_process->ctx.rflags;
+        g_ctx_watch_reason = 2;
+        g_ctx_watch_hits++;
+        serial_write("[sched] ctxwatch preempt pid=");
+        process_log_hex64(g_current_process->pid);
+        serial_write("[sched] ctxwatch preempt ctx=");
+        process_log_hex64(g_ctx_watch_ctx);
+        serial_write("[sched] ctxwatch preempt rip=");
+        process_log_hex64(g_ctx_watch_last_rip);
+        serial_write("[sched] ctxwatch preempt rsp=");
+        process_log_hex64(g_ctx_watch_last_rsp);
+        serial_write("[sched] ctxwatch preempt rflags=");
+        process_log_hex64(g_ctx_watch_last_rflags);
+    }
 
     g_current_process->state = PROCESS_STATE_READY;
     g_current_process->block_reason = PROCESS_BLOCK_NONE;
@@ -684,6 +971,27 @@ void critical_section_enter(void) {
 
 void critical_section_leave(void) {
     preempt_enable();
+}
+
+void preempt_safepoint(void) {
+    if (!g_current_process) {
+        return;
+    }
+    if (!process_should_resched()) {
+        return;
+    }
+    process_clear_resched();
+    process_yield(PROCESS_RUN_YIELDED);
+}
+
+void pm_preempt_safe_enter(void) {
+    g_pm_preempt_safe_depth++;
+}
+
+void pm_preempt_safe_leave(void) {
+    if (g_pm_preempt_safe_depth > 0) {
+        g_pm_preempt_safe_depth--;
+    }
 }
 
 uint32_t process_count_active(void) {

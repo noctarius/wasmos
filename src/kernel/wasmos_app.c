@@ -180,12 +180,26 @@ int
 wasmos_app_call_entry(wasmos_app_instance_t *instance)
 {
     if (!instance || !instance->active) {
+        serial_write("[wasmos-app] entry skipped (inactive)\n");
         return -1;
     }
-    return wasm_driver_call_unlocked(&instance->driver,
-                                     instance->entry,
-                                     instance->entry_argc,
-                                     instance->entry_argv);
+    serial_write("[wasmos-app] entry start ");
+    serial_write(instance->name);
+    serial_write(" export=");
+    serial_write(instance->entry);
+    serial_write("\n");
+    int rc = wasm_driver_call_unlocked(&instance->driver,
+                                       instance->entry,
+                                       instance->entry_argc,
+                                       instance->entry_argv);
+    if (rc == 0) {
+        serial_write("[wasmos-app] entry ok ");
+    } else {
+        serial_write("[wasmos-app] entry failed ");
+    }
+    serial_write(instance->name);
+    serial_write("\n");
+    return rc;
 }
 
 int

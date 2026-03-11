@@ -239,11 +239,18 @@ pm_app_entry(process_t *process, void *arg)
         return PROCESS_RUN_IDLE;
     }
 
+#if defined(WASMOS_ENABLE_PREEMPT_GUARD)
+    preempt_disable();
+#endif
+
     if (!state->started) {
         wasmos_app_desc_t desc;
         if (wasmos_app_parse(state->blob, state->blob_size, &desc) != 0) {
             serial_write("[pm] app parse failed\n");
             process_set_exit_status(process, -1);
+#if defined(WASMOS_ENABLE_PREEMPT_GUARD)
+            preempt_enable();
+#endif
             return PROCESS_RUN_EXITED;
         }
         uint32_t init_args[4] = {
@@ -262,6 +269,9 @@ pm_app_entry(process_t *process, void *arg)
                              state->entry_argc) != 0) {
             serial_write("[pm] app start failed\n");
             process_set_exit_status(process, -1);
+#if defined(WASMOS_ENABLE_PREEMPT_GUARD)
+            preempt_enable();
+#endif
             return PROCESS_RUN_EXITED;
         }
         state->started = 1;
@@ -270,15 +280,60 @@ pm_app_entry(process_t *process, void *arg)
     serial_write_unlocked("[pm] entry start ");
     serial_write_unlocked(state->name);
     serial_write_unlocked("\n");
-    if (wasmos_app_call_entry(&state->app) != 0) {
-        serial_write("[pm] app entry failed\n");
-        process_set_exit_status(process, -1);
-    } else {
-        process_set_exit_status(process, 0);
+    serial_write_unlocked("[pm] entry args count=");
+    pm_write_hex64((uint64_t)(uint32_t)state->entry_argc);
+    serial_write_unlocked("[pm] entry args a0=");
+    pm_write_hex64((uint64_t)(uint32_t)state->entry_arg0);
+    serial_write_unlocked("[pm] entry args a1=");
+    pm_write_hex64((uint64_t)(uint32_t)state->entry_arg1);
+    serial_write_unlocked("[pm] entry args a2=");
+    pm_write_hex64((uint64_t)(uint32_t)state->entry_arg2);
+    serial_write_unlocked("[pm] entry args a3=");
+    pm_write_hex64((uint64_t)(uint32_t)state->entry_arg3);
+
+    {
+        volatile uint64_t stack_canary_a = 0xA5A5A5A5DEADBEEFULL;
+        volatile uint64_t stack_canary_b = 0x5A5A5A5AF00DFACEULL;
+        uint64_t rsp = 0;
+        uint64_t rip = 0;
+        __asm__ volatile("mov %%rsp, %0\n" : "=r"(rsp));
+        __asm__ volatile("leaq 1f(%%rip), %0\n1:" : "=r"(rip));
+        serial_write_unlocked("[pm] entry rsp=");
+        pm_write_hex64(rsp);
+        serial_write_unlocked("[pm] entry rip=");
+        pm_write_hex64(rip);
+        if (wasmos_app_call_entry(&state->app) != 0) {
+            serial_write("[pm] app entry failed\n");
+            process_set_exit_status(process, -1);
+        } else {
+            process_set_exit_status(process, 0);
+        }
+        if (stack_canary_a != 0xA5A5A5A5DEADBEEFULL || stack_canary_b != 0x5A5A5A5AF00DFACEULL) {
+            serial_write("[pm] stack canary corrupted around entry\n");
+            serial_write_unlocked("[pm] canary a=");
+            pm_write_hex64(stack_canary_a);
+            serial_write_unlocked("[pm] canary b=");
+            pm_write_hex64(stack_canary_b);
+            for (;;) {
+                __asm__ volatile("hlt");
+            }
+        }
+        uint64_t rsp_after = 0;
+        uint64_t rip_after = 0;
+        __asm__ volatile("mov %%rsp, %0\n" : "=r"(rsp_after));
+        __asm__ volatile("leaq 1f(%%rip), %0\n1:" : "=r"(rip_after));
+        serial_write_unlocked("[pm] entry done rsp=");
+        pm_write_hex64(rsp_after);
+        serial_write_unlocked("[pm] entry done rip=");
+        pm_write_hex64(rip_after);
     }
+
     wasmos_app_stop(&state->app);
     state->in_use = 0;
     state->pid = 0;
+#if defined(WASMOS_ENABLE_PREEMPT_GUARD)
+    preempt_enable();
+#endif
     return PROCESS_RUN_EXITED;
 }
 
@@ -604,7 +659,10 @@ pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t *msg)
     resp.arg1 = 0;
     resp.arg2 = 0;
     resp.arg3 = 0;
-    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
+    int rc = ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
+    serial_write_unlocked("[pm] spawn resp rc=");
+    pm_write_hex64((uint64_t)(uint32_t)rc);
+    return rc;
 }
 
 static int
@@ -885,6 +943,8 @@ process_manager_entry(process_t *process, void *arg)
     }
     serial_write_unlocked("[pm] recv type=");
     pm_write_hex64_unlocked(msg.type);
+    serial_write_unlocked("[pm] recv req=");
+    pm_write_hex64_unlocked(msg.request_id);
 
     int rc = -1;
     switch (msg.type) {

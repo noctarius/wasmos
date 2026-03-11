@@ -7,7 +7,8 @@
 #define PROCESS_MAX_COUNT 32
 // Round-robin scheduler time slice (fixed ticks per run).
 #define PROCESS_DEFAULT_SLICE_TICKS 5u
-#define PROCESS_STACK_SIZE 32768u
+#define PROCESS_STACK_SIZE 524288u
+#define PROCESS_CTX_CANARY_VALUE 0xC0FFEE0DD15EA5EULL
 
 typedef struct {
     uint64_t r15;
@@ -37,28 +38,28 @@ _Static_assert(offsetof(process_context_t, rip) == 128, "process_context_t rip o
 _Static_assert(offsetof(process_context_t, rflags) == 136, "process_context_t rflags offset mismatch");
 
 typedef struct {
-    uint64_t rax;
-    uint64_t rbx;
-    uint64_t rcx;
-    uint64_t rdx;
-    uint64_t rbp;
-    uint64_t rsi;
-    uint64_t rdi;
-    uint64_t r8;
-    uint64_t r9;
-    uint64_t r10;
-    uint64_t r11;
-    uint64_t r12;
-    uint64_t r13;
-    uint64_t r14;
     uint64_t r15;
+    uint64_t r14;
+    uint64_t r13;
+    uint64_t r12;
+    uint64_t r11;
+    uint64_t r10;
+    uint64_t r9;
+    uint64_t r8;
+    uint64_t rdi;
+    uint64_t rsi;
+    uint64_t rbp;
+    uint64_t rdx;
+    uint64_t rcx;
+    uint64_t rbx;
+    uint64_t rax;
     uint64_t rip;
     uint64_t cs;
     uint64_t rflags;
 } irq_frame_t;
 
-_Static_assert(offsetof(irq_frame_t, rax) == 0, "irq_frame_t rax offset mismatch");
-_Static_assert(offsetof(irq_frame_t, r15) == 112, "irq_frame_t r15 offset mismatch");
+_Static_assert(offsetof(irq_frame_t, r15) == 0, "irq_frame_t r15 offset mismatch");
+_Static_assert(offsetof(irq_frame_t, rax) == 112, "irq_frame_t rax offset mismatch");
 _Static_assert(offsetof(irq_frame_t, rip) == 120, "irq_frame_t rip offset mismatch");
 
 typedef enum {
@@ -98,7 +99,9 @@ typedef struct process {
     uint64_t ticks_total;
     uint8_t in_ready_queue;
     uint8_t is_idle;
+    uint64_t ctx_canary_pre;
     process_context_t ctx;
+    uint64_t ctx_canary_post;
     uintptr_t stack_base;
     uintptr_t stack_top;
     uint32_t stack_pages;
@@ -132,6 +135,9 @@ int preempt_is_enabled(void);
 uint32_t preempt_disable_depth(void);
 void critical_section_enter(void);
 void critical_section_leave(void);
+void preempt_safepoint(void);
+void pm_preempt_safe_enter(void);
+void pm_preempt_safe_leave(void);
 uint32_t process_count_active(void);
 uint32_t process_ready_count(void);
 int process_info_at(uint32_t index, uint32_t *out_pid, const char **out_name);

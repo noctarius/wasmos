@@ -3,12 +3,53 @@
 #if defined(WAMR_ENABLED)
 #include <stddef.h>
 #include "wasm_export.h"
+#include "serial.h"
+#include "wasm_exec_env.h"
+#if defined(WASMOS_ENABLE_PREEMPT_GUARD)
+#include "process.h"
+#endif
 
 static void memzero8(void *dst, uint32_t size) {
     uint8_t *d = (uint8_t *)dst;
     for (uint32_t i = 0; i < size; ++i) {
         d[i] = 0;
     }
+}
+
+static void
+serial_write_hex64_local(uint64_t value)
+{
+    char buf[21];
+    static const char hex[] = "0123456789ABCDEF";
+    buf[0] = '0';
+    buf[1] = 'x';
+    for (int i = 0; i < 16; ++i) {
+        buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
+    }
+    buf[18] = '\n';
+    buf[19] = '\0';
+    serial_write(buf);
+}
+
+static void
+log_exec_env_layout(const char *label, wasm_exec_env_t exec_env)
+{
+    if (!exec_env) {
+        return;
+    }
+    WASMExecEnv *env = (WASMExecEnv *)exec_env;
+    serial_write(label);
+    serial_write(" exec_env=");
+    serial_write_hex64_local((uint64_t)(uintptr_t)env);
+    serial_write(label);
+    serial_write(" wasm_stack.bottom=");
+    serial_write_hex64_local((uint64_t)(uintptr_t)env->wasm_stack.bottom);
+    serial_write(label);
+    serial_write(" wasm_stack.top=");
+    serial_write_hex64_local((uint64_t)(uintptr_t)env->wasm_stack.top);
+    serial_write(label);
+    serial_write(" wasm_stack.top_boundary=");
+    serial_write_hex64_local((uint64_t)(uintptr_t)env->wasm_stack.top_boundary);
 }
 
 int wamr_runtime_init(void) {
@@ -122,8 +163,15 @@ int wamr_call_function(wamr_instance_t *instance,
     if (!exec_env) {
         return 0;
     }
+    log_exec_env_layout("[wamr] exec_env", exec_env);
 
+#if defined(WASMOS_ENABLE_PREEMPT_GUARD)
+    preempt_disable();
+#endif
     int ok = wasm_runtime_call_wasm(exec_env, func, argc, argv) ? 1 : 0;
+#if defined(WASMOS_ENABLE_PREEMPT_GUARD)
+    preempt_enable();
+#endif
     wasm_runtime_destroy_exec_env(exec_env);
     return ok;
 }

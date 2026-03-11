@@ -190,5 +190,14 @@ wasm_driver_call_unlocked(wasm_driver_t *driver,
                                 argc,
                                 argv,
                                 0);
+    if (!ok) {
+        serial_write("[wasm-driver] call failed export=");
+        serial_write(export_name);
+        serial_write("\n");
+    } else {
+        serial_write("[wasm-driver] call ok export=");
+        serial_write(export_name);
+        serial_write("\n");
+    }
     return ok ? 0 : -1;
 }

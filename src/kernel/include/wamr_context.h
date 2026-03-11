@@ -14,5 +14,6 @@ typedef struct {
 
 int wamr_context_init(void);
 int wamr_context_bind(mm_context_t *ctx, wamr_context_t *out_ctx);
+void wamr_runtime_heap_range(uintptr_t *out_base, uint32_t *out_size);
 
 #endif

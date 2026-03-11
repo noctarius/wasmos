@@ -3,14 +3,18 @@
 #include "process.h"
 #include "memory_service.h"
 #include "irq.h"
+#include "wamr_context.h"
 #include <stdint.h>
 
-#define GDT_ENTRY_COUNT 3
+#define GDT_ENTRY_COUNT 5
 #define IDT_ENTRY_COUNT 256
 #define EXCEPTION_COUNT 32
 
 #define KERNEL_CS_SELECTOR 0x08
 #define KERNEL_DS_SELECTOR 0x10
+#define KERNEL_TSS_SELECTOR 0x18
+#define IRQ0_IST_INDEX 1
+#define IRQ0_IST_STACK_SIZE 16384u
 
 #define IDT_TYPE_INTERRUPT_GATE 0x8E
 
@@ -31,13 +35,58 @@ typedef struct __attribute__((packed)) {
 
 extern void *x86_exception_stub_table[];
 extern void *x86_irq_stub_table[];
+#if !defined(WASMOS_DISABLE_TRACE)
+extern void *wasmos_wamr_last_frame_ip;
+extern void *wasmos_wamr_last_func;
+extern void *wasmos_wamr_last_module;
+extern void *wasmos_wamr_last_exec_env;
+extern volatile uint8_t wasmos_wamr_last_opcodes[16];
+extern volatile uint32_t wasmos_wamr_last_opcodes_len;
+extern void *wasmos_wamr_last_rsp;
+extern void *wasmos_wamr_last_frame_sp;
+extern void *wasmos_wamr_last_frame_lp;
+extern void *wasmos_wamr_last_native_ptr;
+extern uint32_t wasmos_wamr_last_native_index;
+extern void *wasmos_wamr_bad_ip;
+extern void *wasmos_wamr_bad_sp;
+extern void *wasmos_wamr_bad_csp;
+extern uint32_t wasmos_wamr_bad_reason;
+extern void *wasmos_wamr_bad_sp_bottom;
+extern void *wasmos_wamr_bad_sp_boundary;
+#endif
+extern uint8_t __kernel_start;
+extern uint8_t __kernel_end;
 
 static uint64_t g_gdt[GDT_ENTRY_COUNT] = {
     0x0000000000000000ULL,
     0x00AF9A000000FFFFULL,
     0x00AF92000000FFFFULL,
+    0x0000000000000000ULL,
+    0x0000000000000000ULL,
 };
 static idt_entry_t g_idt[IDT_ENTRY_COUNT];
+uint8_t g_irq0_ist_stack[IRQ0_IST_STACK_SIZE] __attribute__((aligned(16)));
+uint64_t g_irq0_ist_canary = 0xCAFEBABEDEADC0DEULL;
+
+typedef struct __attribute__((packed)) {
+    uint32_t reserved0;
+    uint64_t rsp0;
+    uint64_t rsp1;
+    uint64_t rsp2;
+    uint64_t reserved1;
+    uint64_t ist1;
+    uint64_t ist2;
+    uint64_t ist3;
+    uint64_t ist4;
+    uint64_t ist5;
+    uint64_t ist6;
+    uint64_t ist7;
+    uint64_t reserved2;
+    uint16_t reserved3;
+    uint16_t iopb;
+} tss_t;
+
+static tss_t g_tss;
 
 static void
 serial_write_hex64(uint64_t value)
@@ -70,6 +119,37 @@ serial_write_hex64_unlocked(uint64_t value)
 }
 
 static void
+serial_write_hexbyte_unlocked(uint8_t value)
+{
+    char buf[3];
+    static const char hex[] = "0123456789ABCDEF";
+    buf[0] = hex[(value >> 4) & 0xF];
+    buf[1] = hex[value & 0xF];
+    buf[2] = '\0';
+    serial_write_unlocked(buf);
+}
+
+static void
+serial_dump_bytes_unlocked(const char *label, const uint8_t *ptr, uint32_t count)
+{
+    if (!ptr || count == 0) {
+        return;
+    }
+    if (label) {
+        serial_write_unlocked(label);
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+        if (i == 0) {
+            serial_write_unlocked(" ");
+        } else {
+            serial_write_unlocked(" ");
+        }
+        serial_write_hexbyte_unlocked(ptr[i]);
+    }
+    serial_write_unlocked("\n");
+}
+
+static void
 gdt_install(void)
 {
     descriptor_ptr_t gdtr;
@@ -90,6 +170,9 @@ gdt_install(void)
         :
         : "m"(gdtr)
         : "rax", "memory");
+
+    uint16_t tss_selector = KERNEL_TSS_SELECTOR;
+    __asm__ volatile("ltr %0" : : "r"(tss_selector) : "memory");
 }
 
 static void
@@ -103,6 +186,52 @@ idt_set_gate(uint8_t vector, uintptr_t handler, uint8_t type_attr)
     entry->offset_mid = (uint16_t)((handler >> 16) & 0xFFFFU);
     entry->offset_high = (uint32_t)((handler >> 32) & 0xFFFFFFFFU);
     entry->zero = 0;
+}
+
+static void
+idt_set_gate_ist(uint8_t vector, uintptr_t handler, uint8_t type_attr, uint8_t ist)
+{
+    idt_entry_t *entry = &g_idt[vector];
+    entry->offset_low = (uint16_t)(handler & 0xFFFFU);
+    entry->selector = KERNEL_CS_SELECTOR;
+    entry->ist = ist;
+    entry->type_attr = type_attr;
+    entry->offset_mid = (uint16_t)((handler >> 16) & 0xFFFFU);
+    entry->offset_high = (uint32_t)((handler >> 32) & 0xFFFFFFFFU);
+    entry->zero = 0;
+}
+
+static void
+gdt_set_tss(void)
+{
+    uint64_t base = (uint64_t)(uintptr_t)&g_tss;
+    uint32_t limit = (uint32_t)(sizeof(g_tss) - 1u);
+    uint64_t low = 0;
+    low |= (uint64_t)(limit & 0xFFFFu);
+    low |= (uint64_t)(base & 0xFFFFFFu) << 16;
+    low |= (uint64_t)0x89u << 40;
+    low |= (uint64_t)((limit >> 16) & 0xFu) << 48;
+    low |= (uint64_t)((base >> 24) & 0xFFu) << 56;
+    uint64_t high = (uint64_t)(base >> 32);
+    g_gdt[3] = low;
+    g_gdt[4] = high;
+}
+
+static void
+tss_init(void)
+{
+    for (uint32_t i = 0; i < sizeof(g_tss); ++i) {
+        ((uint8_t *)&g_tss)[i] = 0;
+    }
+    for (uint32_t i = 0; i < IRQ0_IST_STACK_SIZE; ++i) {
+        g_irq0_ist_stack[i] = 0xCC;
+    }
+    *(uint64_t *)(uintptr_t)g_irq0_ist_stack = g_irq0_ist_canary;
+    uint64_t ist1_top = (uint64_t)(uintptr_t)(g_irq0_ist_stack + IRQ0_IST_STACK_SIZE);
+    g_tss.rsp0 = ist1_top;
+    g_tss.ist1 = ist1_top;
+    g_tss.iopb = (uint16_t)sizeof(g_tss);
+    gdt_set_tss();
 }
 
 static void
@@ -160,6 +289,10 @@ x86_exception_panic_frame(uint64_t vector, const uint64_t *frame)
     const char *name = proc && proc->name ? proc->name : 0;
     uint64_t stack_base = proc ? (uint64_t)proc->stack_base : 0;
     uint64_t stack_top = proc ? (uint64_t)proc->stack_top : 0;
+    uintptr_t wamr_heap_base = 0;
+    uint32_t wamr_heap_size = 0;
+    uint64_t kernel_start = (uint64_t)(uintptr_t)&__kernel_start;
+    uint64_t kernel_end = (uint64_t)(uintptr_t)&__kernel_end;
 
     if (frame) {
         err = frame[0];
@@ -193,6 +326,62 @@ x86_exception_panic_frame(uint64_t vector, const uint64_t *frame)
     serial_write_hex64_unlocked(stack_base);
     serial_write_unlocked("[cpu] stack top=");
     serial_write_hex64_unlocked(stack_top);
+#if !defined(WASMOS_DISABLE_TRACE)
+    serial_write_unlocked("[cpu] wamr ip=");
+    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_last_frame_ip);
+    serial_write_unlocked("[cpu] wamr func=");
+    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_last_func);
+    serial_write_unlocked("[cpu] wamr module=");
+    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_last_module);
+    serial_write_unlocked("[cpu] wamr exec_env=");
+    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_last_exec_env);
+    serial_write_unlocked("[cpu] wamr rsp=");
+    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_last_rsp);
+    serial_write_unlocked("[cpu] wamr frame_sp=");
+    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_last_frame_sp);
+    serial_write_unlocked("[cpu] wamr frame_lp=");
+    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_last_frame_lp);
+    if (wasmos_wamr_last_rsp && stack_top) {
+        uint64_t gap = stack_top - (uint64_t)(uintptr_t)wasmos_wamr_last_rsp;
+        serial_write_unlocked("[cpu] wamr rsp->stack_top gap=");
+        serial_write_hex64_unlocked(gap);
+    }
+    serial_write_unlocked("[cpu] wamr native ptr=");
+    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_last_native_ptr);
+    serial_write_unlocked("[cpu] wamr native index=");
+    serial_write_hex64_unlocked((uint64_t)wasmos_wamr_last_native_index);
+    serial_write_unlocked("[cpu] wamr bad reason=");
+    serial_write_hex64_unlocked((uint64_t)wasmos_wamr_bad_reason);
+    serial_write_unlocked("[cpu] wamr bad ip=");
+    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_bad_ip);
+    serial_write_unlocked("[cpu] wamr bad sp=");
+    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_bad_sp);
+    serial_write_unlocked("[cpu] wamr bad csp=");
+    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_bad_csp);
+    serial_write_unlocked("[cpu] wamr bad sp_bottom=");
+    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_bad_sp_bottom);
+    serial_write_unlocked("[cpu] wamr bad sp_boundary=");
+    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_bad_sp_boundary);
+    if (wasmos_wamr_last_opcodes_len > 0 && wasmos_wamr_last_opcodes_len <= 16) {
+        serial_dump_bytes_unlocked("[cpu] wamr opcodes",
+                                   (const uint8_t *)wasmos_wamr_last_opcodes,
+                                   (uint32_t)wasmos_wamr_last_opcodes_len);
+    }
+
+    wamr_runtime_heap_range(&wamr_heap_base, &wamr_heap_size);
+    if (wamr_heap_base && wamr_heap_size) {
+        uint64_t ip = (uint64_t)(uintptr_t)wasmos_wamr_last_frame_ip;
+        if (ip >= wamr_heap_base && (ip + 16) <= (wamr_heap_base + wamr_heap_size)) {
+            serial_dump_bytes_unlocked("[cpu] wamr ip bytes", (const uint8_t *)ip, 16);
+        }
+        if (rip >= wamr_heap_base && (rip + 16) <= (wamr_heap_base + wamr_heap_size)) {
+            serial_dump_bytes_unlocked("[cpu] rip bytes", (const uint8_t *)rip, 16);
+        }
+    }
+    if (rip >= kernel_start && (rip + 16) <= kernel_end) {
+        serial_dump_bytes_unlocked("[cpu] rip bytes", (const uint8_t *)rip, 16);
+    }
+#endif
 
     __asm__ volatile("cli");
     for (;;) {
@@ -224,11 +413,16 @@ void
 cpu_init(void)
 {
     serial_write("[cpu] init\n");
+    tss_init();
     gdt_install();
     idt_install();
     for (uint32_t i = 0; i < IRQ_COUNT; ++i) {
         uintptr_t handler = (uintptr_t)x86_irq_stub_table[i];
-        idt_set_gate((uint8_t)(IRQ_VECTOR_BASE + i), handler, IDT_TYPE_INTERRUPT_GATE);
+        if (i == 0) {
+            idt_set_gate_ist((uint8_t)(IRQ_VECTOR_BASE + i), handler, IDT_TYPE_INTERRUPT_GATE, IRQ0_IST_INDEX);
+        } else {
+            idt_set_gate((uint8_t)(IRQ_VECTOR_BASE + i), handler, IDT_TYPE_INTERRUPT_GATE);
+        }
     }
     irq_init();
     serial_write("[cpu] gdt/idt ready\n");

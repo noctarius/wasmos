@@ -24,6 +24,43 @@ static irq_route_t g_irq_routes[IRQ_COUNT];
 static uint8_t g_pic_mask1 = 0xFF;
 static uint8_t g_pic_mask2 = 0xFF;
 
+static void serial_write_hex64_local(uint64_t value) {
+    char buf[21];
+    static const char hex[] = "0123456789ABCDEF";
+    buf[0] = '0';
+    buf[1] = 'x';
+    for (int i = 0; i < 16; ++i) {
+        buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
+    }
+    buf[18] = '\n';
+    buf[19] = '\0';
+    serial_write(buf);
+}
+
+void x86_irq_iret_corrupt(const uint64_t *saved, const uint64_t *current) {
+    serial_write("[irq] iret frame corrupt\n");
+    if (!saved || !current) {
+        serial_write("[irq] iret frame ptr invalid\n");
+        return;
+    }
+    serial_write("[irq] saved rip=");
+    serial_write_hex64_local(saved[0]);
+    serial_write("[irq] saved cs=");
+    serial_write_hex64_local(saved[1]);
+    serial_write("[irq] saved rflags=");
+    serial_write_hex64_local(saved[2]);
+    serial_write("[irq] current rip=");
+    serial_write_hex64_local(current[0]);
+    serial_write("[irq] current cs=");
+    serial_write_hex64_local(current[1]);
+    serial_write("[irq] current rflags=");
+    serial_write_hex64_local(current[2]);
+}
+
+void x86_irq_ist_corrupt(void) {
+    serial_write("[irq] ist stack canary corrupt\n");
+}
+
 static inline void outb(uint16_t port, uint8_t value) {
     __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
 }
@@ -186,6 +223,20 @@ void x86_irq_handler(uint64_t vector) {
 }
 
 void x86_timer_irq_handler(irq_frame_t *frame) {
+    static uint8_t logged;
+    if (!logged) {
+        logged = 1;
+        serial_write("[irq] frame ptr=");
+        serial_write_hex64_local((uint64_t)(uintptr_t)frame);
+        if (frame) {
+            serial_write("[irq] frame rip=");
+            serial_write_hex64_local(frame->rip);
+            serial_write("[irq] frame cs=");
+            serial_write_hex64_local(frame->cs);
+            serial_write("[irq] frame rflags=");
+            serial_write_hex64_local(frame->rflags);
+        }
+    }
     x86_irq_handler(IRQ_VECTOR_BASE);
     process_preempt_from_irq(frame);
 }

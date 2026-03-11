@@ -10,6 +10,9 @@
 #include "wasm_loader.h"
 #include "wasm_memory.h"
 #include "../common/wasm_exec_env.h"
+#if defined(WASMOS_ENABLE_PREEMPT_GUARD) || defined(WASMOS_ENABLE_SAFEPOINT)
+#include "process.h"
+#endif
 #if WASM_ENABLE_GC != 0
 #include "../common/gc/gc_object.h"
 #include "mem_alloc.h"
@@ -32,6 +35,89 @@ typedef int32 CellType_I32;
 typedef int64 CellType_I64;
 typedef float32 CellType_F32;
 typedef float64 CellType_F64;
+
+#if !defined(WASMOS_DISABLE_TRACE)
+volatile void *wasmos_wamr_last_frame_ip;
+volatile void *wasmos_wamr_last_func;
+volatile void *wasmos_wamr_last_module;
+volatile void *wasmos_wamr_last_exec_env;
+volatile uint8_t wasmos_wamr_last_opcodes[16];
+volatile uint32_t wasmos_wamr_last_opcodes_len;
+volatile void *wasmos_wamr_last_rsp;
+volatile void *wasmos_wamr_last_frame_sp;
+volatile void *wasmos_wamr_last_frame_lp;
+volatile void *wasmos_wamr_stack_top;
+volatile void *wasmos_wamr_last_native_ptr;
+volatile uint32_t wasmos_wamr_last_native_index;
+volatile void *wasmos_wamr_bad_ip;
+volatile void *wasmos_wamr_bad_sp;
+volatile void *wasmos_wamr_bad_csp;
+volatile uint32_t wasmos_wamr_bad_reason;
+volatile void *wasmos_wamr_bad_sp_bottom;
+volatile void *wasmos_wamr_bad_sp_boundary;
+
+static inline void
+wasmos_wamr_record_rsp(void)
+{
+    void *rsp = 0;
+#if defined(__x86_64__) || defined(_M_X64)
+    __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
+#endif
+    wasmos_wamr_last_rsp = rsp;
+}
+
+
+static void
+wasmos_wamr_record_opcodes(uint8 *frame_ip, uint8 *frame_ip_end)
+{
+    if (!frame_ip || !frame_ip_end || frame_ip_end <= frame_ip) {
+        wasmos_wamr_last_opcodes_len = 0;
+        return;
+    }
+    uint32_t remaining = (uint32_t)(frame_ip_end - frame_ip);
+    uint32_t count = remaining > 16 ? 16 : remaining;
+    for (uint32_t i = 0; i < count; ++i) {
+        wasmos_wamr_last_opcodes[i] = frame_ip[i];
+    }
+    wasmos_wamr_last_opcodes_len = count;
+}
+
+static inline bool
+wasmos_wamr_check_frame(WASMModuleInstance *module,
+                        WASMFunctionInstance *cur_func,
+                        WASMInterpFrame *frame,
+                        uint8 *frame_ip,
+                        uint8 *frame_ip_end)
+{
+    (void)frame_ip_end;
+    if (!module || !cur_func || !frame || !frame_ip) {
+        wasmos_wamr_bad_reason = 1;
+        wasmos_wamr_bad_ip = frame_ip;
+        return false;
+    }
+    uint8 *code_begin = wasm_get_func_code(cur_func);
+    uint8 *code_end = wasm_get_func_code_end(cur_func);
+    if (!code_begin || !code_end || frame_ip < code_begin || frame_ip >= code_end) {
+        wasmos_wamr_bad_reason = 1;
+        wasmos_wamr_bad_ip = frame_ip;
+        return false;
+    }
+    if (frame->sp < frame->sp_bottom || frame->sp > frame->sp_boundary) {
+        wasmos_wamr_bad_reason = 2;
+        wasmos_wamr_bad_sp = frame->sp;
+        wasmos_wamr_bad_sp_bottom = frame->sp_bottom;
+        wasmos_wamr_bad_sp_boundary = frame->sp_boundary;
+        return false;
+    }
+    if (frame->csp < frame->csp_bottom || frame->csp > frame->csp_boundary) {
+        wasmos_wamr_bad_reason = 3;
+        wasmos_wamr_bad_csp = frame->csp;
+        return false;
+    }
+    wasmos_wamr_bad_reason = 0;
+    return true;
+}
+#endif
 
 #define BR_TABLE_TMP_BUF_LEN 32
 
@@ -1254,9 +1340,23 @@ wasm_interp_call_func_native(WASMModuleInstance *module_inst,
         native_func_pointer = c_api_func_import->func_ptr_linked;
     }
 
+    wasmos_wamr_last_native_ptr = native_func_pointer;
+    wasmos_wamr_last_native_index = cur_func_index;
+
     if (!native_func_pointer) {
         snprintf(buf, sizeof(buf),
                  "failed to call unlinked import function (%s, %s)",
+                 func_import->module_name, func_import->field_name);
+        wasm_set_exception(module_inst, buf);
+        return;
+    }
+
+    if (native_func_pointer == (void *)module_inst
+        || native_func_pointer == (void *)exec_env
+        || native_func_pointer == (void *)cur_func
+        || native_func_pointer == (void *)frame) {
+        snprintf(buf, sizeof(buf),
+                 "invalid native function pointer (%s, %s)",
                  func_import->module_name, func_import->field_name);
         wasm_set_exception(module_inst, buf);
         return;
@@ -1474,6 +1574,38 @@ wasm_interp_call_func_import(WASMModuleInstance *module_inst,
 
 #define HANDLE_OP(opcode) HANDLE_##opcode:
 #define FETCH_OPCODE_AND_DISPATCH() goto *handle_table[*frame_ip++]
+#if defined(WASMOS_ENABLE_SAFEPOINT)
+#define WASMOS_SAFEPOINT()                       \
+    do {                                         \
+        if (wasmos_safepoint_budget-- == 0) {    \
+            wasmos_safepoint_budget = 128;       \
+            pm_preempt_safe_enter();             \
+            preempt_safepoint();                 \
+            pm_preempt_safe_leave();             \
+        }                                        \
+    } while (0)
+#else
+#define WASMOS_SAFEPOINT() (void)0
+#endif
+#if !defined(WASMOS_DISABLE_TRACE)
+#define WASMOS_TRACE_WAMR_IP()             \
+    do {                                   \
+        if (!wasmos_wamr_check_frame(module, cur_func, frame, frame_ip, frame_ip_end)) { \
+            wasm_set_exception(module, "wasm frame corruption"); \
+            goto got_exception; \
+        } \
+        wasmos_wamr_last_frame_ip = frame_ip; \
+        wasmos_wamr_last_func = cur_func;      \
+        wasmos_wamr_last_module = module;      \
+        wasmos_wamr_last_exec_env = exec_env;  \
+        wasmos_wamr_last_frame_sp = frame->sp; \
+        wasmos_wamr_last_frame_lp = frame->lp; \
+        wasmos_wamr_record_rsp();              \
+        wasmos_wamr_record_opcodes(frame_ip, frame_ip_end); \
+    } while (0)
+#else
+#define WASMOS_TRACE_WAMR_IP() (void)0
+#endif
 
 #if WASM_ENABLE_THREAD_MGR != 0 && WASM_ENABLE_DEBUG_INTERP != 0
 #define HANDLE_OP_END()                                                       \
@@ -1494,17 +1626,53 @@ wasm_interp_call_func_import(WASMModuleInstance *module_inst,
             }                                                                 \
             os_mutex_unlock(&exec_env->wait_lock);                            \
         }                                                                     \
+        WASMOS_SAFEPOINT();                                                   \
         CHECK_INSTRUCTION_LIMIT();                                            \
+        WASMOS_TRACE_WAMR_IP();                                               \
         goto *handle_table[*frame_ip++];                                      \
     } while (0)
 #else
 #define HANDLE_OP_END()        \
+    WASMOS_SAFEPOINT();        \
     CHECK_INSTRUCTION_LIMIT(); \
+    WASMOS_TRACE_WAMR_IP();    \
     FETCH_OPCODE_AND_DISPATCH()
 #endif
 
 #else /* else of WASM_ENABLE_LABELS_AS_VALUES */
 #define HANDLE_OP(opcode) case opcode:
+#if defined(WASMOS_ENABLE_SAFEPOINT)
+#define WASMOS_SAFEPOINT()                       \
+    do {                                         \
+        if (wasmos_safepoint_budget-- == 0) {    \
+            wasmos_safepoint_budget = 128;       \
+            pm_preempt_safe_enter();             \
+            preempt_safepoint();                 \
+            pm_preempt_safe_leave();             \
+        }                                        \
+    } while (0)
+#else
+#define WASMOS_SAFEPOINT() (void)0
+#endif
+#if !defined(WASMOS_DISABLE_TRACE)
+#define WASMOS_TRACE_WAMR_IP()             \
+    do {                                   \
+        if (!wasmos_wamr_check_frame(module, cur_func, frame, frame_ip, frame_ip_end)) { \
+            wasm_set_exception(module, "wasm frame corruption"); \
+            goto got_exception; \
+        } \
+        wasmos_wamr_last_frame_ip = frame_ip; \
+        wasmos_wamr_last_func = cur_func;      \
+        wasmos_wamr_last_module = module;      \
+        wasmos_wamr_last_exec_env = exec_env;  \
+        wasmos_wamr_last_frame_sp = frame->sp; \
+        wasmos_wamr_last_frame_lp = frame->lp; \
+        wasmos_wamr_record_rsp();              \
+        wasmos_wamr_record_opcodes(frame_ip, frame_ip_end); \
+    } while (0)
+#else
+#define WASMOS_TRACE_WAMR_IP() (void)0
+#endif
 #if WASM_ENABLE_THREAD_MGR != 0 && WASM_ENABLE_DEBUG_INTERP != 0
 #define HANDLE_OP_END()                                                   \
     /* Record the current frame_ip, so when exception occurs,             \
@@ -1523,11 +1691,15 @@ wasm_interp_call_func_import(WASMModuleInstance *module_inst,
         }                                                                 \
         os_mutex_unlock(&exec_env->wait_lock);                            \
     }                                                                     \
+    WASMOS_SAFEPOINT();                                                   \
     CHECK_INSTRUCTION_LIMIT();                                            \
+    WASMOS_TRACE_WAMR_IP();                                               \
     continue;
 #else
 #define HANDLE_OP_END()        \
+    WASMOS_SAFEPOINT();        \
     CHECK_INSTRUCTION_LIMIT(); \
+    WASMOS_TRACE_WAMR_IP();    \
     continue;
 #endif
 
@@ -1564,6 +1736,9 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
                                WASMFunctionInstance *cur_func,
                                WASMInterpFrame *prev_frame)
 {
+#if defined(WASMOS_ENABLE_PREEMPT_GUARD)
+    preempt_disable();
+#endif
     WASMMemoryInstance *memory = wasm_get_default_memory(module);
 #if !defined(OS_ENABLE_HW_BOUND_CHECK)              \
     || WASM_CPU_SUPPORTS_UNALIGNED_ADDR_ACCESS == 0 \
@@ -1601,6 +1776,9 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
     uint32 local_idx, local_offset, global_idx;
     uint8 local_type, *global_addr;
     uint32 cache_index, type_index, param_cell_num, cell_num;
+#if defined(WASMOS_ENABLE_SAFEPOINT)
+    uint32 wasmos_safepoint_budget = 128;
+#endif
 
 #if WASM_ENABLE_INSTRUCTION_METERING != 0
     int instructions_left = -1;
@@ -6857,6 +7035,9 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
 
         if (!prev_frame->ip) {
             /* Called from native. */
+#if defined(WASMOS_ENABLE_PREEMPT_GUARD)
+            preempt_enable();
+#endif
             return;
         }
 
@@ -6895,6 +7076,9 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
         }
 #endif
         SYNC_ALL_TO_FRAME();
+#if defined(WASMOS_ENABLE_PREEMPT_GUARD)
+        preempt_enable();
+#endif
         return;
 
 #if WASM_ENABLE_LABELS_AS_VALUES == 0

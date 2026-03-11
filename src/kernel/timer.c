@@ -42,6 +42,7 @@ void timer_handle_irq(void) {
     process_tick();
     if (g_timer_ticks == g_timer_log_threshold) {
         g_timer_log_pending = 1;
+        g_timer_log_threshold += 100;
     }
 }
 

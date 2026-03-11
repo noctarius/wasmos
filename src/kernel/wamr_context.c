@@ -58,6 +58,15 @@ int wamr_context_bind(mm_context_t *ctx, wamr_context_t *out_ctx) {
     return 0;
 }
 
+void wamr_runtime_heap_range(uintptr_t *out_base, uint32_t *out_size) {
+    if (out_base) {
+        *out_base = (uintptr_t)g_wamr_runtime_heap;
+    }
+    if (out_size) {
+        *out_size = (uint32_t)WAMR_RUNTIME_HEAP_SIZE;
+    }
+}
+
 #else
 
 int wamr_context_init(void) {
@@ -69,6 +78,15 @@ int wamr_context_bind(mm_context_t *ctx, wamr_context_t *out_ctx) {
     (void)ctx;
     (void)out_ctx;
     return -1;
+}
+
+void wamr_runtime_heap_range(uintptr_t *out_base, uint32_t *out_size) {
+    if (out_base) {
+        *out_base = 0;
+    }
+    if (out_size) {
+        *out_size = 0;
+    }
 }
 
 #endif

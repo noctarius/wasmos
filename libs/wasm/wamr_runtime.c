@@ -169,6 +169,12 @@ int wamr_call_function(wamr_instance_t *instance,
     preempt_disable();
 #endif
     int ok = wasm_runtime_call_wasm(exec_env, func, argc, argv) ? 1 : 0;
+    const char *exc = wasm_runtime_get_exception((wasm_module_inst_t)instance);
+    if (exc) {
+        serial_write("[wamr] exception ");
+        serial_write(exc);
+        serial_write("\n");
+    }
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD)
     preempt_enable();
 #endif

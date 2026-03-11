@@ -13,6 +13,8 @@
 extern int32_t wasmos_console_write(int32_t ptr, int32_t len)
     WASMOS_WASM_IMPORT("wasmos", "console_write");
 
+static int32_t (*volatile g_console_write)(int32_t, int32_t) = wasmos_console_write;
+
 static void
 write_line(const char *s)
 {
@@ -24,7 +26,7 @@ write_line(const char *s)
         len++;
     }
     if (len > 0) {
-        wasmos_console_write((int32_t)(uintptr_t)s, len);
+        g_console_write((int32_t)(uintptr_t)s, len);
     }
 }
 

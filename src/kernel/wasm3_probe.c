@@ -4,74 +4,7 @@
 #include "serial.h"
 #include "wasmos_app.h"
 #include "wasm3.h"
-
-static void
-probe_write_hex64(uint64_t value)
-{
-    char buf[21];
-    static const char hex[] = "0123456789ABCDEF";
-    buf[0] = '0';
-    buf[1] = 'x';
-    for (int i = 0; i < 16; ++i) {
-        buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
-    }
-    buf[18] = '\n';
-    buf[19] = '\0';
-    serial_write(buf);
-}
-
-static void
-probe_write_bytes(const char *ptr, uint32_t len)
-{
-    if (!ptr || len == 0) {
-        return;
-    }
-    char buf[128];
-    uint32_t offset = 0;
-    while (offset < len) {
-        uint32_t chunk = len - offset;
-        if (chunk > (uint32_t)(sizeof(buf) - 1)) {
-            chunk = (uint32_t)(sizeof(buf) - 1);
-        }
-        for (uint32_t i = 0; i < chunk; ++i) {
-            buf[i] = ptr[offset + i];
-        }
-        buf[chunk] = '\0';
-        serial_write(buf);
-        offset += chunk;
-    }
-}
-
-m3ApiRawFunction(wasmos_console_write)
-{
-    (void)runtime;
-    (void)_ctx;
-    (void)_mem;
-    m3ApiReturnType(uint32_t)
-    m3ApiGetArgMem(const char *, ptr)
-    m3ApiGetArg(uint32_t, len)
-
-    if (!ptr || len == 0) {
-        m3ApiReturn(0);
-    }
-
-    m3ApiCheckMem(ptr, len);
-    probe_write_bytes(ptr, len);
-    m3ApiReturn(0);
-}
-
-m3ApiRawFunction(wasmos_debug_mark)
-{
-    (void)runtime;
-    (void)_ctx;
-    (void)_mem;
-    m3ApiReturnType(uint32_t)
-    m3ApiGetArg(uint32_t, tag)
-
-    serial_write("[wasm3] debug_mark tag=");
-    probe_write_hex64((uint64_t)tag);
-    m3ApiReturn(0);
-}
+#include "wasm3_link.h"
 
 static const boot_module_t *
 probe_module_at(const boot_info_t *info, uint32_t index)
@@ -141,18 +74,11 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
         return -1;
     }
 
-    res = m3_LinkRawFunction(module, "wasmos", "console_write", "i(ii)", &wasmos_console_write);
-    if (res) {
-        serial_write("[wasm3] link console_write failed: ");
-        serial_write(res);
-        serial_write("\n");
+    if (wasm3_link_wasmos(module) != 0) {
+        serial_write("[wasm3] link wasmos failed\n");
     }
-
-    res = m3_LinkRawFunction(module, "wasmos", "debug_mark", "i(i)", &wasmos_debug_mark);
-    if (res) {
-        serial_write("[wasm3] link debug_mark failed: ");
-        serial_write(res);
-        serial_write("\n");
+    if (wasm3_link_env(module) != 0) {
+        serial_write("[wasm3] link env failed\n");
     }
 
     IM3Function func = NULL;

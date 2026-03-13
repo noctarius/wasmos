@@ -9,15 +9,14 @@
 #include "serial.h"
 #include "timer.h"
 #include "wasmos_app.h"
-#include "wamr_context.h"
-#include "wamr_runtime.h"
 #include "wasm_chardev.h"
 #include "wasm3_probe.h"
+#include "wasm3_link.h"
 #include "physmem.h"
 #include "io.h"
 
 #include <stdint.h>
-#include "wasm_export.h"
+#include "wasm3.h"
 
 typedef struct {
     uint32_t pid;
@@ -55,7 +54,7 @@ typedef struct {
 } preempt_test_state_t;
 static preempt_test_state_t g_preempt_test_state;
 static const uint8_t g_preempt_test_enabled = 0;
-static const uint8_t g_skip_wamr_boot = 1;
+static const uint8_t g_skip_wamr_boot = 0;
 
 typedef struct {
     const boot_info_t *boot_info;
@@ -132,37 +131,6 @@ serial_write_hex64_unlocked(uint64_t value)
     buf[18] = '\n';
     buf[19] = '\0';
     serial_write_unlocked(buf);
-}
-
-static int
-is_canonical_addr(uint64_t addr)
-{
-    uint64_t top = addr >> 47;
-    return (top == 0) || (top == 0x1FFFF);
-}
-
-static void
-log_bad_app_addr(const char *label, uint64_t addr, uint64_t len)
-{
-    uint32_t pid = process_current_pid();
-    process_t *proc = process_get(pid);
-    const char *name = proc && proc->name ? proc->name : "(unknown)";
-
-    serial_write_unlocked("[wasm] bad app addr ");
-    if (label) {
-        serial_write_unlocked(label);
-    } else {
-        serial_write_unlocked("(unknown)");
-    }
-    serial_write_unlocked(" pid=");
-    serial_write_hex64_unlocked(pid);
-    serial_write_unlocked("[wasm] name=");
-    serial_write_unlocked(name);
-    serial_write_unlocked("\n");
-    serial_write_unlocked("[wasm] addr=");
-    serial_write_hex64_unlocked(addr);
-    serial_write_unlocked("[wasm] len=");
-    serial_write_hex64_unlocked(len);
 }
 
 static int
@@ -347,67 +315,60 @@ current_process_context(uint32_t *out_context_id)
     return 0;
 }
 
-static int32_t
-native_ipc_create_endpoint(wasm_exec_env_t exec_env)
+m3ApiRawFunction(wasmos_ipc_create_endpoint)
 {
+    m3ApiReturnType(int32_t)
     uint32_t context_id = 0;
     uint32_t endpoint = IPC_ENDPOINT_NONE;
 
-    (void)exec_env;
-
     preempt_safepoint();
     if (current_process_context(&context_id) != 0) {
-        return -1;
+        m3ApiReturn(-1);
     }
     if (ipc_endpoint_create(context_id, &endpoint) != IPC_OK) {
-        return -1;
+        m3ApiReturn(-1);
     }
     preempt_safepoint();
-    return (int32_t)endpoint;
+    m3ApiReturn((int32_t)endpoint);
 }
 
-static int32_t
-native_ipc_create_notification(wasm_exec_env_t exec_env)
+m3ApiRawFunction(wasmos_ipc_create_notification)
 {
+    m3ApiReturnType(int32_t)
     uint32_t context_id = 0;
     uint32_t endpoint = IPC_ENDPOINT_NONE;
 
-    (void)exec_env;
-
     preempt_safepoint();
     if (current_process_context(&context_id) != 0) {
-        return -1;
+        m3ApiReturn(-1);
     }
     if (ipc_notification_create(context_id, &endpoint) != IPC_OK) {
-        return -1;
+        m3ApiReturn(-1);
     }
     preempt_safepoint();
-    return (int32_t)endpoint;
+    m3ApiReturn((int32_t)endpoint);
 }
 
-static int32_t
-native_ipc_send(wasm_exec_env_t exec_env,
-                int32_t destination_endpoint,
-                int32_t source_endpoint,
-                int32_t type,
-                int32_t request_id,
-                int32_t arg0,
-                int32_t arg1,
-                int32_t arg2,
-                int32_t arg3)
+m3ApiRawFunction(wasmos_ipc_send)
 {
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, destination_endpoint)
+    m3ApiGetArg(int32_t, source_endpoint)
+    m3ApiGetArg(int32_t, type)
+    m3ApiGetArg(int32_t, request_id)
+    m3ApiGetArg(int32_t, arg0)
+    m3ApiGetArg(int32_t, arg1)
+    m3ApiGetArg(int32_t, arg2)
+    m3ApiGetArg(int32_t, arg3)
     uint32_t context_id = 0;
     ipc_message_t req;
 
-    (void)exec_env;
-
     preempt_safepoint();
     if (destination_endpoint < 0 || source_endpoint < 0) {
-        return -1;
+        m3ApiReturn(-1);
     }
-
     if (current_process_context(&context_id) != 0) {
-        return -1;
+        m3ApiReturn(-1);
     }
 
     req.type = (uint32_t)type;
@@ -421,32 +382,31 @@ native_ipc_send(wasm_exec_env_t exec_env,
 
     int rc = ipc_send_from(context_id, (uint32_t)destination_endpoint, &req);
     preempt_safepoint();
-    return rc;
+    m3ApiReturn(rc);
 }
 
-static int32_t
-native_ipc_recv(wasm_exec_env_t exec_env, int32_t endpoint)
+m3ApiRawFunction(wasmos_ipc_recv)
 {
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, endpoint)
     uint32_t context_id = 0;
     uint32_t pid = process_current_pid();
     wasm_ipc_last_slot_t *slot;
     int rc;
     process_t *process;
 
-    (void)exec_env;
-
     if (endpoint < 0 || current_process_context(&context_id) != 0) {
-        return -1;
+        m3ApiReturn(-1);
     }
 
     slot = wasm_ipc_slot_for_pid(pid);
     if (!slot) {
-        return -1;
+        m3ApiReturn(-1);
     }
 
     process = process_get(pid);
     if (!process) {
-        return -1;
+        m3ApiReturn(-1);
     }
 
     preempt_safepoint();
@@ -459,474 +419,410 @@ native_ipc_recv(wasm_exec_env_t exec_env, int32_t endpoint)
             continue;
         }
         if (rc != IPC_OK) {
-            return -1;
+            m3ApiReturn(-1);
         }
         slot->valid = 1;
         preempt_safepoint();
-        return 1;
+        m3ApiReturn(1);
     }
 }
 
-static int32_t
-native_ipc_wait(wasm_exec_env_t exec_env, int32_t endpoint)
+m3ApiRawFunction(wasmos_ipc_wait)
 {
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, endpoint)
     uint32_t context_id = 0;
     int rc;
 
-    (void)exec_env;
-
     preempt_safepoint();
     if (endpoint < 0 || current_process_context(&context_id) != 0) {
-        return -1;
+        m3ApiReturn(-1);
     }
 
     rc = ipc_wait_for(context_id, (uint32_t)endpoint);
     if (rc == IPC_EMPTY) {
         preempt_safepoint();
-        return 0;
+        m3ApiReturn(0);
     }
     if (rc != IPC_OK) {
-        return -1;
+        m3ApiReturn(-1);
     }
     preempt_safepoint();
-    return 1;
+    m3ApiReturn(1);
 }
 
-static int32_t
-native_ipc_notify(wasm_exec_env_t exec_env, int32_t endpoint)
+m3ApiRawFunction(wasmos_ipc_notify)
 {
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, endpoint)
     uint32_t context_id = 0;
-
-    (void)exec_env;
 
     preempt_safepoint();
     if (endpoint < 0 || current_process_context(&context_id) != 0) {
-        return -1;
+        m3ApiReturn(-1);
     }
     int rc = ipc_notify_from(context_id, (uint32_t)endpoint) == IPC_OK ? 0 : -1;
     preempt_safepoint();
-    return rc;
+    m3ApiReturn(rc);
 }
 
-static int32_t
-native_ipc_last_field(wasm_exec_env_t exec_env, int32_t field)
+m3ApiRawFunction(wasmos_ipc_last_field)
 {
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, field)
     uint32_t pid = process_current_pid();
     wasm_ipc_last_slot_t *slot = wasm_ipc_slot_for_pid(pid);
 
-    (void)exec_env;
-
     if (!slot || !slot->valid) {
-        return -1;
+        m3ApiReturn(-1);
     }
 
     switch ((uint32_t)field) {
         case WASMOS_IPC_FIELD_TYPE:
-            return (int32_t)slot->message.type;
+            m3ApiReturn((int32_t)slot->message.type);
         case WASMOS_IPC_FIELD_REQUEST_ID:
-            return (int32_t)slot->message.request_id;
+            m3ApiReturn((int32_t)slot->message.request_id);
         case WASMOS_IPC_FIELD_ARG0:
-            return (int32_t)slot->message.arg0;
+            m3ApiReturn((int32_t)slot->message.arg0);
         case WASMOS_IPC_FIELD_ARG1:
-            return (int32_t)slot->message.arg1;
+            m3ApiReturn((int32_t)slot->message.arg1);
         case WASMOS_IPC_FIELD_SOURCE:
-            return (int32_t)slot->message.source;
+            m3ApiReturn((int32_t)slot->message.source);
         case WASMOS_IPC_FIELD_DESTINATION:
-            return (int32_t)slot->message.destination;
+            m3ApiReturn((int32_t)slot->message.destination);
         case WASMOS_IPC_FIELD_ARG2:
-            return (int32_t)slot->message.arg2;
+            m3ApiReturn((int32_t)slot->message.arg2);
         case WASMOS_IPC_FIELD_ARG3:
-            return (int32_t)slot->message.arg3;
+            m3ApiReturn((int32_t)slot->message.arg3);
         default:
-            return -1;
+            m3ApiReturn(-1);
     }
 }
 
 #define WASM_BLOCK_BUFFER_PAGES 2u
 
-static int32_t
-native_block_buffer_phys(wasm_exec_env_t exec_env)
+m3ApiRawFunction(wasmos_block_buffer_phys)
 {
+    m3ApiReturnType(int32_t)
     uint32_t pid = process_current_pid();
     wasm_block_slot_t *slot = wasm_block_slot_for_pid(pid);
-    (void)exec_env;
 
     if (!slot) {
-        return -1;
+        m3ApiReturn(-1);
     }
     if (slot->buffer_phys == 0) {
         uint64_t phys = pfa_alloc_pages_below(WASM_BLOCK_BUFFER_PAGES, 0x100000000ULL);
         if (!phys) {
-            return -1;
+            m3ApiReturn(-1);
         }
         slot->buffer_phys = phys;
     }
 
     if (slot->buffer_phys > 0xFFFFFFFFULL) {
-        return -1;
+        m3ApiReturn(-1);
     }
-    return (int32_t)slot->buffer_phys;
+    m3ApiReturn((int32_t)slot->buffer_phys);
 }
 
-static int32_t
-native_block_buffer_copy(wasm_exec_env_t exec_env, int32_t phys, int32_t ptr, int32_t len, int32_t offset)
+m3ApiRawFunction(wasmos_block_buffer_copy)
 {
-    if (ptr < 0 || len <= 0 || offset < 0 || phys <= 0) {
-        return -1;
-    }
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, phys)
+    m3ApiGetArgMem(uint8_t *, ptr)
+    m3ApiGetArg(int32_t, len)
+    m3ApiGetArg(int32_t, offset)
 
-    wasm_module_inst_t module_inst = get_module_inst(exec_env);
-    if (!module_inst) {
-        return -1;
+    if (len <= 0 || offset < 0 || phys <= 0) {
+        m3ApiReturn(-1);
     }
-    if (!wasm_runtime_validate_app_addr(module_inst, (uint64_t)ptr, (uint64_t)len)) {
-        log_bad_app_addr("block_buffer_copy", (uint64_t)ptr, (uint64_t)len);
-        return -1;
-    }
-    uint8_t *dst = (uint8_t *)wasm_runtime_addr_app_to_native(module_inst,
-                                                             (uint64_t)ptr);
-    if (!dst) {
-        return -1;
-    }
+    m3ApiCheckMem(ptr, (uint32_t)len);
 
     const uint8_t *src = (const uint8_t *)(uintptr_t)((uint32_t)phys + (uint32_t)offset);
     for (int32_t i = 0; i < len; ++i) {
-        dst[i] = src[i];
+        ptr[i] = src[i];
     }
-    return 0;
+    m3ApiReturn(0);
 }
 
-static int32_t
-native_block_buffer_write(wasm_exec_env_t exec_env, int32_t phys, int32_t ptr, int32_t len, int32_t offset)
+m3ApiRawFunction(wasmos_block_buffer_write)
 {
-    if (ptr < 0 || len <= 0 || offset < 0 || phys <= 0) {
-        return -1;
-    }
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, phys)
+    m3ApiGetArgMem(const uint8_t *, ptr)
+    m3ApiGetArg(int32_t, len)
+    m3ApiGetArg(int32_t, offset)
 
-    wasm_module_inst_t module_inst = get_module_inst(exec_env);
-    if (!module_inst) {
-        return -1;
+    if (len <= 0 || offset < 0 || phys <= 0) {
+        m3ApiReturn(-1);
     }
-    if (!wasm_runtime_validate_app_addr(module_inst, (uint64_t)ptr, (uint64_t)len)) {
-        log_bad_app_addr("block_buffer_write", (uint64_t)ptr, (uint64_t)len);
-        return -1;
-    }
-    const uint8_t *src = (const uint8_t *)wasm_runtime_addr_app_to_native(module_inst, (uint64_t)ptr);
-    if (!src) {
-        return -1;
-    }
+    m3ApiCheckMem(ptr, (uint32_t)len);
 
     uint8_t *dst = (uint8_t *)(uintptr_t)((uint32_t)phys + (uint32_t)offset);
     for (int32_t i = 0; i < len; ++i) {
-        dst[i] = src[i];
+        dst[i] = ptr[i];
     }
-    return 0;
+    m3ApiReturn(0);
 }
 
-static int32_t
-native_fs_buffer_size(wasm_exec_env_t exec_env)
+m3ApiRawFunction(wasmos_fs_buffer_size)
 {
-    (void)exec_env;
-    return (int32_t)process_manager_fs_buffer_size();
+    m3ApiReturnType(int32_t)
+    m3ApiReturn((int32_t)process_manager_fs_buffer_size());
 }
 
-static int32_t
-native_fs_buffer_write(wasm_exec_env_t exec_env, int32_t ptr, int32_t len, int32_t offset)
+m3ApiRawFunction(wasmos_fs_buffer_write)
 {
-    if (ptr < 0 || len <= 0 || offset < 0) {
-        return -1;
+    m3ApiReturnType(int32_t)
+    m3ApiGetArgMem(const uint8_t *, ptr)
+    m3ApiGetArg(int32_t, len)
+    m3ApiGetArg(int32_t, offset)
+
+    if (len <= 0 || offset < 0) {
+        m3ApiReturn(-1);
     }
     uint32_t max_len = process_manager_fs_buffer_size();
     if ((uint32_t)offset + (uint32_t)len > max_len) {
-        return -1;
+        m3ApiReturn(-1);
     }
+    m3ApiCheckMem(ptr, (uint32_t)len);
 
-    wasm_module_inst_t module_inst = get_module_inst(exec_env);
-    if (!module_inst) {
-        return -1;
-    }
-    if (!wasm_runtime_validate_app_addr(module_inst, (uint64_t)ptr, (uint64_t)len)) {
-        log_bad_app_addr("fs_buffer_write", (uint64_t)ptr, (uint64_t)len);
-        return -1;
-    }
-    const uint8_t *src = (const uint8_t *)wasm_runtime_addr_app_to_native(module_inst, (uint64_t)ptr);
-    if (!src) {
-        return -1;
-    }
     uint8_t *dst = (uint8_t *)process_manager_fs_buffer();
     for (int32_t i = 0; i < len; ++i) {
-        dst[offset + i] = src[i];
+        dst[offset + i] = ptr[i];
     }
-    return 0;
+    m3ApiReturn(0);
 }
 
-static int32_t
-native_io_in8(wasm_exec_env_t exec_env, int32_t port)
+m3ApiRawFunction(wasmos_io_in8)
 {
-    (void)exec_env;
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, port)
     if (port < 0 || port > 0xFFFF) {
-        return -1;
+        m3ApiReturn(-1);
     }
-    return (int32_t)inb((uint16_t)port);
+    m3ApiReturn((int32_t)inb((uint16_t)port));
 }
 
-static int32_t
-native_io_in16(wasm_exec_env_t exec_env, int32_t port)
+m3ApiRawFunction(wasmos_io_in16)
 {
-    (void)exec_env;
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, port)
     if (port < 0 || port > 0xFFFF) {
-        return -1;
+        m3ApiReturn(-1);
     }
-    return (int32_t)inw((uint16_t)port);
+    m3ApiReturn((int32_t)inw((uint16_t)port));
 }
 
-static int32_t
-native_io_out8(wasm_exec_env_t exec_env, int32_t port, int32_t value)
+m3ApiRawFunction(wasmos_io_out8)
 {
-    (void)exec_env;
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, port)
+    m3ApiGetArg(int32_t, value)
     if (port < 0 || port > 0xFFFF || value < 0 || value > 0xFF) {
-        return -1;
+        m3ApiReturn(-1);
     }
     outb((uint16_t)port, (uint8_t)value);
-    return 0;
+    m3ApiReturn(0);
 }
 
-static int32_t
-native_io_out16(wasm_exec_env_t exec_env, int32_t port, int32_t value)
+m3ApiRawFunction(wasmos_io_out16)
 {
-    (void)exec_env;
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, port)
+    m3ApiGetArg(int32_t, value)
     if (port < 0 || port > 0xFFFF || value < 0 || value > 0xFFFF) {
-        return -1;
+        m3ApiReturn(-1);
     }
     outw((uint16_t)port, (uint16_t)value);
-    return 0;
+    m3ApiReturn(0);
 }
 
-static int32_t
-native_io_wait(wasm_exec_env_t exec_env)
+m3ApiRawFunction(wasmos_io_wait)
 {
-    (void)exec_env;
+    m3ApiReturnType(int32_t)
     io_wait();
-    return 0;
+    m3ApiReturn(0);
 }
 
-static int32_t
-native_system_halt(wasm_exec_env_t exec_env)
+m3ApiRawFunction(wasmos_system_halt)
 {
-    (void)exec_env;
+    m3ApiReturnType(int32_t)
     outw(0x604, 0x2000);
     outw(0xB004, 0x2000);
     outw(0x4004, 0x3400);
     for (;;) {
         __asm__ volatile("hlt");
     }
-    return 0;
+    m3ApiReturn(0);
 }
 
-static int32_t
-native_system_reboot(wasm_exec_env_t exec_env)
+m3ApiRawFunction(wasmos_system_reboot)
 {
-    (void)exec_env;
+    m3ApiReturnType(int32_t)
     outb(0x64, 0xFE);
     outb(0xCF9, 0x06);
     outb(0xCF9, 0x0E);
     for (;;) {
         __asm__ volatile("hlt");
     }
-    return 0;
+    m3ApiReturn(0);
 }
 
-static int32_t
-native_acpi_rsdp_info(wasm_exec_env_t exec_env, int32_t out_ptr, int32_t out_len_ptr, int32_t max_len)
+m3ApiRawFunction(wasmos_acpi_rsdp_info)
 {
-    if (out_ptr < 0 || out_len_ptr < 0 || max_len <= 0) {
-        return -1;
+    m3ApiReturnType(int32_t)
+    m3ApiGetArgMem(uint8_t *, out_ptr)
+    m3ApiGetArgMem(uint32_t *, out_len_ptr)
+    m3ApiGetArg(int32_t, max_len)
+
+    if (max_len <= 0) {
+        m3ApiReturn(-1);
     }
     if (!g_boot_info || !g_boot_info->rsdp || g_boot_info->rsdp_length == 0) {
-        return -1;
+        m3ApiReturn(-1);
     }
     uint32_t len = g_boot_info->rsdp_length;
     if (len > (uint32_t)max_len) {
-        return -1;
+        m3ApiReturn(-1);
     }
+    m3ApiCheckMem(out_ptr, len);
+    m3ApiCheckMem(out_len_ptr, sizeof(uint32_t));
 
-    wasm_module_inst_t module_inst = get_module_inst(exec_env);
-    if (!module_inst) {
-        return -1;
-    }
-    if (!wasm_runtime_validate_app_addr(module_inst, (uint64_t)out_ptr, (uint64_t)len)) {
-        log_bad_app_addr("acpi_rsdp_info.out", (uint64_t)out_ptr, (uint64_t)len);
-        return -1;
-    }
-    if (!wasm_runtime_validate_app_addr(module_inst, (uint64_t)out_len_ptr, sizeof(uint32_t))) {
-        log_bad_app_addr("acpi_rsdp_info.len", (uint64_t)out_len_ptr, sizeof(uint32_t));
-        return -1;
-    }
-    uint8_t *dst = (uint8_t *)wasm_runtime_addr_app_to_native(module_inst, (uint64_t)out_ptr);
-    uint32_t *len_out = (uint32_t *)wasm_runtime_addr_app_to_native(module_inst, (uint64_t)out_len_ptr);
-    if (!dst || !len_out) {
-        return -1;
-    }
     const uint8_t *src = (const uint8_t *)(uintptr_t)g_boot_info->rsdp;
     for (uint32_t i = 0; i < len; ++i) {
-        dst[i] = src[i];
+        out_ptr[i] = src[i];
     }
-    *len_out = len;
-    return 0;
+    *out_len_ptr = len;
+    m3ApiReturn(0);
 }
 
-static int32_t
-native_boot_module_name(wasm_exec_env_t exec_env, int32_t index, int32_t out_ptr, int32_t out_len)
+m3ApiRawFunction(wasmos_boot_module_name)
 {
-    if (index < 0 || out_ptr < 0 || out_len <= 0) {
-        return -1;
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, index)
+    m3ApiGetArgMem(char *, out_ptr)
+    m3ApiGetArg(int32_t, out_len)
+
+    if (index < 0 || out_len <= 0) {
+        m3ApiReturn(-1);
     }
-    wasm_module_inst_t module_inst = get_module_inst(exec_env);
-    if (!module_inst) {
-        return -1;
-    }
-    if (!wasm_runtime_validate_app_addr(module_inst, (uint64_t)out_ptr, (uint64_t)out_len)) {
-        log_bad_app_addr("boot_module_name", (uint64_t)out_ptr, (uint64_t)out_len);
-        return -1;
-    }
-    char *dst = (char *)wasm_runtime_addr_app_to_native(module_inst, (uint64_t)out_ptr);
-    if (!dst) {
-        return -1;
-    }
+    m3ApiCheckMem(out_ptr, (uint32_t)out_len);
+
     uint32_t name_len = 0;
-    if (boot_module_name_at((uint32_t)index, dst, (uint32_t)out_len, &name_len) != 0) {
-        return -1;
+    if (boot_module_name_at((uint32_t)index, out_ptr, (uint32_t)out_len, &name_len) != 0) {
+        m3ApiReturn(-1);
     }
-    return (int32_t)name_len;
+    m3ApiReturn((int32_t)name_len);
 }
 
-static int32_t
-native_console_write(wasm_exec_env_t exec_env, int32_t ptr, int32_t len)
+m3ApiRawFunction(wasmos_console_write)
 {
-    if (ptr < 0 || len <= 0) {
-        return -1;
-    }
+    m3ApiReturnType(int32_t)
+    m3ApiGetArgMem(const char *, ptr)
+    m3ApiGetArg(int32_t, len)
 
-    wasm_module_inst_t module_inst = get_module_inst(exec_env);
-    if (!module_inst) {
-        return -1;
+    if (len <= 0) {
+        m3ApiReturn(-1);
     }
-    serial_write_unlocked("[wasm] console_write ");
-    serial_write_hex64_unlocked((uint64_t)(uint32_t)ptr);
-    serial_write_unlocked("[wasm] console_write len ");
-    serial_write_hex64_unlocked((uint64_t)(uint32_t)len);
-    if (!wasm_runtime_validate_app_addr(module_inst, (uint64_t)ptr, (uint64_t)len)) {
-        log_bad_app_addr("console_write", (uint64_t)ptr, (uint64_t)len);
-        return -1;
-    }
-
-    const char *src = (const char *)wasm_runtime_addr_app_to_native(module_inst, (uint64_t)ptr);
-    if (!src) {
-        return -1;
-    }
+    m3ApiCheckMem(ptr, (uint32_t)len);
 
     char buf[128];
     int32_t remaining = len;
     while (remaining > 0) {
         int32_t chunk = remaining > (int32_t)(sizeof(buf) - 1) ? (int32_t)(sizeof(buf) - 1) : remaining;
         for (int32_t i = 0; i < chunk; ++i) {
-            buf[i] = src[len - remaining + i];
+            buf[i] = ptr[len - remaining + i];
         }
         buf[chunk] = '\0';
         serial_write(buf);
         remaining -= chunk;
     }
-
-    return 0;
+    m3ApiReturn(0);
 }
 
-static int32_t
-native_debug_mark(wasm_exec_env_t exec_env, int32_t tag)
+m3ApiRawFunction(wasmos_debug_mark)
 {
-    (void)exec_env;
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, tag)
     serial_write_unlocked("[wasm] debug_mark tag=");
     serial_write_hex64_unlocked((uint64_t)(uint32_t)tag);
     serial_write_unlocked("[wasm] debug_mark pid=");
     serial_write_hex64_unlocked((uint64_t)process_current_pid());
-    return 0;
+    m3ApiReturn(0);
 }
 
-static int32_t
-native_console_read(wasm_exec_env_t exec_env, char *ptr, int32_t len)
+m3ApiRawFunction(wasmos_console_read)
 {
-    (void)exec_env;
-    if (!ptr || len <= 0) {
-        return -1;
+    m3ApiReturnType(int32_t)
+    m3ApiGetArgMem(char *, ptr)
+    m3ApiGetArg(int32_t, len)
+
+    if (len <= 0) {
+        m3ApiReturn(-1);
     }
-    if (!is_canonical_addr((uint64_t)(uintptr_t)ptr)) {
-        log_bad_app_addr("console_read.native", (uint64_t)(uintptr_t)ptr, (uint64_t)len);
-        return -1;
-    }
+    m3ApiCheckMem(ptr, 1);
     uint8_t ch = 0;
     int rc = serial_read_char(&ch);
     if (rc <= 0) {
-        return rc;
+        m3ApiReturn(rc);
     }
     ptr[0] = (char)ch;
-    return 1;
+    m3ApiReturn(1);
 }
 
-static int32_t
-native_proc_count(wasm_exec_env_t exec_env)
+m3ApiRawFunction(wasmos_proc_count)
 {
-    (void)exec_env;
-    return (int32_t)process_count_active();
+    m3ApiReturnType(int32_t)
+    m3ApiReturn((int32_t)process_count_active());
 }
 
-static int32_t
-native_proc_exit(wasm_exec_env_t exec_env, int32_t status)
+m3ApiRawFunction(wasmos_proc_exit)
 {
-    (void)exec_env;
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, status)
     process_t *proc = process_get(process_current_pid());
     if (!proc) {
-        return -1;
+        m3ApiReturn(-1);
     }
     process_set_exit_status(proc, status);
     process_yield(PROCESS_RUN_EXITED);
-    return 0;
+    m3ApiReturn(0);
 }
 
-static int32_t
-native_sched_ticks(wasm_exec_env_t exec_env)
+m3ApiRawFunction(wasmos_sched_ticks)
 {
-    (void)exec_env;
-    return (int32_t)timer_ticks();
+    m3ApiReturnType(int32_t)
+    m3ApiReturn((int32_t)timer_ticks());
 }
 
-static int32_t
-native_sched_ready_count(wasm_exec_env_t exec_env)
+m3ApiRawFunction(wasmos_sched_ready_count)
 {
-    (void)exec_env;
-    return (int32_t)process_ready_count();
+    m3ApiReturnType(int32_t)
+    m3ApiReturn((int32_t)process_ready_count());
 }
 
-static int32_t
-native_sched_current_pid(wasm_exec_env_t exec_env)
+m3ApiRawFunction(wasmos_sched_current_pid)
 {
-    (void)exec_env;
-    return (int32_t)process_current_pid();
+    m3ApiReturnType(int32_t)
+    m3ApiReturn((int32_t)process_current_pid());
 }
 
-static int32_t
-native_proc_info(wasm_exec_env_t exec_env, int32_t index, char *buf, int32_t buf_len)
+m3ApiRawFunction(wasmos_proc_info)
 {
-    (void)exec_env;
-    if (index < 0 || !buf || buf_len <= 0) {
-        return -1;
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, index)
+    m3ApiGetArgMem(char *, buf)
+    m3ApiGetArg(int32_t, buf_len)
+
+    if (index < 0 || buf_len <= 0) {
+        m3ApiReturn(-1);
     }
-    if (!is_canonical_addr((uint64_t)(uintptr_t)buf)) {
-        log_bad_app_addr("proc_info.native", (uint64_t)(uintptr_t)buf, (uint64_t)buf_len);
-        return -1;
-    }
+    m3ApiCheckMem(buf, (uint32_t)buf_len);
+
     uint32_t pid = 0;
     const char *name = 0;
     if (process_info_at((uint32_t)index, &pid, &name) != 0) {
-        return -1;
+        m3ApiReturn(-1);
     }
     int32_t i = 0;
     if (name) {
@@ -936,39 +832,30 @@ native_proc_info(wasm_exec_env_t exec_env, int32_t index, char *buf, int32_t buf
         }
     }
     buf[i] = '\0';
-    return (int32_t)pid;
+    m3ApiReturn((int32_t)pid);
 }
 
-static int32_t
-native_proc_info_ex(wasm_exec_env_t exec_env, int32_t index, char *buf, int32_t buf_len, int32_t parent_ptr)
+m3ApiRawFunction(wasmos_proc_info_ex)
 {
-    if (index < 0 || !buf || buf_len <= 0 || parent_ptr < 0) {
-        return -1;
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, index)
+    m3ApiGetArgMem(char *, buf)
+    m3ApiGetArg(int32_t, buf_len)
+    m3ApiGetArgMem(uint32_t *, parent_ptr)
+
+    if (index < 0 || buf_len <= 0) {
+        m3ApiReturn(-1);
     }
-    if (!is_canonical_addr((uint64_t)(uintptr_t)buf)) {
-        log_bad_app_addr("proc_info_ex.native", (uint64_t)(uintptr_t)buf, (uint64_t)buf_len);
-        return -1;
-    }
+    m3ApiCheckMem(buf, (uint32_t)buf_len);
+    m3ApiCheckMem(parent_ptr, sizeof(uint32_t));
+
     uint32_t pid = 0;
     uint32_t parent_pid = 0;
     const char *name = 0;
     if (process_info_at_ex((uint32_t)index, &pid, &parent_pid, &name) != 0) {
-        return -1;
+        m3ApiReturn(-1);
     }
-
-    wasm_module_inst_t module_inst = get_module_inst(exec_env);
-    if (!module_inst) {
-        return -1;
-    }
-    if (!wasm_runtime_validate_app_addr(module_inst, (uint64_t)parent_ptr, sizeof(uint32_t))) {
-        log_bad_app_addr("proc_info_ex.parent", (uint64_t)parent_ptr, sizeof(uint32_t));
-        return -1;
-    }
-    uint32_t *parent_out = (uint32_t *)wasm_runtime_addr_app_to_native(module_inst, (uint64_t)parent_ptr);
-    if (!parent_out) {
-        return -1;
-    }
-    *parent_out = parent_pid;
+    *parent_ptr = parent_pid;
 
     int32_t i = 0;
     if (name) {
@@ -978,53 +865,102 @@ native_proc_info_ex(wasm_exec_env_t exec_env, int32_t index, char *buf, int32_t 
         }
     }
     buf[i] = '\0';
-    return (int32_t)pid;
+    m3ApiReturn((int32_t)pid);
+}
+
+m3ApiRawFunction(wasmos_strlen)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArgMem(const char *, ptr)
+
+    const uint8_t *start = (const uint8_t *)ptr;
+    const uint8_t *end = (const uint8_t *)_mem + m3_GetMemorySize(runtime);
+    if ((const uint8_t *)ptr < (const uint8_t *)_mem || start >= end) {
+        m3ApiReturn(0);
+    }
+    int32_t len = 0;
+    while (start + len < end && start[len] != '\0') {
+        len++;
+    }
+    m3ApiReturn(len);
+}
+
+static void
+wasm3_link_error(const char *name, const char *res)
+{
+    serial_write("[wasm3] link failed ");
+    serial_write(name);
+    serial_write(": ");
+    serial_write(res ? res : "unknown");
+    serial_write("\n");
 }
 
 static int
-register_wasm_ipc_natives(void)
+wasm3_link_raw(IM3Module module, const char *mod, const char *name, const char *sig, M3RawCall fn)
 {
-    static const wamr_native_symbol_t symbols[] = {
-        { "ipc_create_endpoint", native_ipc_create_endpoint, "()i", 0 },
-        { "ipc_create_notification", native_ipc_create_notification, "()i", 0 },
-        { "ipc_send", native_ipc_send, "(iiiiiiii)i", 0 },
-        { "ipc_recv", native_ipc_recv, "(i)i", 0 },
-        { "ipc_wait", native_ipc_wait, "(i)i", 0 },
-        { "ipc_notify", native_ipc_notify, "(i)i", 0 },
-        { "ipc_last_field", native_ipc_last_field, "(i)i", 0 },
-        { "console_write", native_console_write, "(ii)i", 0 },
-        { "debug_mark", native_debug_mark, "(i)i", 0 },
-        { "console_read", native_console_read, "(*~)i", 0 },
-        { "proc_count", native_proc_count, "()i", 0 },
-        { "proc_exit", native_proc_exit, "(i)i", 0 },
-        { "sched_ticks", native_sched_ticks, "()i", 0 },
-        { "sched_ready_count", native_sched_ready_count, "()i", 0 },
-        { "sched_current_pid", native_sched_current_pid, "()i", 0 },
-        { "proc_info", native_proc_info, "(i*~)i", 0 },
-        { "proc_info_ex", native_proc_info_ex, "(i*~i)i", 0 },
-        { "block_buffer_phys", native_block_buffer_phys, "()i", 0 },
-        { "block_buffer_copy", native_block_buffer_copy, "(iiii)i", 0 },
-        { "block_buffer_write", native_block_buffer_write, "(iiii)i", 0 },
-        { "fs_buffer_size", native_fs_buffer_size, "()i", 0 },
-        { "fs_buffer_write", native_fs_buffer_write, "(iii)i", 0 },
-        { "system_halt", native_system_halt, "()i", 0 },
-        { "system_reboot", native_system_reboot, "()i", 0 },
-        { "acpi_rsdp_info", native_acpi_rsdp_info, "(iii)i", 0 },
-        { "boot_module_name", native_boot_module_name, "(iii)i", 0 },
-        { "io_in8", native_io_in8, "(i)i", 0 },
-        { "io_in16", native_io_in16, "(i)i", 0 },
-        { "io_out8", native_io_out8, "(ii)i", 0 },
-        { "io_out16", native_io_out16, "(ii)i", 0 },
-        { "io_wait", native_io_wait, "()i", 0 },
-    };
-
-    if (!wamr_register_natives("wasmos", symbols,
-                               (uint32_t)(sizeof(symbols) / sizeof(symbols[0])))) {
-        serial_write("[kernel] wasm native registration failed\n");
+    M3Result res = m3_LinkRawFunction(module, mod, name, sig, fn);
+    if (res && res != m3Err_functionLookupFailed) {
+        wasm3_link_error(name, res);
         return -1;
     }
+    return 0;
+}
 
-    serial_write("[kernel] wasm native registration ok\n");
+int
+wasm3_link_wasmos(IM3Module module)
+{
+    if (!module) {
+        return -1;
+    }
+    int rc = 0;
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_create_endpoint", "i()", wasmos_ipc_create_endpoint);
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_create_notification", "i()", wasmos_ipc_create_notification);
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_send", "i(iiiiiiii)", wasmos_ipc_send);
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_recv", "i(i)", wasmos_ipc_recv);
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_wait", "i(i)", wasmos_ipc_wait);
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_notify", "i(i)", wasmos_ipc_notify);
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_last_field", "i(i)", wasmos_ipc_last_field);
+    rc |= wasm3_link_raw(module, "wasmos", "console_write", "i(*i)", wasmos_console_write);
+    rc |= wasm3_link_raw(module, "wasmos", "debug_mark", "i(i)", wasmos_debug_mark);
+    rc |= wasm3_link_raw(module, "wasmos", "console_read", "i(*i)", wasmos_console_read);
+    rc |= wasm3_link_raw(module, "wasmos", "proc_count", "i()", wasmos_proc_count);
+    rc |= wasm3_link_raw(module, "wasmos", "proc_exit", "i(i)", wasmos_proc_exit);
+    rc |= wasm3_link_raw(module, "wasmos", "sched_ticks", "i()", wasmos_sched_ticks);
+    rc |= wasm3_link_raw(module, "wasmos", "sched_ready_count", "i()", wasmos_sched_ready_count);
+    rc |= wasm3_link_raw(module, "wasmos", "sched_current_pid", "i()", wasmos_sched_current_pid);
+    rc |= wasm3_link_raw(module, "wasmos", "proc_info", "i(i*i)", wasmos_proc_info);
+    rc |= wasm3_link_raw(module, "wasmos", "proc_info_ex", "i(i*i*)", wasmos_proc_info_ex);
+    rc |= wasm3_link_raw(module, "wasmos", "block_buffer_phys", "i()", wasmos_block_buffer_phys);
+    rc |= wasm3_link_raw(module, "wasmos", "block_buffer_copy", "i(i*ii)", wasmos_block_buffer_copy);
+    rc |= wasm3_link_raw(module, "wasmos", "block_buffer_write", "i(i*ii)", wasmos_block_buffer_write);
+    rc |= wasm3_link_raw(module, "wasmos", "fs_buffer_size", "i()", wasmos_fs_buffer_size);
+    rc |= wasm3_link_raw(module, "wasmos", "fs_buffer_write", "i(*ii)", wasmos_fs_buffer_write);
+    rc |= wasm3_link_raw(module, "wasmos", "system_halt", "i()", wasmos_system_halt);
+    rc |= wasm3_link_raw(module, "wasmos", "system_reboot", "i()", wasmos_system_reboot);
+    rc |= wasm3_link_raw(module, "wasmos", "acpi_rsdp_info", "i(**i)", wasmos_acpi_rsdp_info);
+    rc |= wasm3_link_raw(module, "wasmos", "boot_module_name", "i(i*i)", wasmos_boot_module_name);
+    rc |= wasm3_link_raw(module, "wasmos", "io_in8", "i(i)", wasmos_io_in8);
+    rc |= wasm3_link_raw(module, "wasmos", "io_in16", "i(i)", wasmos_io_in16);
+    rc |= wasm3_link_raw(module, "wasmos", "io_out8", "i(ii)", wasmos_io_out8);
+    rc |= wasm3_link_raw(module, "wasmos", "io_out16", "i(ii)", wasmos_io_out16);
+    rc |= wasm3_link_raw(module, "wasmos", "io_wait", "i()", wasmos_io_wait);
+    if (rc != 0) {
+        serial_write("[kernel] wasm3 link errors\n");
+        return -1;
+    }
+    return 0;
+}
+
+int
+wasm3_link_env(IM3Module module)
+{
+    if (!module) {
+        return -1;
+    }
+    if (wasm3_link_raw(module, "env", "strlen", "i(*)", wasmos_strlen) != 0) {
+        serial_write("[kernel] wasm3 env link errors\n");
+        return -1;
+    }
     return 0;
 }
 
@@ -1564,7 +1500,7 @@ kmain(boot_info_t *boot_info)
     process_init();
     wasm_ipc_slots_init();
 
-    serial_write("[kernel] wamr init on-demand\n");
+    serial_write("[kernel] wasm3 init on-demand\n");
 
     if (process_spawn_idle("idle", idle_entry, 0, &idle_pid) != 0) {
         serial_write("[kernel] idle spawn failed\n");
@@ -1624,12 +1560,6 @@ kmain(boot_info_t *boot_info)
     chardev_proc = process_get(chardev_pid);
     if (!chardev_proc || wasm_chardev_init(chardev_proc->context_id) != 0) {
         serial_write("[kernel] chardev service init failed\n");
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
-    }
-
-    if (register_wasm_ipc_natives() != 0) {
         for (;;) {
             __asm__ volatile("hlt");
         }

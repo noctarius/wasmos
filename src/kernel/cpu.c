@@ -3,7 +3,6 @@
 #include "process.h"
 #include "memory_service.h"
 #include "irq.h"
-#include "wamr_context.h"
 #include <stdint.h>
 
 #define GDT_ENTRY_COUNT 5
@@ -35,25 +34,6 @@ typedef struct __attribute__((packed)) {
 
 extern void *x86_exception_stub_table[];
 extern void *x86_irq_stub_table[];
-#if !defined(WASMOS_DISABLE_TRACE)
-extern void *wasmos_wamr_last_frame_ip;
-extern void *wasmos_wamr_last_func;
-extern void *wasmos_wamr_last_module;
-extern void *wasmos_wamr_last_exec_env;
-extern volatile uint8_t wasmos_wamr_last_opcodes[16];
-extern volatile uint32_t wasmos_wamr_last_opcodes_len;
-extern void *wasmos_wamr_last_rsp;
-extern void *wasmos_wamr_last_frame_sp;
-extern void *wasmos_wamr_last_frame_lp;
-extern void *wasmos_wamr_last_native_ptr;
-extern uint32_t wasmos_wamr_last_native_index;
-extern void *wasmos_wamr_bad_ip;
-extern void *wasmos_wamr_bad_sp;
-extern void *wasmos_wamr_bad_csp;
-extern uint32_t wasmos_wamr_bad_reason;
-extern void *wasmos_wamr_bad_sp_bottom;
-extern void *wasmos_wamr_bad_sp_boundary;
-#endif
 extern uint8_t __kernel_start;
 extern uint8_t __kernel_end;
 
@@ -289,8 +269,6 @@ x86_exception_panic_frame(uint64_t vector, const uint64_t *frame)
     const char *name = proc && proc->name ? proc->name : 0;
     uint64_t stack_base = proc ? (uint64_t)proc->stack_base : 0;
     uint64_t stack_top = proc ? (uint64_t)proc->stack_top : 0;
-    uintptr_t wamr_heap_base = 0;
-    uint32_t wamr_heap_size = 0;
     uint64_t kernel_start = (uint64_t)(uintptr_t)&__kernel_start;
     uint64_t kernel_end = (uint64_t)(uintptr_t)&__kernel_end;
 
@@ -326,62 +304,9 @@ x86_exception_panic_frame(uint64_t vector, const uint64_t *frame)
     serial_write_hex64_unlocked(stack_base);
     serial_write_unlocked("[cpu] stack top=");
     serial_write_hex64_unlocked(stack_top);
-#if !defined(WASMOS_DISABLE_TRACE)
-    serial_write_unlocked("[cpu] wamr ip=");
-    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_last_frame_ip);
-    serial_write_unlocked("[cpu] wamr func=");
-    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_last_func);
-    serial_write_unlocked("[cpu] wamr module=");
-    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_last_module);
-    serial_write_unlocked("[cpu] wamr exec_env=");
-    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_last_exec_env);
-    serial_write_unlocked("[cpu] wamr rsp=");
-    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_last_rsp);
-    serial_write_unlocked("[cpu] wamr frame_sp=");
-    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_last_frame_sp);
-    serial_write_unlocked("[cpu] wamr frame_lp=");
-    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_last_frame_lp);
-    if (wasmos_wamr_last_rsp && stack_top) {
-        uint64_t gap = stack_top - (uint64_t)(uintptr_t)wasmos_wamr_last_rsp;
-        serial_write_unlocked("[cpu] wamr rsp->stack_top gap=");
-        serial_write_hex64_unlocked(gap);
-    }
-    serial_write_unlocked("[cpu] wamr native ptr=");
-    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_last_native_ptr);
-    serial_write_unlocked("[cpu] wamr native index=");
-    serial_write_hex64_unlocked((uint64_t)wasmos_wamr_last_native_index);
-    serial_write_unlocked("[cpu] wamr bad reason=");
-    serial_write_hex64_unlocked((uint64_t)wasmos_wamr_bad_reason);
-    serial_write_unlocked("[cpu] wamr bad ip=");
-    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_bad_ip);
-    serial_write_unlocked("[cpu] wamr bad sp=");
-    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_bad_sp);
-    serial_write_unlocked("[cpu] wamr bad csp=");
-    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_bad_csp);
-    serial_write_unlocked("[cpu] wamr bad sp_bottom=");
-    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_bad_sp_bottom);
-    serial_write_unlocked("[cpu] wamr bad sp_boundary=");
-    serial_write_hex64_unlocked((uint64_t)(uintptr_t)wasmos_wamr_bad_sp_boundary);
-    if (wasmos_wamr_last_opcodes_len > 0 && wasmos_wamr_last_opcodes_len <= 16) {
-        serial_dump_bytes_unlocked("[cpu] wamr opcodes",
-                                   (const uint8_t *)wasmos_wamr_last_opcodes,
-                                   (uint32_t)wasmos_wamr_last_opcodes_len);
-    }
-
-    wamr_runtime_heap_range(&wamr_heap_base, &wamr_heap_size);
-    if (wamr_heap_base && wamr_heap_size) {
-        uint64_t ip = (uint64_t)(uintptr_t)wasmos_wamr_last_frame_ip;
-        if (ip >= wamr_heap_base && (ip + 16) <= (wamr_heap_base + wamr_heap_size)) {
-            serial_dump_bytes_unlocked("[cpu] wamr ip bytes", (const uint8_t *)ip, 16);
-        }
-        if (rip >= wamr_heap_base && (rip + 16) <= (wamr_heap_base + wamr_heap_size)) {
-            serial_dump_bytes_unlocked("[cpu] rip bytes", (const uint8_t *)rip, 16);
-        }
-    }
     if (rip >= kernel_start && (rip + 16) <= kernel_end) {
         serial_dump_bytes_unlocked("[cpu] rip bytes", (const uint8_t *)rip, 16);
     }
-#endif
 
     __asm__ volatile("cli");
     for (;;) {

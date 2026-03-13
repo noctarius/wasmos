@@ -58,6 +58,10 @@ volatile uint32_t wasmos_wamr_bytecode_calls;
 volatile uint32_t wasmos_wamr_call_indirect_count;
 volatile uint32_t wasmos_wamr_call_indirect_last_fidx;
 volatile uint32_t wasmos_wamr_call_indirect_last_import;
+volatile uint32_t wasmos_wamr_impdep_hits;
+volatile void *wasmos_wamr_impdep_ip;
+volatile void *wasmos_wamr_impdep_sp;
+volatile void *wasmos_wamr_impdep_csp;
 volatile void *wasmos_wamr_last_code_start;
 volatile void *wasmos_wamr_last_code_end;
 volatile uint32_t wasmos_wamr_opcode_exec_count;
@@ -6779,6 +6783,10 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
                 frame_ip = frame->ip;
                 frame_sp = frame->sp;
                 frame_csp = frame->csp;
+                wasmos_wamr_impdep_hits++;
+                wasmos_wamr_impdep_ip = frame_ip;
+                wasmos_wamr_impdep_sp = frame_sp;
+                wasmos_wamr_impdep_csp = frame_csp;
 #if WASM_ENABLE_TAIL_CALL != 0 || WASM_ENABLE_GC != 0
                 is_return_call = false;
 #endif

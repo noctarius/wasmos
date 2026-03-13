@@ -114,6 +114,9 @@ target_include_directories(kernel_ide PRIVATE
   ${KERNEL_DIR}/include
   ${DRIVER_WASM_DIR}/include
   ${WAMR_DIR}/core/iwasm/include
+  ${WAMR_DIR}/core/iwasm/common
+  ${WAMR_DIR}/core/shared/utils
+  ${WAMR_DIR}/core/shared/platform/include
   ${WASM_DIR}
   ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos
 )

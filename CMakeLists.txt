@@ -290,7 +290,12 @@ endif ()
 option(WAMR_ENABLE "Enable WAMR runtime integration (requires linking WAMR)" ON)
 option(WAMR_LINK "Link the WAMR runtime library" ON)
 if (WAMR_ENABLE AND WAMR_LINK)
-  set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -DWAMR_ENABLED=1 -I${WAMR_DIR}/core/iwasm/include)
+  set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -DWAMR_ENABLED=1
+      -I${WAMR_DIR}/core/iwasm/include
+      -I${WAMR_DIR}/core/iwasm/common
+      -I${WAMR_DIR}/core/shared/utils
+      -I${WAMR_DIR}/core/shared/platform/include
+      -I${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos)
 endif ()
 
 if (WAMR_LINK)

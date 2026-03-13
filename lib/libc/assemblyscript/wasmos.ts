@@ -96,6 +96,10 @@ export namespace std {
     return writeStringRaw(text);
   }
 
+  export function printf(text: string): bool {
+    return writeStringRaw(text);
+  }
+
   export function println(text: string): bool {
     return writeStringRaw(text + "\n");
   }

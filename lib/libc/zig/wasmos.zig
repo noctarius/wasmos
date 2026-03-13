@@ -108,6 +108,10 @@ pub const stdlib = struct {
         try rawWrite(line);
     }
 
+    pub fn printf(comptime fmt: []const u8, args: anytype) Error!void {
+        try print(fmt, args);
+    }
+
     pub fn println(comptime fmt: []const u8, args: anytype) Error!void {
         try print(fmt ++ "\n", args);
     }

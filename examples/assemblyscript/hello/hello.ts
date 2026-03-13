@@ -15,7 +15,7 @@ export function main(
     const readable = startup != null && startup.indexOf("BOOTX64.EFI") >= 0;
     std.println("Hello from AssemblyScript on WASMOS!");
     std.println("This is a tiny WASMOS-APP written in AS.");
-    std.println("Entry: main, runtime: stub");
+    std.printf("Entry: main, runtime: stub\n");
     std.println("startup.nsh readable: " + (readable ? "true" : "false"));
   }
   return 0;

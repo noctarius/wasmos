@@ -1,30 +1,7 @@
 #include <stdint.h>
+#include "wasmos/api.h"
+#include "wasmos/ipc.h"
 #include "wasmos_driver_abi.h"
-
-#if defined(__wasm__)
-#define WASMOS_WASM_IMPORT(module_name, symbol_name) \
-    __attribute__((import_module(module_name), import_name(symbol_name)))
-#define WASMOS_WASM_EXPORT __attribute__((visibility("default")))
-#else
-#define WASMOS_WASM_IMPORT(module_name, import_name)
-#define WASMOS_WASM_EXPORT
-#endif
-
-extern int32_t wasmos_ipc_create_endpoint(void)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_create_endpoint");
-extern int32_t wasmos_ipc_send(int32_t destination_endpoint,
-                               int32_t source_endpoint,
-                               int32_t type,
-                               int32_t request_id,
-                               int32_t arg0,
-                               int32_t arg1,
-                               int32_t arg2,
-                               int32_t arg3)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_send");
-extern int32_t wasmos_ipc_recv(int32_t endpoint)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_recv");
-extern int32_t wasmos_ipc_last_field(int32_t field)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_last_field");
 
 WASMOS_WASM_EXPORT int32_t
 main(int32_t chardev_endpoint,
@@ -55,14 +32,12 @@ main(int32_t chardev_endpoint,
         return -1;
     }
 
-    int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
-    int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
-    int32_t resp_status = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-    int32_t resp_value = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
-    if (resp_type != WASM_CHARDEV_IPC_WRITE_RESP
-        || resp_req != write_request_id
-        || resp_status != 0
-        || (resp_value & 0xFF) != (write_value & 0xFF)) {
+    wasmos_ipc_message_t resp;
+    wasmos_ipc_message_read_last(&resp);
+    if (resp.type != WASM_CHARDEV_IPC_WRITE_RESP
+        || resp.request_id != write_request_id
+        || resp.arg0 != 0
+        || (resp.arg1 & 0xFF) != (write_value & 0xFF)) {
         return -1;
     }
 
@@ -76,14 +51,11 @@ main(int32_t chardev_endpoint,
         return -1;
     }
 
-    resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
-    resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
-    resp_status = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-    resp_value = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
-    if (resp_type != WASM_CHARDEV_IPC_READ_RESP
-        || resp_req != read_request_id
-        || resp_status != 0
-        || (resp_value & 0xFF) != (write_value & 0xFF)) {
+    wasmos_ipc_message_read_last(&resp);
+    if (resp.type != WASM_CHARDEV_IPC_READ_RESP
+        || resp.request_id != read_request_id
+        || resp.arg0 != 0
+        || (resp.arg1 & 0xFF) != (write_value & 0xFF)) {
         return -1;
     }
 

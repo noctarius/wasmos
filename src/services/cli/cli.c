@@ -1,50 +1,9 @@
 #include <stdint.h>
+#include "ctype.h"
+#include "stdio.h"
+#include "string.h"
+#include "wasmos/api.h"
 #include "wasmos_driver_abi.h"
-
-#if defined(__wasm__)
-#define WASMOS_WASM_IMPORT(module_name, symbol_name) \
-    __attribute__((import_module(module_name), import_name(symbol_name)))
-#define WASMOS_WASM_EXPORT __attribute__((visibility("default")))
-#else
-#define WASMOS_WASM_IMPORT(module_name, import_name)
-#define WASMOS_WASM_EXPORT
-#endif
-
-extern int32_t wasmos_console_write(int32_t ptr, int32_t len)
-    WASMOS_WASM_IMPORT("wasmos", "console_write");
-extern int32_t wasmos_console_read(int32_t ptr, int32_t len)
-    WASMOS_WASM_IMPORT("wasmos", "console_read");
-extern int32_t wasmos_ipc_create_endpoint(void)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_create_endpoint");
-extern int32_t wasmos_ipc_send(int32_t destination_endpoint,
-                               int32_t source_endpoint,
-                               int32_t type,
-                               int32_t request_id,
-                               int32_t arg0,
-                               int32_t arg1,
-                               int32_t arg2,
-                               int32_t arg3)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_send");
-extern int32_t wasmos_ipc_recv(int32_t endpoint)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_recv");
-extern int32_t wasmos_ipc_last_field(int32_t field)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_last_field");
-extern int32_t wasmos_proc_count(void)
-    WASMOS_WASM_IMPORT("wasmos", "proc_count");
-extern int32_t wasmos_sched_ticks(void)
-    WASMOS_WASM_IMPORT("wasmos", "sched_ticks");
-extern int32_t wasmos_sched_ready_count(void)
-    WASMOS_WASM_IMPORT("wasmos", "sched_ready_count");
-extern int32_t wasmos_sched_current_pid(void)
-    WASMOS_WASM_IMPORT("wasmos", "sched_current_pid");
-extern int32_t wasmos_sched_yield(void)
-    WASMOS_WASM_IMPORT("wasmos", "sched_yield");
-extern int32_t wasmos_proc_info_ex(int32_t index, int32_t ptr, int32_t len, int32_t parent_ptr)
-    WASMOS_WASM_IMPORT("wasmos", "proc_info_ex");
-extern int32_t wasmos_system_halt(void)
-    WASMOS_WASM_IMPORT("wasmos", "system_halt");
-extern int32_t wasmos_system_reboot(void)
-    WASMOS_WASM_IMPORT("wasmos", "system_reboot");
 
 typedef enum {
     CLI_PHASE_INIT = 0,
@@ -92,27 +51,13 @@ enum {
 static int32_t
 str_len(const char *s)
 {
-    int32_t len = 0;
-    while (s && s[len]) {
-        len++;
-    }
-    return len;
+    return (int32_t)strlen(s);
 }
 
 static int
 str_eq(const char *a, const char *b)
 {
-    if (!a || !b) {
-        return 0;
-    }
-    while (*a && *b) {
-        if (*a != *b) {
-            return 0;
-        }
-        a++;
-        b++;
-    }
-    return *a == '\0' && *b == '\0';
+    return strcmp(a, b) == 0;
 }
 
 static void
@@ -125,20 +70,13 @@ set_cwd_root(void)
 static char
 to_lower(char c)
 {
-    if (c >= 'A' && c <= 'Z') {
-        return (char)(c + ('a' - 'A'));
-    }
-    return c;
+    return (char)tolower((unsigned char)c);
 }
 
 static void
 console_write(const char *s)
 {
-    int32_t len = str_len(s);
-    if (len <= 0) {
-        return;
-    }
-    wasmos_console_write((int32_t)(uintptr_t)s, len);
+    putsn(s, strlen(s));
 }
 
 static void

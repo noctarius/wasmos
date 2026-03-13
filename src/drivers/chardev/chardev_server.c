@@ -1,28 +1,7 @@
 #include <stdint.h>
+#include "wasmos/api.h"
+#include "wasmos/ipc.h"
 #include "wasmos_driver_abi.h"
-
-#if defined(__wasm__)
-#define WASMOS_WASM_IMPORT(module_name, symbol_name) \
-    __attribute__((import_module(module_name), import_name(symbol_name)))
-#define WASMOS_WASM_EXPORT __attribute__((visibility("default")))
-#else
-#define WASMOS_WASM_IMPORT(module_name, symbol_name)
-#define WASMOS_WASM_EXPORT
-#endif
-
-extern int32_t wasmos_ipc_send(int32_t destination_endpoint,
-                               int32_t source_endpoint,
-                               int32_t type,
-                               int32_t request_id,
-                               int32_t arg0,
-                               int32_t arg1,
-                               int32_t arg2,
-                               int32_t arg3)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_send");
-extern int32_t wasmos_ipc_recv(int32_t endpoint)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_recv");
-extern int32_t wasmos_ipc_last_field(int32_t field)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_last_field");
 
 static uint8_t g_last_byte;
 static uint8_t g_has_data;
@@ -38,14 +17,12 @@ chardev_reply(int32_t reply_endpoint,
     if (g_service_endpoint < 0 || reply_endpoint < 0) {
         return;
     }
-    (void)wasmos_ipc_send(reply_endpoint,
-                          g_service_endpoint,
-                          type,
-                          request_id,
-                          status,
-                          value,
-                          0,
-                          0);
+    (void)wasmos_ipc_reply(reply_endpoint,
+                           g_service_endpoint,
+                           type,
+                           request_id,
+                           status,
+                           value);
 }
 
 WASMOS_WASM_EXPORT int32_t
@@ -67,42 +44,40 @@ initialize(int32_t service_endpoint,
         if (recv_rc < 0) {
             continue;
         }
-        int32_t msg_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
-        int32_t msg_req_id = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
-        int32_t msg_source = wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE);
-        int32_t msg_arg0 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+        wasmos_ipc_message_t msg;
+        wasmos_ipc_message_read_last(&msg);
 
-        switch ((uint32_t)msg_type) {
+        switch ((uint32_t)msg.type) {
             case WASM_CHARDEV_IPC_READ_REQ:
                 if (!g_has_data) {
-                    chardev_reply(msg_source,
+                    chardev_reply(msg.source,
                                   WASM_CHARDEV_IPC_READ_RESP,
-                                  msg_req_id,
+                                  msg.request_id,
                                   -1,
                                   0);
                 } else {
-                    chardev_reply(msg_source,
+                    chardev_reply(msg.source,
                                   WASM_CHARDEV_IPC_READ_RESP,
-                                  msg_req_id,
+                                  msg.request_id,
                                   0,
                                   (int32_t)g_last_byte);
                 }
                 break;
             case WASM_CHARDEV_IPC_WRITE_REQ:
-                g_last_byte = (uint8_t)(msg_arg0 & 0xFF);
+                g_last_byte = (uint8_t)(msg.arg0 & 0xFF);
                 g_has_data = 1;
-                chardev_reply(msg_source,
+                chardev_reply(msg.source,
                               WASM_CHARDEV_IPC_WRITE_RESP,
-                              msg_req_id,
+                              msg.request_id,
                               0,
-                              msg_arg0 & 0xFF);
+                              msg.arg0 & 0xFF);
                 break;
             default:
-                chardev_reply(msg_source,
+                chardev_reply(msg.source,
                               WASM_CHARDEV_IPC_ERROR_RESP,
-                              msg_req_id,
+                              msg.request_id,
                               -1,
-                              msg_type);
+                              msg.type);
                 break;
         }
     }

@@ -1,5 +1,6 @@
 set(WASM_LIBC_C_SOURCES
   ${LIBC_DIR}/src/ctype.c
+  ${LIBC_DIR}/src/stdlib.c
   ${LIBC_DIR}/src/string.c
   ${LIBC_DIR}/src/stdio.c
 )
@@ -20,7 +21,7 @@ add_custom_command(
           ${WASM_HW_DISCOVERY_SRC}
           -o ${WASM_HW_DISCOVERY_WASM}
   DEPENDS ${WASM_HW_DISCOVERY_SRC} ${WASM_LIBC_C_SOURCES} ${LIBC_DIR}/include/ctype.h
-          ${LIBC_DIR}/include/stdio.h ${LIBC_DIR}/include/string.h
+          ${LIBC_DIR}/include/stdio.h ${LIBC_DIR}/include/stdlib.h ${LIBC_DIR}/include/string.h
           ${LIBC_DIR}/include/wasmos/api.h ${LIBC_DIR}/include/wasmos/ipc.h
           ${LIBC_DIR}/include/wasmos/imports.h ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

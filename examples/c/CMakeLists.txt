@@ -1,5 +1,6 @@
 set(WASM_LIBC_C_SOURCES
   ${LIBC_DIR}/src/ctype.c
+  ${LIBC_DIR}/src/stdlib.c
   ${LIBC_DIR}/src/string.c
   ${LIBC_DIR}/src/stdio.c
 )
@@ -20,7 +21,7 @@ add_custom_command(
           ${WASM_HELLO_C_SRC}
           -o ${WASM_HELLO_C_WASM}
   DEPENDS ${WASM_HELLO_C_SRC} ${WASM_LIBC_C_SOURCES} ${LIBC_DIR}/include/stdio.h
-          ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/wasmos/imports.h
+          ${LIBC_DIR}/include/stdlib.h ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/wasmos/imports.h
           ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Building wasm hello-c module"
@@ -63,7 +64,7 @@ add_custom_command(
           ${WASM_CHARDEV_CLIENT_SRC}
           -o ${WASM_CHARDEV_CLIENT_WASM}
   DEPENDS ${WASM_CHARDEV_CLIENT_SRC} ${WASM_LIBC_C_SOURCES} ${LIBC_DIR}/include/stdio.h
-          ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/wasmos/imports.h
+          ${LIBC_DIR}/include/stdlib.h ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/wasmos/imports.h
           ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Building wasm chardev client module"
@@ -117,7 +118,7 @@ add_custom_command(
           ${WASM_CHARDEV_PREEMPT_SRC}
           -o ${WASM_CHARDEV_PREEMPT_WASM}
   DEPENDS ${WASM_CHARDEV_PREEMPT_SRC} ${WASM_LIBC_C_SOURCES} ${LIBC_DIR}/include/stdio.h
-          ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/wasmos/imports.h
+          ${LIBC_DIR}/include/stdlib.h ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/wasmos/imports.h
           ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Building wasm chardev preempt module"
@@ -160,7 +161,7 @@ add_custom_command(
           ${WASM_INIT_SMOKE_SRC}
           -o ${WASM_INIT_SMOKE_WASM}
   DEPENDS ${WASM_INIT_SMOKE_SRC} ${WASM_LIBC_C_SOURCES} ${LIBC_DIR}/include/stdio.h
-          ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/wasmos/imports.h
+          ${LIBC_DIR}/include/stdlib.h ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/wasmos/imports.h
           ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Building wasm init smoke module"
@@ -203,7 +204,7 @@ add_custom_command(
           ${WASM_NATIVE_CALL_SMOKE_SRC}
           -o ${WASM_NATIVE_CALL_SMOKE_WASM}
   DEPENDS ${WASM_NATIVE_CALL_SMOKE_SRC} ${WASM_LIBC_C_SOURCES} ${LIBC_DIR}/include/stdio.h
-          ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/wasmos/imports.h
+          ${LIBC_DIR}/include/stdlib.h ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/wasmos/imports.h
           ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Building wasm native call smoke module"
@@ -246,7 +247,7 @@ add_custom_command(
           ${WASM_NATIVE_CALL_MIN_SRC}
           -o ${WASM_NATIVE_CALL_MIN_WASM}
   DEPENDS ${WASM_NATIVE_CALL_MIN_SRC} ${WASM_LIBC_C_SOURCES} ${LIBC_DIR}/include/stdio.h
-          ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/wasmos/imports.h
+          ${LIBC_DIR}/include/stdlib.h ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/wasmos/imports.h
           ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Building wasm native call min module"

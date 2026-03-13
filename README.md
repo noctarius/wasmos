@@ -48,7 +48,7 @@ If it isn't present, download OVMF from edk2 and pass `-DOVMF_CODE=/path/to/OVMF
 - wasm3 is vendored via git subtree at `libs/wasm/wasm3`.
 - This branch uses a per-process bump allocator for `malloc/calloc/realloc` in `src/kernel/wasm3_shim.c` and disables the wasm3 fixed heap.
 - Kernel-side wasm3 runtime create/load/call/free paths execute with preemption disabled so timer IRQs do not interrupt runtime mutation.
-- `lib/libc` now provides a shared userland C surface for common helpers such as `strlen`, `strcmp`, `strncmp`, `tolower`, `toupper`, and `putsn`, alongside reusable WASMOS host wrapper headers in `lib/libc/include/wasmos/`.
+- `lib/libc` now provides a shared userland C surface for common helpers such as `strlen`, `strcmp`, `strncmp`, `tolower`, `toupper`, `putsn`, `abs`, `atoi`, and `strtol`, alongside reusable WASMOS host wrapper headers in `lib/libc/include/wasmos/`.
 
 ### AssemblyScript (optional)
 AssemblyScript can be used to write WASMOS drivers, services, and applications. Install AssemblyScript via npm and ensure `asc` is available in your PATH (for example via a global install or `npm link`):

@@ -4,18 +4,11 @@ This document summarizes the current WAMR debugging findings on the preemptive
 multitasking branch and the runtime instrumentation changes that were added.
 
 ## Current Issue
-WAMR instances launch and return successfully, but WASM bytecode appears to
-execute only a single opcode and never reaches native imports such as
-`console_write` or `debug_mark`. This is visible in the runtime trace output:
-- `native call count` stays at `0`
-- `opcode exec count` is `1`
-- `last frame ip` stays `0`
-- opcode bytes captured from the code buffer show the expected prologue
-  (`23 00 41 ...`), but execution does not proceed beyond the initial glue frame
-
-The trace also shows the first opcode captured as `0xCF` (WAMR's `IMPDEP`
-glue-frame opcode), which indicates the interpreter is still observing the
-call-entry trampoline rather than the first real bytecode instruction.
+Preemptive runs now reach the expected bytecode prologues (no more `IMPDEP`
+opcode as the "first opcode"), but the system still hangs after `sysinit`
+returns, and the QEMU halt test never reaches the CLI prompt. We now need to
+determine whether the hang is scheduler/process-state related rather than a
+WAMR bytecode entry issue.
 
 ## Hypotheses Under Consideration
 - Preemption/timer interaction disrupting interpreter state
@@ -46,16 +39,40 @@ expose execution state around the interpreter dispatch loop.
   to compare call paths and trace output.
 
 ## Observed Runtime Output (Preemptive)
-Example pattern seen in logs:
-- `first opcode bytes=CF` (IMPDEP glue)
-- `opcodes bytes=23 00 41 ...` (real code start)
-- `native call count=0`
-- `opcode exec count=1`
-- `last frame ip=0`
+Latest trace (2026-03-13) shows correct bytecode entry:
+- `first opcode ip` matches `code start`
+- `first opcode bytes=23 00 41 10 6B CA ...` (expected prologue)
+- `impdep hits=1` with `impdep ip=0`
+- `opcode exec count=1` (expected for tiny smoke apps)
+- `native-call-smoke` and `init-smoke` both return OK
+
+Despite the correct bytecode entry, the system hangs after `sysinit` returns
+and only `[timer] ticks` continue printing.
+
+## Cooperative vs Preemptive Trace Comparison (2026-03-13)
+Cooperative (main branch) shows the interpreter entering real bytecode directly:
+- `first opcode ip` matches `code start`
+- `first opcode bytes` match the code prologue (example: `41 81 20 41 00 3A 00 00`
+  or `23 00 41 40 6A CA 00 24`)
+- `opcodes bytes` match `first opcode bytes`
+
+Preemptive (preemptive-clean branch) now shows the same entry pattern:
+- `first opcode ip` matches `code start`
+- `first opcode bytes` match the real code start bytes (`23 00 41 ...`)
+
+## IMPDEP Handoff Trace
+Additional instrumentation records the IMPDEP transition:
+- `impdep hits=1` per entry call
+- `impdep ip` recorded as `0x0` in cooperative runs (before the real code start)
+- `impdep sp` recorded as a valid stack address
+
+This suggests the interpreter is now starting from the IMPDEP glue frame and
+transitioning correctly in preemptive mode as well. The remaining hang likely
+lies in scheduler/process state after `sysinit` exits.
 
 ## Additional Debugging Steps
 - Compare cooperative vs preemptive trace output with identical instrumentation.
-- Confirm the interpreter reaches real bytecode instructions in cooperative
-  mode and whether `first opcode` changes from `CF` to the expected prologue.
+- Confirm post-sysinit process state and whether any runnable tasks remain
+  (CLI or hw-discovery) after `sysinit` returns.
 - Investigate whether the frame `ip` is being set/cleared incorrectly at or
   after the IMPDEP glue frame.

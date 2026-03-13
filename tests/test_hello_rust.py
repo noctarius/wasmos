@@ -48,7 +48,7 @@ class HelloRustTest(unittest.TestCase):
             [
                 b"spawned pid",
                 b"Hello from Rust on WASMOS!",
-                b"Entry: hello_rust_step",
+                b"Entry: main",
             ],
         )
 

@@ -61,11 +61,4 @@ enum {
     WASMOS_IPC_FIELD_ARG3 = 7
 };
 
-enum {
-    WASMOS_WASM_STEP_YIELDED = 0,
-    WASMOS_WASM_STEP_BLOCKED = 1,
-    WASMOS_WASM_STEP_DONE = 2,
-    WASMOS_WASM_STEP_FAILED = -1
-};
-
 #endif

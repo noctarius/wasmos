@@ -87,7 +87,7 @@ If the driver needs extra init args (endpoints, buffer phys):
 
 ## Pitfalls
 
-- WAMR native signatures must match exactly (e.g. `(iiii)i` vs `(*~)i`).
-- Don’t use `*~` unless you want WAMR to translate pointers.
+- wasm3 native signatures must match exactly (e.g. `(iiii)i` vs `(*~)i`).
+- Don’t use `*~` unless you want the runtime to translate pointers.
 - Kernel IPC send requires the source endpoint to be owned by the caller’s context.
 - For block drivers, only pass physical addresses the kernel can access.

@@ -1,4 +1,5 @@
 if (AS_ENABLE)
+  set(AS_HELLO_LIBC_SRC ${LIBC_DIR}/assemblyscript/wasmos.ts)
   find_program(ASC_EXECUTABLE asc HINTS ${CLANG_BIN_DIR})
   if (NOT ASC_EXECUTABLE)
     message(FATAL_ERROR "AssemblyScript compiler 'asc' not found. Install with: npm i -g assemblyscript")
@@ -14,7 +15,7 @@ if (AS_ENABLE)
             --runtime stub
             --noAssert
             --outFile ${AS_HELLO_WASM}
-    DEPENDS ${AS_HELLO_SRC}
+    DEPENDS ${AS_HELLO_SRC} ${AS_HELLO_LIBC_SRC}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Building AssemblyScript hello module"
     VERBATIM
@@ -26,7 +27,7 @@ if (AS_ENABLE)
             ${AS_HELLO_WASM}
             ${AS_HELLO_APP}
             hello-as
-            hello_step
+            main
             16
             16
             4

@@ -48,7 +48,7 @@ class HelloCTest(unittest.TestCase):
             [
                 b"spawned pid",
                 b"Hello from C on WASMOS!",
-                b"Entry: hello_c_step",
+                b"Entry: main",
             ],
         )
 

@@ -48,7 +48,8 @@ class HelloAssemblyScriptTest(unittest.TestCase):
             [
                 b"spawned pid",
                 b"Hello from AssemblyScript on WASMOS!",
-                b"Entry: hello_step, runtime: stub",
+                b"Entry: main, runtime: stub",
+                b"startup.nsh readable: true",
             ],
         )
 

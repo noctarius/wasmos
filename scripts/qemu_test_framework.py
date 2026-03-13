@@ -62,10 +62,12 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
 
 
 class QemuSession:
-    def __init__(self, cfg: QemuConfig, timeout_s: int = 120, echo: bool = True):
+    def __init__(self, cfg: QemuConfig, timeout_s: int = 120, echo: bool = True,
+                 force_stop_on_timeout: bool = True):
         self.cfg = cfg
         self.timeout_s = timeout_s
         self.echo = echo
+        self.force_stop_on_timeout = force_stop_on_timeout
         self.proc: Optional[subprocess.Popen] = None
         self.selector: Optional[selectors.BaseSelector] = None
         self.buf = b""
@@ -96,6 +98,7 @@ class QemuSession:
         try:
             if self.proc.poll() is None:
                 try:
+                    self.force_stop()
                     self.proc.terminate()
                     self.proc.wait(timeout=5)
                 except Exception:
@@ -138,6 +141,17 @@ class QemuSession:
         self.proc.stdin.write(line.encode("utf-8") + b"\r\n")
         self.proc.stdin.flush()
 
+    def force_stop(self) -> None:
+        if not self.proc or not self.proc.stdin:
+            return
+        if self.proc.poll() is not None:
+            return
+        try:
+            self.proc.stdin.write(b"\x01x")
+            self.proc.stdin.flush()
+        except Exception:
+            return
+
     def _pump(self, timeout_s: float) -> None:
         if not self.selector or not self.proc:
             return
@@ -176,6 +190,8 @@ class QemuSession:
                 if needle_b in self.buf:
                     return True
             self._pump(0.2)
+        if self.force_stop_on_timeout:
+            self.force_stop()
         return False
 
     def mark(self) -> int:
@@ -205,6 +221,8 @@ class QemuSession:
                 if needle_b in view:
                     return True
             self._pump(0.2)
+        if self.force_stop_on_timeout:
+            self.force_stop()
         return False
 
     def tail(self, max_bytes: int = 2048) -> str:

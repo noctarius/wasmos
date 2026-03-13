@@ -51,6 +51,22 @@ void serial_write(const char *s) {
     spinlock_unlock(&g_serial_lock);
 }
 
+void serial_write_unlocked(const char *s) {
+    if (!s) {
+        return;
+    }
+    for (const char *p = s; *p; ++p) {
+        if (*p == '\n') {
+            while (!serial_tx_ready()) {
+            }
+            outb(COM1_PORT, '\r');
+        }
+        while (!serial_tx_ready()) {
+        }
+        outb(COM1_PORT, (uint8_t)*p);
+    }
+}
+
 int serial_read_char(uint8_t *out_char) {
     if (!out_char) {
         return -1;

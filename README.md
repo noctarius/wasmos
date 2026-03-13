@@ -126,6 +126,7 @@ cmake --build build --target zig_examples
 The sample lives at `examples/zig/hello/hello_zig.zig` and is packed as `hello_zig.wasmosapp`.
 Note: Zig requires an explicit wasm export for the WASMOS entry; the build adds
 `--export=wasmos_entry` so the module retains the entry function.
+The Zig shim in `lib/libc/zig/wasmos.zig` now exposes Zig-facing `stdio` and `fs` wrappers so Zig modules can use shared libc-style functionality without binding directly to the raw WASMOS C-shaped import surface.
 
 ### Scheduler
 The kernel uses a round-robin scheduler with a fixed time slice per process

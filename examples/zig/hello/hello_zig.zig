@@ -1,3 +1,4 @@
+const std = @import("std");
 const wasmos = @import("wasmos.zig");
 
 var printed: bool = false;
@@ -16,9 +17,24 @@ pub export fn wasmos_entry(
     _ = ignored_arg3;
 
     if (!printed) {
+        var file = wasmos.fs.openRead("/startup.nsh") catch |err| {
+            printed = true;
+            _ = wasmos.stdio.println("Hello from Zig on WASMOS!", .{}) catch {};
+            _ = wasmos.stdio.println("This is a tiny WASMOS-APP written in Zig.", .{}) catch {};
+            _ = wasmos.stdio.println("Entry: {s}", .{"main"}) catch {};
+            _ = wasmos.stdio.println("startup.nsh: {s}", .{@errorName(err)}) catch {};
+            return;
+        };
+        defer file.close() catch {};
+
+        var buffer: [96]u8 = undefined;
+        const count = file.read(buffer[0..]) catch 0;
+        const readable = std.mem.indexOf(u8, buffer[0..count], "BOOTX64.EFI") != null;
+
         printed = true;
-        _ = wasmos.putsn("Hello from Zig on WASMOS!\n");
-        _ = wasmos.putsn("This is a tiny WASMOS-APP written in Zig.\n");
-        _ = wasmos.putsn("Entry: main\n");
+        _ = wasmos.stdio.println("Hello from Zig on WASMOS!", .{}) catch {};
+        _ = wasmos.stdio.println("This is a tiny WASMOS-APP written in Zig.", .{}) catch {};
+        _ = wasmos.stdio.println("Entry: {s}", .{"main"}) catch {};
+        _ = wasmos.stdio.println("startup.nsh readable: {}", .{readable}) catch {};
     }
 }

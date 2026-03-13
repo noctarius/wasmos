@@ -237,10 +237,3 @@ func (fsAPI) OpenRead(path string) (File, Error) {
 	}
 	return File{fd: fd}, ErrOK
 }
-
-func putsn(s string) int32 {
-	if rawWriteString(s) != ErrOK {
-		return -1
-	}
-	return 0
-}

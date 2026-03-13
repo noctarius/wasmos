@@ -200,7 +200,3 @@ export namespace fs {
     return String.UTF8.decodeUnsafe(bytes.dataStart, bytes.length, false);
   }
 }
-
-export function putsn(msg: string): void {
-  std.write(msg);
-}

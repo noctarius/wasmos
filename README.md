@@ -71,7 +71,7 @@ cmake --build build --target assemblyscript_examples
 ```
 
 The sample uses `asc` with release/size settings and the `stub` runtime (no GC).
-The AssemblyScript shim in `lib/libc/assemblyscript/wasmos.ts` now exposes AssemblyScript-facing `std` and `fs` wrappers so AssemblyScript modules can use shared libc-style behavior without binding directly to the raw WASMOS C-shaped import surface.
+The AssemblyScript shim in `lib/libc/assemblyscript/wasmos.ts` now exposes AssemblyScript-facing `std` and `fs` wrappers so AssemblyScript modules can use shared libc-style behavior without binding directly to the raw WASMOS C-shaped import surface. The shim no longer keeps free-function compatibility aliases for console output helpers such as `putsn`.
 
 There is also a minimal C-based example at `examples/c/hello/hello_c.c`, packed as `hello_c.wasmosapp`.
 `examples/c/chardev_preempt/chardev_preempt.c` is a small preemption stress test for the embedded chardev server. Run it from the CLI with `exec chardev-preempt`.
@@ -98,7 +98,7 @@ cmake --build build --target rust_examples
 ```
 
 The sample lives at `examples/rust/hello/hello_rust.rs` and is packed as `hello_rust.wasmosapp`.
-The Rust shim in `lib/libc/rust/wasmos.rs` now exposes Rust-facing `std` and `fs` wrappers so Rust modules can use shared libc-style behavior without binding directly to the raw WASMOS C-shaped import surface.
+The Rust shim in `lib/libc/rust/wasmos.rs` now exposes Rust-facing `std` and `fs` wrappers so Rust modules can use shared libc-style behavior without binding directly to the raw WASMOS C-shaped import surface. The shim no longer keeps free-function compatibility aliases for console output helpers such as `putsn`.
 
 ### Go (TinyGo) (optional)
 Go can be used to write WASMOS applications via TinyGo. Install TinyGo and ensure it is in your PATH.
@@ -110,7 +110,7 @@ cmake --build build --target go_examples
 
 The sample lives at `examples/go/hello/hello_go.go` and is packed as `hello_go.wasmosapp`.
 Note: TinyGo exports a small `wasmos_entry` wrapper that calls `main` to satisfy both the Go runtime and the WASMOS entry contract.
-The Go shim in `lib/libc/go/wasmos.go` now exposes Go-facing `std` and `fs` wrappers so TinyGo modules can use shared libc-style behavior without binding directly to the raw WASMOS C-shaped import surface.
+The Go shim in `lib/libc/go/wasmos.go` now exposes Go-facing `std` and `fs` wrappers so TinyGo modules can use shared libc-style behavior without binding directly to the raw WASMOS C-shaped import surface. The shim no longer keeps free-function compatibility aliases for console output helpers such as `putsn`.
 
 ### Zig (optional)
 Zig can be used to write WASMOS applications. Install Zig and ensure it is in your PATH.
@@ -129,7 +129,7 @@ cmake --build build --target zig_examples
 The sample lives at `examples/zig/hello/hello_zig.zig` and is packed as `hello_zig.wasmosapp`.
 Note: Zig requires an explicit wasm export for the WASMOS entry; the build adds
 `--export=wasmos_entry` so the module retains the entry function.
-The Zig shim in `lib/libc/zig/wasmos.zig` now exposes Zig-facing `stdlib` and `fs` wrappers so Zig modules can use shared libc-style functionality without binding directly to the raw WASMOS C-shaped import surface.
+The Zig shim in `lib/libc/zig/wasmos.zig` now exposes Zig-facing `stdlib` and `fs` wrappers so Zig modules can use shared libc-style functionality without binding directly to the raw WASMOS C-shaped import surface. The shim no longer keeps free-function compatibility aliases for console output helpers such as `putsn`.
 
 ### Scheduler
 The kernel uses a round-robin scheduler with a fixed time slice per process

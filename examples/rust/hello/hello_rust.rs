@@ -22,9 +22,9 @@ pub extern "C" fn main(
     unsafe {
         if !PRINTED {
             PRINTED = true;
-            wasmos::putsn(b"Hello from Rust on WASMOS!\n");
-            wasmos::putsn(b"This is a tiny WASMOS-APP written in Rust.\n");
-            wasmos::putsn(b"Entry: main\n");
+            let _ = wasmos::stdio::puts(b"Hello from Rust on WASMOS!\n");
+            let _ = wasmos::stdio::puts(b"This is a tiny WASMOS-APP written in Rust.\n");
+            let _ = wasmos::stdio::print(format_args!("Entry: {}\n", "main"));
         }
     }
 

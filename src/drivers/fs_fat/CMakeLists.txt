@@ -10,6 +10,7 @@ add_custom_command(
   OUTPUT ${WASM_FAT_DRIVER_WASM}
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
   COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -fno-builtin
+          ${WASMOS_TRACE_DEFINE}
           -Wl,--no-entry -Wl,--strip-all
           -Wl,-z,stack-size=4096
           -Wl,--initial-memory=65536

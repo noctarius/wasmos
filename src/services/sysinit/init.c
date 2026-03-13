@@ -15,6 +15,10 @@ static int32_t g_tick = 0;
 static int32_t (*volatile g_console_write)(int32_t, int32_t);
 static int32_t (*volatile g_debug_mark)(int32_t);
 
+#ifndef WASMOS_TRACE
+#define WASMOS_TRACE 0
+#endif
+
 static void
 stall_forever(void)
 {
@@ -48,6 +52,26 @@ log_line(const char *s)
     }
 }
 
+static void
+trace_line(const char *s)
+{
+#if WASMOS_TRACE
+    log_line(s);
+#else
+    (void)s;
+#endif
+}
+
+static void
+trace_mark(int32_t tag)
+{
+#if WASMOS_TRACE
+    (void)g_debug_mark(tag);
+#else
+    (void)tag;
+#endif
+}
+
 static int
 proc_running(const char *name)
 {
@@ -58,7 +82,7 @@ proc_running(const char *name)
     if (count > 64) {
         count = 64;
     }
-    log_line("[sysinit] proc snapshot\n");
+    trace_line("[sysinit] proc snapshot\n");
     for (int32_t i = 0; i < count; ++i) {
         char buf[32];
         buf[0] = '\0';
@@ -66,9 +90,9 @@ proc_running(const char *name)
         if (pid <= 0) {
             continue;
         }
-        log_line("[sysinit] proc ");
-        log_line(buf);
-        log_line("\n");
+        trace_line("[sysinit] proc ");
+        trace_line(buf);
+        trace_line("\n");
         if (str_eq(buf, name)) {
             return 1;
         }
@@ -100,14 +124,14 @@ initialize(int32_t proc_endpoint,
 
     g_console_write = wasmos_console_write;
     g_debug_mark = wasmos_debug_mark;
-    (void)g_debug_mark(0x1101);
+    trace_mark(0x1101);
     {
         char ch = 'S';
         g_console_write((int32_t)(uintptr_t)&ch, 1);
     }
 
     g_reply_endpoint = wasmos_ipc_create_endpoint();
-    (void)g_debug_mark(0x1102);
+    trace_mark(0x1102);
     if (g_reply_endpoint < 0) {
         log_line("[sysinit] failed to create reply endpoint\n");
         stall_forever();
@@ -123,16 +147,16 @@ initialize(int32_t proc_endpoint,
     g_init_index = init_index;
     g_next_index = 0;
     g_pending_index = -1;
-    log_line("[sysinit] start\n");
-    (void)g_debug_mark(0x1103);
-    log_line("[sysinit] boot module list\n");
+    trace_line("[sysinit] start\n");
+    trace_mark(0x1103);
+    trace_line("[sysinit] boot module list\n");
     for (int32_t i = 0; i < g_module_count; ++i) {
         char name[32];
         name[0] = '\0';
         if (wasmos_boot_module_name(i, (int32_t)(uintptr_t)name, (int32_t)sizeof(name)) >= 0) {
-            log_line("[sysinit] module ");
-            log_line(name);
-            log_line(" idx=");
+            trace_line("[sysinit] module ");
+            trace_line(name);
+            trace_line(" idx=");
             {
                 char buf[12];
                 int n = i;
@@ -153,26 +177,26 @@ initialize(int32_t proc_endpoint,
                 }
                 buf[k++] = '\n';
                 buf[k] = '\0';
-                log_line(buf);
+                trace_line(buf);
             }
         } else {
-            log_line("[sysinit] module <name-error>\n");
+            trace_line("[sysinit] module <name-error>\n");
         }
     }
 
-    log_line("[sysinit] enter loop\n");
-    (void)g_debug_mark(0x1104);
+    trace_line("[sysinit] enter loop\n");
+    trace_mark(0x1104);
     for (;;) {
         g_tick++;
         if ((g_tick & 0x3FF) == 0) {
-            (void)g_debug_mark(0x11FF);
+            trace_mark(0x11FF);
         }
         for (volatile int spin = 0; spin < 200000; ++spin) {
         }
         (void)wasmos_sched_yield();
         while (g_next_index < g_module_count &&
                (g_next_index == g_init_index || should_skip_module(g_next_index))) {
-            log_line("[sysinit] skip index ");
+            trace_line("[sysinit] skip index ");
             char buf[12];
             int n = g_next_index;
             int i = 0;
@@ -192,11 +216,11 @@ initialize(int32_t proc_endpoint,
             }
             buf[i++] = '\n';
             buf[i] = '\0';
-            log_line(buf);
+            trace_line(buf);
             g_next_index++;
         }
         if (g_next_index >= g_module_count) {
-            log_line("[sysinit] idle wait\n");
+            trace_line("[sysinit] idle wait\n");
             (void)wasmos_ipc_recv(g_reply_endpoint);
             continue;
         }
@@ -211,13 +235,13 @@ initialize(int32_t proc_endpoint,
             stall_forever();
         }
         if (str_eq(name, "cli") && !proc_running("fs-fat")) {
-            log_line("[sysinit] defer cli until fs-fat\n");
+            trace_line("[sysinit] defer cli until fs-fat\n");
             continue;
         }
 
-        log_line("[sysinit] spawn ");
-        log_line(name);
-        log_line(" idx=");
+        trace_line("[sysinit] spawn ");
+        trace_line(name);
+        trace_line(" idx=");
         {
             char buf[12];
             int n = g_next_index;
@@ -238,7 +262,7 @@ initialize(int32_t proc_endpoint,
             }
             buf[i++] = '\n';
             buf[i] = '\0';
-            log_line(buf);
+            trace_line(buf);
         }
 
         if (wasmos_ipc_send(g_proc_endpoint, g_reply_endpoint,
@@ -298,6 +322,6 @@ initialize(int32_t proc_endpoint,
         g_pending_index = -1;
     }
 
-    log_line("[sysinit] exit\n");
-    (void)g_debug_mark(0x11EE);
+    trace_line("[sysinit] exit\n");
+    trace_mark(0x11EE);
 }

@@ -28,19 +28,11 @@ class BootSmokeTest(unittest.TestCase):
             cls.session.close()
             cls.session = None
 
-    def test_boot_reaches_init_spawn(self) -> None:
+    def test_boot_reaches_cli(self) -> None:
         assert self.session is not None
-        ok = self.session.expect(b"[init] spawn sysinit", timeout_s=30)
-        self.assertTrue(ok, "did not reach sysinit spawn marker")
-        ok = self.session.expect(b"[pm] recv type=", timeout_s=10)
-        self.assertTrue(ok, "did not receive a proc message in PM")
-        ok = self.session.expect(b"[init] sysinit spawn ok", timeout_s=10)
-        self.assertTrue(ok, "sysinit spawn reply not received")
-        ok = self.session.expect(b"[pm] spawn index=0x0000000000000001", timeout_s=10)
-        self.assertTrue(ok, "second spawn index not observed")
-        ok = self.session.expect(b"[pm] spawn index=0x0000000000000002", timeout_s=10)
-        self.assertTrue(ok, "third spawn index not observed")
-        ok = self.session.expect(b"[pm] entry start hw-discovery", timeout_s=10)
-        self.assertTrue(ok, "hw-discovery entry not reached")
-        ok = self.session.expect(b"[pm] app start ata", timeout_s=10)
-        self.assertTrue(ok, "ata start not reached")
+        ok = self.session.expect(b"[kernel] kmain", timeout_s=30)
+        self.assertTrue(ok, "kernel entry marker not observed")
+        ok = self.session.expect(b"[irq] pic remapped", timeout_s=10)
+        self.assertTrue(ok, "PIC remap marker not observed")
+        ok = self.session.expect(b"wamos> ", timeout_s=30)
+        self.assertTrue(ok, "CLI prompt not reached")

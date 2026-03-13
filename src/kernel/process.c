@@ -141,49 +141,49 @@ static int process_str_eq(const char *a, const char *b) {
 }
 
 static void process_log_ctx_watch(const char *where) {
-    serial_write("[sched] ctxwatch ");
+    trace_write("[sched] ctxwatch ");
     if (where) {
-        serial_write(where);
+        trace_write(where);
     }
-    serial_write(" ctx=");
-    process_log_hex64(g_ctx_watch_last_ctx);
-    serial_write("[sched] ctxwatch hits=");
-    process_log_hex64(g_ctx_watch_hits);
-    serial_write("[sched] ctxwatch reason=");
-    process_log_hex64(g_ctx_watch_reason);
-    serial_write("[sched] ctxwatch rip=");
-    process_log_hex64(g_ctx_watch_last_rip);
-    serial_write("[sched] ctxwatch rsp=");
-    process_log_hex64(g_ctx_watch_last_rsp);
-    serial_write("[sched] ctxwatch rflags=");
-    process_log_hex64(g_ctx_watch_last_rflags);
+    trace_write(" ctx=");
+    trace_do(process_log_hex64(g_ctx_watch_last_ctx));
+    trace_write("[sched] ctxwatch hits=");
+    trace_do(process_log_hex64(g_ctx_watch_hits));
+    trace_write("[sched] ctxwatch reason=");
+    trace_do(process_log_hex64(g_ctx_watch_reason));
+    trace_write("[sched] ctxwatch rip=");
+    trace_do(process_log_hex64(g_ctx_watch_last_rip));
+    trace_write("[sched] ctxwatch rsp=");
+    trace_do(process_log_hex64(g_ctx_watch_last_rsp));
+    trace_write("[sched] ctxwatch rflags=");
+    trace_do(process_log_hex64(g_ctx_watch_last_rflags));
 }
 
 static void process_log_ctxsw_state(void) {
-    serial_write("[sched] ctxsw out ctx=");
-    process_log_hex64(g_ctxsw_last_out_ctx);
-    serial_write("[sched] ctxsw out rip=");
-    process_log_hex64(g_ctxsw_last_out_rip);
-    serial_write("[sched] ctxsw out rsp=");
-    process_log_hex64(g_ctxsw_last_out_rsp);
-    serial_write("[sched] ctxsw out rflags=");
-    process_log_hex64(g_ctxsw_last_out_rflags);
-    serial_write("[sched] ctxsw in ctx=");
-    process_log_hex64(g_ctxsw_last_in_ctx);
-    serial_write("[sched] ctxsw in rip=");
-    process_log_hex64(g_ctxsw_last_in_rip);
-    serial_write("[sched] ctxsw in rsp=");
-    process_log_hex64(g_ctxsw_last_in_rsp);
-    serial_write("[sched] ctxsw in rflags=");
-    process_log_hex64(g_ctxsw_last_in_rflags);
-    serial_write("[sched] ctxsw restore ctx=");
-    process_log_hex64(g_ctx_restore_ctx);
-    serial_write("[sched] ctxsw restore rip=");
-    process_log_hex64(g_ctx_restore_rip);
-    serial_write("[sched] ctxsw restore rsp=");
-    process_log_hex64(g_ctx_restore_rsp);
-    serial_write("[sched] ctxsw restore rflags=");
-    process_log_hex64(g_ctx_restore_rflags);
+    trace_write("[sched] ctxsw out ctx=");
+    trace_do(process_log_hex64(g_ctxsw_last_out_ctx));
+    trace_write("[sched] ctxsw out rip=");
+    trace_do(process_log_hex64(g_ctxsw_last_out_rip));
+    trace_write("[sched] ctxsw out rsp=");
+    trace_do(process_log_hex64(g_ctxsw_last_out_rsp));
+    trace_write("[sched] ctxsw out rflags=");
+    trace_do(process_log_hex64(g_ctxsw_last_out_rflags));
+    trace_write("[sched] ctxsw in ctx=");
+    trace_do(process_log_hex64(g_ctxsw_last_in_ctx));
+    trace_write("[sched] ctxsw in rip=");
+    trace_do(process_log_hex64(g_ctxsw_last_in_rip));
+    trace_write("[sched] ctxsw in rsp=");
+    trace_do(process_log_hex64(g_ctxsw_last_in_rsp));
+    trace_write("[sched] ctxsw in rflags=");
+    trace_do(process_log_hex64(g_ctxsw_last_in_rflags));
+    trace_write("[sched] ctxsw restore ctx=");
+    trace_do(process_log_hex64(g_ctx_restore_ctx));
+    trace_write("[sched] ctxsw restore rip=");
+    trace_do(process_log_hex64(g_ctx_restore_rip));
+    trace_write("[sched] ctxsw restore rsp=");
+    trace_do(process_log_hex64(g_ctx_restore_rsp));
+    trace_write("[sched] ctxsw restore rflags=");
+    trace_do(process_log_hex64(g_ctx_restore_rflags));
 }
 
 static void process_log_ctx_watch_if_changed(void) {
@@ -537,23 +537,23 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
         g_ctx_watch_last_ctx = g_ctx_watch_ctx;
         g_ctx_watch_hits = 0;
         g_ctx_watch_reason = 0;
-        serial_write("[sched] ctxwatch armed ctx=");
-        process_log_hex64(g_ctx_watch_ctx);
+        trace_write("[sched] ctxwatch armed ctx=");
+        trace_do(process_log_hex64(g_ctx_watch_ctx));
         if (slot->stack_top >= sizeof(uint64_t)) {
             g_pm_stack_watch = (uint64_t *)(uintptr_t)(slot->stack_top - sizeof(uint64_t));
-            serial_write("[sched] pm stack watch addr=");
-            process_log_hex64((uint64_t)(uintptr_t)g_pm_stack_watch);
+            trace_write("[sched] pm stack watch addr=");
+            trace_do(process_log_hex64((uint64_t)(uintptr_t)g_pm_stack_watch));
         }
     }
     if (process_str_eq(name, "preempt-busy")) {
-        serial_write("[sched] spawn preempt-busy rip=");
-        process_log_hex64(slot->ctx.rip);
-        serial_write("[sched] spawn preempt-busy rsp=");
-        process_log_hex64(slot->ctx.rsp);
-        serial_write("[sched] spawn preempt-busy stack base=");
-        process_log_hex64(slot->stack_base);
-        serial_write("[sched] spawn preempt-busy stack top=");
-        process_log_hex64(slot->stack_top);
+        trace_write("[sched] spawn preempt-busy rip=");
+        trace_do(process_log_hex64(slot->ctx.rip));
+        trace_write("[sched] spawn preempt-busy rsp=");
+        trace_do(process_log_hex64(slot->ctx.rsp));
+        trace_write("[sched] spawn preempt-busy stack base=");
+        trace_do(process_log_hex64(slot->stack_base));
+        trace_write("[sched] spawn preempt-busy stack top=");
+        trace_do(process_log_hex64(slot->stack_top));
     }
     ready_queue_enqueue(slot);
     *out_pid = pid;
@@ -857,78 +857,82 @@ int process_preempt_from_irq(irq_frame_t *frame) {
         static uint8_t logged_frame_dump;
         if (!logged_frame_dump) {
             logged_frame_dump = 1;
-            serial_write("[irq] pm preempt frame dump\n");
-            serial_write("[irq] frame ptr=");
-            process_log_hex64((uint64_t)(uintptr_t)frame);
-            serial_write("[irq] frame rip=");
-            process_log_hex64(frame->rip);
-            serial_write("[irq] frame cs=");
-            process_log_hex64(frame->cs);
-            serial_write("[irq] frame rflags=");
-            process_log_hex64(frame->rflags);
+            trace_write("[irq] pm preempt frame dump\n");
+            trace_write("[irq] frame ptr=");
+            trace_do(process_log_hex64((uint64_t)(uintptr_t)frame));
+            trace_write("[irq] frame rip=");
+            trace_do(process_log_hex64(frame->rip));
+            trace_write("[irq] frame cs=");
+            trace_do(process_log_hex64(frame->cs));
+            trace_write("[irq] frame rflags=");
+            trace_do(process_log_hex64(frame->rflags));
+#if WASMOS_TRACE
             uint64_t *raw = (uint64_t *)(uintptr_t)frame;
             for (uint32_t i = 0; i < 8; ++i) {
-                serial_write("[irq] frame qword ");
-                process_log_hex64(i);
-                process_log_hex64(raw[i]);
+                trace_write("[irq] frame qword ");
+                trace_do(process_log_hex64(i));
+                trace_do(process_log_hex64(raw[i]));
             }
             uint64_t *tail = (uint64_t *)((uintptr_t)frame + 120);
             for (uint32_t i = 0; i < 4; ++i) {
-                serial_write("[irq] iret qword ");
-                process_log_hex64(i);
-                process_log_hex64(tail[i]);
+                trace_write("[irq] iret qword ");
+                trace_do(process_log_hex64(i));
+                trace_do(process_log_hex64(tail[i]));
             }
+#endif
         }
     }
     if ((frame->rip < start || frame->rip >= end) && process_str_eq(g_current_process->name, "process-manager")) {
         static uint8_t logged_bad_frame;
         if (!logged_bad_frame) {
             logged_bad_frame = 1;
-            serial_write("[irq] bad frame rip for pm\n");
-            serial_write("[irq] frame ptr=");
-            process_log_hex64((uint64_t)(uintptr_t)frame);
-            serial_write("[irq] frame rip=");
-            process_log_hex64(frame->rip);
-            serial_write("[irq] frame cs=");
-            process_log_hex64(frame->cs);
-            serial_write("[irq] frame rflags=");
-            process_log_hex64(frame->rflags);
-            serial_write("[irq] frame rax=");
-            process_log_hex64(frame->rax);
-            serial_write("[irq] frame rbx=");
-            process_log_hex64(frame->rbx);
-            serial_write("[irq] frame rcx=");
-            process_log_hex64(frame->rcx);
-            serial_write("[irq] frame rdx=");
-            process_log_hex64(frame->rdx);
-            serial_write("[irq] frame rbp=");
-            process_log_hex64(frame->rbp);
-            serial_write("[irq] frame rsi=");
-            process_log_hex64(frame->rsi);
-            serial_write("[irq] frame rdi=");
-            process_log_hex64(frame->rdi);
-            serial_write("[irq] frame r8=");
-            process_log_hex64(frame->r8);
-            serial_write("[irq] frame r9=");
-            process_log_hex64(frame->r9);
-            serial_write("[irq] frame r10=");
-            process_log_hex64(frame->r10);
-            serial_write("[irq] frame r11=");
-            process_log_hex64(frame->r11);
-            serial_write("[irq] frame r12=");
-            process_log_hex64(frame->r12);
-            serial_write("[irq] frame r13=");
-            process_log_hex64(frame->r13);
-            serial_write("[irq] frame r14=");
-            process_log_hex64(frame->r14);
-            serial_write("[irq] frame r15=");
-            process_log_hex64(frame->r15);
+            trace_write("[irq] bad frame rip for pm\n");
+            trace_write("[irq] frame ptr=");
+            trace_do(process_log_hex64((uint64_t)(uintptr_t)frame));
+            trace_write("[irq] frame rip=");
+            trace_do(process_log_hex64(frame->rip));
+            trace_write("[irq] frame cs=");
+            trace_do(process_log_hex64(frame->cs));
+            trace_write("[irq] frame rflags=");
+            trace_do(process_log_hex64(frame->rflags));
+            trace_write("[irq] frame rax=");
+            trace_do(process_log_hex64(frame->rax));
+            trace_write("[irq] frame rbx=");
+            trace_do(process_log_hex64(frame->rbx));
+            trace_write("[irq] frame rcx=");
+            trace_do(process_log_hex64(frame->rcx));
+            trace_write("[irq] frame rdx=");
+            trace_do(process_log_hex64(frame->rdx));
+            trace_write("[irq] frame rbp=");
+            trace_do(process_log_hex64(frame->rbp));
+            trace_write("[irq] frame rsi=");
+            trace_do(process_log_hex64(frame->rsi));
+            trace_write("[irq] frame rdi=");
+            trace_do(process_log_hex64(frame->rdi));
+            trace_write("[irq] frame r8=");
+            trace_do(process_log_hex64(frame->r8));
+            trace_write("[irq] frame r9=");
+            trace_do(process_log_hex64(frame->r9));
+            trace_write("[irq] frame r10=");
+            trace_do(process_log_hex64(frame->r10));
+            trace_write("[irq] frame r11=");
+            trace_do(process_log_hex64(frame->r11));
+            trace_write("[irq] frame r12=");
+            trace_do(process_log_hex64(frame->r12));
+            trace_write("[irq] frame r13=");
+            trace_do(process_log_hex64(frame->r13));
+            trace_write("[irq] frame r14=");
+            trace_do(process_log_hex64(frame->r14));
+            trace_write("[irq] frame r15=");
+            trace_do(process_log_hex64(frame->r15));
+#if WASMOS_TRACE
             uint64_t *raw = (uint64_t *)(uintptr_t)frame;
             for (uint32_t i = 0; i < 8; ++i) {
-                serial_write("[irq] frame qword ");
-                process_log_hex64(i);
-                process_log_hex64(raw[i]);
+                trace_write("[irq] frame qword ");
+                trace_do(process_log_hex64(i));
+                trace_do(process_log_hex64(raw[i]));
             }
+#endif
         }
     }
 
@@ -958,16 +962,16 @@ int process_preempt_from_irq(irq_frame_t *frame) {
         g_ctx_watch_last_rflags = g_current_process->ctx.rflags;
         g_ctx_watch_reason = 2;
         g_ctx_watch_hits++;
-        serial_write("[sched] ctxwatch preempt pid=");
-        process_log_hex64(g_current_process->pid);
-        serial_write("[sched] ctxwatch preempt ctx=");
-        process_log_hex64(g_ctx_watch_ctx);
-        serial_write("[sched] ctxwatch preempt rip=");
-        process_log_hex64(g_ctx_watch_last_rip);
-        serial_write("[sched] ctxwatch preempt rsp=");
-        process_log_hex64(g_ctx_watch_last_rsp);
-        serial_write("[sched] ctxwatch preempt rflags=");
-        process_log_hex64(g_ctx_watch_last_rflags);
+        trace_write("[sched] ctxwatch preempt pid=");
+        trace_do(process_log_hex64(g_current_process->pid));
+        trace_write("[sched] ctxwatch preempt ctx=");
+        trace_do(process_log_hex64(g_ctx_watch_ctx));
+        trace_write("[sched] ctxwatch preempt rip=");
+        trace_do(process_log_hex64(g_ctx_watch_last_rip));
+        trace_write("[sched] ctxwatch preempt rsp=");
+        trace_do(process_log_hex64(g_ctx_watch_last_rsp));
+        trace_write("[sched] ctxwatch preempt rflags=");
+        trace_do(process_log_hex64(g_ctx_watch_last_rflags));
     }
 
     g_current_process->state = PROCESS_STATE_READY;

@@ -103,7 +103,7 @@ serial_write_hex64(uint64_t value)
     serial_write(buf);
 }
 
-static void
+static void __attribute__((unused))
 serial_write_hex64_unlocked(uint64_t value)
 {
     char buf[21];
@@ -379,7 +379,7 @@ init_entry(process_t *process, void *arg)
         state->pending_kind = 0;
         state->phase = 0;
         if (g_skip_wasm_boot) {
-            serial_write("[init] wasm boot bypass enabled\n");
+            trace_write("[init] wasm boot bypass enabled\n");
             state->started = 1;
             return PROCESS_RUN_YIELDED;
         }
@@ -391,8 +391,8 @@ init_entry(process_t *process, void *arg)
             return PROCESS_RUN_EXITED;
         }
 
-        serial_write("[init] process manager pid=");
-        serial_write_hex64(pm_pid);
+        trace_write("[init] process manager pid=");
+        trace_do(serial_write_hex64(pm_pid));
         state->started = 1;
         if (state->sysinit_index == 0xFFFFFFFFu) {
             serial_write("[init] sysinit module not found\n");
@@ -403,10 +403,11 @@ init_entry(process_t *process, void *arg)
 
     if (g_skip_wasm_boot) {
         if (!state->wasm3_probe_done && state->native_min_index != 0xFFFFFFFFu) {
-            serial_write("[init] wasm3 probe native-call-min\n");
+            trace_write("[init] wasm3 probe native-call-min\n");
             int wasm3_rc = wasm3_probe_run(state->boot_info, state->native_min_index);
-            serial_write("[init] wasm3 probe rc=");
-            serial_write_hex64((uint64_t)(uint32_t)wasm3_rc);
+            (void)wasm3_rc;
+            trace_write("[init] wasm3 probe rc=");
+            trace_do(serial_write_hex64((uint64_t)(uint32_t)wasm3_rc));
             state->wasm3_probe_done = 1;
         }
         process_block_on_ipc(process);
@@ -415,10 +416,11 @@ init_entry(process_t *process, void *arg)
 
     if (state->phase == 0) {
         if (!state->wasm3_probe_done && state->native_min_index != 0xFFFFFFFFu) {
-            serial_write("[init] wasm3 probe native-call-min\n");
+            trace_write("[init] wasm3 probe native-call-min\n");
             int wasm3_rc = wasm3_probe_run(state->boot_info, state->native_min_index);
-            serial_write("[init] wasm3 probe rc=");
-            serial_write_hex64((uint64_t)(uint32_t)wasm3_rc);
+            (void)wasm3_rc;
+            trace_write("[init] wasm3 probe rc=");
+            trace_do(serial_write_hex64((uint64_t)(uint32_t)wasm3_rc));
             state->wasm3_probe_done = 1;
         }
         uint32_t proc_ep = process_manager_endpoint();
@@ -435,22 +437,22 @@ init_entry(process_t *process, void *arg)
         msg.destination = proc_ep;
         msg.request_id = state->request_id;
         if (state->native_min_index != 0xFFFFFFFFu) {
-            serial_write("[init] spawn native-call-min\n");
+            trace_write("[init] spawn native-call-min\n");
             msg.arg0 = state->native_min_index;
             state->pending_kind = 1;
             state->phase = 1;
         } else if (state->native_smoke_index != 0xFFFFFFFFu) {
-            serial_write("[init] spawn native-call-smoke\n");
+            trace_write("[init] spawn native-call-smoke\n");
             msg.arg0 = state->native_smoke_index;
             state->pending_kind = 2;
             state->phase = 1;
         } else if (state->smoke_index != 0xFFFFFFFFu) {
-            serial_write("[init] spawn init-smoke\n");
+            trace_write("[init] spawn init-smoke\n");
             msg.arg0 = state->smoke_index;
             state->pending_kind = 3;
             state->phase = 1;
         } else {
-            serial_write("[init] spawn sysinit\n");
+            trace_write("[init] spawn sysinit\n");
             msg.arg0 = state->sysinit_index;
             state->pending_kind = 4;
             state->phase = 3;
@@ -458,28 +460,28 @@ init_entry(process_t *process, void *arg)
         msg.arg1 = 0;
         msg.arg2 = 0;
         msg.arg3 = 0;
-        serial_write("[init] proc ep=");
-        serial_write_hex64(proc_ep);
-        serial_write("[init] reply ep=");
-        serial_write_hex64(state->reply_endpoint);
-        serial_write("[init] ctx=");
-        serial_write_hex64(process->context_id);
+        trace_write("[init] proc ep=");
+        trace_do(serial_write_hex64(proc_ep));
+        trace_write("[init] reply ep=");
+        trace_do(serial_write_hex64(state->reply_endpoint));
+        trace_write("[init] ctx=");
+        trace_do(serial_write_hex64(process->context_id));
         uint32_t proc_owner = 0;
         uint32_t reply_owner = 0;
         if (ipc_endpoint_owner(proc_ep, &proc_owner) == IPC_OK) {
-            serial_write("[init] proc owner=");
-            serial_write_hex64(proc_owner);
+            trace_write("[init] proc owner=");
+            trace_do(serial_write_hex64(proc_owner));
         }
         if (ipc_endpoint_owner(state->reply_endpoint, &reply_owner) == IPC_OK) {
-            serial_write("[init] reply owner=");
-            serial_write_hex64(reply_owner);
+            trace_write("[init] reply owner=");
+            trace_do(serial_write_hex64(reply_owner));
         }
-        serial_write_unlocked("[init] preempt depth=");
-        serial_write_hex64_unlocked(preempt_disable_depth());
-        serial_write_unlocked("[init] send enter\n");
+        trace_write_unlocked("[init] preempt depth=");
+        trace_do(serial_write_hex64_unlocked(preempt_disable_depth()));
+        trace_write_unlocked("[init] send enter\n");
         int send_rc = ipc_send_from(process->context_id, proc_ep, &msg);
-        serial_write_unlocked("[init] send rc=");
-        serial_write_hex64_unlocked((uint64_t)(uint32_t)send_rc);
+        trace_write_unlocked("[init] send rc=");
+        trace_do(serial_write_hex64_unlocked((uint64_t)(uint32_t)send_rc));
         if (send_rc != IPC_OK) {
             serial_write("[init] spawn request failed rc=");
             serial_write_hex64((uint64_t)(uint32_t)send_rc);
@@ -490,11 +492,11 @@ init_entry(process_t *process, void *arg)
         uint32_t queued = 0;
         int count_rc = ipc_endpoint_count(proc_ep, &queued);
         if (count_rc == IPC_OK) {
-            serial_write_unlocked("[init] proc queue=");
-            serial_write_hex64_unlocked(queued);
+            trace_write_unlocked("[init] proc queue=");
+            trace_do(serial_write_hex64_unlocked(queued));
         } else {
-            serial_write_unlocked("[init] proc queue rc=");
-            serial_write_hex64_unlocked((uint64_t)(uint32_t)count_rc);
+            trace_write_unlocked("[init] proc queue rc=");
+            trace_do(serial_write_hex64_unlocked((uint64_t)(uint32_t)count_rc));
         }
         return PROCESS_RUN_YIELDED;
     }
@@ -522,7 +524,7 @@ init_entry(process_t *process, void *arg)
             return PROCESS_RUN_EXITED;
         }
         if (state->pending_kind == 1) {
-            serial_write("[init] native-call-min spawn ok\n");
+            trace_write("[init] native-call-min spawn ok\n");
             state->pending_kind = 0;
             if (state->native_smoke_index != 0xFFFFFFFFu) {
                 state->request_id++;
@@ -534,7 +536,7 @@ init_entry(process_t *process, void *arg)
                 msg.arg1 = 0;
                 msg.arg2 = 0;
                 msg.arg3 = 0;
-                serial_write("[init] spawn native-call-smoke\n");
+                trace_write("[init] spawn native-call-smoke\n");
                 int send_rc = ipc_send_from(process->context_id, msg.destination, &msg);
                 if (send_rc != IPC_OK) {
                     serial_write("[init] native-call-smoke spawn request failed rc=");
@@ -548,7 +550,7 @@ init_entry(process_t *process, void *arg)
                 return PROCESS_RUN_YIELDED;
             }
         } else if (state->pending_kind == 2) {
-            serial_write("[init] native-call-smoke spawn ok\n");
+            trace_write("[init] native-call-smoke spawn ok\n");
             state->pending_kind = 0;
             if (state->smoke_index != 0xFFFFFFFFu) {
                 state->request_id++;
@@ -560,7 +562,7 @@ init_entry(process_t *process, void *arg)
                 msg.arg1 = 0;
                 msg.arg2 = 0;
                 msg.arg3 = 0;
-                serial_write("[init] spawn init-smoke\n");
+                trace_write("[init] spawn init-smoke\n");
                 int send_rc = ipc_send_from(process->context_id, msg.destination, &msg);
                 if (send_rc != IPC_OK) {
                     serial_write("[init] init-smoke spawn request failed rc=");
@@ -574,10 +576,10 @@ init_entry(process_t *process, void *arg)
                 return PROCESS_RUN_YIELDED;
             }
         } else if (state->pending_kind == 3) {
-            serial_write("[init] init-smoke spawn ok\n");
+            trace_write("[init] init-smoke spawn ok\n");
             state->pending_kind = 0;
         } else {
-            serial_write("[init] sysinit spawn ok\n");
+            trace_write("[init] sysinit spawn ok\n");
             state->pending_kind = 0;
             state->phase = 4;
             process_block_on_ipc(process);
@@ -593,7 +595,7 @@ init_entry(process_t *process, void *arg)
         msg.arg1 = 0;
         msg.arg2 = 0;
         msg.arg3 = 0;
-        serial_write("[init] spawn sysinit\n");
+        trace_write("[init] spawn sysinit\n");
         int send_rc = ipc_send_from(process->context_id, msg.destination, &msg);
         if (send_rc != IPC_OK) {
             serial_write("[init] sysinit spawn request failed rc=");
@@ -620,7 +622,7 @@ init_entry(process_t *process, void *arg)
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
-        serial_write("[init] init-smoke spawn ok\n");
+        trace_write("[init] init-smoke spawn ok\n");
         state->request_id++;
         msg.type = PROC_IPC_SPAWN;
         msg.source = state->reply_endpoint;
@@ -630,7 +632,7 @@ init_entry(process_t *process, void *arg)
         msg.arg1 = 0;
         msg.arg2 = 0;
         msg.arg3 = 0;
-        serial_write("[init] spawn sysinit\n");
+        trace_write("[init] spawn sysinit\n");
         int send_rc = ipc_send_from(process->context_id, msg.destination, &msg);
         if (send_rc != IPC_OK) {
             serial_write("[init] sysinit spawn request failed rc=");
@@ -657,7 +659,7 @@ init_entry(process_t *process, void *arg)
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
-        serial_write("[init] sysinit spawn ok\n");
+        trace_write("[init] sysinit spawn ok\n");
         state->pending_kind = 0;
         state->phase = 4;
     }

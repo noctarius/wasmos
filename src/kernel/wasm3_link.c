@@ -26,7 +26,7 @@ static wasm_ipc_last_slot_t g_wasm_last_slots[PROCESS_MAX_COUNT];
 static wasm_block_slot_t g_wasm_block_slots[PROCESS_MAX_COUNT];
 static const boot_info_t *g_wasm_boot_info;
 
-static void
+static void __attribute__((unused))
 serial_write_hex64_unlocked_local(uint64_t value)
 {
     char buf[21];
@@ -640,10 +640,10 @@ m3ApiRawFunction(wasmos_debug_mark)
 {
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, tag)
-    serial_write_unlocked("[wasm] debug_mark tag=");
-    serial_write_hex64_unlocked_local((uint64_t)(uint32_t)tag);
-    serial_write_unlocked("[wasm] debug_mark pid=");
-    serial_write_hex64_unlocked_local((uint64_t)process_current_pid());
+    trace_write_unlocked("[wasm] debug_mark tag=");
+    trace_do(serial_write_hex64_unlocked_local((uint64_t)(uint32_t)tag));
+    trace_write_unlocked("[wasm] debug_mark pid=");
+    trace_do(serial_write_hex64_unlocked_local((uint64_t)process_current_pid()));
     m3ApiReturn(0);
 }
 

@@ -54,7 +54,7 @@ typedef struct {
 } preempt_test_state_t;
 static preempt_test_state_t g_preempt_test_state;
 static const uint8_t g_preempt_test_enabled = 0;
-static const uint8_t g_skip_wamr_boot = 0;
+static const uint8_t g_skip_wasm_boot = 0;
 
 typedef struct {
     const boot_info_t *boot_info;
@@ -892,6 +892,27 @@ m3ApiRawFunction(wasmos_strlen)
     m3ApiReturn(len);
 }
 
+m3ApiRawFunction(wasmos_env_abort)
+{
+    m3ApiReturnType(void)
+    (void)raw_return;
+    m3ApiGetArg(int32_t, msg)
+    m3ApiGetArg(int32_t, file)
+    m3ApiGetArg(int32_t, line)
+    m3ApiGetArg(int32_t, column)
+    (void)msg;
+    (void)file;
+    (void)line;
+    (void)column;
+
+    process_t *proc = process_get(process_current_pid());
+    if (proc) {
+        process_set_exit_status(proc, -1);
+        process_yield(PROCESS_RUN_EXITED);
+    }
+    m3ApiSuccess();
+}
+
 static void
 wasm3_link_error(const char *name, const char *res)
 {
@@ -965,7 +986,10 @@ wasm3_link_env(IM3Module module)
     if (!module) {
         return -1;
     }
-    if (wasm3_link_raw(module, "env", "strlen", "i(*)", wasmos_strlen) != 0) {
+    int rc = 0;
+    rc |= wasm3_link_raw(module, "env", "strlen", "i(*)", wasmos_strlen);
+    rc |= wasm3_link_raw(module, "env", "abort", "v(iiii)", wasmos_env_abort);
+    if (rc != 0) {
         serial_write("[kernel] wasm3 env link errors\n");
         return -1;
     }
@@ -1161,8 +1185,8 @@ init_entry(process_t *process, void *arg)
         state->request_id = 1;
         state->pending_kind = 0;
         state->phase = 0;
-        if (g_skip_wamr_boot) {
-            serial_write("[init] wamr boot bypass enabled\n");
+        if (g_skip_wasm_boot) {
+            serial_write("[init] wasm boot bypass enabled\n");
             state->started = 1;
             return PROCESS_RUN_YIELDED;
         }
@@ -1184,7 +1208,7 @@ init_entry(process_t *process, void *arg)
         }
     }
 
-    if (g_skip_wamr_boot) {
+    if (g_skip_wasm_boot) {
         if (!state->wasm3_probe_done && state->native_min_index != 0xFFFFFFFFu) {
             serial_write("[init] wasm3 probe native-call-min\n");
             int wasm3_rc = wasm3_probe_run(state->boot_info, state->native_min_index);

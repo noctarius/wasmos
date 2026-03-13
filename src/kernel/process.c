@@ -3,6 +3,7 @@
 #include "physmem.h"
 #include "serial.h"
 #include "paging.h"
+#include "wasm3_shim.h"
 
 static process_t g_processes[PROCESS_MAX_COUNT];
 static uint32_t g_next_pid;
@@ -29,6 +30,7 @@ static uint64_t g_ctx_watch_last_logged_rip;
 static uint64_t g_ctx_watch_last_logged_rsp;
 static uint64_t g_ctx_watch_last_logged_rflags;
 static uint64_t g_ctx_watch_last_logged_reason;
+static uint8_t g_preempt_smoke_logged;
 
 volatile uint64_t g_ctxsw_last_out_ctx;
 volatile uint64_t g_ctxsw_last_out_rip;
@@ -435,6 +437,20 @@ static void process_mark_exited(process_t *proc, int32_t exit_status) {
 }
 
 static void process_reap(process_t *proc) {
+    if (!proc) {
+        return;
+    }
+    if (proc->stack_base && proc->stack_pages) {
+        uint64_t total_pages = (uint64_t)proc->stack_pages + (STACK_GUARD_PAGES * 2u);
+        uint64_t stack_alloc_base = (uint64_t)proc->stack_base - ((uint64_t)STACK_GUARD_PAGES * PAGE_SIZE);
+        pfa_free_pages(stack_alloc_base, total_pages);
+    }
+    if (proc->context_id != 0) {
+        (void)mm_context_destroy(proc->context_id);
+    }
+    if (proc->pid != 0) {
+        wasm3_heap_release(proc->pid);
+    }
     process_reset_slot(proc);
 }
 
@@ -461,6 +477,7 @@ void process_init(void) {
     g_ctx_watch_last_logged_rsp = 0;
     g_ctx_watch_last_logged_rflags = 0;
     g_ctx_watch_last_logged_reason = 0;
+    g_preempt_smoke_logged = 0;
     g_ctx_restore_ctx = 0;
     g_ctx_restore_rip = 0;
     g_ctx_restore_rsp = 0;
@@ -785,6 +802,10 @@ void process_tick(void) {
         proc->ticks_remaining--;
         if (proc->ticks_remaining == 0) {
             g_need_resched = 1;
+            if (!g_preempt_smoke_logged) {
+                g_preempt_smoke_logged = 1;
+                serial_write("[test] preempt ok\n");
+            }
         }
     }
 }
@@ -805,6 +826,9 @@ int process_preempt_from_irq(irq_frame_t *frame) {
         return 0;
     }
     if (g_in_context_switch) {
+        return 0;
+    }
+    if (g_current_process && process_str_eq(g_current_process->name, "chardev-server")) {
         return 0;
     }
     if (g_current_process && process_str_eq(g_current_process->name, "process-manager") &&

@@ -1,6 +1,6 @@
 # WASMOS
 
-Minimal x86_64 UEFI boot + C/ASM kernel scaffold intended to host a WASM runtime (WAMR) and hardware drivers.
+Minimal x86_64 UEFI boot + C/ASM kernel scaffold intended to host a WASM runtime (wasm3) and hardware drivers.
 
 IMPORTANT: Keep this file and `ARCHITECTURE.md` up to date with every prompt execution and code iteration.
 IMPORTANT: Create a git commit after each prompt iteration.
@@ -8,7 +8,7 @@ IMPORTANT: Create a git commit after each prompt iteration.
 ## Layout
 - `src/boot/` UEFI application (PE/COFF) that loads `kernel.elf` and jumps to its entry.
 - `src/kernel/` Freestanding kernel (C + ASM) with a tiny boot-time runtime.
-- `libs/wasm/` Placeholder for integrating WAMR.
+- `libs/wasm/` WASM runtime sources (currently wasm3).
 - `examples/c/` Example C WASM applications.
 - `examples/go/` Example Go (TinyGo) WASM applications.
 - `examples/rust/` Example Rust WASM applications.
@@ -44,9 +44,8 @@ Note: Homebrew does not provide an `edk2-ovmf` formula. QEMU often ships the fir
 If it isn't present, download OVMF from edk2 and pass `-DOVMF_CODE=/path/to/OVMF_CODE.fd`.
 
 ### Dependencies
-- WAMR (wasm-micro-runtime) is vendored via git subtree at `libs/wasm/wasm-micro-runtime`.
-- wasm3 is vendored via git subtree at `libs/wasm/wasm3` (used as an alternative runtime on the `wasm3` branch).
-- The `wasm3` branch uses a per-process bump allocator for `malloc/calloc/realloc` in `src/kernel/wasm3_shim.c` and disables the wasm3 fixed heap.
+- wasm3 is vendored via git subtree at `libs/wasm/wasm3`.
+- This branch uses a per-process bump allocator for `malloc/calloc/realloc` in `src/kernel/wasm3_shim.c` and disables the wasm3 fixed heap.
 
 ### AssemblyScript (optional)
 AssemblyScript can be used to write WASMOS drivers, services, and applications. Install AssemblyScript via npm and ensure `asc` is available in your PATH (for example via a global install or `npm link`):
@@ -126,10 +125,6 @@ The kernel uses a round-robin scheduler with a fixed time slice per process
 (see `PROCESS_DEFAULT_SLICE_TICKS` in `src/kernel/include/process.h`).
 User space can call the `sched_yield` wasm native to explicitly yield during busy loops.
 
-### WAMR scaffold
-- `libs/wasm/wamr_runtime.c` provides a thin wrapper over the WAMR C API.
-- Enable with `-DWAMR_ENABLE=ON` once you wire the WAMR library into the kernel link.
-
 ### Configure
 ```
 cmake -S . -B build
@@ -170,21 +165,20 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes. U
 
 ### Next steps
 1. Verify the UEFI toolchain flags for your host.
-2. Integrate WAMR into `libs/wasm/` and wire into `src/kernel/kernel.c`.
-3. Implement hardware drivers and a basic scheduler.
+2. Implement hardware drivers and a basic scheduler.
 
 ## Notes
 - WASMOS follows a microkernel direction: the kernel keeps only minimal primitives, while drivers/services/apps are WASM programs.
-- Each WASM program is expected to run in an isolated WAMR context with its own memory regions.
+- Each WASM program is expected to run in an isolated runtime context with its own memory regions.
 - Inter-component communication is IPC-based.
 - Debugging: the `debug_mark(tag)` wasm native logs a tag and PID to serial to confirm app execution paths.
 - Debugging: PM logs app flags and entry returns, and `sysinit` emits debug_mark tags `0x1101..0x11FF` to trace its loop behavior in preemptive runs.
-- Debugging: the kernel init path can temporarily bypass WAMR boot module spawning via `g_skip_wamr_boot` in `src/kernel/kernel.c` when isolating the wasm3 probe.
+- Debugging: the kernel init path can temporarily bypass boot module spawning via `g_skip_wasm_boot` in `src/kernel/kernel.c` when isolating the wasm3 probe.
 - The #GP exception handler logs err/rip/cs/rflags plus current PID/name and stack bounds for debugging non-canonical instruction pointers.
 - Process stacks carry canaries at base/top and are checked on each process entry to catch overflows early.
 - Process stacks reserve an unmapped guard page above and below the usable stack to catch overflows as page faults.
 - The bootloader loads `kernel.elf` from the EFI System Partition (ESP).
-- CLion IDE targets (`bootloader_ide`, `kernel_ide`) aggregate all project C/H sources and include directories (kernel, drivers, WAMR) for indexing.
+- CLion IDE targets (`bootloader_ide`, `kernel_ide`) aggregate all project C/H sources and include directories (kernel, drivers, wasm3) for indexing.
 - The Kernel Architecture Guide in `ARCHITECTURE.md` outlines microkernel design decisions and the stepwise roadmap.
 - The Bootloader & Kernel Architecture rework section in `ARCHITECTURE.md` is the current design baseline.
 - IPC guidance now incorporates seL4/QNX-style separation of synchronous IPC and asynchronous notifications.
@@ -218,21 +212,14 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes. U
 - The kernel entry preserves the incoming `boot_info_t *` (UEFI passes it in `RCX`) through early init.
 - The kernel emits early serial output on COM1 (QEMU `-serial`).
 - Basic CPU init now installs a minimal kernel GDT/IDT and exception stubs for vectors `0..31`.
-- Memory management scaffolding tracks per-WAMR-context memory regions (microkernel model).
+- Memory management scaffolding tracks per-runtime memory regions (microkernel model).
 - A minimal physical frame allocator ingests the UEFI memory map (conventional + boot services memory).
 - The physical frame allocator supports freeing pages, and contexts can allocate regions from it.
 - `mm_init` scaffolds a root context with basic linear/stack/heap regions.
 - `mm_init` now sets up kernel-owned page tables, reloads `CR3`, and installs a higher-half alias mapping at `0xFFFFFFFF80000000`.
 - The root context also reserves placeholder IPC and device regions.
 - `mm_context_create` allocates a new context and default regions.
-- WAMR runtime init uses a fixed page pool and `wamr_context_bind` ties a context's regions to WAMR sizing.
-- WAMR runtime initialization is on-demand through the kernel wasm driver host layer and currently uses a kernel-owned static pool (4 MiB).
-- WAMR is enabled by default and links the WAMR runtime library unless `-DWAMR_LINK=OFF` is set.
-- `WAMR_LINK` builds the WAMR runtime with a minimal `wasmos` platform in `src/wasm-micro-runtime/platform/wasmos/`.
-- WAMR custom object builds propagate upstream runtime feature defines and compile third-party sources with `-Wno-error`.
-- `WAMR_DISABLE_APP_ENTRY=1` is set for the freestanding kernel profile.
-- The `wasmos` platform adapter includes WAMR's shared math implementation and provides freestanding libc/fortify shims (e.g. `__memcpy_chk`, `__memset_chk`).
-- The `wasmos` platform adapter now backs WAMR memory APIs (`os_mmap`/`os_mremap` and related allocators) with runtime allocator calls so module instantiation can map linear memory in freestanding mode.
+- The wasm3 runtime uses a per-process bump allocator in `src/kernel/wasm3_shim.c` and does not use the wasm3 fixed heap.
 - Kernel primitives now include a minimal spinlock (`src/kernel/spinlock.c`) and IPC transport with per-endpoint queues (`src/kernel/ipc.c`).
 - Kernel primitives now include basic cooperative process management (`src/kernel/process.c`) with per-process memory-context binding.
 - PIT timer init now programs IRQ0 and increments a kernel tick counter; the kernel logs a tick milestone via a deferred poll in the scheduler loop.
@@ -242,7 +229,7 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes. U
 - The scheduler now switches into process contexts via a minimal context-switch trampoline; timer-driven preemption is enabled.
 - Timer IRQ preemption now redirects the interrupted RIP to a kernel preempt trampoline before yielding to the scheduler.
 - Spinlocks now disable preemption while held to keep IPC and scheduler paths safe.
-- WASMOS apps can terminate themselves via a `proc_exit` wasm native; the process manager reaps exited apps and releases their WAMR instances.
+- WASMOS apps can terminate themselves via a `proc_exit` wasm native; the process manager reaps exited apps and releases their runtime instances.
 - An explicit idle task runs `hlt` when no READY tasks are available.
 - Process stacks are allocated from the physical frame allocator, and the kernel image range is reserved before handing out pages.
 - Process lifecycle primitives now include `wait`, `kill`, and tracked `exit_status` via zombie processes until reaped.
@@ -257,12 +244,11 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes. U
 - IPC endpoint permissions are enforced by context-aware APIs (`ipc_send_from`, `ipc_recv_for`) for source-endpoint ownership and endpoint receive ownership.
 - The kernel now builds and embeds example WASM applications from `examples/` (including `chardev_client`).
 - Driver wasm link settings currently constrain module stack/linear memory for low-footprint instantiation in the freestanding runtime pool.
-- A generic kernel wasm driver host (`src/kernel/wasm_driver.c`) loads embedded modules, instantiates them via WAMR, and provides an entry call for long-running drivers.
+- A generic kernel wasm driver host (`src/kernel/wasm_driver.c`) loads embedded modules, instantiates them via wasm3, and provides an entry call for long-running drivers.
 - The WASM-backed chardev runs as an IPC service in a dedicated `chardev-server` process (`src/kernel/wasm_chardev.c`) using `src/drivers/chardev/chardev_server.c`.
 - Boot modules now include `sysinit.wasmosapp` and `chardev_client.wasmosapp`; the chardev client performs one IPC write/read roundtrip via imported IPC primitives.
 - The chardev server process blocks in `ipc_recv` when its IPC queue is empty and is woken by incoming IPC messages.
 - The chardev service path uses permission-aware IPC send/receive calls tied to its owner context.
 - The chardev module export contract is `initialize` (the driver handles IPC internally).
 - Chardev IPC protocol uses request/response message types for byte read/write (`WASM_CHARDEV_IPC_*` in `src/drivers/include/wasmos_driver_abi.h`).
-- WAMR native IPC imports now follow the WAMR `exec_env` calling convention for correct argument marshalling.
 - IPC best-practice notes and improvement targets (from Herder’s MINIX thesis and Aigner’s microkernel communication work) are tracked in `ARCHITECTURE.md`.

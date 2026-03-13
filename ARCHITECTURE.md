@@ -1,7 +1,7 @@
 # Architecture Notes
 
 This document captures the in-depth architecture for the UEFI bootloader and kernel scaffold.
-It is intended to evolve as the project grows (WAMR integration, drivers, scheduler, etc.).
+It is intended to evolve as the project grows (wasm3 integration, drivers, scheduler, etc.).
 
 IMPORTANT: Keep this file and `README.md` up to date with every prompt execution and code iteration.
 IMPORTANT: Create a git commit after each prompt iteration.
@@ -140,7 +140,7 @@ Isolation rules:
 ### Debugging
 - A debug-only wasm native `debug_mark(tag)` logs a tag and PID to the serial console to confirm user-space execution paths.
 - PM logs app flags and entry returns, and `sysinit` emits debug_mark tags (`0x1101..0x11FF`) to trace loop behavior during preemptive debugging.
-- The kernel init path can temporarily bypass WAMR boot module spawning via `g_skip_wamr_boot` in `src/kernel/kernel.c` to isolate the wasm3 probe.
+- The kernel init path can temporarily bypass boot module spawning via `g_skip_wasm_boot` in `src/kernel/kernel.c` to isolate the wasm3 probe.
 
 ### Stepwise Plan
 1. Freeze the `boot_info_t` contract and document versioning rules.
@@ -182,7 +182,7 @@ Tests: QEMU boot runs a process that triggers page faults and continues successf
 Status: implemented with a kernel-hosted memory service and a pagefault-test process.
 
 6. Process Manager
-Scope: WASMOS-APP loading, WAMR context creation, process lifecycle management.
+Scope: WASMOS-APP loading, runtime context creation, process lifecycle management.
 Definition of Done: PM loads a WASMOS-APP, resolves endpoints, starts entry export; lifecycle APIs (`spawn`, `wait`, `kill`) work.
 Tests: QEMU boot loads a WASMOS-APP via PM and exits cleanly with status.
 Status: implemented with a kernel init process that spawns a process manager service owning the `proc` endpoint, then requests it to load the `sysinit` WASMOS-APP boot module and supports IPC `spawn`, `wait`, `kill`, and `status`.
@@ -239,13 +239,13 @@ This guide captures microkernel-informed design decisions and a stepwise plan fo
 ## Microkernel Model
 - The kernel only provides minimal primitives (boot, memory, isolation boundaries, IPC transport, and runtime hosting hooks).
 - Drivers, OS services, and applications are implemented as WASM programs instead of in-kernel subsystems.
-- Each WASM program runs in its own WAMR context bound to its own memory regions.
+- Each WASM program runs in its own runtime context bound to its own memory regions.
 - Cross-context interaction is explicit and IPC-based; direct shared mutable state between contexts is not the default model.
 
 ## Repository Layout
 - `src/boot/` UEFI application (PE/COFF) that loads `kernel.elf` from the ESP.
 - `src/kernel/` Freestanding kernel (C + ASM).
-- `libs/wasm/` Placeholder integration point for WAMR.
+- `libs/wasm/` Integration point for the wasm3 runtime.
 - `examples/` Example WASM applications used for driver/server/client bring-up (grouped by language).
 - `examples/c/chardev_preempt/` Small preemption stress test that exercises the embedded chardev server via IPC.
 - `src/drivers/` WASM driver sources and ABI headers. Each driver lives in its own subdirectory.
@@ -262,7 +262,7 @@ UEFI firmware
         -> setup stack, clear BSS
         -> kmain(boot_info)
         -> init subsystems (memory, drivers)
-        -> init WAMR
+        -> init wasm3 runtime
 ```
 
 ## Boot Flow (Detailed)
@@ -302,7 +302,7 @@ UEFI firmware
          |
          | Memory manager
          | Drivers
-         | WAMR runtime
+        | wasm3 runtime
          v
 +------------------------+
 | Userland (WASM)        |
@@ -368,7 +368,7 @@ Remaining:
 - Framebuffer console path (serial is implemented; framebuffer is still pending).
 
 ## Memory Management Scaffold
-- Microkernel model: every driver/service/app runs in its own WAMR context.
+- Microkernel model: every driver/service/app runs in its own runtime context.
 - Each context owns a bounded set of memory regions (linear memory, IPC, device, stack, heap, code).
 - Current scaffold tracks per-context regions and defers real allocation to later.
 - A simple physical frame allocator scans the UEFI memory map and tracks usable ranges.
@@ -377,14 +377,7 @@ Remaining:
 - `mm_init` now installs kernel-owned x86_64 page tables and reloads `CR3`.
 - The paging scaffold keeps low-memory identity mapping and adds higher-half aliases at `0xFFFFFFFF80000000`.
 - `mm_context_create` can allocate new contexts with default linear/stack/heap regions.
-- WAMR initialization uses a kernel-owned static pool allocator (currently 4 MiB) with per-context bindings for linear/stack/heap sizing.
-- WAMR runtime initialization is performed on-demand by the kernel wasm driver host when the first wasm driver is started.
-- WAMR is enabled by default and links the runtime library unless `WAMR_LINK=OFF` is set.
-- The WAMR runtime build uses a minimal `wasmos` platform from `src/wasm-micro-runtime/platform/wasmos/`.
-- The custom WAMR object build path forwards upstream runtime feature defines and disables `-Werror` for third-party WAMR sources.
-- Freestanding builds set `WAMR_DISABLE_APP_ENTRY=1` and link the generated `libwamr_runtime.a` into the kernel.
-- The `wasmos` platform adapter includes WAMR shared math sources and minimal libc/fortify shims required by freestanding linkage.
-- The `wasmos` platform adapter now provides runtime-backed `os_mmap`/`os_mremap` allocation behavior required for interpreter linear-memory mapping during module instantiation.
+- The wasm3 runtime uses a per-process bump allocator and does not use the wasm3 fixed heap.
 
 ## IPC Model
 - IPC is the default communication mechanism between WASM drivers, services, and applications.
@@ -506,11 +499,10 @@ Design takeaways:
 - Scheduler metrics (timer ticks, ready queue depth, current running PID) are exposed via wasm natives for diagnostics.
 - The scheduler now switches into per-process contexts via a trampoline and stack; timer-driven preemption is enabled.
 - Spinlocks disable preemption while held to keep IPC and scheduler paths safe under timer interrupts.
-- WASMOS apps can terminate via a `proc_exit` wasm native; the process manager reaps exited apps and releases their WAMR instances.
+- WASMOS apps can terminate via a `proc_exit` wasm native; the process manager reaps exited apps and releases their runtime instances.
 - An explicit idle task runs `hlt` when no READY tasks are available.
 - `process_spawn` binds each process to a new memory context (`mm_context_create(pid)`), establishing per-process isolation boundaries.
 - Lifecycle primitives now include `process_wait`, `process_kill`, and `process_get_exit_status`.
-- WAMR native IPC imports use the `exec_env` calling convention to align with WAMR native argument marshalling.
 
 ## Process Model (Current Scaffold)
 - The scheduler is preemptive and time-sliced (`process_schedule_once`), using a FIFO ready queue for round-robin execution.
@@ -530,13 +522,11 @@ Design takeaways:
 - A minimal user-space `cli` WASMOS-APP is loaded as a boot module, reads serial input, and supports `help`, `ps`, `ls`, and `cat` via small native helpers.
 - The chardev server blocks in `ipc_recv` when no IPC message is pending, reducing scheduler churn while idle.
 
-## WAMR Integration (Current Scaffold)
-- WAMR is vendored via git subtree at `libs/wasm/wasm-micro-runtime`.
-- WAMR is built as a static library and linked into the kernel.
-- `libs/wasm/wamr_runtime.c` provides a basic wrapper over the WAMR C API.
+## wasm3 Integration (Current Scaffold)
+- wasm3 is vendored via git subtree at `libs/wasm/wasm3`.
+- The kernel uses wasm3 for the process manager/driver execution path.
 - A stable ABI is defined via `src/drivers/include/wasmos_driver_abi.h` and the WASMOS-APP container format.
-- The `wasm3` branch integrates the wasm3 runtime for the process manager/driver execution path as an alternative to WAMR.
-- The `wasm3` branch supplies a per-process bump allocator for wasm3 (`malloc/calloc/realloc` in `src/kernel/wasm3_shim.c`) and disables wasm3's global fixed heap.
+- The kernel supplies a per-process bump allocator for wasm3 (`malloc/calloc/realloc` in `src/kernel/wasm3_shim.c`) and disables wasm3's global fixed heap.
 
 Planned:
 - Provide WASI-like shims or richer custom syscalls for drivers.
@@ -547,7 +537,7 @@ Planned:
 - Current scaffold includes project-owned wasm application examples under `examples/` (C, AssemblyScript, Rust, Go, and Zig).
 - The build compiles the chardev server driver (`src/drivers/chardev`) and chardev client example into `.wasm` binaries and embeds them into the kernel image as binary blobs.
 - Driver wasm binaries are linked with explicit stack and initial/max memory bounds to keep freestanding instantiation deterministic.
-- A kernel wasm driver host (`src/kernel/wasm_driver.c`) loads embedded modules, instantiates them with WAMR, allocates IPC endpoints, and starts a long-running driver entry.
+- A kernel wasm driver host (`src/kernel/wasm_driver.c`) loads embedded modules, instantiates them with wasm3, allocates IPC endpoints, and starts a long-running driver entry.
 - The chardev service (`src/kernel/wasm_chardev.c`) runs in the spawned `chardev-server` process and lets the driver handle IPC request/response traffic directly.
 - The wasm chardev module exports `initialize` as its long-running entry.
 - The wasm chardev test-client module exports `main` and consumes imported IPC APIs (`ipc_create_endpoint`, `ipc_send`, `ipc_recv`, `ipc_last_field`) from native module `wasmos`.
@@ -596,7 +586,7 @@ Services:
   - Reads WASMOS-APP containers, validates headers and tables.
   - Copies WASM payload into managed memory and tracks lifetime.
   - Creates the process context (memory regions, IPC endpoints, permissions).
-  - Instantiates WAMR context and binds linear/stack/heap sizes from hints.
+  - Instantiates runtime context and binds linear/stack/heap sizes from hints.
   - Resolves required IPC endpoints/capabilities before start.
   - Starts the entry export and registers the process with the scheduler.
 - `sysinit` (root task / init process): the first user-space task that bootstraps the system.
@@ -750,7 +740,7 @@ Notes:
 Current implementation (kernel scaffold):
 - `src/kernel/wasmos_app.c` provides the initial WASMOS-APP parser/loader.
 - Loader validates header/version/magic, all section bounds, and extracts wasm bytes.
-- Memory hints are parsed; stack/heap min-page hints are mapped to WAMR stack/heap sizes.
+- Memory hints are parsed; stack/heap min-page hints are mapped to runtime stack/heap sizes.
 - Required endpoints and capability tables are enforced during `wasmos_app_start` via kernel policy hooks.
 - Startup fails if endpoint resolution or capability grant fails for any required entry.
 - The test client path now consumes a boot-preloaded WASMOS-APP module and starts it through the loader API.
@@ -769,8 +759,8 @@ Current implementation (kernel scaffold):
 - CLI integration tests include per-app hello tests (`test_hello_*.py`).
 - CMake is split across per-component `CMakeLists.txt` files (boot, kernel, drivers, services, and each example language).
 - CLI integration tests include executing `hello-zig` and asserting its banner output before returning to the prompt.
-- IDE indexing targets (`bootloader_ide`, `kernel_ide`) include all project C/H sources for CLion, including drivers/services/examples and WAMR platform stubs.
-  - IDE targets also export include directories for kernel/drivers/WAMR headers to improve CLion resolution.
+- IDE indexing targets (`bootloader_ide`, `kernel_ide`) include all project C/H sources for CLion, including drivers/services/examples and wasm3 sources.
+  - IDE targets also export include directories for kernel/drivers/wasm3 headers to improve CLion resolution.
 - Zig WASMOS-APP builds force-export the entry symbol (the build passes `--export=wasmos_entry`) so the entry function is retained.
 If OVMF isn't found, pass `-DOVMF_CODE=/path/to/OVMF_CODE.fd` at configure time.
 macOS/Homebrew: `brew install edk2-ovmf`.

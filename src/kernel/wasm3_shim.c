@@ -5,8 +5,10 @@
 #include "serial.h"
 #include "process.h"
 #include "physmem.h"
+#include "wasm3_shim.h"
 
-#define WASM3_HEAP_PAGES 512u
+#define WASM3_HEAP_PAGES 1024u
+#define WASM3_HEAP_MIN_PAGES 32u
 #define WASM3_HEAP_ALIGN 16u
 
 typedef struct {
@@ -18,9 +20,27 @@ typedef struct {
 
 typedef struct {
     size_t size;
+    size_t total;
+    size_t start;
 } wasm3_heap_block_t;
 
 static wasm3_heap_slot_t g_wasm3_heaps[PROCESS_MAX_COUNT];
+static uint32_t g_wasm3_heap_bound_pid;
+
+static void
+wasm3_log_hex64(uint64_t value)
+{
+    char buf[21];
+    static const char hex[] = "0123456789ABCDEF";
+    buf[0] = '0';
+    buf[1] = 'x';
+    for (int i = 0; i < 16; ++i) {
+        buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
+    }
+    buf[18] = '\n';
+    buf[19] = '\0';
+    serial_write(buf);
+}
 
 static size_t
 align_up(size_t value, size_t align)
@@ -54,7 +74,10 @@ wasm3_memcpy(void *dst, const void *src, size_t len)
 static wasm3_heap_slot_t *
 wasm3_heap_slot(void)
 {
-    uint32_t pid = process_current_pid();
+    uint32_t pid = g_wasm3_heap_bound_pid ? g_wasm3_heap_bound_pid : process_current_pid();
+    if (pid == 0) {
+        return 0;
+    }
     wasm3_heap_slot_t *empty = 0;
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_wasm3_heaps[i].pid == pid) {
@@ -73,6 +96,20 @@ wasm3_heap_slot(void)
     return empty;
 }
 
+uint32_t
+wasm3_heap_bind_pid(uint32_t pid)
+{
+    uint32_t previous_pid = g_wasm3_heap_bound_pid;
+    g_wasm3_heap_bound_pid = pid;
+    return previous_pid;
+}
+
+void
+wasm3_heap_restore_pid(uint32_t previous_pid)
+{
+    g_wasm3_heap_bound_pid = previous_pid;
+}
+
 static void *
 wasm3_alloc(size_t size, int zero)
 {
@@ -85,26 +122,66 @@ wasm3_alloc(size_t size, int zero)
         return 0;
     }
     critical_section_enter();
+    size_t total = align_up(sizeof(wasm3_heap_block_t) + size, WASM3_HEAP_ALIGN);
     if (!slot->base) {
-        uint64_t phys = pfa_alloc_pages_below(WASM3_HEAP_PAGES, 0x100000000ULL);
-        if (!phys) {
+        uint64_t min_pages = (uint64_t)((total + 4095u) / 4096u);
+        if (min_pages < WASM3_HEAP_MIN_PAGES) {
+            min_pages = WASM3_HEAP_MIN_PAGES;
+        }
+
+        uint64_t pages = WASM3_HEAP_PAGES;
+        if (pages < min_pages) {
+            pages = min_pages;
+        }
+
+        uint64_t phys = 0;
+        while (pages >= min_pages) {
+            phys = pfa_alloc_pages_below(pages, 0x100000000ULL);
+            if (!phys) {
+                phys = pfa_alloc_pages(pages);
+            }
+            if (phys) {
+                slot->base = (uint8_t *)(uintptr_t)phys;
+                slot->size = (size_t)pages * 4096u;
+                slot->offset = 0;
+                break;
+            }
+            if (pages == min_pages) {
+                break;
+            }
+            pages /= 2u;
+            if (pages < min_pages) {
+                pages = min_pages;
+            }
+        }
+        if (!slot->base) {
+            serial_write("[wasm3-heap] init alloc failed pid=");
+            wasm3_log_hex64(process_current_pid());
+            serial_write("[wasm3-heap] min_pages=");
+            wasm3_log_hex64(min_pages);
             critical_section_leave();
             return 0;
         }
-        slot->base = (uint8_t *)(uintptr_t)phys;
-        slot->size = (size_t)WASM3_HEAP_PAGES * 4096u;
-        slot->offset = 0;
     }
 
     size_t aligned_offset = align_up(slot->offset, WASM3_HEAP_ALIGN);
-    size_t total = align_up(sizeof(wasm3_heap_block_t) + size, WASM3_HEAP_ALIGN);
     if (aligned_offset + total > slot->size) {
+        serial_write("[wasm3-heap] oom pid=");
+        wasm3_log_hex64(process_current_pid());
+        serial_write("[wasm3-heap] req=");
+        wasm3_log_hex64((uint64_t)size);
+        serial_write("[wasm3-heap] off=");
+        wasm3_log_hex64((uint64_t)slot->offset);
+        serial_write("[wasm3-heap] total=");
+        wasm3_log_hex64((uint64_t)slot->size);
         critical_section_leave();
         return 0;
     }
 
     wasm3_heap_block_t *block = (wasm3_heap_block_t *)(slot->base + aligned_offset);
     block->size = size;
+    block->total = total;
+    block->start = aligned_offset;
     void *ptr = (uint8_t *)block + sizeof(wasm3_heap_block_t);
     slot->offset = aligned_offset + total;
     critical_section_leave();
@@ -133,7 +210,44 @@ void *calloc(size_t nmemb, size_t size)
 
 void free(void *ptr)
 {
-    (void)ptr;
+    if (!ptr) {
+        return;
+    }
+    wasm3_heap_slot_t *slot = wasm3_heap_slot();
+    if (!slot || !slot->base) {
+        return;
+    }
+    wasm3_heap_block_t *block = (wasm3_heap_block_t *)((uint8_t *)ptr - sizeof(wasm3_heap_block_t));
+
+    critical_section_enter();
+    if (block->start + block->total == slot->offset) {
+        slot->offset = block->start;
+    }
+    critical_section_leave();
+}
+
+void wasm3_heap_release(uint32_t pid)
+{
+    if (pid == 0) {
+        return;
+    }
+    critical_section_enter();
+    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        wasm3_heap_slot_t *slot = &g_wasm3_heaps[i];
+        if (slot->pid != pid) {
+            continue;
+        }
+        if (slot->base && slot->size > 0) {
+            uint64_t pages = ((uint64_t)slot->size + 4095ULL) / 4096ULL;
+            pfa_free_pages((uint64_t)(uintptr_t)slot->base, pages);
+        }
+        slot->pid = 0;
+        slot->base = 0;
+        slot->size = 0;
+        slot->offset = 0;
+        break;
+    }
+    critical_section_leave();
 }
 
 void *realloc(void *ptr, size_t size)
@@ -146,12 +260,28 @@ void *realloc(void *ptr, size_t size)
     }
     wasm3_heap_block_t *block = (wasm3_heap_block_t *)((uint8_t *)ptr - sizeof(wasm3_heap_block_t));
     size_t old_size = block->size;
+    wasm3_heap_slot_t *slot = wasm3_heap_slot();
+    size_t new_total = align_up(sizeof(wasm3_heap_block_t) + size, WASM3_HEAP_ALIGN);
+    if (slot && slot->base) {
+        critical_section_enter();
+        if (block->start + block->total == slot->offset) {
+            if (block->start + new_total <= slot->size) {
+                slot->offset = block->start + new_total;
+                block->size = size;
+                block->total = new_total;
+                critical_section_leave();
+                return ptr;
+            }
+        }
+        critical_section_leave();
+    }
     void *new_ptr = malloc(size);
     if (!new_ptr) {
         return 0;
     }
     size_t copy_size = old_size < size ? old_size : size;
     wasm3_memcpy(new_ptr, ptr, copy_size);
+    free(ptr);
     return new_ptr;
 }
 

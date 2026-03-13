@@ -270,6 +270,18 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         uefi_log(system, "[boot] preloaded module: \\\\apps\\\\init_smoke.wasmosapp\n");
     }
 
+    static CHAR16 native_call_smoke_path[] = L"\\apps\\native_call_smoke.wasmosapp";
+    void *native_call_smoke_buf = 0;
+    UINTN native_call_smoke_size = 0;
+    status = read_file_alloc(bs, root, native_call_smoke_path, &native_call_smoke_buf, &native_call_smoke_size);
+    if (EFI_ERROR(status)) {
+        native_call_smoke_buf = 0;
+        native_call_smoke_size = 0;
+        uefi_log(system, "[boot] optional module not found: \\\\apps\\\\native_call_smoke.wasmosapp\n");
+    } else {
+        uefi_log(system, "[boot] preloaded module: \\\\apps\\\\native_call_smoke.wasmosapp\n");
+    }
+
     static CHAR16 ata_path[] = L"\\system\\drivers\\ata.wasmosapp";
     void *ata_buf = 0;
     UINTN ata_size = 0;
@@ -400,6 +412,9 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
     if (init_smoke_buf && init_smoke_size > 0) {
         module_count++;
     }
+    if (native_call_smoke_buf && native_call_smoke_size > 0) {
+        module_count++;
+    }
     if (ata_buf && ata_size > 0) {
         module_count++;
     }
@@ -414,7 +429,8 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
     }
     UINTN module_table_bytes = module_count * sizeof(boot_module_t);
     UINTN module_data_bytes =
-        init_size + app_size + init_smoke_size + ata_size + fat_size + hw_discovery_size + cli_size;
+        init_size + app_size + init_smoke_size + native_call_smoke_size + ata_size + fat_size +
+        hw_discovery_size + cli_size;
 
     void *mmap = 0;
     UINT64 boot_buf = 0;
@@ -511,6 +527,18 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
                 copy_cstr(mods[mod_index].name, sizeof(mods[mod_index].name), "apps/init_smoke.wasmosapp");
                 memcpy8(cursor, init_smoke_buf, init_smoke_size);
                 cursor += init_smoke_size;
+                mod_index++;
+            }
+
+            if (native_call_smoke_buf && native_call_smoke_size > 0) {
+                mods[mod_index].base = (UINT64)(UINTN)cursor;
+                mods[mod_index].size = native_call_smoke_size;
+                mods[mod_index].type = BOOT_MODULE_TYPE_WASMOS_APP;
+                mods[mod_index].reserved = 0;
+                copy_cstr(mods[mod_index].name, sizeof(mods[mod_index].name),
+                          "apps/native_call_smoke.wasmosapp");
+                memcpy8(cursor, native_call_smoke_buf, native_call_smoke_size);
+                cursor += native_call_smoke_size;
                 mod_index++;
             }
 

@@ -51,6 +51,12 @@ volatile void *wasmos_wamr_last_native_ptr;
 volatile uint32_t wasmos_wamr_last_native_index;
 volatile uint32_t wasmos_wamr_native_calls;
 volatile uint32_t wasmos_wamr_bytecode_calls;
+volatile uint32_t wasmos_wamr_call_indirect_count;
+volatile uint32_t wasmos_wamr_call_indirect_last_fidx;
+volatile uint32_t wasmos_wamr_call_indirect_last_import;
+volatile void *wasmos_wamr_last_code_start;
+volatile void *wasmos_wamr_last_code_end;
+volatile uint32_t wasmos_wamr_opcode_exec_count;
 volatile void *wasmos_wamr_bad_ip;
 volatile void *wasmos_wamr_bad_sp;
 volatile void *wasmos_wamr_bad_csp;
@@ -1639,6 +1645,7 @@ wasm_interp_call_func_import(WASMModuleInstance *module_inst,
 #define HANDLE_OP_END()        \
     WASMOS_SAFEPOINT();        \
     CHECK_INSTRUCTION_LIMIT(); \
+    wasmos_wamr_opcode_exec_count++; \
     WASMOS_TRACE_WAMR_IP();    \
     FETCH_OPCODE_AND_DISPATCH()
 #endif
@@ -2602,6 +2609,10 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
 
                 /* always call module own functions */
                 cur_func = module->e->functions + fidx;
+
+                wasmos_wamr_call_indirect_count++;
+                wasmos_wamr_call_indirect_last_fidx = fidx;
+                wasmos_wamr_call_indirect_last_import = cur_func->is_import_func ? 1 : 0;
 
                 if (cur_func->is_import_func)
                     cur_func_type = cur_func->u.func_import->func_type;
@@ -6984,6 +6995,18 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
             frame_ip = wasm_get_func_code(cur_func);
             frame_ip_end = wasm_get_func_code_end(cur_func);
             frame_lp = frame->lp;
+
+            wasmos_wamr_last_code_start = frame_ip;
+            wasmos_wamr_last_code_end = frame_ip_end;
+            wasmos_wamr_last_opcodes_len = 0;
+            if (frame_ip && frame_ip_end && frame_ip_end > frame_ip) {
+                uint32_t remaining = (uint32_t)(frame_ip_end - frame_ip);
+                uint32_t count = remaining > 16 ? 16 : remaining;
+                for (uint32_t j = 0; j < count; ++j) {
+                    wasmos_wamr_last_opcodes[j] = frame_ip[j];
+                }
+                wasmos_wamr_last_opcodes_len = count;
+            }
 
             frame_sp = frame->sp_bottom =
                 frame_lp + cur_func->param_cell_num + cur_func->local_cell_num;

@@ -13,21 +13,14 @@
 extern int32_t wasmos_console_write(int32_t ptr, int32_t len)
     WASMOS_WASM_IMPORT("wasmos", "console_write");
 
-static int32_t (*volatile g_console_write)(int32_t, int32_t);
-
-static void
-write_line(const char *s)
+__attribute__((noinline, used)) static int32_t
+call_console(const char *s)
 {
-    if (!s) {
-        return;
-    }
     int32_t len = 0;
     while (s[len]) {
         len++;
     }
-    if (len > 0) {
-        g_console_write((int32_t)(uintptr_t)s, len);
-    }
+    return wasmos_console_write((int32_t)(uintptr_t)s, len);
 }
 
 WASMOS_WASM_EXPORT int32_t
@@ -41,18 +34,18 @@ main(int32_t arg0,
     (void)arg2;
     (void)arg3;
 
-    g_console_write = wasmos_console_write;
-    write_line("init-smoke: init start\n");
+    static const char msg[] = "native-call-smoke: start\n";
+    volatile int32_t write_rc = wasmos_console_write((int32_t)(uintptr_t)msg, (int32_t)sizeof(msg) - 1);
+    (void)write_rc;
 
     volatile uint32_t sink = 0;
-    for (uint32_t i = 0; i < 200000u; ++i) {
-        sink ^= i;
+    for (uint32_t i = 0; i < 100000u; ++i) {
+        sink ^= (i ^ (uint32_t)write_rc);
     }
 
-    write_line("init-smoke: init done\n");
+    static const char done[] = "native-call-smoke: done\n";
+    write_rc = wasmos_console_write((int32_t)(uintptr_t)done, (int32_t)sizeof(done) - 1);
+    sink ^= (uint32_t)write_rc;
 
-    for (uint32_t i = 0; i < 200000u; ++i) {
-        sink ^= (i << 1u);
-    }
-    return 0;
+    return (int32_t)sink;
 }

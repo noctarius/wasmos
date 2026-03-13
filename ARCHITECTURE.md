@@ -136,12 +136,17 @@ Isolation rules:
 - Ensure IPC paths do not block kernel tasks.
 - Timer IRQ preemption now rewrites the interrupted RIP to a kernel preempt trampoline and yields back to the scheduler.
 - User space can call the `sched_yield` wasm native to explicitly yield from busy loops.
+- IPC receive host calls mark the current process as in a hostcall so timer preemption does not interrupt the empty-to-block transition mid-flight.
+- The scheduler preserves a process that is woken during that IPC block transition instead of forcing it back to `BLOCKED`.
+- The CLI uses `sched_yield` while polling for console input so background apps can continue running when the prompt is idle.
+- The CLI uses `sched_yield` while polling for console input so other PM-managed apps continue to run between keystrokes.
 
 ### Debugging
 - A debug-only wasm native `debug_mark(tag)` logs a tag and PID to the serial console to confirm user-space execution paths.
 - PM logs app flags and entry returns, and `sysinit` emits debug_mark tags (`0x1101..0x11FF`) to trace loop behavior during preemptive debugging.
 - The kernel init path can temporarily bypass boot module spawning via `g_skip_wasm_boot` in `src/kernel/kernel.c` to isolate the wasm3 probe.
 - Kernel-hosted wasm3 runtime lifecycle and entry calls currently run with preemption disabled to avoid timer IRQ interruption while runtime state is being mutated.
+- CLI regression coverage includes the `chardev-preempt` app so embedded chardev IPC stays exercised after scheduler changes.
 
 ### Stepwise Plan
 1. Freeze the `boot_info_t` contract and document versioning rules.

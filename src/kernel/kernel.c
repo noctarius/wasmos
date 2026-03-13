@@ -408,19 +408,40 @@ m3ApiRawFunction(wasmos_ipc_recv)
     if (!process) {
         m3ApiReturn(-1);
     }
+    process->in_hostcall = 1;
 
     preempt_safepoint();
     for (;;) {
+        process->block_reason = PROCESS_BLOCK_IPC;
         rc = ipc_recv_for(context_id, (uint32_t)endpoint, &slot->message);
         if (rc == IPC_EMPTY) {
             process_block_on_ipc(process);
+            rc = ipc_recv_for(context_id, (uint32_t)endpoint, &slot->message);
+            if (rc == IPC_OK) {
+                process->state = PROCESS_STATE_RUNNING;
+                process->block_reason = PROCESS_BLOCK_NONE;
+                process->in_hostcall = 0;
+                slot->valid = 1;
+                preempt_safepoint();
+                m3ApiReturn(1);
+            }
+            if (rc != IPC_EMPTY) {
+                process->state = PROCESS_STATE_RUNNING;
+                process->block_reason = PROCESS_BLOCK_NONE;
+                process->in_hostcall = 0;
+                m3ApiReturn(-1);
+            }
             process_yield(PROCESS_RUN_BLOCKED);
             preempt_safepoint();
             continue;
         }
         if (rc != IPC_OK) {
+            process->block_reason = PROCESS_BLOCK_NONE;
+            process->in_hostcall = 0;
             m3ApiReturn(-1);
         }
+        process->block_reason = PROCESS_BLOCK_NONE;
+        process->in_hostcall = 0;
         slot->valid = 1;
         preempt_safepoint();
         m3ApiReturn(1);

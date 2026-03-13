@@ -37,6 +37,8 @@ extern int32_t wasmos_sched_ready_count(void)
     WASMOS_WASM_IMPORT("wasmos", "sched_ready_count");
 extern int32_t wasmos_sched_current_pid(void)
     WASMOS_WASM_IMPORT("wasmos", "sched_current_pid");
+extern int32_t wasmos_sched_yield(void)
+    WASMOS_WASM_IMPORT("wasmos", "sched_yield");
 extern int32_t wasmos_proc_info_ex(int32_t index, int32_t ptr, int32_t len, int32_t parent_ptr)
     WASMOS_WASM_IMPORT("wasmos", "proc_info_ex");
 extern int32_t wasmos_system_halt(void)
@@ -625,6 +627,7 @@ initialize(int32_t proc_endpoint,
             }
             int32_t rc = wasmos_console_read((int32_t)(uintptr_t)&g_line[g_line_len], 1);
             if (rc == 0) {
+                (void)wasmos_sched_yield();
                 continue;
             }
             if (rc < 0) {

@@ -358,6 +358,7 @@ static void process_reset_slot(process_t *proc) {
     proc->ticks_total = 0;
     proc->in_ready_queue = 0;
     proc->is_idle = 0;
+    proc->in_hostcall = 0;
     proc->ctx = (process_context_t){0};
     proc->ctx_canary_pre = 0;
     proc->ctx_canary_post = 0;
@@ -637,7 +638,9 @@ void process_block_on_ipc(process_t *process) {
     if (!process) {
         return;
     }
+    process->state = PROCESS_STATE_BLOCKED;
     process->block_reason = PROCESS_BLOCK_IPC;
+    process->wait_target_pid = 0;
 }
 
 int process_wait(process_t *process, uint32_t target_pid, int32_t *out_exit_status) {
@@ -709,10 +712,11 @@ uint32_t process_wake_by_context(uint32_t context_id) {
         if (proc->context_id != context_id) {
             continue;
         }
-        if (proc->state != PROCESS_STATE_BLOCKED) {
+        if (proc->block_reason != PROCESS_BLOCK_IPC) {
             continue;
         }
-        if (proc->block_reason != PROCESS_BLOCK_IPC) {
+        if (proc->state != PROCESS_STATE_BLOCKED &&
+            !(proc->state == PROCESS_STATE_RUNNING && proc == g_current_process)) {
             continue;
         }
         proc->block_reason = PROCESS_BLOCK_NONE;
@@ -773,9 +777,13 @@ int process_schedule_once(void) {
     if (result == PROCESS_RUN_EXITED) {
         process_mark_exited(proc, proc->exit_status);
     } else if (result == PROCESS_RUN_BLOCKED) {
-        proc->state = PROCESS_STATE_BLOCKED;
-        if (proc->block_reason == PROCESS_BLOCK_NONE) {
-            proc->block_reason = PROCESS_BLOCK_IPC;
+        if (proc->state == PROCESS_STATE_READY) {
+            proc->block_reason = PROCESS_BLOCK_NONE;
+        } else {
+            proc->state = PROCESS_STATE_BLOCKED;
+            if (proc->block_reason == PROCESS_BLOCK_NONE) {
+                proc->block_reason = PROCESS_BLOCK_IPC;
+            }
         }
     } else {
         proc->state = PROCESS_STATE_READY;
@@ -828,9 +836,6 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     if (g_in_context_switch) {
         return 0;
     }
-    if (g_current_process && process_str_eq(g_current_process->name, "chardev-server")) {
-        return 0;
-    }
     if (g_current_process && process_str_eq(g_current_process->name, "process-manager") &&
         g_pm_preempt_safe_depth == 0) {
         return 0;
@@ -840,6 +845,9 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     }
     if (!g_current_process || g_current_process->state != PROCESS_STATE_RUNNING) {
         process_clear_resched();
+        return 0;
+    }
+    if (g_current_process->in_hostcall) {
         return 0;
     }
 

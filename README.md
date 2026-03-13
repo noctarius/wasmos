@@ -125,6 +125,8 @@ Note: Zig requires an explicit wasm export for the WASMOS entry; the build adds
 The kernel uses a round-robin scheduler with a fixed time slice per process
 (see `PROCESS_DEFAULT_SLICE_TICKS` in `src/kernel/include/process.h`).
 User space can call the `sched_yield` wasm native to explicitly yield during busy loops.
+IPC receive host calls now mark the current process as non-preemptible until the receive path either returns or fully blocks, which closes a lost-wakeup race for long-lived IPC servers.
+The CLI yields while polling for console input so spawned apps can continue making progress while the prompt is idle.
 
 ### Configure
 ```
@@ -157,6 +159,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - QEMU smoke tests include a PIT timer tick marker check (`tests/test_timer_tick.py`).
 - QEMU smoke tests include an IPC wakeup marker check (`tests/test_ipc_wakeup.py`).
 - QEMU smoke tests include a preemption marker check (`tests/test_preempt_smoke.py`).
+- CLI integration tests include `exec chardev-preempt` to exercise the embedded chardev IPC path under scheduler activity.
 - The CLI tests include running `exec hello-zig` and asserting the Zig app prints its banner and returns to the prompt.
 - `cmake --build build --target zig_examples` builds the Zig hello WASMOS-APP when Zig is available
 - `run-qemu`, `run-qemu-test`, and `run-qemu-cli-test` copy `sysinit.wasmosapp`, `cli.wasmosapp`, and `hw_discovery.wasmosapp` into `esp/system/services` in addition to `esp/apps` (where applicable).

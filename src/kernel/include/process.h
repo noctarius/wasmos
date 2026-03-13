@@ -99,6 +99,7 @@ typedef struct process {
     uint64_t ticks_total;
     uint8_t in_ready_queue;
     uint8_t is_idle;
+    uint8_t in_hostcall;
     uint64_t ctx_canary_pre;
     process_context_t ctx;
     uint64_t ctx_canary_post;

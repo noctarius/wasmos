@@ -10,6 +10,7 @@ add_custom_command(
   OUTPUT ${WASM_HW_DISCOVERY_WASM}
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
   COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib
+          ${WASMOS_TRACE_DEFINE}
           -Wl,--no-entry -Wl,--strip-all
           -Wl,-z,stack-size=16384
           -Wl,--initial-memory=65536

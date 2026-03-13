@@ -10,6 +10,7 @@ add_custom_command(
   OUTPUT ${WASM_HELLO_C_WASM}
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
   COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
+          ${WASMOS_TRACE_DEFINE}
           -Wl,--no-entry -Wl,--strip-all
           -Wl,-z,stack-size=4096
           -Wl,--initial-memory=65536
@@ -53,6 +54,7 @@ add_custom_command(
   OUTPUT ${WASM_CHARDEV_CLIENT_WASM}
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
   COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
+          ${WASMOS_TRACE_DEFINE}
           -Wl,--no-entry -Wl,--strip-all
           -Wl,-z,stack-size=4096
           -Wl,--initial-memory=65536
@@ -107,6 +109,7 @@ add_custom_command(
   OUTPUT ${WASM_CHARDEV_PREEMPT_WASM}
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
   COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
+          ${WASMOS_TRACE_DEFINE}
           -Wl,--no-entry -Wl,--strip-all
           -Wl,-z,stack-size=4096
           -Wl,--initial-memory=65536
@@ -150,6 +153,7 @@ add_custom_command(
   OUTPUT ${WASM_INIT_SMOKE_WASM}
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
   COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
+          ${WASMOS_TRACE_DEFINE}
           -Wl,--no-entry -Wl,--strip-all
           -Wl,-z,stack-size=4096
           -Wl,--initial-memory=65536
@@ -193,6 +197,7 @@ add_custom_command(
   OUTPUT ${WASM_NATIVE_CALL_SMOKE_WASM}
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
   COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
+          ${WASMOS_TRACE_DEFINE}
           -Wl,--no-entry -Wl,--strip-all
           -Wl,-z,stack-size=4096
           -Wl,--initial-memory=65536
@@ -236,6 +241,7 @@ add_custom_command(
   OUTPUT ${WASM_FS_OPEN_SMOKE_WASM}
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
   COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
+          ${WASMOS_TRACE_DEFINE}
           -Wl,--no-entry -Wl,--strip-all
           -Wl,-z,stack-size=4096
           -Wl,--initial-memory=65536
@@ -280,6 +286,7 @@ add_custom_command(
   OUTPUT ${WASM_NATIVE_CALL_MIN_WASM}
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
   COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
+          ${WASMOS_TRACE_DEFINE}
           -Wl,--no-entry -Wl,--strip-all
           -Wl,-z,stack-size=4096
           -Wl,--initial-memory=65536

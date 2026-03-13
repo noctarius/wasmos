@@ -178,6 +178,12 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 
 Use `run-qemu-test` as the default compile+boot+halt check after code changes. Use `run-qemu-cli-test` for scripted CLI assertions (e.g. `ls` output).
 
+### Tracing
+- `WASMOS_TRACE` is a build-time define and defaults to `OFF`.
+- With tracing disabled, verbose init/process-manager/scheduler/sysinit tracing and `debug_mark(tag)` serial output stay hidden.
+- Enable verbose tracing with `cmake -S . -B build -DWASMOS_TRACE=ON`.
+- Normal boot/runtime output and failure diagnostics remain visible when tracing is off.
+
 ### Next steps
 1. Verify the UEFI toolchain flags for your host.
 2. Implement hardware drivers and a basic scheduler.
@@ -187,8 +193,8 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes. U
 - Each WASM program is expected to run in an isolated runtime context with its own memory regions.
 - Inter-component communication is IPC-based.
 - Userland C code should prefer the shared `lib/libc` headers and helpers instead of declaring per-module WASMOS imports locally.
-- Debugging: the `debug_mark(tag)` wasm native logs a tag and PID to serial to confirm app execution paths.
-- Debugging: PM logs app flags and entry returns, and `sysinit` emits debug_mark tags `0x1101..0x11FF` to trace its loop behavior in preemptive runs.
+- Debugging: with `WASMOS_TRACE=ON`, the `debug_mark(tag)` wasm native logs a tag and PID to serial to confirm app execution paths.
+- Debugging: with `WASMOS_TRACE=ON`, PM logs app flags and entry returns, and `sysinit` emits debug_mark tags `0x1101..0x11FF` to trace its loop behavior in preemptive runs.
 - Debugging: the kernel init path can temporarily bypass boot module spawning via `g_skip_wasm_boot` in `src/kernel/kernel.c` when isolating the wasm3 probe.
 - The #GP exception handler logs err/rip/cs/rflags plus current PID/name and stack bounds for debugging non-canonical instruction pointers.
 - Process stacks carry canaries at base/top and are checked on each process entry to catch overflows early.

@@ -224,17 +224,17 @@ void x86_irq_handler(uint64_t vector) {
 
 void x86_timer_irq_handler(irq_frame_t *frame) {
     static uint8_t logged;
-    if (!logged) {
+    if (WASMOS_TRACE && !logged) {
         logged = 1;
-        serial_write("[irq] frame ptr=");
-        serial_write_hex64_local((uint64_t)(uintptr_t)frame);
+        trace_write("[irq] frame ptr=");
+        trace_do(serial_write_hex64_local((uint64_t)(uintptr_t)frame));
         if (frame) {
-            serial_write("[irq] frame rip=");
-            serial_write_hex64_local(frame->rip);
-            serial_write("[irq] frame cs=");
-            serial_write_hex64_local(frame->cs);
-            serial_write("[irq] frame rflags=");
-            serial_write_hex64_local(frame->rflags);
+            trace_write("[irq] frame rip=");
+            trace_do(serial_write_hex64_local(frame->rip));
+            trace_write("[irq] frame cs=");
+            trace_do(serial_write_hex64_local(frame->cs));
+            trace_write("[irq] frame rflags=");
+            trace_do(serial_write_hex64_local(frame->rflags));
         }
     }
     x86_irq_handler(IRQ_VECTOR_BASE);

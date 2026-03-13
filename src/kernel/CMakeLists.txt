@@ -1,5 +1,5 @@
 set(LDFLAGS_KERNEL -nostdlib -T ${KERNEL_DIR}/arch/x86_64/linker.ld)
-set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -I${WASM_DIR}/wasm3/source -Wno-unused-parameter)
+set(CFLAGS_KERNEL ${CFLAGS_KERNEL} ${WASMOS_TRACE_DEFINE} -I${WASM_DIR}/wasm3/source -Wno-unused-parameter)
 set(CFLAGS_WASM3 ${CFLAGS_KERNEL} -I${WASM_DIR}/wasm3/source -Dd_m3HasFloat=0 -Wno-unused-parameter -Wno-unused-variable)
 
 set(KERNEL_OBJS
@@ -145,6 +145,7 @@ target_include_directories(kernel_ide PRIVATE
   ${WASM_DIR}
   ${WASM_DIR}/wasm3/source
 )
+target_compile_definitions(kernel_ide PRIVATE WASMOS_TRACE=${WASMOS_TRACE_VALUE})
 
 get_property(WASMOS_KERNEL_BLOBS GLOBAL PROPERTY WASMOS_KERNEL_BLOBS)
 if (WASMOS_KERNEL_BLOBS)

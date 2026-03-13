@@ -48,7 +48,8 @@ class HelloZigTest(unittest.TestCase):
             [
                 b"spawned pid",
                 b"Hello from Zig on WASMOS!",
-                b"Entry: hello_zig_step",
+                b"Entry: main",
+                b"startup.nsh readable: true",
             ],
         )
 

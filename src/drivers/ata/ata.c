@@ -1,40 +1,6 @@
 #include <stdint.h>
+#include "wasmos/api.h"
 #include "wasmos_driver_abi.h"
-
-#if defined(__wasm__)
-#define WASMOS_WASM_IMPORT(module_name, symbol_name) \
-    __attribute__((import_module(module_name), import_name(symbol_name)))
-#define WASMOS_WASM_EXPORT __attribute__((visibility("default")))
-#else
-#define WASMOS_WASM_IMPORT(module_name, import_name)
-#define WASMOS_WASM_EXPORT
-#endif
-
-extern int32_t wasmos_ipc_send(int32_t destination_endpoint,
-                               int32_t source_endpoint,
-                               int32_t type,
-                               int32_t request_id,
-                               int32_t arg0,
-                               int32_t arg1,
-                               int32_t arg2,
-                               int32_t arg3)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_send");
-extern int32_t wasmos_ipc_recv(int32_t endpoint)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_recv");
-extern int32_t wasmos_ipc_last_field(int32_t field)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_last_field");
-extern int32_t wasmos_block_buffer_write(int32_t phys, int32_t ptr, int32_t len, int32_t offset)
-    WASMOS_WASM_IMPORT("wasmos", "block_buffer_write");
-extern int32_t wasmos_io_in8(int32_t port)
-    WASMOS_WASM_IMPORT("wasmos", "io_in8");
-extern int32_t wasmos_io_in16(int32_t port)
-    WASMOS_WASM_IMPORT("wasmos", "io_in16");
-extern int32_t wasmos_io_out8(int32_t port, int32_t value)
-    WASMOS_WASM_IMPORT("wasmos", "io_out8");
-extern int32_t wasmos_io_out16(int32_t port, int32_t value)
-    WASMOS_WASM_IMPORT("wasmos", "io_out16");
-extern int32_t wasmos_io_wait(void)
-    WASMOS_WASM_IMPORT("wasmos", "io_wait");
 
 #define ATA_PRIMARY_BASE 0x1F0
 #define ATA_PRIMARY_CTRL 0x3F6
@@ -215,45 +181,39 @@ ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t arg0, int32
 }
 
 WASMOS_WASM_EXPORT int32_t
-ata_step(int32_t ignored_type,
-         int32_t block_endpoint,
-         int32_t ignored_arg1,
-         int32_t ignored_arg2,
-         int32_t ignored_arg3)
+initialize(int32_t block_endpoint,
+           int32_t ignored_arg1,
+           int32_t ignored_arg2,
+           int32_t ignored_arg3)
 {
-    (void)ignored_type;
     (void)ignored_arg1;
     (void)ignored_arg2;
     (void)ignored_arg3;
 
-    if (g_block_endpoint < 0) {
-        g_block_endpoint = block_endpoint;
-        g_present = 0;
-        g_sector_count = 0;
-        uint16_t identify_words[256];
-        if (ata_identify(identify_words) == 0) {
-            uint32_t lba28 = ((uint32_t)identify_words[61] << 16) | identify_words[60];
-            g_sector_count = lba28;
-            g_present = 1;
+    g_block_endpoint = block_endpoint;
+    g_present = 0;
+    g_sector_count = 0;
+    uint16_t identify_words[256];
+    if (ata_identify(identify_words) == 0) {
+        uint32_t lba28 = ((uint32_t)identify_words[61] << 16) | identify_words[60];
+        g_sector_count = lba28;
+        g_present = 1;
+    }
+
+    for (;;) {
+        int32_t recv_rc = wasmos_ipc_recv(g_block_endpoint);
+        if (recv_rc < 0) {
+            continue;
         }
-        return WASMOS_WASM_STEP_YIELDED;
-    }
 
-    int32_t recv_rc = wasmos_ipc_recv(g_block_endpoint);
-    if (recv_rc == 0) {
-        return WASMOS_WASM_STEP_BLOCKED;
-    }
-    if (recv_rc < 0) {
-        return WASMOS_WASM_STEP_FAILED;
-    }
+        int32_t req_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+        int32_t req_id = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+        int32_t arg0 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+        int32_t arg1 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+        int32_t arg2 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
+        int32_t source = wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE);
 
-    int32_t req_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
-    int32_t req_id = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
-    int32_t arg0 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-    int32_t arg1 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
-    int32_t arg2 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
-    int32_t source = wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE);
-
-    ata_handle_ipc(req_type, source, req_id, arg0, arg1, arg2);
-    return WASMOS_WASM_STEP_YIELDED;
+        ata_handle_ipc(req_type, source, req_id, arg0, arg1, arg2);
+    }
+    return 0;
 }

@@ -4,7 +4,7 @@ This repository uses Codex CLI to assist with development. Follow these conventi
 
 ## Scope
 - You are operating inside `/Volumes/git/wasmos`.
-- The project is a minimal x86_64 UEFI boot + kernel scaffold intended to host a WASM runtime (WAMR).
+- The project is a minimal x86_64 UEFI boot + kernel scaffold intended to host a WASM runtime (wasm3).
 
 ## Always Do
 - Read `README.md` and `ARCHITECTURE.md` at the start of a new task.
@@ -18,7 +18,7 @@ This repository uses Codex CLI to assist with development. Follow these conventi
 - Do not introduce large frameworks or heavy dependencies.
 - Do not add extra documentation files unless explicitly asked.
 - Do not break the boot flow or kernel entry contract.
-- NEVER modify code in `libs/wasm/wasm-micro-runtime` or in any other dependency imported via git subtree.
+- NEVER modify code in `libs/wasm/wasm3` or in any other dependency imported via git subtree.
 
 ## Code Style
 - Keep C/ASM code minimal and explicit.
@@ -41,4 +41,5 @@ This repository uses Codex CLI to assist with development. Follow these conventi
 - Make a git commit after each prompt iteration when changes are made.
 - Do not amend commits unless explicitly requested.
 - `git add` and `git commit` are always allowed in this repository.
- - ALWAYS run `cmake --build build --target run-qemu-test` before staging and committing changes.
+- ALWAYS run `cmake --build build --target run-qemu-test` before staging and committing changes.
+- ALWAYS run unit tests, especially newly created tests, and also the full existing unit test suite, before declaring work complete.

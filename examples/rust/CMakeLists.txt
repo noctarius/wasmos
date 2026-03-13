@@ -1,3 +1,5 @@
+set(WASM_HELLO_RUST_LIBC_SRC ${LIBC_DIR}/rust/wasmos.rs)
+
 if (RUST_ENABLE)
   find_program(RUSTC_EXECUTABLE rustc)
   if (NOT RUSTC_EXECUTABLE)
@@ -13,14 +15,14 @@ if (RUST_ENABLE)
             -C panic=abort
             -C codegen-units=1
             -C link-arg=--no-entry
-            -C link-arg=--export=hello_rust_step
+            -C link-arg=--export=main
             -C link-arg=--strip-all
             -C link-arg=--initial-memory=2097152
             -C link-arg=--max-memory=2097152
             --crate-type=cdylib
             ${WASM_HELLO_RUST_SRC}
             -o ${WASM_HELLO_RUST_WASM}
-    DEPENDS ${WASM_HELLO_RUST_SRC}
+    DEPENDS ${WASM_HELLO_RUST_SRC} ${WASM_HELLO_RUST_LIBC_SRC}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Building wasm hello-rust module"
     VERBATIM
@@ -31,7 +33,7 @@ if (RUST_ENABLE)
             ${WASM_HELLO_RUST_WASM}
             ${WASM_HELLO_RUST_APP}
             hello-rust
-            hello_rust_step
+            main
             16
             16
             4

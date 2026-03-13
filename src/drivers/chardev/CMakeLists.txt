@@ -1,3 +1,11 @@
+set(WASM_LIBC_C_SOURCES
+  ${LIBC_DIR}/src/ctype.c
+  ${LIBC_DIR}/src/stdlib.c
+  ${LIBC_DIR}/src/string.c
+  ${LIBC_DIR}/src/stdio.c
+  ${LIBC_DIR}/src/unistd.c
+)
+
 add_custom_command(
   OUTPUT ${WASM_CHARDEV_DRIVER_WASM}
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
@@ -7,14 +15,16 @@ add_custom_command(
           -Wl,-z,stack-size=4096
           -Wl,--initial-memory=65536
           -Wl,--max-memory=65536
-          -Wl,--export=chardev_init
-          -Wl,--export=chardev_read_byte
-          -Wl,--export=chardev_write_byte
-          -Wl,--export=chardev_ipc_dispatch
+          -Wl,--export=initialize
+          -I${LIBC_DIR}/include
           -I${DRIVER_WASM_DIR}/include
+          ${WASM_LIBC_C_SOURCES}
           ${WASM_CHARDEV_DRIVER_SRC}
           -o ${WASM_CHARDEV_DRIVER_WASM}
-  DEPENDS ${WASM_CHARDEV_DRIVER_SRC} ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
+  DEPENDS ${WASM_CHARDEV_DRIVER_SRC} ${WASM_LIBC_C_SOURCES} ${LIBC_DIR}/include/ctype.h
+          ${LIBC_DIR}/include/stdio.h ${LIBC_DIR}/include/stdlib.h ${LIBC_DIR}/include/string.h
+          ${LIBC_DIR}/include/wasmos/api.h ${LIBC_DIR}/include/wasmos/ipc.h
+          ${LIBC_DIR}/include/wasmos/imports.h ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Building wasm chardev driver module"
   VERBATIM

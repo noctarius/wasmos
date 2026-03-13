@@ -1,8 +1,15 @@
 .section .text
 
 .extern x86_exception_panic
+.extern x86_exception_panic_frame
 .extern x86_page_fault_handler
 .extern x86_irq_handler
+.extern x86_timer_irq_handler
+.extern x86_irq_iret_corrupt
+.extern process_preempt_trampoline
+.extern g_irq0_ist_stack
+.extern g_irq0_ist_canary
+.extern x86_irq_ist_corrupt
 
 .macro PUSH_REGS
     pushq %r15
@@ -52,28 +59,66 @@ isr_exception_\num:
 .endm
 
 DECL_EXC 0
-DECL_EXC 1
+ .global isr_exception_1
+isr_exception_1:
+    pushq $0
+    mov %rsp, %rsi
+    mov $1, %rdi
+    call x86_exception_panic_frame
+1:
+    cli
+    hlt
+    jmp 1b
 DECL_EXC 2
-DECL_EXC 3
+ .global isr_exception_3
+isr_exception_3:
+    pushq $0
+    mov %rsp, %rsi
+    mov $3, %rdi
+    call x86_exception_panic_frame
+1:
+    cli
+    hlt
+    jmp 1b
 DECL_EXC 4
 DECL_EXC 5
-DECL_EXC 6
+ .global isr_exception_6
+isr_exception_6:
+    pushq $0
+    mov %rsp, %rsi
+    mov $6, %rdi
+    call x86_exception_panic_frame
+1:
+    cli
+    hlt
+    jmp 1b
 DECL_EXC 7
 DECL_EXC 8
 DECL_EXC 9
 DECL_EXC 10
 DECL_EXC 11
 DECL_EXC 12
-DECL_EXC 13
+ .global isr_exception_13
+isr_exception_13:
+    mov %rsp, %rsi
+    mov $13, %rdi
+    call x86_exception_panic_frame
+1:
+    cli
+    hlt
+    jmp 1b
  .global isr_exception_14
 isr_exception_14:
     PUSH_REGS
     mov 120(%rsp), %rdi
+    subq $8, %rsp
     call x86_page_fault_handler
+    addq $8, %rsp
     test %eax, %eax
     jz 2f
+    leaq 120(%rsp), %rsi
     mov $14, %rdi
-    call x86_exception_panic
+    call x86_exception_panic_frame
 2:
     POP_REGS
     add $8, %rsp
@@ -96,17 +141,75 @@ DECL_EXC 29
 DECL_EXC 30
 DECL_EXC 31
 
+ .global isr_irq_0
+isr_irq_0:
+    PUSH_REGS
+    movq g_irq0_ist_canary(%rip), %rax
+    cmpq %rax, g_irq0_ist_stack(%rip)
+    jne 3f
+    subq $48, %rsp
+    movabs $0xC0FFEE0DD15EA5E, %rax
+    movq %rax, (%rsp)
+    movq %rax, 8(%rsp)
+    movq 168(%rsp), %rax
+    movq %rax, 16(%rsp)
+    movq 176(%rsp), %rax
+    movq %rax, 24(%rsp)
+    movq 184(%rsp), %rax
+    movq %rax, 32(%rsp)
+    leaq 48(%rsp), %rdi
+    subq $8, %rsp
+    call x86_timer_irq_handler
+    addq $8, %rsp
+    movabs $0xC0FFEE0DD15EA5E, %rax
+    cmpq %rax, (%rsp)
+    jne 1f
+    cmpq %rax, 8(%rsp)
+    jne 1f
+    movq 16(%rsp), %rax
+    cmpq %rax, 168(%rsp)
+    je 0f
+    movq 168(%rsp), %rax
+    leaq process_preempt_trampoline(%rip), %rcx
+    cmpq %rcx, %rax
+    jne 1f
+0:
+    movq 24(%rsp), %rax
+    cmpq %rax, 176(%rsp)
+    jne 1f
+    movq 32(%rsp), %rax
+    cmpq %rax, 184(%rsp)
+    jne 1f
+    addq $48, %rsp
+    POP_REGS
+    iretq
+1:
+    leaq 16(%rsp), %rdi
+    leaq 168(%rsp), %rsi
+    call x86_irq_iret_corrupt
+2:
+    cli
+    hlt
+    jmp 2b
+3:
+    call x86_irq_ist_corrupt
+4:
+    cli
+    hlt
+    jmp 4b
+
 .macro DECL_IRQ num vec
 .global isr_irq_\num
 isr_irq_\num:
     PUSH_REGS
     mov $\vec, %rdi
+    subq $8, %rsp
     call x86_irq_handler
+    addq $8, %rsp
     POP_REGS
     iretq
 .endm
 
-DECL_IRQ 0 32
 DECL_IRQ 1 33
 DECL_IRQ 2 34
 DECL_IRQ 3 35

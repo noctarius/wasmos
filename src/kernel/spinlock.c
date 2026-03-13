@@ -1,4 +1,5 @@
 #include "spinlock.h"
+#include "process.h"
 
 void spinlock_init(spinlock_t *lock) {
     if (!lock) {
@@ -18,7 +19,12 @@ void spinlock_lock(spinlock_t *lock) {
     if (!lock) {
         return;
     }
-    while (!spinlock_try_lock(lock)) {
+    for (;;) {
+        preempt_disable();
+        if (spinlock_try_lock(lock)) {
+            return;
+        }
+        preempt_enable();
         __asm__ volatile("pause");
     }
 }
@@ -28,4 +34,5 @@ void spinlock_unlock(spinlock_t *lock) {
         return;
     }
     __sync_lock_release(&lock->state);
+    preempt_enable();
 }

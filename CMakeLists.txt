@@ -24,8 +24,8 @@ endif ()
 set(BUILD_DIR ${CMAKE_BINARY_DIR})
 set(BOOT_DIR ${CMAKE_SOURCE_DIR}/src/boot)
 set(KERNEL_DIR ${CMAKE_SOURCE_DIR}/src/kernel)
+set(LIBC_DIR ${CMAKE_SOURCE_DIR}/lib/libc)
 set(WASM_DIR ${CMAKE_SOURCE_DIR}/libs/wasm)
-set(WAMR_DIR ${WASM_DIR}/wasm-micro-runtime)
 set(DRIVER_WASM_DIR ${CMAKE_SOURCE_DIR}/src/drivers)
 set(EXAMPLES_C_DIR ${CMAKE_SOURCE_DIR}/examples/c)
 set(EXAMPLES_GO_DIR ${CMAKE_SOURCE_DIR}/examples/go)
@@ -41,6 +41,21 @@ set(WASM_CHARDEV_CLIENT_SRC ${EXAMPLES_C_DIR}/chardev_client/chardev_client.c)
 set(WASM_CHARDEV_CLIENT_WASM ${BUILD_DIR}/chardev_client.wasm)
 set(WASM_CHARDEV_CLIENT_BLOB ${BUILD_DIR}/chardev_client_blob.o)
 set(WASM_CHARDEV_CLIENT_APP ${BUILD_DIR}/chardev_client.wasmosapp)
+set(WASM_CHARDEV_PREEMPT_SRC ${EXAMPLES_C_DIR}/chardev_preempt/chardev_preempt.c)
+set(WASM_CHARDEV_PREEMPT_WASM ${BUILD_DIR}/chardev_preempt.wasm)
+set(WASM_CHARDEV_PREEMPT_APP ${BUILD_DIR}/chardev_preempt.wasmosapp)
+set(WASM_INIT_SMOKE_SRC ${EXAMPLES_C_DIR}/init_smoke/init_smoke.c)
+set(WASM_INIT_SMOKE_WASM ${BUILD_DIR}/init_smoke.wasm)
+set(WASM_INIT_SMOKE_APP ${BUILD_DIR}/init_smoke.wasmosapp)
+set(WASM_FS_OPEN_SMOKE_SRC ${EXAMPLES_C_DIR}/fs_open_smoke/fs_open_smoke.c)
+set(WASM_FS_OPEN_SMOKE_WASM ${BUILD_DIR}/fs_open_smoke.wasm)
+set(WASM_FS_OPEN_SMOKE_APP ${BUILD_DIR}/fs_open_smoke.wasmosapp)
+set(WASM_NATIVE_CALL_MIN_SRC ${EXAMPLES_C_DIR}/native_call_min/native_call_min.c)
+set(WASM_NATIVE_CALL_MIN_WASM ${BUILD_DIR}/native_call_min.wasm)
+set(WASM_NATIVE_CALL_MIN_APP ${BUILD_DIR}/native_call_min.wasmosapp)
+set(WASM_NATIVE_CALL_SMOKE_SRC ${EXAMPLES_C_DIR}/native_call_smoke/native_call_smoke.c)
+set(WASM_NATIVE_CALL_SMOKE_WASM ${BUILD_DIR}/native_call_smoke.wasm)
+set(WASM_NATIVE_CALL_SMOKE_APP ${BUILD_DIR}/native_call_smoke.wasmosapp)
 set(WASM_ATA_DRIVER_SRC ${DRIVER_WASM_DIR}/ata/ata.c)
 set(WASM_ATA_DRIVER_WASM ${BUILD_DIR}/ata.wasm)
 set(WASM_ATA_APP ${BUILD_DIR}/ata.wasmosapp)
@@ -205,7 +220,7 @@ get_filename_component(LLD_DIR ${LLD_PATH} DIRECTORY)
 
 set(CFLAGS_COMMON -ffreestanding -fno-stack-protector -fno-builtin -Wall -Wextra -Werror -g)
 set(CFLAGS_EFI ${CFLAGS_COMMON} -target x86_64-unknown-uefi -fshort-wchar -mno-red-zone -B${CLANG_BIN_DIR})
-set(CFLAGS_KERNEL ${CFLAGS_COMMON} -target ${KERNEL_TARGET_TRIPLE} -mno-red-zone -mcmodel=kernel -m64 -I${WASM_DIR} -I${KERNEL_DIR}/include -I${DRIVER_WASM_DIR}/include -B${LLD_DIR})
+set(CFLAGS_KERNEL ${CFLAGS_COMMON} -target ${KERNEL_TARGET_TRIPLE} -mno-red-zone -mcmodel=kernel -m64 -I${WASM_DIR} -I${KERNEL_DIR}/include -I${DRIVER_WASM_DIR}/include -B${LLD_DIR} -DWASMOS_ENABLE_PREEMPT_GUARD=1 -DWASMOS_ENABLE_SAFEPOINT=1)
 if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   find_program(LLD_LINK_PATH ${LLD_LINK} HINTS ${LLD_HINTS})
   if (LLD_LINK_PATH)
@@ -287,118 +302,6 @@ if (OVMF_VARS AND NOT EXISTS ${OVMF_VARS})
   set(OVMF_VARS "" CACHE FILEPATH "Path to OVMF_VARS.fd (optional)" FORCE)
 endif ()
 
-option(WAMR_ENABLE "Enable WAMR runtime integration (requires linking WAMR)" ON)
-option(WAMR_LINK "Link the WAMR runtime library" ON)
-if (WAMR_ENABLE AND WAMR_LINK)
-  set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -DWAMR_ENABLED=1
-      -I${WAMR_DIR}/core/iwasm/include
-      -I${WAMR_DIR}/core/iwasm/common
-      -I${WAMR_DIR}/core/shared/utils
-      -I${WAMR_DIR}/core/shared/platform/include
-      -I${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos)
-endif ()
-
-if (WAMR_LINK)
-  set(WAMR_BUILD_PLATFORM "wasmos" CACHE STRING "WAMR build platform")
-  set(WAMR_BUILD_TARGET "X86_64" CACHE STRING "WAMR build target")
-  set(WAMR_BUILD_INTERP 1 CACHE BOOL "Enable WAMR interpreter")
-  set(WAMR_BUILD_FAST_INTERP 0 CACHE BOOL "Disable WAMR fast interpreter")
-  set(WAMR_BUILD_AOT 0 CACHE BOOL "Disable WAMR AOT")
-  set(WAMR_BUILD_JIT 0 CACHE BOOL "Disable WAMR JIT")
-  set(WAMR_BUILD_LIBC_BUILTIN 0 CACHE BOOL "Disable WAMR builtin libc")
-  set(WAMR_BUILD_LIBC_WASI 0 CACHE BOOL "Disable WAMR WASI libc")
-  set(WAMR_BUILD_LIBC_UVWASI 0 CACHE BOOL "Disable WAMR uvwasi libc")
-  set(WAMR_DISABLE_APP_ENTRY 1 CACHE BOOL "Disable WAMR app entry helpers")
-  set(WAMR_BUILD_LIB_PTHREAD 0 CACHE BOOL "Disable WAMR pthreads")
-  set(WAMR_BUILD_THREAD_MGR 0 CACHE BOOL "Disable WAMR thread mgr")
-
-  set(WAMR_ROOT_DIR ${WAMR_DIR})
-  set(SHARED_PLATFORM_CONFIG ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/shared_platform.cmake)
-  include(${WAMR_ROOT_DIR}/build-scripts/runtime_lib.cmake)
-
-  # runtime_lib.cmake configures required feature macros via add_definitions().
-  # Propagate them into our custom WAMR object build commands.
-  get_directory_property(WAMR_COMPILE_DEFINITIONS COMPILE_DEFINITIONS)
-  set(WAMR_DEF_NAMES "")
-  set(WAMR_DEF_VALUES "")
-  foreach(def IN LISTS WAMR_COMPILE_DEFINITIONS)
-    string(REGEX REPLACE "^([^=]+)=?.*$" "\\1" def_name "${def}")
-    list(FIND WAMR_DEF_NAMES "${def_name}" def_idx)
-    if (NOT def_idx EQUAL -1)
-      list(REMOVE_AT WAMR_DEF_NAMES ${def_idx})
-      list(REMOVE_AT WAMR_DEF_VALUES ${def_idx})
-    endif ()
-    list(APPEND WAMR_DEF_NAMES "${def_name}")
-    list(APPEND WAMR_DEF_VALUES "${def}")
-  endforeach()
-  set(WAMR_DEF_FLAGS "")
-  foreach(def IN LISTS WAMR_DEF_VALUES)
-    list(APPEND WAMR_DEF_FLAGS -D${def})
-  endforeach()
-
-  if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND NOT MACOS_SDK_PATH)
-    execute_process(
-      COMMAND xcrun --sdk macosx --show-sdk-path
-      OUTPUT_VARIABLE MACOS_SDK_PATH
-      OUTPUT_STRIP_TRAILING_WHITESPACE
-    )
-  endif ()
-
-  find_program(LLVM_AR llvm-ar HINTS ${CLANG_BIN_DIR} /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin)
-  if (NOT LLVM_AR)
-    message(FATAL_ERROR "llvm-ar not found. Install LLVM and ensure llvm-ar is in PATH.")
-  endif ()
-
-  set(WAMR_INCLUDE_DIRS
-    ${WAMR_ROOT_DIR}/core/iwasm/interpreter
-    ${WAMR_ROOT_DIR}/core/iwasm/libraries/libc-builtin
-    ${WAMR_ROOT_DIR}/core/iwasm/include
-    ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos
-    ${WAMR_ROOT_DIR}/core/shared/platform/include
-    ${WAMR_ROOT_DIR}/core/shared/mem-alloc
-    ${WAMR_ROOT_DIR}/core/iwasm/common
-    ${WAMR_ROOT_DIR}/core/shared/utils
-    ${WAMR_ROOT_DIR}/core/shared
-  )
-
-  set(WAMR_INC_FLAGS "")
-  foreach(dir IN LISTS WAMR_INCLUDE_DIRS)
-    list(APPEND WAMR_INC_FLAGS -I${dir})
-  endforeach()
-  if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND MACOS_SDK_PATH)
-    list(APPEND WAMR_INC_FLAGS -isysroot ${MACOS_SDK_PATH} -isystem ${MACOS_SDK_PATH}/usr/include)
-  endif ()
-
-  set(WAMR_OBJ_DIR ${BUILD_DIR}/wamr_obj)
-  set(WAMR_OBJS "")
-  foreach(src IN LISTS WAMR_RUNTIME_LIB_SOURCE)
-    string(REPLACE "/" "_" obj_name ${src})
-    string(REPLACE "." "_" obj_name ${obj_name})
-    set(obj ${WAMR_OBJ_DIR}/${obj_name}.o)
-    add_custom_command(
-      OUTPUT ${obj}
-      COMMAND ${CMAKE_COMMAND} -E make_directory ${WAMR_OBJ_DIR}
-      COMMAND ${CLANG} ${CFLAGS_KERNEL} ${WAMR_DEF_FLAGS} -Wno-error -Wno-unused-command-line-argument -Wno-error=unused-parameter ${WAMR_INC_FLAGS}
-              -c ${src} -o ${obj}
-      DEPENDS ${src}
-      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-      VERBATIM
-    )
-    list(APPEND WAMR_OBJS ${obj})
-  endforeach()
-
-  set(WAMR_RUNTIME_LIB ${BUILD_DIR}/libwamr_runtime.a)
-  add_custom_command(
-    OUTPUT ${WAMR_RUNTIME_LIB}
-    COMMAND ${LLVM_AR} rcs ${WAMR_RUNTIME_LIB} ${WAMR_OBJS}
-    DEPENDS ${WAMR_OBJS}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    VERBATIM
-  )
-  add_custom_target(wamr_runtime_lib DEPENDS ${WAMR_RUNTIME_LIB})
-  set(KERNEL_LINK_LIBS ${KERNEL_LINK_LIBS} ${WAMR_RUNTIME_LIB})
-endif ()
-
 add_subdirectory(src/boot)
 add_subdirectory(src/drivers)
 add_subdirectory(examples/c)
@@ -428,11 +331,9 @@ else ()
   add_custom_target(wasm_driver_blobs)
 endif ()
 add_dependencies(kernel wasm_driver_blobs)
-if (WAMR_LINK)
-  add_dependencies(kernel wamr_runtime_lib)
-endif ()
 
 # QEMU helper
+set(QEMU_GDB_PORT 1234 CACHE STRING "QEMU gdb port for run-qemu-debug")
 if (AS_ENABLE)
   set(AS_HELLO_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${AS_HELLO_APP} ${BUILD_DIR}/esp/apps/hello_as.wasmosapp
@@ -440,6 +341,21 @@ if (AS_ENABLE)
 endif ()
 set(HELLO_C_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HELLO_C_APP} ${BUILD_DIR}/esp/apps/hello_c.wasmosapp
+)
+set(CHARDEV_PREEMPT_COPY_CMD
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_PREEMPT_APP} ${BUILD_DIR}/esp/apps/chardev_preempt.wasmosapp
+)
+set(INIT_SMOKE_COPY_CMD
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_SMOKE_APP} ${BUILD_DIR}/esp/apps/init_smoke.wasmosapp
+)
+set(FS_OPEN_SMOKE_COPY_CMD
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FS_OPEN_SMOKE_APP} ${BUILD_DIR}/esp/apps/fs_open_smoke.wasmosapp
+)
+set(NATIVE_CALL_MIN_COPY_CMD
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_NATIVE_CALL_MIN_APP} ${BUILD_DIR}/esp/apps/native_call_min.wasmosapp
+)
+set(NATIVE_CALL_SMOKE_COPY_CMD
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_NATIVE_CALL_SMOKE_APP} ${BUILD_DIR}/esp/apps/native_call_smoke.wasmosapp
 )
 if (RUST_ENABLE)
   set(RUST_HELLO_COPY_CMD
@@ -463,7 +379,6 @@ if (OVMF_VARS AND OVMF_CODE)
     set(OVMF_VARS "" CACHE FILEPATH "Path to OVMF_VARS.fd (optional)" FORCE)
   endif ()
 endif ()
-
 if (OVMF_VARS)
   add_custom_target(run-qemu
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
@@ -482,6 +397,11 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
+    ${CHARDEV_PREEMPT_COPY_CMD}
+    ${INIT_SMOKE_COPY_CMD}
+    ${FS_OPEN_SMOKE_COPY_CMD}
+    ${NATIVE_CALL_MIN_COPY_CMD}
+    ${NATIVE_CALL_SMOKE_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
@@ -493,6 +413,42 @@ if (OVMF_VARS)
     DEPENDS bootloader kernel
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU"
+    VERBATIM
+  )
+  add_custom_target(run-qemu-debug
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
+    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
+    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HW_DISCOVERY_APP} ${BUILD_DIR}/esp/system/services/hw_discovery.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
+    ${AS_HELLO_COPY_CMD}
+    ${HELLO_C_COPY_CMD}
+    ${CHARDEV_PREEMPT_COPY_CMD}
+    ${INIT_SMOKE_COPY_CMD}
+    ${FS_OPEN_SMOKE_COPY_CMD}
+    ${NATIVE_CALL_MIN_COPY_CMD}
+    ${NATIVE_CALL_SMOKE_COPY_CMD}
+    ${RUST_HELLO_COPY_CMD}
+    ${GO_HELLO_COPY_CMD}
+    ${ZIG_HELLO_COPY_CMD}
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
+    COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
+            -S -gdb tcp::${QEMU_GDB_PORT}
+            -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
+            -drive if=pflash,format=raw,file=${OVMF_VARS}
+            -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
+    DEPENDS bootloader kernel
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Running in QEMU (paused for GDB on port ${QEMU_GDB_PORT})"
     VERBATIM
   )
   add_custom_target(run-qemu-test
@@ -512,6 +468,11 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
+    ${CHARDEV_PREEMPT_COPY_CMD}
+    ${INIT_SMOKE_COPY_CMD}
+    ${FS_OPEN_SMOKE_COPY_CMD}
+    ${NATIVE_CALL_MIN_COPY_CMD}
+    ${NATIVE_CALL_SMOKE_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
@@ -544,6 +505,11 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
+    ${CHARDEV_PREEMPT_COPY_CMD}
+    ${INIT_SMOKE_COPY_CMD}
+    ${FS_OPEN_SMOKE_COPY_CMD}
+    ${NATIVE_CALL_MIN_COPY_CMD}
+    ${NATIVE_CALL_SMOKE_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
@@ -579,6 +545,11 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
+    ${CHARDEV_PREEMPT_COPY_CMD}
+    ${INIT_SMOKE_COPY_CMD}
+    ${FS_OPEN_SMOKE_COPY_CMD}
+    ${NATIVE_CALL_MIN_COPY_CMD}
+    ${NATIVE_CALL_SMOKE_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
@@ -589,6 +560,41 @@ else ()
     DEPENDS bootloader kernel
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU"
+    VERBATIM
+  )
+  add_custom_target(run-qemu-debug
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
+    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
+    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HW_DISCOVERY_APP} ${BUILD_DIR}/esp/system/services/hw_discovery.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
+    ${AS_HELLO_COPY_CMD}
+    ${HELLO_C_COPY_CMD}
+    ${CHARDEV_PREEMPT_COPY_CMD}
+    ${INIT_SMOKE_COPY_CMD}
+    ${FS_OPEN_SMOKE_COPY_CMD}
+    ${NATIVE_CALL_MIN_COPY_CMD}
+    ${NATIVE_CALL_SMOKE_COPY_CMD}
+    ${RUST_HELLO_COPY_CMD}
+    ${GO_HELLO_COPY_CMD}
+    ${ZIG_HELLO_COPY_CMD}
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
+    COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
+            -S -gdb tcp::${QEMU_GDB_PORT}
+            -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
+            -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
+    DEPENDS bootloader kernel
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Running in QEMU (paused for GDB on port ${QEMU_GDB_PORT})"
     VERBATIM
   )
   if (AS_ENABLE)
@@ -610,6 +616,11 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
+    ${CHARDEV_PREEMPT_COPY_CMD}
+    ${INIT_SMOKE_COPY_CMD}
+    ${FS_OPEN_SMOKE_COPY_CMD}
+    ${NATIVE_CALL_MIN_COPY_CMD}
+    ${NATIVE_CALL_SMOKE_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
@@ -641,6 +652,11 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
+    ${CHARDEV_PREEMPT_COPY_CMD}
+    ${INIT_SMOKE_COPY_CMD}
+    ${FS_OPEN_SMOKE_COPY_CMD}
+    ${NATIVE_CALL_MIN_COPY_CMD}
+    ${NATIVE_CALL_SMOKE_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
@@ -659,24 +675,29 @@ endif ()
 add_dependencies(run-qemu c_examples services drivers)
 add_dependencies(run-qemu-test c_examples services drivers)
 add_dependencies(run-qemu-cli-test c_examples services drivers)
+add_dependencies(run-qemu-debug c_examples services drivers)
 
 if (TARGET assemblyscript_examples)
   add_dependencies(run-qemu assemblyscript_examples)
   add_dependencies(run-qemu-test assemblyscript_examples)
   add_dependencies(run-qemu-cli-test assemblyscript_examples)
+  add_dependencies(run-qemu-debug assemblyscript_examples)
 endif ()
 if (TARGET rust_examples)
   add_dependencies(run-qemu rust_examples)
   add_dependencies(run-qemu-test rust_examples)
   add_dependencies(run-qemu-cli-test rust_examples)
+  add_dependencies(run-qemu-debug rust_examples)
 endif ()
 if (TARGET go_examples)
   add_dependencies(run-qemu go_examples)
   add_dependencies(run-qemu-test go_examples)
   add_dependencies(run-qemu-cli-test go_examples)
+  add_dependencies(run-qemu-debug go_examples)
 endif ()
 if (TARGET zig_examples)
   add_dependencies(run-qemu zig_examples)
   add_dependencies(run-qemu-test zig_examples)
   add_dependencies(run-qemu-cli-test zig_examples)
+  add_dependencies(run-qemu-debug zig_examples)
 endif ()

@@ -36,6 +36,7 @@ void ipc_init(void);
 int ipc_endpoint_create(uint32_t owner_context_id, uint32_t *out_endpoint);
 int ipc_notification_create(uint32_t owner_context_id, uint32_t *out_endpoint);
 int ipc_endpoint_owner(uint32_t endpoint, uint32_t *out_owner_context_id);
+int ipc_endpoint_count(uint32_t endpoint, uint32_t *out_count);
 int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_message_t *message);
 int ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t *out_message);
 int ipc_notify_from(uint32_t sender_context_id, uint32_t endpoint);

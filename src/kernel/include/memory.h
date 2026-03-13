@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "boot.h"
 
-#define MM_MAX_CONTEXTS 16
+#define MM_MAX_CONTEXTS 32
 #define MM_MAX_REGIONS 8
 
 typedef enum {
@@ -47,6 +47,7 @@ int mm_context_region_for_type(mm_context_t *ctx, mem_region_type_t type, mem_re
 int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint64_t error_code, uint64_t *out_mapped_base);
 mm_context_t *mm_context_get(uint32_t id);
 mm_context_t *mm_context_create(uint32_t id);
+int mm_context_destroy(uint32_t id);
 int mm_shared_create(uint64_t pages, uint32_t flags, uint32_t *out_id, uint64_t *out_base);
 int mm_shared_map(mm_context_t *ctx, uint32_t id, uint32_t flags, uint64_t *out_base);
 int mm_shared_unmap(mm_context_t *ctx, uint32_t id);

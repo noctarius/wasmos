@@ -3,7 +3,7 @@
 This document describes a detailed design for adding preemptive multitasking and a timer-driven scheduler to WASMOS. It is intentionally separate from `ARCHITECTURE.md` and is meant to be reviewed and iterated before merging the concepts into the main architecture notes.
 
 **Status**
-Draft. No code changes yet.
+Implemented and tested in-tree. See “Current State” and “Phased Implementation Plan” for what is complete vs pending.
 
 **Scope**
 - Introduce preemptive scheduling with periodic timer interrupts.
@@ -17,10 +17,25 @@ Draft. No code changes yet.
 - Kernel debugging/tracing infrastructure beyond minimal counters.
 
 **Current Baseline**
-- Cooperative scheduler: processes run until they yield, block, or exit.
-- Blocking happens on IPC receive/wait.
-- Timer interrupts are not used for preemption.
+- Preemptive round-robin scheduling is enabled.
+- Timer interrupts (PIT/IRQ0) drive time-slice accounting and preemption.
+- Blocking happens on IPC receive/wait; wakeups enqueue READY processes.
 - Processes run in ring 0 with shared kernel address space.
+
+**Current State (Implementation)**
+- PIT timer implemented in `src/kernel/timer.c` / `src/kernel/include/timer.h`.
+- IRQ0 handler updates tick accounting and invokes preemption logic.
+- Ready queue is a fixed-size ring buffer in `process.c`.
+- Per-process context (`process_context_t`) holds full GPRs + RIP/RSP/RFLAGS.
+- Context switch implemented in `src/kernel/arch/x86_64/context_switch.S`.
+- Timer preemption uses an IRQ preempt trampoline (`process_preempt_trampoline`) that yields to the scheduler.
+- Spinlocks disable preemption while held.
+- Scheduler metrics (timer ticks, ready queue depth, current running PID) are exposed via wasm natives and surfaced in `ps`.
+- Idle task exists and runs `hlt` when no READY tasks are available.
+- Process stacks are allocated from the physical frame allocator (not static BSS).
+- Kernel image range is reserved from the physical frame allocator at boot.
+- Process/context caps raised: `PROCESS_MAX_COUNT=32`, `MM_MAX_CONTEXTS=32`.
+- Tests: `run-qemu-test` and `run-qemu-cli-test` pass.
 
 **Design Principles**
 - Determinism and minimalism first: keep the preemption core small.
@@ -35,6 +50,7 @@ Draft. No code changes yet.
 - Provide a `timer_init(hz)` that programs PIT channel 0.
 - Hook IRQ0 handler into IDT with `IRQ_TIMER_VECTOR` after PIC remap.
 - Keep PIT configuration in `src/kernel/timer.c` and `src/kernel/include/timer.h`.
+**State**: Implemented, tick rate fixed at 250 Hz default.
 
 **IRQ Path and Preemption**
 - IRQ0 ISR must be minimal:
@@ -43,6 +59,7 @@ Draft. No code changes yet.
   - Update current process accounting.
   - Set `need_resched = 1`.
 - Avoid doing scheduling directly in the ISR. Defer reschedule to a safe point.
+**State**: Implemented. IRQ0 updates tick accounting and preempt logic; preemption redirects to a trampoline that yields to the scheduler.
 
 **Preemption Control**
 - Add a per-CPU `preempt_count` counter for nested preemption disables.
@@ -53,6 +70,7 @@ Draft. No code changes yet.
 - Provide helpers:
   - `preempt_disable()`, `preempt_enable()`
   - `preempt_maybe_resched()` called at safe points
+**State**: Implemented `preempt_disable`/`preempt_enable` and guards in spinlocks. Safe-point helper not added; preemption is timer-driven via trampoline.
 
 **Context Switching**
 - Introduce a saved CPU context struct per process:
@@ -69,6 +87,7 @@ Draft. No code changes yet.
 - Ensure interrupt state is consistent:
   - Switch with interrupts disabled
   - Restore `RFLAGS` for the new task
+**State**: Implemented with a single `context_switch`.
 
 **Process Model Changes**
 - Extend `process_t`:
@@ -78,6 +97,7 @@ Draft. No code changes yet.
   - Add `ticks_remaining`
   - Add `ctx` (saved register state)
 - Track current process per CPU (single CPU for now).
+**State**: Implemented. `process_t` carries tick accounting and saved context.
 
 **Run Queue**
 - Add a ready queue data structure:
@@ -99,6 +119,7 @@ Draft. No code changes yet.
   - Move current RUNNING to READY (if still runnable).
   - Pop next READY from queue.
   - Reset `ticks_remaining` to `time_slice_ticks`.
+**State**: Implemented round-robin with fixed time slices.
 
 **Blocking and Wakeup Semantics**
 - IPC recv/wait:
@@ -109,6 +130,7 @@ Draft. No code changes yet.
   - Receiver will run on next scheduling decision.
 - Ensure wakeup is safe when called from interrupt context:
   - If in IRQ, only enqueue and set a resched flag.
+**State**: Implemented. Wakeups enqueue READY tasks; preemption scheduling occurs via the trampoline.
 
 **Kernel Main Loop**
 - Replace cooperative loop:
@@ -117,23 +139,26 @@ Draft. No code changes yet.
 - Idle task:
   - Executes `hlt` in a loop.
   - Must be preemptible by IRQ0.
+**State**: Implemented idle task and scheduler loop; idle executes `hlt`.
 
-**Interaction with WAMR and WASM Processes**
-- WAMR execution is not aware of preemption.
+**Interaction with wasm3 and WASM Processes**
+- wasm3 execution is not aware of preemption.
 - Preempting a WASM process is equivalent to preempting any kernel process.
-- Ensure WAMR runtime state is per-process and does not assume uninterrupted execution.
-- Avoid long critical sections inside WAMR host callbacks.
+- Ensure runtime state is per-process and does not assume uninterrupted execution.
+- Avoid long critical sections inside runtime host callbacks.
 
 **IPC Path Considerations**
 - IPC operations must be atomic with respect to preemption.
 - Wrap IPC queue manipulation with both `preempt_disable` and spinlocks.
 - IPC send/recv must remain lock-bounded to avoid priority inversion.
+**State**: Implemented with spinlocks disabling preemption around IPC queue manipulation.
 
 **Memory Management Implications**
 - Context switch is designed for future per-process address spaces.
 - Plan for `CR3` switching on context switch once user mode is introduced.
 - Ensure kernel mappings remain shared and valid across address spaces.
 - The scheduler must be aware of address space boundaries if/when introduced.
+**State**: Kernel reserves its image range in the physical frame allocator and allocates process stacks from PFA. No per-process address spaces yet.
 
 **User Mode and Privilege Separation (Future)**
 - Preemption design should be compatible with ring-3:
@@ -143,14 +168,10 @@ Draft. No code changes yet.
 - Add a privilege switch during context restore for user tasks.
 
 **External Modules and Dependencies**
-Changes required in external modules (WAMR):
-- `libs/wasm/wasm-micro-runtime` should not be modified.
-- WAMR usage in kernel must avoid global state that assumes single-threaded execution.
-- Any WAMR host API calls invoked during IRQ must be avoided; IRQ path stays in kernel only.
-
-Changes required in platform stubs:
-- `src/wasm-micro-runtime/platform/wasmos/` must remain compatible.
-- If any platform memory APIs assume non-preemptive execution, isolate them with locks.
+Changes required in external modules (wasm3):
+- `libs/wasm/wasm3` should not be modified.
+- wasm3 usage in kernel must avoid global state that assumes single-threaded execution.
+- Any wasm runtime host API calls invoked during IRQ must be avoided; IRQ path stays in kernel only.
 
 **Files and Modules to Add**
 - `src/kernel/timer.c` / `src/kernel/include/timer.h`
@@ -161,6 +182,7 @@ Changes required in platform stubs:
   - Run queue operations and scheduling API.
 - `src/kernel/scheduler.c`
   - Core scheduling logic.
+**State**: Not added. Scheduling logic resides in `process.c` for now.
 
 **Existing Files to Modify**
 - `src/kernel/kernel.c`
@@ -172,6 +194,7 @@ Changes required in platform stubs:
   - Guard IPC queues under preemption.
 - `src/kernel/irq.c`
   - Add IRQ0 handler for timer tick and reschedule path.
+**State**: Implemented.
 
 **State Machine: Process Lifecycle**
 - NEW -> READY: inserted in run queue.
@@ -196,21 +219,23 @@ Changes required in platform stubs:
 **Failure Modes to Avoid**
 - Preempting while holding spinlocks: deadlock or corruption.
 - Scheduling from IRQ while another core (future) is modifying queues.
-- Running WAMR from IRQ context.
+- Running wasm runtime from IRQ context.
 - Starvation if READY queue is mishandled.
 
 **Validation Plan**
 - Add a busy-loop WASM app and verify CLI responsiveness.
 - Add a yield-free kernel task and verify time slicing.
 - Confirm IPC wakeups still work under tick-based preemption.
+**State**: Implemented via kernel preemption smoke test plus IPC wakeup and timer tick tests.
 
 **Open Questions**
 - Preemption aggressiveness: start conservative (safe-point-only), then audit toward moderate if needed.
 
 **Phased Implementation Plan**
-1. Add PIT + IRQ0 tick counter; no preemption.
-2. Add per-process `ticks_remaining` and `need_resched` logic.
-3. Implement context switch and preemptive round-robin.
-4. Convert kernel loop to idle task with timer-driven scheduling.
-5. Audit IPC paths for preemption safety.
-6. Add minimal scheduler metrics and diagnostics.
+1. Add PIT + IRQ0 tick counter; no preemption. **Done**
+2. Add per-process `ticks_remaining` and `need_resched` logic. **Done**
+3. Implement context switch and preemptive round-robin. **Done**
+4. Convert kernel loop to idle task with timer-driven scheduling. **Done**
+5. Audit IPC paths for preemption safety. **Done (spinlock-preempt guard)**
+6. Add minimal scheduler metrics and diagnostics. **Pending**
+**State**: Phases 1-5 are complete; phase 6 remains pending.

@@ -71,11 +71,17 @@ typedef struct {
     char entry[64];
     uint32_t resolved_ep_count;
     uint32_t resolved_eps[WASMOS_APP_MAX_REQUIRED_ENDPOINTS];
+    uint32_t entry_argc;
+    uint32_t entry_argv[4];
 } wasmos_app_instance_t;
 
 int wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out_desc);
-int wasmos_app_start(wasmos_app_instance_t *instance, const wasmos_app_desc_t *desc, uint32_t owner_context_id);
-int wasmos_app_dispatch(wasmos_app_instance_t *instance, const ipc_message_t *request, int32_t *out_value);
+int wasmos_app_start(wasmos_app_instance_t *instance,
+                     const wasmos_app_desc_t *desc,
+                     uint32_t owner_context_id,
+                     const uint32_t *init_argv,
+                     uint32_t init_argc);
+int wasmos_app_call_entry(wasmos_app_instance_t *instance);
 void wasmos_app_stop(wasmos_app_instance_t *instance);
 void wasmos_app_set_policy_hooks(wasmos_app_endpoint_resolver_t endpoint_resolver,
                                  wasmos_app_capability_granter_t capability_granter);

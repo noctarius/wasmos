@@ -1,3 +1,4 @@
+#include <stddef.h>
 #include "wasmos_app.h"
 #include "serial.h"
 
@@ -69,6 +70,21 @@ copy_ascii_field(char *dst, uint32_t dst_size, const uint8_t *src, uint32_t src_
     }
     dst[src_len] = '\0';
     return 0;
+}
+
+static void
+app_write_hex64(uint64_t value)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    char buf[21];
+    buf[0] = '0';
+    buf[1] = 'x';
+    for (int i = 0; i < 16; ++i) {
+        buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
+    }
+    buf[18] = '\n';
+    buf[19] = '\0';
+    serial_write(buf);
 }
 
 int
@@ -176,7 +192,39 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
 }
 
 int
-wasmos_app_start(wasmos_app_instance_t *instance, const wasmos_app_desc_t *desc, uint32_t owner_context_id)
+wasmos_app_call_entry(wasmos_app_instance_t *instance)
+{
+    if (!instance || !instance->active) {
+        serial_write("[wasmos-app] entry skipped (inactive)\n");
+        return -1;
+    }
+    serial_write("[wasmos-app] entry start ");
+    serial_write(instance->name);
+    serial_write(" export=");
+    serial_write(instance->entry);
+    serial_write("\n");
+    int rc = wasm_driver_call_unlocked(&instance->driver,
+                                       instance->entry,
+                                       instance->entry_argc,
+                                       instance->entry_argv);
+    serial_write("[wasmos-app] entry rc=");
+    app_write_hex64((uint64_t)(uint32_t)rc);
+    if (rc == 0) {
+        serial_write("[wasmos-app] entry ok ");
+    } else {
+        serial_write("[wasmos-app] entry failed ");
+    }
+    serial_write(instance->name);
+    serial_write("\n");
+    return rc;
+}
+
+int
+wasmos_app_start(wasmos_app_instance_t *instance,
+                 const wasmos_app_desc_t *desc,
+                 uint32_t owner_context_id,
+                 const uint32_t *init_argv,
+                 uint32_t init_argc)
 {
     if (!instance || !desc || owner_context_id == 0) {
         return -1;
@@ -224,10 +272,19 @@ wasmos_app_start(wasmos_app_instance_t *instance, const wasmos_app_desc_t *desc,
     manifest.name = instance->name;
     manifest.module_bytes = desc->wasm_bytes;
     manifest.module_size = desc->wasm_size;
-    manifest.init_export = 0;
-    manifest.dispatch_export = instance->entry;
+    manifest.entry_export = 0;
+    manifest.entry_argc = 0;
+    manifest.entry_argv = 0;
     manifest.stack_size = desc->stack_pages_hint ? desc->stack_pages_hint * 4096u : 64u * 1024u;
     manifest.heap_size = desc->heap_pages_hint ? desc->heap_pages_hint * 4096u : 64u * 1024u;
+
+    if (init_argc > 4) {
+        init_argc = 4;
+    }
+    instance->entry_argc = init_argc;
+    for (uint32_t i = 0; i < 4; ++i) {
+        instance->entry_argv[i] = init_argv ? init_argv[i] : 0;
+    }
 
     if (wasm_driver_start(&instance->driver, &manifest, owner_context_id) != 0) {
         serial_write("[wasmos-app] start failed\n");
@@ -238,15 +295,6 @@ wasmos_app_start(wasmos_app_instance_t *instance, const wasmos_app_desc_t *desc,
     instance->owner_context_id = owner_context_id;
     instance->active = 1;
     return 0;
-}
-
-int
-wasmos_app_dispatch(wasmos_app_instance_t *instance, const ipc_message_t *request, int32_t *out_value)
-{
-    if (!instance || !instance->active) {
-        return -1;
-    }
-    return wasm_driver_dispatch(&instance->driver, request, out_value);
 }
 
 void
@@ -260,6 +308,7 @@ wasmos_app_stop(wasmos_app_instance_t *instance)
     instance->flags = 0;
     instance->owner_context_id = 0;
     instance->resolved_ep_count = 0;
+    instance->entry_argc = 0;
 }
 
 void

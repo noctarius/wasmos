@@ -9,8 +9,10 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/kernel.o
   ${BUILD_DIR}/cpu.o
   ${BUILD_DIR}/memory.o
+  ${BUILD_DIR}/libc.o
   ${BUILD_DIR}/paging.o
   ${BUILD_DIR}/physmem.o
+  ${BUILD_DIR}/runtime_context.o
   ${BUILD_DIR}/ipc.o
   ${BUILD_DIR}/process.o
   ${BUILD_DIR}/spinlock.o
@@ -46,9 +48,11 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/arch/x86_64/cpu_isr.S
   ${KERNEL_DIR}/kernel.c
   ${KERNEL_DIR}/cpu.c
+  ${KERNEL_DIR}/libc.c
   ${KERNEL_DIR}/memory.c
   ${KERNEL_DIR}/paging.c
   ${KERNEL_DIR}/physmem.c
+  ${KERNEL_DIR}/runtime_context.c
   ${KERNEL_DIR}/ipc.c
   ${KERNEL_DIR}/process.c
   ${KERNEL_DIR}/spinlock.c
@@ -84,6 +88,7 @@ target_sources(kernel_sources INTERFACE
   ${KERNEL_DIR}/include/memory_service.h
   ${KERNEL_DIR}/include/paging.h
   ${KERNEL_DIR}/include/physmem.h
+  ${KERNEL_DIR}/include/runtime_context.h
   ${KERNEL_DIR}/include/process.h
   ${KERNEL_DIR}/include/process_manager.h
   ${KERNEL_DIR}/include/irq.h
@@ -97,9 +102,6 @@ target_sources(kernel_sources INTERFACE
   ${KERNEL_DIR}/wasm3_probe.h
   ${KERNEL_DIR}/include/io.h
   ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_init.c
-  ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_stub.c
-  ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_internal.h
 )
 target_include_directories(kernel_sources INTERFACE ${KERNEL_DIR}/include ${WASM_DIR} ${DRIVER_WASM_DIR}/include)
 
@@ -113,6 +115,7 @@ add_library(kernel_ide OBJECT EXCLUDE_FROM_ALL
   ${KERNEL_DIR}/include/memory.h
   ${KERNEL_DIR}/include/paging.h
   ${KERNEL_DIR}/include/physmem.h
+  ${KERNEL_DIR}/include/runtime_context.h
   ${KERNEL_DIR}/include/process.h
   ${KERNEL_DIR}/include/process_manager.h
   ${KERNEL_DIR}/include/memory_service.h
@@ -133,17 +136,12 @@ add_library(kernel_ide OBJECT EXCLUDE_FROM_ALL
   ${SERVICES_DIR}/sysinit/init.c
   ${SERVICES_DIR}/cli/cli.c
   ${SERVICES_DIR}/hw_discovery/hw_discovery.c
-  ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_init.c
-  ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_stub.c
-  ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_internal.h
 )
 target_include_directories(kernel_ide PRIVATE
   ${KERNEL_DIR}/include
   ${DRIVER_WASM_DIR}/include
-  ${WAMR_DIR}/core/iwasm/include
   ${WASM_DIR}
   ${WASM_DIR}/wasm3/source
-  ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos
 )
 
 get_property(WASMOS_KERNEL_BLOBS GLOBAL PROPERTY WASMOS_KERNEL_BLOBS)
@@ -158,9 +156,11 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/cpu_isr.S -o ${BUILD_DIR}/cpu_isr.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel.c -o ${BUILD_DIR}/kernel.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/cpu.c -o ${BUILD_DIR}/cpu.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/libc.c -o ${BUILD_DIR}/libc.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory.c -o ${BUILD_DIR}/memory.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/paging.c -o ${BUILD_DIR}/paging.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/physmem.c -o ${BUILD_DIR}/physmem.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/runtime_context.c -o ${BUILD_DIR}/runtime_context.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/ipc.c -o ${BUILD_DIR}/ipc.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process.c -o ${BUILD_DIR}/process.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/spinlock.c -o ${BUILD_DIR}/spinlock.o

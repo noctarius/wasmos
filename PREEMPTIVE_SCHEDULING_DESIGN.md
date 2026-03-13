@@ -141,11 +141,11 @@ Implemented and tested in-tree. See “Current State” and “Phased Implementa
   - Must be preemptible by IRQ0.
 **State**: Implemented idle task and scheduler loop; idle executes `hlt`.
 
-**Interaction with WAMR and WASM Processes**
-- WAMR execution is not aware of preemption.
+**Interaction with wasm3 and WASM Processes**
+- wasm3 execution is not aware of preemption.
 - Preempting a WASM process is equivalent to preempting any kernel process.
-- Ensure WAMR runtime state is per-process and does not assume uninterrupted execution.
-- Avoid long critical sections inside WAMR host callbacks.
+- Ensure runtime state is per-process and does not assume uninterrupted execution.
+- Avoid long critical sections inside runtime host callbacks.
 
 **IPC Path Considerations**
 - IPC operations must be atomic with respect to preemption.
@@ -168,14 +168,10 @@ Implemented and tested in-tree. See “Current State” and “Phased Implementa
 - Add a privilege switch during context restore for user tasks.
 
 **External Modules and Dependencies**
-Changes required in external modules (WAMR):
-- `libs/wasm/wasm-micro-runtime` should not be modified.
-- WAMR usage in kernel must avoid global state that assumes single-threaded execution.
-- Any WAMR host API calls invoked during IRQ must be avoided; IRQ path stays in kernel only.
-
-Changes required in platform stubs:
-- `src/wasm-micro-runtime/platform/wasmos/` must remain compatible.
-- If any platform memory APIs assume non-preemptive execution, isolate them with locks.
+Changes required in external modules (wasm3):
+- `libs/wasm/wasm3` should not be modified.
+- wasm3 usage in kernel must avoid global state that assumes single-threaded execution.
+- Any wasm runtime host API calls invoked during IRQ must be avoided; IRQ path stays in kernel only.
 
 **Files and Modules to Add**
 - `src/kernel/timer.c` / `src/kernel/include/timer.h`
@@ -223,7 +219,7 @@ Changes required in platform stubs:
 **Failure Modes to Avoid**
 - Preempting while holding spinlocks: deadlock or corruption.
 - Scheduling from IRQ while another core (future) is modifying queues.
-- Running WAMR from IRQ context.
+- Running wasm runtime from IRQ context.
 - Starvation if READY queue is mishandled.
 
 **Validation Plan**

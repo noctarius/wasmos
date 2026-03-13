@@ -15,6 +15,10 @@ Additional observation: after fixing the packer flags, PM logs `sysinit` as
 sysinit logs appearing. This suggests the WAMR entry still exits after a single
 opcode without executing the sysinit loop or native calls.
 
+Quick probe: `native-call-min` (debug_mark + console_write only) is now spawned
+before `native-call-smoke`. It still returns with `native call count=0`, so the
+minimal native import path remains unexecuted in preemptive mode.
+
 ## Hypotheses Under Consideration
 - Preemption/timer interaction disrupting interpreter state
 - Incorrect frame/IP state when switching into the interpreter

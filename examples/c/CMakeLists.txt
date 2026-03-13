@@ -204,10 +204,49 @@ add_custom_command(
   VERBATIM
 )
 
-add_custom_target(c_examples DEPENDS ${WASM_HELLO_C_APP} ${WASM_CHARDEV_CLIENT_APP} ${WASM_CHARDEV_PREEMPT_APP} ${WASM_INIT_SMOKE_APP} ${WASM_NATIVE_CALL_SMOKE_APP})
+add_custom_command(
+  OUTPUT ${WASM_NATIVE_CALL_MIN_WASM}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
+          -Wl,--no-entry -Wl,--strip-all
+          -Wl,-z,stack-size=4096
+          -Wl,--initial-memory=65536
+          -Wl,--max-memory=65536
+          -Wl,--allow-undefined
+          -Wl,--export=main
+          -I${DRIVER_WASM_DIR}/include
+          ${WASM_NATIVE_CALL_MIN_SRC}
+          -o ${WASM_NATIVE_CALL_MIN_WASM}
+  DEPENDS ${WASM_NATIVE_CALL_MIN_SRC} ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Building wasm native call min module"
+  VERBATIM
+)
+
+add_custom_command(
+  OUTPUT ${WASM_NATIVE_CALL_MIN_APP}
+  COMMAND ${WASMOS_APP_PACKER}
+          ${WASM_NATIVE_CALL_MIN_WASM}
+          ${WASM_NATIVE_CALL_MIN_APP}
+          native-call-min
+          main
+          16
+          16
+          4
+          -
+          0
+          -
+          0
+  DEPENDS ${WASM_NATIVE_CALL_MIN_WASM} make_wasmos_app
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Packing wasm native call min as WASMOS-APP"
+  VERBATIM
+)
+
+add_custom_target(c_examples DEPENDS ${WASM_HELLO_C_APP} ${WASM_CHARDEV_CLIENT_APP} ${WASM_CHARDEV_PREEMPT_APP} ${WASM_INIT_SMOKE_APP} ${WASM_NATIVE_CALL_MIN_APP} ${WASM_NATIVE_CALL_SMOKE_APP})
 add_custom_target(chardev_client_blob DEPENDS ${WASM_CHARDEV_CLIENT_BLOB})
 
-set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_HELLO_C_APP} ${WASM_CHARDEV_CLIENT_APP} ${WASM_CHARDEV_PREEMPT_APP} ${WASM_INIT_SMOKE_APP} ${WASM_NATIVE_CALL_SMOKE_APP})
+set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_HELLO_C_APP} ${WASM_CHARDEV_CLIENT_APP} ${WASM_CHARDEV_PREEMPT_APP} ${WASM_INIT_SMOKE_APP} ${WASM_NATIVE_CALL_MIN_APP} ${WASM_NATIVE_CALL_SMOKE_APP})
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS c_examples)
 set_property(GLOBAL APPEND PROPERTY WASMOS_KERNEL_BLOBS ${WASM_CHARDEV_CLIENT_BLOB})
 set_property(GLOBAL APPEND PROPERTY WASMOS_KERNEL_BLOB_TARGETS chardev_client_blob)

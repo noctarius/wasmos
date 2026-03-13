@@ -110,6 +110,7 @@ cmake --build build --target go_examples
 
 The sample lives at `examples/go/hello/hello_go.go` and is packed as `hello_go.wasmosapp`.
 Note: TinyGo exports a small `wasmos_entry` wrapper that calls `main` to satisfy both the Go runtime and the WASMOS entry contract.
+The Go shim in `lib/libc/go/wasmos.go` now exposes Go-facing `stdio` and `fs` wrappers so TinyGo modules can use shared libc-style behavior without binding directly to the raw WASMOS C-shaped import surface.
 
 ### Zig (optional)
 Zig can be used to write WASMOS applications. Install Zig and ensure it is in your PATH.

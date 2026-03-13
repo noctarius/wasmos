@@ -14,6 +14,49 @@ strlen(const char *s)
     return len;
 }
 
+int
+strcmp(const char *lhs, const char *rhs)
+{
+    size_t i = 0;
+
+    if (lhs == rhs) {
+        return 0;
+    }
+    if (!lhs) {
+        return -1;
+    }
+    if (!rhs) {
+        return 1;
+    }
+    while (lhs[i] && rhs[i]) {
+        if (lhs[i] != rhs[i]) {
+            return (int)(unsigned char)lhs[i] - (int)(unsigned char)rhs[i];
+        }
+        i++;
+    }
+    return (int)(unsigned char)lhs[i] - (int)(unsigned char)rhs[i];
+}
+
+int
+strncmp(const char *lhs, const char *rhs, size_t count)
+{
+    if (count == 0 || lhs == rhs) {
+        return 0;
+    }
+    if (!lhs) {
+        return -1;
+    }
+    if (!rhs) {
+        return 1;
+    }
+    for (size_t i = 0; i < count; ++i) {
+        if (lhs[i] != rhs[i] || lhs[i] == '\0' || rhs[i] == '\0') {
+            return (int)(unsigned char)lhs[i] - (int)(unsigned char)rhs[i];
+        }
+    }
+    return 0;
+}
+
 void *
 memcpy(void *dest, const void *src, size_t count)
 {

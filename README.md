@@ -8,7 +8,7 @@ IMPORTANT: Create a git commit after each prompt iteration.
 ## Layout
 - `src/boot/` UEFI application (PE/COFF) that loads `kernel.elf` and jumps to its entry.
 - `src/kernel/` Freestanding kernel (C + ASM) with a tiny boot-time runtime.
-- `lib/libc/` Minimal user-space libc and per-language shims shared by WASMOS applications.
+- `lib/libc/` Minimal user-space libc, shared C-side WASMOS wrapper headers, and per-language shims shared by WASMOS applications, drivers, and services.
 - `libs/wasm/` WASM runtime sources (currently wasm3).
 - `examples/c/` Example C WASM applications.
 - `examples/go/` Example Go (TinyGo) WASM applications.
@@ -48,6 +48,7 @@ If it isn't present, download OVMF from edk2 and pass `-DOVMF_CODE=/path/to/OVMF
 - wasm3 is vendored via git subtree at `libs/wasm/wasm3`.
 - This branch uses a per-process bump allocator for `malloc/calloc/realloc` in `src/kernel/wasm3_shim.c` and disables the wasm3 fixed heap.
 - Kernel-side wasm3 runtime create/load/call/free paths execute with preemption disabled so timer IRQs do not interrupt runtime mutation.
+- `lib/libc` now provides a shared userland C surface for common helpers such as `strlen`, `strcmp`, `strncmp`, `tolower`, `toupper`, and `putsn`, alongside reusable WASMOS host wrapper headers in `lib/libc/include/wasmos/`.
 
 ### AssemblyScript (optional)
 AssemblyScript can be used to write WASMOS drivers, services, and applications. Install AssemblyScript via npm and ensure `asc` is available in your PATH (for example via a global install or `npm link`):
@@ -176,6 +177,7 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes. U
 - WASMOS follows a microkernel direction: the kernel keeps only minimal primitives, while drivers/services/apps are WASM programs.
 - Each WASM program is expected to run in an isolated runtime context with its own memory regions.
 - Inter-component communication is IPC-based.
+- Userland C code should prefer the shared `lib/libc` headers and helpers instead of declaring per-module WASMOS imports locally.
 - Debugging: the `debug_mark(tag)` wasm native logs a tag and PID to serial to confirm app execution paths.
 - Debugging: PM logs app flags and entry returns, and `sysinit` emits debug_mark tags `0x1101..0x11FF` to trace its loop behavior in preemptive runs.
 - Debugging: the kernel init path can temporarily bypass boot module spawning via `g_skip_wasm_boot` in `src/kernel/kernel.c` when isolating the wasm3 probe.

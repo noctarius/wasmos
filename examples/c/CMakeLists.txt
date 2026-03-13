@@ -1,4 +1,5 @@
 set(WASM_LIBC_C_SOURCES
+  ${LIBC_DIR}/src/ctype.c
   ${LIBC_DIR}/src/string.c
   ${LIBC_DIR}/src/stdio.c
 )

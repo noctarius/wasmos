@@ -1,42 +1,8 @@
 #include <stdint.h>
+#include "stdio.h"
+#include "string.h"
+#include "wasmos/api.h"
 #include "wasmos_driver_abi.h"
-
-#if defined(__wasm__)
-#define WASMOS_WASM_IMPORT(module_name, symbol_name) \
-    __attribute__((import_module(module_name), import_name(symbol_name)))
-#define WASMOS_WASM_EXPORT __attribute__((visibility("default")))
-#else
-#define WASMOS_WASM_IMPORT(module_name, import_name)
-#define WASMOS_WASM_EXPORT
-#endif
-
-extern int32_t wasmos_ipc_create_endpoint(void)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_create_endpoint");
-extern int32_t wasmos_ipc_send(int32_t destination_endpoint,
-                               int32_t source_endpoint,
-                               int32_t type,
-                               int32_t request_id,
-                               int32_t arg0,
-                               int32_t arg1,
-                               int32_t arg2,
-                               int32_t arg3)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_send");
-extern int32_t wasmos_ipc_recv(int32_t endpoint)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_recv");
-extern int32_t wasmos_ipc_last_field(int32_t field)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_last_field");
-extern int32_t wasmos_console_write(int32_t ptr, int32_t len)
-    WASMOS_WASM_IMPORT("wasmos", "console_write");
-extern int32_t wasmos_debug_mark(int32_t tag)
-    WASMOS_WASM_IMPORT("wasmos", "debug_mark");
-extern int32_t wasmos_boot_module_name(int32_t index, int32_t buf, int32_t buf_len)
-    WASMOS_WASM_IMPORT("wasmos", "boot_module_name");
-extern int32_t wasmos_proc_count(void)
-    WASMOS_WASM_IMPORT("wasmos", "proc_count");
-extern int32_t wasmos_proc_info(int32_t index, int32_t buf, int32_t buf_len)
-    WASMOS_WASM_IMPORT("wasmos", "proc_info");
-extern int32_t wasmos_sched_yield(void)
-    WASMOS_WASM_IMPORT("wasmos", "sched_yield");
 
 static int32_t g_reply_endpoint = -1;
 static int32_t g_spawn_request_id = 1;
@@ -63,17 +29,7 @@ stall_forever(void)
 static int
 str_eq(const char *a, const char *b)
 {
-    int i = 0;
-    if (!a || !b) {
-        return 0;
-    }
-    while (a[i] && b[i]) {
-        if (a[i] != b[i]) {
-            return 0;
-        }
-        i++;
-    }
-    return a[i] == '\0' && b[i] == '\0';
+    return strcmp(a, b) == 0;
 }
 
 static void
@@ -82,10 +38,7 @@ log_line(const char *s)
     if (!s) {
         return;
     }
-    int len = 0;
-    while (s[len]) {
-        len++;
-    }
+    int len = (int)strlen(s);
     if (len > 0) {
         int32_t rc = g_console_write((int32_t)(uintptr_t)s, len);
         if (rc < 0) {

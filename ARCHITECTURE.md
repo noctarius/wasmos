@@ -51,6 +51,7 @@ Kernel responsibilities:
 - Memory management mechanisms (page tables, region mapping, allocation primitives).
 - Interrupt and timer dispatch to user space via nonblocking notifications.
 - Embedded WASM drivers use an `initialize` entry as their long-running execution loop.
+- Application modules expose a stable `wasmos_main` ABI entry owned by their language shim; the shim then invokes the language-facing entrypoint.
 
 ### Scheduler
 Current policy is round-robin with a fixed time slice (see `PROCESS_DEFAULT_SLICE_TICKS` in `src/kernel/include/process.h`).
@@ -254,6 +255,7 @@ This guide captures microkernel-informed design decisions and a stepwise plan fo
 - `src/boot/` UEFI application (PE/COFF) that loads `kernel.elf` from the ESP.
 - `src/kernel/` Freestanding kernel (C + ASM).
 - `lib/libc/` Minimal user-space libc surface, shared C-side WASMOS wrapper headers, and per-language shims for WASMOS applications, drivers, and services; it stays separate from the freestanding kernel runtime code in `src/kernel/`.
+- Application-facing shims now own the exported `wasmos_main` ABI entry and translate it into language-native entrypoints, while still exposing raw startup slots for advanced cases.
 - The AssemblyScript shim in `lib/libc/assemblyscript/wasmos.ts` now wraps the raw host ABI behind AssemblyScript-facing `std` and `fs` helpers so AssemblyScript code can use libc-style behavior without importing the C-shaped host symbols directly; the shim no longer keeps free-function compatibility aliases for console output helpers such as `putsn`, and exposes a namespaced `std.printf` entry point for preformatted output.
 - The Go shim in `lib/libc/go/wasmos.go` now wraps the raw host ABI behind Go-facing `std` and `fs` helpers so TinyGo code can use libc-style behavior without importing the C-shaped host symbols directly; the shim no longer keeps free-function compatibility aliases for console output helpers such as `putsn`, and exposes `std.Printf` for preformatted output.
 - The Rust shim in `lib/libc/rust/wasmos.rs` now wraps the raw host ABI behind Rust-facing `std` and `fs` helpers so Rust code can use libc-style behavior without importing the C-shaped host symbols directly; the shim no longer keeps free-function compatibility aliases for console output helpers such as `putsn`, and exposes formatted output as `std::printf(format_args!(...))`.

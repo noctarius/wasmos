@@ -27,7 +27,7 @@ if (AS_ENABLE)
             ${AS_HELLO_WASM}
             ${AS_HELLO_APP}
             hello-as
-            main
+            wasmos_main
             16
             16
             4

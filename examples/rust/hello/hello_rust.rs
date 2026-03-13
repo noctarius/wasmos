@@ -10,13 +10,7 @@ fn panic(_info: &PanicInfo) -> ! {
     loop {}
 }
 
-#[no_mangle]
-pub extern "C" fn main(
-    _arg0: i32,
-    _arg1: i32,
-    _arg2: i32,
-    _arg3: i32,
-) -> i32 {
+fn main(_args: &[&str]) -> i32 {
     static mut PRINTED: bool = false;
 
     unsafe {

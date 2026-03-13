@@ -16,7 +16,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - `examples/zig/` Example Zig WASM applications.
 - `src/drivers/` WASM driver sources and ABI headers (each driver lives in its own subdirectory).
 - `src/services/` System services (WASM-based).
-- WASMOS-APPs export `main` for applications, while drivers and services export `initialize`.
+- WASMOS-APPs now export a library-owned `wasmos_main` entry for applications, while drivers and services export `initialize`.
+- Application shims translate that ABI entry into language-facing entrypoints so app code no longer has to implement the raw four-slot startup ABI directly.
 - Embedded WASM drivers (for example the chardev server) expose an `initialize` entry for setup.
 - `scripts/` Helper scripts (optional).
 - `scripts/wasm_inspect.py` inspects `.wasm` or `.wasmosapp` files to list imports/exports and basic section counts.
@@ -72,8 +73,10 @@ cmake --build build --target assemblyscript_examples
 
 The sample uses `asc` with release/size settings and the `stub` runtime (no GC).
 The AssemblyScript shim in `lib/libc/assemblyscript/wasmos.ts` now exposes AssemblyScript-facing `std` and `fs` wrappers so AssemblyScript modules can use shared libc-style behavior without binding directly to the raw WASMOS C-shaped import surface. The shim no longer keeps free-function compatibility aliases for console output helpers such as `putsn`, and exposes a namespaced `std.printf` entry point for preformatted output.
+AssemblyScript apps call a regular `main(args: Array<string>): i32`; the sample keeps a one-line `wasmos_main` trampoline only because `asc` does not automatically re-export imported wrapper symbols.
 
 There is also a minimal C-based example at `examples/c/hello/hello_c.c`, packed as `hello_c.wasmosapp`.
+The C app wrapper in `lib/libc/src/startup.c` now exports `wasmos_main`, stores the raw startup slots for `wasmos_startup_arg(index)`, and calls the user-facing `int main(int argc, char **argv)`.
 `examples/c/chardev_preempt/chardev_preempt.c` is a small preemption stress test for the embedded chardev server. Run it from the CLI with `exec chardev-preempt`.
 `examples/c/init_smoke/init_smoke.c` is a tiny init-entry smoke test; run it from the CLI with `exec init-smoke`.
 `examples/c/native_call_smoke/native_call_smoke.c` is a tiny smoke test that directly calls `console_write`; run it from the CLI with `exec native-call-smoke`.
@@ -99,6 +102,7 @@ cmake --build build --target rust_examples
 
 The sample lives at `examples/rust/hello/hello_rust.rs` and is packed as `hello_rust.wasmosapp`.
 The Rust shim in `lib/libc/rust/wasmos.rs` now exposes Rust-facing `std` and `fs` wrappers so Rust modules can use shared libc-style behavior without binding directly to the raw WASMOS C-shaped import surface. The shim no longer keeps free-function compatibility aliases for console output helpers such as `putsn`, and now maps formatted output through `std::printf(format_args!(...))`.
+Rust apps now implement `fn main(args: &[&str]) -> i32`, while the shim exports `wasmos_main` and exposes raw startup slots via `wasmos::startup::arg(index)`.
 
 ### Go (TinyGo) (optional)
 Go can be used to write WASMOS applications via TinyGo. Install TinyGo and ensure it is in your PATH.
@@ -109,8 +113,8 @@ cmake --build build --target go_examples
 ```
 
 The sample lives at `examples/go/hello/hello_go.go` and is packed as `hello_go.wasmosapp`.
-Note: TinyGo exports a small `wasmos_entry` wrapper that calls `main` to satisfy both the Go runtime and the WASMOS entry contract.
 The Go shim in `lib/libc/go/wasmos.go` now exposes Go-facing `std` and `fs` wrappers so TinyGo modules can use shared libc-style behavior without binding directly to the raw WASMOS C-shaped import surface. The shim no longer keeps free-function compatibility aliases for console output helpers such as `putsn`, and now includes `std.Printf` for preformatted output.
+Note: TinyGo still requires a package `main` entry, so the shim owns `wasmos_main` and calls the user-facing `Main(args []string) int32`.
 
 ### Zig (optional)
 Zig can be used to write WASMOS applications. Install Zig and ensure it is in your PATH.
@@ -127,8 +131,7 @@ cmake --build build --target zig_examples
 ```
 
 The sample lives at `examples/zig/hello/hello_zig.zig` and is packed as `hello_zig.wasmosapp`.
-Note: Zig requires an explicit wasm export for the WASMOS entry; the build adds
-`--export=wasmos_entry` so the module retains the entry function.
+Note: Zig now exports the shim-owned `wasmos_main`. The user-facing Zig entry stays `pub fn main() u8` because the current Zig wasm build mode does not accept an argv-style `main`.
 The Zig shim in `lib/libc/zig/wasmos.zig` now exposes Zig-facing `stdlib` and `fs` wrappers so Zig modules can use shared libc-style functionality without binding directly to the raw WASMOS C-shaped import surface. The shim no longer keeps free-function compatibility aliases for console output helpers such as `putsn`, and now includes `stdlib.printf`.
 
 ### Scheduler

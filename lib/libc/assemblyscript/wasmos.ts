@@ -37,6 +37,30 @@ declare function fs_buffer_copy(ptr: i32, len: i32, offset: i32): i32;
 
 let g_fsReplyEndpoint: i32 = -1;
 let g_fsRequestId: i32 = 1;
+let g_startupArgs = new StaticArray<i32>(4);
+
+export namespace startup {
+  export function arg(index: i32): i32 {
+    if (index < 0 || index >= 4) {
+      return 0;
+    }
+    return unchecked(g_startupArgs[index]);
+  }
+}
+
+export function runMain(
+  entry: (args: Array<string>) => i32,
+  arg0: i32,
+  arg1: i32,
+  arg2: i32,
+  arg3: i32
+): i32 {
+  unchecked(g_startupArgs[0] = arg0);
+  unchecked(g_startupArgs[1] = arg1);
+  unchecked(g_startupArgs[2] = arg2);
+  unchecked(g_startupArgs[3] = arg3);
+  return entry(new Array<string>());
+}
 
 function writeBytes(bytes: Uint8Array): bool {
   if (bytes.length == 0) {

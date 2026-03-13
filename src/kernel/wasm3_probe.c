@@ -27,6 +27,7 @@ probe_module_at(const boot_info_t *info, uint32_t index)
 int
 wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
 {
+    char entry_name[64];
     uint32_t previous_pid = wasm3_heap_bind_pid(process_current_pid());
     preempt_disable();
     const boot_module_t *mod = probe_module_at(info, module_index);
@@ -47,6 +48,16 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
         wasm3_heap_restore_pid(previous_pid);
         return -1;
     }
+    if (desc.entry_len == 0 || desc.entry_len >= sizeof(entry_name)) {
+        serial_write("[wasm3] invalid entry name\n");
+        preempt_enable();
+        wasm3_heap_restore_pid(previous_pid);
+        return -1;
+    }
+    for (uint32_t i = 0; i < desc.entry_len; ++i) {
+        entry_name[i] = (char)desc.entry[i];
+    }
+    entry_name[desc.entry_len] = '\0';
 
     IM3Environment env = m3_NewEnvironment();
     if (!env) {
@@ -98,9 +109,9 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
     }
 
     IM3Function func = NULL;
-    res = m3_FindFunction(&func, runtime, "main");
+    res = m3_FindFunction(&func, runtime, entry_name);
     if (res) {
-        serial_write("[wasm3] find main failed: ");
+        serial_write("[wasm3] find entry failed: ");
         serial_write(res);
         serial_write("\n");
         m3_FreeRuntime(runtime);

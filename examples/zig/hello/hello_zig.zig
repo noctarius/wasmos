@@ -3,19 +3,7 @@ const wasmos = @import("wasmos.zig");
 
 var printed: bool = false;
 
-pub fn main() void {}
-
-pub export fn wasmos_entry(
-    ignored_arg0: i32,
-    ignored_arg1: i32,
-    ignored_arg2: i32,
-    ignored_arg3: i32,
-) callconv(.c) void {
-    _ = ignored_arg0;
-    _ = ignored_arg1;
-    _ = ignored_arg2;
-    _ = ignored_arg3;
-
+pub fn main() u8 {
     if (!printed) {
         var file = wasmos.fs.openRead("/startup.nsh") catch |err| {
             printed = true;
@@ -23,7 +11,7 @@ pub export fn wasmos_entry(
             _ = wasmos.stdlib.println("This is a tiny WASMOS-APP written in Zig.", .{}) catch {};
             _ = wasmos.stdlib.printf("Entry: {s}\n", .{"main"}) catch {};
             _ = wasmos.stdlib.println("startup.nsh: {s}", .{@errorName(err)}) catch {};
-            return;
+            return 0;
         };
         defer file.close() catch {};
 
@@ -37,4 +25,5 @@ pub export fn wasmos_entry(
         _ = wasmos.stdlib.printf("Entry: {s}\n", .{"main"}) catch {};
         _ = wasmos.stdlib.println("startup.nsh readable: {}", .{readable}) catch {};
     }
+    return 0;
 }

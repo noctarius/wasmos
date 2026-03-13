@@ -3,16 +3,11 @@
 #include "wasmos/api.h"
 #include "wasmos_driver_abi.h"
 
-WASMOS_WASM_EXPORT int32_t
-main(int32_t arg0,
-     int32_t arg1,
-     int32_t arg2,
-     int32_t arg3)
+int
+main(int argc, char **argv)
 {
-    (void)arg0;
-    (void)arg1;
-    (void)arg2;
-    (void)arg3;
+    (void)argc;
+    (void)argv;
 
     putsn("init-smoke: init start\n", 23);
 

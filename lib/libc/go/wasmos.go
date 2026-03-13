@@ -56,6 +56,8 @@ func fsBufferCopy(ptr uint32, len uint32, offset uint32) int32
 
 var fsReplyEndpoint int32 = -1
 var fsRequestID int32 = 1
+var startupArgs [4]int32
+var startup = startupAPI{}
 
 type stdAPI struct{}
 
@@ -68,6 +70,10 @@ type File struct {
 type fsAPI struct{}
 
 var fs = fsAPI{}
+
+type startupAPI struct{}
+
+var emptyArgs = []string{}
 
 func rawWriteString(s string) Error {
 	if len(s) == 0 {
@@ -88,6 +94,24 @@ func rawWriteBytes(b []byte) Error {
 		return ErrHostCallFailed
 	}
 	return ErrOK
+}
+
+func (startupAPI) Arg(index int) int32 {
+	if index < 0 || index >= len(startupArgs) {
+		return 0
+	}
+	return startupArgs[index]
+}
+
+func main() {}
+
+//export wasmos_main
+func wasmos_main(arg0, arg1, arg2, arg3 int32) int32 {
+	startupArgs[0] = arg0
+	startupArgs[1] = arg1
+	startupArgs[2] = arg2
+	startupArgs[3] = arg3
+	return Main(emptyArgs)
 }
 
 func ensureFSReplyEndpoint() (int32, Error) {

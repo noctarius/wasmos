@@ -15,7 +15,7 @@ if (RUST_ENABLE)
             -C panic=abort
             -C codegen-units=1
             -C link-arg=--no-entry
-            -C link-arg=--export=main
+            -C link-arg=--export=wasmos_main
             -C link-arg=--strip-all
             -C link-arg=--initial-memory=2097152
             -C link-arg=--max-memory=2097152
@@ -33,7 +33,7 @@ if (RUST_ENABLE)
             ${WASM_HELLO_RUST_WASM}
             ${WASM_HELLO_RUST_APP}
             hello-rust
-            main
+            wasmos_main
             16
             16
             4

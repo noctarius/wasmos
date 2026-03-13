@@ -1,4 +1,5 @@
 const std = @import("std");
+const root = @import("root");
 
 const FS_IPC_OPEN_REQ: i32 = 0x400;
 const FS_IPC_READ_REQ: i32 = 0x401;
@@ -40,6 +41,24 @@ pub const Error = error{
 
 var g_fs_reply_endpoint: i32 = -1;
 var g_fs_request_id: i32 = 1;
+var g_startup_args = [4]i32{ 0, 0, 0, 0 };
+
+pub const startup = struct {
+    pub fn arg(index: usize) i32 {
+        if (index >= g_startup_args.len) {
+            return 0;
+        }
+        return g_startup_args[index];
+    }
+};
+
+pub export fn wasmos_main(arg0: i32, arg1: i32, arg2: i32, arg3: i32) callconv(.c) i32 {
+    g_startup_args[0] = arg0;
+    g_startup_args[1] = arg1;
+    g_startup_args[2] = arg2;
+    g_startup_args[3] = arg3;
+    return @intCast(root.main());
+}
 
 fn rawWrite(bytes: []const u8) Error!void {
     if (bytes.len == 0) {

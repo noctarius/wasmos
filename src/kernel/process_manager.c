@@ -11,6 +11,7 @@
 typedef struct {
     uint8_t in_use;
     uint32_t pid;
+    uint32_t flags;
     const uint8_t *blob;
     uint32_t blob_size;
     uint8_t blob_storage[PM_FS_BUFFER_SIZE];
@@ -253,12 +254,22 @@ pm_app_entry(process_t *process, void *arg)
 #endif
             return PROCESS_RUN_EXITED;
         }
+        state->flags = desc.flags;
         uint32_t init_args[4] = {
             state->entry_arg0,
             state->entry_arg1,
             state->entry_arg2,
             state->entry_arg3
         };
+        serial_write_unlocked("[pm] app flags=");
+        pm_write_hex64((uint64_t)desc.flags);
+        if (desc.flags & WASMOS_APP_FLAG_DRIVER) {
+            serial_write_unlocked("[pm] app type=driver\n");
+        } else if (desc.flags & WASMOS_APP_FLAG_SERVICE) {
+            serial_write_unlocked("[pm] app type=service\n");
+        } else if (desc.flags & WASMOS_APP_FLAG_APP) {
+            serial_write_unlocked("[pm] app type=app\n");
+        }
         serial_write_unlocked("[pm] app start ");
         serial_write_unlocked(state->name);
         serial_write_unlocked("\n");
@@ -311,6 +322,15 @@ pm_app_entry(process_t *process, void *arg)
             process_set_exit_status(process, -1);
         } else {
             process_set_exit_status(process, 0);
+        }
+        serial_write_unlocked("[pm] entry returned ");
+        serial_write_unlocked(state->name);
+        serial_write_unlocked(" flags=");
+        pm_write_hex64((uint64_t)state->flags);
+        if (state->flags & (WASMOS_APP_FLAG_DRIVER | WASMOS_APP_FLAG_SERVICE)) {
+            serial_write_unlocked("[pm] service/driver returned\n");
+        } else {
+            serial_write_unlocked("[pm] app returned\n");
         }
         if (stack_canary_a != 0xA5A5A5A5DEADBEEFULL || stack_canary_b != 0x5A5A5A5AF00DFACEULL) {
             serial_write("[pm] stack canary corrupted around entry\n");

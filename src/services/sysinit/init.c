@@ -145,14 +145,14 @@ initialize(int32_t proc_endpoint,
 
     g_console_write = wasmos_console_write;
     g_debug_mark = wasmos_debug_mark;
-    (void)g_debug_mark(0x1001);
+    (void)g_debug_mark(0x1101);
     {
         char ch = 'S';
         g_console_write((int32_t)(uintptr_t)&ch, 1);
     }
 
     g_reply_endpoint = wasmos_ipc_create_endpoint();
-    (void)g_debug_mark(0x1002);
+    (void)g_debug_mark(0x1102);
     if (g_reply_endpoint < 0) {
         log_line("[sysinit] failed to create reply endpoint\n");
         stall_forever();
@@ -169,6 +169,7 @@ initialize(int32_t proc_endpoint,
     g_next_index = 0;
     g_pending_index = -1;
     log_line("[sysinit] start\n");
+    (void)g_debug_mark(0x1103);
     log_line("[sysinit] boot module list\n");
     for (int32_t i = 0; i < g_module_count; ++i) {
         char name[32];
@@ -204,8 +205,13 @@ initialize(int32_t proc_endpoint,
         }
     }
 
+    log_line("[sysinit] enter loop\n");
+    (void)g_debug_mark(0x1104);
     for (;;) {
         g_tick++;
+        if ((g_tick & 0x3FF) == 0) {
+            (void)g_debug_mark(0x11FF);
+        }
         for (volatile int spin = 0; spin < 200000; ++spin) {
         }
         while (g_next_index < g_module_count &&
@@ -335,4 +341,7 @@ initialize(int32_t proc_endpoint,
         g_next_index = g_pending_index + 1;
         g_pending_index = -1;
     }
+
+    log_line("[sysinit] exit\n");
+    (void)g_debug_mark(0x11EE);
 }

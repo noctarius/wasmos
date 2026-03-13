@@ -298,7 +298,14 @@ int wamr_call_function(wamr_instance_t *instance,
     wasmos_wamr_opcode_exec_count = 0;
     wasmos_wamr_last_frame_ip = 0;
     wasmos_wamr_last_func = 0;
+    serial_write("[wamr] call begin func=");
+    serial_write(func_name);
+    serial_write("\n");
     int ok = wasm_runtime_call_wasm(exec_env, func, argc, argv) ? 1 : 0;
+    serial_write("[wamr] call end func=");
+    serial_write(func_name);
+    serial_write(" ok=");
+    serial_write_hex64_local((uint64_t)ok);
     serial_write("[wamr] last native ptr=");
     serial_write_hex64_local((uint64_t)(uintptr_t)wasmos_wamr_last_native_ptr);
     serial_write("[wamr] last native idx=");
@@ -338,6 +345,8 @@ int wamr_call_function(wamr_instance_t *instance,
         serial_write("[wamr] exception ");
         serial_write(exc);
         serial_write("\n");
+    } else {
+        serial_write("[wamr] exception <none>\n");
     }
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD)
     preempt_enable();

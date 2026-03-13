@@ -44,8 +44,8 @@ static int32_t g_init_index = -1;
 static int32_t g_next_index = 0;
 static int32_t g_pending_index = -1;
 static int32_t g_tick = 0;
-static int32_t (*volatile g_console_write)(int32_t, int32_t) = wasmos_console_write;
-static int32_t (*volatile g_debug_mark)(int32_t) = wasmos_debug_mark;
+static int32_t (*volatile g_console_write)(int32_t, int32_t);
+static int32_t (*volatile g_debug_mark)(int32_t);
 
 static void
 stall_forever(void)
@@ -143,6 +143,8 @@ initialize(int32_t proc_endpoint,
 {
     (void)ignored_arg3;
 
+    g_console_write = wasmos_console_write;
+    g_debug_mark = wasmos_debug_mark;
     (void)g_debug_mark(0x1001);
     {
         char ch = 'S';

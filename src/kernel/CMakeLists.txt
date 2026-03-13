@@ -1,4 +1,5 @@
 set(LDFLAGS_KERNEL -nostdlib -T ${KERNEL_DIR}/arch/x86_64/linker.ld)
+set(CFLAGS_WASM3 ${CFLAGS_KERNEL} -I${WASM_DIR}/wasm3/source -Dd_m3FixedHeap=196608 -Dd_m3FixedHeapAlign=16 -Dd_m3HasFloat=0 -Wno-unused-parameter -Wno-unused-variable)
 
 set(KERNEL_OBJS
   ${BUILD_DIR}/entry.o
@@ -20,8 +21,20 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/wasm_driver.o
   ${BUILD_DIR}/wamr_context.o
   ${BUILD_DIR}/wasm_chardev.o
+  ${BUILD_DIR}/wasm3_probe.o
+  ${BUILD_DIR}/wasm3_shim.o
   ${BUILD_DIR}/serial.o
   ${BUILD_DIR}/wamr_runtime.o
+  ${BUILD_DIR}/wasm3_code.o
+  ${BUILD_DIR}/wasm3_bind.o
+  ${BUILD_DIR}/wasm3_compile.o
+  ${BUILD_DIR}/wasm3_core.o
+  ${BUILD_DIR}/wasm3_env.o
+  ${BUILD_DIR}/wasm3_exec.o
+  ${BUILD_DIR}/wasm3_function.o
+  ${BUILD_DIR}/wasm3_info.o
+  ${BUILD_DIR}/wasm3_module.o
+  ${BUILD_DIR}/wasm3_parse.o
 )
 
 if (NOT DEFINED KERNEL_LINK_LIBS)
@@ -48,8 +61,20 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/wasm_driver.c
   ${KERNEL_DIR}/wamr_context.c
   ${KERNEL_DIR}/wasm_chardev.c
+  ${KERNEL_DIR}/wasm3_probe.c
+  ${KERNEL_DIR}/wasm3_shim.c
   ${KERNEL_DIR}/serial.c
   ${WASM_DIR}/wamr_runtime.c
+  ${WASM_DIR}/wasm3/source/m3_code.c
+  ${WASM_DIR}/wasm3/source/m3_bind.c
+  ${WASM_DIR}/wasm3/source/m3_compile.c
+  ${WASM_DIR}/wasm3/source/m3_core.c
+  ${WASM_DIR}/wasm3/source/m3_env.c
+  ${WASM_DIR}/wasm3/source/m3_exec.c
+  ${WASM_DIR}/wasm3/source/m3_function.c
+  ${WASM_DIR}/wasm3/source/m3_info.c
+  ${WASM_DIR}/wasm3/source/m3_module.c
+  ${WASM_DIR}/wasm3/source/m3_parse.c
 )
 
 add_library(kernel_sources INTERFACE)
@@ -72,6 +97,7 @@ target_sources(kernel_sources INTERFACE
   ${KERNEL_DIR}/include/wasm_chardev.h
   ${KERNEL_DIR}/include/wasm_driver.h
   ${KERNEL_DIR}/include/wasmos_app.h
+  ${KERNEL_DIR}/wasm3_probe.h
   ${KERNEL_DIR}/include/io.h
   ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
   ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_init.c
@@ -122,6 +148,7 @@ target_include_directories(kernel_ide PRIVATE
   ${DRIVER_WASM_DIR}/include
   ${WAMR_DIR}/core/iwasm/include
   ${WASM_DIR}
+  ${WASM_DIR}/wasm3/source
   ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos
 )
 
@@ -151,8 +178,20 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_driver.c -o ${BUILD_DIR}/wasm_driver.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wamr_context.c -o ${BUILD_DIR}/wamr_context.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_chardev.c -o ${BUILD_DIR}/wasm_chardev.o
+  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${KERNEL_DIR}/wasm3_probe.c -o ${BUILD_DIR}/wasm3_probe.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm3_shim.c -o ${BUILD_DIR}/wasm3_shim.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/serial.c -o ${BUILD_DIR}/serial.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${WASM_DIR}/wamr_runtime.c -o ${BUILD_DIR}/wamr_runtime.o
+  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_code.c -o ${BUILD_DIR}/wasm3_code.o
+  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_bind.c -o ${BUILD_DIR}/wasm3_bind.o
+  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_compile.c -o ${BUILD_DIR}/wasm3_compile.o
+  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_core.c -o ${BUILD_DIR}/wasm3_core.o
+  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_env.c -o ${BUILD_DIR}/wasm3_env.o
+  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_exec.c -o ${BUILD_DIR}/wasm3_exec.o
+  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_function.c -o ${BUILD_DIR}/wasm3_function.o
+  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_info.c -o ${BUILD_DIR}/wasm3_info.o
+  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_module.c -o ${BUILD_DIR}/wasm3_module.o
+  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_parse.c -o ${BUILD_DIR}/wasm3_parse.o
   COMMAND ${LLD_PATH} ${LDFLAGS_KERNEL} -o ${BUILD_DIR}/kernel.elf ${KERNEL_OBJS} ${KERNEL_LINK_LIBS}
   DEPENDS ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/include/cpu.h
           ${KERNEL_DIR}/include/ipc.h ${KERNEL_DIR}/include/memory.h ${KERNEL_DIR}/include/paging.h

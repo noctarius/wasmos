@@ -218,8 +218,3 @@ pub mod fs {
         Ok(File { fd })
     }
 }
-
-#[inline]
-pub fn putsn(bytes: &[u8]) -> i32 {
-    std::write(bytes).map(|_| 0).unwrap_or(-1)
-}

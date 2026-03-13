@@ -190,8 +190,3 @@ pub const fs = struct {
         return File{ .fd = fd };
     }
 };
-
-pub fn putsn(bytes: []const u8) i32 {
-    stdlib.write(bytes) catch return -1;
-    return 0;
-}

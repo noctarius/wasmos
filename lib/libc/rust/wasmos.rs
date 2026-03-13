@@ -132,6 +132,10 @@ pub mod std {
         let mut writer = Writer;
         writer.write_fmt(args).map_err(|_| Error::HostCallFailed)
     }
+
+    pub fn printf(args: fmt::Arguments<'_>) -> Result<(), Error> {
+        print(args)
+    }
 }
 
 pub mod fs {

@@ -21,7 +21,7 @@ pub export fn wasmos_entry(
             printed = true;
             _ = wasmos.stdlib.println("Hello from Zig on WASMOS!", .{}) catch {};
             _ = wasmos.stdlib.println("This is a tiny WASMOS-APP written in Zig.", .{}) catch {};
-            _ = wasmos.stdlib.println("Entry: {s}", .{"main"}) catch {};
+            _ = wasmos.stdlib.printf("Entry: {s}\n", .{"main"}) catch {};
             _ = wasmos.stdlib.println("startup.nsh: {s}", .{@errorName(err)}) catch {};
             return;
         };
@@ -34,7 +34,7 @@ pub export fn wasmos_entry(
         printed = true;
         _ = wasmos.stdlib.println("Hello from Zig on WASMOS!", .{}) catch {};
         _ = wasmos.stdlib.println("This is a tiny WASMOS-APP written in Zig.", .{}) catch {};
-        _ = wasmos.stdlib.println("Entry: {s}", .{"main"}) catch {};
+        _ = wasmos.stdlib.printf("Entry: {s}\n", .{"main"}) catch {};
         _ = wasmos.stdlib.println("startup.nsh readable: {}", .{readable}) catch {};
     }
 }

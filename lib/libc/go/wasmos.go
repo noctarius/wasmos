@@ -151,6 +151,10 @@ func (stdAPI) Println(s string) Error {
 	return rawWriteString(s + "\n")
 }
 
+func (stdAPI) Printf(s string) Error {
+	return rawWriteString(s)
+}
+
 func (File) Invalid() File {
 	return File{fd: -1}
 }

@@ -3,6 +3,7 @@ set(WASM_LIBC_C_SOURCES
   ${LIBC_DIR}/src/stdlib.c
   ${LIBC_DIR}/src/string.c
   ${LIBC_DIR}/src/stdio.c
+  ${LIBC_DIR}/src/unistd.c
 )
 
 add_custom_command(

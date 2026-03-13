@@ -98,6 +98,7 @@ cmake --build build --target rust_examples
 ```
 
 The sample lives at `examples/rust/hello/hello_rust.rs` and is packed as `hello_rust.wasmosapp`.
+The Rust shim in `lib/libc/rust/wasmos.rs` now exposes Rust-facing `stdio` and `fs` wrappers so Rust modules can use shared libc-style behavior without binding directly to the raw WASMOS C-shaped import surface.
 
 ### Go (TinyGo) (optional)
 Go can be used to write WASMOS applications via TinyGo. Install TinyGo and ensure it is in your PATH.

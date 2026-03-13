@@ -22,6 +22,7 @@ typedef struct {
     IM3Environment env;
     IM3Runtime runtime;
     IM3Module module;
+    uint32_t owner_pid;
     uint32_t owner_context_id;
     uint32_t endpoint;
     spinlock_t lock;

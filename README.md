@@ -124,6 +124,7 @@ Note: Zig requires an explicit wasm export for the WASMOS entry; the build adds
 ### Scheduler
 The kernel uses a round-robin scheduler with a fixed time slice per process
 (see `PROCESS_DEFAULT_SLICE_TICKS` in `src/kernel/include/process.h`).
+User space can call the `sched_yield` wasm native to explicitly yield during busy loops.
 
 ### WAMR scaffold
 - `libs/wasm/wamr_runtime.c` provides a thin wrapper over the WAMR C API.

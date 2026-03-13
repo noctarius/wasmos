@@ -807,6 +807,13 @@ m3ApiRawFunction(wasmos_sched_current_pid)
     m3ApiReturn((int32_t)process_current_pid());
 }
 
+m3ApiRawFunction(wasmos_sched_yield)
+{
+    m3ApiReturnType(int32_t)
+    process_yield(PROCESS_RUN_YIELDED);
+    m3ApiReturn(0);
+}
+
 m3ApiRawFunction(wasmos_proc_info)
 {
     m3ApiReturnType(int32_t)
@@ -928,6 +935,7 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "sched_ticks", "i()", wasmos_sched_ticks);
     rc |= wasm3_link_raw(module, "wasmos", "sched_ready_count", "i()", wasmos_sched_ready_count);
     rc |= wasm3_link_raw(module, "wasmos", "sched_current_pid", "i()", wasmos_sched_current_pid);
+    rc |= wasm3_link_raw(module, "wasmos", "sched_yield", "i()", wasmos_sched_yield);
     rc |= wasm3_link_raw(module, "wasmos", "proc_info", "i(i*i)", wasmos_proc_info);
     rc |= wasm3_link_raw(module, "wasmos", "proc_info_ex", "i(i*i*)", wasmos_proc_info_ex);
     rc |= wasm3_link_raw(module, "wasmos", "block_buffer_phys", "i()", wasmos_block_buffer_phys);

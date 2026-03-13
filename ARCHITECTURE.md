@@ -135,6 +135,7 @@ Isolation rules:
 - Allow user-space services to set priorities and budgets via explicit calls.
 - Ensure IPC paths do not block kernel tasks.
 - Timer IRQ preemption now rewrites the interrupted RIP to a kernel preempt trampoline and yields back to the scheduler.
+- User space can call the `sched_yield` wasm native to explicitly yield from busy loops.
 
 ### Debugging
 - A debug-only wasm native `debug_mark(tag)` logs a tag and PID to the serial console to confirm user-space execution paths.

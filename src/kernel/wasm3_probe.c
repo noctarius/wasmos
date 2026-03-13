@@ -5,6 +5,8 @@
 #include "wasmos_app.h"
 #include "wasm3.h"
 #include "wasm3_link.h"
+#include "process.h"
+#include "wasm3_shim.h"
 
 static const boot_module_t *
 probe_module_at(const boot_info_t *info, uint32_t index)
@@ -25,10 +27,14 @@ probe_module_at(const boot_info_t *info, uint32_t index)
 int
 wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
 {
+    uint32_t previous_pid = wasm3_heap_bind_pid(process_current_pid());
+    preempt_disable();
     const boot_module_t *mod = probe_module_at(info, module_index);
     if (!mod || mod->type != BOOT_MODULE_TYPE_WASMOS_APP || mod->base == 0 ||
         mod->size == 0 || mod->size > 0xFFFFFFFFULL) {
         serial_write("[wasm3] invalid module\n");
+        preempt_enable();
+        wasm3_heap_restore_pid(previous_pid);
         return -1;
     }
 
@@ -37,12 +43,16 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
                          (uint32_t)mod->size,
                          &desc) != 0) {
         serial_write("[wasm3] parse failed\n");
+        preempt_enable();
+        wasm3_heap_restore_pid(previous_pid);
         return -1;
     }
 
     IM3Environment env = m3_NewEnvironment();
     if (!env) {
         serial_write("[wasm3] env alloc failed\n");
+        preempt_enable();
+        wasm3_heap_restore_pid(previous_pid);
         return -1;
     }
 
@@ -50,6 +60,8 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
     if (!runtime) {
         serial_write("[wasm3] runtime alloc failed\n");
         m3_FreeEnvironment(env);
+        preempt_enable();
+        wasm3_heap_restore_pid(previous_pid);
         return -1;
     }
 
@@ -61,6 +73,8 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
         serial_write("\n");
         m3_FreeRuntime(runtime);
         m3_FreeEnvironment(env);
+        preempt_enable();
+        wasm3_heap_restore_pid(previous_pid);
         return -1;
     }
 
@@ -71,6 +85,8 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
         serial_write("\n");
         m3_FreeRuntime(runtime);
         m3_FreeEnvironment(env);
+        preempt_enable();
+        wasm3_heap_restore_pid(previous_pid);
         return -1;
     }
 
@@ -89,6 +105,8 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
         serial_write("\n");
         m3_FreeRuntime(runtime);
         m3_FreeEnvironment(env);
+        preempt_enable();
+        wasm3_heap_restore_pid(previous_pid);
         return -1;
     }
 
@@ -115,5 +133,7 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
 
     m3_FreeRuntime(runtime);
     m3_FreeEnvironment(env);
+    preempt_enable();
+    wasm3_heap_restore_pid(previous_pid);
     return res ? -1 : 0;
 }

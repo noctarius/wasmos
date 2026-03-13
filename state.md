@@ -1,7 +1,7 @@
 # Current Task State (Preemptive Scheduling)
 
 ## Summary
-Preemptive scheduling is implemented and stable. The IRQ0 timer tick drives time-slice accounting and preemption via a kernel trampoline that yields to the scheduler. Ready queue scheduling, idle task, and spinlock preemption guards are in place. Scheduler metrics (timer ticks, ready queue depth, current running PID) are exposed via wasm natives and shown in the CLI `ps` output. WASMOS apps can terminate via a `proc_exit` wasm native; the process manager reaps exited apps and releases their WAMR instances. Process stacks now come from the physical frame allocator, and the kernel image range is reserved before allocating pages. Capacity limits were raised to allow CLI exec tests to spawn apps reliably.
+Preemptive scheduling is implemented and stable. The IRQ0 timer tick drives time-slice accounting and preemption via a kernel trampoline that yields to the scheduler. Ready queue scheduling, idle task, and spinlock preemption guards are in place. Scheduler metrics (timer ticks, ready queue depth, current running PID) are exposed via wasm natives and shown in the CLI `ps` output. WASMOS apps can terminate via a `proc_exit` wasm native; the process manager reaps exited apps and releases their runtime instances. Process stacks now come from the physical frame allocator, and the kernel image range is reserved before allocating pages. Capacity limits were raised to allow CLI exec tests to spawn apps reliably.
 
 ## Current Behavior
 - PIT timer IRQ0 updates ticks and triggers preemption.

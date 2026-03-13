@@ -300,3 +300,29 @@ mm_context_t *mm_context_create(uint32_t id) {
     g_context_count++;
     return ctx;
 }
+
+int mm_context_destroy(uint32_t id) {
+    if (id == g_root_ctx.id || id == 0) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < g_context_count; ++i) {
+        mm_context_t *ctx = &g_contexts[i];
+        if (ctx->id != id) {
+            continue;
+        }
+        for (uint32_t r = 0; r < ctx->region_count; ++r) {
+            mem_region_t *region = &ctx->regions[r];
+            if (region->base == 0 || region->size == 0) {
+                continue;
+            }
+            uint64_t pages = (region->size + PAGE_SIZE - 1ULL) / PAGE_SIZE;
+            pfa_free_pages(region->base, pages);
+        }
+        if (i + 1 < g_context_count) {
+            g_contexts[i] = g_contexts[g_context_count - 1];
+        }
+        g_context_count--;
+        return 0;
+    }
+    return -1;
+}

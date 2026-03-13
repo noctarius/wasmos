@@ -58,6 +58,20 @@ wasm_driver_restore_owner_pid(uint32_t previous_pid)
     }
 }
 
+static uint32_t
+wasm_driver_enter_runtime(const wasm_driver_t *driver)
+{
+    preempt_disable();
+    return wasm_driver_bind_owner_pid(driver);
+}
+
+static void
+wasm_driver_leave_runtime(uint32_t previous_pid)
+{
+    wasm_driver_restore_owner_pid(previous_pid);
+    preempt_enable();
+}
+
 int
 wasm_driver_start(wasm_driver_t *driver,
                   const wasm_driver_manifest_t *manifest,
@@ -76,12 +90,12 @@ wasm_driver_start(wasm_driver_t *driver,
     process_t *owner = process_find_by_context(owner_context_id);
     driver->owner_pid = owner ? owner->pid : process_current_pid();
 
-    uint32_t previous_pid = wasm_driver_bind_owner_pid(driver);
+    uint32_t previous_pid = wasm_driver_enter_runtime(driver);
 
     driver->env = m3_NewEnvironment();
     if (!driver->env) {
         serial_write("[wasm-driver] env alloc failed\n");
-        wasm_driver_restore_owner_pid(previous_pid);
+        wasm_driver_leave_runtime(previous_pid);
         return -1;
     }
 
@@ -91,7 +105,7 @@ wasm_driver_start(wasm_driver_t *driver,
         serial_write("[wasm-driver] runtime alloc failed\n");
         m3_FreeEnvironment(driver->env);
         driver->env = 0;
-        wasm_driver_restore_owner_pid(previous_pid);
+        wasm_driver_leave_runtime(previous_pid);
         return -1;
     }
 
@@ -104,7 +118,7 @@ wasm_driver_start(wasm_driver_t *driver,
         m3_FreeEnvironment(driver->env);
         driver->runtime = 0;
         driver->env = 0;
-        wasm_driver_restore_owner_pid(previous_pid);
+        wasm_driver_leave_runtime(previous_pid);
         return -1;
     }
 
@@ -117,7 +131,7 @@ wasm_driver_start(wasm_driver_t *driver,
         driver->runtime = 0;
         driver->env = 0;
         driver->module = 0;
-        wasm_driver_restore_owner_pid(previous_pid);
+        wasm_driver_leave_runtime(previous_pid);
         return -1;
     }
 
@@ -128,7 +142,7 @@ wasm_driver_start(wasm_driver_t *driver,
         driver->runtime = 0;
         driver->env = 0;
         driver->module = 0;
-        wasm_driver_restore_owner_pid(previous_pid);
+        wasm_driver_leave_runtime(previous_pid);
         return -1;
     }
 
@@ -137,13 +151,13 @@ wasm_driver_start(wasm_driver_t *driver,
         m3_FreeRuntime(driver->runtime);
         m3_FreeEnvironment(driver->env);
         wasm_driver_reset(driver);
-        wasm_driver_restore_owner_pid(previous_pid);
+        wasm_driver_leave_runtime(previous_pid);
         return -1;
     }
 
     driver->active = 1;
     serial_write("[wasm-driver] started\n");
-    wasm_driver_restore_owner_pid(previous_pid);
+    wasm_driver_leave_runtime(previous_pid);
     return 0;
 }
 
@@ -153,14 +167,14 @@ wasm_driver_stop(wasm_driver_t *driver)
     if (!driver) {
         return;
     }
-    uint32_t previous_pid = wasm_driver_bind_owner_pid(driver);
+    uint32_t previous_pid = wasm_driver_enter_runtime(driver);
     if (driver->runtime) {
         m3_FreeRuntime(driver->runtime);
     }
     if (driver->env) {
         m3_FreeEnvironment(driver->env);
     }
-    wasm_driver_restore_owner_pid(previous_pid);
+    wasm_driver_leave_runtime(previous_pid);
     wasm_driver_reset(driver);
 }
 
@@ -196,21 +210,21 @@ wasm_driver_call_entry(wasm_driver_t *driver)
     }
 
     IM3Function func = NULL;
-    uint32_t previous_pid = wasm_driver_bind_owner_pid(driver);
+    uint32_t previous_pid = wasm_driver_enter_runtime(driver);
     M3Result res = m3_FindFunction(&func, driver->runtime, driver->manifest.entry_export);
     if (res) {
         log_wasm3_error("[wasm-driver] entry lookup failed: ", res, driver->runtime);
-        wasm_driver_restore_owner_pid(previous_pid);
+        wasm_driver_leave_runtime(previous_pid);
         return -1;
     }
     const void *args[4] = { &argv[0], &argv[1], &argv[2], &argv[3] };
     res = m3_Call(func, argc, args);
     if (res) {
         log_wasm3_error("[wasm-driver] entry failed: ", res, driver->runtime);
-        wasm_driver_restore_owner_pid(previous_pid);
+        wasm_driver_leave_runtime(previous_pid);
         return -1;
     }
-    wasm_driver_restore_owner_pid(previous_pid);
+    wasm_driver_leave_runtime(previous_pid);
     return 0;
 }
 
@@ -225,7 +239,7 @@ wasm_driver_call(wasm_driver_t *driver,
     }
 
     spinlock_lock(&driver->lock);
-    uint32_t previous_pid = wasm_driver_bind_owner_pid(driver);
+    uint32_t previous_pid = wasm_driver_enter_runtime(driver);
     IM3Function func = NULL;
     M3Result res = m3_FindFunction(&func, driver->runtime, export_name);
     int ok = 0;
@@ -239,7 +253,7 @@ wasm_driver_call(wasm_driver_t *driver,
             log_wasm3_error("[wasm-driver] call failed: ", res, driver->runtime);
         }
     }
-    wasm_driver_restore_owner_pid(previous_pid);
+    wasm_driver_leave_runtime(previous_pid);
     spinlock_unlock(&driver->lock);
     return ok == 0 ? 0 : -1;
 }
@@ -253,21 +267,21 @@ wasm_driver_call_unlocked(wasm_driver_t *driver,
     if (!driver || !export_name || !driver->active || !driver->runtime) {
         return -1;
     }
-    uint32_t previous_pid = wasm_driver_bind_owner_pid(driver);
+    uint32_t previous_pid = wasm_driver_enter_runtime(driver);
     IM3Function func = NULL;
     M3Result res = m3_FindFunction(&func, driver->runtime, export_name);
     if (res) {
         log_wasm3_error("[wasm-driver] lookup failed: ", res, driver->runtime);
-        wasm_driver_restore_owner_pid(previous_pid);
+        wasm_driver_leave_runtime(previous_pid);
         return -1;
     }
     const void *args[4] = { &argv[0], &argv[1], &argv[2], &argv[3] };
     res = m3_Call(func, argc, args);
     if (res) {
         log_wasm3_error("[wasm-driver] call failed: ", res, driver->runtime);
-        wasm_driver_restore_owner_pid(previous_pid);
+        wasm_driver_leave_runtime(previous_pid);
         return -1;
     }
-    wasm_driver_restore_owner_pid(previous_pid);
+    wasm_driver_leave_runtime(previous_pid);
     return 0;
 }

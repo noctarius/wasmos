@@ -141,6 +141,7 @@ Isolation rules:
 - A debug-only wasm native `debug_mark(tag)` logs a tag and PID to the serial console to confirm user-space execution paths.
 - PM logs app flags and entry returns, and `sysinit` emits debug_mark tags (`0x1101..0x11FF`) to trace loop behavior during preemptive debugging.
 - The kernel init path can temporarily bypass boot module spawning via `g_skip_wasm_boot` in `src/kernel/kernel.c` to isolate the wasm3 probe.
+- Kernel-hosted wasm3 runtime lifecycle and entry calls currently run with preemption disabled to avoid timer IRQ interruption while runtime state is being mutated.
 
 ### Stepwise Plan
 1. Freeze the `boot_info_t` contract and document versioning rules.

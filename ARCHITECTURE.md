@@ -138,6 +138,7 @@ Isolation rules:
 
 ### Debugging
 - A debug-only wasm native `debug_mark(tag)` logs a tag and PID to the serial console to confirm user-space execution paths.
+- PM logs app flags and entry returns, and `sysinit` emits debug_mark tags (`0x1101..0x11FF`) to trace loop behavior during preemptive debugging.
 
 ### Stepwise Plan
 1. Freeze the `boot_info_t` contract and document versioning rules.

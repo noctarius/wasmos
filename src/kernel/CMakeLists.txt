@@ -1,5 +1,6 @@
 set(LDFLAGS_KERNEL -nostdlib -T ${KERNEL_DIR}/arch/x86_64/linker.ld)
-set(CFLAGS_WASM3 ${CFLAGS_KERNEL} -I${WASM_DIR}/wasm3/source -Dd_m3FixedHeap=196608 -Dd_m3FixedHeapAlign=16 -Dd_m3HasFloat=0 -Wno-unused-parameter -Wno-unused-variable)
+set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -I${WASM_DIR}/wasm3/source -Wno-unused-parameter)
+set(CFLAGS_WASM3 ${CFLAGS_KERNEL} -I${WASM_DIR}/wasm3/source -Dd_m3HasFloat=0 -Wno-unused-parameter -Wno-unused-variable)
 
 set(KERNEL_OBJS
   ${BUILD_DIR}/entry.o
@@ -19,12 +20,10 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/process_manager.o
   ${BUILD_DIR}/wasmos_app.o
   ${BUILD_DIR}/wasm_driver.o
-  ${BUILD_DIR}/wamr_context.o
   ${BUILD_DIR}/wasm_chardev.o
   ${BUILD_DIR}/wasm3_probe.o
   ${BUILD_DIR}/wasm3_shim.o
   ${BUILD_DIR}/serial.o
-  ${BUILD_DIR}/wamr_runtime.o
   ${BUILD_DIR}/wasm3_code.o
   ${BUILD_DIR}/wasm3_bind.o
   ${BUILD_DIR}/wasm3_compile.o
@@ -59,12 +58,10 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/process_manager.c
   ${KERNEL_DIR}/wasmos_app.c
   ${KERNEL_DIR}/wasm_driver.c
-  ${KERNEL_DIR}/wamr_context.c
   ${KERNEL_DIR}/wasm_chardev.c
   ${KERNEL_DIR}/wasm3_probe.c
   ${KERNEL_DIR}/wasm3_shim.c
   ${KERNEL_DIR}/serial.c
-  ${WASM_DIR}/wamr_runtime.c
   ${WASM_DIR}/wasm3/source/m3_code.c
   ${WASM_DIR}/wasm3/source/m3_bind.c
   ${WASM_DIR}/wasm3/source/m3_compile.c
@@ -93,17 +90,16 @@ target_sources(kernel_sources INTERFACE
   ${KERNEL_DIR}/include/timer.h
   ${KERNEL_DIR}/include/serial.h
   ${KERNEL_DIR}/include/spinlock.h
-  ${KERNEL_DIR}/include/wamr_context.h
   ${KERNEL_DIR}/include/wasm_chardev.h
   ${KERNEL_DIR}/include/wasm_driver.h
   ${KERNEL_DIR}/include/wasmos_app.h
+  ${KERNEL_DIR}/include/wasm3_link.h
   ${KERNEL_DIR}/wasm3_probe.h
   ${KERNEL_DIR}/include/io.h
   ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
   ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_init.c
   ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_stub.c
   ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_internal.h
-  ${WASM_DIR}/wamr_runtime.h
 )
 target_include_directories(kernel_sources INTERFACE ${KERNEL_DIR}/include ${WASM_DIR} ${DRIVER_WASM_DIR}/include)
 
@@ -125,7 +121,6 @@ add_library(kernel_ide OBJECT EXCLUDE_FROM_ALL
   ${KERNEL_DIR}/include/serial.h
   ${KERNEL_DIR}/include/wasmos_app.h
   ${KERNEL_DIR}/include/spinlock.h
-  ${KERNEL_DIR}/include/wamr_context.h
   ${KERNEL_DIR}/include/wasm_driver.h
   ${KERNEL_DIR}/include/wasm_chardev.h
   ${KERNEL_DIR}/include/io.h
@@ -141,7 +136,6 @@ add_library(kernel_ide OBJECT EXCLUDE_FROM_ALL
   ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_init.c
   ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_stub.c
   ${CMAKE_SOURCE_DIR}/src/wasm-micro-runtime/platform/wasmos/platform_internal.h
-  ${WASM_DIR}/wamr_runtime.h
 )
 target_include_directories(kernel_ide PRIVATE
   ${KERNEL_DIR}/include
@@ -176,12 +170,10 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager.c -o ${BUILD_DIR}/process_manager.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_app.c -o ${BUILD_DIR}/wasmos_app.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_driver.c -o ${BUILD_DIR}/wasm_driver.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wamr_context.c -o ${BUILD_DIR}/wamr_context.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_chardev.c -o ${BUILD_DIR}/wasm_chardev.o
   COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${KERNEL_DIR}/wasm3_probe.c -o ${BUILD_DIR}/wasm3_probe.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm3_shim.c -o ${BUILD_DIR}/wasm3_shim.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/serial.c -o ${BUILD_DIR}/serial.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${WASM_DIR}/wamr_runtime.c -o ${BUILD_DIR}/wamr_runtime.o
   COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_code.c -o ${BUILD_DIR}/wasm3_code.o
   COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_bind.c -o ${BUILD_DIR}/wasm3_bind.o
   COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_compile.c -o ${BUILD_DIR}/wasm3_compile.o
@@ -198,9 +190,9 @@ add_custom_command(
           ${KERNEL_DIR}/include/physmem.h ${KERNEL_DIR}/include/process.h ${KERNEL_DIR}/include/process_manager.h
           ${KERNEL_DIR}/include/memory_service.h ${KERNEL_DIR}/include/irq.h ${KERNEL_DIR}/include/timer.h
           ${KERNEL_DIR}/include/serial.h ${KERNEL_DIR}/include/wasmos_app.h ${KERNEL_DIR}/include/spinlock.h
-          ${KERNEL_DIR}/include/wamr_context.h ${KERNEL_DIR}/include/wasm_driver.h ${KERNEL_DIR}/include/wasm_chardev.h
+          ${KERNEL_DIR}/include/wasm_driver.h ${KERNEL_DIR}/include/wasm_chardev.h
           ${KERNEL_DIR}/include/io.h
-          ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h ${WASM_DIR}/wamr_runtime.h
+          ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Building kernel"
   VERBATIM

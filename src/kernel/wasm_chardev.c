@@ -7,7 +7,7 @@ extern const uint8_t _binary_chardev_server_wasm_end[];
 
 static wasm_driver_t g_chardev_driver;
 static uint32_t g_owner_context_id;
-static uint32_t g_entry_args[1];
+static uint32_t g_entry_args[4];
 
 static uint32_t
 wasm_chardev_module_size(void)
@@ -28,7 +28,7 @@ wasm_chardev_init(uint32_t owner_context_id)
     manifest.entry_export = "initialize";
     manifest.stack_size = 64 * 1024;
     manifest.heap_size = 64 * 1024;
-    manifest.entry_argc = 1;
+    manifest.entry_argc = 4;
     manifest.entry_argv = g_entry_args;
 
     g_owner_context_id = owner_context_id;

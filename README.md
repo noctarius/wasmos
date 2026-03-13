@@ -45,6 +45,8 @@ If it isn't present, download OVMF from edk2 and pass `-DOVMF_CODE=/path/to/OVMF
 
 ### Dependencies
 - WAMR (wasm-micro-runtime) is vendored via git subtree at `libs/wasm/wasm-micro-runtime`.
+- wasm3 is vendored via git subtree at `libs/wasm/wasm3` (used as an alternative runtime on the `wasm3` branch).
+- The `wasm3` branch uses a per-process bump allocator for `malloc/calloc/realloc` in `src/kernel/wasm3_shim.c` and disables the wasm3 fixed heap.
 
 ### AssemblyScript (optional)
 AssemblyScript can be used to write WASMOS drivers, services, and applications. Install AssemblyScript via npm and ensure `asc` is available in your PATH (for example via a global install or `npm link`):

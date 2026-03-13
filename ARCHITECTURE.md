@@ -534,6 +534,8 @@ Design takeaways:
 - WAMR is built as a static library and linked into the kernel.
 - `libs/wasm/wamr_runtime.c` provides a basic wrapper over the WAMR C API.
 - A stable ABI is defined via `src/drivers/include/wasmos_driver_abi.h` and the WASMOS-APP container format.
+- The `wasm3` branch integrates the wasm3 runtime for the process manager/driver execution path as an alternative to WAMR.
+- The `wasm3` branch supplies a per-process bump allocator for wasm3 (`malloc/calloc/realloc` in `src/kernel/wasm3_shim.c`) and disables wasm3's global fixed heap.
 
 Planned:
 - Provide WASI-like shims or richer custom syscalls for drivers.

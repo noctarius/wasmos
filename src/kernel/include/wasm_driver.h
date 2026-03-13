@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "ipc.h"
 #include "spinlock.h"
-#include "wamr_runtime.h"
+#include "wasm3.h"
 
 typedef struct {
     const char *name;
@@ -19,15 +19,15 @@ typedef struct {
 
 typedef struct {
     wasm_driver_manifest_t manifest;
-    wamr_module_t *module;
-    wamr_instance_t *instance;
+    IM3Environment env;
+    IM3Runtime runtime;
+    IM3Module module;
     uint32_t owner_context_id;
     uint32_t endpoint;
     spinlock_t lock;
     uint8_t active;
 } wasm_driver_t;
 
-int wasm_driver_runtime_ensure(void);
 int wasm_driver_start(wasm_driver_t *driver,
                       const wasm_driver_manifest_t *manifest,
                       uint32_t owner_context_id);

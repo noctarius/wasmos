@@ -253,6 +253,7 @@ This guide captures microkernel-informed design decisions and a stepwise plan fo
 - `src/boot/` UEFI application (PE/COFF) that loads `kernel.elf` from the ESP.
 - `src/kernel/` Freestanding kernel (C + ASM).
 - `lib/libc/` Minimal user-space libc surface, shared C-side WASMOS wrapper headers, and per-language shims for WASMOS applications, drivers, and services; it stays separate from the freestanding kernel runtime code in `src/kernel/`.
+- The Zig shim in `lib/libc/zig/wasmos.zig` now wraps the raw host ABI behind Zig-facing `stdio` and `fs` helpers so Zig code can use libc-style behavior without importing the C-shaped host symbols directly.
 - `lib/libc/include/wasmos/api.h` centralizes the C-side host import declarations used by userland WASMOS modules.
 - `lib/libc/include/wasmos/ipc.h` provides reusable IPC message/reply helpers for C userland code.
 - `lib/libc/src/` owns the shared userland libc helper implementations (`string`, `stdio`, `ctype`, `stdlib`, `unistd`) so example applications and WASM services/drivers can reuse common libc methods instead of open-coding them; the `stdio` layer also provides a constrained shared formatter (`printf`, `snprintf`, `vsnprintf`) and minimal read-only `FILE` wrappers (`fopen`, `fread`, `fgets`, `fgetc`, `fclose`) for userland C code.

@@ -93,7 +93,7 @@ fn fsRequest(msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32) Error!i3
     return ipc_last_field(IPC_FIELD_ARG0);
 }
 
-pub const stdio = struct {
+pub const stdlib = struct {
     pub fn write(bytes: []const u8) Error!void {
         try rawWrite(bytes);
     }
@@ -192,6 +192,6 @@ pub const fs = struct {
 };
 
 pub fn putsn(bytes: []const u8) i32 {
-    stdio.write(bytes) catch return -1;
+    stdlib.write(bytes) catch return -1;
     return 0;
 }

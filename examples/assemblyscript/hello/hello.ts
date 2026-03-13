@@ -1,4 +1,4 @@
-import { fs, stdio } from "../../../lib/libc/assemblyscript/wasmos";
+import { fs, std } from "../../../lib/libc/assemblyscript/wasmos";
 
 let printed = false;
 
@@ -13,10 +13,10 @@ export function main(
     printed = true;
     const startup = fs.readTextFile("/startup.nsh");
     const readable = startup != null && startup.indexOf("BOOTX64.EFI") >= 0;
-    stdio.println("Hello from AssemblyScript on WASMOS!");
-    stdio.println("This is a tiny WASMOS-APP written in AS.");
-    stdio.println("Entry: main, runtime: stub");
-    stdio.println("startup.nsh readable: " + (readable ? "true" : "false"));
+    std.println("Hello from AssemblyScript on WASMOS!");
+    std.println("This is a tiny WASMOS-APP written in AS.");
+    std.println("Entry: main, runtime: stub");
+    std.println("startup.nsh readable: " + (readable ? "true" : "false"));
   }
   return 0;
 }

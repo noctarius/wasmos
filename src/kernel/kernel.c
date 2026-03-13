@@ -62,6 +62,7 @@ typedef struct {
     uint8_t pending_kind;
     uint32_t reply_endpoint;
     uint32_t request_id;
+    uint32_t native_min_index;
     uint32_t native_smoke_index;
     uint32_t smoke_index;
     uint32_t sysinit_index;
@@ -1218,6 +1219,7 @@ init_entry(process_t *process, void *arg)
         state->reply_endpoint = IPC_ENDPOINT_NONE;
         state->request_id = 1;
         state->pending_kind = 0;
+        state->native_min_index = boot_module_index_by_app_name(state->boot_info, "native-call-min");
         state->native_smoke_index = boot_module_index_by_app_name(state->boot_info, "native-call-smoke");
         state->smoke_index = boot_module_index_by_app_name(state->boot_info, "init-smoke");
         state->sysinit_index = boot_module_index_by_app_name(state->boot_info, "sysinit");
@@ -1242,20 +1244,25 @@ init_entry(process_t *process, void *arg)
         msg.source = state->reply_endpoint;
         msg.destination = proc_ep;
         msg.request_id = state->request_id;
-        if (state->native_smoke_index != 0xFFFFFFFFu) {
+        if (state->native_min_index != 0xFFFFFFFFu) {
+            serial_write("[init] spawn native-call-min\n");
+            msg.arg0 = state->native_min_index;
+            state->pending_kind = 1;
+            state->phase = 1;
+        } else if (state->native_smoke_index != 0xFFFFFFFFu) {
             serial_write("[init] spawn native-call-smoke\n");
             msg.arg0 = state->native_smoke_index;
-            state->pending_kind = 1;
+            state->pending_kind = 2;
             state->phase = 1;
         } else if (state->smoke_index != 0xFFFFFFFFu) {
             serial_write("[init] spawn init-smoke\n");
             msg.arg0 = state->smoke_index;
-            state->pending_kind = 2;
+            state->pending_kind = 3;
             state->phase = 1;
         } else {
             serial_write("[init] spawn sysinit\n");
             msg.arg0 = state->sysinit_index;
-            state->pending_kind = 3;
+            state->pending_kind = 4;
             state->phase = 3;
         }
         msg.arg1 = 0;
@@ -1313,8 +1320,10 @@ init_entry(process_t *process, void *arg)
         }
         if (msg.request_id != state->request_id || msg.type == PROC_IPC_ERROR) {
             if (state->pending_kind == 1) {
-                serial_write("[init] native-call-smoke spawn failed\n");
+                serial_write("[init] native-call-min spawn failed\n");
             } else if (state->pending_kind == 2) {
+                serial_write("[init] native-call-smoke spawn failed\n");
+            } else if (state->pending_kind == 3) {
                 serial_write("[init] init-smoke spawn failed\n");
             } else {
                 serial_write("[init] sysinit spawn failed\n");
@@ -1323,6 +1332,32 @@ init_entry(process_t *process, void *arg)
             return PROCESS_RUN_EXITED;
         }
         if (state->pending_kind == 1) {
+            serial_write("[init] native-call-min spawn ok\n");
+            state->pending_kind = 0;
+            if (state->native_smoke_index != 0xFFFFFFFFu) {
+                state->request_id++;
+                msg.type = PROC_IPC_SPAWN;
+                msg.source = state->reply_endpoint;
+                msg.destination = process_manager_endpoint();
+                msg.request_id = state->request_id;
+                msg.arg0 = state->native_smoke_index;
+                msg.arg1 = 0;
+                msg.arg2 = 0;
+                msg.arg3 = 0;
+                serial_write("[init] spawn native-call-smoke\n");
+                int send_rc = ipc_send_from(process->context_id, msg.destination, &msg);
+                if (send_rc != IPC_OK) {
+                    serial_write("[init] native-call-smoke spawn request failed rc=");
+                    serial_write_hex64((uint64_t)(uint32_t)send_rc);
+                    serial_write("[init] native-call-smoke spawn request failed\n");
+                    process_set_exit_status(process, -1);
+                    return PROCESS_RUN_EXITED;
+                }
+                state->pending_kind = 2;
+                state->phase = 2;
+                return PROCESS_RUN_YIELDED;
+            }
+        } else if (state->pending_kind == 2) {
             serial_write("[init] native-call-smoke spawn ok\n");
             state->pending_kind = 0;
             if (state->smoke_index != 0xFFFFFFFFu) {
@@ -1344,11 +1379,11 @@ init_entry(process_t *process, void *arg)
                     process_set_exit_status(process, -1);
                     return PROCESS_RUN_EXITED;
                 }
-                state->pending_kind = 2;
+                state->pending_kind = 3;
                 state->phase = 2;
                 return PROCESS_RUN_YIELDED;
             }
-        } else if (state->pending_kind == 2) {
+        } else if (state->pending_kind == 3) {
             serial_write("[init] init-smoke spawn ok\n");
             state->pending_kind = 0;
         } else {
@@ -1377,7 +1412,7 @@ init_entry(process_t *process, void *arg)
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
-        state->pending_kind = 3;
+        state->pending_kind = 4;
         state->phase = 3;
     }
 
@@ -1414,7 +1449,7 @@ init_entry(process_t *process, void *arg)
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
-        state->pending_kind = 3;
+        state->pending_kind = 4;
         state->phase = 3;
     }
 

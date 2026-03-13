@@ -69,6 +69,7 @@ There is also a minimal C-based example at `examples/c/hello/hello_c.c`, packed 
 `examples/c/chardev_preempt/chardev_preempt.c` is a small preemption stress test for the embedded chardev server. Run it from the CLI with `exec chardev-preempt`.
 `examples/c/init_smoke/init_smoke.c` is a tiny init-entry smoke test; run it from the CLI with `exec init-smoke`.
 `examples/c/native_call_smoke/native_call_smoke.c` is a tiny smoke test that directly calls `console_write`; run it from the CLI with `exec native-call-smoke`.
+`examples/c/native_call_min/native_call_min.c` is the minimal native-call probe (debug_mark + console_write); run it from the CLI with `exec native-call-min`.
 
 ### Rust (optional)
 Rust can be used to write WASMOS drivers, services, and applications. Install Rust and the WebAssembly target:

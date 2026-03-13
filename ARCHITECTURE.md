@@ -251,6 +251,7 @@ This guide captures microkernel-informed design decisions and a stepwise plan fo
 ## Repository Layout
 - `src/boot/` UEFI application (PE/COFF) that loads `kernel.elf` from the ESP.
 - `src/kernel/` Freestanding kernel (C + ASM).
+- `lib/libc/` Minimal user-space libc surface and per-language shims for WASMOS applications; it stays separate from the freestanding kernel runtime code in `src/kernel/`.
 - `src/kernel/wasm3_link.c` owns the wasm3 host ABI wrapper surface and import registration, separate from boot and init policy in `src/kernel/kernel.c`.
 - `libs/wasm/` Integration point for the wasm3 runtime.
 - `examples/` Example WASM applications used for driver/server/client bring-up (grouped by language).

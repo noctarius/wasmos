@@ -1,3 +1,5 @@
+set(WASM_HELLO_RUST_LIBC_SRC ${LIBC_DIR}/rust/wasmos.rs)
+
 if (RUST_ENABLE)
   find_program(RUSTC_EXECUTABLE rustc)
   if (NOT RUSTC_EXECUTABLE)
@@ -20,7 +22,7 @@ if (RUST_ENABLE)
             --crate-type=cdylib
             ${WASM_HELLO_RUST_SRC}
             -o ${WASM_HELLO_RUST_WASM}
-    DEPENDS ${WASM_HELLO_RUST_SRC}
+    DEPENDS ${WASM_HELLO_RUST_SRC} ${WASM_HELLO_RUST_LIBC_SRC}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Building wasm hello-rust module"
     VERBATIM

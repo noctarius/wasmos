@@ -15,10 +15,16 @@ if (ZIG_ENABLE)
   endif ()
 endif ()
 
+set(WASM_HELLO_ZIG_LIBC_SRC ${LIBC_DIR}/zig/wasmos.zig)
+
 if (ZIG_AVAILABLE)
+  set(WASM_HELLO_ZIG_STAGE_DIR ${BUILD_DIR}/zig_hello_src)
   add_custom_command(
     OUTPUT ${WASM_HELLO_ZIG_WASM}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${WASM_HELLO_ZIG_STAGE_DIR}
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${WASM_HELLO_ZIG_SRC} ${WASM_HELLO_ZIG_STAGE_DIR}/hello_zig.zig
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${WASM_HELLO_ZIG_LIBC_SRC} ${WASM_HELLO_ZIG_STAGE_DIR}/wasmos.zig
     COMMAND ${ZIG_EXECUTABLE}
             build-exe
             -target wasm32-freestanding
@@ -27,8 +33,8 @@ if (ZIG_AVAILABLE)
             -fstrip
             --export=wasmos_entry
             -femit-bin=${WASM_HELLO_ZIG_WASM}
-            ${WASM_HELLO_ZIG_SRC}
-    DEPENDS ${WASM_HELLO_ZIG_SRC}
+            ${WASM_HELLO_ZIG_STAGE_DIR}/hello_zig.zig
+    DEPENDS ${WASM_HELLO_ZIG_SRC} ${WASM_HELLO_ZIG_LIBC_SRC}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Building Zig hello module"
     VERBATIM

@@ -109,7 +109,7 @@ fn fs_request(msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> Resu
     Ok(unsafe { ipc_last_field(IPC_FIELD_ARG0) })
 }
 
-pub mod stdio {
+pub mod std {
     use super::{fmt, raw_write, Error, Write};
 
     pub struct Writer;
@@ -221,5 +221,5 @@ pub mod fs {
 
 #[inline]
 pub fn putsn(bytes: &[u8]) -> i32 {
-    stdio::write(bytes).map(|_| 0).unwrap_or(-1)
+    std::write(bytes).map(|_| 0).unwrap_or(-1)
 }

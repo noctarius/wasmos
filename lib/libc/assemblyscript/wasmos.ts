@@ -87,7 +87,7 @@ function fsRequest(type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32): i32 {
   return ipc_last_field(IPC_FIELD_ARG0);
 }
 
-export namespace stdio {
+export namespace std {
   export function write(text: string): bool {
     return writeStringRaw(text);
   }
@@ -202,5 +202,5 @@ export namespace fs {
 }
 
 export function putsn(msg: string): void {
-  stdio.write(msg);
+  std.write(msg);
 }

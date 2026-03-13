@@ -57,9 +57,9 @@ func fsBufferCopy(ptr uint32, len uint32, offset uint32) int32
 var fsReplyEndpoint int32 = -1
 var fsRequestID int32 = 1
 
-type stdioAPI struct{}
+type stdAPI struct{}
 
-var stdio = stdioAPI{}
+var std = stdAPI{}
 
 type File struct {
 	fd int32
@@ -135,19 +135,19 @@ func fsRequest(msgType int32, arg0 int32, arg1 int32, arg2 int32, arg3 int32) (i
 	return ipcLastField(ipcFieldArg0), ErrOK
 }
 
-func (stdioAPI) WriteString(s string) Error {
+func (stdAPI) WriteString(s string) Error {
 	return rawWriteString(s)
 }
 
-func (stdioAPI) WriteBytes(b []byte) Error {
+func (stdAPI) WriteBytes(b []byte) Error {
 	return rawWriteBytes(b)
 }
 
-func (stdioAPI) Puts(s string) Error {
+func (stdAPI) Puts(s string) Error {
 	return rawWriteString(s)
 }
 
-func (stdioAPI) Println(s string) Error {
+func (stdAPI) Println(s string) Error {
 	return rawWriteString(s + "\n")
 }
 

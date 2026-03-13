@@ -24,6 +24,8 @@ extern volatile uint8_t wasmos_wamr_last_opcodes[16];
 extern volatile uint32_t wasmos_wamr_last_opcodes_len;
 extern volatile uint8_t wasmos_wamr_first_opcodes[16];
 extern volatile uint32_t wasmos_wamr_first_opcodes_len;
+extern volatile uint8_t wasmos_wamr_exec_opcodes[16];
+extern volatile uint32_t wasmos_wamr_exec_opcodes_len;
 extern volatile void *wasmos_wamr_first_ip;
 extern volatile void *wasmos_wamr_first_ip_end;
 extern volatile void *wasmos_wamr_last_code_start;
@@ -51,6 +53,19 @@ serial_write_hex64_local(uint64_t value)
     }
     buf[18] = '\n';
     buf[19] = '\0';
+    serial_write(buf);
+}
+
+static void
+serial_write_hex8_local(uint8_t value)
+{
+    char buf[5];
+    static const char hex[] = "0123456789ABCDEF";
+    buf[0] = '0';
+    buf[1] = 'x';
+    buf[2] = hex[(value >> 4) & 0xF];
+    buf[3] = hex[value & 0xF];
+    buf[4] = '\0';
     serial_write(buf);
 }
 
@@ -253,6 +268,23 @@ void wamr_unload_module(wamr_module_t *module) {
     wasm_runtime_unload((wasm_module_t)module);
 }
 
+static void
+log_exec_opcodes(void)
+{
+    serial_write("[wamr] exec opcode count=");
+    serial_write_hex64_local((uint64_t)wasmos_wamr_exec_opcodes_len);
+    serial_write("[wamr] exec opcodes=");
+    if (wasmos_wamr_exec_opcodes_len == 0) {
+        serial_write("\n");
+        return;
+    }
+    for (uint32_t i = 0; i < wasmos_wamr_exec_opcodes_len; ++i) {
+        serial_write_hex8_local(wasmos_wamr_exec_opcodes[i]);
+        serial_write(" ");
+    }
+    serial_write("\n");
+}
+
 int wamr_call_function(wamr_instance_t *instance,
                        const char *func_name,
                        uint32_t argc,
@@ -298,6 +330,7 @@ int wamr_call_function(wamr_instance_t *instance,
     wasmos_wamr_opcode_exec_count = 0;
     wasmos_wamr_last_frame_ip = 0;
     wasmos_wamr_last_func = 0;
+    wasmos_wamr_exec_opcodes_len = 0;
     serial_write("[wamr] call begin func=");
     serial_write(func_name);
     serial_write("\n");
@@ -340,6 +373,7 @@ int wamr_call_function(wamr_instance_t *instance,
     serial_write_hex64_local((uint64_t)(uintptr_t)wasmos_wamr_last_func);
     log_first_opcode_bytes();
     log_opcode_bytes();
+    log_exec_opcodes();
     const char *exc = wasm_runtime_get_exception((wasm_module_inst_t)instance);
     if (exc) {
         serial_write("[wamr] exception ");

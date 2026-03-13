@@ -19,6 +19,10 @@ Quick probe: `native-call-min` (debug_mark + console_write only) is now spawned
 before `native-call-smoke`. It still returns with `native call count=0`, so the
 minimal native import path remains unexecuted in preemptive mode.
 
+Interpreter opcode trace now shows `exec opcodes=0xCF` for both `native-call`
+apps and `sysinit`, confirming that only the IMPDEP glue opcode is executed
+before returning.
+
 ## Hypotheses Under Consideration
 - Preemption/timer interaction disrupting interpreter state
 - Incorrect frame/IP state when switching into the interpreter
@@ -39,6 +43,7 @@ expose execution state around the interpreter dispatch loop.
 - Code start/end addresses for the current function
 - Last frame instruction pointer and function pointer
 - Entry call begin/end logs with `ok` result and exception state
+- Executed opcode trace (first 16 opcode bytes observed by interpreter dispatch)
 - Captured opcode bytes at code start
 - Captured "first opcode" bytes + `ip`/`ip_end` recorded at interpreter entry
 

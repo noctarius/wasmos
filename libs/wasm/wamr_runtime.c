@@ -18,6 +18,10 @@ extern volatile uint32_t wasmos_wamr_call_indirect_last_fidx;
 extern volatile uint32_t wasmos_wamr_call_indirect_last_import;
 extern volatile uint8_t wasmos_wamr_last_opcodes[16];
 extern volatile uint32_t wasmos_wamr_last_opcodes_len;
+extern volatile uint8_t wasmos_wamr_first_opcodes[16];
+extern volatile uint32_t wasmos_wamr_first_opcodes_len;
+extern volatile void *wasmos_wamr_first_ip;
+extern volatile void *wasmos_wamr_first_ip_end;
 extern volatile void *wasmos_wamr_last_code_start;
 extern volatile void *wasmos_wamr_last_code_end;
 extern volatile uint32_t wasmos_wamr_opcode_exec_count;
@@ -81,6 +85,33 @@ log_opcode_bytes(void)
     serial_write("[wamr] opcodes bytes=");
     for (uint32_t i = 0; i < len; ++i) {
         uint8_t b = wasmos_wamr_last_opcodes[i];
+        buf[0] = hex[(b >> 4) & 0xF];
+        buf[1] = hex[b & 0xF];
+        buf[2] = ' ';
+        buf[3] = '\0';
+        serial_write(buf);
+    }
+    serial_write("\n");
+}
+
+static void
+log_first_opcode_bytes(void)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    char buf[4];
+    uint32_t len = wasmos_wamr_first_opcodes_len;
+    if (len > 8) {
+        len = 8;
+    }
+    serial_write("[wamr] first opcode ip=");
+    serial_write_hex64_local((uint64_t)(uintptr_t)wasmos_wamr_first_ip);
+    serial_write("[wamr] first opcode ip_end=");
+    serial_write_hex64_local((uint64_t)(uintptr_t)wasmos_wamr_first_ip_end);
+    serial_write("[wamr] first opcode len=");
+    serial_write_hex64_local((uint64_t)wasmos_wamr_first_opcodes_len);
+    serial_write("[wamr] first opcode bytes=");
+    for (uint32_t i = 0; i < len; ++i) {
+        uint8_t b = wasmos_wamr_first_opcodes[i];
         buf[0] = hex[(b >> 4) & 0xF];
         buf[1] = hex[b & 0xF];
         buf[2] = ' ';
@@ -251,6 +282,9 @@ int wamr_call_function(wamr_instance_t *instance,
     wasmos_wamr_call_indirect_count = 0;
     wasmos_wamr_call_indirect_last_fidx = 0;
     wasmos_wamr_call_indirect_last_import = 0;
+    wasmos_wamr_first_ip = 0;
+    wasmos_wamr_first_ip_end = 0;
+    wasmos_wamr_first_opcodes_len = 0;
     wasmos_wamr_last_code_start = 0;
     wasmos_wamr_last_code_end = 0;
     wasmos_wamr_opcode_exec_count = 0;
@@ -281,6 +315,7 @@ int wamr_call_function(wamr_instance_t *instance,
     serial_write_hex64_local((uint64_t)(uintptr_t)wasmos_wamr_last_frame_ip);
     serial_write("[wamr] last func=");
     serial_write_hex64_local((uint64_t)(uintptr_t)wasmos_wamr_last_func);
+    log_first_opcode_bytes();
     log_opcode_bytes();
     const char *exc = wasm_runtime_get_exception((wasm_module_inst_t)instance);
     if (exc) {

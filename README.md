@@ -250,6 +250,7 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes. U
 - Driver wasm link settings currently constrain module stack/linear memory for low-footprint instantiation in the freestanding runtime pool.
 - A generic kernel wasm driver host (`src/kernel/wasm_driver.c`) loads embedded modules, instantiates them via wasm3, and provides an entry call for long-running drivers.
 - The WASM-backed chardev runs as an IPC service in a dedicated `chardev-server` process (`src/kernel/wasm_chardev.c`) using `src/drivers/chardev/chardev_server.c`.
+- The wasm3 host ABI wrappers and import registration live in `src/kernel/wasm3_link.c`, leaving `src/kernel/kernel.c` focused on boot flow and process bring-up.
 - Boot modules now include `sysinit.wasmosapp` and `chardev_client.wasmosapp`; the chardev client performs one IPC write/read roundtrip via imported IPC primitives.
 - The chardev server process blocks in `ipc_recv` when its IPC queue is empty and is woken by incoming IPC messages.
 - The chardev service path uses permission-aware IPC send/receive calls tied to its owner context.

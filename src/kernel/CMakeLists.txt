@@ -24,6 +24,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/wasm_driver.o
   ${BUILD_DIR}/wasm_chardev.o
   ${BUILD_DIR}/wasm3_probe.o
+  ${BUILD_DIR}/wasm3_link.o
   ${BUILD_DIR}/wasm3_shim.o
   ${BUILD_DIR}/serial.o
   ${BUILD_DIR}/wasm3_code.o
@@ -64,6 +65,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/wasm_driver.c
   ${KERNEL_DIR}/wasm_chardev.c
   ${KERNEL_DIR}/wasm3_probe.c
+  ${KERNEL_DIR}/wasm3_link.c
   ${KERNEL_DIR}/wasm3_shim.c
   ${KERNEL_DIR}/serial.c
   ${WASM_DIR}/wasm3/source/m3_code.c
@@ -172,6 +174,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_driver.c -o ${BUILD_DIR}/wasm_driver.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_chardev.c -o ${BUILD_DIR}/wasm_chardev.o
   COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${KERNEL_DIR}/wasm3_probe.c -o ${BUILD_DIR}/wasm3_probe.o
+  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${KERNEL_DIR}/wasm3_link.c -o ${BUILD_DIR}/wasm3_link.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm3_shim.c -o ${BUILD_DIR}/wasm3_shim.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/serial.c -o ${BUILD_DIR}/serial.o
   COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_code.c -o ${BUILD_DIR}/wasm3_code.o

@@ -35,6 +35,8 @@ extern int32_t wasmos_proc_count(void)
     WASMOS_WASM_IMPORT("wasmos", "proc_count");
 extern int32_t wasmos_proc_info(int32_t index, int32_t buf, int32_t buf_len)
     WASMOS_WASM_IMPORT("wasmos", "proc_info");
+extern int32_t wasmos_sched_yield(void)
+    WASMOS_WASM_IMPORT("wasmos", "sched_yield");
 
 static int32_t g_reply_endpoint = -1;
 static int32_t g_spawn_request_id = 1;
@@ -214,6 +216,7 @@ initialize(int32_t proc_endpoint,
         }
         for (volatile int spin = 0; spin < 200000; ++spin) {
         }
+        (void)wasmos_sched_yield();
         while (g_next_index < g_module_count &&
                (g_next_index == g_init_index || should_skip_module(g_next_index))) {
             log_line("[sysinit] skip index ");

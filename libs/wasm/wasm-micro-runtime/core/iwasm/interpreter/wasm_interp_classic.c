@@ -43,6 +43,10 @@ volatile void *wasmos_wamr_last_module;
 volatile void *wasmos_wamr_last_exec_env;
 volatile uint8_t wasmos_wamr_last_opcodes[16];
 volatile uint32_t wasmos_wamr_last_opcodes_len;
+volatile uint8_t wasmos_wamr_first_opcodes[16];
+volatile uint32_t wasmos_wamr_first_opcodes_len;
+volatile void *wasmos_wamr_first_ip;
+volatile void *wasmos_wamr_first_ip_end;
 volatile void *wasmos_wamr_last_rsp;
 volatile void *wasmos_wamr_last_frame_sp;
 volatile void *wasmos_wamr_last_frame_lp;
@@ -88,6 +92,34 @@ wasmos_wamr_record_opcodes(uint8 *frame_ip, uint8 *frame_ip_end)
         wasmos_wamr_last_opcodes[i] = frame_ip[i];
     }
     wasmos_wamr_last_opcodes_len = count;
+}
+
+static bool
+wasmos_wamr_try_log_first_opcode(WASMFunctionInstance *cur_func,
+                                 uint8 *frame_ip,
+                                 uint8 *frame_ip_end)
+{
+    if (!frame_ip || !frame_ip_end || frame_ip >= frame_ip_end) {
+        return false;
+    }
+    if (!cur_func) {
+        return false;
+    }
+    uint8 *code_begin = wasm_get_func_code(cur_func);
+    uint8 *code_end = wasm_get_func_code_end(cur_func);
+    if (!code_begin || !code_end || frame_ip < code_begin || frame_ip >= code_end) {
+        return false;
+    }
+
+    uint32_t remaining = (uint32_t)(frame_ip_end - frame_ip);
+    uint32_t count = remaining > 8 ? 8 : remaining;
+    wasmos_wamr_first_ip = frame_ip;
+    wasmos_wamr_first_ip_end = frame_ip_end;
+    for (uint32_t i = 0; i < count; ++i) {
+        wasmos_wamr_first_opcodes[i] = frame_ip[i];
+    }
+    wasmos_wamr_first_opcodes_len = count;
+    return true;
 }
 
 static inline bool
@@ -1583,7 +1615,11 @@ wasm_interp_call_func_import(WASMModuleInstance *module_inst,
 #if WASM_ENABLE_LABELS_AS_VALUES != 0
 
 #define HANDLE_OP(opcode) HANDLE_##opcode:
-#define FETCH_OPCODE_AND_DISPATCH() goto *handle_table[*frame_ip++]
+#define FETCH_OPCODE_AND_DISPATCH() \
+    do {                            \
+        WASMOS_TRACE_FIRST_OPCODE(); \
+        goto *handle_table[*frame_ip++]; \
+    } while (0)
 #if defined(WASMOS_ENABLE_SAFEPOINT)
 #define WASMOS_SAFEPOINT()                       \
     do {                                         \
@@ -1613,8 +1649,17 @@ wasm_interp_call_func_import(WASMModuleInstance *module_inst,
         wasmos_wamr_record_rsp();              \
         wasmos_wamr_record_opcodes(frame_ip, frame_ip_end); \
     } while (0)
+#define WASMOS_TRACE_FIRST_OPCODE()                      \
+    do {                                                  \
+        if (wasmos_log_first_opcode) {                   \
+            if (wasmos_wamr_try_log_first_opcode(cur_func, frame_ip, frame_ip_end)) { \
+                wasmos_log_first_opcode = false;         \
+            }                                             \
+        }                                                 \
+    } while (0)
 #else
 #define WASMOS_TRACE_WAMR_IP() (void)0
+#define WASMOS_TRACE_FIRST_OPCODE() (void)0
 #endif
 
 #if WASM_ENABLE_THREAD_MGR != 0 && WASM_ENABLE_DEBUG_INTERP != 0
@@ -1681,8 +1726,17 @@ wasm_interp_call_func_import(WASMModuleInstance *module_inst,
         wasmos_wamr_record_rsp();              \
         wasmos_wamr_record_opcodes(frame_ip, frame_ip_end); \
     } while (0)
+#define WASMOS_TRACE_FIRST_OPCODE()                      \
+    do {                                                  \
+        if (wasmos_log_first_opcode) {                   \
+            if (wasmos_wamr_try_log_first_opcode(cur_func, frame_ip, frame_ip_end)) { \
+                wasmos_log_first_opcode = false;         \
+            }                                             \
+        }                                                 \
+    } while (0)
 #else
 #define WASMOS_TRACE_WAMR_IP() (void)0
+#define WASMOS_TRACE_FIRST_OPCODE() (void)0
 #endif
 #if WASM_ENABLE_THREAD_MGR != 0 && WASM_ENABLE_DEBUG_INTERP != 0
 #define HANDLE_OP_END()                                                   \
@@ -1791,6 +1845,9 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
 #if defined(WASMOS_ENABLE_SAFEPOINT)
     uint32 wasmos_safepoint_budget = 128;
 #endif
+#if !defined(WASMOS_DISABLE_TRACE)
+    bool wasmos_log_first_opcode = true;
+#endif
 
 #if WASM_ENABLE_INSTRUCTION_METERING != 0
     int instructions_left = -1;
@@ -1863,7 +1920,15 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
 
 #if WASM_ENABLE_LABELS_AS_VALUES == 0
     while (frame_ip < frame_ip_end) {
+        uint8 *op_ip = frame_ip;
         opcode = *frame_ip++;
+#if !defined(WASMOS_DISABLE_TRACE)
+        if (wasmos_log_first_opcode) {
+            if (wasmos_wamr_try_log_first_opcode(cur_func, op_ip, frame_ip_end)) {
+                wasmos_log_first_opcode = false;
+            }
+        }
+#endif
         switch (opcode) {
 #else
     FETCH_OPCODE_AND_DISPATCH();
@@ -7007,6 +7072,19 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
                 }
                 wasmos_wamr_last_opcodes_len = count;
             }
+#if !defined(WASMOS_DISABLE_TRACE)
+            if (frame_ip && frame_ip_end && frame_ip_end > frame_ip) {
+                uint32_t remaining = (uint32_t)(frame_ip_end - frame_ip);
+                uint32_t count = remaining > 8 ? 8 : remaining;
+                wasmos_wamr_first_ip = frame_ip;
+                wasmos_wamr_first_ip_end = frame_ip_end;
+                for (uint32_t j = 0; j < count; ++j) {
+                    wasmos_wamr_first_opcodes[j] = frame_ip[j];
+                }
+                wasmos_wamr_first_opcodes_len = count;
+                wasmos_log_first_opcode = false;
+            }
+#endif
 
             frame_sp = frame->sp_bottom =
                 frame_lp + cur_func->param_cell_num + cur_func->local_cell_num;

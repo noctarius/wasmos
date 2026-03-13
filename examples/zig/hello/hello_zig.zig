@@ -1,15 +1,6 @@
-extern "wasmos" fn console_write(ptr: i32, len: i32) callconv(.c) i32;
+const wasmos = @import("wasmos.zig");
 
 var printed: bool = false;
-
-fn write_line(s: []const u8) void {
-    if (s.len == 0) {
-        return;
-    }
-    const ptr: i32 = @intCast(@intFromPtr(s.ptr));
-    const len: i32 = @intCast(s.len);
-    _ = console_write(ptr, len);
-}
 
 pub fn main() void {}
 
@@ -26,8 +17,8 @@ pub export fn wasmos_entry(
 
     if (!printed) {
         printed = true;
-        write_line("Hello from Zig on WASMOS!\n");
-        write_line("This is a tiny WASMOS-APP written in Zig.\n");
-        write_line("Entry: main\n");
+        _ = wasmos.putsn("Hello from Zig on WASMOS!\n");
+        _ = wasmos.putsn("This is a tiny WASMOS-APP written in Zig.\n");
+        _ = wasmos.putsn("Entry: main\n");
     }
 }

@@ -9,10 +9,16 @@ if (GO_ENABLE)
 endif ()
 
 if (GO_AVAILABLE)
+  set(WASM_HELLO_GO_STAGE_DIR ${BUILD_DIR}/go_hello_src)
+  set(WASM_HELLO_GO_LIBC_SRC ${LIBC_DIR}/go/wasmos.go)
   add_custom_command(
     OUTPUT ${WASM_HELLO_GO_WASM}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-    COMMAND ${TINYGO_EXECUTABLE}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${WASM_HELLO_GO_STAGE_DIR}
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${WASM_HELLO_GO_SRC} ${WASM_HELLO_GO_STAGE_DIR}/hello_go.go
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${WASM_HELLO_GO_LIBC_SRC} ${WASM_HELLO_GO_STAGE_DIR}/wasmos.go
+    COMMAND ${CMAKE_COMMAND} -E env GO111MODULE=off
+            ${TINYGO_EXECUTABLE}
             build
             -target=wasm
             -opt=z
@@ -21,9 +27,9 @@ if (GO_AVAILABLE)
             -scheduler=none
             -gc=leaking
             -o ${WASM_HELLO_GO_WASM}
-            ${WASM_HELLO_GO_SRC}
-    DEPENDS ${WASM_HELLO_GO_SRC}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            ./go_hello_src
+    DEPENDS ${WASM_HELLO_GO_SRC} ${WASM_HELLO_GO_LIBC_SRC}
+    WORKING_DIRECTORY ${BUILD_DIR}
     COMMENT "Building wasm hello-go module"
     VERBATIM
   )

@@ -8,6 +8,7 @@ IMPORTANT: Create a git commit after each prompt iteration.
 ## Layout
 - `src/boot/` UEFI application (PE/COFF) that loads `kernel.elf` and jumps to its entry.
 - `src/kernel/` Freestanding kernel (C + ASM) with a tiny boot-time runtime.
+- `lib/libc/` Minimal user-space libc and per-language shims shared by WASMOS applications.
 - `libs/wasm/` WASM runtime sources (currently wasm3).
 - `examples/c/` Example C WASM applications.
 - `examples/go/` Example Go (TinyGo) WASM applications.
@@ -247,6 +248,7 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes. U
 - A minimal user-space `cli` WASMOS-APP is loaded as a boot module, reads input from serial, and supports `help`, `ps`, `ls`, `cat`, `cd`, and `exec` (loads WASMOS-APPs from disk; drivers/services are rejected).
 - IPC endpoint permissions are enforced by context-aware APIs (`ipc_send_from`, `ipc_recv_for`) for source-endpoint ownership and endpoint receive ownership.
 - The kernel now builds and embeds example WASM applications from `examples/` (including `chardev_client`).
+- `lib/libc` provides a separate user-space libc layer (minimal `string`/`stdio` plus host-import wrappers) for C, Go, Rust, Zig, and AssemblyScript examples.
 - Driver wasm link settings currently constrain module stack/linear memory for low-footprint instantiation in the freestanding runtime pool.
 - A generic kernel wasm driver host (`src/kernel/wasm_driver.c`) loads embedded modules, instantiates them via wasm3, and provides an entry call for long-running drivers.
 - The WASM-backed chardev runs as an IPC service in a dedicated `chardev-server` process (`src/kernel/wasm_chardev.c`) using `src/drivers/chardev/chardev_server.c`.

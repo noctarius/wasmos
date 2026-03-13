@@ -12,6 +12,7 @@
 #include "wamr_context.h"
 #include "wamr_runtime.h"
 #include "wasm_chardev.h"
+#include "wasm3_probe.h"
 #include "physmem.h"
 #include "io.h"
 
@@ -54,6 +55,7 @@ typedef struct {
 } preempt_test_state_t;
 static preempt_test_state_t g_preempt_test_state;
 static const uint8_t g_preempt_test_enabled = 0;
+static const uint8_t g_skip_wamr_boot = 1;
 
 typedef struct {
     const boot_info_t *boot_info;
@@ -66,6 +68,7 @@ typedef struct {
     uint32_t native_smoke_index;
     uint32_t smoke_index;
     uint32_t sysinit_index;
+    uint8_t wasm3_probe_done;
 } init_state_t;
 
 static int
@@ -1205,6 +1208,21 @@ init_entry(process_t *process, void *arg)
     }
 
     if (!state->started) {
+        state->native_min_index = boot_module_index_by_app_name(state->boot_info, "native-call-min");
+        state->native_smoke_index = boot_module_index_by_app_name(state->boot_info, "native-call-smoke");
+        state->smoke_index = boot_module_index_by_app_name(state->boot_info, "init-smoke");
+        state->sysinit_index = boot_module_index_by_app_name(state->boot_info, "sysinit");
+        state->wasm3_probe_done = 0;
+        state->reply_endpoint = IPC_ENDPOINT_NONE;
+        state->request_id = 1;
+        state->pending_kind = 0;
+        state->phase = 0;
+        if (g_skip_wamr_boot) {
+            serial_write("[init] wamr boot bypass enabled\n");
+            state->started = 1;
+            return PROCESS_RUN_YIELDED;
+        }
+
         process_manager_init(state->boot_info);
         if (process_spawn_as(process->pid, "process-manager", process_manager_entry, 0, &pm_pid) != 0) {
             serial_write("[init] process manager spawn failed\n");
@@ -1215,14 +1233,6 @@ init_entry(process_t *process, void *arg)
         serial_write("[init] process manager pid=");
         serial_write_hex64(pm_pid);
         state->started = 1;
-        state->phase = 0;
-        state->reply_endpoint = IPC_ENDPOINT_NONE;
-        state->request_id = 1;
-        state->pending_kind = 0;
-        state->native_min_index = boot_module_index_by_app_name(state->boot_info, "native-call-min");
-        state->native_smoke_index = boot_module_index_by_app_name(state->boot_info, "native-call-smoke");
-        state->smoke_index = boot_module_index_by_app_name(state->boot_info, "init-smoke");
-        state->sysinit_index = boot_module_index_by_app_name(state->boot_info, "sysinit");
         if (state->sysinit_index == 0xFFFFFFFFu) {
             serial_write("[init] sysinit module not found\n");
             process_set_exit_status(process, -1);
@@ -1230,7 +1240,26 @@ init_entry(process_t *process, void *arg)
         }
     }
 
+    if (g_skip_wamr_boot) {
+        if (!state->wasm3_probe_done && state->native_min_index != 0xFFFFFFFFu) {
+            serial_write("[init] wasm3 probe native-call-min\n");
+            int wasm3_rc = wasm3_probe_run(state->boot_info, state->native_min_index);
+            serial_write("[init] wasm3 probe rc=");
+            serial_write_hex64((uint64_t)(uint32_t)wasm3_rc);
+            state->wasm3_probe_done = 1;
+        }
+        process_block_on_ipc(process);
+        return PROCESS_RUN_BLOCKED;
+    }
+
     if (state->phase == 0) {
+        if (!state->wasm3_probe_done && state->native_min_index != 0xFFFFFFFFu) {
+            serial_write("[init] wasm3 probe native-call-min\n");
+            int wasm3_rc = wasm3_probe_run(state->boot_info, state->native_min_index);
+            serial_write("[init] wasm3 probe rc=");
+            serial_write_hex64((uint64_t)(uint32_t)wasm3_rc);
+            state->wasm3_probe_done = 1;
+        }
         uint32_t proc_ep = process_manager_endpoint();
         if (proc_ep == IPC_ENDPOINT_NONE) {
             return PROCESS_RUN_YIELDED;

@@ -176,6 +176,7 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes. U
 - Inter-component communication is IPC-based.
 - Debugging: the `debug_mark(tag)` wasm native logs a tag and PID to serial to confirm app execution paths.
 - Debugging: PM logs app flags and entry returns, and `sysinit` emits debug_mark tags `0x1101..0x11FF` to trace its loop behavior in preemptive runs.
+- Debugging: the kernel init path can temporarily bypass WAMR boot module spawning via `g_skip_wamr_boot` in `src/kernel/kernel.c` when isolating the wasm3 probe.
 - The #GP exception handler logs err/rip/cs/rflags plus current PID/name and stack bounds for debugging non-canonical instruction pointers.
 - Process stacks carry canaries at base/top and are checked on each process entry to catch overflows early.
 - Process stacks reserve an unmapped guard page above and below the usable stack to catch overflows as page faults.

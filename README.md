@@ -50,6 +50,8 @@ If it isn't present, download OVMF from edk2 and pass `-DOVMF_CODE=/path/to/OVMF
 - Kernel-side wasm3 runtime create/load/call/free paths execute with preemption disabled so timer IRQs do not interrupt runtime mutation.
 - `lib/libc` now provides a shared userland C surface for common helpers such as `strlen`, `strcmp`, `strncmp`, `tolower`, `toupper`, `putsn`, `printf`, `snprintf`, `abs`, `atoi`, and `strtol`, alongside reusable WASMOS host wrapper headers in `lib/libc/include/wasmos/`.
 - The shared `printf` layer is intentionally minimal: `%s`, `%c`, `%d`/`%i`, `%u`, `%x`/`%X`, `%p`, `%%`, basic width/zero padding, and `l` length modifiers are supported; floating-point formatting is not.
+- `lib/libc` now also exposes minimal read-only file handling through `open`, `read`, `close`, `fopen`, `fread`, `fgets`, `fgetc`, and `fclose`, using the shared process-manager FS buffer and the `fs-fat` service under the hood.
+- The current shared file API is intentionally narrow: read-only access only, no seek/write/stat yet, and `fs-fat` still limits file reads to files that fit within the first FAT cluster.
 
 ### AssemblyScript (optional)
 AssemblyScript can be used to write WASMOS drivers, services, and applications. Install AssemblyScript via npm and ensure `asc` is available in your PATH (for example via a global install or `npm link`):
@@ -75,6 +77,7 @@ There is also a minimal C-based example at `examples/c/hello/hello_c.c`, packed 
 `examples/c/init_smoke/init_smoke.c` is a tiny init-entry smoke test; run it from the CLI with `exec init-smoke`.
 `examples/c/native_call_smoke/native_call_smoke.c` is a tiny smoke test that directly calls `console_write`; run it from the CLI with `exec native-call-smoke`.
 `examples/c/native_call_min/native_call_min.c` is the minimal native-call probe (debug_mark + console_write); run it from the CLI with `exec native-call-min`.
+`examples/c/fs_open_smoke/fs_open_smoke.c` exercises the shared libc file wrappers by opening and reading `/startup.nsh`; run it from the CLI with `exec fs-open-smoke`.
 
 ### Rust (optional)
 Rust can be used to write WASMOS drivers, services, and applications. Install Rust and the WebAssembly target:
@@ -159,6 +162,7 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - `cmake --build build --target run-qemu-cli-test` runs the CLI integration tests via the Python QEMU test framework (`python3 -m unittest discover -s tests`)
 - The QEMU test framework force-stops hung runs via the monitor sequence (`Ctrl+A` then `x`) when a timeout is reached.
 - CLI integration tests include per-app hello tests (`test_hello_*.py`).
+- CLI integration tests include `tests/test_fs_open_smoke.py` to cover the shared libc file-open/read/close path.
 - QEMU smoke tests include a PIT timer tick marker check (`tests/test_timer_tick.py`).
 - QEMU smoke tests include an IPC wakeup marker check (`tests/test_ipc_wakeup.py`).
 - QEMU smoke tests include a preemption marker check (`tests/test_preempt_smoke.py`).

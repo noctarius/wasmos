@@ -58,6 +58,10 @@ extern int32_t wasmos_block_buffer_write(int32_t phys, int32_t ptr, int32_t len,
     WASMOS_WASM_IMPORT("wasmos", "block_buffer_write");
 extern int32_t wasmos_fs_buffer_size(void)
     WASMOS_WASM_IMPORT("wasmos", "fs_buffer_size");
+extern int32_t wasmos_fs_endpoint(void)
+    WASMOS_WASM_IMPORT("wasmos", "fs_endpoint");
+extern int32_t wasmos_fs_buffer_copy(int32_t ptr, int32_t len, int32_t offset)
+    WASMOS_WASM_IMPORT("wasmos", "fs_buffer_copy");
 extern int32_t wasmos_fs_buffer_write(int32_t ptr, int32_t len, int32_t offset)
     WASMOS_WASM_IMPORT("wasmos", "fs_buffer_write");
 extern int32_t wasmos_io_in8(int32_t port)

@@ -432,6 +432,40 @@ m3ApiRawFunction(wasmos_fs_buffer_size)
     m3ApiReturn((int32_t)process_manager_fs_buffer_size());
 }
 
+m3ApiRawFunction(wasmos_fs_endpoint)
+{
+    m3ApiReturnType(int32_t)
+
+    uint32_t endpoint = process_manager_fs_endpoint();
+    if (endpoint == IPC_ENDPOINT_NONE) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn((int32_t)endpoint);
+}
+
+m3ApiRawFunction(wasmos_fs_buffer_copy)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArgMem(uint8_t *, ptr)
+    m3ApiGetArg(int32_t, len)
+    m3ApiGetArg(int32_t, offset)
+
+    if (len <= 0 || offset < 0) {
+        m3ApiReturn(-1);
+    }
+    uint32_t max_len = process_manager_fs_buffer_size();
+    if ((uint32_t)offset + (uint32_t)len > max_len) {
+        m3ApiReturn(-1);
+    }
+    m3ApiCheckMem(ptr, (uint32_t)len);
+
+    const uint8_t *src = (const uint8_t *)process_manager_fs_buffer();
+    for (int32_t i = 0; i < len; ++i) {
+        ptr[i] = src[offset + i];
+    }
+    m3ApiReturn(0);
+}
+
 m3ApiRawFunction(wasmos_fs_buffer_write)
 {
     m3ApiReturnType(int32_t)
@@ -832,6 +866,8 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "block_buffer_copy", "i(i*ii)", wasmos_block_buffer_copy);
     rc |= wasm3_link_raw(module, "wasmos", "block_buffer_write", "i(i*ii)", wasmos_block_buffer_write);
     rc |= wasm3_link_raw(module, "wasmos", "fs_buffer_size", "i()", wasmos_fs_buffer_size);
+    rc |= wasm3_link_raw(module, "wasmos", "fs_endpoint", "i()", wasmos_fs_endpoint);
+    rc |= wasm3_link_raw(module, "wasmos", "fs_buffer_copy", "i(*ii)", wasmos_fs_buffer_copy);
     rc |= wasm3_link_raw(module, "wasmos", "fs_buffer_write", "i(*ii)", wasmos_fs_buffer_write);
     rc |= wasm3_link_raw(module, "wasmos", "system_halt", "i()", wasmos_system_halt);
     rc |= wasm3_link_raw(module, "wasmos", "system_reboot", "i()", wasmos_system_reboot);

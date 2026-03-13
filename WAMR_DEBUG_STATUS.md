@@ -53,6 +53,27 @@ Example pattern seen in logs:
 - `opcode exec count=1`
 - `last frame ip=0`
 
+## Cooperative vs Preemptive Trace Comparison (2026-03-13)
+Cooperative (main branch) shows the interpreter entering real bytecode directly:
+- `first opcode ip` matches `code start`
+- `first opcode bytes` match the code prologue (example: `41 81 20 41 00 3A 00 00`
+  or `23 00 41 40 6A CA 00 24`)
+- `opcodes bytes` match `first opcode bytes`
+
+Preemptive (preemptive-clean branch) still shows the glue frame:
+- `first opcode bytes=CF` (IMPDEP) with `first opcode ip` on a stack address
+- `opcodes bytes` still match the real code start bytes (`23 00 41 ...`)
+
+## IMPDEP Handoff Trace
+Additional instrumentation records the IMPDEP transition:
+- `impdep hits=1` per entry call
+- `impdep ip` recorded as `0x0` in cooperative runs (before the real code start)
+- `impdep sp` recorded as a valid stack address
+
+This suggests the interpreter is still starting from the IMPDEP glue frame,
+but in cooperative mode it transitions to the real bytecode address correctly,
+while the preemptive branch appears to stall before dispatching real bytecode.
+
 ## Additional Debugging Steps
 - Compare cooperative vs preemptive trace output with identical instrumentation.
 - Confirm the interpreter reaches real bytecode instructions in cooperative

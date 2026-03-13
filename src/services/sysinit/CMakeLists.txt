@@ -26,7 +26,7 @@ add_custom_command(
           initialize
           64
           64
-          4
+          2
           proc
           1
           ipc.basic

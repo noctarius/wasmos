@@ -10,10 +10,10 @@ returns, and the QEMU halt test never reaches the CLI prompt. We now need to
 determine whether the hang is scheduler/process-state related rather than a
 WAMR bytecode entry issue.
 
-Additional observation: PM now logs `sysinit` as `flags=0x4` (APP), not
-`SERVICE`, and the entry call returns immediately without any sysinit logs
-appearing. This suggests the WAMR entry still exits after a single opcode
-without executing the sysinit loop or native calls.
+Additional observation: after fixing the packer flags, PM logs `sysinit` as
+`flags=0x2` (SERVICE), but the entry call still returns immediately without any
+sysinit logs appearing. This suggests the WAMR entry still exits after a single
+opcode without executing the sysinit loop or native calls.
 
 ## Hypotheses Under Consideration
 - Preemption/timer interaction disrupting interpreter state

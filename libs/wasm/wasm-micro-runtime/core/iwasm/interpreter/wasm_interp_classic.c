@@ -12,6 +12,14 @@
 #include "../common/wasm_exec_env.h"
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD) || defined(WASMOS_ENABLE_SAFEPOINT)
 #include "process.h"
+#else
+volatile uint8_t wasmos_wamr_exec_opcodes[16];
+volatile uint32_t wasmos_wamr_exec_opcodes_len;
+static inline void
+wasmos_wamr_record_exec_opcode(uint8 opcode)
+{
+    (void)opcode;
+}
 #endif
 #if WASM_ENABLE_GC != 0
 #include "../common/gc/gc_object.h"
@@ -71,6 +79,8 @@ volatile void *wasmos_wamr_bad_csp;
 volatile uint32_t wasmos_wamr_bad_reason;
 volatile void *wasmos_wamr_bad_sp_bottom;
 volatile void *wasmos_wamr_bad_sp_boundary;
+volatile uint8_t wasmos_wamr_exec_opcodes[16];
+volatile uint32_t wasmos_wamr_exec_opcodes_len;
 
 static inline void
 wasmos_wamr_record_rsp(void)
@@ -82,6 +92,16 @@ wasmos_wamr_record_rsp(void)
     wasmos_wamr_last_rsp = rsp;
 }
 
+static inline void
+wasmos_wamr_record_exec_opcode(uint8 opcode)
+{
+    uint32_t idx = wasmos_wamr_exec_opcodes_len;
+    if (idx >= (uint32_t)sizeof(wasmos_wamr_exec_opcodes)) {
+        return;
+    }
+    wasmos_wamr_exec_opcodes[idx] = opcode;
+    wasmos_wamr_exec_opcodes_len = idx + 1;
+}
 
 static void
 wasmos_wamr_record_opcodes(uint8 *frame_ip, uint8 *frame_ip_end)
@@ -1622,6 +1642,7 @@ wasm_interp_call_func_import(WASMModuleInstance *module_inst,
 #define FETCH_OPCODE_AND_DISPATCH() \
     do {                            \
         WASMOS_TRACE_FIRST_OPCODE(); \
+        wasmos_wamr_record_exec_opcode(*frame_ip); \
         goto *handle_table[*frame_ip++]; \
     } while (0)
 #if defined(WASMOS_ENABLE_SAFEPOINT)
@@ -1926,6 +1947,7 @@ wasm_interp_call_func_bytecode(WASMModuleInstance *module,
     while (frame_ip < frame_ip_end) {
         uint8 *op_ip = frame_ip;
         opcode = *frame_ip++;
+        wasmos_wamr_record_exec_opcode(opcode);
 #if !defined(WASMOS_DISABLE_TRACE)
         if (wasmos_log_first_opcode) {
             if (wasmos_wamr_try_log_first_opcode(cur_func, op_ip, frame_ip_end)) {

@@ -45,6 +45,31 @@ pub enum Error {
 
 static mut G_FS_REPLY_ENDPOINT: i32 = -1;
 static mut G_FS_REQUEST_ID: i32 = 1;
+static mut G_STARTUP_ARGS: [i32; 4] = [0; 4];
+
+pub mod startup {
+    use super::G_STARTUP_ARGS;
+
+    pub fn arg(index: usize) -> i32 {
+        if index >= 4 {
+            return 0;
+        }
+        unsafe { G_STARTUP_ARGS[index] }
+    }
+}
+
+static EMPTY_ARGS: [&str; 0] = [];
+
+#[no_mangle]
+pub extern "C" fn wasmos_main(arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> i32 {
+    unsafe {
+        G_STARTUP_ARGS[0] = arg0;
+        G_STARTUP_ARGS[1] = arg1;
+        G_STARTUP_ARGS[2] = arg2;
+        G_STARTUP_ARGS[3] = arg3;
+    }
+    crate::main(&EMPTY_ARGS)
+}
 
 fn raw_write(bytes: &[u8]) -> Result<(), Error> {
     if bytes.is_empty() {

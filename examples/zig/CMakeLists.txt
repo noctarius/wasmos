@@ -31,7 +31,7 @@ if (ZIG_AVAILABLE)
             -O ReleaseSmall
             -fno-entry
             -fstrip
-            --export=wasmos_entry
+            --export=wasmos_main
             -femit-bin=${WASM_HELLO_ZIG_WASM}
             ${WASM_HELLO_ZIG_STAGE_DIR}/hello_zig.zig
     DEPENDS ${WASM_HELLO_ZIG_SRC} ${WASM_HELLO_ZIG_LIBC_SRC}
@@ -46,7 +46,7 @@ if (ZIG_AVAILABLE)
             ${WASM_HELLO_ZIG_WASM}
             ${WASM_HELLO_ZIG_APP}
             hello-zig
-            wasmos_entry
+            wasmos_main
             2
             2
             4

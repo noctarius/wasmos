@@ -3,6 +3,7 @@ set(WASM_LIBC_C_SOURCES
   ${LIBC_DIR}/src/stdlib.c
   ${LIBC_DIR}/src/string.c
   ${LIBC_DIR}/src/stdio.c
+  ${LIBC_DIR}/src/startup.c
   ${LIBC_DIR}/src/unistd.c
 )
 
@@ -16,7 +17,7 @@ add_custom_command(
           -Wl,--initial-memory=65536
           -Wl,--max-memory=65536
           -Wl,--allow-undefined
-          -Wl,--export=main
+          -Wl,--export=wasmos_main
           -I${LIBC_DIR}/include
           -I${DRIVER_WASM_DIR}/include
           ${WASM_LIBC_C_SOURCES}
@@ -36,7 +37,7 @@ add_custom_command(
           ${WASM_HELLO_C_WASM}
           ${WASM_HELLO_C_APP}
           hello-c
-          main
+          wasmos_main
           16
           16
           4
@@ -60,7 +61,7 @@ add_custom_command(
           -Wl,--initial-memory=65536
           -Wl,--max-memory=65536
           -Wl,--allow-undefined
-          -Wl,--export=main
+          -Wl,--export=wasmos_main
           -I${LIBC_DIR}/include
           -I${DRIVER_WASM_DIR}/include
           ${WASM_LIBC_C_SOURCES}
@@ -91,7 +92,7 @@ add_custom_command(
           ${WASM_CHARDEV_CLIENT_WASM}
           ${WASM_CHARDEV_CLIENT_APP}
           chardev-client
-          main
+          wasmos_main
           16
           16
           4
@@ -115,7 +116,7 @@ add_custom_command(
           -Wl,--initial-memory=65536
           -Wl,--max-memory=65536
           -Wl,--allow-undefined
-          -Wl,--export=main
+          -Wl,--export=wasmos_main
           -I${LIBC_DIR}/include
           -I${DRIVER_WASM_DIR}/include
           ${WASM_LIBC_C_SOURCES}
@@ -135,7 +136,7 @@ add_custom_command(
           ${WASM_CHARDEV_PREEMPT_WASM}
           ${WASM_CHARDEV_PREEMPT_APP}
           chardev-preempt
-          main
+          wasmos_main
           16
           16
           4
@@ -159,7 +160,7 @@ add_custom_command(
           -Wl,--initial-memory=65536
           -Wl,--max-memory=65536
           -Wl,--allow-undefined
-          -Wl,--export=main
+          -Wl,--export=wasmos_main
           -I${LIBC_DIR}/include
           -I${DRIVER_WASM_DIR}/include
           ${WASM_LIBC_C_SOURCES}
@@ -179,7 +180,7 @@ add_custom_command(
           ${WASM_INIT_SMOKE_WASM}
           ${WASM_INIT_SMOKE_APP}
           init-smoke
-          main
+          wasmos_main
           16
           16
           4
@@ -203,7 +204,7 @@ add_custom_command(
           -Wl,--initial-memory=65536
           -Wl,--max-memory=65536
           -Wl,--allow-undefined
-          -Wl,--export=main
+          -Wl,--export=wasmos_main
           -I${LIBC_DIR}/include
           -I${DRIVER_WASM_DIR}/include
           ${WASM_LIBC_C_SOURCES}
@@ -223,7 +224,7 @@ add_custom_command(
           ${WASM_NATIVE_CALL_SMOKE_WASM}
           ${WASM_NATIVE_CALL_SMOKE_APP}
           native-call-smoke
-          main
+          wasmos_main
           16
           16
           4
@@ -247,7 +248,7 @@ add_custom_command(
           -Wl,--initial-memory=65536
           -Wl,--max-memory=65536
           -Wl,--allow-undefined
-          -Wl,--export=main
+          -Wl,--export=wasmos_main
           -I${LIBC_DIR}/include
           -I${DRIVER_WASM_DIR}/include
           ${WASM_LIBC_C_SOURCES}
@@ -268,7 +269,7 @@ add_custom_command(
           ${WASM_FS_OPEN_SMOKE_WASM}
           ${WASM_FS_OPEN_SMOKE_APP}
           fs-open-smoke
-          main
+          wasmos_main
           16
           16
           4
@@ -292,7 +293,7 @@ add_custom_command(
           -Wl,--initial-memory=65536
           -Wl,--max-memory=65536
           -Wl,--allow-undefined
-          -Wl,--export=main
+          -Wl,--export=wasmos_main
           -I${LIBC_DIR}/include
           -I${DRIVER_WASM_DIR}/include
           ${WASM_LIBC_C_SOURCES}
@@ -312,7 +313,7 @@ add_custom_command(
           ${WASM_NATIVE_CALL_MIN_WASM}
           ${WASM_NATIVE_CALL_MIN_APP}
           native-call-min
-          main
+          wasmos_main
           16
           16
           4

@@ -1,18 +1,11 @@
-#include <stdint.h>
 #include "stdio.h"
-#include "wasmos/imports.h"
 
-WASMOS_WASM_EXPORT int32_t
-main(int32_t ignored_arg0,
-     int32_t ignored_arg1,
-     int32_t ignored_arg2,
-     int32_t ignored_arg3)
+int
+main(int argc, char **argv)
 {
     static int printed = 0;
-    (void)ignored_arg0;
-    (void)ignored_arg1;
-    (void)ignored_arg2;
-    (void)ignored_arg3;
+    (void)argc;
+    (void)argv;
 
     if (!printed) {
         printed = 1;

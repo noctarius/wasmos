@@ -1,17 +1,15 @@
 #include <stdint.h>
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
+#include "wasmos/startup.h"
 #include "wasmos_driver_abi.h"
 
-WASMOS_WASM_EXPORT int32_t
-main(int32_t chardev_endpoint,
-     int32_t ignored_arg1,
-     int32_t ignored_arg2,
-     int32_t ignored_arg3)
+int
+main(int argc, char **argv)
 {
-    (void)ignored_arg1;
-    (void)ignored_arg2;
-    (void)ignored_arg3;
+    int32_t chardev_endpoint = wasmos_startup_arg(0);
+    (void)argc;
+    (void)argv;
 
     int32_t reply_endpoint = wasmos_ipc_create_endpoint();
     if (reply_endpoint < 0) {

@@ -1,8 +1,5 @@
-#include <stdint.h>
-
 #include "stdio.h"
 #include "string.h"
-#include "wasmos/imports.h"
 
 static int
 contains_token(const char *text, const char *token)
@@ -27,20 +24,15 @@ contains_token(const char *text, const char *token)
     return 0;
 }
 
-WASMOS_WASM_EXPORT int32_t
-main(int32_t arg0,
-     int32_t arg1,
-     int32_t arg2,
-     int32_t arg3)
+int
+main(int argc, char **argv)
 {
     FILE *file;
     char buffer[128];
     size_t count;
 
-    (void)arg0;
-    (void)arg1;
-    (void)arg2;
-    (void)arg3;
+    (void)argc;
+    (void)argv;
 
     file = fopen("/startup.nsh", "r");
     if (!file) {

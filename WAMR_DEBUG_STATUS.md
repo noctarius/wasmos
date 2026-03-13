@@ -34,6 +34,7 @@ expose execution state around the interpreter dispatch loop.
 - Bytecode call count, `call_indirect` count, and last call-indirect target
 - Code start/end addresses for the current function
 - Last frame instruction pointer and function pointer
+- Entry call begin/end logs with `ok` result and exception state
 - Captured opcode bytes at code start
 - Captured "first opcode" bytes + `ip`/`ip_end` recorded at interpreter entry
 

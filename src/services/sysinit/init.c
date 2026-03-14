@@ -22,6 +22,9 @@ static const char *g_targets[] = {
     "chardev-client",
     "cli"
 };
+/* TODO: Replace this fixed target list with parsing of the generated boot
+ * config blob exposed through wasmos_boot_config_* so sysinit startup policy
+ * is data-driven instead of hardcoded here. */
 
 #ifndef WASMOS_TRACE
 #define WASMOS_TRACE 0

@@ -7,15 +7,28 @@
 #include "physmem.h"
 #include "wasm3_shim.h"
 
-#define WASM3_HEAP_PAGES 1024u
+#define WASM3_HEAP_DEFAULT_PAGES 1024u
 #define WASM3_HEAP_MIN_PAGES 32u
 #define WASM3_HEAP_ALIGN 16u
+#define WASM3_HEAP_MAX_BYTES (2ULL * 1024ULL * 1024ULL * 1024ULL)
+#define WASM3_HEAP_MAX_CHUNKS 64u
 
 typedef struct {
-    uint32_t pid;
     uint8_t *base;
     size_t size;
     size_t offset;
+} wasm3_heap_chunk_t;
+
+typedef struct {
+    uint32_t pid;
+    size_t preferred_chunk_size;
+    size_t max_size;
+    size_t committed_size;
+    uint32_t chunk_count;
+    /* The allocator grows by appending chunks. Allocation only advances the
+     * tail chunk, which keeps the implementation simple and deterministic while
+     * still allowing large heaps without one giant contiguous reservation. */
+    wasm3_heap_chunk_t chunks[WASM3_HEAP_MAX_CHUNKS];
 } wasm3_heap_slot_t;
 
 typedef struct {
@@ -53,6 +66,24 @@ align_up(size_t value, size_t align)
 }
 
 static void
+wasm3_heap_slot_init(wasm3_heap_slot_t *slot, uint32_t pid)
+{
+    if (!slot) {
+        return;
+    }
+    slot->pid = pid;
+    slot->preferred_chunk_size = (size_t)WASM3_HEAP_DEFAULT_PAGES * 4096u;
+    slot->max_size = (size_t)WASM3_HEAP_MAX_BYTES;
+    slot->committed_size = 0;
+    slot->chunk_count = 0;
+    for (uint32_t i = 0; i < WASM3_HEAP_MAX_CHUNKS; ++i) {
+        slot->chunks[i].base = 0;
+        slot->chunks[i].size = 0;
+        slot->chunks[i].offset = 0;
+    }
+}
+
+static void
 wasm3_memset(void *dst, int value, size_t len)
 {
     uint8_t *p = (uint8_t *)dst;
@@ -72,9 +103,8 @@ wasm3_memcpy(void *dst, const void *src, size_t len)
 }
 
 static wasm3_heap_slot_t *
-wasm3_heap_slot(void)
+wasm3_heap_slot_for_pid(uint32_t pid)
 {
-    uint32_t pid = g_wasm3_heap_bound_pid ? g_wasm3_heap_bound_pid : process_current_pid();
     if (pid == 0) {
         return 0;
     }
@@ -88,12 +118,16 @@ wasm3_heap_slot(void)
         }
     }
     if (empty) {
-        empty->pid = pid;
-        empty->base = 0;
-        empty->size = 0;
-        empty->offset = 0;
+        wasm3_heap_slot_init(empty, pid);
     }
     return empty;
+}
+
+static wasm3_heap_slot_t *
+wasm3_heap_slot(void)
+{
+    uint32_t pid = g_wasm3_heap_bound_pid ? g_wasm3_heap_bound_pid : process_current_pid();
+    return wasm3_heap_slot_for_pid(pid);
 }
 
 uint32_t
@@ -110,6 +144,161 @@ wasm3_heap_restore_pid(uint32_t previous_pid)
     g_wasm3_heap_bound_pid = previous_pid;
 }
 
+void
+wasm3_heap_configure(uint32_t pid, uint64_t initial_size, uint64_t max_size)
+{
+    if (pid == 0) {
+        return;
+    }
+    critical_section_enter();
+    wasm3_heap_slot_t *slot = wasm3_heap_slot_for_pid(pid);
+    if (slot) {
+        size_t preferred = (size_t)initial_size;
+        size_t limit = max_size == 0 ? (size_t)WASM3_HEAP_MAX_BYTES : (size_t)max_size;
+        size_t minimum = (size_t)WASM3_HEAP_MIN_PAGES * 4096u;
+        if (preferred == 0) {
+            preferred = (size_t)WASM3_HEAP_DEFAULT_PAGES * 4096u;
+        }
+        if (preferred < minimum) {
+            preferred = minimum;
+        }
+        if (limit < minimum) {
+            limit = minimum;
+        }
+        if (limit > (size_t)WASM3_HEAP_MAX_BYTES) {
+            limit = (size_t)WASM3_HEAP_MAX_BYTES;
+        }
+        if (preferred > limit) {
+            preferred = limit;
+        }
+        slot->preferred_chunk_size = preferred;
+        slot->max_size = limit;
+    }
+    critical_section_leave();
+}
+
+static int
+wasm3_heap_grow(wasm3_heap_slot_t *slot, size_t min_total)
+{
+    if (!slot || min_total == 0) {
+        return -1;
+    }
+    if (slot->chunk_count >= WASM3_HEAP_MAX_CHUNKS) {
+        return -1;
+    }
+    if (slot->committed_size >= slot->max_size) {
+        return -1;
+    }
+
+    size_t remaining = slot->max_size - slot->committed_size;
+    if (min_total > remaining) {
+        return -1;
+    }
+
+    /* New chunks try to preserve the configured startup footprint and then grow
+     * from the size of the previous chunk, capped by the per-process limit. */
+    size_t target = slot->preferred_chunk_size;
+    if (slot->chunk_count > 0) {
+        size_t last_size = slot->chunks[slot->chunk_count - 1].size;
+        if (last_size > target) {
+            target = last_size;
+        }
+    }
+    if (target < min_total) {
+        target = min_total;
+    }
+    if (target > remaining) {
+        target = remaining;
+    }
+
+    uint64_t min_pages = (uint64_t)((min_total + 4095u) / 4096u);
+    if (min_pages < WASM3_HEAP_MIN_PAGES) {
+        min_pages = WASM3_HEAP_MIN_PAGES;
+    }
+
+    uint64_t pages = (uint64_t)((target + 4095u) / 4096u);
+    if (pages < min_pages) {
+        pages = min_pages;
+    }
+
+    uint64_t phys = 0;
+    while (pages >= min_pages) {
+        phys = pfa_alloc_pages_below(pages, 0x100000000ULL);
+        if (!phys) {
+            phys = pfa_alloc_pages(pages);
+        }
+        if (phys) {
+            wasm3_heap_chunk_t *chunk = &slot->chunks[slot->chunk_count++];
+            chunk->base = (uint8_t *)(uintptr_t)phys;
+            chunk->size = (size_t)pages * 4096u;
+            chunk->offset = 0;
+            slot->committed_size += chunk->size;
+            return 0;
+        }
+        if (pages == min_pages) {
+            break;
+        }
+        pages /= 2u;
+        if (pages < min_pages) {
+            pages = min_pages;
+        }
+    }
+    return -1;
+}
+
+static wasm3_heap_chunk_t *
+wasm3_heap_tail_chunk(wasm3_heap_slot_t *slot)
+{
+    if (!slot || slot->chunk_count == 0) {
+        return 0;
+    }
+    return &slot->chunks[slot->chunk_count - 1];
+}
+
+static wasm3_heap_chunk_t *
+wasm3_heap_chunk_for_ptr(wasm3_heap_slot_t *slot, const void *ptr, uint32_t *out_index)
+{
+    if (!slot || !ptr) {
+        return 0;
+    }
+    uintptr_t addr = (uintptr_t)ptr;
+    for (uint32_t i = 0; i < slot->chunk_count; ++i) {
+        wasm3_heap_chunk_t *chunk = &slot->chunks[i];
+        uintptr_t base = (uintptr_t)chunk->base;
+        uintptr_t end = base + chunk->size;
+        if (addr >= base && addr < end) {
+            if (out_index) {
+                *out_index = i;
+            }
+            return chunk;
+        }
+    }
+    return 0;
+}
+
+static void
+wasm3_heap_release_empty_tail_chunks(wasm3_heap_slot_t *slot)
+{
+    if (!slot) {
+        return;
+    }
+    /* Empty tail chunks can be returned to the frame allocator immediately.
+     * Interior holes are intentionally not compacted yet. */
+    while (slot->chunk_count > 1) {
+        wasm3_heap_chunk_t *chunk = &slot->chunks[slot->chunk_count - 1];
+        if (!chunk->base || chunk->offset != 0) {
+            break;
+        }
+        uint64_t pages = ((uint64_t)chunk->size + 4095ULL) / 4096ULL;
+        pfa_free_pages((uint64_t)(uintptr_t)chunk->base, pages);
+        slot->committed_size -= chunk->size;
+        chunk->base = 0;
+        chunk->size = 0;
+        chunk->offset = 0;
+        slot->chunk_count--;
+    }
+}
+
 static void *
 wasm3_alloc(size_t size, int zero)
 {
@@ -123,67 +312,47 @@ wasm3_alloc(size_t size, int zero)
     }
     critical_section_enter();
     size_t total = align_up(sizeof(wasm3_heap_block_t) + size, WASM3_HEAP_ALIGN);
-    if (!slot->base) {
-        uint64_t min_pages = (uint64_t)((total + 4095u) / 4096u);
-        if (min_pages < WASM3_HEAP_MIN_PAGES) {
-            min_pages = WASM3_HEAP_MIN_PAGES;
-        }
-
-        uint64_t pages = WASM3_HEAP_PAGES;
-        if (pages < min_pages) {
-            pages = min_pages;
-        }
-
-        uint64_t phys = 0;
-        while (pages >= min_pages) {
-            phys = pfa_alloc_pages_below(pages, 0x100000000ULL);
-            if (!phys) {
-                phys = pfa_alloc_pages(pages);
-            }
-            if (phys) {
-                slot->base = (uint8_t *)(uintptr_t)phys;
-                slot->size = (size_t)pages * 4096u;
-                slot->offset = 0;
-                break;
-            }
-            if (pages == min_pages) {
-                break;
-            }
-            pages /= 2u;
-            if (pages < min_pages) {
-                pages = min_pages;
-            }
-        }
-        if (!slot->base) {
-            serial_write("[wasm3-heap] init alloc failed pid=");
-            wasm3_log_hex64(process_current_pid());
-            serial_write("[wasm3-heap] min_pages=");
-            wasm3_log_hex64(min_pages);
+    wasm3_heap_chunk_t *chunk = wasm3_heap_tail_chunk(slot);
+    if (!chunk || align_up(chunk->offset, WASM3_HEAP_ALIGN) + total > chunk->size) {
+        if (wasm3_heap_grow(slot, total) != 0) {
+            serial_write("[wasm3-heap] grow failed pid=");
+            wasm3_log_hex64(slot->pid);
+            serial_write("[wasm3-heap] req=");
+            wasm3_log_hex64((uint64_t)size);
+            serial_write("[wasm3-heap] committed=");
+            wasm3_log_hex64((uint64_t)slot->committed_size);
+            serial_write("[wasm3-heap] limit=");
+            wasm3_log_hex64((uint64_t)slot->max_size);
             critical_section_leave();
             return 0;
         }
+        chunk = wasm3_heap_tail_chunk(slot);
     }
-
-    size_t aligned_offset = align_up(slot->offset, WASM3_HEAP_ALIGN);
-    if (aligned_offset + total > slot->size) {
-        serial_write("[wasm3-heap] oom pid=");
-        wasm3_log_hex64(process_current_pid());
-        serial_write("[wasm3-heap] req=");
-        wasm3_log_hex64((uint64_t)size);
-        serial_write("[wasm3-heap] off=");
-        wasm3_log_hex64((uint64_t)slot->offset);
-        serial_write("[wasm3-heap] total=");
-        wasm3_log_hex64((uint64_t)slot->size);
+    if (!chunk) {
         critical_section_leave();
         return 0;
     }
 
-    wasm3_heap_block_t *block = (wasm3_heap_block_t *)(slot->base + aligned_offset);
+    size_t aligned_offset = align_up(chunk->offset, WASM3_HEAP_ALIGN);
+    if (aligned_offset + total > chunk->size) {
+        serial_write("[wasm3-heap] chunk oom pid=");
+        wasm3_log_hex64(slot->pid);
+        serial_write("[wasm3-heap] req=");
+        wasm3_log_hex64((uint64_t)size);
+        serial_write("[wasm3-heap] off=");
+        wasm3_log_hex64((uint64_t)chunk->offset);
+        serial_write("[wasm3-heap] total=");
+        wasm3_log_hex64((uint64_t)chunk->size);
+        critical_section_leave();
+        return 0;
+    }
+
+    wasm3_heap_block_t *block = (wasm3_heap_block_t *)(chunk->base + aligned_offset);
     block->size = size;
     block->total = total;
     block->start = aligned_offset;
     void *ptr = (uint8_t *)block + sizeof(wasm3_heap_block_t);
-    slot->offset = aligned_offset + total;
+    chunk->offset = aligned_offset + total;
     critical_section_leave();
     if (zero) {
         wasm3_memset(ptr, 0, size);
@@ -214,14 +383,24 @@ void free(void *ptr)
         return;
     }
     wasm3_heap_slot_t *slot = wasm3_heap_slot();
-    if (!slot || !slot->base) {
+    if (!slot || slot->chunk_count == 0) {
+        return;
+    }
+    uint32_t chunk_index = 0;
+    wasm3_heap_chunk_t *chunk = wasm3_heap_chunk_for_ptr(slot, ptr, &chunk_index);
+    if (!chunk) {
         return;
     }
     wasm3_heap_block_t *block = (wasm3_heap_block_t *)((uint8_t *)ptr - sizeof(wasm3_heap_block_t));
 
     critical_section_enter();
-    if (block->start + block->total == slot->offset) {
-        slot->offset = block->start;
+    /* Free remains stack-like: only the most recent allocation in the tail
+     * chunk shrinks the live frontier. This matches the old allocator's
+     * behavior while still allowing chunked growth. */
+    if (chunk_index + 1 == slot->chunk_count &&
+        block->start + block->total == chunk->offset) {
+        chunk->offset = block->start;
+        wasm3_heap_release_empty_tail_chunks(slot);
     }
     critical_section_leave();
 }
@@ -237,14 +416,15 @@ void wasm3_heap_release(uint32_t pid)
         if (slot->pid != pid) {
             continue;
         }
-        if (slot->base && slot->size > 0) {
-            uint64_t pages = ((uint64_t)slot->size + 4095ULL) / 4096ULL;
-            pfa_free_pages((uint64_t)(uintptr_t)slot->base, pages);
+        for (uint32_t chunk_index = 0; chunk_index < slot->chunk_count; ++chunk_index) {
+            wasm3_heap_chunk_t *chunk = &slot->chunks[chunk_index];
+            if (!chunk->base || chunk->size == 0) {
+                continue;
+            }
+            uint64_t pages = ((uint64_t)chunk->size + 4095ULL) / 4096ULL;
+            pfa_free_pages((uint64_t)(uintptr_t)chunk->base, pages);
         }
-        slot->pid = 0;
-        slot->base = 0;
-        slot->size = 0;
-        slot->offset = 0;
+        wasm3_heap_slot_init(slot, 0);
         break;
     }
     critical_section_leave();
@@ -262,11 +442,16 @@ void *realloc(void *ptr, size_t size)
     size_t old_size = block->size;
     wasm3_heap_slot_t *slot = wasm3_heap_slot();
     size_t new_total = align_up(sizeof(wasm3_heap_block_t) + size, WASM3_HEAP_ALIGN);
-    if (slot && slot->base) {
+    uint32_t chunk_index = 0;
+    wasm3_heap_chunk_t *chunk = wasm3_heap_chunk_for_ptr(slot, ptr, &chunk_index);
+    if (slot && chunk) {
         critical_section_enter();
-        if (block->start + block->total == slot->offset) {
-            if (block->start + new_total <= slot->size) {
-                slot->offset = block->start + new_total;
+        /* In-place growth is only safe for the newest allocation in the active
+         * tail chunk. All other cases fall back to allocate-copy-free. */
+        if (chunk_index + 1 == slot->chunk_count &&
+            block->start + block->total == chunk->offset) {
+            if (block->start + new_total <= chunk->size) {
+                chunk->offset = block->start + new_total;
                 block->size = size;
                 block->total = new_total;
                 critical_section_leave();
@@ -283,6 +468,26 @@ void *realloc(void *ptr, size_t size)
     wasm3_memcpy(new_ptr, ptr, copy_size);
     free(ptr);
     return new_ptr;
+}
+
+int
+wasm3_heap_probe_growth(size_t size)
+{
+    if (size == 0) {
+        return -1;
+    }
+    uint8_t *ptr = (uint8_t *)malloc(size);
+    if (!ptr) {
+        return -1;
+    }
+    ptr[0] = 0xA5u;
+    ptr[size - 1] = 0x5Au;
+    if (ptr[0] != 0xA5u || ptr[size - 1] != 0x5Au) {
+        free(ptr);
+        return -1;
+    }
+    free(ptr);
+    return 0;
 }
 
 static int

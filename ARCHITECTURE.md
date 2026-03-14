@@ -285,9 +285,18 @@ The supported in-tree runtime is `wasm3`.
 
 Current wasm3 integration guarantees:
 - runtime instances are process-local
-- runtime allocation uses a kernel-owned per-process bump allocator
+- runtime allocation uses a kernel-owned per-process chunked bump allocator
+- runtime heaps grow incrementally and are capped at 2 GiB per process
 - runtime create/load/call/free operations execute with preemption disabled so
   timer IRQs cannot interrupt runtime mutation
+
+Current heap behavior:
+- each process starts with a preferred heap chunk size derived from the loader
+  manifest, with a practical default still centered around the old 4 MiB arena
+- additional chunks are allocated on demand instead of requiring a single large
+  contiguous reservation
+- freeing and in-place `realloc` are still optimized for tail allocations only
+- WASMOS-APP heap `max_pages` metadata is parsed but not enforced yet
 
 ### Historical WAMR Note
 Earlier experiments with WAMR on a preemptive branch showed the interpreter
@@ -313,6 +322,11 @@ Current flag roles:
 - service
 - normal application
 - privileged request
+
+Current memory-hint behavior:
+- stack `min_pages` affects runtime stack sizing
+- heap `min_pages` affects the preferred initial runtime heap chunk size
+- heap `max_pages` is reserved metadata for future enforcement
 
 Current entry expectations:
 - applications export `wasmos_main` through a language shim

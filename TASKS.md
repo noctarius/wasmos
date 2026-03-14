@@ -32,6 +32,8 @@ IMPORTANT: Keep this file aligned with `README.md` and `ARCHITECTURE.md`.
 
 ## Runtime and Loading
 - Expand WASMOS-APP policy enforcement and metadata validation as needed.
+- Enforce WASMOS-APP heap `max_pages` instead of relying on the current global
+  2 GiB runtime-heap cap.
 - Add richer runtime diagnostics without modifying vendored runtimes.
 - Evaluate whether non-`wasm3` runtime experimentation should live out-of-tree or
   behind explicit opt-in integration points.

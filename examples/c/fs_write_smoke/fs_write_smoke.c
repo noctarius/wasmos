@@ -86,6 +86,36 @@ main(int argc, char **argv)
         puts("fs-write-smoke: grow verify failed");
         return 1;
     }
+    if (mkdir("/create_dir", 0) != 0) {
+        puts("fs-write-smoke: mkdir failed");
+        return 1;
+    }
+    if (stat("/create_dir", &st) != 0 || (st.st_mode & S_IFMT) != S_IFDIR) {
+        puts("fs-write-smoke: mkdir stat failed");
+        return 1;
+    }
+    fd = open("/create_dir/nested.txt", O_WRONLY | O_CREAT | O_TRUNC);
+    if (fd < 0) {
+        puts("fs-write-smoke: nested create failed");
+        return 1;
+    }
+    close(fd);
+    if (rmdir("/create_dir") == 0) {
+        puts("fs-write-smoke: non-empty rmdir passed");
+        return 1;
+    }
+    if (unlink("/create_dir/nested.txt") != 0) {
+        puts("fs-write-smoke: nested unlink failed");
+        return 1;
+    }
+    if (rmdir("/create_dir") != 0) {
+        puts("fs-write-smoke: rmdir failed");
+        return 1;
+    }
+    if (stat("/create_dir", &st) == 0) {
+        puts("fs-write-smoke: rmdir stat failed");
+        return 1;
+    }
     if (unlink("/create.txt") != 0) {
         puts("fs-write-smoke: unlink failed");
         return 1;

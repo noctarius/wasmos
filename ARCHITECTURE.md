@@ -39,11 +39,13 @@ The current tree already boots into a usable user-space stack:
   zero-length 8.3 files in existing directories; FAT12/16 cluster allocation
   now grows files and newly created files, long-filename creates now emit LFN
   entries plus a generated short alias, regular-file unlink now reclaims the
-  cluster chain and tombstones the short+LFN dir entries, and the C stdio shim
-  now exposes `fopen`/`fwrite` write and append modes. The C libc now exposes
-  `unlink`, and the Rust, Zig, Go, and AssemblyScript shims expose matching
-  create/write/append/unlink helpers. Update modes such as `r+`/`w+`/`a+`,
-  directory removal, and non-ASCII LFN creation remain future work.
+  cluster chain and tombstones the short+LFN dir entries, empty-directory
+  create/remove now allocates a directory cluster plus `.`/`..` entries, and
+  the C stdio shim now exposes `fopen`/`fwrite` write and append modes. The C
+  libc now exposes `unlink`, `mkdir`, and `rmdir`, and the Rust, Zig, Go, and
+  AssemblyScript shims expose matching create/write/append/unlink/mkdir/rmdir
+  helpers. Update modes such as `r+`/`w+`/`a+` and non-ASCII LFN creation
+  remain future work.
 - The runtime host uses `wasm3`, not WAMR.
 - The CMake-only `kernel_ide` aggregation target indexes kernel sources plus
   selected WASM user-space sources, so it must mirror the libc include root

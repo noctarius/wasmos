@@ -9,6 +9,8 @@ const FS_IPC_CLOSE_REQ: i32 = 0x402;
 const FS_IPC_STAT_REQ: i32 = 0x403;
 const FS_IPC_SEEK_REQ: i32 = 0x405;
 const FS_IPC_UNLINK_REQ: i32 = 0x407;
+const FS_IPC_MKDIR_REQ: i32 = 0x408;
+const FS_IPC_RMDIR_REQ: i32 = 0x409;
 const FS_IPC_RESP: i32 = 0x480;
 
 const IPC_FIELD_TYPE: i32 = 0;
@@ -185,8 +187,8 @@ pub mod std {
 pub mod fs {
     use super::{
         fs_buffer_copy, fs_buffer_size, fs_buffer_write, fs_request, Error, FS_IPC_CLOSE_REQ,
-        FS_IPC_OPEN_REQ, FS_IPC_READ_REQ, FS_IPC_SEEK_REQ, FS_IPC_STAT_REQ, FS_IPC_UNLINK_REQ,
-        FS_IPC_WRITE_REQ,
+        FS_IPC_MKDIR_REQ, FS_IPC_OPEN_REQ, FS_IPC_READ_REQ, FS_IPC_RMDIR_REQ, FS_IPC_SEEK_REQ,
+        FS_IPC_STAT_REQ, FS_IPC_UNLINK_REQ, FS_IPC_WRITE_REQ,
         O_APPEND, O_CREAT, O_RDONLY, O_TRUNC, O_WRONLY, S_IFDIR, S_IFREG,
     };
 
@@ -285,7 +287,7 @@ pub mod fs {
         }
     }
 
-    fn open_with_flags(path: &str, flags: i32) -> Result<File, Error> {
+    fn stage_path(path: &str) -> Result<usize, Error> {
         let path_bytes = path.as_bytes();
         let max_buffer = unsafe { fs_buffer_size() };
         let mut path_buf = [0u8; 256];
@@ -310,7 +312,13 @@ pub mod fs {
             return Err(Error::HostCallFailed);
         }
 
-        let (fd, _) = fs_request(FS_IPC_OPEN_REQ, path_bytes.len() as i32, flags, 0, 0)?;
+        Ok(path_bytes.len())
+    }
+
+    fn open_with_flags(path: &str, flags: i32) -> Result<File, Error> {
+        let path_len = stage_path(path)?;
+
+        let (fd, _) = fs_request(FS_IPC_OPEN_REQ, path_len as i32, flags, 0, 0)?;
         if fd < 0 {
             return Err(Error::BadResponse);
         }
@@ -335,31 +343,8 @@ pub mod fs {
     }
 
     pub fn stat(path: &str) -> Result<Stat, Error> {
-        let path_bytes = path.as_bytes();
-        let max_buffer = unsafe { fs_buffer_size() };
-        let mut path_buf = [0u8; 256];
-
-        if path_bytes.is_empty() {
-            return Err(Error::InvalidArgument);
-        }
-        if max_buffer <= 0 {
-            return Err(Error::NotAvailable);
-        }
-        if path_bytes.len() + 1 > path_buf.len() {
-            return Err(Error::NameTooLong);
-        }
-        if path_bytes.len() + 1 > max_buffer as usize {
-            return Err(Error::BufferTooSmall);
-        }
-
-        path_buf[..path_bytes.len()].copy_from_slice(path_bytes);
-        path_buf[path_bytes.len()] = 0;
-
-        if unsafe { fs_buffer_write(path_buf.as_ptr() as i32, (path_bytes.len() + 1) as i32, 0) } != 0 {
-            return Err(Error::HostCallFailed);
-        }
-
-        let (size, mode) = fs_request(FS_IPC_STAT_REQ, path_bytes.len() as i32, 0, 0, 0)?;
+        let path_len = stage_path(path)?;
+        let (size, mode) = fs_request(FS_IPC_STAT_REQ, path_len as i32, 0, 0, 0)?;
         if size < 0 {
             return Err(Error::BadResponse);
         }
@@ -371,31 +356,20 @@ pub mod fs {
     }
 
     pub fn unlink(path: &str) -> Result<(), Error> {
-        let path_bytes = path.as_bytes();
-        let max_buffer = unsafe { fs_buffer_size() };
-        let mut path_buf = [0u8; 256];
+        let path_len = stage_path(path)?;
+        let _ = fs_request(FS_IPC_UNLINK_REQ, path_len as i32, 0, 0, 0)?;
+        Ok(())
+    }
 
-        if path_bytes.is_empty() {
-            return Err(Error::InvalidArgument);
-        }
-        if max_buffer <= 0 {
-            return Err(Error::NotAvailable);
-        }
-        if path_bytes.len() + 1 > path_buf.len() {
-            return Err(Error::NameTooLong);
-        }
-        if path_bytes.len() + 1 > max_buffer as usize {
-            return Err(Error::BufferTooSmall);
-        }
+    pub fn mkdir(path: &str) -> Result<(), Error> {
+        let path_len = stage_path(path)?;
+        let _ = fs_request(FS_IPC_MKDIR_REQ, path_len as i32, 0, 0, 0)?;
+        Ok(())
+    }
 
-        path_buf[..path_bytes.len()].copy_from_slice(path_bytes);
-        path_buf[path_bytes.len()] = 0;
-
-        if unsafe { fs_buffer_write(path_buf.as_ptr() as i32, (path_bytes.len() + 1) as i32, 0) } != 0 {
-            return Err(Error::HostCallFailed);
-        }
-
-        let _ = fs_request(FS_IPC_UNLINK_REQ, path_bytes.len() as i32, 0, 0, 0)?;
+    pub fn rmdir(path: &str) -> Result<(), Error> {
+        let path_len = stage_path(path)?;
+        let _ = fs_request(FS_IPC_RMDIR_REQ, path_len as i32, 0, 0, 0)?;
         Ok(())
     }
 }

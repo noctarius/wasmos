@@ -3,14 +3,16 @@ package main
 import "unsafe"
 
 const (
-	fsIPCOpenReq  int32 = 0x400
-	fsIPCReadReq  int32 = 0x401
-	fsIPCWriteReq int32 = 0x406
-	fsIPCCloseReq int32 = 0x402
-	fsIPCStatReq  int32 = 0x403
-	fsIPCSeekReq  int32 = 0x405
+	fsIPCOpenReq   int32 = 0x400
+	fsIPCReadReq   int32 = 0x401
+	fsIPCWriteReq  int32 = 0x406
+	fsIPCCloseReq  int32 = 0x402
+	fsIPCStatReq   int32 = 0x403
+	fsIPCSeekReq   int32 = 0x405
 	fsIPCUnlinkReq int32 = 0x407
-	fsIPCResp     int32 = 0x480
+	fsIPCMkdirReq  int32 = 0x408
+	fsIPCRmdirReq  int32 = 0x409
+	fsIPCResp      int32 = 0x480
 )
 
 const (
@@ -21,11 +23,11 @@ const (
 )
 
 const (
-	SeekSet int32 = 0
-	SeekCur int32 = 1
-	SeekEnd int32 = 2
-	SIFREG  int32 = 0x8000
-	SIFDIR  int32 = 0x4000
+	SeekSet  int32 = 0
+	SeekCur  int32 = 1
+	SeekEnd  int32 = 2
+	SIFREG   int32 = 0x8000
+	SIFDIR   int32 = 0x4000
 	O_RDONLY int32 = 0
 	O_WRONLY int32 = 1
 	O_APPEND int32 = 0x0008
@@ -93,6 +95,33 @@ type FileStat struct {
 type fsAPI struct{}
 
 var fs = fsAPI{}
+
+func stagePath(path string) (int, Error) {
+	pathLen := len(path)
+	maxBuffer := fsBufferSize()
+	var pathBuf [256]byte
+
+	if pathLen == 0 {
+		return 0, ErrInvalidArgument
+	}
+	if maxBuffer <= 0 {
+		return 0, ErrNotAvailable
+	}
+	if pathLen+1 > len(pathBuf) {
+		return 0, ErrNameTooLong
+	}
+	if pathLen+1 > int(maxBuffer) {
+		return 0, ErrBufferTooSmall
+	}
+
+	copy(pathBuf[:], path)
+	pathBuf[pathLen] = 0
+
+	if fsBufferWrite(uint32(uintptr(unsafe.Pointer(&pathBuf[0]))), uint32(pathLen+1), 0) != 0 {
+		return 0, ErrHostCallFailed
+	}
+	return pathLen, ErrOK
+}
 
 type startupAPI struct{}
 
@@ -301,28 +330,9 @@ func (f File) Seek(offset int32, whence int32) (int32, Error) {
 }
 
 func (fsAPI) openWithFlags(path string, flags int32) (File, Error) {
-	pathLen := len(path)
-	maxBuffer := fsBufferSize()
-	var pathBuf [256]byte
-
-	if pathLen == 0 {
-		return File{fd: -1}, ErrInvalidArgument
-	}
-	if maxBuffer <= 0 {
-		return File{fd: -1}, ErrNotAvailable
-	}
-	if pathLen+1 > len(pathBuf) {
-		return File{fd: -1}, ErrNameTooLong
-	}
-	if pathLen+1 > int(maxBuffer) {
-		return File{fd: -1}, ErrBufferTooSmall
-	}
-
-	copy(pathBuf[:], path)
-	pathBuf[pathLen] = 0
-
-	if fsBufferWrite(uint32(uintptr(unsafe.Pointer(&pathBuf[0]))), uint32(pathLen+1), 0) != 0 {
-		return File{fd: -1}, ErrHostCallFailed
+	pathLen, err := stagePath(path)
+	if err != ErrOK {
+		return File{fd: -1}, err
 	}
 
 	fd, _, err := fsRequest(fsIPCOpenReq, int32(pathLen), flags, 0, 0)
@@ -352,28 +362,9 @@ func (api fsAPI) OpenAppend(path string) (File, Error) {
 }
 
 func (fsAPI) Stat(path string) (FileStat, Error) {
-	pathLen := len(path)
-	maxBuffer := fsBufferSize()
-	var pathBuf [256]byte
-
-	if pathLen == 0 {
-		return FileStat{}, ErrInvalidArgument
-	}
-	if maxBuffer <= 0 {
-		return FileStat{}, ErrNotAvailable
-	}
-	if pathLen+1 > len(pathBuf) {
-		return FileStat{}, ErrNameTooLong
-	}
-	if pathLen+1 > int(maxBuffer) {
-		return FileStat{}, ErrBufferTooSmall
-	}
-
-	copy(pathBuf[:], path)
-	pathBuf[pathLen] = 0
-
-	if fsBufferWrite(uint32(uintptr(unsafe.Pointer(&pathBuf[0]))), uint32(pathLen+1), 0) != 0 {
-		return FileStat{}, ErrHostCallFailed
+	pathLen, err := stagePath(path)
+	if err != ErrOK {
+		return FileStat{}, err
 	}
 
 	size, mode, err := fsRequest(fsIPCStatReq, int32(pathLen), 0, 0, 0)
@@ -387,29 +378,28 @@ func (fsAPI) Stat(path string) (FileStat, Error) {
 }
 
 func (fsAPI) Unlink(path string) Error {
-	pathLen := len(path)
-	maxBuffer := fsBufferSize()
-	var pathBuf [256]byte
+	pathLen, err := stagePath(path)
+	if err != ErrOK {
+		return err
+	}
+	_, _, err = fsRequest(fsIPCUnlinkReq, int32(pathLen), 0, 0, 0)
+	return err
+}
 
-	if pathLen == 0 {
-		return ErrInvalidArgument
+func (fsAPI) Mkdir(path string) Error {
+	pathLen, err := stagePath(path)
+	if err != ErrOK {
+		return err
 	}
-	if maxBuffer <= 0 {
-		return ErrNotAvailable
-	}
-	if pathLen+1 > len(pathBuf) {
-		return ErrNameTooLong
-	}
-	if pathLen+1 > int(maxBuffer) {
-		return ErrBufferTooSmall
-	}
+	_, _, err = fsRequest(fsIPCMkdirReq, int32(pathLen), 0, 0, 0)
+	return err
+}
 
-	copy(pathBuf[:], path)
-	pathBuf[pathLen] = 0
-
-	if fsBufferWrite(uint32(uintptr(unsafe.Pointer(&pathBuf[0]))), uint32(pathLen+1), 0) != 0 {
-		return ErrHostCallFailed
+func (fsAPI) Rmdir(path string) Error {
+	pathLen, err := stagePath(path)
+	if err != ErrOK {
+		return err
 	}
-	_, _, err := fsRequest(fsIPCUnlinkReq, int32(pathLen), 0, 0, 0)
+	_, _, err = fsRequest(fsIPCRmdirReq, int32(pathLen), 0, 0, 0)
 	return err
 }

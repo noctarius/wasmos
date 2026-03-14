@@ -36,6 +36,28 @@ libc_fs_endpoint(void)
 }
 
 static int
+libc_fs_stage_path(const char *path, size_t *out_len)
+{
+    size_t path_len;
+
+    if (!path) {
+        return -1;
+    }
+
+    path_len = strlen(path);
+    if (path_len == 0 || path_len >= (size_t)wasmos_fs_buffer_size()) {
+        return -1;
+    }
+    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, (int32_t)(path_len + 1u), 0) != 0) {
+        return -1;
+    }
+    if (out_len) {
+        *out_len = path_len;
+    }
+    return 0;
+}
+
+static int
 libc_fs_request(int32_t type,
                 int32_t arg0,
                 int32_t arg1,
@@ -92,10 +114,6 @@ open(const char *path, int flags, ...)
     int32_t fd = -1;
     int access_mode;
 
-    if (!path) {
-        return -1;
-    }
-
     access_mode = flags & O_WRONLY;
     if ((flags & ~(O_WRONLY | O_CREAT | O_APPEND | O_TRUNC)) != 0) {
         return -1;
@@ -107,11 +125,7 @@ open(const char *path, int flags, ...)
         return -1;
     }
 
-    path_len = strlen(path);
-    if (path_len == 0 || path_len >= (size_t)wasmos_fs_buffer_size()) {
-        return -1;
-    }
-    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, (int32_t)(path_len + 1u), 0) != 0) {
+    if (libc_fs_stage_path(path, &path_len) != 0) {
         return -1;
     }
     if (libc_fs_request(FS_IPC_OPEN_REQ, (int32_t)path_len, flags, 0, 0, &fd, NULL) != 0) {
@@ -249,11 +263,7 @@ stat(const char *path, struct stat *st)
         return -1;
     }
 
-    path_len = strlen(path);
-    if (path_len == 0 || path_len >= (size_t)wasmos_fs_buffer_size()) {
-        return -1;
-    }
-    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, (int32_t)(path_len + 1u), 0) != 0) {
+    if (libc_fs_stage_path(path, &path_len) != 0) {
         return -1;
     }
     if (libc_fs_request(FS_IPC_STAT_REQ,
@@ -276,18 +286,35 @@ unlink(const char *path)
 {
     size_t path_len;
 
-    if (!path) {
-        return -1;
-    }
-
-    path_len = strlen(path);
-    if (path_len == 0 || path_len >= (size_t)wasmos_fs_buffer_size()) {
-        return -1;
-    }
-    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, (int32_t)(path_len + 1u), 0) != 0) {
+    if (libc_fs_stage_path(path, &path_len) != 0) {
         return -1;
     }
     return libc_fs_request(FS_IPC_UNLINK_REQ, (int32_t)path_len, 0, 0, 0, NULL, NULL);
+}
+
+int
+mkdir(const char *path, mode_t mode)
+{
+    size_t path_len;
+
+    /* TODO: Honor mode bits if WASMOS grows real permission semantics. */
+    (void)mode;
+
+    if (libc_fs_stage_path(path, &path_len) != 0) {
+        return -1;
+    }
+    return libc_fs_request(FS_IPC_MKDIR_REQ, (int32_t)path_len, 0, 0, 0, NULL, NULL);
+}
+
+int
+rmdir(const char *path)
+{
+    size_t path_len;
+
+    if (libc_fs_stage_path(path, &path_len) != 0) {
+        return -1;
+    }
+    return libc_fs_request(FS_IPC_RMDIR_REQ, (int32_t)path_len, 0, 0, 0, NULL, NULL);
 }
 
 FILE *

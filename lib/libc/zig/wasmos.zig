@@ -8,6 +8,8 @@ const FS_IPC_CLOSE_REQ: i32 = 0x402;
 const FS_IPC_STAT_REQ: i32 = 0x403;
 const FS_IPC_SEEK_REQ: i32 = 0x405;
 const FS_IPC_UNLINK_REQ: i32 = 0x407;
+const FS_IPC_MKDIR_REQ: i32 = 0x408;
+const FS_IPC_RMDIR_REQ: i32 = 0x409;
 const FS_IPC_RESP: i32 = 0x480;
 
 const IPC_FIELD_TYPE: i32 = 0;
@@ -246,7 +248,7 @@ pub const fs = struct {
         }
     };
 
-    fn openWithFlags(path: []const u8, flags: i32) Error!File {
+    fn stagePath(path: []const u8) Error!usize {
         var path_buf: [256]u8 = undefined;
         const max_buffer = fs_buffer_size();
 
@@ -269,8 +271,12 @@ pub const fs = struct {
         if (fs_buffer_write(@intCast(@intFromPtr(&path_buf[0])), @intCast(path.len + 1), 0) != 0) {
             return Error.HostCallFailed;
         }
+        return path.len;
+    }
 
-        const response = try fsRequest(FS_IPC_OPEN_REQ, @intCast(path.len), flags, 0, 0);
+    fn openWithFlags(path: []const u8, flags: i32) Error!File {
+        const path_len = try stagePath(path);
+        const response = try fsRequest(FS_IPC_OPEN_REQ, @intCast(path_len), flags, 0, 0);
         if (response.arg0 < 0) {
             return Error.BadResponse;
         }
@@ -294,30 +300,8 @@ pub const fs = struct {
     }
 
     pub fn stat(path: []const u8) Error!Stat {
-        var path_buf: [256]u8 = undefined;
-        const max_buffer = fs_buffer_size();
-
-        if (path.len == 0) {
-            return Error.InvalidArgument;
-        }
-        if (max_buffer <= 0) {
-            return Error.NotAvailable;
-        }
-        if (path.len + 1 > path_buf.len) {
-            return Error.NameTooLong;
-        }
-        if (path.len + 1 > @as(usize, @intCast(max_buffer))) {
-            return Error.BufferTooSmall;
-        }
-
-        @memcpy(path_buf[0..path.len], path);
-        path_buf[path.len] = 0;
-
-        if (fs_buffer_write(@intCast(@intFromPtr(&path_buf[0])), @intCast(path.len + 1), 0) != 0) {
-            return Error.HostCallFailed;
-        }
-
-        const response = try fsRequest(FS_IPC_STAT_REQ, @intCast(path.len), 0, 0, 0);
+        const path_len = try stagePath(path);
+        const response = try fsRequest(FS_IPC_STAT_REQ, @intCast(path_len), 0, 0, 0);
         if (response.arg0 < 0) {
             return Error.BadResponse;
         }
@@ -328,29 +312,17 @@ pub const fs = struct {
     }
 
     pub fn unlink(path: []const u8) Error!void {
-        var path_buf: [256]u8 = undefined;
-        const max_buffer = fs_buffer_size();
+        const path_len = try stagePath(path);
+        _ = try fsRequest(FS_IPC_UNLINK_REQ, @intCast(path_len), 0, 0, 0);
+    }
 
-        if (path.len == 0) {
-            return Error.InvalidArgument;
-        }
-        if (max_buffer <= 0) {
-            return Error.NotAvailable;
-        }
-        if (path.len + 1 > path_buf.len) {
-            return Error.NameTooLong;
-        }
-        if (path.len + 1 > @as(usize, @intCast(max_buffer))) {
-            return Error.BufferTooSmall;
-        }
+    pub fn mkdir(path: []const u8) Error!void {
+        const path_len = try stagePath(path);
+        _ = try fsRequest(FS_IPC_MKDIR_REQ, @intCast(path_len), 0, 0, 0);
+    }
 
-        @memcpy(path_buf[0..path.len], path);
-        path_buf[path.len] = 0;
-
-        if (fs_buffer_write(@intCast(@intFromPtr(&path_buf[0])), @intCast(path.len + 1), 0) != 0) {
-            return Error.HostCallFailed;
-        }
-
-        _ = try fsRequest(FS_IPC_UNLINK_REQ, @intCast(path.len), 0, 0, 0);
+    pub fn rmdir(path: []const u8) Error!void {
+        const path_len = try stagePath(path);
+        _ = try fsRequest(FS_IPC_RMDIR_REQ, @intCast(path_len), 0, 0, 0);
     }
 };

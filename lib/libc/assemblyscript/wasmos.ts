@@ -5,6 +5,8 @@ const FS_IPC_CLOSE_REQ: i32 = 0x402;
 const FS_IPC_STAT_REQ: i32 = 0x403;
 const FS_IPC_SEEK_REQ: i32 = 0x405;
 const FS_IPC_UNLINK_REQ: i32 = 0x407;
+const FS_IPC_MKDIR_REQ: i32 = 0x408;
+const FS_IPC_RMDIR_REQ: i32 = 0x409;
 const FS_IPC_RESP: i32 = 0x480;
 
 const IPC_FIELD_TYPE: i32 = 0;
@@ -228,13 +230,21 @@ export class File {
 }
 
 export namespace fs {
-  function openWithFlags(path: string, flags: i32): File | null {
+  function stagePath(path: string): Uint8Array | null {
     const pathBytes = Uint8Array.wrap(String.UTF8.encode(path, true));
     const bufferLimit = fs_buffer_size();
     if (bufferLimit <= 0 || pathBytes.length > bufferLimit) {
       return null;
     }
     if (fs_buffer_write(pathBytes.dataStart as i32, pathBytes.length, 0) != 0) {
+      return null;
+    }
+    return pathBytes;
+  }
+
+  function openWithFlags(path: string, flags: i32): File | null {
+    const pathBytes = stagePath(path);
+    if (pathBytes == null) {
       return null;
     }
 
@@ -262,12 +272,8 @@ export namespace fs {
   }
 
   export function stat(path: string): FileStat | null {
-    const pathBytes = Uint8Array.wrap(String.UTF8.encode(path, true));
-    const bufferLimit = fs_buffer_size();
-    if (bufferLimit <= 0 || pathBytes.length > bufferLimit) {
-      return null;
-    }
-    if (fs_buffer_write(pathBytes.dataStart as i32, pathBytes.length, 0) != 0) {
+    const pathBytes = stagePath(path);
+    if (pathBytes == null) {
       return null;
     }
 
@@ -279,16 +285,32 @@ export namespace fs {
   }
 
   export function unlink(path: string): bool {
-    const pathBytes = Uint8Array.wrap(String.UTF8.encode(path, true));
-    const bufferLimit = fs_buffer_size();
-    if (bufferLimit <= 0 || pathBytes.length > bufferLimit) {
-      return false;
-    }
-    if (fs_buffer_write(pathBytes.dataStart as i32, pathBytes.length, 0) != 0) {
+    const pathBytes = stagePath(path);
+    if (pathBytes == null) {
       return false;
     }
 
     const response = fsRequest(FS_IPC_UNLINK_REQ, pathBytes.length - 1, 0, 0, 0);
+    return response != null && response.arg0 == 0;
+  }
+
+  export function mkdir(path: string): bool {
+    const pathBytes = stagePath(path);
+    if (pathBytes == null) {
+      return false;
+    }
+
+    const response = fsRequest(FS_IPC_MKDIR_REQ, pathBytes.length - 1, 0, 0, 0);
+    return response != null && response.arg0 == 0;
+  }
+
+  export function rmdir(path: string): bool {
+    const pathBytes = stagePath(path);
+    if (pathBytes == null) {
+      return false;
+    }
+
+    const response = fsRequest(FS_IPC_RMDIR_REQ, pathBytes.length - 1, 0, 0, 0);
     return response != null && response.arg0 == 0;
   }
 

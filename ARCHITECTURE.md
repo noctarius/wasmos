@@ -36,8 +36,9 @@ The current tree already boots into a usable user-space stack:
 - `fs-fat` also supports overwrite-only writes to existing files through the C
   libc `open/write` path, plus `O_TRUNC` size updates, `O_APPEND` writes for
   existing files within their current cluster chain, and `O_CREAT` for
-  zero-length 8.3 files in existing directories; FAT allocation and file growth
-  remain future work.
+  zero-length 8.3 files in existing directories; FAT12/16 cluster allocation
+  now grows files and newly created files, while broader stdio-mode coverage
+  remains future work.
 - The runtime host uses `wasm3`, not WAMR.
 
 ## Architectural Direction

@@ -4,6 +4,7 @@ const FS_IPC_WRITE_REQ: i32 = 0x406;
 const FS_IPC_CLOSE_REQ: i32 = 0x402;
 const FS_IPC_STAT_REQ: i32 = 0x403;
 const FS_IPC_SEEK_REQ: i32 = 0x405;
+const FS_IPC_UNLINK_REQ: i32 = 0x407;
 const FS_IPC_RESP: i32 = 0x480;
 
 const IPC_FIELD_TYPE: i32 = 0;
@@ -275,6 +276,20 @@ export namespace fs {
       return null;
     }
     return new FileStat(response.arg0, response.arg1 & (S_IFREG | S_IFDIR));
+  }
+
+  export function unlink(path: string): bool {
+    const pathBytes = Uint8Array.wrap(String.UTF8.encode(path, true));
+    const bufferLimit = fs_buffer_size();
+    if (bufferLimit <= 0 || pathBytes.length > bufferLimit) {
+      return false;
+    }
+    if (fs_buffer_write(pathBytes.dataStart as i32, pathBytes.length, 0) != 0) {
+      return false;
+    }
+
+    const response = fsRequest(FS_IPC_UNLINK_REQ, pathBytes.length - 1, 0, 0, 0);
+    return response != null && response.arg0 == 0;
   }
 
   export function readFile(path: string): Uint8Array | null {

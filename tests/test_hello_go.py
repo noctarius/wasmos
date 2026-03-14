@@ -50,6 +50,7 @@ class HelloGoTest(unittest.TestCase):
                 b"Hello from Go on WASMOS!",
                 b"Entry: main",
                 b"long filename write: true",
+                b"long filename unlink: true",
             ],
         )
 

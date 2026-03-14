@@ -48,6 +48,15 @@ func Main(args []string) int32 {
 		_ = std.Puts("long filename write: false\n")
 		return 0
 	}
+	if err := fs.Unlink(path); err != ErrOK {
+		_ = std.Puts("long filename unlink: false\n")
+		return 0
+	}
+	if _, err := fs.Stat(path); err == ErrOK {
+		_ = std.Puts("long filename unlink: false\n")
+		return 0
+	}
 	_ = std.Puts("long filename write: true\n")
+	_ = std.Puts("long filename unlink: true\n")
 	return 0
 }

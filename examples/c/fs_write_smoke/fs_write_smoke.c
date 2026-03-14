@@ -86,6 +86,20 @@ main(int argc, char **argv)
         puts("fs-write-smoke: grow verify failed");
         return 1;
     }
+    if (unlink("/create.txt") != 0) {
+        puts("fs-write-smoke: unlink failed");
+        return 1;
+    }
+    if (stat("/create.txt", &st) == 0) {
+        puts("fs-write-smoke: unlink stat failed");
+        return 1;
+    }
+    fd = open("/create.txt", O_WRONLY | O_CREAT | O_TRUNC);
+    if (fd < 0) {
+        puts("fs-write-smoke: recreate open failed");
+        return 1;
+    }
+    close(fd);
     stream = fopen("/stdio.txt", "wb");
     if (!stream) {
         puts("fs-write-smoke: stdio write open failed");

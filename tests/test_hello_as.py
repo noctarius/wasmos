@@ -51,6 +51,7 @@ class HelloAssemblyScriptTest(unittest.TestCase):
                 b"Entry: main, runtime: stub",
                 b"startup.nsh readable: true",
                 b"long filename write: true",
+                b"long filename unlink: true",
             ],
         )
 

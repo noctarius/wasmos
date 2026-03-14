@@ -1,11 +1,20 @@
 const FS_IPC_OPEN_REQ: i32 = 0x400;
 const FS_IPC_READ_REQ: i32 = 0x401;
 const FS_IPC_CLOSE_REQ: i32 = 0x402;
+const FS_IPC_STAT_REQ: i32 = 0x403;
+const FS_IPC_SEEK_REQ: i32 = 0x405;
 const FS_IPC_RESP: i32 = 0x480;
 
 const IPC_FIELD_TYPE: i32 = 0;
 const IPC_FIELD_REQUEST_ID: i32 = 1;
 const IPC_FIELD_ARG0: i32 = 2;
+const IPC_FIELD_ARG1: i32 = 3;
+
+export const SEEK_SET: i32 = 0;
+export const SEEK_CUR: i32 = 1;
+export const SEEK_END: i32 = 2;
+export const S_IFREG: i32 = 0x8000;
+export const S_IFDIR: i32 = 0x4000;
 
 @external("wasmos", "console_write")
 declare function console_write(ptr: i32, len: i32): i32;
@@ -91,24 +100,32 @@ function nextFsRequestId(): i32 {
   return requestId;
 }
 
-function fsRequest(type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32): i32 {
+class FsResponse {
+  constructor(public arg0: i32 = 0, public arg1: i32 = 0) {}
+}
+
+export class FileStat {
+  constructor(public size: i32 = 0, public mode: i32 = 0) {}
+}
+
+function fsRequest(type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32): FsResponse | null {
   const endpoint = fs_endpoint();
   const replyEndpoint = ensureFsReplyEndpoint();
   if (endpoint < 0 || replyEndpoint < 0) {
-    return -1;
+    return null;
   }
 
   const requestId = nextFsRequestId();
   if (ipc_send(endpoint, replyEndpoint, type, requestId, arg0, arg1, arg2, arg3) != 0) {
-    return -1;
+    return null;
   }
   if (ipc_recv(replyEndpoint) < 0) {
-    return -1;
+    return null;
   }
   if (ipc_last_field(IPC_FIELD_REQUEST_ID) != requestId || ipc_last_field(IPC_FIELD_TYPE) != FS_IPC_RESP) {
-    return -1;
+    return null;
   }
-  return ipc_last_field(IPC_FIELD_ARG0);
+  return new FsResponse(ipc_last_field(IPC_FIELD_ARG0), ipc_last_field(IPC_FIELD_ARG1));
 }
 
 export namespace std {
@@ -143,7 +160,11 @@ export class File {
       requested = bufferLimit;
     }
 
-    const readLen = fsRequest(FS_IPC_READ_REQ, this.fd, requested, 0, 0);
+    const response = fsRequest(FS_IPC_READ_REQ, this.fd, requested, 0, 0);
+    if (response == null) {
+      return null;
+    }
+    const readLen = response.arg0;
     if (readLen < 0 || readLen > requested) {
       return null;
     }
@@ -159,7 +180,16 @@ export class File {
   }
 
   close(): bool {
-    return fsRequest(FS_IPC_CLOSE_REQ, this.fd, 0, 0, 0) == 0;
+    const response = fsRequest(FS_IPC_CLOSE_REQ, this.fd, 0, 0, 0);
+    return response != null && response.arg0 == 0;
+  }
+
+  seek(offset: i32, whence: i32): i32 {
+    const response = fsRequest(FS_IPC_SEEK_REQ, this.fd, offset, whence, 0);
+    if (response == null || response.arg0 < 0) {
+      return -1;
+    }
+    return response.arg0;
   }
 }
 
@@ -174,11 +204,28 @@ export namespace fs {
       return null;
     }
 
-    const fd = fsRequest(FS_IPC_OPEN_REQ, pathBytes.length - 1, 0, 0, 0);
-    if (fd < 0) {
+    const response = fsRequest(FS_IPC_OPEN_REQ, pathBytes.length - 1, 0, 0, 0);
+    if (response == null || response.arg0 < 0) {
       return null;
     }
-    return new File(fd);
+    return new File(response.arg0);
+  }
+
+  export function stat(path: string): FileStat | null {
+    const pathBytes = Uint8Array.wrap(String.UTF8.encode(path, true));
+    const bufferLimit = fs_buffer_size();
+    if (bufferLimit <= 0 || pathBytes.length > bufferLimit) {
+      return null;
+    }
+    if (fs_buffer_write(pathBytes.dataStart as i32, pathBytes.length, 0) != 0) {
+      return null;
+    }
+
+    const response = fsRequest(FS_IPC_STAT_REQ, pathBytes.length - 1, 0, 0, 0);
+    if (response == null || response.arg0 < 0) {
+      return null;
+    }
+    return new FileStat(response.arg0, response.arg1 & (S_IFREG | S_IFDIR));
   }
 
   export function readFile(path: string): Uint8Array | null {

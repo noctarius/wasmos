@@ -39,7 +39,8 @@ libc_fs_request(int32_t type,
                 int32_t arg1,
                 int32_t arg2,
                 int32_t arg3,
-                int32_t *out_arg0)
+                int32_t *out_arg0,
+                int32_t *out_arg1)
 {
     int32_t fs_endpoint = libc_fs_endpoint();
     int32_t reply_endpoint = libc_fs_reply_endpoint();
@@ -76,6 +77,9 @@ libc_fs_request(int32_t type,
     if (out_arg0) {
         *out_arg0 = reply.arg0;
     }
+    if (out_arg1) {
+        *out_arg1 = reply.arg1;
+    }
     return 0;
 }
 
@@ -96,7 +100,7 @@ open(const char *path, int flags, ...)
     if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, (int32_t)(path_len + 1u), 0) != 0) {
         return -1;
     }
-    if (libc_fs_request(FS_IPC_OPEN_REQ, (int32_t)path_len, flags, 0, 0, &fd) != 0) {
+    if (libc_fs_request(FS_IPC_OPEN_REQ, (int32_t)path_len, flags, 0, 0, &fd, NULL) != 0) {
         return -1;
     }
     return (int)fd;
@@ -127,7 +131,7 @@ read(int fd, void *buf, size_t count)
         if (chunk > chunk_max) {
             chunk = chunk_max;
         }
-        if (libc_fs_request(FS_IPC_READ_REQ, fd, (int32_t)chunk, 0, 0, &got) != 0) {
+        if (libc_fs_request(FS_IPC_READ_REQ, fd, (int32_t)chunk, 0, 0, &got, NULL) != 0) {
             return done > 0 ? (ssize_t)done : -1;
         }
         if (got < 0 || (size_t)got > chunk) {
@@ -151,7 +155,60 @@ read(int fd, void *buf, size_t count)
 int
 close(int fd)
 {
-    return libc_fs_request(FS_IPC_CLOSE_REQ, fd, 0, 0, 0, NULL);
+    return libc_fs_request(FS_IPC_CLOSE_REQ, fd, 0, 0, 0, NULL, NULL);
+}
+
+off_t
+lseek(int fd, off_t offset, int whence)
+{
+    int32_t result = -1;
+
+    if (offset < (off_t)INT32_MIN || offset > (off_t)INT32_MAX) {
+        return (off_t)-1;
+    }
+    if (libc_fs_request(FS_IPC_SEEK_REQ,
+                        fd,
+                        (int32_t)offset,
+                        whence,
+                        0,
+                        &result,
+                        NULL) != 0) {
+        return (off_t)-1;
+    }
+    return (off_t)result;
+}
+
+int
+stat(const char *path, struct stat *st)
+{
+    size_t path_len;
+    int32_t size = 0;
+    int32_t mode = 0;
+
+    if (!path || !st) {
+        return -1;
+    }
+
+    path_len = strlen(path);
+    if (path_len == 0 || path_len >= (size_t)wasmos_fs_buffer_size()) {
+        return -1;
+    }
+    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, (int32_t)(path_len + 1u), 0) != 0) {
+        return -1;
+    }
+    if (libc_fs_request(FS_IPC_STAT_REQ,
+                        (int32_t)path_len,
+                        0,
+                        0,
+                        0,
+                        &size,
+                        &mode) != 0) {
+        return -1;
+    }
+
+    st->st_size = (uint32_t)size;
+    st->st_mode = (uint32_t)mode;
+    return 0;
 }
 
 FILE *
@@ -223,6 +280,37 @@ fclose(FILE *stream)
     }
 
     return -1;
+}
+
+int
+fseek(FILE *stream, long offset, int whence)
+{
+    if (!stream || stream->fd < 0) {
+        return -1;
+    }
+    if (lseek(stream->fd, (off_t)offset, whence) < 0) {
+        stream->error = 1;
+        return -1;
+    }
+    stream->eof = 0;
+    stream->error = 0;
+    return 0;
+}
+
+long
+ftell(FILE *stream)
+{
+    off_t pos;
+
+    if (!stream || stream->fd < 0) {
+        return -1L;
+    }
+    pos = lseek(stream->fd, 0, SEEK_CUR);
+    if (pos < 0) {
+        stream->error = 1;
+        return -1L;
+    }
+    return (long)pos;
 }
 
 int

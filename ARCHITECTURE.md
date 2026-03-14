@@ -31,6 +31,8 @@ The current tree already boots into a usable user-space stack:
   listed in the generated boot-config blob.
 - The initfs also carries a generated binary boot-config blob derived from
   `scripts/initfs.toml` for config-driven startup.
+- `fs-fat` currently provides read-only open/read/seek/stat primitives for the
+  shared libc layer and the language-native shims.
 - The runtime host uses `wasm3`, not WAMR.
 
 ## Architectural Direction

@@ -5,11 +5,20 @@ use core::fmt::{self, Write};
 const FS_IPC_OPEN_REQ: i32 = 0x400;
 const FS_IPC_READ_REQ: i32 = 0x401;
 const FS_IPC_CLOSE_REQ: i32 = 0x402;
+const FS_IPC_STAT_REQ: i32 = 0x403;
+const FS_IPC_SEEK_REQ: i32 = 0x405;
 const FS_IPC_RESP: i32 = 0x480;
 
 const IPC_FIELD_TYPE: i32 = 0;
 const IPC_FIELD_REQUEST_ID: i32 = 1;
 const IPC_FIELD_ARG0: i32 = 2;
+const IPC_FIELD_ARG1: i32 = 3;
+
+pub const SEEK_SET: i32 = 0;
+pub const SEEK_CUR: i32 = 1;
+pub const SEEK_END: i32 = 2;
+pub const S_IFREG: u32 = 0x8000;
+pub const S_IFDIR: u32 = 0x4000;
 
 #[link(wasm_import_module = "wasmos")]
 unsafe extern "C" {
@@ -109,7 +118,7 @@ fn next_fs_request_id() -> i32 {
     }
 }
 
-fn fs_request(msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> Result<i32, Error> {
+fn fs_request(msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> Result<(i32, i32), Error> {
     let endpoint = unsafe { fs_endpoint() };
     if endpoint < 0 {
         return Err(Error::NotAvailable);
@@ -131,7 +140,10 @@ fn fs_request(msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> Resu
         return Err(Error::BadResponse);
     }
 
-    Ok(unsafe { ipc_last_field(IPC_FIELD_ARG0) })
+    Ok((
+        unsafe { ipc_last_field(IPC_FIELD_ARG0) },
+        unsafe { ipc_last_field(IPC_FIELD_ARG1) },
+    ))
 }
 
 pub mod std {
@@ -164,7 +176,16 @@ pub mod std {
 }
 
 pub mod fs {
-    use super::{fs_buffer_copy, fs_buffer_size, fs_buffer_write, fs_request, Error, FS_IPC_CLOSE_REQ, FS_IPC_OPEN_REQ, FS_IPC_READ_REQ};
+    use super::{
+        fs_buffer_copy, fs_buffer_size, fs_buffer_write, fs_request, Error, FS_IPC_CLOSE_REQ,
+        FS_IPC_OPEN_REQ, FS_IPC_READ_REQ, FS_IPC_SEEK_REQ, FS_IPC_STAT_REQ, S_IFDIR, S_IFREG,
+    };
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct Stat {
+        pub size: u32,
+        pub mode: u32,
+    }
 
     pub struct File {
         fd: i32,
@@ -185,7 +206,7 @@ pub mod fs {
             while done < buffer.len() {
                 let remaining = buffer.len() - done;
                 let chunk_len = remaining.min(max_buffer as usize);
-                let chunk_read = fs_request(FS_IPC_READ_REQ, self.fd, chunk_len as i32, 0, 0)?;
+                let (chunk_read, _) = fs_request(FS_IPC_READ_REQ, self.fd, chunk_len as i32, 0, 0)?;
                 if chunk_read < 0 {
                     return Err(Error::BadResponse);
                 }
@@ -211,6 +232,14 @@ pub mod fs {
         pub fn close(self) -> Result<(), Error> {
             let _ = fs_request(FS_IPC_CLOSE_REQ, self.fd, 0, 0, 0)?;
             Ok(())
+        }
+
+        pub fn seek(&self, offset: i32, whence: i32) -> Result<i32, Error> {
+            let (position, _) = fs_request(FS_IPC_SEEK_REQ, self.fd, offset, whence, 0)?;
+            if position < 0 {
+                return Err(Error::BadResponse);
+            }
+            Ok(position)
         }
     }
 
@@ -239,11 +268,47 @@ pub mod fs {
             return Err(Error::HostCallFailed);
         }
 
-        let fd = fs_request(FS_IPC_OPEN_REQ, path_bytes.len() as i32, 0, 0, 0)?;
+        let (fd, _) = fs_request(FS_IPC_OPEN_REQ, path_bytes.len() as i32, 0, 0, 0)?;
         if fd < 0 {
             return Err(Error::BadResponse);
         }
 
         Ok(File { fd })
+    }
+
+    pub fn stat(path: &str) -> Result<Stat, Error> {
+        let path_bytes = path.as_bytes();
+        let max_buffer = unsafe { fs_buffer_size() };
+        let mut path_buf = [0u8; 256];
+
+        if path_bytes.is_empty() {
+            return Err(Error::InvalidArgument);
+        }
+        if max_buffer <= 0 {
+            return Err(Error::NotAvailable);
+        }
+        if path_bytes.len() + 1 > path_buf.len() {
+            return Err(Error::NameTooLong);
+        }
+        if path_bytes.len() + 1 > max_buffer as usize {
+            return Err(Error::BufferTooSmall);
+        }
+
+        path_buf[..path_bytes.len()].copy_from_slice(path_bytes);
+        path_buf[path_bytes.len()] = 0;
+
+        if unsafe { fs_buffer_write(path_buf.as_ptr() as i32, (path_bytes.len() + 1) as i32, 0) } != 0 {
+            return Err(Error::HostCallFailed);
+        }
+
+        let (size, mode) = fs_request(FS_IPC_STAT_REQ, path_bytes.len() as i32, 0, 0, 0)?;
+        if size < 0 {
+            return Err(Error::BadResponse);
+        }
+
+        Ok(Stat {
+            size: size as u32,
+            mode: mode as u32 & (S_IFREG | S_IFDIR),
+        })
     }
 }

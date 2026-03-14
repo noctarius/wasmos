@@ -3,6 +3,12 @@
 #include "wasmos/ipc.h"
 #include "wasmos_driver_abi.h"
 
+/*
+ * The chardev server is intentionally tiny. It models a single-byte device-like
+ * service over IPC and is mostly used to exercise request/reply semantics,
+ * blocking receive behavior, and scheduler fairness under active IPC traffic.
+ */
+
 static uint8_t g_last_byte;
 static uint8_t g_has_data;
 static int32_t g_service_endpoint = -1;
@@ -47,6 +53,8 @@ initialize(int32_t service_endpoint,
         wasmos_ipc_message_t msg;
         wasmos_ipc_message_read_last(&msg);
 
+        /* The protocol is deliberately simple: one slot of state, one read
+         * opcode, one write opcode, and a generic error path. */
         switch ((uint32_t)msg.type) {
             case WASM_CHARDEV_IPC_READ_REQ:
                 if (!g_has_data) {

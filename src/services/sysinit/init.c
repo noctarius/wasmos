@@ -4,6 +4,13 @@
 #include "wasmos/api.h"
 #include "wasmos_driver_abi.h"
 
+/*
+ * sysinit has been deliberately narrowed. It no longer owns early bootstrap or
+ * boot-module iteration; that responsibility moved into the kernel init task.
+ * sysinit now behaves like a late-start launcher for user-facing processes once
+ * the filesystem path is already available.
+ */
+
 static int32_t g_reply_endpoint = -1;
 static int32_t g_spawn_request_id = 1;
 static int32_t g_proc_endpoint = -1;
@@ -130,6 +137,8 @@ spawn_named(const char *name)
         return -1;
     }
 
+    /* PM's by-name spawn path currently accepts up to sixteen bytes packed into
+     * the four IPC argument slots. */
     pack_name_args(name, packed);
     if (wasmos_ipc_send(g_proc_endpoint, g_reply_endpoint,
                         PROC_IPC_SPAWN_NAME,
@@ -192,6 +201,8 @@ initialize(int32_t proc_endpoint,
     trace_mark(0x1103);
     trace_line("[sysinit] enter loop\n");
     trace_mark(0x1104);
+    /* The loop is intentionally linear and small: ensure the known targets are
+     * running, then idle forever waiting for any future extension point. */
     for (;;) {
         if (g_target_index >= (int32_t)(sizeof(g_targets) / sizeof(g_targets[0]))) {
             trace_line("[sysinit] idle wait\n");

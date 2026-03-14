@@ -1,5 +1,9 @@
 .section .text
 
+# The ISR stubs are intentionally split: exceptions either panic or hand control
+# to a dedicated fault handler, while IRQ stubs do the minimum register save
+# needed before delegating to C.
+
 .extern x86_exception_panic
 .extern x86_exception_panic_frame
 .extern x86_page_fault_handler
@@ -50,6 +54,8 @@
 .macro DECL_EXC num
 .global isr_exception_\num
 isr_exception_\num:
+    # Simple exceptions currently panic immediately; richer recovery is only
+    # implemented for the faults that already have kernel-side handlers.
     mov $\num, %rdi
     call x86_exception_panic
 1:
@@ -109,6 +115,8 @@ isr_exception_13:
     jmp 1b
  .global isr_exception_14
 isr_exception_14:
+    # Page faults are the only recoverable exception path today. Push the full
+    # register set so the C handler can inspect and potentially resume.
     PUSH_REGS
     mov 120(%rsp), %rdi
     subq $8, %rsp
@@ -143,6 +151,9 @@ DECL_EXC 31
 
  .global isr_irq_0
 isr_irq_0:
+    # IRQ0 is special because it drives timer preemption. Capture the IRET frame,
+    # preserve a small canary-protected scratch area, and let the C timer path
+    # decide whether the interrupted RIP should be redirected.
     PUSH_REGS
     movq g_irq0_ist_canary(%rip), %rax
     cmpq %rax, g_irq0_ist_stack(%rip)

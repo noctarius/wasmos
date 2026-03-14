@@ -23,7 +23,13 @@
 .extern g_ctx_restore_rip
 .extern g_ctx_restore_rsp
 .extern g_ctx_restore_rflags
+
+# The context switch path stores and restores the full general-purpose register
+# set plus RIP/RSP/RFLAGS. The scheduler keeps the saved contexts in process_t
+# structures; this assembly code is the narrow mechanism that swaps between them.
 context_switch:
+    # Mark the transition so debug code can distinguish genuine process state
+    # corruption from an in-flight save/restore sequence.
     movb $1, g_in_context_switch(%rip)
     movq %rdi, g_ctxsw_last_out_ctx(%rip)
     movq %rsi, g_ctxsw_last_in_ctx(%rip)
@@ -40,6 +46,8 @@ context_switch:
     movq $1, g_ctx_watch_reason(%rip)
     incq g_ctx_watch_hits(%rip)
 0:
+    # Save the outgoing context first. RIP is synthesized from a local label so
+    # resuming the old context returns just after the switch call.
     movq %r15, 0(%rdi)
     movq %r14, 8(%rdi)
     movq %r13, 16(%rdi)
@@ -73,6 +81,8 @@ context_switch:
     movq %rax, g_ctxsw_last_in_rip(%rip)
     movq 136(%rdx), %rax
     movq %rax, g_ctxsw_last_in_rflags(%rip)
+    # Restore the incoming context and stage RFLAGS/RIP on the new stack so a
+    # plain ret returns into the restored execution stream.
     movq 0(%rdx), %r15
     movq 8(%rdx), %r14
     movq 16(%rdx), %r13
@@ -106,6 +116,9 @@ context_switch:
     ret
 
 context_switch_to:
+    # context_switch_to is the one-way variant used when no outgoing task state
+    # needs to be saved, for example when jumping from the scheduler context
+    # into the very first runnable task or the preempt trampoline.
     movb $1, g_in_context_switch(%rip)
     movq %rdi, %rdx
     movq %rdi, g_ctxsw_last_in_ctx(%rip)
@@ -146,5 +159,8 @@ context_switch_to:
 
 .global process_preempt_trampoline
 process_preempt_trampoline:
+    # Timer IRQ preemption rewrites the interrupted RIP to this symbol. Instead
+    # of re-entering user code directly, control returns to the scheduler
+    # context, which can then pick the next runnable process normally.
     leaq g_sched_ctx(%rip), %rdi
     jmp context_switch_to

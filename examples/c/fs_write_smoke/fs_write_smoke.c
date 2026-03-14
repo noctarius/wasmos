@@ -31,6 +31,28 @@ main(int argc, char **argv)
         return 1;
     }
 
+    fd = open("/create.txt", O_WRONLY | O_CREAT | O_TRUNC);
+    if (fd < 0) {
+        puts("fs-write-smoke: create open failed");
+        return 1;
+    }
+    close(fd);
+    if (stat("/create.txt", &st) != 0 || st.st_size != 0) {
+        puts("fs-write-smoke: create stat failed");
+        return 1;
+    }
+    fd = open("/create.txt", O_RDONLY);
+    if (fd < 0) {
+        puts("fs-write-smoke: create reopen failed");
+        return 1;
+    }
+    rc = read(fd, buffer, sizeof(buffer));
+    close(fd);
+    if (rc != 0) {
+        puts("fs-write-smoke: create verify failed");
+        return 1;
+    }
+
     fd = open("/write_smoke.txt", O_WRONLY | O_TRUNC);
     if (fd < 0) {
         puts("fs-write-smoke: open write failed");

@@ -16,6 +16,7 @@
 #define FAT_LFN_MAX 255u
 #define FAT_MAX_OPEN_FILES 16u
 #define FAT_MAX_PATH 128u
+#define FAT_OPEN_APPEND 0x0008
 #define FAT_OPEN_TRUNC 0x0200
 #define FAT_WAITING 1
 
@@ -124,6 +125,7 @@ static uint8_t g_wait_copy_into_sector = 0;
 static int32_t g_fs_resp_override = 0;
 static int32_t g_fs_resp_arg0 = 0;
 static int32_t g_fs_resp_arg1 = 0;
+static uint8_t g_fs_stage_buf[FAT_MAX_SECTOR_BYTES];
 
 typedef struct {
     uint8_t in_use;
@@ -160,6 +162,8 @@ static int fat_name_eq(const char *a, const char *b);
 static uint32_t fat_lba_for_cluster(uint16_t cluster);
 static int fat_next_cluster(uint16_t cluster, uint16_t *out_next);
 static uint32_t fat_cluster_chain_capacity(uint16_t first_cluster);
+static int fat_open_file_access_mode(const fat_open_file_t *file);
+static int fat_set_open_file_offset(fat_open_file_t *file, uint32_t offset, uint32_t limit);
 static int fat_reposition_open_file(fat_open_file_t *file, uint32_t offset);
 static int fat_sync_block_write(uint32_t lba);
 static int fat_store_open_file_size(fat_open_file_t *file, uint32_t size);
@@ -856,11 +860,12 @@ fat_handle_open(void)
     uint32_t path_len = (uint32_t)g_fs_req.arg0;
     int32_t access_mode = g_fs_req.arg1 & 1;
 
-    if ((g_fs_req.arg1 & ~((int32_t)FAT_OPEN_TRUNC | 1)) != 0 || path_len == 0 || path_len >= sizeof(path)) {
+    if ((g_fs_req.arg1 & ~((int32_t)FAT_OPEN_APPEND | (int32_t)FAT_OPEN_TRUNC | 1)) != 0 ||
+        path_len == 0 || path_len >= sizeof(path)) {
         return -1;
     }
     if ((access_mode != 0 && access_mode != 1) ||
-        ((g_fs_req.arg1 & FAT_OPEN_TRUNC) != 0 && access_mode != 1)) {
+        ((g_fs_req.arg1 & (FAT_OPEN_APPEND | FAT_OPEN_TRUNC)) != 0 && access_mode != 1)) {
         return -1;
     }
     if (path_len + 1u > (uint32_t)wasmos_fs_buffer_size()) {
@@ -886,7 +891,7 @@ fat_handle_open(void)
     if (!file) {
         return -1;
     }
-    file->flags = access_mode;
+    file->flags = g_fs_req.arg1;
     file->first_cluster = entry.size == 0 ? 0 : entry.cluster;
     file->current_cluster = entry.size == 0 ? 0 : entry.cluster;
     file->current_sector = 0;
@@ -903,10 +908,15 @@ fat_handle_open(void)
             file->in_use = 0;
             return -1;
         }
-        file->offset = 0;
-        file->current_cluster = file->first_cluster;
-        file->current_sector = 0;
-        file->file_lba = file->first_cluster >= 2 ? fat_lba_for_cluster(file->first_cluster) : 0;
+        if (fat_set_open_file_offset(file, 0, file->capacity) != 0) {
+            file->in_use = 0;
+            return -1;
+        }
+    } else if ((g_fs_req.arg1 & FAT_OPEN_APPEND) != 0) {
+        if (fat_set_open_file_offset(file, file->size, file->capacity) != 0) {
+            file->in_use = 0;
+            return -1;
+        }
     }
 
     g_fs_resp_override = 1;
@@ -949,7 +959,7 @@ fat_handle_read_open_file(void)
     uint32_t requested;
     uint32_t done = 0;
 
-    if (!file || file->flags != 0 || g_fs_req.arg1 < 0) {
+    if (!file || fat_open_file_access_mode(file) != 0 || g_fs_req.arg1 < 0) {
         return -1;
     }
 
@@ -1014,8 +1024,13 @@ fat_handle_write_open_file(void)
     uint32_t requested;
     uint32_t done = 0;
 
-    if (!file || file->flags != 1 || g_fs_req.arg1 < 0) {
+    if (!file || fat_open_file_access_mode(file) != 1 || g_fs_req.arg1 < 0) {
         return -1;
+    }
+    if ((file->flags & FAT_OPEN_APPEND) != 0) {
+        if (fat_set_open_file_offset(file, file->size, file->capacity) != 0) {
+            return -1;
+        }
     }
 
     /* TODO: Support FAT allocation so writes can grow beyond the existing
@@ -1033,33 +1048,43 @@ fat_handle_write_open_file(void)
         uint32_t sector_offset = file->offset % g_bytes_per_sector;
         uint32_t chunk = g_bytes_per_sector - sector_offset;
         uint16_t next_cluster = 0;
+        uint32_t next_end = 0;
 
         if (chunk > requested - done) {
             chunk = requested - done;
         }
+        next_end = file->offset + chunk;
         if (file->current_cluster < 2 || file->file_lba == 0) {
             return -1;
+        }
+        if (next_end > file->size) {
+            /* Grow the visible file size before writing past the current EOF so
+             * the QEMU FAT backing store accepts the new byte range. */
+            if (fat_store_open_file_size(file, next_end) != 0) {
+                return -1;
+            }
         }
         if (sector_offset != 0 || chunk != g_bytes_per_sector) {
             if (fat_sync_block_read(file->file_lba + file->current_sector) != 0) {
                 return -1;
             }
         }
-        if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)(g_sector_buf + sector_offset),
+        /* Stage through a separate buffer before merging into the sector so
+         * partial writes do not depend on host-call copies into a shifted
+         * destination pointer inside linear memory. */
+        if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)g_fs_stage_buf,
                                   (int32_t)chunk,
                                   (int32_t)done) != 0) {
             return -1;
+        }
+        for (uint32_t i = 0; i < chunk; ++i) {
+            g_sector_buf[sector_offset + i] = g_fs_stage_buf[i];
         }
         if (fat_sync_block_write(file->file_lba + file->current_sector) != 0) {
             return -1;
         }
         file->offset += chunk;
         done += chunk;
-        if (file->offset > file->size) {
-            if (fat_store_open_file_size(file, file->offset) != 0) {
-                return -1;
-            }
-        }
 
         if (file->offset >= file->capacity || sector_offset + chunk < g_bytes_per_sector) {
             continue;
@@ -1113,40 +1138,7 @@ fat_handle_stat(void)
 static int
 fat_reposition_open_file(fat_open_file_t *file, uint32_t offset)
 {
-    uint32_t cluster_bytes;
-    uint32_t cluster_skip;
-
-    if (!file || offset > file->size) {
-        return -1;
-    }
-
-    file->offset = offset;
-    if (file->size == 0 || offset == file->size) {
-        file->current_cluster = file->first_cluster;
-        file->current_sector = 0;
-        file->file_lba = file->first_cluster >= 2 ? fat_lba_for_cluster(file->first_cluster) : 0;
-        return 0;
-    }
-    if (file->first_cluster < 2 || g_sectors_per_cluster == 0 || g_bytes_per_sector == 0) {
-        return -1;
-    }
-
-    cluster_bytes = (uint32_t)g_sectors_per_cluster * g_bytes_per_sector;
-    cluster_skip = offset / cluster_bytes;
-    file->current_cluster = file->first_cluster;
-    file->current_sector = (offset % cluster_bytes) / g_bytes_per_sector;
-
-    while (cluster_skip > 0) {
-        uint16_t next_cluster = 0;
-        if (fat_next_cluster(file->current_cluster, &next_cluster) != 0) {
-            return -1;
-        }
-        file->current_cluster = next_cluster;
-        cluster_skip--;
-    }
-
-    file->file_lba = fat_lba_for_cluster(file->current_cluster);
-    return file->file_lba == 0 ? -1 : 0;
+    return fat_set_open_file_offset(file, offset, file ? file->size : 0);
 }
 
 static int
@@ -1529,6 +1521,60 @@ fat_cluster_chain_capacity(uint16_t first_cluster)
         cluster = next_cluster;
     }
     return total;
+}
+
+static int
+fat_open_file_access_mode(const fat_open_file_t *file)
+{
+    if (!file) {
+        return -1;
+    }
+    return file->flags & 1;
+}
+
+static int
+fat_set_open_file_offset(fat_open_file_t *file, uint32_t offset, uint32_t limit)
+{
+    uint32_t cluster_bytes;
+    uint32_t cluster_skip;
+
+    if (!file || offset > limit) {
+        return -1;
+    }
+
+    file->offset = offset;
+    if (offset == 0) {
+        file->current_cluster = file->first_cluster;
+        file->current_sector = 0;
+        file->file_lba = file->first_cluster >= 2 ? fat_lba_for_cluster(file->first_cluster) : 0;
+        return 0;
+    }
+    if (file->first_cluster < 2 || g_sectors_per_cluster == 0 || g_bytes_per_sector == 0) {
+        return -1;
+    }
+
+    cluster_bytes = (uint32_t)g_sectors_per_cluster * g_bytes_per_sector;
+    cluster_skip = offset / cluster_bytes;
+    if (offset % cluster_bytes == 0) {
+        cluster_skip--;
+    }
+    file->current_cluster = file->first_cluster;
+    file->current_sector = (offset % cluster_bytes) / g_bytes_per_sector;
+    if (offset % cluster_bytes == 0) {
+        file->current_sector = g_sectors_per_cluster - 1u;
+    }
+
+    while (cluster_skip > 0) {
+        uint16_t next_cluster = 0;
+        if (fat_next_cluster(file->current_cluster, &next_cluster) != 0) {
+            return -1;
+        }
+        file->current_cluster = next_cluster;
+        cluster_skip--;
+    }
+
+    file->file_lba = fat_lba_for_cluster(file->current_cluster);
+    return file->file_lba == 0 ? -1 : 0;
 }
 
 static int

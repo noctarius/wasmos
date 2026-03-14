@@ -34,8 +34,9 @@ The current tree already boots into a usable user-space stack:
 - `fs-fat` currently provides read-only open/read/seek/stat primitives for the
   shared libc layer and the language-native shims.
 - `fs-fat` also supports overwrite-only writes to existing files through the C
-  libc `open/write` path, plus `O_TRUNC` size updates for shrinking existing
-  files; FAT allocation, create, append, and file growth remain future work.
+  libc `open/write` path, plus `O_TRUNC` size updates and `O_APPEND` writes for
+  existing files within their current cluster chain; FAT allocation, create,
+  and file growth remain future work.
 - The runtime host uses `wasm3`, not WAMR.
 
 ## Architectural Direction

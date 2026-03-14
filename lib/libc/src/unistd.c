@@ -95,13 +95,13 @@ open(const char *path, int flags, ...)
     }
 
     access_mode = flags & O_WRONLY;
-    if ((flags & ~(O_WRONLY | O_TRUNC)) != 0) {
+    if ((flags & ~(O_WRONLY | O_APPEND | O_TRUNC)) != 0) {
         return -1;
     }
     if (access_mode != O_RDONLY && access_mode != O_WRONLY) {
         return -1;
     }
-    if ((flags & O_TRUNC) && access_mode != O_WRONLY) {
+    if ((flags & (O_APPEND | O_TRUNC)) && access_mode != O_WRONLY) {
         return -1;
     }
 

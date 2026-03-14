@@ -4,6 +4,12 @@
 #include "serial.h"
 
 #define PAGE_SIZE 0x1000ULL
+#define MM_USER_LINEAR_BASE 0x0000008000000000ULL
+#define MM_USER_STACK_BASE  0x0000008100000000ULL
+#define MM_USER_HEAP_BASE   0x0000008200000000ULL
+#define MM_USER_IPC_BASE    0x0000008300000000ULL
+#define MM_USER_DEVICE_BASE 0x0000008400000000ULL
+#define MM_USER_SHARED_BASE 0x0000008500000000ULL
 static const uint64_t pf_err_present = 1ULL << 0;
 static const uint64_t pf_err_write = 1ULL << 1;
 static const uint64_t pf_err_instr = 1ULL << 4;
@@ -25,6 +31,35 @@ typedef struct {
 static mm_shared_region_t g_shared[MM_MAX_SHARED];
 static uint32_t g_shared_next_id = 1;
 
+static uint64_t
+mm_region_virtual_base(mm_context_t *ctx, mem_region_type_t type, uint64_t pages)
+{
+    (void)pages;
+    if (!ctx) {
+        return 0;
+    }
+    switch (type) {
+    case MEM_REGION_WASM_LINEAR:
+        return MM_USER_LINEAR_BASE;
+    case MEM_REGION_STACK:
+        return MM_USER_STACK_BASE;
+    case MEM_REGION_HEAP:
+        return MM_USER_HEAP_BASE;
+    case MEM_REGION_IPC:
+        return MM_USER_IPC_BASE;
+    case MEM_REGION_DEVICE:
+        return MM_USER_DEVICE_BASE;
+    case MEM_REGION_SHARED: {
+        uint64_t base = ctx->next_shared_base;
+        ctx->next_shared_base += pages * PAGE_SIZE;
+        return base;
+    }
+    case MEM_REGION_CODE:
+    default:
+        return 0;
+    }
+}
+
 void mm_init(const boot_info_t *boot_info) {
     g_boot_info = boot_info;
     g_context_count = 0;
@@ -37,6 +72,7 @@ void mm_init(const boot_info_t *boot_info) {
     }
 
     if (mm_context_init(&g_root_ctx, 0) == 0) {
+        g_root_ctx.root_table = paging_get_root_table();
         mm_context_alloc_region(&g_root_ctx, 16, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, MEM_REGION_WASM_LINEAR);
         mm_context_alloc_region(&g_root_ctx, 4, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, MEM_REGION_STACK);
         mm_context_alloc_region(&g_root_ctx, 8, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, MEM_REGION_HEAP);
@@ -64,9 +100,12 @@ int mm_context_init(mm_context_t *ctx, uint32_t id) {
         return -1;
     }
     ctx->id = id;
+    ctx->root_table = 0;
+    ctx->next_shared_base = MM_USER_SHARED_BASE;
     ctx->region_count = 0;
     for (uint32_t i = 0; i < MM_MAX_REGIONS; ++i) {
         ctx->regions[i].base = 0;
+        ctx->regions[i].phys_base = 0;
         ctx->regions[i].size = 0;
         ctx->regions[i].flags = 0;
         ctx->regions[i].type = MEM_REGION_WASM_LINEAR;
@@ -80,6 +119,7 @@ int mm_context_add_region(mm_context_t *ctx, uint64_t base, uint64_t size, uint3
     }
     mem_region_t *region = &ctx->regions[ctx->region_count++];
     region->base = base;
+    region->phys_base = 0;
     region->size = size;
     region->flags = flags;
     region->type = type;
@@ -148,7 +188,11 @@ int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint64_t error_code
     }
 
     uint64_t page_base = addr & ~(PAGE_SIZE - 1ULL);
-    int rc = paging_map_4k(page_base, page_base, region->flags);
+    /* Region metadata now tracks a process-visible virtual base and a separate
+     * physical backing base. Fault resolution wires the missing virtual page
+     * into the owning context's private root table on demand. */
+    uint64_t phys_page = region->phys_base + (page_base - region->base);
+    int rc = paging_map_4k_in_root(ctx->root_table, page_base, phys_page, region->flags);
     if (rc < 0) {
         return -1;
     }
@@ -204,13 +248,15 @@ int mm_shared_map(mm_context_t *ctx, uint32_t id, uint32_t flags, uint64_t *out_
     if (flags) {
         effective_flags &= flags;
     }
-    if (mm_context_add_region(ctx, region->base, region->pages * PAGE_SIZE,
-                              effective_flags, MEM_REGION_SHARED) != 0) {
+    uint64_t virt_base = mm_region_virtual_base(ctx, MEM_REGION_SHARED, region->pages);
+    if (virt_base == 0 || mm_context_add_region(ctx, virt_base, region->pages * PAGE_SIZE,
+                                                effective_flags, MEM_REGION_SHARED) != 0) {
         return -1;
     }
+    ctx->regions[ctx->region_count - 1].phys_base = region->base;
     region->refcount++;
     if (out_base) {
-        *out_base = region->base;
+        *out_base = virt_base;
     }
     return 0;
 }
@@ -258,11 +304,17 @@ int mm_context_alloc_region(mm_context_t *ctx, uint64_t pages, uint32_t flags, m
     if (!ctx || pages == 0) {
         return -1;
     }
-    uint64_t base = pfa_alloc_pages(pages);
-    if (!base) {
+    uint64_t phys = pfa_alloc_pages(pages);
+    if (!phys) {
         return -1;
     }
-    return mm_context_add_region(ctx, base, pages * PAGE_SIZE, flags, type);
+    uint64_t virt = mm_region_virtual_base(ctx, type, pages);
+    if (!virt || mm_context_add_region(ctx, virt, pages * PAGE_SIZE, flags, type) != 0) {
+        pfa_free_pages(phys, pages);
+        return -1;
+    }
+    ctx->regions[ctx->region_count - 1].phys_base = phys;
+    return 0;
 }
 
 mm_context_t *mm_context_get(uint32_t id) {
@@ -286,6 +338,9 @@ mm_context_t *mm_context_create(uint32_t id) {
     }
     mm_context_t *ctx = &g_contexts[g_context_count];
     if (mm_context_init(ctx, id) != 0) {
+        return 0;
+    }
+    if (paging_create_address_space(&ctx->root_table) != 0) {
         return 0;
     }
     if (mm_context_alloc_region(ctx, 8, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, MEM_REGION_WASM_LINEAR) != 0) {
@@ -312,12 +367,13 @@ int mm_context_destroy(uint32_t id) {
         }
         for (uint32_t r = 0; r < ctx->region_count; ++r) {
             mem_region_t *region = &ctx->regions[r];
-            if (region->base == 0 || region->size == 0) {
+            if (region->phys_base == 0 || region->size == 0) {
                 continue;
             }
             uint64_t pages = (region->size + PAGE_SIZE - 1ULL) / PAGE_SIZE;
-            pfa_free_pages(region->base, pages);
+            pfa_free_pages(region->phys_base, pages);
         }
+        paging_destroy_address_space(ctx->root_table);
         if (i + 1 < g_context_count) {
             g_contexts[i] = g_contexts[g_context_count - 1];
         }
@@ -325,4 +381,23 @@ int mm_context_destroy(uint32_t id) {
         return 0;
     }
     return -1;
+}
+
+int mm_context_activate(uint32_t id) {
+    mm_context_t *ctx = mm_context_get(id);
+    if (!ctx || ctx->root_table == 0) {
+        return -1;
+    }
+    /* Scheduling flips CR3 between the kernel root context and the selected
+     * process context. The kernel mappings stay shared; the private user slot
+     * changes with the owning mm_context. */
+    return paging_switch_root(ctx->root_table);
+}
+
+uint64_t mm_context_root_table(uint32_t id) {
+    mm_context_t *ctx = mm_context_get(id);
+    if (!ctx) {
+        return 0;
+    }
+    return ctx->root_table;
 }

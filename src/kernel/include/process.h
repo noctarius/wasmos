@@ -5,6 +5,7 @@
 #include <stddef.h>
 
 #define PROCESS_MAX_COUNT 32
+#define PROCESS_NAME_MAX 64
 // Round-robin scheduler time slice (fixed ticks per run).
 #define PROCESS_DEFAULT_SLICE_TICKS 5u
 #define PROCESS_STACK_SIZE 524288u
@@ -108,6 +109,7 @@ typedef struct process {
     uint32_t stack_pages;
     process_entry_t entry;
     void *arg;
+    char name_storage[PROCESS_NAME_MAX];
     const char *name;
 } process_t;
 

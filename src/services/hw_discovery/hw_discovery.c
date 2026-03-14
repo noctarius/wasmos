@@ -6,9 +6,11 @@
 
 /*
  * hw-discovery is currently a bootstrap sequencer more than a full device
- * manager. It verifies the ACPI RSDP is present, finds the preloaded storage
+ * manager. It verifies the ACPI RSDP is present, finds the bootstrap storage
  * driver modules, and asks the process manager to start them in dependency
  * order.
+ * TODO: Grow this into a real hardware inventory/policy service instead of a
+ * storage-bootstrap sequencer with hardcoded ATA/FAT assumptions.
  */
 
 typedef struct __attribute__((packed)) {

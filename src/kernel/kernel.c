@@ -72,6 +72,9 @@ boot_module_index_by_app_name(const boot_info_t *info, const char *name)
 {
     /* Boot modules are only an early bootstrap channel, so resolve them by the
      * embedded WASMOS-APP metadata rather than by bootloader-side filenames. */
+    /* TODO: Replace this bootstrap bridge with direct initfs consumption once
+     * the kernel no longer depends on synthesized boot_module_t entries for
+     * early user-space bring-up. */
     if (!info || !name || !(info->flags & BOOT_INFO_FLAG_MODULES_PRESENT)) {
         return 0xFFFFFFFFu;
     }

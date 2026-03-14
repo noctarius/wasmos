@@ -2,6 +2,7 @@
 #define WASMOS_LIBC_SYS_STAT_H
 
 #include <stdint.h>
+#include <sys/types.h>
 
 struct stat {
     uint32_t st_mode;
@@ -11,5 +12,7 @@ struct stat {
 #define S_IFMT  0xF000u
 #define S_IFREG 0x8000u
 #define S_IFDIR 0x4000u
+
+int mkdir(const char *path, mode_t mode);
 
 #endif

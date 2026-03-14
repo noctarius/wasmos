@@ -160,6 +160,7 @@ static void fat_lfn_reset(void);
 static void fat_lfn_finalize(void);
 static void fat_lfn_collect(const uint8_t *ent);
 static int fat_name_eq(const char *a, const char *b);
+static uint32_t fat_first_data_lba(void);
 static uint32_t fat_lba_for_cluster(uint16_t cluster);
 static int fat_next_cluster(uint16_t cluster, uint16_t *out_next);
 static uint32_t fat_cluster_chain_capacity(uint16_t first_cluster);
@@ -195,14 +196,23 @@ static void fat_fill_lfn_entry(uint8_t *entry,
                                uint32_t ordinal,
                                uint32_t total,
                                uint8_t checksum);
+static int fat_create_path_entry(const char *path,
+                                 uint8_t attr,
+                                 uint16_t cluster,
+                                 uint32_t size,
+                                 uint8_t fail_if_exists,
+                                 fat_dir_entry_info_t *out);
 static int fat_create_empty_file(const char *path, fat_dir_entry_info_t *out);
+static int fat_create_directory(const char *path);
 static int fat_free_cluster_chain(uint16_t first_cluster);
 static int fat_entry_is_open(const fat_dir_entry_info_t *entry);
 static int fat_delete_dir_entry_chain(uint32_t dir_lba, uint32_t entry_index);
 static int fat_unlink_path(const char *path);
+static int fat_rmdir_path(const char *path);
 static int fat_read_fat_entry(uint16_t cluster, uint16_t *out_value);
 static int fat_write_fat_entry(uint16_t cluster, uint16_t value);
 static int fat_find_free_cluster(uint16_t *out_cluster);
+static uint16_t fat_end_of_chain_marker(void);
 static int fat_last_cluster_in_chain(uint16_t first_cluster, uint16_t *out_cluster);
 static int fat_append_cluster_to_file(fat_open_file_t *file);
 static int fat_ensure_open_file_capacity(fat_open_file_t *file, uint32_t min_size);
@@ -1411,7 +1421,12 @@ fat_fill_lfn_entry(uint8_t *entry,
 }
 
 static int
-fat_create_empty_file(const char *path, fat_dir_entry_info_t *out)
+fat_create_path_entry(const char *path,
+                      uint8_t attr,
+                      uint16_t cluster,
+                      uint32_t size,
+                      uint8_t fail_if_exists,
+                      fat_dir_entry_info_t *out)
 {
     uint32_t dir_lba = 0;
     uint32_t dir_sectors = 0;
@@ -1440,7 +1455,7 @@ fat_create_empty_file(const char *path, fat_dir_entry_info_t *out)
                         fat_dir_entry_limit(root, dir_sectors),
                         name,
                         out) == 0 && out->valid) {
-        return 0;
+        return fail_if_exists ? -1 : 0;
     }
     if (fat_encode_short_name(name, short_name) == 0) {
         exact_short = 1;
@@ -1497,17 +1512,157 @@ fat_create_empty_file(const char *path, fat_dir_entry_info_t *out)
     for (uint32_t i = 0; i < 11; ++i) {
         entry[i] = short_name[i];
     }
+    entry[11] = attr;
+    entry[26] = (uint8_t)(cluster & 0xFFu);
+    entry[27] = (uint8_t)((cluster >> 8) & 0xFFu);
+    entry[28] = (uint8_t)(size & 0xFFu);
+    entry[29] = (uint8_t)((size >> 8) & 0xFFu);
+    entry[30] = (uint8_t)((size >> 16) & 0xFFu);
+    entry[31] = (uint8_t)((size >> 24) & 0xFFu);
     if (fat_write_dir_entry(dir_lba, slot_entry, entry) != 0) {
         return -1;
     }
 
     out->valid = 1;
-    out->attr = 0;
-    out->cluster = 0;
-    out->size = 0;
+    out->attr = attr;
+    out->cluster = cluster;
+    out->size = size;
     out->dir_lba = dir_lba;
     out->dir_sector = slot_entry / (g_bytes_per_sector / 32u);
     out->dir_index = slot_entry % (g_bytes_per_sector / 32u);
+    return 0;
+}
+
+static int
+fat_create_empty_file(const char *path, fat_dir_entry_info_t *out)
+{
+    return fat_create_path_entry(path, 0, 0, 0, 0, out);
+}
+
+static int
+fat_zero_cluster(uint16_t cluster)
+{
+    uint32_t lba = fat_lba_for_cluster(cluster);
+
+    if (cluster < 2 || lba == 0) {
+        return -1;
+    }
+    for (uint32_t sector = 0; sector < g_sectors_per_cluster; ++sector) {
+        for (uint32_t i = 0; i < g_bytes_per_sector; ++i) {
+            g_sector_buf[i] = 0;
+        }
+        if (fat_sync_block_write(lba + sector) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int
+fat_dir_cluster_from_lba(uint32_t dir_lba, uint16_t *out_cluster)
+{
+    uint32_t first_data = fat_first_data_lba();
+    uint32_t rel;
+
+    if (!out_cluster || dir_lba < first_data || g_sectors_per_cluster == 0) {
+        return -1;
+    }
+    rel = dir_lba - first_data;
+    if ((rel % g_sectors_per_cluster) != 0) {
+        return -1;
+    }
+    rel /= g_sectors_per_cluster;
+    if (rel > 0xFFFDu) {
+        return -1;
+    }
+    *out_cluster = (uint16_t)(rel + 2u);
+    return 0;
+}
+
+static void
+fat_fill_dot_dir_entry(uint8_t entry[32], uint8_t dots, uint16_t cluster)
+{
+    for (uint32_t i = 0; i < 32; ++i) {
+        entry[i] = 0;
+    }
+    entry[0] = '.';
+    entry[1] = dots == 2 ? '.' : ' ';
+    for (uint32_t i = 2; i < 11; ++i) {
+        entry[i] = ' ';
+    }
+    entry[11] = 0x10;
+    entry[26] = (uint8_t)(cluster & 0xFFu);
+    entry[27] = (uint8_t)((cluster >> 8) & 0xFFu);
+}
+
+static int
+fat_init_directory_cluster(uint16_t cluster, uint16_t parent_cluster)
+{
+    uint32_t lba = fat_lba_for_cluster(cluster);
+    uint8_t entry[32];
+
+    if (fat_zero_cluster(cluster) != 0) {
+        return -1;
+    }
+    if (fat_sync_block_read(lba) != 0) {
+        return -1;
+    }
+    fat_fill_dot_dir_entry(entry, 1, cluster);
+    for (uint32_t i = 0; i < 32; ++i) {
+        g_sector_buf[i] = entry[i];
+    }
+    fat_fill_dot_dir_entry(entry, 2, parent_cluster);
+    for (uint32_t i = 0; i < 32; ++i) {
+        g_sector_buf[32u + i] = entry[i];
+    }
+    return fat_sync_block_write(lba);
+}
+
+static int
+fat_create_directory(const char *path)
+{
+    fat_dir_entry_info_t entry = { 0 };
+    uint32_t dir_lba = 0;
+    uint32_t dir_sectors = 0;
+    uint8_t root = 1;
+    uint16_t cluster = 0;
+    uint16_t parent_cluster = 0;
+    char name[FAT_MAX_PATH];
+
+    if (!path) {
+        return -1;
+    }
+    if (fat_resolve_parent_dir(path, &dir_lba, &dir_sectors, &root, name, sizeof(name)) != 0) {
+        return -1;
+    }
+    (void)dir_sectors;
+    (void)name;
+    if (root) {
+        /* TODO: FAT12/16 root directories do not have a real cluster number.
+         * Use a self-reference in `..` for vvfat compatibility until the
+         * writable path grows explicit root-parent handling. */
+        parent_cluster = cluster;
+    } else if (fat_dir_cluster_from_lba(dir_lba, &parent_cluster) != 0) {
+        /* TODO: Directory creation assumes the parent directory starts on one
+         * cluster boundary; wider writable directory chains need explicit
+         * parent-cluster tracking. */
+        return -1;
+    }
+    if (fat_find_free_cluster(&cluster) != 0) {
+        return -1;
+    }
+    if (fat_write_fat_entry(cluster, fat_end_of_chain_marker()) != 0) {
+        return -1;
+    }
+    if (fat_init_directory_cluster(cluster, parent_cluster) != 0) {
+        (void)fat_write_fat_entry(cluster, 0);
+        return -1;
+    }
+    if (fat_create_path_entry(path, 0x10, cluster, 0, 1, &entry) != 0) {
+        (void)fat_zero_cluster(cluster);
+        (void)fat_write_fat_entry(cluster, 0);
+        return -1;
+    }
     return 0;
 }
 
@@ -1615,6 +1770,92 @@ fat_unlink_path(const char *path)
 
     entry_index = entry.dir_sector * (g_bytes_per_sector / 32u) + entry.dir_index;
     return fat_delete_dir_entry_chain(entry.dir_lba, entry_index);
+}
+
+static int
+fat_dir_is_empty(const fat_dir_entry_info_t *entry)
+{
+    uint32_t entries_left;
+    uint32_t dir_lba;
+    uint32_t dir_sectors;
+
+    if (!entry || !entry->valid || (entry->attr & 0x10) == 0 || entry->cluster < 2) {
+        return -1;
+    }
+
+    dir_lba = fat_lba_for_cluster(entry->cluster);
+    dir_sectors = g_sectors_per_cluster;
+    entries_left = fat_dir_entry_limit(0, dir_sectors);
+    fat_lfn_reset();
+
+    for (uint32_t sector = 0; sector < dir_sectors && entries_left > 0; ++sector) {
+        uint32_t entries_per_sector = g_bytes_per_sector / 32u;
+        uint32_t entries_total = entries_left < entries_per_sector ? entries_left : entries_per_sector;
+
+        if (fat_sync_block_read(dir_lba + sector) != 0) {
+            fat_lfn_reset();
+            return -1;
+        }
+        for (uint32_t i = 0; i < entries_total; ++i) {
+            uint8_t *ent = g_sector_buf + i * 32u;
+            char entry_name[FAT_LFN_MAX + 1u];
+
+            if (ent[0] == 0x00) {
+                fat_lfn_reset();
+                return 1;
+            }
+            if (ent[0] == 0xE5) {
+                fat_lfn_reset();
+                continue;
+            }
+            if ((ent[11] & 0x0F) == 0x0F) {
+                fat_lfn_collect(ent);
+                continue;
+            }
+            if (ent[11] & 0x08) {
+                fat_lfn_reset();
+                continue;
+            }
+            fat_entry_name_from_dirent(ent, entry_name, sizeof(entry_name));
+            fat_lfn_reset();
+            if (fat_name_eq(entry_name, ".") || fat_name_eq(entry_name, "..")) {
+                continue;
+            }
+            return 0;
+        }
+        entries_left -= entries_total;
+    }
+
+    return 1;
+}
+
+static int
+fat_rmdir_path(const char *path)
+{
+    fat_dir_entry_info_t entry = { 0 };
+    uint32_t entry_index;
+    int empty;
+
+    if (!path || fat_resolve_path(path, &entry) != 0 || !entry.valid) {
+        return -1;
+    }
+    if ((entry.attr & 0x10) == 0 || entry.cluster < 2) {
+        return -1;
+    }
+    if (g_cwd_source == g_fs_req.source &&
+        !g_cwd_root &&
+        g_dir_lba == fat_lba_for_cluster(entry.cluster)) {
+        return -1;
+    }
+    empty = fat_dir_is_empty(&entry);
+    if (empty <= 0) {
+        return -1;
+    }
+    entry_index = entry.dir_sector * (g_bytes_per_sector / 32u) + entry.dir_index;
+    if (fat_delete_dir_entry_chain(entry.dir_lba, entry_index) != 0) {
+        return -1;
+    }
+    return fat_free_cluster_chain(entry.cluster);
 }
 
 static int
@@ -1830,6 +2071,58 @@ fat_handle_unlink(void)
     path[path_len] = '\0';
 
     if (fat_unlink_path(path) != 0) {
+        return -1;
+    }
+
+    g_fs_resp_override = 1;
+    g_fs_resp_arg0 = 0;
+    return 0;
+}
+
+static int
+fat_handle_mkdir(void)
+{
+    char path[FAT_MAX_PATH];
+    uint32_t path_len = (uint32_t)g_fs_req.arg0;
+
+    if (g_fs_req.arg1 != 0 || path_len == 0 || path_len >= sizeof(path)) {
+        return -1;
+    }
+    if (path_len + 1u > (uint32_t)wasmos_fs_buffer_size()) {
+        return -1;
+    }
+    if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+        return -1;
+    }
+    path[path_len] = '\0';
+
+    if (fat_create_directory(path) != 0) {
+        return -1;
+    }
+
+    g_fs_resp_override = 1;
+    g_fs_resp_arg0 = 0;
+    return 0;
+}
+
+static int
+fat_handle_rmdir(void)
+{
+    char path[FAT_MAX_PATH];
+    uint32_t path_len = (uint32_t)g_fs_req.arg0;
+
+    if (g_fs_req.arg1 != 0 || path_len == 0 || path_len >= sizeof(path)) {
+        return -1;
+    }
+    if (path_len + 1u > (uint32_t)wasmos_fs_buffer_size()) {
+        return -1;
+    }
+    if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+        return -1;
+    }
+    path[path_len] = '\0';
+
+    if (fat_rmdir_path(path) != 0) {
         return -1;
     }
 
@@ -3336,6 +3629,18 @@ fat_ipc_dispatch(int32_t type,
             return -1;
         }
         return fat_handle_unlink();
+    }
+    if (type == FS_IPC_MKDIR_REQ) {
+        if (g_op != FAT_OP_NONE) {
+            return -1;
+        }
+        return fat_handle_mkdir();
+    }
+    if (type == FS_IPC_RMDIR_REQ) {
+        if (g_op != FAT_OP_NONE) {
+            return -1;
+        }
+        return fat_handle_rmdir();
     }
     if (type == FS_IPC_CLOSE_REQ) {
         if (g_op != FAT_OP_NONE) {

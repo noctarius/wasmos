@@ -36,9 +36,12 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - `O_CREAT` support for zero-length 8.3 FAT files in existing directories
 - FAT12/16 cluster allocation for file growth, including writes to new files
 - FAT file unlink support with cluster-chain reclamation for regular files
+- FAT directory create/remove support for empty directories
 - C stdio write/append modes via `fopen`/`fwrite`
 - C libc `unlink` support
+- C libc `mkdir`/`rmdir` support
 - Rust, Zig, Go, and AssemblyScript fs shims can now create/write/append/unlink files
+  and create/remove directories
 - FAT new-file creation supports long filenames with generated short aliases
 - growable per-process `wasm3` heaps with a 2 GiB cap
 - per-process virtual memory contexts with private user mappings

@@ -3,10 +3,9 @@
 #include "wasmos_driver_abi.h"
 
 /*
- * Minimal PIO ATA driver used for the early storage bootstrap path. It only
- * supports identify and read requests, which is enough for the FAT driver to
- * mount the ESP and for the rest of the system to move from preloaded modules
- * to filesystem-backed loading.
+ * Minimal PIO ATA driver used for the early storage bootstrap path. It now
+ * supports identify plus small read/write requests, which is enough for the FAT
+ * driver to mount the ESP and service the current overwrite-only write path.
  */
 
 #define ATA_PRIMARY_BASE 0x1F0
@@ -25,6 +24,8 @@
 
 #define ATA_CMD_IDENTIFY 0xEC
 #define ATA_CMD_READ_SECTORS 0x20
+#define ATA_CMD_WRITE_SECTORS 0x30
+#define ATA_CMD_CACHE_FLUSH 0xE7
 
 #define ATA_SR_BSY 0x80
 #define ATA_SR_DRQ 0x08
@@ -141,6 +142,48 @@ ata_read_lba28(uint32_t lba, uint8_t count, uint32_t buffer_phys)
     return 0;
 }
 
+static int
+ata_write_lba28(uint32_t lba, uint8_t count, uint32_t buffer_phys)
+{
+    if (count == 0 || count > ATA_MAX_READ_SECTORS || buffer_phys == 0) {
+        return -1;
+    }
+
+    if (ata_wait_not_busy() != 0) {
+        return -1;
+    }
+
+    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_HDDEVSEL, 0xE0 | ((lba >> 24) & 0x0F));
+    wasmos_io_wait();
+    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_SECCOUNT0, count);
+    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_LBA0, (uint8_t)(lba & 0xFF));
+    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_LBA1, (uint8_t)((lba >> 8) & 0xFF));
+    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_LBA2, (uint8_t)((lba >> 16) & 0xFF));
+    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_COMMAND, ATA_CMD_WRITE_SECTORS);
+
+    for (uint8_t sector = 0; sector < count; ++sector) {
+        if (ata_wait_drq() != 0) {
+            return -1;
+        }
+        if (wasmos_block_buffer_copy((int32_t)buffer_phys,
+                                     (int32_t)(uintptr_t)g_sector_buf,
+                                     ATA_SECTOR_SIZE,
+                                     (int32_t)(sector * ATA_SECTOR_SIZE)) != 0) {
+            return -1;
+        }
+        uint16_t *in = (uint16_t *)g_sector_buf;
+        for (uint32_t i = 0; i < 256; ++i) {
+            wasmos_io_out16(ATA_PRIMARY_BASE + ATA_REG_DATA, in[i]);
+        }
+    }
+
+    if (ata_wait_not_busy() != 0) {
+        return -1;
+    }
+    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_COMMAND, ATA_CMD_CACHE_FLUSH);
+    return ata_wait_not_busy();
+}
+
 static void
 ata_send_resp(int32_t reply_ep, int32_t req_id, int32_t type, int32_t status, int32_t arg1)
 {
@@ -179,6 +222,26 @@ ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t arg0, int32
         wasmos_ipc_send(source,
                         g_block_endpoint,
                         BLOCK_IPC_READ_RESP,
+                        req_id,
+                        0,
+                        arg2,
+                        0,
+                        0);
+        return 0;
+    }
+
+    if (type == BLOCK_IPC_WRITE_REQ) {
+        if (arg2 <= 0 || arg2 > (int32_t)ATA_MAX_READ_SECTORS || arg0 <= 0) {
+            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 2, 0);
+            return 0;
+        }
+        if (ata_write_lba28((uint32_t)arg1, (uint8_t)arg2, (uint32_t)arg0) != 0) {
+            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 5, 0);
+            return 0;
+        }
+        wasmos_ipc_send(source,
+                        g_block_endpoint,
+                        BLOCK_IPC_WRITE_RESP,
                         req_id,
                         0,
                         arg2,

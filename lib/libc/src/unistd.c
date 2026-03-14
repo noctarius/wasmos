@@ -89,7 +89,7 @@ open(const char *path, int flags, ...)
     size_t path_len;
     int32_t fd = -1;
 
-    if (!path || flags != O_RDONLY) {
+    if (!path || (flags != O_RDONLY && flags != O_WRONLY)) {
         return -1;
     }
 
@@ -145,6 +145,52 @@ read(int fd, void *buf, size_t count)
         }
         done += (size_t)got;
         if ((size_t)got < chunk) {
+            break;
+        }
+    }
+
+    return (ssize_t)done;
+}
+
+ssize_t
+write(int fd, const void *buf, size_t count)
+{
+    const uint8_t *src = (const uint8_t *)buf;
+    size_t done = 0;
+    size_t chunk_max;
+
+    if (!buf) {
+        return -1;
+    }
+    if (count == 0) {
+        return 0;
+    }
+
+    chunk_max = (size_t)wasmos_fs_buffer_size();
+    if (chunk_max == 0) {
+        return -1;
+    }
+
+    while (done < count) {
+        size_t chunk = count - done;
+        int32_t wrote = 0;
+        if (chunk > chunk_max) {
+            chunk = chunk_max;
+        }
+        if (wasmos_fs_buffer_write((int32_t)(uintptr_t)(src + done), (int32_t)chunk, 0) != 0) {
+            return done > 0 ? (ssize_t)done : -1;
+        }
+        if (libc_fs_request(FS_IPC_WRITE_REQ, fd, (int32_t)chunk, 0, 0, &wrote, NULL) != 0) {
+            return done > 0 ? (ssize_t)done : -1;
+        }
+        if (wrote < 0 || (size_t)wrote > chunk) {
+            return done > 0 ? (ssize_t)done : -1;
+        }
+        if (wrote == 0) {
+            break;
+        }
+        done += (size_t)wrote;
+        if ((size_t)wrote < chunk) {
             break;
         }
     }
@@ -216,6 +262,8 @@ fopen(const char *path, const char *mode)
 {
     int fd;
 
+    /* TODO: Add stdio write modes once fs-fat supports create/truncate/append
+     * instead of the current overwrite-only low-level write path. */
     if (!mode || (strcmp(mode, "r") != 0 && strcmp(mode, "rb") != 0)) {
         return NULL;
     }

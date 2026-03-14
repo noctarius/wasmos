@@ -33,6 +33,9 @@ The current tree already boots into a usable user-space stack:
   `scripts/initfs.toml` for config-driven startup.
 - `fs-fat` currently provides read-only open/read/seek/stat primitives for the
   shared libc layer and the language-native shims.
+- `fs-fat` also supports overwrite-only writes to existing files through the C
+  libc `open/write` path; FAT allocation and create/truncate behavior remain
+  future work.
 - The runtime host uses `wasm3`, not WAMR.
 
 ## Architectural Direction

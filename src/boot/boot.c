@@ -217,6 +217,51 @@ static EFI_STATUS read_file_alloc(EFI_BOOT_SERVICES *bs,
     return EFI_SUCCESS;
 }
 
+static int
+initfs_valid(const void *blob, UINTN size)
+{
+    if (!blob || size < sizeof(wasmos_initfs_header_t)) {
+        return 0;
+    }
+    const wasmos_initfs_header_t *hdr = (const wasmos_initfs_header_t *)blob;
+    for (UINTN i = 0; i < 8; ++i) {
+        if ((UINT8)hdr->magic[i] != (UINT8)WASMOS_INITFS_MAGIC[i]) {
+            return 0;
+        }
+    }
+    if (hdr->version != WASMOS_INITFS_VERSION ||
+        hdr->header_size != sizeof(wasmos_initfs_header_t) ||
+        hdr->entry_size != sizeof(wasmos_initfs_entry_t) ||
+        hdr->total_size > size) {
+        return 0;
+    }
+    UINTN table_bytes = (UINTN)hdr->entry_count * sizeof(wasmos_initfs_entry_t);
+    if (hdr->header_size + table_bytes > hdr->total_size) {
+        return 0;
+    }
+    const wasmos_initfs_entry_t *entries =
+        (const wasmos_initfs_entry_t *)((const UINT8 *)blob + hdr->header_size);
+    for (UINT32 i = 0; i < hdr->entry_count; ++i) {
+        const wasmos_initfs_entry_t *entry = &entries[i];
+        UINT64 end = (UINT64)entry->offset + (UINT64)entry->size;
+        if (entry->offset < hdr->header_size + table_bytes || end > hdr->total_size) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void
+uefi_log_initfs_entry(EFI_SYSTEM_TABLE *system, const char *prefix, const wasmos_initfs_entry_t *entry)
+{
+    if (!system || !prefix || !entry) {
+        return;
+    }
+    uefi_log(system, prefix);
+    uefi_log(system, entry->path);
+    uefi_log(system, "\n");
+}
+
 EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
     EFI_BOOT_SERVICES *bs = system->BootServices;
     EFI_STATUS status;
@@ -255,95 +300,23 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         return status;
     }
 
-    /*
-     * Optional smoke and bootstrap modules are preloaded into boot_info_t so the
-     * kernel can bring up the storage path before filesystem loading is
-     * available. This preload list is intentionally short and does not include
-     * late user-space services such as sysinit anymore.
-     */
-    static CHAR16 app_path[] = L"\\apps\\chardev_client.wasmosapp";
-    void *app_buf = 0;
-    UINTN app_size = 0;
-    status = read_file_alloc(bs, root, app_path, &app_buf, &app_size);
+    /* The bootloader now loads one initfs image instead of a hardcoded list of
+     * individual bootstrap modules. It still exposes the contained WASMOS-APP
+     * entries as boot modules so the kernel and early services can keep the
+     * same module-index bootstrap contract. */
+    static CHAR16 initfs_path[] = L"\\initfs.img";
+    void *initfs_buf = 0;
+    UINTN initfs_size = 0;
+    status = read_file_alloc(bs, root, initfs_path, &initfs_buf, &initfs_size);
     if (EFI_ERROR(status)) {
-        app_buf = 0;
-        app_size = 0;
-        uefi_log(system, "[boot] optional module not found: \\\\apps\\\\chardev_client.wasmosapp\n");
-    } else {
-        uefi_log(system, "[boot] preloaded module: \\\\apps\\\\chardev_client.wasmosapp\n");
+        uefi_log_status(system, "[boot] Read \\\\initfs.img failed: ", status);
+        return status;
     }
-
-    static CHAR16 init_smoke_path[] = L"\\apps\\init_smoke.wasmosapp";
-    void *init_smoke_buf = 0;
-    UINTN init_smoke_size = 0;
-    status = read_file_alloc(bs, root, init_smoke_path, &init_smoke_buf, &init_smoke_size);
-    if (EFI_ERROR(status)) {
-        init_smoke_buf = 0;
-        init_smoke_size = 0;
-        uefi_log(system, "[boot] optional module not found: \\\\apps\\\\init_smoke.wasmosapp\n");
-    } else {
-        uefi_log(system, "[boot] preloaded module: \\\\apps\\\\init_smoke.wasmosapp\n");
+    if (!initfs_valid(initfs_buf, initfs_size)) {
+        uefi_log(system, "[boot] invalid initfs image\n");
+        return 1;
     }
-
-    static CHAR16 native_call_min_path[] = L"\\apps\\native_call_min.wasmosapp";
-    void *native_call_min_buf = 0;
-    UINTN native_call_min_size = 0;
-    status = read_file_alloc(bs, root, native_call_min_path, &native_call_min_buf, &native_call_min_size);
-    if (EFI_ERROR(status)) {
-        native_call_min_buf = 0;
-        native_call_min_size = 0;
-        uefi_log(system, "[boot] optional module not found: \\\\apps\\\\native_call_min.wasmosapp\n");
-    } else {
-        uefi_log(system, "[boot] preloaded module: \\\\apps\\\\native_call_min.wasmosapp\n");
-    }
-
-    static CHAR16 native_call_smoke_path[] = L"\\apps\\native_call_smoke.wasmosapp";
-    void *native_call_smoke_buf = 0;
-    UINTN native_call_smoke_size = 0;
-    status = read_file_alloc(bs, root, native_call_smoke_path, &native_call_smoke_buf, &native_call_smoke_size);
-    if (EFI_ERROR(status)) {
-        native_call_smoke_buf = 0;
-        native_call_smoke_size = 0;
-        uefi_log(system, "[boot] optional module not found: \\\\apps\\\\native_call_smoke.wasmosapp\n");
-    } else {
-        uefi_log(system, "[boot] preloaded module: \\\\apps\\\\native_call_smoke.wasmosapp\n");
-    }
-
-    static CHAR16 ata_path[] = L"\\system\\drivers\\ata.wasmosapp";
-    void *ata_buf = 0;
-    UINTN ata_size = 0;
-    status = read_file_alloc(bs, root, ata_path, &ata_buf, &ata_size);
-    if (EFI_ERROR(status)) {
-        ata_buf = 0;
-        ata_size = 0;
-        uefi_log(system, "[boot] optional module not found: \\\\system\\\\drivers\\\\ata.wasmosapp\n");
-    } else {
-        uefi_log(system, "[boot] preloaded module: \\\\system\\\\drivers\\\\ata.wasmosapp\n");
-    }
-
-    static CHAR16 fat_path[] = L"\\system\\drivers\\fs_fat.wasmosapp";
-    void *fat_buf = 0;
-    UINTN fat_size = 0;
-    status = read_file_alloc(bs, root, fat_path, &fat_buf, &fat_size);
-    if (EFI_ERROR(status)) {
-        fat_buf = 0;
-        fat_size = 0;
-        uefi_log(system, "[boot] optional module not found: \\\\system\\\\drivers\\\\fs_fat.wasmosapp\n");
-    } else {
-        uefi_log(system, "[boot] preloaded module: \\\\system\\\\drivers\\\\fs_fat.wasmosapp\n");
-    }
-
-    static CHAR16 hw_discovery_path[] = L"\\system\\services\\hw_discovery.wasmosapp";
-    void *hw_discovery_buf = 0;
-    UINTN hw_discovery_size = 0;
-    status = read_file_alloc(bs, root, hw_discovery_path, &hw_discovery_buf, &hw_discovery_size);
-    if (EFI_ERROR(status)) {
-        hw_discovery_buf = 0;
-        hw_discovery_size = 0;
-        uefi_log(system, "[boot] optional module not found: \\\\system\\\\services\\\\hw_discovery.wasmosapp\n");
-    } else {
-        uefi_log(system, "[boot] preloaded module: \\\\system\\\\services\\\\hw_discovery.wasmosapp\n");
-    }
+    uefi_log(system, "[boot] loaded initfs: \\\\initfs.img\n");
 
     Elf64_Ehdr *ehdr = (Elf64_Ehdr *)kernel_buf;
     if (!elf_is_valid(ehdr)) {
@@ -417,32 +390,17 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
     mmap_size += desc_size * 2;
     UINTN mmap_capacity = mmap_size;
     UINTN boot_capacity = 0;
+    const wasmos_initfs_header_t *initfs_hdr = (const wasmos_initfs_header_t *)initfs_buf;
+    const wasmos_initfs_entry_t *initfs_entries =
+        (const wasmos_initfs_entry_t *)((const UINT8 *)initfs_buf + initfs_hdr->header_size);
     UINTN module_count = 0;
-    if (app_buf && app_size > 0) {
-        module_count++;
-    }
-    if (init_smoke_buf && init_smoke_size > 0) {
-        module_count++;
-    }
-    if (native_call_min_buf && native_call_min_size > 0) {
-        module_count++;
-    }
-    if (native_call_smoke_buf && native_call_smoke_size > 0) {
-        module_count++;
-    }
-    if (ata_buf && ata_size > 0) {
-        module_count++;
-    }
-    if (fat_buf && fat_size > 0) {
-        module_count++;
-    }
-    if (hw_discovery_buf && hw_discovery_size > 0) {
-        module_count++;
+    for (UINT32 i = 0; i < initfs_hdr->entry_count; ++i) {
+        if (initfs_entries[i].type == WASMOS_INITFS_ENTRY_WASMOS_APP) {
+            module_count++;
+            uefi_log_initfs_entry(system, "[boot] initfs module: ", &initfs_entries[i]);
+        }
     }
     UINTN module_table_bytes = module_count * sizeof(boot_module_t);
-    UINTN module_data_bytes =
-        app_size + init_smoke_size + native_call_min_size + native_call_smoke_size +
-        ata_size + fat_size + hw_discovery_size;
 
     void *mmap = 0;
     UINT64 boot_buf = 0;
@@ -474,7 +432,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
 
         UINTN boot_bytes = sizeof(boot_info_t);
         map_bytes = mmap_size;
-        UINTN total_bytes = boot_bytes + map_bytes + module_table_bytes + module_data_bytes;
+        UINTN total_bytes = boot_bytes + map_bytes + initfs_size + module_table_bytes;
         UINTN total_pages = (total_bytes + 0xFFF) / 0x1000;
         if (boot_capacity < total_pages) {
             status = bs->AllocatePages(EFI_ALLOCATE_ANY_PAGES, EFI_LOADER_DATA, total_pages, &boot_buf);
@@ -501,92 +459,42 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         boot_info->module_entry_size = sizeof(boot_module_t);
         boot_info->rsdp = rsdp;
         boot_info->rsdp_length = rsdp_length;
+        boot_info->initfs = 0;
+        boot_info->initfs_size = 0;
+        boot_info->boot_config = 0;
+        boot_info->boot_config_size = 0;
 
         UINT8 *cursor = (UINT8 *)map_dst + map_bytes;
+        UINT8 *initfs_copy = cursor;
+        memcpy8(initfs_copy, initfs_buf, initfs_size);
+        boot_info->initfs = initfs_copy;
+        boot_info->initfs_size = (uint32_t)initfs_size;
+        boot_info->flags |= BOOT_INFO_FLAG_INITFS_PRESENT;
+        cursor += initfs_size;
+
         if (module_count > 0) {
             boot_module_t *mods = (boot_module_t *)cursor;
             memset8(mods, 0, module_table_bytes);
             cursor += module_table_bytes;
 
             UINT32 mod_index = 0;
-            if (app_buf && app_size > 0) {
-                mods[mod_index].base = (UINT64)(UINTN)cursor;
-                mods[mod_index].size = app_size;
-                mods[mod_index].type = BOOT_MODULE_TYPE_WASMOS_APP;
-                mods[mod_index].reserved = 0;
-                copy_cstr(mods[mod_index].name, sizeof(mods[mod_index].name), "apps/chardev_client.wasmosapp");
-                memcpy8(cursor, app_buf, app_size);
-                cursor += app_size;
-                mod_index++;
-            }
-
-            if (init_smoke_buf && init_smoke_size > 0) {
-                mods[mod_index].base = (UINT64)(UINTN)cursor;
-                mods[mod_index].size = init_smoke_size;
-                mods[mod_index].type = BOOT_MODULE_TYPE_WASMOS_APP;
-                mods[mod_index].reserved = 0;
-                copy_cstr(mods[mod_index].name, sizeof(mods[mod_index].name), "apps/init_smoke.wasmosapp");
-                memcpy8(cursor, init_smoke_buf, init_smoke_size);
-                cursor += init_smoke_size;
-                mod_index++;
-            }
-
-            if (native_call_min_buf && native_call_min_size > 0) {
-                mods[mod_index].base = (UINT64)(UINTN)cursor;
-                mods[mod_index].size = native_call_min_size;
-                mods[mod_index].type = BOOT_MODULE_TYPE_WASMOS_APP;
-                mods[mod_index].reserved = 0;
-                copy_cstr(mods[mod_index].name, sizeof(mods[mod_index].name),
-                          "apps/native_call_min.wasmosapp");
-                memcpy8(cursor, native_call_min_buf, native_call_min_size);
-                cursor += native_call_min_size;
-                mod_index++;
-            }
-
-            if (native_call_smoke_buf && native_call_smoke_size > 0) {
-                mods[mod_index].base = (UINT64)(UINTN)cursor;
-                mods[mod_index].size = native_call_smoke_size;
-                mods[mod_index].type = BOOT_MODULE_TYPE_WASMOS_APP;
-                mods[mod_index].reserved = 0;
-                copy_cstr(mods[mod_index].name, sizeof(mods[mod_index].name),
-                          "apps/native_call_smoke.wasmosapp");
-                memcpy8(cursor, native_call_smoke_buf, native_call_smoke_size);
-                cursor += native_call_smoke_size;
-                mod_index++;
-            }
-
-            if (ata_buf && ata_size > 0) {
-                mods[mod_index].base = (UINT64)(UINTN)cursor;
-                mods[mod_index].size = ata_size;
-                mods[mod_index].type = BOOT_MODULE_TYPE_WASMOS_APP;
-                mods[mod_index].reserved = 0;
-                copy_cstr(mods[mod_index].name, sizeof(mods[mod_index].name), "system/drivers/ata.wasmosapp");
-                memcpy8(cursor, ata_buf, ata_size);
-                cursor += ata_size;
-                mod_index++;
-            }
-
-            if (fat_buf && fat_size > 0) {
-                mods[mod_index].base = (UINT64)(UINTN)cursor;
-                mods[mod_index].size = fat_size;
-                mods[mod_index].type = BOOT_MODULE_TYPE_WASMOS_APP;
-                mods[mod_index].reserved = 0;
-                copy_cstr(mods[mod_index].name, sizeof(mods[mod_index].name), "system/drivers/fs_fat.wasmosapp");
-                memcpy8(cursor, fat_buf, fat_size);
-                cursor += fat_size;
-                mod_index++;
-            }
-
-            if (hw_discovery_buf && hw_discovery_size > 0) {
-                mods[mod_index].base = (UINT64)(UINTN)cursor;
-                mods[mod_index].size = hw_discovery_size;
-                mods[mod_index].type = BOOT_MODULE_TYPE_WASMOS_APP;
-                mods[mod_index].reserved = 0;
-                copy_cstr(mods[mod_index].name, sizeof(mods[mod_index].name),
-                          "system/services/hw_discovery.wasmosapp");
-                memcpy8(cursor, hw_discovery_buf, hw_discovery_size);
-                cursor += hw_discovery_size;
-                mod_index++;
+            const wasmos_initfs_header_t *copied_hdr = (const wasmos_initfs_header_t *)initfs_copy;
+            const wasmos_initfs_entry_t *copied_entries =
+                (const wasmos_initfs_entry_t *)(initfs_copy + copied_hdr->header_size);
+            for (UINT32 i = 0; i < copied_hdr->entry_count; ++i) {
+                const wasmos_initfs_entry_t *entry = &copied_entries[i];
+                UINT8 *payload = initfs_copy + entry->offset;
+                if (entry->type == WASMOS_INITFS_ENTRY_WASMOS_APP) {
+                    mods[mod_index].base = (UINT64)(UINTN)payload;
+                    mods[mod_index].size = entry->size;
+                    mods[mod_index].type = BOOT_MODULE_TYPE_WASMOS_APP;
+                    mods[mod_index].reserved = 0;
+                    copy_cstr(mods[mod_index].name, sizeof(mods[mod_index].name), entry->path);
+                    mod_index++;
+                } else if (entry->type == WASMOS_INITFS_ENTRY_CONFIG) {
+                    boot_info->boot_config = payload;
+                    boot_info->boot_config_size = entry->size;
+                }
             }
 
             boot_info->modules = mods;

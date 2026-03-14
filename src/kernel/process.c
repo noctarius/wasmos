@@ -783,7 +783,21 @@ int process_schedule_once(void) {
     g_current_pid = proc->pid;
     g_current_process = proc;
     critical_section_leave();
+    if (mm_context_activate(proc->context_id) != 0) {
+        serial_write("[sched] cr3 activate failed\n");
+        critical_section_enter();
+        g_current_process = 0;
+        g_current_pid = 0;
+        critical_section_leave();
+        return 1;
+    }
     context_switch(&g_sched_ctx, &proc->ctx);
+    if (mm_context_activate(0) != 0) {
+        serial_write("[sched] root cr3 restore failed\n");
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
     process_run_result_t result = g_last_run_result;
     critical_section_enter();
     g_current_process = 0;

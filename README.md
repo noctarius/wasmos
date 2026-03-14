@@ -18,12 +18,13 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - ELF64 kernel loading with aligned/overlap-safe `PT_LOAD` handling
 - versioned `boot_info_t` handoff
 - serial-first early boot diagnostics
-- physical frame allocator and paging scaffold
+- physical frame allocator and per-process CR3-managed paging
 - preemptive round-robin scheduler driven by PIT IRQ0
 - kernel IPC transport with endpoint ownership checks
 - process manager with WASMOS-APP loading
 - FAT-backed loading of `sysinit`, `cli`, and user apps
 - growable per-process `wasm3` heaps with a 2 GiB cap
+- per-process virtual memory contexts with private user mappings
 - shared user-space libc surface for C, Rust, Go, Zig, and AssemblyScript
 - language-native application entrypoints behind a stable `wasmos_main` ABI
 
@@ -148,6 +149,14 @@ Integration rules:
 - runtime mutation paths run with preemption disabled
 - each process gets a growable runtime heap that can expand in chunks up to
   2 GiB without reserving one contiguous arena up front
+
+Memory model notes:
+- each process owns a separate root page table
+- the scheduler switches CR3 on dispatch and restores the kernel root on return
+- kernel identity/higher-half mappings stay shared across all address spaces
+- process-visible WASM linear/stack/heap regions live in a private user window
+- CPU privilege is still ring 0 for all tasks; this is address-space separation,
+  not user-mode isolation yet
 
 ### WASMOS-APP
 WASMOS-APP is the container format used by the process manager. It wraps:

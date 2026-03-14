@@ -25,7 +25,6 @@ IMPORTANT: Keep this file aligned with `README.md` and `ARCHITECTURE.md`.
 - Add better async server support for multi-hop service chains.
 
 ## Memory and Privilege Separation
-- Implement real per-process address spaces.
 - Move page-fault handling out of the kernel-hosted scaffold into user space.
 - Introduce ring 3 execution, syscall entry, and kernel/user stack separation.
 - Add capability-granted MMIO/PIO/DMA/IRQ resource assignment for drivers.

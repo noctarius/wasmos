@@ -15,8 +15,10 @@
 #define IDENTITY_PD_COUNT 4
 #define HIGHER_HALF_PD_COUNT 2
 #define HIGHER_HALF_PDPT_INDEX 510
+#define USER_PML4_INDEX 1
 
 static uint64_t g_pml4_phys;
+static uint64_t g_current_pml4_phys;
 
 static void
 serial_write_hex64(uint64_t value)
@@ -173,6 +175,7 @@ paging_init(void)
     }
 
     g_pml4_phys = pml4_phys;
+    g_current_pml4_phys = g_pml4_phys;
     write_cr3(g_pml4_phys);
 
     serial_write("[paging] cr3=");
@@ -194,10 +197,80 @@ paging_get_root_table(void)
     return g_pml4_phys;
 }
 
-int
-paging_map_4k(uint64_t virt, uint64_t phys, uint64_t flags)
+uint64_t
+paging_get_current_root_table(void)
 {
-    if (!g_pml4_phys) {
+    return g_current_pml4_phys;
+}
+
+int
+paging_switch_root(uint64_t root_table)
+{
+    if (!root_table) {
+        return -1;
+    }
+    g_current_pml4_phys = root_table;
+    write_cr3(root_table);
+    return 0;
+}
+
+int
+paging_create_address_space(uint64_t *out_root_table)
+{
+    if (!out_root_table || !g_pml4_phys) {
+        return -1;
+    }
+    uint64_t root = 0;
+    if (alloc_table(&root) != 0) {
+        return -1;
+    }
+    volatile uint64_t *dst = (volatile uint64_t *)(uintptr_t)root;
+    volatile uint64_t *src = (volatile uint64_t *)(uintptr_t)g_pml4_phys;
+    /* A child address space starts with only the shared kernel mappings:
+     * low identity/direct-physical access in slot 0 and the higher-half alias
+     * in slot 511. Slot 1 stays private for process-owned mappings. */
+    dst[0] = src[0];
+    dst[511] = src[511];
+    *out_root_table = root;
+    return 0;
+}
+
+void
+paging_destroy_address_space(uint64_t root_table)
+{
+    if (!root_table || root_table == g_pml4_phys) {
+        return;
+    }
+
+    volatile uint64_t *pml4 = (volatile uint64_t *)(uintptr_t)root_table;
+    if (pml4[USER_PML4_INDEX] & PT_FLAG_PRESENT) {
+        uint64_t pdpt_phys = entry_phys(pml4[USER_PML4_INDEX]);
+        volatile uint64_t *pdpt = (volatile uint64_t *)(uintptr_t)pdpt_phys;
+        for (uint32_t pdpt_idx = 0; pdpt_idx < ENTRIES_PER_TABLE; ++pdpt_idx) {
+            if (!(pdpt[pdpt_idx] & PT_FLAG_PRESENT)) {
+                continue;
+            }
+            uint64_t pd_phys = entry_phys(pdpt[pdpt_idx]);
+            volatile uint64_t *pd = (volatile uint64_t *)(uintptr_t)pd_phys;
+            for (uint32_t pd_idx = 0; pd_idx < ENTRIES_PER_TABLE; ++pd_idx) {
+                if (!(pd[pd_idx] & PT_FLAG_PRESENT)) {
+                    continue;
+                }
+                if ((pd[pd_idx] & PT_FLAG_LARGE_PAGE) == 0) {
+                    pfa_free_pages(entry_phys(pd[pd_idx]), 1);
+                }
+            }
+            pfa_free_pages(pd_phys, 1);
+        }
+        pfa_free_pages(pdpt_phys, 1);
+    }
+    pfa_free_pages(root_table, 1);
+}
+
+int
+paging_map_4k_in_root(uint64_t root_table, uint64_t virt, uint64_t phys, uint64_t flags)
+{
+    if (!root_table) {
         return -1;
     }
 
@@ -206,7 +279,7 @@ paging_map_4k(uint64_t virt, uint64_t phys, uint64_t flags)
     uint64_t pd_idx = (virt >> 21) & 0x1FF;
     uint64_t pt_idx = (virt >> 12) & 0x1FF;
 
-    volatile uint64_t *pml4 = (volatile uint64_t *)(uintptr_t)g_pml4_phys;
+    volatile uint64_t *pml4 = (volatile uint64_t *)(uintptr_t)root_table;
     uint64_t pdpt_phys = 0;
     if (ensure_table((uint64_t *)&pml4[pml4_idx], &pdpt_phys) != 0) {
         return -1;
@@ -240,9 +313,9 @@ paging_map_4k(uint64_t virt, uint64_t phys, uint64_t flags)
 }
 
 int
-paging_unmap_4k(uint64_t virt)
+paging_unmap_4k_in_root(uint64_t root_table, uint64_t virt)
 {
-    if (!g_pml4_phys) {
+    if (!root_table) {
         return -1;
     }
 
@@ -251,7 +324,7 @@ paging_unmap_4k(uint64_t virt)
     uint64_t pd_idx = (virt >> 21) & 0x1FF;
     uint64_t pt_idx = (virt >> 12) & 0x1FF;
 
-    volatile uint64_t *pml4 = (volatile uint64_t *)(uintptr_t)g_pml4_phys;
+    volatile uint64_t *pml4 = (volatile uint64_t *)(uintptr_t)root_table;
     if (!(pml4[pml4_idx] & PT_FLAG_PRESENT)) {
         return -1;
     }
@@ -275,4 +348,16 @@ paging_unmap_4k(uint64_t virt)
     pt[pt_idx] = 0;
     invlpg(virt);
     return 0;
+}
+
+int
+paging_map_4k(uint64_t virt, uint64_t phys, uint64_t flags)
+{
+    return paging_map_4k_in_root(g_current_pml4_phys, virt, phys, flags);
+}
+
+int
+paging_unmap_4k(uint64_t virt)
+{
+    return paging_unmap_4k_in_root(g_current_pml4_phys, virt);
 }

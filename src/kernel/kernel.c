@@ -347,6 +347,14 @@ page_fault_test_entry(process_t *process, void *arg)
             return PROCESS_RUN_EXITED;
         }
         state->addr = linear.base;
+        /* With per-process address spaces the linear region starts unmapped.
+         * Seed the first page once, then unmap it again so the actual test
+         * still verifies fault-driven remapping. */
+        if (mm_handle_page_fault(process->context_id, state->addr, 0, 0) != 0) {
+            serial_write("[test] page fault seed map failed\n");
+            process_set_exit_status(process, -1);
+            return PROCESS_RUN_EXITED;
+        }
         if (paging_unmap_4k(state->addr) != 0) {
             serial_write("[test] page fault unmap failed\n");
             process_set_exit_status(process, -1);

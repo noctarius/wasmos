@@ -35,6 +35,12 @@ fn main(_args: &[&str]) -> i32 {
             let _ = wasmos::std::puts(b"This is a tiny WASMOS-APP written in Rust.\n");
             let _ = wasmos::std::printf(format_args!("Entry: {}\n", "main"));
             let _ = wasmos::std::printf(format_args!("long filename write: {}\n", file_ok));
+            let unlink_ok = if file_ok {
+                wasmos::fs::unlink(PATH).is_ok() && wasmos::fs::stat(PATH).is_err()
+            } else {
+                false
+            };
+            let _ = wasmos::std::printf(format_args!("long filename unlink: {}\n", unlink_ok));
         }
     }
 

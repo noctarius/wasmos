@@ -50,6 +50,7 @@ class HelloRustTest(unittest.TestCase):
                 b"Hello from Rust on WASMOS!",
                 b"Entry: main",
                 b"long filename write: true",
+                b"long filename unlink: true",
             ],
         )
 

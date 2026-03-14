@@ -11,6 +11,7 @@ export function main(args: Array<string>): i32 {
     const content = String.UTF8.encode("assemblyscript shim long filename\n", false);
     const contentBytes = Uint8Array.wrap(content);
     let writeOk = false;
+    let unlinkOk = false;
     const out = fs.create(path);
     if (out != null) {
       writeOk = out.write(contentBytes) == content.byteLength && out.close();
@@ -30,6 +31,9 @@ export function main(args: Array<string>): i32 {
         } else {
           writeOk = false;
         }
+        if (writeOk) {
+          unlinkOk = fs.unlink(path) && fs.stat(path) == null;
+        }
       }
     }
     printed = true;
@@ -40,6 +44,7 @@ export function main(args: Array<string>): i32 {
     std.printf("Entry: main, runtime: stub\n");
     std.println("startup.nsh readable: " + (readable ? "true" : "false"));
     std.println("long filename write: " + (writeOk ? "true" : "false"));
+    std.println("long filename unlink: " + (unlinkOk ? "true" : "false"));
   }
   return 0;
 }

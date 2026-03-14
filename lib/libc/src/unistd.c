@@ -271,6 +271,25 @@ stat(const char *path, struct stat *st)
     return 0;
 }
 
+int
+unlink(const char *path)
+{
+    size_t path_len;
+
+    if (!path) {
+        return -1;
+    }
+
+    path_len = strlen(path);
+    if (path_len == 0 || path_len >= (size_t)wasmos_fs_buffer_size()) {
+        return -1;
+    }
+    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, (int32_t)(path_len + 1u), 0) != 0) {
+        return -1;
+    }
+    return libc_fs_request(FS_IPC_UNLINK_REQ, (int32_t)path_len, 0, 0, 0, NULL, NULL);
+}
+
 FILE *
 fopen(const char *path, const char *mode)
 {

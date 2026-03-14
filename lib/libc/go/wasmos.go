@@ -9,6 +9,7 @@ const (
 	fsIPCCloseReq int32 = 0x402
 	fsIPCStatReq  int32 = 0x403
 	fsIPCSeekReq  int32 = 0x405
+	fsIPCUnlinkReq int32 = 0x407
 	fsIPCResp     int32 = 0x480
 )
 
@@ -383,4 +384,32 @@ func (fsAPI) Stat(path string) (FileStat, Error) {
 		return FileStat{}, ErrBadResponse
 	}
 	return FileStat{Size: size, Mode: mode & (SIFREG | SIFDIR)}, ErrOK
+}
+
+func (fsAPI) Unlink(path string) Error {
+	pathLen := len(path)
+	maxBuffer := fsBufferSize()
+	var pathBuf [256]byte
+
+	if pathLen == 0 {
+		return ErrInvalidArgument
+	}
+	if maxBuffer <= 0 {
+		return ErrNotAvailable
+	}
+	if pathLen+1 > len(pathBuf) {
+		return ErrNameTooLong
+	}
+	if pathLen+1 > int(maxBuffer) {
+		return ErrBufferTooSmall
+	}
+
+	copy(pathBuf[:], path)
+	pathBuf[pathLen] = 0
+
+	if fsBufferWrite(uint32(uintptr(unsafe.Pointer(&pathBuf[0]))), uint32(pathLen+1), 0) != 0 {
+		return ErrHostCallFailed
+	}
+	_, _, err := fsRequest(fsIPCUnlinkReq, int32(pathLen), 0, 0, 0)
+	return err
 }

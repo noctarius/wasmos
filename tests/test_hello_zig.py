@@ -51,6 +51,7 @@ class HelloZigTest(unittest.TestCase):
                 b"Entry: main",
                 b"startup.nsh readable: true",
                 b"long filename write: true",
+                b"long filename unlink: true",
             ],
         )
 

@@ -15,5 +15,6 @@ ssize_t write(int fd, const void *buf, size_t count);
 int open(const char *path, int flags, ...);
 off_t lseek(int fd, off_t offset, int whence);
 int stat(const char *path, struct stat *st);
+int unlink(const char *path);
 
 #endif

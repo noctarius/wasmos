@@ -7,6 +7,7 @@ const FS_IPC_WRITE_REQ: i32 = 0x406;
 const FS_IPC_CLOSE_REQ: i32 = 0x402;
 const FS_IPC_STAT_REQ: i32 = 0x403;
 const FS_IPC_SEEK_REQ: i32 = 0x405;
+const FS_IPC_UNLINK_REQ: i32 = 0x407;
 const FS_IPC_RESP: i32 = 0x480;
 
 const IPC_FIELD_TYPE: i32 = 0;
@@ -324,5 +325,32 @@ pub const fs = struct {
             .size = @intCast(response.arg0),
             .mode = @as(u32, @intCast(response.arg1)) & (S_IFREG | S_IFDIR),
         };
+    }
+
+    pub fn unlink(path: []const u8) Error!void {
+        var path_buf: [256]u8 = undefined;
+        const max_buffer = fs_buffer_size();
+
+        if (path.len == 0) {
+            return Error.InvalidArgument;
+        }
+        if (max_buffer <= 0) {
+            return Error.NotAvailable;
+        }
+        if (path.len + 1 > path_buf.len) {
+            return Error.NameTooLong;
+        }
+        if (path.len + 1 > @as(usize, @intCast(max_buffer))) {
+            return Error.BufferTooSmall;
+        }
+
+        @memcpy(path_buf[0..path.len], path);
+        path_buf[path.len] = 0;
+
+        if (fs_buffer_write(@intCast(@intFromPtr(&path_buf[0])), @intCast(path.len + 1), 0) != 0) {
+            return Error.HostCallFailed;
+        }
+
+        _ = try fsRequest(FS_IPC_UNLINK_REQ, @intCast(path.len), 0, 0, 0);
     }
 };

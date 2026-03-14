@@ -383,7 +383,25 @@ static void process_reset_slot(process_t *proc) {
     proc->stack_pages = 0;
     proc->entry = 0;
     proc->arg = 0;
+    for (uint32_t i = 0; i < PROCESS_NAME_MAX; ++i) {
+        proc->name_storage[i] = '\0';
+    }
     proc->name = 0;
+}
+
+static int
+process_copy_name(process_t *proc, const char *name)
+{
+    if (!proc || !name) {
+        return -1;
+    }
+    uint32_t i = 0;
+    for (; name[i] && i + 1 < PROCESS_NAME_MAX; ++i) {
+        proc->name_storage[i] = name[i];
+    }
+    proc->name_storage[i] = '\0';
+    proc->name = proc->name_storage;
+    return name[i] == '\0' ? 0 : -1;
 }
 
 static process_t *process_find_slot(void) {
@@ -540,7 +558,9 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
     slot->ctx_canary_post = PROCESS_CTX_CANARY_VALUE;
     slot->entry = entry;
     slot->arg = arg;
-    slot->name = name;
+    if (process_copy_name(slot, name ? name : "") != 0) {
+        return -1;
+    }
     uint32_t stack_pages = (PROCESS_STACK_SIZE + PAGE_SIZE - 1u) / PAGE_SIZE;
     if (process_alloc_stack(slot, stack_pages) != 0) {
         return -1;
@@ -609,7 +629,9 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
     slot->ctx_canary_post = PROCESS_CTX_CANARY_VALUE;
     slot->entry = entry;
     slot->arg = arg;
-    slot->name = name;
+    if (process_copy_name(slot, name ? name : "") != 0) {
+        return -1;
+    }
     slot->is_idle = 1;
     uint32_t stack_pages = (PROCESS_STACK_SIZE + PAGE_SIZE - 1u) / PAGE_SIZE;
     if (process_alloc_stack(slot, stack_pages) != 0) {
@@ -1063,7 +1085,8 @@ void pm_preempt_safe_leave(void) {
 uint32_t process_count_active(void) {
     uint32_t count = 0;
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        if (g_processes[i].state != PROCESS_STATE_UNUSED) {
+        if (g_processes[i].state != PROCESS_STATE_UNUSED &&
+            g_processes[i].state != PROCESS_STATE_ZOMBIE) {
             count++;
         }
     }
@@ -1080,7 +1103,8 @@ int process_info_at(uint32_t index, uint32_t *out_pid, const char **out_name) {
     }
     uint32_t current = 0;
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        if (g_processes[i].state == PROCESS_STATE_UNUSED) {
+        if (g_processes[i].state == PROCESS_STATE_UNUSED ||
+            g_processes[i].state == PROCESS_STATE_ZOMBIE) {
             continue;
         }
         if (current == index) {
@@ -1099,7 +1123,8 @@ int process_info_at_ex(uint32_t index, uint32_t *out_pid, uint32_t *out_parent_p
     }
     uint32_t current = 0;
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        if (g_processes[i].state == PROCESS_STATE_UNUSED) {
+        if (g_processes[i].state == PROCESS_STATE_UNUSED ||
+            g_processes[i].state == PROCESS_STATE_ZOMBIE) {
             continue;
         }
         if (current == index) {

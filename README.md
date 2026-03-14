@@ -31,6 +31,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
   path
 - `O_TRUNC` support for shrinking existing FAT files through the same low-level
   write path
+- `O_APPEND` support for extending existing FAT files within their current
+  cluster chain
 - growable per-process `wasm3` heaps with a 2 GiB cap
 - per-process virtual memory contexts with private user mappings
 - shared user-space libc surface for C, Rust, Go, Zig, and AssemblyScript

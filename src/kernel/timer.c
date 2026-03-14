@@ -4,6 +4,12 @@
 #include "serial.h"
 #include "process.h"
 
+/*
+ * PIT channel 0 is the current scheduler clock. The timer path only accounts
+ * ticks and marks deferred log milestones; the heavy scheduling decision stays
+ * outside the raw IRQ context.
+ */
+
 #define PIT_CMD_PORT 0x43
 #define PIT_CH0_PORT 0x40
 #define PIT_CMD_SQUARE_WAVE 0x36
@@ -39,6 +45,7 @@ void timer_init(uint32_t hz) {
 
 void timer_handle_irq(void) {
     g_timer_ticks++;
+    /* process_tick() owns quantum accounting and reschedule triggering. */
     process_tick();
     if (g_timer_ticks == g_timer_log_threshold) {
         g_timer_log_pending = 1;
@@ -51,6 +58,8 @@ void timer_poll(void) {
         return;
     }
     g_timer_log_pending = 0;
+    /* Periodic tick markers are useful while debugging scheduler liveness, but
+     * they are intentionally hidden from normal boots behind WASMOS_TRACE. */
     trace_write("[timer] ticks\n");
 }
 

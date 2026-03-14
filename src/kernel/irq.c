@@ -4,6 +4,13 @@
 #include "timer.h"
 #include "process.h"
 
+/*
+ * irq.c handles PIC setup, IRQ routing, and the minimal interrupt-side work
+ * needed to wake the rest of the system. The policy rule is strict: do the
+ * smallest safe amount of work in interrupt context, then let the scheduler and
+ * regular kernel paths finish the job.
+ */
+
 #define PIC1_CMD 0x20
 #define PIC1_DATA 0x21
 #define PIC2_CMD 0xA0
@@ -108,6 +115,8 @@ void irq_init(void) {
         g_irq_routes[i].endpoint = IPC_ENDPOINT_NONE;
     }
 
+    /* Preserve the pre-existing mask state across the PIC remap so only the
+     * lines we explicitly unmask later become active. */
     uint8_t mask1 = inb(PIC1_DATA);
     uint8_t mask2 = inb(PIC2_DATA);
 
@@ -213,6 +222,8 @@ void x86_irq_handler(uint64_t vector) {
     }
 
     irq_route_t *route = &g_irq_routes[irq_line];
+    /* IRQ0 is special because it drives scheduler accounting before any routed
+     * notification endpoints are serviced. */
     if (irq_line == 0) {
         timer_handle_irq();
     }
@@ -237,6 +248,8 @@ void x86_timer_irq_handler(irq_frame_t *frame) {
             trace_do(serial_write_hex64_local(frame->rflags));
         }
     }
+    /* The common IRQ handler performs accounting and EOI; the scheduler-facing
+     * preemption handoff is a second, explicit step. */
     x86_irq_handler(IRQ_VECTOR_BASE);
     process_preempt_from_irq(frame);
 }

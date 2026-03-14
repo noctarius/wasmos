@@ -4,6 +4,13 @@
 #include "wasmos_app.h"
 #include "wasm_chardev.h"
 
+/*
+ * The process manager is the bridge between filesystem-visible WASMOS-APP
+ * artifacts and runnable kernel processes. It validates container metadata,
+ * allocates runtime state, resolves endpoint dependencies, and drives entry
+ * execution according to the app/service/driver role encoded in the container.
+ */
+
 #define PM_MAX_MANAGED_APPS 8u
 #define PM_MAX_WAITERS 8u
 #define PM_FS_BUFFER_SIZE (256u * 1024u)
@@ -14,6 +21,8 @@ typedef struct {
     uint32_t flags;
     const uint8_t *blob;
     uint32_t blob_size;
+    /* FS-backed spawns are copied into PM-owned storage so the originating
+     * filesystem buffer can be reused immediately after the spawn request. */
     uint8_t blob_storage[PM_FS_BUFFER_SIZE];
     uint8_t started;
     uint32_t entry_argc;
@@ -205,6 +214,8 @@ pm_find_app_slot(void)
 static uint32_t
 pm_find_module_index_by_name(const char *name)
 {
+    /* Boot modules are still a first-class lookup source for the early storage
+     * bootstrap chain even though late startup now prefers FAT-backed loading. */
     const boot_info_t *info = g_pm.boot_info;
     if (!info || !name || !(info->flags & BOOT_INFO_FLAG_MODULES_PRESENT)) {
         return 0xFFFFFFFFu;
@@ -245,6 +256,8 @@ pm_app_entry(process_t *process, void *arg)
 #endif
 
     if (!state->started) {
+        /* The first run performs the expensive path once: parse metadata, wire
+         * endpoints, instantiate the runtime, and invoke the declared entry. */
         wasmos_app_desc_t desc;
         if (wasmos_app_parse(state->blob, state->blob_size, &desc) != 0) {
             serial_write("[pm] app parse failed\n");

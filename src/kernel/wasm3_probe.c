@@ -30,6 +30,14 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
     char entry_name[64];
     uint32_t previous_pid = wasm3_heap_bind_pid(process_current_pid());
     preempt_disable();
+    wasm3_heap_configure(process_current_pid(), 0, 2ULL * 1024ULL * 1024ULL * 1024ULL);
+    if (wasm3_heap_probe_growth(6u * 1024u * 1024u) != 0) {
+        serial_write("[wasm3] heap growth probe failed\n");
+        preempt_enable();
+        wasm3_heap_restore_pid(previous_pid);
+        return -1;
+    }
+    serial_write("[test] wasm heap grow ok\n");
     const boot_module_t *mod = probe_module_at(info, module_index);
     if (!mod || mod->type != BOOT_MODULE_TYPE_WASMOS_APP || mod->base == 0 ||
         mod->size == 0 || mod->size > 0xFFFFFFFFULL) {

@@ -89,6 +89,9 @@ wasm_driver_start(wasm_driver_t *driver,
     spinlock_init(&driver->lock);
     process_t *owner = process_find_by_context(owner_context_id);
     driver->owner_pid = owner ? owner->pid : process_current_pid();
+    wasm3_heap_configure(driver->owner_pid,
+                         driver->manifest.heap_size,
+                         2ULL * 1024ULL * 1024ULL * 1024ULL);
 
     uint32_t previous_pid = wasm_driver_enter_runtime(driver);
 

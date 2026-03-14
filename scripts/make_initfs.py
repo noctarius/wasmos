@@ -14,6 +14,7 @@ INITFS_ENTRY_STRUCT = struct.Struct("<IIII96s")
 CONFIG_MAGIC = b"WCFG0001"
 CONFIG_HEADER_STRUCT = struct.Struct("<8sIIII")
 CONFIG_OFFSET_STRUCT = struct.Struct("<I")
+SYSINIT_SPAWN_NAME_MAX = 16
 
 ENTRY_KIND = {
     "wasmos_app": 1,
@@ -39,6 +40,7 @@ def build_boot_config(manifest: dict) -> bytes:
     strings = bytearray()
     boot_offsets: list[int] = []
     sysinit_offsets: list[int] = []
+    sysinit_seen: set[str] = set()
 
     def add_name(name: str) -> int:
         if not isinstance(name, str) or not name:
@@ -50,7 +52,14 @@ def build_boot_config(manifest: dict) -> bytes:
 
     for name in boot_names:
         boot_offsets.append(add_name(name))
+    if not isinstance(sysinit_names, list) or not sysinit_names:
+        raise ValueError("sysinit.spawn must list at least one process")
     for name in sysinit_names:
+        if name in sysinit_seen:
+            raise ValueError("sysinit.spawn names must be unique")
+        if len(name.encode("ascii")) > SYSINIT_SPAWN_NAME_MAX:
+            raise ValueError("sysinit.spawn names must fit the 16-byte PM spawn ABI")
+        sysinit_seen.add(name)
         sysinit_offsets.append(add_name(name))
 
     out = bytearray()

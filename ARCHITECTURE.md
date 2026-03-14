@@ -437,13 +437,19 @@ Current config format:
 - offset arrays for each string list
 - NUL-terminated ASCII string table
 
+Current `sysinit.spawn` validation:
+- at least one late-start process must be configured
+- process names must be unique
+- process names must fit the current 16-byte PM by-name spawn ABI
+
 Current use:
 - the blob is carried in initfs for stable packaging
 - the bootloader exposes the blob through `boot_info_t`
 - wasm processes can read it through `wasmos_boot_config_size()` and
   `wasmos_boot_config_copy()`
 - `sysinit` validates and consumes the `sysinit.spawn` string list for its
-  late-start process policy
+  late-start process policy and halts that policy path if the config is
+  malformed
 
 ### What Is Still Missing
 - driver-manager

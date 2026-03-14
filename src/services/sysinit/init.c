@@ -29,6 +29,7 @@ static const char *g_targets[16];
 
 #define BOOT_CONFIG_MAGIC "WCFG0001"
 #define BOOT_CONFIG_VERSION 1u
+#define SYSINIT_MAX_TARGET_NAME_LEN 16u
 
 static uint32_t
 load_u32_le(const uint8_t *src)
@@ -43,6 +44,30 @@ load_u32_le(const uint8_t *src)
 }
 
 static int
+str_eq(const char *a, const char *b)
+{
+    return strcmp(a, b) == 0;
+}
+
+static int
+target_name_len(const uint8_t *table, uint32_t string_table_size, uint32_t string_offset, uint32_t *out_len)
+{
+    if (!table || string_offset >= string_table_size) {
+        return -1;
+    }
+
+    for (uint32_t j = string_offset; j < string_table_size; ++j) {
+        if (table[j] == '\0') {
+            if (out_len) {
+                *out_len = j - string_offset;
+            }
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static int
 load_boot_targets(void)
 {
     int32_t size = wasmos_boot_config_size();
@@ -50,6 +75,7 @@ load_boot_targets(void)
     uint32_t boot_count;
     uint32_t sysinit_count;
     uint32_t string_table_size;
+    uint32_t total_count;
     uint32_t offsets_base;
     uint32_t strings_base;
 
@@ -67,12 +93,21 @@ load_boot_targets(void)
     boot_count = load_u32_le(g_boot_config + 12);
     sysinit_count = load_u32_le(g_boot_config + 16);
     string_table_size = load_u32_le(g_boot_config + 20);
-    if (version != BOOT_CONFIG_VERSION || sysinit_count > (uint32_t)(sizeof(g_targets) / sizeof(g_targets[0]))) {
+    if (version != BOOT_CONFIG_VERSION ||
+        sysinit_count == 0 ||
+        sysinit_count > (uint32_t)(sizeof(g_targets) / sizeof(g_targets[0]))) {
+        return -1;
+    }
+    if (boot_count > 0xFFFFFFFFu - sysinit_count) {
+        return -1;
+    }
+    total_count = boot_count + sysinit_count;
+    if (total_count > (((uint32_t)size) - 24u) / 4u) {
         return -1;
     }
 
     offsets_base = 24u + boot_count * 4u;
-    strings_base = 24u + (boot_count + sysinit_count) * 4u;
+    strings_base = 24u + total_count * 4u;
     if (strings_base > (uint32_t)size || string_table_size > (uint32_t)size ||
         strings_base + string_table_size > (uint32_t)size) {
         return -1;
@@ -82,25 +117,28 @@ load_boot_targets(void)
     for (uint32_t i = 0; i < sysinit_count; ++i) {
         uint32_t offset_pos = offsets_base + i * 4u;
         uint32_t string_offset;
-        uint32_t j;
+        uint32_t name_len = 0;
+        const char *name;
 
         if (offset_pos + 4u > (uint32_t)size) {
             return -1;
         }
         string_offset = load_u32_le(g_boot_config + offset_pos);
-        if (string_offset >= string_table_size) {
+        if (target_name_len(g_boot_config + strings_base, string_table_size, string_offset, &name_len) != 0) {
+            return -1;
+        }
+        if (name_len == 0 || name_len > SYSINIT_MAX_TARGET_NAME_LEN) {
             return -1;
         }
 
-        g_targets[g_target_count] = (const char *)(g_boot_config + strings_base + string_offset);
-        for (j = string_offset; j < string_table_size; ++j) {
-            if (g_boot_config[strings_base + j] == '\0') {
-                break;
+        name = (const char *)(g_boot_config + strings_base + string_offset);
+        for (int32_t j = 0; j < g_target_count; ++j) {
+            if (str_eq(g_targets[j], name)) {
+                return -1;
             }
         }
-        if (j == string_table_size) {
-            return -1;
-        }
+
+        g_targets[g_target_count] = name;
         g_target_count++;
     }
 
@@ -116,12 +154,6 @@ stall_forever(void)
             (void)wasmos_ipc_recv(endpoint);
         }
     }
-}
-
-static int
-str_eq(const char *a, const char *b)
-{
-    return strcmp(a, b) == 0;
 }
 
 static void

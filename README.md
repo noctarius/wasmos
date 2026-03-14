@@ -86,13 +86,19 @@ Current behavior:
   as `config/bootcfg.bin`
 - the bootloader exposes bootstrap apps through the existing boot-module
   mechanism and exposes the raw config blob through `boot_info_t`
-- `sysinit` reads the `sysinit.spawn` list from that blob at runtime
+- `sysinit` validates and reads the `sysinit.spawn` list from that blob at
+  runtime, failing closed if the config is malformed
 
 Current boot-config binary format:
 - magic `WCFG0001`
 - header fields: version, bootstrap-module count, sysinit-spawn count, string-table size
 - bootstrap and sysinit string offsets
 - NUL-terminated string table
+
+Current `sysinit.spawn` rules:
+- at least one process name must be present
+- names must be unique
+- names must fit the current 16-byte PM by-name spawn ABI
 
 User-space access:
 - `wasmos_boot_config_size()`

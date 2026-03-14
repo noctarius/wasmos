@@ -1869,6 +1869,12 @@ fat_ipc_dispatch(int32_t type,
         }
         return fat_handle_open();
     }
+    if (type == FS_IPC_READY_REQ) {
+        if (g_op != FAT_OP_NONE) {
+            return -1;
+        }
+        return 0;
+    }
     if (type == FS_IPC_READ_REQ) {
         if (g_op != FAT_OP_NONE) {
             return -1;

@@ -236,16 +236,6 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         return status;
     }
 
-    static CHAR16 init_path[] = L"\\apps\\sysinit.wasmosapp";
-    void *init_buf = 0;
-    UINTN init_size = 0;
-    status = read_file_alloc(bs, root, init_path, &init_buf, &init_size);
-    if (EFI_ERROR(status)) {
-        uefi_log_status(system, "[boot] Read \\\\apps\\\\sysinit.wasmosapp failed: ", status);
-        return status;
-    }
-    uefi_log(system, "[boot] preloaded module: \\\\apps\\\\sysinit.wasmosapp\n");
-
     static CHAR16 app_path[] = L"\\apps\\chardev_client.wasmosapp";
     void *app_buf = 0;
     UINTN app_size = 0;
@@ -403,9 +393,6 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
     UINTN mmap_capacity = mmap_size;
     UINTN boot_capacity = 0;
     UINTN module_count = 0;
-    if (init_buf && init_size > 0) {
-        module_count++;
-    }
     if (app_buf && app_size > 0) {
         module_count++;
     }
@@ -429,7 +416,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
     }
     UINTN module_table_bytes = module_count * sizeof(boot_module_t);
     UINTN module_data_bytes =
-        init_size + app_size + init_smoke_size + native_call_min_size + native_call_smoke_size +
+        app_size + init_smoke_size + native_call_min_size + native_call_smoke_size +
         ata_size + fat_size + hw_discovery_size;
 
     void *mmap = 0;
@@ -497,17 +484,6 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
             cursor += module_table_bytes;
 
             UINT32 mod_index = 0;
-            if (init_buf && init_size > 0) {
-                mods[mod_index].base = (UINT64)(UINTN)cursor;
-                mods[mod_index].size = init_size;
-                mods[mod_index].type = BOOT_MODULE_TYPE_WASMOS_APP;
-                mods[mod_index].reserved = 0;
-                copy_cstr(mods[mod_index].name, sizeof(mods[mod_index].name), "apps/sysinit.wasmosapp");
-                memcpy8(cursor, init_buf, init_size);
-                cursor += init_size;
-                mod_index++;
-            }
-
             if (app_buf && app_size > 0) {
                 mods[mod_index].base = (UINT64)(UINTN)cursor;
                 mods[mod_index].size = app_size;

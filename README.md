@@ -177,7 +177,8 @@ On macOS with Homebrew, install OVMF via `brew install edk2-ovmf`.
 - The CLI tests include running `exec hello-zig` and asserting the Zig app prints its banner and returns to the prompt.
 - `cmake --build build --target zig_examples` builds the Zig hello WASMOS-APP when Zig is available
 - `run-qemu`, `run-qemu-test`, and `run-qemu-cli-test` copy `sysinit.wasmosapp`, `cli.wasmosapp`, and `hw_discovery.wasmosapp` into `esp/system/services` in addition to `esp/apps` (where applicable).
-- The bootloader now preloads `sysinit` plus the disk-bootstrap modules (`hw-discovery`, `ata`, and `fs-fat`), while `sysinit` starts `cli` from FAT via the process manager once `fs-fat` is running.
+- The bootloader now preloads only the disk-bootstrap modules (`hw-discovery`, `ata`, and `fs-fat`) plus any early smoke-test apps. The kernel `init` process starts `hw-discovery`, waits for a successful FAT readiness probe, then loads `sysinit` from FAT via the process manager.
+- `sysinit` now focuses on late user-process startup and loads `chardev-client` and `cli` from FAT through the process manager.
 - `ata.wasmosapp` and `fs_fat.wasmosapp` are now copied into `esp/system/drivers` for the bootloader to preload as drivers.
 
 Use `run-qemu-test` as the default compile+boot+halt check after code changes. Use `run-qemu-cli-test` for scripted CLI assertions (e.g. `ls` output).

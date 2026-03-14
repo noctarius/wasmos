@@ -187,6 +187,9 @@ Meaning:
 The repository standard is:
 - use `run-qemu-test` after code changes
 - use `run-qemu-cli-test` before declaring work complete
+- the `kernel_ide` aggregation target also carries `${LIBC_DIR}/include` so
+  CLion and other CMake IDEs can resolve `wasmos/api.h` for indexed WASM
+  drivers, services, and C examples
 
 ## Runtime and ABI Model
 

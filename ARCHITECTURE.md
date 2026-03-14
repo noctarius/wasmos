@@ -45,6 +45,9 @@ The current tree already boots into a usable user-space stack:
   create/write/append/unlink helpers. Update modes such as `r+`/`w+`/`a+`,
   directory removal, and non-ASCII LFN creation remain future work.
 - The runtime host uses `wasm3`, not WAMR.
+- The CMake-only `kernel_ide` aggregation target indexes kernel sources plus
+  selected WASM user-space sources, so it must mirror the libc include root
+  used by those components for editor diagnostics.
 
 ## Architectural Direction
 

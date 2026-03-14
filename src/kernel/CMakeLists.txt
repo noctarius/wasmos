@@ -141,6 +141,7 @@ add_library(kernel_ide OBJECT EXCLUDE_FROM_ALL
 )
 target_include_directories(kernel_ide PRIVATE
   ${KERNEL_DIR}/include
+  ${LIBC_DIR}/include
   ${DRIVER_WASM_DIR}/include
   ${WASM_DIR}
   ${WASM_DIR}/wasm3/source

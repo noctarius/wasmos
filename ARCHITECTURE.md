@@ -391,6 +391,8 @@ This keeps the external ABI stable while presenting language-native entrypoints.
   - owns the `fs` endpoint
   - supports root/subdirectory listing, `cat`, `cd`, PM app loading, and the
     minimal shared libc read-only file API
+  - follows FAT12/16 cluster chains for multi-cluster file reads on the
+    current ESP baseline
 - `chardev`
   - IPC-backed console/character device service
 

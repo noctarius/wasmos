@@ -46,7 +46,6 @@ IMPORTANT: Keep this file aligned with `README.md` and `ARCHITECTURE.md`.
 
 ## Filesystem and Userland
 - Extend `fs-fat` beyond the current small-file/read-only path.
-- Add multi-cluster file reads.
 - Add write, seek, and stat support where appropriate.
 - Decide whether initfs should eventually carry additional early-userland data
   beyond bootstrap apps and boot config.

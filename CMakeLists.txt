@@ -391,6 +391,9 @@ set(NATIVE_CALL_MIN_COPY_CMD
 set(NATIVE_CALL_SMOKE_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_NATIVE_CALL_SMOKE_APP} ${BUILD_DIR}/esp/apps/native_call_smoke.wasmosapp
 )
+set(LARGE_READ_COPY_CMD
+  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/large_read.txt ${BUILD_DIR}/esp/large_read.txt
+)
 set(INITFS_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${INITFS_IMG} ${BUILD_DIR}/esp/initfs.img
 )
@@ -443,6 +446,7 @@ if (OVMF_VARS)
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
+    ${LARGE_READ_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
@@ -479,6 +483,7 @@ if (OVMF_VARS)
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
+    ${LARGE_READ_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
             -S -gdb tcp::${QEMU_GDB_PORT}
@@ -516,6 +521,7 @@ if (OVMF_VARS)
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
+    ${LARGE_READ_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_halt_test.py
             --ovmf-code ${OVMF_CODE}
@@ -554,6 +560,7 @@ if (OVMF_VARS)
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
+    ${LARGE_READ_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND ${CMAKE_COMMAND} -E env
             WASMOS_OVMF_CODE=${OVMF_CODE}
@@ -595,6 +602,7 @@ else ()
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
+    ${LARGE_READ_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
@@ -630,6 +638,7 @@ else ()
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
+    ${LARGE_READ_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
             -S -gdb tcp::${QEMU_GDB_PORT}
@@ -668,6 +677,7 @@ else ()
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
+    ${LARGE_READ_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_halt_test.py
             --ovmf-code ${OVMF_CODE}
@@ -705,6 +715,7 @@ else ()
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
+    ${LARGE_READ_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND ${CMAKE_COMMAND} -E env
             WASMOS_OVMF_CODE=${OVMF_CODE}

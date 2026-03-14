@@ -120,10 +120,12 @@ static uint32_t g_wait_count = 0;
 static int32_t g_wait_req_id = 0;
 static int32_t g_fs_resp_override = 0;
 static int32_t g_fs_resp_arg0 = 0;
+static int32_t g_fs_resp_arg1 = 0;
 
 typedef struct {
     uint8_t in_use;
     int32_t owner;
+    uint16_t first_cluster;
     uint16_t current_cluster;
     uint32_t current_sector;
     uint32_t file_lba;
@@ -146,6 +148,7 @@ static void fat_lfn_collect(const uint8_t *ent);
 static int fat_name_eq(const char *a, const char *b);
 static uint32_t fat_lba_for_cluster(uint16_t cluster);
 static int fat_next_cluster(uint16_t cluster, uint16_t *out_next);
+static int fat_reposition_open_file(fat_open_file_t *file, uint32_t offset);
 
 typedef struct {
     uint8_t in_use;
@@ -757,6 +760,7 @@ fat_open_file_alloc(int32_t source, int32_t *out_fd)
         if (!g_open_files[i].in_use) {
             g_open_files[i].in_use = 1;
             g_open_files[i].owner = source;
+            g_open_files[i].first_cluster = 0;
             g_open_files[i].current_cluster = 0;
             g_open_files[i].current_sector = 0;
             g_open_files[i].file_lba = 0;
@@ -774,7 +778,6 @@ fat_handle_open(void)
 {
     char path[FAT_MAX_PATH];
     fat_dir_entry_info_t entry = { 0 };
-    uint32_t cluster_bytes;
     int32_t fd = -1;
     uint32_t path_len = (uint32_t)g_fs_req.arg0;
 
@@ -804,6 +807,7 @@ fat_handle_open(void)
     if (!file) {
         return -1;
     }
+    file->first_cluster = entry.size == 0 ? 0 : entry.cluster;
     file->current_cluster = entry.size == 0 ? 0 : entry.cluster;
     file->current_sector = 0;
     file->file_lba = entry.size == 0 ? 0 : fat_lba_for_cluster(entry.cluster);
@@ -881,6 +885,107 @@ fat_handle_read_open_file(void)
 }
 
 static int
+fat_handle_stat(void)
+{
+    char path[FAT_MAX_PATH];
+    fat_dir_entry_info_t entry = { 0 };
+    uint32_t path_len = (uint32_t)g_fs_req.arg0;
+
+    if (g_fs_req.arg1 != 0 || path_len == 0 || path_len >= sizeof(path)) {
+        return -1;
+    }
+    if (path_len + 1u > (uint32_t)wasmos_fs_buffer_size()) {
+        return -1;
+    }
+    if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+        return -1;
+    }
+    path[path_len] = '\0';
+
+    if (fat_resolve_path(path, &entry) != 0 || !entry.valid) {
+        return -1;
+    }
+
+    g_fs_resp_override = 1;
+    g_fs_resp_arg0 = (int32_t)entry.size;
+    g_fs_resp_arg1 = (entry.attr & 0x10) ? 0x4000 : 0x8000;
+    return 0;
+}
+
+static int
+fat_reposition_open_file(fat_open_file_t *file, uint32_t offset)
+{
+    uint32_t cluster_bytes;
+    uint32_t cluster_skip;
+
+    if (!file || offset > file->size) {
+        return -1;
+    }
+
+    file->offset = offset;
+    if (file->size == 0 || offset == file->size) {
+        file->current_cluster = file->first_cluster;
+        file->current_sector = 0;
+        file->file_lba = file->first_cluster >= 2 ? fat_lba_for_cluster(file->first_cluster) : 0;
+        return 0;
+    }
+    if (file->first_cluster < 2 || g_sectors_per_cluster == 0 || g_bytes_per_sector == 0) {
+        return -1;
+    }
+
+    cluster_bytes = (uint32_t)g_sectors_per_cluster * g_bytes_per_sector;
+    cluster_skip = offset / cluster_bytes;
+    file->current_cluster = file->first_cluster;
+    file->current_sector = (offset % cluster_bytes) / g_bytes_per_sector;
+
+    while (cluster_skip > 0) {
+        uint16_t next_cluster = 0;
+        if (fat_next_cluster(file->current_cluster, &next_cluster) != 0) {
+            return -1;
+        }
+        file->current_cluster = next_cluster;
+        cluster_skip--;
+    }
+
+    file->file_lba = fat_lba_for_cluster(file->current_cluster);
+    return file->file_lba == 0 ? -1 : 0;
+}
+
+static int
+fat_handle_seek_open_file(void)
+{
+    fat_open_file_t *file = fat_open_file_for_fd(g_fs_req.source, g_fs_req.arg0);
+    int32_t base;
+    int64_t target;
+
+    if (!file) {
+        return -1;
+    }
+
+    if (g_fs_req.arg2 == 0) {
+        base = 0;
+    } else if (g_fs_req.arg2 == 1) {
+        base = (int32_t)file->offset;
+    } else if (g_fs_req.arg2 == 2) {
+        base = (int32_t)file->size;
+    } else {
+        return -1;
+    }
+
+    target = (int64_t)base + (int64_t)g_fs_req.arg1;
+    if (target < 0 || (uint64_t)target > file->size) {
+        return -1;
+    }
+    if (fat_reposition_open_file(file, (uint32_t)target) != 0) {
+        return -1;
+    }
+
+    g_fs_resp_override = 1;
+    g_fs_resp_arg0 = (int32_t)target;
+    return 0;
+}
+
+static int
 fat_handle_close_open_file(void)
 {
     fat_open_file_t *file = fat_open_file_for_fd(g_fs_req.source, g_fs_req.arg0);
@@ -891,6 +996,7 @@ fat_handle_close_open_file(void)
 
     file->in_use = 0;
     file->owner = -1;
+    file->first_cluster = 0;
     file->current_cluster = 0;
     file->current_sector = 0;
     file->file_lba = 0;
@@ -2021,6 +2127,12 @@ fat_ipc_dispatch(int32_t type,
         }
         return fat_handle_open();
     }
+    if (type == FS_IPC_STAT_REQ) {
+        if (g_op != FAT_OP_NONE) {
+            return -1;
+        }
+        return fat_handle_stat();
+    }
     if (type == FS_IPC_READY_REQ) {
         if (g_op != FAT_OP_NONE) {
             return -1;
@@ -2039,6 +2151,12 @@ fat_ipc_dispatch(int32_t type,
         }
         return fat_handle_close_open_file();
     }
+    if (type == FS_IPC_SEEK_REQ) {
+        if (g_op != FAT_OP_NONE) {
+            return -1;
+        }
+        return fat_handle_seek_open_file();
+    }
 
     return -1;
 }
@@ -2048,16 +2166,20 @@ fat_send_fs_response(int32_t status)
 {
     int32_t type = status == 0 ? FS_IPC_RESP : FS_IPC_ERROR;
     int32_t arg0 = status;
+    int32_t arg1 = 0;
     if (g_fs_resp_override && type == FS_IPC_RESP) {
         arg0 = g_fs_resp_arg0;
+        arg1 = g_fs_resp_arg1;
     }
     g_fs_resp_override = 0;
+    g_fs_resp_arg0 = 0;
+    g_fs_resp_arg1 = 0;
     return wasmos_ipc_send(g_fs_req.source,
                            g_fs_endpoint,
                            type,
                            g_fs_req.request_id,
                            arg0,
-                           0,
+                           arg1,
                            0,
                            0);
 }
@@ -2089,6 +2211,7 @@ initialize(int32_t block_endpoint,
     g_fs_req.in_use = 0;
     g_fs_resp_override = 0;
     g_fs_resp_arg0 = 0;
+    g_fs_resp_arg1 = 0;
     g_cwd_root = 1;
     g_cwd_source = -1;
     g_cwd_cluster = 0;
@@ -2102,6 +2225,7 @@ initialize(int32_t block_endpoint,
     for (uint32_t i = 0; i < FAT_MAX_OPEN_FILES; ++i) {
         g_open_files[i].in_use = 0;
         g_open_files[i].owner = -1;
+        g_open_files[i].first_cluster = 0;
         g_open_files[i].current_cluster = 0;
         g_open_files[i].current_sector = 0;
         g_open_files[i].file_lba = 0;

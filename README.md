@@ -26,6 +26,7 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - FAT-backed loading of `sysinit`, `cli`, and user apps
 - manifest-driven late startup policy consumed by `sysinit`
 - multi-cluster FAT file reads for libc and app loading
+- read-only FAT seek/stat support for libc and language shims
 - growable per-process `wasm3` heaps with a 2 GiB cap
 - per-process virtual memory contexts with private user mappings
 - shared user-space libc surface for C, Rust, Go, Zig, and AssemblyScript
@@ -217,6 +218,8 @@ Current heap-hint behavior:
 ### C
 - user-facing entrypoint: `int main(int argc, char **argv)`
 - shim-owned export: `wasmos_main`
+- file I/O currently supports `open/read/close`, `stat`, `lseek`, `fseek`, and
+  `ftell` on the FAT-backed read-only path
 
 ### Rust
 - user-facing entrypoint: `fn main(args: &[&str]) -> i32`
@@ -247,11 +250,11 @@ Current functionality includes:
 - minimal read-only file API
 
 Current file I/O scope:
-- `open`, `read`, `close`
-- `fopen`, `fread`, `fgets`, `fgetc`, `fclose`
+- `open`, `read`, `close`, `stat`, `lseek`
+- `fopen`, `fread`, `fgets`, `fgetc`, `fclose`, `fseek`, `ftell`
 - reads now span multi-cluster FAT files through the shared FS IPC path used by
   C, Rust, Go, Zig, and AssemblyScript shims
-- no write/seek/stat yet
+- seek/stat are read-only today; no write support yet
 
 ## Implemented Drivers and Services
 

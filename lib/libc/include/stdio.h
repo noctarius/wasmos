@@ -24,6 +24,8 @@ int fclose(FILE *stream);
 char *fgets(char *s, int size, FILE *stream);
 int fgetc(FILE *stream);
 int getc(FILE *stream);
+int fseek(FILE *stream, long offset, int whence);
+long ftell(FILE *stream);
 int feof(FILE *stream);
 int ferror(FILE *stream);
 void clearerr(FILE *stream);

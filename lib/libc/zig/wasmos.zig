@@ -4,11 +4,20 @@ const root = @import("root");
 const FS_IPC_OPEN_REQ: i32 = 0x400;
 const FS_IPC_READ_REQ: i32 = 0x401;
 const FS_IPC_CLOSE_REQ: i32 = 0x402;
+const FS_IPC_STAT_REQ: i32 = 0x403;
+const FS_IPC_SEEK_REQ: i32 = 0x405;
 const FS_IPC_RESP: i32 = 0x480;
 
 const IPC_FIELD_TYPE: i32 = 0;
 const IPC_FIELD_REQUEST_ID: i32 = 1;
 const IPC_FIELD_ARG0: i32 = 2;
+const IPC_FIELD_ARG1: i32 = 3;
+
+pub const SEEK_SET: i32 = 0;
+pub const SEEK_CUR: i32 = 1;
+pub const SEEK_END: i32 = 2;
+pub const S_IFREG: u32 = 0x8000;
+pub const S_IFDIR: u32 = 0x4000;
 
 extern "wasmos" fn console_write(ptr: i32, len: i32) callconv(.c) i32;
 extern "wasmos" fn ipc_create_endpoint() callconv(.c) i32;
@@ -91,7 +100,7 @@ fn nextFsRequestId() i32 {
     return request_id;
 }
 
-fn fsRequest(msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32) Error!i32 {
+fn fsRequest(msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32) Error!struct { arg0: i32, arg1: i32 } {
     const endpoint = fs_endpoint();
     if (endpoint < 0) {
         return Error.NotAvailable;
@@ -109,7 +118,10 @@ fn fsRequest(msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32) Error!i3
     if (ipc_last_field(IPC_FIELD_REQUEST_ID) != request_id or ipc_last_field(IPC_FIELD_TYPE) != FS_IPC_RESP) {
         return Error.BadResponse;
     }
-    return ipc_last_field(IPC_FIELD_ARG0);
+    return .{
+        .arg0 = ipc_last_field(IPC_FIELD_ARG0),
+        .arg1 = ipc_last_field(IPC_FIELD_ARG1),
+    };
 }
 
 pub const stdlib = struct {
@@ -137,6 +149,11 @@ pub const stdlib = struct {
 };
 
 pub const fs = struct {
+    pub const Stat = struct {
+        size: u32,
+        mode: u32,
+    };
+
     pub const File = struct {
         fd: i32,
 
@@ -156,7 +173,8 @@ pub const fs = struct {
                     @intCast(max_buffer)
                 else
                     remaining;
-                const chunk_read = try fsRequest(FS_IPC_READ_REQ, self.fd, @intCast(chunk_len), 0, 0);
+                const response = try fsRequest(FS_IPC_READ_REQ, self.fd, @intCast(chunk_len), 0, 0);
+                const chunk_read = response.arg0;
                 if (chunk_read < 0) {
                     return Error.BadResponse;
                 }
@@ -179,6 +197,14 @@ pub const fs = struct {
 
         pub fn close(self: File) Error!void {
             _ = try fsRequest(FS_IPC_CLOSE_REQ, self.fd, 0, 0, 0);
+        }
+
+        pub fn seek(self: File, offset: i32, whence: i32) Error!i32 {
+            const response = try fsRequest(FS_IPC_SEEK_REQ, self.fd, offset, whence, 0);
+            if (response.arg0 < 0) {
+                return Error.BadResponse;
+            }
+            return response.arg0;
         }
     };
 
@@ -206,10 +232,44 @@ pub const fs = struct {
             return Error.HostCallFailed;
         }
 
-        const fd = try fsRequest(FS_IPC_OPEN_REQ, @intCast(path.len), 0, 0, 0);
-        if (fd < 0) {
+        const response = try fsRequest(FS_IPC_OPEN_REQ, @intCast(path.len), 0, 0, 0);
+        if (response.arg0 < 0) {
             return Error.BadResponse;
         }
-        return File{ .fd = fd };
+        return File{ .fd = response.arg0 };
+    }
+
+    pub fn stat(path: []const u8) Error!Stat {
+        var path_buf: [256]u8 = undefined;
+        const max_buffer = fs_buffer_size();
+
+        if (path.len == 0) {
+            return Error.InvalidArgument;
+        }
+        if (max_buffer <= 0) {
+            return Error.NotAvailable;
+        }
+        if (path.len + 1 > path_buf.len) {
+            return Error.NameTooLong;
+        }
+        if (path.len + 1 > @as(usize, @intCast(max_buffer))) {
+            return Error.BufferTooSmall;
+        }
+
+        @memcpy(path_buf[0..path.len], path);
+        path_buf[path.len] = 0;
+
+        if (fs_buffer_write(@intCast(@intFromPtr(&path_buf[0])), @intCast(path.len + 1), 0) != 0) {
+            return Error.HostCallFailed;
+        }
+
+        const response = try fsRequest(FS_IPC_STAT_REQ, @intCast(path.len), 0, 0, 0);
+        if (response.arg0 < 0) {
+            return Error.BadResponse;
+        }
+        return Stat{
+            .size = @intCast(response.arg0),
+            .mode = @as(u32, @intCast(response.arg1)) & (S_IFREG | S_IFDIR),
+        };
     }
 };

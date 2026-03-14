@@ -6,6 +6,8 @@ const (
 	fsIPCOpenReq  int32 = 0x400
 	fsIPCReadReq  int32 = 0x401
 	fsIPCCloseReq int32 = 0x402
+	fsIPCStatReq  int32 = 0x403
+	fsIPCSeekReq  int32 = 0x405
 	fsIPCResp     int32 = 0x480
 )
 
@@ -13,6 +15,15 @@ const (
 	ipcFieldType      int32 = 0
 	ipcFieldRequestID int32 = 1
 	ipcFieldArg0      int32 = 2
+	ipcFieldArg1      int32 = 3
+)
+
+const (
+	SeekSet int32 = 0
+	SeekCur int32 = 1
+	SeekEnd int32 = 2
+	SIFREG  int32 = 0x8000
+	SIFDIR  int32 = 0x4000
 )
 
 type Error int32
@@ -65,6 +76,11 @@ var std = stdAPI{}
 
 type File struct {
 	fd int32
+}
+
+type FileStat struct {
+	Size int32
+	Mode int32
 }
 
 type fsAPI struct{}
@@ -135,28 +151,28 @@ func nextFSRequestID() int32 {
 	return requestID
 }
 
-func fsRequest(msgType int32, arg0 int32, arg1 int32, arg2 int32, arg3 int32) (int32, Error) {
+func fsRequest(msgType int32, arg0 int32, arg1 int32, arg2 int32, arg3 int32) (int32, int32, Error) {
 	endpoint := fsEndpoint()
 	if endpoint < 0 {
-		return -1, ErrNotAvailable
+		return -1, 0, ErrNotAvailable
 	}
 
 	replyEndpoint, err := ensureFSReplyEndpoint()
 	if err != ErrOK {
-		return -1, err
+		return -1, 0, err
 	}
 
 	requestID := nextFSRequestID()
 	if ipcSend(endpoint, replyEndpoint, msgType, requestID, arg0, arg1, arg2, arg3) != 0 {
-		return -1, ErrHostCallFailed
+		return -1, 0, ErrHostCallFailed
 	}
 	if ipcRecv(replyEndpoint) < 0 {
-		return -1, ErrHostCallFailed
+		return -1, 0, ErrHostCallFailed
 	}
 	if ipcLastField(ipcFieldRequestID) != requestID || ipcLastField(ipcFieldType) != fsIPCResp {
-		return -1, ErrBadResponse
+		return -1, 0, ErrBadResponse
 	}
-	return ipcLastField(ipcFieldArg0), ErrOK
+	return ipcLastField(ipcFieldArg0), ipcLastField(ipcFieldArg1), ErrOK
 }
 
 func (stdAPI) WriteString(s string) Error {
@@ -201,7 +217,7 @@ func (f File) Read(buffer []byte) (int, Error) {
 			chunkLen = int(maxBuffer)
 		}
 
-		chunkRead, err := fsRequest(fsIPCReadReq, f.fd, int32(chunkLen), 0, 0)
+		chunkRead, _, err := fsRequest(fsIPCReadReq, f.fd, int32(chunkLen), 0, 0)
 		if err != ErrOK {
 			return done, err
 		}
@@ -227,8 +243,19 @@ func (f File) Read(buffer []byte) (int, Error) {
 }
 
 func (f File) Close() Error {
-	_, err := fsRequest(fsIPCCloseReq, f.fd, 0, 0, 0)
+	_, _, err := fsRequest(fsIPCCloseReq, f.fd, 0, 0, 0)
 	return err
+}
+
+func (f File) Seek(offset int32, whence int32) (int32, Error) {
+	position, _, err := fsRequest(fsIPCSeekReq, f.fd, offset, whence, 0)
+	if err != ErrOK {
+		return -1, err
+	}
+	if position < 0 {
+		return -1, ErrBadResponse
+	}
+	return position, ErrOK
 }
 
 func (fsAPI) OpenRead(path string) (File, Error) {
@@ -256,7 +283,7 @@ func (fsAPI) OpenRead(path string) (File, Error) {
 		return File{fd: -1}, ErrHostCallFailed
 	}
 
-	fd, err := fsRequest(fsIPCOpenReq, int32(pathLen), 0, 0, 0)
+	fd, _, err := fsRequest(fsIPCOpenReq, int32(pathLen), 0, 0, 0)
 	if err != ErrOK {
 		return File{fd: -1}, err
 	}
@@ -264,4 +291,39 @@ func (fsAPI) OpenRead(path string) (File, Error) {
 		return File{fd: -1}, ErrBadResponse
 	}
 	return File{fd: fd}, ErrOK
+}
+
+func (fsAPI) Stat(path string) (FileStat, Error) {
+	pathLen := len(path)
+	maxBuffer := fsBufferSize()
+	var pathBuf [256]byte
+
+	if pathLen == 0 {
+		return FileStat{}, ErrInvalidArgument
+	}
+	if maxBuffer <= 0 {
+		return FileStat{}, ErrNotAvailable
+	}
+	if pathLen+1 > len(pathBuf) {
+		return FileStat{}, ErrNameTooLong
+	}
+	if pathLen+1 > int(maxBuffer) {
+		return FileStat{}, ErrBufferTooSmall
+	}
+
+	copy(pathBuf[:], path)
+	pathBuf[pathLen] = 0
+
+	if fsBufferWrite(uint32(uintptr(unsafe.Pointer(&pathBuf[0]))), uint32(pathLen+1), 0) != 0 {
+		return FileStat{}, ErrHostCallFailed
+	}
+
+	size, mode, err := fsRequest(fsIPCStatReq, int32(pathLen), 0, 0, 0)
+	if err != ErrOK {
+		return FileStat{}, err
+	}
+	if size < 0 {
+		return FileStat{}, ErrBadResponse
+	}
+	return FileStat{Size: size, Mode: mode & (SIFREG | SIFDIR)}, ErrOK
 }

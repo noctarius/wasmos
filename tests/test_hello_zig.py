@@ -50,6 +50,7 @@ class HelloZigTest(unittest.TestCase):
                 b"Hello from Zig on WASMOS!",
                 b"Entry: main",
                 b"startup.nsh readable: true",
+                b"long filename write: true",
             ],
         )
 

@@ -1,5 +1,6 @@
 const FS_IPC_OPEN_REQ: i32 = 0x400;
 const FS_IPC_READ_REQ: i32 = 0x401;
+const FS_IPC_WRITE_REQ: i32 = 0x406;
 const FS_IPC_CLOSE_REQ: i32 = 0x402;
 const FS_IPC_STAT_REQ: i32 = 0x403;
 const FS_IPC_SEEK_REQ: i32 = 0x405;
@@ -15,6 +16,11 @@ export const SEEK_CUR: i32 = 1;
 export const SEEK_END: i32 = 2;
 export const S_IFREG: i32 = 0x8000;
 export const S_IFDIR: i32 = 0x4000;
+export const O_RDONLY: i32 = 0;
+export const O_WRONLY: i32 = 1;
+export const O_APPEND: i32 = 0x0008;
+export const O_CREAT: i32 = 0x0040;
+export const O_TRUNC: i32 = 0x0200;
 
 @external("wasmos", "console_write")
 declare function console_write(ptr: i32, len: i32): i32;
@@ -184,6 +190,33 @@ export class File {
     return response != null && response.arg0 == 0;
   }
 
+  write(buffer: Uint8Array): i32 {
+    const bufferLimit = fs_buffer_size();
+    if (bufferLimit <= 0) {
+      return -1;
+    }
+
+    let done = 0;
+    while (done < buffer.length) {
+      let chunkLen = buffer.length - done;
+      if (chunkLen > bufferLimit) {
+        chunkLen = bufferLimit;
+      }
+      if (fs_buffer_write(buffer.dataStart as i32 + done, chunkLen, 0) != 0) {
+        return -1;
+      }
+      const response = fsRequest(FS_IPC_WRITE_REQ, this.fd, chunkLen, 0, 0);
+      if (response == null || response.arg0 < 0 || response.arg0 > chunkLen) {
+        return -1;
+      }
+      done += response.arg0;
+      if (response.arg0 == 0 || response.arg0 != chunkLen) {
+        break;
+      }
+    }
+    return done;
+  }
+
   seek(offset: i32, whence: i32): i32 {
     const response = fsRequest(FS_IPC_SEEK_REQ, this.fd, offset, whence, 0);
     if (response == null || response.arg0 < 0) {
@@ -194,7 +227,7 @@ export class File {
 }
 
 export namespace fs {
-  export function openRead(path: string): File | null {
+  function openWithFlags(path: string, flags: i32): File | null {
     const pathBytes = Uint8Array.wrap(String.UTF8.encode(path, true));
     const bufferLimit = fs_buffer_size();
     if (bufferLimit <= 0 || pathBytes.length > bufferLimit) {
@@ -204,11 +237,27 @@ export namespace fs {
       return null;
     }
 
-    const response = fsRequest(FS_IPC_OPEN_REQ, pathBytes.length - 1, 0, 0, 0);
+    const response = fsRequest(FS_IPC_OPEN_REQ, pathBytes.length - 1, flags, 0, 0);
     if (response == null || response.arg0 < 0) {
       return null;
     }
     return new File(response.arg0);
+  }
+
+  export function openRead(path: string): File | null {
+    return openWithFlags(path, O_RDONLY);
+  }
+
+  export function openWrite(path: string): File | null {
+    return openWithFlags(path, O_WRONLY);
+  }
+
+  export function create(path: string): File | null {
+    return openWithFlags(path, O_WRONLY | O_CREAT | O_TRUNC);
+  }
+
+  export function openAppend(path: string): File | null {
+    return openWithFlags(path, O_WRONLY | O_CREAT | O_APPEND);
   }
 
   export function stat(path: string): FileStat | null {

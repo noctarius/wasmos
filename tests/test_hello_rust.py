@@ -49,6 +49,7 @@ class HelloRustTest(unittest.TestCase):
                 b"spawned pid",
                 b"Hello from Rust on WASMOS!",
                 b"Entry: main",
+                b"long filename write: true",
             ],
         )
 

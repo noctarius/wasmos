@@ -3,6 +3,7 @@ const root = @import("root");
 
 const FS_IPC_OPEN_REQ: i32 = 0x400;
 const FS_IPC_READ_REQ: i32 = 0x401;
+const FS_IPC_WRITE_REQ: i32 = 0x406;
 const FS_IPC_CLOSE_REQ: i32 = 0x402;
 const FS_IPC_STAT_REQ: i32 = 0x403;
 const FS_IPC_SEEK_REQ: i32 = 0x405;
@@ -18,6 +19,11 @@ pub const SEEK_CUR: i32 = 1;
 pub const SEEK_END: i32 = 2;
 pub const S_IFREG: u32 = 0x8000;
 pub const S_IFDIR: u32 = 0x4000;
+pub const O_RDONLY: i32 = 0;
+pub const O_WRONLY: i32 = 1;
+pub const O_APPEND: i32 = 0x0008;
+pub const O_CREAT: i32 = 0x0040;
+pub const O_TRUNC: i32 = 0x0200;
 
 extern "wasmos" fn console_write(ptr: i32, len: i32) callconv(.c) i32;
 extern "wasmos" fn ipc_create_endpoint() callconv(.c) i32;
@@ -199,6 +205,37 @@ pub const fs = struct {
             _ = try fsRequest(FS_IPC_CLOSE_REQ, self.fd, 0, 0, 0);
         }
 
+        pub fn write(self: File, buffer: []const u8) Error!usize {
+            if (buffer.len == 0) {
+                return 0;
+            }
+            const max_buffer = fs_buffer_size();
+            if (max_buffer <= 0) {
+                return Error.NotAvailable;
+            }
+
+            var done: usize = 0;
+            while (done < buffer.len) {
+                const remaining = buffer.len - done;
+                const chunk_len: usize = if (remaining > @as(usize, @intCast(max_buffer)))
+                    @intCast(max_buffer)
+                else
+                    remaining;
+                if (fs_buffer_write(@intCast(@intFromPtr(buffer.ptr + done)), @intCast(chunk_len), 0) != 0) {
+                    return Error.HostCallFailed;
+                }
+                const response = try fsRequest(FS_IPC_WRITE_REQ, self.fd, @intCast(chunk_len), 0, 0);
+                if (response.arg0 < 0 or @as(usize, @intCast(response.arg0)) > chunk_len) {
+                    return Error.BadResponse;
+                }
+                done += @intCast(response.arg0);
+                if (response.arg0 == 0 or @as(usize, @intCast(response.arg0)) != chunk_len) {
+                    break;
+                }
+            }
+            return done;
+        }
+
         pub fn seek(self: File, offset: i32, whence: i32) Error!i32 {
             const response = try fsRequest(FS_IPC_SEEK_REQ, self.fd, offset, whence, 0);
             if (response.arg0 < 0) {
@@ -208,7 +245,7 @@ pub const fs = struct {
         }
     };
 
-    pub fn openRead(path: []const u8) Error!File {
+    fn openWithFlags(path: []const u8, flags: i32) Error!File {
         var path_buf: [256]u8 = undefined;
         const max_buffer = fs_buffer_size();
 
@@ -232,11 +269,27 @@ pub const fs = struct {
             return Error.HostCallFailed;
         }
 
-        const response = try fsRequest(FS_IPC_OPEN_REQ, @intCast(path.len), 0, 0, 0);
+        const response = try fsRequest(FS_IPC_OPEN_REQ, @intCast(path.len), flags, 0, 0);
         if (response.arg0 < 0) {
             return Error.BadResponse;
         }
         return File{ .fd = response.arg0 };
+    }
+
+    pub fn openRead(path: []const u8) Error!File {
+        return openWithFlags(path, O_RDONLY);
+    }
+
+    pub fn openWrite(path: []const u8) Error!File {
+        return openWithFlags(path, O_WRONLY);
+    }
+
+    pub fn create(path: []const u8) Error!File {
+        return openWithFlags(path, O_WRONLY | O_CREAT | O_TRUNC);
+    }
+
+    pub fn openAppend(path: []const u8) Error!File {
+        return openWithFlags(path, O_WRONLY | O_CREAT | O_APPEND);
     }
 
     pub fn stat(path: []const u8) Error!Stat {

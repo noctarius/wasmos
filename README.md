@@ -36,6 +36,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - `O_CREAT` support for zero-length 8.3 FAT files in existing directories
 - FAT12/16 cluster allocation for file growth, including writes to new files
 - C stdio write/append modes via `fopen`/`fwrite`
+- Rust, Zig, Go, and AssemblyScript fs shims can now create/write/append files
+- FAT new-file creation supports long filenames with generated short aliases
 - growable per-process `wasm3` heaps with a 2 GiB cap
 - per-process virtual memory contexts with private user mappings
 - shared user-space libc surface for C, Rust, Go, Zig, and AssemblyScript

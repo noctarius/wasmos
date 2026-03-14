@@ -5,6 +5,7 @@ import "unsafe"
 const (
 	fsIPCOpenReq  int32 = 0x400
 	fsIPCReadReq  int32 = 0x401
+	fsIPCWriteReq int32 = 0x406
 	fsIPCCloseReq int32 = 0x402
 	fsIPCStatReq  int32 = 0x403
 	fsIPCSeekReq  int32 = 0x405
@@ -24,6 +25,11 @@ const (
 	SeekEnd int32 = 2
 	SIFREG  int32 = 0x8000
 	SIFDIR  int32 = 0x4000
+	O_RDONLY int32 = 0
+	O_WRONLY int32 = 1
+	O_APPEND int32 = 0x0008
+	O_CREAT  int32 = 0x0040
+	O_TRUNC  int32 = 0x0200
 )
 
 type Error int32
@@ -247,6 +253,41 @@ func (f File) Close() Error {
 	return err
 }
 
+func (f File) Write(buffer []byte) (int, Error) {
+	if len(buffer) == 0 {
+		return 0, ErrOK
+	}
+
+	maxBuffer := fsBufferSize()
+	if maxBuffer <= 0 {
+		return 0, ErrNotAvailable
+	}
+
+	done := 0
+	for done < len(buffer) {
+		chunkLen := len(buffer) - done
+		if chunkLen > int(maxBuffer) {
+			chunkLen = int(maxBuffer)
+		}
+		if fsBufferWrite(uint32(uintptr(unsafe.Pointer(&buffer[done]))), uint32(chunkLen), 0) != 0 {
+			return done, ErrHostCallFailed
+		}
+		chunkWritten, _, err := fsRequest(fsIPCWriteReq, f.fd, int32(chunkLen), 0, 0)
+		if err != ErrOK {
+			return done, err
+		}
+		if chunkWritten < 0 || int(chunkWritten) > chunkLen {
+			return done, ErrBadResponse
+		}
+		done += int(chunkWritten)
+		if chunkWritten == 0 || int(chunkWritten) != chunkLen {
+			break
+		}
+	}
+
+	return done, ErrOK
+}
+
 func (f File) Seek(offset int32, whence int32) (int32, Error) {
 	position, _, err := fsRequest(fsIPCSeekReq, f.fd, offset, whence, 0)
 	if err != ErrOK {
@@ -258,7 +299,7 @@ func (f File) Seek(offset int32, whence int32) (int32, Error) {
 	return position, ErrOK
 }
 
-func (fsAPI) OpenRead(path string) (File, Error) {
+func (fsAPI) openWithFlags(path string, flags int32) (File, Error) {
 	pathLen := len(path)
 	maxBuffer := fsBufferSize()
 	var pathBuf [256]byte
@@ -283,7 +324,7 @@ func (fsAPI) OpenRead(path string) (File, Error) {
 		return File{fd: -1}, ErrHostCallFailed
 	}
 
-	fd, _, err := fsRequest(fsIPCOpenReq, int32(pathLen), 0, 0, 0)
+	fd, _, err := fsRequest(fsIPCOpenReq, int32(pathLen), flags, 0, 0)
 	if err != ErrOK {
 		return File{fd: -1}, err
 	}
@@ -291,6 +332,22 @@ func (fsAPI) OpenRead(path string) (File, Error) {
 		return File{fd: -1}, ErrBadResponse
 	}
 	return File{fd: fd}, ErrOK
+}
+
+func (api fsAPI) OpenRead(path string) (File, Error) {
+	return api.openWithFlags(path, O_RDONLY)
+}
+
+func (api fsAPI) OpenWrite(path string) (File, Error) {
+	return api.openWithFlags(path, O_WRONLY)
+}
+
+func (api fsAPI) Create(path string) (File, Error) {
+	return api.openWithFlags(path, O_WRONLY|O_CREAT|O_TRUNC)
+}
+
+func (api fsAPI) OpenAppend(path string) (File, Error) {
+	return api.openWithFlags(path, O_WRONLY|O_CREAT|O_APPEND)
 }
 
 func (fsAPI) Stat(path string) (FileStat, Error) {

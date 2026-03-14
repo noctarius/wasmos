@@ -4,6 +4,7 @@ use core::fmt::{self, Write};
 
 const FS_IPC_OPEN_REQ: i32 = 0x400;
 const FS_IPC_READ_REQ: i32 = 0x401;
+const FS_IPC_WRITE_REQ: i32 = 0x406;
 const FS_IPC_CLOSE_REQ: i32 = 0x402;
 const FS_IPC_STAT_REQ: i32 = 0x403;
 const FS_IPC_SEEK_REQ: i32 = 0x405;
@@ -19,6 +20,11 @@ pub const SEEK_CUR: i32 = 1;
 pub const SEEK_END: i32 = 2;
 pub const S_IFREG: u32 = 0x8000;
 pub const S_IFDIR: u32 = 0x4000;
+pub const O_RDONLY: i32 = 0;
+pub const O_WRONLY: i32 = 1;
+pub const O_APPEND: i32 = 0x0008;
+pub const O_CREAT: i32 = 0x0040;
+pub const O_TRUNC: i32 = 0x0200;
 
 #[link(wasm_import_module = "wasmos")]
 unsafe extern "C" {
@@ -178,7 +184,8 @@ pub mod std {
 pub mod fs {
     use super::{
         fs_buffer_copy, fs_buffer_size, fs_buffer_write, fs_request, Error, FS_IPC_CLOSE_REQ,
-        FS_IPC_OPEN_REQ, FS_IPC_READ_REQ, FS_IPC_SEEK_REQ, FS_IPC_STAT_REQ, S_IFDIR, S_IFREG,
+        FS_IPC_OPEN_REQ, FS_IPC_READ_REQ, FS_IPC_SEEK_REQ, FS_IPC_STAT_REQ, FS_IPC_WRITE_REQ,
+        O_APPEND, O_CREAT, O_RDONLY, O_TRUNC, O_WRONLY, S_IFDIR, S_IFREG,
     };
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -234,6 +241,39 @@ pub mod fs {
             Ok(())
         }
 
+        pub fn write(&self, buffer: &[u8]) -> Result<usize, Error> {
+            if buffer.is_empty() {
+                return Ok(0);
+            }
+
+            let max_buffer = unsafe { fs_buffer_size() };
+            if max_buffer <= 0 {
+                return Err(Error::NotAvailable);
+            }
+
+            let mut done = 0usize;
+            while done < buffer.len() {
+                let remaining = buffer.len() - done;
+                let chunk_len = remaining.min(max_buffer as usize);
+                if unsafe { fs_buffer_write(buffer.as_ptr().add(done) as i32, chunk_len as i32, 0) } != 0 {
+                    return Err(Error::HostCallFailed);
+                }
+                let (chunk_written, _) = fs_request(FS_IPC_WRITE_REQ, self.fd, chunk_len as i32, 0, 0)?;
+                if chunk_written < 0 {
+                    return Err(Error::BadResponse);
+                }
+                if chunk_written as usize > chunk_len {
+                    return Err(Error::BadResponse);
+                }
+                done += chunk_written as usize;
+                if chunk_written == 0 || chunk_written as usize != chunk_len {
+                    break;
+                }
+            }
+
+            Ok(done)
+        }
+
         pub fn seek(&self, offset: i32, whence: i32) -> Result<i32, Error> {
             let (position, _) = fs_request(FS_IPC_SEEK_REQ, self.fd, offset, whence, 0)?;
             if position < 0 {
@@ -243,7 +283,7 @@ pub mod fs {
         }
     }
 
-    pub fn open_read(path: &str) -> Result<File, Error> {
+    fn open_with_flags(path: &str, flags: i32) -> Result<File, Error> {
         let path_bytes = path.as_bytes();
         let max_buffer = unsafe { fs_buffer_size() };
         let mut path_buf = [0u8; 256];
@@ -268,12 +308,28 @@ pub mod fs {
             return Err(Error::HostCallFailed);
         }
 
-        let (fd, _) = fs_request(FS_IPC_OPEN_REQ, path_bytes.len() as i32, 0, 0, 0)?;
+        let (fd, _) = fs_request(FS_IPC_OPEN_REQ, path_bytes.len() as i32, flags, 0, 0)?;
         if fd < 0 {
             return Err(Error::BadResponse);
         }
 
         Ok(File { fd })
+    }
+
+    pub fn open_read(path: &str) -> Result<File, Error> {
+        open_with_flags(path, O_RDONLY)
+    }
+
+    pub fn open_write(path: &str) -> Result<File, Error> {
+        open_with_flags(path, O_WRONLY)
+    }
+
+    pub fn create(path: &str) -> Result<File, Error> {
+        open_with_flags(path, O_WRONLY | O_CREAT | O_TRUNC)
+    }
+
+    pub fn open_append(path: &str) -> Result<File, Error> {
+        open_with_flags(path, O_WRONLY | O_CREAT | O_APPEND)
     }
 
     pub fn stat(path: &str) -> Result<Stat, Error> {

@@ -54,5 +54,5 @@ IMPORTANT: Keep this file aligned with `README.md` and `ARCHITECTURE.md`.
 ## Documentation and Tests
 - Keep source comments aligned with architecture decisions as internals evolve.
 - Add tests for any new IPC notification or shared-memory paths.
-- Add tests for malformed boot-config handling and future startup-policy
+- Add broader malformed boot-config coverage and future startup-policy
   expansion beyond the current `sysinit.spawn` list.

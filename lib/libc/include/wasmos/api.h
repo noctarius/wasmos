@@ -64,6 +64,10 @@ extern int32_t wasmos_fs_buffer_copy(int32_t ptr, int32_t len, int32_t offset)
     WASMOS_WASM_IMPORT("wasmos", "fs_buffer_copy");
 extern int32_t wasmos_fs_buffer_write(int32_t ptr, int32_t len, int32_t offset)
     WASMOS_WASM_IMPORT("wasmos", "fs_buffer_write");
+extern int32_t wasmos_boot_config_size(void)
+    WASMOS_WASM_IMPORT("wasmos", "boot_config_size");
+extern int32_t wasmos_boot_config_copy(int32_t ptr, int32_t len, int32_t offset)
+    WASMOS_WASM_IMPORT("wasmos", "boot_config_copy");
 extern int32_t wasmos_io_in8(int32_t port)
     WASMOS_WASM_IMPORT("wasmos", "io_in8");
 extern int32_t wasmos_io_in16(int32_t port)

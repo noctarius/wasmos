@@ -17,6 +17,7 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - UEFI boot via `BOOTX64.EFI`
 - ELF64 kernel loading with aligned/overlap-safe `PT_LOAD` handling
 - versioned `boot_info_t` handoff
+- bootstrap `initfs.img` packaging for early WASMOS modules and boot config
 - serial-first early boot diagnostics
 - physical frame allocator and per-process CR3-managed paging
 - preemptive round-robin scheduler driven by PIT IRQ0
@@ -45,8 +46,10 @@ IMPORTANT: Create a git commit after each prompt iteration.
 ### Bootloader
 `BOOTX64.EFI` is responsible for:
 - loading `kernel.elf`
+- loading `initfs.img`
 - collecting the UEFI memory map
-- preloading only the minimal storage bootstrap modules
+- copying the initfs blob into boot handoff memory
+- synthesizing early `boot_module_t` entries from bootstrap-marked initfs apps
 - exiting boot services
 - jumping into the kernel entry point
 
@@ -60,14 +63,37 @@ The kernel owns:
 
 ### User Space
 The current startup chain is:
-1. bootloader preloads `hw-discovery`, `ata`, `fs-fat`
-2. kernel `init` starts `hw-discovery`
-3. `hw-discovery` starts `ata` and `fs-fat`
-4. kernel `init` waits for FAT readiness
-5. kernel `init` asks PM to load `sysinit` from disk
-6. `sysinit` starts late user processes (`chardev-client`, `cli`)
+1. bootloader loads `initfs.img`
+2. initfs provides bootstrap WASMOS apps plus a generated boot-config blob
+3. kernel `init` starts `hw-discovery` from the bootstrap module set
+4. `hw-discovery` starts `ata` and `fs-fat`
+5. kernel `init` waits for FAT readiness
+6. kernel `init` asks PM to load `sysinit` from disk
+7. `sysinit` starts late user processes (`chardev-client`, `cli`)
 
 This is the current stable bootstrap baseline.
+
+## Initfs and Boot Config
+The early bootstrap payload is a single `initfs.img` built from
+[`scripts/initfs.toml`](/Volumes/git/wasmos/scripts/initfs.toml).
+
+Current behavior:
+- `scripts/make_initfs.py` reads the TOML manifest during the build
+- bootstrap WASMOS modules are packed into one initfs image
+- a small binary boot-config blob is generated from the TOML data and embedded
+  as `config/bootcfg.bin`
+- the bootloader exposes bootstrap apps through the existing boot-module
+  mechanism and exposes the raw config blob through `boot_info_t`
+
+Current boot-config binary format:
+- magic `WCFG0001`
+- header fields: version, bootstrap-module count, sysinit-spawn count, string-table size
+- bootstrap and sysinit string offsets
+- NUL-terminated string table
+
+User-space access:
+- `wasmos_boot_config_size()`
+- `wasmos_boot_config_copy(ptr, len, offset)`
 
 ## Toolchain
 - `clang` + `lld`
@@ -292,6 +318,6 @@ Broad areas still open:
 - ring 3 / syscall transition
 - richer IPC and shared-memory paths
 - driver-manager and better hardware inventory
-- config-driven startup
+- config-driven startup consumption in `sysinit`
 - broader filesystem support
 - stronger capability and privilege separation

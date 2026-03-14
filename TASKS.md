@@ -8,8 +8,8 @@ IMPORTANT: Keep this file aligned with `README.md` and `ARCHITECTURE.md`.
 ## Boot and Platform
 - Add framebuffer console support in addition to serial.
 - Add APIC / IOAPIC support and retire the PIC-only interrupt assumption.
-- Decide whether the storage bootstrap should eventually stop relying on any
-  preloaded driver modules.
+- Decide whether the kernel should eventually read initfs directly instead of
+  relying on synthesized bootstrap `boot_module_t` records.
 
 ## Scheduling and Process Model
 - Add scheduler observability beyond basic `ps` metrics.
@@ -48,9 +48,13 @@ IMPORTANT: Keep this file aligned with `README.md` and `ARCHITECTURE.md`.
 - Extend `fs-fat` beyond the current small-file/read-only path.
 - Add multi-cluster file reads.
 - Add write, seek, and stat support where appropriate.
-- Add config-driven startup so `sysinit` is driven by data instead of fixed names.
+- Teach `sysinit` to consume the generated boot-config blob instead of using
+  fixed process names.
+- Decide whether initfs should eventually carry additional early-userland data
+  beyond bootstrap apps and boot config.
 
 ## Documentation and Tests
 - Keep source comments aligned with architecture decisions as internals evolve.
 - Add tests for any new IPC notification or shared-memory paths.
-- Add tests for future config-driven startup once implemented.
+- Add tests for boot-config import access and future config-driven startup once
+  implemented.

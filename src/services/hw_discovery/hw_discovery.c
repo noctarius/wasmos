@@ -4,6 +4,13 @@
 #include "wasmos/api.h"
 #include "wasmos_driver_abi.h"
 
+/*
+ * hw-discovery is currently a bootstrap sequencer more than a full device
+ * manager. It verifies the ACPI RSDP is present, finds the preloaded storage
+ * driver modules, and asks the process manager to start them in dependency
+ * order.
+ */
+
 typedef struct __attribute__((packed)) {
     char signature[8];
     uint8_t checksum;
@@ -125,6 +132,8 @@ module_index_by_name(const char *name)
 static void
 hw_scan_acpi(void)
 {
+    /* For now the service only validates that the bootloader passed a usable
+     * RSDP. Richer ACPI parsing and device publication are future work. */
     acpi_rsdp_t rsdp;
     uint32_t length = 0;
     int32_t rc = wasmos_acpi_rsdp_info((int32_t)(uintptr_t)&rsdp,
@@ -210,6 +219,8 @@ initialize(int32_t proc_endpoint,
 
     for (;;) {
         if (g_phase == HW_PHASE_SPAWN) {
+            /* Spawn ATA before FAT so the filesystem service never starts
+             * without its block-device dependency. */
             hw_spawn_target_t target = next_spawn_target();
             if (target == HW_SPAWN_NONE) {
                 g_phase = HW_PHASE_IDLE;

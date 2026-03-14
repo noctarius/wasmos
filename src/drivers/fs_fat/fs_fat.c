@@ -5,6 +5,12 @@
 #include "wasmos/api.h"
 #include "wasmos_driver_abi.h"
 
+/*
+ * fs-fat is the first filesystem service in the stack. Its scope is pragmatic:
+ * mount the ESP over the ATA block driver, expose enough IPC to list/cat/cd,
+ * feed PM with app blobs, and back the current read-only libc file API.
+ */
+
 #define FAT_SECTOR_SIZE 512u
 #define FAT_MAX_SECTOR_BYTES 4096u
 #define FAT_LFN_MAX 255u
@@ -214,6 +220,8 @@ fat_stall(void)
 static int
 fat_send_block_read(uint32_t lba, uint32_t count)
 {
+    /* Block reads are asynchronous at the protocol level even though the driver
+     * currently processes one filesystem operation at a time. */
     if (g_block_endpoint < 0 || g_reply_endpoint < 0 || g_block_buf_phys < 0) {
         return -1;
     }
@@ -243,6 +251,8 @@ fat_poll_block_read(void)
         return 0;
     }
 
+    /* The FAT state machines reuse a single reply endpoint and complete one
+     * block request at a time, which keeps memory use and control flow simple. */
     int32_t recv_rc = wasmos_ipc_recv(g_reply_endpoint);
     if (recv_rc < 0) {
         g_waiting = 0;

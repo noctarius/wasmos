@@ -2,6 +2,13 @@
 #include "wasmos/api.h"
 #include "wasmos_driver_abi.h"
 
+/*
+ * Minimal PIO ATA driver used for the early storage bootstrap path. It only
+ * supports identify and read requests, which is enough for the FAT driver to
+ * mount the ESP and for the rest of the system to move from preloaded modules
+ * to filesystem-backed loading.
+ */
+
 #define ATA_PRIMARY_BASE 0x1F0
 #define ATA_PRIMARY_CTRL 0x3F6
 
@@ -52,6 +59,8 @@ ata_wait_not_busy(void)
 static int
 ata_wait_drq(void)
 {
+    /* Polling is acceptable here because the driver is intentionally tiny and
+     * only used in the single-disk bootstrap path. */
     for (uint32_t i = 0; i < 100000; ++i) {
         uint8_t status = ata_read_status();
         if (status & ATA_SR_ERR) {
@@ -111,6 +120,8 @@ ata_read_lba28(uint32_t lba, uint8_t count, uint32_t buffer_phys)
     wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_LBA2, (uint8_t)((lba >> 16) & 0xFF));
     wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_COMMAND, ATA_CMD_READ_SECTORS);
 
+    /* Reads are staged through a local 512-byte sector buffer and then copied
+     * into the shared block buffer owned by the kernel/consumer side. */
     for (uint8_t sector = 0; sector < count; ++sector) {
         if (ata_wait_drq() != 0) {
             return -1;
@@ -200,6 +211,8 @@ initialize(int32_t block_endpoint,
         g_present = 1;
     }
 
+    /* Drivers are long-running processes: initialize once, then block in the
+     * IPC loop forever. */
     for (;;) {
         int32_t recv_rc = wasmos_ipc_recv(g_block_endpoint);
         if (recv_rc < 0) {

@@ -5,6 +5,12 @@
 #include "wasmos/api.h"
 #include "wasmos_driver_abi.h"
 
+/*
+ * The CLI is a small user-space shell used both for manual interaction and as a
+ * regression target. It is intentionally synchronous from the user's point of
+ * view but yields while idle so background processes continue to run.
+ */
+
 typedef enum {
     CLI_PHASE_INIT = 0,
     CLI_PHASE_PROMPT,
@@ -82,6 +88,8 @@ console_write(const char *s)
 static void
 console_prompt(void)
 {
+    /* Keep the prompt formatting in one place so cwd handling stays consistent
+     * across command execution and asynchronous command completions. */
     if (g_cwd[0]) {
         console_write(g_cwd);
         console_write(" ");
@@ -202,6 +210,8 @@ cli_send_fs(int32_t type, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t 
     if (g_fs_endpoint < 0 || g_reply_endpoint < 0) {
         return -1;
     }
+    /* The CLI tracks one outstanding request at a time, which keeps the state
+     * machine small and makes the Python QEMU tests deterministic. */
     int32_t req_id = g_request_id++;
     if (wasmos_ipc_send(g_fs_endpoint,
                         g_reply_endpoint,

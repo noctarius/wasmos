@@ -50,6 +50,7 @@ class HelloAssemblyScriptTest(unittest.TestCase):
                 b"Hello from AssemblyScript on WASMOS!",
                 b"Entry: main, runtime: stub",
                 b"startup.nsh readable: true",
+                b"long filename write: true",
             ],
         )
 

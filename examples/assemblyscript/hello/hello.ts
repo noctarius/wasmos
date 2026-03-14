@@ -1,12 +1,8 @@
-import { fs, runMain, std } from "../../../lib/libc/assemblyscript/wasmos";
-
-export function wasmos_main(arg0: i32, arg1: i32, arg2: i32, arg3: i32): i32 {
-  return runMain(main, arg0, arg1, arg2, arg3);
-}
+import { fs, std } from "./wasmos";
 
 let printed = false;
 
-function main(args: Array<string>): i32 {
+export function main(args: Array<string>): i32 {
   if (args.length != 0) {
     std.println("unexpected args");
   }

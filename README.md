@@ -73,7 +73,7 @@ cmake --build build --target assemblyscript_examples
 
 The sample uses `asc` with release/size settings and the `stub` runtime (no GC).
 The AssemblyScript shim in `lib/libc/assemblyscript/wasmos.ts` now exposes AssemblyScript-facing `std` and `fs` wrappers so AssemblyScript modules can use shared libc-style behavior without binding directly to the raw WASMOS C-shaped import surface. The shim no longer keeps free-function compatibility aliases for console output helpers such as `putsn`, and exposes a namespaced `std.printf` entry point for preformatted output.
-AssemblyScript apps call a regular `main(args: Array<string>): i32`; the sample keeps a one-line `wasmos_main` trampoline only because `asc` does not automatically re-export imported wrapper symbols.
+AssemblyScript apps now export only `main(args: Array<string>): i32`. The build stages a toolchain-owned root module from `lib/libc/assemblyscript/runtime.ts` that exports the ABI-facing `wasmos_main` entry and delegates into the app's exported `main`.
 
 There is also a minimal C-based example at `examples/c/hello/hello_c.c`, packed as `hello_c.wasmosapp`.
 The C app wrapper in `lib/libc/src/startup.c` now exports `wasmos_main`, stores the raw startup slots for `wasmos_startup_arg(index)`, and calls the user-facing `int main(int argc, char **argv)`.

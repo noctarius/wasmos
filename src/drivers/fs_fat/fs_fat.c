@@ -17,6 +17,7 @@
 #define FAT_MAX_OPEN_FILES 16u
 #define FAT_MAX_PATH 128u
 #define FAT_OPEN_APPEND 0x0008
+#define FAT_OPEN_CREAT 0x0040
 #define FAT_OPEN_TRUNC 0x0200
 #define FAT_WAITING 1
 
@@ -167,6 +168,19 @@ static int fat_set_open_file_offset(fat_open_file_t *file, uint32_t offset, uint
 static int fat_reposition_open_file(fat_open_file_t *file, uint32_t offset);
 static int fat_sync_block_write(uint32_t lba);
 static int fat_store_open_file_size(fat_open_file_t *file, uint32_t size);
+static int fat_resolve_parent_dir(const char *path,
+                                  uint32_t *out_dir_lba,
+                                  uint32_t *out_dir_sectors,
+                                  uint8_t *out_root,
+                                  char *out_name,
+                                  uint32_t out_name_len);
+static int fat_encode_short_name(const char *name, uint8_t out[11]);
+static int fat_find_free_dir_slot(uint32_t dir_lba,
+                                  uint32_t dir_sectors,
+                                  uint32_t entry_limit,
+                                  uint32_t *out_sector,
+                                  uint32_t *out_index);
+static int fat_create_empty_file(const char *path, fat_dir_entry_info_t *out);
 
 typedef struct {
     uint8_t in_use;
@@ -860,7 +874,7 @@ fat_handle_open(void)
     uint32_t path_len = (uint32_t)g_fs_req.arg0;
     int32_t access_mode = g_fs_req.arg1 & 1;
 
-    if ((g_fs_req.arg1 & ~((int32_t)FAT_OPEN_APPEND | (int32_t)FAT_OPEN_TRUNC | 1)) != 0 ||
+    if ((g_fs_req.arg1 & ~((int32_t)FAT_OPEN_APPEND | (int32_t)FAT_OPEN_CREAT | (int32_t)FAT_OPEN_TRUNC | 1)) != 0 ||
         path_len == 0 || path_len >= sizeof(path)) {
         return -1;
     }
@@ -876,7 +890,12 @@ fat_handle_open(void)
     }
     path[path_len] = '\0';
 
-    if (fat_resolve_path(path, &entry) != 0 || !entry.valid || (entry.attr & 0x10)) {
+    if (fat_resolve_path(path, &entry) != 0 || !entry.valid) {
+        if ((g_fs_req.arg1 & FAT_OPEN_CREAT) == 0 || fat_create_empty_file(path, &entry) != 0) {
+            return -1;
+        }
+    }
+    if (entry.attr & 0x10) {
         return -1;
     }
 
@@ -947,6 +966,235 @@ fat_store_open_file_size(fat_open_file_t *file, uint32_t size)
     }
 
     file->size = size;
+    return 0;
+}
+
+static int
+fat_resolve_parent_dir(const char *path,
+                       uint32_t *out_dir_lba,
+                       uint32_t *out_dir_sectors,
+                       uint8_t *out_root,
+                       char *out_name,
+                       uint32_t out_name_len)
+{
+    uint8_t current_root = 1;
+    uint32_t current_lba = g_root_dir_lba;
+    uint32_t current_sectors = g_root_dir_sectors;
+    uint32_t pos = 0;
+
+    if (!path || !out_dir_lba || !out_dir_sectors || !out_root || !out_name || out_name_len < 2) {
+        return -1;
+    }
+    if (g_root_entry_count == 0 || g_root_dir_sectors == 0) {
+        return -1;
+    }
+
+    if (path[0] != '\0' && path[0] != '/' && g_fs_req.source == g_cwd_source && !g_cwd_root && g_dir_lba != 0) {
+        current_root = 0;
+        current_lba = g_dir_lba;
+        current_sectors = g_dir_sectors;
+    }
+
+    for (;;) {
+        char component[32];
+        fat_dir_entry_info_t entry = { 0 };
+        int rc = fat_path_next_component(path, &pos, component, sizeof(component));
+        if (rc <= 0) {
+            return -1;
+        }
+        if (component[0] == '.' && component[1] == '\0') {
+            if (!fat_path_has_more(path, pos)) {
+                return -1;
+            }
+            continue;
+        }
+        if (component[0] == '.' && component[1] == '.' && component[2] == '\0') {
+            current_root = 1;
+            current_lba = g_root_dir_lba;
+            current_sectors = g_root_dir_sectors;
+            if (!fat_path_has_more(path, pos)) {
+                return -1;
+            }
+            continue;
+        }
+        if (!fat_path_has_more(path, pos)) {
+            uint32_t i = 0;
+            while (component[i] && i + 1 < out_name_len) {
+                out_name[i] = component[i];
+                i++;
+            }
+            if (component[i] != '\0') {
+                return -1;
+            }
+            out_name[i] = '\0';
+            *out_dir_lba = current_lba;
+            *out_dir_sectors = current_sectors;
+            *out_root = current_root;
+            return 0;
+        }
+        if (fat_find_in_dir(current_lba,
+                            current_sectors,
+                            fat_dir_entry_limit(current_root, current_sectors),
+                            component,
+                            &entry) != 0) {
+            return -1;
+        }
+        if (!(entry.attr & 0x10) || entry.cluster < 2) {
+            return -1;
+        }
+        current_root = 0;
+        current_lba = fat_lba_for_cluster(entry.cluster);
+        current_sectors = g_sectors_per_cluster;
+        if (current_lba == 0 || current_sectors == 0) {
+            return -1;
+        }
+    }
+}
+
+static int
+fat_encode_short_name(const char *name, uint8_t out[11])
+{
+    uint32_t base_len = 0;
+    uint32_t ext_len = 0;
+    uint32_t i = 0;
+    uint32_t dot_pos = 0xFFFFFFFFu;
+
+    if (!name || !out || name[0] == '\0') {
+        return -1;
+    }
+
+    while (name[i]) {
+        char c = name[i];
+        if (c == '.') {
+            if (dot_pos != 0xFFFFFFFFu || i == 0 || name[i + 1] == '\0') {
+                return -1;
+            }
+            dot_pos = i;
+        } else if (!((c >= 'a' && c <= 'z') ||
+                     (c >= 'A' && c <= 'Z') ||
+                     (c >= '0' && c <= '9') ||
+                     c == '_' || c == '-')) {
+            return -1;
+        }
+        i++;
+    }
+
+    if (dot_pos == 0xFFFFFFFFu) {
+        base_len = i;
+    } else {
+        base_len = dot_pos;
+        ext_len = i - dot_pos - 1u;
+    }
+    if (base_len == 0 || base_len > 8 || ext_len > 3) {
+        return -1;
+    }
+
+    for (i = 0; i < 11; ++i) {
+        out[i] = ' ';
+    }
+    for (i = 0; i < base_len; ++i) {
+        out[i] = (uint8_t)to_upper(name[i]);
+    }
+    for (i = 0; i < ext_len; ++i) {
+        out[8 + i] = (uint8_t)to_upper(name[dot_pos + 1u + i]);
+    }
+
+    /* TODO: Add LFN create support instead of rejecting names outside 8.3. */
+    return 0;
+}
+
+static int
+fat_find_free_dir_slot(uint32_t dir_lba,
+                       uint32_t dir_sectors,
+                       uint32_t entry_limit,
+                       uint32_t *out_sector,
+                       uint32_t *out_index)
+{
+    uint32_t entries_left = entry_limit;
+
+    if (!out_sector || !out_index) {
+        return -1;
+    }
+
+    for (uint32_t sector = 0; sector < dir_sectors && entries_left > 0; ++sector) {
+        uint32_t entries_per_sector = g_bytes_per_sector / 32u;
+        uint32_t entries_total = entries_left < entries_per_sector ? entries_left : entries_per_sector;
+
+        if (fat_sync_block_read(dir_lba + sector) != 0) {
+            return -1;
+        }
+        for (uint32_t i = 0; i < entries_total; ++i) {
+            uint8_t *ent = g_sector_buf + i * 32u;
+            if (ent[0] == 0x00 || ent[0] == 0xE5) {
+                *out_sector = sector;
+                *out_index = i;
+                return 0;
+            }
+        }
+        entries_left -= entries_total;
+    }
+
+    return -1;
+}
+
+static int
+fat_create_empty_file(const char *path, fat_dir_entry_info_t *out)
+{
+    uint32_t dir_lba = 0;
+    uint32_t dir_sectors = 0;
+    uint32_t slot_sector = 0;
+    uint32_t slot_index = 0;
+    uint8_t root = 1;
+    uint8_t short_name[11];
+    char name[32];
+    uint8_t *ent;
+
+    if (!path || !out) {
+        return -1;
+    }
+    if (fat_resolve_parent_dir(path, &dir_lba, &dir_sectors, &root, name, sizeof(name)) != 0) {
+        return -1;
+    }
+    if (fat_encode_short_name(name, short_name) != 0) {
+        return -1;
+    }
+    if (fat_find_in_dir(dir_lba,
+                        dir_sectors,
+                        fat_dir_entry_limit(root, dir_sectors),
+                        name,
+                        out) == 0 && out->valid) {
+        return 0;
+    }
+    if (fat_find_free_dir_slot(dir_lba,
+                               dir_sectors,
+                               fat_dir_entry_limit(root, dir_sectors),
+                               &slot_sector,
+                               &slot_index) != 0) {
+        return -1;
+    }
+    if (fat_sync_block_read(dir_lba + slot_sector) != 0) {
+        return -1;
+    }
+
+    ent = g_sector_buf + slot_index * 32u;
+    for (uint32_t i = 0; i < 32; ++i) {
+        ent[i] = 0;
+    }
+    for (uint32_t i = 0; i < 11; ++i) {
+        ent[i] = short_name[i];
+    }
+
+    if (fat_sync_block_write(dir_lba + slot_sector) != 0) {
+        return -1;
+    }
+
+    out->valid = 1;
+    out->attr = 0;
+    out->cluster = 0;
+    out->size = 0;
+    out->dir_lba = dir_lba;
+    out->dir_sector = slot_sector;
+    out->dir_index = slot_index;
     return 0;
 }
 

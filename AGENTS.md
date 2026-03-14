@@ -9,6 +9,9 @@ This repository uses Codex CLI to assist with development. Follow these conventi
 ## Always Do
 - Read `README.md` and `ARCHITECTURE.md` at the start of a new task.
 - Keep `README.md` and `ARCHITECTURE.md` updated with meaningful changes and new behaviors.
+- Add a short `TODO` or `FIXME` comment at the relevant source location when you
+  identify a real known gap or deferred issue that is intentionally left in
+  place.
 - Make small, focused changes that preserve the project’s minimalism.
 - Prefer `rg` for searching and `cmake` for build orchestration.
 - Use `clang`/`lld` for UEFI targets (AppleClang is insufficient).

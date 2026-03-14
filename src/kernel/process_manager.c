@@ -435,7 +435,9 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
         slot->entry_arg0 = IPC_ENDPOINT_NONE;
     }
 
+    preempt_disable();
     if (process_spawn_as(parent_pid, slot->name, pm_app_entry, slot, out_pid) != 0) {
+        preempt_enable();
         slot->in_use = 0;
         return -1;
     }
@@ -446,6 +448,7 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     if (name_eq(slot->name, "ata") && g_pm.block_endpoint == IPC_ENDPOINT_NONE) {
         process_t *proc = process_get(*out_pid);
         if (!proc || ipc_endpoint_create(proc->context_id, &g_pm.block_endpoint) != IPC_OK) {
+            preempt_enable();
             slot->in_use = 0;
             return -1;
         }
@@ -454,11 +457,13 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     if (name_eq(slot->name, "fs-fat") && g_pm.fs_endpoint == IPC_ENDPOINT_NONE) {
         process_t *proc = process_get(*out_pid);
         if (!proc || ipc_endpoint_create(proc->context_id, &g_pm.fs_endpoint) != IPC_OK) {
+            preempt_enable();
             slot->in_use = 0;
             return -1;
         }
         slot->entry_arg1 = g_pm.fs_endpoint;
     }
+    preempt_enable();
     return 0;
 }
 
@@ -510,6 +515,13 @@ pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t *blob, uint32_t blob_siz
         }
         slot->entry_argc = 4;
         slot->entry_arg0 = chardev_endpoint;
+    } else if (name_eq(slot->name, "cli")) {
+        if (g_pm.proc_endpoint == IPC_ENDPOINT_NONE || g_pm.fs_endpoint == IPC_ENDPOINT_NONE) {
+            slot->in_use = 0;
+            return -1;
+        }
+        slot->entry_arg0 = g_pm.proc_endpoint;
+        slot->entry_arg1 = g_pm.fs_endpoint;
     }
 
     if (process_spawn_as(parent_pid, slot->name, pm_app_entry, slot, out_pid) != 0) {

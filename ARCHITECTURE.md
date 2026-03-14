@@ -200,6 +200,7 @@ Scope: sysinit reads config from EFI disk, starts PM, drivers, FAT32, CLI.
 Definition of Done: sysinit loads config, spawns core services in order, registers names.
 Tests: QEMU boot shows sysinit-driven startup and CLI prompt.
 Status: user-space `sysinit` WASMOS-APP spawns `chardev-client` via the `proc` endpoint; config/FS-driven startup is still pending.
+Current boot flow refinement: the bootloader still preloads `sysinit` and the storage bootstrap chain (`hw-discovery`, `ata`, `fs-fat`), but `sysinit` now asks the process manager to load `cli` from FAT by name once `fs-fat` is available.
 
 8. Storage Stack
 Scope: virtio, ATA, SATA block driver + FAT32 filesystem service.

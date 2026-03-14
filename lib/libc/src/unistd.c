@@ -88,8 +88,20 @@ open(const char *path, int flags, ...)
 {
     size_t path_len;
     int32_t fd = -1;
+    int access_mode;
 
-    if (!path || (flags != O_RDONLY && flags != O_WRONLY)) {
+    if (!path) {
+        return -1;
+    }
+
+    access_mode = flags & O_WRONLY;
+    if ((flags & ~(O_WRONLY | O_TRUNC)) != 0) {
+        return -1;
+    }
+    if (access_mode != O_RDONLY && access_mode != O_WRONLY) {
+        return -1;
+    }
+    if ((flags & O_TRUNC) && access_mode != O_WRONLY) {
         return -1;
     }
 
@@ -262,8 +274,8 @@ fopen(const char *path, const char *mode)
 {
     int fd;
 
-    /* TODO: Add stdio write modes once fs-fat supports create/truncate/append
-     * instead of the current overwrite-only low-level write path. */
+    /* TODO: Add stdio write modes once fs-fat supports create/append and the
+     * rest of the write-mode matrix beyond the current low-level path. */
     if (!mode || (strcmp(mode, "r") != 0 && strcmp(mode, "rb") != 0)) {
         return NULL;
     }

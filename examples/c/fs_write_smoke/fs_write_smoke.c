@@ -8,11 +8,15 @@ int
 main(int argc, char **argv)
 {
     static char grow_pattern[1024];
+    static const char stdio_initial[] = "STDIO-WRITE\n";
+    static const char stdio_append[] = "APPEND\n";
+    static const char stdio_expected[] = "STDIO-WRITE\nAPPEND\n";
     static const char original[] = "WASMOS-WRITE-SMOKE-ORIGINAL\n";
     static const char append_suffix[] = "APPEND\n";
     static const char appended[] = "WASMOS-WRITE-SMOKE-ORIGINAL\nAPPEND\n";
     static const char updated[] = "TRUNCATED\n";
     char buffer[sizeof(grow_pattern)];
+    FILE *stream;
     struct stat st;
     int fd;
     ssize_t rc;
@@ -80,6 +84,37 @@ main(int argc, char **argv)
     close(fd);
     if (rc != (ssize_t)sizeof(grow_pattern) || memcmp(buffer, grow_pattern, sizeof(grow_pattern)) != 0) {
         puts("fs-write-smoke: grow verify failed");
+        return 1;
+    }
+    stream = fopen("/stdio.txt", "wb");
+    if (!stream) {
+        puts("fs-write-smoke: stdio write open failed");
+        return 1;
+    }
+    if (fwrite(stdio_initial, 1u, sizeof(stdio_initial) - 1u, stream) != sizeof(stdio_initial) - 1u ||
+        fclose(stream) != 0) {
+        puts("fs-write-smoke: stdio write failed");
+        return 1;
+    }
+    stream = fopen("/stdio.txt", "ab");
+    if (!stream) {
+        puts("fs-write-smoke: stdio append open failed");
+        return 1;
+    }
+    if (fwrite(stdio_append, 1u, sizeof(stdio_append) - 1u, stream) != sizeof(stdio_append) - 1u ||
+        fclose(stream) != 0) {
+        puts("fs-write-smoke: stdio append failed");
+        return 1;
+    }
+    stream = fopen("/stdio.txt", "rb");
+    if (!stream) {
+        puts("fs-write-smoke: stdio read open failed");
+        return 1;
+    }
+    if (fread(buffer, 1u, sizeof(stdio_expected) - 1u, stream) != sizeof(stdio_expected) - 1u ||
+        fclose(stream) != 0 ||
+        memcmp(buffer, stdio_expected, sizeof(stdio_expected) - 1u) != 0) {
+        puts("fs-write-smoke: stdio verify failed");
         return 1;
     }
 

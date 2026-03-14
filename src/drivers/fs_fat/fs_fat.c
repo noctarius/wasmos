@@ -184,7 +184,6 @@ static int fat_find_free_dir_slot(uint32_t dir_lba,
 static int fat_create_empty_file(const char *path, fat_dir_entry_info_t *out);
 static int fat_read_fat_entry(uint16_t cluster, uint16_t *out_value);
 static int fat_write_fat_entry(uint16_t cluster, uint16_t value);
-static int fat_zero_cluster(uint16_t cluster);
 static int fat_find_free_cluster(uint16_t *out_cluster);
 static int fat_last_cluster_in_chain(uint16_t first_cluster, uint16_t *out_cluster);
 static int fat_append_cluster_to_file(fat_open_file_t *file);
@@ -919,10 +918,10 @@ fat_handle_open(void)
         return -1;
     }
     file->flags = g_fs_req.arg1;
-    file->first_cluster = entry.size == 0 ? 0 : entry.cluster;
-    file->current_cluster = entry.size == 0 ? 0 : entry.cluster;
+    file->first_cluster = entry.cluster;
+    file->current_cluster = entry.cluster;
     file->current_sector = 0;
-    file->file_lba = entry.size == 0 ? 0 : fat_lba_for_cluster(entry.cluster);
+    file->file_lba = fat_lba_for_cluster(entry.cluster);
     file->size = entry.size;
     file->capacity = fat_cluster_chain_capacity(entry.cluster);
     file->offset = 0;
@@ -1334,6 +1333,7 @@ fat_handle_write_open_file(void)
         uint32_t chunk = g_bytes_per_sector - sector_offset;
         uint16_t next_cluster = 0;
         uint32_t next_end = 0;
+        uint32_t old_size = file->size;
 
         if (chunk > requested - done) {
             chunk = requested - done;
@@ -1350,7 +1350,11 @@ fat_handle_write_open_file(void)
             }
         }
         if (sector_offset != 0 || chunk != g_bytes_per_sector) {
-            if (fat_sync_block_read(file->file_lba + file->current_sector) != 0) {
+            if (old_size <= file->offset && sector_offset == 0) {
+                for (uint32_t i = 0; i < g_bytes_per_sector; ++i) {
+                    g_sector_buf[i] = 0;
+                }
+            } else if (fat_sync_block_read(file->file_lba + file->current_sector) != 0) {
                 return -1;
             }
         }
@@ -1911,25 +1915,6 @@ fat_cluster_chain_capacity(uint16_t first_cluster)
 }
 
 static int
-fat_zero_cluster(uint16_t cluster)
-{
-    uint32_t lba = fat_lba_for_cluster(cluster);
-
-    if (lba == 0) {
-        return -1;
-    }
-    for (uint32_t sector = 0; sector < g_sectors_per_cluster; ++sector) {
-        for (uint32_t i = 0; i < g_bytes_per_sector; ++i) {
-            g_sector_buf[i] = 0;
-        }
-        if (fat_sync_block_write(lba + sector) != 0) {
-            return -1;
-        }
-    }
-    return 0;
-}
-
-static int
 fat_find_free_cluster(uint16_t *out_cluster)
 {
     uint32_t total_clusters = fat_total_clusters();
@@ -1985,10 +1970,6 @@ fat_append_cluster_to_file(fat_open_file_t *file)
     if (fat_write_fat_entry(new_cluster, end_marker) != 0) {
         return -1;
     }
-    if (fat_zero_cluster(new_cluster) != 0) {
-        (void)fat_write_fat_entry(new_cluster, 0);
-        return -1;
-    }
 
     if (file->first_cluster < 2) {
         if (fat_store_open_file_cluster(file, new_cluster) != 0) {
@@ -2025,7 +2006,10 @@ fat_ensure_open_file_capacity(fat_open_file_t *file, uint32_t min_size)
             return -1;
         }
     }
-    return fat_set_open_file_offset(file, saved_offset, file->capacity);
+    if (fat_set_open_file_offset(file, saved_offset, file->capacity) != 0) {
+        return -1;
+    }
+    return 0;
 }
 
 static int
@@ -2042,6 +2026,8 @@ fat_set_open_file_offset(fat_open_file_t *file, uint32_t offset, uint32_t limit)
 {
     uint32_t cluster_bytes;
     uint32_t cluster_skip;
+    uint32_t cluster_offset;
+    uint32_t at_limit_boundary = 0;
 
     if (!file || offset > limit) {
         return -1;
@@ -2060,12 +2046,14 @@ fat_set_open_file_offset(fat_open_file_t *file, uint32_t offset, uint32_t limit)
 
     cluster_bytes = (uint32_t)g_sectors_per_cluster * g_bytes_per_sector;
     cluster_skip = offset / cluster_bytes;
-    if (offset % cluster_bytes == 0) {
+    cluster_offset = offset % cluster_bytes;
+    at_limit_boundary = offset > 0 && offset == limit && cluster_offset == 0;
+    if (at_limit_boundary) {
         cluster_skip--;
     }
     file->current_cluster = file->first_cluster;
-    file->current_sector = (offset % cluster_bytes) / g_bytes_per_sector;
-    if (offset % cluster_bytes == 0) {
+    file->current_sector = cluster_offset / g_bytes_per_sector;
+    if (at_limit_boundary) {
         file->current_sector = g_sectors_per_cluster - 1u;
     }
 

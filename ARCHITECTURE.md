@@ -37,8 +37,9 @@ The current tree already boots into a usable user-space stack:
   libc `open/write` path, plus `O_TRUNC` size updates, `O_APPEND` writes for
   existing files within their current cluster chain, and `O_CREAT` for
   zero-length 8.3 files in existing directories; FAT12/16 cluster allocation
-  now grows files and newly created files, while broader stdio-mode coverage
-  remains future work.
+  now grows files and newly created files, and the C stdio shim now exposes
+  `fopen`/`fwrite` write and append modes. Update modes such as `r+`/`w+`/`a+`
+  remain future work.
 - The runtime host uses `wasm3`, not WAMR.
 
 ## Architectural Direction

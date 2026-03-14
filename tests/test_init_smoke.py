@@ -41,6 +41,10 @@ class InitSmokeTests(unittest.TestCase):
     def test_init_smoke_runs(self):
         self._cmd_expect("exec init-smoke", b"init-smoke: init done")
 
+    def test_sysinit_starts_configured_targets(self):
+        self.assertIn(b"[wasmos-app] entry ok chardev-client", self.session.buf)
+        self._cmd_expect("ps", b"cli (pid")
+
 
 if __name__ == "__main__":
     unittest.main()

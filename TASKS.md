@@ -48,13 +48,11 @@ IMPORTANT: Keep this file aligned with `README.md` and `ARCHITECTURE.md`.
 - Extend `fs-fat` beyond the current small-file/read-only path.
 - Add multi-cluster file reads.
 - Add write, seek, and stat support where appropriate.
-- Teach `sysinit` to consume the generated boot-config blob instead of using
-  fixed process names.
 - Decide whether initfs should eventually carry additional early-userland data
   beyond bootstrap apps and boot config.
 
 ## Documentation and Tests
 - Keep source comments aligned with architecture decisions as internals evolve.
 - Add tests for any new IPC notification or shared-memory paths.
-- Add tests for boot-config import access and future config-driven startup once
-  implemented.
+- Add tests for malformed boot-config handling and future startup-policy
+  expansion beyond the current `sysinit.spawn` list.

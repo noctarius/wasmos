@@ -17,18 +17,95 @@ static int32_t g_proc_endpoint = -1;
 static int32_t g_target_index = 0;
 static int32_t (*volatile g_console_write)(int32_t, int32_t);
 static int32_t (*volatile g_debug_mark)(int32_t);
-
-static const char *g_targets[] = {
-    "chardev-client",
-    "cli"
-};
-/* TODO: Replace this fixed target list with parsing of the generated boot
- * config blob exposed through wasmos_boot_config_* so sysinit startup policy
- * is data-driven instead of hardcoded here. */
+static uint8_t g_boot_config[512];
+static int32_t g_target_count = 0;
+static const char *g_targets[16];
+/* TODO: Lift the small fixed limits once sysinit needs larger startup sets or
+ * richer boot policy than the current manifest-driven name list. */
 
 #ifndef WASMOS_TRACE
 #define WASMOS_TRACE 0
 #endif
+
+#define BOOT_CONFIG_MAGIC "WCFG0001"
+#define BOOT_CONFIG_VERSION 1u
+
+static uint32_t
+load_u32_le(const uint8_t *src)
+{
+    if (!src) {
+        return 0;
+    }
+    return ((uint32_t)src[0]) |
+           ((uint32_t)src[1] << 8) |
+           ((uint32_t)src[2] << 16) |
+           ((uint32_t)src[3] << 24);
+}
+
+static int
+load_boot_targets(void)
+{
+    int32_t size = wasmos_boot_config_size();
+    uint32_t version;
+    uint32_t boot_count;
+    uint32_t sysinit_count;
+    uint32_t string_table_size;
+    uint32_t offsets_base;
+    uint32_t strings_base;
+
+    if (size < 24 || size > (int32_t)sizeof(g_boot_config)) {
+        return -1;
+    }
+    if (wasmos_boot_config_copy((int32_t)(uintptr_t)g_boot_config, size, 0) != 0) {
+        return -1;
+    }
+    if (memcmp(g_boot_config, BOOT_CONFIG_MAGIC, 8) != 0) {
+        return -1;
+    }
+
+    version = load_u32_le(g_boot_config + 8);
+    boot_count = load_u32_le(g_boot_config + 12);
+    sysinit_count = load_u32_le(g_boot_config + 16);
+    string_table_size = load_u32_le(g_boot_config + 20);
+    if (version != BOOT_CONFIG_VERSION || sysinit_count > (uint32_t)(sizeof(g_targets) / sizeof(g_targets[0]))) {
+        return -1;
+    }
+
+    offsets_base = 24u + boot_count * 4u;
+    strings_base = 24u + (boot_count + sysinit_count) * 4u;
+    if (strings_base > (uint32_t)size || string_table_size > (uint32_t)size ||
+        strings_base + string_table_size > (uint32_t)size) {
+        return -1;
+    }
+
+    g_target_count = 0;
+    for (uint32_t i = 0; i < sysinit_count; ++i) {
+        uint32_t offset_pos = offsets_base + i * 4u;
+        uint32_t string_offset;
+        uint32_t j;
+
+        if (offset_pos + 4u > (uint32_t)size) {
+            return -1;
+        }
+        string_offset = load_u32_le(g_boot_config + offset_pos);
+        if (string_offset >= string_table_size) {
+            return -1;
+        }
+
+        g_targets[g_target_count] = (const char *)(g_boot_config + strings_base + string_offset);
+        for (j = string_offset; j < string_table_size; ++j) {
+            if (g_boot_config[strings_base + j] == '\0') {
+                break;
+            }
+        }
+        if (j == string_table_size) {
+            return -1;
+        }
+        g_target_count++;
+    }
+
+    return 0;
+}
 
 static void
 stall_forever(void)
@@ -200,14 +277,19 @@ initialize(int32_t proc_endpoint,
 
     g_proc_endpoint = proc_endpoint;
     g_target_index = 0;
+    if (load_boot_targets() != 0) {
+        log_line("[sysinit] invalid boot config\n");
+        stall_forever();
+    }
     trace_line("[sysinit] start\n");
     trace_mark(0x1103);
     trace_line("[sysinit] enter loop\n");
     trace_mark(0x1104);
-    /* The loop is intentionally linear and small: ensure the known targets are
-     * running, then idle forever waiting for any future extension point. */
+    /* The loop is intentionally linear and small: ensure the configured
+     * late-start targets are running, then idle forever waiting for any future
+     * extension point. */
     for (;;) {
-        if (g_target_index >= (int32_t)(sizeof(g_targets) / sizeof(g_targets[0]))) {
+        if (g_target_index >= g_target_count) {
             trace_line("[sysinit] idle wait\n");
             (void)wasmos_ipc_recv(g_reply_endpoint);
             continue;

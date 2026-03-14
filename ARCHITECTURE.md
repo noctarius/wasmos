@@ -27,10 +27,10 @@ The current tree already boots into a usable user-space stack:
 - A kernel-owned `init` process starts `hw-discovery`, waits for `fs-fat` to
   become ready, and then asks the process manager to load `sysinit` from the
   FAT filesystem.
-- `sysinit` is intentionally small and only starts late user processes
-  (`chardev-client` and `cli`).
+- `sysinit` is intentionally small and only starts the late user processes
+  listed in the generated boot-config blob.
 - The initfs also carries a generated binary boot-config blob derived from
-  `scripts/initfs.toml` for future config-driven startup.
+  `scripts/initfs.toml` for config-driven startup.
 - The runtime host uses `wasm3`, not WAMR.
 
 ## Architectural Direction
@@ -133,14 +133,15 @@ Current bootstrap use:
 6. `hw-discovery` starts `ata` and `fs-fat`.
 7. `init` waits for FAT readiness, then loads `sysinit` from disk through the
    process manager.
-8. `sysinit` starts late user processes.
+8. `sysinit` reads the boot config and starts the configured late user
+   processes.
 9. The CLI becomes the visible interactive shell.
 
 ### Practical Boot Ownership
 - Bootloader owns UEFI interaction and boot-time file I/O.
 - Kernel owns core mechanisms and early bootstrap orchestration.
 - `init` owns system bootstrap sequencing once the kernel is alive.
-- `sysinit` owns late user process startup only.
+- `sysinit` owns late user process startup policy from boot config only.
 
 This split is intentional: it keeps bootloader policy minimal and prevents
 `sysinit` from becoming a second bootstrap coordinator.
@@ -405,7 +406,7 @@ This keeps the external ABI stable while presenting language-native entrypoints.
   - starts the early storage driver chain
 - `sysinit`
   - intentionally narrow
-  - starts late user processes only
+  - starts late user processes from the generated boot config
 - `cli`
   - interactive shell over `proc` and `fs`
 
@@ -418,7 +419,7 @@ Current startup chain:
 4. `hw-discovery` starts `ata` and `fs-fat`
 5. kernel `init` waits for a successful FAT readiness probe
 6. kernel `init` loads `sysinit` from disk via PM
-7. `sysinit` loads `chardev-client` and `cli` from disk
+7. `sysinit` loads the configured `sysinit.spawn` processes from disk
 
 This is the current stable bootstrap baseline.
 
@@ -441,7 +442,8 @@ Current use:
 - the bootloader exposes the blob through `boot_info_t`
 - wasm processes can read it through `wasmos_boot_config_size()` and
   `wasmos_boot_config_copy()`
-- no service consumes it yet, so startup policy is not data-driven today
+- `sysinit` validates and consumes the `sysinit.spawn` string list for its
+  late-start process policy
 
 ### What Is Still Missing
 - driver-manager
@@ -526,7 +528,7 @@ These remain visible even with tracing disabled:
 - service registry
 - supervision / restart policy
 - capability-granted device access
-- config-driven startup consumption
+- broader config-driven startup policy beyond the current `sysinit.spawn` list
 
 Open implementation work is tracked in `TASKS.md`.
 

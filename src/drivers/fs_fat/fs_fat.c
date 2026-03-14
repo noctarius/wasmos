@@ -168,6 +168,7 @@ static int fat_set_open_file_offset(fat_open_file_t *file, uint32_t offset, uint
 static int fat_reposition_open_file(fat_open_file_t *file, uint32_t offset);
 static int fat_sync_block_write(uint32_t lba);
 static int fat_store_open_file_size(fat_open_file_t *file, uint32_t size);
+static int fat_store_open_file_cluster(fat_open_file_t *file, uint16_t cluster);
 static int fat_resolve_parent_dir(const char *path,
                                   uint32_t *out_dir_lba,
                                   uint32_t *out_dir_sectors,
@@ -181,6 +182,13 @@ static int fat_find_free_dir_slot(uint32_t dir_lba,
                                   uint32_t *out_sector,
                                   uint32_t *out_index);
 static int fat_create_empty_file(const char *path, fat_dir_entry_info_t *out);
+static int fat_read_fat_entry(uint16_t cluster, uint16_t *out_value);
+static int fat_write_fat_entry(uint16_t cluster, uint16_t value);
+static int fat_zero_cluster(uint16_t cluster);
+static int fat_find_free_cluster(uint16_t *out_cluster);
+static int fat_last_cluster_in_chain(uint16_t first_cluster, uint16_t *out_cluster);
+static int fat_append_cluster_to_file(fat_open_file_t *file);
+static int fat_ensure_open_file_capacity(fat_open_file_t *file, uint32_t min_size);
 
 typedef struct {
     uint8_t in_use;
@@ -970,6 +978,30 @@ fat_store_open_file_size(fat_open_file_t *file, uint32_t size)
 }
 
 static int
+fat_store_open_file_cluster(fat_open_file_t *file, uint16_t cluster)
+{
+    uint8_t *ent;
+
+    if (!file || file->dir_lba == 0 || file->dir_index >= (g_bytes_per_sector / 32u)) {
+        return -1;
+    }
+    if (fat_sync_block_read(file->dir_lba + file->dir_sector) != 0) {
+        return -1;
+    }
+
+    ent = g_sector_buf + file->dir_index * 32u;
+    ent[26] = (uint8_t)(cluster & 0xFFu);
+    ent[27] = (uint8_t)((cluster >> 8) & 0xFFu);
+
+    if (fat_sync_block_write(file->dir_lba + file->dir_sector) != 0) {
+        return -1;
+    }
+
+    file->first_cluster = cluster;
+    return 0;
+}
+
+static int
 fat_resolve_parent_dir(const char *path,
                        uint32_t *out_dir_lba,
                        uint32_t *out_dir_sectors,
@@ -1268,9 +1300,9 @@ fat_handle_write_open_file(void)
 {
     fat_open_file_t *file = fat_open_file_for_fd(g_fs_req.source, g_fs_req.arg0);
     uint32_t max_buffer = (uint32_t)wasmos_fs_buffer_size();
-    uint32_t remaining;
     uint32_t requested;
     uint32_t done = 0;
+    uint32_t target_end;
 
     if (!file || fat_open_file_access_mode(file) != 1 || g_fs_req.arg1 < 0) {
         return -1;
@@ -1280,16 +1312,21 @@ fat_handle_write_open_file(void)
             return -1;
         }
     }
-
-    /* TODO: Support FAT allocation so writes can grow beyond the existing
-     * cluster chain instead of stopping at the current file capacity. */
-    remaining = file->offset < file->capacity ? file->capacity - file->offset : 0;
     requested = (uint32_t)g_fs_req.arg1;
     if (requested > max_buffer) {
         requested = max_buffer;
     }
-    if (requested > remaining) {
-        requested = remaining;
+    if (requested == 0) {
+        g_fs_resp_override = 1;
+        g_fs_resp_arg0 = 0;
+        return 0;
+    }
+    target_end = file->offset + requested;
+    if (target_end < file->offset) {
+        return -1;
+    }
+    if (fat_ensure_open_file_capacity(file, target_end) != 0) {
+        return -1;
     }
 
     while (done < requested) {
@@ -1692,18 +1729,75 @@ fat_load_fat_bytes(uint32_t fat_offset, uint8_t *out_lo, uint8_t *out_hi)
     return 0;
 }
 
+static uint16_t
+fat_end_of_chain_marker(void)
+{
+    if (g_fat_type == FAT_TYPE_12) {
+        return 0x0FFFu;
+    }
+    if (g_fat_type == FAT_TYPE_16) {
+        return 0xFFFFu;
+    }
+    return 0;
+}
+
+static uint32_t
+fat_total_clusters(void)
+{
+    uint32_t first_data = fat_first_data_lba();
+    uint32_t data_sectors;
+
+    if (first_data < g_boot_lba || g_total_sectors <= first_data - g_boot_lba || g_sectors_per_cluster == 0) {
+        return 0;
+    }
+    data_sectors = g_total_sectors - (first_data - g_boot_lba);
+    return data_sectors / g_sectors_per_cluster;
+}
+
 static int
-fat_next_cluster(uint16_t cluster, uint16_t *out_next)
+fat_store_fat_bytes(uint32_t fat_offset, uint8_t lo, uint8_t hi)
+{
+    for (uint32_t copy = 0; copy < g_fat_count; ++copy) {
+        uint32_t fat_base = g_boot_lba + g_reserved_sectors + copy * g_fat_size;
+        uint32_t fat_lba = fat_base + (fat_offset / g_bytes_per_sector);
+        uint32_t sector_offset = fat_offset % g_bytes_per_sector;
+
+        if (fat_sync_block_read(fat_lba) != 0) {
+            return -1;
+        }
+        g_sector_buf[sector_offset] = lo;
+        if (sector_offset + 1u < g_bytes_per_sector) {
+            g_sector_buf[sector_offset + 1u] = hi;
+            if (fat_sync_block_write(fat_lba) != 0) {
+                return -1;
+            }
+            continue;
+        }
+        if (fat_sync_block_write(fat_lba) != 0) {
+            return -1;
+        }
+        if (fat_sync_block_read(fat_lba + 1u) != 0) {
+            return -1;
+        }
+        g_sector_buf[0] = hi;
+        if (fat_sync_block_write(fat_lba + 1u) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int
+fat_read_fat_entry(uint16_t cluster, uint16_t *out_value)
 {
     uint8_t lo = 0;
     uint8_t hi = 0;
-    uint16_t value = 0;
-    uint32_t fat_offset = 0;
+    uint16_t value;
+    uint32_t fat_offset;
 
-    if (!out_next || cluster < 2) {
+    if (!out_value || cluster < 2) {
         return -1;
     }
-
     if (g_fat_type == FAT_TYPE_12) {
         fat_offset = cluster + (cluster / 2u);
         if (fat_load_fat_bytes(fat_offset, &lo, &hi) != 0) {
@@ -1715,36 +1809,81 @@ fat_next_cluster(uint16_t cluster, uint16_t *out_next)
         } else {
             value &= 0x0FFFu;
         }
-        if (value >= 0x0FF8u) {
-            return -1;
-        }
-        if (value < 2u) {
-            return -1;
-        }
-        *out_next = value;
+        *out_value = value;
         return 0;
     }
-
     if (g_fat_type == FAT_TYPE_16) {
         fat_offset = (uint32_t)cluster * 2u;
         if (fat_load_fat_bytes(fat_offset, &lo, &hi) != 0) {
             return -1;
         }
-        value = (uint16_t)lo | ((uint16_t)hi << 8);
-        if (value >= 0xFFF8u) {
-            return -1;
-        }
-        if (value < 2u) {
-            return -1;
-        }
-        *out_next = value;
+        *out_value = (uint16_t)lo | ((uint16_t)hi << 8);
         return 0;
     }
+    return -1;
+}
+
+static int
+fat_write_fat_entry(uint16_t cluster, uint16_t value)
+{
+    uint8_t lo = 0;
+    uint8_t hi = 0;
+    uint16_t current = 0;
+    uint16_t merged = 0;
+    uint32_t fat_offset;
+
+    if (cluster < 2) {
+        return -1;
+    }
+    if (g_fat_type == FAT_TYPE_12) {
+        fat_offset = cluster + (cluster / 2u);
+        if (fat_load_fat_bytes(fat_offset, &lo, &hi) != 0) {
+            return -1;
+        }
+        current = (uint16_t)lo | ((uint16_t)hi << 8);
+        value &= 0x0FFFu;
+        if (cluster & 1u) {
+            merged = (uint16_t)((current & 0x000Fu) | (uint16_t)(value << 4));
+        } else {
+            merged = (uint16_t)((current & 0xF000u) | value);
+        }
+        return fat_store_fat_bytes(fat_offset,
+                                   (uint8_t)(merged & 0xFFu),
+                                   (uint8_t)((merged >> 8) & 0xFFu));
+    }
+    if (g_fat_type == FAT_TYPE_16) {
+        fat_offset = (uint32_t)cluster * 2u;
+        return fat_store_fat_bytes(fat_offset,
+                                   (uint8_t)(value & 0xFFu),
+                                   (uint8_t)((value >> 8) & 0xFFu));
+    }
+    return -1;
+}
+
+static int
+fat_next_cluster(uint16_t cluster, uint16_t *out_next)
+{
+    uint16_t value = 0;
+
+    if (!out_next || cluster < 2) {
+        return -1;
+    }
+    if (fat_read_fat_entry(cluster, &value) != 0) {
+        return -1;
+    }
+    if ((g_fat_type == FAT_TYPE_12 && value >= 0x0FF8u) ||
+        (g_fat_type == FAT_TYPE_16 && value >= 0xFFF8u)) {
+        return -1;
+    }
+    if (value < 2u) {
+        return -1;
+    }
+    *out_next = value;
+    return 0;
 
     /* TODO: FAT32 needs a wider cluster type and root-directory handling
      * before cluster-chain walking can be extended beyond the current FAT12/16
      * scaffold. */
-    return -1;
 }
 
 static uint32_t
@@ -1769,6 +1908,124 @@ fat_cluster_chain_capacity(uint16_t first_cluster)
         cluster = next_cluster;
     }
     return total;
+}
+
+static int
+fat_zero_cluster(uint16_t cluster)
+{
+    uint32_t lba = fat_lba_for_cluster(cluster);
+
+    if (lba == 0) {
+        return -1;
+    }
+    for (uint32_t sector = 0; sector < g_sectors_per_cluster; ++sector) {
+        for (uint32_t i = 0; i < g_bytes_per_sector; ++i) {
+            g_sector_buf[i] = 0;
+        }
+        if (fat_sync_block_write(lba + sector) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int
+fat_find_free_cluster(uint16_t *out_cluster)
+{
+    uint32_t total_clusters = fat_total_clusters();
+
+    if (!out_cluster || total_clusters == 0) {
+        return -1;
+    }
+    for (uint32_t cluster = 2; cluster < total_clusters + 2u; ++cluster) {
+        uint16_t value = 0;
+        if (fat_read_fat_entry((uint16_t)cluster, &value) != 0) {
+            return -1;
+        }
+        if (value == 0) {
+            *out_cluster = (uint16_t)cluster;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static int
+fat_last_cluster_in_chain(uint16_t first_cluster, uint16_t *out_cluster)
+{
+    uint16_t cluster = first_cluster;
+
+    if (!out_cluster || cluster < 2) {
+        return -1;
+    }
+    for (;;) {
+        uint16_t next_cluster = 0;
+        if (fat_next_cluster(cluster, &next_cluster) != 0) {
+            *out_cluster = cluster;
+            return 0;
+        }
+        cluster = next_cluster;
+    }
+}
+
+static int
+fat_append_cluster_to_file(fat_open_file_t *file)
+{
+    uint16_t new_cluster = 0;
+    uint16_t last_cluster = 0;
+    uint16_t end_marker;
+
+    if (!file) {
+        return -1;
+    }
+    end_marker = fat_end_of_chain_marker();
+    if (end_marker == 0 || fat_find_free_cluster(&new_cluster) != 0) {
+        return -1;
+    }
+    if (fat_write_fat_entry(new_cluster, end_marker) != 0) {
+        return -1;
+    }
+    if (fat_zero_cluster(new_cluster) != 0) {
+        (void)fat_write_fat_entry(new_cluster, 0);
+        return -1;
+    }
+
+    if (file->first_cluster < 2) {
+        if (fat_store_open_file_cluster(file, new_cluster) != 0) {
+            (void)fat_write_fat_entry(new_cluster, 0);
+            return -1;
+        }
+    } else {
+        if (fat_last_cluster_in_chain(file->first_cluster, &last_cluster) != 0 ||
+            fat_write_fat_entry(last_cluster, new_cluster) != 0) {
+            (void)fat_write_fat_entry(new_cluster, 0);
+            return -1;
+        }
+    }
+
+    file->capacity += (uint32_t)g_sectors_per_cluster * g_bytes_per_sector;
+    return 0;
+}
+
+static int
+fat_ensure_open_file_capacity(fat_open_file_t *file, uint32_t min_size)
+{
+    uint32_t saved_offset;
+
+    if (!file) {
+        return -1;
+    }
+    if (min_size == 0 || file->capacity >= min_size) {
+        return 0;
+    }
+
+    saved_offset = file->offset;
+    while (file->capacity < min_size) {
+        if (fat_append_cluster_to_file(file) != 0) {
+            return -1;
+        }
+    }
+    return fat_set_open_file_offset(file, saved_offset, file->capacity);
 }
 
 static int

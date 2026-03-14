@@ -7,11 +7,12 @@
 int
 main(int argc, char **argv)
 {
+    static char grow_pattern[1024];
     static const char original[] = "WASMOS-WRITE-SMOKE-ORIGINAL\n";
     static const char append_suffix[] = "APPEND\n";
     static const char appended[] = "WASMOS-WRITE-SMOKE-ORIGINAL\nAPPEND\n";
     static const char updated[] = "TRUNCATED\n";
-    char buffer[sizeof(appended)];
+    char buffer[sizeof(grow_pattern)];
     struct stat st;
     int fd;
     ssize_t rc;
@@ -50,6 +51,35 @@ main(int argc, char **argv)
     close(fd);
     if (rc != 0) {
         puts("fs-write-smoke: create verify failed");
+        return 1;
+    }
+    for (size_t i = 0; i < sizeof(grow_pattern); ++i) {
+        grow_pattern[i] = (char)('A' + (i % 23u));
+    }
+    fd = open("/create.txt", O_WRONLY | O_TRUNC);
+    if (fd < 0) {
+        puts("fs-write-smoke: grow open failed");
+        return 1;
+    }
+    rc = write(fd, grow_pattern, sizeof(grow_pattern));
+    close(fd);
+    if (rc != (ssize_t)sizeof(grow_pattern)) {
+        puts("fs-write-smoke: grow write failed");
+        return 1;
+    }
+    if (stat("/create.txt", &st) != 0 || st.st_size != (off_t)sizeof(grow_pattern)) {
+        puts("fs-write-smoke: grow stat failed");
+        return 1;
+    }
+    fd = open("/create.txt", O_RDONLY);
+    if (fd < 0) {
+        puts("fs-write-smoke: grow reopen failed");
+        return 1;
+    }
+    rc = read(fd, buffer, sizeof(buffer));
+    close(fd);
+    if (rc != (ssize_t)sizeof(grow_pattern) || memcmp(buffer, grow_pattern, sizeof(grow_pattern)) != 0) {
+        puts("fs-write-smoke: grow verify failed");
         return 1;
     }
 

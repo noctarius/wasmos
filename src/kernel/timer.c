@@ -51,7 +51,7 @@ void timer_poll(void) {
         return;
     }
     g_timer_log_pending = 0;
-    serial_write("[timer] ticks\n");
+    trace_write("[timer] ticks\n");
 }
 
 uint64_t timer_ticks(void) {

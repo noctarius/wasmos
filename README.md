@@ -186,6 +186,7 @@ Use `run-qemu-test` as the default compile+boot+halt check after code changes. U
 ### Tracing
 - `WASMOS_TRACE` is a build-time define and defaults to `OFF`.
 - With tracing disabled, verbose init/process-manager/scheduler/sysinit tracing and `debug_mark(tag)` serial output stay hidden.
+- With tracing disabled, periodic `[timer] ticks` progress output also stays hidden.
 - Enable verbose tracing with `cmake -S . -B build -DWASMOS_TRACE=ON`.
 - Normal boot/runtime output and failure diagnostics remain visible when tracing is off.
 

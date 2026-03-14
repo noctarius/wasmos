@@ -144,6 +144,7 @@ Isolation rules:
 
 ### Debugging
 - `WASMOS_TRACE` is a build-time switch, default `OFF`, that gates verbose init/process-manager/scheduler/sysinit tracing.
+- `WASMOS_TRACE` also gates periodic scheduler/timer progress markers such as `[timer] ticks`.
 - With `WASMOS_TRACE=ON`, the debug-only wasm native `debug_mark(tag)` logs a tag and PID to the serial console to confirm user-space execution paths.
 - With `WASMOS_TRACE=ON`, PM logs app flags and entry returns, and `sysinit` emits debug_mark tags (`0x1101..0x11FF`) to trace loop behavior during preemptive debugging.
 - The kernel init path can temporarily bypass boot module spawning via `g_skip_wasm_boot` in `src/kernel/kernel.c` to isolate the wasm3 probe.

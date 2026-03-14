@@ -6,7 +6,7 @@ architecture and README cleanup.
 IMPORTANT: Keep this file aligned with `README.md` and `ARCHITECTURE.md`.
 
 ## Boot and Platform
-- Add framebuffer console support in addition to serial.
+- Add framebuffer console support (via UEFI framebuffer device) in addition to serial.
 - Add APIC / IOAPIC support and retire the PIC-only interrupt assumption.
 - Decide whether the kernel should eventually read initfs directly instead of
   relying on synthesized bootstrap `boot_module_t` records.
@@ -16,6 +16,12 @@ IMPORTANT: Keep this file aligned with `README.md` and `ARCHITECTURE.md`.
 - Add priorities and/or execution budgets.
 - Prepare the scheduler and context-switch path for user-mode execution.
 - Add SMP-aware scheduling only after the single-core model is fully stable.
+- Potentially a more sophisticated scheduler design (e.g., a "fair" scheduler).
+- Potentially a tickless preemptive multitasking scheduler.
+- Any syscall/IPC call should be considered a safe point for preemption (would remove the need to `sched_yield`).
+- Add a `fork` syscall to create a new process with a copy of the current process's
+  memory and state.
+- Add a `exec` syscall to replace the current process image with a new one.
 
 ## IPC
 - Add true notification objects separate from synchronous IPC endpoints.
@@ -28,6 +34,7 @@ IMPORTANT: Keep this file aligned with `README.md` and `ARCHITECTURE.md`.
 - Move page-fault handling out of the kernel-hosted scaffold into user space.
 - Introduce ring 3 execution, syscall entry, and kernel/user stack separation.
 - Add capability-granted MMIO/PIO/DMA/IRQ resource assignment for drivers.
+- Introduction of an alternative SLAB allocator for the kernel and user space heap.
 
 ## Runtime and Loading
 - Expand WASMOS-APP policy enforcement and metadata validation as needed.
@@ -43,6 +50,20 @@ IMPORTANT: Keep this file aligned with `README.md` and `ARCHITECTURE.md`.
 - Add PCI device inventory and driver matching.
 - Add hotplug/event publication.
 - Decide on the long-term service registry / naming model.
+- Add a filesystem and mountpoint manager `mount-manager`.
+- Add a filesystem abstraction.
+- Add a virtual filesystem as the initial mount point `/` (root).
+- Add a virtual `sys` filesystem for system-level configuration.
+- Add a virtual `dev` filesystem for device-level configuration.
+- Add a virtual `proc` filesystem for process-level information.
+- Add dynamic mount points per filesystem.
+- Mount the EFI filesystem as `/boot`.
+- Add timer/clock (RTC) device support.
+- Add NVMe support.
+- Add (virtual) TTY support.
+- Add NVMEM support.
+- Add virtio support (virtio-blk, virtio-console, virtio-rng, virtio-fs, virtio-net).
+- Asynchronous I/O support (e.g., `async-io`).
 
 ## Filesystem and Userland
 - Extend `fs-fat` beyond the current small-file/read-only path.
@@ -51,6 +72,31 @@ IMPORTANT: Keep this file aligned with `README.md` and `ARCHITECTURE.md`.
   update-mode semantics, richer buffering, and non-ASCII filename handling.
 - Decide whether initfs should eventually carry additional early-userland data
   beyond bootstrap apps and boot config.
+- Add full FAT32 support.
+- Add ext4 support.
+- Add a minimal custom filesystem (CFS_CUSTOM_FILE_SYSTEM.md).
+
+## Userland and CLI
+- Extend `ps` with more process-level information and memory and CPU usage.
+- Add a `top` command to display process-level metrics.
+- Add a `console` command to switch between serial and framebuffer consoles.
+- Add a `mount` command to mount filesystems.
+- Add a `umount` command to unmount filesystems.
+- Extend a `ls` command with more file-level information such as size.
+- Add a `rm` command to remove files.
+- Add a `cp` command to copy files.
+- Add a `mv` command to move files.
+- Add a `mkdir` command to create directories.
+- Add a `rmdir` command to remove directories.
+- Add a `touch` command to create empty files.
+- Add a `echo` command to write to the console.
+- Add a `pwd` command to display the current working directory.
+- Add a `clear` command to clear the console.
+- Add a `sleep` command to suspend the current process for a specified duration.
+
+## Buildsystem and Tooling
+- Add a `make` wrapper to simplify the build process.
+- Add an ncurses UI for the build system (similar to `menuconfig`).
 
 ## Documentation and Tests
 - Keep source comments aligned with architecture decisions as internals evolve.

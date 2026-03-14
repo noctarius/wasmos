@@ -25,6 +25,9 @@ typedef struct {
     size_t max_size;
     size_t committed_size;
     uint32_t chunk_count;
+    /* The allocator grows by appending chunks. Allocation only advances the
+     * tail chunk, which keeps the implementation simple and deterministic while
+     * still allowing large heaps without one giant contiguous reservation. */
     wasm3_heap_chunk_t chunks[WASM3_HEAP_MAX_CHUNKS];
 } wasm3_heap_slot_t;
 
@@ -192,6 +195,8 @@ wasm3_heap_grow(wasm3_heap_slot_t *slot, size_t min_total)
         return -1;
     }
 
+    /* New chunks try to preserve the configured startup footprint and then grow
+     * from the size of the previous chunk, capped by the per-process limit. */
     size_t target = slot->preferred_chunk_size;
     if (slot->chunk_count > 0) {
         size_t last_size = slot->chunks[slot->chunk_count - 1].size;
@@ -277,6 +282,8 @@ wasm3_heap_release_empty_tail_chunks(wasm3_heap_slot_t *slot)
     if (!slot) {
         return;
     }
+    /* Empty tail chunks can be returned to the frame allocator immediately.
+     * Interior holes are intentionally not compacted yet. */
     while (slot->chunk_count > 1) {
         wasm3_heap_chunk_t *chunk = &slot->chunks[slot->chunk_count - 1];
         if (!chunk->base || chunk->offset != 0) {
@@ -387,6 +394,9 @@ void free(void *ptr)
     wasm3_heap_block_t *block = (wasm3_heap_block_t *)((uint8_t *)ptr - sizeof(wasm3_heap_block_t));
 
     critical_section_enter();
+    /* Free remains stack-like: only the most recent allocation in the tail
+     * chunk shrinks the live frontier. This matches the old allocator's
+     * behavior while still allowing chunked growth. */
     if (chunk_index + 1 == slot->chunk_count &&
         block->start + block->total == chunk->offset) {
         chunk->offset = block->start;
@@ -436,6 +446,8 @@ void *realloc(void *ptr, size_t size)
     wasm3_heap_chunk_t *chunk = wasm3_heap_chunk_for_ptr(slot, ptr, &chunk_index);
     if (slot && chunk) {
         critical_section_enter();
+        /* In-place growth is only safe for the newest allocation in the active
+         * tail chunk. All other cases fall back to allocate-copy-free. */
         if (chunk_index + 1 == slot->chunk_count &&
             block->start + block->total == chunk->offset) {
             if (block->start + new_total <= chunk->size) {

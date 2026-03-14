@@ -46,8 +46,8 @@ IMPORTANT: Keep this file aligned with `README.md` and `ARCHITECTURE.md`.
 
 ## Filesystem and Userland
 - Extend `fs-fat` beyond the current small-file/read-only path.
-- Extend FAT writes beyond the current overwrite-only existing-file path:
-  broader language-shim coverage.
+- Extend libc and language-shim filesystem coverage beyond the current C
+  low-level path and basic stdio support.
 - Decide whether initfs should eventually carry additional early-userland data
   beyond bootstrap apps and boot config.
 

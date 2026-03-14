@@ -10,6 +10,8 @@
 #include <stdint.h>
 
 #define WASMOS_FILE_STREAM_COUNT 8
+#define WASMOS_FILE_MODE_READ  0x1
+#define WASMOS_FILE_MODE_WRITE 0x2
 
 static int32_t g_fs_reply_endpoint = -1;
 static int32_t g_fs_request_id = 1;
@@ -273,14 +275,27 @@ FILE *
 fopen(const char *path, const char *mode)
 {
     int fd;
+    int open_flags = 0;
+    int stream_mode = 0;
 
-    /* TODO: Add stdio write modes once fs-fat supports create/append and the
-     * rest of the write-mode matrix beyond the current low-level path. */
-    if (!mode || (strcmp(mode, "r") != 0 && strcmp(mode, "rb") != 0)) {
+    if (!mode) {
+        return NULL;
+    }
+    if (strcmp(mode, "r") == 0 || strcmp(mode, "rb") == 0) {
+        open_flags = O_RDONLY;
+        stream_mode = WASMOS_FILE_MODE_READ;
+    } else if (strcmp(mode, "w") == 0 || strcmp(mode, "wb") == 0) {
+        open_flags = O_WRONLY | O_CREAT | O_TRUNC;
+        stream_mode = WASMOS_FILE_MODE_WRITE;
+    } else if (strcmp(mode, "a") == 0 || strcmp(mode, "ab") == 0) {
+        open_flags = O_WRONLY | O_CREAT | O_APPEND;
+        stream_mode = WASMOS_FILE_MODE_WRITE;
+    } else {
+        /* TODO: Extend stdio mode parsing for update modes such as r+/w+/a+. */
         return NULL;
     }
 
-    fd = open(path, O_RDONLY);
+    fd = open(path, open_flags);
     if (fd < 0) {
         return NULL;
     }
@@ -289,6 +304,7 @@ fopen(const char *path, const char *mode)
         if (!g_file_stream_used[i]) {
             g_file_stream_used[i] = 1;
             g_file_streams[i].fd = fd;
+            g_file_streams[i].mode = stream_mode;
             g_file_streams[i].eof = 0;
             g_file_streams[i].error = 0;
             return &g_file_streams[i];
@@ -308,6 +324,10 @@ fread(void *ptr, size_t size, size_t nmemb, FILE *stream)
     if (!ptr || !stream || stream->fd < 0 || size == 0 || nmemb == 0) {
         return 0;
     }
+    if ((stream->mode & WASMOS_FILE_MODE_READ) == 0) {
+        stream->error = 1;
+        return 0;
+    }
 
     total = size * nmemb;
     rc = read(stream->fd, ptr, total);
@@ -317,6 +337,29 @@ fread(void *ptr, size_t size, size_t nmemb, FILE *stream)
     }
     if ((size_t)rc < total) {
         stream->eof = 1;
+    }
+    return (size_t)rc / size;
+}
+
+size_t
+fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream)
+{
+    ssize_t rc;
+    size_t total;
+
+    if (!ptr || !stream || stream->fd < 0 || size == 0 || nmemb == 0) {
+        return 0;
+    }
+    if ((stream->mode & WASMOS_FILE_MODE_WRITE) == 0) {
+        stream->error = 1;
+        return 0;
+    }
+
+    total = size * nmemb;
+    rc = write(stream->fd, ptr, total);
+    if (rc < 0) {
+        stream->error = 1;
+        return 0;
     }
     return (size_t)rc / size;
 }
@@ -333,6 +376,7 @@ fclose(FILE *stream)
             int rc = close(stream->fd);
             g_file_stream_used[i] = 0;
             stream->fd = -1;
+            stream->mode = 0;
             stream->eof = 0;
             stream->error = 0;
             return rc;

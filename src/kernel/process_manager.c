@@ -489,8 +489,8 @@ pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t *blob, uint32_t blob_siz
     if (wasmos_app_parse(slot->blob_storage, blob_size, &desc) != 0) {
         return -1;
     }
-    if ((desc.flags & WASMOS_APP_FLAG_APP) == 0 ||
-        (desc.flags & (WASMOS_APP_FLAG_DRIVER | WASMOS_APP_FLAG_SERVICE)) != 0) {
+    if ((desc.flags & WASMOS_APP_FLAG_DRIVER) != 0 ||
+        (desc.flags & (WASMOS_APP_FLAG_APP | WASMOS_APP_FLAG_SERVICE)) == 0) {
         return -1;
     }
     if (copy_name(slot->name, sizeof(slot->name), desc.name, desc.name_len) != 0) {
@@ -515,6 +515,12 @@ pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t *blob, uint32_t blob_siz
         }
         slot->entry_argc = 4;
         slot->entry_arg0 = chardev_endpoint;
+    } else if (name_eq(slot->name, "sysinit")) {
+        if (g_pm.proc_endpoint == IPC_ENDPOINT_NONE) {
+            slot->in_use = 0;
+            return -1;
+        }
+        slot->entry_arg0 = g_pm.proc_endpoint;
     } else if (name_eq(slot->name, "cli")) {
         if (g_pm.proc_endpoint == IPC_ENDPOINT_NONE || g_pm.fs_endpoint == IPC_ENDPOINT_NONE) {
             slot->in_use = 0;

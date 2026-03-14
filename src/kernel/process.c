@@ -467,6 +467,10 @@ static void process_mark_exited(process_t *proc, int32_t exit_status) {
     proc->exit_status = exit_status;
     proc->block_reason = PROCESS_BLOCK_NONE;
     proc->wait_target_pid = 0;
+    /* TODO: Add safe automatic reaping for exited kernel-owned children that
+     * are never waited on. Today they remain zombies until an explicit wait or
+     * a subsystem-specific reap path (for example the process manager) handles
+     * them. */
     proc->state = PROCESS_STATE_ZOMBIE;
     process_wake_waiters(proc->pid);
 }

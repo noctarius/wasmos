@@ -50,6 +50,9 @@ set(WASM_INIT_SMOKE_APP ${BUILD_DIR}/init_smoke.wasmosapp)
 set(WASM_FS_OPEN_SMOKE_SRC ${EXAMPLES_C_DIR}/fs_open_smoke/fs_open_smoke.c)
 set(WASM_FS_OPEN_SMOKE_WASM ${BUILD_DIR}/fs_open_smoke.wasm)
 set(WASM_FS_OPEN_SMOKE_APP ${BUILD_DIR}/fs_open_smoke.wasmosapp)
+set(WASM_FS_WRITE_SMOKE_SRC ${EXAMPLES_C_DIR}/fs_write_smoke/fs_write_smoke.c)
+set(WASM_FS_WRITE_SMOKE_WASM ${BUILD_DIR}/fs_write_smoke.wasm)
+set(WASM_FS_WRITE_SMOKE_APP ${BUILD_DIR}/fs_write_smoke.wasmosapp)
 set(WASM_NATIVE_CALL_MIN_SRC ${EXAMPLES_C_DIR}/native_call_min/native_call_min.c)
 set(WASM_NATIVE_CALL_MIN_WASM ${BUILD_DIR}/native_call_min.wasm)
 set(WASM_NATIVE_CALL_MIN_APP ${BUILD_DIR}/native_call_min.wasmosapp)
@@ -385,6 +388,9 @@ set(INIT_SMOKE_COPY_CMD
 set(FS_OPEN_SMOKE_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FS_OPEN_SMOKE_APP} ${BUILD_DIR}/esp/apps/fs_open_smoke.wasmosapp
 )
+set(FS_WRITE_SMOKE_COPY_CMD
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FS_WRITE_SMOKE_APP} ${BUILD_DIR}/esp/apps/fs_write_smoke.wasmosapp
+)
 set(NATIVE_CALL_MIN_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_NATIVE_CALL_MIN_APP} ${BUILD_DIR}/esp/apps/native_call_min.wasmosapp
 )
@@ -393,6 +399,9 @@ set(NATIVE_CALL_SMOKE_COPY_CMD
 )
 set(LARGE_READ_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/large_read.txt ${BUILD_DIR}/esp/large_read.txt
+)
+set(WRITE_SMOKE_FILE_COPY_CMD
+  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/write_smoke.txt ${BUILD_DIR}/esp/write_smoke.txt
 )
 set(INITFS_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${INITFS_IMG} ${BUILD_DIR}/esp/initfs.img
@@ -441,12 +450,14 @@ if (OVMF_VARS)
     ${CHARDEV_PREEMPT_COPY_CMD}
     ${INIT_SMOKE_COPY_CMD}
     ${FS_OPEN_SMOKE_COPY_CMD}
+    ${FS_WRITE_SMOKE_COPY_CMD}
     ${NATIVE_CALL_MIN_COPY_CMD}
     ${NATIVE_CALL_SMOKE_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
     ${LARGE_READ_COPY_CMD}
+    ${WRITE_SMOKE_FILE_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
@@ -478,12 +489,14 @@ if (OVMF_VARS)
     ${CHARDEV_PREEMPT_COPY_CMD}
     ${INIT_SMOKE_COPY_CMD}
     ${FS_OPEN_SMOKE_COPY_CMD}
+    ${FS_WRITE_SMOKE_COPY_CMD}
     ${NATIVE_CALL_MIN_COPY_CMD}
     ${NATIVE_CALL_SMOKE_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
     ${LARGE_READ_COPY_CMD}
+    ${WRITE_SMOKE_FILE_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
             -S -gdb tcp::${QEMU_GDB_PORT}
@@ -516,12 +529,14 @@ if (OVMF_VARS)
     ${CHARDEV_PREEMPT_COPY_CMD}
     ${INIT_SMOKE_COPY_CMD}
     ${FS_OPEN_SMOKE_COPY_CMD}
+    ${FS_WRITE_SMOKE_COPY_CMD}
     ${NATIVE_CALL_MIN_COPY_CMD}
     ${NATIVE_CALL_SMOKE_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
     ${LARGE_READ_COPY_CMD}
+    ${WRITE_SMOKE_FILE_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_halt_test.py
             --ovmf-code ${OVMF_CODE}
@@ -555,12 +570,14 @@ if (OVMF_VARS)
     ${CHARDEV_PREEMPT_COPY_CMD}
     ${INIT_SMOKE_COPY_CMD}
     ${FS_OPEN_SMOKE_COPY_CMD}
+    ${FS_WRITE_SMOKE_COPY_CMD}
     ${NATIVE_CALL_MIN_COPY_CMD}
     ${NATIVE_CALL_SMOKE_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
     ${LARGE_READ_COPY_CMD}
+    ${WRITE_SMOKE_FILE_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND ${CMAKE_COMMAND} -E env
             WASMOS_OVMF_CODE=${OVMF_CODE}
@@ -597,12 +614,14 @@ else ()
     ${CHARDEV_PREEMPT_COPY_CMD}
     ${INIT_SMOKE_COPY_CMD}
     ${FS_OPEN_SMOKE_COPY_CMD}
+    ${FS_WRITE_SMOKE_COPY_CMD}
     ${NATIVE_CALL_MIN_COPY_CMD}
     ${NATIVE_CALL_SMOKE_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
     ${LARGE_READ_COPY_CMD}
+    ${WRITE_SMOKE_FILE_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
@@ -633,12 +652,14 @@ else ()
     ${CHARDEV_PREEMPT_COPY_CMD}
     ${INIT_SMOKE_COPY_CMD}
     ${FS_OPEN_SMOKE_COPY_CMD}
+    ${FS_WRITE_SMOKE_COPY_CMD}
     ${NATIVE_CALL_MIN_COPY_CMD}
     ${NATIVE_CALL_SMOKE_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
     ${LARGE_READ_COPY_CMD}
+    ${WRITE_SMOKE_FILE_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
             -S -gdb tcp::${QEMU_GDB_PORT}
@@ -672,12 +693,14 @@ else ()
     ${CHARDEV_PREEMPT_COPY_CMD}
     ${INIT_SMOKE_COPY_CMD}
     ${FS_OPEN_SMOKE_COPY_CMD}
+    ${FS_WRITE_SMOKE_COPY_CMD}
     ${NATIVE_CALL_MIN_COPY_CMD}
     ${NATIVE_CALL_SMOKE_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
     ${LARGE_READ_COPY_CMD}
+    ${WRITE_SMOKE_FILE_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_halt_test.py
             --ovmf-code ${OVMF_CODE}
@@ -710,12 +733,14 @@ else ()
     ${CHARDEV_PREEMPT_COPY_CMD}
     ${INIT_SMOKE_COPY_CMD}
     ${FS_OPEN_SMOKE_COPY_CMD}
+    ${FS_WRITE_SMOKE_COPY_CMD}
     ${NATIVE_CALL_MIN_COPY_CMD}
     ${NATIVE_CALL_SMOKE_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
     ${LARGE_READ_COPY_CMD}
+    ${WRITE_SMOKE_FILE_COPY_CMD}
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
     COMMAND ${CMAKE_COMMAND} -E env
             WASMOS_OVMF_CODE=${OVMF_CODE}

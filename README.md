@@ -27,6 +27,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - manifest-driven late startup policy consumed by `sysinit`
 - multi-cluster FAT file reads for libc and app loading
 - read-only FAT seek/stat support for libc and language shims
+- overwrite-only FAT writes for existing files through the C libc `open/write`
+  path
 - growable per-process `wasm3` heaps with a 2 GiB cap
 - per-process virtual memory contexts with private user mappings
 - shared user-space libc surface for C, Rust, Go, Zig, and AssemblyScript
@@ -250,11 +252,13 @@ Current functionality includes:
 - minimal read-only file API
 
 Current file I/O scope:
-- `open`, `read`, `close`, `stat`, `lseek`
+- `open`, `read`, `write`, `close`, `stat`, `lseek`
 - `fopen`, `fread`, `fgets`, `fgetc`, `fclose`, `fseek`, `ftell`
 - reads now span multi-cluster FAT files through the shared FS IPC path used by
   C, Rust, Go, Zig, and AssemblyScript shims
-- seek/stat are read-only today; no write support yet
+- seek/stat are available through libc and the language shims
+- writes are currently limited to C libc `open(..., O_WRONLY)` plus `write`
+  against existing files without growth, create, truncate, or append semantics
 
 ## Implemented Drivers and Services
 

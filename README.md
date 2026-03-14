@@ -25,6 +25,7 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - process manager with WASMOS-APP loading
 - FAT-backed loading of `sysinit`, `cli`, and user apps
 - manifest-driven late startup policy consumed by `sysinit`
+- multi-cluster FAT file reads for libc and app loading
 - growable per-process `wasm3` heaps with a 2 GiB cap
 - per-process virtual memory contexts with private user mappings
 - shared user-space libc surface for C, Rust, Go, Zig, and AssemblyScript
@@ -248,6 +249,8 @@ Current functionality includes:
 Current file I/O scope:
 - `open`, `read`, `close`
 - `fopen`, `fread`, `fgets`, `fgetc`, `fclose`
+- reads now span multi-cluster FAT files through the shared FS IPC path used by
+  C, Rust, Go, Zig, and AssemblyScript shims
 - no write/seek/stat yet
 
 ## Implemented Drivers and Services

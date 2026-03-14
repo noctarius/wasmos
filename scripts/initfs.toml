@@ -1,0 +1,65 @@
+version = 1
+
+[boot]
+bootstrap_modules = [
+  "chardev-client",
+  "init-smoke",
+  "native-call-min",
+  "native-call-smoke",
+  "ata",
+  "fs-fat",
+  "hw-discovery",
+]
+
+[sysinit]
+spawn = [
+  "chardev-client",
+  "cli",
+]
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "apps/chardev_client.wasmosapp"
+source = "chardev_client.wasmosapp"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "apps/init_smoke.wasmosapp"
+source = "init_smoke.wasmosapp"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "apps/native_call_min.wasmosapp"
+source = "native_call_min.wasmosapp"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "apps/native_call_smoke.wasmosapp"
+source = "native_call_smoke.wasmosapp"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/drivers/ata.wasmosapp"
+source = "ata.wasmosapp"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/drivers/fs_fat.wasmosapp"
+source = "fs_fat.wasmosapp"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/services/hw_discovery.wasmosapp"
+source = "hw_discovery.wasmosapp"
+
+[[entries]]
+kind = "config"
+path = "config/bootcfg.bin"
+generated = "boot_config"

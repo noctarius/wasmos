@@ -19,8 +19,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 
 ## Current System Summary
 The current tree already boots into a usable user-space stack:
-- `BOOTX64.EFI` loads `kernel.elf`, gathers the memory map, preloads the
-  minimal disk bootstrap modules, and exits boot services.
+- `BOOTX64.EFI` loads `kernel.elf` plus a single `initfs.img`, gathers the
+  memory map, materializes bootstrap boot modules from the initfs, and exits
+  boot services.
 - The kernel initializes paging, physical memory management, exceptions, the
   timer, IPC, the scheduler, and the process manager.
 - A kernel-owned `init` process starts `hw-discovery`, waits for `fs-fat` to
@@ -28,6 +29,8 @@ The current tree already boots into a usable user-space stack:
   FAT filesystem.
 - `sysinit` is intentionally small and only starts late user processes
   (`chardev-client` and `cli`).
+- The initfs also carries a generated binary boot-config blob derived from
+  `scripts/initfs.toml` for future config-driven startup.
 - The runtime host uses `wasm3`, not WAMR.
 
 ## Architectural Direction
@@ -64,13 +67,16 @@ Intent: small, deterministic, and policy-light.
 
 The bootloader must:
 - Locate and read `kernel.elf` from the EFI System Partition.
+- Locate and read `initfs.img` from the EFI System Partition.
 - Validate the ELF header and load all `PT_LOAD` segments, including
   misaligned physical addresses and overlapping segment reuse.
 - Collect the UEFI memory map and copy it into kernel-owned pages before
   `ExitBootServices()`.
 - Fill a versioned `boot_info_t`.
-- Preload only the modules required for storage bootstrap:
-  `hw-discovery`, `ata`, `fs-fat`, plus optional early smoke apps.
+- Validate the initfs header and entry table, then copy the initfs blob into
+  boot handoff memory.
+- Synthesize `boot_module_t` records for bootstrap-marked initfs WASMOS apps so
+  the existing early-kernel bootstrap path can stay unchanged.
 - Transfer control to the kernel entry point without embedding higher-level OS
   policy.
 
@@ -90,23 +96,45 @@ Current required fields:
 - `memory_map`, `memory_map_size`, `memory_desc_size`, `memory_desc_version`
 - `modules`, `module_count`, `module_entry_size`
 - `rsdp`, `rsdp_length`
+- `initfs`, `initfs_size`
+- `boot_config`, `boot_config_size`
 
 Current behavior:
 - The bootloader fills the structure and the kernel validates the size/version
   before using it.
-- Boot modules are currently used only as an early bootstrap channel.
+- Boot modules are still used as the early bootstrap channel, but they are now
+  derived from the initfs instead of being loaded one-by-one in the bootloader.
+
+### Initfs Layout
+The bootstrap image format is intentionally small and append-only enough for
+boot handoff use:
+- header with magic `WMINITFS`, version, table sizing, and total image size
+- fixed-size entries with type, flags, payload offset/size, and logical path
+- raw payload data packed directly behind the table
+
+Current entry types:
+- WASMOS app payload
+- config payload
+- generic data payload
+
+Current bootstrap use:
+- bootstrap-marked WASMOS app entries are exposed as `boot_module_t` records
+- the first config entry is exposed through `boot_info_t.boot_config`
+- the full blob is retained so later code can add a proper initfs reader
 
 ## Boot Flow
 
 ### High-Level Sequence
 1. UEFI loads `BOOTX64.EFI`.
-2. The bootloader loads `kernel.elf` and the early disk-bootstrap modules.
+2. The bootloader loads `kernel.elf` and `initfs.img`.
 3. The bootloader exits boot services and jumps to kernel entry.
 4. The kernel initializes core subsystems and spawns the kernel `init` task.
-5. `init` starts `hw-discovery`, waits for FAT readiness, then loads `sysinit`
-   from disk through the process manager.
-6. `sysinit` starts late user processes.
-7. The CLI becomes the visible interactive shell.
+5. `init` starts `hw-discovery` from the bootstrap module set exposed by initfs.
+6. `hw-discovery` starts `ata` and `fs-fat`.
+7. `init` waits for FAT readiness, then loads `sysinit` from disk through the
+   process manager.
+8. `sysinit` starts late user processes.
+9. The CLI becomes the visible interactive shell.
 
 ### Practical Boot Ownership
 - Bootloader owns UEFI interaction and boot-time file I/O.
@@ -383,14 +411,37 @@ This keeps the external ABI stable while presenting language-native entrypoints.
 
 ### Driver and Service Startup Chain
 Current startup chain:
-1. bootloader preloads `hw-discovery`, `ata`, `fs-fat`
-2. kernel `init` spawns `hw-discovery`
-3. `hw-discovery` starts `ata` and `fs-fat`
-4. kernel `init` waits for a successful FAT readiness probe
-5. kernel `init` loads `sysinit` from disk via PM
-6. `sysinit` loads `chardev-client` and `cli` from disk
+1. bootloader loads `initfs.img`
+2. initfs contributes bootstrap `boot_module_t` entries for `hw-discovery`,
+   `ata`, `fs-fat`, and the current smoke/bootstrap apps
+3. kernel `init` spawns `hw-discovery`
+4. `hw-discovery` starts `ata` and `fs-fat`
+5. kernel `init` waits for a successful FAT readiness probe
+6. kernel `init` loads `sysinit` from disk via PM
+7. `sysinit` loads `chardev-client` and `cli` from disk
 
 This is the current stable bootstrap baseline.
+
+### Boot Config
+The initial config channel is a simple binary blob generated from TOML at build
+time. The current generator reads `scripts/initfs.toml` and emits both the
+initfs image and a compact `bootcfg.bin` payload.
+
+Current config format:
+- magic `WCFG0001`
+- version
+- bootstrap-module count
+- sysinit-spawn count
+- string-table size
+- offset arrays for each string list
+- NUL-terminated ASCII string table
+
+Current use:
+- the blob is carried in initfs for stable packaging
+- the bootloader exposes the blob through `boot_info_t`
+- wasm processes can read it through `wasmos_boot_config_size()` and
+  `wasmos_boot_config_copy()`
+- no service consumes it yet, so startup policy is not data-driven today
 
 ### What Is Still Missing
 - driver-manager
@@ -441,6 +492,7 @@ These remain visible even with tracing disabled:
 ### Done
 - boot contract versioning and validation
 - ELF loading with aligned/overlap-safe segment handling
+- single-image initfs bootstrap packaging
 - serial-first early boot diagnostics
 - physical memory allocator
 - basic paging scaffold
@@ -451,6 +503,7 @@ These remain visible even with tracing disabled:
 - process manager and WASMOS-APP loader
 - bootstrap split between kernel `init` and user-space `sysinit`
 - FAT-backed loading of `sysinit`, `cli`, and normal applications
+- generated boot-config blob exposed to user space
 - shared read-only file API in userland libc
 - language-native application entrypoint shims
 
@@ -473,7 +526,7 @@ These remain visible even with tracing disabled:
 - service registry
 - supervision / restart policy
 - capability-granted device access
-- config-driven startup
+- config-driven startup consumption
 
 Open implementation work is tracked in `TASKS.md`.
 

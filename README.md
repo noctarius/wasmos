@@ -24,6 +24,7 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - kernel IPC transport with endpoint ownership checks
 - process manager with WASMOS-APP loading
 - FAT-backed loading of `sysinit`, `cli`, and user apps
+- manifest-driven late startup policy consumed by `sysinit`
 - growable per-process `wasm3` heaps with a 2 GiB cap
 - per-process virtual memory contexts with private user mappings
 - shared user-space libc surface for C, Rust, Go, Zig, and AssemblyScript
@@ -69,7 +70,8 @@ The current startup chain is:
 4. `hw-discovery` starts `ata` and `fs-fat`
 5. kernel `init` waits for FAT readiness
 6. kernel `init` asks PM to load `sysinit` from disk
-7. `sysinit` starts late user processes (`chardev-client`, `cli`)
+7. `sysinit` parses the generated boot-config blob and starts its configured
+   late user processes
 
 This is the current stable bootstrap baseline.
 
@@ -84,6 +86,7 @@ Current behavior:
   as `config/bootcfg.bin`
 - the bootloader exposes bootstrap apps through the existing boot-module
   mechanism and exposes the raw config blob through `boot_info_t`
+- `sysinit` reads the `sysinit.spawn` list from that blob at runtime
 
 Current boot-config binary format:
 - magic `WCFG0001`
@@ -251,7 +254,7 @@ Current file I/O scope:
 ### Services
 - `process-manager`: spawn/wait/kill/status plus WASMOS-APP loading
 - `hw-discovery`: ACPI-driven early storage bootstrap
-- `sysinit`: late user-process startup only
+- `sysinit`: late user-process startup from manifest-generated boot config
 - `cli`: shell over `proc` and `fs`
 
 ## CLI

@@ -2,6 +2,13 @@
 #include "elf.h"
 #include "boot.h"
 
+/*
+ * The UEFI loader keeps policy intentionally narrow. Its only job is to build a
+ * trustworthy handoff for the kernel: load ELF segments, snapshot the UEFI
+ * memory map, preload the minimal disk bootstrap modules, and transfer control
+ * through the versioned boot_info_t contract.
+ */
+
 #define EFI_ALLOCATE_ANY_PAGES 0
 #define EFI_ALLOCATE_ADDRESS 2
 #define EFI_LOADER_DATA 2
@@ -48,6 +55,11 @@ static void *find_acpi_rsdp(EFI_SYSTEM_TABLE *system, UINT32 *out_len) {
         return 0;
     }
 
+    /*
+     * UEFI may expose both ACPI 1.0 and ACPI 2.0 entries. Prefer the ACPI 2.0
+     * table when available but keep the ACPI 1.0 pointer as a fallback so early
+     * hardware discovery still has a stable root pointer on older firmware.
+     */
     EFI_CONFIGURATION_TABLE *tables = (EFI_CONFIGURATION_TABLE *)system->ConfigurationTable;
     void *rsdp = 0;
     for (UINTN i = 0; i < system->NumberOfTableEntries; ++i) {
@@ -167,6 +179,12 @@ static EFI_STATUS read_file_alloc(EFI_BOOT_SERVICES *bs,
         return status;
     }
 
+    /*
+     * UEFI file reads are size-driven, so resolve the file length first through
+     * EFI_FILE_INFO and then allocate a pool buffer large enough to hold the
+     * entire payload. The kernel expects every preloaded module as a contiguous
+     * blob.
+     */
     EFI_GUID file_info_guid = EFI_FILE_INFO_GUID;
     UINTN info_size = 0;
     EFI_FILE_INFO *info = 0;
@@ -227,6 +245,7 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         return status;
     }
 
+    /* The kernel image itself is always loaded from the ESP root. */
     static CHAR16 kernel_path[] = L"\\kernel.elf";
     void *kernel_buf = 0;
     UINTN kernel_size = 0;
@@ -236,6 +255,12 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         return status;
     }
 
+    /*
+     * Optional smoke and bootstrap modules are preloaded into boot_info_t so the
+     * kernel can bring up the storage path before filesystem loading is
+     * available. This preload list is intentionally short and does not include
+     * late user-space services such as sysinit anymore.
+     */
     static CHAR16 app_path[] = L"\\apps\\chardev_client.wasmosapp";
     void *app_buf = 0;
     UINTN app_size = 0;

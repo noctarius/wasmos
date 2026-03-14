@@ -2,6 +2,12 @@
 #include "process.h"
 #include "spinlock.h"
 
+/*
+ * The kernel IPC layer keeps transport deliberately small: fixed-size endpoint
+ * tables, bounded queues, context ownership checks, and optional notification
+ * counters. Higher-level protocols are built entirely in drivers and services.
+ */
+
 typedef struct {
     uint32_t in_use;
     ipc_endpoint_type_t type;
@@ -106,6 +112,11 @@ int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_messa
         return IPC_ERR_INVALID;
     }
 
+    /*
+     * Endpoint ownership is the current capability boundary. A non-kernel sender
+     * may only speak from endpoints owned by its context; the kernel is allowed
+     * to originate messages without that restriction.
+     */
     if (sender_context_id != IPC_CONTEXT_KERNEL) {
         if (message->source == IPC_ENDPOINT_NONE) {
             return IPC_ERR_PERM;
@@ -129,6 +140,8 @@ int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_messa
     ep->count++;
     uint32_t owner_context_id = ep->owner_context_id;
     spinlock_unlock(&ep->lock);
+    /* Wake the destination owner after releasing the queue lock so the scheduler
+     * sees a consistent endpoint state if the process runs immediately. */
     process_wake_by_context(owner_context_id);
     return IPC_OK;
 }

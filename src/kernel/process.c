@@ -5,6 +5,13 @@
 #include "paging.h"
 #include "wasm3_shim.h"
 
+/*
+ * process.c contains the single-core scheduler, process table, run queue, and
+ * context-switch glue. The implementation is intentionally simple: fixed-size
+ * arrays, a FIFO ready queue, and explicit state transitions that are easy to
+ * audit while the kernel is still ring-0-only.
+ */
+
 static process_t g_processes[PROCESS_MAX_COUNT];
 static uint32_t g_next_pid;
 static uint32_t g_last_index;
@@ -68,6 +75,11 @@ process_alloc_stack(process_t *slot, uint32_t stack_pages)
     if (!slot || stack_pages == 0) {
         return -1;
     }
+    /*
+     * Stacks are allocated as [guard][usable][guard]. The guard pages are
+     * unmapped immediately so any overrun turns into a deterministic page fault
+     * instead of silent memory corruption.
+     */
     uint64_t total_pages = (uint64_t)stack_pages + (STACK_GUARD_PAGES * 2u);
     uint64_t base = pfa_alloc_pages(total_pages);
     if (!base) {
@@ -96,6 +108,8 @@ process_alloc_stack(process_t *slot, uint32_t stack_pages)
     slot->stack_top = (uintptr_t)guard_high;
 
     if (slot->stack_base && slot->stack_top > slot->stack_base + sizeof(uint64_t)) {
+        /* Canaries catch in-range stack corruption that does not reach the guard
+         * pages, such as smashed frames near the bottom or top of the stack. */
         uint64_t *base_canary = (uint64_t *)(uintptr_t)slot->stack_base;
         uint64_t *top_canary = (uint64_t *)(uintptr_t)(slot->stack_top - sizeof(uint64_t));
         uintptr_t mid_addr = slot->stack_base + (slot->stack_top - slot->stack_base) / 2u;
@@ -255,6 +269,8 @@ static int ready_queue_enqueue(process_t *proc) {
     if (!proc || proc->in_ready_queue) {
         return 0;
     }
+    /* The idle task is scheduled as a fallback only and never participates in
+     * the normal ready queue rotation. */
     if (proc->is_idle) {
         return 0;
     }

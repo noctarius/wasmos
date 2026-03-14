@@ -2,6 +2,12 @@
 #include "wasmos_app.h"
 #include "serial.h"
 
+/*
+ * WASMOS-APP parsing is kept separate from process-manager policy so the binary
+ * format stays testable and reusable. This file validates container structure,
+ * exposes parsed descriptors, and translates metadata into runtime startup.
+ */
+
 typedef struct __attribute__((packed)) {
     char magic[8];
     uint16_t version;
@@ -49,6 +55,8 @@ check_u32_add(uint32_t a, uint32_t b, uint32_t *out)
 static int
 check_bounds(uint32_t offset, uint32_t size, uint32_t blob_size)
 {
+    /* All variable-sized sections are bounds-checked with 32-bit arithmetic
+     * overflow protection before any pointer arithmetic is trusted. */
     uint32_t end = 0;
     if (check_u32_add(offset, size, &end) != 0) {
         return -1;
@@ -113,6 +121,9 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
     out_desc->req_ep_count = 0;
     out_desc->cap_count = 0;
 
+    /* The parser walks the blob linearly in the same order the packer writes it:
+     * fixed header, name, entry, endpoint table, capability table, mem hints,
+     * then raw WASM bytes. */
     uint32_t off = hdr->header_size;
     if (check_bounds(off, hdr->name_len, blob_size) != 0) {
         return -1;
@@ -203,6 +214,8 @@ wasmos_app_call_entry(wasmos_app_instance_t *instance)
     serial_write(" export=");
     serial_write(instance->entry);
     serial_write("\n");
+    /* Entry dispatch is centralized here so drivers, services, and applications
+     * all produce the same diagnostic framing around their actual export call. */
     int rc = wasm_driver_call_unlocked(&instance->driver,
                                        instance->entry,
                                        instance->entry_argc,

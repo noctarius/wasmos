@@ -18,6 +18,12 @@
 #include <stdint.h>
 #include "wasm3.h"
 
+/*
+ * kernel.c owns the high-level bootstrap choreography after the architecture
+ * entry path has established a stack and cleared BSS. The file intentionally
+ * keeps policy limited to early bring-up and the kernel-owned init task.
+ */
+
 static uint32_t g_chardev_service_endpoint = IPC_ENDPOINT_NONE;
 static const boot_info_t *g_boot_info;
 
@@ -64,6 +70,8 @@ bytes_eq(const uint8_t *a, uint32_t a_len, const char *b);
 static uint32_t
 boot_module_index_by_app_name(const boot_info_t *info, const char *name)
 {
+    /* Boot modules are only an early bootstrap channel, so resolve them by the
+     * embedded WASMOS-APP metadata rather than by bootloader-side filenames. */
     if (!info || !name || !(info->flags & BOOT_INFO_FLAG_MODULES_PRESENT)) {
         return 0xFFFFFFFFu;
     }
@@ -137,6 +145,8 @@ bytes_eq(const uint8_t *a, uint32_t a_len, const char *b)
 static void
 pack_name_args(const char *name, uint32_t out[4])
 {
+    /* PROC_IPC_SPAWN_NAME currently carries short names in four register-sized
+     * arguments, so pack up to sixteen bytes little-endian into the IPC slots. */
     if (!out) {
         return;
     }
@@ -164,6 +174,8 @@ init_send_spawn_index(process_t *process, init_state_t *state, uint32_t module_i
     if (!process || !state || module_index == 0xFFFFFFFFu) {
         return -1;
     }
+    /* init always talks to the process manager through a private reply endpoint
+     * so each bootstrap step is correlated with a request_id. */
     proc_ep = process_manager_endpoint();
     if (proc_ep == IPC_ENDPOINT_NONE) {
         return 1;
@@ -228,6 +240,9 @@ init_send_fs_probe(process_t *process, init_state_t *state)
     if (!process || !state) {
         return -1;
     }
+    /* FAT readiness is probed explicitly so init can switch from preloaded
+     * bootstrap modules to disk-backed loading without depending on directory
+     * listing side effects. */
     fs_ep = process_manager_fs_endpoint();
     if (fs_ep == IPC_ENDPOINT_NONE) {
         return 1;

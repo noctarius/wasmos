@@ -16,7 +16,7 @@ class QemuConfig:
     ovmf_vars: str
     esp_dir: str
     nographic: bool = True
-    display: str = "gtk"
+    display: str = ""
 
 
 def _read_cmake_cache(cache_path: str) -> dict:

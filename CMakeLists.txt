@@ -68,6 +68,12 @@ set(WASM_FAT_APP ${BUILD_DIR}/fs_fat.wasmosapp)
 set(WASM_SERIAL_DRIVER_SRC ${DRIVER_WASM_DIR}/serial/serial.ts)
 set(WASM_SERIAL_DRIVER_WASM ${BUILD_DIR}/serial.wasm)
 set(WASM_SERIAL_APP ${BUILD_DIR}/serial.wasmosapp)
+set(WASM_KEYBOARD_DRIVER_SRC ${DRIVER_WASM_DIR}/keyboard/keyboard.ts)
+set(WASM_KEYBOARD_DRIVER_WASM ${BUILD_DIR}/keyboard.wasm)
+set(WASM_KEYBOARD_APP ${BUILD_DIR}/keyboard.wasmosapp)
+set(WASM_FRAMEBUFFER_DRIVER_SRC ${DRIVER_WASM_DIR}/framebuffer/framebuffer.ts)
+set(WASM_FRAMEBUFFER_DRIVER_WASM ${BUILD_DIR}/framebuffer.wasm)
+set(WASM_FRAMEBUFFER_APP ${BUILD_DIR}/framebuffer.wasmosapp)
 set(WASM_INIT_APP_SRC ${SERVICES_DIR}/sysinit/init.c)
 set(WASM_INIT_APP_WASM ${BUILD_DIR}/init.wasm)
 set(WASM_INIT_APP ${BUILD_DIR}/sysinit.wasmosapp)
@@ -327,6 +333,7 @@ add_custom_command(
           ${WASM_INIT_SMOKE_APP}
           ${WASM_NATIVE_CALL_MIN_APP}
           ${WASM_NATIVE_CALL_SMOKE_APP}
+          ${WASM_KEYBOARD_APP}
   ${WASM_ATA_APP}
   ${WASM_FAT_APP}
   ${WASM_SERIAL_APP}
@@ -445,13 +452,7 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SERIAL_APP} ${BUILD_DIR}/esp/system/drivers/serial.wasmosapp
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SERIAL_APP} ${BUILD_DIR}/esp/system/drivers/serial.wasmosapp
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SERIAL_APP} ${BUILD_DIR}/esp/system/drivers/serial.wasmosapp
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SERIAL_APP} ${BUILD_DIR}/esp/system/drivers/serial.wasmosapp
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SERIAL_APP} ${BUILD_DIR}/esp/system/drivers/serial.wasmosapp
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SERIAL_APP} ${BUILD_DIR}/esp/system/drivers/serial.wasmosapp
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SERIAL_APP} ${BUILD_DIR}/esp/system/drivers/serial.wasmosapp
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SERIAL_APP} ${BUILD_DIR}/esp/system/drivers/serial.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_KEYBOARD_APP} ${BUILD_DIR}/esp/system/drivers/keyboard.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wasmosapp
@@ -491,6 +492,7 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_KEYBOARD_APP} ${BUILD_DIR}/esp/system/drivers/keyboard.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wasmosapp
@@ -525,6 +527,7 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/devices
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
     ${INITFS_COPY_CMD}
@@ -566,6 +569,7 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/devices
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
     COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
     ${INITFS_COPY_CMD}

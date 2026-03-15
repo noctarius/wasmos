@@ -40,6 +40,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - an AssemblyScript `serial` driver loads through `hw-discovery` and calls
   `serial_register`, letting the kernel hand off console output from the COM1
   stub to the new service once it is ready
+- an AssemblyScript keyboard driver is launched by `hw-discovery` and polls the
+  PS/2 controller for scancodes; it stays running even if no input arrives so
+  the kernel does not need any keyboard-specific logic in its microkernel core
 - physical frame allocator and per-process CR3-managed paging
 - preemptive round-robin scheduler driven by PIT IRQ0
 - kernel IPC transport with endpoint ownership checks
@@ -307,6 +310,9 @@ Current file I/O scope:
 - `ata`: PIO ATA block device driver
 - `fs-fat`: FAT12/16/32 filesystem service on top of `ata`
 - `chardev`: character-device IPC service
+- `serial`: AssemblyScript-backed COM1 console driver that registers via `serial_register`
+- `framebuffer`: optional AssemblyScript driver that probes the kernel framebuffer exports directly, validates the resolution/stride, and paints a QEMU VGA gradient when the framebuffer is available
+- `keyboard`: AssemblyScript PS/2 driver that polls for scancodes and remains idle when no keyboard replies
 
 ### Services
 - `process-manager`: spawn/wait/kill/status plus WASMOS-APP loading

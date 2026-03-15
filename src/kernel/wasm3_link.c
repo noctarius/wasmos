@@ -8,8 +8,10 @@
 #include "timer.h"
 #include "wasm3_link.h"
 #include "wasmos_app.h"
+#include "framebuffer.h"
 
 #include <stdint.h>
+#include <string.h>
 
 typedef struct {
     uint32_t pid;
@@ -581,6 +583,39 @@ m3ApiRawFunction(wasmos_io_wait)
     m3ApiReturn(0);
 }
 
+m3ApiRawFunction(wasmos_framebuffer_pixel)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, x)
+    m3ApiGetArg(int32_t, y)
+    m3ApiGetArg(int32_t, color)
+    if (framebuffer_put_pixel((uint32_t)x, (uint32_t)y, (uint32_t)color) != 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn(0);
+}
+
+m3ApiRawFunction(wasmos_framebuffer_info)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArgMem(uint8_t *, out_ptr)
+    m3ApiGetArg(int32_t, len)
+
+    if (len < (int32_t)sizeof(framebuffer_info_t) || len <= 0) {
+        m3ApiReturn(-1);
+    }
+    if (!out_ptr) {
+        m3ApiReturn(-1);
+    }
+    framebuffer_info_t info = {0};
+    if (framebuffer_get_info(&info) != 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiCheckMem(out_ptr, (uint32_t)len);
+    memcpy(out_ptr, &info, sizeof(info));
+    m3ApiReturn(0);
+}
+
 m3ApiRawFunction(wasmos_system_halt)
 {
     m3ApiReturnType(int32_t)
@@ -928,6 +963,8 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "io_out8", "i(ii)", wasmos_io_out8);
     rc |= wasm3_link_raw(module, "wasmos", "io_out16", "i(ii)", wasmos_io_out16);
     rc |= wasm3_link_raw(module, "wasmos", "io_wait", "i()", wasmos_io_wait);
+    rc |= wasm3_link_raw(module, "wasmos", "framebuffer_info", "i(ii)", wasmos_framebuffer_info);
+    rc |= wasm3_link_raw(module, "wasmos", "framebuffer_pixel", "i(iii)", wasmos_framebuffer_pixel);
     rc |= wasm3_link_raw(module, "wasmos", "serial_register", "i(i)", wasmos_serial_register);
     if (rc != 0) {
         serial_write("[kernel] wasm3 link errors\n");

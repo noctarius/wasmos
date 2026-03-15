@@ -78,5 +78,17 @@ extern int32_t wasmos_io_out16(int32_t port, int32_t value)
     WASMOS_WASM_IMPORT("wasmos", "io_out16");
 extern int32_t wasmos_io_wait(void)
     WASMOS_WASM_IMPORT("wasmos", "io_wait");
+typedef struct {
+    uint64_t framebuffer_base;
+    uint64_t framebuffer_size;
+    uint32_t framebuffer_width;
+    uint32_t framebuffer_height;
+    uint32_t framebuffer_stride;
+    uint32_t framebuffer_reserved;
+} wasmos_framebuffer_info_t;
 
+extern int32_t wasmos_framebuffer_info(wasmos_framebuffer_info_t *info, int32_t info_len)
+    WASMOS_WASM_IMPORT("wasmos", "framebuffer_info");
+extern int32_t wasmos_framebuffer_pixel(int32_t x, int32_t y, int32_t color)
+    WASMOS_WASM_IMPORT("wasmos", "framebuffer_pixel");
 #endif

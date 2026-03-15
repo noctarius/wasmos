@@ -1,9 +1,8 @@
-# WASMOS
-
 <p align="center">
   <picture>
-    <source srcset="wasmos_wordmark.webp" type="image/webp">
-    <img src="wasmos_wordmark.svg" alt="WASMOS wordmark" width="520">
+    <source srcset="wasmos_wordmark-light.webp" type="image/webp" media="(prefers-color-scheme: light)">
+    <source srcset="wasmos_wordmark-dark.webp" type="image/webp" media="(prefers-color-scheme: dark)">
+    <img src="wasmos_wordmark-light.svg" alt="WASMOS wordmark" width="520">
   </picture>
 </p>
 

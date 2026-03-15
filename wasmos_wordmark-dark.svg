@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 700 150">
+  <defs>
+    <style>
+      .cls-1, .cls-2 {
+        fill: #111;
+      }
+
+      .cls-2, .cls-3, .cls-4 {
+        font-family: RobotoMono-BoldItalic, 'Roboto Mono';
+        font-size: 140px;
+        font-style: italic;
+        font-weight: 700;
+        isolation: isolate;
+        letter-spacing: 0em;
+      }
+
+      .cls-5, .cls-3 {
+        fill: #f4d33b;
+      }
+
+      .cls-6 {
+        stroke: #111;
+      }
+
+      .cls-6, .cls-7 {
+        fill: none;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 14px;
+      }
+
+      .cls-8, .cls-4 {
+        fill: #fff;
+      }
+
+      .cls-7 {
+        stroke: #fff;
+      }
+
+      .cls-9 {
+        display: none;
+      }
+    </style>
+  </defs>
+  <!-- Generator: Adobe Illustrator 28.7.1, SVG Export Plug-In . SVG Version: 1.2.0 Build 142)  -->
+  <g>
+    <g id="Lightmode" class="cls-9">
+      <text class="cls-2" transform="translate(153.2 123.2)"><tspan x="0" y="0">WAS</tspan></text>
+      <polygon class="cls-6" points="65.8 13.9 116.3 44.7 116.3 106.3 65.8 137.1 15.3 106.3 15.3 44.7 65.8 13.9"/>
+      <rect class="cls-1" x="39.9" y="44.9" width="49.3" height="18.5" rx="3.7" ry="3.7"/>
+      <rect class="cls-1" x="39.9" y="88.1" width="49.3" height="18.5" rx="3.7" ry="3.7"/>
+    </g>
+    <g id="Darkmode">
+      <text class="cls-4" transform="translate(153 123.3)"><tspan x="0" y="0">WAS</tspan></text>
+      <polygon class="cls-7" points="65.6 14 116.1 44.8 116.1 106.4 65.6 137.1 15.1 106.4 15.1 44.8 65.6 14"/>
+      <rect class="cls-8" x="39.8" y="45" width="49.3" height="18.5" rx="3.7" ry="3.7"/>
+      <rect class="cls-8" x="39.8" y="88.1" width="49.3" height="18.5" rx="3.7" ry="3.7"/>
+    </g>
+    <g id="Layer_1">
+      <text class="cls-3" transform="translate(427.2 123.2)"><tspan x="0" y="0">MOS</tspan></text>
+      <rect class="cls-5" x="39.9" y="66.5" width="49.3" height="18.5" rx="3.7" ry="3.7"/>
+    </g>
+  </g>
+</svg>

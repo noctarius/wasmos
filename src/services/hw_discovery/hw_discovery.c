@@ -35,6 +35,7 @@ typedef enum {
 
 typedef enum {
     HW_SPAWN_NONE = 0,
+    HW_SPAWN_SERIAL,
     HW_SPAWN_ATA,
     HW_SPAWN_FAT
 } hw_spawn_target_t;
@@ -47,10 +48,13 @@ static int32_t g_request_id = 1;
 static int32_t g_module_count = 0;
 static uint8_t g_need_ata = 0;
 static uint8_t g_need_fat = 0;
+static uint8_t g_need_serial = 0;
 static uint8_t g_ata_retries = 0;
 static uint8_t g_fat_retries = 0;
+static uint8_t g_serial_retries = 0;
 static int32_t g_ata_index = -1;
 static int32_t g_fat_index = -1;
+static int32_t g_serial_index = -1;
 
 static void
 stall_forever(void)
@@ -181,6 +185,9 @@ hw_spawn_driver_index(int32_t index)
 static hw_spawn_target_t
 next_spawn_target(void)
 {
+    if (g_need_serial) {
+        return HW_SPAWN_SERIAL;
+    }
     if (g_need_ata) {
         return HW_SPAWN_ATA;
     }
@@ -215,20 +222,27 @@ initialize(int32_t proc_endpoint,
     hw_scan_acpi();
     g_ata_index = module_index_by_name("ata");
     g_fat_index = module_index_by_name("fs-fat");
+    g_serial_index = module_index_by_name("serial");
     g_need_ata = (g_ata_index >= 0 && !proc_running("ata")) ? 1 : 0;
     g_need_fat = (g_fat_index >= 0 && !proc_running("fs-fat")) ? 1 : 0;
+    g_need_serial = (g_serial_index >= 0 && !proc_running("serial")) ? 1 : 0;
     g_phase = HW_PHASE_SPAWN;
 
     for (;;) {
         if (g_phase == HW_PHASE_SPAWN) {
-            /* Spawn ATA before FAT so the filesystem service never starts
-             * without its block-device dependency. */
+            /* Spawn serial before ATA/FAT so the terminal handoff stays deterministic. */
             hw_spawn_target_t target = next_spawn_target();
             if (target == HW_SPAWN_NONE) {
                 g_phase = HW_PHASE_IDLE;
                 continue;
             }
-            if (target == HW_SPAWN_ATA) {
+            if (target == HW_SPAWN_SERIAL) {
+                if (hw_spawn_driver_index(g_serial_index) != 0) {
+                    g_phase = HW_PHASE_FAILED;
+                    console_write("[hw-discovery] spawn serial failed\n");
+                    stall_forever();
+                }
+            } else if (target == HW_SPAWN_ATA) {
                 if (hw_spawn_driver_index(g_ata_index) != 0) {
                     g_phase = HW_PHASE_FAILED;
                     console_write("[hw-discovery] spawn ata failed\n");
@@ -263,7 +277,9 @@ initialize(int32_t proc_endpoint,
             }
             g_request_id++;
             if (resp_type == PROC_IPC_RESP) {
-                if (g_pending == HW_SPAWN_ATA) {
+                if (g_pending == HW_SPAWN_SERIAL) {
+                    g_need_serial = 0;
+                } else if (g_pending == HW_SPAWN_ATA) {
                     g_need_ata = 0;
                 } else if (g_pending == HW_SPAWN_FAT) {
                     g_need_fat = 0;
@@ -273,7 +289,12 @@ initialize(int32_t proc_endpoint,
                 continue;
             }
             if (resp_type == PROC_IPC_ERROR) {
-                if (g_pending == HW_SPAWN_ATA) {
+                if (g_pending == HW_SPAWN_SERIAL) {
+                    g_serial_retries++;
+                    if (g_serial_retries > 8) {
+                        g_need_serial = 0;
+                    }
+                } else if (g_pending == HW_SPAWN_ATA) {
                     g_ata_retries++;
                     if (g_ata_retries > 8) {
                         g_need_ata = 0;

@@ -17,6 +17,8 @@ int serial_read_char(uint8_t *out_char);
 const serial_driver_t *serial_set_driver(const serial_driver_t *driver);
 const serial_driver_t *serial_get_driver(void);
 
+int serial_register_remote_driver(uint32_t endpoint);
+
 #ifndef WASMOS_TRACE
 #define WASMOS_TRACE 0
 #endif

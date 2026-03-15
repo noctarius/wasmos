@@ -707,6 +707,13 @@ m3ApiRawFunction(wasmos_console_read)
     m3ApiReturn(1);
 }
 
+m3ApiRawFunction(wasmos_serial_register)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, endpoint)
+    m3ApiReturn(serial_register_remote_driver((uint32_t)endpoint));
+}
+
 m3ApiRawFunction(wasmos_proc_count)
 {
     m3ApiReturnType(int32_t)
@@ -921,6 +928,7 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "io_out8", "i(ii)", wasmos_io_out8);
     rc |= wasm3_link_raw(module, "wasmos", "io_out16", "i(ii)", wasmos_io_out16);
     rc |= wasm3_link_raw(module, "wasmos", "io_wait", "i()", wasmos_io_wait);
+    rc |= wasm3_link_raw(module, "wasmos", "serial_register", "i(i)", wasmos_serial_register);
     if (rc != 0) {
         serial_write("[kernel] wasm3 link errors\n");
         return -1;

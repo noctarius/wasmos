@@ -8,6 +8,7 @@ bootstrap_modules = [
   "native-call-smoke",
   "ata",
   "fs-fat",
+  "serial",
   "hw-discovery",
 ]
 
@@ -52,6 +53,12 @@ kind = "wasmos_app"
 flags = ["bootstrap"]
 path = "system/drivers/fs_fat.wasmosapp"
 source = "fs_fat.wasmosapp"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/drivers/serial.wasmosapp"
+source = "serial.wasmosapp"
 
 [[entries]]
 kind = "wasmos_app"

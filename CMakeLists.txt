@@ -562,6 +562,46 @@ if (OVMF_VARS)
     COMMENT "Running QEMU halt test"
     VERBATIM
   )
+  add_custom_target(run-qemu-ui-test
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/devices
+    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
+    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
+    ${INITFS_COPY_CMD}
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HW_DISCOVERY_APP} ${BUILD_DIR}/esp/system/services/hw_discovery.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wasmosapp
+    ${AS_HELLO_COPY_CMD}
+    ${HELLO_C_COPY_CMD}
+    ${CHARDEV_PREEMPT_COPY_CMD}
+    ${INIT_SMOKE_COPY_CMD}
+    ${FS_OPEN_SMOKE_COPY_CMD}
+    ${FS_WRITE_SMOKE_COPY_CMD}
+    ${NATIVE_CALL_MIN_COPY_CMD}
+    ${NATIVE_CALL_SMOKE_COPY_CMD}
+    ${RUST_HELLO_COPY_CMD}
+    ${GO_HELLO_COPY_CMD}
+    ${ZIG_HELLO_COPY_CMD}
+    ${LARGE_READ_COPY_CMD}
+    ${WRITE_SMOKE_FILE_COPY_CMD}
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_ui_test.py
+            --ovmf-code ${OVMF_CODE}
+            --ovmf-vars ${OVMF_VARS}
+            --esp ${BUILD_DIR}/esp
+    DEPENDS bootloader kernel
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Running QEMU UI test"
+    VERBATIM
+  )
   if (AS_ENABLE)
   endif ()
   add_custom_target(run-qemu-cli-test

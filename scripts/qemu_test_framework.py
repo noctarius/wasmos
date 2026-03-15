@@ -15,6 +15,8 @@ class QemuConfig:
     ovmf_code: str
     ovmf_vars: str
     esp_dir: str
+    nographic: bool = True
+    display: str = "gtk"
 
 
 def _read_cmake_cache(cache_path: str) -> dict:
@@ -49,12 +51,16 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
         "qemu-system-x86_64",
         "-m",
         "512M",
-        "-nographic",
         "-serial",
         "mon:stdio",
         "-drive",
         f"if=pflash,format=raw,readonly=on,file={cfg.ovmf_code}",
     ]
+    if cfg.nographic:
+        cmd += ["-nographic"]
+    else:
+        if cfg.display:
+            cmd += ["-display", cfg.display]
     if cfg.ovmf_vars:
         cmd += ["-drive", f"if=pflash,format=raw,file={cfg.ovmf_vars}"]
     cmd += ["-drive", f"format=raw,file=fat:rw:{cfg.esp_dir}"]

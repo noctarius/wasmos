@@ -158,6 +158,10 @@ Current bootstrap use:
    processes.
 9. The CLI becomes the visible interactive shell.
 
+A minimal COM1-based serial stub keeps the console alive during the steps above;
+this driver can be replaced later when a driver module registers through
+`serial_set_driver()` once terminal handoff is ready.
+
 ### Practical Boot Ownership
 - Bootloader owns UEFI interaction and boot-time file I/O.
 - Kernel owns core mechanisms and early bootstrap orchestration.

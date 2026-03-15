@@ -1,12 +1,29 @@
 #include "framebuffer.h"
+#include "serial.h"
 
 #include <stdint.h>
 #include <string.h>
+
+static void framebuffer_log_hex64(uint64_t value);
 
 static framebuffer_info_t g_framebuffer_info = {0};
 
 void framebuffer_init(const boot_info_t *info)
 {
+    serial_write("[framebuffer] init ");
+    framebuffer_log_hex64(info ? (uint64_t)(uintptr_t)info->framebuffer_base : 0);
+    serial_write(" ");
+    framebuffer_log_hex64(info ? (uint64_t)info->framebuffer_size : 0);
+    serial_write(" ");
+    framebuffer_log_hex64(info ? info->framebuffer_width : 0);
+    serial_write(" ");
+    framebuffer_log_hex64(info ? info->framebuffer_height : 0);
+    serial_write(" ");
+    framebuffer_log_hex64(info ? info->framebuffer_pixels_per_scanline : 0);
+    serial_write(" flags=");
+    framebuffer_log_hex64(info ? info->flags : 0);
+    serial_write("\n");
+
     if (!info || !(info->flags & BOOT_INFO_FLAG_GOP_PRESENT) ||
         !info->framebuffer_base || info->framebuffer_size == 0 ||
         info->framebuffer_width == 0 || info->framebuffer_height == 0) {
@@ -17,6 +34,22 @@ void framebuffer_init(const boot_info_t *info)
     g_framebuffer_info.framebuffer_width = info->framebuffer_width;
     g_framebuffer_info.framebuffer_height = info->framebuffer_height;
     g_framebuffer_info.framebuffer_stride = info->framebuffer_pixels_per_scanline;
+    serial_write("[framebuffer] stride=");
+    framebuffer_log_hex64(info->framebuffer_pixels_per_scanline);
+    serial_write("\n");
+}
+
+static void framebuffer_log_hex64(uint64_t value)
+{
+    char buf[21];
+    static const char hex[] = "0123456789ABCDEF";
+    buf[0] = '0';
+    buf[1] = 'x';
+    for (int i = 0; i < 16; ++i) {
+        buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
+    }
+    buf[18] = '\0';
+    serial_write(buf);
 }
 
 int framebuffer_get_info(framebuffer_info_t *out)

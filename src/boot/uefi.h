@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #define EFI_SUCCESS 0
+#define EFI_NOT_FOUND ((EFI_STATUS)0x800000000000000EULL)
 #define EFI_ERROR(x) ((x) != EFI_SUCCESS)
 
 typedef uint64_t EFI_STATUS;
@@ -26,6 +27,26 @@ typedef struct {
     UINT16 Data3;
     UINT8 Data4[8];
 } EFI_GUID;
+
+typedef enum {
+    EFI_LOCATE_SEARCH_TYPE_BY_HANDLE,
+    EFI_LOCATE_SEARCH_TYPE_BY_REGISTER_NOTIFY,
+    EFI_LOCATE_SEARCH_TYPE_BY_PROTOCOL
+} EFI_LOCATE_SEARCH_TYPE;
+
+typedef EFI_STATUS (EFIAPI *EFI_LOCATE_HANDLE_BUFFER)(
+    EFI_LOCATE_SEARCH_TYPE SearchType,
+    const EFI_GUID *Protocol,
+    void *SearchKey,
+    UINTN *NoHandles,
+    EFI_HANDLE **Buffer
+);
+
+typedef EFI_STATUS (EFIAPI *EFI_HANDLE_PROTOCOL)(
+    EFI_HANDLE Handle,
+    const EFI_GUID *Protocol,
+    void **Interface
+);
 
 typedef struct {
     UINT64 Signature;

@@ -401,3 +401,49 @@ uint64_t mm_context_root_table(uint32_t id) {
     }
     return ctx->root_table;
 }
+
+int mm_context_map_physical(uint32_t context_id,
+                           uint64_t virt,
+                           uint64_t phys,
+                           uint64_t size,
+                           uint32_t flags)
+{
+    if (context_id == 0 || virt == 0 || phys == 0 || size == 0) {
+        return -1;
+    }
+    if ((virt & 0xFFFULL) != 0 || (phys & 0xFFFULL) != 0 || (size & 0xFFFULL) != 0) {
+        return -1;
+    }
+
+    mm_context_t *ctx = mm_context_get(context_id);
+    if (!ctx || ctx->root_table == 0) {
+        return -1;
+    }
+
+    mem_region_t linear = {0};
+    if (mm_context_region_for_type(ctx, MEM_REGION_WASM_LINEAR, &linear) != 0) {
+        return -1;
+    }
+
+    uint64_t region_end = linear.base + linear.size;
+    if (virt < linear.base || virt + size > region_end) {
+        return -1;
+    }
+
+    uint64_t pages = size / PAGE_SIZE;
+    if (pages == 0) {
+        return -1;
+    }
+
+    uint64_t current_virt = virt;
+    uint64_t current_phys = phys;
+    for (uint64_t i = 0; i < pages; ++i) {
+        (void)paging_unmap_4k_in_root(ctx->root_table, current_virt);
+        if (paging_map_4k_in_root(ctx->root_table, current_virt, current_phys, flags) != 0) {
+            return -1;
+        }
+        current_virt += PAGE_SIZE;
+        current_phys += PAGE_SIZE;
+    }
+    return 0;
+}

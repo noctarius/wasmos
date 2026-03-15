@@ -311,7 +311,7 @@ Current file I/O scope:
 - `fs-fat`: FAT12/16/32 filesystem service on top of `ata`
 - `chardev`: character-device IPC service
 - `serial`: AssemblyScript-backed COM1 console driver that registers via `serial_register`
-- `framebuffer`: optional AssemblyScript driver that probes the kernel framebuffer exports directly, validates the resolution/stride, and paints a QEMU VGA gradient when the framebuffer is available
+- `framebuffer`: optional AssemblyScript driver that probes the kernel framebuffer exports, maps the GOP frame buffer into its own linear memory through `wasmos_framebuffer_map()`, and paints a gradient on the mapped region when the device is available; a `framebuffer_pixel()` fallback keeps the boot log alive if mapping fails
 - `keyboard`: AssemblyScript PS/2 driver that polls for scancodes and remains idle when no keyboard replies
 
 ### Services

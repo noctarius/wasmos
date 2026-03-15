@@ -37,6 +37,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - versioned `boot_info_t` handoff
 - bootstrap `initfs.img` packaging for early WASMOS modules and boot config
 - serial-first early boot diagnostics
+- minimal COM1 serial stub remains the early-boot console until a registered
+  serial driver formally takes over
 - physical frame allocator and per-process CR3-managed paging
 - preemptive round-robin scheduler driven by PIT IRQ0
 - kernel IPC transport with endpoint ownership checks

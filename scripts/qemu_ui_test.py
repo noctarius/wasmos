@@ -3,6 +3,7 @@ import argparse
 import shutil
 import subprocess
 import sys
+import time
 
 from qemu_test_framework import QemuConfig, QemuSession, default_config
 
@@ -21,7 +22,7 @@ def _available_display_backends() -> list[str]:
     except (subprocess.CalledProcessError, FileNotFoundError, PermissionError):
         return []
 
-    lines = [line.strip() for line in result.stdout.splitlines()]
+    lines = [line.strip().lower() for line in result.stdout.splitlines()]
     collecting = False
     available = []
     for line in lines:
@@ -69,6 +70,17 @@ def main():
     parser.add_argument("--esp", default="")
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument(
+        "--hold-time",
+        type=float,
+        default=0.0,
+        help="Seconds to wait after the shell prompt before sending `halt`.",
+    )
+    parser.add_argument(
+        "--no-halt",
+        action="store_true",
+        help="Do not send `halt`; keep the machine running until the user stops it.",
+    )
+    parser.add_argument(
         "--display",
         default="auto",
         help="QEMU display backend to use (auto chooses a supported UI).",
@@ -98,7 +110,10 @@ def main():
     with QemuSession(cfg, timeout_s=args.timeout) as session:
         if not session.expect(b"wamos> "):
             return 1
-        session.send("halt")
+        if args.hold_time > 0:
+            time.sleep(args.hold_time)
+        if not args.no_halt:
+            session.send("halt")
         return 0
 
 

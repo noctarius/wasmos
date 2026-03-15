@@ -336,6 +336,11 @@ Implemented:
 - Process runtime stacks still rely on shared low kernel mappings rather than a
   dedicated kernel-stack virtual range per process.
 
+A new kernel helper, `mm_context_map_physical`, now allows privileged drivers to
+request that specific physical regions (for example, the GOP framebuffer) be
+remapped into their linear heap pages, giving them direct access while keeping
+the host-managed map validation inside the kernel.
+
 ### Direction
 The desired endpoint is:
 - shared kernel higher-half mappings
@@ -430,6 +435,7 @@ This keeps the external ABI stable while presenting language-native entrypoints.
   - optional AssemblyScript driver
   - probes the kernel framebuffer APIs exposed via GOP
   - validates resolution and stride itself before painting
+  - maps the framebuffer pages into the driver linear heap through `wasmos_framebuffer_map()` backed by `mm_context_map_physical`
   - paints a gradient on the standard QEMU VGA framebuffer when the device is present
 
 ### Implemented Services

@@ -89,6 +89,8 @@ typedef struct {
 
 extern int32_t wasmos_framebuffer_info(wasmos_framebuffer_info_t *info, int32_t info_len)
     WASMOS_WASM_IMPORT("wasmos", "framebuffer_info");
+extern int32_t wasmos_framebuffer_map(int32_t ptr, int32_t size)
+    WASMOS_WASM_IMPORT("wasmos", "framebuffer_map");
 extern int32_t wasmos_framebuffer_pixel(int32_t x, int32_t y, int32_t color)
     WASMOS_WASM_IMPORT("wasmos", "framebuffer_pixel");
 #endif

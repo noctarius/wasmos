@@ -56,5 +56,6 @@ uint64_t mm_context_root_table(uint32_t id);
 int mm_shared_create(uint64_t pages, uint32_t flags, uint32_t *out_id, uint64_t *out_base);
 int mm_shared_map(mm_context_t *ctx, uint32_t id, uint32_t flags, uint64_t *out_base);
 int mm_shared_unmap(mm_context_t *ctx, uint32_t id);
+int mm_context_map_physical(uint32_t context_id, uint64_t virt, uint64_t phys, uint64_t size, uint32_t flags);
 
 #endif

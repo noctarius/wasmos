@@ -4,6 +4,7 @@
 #include "physmem.h"
 #include "process.h"
 #include "process_manager.h"
+#include "memory.h"
 #include "serial.h"
 #include "timer.h"
 #include "wasm3_link.h"
@@ -616,6 +617,42 @@ m3ApiRawFunction(wasmos_framebuffer_info)
     m3ApiReturn(0);
 }
 
+m3ApiRawFunction(wasmos_framebuffer_map)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, ptr)
+    m3ApiGetArg(int32_t, size)
+
+    if (ptr <= 0 || size <= 0) {
+        m3ApiReturn(-1);
+    }
+    if ((ptr & 0xFFF) != 0 || (size & 0xFFF) != 0) {
+        m3ApiReturn(-1);
+    }
+
+    framebuffer_info_t info = {0};
+    if (framebuffer_get_info(&info) != 0) {
+        m3ApiReturn(-1);
+    }
+    if ((uint32_t)size < info.framebuffer_size) {
+        m3ApiReturn(-1);
+    }
+
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+
+    if (mm_context_map_physical(proc->context_id,
+                                (uint64_t)(uint32_t)ptr,
+                                info.framebuffer_base,
+                                (uint64_t)(uint32_t)size,
+                                MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn(0);
+}
+
 m3ApiRawFunction(wasmos_system_halt)
 {
     m3ApiReturnType(int32_t)
@@ -964,6 +1001,7 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "io_out16", "i(ii)", wasmos_io_out16);
     rc |= wasm3_link_raw(module, "wasmos", "io_wait", "i()", wasmos_io_wait);
     rc |= wasm3_link_raw(module, "wasmos", "framebuffer_info", "i(ii)", wasmos_framebuffer_info);
+    rc |= wasm3_link_raw(module, "wasmos", "framebuffer_map", "i(ii)", wasmos_framebuffer_map);
     rc |= wasm3_link_raw(module, "wasmos", "framebuffer_pixel", "i(iii)", wasmos_framebuffer_pixel);
     rc |= wasm3_link_raw(module, "wasmos", "serial_register", "i(i)", wasmos_serial_register);
     if (rc != 0) {

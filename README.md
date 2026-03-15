@@ -206,6 +206,7 @@ cmake --build build --target run-qemu
 cmake --build build --target run-qemu-debug
 cmake --build build --target run-qemu-test
 cmake --build build --target run-qemu-cli-test
+cmake --build build --target run-qemu-ui-test
 ```
 
 Meaning:
@@ -213,6 +214,7 @@ Meaning:
 - `run-qemu-debug` starts QEMU paused for GDB
 - `run-qemu-test` performs a compile + boot + halt smoke run
 - `run-qemu-cli-test` runs the full CLI integration suite
+- `run-qemu-ui-test` boots QEMU with a graphical display plus `mon:stdio` serial
 
 The repository standard is:
 - use `run-qemu-test` after code changes

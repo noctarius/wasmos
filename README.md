@@ -98,6 +98,7 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - synthesizing early `boot_module_t` entries from bootstrap-marked initfs apps
 - exiting boot services
 - jumping into the kernel entry point
+`BOOTX64.EFI` also attempts to capture the GOP framebuffer. If GOP protocols are missing it now falls back to scanning VGA PCI BARs so WASM drivers can map the QEMU framebuffer and paint a gradient. PCI fallback logs now show when handle discovery or BAR selection fails so we can tell whether no VGA device was found.
 
 ### Kernel
 The kernel owns:

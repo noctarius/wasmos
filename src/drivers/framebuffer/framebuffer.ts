@@ -36,6 +36,7 @@ function writeString(text: string): void {
 
 function probeFramebuffer(): FramebufferDetails | null {
   if (framebuffer_info(framebufferInfoPtr, FRAMEBUFFER_INFO_SIZE) != 0) {
+    writeString("[framebuffer] info syscall failed\n");
     return null;
   }
 
@@ -48,9 +49,29 @@ function probeFramebuffer(): FramebufferDetails | null {
 
   if (info.base == 0 || info.size == 0 ||
       info.width <= 0 || info.height <= 0 || info.stride <= 0) {
+    writeString(
+      "[framebuffer] dropping info "
+        + info.base.toString()
+        + " "
+        + info.size.toString()
+        + " "
+        + info.width.toString()
+        + " "
+        + info.height.toString()
+        + " "
+        + info.stride.toString()
+        + "\n"
+    );
     return null;
   }
   if (info.stride < info.width) {
+    writeString(
+      "[framebuffer] stride < width "
+        + info.stride.toString()
+        + " < "
+        + info.width.toString()
+        + "\n"
+    );
     return null;
   }
   return info;

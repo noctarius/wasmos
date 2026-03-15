@@ -146,17 +146,52 @@ static void copy_cstr(char *dst, UINTN dst_size, const char *src) {
     dst[i] = '\0';
 }
 
+static void uefi_log(EFI_SYSTEM_TABLE *system, const char *msg);
+static void uefi_log_status(EFI_SYSTEM_TABLE *system, const char *msg, EFI_STATUS status);
+
 static void capture_framebuffer(EFI_SYSTEM_TABLE *system, boot_info_t *boot_info) {
     if (!system || !system->BootServices || !boot_info) {
         return;
     }
+    static int gop_locate_failed = 0;
     static const EFI_GUID gop_guid =
         { 0x9042a9de, 0x23dc, 0x4a38, { 0x96, 0xfb, 0x7a, 0xd4, 0x76, 0x2b, 0x04, 0x6f } };
     EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = 0;
-    if (system->BootServices->LocateProtocol(&gop_guid, 0, (void **)&gop) != EFI_SUCCESS) {
+    EFI_STATUS status = EFI_NOT_FOUND;
+    EFI_HANDLE *handles = 0;
+    UINTN handle_count = 0;
+    EFI_LOCATE_HANDLE_BUFFER locate_handle_buffer =
+        (EFI_LOCATE_HANDLE_BUFFER)system->BootServices->LocateHandleBuffer;
+    EFI_HANDLE_PROTOCOL handle_protocol =
+        (EFI_HANDLE_PROTOCOL)system->BootServices->HandleProtocol;
+    if (handle_protocol) {
+        EFI_HANDLE console_handle = system->ConsoleOutHandle;
+        if (console_handle) {
+            status = handle_protocol(console_handle, &gop_guid, (void **)&gop);
+        }
+    }
+    if (EFI_ERROR(status) && locate_handle_buffer && handle_protocol) {
+        status = locate_handle_buffer(EFI_LOCATE_SEARCH_TYPE_BY_PROTOCOL,
+                                      &gop_guid, 0, &handle_count, &handles);
+        if (!EFI_ERROR(status) && handle_count > 0) {
+            status = handle_protocol(handles[0], &gop_guid, (void **)&gop);
+        }
+    }
+    if (handles && system->BootServices && system->BootServices->FreePool) {
+        system->BootServices->FreePool(handles);
+    }
+    if (EFI_ERROR(status)) {
+        if (!gop_locate_failed) {
+            uefi_log_status(system, "[boot] LocateProtocol(GOP) failed: ", status);
+            gop_locate_failed = 1;
+        }
         return;
     }
     if (!gop || !gop->Mode || !gop->Mode->Info) {
+        if (!gop_locate_failed) {
+            uefi_log(system, "[boot] GOP or mode info missing\n");
+            gop_locate_failed = 1;
+        }
         return;
     }
     boot_info->framebuffer_base = (void *)(uintptr_t)gop->Mode->FrameBufferBase;

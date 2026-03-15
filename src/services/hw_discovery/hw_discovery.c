@@ -36,6 +36,8 @@ typedef enum {
 typedef enum {
     HW_SPAWN_NONE = 0,
     HW_SPAWN_SERIAL,
+    HW_SPAWN_KEYBOARD,
+    HW_SPAWN_FRAMEBUFFER,
     HW_SPAWN_ATA,
     HW_SPAWN_FAT
 } hw_spawn_target_t;
@@ -49,12 +51,18 @@ static int32_t g_module_count = 0;
 static uint8_t g_need_ata = 0;
 static uint8_t g_need_fat = 0;
 static uint8_t g_need_serial = 0;
+static uint8_t g_need_keyboard = 0;
+static uint8_t g_need_framebuffer = 0;
 static uint8_t g_ata_retries = 0;
 static uint8_t g_fat_retries = 0;
 static uint8_t g_serial_retries = 0;
+static uint8_t g_keyboard_retries = 0;
+static uint8_t g_framebuffer_retries = 0;
 static int32_t g_ata_index = -1;
 static int32_t g_fat_index = -1;
 static int32_t g_serial_index = -1;
+static int32_t g_keyboard_index = -1;
+static int32_t g_framebuffer_index = -1;
 
 static void
 stall_forever(void)
@@ -188,6 +196,12 @@ next_spawn_target(void)
     if (g_need_serial) {
         return HW_SPAWN_SERIAL;
     }
+    if (g_need_keyboard) {
+        return HW_SPAWN_KEYBOARD;
+    }
+    if (g_need_framebuffer) {
+        return HW_SPAWN_FRAMEBUFFER;
+    }
     if (g_need_ata) {
         return HW_SPAWN_ATA;
     }
@@ -223,9 +237,13 @@ initialize(int32_t proc_endpoint,
     g_ata_index = module_index_by_name("ata");
     g_fat_index = module_index_by_name("fs-fat");
     g_serial_index = module_index_by_name("serial");
+    g_keyboard_index = module_index_by_name("keyboard");
+    g_framebuffer_index = module_index_by_name("framebuffer");
     g_need_ata = (g_ata_index >= 0 && !proc_running("ata")) ? 1 : 0;
     g_need_fat = (g_fat_index >= 0 && !proc_running("fs-fat")) ? 1 : 0;
     g_need_serial = (g_serial_index >= 0 && !proc_running("serial")) ? 1 : 0;
+    g_need_keyboard = (g_keyboard_index >= 0 && !proc_running("keyboard")) ? 1 : 0;
+    g_need_framebuffer = (g_framebuffer_index >= 0 && !proc_running("framebuffer")) ? 1 : 0;
     g_phase = HW_PHASE_SPAWN;
 
     for (;;) {
@@ -240,6 +258,18 @@ initialize(int32_t proc_endpoint,
                 if (hw_spawn_driver_index(g_serial_index) != 0) {
                     g_phase = HW_PHASE_FAILED;
                     console_write("[hw-discovery] spawn serial failed\n");
+                    stall_forever();
+                }
+            } else if (target == HW_SPAWN_KEYBOARD) {
+                if (hw_spawn_driver_index(g_keyboard_index) != 0) {
+                    g_phase = HW_PHASE_FAILED;
+                    console_write("[hw-discovery] spawn keyboard failed\n");
+                    stall_forever();
+                }
+            } else if (target == HW_SPAWN_FRAMEBUFFER) {
+                if (hw_spawn_driver_index(g_framebuffer_index) != 0) {
+                    g_phase = HW_PHASE_FAILED;
+                    console_write("[hw-discovery] spawn framebuffer failed\n");
                     stall_forever();
                 }
             } else if (target == HW_SPAWN_ATA) {
@@ -279,6 +309,10 @@ initialize(int32_t proc_endpoint,
             if (resp_type == PROC_IPC_RESP) {
                 if (g_pending == HW_SPAWN_SERIAL) {
                     g_need_serial = 0;
+                } else if (g_pending == HW_SPAWN_KEYBOARD) {
+                    g_need_keyboard = 0;
+                } else if (g_pending == HW_SPAWN_FRAMEBUFFER) {
+                    g_need_framebuffer = 0;
                 } else if (g_pending == HW_SPAWN_ATA) {
                     g_need_ata = 0;
                 } else if (g_pending == HW_SPAWN_FAT) {
@@ -293,6 +327,16 @@ initialize(int32_t proc_endpoint,
                     g_serial_retries++;
                     if (g_serial_retries > 8) {
                         g_need_serial = 0;
+                    }
+                } else if (g_pending == HW_SPAWN_KEYBOARD) {
+                    g_keyboard_retries++;
+                    if (g_keyboard_retries > 8) {
+                        g_need_keyboard = 0;
+                    }
+                } else if (g_pending == HW_SPAWN_FRAMEBUFFER) {
+                    g_framebuffer_retries++;
+                    if (g_framebuffer_retries > 8) {
+                        g_need_framebuffer = 0;
                     }
                 } else if (g_pending == HW_SPAWN_ATA) {
                     g_ata_retries++;

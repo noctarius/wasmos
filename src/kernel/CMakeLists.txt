@@ -27,6 +27,8 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/wasm3_link.o
   ${BUILD_DIR}/wasm3_shim.o
   ${BUILD_DIR}/serial.o
+  ${BUILD_DIR}/keyboard.o
+  ${BUILD_DIR}/framebuffer.o
   ${BUILD_DIR}/wasm3_code.o
   ${BUILD_DIR}/wasm3_bind.o
   ${BUILD_DIR}/wasm3_compile.o
@@ -68,6 +70,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/wasm3_link.c
   ${KERNEL_DIR}/wasm3_shim.c
   ${KERNEL_DIR}/serial.c
+  ${KERNEL_DIR}/framebuffer.c
   ${WASM_DIR}/wasm3/source/m3_code.c
   ${WASM_DIR}/wasm3/source/m3_bind.c
   ${WASM_DIR}/wasm3/source/m3_compile.c
@@ -179,6 +182,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${KERNEL_DIR}/wasm3_link.c -o ${BUILD_DIR}/wasm3_link.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm3_shim.c -o ${BUILD_DIR}/wasm3_shim.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/serial.c -o ${BUILD_DIR}/serial.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/framebuffer.c -o ${BUILD_DIR}/framebuffer.o
   COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_code.c -o ${BUILD_DIR}/wasm3_code.o
   COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_bind.c -o ${BUILD_DIR}/wasm3_bind.o
   COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_compile.c -o ${BUILD_DIR}/wasm3_compile.o
@@ -191,11 +195,12 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_parse.c -o ${BUILD_DIR}/wasm3_parse.o
   COMMAND ${LLD_PATH} ${LDFLAGS_KERNEL} -o ${BUILD_DIR}/kernel.elf ${KERNEL_OBJS} ${KERNEL_LINK_LIBS}
   DEPENDS ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/include/cpu.h
-          ${KERNEL_DIR}/include/ipc.h ${KERNEL_DIR}/include/memory.h ${KERNEL_DIR}/include/paging.h
+  ${KERNEL_DIR}/include/ipc.h ${KERNEL_DIR}/include/memory.h ${KERNEL_DIR}/include/paging.h
           ${KERNEL_DIR}/include/physmem.h ${KERNEL_DIR}/include/process.h ${KERNEL_DIR}/include/process_manager.h
           ${KERNEL_DIR}/include/memory_service.h ${KERNEL_DIR}/include/irq.h ${KERNEL_DIR}/include/timer.h
           ${KERNEL_DIR}/include/serial.h ${KERNEL_DIR}/include/wasmos_app.h ${KERNEL_DIR}/include/spinlock.h
           ${KERNEL_DIR}/include/wasm_driver.h ${KERNEL_DIR}/include/wasm_chardev.h
+          ${KERNEL_DIR}/include/framebuffer.h
           ${KERNEL_DIR}/include/io.h
           ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

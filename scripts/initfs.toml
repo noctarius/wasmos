@@ -9,6 +9,7 @@ bootstrap_modules = [
   "ata",
   "fs-fat",
   "serial",
+  "framebuffer",
   "hw-discovery",
 ]
 
@@ -59,6 +60,18 @@ kind = "wasmos_app"
 flags = ["bootstrap"]
 path = "system/drivers/serial.wasmosapp"
 source = "serial.wasmosapp"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/drivers/framebuffer.wasmosapp"
+source = "framebuffer.wasmosapp"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/drivers/keyboard.wasmosapp"
+source = "keyboard.wasmosapp"
 
 [[entries]]
 kind = "wasmos_app"

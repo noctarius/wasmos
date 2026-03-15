@@ -14,6 +14,7 @@
 #include "wasm3_link.h"
 #include "physmem.h"
 #include "io.h"
+#include "framebuffer.h"
 
 #include <stdint.h>
 #include "wasm3.h"
@@ -772,6 +773,7 @@ kmain(boot_info_t *boot_info)
     serial_write("[kernel] boot_info size=");
     serial_write_hex64(boot_info->size);
     g_boot_info = boot_info;
+    framebuffer_init(boot_info);
     cpu_init();
 
     mm_init(boot_info);

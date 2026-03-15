@@ -2,6 +2,38 @@
 #include "elf.h"
 #include "boot.h"
 
+typedef enum {
+    PixelRedGreenBlueReserved8BitPerColor = 0,
+    PixelBlueGreenRedReserved8BitPerColor = 1,
+    PixelBitMask = 2,
+    PixelBltOnly = 3
+} EFI_GRAPHICS_PIXEL_FORMAT;
+
+typedef struct {
+    UINT32 Version;
+    UINT32 HorizontalResolution;
+    UINT32 VerticalResolution;
+    EFI_GRAPHICS_PIXEL_FORMAT PixelFormat;
+    UINT32 PixelInformation;
+    UINT32 PixelsPerScanLine;
+} EFI_GRAPHICS_OUTPUT_MODE_INFORMATION;
+
+typedef struct _EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE {
+    UINT32 MaxMode;
+    UINT32 Mode;
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *Info;
+    UINTN SizeOfInfo;
+    UINT64 FrameBufferBase;
+    UINT64 FrameBufferSize;
+} EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE;
+
+typedef struct {
+    EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *Mode;
+    void *QueryMode;
+    void *SetMode;
+    void *Blt;
+} EFI_GRAPHICS_OUTPUT_PROTOCOL;
+
 /*
  * The UEFI loader keeps policy intentionally narrow. Its only job is to build a
  * trustworthy handoff for the kernel: load ELF segments, snapshot the UEFI
@@ -112,6 +144,27 @@ static void copy_cstr(char *dst, UINTN dst_size, const char *src) {
         dst[i] = src[i];
     }
     dst[i] = '\0';
+}
+
+static void capture_framebuffer(EFI_SYSTEM_TABLE *system, boot_info_t *boot_info) {
+    if (!system || !system->BootServices || !boot_info) {
+        return;
+    }
+    static const EFI_GUID gop_guid =
+        { 0x9042a9de, 0x23dc, 0x4a38, { 0x96, 0xfb, 0x7a, 0xd4, 0x76, 0x2b, 0x04, 0x6f } };
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = 0;
+    if (system->BootServices->LocateProtocol(&gop_guid, 0, (void **)&gop) != EFI_SUCCESS) {
+        return;
+    }
+    if (!gop || !gop->Mode || !gop->Mode->Info) {
+        return;
+    }
+    boot_info->framebuffer_base = (void *)(uintptr_t)gop->Mode->FrameBufferBase;
+    boot_info->framebuffer_size = gop->Mode->FrameBufferSize;
+    boot_info->framebuffer_width = gop->Mode->Info->HorizontalResolution;
+    boot_info->framebuffer_height = gop->Mode->Info->VerticalResolution;
+    boot_info->framebuffer_pixels_per_scanline = gop->Mode->Info->PixelsPerScanLine;
+    boot_info->flags |= BOOT_INFO_FLAG_GOP_PRESENT;
 }
 
 static void uefi_hex(UINT64 value, char *out) {
@@ -495,12 +548,14 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
                     boot_info->boot_config = payload;
                     boot_info->boot_config_size = entry->size;
                 }
-            }
-
-            boot_info->modules = mods;
-            boot_info->module_count = (uint32_t)module_count;
-            boot_info->flags |= BOOT_INFO_FLAG_MODULES_PRESENT;
         }
+
+        boot_info->modules = mods;
+        boot_info->module_count = (uint32_t)module_count;
+        boot_info->flags |= BOOT_INFO_FLAG_MODULES_PRESENT;
+    }
+
+        capture_framebuffer(system, boot_info);
 
         status = bs->ExitBootServices(image, map_key);
         if (!EFI_ERROR(status)) {

@@ -163,6 +163,11 @@ The AssemblyScript `serial` driver now loads via `hw-discovery` and invokes
 `serial_register()` so console output can switch over from the stub to the new
 service as soon as the driver is available.
 
+- `hw-discovery` merely starts the keyboard WASMOS app alongside the other
+  bootstrap drivers; the AssemblyScript driver now polls the PS/2 controller for
+  scancodes itself so keyboard presence remains a user-space concern instead of
+  spinning kernel knowledge into the microkernel core.
+
 ### Practical Boot Ownership
 - Bootloader owns UEFI interaction and boot-time file I/O.
 - Kernel owns core mechanisms and early bootstrap orchestration.
@@ -421,6 +426,11 @@ This keeps the external ABI stable while presenting language-native entrypoints.
     current ESP baseline
 - `chardev`
   - IPC-backed console/character device service
+- `framebuffer`
+  - optional AssemblyScript driver
+  - probes the kernel framebuffer APIs exposed via GOP
+  - validates resolution and stride itself before painting
+  - paints a gradient on the standard QEMU VGA framebuffer when the device is present
 
 ### Implemented Services
 - `process-manager`
@@ -442,9 +452,11 @@ This keeps the external ABI stable while presenting language-native entrypoints.
 Current startup chain:
 1. bootloader loads `initfs.img`
 2. initfs contributes bootstrap `boot_module_t` entries for `hw-discovery`,
-   `ata`, `fs-fat`, and the current smoke/bootstrap apps
+   `serial`, `keyboard`, `framebuffer`, `ata`, `fs-fat`, and the current
+   smoke/bootstrap apps
 3. kernel `init` spawns `hw-discovery`
-4. `hw-discovery` starts `ata` and `fs-fat`
+4. `hw-discovery` starts the driver chain: `serial`, `keyboard`, the optional
+   `framebuffer`, `ata`, and `fs-fat`
 5. kernel `init` waits for a successful FAT readiness probe
 6. kernel `init` loads `sysinit` from disk via PM
 7. `sysinit` loads the configured `sysinit.spawn` processes from disk

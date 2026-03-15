@@ -768,6 +768,11 @@ else ()
     COMMENT \"Running QEMU CLI integration tests\"
     VERBATIM
   )
+set(QEMU_UI_OVMF_VARS_ARG "")
+if (OVMF_VARS)
+  set(QEMU_UI_OVMF_VARS_ARG "--ovmf-vars ${OVMF_VARS}")
+endif ()
+
 add_custom_target(run-qemu-ui-test
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
@@ -799,10 +804,11 @@ add_custom_target(run-qemu-ui-test
   ${LARGE_READ_COPY_CMD}
   ${WRITE_SMOKE_FILE_COPY_CMD}
   COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
-  COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_ui_test.py
-          --ovmf-code ${OVMF_CODE}
-          --ovmf-vars ${OVMF_VARS}
-          --esp ${BUILD_DIR}/esp
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_SOURCE_DIR}/scripts/qemu_ui_test.py
+            --ovmf-code ${OVMF_CODE}
+            ${QEMU_UI_OVMF_VARS_ARG}
+            --esp ${BUILD_DIR}/esp
   DEPENDS bootloader kernel
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Running QEMU UI test"

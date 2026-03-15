@@ -27,7 +27,6 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/wasm3_link.o
   ${BUILD_DIR}/wasm3_shim.o
   ${BUILD_DIR}/serial.o
-  ${BUILD_DIR}/keyboard.o
   ${BUILD_DIR}/framebuffer.o
   ${BUILD_DIR}/wasm3_code.o
   ${BUILD_DIR}/wasm3_bind.o

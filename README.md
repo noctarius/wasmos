@@ -37,8 +37,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - versioned `boot_info_t` handoff
 - bootstrap `initfs.img` packaging for early WASMOS modules and boot config
 - serial-first early boot diagnostics
-- minimal COM1 serial stub remains the early-boot console until a registered
-  serial driver formally takes over
+- an AssemblyScript `serial` driver loads through `hw-discovery` and calls
+  `serial_register`, letting the kernel hand off console output from the COM1
+  stub to the new service once it is ready
 - physical frame allocator and per-process CR3-managed paging
 - preemptive round-robin scheduler driven by PIT IRQ0
 - kernel IPC transport with endpoint ownership checks

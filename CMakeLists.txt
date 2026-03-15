@@ -65,6 +65,9 @@ set(WASM_ATA_APP ${BUILD_DIR}/ata.wasmosapp)
 set(WASM_FAT_DRIVER_SRC ${DRIVER_WASM_DIR}/fs_fat/fs_fat.c)
 set(WASM_FAT_DRIVER_WASM ${BUILD_DIR}/fs_fat.wasm)
 set(WASM_FAT_APP ${BUILD_DIR}/fs_fat.wasmosapp)
+set(WASM_SERIAL_DRIVER_SRC ${DRIVER_WASM_DIR}/serial/serial.ts)
+set(WASM_SERIAL_DRIVER_WASM ${BUILD_DIR}/serial.wasm)
+set(WASM_SERIAL_APP ${BUILD_DIR}/serial.wasmosapp)
 set(WASM_INIT_APP_SRC ${SERVICES_DIR}/sysinit/init.c)
 set(WASM_INIT_APP_WASM ${BUILD_DIR}/init.wasm)
 set(WASM_INIT_APP ${BUILD_DIR}/sysinit.wasmosapp)
@@ -324,10 +327,11 @@ add_custom_command(
           ${WASM_INIT_SMOKE_APP}
           ${WASM_NATIVE_CALL_MIN_APP}
           ${WASM_NATIVE_CALL_SMOKE_APP}
-          ${WASM_ATA_APP}
-          ${WASM_FAT_APP}
-          ${WASM_HW_DISCOVERY_APP}
-          make_wasmos_app
+  ${WASM_ATA_APP}
+  ${WASM_FAT_APP}
+  ${WASM_SERIAL_APP}
+  ${WASM_HW_DISCOVERY_APP}
+  make_wasmos_app
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Building initfs image"
   VERBATIM
@@ -440,6 +444,14 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SERIAL_APP} ${BUILD_DIR}/esp/system/drivers/serial.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SERIAL_APP} ${BUILD_DIR}/esp/system/drivers/serial.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SERIAL_APP} ${BUILD_DIR}/esp/system/drivers/serial.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SERIAL_APP} ${BUILD_DIR}/esp/system/drivers/serial.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SERIAL_APP} ${BUILD_DIR}/esp/system/drivers/serial.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SERIAL_APP} ${BUILD_DIR}/esp/system/drivers/serial.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SERIAL_APP} ${BUILD_DIR}/esp/system/drivers/serial.wasmosapp
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SERIAL_APP} ${BUILD_DIR}/esp/system/drivers/serial.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wasmosapp
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wasmosapp

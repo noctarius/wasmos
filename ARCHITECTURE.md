@@ -158,9 +158,10 @@ Current bootstrap use:
    processes.
 9. The CLI becomes the visible interactive shell.
 
-A minimal COM1-based serial stub keeps the console alive during the steps above;
-this driver can be replaced later when a driver module registers through
-`serial_set_driver()` once terminal handoff is ready.
+A minimal COM1-based serial stub keeps the console alive during the steps above.
+The AssemblyScript `serial` driver now loads via `hw-discovery` and invokes
+`serial_register()` so console output can switch over from the stub to the new
+service as soon as the driver is available.
 
 ### Practical Boot Ownership
 - Bootloader owns UEFI interaction and boot-time file I/O.

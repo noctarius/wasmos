@@ -312,9 +312,33 @@ wasm3_alloc(size_t size, int zero)
     }
     critical_section_enter();
     size_t total = align_up(sizeof(wasm3_heap_block_t) + size, WASM3_HEAP_ALIGN);
+    /* Keep small allocations tightly packed but ensure larger buffers (notably
+     * wasm3 linear memory) are page-aligned so we can remap them to devices. */
+    size_t align = WASM3_HEAP_ALIGN;
+    if (size >= 4096u) {
+        align = 4096u;
+    }
+    size_t header = sizeof(wasm3_heap_block_t);
+    size_t skew = 0;
+    /* wasm3 hostcalls receive the linear memory base as m3MemData(header),
+     * i.e. (returned_ptr + sizeof(M3MemoryHeader)). Keep that data base page
+     * aligned by skewing large allocations by 0x18. */
+    if (align == 4096u) {
+        skew = 0x18u;
+    }
     wasm3_heap_chunk_t *chunk = wasm3_heap_tail_chunk(slot);
-    if (!chunk || align_up(chunk->offset, WASM3_HEAP_ALIGN) + total > chunk->size) {
-        if (wasm3_heap_grow(slot, total) != 0) {
+    size_t aligned_offset = 0;
+    if (chunk) {
+        aligned_offset = align_up(chunk->offset + header + skew, align);
+        if (aligned_offset >= header + skew) {
+            aligned_offset -= (header + skew);
+        } else {
+            aligned_offset = 0;
+        }
+    }
+    if (!chunk || aligned_offset == 0 || aligned_offset + total > chunk->size) {
+        /* Ensure new chunks account for the worst-case alignment slop. */
+        if (wasm3_heap_grow(slot, total + align) != 0) {
             serial_write("[wasm3-heap] grow failed pid=");
             wasm3_log_hex64(slot->pid);
             serial_write("[wasm3-heap] req=");
@@ -327,24 +351,20 @@ wasm3_alloc(size_t size, int zero)
             return 0;
         }
         chunk = wasm3_heap_tail_chunk(slot);
-    }
-    if (!chunk) {
-        critical_section_leave();
-        return 0;
-    }
-
-    size_t aligned_offset = align_up(chunk->offset, WASM3_HEAP_ALIGN);
-    if (aligned_offset + total > chunk->size) {
-        serial_write("[wasm3-heap] chunk oom pid=");
-        wasm3_log_hex64(slot->pid);
-        serial_write("[wasm3-heap] req=");
-        wasm3_log_hex64((uint64_t)size);
-        serial_write("[wasm3-heap] off=");
-        wasm3_log_hex64((uint64_t)chunk->offset);
-        serial_write("[wasm3-heap] total=");
-        wasm3_log_hex64((uint64_t)chunk->size);
-        critical_section_leave();
-        return 0;
+        if (!chunk) {
+            critical_section_leave();
+            return 0;
+        }
+        aligned_offset = align_up(chunk->offset + header + skew, align);
+        if (aligned_offset < header + skew) {
+            critical_section_leave();
+            return 0;
+        }
+        aligned_offset -= (header + skew);
+        if (aligned_offset + total > chunk->size) {
+            critical_section_leave();
+            return 0;
+        }
     }
 
     wasm3_heap_block_t *block = (wasm3_heap_block_t *)(chunk->base + aligned_offset);

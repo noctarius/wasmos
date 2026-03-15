@@ -2,13 +2,14 @@
 import argparse
 import shutil
 import subprocess
+import sys
 
 from qemu_test_framework import QemuConfig, QemuSession, default_config
 
-PREFERRED_DISPLAYERS = ["curses", "gtk", "sdl", "cocoa", "dbus"]
+PREFERRED_DISPLAYERS = ["cocoa", "gtk", "sdl", "dbus", "curses"]
 
 
-def detect_display_backend() -> str:
+def _available_display_backends() -> list[str]:
     qemu_bin = shutil.which("qemu-system-x86_64") or "qemu-system-x86_64"
     try:
         result = subprocess.run(
@@ -18,7 +19,7 @@ def detect_display_backend() -> str:
             check=True,
         )
     except (subprocess.CalledProcessError, FileNotFoundError, PermissionError):
-        return ""
+        return []
 
     lines = [line.strip() for line in result.stdout.splitlines()]
     collecting = False
@@ -35,16 +36,30 @@ def detect_display_backend() -> str:
                 break
             if line not in available:
                 available.append(line)
+    return available
 
+
+def detect_display_backend() -> str:
+    available = _available_display_backends()
+    if not available:
+        return ""
+
+    has_terminal = sys.stdin.isatty() and sys.stdout.isatty()
     for preferred in PREFERRED_DISPLAYERS:
-        if preferred in available:
-            return preferred
+        if preferred not in available:
+            continue
+        if preferred == "curses" and not has_terminal:
+            continue
+        return preferred
+
+    if not has_terminal and "none" in available:
+        return "none"
 
     for candidate in available:
         if candidate and candidate.lower() != "none":
             return candidate
 
-    return ""
+    return "none" if "none" in available else ""
 
 
 def main():
@@ -60,8 +75,9 @@ def main():
     )
     args = parser.parse_args()
 
-    if args.display in ("auto", "default"):
-        args.display = detect_display_backend()
+    display_backend = args.display
+    if display_backend in ("auto", "default"):
+        display_backend = detect_display_backend()
 
     if args.ovmf_code or args.esp:
         cfg = QemuConfig(
@@ -72,8 +88,12 @@ def main():
     else:
         cfg = default_config()
 
-    cfg.nographic = False
-    cfg.display = args.display or ""
+    if not display_backend or display_backend == "none":
+        cfg.nographic = True
+        cfg.display = ""
+    else:
+        cfg.nographic = False
+        cfg.display = display_backend
 
     with QemuSession(cfg, timeout_s=args.timeout) as session:
         if not session.expect(b"wamos> "):

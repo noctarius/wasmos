@@ -1,5 +1,21 @@
 # WASMOS
 
+<p align="center">
+  <picture>
+    <source srcset="wasmos_wordmark.webp" type="image/webp">
+    <img src="wasmos_wordmark.svg" alt="WASMOS wordmark" width="520">
+  </picture>
+</p>
+
+<p align="center">
+  <picture>
+    <source srcset="wasmo.webp" type="image/webp">
+    <img src="wasmo.svg" alt="Wasmo the WASMOS mascot" width="180">
+  </picture>
+</p>
+
+<p align="center"><strong>Small boot path. Small kernel. Large mascot energy.</strong></p>
+
 WASMOS is a minimal x86_64 UEFI bootloader + kernel scaffold that boots a
 small WASM-based user-space stack on top of `wasm3`.
 
@@ -8,6 +24,9 @@ The project is intentionally narrow:
 - the kernel keeps only low-level mechanisms
 - drivers, services, and applications are WASM programs
 - integration is validated through QEMU boot and CLI tests
+
+If the boot log feels a little too serious, Wasmo is here to remind you that
+the system still boots better when the mascot is confident.
 
 IMPORTANT: Keep this file and `ARCHITECTURE.md` up to date with every prompt
 execution and code iteration.
@@ -59,6 +78,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - `scripts/` helper scripts and the QEMU test framework
 - `ARCHITECTURE.md` system design and implementation baseline
 - `TASKS.md` open work and follow-up items
+- `wasmo.svg` / `wasmo.webp` repo-local mascot art used by this README
+- `wasmos_wordmark.svg` / `wasmos_wordmark.webp` repo-local wordmark art used
+  by this README
 
 ## Boot and Startup Model
 

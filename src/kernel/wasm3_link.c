@@ -5,6 +5,7 @@
 #include "process.h"
 #include "process_manager.h"
 #include "memory.h"
+#include "paging.h"
 #include "serial.h"
 #include "timer.h"
 #include "wasm3_link.h"
@@ -623,10 +624,10 @@ m3ApiRawFunction(wasmos_framebuffer_map)
     m3ApiGetArg(int32_t, ptr)
     m3ApiGetArg(int32_t, size)
 
-    if (ptr <= 0 || size <= 0) {
+    if (ptr < 0 || size <= 0) {
         m3ApiReturn(-1);
     }
-    if ((ptr & 0xFFF) != 0 || (size & 0xFFF) != 0) {
+    if ((size & 0xFFF) != 0) {
         m3ApiReturn(-1);
     }
 
@@ -643,12 +644,43 @@ m3ApiRawFunction(wasmos_framebuffer_map)
         m3ApiReturn(-1);
     }
 
-    if (mm_context_map_physical(proc->context_id,
-                                (uint64_t)(uint32_t)ptr,
-                                info.framebuffer_base,
-                                (uint64_t)(uint32_t)size,
-                                MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE) != 0) {
+    mm_context_t *ctx = mm_context_get(proc->context_id);
+    if (!ctx || ctx->root_table == 0) {
         m3ApiReturn(-1);
+    }
+
+    /* Map the physical framebuffer over the caller-provided linear-memory span.
+     * The WASM pointer is an offset into wasm3's linear memory; convert it into
+     * the host virtual address (_mem + offset) that the interpreter uses. */
+    uint64_t mem_size = (uint64_t)m3_GetMemorySize(runtime);
+    uint64_t off = (uint64_t)(uint32_t)ptr;
+    uint64_t map_size = (uint64_t)(uint32_t)size;
+    if (off + map_size > mem_size) {
+        m3ApiReturn(-1);
+    }
+
+    uint64_t virt = (uint64_t)(uintptr_t)m3ApiOffsetToPtr((uint32_t)ptr);
+    if ((virt & 0xFFFULL) != 0) {
+        m3ApiReturn(-1);
+    }
+
+    uint64_t pages = map_size / 0x1000ULL;
+    if (pages == 0) {
+        serial_write("[framebuffer-map] zero pages\n");
+        m3ApiReturn(-1);
+    }
+    uint64_t cur_virt = virt;
+    uint64_t cur_phys = info.framebuffer_base;
+    for (uint64_t i = 0; i < pages; ++i) {
+        (void)paging_unmap_4k_in_root(ctx->root_table, cur_virt);
+        if (paging_map_4k_in_root(ctx->root_table,
+                                 cur_virt,
+                                 cur_phys,
+                                 MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE) < 0) {
+            m3ApiReturn(-1);
+        }
+        cur_virt += 0x1000ULL;
+        cur_phys += 0x1000ULL;
     }
     m3ApiReturn(0);
 }

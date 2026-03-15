@@ -50,6 +50,9 @@ The current tree already boots into a usable user-space stack:
 - The CMake-only `kernel_ide` aggregation target indexes kernel sources plus
   selected WASM user-space sources, so it must mirror the libc include root
   used by those components for editor diagnostics.
+- The top-level documentation now uses repo-local mascot and wordmark assets in
+  `README.md`; this is documentation-only branding and does not affect boot or
+  runtime behavior.
 
 ## Architectural Direction
 

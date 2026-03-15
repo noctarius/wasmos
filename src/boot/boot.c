@@ -34,6 +34,18 @@ typedef struct {
     void *Blt;
 } EFI_GRAPHICS_OUTPUT_PROTOCOL;
 
+typedef EFI_STATUS (EFIAPI *EFI_GOP_SET_MODE)(
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *This,
+    UINT32 ModeNumber
+);
+
+typedef EFI_STATUS (EFIAPI *EFI_GOP_QUERY_MODE)(
+    EFI_GRAPHICS_OUTPUT_PROTOCOL *This,
+    UINT32 ModeNumber,
+    UINTN *SizeOfInfo,
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION **Info
+);
+
 /*
  * The UEFI loader keeps policy intentionally narrow. Its only job is to build a
  * trustworthy handoff for the kernel: load ELF segments, snapshot the UEFI
@@ -146,14 +158,240 @@ static void copy_cstr(char *dst, UINTN dst_size, const char *src) {
     dst[i] = '\0';
 }
 
-static void uefi_log(EFI_SYSTEM_TABLE *system, const char *msg);
-static void uefi_log_status(EFI_SYSTEM_TABLE *system, const char *msg, EFI_STATUS status);
-
-static void capture_framebuffer(EFI_SYSTEM_TABLE *system, boot_info_t *boot_info) {
-    if (!system || !system->BootServices || !boot_info) {
+static void connect_handles_for_protocol(EFI_SYSTEM_TABLE *system, EFI_CONNECT_CONTROLLER connect_controller,
+                                         EFI_LOCATE_HANDLE_BUFFER locate_handle_buffer, const EFI_GUID *protocol) {
+    if (!system || !connect_controller || !locate_handle_buffer || !protocol) {
         return;
     }
+    EFI_HANDLE *handles = 0;
+    UINTN handle_count = 0;
+    EFI_STATUS status = locate_handle_buffer(
+        EFI_LOCATE_SEARCH_TYPE_BY_PROTOCOL,
+        protocol,
+        0,
+        &handle_count,
+        &handles
+    );
+    if (EFI_ERROR(status) || !handles || handle_count == 0) {
+        return;
+    }
+    for (UINTN i = 0; i < handle_count; ++i) {
+        if (!handles[i]) {
+            continue;
+        }
+        connect_controller(handles[i], 0, 0, TRUE);
+    }
+    if (system->BootServices && system->BootServices->FreePool) {
+        system->BootServices->FreePool(handles);
+    }
+}
+
+static void connect_graphics_controllers(EFI_SYSTEM_TABLE *system) {
+    static int g_graphics_connected = 0;
+    if (g_graphics_connected || !system || !system->BootServices) {
+        return;
+    }
+    EFI_CONNECT_CONTROLLER connect_controller =
+        (EFI_CONNECT_CONTROLLER)system->BootServices->ConnectController;
+    EFI_LOCATE_HANDLE_BUFFER locate_handle_buffer =
+        (EFI_LOCATE_HANDLE_BUFFER)system->BootServices->LocateHandleBuffer;
+    if (!connect_controller || !locate_handle_buffer) {
+        return;
+    }
+
+    if (system->ConsoleOutHandle) {
+        connect_controller(system->ConsoleOutHandle, 0, 0, TRUE);
+    }
+    if (system->StandardErrorHandle && system->StandardErrorHandle != system->ConsoleOutHandle) {
+        connect_controller(system->StandardErrorHandle, 0, 0, TRUE);
+    }
+
+    static const EFI_GUID text_output_guid =
+        { 0x387477c2, 0x69c7, 0x11d2, { 0x8e, 0x39, 0x00, 0xa0, 0xc9, 0x69, 0x72, 0x3b } };
+    static const EFI_GUID pci_io_guid =
+        { 0x2f707eb9, 0x3a1a, 0x11d4, { 0x9a, 0x46, 0x00, 0x90, 0x27, 0x3f, 0xcc, 0x69 } };
+    static const EFI_GUID root_bridge_guid = EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_GUID;
+
+    connect_handles_for_protocol(system, connect_controller, locate_handle_buffer, &text_output_guid);
+    connect_handles_for_protocol(system, connect_controller, locate_handle_buffer, &pci_io_guid);
+    connect_handles_for_protocol(system, connect_controller, locate_handle_buffer, &root_bridge_guid);
+    g_graphics_connected = 1;
+}
+
+static void uefi_log(EFI_SYSTEM_TABLE *system, const char *msg);
+static void uefi_log_status(EFI_SYSTEM_TABLE *system, const char *msg, EFI_STATUS status);
+static void uefi_log_hex_prefixed(EFI_SYSTEM_TABLE *system, const char *prefix, uint64_t value);
+
+typedef struct {
+    uint64_t base;
+    uint64_t size;
+    uint32_t width;
+    uint32_t height;
+    uint32_t stride;
+    uint32_t flags;
+} framebuffer_snapshot_t;
+
+static inline void pci_out32(uint16_t port, uint32_t value)
+{
+    __asm__ volatile("outl %%eax, %%dx" : : "a"(value), "d"(port));
+}
+
+static inline uint32_t pci_in32(uint16_t port)
+{
+    uint32_t value;
+    __asm__ volatile("inl %%dx, %%eax" : "=a"(value) : "d"(port));
+    return value;
+}
+
+static uint32_t pci_config_read32(uint8_t bus, uint8_t device, uint8_t function, uint8_t reg)
+{
+    uint32_t address = 0x80000000u;
+    address |= ((uint32_t)bus << 16);
+    address |= ((uint32_t)device << 11);
+    address |= ((uint32_t)function << 8);
+    address |= reg & 0xFC;
+    pci_out32(0xCF8, address);
+    return pci_in32(0xCFC);
+}
+
+static void pci_config_write32(uint8_t bus, uint8_t device, uint8_t function, uint8_t reg, uint32_t value)
+{
+    uint32_t address = 0x80000000u;
+    address |= ((uint32_t)bus << 16);
+    address |= ((uint32_t)device << 11);
+    address |= ((uint32_t)function << 8);
+    address |= reg & 0xFC;
+    pci_out32(0xCF8, address);
+    pci_out32(0xCFC, value);
+}
+
+static int pci_probe_mem_bar(uint8_t bus,
+                            uint8_t device,
+                            uint8_t function,
+                            uint8_t bar_index,
+                            uint64_t *out_base,
+                            uint64_t *out_size,
+                            int *consumed_next)
+{
+    if (!out_base || !out_size || !consumed_next) {
+        return -1;
+    }
+    *consumed_next = 0;
+    uint8_t reg = 0x10 + (bar_index << 2);
+    uint32_t bar_value = pci_config_read32(bus, device, function, reg);
+    if (bar_value == 0) {
+        return -1;
+    }
+    if (bar_value & 0x1) {
+        return -1;
+    }
+    uint32_t type = (bar_value >> 1) & 0x3;
+    if (type == 0x1) {
+        return -1;
+    }
+    uint64_t base = bar_value & 0xFFFFFFF0u;
+    if (type == 0x0) {
+        pci_config_write32(bus, device, function, reg, 0xFFFFFFFFu);
+        uint32_t mask = pci_config_read32(bus, device, function, reg);
+        pci_config_write32(bus, device, function, reg, bar_value);
+        uint32_t mask_clean = mask & 0xFFFFFFF0u;
+        if (mask_clean == 0) {
+            return -1;
+        }
+        *out_base = base;
+        *out_size = ((uint64_t)(~mask_clean & 0xFFFFFFFFu)) + 1;
+        return 0;
+    }
+    if (type == 0x2) {
+        uint32_t bar_high = pci_config_read32(bus, device, function, reg + 4);
+        uint64_t base64 = base | ((uint64_t)bar_high << 32);
+        pci_config_write32(bus, device, function, reg, 0xFFFFFFFFu);
+        pci_config_write32(bus, device, function, reg + 4, 0xFFFFFFFFu);
+        uint32_t mask_low = pci_config_read32(bus, device, function, reg);
+        uint32_t mask_high = pci_config_read32(bus, device, function, reg + 4);
+        pci_config_write32(bus, device, function, reg, bar_value);
+        pci_config_write32(bus, device, function, reg + 4, bar_high);
+        uint64_t mask64 = (((uint64_t)mask_high) << 32) | (uint64_t)(mask_low & 0xFFFFFFF0u);
+        mask64 &= ~0xFULL;
+        if (mask64 == 0) {
+            return -1;
+        }
+        *consumed_next = 1;
+        *out_base = base64;
+        *out_size = (~mask64) + 1;
+        return 0;
+    }
+    return -1;
+}
+
+static int capture_framebuffer_from_pci_config(EFI_SYSTEM_TABLE *system,
+                                               framebuffer_snapshot_t *snapshot)
+{
+    if (!system || !system->BootServices || !snapshot) {
+        return -1;
+    }
+    uefi_log(system, "[boot] PCI direct memory scan fallback start\n");
+    uint64_t best_base = 0;
+    uint64_t best_size = 0;
+    for (uint16_t bus = 0; bus < 256; ++bus) {
+        for (uint8_t device = 0; device < 32; ++device) {
+            for (uint8_t function = 0; function < 8; ++function) {
+                uint32_t vendor_id = pci_config_read32(bus, device, function, 0);
+                if ((vendor_id & 0xFFFF) == 0xFFFF) {
+                    continue;
+                }
+                uint32_t class_code = pci_config_read32(bus, device, function, 8);
+                uint8_t base_class = (class_code >> 24) & 0xFF;
+                if (base_class != 0x03) {
+                    continue;
+                }
+                int bar_index = 0;
+                while (bar_index < 6) {
+                    uint64_t candidate_base = 0;
+                    uint64_t candidate_size = 0;
+                    int consumed = 0;
+                    if (pci_probe_mem_bar(bus, device, function, (uint8_t)bar_index,
+                                          &candidate_base, &candidate_size, &consumed) == 0) {
+                        if (candidate_size > best_size && candidate_base != 0) {
+                            best_size = candidate_size;
+                            best_base = candidate_base;
+                            uefi_log(system, "[boot] PCI VGA candidate BAR via config\n");
+                            uefi_log_hex_prefixed(system, "  base=", best_base);
+                            uefi_log_hex_prefixed(system, "  size=", best_size);
+                        }
+                    }
+                    bar_index += 1 + consumed;
+                }
+            }
+        }
+    }
+
+    if (best_size == 0 || best_base == 0) {
+        uefi_log(system, "[boot] PCI config scan found no VGA BAR\n");
+        return -1;
+    }
+
+    snapshot->base = best_base;
+    snapshot->size = best_size;
+    snapshot->width = 1024;
+    snapshot->height = 768;
+    snapshot->stride = 1024;
+    snapshot->flags = BOOT_INFO_FLAG_GOP_PRESENT;
+    uefi_log(system, "[boot] VGA framebuffer mapped via PCI config scan\n");
+    return 0;
+}
+
+
+static int capture_framebuffer_snapshot(EFI_SYSTEM_TABLE *system,
+                                       framebuffer_snapshot_t *snapshot)
+{
+    if (!system || !system->BootServices || !snapshot) {
+        return -1;
+    }
+
+    connect_graphics_controllers(system);
     static int gop_locate_failed = 0;
+    static int gop_handle_locate_failed = 0;
     static const EFI_GUID gop_guid =
         { 0x9042a9de, 0x23dc, 0x4a38, { 0x96, 0xfb, 0x7a, 0xd4, 0x76, 0x2b, 0x04, 0x6f } };
     EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = 0;
@@ -164,42 +402,137 @@ static void capture_framebuffer(EFI_SYSTEM_TABLE *system, boot_info_t *boot_info
         (EFI_LOCATE_HANDLE_BUFFER)system->BootServices->LocateHandleBuffer;
     EFI_HANDLE_PROTOCOL handle_protocol =
         (EFI_HANDLE_PROTOCOL)system->BootServices->HandleProtocol;
-    if (handle_protocol) {
-        EFI_HANDLE console_handle = system->ConsoleOutHandle;
-        if (console_handle) {
-            status = handle_protocol(console_handle, &gop_guid, (void **)&gop);
-        }
+    EFI_CONNECT_CONTROLLER connect_controller =
+        (EFI_CONNECT_CONTROLLER)system->BootServices->ConnectController;
+    EFI_LOCATE_PROTOCOL locate_protocol =
+        (EFI_LOCATE_PROTOCOL)system->BootServices->LocateProtocol;
+
+    if (connect_controller && system->ConsoleOutHandle) {
+        connect_controller(system->ConsoleOutHandle, 0, 0, TRUE);
     }
-    if (EFI_ERROR(status) && locate_handle_buffer && handle_protocol) {
+
+    if (locate_protocol) {
+        status = locate_protocol(&gop_guid, 0, (void **)&gop);
+    }
+
+    if ((EFI_ERROR(status) || !gop) && handle_protocol && system->ConsoleOutHandle) {
+        status = handle_protocol(system->ConsoleOutHandle, &gop_guid, (void **)&gop);
+    }
+
+    if ((EFI_ERROR(status) || !gop) && locate_handle_buffer && handle_protocol) {
         status = locate_handle_buffer(EFI_LOCATE_SEARCH_TYPE_BY_PROTOCOL,
                                       &gop_guid, 0, &handle_count, &handles);
-        if (!EFI_ERROR(status) && handle_count > 0) {
-            status = handle_protocol(handles[0], &gop_guid, (void **)&gop);
+        if (EFI_ERROR(status)) {
+            if (!gop_handle_locate_failed) {
+                uefi_log_status(system, "[boot] LocateHandleBuffer error: ", status);
+                gop_handle_locate_failed = 1;
+            }
+        } else {
+            uefi_log(system, "[boot] LocateHandleBuffer succeeded\n");
+            gop_handle_locate_failed = 0;
+        }
+        if (!EFI_ERROR(status)) {
+            for (UINTN i = 0; i < handle_count; ++i) {
+                EFI_HANDLE candidate = handles[i];
+                if (connect_controller) {
+                    connect_controller(candidate, 0, 0, TRUE);
+                }
+                status = handle_protocol(candidate, &gop_guid, (void **)&gop);
+                if (EFI_ERROR(status) || !gop) {
+                    continue;
+                }
+                break;
+            }
         }
     }
+
     if (handles && system->BootServices && system->BootServices->FreePool) {
         system->BootServices->FreePool(handles);
     }
+    static int pci_fallback_attempted = 0;
     if (EFI_ERROR(status)) {
+        if (!pci_fallback_attempted) {
+            pci_fallback_attempted = 1;
+            if (capture_framebuffer_from_pci_config(system, snapshot) == 0) {
+                return 0;
+            }
+        }
         if (!gop_locate_failed) {
             uefi_log_status(system, "[boot] LocateProtocol(GOP) failed: ", status);
             gop_locate_failed = 1;
         }
-        return;
+        return -1;
     }
-    if (!gop || !gop->Mode || !gop->Mode->Info) {
+    if (!gop) {
         if (!gop_locate_failed) {
-            uefi_log(system, "[boot] GOP or mode info missing\n");
+            uefi_log(system, "[boot] GOP missing after handle iteration\n");
             gop_locate_failed = 1;
         }
+        return -1;
+    }
+
+    EFI_GOP_SET_MODE set_mode = (EFI_GOP_SET_MODE)gop->SetMode;
+    EFI_GOP_QUERY_MODE query_mode = (EFI_GOP_QUERY_MODE)gop->QueryMode;
+
+    if (!gop->Mode) {
+        if (!set_mode) {
+            if (!gop_locate_failed) {
+                uefi_log(system, "[boot] GOP SetMode missing\n");
+                gop_locate_failed = 1;
+            }
+            return -1;
+        }
+        status = set_mode(gop, 0);
+        if (EFI_ERROR(status) || !gop->Mode) {
+            if (!gop_locate_failed) {
+                uefi_log(system, "[boot] GOP mode missing after SetMode\n");
+                gop_locate_failed = 1;
+            }
+            return -1;
+        }
+    }
+
+    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *mode_info = gop->Mode->Info;
+    UINTN mode_size = 0;
+    if ((!mode_info || mode_info->HorizontalResolution == 0) && query_mode) {
+        status = query_mode(gop, gop->Mode->Mode, &mode_size, &mode_info);
+        if (EFI_ERROR(status) || !mode_info) {
+            if (!gop_locate_failed) {
+                uefi_log(system, "[boot] GOP QueryMode failed\n");
+                gop_locate_failed = 1;
+            }
+            return -1;
+        }
+    }
+    if (!mode_info) {
+        if (!gop_locate_failed) {
+            uefi_log(system, "[boot] GOP mode info missing\n");
+            gop_locate_failed = 1;
+        }
+        return -1;
+    }
+    snapshot->base = (uint64_t)(uintptr_t)gop->Mode->FrameBufferBase;
+    snapshot->size = gop->Mode->FrameBufferSize;
+    snapshot->width = mode_info->HorizontalResolution;
+    snapshot->height = mode_info->VerticalResolution;
+    snapshot->stride = mode_info->PixelsPerScanLine;
+    snapshot->flags = BOOT_INFO_FLAG_GOP_PRESENT;
+    return 0;
+}
+
+static void apply_framebuffer_snapshot(boot_info_t *boot_info,
+                                       const framebuffer_snapshot_t *snapshot)
+{
+    if (!boot_info || !snapshot || snapshot->base == 0 || snapshot->size == 0) {
         return;
     }
-    boot_info->framebuffer_base = (void *)(uintptr_t)gop->Mode->FrameBufferBase;
-    boot_info->framebuffer_size = gop->Mode->FrameBufferSize;
-    boot_info->framebuffer_width = gop->Mode->Info->HorizontalResolution;
-    boot_info->framebuffer_height = gop->Mode->Info->VerticalResolution;
-    boot_info->framebuffer_pixels_per_scanline = gop->Mode->Info->PixelsPerScanLine;
-    boot_info->flags |= BOOT_INFO_FLAG_GOP_PRESENT;
+
+    boot_info->framebuffer_base = (void *)(uintptr_t)snapshot->base;
+    boot_info->framebuffer_size = snapshot->size;
+    boot_info->framebuffer_width = snapshot->width;
+    boot_info->framebuffer_height = snapshot->height;
+    boot_info->framebuffer_pixels_per_scanline = snapshot->stride;
+    boot_info->flags |= snapshot->flags;
 }
 
 static void uefi_hex(UINT64 value, char *out) {
@@ -210,6 +543,14 @@ static void uefi_hex(UINT64 value, char *out) {
         out[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
     }
     out[18] = '\0';
+}
+
+static void uefi_log_hex_prefixed(EFI_SYSTEM_TABLE *system, const char *prefix, uint64_t value) {
+    char hex_buf[19];
+    uefi_hex(value, hex_buf);
+    uefi_log(system, prefix);
+    uefi_log(system, hex_buf);
+    uefi_log(system, "\n");
 }
 
 static void uefi_log(EFI_SYSTEM_TABLE *system, const char *msg) {
@@ -469,6 +810,24 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         uefi_log(system, "[boot] ACPI RSDP located\n");
     }
 
+    /*
+     * Capture the framebuffer snapshot before we start the ExitBootServices()
+     * dance. GOP discovery and controller connects can mutate the UEFI memory
+     * map, so doing this early keeps the final map_key stable.
+     */
+    framebuffer_snapshot_t framebuffer_snapshot;
+    memset8(&framebuffer_snapshot, 0, sizeof(framebuffer_snapshot));
+    int have_framebuffer = (capture_framebuffer_snapshot(system, &framebuffer_snapshot) == 0);
+    if (have_framebuffer) {
+        uefi_log(system, "[boot] framebuffer info set\n");
+        uefi_log_hex_prefixed(system, "  base=", framebuffer_snapshot.base);
+        uefi_log_hex_prefixed(system, "  size=", framebuffer_snapshot.size);
+        uefi_log_hex_prefixed(system, "  width=", framebuffer_snapshot.width);
+        uefi_log_hex_prefixed(system, "  height=", framebuffer_snapshot.height);
+        uefi_log_hex_prefixed(system, "  stride=", framebuffer_snapshot.stride);
+        uefi_log_hex_prefixed(system, "  flags=", framebuffer_snapshot.flags);
+    }
+
     boot_info_t *boot_info = 0;
     UINTN mmap_size = 0;
     UINTN map_key = 0;
@@ -552,6 +911,10 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         boot_info->boot_config = 0;
         boot_info->boot_config_size = 0;
 
+        if (have_framebuffer) {
+            apply_framebuffer_snapshot(boot_info, &framebuffer_snapshot);
+        }
+
         UINT8 *cursor = (UINT8 *)map_dst + map_bytes;
         UINT8 *initfs_copy = cursor;
         memcpy8(initfs_copy, initfs_buf, initfs_size);
@@ -589,8 +952,6 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
         boot_info->module_count = (uint32_t)module_count;
         boot_info->flags |= BOOT_INFO_FLAG_MODULES_PRESENT;
     }
-
-        capture_framebuffer(system, boot_info);
 
         status = bs->ExitBootServices(image, map_key);
         if (!EFI_ERROR(status)) {

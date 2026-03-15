@@ -101,6 +101,12 @@ The bootloader must:
 - Transfer control to the kernel entry point without embedding higher-level OS
   policy.
 
+`BOOTX64.EFI` now also captures the GOP framebuffer when available. When the
+GOP handles are absent, it scans VGA PCI BARs for a framebuffer, logs the
+cartographic results, and pipes the discovered base, size, resolution, stride,
+and `BOOT_INFO_FLAG_GOP_PRESENT` into `boot_info_t` so lower-privilege drivers
+can map the framebuffer themselves.
+
 ### Kernel Entry Responsibilities
 The architecture-specific entry path must:
 - Establish a known stack.

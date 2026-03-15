@@ -18,6 +18,8 @@ typedef uint16_t UINT16;
 typedef uint8_t UINT8;
 typedef int64_t INTN;
 typedef uint8_t BOOLEAN;
+#define TRUE 1
+#define FALSE 0
 
 #define EFIAPI __attribute__((ms_abi))
 
@@ -42,10 +44,23 @@ typedef EFI_STATUS (EFIAPI *EFI_LOCATE_HANDLE_BUFFER)(
     EFI_HANDLE **Buffer
 );
 
+typedef EFI_STATUS (EFIAPI *EFI_LOCATE_PROTOCOL)(
+    const EFI_GUID *Protocol,
+    void *Registration,
+    void **Interface
+);
+
 typedef EFI_STATUS (EFIAPI *EFI_HANDLE_PROTOCOL)(
     EFI_HANDLE Handle,
     const EFI_GUID *Protocol,
     void **Interface
+);
+
+typedef EFI_STATUS (EFIAPI *EFI_CONNECT_CONTROLLER)(
+    EFI_HANDLE ControllerHandle,
+    EFI_HANDLE *DriverImageHandle,
+    void *RemainingDevicePath,
+    BOOLEAN Recursive
 );
 
 typedef struct {
@@ -228,6 +243,106 @@ typedef struct {
         EFI_FILE_PROTOCOL **Root
     );
 } EFI_SIMPLE_FILE_SYSTEM_PROTOCOL;
+
+typedef enum {
+    EfiPciIoWidthUint8,
+    EfiPciIoWidthUint16,
+    EfiPciIoWidthUint32,
+    EfiPciIoWidthUint64,
+    EfiPciIoWidthFifoUint8,
+    EfiPciIoWidthFifoUint16,
+    EfiPciIoWidthFifoUint32,
+    EfiPciIoWidthFifoUint64,
+    EfiPciIoWidthFillUint8,
+    EfiPciIoWidthFillUint16,
+    EfiPciIoWidthFillUint32,
+    EfiPciIoWidthFillUint64
+} EFI_PCI_IO_PROTOCOL_WIDTH;
+
+typedef struct _EFI_PCI_IO_PROTOCOL EFI_PCI_IO_PROTOCOL;
+
+typedef EFI_STATUS (EFIAPI *EFI_PCI_IO_PROTOCOL_PCI)(
+    EFI_PCI_IO_PROTOCOL *This,
+    EFI_PCI_IO_PROTOCOL_WIDTH Width,
+    UINT32 Offset,
+    UINTN Count,
+    void *Buffer
+);
+
+typedef struct {
+    EFI_PCI_IO_PROTOCOL_PCI Read;
+    EFI_PCI_IO_PROTOCOL_PCI Write;
+} EFI_PCI_IO_PROTOCOL_CONFIG_ACCESS;
+
+typedef EFI_STATUS (EFIAPI *EFI_PCI_IO_PROTOCOL_GET_BAR_ATTRIBUTES)(
+    EFI_PCI_IO_PROTOCOL *This,
+    UINT8 BarIndex,
+    void *ResourceType,
+    void **BarAttribute
+);
+
+typedef struct {
+    uint8_t QWORD_ASD;
+    uint16_t Length;
+    uint8_t ResourceType;
+    uint8_t GeneralFlags;
+    uint8_t TypeSpecificFlags;
+    uint64_t AddressSpaceGranularity;
+    uint64_t AddressMin;
+    uint64_t AddressMax;
+    uint64_t AddressTransOffset;
+    uint64_t AddressLength;
+    uint8_t EndTag;
+    uint8_t Checksum;
+} EFI_ADDRESS_SPACE_DESCRIPTOR;
+
+struct _EFI_PCI_IO_PROTOCOL {
+    void *PollMem;
+    void *PollIo;
+    void *Mem;
+    void *Io;
+    EFI_PCI_IO_PROTOCOL_CONFIG_ACCESS Pci;
+    void *CopyMem;
+    void *Map;
+    void *Unmap;
+    void *AllocateBuffer;
+    void *FreeBuffer;
+    void *Flush;
+    void *GetLocation;
+    void *Attributes;
+    EFI_PCI_IO_PROTOCOL_GET_BAR_ATTRIBUTES GetBarAttributes;
+    void *SetBarAttributes;
+    void *RomSize;
+    void *RomImage;
+};
+
+#define EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_GUID \
+    {0x2c8b3a3c, 0x7c96, 0x4f50, {0x9f, 0xea, 0xf7, 0xb1, 0x00, 0x65, 0x9f, 0xf9}}
+
+typedef EFI_PCI_IO_PROTOCOL_WIDTH EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_WIDTH;
+
+typedef struct _EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL;
+
+typedef EFI_STATUS (EFIAPI *EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_PCI)(
+    EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL *This,
+    EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_WIDTH Width,
+    UINT64 Address,
+    UINTN Count,
+    void *Buffer
+);
+
+typedef struct {
+    EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_PCI Read;
+    EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_PCI Write;
+} EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_CONFIG_ACCESS;
+
+struct _EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL {
+    void *PollMem;
+    void *PollIo;
+    void *Mem;
+    void *Io;
+    EFI_PCI_ROOT_BRIDGE_IO_PROTOCOL_CONFIG_ACCESS Pci;
+};
 
 #define EFI_LOADED_IMAGE_PROTOCOL_GUID \
     {0x5B1B31A1,0x9562,0x11d2,{0x8E,0x3F,0x00,0xA0,0xC9,0x69,0x72,0x3B}}

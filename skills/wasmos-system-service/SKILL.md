@@ -54,7 +54,7 @@ Keep heap/stack small; avoid dynamic allocation.
 Add to `src/services/<service-name>/CMakeLists.txt`:
 - `WASM_FOO_APP_SRC`, `WASM_FOO_APP_WASM`, `WASM_FOO_APP`
 - A `clang --target=wasm32` build rule (similar to `sysinit` or `cli`)
-- A pack step that invokes `make_wasmos_app` to package the `.wasm` into `.wasmosapp`
+- A pack step that invokes `make_wasmos_app` to package the `.wasm` into `.wap`
 - Register the app via `set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ...)`
 - Create a target (e.g. `foo_app`) and append it to `WASMOS_WASM_APP_TARGETS`
 
@@ -63,7 +63,7 @@ Add the subdirectory in `src/services/CMakeLists.txt` so the service is built.
 ## Step 4: Disk placement (ESP)
 
 System services are stored on the ESP under:
-`esp/system/services/<service>.wasmosapp`
+`esp/system/services/<service>.wap`
 
 Update the `run-qemu` and `run-qemu-test` copy steps to place the service there.
 If the FS service only scans `\APPS`, extend it to scan `\SYSTEM\\SERVICES`

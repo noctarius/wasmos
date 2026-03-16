@@ -2381,7 +2381,7 @@ fat_build_read_names(void)
         }
         g_read_name_alt[pos] = '\0';
     }
-    const char *suffix = ".WASMOSAPP";
+    const char *suffix = ".wap";
     uint32_t s = 0;
     while (suffix[s] && pos + 1 < sizeof(g_read_name_ext)) {
         g_read_name_ext[pos++] = suffix[s++];

@@ -22,62 +22,62 @@ spawn = [
 [[entries]]
 kind = "wasmos_app"
 flags = ["bootstrap"]
-path = "apps/chardev_client.wasmosapp"
-source = "chardev_client.wasmosapp"
+path = "apps/chardev_client.wap"
+source = "chardev_client.wap"
 
 [[entries]]
 kind = "wasmos_app"
 flags = ["bootstrap"]
-path = "apps/init_smoke.wasmosapp"
-source = "init_smoke.wasmosapp"
+path = "apps/init_smoke.wap"
+source = "init_smoke.wap"
 
 [[entries]]
 kind = "wasmos_app"
 flags = ["bootstrap"]
-path = "apps/native_call_min.wasmosapp"
-source = "native_call_min.wasmosapp"
+path = "apps/native_call_min.wap"
+source = "native_call_min.wap"
 
 [[entries]]
 kind = "wasmos_app"
 flags = ["bootstrap"]
-path = "apps/native_call_smoke.wasmosapp"
-source = "native_call_smoke.wasmosapp"
+path = "apps/native_call_smoke.wap"
+source = "native_call_smoke.wap"
 
 [[entries]]
 kind = "wasmos_app"
 flags = ["bootstrap"]
-path = "system/drivers/ata.wasmosapp"
-source = "ata.wasmosapp"
+path = "system/drivers/ata.wap"
+source = "ata.wap"
 
 [[entries]]
 kind = "wasmos_app"
 flags = ["bootstrap"]
-path = "system/drivers/fs_fat.wasmosapp"
-source = "fs_fat.wasmosapp"
+path = "system/drivers/fs_fat.wap"
+source = "fs_fat.wap"
 
 [[entries]]
 kind = "wasmos_app"
 flags = ["bootstrap"]
-path = "system/drivers/serial.wasmosapp"
-source = "serial.wasmosapp"
+path = "system/drivers/serial.wap"
+source = "serial.wap"
 
 [[entries]]
 kind = "wasmos_app"
 flags = ["bootstrap"]
-path = "system/drivers/framebuffer.wasmosapp"
-source = "framebuffer.wasmosapp"
+path = "system/drivers/framebuffer.wap"
+source = "framebuffer.wap"
 
 [[entries]]
 kind = "wasmos_app"
 flags = ["bootstrap"]
-path = "system/drivers/keyboard.wasmosapp"
-source = "keyboard.wasmosapp"
+path = "system/drivers/keyboard.wap"
+source = "keyboard.wap"
 
 [[entries]]
 kind = "wasmos_app"
 flags = ["bootstrap"]
-path = "system/services/hw_discovery.wasmosapp"
-source = "hw_discovery.wasmosapp"
+path = "system/services/hw_discovery.wap"
+source = "hw_discovery.wap"
 
 [[entries]]
 kind = "config"

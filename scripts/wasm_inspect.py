@@ -337,8 +337,8 @@ def scan_calls_in_body(body):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Inspect wasm or .wasmosapp files.")
-    parser.add_argument("path", help="Path to .wasm or .wasmosapp")
+    parser = argparse.ArgumentParser(description="Inspect wasm or .wap files.")
+    parser.add_argument("path", help="Path to .wasm or .wap")
     parser.add_argument("--raw", action="store_true", help="Print raw import/export lists without headers")
     parser.add_argument("--calls", action="store_true", help="Scan function bodies for call opcodes")
     args = parser.parse_args()

@@ -55,7 +55,7 @@ static int parse_u32(const char *s, uint32_t *out) {
 
 int main(int argc, char **argv) {
     if (argc != 12) {
-        fprintf(stderr, "usage: %s <in.wasm> <out.wasmosapp> <name> <entry> <stack_pages> <heap_pages> <flags> <req_ep_name|- > <req_ep_rights> <cap_name|- > <cap_flags>\n", argv[0]);
+        fprintf(stderr, "usage: %s <in.wasm> <out.wap> <name> <entry> <stack_pages> <heap_pages> <flags> <req_ep_name|- > <req_ep_rights> <cap_name|- > <cap_flags>\n", argv[0]);
         return 1;
     }
 

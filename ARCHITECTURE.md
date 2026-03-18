@@ -612,5 +612,10 @@ Every architecture-affecting change is expected to keep these green:
 - `cmake --build build --target run-qemu-test`
 - `cmake --build build --target run-qemu-cli-test`
 
+QEMU backend caveat:
+- the CLI write smoke keeps truncate/append/create plus nested unlink/rmdir
+  checks, but avoids one top-level grown-file unlink sequence that can trigger
+  a known `vvfat` host assertion on some QEMU builds
+
 The architecture is only considered stable when both the non-interactive boot
 check and the CLI integration suite pass.

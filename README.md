@@ -401,6 +401,12 @@ Coverage currently includes:
 - scheduler/timer forward-progress smoke
 - chardev preemption exercise
 
+Current QEMU note:
+- the `fs-write-smoke` flow keeps directory/unlink coverage for nested files and
+  rmdir behavior, but avoids unlinking the grown top-level `create.txt` test
+  file because some QEMU `vvfat` versions can assert in host commit paths for
+  that specific sequence
+
 ## Development Rules
 - prefer `rg` for searching
 - keep changes small and explicit

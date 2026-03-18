@@ -117,6 +117,11 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
         hdr->cap_count > WASMOS_APP_MAX_CAP_REQUESTS) {
         return -1;
     }
+    /* NATIVE is only meaningful for drivers; reject any other combination. */
+    if ((hdr->flags & WASMOS_APP_FLAG_NATIVE) &&
+        !(hdr->flags & WASMOS_APP_FLAG_DRIVER)) {
+        return -1;
+    }
 
     out_desc->req_ep_count = 0;
     out_desc->cap_count = 0;

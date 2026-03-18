@@ -2,6 +2,7 @@
 #include "ipc.h"
 #include "serial.h"
 #include "wasmos_app.h"
+#include "native_driver.h"
 #include "wasm_chardev.h"
 
 /*
@@ -276,7 +277,9 @@ pm_app_entry(process_t *process, void *arg)
         };
         trace_write_unlocked("[pm] app flags=");
         trace_do(pm_write_hex64((uint64_t)desc.flags));
-        if (desc.flags & WASMOS_APP_FLAG_DRIVER) {
+        if (desc.flags & WASMOS_APP_FLAG_NATIVE) {
+            trace_write_unlocked("[pm] app type=native-driver\n");
+        } else if (desc.flags & WASMOS_APP_FLAG_DRIVER) {
             trace_write_unlocked("[pm] app type=driver\n");
         } else if (desc.flags & WASMOS_APP_FLAG_SERVICE) {
             trace_write_unlocked("[pm] app type=service\n");
@@ -286,6 +289,26 @@ pm_app_entry(process_t *process, void *arg)
         trace_write_unlocked("[pm] app start ");
         trace_write_unlocked(state->name);
         trace_write_unlocked("\n");
+
+        if (desc.flags & WASMOS_APP_FLAG_NATIVE) {
+            /* Native ELF driver: load segments and call initialize() in one
+             * shot.  The wasm instance is never created, so wasmos_app_stop
+             * on the (inactive) app slot below is a safe no-op. */
+            int native_rc = native_driver_start(process->context_id,
+                                                desc.wasm_bytes,
+                                                desc.wasm_size,
+                                                state->name,
+                                                init_args,
+                                                state->entry_argc);
+            process_set_exit_status(process, native_rc == 0 ? 0 : -1);
+            wasmos_app_stop(&state->app);
+            state->in_use = 0;
+#if defined(WASMOS_ENABLE_PREEMPT_GUARD)
+            preempt_enable();
+#endif
+            return PROCESS_RUN_EXITED;
+        }
+
         if (wasmos_app_start(&state->app,
                              &desc,
                              process->context_id,

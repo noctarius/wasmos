@@ -1,0 +1,8 @@
+{
+  "name": "assemblyscript",
+  "version": "1.0.0",
+  "license": "MIT",
+  "dependencies": {
+    "assemblyscript": "0.28.10"
+  }
+}

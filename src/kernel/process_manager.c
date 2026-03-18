@@ -4,6 +4,7 @@
 #include "wasmos_app.h"
 #include "native_driver.h"
 #include "wasm_chardev.h"
+#include "physmem.h"
 
 /*
  * The process manager is the bridge between filesystem-visible WASMOS-APP
@@ -52,6 +53,12 @@ typedef struct {
 } pm_spawn_state_t;
 
 typedef struct {
+    uint8_t in_use;
+    uint32_t context_id;
+    uint64_t buffer_phys;
+} pm_fs_buffer_slot_t;
+
+typedef struct {
     const boot_info_t *boot_info;
     uint32_t proc_endpoint;
     uint32_t fs_endpoint;
@@ -67,18 +74,56 @@ typedef struct {
 } pm_state_t;
 
 static pm_state_t g_pm;
-static uint8_t g_pm_fs_buffer[PM_FS_BUFFER_SIZE];
+static pm_fs_buffer_slot_t g_pm_fs_slots[PROCESS_MAX_COUNT];
+
+static pm_fs_buffer_slot_t *
+pm_fs_slot_for_context(uint32_t context_id)
+{
+    pm_fs_buffer_slot_t *empty = 0;
+    const uint64_t page_size = 4096u;
+    const uint64_t pages = PM_FS_BUFFER_SIZE / page_size;
+
+    if (context_id == 0) {
+        return 0;
+    }
+
+    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        if (g_pm_fs_slots[i].in_use && g_pm_fs_slots[i].context_id == context_id) {
+            return &g_pm_fs_slots[i];
+        }
+        if (!empty && !g_pm_fs_slots[i].in_use) {
+            empty = &g_pm_fs_slots[i];
+        }
+    }
+
+    if (!empty) {
+        return 0;
+    }
+    empty->in_use = 1;
+    empty->context_id = context_id;
+    empty->buffer_phys = pfa_alloc_pages(pages);
+    if (empty->buffer_phys == 0) {
+        empty->in_use = 0;
+        empty->context_id = 0;
+        return 0;
+    }
+    return empty;
+}
 
 void *
-process_manager_fs_buffer(void)
+process_manager_fs_buffer_for_context(uint32_t context_id)
 {
-    return g_pm_fs_buffer;
+    pm_fs_buffer_slot_t *slot = pm_fs_slot_for_context(context_id);
+    if (!slot) {
+        return 0;
+    }
+    return (void *)(uintptr_t)slot->buffer_phys;
 }
 
 uint32_t
 process_manager_fs_buffer_size(void)
 {
-    return (uint32_t)sizeof(g_pm_fs_buffer);
+    return PM_FS_BUFFER_SIZE;
 }
 
 static void
@@ -630,9 +675,10 @@ pm_poll_spawn(uint32_t pm_context_id)
 
     uint32_t pid = 0;
     uint32_t size = (uint32_t)msg.arg0;
-    if (size == 0 || size > process_manager_fs_buffer_size() ||
+    const uint8_t *fs_blob = (const uint8_t *)process_manager_fs_buffer_for_context(pm_context_id);
+    if (size == 0 || size > process_manager_fs_buffer_size() || !fs_blob ||
         pm_spawn_from_buffer(g_pm.spawn.parent_pid,
-                             (const uint8_t *)process_manager_fs_buffer(),
+                             fs_blob,
                              size,
                              &pid) != 0) {
         ipc_message_t resp;
@@ -689,8 +735,11 @@ pm_check_waits(uint32_t pm_context_id)
 }
 
 static void
-pm_reap_apps(void)
+pm_reap_apps(process_t *owner)
 {
+    if (!owner) {
+        return;
+    }
     for (uint32_t i = 0; i < PM_MAX_MANAGED_APPS; ++i) {
         pm_app_state_t *app = &g_pm.apps[i];
         if (!app->in_use || app->pid == 0) {
@@ -698,6 +747,9 @@ pm_reap_apps(void)
         }
         int32_t exit_status = 0;
         if (process_get_exit_status(app->pid, &exit_status) != 0) {
+            continue;
+        }
+        if (process_wait(owner, app->pid, &exit_status) != 0) {
             continue;
         }
         wasmos_app_stop(&app->app);
@@ -989,7 +1041,7 @@ process_manager_entry(process_t *process, void *arg)
     }
 
     pm_check_waits(process->context_id);
-    pm_reap_apps();
+    pm_reap_apps(process);
     pm_poll_spawn(process->context_id);
     if (!logged_pending) {
         uint32_t pending = 0;

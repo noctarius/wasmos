@@ -10,6 +10,7 @@
 #include "timer.h"
 #include "wasm3_link.h"
 #include "wasmos_app.h"
+#include "wasmos_driver_abi.h"
 #include "framebuffer.h"
 
 #include <stdint.h>
@@ -26,8 +27,15 @@ typedef struct {
     uint64_t buffer_phys;
 } wasm_block_slot_t;
 
+typedef struct {
+    uint32_t pid;
+    uint8_t valid;
+    uint32_t peer_context_id;
+} wasm_fs_peer_slot_t;
+
 static wasm_ipc_last_slot_t g_wasm_last_slots[PROCESS_MAX_COUNT];
 static wasm_block_slot_t g_wasm_block_slots[PROCESS_MAX_COUNT];
+static wasm_fs_peer_slot_t g_wasm_fs_peer_slots[PROCESS_MAX_COUNT];
 static const boot_info_t *g_wasm_boot_info;
 
 static void __attribute__((unused))
@@ -93,6 +101,9 @@ wasm_ipc_slots_init(void)
         g_wasm_last_slots[i].valid = 0;
         g_wasm_block_slots[i].pid = 0;
         g_wasm_block_slots[i].buffer_phys = 0;
+        g_wasm_fs_peer_slots[i].pid = 0;
+        g_wasm_fs_peer_slots[i].valid = 0;
+        g_wasm_fs_peer_slots[i].peer_context_id = 0;
     }
 }
 
@@ -158,6 +169,43 @@ current_process_context(uint32_t *out_context_id)
 
     *out_context_id = proc->context_id;
     return 0;
+}
+
+static wasm_fs_peer_slot_t *
+wasm_fs_peer_slot_for_pid(uint32_t pid)
+{
+    wasm_fs_peer_slot_t *empty = 0;
+
+    if (pid == 0) {
+        return 0;
+    }
+
+    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        if (g_wasm_fs_peer_slots[i].pid == pid) {
+            return &g_wasm_fs_peer_slots[i];
+        }
+        if (!empty && g_wasm_fs_peer_slots[i].pid == 0) {
+            empty = &g_wasm_fs_peer_slots[i];
+        }
+    }
+
+    if (empty) {
+        empty->pid = pid;
+        empty->valid = 0;
+        empty->peer_context_id = 0;
+    }
+    return empty;
+}
+
+static void *
+wasm_fs_buffer_for_pid(uint32_t pid, uint32_t context_id)
+{
+    uint32_t target_context = context_id;
+    wasm_fs_peer_slot_t *peer = wasm_fs_peer_slot_for_pid(pid);
+    if (peer && peer->valid && peer->peer_context_id != 0) {
+        target_context = peer->peer_context_id;
+    }
+    return process_manager_fs_buffer_for_context(target_context);
 }
 
 m3ApiRawFunction(wasmos_ipc_create_endpoint)
@@ -267,6 +315,20 @@ m3ApiRawFunction(wasmos_ipc_recv)
                 process->block_reason = PROCESS_BLOCK_NONE;
                 process->in_hostcall = 0;
                 slot->valid = 1;
+                wasm_fs_peer_slot_t *peer = wasm_fs_peer_slot_for_pid(pid);
+                if (peer &&
+                    slot->message.type >= FS_IPC_OPEN_REQ &&
+                    slot->message.type <= FS_IPC_READ_APP_REQ) {
+                    uint32_t owner_context = 0;
+                    if (ipc_endpoint_owner(slot->message.source, &owner_context) == IPC_OK &&
+                        owner_context != 0) {
+                        peer->valid = 1;
+                        peer->peer_context_id = owner_context;
+                    } else {
+                        peer->valid = 0;
+                        peer->peer_context_id = 0;
+                    }
+                }
                 preempt_safepoint();
                 m3ApiReturn(1);
             }
@@ -288,6 +350,20 @@ m3ApiRawFunction(wasmos_ipc_recv)
         process->block_reason = PROCESS_BLOCK_NONE;
         process->in_hostcall = 0;
         slot->valid = 1;
+        wasm_fs_peer_slot_t *peer = wasm_fs_peer_slot_for_pid(pid);
+        if (peer &&
+            slot->message.type >= FS_IPC_OPEN_REQ &&
+            slot->message.type <= FS_IPC_READ_APP_REQ) {
+            uint32_t owner_context = 0;
+            if (ipc_endpoint_owner(slot->message.source, &owner_context) == IPC_OK &&
+                owner_context != 0) {
+                peer->valid = 1;
+                peer->peer_context_id = owner_context;
+            } else {
+                peer->valid = 0;
+                peer->peer_context_id = 0;
+            }
+        }
         preempt_safepoint();
         m3ApiReturn(1);
     }
@@ -453,8 +529,13 @@ m3ApiRawFunction(wasmos_fs_buffer_copy)
     m3ApiGetArgMem(uint8_t *, ptr)
     m3ApiGetArg(int32_t, len)
     m3ApiGetArg(int32_t, offset)
+    uint32_t context_id = 0;
+    uint32_t pid = process_current_pid();
 
     if (len <= 0 || offset < 0) {
+        m3ApiReturn(-1);
+    }
+    if (current_process_context(&context_id) != 0) {
         m3ApiReturn(-1);
     }
     uint32_t max_len = process_manager_fs_buffer_size();
@@ -463,7 +544,10 @@ m3ApiRawFunction(wasmos_fs_buffer_copy)
     }
     m3ApiCheckMem(ptr, (uint32_t)len);
 
-    const uint8_t *src = (const uint8_t *)process_manager_fs_buffer();
+    const uint8_t *src = (const uint8_t *)wasm_fs_buffer_for_pid(pid, context_id);
+    if (!src) {
+        m3ApiReturn(-1);
+    }
     for (int32_t i = 0; i < len; ++i) {
         ptr[i] = src[offset + i];
     }
@@ -476,8 +560,13 @@ m3ApiRawFunction(wasmos_fs_buffer_write)
     m3ApiGetArgMem(const uint8_t *, ptr)
     m3ApiGetArg(int32_t, len)
     m3ApiGetArg(int32_t, offset)
+    uint32_t context_id = 0;
+    uint32_t pid = process_current_pid();
 
     if (len <= 0 || offset < 0) {
+        m3ApiReturn(-1);
+    }
+    if (current_process_context(&context_id) != 0) {
         m3ApiReturn(-1);
     }
     uint32_t max_len = process_manager_fs_buffer_size();
@@ -486,7 +575,10 @@ m3ApiRawFunction(wasmos_fs_buffer_write)
     }
     m3ApiCheckMem(ptr, (uint32_t)len);
 
-    uint8_t *dst = (uint8_t *)process_manager_fs_buffer();
+    uint8_t *dst = (uint8_t *)wasm_fs_buffer_for_pid(pid, context_id);
+    if (!dst) {
+        m3ApiReturn(-1);
+    }
     for (int32_t i = 0; i < len; ++i) {
         dst[offset + i] = ptr[i];
     }

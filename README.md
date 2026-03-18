@@ -13,7 +13,18 @@
   </picture>
 </p>
 
-<p align="center"><strong>Small boot path. Small kernel. Large mascot energy.</strong></p>
+<p align="center"><strong>Small boot path. Small kernel. Large mascot and agent energy.</strong></p>
+
+WASMOS is a tiny OS playground built almost entirely through AI-assisted coding:
+basically no line was typed directly by hand, but many were produced through
+aggressively hands-on guidance, nudging, and occasional emotional support for
+coding agents. It is intentionally basic and absolutely not tuned for speed,
+especially because it uses `wasm3` (an interpreter-only WebAssembly runtime).
+The point is not benchmark glory; the point is to explore ideas, run
+experiments, and learn how to better steer coding agents without setting your
+keyboard on fire.
+
+## WASMOS Kernel Architecture
 
 WASMOS is a minimal x86_64 UEFI bootloader + kernel scaffold that boots a
 small WASM-first user-space stack on top of `wasm3`, with optional native ELF

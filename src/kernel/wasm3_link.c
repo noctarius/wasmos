@@ -767,6 +767,7 @@ m3ApiRawFunction(wasmos_console_write)
     }
     m3ApiCheckMem(ptr, (uint32_t)len);
 
+    preempt_disable();
     char buf[128];
     int32_t remaining = len;
     while (remaining > 0) {
@@ -778,6 +779,7 @@ m3ApiRawFunction(wasmos_console_write)
         serial_write(buf);
         remaining -= chunk;
     }
+    preempt_enable();
     m3ApiReturn(0);
 }
 

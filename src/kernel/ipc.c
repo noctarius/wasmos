@@ -233,3 +233,26 @@ int ipc_notify(uint32_t endpoint) {
 int ipc_wait(uint32_t endpoint) {
     return ipc_wait_for(IPC_CONTEXT_KERNEL, endpoint);
 }
+
+void
+ipc_endpoints_release_owner(uint32_t owner_context_id)
+{
+    if (owner_context_id == 0) {
+        return;
+    }
+    for (uint32_t i = 0; i < IPC_MAX_ENDPOINTS; ++i) {
+        ipc_endpoint_t *ep = &g_endpoints[i];
+        if (!ep->in_use || ep->owner_context_id != owner_context_id) {
+            continue;
+        }
+        spinlock_lock(&ep->lock);
+        ep->in_use = 0;
+        ep->type = IPC_ENDPOINT_TYPE_MESSAGE;
+        ep->owner_context_id = 0;
+        ep->head = 0;
+        ep->tail = 0;
+        ep->count = 0;
+        ep->notify_count = 0;
+        spinlock_unlock(&ep->lock);
+    }
+}

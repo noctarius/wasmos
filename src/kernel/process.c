@@ -4,6 +4,7 @@
 #include "serial.h"
 #include "paging.h"
 #include "wasm3_shim.h"
+#include "ipc.h"
 
 /*
  * process.c contains the single-core scheduler, process table, run queue, and
@@ -485,6 +486,7 @@ static void process_reap(process_t *proc) {
         pfa_free_pages(stack_alloc_base, total_pages);
     }
     if (proc->context_id != 0) {
+        ipc_endpoints_release_owner(proc->context_id);
         (void)mm_context_destroy(proc->context_id);
     }
     if (proc->pid != 0) {

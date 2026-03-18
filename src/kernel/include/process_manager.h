@@ -10,7 +10,7 @@ int process_manager_init(const boot_info_t *boot_info);
 uint32_t process_manager_endpoint(void);
 uint32_t process_manager_fs_endpoint(void);
 uint32_t process_manager_block_endpoint(void);
-void *process_manager_fs_buffer(void);
+void *process_manager_fs_buffer_for_context(uint32_t context_id);
 uint32_t process_manager_fs_buffer_size(void);
 process_run_result_t process_manager_entry(process_t *process, void *arg);
 

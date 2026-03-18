@@ -65,6 +65,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - physical frame allocator and per-process CR3-managed paging
 - preemptive round-robin scheduler driven by PIT IRQ0
 - kernel IPC transport with endpoint ownership checks
+- IPC endpoint table scaled to 128 entries with endpoint reclamation on process
+  reap to keep repeated app exec/file-I/O flows stable
 - process manager with WASMOS-APP loading
 - FAT-backed loading of `sysinit`, `cli`, and user apps
 - manifest-driven late startup policy consumed by `sysinit`

@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#define IPC_MAX_ENDPOINTS 32
+#define IPC_MAX_ENDPOINTS 128
 #define IPC_QUEUE_DEPTH 32
 #define IPC_CONTEXT_KERNEL 0u
 #define IPC_ENDPOINT_NONE ((uint32_t)~0u)
@@ -45,5 +45,6 @@ int ipc_send(uint32_t endpoint, const ipc_message_t *message);
 int ipc_recv(uint32_t endpoint, ipc_message_t *out_message);
 int ipc_notify(uint32_t endpoint);
 int ipc_wait(uint32_t endpoint);
+void ipc_endpoints_release_owner(uint32_t owner_context_id);
 
 #endif

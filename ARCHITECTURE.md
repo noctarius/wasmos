@@ -294,6 +294,9 @@ shared buffers plus synchronization messages.
 - `ipc_recv_for` requires a non-kernel receiver to own the destination endpoint.
 - Enqueueing a message can wake a process blocked on the destination endpoint.
 - Message queues are bounded and protected by spinlocks.
+- Endpoint table capacity is currently 128 and endpoints owned by a process
+  context are released when that process is reaped, preventing table exhaustion
+  across repeated short-lived app runs.
 
 ### Error Model
 Current IPC status codes:

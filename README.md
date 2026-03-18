@@ -16,12 +16,14 @@
 <p align="center"><strong>Small boot path. Small kernel. Large mascot energy.</strong></p>
 
 WASMOS is a minimal x86_64 UEFI bootloader + kernel scaffold that boots a
-small WASM-based user-space stack on top of `wasm3`.
+small WASM-first user-space stack on top of `wasm3`, with optional native ELF
+drivers for hardware paths that need full native speed.
 
 The project is intentionally narrow:
 - the bootloader stays deterministic and small
 - the kernel keeps only low-level mechanisms
-- drivers, services, and applications are WASM programs
+- services and applications are WASM programs; drivers can be WASM or native
+  ELF payloads inside WASMOS-APP
 - integration is validated through QEMU boot and CLI tests
 
 If the boot log feels a little too serious, Wasmo is here to remind you that
@@ -43,6 +45,12 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - an AssemblyScript keyboard driver is launched by `hw-discovery` and polls the
   PS/2 controller for scancodes; it stays running even if no input arrives so
   the kernel does not need any keyboard-specific logic in its microkernel core
+- native ELF driver loading through the process manager for
+  `WASMOS_APP_FLAG_DRIVER | WASMOS_APP_FLAG_NATIVE` payloads
+- a freestanding native-driver ABI (`wasmos_driver_api_t`) shared between
+  kernel and native drivers
+- a native C framebuffer driver that maps the physical framebuffer into driver
+  space and paints at native speed without wasm3
 - physical frame allocator and per-process CR3-managed paging
 - preemptive round-robin scheduler driven by PIT IRQ0
 - kernel IPC transport with endpoint ownership checks
@@ -75,7 +83,7 @@ IMPORTANT: Create a git commit after each prompt iteration.
 ## Repository Layout
 - `src/boot/` UEFI bootloader
 - `src/kernel/` kernel core, scheduler, memory, IPC, runtime hosting
-- `src/drivers/` WASM drivers
+- `src/drivers/` WASM and native drivers
 - `src/services/` WASM services
 - `lib/libc/` shared user-space libc and language shims
 - `examples/` WASM applications and smoke tests
@@ -98,14 +106,14 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - synthesizing early `boot_module_t` entries from bootstrap-marked initfs apps
 - exiting boot services
 - jumping into the kernel entry point
-`BOOTX64.EFI` also attempts to capture the GOP framebuffer. If GOP protocols are missing it now falls back to scanning VGA PCI BARs so WASM drivers can map the QEMU framebuffer and paint a gradient. PCI fallback logs now show when handle discovery or BAR selection fails so we can tell whether no VGA device was found.
+`BOOTX64.EFI` also attempts to capture the GOP framebuffer. If GOP protocols are missing it now falls back to scanning VGA PCI BARs so drivers can map the QEMU framebuffer and paint a gradient. PCI fallback logs now show when handle discovery or BAR selection fails so we can tell whether no VGA device was found.
 
 ### Kernel
 The kernel owns:
 - early CPU, paging, timer, and memory initialization
 - process scheduling and IPC
 - the process manager
-- runtime hosting for WASM modules
+- runtime hosting for WASM modules and native driver entry dispatch
 - the `init` bootstrap sequence
 
 ### User Space
@@ -251,10 +259,15 @@ WASMOS-APP is the container format used by the process manager. It wraps:
 - endpoint requirements
 - capability requests
 - memory hints
-- raw WASM payload
+- raw payload bytes (WASM module or native ELF driver)
 
 Applications expose `wasmos_main` through a language shim.
 Drivers and services expose `initialize`.
+
+Current driver flags:
+- `WASMOS_APP_FLAG_DRIVER`: driver payload
+- `WASMOS_APP_FLAG_NATIVE`: payload is native ELF (valid only with
+  `WASMOS_APP_FLAG_DRIVER`)
 
 Current heap-hint behavior:
 - stack hints are applied at runtime creation
@@ -314,7 +327,10 @@ Current file I/O scope:
 - `fs-fat`: FAT12/16/32 filesystem service on top of `ata`
 - `chardev`: character-device IPC service
 - `serial`: AssemblyScript-backed COM1 console driver that registers via `serial_register`
-- `framebuffer`: optional AssemblyScript driver that probes the kernel framebuffer exports, maps the GOP frame buffer into its own linear memory through `wasmos_framebuffer_map()`, and paints a gradient on the mapped region when the device is available; a `framebuffer_pixel()` fallback keeps the boot log alive if mapping fails
+- `framebuffer`: optional native C driver packed as
+  `WASMOS_APP_FLAG_DRIVER | WASMOS_APP_FLAG_NATIVE`; it probes framebuffer
+  info, maps the physical framebuffer into the driver context through the
+  native-driver API, and paints a gradient at native speed
 - `keyboard`: AssemblyScript PS/2 driver that polls for scancodes and remains idle when no keyboard replies
 
 ### Services

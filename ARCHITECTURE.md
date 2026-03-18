@@ -12,8 +12,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - Boot an x86_64 kernel through UEFI with a deterministic, auditable handoff.
 - Keep the kernel small: scheduling, IPC, memory, interrupts, and runtime
   hosting are kernel responsibilities; policy lives in WASM services.
-- Treat drivers, services, and applications as isolated WASM programs with
-  explicit IPC contracts instead of implicit in-kernel calls.
+- Treat services and applications as isolated WASM programs and allow selected
+  drivers to run as native ELF payloads when needed, all behind explicit IPC
+  contracts instead of implicit in-kernel calls.
 - Preserve a stable boot and process ABI while still allowing the system to
   evolve incrementally.
 
@@ -47,6 +48,9 @@ The current tree already boots into a usable user-space stack:
   helpers. Update modes such as `r+`/`w+`/`a+` and non-ASCII LFN creation
   remain future work.
 - The runtime host uses `wasm3`, not WAMR.
+- The process manager also supports native ELF drivers wrapped in WASMOS-APP as
+  `FLAG_DRIVER|FLAG_NATIVE`, loaded directly into a process context and called
+  through a kernel-provided function-table ABI.
 - The CMake-only `kernel_ide` aggregation target indexes kernel sources plus
   selected WASM user-space sources, so it must mirror the libc include root
   used by those components for editor diagnostics.
@@ -63,7 +67,7 @@ Kernel mechanisms:
 - Preemptive scheduling and process lifecycle control.
 - IPC transport, endpoint ownership, and wakeup rules.
 - Interrupt handling and timer-driven preemption.
-- WASM runtime hosting and WASMOS-APP loading hooks.
+- WASM runtime hosting plus native-driver ELF loading via WASMOS-APP hooks.
 
 User-space policy:
 - Driver startup order and long-running driver logic.
@@ -342,10 +346,9 @@ Implemented:
 - Process runtime stacks still rely on shared low kernel mappings rather than a
   dedicated kernel-stack virtual range per process.
 
-A new kernel helper, `mm_context_map_physical`, now allows privileged drivers to
-request that specific physical regions (for example, the GOP framebuffer) be
-remapped into their linear heap pages, giving them direct access while keeping
-the host-managed map validation inside the kernel.
+The native-driver loader maps requested physical device memory (for example, the
+GOP framebuffer) into the driver process context at a fixed device virtual base
+for direct native access after validation.
 
 ### Direction
 The desired endpoint is:
@@ -392,13 +395,14 @@ WASMOS-APP exists to make boot and PM loading deterministic:
 - endpoint requirements
 - capability requests
 - memory hints
-- raw WASM payload
+- raw payload bytes (WASM module or native ELF)
 
 Current flag roles:
 - driver
 - service
 - normal application
 - privileged request
+- native payload (valid only in combination with `driver`)
 
 Current memory-hint behavior:
 - stack `min_pages` affects runtime stack sizing
@@ -408,6 +412,7 @@ Current memory-hint behavior:
 Current entry expectations:
 - applications export `wasmos_main` through a language shim
 - drivers and services export `initialize`
+- native drivers use ELF `e_entry` to point at `initialize(wasmos_driver_api_t *, int, int, int)`
 
 ### Language ABI Strategy
 Applications no longer need to implement the raw startup ABI directly:
@@ -438,10 +443,10 @@ This keeps the external ABI stable while presenting language-native entrypoints.
 - `chardev`
   - IPC-backed console/character device service
 - `framebuffer`
-  - optional AssemblyScript driver
+  - optional native C driver packed as `FLAG_DRIVER|FLAG_NATIVE`
   - probes the kernel framebuffer APIs exposed via GOP
-  - validates resolution and stride itself before painting
-  - maps the framebuffer pages into the driver linear heap through `wasmos_framebuffer_map()` backed by `mm_context_map_physical`
+  - validates geometry and maps framebuffer pages into a fixed driver device
+    virtual region through the native-driver API
   - paints a gradient on the standard QEMU VGA framebuffer when the device is present
 
 ### Implemented Services
@@ -593,7 +598,7 @@ Open implementation work is tracked in `TASKS.md`.
 ## Repository Map
 - `src/boot/`: UEFI loader
 - `src/kernel/`: kernel core, runtime hosting, scheduler, IPC, memory
-- `src/drivers/`: WASM drivers
+- `src/drivers/`: WASM and native drivers
 - `src/services/`: WASM services
 - `lib/libc/`: shared user-space libc surface and language shims
 - `examples/`: application examples and smoke apps

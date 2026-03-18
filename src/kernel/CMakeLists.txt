@@ -21,6 +21,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/timer.o
   ${BUILD_DIR}/process_manager.o
   ${BUILD_DIR}/wasmos_app.o
+  ${BUILD_DIR}/native_driver.o
   ${BUILD_DIR}/wasm_driver.o
   ${BUILD_DIR}/wasm_chardev.o
   ${BUILD_DIR}/wasm3_probe.o
@@ -63,6 +64,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/timer.c
   ${KERNEL_DIR}/process_manager.c
   ${KERNEL_DIR}/wasmos_app.c
+  ${KERNEL_DIR}/native_driver.c
   ${KERNEL_DIR}/wasm_driver.c
   ${KERNEL_DIR}/wasm_chardev.c
   ${KERNEL_DIR}/wasm3_probe.c
@@ -175,6 +177,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/timer.c -o ${BUILD_DIR}/timer.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager.c -o ${BUILD_DIR}/process_manager.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_app.c -o ${BUILD_DIR}/wasmos_app.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/native_driver.c -o ${BUILD_DIR}/native_driver.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_driver.c -o ${BUILD_DIR}/wasm_driver.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_chardev.c -o ${BUILD_DIR}/wasm_chardev.o
   COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${KERNEL_DIR}/wasm3_probe.c -o ${BUILD_DIR}/wasm3_probe.o
@@ -197,7 +200,8 @@ add_custom_command(
   ${KERNEL_DIR}/include/ipc.h ${KERNEL_DIR}/include/memory.h ${KERNEL_DIR}/include/paging.h
           ${KERNEL_DIR}/include/physmem.h ${KERNEL_DIR}/include/process.h ${KERNEL_DIR}/include/process_manager.h
           ${KERNEL_DIR}/include/memory_service.h ${KERNEL_DIR}/include/irq.h ${KERNEL_DIR}/include/timer.h
-          ${KERNEL_DIR}/include/serial.h ${KERNEL_DIR}/include/wasmos_app.h ${KERNEL_DIR}/include/spinlock.h
+          ${KERNEL_DIR}/include/serial.h ${KERNEL_DIR}/include/wasmos_app.h
+          ${KERNEL_DIR}/include/native_driver.h ${KERNEL_DIR}/include/spinlock.h
           ${KERNEL_DIR}/include/wasm_driver.h ${KERNEL_DIR}/include/wasm_chardev.h
           ${KERNEL_DIR}/include/framebuffer.h
           ${KERNEL_DIR}/include/io.h

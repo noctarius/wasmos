@@ -133,7 +133,7 @@ nd_framebuffer_map(uint32_t size)
     if (framebuffer_get_info(&info) != 0) {
         return (void *)0;
     }
-    if ((uint64_t)size < info.framebuffer_size) {
+    if ((uint64_t)size > info.framebuffer_size) {
         return (void *)0;
     }
 
@@ -214,6 +214,24 @@ static uint32_t
 nd_sched_current_pid(void)
 {
     return process_current_pid();
+}
+
+static uint32_t
+nd_early_log_size(void)
+{
+    return serial_early_log_size();
+}
+
+static void
+nd_early_log_copy(uint8_t *dst, uint32_t offset, uint32_t len)
+{
+    serial_early_log_copy(dst, offset, len);
+}
+
+static int
+nd_console_register_fb(uint32_t context_id, uint32_t endpoint)
+{
+    return serial_register_fb_backend(context_id, endpoint);
 }
 
 static void
@@ -379,6 +397,9 @@ native_driver_start(uint32_t context_id,
     api.sched_yield         = nd_sched_yield;
     api.sched_current_pid   = nd_sched_current_pid;
     api.proc_exit           = nd_proc_exit;
+    api.early_log_size        = nd_early_log_size;
+    api.early_log_copy        = nd_early_log_copy;
+    api.console_register_fb   = nd_console_register_fb;
 
     serial_write("[native-driver] calling initialize\n");
     int rc = entry(&api,

@@ -1,13 +1,34 @@
 #include "wasmos_native_driver.h"
+#include "../include/wasmos_driver_abi.h"
+#include "fbtext_internal.h"
 
 /*
- * Native framebuffer driver.
+ * Native framebuffer driver — Phase 1 virtual terminal.
  *
- * Probes the kernel framebuffer, maps it directly into this process's address
- * space via the driver API, and paints a gradient.  Because this runs as
- * compiled x86-64 code rather than through the wasm3 interpreter, the inner
- * pixel loop executes at full native speed.
+ * Extends the original gradient demo into a text-rendering IPC server:
+ *   1. Probe and map the physical framebuffer.
+ *   2. Initialise the cell grid and font.
+ *   3. Replay the kernel early-log ring buffer so the full boot log appears.
+ *   4. Enter a yield-poll IPC loop serving FBTEXT_IPC_* messages.
+ *
+ * The internal rendering code lives in render.c; this file owns the driver
+ * lifecycle, early-log replay, and the IPC server loop.
+ *
+ * IPC message encoding:
+ *   FBTEXT_IPC_CELL_WRITE_REQ  arg0=col  arg1=row  arg2=codepoint  arg3=(fg<<8)|bg
+ *   FBTEXT_IPC_CURSOR_SET_REQ  arg0=col  arg1=row
+ *   FBTEXT_IPC_SCROLL_REQ      arg0=n_rows
+ *   FBTEXT_IPC_CLEAR_REQ       (no args)
  */
+
+/* IPC_EMPTY and IPC_OK values — must stay in sync with kernel ipc.h. */
+#define ND_IPC_OK    0
+#define ND_IPC_EMPTY 1
+
+#define EARLY_LOG_BUF 4096
+
+static fbtext_state_t g_state;
+static uint8_t        g_early_log_buf[EARLY_LOG_BUF];
 
 static int
 str_len(const char *s)
@@ -24,18 +45,85 @@ write_str(wasmos_driver_api_t *api, const char *s)
 }
 
 static void
-paint_gradient(uint32_t *fb, int width, int height, int stride)
+write_hex32(wasmos_driver_api_t *api, const char *label, uint32_t v)
 {
-    int wh = width + height;
-    for (int y = 0; y < height; ++y) {
-        int g = (y * 255) / height;
-        int by = (y * 128) / wh;
-        uint32_t *row = fb + (uint32_t)y * (uint32_t)stride;
-        for (int x = 0; x < width; ++x) {
-            int r = (x * 255) / width;
-            int b = ((x * 128) / wh + by) & 0xff;
-            row[x] = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+    static const char hx[] = "0123456789ABCDEF";
+    char buf[64];
+    int i = 0;
+    const char *p = label;
+    while (*p) buf[i++] = *p++;
+    buf[i++] = '0'; buf[i++] = 'x';
+    for (int s = 28; s >= 0; s -= 4) buf[i++] = hx[(v >> s) & 0xF];
+    buf[i] = '\0';
+    api->console_write(buf, i);
+}
+
+/* Target display resolution — change these to switch modes. */
+#define VBE_TARGET_WIDTH  1280
+#define VBE_TARGET_HEIGHT 1024
+
+/* Read/write a Bochs VBE register via I/O ports 0x01CE/0x01CF. */
+static uint16_t
+vbe_read(wasmos_driver_api_t *api, uint16_t index)
+{
+    api->io_out16(0x01CE, index);
+    return api->io_in16(0x01CF);
+}
+
+static void
+vbe_write(wasmos_driver_api_t *api, uint16_t index, uint16_t value)
+{
+    api->io_out16(0x01CE, index);
+    api->io_out16(0x01CF, value);
+}
+
+/* Set the Bochs VBE device to the desired mode.
+ * Sequence: disable → set geometry → enable LFB. */
+static void
+vbe_set_mode(wasmos_driver_api_t *api, uint16_t width, uint16_t height)
+{
+    vbe_write(api, 4, 0x00);           /* ENABLE  = disabled            */
+    vbe_write(api, 1, width);          /* XRES                          */
+    vbe_write(api, 2, height);         /* YRES                          */
+    vbe_write(api, 3, 32);             /* BPP     = 32                  */
+    vbe_write(api, 6, width);          /* VIRT_WIDTH = stride in pixels */
+    vbe_write(api, 5, 0);             /* VIRT_Y_OFFSET = 0             */
+    vbe_write(api, 4, 0x41);           /* ENABLE  = enabled | LFB       */
+}
+
+static void
+replay_early_log(wasmos_driver_api_t *api)
+{
+    uint32_t total = api->early_log_size();
+    if (total == 0) {
+        return;
+    }
+    if (total > EARLY_LOG_BUF) {
+        uint32_t skip = total - EARLY_LOG_BUF;
+        api->early_log_copy(g_early_log_buf, skip, EARLY_LOG_BUF);
+        total = EARLY_LOG_BUF;
+    } else {
+        api->early_log_copy(g_early_log_buf, 0, total);
+    }
+
+    /* Find the start offset such that only the last (rows-1) newlines worth
+     * of content is replayed — fits on screen without any scrolling. */
+    uint16_t max_rows = g_state.rows > 1 ? (uint16_t)(g_state.rows - 1) : 1;
+    uint16_t nl_count = 0;
+    uint32_t start    = total;        /* exclusive upper bound, scan left */
+    while (start > 0) {
+        start--;
+        if (g_early_log_buf[start] == '\n') {
+            nl_count++;
+            if (nl_count >= max_rows) {
+                start++;            /* replay from byte after this newline */
+                break;
+            }
         }
+    }
+
+    for (uint32_t i = start; i < total; i++) {
+        fbtext_put_char(&g_state, (uint32_t)g_early_log_buf[i]);
     }
 }
 
@@ -46,7 +134,7 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
     (void)arg2;
     (void)arg3;
 
-    write_str(api, "[framebuffer-native] probing\n");
+    write_str(api, "[framebuffer] probing\n");
 
     nd_framebuffer_info_t info;
     if (api->framebuffer_info(&info) != 0 ||
@@ -54,27 +142,135 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
         info.framebuffer_width == 0 ||
         info.framebuffer_height == 0 ||
         info.framebuffer_stride == 0) {
-        write_str(api, "[framebuffer-native] not present\n");
+        write_str(api, "[framebuffer] not present\n");
         return 0;
     }
 
-    /* Round size up to the next page boundary before mapping. */
-    uint32_t size = (uint32_t)info.framebuffer_size;
-    size = (size + 0xfffu) & ~0xfffu;
+    /* Switch the Bochs VBE device to the desired resolution. */
+    vbe_set_mode(api, VBE_TARGET_WIDTH, VBE_TARGET_HEIGHT);
 
-    write_str(api, "[framebuffer-native] mapping\n");
+    /* Read actual VBE geometry before mapping so we allocate the right size.
+     * vbe_set_mode above should have set the target mode; read back to confirm
+     * and derive stride/size. */
+    uint32_t fb_width  = info.framebuffer_width;
+    uint32_t fb_height = info.framebuffer_height;
+    uint32_t fb_stride = info.framebuffer_stride;
+    {
+        uint16_t vbe_en = vbe_read(api, 4); /* ENABLE */
+        uint16_t vbe_xr = vbe_read(api, 1); /* XRES   */
+        uint16_t vbe_yr = vbe_read(api, 2); /* YRES   */
+        uint16_t vbe_vw = vbe_read(api, 6); /* VIRT_WIDTH = stride in pixels */
+        if ((vbe_en & 0x01u) && vbe_xr && vbe_yr && vbe_vw) {
+            fb_width  = vbe_xr;
+            fb_height = vbe_yr;
+            fb_stride = vbe_vw;
+            write_hex32(api, "[framebuffer] vbe override ", vbe_xr);
+            write_hex32(api, "x", vbe_yr);
+            write_hex32(api, " stride=", vbe_vw);
+            write_str(api, "\n");
+        }
+    }
+
+    /* Compute map size from actual geometry (32bpp = 4 bytes/pixel). */
+    uint32_t size = fb_stride * fb_height * 4u;
+    size = (size + 0xFFFu) & ~0xFFFu;
+
+    write_str(api, "[framebuffer] mapping\n");
     void *fb = api->framebuffer_map(size);
     if (!fb) {
-        write_str(api, "[framebuffer-native] map failed\n");
+        write_str(api, "[framebuffer] map failed\n");
         return -1;
     }
 
-    write_str(api, "[framebuffer-native] painting\n");
-    paint_gradient((uint32_t *)fb,
-                   (int)info.framebuffer_width,
-                   (int)info.framebuffer_height,
-                   (int)info.framebuffer_stride);
+    /* Initialise the cell grid with the corrected geometry. */
+    fbtext_render_init(&g_state, (uint32_t *)fb, fb_stride, fb_width, fb_height);
+    fbtext_clear(&g_state);
 
-    write_str(api, "[framebuffer-native] done\n");
+    replay_early_log(api);
+
+    write_str(api, "[framebuffer] ready\n");
+
+    /* Create the IPC endpoint for cell-write requests. */
+    uint32_t ep = api->ipc_create_endpoint();
+    if (ep == (uint32_t)~0u) {
+        write_str(api, "[framebuffer] ipc endpoint failed\n");
+        return -1;
+    }
+
+    /* Derive our context id from current pid (context_id == pid for native). */
+    uint32_t ctx = api->sched_current_pid();
+
+    /* Register as the kernel's framebuffer console backend so all subsequent
+     * serial_write calls also deliver PUT_CHAR messages to this endpoint. */
+    api->console_register_fb(ctx, ep);
+
+    /* IPC server loop.  nd_ipc_recv returns ND_IPC_EMPTY when the queue is
+     * empty; yield and retry rather than busy-spinning. */
+    nd_ipc_message_t msg;
+    for (;;) {
+        int rc = api->ipc_recv(ctx, ep, &msg);
+        if (rc == ND_IPC_EMPTY) {
+            api->sched_yield();
+            continue;
+        }
+        if (rc != ND_IPC_OK) {
+            /* Endpoint error — log and exit. */
+            write_str(api, "[framebuffer] ipc error\n");
+            break;
+        }
+
+        nd_ipc_message_t resp;
+        resp.type        = FBTEXT_IPC_RESP;
+        resp.source      = ep;
+        resp.destination = msg.source;
+        resp.request_id  = msg.request_id;
+        resp.arg0        = 0;
+        resp.arg1        = 0;
+        resp.arg2        = 0;
+        resp.arg3        = 0;
+
+        switch (msg.type) {
+        case FBTEXT_IPC_CELL_WRITE_REQ: {
+            uint16_t col       = (uint16_t)msg.arg0;
+            uint16_t row       = (uint16_t)msg.arg1;
+            uint32_t codepoint = msg.arg2;
+            uint8_t  fg        = (uint8_t)((msg.arg3 >> 8) & 0xF);
+            uint8_t  bg        = (uint8_t)(msg.arg3 & 0xF);
+            if (col < g_state.cols && row < g_state.rows) {
+                fbtext_cell_t *cell = &g_state.cells[row * g_state.cols + col];
+                cell->ch  = codepoint;
+                cell->fg  = fg;
+                cell->bg  = bg;
+                fbtext_render_cell(&g_state, col, row);
+            }
+            break;
+        }
+        case FBTEXT_IPC_CURSOR_SET_REQ:
+            if ((uint16_t)msg.arg0 < g_state.cols &&
+                (uint16_t)msg.arg1 < g_state.rows) {
+                g_state.cursor.col = (uint16_t)msg.arg0;
+                g_state.cursor.row = (uint16_t)msg.arg1;
+            }
+            break;
+        case FBTEXT_IPC_SCROLL_REQ:
+            fbtext_scroll_up(&g_state, (uint16_t)msg.arg0);
+            break;
+        case FBTEXT_IPC_CLEAR_REQ:
+            fbtext_clear(&g_state);
+            break;
+        case FBTEXT_IPC_PUT_CHAR_REQ:
+            fbtext_put_char(&g_state, msg.arg0);
+            break;
+        default:
+            resp.type = FBTEXT_IPC_ERROR;
+            resp.arg0 = (uint32_t)-1;
+            break;
+        }
+
+        if (msg.source != (uint32_t)~0u) {
+            api->ipc_send(ctx, msg.source, &resp);
+        }
+    }
+
     return 0;
 }

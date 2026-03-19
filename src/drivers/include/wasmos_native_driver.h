@@ -66,6 +66,19 @@ typedef struct wasmos_driver_api {
 
     /* Process */
     void     (*proc_exit)(int code);
+
+    /* Early kernel log — ring buffer of all serial output before the VT is
+     * ready.  early_log_size() returns bytes buffered.  early_log_copy()
+     * copies len bytes starting at logical offset into dst.
+     * Both are read-only; the ring is never flushed after handoff. */
+    uint32_t (*early_log_size)(void);
+    void     (*early_log_copy)(uint8_t *dst, uint32_t offset, uint32_t len);
+
+    /* Console framebuffer backend — after the framebuffer driver creates its
+     * IPC endpoint, it calls this to register itself as a secondary console
+     * output.  Subsequent serial_write calls also deliver FBTEXT_IPC_PUT_CHAR_REQ
+     * messages to the registered endpoint so live output appears on screen. */
+    int      (*console_register_fb)(uint32_t context_id, uint32_t endpoint);
 } wasmos_driver_api_t;
 
 /* Entry point that every native driver must provide via ELF e_entry. */

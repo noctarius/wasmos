@@ -18,6 +18,13 @@ const serial_driver_t *serial_set_driver(const serial_driver_t *driver);
 const serial_driver_t *serial_get_driver(void);
 
 int serial_register_remote_driver(uint32_t endpoint);
+int serial_register_fb_backend(uint32_t context_id, uint32_t endpoint);
+
+/* Early log ring buffer — captured from the first serial_write onward.
+ * Returns the number of bytes currently buffered (capped at ring size).
+ * early_log_copy copies up to len bytes starting at logical offset into dst. */
+uint32_t serial_early_log_size(void);
+void     serial_early_log_copy(uint8_t *dst, uint32_t offset, uint32_t len);
 
 #ifndef WASMOS_TRACE
 #define WASMOS_TRACE 0

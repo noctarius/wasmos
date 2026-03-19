@@ -73,7 +73,10 @@ set(WASM_KEYBOARD_DRIVER_WASM ${BUILD_DIR}/keyboard.wasm)
 set(WASM_KEYBOARD_APP ${BUILD_DIR}/keyboard.wap)
 set(WASM_FRAMEBUFFER_APP ${BUILD_DIR}/framebuffer.wap)
 set(NATIVE_FRAMEBUFFER_DRIVER_SRC ${DRIVER_WASM_DIR}/framebuffer/framebuffer_native.c)
+set(NATIVE_FRAMEBUFFER_RENDER_SRC ${DRIVER_WASM_DIR}/framebuffer/render.c)
 set(NATIVE_FRAMEBUFFER_DRIVER_ELF ${BUILD_DIR}/framebuffer_native.elf)
+set(NATIVE_FRAMEBUFFER_DRIVER_OBJ ${BUILD_DIR}/framebuffer_native.o)
+set(NATIVE_FRAMEBUFFER_RENDER_OBJ ${BUILD_DIR}/framebuffer_render.o)
 set(WASM_INIT_APP_SRC ${SERVICES_DIR}/sysinit/init.c)
 set(WASM_INIT_APP_WASM ${BUILD_DIR}/init.wasm)
 set(WASM_INIT_APP ${BUILD_DIR}/sysinit.wap)
@@ -647,6 +650,44 @@ else ()
     COMMENT "Running in QEMU"
     VERBATIM
   )
+  add_custom_target(run-qemu-ui
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
+    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
+    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
+    ${INITFS_COPY_CMD}
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HW_DISCOVERY_APP} ${BUILD_DIR}/esp/system/services/hw_discovery.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wap
+    ${AS_HELLO_COPY_CMD}
+    ${HELLO_C_COPY_CMD}
+    ${CHARDEV_PREEMPT_COPY_CMD}
+    ${INIT_SMOKE_COPY_CMD}
+    ${FS_OPEN_SMOKE_COPY_CMD}
+    ${FS_WRITE_SMOKE_COPY_CMD}
+    ${NATIVE_CALL_MIN_COPY_CMD}
+    ${NATIVE_CALL_SMOKE_COPY_CMD}
+    ${RUST_HELLO_COPY_CMD}
+    ${GO_HELLO_COPY_CMD}
+    ${ZIG_HELLO_COPY_CMD}
+    ${LARGE_READ_COPY_CMD}
+    ${WRITE_SMOKE_FILE_COPY_CMD}
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
+    COMMAND qemu-system-x86_64 -m 512M -serial mon:stdio
+            -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
+            -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
+    DEPENDS bootloader kernel
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Running in QEMU"
+    VERBATIM
+  )
   add_custom_target(run-qemu-debug
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
@@ -820,6 +861,7 @@ add_dependencies(run-qemu-test c_examples services drivers)
 add_dependencies(run-qemu-cli-test c_examples services drivers)
 add_dependencies(run-qemu-debug c_examples services drivers)
 add_dependencies(run-qemu make_initfs)
+add_dependencies(run-qemu-ui make_initfs)
 add_dependencies(run-qemu-test make_initfs)
 add_dependencies(run-qemu-cli-test make_initfs)
 add_dependencies(run-qemu-debug make_initfs)

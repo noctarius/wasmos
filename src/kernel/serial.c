@@ -24,6 +24,11 @@ static inline uint8_t inb(uint16_t port) {
     return ret;
 }
 
+#define EARLY_LOG_SIZE 4096
+static uint8_t  g_early_log[EARLY_LOG_SIZE];
+static uint32_t g_early_log_head  = 0;  /* next write index (wraps) */
+static uint32_t g_early_log_count = 0;  /* bytes written, capped at EARLY_LOG_SIZE */
+
 static spinlock_t g_serial_lock = {0};
 
 static int serial_tx_ready(void) {
@@ -73,6 +78,12 @@ static uint32_t g_serial_remote_endpoint = IPC_ENDPOINT_NONE;
 static uint32_t g_serial_remote_reply_endpoint = IPC_ENDPOINT_NONE;
 static uint32_t g_serial_remote_next_request_id = 1;
 static uint32_t g_serial_remote_pending_read_request = 0;
+
+/* Optional framebuffer console backend.  When registered, every transmitted
+ * byte is also sent to the framebuffer driver as FBTEXT_IPC_PUT_CHAR_REQ so
+ * live output appears on screen alongside the serial/chardev path. */
+#define FBTEXT_IPC_PUT_CHAR_REQ 0x604
+static uint32_t g_fb_endpoint = IPC_ENDPOINT_NONE;
 
 static void serial_remote_reset(void) {
     g_serial_remote_endpoint = IPC_ENDPOINT_NONE;
@@ -168,6 +179,15 @@ static int serial_remote_read_char(uint8_t *out_char) {
     return 0;
 }
 
+int serial_register_fb_backend(uint32_t context_id, uint32_t endpoint) {
+    (void)context_id;
+    if (endpoint == IPC_ENDPOINT_NONE) {
+        return -1;
+    }
+    g_fb_endpoint = endpoint;
+    return 0;
+}
+
 int serial_register_remote_driver(uint32_t endpoint) {
     if (endpoint == IPC_ENDPOINT_NONE) {
         return -1;
@@ -209,10 +229,30 @@ static void serial_put_internal(char c) {
     }
 }
 
+static void serial_fb_transmit(uint8_t c) {
+    if (g_fb_endpoint == IPC_ENDPOINT_NONE) {
+        return;
+    }
+    ipc_message_t msg = {
+        .type        = FBTEXT_IPC_PUT_CHAR_REQ,
+        .source      = IPC_ENDPOINT_NONE,
+        .destination = g_fb_endpoint,
+        .request_id  = 0,
+        .arg0        = (uint32_t)c,
+        .arg1        = 0,
+        .arg2        = 0,
+        .arg3        = 0,
+    };
+    /* Fire-and-forget: ignore send errors so a crashed/slow framebuffer
+     * driver never stalls the kernel console path. */
+    (void)ipc_send_from(IPC_CONTEXT_KERNEL, g_fb_endpoint, &msg);
+}
+
 static void serial_transmit(char c) {
     if (!serial_remote_transmit((uint8_t)c)) {
         serial_put_internal(c);
     }
+    serial_fb_transmit((uint8_t)c);
 }
 
 void serial_init(void) {
@@ -237,8 +277,34 @@ void serial_write_unlocked(const char *s) {
     for (const char *p = s; *p; ++p) {
         if (*p == '\n') {
             serial_transmit('\r');
+            g_early_log[g_early_log_head] = '\r';
+            g_early_log_head = (g_early_log_head + 1) % EARLY_LOG_SIZE;
+            if (g_early_log_count < EARLY_LOG_SIZE) { g_early_log_count++; }
         }
         serial_transmit(*p);
+        g_early_log[g_early_log_head] = (uint8_t)*p;
+        g_early_log_head = (g_early_log_head + 1) % EARLY_LOG_SIZE;
+        if (g_early_log_count < EARLY_LOG_SIZE) { g_early_log_count++; }
+    }
+}
+
+uint32_t serial_early_log_size(void) {
+    return g_early_log_count;
+}
+
+void serial_early_log_copy(uint8_t *dst, uint32_t offset, uint32_t len) {
+    if (!dst || offset >= g_early_log_count) {
+        return;
+    }
+    if (len > g_early_log_count - offset) {
+        len = g_early_log_count - offset;
+    }
+    /* Logical index 0 is the oldest byte. */
+    uint32_t start = (g_early_log_count < EARLY_LOG_SIZE)
+                   ? 0
+                   : g_early_log_head; /* head = oldest when ring is full */
+    for (uint32_t i = 0; i < len; ++i) {
+        dst[i] = g_early_log[(start + offset + i) % EARLY_LOG_SIZE];
     }
 }
 

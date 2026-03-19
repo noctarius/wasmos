@@ -1,33 +1,59 @@
 # FLAG_DRIVER=1, FLAG_NATIVE=16 -> 17
 set(NATIVE_FRAMEBUFFER_FLAGS 17)
-set(NATIVE_FRAMEBUFFER_OBJ ${BUILD_DIR}/framebuffer_native.o)
+
+set(NATIVE_FB_CFLAGS
+    --target=x86_64-elf
+    -ffreestanding -fno-builtin -fno-stack-protector
+    -fno-pic -fno-pie
+    -mno-red-zone
+    -mcmodel=small
+    -Oz -c
+    -Wall -Wextra
+    -I${DRIVER_WASM_DIR}/include
+    -I${DRIVER_WASM_DIR}/framebuffer
+)
+
+add_custom_command(
+  OUTPUT ${NATIVE_FRAMEBUFFER_DRIVER_OBJ}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG} ${NATIVE_FB_CFLAGS}
+          ${NATIVE_FRAMEBUFFER_DRIVER_SRC}
+          -o ${NATIVE_FRAMEBUFFER_DRIVER_OBJ}
+  DEPENDS ${NATIVE_FRAMEBUFFER_DRIVER_SRC}
+          ${DRIVER_WASM_DIR}/include/wasmos_native_driver.h
+          ${DRIVER_WASM_DIR}/framebuffer/fbtext_internal.h
+          ${DRIVER_WASM_DIR}/framebuffer/font_8x16.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Compiling framebuffer_native.c"
+  VERBATIM
+)
+
+add_custom_command(
+  OUTPUT ${NATIVE_FRAMEBUFFER_RENDER_OBJ}
+  COMMAND ${CLANG} ${NATIVE_FB_CFLAGS}
+          ${NATIVE_FRAMEBUFFER_RENDER_SRC}
+          -o ${NATIVE_FRAMEBUFFER_RENDER_OBJ}
+  DEPENDS ${NATIVE_FRAMEBUFFER_RENDER_SRC}
+          ${DRIVER_WASM_DIR}/framebuffer/fbtext_internal.h
+          ${DRIVER_WASM_DIR}/framebuffer/font_8x16.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Compiling render.c"
+  VERBATIM
+)
 
 add_custom_command(
   OUTPUT ${NATIVE_FRAMEBUFFER_DRIVER_ELF}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  # Compile to object
-  COMMAND ${CLANG}
-          --target=x86_64-elf
-          -ffreestanding -fno-builtin -fno-stack-protector
-          -fno-pic -fno-pie
-          -mno-red-zone
-          -mcmodel=small
-          -Oz -c
-          -Wall -Wextra
-          -I${DRIVER_WASM_DIR}/include
-          ${NATIVE_FRAMEBUFFER_DRIVER_SRC}
-          -o ${NATIVE_FRAMEBUFFER_OBJ}
-  # Link with lld directly (same approach as the kernel build)
   COMMAND ${LLD_PATH}
           --image-base=0x10000000
           -e initialize
           -static
-          ${NATIVE_FRAMEBUFFER_OBJ}
+          ${NATIVE_FRAMEBUFFER_DRIVER_OBJ}
+          ${NATIVE_FRAMEBUFFER_RENDER_OBJ}
           -o ${NATIVE_FRAMEBUFFER_DRIVER_ELF}
-  DEPENDS ${NATIVE_FRAMEBUFFER_DRIVER_SRC}
-          ${DRIVER_WASM_DIR}/include/wasmos_native_driver.h
+  DEPENDS ${NATIVE_FRAMEBUFFER_DRIVER_OBJ}
+          ${NATIVE_FRAMEBUFFER_RENDER_OBJ}
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building native framebuffer driver"
+  COMMENT "Linking native framebuffer driver"
   VERBATIM
 )
 

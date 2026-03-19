@@ -272,6 +272,11 @@ x86_exception_panic_frame(uint64_t vector, const uint64_t *frame)
     uint64_t kernel_start = (uint64_t)(uintptr_t)&__kernel_start;
     uint64_t kernel_end = (uint64_t)(uintptr_t)&__kernel_end;
 
+    uint64_t cr2 = 0;
+    if (vector == 14) {
+        __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
+    }
+
     if (frame) {
         err = frame[0];
         rip = frame[1];
@@ -289,6 +294,10 @@ x86_exception_panic_frame(uint64_t vector, const uint64_t *frame)
     serial_write_hex64_unlocked(cs);
     serial_write_unlocked("[cpu] rflags=");
     serial_write_hex64_unlocked(rflags);
+    if (vector == 14) {
+        serial_write_unlocked("[cpu] cr2=");
+        serial_write_hex64_unlocked(cr2);
+    }
     serial_write_unlocked("[cpu] frame=");
     serial_write_hex64_unlocked((uint64_t)(uintptr_t)frame);
     serial_write_unlocked("[cpu] pid=");

@@ -12,6 +12,8 @@ typedef struct serial_driver {
 void serial_init(void);
 void serial_write(const char *s);
 void serial_write_unlocked(const char *s);
+void serial_write_hex64(uint64_t value);
+void serial_write_hex64_unlocked(uint64_t value);
 int serial_read_char(uint8_t *out_char);
 
 const serial_driver_t *serial_set_driver(const serial_driver_t *driver);

@@ -40,20 +40,6 @@ typedef struct {
 static wasm3_heap_slot_t g_wasm3_heaps[PROCESS_MAX_COUNT];
 static uint32_t g_wasm3_heap_bound_pid;
 
-static void
-wasm3_log_hex64(uint64_t value)
-{
-    char buf[21];
-    static const char hex[] = "0123456789ABCDEF";
-    buf[0] = '0';
-    buf[1] = 'x';
-    for (int i = 0; i < 16; ++i) {
-        buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
-    }
-    buf[18] = '\n';
-    buf[19] = '\0';
-    serial_write(buf);
-}
 
 static size_t
 align_up(size_t value, size_t align)
@@ -340,13 +326,13 @@ wasm3_alloc(size_t size, int zero)
         /* Ensure new chunks account for the worst-case alignment slop. */
         if (wasm3_heap_grow(slot, total + align) != 0) {
             serial_write("[wasm3-heap] grow failed pid=");
-            wasm3_log_hex64(slot->pid);
+            serial_write_hex64(slot->pid);
             serial_write("[wasm3-heap] req=");
-            wasm3_log_hex64((uint64_t)size);
+            serial_write_hex64((uint64_t)size);
             serial_write("[wasm3-heap] committed=");
-            wasm3_log_hex64((uint64_t)slot->committed_size);
+            serial_write_hex64((uint64_t)slot->committed_size);
             serial_write("[wasm3-heap] limit=");
-            wasm3_log_hex64((uint64_t)slot->max_size);
+            serial_write_hex64((uint64_t)slot->max_size);
             critical_section_leave();
             return 0;
         }

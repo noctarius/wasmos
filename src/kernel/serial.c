@@ -1,5 +1,7 @@
 #include "ipc.h"
 #include "serial.h"
+
+#include "process.h"
 #include "spinlock.h"
 
 #define COM1_PORT 0x3F8
@@ -304,10 +306,35 @@ void serial_write(const char *s) {
     spinlock_unlock(&g_serial_lock);
 }
 
+void serial_write_hex64(uint64_t value)
+{
+    char buf[20];
+    static const char hex[] = "0123456789ABCDEF";
+    buf[0] = '0'; buf[1] = 'x';
+    for (int i = 0; i < 16; ++i) {
+        buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
+    }
+    buf[18] = '\n'; buf[19] = '\0';
+    serial_write(buf);
+}
+
+void serial_write_hex64_unlocked(uint64_t value)
+{
+    char buf[20];
+    static const char hex[] = "0123456789ABCDEF";
+    buf[0] = '0'; buf[1] = 'x';
+    for (int i = 0; i < 16; ++i) {
+        buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
+    }
+    buf[18] = '\n'; buf[19] = '\0';
+    serial_write_unlocked(buf);
+}
+
 void serial_write_unlocked(const char *s) {
     if (!s) {
         return;
     }
+    preempt_disable();
     for (const char *p = s; *p; ++p) {
         if (*p == '\n') {
             serial_transmit('\r');
@@ -320,6 +347,7 @@ void serial_write_unlocked(const char *s) {
         g_early_log_head = (g_early_log_head + 1) % EARLY_LOG_SIZE;
         if (g_early_log_count < EARLY_LOG_SIZE) { g_early_log_count++; }
     }
+    preempt_enable();
 }
 
 uint32_t serial_early_log_size(void) {

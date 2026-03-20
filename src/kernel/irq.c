@@ -31,18 +31,6 @@ static irq_route_t g_irq_routes[IRQ_COUNT];
 static uint8_t g_pic_mask1 = 0xFF;
 static uint8_t g_pic_mask2 = 0xFF;
 
-static void serial_write_hex64_local(uint64_t value) {
-    char buf[21];
-    static const char hex[] = "0123456789ABCDEF";
-    buf[0] = '0';
-    buf[1] = 'x';
-    for (int i = 0; i < 16; ++i) {
-        buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
-    }
-    buf[18] = '\n';
-    buf[19] = '\0';
-    serial_write(buf);
-}
 
 void x86_irq_iret_corrupt(const uint64_t *saved, const uint64_t *current) {
     serial_write("[irq] iret frame corrupt\n");
@@ -51,17 +39,17 @@ void x86_irq_iret_corrupt(const uint64_t *saved, const uint64_t *current) {
         return;
     }
     serial_write("[irq] saved rip=");
-    serial_write_hex64_local(saved[0]);
+    serial_write_hex64(saved[0]);
     serial_write("[irq] saved cs=");
-    serial_write_hex64_local(saved[1]);
+    serial_write_hex64(saved[1]);
     serial_write("[irq] saved rflags=");
-    serial_write_hex64_local(saved[2]);
+    serial_write_hex64(saved[2]);
     serial_write("[irq] current rip=");
-    serial_write_hex64_local(current[0]);
+    serial_write_hex64(current[0]);
     serial_write("[irq] current cs=");
-    serial_write_hex64_local(current[1]);
+    serial_write_hex64(current[1]);
     serial_write("[irq] current rflags=");
-    serial_write_hex64_local(current[2]);
+    serial_write_hex64(current[2]);
 }
 
 void x86_irq_ist_corrupt(void) {
@@ -238,14 +226,14 @@ void x86_timer_irq_handler(irq_frame_t *frame) {
     if (WASMOS_TRACE && !logged) {
         logged = 1;
         trace_write("[irq] frame ptr=");
-        trace_do(serial_write_hex64_local((uint64_t)(uintptr_t)frame));
+        trace_do(serial_write_hex64((uint64_t)(uintptr_t)frame));
         if (frame) {
             trace_write("[irq] frame rip=");
-            trace_do(serial_write_hex64_local(frame->rip));
+            trace_do(serial_write_hex64(frame->rip));
             trace_write("[irq] frame cs=");
-            trace_do(serial_write_hex64_local(frame->cs));
+            trace_do(serial_write_hex64(frame->cs));
             trace_write("[irq] frame rflags=");
-            trace_do(serial_write_hex64_local(frame->rflags));
+            trace_do(serial_write_hex64(frame->rflags));
         }
     }
     /* The common IRQ handler performs accounting and EOI; the scheduler-facing

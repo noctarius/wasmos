@@ -38,20 +38,6 @@ static wasm_block_slot_t g_wasm_block_slots[PROCESS_MAX_COUNT];
 static wasm_fs_peer_slot_t g_wasm_fs_peer_slots[PROCESS_MAX_COUNT];
 static const boot_info_t *g_wasm_boot_info;
 
-static void __attribute__((unused))
-serial_write_hex64_unlocked_local(uint64_t value)
-{
-    char buf[21];
-    static const char hex[] = "0123456789ABCDEF";
-    buf[0] = '0';
-    buf[1] = 'x';
-    for (int i = 0; i < 16; ++i) {
-        buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
-    }
-    buf[18] = '\n';
-    buf[19] = '\0';
-    serial_write_unlocked(buf);
-}
 
 static int
 boot_module_name_at(uint32_t index, char *out, uint32_t out_len, uint32_t *out_name_len)
@@ -941,9 +927,9 @@ m3ApiRawFunction(wasmos_debug_mark)
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, tag)
     trace_write_unlocked("[wasm] debug_mark tag=");
-    trace_do(serial_write_hex64_unlocked_local((uint64_t)(uint32_t)tag));
+    trace_do(serial_write_hex64_unlocked((uint64_t)(uint32_t)tag));
     trace_write_unlocked("[wasm] debug_mark pid=");
-    trace_do(serial_write_hex64_unlocked_local((uint64_t)process_current_pid()));
+    trace_do(serial_write_hex64_unlocked((uint64_t)process_current_pid()));
     m3ApiReturn(0);
 }
 

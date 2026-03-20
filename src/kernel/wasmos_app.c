@@ -80,20 +80,6 @@ copy_ascii_field(char *dst, uint32_t dst_size, const uint8_t *src, uint32_t src_
     return 0;
 }
 
-static void
-app_write_hex64(uint64_t value)
-{
-    static const char hex[] = "0123456789ABCDEF";
-    char buf[21];
-    buf[0] = '0';
-    buf[1] = 'x';
-    for (int i = 0; i < 16; ++i) {
-        buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
-    }
-    buf[18] = '\n';
-    buf[19] = '\0';
-    serial_write(buf);
-}
 
 int
 wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out_desc)
@@ -226,7 +212,7 @@ wasmos_app_call_entry(wasmos_app_instance_t *instance)
                                        instance->entry_argc,
                                        instance->entry_argv);
     serial_write("[wasmos-app] entry rc=");
-    app_write_hex64((uint64_t)(uint32_t)rc);
+    serial_write_hex64((uint64_t)(uint32_t)rc);
     if (rc == 0) {
         serial_write("[wasmos-app] entry ok ");
     } else {

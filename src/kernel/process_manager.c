@@ -127,35 +127,6 @@ process_manager_fs_buffer_size(void)
     return PM_FS_BUFFER_SIZE;
 }
 
-static void
-pm_write_hex64(uint64_t value)
-{
-    char buf[21];
-    static const char hex[] = "0123456789ABCDEF";
-    buf[0] = '0';
-    buf[1] = 'x';
-    for (int i = 0; i < 16; ++i) {
-        buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
-    }
-    buf[18] = '\n';
-    buf[19] = '\0';
-    serial_write(buf);
-}
-
-static void __attribute__((unused))
-pm_write_hex64_unlocked(uint64_t value)
-{
-    char buf[21];
-    static const char hex[] = "0123456789ABCDEF";
-    buf[0] = '0';
-    buf[1] = 'x';
-    for (int i = 0; i < 16; ++i) {
-        buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
-    }
-    buf[18] = '\n';
-    buf[19] = '\0';
-    serial_write_unlocked(buf);
-}
 
 static int
 copy_name(char *dst, uint32_t dst_len, const uint8_t *src, uint32_t src_len)
@@ -322,7 +293,7 @@ pm_app_entry(process_t *process, void *arg)
             state->entry_arg3
         };
         trace_write_unlocked("[pm] app flags=");
-        trace_do(pm_write_hex64((uint64_t)desc.flags));
+        trace_do(serial_write_hex64((uint64_t)desc.flags));
         if (desc.flags & WASMOS_APP_FLAG_NATIVE) {
             trace_write_unlocked("[pm] app type=native-driver\n");
         } else if (desc.flags & WASMOS_APP_FLAG_DRIVER) {
@@ -374,15 +345,15 @@ pm_app_entry(process_t *process, void *arg)
     trace_write_unlocked(state->name);
     trace_write_unlocked("\n");
     trace_write_unlocked("[pm] entry args count=");
-    trace_do(pm_write_hex64((uint64_t)(uint32_t)state->entry_argc));
+    trace_do(serial_write_hex64((uint64_t)(uint32_t)state->entry_argc));
     trace_write_unlocked("[pm] entry args a0=");
-    trace_do(pm_write_hex64((uint64_t)(uint32_t)state->entry_arg0));
+    trace_do(serial_write_hex64((uint64_t)(uint32_t)state->entry_arg0));
     trace_write_unlocked("[pm] entry args a1=");
-    trace_do(pm_write_hex64((uint64_t)(uint32_t)state->entry_arg1));
+    trace_do(serial_write_hex64((uint64_t)(uint32_t)state->entry_arg1));
     trace_write_unlocked("[pm] entry args a2=");
-    trace_do(pm_write_hex64((uint64_t)(uint32_t)state->entry_arg2));
+    trace_do(serial_write_hex64((uint64_t)(uint32_t)state->entry_arg2));
     trace_write_unlocked("[pm] entry args a3=");
-    trace_do(pm_write_hex64((uint64_t)(uint32_t)state->entry_arg3));
+    trace_do(serial_write_hex64((uint64_t)(uint32_t)state->entry_arg3));
 
     {
         volatile uint64_t stack_canary_a = 0xA5A5A5A5DEADBEEFULL;
@@ -392,13 +363,13 @@ pm_app_entry(process_t *process, void *arg)
         __asm__ volatile("mov %%rsp, %0\n" : "=r"(rsp));
         __asm__ volatile("leaq 1f(%%rip), %0\n1:" : "=r"(rip));
         trace_write_unlocked("[pm] entry rsp=");
-        trace_do(pm_write_hex64(rsp));
+        trace_do(serial_write_hex64(rsp));
         trace_write_unlocked("[pm] entry rip=");
-        trace_do(pm_write_hex64(rip));
+        trace_do(serial_write_hex64(rip));
         trace_write_unlocked("[pm] entry call begin\n");
         int entry_rc = wasmos_app_call_entry(&state->app);
         trace_write_unlocked("[pm] entry call rc=");
-        trace_do(pm_write_hex64((uint64_t)(uint32_t)entry_rc));
+        trace_do(serial_write_hex64((uint64_t)(uint32_t)entry_rc));
         if (entry_rc != 0) {
             serial_write("[pm] app entry failed\n");
             process_set_exit_status(process, -1);
@@ -408,7 +379,7 @@ pm_app_entry(process_t *process, void *arg)
         trace_write_unlocked("[pm] entry returned ");
         trace_write_unlocked(state->name);
         trace_write_unlocked(" flags=");
-        trace_do(pm_write_hex64((uint64_t)state->flags));
+        trace_do(serial_write_hex64((uint64_t)state->flags));
         if (state->flags & (WASMOS_APP_FLAG_DRIVER | WASMOS_APP_FLAG_SERVICE)) {
             trace_write_unlocked("[pm] service/driver returned\n");
         } else {
@@ -417,9 +388,9 @@ pm_app_entry(process_t *process, void *arg)
         if (stack_canary_a != 0xA5A5A5A5DEADBEEFULL || stack_canary_b != 0x5A5A5A5AF00DFACEULL) {
             serial_write("[pm] stack canary corrupted around entry\n");
             trace_write_unlocked("[pm] canary a=");
-            trace_do(pm_write_hex64(stack_canary_a));
+            trace_do(serial_write_hex64(stack_canary_a));
             trace_write_unlocked("[pm] canary b=");
-            trace_do(pm_write_hex64(stack_canary_b));
+            trace_do(serial_write_hex64(stack_canary_b));
             for (;;) {
                 __asm__ volatile("hlt");
             }
@@ -429,9 +400,9 @@ pm_app_entry(process_t *process, void *arg)
         __asm__ volatile("mov %%rsp, %0\n" : "=r"(rsp_after));
         __asm__ volatile("leaq 1f(%%rip), %0\n1:" : "=r"(rip_after));
         trace_write_unlocked("[pm] entry done rsp=");
-        trace_do(pm_write_hex64(rsp_after));
+        trace_do(serial_write_hex64(rsp_after));
         trace_write_unlocked("[pm] entry done rip=");
-        trace_do(pm_write_hex64(rip_after));
+        trace_do(serial_write_hex64(rip_after));
     }
 
     wasmos_app_stop(&state->app);
@@ -536,7 +507,7 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
 
     slot->pid = *out_pid;
     trace_write("[pm] spawn pid ");
-    trace_do(pm_write_hex64(*out_pid));
+    trace_do(serial_write_hex64(*out_pid));
     if (name_eq(slot->name, "ata") && g_pm.block_endpoint == IPC_ENDPOINT_NONE) {
         process_t *proc = process_get(*out_pid);
         if (!proc || ipc_endpoint_create(proc->context_id, &g_pm.block_endpoint) != IPC_OK) {
@@ -794,7 +765,7 @@ pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t *msg)
     uint32_t parent_pid = 0;
     uint32_t pid = 0;
     trace_write("[pm] spawn index=");
-    trace_do(pm_write_hex64(msg->arg0));
+    trace_do(serial_write_hex64(msg->arg0));
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
         return -1;
     }
@@ -819,7 +790,7 @@ pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t *msg)
     resp.arg3 = 0;
     int rc = ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
     trace_write_unlocked("[pm] spawn resp rc=");
-    trace_do(pm_write_hex64((uint64_t)(uint32_t)rc));
+    trace_do(serial_write_hex64((uint64_t)(uint32_t)rc));
     return rc;
 }
 
@@ -1064,9 +1035,9 @@ process_manager_entry(process_t *process, void *arg)
         }
         g_pm.started = 1;
         trace_write("[pm] proc endpoint=");
-        trace_do(pm_write_hex64(g_pm.proc_endpoint));
+        trace_do(serial_write_hex64(g_pm.proc_endpoint));
         trace_write("[pm] context id=");
-        trace_do(pm_write_hex64(process->context_id));
+        trace_do(serial_write_hex64(process->context_id));
     }
 
     pm_check_waits(process->context_id);
@@ -1089,21 +1060,21 @@ process_manager_entry(process_t *process, void *arg)
         if (!logged_recv_fail) {
             logged_recv_fail = 1;
             serial_write("[pm] recv failed rc=");
-            pm_write_hex64((uint64_t)(uint32_t)recv_rc);
+            serial_write_hex64((uint64_t)(uint32_t)recv_rc);
             uint32_t owner = 0;
             if (ipc_endpoint_owner(g_pm.proc_endpoint, &owner) == IPC_OK) {
                 serial_write("[pm] proc owner=");
-                pm_write_hex64(owner);
+                serial_write_hex64(owner);
             }
             serial_write("[pm] ctx=");
-            pm_write_hex64(process->context_id);
+            serial_write_hex64(process->context_id);
         }
         return PROCESS_RUN_YIELDED;
     }
     trace_write_unlocked("[pm] recv type=");
-    trace_do(pm_write_hex64_unlocked(msg.type));
+    trace_do(serial_write_hex64_unlocked(msg.type));
     trace_write_unlocked("[pm] recv req=");
-    trace_do(pm_write_hex64_unlocked(msg.request_id));
+    trace_do(serial_write_hex64_unlocked(msg.request_id));
 
     int rc = -1;
     switch (msg.type) {

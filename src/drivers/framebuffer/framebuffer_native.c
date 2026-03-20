@@ -261,6 +261,15 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
         case FBTEXT_IPC_PUT_CHAR_REQ:
             fbtext_put_char(&g_state, msg.arg0);
             break;
+        case FBTEXT_IPC_PUT_STRING_REQ: {
+            uint32_t args[4] = { msg.arg0, msg.arg1, msg.arg2, msg.arg3 };
+            for (int i = 0; i < 4; ++i) {
+                uint8_t b = (uint8_t)(args[i] & 0xFF);
+                if (b == 0) break;
+                fbtext_put_char(&g_state, (uint32_t)b);
+            }
+            break;
+        }
         default:
             resp.type = FBTEXT_IPC_ERROR;
             resp.arg0 = (uint32_t)-1;

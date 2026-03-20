@@ -325,14 +325,15 @@ wasm3_alloc(size_t size, int zero)
     if (!chunk || aligned_offset == 0 || aligned_offset + total > chunk->size) {
         /* Ensure new chunks account for the worst-case alignment slop. */
         if (wasm3_heap_grow(slot, total + align) != 0) {
-            serial_write("[wasm3-heap] grow failed pid=");
-            serial_write_hex64(slot->pid);
-            serial_write("[wasm3-heap] req=");
-            serial_write_hex64((uint64_t)size);
-            serial_write("[wasm3-heap] committed=");
-            serial_write_hex64((uint64_t)slot->committed_size);
-            serial_write("[wasm3-heap] limit=");
-            serial_write_hex64((uint64_t)slot->max_size);
+            serial_printf(
+                "[wasm3-heap] grow failed pid=%016llx\n"
+                "[wasm3-heap] req=%016llx\n"
+                "[wasm3-heap] committed=%016llx\n"
+                "[wasm3-heap] limit=%016llx\n",
+                (unsigned long long)slot->pid,
+                (unsigned long long)size,
+                (unsigned long long)slot->committed_size,
+                (unsigned long long)slot->max_size);
             critical_section_leave();
             return 0;
         }

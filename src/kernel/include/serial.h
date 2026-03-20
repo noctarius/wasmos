@@ -14,6 +14,8 @@ void serial_write(const char *s);
 void serial_write_unlocked(const char *s);
 void serial_write_hex64(uint64_t value);
 void serial_write_hex64_unlocked(uint64_t value);
+void serial_printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+void serial_printf_unlocked(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 int serial_read_char(uint8_t *out_char);
 
 const serial_driver_t *serial_set_driver(const serial_driver_t *driver);

@@ -290,10 +290,6 @@ initialize(int32_t proc_endpoint,
     g_console_write = wasmos_console_write;
     g_debug_mark = wasmos_debug_mark;
     trace_mark(0x1101);
-    {
-        char ch = 'S';
-        g_console_write((int32_t)(uintptr_t)&ch, 1);
-    }
 
     g_reply_endpoint = wasmos_ipc_create_endpoint();
     trace_mark(0x1102);

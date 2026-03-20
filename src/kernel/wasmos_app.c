@@ -200,26 +200,18 @@ wasmos_app_call_entry(wasmos_app_instance_t *instance)
         serial_write("[wasmos-app] entry skipped (inactive)\n");
         return -1;
     }
-    serial_write("[wasmos-app] entry start ");
-    serial_write(instance->name);
-    serial_write(" export=");
-    serial_write(instance->entry);
-    serial_write("\n");
+    serial_printf("[wasmos-app] entry start %s export=%s\n",
+        instance->name, instance->entry);
     /* Entry dispatch is centralized here so drivers, services, and applications
      * all produce the same diagnostic framing around their actual export call. */
     int rc = wasm_driver_call_unlocked(&instance->driver,
                                        instance->entry,
                                        instance->entry_argc,
                                        instance->entry_argv);
-    serial_write("[wasmos-app] entry rc=");
-    serial_write_hex64((uint64_t)(uint32_t)rc);
-    if (rc == 0) {
-        serial_write("[wasmos-app] entry ok ");
-    } else {
-        serial_write("[wasmos-app] entry failed ");
-    }
-    serial_write(instance->name);
-    serial_write("\n");
+    serial_printf("[wasmos-app] entry rc=%016llx\n[wasmos-app] entry %s %s\n",
+        (unsigned long long)(uint32_t)rc,
+        rc == 0 ? "ok" : "failed",
+        instance->name);
     return rc;
 }
 

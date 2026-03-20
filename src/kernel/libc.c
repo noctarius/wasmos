@@ -104,7 +104,9 @@ static size_t append_str(char *buf, size_t size, size_t pos, const char *s) {
     return pos;
 }
 
-static size_t append_u64(char *buf, size_t size, size_t pos, uint64_t value, uint32_t base, int uppercase) {
+static size_t append_u64(char *buf, size_t size, size_t pos,
+                          uint64_t value, uint32_t base, int uppercase,
+                          int width, char pad) {
     char tmp[32];
     const char *digits = uppercase ? "0123456789ABCDEF" : "0123456789abcdef";
     int idx = 0;
@@ -116,6 +118,9 @@ static size_t append_u64(char *buf, size_t size, size_t pos, uint64_t value, uin
             value /= base;
         }
     }
+    while (idx < width && idx < (int)sizeof(tmp)) {
+        tmp[idx++] = pad;
+    }
     while (idx > 0) {
         pos = append_char(buf, size, pos, tmp[--idx]);
     }
@@ -125,9 +130,9 @@ static size_t append_u64(char *buf, size_t size, size_t pos, uint64_t value, uin
 static size_t append_i64(char *buf, size_t size, size_t pos, int64_t value) {
     if (value < 0) {
         pos = append_char(buf, size, pos, '-');
-        return append_u64(buf, size, pos, (uint64_t)(-value), 10, 0);
+        return append_u64(buf, size, pos, (uint64_t)(-value), 10, 0, 0, ' ');
     }
-    return append_u64(buf, size, pos, (uint64_t)value, 10, 0);
+    return append_u64(buf, size, pos, (uint64_t)value, 10, 0, 0, ' ');
 }
 
 int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
@@ -145,10 +150,32 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
         if (*p == '\0') {
             break;
         }
-        switch (*p) {
-        case '%':
+        if (*p == '%') {
             pos = append_char(buf, size, pos, '%');
-            break;
+            continue;
+        }
+
+        /* Flags: only '0' for now. */
+        char pad = ' ';
+        if (*p == '0') { pad = '0'; p++; }
+
+        /* Width. */
+        int width = 0;
+        while (*p >= '0' && *p <= '9') {
+            width = width * 10 + (*p - '0');
+            p++;
+        }
+
+        /* Length modifier: l, ll, z. */
+        int lmod = 0; /* 0=int, 1=long, 2=long long / size_t */
+        if (*p == 'l') {
+            lmod = 1; p++;
+            if (*p == 'l') { lmod = 2; p++; }
+        } else if (*p == 'z') {
+            lmod = 2; p++;
+        }
+
+        switch (*p) {
         case 'c': {
             int ch = va_arg(ap, int);
             pos = append_char(buf, size, pos, (char)ch);
@@ -161,29 +188,41 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
         }
         case 'd':
         case 'i': {
-            int v = va_arg(ap, int);
-            pos = append_i64(buf, size, pos, (int64_t)v);
+            int64_t v;
+            if (lmod == 2)      v = va_arg(ap, long long);
+            else if (lmod == 1) v = va_arg(ap, long);
+            else                v = va_arg(ap, int);
+            pos = append_i64(buf, size, pos, v);
             break;
         }
         case 'u': {
-            unsigned int v = va_arg(ap, unsigned int);
-            pos = append_u64(buf, size, pos, (uint64_t)v, 10, 0);
+            uint64_t v;
+            if (lmod == 2)      v = va_arg(ap, unsigned long long);
+            else if (lmod == 1) v = va_arg(ap, unsigned long);
+            else                v = va_arg(ap, unsigned int);
+            pos = append_u64(buf, size, pos, v, 10, 0, width, pad);
             break;
         }
         case 'x': {
-            unsigned int v = va_arg(ap, unsigned int);
-            pos = append_u64(buf, size, pos, (uint64_t)v, 16, 0);
+            uint64_t v;
+            if (lmod == 2)      v = va_arg(ap, unsigned long long);
+            else if (lmod == 1) v = va_arg(ap, unsigned long);
+            else                v = va_arg(ap, unsigned int);
+            pos = append_u64(buf, size, pos, v, 16, 0, width, pad);
             break;
         }
         case 'X': {
-            unsigned int v = va_arg(ap, unsigned int);
-            pos = append_u64(buf, size, pos, (uint64_t)v, 16, 1);
+            uint64_t v;
+            if (lmod == 2)      v = va_arg(ap, unsigned long long);
+            else if (lmod == 1) v = va_arg(ap, unsigned long);
+            else                v = va_arg(ap, unsigned int);
+            pos = append_u64(buf, size, pos, v, 16, 1, width, pad);
             break;
         }
         case 'p': {
             uintptr_t v = (uintptr_t)va_arg(ap, void *);
             pos = append_str(buf, size, pos, "0x");
-            pos = append_u64(buf, size, pos, (uint64_t)v, 16, 0);
+            pos = append_u64(buf, size, pos, (uint64_t)v, 16, 0, 0, ' ');
             break;
         }
         default:

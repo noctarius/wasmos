@@ -212,14 +212,12 @@ idt_install(void)
 __attribute__((noreturn)) void
 x86_exception_panic(uint64_t vector)
 {
-    serial_write("[cpu] exception vector=");
-    serial_write_hex64(vector);
+    serial_printf("[cpu] exception vector=%016llx\n", (unsigned long long)vector);
 
     if (vector == 14) {
         uint64_t cr2 = 0;
         __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
-        serial_write("[cpu] page fault cr2=");
-        serial_write_hex64(cr2);
+        serial_printf("[cpu] page fault cr2=%016llx\n", (unsigned long long)cr2);
     }
 
     __asm__ volatile("cli");
@@ -255,35 +253,31 @@ x86_exception_panic_frame(uint64_t vector, const uint64_t *frame)
         rflags = frame[3];
     }
 
-    serial_write_unlocked("[cpu] exception vector=");
-    serial_write_hex64_unlocked(vector);
-    serial_write_unlocked("[cpu] err=");
-    serial_write_hex64_unlocked(err);
-    serial_write_unlocked("[cpu] rip=");
-    serial_write_hex64_unlocked(rip);
-    serial_write_unlocked("[cpu] cs=");
-    serial_write_hex64_unlocked(cs);
-    serial_write_unlocked("[cpu] rflags=");
-    serial_write_hex64_unlocked(rflags);
+    serial_printf_unlocked(
+        "[cpu] exception vector=%016llx\n"
+        "[cpu] err=%016llx\n"
+        "[cpu] rip=%016llx\n"
+        "[cpu] cs=%016llx\n"
+        "[cpu] rflags=%016llx\n",
+        (unsigned long long)vector,
+        (unsigned long long)err,
+        (unsigned long long)rip,
+        (unsigned long long)cs,
+        (unsigned long long)rflags);
     if (vector == 14) {
-        serial_write_unlocked("[cpu] cr2=");
-        serial_write_hex64_unlocked(cr2);
+        serial_printf_unlocked("[cpu] cr2=%016llx\n", (unsigned long long)cr2);
     }
-    serial_write_unlocked("[cpu] frame=");
-    serial_write_hex64_unlocked((uint64_t)(uintptr_t)frame);
-    serial_write_unlocked("[cpu] pid=");
-    serial_write_hex64_unlocked(pid);
-    serial_write_unlocked("[cpu] name=");
-    if (name) {
-        serial_write_unlocked(name);
-    } else {
-        serial_write_unlocked("(null)");
-    }
-    serial_write_unlocked("\n");
-    serial_write_unlocked("[cpu] stack base=");
-    serial_write_hex64_unlocked(stack_base);
-    serial_write_unlocked("[cpu] stack top=");
-    serial_write_hex64_unlocked(stack_top);
+    serial_printf_unlocked(
+        "[cpu] frame=%016llx\n"
+        "[cpu] pid=%u\n"
+        "[cpu] name=%s\n"
+        "[cpu] stack base=%016llx\n"
+        "[cpu] stack top=%016llx\n",
+        (unsigned long long)(uintptr_t)frame,
+        pid,
+        name ? name : "(null)",
+        (unsigned long long)stack_base,
+        (unsigned long long)stack_top);
     if (rip >= kernel_start && (rip + 16) <= kernel_end) {
         serial_dump_bytes_unlocked("[cpu] rip bytes", (const uint8_t *)rip, 16);
     }

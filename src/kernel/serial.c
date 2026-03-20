@@ -1,5 +1,7 @@
+#include <stdarg.h>
 #include "ipc.h"
 #include "serial.h"
+#include "stdio.h"
 
 #include "process.h"
 #include "spinlock.h"
@@ -82,9 +84,10 @@ static uint32_t g_serial_remote_next_request_id = 1;
 static uint32_t g_serial_remote_pending_read_request = 0;
 
 /* Optional framebuffer console backend.  When registered, every transmitted
- * byte is also sent to the framebuffer driver as FBTEXT_IPC_PUT_CHAR_REQ so
- * live output appears on screen alongside the serial/chardev path. */
-#define FBTEXT_IPC_PUT_CHAR_REQ 0x604
+ * string is also sent to the framebuffer driver in 4-byte chunks via
+ * FBTEXT_IPC_PUT_STRING_REQ so live output appears on screen.
+ * fbtext_put_char handles '\n' natively, so no \r injection is needed. */
+#define FBTEXT_IPC_PUT_STRING_REQ 0x605
 static uint32_t g_fb_endpoint = IPC_ENDPOINT_NONE;
 
 /* Keyboard input ring — fed by vt via serial_input_push; polled via
@@ -137,7 +140,7 @@ static int serial_remote_send_message(uint32_t type,
     return rc;
 }
 
-static int serial_remote_transmit(uint8_t value) {
+static int __attribute__((unused)) serial_remote_transmit(uint8_t value) {
     if (serial_remote_send_message(SERIAL_DRIVER_WRITE_REQ,
                                    serial_remote_next_request_id(),
                                    (uint32_t)value,
@@ -265,30 +268,40 @@ static void serial_put_internal(char c) {
     }
 }
 
-static void serial_fb_transmit(uint8_t c) {
-    if (g_fb_endpoint == IPC_ENDPOINT_NONE) {
+static void serial_fb_transmit_string(const char *s) {
+    if (g_fb_endpoint == IPC_ENDPOINT_NONE || !s) {
         return;
     }
-    ipc_message_t msg = {
-        .type        = FBTEXT_IPC_PUT_CHAR_REQ,
-        .source      = IPC_ENDPOINT_NONE,
-        .destination = g_fb_endpoint,
-        .request_id  = 0,
-        .arg0        = (uint32_t)c,
-        .arg1        = 0,
-        .arg2        = 0,
-        .arg3        = 0,
-    };
-    /* Fire-and-forget: ignore send errors so a crashed/slow framebuffer
-     * driver never stalls the kernel console path. */
-    (void)ipc_send_from(IPC_CONTEXT_KERNEL, g_fb_endpoint, &msg);
+    /* Batch up to 4 bytes per FBTEXT_IPC_PUT_STRING_REQ to stay within the
+     * depth-32 IPC queue for strings of up to 128 bytes before overflow. */
+    while (*s) {
+        ipc_message_t msg = {
+            .type        = FBTEXT_IPC_PUT_STRING_REQ,
+            .source      = IPC_ENDPOINT_NONE,
+            .destination = g_fb_endpoint,
+            .request_id  = 0,
+            .arg0        = 0,
+            .arg1        = 0,
+            .arg2        = 0,
+            .arg3        = 0,
+        };
+        uint32_t *args = &msg.arg0;
+        for (int i = 0; i < 4 && *s; ++i) {
+            args[i] = (uint32_t)(uint8_t)*s++;
+        }
+        (void)ipc_send_from(IPC_CONTEXT_KERNEL, g_fb_endpoint, &msg);
+    }
 }
 
 static void serial_transmit(char c) {
-    if (!serial_remote_transmit((uint8_t)c)) {
-        serial_put_internal(c);
-    }
-    serial_fb_transmit((uint8_t)c);
+    /* Always use the direct driver for output.  Per-character IPC to the
+     * remote serial service overflows the depth-32 endpoint queue for any
+     * string longer than 32 bytes; chars beyond slot 32 fall back to direct
+     * COM1 while the earlier chars are still queued, inverting their on-wire
+     * order.  The remote endpoint is retained for read requests only.
+     * Framebuffer output is batched string-by-string in serial_write_unlocked
+     * via serial_fb_transmit_string to avoid the same overflow. */
+    serial_put_internal(c);
 }
 
 void serial_init(void) {
@@ -304,6 +317,26 @@ void serial_write(const char *s) {
     spinlock_lock(&g_serial_lock);
     serial_write_unlocked(s);
     spinlock_unlock(&g_serial_lock);
+}
+
+void serial_printf(const char *fmt, ...)
+{
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    serial_write(buf);
+}
+
+void serial_printf_unlocked(const char *fmt, ...)
+{
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    serial_write_unlocked(buf);
 }
 
 void serial_write_hex64(uint64_t value)
@@ -335,6 +368,9 @@ void serial_write_unlocked(const char *s) {
         return;
     }
     preempt_disable();
+    /* Batch-send the string to the framebuffer before iterating per-char.
+     * fbtext_put_char handles '\n' natively so no \r expansion is needed. */
+    serial_fb_transmit_string(s);
     for (const char *p = s; *p; ++p) {
         if (*p == '\n') {
             serial_transmit('\r');

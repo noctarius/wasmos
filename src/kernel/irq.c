@@ -38,18 +38,19 @@ void x86_irq_iret_corrupt(const uint64_t *saved, const uint64_t *current) {
         serial_write("[irq] iret frame ptr invalid\n");
         return;
     }
-    serial_write("[irq] saved rip=");
-    serial_write_hex64(saved[0]);
-    serial_write("[irq] saved cs=");
-    serial_write_hex64(saved[1]);
-    serial_write("[irq] saved rflags=");
-    serial_write_hex64(saved[2]);
-    serial_write("[irq] current rip=");
-    serial_write_hex64(current[0]);
-    serial_write("[irq] current cs=");
-    serial_write_hex64(current[1]);
-    serial_write("[irq] current rflags=");
-    serial_write_hex64(current[2]);
+    serial_printf(
+        "[irq] saved rip=%016llx\n"
+        "[irq] saved cs=%016llx\n"
+        "[irq] saved rflags=%016llx\n"
+        "[irq] current rip=%016llx\n"
+        "[irq] current cs=%016llx\n"
+        "[irq] current rflags=%016llx\n",
+        (unsigned long long)saved[0],
+        (unsigned long long)saved[1],
+        (unsigned long long)saved[2],
+        (unsigned long long)current[0],
+        (unsigned long long)current[1],
+        (unsigned long long)current[2]);
 }
 
 void x86_irq_ist_corrupt(void) {

@@ -573,15 +573,22 @@ initialize(int32_t proc_endpoint,
                 g_phase = CLI_PHASE_PROMPT;
                 continue;
             }
-            int32_t rc = wasmos_console_read((int32_t)(uintptr_t)&g_line[g_line_len], 1);
-            if (rc == 0) {
-                (void)wasmos_sched_yield();
-                continue;
-            }
-            if (rc < 0) {
-                g_phase = CLI_PHASE_FAILED;
-                console_write("[cli] console read failed\n");
-                stall_forever();
+            /* Check the keyboard input ring first (fed by the vt service).
+             * Fall back to the serial console for headless/test mode. */
+            int32_t kbd = wasmos_input_read();
+            if (kbd >= 0) {
+                g_line[g_line_len] = (char)(kbd & 0xFF);
+            } else {
+                int32_t rc = wasmos_console_read((int32_t)(uintptr_t)&g_line[g_line_len], 1);
+                if (rc == 0) {
+                    (void)wasmos_sched_yield();
+                    continue;
+                }
+                if (rc < 0) {
+                    g_phase = CLI_PHASE_FAILED;
+                    console_write("[cli] console read failed\n");
+                    stall_forever();
+                }
             }
 
             char ch = g_line[g_line_len];

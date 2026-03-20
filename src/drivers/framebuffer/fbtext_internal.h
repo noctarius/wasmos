@@ -8,12 +8,15 @@
  * Not part of the public driver ABI; used only inside the framebuffer driver.
  */
 
-#define FONT_W 8
-#define FONT_H 16
+#define FONT_W     8
+#define FONT_H     16
+#define FONT_SCALE 1                    /* pixel scale: each font pixel → NxN screen pixels */
+#define CELL_W     (FONT_W * FONT_SCALE)
+#define CELL_H     (FONT_H * FONT_SCALE)
 
-/* Maximum grid dimensions.  Sized for 1920×1080 / 8×16 = 240×67 plus margin. */
-#define FBTEXT_MAX_COLS 240
-#define FBTEXT_MAX_ROWS 68
+/* Maximum grid dimensions.  Sized for 1280×1024 / 8×16 = 160×64. */
+#define FBTEXT_MAX_COLS 160
+#define FBTEXT_MAX_ROWS 64
 
 /* CGA-style default colors. */
 #define FBTEXT_DEFAULT_FG 15   /* bright white */

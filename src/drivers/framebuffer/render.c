@@ -59,8 +59,8 @@ fbtext_render_init(fbtext_state_t *s,
 {
     s->fb        = fb;
     s->fb_stride = stride;
-    s->cols      = (uint16_t)(width  / FONT_W);
-    s->rows      = (uint16_t)(height / FONT_H);
+    s->cols      = (uint16_t)(width  / CELL_W);
+    s->rows      = (uint16_t)(height / CELL_H);
     if (s->cols > FBTEXT_MAX_COLS) { s->cols = FBTEXT_MAX_COLS; }
     if (s->rows > FBTEXT_MAX_ROWS) { s->rows = FBTEXT_MAX_ROWS; }
     s->cursor.col = 0;
@@ -90,14 +90,19 @@ fbtext_render_cell(fbtext_state_t *s, uint16_t col, uint16_t row)
     }
     const uint8_t *glyph = font_8x16[ch - 0x20];
 
-    uint32_t x0 = (uint32_t)col * FONT_W;
-    uint32_t y0 = (uint32_t)row * FONT_H;
+    uint32_t x0 = (uint32_t)col * CELL_W;
+    uint32_t y0 = (uint32_t)row * CELL_H;
 
     for (int y = 0; y < FONT_H; y++) {
         uint8_t bits = glyph[y];
-        uint32_t *line = s->fb + (y0 + (uint32_t)y) * s->fb_stride + x0;
-        for (int x = 0; x < FONT_W; x++) {
-            line[x] = (bits & (0x80u >> x)) ? fg : bg;
+        for (int sy = 0; sy < FONT_SCALE; sy++) {
+            uint32_t *line = s->fb + (y0 + (uint32_t)(y * FONT_SCALE + sy)) * s->fb_stride + x0;
+            for (int x = 0; x < FONT_W; x++) {
+                uint32_t pixel = (bits & (0x80u >> x)) ? fg : bg;
+                for (int sx = 0; sx < FONT_SCALE; sx++) {
+                    line[x * FONT_SCALE + sx] = pixel;
+                }
+            }
         }
     }
 }
@@ -151,11 +156,11 @@ fbtext_scroll_up(fbtext_state_t *s, uint16_t n)
         s->cells[i].bg   = FBTEXT_DEFAULT_BG;
         s->cells[i].attr = 0;
     }
-    /* Pixel-level: shift framebuffer rows up by n*FONT_H scan lines. */
-    unsigned long move_lines  = (unsigned long)(s->rows - n) * FONT_H;
-    unsigned long clear_lines = (unsigned long)n * FONT_H;
+    /* Pixel-level: shift framebuffer rows up by n*CELL_H scan lines. */
+    unsigned long move_lines  = (unsigned long)(s->rows - n) * CELL_H;
+    unsigned long clear_lines = (unsigned long)n * CELL_H;
     nd_memmove(s->fb,
-               s->fb + (unsigned long)n * FONT_H * s->fb_stride,
+               s->fb + (unsigned long)n * CELL_H * s->fb_stride,
                move_lines * s->fb_stride * sizeof(uint32_t));
     /* Re-render only the vacated bottom n rows. */
     for (uint16_t r = (uint16_t)(s->rows - n); r < s->rows; r++) {

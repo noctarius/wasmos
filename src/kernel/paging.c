@@ -164,10 +164,9 @@ paging_init(void)
     g_current_pml4_phys = g_pml4_phys;
     write_cr3(g_pml4_phys);
 
-    serial_write("[paging] cr3=");
-    serial_write_hex64(g_pml4_phys);
-    serial_write("[paging] higher-half=");
-    serial_write_hex64(KERNEL_HIGHER_HALF_BASE);
+    serial_printf("[paging] cr3=%016llx\n[paging] higher-half=%016llx\n",
+        (unsigned long long)g_pml4_phys,
+        (unsigned long long)KERNEL_HIGHER_HALF_BASE);
     return 0;
 }
 

@@ -1059,15 +1059,13 @@ process_manager_entry(process_t *process, void *arg)
         static uint8_t logged_recv_fail = 0;
         if (!logged_recv_fail) {
             logged_recv_fail = 1;
-            serial_write("[pm] recv failed rc=");
-            serial_write_hex64((uint64_t)(uint32_t)recv_rc);
             uint32_t owner = 0;
-            if (ipc_endpoint_owner(g_pm.proc_endpoint, &owner) == IPC_OK) {
-                serial_write("[pm] proc owner=");
-                serial_write_hex64(owner);
+            int has_owner = (ipc_endpoint_owner(g_pm.proc_endpoint, &owner) == IPC_OK);
+            serial_printf("[pm] recv failed rc=%016llx\n", (unsigned long long)(uint32_t)recv_rc);
+            if (has_owner) {
+                serial_printf("[pm] proc owner=%016llx\n", (unsigned long long)owner);
             }
-            serial_write("[pm] ctx=");
-            serial_write_hex64(process->context_id);
+            serial_printf("[pm] ctx=%016llx\n", (unsigned long long)process->context_id);
         }
         return PROCESS_RUN_YIELDED;
     }

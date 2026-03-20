@@ -209,14 +209,15 @@ static void process_validate_context(process_t *proc, const char *where) {
     }
     if (proc->ctx_canary_pre != PROCESS_CTX_CANARY_VALUE ||
         proc->ctx_canary_post != PROCESS_CTX_CANARY_VALUE) {
-        serial_write("[sched] ctx canary corrupt pid=");
-        serial_write_hex64(proc->pid);
-        serial_write("[sched] name=");
-        serial_write(proc->name ? proc->name : "(null)");
-        serial_write("\n[sched] ctx canary pre=");
-        serial_write_hex64(proc->ctx_canary_pre);
-        serial_write("[sched] ctx canary post=");
-        serial_write_hex64(proc->ctx_canary_post);
+        serial_printf(
+            "[sched] ctx canary corrupt pid=%016llx\n"
+            "[sched] name=%s\n"
+            "[sched] ctx canary pre=%016llx\n"
+            "[sched] ctx canary post=%016llx\n",
+            (unsigned long long)proc->pid,
+            proc->name ? proc->name : "(null)",
+            (unsigned long long)proc->ctx_canary_pre,
+            (unsigned long long)proc->ctx_canary_post);
         process_log_ctxsw_state();
         process_log_ctx_watch("canary");
         for (;;) {
@@ -229,18 +230,16 @@ static void process_validate_context(process_t *proc, const char *where) {
     if (rip >= start && rip < end) {
         return;
     }
-    serial_write("[sched] invalid rip in ");
-    if (where) {
-        serial_write(where);
-    }
-    serial_write(" pid=");
-    serial_write_hex64(proc->pid);
-    serial_write("[sched] name=");
-    serial_write(proc->name ? proc->name : "(null)");
-    serial_write("\n[sched] rip=");
-    serial_write_hex64(rip);
-    serial_write("[sched] rsp=");
-    serial_write_hex64(proc->ctx.rsp);
+    serial_printf(
+        "[sched] invalid rip in %s pid=%016llx\n"
+        "[sched] name=%s\n"
+        "[sched] rip=%016llx\n"
+        "[sched] rsp=%016llx\n",
+        where ? where : "?",
+        (unsigned long long)proc->pid,
+        proc->name ? proc->name : "(null)",
+        (unsigned long long)rip,
+        (unsigned long long)proc->ctx.rsp);
     process_log_ctxsw_state();
     process_log_ctx_watch("invalid-rip");
     for (;;) {
@@ -302,25 +301,21 @@ static void process_trampoline(void) {
             if (base && top && mid) {
                 const uint64_t canary = STACK_CANARY_VALUE;
                 if (*base != canary || *top != canary || *mid != canary) {
-                    serial_write_unlocked("[sched] stack canary tripped for ");
-                    if (g_current_process->name) {
-                        serial_write_unlocked(g_current_process->name);
-                    } else {
-                        serial_write_unlocked("(unknown)");
-                    }
-                    serial_write_unlocked("\n");
-                    serial_write_unlocked("[sched] base=");
-                    serial_write_hex64((uint64_t)(uintptr_t)base);
-                    serial_write_unlocked("[sched] mid=");
-                    serial_write_hex64((uint64_t)(uintptr_t)mid);
-                    serial_write_unlocked("[sched] top=");
-                    serial_write_hex64((uint64_t)(uintptr_t)top);
-                    serial_write_unlocked("[sched] base val=");
-                    serial_write_hex64(*base);
-                    serial_write_unlocked("[sched] mid val=");
-                    serial_write_hex64(*mid);
-                    serial_write_unlocked("[sched] top val=");
-                    serial_write_hex64(*top);
+                    serial_printf_unlocked(
+                        "[sched] stack canary tripped for %s\n"
+                        "[sched] base=%016llx\n"
+                        "[sched] mid=%016llx\n"
+                        "[sched] top=%016llx\n"
+                        "[sched] base val=%016llx\n"
+                        "[sched] mid val=%016llx\n"
+                        "[sched] top val=%016llx\n",
+                        g_current_process->name ? g_current_process->name : "(unknown)",
+                        (unsigned long long)(uintptr_t)base,
+                        (unsigned long long)(uintptr_t)mid,
+                        (unsigned long long)(uintptr_t)top,
+                        (unsigned long long)*base,
+                        (unsigned long long)*mid,
+                        (unsigned long long)*top);
                     for (;;) {
                         __asm__ volatile("cli; hlt");
                     }

@@ -739,10 +739,9 @@ kmain(boot_info_t *boot_info)
             __asm__ volatile("hlt");
         }
     }
-    serial_write("[kernel] boot_info version=");
-    serial_write_hex64(boot_info->version);
-    serial_write("[kernel] boot_info size=");
-    serial_write_hex64(boot_info->size);
+    serial_printf("[kernel] boot_info version=%016llx\n[kernel] boot_info size=%016llx\n",
+        (unsigned long long)boot_info->version,
+        (unsigned long long)boot_info->size);
     g_boot_info = boot_info;
     framebuffer_init(boot_info);
     cpu_init();
@@ -770,8 +769,7 @@ kmain(boot_info_t *boot_info)
         }
     }
 
-    serial_write("[kernel] init pid=");
-    serial_write_hex64(init_pid);
+    serial_printf("[kernel] init pid=%016llx\n", (unsigned long long)init_pid);
 
     if (process_spawn_as(init_pid, "mem-service", memory_service_entry, 0, &mem_service_pid) != 0) {
         serial_write("[kernel] mem service spawn failed\n");
@@ -806,8 +804,7 @@ kmain(boot_info_t *boot_info)
         }
     }
 
-    serial_write("[kernel] chardev pid=");
-    serial_write_hex64(chardev_pid);
+    serial_printf("[kernel] chardev pid=%016llx\n", (unsigned long long)chardev_pid);
 
     chardev_proc = process_get(chardev_pid);
     if (!chardev_proc || wasm_chardev_init(chardev_proc->context_id) != 0) {
@@ -836,8 +833,7 @@ kmain(boot_info_t *boot_info)
         }
     }
 
-    serial_write("[kernel] page fault test pid=");
-    serial_write_hex64(pf_test_pid);
+    serial_printf("[kernel] page fault test pid=%016llx\n", (unsigned long long)pf_test_pid);
 
     g_ipc_test_state.endpoint = IPC_ENDPOINT_NONE;
     g_ipc_test_state.sender_endpoint = IPC_ENDPOINT_NONE;

@@ -20,6 +20,8 @@ const serial_driver_t *serial_get_driver(void);
 int serial_register_remote_driver(uint32_t endpoint);
 int serial_register_fb_backend(uint32_t context_id, uint32_t endpoint);
 uint32_t serial_get_fb_endpoint(void);
+void serial_input_push(uint8_t ch);
+int  serial_input_read(uint8_t *out);
 
 /* Early log ring buffer — captured from the first serial_write onward.
  * Returns the number of bytes currently buffered (capped at ring size).

@@ -966,6 +966,24 @@ m3ApiRawFunction(wasmos_console_read)
     m3ApiReturn(1);
 }
 
+m3ApiRawFunction(wasmos_input_push)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, ch)
+    serial_input_push((uint8_t)(ch & 0xFF));
+    m3ApiReturn(0);
+}
+
+m3ApiRawFunction(wasmos_input_read)
+{
+    m3ApiReturnType(int32_t)
+    uint8_t ch = 0;
+    if (serial_input_read(&ch)) {
+        m3ApiReturn((int32_t)ch);
+    }
+    m3ApiReturn(-1);
+}
+
 m3ApiRawFunction(wasmos_serial_register)
 {
     m3ApiReturnType(int32_t)
@@ -1194,6 +1212,8 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "framebuffer_map", "i(ii)", wasmos_framebuffer_map);
     rc |= wasm3_link_raw(module, "wasmos", "framebuffer_pixel", "i(iii)", wasmos_framebuffer_pixel);
     rc |= wasm3_link_raw(module, "wasmos", "serial_register", "i(i)", wasmos_serial_register);
+    rc |= wasm3_link_raw(module, "wasmos", "input_push", "i(i)", wasmos_input_push);
+    rc |= wasm3_link_raw(module, "wasmos", "input_read", "i()", wasmos_input_read);
     if (rc != 0) {
         serial_write("[kernel] wasm3 link errors\n");
         return -1;

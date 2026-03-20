@@ -164,12 +164,10 @@ vt_handle_key_notify(int32_t scancode, int32_t keyup)
     if (ch == 0) {
         return;
     }
-    /* Echo the character to the framebuffer. */
-    vt_process_byte(ch);
-    /* CR → also emit LF for Enter key. */
-    if (ch == '\n') {
-        vt_process_byte('\r');
-    }
+    /* Push to the kernel input ring.  The CLI (or any reader of
+     * wasmos_console_read) will echo the character via the output path,
+     * which now routes back through vt — single echo, no duplication. */
+    wasmos_input_push((int32_t)ch);
 }
 
 /* -------------------------------------------------------------------------

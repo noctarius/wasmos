@@ -97,4 +97,9 @@ extern int32_t wasmos_framebuffer_map(int32_t ptr, int32_t size)
     WASMOS_WASM_IMPORT("wasmos", "framebuffer_map");
 extern int32_t wasmos_framebuffer_pixel(int32_t x, int32_t y, int32_t color)
     WASMOS_WASM_IMPORT("wasmos", "framebuffer_pixel");
+/* vt keyboard input integration */
+extern int32_t wasmos_input_push(int32_t ch)
+    WASMOS_WASM_IMPORT("wasmos", "input_push");
+extern int32_t wasmos_input_read(void)
+    WASMOS_WASM_IMPORT("wasmos", "input_read");
 #endif

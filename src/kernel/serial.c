@@ -85,6 +85,13 @@ static uint32_t g_serial_remote_pending_read_request = 0;
 #define FBTEXT_IPC_PUT_CHAR_REQ 0x604
 static uint32_t g_fb_endpoint = IPC_ENDPOINT_NONE;
 
+/* Keyboard input ring — fed by vt via serial_input_push; polled via
+ * the wasmos_input_read kernel import before falling back to COM1. */
+#define INPUT_RING_SIZE 64
+static uint8_t  g_input_ring[INPUT_RING_SIZE];
+static uint32_t g_input_head  = 0;
+static uint32_t g_input_count = 0;
+
 static void serial_remote_reset(void) {
     g_serial_remote_endpoint = IPC_ENDPOINT_NONE;
     g_serial_remote_pending_read_request = 0;
@@ -177,6 +184,29 @@ static int serial_remote_read_char(uint8_t *out_char) {
     }
     g_serial_remote_pending_read_request = request_id;
     return 0;
+}
+
+void serial_input_push(uint8_t ch) {
+    spinlock_lock(&g_serial_lock);
+    if (g_input_count < INPUT_RING_SIZE) {
+        uint32_t idx = (g_input_head + g_input_count) % INPUT_RING_SIZE;
+        g_input_ring[idx] = ch;
+        g_input_count++;
+    }
+    spinlock_unlock(&g_serial_lock);
+}
+
+int serial_input_read(uint8_t *out) {
+    spinlock_lock(&g_serial_lock);
+    if (g_input_count == 0) {
+        spinlock_unlock(&g_serial_lock);
+        return 0;
+    }
+    *out = g_input_ring[g_input_head];
+    g_input_head = (g_input_head + 1) % INPUT_RING_SIZE;
+    g_input_count--;
+    spinlock_unlock(&g_serial_lock);
+    return 1;
 }
 
 int serial_register_fb_backend(uint32_t context_id, uint32_t endpoint) {

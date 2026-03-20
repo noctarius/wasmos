@@ -16,6 +16,7 @@ bootstrap_modules = [
 [sysinit]
 spawn = [
   "chardev-client",
+  "vt",
   "cli",
 ]
 
@@ -78,6 +79,11 @@ kind = "wasmos_app"
 flags = ["bootstrap"]
 path = "system/services/hw_discovery.wap"
 source = "hw_discovery.wap"
+
+[[entries]]
+kind = "wasmos_app"
+path = "apps/vt.wap"
+source = "vt.wap"
 
 [[entries]]
 kind = "config"

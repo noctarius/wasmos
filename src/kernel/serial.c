@@ -188,6 +188,10 @@ int serial_register_fb_backend(uint32_t context_id, uint32_t endpoint) {
     return 0;
 }
 
+uint32_t serial_get_fb_endpoint(void) {
+    return g_fb_endpoint;
+}
+
 int serial_register_remote_driver(uint32_t endpoint) {
     if (endpoint == IPC_ENDPOINT_NONE) {
         return -1;

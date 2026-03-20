@@ -369,6 +369,37 @@ m3ApiRawFunction(wasmos_ipc_recv)
     }
 }
 
+m3ApiRawFunction(wasmos_ipc_try_recv)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, endpoint)
+    uint32_t context_id = 0;
+    uint32_t pid = process_current_pid();
+    wasm_ipc_last_slot_t *slot;
+    int rc;
+
+    if (endpoint < 0 || current_process_context(&context_id) != 0) {
+        m3ApiReturn(-1);
+    }
+
+    slot = wasm_ipc_slot_for_pid(pid);
+    if (!slot) {
+        m3ApiReturn(-1);
+    }
+
+    preempt_safepoint();
+    rc = ipc_recv_for(context_id, (uint32_t)endpoint, &slot->message);
+    if (rc == IPC_EMPTY) {
+        m3ApiReturn(0); /* no message — return without blocking */
+    }
+    if (rc != IPC_OK) {
+        m3ApiReturn(-1);
+    }
+    slot->valid = 1;
+    preempt_safepoint();
+    m3ApiReturn(1);
+}
+
 m3ApiRawFunction(wasmos_ipc_wait)
 {
     m3ApiReturnType(int32_t)
@@ -1124,6 +1155,7 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "ipc_create_notification", "i()", wasmos_ipc_create_notification);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_send", "i(iiiiiiii)", wasmos_ipc_send);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_recv", "i(i)", wasmos_ipc_recv);
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_try_recv", "i(i)", wasmos_ipc_try_recv);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_wait", "i(i)", wasmos_ipc_wait);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_notify", "i(i)", wasmos_ipc_notify);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_last_field", "i(i)", wasmos_ipc_last_field);

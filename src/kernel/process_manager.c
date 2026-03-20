@@ -13,7 +13,7 @@
  * execution according to the app/service/driver role encoded in the container.
  */
 
-#define PM_MAX_MANAGED_APPS 8u
+#define PM_MAX_MANAGED_APPS 16u
 #define PM_MAX_WAITERS 8u
 #define PM_FS_BUFFER_SIZE (256u * 1024u)
 
@@ -63,6 +63,7 @@ typedef struct {
     uint32_t proc_endpoint;
     uint32_t fs_endpoint;
     uint32_t block_endpoint;
+    uint32_t kbd_endpoint;
     uint32_t fs_reply_endpoint;
     uint32_t fs_request_id;
     uint8_t started;
@@ -514,6 +515,16 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
         slot->entry_arg1 = g_pm.module_count;
     } else if (name_eq(slot->name, "ata")) {
         slot->entry_arg0 = IPC_ENDPOINT_NONE;
+    } else if (name_eq(slot->name, "keyboard")) {
+        slot->entry_arg1 = IPC_ENDPOINT_NONE;
+    } else if (name_eq(slot->name, "vt")) {
+        uint32_t fb_endpoint = serial_get_fb_endpoint();
+        if (fb_endpoint == IPC_ENDPOINT_NONE) {
+            slot->in_use = 0;
+            return -1;
+        }
+        slot->entry_arg0 = fb_endpoint;
+        slot->entry_arg1 = g_pm.kbd_endpoint;
     }
 
     preempt_disable();
@@ -534,6 +545,15 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
             return -1;
         }
         slot->entry_arg0 = g_pm.block_endpoint;
+    }
+    if (name_eq(slot->name, "keyboard") && g_pm.kbd_endpoint == IPC_ENDPOINT_NONE) {
+        process_t *proc = process_get(*out_pid);
+        if (!proc || ipc_endpoint_create(proc->context_id, &g_pm.kbd_endpoint) != IPC_OK) {
+            preempt_enable();
+            slot->in_use = 0;
+            return -1;
+        }
+        slot->entry_arg1 = g_pm.kbd_endpoint;
     }
     if (name_eq(slot->name, "fs-fat") && g_pm.fs_endpoint == IPC_ENDPOINT_NONE) {
         process_t *proc = process_get(*out_pid);
@@ -609,6 +629,14 @@ pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t *blob, uint32_t blob_siz
         }
         slot->entry_arg0 = g_pm.proc_endpoint;
         slot->entry_arg1 = g_pm.fs_endpoint;
+    } else if (name_eq(slot->name, "vt")) {
+        uint32_t fb_endpoint = serial_get_fb_endpoint();
+        if (fb_endpoint == IPC_ENDPOINT_NONE) {
+            slot->in_use = 0;
+            return -1;
+        }
+        slot->entry_arg0 = fb_endpoint;
+        slot->entry_arg1 = g_pm.kbd_endpoint;
     }
 
     if (process_spawn_as(parent_pid, slot->name, pm_app_entry, slot, out_pid) != 0) {
@@ -967,6 +995,7 @@ process_manager_init(const boot_info_t *boot_info)
     g_pm.proc_endpoint = IPC_ENDPOINT_NONE;
     g_pm.fs_endpoint = IPC_ENDPOINT_NONE;
     g_pm.block_endpoint = IPC_ENDPOINT_NONE;
+    g_pm.kbd_endpoint = IPC_ENDPOINT_NONE;
     g_pm.fs_reply_endpoint = IPC_ENDPOINT_NONE;
     g_pm.fs_request_id = 1;
     g_pm.started = 0;

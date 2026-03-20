@@ -52,7 +52,7 @@ vt_put_char(uint32_t cp)
     }
     wasmos_ipc_send(
         g_fb_ep,
-        -1,
+        g_vt_ep,
         FBTEXT_IPC_PUT_CHAR_REQ,
         0,
         (int32_t)cp,

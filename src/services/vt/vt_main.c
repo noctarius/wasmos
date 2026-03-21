@@ -356,10 +356,10 @@ vt_init_ttys(void)
         g_ttys[i].fg = 15;
         g_ttys[i].bg = 0;
         g_ttys[i].attr = 0;
-        /* Canonical input should still feel interactive: echo locally in VT
-         * while the cooked line is buffered until Enter. */
-        g_ttys[i].input_echo = 1;
-        g_ttys[i].input_canonical = 1;
+        /* Input is delivered raw to the tty client; CLI owns line editing
+         * and user-visible echo so serial and framebuffer behave the same. */
+        g_ttys[i].input_echo = 0;
+        g_ttys[i].input_canonical = 0;
         g_ttys[i].esc = ESC_NORMAL;
         g_ttys[i].input_q_head = 0;
         g_ttys[i].input_q_tail = 0;

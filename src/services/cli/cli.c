@@ -25,6 +25,7 @@ static cli_phase_t g_phase = CLI_PHASE_INIT;
 static char g_line[128];
 static int32_t g_line_len = 0;
 static int32_t g_reply_endpoint = -1;
+static int32_t g_vt_client_endpoint = -1;
 static int32_t g_fs_endpoint = -1;
 static int32_t g_proc_endpoint = -1;
 static int32_t g_vt_endpoint = -1;
@@ -96,6 +97,7 @@ console_write(const char *s)
         return;
     }
     if (g_vt_endpoint >= 0 && g_reply_endpoint >= 0 && g_home_tty > 0 &&
+        g_vt_client_endpoint >= 0 &&
         g_last_seen_active_tty == g_home_tty) {
         uint32_t pos = 0;
         while (pos < len) {
@@ -106,7 +108,7 @@ console_write(const char *s)
             uint32_t tries = 0;
             for (;;) {
                 int32_t rc = wasmos_ipc_send(g_vt_endpoint,
-                                             g_reply_endpoint,
+                                             g_vt_client_endpoint,
                                              VT_IPC_WRITE_REQ,
                                              0,
                                              args[0], args[1], args[2], args[3]);
@@ -131,12 +133,12 @@ console_write(const char *s)
 static int32_t
 cli_query_active_tty(void)
 {
-    if (g_vt_endpoint < 0 || g_reply_endpoint < 0) {
+    if (g_vt_endpoint < 0 || g_vt_client_endpoint < 0) {
         return g_home_tty;
     }
     int32_t req_id = g_request_id++;
     if (wasmos_ipc_send(g_vt_endpoint,
-                        g_reply_endpoint,
+                        g_vt_client_endpoint,
                         VT_IPC_GET_ACTIVE_TTY,
                         req_id,
                         0, 0, 0, 0) != 0) {
@@ -144,7 +146,7 @@ cli_query_active_tty(void)
     }
 
     for (int tries = 0; tries < 64; ++tries) {
-        int32_t rc = wasmos_ipc_try_recv(g_reply_endpoint);
+        int32_t rc = wasmos_ipc_try_recv(g_vt_client_endpoint);
         if (rc < 0) {
             return -1;
         }
@@ -169,7 +171,7 @@ cli_query_active_tty(void)
 static int
 cli_switch_tty(int32_t tty, int wait_resp)
 {
-    if (g_vt_endpoint < 0 || g_reply_endpoint < 0) {
+    if (g_vt_endpoint < 0 || g_vt_client_endpoint < 0) {
         return -1;
     }
 
@@ -177,7 +179,7 @@ cli_switch_tty(int32_t tty, int wait_resp)
     uint32_t tries = 0;
     for (;;) {
         int32_t rc = wasmos_ipc_send(g_vt_endpoint,
-                                     g_reply_endpoint,
+                                     g_vt_client_endpoint,
                                      VT_IPC_SWITCH_TTY,
                                      req_id,
                                      tty, 0, 0, 0);
@@ -195,7 +197,7 @@ cli_switch_tty(int32_t tty, int wait_resp)
     }
 
     for (int tries_resp = 0; tries_resp < 64; ++tries_resp) {
-        int32_t rc = wasmos_ipc_try_recv(g_reply_endpoint);
+        int32_t rc = wasmos_ipc_try_recv(g_vt_client_endpoint);
         if (rc < 0) {
             return -1;
         }
@@ -242,7 +244,7 @@ cli_vt_read_char(char *out_ch)
     if (!out_ch) {
         return -1;
     }
-    if (g_vt_endpoint < 0 || g_reply_endpoint < 0) {
+    if (g_vt_endpoint < 0 || g_vt_client_endpoint < 0) {
         return -1;
     }
 
@@ -250,7 +252,7 @@ cli_vt_read_char(char *out_ch)
     uint32_t tries = 0;
     for (;;) {
         int32_t rc = wasmos_ipc_send(g_vt_endpoint,
-                                     g_reply_endpoint,
+                                     g_vt_client_endpoint,
                                      VT_IPC_READ_REQ,
                                      req_id,
                                      g_home_tty, 0, 0, 0);
@@ -264,7 +266,7 @@ cli_vt_read_char(char *out_ch)
     }
 
     for (int wait = 0; wait < 32; ++wait) {
-        int32_t rc = wasmos_ipc_try_recv(g_reply_endpoint);
+        int32_t rc = wasmos_ipc_try_recv(g_vt_client_endpoint);
         if (rc < 0) {
             return -1;
         }
@@ -834,6 +836,12 @@ initialize(int32_t proc_endpoint,
             if (g_reply_endpoint < 0) {
                 g_phase = CLI_PHASE_FAILED;
                 console_write("[cli] failed to create reply endpoint\n");
+                stall_forever();
+            }
+            g_vt_client_endpoint = wasmos_ipc_create_endpoint();
+            if (g_vt_client_endpoint < 0) {
+                g_phase = CLI_PHASE_FAILED;
+                console_write("[cli] failed to create vt endpoint\n");
                 stall_forever();
             }
             g_proc_endpoint = proc_endpoint;

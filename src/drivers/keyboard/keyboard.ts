@@ -29,15 +29,6 @@ let g_subs2: i32 = -1;
 let g_subs3: i32 = -1;
 
 let g_kbd_ep: i32 = -1;
-let g_req_id: i32 = 1;
-
-function nextReqId(): i32 {
-  let id = g_req_id;
-  g_req_id += 1;
-  if (g_req_id == 0) { g_req_id = 1; }
-  return id;
-}
-
 function writeString(text: string): void {
   if (text.length == 0) { return; }
   let bytes = Uint8Array.wrap(String.UTF8.encode(text, false));
@@ -64,18 +55,17 @@ function addSubscriber(ep: i32): i32 {
 }
 
 function notifySubscribers(scancode: i32, keyup: i32): void {
-  let id = nextReqId();
   if (g_subs0 >= 0) {
-    ipc_send(g_subs0, g_kbd_ep, KBD_IPC_KEY_NOTIFY, id, scancode, keyup, 0, 0);
+    ipc_send(g_subs0, g_kbd_ep, KBD_IPC_KEY_NOTIFY, 0, scancode, keyup, 0, 0);
   }
   if (g_subs1 >= 0) {
-    ipc_send(g_subs1, g_kbd_ep, KBD_IPC_KEY_NOTIFY, id, scancode, keyup, 0, 0);
+    ipc_send(g_subs1, g_kbd_ep, KBD_IPC_KEY_NOTIFY, 0, scancode, keyup, 0, 0);
   }
   if (g_subs2 >= 0) {
-    ipc_send(g_subs2, g_kbd_ep, KBD_IPC_KEY_NOTIFY, id, scancode, keyup, 0, 0);
+    ipc_send(g_subs2, g_kbd_ep, KBD_IPC_KEY_NOTIFY, 0, scancode, keyup, 0, 0);
   }
   if (g_subs3 >= 0) {
-    ipc_send(g_subs3, g_kbd_ep, KBD_IPC_KEY_NOTIFY, id, scancode, keyup, 0, 0);
+    ipc_send(g_subs3, g_kbd_ep, KBD_IPC_KEY_NOTIFY, 0, scancode, keyup, 0, 0);
   }
 }
 

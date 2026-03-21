@@ -27,12 +27,17 @@ static int32_t g_line_len = 0;
 static int32_t g_reply_endpoint = -1;
 static int32_t g_fs_endpoint = -1;
 static int32_t g_proc_endpoint = -1;
+static int32_t g_vt_endpoint = -1;
+static int32_t g_active_tty = 1;
 static int32_t g_request_id = 1;
 static int32_t g_pending_req = -1;
 static char g_cwd[64] = "/";
 static int32_t g_pending_kind = 0;
 static int32_t g_pending_cd_use_path = 0;
 static char g_pending_cd_path[32] = "/";
+/* Keep in sync with kernel ipc.h */
+#define IPC_ERR_FULL (-3)
+#define CLI_VT_SEND_RETRIES 1024
 
 static void
 stall_forever(void)
@@ -82,7 +87,43 @@ to_lower(char c)
 static void
 console_write(const char *s)
 {
-    putsn(s, strlen(s));
+    if (!s) {
+        return;
+    }
+    uint32_t len = (uint32_t)strlen(s);
+    if (len == 0) {
+        return;
+    }
+    if (g_vt_endpoint >= 0 && g_reply_endpoint >= 0 && g_active_tty > 0) {
+        uint32_t pos = 0;
+        while (pos < len) {
+            int32_t args[4] = {0, 0, 0, 0};
+            for (int i = 0; i < 4 && pos < len; ++i, ++pos) {
+                args[i] = (int32_t)(uint8_t)s[pos];
+            }
+            uint32_t tries = 0;
+            for (;;) {
+                int32_t rc = wasmos_ipc_send(g_vt_endpoint,
+                                             g_reply_endpoint,
+                                             VT_IPC_WRITE_REQ,
+                                             0,
+                                             args[0], args[1], args[2], args[3]);
+                if (rc == 0) {
+                    break;
+                }
+                if (rc != IPC_ERR_FULL) {
+                    break;
+                }
+                /* FIXME: if VT endpoint remains full we drop this chunk to
+                 * avoid freezing the CLI input loop behind output backpressure. */
+                if (++tries >= CLI_VT_SEND_RETRIES) {
+                    break;
+                }
+                (void)wasmos_sched_yield();
+            }
+        }
+    }
+    putsn(s, len);
 }
 
 static void
@@ -413,7 +454,35 @@ cli_handle_line(void)
         to_lower(g_line[1]) == 'e' &&
         to_lower(g_line[2]) == 'l' &&
         to_lower(g_line[3]) == 'p') {
-        console_write("commands: help, ps, ls, cat <name>, cd <path>, exec <app>, halt, reboot\n");
+        console_write("commands: help, ps, ls, cat <name>, cd <path>, exec <app>, tty <0-3>, halt, reboot\n");
+        return 0;
+    }
+    if (g_line_len > 4 &&
+        to_lower(g_line[0]) == 't' &&
+        to_lower(g_line[1]) == 't' &&
+        to_lower(g_line[2]) == 'y' &&
+        g_line[3] == ' ') {
+        int32_t tty = (int32_t)(g_line[4] - '0');
+        if (g_line[4] < '0' || g_line[4] > '3' || g_line[5] != '\0') {
+            console_write("tty usage: tty <0-3>\n");
+            return 0;
+        }
+        if (g_vt_endpoint < 0 || g_reply_endpoint < 0) {
+            console_write("tty switch unavailable\n");
+            return 0;
+        }
+        if (wasmos_ipc_send(g_vt_endpoint,
+                            g_reply_endpoint,
+                            VT_IPC_SWITCH_TTY,
+                            0,
+                            tty, 0, 0, 0) != 0) {
+            console_write("tty switch failed\n");
+            return 0;
+        }
+        g_active_tty = tty;
+        if (tty == 0) {
+            console_write("switched to tty0 (system console)\n");
+        }
         return 0;
     }
     if (g_line_len > 3 &&
@@ -592,17 +661,16 @@ cli_handle_line(void)
 WASMOS_WASM_EXPORT int32_t
 initialize(int32_t proc_endpoint,
            int32_t fs_endpoint,
-           int32_t ignored_arg2,
+           int32_t vt_endpoint,
            int32_t ignored_arg3)
 {
-    (void)ignored_arg2;
     (void)ignored_arg3;
 
     g_phase = CLI_PHASE_INIT;
 
     for (;;) {
         if (g_phase == CLI_PHASE_INIT) {
-            const char *msg = "WAMOS CLI\ncommands: help, ps, ls, cat <name>, cd <path>, exec <app>, halt, reboot\n";
+            const char *msg = "WAMOS CLI\ncommands: help, ps, ls, cat <name>, cd <path>, exec <app>, tty <0-3>, halt, reboot\n";
             wasmos_console_write((int32_t)(uintptr_t)msg, str_len(msg));
             set_cwd_root();
             g_reply_endpoint = wasmos_ipc_create_endpoint();
@@ -613,6 +681,18 @@ initialize(int32_t proc_endpoint,
             }
             g_proc_endpoint = proc_endpoint;
             g_fs_endpoint = fs_endpoint;
+            g_vt_endpoint = vt_endpoint;
+            if (g_vt_endpoint >= 0) {
+                (void)wasmos_ipc_send(g_vt_endpoint,
+                                      g_reply_endpoint,
+                                      VT_IPC_SWITCH_TTY,
+                                      0,
+                                      1,
+                                      0,
+                                      0,
+                                      0);
+                g_active_tty = 1;
+            }
             g_phase = CLI_PHASE_PROMPT;
             continue;
         }

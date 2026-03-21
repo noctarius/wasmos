@@ -1,17 +1,16 @@
-# Current Task State (Console Ring + Shared Memory Baseline)
+# Current Task State (VT/TTY Split + Input Lockup Hardening)
 
 ## Summary
-The current baseline has moved framebuffer text output away from serial-to-
-framebuffer IPC text messages and onto a kernel-owned shared-memory console
-ring.
+The current baseline uses split terminal ownership:
+- `tty0` is the system console mirror (`serial_write` -> COM1 + shared ring).
+- `tty1+` are VT-managed virtual terminals rendered by framebuffer IPC.
 
-`serial_write` now writes to COM1 and appends bytes to a 1-page shared ring.
-The native framebuffer driver maps that ring and drains it in its main loop,
-while still serving framebuffer control IPC (`FBTEXT_IPC_*`).
-
-Shared-memory APIs are now available in both native and WASM paths:
-- native driver ABI: `shmem_create`, `shmem_map`, `shmem_unmap`, `console_ring_id`
-- WASM imports: `wasmos_shmem_create`, `wasmos_shmem_map`, `wasmos_shmem_unmap`
+Recent hardening focused on framebuffer-only CLI lockups seen after one command:
+- keyboard notify events now use fire-and-forget IPC (`request_id = 0`)
+- stale framebuffer backend publish call was removed from native framebuffer
+  driver init
+- VT->framebuffer and CLI->VT output loops now use bounded retries on
+  `IPC_ERR_FULL` and fail soft (drop output chunk) instead of spinning forever
 
 ## Current Behavior
 - Kernel creates and owns a console ring shared-memory region.
@@ -20,11 +19,15 @@ Shared-memory APIs are now available in both native and WASM paths:
 - Early kernel log replay remains available and is replayed by framebuffer at init.
 - Legacy serial→framebuffer text IPC path (`FBTEXT_IPC_PUT_CHAR_REQ` /
   `FBTEXT_IPC_PUT_STRING_REQ`) is removed.
-- VT service currently focuses on keyboard subscription/routing and escape
-  filtering, and forwards output through `wasmos_console_write`.
+- VT keeps per-tty state and switches framebuffer mode:
+  - `tty0`: console-ring drain enabled (serial/system console view)
+  - `tty1+`: console-ring drain disabled, VT cell replay active
+- CLI starts on `tty1` and uses VT write IPC for framebuffer-visible output.
 
 ## Tests (Last Run)
 - `cmake --build build --target run-qemu-test` OK
+- `cmake --build build --target run-qemu-test` stress loop x10 OK
+- `cmake --build build --target run-qemu-test` stress loop x5 OK (post-fix)
 - `ctest --test-dir build --output-on-failure` OK (no tests discovered)
 
 ## Key Files
@@ -45,6 +48,8 @@ Shared-memory APIs are now available in both native and WASM paths:
 - Define clear ownership/lifetime rules for shared-memory users (especially
   mixed native/WASM flows).
 - Decide how WASM `shmem_unmap` should handle restoring overwritten linear pages.
-- Extend VT toward multi-TTY, richer ANSI semantics, and line discipline.
+- Add an automated interactive framebuffer test for VT/CLI input/output
+  lockups (command->prompt->next command flow).
+- Extend VT toward richer ANSI semantics and line discipline.
 - Keep docs (`README.md`, `ARCHITECTURE.md`, `TASKS.md`, `VIRTUAL_TERMINAL.md`)
   aligned as behavior evolves.

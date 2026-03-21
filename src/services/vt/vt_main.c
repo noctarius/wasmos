@@ -30,6 +30,9 @@ typedef struct {
 #define VT_MAX_TTYS 4u
 #define VT_COLS_DEFAULT 80u
 #define VT_ROWS_DEFAULT 25u
+/* Keep in sync with kernel ipc.h */
+#define IPC_ERR_FULL (-3)
+#define VT_FB_SEND_RETRIES 1024
 
 static int32_t  g_vt_ep = -1;
 static int32_t  g_kbd_ep = -1;
@@ -62,8 +65,23 @@ vt_fb_send(uint32_t type,
     if (g_fb_ep < 0 || g_vt_ep < 0) {
         return -1;
     }
-    return wasmos_ipc_send(g_fb_ep, g_vt_ep, (int32_t)type, 0,
-                           arg0, arg1, arg2, arg3);
+    uint32_t tries = 0;
+    for (;;) {
+        int32_t rc = wasmos_ipc_send(g_fb_ep, g_vt_ep, (int32_t)type, 0,
+                                     arg0, arg1, arg2, arg3);
+        if (rc == 0) {
+            return 0;
+        }
+        if (rc != IPC_ERR_FULL) {
+            return rc;
+        }
+        /* FIXME: persistent queue-full means framebuffer service is stalled;
+         * drop this update so VT input handling stays responsive. */
+        if (++tries >= VT_FB_SEND_RETRIES) {
+            return IPC_ERR_FULL;
+        }
+        (void)wasmos_sched_yield();
+    }
 }
 
 static void
@@ -358,16 +376,19 @@ vt_handle_key_notify(int32_t scancode, int32_t keyup)
 WASMOS_WASM_EXPORT int32_t
 initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3)
 {
-    (void)arg2;
     (void)arg3;
 
     g_fb_ep = fb_endpoint;
     g_kbd_ep = kbd_endpoint;
     vt_init_ttys();
 
-    g_vt_ep = wasmos_ipc_create_endpoint();
-    if (g_vt_ep < 0) {
-        return -1;
+    if (arg2 >= 0) {
+        g_vt_ep = arg2;
+    } else {
+        g_vt_ep = wasmos_ipc_create_endpoint();
+        if (g_vt_ep < 0) {
+            return -1;
+        }
     }
 
     if (g_kbd_ep >= 0) {
@@ -400,7 +421,7 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
                 }
                 vt_process_byte(tty, b);
             }
-            if (msg.source >= 0) {
+            if (msg.source >= 0 && msg.request_id != 0) {
                 wasmos_ipc_reply(msg.source, g_vt_ep,
                                  VT_IPC_RESP, msg.request_id, 0, 0);
             }
@@ -419,7 +440,7 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
                 tty->bg = bg;
             }
             tty->attr = attr;
-            if (msg.source >= 0) {
+            if (msg.source >= 0 && msg.request_id != 0) {
                 wasmos_ipc_reply(msg.source, g_vt_ep,
                                  VT_IPC_RESP, msg.request_id, 0, 0);
             }
@@ -428,7 +449,7 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
 
         case VT_IPC_SWITCH_TTY: {
             int32_t sw = vt_switch_tty((uint32_t)msg.arg0);
-            if (msg.source >= 0) {
+            if (msg.source >= 0 && msg.request_id != 0) {
                 wasmos_ipc_reply(msg.source, g_vt_ep,
                                  (sw == 0) ? VT_IPC_RESP : VT_IPC_ERROR,
                                  msg.request_id,
@@ -446,7 +467,7 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
             break;
 
         default:
-            if (msg.source >= 0) {
+            if (msg.source >= 0 && msg.request_id != 0) {
                 wasmos_ipc_reply(msg.source, g_vt_ep,
                                  VT_IPC_ERROR, msg.request_id, -1, 0);
             }

@@ -75,7 +75,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
   while keeping console output routed through `wasmos_console_write`
 - `tty0` is the system console mirror (serial/console-ring). Switching to
   `tty1+` disables console-ring drain and replays VT-managed framebuffer cells;
-  switching back to `tty0` re-enables ring drain
+  every tty switch clears the framebuffer first, then replays the selected tty
+  buffer; switching back to `tty0` re-enables ring drain
 - CLI now attaches to VT `tty1` by default and writes through `VT_IPC_WRITE_REQ`
   (with `tty 0..3` command for manual switching)
 - sysinit now keeps one CLI instance per VT tty (`tty1..tty3`), with process

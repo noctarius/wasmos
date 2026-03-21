@@ -329,12 +329,10 @@ vt_process_byte(vt_tty_t *tty, uint8_t c)
 static void
 vt_replay_tty(uint32_t tty_index)
 {
-    if (tty_index == 0 || tty_index >= VT_MAX_TTYS) {
+    if (tty_index >= VT_MAX_TTYS) {
         return;
     }
     vt_tty_t *tty = &g_ttys[tty_index];
-
-    (void)vt_fb_send(FBTEXT_IPC_CLEAR_REQ, 0, 0, 0, 0);
 
     for (uint16_t row = 0; row < VT_ROWS_DEFAULT; ++row) {
         for (uint16_t col = 0; col < VT_COLS_DEFAULT; ++col) {
@@ -400,8 +398,13 @@ vt_switch_tty(uint32_t tty_index)
         return 0;
     }
 
+    (void)vt_fb_send(FBTEXT_IPC_CLEAR_REQ, 0, 0, 0, 0);
+
     if (tty_index == 0) {
+        vt_replay_tty(tty_index);
         vt_fb_console_mode(1);
+        /* FIXME: tty0 reflects kernel serial output via console ring and does
+         * not yet have a VT-owned full-screen replay buffer. */
         return 0;
     }
 

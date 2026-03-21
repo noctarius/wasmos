@@ -68,6 +68,7 @@ typedef struct {
     uint32_t vt_endpoint;
     uint32_t fs_reply_endpoint;
     uint32_t fs_request_id;
+    uint32_t next_cli_tty;
     uint8_t started;
     uint32_t init_module_index;
     uint32_t module_count;
@@ -78,6 +79,8 @@ typedef struct {
 
 static pm_state_t g_pm;
 static pm_fs_buffer_slot_t g_pm_fs_slots[PROCESS_MAX_COUNT];
+
+static uint32_t pm_alloc_cli_tty(void);
 
 static pm_fs_buffer_slot_t *
 pm_fs_slot_for_context(uint32_t context_id)
@@ -474,6 +477,7 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
         slot->entry_arg2 = (g_pm.vt_endpoint != IPC_ENDPOINT_NONE)
                                ? g_pm.vt_endpoint
                                : (uint32_t)-1;
+        slot->entry_arg3 = pm_alloc_cli_tty();
     } else if (name_eq(slot->name, "fs-fat")) {
         uint32_t block_endpoint = g_pm.block_endpoint;
         if (block_endpoint == IPC_ENDPOINT_NONE) {
@@ -622,6 +626,7 @@ pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t *blob, uint32_t blob_siz
         slot->entry_arg2 = (g_pm.vt_endpoint != IPC_ENDPOINT_NONE)
                                ? g_pm.vt_endpoint
                                : (uint32_t)-1;
+        slot->entry_arg3 = pm_alloc_cli_tty();
     } else if (name_eq(slot->name, "vt")) {
         slot->entry_arg0 = (g_pm.fb_endpoint != IPC_ENDPOINT_NONE)
                                ? g_pm.fb_endpoint
@@ -1001,6 +1006,7 @@ process_manager_init(const boot_info_t *boot_info)
     g_pm.vt_endpoint = IPC_ENDPOINT_NONE;
     g_pm.fs_reply_endpoint = IPC_ENDPOINT_NONE;
     g_pm.fs_request_id = 1;
+    g_pm.next_cli_tty = 1;
     g_pm.started = 0;
     if (boot_info && (boot_info->flags & BOOT_INFO_FLAG_MODULES_PRESENT)) {
         g_pm.module_count = boot_info->module_count;
@@ -1154,4 +1160,15 @@ process_manager_entry(process_t *process, void *arg)
     }
 
     return PROCESS_RUN_YIELDED;
+}
+static uint32_t
+pm_alloc_cli_tty(void)
+{
+    /* Reserve tty0 for system console; rotate shell homes across tty1..tty3. */
+    uint32_t tty = g_pm.next_cli_tty;
+    if (tty < 1 || tty > 3) {
+        tty = 1;
+    }
+    g_pm.next_cli_tty = (tty >= 3) ? 1 : (tty + 1);
+    return tty;
 }

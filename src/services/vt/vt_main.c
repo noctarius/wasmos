@@ -459,6 +459,16 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
             break;
         }
 
+        case VT_IPC_GET_ACTIVE_TTY:
+            if (msg.source >= 0 && msg.request_id != 0) {
+                wasmos_ipc_reply(msg.source, g_vt_ep,
+                                 VT_IPC_RESP,
+                                 msg.request_id,
+                                 0,
+                                 (int32_t)g_active_tty);
+            }
+            break;
+
         case KBD_IPC_KEY_NOTIFY:
             vt_handle_key_notify(msg.arg0, msg.arg1);
             break;

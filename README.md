@@ -75,6 +75,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   switching back to `tty0` re-enables ring drain
 - CLI now attaches to VT `tty1` by default and writes through `VT_IPC_WRITE_REQ`
   (with `tty 0..3` command for manual switching)
+- sysinit now keeps one CLI instance per VT tty (`tty1..tty3`), with process
+  manager assigning each CLI a home tty; only the foreground tty's CLI consumes
+  keyboard input
 - keyboard notify events use fire-and-forget IPC (`request_id = 0`) and VT/CLI
   output paths now use bounded queue-full retries so transient framebuffer/IPC
   backpressure does not hard-lock interactive input loops

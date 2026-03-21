@@ -28,7 +28,8 @@ static int32_t g_reply_endpoint = -1;
 static int32_t g_fs_endpoint = -1;
 static int32_t g_proc_endpoint = -1;
 static int32_t g_vt_endpoint = -1;
-static int32_t g_active_tty = 1;
+static int32_t g_home_tty = 1;
+static int32_t g_last_seen_active_tty = 1;
 static int32_t g_request_id = 1;
 static int32_t g_pending_req = -1;
 static char g_cwd[64] = "/";
@@ -94,7 +95,8 @@ console_write(const char *s)
     if (len == 0) {
         return;
     }
-    if (g_vt_endpoint >= 0 && g_reply_endpoint >= 0 && g_active_tty > 0) {
+    if (g_vt_endpoint >= 0 && g_reply_endpoint >= 0 && g_home_tty > 0 &&
+        g_last_seen_active_tty == g_home_tty) {
         uint32_t pos = 0;
         while (pos < len) {
             int32_t args[4] = {0, 0, 0, 0};
@@ -123,11 +125,115 @@ console_write(const char *s)
             }
         }
     }
-    /* tty0 is the system console (serial + ring). For tty1+ we render through
-     * VT only so framebuffer output is not duplicated by serial mirroring. */
-    if (g_active_tty <= 0 || g_vt_endpoint < 0 || g_reply_endpoint < 0) {
-        putsn(s, len);
+    putsn(s, len);
+}
+
+static int32_t
+cli_query_active_tty(void)
+{
+    if (g_vt_endpoint < 0 || g_reply_endpoint < 0) {
+        return g_home_tty;
     }
+    int32_t req_id = g_request_id++;
+    if (wasmos_ipc_send(g_vt_endpoint,
+                        g_reply_endpoint,
+                        VT_IPC_GET_ACTIVE_TTY,
+                        req_id,
+                        0, 0, 0, 0) != 0) {
+        return -1;
+    }
+
+    for (int tries = 0; tries < 64; ++tries) {
+        int32_t rc = wasmos_ipc_try_recv(g_reply_endpoint);
+        if (rc < 0) {
+            return -1;
+        }
+        if (rc == 0) {
+            (void)wasmos_sched_yield();
+            continue;
+        }
+        int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+        int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+        if (resp_req != req_id) {
+            continue;
+        }
+        if (resp_type != VT_IPC_RESP) {
+            return -1;
+        }
+        return wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+    }
+
+    return -1;
+}
+
+static int
+cli_switch_tty(int32_t tty, int wait_resp)
+{
+    if (g_vt_endpoint < 0 || g_reply_endpoint < 0) {
+        return -1;
+    }
+
+    int32_t req_id = wait_resp ? g_request_id++ : 0;
+    uint32_t tries = 0;
+    for (;;) {
+        int32_t rc = wasmos_ipc_send(g_vt_endpoint,
+                                     g_reply_endpoint,
+                                     VT_IPC_SWITCH_TTY,
+                                     req_id,
+                                     tty, 0, 0, 0);
+        if (rc == 0) {
+            break;
+        }
+        if (rc != IPC_ERR_FULL || ++tries >= CLI_VT_SEND_RETRIES) {
+            return -1;
+        }
+        (void)wasmos_sched_yield();
+    }
+
+    if (!wait_resp) {
+        return 0;
+    }
+
+    for (int tries_resp = 0; tries_resp < 64; ++tries_resp) {
+        int32_t rc = wasmos_ipc_try_recv(g_reply_endpoint);
+        if (rc < 0) {
+            return -1;
+        }
+        if (rc == 0) {
+            (void)wasmos_sched_yield();
+            continue;
+        }
+        int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+        int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+        if (resp_req != req_id) {
+            continue;
+        }
+        if (resp_type == VT_IPC_RESP) {
+            g_last_seen_active_tty = tty;
+            return 0;
+        }
+        return -1;
+    }
+    return -1;
+}
+
+static int
+cli_is_foreground(void)
+{
+    if (g_vt_endpoint < 0 || g_home_tty <= 0) {
+        return 1;
+    }
+    int32_t active_tty = cli_query_active_tty();
+    if (active_tty >= 0) {
+        if (!(g_home_tty == 1 && active_tty == 0)) {
+            g_last_seen_active_tty = active_tty;
+        }
+    }
+    if (g_home_tty == 1 && g_last_seen_active_tty == 0) {
+        (void)cli_switch_tty(1, 0);
+        return 1;
+    }
+    return g_last_seen_active_tty == g_home_tty;
 }
 
 static void
@@ -475,15 +581,11 @@ cli_handle_line(void)
             console_write("tty switch unavailable\n");
             return 0;
         }
-        if (wasmos_ipc_send(g_vt_endpoint,
-                            g_reply_endpoint,
-                            VT_IPC_SWITCH_TTY,
-                            0,
-                            tty, 0, 0, 0) != 0) {
+        if (cli_switch_tty(tty, 1) != 0) {
             console_write("tty switch failed\n");
             return 0;
         }
-        g_active_tty = tty;
+        g_last_seen_active_tty = tty;
         if (tty == 0) {
             console_write("switched to tty0 (system console)\n");
         }
@@ -666,16 +768,12 @@ WASMOS_WASM_EXPORT int32_t
 initialize(int32_t proc_endpoint,
            int32_t fs_endpoint,
            int32_t vt_endpoint,
-           int32_t ignored_arg3)
+           int32_t home_tty_arg)
 {
-    (void)ignored_arg3;
-
     g_phase = CLI_PHASE_INIT;
 
     for (;;) {
         if (g_phase == CLI_PHASE_INIT) {
-            const char *msg = "WAMOS CLI\ncommands: help, ps, ls, cat <name>, cd <path>, exec <app>, tty <0-3>, halt, reboot\n";
-            wasmos_console_write((int32_t)(uintptr_t)msg, str_len(msg));
             set_cwd_root();
             g_reply_endpoint = wasmos_ipc_create_endpoint();
             if (g_reply_endpoint < 0) {
@@ -686,22 +784,29 @@ initialize(int32_t proc_endpoint,
             g_proc_endpoint = proc_endpoint;
             g_fs_endpoint = fs_endpoint;
             g_vt_endpoint = vt_endpoint;
+            if (home_tty_arg >= 1 && home_tty_arg <= 3) {
+                g_home_tty = home_tty_arg;
+            } else {
+                g_home_tty = 1;
+            }
+            g_last_seen_active_tty = 0;
             if (g_vt_endpoint >= 0) {
-                (void)wasmos_ipc_send(g_vt_endpoint,
-                                      g_reply_endpoint,
-                                      VT_IPC_SWITCH_TTY,
-                                      0,
-                                      1,
-                                      0,
-                                      0,
-                                      0);
-                g_active_tty = 1;
+                if (g_home_tty == 1) {
+                    (void)cli_switch_tty(1, 1);
+                }
+            }
+            if (g_home_tty == 1) {
+                console_write("WAMOS CLI\ncommands: help, ps, ls, cat <name>, cd <path>, exec <app>, tty <0-3>, halt, reboot\n");
             }
             g_phase = CLI_PHASE_PROMPT;
             continue;
         }
 
         if (g_phase == CLI_PHASE_PROMPT) {
+            if (!cli_is_foreground()) {
+                (void)wasmos_sched_yield();
+                continue;
+            }
             console_prompt();
             g_line_len = 0;
             g_phase = CLI_PHASE_READ;
@@ -709,6 +814,11 @@ initialize(int32_t proc_endpoint,
         }
 
         if (g_phase == CLI_PHASE_READ) {
+            if (!cli_is_foreground()) {
+                (void)wasmos_sched_yield();
+                continue;
+            }
+
             if (g_line_len >= (int32_t)(sizeof(g_line) - 1)) {
                 console_write("\n");
                 g_line_len = 0;

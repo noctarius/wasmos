@@ -448,7 +448,7 @@ compile time (e.g. 500 rows) to avoid dynamic allocation complexity.
 | Phase | Deliverables |
 |-------|-------------|
 | **1 (done)** | Native framebuffer text rendering, early-log replay, shared console ring drain, serial mirror retained. |
-| **2 (in progress)** | VT escape parsing + keyboard routing landed; remaining: richer ANSI handling, multi-TTY, line discipline. |
+| **2 (in progress)** | VT escape parsing, keyboard routing, multi-TTY switching, and per-tty CLI homes landed; remaining: richer ANSI handling and line discipline. |
 | **3 (planned)** | UTF-8 expansion, scrollback, richer VT client API, and tighter shared-memory conventions for bulk text/data paths. |
 
 ---

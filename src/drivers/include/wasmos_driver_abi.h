@@ -81,6 +81,7 @@ enum {
     VT_IPC_READ_REQ     = 0x701,
     VT_IPC_SET_ATTR_REQ = 0x702,
     VT_IPC_SWITCH_TTY   = 0x703,
+    VT_IPC_GET_ACTIVE_TTY = 0x704,
     VT_IPC_RESP         = 0x780,
     VT_IPC_ERROR        = 0x7FF
 };

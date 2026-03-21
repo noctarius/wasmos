@@ -44,5 +44,7 @@ This repository uses Codex CLI to assist with development. Follow these conventi
 - Make a git commit after each prompt iteration when changes are made.
 - Do not amend commits unless explicitly requested.
 - `git add` and `git commit` are always allowed in this repository.
+- Commit messages must always be detailed (clear summary + meaningful body).
+- Commits created by agents must include a `Co-authored-by:` trailer.
 - ALWAYS run `cmake --build build --target run-qemu-test` before staging and committing changes.
 - ALWAYS run unit tests, especially newly created tests, and also the full existing unit test suite, before declaring work complete.

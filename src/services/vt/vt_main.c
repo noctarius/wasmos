@@ -605,6 +605,11 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
                  * ownership before writes; fallback keeps compatibility. */
                 tty_index = (int32_t)g_active_tty;
             }
+            /* FIXME: Investigate remaining framebuffer artifact where tty
+             * switches can still show duplicated/misaligned prompts after
+             * rapid Ctrl+Shift+Fn switching. Repro is intermittent in VM and
+             * likely involves ordering between switch replay and concurrent
+             * CLI output bursts across multiple tty endpoints. */
             vt_tty_t *tty = &g_ttys[(uint32_t)tty_index];
             int32_t args[4] = { msg.arg0, msg.arg1, msg.arg2, msg.arg3 };
             for (int i = 0; i < 4; ++i) {

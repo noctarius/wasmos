@@ -39,38 +39,136 @@ typedef enum {
     ESC_CSI,
 } esc_state_t;
 
+typedef struct {
+    uint16_t cursor_row;
+    uint16_t cursor_col;
+    uint8_t fg;
+    uint8_t bg;
+    uint8_t attr;
+    esc_state_t esc;
+} vt_tty_t;
+
+#define VT_MAX_TTYS 4
+#define VT_COLS_DEFAULT 80u
+#define VT_ROWS_DEFAULT 25u
+
 static int32_t     g_vt_ep  = -1;
 static int32_t     g_kbd_ep = -1;
-static esc_state_t g_esc    = ESC_NORMAL;
+static vt_tty_t    g_ttys[VT_MAX_TTYS];
+static uint32_t    g_active_tty = 0;
+
+static vt_tty_t *
+vt_active_tty(void)
+{
+    if (g_active_tty >= VT_MAX_TTYS) {
+        g_active_tty = 0;
+    }
+    return &g_ttys[g_active_tty];
+}
 
 static void
-vt_put_char(uint32_t cp)
+vt_init_ttys(void)
+{
+    for (uint32_t i = 0; i < VT_MAX_TTYS; ++i) {
+        g_ttys[i].cursor_row = 0;
+        g_ttys[i].cursor_col = 0;
+        g_ttys[i].fg = 15;
+        g_ttys[i].bg = 0;
+        g_ttys[i].attr = 0;
+        g_ttys[i].esc = ESC_NORMAL;
+    }
+    g_active_tty = 0;
+}
+
+static int32_t
+vt_switch_tty(uint32_t tty_index)
+{
+    if (tty_index >= VT_MAX_TTYS) {
+        return -1;
+    }
+    g_active_tty = tty_index;
+    /* FIXME: Switching tty state currently does not trigger framebuffer
+     * re-render of that tty's saved cells; output path still goes through
+     * serial->console-ring until vt owns full screen-state replay. */
+    return 0;
+}
+
+static void
+vt_advance_cursor(vt_tty_t *tty, uint8_t ch)
+{
+    if (!tty) {
+        return;
+    }
+    if (ch == '\r') {
+        tty->cursor_col = 0;
+        return;
+    }
+    if (ch == '\n') {
+        tty->cursor_col = 0;
+        if (tty->cursor_row + 1 < VT_ROWS_DEFAULT) {
+            tty->cursor_row++;
+        }
+        return;
+    }
+    if (ch == '\b') {
+        if (tty->cursor_col > 0) {
+            tty->cursor_col--;
+        }
+        return;
+    }
+    if (ch == '\t') {
+        uint16_t next = (uint16_t)((tty->cursor_col + 8u) & ~7u);
+        if (next >= VT_COLS_DEFAULT) {
+            tty->cursor_col = 0;
+            if (tty->cursor_row + 1 < VT_ROWS_DEFAULT) {
+                tty->cursor_row++;
+            }
+        } else {
+            tty->cursor_col = next;
+        }
+        return;
+    }
+    tty->cursor_col++;
+    if (tty->cursor_col >= VT_COLS_DEFAULT) {
+        tty->cursor_col = 0;
+        if (tty->cursor_row + 1 < VT_ROWS_DEFAULT) {
+            tty->cursor_row++;
+        }
+    }
+}
+
+static void
+vt_put_char(vt_tty_t *tty, uint32_t cp)
 {
     char ch = (char)(cp & 0xFFu);
+    vt_advance_cursor(tty, (uint8_t)ch);
     (void)wasmos_console_write((int32_t)(uintptr_t)&ch, 1);
 }
 
 static void
-vt_process_byte(uint8_t c)
+vt_process_byte(vt_tty_t *tty, uint8_t c)
 {
-    switch (g_esc) {
+    if (!tty) {
+        return;
+    }
+    switch (tty->esc) {
     case ESC_NORMAL:
         if (c == 0x1B) {
-            g_esc = ESC_ESC;
+            tty->esc = ESC_ESC;
         } else {
-            vt_put_char((uint32_t)c);
+            vt_put_char(tty, (uint32_t)c);
         }
         break;
     case ESC_ESC:
         if (c == '[') {
-            g_esc = ESC_CSI;
+            tty->esc = ESC_CSI;
         } else {
-            g_esc = ESC_NORMAL;
+            tty->esc = ESC_NORMAL;
         }
         break;
     case ESC_CSI:
         if (c >= 0x40 && c <= 0x7E) {
-            g_esc = ESC_NORMAL;
+            tty->esc = ESC_NORMAL;
         }
         break;
     }
@@ -173,6 +271,7 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
     (void)arg3;
 
     g_kbd_ep = kbd_endpoint;
+    vt_init_ttys();
 
     g_vt_ep = wasmos_ipc_create_endpoint();
     if (g_vt_ep < 0) {
@@ -205,17 +304,49 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
         switch ((uint32_t)msg.type) {
 
         case VT_IPC_WRITE_REQ: {
+            vt_tty_t *tty = vt_active_tty();
             int32_t args[4] = { msg.arg0, msg.arg1, msg.arg2, msg.arg3 };
             for (int i = 0; i < 4; i++) {
                 uint8_t b = (uint8_t)(args[i] & 0xFF);
                 if (b == 0) {
                     break;
                 }
-                vt_process_byte(b);
+                vt_process_byte(tty, b);
             }
             if (msg.source >= 0) {
                 wasmos_ipc_reply(msg.source, g_vt_ep,
                                  VT_IPC_RESP, msg.request_id, 0, 0);
+            }
+            break;
+        }
+
+        case VT_IPC_SET_ATTR_REQ: {
+            vt_tty_t *tty = vt_active_tty();
+            uint8_t fg = (uint8_t)(msg.arg0 & 0xFF);
+            uint8_t bg = (uint8_t)(msg.arg1 & 0xFF);
+            uint8_t attr = (uint8_t)(msg.arg2 & 0xFF);
+            if (fg <= 15u) {
+                tty->fg = fg;
+            }
+            if (bg <= 15u) {
+                tty->bg = bg;
+            }
+            tty->attr = attr;
+            if (msg.source >= 0) {
+                wasmos_ipc_reply(msg.source, g_vt_ep,
+                                 VT_IPC_RESP, msg.request_id, 0, 0);
+            }
+            break;
+        }
+
+        case VT_IPC_SWITCH_TTY: {
+            int32_t rc_switch = vt_switch_tty((uint32_t)msg.arg0);
+            if (msg.source >= 0) {
+                wasmos_ipc_reply(msg.source, g_vt_ep,
+                                 (rc_switch == 0) ? VT_IPC_RESP : VT_IPC_ERROR,
+                                 msg.request_id,
+                                 rc_switch,
+                                 (int32_t)g_active_tty);
             }
             break;
         }

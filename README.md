@@ -85,6 +85,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - VT now owns keyboard input routing and delivers per-tty raw input via
   `VT_IPC_READ_REQ`; CLI owns line editing/echo, with serial input retained as
   fallback for headless/automation flows
+- VT output is now source-tty scoped: each CLI endpoint writes to its assigned
+  tty buffer, and background tty writes no longer paint the active framebuffer
 - VT supports keyboard hotkey switching with `Ctrl+Shift+F1..F4` mapped to
   `tty0..tty3`
 - keyboard notify events use fire-and-forget IPC (`request_id = 0`) and VT/CLI

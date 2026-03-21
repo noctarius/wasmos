@@ -6,7 +6,6 @@ architecture and README cleanup.
 IMPORTANT: Keep this file aligned with `README.md` and `ARCHITECTURE.md`.
 
 ## Boot and Platform
-- Add framebuffer console support (via UEFI framebuffer device) in addition to serial.
 - Add APIC / IOAPIC support and retire the PIC-only interrupt assumption.
 - Decide whether the kernel should eventually read initfs directly instead of
   relying on synthesized bootstrap `boot_module_t` records.
@@ -25,7 +24,10 @@ IMPORTANT: Keep this file aligned with `README.md` and `ARCHITECTURE.md`.
 
 ## IPC
 - Add true notification objects separate from synchronous IPC endpoints.
-- Add shared-memory bulk transfer primitives and conventions.
+- Define shared-memory bulk-transfer conventions on top of the new
+  `shmem_create/map/unmap` primitives (ownership rules, discovery, ABI docs).
+- Add an explicit unmap/remap policy for WASM `wasmos_shmem_map` overlays
+  (current unmap releases ownership but does not restore prior linear mapping).
 - Add endpoint badges / richer sender identification.
 - Add service-level IPC allowlists beyond current endpoint ownership checks.
 - Add better async server support for multi-hop service chains.
@@ -60,7 +62,8 @@ IMPORTANT: Keep this file aligned with `README.md` and `ARCHITECTURE.md`.
 - Mount the EFI filesystem as `/boot`.
 - Add timer/clock (RTC) device support.
 - Add NVMe support.
-- Add (virtual) TTY support.
+- Extend virtual terminal support beyond the current baseline:
+  multi-TTY, richer ANSI handling, cooked/raw modes, history, and scrollback.
 - Add NVMEM support.
 - Add virtio support (virtio-blk, virtio-console, virtio-rng, virtio-fs, virtio-net).
 - Asynchronous I/O support (e.g., `async-io`).

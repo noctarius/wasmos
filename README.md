@@ -70,6 +70,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - VT service now tracks per-TTY state (4 slots), including active-TTY switching
   via `VT_IPC_SWITCH_TTY` and per-TTY attributes via `VT_IPC_SET_ATTR_REQ`
   while keeping console output routed through `wasmos_console_write`
+- `tty0` is the system console mirror (serial/console-ring). Switching to
+  `tty1+` disables console-ring drain and replays VT-managed framebuffer cells;
+  switching back to `tty0` re-enables ring drain
 - physical frame allocator and per-process CR3-managed paging
 - preemptive round-robin scheduler driven by PIT IRQ0
 - kernel IPC transport with endpoint ownership checks

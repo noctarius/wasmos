@@ -87,6 +87,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   fallback for headless/automation flows
 - VT output is now source-tty scoped: each CLI endpoint writes to its assigned
   tty buffer, and background tty writes no longer paint the active framebuffer
+- VT now requires explicit writer registration (`VT_IPC_REGISTER_WRITER`) and
+  tags tty output with a switch-generation token so stale pre-switch writes are
+  dropped instead of repainting over a freshly replayed tty
 - VT supports keyboard hotkey switching with `Ctrl+Shift+F1..F4` mapped to
   `tty0..tty3`
 - keyboard notify events use fire-and-forget IPC (`request_id = 0`) and VT/CLI

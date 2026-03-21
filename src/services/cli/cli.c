@@ -31,6 +31,7 @@ static int32_t g_proc_endpoint = -1;
 static int32_t g_vt_endpoint = -1;
 static int32_t g_home_tty = 1;
 static int32_t g_last_seen_active_tty = 1;
+static uint32_t g_vt_switch_generation = 1;
 static int32_t g_request_id = 1;
 static int32_t g_pending_req = -1;
 static char g_cwd[64] = "/";
@@ -110,7 +111,7 @@ console_write(const char *s)
                 int32_t rc = wasmos_ipc_send(g_vt_endpoint,
                                              g_vt_client_endpoint,
                                              VT_IPC_WRITE_REQ,
-                                             0,
+                                             (int32_t)g_vt_switch_generation,
                                              args[0], args[1], args[2], args[3]);
                 if (rc == 0) {
                     break;
@@ -131,9 +132,12 @@ console_write(const char *s)
 }
 
 static int32_t
-cli_query_active_tty(void)
+cli_query_active_tty(uint32_t *out_generation)
 {
     if (g_vt_endpoint < 0 || g_vt_client_endpoint < 0) {
+        if (out_generation) {
+            *out_generation = g_vt_switch_generation;
+        }
         return g_home_tty;
     }
     int32_t req_id = g_request_id++;
@@ -161,6 +165,13 @@ cli_query_active_tty(void)
         }
         if (resp_type != VT_IPC_RESP) {
             return -1;
+        }
+        uint32_t gen = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+        if (gen != 0) {
+            g_vt_switch_generation = gen;
+            if (out_generation) {
+                *out_generation = gen;
+            }
         }
         return wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
     }
@@ -211,7 +222,11 @@ cli_switch_tty(int32_t tty, int wait_resp)
             continue;
         }
         if (resp_type == VT_IPC_RESP) {
-            g_last_seen_active_tty = tty;
+            uint32_t gen = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+            if (gen != 0) {
+                g_vt_switch_generation = gen;
+            }
+            g_last_seen_active_tty = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
             return 0;
         }
         return -1;
@@ -225,7 +240,7 @@ cli_is_foreground(void)
     if (g_vt_endpoint < 0 || g_home_tty <= 0) {
         return 1;
     }
-    int32_t active_tty = cli_query_active_tty();
+    int32_t active_tty = cli_query_active_tty(NULL);
     if (active_tty >= 0) {
         if (!(g_home_tty == 1 && active_tty == 0)) {
             g_last_seen_active_tty = active_tty;
@@ -236,6 +251,47 @@ cli_is_foreground(void)
         return 1;
     }
     return g_last_seen_active_tty == g_home_tty;
+}
+
+static int
+cli_register_vt_writer(void)
+{
+    if (g_vt_endpoint < 0 || g_vt_client_endpoint < 0 || g_home_tty < 0) {
+        return -1;
+    }
+    int32_t req_id = g_request_id++;
+    if (wasmos_ipc_send(g_vt_endpoint,
+                        g_vt_client_endpoint,
+                        VT_IPC_REGISTER_WRITER,
+                        req_id,
+                        g_home_tty, 0, 0, 0) != 0) {
+        return -1;
+    }
+
+    for (int tries = 0; tries < 64; ++tries) {
+        int32_t rc = wasmos_ipc_try_recv(g_vt_client_endpoint);
+        if (rc < 0) {
+            return -1;
+        }
+        if (rc == 0) {
+            (void)wasmos_sched_yield();
+            continue;
+        }
+        int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+        int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+        if (resp_req != req_id) {
+            continue;
+        }
+        if (resp_type != VT_IPC_RESP) {
+            return -1;
+        }
+        uint32_t gen = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+        if (gen != 0) {
+            g_vt_switch_generation = gen;
+        }
+        return 0;
+    }
+    return -1;
 }
 
 static int32_t
@@ -851,6 +907,12 @@ initialize(int32_t proc_endpoint,
                 g_home_tty = home_tty_arg;
             } else {
                 g_home_tty = 1;
+            }
+            g_vt_switch_generation = 1;
+            if (g_vt_endpoint >= 0 && cli_register_vt_writer() != 0) {
+                g_phase = CLI_PHASE_FAILED;
+                console_write("[cli] vt writer register failed\n");
+                stall_forever();
             }
             g_last_seen_active_tty = 0;
             if (g_vt_endpoint >= 0) {

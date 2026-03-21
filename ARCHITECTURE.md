@@ -81,6 +81,10 @@ The current tree already boots into a usable user-space stack:
 - VT write routing now uses caller endpoint ownership to target the correct tty
   buffer; non-foreground tty writes are buffered without rendering over the
   active framebuffer.
+- VT enforces explicit writer registration (`VT_IPC_REGISTER_WRITER`) and
+  switch-generation write tokens: writes tagged with older generations are
+  dropped after tty switches, and switch replay runs behind a temporary render
+  barrier to avoid in-flight foreground repaint races.
 - VT keyboard hotkeys support `Ctrl+Shift+F1..F4` to switch directly to
   `tty0..tty3`.
 - Keyboard event delivery into VT is now explicit fire-and-forget

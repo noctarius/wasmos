@@ -356,7 +356,9 @@ vt_init_ttys(void)
         g_ttys[i].fg = 15;
         g_ttys[i].bg = 0;
         g_ttys[i].attr = 0;
-        g_ttys[i].input_echo = 1;
+        /* CLI owns user-visible echo; keep VT echo off by default to avoid
+         * double/missing echoes when multiple producers share the tty. */
+        g_ttys[i].input_echo = 0;
         g_ttys[i].input_canonical = 1;
         g_ttys[i].esc = ESC_NORMAL;
         g_ttys[i].input_q_head = 0;

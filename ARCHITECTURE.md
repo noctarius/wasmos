@@ -67,6 +67,13 @@ The current tree already boots into a usable user-space stack:
   serial/console-ring output, while `tty1+` are VT-managed framebuffers.
   Framebuffer control IPC now includes a console-mode toggle so VT can disable
   console-ring drain when non-zero ttys are active and restore it on `tty0`.
+- CLI now receives the VT endpoint from process-manager wiring, switches to
+  `tty1` at startup, and sends terminal output through `VT_IPC_WRITE_REQ`
+  rather than direct console writes.
+- Keyboard event delivery into VT is now explicit fire-and-forget
+  (`KBD_IPC_KEY_NOTIFY` with `request_id = 0`), and VT/CLI output transport
+  loops now use bounded `IPC_ERR_FULL` retries so queue backpressure degrades
+  output before it can freeze the interactive path.
 - The CMake-only `kernel_ide` aggregation target indexes kernel sources plus
   selected WASM user-space sources, so it must mirror the libc include root
   used by those components for editor diagnostics.

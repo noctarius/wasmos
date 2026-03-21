@@ -225,9 +225,6 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
 
     /* Derive our context id from current pid (context_id == pid for native). */
     uint32_t ctx = api->sched_current_pid();
-    if (api->console_register_fb(ctx, ep) != 0) {
-        write_str(api, "[framebuffer] endpoint publish failed\n");
-    }
 
     /* Main loop: drain console ring, then process control IPC. */
     nd_ipc_message_t msg;
@@ -294,7 +291,7 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
             break;
         }
 
-        if (msg.source != (uint32_t)~0u) {
+        if (msg.source != (uint32_t)~0u && msg.request_id != 0) {
             api->ipc_send(ctx, msg.source, &resp);
         }
     }

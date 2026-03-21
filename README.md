@@ -73,6 +73,11 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - `tty0` is the system console mirror (serial/console-ring). Switching to
   `tty1+` disables console-ring drain and replays VT-managed framebuffer cells;
   switching back to `tty0` re-enables ring drain
+- CLI now attaches to VT `tty1` by default and writes through `VT_IPC_WRITE_REQ`
+  (with `tty 0..3` command for manual switching)
+- keyboard notify events use fire-and-forget IPC (`request_id = 0`) and VT/CLI
+  output paths now use bounded queue-full retries so transient framebuffer/IPC
+  backpressure does not hard-lock interactive input loops
 - physical frame allocator and per-process CR3-managed paging
 - preemptive round-robin scheduler driven by PIT IRQ0
 - kernel IPC transport with endpoint ownership checks

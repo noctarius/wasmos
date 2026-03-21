@@ -74,7 +74,8 @@ scroll/clear) remain IPC-based.
 - forwards printable output through `wasmos_console_write` (which feeds serial
   and the shared console ring)
 
-`vt` does not currently own a framebuffer endpoint for per-character writes.
+`vt` now owns a framebuffer control endpoint and can switch between system-
+console mode (`tty0`) and VT-managed virtual terminals (`tty1+`).
 
 Splitting terminal logic into a WASM service means it can be updated, replaced,
 or crashed without touching the framebuffer driver, and it cannot directly
@@ -89,8 +90,11 @@ corrupt display hardware.
   - native driver shared-memory API (`shmem_create/map/unmap`)
   - WASM shared-memory syscalls (`wasmos_shmem_create/map/unmap`)
   - `vt` keyboard subscribe + input routing + escape stripping
+  - keyboard `KBD_KEY_NOTIFY` path now sends as strict fire-and-forget
+    (`request_id = 0`)
+  - VT→framebuffer and CLI→VT output paths now cap queue-full retries and drop
+    stale updates on persistent backpressure instead of spinning forever
 - Not landed yet:
-  - multi-TTY state/mux
   - cooked/raw line discipline history
   - full ANSI cursor/color feature set
   - service-registry-based VT endpoint discovery
@@ -241,7 +245,11 @@ driver's hot path free of blocking IPC waits.
 
 ### TTY State
 
-Phase 1 has exactly one TTY (`tty0`). The TTY state is a struct in `vt`:
+The current baseline has four TTY slots (`tty0..tty3`):
+- `tty0` is the system console mirror (serial + console ring)
+- `tty1..tty3` are VT-managed virtual terminals
+
+The per-TTY state in `vt` is:
 
 ```c
 typedef struct {

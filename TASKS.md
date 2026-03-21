@@ -104,5 +104,7 @@ IMPORTANT: Keep this file aligned with `README.md` and `ARCHITECTURE.md`.
 ## Documentation and Tests
 - Keep source comments aligned with architecture decisions as internals evolve.
 - Add tests for any new IPC notification or shared-memory paths.
+- Add an interactive framebuffer regression test that drives keyboard input
+  through VT/CLI (multiple commands + prompt returns) and fails on stuck input.
 - Add broader malformed boot-config coverage and future startup-policy
   expansion beyond the current `sysinit.spawn` list.

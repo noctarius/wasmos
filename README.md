@@ -65,6 +65,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - kernel-owned 1-page shared-memory console ring: `serial_write` appends text
   and the native framebuffer driver drains it directly (no serial→framebuffer
   text IPC forwarding)
+- fatal CPU exceptions now render a kernel panic screen directly on the
+  framebuffer (black background) with crash context: vector/register state,
+  process identity, stack bounds, CR3, kernel text range, and framebuffer info
 - shared-memory APIs for native drivers (`shmem_create/map/unmap`,
   `console_ring_id`) and WASM syscalls (`wasmos_shmem_create/map/unmap`)
 - VT service now tracks per-TTY state (4 slots), including active-TTY switching

@@ -889,16 +889,12 @@ initialize(int32_t proc_endpoint,
                 continue;
             }
             int32_t have_ch = 0;
-            int32_t from_vt = 0;
             if (g_vt_endpoint >= 0) {
                 have_ch = cli_vt_read_char(&g_line[g_line_len]);
                 if (have_ch < 0) {
                     g_phase = CLI_PHASE_FAILED;
                     console_write("[cli] vt read failed\n");
                     stall_forever();
-                }
-                if (have_ch > 0) {
-                    from_vt = 1;
                 }
             }
             if (!have_ch) {
@@ -910,7 +906,6 @@ initialize(int32_t proc_endpoint,
                 }
                 if (rc > 0) {
                     have_ch = 1;
-                    from_vt = 0;
                 }
             }
             if (!have_ch) {
@@ -920,9 +915,7 @@ initialize(int32_t proc_endpoint,
 
             char ch = g_line[g_line_len];
             if (ch == '\r' || ch == '\n') {
-                if (!from_vt) {
-                    console_write("\n");
-                }
+                console_write("\n");
                 if (cli_handle_line()) {
                     g_phase = CLI_PHASE_WAIT_IPC;
                 } else {
@@ -933,17 +926,13 @@ initialize(int32_t proc_endpoint,
             if (ch == '\b' || ch == 0x7F) {
                 if (g_line_len > 0) {
                     g_line_len--;
-                    if (!from_vt) {
-                        console_write("\b \b");
-                    }
+                    console_write("\b \b");
                 }
                 continue;
             }
             g_line_len++;
-            if (!from_vt) {
-                char echo_buf[2] = { ch, '\0' };
-                console_write(echo_buf);
-            }
+            char echo_buf[2] = { ch, '\0' };
+            console_write(echo_buf);
             continue;
         }
 

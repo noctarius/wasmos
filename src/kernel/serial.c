@@ -272,8 +272,9 @@ static void serial_fb_transmit_string(const char *s) {
     if (g_fb_endpoint == IPC_ENDPOINT_NONE || !s) {
         return;
     }
-    /* Batch up to 4 bytes per FBTEXT_IPC_PUT_STRING_REQ to stay within the
-     * depth-32 IPC queue for strings of up to 128 bytes before overflow. */
+    /* Pack 4 bytes per arg (16 bytes per message) to reduce IPC message count
+     * by 4×, keeping a 14-process ps tree (~350 chars) within the depth-32
+     * queue (~22 messages vs ~88 at 4 bytes/message). */
     while (*s) {
         ipc_message_t msg = {
             .type        = FBTEXT_IPC_PUT_STRING_REQ,
@@ -286,8 +287,13 @@ static void serial_fb_transmit_string(const char *s) {
             .arg3        = 0,
         };
         uint32_t *args = &msg.arg0;
-        for (int i = 0; i < 4 && *s; ++i) {
-            args[i] = (uint32_t)(uint8_t)*s++;
+        for (int i = 0; i < 4; ++i) {
+            uint32_t word = 0;
+            for (int j = 0; j < 4 && *s; ++j) {
+                word |= (uint32_t)(uint8_t)*s++ << (j * 8);
+            }
+            args[i] = word;
+            if (!*s) { break; }
         }
         (void)ipc_send_from(IPC_CONTEXT_KERNEL, g_fb_endpoint, &msg);
     }

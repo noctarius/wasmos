@@ -88,13 +88,28 @@ console_write(const char *s)
 static void
 console_prompt(void)
 {
-    /* Keep the prompt formatting in one place so cwd handling stays consistent
-     * across command execution and asynchronous command completions. */
+    /* Build the full prompt in one buffer so it is emitted as a single
+     * console_write call.  Multiple separate calls release the serial spinlock
+     * between them; another process can log a '\n' in the gap, causing a
+     * scroll that splits the prompt across rows. */
+    char buf[80];
+    int32_t pos = 0;
     if (g_cwd[0]) {
-        console_write(g_cwd);
-        console_write(" ");
+        int32_t cwd_len = str_len(g_cwd);
+        if (cwd_len > (int32_t)(sizeof(buf) - 9)) {
+            cwd_len = (int32_t)(sizeof(buf) - 9);
+        }
+        for (int32_t i = 0; i < cwd_len; ++i) {
+            buf[pos++] = g_cwd[i];
+        }
+        buf[pos++] = ' ';
     }
-    console_write("wamos> ");
+    const char *suffix = "wamos> ";
+    for (int32_t i = 0; suffix[i]; ++i) {
+        buf[pos++] = suffix[i];
+    }
+    buf[pos] = '\0';
+    console_write(buf);
 }
 
 static void
@@ -147,6 +162,37 @@ console_write_u32(uint32_t value)
     console_write(buf);
 }
 
+/* Buffer helpers: append string/uint32 into a fixed-size buffer.
+ * cap = total buffer capacity (including NUL terminator).
+ * Returns the new write position. */
+static int
+buf_append_str(char *buf, int pos, int cap, const char *s)
+{
+    for (int i = 0; s[i] && pos + 1 < cap; ++i) {
+        buf[pos++] = s[i];
+    }
+    return pos;
+}
+
+static int
+buf_append_u32(char *buf, int pos, int cap, uint32_t v)
+{
+    if (v == 0) {
+        if (pos + 1 < cap) { buf[pos++] = '0'; }
+        return pos;
+    }
+    char tmp[12];
+    int tpos = 0;
+    while (v > 0 && tpos < (int)sizeof(tmp)) {
+        tmp[tpos++] = (char)('0' + (v % 10));
+        v /= 10;
+    }
+    for (int i = tpos - 1; i >= 0 && pos + 1 < cap; --i) {
+        buf[pos++] = tmp[i];
+    }
+    return pos;
+}
+
 static int
 cli_find_index_by_pid(uint32_t count, const uint32_t *pids, uint32_t pid)
 {
@@ -171,13 +217,19 @@ cli_print_tree(uint32_t index,
         return;
     }
     visited[index] = 1;
-    for (uint32_t i = 0; i < depth; ++i) {
-        console_write("  ");
+    /* Build the entire line in one buffer so it is emitted atomically. */
+    char buf[128];
+    int pos = 0;
+    for (uint32_t i = 0; i < depth && pos + 2 < (int)sizeof(buf); ++i) {
+        buf[pos++] = ' ';
+        buf[pos++] = ' ';
     }
-    console_write(names[index]);
-    console_write(" (pid ");
-    console_write_u32(pids[index]);
-    console_write(")\n");
+    pos = buf_append_str(buf, pos, (int)sizeof(buf), names[index]);
+    pos = buf_append_str(buf, pos, (int)sizeof(buf), " (pid ");
+    pos = buf_append_u32(buf, pos, (int)sizeof(buf), pids[index]);
+    pos = buf_append_str(buf, pos, (int)sizeof(buf), ")\n");
+    buf[pos] = '\0';
+    console_write(buf);
 
     uint32_t pid = pids[index];
     for (uint32_t i = 0; i < count; ++i) {
@@ -465,13 +517,19 @@ cli_handle_line(void)
             count = (int32_t)CLI_MAX_PROCS;
         }
         console_write_num("processes: ", count);
-        console_write("sched: ticks ");
-        console_write_u32((uint32_t)wasmos_sched_ticks());
-        console_write(" ready ");
-        console_write_u32((uint32_t)wasmos_sched_ready_count());
-        console_write(" running ");
-        console_write_u32((uint32_t)wasmos_sched_current_pid());
-        console_write("\n");
+        {
+            char sbuf[80];
+            int spos = 0;
+            spos = buf_append_str(sbuf, spos, (int)sizeof(sbuf), "sched: ticks ");
+            spos = buf_append_u32(sbuf, spos, (int)sizeof(sbuf), (uint32_t)wasmos_sched_ticks());
+            spos = buf_append_str(sbuf, spos, (int)sizeof(sbuf), " ready ");
+            spos = buf_append_u32(sbuf, spos, (int)sizeof(sbuf), (uint32_t)wasmos_sched_ready_count());
+            spos = buf_append_str(sbuf, spos, (int)sizeof(sbuf), " running ");
+            spos = buf_append_u32(sbuf, spos, (int)sizeof(sbuf), (uint32_t)wasmos_sched_current_pid());
+            spos = buf_append_str(sbuf, spos, (int)sizeof(sbuf), "\n");
+            sbuf[spos] = '\0';
+            console_write(sbuf);
+        }
         for (int32_t i = 0; i < count; ++i) {
             uint32_t parent = 0;
             int32_t pid = wasmos_proc_info_ex(i,
@@ -638,9 +696,15 @@ initialize(int32_t proc_endpoint,
                 console_write("[cli] ipc response invalid\n");
                 stall_forever();
             } else if (g_pending_kind == PENDING_EXEC && resp_type == PROC_IPC_RESP) {
-                console_write("spawned pid ");
-                console_write_u32((uint32_t)resp_status);
-                console_write("\n");
+                {
+                char pbuf[32];
+                int ppos = 0;
+                ppos = buf_append_str(pbuf, ppos, (int)sizeof(pbuf), "spawned pid ");
+                ppos = buf_append_u32(pbuf, ppos, (int)sizeof(pbuf), (uint32_t)resp_status);
+                ppos = buf_append_str(pbuf, ppos, (int)sizeof(pbuf), "\n");
+                pbuf[ppos] = '\0';
+                console_write(pbuf);
+            }
             } else if (g_pending_kind == PENDING_CD_CHAIN) {
                 const char *tail = g_pending_cd_path;
                 if (tail[0] == '/') {

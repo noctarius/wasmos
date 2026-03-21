@@ -262,11 +262,16 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
             fbtext_put_char(&g_state, msg.arg0);
             break;
         case FBTEXT_IPC_PUT_STRING_REQ: {
+            /* Each arg carries up to 4 bytes, packed little-endian.
+             * A zero byte signals end of string. */
             uint32_t args[4] = { msg.arg0, msg.arg1, msg.arg2, msg.arg3 };
-            for (int i = 0; i < 4; ++i) {
-                uint8_t b = (uint8_t)(args[i] & 0xFF);
-                if (b == 0) break;
-                fbtext_put_char(&g_state, (uint32_t)b);
+            int done = 0;
+            for (int i = 0; i < 4 && !done; ++i) {
+                for (int j = 0; j < 4 && !done; ++j) {
+                    uint8_t b = (uint8_t)((args[i] >> (j * 8)) & 0xFF);
+                    if (b == 0) { done = 1; break; }
+                    fbtext_put_char(&g_state, (uint32_t)b);
+                }
             }
             break;
         }

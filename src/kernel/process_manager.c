@@ -489,12 +489,7 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     } else if (name_eq(slot->name, "keyboard")) {
         slot->entry_arg1 = IPC_ENDPOINT_NONE;
     } else if (name_eq(slot->name, "vt")) {
-        uint32_t fb_endpoint = serial_get_fb_endpoint();
-        if (fb_endpoint == IPC_ENDPOINT_NONE) {
-            slot->in_use = 0;
-            return -1;
-        }
-        slot->entry_arg0 = fb_endpoint;
+        slot->entry_arg0 = (uint32_t)-1;
         slot->entry_arg1 = g_pm.kbd_endpoint;
     }
 
@@ -601,12 +596,7 @@ pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t *blob, uint32_t blob_siz
         slot->entry_arg0 = g_pm.proc_endpoint;
         slot->entry_arg1 = g_pm.fs_endpoint;
     } else if (name_eq(slot->name, "vt")) {
-        uint32_t fb_endpoint = serial_get_fb_endpoint();
-        if (fb_endpoint == IPC_ENDPOINT_NONE) {
-            slot->in_use = 0;
-            return -1;
-        }
-        slot->entry_arg0 = fb_endpoint;
+        slot->entry_arg0 = (uint32_t)-1;
         slot->entry_arg1 = g_pm.kbd_endpoint;
     }
 

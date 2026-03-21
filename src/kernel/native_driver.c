@@ -229,9 +229,53 @@ nd_early_log_copy(uint8_t *dst, uint32_t offset, uint32_t len)
 }
 
 static int
+nd_shmem_create(uint64_t pages, uint32_t flags, uint32_t *out_id, void **out_ptr)
+{
+    uint64_t phys = 0;
+    if (mm_shared_create(pages, flags, out_id, &phys) != 0) {
+        return -1;
+    }
+    if (mm_shared_retain(*out_id) != 0) {
+        return -1;
+    }
+    if (out_ptr) {
+        *out_ptr = (void *)(uintptr_t)phys;
+    }
+    return 0;
+}
+
+static void *
+nd_shmem_map(uint32_t id)
+{
+    uint64_t base = 0;
+    uint64_t pages = 0;
+    if (mm_shared_get_phys(id, &base, &pages) != 0 || pages == 0) {
+        return 0;
+    }
+    if (mm_shared_retain(id) != 0) {
+        return 0;
+    }
+    return (void *)(uintptr_t)base;
+}
+
+static int
+nd_shmem_unmap(uint32_t id)
+{
+    return mm_shared_release(id);
+}
+
+static uint32_t
+nd_console_ring_id(void)
+{
+    return serial_console_ring_id();
+}
+
+static int
 nd_console_register_fb(uint32_t context_id, uint32_t endpoint)
 {
-    return serial_register_fb_backend(context_id, endpoint);
+    (void)context_id;
+    (void)endpoint;
+    return -1;
 }
 
 static void
@@ -397,9 +441,13 @@ native_driver_start(uint32_t context_id,
     api.sched_yield         = nd_sched_yield;
     api.sched_current_pid   = nd_sched_current_pid;
     api.proc_exit           = nd_proc_exit;
-    api.early_log_size        = nd_early_log_size;
-    api.early_log_copy        = nd_early_log_copy;
-    api.console_register_fb   = nd_console_register_fb;
+    api.early_log_size      = nd_early_log_size;
+    api.early_log_copy      = nd_early_log_copy;
+    api.shmem_create        = nd_shmem_create;
+    api.shmem_map           = nd_shmem_map;
+    api.shmem_unmap         = nd_shmem_unmap;
+    api.console_ring_id     = nd_console_ring_id;
+    api.console_register_fb = nd_console_register_fb;
 
     serial_write("[native-driver] calling initialize\n");
     int rc = entry(&api,

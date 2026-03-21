@@ -51,6 +51,14 @@ The current tree already boots into a usable user-space stack:
 - The process manager also supports native ELF drivers wrapped in WASMOS-APP as
   `FLAG_DRIVER|FLAG_NATIVE`, loaded directly into a process context and called
   through a kernel-provided function-table ABI.
+- Serial-to-framebuffer text handoff now uses a kernel-created shared-memory
+  console ring (1 page). `serial_write` appends bytes into this ring, and the
+  native framebuffer driver maps and drains it, removing the previous
+  serial→framebuffer text IPC message path.
+- Shared-memory primitives now exist for both native-driver ABI
+  (`shmem_create/map/unmap`, `console_ring_id`) and WASM syscalls
+  (`wasmos_shmem_create/map/unmap`) backed by the same kernel shared-memory
+  registry.
 - The CMake-only `kernel_ide` aggregation target indexes kernel sources plus
   selected WASM user-space sources, so it must mirror the libc include root
   used by those components for editor diagnostics.

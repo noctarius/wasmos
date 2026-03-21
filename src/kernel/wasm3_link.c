@@ -824,6 +824,101 @@ m3ApiRawFunction(wasmos_framebuffer_map)
     m3ApiReturn(0);
 }
 
+m3ApiRawFunction(wasmos_shmem_create)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, pages)
+    m3ApiGetArg(int32_t, flags)
+
+    if (pages <= 0) {
+        m3ApiReturn(-1);
+    }
+
+    uint32_t id = 0;
+    uint64_t phys = 0;
+    uint32_t create_flags = (flags > 0)
+                                ? (uint32_t)flags
+                                : (MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE);
+    if (mm_shared_create((uint64_t)(uint32_t)pages, create_flags, &id, &phys) != 0) {
+        m3ApiReturn(-1);
+    }
+    (void)phys;
+    m3ApiReturn((int32_t)id);
+}
+
+m3ApiRawFunction(wasmos_shmem_map)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, id)
+    m3ApiGetArg(int32_t, ptr)
+    m3ApiGetArg(int32_t, size)
+
+    if (id <= 0 || ptr < 0 || size <= 0 || (size & 0xFFF) != 0) {
+        m3ApiReturn(-1);
+    }
+
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    mm_context_t *ctx = mm_context_get(proc->context_id);
+    if (!ctx || ctx->root_table == 0) {
+        m3ApiReturn(-1);
+    }
+
+    uint64_t phys_base = 0;
+    uint64_t shared_pages = 0;
+    if (mm_shared_get_phys((uint32_t)id, &phys_base, &shared_pages) != 0 || shared_pages == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t map_size = (uint64_t)(uint32_t)size;
+    uint64_t needed_size = shared_pages * 0x1000ULL;
+    if (map_size < needed_size) {
+        m3ApiReturn(-1);
+    }
+
+    uint64_t mem_size = (uint64_t)m3_GetMemorySize(runtime);
+    uint64_t off = (uint64_t)(uint32_t)ptr;
+    if (off + map_size > mem_size) {
+        m3ApiReturn(-1);
+    }
+
+    uint64_t virt = (uint64_t)(uintptr_t)m3ApiOffsetToPtr((uint32_t)ptr);
+    if ((virt & 0xFFFULL) != 0) {
+        m3ApiReturn(-1);
+    }
+
+    for (uint64_t i = 0; i < shared_pages; ++i) {
+        uint64_t cur_virt = virt + (i * 0x1000ULL);
+        uint64_t cur_phys = phys_base + (i * 0x1000ULL);
+        (void)paging_unmap_4k_in_root(ctx->root_table, cur_virt);
+        if (paging_map_4k_in_root(ctx->root_table,
+                                  cur_virt,
+                                  cur_phys,
+                                  MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE) < 0) {
+            m3ApiReturn(-1);
+        }
+    }
+
+    if (mm_shared_retain((uint32_t)id) != 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn(0);
+}
+
+m3ApiRawFunction(wasmos_shmem_unmap)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, id)
+
+    if (id <= 0) {
+        m3ApiReturn(-1);
+    }
+    /* FIXME: This currently only releases shared-region ownership/refcount.
+     * It does not restore the previous linear-memory page mappings. */
+    m3ApiReturn(mm_shared_release((uint32_t)id));
+}
+
 m3ApiRawFunction(wasmos_system_halt)
 {
     m3ApiReturnType(int32_t)
@@ -1197,6 +1292,9 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "framebuffer_info", "i(ii)", wasmos_framebuffer_info);
     rc |= wasm3_link_raw(module, "wasmos", "framebuffer_map", "i(ii)", wasmos_framebuffer_map);
     rc |= wasm3_link_raw(module, "wasmos", "framebuffer_pixel", "i(iii)", wasmos_framebuffer_pixel);
+    rc |= wasm3_link_raw(module, "wasmos", "shmem_create", "i(ii)", wasmos_shmem_create);
+    rc |= wasm3_link_raw(module, "wasmos", "shmem_map", "i(iii)", wasmos_shmem_map);
+    rc |= wasm3_link_raw(module, "wasmos", "shmem_unmap", "i(i)", wasmos_shmem_unmap);
     rc |= wasm3_link_raw(module, "wasmos", "serial_register", "i(i)", wasmos_serial_register);
     rc |= wasm3_link_raw(module, "wasmos", "input_push", "i(i)", wasmos_input_push);
     rc |= wasm3_link_raw(module, "wasmos", "input_read", "i()", wasmos_input_read);

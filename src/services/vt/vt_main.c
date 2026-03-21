@@ -219,18 +219,26 @@ vt_put_char_tty0(vt_tty_t *tty, uint8_t ch)
             tty->cursor_col = 0;
         } else if (c == '\n') {
             tty->cursor_col = 0;
-            if (tty->cursor_row + 1u < VT_ROWS_DEFAULT) {
+            if (tty->cursor_row + 1u >= VT_ROWS_DEFAULT) {
+                vt_scroll_up(tty);
+                tty->cursor_row = (uint16_t)(VT_ROWS_DEFAULT - 1u);
+            } else {
                 tty->cursor_row++;
             }
         } else if (c == '\b') {
             if (tty->cursor_col > 0) {
                 tty->cursor_col--;
             }
+            vt_store_cell(tty, tty->cursor_row, tty->cursor_col, ' ');
         } else {
+            vt_store_cell(tty, tty->cursor_row, tty->cursor_col, (uint32_t)c);
             tty->cursor_col++;
             if (tty->cursor_col >= VT_COLS_DEFAULT) {
                 tty->cursor_col = 0;
-                if (tty->cursor_row + 1u < VT_ROWS_DEFAULT) {
+                if (tty->cursor_row + 1u >= VT_ROWS_DEFAULT) {
+                    vt_scroll_up(tty);
+                    tty->cursor_row = (uint16_t)(VT_ROWS_DEFAULT - 1u);
+                } else {
                     tty->cursor_row++;
                 }
             }
@@ -398,17 +406,18 @@ vt_switch_tty(uint32_t tty_index)
         return 0;
     }
 
-    (void)vt_fb_send(FBTEXT_IPC_CLEAR_REQ, 0, 0, 0, 0);
-
     if (tty_index == 0) {
+        /* Keep ring output paused until replay is complete. */
+        vt_fb_console_mode(0);
+        (void)vt_fb_send(FBTEXT_IPC_CLEAR_REQ, 0, 0, 0, 0);
         vt_replay_tty(tty_index);
         vt_fb_console_mode(1);
-        /* FIXME: tty0 reflects kernel serial output via console ring and does
-         * not yet have a VT-owned full-screen replay buffer. */
         return 0;
     }
 
+    /* Disable ring first to avoid immediate repaint races from tty0 output. */
     vt_fb_console_mode(0);
+    (void)vt_fb_send(FBTEXT_IPC_CLEAR_REQ, 0, 0, 0, 0);
     /* FIXME: replay currently repaints the full 80x25 virtual grid even if
      * only a small number of cells changed. */
     vt_replay_tty(tty_index);

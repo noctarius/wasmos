@@ -48,7 +48,8 @@ static int32_t  g_fb_ep = -1;
 static vt_tty_t g_ttys[VT_MAX_TTYS];
 static uint32_t g_active_tty = 0;
 static int32_t  g_tty_reader_ep[VT_MAX_TTYS] = { -1, -1, -1, -1 };
-static uint8_t  g_alt_down = 0;
+static uint8_t  g_ctrl_down = 0;
+static uint8_t  g_shift_down = 0;
 
 static uint32_t
 vt_cell_index(uint16_t row, uint16_t col)
@@ -491,8 +492,12 @@ vt_input_handle_char(uint32_t tty_index, uint8_t ch)
 static void
 vt_handle_key_notify(int32_t scancode, int32_t keyup)
 {
-    if (scancode == 0x38) { /* Left Alt */
-        g_alt_down = keyup ? 0 : 1;
+    if (scancode == 0x1D) { /* Ctrl */
+        g_ctrl_down = keyup ? 0 : 1;
+        return;
+    }
+    if (scancode == 0x2A || scancode == 0x36) { /* Left/Right Shift */
+        g_shift_down = keyup ? 0 : 1;
         return;
     }
 
@@ -500,7 +505,7 @@ vt_handle_key_notify(int32_t scancode, int32_t keyup)
         return;
     }
 
-    if (g_alt_down) {
+    if (g_ctrl_down && g_shift_down) {
         /* Set 1 scancodes: F1..F4 => 0x3B..0x3E map to tty0..tty3. */
         if (scancode >= 0x3B && scancode <= 0x3E) {
             (void)vt_switch_tty((uint32_t)(scancode - 0x3B));

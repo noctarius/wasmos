@@ -77,7 +77,8 @@ The current tree already boots into a usable user-space stack:
   input over `VT_IPC_READ_REQ`. CLI remains the owner of line editing/echo;
   serial console reads are retained as fallback for headless/automated test
   flows.
-- VT keyboard hotkeys support `Alt+F1..F4` to switch directly to `tty0..tty3`.
+- VT keyboard hotkeys support `Ctrl+Shift+F1..F4` to switch directly to
+  `tty0..tty3`.
 - Keyboard event delivery into VT is now explicit fire-and-forget
   (`KBD_IPC_KEY_NOTIFY` with `request_id = 0`), and VT/CLI output transport
   loops now use bounded `IPC_ERR_FULL` retries so queue backpressure degrades

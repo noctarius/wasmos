@@ -59,6 +59,10 @@ The current tree already boots into a usable user-space stack:
   (`shmem_create/map/unmap`, `console_ring_id`) and WASM syscalls
   (`wasmos_shmem_create/map/unmap`) backed by the same kernel shared-memory
   registry.
+- The VT WASM service now maintains explicit per-TTY state (4 tty slots),
+  supports active-tty selection (`VT_IPC_SWITCH_TTY`), and stores per-tty
+  attributes (`VT_IPC_SET_ATTR_REQ`) while output remains routed through
+  `wasmos_console_write` into the serial/console-ring path.
 - The CMake-only `kernel_ide` aggregation target indexes kernel sources plus
   selected WASM user-space sources, so it must mirror the libc include root
   used by those components for editor diagnostics.

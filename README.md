@@ -67,6 +67,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   text IPC forwarding)
 - shared-memory APIs for native drivers (`shmem_create/map/unmap`,
   `console_ring_id`) and WASM syscalls (`wasmos_shmem_create/map/unmap`)
+- VT service now tracks per-TTY state (4 slots), including active-TTY switching
+  via `VT_IPC_SWITCH_TTY` and per-TTY attributes via `VT_IPC_SET_ATTR_REQ`
+  while keeping console output routed through `wasmos_console_write`
 - physical frame allocator and per-process CR3-managed paging
 - preemptive round-robin scheduler driven by PIT IRQ0
 - kernel IPC transport with endpoint ownership checks

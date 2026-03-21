@@ -330,11 +330,15 @@ vt_switch_tty(uint32_t tty_index)
     if (tty_index >= VT_MAX_TTYS) {
         return -1;
     }
-    if (g_fb_ep < 0) {
-        return (tty_index == 0) ? 0 : -1;
-    }
 
     g_active_tty = tty_index;
+
+    /* Allow logical tty switching even when framebuffer control is unavailable
+     * (startup races/headless mode). This keeps VT/CLI state consistent and
+     * avoids reporting spurious switch failures to user-space. */
+    if (g_fb_ep < 0) {
+        return 0;
+    }
 
     if (tty_index == 0) {
         vt_fb_console_mode(1);

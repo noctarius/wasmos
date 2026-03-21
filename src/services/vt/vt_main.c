@@ -48,6 +48,9 @@ static int32_t  g_fb_ep = -1;
 static vt_tty_t g_ttys[VT_MAX_TTYS];
 static uint32_t g_active_tty = 0;
 static int32_t  g_tty_reader_ep[VT_MAX_TTYS] = { -1, -1, -1, -1 };
+static int32_t  g_tty_writer_ep[VT_MAX_TTYS] = { -1, -1, -1, -1 };
+static uint32_t g_switch_generation = 1;
+static uint8_t  g_switch_barrier = 0;
 static uint8_t  g_ctrl_down = 0;
 static uint8_t  g_shift_down = 0;
 
@@ -55,15 +58,6 @@ static uint32_t
 vt_cell_index(uint16_t row, uint16_t col)
 {
     return (uint32_t)row * VT_COLS_DEFAULT + (uint32_t)col;
-}
-
-static vt_tty_t *
-vt_active_tty(void)
-{
-    if (g_active_tty >= VT_MAX_TTYS) {
-        g_active_tty = 0;
-    }
-    return &g_ttys[g_active_tty];
 }
 
 static uint16_t
@@ -253,7 +247,7 @@ vt_put_char_virtual(vt_tty_t *tty, uint32_t tty_index, uint8_t ch)
     if (!tty) {
         return;
     }
-    uint8_t render_now = (tty_index == g_active_tty);
+    uint8_t render_now = (tty_index == g_active_tty) && !g_switch_barrier;
 
     if (ch == '\r') {
         tty->cursor_col = 0;
@@ -352,6 +346,9 @@ vt_tty_index_for_source(int32_t source_ep)
         return -1;
     }
     for (uint32_t i = 0; i < VT_MAX_TTYS; ++i) {
+        if (g_tty_writer_ep[i] == source_ep) {
+            return (int32_t)i;
+        }
         if (g_tty_reader_ep[i] == source_ep) {
             return (int32_t)i;
         }
@@ -409,6 +406,8 @@ vt_init_ttys(void)
         }
     }
     g_active_tty = 0;
+    g_switch_generation = 1;
+    g_switch_barrier = 0;
 }
 
 static int32_t
@@ -418,12 +417,15 @@ vt_switch_tty(uint32_t tty_index)
         return -1;
     }
 
+    g_switch_barrier = 1;
+    g_switch_generation++;
     g_active_tty = tty_index;
 
     /* Allow logical tty switching even when framebuffer control is unavailable
      * (startup races/headless mode). This keeps VT/CLI state consistent and
      * avoids reporting spurious switch failures to user-space. */
     if (g_fb_ep < 0) {
+        g_switch_barrier = 0;
         return 0;
     }
 
@@ -433,6 +435,7 @@ vt_switch_tty(uint32_t tty_index)
         (void)vt_fb_send(FBTEXT_IPC_CLEAR_REQ, 0, 0, 0, 0);
         vt_replay_tty(tty_index);
         vt_fb_console_mode(1);
+        g_switch_barrier = 0;
         return 0;
     }
 
@@ -442,6 +445,7 @@ vt_switch_tty(uint32_t tty_index)
     /* FIXME: replay currently repaints the full 80x25 virtual grid even if
      * only a small number of cells changed. */
     vt_replay_tty(tty_index);
+    g_switch_barrier = 0;
     return 0;
 }
 
@@ -601,9 +605,11 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
         case VT_IPC_WRITE_REQ: {
             int32_t tty_index = vt_tty_index_for_source(msg.source);
             if (tty_index < 0 || tty_index >= (int32_t)VT_MAX_TTYS) {
-                /* FIXME: source endpoint should explicitly register tty
-                 * ownership before writes; fallback keeps compatibility. */
-                tty_index = (int32_t)g_active_tty;
+                break;
+            }
+            if ((uint32_t)msg.request_id != g_switch_generation) {
+                /* Drop stale write chunks queued before the last tty switch. */
+                break;
             }
             /* FIXME: Investigate remaining framebuffer artifact where tty
              * switches can still show duplicated/misaligned prompts after
@@ -619,17 +625,17 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
                 }
                 vt_process_byte((uint32_t)tty_index, tty, b);
             }
-            if (msg.source >= 0 && msg.request_id != 0) {
-                wasmos_ipc_reply(msg.source, g_vt_ep,
-                                 VT_IPC_RESP, msg.request_id, 0, 0);
-            }
             break;
         }
 
         case VT_IPC_SET_ATTR_REQ: {
             int32_t tty_index = vt_tty_index_for_source(msg.source);
             if (tty_index < 0 || tty_index >= (int32_t)VT_MAX_TTYS) {
-                tty_index = (int32_t)g_active_tty;
+                if (msg.source >= 0 && msg.request_id != 0) {
+                    wasmos_ipc_reply(msg.source, g_vt_ep,
+                                     VT_IPC_ERROR, msg.request_id, -1, 0);
+                }
+                break;
             }
             vt_tty_t *tty = &g_ttys[(uint32_t)tty_index];
             uint8_t fg = (uint8_t)(msg.arg0 & 0xFF);
@@ -655,7 +661,7 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
                 wasmos_ipc_reply(msg.source, g_vt_ep,
                                  (sw == 0) ? VT_IPC_RESP : VT_IPC_ERROR,
                                  msg.request_id,
-                                 sw,
+                                 (sw == 0) ? (int32_t)g_switch_generation : sw,
                                  (int32_t)g_active_tty);
             }
             break;
@@ -666,10 +672,33 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
                 wasmos_ipc_reply(msg.source, g_vt_ep,
                                  VT_IPC_RESP,
                                  msg.request_id,
-                                 0,
+                                 (int32_t)g_switch_generation,
                                  (int32_t)g_active_tty);
             }
             break;
+
+        case VT_IPC_REGISTER_WRITER: {
+            if (msg.source < 0 || msg.request_id == 0) {
+                break;
+            }
+            int32_t tty_id = msg.arg0;
+            if (tty_id < 0 || tty_id >= (int32_t)VT_MAX_TTYS) {
+                wasmos_ipc_reply(msg.source, g_vt_ep,
+                                 VT_IPC_ERROR, msg.request_id, -1, 0);
+                break;
+            }
+            uint32_t idx = (uint32_t)tty_id;
+            if (g_tty_writer_ep[idx] >= 0 && g_tty_writer_ep[idx] != msg.source) {
+                wasmos_ipc_reply(msg.source, g_vt_ep,
+                                 VT_IPC_ERROR, msg.request_id, -1, 0);
+                break;
+            }
+            g_tty_writer_ep[idx] = msg.source;
+            wasmos_ipc_reply(msg.source, g_vt_ep,
+                             VT_IPC_RESP, msg.request_id,
+                             (int32_t)g_switch_generation, tty_id);
+            break;
+        }
 
         case VT_IPC_READ_REQ: {
             if (msg.source < 0 || msg.request_id == 0) {

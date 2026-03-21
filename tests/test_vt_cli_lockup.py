@@ -61,6 +61,21 @@ class VtCliLockupRegressionTests(unittest.TestCase):
             msg=f"Detected duplicated command echo for 'ps'.\n--- tail ---\n{self.session.tail()}\n",
         )
 
+    def test_tty_switch_stress_with_output_spam(self):
+        # nographic CI path cannot inject Ctrl+Shift+Fn scancodes directly,
+        # so stress the same VT switch/replay/write ordering via `tty N`.
+        plan = [
+            ("tty 2", b"wamos> "),
+            ("help", b"commands:"),
+            ("tty 3", b"wamos> "),
+            ("ps", b"processes:"),
+            ("tty 1", b"wamos> "),
+            ("ls", b"apps"),
+        ]
+        for _ in range(4):
+            for cmd, needle in plan:
+                self._cmd_expect_prompt(cmd, needle, timeout_s=15)
+
 
 if __name__ == "__main__":
     unittest.main()

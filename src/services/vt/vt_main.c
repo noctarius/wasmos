@@ -344,10 +344,6 @@ vt_replay_tty(uint32_t tty_index)
 
     for (uint16_t row = 0; row < VT_ROWS_DEFAULT; ++row) {
         for (uint16_t col = 0; col < VT_COLS_DEFAULT; ++col) {
-            uint32_t idx = vt_cell_index(row, col);
-            if (tty->cells[idx].ch == 0) {
-                continue;
-            }
             vt_render_cell(tty, row, col);
         }
     }

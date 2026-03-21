@@ -123,7 +123,11 @@ console_write(const char *s)
             }
         }
     }
-    putsn(s, len);
+    /* tty0 is the system console (serial + ring). For tty1+ we render through
+     * VT only so framebuffer output is not duplicated by serial mirroring. */
+    if (g_active_tty <= 0 || g_vt_endpoint < 0 || g_reply_endpoint < 0) {
+        putsn(s, len);
+    }
 }
 
 static void

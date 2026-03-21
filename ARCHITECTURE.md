@@ -77,6 +77,10 @@ The current tree already boots into a usable user-space stack:
   (`KBD_IPC_KEY_NOTIFY` with `request_id = 0`), and VT/CLI output transport
   loops now use bounded `IPC_ERR_FULL` retries so queue backpressure degrades
   output before it can freeze the interactive path.
+- Fatal CPU exceptions still log to serial and now also render an in-kernel
+  framebuffer panic screen (black background) with key crash diagnostics
+  including exception registers, process identity, stack bounds, CR3/kernel
+  text range, and framebuffer geometry/base.
 - The CMake-only `kernel_ide` aggregation target indexes kernel sources plus
   selected WASM user-space sources, so it must mirror the libc include root
   used by those components for editor diagnostics.

@@ -81,9 +81,10 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - sysinit now keeps one CLI instance per VT tty (`tty1..tty3`), with process
   manager assigning each CLI a home tty; only the foreground tty's CLI consumes
   keyboard input
-- VT now owns keyboard input routing and per-tty line discipline state
-  (`echo` + canonical buffering); CLIs read input via `VT_IPC_READ_REQ`, while
-  serial input remains a fallback path for headless/automation flows
+- VT now owns keyboard input routing and delivers per-tty raw input via
+  `VT_IPC_READ_REQ`; CLI owns line editing/echo, with serial input retained as
+  fallback for headless/automation flows
+- VT supports keyboard hotkey switching with `Alt+F1..F4` mapped to `tty0..tty3`
 - keyboard notify events use fire-and-forget IPC (`request_id = 0`) and VT/CLI
   output paths now use bounded queue-full retries so transient framebuffer/IPC
   backpressure does not hard-lock interactive input loops

@@ -1,5 +1,7 @@
 #include <stdarg.h>
+#include "console_ring.h"
 #include "ipc.h"
+#include "memory.h"
 #include "serial.h"
 #include "stdio.h"
 
@@ -83,12 +85,8 @@ static uint32_t g_serial_remote_reply_endpoint = IPC_ENDPOINT_NONE;
 static uint32_t g_serial_remote_next_request_id = 1;
 static uint32_t g_serial_remote_pending_read_request = 0;
 
-/* Optional framebuffer console backend.  When registered, every transmitted
- * string is also sent to the framebuffer driver in 4-byte chunks via
- * FBTEXT_IPC_PUT_STRING_REQ so live output appears on screen.
- * fbtext_put_char handles '\n' natively, so no \r injection is needed. */
-#define FBTEXT_IPC_PUT_STRING_REQ 0x605
-static uint32_t g_fb_endpoint = IPC_ENDPOINT_NONE;
+static uint32_t g_console_ring_shmem_id = 0;
+static console_ring_t *g_console_ring = 0;
 
 /* Keyboard input ring — fed by vt via serial_input_push; polled via
  * the wasmos_input_read kernel import before falling back to COM1. */
@@ -101,6 +99,26 @@ static void serial_remote_reset(void) {
     g_serial_remote_endpoint = IPC_ENDPOINT_NONE;
     g_serial_remote_pending_read_request = 0;
     g_serial_remote_next_request_id = 1;
+}
+
+static void serial_ring_init(void) {
+    if (g_console_ring) {
+        return;
+    }
+    uint64_t phys_base = 0;
+    if (mm_shared_create(1, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE,
+                         &g_console_ring_shmem_id, &phys_base) != 0) {
+        return;
+    }
+    if (mm_shared_retain(g_console_ring_shmem_id) != 0) {
+        g_console_ring_shmem_id = 0;
+        return;
+    }
+    g_console_ring = (console_ring_t *)(uintptr_t)phys_base;
+    g_console_ring->write_pos = 0;
+    g_console_ring->read_pos = 0;
+    g_console_ring->capacity = CONSOLE_RING_DATA_SIZE;
+    g_console_ring->_pad = 0;
 }
 
 static uint32_t serial_remote_next_request_id(void) {
@@ -214,17 +232,18 @@ int serial_input_read(uint8_t *out) {
     return 1;
 }
 
-int serial_register_fb_backend(uint32_t context_id, uint32_t endpoint) {
-    (void)context_id;
-    if (endpoint == IPC_ENDPOINT_NONE) {
-        return -1;
+uint32_t serial_console_ring_id(void) {
+    if (g_console_ring_shmem_id == 0) {
+        serial_ring_init();
     }
-    g_fb_endpoint = endpoint;
-    return 0;
+    return g_console_ring_shmem_id;
 }
 
-uint32_t serial_get_fb_endpoint(void) {
-    return g_fb_endpoint;
+void *serial_console_ring_ptr(void) {
+    if (!g_console_ring) {
+        serial_ring_init();
+    }
+    return g_console_ring;
 }
 
 int serial_register_remote_driver(uint32_t endpoint) {
@@ -268,35 +287,20 @@ static void serial_put_internal(char c) {
     }
 }
 
-static void serial_fb_transmit_string(const char *s) {
-    if (g_fb_endpoint == IPC_ENDPOINT_NONE || !s) {
+static void serial_ring_write(const char *s) {
+    if (!g_console_ring || !s) {
         return;
     }
-    /* Pack 4 bytes per arg (16 bytes per message) to reduce IPC message count
-     * by 4×, keeping a 14-process ps tree (~350 chars) within the depth-32
-     * queue (~22 messages vs ~88 at 4 bytes/message). */
-    while (*s) {
-        ipc_message_t msg = {
-            .type        = FBTEXT_IPC_PUT_STRING_REQ,
-            .source      = IPC_ENDPOINT_NONE,
-            .destination = g_fb_endpoint,
-            .request_id  = 0,
-            .arg0        = 0,
-            .arg1        = 0,
-            .arg2        = 0,
-            .arg3        = 0,
-        };
-        uint32_t *args = &msg.arg0;
-        for (int i = 0; i < 4; ++i) {
-            uint32_t word = 0;
-            for (int j = 0; j < 4 && *s; ++j) {
-                word |= (uint32_t)(uint8_t)*s++ << (j * 8);
-            }
-            args[i] = word;
-            if (!*s) { break; }
-        }
-        (void)ipc_send_from(IPC_CONTEXT_KERNEL, g_fb_endpoint, &msg);
+    uint32_t cap = g_console_ring->capacity;
+    uint32_t wp = g_console_ring->write_pos;
+    if (cap == 0) {
+        return;
     }
+    while (*s) {
+        g_console_ring->data[wp % cap] = (uint8_t)*s++;
+        wp++;
+    }
+    g_console_ring->write_pos = wp;
 }
 
 static void serial_transmit(char c) {
@@ -305,8 +309,8 @@ static void serial_transmit(char c) {
      * string longer than 32 bytes; chars beyond slot 32 fall back to direct
      * COM1 while the earlier chars are still queued, inverting their on-wire
      * order.  The remote endpoint is retained for read requests only.
-     * Framebuffer output is batched string-by-string in serial_write_unlocked
-     * via serial_fb_transmit_string to avoid the same overflow. */
+     * The framebuffer driver consumes a shared-memory console ring instead of
+     * per-character IPC forwarding from serial_write. */
     serial_put_internal(c);
 }
 
@@ -314,6 +318,7 @@ void serial_init(void) {
     if (g_serial_driver && g_serial_driver->init) {
         g_serial_driver->init();
     }
+    serial_ring_init();
 }
 
 void serial_write(const char *s) {
@@ -373,10 +378,11 @@ void serial_write_unlocked(const char *s) {
     if (!s) {
         return;
     }
+    if (!g_console_ring) {
+        serial_ring_init();
+    }
     preempt_disable();
-    /* Batch-send the string to the framebuffer before iterating per-char.
-     * fbtext_put_char handles '\n' natively so no \r expansion is needed. */
-    serial_fb_transmit_string(s);
+    serial_ring_write(s);
     for (const char *p = s; *p; ++p) {
         if (*p == '\n') {
             serial_transmit('\r');

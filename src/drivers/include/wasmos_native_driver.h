@@ -74,10 +74,19 @@ typedef struct wasmos_driver_api {
     uint32_t (*early_log_size)(void);
     void     (*early_log_copy)(uint8_t *dst, uint32_t offset, uint32_t len);
 
-    /* Console framebuffer backend — after the framebuffer driver creates its
-     * IPC endpoint, it calls this to register itself as a secondary console
-     * output.  Subsequent serial_write calls also deliver FBTEXT_IPC_PUT_CHAR_REQ
-     * messages to the registered endpoint so live output appears on screen. */
+    /* Shared memory — general facility for sharing pages between processes.
+     * shmem_create allocates pages and returns id plus direct pointer.
+     * shmem_map returns identity-mapped kernel pointer for native drivers.
+     * shmem_unmap releases this process's mapping reference. */
+    int      (*shmem_create)(uint64_t pages, uint32_t flags,
+                             uint32_t *out_id, void **out_ptr);
+    void    *(*shmem_map)(uint32_t id);
+    int      (*shmem_unmap)(uint32_t id);
+
+    /* Returns the shmem id of the kernel console text ring. */
+    uint32_t (*console_ring_id)(void);
+
+    /* Deprecated: framebuffer registration moved to console shared ring. */
     int      (*console_register_fb)(uint32_t context_id, uint32_t endpoint);
 } wasmos_driver_api_t;
 

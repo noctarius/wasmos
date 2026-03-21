@@ -3,6 +3,16 @@
 
 #include <stdint.h>
 
+#define CONSOLE_RING_DATA_SIZE 4080u
+
+typedef struct {
+    volatile uint32_t write_pos;
+    volatile uint32_t read_pos;
+    uint32_t capacity;
+    uint32_t _pad;
+    uint8_t data[CONSOLE_RING_DATA_SIZE];
+} console_ring_t;
+
 enum {
     WASM_CHARDEV_IPC_READ_REQ = 0x100,
     WASM_CHARDEV_IPC_WRITE_REQ = 0x101,
@@ -61,8 +71,6 @@ enum {
     FBTEXT_IPC_CURSOR_SET_REQ  = 0x601,
     FBTEXT_IPC_SCROLL_REQ      = 0x602,
     FBTEXT_IPC_CLEAR_REQ       = 0x603,
-    FBTEXT_IPC_PUT_CHAR_REQ    = 0x604,  /* arg0=codepoint; driver calls fbtext_put_char */
-    FBTEXT_IPC_PUT_STRING_REQ  = 0x605,  /* arg0..arg3: 4 bytes each, little-endian; 0x00 byte = end */
     FBTEXT_IPC_RESP            = 0x680,
     FBTEXT_IPC_ERROR           = 0x6FF
 };

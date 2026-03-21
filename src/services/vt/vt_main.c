@@ -6,14 +6,14 @@
 /*
  * vt — Phase 2 virtual terminal service.
  *
- * Sits between clients and the framebuffer driver:
+ * Sits between clients and the serial/console path:
  *   - Exposes a VT_IPC_WRITE_REQ endpoint that any process can write text to.
  *   - Strips ANSI/VT100 escape sequences so raw control codes never reach the
- *     cell renderer.
- *   - Forwards printable bytes to the framebuffer as FBTEXT_IPC_PUT_CHAR_REQ
- *     (fire-and-forget; framebuffer handles cursor/scroll internally).
+ *     serial console ring renderer.
+ *   - Forwards printable bytes via wasmos_console_write so serial.c writes
+ *     into the shared console ring consumed by the framebuffer driver.
  *   - Subscribes to the keyboard driver (KBD_IPC_SUBSCRIBE_REQ) and echoes
- *     key-down events to the framebuffer as local echo.
+ *     key-down events through the kernel input ring.
  *
  * IPC protocol — VT_IPC_WRITE_REQ:
  *   arg0..arg3: up to four bytes of payload, one per field (low 8 bits).
@@ -39,7 +39,6 @@ typedef enum {
     ESC_CSI,
 } esc_state_t;
 
-static int32_t     g_fb_ep  = -1;
 static int32_t     g_vt_ep  = -1;
 static int32_t     g_kbd_ep = -1;
 static esc_state_t g_esc    = ESC_NORMAL;
@@ -47,16 +46,8 @@ static esc_state_t g_esc    = ESC_NORMAL;
 static void
 vt_put_char(uint32_t cp)
 {
-    if (g_fb_ep < 0) {
-        return;
-    }
-    wasmos_ipc_send(
-        g_fb_ep,
-        g_vt_ep,
-        FBTEXT_IPC_PUT_CHAR_REQ,
-        0,
-        (int32_t)cp,
-        0, 0, 0);
+    char ch = (char)(cp & 0xFFu);
+    (void)wasmos_console_write((int32_t)(uintptr_t)&ch, 1);
 }
 
 static void
@@ -177,10 +168,10 @@ vt_handle_key_notify(int32_t scancode, int32_t keyup)
 WASMOS_WASM_EXPORT int32_t
 initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3)
 {
+    (void)fb_endpoint;
     (void)arg2;
     (void)arg3;
 
-    g_fb_ep  = fb_endpoint;
     g_kbd_ep = kbd_endpoint;
 
     g_vt_ep = wasmos_ipc_create_endpoint();

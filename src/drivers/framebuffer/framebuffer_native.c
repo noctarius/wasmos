@@ -5,11 +5,11 @@
 /*
  * Native framebuffer driver — Phase 1 virtual terminal.
  *
- * Extends the original gradient demo into a text-rendering IPC server:
+ * Extends the original gradient demo into a text-rendering server:
  *   1. Probe and map the physical framebuffer.
  *   2. Initialise the cell grid and font.
  *   3. Replay the kernel early-log ring buffer so the full boot log appears.
- *   4. Enter a yield-poll IPC loop serving FBTEXT_IPC_* messages.
+ *   4. Drain the shared serial console ring and serve FBTEXT control IPC.
  *
  * The internal rendering code lives in render.c; this file owns the driver
  * lifecycle, early-log replay, and the IPC server loop.
@@ -127,6 +127,25 @@ replay_early_log(wasmos_driver_api_t *api)
     }
 }
 
+static int
+drain_console_ring(console_ring_t *ring)
+{
+    if (!ring || ring->capacity == 0) {
+        return 0;
+    }
+    uint32_t cap = ring->capacity;
+    uint32_t rp = ring->read_pos;
+    uint32_t wp = ring->write_pos;
+    int drained = 0;
+    while (rp != wp) {
+        fbtext_put_char(&g_state, ring->data[rp % cap]);
+        rp++;
+        drained = 1;
+    }
+    ring->read_pos = rp;
+    return drained;
+}
+
 int
 initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
 {
@@ -197,20 +216,24 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
         return -1;
     }
 
+    console_ring_t *ring = (console_ring_t *)api->shmem_map(api->console_ring_id());
+    if (!ring) {
+        write_str(api, "[framebuffer] console ring map failed\n");
+        return -1;
+    }
+
     /* Derive our context id from current pid (context_id == pid for native). */
     uint32_t ctx = api->sched_current_pid();
 
-    /* Register as the kernel's framebuffer console backend so all subsequent
-     * serial_write calls also deliver PUT_CHAR messages to this endpoint. */
-    api->console_register_fb(ctx, ep);
-
-    /* IPC server loop.  nd_ipc_recv returns ND_IPC_EMPTY when the queue is
-     * empty; yield and retry rather than busy-spinning. */
+    /* Main loop: drain console ring, then process control IPC. */
     nd_ipc_message_t msg;
     for (;;) {
+        int had_ring = drain_console_ring(ring);
         int rc = api->ipc_recv(ctx, ep, &msg);
         if (rc == ND_IPC_EMPTY) {
-            api->sched_yield();
+            if (!had_ring) {
+                api->sched_yield();
+            }
             continue;
         }
         if (rc != ND_IPC_OK) {
@@ -258,23 +281,6 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
         case FBTEXT_IPC_CLEAR_REQ:
             fbtext_clear(&g_state);
             break;
-        case FBTEXT_IPC_PUT_CHAR_REQ:
-            fbtext_put_char(&g_state, msg.arg0);
-            break;
-        case FBTEXT_IPC_PUT_STRING_REQ: {
-            /* Each arg carries up to 4 bytes, packed little-endian.
-             * A zero byte signals end of string. */
-            uint32_t args[4] = { msg.arg0, msg.arg1, msg.arg2, msg.arg3 };
-            int done = 0;
-            for (int i = 0; i < 4 && !done; ++i) {
-                for (int j = 0; j < 4 && !done; ++j) {
-                    uint8_t b = (uint8_t)((args[i] >> (j * 8)) & 0xFF);
-                    if (b == 0) { done = 1; break; }
-                    fbtext_put_char(&g_state, (uint32_t)b);
-                }
-            }
-            break;
-        }
         default:
             resp.type = FBTEXT_IPC_ERROR;
             resp.arg0 = (uint32_t)-1;

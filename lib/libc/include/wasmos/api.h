@@ -20,6 +20,8 @@ extern int32_t wasmos_ipc_send(int32_t destination_endpoint,
     WASMOS_WASM_IMPORT("wasmos", "ipc_send");
 extern int32_t wasmos_ipc_recv(int32_t endpoint)
     WASMOS_WASM_IMPORT("wasmos", "ipc_recv");
+extern int32_t wasmos_ipc_try_recv(int32_t endpoint)
+    WASMOS_WASM_IMPORT("wasmos", "ipc_try_recv");
 extern int32_t wasmos_ipc_wait(int32_t endpoint)
     WASMOS_WASM_IMPORT("wasmos", "ipc_wait");
 extern int32_t wasmos_ipc_notify(int32_t endpoint)
@@ -97,6 +99,12 @@ extern int32_t wasmos_framebuffer_map(int32_t ptr, int32_t size)
     WASMOS_WASM_IMPORT("wasmos", "framebuffer_map");
 extern int32_t wasmos_framebuffer_pixel(int32_t x, int32_t y, int32_t color)
     WASMOS_WASM_IMPORT("wasmos", "framebuffer_pixel");
+extern int32_t wasmos_shmem_create(int32_t pages, int32_t flags)
+    WASMOS_WASM_IMPORT("wasmos", "shmem_create");
+extern int32_t wasmos_shmem_map(int32_t id, int32_t ptr, int32_t size)
+    WASMOS_WASM_IMPORT("wasmos", "shmem_map");
+extern int32_t wasmos_shmem_unmap(int32_t id)
+    WASMOS_WASM_IMPORT("wasmos", "shmem_unmap");
 /* vt keyboard input integration */
 extern int32_t wasmos_input_push(int32_t ch)
     WASMOS_WASM_IMPORT("wasmos", "input_push");

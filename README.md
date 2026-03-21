@@ -62,6 +62,11 @@ IMPORTANT: Create a git commit after each prompt iteration.
   kernel and native drivers
 - a native C framebuffer driver that maps the physical framebuffer into driver
   space and paints at native speed without wasm3
+- kernel-owned 1-page shared-memory console ring: `serial_write` appends text
+  and the native framebuffer driver drains it directly (no serial→framebuffer
+  text IPC forwarding)
+- shared-memory APIs for native drivers (`shmem_create/map/unmap`,
+  `console_ring_id`) and WASM syscalls (`wasmos_shmem_create/map/unmap`)
 - physical frame allocator and per-process CR3-managed paging
 - preemptive round-robin scheduler driven by PIT IRQ0
 - kernel IPC transport with endpoint ownership checks

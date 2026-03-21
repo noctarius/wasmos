@@ -63,6 +63,10 @@ The current tree already boots into a usable user-space stack:
   supports active-tty selection (`VT_IPC_SWITCH_TTY`), and stores per-tty
   attributes (`VT_IPC_SET_ATTR_REQ`) while output remains routed through
   `wasmos_console_write` into the serial/console-ring path.
+- VT tty roles are now split intentionally: `tty0` reflects the system
+  serial/console-ring output, while `tty1+` are VT-managed framebuffers.
+  Framebuffer control IPC now includes a console-mode toggle so VT can disable
+  console-ring drain when non-zero ttys are active and restore it on `tty0`.
 - The CMake-only `kernel_ide` aggregation target indexes kernel sources plus
   selected WASM user-space sources, so it must mirror the libc include root
   used by those components for editor diagnostics.

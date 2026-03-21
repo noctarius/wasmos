@@ -3,6 +3,7 @@
 #include "paging.h"
 #include "physmem.h"
 #include "process.h"
+#include "process_manager.h"
 #include "serial.h"
 #include "framebuffer.h"
 #include "ipc.h"
@@ -274,8 +275,11 @@ static int
 nd_console_register_fb(uint32_t context_id, uint32_t endpoint)
 {
     (void)context_id;
-    (void)endpoint;
-    return -1;
+    if (endpoint == IPC_ENDPOINT_NONE) {
+        return -1;
+    }
+    process_manager_set_framebuffer_endpoint(endpoint);
+    return 0;
 }
 
 static void

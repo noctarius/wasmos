@@ -64,6 +64,7 @@ typedef struct {
     uint32_t fs_endpoint;
     uint32_t block_endpoint;
     uint32_t kbd_endpoint;
+    uint32_t fb_endpoint;
     uint32_t fs_reply_endpoint;
     uint32_t fs_request_id;
     uint8_t started;
@@ -489,7 +490,9 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     } else if (name_eq(slot->name, "keyboard")) {
         slot->entry_arg1 = IPC_ENDPOINT_NONE;
     } else if (name_eq(slot->name, "vt")) {
-        slot->entry_arg0 = (uint32_t)-1;
+        slot->entry_arg0 = (g_pm.fb_endpoint != IPC_ENDPOINT_NONE)
+                               ? g_pm.fb_endpoint
+                               : (uint32_t)-1;
         slot->entry_arg1 = g_pm.kbd_endpoint;
     }
 
@@ -596,7 +599,9 @@ pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t *blob, uint32_t blob_siz
         slot->entry_arg0 = g_pm.proc_endpoint;
         slot->entry_arg1 = g_pm.fs_endpoint;
     } else if (name_eq(slot->name, "vt")) {
-        slot->entry_arg0 = (uint32_t)-1;
+        slot->entry_arg0 = (g_pm.fb_endpoint != IPC_ENDPOINT_NONE)
+                               ? g_pm.fb_endpoint
+                               : (uint32_t)-1;
         slot->entry_arg1 = g_pm.kbd_endpoint;
     }
 
@@ -957,6 +962,7 @@ process_manager_init(const boot_info_t *boot_info)
     g_pm.fs_endpoint = IPC_ENDPOINT_NONE;
     g_pm.block_endpoint = IPC_ENDPOINT_NONE;
     g_pm.kbd_endpoint = IPC_ENDPOINT_NONE;
+    g_pm.fb_endpoint = IPC_ENDPOINT_NONE;
     g_pm.fs_reply_endpoint = IPC_ENDPOINT_NONE;
     g_pm.fs_request_id = 1;
     g_pm.started = 0;
@@ -998,6 +1004,18 @@ uint32_t
 process_manager_block_endpoint(void)
 {
     return g_pm.block_endpoint;
+}
+
+uint32_t
+process_manager_framebuffer_endpoint(void)
+{
+    return g_pm.fb_endpoint;
+}
+
+void
+process_manager_set_framebuffer_endpoint(uint32_t endpoint)
+{
+    g_pm.fb_endpoint = endpoint;
 }
 
 process_run_result_t

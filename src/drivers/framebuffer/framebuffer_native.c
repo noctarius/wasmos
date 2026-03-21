@@ -29,6 +29,7 @@
 
 static fbtext_state_t g_state;
 static uint8_t        g_early_log_buf[EARLY_LOG_BUF];
+static uint8_t        g_console_ring_enabled = 1;
 
 static int
 str_len(const char *s)
@@ -224,11 +225,14 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
 
     /* Derive our context id from current pid (context_id == pid for native). */
     uint32_t ctx = api->sched_current_pid();
+    if (api->console_register_fb(ctx, ep) != 0) {
+        write_str(api, "[framebuffer] endpoint publish failed\n");
+    }
 
     /* Main loop: drain console ring, then process control IPC. */
     nd_ipc_message_t msg;
     for (;;) {
-        int had_ring = drain_console_ring(ring);
+        int had_ring = g_console_ring_enabled ? drain_console_ring(ring) : 0;
         int rc = api->ipc_recv(ctx, ep, &msg);
         if (rc == ND_IPC_EMPTY) {
             if (!had_ring) {
@@ -280,6 +284,9 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
             break;
         case FBTEXT_IPC_CLEAR_REQ:
             fbtext_clear(&g_state);
+            break;
+        case FBTEXT_IPC_CONSOLE_MODE_REQ:
+            g_console_ring_enabled = (msg.arg0 != 0) ? 1u : 0u;
             break;
         default:
             resp.type = FBTEXT_IPC_ERROR;

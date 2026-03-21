@@ -184,7 +184,7 @@ vt_render_cell(const vt_tty_t *tty, uint16_t row, uint16_t col)
 }
 
 static void
-vt_scroll_up(vt_tty_t *tty)
+vt_scroll_up(vt_tty_t *tty, uint8_t render_now)
 {
     if (!tty) {
         return;
@@ -205,7 +205,7 @@ vt_scroll_up(vt_tty_t *tty)
         tty->cells[idx].attr = tty->attr;
     }
 
-    if (g_active_tty != 0) {
+    if (render_now) {
         (void)vt_fb_send(FBTEXT_IPC_SCROLL_REQ, 1, 0, 0, 0);
     }
 }
@@ -220,7 +220,7 @@ vt_put_char_tty0(vt_tty_t *tty, uint8_t ch)
         } else if (c == '\n') {
             tty->cursor_col = 0;
             if (tty->cursor_row + 1u >= VT_ROWS_DEFAULT) {
-                vt_scroll_up(tty);
+                vt_scroll_up(tty, 0);
                 tty->cursor_row = (uint16_t)(VT_ROWS_DEFAULT - 1u);
             } else {
                 tty->cursor_row++;
@@ -236,7 +236,7 @@ vt_put_char_tty0(vt_tty_t *tty, uint8_t ch)
             if (tty->cursor_col >= VT_COLS_DEFAULT) {
                 tty->cursor_col = 0;
                 if (tty->cursor_row + 1u >= VT_ROWS_DEFAULT) {
-                    vt_scroll_up(tty);
+                    vt_scroll_up(tty, 0);
                     tty->cursor_row = (uint16_t)(VT_ROWS_DEFAULT - 1u);
                 } else {
                     tty->cursor_row++;
@@ -248,26 +248,31 @@ vt_put_char_tty0(vt_tty_t *tty, uint8_t ch)
 }
 
 static void
-vt_put_char_virtual(vt_tty_t *tty, uint8_t ch)
+vt_put_char_virtual(vt_tty_t *tty, uint32_t tty_index, uint8_t ch)
 {
     if (!tty) {
         return;
     }
+    uint8_t render_now = (tty_index == g_active_tty);
 
     if (ch == '\r') {
         tty->cursor_col = 0;
-        vt_fb_set_cursor(tty);
+        if (render_now) {
+            vt_fb_set_cursor(tty);
+        }
         return;
     }
     if (ch == '\n') {
         tty->cursor_col = 0;
         if (tty->cursor_row + 1u >= VT_ROWS_DEFAULT) {
-            vt_scroll_up(tty);
+            vt_scroll_up(tty, render_now);
             tty->cursor_row = (uint16_t)(VT_ROWS_DEFAULT - 1u);
         } else {
             tty->cursor_row++;
         }
-        vt_fb_set_cursor(tty);
+        if (render_now) {
+            vt_fb_set_cursor(tty);
+        }
         return;
     }
     if (ch == '\b') {
@@ -275,36 +280,42 @@ vt_put_char_virtual(vt_tty_t *tty, uint8_t ch)
             tty->cursor_col--;
         }
         vt_store_cell(tty, tty->cursor_row, tty->cursor_col, ' ');
-        vt_render_cell(tty, tty->cursor_row, tty->cursor_col);
-        vt_fb_set_cursor(tty);
+        if (render_now) {
+            vt_render_cell(tty, tty->cursor_row, tty->cursor_col);
+            vt_fb_set_cursor(tty);
+        }
         return;
     }
     if (ch == '\t') {
         uint16_t next = (uint16_t)((tty->cursor_col + 8u) & ~7u);
         while (tty->cursor_col < next) {
-            vt_put_char_virtual(tty, ' ');
+            vt_put_char_virtual(tty, tty_index, ' ');
         }
         return;
     }
 
     vt_store_cell(tty, tty->cursor_row, tty->cursor_col, (uint32_t)ch);
-    vt_render_cell(tty, tty->cursor_row, tty->cursor_col);
+    if (render_now) {
+        vt_render_cell(tty, tty->cursor_row, tty->cursor_col);
+    }
 
     tty->cursor_col++;
     if (tty->cursor_col >= VT_COLS_DEFAULT) {
         tty->cursor_col = 0;
         if (tty->cursor_row + 1u >= VT_ROWS_DEFAULT) {
-            vt_scroll_up(tty);
+            vt_scroll_up(tty, render_now);
             tty->cursor_row = (uint16_t)(VT_ROWS_DEFAULT - 1u);
         } else {
             tty->cursor_row++;
         }
     }
-    vt_fb_set_cursor(tty);
+    if (render_now) {
+        vt_fb_set_cursor(tty);
+    }
 }
 
 static void
-vt_process_byte(vt_tty_t *tty, uint8_t c)
+vt_process_byte(uint32_t tty_index, vt_tty_t *tty, uint8_t c)
 {
     if (!tty) {
         return;
@@ -313,10 +324,10 @@ vt_process_byte(vt_tty_t *tty, uint8_t c)
     case ESC_NORMAL:
         if (c == 0x1B) {
             tty->esc = ESC_ESC;
-        } else if (g_active_tty == 0) {
+        } else if (tty_index == 0) {
             vt_put_char_tty0(tty, c);
         } else {
-            vt_put_char_virtual(tty, c);
+            vt_put_char_virtual(tty, tty_index, c);
         }
         break;
     case ESC_ESC:
@@ -332,6 +343,20 @@ vt_process_byte(vt_tty_t *tty, uint8_t c)
         }
         break;
     }
+}
+
+static int32_t
+vt_tty_index_for_source(int32_t source_ep)
+{
+    if (source_ep < 0) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < VT_MAX_TTYS; ++i) {
+        if (g_tty_reader_ep[i] == source_ep) {
+            return (int32_t)i;
+        }
+    }
+    return -1;
 }
 
 static void
@@ -436,7 +461,7 @@ vt_input_echo_char(uint32_t tty_index, uint8_t ch)
         return;
     }
     vt_tty_t *tty = &g_ttys[tty_index];
-    vt_process_byte(tty, ch);
+    vt_process_byte(tty_index, tty, ch);
 }
 
 static void
@@ -574,14 +599,20 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
 
         switch ((uint32_t)msg.type) {
         case VT_IPC_WRITE_REQ: {
-            vt_tty_t *tty = vt_active_tty();
+            int32_t tty_index = vt_tty_index_for_source(msg.source);
+            if (tty_index < 0 || tty_index >= (int32_t)VT_MAX_TTYS) {
+                /* FIXME: source endpoint should explicitly register tty
+                 * ownership before writes; fallback keeps compatibility. */
+                tty_index = (int32_t)g_active_tty;
+            }
+            vt_tty_t *tty = &g_ttys[(uint32_t)tty_index];
             int32_t args[4] = { msg.arg0, msg.arg1, msg.arg2, msg.arg3 };
             for (int i = 0; i < 4; ++i) {
                 uint8_t b = (uint8_t)(args[i] & 0xFF);
                 if (b == 0) {
                     break;
                 }
-                vt_process_byte(tty, b);
+                vt_process_byte((uint32_t)tty_index, tty, b);
             }
             if (msg.source >= 0 && msg.request_id != 0) {
                 wasmos_ipc_reply(msg.source, g_vt_ep,
@@ -591,7 +622,11 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
         }
 
         case VT_IPC_SET_ATTR_REQ: {
-            vt_tty_t *tty = vt_active_tty();
+            int32_t tty_index = vt_tty_index_for_source(msg.source);
+            if (tty_index < 0 || tty_index >= (int32_t)VT_MAX_TTYS) {
+                tty_index = (int32_t)g_active_tty;
+            }
+            vt_tty_t *tty = &g_ttys[(uint32_t)tty_index];
             uint8_t fg = (uint8_t)(msg.arg0 & 0xFF);
             uint8_t bg = (uint8_t)(msg.arg1 & 0xFF);
             uint8_t attr = (uint8_t)(msg.arg2 & 0xFF);

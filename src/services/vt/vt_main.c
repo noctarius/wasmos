@@ -23,7 +23,15 @@ typedef struct {
     uint8_t fg;
     uint8_t bg;
     uint8_t attr;
+    uint8_t input_echo;
+    uint8_t input_canonical;
     esc_state_t esc;
+    uint16_t input_q_head;
+    uint16_t input_q_tail;
+    uint16_t input_line_len;
+    uint16_t input_line_cursor;
+    uint8_t input_q[256];
+    uint8_t input_line[128];
     vt_cell_t cells[80u * 25u];
 } vt_tty_t;
 
@@ -39,6 +47,7 @@ static int32_t  g_kbd_ep = -1;
 static int32_t  g_fb_ep = -1;
 static vt_tty_t g_ttys[VT_MAX_TTYS];
 static uint32_t g_active_tty = 0;
+static int32_t  g_tty_reader_ep[VT_MAX_TTYS] = { -1, -1, -1, -1 };
 
 static uint32_t
 vt_cell_index(uint16_t row, uint16_t col)
@@ -53,6 +62,41 @@ vt_active_tty(void)
         g_active_tty = 0;
     }
     return &g_ttys[g_active_tty];
+}
+
+static uint16_t
+vt_input_q_next(uint16_t v)
+{
+    return (uint16_t)((v + 1u) & 0xFFu);
+}
+
+static int
+vt_input_q_push(vt_tty_t *tty, uint8_t ch)
+{
+    if (!tty) {
+        return -1;
+    }
+    uint16_t next = vt_input_q_next(tty->input_q_tail);
+    if (next == tty->input_q_head) {
+        return -1;
+    }
+    tty->input_q[tty->input_q_tail] = ch;
+    tty->input_q_tail = next;
+    return 0;
+}
+
+static int
+vt_input_q_pop(vt_tty_t *tty, uint8_t *out_ch)
+{
+    if (!tty || !out_ch) {
+        return -1;
+    }
+    if (tty->input_q_head == tty->input_q_tail) {
+        return -1;
+    }
+    *out_ch = tty->input_q[tty->input_q_head];
+    tty->input_q_head = vt_input_q_next(tty->input_q_head);
+    return 0;
 }
 
 static int
@@ -312,7 +356,19 @@ vt_init_ttys(void)
         g_ttys[i].fg = 15;
         g_ttys[i].bg = 0;
         g_ttys[i].attr = 0;
+        g_ttys[i].input_echo = 1;
+        g_ttys[i].input_canonical = 1;
         g_ttys[i].esc = ESC_NORMAL;
+        g_ttys[i].input_q_head = 0;
+        g_ttys[i].input_q_tail = 0;
+        g_ttys[i].input_line_len = 0;
+        g_ttys[i].input_line_cursor = 0;
+        for (uint32_t k = 0; k < sizeof(g_ttys[i].input_q); ++k) {
+            g_ttys[i].input_q[k] = 0;
+        }
+        for (uint32_t k = 0; k < sizeof(g_ttys[i].input_line); ++k) {
+            g_ttys[i].input_line[k] = 0;
+        }
         for (uint32_t j = 0; j < VT_COLS_DEFAULT * VT_ROWS_DEFAULT; ++j) {
             g_ttys[i].cells[j].ch = 0;
             g_ttys[i].cells[j].fg = 15;
@@ -362,6 +418,74 @@ static const uint8_t g_sc_to_ascii[58] = {
 };
 
 static void
+vt_input_echo_char(uint32_t tty_index, uint8_t ch)
+{
+    if (tty_index >= VT_MAX_TTYS || tty_index != g_active_tty) {
+        return;
+    }
+    vt_tty_t *tty = &g_ttys[tty_index];
+    vt_process_byte(tty, ch);
+}
+
+static void
+vt_input_commit_line(vt_tty_t *tty)
+{
+    if (!tty) {
+        return;
+    }
+    for (uint16_t i = 0; i < tty->input_line_len; ++i) {
+        (void)vt_input_q_push(tty, tty->input_line[i]);
+    }
+    (void)vt_input_q_push(tty, '\n');
+    tty->input_line_len = 0;
+    tty->input_line_cursor = 0;
+}
+
+static void
+vt_input_handle_char(uint32_t tty_index, uint8_t ch)
+{
+    if (tty_index >= VT_MAX_TTYS) {
+        return;
+    }
+    vt_tty_t *tty = &g_ttys[tty_index];
+    if (tty->input_canonical) {
+        if (ch == '\r' || ch == '\n') {
+            if (tty->input_echo) {
+                vt_input_echo_char(tty_index, '\n');
+            }
+            vt_input_commit_line(tty);
+            return;
+        }
+        if (ch == '\b' || ch == 0x7F) {
+            if (tty->input_line_len > 0) {
+                tty->input_line_len--;
+                tty->input_line_cursor = tty->input_line_len;
+                if (tty->input_echo) {
+                    vt_input_echo_char(tty_index, '\b');
+                }
+            }
+            return;
+        }
+        if (ch < 0x20 || ch > 0x7E) {
+            return;
+        }
+        if (tty->input_line_len + 1u >= (uint16_t)sizeof(tty->input_line)) {
+            return;
+        }
+        tty->input_line[tty->input_line_len++] = ch;
+        tty->input_line_cursor = tty->input_line_len;
+        if (tty->input_echo) {
+            vt_input_echo_char(tty_index, ch);
+        }
+        return;
+    }
+    (void)vt_input_q_push(tty, ch);
+    if (tty->input_echo) {
+        vt_input_echo_char(tty_index, ch);
+    }
+}
+
+static void
 vt_handle_key_notify(int32_t scancode, int32_t keyup)
 {
     if (keyup != 0) {
@@ -374,7 +498,11 @@ vt_handle_key_notify(int32_t scancode, int32_t keyup)
     if (ch == 0) {
         return;
     }
-    wasmos_input_push((int32_t)ch);
+    /* tty0 is the system console mirror; CLI sessions are tty1+. */
+    if (g_active_tty == 0) {
+        return;
+    }
+    vt_input_handle_char(g_active_tty, ch);
 }
 
 WASMOS_WASM_EXPORT int32_t
@@ -472,6 +600,34 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
                                  (int32_t)g_active_tty);
             }
             break;
+
+        case VT_IPC_READ_REQ: {
+            if (msg.source < 0 || msg.request_id == 0) {
+                break;
+            }
+            int32_t tty_id = msg.arg0;
+            if (tty_id < 0 || tty_id >= (int32_t)VT_MAX_TTYS) {
+                wasmos_ipc_reply(msg.source, g_vt_ep,
+                                 VT_IPC_ERROR, msg.request_id, -1, 0);
+                break;
+            }
+            if (g_tty_reader_ep[(uint32_t)tty_id] < 0) {
+                g_tty_reader_ep[(uint32_t)tty_id] = msg.source;
+            } else if (g_tty_reader_ep[(uint32_t)tty_id] != msg.source) {
+                wasmos_ipc_reply(msg.source, g_vt_ep,
+                                 VT_IPC_ERROR, msg.request_id, -1, 0);
+                break;
+            }
+            uint8_t ch = 0;
+            if (vt_input_q_pop(&g_ttys[(uint32_t)tty_id], &ch) == 0) {
+                wasmos_ipc_reply(msg.source, g_vt_ep,
+                                 VT_IPC_RESP, msg.request_id, 0, (int32_t)ch);
+            } else {
+                wasmos_ipc_reply(msg.source, g_vt_ep,
+                                 VT_IPC_RESP, msg.request_id, 1, 0);
+            }
+            break;
+        }
 
         case KBD_IPC_KEY_NOTIFY:
             vt_handle_key_notify(msg.arg0, msg.arg1);

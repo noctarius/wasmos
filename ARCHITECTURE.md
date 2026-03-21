@@ -73,6 +73,10 @@ The current tree already boots into a usable user-space stack:
 - Process-manager now assigns a home tty to each CLI instance (`tty1..tty3`)
   and `sysinit` ensures one CLI per VT-managed tty. CLIs gate input by current
   VT foreground selection so only the active tty shell reads keystrokes.
+- VT now owns keyboard input routing end-to-end and keeps per-tty line
+  discipline state (`echo` + canonical line buffering). CLI input is consumed
+  over `VT_IPC_READ_REQ` per home tty, with serial console reads retained as a
+  fallback for headless/automated test flows.
 - Keyboard event delivery into VT is now explicit fire-and-forget
   (`KBD_IPC_KEY_NOTIFY` with `request_id = 0`), and VT/CLI output transport
   loops now use bounded `IPC_ERR_FULL` retries so queue backpressure degrades

@@ -236,6 +236,61 @@ cli_is_foreground(void)
     return g_last_seen_active_tty == g_home_tty;
 }
 
+static int32_t
+cli_vt_read_char(char *out_ch)
+{
+    if (!out_ch) {
+        return -1;
+    }
+    if (g_vt_endpoint < 0 || g_reply_endpoint < 0) {
+        return -1;
+    }
+
+    int32_t req_id = g_request_id++;
+    uint32_t tries = 0;
+    for (;;) {
+        int32_t rc = wasmos_ipc_send(g_vt_endpoint,
+                                     g_reply_endpoint,
+                                     VT_IPC_READ_REQ,
+                                     req_id,
+                                     g_home_tty, 0, 0, 0);
+        if (rc == 0) {
+            break;
+        }
+        if (rc != IPC_ERR_FULL || ++tries >= CLI_VT_SEND_RETRIES) {
+            return -1;
+        }
+        (void)wasmos_sched_yield();
+    }
+
+    for (int wait = 0; wait < 32; ++wait) {
+        int32_t rc = wasmos_ipc_try_recv(g_reply_endpoint);
+        if (rc < 0) {
+            return -1;
+        }
+        if (rc == 0) {
+            (void)wasmos_sched_yield();
+            continue;
+        }
+        int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+        int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+        if (resp_req != req_id) {
+            continue;
+        }
+        if (resp_type != VT_IPC_RESP) {
+            return -1;
+        }
+        int32_t status = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+        if (status != 0) {
+            return 0;
+        }
+        int32_t ch = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+        *out_ch = (char)(ch & 0xFF);
+        return 1;
+    }
+    return 0;
+}
+
 static void
 console_prompt(void)
 {
@@ -825,27 +880,43 @@ initialize(int32_t proc_endpoint,
                 g_phase = CLI_PHASE_PROMPT;
                 continue;
             }
-            /* Check the keyboard input ring first (fed by the vt service).
-             * Fall back to the serial console for headless/test mode. */
-            int32_t kbd = wasmos_input_read();
-            if (kbd >= 0) {
-                g_line[g_line_len] = (char)(kbd & 0xFF);
-            } else {
-                int32_t rc = wasmos_console_read((int32_t)(uintptr_t)&g_line[g_line_len], 1);
-                if (rc == 0) {
-                    (void)wasmos_sched_yield();
-                    continue;
+            int32_t have_ch = 0;
+            int32_t from_vt = 0;
+            if (g_vt_endpoint >= 0) {
+                have_ch = cli_vt_read_char(&g_line[g_line_len]);
+                if (have_ch < 0) {
+                    g_phase = CLI_PHASE_FAILED;
+                    console_write("[cli] vt read failed\n");
+                    stall_forever();
                 }
+                if (have_ch > 0) {
+                    from_vt = 1;
+                }
+            }
+            if (!have_ch) {
+                int32_t rc = wasmos_console_read((int32_t)(uintptr_t)&g_line[g_line_len], 1);
                 if (rc < 0) {
                     g_phase = CLI_PHASE_FAILED;
                     console_write("[cli] console read failed\n");
                     stall_forever();
                 }
+                if (rc > 0) {
+                    have_ch = 1;
+                    from_vt = 0;
+                }
+            } else {
+                from_vt = 0;
+            }
+            if (!have_ch) {
+                (void)wasmos_sched_yield();
+                continue;
             }
 
             char ch = g_line[g_line_len];
             if (ch == '\r' || ch == '\n') {
-                console_write("\n");
+                if (!from_vt) {
+                    console_write("\n");
+                }
                 if (cli_handle_line()) {
                     g_phase = CLI_PHASE_WAIT_IPC;
                 } else {
@@ -856,13 +927,17 @@ initialize(int32_t proc_endpoint,
             if (ch == '\b' || ch == 0x7F) {
                 if (g_line_len > 0) {
                     g_line_len--;
-                    console_write("\b \b");
+                    if (!from_vt) {
+                        console_write("\b \b");
+                    }
                 }
                 continue;
             }
             g_line_len++;
-            char echo_buf[2] = { ch, '\0' };
-            console_write(echo_buf);
+            if (!from_vt) {
+                char echo_buf[2] = { ch, '\0' };
+                console_write(echo_buf);
+            }
             continue;
         }
 

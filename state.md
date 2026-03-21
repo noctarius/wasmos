@@ -1,37 +1,50 @@
-# Current Task State (Preemptive Scheduling)
+# Current Task State (Console Ring + Shared Memory Baseline)
 
 ## Summary
-Preemptive scheduling is implemented and stable. The IRQ0 timer tick drives time-slice accounting and preemption via a kernel trampoline that yields to the scheduler. Ready queue scheduling, idle task, and spinlock preemption guards are in place. Scheduler metrics (timer ticks, ready queue depth, current running PID) are exposed via wasm natives and shown in the CLI `ps` output. WASMOS apps can terminate via a `proc_exit` wasm native; the process manager reaps exited apps and releases their runtime instances. Process stacks now come from the physical frame allocator, and the kernel image range is reserved before allocating pages. Capacity limits were raised to allow CLI exec tests to spawn apps reliably.
+The current baseline has moved framebuffer text output away from serial-to-
+framebuffer IPC text messages and onto a kernel-owned shared-memory console
+ring.
+
+`serial_write` now writes to COM1 and appends bytes to a 1-page shared ring.
+The native framebuffer driver maps that ring and drains it in its main loop,
+while still serving framebuffer control IPC (`FBTEXT_IPC_*`).
+
+Shared-memory APIs are now available in both native and WASM paths:
+- native driver ABI: `shmem_create`, `shmem_map`, `shmem_unmap`, `console_ring_id`
+- WASM imports: `wasmos_shmem_create`, `wasmos_shmem_map`, `wasmos_shmem_unmap`
 
 ## Current Behavior
-- PIT timer IRQ0 updates ticks and triggers preemption.
-- Preemption redirects the interrupted RIP to `process_preempt_trampoline`, which yields back to the scheduler.
-- Ready queue is a ring buffer in `process.c`.
-- Idle task runs `hlt` when no READY tasks exist.
-- IPC queue operations are protected by spinlocks that disable preemption.
-- QEMU test framework force-stops hung runs via the monitor sequence (`Ctrl+A` then `x`) on timeout.
-- A `run-qemu-debug` target starts QEMU paused for GDB on port `1234` (override with `-DQEMU_GDB_PORT=1234`).
-- CLI `ps` shows scheduler metrics via wasm natives (`sched_ticks`, `sched_ready_count`, `sched_current_pid`).
-- `proc_exit` allows WASMOS apps to terminate themselves; PM reaps exited app instances.
+- Kernel creates and owns a console ring shared-memory region.
+- `serial_write` appends text bytes directly into that ring.
+- Framebuffer native driver maps the ring and renders drained bytes.
+- Early kernel log replay remains available and is replayed by framebuffer at init.
+- Legacy serial→framebuffer text IPC path (`FBTEXT_IPC_PUT_CHAR_REQ` /
+  `FBTEXT_IPC_PUT_STRING_REQ`) is removed.
+- VT service currently focuses on keyboard subscription/routing and escape
+  filtering, and forwards output through `wasmos_console_write`.
 
 ## Tests (Last Run)
 - `cmake --build build --target run-qemu-test` OK
-- `cmake --build build --target run-qemu-cli-test` OK
+- `ctest --test-dir build --output-on-failure` OK (no tests discovered)
 
 ## Key Files
-- `src/kernel/process.c`
-- `src/kernel/arch/x86_64/context_switch.S`
-- `src/kernel/arch/x86_64/cpu_isr.S`
-- `src/kernel/irq.c`
-- `src/kernel/timer.c`
-- `src/kernel/physmem.c`
-- `src/kernel/arch/x86_64/linker.ld`
-- `src/kernel/include/process.h`
-- `src/kernel/include/memory.h`
-- `PREEMPTIVE_SCHEDULING_DESIGN.md`
+- `src/kernel/serial.c`
+- `src/kernel/memory.c`
+- `src/kernel/native_driver.c`
+- `src/kernel/wasm3_link.c`
+- `src/kernel/include/console_ring.h`
+- `src/drivers/framebuffer/framebuffer_native.c`
+- `src/drivers/include/wasmos_native_driver.h`
+- `src/drivers/include/wasmos_driver_abi.h`
+- `src/services/vt/vt_main.c`
 - `README.md`
 - `ARCHITECTURE.md`
+- `VIRTUAL_TERMINAL.md`
 
 ## Pending / Next Steps
-- Optional: reap short-lived test processes automatically to keep `ps` cleaner.
-- Ensure documentation in `PREEMPTIVE_SCHEDULING_DESIGN.md`, `README.md`, and `ARCHITECTURE.md` stays aligned as features evolve.
+- Define clear ownership/lifetime rules for shared-memory users (especially
+  mixed native/WASM flows).
+- Decide how WASM `shmem_unmap` should handle restoring overwritten linear pages.
+- Extend VT toward multi-TTY, richer ANSI semantics, and line discipline.
+- Keep docs (`README.md`, `ARCHITECTURE.md`, `TASKS.md`, `VIRTUAL_TERMINAL.md`)
+  aligned as behavior evolves.

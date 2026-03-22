@@ -439,7 +439,8 @@ Phase 3 adds a line discipline layer inside `vt`:
 
 The line discipline is accessible through the same `VT_READ_REQ` IPC path. The
 mode flag transport (`VT_SET_MODE_REQ`) is now landed; richer cooked-mode
-editing/history behavior remains Phase 3 work.
+editing/history behavior remains Phase 3 work. The current cooked baseline now
+handles `Backspace`, `Ctrl+U`, and `Ctrl+C` inside VT.
 
 ---
 

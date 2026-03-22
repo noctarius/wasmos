@@ -87,6 +87,9 @@ The current tree already boots into a usable user-space stack:
 - VT now accepts `VT_IPC_SET_MODE_REQ` so clients can select per-tty input
   handling (`raw`, `canonical`, `echo`) through the same owned endpoint used
   for VT writes/reads.
+- VT canonical input handling now includes baseline in-service line discipline
+  controls (`Backspace`, `Ctrl+U`, `Ctrl+C`) so cooked-mode consumers can rely
+  on VT-side editing/interrupt delivery semantics.
 - VT enforces explicit writer registration (`VT_IPC_REGISTER_WRITER`) and
   switch-generation write tokens: writes tagged with older generations are
   dropped after tty switches, and switch replay runs behind a temporary render

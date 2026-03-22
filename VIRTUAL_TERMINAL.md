@@ -98,6 +98,9 @@ corrupt display hardware.
   - cooked/raw line discipline history
   - full ANSI cursor/color feature set
   - service-registry-based VT endpoint discovery
+  - deferred debug pass for an intermittent framebuffer-only prompt
+    duplication/misalignment artifact seen during rapid `Ctrl+Shift+Fn`
+    switching (currently not reproducible in recent runs)
 
 ---
 

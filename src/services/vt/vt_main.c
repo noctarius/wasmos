@@ -647,11 +647,12 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
                               (uint16_t)(((uint32_t)msg.request_id) & 0x0FFFu));
                 break;
             }
-            /* FIXME: Investigate remaining framebuffer artifact where tty
-             * switches can still show duplicated/misaligned prompts after
-             * rapid Ctrl+Shift+Fn switching. Repro is intermittent in VM and
-             * likely involves ordering between switch replay and concurrent
-             * CLI output bursts across multiple tty endpoints. */
+            /* FIXME: Deferred follow-up. We have seen an intermittent
+             * framebuffer-only artifact where rapid Ctrl+Shift+Fn switching
+             * can still show duplicated/misaligned prompts. This has not
+             * reproduced again in recent runs, but keep the VT trace markers
+             * (switch/write-drop/register events) enabled for future captures
+             * and revisit once a reliable repro sequence exists. */
             vt_tty_t *tty = &g_ttys[(uint32_t)tty_index];
             int32_t args[4] = { msg.arg0, msg.arg1, msg.arg2, msg.arg3 };
             for (int i = 0; i < 4; ++i) {

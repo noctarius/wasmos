@@ -88,6 +88,10 @@ The current tree already boots into a usable user-space stack:
 - VT can emit compact switch/ownership/drop telemetry through
   `wasmos_debug_mark` into the kernel's global trace stream when
   `WASMOS_TRACE=1`, so race analysis uses existing tracing infrastructure.
+- Known deferred VT issue: an intermittent framebuffer-only prompt
+  duplication/misalignment artifact during rapid `Ctrl+Shift+Fn` switching was
+  observed earlier. It is currently not reproducible in recent runs, so the
+  issue is deferred until a stable repro path is available.
 - VT keyboard hotkeys support `Ctrl+Shift+F1..F4` to switch directly to
   `tty0..tty3`.
 - Keyboard event delivery into VT is now explicit fire-and-forget

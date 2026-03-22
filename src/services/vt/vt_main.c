@@ -812,6 +812,20 @@ vt_input_handle_char(uint32_t tty_index, uint8_t ch)
 }
 
 static void
+vt_set_input_mode(vt_tty_t *tty, uint8_t mode)
+{
+    if (!tty) {
+        return;
+    }
+    tty->input_canonical = (mode & VT_INPUT_MODE_CANONICAL) ? 1 : 0;
+    tty->input_echo = (mode & VT_INPUT_MODE_ECHO) ? 1 : 0;
+    if (!tty->input_canonical) {
+        tty->input_line_len = 0;
+        tty->input_line_cursor = 0;
+    }
+}
+
+static void
 vt_handle_key_notify(int32_t scancode, int32_t keyup)
 {
     if (scancode == 0x1D) { /* Ctrl */
@@ -1023,6 +1037,25 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
                 wasmos_ipc_reply(msg.source, g_vt_ep,
                                  VT_IPC_RESP, msg.request_id, 1, 0);
             }
+            break;
+        }
+
+        case VT_IPC_SET_MODE_REQ: {
+            if (msg.source < 0 || msg.request_id == 0) {
+                break;
+            }
+            int32_t tty_index = vt_tty_index_for_source(msg.source);
+            if (tty_index < 0 || tty_index >= (int32_t)VT_MAX_TTYS) {
+                wasmos_ipc_reply(msg.source, g_vt_ep,
+                                 VT_IPC_ERROR, msg.request_id, -1, 0);
+                break;
+            }
+            uint8_t mode = (uint8_t)(msg.arg0 &
+                                     (VT_INPUT_MODE_CANONICAL | VT_INPUT_MODE_ECHO));
+            vt_set_input_mode(&g_ttys[(uint32_t)tty_index], mode);
+            wasmos_ipc_reply(msg.source, g_vt_ep,
+                             VT_IPC_RESP, msg.request_id,
+                             (int32_t)mode, tty_index);
             break;
         }
 

@@ -84,6 +84,9 @@ The current tree already boots into a usable user-space stack:
 - VT write routing now uses caller endpoint ownership to target the correct tty
   buffer; non-foreground tty writes are buffered without rendering over the
   active framebuffer.
+- VT now accepts `VT_IPC_SET_MODE_REQ` so clients can select per-tty input
+  handling (`raw`, `canonical`, `echo`) through the same owned endpoint used
+  for VT writes/reads.
 - VT enforces explicit writer registration (`VT_IPC_REGISTER_WRITER`) and
   switch-generation write tokens: writes tagged with older generations are
   dropped after tty switches, and switch replay runs behind a temporary render

@@ -92,6 +92,8 @@ corrupt display hardware.
   - `vt` keyboard subscribe + input routing + escape stripping
   - `vt` core CSI/SGR decode subset:
     cursor move (`A/B/C/D/H/f`), erase (`J/K`), and 16-color SGR (`m`)
+  - `vt` per-tty input mode control via `VT_IPC_SET_MODE_REQ`
+    (`VT_INPUT_MODE_RAW`, `VT_INPUT_MODE_CANONICAL`, `VT_INPUT_MODE_ECHO`)
   - keyboard `KBD_KEY_NOTIFY` path now sends as strict fire-and-forget
     (`request_id = 0`)
   - VT→framebuffer and CLI→VT output paths now cap queue-full retries and drop
@@ -312,6 +314,7 @@ with no framebuffer or IPC dependency.
 | `VT_SET_ATTR_RESP`    | 0x782  | vt → client    | Acknowledgment                               |
 | `VT_SWITCH_TTY_REQ`   | 0x703  | client → vt    | Switch active TTY (`arg0` = tty index)       |
 | `VT_SWITCH_TTY_RESP`  | 0x783  | vt → client    | Acknowledgment                               |
+| `VT_SET_MODE_REQ`     | 0x706  | client → vt    | Set input mode bits (`arg0` = mode flags)    |
 | `VT_ERROR_RESP`       | 0x7FF  | vt → client    | Error, `arg0` = error code                   |
 
 `VT_WRITE_REQ` carries up to 4 bytes inline in `arg0`–`arg3` (Phase 1). For
@@ -434,8 +437,9 @@ Phase 3 adds a line discipline layer inside `vt`:
 - Raw mode flag per TTY for programs that want uncooked input (future shells,
   editors).
 
-The line discipline is accessible through the same `VT_READ_REQ` IPC path; the
-mode flag is set via a new `VT_SET_MODE_REQ` message.
+The line discipline is accessible through the same `VT_READ_REQ` IPC path. The
+mode flag transport (`VT_SET_MODE_REQ`) is now landed; richer cooked-mode
+editing/history behavior remains Phase 3 work.
 
 ---
 

@@ -85,6 +85,9 @@ The current tree already boots into a usable user-space stack:
   switch-generation write tokens: writes tagged with older generations are
   dropped after tty switches, and switch replay runs behind a temporary render
   barrier to avoid in-flight foreground repaint races.
+- VT can emit compact switch/ownership/drop telemetry through
+  `wasmos_debug_mark` into the kernel's global trace stream when
+  `WASMOS_TRACE=1`, so race analysis uses existing tracing infrastructure.
 - VT keyboard hotkeys support `Ctrl+Shift+F1..F4` to switch directly to
   `tty0..tty3`.
 - Keyboard event delivery into VT is now explicit fire-and-forget

@@ -42,6 +42,10 @@ typedef struct {
 #define IPC_ERR_FULL (-3)
 #define VT_FB_SEND_RETRIES 1024
 
+#ifndef WASMOS_TRACE
+#define WASMOS_TRACE 0
+#endif
+
 static int32_t  g_vt_ep = -1;
 static int32_t  g_kbd_ep = -1;
 static int32_t  g_fb_ep = -1;
@@ -53,6 +57,29 @@ static uint32_t g_switch_generation = 1;
 static uint8_t  g_switch_barrier = 0;
 static uint8_t  g_ctrl_down = 0;
 static uint8_t  g_shift_down = 0;
+
+enum {
+    VT_TRACE_SWITCH = 0xA1,
+    VT_TRACE_WRITER_OK = 0xA2,
+    VT_TRACE_WRITER_CONFLICT = 0xA3,
+    VT_TRACE_DROP_UNOWNED = 0xA4,
+    VT_TRACE_DROP_STALE = 0xA5
+};
+
+static void
+vt_trace_mark(uint8_t event, uint16_t a, uint16_t b)
+{
+#if WASMOS_TRACE
+    uint32_t tag = ((uint32_t)event << 24) |
+                   (((uint32_t)(a & 0x0FFFu)) << 12) |
+                   (uint32_t)(b & 0x0FFFu);
+    (void)wasmos_debug_mark((int32_t)tag);
+#else
+    (void)event;
+    (void)a;
+    (void)b;
+#endif
+}
 
 static uint32_t
 vt_cell_index(uint16_t row, uint16_t col)
@@ -420,6 +447,9 @@ vt_switch_tty(uint32_t tty_index)
     g_switch_barrier = 1;
     g_switch_generation++;
     g_active_tty = tty_index;
+    vt_trace_mark(VT_TRACE_SWITCH,
+                  (uint16_t)(tty_index & 0x0FFFu),
+                  (uint16_t)(g_switch_generation & 0x0FFFu));
 
     /* Allow logical tty switching even when framebuffer control is unavailable
      * (startup races/headless mode). This keeps VT/CLI state consistent and
@@ -605,10 +635,16 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
         case VT_IPC_WRITE_REQ: {
             int32_t tty_index = vt_tty_index_for_source(msg.source);
             if (tty_index < 0 || tty_index >= (int32_t)VT_MAX_TTYS) {
+                vt_trace_mark(VT_TRACE_DROP_UNOWNED,
+                              (uint16_t)(msg.source < 0 ? 0x0FFFu : ((uint32_t)msg.source & 0x0FFFu)),
+                              0);
                 break;
             }
             if ((uint32_t)msg.request_id != g_switch_generation) {
                 /* Drop stale write chunks queued before the last tty switch. */
+                vt_trace_mark(VT_TRACE_DROP_STALE,
+                              (uint16_t)((uint32_t)tty_index & 0x0FFFu),
+                              (uint16_t)(((uint32_t)msg.request_id) & 0x0FFFu));
                 break;
             }
             /* FIXME: Investigate remaining framebuffer artifact where tty
@@ -689,11 +725,17 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
             }
             uint32_t idx = (uint32_t)tty_id;
             if (g_tty_writer_ep[idx] >= 0 && g_tty_writer_ep[idx] != msg.source) {
+                vt_trace_mark(VT_TRACE_WRITER_CONFLICT,
+                              (uint16_t)(idx & 0x0FFFu),
+                              (uint16_t)((uint32_t)msg.source & 0x0FFFu));
                 wasmos_ipc_reply(msg.source, g_vt_ep,
                                  VT_IPC_ERROR, msg.request_id, -1, 0);
                 break;
             }
             g_tty_writer_ep[idx] = msg.source;
+            vt_trace_mark(VT_TRACE_WRITER_OK,
+                          (uint16_t)(idx & 0x0FFFu),
+                          (uint16_t)((uint32_t)msg.source & 0x0FFFu));
             wasmos_ipc_reply(msg.source, g_vt_ep,
                              VT_IPC_RESP, msg.request_id,
                              (int32_t)g_switch_generation, tty_id);

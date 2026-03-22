@@ -87,6 +87,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
   fallback for headless/automation flows
 - VT output is now source-tty scoped: each CLI endpoint writes to its assigned
   tty buffer, and background tty writes no longer paint the active framebuffer
+- VT now decodes a core ANSI/VT100 CSI subset per tty buffer: cursor movement
+  (`A/B/C/D/H/f`), erase display/line (`J/K`), and 16-color SGR (`m`)
 - VT now requires explicit writer registration (`VT_IPC_REGISTER_WRITER`) and
   tags tty output with a switch-generation token so stale pre-switch writes are
   dropped instead of repainting over a freshly replayed tty

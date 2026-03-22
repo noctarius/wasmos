@@ -32,6 +32,11 @@ typedef struct {
     uint16_t input_line_cursor;
     uint8_t input_q[256];
     uint8_t input_line[128];
+    uint16_t csi_params[8];
+    uint8_t csi_count;
+    uint16_t csi_current;
+    uint8_t csi_have_current;
+    uint8_t csi_private;
     vt_cell_t cells[80u * 25u];
 } vt_tty_t;
 
@@ -86,6 +91,9 @@ vt_cell_index(uint16_t row, uint16_t col)
 {
     return (uint32_t)row * VT_COLS_DEFAULT + (uint32_t)col;
 }
+
+static void
+vt_render_cell(const vt_tty_t *tty, uint16_t row, uint16_t col);
 
 static uint16_t
 vt_input_q_next(uint16_t v)
@@ -185,6 +193,228 @@ vt_store_cell(vt_tty_t *tty, uint16_t row, uint16_t col, uint32_t ch)
     tty->cells[idx].fg = tty->fg;
     tty->cells[idx].bg = tty->bg;
     tty->cells[idx].attr = tty->attr;
+}
+
+static uint16_t
+vt_clamp_row(int32_t row)
+{
+    if (row < 0) {
+        return 0;
+    }
+    if (row >= (int32_t)VT_ROWS_DEFAULT) {
+        return (uint16_t)(VT_ROWS_DEFAULT - 1u);
+    }
+    return (uint16_t)row;
+}
+
+static uint16_t
+vt_clamp_col(int32_t col)
+{
+    if (col < 0) {
+        return 0;
+    }
+    if (col >= (int32_t)VT_COLS_DEFAULT) {
+        return (uint16_t)(VT_COLS_DEFAULT - 1u);
+    }
+    return (uint16_t)col;
+}
+
+static void
+vt_csi_reset(vt_tty_t *tty)
+{
+    if (!tty) {
+        return;
+    }
+    tty->csi_count = 0;
+    tty->csi_current = 0;
+    tty->csi_have_current = 0;
+    tty->csi_private = 0;
+}
+
+static void
+vt_csi_push_param(vt_tty_t *tty)
+{
+    if (!tty) {
+        return;
+    }
+    if (tty->csi_count >= sizeof(tty->csi_params) / sizeof(tty->csi_params[0])) {
+        tty->csi_current = 0;
+        tty->csi_have_current = 0;
+        return;
+    }
+    tty->csi_params[tty->csi_count++] = tty->csi_current;
+    tty->csi_current = 0;
+    tty->csi_have_current = 0;
+}
+
+static uint16_t
+vt_csi_param(vt_tty_t *tty, uint8_t index, uint16_t def)
+{
+    if (!tty) {
+        return def;
+    }
+    if (index < tty->csi_count) {
+        uint16_t v = tty->csi_params[index];
+        return v == 0 ? def : v;
+    }
+    return def;
+}
+
+static void
+vt_clear_cell(vt_tty_t *tty, uint16_t row, uint16_t col, uint8_t render_now)
+{
+    if (!tty || row >= VT_ROWS_DEFAULT || col >= VT_COLS_DEFAULT) {
+        return;
+    }
+    vt_store_cell(tty, row, col, ' ');
+    if (render_now) {
+        vt_render_cell(tty, row, col);
+    }
+}
+
+static void
+vt_apply_sgr(vt_tty_t *tty, uint16_t code)
+{
+    if (!tty) {
+        return;
+    }
+    if (code == 0) {
+        tty->fg = 15;
+        tty->bg = 0;
+        tty->attr = 0;
+        return;
+    }
+    if (code == 1) {
+        tty->attr |= 0x01u;
+        return;
+    }
+    if (code == 22) {
+        tty->attr &= (uint8_t)~0x01u;
+        return;
+    }
+    if (code >= 30 && code <= 37) {
+        tty->fg = (uint8_t)(code - 30);
+        return;
+    }
+    if (code >= 90 && code <= 97) {
+        tty->fg = (uint8_t)(8 + (code - 90));
+        return;
+    }
+    if (code == 39) {
+        tty->fg = 15;
+        return;
+    }
+    if (code >= 40 && code <= 47) {
+        tty->bg = (uint8_t)(code - 40);
+        return;
+    }
+    if (code >= 100 && code <= 107) {
+        tty->bg = (uint8_t)(8 + (code - 100));
+        return;
+    }
+    if (code == 49) {
+        tty->bg = 0;
+        return;
+    }
+}
+
+static void
+vt_apply_csi(uint32_t tty_index, vt_tty_t *tty, uint8_t final)
+{
+    if (!tty) {
+        return;
+    }
+    uint8_t render_now = (tty_index != 0) &&
+                         (tty_index == g_active_tty) &&
+                         !g_switch_barrier;
+    switch (final) {
+    case 'A': {
+        uint16_t n = vt_csi_param(tty, 0, 1);
+        tty->cursor_row = vt_clamp_row((int32_t)tty->cursor_row - (int32_t)n);
+        break;
+    }
+    case 'B': {
+        uint16_t n = vt_csi_param(tty, 0, 1);
+        tty->cursor_row = vt_clamp_row((int32_t)tty->cursor_row + (int32_t)n);
+        break;
+    }
+    case 'C': {
+        uint16_t n = vt_csi_param(tty, 0, 1);
+        tty->cursor_col = vt_clamp_col((int32_t)tty->cursor_col + (int32_t)n);
+        break;
+    }
+    case 'D': {
+        uint16_t n = vt_csi_param(tty, 0, 1);
+        tty->cursor_col = vt_clamp_col((int32_t)tty->cursor_col - (int32_t)n);
+        break;
+    }
+    case 'H':
+    case 'f': {
+        uint16_t row = vt_csi_param(tty, 0, 1);
+        uint16_t col = vt_csi_param(tty, 1, 1);
+        tty->cursor_row = vt_clamp_row((int32_t)row - 1);
+        tty->cursor_col = vt_clamp_col((int32_t)col - 1);
+        break;
+    }
+    case 'J': {
+        uint16_t mode = (tty->csi_count > 0) ? tty->csi_params[0] : 0;
+        if (mode == 2) {
+            for (uint16_t r = 0; r < VT_ROWS_DEFAULT; ++r) {
+                for (uint16_t c = 0; c < VT_COLS_DEFAULT; ++c) {
+                    vt_clear_cell(tty, r, c, render_now);
+                }
+            }
+        } else if (mode == 1) {
+            for (uint16_t r = 0; r <= tty->cursor_row; ++r) {
+                uint16_t max_col = (r == tty->cursor_row) ? tty->cursor_col : (uint16_t)(VT_COLS_DEFAULT - 1u);
+                for (uint16_t c = 0; c <= max_col; ++c) {
+                    vt_clear_cell(tty, r, c, render_now);
+                }
+            }
+        } else {
+            for (uint16_t r = tty->cursor_row; r < VT_ROWS_DEFAULT; ++r) {
+                uint16_t start_col = (r == tty->cursor_row) ? tty->cursor_col : 0;
+                for (uint16_t c = start_col; c < VT_COLS_DEFAULT; ++c) {
+                    vt_clear_cell(tty, r, c, render_now);
+                }
+            }
+        }
+        break;
+    }
+    case 'K': {
+        uint16_t mode = (tty->csi_count > 0) ? tty->csi_params[0] : 0;
+        if (mode == 2) {
+            for (uint16_t c = 0; c < VT_COLS_DEFAULT; ++c) {
+                vt_clear_cell(tty, tty->cursor_row, c, render_now);
+            }
+        } else if (mode == 1) {
+            for (uint16_t c = 0; c <= tty->cursor_col; ++c) {
+                vt_clear_cell(tty, tty->cursor_row, c, render_now);
+            }
+        } else {
+            for (uint16_t c = tty->cursor_col; c < VT_COLS_DEFAULT; ++c) {
+                vt_clear_cell(tty, tty->cursor_row, c, render_now);
+            }
+        }
+        break;
+    }
+    case 'm': {
+        if (tty->csi_count == 0) {
+            vt_apply_sgr(tty, 0);
+            break;
+        }
+        for (uint8_t i = 0; i < tty->csi_count; ++i) {
+            vt_apply_sgr(tty, tty->csi_params[i]);
+        }
+        break;
+    }
+    default:
+        break;
+    }
+
+    if (render_now) {
+        vt_fb_set_cursor(tty);
+    }
 }
 
 static void
@@ -354,13 +584,34 @@ vt_process_byte(uint32_t tty_index, vt_tty_t *tty, uint8_t c)
     case ESC_ESC:
         if (c == '[') {
             tty->esc = ESC_CSI;
+            vt_csi_reset(tty);
         } else {
             tty->esc = ESC_NORMAL;
         }
         break;
     case ESC_CSI:
+        if (c == '?') {
+            tty->csi_private = 1;
+            break;
+        }
+        if (c >= '0' && c <= '9') {
+            tty->csi_current = (uint16_t)(tty->csi_current * 10u + (uint16_t)(c - '0'));
+            tty->csi_have_current = 1;
+            break;
+        }
+        if (c == ';') {
+            vt_csi_push_param(tty);
+            break;
+        }
         if (c >= 0x40 && c <= 0x7E) {
+            if (tty->csi_have_current || tty->csi_count > 0) {
+                vt_csi_push_param(tty);
+            }
+            if (!tty->csi_private) {
+                vt_apply_csi(tty_index, tty, c);
+            }
             tty->esc = ESC_NORMAL;
+            vt_csi_reset(tty);
         }
         break;
     }
@@ -418,6 +669,10 @@ vt_init_ttys(void)
         g_ttys[i].input_q_tail = 0;
         g_ttys[i].input_line_len = 0;
         g_ttys[i].input_line_cursor = 0;
+        g_ttys[i].csi_count = 0;
+        g_ttys[i].csi_current = 0;
+        g_ttys[i].csi_have_current = 0;
+        g_ttys[i].csi_private = 0;
         for (uint32_t k = 0; k < sizeof(g_ttys[i].input_q); ++k) {
             g_ttys[i].input_q[k] = 0;
         }

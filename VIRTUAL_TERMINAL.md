@@ -90,6 +90,8 @@ corrupt display hardware.
   - native driver shared-memory API (`shmem_create/map/unmap`)
   - WASM shared-memory syscalls (`wasmos_shmem_create/map/unmap`)
   - `vt` keyboard subscribe + input routing + escape stripping
+  - `vt` core CSI/SGR decode subset:
+    cursor move (`A/B/C/D/H/f`), erase (`J/K`), and 16-color SGR (`m`)
   - keyboard `KBD_KEY_NOTIFY` path now sends as strict fire-and-forget
     (`request_id = 0`)
   - VT→framebuffer and CLI→VT output paths now cap queue-full retries and drop

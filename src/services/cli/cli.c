@@ -294,6 +294,40 @@ cli_register_vt_writer(void)
     return -1;
 }
 
+static int
+cli_set_vt_mode(uint32_t mode)
+{
+    if (g_vt_endpoint < 0 || g_vt_client_endpoint < 0) {
+        return -1;
+    }
+    int32_t req_id = g_request_id++;
+    if (wasmos_ipc_send(g_vt_endpoint,
+                        g_vt_client_endpoint,
+                        VT_IPC_SET_MODE_REQ,
+                        req_id,
+                        (int32_t)mode, 0, 0, 0) != 0) {
+        return -1;
+    }
+
+    for (int tries = 0; tries < 64; ++tries) {
+        int32_t rc = wasmos_ipc_try_recv(g_vt_client_endpoint);
+        if (rc < 0) {
+            return -1;
+        }
+        if (rc == 0) {
+            (void)wasmos_sched_yield();
+            continue;
+        }
+        int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+        int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+        if (resp_req != req_id) {
+            continue;
+        }
+        return (resp_type == VT_IPC_RESP) ? 0 : -1;
+    }
+    return -1;
+}
+
 static int32_t
 cli_vt_read_char(char *out_ch)
 {
@@ -912,6 +946,12 @@ initialize(int32_t proc_endpoint,
             if (g_vt_endpoint >= 0 && cli_register_vt_writer() != 0) {
                 g_phase = CLI_PHASE_FAILED;
                 console_write("[cli] vt writer register failed\n");
+                stall_forever();
+            }
+            if (g_vt_endpoint >= 0 &&
+                cli_set_vt_mode((uint32_t)VT_INPUT_MODE_RAW) != 0) {
+                g_phase = CLI_PHASE_FAILED;
+                console_write("[cli] vt mode set failed\n");
                 stall_forever();
             }
             g_last_seen_active_tty = 0;

@@ -83,8 +83,15 @@ enum {
     VT_IPC_SWITCH_TTY   = 0x703,
     VT_IPC_GET_ACTIVE_TTY = 0x704,
     VT_IPC_REGISTER_WRITER = 0x705,
+    VT_IPC_SET_MODE_REQ = 0x706,
     VT_IPC_RESP         = 0x780,
     VT_IPC_ERROR        = 0x7FF
+};
+
+enum {
+    VT_INPUT_MODE_RAW = 0,
+    VT_INPUT_MODE_CANONICAL = 1 << 0,
+    VT_INPUT_MODE_ECHO = 1 << 1
 };
 
 enum {

@@ -89,6 +89,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
   tty buffer, and background tty writes no longer paint the active framebuffer
 - VT now decodes a core ANSI/VT100 CSI subset per tty buffer: cursor movement
   (`A/B/C/D/H/f`), erase display/line (`J/K`), and 16-color SGR (`m`)
+- VT now exposes `VT_IPC_SET_MODE_REQ` to configure per-tty input mode
+  (`raw`, `canonical`, `echo`) without changing writer/read ownership rules
 - VT now requires explicit writer registration (`VT_IPC_REGISTER_WRITER`) and
   tags tty output with a switch-generation token so stale pre-switch writes are
   dropped instead of repainting over a freshly replayed tty

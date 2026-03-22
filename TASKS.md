@@ -64,6 +64,9 @@ IMPORTANT: Keep this file aligned with `README.md` and `ARCHITECTURE.md`.
 - Add NVMe support.
 - Extend virtual terminal support beyond the current baseline:
   multi-TTY, richer ANSI handling, cooked/raw modes, history, and scrollback.
+- Revisit deferred VT framebuffer artifact: intermittent duplicated/misaligned
+  prompts during rapid `Ctrl+Shift+Fn` tty switching. Use existing VT
+  `wasmos_debug_mark` trace events to capture a stable repro timeline first.
 - Add NVMEM support.
 - Add virtio support (virtio-blk, virtio-console, virtio-rng, virtio-fs, virtio-net).
 - Asynchronous I/O support (e.g., `async-io`).

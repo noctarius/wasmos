@@ -48,3 +48,7 @@ This repository uses Codex CLI to assist with development. Follow these conventi
 - Commits created by agents must include a `Co-authored-by:` trailer.
 - ALWAYS run `cmake --build build --target run-qemu-test` before staging and committing changes.
 - ALWAYS run unit tests, especially newly created tests, and also the full existing unit test suite, before declaring work complete.
+- Unit/integration test targets MUST NOT be started in parallel (for example,
+  do not run `run-qemu-test` and `run-qemu-cli-test` at the same time). They
+  share mutable `build/esp` artifacts and parallel runs can cause flaky
+  failures like `Error deleting` and boot-config corruption.

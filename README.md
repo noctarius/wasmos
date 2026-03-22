@@ -92,6 +92,10 @@ IMPORTANT: Create a git commit after each prompt iteration.
   dropped instead of repainting over a freshly replayed tty
 - VT switch/write-drop diagnostics now emit compact `wasmos_debug_mark` tags
   (when `WASMOS_TRACE=1`) into the existing global kernel trace stream
+- Known deferred issue: an intermittent framebuffer-only prompt duplication /
+  spacing artifact during very rapid `Ctrl+Shift+F1..F4` switching was observed
+  previously; it has not reproduced again recently, and trace hooks remain in
+  place for a future focused repro/debug pass
 - VT supports keyboard hotkey switching with `Ctrl+Shift+F1..F4` mapped to
   `tty0..tty3`
 - keyboard notify events use fire-and-forget IPC (`request_id = 0`) and VT/CLI

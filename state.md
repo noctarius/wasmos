@@ -57,6 +57,9 @@ Lockup hardening remains in place:
 - Decide how WASM `shmem_unmap` should handle restoring overwritten linear pages.
 - Extend coverage with explicit tty-switch behavior tests (`tty 1/2/3`) that
   verify shell state isolation across ttys.
+- Deferred investigation: intermittent framebuffer-only prompt duplication /
+  spacing artifact during rapid `Ctrl+Shift+Fn` switches. Not reproducing in
+  recent runs; keep VT debug-mark traces as the primary future capture path.
 - Extend VT toward richer ANSI semantics and line discipline.
 - Keep docs (`README.md`, `ARCHITECTURE.md`, `TASKS.md`, `VIRTUAL_TERMINAL.md`)
   aligned as behavior evolves.

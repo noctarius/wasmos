@@ -91,6 +91,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   (`A/B/C/D/H/f`), erase display/line (`J/K`), and 16-color SGR (`m`)
 - VT now exposes `VT_IPC_SET_MODE_REQ` to configure per-tty input mode
   (`raw`, `canonical`, `echo`) without changing writer/read ownership rules
+- VT canonical mode now handles core line-discipline controls in-service
+  (`Backspace`, `Ctrl+U`, `Ctrl+C`) so cooked-mode clients do not need to
+  reimplement baseline editing behavior
 - VT now requires explicit writer registration (`VT_IPC_REGISTER_WRITER`) and
   tags tty output with a switch-generation token so stale pre-switch writes are
   dropped instead of repainting over a freshly replayed tty

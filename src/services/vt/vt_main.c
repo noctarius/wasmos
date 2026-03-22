@@ -775,6 +775,27 @@ vt_input_handle_char(uint32_t tty_index, uint8_t ch)
     }
     vt_tty_t *tty = &g_ttys[tty_index];
     if (tty->input_canonical) {
+        if (ch == 0x03) { /* Ctrl+C */
+            tty->input_line_len = 0;
+            tty->input_line_cursor = 0;
+            if (tty->input_echo) {
+                vt_input_echo_char(tty_index, '^');
+                vt_input_echo_char(tty_index, 'C');
+                vt_input_echo_char(tty_index, '\n');
+            }
+            (void)vt_input_q_push(tty, ch);
+            return;
+        }
+        if (ch == 0x15) { /* Ctrl+U */
+            while (tty->input_line_len > 0) {
+                tty->input_line_len--;
+                tty->input_line_cursor = tty->input_line_len;
+                if (tty->input_echo) {
+                    vt_input_echo_char(tty_index, '\b');
+                }
+            }
+            return;
+        }
         if (ch == '\r' || ch == '\n') {
             if (tty->input_echo) {
                 vt_input_echo_char(tty_index, '\n');
@@ -849,10 +870,21 @@ vt_handle_key_notify(int32_t scancode, int32_t keyup)
         }
     }
 
-    if (scancode <= 0 || scancode >= (int32_t)(sizeof(g_sc_to_ascii))) {
-        return;
+    uint8_t ch = 0;
+    if (g_ctrl_down) {
+        /* Minimal cooked-mode control set for line discipline. */
+        if (scancode == 0x16) {       /* U */
+            ch = 0x15;                /* NAK / Ctrl+U */
+        } else if (scancode == 0x2E) {/* C */
+            ch = 0x03;                /* ETX / Ctrl+C */
+        }
     }
-    uint8_t ch = g_sc_to_ascii[(uint32_t)scancode];
+    if (ch == 0) {
+        if (scancode <= 0 || scancode >= (int32_t)(sizeof(g_sc_to_ascii))) {
+            return;
+        }
+        ch = g_sc_to_ascii[(uint32_t)scancode];
+    }
     if (ch == 0) {
         return;
     }

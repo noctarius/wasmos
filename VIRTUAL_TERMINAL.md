@@ -228,8 +228,8 @@ notification mechanism, not through request/response IPC. The model is:
    scancode (`arg0`), key-up flag (`arg1`), and extended-key prefix flag from
    `0xE0` (`arg2`).
 4. `vt` receives the notification in its main loop, maps canonical controls
-   (including history navigation), and echoes back to the framebuffer driver as
-   appropriate.
+   (including history navigation), maps raw-mode arrows to ANSI escape bytes
+   (`ESC[A/B/C/D`), and echoes back to the framebuffer driver as appropriate.
 
 This is a pub/sub model: the keyboard driver does not know or care what `vt`
 does with the event. Multiple subscribers (e.g. a future compositor or debugger)
@@ -445,6 +445,8 @@ mode flag transport (`VT_SET_MODE_REQ`) is now landed; richer cooked-mode
 editing/history behavior remains Phase 3 work. The current cooked baseline now
 handles `Backspace`, `Ctrl+U`, `Ctrl+C`, and per-tty history recall via
 `Up/Down` arrows with `Ctrl+P` / `Ctrl+N` fallback inside VT.
+Raw mode now preserves arrow semantics by emitting ANSI escape bytes
+(`ESC[A/B/C/D`) on `VT_READ_REQ`.
 
 ---
 

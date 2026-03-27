@@ -89,8 +89,8 @@ The current tree already boots into a usable user-space stack:
   for VT writes/reads.
 - VT canonical input handling now includes baseline in-service line discipline
   controls (`Backspace`, `Ctrl+U`, `Ctrl+C`) plus per-tty history navigation
-  (`Ctrl+P`/`Ctrl+N`), so cooked-mode consumers can rely on VT-side editing/
-  interrupt delivery semantics.
+  (`Up/Down` arrows with `Ctrl+P`/`Ctrl+N` fallback), so cooked-mode consumers
+  can rely on VT-side editing/interrupt delivery semantics.
 - VT enforces explicit writer registration (`VT_IPC_REGISTER_WRITER`) and
   switch-generation write tokens: writes tagged with older generations are
   dropped after tty switches, and switch replay runs behind a temporary render

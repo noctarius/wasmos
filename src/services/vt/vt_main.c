@@ -1022,9 +1022,9 @@ vt_set_input_mode(vt_tty_t *tty, uint8_t mode)
 }
 
 static void
-vt_handle_key_notify(int32_t scancode, int32_t keyup)
+vt_handle_key_notify(int32_t scancode, int32_t keyup, int32_t extended)
 {
-    if (scancode == 0x1D) { /* Ctrl */
+    if (scancode == 0x1D) { /* Ctrl (left + extended right) */
         g_ctrl_down = keyup ? 0 : 1;
         return;
     }
@@ -1035,6 +1035,21 @@ vt_handle_key_notify(int32_t scancode, int32_t keyup)
 
     if (keyup != 0) {
         return;
+    }
+
+    if (extended && g_active_tty != 0) {
+        vt_tty_t *tty = &g_ttys[g_active_tty];
+        /* Extended set-1 arrows: Up=0x48, Down=0x50. */
+        if (tty->input_canonical && scancode == 0x48) {
+            vt_input_handle_char(g_active_tty, 0x10); /* Ctrl+P semantic */
+            return;
+        }
+        if (tty->input_canonical && scancode == 0x50) {
+            vt_input_handle_char(g_active_tty, 0x0E); /* Ctrl+N semantic */
+            return;
+        }
+        /* FIXME: raw mode currently does not translate extended arrows into
+         * escape sequences for user-space consumers yet. */
     }
 
     if (g_ctrl_down && g_shift_down) {
@@ -1058,8 +1073,6 @@ vt_handle_key_notify(int32_t scancode, int32_t keyup)
             ch = 0x0E;                /* SO / Ctrl+N */
         }
     }
-    /* FIXME: keyboard driver currently reports only set-1 base scancodes,
-     * so extended arrows are not reliably available here yet. */
     if (ch == 0) {
         if (scancode <= 0 || scancode >= (int32_t)(sizeof(g_sc_to_ascii))) {
             return;
@@ -1273,7 +1286,7 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
         }
 
         case KBD_IPC_KEY_NOTIFY:
-            vt_handle_key_notify(msg.arg0, msg.arg1);
+            vt_handle_key_notify(msg.arg0, msg.arg1, msg.arg2);
             break;
 
         case KBD_IPC_SUBSCRIBE_RESP:

@@ -29,6 +29,7 @@ let g_subs2: i32 = -1;
 let g_subs3: i32 = -1;
 
 let g_kbd_ep: i32 = -1;
+let g_extended_pending: i32 = 0;
 function writeString(text: string): void {
   if (text.length == 0) { return; }
   let bytes = Uint8Array.wrap(String.UTF8.encode(text, false));
@@ -54,18 +55,18 @@ function addSubscriber(ep: i32): i32 {
   return -1; /* full */
 }
 
-function notifySubscribers(scancode: i32, keyup: i32): void {
+function notifySubscribers(scancode: i32, keyup: i32, extended: i32): void {
   if (g_subs0 >= 0) {
-    ipc_send(g_subs0, g_kbd_ep, KBD_IPC_KEY_NOTIFY, 0, scancode, keyup, 0, 0);
+    ipc_send(g_subs0, g_kbd_ep, KBD_IPC_KEY_NOTIFY, 0, scancode, keyup, extended, 0);
   }
   if (g_subs1 >= 0) {
-    ipc_send(g_subs1, g_kbd_ep, KBD_IPC_KEY_NOTIFY, 0, scancode, keyup, 0, 0);
+    ipc_send(g_subs1, g_kbd_ep, KBD_IPC_KEY_NOTIFY, 0, scancode, keyup, extended, 0);
   }
   if (g_subs2 >= 0) {
-    ipc_send(g_subs2, g_kbd_ep, KBD_IPC_KEY_NOTIFY, 0, scancode, keyup, 0, 0);
+    ipc_send(g_subs2, g_kbd_ep, KBD_IPC_KEY_NOTIFY, 0, scancode, keyup, extended, 0);
   }
   if (g_subs3 >= 0) {
-    ipc_send(g_subs3, g_kbd_ep, KBD_IPC_KEY_NOTIFY, 0, scancode, keyup, 0, 0);
+    ipc_send(g_subs3, g_kbd_ep, KBD_IPC_KEY_NOTIFY, 0, scancode, keyup, extended, 0);
   }
 }
 
@@ -113,10 +114,18 @@ export function initialize(_proc_endpoint: i32, kbd_endpoint: i32,
     /* 2. Check for a new PS/2 scancode. */
     let code = readScancode();
     if (code >= 0) {
+      if (code == 0xE0) {
+        g_extended_pending = 1;
+        io_wait();
+        sched_yield();
+        continue;
+      }
       /* PS/2 Set 1: key-up codes have bit 7 set. */
       let keyup: i32 = (code & 0x80) != 0 ? 1 : 0;
       let sc: i32    = code & 0x7F;
-      notifySubscribers(sc, keyup);
+      let ext: i32   = g_extended_pending;
+      g_extended_pending = 0;
+      notifySubscribers(sc, keyup, ext);
     }
 
     io_wait();

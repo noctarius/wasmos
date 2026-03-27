@@ -95,15 +95,14 @@ corrupt display hardware.
     private cursor show/hide (`?25h/l`), and 16-color SGR (`m`)
   - `vt` per-tty input mode control via `VT_IPC_SET_MODE_REQ`
     (`VT_INPUT_MODE_RAW`, `VT_INPUT_MODE_CANONICAL`, `VT_INPUT_MODE_ECHO`)
-  - `vt` canonical input history ring with `Ctrl+P` / `Ctrl+N` navigation
+  - `vt` canonical input history ring with `Up/Down` arrow navigation and
+    `Ctrl+P` / `Ctrl+N` fallback
   - keyboard `KBD_KEY_NOTIFY` path now sends as strict fire-and-forget
     (`request_id = 0`)
   - VT→framebuffer and CLI→VT output paths now cap queue-full retries and drop
     stale updates on persistent backpressure instead of spinning forever
 - Not landed yet:
   - full ANSI cursor/color feature set
-  - arrow-key history navigation (depends on keyboard extended scancode
-    reporting; current fallback is `Ctrl+P` / `Ctrl+N`)
   - service-registry-based VT endpoint discovery
   - deferred debug pass for an intermittent framebuffer-only prompt
     duplication/misalignment artifact seen during rapid `Ctrl+Shift+Fn`
@@ -225,11 +224,12 @@ notification mechanism, not through request/response IPC. The model is:
    keyboard driver (a `KBD_SUBSCRIBE_REQ` IPC call during initialization).
 2. The keyboard driver records `vt`'s notification endpoint.
 3. On each scancode the keyboard driver delivers a `KBD_KEY_NOTIFY` notification
-   to every registered subscriber. The notification carries the raw scancode and
-   a decoded codepoint (or zero if not printable).
-4. `vt` receives the notification in its main loop, feeds the codepoint into the
-   active TTY's input queue (or the escape parser if in raw mode), and echoes
-   back to the framebuffer driver as appropriate.
+   to every registered subscriber. The notification carries the raw set-1
+   scancode (`arg0`), key-up flag (`arg1`), and extended-key prefix flag from
+   `0xE0` (`arg2`).
+4. `vt` receives the notification in its main loop, maps canonical controls
+   (including history navigation), and echoes back to the framebuffer driver as
+   appropriate.
 
 This is a pub/sub model: the keyboard driver does not know or care what `vt`
 does with the event. Multiple subscribers (e.g. a future compositor or debugger)
@@ -243,7 +243,7 @@ active and takes over echo responsibility under its line discipline.
 ```
 KBD_SUBSCRIBE_REQ    0x800  vt → keyboard driver   register notification endpoint
 KBD_SUBSCRIBE_RESP   0x880  keyboard → vt          acknowledgment
-KBD_KEY_NOTIFY       0x801  keyboard → subscriber  scancode in arg0, codepoint in arg1
+KBD_KEY_NOTIFY       0x801  keyboard → subscriber  scancode in arg0, keyup in arg1, extended in arg2
 ```
 
 `KBD_KEY_NOTIFY` is fire-and-forget (no response expected) to keep the keyboard
@@ -444,8 +444,7 @@ The line discipline is accessible through the same `VT_READ_REQ` IPC path. The
 mode flag transport (`VT_SET_MODE_REQ`) is now landed; richer cooked-mode
 editing/history behavior remains Phase 3 work. The current cooked baseline now
 handles `Backspace`, `Ctrl+U`, `Ctrl+C`, and per-tty history recall via
-`Ctrl+P` / `Ctrl+N` inside VT (arrow-key navigation remains pending keyboard
-extended scancode support).
+`Up/Down` arrows with `Ctrl+P` / `Ctrl+N` fallback inside VT.
 
 ---
 

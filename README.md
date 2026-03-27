@@ -83,8 +83,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   manager assigning each CLI a home tty; only the foreground tty's CLI consumes
   keyboard input
 - VT now owns keyboard input routing and delivers per-tty raw input via
-  `VT_IPC_READ_REQ`; CLI owns line editing/echo, with serial input retained as
-  fallback for headless/automation flows
+  `VT_IPC_READ_REQ`; in raw mode, extended arrows are emitted as ANSI escape
+  sequences (`ESC[A/B/C/D`). CLI owns line editing/echo, with serial input
+  retained as fallback for headless/automation flows
 - VT output is now source-tty scoped: each CLI endpoint writes to its assigned
   tty buffer, and background tty writes no longer paint the active framebuffer
 - VT now decodes a core ANSI/VT100 CSI subset per tty buffer: cursor movement

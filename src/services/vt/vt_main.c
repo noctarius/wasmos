@@ -153,6 +153,17 @@ vt_input_q_pop(vt_tty_t *tty, uint8_t *out_ch)
     return 0;
 }
 
+static void
+vt_input_q_push_escape(vt_tty_t *tty, uint8_t final)
+{
+    if (!tty) {
+        return;
+    }
+    (void)vt_input_q_push(tty, 0x1B); /* ESC */
+    (void)vt_input_q_push(tty, '[');
+    (void)vt_input_q_push(tty, final);
+}
+
 static int
 vt_fb_send(uint32_t type,
            int32_t arg0,
@@ -1040,16 +1051,31 @@ vt_handle_key_notify(int32_t scancode, int32_t keyup, int32_t extended)
     if (extended && g_active_tty != 0) {
         vt_tty_t *tty = &g_ttys[g_active_tty];
         /* Extended set-1 arrows: Up=0x48, Down=0x50. */
-        if (tty->input_canonical && scancode == 0x48) {
-            vt_input_handle_char(g_active_tty, 0x10); /* Ctrl+P semantic */
+        if (tty->input_canonical) {
+            if (scancode == 0x48) {
+                vt_input_handle_char(g_active_tty, 0x10); /* Ctrl+P semantic */
+                return;
+            }
+            if (scancode == 0x50) {
+                vt_input_handle_char(g_active_tty, 0x0E); /* Ctrl+N semantic */
+                return;
+            }
             return;
         }
-        if (tty->input_canonical && scancode == 0x50) {
-            vt_input_handle_char(g_active_tty, 0x0E); /* Ctrl+N semantic */
+
+        if (scancode == 0x48) {       /* Up */
+            vt_input_q_push_escape(tty, 'A');
+            return;
+        } else if (scancode == 0x50) {/* Down */
+            vt_input_q_push_escape(tty, 'B');
+            return;
+        } else if (scancode == 0x4D) {/* Right */
+            vt_input_q_push_escape(tty, 'C');
+            return;
+        } else if (scancode == 0x4B) {/* Left */
+            vt_input_q_push_escape(tty, 'D');
             return;
         }
-        /* FIXME: raw mode currently does not translate extended arrows into
-         * escape sequences for user-space consumers yet. */
     }
 
     if (g_ctrl_down && g_shift_down) {

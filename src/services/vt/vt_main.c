@@ -20,9 +20,13 @@ typedef struct {
 typedef struct {
     uint16_t cursor_row;
     uint16_t cursor_col;
+    uint16_t cursor_saved_row;
+    uint16_t cursor_saved_col;
     uint8_t fg;
     uint8_t bg;
     uint8_t attr;
+    uint8_t cursor_visible;
+    uint8_t cursor_saved_valid;
     uint8_t input_echo;
     uint8_t input_canonical;
     esc_state_t esc;
@@ -30,8 +34,13 @@ typedef struct {
     uint16_t input_q_tail;
     uint16_t input_line_len;
     uint16_t input_line_cursor;
+    uint8_t input_history_count;
+    uint8_t input_history_head;
+    int8_t input_history_nav;
     uint8_t input_q[256];
     uint8_t input_line[128];
+    uint8_t input_history[8][128];
+    uint8_t input_history_len[8];
     uint16_t csi_params[8];
     uint8_t csi_count;
     uint16_t csi_current;
@@ -94,6 +103,20 @@ vt_cell_index(uint16_t row, uint16_t col)
 
 static void
 vt_render_cell(const vt_tty_t *tty, uint16_t row, uint16_t col);
+
+static int
+vt_bytes_equal(const uint8_t *a, const uint8_t *b, uint16_t len)
+{
+    if (!a || !b) {
+        return 0;
+    }
+    for (uint16_t i = 0; i < len; ++i) {
+        if (a[i] != b[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
 
 static uint16_t
 vt_input_q_next(uint16_t v)
@@ -162,7 +185,7 @@ vt_fb_send(uint32_t type,
 static void
 vt_fb_set_cursor(const vt_tty_t *tty)
 {
-    if (!tty) {
+    if (!tty || !tty->cursor_visible) {
         return;
     }
     (void)vt_fb_send(FBTEXT_IPC_CURSOR_SET_REQ,
@@ -319,6 +342,33 @@ vt_apply_sgr(vt_tty_t *tty, uint16_t code)
 }
 
 static void
+vt_apply_private_csi(uint32_t tty_index, vt_tty_t *tty, uint8_t final)
+{
+    if (!tty || (final != 'h' && final != 'l')) {
+        return;
+    }
+
+    uint8_t has_cursor_param = 0;
+    for (uint8_t i = 0; i < tty->csi_count; ++i) {
+        if (tty->csi_params[i] == 25u) {
+            has_cursor_param = 1u;
+            break;
+        }
+    }
+    if (!has_cursor_param) {
+        return;
+    }
+
+    tty->cursor_visible = (final == 'h') ? 1u : 0u;
+    if ((tty_index != 0u) &&
+        (tty_index == g_active_tty) &&
+        !g_switch_barrier &&
+        tty->cursor_visible) {
+        vt_fb_set_cursor(tty);
+    }
+}
+
+static void
 vt_apply_csi(uint32_t tty_index, vt_tty_t *tty, uint8_t final)
 {
     if (!tty) {
@@ -408,6 +458,17 @@ vt_apply_csi(uint32_t tty_index, vt_tty_t *tty, uint8_t final)
         }
         break;
     }
+    case 's':
+        tty->cursor_saved_row = tty->cursor_row;
+        tty->cursor_saved_col = tty->cursor_col;
+        tty->cursor_saved_valid = 1u;
+        break;
+    case 'u':
+        if (tty->cursor_saved_valid) {
+            tty->cursor_row = tty->cursor_saved_row;
+            tty->cursor_col = tty->cursor_saved_col;
+        }
+        break;
     default:
         break;
     }
@@ -607,7 +668,9 @@ vt_process_byte(uint32_t tty_index, vt_tty_t *tty, uint8_t c)
             if (tty->csi_have_current || tty->csi_count > 0) {
                 vt_csi_push_param(tty);
             }
-            if (!tty->csi_private) {
+            if (tty->csi_private) {
+                vt_apply_private_csi(tty_index, tty, c);
+            } else {
                 vt_apply_csi(tty_index, tty, c);
             }
             tty->esc = ESC_NORMAL;
@@ -657,9 +720,13 @@ vt_init_ttys(void)
     for (uint32_t i = 0; i < VT_MAX_TTYS; ++i) {
         g_ttys[i].cursor_row = 0;
         g_ttys[i].cursor_col = 0;
+        g_ttys[i].cursor_saved_row = 0;
+        g_ttys[i].cursor_saved_col = 0;
         g_ttys[i].fg = 15;
         g_ttys[i].bg = 0;
         g_ttys[i].attr = 0;
+        g_ttys[i].cursor_visible = 1;
+        g_ttys[i].cursor_saved_valid = 0;
         /* Input is delivered raw to the tty client; CLI owns line editing
          * and user-visible echo so serial and framebuffer behave the same. */
         g_ttys[i].input_echo = 0;
@@ -669,6 +736,9 @@ vt_init_ttys(void)
         g_ttys[i].input_q_tail = 0;
         g_ttys[i].input_line_len = 0;
         g_ttys[i].input_line_cursor = 0;
+        g_ttys[i].input_history_count = 0;
+        g_ttys[i].input_history_head = 0;
+        g_ttys[i].input_history_nav = -1;
         g_ttys[i].csi_count = 0;
         g_ttys[i].csi_current = 0;
         g_ttys[i].csi_have_current = 0;
@@ -678,6 +748,12 @@ vt_init_ttys(void)
         }
         for (uint32_t k = 0; k < sizeof(g_ttys[i].input_line); ++k) {
             g_ttys[i].input_line[k] = 0;
+        }
+        for (uint32_t h = 0; h < 8u; ++h) {
+            g_ttys[i].input_history_len[h] = 0;
+            for (uint32_t k = 0; k < sizeof(g_ttys[i].input_history[h]); ++k) {
+                g_ttys[i].input_history[h][k] = 0;
+            }
         }
         for (uint32_t j = 0; j < VT_COLS_DEFAULT * VT_ROWS_DEFAULT; ++j) {
             g_ttys[i].cells[j].ch = 0;
@@ -765,6 +841,91 @@ vt_input_commit_line(vt_tty_t *tty)
     (void)vt_input_q_push(tty, '\n');
     tty->input_line_len = 0;
     tty->input_line_cursor = 0;
+    tty->input_history_nav = -1;
+}
+
+static void
+vt_input_history_store(vt_tty_t *tty)
+{
+    if (!tty || tty->input_line_len == 0) {
+        return;
+    }
+
+    if (tty->input_history_count > 0) {
+        uint8_t newest = (uint8_t)((tty->input_history_head + 8u - 1u) % 8u);
+        uint8_t newest_len = tty->input_history_len[newest];
+        if (newest_len == (uint8_t)tty->input_line_len &&
+            vt_bytes_equal(tty->input_history[newest], tty->input_line, tty->input_line_len)) {
+            return;
+        }
+    }
+
+    uint8_t slot = tty->input_history_head;
+    tty->input_history_len[slot] = (uint8_t)tty->input_line_len;
+    for (uint16_t i = 0; i < tty->input_line_len; ++i) {
+        tty->input_history[slot][i] = tty->input_line[i];
+    }
+    tty->input_history_head = (uint8_t)((tty->input_history_head + 1u) % 8u);
+    if (tty->input_history_count < 8u) {
+        tty->input_history_count++;
+    }
+}
+
+static void
+vt_input_replace_line(uint32_t tty_index, vt_tty_t *tty, const uint8_t *line, uint16_t len)
+{
+    if (!tty) {
+        return;
+    }
+
+    while (tty->input_line_len > 0) {
+        tty->input_line_len--;
+        tty->input_line_cursor = tty->input_line_len;
+        if (tty->input_echo) {
+            vt_input_echo_char(tty_index, '\b');
+        }
+    }
+    for (uint16_t i = 0; i < len; ++i) {
+        tty->input_line[i] = line[i];
+        tty->input_line_len++;
+        tty->input_line_cursor = tty->input_line_len;
+        if (tty->input_echo) {
+            vt_input_echo_char(tty_index, line[i]);
+        }
+    }
+}
+
+static void
+vt_input_history_nav(uint32_t tty_index, vt_tty_t *tty, uint8_t older)
+{
+    if (!tty || tty->input_history_count == 0) {
+        return;
+    }
+
+    int16_t nav = tty->input_history_nav;
+    if (older) {
+        if (nav + 1 >= (int16_t)tty->input_history_count) {
+            return;
+        }
+        nav++;
+    } else {
+        if (nav < 0) {
+            return;
+        }
+        nav--;
+    }
+
+    if (nav < 0) {
+        tty->input_history_nav = -1;
+        vt_input_replace_line(tty_index, tty, 0, 0);
+        return;
+    }
+
+    tty->input_history_nav = (int8_t)nav;
+    uint8_t newest = (uint8_t)((tty->input_history_head + 8u - 1u) % 8u);
+    uint8_t slot = (uint8_t)((newest + 8u - (uint8_t)nav) % 8u);
+    uint16_t len = tty->input_history_len[slot];
+    vt_input_replace_line(tty_index, tty, tty->input_history[slot], len);
 }
 
 static void
@@ -778,6 +939,7 @@ vt_input_handle_char(uint32_t tty_index, uint8_t ch)
         if (ch == 0x03) { /* Ctrl+C */
             tty->input_line_len = 0;
             tty->input_line_cursor = 0;
+            tty->input_history_nav = -1;
             if (tty->input_echo) {
                 vt_input_echo_char(tty_index, '^');
                 vt_input_echo_char(tty_index, 'C');
@@ -794,12 +956,22 @@ vt_input_handle_char(uint32_t tty_index, uint8_t ch)
                     vt_input_echo_char(tty_index, '\b');
                 }
             }
+            tty->input_history_nav = -1;
+            return;
+        }
+        if (ch == 0x10) { /* Ctrl+P => previous history */
+            vt_input_history_nav(tty_index, tty, 1);
+            return;
+        }
+        if (ch == 0x0E) { /* Ctrl+N => next history */
+            vt_input_history_nav(tty_index, tty, 0);
             return;
         }
         if (ch == '\r' || ch == '\n') {
             if (tty->input_echo) {
                 vt_input_echo_char(tty_index, '\n');
             }
+            vt_input_history_store(tty);
             vt_input_commit_line(tty);
             return;
         }
@@ -811,6 +983,7 @@ vt_input_handle_char(uint32_t tty_index, uint8_t ch)
                     vt_input_echo_char(tty_index, '\b');
                 }
             }
+            tty->input_history_nav = -1;
             return;
         }
         if (ch < 0x20 || ch > 0x7E) {
@@ -821,6 +994,7 @@ vt_input_handle_char(uint32_t tty_index, uint8_t ch)
         }
         tty->input_line[tty->input_line_len++] = ch;
         tty->input_line_cursor = tty->input_line_len;
+        tty->input_history_nav = -1;
         if (tty->input_echo) {
             vt_input_echo_char(tty_index, ch);
         }
@@ -843,6 +1017,7 @@ vt_set_input_mode(vt_tty_t *tty, uint8_t mode)
     if (!tty->input_canonical) {
         tty->input_line_len = 0;
         tty->input_line_cursor = 0;
+        tty->input_history_nav = -1;
     }
 }
 
@@ -877,8 +1052,14 @@ vt_handle_key_notify(int32_t scancode, int32_t keyup)
             ch = 0x15;                /* NAK / Ctrl+U */
         } else if (scancode == 0x2E) {/* C */
             ch = 0x03;                /* ETX / Ctrl+C */
+        } else if (scancode == 0x19) {/* P */
+            ch = 0x10;                /* DLE / Ctrl+P */
+        } else if (scancode == 0x31) {/* N */
+            ch = 0x0E;                /* SO / Ctrl+N */
         }
     }
+    /* FIXME: keyboard driver currently reports only set-1 base scancodes,
+     * so extended arrows are not reliably available here yet. */
     if (ch == 0) {
         if (scancode <= 0 || scancode >= (int32_t)(sizeof(g_sc_to_ascii))) {
             return;

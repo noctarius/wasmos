@@ -78,9 +78,9 @@ The current tree already boots into a usable user-space stack:
   input over `VT_IPC_READ_REQ`. CLI remains the owner of line editing/echo;
   serial console reads are retained as fallback for headless/automated test
   flows.
-- VT now applies a core CSI/SGR subset per tty state (`A/B/C/D/H/f`, `J`, `K`,
-  `m` with 16-color mapping), so replayed tty buffers preserve cursor/erase/
-  color effects across switches.
+- VT now applies a core CSI/SGR subset per tty state (`A/B/C/D/H/f`, `s/u`,
+  `J`, `K`, private `?25h/l`, `m` with 16-color mapping), so replayed tty
+  buffers preserve cursor/erase/color effects across switches.
 - VT write routing now uses caller endpoint ownership to target the correct tty
   buffer; non-foreground tty writes are buffered without rendering over the
   active framebuffer.
@@ -88,8 +88,9 @@ The current tree already boots into a usable user-space stack:
   handling (`raw`, `canonical`, `echo`) through the same owned endpoint used
   for VT writes/reads.
 - VT canonical input handling now includes baseline in-service line discipline
-  controls (`Backspace`, `Ctrl+U`, `Ctrl+C`) so cooked-mode consumers can rely
-  on VT-side editing/interrupt delivery semantics.
+  controls (`Backspace`, `Ctrl+U`, `Ctrl+C`) plus per-tty history navigation
+  (`Ctrl+P`/`Ctrl+N`), so cooked-mode consumers can rely on VT-side editing/
+  interrupt delivery semantics.
 - VT enforces explicit writer registration (`VT_IPC_REGISTER_WRITER`) and
   switch-generation write tokens: writes tagged with older generations are
   dropped after tty switches, and switch replay runs behind a temporary render

@@ -91,16 +91,19 @@ corrupt display hardware.
   - WASM shared-memory syscalls (`wasmos_shmem_create/map/unmap`)
   - `vt` keyboard subscribe + input routing + escape stripping
   - `vt` core CSI/SGR decode subset:
-    cursor move (`A/B/C/D/H/f`), erase (`J/K`), and 16-color SGR (`m`)
+    cursor move (`A/B/C/D/H/f`), save/restore cursor (`s/u`), erase (`J/K`),
+    private cursor show/hide (`?25h/l`), and 16-color SGR (`m`)
   - `vt` per-tty input mode control via `VT_IPC_SET_MODE_REQ`
     (`VT_INPUT_MODE_RAW`, `VT_INPUT_MODE_CANONICAL`, `VT_INPUT_MODE_ECHO`)
+  - `vt` canonical input history ring with `Ctrl+P` / `Ctrl+N` navigation
   - keyboard `KBD_KEY_NOTIFY` path now sends as strict fire-and-forget
     (`request_id = 0`)
   - VT→framebuffer and CLI→VT output paths now cap queue-full retries and drop
     stale updates on persistent backpressure instead of spinning forever
 - Not landed yet:
-  - cooked/raw line discipline history
   - full ANSI cursor/color feature set
+  - arrow-key history navigation (depends on keyboard extended scancode
+    reporting; current fallback is `Ctrl+P` / `Ctrl+N`)
   - service-registry-based VT endpoint discovery
   - deferred debug pass for an intermittent framebuffer-only prompt
     duplication/misalignment artifact seen during rapid `Ctrl+Shift+Fn`
@@ -297,8 +300,8 @@ Priority target sequences for Phase 2:
 
 Unrecognized sequences are silently consumed (no corruption of cell state).
 
-The parser lives in `src/services/vt/escape.c` and is exercised by unit tests
-with no framebuffer or IPC dependency.
+The parser currently lives in `src/services/vt/vt_main.c`. Splitting it into
+`escape.c` with standalone unit coverage remains follow-up refactor work.
 
 ### `vt` Public IPC Interface
 
@@ -440,7 +443,9 @@ Phase 3 adds a line discipline layer inside `vt`:
 The line discipline is accessible through the same `VT_READ_REQ` IPC path. The
 mode flag transport (`VT_SET_MODE_REQ`) is now landed; richer cooked-mode
 editing/history behavior remains Phase 3 work. The current cooked baseline now
-handles `Backspace`, `Ctrl+U`, and `Ctrl+C` inside VT.
+handles `Backspace`, `Ctrl+U`, `Ctrl+C`, and per-tty history recall via
+`Ctrl+P` / `Ctrl+N` inside VT (arrow-key navigation remains pending keyboard
+extended scancode support).
 
 ---
 
@@ -458,7 +463,7 @@ compile time (e.g. 500 rows) to avoid dynamic allocation complexity.
 | Phase | Deliverables |
 |-------|-------------|
 | **1 (done)** | Native framebuffer text rendering, early-log replay, shared console ring drain, serial mirror retained. |
-| **2 (in progress)** | VT escape parsing, keyboard routing, multi-TTY switching, and per-tty CLI homes landed; remaining: richer ANSI handling and line discipline. |
+| **2 (in progress)** | VT escape parsing, keyboard routing, multi-TTY switching, per-tty CLI homes, and baseline history recall landed; remaining: richer ANSI handling and line-discipline polish. |
 | **3 (planned)** | UTF-8 expansion, scrollback, richer VT client API, and tighter shared-memory conventions for bulk text/data paths. |
 
 ---

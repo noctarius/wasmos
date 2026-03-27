@@ -1050,7 +1050,7 @@ vt_handle_key_notify(int32_t scancode, int32_t keyup, int32_t extended)
 
     if (extended && g_active_tty != 0) {
         vt_tty_t *tty = &g_ttys[g_active_tty];
-        /* Extended set-1 arrows: Up=0x48, Down=0x50. */
+        /* Extended set-1 keys include arrows plus nav/edit cluster. */
         if (tty->input_canonical) {
             if (scancode == 0x48) {
                 vt_input_handle_char(g_active_tty, 0x10); /* Ctrl+P semantic */
@@ -1074,6 +1074,40 @@ vt_handle_key_notify(int32_t scancode, int32_t keyup, int32_t extended)
             return;
         } else if (scancode == 0x4B) {/* Left */
             vt_input_q_push_escape(tty, 'D');
+            return;
+        } else if (scancode == 0x47) {/* Home */
+            (void)vt_input_q_push(tty, 0x1B);
+            (void)vt_input_q_push(tty, '[');
+            (void)vt_input_q_push(tty, 'H');
+            return;
+        } else if (scancode == 0x4F) {/* End */
+            (void)vt_input_q_push(tty, 0x1B);
+            (void)vt_input_q_push(tty, '[');
+            (void)vt_input_q_push(tty, 'F');
+            return;
+        } else if (scancode == 0x49) {/* Page Up */
+            (void)vt_input_q_push(tty, 0x1B);
+            (void)vt_input_q_push(tty, '[');
+            (void)vt_input_q_push(tty, '5');
+            (void)vt_input_q_push(tty, '~');
+            return;
+        } else if (scancode == 0x51) {/* Page Down */
+            (void)vt_input_q_push(tty, 0x1B);
+            (void)vt_input_q_push(tty, '[');
+            (void)vt_input_q_push(tty, '6');
+            (void)vt_input_q_push(tty, '~');
+            return;
+        } else if (scancode == 0x52) {/* Insert */
+            (void)vt_input_q_push(tty, 0x1B);
+            (void)vt_input_q_push(tty, '[');
+            (void)vt_input_q_push(tty, '2');
+            (void)vt_input_q_push(tty, '~');
+            return;
+        } else if (scancode == 0x53) {/* Delete */
+            (void)vt_input_q_push(tty, 0x1B);
+            (void)vt_input_q_push(tty, '[');
+            (void)vt_input_q_push(tty, '3');
+            (void)vt_input_q_push(tty, '~');
             return;
         }
     }

@@ -51,7 +51,7 @@ static uint8_t g_esc_state = 0;
 /* Keep in sync with kernel ipc.h */
 #define IPC_ERR_FULL (-3)
 #define CLI_VT_SEND_RETRIES 1024
-#define CLI_REQ_SEND_RETRIES 1024
+#define CLI_REQ_SEND_RETRIES 8192
 
 static void
 stall_forever(void)

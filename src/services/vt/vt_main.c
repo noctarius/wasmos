@@ -55,6 +55,7 @@ typedef struct {
 /* Keep in sync with kernel ipc.h */
 #define IPC_ERR_FULL (-3)
 #define VT_FB_SEND_RETRIES 1024
+#define VT_FB_SWITCH_SEND_RETRIES 32768
 
 #ifndef WASMOS_TRACE
 #define WASMOS_TRACE 0
@@ -188,6 +189,30 @@ vt_fb_send(uint32_t type,
          * drop this update so VT input handling stays responsive. */
         if (++tries >= VT_FB_SEND_RETRIES) {
             return IPC_ERR_FULL;
+        }
+        (void)wasmos_sched_yield();
+    }
+}
+
+static int
+vt_fb_send_switch(uint32_t type,
+                  int32_t arg0,
+                  int32_t arg1,
+                  int32_t arg2,
+                  int32_t arg3)
+{
+    if (g_fb_ep < 0 || g_vt_ep < 0) {
+        return -1;
+    }
+    uint32_t tries = 0;
+    for (;;) {
+        int32_t rc = wasmos_ipc_send(g_fb_ep, g_vt_ep, (int32_t)type, 0,
+                                     arg0, arg1, arg2, arg3);
+        if (rc == 0) {
+            return 0;
+        }
+        if (rc != IPC_ERR_FULL || ++tries >= VT_FB_SWITCH_SEND_RETRIES) {
+            return rc;
         }
         (void)wasmos_sched_yield();
     }
@@ -507,6 +532,23 @@ vt_render_cell(const vt_tty_t *tty, uint16_t row, uint16_t col)
 }
 
 static void
+vt_render_cell_switch(const vt_tty_t *tty, uint16_t row, uint16_t col)
+{
+    if (!tty || row >= VT_ROWS_DEFAULT || col >= VT_COLS_DEFAULT) {
+        return;
+    }
+    uint32_t idx = vt_cell_index(row, col);
+    const vt_cell_t *cell = &tty->cells[idx];
+    uint32_t packed = ((uint32_t)(cell->fg & 0x0Fu) << 8) |
+                      (uint32_t)(cell->bg & 0x0Fu);
+    (void)vt_fb_send_switch(FBTEXT_IPC_CELL_WRITE_REQ,
+                            (int32_t)col,
+                            (int32_t)row,
+                            (int32_t)cell->ch,
+                            (int32_t)packed);
+}
+
+static void
 vt_scroll_up(vt_tty_t *tty, uint8_t render_now)
 {
     if (!tty) {
@@ -709,7 +751,7 @@ vt_tty_index_for_source(int32_t source_ep)
 }
 
 static void
-vt_replay_tty(uint32_t tty_index)
+vt_replay_tty(uint32_t tty_index, uint8_t reliable)
 {
     if (tty_index >= VT_MAX_TTYS) {
         return;
@@ -718,7 +760,11 @@ vt_replay_tty(uint32_t tty_index)
 
     for (uint16_t row = 0; row < VT_ROWS_DEFAULT; ++row) {
         for (uint16_t col = 0; col < VT_COLS_DEFAULT; ++col) {
-            vt_render_cell(tty, row, col);
+            if (reliable) {
+                vt_render_cell_switch(tty, row, col);
+            } else {
+                vt_render_cell(tty, row, col);
+            }
         }
     }
 
@@ -803,20 +849,20 @@ vt_switch_tty(uint32_t tty_index)
 
     if (tty_index == 0) {
         /* Keep ring output paused until replay is complete. */
-        vt_fb_console_mode(0);
-        (void)vt_fb_send(FBTEXT_IPC_CLEAR_REQ, 0, 0, 0, 0);
-        vt_replay_tty(tty_index);
-        vt_fb_console_mode(1);
+        (void)vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 0, 0, 0, 0);
+        (void)vt_fb_send_switch(FBTEXT_IPC_CLEAR_REQ, 0, 0, 0, 0);
+        vt_replay_tty(tty_index, 1);
+        (void)vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 1, 0, 0, 0);
         g_switch_barrier = 0;
         return 0;
     }
 
     /* Disable ring first to avoid immediate repaint races from tty0 output. */
-    vt_fb_console_mode(0);
-    (void)vt_fb_send(FBTEXT_IPC_CLEAR_REQ, 0, 0, 0, 0);
+    (void)vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 0, 0, 0, 0);
+    (void)vt_fb_send_switch(FBTEXT_IPC_CLEAR_REQ, 0, 0, 0, 0);
     /* FIXME: replay currently repaints the full 80x25 virtual grid even if
      * only a small number of cells changed. */
-    vt_replay_tty(tty_index);
+    vt_replay_tty(tty_index, 1);
     g_switch_barrier = 0;
     return 0;
 }

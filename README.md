@@ -76,7 +76,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - `tty0` is the system console mirror (serial/console-ring). Switching to
   `tty1+` disables console-ring drain and replays VT-managed framebuffer cells;
   every tty switch clears the framebuffer first, then replays the selected tty
-  buffer; switching back to `tty0` re-enables ring drain
+  buffer; switch-time clear/replay now uses a reliable framebuffer IPC path to
+  avoid dropped redraws under transient queue pressure; switching back to
+  `tty0` re-enables ring drain
 - CLI now attaches to VT `tty1` by default and writes through `VT_IPC_WRITE_REQ`
   (with `tty 0..3` command for manual switching)
 - CLI `cd` now preserves shell-like path semantics for `.` (stay in cwd) and

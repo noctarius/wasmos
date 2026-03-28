@@ -67,7 +67,9 @@ The current tree already boots into a usable user-space stack:
   serial/console-ring output, while `tty1+` are VT-managed framebuffers.
   Framebuffer control IPC now includes a console-mode toggle so VT can disable
   console-ring drain when non-zero ttys are active and restore it on `tty0`.
-  tty switches clear the framebuffer before replaying the selected tty buffer.
+  tty switches clear the framebuffer before replaying the selected tty buffer,
+  and switch-time clear/replay now uses a higher-reliability IPC send path so
+  redraw is not skipped under transient framebuffer queue backpressure.
 - CLI now receives the VT endpoint from process-manager wiring, switches to
   `tty1` at startup, and sends terminal output through `VT_IPC_WRITE_REQ`
   rather than direct console writes.

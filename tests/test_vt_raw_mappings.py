@@ -38,6 +38,11 @@ class VtRawMappingSpecTest(unittest.TestCase):
         self._require(r"g_shift_down\s*\?\s*g_sc_to_ascii_shift\[\(uint32_t\)scancode\]\s*:\s*g_sc_to_ascii\[\(uint32_t\)scancode\]")
         self._require(r"g_sc_to_ascii_shift\[58\][\s\S]*'\?'")
 
+    def test_switch_replay_uses_reliable_send(self):
+        self._require(r"static int\s+vt_fb_send_switch\(")
+        self._require(r"vt_replay_tty\(tty_index,\s*1\)")
+        self._require(r"vt_fb_send_switch\(FBTEXT_IPC_CLEAR_REQ")
+
 
 if __name__ == "__main__":
     unittest.main()

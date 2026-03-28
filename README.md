@@ -92,6 +92,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
   backlogs; switching back to `tty0` re-enables ring drain
 - CLI now attaches to VT `tty1` by default and writes through `VT_IPC_WRITE_REQ`
   (with `tty 0..3` command for manual switching)
+- CLI now surfaces VT switch error codes (`tty switch failed: <code>`) so
+  failures can be tied to the precise switch stage during diagnostics
 - CLI `cd` now preserves shell-like path semantics for `.` (stay in cwd) and
   `..` (move to parent) instead of forcing root
 - sysinit now keeps one CLI instance per VT tty (`tty1..tty3`), with process

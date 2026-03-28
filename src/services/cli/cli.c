@@ -52,6 +52,7 @@ static uint8_t g_esc_state = 0;
 #define IPC_ERR_FULL (-3)
 #define CLI_VT_SEND_RETRIES 1024
 #define CLI_REQ_SEND_RETRIES 8192
+#define CLI_VT_RESP_RETRIES 4096
 
 static void
 stall_forever(void)
@@ -160,7 +161,7 @@ cli_query_active_tty(uint32_t *out_generation)
         return -1;
     }
 
-    for (int tries = 0; tries < 64; ++tries) {
+    for (int tries = 0; tries < CLI_VT_RESP_RETRIES; ++tries) {
         int32_t rc = wasmos_ipc_try_recv(g_vt_client_endpoint);
         if (rc < 0) {
             return -1;
@@ -191,9 +192,15 @@ cli_query_active_tty(uint32_t *out_generation)
 }
 
 static int
-cli_switch_tty(int32_t tty, int wait_resp)
+cli_switch_tty(int32_t tty, int wait_resp, int32_t *out_error)
 {
+    if (out_error) {
+        *out_error = 0;
+    }
     if (g_vt_endpoint < 0 || g_vt_client_endpoint < 0) {
+        if (out_error) {
+            *out_error = -1;
+        }
         return -1;
     }
 
@@ -209,6 +216,9 @@ cli_switch_tty(int32_t tty, int wait_resp)
             break;
         }
         if (rc != IPC_ERR_FULL || ++tries >= CLI_VT_SEND_RETRIES) {
+            if (out_error) {
+                *out_error = rc;
+            }
             return -1;
         }
         (void)wasmos_sched_yield();
@@ -218,9 +228,12 @@ cli_switch_tty(int32_t tty, int wait_resp)
         return 0;
     }
 
-    for (int tries_resp = 0; tries_resp < 64; ++tries_resp) {
+    for (int tries_resp = 0; tries_resp < CLI_VT_RESP_RETRIES; ++tries_resp) {
         int32_t rc = wasmos_ipc_try_recv(g_vt_client_endpoint);
         if (rc < 0) {
+            if (out_error) {
+                *out_error = rc;
+            }
             return -1;
         }
         if (rc == 0) {
@@ -240,7 +253,13 @@ cli_switch_tty(int32_t tty, int wait_resp)
             g_last_seen_active_tty = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
             return 0;
         }
+        if (out_error) {
+            *out_error = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+        }
         return -1;
+    }
+    if (out_error) {
+        *out_error = -2;
     }
     return -1;
 }
@@ -258,7 +277,7 @@ cli_is_foreground(void)
         }
     }
     if (g_home_tty == 1 && g_last_seen_active_tty == 0) {
-        (void)cli_switch_tty(1, 0);
+        (void)cli_switch_tty(1, 0, 0);
         return 1;
     }
     return g_last_seen_active_tty == g_home_tty;
@@ -279,7 +298,7 @@ cli_register_vt_writer(void)
         return -1;
     }
 
-    for (int tries = 0; tries < 64; ++tries) {
+    for (int tries = 0; tries < CLI_VT_RESP_RETRIES; ++tries) {
         int32_t rc = wasmos_ipc_try_recv(g_vt_client_endpoint);
         if (rc < 0) {
             return -1;
@@ -320,7 +339,7 @@ cli_set_vt_mode(uint32_t mode)
         return -1;
     }
 
-    for (int tries = 0; tries < 64; ++tries) {
+    for (int tries = 0; tries < CLI_VT_RESP_RETRIES; ++tries) {
         int32_t rc = wasmos_ipc_try_recv(g_vt_client_endpoint);
         if (rc < 0) {
             return -1;
@@ -429,15 +448,21 @@ console_write_num(const char *label, int32_t value)
     if (label) {
         console_write(label);
     }
-    if (value == 0) {
+    uint32_t uv = 0;
+    if (value < 0) {
+        buf[pos++] = '-';
+        uv = (uint32_t)(-(int64_t)value);
+    } else {
+        uv = (uint32_t)value;
+    }
+    if (uv == 0) {
         buf[pos++] = '0';
     } else {
-        int32_t v = value;
         char tmp[16];
         int tpos = 0;
-        while (v > 0 && tpos < (int)sizeof(tmp)) {
-            tmp[tpos++] = (char)('0' + (v % 10));
-            v /= 10;
+        while (uv > 0 && tpos < (int)sizeof(tmp)) {
+            tmp[tpos++] = (char)('0' + (uv % 10u));
+            uv /= 10u;
         }
         for (int i = tpos - 1; i >= 0; --i) {
             buf[pos++] = tmp[i];
@@ -892,8 +917,13 @@ cli_handle_line(void)
             console_write("tty switch unavailable\n");
             return 0;
         }
-        if (cli_switch_tty(tty, 1) != 0) {
-            console_write("tty switch failed\n");
+        int32_t sw_err = 0;
+        if (cli_switch_tty(tty, 1, &sw_err) != 0) {
+            if (sw_err != 0) {
+                console_write_num("tty switch failed: ", sw_err);
+            } else {
+                console_write("tty switch failed\n");
+            }
             return 0;
         }
         g_last_seen_active_tty = tty;
@@ -1121,7 +1151,7 @@ initialize(int32_t proc_endpoint,
             g_last_seen_active_tty = 0;
             if (g_vt_endpoint >= 0) {
                 if (g_home_tty == 1) {
-                    (void)cli_switch_tty(1, 1);
+                    (void)cli_switch_tty(1, 1, 0);
                 }
             }
             if (g_home_tty == 1) {

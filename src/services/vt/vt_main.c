@@ -82,6 +82,14 @@ enum {
     VT_TRACE_DROP_STALE = 0xA5
 };
 
+enum {
+    VT_SWITCH_ERR_INVALID_TTY = -1,
+    VT_SWITCH_ERR_MODE_OFF = -11,
+    VT_SWITCH_ERR_CLEAR = -12,
+    VT_SWITCH_ERR_REPLAY = -13,
+    VT_SWITCH_ERR_MODE_ON = -14
+};
+
 static void
 vt_trace_mark(uint8_t event, uint16_t a, uint16_t b)
 {
@@ -846,7 +854,7 @@ static int32_t
 vt_switch_tty(uint32_t tty_index)
 {
     if (tty_index >= VT_MAX_TTYS) {
-        return -1;
+        return VT_SWITCH_ERR_INVALID_TTY;
     }
     if (tty_index == g_active_tty) {
         return 0;
@@ -873,20 +881,36 @@ vt_switch_tty(uint32_t tty_index)
     if (prev_console_mode != 0u) {
         if (vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 0, 0, 0, 0) != 0) {
             g_switch_barrier = 0;
-            return -1;
+            return VT_SWITCH_ERR_MODE_OFF;
         }
     }
-    if (vt_fb_send_switch(FBTEXT_IPC_CLEAR_REQ, 0, 0, 0, 0) != 0 ||
-        vt_replay_tty(tty_index, 1) != 0 ||
-        (next_console_mode != 0u &&
-         vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 1, 0, 0, 0) != 0)) {
+    if (vt_fb_send_switch(FBTEXT_IPC_CLEAR_REQ, 0, 0, 0, 0) != 0) {
         if (prev_console_mode != 0u) {
             (void)vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 1, 0, 0, 0);
         } else {
             (void)vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 0, 0, 0, 0);
         }
         g_switch_barrier = 0;
-        return -1;
+        return VT_SWITCH_ERR_CLEAR;
+    }
+    if (vt_replay_tty(tty_index, 1) != 0) {
+        if (prev_console_mode != 0u) {
+            (void)vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 1, 0, 0, 0);
+        } else {
+            (void)vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 0, 0, 0, 0);
+        }
+        g_switch_barrier = 0;
+        return VT_SWITCH_ERR_REPLAY;
+    }
+    if (next_console_mode != 0u &&
+        vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 1, 0, 0, 0) != 0) {
+        if (prev_console_mode != 0u) {
+            (void)vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 1, 0, 0, 0);
+        } else {
+            (void)vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 0, 0, 0, 0);
+        }
+        g_switch_barrier = 0;
+        return VT_SWITCH_ERR_MODE_ON;
     }
 
     g_switch_generation++;

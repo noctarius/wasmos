@@ -531,21 +531,21 @@ vt_render_cell(const vt_tty_t *tty, uint16_t row, uint16_t col)
                      (int32_t)packed);
 }
 
-static void
+static int32_t
 vt_render_cell_switch(const vt_tty_t *tty, uint16_t row, uint16_t col)
 {
     if (!tty || row >= VT_ROWS_DEFAULT || col >= VT_COLS_DEFAULT) {
-        return;
+        return -1;
     }
     uint32_t idx = vt_cell_index(row, col);
     const vt_cell_t *cell = &tty->cells[idx];
     uint32_t packed = ((uint32_t)(cell->fg & 0x0Fu) << 8) |
                       (uint32_t)(cell->bg & 0x0Fu);
-    (void)vt_fb_send_switch(FBTEXT_IPC_CELL_WRITE_REQ,
-                            (int32_t)col,
-                            (int32_t)row,
-                            (int32_t)cell->ch,
-                            (int32_t)packed);
+    return vt_fb_send_switch(FBTEXT_IPC_CELL_WRITE_REQ,
+                             (int32_t)col,
+                             (int32_t)row,
+                             (int32_t)cell->ch,
+                             (int32_t)packed);
 }
 
 static void
@@ -750,18 +750,20 @@ vt_tty_index_for_source(int32_t source_ep)
     return -1;
 }
 
-static void
+static int32_t
 vt_replay_tty(uint32_t tty_index, uint8_t reliable)
 {
     if (tty_index >= VT_MAX_TTYS) {
-        return;
+        return -1;
     }
     vt_tty_t *tty = &g_ttys[tty_index];
 
     for (uint16_t row = 0; row < VT_ROWS_DEFAULT; ++row) {
         for (uint16_t col = 0; col < VT_COLS_DEFAULT; ++col) {
             if (reliable) {
-                vt_render_cell_switch(tty, row, col);
+                if (vt_render_cell_switch(tty, row, col) != 0) {
+                    return -1;
+                }
             } else {
                 vt_render_cell(tty, row, col);
             }
@@ -769,6 +771,7 @@ vt_replay_tty(uint32_t tty_index, uint8_t reliable)
     }
 
     vt_fb_set_cursor(tty);
+    return 0;
 }
 
 static void
@@ -849,20 +852,29 @@ vt_switch_tty(uint32_t tty_index)
 
     if (tty_index == 0) {
         /* Keep ring output paused until replay is complete. */
-        (void)vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 0, 0, 0, 0);
-        (void)vt_fb_send_switch(FBTEXT_IPC_CLEAR_REQ, 0, 0, 0, 0);
-        vt_replay_tty(tty_index, 1);
-        (void)vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 1, 0, 0, 0);
+        if (vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 0, 0, 0, 0) != 0 ||
+            vt_fb_send_switch(FBTEXT_IPC_CLEAR_REQ, 0, 0, 0, 0) != 0 ||
+            vt_replay_tty(tty_index, 1) != 0 ||
+            vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 1, 0, 0, 0) != 0) {
+            g_switch_barrier = 0;
+            return -1;
+        }
         g_switch_barrier = 0;
         return 0;
     }
 
     /* Disable ring first to avoid immediate repaint races from tty0 output. */
-    (void)vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 0, 0, 0, 0);
-    (void)vt_fb_send_switch(FBTEXT_IPC_CLEAR_REQ, 0, 0, 0, 0);
+    if (vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 0, 0, 0, 0) != 0 ||
+        vt_fb_send_switch(FBTEXT_IPC_CLEAR_REQ, 0, 0, 0, 0) != 0) {
+        g_switch_barrier = 0;
+        return -1;
+    }
     /* FIXME: replay currently repaints the full 80x25 virtual grid even if
      * only a small number of cells changed. */
-    vt_replay_tty(tty_index, 1);
+    if (vt_replay_tty(tty_index, 1) != 0) {
+        g_switch_barrier = 0;
+        return -1;
+    }
     g_switch_barrier = 0;
     return 0;
 }

@@ -735,51 +735,81 @@ cli_send_proc(int32_t type, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_
 static void
 set_cwd_path(const char *path)
 {
-    if (!path || !path[0] || str_eq(path, "/") || str_eq(path, ".") || str_eq(path, "..")) {
+    if (!path || !path[0] || str_eq(path, ".")) {
+        return;
+    }
+    if (str_eq(path, "/")) {
         set_cwd_root();
         return;
     }
 
-    char old_cwd[64];
-    uint32_t old_len = 0;
-    while (g_cwd[old_len] && old_len + 1 < sizeof(old_cwd)) {
-        old_cwd[old_len] = g_cwd[old_len];
-        old_len++;
-    }
-    old_cwd[old_len] = '\0';
-
+    char resolved[64];
     uint32_t out = 0;
-    g_cwd[0] = '\0';
 
+    resolved[out++] = '/';
     if (path[0] == '/') {
-        g_cwd[out++] = '/';
-    } else if (old_cwd[0] == '/' && old_cwd[1] == '\0') {
-        g_cwd[out++] = '/';
-    } else {
+        /* Absolute path starts from root. */
+    } else if (!(g_cwd[0] == '/' && g_cwd[1] == '\0')) {
+        /* Relative path starts from current cwd. */
         uint32_t i = 0;
-        while (old_cwd[i] && out + 1 < sizeof(g_cwd)) {
-            g_cwd[out++] = old_cwd[i++];
+        while (g_cwd[i] && out + 1 < sizeof(resolved)) {
+            if (i == 0 && g_cwd[i] == '/') {
+                i++;
+                continue;
+            }
+            resolved[out++] = g_cwd[i++];
         }
-        if (out == 0) {
-            g_cwd[out++] = '/';
-        } else if (g_cwd[out - 1] != '/' && out + 1 < sizeof(g_cwd)) {
-            g_cwd[out++] = '/';
+        if (out > 1 && resolved[out - 1] != '/' && out + 1 < sizeof(resolved)) {
+            resolved[out++] = '/';
         }
     }
 
     uint32_t i = 0;
-    while (path[i] && out + 1 < sizeof(g_cwd)) {
-        if (i == 0 && path[i] == '/') {
+    while (path[i]) {
+        while (path[i] == '/') {
             i++;
+        }
+        if (!path[i]) {
+            break;
+        }
+        uint32_t seg_start = i;
+        while (path[i] && path[i] != '/') {
+            i++;
+        }
+        uint32_t seg_len = i - seg_start;
+        if (seg_len == 1 && path[seg_start] == '.') {
             continue;
         }
-        g_cwd[out++] = path[i++];
+        if (seg_len == 2 && path[seg_start] == '.' && path[seg_start + 1] == '.') {
+            if (out > 1) {
+                if (out > 1 && resolved[out - 1] == '/') {
+                    out--;
+                }
+                while (out > 1 && resolved[out - 1] != '/') {
+                    out--;
+                }
+            }
+            continue;
+        }
+        if (out > 1 && resolved[out - 1] != '/' && out + 1 < sizeof(resolved)) {
+            resolved[out++] = '/';
+        }
+        for (uint32_t j = 0; j < seg_len && out + 1 < sizeof(resolved); ++j) {
+            resolved[out++] = path[seg_start + j];
+        }
     }
 
-    if (out > 1 && g_cwd[out - 1] == '/') {
+    if (out > 1 && resolved[out - 1] == '/') {
         out--;
     }
-    g_cwd[out] = '\0';
+    resolved[out] = '\0';
+
+    uint32_t k = 0;
+    while (resolved[k] && k + 1 < sizeof(g_cwd)) {
+        g_cwd[k] = resolved[k];
+        k++;
+    }
+    g_cwd[k] = '\0';
 }
 
 static void
@@ -877,7 +907,7 @@ cli_handle_line(void)
         to_lower(g_line[1]) == 'd' &&
         g_line[2] == ' ') {
         const char *path = &g_line[3];
-        if (str_eq(path, "/") || str_eq(path, ".") || str_eq(path, "..")) {
+        if (str_eq(path, "/")) {
             set_cwd_root();
             if (cli_send_fs(FS_IPC_CHDIR_REQ, 0, 0, 0, 0) != 0) {
                 console_write("cd failed\n");

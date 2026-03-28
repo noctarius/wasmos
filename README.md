@@ -77,8 +77,10 @@ IMPORTANT: Create a git commit after each prompt iteration.
   `tty1+` disables console-ring drain and replays VT-managed framebuffer cells;
   every tty switch clears the framebuffer first, then replays the selected tty
   buffer; switch-time clear/replay now uses a reliable framebuffer IPC path to
-  avoid dropped redraws under transient queue pressure; switching back to
-  `tty0` re-enables ring drain
+  avoid dropped redraws under transient queue pressure; the native framebuffer
+  driver now prioritizes control IPC over ring-drain work so switch commands
+  are not delayed behind console backlog; switching back to `tty0` re-enables
+  ring drain
 - CLI now attaches to VT `tty1` by default and writes through `VT_IPC_WRITE_REQ`
   (with `tty 0..3` command for manual switching)
 - CLI `cd` now preserves shell-like path semantics for `.` (stay in cwd) and

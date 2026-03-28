@@ -129,7 +129,7 @@ replay_early_log(wasmos_driver_api_t *api)
 }
 
 static int
-drain_console_ring(console_ring_t *ring)
+drain_console_ring(console_ring_t *ring, uint32_t budget)
 {
     if (!ring || ring->capacity == 0) {
         return 0;
@@ -138,9 +138,11 @@ drain_console_ring(console_ring_t *ring)
     uint32_t rp = ring->read_pos;
     uint32_t wp = ring->write_pos;
     int drained = 0;
-    while (rp != wp) {
+    uint32_t n = 0;
+    while (rp != wp && n < budget) {
         fbtext_put_char(&g_state, ring->data[rp % cap]);
         rp++;
+        n++;
         drained = 1;
     }
     ring->read_pos = rp;
@@ -235,7 +237,11 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
     for (;;) {
         int rc = api->ipc_recv(ctx, ep, &msg);
         if (rc == ND_IPC_EMPTY) {
-            int had_ring = g_console_ring_enabled ? drain_console_ring(ring) : 0;
+            /* Drain ring output in bounded chunks so control IPC gets regular
+             * service windows even under sustained serial log throughput. */
+            int had_ring = g_console_ring_enabled
+                               ? drain_console_ring(ring, 256u)
+                               : 0;
             if (!had_ring) {
                 api->sched_yield();
             }

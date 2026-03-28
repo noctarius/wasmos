@@ -74,10 +74,15 @@ The current tree already boots into a usable user-space stack:
   tty switches clear the framebuffer before replaying the selected tty buffer,
   and switch-time clear/replay now uses a higher-reliability IPC send path so
   redraw is not skipped under transient framebuffer queue backpressure; VT now
-  fails switch requests when clear/replay IPC cannot be delivered so clients do
-  not receive false-positive switch success. The native framebuffer driver now
-  services control IPC before draining console ring backlog so switch
-  clear/replay commands are not starved by log traffic.
+  fails switch requests when switch control-plane IPC (console-mode/clear) cannot
+  be delivered so clients do not receive false-positive switch success. VT switch
+  state commit is atomic with successful switch control operations (generation +
+  active tty update only after control success), failed switches restore the
+  prior framebuffer console mode to avoid half-switched states, and replay is
+  intentionally best-effort under sustained queue pressure to avoid repeated
+  switch abort loops. The native framebuffer driver now services control IPC
+  before draining console ring backlog and now drains ring bytes in bounded
+  chunks so switch clear/replay commands are not starved by heavy log traffic.
 - CLI now receives the VT endpoint from process-manager wiring, switches to
   `tty1` at startup, and sends terminal output through `VT_IPC_WRITE_REQ`
   rather than direct console writes.

@@ -55,7 +55,8 @@ typedef struct {
 /* Keep in sync with kernel ipc.h */
 #define IPC_ERR_FULL (-3)
 #define VT_FB_SEND_RETRIES 1024
-#define VT_FB_SWITCH_SEND_RETRIES 32768
+#define VT_FB_SWITCH_CTRL_RETRIES 8192
+#define VT_FB_SWITCH_CELL_RETRIES 4096
 
 #ifndef WASMOS_TRACE
 #define WASMOS_TRACE 0
@@ -205,13 +206,16 @@ vt_fb_send_switch(uint32_t type,
         return -1;
     }
     uint32_t tries = 0;
+    uint32_t max_tries = (type == FBTEXT_IPC_CELL_WRITE_REQ)
+                             ? VT_FB_SWITCH_CELL_RETRIES
+                             : VT_FB_SWITCH_CTRL_RETRIES;
     for (;;) {
         int32_t rc = wasmos_ipc_send(g_fb_ep, g_vt_ep, (int32_t)type, 0,
                                      arg0, arg1, arg2, arg3);
         if (rc == 0) {
             return 0;
         }
-        if (rc != IPC_ERR_FULL || ++tries >= VT_FB_SWITCH_SEND_RETRIES) {
+        if (rc != IPC_ERR_FULL || ++tries >= max_tries) {
             return rc;
         }
         (void)wasmos_sched_yield();
@@ -757,19 +761,29 @@ vt_replay_tty(uint32_t tty_index, uint8_t reliable)
         return -1;
     }
     vt_tty_t *tty = &g_ttys[tty_index];
+    uint32_t dropped_cells = 0;
 
     for (uint16_t row = 0; row < VT_ROWS_DEFAULT; ++row) {
         for (uint16_t col = 0; col < VT_COLS_DEFAULT; ++col) {
             if (reliable) {
                 if (vt_render_cell_switch(tty, row, col) != 0) {
-                    return -1;
+                    dropped_cells++;
                 }
             } else {
                 vt_render_cell(tty, row, col);
             }
         }
+        if (reliable) {
+            /* Give the framebuffer service an explicit scheduling window
+             * between replay rows to reduce queue saturation bursts. */
+            (void)wasmos_sched_yield();
+        }
     }
 
+    /* FIXME: replay currently remains best-effort under sustained framebuffer
+     * backpressure; dropped cell updates are tolerated to avoid switch abort
+     * loops and user-visible tty switch failures during stress. */
+    (void)dropped_cells;
     vt_fb_set_cursor(tty);
     return 0;
 }
@@ -834,47 +848,52 @@ vt_switch_tty(uint32_t tty_index)
     if (tty_index >= VT_MAX_TTYS) {
         return -1;
     }
+    if (tty_index == g_active_tty) {
+        return 0;
+    }
 
+    uint32_t prev_active = g_active_tty;
+    uint8_t prev_console_mode = (prev_active == 0) ? 1u : 0u;
+    uint8_t next_console_mode = (tty_index == 0) ? 1u : 0u;
     g_switch_barrier = 1;
-    g_switch_generation++;
-    g_active_tty = tty_index;
-    vt_trace_mark(VT_TRACE_SWITCH,
-                  (uint16_t)(tty_index & 0x0FFFu),
-                  (uint16_t)(g_switch_generation & 0x0FFFu));
 
     /* Allow logical tty switching even when framebuffer control is unavailable
      * (startup races/headless mode). This keeps VT/CLI state consistent and
      * avoids reporting spurious switch failures to user-space. */
     if (g_fb_ep < 0) {
+        g_switch_generation++;
+        g_active_tty = tty_index;
+        vt_trace_mark(VT_TRACE_SWITCH,
+                      (uint16_t)(tty_index & 0x0FFFu),
+                      (uint16_t)(g_switch_generation & 0x0FFFu));
         g_switch_barrier = 0;
         return 0;
     }
 
-    if (tty_index == 0) {
-        /* Keep ring output paused until replay is complete. */
-        if (vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 0, 0, 0, 0) != 0 ||
-            vt_fb_send_switch(FBTEXT_IPC_CLEAR_REQ, 0, 0, 0, 0) != 0 ||
-            vt_replay_tty(tty_index, 1) != 0 ||
-            vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 1, 0, 0, 0) != 0) {
+    if (prev_console_mode != 0u) {
+        if (vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 0, 0, 0, 0) != 0) {
             g_switch_barrier = 0;
             return -1;
         }
+    }
+    if (vt_fb_send_switch(FBTEXT_IPC_CLEAR_REQ, 0, 0, 0, 0) != 0 ||
+        vt_replay_tty(tty_index, 1) != 0 ||
+        (next_console_mode != 0u &&
+         vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 1, 0, 0, 0) != 0)) {
+        if (prev_console_mode != 0u) {
+            (void)vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 1, 0, 0, 0);
+        } else {
+            (void)vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 0, 0, 0, 0);
+        }
         g_switch_barrier = 0;
-        return 0;
+        return -1;
     }
 
-    /* Disable ring first to avoid immediate repaint races from tty0 output. */
-    if (vt_fb_send_switch(FBTEXT_IPC_CONSOLE_MODE_REQ, 0, 0, 0, 0) != 0 ||
-        vt_fb_send_switch(FBTEXT_IPC_CLEAR_REQ, 0, 0, 0, 0) != 0) {
-        g_switch_barrier = 0;
-        return -1;
-    }
-    /* FIXME: replay currently repaints the full 80x25 virtual grid even if
-     * only a small number of cells changed. */
-    if (vt_replay_tty(tty_index, 1) != 0) {
-        g_switch_barrier = 0;
-        return -1;
-    }
+    g_switch_generation++;
+    g_active_tty = tty_index;
+    vt_trace_mark(VT_TRACE_SWITCH,
+                  (uint16_t)(tty_index & 0x0FFFu),
+                  (uint16_t)(g_switch_generation & 0x0FFFu));
     g_switch_barrier = 0;
     return 0;
 }

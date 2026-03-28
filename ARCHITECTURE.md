@@ -71,6 +71,8 @@ The current tree already boots into a usable user-space stack:
 - CLI now receives the VT endpoint from process-manager wiring, switches to
   `tty1` at startup, and sends terminal output through `VT_IPC_WRITE_REQ`
   rather than direct console writes.
+- CLI `cd` path tracking now keeps standard dot-segment semantics (`.` stays in
+  place, `..` resolves to the parent) instead of collapsing both to `/`.
 - Process-manager now assigns a home tty to each CLI instance (`tty1..tty3`)
   and `sysinit` ensures one CLI per VT-managed tty. CLIs gate input by current
   VT foreground selection so only the active tty shell reads keystrokes.

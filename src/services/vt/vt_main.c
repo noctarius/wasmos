@@ -57,6 +57,7 @@ typedef struct {
 #define VT_FB_SEND_RETRIES 1024
 #define VT_FB_SWITCH_CTRL_RETRIES 8192
 #define VT_FB_SWITCH_CELL_RETRIES 4096
+#define VT_IPC_REPLY_RETRIES 1024
 
 #ifndef WASMOS_TRACE
 #define WASMOS_TRACE 0
@@ -225,6 +226,35 @@ vt_fb_send_switch(uint32_t type,
         }
         if (rc != IPC_ERR_FULL || ++tries >= max_tries) {
             return rc;
+        }
+        (void)wasmos_sched_yield();
+    }
+}
+
+static int
+vt_ipc_reply_retry(int32_t reply_endpoint,
+                   int32_t type,
+                   int32_t request_id,
+                   int32_t arg0,
+                   int32_t arg1)
+{
+    if (reply_endpoint < 0 || g_vt_ep < 0 || request_id == 0) {
+        return -1;
+    }
+    uint32_t tries = 0;
+    for (;;) {
+        int32_t rc = wasmos_ipc_reply(reply_endpoint, g_vt_ep,
+                                      type, request_id, arg0, arg1);
+        if (rc == 0) {
+            return 0;
+        }
+        if (rc != IPC_ERR_FULL) {
+            return rc;
+        }
+        /* FIXME: if client queues stay saturated, drop the reply so VT keeps
+         * servicing input/output rather than blocking indefinitely. */
+        if (++tries >= VT_IPC_REPLY_RETRIES) {
+            return IPC_ERR_FULL;
         }
         (void)wasmos_sched_yield();
     }
@@ -1338,8 +1368,11 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
             int32_t tty_index = vt_tty_index_for_source(msg.source);
             if (tty_index < 0 || tty_index >= (int32_t)VT_MAX_TTYS) {
                 if (msg.source >= 0 && msg.request_id != 0) {
-                    wasmos_ipc_reply(msg.source, g_vt_ep,
-                                     VT_IPC_ERROR, msg.request_id, -1, 0);
+                    (void)vt_ipc_reply_retry(msg.source,
+                                             VT_IPC_ERROR,
+                                             msg.request_id,
+                                             -1,
+                                             0);
                 }
                 break;
             }
@@ -1355,8 +1388,11 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
             }
             tty->attr = attr;
             if (msg.source >= 0 && msg.request_id != 0) {
-                wasmos_ipc_reply(msg.source, g_vt_ep,
-                                 VT_IPC_RESP, msg.request_id, 0, 0);
+                (void)vt_ipc_reply_retry(msg.source,
+                                         VT_IPC_RESP,
+                                         msg.request_id,
+                                         0,
+                                         0);
             }
             break;
         }
@@ -1364,22 +1400,22 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
         case VT_IPC_SWITCH_TTY: {
             int32_t sw = vt_switch_tty((uint32_t)msg.arg0);
             if (msg.source >= 0 && msg.request_id != 0) {
-                wasmos_ipc_reply(msg.source, g_vt_ep,
-                                 (sw == 0) ? VT_IPC_RESP : VT_IPC_ERROR,
-                                 msg.request_id,
-                                 (sw == 0) ? (int32_t)g_switch_generation : sw,
-                                 (int32_t)g_active_tty);
+                (void)vt_ipc_reply_retry(msg.source,
+                                         (sw == 0) ? VT_IPC_RESP : VT_IPC_ERROR,
+                                         msg.request_id,
+                                         (sw == 0) ? (int32_t)g_switch_generation : sw,
+                                         (int32_t)g_active_tty);
             }
             break;
         }
 
         case VT_IPC_GET_ACTIVE_TTY:
             if (msg.source >= 0 && msg.request_id != 0) {
-                wasmos_ipc_reply(msg.source, g_vt_ep,
-                                 VT_IPC_RESP,
-                                 msg.request_id,
-                                 (int32_t)g_switch_generation,
-                                 (int32_t)g_active_tty);
+                (void)vt_ipc_reply_retry(msg.source,
+                                         VT_IPC_RESP,
+                                         msg.request_id,
+                                         (int32_t)g_switch_generation,
+                                         (int32_t)g_active_tty);
             }
             break;
 
@@ -1389,8 +1425,11 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
             }
             int32_t tty_id = msg.arg0;
             if (tty_id < 0 || tty_id >= (int32_t)VT_MAX_TTYS) {
-                wasmos_ipc_reply(msg.source, g_vt_ep,
-                                 VT_IPC_ERROR, msg.request_id, -1, 0);
+                (void)vt_ipc_reply_retry(msg.source,
+                                         VT_IPC_ERROR,
+                                         msg.request_id,
+                                         -1,
+                                         0);
                 break;
             }
             uint32_t idx = (uint32_t)tty_id;
@@ -1398,17 +1437,22 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
                 vt_trace_mark(VT_TRACE_WRITER_CONFLICT,
                               (uint16_t)(idx & 0x0FFFu),
                               (uint16_t)((uint32_t)msg.source & 0x0FFFu));
-                wasmos_ipc_reply(msg.source, g_vt_ep,
-                                 VT_IPC_ERROR, msg.request_id, -1, 0);
+                (void)vt_ipc_reply_retry(msg.source,
+                                         VT_IPC_ERROR,
+                                         msg.request_id,
+                                         -1,
+                                         0);
                 break;
             }
             g_tty_writer_ep[idx] = msg.source;
             vt_trace_mark(VT_TRACE_WRITER_OK,
                           (uint16_t)(idx & 0x0FFFu),
                           (uint16_t)((uint32_t)msg.source & 0x0FFFu));
-            wasmos_ipc_reply(msg.source, g_vt_ep,
-                             VT_IPC_RESP, msg.request_id,
-                             (int32_t)g_switch_generation, tty_id);
+            (void)vt_ipc_reply_retry(msg.source,
+                                     VT_IPC_RESP,
+                                     msg.request_id,
+                                     (int32_t)g_switch_generation,
+                                     tty_id);
             break;
         }
 
@@ -1418,24 +1462,36 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
             }
             int32_t tty_id = msg.arg0;
             if (tty_id < 0 || tty_id >= (int32_t)VT_MAX_TTYS) {
-                wasmos_ipc_reply(msg.source, g_vt_ep,
-                                 VT_IPC_ERROR, msg.request_id, -1, 0);
+                (void)vt_ipc_reply_retry(msg.source,
+                                         VT_IPC_ERROR,
+                                         msg.request_id,
+                                         -1,
+                                         0);
                 break;
             }
             if (g_tty_reader_ep[(uint32_t)tty_id] < 0) {
                 g_tty_reader_ep[(uint32_t)tty_id] = msg.source;
             } else if (g_tty_reader_ep[(uint32_t)tty_id] != msg.source) {
-                wasmos_ipc_reply(msg.source, g_vt_ep,
-                                 VT_IPC_ERROR, msg.request_id, -1, 0);
+                (void)vt_ipc_reply_retry(msg.source,
+                                         VT_IPC_ERROR,
+                                         msg.request_id,
+                                         -1,
+                                         0);
                 break;
             }
             uint8_t ch = 0;
             if (vt_input_q_pop(&g_ttys[(uint32_t)tty_id], &ch) == 0) {
-                wasmos_ipc_reply(msg.source, g_vt_ep,
-                                 VT_IPC_RESP, msg.request_id, 0, (int32_t)ch);
+                (void)vt_ipc_reply_retry(msg.source,
+                                         VT_IPC_RESP,
+                                         msg.request_id,
+                                         0,
+                                         (int32_t)ch);
             } else {
-                wasmos_ipc_reply(msg.source, g_vt_ep,
-                                 VT_IPC_RESP, msg.request_id, 1, 0);
+                (void)vt_ipc_reply_retry(msg.source,
+                                         VT_IPC_RESP,
+                                         msg.request_id,
+                                         1,
+                                         0);
             }
             break;
         }
@@ -1446,16 +1502,21 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
             }
             int32_t tty_index = vt_tty_index_for_source(msg.source);
             if (tty_index < 0 || tty_index >= (int32_t)VT_MAX_TTYS) {
-                wasmos_ipc_reply(msg.source, g_vt_ep,
-                                 VT_IPC_ERROR, msg.request_id, -1, 0);
+                (void)vt_ipc_reply_retry(msg.source,
+                                         VT_IPC_ERROR,
+                                         msg.request_id,
+                                         -1,
+                                         0);
                 break;
             }
             uint8_t mode = (uint8_t)(msg.arg0 &
                                      (VT_INPUT_MODE_CANONICAL | VT_INPUT_MODE_ECHO));
             vt_set_input_mode(&g_ttys[(uint32_t)tty_index], mode);
-            wasmos_ipc_reply(msg.source, g_vt_ep,
-                             VT_IPC_RESP, msg.request_id,
-                             (int32_t)mode, tty_index);
+            (void)vt_ipc_reply_retry(msg.source,
+                                     VT_IPC_RESP,
+                                     msg.request_id,
+                                     (int32_t)mode,
+                                     tty_index);
             break;
         }
 
@@ -1468,8 +1529,11 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
 
         default:
             if (msg.source >= 0 && msg.request_id != 0) {
-                wasmos_ipc_reply(msg.source, g_vt_ep,
-                                 VT_IPC_ERROR, msg.request_id, -1, 0);
+                (void)vt_ipc_reply_retry(msg.source,
+                                         VT_IPC_ERROR,
+                                         msg.request_id,
+                                         -1,
+                                         0);
             }
             break;
         }

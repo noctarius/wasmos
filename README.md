@@ -121,6 +121,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - VT now requires explicit writer registration (`VT_IPC_REGISTER_WRITER`) and
   tags tty output with a switch-generation token so stale pre-switch writes are
   dropped instead of repainting over a freshly replayed tty
+- VT replies now use bounded retry/yield behavior under IPC queue pressure, so
+  transient full queues are less likely to drop switch/query responses and
+  produce CLI-side timeout failures
 - VT switch/write-drop diagnostics now emit compact `wasmos_debug_mark` tags
   (when `WASMOS_TRACE=1`) into the existing global kernel trace stream
 - Known deferred issue: an intermittent framebuffer-only prompt duplication /

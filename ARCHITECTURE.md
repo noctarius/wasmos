@@ -116,7 +116,9 @@ The current tree already boots into a usable user-space stack:
 - VT enforces explicit writer registration (`VT_IPC_REGISTER_WRITER`) and
   switch-generation write tokens: writes tagged with older generations are
   dropped after tty switches, and switch replay runs behind a temporary render
-  barrier to avoid in-flight foreground repaint races.
+  barrier to avoid in-flight foreground repaint races. VT reply paths now also
+  use bounded retry/yield behavior under queue pressure, reducing lost
+  response windows that previously surfaced as CLI-side switch timeouts.
 - VT can emit compact switch/ownership/drop telemetry through
   `wasmos_debug_mark` into the kernel's global trace stream when
   `WASMOS_TRACE=1`, so race analysis uses existing tracing infrastructure.

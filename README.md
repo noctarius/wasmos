@@ -62,6 +62,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   kernel and native drivers
 - a native C framebuffer driver that maps the physical framebuffer into driver
   space and paints at native speed without wasm3
+- the native framebuffer driver now explicitly registers its text-control IPC
+  endpoint with process-manager so VT receives a valid framebuffer endpoint for
+  tty clear/replay control (instead of falling back to logical-only switching)
 - kernel-owned 1-page shared-memory console ring: `serial_write` appends text
   and the native framebuffer driver drains it directly (no serial→framebuffer
   text IPC forwarding)

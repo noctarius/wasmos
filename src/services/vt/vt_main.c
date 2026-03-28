@@ -830,6 +830,15 @@ static const uint8_t g_sc_to_ascii[58] = {
     'm', ',', '.', '/', 0, '*', 0, ' '
 };
 
+static const uint8_t g_sc_to_ascii_shift[58] = {
+    0, 0x1B, '!', '@', '#', '$', '%', '^', '&', '*',
+    '(', ')', '_', '+', '\b', '\t', 'Q', 'W', 'E', 'R',
+    'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', '\n', 0,
+    'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':',
+    '"', '~', 0, '|', 'Z', 'X', 'C', 'V', 'B', 'N',
+    'M', '<', '>', '?', 0, '*', 0, ' '
+};
+
 static void
 vt_input_echo_char(uint32_t tty_index, uint8_t ch)
 {
@@ -1137,7 +1146,11 @@ vt_handle_key_notify(int32_t scancode, int32_t keyup, int32_t extended)
         if (scancode <= 0 || scancode >= (int32_t)(sizeof(g_sc_to_ascii))) {
             return;
         }
-        ch = g_sc_to_ascii[(uint32_t)scancode];
+        ch = g_shift_down
+            ? g_sc_to_ascii_shift[(uint32_t)scancode]
+            : g_sc_to_ascii[(uint32_t)scancode];
+        /* FIXME: this Set-1 map currently ignores CapsLock and AltGr states;
+         * add modifier-state-aware keymap handling when layouts expand. */
     }
     if (ch == 0) {
         return;

@@ -216,15 +216,18 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
         write_str(api, "[framebuffer] ipc endpoint failed\n");
         return -1;
     }
+    /* Derive our context id from current pid (context_id == pid for native). */
+    uint32_t ctx = api->sched_current_pid();
+    if (api->console_register_fb(ctx, ep) != 0) {
+        write_str(api, "[framebuffer] register endpoint failed\n");
+        return -1;
+    }
 
     console_ring_t *ring = (console_ring_t *)api->shmem_map(api->console_ring_id());
     if (!ring) {
         write_str(api, "[framebuffer] console ring map failed\n");
         return -1;
     }
-
-    /* Derive our context id from current pid (context_id == pid for native). */
-    uint32_t ctx = api->sched_current_pid();
 
     /* Main loop: prioritize control IPC so tty switch clear/replay requests
      * are applied promptly even if console ring backlog is large. */

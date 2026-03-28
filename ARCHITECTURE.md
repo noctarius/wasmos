@@ -51,6 +51,10 @@ The current tree already boots into a usable user-space stack:
 - The process manager also supports native ELF drivers wrapped in WASMOS-APP as
   `FLAG_DRIVER|FLAG_NATIVE`, loaded directly into a process context and called
   through a kernel-provided function-table ABI.
+- Native framebuffer startup now registers its text-control IPC endpoint back
+  into process-manager state, so downstream VT instances receive a concrete
+  framebuffer endpoint for switch clear/replay control instead of degrading to
+  logical-only tty switching.
 - Serial-to-framebuffer text handoff now uses a kernel-created shared-memory
   console ring (1 page). `serial_write` appends bytes into this ring, and the
   native framebuffer driver maps and drains it, removing the previous

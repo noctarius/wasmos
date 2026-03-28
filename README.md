@@ -81,11 +81,15 @@ IMPORTANT: Create a git commit after each prompt iteration.
   every tty switch clears the framebuffer first, then replays the selected tty
   buffer; switch-time clear/replay now uses a reliable framebuffer IPC path to
   avoid dropped redraws under transient queue pressure; VT now treats
-  clear/replay IPC failures as switch failures (instead of reporting false
-  success), so `tty N` can report an error when redraw did not complete; the
-  native framebuffer driver now prioritizes control IPC over ring-drain work
-  so switch commands are not delayed behind console backlog; switching back to
-  `tty0` re-enables ring drain
+  control-plane switch IPC failures as switch failures (instead of reporting
+  false success), so `tty N` can report an error when mode/clear operations do
+  not complete. Replay remains best-effort under sustained queue pressure to
+  avoid abort loops; VT commits tty-generation/active-tty atomically with
+  successful switch control operations and restores prior console mode on
+  failure, avoiding half-switched visual states; the native framebuffer driver
+  now prioritizes control IPC over ring-drain work and drains ring output in
+  bounded chunks so switch commands are not delayed behind large console
+  backlogs; switching back to `tty0` re-enables ring drain
 - CLI now attaches to VT `tty1` by default and writes through `VT_IPC_WRITE_REQ`
   (with `tty 0..3` command for manual switching)
 - CLI `cd` now preserves shell-like path semantics for `.` (stay in cwd) and

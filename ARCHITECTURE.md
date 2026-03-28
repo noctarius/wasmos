@@ -69,7 +69,9 @@ The current tree already boots into a usable user-space stack:
   console-ring drain when non-zero ttys are active and restore it on `tty0`.
   tty switches clear the framebuffer before replaying the selected tty buffer,
   and switch-time clear/replay now uses a higher-reliability IPC send path so
-  redraw is not skipped under transient framebuffer queue backpressure.
+  redraw is not skipped under transient framebuffer queue backpressure. The
+  native framebuffer driver now services control IPC before draining console
+  ring backlog so switch clear/replay commands are not starved by log traffic.
 - CLI now receives the VT endpoint from process-manager wiring, switches to
   `tty1` at startup, and sends terminal output through `VT_IPC_WRITE_REQ`
   rather than direct console writes.

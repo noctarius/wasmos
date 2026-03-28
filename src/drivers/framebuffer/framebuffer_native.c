@@ -226,12 +226,13 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
     /* Derive our context id from current pid (context_id == pid for native). */
     uint32_t ctx = api->sched_current_pid();
 
-    /* Main loop: drain console ring, then process control IPC. */
+    /* Main loop: prioritize control IPC so tty switch clear/replay requests
+     * are applied promptly even if console ring backlog is large. */
     nd_ipc_message_t msg;
     for (;;) {
-        int had_ring = g_console_ring_enabled ? drain_console_ring(ring) : 0;
         int rc = api->ipc_recv(ctx, ep, &msg);
         if (rc == ND_IPC_EMPTY) {
+            int had_ring = g_console_ring_enabled ? drain_console_ring(ring) : 0;
             if (!had_ring) {
                 api->sched_yield();
             }

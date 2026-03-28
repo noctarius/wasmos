@@ -77,7 +77,8 @@ The current tree already boots into a usable user-space stack:
 - VT now owns keyboard input routing end-to-end and delivers per-tty raw key
   input over `VT_IPC_READ_REQ`. CLI remains the owner of line editing/echo;
   raw mode now emits extended arrows plus nav/edit keys as ANSI escape bytes
-  (`ESC[A/B/C/D`, `ESC[H/F`, `ESC[5~/6~`, `ESC[2~/3~`), and serial console
+  (`ESC[A/B/C/D`, `ESC[H/F`, `ESC[5~/6~`, `ESC[2~/3~`), CLI now consumes
+  `ESC[A`/`ESC[B` for shell history navigation in raw mode, and serial console
   reads are retained as fallback for headless/automated test flows.
 - VT now applies a core CSI/SGR subset per tty state (`A/B/C/D/H/f`, `s/u`,
   `J`, `K`, private `?25h/l`, `m` with 16-color mapping), so replayed tty

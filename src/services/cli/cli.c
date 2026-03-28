@@ -20,6 +20,7 @@ typedef enum {
 } cli_phase_t;
 
 #define CLI_MAX_PROCS 16
+#define CLI_HISTORY_MAX 8
 
 static cli_phase_t g_phase = CLI_PHASE_INIT;
 static char g_line[128];
@@ -38,9 +39,19 @@ static char g_cwd[64] = "/";
 static int32_t g_pending_kind = 0;
 static int32_t g_pending_cd_use_path = 0;
 static char g_pending_cd_path[32] = "/";
+static char g_history[CLI_HISTORY_MAX][sizeof(g_line)];
+static uint8_t g_history_len[CLI_HISTORY_MAX];
+static uint8_t g_history_count = 0;
+static uint8_t g_history_head = 0;
+static int8_t g_history_nav = -1;
+static char g_history_scratch[sizeof(g_line)];
+static int32_t g_history_scratch_len = 0;
+static uint8_t g_history_have_scratch = 0;
+static uint8_t g_esc_state = 0;
 /* Keep in sync with kernel ipc.h */
 #define IPC_ERR_FULL (-3)
 #define CLI_VT_SEND_RETRIES 1024
+#define CLI_REQ_SEND_RETRIES 1024
 
 static void
 stall_forever(void)
@@ -460,6 +471,113 @@ console_write_u32(uint32_t value)
     console_write(buf);
 }
 
+static int
+cli_bytes_equal(const char *a, const char *b, int32_t len)
+{
+    if (!a || !b || len < 0) {
+        return 0;
+    }
+    for (int32_t i = 0; i < len; ++i) {
+        if (a[i] != b[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static void
+cli_replace_line(const char *line, int32_t len)
+{
+    if (!line || len < 0) {
+        return;
+    }
+    if (len > (int32_t)(sizeof(g_line) - 1)) {
+        len = (int32_t)(sizeof(g_line) - 1);
+    }
+    while (g_line_len > 0) {
+        g_line_len--;
+        console_write("\b \b");
+    }
+    for (int32_t i = 0; i < len; ++i) {
+        g_line[i] = line[i];
+        char echo_buf[2] = { line[i], '\0' };
+        console_write(echo_buf);
+    }
+    g_line_len = len;
+}
+
+static void
+cli_history_store_current(void)
+{
+    if (g_line_len <= 0) {
+        return;
+    }
+    uint8_t newest = (uint8_t)((g_history_head + CLI_HISTORY_MAX - 1u) % CLI_HISTORY_MAX);
+    if (g_history_count > 0 &&
+        g_history_len[newest] == (uint8_t)g_line_len &&
+        cli_bytes_equal(g_history[newest], g_line, g_line_len)) {
+        return;
+    }
+    uint8_t slot = g_history_head;
+    for (int32_t i = 0; i < g_line_len; ++i) {
+        g_history[slot][i] = g_line[i];
+    }
+    g_history[slot][g_line_len] = '\0';
+    g_history_len[slot] = (uint8_t)g_line_len;
+    g_history_head = (uint8_t)((g_history_head + 1u) % CLI_HISTORY_MAX);
+    if (g_history_count < CLI_HISTORY_MAX) {
+        g_history_count++;
+    }
+}
+
+static void
+cli_history_reset_nav(void)
+{
+    g_history_nav = -1;
+    g_history_have_scratch = 0;
+    g_history_scratch_len = 0;
+}
+
+static void
+cli_history_nav(int older)
+{
+    if (g_history_count == 0) {
+        return;
+    }
+
+    if (older) {
+        if (g_history_nav < 0) {
+            g_history_scratch_len = g_line_len;
+            for (int32_t i = 0; i < g_line_len; ++i) {
+                g_history_scratch[i] = g_line[i];
+            }
+            g_history_scratch[g_line_len] = '\0';
+            g_history_have_scratch = 1;
+            g_history_nav = 0;
+        } else if (g_history_nav + 1 < (int8_t)g_history_count) {
+            g_history_nav++;
+        }
+    } else {
+        if (g_history_nav < 0) {
+            return;
+        }
+        if (g_history_nav == 0) {
+            if (g_history_have_scratch) {
+                cli_replace_line(g_history_scratch, g_history_scratch_len);
+            } else {
+                cli_replace_line("", 0);
+            }
+            cli_history_reset_nav();
+            return;
+        }
+        g_history_nav--;
+    }
+
+    uint8_t slot = (uint8_t)((g_history_head + CLI_HISTORY_MAX - 1u -
+                              (uint8_t)g_history_nav) % CLI_HISTORY_MAX);
+    cli_replace_line(g_history[slot], g_history_len[slot]);
+}
+
 /* Buffer helpers: append string/uint32 into a fixed-size buffer.
  * cap = total buffer capacity (including NUL terminator).
  * Returns the new write position. */
@@ -563,15 +681,23 @@ cli_send_fs(int32_t type, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t 
     /* The CLI tracks one outstanding request at a time, which keeps the state
      * machine small and makes the Python QEMU tests deterministic. */
     int32_t req_id = g_request_id++;
-    if (wasmos_ipc_send(g_fs_endpoint,
-                        g_reply_endpoint,
-                        type,
-                        req_id,
-                        (int32_t)arg0,
-                        (int32_t)arg1,
-                        (int32_t)arg2,
-                        (int32_t)arg3) != 0) {
-        return -1;
+    uint32_t tries = 0;
+    for (;;) {
+        int32_t rc = wasmos_ipc_send(g_fs_endpoint,
+                                     g_reply_endpoint,
+                                     type,
+                                     req_id,
+                                     (int32_t)arg0,
+                                     (int32_t)arg1,
+                                     (int32_t)arg2,
+                                     (int32_t)arg3);
+        if (rc == 0) {
+            break;
+        }
+        if (rc != IPC_ERR_FULL || ++tries >= CLI_REQ_SEND_RETRIES) {
+            return -1;
+        }
+        (void)wasmos_sched_yield();
     }
     g_pending_req = req_id;
     return 0;
@@ -584,15 +710,23 @@ cli_send_proc(int32_t type, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_
         return -1;
     }
     int32_t req_id = g_request_id++;
-    if (wasmos_ipc_send(g_proc_endpoint,
-                        g_reply_endpoint,
-                        type,
-                        req_id,
-                        (int32_t)arg0,
-                        (int32_t)arg1,
-                        (int32_t)arg2,
-                        (int32_t)arg3) != 0) {
-        return -1;
+    uint32_t tries = 0;
+    for (;;) {
+        int32_t rc = wasmos_ipc_send(g_proc_endpoint,
+                                     g_reply_endpoint,
+                                     type,
+                                     req_id,
+                                     (int32_t)arg0,
+                                     (int32_t)arg1,
+                                     (int32_t)arg2,
+                                     (int32_t)arg3);
+        if (rc == 0) {
+            break;
+        }
+        if (rc != IPC_ERR_FULL || ++tries >= CLI_REQ_SEND_RETRIES) {
+            return -1;
+        }
+        (void)wasmos_sched_yield();
     }
     g_pending_req = req_id;
     return 0;
@@ -974,6 +1108,8 @@ initialize(int32_t proc_endpoint,
             }
             console_prompt();
             g_line_len = 0;
+            g_esc_state = 0;
+            cli_history_reset_nav();
             g_phase = CLI_PHASE_READ;
             continue;
         }
@@ -991,16 +1127,21 @@ initialize(int32_t proc_endpoint,
                 continue;
             }
             int32_t have_ch = 0;
+            int32_t from_vt = 0;
+            char ch = '\0';
             if (g_vt_endpoint >= 0) {
-                have_ch = cli_vt_read_char(&g_line[g_line_len]);
+                have_ch = cli_vt_read_char(&ch);
                 if (have_ch < 0) {
                     g_phase = CLI_PHASE_FAILED;
                     console_write("[cli] vt read failed\n");
                     stall_forever();
                 }
+                if (have_ch > 0) {
+                    from_vt = 1;
+                }
             }
             if (!have_ch) {
-                int32_t rc = wasmos_console_read((int32_t)(uintptr_t)&g_line[g_line_len], 1);
+                int32_t rc = wasmos_console_read((int32_t)(uintptr_t)&ch, 1);
                 if (rc < 0) {
                     g_phase = CLI_PHASE_FAILED;
                     console_write("[cli] console read failed\n");
@@ -1015,9 +1156,34 @@ initialize(int32_t proc_endpoint,
                 continue;
             }
 
-            char ch = g_line[g_line_len];
+            if (from_vt) {
+                if (g_esc_state == 1) {
+                    if (ch == '[') {
+                        g_esc_state = 2;
+                    } else {
+                        g_esc_state = 0;
+                    }
+                    continue;
+                } else if (g_esc_state == 2) {
+                    if (ch == 'A') {
+                        cli_history_nav(1);
+                    } else if (ch == 'B') {
+                        cli_history_nav(0);
+                    }
+                    /* FIXME: extend CSI handling for left/right/home/end if CLI
+                     * editing grows beyond append/backspace + history nav. */
+                    g_esc_state = 0;
+                    continue;
+                }
+                if ((uint8_t)ch == 0x1B) {
+                    g_esc_state = 1;
+                    continue;
+                }
+            }
             if (ch == '\r' || ch == '\n') {
                 console_write("\n");
+                cli_history_store_current();
+                cli_history_reset_nav();
                 if (cli_handle_line()) {
                     g_phase = CLI_PHASE_WAIT_IPC;
                 } else {
@@ -1030,9 +1196,12 @@ initialize(int32_t proc_endpoint,
                     g_line_len--;
                     console_write("\b \b");
                 }
+                cli_history_reset_nav();
                 continue;
             }
+            g_line[g_line_len] = ch;
             g_line_len++;
+            cli_history_reset_nav();
             char echo_buf[2] = { ch, '\0' };
             console_write(echo_buf);
             continue;

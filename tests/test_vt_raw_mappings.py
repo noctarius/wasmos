@@ -33,6 +33,11 @@ class VtRawMappingSpecTest(unittest.TestCase):
         self._require(r"scancode\s*==\s*0x52[^\n]*\/\*\s*Insert\s*\*/[\s\S]*?vt_input_q_push\(tty,\s*'2'\)[\s\S]*?vt_input_q_push\(tty,\s*'~'\)")
         self._require(r"scancode\s*==\s*0x53[^\n]*\/\*\s*Delete\s*\*/[\s\S]*?vt_input_q_push\(tty,\s*'3'\)[\s\S]*?vt_input_q_push\(tty,\s*'~'\)")
 
+    def test_shift_ascii_mapping_exists(self):
+        self._require(r"static const uint8_t g_sc_to_ascii_shift\[58\]")
+        self._require(r"g_shift_down\s*\?\s*g_sc_to_ascii_shift\[\(uint32_t\)scancode\]\s*:\s*g_sc_to_ascii\[\(uint32_t\)scancode\]")
+        self._require(r"g_sc_to_ascii_shift\[58\][\s\S]*'\?'")
+
 
 if __name__ == "__main__":
     unittest.main()

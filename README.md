@@ -87,6 +87,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - VT now owns keyboard input routing and delivers per-tty raw input via
   `VT_IPC_READ_REQ`; in raw mode, extended arrows and nav/edit keys are emitted
   as ANSI escape sequences (`ESC[A/B/C/D`, `ESC[H/F`, `ESC[5~/6~`, `ESC[2~/3~`).
+  Raw printable key translation now also applies Shift-modified ASCII symbols
+  (for example `Shift+7` => `/` on the configured Set-1 map).
   CLI owns line editing/echo and now handles `Up/Down` (`ESC[A` / `ESC[B`) as
   shell-history navigation in raw mode, with serial input retained as fallback
   for headless/automation flows

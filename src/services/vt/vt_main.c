@@ -46,12 +46,14 @@ typedef struct {
     uint16_t csi_current;
     uint8_t csi_have_current;
     uint8_t csi_private;
-    vt_cell_t cells[80u * 25u];
+    vt_cell_t cells[160u * 64u];
 } vt_tty_t;
 
 #define VT_MAX_TTYS 4u
 #define VT_COLS_DEFAULT 80u
 #define VT_ROWS_DEFAULT 25u
+#define VT_MAX_COLS 160u
+#define VT_MAX_ROWS 64u
 /* Keep in sync with kernel ipc.h */
 #define IPC_ERR_FULL (-3)
 #define VT_FB_SEND_RETRIES 1024
@@ -74,6 +76,8 @@ static uint32_t g_switch_generation = 1;
 static uint8_t  g_switch_barrier = 0;
 static uint8_t  g_ctrl_down = 0;
 static uint8_t  g_shift_down = 0;
+static uint16_t g_vt_cols = VT_COLS_DEFAULT;
+static uint16_t g_vt_rows = VT_ROWS_DEFAULT;
 
 enum {
     VT_TRACE_SWITCH = 0xA1,
@@ -109,7 +113,7 @@ vt_trace_mark(uint8_t event, uint16_t a, uint16_t b)
 static uint32_t
 vt_cell_index(uint16_t row, uint16_t col)
 {
-    return (uint32_t)row * VT_COLS_DEFAULT + (uint32_t)col;
+    return (uint32_t)row * g_vt_cols + (uint32_t)col;
 }
 
 static void
@@ -263,6 +267,46 @@ vt_ipc_reply_retry(int32_t reply_endpoint,
 }
 
 static void
+vt_query_geometry(void)
+{
+    if (g_fb_ep < 0 || g_vt_ep < 0) {
+        return;
+    }
+    int32_t req_id = 0x5647; /* fixed local request id */
+    if (wasmos_ipc_send(g_fb_ep, g_vt_ep, FBTEXT_IPC_GEOMETRY_REQ, req_id,
+                        0, 0, 0, 0) != 0) {
+        return;
+    }
+    for (int tries = 0; tries < 2048; ++tries) {
+        int32_t rc = wasmos_ipc_try_recv(g_vt_ep);
+        if (rc < 0) {
+            return;
+        }
+        if (rc == 0) {
+            (void)wasmos_sched_yield();
+            continue;
+        }
+        int32_t type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+        int32_t rid = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+        if (rid != req_id) {
+            continue;
+        }
+        if (type != FBTEXT_IPC_RESP) {
+            return;
+        }
+        int32_t cols = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+        int32_t rows = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+        if (cols >= 40 && cols <= (int32_t)VT_MAX_COLS) {
+            g_vt_cols = (uint16_t)cols;
+        }
+        if (rows >= 16 && rows <= (int32_t)VT_MAX_ROWS) {
+            g_vt_rows = (uint16_t)rows;
+        }
+        return;
+    }
+}
+
+static void
 vt_fb_set_cursor(const vt_tty_t *tty)
 {
     if (!tty || !tty->cursor_visible) {
@@ -288,7 +332,7 @@ vt_fb_console_mode(uint8_t enabled)
 static void
 vt_store_cell(vt_tty_t *tty, uint16_t row, uint16_t col, uint32_t ch)
 {
-    if (!tty || row >= VT_ROWS_DEFAULT || col >= VT_COLS_DEFAULT) {
+    if (!tty || row >= g_vt_rows || col >= g_vt_cols) {
         return;
     }
     uint32_t idx = vt_cell_index(row, col);
@@ -304,8 +348,8 @@ vt_clamp_row(int32_t row)
     if (row < 0) {
         return 0;
     }
-    if (row >= (int32_t)VT_ROWS_DEFAULT) {
-        return (uint16_t)(VT_ROWS_DEFAULT - 1u);
+    if (row >= (int32_t)g_vt_rows) {
+        return (uint16_t)(g_vt_rows - 1u);
     }
     return (uint16_t)row;
 }
@@ -316,8 +360,8 @@ vt_clamp_col(int32_t col)
     if (col < 0) {
         return 0;
     }
-    if (col >= (int32_t)VT_COLS_DEFAULT) {
-        return (uint16_t)(VT_COLS_DEFAULT - 1u);
+    if (col >= (int32_t)g_vt_cols) {
+        return (uint16_t)(g_vt_cols - 1u);
     }
     return (uint16_t)col;
 }
@@ -366,7 +410,7 @@ vt_csi_param(vt_tty_t *tty, uint8_t index, uint16_t def)
 static void
 vt_clear_cell(vt_tty_t *tty, uint16_t row, uint16_t col, uint8_t render_now)
 {
-    if (!tty || row >= VT_ROWS_DEFAULT || col >= VT_COLS_DEFAULT) {
+    if (!tty || row >= g_vt_rows || col >= g_vt_cols) {
         return;
     }
     vt_store_cell(tty, row, col, ' ');
@@ -489,22 +533,22 @@ vt_apply_csi(uint32_t tty_index, vt_tty_t *tty, uint8_t final)
     case 'J': {
         uint16_t mode = (tty->csi_count > 0) ? tty->csi_params[0] : 0;
         if (mode == 2) {
-            for (uint16_t r = 0; r < VT_ROWS_DEFAULT; ++r) {
-                for (uint16_t c = 0; c < VT_COLS_DEFAULT; ++c) {
+            for (uint16_t r = 0; r < g_vt_rows; ++r) {
+                for (uint16_t c = 0; c < g_vt_cols; ++c) {
                     vt_clear_cell(tty, r, c, render_now);
                 }
             }
         } else if (mode == 1) {
             for (uint16_t r = 0; r <= tty->cursor_row; ++r) {
-                uint16_t max_col = (r == tty->cursor_row) ? tty->cursor_col : (uint16_t)(VT_COLS_DEFAULT - 1u);
+                uint16_t max_col = (r == tty->cursor_row) ? tty->cursor_col : (uint16_t)(g_vt_cols - 1u);
                 for (uint16_t c = 0; c <= max_col; ++c) {
                     vt_clear_cell(tty, r, c, render_now);
                 }
             }
         } else {
-            for (uint16_t r = tty->cursor_row; r < VT_ROWS_DEFAULT; ++r) {
+            for (uint16_t r = tty->cursor_row; r < g_vt_rows; ++r) {
                 uint16_t start_col = (r == tty->cursor_row) ? tty->cursor_col : 0;
-                for (uint16_t c = start_col; c < VT_COLS_DEFAULT; ++c) {
+                for (uint16_t c = start_col; c < g_vt_cols; ++c) {
                     vt_clear_cell(tty, r, c, render_now);
                 }
             }
@@ -514,7 +558,7 @@ vt_apply_csi(uint32_t tty_index, vt_tty_t *tty, uint8_t final)
     case 'K': {
         uint16_t mode = (tty->csi_count > 0) ? tty->csi_params[0] : 0;
         if (mode == 2) {
-            for (uint16_t c = 0; c < VT_COLS_DEFAULT; ++c) {
+            for (uint16_t c = 0; c < g_vt_cols; ++c) {
                 vt_clear_cell(tty, tty->cursor_row, c, render_now);
             }
         } else if (mode == 1) {
@@ -522,7 +566,7 @@ vt_apply_csi(uint32_t tty_index, vt_tty_t *tty, uint8_t final)
                 vt_clear_cell(tty, tty->cursor_row, c, render_now);
             }
         } else {
-            for (uint16_t c = tty->cursor_col; c < VT_COLS_DEFAULT; ++c) {
+            for (uint16_t c = tty->cursor_col; c < g_vt_cols; ++c) {
                 vt_clear_cell(tty, tty->cursor_row, c, render_now);
             }
         }
@@ -561,7 +605,7 @@ vt_apply_csi(uint32_t tty_index, vt_tty_t *tty, uint8_t final)
 static void
 vt_render_cell(const vt_tty_t *tty, uint16_t row, uint16_t col)
 {
-    if (!tty || row >= VT_ROWS_DEFAULT || col >= VT_COLS_DEFAULT) {
+    if (!tty || row >= g_vt_rows || col >= g_vt_cols) {
         return;
     }
     uint32_t idx = vt_cell_index(row, col);
@@ -578,7 +622,7 @@ vt_render_cell(const vt_tty_t *tty, uint16_t row, uint16_t col)
 static int32_t
 vt_render_cell_switch(const vt_tty_t *tty, uint16_t row, uint16_t col)
 {
-    if (!tty || row >= VT_ROWS_DEFAULT || col >= VT_COLS_DEFAULT) {
+    if (!tty || row >= g_vt_rows || col >= g_vt_cols) {
         return -1;
     }
     uint32_t idx = vt_cell_index(row, col);
@@ -599,15 +643,15 @@ vt_scroll_up(vt_tty_t *tty, uint8_t render_now)
         return;
     }
 
-    for (uint16_t row = 1; row < VT_ROWS_DEFAULT; ++row) {
-        for (uint16_t col = 0; col < VT_COLS_DEFAULT; ++col) {
+    for (uint16_t row = 1; row < g_vt_rows; ++row) {
+        for (uint16_t col = 0; col < g_vt_cols; ++col) {
             uint32_t dst = vt_cell_index((uint16_t)(row - 1u), col);
             uint32_t src = vt_cell_index(row, col);
             tty->cells[dst] = tty->cells[src];
         }
     }
-    for (uint16_t col = 0; col < VT_COLS_DEFAULT; ++col) {
-        uint32_t idx = vt_cell_index((uint16_t)(VT_ROWS_DEFAULT - 1u), col);
+    for (uint16_t col = 0; col < g_vt_cols; ++col) {
+        uint32_t idx = vt_cell_index((uint16_t)(g_vt_rows - 1u), col);
         tty->cells[idx].ch = ' ';
         tty->cells[idx].fg = tty->fg;
         tty->cells[idx].bg = tty->bg;
@@ -628,9 +672,9 @@ vt_put_char_tty0(vt_tty_t *tty, uint8_t ch)
             tty->cursor_col = 0;
         } else if (c == '\n') {
             tty->cursor_col = 0;
-            if (tty->cursor_row + 1u >= VT_ROWS_DEFAULT) {
+            if (tty->cursor_row + 1u >= g_vt_rows) {
                 vt_scroll_up(tty, 0);
-                tty->cursor_row = (uint16_t)(VT_ROWS_DEFAULT - 1u);
+                tty->cursor_row = (uint16_t)(g_vt_rows - 1u);
             } else {
                 tty->cursor_row++;
             }
@@ -642,11 +686,11 @@ vt_put_char_tty0(vt_tty_t *tty, uint8_t ch)
         } else {
             vt_store_cell(tty, tty->cursor_row, tty->cursor_col, (uint32_t)c);
             tty->cursor_col++;
-            if (tty->cursor_col >= VT_COLS_DEFAULT) {
+            if (tty->cursor_col >= g_vt_cols) {
                 tty->cursor_col = 0;
-                if (tty->cursor_row + 1u >= VT_ROWS_DEFAULT) {
+                if (tty->cursor_row + 1u >= g_vt_rows) {
                     vt_scroll_up(tty, 0);
-                    tty->cursor_row = (uint16_t)(VT_ROWS_DEFAULT - 1u);
+                    tty->cursor_row = (uint16_t)(g_vt_rows - 1u);
                 } else {
                     tty->cursor_row++;
                 }
@@ -673,9 +717,9 @@ vt_put_char_virtual(vt_tty_t *tty, uint32_t tty_index, uint8_t ch)
     }
     if (ch == '\n') {
         tty->cursor_col = 0;
-        if (tty->cursor_row + 1u >= VT_ROWS_DEFAULT) {
+        if (tty->cursor_row + 1u >= g_vt_rows) {
             vt_scroll_up(tty, render_now);
-            tty->cursor_row = (uint16_t)(VT_ROWS_DEFAULT - 1u);
+            tty->cursor_row = (uint16_t)(g_vt_rows - 1u);
         } else {
             tty->cursor_row++;
         }
@@ -709,11 +753,11 @@ vt_put_char_virtual(vt_tty_t *tty, uint32_t tty_index, uint8_t ch)
     }
 
     tty->cursor_col++;
-    if (tty->cursor_col >= VT_COLS_DEFAULT) {
+    if (tty->cursor_col >= g_vt_cols) {
         tty->cursor_col = 0;
-        if (tty->cursor_row + 1u >= VT_ROWS_DEFAULT) {
+        if (tty->cursor_row + 1u >= g_vt_rows) {
             vt_scroll_up(tty, render_now);
-            tty->cursor_row = (uint16_t)(VT_ROWS_DEFAULT - 1u);
+            tty->cursor_row = (uint16_t)(g_vt_rows - 1u);
         } else {
             tty->cursor_row++;
         }
@@ -825,8 +869,8 @@ vt_replay_tty(uint32_t tty_index, uint8_t reliable)
     vt_tty_t *tty = &g_ttys[tty_index];
     uint32_t dropped_cells = 0;
 
-    for (uint16_t row = 0; row < VT_ROWS_DEFAULT; ++row) {
-        for (uint16_t col = 0; col < VT_COLS_DEFAULT; ++col) {
+    for (uint16_t row = 0; row < g_vt_rows; ++row) {
+        for (uint16_t col = 0; col < g_vt_cols; ++col) {
             if (reliable) {
                 if (vt_render_cell_switch(tty, row, col) != 0) {
                     dropped_cells++;
@@ -891,7 +935,7 @@ vt_init_ttys(void)
                 g_ttys[i].input_history[h][k] = 0;
             }
         }
-        for (uint32_t j = 0; j < VT_COLS_DEFAULT * VT_ROWS_DEFAULT; ++j) {
+        for (uint32_t j = 0; j < g_vt_cols * g_vt_rows; ++j) {
             g_ttys[i].cells[j].ch = 0;
             g_ttys[i].cells[j].fg = 15;
             g_ttys[i].cells[j].bg = 0;
@@ -1337,7 +1381,6 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
 
     g_fb_ep = fb_endpoint;
     g_kbd_ep = kbd_endpoint;
-    vt_init_ttys();
 
     if (arg2 >= 0) {
         g_vt_ep = arg2;
@@ -1347,6 +1390,9 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
             return -1;
         }
     }
+
+    vt_query_geometry();
+    vt_init_ttys();
 
     if (g_kbd_ep >= 0) {
         (void)wasmos_ipc_send(g_kbd_ep, g_vt_ep, KBD_IPC_SUBSCRIBE_REQ,

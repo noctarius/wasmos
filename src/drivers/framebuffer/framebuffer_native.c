@@ -19,6 +19,7 @@
  *   FBTEXT_IPC_CURSOR_SET_REQ  arg0=col  arg1=row
  *   FBTEXT_IPC_SCROLL_REQ      arg0=n_rows
  *   FBTEXT_IPC_CLEAR_REQ       (no args)
+ *   FBTEXT_IPC_GEOMETRY_REQ    resp: arg0=cols arg1=rows
  */
 
 /* IPC_EMPTY and IPC_OK values — must stay in sync with kernel ipc.h. */
@@ -304,6 +305,10 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
             } else {
                 g_console_ring_enabled = 0u;
             }
+            break;
+        case FBTEXT_IPC_GEOMETRY_REQ:
+            resp.arg0 = g_state.cols;
+            resp.arg1 = g_state.rows;
             break;
         default:
             resp.type = FBTEXT_IPC_ERROR;

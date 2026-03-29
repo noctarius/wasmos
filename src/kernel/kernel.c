@@ -52,6 +52,9 @@ typedef struct {
 static preempt_test_state_t g_preempt_test_state;
 static const uint8_t g_preempt_test_enabled = 0;
 static const uint8_t g_skip_wasm_boot = 0;
+/* TODO: Re-enable by default once IRQ preemption trampoline is fully ring3-
+ * aware. Current preempt handoff still assumes a kernel return RIP path. */
+static const uint8_t g_ring3_smoke_enabled = 0;
 
 typedef struct {
     const boot_info_t *boot_info;
@@ -474,6 +477,84 @@ preempt_observer_entry(process_t *process, void *arg)
 }
 
 static process_run_result_t
+ring3_smoke_fallback_entry(process_t *process, void *arg)
+{
+    (void)arg;
+    if (process) {
+        serial_write("[test] ring3 fallback path\n");
+        process_set_exit_status(process, -1);
+    }
+    return PROCESS_RUN_EXITED;
+}
+
+static int
+spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
+{
+    static const uint8_t ring3_code[] = {
+        0xB8, 0x01, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_GETPID */
+        0xCD, 0x80,                   /* int 0x80 */
+        0x31, 0xFF,                   /* xor edi, edi (exit status 0) */
+        0xB8, 0x02, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_EXIT */
+        0xCD, 0x80,                   /* int 0x80 */
+        0xEB, 0xFE                    /* should not return: spin if it does */
+    };
+
+    process_t *proc = 0;
+    mm_context_t *ctx = 0;
+    mem_region_t linear = {0};
+    mem_region_t stack = {0};
+    uint8_t *dst = 0;
+    uint64_t user_rip = 0;
+    uint64_t user_rsp = 0;
+
+    if (!out_pid) {
+        return -1;
+    }
+    if (process_spawn_as(parent_pid, "ring3-smoke", ring3_smoke_fallback_entry, 0, out_pid) != 0) {
+        return -1;
+    }
+
+    proc = process_get(*out_pid);
+    if (!proc) {
+        return -1;
+    }
+    ctx = mm_context_get(proc->context_id);
+    if (!ctx) {
+        return -1;
+    }
+    if (mm_context_region_for_type(ctx, MEM_REGION_WASM_LINEAR, &linear) != 0 ||
+        mm_context_region_for_type(ctx, MEM_REGION_STACK, &stack) != 0) {
+        return -1;
+    }
+    if (linear.phys_base == 0 || linear.size < sizeof(ring3_code) ||
+        stack.base == 0 || stack.size < 16u) {
+        return -1;
+    }
+
+    for (uint32_t i = 0; i < ctx->region_count; ++i) {
+        mem_region_t *region = &ctx->regions[i];
+        if (region->type == MEM_REGION_WASM_LINEAR) {
+            region->flags |= MEM_REGION_FLAG_EXEC;
+            break;
+        }
+    }
+
+    dst = (uint8_t *)(uintptr_t)linear.phys_base;
+    for (uint32_t i = 0; i < sizeof(ring3_code); ++i) {
+        dst[i] = ring3_code[i];
+    }
+
+    user_rip = linear.base;
+    user_rsp = stack.base + stack.size - 16u;
+    if (process_set_user_entry(*out_pid, user_rip, user_rsp) != 0) {
+        return -1;
+    }
+
+    serial_printf("[kernel] ring3 smoke pid=%016llx\n", (unsigned long long)*out_pid);
+    return 0;
+}
+
+static process_run_result_t
 init_entry(process_t *process, void *arg)
 {
     init_state_t *state = (init_state_t *)arg;
@@ -727,6 +808,7 @@ kmain(boot_info_t *boot_info)
     process_t *ipc_send_proc = 0;
     uint32_t preempt_busy_pid = 0;
     uint32_t preempt_observer_pid = 0;
+    uint32_t ring3_smoke_pid = 0;
     uint32_t idle_pid = 0;
     uint32_t init_pid = 0;
     init_state_t init_state;
@@ -877,6 +959,15 @@ kmain(boot_info_t *boot_info)
         process_spawn_as(init_pid, "preempt-observer", preempt_observer_entry, &g_preempt_test_state,
                          &preempt_observer_pid) != 0) {
             serial_write("[kernel] preempt test spawn failed\n");
+            for (;;) {
+                __asm__ volatile("hlt");
+            }
+        }
+    }
+
+    if (g_ring3_smoke_enabled) {
+        if (spawn_ring3_smoke_process(init_pid, &ring3_smoke_pid) != 0) {
+            serial_write("[kernel] ring3 smoke spawn failed\n");
             for (;;) {
                 __asm__ volatile("hlt");
             }

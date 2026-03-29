@@ -14,6 +14,8 @@ class MemoryPrivilegeFoundationSpecTest(unittest.TestCase):
         cls.process_h_path = os.path.join(root, "src", "kernel", "include", "process.h")
         cls.process_c_path = os.path.join(root, "src", "kernel", "process.c")
         cls.ctxsw_path = os.path.join(root, "src", "kernel", "arch", "x86_64", "context_switch.S")
+        cls.kernel_c_path = os.path.join(root, "src", "kernel", "kernel.c")
+        cls.syscall_c_path = os.path.join(root, "src", "kernel", "syscall.c")
         with open(cls.cpu_path, "r", encoding="utf-8") as f:
             cls.cpu_src = f.read()
         with open(cls.isr_path, "r", encoding="utf-8") as f:
@@ -28,6 +30,10 @@ class MemoryPrivilegeFoundationSpecTest(unittest.TestCase):
             cls.process_c_src = f.read()
         with open(cls.ctxsw_path, "r", encoding="utf-8") as f:
             cls.ctxsw_src = f.read()
+        with open(cls.kernel_c_path, "r", encoding="utf-8") as f:
+            cls.kernel_c_src = f.read()
+        with open(cls.syscall_c_path, "r", encoding="utf-8") as f:
+            cls.syscall_c_src = f.read()
 
     def _require(self, src: str, pattern: str, msg: str) -> None:
         self.assertRegex(src, re.compile(pattern, re.DOTALL), msg=msg)
@@ -93,6 +99,28 @@ class MemoryPrivilegeFoundationSpecTest(unittest.TestCase):
             self.ctxsw_src,
             r"testb \$0x3,\s*%sil[\s\S]*iretq",
             "context switch should branch to iretq path for ring3 cs",
+        )
+
+    def test_ring3_smoke_process_wiring_exists(self):
+        self._require(
+            self.kernel_c_src,
+            r"spawn_ring3_smoke_process",
+            "kernel.c should define a ring3 smoke-process setup helper",
+        )
+        self._require(
+            self.kernel_c_src,
+            r"region->flags \|= MEM_REGION_FLAG_EXEC",
+            "ring3 smoke setup should mark user linear region executable",
+        )
+        self._require(
+            self.kernel_c_src,
+            r"process_set_user_entry\(",
+            "ring3 smoke setup should switch process context to user entry",
+        )
+        self._require(
+            self.syscall_c_src,
+            r"\(frame->cs & 0x3u\) != 0x3u",
+            "syscall handler should detect CPL3-origin syscalls for ring3 smoke validation",
         )
 
 

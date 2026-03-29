@@ -193,6 +193,10 @@ IMPORTANT: Create a git commit after each prompt iteration.
   while retaining the existing ring0 fast-path (`ret`)
 - scheduler now updates TSS `rsp0` per selected process so user-mode trap/syscall
   entry has a deterministic kernel stack landing point
+- kernel startup now includes a ring3 smoke process (`ring3-smoke`) that
+  installs a minimal user-mode code blob in the process linear region, switches
+  to CPL3 via `process_set_user_entry`, and validates syscall boundary flow by
+  emitting `[test] ring3 syscall ok` on the first user-mode `getpid` syscall
 - process-owned user regions now carry an explicit user mapping flag from
   memory policy into paging (including intermediate table propagation) so
   ring3-accessible mappings are representable

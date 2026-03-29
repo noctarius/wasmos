@@ -168,6 +168,11 @@ The current tree already boots into a usable user-space stack:
 - Scheduler now updates TSS `rsp0` per selected process before context switch,
   establishing the kernel-stack landing point used by user-mode trap/syscall
   entry.
+- Kernel startup now provisions a dedicated ring3 smoke task (`ring3-smoke`):
+  it copies a tiny user-mode `int 0x80` loop into the process linear region,
+  marks that region executable, and flips the process into CPL3 via
+  `process_set_user_entry`. The syscall handler logs `[test] ring3 syscall ok`
+  on the first CPL3 `getpid` call as an end-to-end transition checkpoint.
 - Memory-region policy now carries an explicit user-access flag into paging
   mappings (including intermediate page-table entries), so user-accessible
   pages are tracked by intent rather than implicit convention.

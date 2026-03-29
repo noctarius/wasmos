@@ -90,7 +90,10 @@ The current tree already boots into a usable user-space stack:
   `tty1` at startup, and sends terminal output through `VT_IPC_WRITE_REQ`
   rather than direct console writes. VT write retry budgets were raised to
   reduce dropped output chunks under queue pressure during larger command
-  bursts.
+  bursts. Filesystem `ls`/`cat` output now returns from `fs-fat` over a
+  requester-scoped IPC stream and is rendered by the requesting CLI instance,
+  so multi-tty sessions keep file listings/content on the active tty rather
+  than global console-only output.
 - CLI now exposes VT switch failure codes in `tty` command errors so switch
   failures can be mapped to explicit VT control-plane failure paths.
 - CLI `cd` path tracking now keeps standard dot-segment semantics (`.` stays in
@@ -132,7 +135,12 @@ The current tree already boots into a usable user-space stack:
   observed earlier. It is currently not reproducible in recent runs, so the
   issue is deferred until a stable repro path is available.
 - VT keyboard hotkeys support `Ctrl+Shift+F1..F4` to switch directly to
-  `tty0..tty3`.
+  `tty0..tty3`. While active tty is `tty0`, plain `F2/F3/F4` also switches
+  directly to `tty1..tty3` as a recovery path when modifier tracking is not
+  reliable.
+- Entering `tty0` now renders a short read-only hint line so a blank
+  live-tail console state is visibly intentional and provides immediate switch
+  guidance.
 - Keyboard event delivery into VT is now explicit fire-and-forget
   (`KBD_IPC_KEY_NOTIFY` with `request_id = 0`), and VT/CLI output transport
   loops now use bounded `IPC_ERR_FULL` retries so queue backpressure degrades

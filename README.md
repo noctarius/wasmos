@@ -97,6 +97,10 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - CLI keeps VT as the primary interactive path on `tty1+`; VT write retries
   were raised to reduce dropped output chunks under transient queue pressure
   during larger command output bursts (for example `ls`)
+- `ls`/`cat` output is now returned from `fs-fat` as requester-scoped IPC stream
+  chunks and rendered by the requesting CLI tty, so filesystem listings/content
+  stay on the active virtual tty instead of disappearing into `tty0`-only
+  console output
 - CLI now surfaces VT switch error codes (`tty switch failed: <code>`) so
   failures can be tied to the precise switch stage during diagnostics
 - CLI `cd` now preserves shell-like path semantics for `.` (stay in cwd) and
@@ -136,7 +140,11 @@ IMPORTANT: Create a git commit after each prompt iteration.
   previously; it has not reproduced again recently, and trace hooks remain in
   place for a future focused repro/debug pass
 - VT supports keyboard hotkey switching with `Ctrl+Shift+F1..F4` mapped to
-  `tty0..tty3`
+  `tty0..tty3`; while viewing `tty0`, plain `F2/F3/F4` also switches directly
+  to `tty1..tty3` as a recovery path when modifier-state tracking is out of
+  sync
+- entering `tty0` now renders a short read-only hint line so an otherwise blank
+  live-tail screen is visibly intentional
 - keyboard notify events use fire-and-forget IPC (`request_id = 0`) and VT/CLI
   output paths now use bounded queue-full retries so transient framebuffer/IPC
   backpressure does not hard-lock interactive input loops

@@ -20,6 +20,8 @@
 #define FAT_OPEN_CREAT 0x0040
 #define FAT_OPEN_TRUNC 0x0200
 #define FAT_WAITING 1
+#define IPC_ERR_FULL (-3)
+#define FAT_STREAM_SEND_RETRIES 8192
 
 typedef enum {
     FAT_BOOT_INIT = 0,
@@ -276,6 +278,50 @@ console_write(const char *s)
 {
     int32_t len = str_len(s);
     if (len <= 0) {
+        return;
+    }
+    if (g_fs_req.in_use &&
+        g_fs_req.source >= 0 &&
+        g_fs_req.request_id != 0 &&
+        g_fs_endpoint >= 0 &&
+        (g_fs_req.type == FS_IPC_LIST_ROOT_REQ ||
+         g_fs_req.type == FS_IPC_CAT_ROOT_REQ)) {
+        uint32_t pos = 0;
+        while (pos < (uint32_t)len) {
+            int32_t a0 = 0;
+            int32_t a1 = 0;
+            int32_t a2 = 0;
+            int32_t a3 = 0;
+            a0 = (int32_t)(uint8_t)s[pos++];
+            if (pos < (uint32_t)len) {
+                a1 = (int32_t)(uint8_t)s[pos++];
+            }
+            if (pos < (uint32_t)len) {
+                a2 = (int32_t)(uint8_t)s[pos++];
+            }
+            if (pos < (uint32_t)len) {
+                a3 = (int32_t)(uint8_t)s[pos++];
+            }
+            uint32_t tries = 0;
+            for (;;) {
+                int32_t rc = wasmos_ipc_send(g_fs_req.source,
+                                             g_fs_endpoint,
+                                             FS_IPC_STREAM,
+                                             g_fs_req.request_id,
+                                             a0,
+                                             a1,
+                                             a2,
+                                             a3);
+                if (rc == 0) {
+                    break;
+                }
+                if (rc != IPC_ERR_FULL || ++tries >= FAT_STREAM_SEND_RETRIES) {
+                    wasmos_console_write((int32_t)(uintptr_t)s, len);
+                    return;
+                }
+                (void)wasmos_sched_yield();
+            }
+        }
         return;
     }
     wasmos_console_write((int32_t)(uintptr_t)s, len);

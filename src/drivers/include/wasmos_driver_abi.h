@@ -63,6 +63,7 @@ enum {
     FS_IPC_CHDIR_REQ = 0x412,
     FS_IPC_READ_APP_REQ = 0x413,
     FS_IPC_RESP = 0x480,
+    FS_IPC_STREAM = 0x481,
     FS_IPC_ERROR = 0x4FF
 };
 

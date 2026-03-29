@@ -118,6 +118,10 @@ IMPORTANT: Create a git commit after each prompt iteration.
   for headless/automation flows
 - VT output is now source-tty scoped: each CLI endpoint writes to its assigned
   tty buffer, and background tty writes no longer paint the active framebuffer
+- kernel-hosted WASM `console_write` now mirrors to the active VT tty as
+  best-effort kernel-origin VT write chunks while retaining serial output, so
+  app/runtime logs remain visible on framebuffer sessions without regressing
+  serial-based diagnostics
 - VT now decodes a core ANSI/VT100 CSI subset per tty buffer: cursor movement
   (`A/B/C/D/H/f`), save/restore cursor (`s/u`), erase display/line (`J/K`),
   cursor show/hide (`?25h/l`), and 16-color SGR (`m`)

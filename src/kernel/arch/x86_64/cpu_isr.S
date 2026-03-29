@@ -9,12 +9,16 @@
 .extern x86_page_fault_handler
 .extern x86_syscall_handler
 .extern x86_irq_handler
-.extern x86_timer_irq_handler
-.extern x86_irq_iret_corrupt
-.extern process_preempt_trampoline
+ .extern x86_timer_irq_handler
+ .extern x86_irq_iret_corrupt
+ .extern process_preempt_trampoline
 .extern g_irq0_ist_stack
 .extern g_irq0_ist_canary
 .extern x86_irq_ist_corrupt
+
+# Kernel code selector used when the timer preempt path rewrites a CPL3 IRET
+# frame to return through a ring0 scheduler trampoline.
+#define KERNEL_CS_SELECTOR 0x08
 
 .macro PUSH_REGS
     pushq %r15
@@ -189,7 +193,10 @@ isr_irq_0:
 0:
     movq 24(%rsp), %rax
     cmpq %rax, 176(%rsp)
+    je 5f
+    cmpq $KERNEL_CS_SELECTOR, 176(%rsp)
     jne 1f
+5:
     movq 32(%rsp), %rax
     cmpq %rax, 184(%rsp)
     jne 1f

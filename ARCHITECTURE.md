@@ -173,12 +173,11 @@ The current tree already boots into a usable user-space stack:
   marks that region executable, and flips the process into CPL3 via
   `process_set_user_entry`. The syscall handler logs `[test] ring3 syscall ok`
   on the first CPL3 `getpid` call as an end-to-end transition checkpoint.
-  Default smoke spawn remains disabled while IRQ-side ring3 preemption
-  hardening is still in progress.
-- Timer IRQ preemption now treats CPL3 frames conservatively: it no longer
-  rewrites user return RIP to a ring0 trampoline. Instead, pending reschedule
-  is honored at the next CPL3 syscall boundary. This keeps user-mode execution
-  ring-safe while a true ring3 IRQ preemption trampoline path is still pending.
+  Default smoke spawn remains disabled while this path is still being soak-tested.
+- Timer IRQ preemption now performs a ring3-safe trampoline rewrite for CPL3
+  frames: return RIP is redirected to the scheduler preempt trampoline and CS
+  is rewritten to kernel code selector so `iretq` re-enters ring0 cleanly
+  before the scheduler context switch runs.
 - Memory-region policy now carries an explicit user-access flag into paging
   mappings (including intermediate page-table entries), so user-accessible
   pages are tracked by intent rather than implicit convention.

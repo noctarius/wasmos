@@ -34,6 +34,23 @@ syscall_trace_ring3_once(syscall_frame_t *frame)
     serial_write("[test] ring3 syscall ok\n");
 }
 
+static uint64_t
+syscall_finish_with_resched(syscall_frame_t *frame, uint64_t result)
+{
+    if (!frame) {
+        return result;
+    }
+    if ((frame->cs & 0x3u) != 0x3u) {
+        return result;
+    }
+    if (!preempt_is_enabled() || !process_should_resched()) {
+        return result;
+    }
+    process_clear_resched();
+    process_yield(PROCESS_RUN_YIELDED);
+    return result;
+}
+
 uint64_t
 x86_syscall_handler(syscall_frame_t *frame)
 {
@@ -44,9 +61,9 @@ x86_syscall_handler(syscall_frame_t *frame)
 
     switch ((uint32_t)frame->rax) {
     case WASMOS_SYSCALL_NOP:
-        return 0;
+        return syscall_finish_with_resched(frame, 0);
     case WASMOS_SYSCALL_GETPID:
-        return process_current_pid();
+        return syscall_finish_with_resched(frame, process_current_pid());
     case WASMOS_SYSCALL_EXIT: {
         process_t *proc = process_get(process_current_pid());
         if (!proc) {
@@ -57,6 +74,6 @@ x86_syscall_handler(syscall_frame_t *frame)
         return 0;
     }
     default:
-        return (uint64_t)-1;
+        return syscall_finish_with_resched(frame, (uint64_t)-1);
     }
 }

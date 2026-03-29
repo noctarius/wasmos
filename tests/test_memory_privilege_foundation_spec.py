@@ -122,6 +122,16 @@ class MemoryPrivilegeFoundationSpecTest(unittest.TestCase):
             r"\(frame->cs & 0x3u\) != 0x3u",
             "syscall handler should detect CPL3-origin syscalls for ring3 smoke validation",
         )
+        self._require(
+            self.process_c_src,
+            r"if \(\(frame->cs & 0x3u\) == 0x3u\)[\s\S]*return 0;",
+            "IRQ preempt path should avoid rewriting return RIP for CPL3 frames",
+        )
+        self._require(
+            self.syscall_c_src,
+            r"syscall_finish_with_resched[\s\S]*process_should_resched",
+            "syscall path should consume pending reschedule for CPL3 callers",
+        )
 
 
 if __name__ == "__main__":

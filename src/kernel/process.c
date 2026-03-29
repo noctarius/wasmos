@@ -924,6 +924,11 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     if (g_current_process->in_hostcall) {
         return 0;
     }
+    if ((frame->cs & 0x3u) == 0x3u) {
+        /* TODO: Add a ring3-safe IRQ trampoline path so fully asynchronous
+         * user-mode preemption does not depend on syscall-boundary yields. */
+        return 0;
+    }
 
     uint64_t start = (uint64_t)(uintptr_t)&__kernel_start;
     uint64_t end = (uint64_t)(uintptr_t)&__kernel_end;

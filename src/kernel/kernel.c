@@ -52,8 +52,8 @@ typedef struct {
 static preempt_test_state_t g_preempt_test_state;
 static const uint8_t g_preempt_test_enabled = 0;
 static const uint8_t g_skip_wasm_boot = 0;
-/* TODO: Re-enable by default once IRQ preemption trampoline is fully ring3-
- * aware. Current preempt handoff still assumes a kernel return RIP path. */
+/* TODO: Replace syscall-boundary reschedule fallback with true ring3-safe
+ * IRQ preemption trampoline handoff, then re-enable default ring3 smoke spawn. */
 static const uint8_t g_ring3_smoke_enabled = 0;
 
 typedef struct {

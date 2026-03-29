@@ -186,7 +186,7 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - FAT new-file creation supports long filenames with generated short aliases
 - growable per-process `wasm3` heaps with a 2 GiB cap
 - x86 privilege-boundary groundwork: IDT `int 0x80` syscall gate is now
-  present with a minimal syscall dispatcher (`nop`, `getpid`) as the initial
+  present with a minimal syscall dispatcher (`nop`, `getpid`, `exit`) as the initial
   ring3 boundary primitive
 - scheduler/context-switch groundwork now carries per-context privilege
   metadata (`cs/ss/user_rsp`) and can restore ring3 contexts via `iretq`
@@ -196,7 +196,12 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - kernel startup now includes a ring3 smoke process (`ring3-smoke`) that
   installs a minimal user-mode code blob in the process linear region, switches
   to CPL3 via `process_set_user_entry`, and validates syscall boundary flow by
-  emitting `[test] ring3 syscall ok` on the first user-mode `getpid` syscall
+  emitting `[test] ring3 syscall ok` on the first user-mode `getpid` syscall;
+  default spawn remains disabled while the full IRQ-side ring3 preemption path
+  is still being hardened
+- timer preemption now avoids rewriting IRQ return RIP for CPL3 frames; pending
+  user-mode reschedule is consumed at the next syscall boundary as an interim
+  ring3-safe fallback until a dedicated ring3 IRQ trampoline path lands
 - process-owned user regions now carry an explicit user mapping flag from
   memory policy into paging (including intermediate table propagation) so
   ring3-accessible mappings are representable

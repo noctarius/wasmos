@@ -20,6 +20,8 @@ typedef enum {
 #define MEM_REGION_FLAG_READ   (1u << 0)
 #define MEM_REGION_FLAG_WRITE  (1u << 1)
 #define MEM_REGION_FLAG_EXEC   (1u << 2)
+/* Region is intended to be user-accessible once ring3 mappings are active. */
+#define MEM_REGION_FLAG_USER   (1u << 3)
 
 typedef enum {
     IPC_MEM_FAULT = 0x1000,

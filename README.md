@@ -181,6 +181,18 @@ IMPORTANT: Create a git commit after each prompt iteration.
   and create/remove directories
 - FAT new-file creation supports long filenames with generated short aliases
 - growable per-process `wasm3` heaps with a 2 GiB cap
+- x86 privilege-boundary groundwork: IDT `int 0x80` syscall gate is now
+  present with a minimal syscall dispatcher (`nop`, `getpid`) as the initial
+  ring3 boundary primitive
+- process-owned user regions now carry an explicit user mapping flag from
+  memory policy into paging (including intermediate table propagation) so
+  ring3-accessible mappings are representable
+- capability-based driver resource groundwork: per-context capability registry
+  (`io.port`, `irq.route`, `mmio.map`, `dma.buffer`) is now wired into
+  WASMOS-APP capability grants, and WASM I/O hostcalls enforce `io.port` when
+  a context has explicit capability policy configured
+- optional small-object slab allocator scaffold (`kalloc_small`/`kfree_small`)
+  added for incremental adoption without replacing existing static tables
 - per-process virtual memory contexts with private user mappings
 - shared user-space libc surface for C, Rust, Go, Zig, and AssemblyScript
 - language-native application entrypoints behind a stable `wasmos_main` ABI

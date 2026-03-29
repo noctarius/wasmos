@@ -10,6 +10,7 @@
 
 #define PT_FLAG_PRESENT (1ULL << 0)
 #define PT_FLAG_WRITE (1ULL << 1)
+#define PT_FLAG_USER (1ULL << 2)
 #define PT_FLAG_LARGE_PAGE (1ULL << 7)
 
 #define IDENTITY_PD_COUNT 4
@@ -66,9 +67,12 @@ entry_phys(uint64_t entry)
 }
 
 static int
-ensure_table(uint64_t *entry, uint64_t *out_phys)
+ensure_table(uint64_t *entry, uint64_t *out_phys, uint64_t table_flags)
 {
     if (*entry & PT_FLAG_PRESENT) {
+        if ((*entry & table_flags) != table_flags) {
+            *entry |= table_flags;
+        }
         *out_phys = entry_phys(*entry);
         return 0;
     }
@@ -76,16 +80,19 @@ ensure_table(uint64_t *entry, uint64_t *out_phys)
     if (alloc_table(&phys) != 0) {
         return -1;
     }
-    *entry = phys | PT_FLAG_PRESENT | PT_FLAG_WRITE;
+    *entry = phys | PT_FLAG_PRESENT | PT_FLAG_WRITE | table_flags;
     *out_phys = phys;
     return 0;
 }
 
 static int
-ensure_pt_for_pd(uint64_t *pd_entry)
+ensure_pt_for_pd(uint64_t *pd_entry, uint64_t table_flags)
 {
     if (*pd_entry & PT_FLAG_PRESENT) {
         if ((*pd_entry & PT_FLAG_LARGE_PAGE) == 0) {
+            if ((*pd_entry & table_flags) != table_flags) {
+                *pd_entry |= table_flags;
+            }
             return 0;
         }
         uint64_t base = *pd_entry & ~0x1FFFFFULL;
@@ -98,6 +105,7 @@ ensure_pt_for_pd(uint64_t *pd_entry)
         if (*pd_entry & PT_FLAG_WRITE) {
             flags |= PT_FLAG_WRITE;
         }
+        flags |= table_flags;
         for (uint32_t i = 0; i < ENTRIES_PER_TABLE; ++i) {
             pt[i] = (base + ((uint64_t)i * PAGE_SIZE_4K)) | flags;
         }
@@ -109,7 +117,7 @@ ensure_pt_for_pd(uint64_t *pd_entry)
     if (alloc_table(&pt_phys) != 0) {
         return -1;
     }
-    *pd_entry = pt_phys | PT_FLAG_PRESENT | PT_FLAG_WRITE;
+    *pd_entry = pt_phys | PT_FLAG_PRESENT | PT_FLAG_WRITE | table_flags;
     return 0;
 }
 
@@ -264,20 +272,25 @@ paging_map_4k_in_root(uint64_t root_table, uint64_t virt, uint64_t phys, uint64_
     uint64_t pd_idx = (virt >> 21) & 0x1FF;
     uint64_t pt_idx = (virt >> 12) & 0x1FF;
 
+    uint64_t table_flags = 0;
+    if (flags & MEM_REGION_FLAG_USER) {
+        table_flags |= PT_FLAG_USER;
+    }
+
     volatile uint64_t *pml4 = (volatile uint64_t *)(uintptr_t)root_table;
     uint64_t pdpt_phys = 0;
-    if (ensure_table((uint64_t *)&pml4[pml4_idx], &pdpt_phys) != 0) {
+    if (ensure_table((uint64_t *)&pml4[pml4_idx], &pdpt_phys, table_flags) != 0) {
         return -1;
     }
 
     volatile uint64_t *pdpt = (volatile uint64_t *)(uintptr_t)pdpt_phys;
     uint64_t pd_phys = 0;
-    if (ensure_table((uint64_t *)&pdpt[pdpt_idx], &pd_phys) != 0) {
+    if (ensure_table((uint64_t *)&pdpt[pdpt_idx], &pd_phys, table_flags) != 0) {
         return -1;
     }
 
     volatile uint64_t *pd = (volatile uint64_t *)(uintptr_t)pd_phys;
-    if (ensure_pt_for_pd((uint64_t *)&pd[pd_idx]) != 0) {
+    if (ensure_pt_for_pd((uint64_t *)&pd[pd_idx], table_flags) != 0) {
         return -1;
     }
 
@@ -291,6 +304,9 @@ paging_map_4k_in_root(uint64_t root_table, uint64_t virt, uint64_t phys, uint64_
     uint64_t map_flags = PT_FLAG_PRESENT;
     if (flags & MEM_REGION_FLAG_WRITE) {
         map_flags |= PT_FLAG_WRITE;
+    }
+    if (flags & MEM_REGION_FLAG_USER) {
+        map_flags |= PT_FLAG_USER;
     }
     pt[pt_idx] = (phys & ~0xFFFULL) | map_flags;
     invlpg(virt);
@@ -322,7 +338,7 @@ paging_unmap_4k_in_root(uint64_t root_table, uint64_t virt)
         return -1;
     }
     if (pd[pd_idx] & PT_FLAG_LARGE_PAGE) {
-        if (ensure_pt_for_pd((uint64_t *)&pd[pd_idx]) != 0) {
+        if (ensure_pt_for_pd((uint64_t *)&pd[pd_idx], 0) != 0) {
             return -1;
         }
     }

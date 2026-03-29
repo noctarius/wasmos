@@ -381,13 +381,16 @@ mm_context_t *mm_context_create(uint32_t id) {
     if (paging_create_address_space(&ctx->root_table) != 0) {
         return 0;
     }
-    if (mm_context_alloc_region(ctx, 8, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, MEM_REGION_WASM_LINEAR) != 0) {
+    if (mm_context_alloc_region(ctx, 8, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER,
+                                MEM_REGION_WASM_LINEAR) != 0) {
         return 0;
     }
-    if (mm_context_alloc_region(ctx, 2, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, MEM_REGION_STACK) != 0) {
+    if (mm_context_alloc_region(ctx, 2, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER,
+                                MEM_REGION_STACK) != 0) {
         return 0;
     }
-    if (mm_context_alloc_region(ctx, 4, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, MEM_REGION_HEAP) != 0) {
+    if (mm_context_alloc_region(ctx, 4, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER,
+                                MEM_REGION_HEAP) != 0) {
         return 0;
     }
     g_context_count++;

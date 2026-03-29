@@ -12,6 +12,7 @@
 #include "wasmos_app.h"
 #include "wasmos_driver_abi.h"
 #include "framebuffer.h"
+#include "capability.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -155,6 +156,19 @@ current_process_context(uint32_t *out_context_id)
 
     *out_context_id = proc->context_id;
     return 0;
+}
+
+static int
+require_io_capability(uint32_t context_id)
+{
+    /* Compatibility mode: if no explicit resource caps were configured for this
+     * context yet, keep legacy behavior and allow I/O hostcalls. */
+    /* TODO: Flip this to strict-deny by default once all drivers/services
+     * declare resource capabilities in WASMOS-APP metadata. */
+    if (!capability_context_configured(context_id)) {
+        return 0;
+    }
+    return capability_has(context_id, CAP_IO_PORT) ? 0 : -1;
 }
 
 static wasm_fs_peer_slot_t *
@@ -677,7 +691,11 @@ m3ApiRawFunction(wasmos_io_in8)
 {
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, port)
+    uint32_t context_id = 0;
     if (port < 0 || port > 0xFFFF) {
+        m3ApiReturn(-1);
+    }
+    if (current_process_context(&context_id) != 0 || require_io_capability(context_id) != 0) {
         m3ApiReturn(-1);
     }
     m3ApiReturn((int32_t)inb((uint16_t)port));
@@ -687,7 +705,11 @@ m3ApiRawFunction(wasmos_io_in16)
 {
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, port)
+    uint32_t context_id = 0;
     if (port < 0 || port > 0xFFFF) {
+        m3ApiReturn(-1);
+    }
+    if (current_process_context(&context_id) != 0 || require_io_capability(context_id) != 0) {
         m3ApiReturn(-1);
     }
     m3ApiReturn((int32_t)inw((uint16_t)port));
@@ -698,7 +720,11 @@ m3ApiRawFunction(wasmos_io_out8)
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, port)
     m3ApiGetArg(int32_t, value)
+    uint32_t context_id = 0;
     if (port < 0 || port > 0xFFFF || value < 0 || value > 0xFF) {
+        m3ApiReturn(-1);
+    }
+    if (current_process_context(&context_id) != 0 || require_io_capability(context_id) != 0) {
         m3ApiReturn(-1);
     }
     outb((uint16_t)port, (uint8_t)value);
@@ -710,7 +736,11 @@ m3ApiRawFunction(wasmos_io_out16)
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, port)
     m3ApiGetArg(int32_t, value)
+    uint32_t context_id = 0;
     if (port < 0 || port > 0xFFFF || value < 0 || value > 0xFFFF) {
+        m3ApiReturn(-1);
+    }
+    if (current_process_context(&context_id) != 0 || require_io_capability(context_id) != 0) {
         m3ApiReturn(-1);
     }
     outw((uint16_t)port, (uint16_t)value);
@@ -720,6 +750,10 @@ m3ApiRawFunction(wasmos_io_out16)
 m3ApiRawFunction(wasmos_io_wait)
 {
     m3ApiReturnType(int32_t)
+    uint32_t context_id = 0;
+    if (current_process_context(&context_id) != 0 || require_io_capability(context_id) != 0) {
+        m3ApiReturn(-1);
+    }
     io_wait();
     m3ApiReturn(0);
 }

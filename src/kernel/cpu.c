@@ -4,21 +4,25 @@
 #include "memory_service.h"
 #include "irq.h"
 #include "framebuffer.h"
+#include "syscall.h"
 #include "stdio.h"
 #include <stdint.h>
 #include <stdarg.h>
 
-#define GDT_ENTRY_COUNT 5
+#define GDT_ENTRY_COUNT 7
 #define IDT_ENTRY_COUNT 256
 #define EXCEPTION_COUNT 32
 
 #define KERNEL_CS_SELECTOR 0x08
 #define KERNEL_DS_SELECTOR 0x10
-#define KERNEL_TSS_SELECTOR 0x18
+#define USER_CS_SELECTOR   0x18
+#define USER_DS_SELECTOR   0x20
+#define KERNEL_TSS_SELECTOR 0x28
 #define IRQ0_IST_INDEX 1
 #define IRQ0_IST_STACK_SIZE 16384u
 
 #define IDT_TYPE_INTERRUPT_GATE 0x8E
+#define IDT_TYPE_INTERRUPT_GATE_USER 0xEE
 
 typedef struct __attribute__((packed)) {
     uint16_t limit;
@@ -37,6 +41,7 @@ typedef struct __attribute__((packed)) {
 
 extern void *x86_exception_stub_table[];
 extern void *x86_irq_stub_table[];
+extern void isr_syscall_128(void);
 extern uint8_t __kernel_start;
 extern uint8_t __kernel_end;
 
@@ -44,6 +49,8 @@ static uint64_t g_gdt[GDT_ENTRY_COUNT] = {
     0x0000000000000000ULL,
     0x00AF9A000000FFFFULL,
     0x00AF92000000FFFFULL,
+    0x00AFFA000000FFFFULL,
+    0x00AFF2000000FFFFULL,
     0x0000000000000000ULL,
     0x0000000000000000ULL,
 };
@@ -233,8 +240,8 @@ gdt_set_tss(void)
     low |= (uint64_t)((limit >> 16) & 0xFu) << 48;
     low |= (uint64_t)((base >> 24) & 0xFFu) << 56;
     uint64_t high = (uint64_t)(base >> 32);
-    g_gdt[3] = low;
-    g_gdt[4] = high;
+    g_gdt[5] = low;
+    g_gdt[6] = high;
 }
 
 static void
@@ -391,7 +398,7 @@ x86_exception_panic_frame(uint64_t vector, const uint64_t *frame)
 
 
 int
-x86_page_fault_handler(uint64_t error_code)
+x86_page_fault_handler(uint64_t error_code, const uint64_t *frame)
 {
     uint64_t cr2 = 0;
     __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
@@ -401,6 +408,14 @@ x86_page_fault_handler(uint64_t error_code)
     if (!proc) {
         return -1;
     }
+
+    /* #PF frame starts with [err, rip, cs, rflags, ...]. Keep this metadata
+     * available now so user-mode faults can be routed differently later. */
+    uint64_t cs = frame ? frame[2] : 0;
+    uint8_t from_user = (uint8_t)((cs & 0x3u) == 0x3u);
+    /* TODO: Route user-mode page faults through a user-space pager contract
+     * instead of the current kernel memory-service fallback path. */
+    (void)from_user;
 
     if (memory_service_handle_fault_ipc(proc->context_id, cr2, error_code) != 0) {
         serial_write("[cpu] page fault not handled\n");
@@ -424,9 +439,12 @@ cpu_init(void)
             idt_set_gate((uint8_t)(IRQ_VECTOR_BASE + i), handler, IDT_TYPE_INTERRUPT_GATE);
         }
     }
+    idt_set_gate((uint8_t)X86_VECTOR_SYSCALL, (uintptr_t)isr_syscall_128, IDT_TYPE_INTERRUPT_GATE_USER);
     irq_init();
     serial_write("[cpu] gdt/idt ready\n");
     (void)KERNEL_DS_SELECTOR;
+    (void)USER_CS_SELECTOR;
+    (void)USER_DS_SELECTOR;
 }
 
 void

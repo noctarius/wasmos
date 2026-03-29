@@ -11,6 +11,9 @@ class MemoryPrivilegeFoundationSpecTest(unittest.TestCase):
         cls.isr_path = os.path.join(root, "src", "kernel", "arch", "x86_64", "cpu_isr.S")
         cls.paging_path = os.path.join(root, "src", "kernel", "paging.c")
         cls.wasm3_link_path = os.path.join(root, "src", "kernel", "wasm3_link.c")
+        cls.process_h_path = os.path.join(root, "src", "kernel", "include", "process.h")
+        cls.process_c_path = os.path.join(root, "src", "kernel", "process.c")
+        cls.ctxsw_path = os.path.join(root, "src", "kernel", "arch", "x86_64", "context_switch.S")
         with open(cls.cpu_path, "r", encoding="utf-8") as f:
             cls.cpu_src = f.read()
         with open(cls.isr_path, "r", encoding="utf-8") as f:
@@ -19,6 +22,12 @@ class MemoryPrivilegeFoundationSpecTest(unittest.TestCase):
             cls.paging_src = f.read()
         with open(cls.wasm3_link_path, "r", encoding="utf-8") as f:
             cls.wasm3_link_src = f.read()
+        with open(cls.process_h_path, "r", encoding="utf-8") as f:
+            cls.process_h_src = f.read()
+        with open(cls.process_c_path, "r", encoding="utf-8") as f:
+            cls.process_c_src = f.read()
+        with open(cls.ctxsw_path, "r", encoding="utf-8") as f:
+            cls.ctxsw_src = f.read()
 
     def _require(self, src: str, pattern: str, msg: str) -> None:
         self.assertRegex(src, re.compile(pattern, re.DOTALL), msg=msg)
@@ -67,6 +76,23 @@ class MemoryPrivilegeFoundationSpecTest(unittest.TestCase):
             self.wasm3_link_src,
             r"wasmos_io_out8[\s\S]*require_io_capability",
             "wasmos_io_out8 should enforce io capability",
+        )
+
+    def test_ring3_context_restore_scaffolding_exists(self):
+        self._require(
+            self.process_h_src,
+            r"uint64_t cs;\s*uint64_t ss;\s*uint64_t user_rsp;",
+            "process context should carry cs/ss/user_rsp fields",
+        )
+        self._require(
+            self.process_c_src,
+            r"cpu_set_kernel_stack\(",
+            "scheduler should set TSS rsp0 before running process",
+        )
+        self._require(
+            self.ctxsw_src,
+            r"testb \$0x3,\s*%sil[\s\S]*iretq",
+            "context switch should branch to iretq path for ring3 cs",
         )
 
 

@@ -46,7 +46,7 @@ typedef struct {
     uint16_t csi_current;
     uint8_t csi_have_current;
     uint8_t csi_private;
-    vt_cell_t cells[160u * 64u];
+    vt_cell_t *cells;
 } vt_tty_t;
 
 #define VT_MAX_TTYS 4u
@@ -78,6 +78,10 @@ static uint8_t  g_ctrl_down = 0;
 static uint8_t  g_shift_down = 0;
 static uint16_t g_vt_cols = VT_COLS_DEFAULT;
 static uint16_t g_vt_rows = VT_ROWS_DEFAULT;
+static uint32_t g_heap_cursor = 0;
+static uint32_t g_heap_limit = 0;
+
+extern uint8_t __heap_base;
 
 enum {
     VT_TRACE_SWITCH = 0xA1,
@@ -114,6 +118,76 @@ static uint32_t
 vt_cell_index(uint16_t row, uint16_t col)
 {
     return (uint32_t)row * g_vt_cols + (uint32_t)col;
+}
+
+static uint32_t
+vt_cell_capacity(void)
+{
+    return (uint32_t)g_vt_cols * (uint32_t)g_vt_rows;
+}
+
+static void
+vt_heap_init(void)
+{
+    g_heap_cursor = (uint32_t)(uintptr_t)&__heap_base;
+    g_heap_limit = (uint32_t)__builtin_wasm_memory_size(0) * 65536u;
+    if (g_heap_cursor > g_heap_limit) {
+        g_heap_cursor = g_heap_limit;
+    }
+}
+
+static void *
+vt_alloc(uint32_t size, uint32_t align)
+{
+    if (size == 0u) {
+        return (void *)(uintptr_t)g_heap_cursor;
+    }
+    if (align == 0u) {
+        align = 1u;
+    }
+    if ((align & (align - 1u)) != 0u) {
+        return 0;
+    }
+    uint32_t aligned = (g_heap_cursor + (align - 1u)) & ~(align - 1u);
+    uint32_t end = aligned + size;
+    if (end < aligned) {
+        return 0;
+    }
+    while (end > g_heap_limit) {
+        int32_t grown = (int32_t)__builtin_wasm_memory_grow(0, 1);
+        if (grown < 0) {
+            return 0;
+        }
+        g_heap_limit += 65536u;
+    }
+    g_heap_cursor = end;
+    return (void *)(uintptr_t)aligned;
+}
+
+static void
+vt_reset_tty_cells(void)
+{
+    for (uint32_t i = 0; i < VT_MAX_TTYS; ++i) {
+        g_ttys[i].cells = 0;
+    }
+}
+
+static int
+vt_alloc_tty_cells(void)
+{
+    uint32_t cells = vt_cell_capacity();
+    if (cells == 0u || cells > (uint32_t)VT_MAX_COLS * (uint32_t)VT_MAX_ROWS) {
+        return -1;
+    }
+    uint32_t bytes = cells * (uint32_t)sizeof(vt_cell_t);
+    for (uint32_t i = 0; i < VT_MAX_TTYS; ++i) {
+        vt_cell_t *buf = (vt_cell_t *)vt_alloc(bytes, 8u);
+        if (!buf) {
+            return -1;
+        }
+        g_ttys[i].cells = buf;
+    }
+    return 0;
 }
 
 static void
@@ -332,7 +406,7 @@ vt_fb_console_mode(uint8_t enabled)
 static void
 vt_store_cell(vt_tty_t *tty, uint16_t row, uint16_t col, uint32_t ch)
 {
-    if (!tty || row >= g_vt_rows || col >= g_vt_cols) {
+    if (!tty || !tty->cells || row >= g_vt_rows || col >= g_vt_cols) {
         return;
     }
     uint32_t idx = vt_cell_index(row, col);
@@ -410,7 +484,7 @@ vt_csi_param(vt_tty_t *tty, uint8_t index, uint16_t def)
 static void
 vt_clear_cell(vt_tty_t *tty, uint16_t row, uint16_t col, uint8_t render_now)
 {
-    if (!tty || row >= g_vt_rows || col >= g_vt_cols) {
+    if (!tty || !tty->cells || row >= g_vt_rows || col >= g_vt_cols) {
         return;
     }
     vt_store_cell(tty, row, col, ' ');
@@ -605,7 +679,7 @@ vt_apply_csi(uint32_t tty_index, vt_tty_t *tty, uint8_t final)
 static void
 vt_render_cell(const vt_tty_t *tty, uint16_t row, uint16_t col)
 {
-    if (!tty || row >= g_vt_rows || col >= g_vt_cols) {
+    if (!tty || !tty->cells || row >= g_vt_rows || col >= g_vt_cols) {
         return;
     }
     uint32_t idx = vt_cell_index(row, col);
@@ -622,7 +696,7 @@ vt_render_cell(const vt_tty_t *tty, uint16_t row, uint16_t col)
 static int32_t
 vt_render_cell_switch(const vt_tty_t *tty, uint16_t row, uint16_t col)
 {
-    if (!tty || row >= g_vt_rows || col >= g_vt_cols) {
+    if (!tty || !tty->cells || row >= g_vt_rows || col >= g_vt_cols) {
         return -1;
     }
     uint32_t idx = vt_cell_index(row, col);
@@ -639,7 +713,7 @@ vt_render_cell_switch(const vt_tty_t *tty, uint16_t row, uint16_t col)
 static void
 vt_scroll_up(vt_tty_t *tty, uint8_t render_now)
 {
-    if (!tty) {
+    if (!tty || !tty->cells) {
         return;
     }
 
@@ -867,6 +941,9 @@ vt_replay_tty(uint32_t tty_index, uint8_t reliable)
         return -1;
     }
     vt_tty_t *tty = &g_ttys[tty_index];
+    if (!tty->cells) {
+        return -1;
+    }
     uint32_t dropped_cells = 0;
 
     for (uint16_t row = 0; row < g_vt_rows; ++row) {
@@ -897,6 +974,10 @@ vt_replay_tty(uint32_t tty_index, uint8_t reliable)
 static void
 vt_init_ttys(void)
 {
+    uint32_t cell_count = vt_cell_capacity();
+    if (cell_count == 0u || cell_count > (uint32_t)VT_MAX_COLS * (uint32_t)VT_MAX_ROWS) {
+        return;
+    }
     for (uint32_t i = 0; i < VT_MAX_TTYS; ++i) {
         g_ttys[i].cursor_row = 0;
         g_ttys[i].cursor_col = 0;
@@ -935,7 +1016,10 @@ vt_init_ttys(void)
                 g_ttys[i].input_history[h][k] = 0;
             }
         }
-        for (uint32_t j = 0; j < g_vt_cols * g_vt_rows; ++j) {
+        if (!g_ttys[i].cells) {
+            continue;
+        }
+        for (uint32_t j = 0; j < cell_count; ++j) {
             g_ttys[i].cells[j].ch = 0;
             g_ttys[i].cells[j].fg = 15;
             g_ttys[i].cells[j].bg = 0;
@@ -1392,6 +1476,18 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
     }
 
     vt_query_geometry();
+    vt_reset_tty_cells();
+    vt_heap_init();
+    if (vt_alloc_tty_cells() != 0) {
+        /* Fallback if large-grid allocation fails under tight memory. */
+        g_vt_cols = VT_COLS_DEFAULT;
+        g_vt_rows = VT_ROWS_DEFAULT;
+        vt_reset_tty_cells();
+        vt_heap_init();
+        if (vt_alloc_tty_cells() != 0) {
+            return -1;
+        }
+    }
     vt_init_ttys();
 
     if (g_kbd_ep >= 0) {

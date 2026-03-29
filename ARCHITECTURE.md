@@ -113,7 +113,10 @@ The current tree already boots into a usable user-space stack:
   buffers preserve cursor/erase/color effects across switches.
 - VT now queries framebuffer text geometry during startup and sizes tty state
   to that runtime grid (with fixed upper bounds) rather than hardcoding 80x25,
-  preventing premature scroll on larger framebuffer text layouts.
+  preventing premature scroll on larger framebuffer text layouts. Per-tty cell
+  storage is now allocated dynamically from WASM linear memory at startup
+  (with explicit memory growth when needed), and VT falls back to default
+  geometry if larger-grid allocation cannot be satisfied.
 - VT write routing now uses caller endpoint ownership to target the correct tty
   buffer; non-foreground tty writes are buffered without rendering over the
   active framebuffer.

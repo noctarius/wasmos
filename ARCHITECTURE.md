@@ -83,6 +83,9 @@ The current tree already boots into a usable user-space stack:
   switch abort loops. The native framebuffer driver now services control IPC
   before draining console ring backlog and now drains ring bytes in bounded
   chunks so switch clear/replay commands are not starved by heavy log traffic.
+  When console mode is re-enabled for `tty0`, the framebuffer now drops stale
+  ring backlog and resumes in live-tail mode, preventing large catch-up floods
+  from monopolizing the display path after long `tty1+` sessions.
 - CLI now receives the VT endpoint from process-manager wiring, switches to
   `tty1` at startup, and sends terminal output through `VT_IPC_WRITE_REQ`
   rather than direct console writes.

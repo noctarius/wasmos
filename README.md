@@ -89,7 +89,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   failure, avoiding half-switched visual states; the native framebuffer driver
   now prioritizes control IPC over ring-drain work and drains ring output in
   bounded chunks so switch commands are not delayed behind large console
-  backlogs; switching back to `tty0` re-enables ring drain
+  backlogs; switching back to `tty0` re-enables ring drain in live-tail mode
+  (stale backlog is dropped on re-enable), avoiding multi-screen catch-up floods
+  that could destabilize follow-on tty operations
 - CLI now attaches to VT `tty1` by default and writes through `VT_IPC_WRITE_REQ`
   (with `tty 0..3` command for manual switching)
 - CLI now surfaces VT switch error codes (`tty switch failed: <code>`) so

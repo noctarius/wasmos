@@ -293,7 +293,17 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
             fbtext_clear(&g_state);
             break;
         case FBTEXT_IPC_CONSOLE_MODE_REQ:
-            g_console_ring_enabled = (msg.arg0 != 0) ? 1u : 0u;
+            if (msg.arg0 != 0) {
+                if (!g_console_ring_enabled) {
+                    /* Re-enable in "live tail" mode: drop stale backlog so
+                     * returning to tty0 does not replay minutes of old logs
+                     * and starve subsequent tty control traffic. */
+                    ring->read_pos = ring->write_pos;
+                }
+                g_console_ring_enabled = 1u;
+            } else {
+                g_console_ring_enabled = 0u;
+            }
             break;
         default:
             resp.type = FBTEXT_IPC_ERROR;

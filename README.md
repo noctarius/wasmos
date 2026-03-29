@@ -94,6 +94,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   that could destabilize follow-on tty operations
 - CLI now attaches to VT `tty1` by default and writes through `VT_IPC_WRITE_REQ`
   (with `tty 0..3` command for manual switching)
+- CLI keeps VT as the primary interactive path on `tty1+`; VT write retries
+  were raised to reduce dropped output chunks under transient queue pressure
+  during larger command output bursts (for example `ls`)
 - CLI now surfaces VT switch error codes (`tty switch failed: <code>`) so
   failures can be tied to the precise switch stage during diagnostics
 - CLI `cd` now preserves shell-like path semantics for `.` (stay in cwd) and

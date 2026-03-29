@@ -88,7 +88,9 @@ The current tree already boots into a usable user-space stack:
   from monopolizing the display path after long `tty1+` sessions.
 - CLI now receives the VT endpoint from process-manager wiring, switches to
   `tty1` at startup, and sends terminal output through `VT_IPC_WRITE_REQ`
-  rather than direct console writes.
+  rather than direct console writes. VT write retry budgets were raised to
+  reduce dropped output chunks under queue pressure during larger command
+  bursts.
 - CLI now exposes VT switch failure codes in `tty` command errors so switch
   failures can be mapped to explicit VT control-plane failure paths.
 - CLI `cd` path tracking now keeps standard dot-segment semantics (`.` stays in

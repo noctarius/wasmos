@@ -123,7 +123,10 @@ IMPORTANT: Create a git commit after each prompt iteration.
   cursor show/hide (`?25h/l`), and 16-color SGR (`m`)
 - VT now queries framebuffer text geometry at startup and sizes tty buffers to
   the runtime grid (bounded by 160x64) instead of fixed 80x25, so scrolling
-  and cursor bounds match the visible framebuffer text area
+  and cursor bounds match the visible framebuffer text area. Per-tty cell
+  buffers are now allocated dynamically from WASM linear memory at startup
+  (growing memory on demand), with fallback to default geometry if larger-grid
+  allocation fails
 - VT now exposes `VT_IPC_SET_MODE_REQ` to configure per-tty input mode
   (`raw`, `canonical`, `echo`) without changing writer/read ownership rules
 - VT canonical mode now handles core line-discipline controls in-service

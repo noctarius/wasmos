@@ -13,7 +13,7 @@ add_custom_command(
           ${WASMOS_TRACE_DEFINE}
           -Wl,--no-entry -Wl,--strip-all
           -Wl,-z,stack-size=4096
-          -Wl,--initial-memory=524288
+          -Wl,--initial-memory=131072
           -Wl,--max-memory=1048576
           -Wl,--allow-undefined
           -Wl,--export=initialize

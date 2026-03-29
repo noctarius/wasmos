@@ -50,7 +50,7 @@ static uint8_t g_history_have_scratch = 0;
 static uint8_t g_esc_state = 0;
 /* Keep in sync with kernel ipc.h */
 #define IPC_ERR_FULL (-3)
-#define CLI_VT_SEND_RETRIES 1024
+#define CLI_VT_SEND_RETRIES 16384
 #define CLI_REQ_SEND_RETRIES 8192
 #define CLI_VT_RESP_RETRIES 4096
 
@@ -109,9 +109,10 @@ console_write(const char *s)
     if (len == 0) {
         return;
     }
-    if (g_vt_endpoint >= 0 && g_reply_endpoint >= 0 && g_home_tty > 0 &&
+    int use_vt = (g_vt_endpoint >= 0 && g_reply_endpoint >= 0 && g_home_tty > 0 &&
         g_vt_client_endpoint >= 0 &&
-        g_last_seen_active_tty == g_home_tty) {
+        g_last_seen_active_tty == g_home_tty);
+    if (use_vt) {
         uint32_t pos = 0;
         while (pos < len) {
             int32_t args[4] = {0, 0, 0, 0};

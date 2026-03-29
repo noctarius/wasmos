@@ -160,7 +160,7 @@ The current tree already boots into a usable user-space stack:
   including exception registers, process identity, stack bounds, CR3/kernel
   text range, and framebuffer geometry/base.
 - x86 syscall boundary groundwork now exists via a DPL3-callable `int 0x80`
-  gate and a minimal syscall dispatcher (`nop`, `getpid`) so ring3 transition
+  gate and a minimal syscall dispatcher (`nop`, `getpid`, `exit`) so ring3 transition
   work can pivot from hostcall-only assumptions to an explicit kernel entry.
 - Scheduler context state now tracks privilege-return metadata (`cs`, `ss`,
   `user_rsp`) and context-switch restore now branches to `iretq` for ring3
@@ -173,6 +173,12 @@ The current tree already boots into a usable user-space stack:
   marks that region executable, and flips the process into CPL3 via
   `process_set_user_entry`. The syscall handler logs `[test] ring3 syscall ok`
   on the first CPL3 `getpid` call as an end-to-end transition checkpoint.
+  Default smoke spawn remains disabled while IRQ-side ring3 preemption
+  hardening is still in progress.
+- Timer IRQ preemption now treats CPL3 frames conservatively: it no longer
+  rewrites user return RIP to a ring0 trampoline. Instead, pending reschedule
+  is honored at the next CPL3 syscall boundary. This keeps user-mode execution
+  ring-safe while a true ring3 IRQ preemption trampoline path is still pending.
 - Memory-region policy now carries an explicit user-access flag into paging
   mappings (including intermediate page-table entries), so user-accessible
   pages are tracked by intent rather than implicit convention.

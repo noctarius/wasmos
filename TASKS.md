@@ -65,6 +65,12 @@ IMPORTANT: Keep this file aligned with `README.md` and `ARCHITECTURE.md`.
 - Extend virtual terminal support beyond the current baseline:
   multi-TTY, richer ANSI handling, cooked/raw behavior polish on top of
   `VT_IPC_SET_MODE_REQ`, history, and scrollback.
+- Add a focused VT allocator stress test that repeatedly exercises
+  `memory.grow` and near-OOM fallback behavior for tty cell buffers.
+- Evaluate extracting the VT linear-memory bump allocator into a shared helper
+  for other WASM services that may need dynamic startup allocation.
+- Add optional VT memory pressure telemetry/soft-cap reporting so CLI and
+  diagnostics can surface growth/fallback pressure earlier.
 - Revisit deferred VT framebuffer artifact: intermittent duplicated/misaligned
   prompts during rapid `Ctrl+Shift+Fn` tty switching. Use existing VT
   `wasmos_debug_mark` trace events to capture a stable repro timeline first.

@@ -111,6 +111,9 @@ The current tree already boots into a usable user-space stack:
 - VT now applies a core CSI/SGR subset per tty state (`A/B/C/D/H/f`, `s/u`,
   `J`, `K`, private `?25h/l`, `m` with 16-color mapping), so replayed tty
   buffers preserve cursor/erase/color effects across switches.
+- VT now queries framebuffer text geometry during startup and sizes tty state
+  to that runtime grid (with fixed upper bounds) rather than hardcoding 80x25,
+  preventing premature scroll on larger framebuffer text layouts.
 - VT write routing now uses caller endpoint ownership to target the correct tty
   buffer; non-foreground tty writes are buffered without rendering over the
   active framebuffer.

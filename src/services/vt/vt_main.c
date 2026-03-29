@@ -80,8 +80,17 @@ static uint16_t g_vt_cols = VT_COLS_DEFAULT;
 static uint16_t g_vt_rows = VT_ROWS_DEFAULT;
 static uint32_t g_heap_cursor = 0;
 static uint32_t g_heap_limit = 0;
+static int32_t  g_alloc_failure = 0;
 
 extern uint8_t __heap_base;
+
+enum {
+    VT_ALLOC_FAIL_NONE = 0,
+    VT_ALLOC_FAIL_ALIGN = 1,
+    VT_ALLOC_FAIL_OVERFLOW = 2,
+    VT_ALLOC_FAIL_GROW = 3,
+    VT_ALLOC_FAIL_CAPACITY = 4
+};
 
 enum {
     VT_TRACE_SWITCH = 0xA1,
@@ -134,6 +143,44 @@ vt_heap_init(void)
     if (g_heap_cursor > g_heap_limit) {
         g_heap_cursor = g_heap_limit;
     }
+    g_alloc_failure = VT_ALLOC_FAIL_NONE;
+}
+
+static void
+vt_log_alloc_failure(const char *tag, int32_t code)
+{
+    static const char prefix[] = "[vt] alloc failed: ";
+    static const char sep[] = " code=";
+    char num[16];
+    int n = 0;
+    int32_t v = code;
+    if (v == 0) {
+        num[n++] = '0';
+    } else {
+        if (v < 0) {
+            num[n++] = '-';
+            v = -v;
+        }
+        int32_t p = 1;
+        while (v / p >= 10) {
+            p *= 10;
+        }
+        while (p > 0) {
+            num[n++] = (char)('0' + ((v / p) % 10));
+            p /= 10;
+        }
+    }
+    (void)wasmos_console_write((int32_t)(uintptr_t)prefix, (int32_t)(sizeof(prefix) - 1u));
+    if (tag) {
+        int32_t len = 0;
+        while (tag[len]) {
+            len++;
+        }
+        (void)wasmos_console_write((int32_t)(uintptr_t)tag, len);
+    }
+    (void)wasmos_console_write((int32_t)(uintptr_t)sep, (int32_t)(sizeof(sep) - 1u));
+    (void)wasmos_console_write((int32_t)(uintptr_t)num, n);
+    (void)wasmos_console_write((int32_t)(uintptr_t)"\n", 1);
 }
 
 static void *
@@ -146,16 +193,19 @@ vt_alloc(uint32_t size, uint32_t align)
         align = 1u;
     }
     if ((align & (align - 1u)) != 0u) {
+        g_alloc_failure = VT_ALLOC_FAIL_ALIGN;
         return 0;
     }
     uint32_t aligned = (g_heap_cursor + (align - 1u)) & ~(align - 1u);
     uint32_t end = aligned + size;
     if (end < aligned) {
+        g_alloc_failure = VT_ALLOC_FAIL_OVERFLOW;
         return 0;
     }
     while (end > g_heap_limit) {
         int32_t grown = (int32_t)__builtin_wasm_memory_grow(0, 1);
         if (grown < 0) {
+            g_alloc_failure = VT_ALLOC_FAIL_GROW;
             return 0;
         }
         g_heap_limit += 65536u;
@@ -177,6 +227,7 @@ vt_alloc_tty_cells(void)
 {
     uint32_t cells = vt_cell_capacity();
     if (cells == 0u || cells > (uint32_t)VT_MAX_COLS * (uint32_t)VT_MAX_ROWS) {
+        g_alloc_failure = VT_ALLOC_FAIL_CAPACITY;
         return -1;
     }
     uint32_t bytes = cells * (uint32_t)sizeof(vt_cell_t);
@@ -1479,12 +1530,13 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
     vt_reset_tty_cells();
     vt_heap_init();
     if (vt_alloc_tty_cells() != 0) {
+        vt_log_alloc_failure("runtime-grid", g_alloc_failure);
         /* Fallback if large-grid allocation fails under tight memory. */
         g_vt_cols = VT_COLS_DEFAULT;
         g_vt_rows = VT_ROWS_DEFAULT;
         vt_reset_tty_cells();
-        vt_heap_init();
         if (vt_alloc_tty_cells() != 0) {
+            vt_log_alloc_failure("default-grid", g_alloc_failure);
             return -1;
         }
     }

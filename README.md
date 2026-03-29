@@ -197,11 +197,10 @@ IMPORTANT: Create a git commit after each prompt iteration.
   installs a minimal user-mode code blob in the process linear region, switches
   to CPL3 via `process_set_user_entry`, and validates syscall boundary flow by
   emitting `[test] ring3 syscall ok` on the first user-mode `getpid` syscall;
-  default spawn remains disabled while the full IRQ-side ring3 preemption path
-  is still being hardened
-- timer preemption now avoids rewriting IRQ return RIP for CPL3 frames; pending
-  user-mode reschedule is consumed at the next syscall boundary as an interim
-  ring3-safe fallback until a dedicated ring3 IRQ trampoline path lands
+  default spawn remains disabled while this path is still being soak-tested
+- timer preemption now uses a ring3-safe IRQ trampoline handoff: CPL3 interrupt
+  frames are rewritten to return through a kernel CS trampoline before scheduler
+  context switch, rather than attempting a user-mode return into kernel text
 - process-owned user regions now carry an explicit user mapping flag from
   memory policy into paging (including intermediate table propagation) so
   ring3-accessible mappings are representable

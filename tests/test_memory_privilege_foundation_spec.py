@@ -124,13 +124,18 @@ class MemoryPrivilegeFoundationSpecTest(unittest.TestCase):
         )
         self._require(
             self.process_c_src,
-            r"if \(\(frame->cs & 0x3u\) == 0x3u\)[\s\S]*return 0;",
-            "IRQ preempt path should avoid rewriting return RIP for CPL3 frames",
+            r"if \(\(frame->cs & 0x3u\) == 0x3u\)[\s\S]*frame->cs = KERNEL_CS_SELECTOR;",
+            "IRQ preempt path should rewrite CPL3 frames to kernel CS before trampoline return",
         )
         self._require(
-            self.syscall_c_src,
-            r"syscall_finish_with_resched[\s\S]*process_should_resched",
-            "syscall path should consume pending reschedule for CPL3 callers",
+            self.process_c_src,
+            r"frame->rip = \(uint64_t\)\(uintptr_t\)process_preempt_trampoline;",
+            "IRQ preempt path should redirect return RIP to preempt trampoline",
+        )
+        self._require(
+            self.isr_src,
+            r"cmpq \$KERNEL_CS_SELECTOR,\s*176\(%rsp\)",
+            "IRQ0 integrity check should allow intentional CS rewrite to kernel selector",
         )
 
 

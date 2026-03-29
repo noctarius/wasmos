@@ -448,6 +448,15 @@ cpu_init(void)
 }
 
 void
+cpu_set_kernel_stack(uint64_t rsp0)
+{
+    if (rsp0 == 0) {
+        return;
+    }
+    g_tss.rsp0 = rsp0;
+}
+
+void
 cpu_enable_interrupts(void)
 {
     __asm__ volatile("sti");

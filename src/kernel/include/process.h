@@ -30,6 +30,9 @@ typedef struct {
     uint64_t rsp;
     uint64_t rip;
     uint64_t rflags;
+    uint64_t cs;
+    uint64_t ss;
+    uint64_t user_rsp;
 } process_context_t;
 
 _Static_assert(offsetof(process_context_t, r15) == 0, "process_context_t r15 offset mismatch");
@@ -37,6 +40,9 @@ _Static_assert(offsetof(process_context_t, rdi) == 64, "process_context_t rdi of
 _Static_assert(offsetof(process_context_t, rsp) == 120, "process_context_t rsp offset mismatch");
 _Static_assert(offsetof(process_context_t, rip) == 128, "process_context_t rip offset mismatch");
 _Static_assert(offsetof(process_context_t, rflags) == 136, "process_context_t rflags offset mismatch");
+_Static_assert(offsetof(process_context_t, cs) == 144, "process_context_t cs offset mismatch");
+_Static_assert(offsetof(process_context_t, ss) == 152, "process_context_t ss offset mismatch");
+_Static_assert(offsetof(process_context_t, user_rsp) == 160, "process_context_t user_rsp offset mismatch");
 
 typedef struct {
     uint64_t r15;
@@ -57,11 +63,14 @@ typedef struct {
     uint64_t rip;
     uint64_t cs;
     uint64_t rflags;
+    uint64_t user_rsp;
+    uint64_t user_ss;
 } irq_frame_t;
 
 _Static_assert(offsetof(irq_frame_t, r15) == 0, "irq_frame_t r15 offset mismatch");
 _Static_assert(offsetof(irq_frame_t, rax) == 112, "irq_frame_t rax offset mismatch");
 _Static_assert(offsetof(irq_frame_t, rip) == 120, "irq_frame_t rip offset mismatch");
+_Static_assert(offsetof(irq_frame_t, user_rsp) == 144, "irq_frame_t user_rsp offset mismatch");
 
 typedef enum {
     PROCESS_STATE_UNUSED = 0,
@@ -145,5 +154,6 @@ uint32_t process_count_active(void);
 uint32_t process_ready_count(void);
 int process_info_at(uint32_t index, uint32_t *out_pid, const char **out_name);
 int process_info_at_ex(uint32_t index, uint32_t *out_pid, uint32_t *out_parent_pid, const char **out_name);
+int process_set_user_entry(uint32_t pid, uint64_t rip, uint64_t user_rsp);
 
 #endif

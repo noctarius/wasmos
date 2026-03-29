@@ -3,6 +3,7 @@
 #include "physmem.h"
 #include "serial.h"
 #include "paging.h"
+#include "cpu.h"
 #include "wasm3_shim.h"
 #include "ipc.h"
 
@@ -66,6 +67,10 @@ extern uint8_t __kernel_start;
 extern uint8_t __kernel_end;
 
 #define PAGE_SIZE 0x1000u
+#define KERNEL_CS_SELECTOR 0x08u
+#define KERNEL_DS_SELECTOR 0x10u
+#define USER_CS_SELECTOR   0x1Bu
+#define USER_DS_SELECTOR   0x23u
 #define STACK_GUARD_PAGES 1u
 #define STACK_REDZONE_BYTES 4096u
 #define STACK_CANARY_VALUE 0xC0DEC0DEF00DFACEULL
@@ -225,9 +230,10 @@ static void process_validate_context(process_t *proc, const char *where) {
         }
     }
     uint64_t rip = proc->ctx.rip;
+    uint8_t is_user_ctx = (uint8_t)((proc->ctx.cs & 0x3u) == 0x3u);
     uint64_t start = (uint64_t)(uintptr_t)&__kernel_start;
     uint64_t end = (uint64_t)(uintptr_t)&__kernel_end;
-    if (rip >= start && rip < end) {
+    if (is_user_ctx || (rip >= start && rip < end)) {
         return;
     }
     serial_printf(
@@ -555,8 +561,11 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
         return -1;
     }
     slot->ctx.rsp = slot->stack_top - (STACK_REDZONE_BYTES + 8u);
+    slot->ctx.user_rsp = slot->ctx.rsp;
     slot->ctx.rip = (uint64_t)(uintptr_t)process_trampoline;
     slot->ctx.rflags = 0x200;
+    slot->ctx.cs = KERNEL_CS_SELECTOR;
+    slot->ctx.ss = KERNEL_DS_SELECTOR;
     if (process_str_eq(name, "process-manager")) {
         g_ctx_watch_ctx = (uint64_t)(uintptr_t)&slot->ctx;
         g_ctx_watch_last_ctx = g_ctx_watch_ctx;
@@ -627,10 +636,30 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
         return -1;
     }
     slot->ctx.rsp = slot->stack_top - (STACK_REDZONE_BYTES + 8u);
+    slot->ctx.user_rsp = slot->ctx.rsp;
     slot->ctx.rip = (uint64_t)(uintptr_t)process_trampoline;
     slot->ctx.rflags = 0x200;
+    slot->ctx.cs = KERNEL_CS_SELECTOR;
+    slot->ctx.ss = KERNEL_DS_SELECTOR;
     g_idle_process = slot;
     *out_pid = pid;
+    return 0;
+}
+
+int
+process_set_user_entry(uint32_t pid, uint64_t rip, uint64_t user_rsp)
+{
+    /* TODO: Wire this into process-manager launch policy once the first
+     * user-mode service/app path is selected and validated end-to-end. */
+    process_t *proc = process_find_by_pid(pid);
+    if (!proc || rip == 0 || user_rsp == 0) {
+        return -1;
+    }
+    proc->ctx.rip = rip;
+    proc->ctx.cs = USER_CS_SELECTOR;
+    proc->ctx.ss = USER_DS_SELECTOR;
+    proc->ctx.user_rsp = user_rsp;
+    proc->ctx.rflags = 0x200;
     return 0;
 }
 
@@ -794,6 +823,10 @@ int process_schedule_once(void) {
     g_current_pid = proc->pid;
     g_current_process = proc;
     critical_section_leave();
+    /* Ring3 transitions use TSS.rsp0 as the kernel entry stack. Keep it aligned
+     * to the scheduled process stack so user-mode interrupts/syscalls have a
+     * deterministic kernel stack landing point. */
+    cpu_set_kernel_stack((uint64_t)(proc->stack_top - 16u));
     if (mm_context_activate(proc->context_id) != 0) {
         serial_write("[sched] cr3 activate failed\n");
         critical_section_enter();
@@ -993,7 +1026,15 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     g_current_process->ctx.r13 = frame->r13;
     g_current_process->ctx.r14 = frame->r14;
     g_current_process->ctx.r15 = frame->r15;
-    g_current_process->ctx.rsp = (uint64_t)((uintptr_t)frame + sizeof(irq_frame_t));
+    g_current_process->ctx.cs = frame->cs;
+    if ((frame->cs & 0x3u) == 0x3u) {
+        g_current_process->ctx.user_rsp = frame->user_rsp;
+        g_current_process->ctx.ss = frame->user_ss;
+    } else {
+        g_current_process->ctx.rsp = (uint64_t)((uintptr_t)frame + sizeof(irq_frame_t));
+        g_current_process->ctx.user_rsp = g_current_process->ctx.rsp;
+        g_current_process->ctx.ss = KERNEL_DS_SELECTOR;
+    }
     g_current_process->ctx.rip = frame->rip;
     g_current_process->ctx.rflags = frame->rflags;
     if (g_ctx_watch_ctx == (uint64_t)(uintptr_t)&g_current_process->ctx) {

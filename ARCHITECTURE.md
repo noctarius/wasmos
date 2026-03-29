@@ -158,6 +158,12 @@ The current tree already boots into a usable user-space stack:
 - x86 syscall boundary groundwork now exists via a DPL3-callable `int 0x80`
   gate and a minimal syscall dispatcher (`nop`, `getpid`) so ring3 transition
   work can pivot from hostcall-only assumptions to an explicit kernel entry.
+- Scheduler context state now tracks privilege-return metadata (`cs`, `ss`,
+  `user_rsp`) and context-switch restore now branches to `iretq` for ring3
+  contexts while preserving `ret` for ring0 contexts.
+- Scheduler now updates TSS `rsp0` per selected process before context switch,
+  establishing the kernel-stack landing point used by user-mode trap/syscall
+  entry.
 - Memory-region policy now carries an explicit user-access flag into paging
   mappings (including intermediate page-table entries), so user-accessible
   pages are tracked by intent rather than implicit convention.
@@ -197,8 +203,9 @@ User-space policy:
 - Today all processes still execute in ring 0 with per-process kernel data
   structures and separate runtime contexts.
 - The architecture now includes a minimal syscall entry primitive (`int 0x80`)
-  and user-page mapping flag plumbing, but full ring3 execution and user stack
-  entry/return mechanics are still pending.
+  plus ring3-capable context-restore primitives (`iretq` path + per-process
+  `rsp0` setup) and user-page mapping flag plumbing, but full user-mode
+  process rollout and user-space pager ownership are still pending.
 - Drivers are treated as privileged by policy.
 - Services are intended to become least-privileged first once ring 3 support,
   page-table separation, and syscall entry are in place.

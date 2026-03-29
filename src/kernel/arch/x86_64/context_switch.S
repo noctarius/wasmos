@@ -25,8 +25,8 @@
 .extern g_ctx_restore_rflags
 
 # The context switch path stores and restores the full general-purpose register
-# set plus RIP/RSP/RFLAGS. The scheduler keeps the saved contexts in process_t
-# structures; this assembly code is the narrow mechanism that swaps between them.
+# set plus RIP/RSP/RFLAGS. It also carries CS/SS/user-RSP metadata so ring3
+# contexts can resume via iretq while ring0 contexts keep the ret fast path.
 context_switch:
     # Mark the transition so debug code can distinguish genuine process state
     # corruption from an in-flight save/restore sequence.
@@ -72,6 +72,9 @@ context_switch:
     popq %rax
     movq %rax, g_ctxsw_last_out_rflags(%rip)
     movq %rax, 136(%rdi)
+    movq $0x08, 144(%rdi)
+    movq $0x10, 152(%rdi)
+    movq %rsp, 160(%rdi)
 
     movq %rsi, %rdx
     movq %rsi, g_ctxsw_last_in_ctx(%rip)
@@ -98,6 +101,9 @@ context_switch:
     movq 120(%rdx), %rsp
     movq 136(%rdx), %rax
     movq 128(%rdx), %rcx
+    movq 144(%rdx), %rsi
+    testb $0x3, %sil
+    jne 2f
     subq $16, %rsp
     movq %rax, (%rsp)
     movq %rcx, 8(%rsp)
@@ -111,6 +117,25 @@ context_switch:
     movq 88(%rdx), %rdx
     movb $0, g_in_context_switch(%rip)
     ret
+2:
+    movq 160(%rdx), %rdi
+    movq 152(%rdx), %rsi
+    subq $40, %rsp
+    movq %rcx, 0(%rsp)
+    movq 144(%rdx), %r11
+    movq %r11, 8(%rsp)
+    movq %rax, 16(%rsp)
+    movq %rdi, 24(%rsp)
+    movq %rsi, 32(%rsp)
+    movq %rdx, g_ctx_restore_ctx(%rip)
+    movq %rcx, g_ctx_restore_rip(%rip)
+    movq %rsp, g_ctx_restore_rsp(%rip)
+    movq %rax, g_ctx_restore_rflags(%rip)
+    movq 112(%rdx), %rax
+    movq 96(%rdx), %rcx
+    movq 88(%rdx), %rdx
+    movb $0, g_in_context_switch(%rip)
+    iretq
 1:
     movb $0, g_in_context_switch(%rip)
     ret
@@ -143,6 +168,9 @@ context_switch_to:
     movq 120(%rdx), %rsp
     movq 136(%rdx), %rax
     movq 128(%rdx), %rcx
+    movq 144(%rdx), %rsi
+    testb $0x3, %sil
+    jne 3f
     subq $16, %rsp
     movq %rax, (%rsp)
     movq %rcx, 8(%rsp)
@@ -156,6 +184,25 @@ context_switch_to:
     movq 88(%rdx), %rdx
     movb $0, g_in_context_switch(%rip)
     ret
+3:
+    movq 160(%rdx), %rdi
+    movq 152(%rdx), %rsi
+    subq $40, %rsp
+    movq %rcx, 0(%rsp)
+    movq 144(%rdx), %r11
+    movq %r11, 8(%rsp)
+    movq %rax, 16(%rsp)
+    movq %rdi, 24(%rsp)
+    movq %rsi, 32(%rsp)
+    movq %rdx, g_ctx_restore_ctx(%rip)
+    movq %rcx, g_ctx_restore_rip(%rip)
+    movq %rsp, g_ctx_restore_rsp(%rip)
+    movq %rax, g_ctx_restore_rflags(%rip)
+    movq 112(%rdx), %rax
+    movq 96(%rdx), %rcx
+    movq 88(%rdx), %rdx
+    movb $0, g_in_context_switch(%rip)
+    iretq
 
 .global process_preempt_trampoline
 process_preempt_trampoline:

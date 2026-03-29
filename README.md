@@ -184,6 +184,11 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - x86 privilege-boundary groundwork: IDT `int 0x80` syscall gate is now
   present with a minimal syscall dispatcher (`nop`, `getpid`) as the initial
   ring3 boundary primitive
+- scheduler/context-switch groundwork now carries per-context privilege
+  metadata (`cs/ss/user_rsp`) and can restore ring3 contexts via `iretq`
+  while retaining the existing ring0 fast-path (`ret`)
+- scheduler now updates TSS `rsp0` per selected process so user-mode trap/syscall
+  entry has a deterministic kernel stack landing point
 - process-owned user regions now carry an explicit user mapping flag from
   memory policy into paging (including intermediate table propagation) so
   ring3-accessible mappings are representable

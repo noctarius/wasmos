@@ -15,6 +15,8 @@
 #include "physmem.h"
 #include "io.h"
 #include "framebuffer.h"
+#include "capability.h"
+#include "slab.h"
 
 #include <stdint.h>
 #include "wasm3.h"
@@ -286,9 +288,10 @@ wasmos_capability_grant(uint32_t owner_context_id,
                         uint32_t name_len,
                         uint32_t flags)
 {
-    (void)owner_context_id;
-    (void)flags;
     if (bytes_eq(name, name_len, "ipc.basic")) {
+        return 0;
+    }
+    if (capability_grant_name(owner_context_id, name, name_len, flags) == 0) {
         return 0;
     }
     return -1;
@@ -747,6 +750,8 @@ kmain(boot_info_t *boot_info)
     cpu_init();
 
     mm_init(boot_info);
+    capability_init();
+    slab_init();
     ipc_init();
     process_init();
     wasm3_link_init(boot_info);

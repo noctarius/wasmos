@@ -7,6 +7,7 @@
 .extern x86_exception_panic
 .extern x86_exception_panic_frame
 .extern x86_page_fault_handler
+.extern x86_syscall_handler
 .extern x86_irq_handler
 .extern x86_timer_irq_handler
 .extern x86_irq_iret_corrupt
@@ -119,6 +120,7 @@ isr_exception_14:
     # register set so the C handler can inspect and potentially resume.
     PUSH_REGS
     mov 120(%rsp), %rdi
+    leaq 120(%rsp), %rsi
     subq $8, %rsp
     call x86_page_fault_handler
     addq $8, %rsp
@@ -236,6 +238,19 @@ DECL_IRQ 12 44
 DECL_IRQ 13 45
 DECL_IRQ 14 46
 DECL_IRQ 15 47
+
+.global isr_syscall_128
+isr_syscall_128:
+    # Syscall boundary (int 0x80). The C handler receives a pointer to the
+    # saved register frame and returns the syscall result in RAX.
+    PUSH_REGS
+    mov %rsp, %rdi
+    subq $8, %rsp
+    call x86_syscall_handler
+    addq $8, %rsp
+    movq %rax, 112(%rsp)
+    POP_REGS
+    iretq
 
 .global x86_exception_stub_table
 x86_exception_stub_table:

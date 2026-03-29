@@ -155,6 +155,19 @@ The current tree already boots into a usable user-space stack:
   framebuffer panic screen (black background) with key crash diagnostics
   including exception registers, process identity, stack bounds, CR3/kernel
   text range, and framebuffer geometry/base.
+- x86 syscall boundary groundwork now exists via a DPL3-callable `int 0x80`
+  gate and a minimal syscall dispatcher (`nop`, `getpid`) so ring3 transition
+  work can pivot from hostcall-only assumptions to an explicit kernel entry.
+- Memory-region policy now carries an explicit user-access flag into paging
+  mappings (including intermediate page-table entries), so user-accessible
+  pages are tracked by intent rather than implicit convention.
+- Capability metadata now feeds a per-context resource-capability registry
+  (`io.port`, `irq.route`, `mmio.map`, `dma.buffer`); WASM I/O hostcalls now
+  enforce `io.port` when explicit capability policy is configured for the
+  calling context, while unconfigured contexts remain in compatibility mode.
+- A minimal fixed-size slab allocator scaffold (`kalloc_small`/`kfree_small`)
+  is now available as an optional kernel allocator path for incremental
+  migration off ad-hoc static/object-specific allocation patterns.
 - The CMake-only `kernel_ide` aggregation target indexes kernel sources plus
   selected WASM user-space sources, so it must mirror the libc include root
   used by those components for editor diagnostics.
@@ -183,6 +196,9 @@ User-space policy:
 ### Privilege Model
 - Today all processes still execute in ring 0 with per-process kernel data
   structures and separate runtime contexts.
+- The architecture now includes a minimal syscall entry primitive (`int 0x80`)
+  and user-page mapping flag plumbing, but full ring3 execution and user stack
+  entry/return mechanics are still pending.
 - Drivers are treated as privileged by policy.
 - Services are intended to become least-privileged first once ring 3 support,
   page-table separation, and syscall entry are in place.

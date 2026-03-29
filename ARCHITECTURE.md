@@ -120,6 +120,10 @@ The current tree already boots into a usable user-space stack:
 - VT write routing now uses caller endpoint ownership to target the correct tty
   buffer; non-foreground tty writes are buffered without rendering over the
   active framebuffer.
+- Kernel-hosted WASM `console_write` now also mirrors output into VT as
+  kernel-origin write chunks targeted at the active tty (best-effort, no
+  writer registration/generation token), while still emitting serial output for
+  headless logging and existing diagnostics/tests.
 - VT now accepts `VT_IPC_SET_MODE_REQ` so clients can select per-tty input
   handling (`raw`, `canonical`, `echo`) through the same owned endpoint used
   for VT writes/reads.

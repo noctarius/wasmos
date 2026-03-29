@@ -1563,14 +1563,22 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
 
         switch ((uint32_t)msg.type) {
         case VT_IPC_WRITE_REQ: {
-            int32_t tty_index = vt_tty_index_for_source(msg.source);
+            int32_t tty_index = -1;
+            if (msg.source < 0) {
+                /* Kernel-originated mirrored console writes target whichever TTY
+                 * is active. They are advisory and intentionally bypass writer
+                 * ownership plus generation checks. */
+                tty_index = (int32_t)g_active_tty;
+            } else {
+                tty_index = vt_tty_index_for_source(msg.source);
+            }
             if (tty_index < 0 || tty_index >= (int32_t)VT_MAX_TTYS) {
                 vt_trace_mark(VT_TRACE_DROP_UNOWNED,
                               (uint16_t)(msg.source < 0 ? 0x0FFFu : ((uint32_t)msg.source & 0x0FFFu)),
                               0);
                 break;
             }
-            if ((uint32_t)msg.request_id != g_switch_generation) {
+            if (msg.source >= 0 && (uint32_t)msg.request_id != g_switch_generation) {
                 /* Drop stale write chunks queued before the last tty switch. */
                 vt_trace_mark(VT_TRACE_DROP_STALE,
                               (uint16_t)((uint32_t)tty_index & 0x0FFFu),

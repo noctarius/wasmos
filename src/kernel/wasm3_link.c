@@ -171,6 +171,67 @@ require_io_capability(uint32_t context_id)
     return capability_has(context_id, CAP_IO_PORT) ? 0 : -1;
 }
 
+static int
+wasm_console_should_mirror_to_vt(void)
+{
+    process_t *proc = process_get(process_current_pid());
+    if (!proc) {
+        return 0;
+    }
+
+    if (proc->name &&
+        memcmp(proc->name, "hello-", 6) == 0 &&
+        (proc->name[6] != '\0')) {
+        return 1;
+    }
+
+    if (proc->parent_pid == 0) {
+        return 0;
+    }
+
+    process_t *parent = process_get(proc->parent_pid);
+    if (!parent || !parent->name) {
+        return 0;
+    }
+
+    /* Restrict mirrored VT output to shell-launched app workloads for now.
+     * FIXME: Replace this parent-name heuristic with explicit per-process
+     * console routing policy once PM exposes tty ownership metadata. */
+    return strcmp(parent->name, "cli") == 0;
+}
+
+static void
+wasm_console_write_vt_mirror(const char *ptr, int32_t len)
+{
+    uint32_t vt_endpoint = process_manager_vt_endpoint();
+    if (vt_endpoint == IPC_ENDPOINT_NONE || !ptr || len <= 0 ||
+        !wasm_console_should_mirror_to_vt()) {
+        return;
+    }
+
+    for (int32_t offset = 0; offset < len; ) {
+        ipc_message_t msg;
+        int32_t chunk[4] = { 0, 0, 0, 0 };
+
+        for (int i = 0; i < 4 && offset < len; ++i, ++offset) {
+            chunk[i] = (int32_t)(uint8_t)ptr[offset];
+        }
+
+        msg.type = VT_IPC_WRITE_REQ;
+        msg.source = IPC_ENDPOINT_NONE;
+        msg.destination = vt_endpoint;
+        msg.request_id = 0;
+        msg.arg0 = (uint32_t)chunk[0];
+        msg.arg1 = (uint32_t)chunk[1];
+        msg.arg2 = (uint32_t)chunk[2];
+        msg.arg3 = (uint32_t)chunk[3];
+
+        if (ipc_send_from(IPC_CONTEXT_KERNEL, vt_endpoint, &msg) != IPC_OK) {
+            break;
+        }
+    }
+}
+
 static wasm_fs_peer_slot_t *
 wasm_fs_peer_slot_for_pid(uint32_t pid)
 {
@@ -1048,6 +1109,7 @@ m3ApiRawFunction(wasmos_console_write)
         remaining -= chunk;
     }
     preempt_enable();
+    wasm_console_write_vt_mirror(ptr, len);
     m3ApiReturn(0);
 }
 

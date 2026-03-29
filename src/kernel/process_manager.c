@@ -1049,6 +1049,12 @@ process_manager_block_endpoint(void)
 }
 
 uint32_t
+process_manager_vt_endpoint(void)
+{
+    return g_pm.vt_endpoint;
+}
+
+uint32_t
 process_manager_framebuffer_endpoint(void)
 {
     return g_pm.fb_endpoint;

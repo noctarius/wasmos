@@ -1277,6 +1277,30 @@ initialize(int32_t proc_endpoint,
             }
             int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
             int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+            if ((g_pending_kind == PENDING_LIST || g_pending_kind == PENDING_CAT) &&
+                resp_type == FS_IPC_STREAM &&
+                resp_req == g_pending_req) {
+                int32_t args[4] = {
+                    wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0),
+                    wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1),
+                    wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2),
+                    wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3)
+                };
+                char out[5];
+                int out_len = 0;
+                for (int i = 0; i < 4; ++i) {
+                    char c = (char)(args[i] & 0xFF);
+                    if (c == '\0') {
+                        break;
+                    }
+                    out[out_len++] = c;
+                }
+                out[out_len] = '\0';
+                if (out_len > 0) {
+                    console_write(out);
+                }
+                continue;
+            }
             int32_t resp_status = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
             if (resp_req != g_pending_req) {
                 g_phase = CLI_PHASE_FAILED;

@@ -114,6 +114,8 @@ vt_cell_index(uint16_t row, uint16_t col)
 
 static void
 vt_render_cell(const vt_tty_t *tty, uint16_t row, uint16_t col);
+static void
+vt_draw_tty0_hint(void);
 
 static int
 vt_bytes_equal(const uint8_t *a, const uint8_t *b, uint16_t len)
@@ -722,6 +724,28 @@ vt_put_char_virtual(vt_tty_t *tty, uint32_t tty_index, uint8_t ch)
 }
 
 static void
+vt_draw_tty0_hint(void)
+{
+    vt_tty_t *tty = &g_ttys[0];
+    tty->fg = 14;
+    tty->bg = 0;
+    tty->attr = 0;
+    tty->cursor_row = 0;
+    tty->cursor_col = 0;
+    const char *line0 = "tty0 system console (read-only)";
+    const char *line1 = "press F2/F3/F4 or Ctrl+Shift+F2/F3/F4";
+    while (*line0) {
+        vt_put_char_virtual(tty, 0, (uint8_t)*line0++);
+    }
+    vt_put_char_virtual(tty, 0, (uint8_t)'\n');
+    while (*line1) {
+        vt_put_char_virtual(tty, 0, (uint8_t)*line1++);
+    }
+    vt_put_char_virtual(tty, 0, (uint8_t)'\n');
+    tty->fg = 15;
+}
+
+static void
 vt_process_byte(uint32_t tty_index, vt_tty_t *tty, uint8_t c)
 {
     if (!tty) {
@@ -949,6 +973,10 @@ vt_switch_tty(uint32_t tty_index)
                   (uint16_t)(tty_index & 0x0FFFu),
                   (uint16_t)(g_switch_generation & 0x0FFFu));
     g_switch_barrier = 0;
+    if (tty_index == 0) {
+        /* Keep tty0 visibly intentional even when no fresh ring data exists. */
+        vt_draw_tty0_hint();
+    }
     return 0;
 }
 
@@ -1186,6 +1214,15 @@ vt_handle_key_notify(int32_t scancode, int32_t keyup, int32_t extended)
 
     if (keyup != 0) {
         return;
+    }
+
+    if (g_active_tty == 0) {
+        /* tty0 is read-only: allow direct escape back to shell ttys even if
+         * modifier state tracking is out of sync for a host/PS2 sequence. */
+        if (scancode >= 0x3C && scancode <= 0x3E) { /* F2..F4 => tty1..tty3 */
+            (void)vt_switch_tty((uint32_t)(scancode - 0x3B));
+            return;
+        }
     }
 
     if (extended && g_active_tty != 0) {

@@ -60,39 +60,6 @@ write_hex32(wasmos_driver_api_t *api, const char *label, uint32_t v)
     api->console_write(buf, i);
 }
 
-/* Target display resolution — change these to switch modes. */
-#define VBE_TARGET_WIDTH  1280
-#define VBE_TARGET_HEIGHT 1024
-
-/* Read/write a Bochs VBE register via I/O ports 0x01CE/0x01CF. */
-static uint16_t
-vbe_read(wasmos_driver_api_t *api, uint16_t index)
-{
-    api->io_out16(0x01CE, index);
-    return api->io_in16(0x01CF);
-}
-
-static void
-vbe_write(wasmos_driver_api_t *api, uint16_t index, uint16_t value)
-{
-    api->io_out16(0x01CE, index);
-    api->io_out16(0x01CF, value);
-}
-
-/* Set the Bochs VBE device to the desired mode.
- * Sequence: disable → set geometry → enable LFB. */
-static void
-vbe_set_mode(wasmos_driver_api_t *api, uint16_t width, uint16_t height)
-{
-    vbe_write(api, 4, 0x00);           /* ENABLE  = disabled            */
-    vbe_write(api, 1, width);          /* XRES                          */
-    vbe_write(api, 2, height);         /* YRES                          */
-    vbe_write(api, 3, 32);             /* BPP     = 32                  */
-    vbe_write(api, 6, width);          /* VIRT_WIDTH = stride in pixels */
-    vbe_write(api, 5, 0);             /* VIRT_Y_OFFSET = 0             */
-    vbe_write(api, 4, 0x41);           /* ENABLE  = enabled | LFB       */
-}
-
 static void
 replay_early_log(wasmos_driver_api_t *api)
 {
@@ -169,32 +136,21 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
         return 0;
     }
 
-    /* Switch the Bochs VBE device to the desired resolution. */
-    vbe_set_mode(api, VBE_TARGET_WIDTH, VBE_TARGET_HEIGHT);
-
-    /* Read actual VBE geometry before mapping so we allocate the right size.
-     * vbe_set_mode above should have set the target mode; read back to confirm
-     * and derive stride/size. */
+    /* Start from the boot-provided framebuffer geometry. The kernel only maps
+     * the physical framebuffer range captured by the bootloader, so native
+     * driver-side VBE mode changes must not expand the required map size.
+     * TODO: add an explicit mode-set/update-framebuffer-info path before
+     * allowing this driver to reprogram Bochs VBE after ExitBootServices().
+     */
     uint32_t fb_width  = info.framebuffer_width;
     uint32_t fb_height = info.framebuffer_height;
     uint32_t fb_stride = info.framebuffer_stride;
-    {
-        uint16_t vbe_en = vbe_read(api, 4); /* ENABLE */
-        uint16_t vbe_xr = vbe_read(api, 1); /* XRES   */
-        uint16_t vbe_yr = vbe_read(api, 2); /* YRES   */
-        uint16_t vbe_vw = vbe_read(api, 6); /* VIRT_WIDTH = stride in pixels */
-        if ((vbe_en & 0x01u) && vbe_xr && vbe_yr && vbe_vw) {
-            fb_width  = vbe_xr;
-            fb_height = vbe_yr;
-            fb_stride = vbe_vw;
-            write_hex32(api, "[framebuffer] vbe override ", vbe_xr);
-            write_hex32(api, "x", vbe_yr);
-            write_hex32(api, " stride=", vbe_vw);
-            write_str(api, "\n");
-        }
-    }
+    write_hex32(api, "[framebuffer] boot mode ", fb_width);
+    write_hex32(api, "x", fb_height);
+    write_hex32(api, " stride=", fb_stride);
+    write_str(api, "\n");
 
-    /* Compute map size from actual geometry (32bpp = 4 bytes/pixel). */
+    /* Compute map size from boot geometry (32bpp = 4 bytes/pixel). */
     uint32_t size = fb_stride * fb_height * 4u;
     size = (size + 0xFFFu) & ~0xFFFu;
 

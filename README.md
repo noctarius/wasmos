@@ -49,6 +49,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - ELF64 kernel loading with aligned/overlap-safe `PT_LOAD` handling
 - versioned `boot_info_t` handoff
 - bootstrap `initfs.img` packaging for early WASMOS modules and boot config
+  with direct CMake dependencies for bootstrap driver/service payloads, so
+  rebuilt native drivers are repacked before QEMU runs
 - serial-first early boot diagnostics
 - an AssemblyScript `serial` driver loads through `hw-discovery` and calls
   `serial_register`, letting the kernel hand off console output from the COM1
@@ -61,7 +63,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - a freestanding native-driver ABI (`wasmos_driver_api_t`) shared between
   kernel and native drivers
 - a native C framebuffer driver that maps the physical framebuffer into driver
-  space and paints at native speed without wasm3
+  space and paints at native speed without wasm3; it now honors the
+  bootloader-captured framebuffer size and ignores larger post-boot Bochs VBE
+  geometry until mode-setting can update the kernel framebuffer contract
 - the native framebuffer driver now explicitly registers its text-control IPC
   endpoint with process-manager so VT receives a valid framebuffer endpoint for
   tty clear/replay control (instead of falling back to logical-only switching)

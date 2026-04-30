@@ -31,7 +31,9 @@ The current tree already boots into a usable user-space stack:
 - `sysinit` is intentionally small and only starts the late user processes
   listed in the generated boot-config blob.
 - The initfs also carries a generated binary boot-config blob derived from
-  `scripts/initfs.toml` for config-driven startup.
+  `scripts/initfs.toml` for config-driven startup. CMake tracks the bootstrap
+  driver/service payloads embedded by that manifest, including the native
+  framebuffer wrapper, so initfs regeneration follows driver rebuilds.
 - `fs-fat` currently provides read-only open/read/seek/stat primitives for the
   shared libc layer and the language-native shims.
 - `fs-fat` also supports overwrite-only writes to existing files through the C
@@ -54,7 +56,10 @@ The current tree already boots into a usable user-space stack:
 - Native framebuffer startup now registers its text-control IPC endpoint back
   into process-manager state, so downstream VT instances receive a concrete
   framebuffer endpoint for switch clear/replay control instead of degrading to
-  logical-only tty switching.
+  logical-only tty switching. The driver maps only the framebuffer byte range
+  captured by the bootloader and keeps the boot-provided geometry when Bochs
+  VBE reports a larger post-boot mode, preserving the kernel's framebuffer
+  mapping contract until explicit native-driver mode setting is introduced.
 - Serial-to-framebuffer text handoff now uses a kernel-created shared-memory
   console ring (1 page). `serial_write` appends bytes into this ring, and the
   native framebuffer driver maps and drains it, removing the previous

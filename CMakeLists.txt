@@ -340,11 +340,13 @@ add_custom_command(
           ${WASM_NATIVE_CALL_MIN_APP}
           ${WASM_NATIVE_CALL_SMOKE_APP}
           ${WASM_KEYBOARD_APP}
-  ${WASM_ATA_APP}
-  ${WASM_FAT_APP}
-  ${WASM_SERIAL_APP}
-  ${WASM_HW_DISCOVERY_APP}
-  make_wasmos_app
+          ${WASM_ATA_APP}
+          ${WASM_FAT_APP}
+          ${WASM_SERIAL_APP}
+          ${WASM_FRAMEBUFFER_APP}
+          ${WASM_HW_DISCOVERY_APP}
+          ${WASM_VT_APP}
+          make_wasmos_app
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Building initfs image"
   VERBATIM

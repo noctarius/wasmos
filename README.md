@@ -198,7 +198,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - x86 privilege-boundary groundwork: IDT `int 0x80` syscall gate is now
   present with a minimal syscall dispatcher (`nop`, `getpid`, `exit`,
   `yield`, `wait`, `ipc_notify`, `ipc_call`) as the initial ring3 boundary
-  primitive
+  primitive; syscall-side hardening now validates 32-bit field cleanliness for
+  `wait`, `ipc_notify`, and `ipc_call` arguments
 - scheduler/context-switch groundwork now carries per-context privilege
   metadata (`cs/ss/user_rsp`) and can restore ring3 contexts via `iretq`
   while retaining the existing ring0 fast-path (`ret`)

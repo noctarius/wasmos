@@ -175,7 +175,9 @@ The current tree already boots into a usable user-space stack:
 - x86 syscall boundary groundwork now exists via a DPL3-callable `int 0x80`
   gate and a minimal syscall dispatcher (`nop`, `getpid`, `exit`, `yield`,
   `wait`, `ipc_notify`, `ipc_call`) so ring3 transition work can pivot from
-  hostcall-only assumptions to an explicit kernel entry.
+  hostcall-only assumptions to an explicit kernel entry. Syscall argument
+  handling now enforces 32-bit cleanliness for current 32-bit field-based
+  calls (`wait`, `ipc_notify`, `ipc_call`) before dispatch.
 - The libc include tree now exposes a native-only syscall helper header at
   `lib/libc/include/wasmos/syscall_x86_64.h` that mirrors the current register
   ABI for non-WASM x86_64 userland experiments (`int 0x80` wrappers with

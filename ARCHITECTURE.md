@@ -199,12 +199,15 @@ The current tree already boots into a usable user-space stack:
   kernel-owned permission-denied endpoint, and a kernel echo endpoint,
   logging `[test] ring3 ipc call deny ok`,
   `[test] ring3 ipc call perm deny ok`, and `[test] ring3 ipc call ok` when
-  observed. The smoke loop then performs 4096
+  observed. It also issues an explicit CPL3 `yield` syscall and logs
+  `[test] ring3 yield syscall ok` when observed. The smoke loop then performs 4096
   CPL3 `getpid` syscalls before issuing a CPL3 `exit`, and the kernel logs
   `[test] ring3 preempt stress ok` when that loop completes to validate
   timer-preemption trampoline behavior under sustained user-mode syscall
-  traffic. Default smoke spawn remains disabled while this path is still being
-  soak-tested.
+  traffic. The `run-qemu-ring3-test` harness now also requires
+  `native-call-smoke: ipc-call ok` so native IPC call plumbing is asserted in
+  the same run. Default smoke spawn remains disabled while this path is still
+  being soak-tested.
 - Timer IRQ preemption now performs a ring3-safe trampoline rewrite for CPL3
   frames: return RIP is redirected to the scheduler preempt trampoline and CS
   is rewritten to kernel code selector so `iretq` re-enters ring0 cleanly

@@ -505,6 +505,7 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
      *   and a process-owned notification endpoint (allow path)
      * - probe IPC call boundary with invalid/permission-denied endpoints and a
      *   kernel echo endpoint (allow path)
+     * - issue an explicit YIELD syscall from CPL3
      * - execute many GETPID syscalls from CPL3 to exercise timer-IRQ preempt
      *   + trampoline return under repeated user->kernel transitions
      * - exit cleanly once done. */
@@ -529,6 +530,8 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
         0xBE, 0x78, 0x56, 0x00, 0x00, /* mov esi, 0x5678 (msg type) */
         0xBA, 0xEF, 0xBE, 0xAD, 0xDE, /* mov edx, 0xDEADBEEF (arg0) */
         0xB8, 0x06, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_IPC_CALL */
+        0xCD, 0x80,                   /* int 0x80 */
+        0xB8, 0x03, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_YIELD */
         0xCD, 0x80,                   /* int 0x80 */
         0xB9, 0x00, 0x10, 0x00, 0x00, /* mov ecx, 4096 */
         0xB8, 0x01, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_GETPID */

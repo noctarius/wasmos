@@ -12,6 +12,7 @@ static uint8_t g_ring3_ipc_ok_logged;
 static uint8_t g_ring3_ipc_call_deny_logged;
 static uint8_t g_ring3_ipc_call_perm_deny_logged;
 static uint8_t g_ring3_ipc_call_ok_logged;
+static uint8_t g_ring3_ipc_call_err_rdx_zero_logged;
 static uint8_t g_ring3_yield_logged;
 static uint8_t g_ring3_native_abi_logged;
 static uint32_t g_syscall_ipc_call_next_request_id = 1;
@@ -259,6 +260,10 @@ x86_syscall_handler(syscall_frame_t *frame)
                 destination == 0xFFFFFFFFu) {
                 g_ring3_ipc_call_deny_logged = 1;
                 serial_write("[test] ring3 ipc call deny ok\n");
+                if (!g_ring3_ipc_call_err_rdx_zero_logged && frame->rdx == 0) {
+                    g_ring3_ipc_call_err_rdx_zero_logged = 1;
+                    serial_write("[test] ring3 ipc call err rdx zero ok\n");
+                }
             }
             return (uint64_t)(int64_t)rc;
         }

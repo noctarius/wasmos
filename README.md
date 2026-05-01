@@ -210,7 +210,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
   emitting `[test] ring3 syscall ok` on the first user-mode `getpid` syscall,
   now probes `ipc_notify` with both deny (`[test] ring3 ipc syscall deny ok`)
   and allow (`[test] ring3 ipc syscall ok`) paths, probes `ipc_call` with deny
-  (`[test] ring3 ipc call deny ok`), permission-denied
+  (`[test] ring3 ipc call deny ok`, plus error-path `RDX=0` contract marker
+  `[test] ring3 ipc call err rdx zero ok`), permission-denied
   (`[test] ring3 ipc call perm deny ok`), and echo-allow
   (`[test] ring3 ipc call ok`) paths, issues an explicit CPL3 `yield`
   (`[test] ring3 yield syscall ok`), and runs a 4096-call CPL3

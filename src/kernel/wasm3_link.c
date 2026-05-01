@@ -1008,13 +1008,16 @@ m3ApiRawFunction(wasmos_shmem_map)
         m3ApiReturn(-1);
     }
 
-    uint64_t mem_size = (uint64_t)m3_GetMemorySize(runtime);
-    uint64_t off = (uint64_t)(uint32_t)ptr;
-    if (off + map_size > mem_size) {
+    uint32_t off32 = (uint32_t)ptr;
+    uint32_t map_size32 = (uint32_t)size;
+    if ((uint64_t)off32 + (uint64_t)map_size32 > (uint64_t)m3_GetMemorySize(runtime)) {
         m3ApiReturn(-1);
     }
-
-    uint64_t virt = (uint64_t)(uintptr_t)m3ApiOffsetToPtr((uint32_t)ptr);
+    uint64_t virt = 0;
+    if (wasm_user_va_from_offset(proc->context_id, off32, map_size32, &virt) != 0 ||
+        mm_user_range_permitted(proc->context_id, virt, (uint64_t)map_size32, MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
     if ((virt & 0xFFFULL) != 0) {
         m3ApiReturn(-1);
     }

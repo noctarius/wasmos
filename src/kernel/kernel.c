@@ -598,6 +598,7 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
         mem_region_t *region = &ctx->regions[i];
         if (region->type == MEM_REGION_WASM_LINEAR) {
             region->flags |= MEM_REGION_FLAG_EXEC;
+            region->flags &= ~MEM_REGION_FLAG_WRITE;
             break;
         }
     }
@@ -679,6 +680,7 @@ spawn_ring3_native_probe_process(uint32_t parent_pid, uint32_t *out_pid)
         mem_region_t *region = &ctx->regions[i];
         if (region->type == MEM_REGION_WASM_LINEAR) {
             region->flags |= MEM_REGION_FLAG_EXEC;
+            region->flags &= ~MEM_REGION_FLAG_WRITE;
             break;
         }
     }

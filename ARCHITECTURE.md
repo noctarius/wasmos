@@ -185,8 +185,12 @@ The current tree already boots into a usable user-space stack:
   it copies a tiny user-mode `int 0x80` loop into the process linear region,
   marks that region executable, and flips the process into CPL3 via
   `process_set_user_entry`. The syscall handler logs `[test] ring3 syscall ok`
-  on the first CPL3 `getpid` call as an end-to-end transition checkpoint.
-  Default smoke spawn remains disabled while this path is still being soak-tested.
+  on the first CPL3 `getpid` call as an end-to-end transition checkpoint; the
+  smoke loop now performs 4096 CPL3 `getpid` syscalls before issuing a CPL3
+  `exit`, and the kernel logs `[test] ring3 preempt stress ok` when that loop
+  completes to validate timer-preemption trampoline behavior under sustained
+  user-mode syscall traffic. Default smoke spawn remains disabled while this
+  path is still being soak-tested.
 - Timer IRQ preemption now performs a ring3-safe trampoline rewrite for CPL3
   frames: return RIP is redirected to the scheduler preempt trampoline and CS
   is rewritten to kernel code selector so `iretq` re-enters ring0 cleanly

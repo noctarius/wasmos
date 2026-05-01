@@ -409,15 +409,20 @@ x86_page_fault_handler(uint64_t error_code, const uint64_t *frame)
         return -1;
     }
 
-    /* #PF frame starts with [err, rip, cs, rflags, ...]. Keep this metadata
-     * available now so user-mode faults can be routed differently later. */
+    /* #PF frame starts with [err, rip, cs, rflags, ...]. */
     uint64_t cs = frame ? frame[2] : 0;
     uint8_t from_user = (uint8_t)((cs & 0x3u) == 0x3u);
-    /* TODO: Route user-mode page faults through a user-space pager contract
-     * instead of the current kernel memory-service fallback path. */
-    (void)from_user;
 
     if (memory_service_handle_fault_ipc(proc->context_id, cr2, error_code) != 0) {
+        if (from_user) {
+            serial_printf("[cpu] user page fault terminate pid=%u err=%016llx cr2=%016llx\n",
+                          pid,
+                          (unsigned long long)error_code,
+                          (unsigned long long)cr2);
+            process_set_exit_status(proc, -11);
+            process_yield(PROCESS_RUN_EXITED);
+            return 0;
+        }
         serial_write("[cpu] page fault not handled\n");
         return -1;
     }

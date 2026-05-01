@@ -6,6 +6,7 @@
 #include "paging.h"
 #include "process.h"
 #include "process_manager.h"
+#include "syscall.h"
 #include "serial.h"
 #include "timer.h"
 #include "wasmos_app.h"
@@ -52,9 +53,12 @@ typedef struct {
 static preempt_test_state_t g_preempt_test_state;
 static const uint8_t g_preempt_test_enabled = 0;
 static const uint8_t g_skip_wasm_boot = 0;
+#ifndef WASMOS_RING3_SMOKE_DEFAULT
+#define WASMOS_RING3_SMOKE_DEFAULT 0
+#endif
 /* TODO: Re-enable default ring3 smoke spawn after sustained soak confirms
  * preempt-trampoline behavior remains stable across broader workloads. */
-static const uint8_t g_ring3_smoke_enabled = 0;
+static const uint8_t g_ring3_smoke_enabled = WASMOS_RING3_SMOKE_DEFAULT;
 
 typedef struct {
     const boot_info_t *boot_info;
@@ -499,8 +503,8 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
     /* Ring3 stress loop:
      * - probe IPC syscall boundary with an invalid notify endpoint (deny path)
      *   and a process-owned notification endpoint (allow path)
-     * - probe IPC call boundary with an invalid endpoint (deny path) and a
-     *   process-owned message endpoint (loopback allow path)
+     * - probe IPC call boundary with invalid/permission-denied endpoints and a
+     *   kernel echo endpoint (allow path)
      * - execute many GETPID syscalls from CPL3 to exercise timer-IRQ preempt
      *   + trampoline return under repeated user->kernel transitions
      * - exit cleanly once done. */
@@ -516,7 +520,12 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
         0xBA, 0xBE, 0xBA, 0xFE, 0xCA, /* mov edx, 0xCAFEBABE (arg0) */
         0xB8, 0x06, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_IPC_CALL */
         0xCD, 0x80,                   /* int 0x80 */
-        0xBF, 0x00, 0x00, 0x00, 0x00, /* mov edi, <ring3 call ep> (patched) */
+        0xBF, 0x00, 0x00, 0x00, 0x00, /* mov edi, <kernel denied call ep> (patched) */
+        0xBE, 0x55, 0x22, 0x00, 0x00, /* mov esi, 0x2255 (msg type) */
+        0xBA, 0xCD, 0xAB, 0x00, 0x00, /* mov edx, 0x0000ABCD (arg0) */
+        0xB8, 0x06, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_IPC_CALL */
+        0xCD, 0x80,                   /* int 0x80 */
+        0xBF, 0x00, 0x00, 0x00, 0x00, /* mov edi, <kernel echo call ep> (patched) */
         0xBE, 0x78, 0x56, 0x00, 0x00, /* mov esi, 0x5678 (msg type) */
         0xBA, 0xEF, 0xBE, 0xAD, 0xDE, /* mov edx, 0xDEADBEEF (arg0) */
         0xB8, 0x06, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_IPC_CALL */
@@ -540,7 +549,8 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
     uint64_t user_rip = 0;
     uint64_t user_rsp = 0;
     uint32_t ring3_notify_ep = IPC_ENDPOINT_NONE;
-    uint32_t ring3_call_ep = IPC_ENDPOINT_NONE;
+    uint32_t ring3_call_denied_ep = IPC_ENDPOINT_NONE;
+    uint32_t ring3_call_echo_ep = IPC_ENDPOINT_NONE;
 
     if (!out_pid) {
         return -1;
@@ -557,10 +567,15 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
         ring3_notify_ep == IPC_ENDPOINT_NONE) {
         return -1;
     }
-    if (ipc_endpoint_create(proc->context_id, &ring3_call_ep) != IPC_OK ||
-        ring3_call_ep == IPC_ENDPOINT_NONE) {
+    if (ipc_endpoint_create(IPC_CONTEXT_KERNEL, &ring3_call_denied_ep) != IPC_OK ||
+        ring3_call_denied_ep == IPC_ENDPOINT_NONE) {
         return -1;
     }
+    if (ipc_endpoint_create(IPC_CONTEXT_KERNEL, &ring3_call_echo_ep) != IPC_OK ||
+        ring3_call_echo_ep == IPC_ENDPOINT_NONE) {
+        return -1;
+    }
+    syscall_set_ipc_call_echo_endpoint(ring3_call_echo_ep);
     ctx = mm_context_get(proc->context_id);
     if (!ctx) {
         return -1;
@@ -597,10 +612,17 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
     }
     {
         const uint32_t ep_imm_off = 47u;
-        dst[ep_imm_off + 0] = (uint8_t)(ring3_call_ep & 0xFFu);
-        dst[ep_imm_off + 1] = (uint8_t)((ring3_call_ep >> 8) & 0xFFu);
-        dst[ep_imm_off + 2] = (uint8_t)((ring3_call_ep >> 16) & 0xFFu);
-        dst[ep_imm_off + 3] = (uint8_t)((ring3_call_ep >> 24) & 0xFFu);
+        dst[ep_imm_off + 0] = (uint8_t)(ring3_call_denied_ep & 0xFFu);
+        dst[ep_imm_off + 1] = (uint8_t)((ring3_call_denied_ep >> 8) & 0xFFu);
+        dst[ep_imm_off + 2] = (uint8_t)((ring3_call_denied_ep >> 16) & 0xFFu);
+        dst[ep_imm_off + 3] = (uint8_t)((ring3_call_denied_ep >> 24) & 0xFFu);
+    }
+    {
+        const uint32_t ep_imm_off = 69u;
+        dst[ep_imm_off + 0] = (uint8_t)(ring3_call_echo_ep & 0xFFu);
+        dst[ep_imm_off + 1] = (uint8_t)((ring3_call_echo_ep >> 8) & 0xFFu);
+        dst[ep_imm_off + 2] = (uint8_t)((ring3_call_echo_ep >> 16) & 0xFFu);
+        dst[ep_imm_off + 3] = (uint8_t)((ring3_call_echo_ep >> 24) & 0xFFu);
     }
 
     user_rip = linear.base;

@@ -190,9 +190,11 @@ The current tree already boots into a usable user-space stack:
   now also probes `ipc_notify` deny/allow paths and logs
   `[test] ring3 ipc syscall deny ok` and `[test] ring3 ipc syscall ok` from the
   syscall layer when those outcomes are observed. It also probes `ipc_call`
-  deny/allow behavior via invalid-endpoint rejection and a process-owned
-  message-endpoint loopback path, logging `[test] ring3 ipc call deny ok` and
-  `[test] ring3 ipc call ok` when observed. The smoke loop then performs 4096
+  invalid/permission-denied/allow behavior via invalid-endpoint rejection, a
+  kernel-owned permission-denied endpoint, and a kernel echo endpoint,
+  logging `[test] ring3 ipc call deny ok`,
+  `[test] ring3 ipc call perm deny ok`, and `[test] ring3 ipc call ok` when
+  observed. The smoke loop then performs 4096
   CPL3 `getpid` syscalls before issuing a CPL3 `exit`, and the kernel logs
   `[test] ring3 preempt stress ok` when that loop completes to validate
   timer-preemption trampoline behavior under sustained user-mode syscall

@@ -221,6 +221,9 @@ The current tree already boots into a usable user-space stack:
   ring3 bootstrap copying
   now writes through the target context's user virtual mapping (temporary RW
   mapping then RX remap) instead of writing code directly via physical aliases.
+- Native driver ELF PT_LOAD segment population now uses `mm_copy_to_user`
+  (bytes + zero-fill) into the target context rather than direct dereference
+  of mapped segment virtual addresses.
 - Regression coverage now includes `tests/test_ring3_smoke_target.py`, which
   executes `cmake --build build --target run-qemu-ring3-test` to keep ring3
   marker assertions in the standard automated test suite.

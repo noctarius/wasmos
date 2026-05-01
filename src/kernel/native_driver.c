@@ -323,6 +323,38 @@ elf_validate(const uint8_t *data, uint32_t size)
 }
 
 static int
+copy_into_root(uint64_t root_table, uint64_t dst_virt, const void *src, uint64_t size)
+{
+    if (root_table == 0 || dst_virt == 0 || !src || size == 0) {
+        return -1;
+    }
+    uint64_t prev_root = paging_get_current_root_table();
+    if (paging_switch_root(root_table) != 0) {
+        return -1;
+    }
+    memcpy((void *)(uintptr_t)dst_virt, src, (size_t)size);
+    if (paging_switch_root(prev_root) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int
+zero_into_root(uint64_t root_table, uint64_t dst_virt, uint64_t size)
+{
+    static const uint8_t zero_chunk[256] = {0};
+    while (size > 0) {
+        uint64_t chunk = size > sizeof(zero_chunk) ? sizeof(zero_chunk) : size;
+        if (copy_into_root(root_table, dst_virt, zero_chunk, chunk) != 0) {
+            return -1;
+        }
+        dst_virt += chunk;
+        size -= chunk;
+    }
+    return 0;
+}
+
+static int
 load_segments(const uint8_t *elf_data, uint32_t elf_size, uint64_t root_table)
 {
     const elf64_ehdr_t *hdr = (const elf64_ehdr_t *)elf_data;
@@ -370,16 +402,21 @@ load_segments(const uint8_t *elf_data, uint32_t elf_size, uint64_t root_table)
             }
         }
 
-        /* paging_map_4k_in_root issues invlpg per page, so the virtual
-         * addresses are immediately accessible in the current CR3. */
-        uint8_t *dst       = (uint8_t *)(uintptr_t)ph->p_vaddr;
         const uint8_t *src = elf_data + ph->p_offset;
 
         if (ph->p_filesz > 0) {
-            memcpy(dst, src, ph->p_filesz);
+            if (copy_into_root(root_table, ph->p_vaddr, src, ph->p_filesz) != 0) {
+                pfa_free_pages(phys, alloc_pages);
+                return -1;
+            }
         }
         if (ph->p_memsz > ph->p_filesz) {
-            memset(dst + ph->p_filesz, 0, ph->p_memsz - ph->p_filesz);
+            if (zero_into_root(root_table,
+                               ph->p_vaddr + ph->p_filesz,
+                               ph->p_memsz - ph->p_filesz) != 0) {
+                pfa_free_pages(phys, alloc_pages);
+                return -1;
+            }
         }
 
         /* Drop the temporary write permission for read-only/execute segments. */

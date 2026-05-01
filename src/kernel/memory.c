@@ -229,6 +229,49 @@ mm_ensure_user_range_mapped(mm_context_t *ctx, uint64_t user_addr, uint64_t size
     return 0;
 }
 
+int
+mm_user_range_permitted(uint32_t context_id, uint64_t user_addr, uint64_t size, uint32_t needed_flags)
+{
+    if (context_id == 0 || user_addr == 0 || size == 0) {
+        return -1;
+    }
+
+    mm_context_t *ctx = mm_context_get(context_id);
+    if (!ctx || ctx->root_table == 0) {
+        return -1;
+    }
+
+    uint64_t end = user_addr + size;
+    if (end < user_addr) {
+        return -1;
+    }
+
+    uint64_t cur = user_addr;
+    while (cur < end) {
+        mem_region_t *region = mm_find_region_for_addr(ctx, cur);
+        if (!region) {
+            return -1;
+        }
+        if (!(region->flags & MEM_REGION_FLAG_USER)) {
+            return -1;
+        }
+        if ((needed_flags & MEM_REGION_FLAG_READ) && !(region->flags & MEM_REGION_FLAG_READ)) {
+            return -1;
+        }
+        if ((needed_flags & MEM_REGION_FLAG_WRITE) && !(region->flags & MEM_REGION_FLAG_WRITE)) {
+            return -1;
+        }
+        if ((needed_flags & MEM_REGION_FLAG_EXEC) && !(region->flags & MEM_REGION_FLAG_EXEC)) {
+            return -1;
+        }
+
+        uint64_t page_base = cur & ~(PAGE_SIZE - 1ULL);
+        cur = page_base + PAGE_SIZE;
+    }
+
+    return 0;
+}
+
 int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint64_t error_code, uint64_t *out_mapped_base) {
     mm_context_t *ctx = mm_context_get(context_id);
     if (!ctx) {

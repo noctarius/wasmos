@@ -236,7 +236,9 @@ The current tree already boots into a usable user-space stack:
   (`mm_copy_from_user` / `mm_copy_to_user`) with user-range permission checks,
   pre-mapping of touched pages, and temporary CR3 switch/restore around the
   actual copy. Hostcall migration has started with `wasmos_framebuffer_info`
-  using `mm_copy_to_user`.
+  using `mm_copy_to_user`. A non-copy validator API
+  (`mm_user_range_permitted`) is now available for phased hostcall guard
+  rollouts.
 - Unrecoverable user-mode page faults now use process-local failure semantics:
   the kernel marks only the faulting process exited (`-11`) and continues
   scheduling remaining work; unhandled kernel-mode faults remain fatal.

@@ -9,6 +9,9 @@ static uint8_t g_ring3_stress_ok_logged;
 static uint32_t g_ring3_getpid_count;
 static uint8_t g_ring3_ipc_deny_logged;
 static uint8_t g_ring3_ipc_ok_logged;
+static uint8_t g_ring3_ipc_call_deny_logged;
+static uint8_t g_ring3_ipc_call_ok_logged;
+static uint32_t g_syscall_ipc_call_next_request_id = 1;
 
 static int
 name_eq(const char *a, const char *b)
@@ -128,6 +131,57 @@ x86_syscall_handler(syscall_frame_t *frame)
             }
         }
         return (uint64_t)(int64_t)rc;
+    }
+    case WASMOS_SYSCALL_IPC_CALL: {
+        process_t *proc = process_get(process_current_pid());
+        uint32_t endpoint = (uint32_t)frame->rdi;
+        uint32_t request_id = g_syscall_ipc_call_next_request_id++;
+        int rc = IPC_ERR_INVALID;
+        ipc_message_t req;
+        ipc_message_t resp;
+        if (!proc) {
+            return (uint64_t)-1;
+        }
+        if (request_id == 0) {
+            request_id = g_syscall_ipc_call_next_request_id++;
+        }
+        req.type = (uint32_t)frame->rsi;
+        req.source = endpoint;
+        req.destination = endpoint;
+        req.request_id = request_id;
+        req.arg0 = (uint32_t)frame->rdx;
+        req.arg1 = (uint32_t)frame->rcx;
+        req.arg2 = (uint32_t)frame->r8;
+        req.arg3 = (uint32_t)frame->r9;
+        rc = ipc_send_from(proc->context_id, endpoint, &req);
+        if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_call_deny_logged &&
+            endpoint == 0xFFFFFFFFu && rc == IPC_ERR_INVALID) {
+            g_ring3_ipc_call_deny_logged = 1;
+            serial_write("[test] ring3 ipc call deny ok\n");
+        }
+        if (rc != IPC_OK) {
+            return (uint64_t)(int64_t)rc;
+        }
+        for (;;) {
+            rc = ipc_recv_for(proc->context_id, endpoint, &resp);
+            if (rc == IPC_EMPTY) {
+                process_yield(PROCESS_RUN_BLOCKED);
+                continue;
+            }
+            if (rc != IPC_OK) {
+                return (uint64_t)(int64_t)rc;
+            }
+            if (resp.request_id != request_id) {
+                continue;
+            }
+            frame->rdx = (uint64_t)resp.arg0;
+            if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_call_ok_logged &&
+                endpoint != 0xFFFFFFFFu && (uint32_t)frame->rdx == req.arg0) {
+                g_ring3_ipc_call_ok_logged = 1;
+                serial_write("[test] ring3 ipc call ok\n");
+            }
+            return 0;
+        }
     }
     default:
         return (uint64_t)-1;

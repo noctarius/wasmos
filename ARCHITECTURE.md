@@ -174,8 +174,8 @@ The current tree already boots into a usable user-space stack:
   text range, and framebuffer geometry/base.
 - x86 syscall boundary groundwork now exists via a DPL3-callable `int 0x80`
   gate and a minimal syscall dispatcher (`nop`, `getpid`, `exit`, `yield`,
-  `wait`, `ipc_notify`) so ring3 transition work can pivot from hostcall-only
-  assumptions to an explicit kernel entry.
+  `wait`, `ipc_notify`, `ipc_call`) so ring3 transition work can pivot from
+  hostcall-only assumptions to an explicit kernel entry.
 - Scheduler context state now tracks privilege-return metadata (`cs`, `ss`,
   `user_rsp`) and context-switch restore now branches to `iretq` for ring3
   contexts while preserving `ret` for ring0 contexts.
@@ -189,8 +189,11 @@ The current tree already boots into a usable user-space stack:
   on the first CPL3 `getpid` call as an end-to-end transition checkpoint; it
   now also probes `ipc_notify` deny/allow paths and logs
   `[test] ring3 ipc syscall deny ok` and `[test] ring3 ipc syscall ok` from the
-  syscall layer when those outcomes are observed. The smoke loop then performs
-  4096 CPL3 `getpid` syscalls before issuing a CPL3 `exit`, and the kernel logs
+  syscall layer when those outcomes are observed. It also probes `ipc_call`
+  deny/allow behavior via invalid-endpoint rejection and a process-owned
+  message-endpoint loopback path, logging `[test] ring3 ipc call deny ok` and
+  `[test] ring3 ipc call ok` when observed. The smoke loop then performs 4096
+  CPL3 `getpid` syscalls before issuing a CPL3 `exit`, and the kernel logs
   `[test] ring3 preempt stress ok` when that loop completes to validate
   timer-preemption trampoline behavior under sustained user-mode syscall
   traffic. Default smoke spawn remains disabled while this path is still being

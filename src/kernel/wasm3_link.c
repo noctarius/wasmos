@@ -1173,6 +1173,23 @@ m3ApiRawFunction(wasmos_console_write)
         m3ApiReturn(-1);
     }
     m3ApiCheckMem(ptr, (uint32_t)len);
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t ptr_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   (uint32_t)len,
+                                   &ptr_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                ptr_user,
+                                (uint64_t)(uint32_t)len,
+                                MEM_REGION_FLAG_READ) != 0) {
+        m3ApiReturn(-1);
+    }
 
     preempt_disable();
     char buf[128];
@@ -1212,6 +1229,23 @@ m3ApiRawFunction(wasmos_console_read)
         m3ApiReturn(-1);
     }
     m3ApiCheckMem(ptr, 1);
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t ptr_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   1,
+                                   &ptr_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                ptr_user,
+                                1,
+                                MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
     uint8_t ch = 0;
     int rc = serial_read_char(&ch);
     if (rc <= 0) {

@@ -6,6 +6,7 @@
 #include "framebuffer.h"
 #include "syscall.h"
 #include "stdio.h"
+#include "string.h"
 #include <stdint.h>
 #include <stdarg.h>
 
@@ -419,6 +420,9 @@ x86_page_fault_handler(uint64_t error_code, const uint64_t *frame)
                           pid,
                           (unsigned long long)error_code,
                           (unsigned long long)cr2);
+            if (proc->name && strcmp(proc->name, "ring3-fault") == 0) {
+                serial_write("[test] ring3 fault isolate ok\n");
+            }
             process_set_exit_status(proc, -11);
             process_yield(PROCESS_RUN_EXITED);
             return 0;

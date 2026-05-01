@@ -748,6 +748,79 @@ spawn_ring3_native_probe_process(uint32_t parent_pid, uint32_t *out_pid)
     return 0;
 }
 
+static int
+spawn_ring3_fault_probe_process(uint32_t parent_pid, uint32_t *out_pid)
+{
+    static const uint8_t ring3_fault_code[] = {
+        0xB8, 0x01, 0x00, 0x00, 0x00,       /* mov eax, WASMOS_SYSCALL_GETPID */
+        0xCD, 0x80,                         /* int 0x80 */
+        0x48, 0x8B, 0x04, 0x25, 0x00, 0x00, 0x00, 0x00, /* mov rax, [0] */
+        0xEB, 0xFE                          /* spin if fault unexpectedly returns */
+    };
+
+    process_t *proc = 0;
+    mm_context_t *ctx = 0;
+    mem_region_t linear = {0};
+    mem_region_t stack = {0};
+    uint64_t user_rip = 0;
+    uint64_t user_rsp = 0;
+    uint32_t code_size = (uint32_t)sizeof(ring3_fault_code);
+
+    if (!out_pid) {
+        return -1;
+    }
+    if (process_spawn_as(parent_pid, "ring3-fault", ring3_smoke_fallback_entry, 0, out_pid) != 0) {
+        return -1;
+    }
+    proc = process_get(*out_pid);
+    if (!proc) {
+        return -1;
+    }
+    ctx = mm_context_get(proc->context_id);
+    if (!ctx) {
+        return -1;
+    }
+    if (mm_context_region_for_type(ctx, MEM_REGION_WASM_LINEAR, &linear) != 0 ||
+        mm_context_region_for_type(ctx, MEM_REGION_STACK, &stack) != 0) {
+        return -1;
+    }
+    if (linear.phys_base == 0 || linear.size < code_size || stack.base == 0 || stack.size < 16u) {
+        return -1;
+    }
+    if (map_linear_pages(ctx->root_table,
+                         linear.base,
+                         linear.phys_base,
+                         code_size,
+                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) != 0) {
+        return -1;
+    }
+    if (mm_copy_to_user(proc->context_id, linear.base, ring3_fault_code, code_size) != 0) {
+        return -1;
+    }
+    if (map_linear_pages(ctx->root_table,
+                         linear.base,
+                         linear.phys_base,
+                         code_size,
+                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_EXEC | MEM_REGION_FLAG_USER) != 0) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < ctx->region_count; ++i) {
+        mem_region_t *region = &ctx->regions[i];
+        if (region->type == MEM_REGION_WASM_LINEAR) {
+            region->flags |= MEM_REGION_FLAG_EXEC;
+            region->flags &= ~MEM_REGION_FLAG_WRITE;
+            break;
+        }
+    }
+    user_rip = linear.base;
+    user_rsp = stack.base + stack.size - 16u;
+    if (process_set_user_entry(*out_pid, user_rip, user_rsp) != 0) {
+        return -1;
+    }
+    serial_printf("[kernel] ring3 fault pid=%016llx\n", (unsigned long long)*out_pid);
+    return 0;
+}
+
 static process_run_result_t
 init_entry(process_t *process, void *arg)
 {
@@ -1013,6 +1086,7 @@ kmain(boot_info_t *boot_info)
     uint32_t preempt_observer_pid = 0;
     uint32_t ring3_smoke_pid = 0;
     uint32_t ring3_native_pid = 0;
+    uint32_t ring3_fault_pid = 0;
     uint32_t idle_pid = 0;
     uint32_t init_pid = 0;
     init_state_t init_state;
@@ -1178,6 +1252,12 @@ kmain(boot_info_t *boot_info)
         }
         if (spawn_ring3_native_probe_process(init_pid, &ring3_native_pid) != 0) {
             serial_write("[kernel] ring3 native spawn failed\n");
+            for (;;) {
+                __asm__ volatile("hlt");
+            }
+        }
+        if (spawn_ring3_fault_probe_process(init_pid, &ring3_fault_pid) != 0) {
+            serial_write("[kernel] ring3 fault spawn failed\n");
             for (;;) {
                 __asm__ volatile("hlt");
             }

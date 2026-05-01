@@ -1118,6 +1118,34 @@ m3ApiRawFunction(wasmos_acpi_rsdp_info)
     }
     m3ApiCheckMem(out_ptr, len);
     m3ApiCheckMem(out_len_ptr, sizeof(uint32_t));
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t out_user = 0;
+    uint64_t out_len_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   out_ptr,
+                                   len,
+                                   &out_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                out_user,
+                                len,
+                                MEM_REGION_FLAG_WRITE) != 0 ||
+        wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   out_len_ptr,
+                                   sizeof(uint32_t),
+                                   &out_len_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                out_len_user,
+                                sizeof(uint32_t),
+                                MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
 
     const uint8_t *src = (const uint8_t *)(uintptr_t)g_wasm_boot_info->rsdp;
     for (uint32_t i = 0; i < len; ++i) {

@@ -26,8 +26,9 @@ typedef enum {
  * - EXIT:           RDI=exit_status; does not return to caller path
  * - YIELD:          RAX=0
  * - WAIT:           RDI=child_pid; RAX=child_exit_status or -1
- * - IPC_NOTIFY:     RDI=endpoint; RAX=ipc_result_t
+ * - IPC_NOTIFY:     RDI=endpoint(32-bit clean); RAX=ipc_result_t
  * - IPC_CALL:       RDI=endpoint, RSI=type, RDX/RCX/R8/R9=arg0..arg3
+ *                   all IPC_CALL fields are validated as 32-bit-clean
  *                   RAX=ipc_result_t (0 on success), RDX=reply arg0 on success
  *                   RDX=0 on error
  *                   current behavior blocks by yielding until a reply with a

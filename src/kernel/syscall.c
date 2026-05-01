@@ -35,6 +35,19 @@ name_eq(const char *a, const char *b)
     return strcmp(a, b) == 0;
 }
 
+static int
+syscall_arg_u32(uint64_t raw, uint32_t *out)
+{
+    if (!out) {
+        return -1;
+    }
+    if ((raw >> 32) != 0) {
+        return -1;
+    }
+    *out = (uint32_t)raw;
+    return 0;
+}
+
 void
 syscall_set_ipc_call_echo_endpoint(uint32_t endpoint)
 {
@@ -194,10 +207,13 @@ x86_syscall_handler(syscall_frame_t *frame)
         return 0;
     case WASMOS_SYSCALL_WAIT: {
         process_t *proc = process_get(process_current_pid());
-        uint32_t target_pid = (uint32_t)frame->rdi;
+        uint32_t target_pid = 0;
         int32_t exit_status = 0;
         int wait_rc = 0;
         if (!proc) {
+            return (uint64_t)-1;
+        }
+        if (syscall_arg_u32(frame->rdi, &target_pid) != 0) {
             return (uint64_t)-1;
         }
         for (;;) {
@@ -213,10 +229,13 @@ x86_syscall_handler(syscall_frame_t *frame)
     }
     case WASMOS_SYSCALL_IPC_NOTIFY: {
         process_t *proc = process_get(process_current_pid());
-        uint32_t endpoint = (uint32_t)frame->rdi;
+        uint32_t endpoint = 0;
         int rc = IPC_ERR_INVALID;
         if (!proc) {
             return (uint64_t)-1;
+        }
+        if (syscall_arg_u32(frame->rdi, &endpoint) != 0) {
+            return (uint64_t)(int64_t)IPC_ERR_INVALID;
         }
         rc = ipc_notify_from(proc->context_id, endpoint);
         if (name_eq(proc->name, "ring3-smoke")) {
@@ -233,7 +252,12 @@ x86_syscall_handler(syscall_frame_t *frame)
     }
     case WASMOS_SYSCALL_IPC_CALL: {
         process_t *proc = process_get(process_current_pid());
-        uint32_t destination = (uint32_t)frame->rdi;
+        uint32_t destination = 0;
+        uint32_t msg_type = 0;
+        uint32_t arg0 = 0;
+        uint32_t arg1 = 0;
+        uint32_t arg2 = 0;
+        uint32_t arg3 = 0;
         uint32_t source_endpoint = IPC_ENDPOINT_NONE;
         uint32_t request_id = g_syscall_ipc_call_next_request_id++;
         uint32_t owner_context = 0;
@@ -242,6 +266,14 @@ x86_syscall_handler(syscall_frame_t *frame)
         ipc_message_t resp;
         if (!proc) {
             return (uint64_t)-1;
+        }
+        if (syscall_arg_u32(frame->rdi, &destination) != 0 ||
+            syscall_arg_u32(frame->rsi, &msg_type) != 0 ||
+            syscall_arg_u32(frame->rdx, &arg0) != 0 ||
+            syscall_arg_u32(frame->rcx, &arg1) != 0 ||
+            syscall_arg_u32(frame->r8, &arg2) != 0 ||
+            syscall_arg_u32(frame->r9, &arg3) != 0) {
+            return (uint64_t)(int64_t)IPC_ERR_INVALID;
         }
         /* IPC_CALL returns a secondary value in RDX only on success.
          * Clear it up-front so callers never observe stale register contents on
@@ -277,14 +309,14 @@ x86_syscall_handler(syscall_frame_t *frame)
             }
             return (uint64_t)(int64_t)rc;
         }
-        req.type = (uint32_t)frame->rsi;
+        req.type = msg_type;
         req.source = source_endpoint;
         req.destination = destination;
         req.request_id = request_id;
-        req.arg0 = (uint32_t)frame->rdx;
-        req.arg1 = (uint32_t)frame->rcx;
-        req.arg2 = (uint32_t)frame->r8;
-        req.arg3 = (uint32_t)frame->r9;
+        req.arg0 = arg0;
+        req.arg1 = arg1;
+        req.arg2 = arg2;
+        req.arg3 = arg3;
         if (destination == g_ipc_call_echo_endpoint &&
             g_ipc_call_echo_endpoint != IPC_ENDPOINT_NONE) {
             frame->rdx = (uint64_t)req.arg0;

@@ -21,6 +21,12 @@
 static uint64_t g_pml4_phys;
 static uint64_t g_current_pml4_phys;
 
+static uint8_t
+is_user_slot_virt(uint64_t virt)
+{
+    return (uint8_t)(((virt >> 39) & 0x1FFULL) == USER_PML4_INDEX);
+}
+
 
 static void
 zero_page(uint64_t phys_addr)
@@ -271,6 +277,22 @@ paging_map_4k_in_root(uint64_t root_table, uint64_t virt, uint64_t phys, uint64_
     uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
     uint64_t pd_idx = (virt >> 21) & 0x1FF;
     uint64_t pt_idx = (virt >> 12) & 0x1FF;
+
+    uint8_t user_slot = is_user_slot_virt(virt);
+    if (user_slot && !(flags & MEM_REGION_FLAG_USER)) {
+        /* Compatibility bridge while callers are migrated: addresses in the
+         * dedicated user slot are always user-accessible mappings. */
+        flags |= MEM_REGION_FLAG_USER;
+    }
+    if (!user_slot && (flags & MEM_REGION_FLAG_USER)) {
+        return -1;
+    }
+    if ((flags & MEM_REGION_FLAG_USER) &&
+        (flags & MEM_REGION_FLAG_WRITE) &&
+        (flags & MEM_REGION_FLAG_EXEC)) {
+        /* Enforce W^X policy for user mappings. */
+        return -1;
+    }
 
     uint64_t table_flags = 0;
     if (flags & MEM_REGION_FLAG_USER) {

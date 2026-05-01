@@ -12,6 +12,7 @@
 #define MM_USER_SHARED_BASE 0x0000008500000000ULL
 static const uint64_t pf_err_present = 1ULL << 0;
 static const uint64_t pf_err_write = 1ULL << 1;
+static const uint64_t pf_err_user = 1ULL << 2;
 static const uint64_t pf_err_instr = 1ULL << 4;
 static const boot_info_t *g_boot_info;
 static mm_context_t g_contexts[MM_MAX_CONTEXTS];
@@ -30,6 +31,7 @@ typedef struct {
 
 static mm_shared_region_t g_shared[MM_MAX_SHARED];
 static uint32_t g_shared_next_id = 1;
+static int mm_region_flags_valid(uint32_t flags);
 
 static uint64_t
 mm_region_virtual_base(mm_context_t *ctx, mem_region_type_t type, uint64_t pages)
@@ -117,6 +119,9 @@ int mm_context_add_region(mm_context_t *ctx, uint64_t base, uint64_t size, uint3
     if (!ctx || ctx->region_count >= MM_MAX_REGIONS) {
         return -1;
     }
+    if (!mm_region_flags_valid(flags)) {
+        return -1;
+    }
     mem_region_t *region = &ctx->regions[ctx->region_count++];
     region->base = base;
     region->phys_base = 0;
@@ -181,6 +186,17 @@ static mem_region_t *mm_find_region_for_addr(mm_context_t *ctx, uint64_t addr) {
     return 0;
 }
 
+static int
+mm_region_flags_valid(uint32_t flags)
+{
+    if ((flags & MEM_REGION_FLAG_USER) &&
+        (flags & MEM_REGION_FLAG_WRITE) &&
+        (flags & MEM_REGION_FLAG_EXEC)) {
+        return 0;
+    }
+    return 1;
+}
+
 int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint64_t error_code, uint64_t *out_mapped_base) {
     mm_context_t *ctx = mm_context_get(context_id);
     if (!ctx) {
@@ -193,6 +209,9 @@ int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint64_t error_code
 
     mem_region_t *region = mm_find_region_for_addr(ctx, addr);
     if (!region) {
+        return -1;
+    }
+    if ((error_code & pf_err_user) && !(region->flags & MEM_REGION_FLAG_USER)) {
         return -1;
     }
 
@@ -453,6 +472,9 @@ int mm_context_map_physical(uint32_t context_id,
         return -1;
     }
     if ((virt & 0xFFFULL) != 0 || (phys & 0xFFFULL) != 0 || (size & 0xFFFULL) != 0) {
+        return -1;
+    }
+    if (!mm_region_flags_valid(flags)) {
         return -1;
     }
 

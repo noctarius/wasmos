@@ -227,7 +227,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
   context switch, rather than attempting a user-mode return into kernel text
 - process-owned user regions now carry an explicit user mapping flag from
   memory policy into paging (including intermediate table propagation) so
-  ring3-accessible mappings are representable
+  ring3-accessible mappings are representable; paging now rejects user mappings
+  outside the dedicated user slot and enforces user W^X (`WRITE+EXEC` denied)
 - capability-based driver resource groundwork: per-context capability registry
   (`io.port`, `irq.route`, `mmio.map`, `dma.buffer`) is now wired into
   WASMOS-APP capability grants, and WASM I/O hostcalls enforce `io.port` when

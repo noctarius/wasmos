@@ -224,7 +224,10 @@ The current tree already boots into a usable user-space stack:
   before the scheduler context switch runs.
 - Memory-region policy now carries an explicit user-access flag into paging
   mappings (including intermediate page-table entries), so user-accessible
-  pages are tracked by intent rather than implicit convention.
+  pages are tracked by intent rather than implicit convention. Paging now also
+  rejects user mappings outside the designated user virtual-address slot and
+  enforces user W^X (`WRITE+EXEC` denied); ring3 smoke/native code regions are
+  now marked RX after bootstrap copy.
 - Capability metadata now feeds a per-context resource-capability registry
   (`io.port`, `irq.route`, `mmio.map`, `dma.buffer`); WASM I/O hostcalls now
   enforce `io.port` when explicit capability policy is configured for the

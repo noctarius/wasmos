@@ -19,6 +19,7 @@ def main():
 
     required = [
         b"native-call-smoke: ipc-call ok",
+        b"[test] ring3 native abi ok",
         b"[test] ring3 ipc syscall deny ok",
         b"[test] ring3 ipc syscall ok",
         b"[test] ring3 ipc call deny ok",

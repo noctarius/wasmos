@@ -2,6 +2,38 @@ set(LDFLAGS_KERNEL -nostdlib -T ${KERNEL_DIR}/arch/x86_64/linker.ld)
 set(CFLAGS_KERNEL ${CFLAGS_KERNEL} ${WASMOS_TRACE_DEFINE} ${WASMOS_RING3_SMOKE_DEFINE} -I${WASM_DIR}/wasm3/source -Wno-unused-parameter)
 set(CFLAGS_WASM3 ${CFLAGS_KERNEL} -I${WASM_DIR}/wasm3/source -Dd_m3HasFloat=0 -Wno-unused-parameter -Wno-unused-variable)
 
+set(RING3_NATIVE_PROBE_SRC ${KERNEL_DIR}/ring3_native_probe.c)
+set(RING3_NATIVE_PROBE_OBJ ${BUILD_DIR}/ring3_native_probe.o)
+set(RING3_NATIVE_PROBE_ELF ${BUILD_DIR}/ring3_native_probe.elf)
+set(RING3_NATIVE_PROBE_BIN ${BUILD_DIR}/ring3_native_probe.bin)
+set(RING3_NATIVE_PROBE_BLOB ${BUILD_DIR}/ring3_native_probe_blob.o)
+
+add_custom_command(
+  OUTPUT ${RING3_NATIVE_PROBE_BLOB}
+  COMMAND ${CLANG} --target=x86_64-unknown-none-elf -Os -ffreestanding -fno-builtin
+          -fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables
+          -fomit-frame-pointer -mno-red-zone -nostdlib
+          -I${LIBC_DIR}/include
+          -c ${RING3_NATIVE_PROBE_SRC}
+          -o ${RING3_NATIVE_PROBE_OBJ}
+  COMMAND ${LLD_PATH} -nostdlib -T ${KERNEL_DIR}/arch/x86_64/ring3_native.ld
+          -o ${RING3_NATIVE_PROBE_ELF}
+          ${RING3_NATIVE_PROBE_OBJ}
+  COMMAND ${OBJCOPY} --output-target=binary ${RING3_NATIVE_PROBE_ELF} ${RING3_NATIVE_PROBE_BIN}
+  COMMAND ${OBJCOPY} --input-target=binary --output-target=elf64-x86-64
+          --binary-architecture=i386:x86-64
+          ring3_native_probe.bin ring3_native_probe_blob.o
+  DEPENDS ${RING3_NATIVE_PROBE_SRC} ${KERNEL_DIR}/arch/x86_64/ring3_native.ld
+          ${LIBC_DIR}/include/wasmos/syscall_x86_64.h
+  WORKING_DIRECTORY ${BUILD_DIR}
+  COMMENT "Building native ring3 syscall probe blob"
+  VERBATIM
+)
+
+add_custom_target(ring3_native_probe_blob DEPENDS ${RING3_NATIVE_PROBE_BLOB})
+set_property(GLOBAL APPEND PROPERTY WASMOS_KERNEL_BLOBS ${RING3_NATIVE_PROBE_BLOB})
+set_property(GLOBAL APPEND PROPERTY WASMOS_KERNEL_BLOB_TARGETS ring3_native_probe_blob)
+
 set(KERNEL_OBJS
   ${BUILD_DIR}/entry.o
   ${BUILD_DIR}/context_switch.o

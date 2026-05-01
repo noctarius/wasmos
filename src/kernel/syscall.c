@@ -13,6 +13,7 @@ static uint8_t g_ring3_ipc_call_deny_logged;
 static uint8_t g_ring3_ipc_call_perm_deny_logged;
 static uint8_t g_ring3_ipc_call_ok_logged;
 static uint8_t g_ring3_yield_logged;
+static uint8_t g_ring3_native_abi_logged;
 static uint32_t g_syscall_ipc_call_next_request_id = 1;
 static uint32_t g_ipc_call_echo_endpoint = IPC_ENDPOINT_NONE;
 
@@ -162,6 +163,13 @@ x86_syscall_handler(syscall_frame_t *frame)
     case WASMOS_SYSCALL_NOP:
         return 0;
     case WASMOS_SYSCALL_GETPID:
+        if (!g_ring3_native_abi_logged && (frame->cs & 0x3u) == 0x3u) {
+            process_t *proc = process_get(process_current_pid());
+            if (proc && name_eq(proc->name, "ring3-native")) {
+                g_ring3_native_abi_logged = 1;
+                serial_write("[test] ring3 native abi ok\n");
+            }
+        }
         return process_current_pid();
     case WASMOS_SYSCALL_EXIT: {
         process_t *proc = process_get(process_current_pid());

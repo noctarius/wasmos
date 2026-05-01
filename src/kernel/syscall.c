@@ -1,8 +1,18 @@
 #include "syscall.h"
 #include "process.h"
 #include "serial.h"
+#include "string.h"
 
 static uint8_t g_ring3_syscall_logged;
+
+static int
+name_eq(const char *a, const char *b)
+{
+    if (!a || !b) {
+        return 0;
+    }
+    return strcmp(a, b) == 0;
+}
 
 static void
 syscall_trace_ring3_once(syscall_frame_t *frame)
@@ -13,8 +23,13 @@ syscall_trace_ring3_once(syscall_frame_t *frame)
     if ((frame->cs & 0x3u) != 0x3u) {
         return;
     }
-    /* TODO: Restore a stricter ring3-smoke GETPID assertion once the smoke
-     * syscall frame reliably carries the expected syscall id in RAX. */
+    if ((uint32_t)frame->rax != WASMOS_SYSCALL_GETPID) {
+        return;
+    }
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || !name_eq(proc->name, "ring3-smoke")) {
+        return;
+    }
     g_ring3_syscall_logged = 1;
     serial_write("[test] ring3 syscall ok\n");
 }

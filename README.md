@@ -233,6 +233,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - per-process virtual memory contexts with private user mappings
 - shared user-space libc surface for C, Rust, Go, Zig, and AssemblyScript
 - language-native application entrypoints behind a stable `wasmos_main` ABI
+- native x86_64 ring3 syscall helper header now available at
+  `lib/libc/include/wasmos/syscall_x86_64.h` for non-WASM userland code paths
+  that call `int 0x80` directly
 
 ## Repository Layout
 - `src/boot/` UEFI bootloader

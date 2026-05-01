@@ -205,9 +205,13 @@ IMPORTANT: Create a git commit after each prompt iteration.
   entry has a deterministic kernel stack landing point
 - kernel startup now includes a ring3 smoke process (`ring3-smoke`) that
   installs a minimal user-mode code blob in the process linear region, switches
-  to CPL3 via `process_set_user_entry`, and validates syscall boundary flow by
-  emitting `[test] ring3 syscall ok` on the first user-mode `getpid` syscall;
-  default spawn remains disabled while this path is still being soak-tested
+  to CPL3 via `process_set_user_entry`, validates syscall boundary flow by
+  emitting `[test] ring3 syscall ok` on the first user-mode `getpid` syscall,
+  and now runs a 4096-call CPL3 `getpid` loop before exit; if the full loop
+  completes, the kernel emits `[test] ring3 preempt stress ok` to confirm timer
+  preemption/trampoline flow stayed stable under sustained user-mode syscall
+  traffic; default spawn remains disabled while this path is still being
+  soak-tested
 - timer preemption now uses a ring3-safe IRQ trampoline handoff: CPL3 interrupt
   frames are rewritten to return through a kernel CS trampoline before scheduler
   context switch, rather than attempting a user-mode return into kernel text

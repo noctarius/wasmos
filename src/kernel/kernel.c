@@ -52,8 +52,8 @@ typedef struct {
 static preempt_test_state_t g_preempt_test_state;
 static const uint8_t g_preempt_test_enabled = 0;
 static const uint8_t g_skip_wasm_boot = 0;
-/* TODO: Replace syscall-boundary reschedule fallback with true ring3-safe
- * IRQ preemption trampoline handoff, then re-enable default ring3 smoke spawn. */
+/* TODO: Re-enable default ring3 smoke spawn after sustained soak confirms
+ * preempt-trampoline behavior remains stable across broader workloads. */
 static const uint8_t g_ring3_smoke_enabled = 0;
 
 typedef struct {
@@ -496,9 +496,16 @@ ring3_smoke_fallback_entry(process_t *process, void *arg)
 static int
 spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
 {
+    /* Ring3 stress loop:
+     * - execute many GETPID syscalls from CPL3 to exercise timer-IRQ preempt
+     *   + trampoline return under repeated user->kernel transitions
+     * - exit cleanly once done. */
     static const uint8_t ring3_code[] = {
+        0xB9, 0x00, 0x10, 0x00, 0x00, /* mov ecx, 4096 */
         0xB8, 0x01, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_GETPID */
         0xCD, 0x80,                   /* int 0x80 */
+        0xFF, 0xC9,                   /* dec ecx */
+        0x75, 0xF5,                   /* jnz <mov eax, GETPID> */
         0x31, 0xFF,                   /* xor edi, edi (exit status 0) */
         0xB8, 0x02, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_EXIT */
         0xCD, 0x80,                   /* int 0x80 */

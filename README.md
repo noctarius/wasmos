@@ -556,6 +556,8 @@ Coverage currently includes:
 - preemption smoke
 - scheduler/timer forward-progress smoke
 - chardev preemption exercise
+- dedicated ring3 target regression (`tests/test_ring3_smoke_target.py`) that
+  executes `cmake --build build --target run-qemu-ring3-test`
 
 Current QEMU note:
 - the `fs-write-smoke` flow keeps directory/unlink coverage for nested files and

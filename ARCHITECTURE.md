@@ -215,6 +215,9 @@ The current tree already boots into a usable user-space stack:
   and `[test] ring3 native abi ok` so both native IPC-call and native syscall
   header paths are asserted in the same run. Default smoke spawn remains
   disabled while this path is still being soak-tested.
+- Regression coverage now includes `tests/test_ring3_smoke_target.py`, which
+  executes `cmake --build build --target run-qemu-ring3-test` to keep ring3
+  marker assertions in the standard automated test suite.
 - Timer IRQ preemption now performs a ring3-safe trampoline rewrite for CPL3
   frames: return RIP is redirected to the scheduler preempt trampoline and CS
   is rewritten to kernel code selector so `iretq` re-enters ring0 cleanly

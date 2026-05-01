@@ -240,9 +240,9 @@ The current tree already boots into a usable user-space stack:
   (`mm_user_range_permitted`) is now available for phased hostcall guard
   rollouts. The framebuffer and shared-memory map hostcalls now use an
   explicit WASM-offset to user-VA resolver before remapping linear pages.
-  `wasmos_boot_module_name` and `wasmos_proc_info` now also use a host-pointer
-  bridge to resolve destination pointers back into user VA for explicit
-  range-permission checks.
+  `wasmos_boot_module_name`, `wasmos_proc_info`, and `wasmos_proc_info_ex`
+  now also use a host-pointer bridge to resolve destination pointers back into
+  user VA for explicit range-permission checks.
 - Unrecoverable user-mode page faults now use process-local failure semantics:
   the kernel marks only the faulting process exited (`-11`) and continues
   scheduling remaining work; unhandled kernel-mode faults remain fatal.

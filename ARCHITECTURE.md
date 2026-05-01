@@ -238,7 +238,8 @@ The current tree already boots into a usable user-space stack:
   actual copy. Hostcall migration has started with `wasmos_framebuffer_info`
   using `mm_copy_to_user`. A non-copy validator API
   (`mm_user_range_permitted`) is now available for phased hostcall guard
-  rollouts.
+  rollouts. The framebuffer map hostcall now uses an explicit WASM-offset to
+  user-VA resolver before remapping linear pages.
 - Unrecoverable user-mode page faults now use process-local failure semantics:
   the kernel marks only the faulting process exited (`-11`) and continues
   scheduling remaining work; unhandled kernel-mode faults remain fatal.

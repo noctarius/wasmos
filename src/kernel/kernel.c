@@ -522,25 +522,6 @@ map_linear_pages(uint64_t root_table,
 }
 
 static int
-copy_bytes_into_context(uint32_t context_id, uint64_t dst_virt, const uint8_t *src, uint32_t size)
-{
-    if (context_id == 0 || dst_virt == 0 || !src || size == 0) {
-        return -1;
-    }
-    if (mm_context_activate(context_id) != 0) {
-        return -1;
-    }
-    uint8_t *dst = (uint8_t *)(uintptr_t)dst_virt;
-    for (uint32_t i = 0; i < size; ++i) {
-        dst[i] = src[i];
-    }
-    if (mm_context_activate(0) != 0) {
-        return -1;
-    }
-    return 0;
-}
-
-static int
 spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
 {
     /* Ring3 stress loop:
@@ -640,7 +621,7 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
                          MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) != 0) {
         return -1;
     }
-    if (copy_bytes_into_context(proc->context_id, linear.base, ring3_code, (uint32_t)sizeof(ring3_code)) != 0) {
+    if (mm_copy_to_user(proc->context_id, linear.base, ring3_code, (uint32_t)sizeof(ring3_code)) != 0) {
         return -1;
     }
     uint8_t *dst = (uint8_t *)(uintptr_t)linear.base;
@@ -740,7 +721,7 @@ spawn_ring3_native_probe_process(uint32_t parent_pid, uint32_t *out_pid)
                          MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) != 0) {
         return -1;
     }
-    if (copy_bytes_into_context(proc->context_id, linear.base, src, code_size) != 0) {
+    if (mm_copy_to_user(proc->context_id, linear.base, src, code_size) != 0) {
         return -1;
     }
     if (map_linear_pages(ctx->root_table,

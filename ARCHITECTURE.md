@@ -230,6 +230,10 @@ The current tree already boots into a usable user-space stack:
   rejects user mappings outside the designated user virtual-address slot and
   enforces user W^X (`WRITE+EXEC` denied); ring3 smoke/native code regions are
   now marked RX after bootstrap copy.
+- A baseline user-pointer copy layer now exists in kernel memory management
+  (`mm_copy_from_user` / `mm_copy_to_user`) with user-range permission checks,
+  pre-mapping of touched pages, and temporary CR3 switch/restore around the
+  actual copy.
 - Capability metadata now feeds a per-context resource-capability registry
   (`io.port`, `irq.route`, `mmio.map`, `dma.buffer`); WASM I/O hostcalls now
   enforce `io.port` when explicit capability policy is configured for the

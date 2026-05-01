@@ -229,6 +229,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   memory policy into paging (including intermediate table propagation) so
   ring3-accessible mappings are representable; paging now rejects user mappings
   outside the dedicated user slot and enforces user W^X (`WRITE+EXEC` denied)
+- kernel memory now provides `mm_copy_from_user` / `mm_copy_to_user` helpers
+  with user-range validation, on-demand page mapping, and temporary context
+  switch/restore for safer user-pointer access patterns
 - capability-based driver resource groundwork: per-context capability registry
   (`io.port`, `irq.route`, `mmio.map`, `dma.buffer`) is now wired into
   WASMOS-APP capability grants, and WASM I/O hostcalls enforce `io.port` when

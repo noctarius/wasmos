@@ -53,6 +53,11 @@ syscall_ipc_call_slot_for_pid(uint32_t pid)
     }
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         syscall_ipc_call_slot_t *slot = &g_syscall_ipc_call_slots[i];
+        if (slot->in_use && !process_get(slot->pid)) {
+            slot->in_use = 0;
+            slot->pid = 0;
+            slot->source_endpoint = IPC_ENDPOINT_NONE;
+        }
         if (slot->in_use && slot->pid == pid) {
             return slot;
         }
@@ -74,6 +79,7 @@ syscall_ipc_call_source_endpoint(process_t *proc, uint32_t *out_endpoint)
 {
     syscall_ipc_call_slot_t *slot = 0;
     uint32_t endpoint = IPC_ENDPOINT_NONE;
+    uint32_t owner_context = 0;
 
     if (!proc || !out_endpoint) {
         return IPC_ERR_INVALID;
@@ -81,6 +87,11 @@ syscall_ipc_call_source_endpoint(process_t *proc, uint32_t *out_endpoint)
     slot = syscall_ipc_call_slot_for_pid(proc->pid);
     if (!slot) {
         return IPC_ERR_FULL;
+    }
+    if (slot->source_endpoint != IPC_ENDPOINT_NONE &&
+        (ipc_endpoint_owner(slot->source_endpoint, &owner_context) != IPC_OK ||
+         owner_context != proc->context_id)) {
+        slot->source_endpoint = IPC_ENDPOINT_NONE;
     }
     if (slot->source_endpoint == IPC_ENDPOINT_NONE) {
         if (ipc_endpoint_create(proc->context_id, &endpoint) != IPC_OK) {

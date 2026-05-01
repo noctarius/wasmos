@@ -232,7 +232,7 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - kernel memory now provides `mm_copy_from_user` / `mm_copy_to_user` helpers
   with user-range validation, on-demand page mapping, and temporary context
   switch/restore for safer user-pointer access patterns; migration is underway
-  and `wasmos_framebuffer_info` now writes via `mm_copy_to_user`
+  and `wasmos_framebuffer_info` now routes writes through `mm_copy_to_user`
 - unrecoverable CPL3 page faults now terminate only the faulting process
   (`exit_status=-11`) and keep the kernel scheduler alive; kernel-mode unhandled
   faults remain fatal; ring3 smoke mode now includes a dedicated

@@ -10,8 +10,18 @@ static uint32_t g_ring3_getpid_count;
 static uint8_t g_ring3_ipc_deny_logged;
 static uint8_t g_ring3_ipc_ok_logged;
 static uint8_t g_ring3_ipc_call_deny_logged;
+static uint8_t g_ring3_ipc_call_perm_deny_logged;
 static uint8_t g_ring3_ipc_call_ok_logged;
 static uint32_t g_syscall_ipc_call_next_request_id = 1;
+static uint32_t g_ipc_call_echo_endpoint = IPC_ENDPOINT_NONE;
+
+typedef struct {
+    uint8_t in_use;
+    uint32_t pid;
+    uint32_t source_endpoint;
+} syscall_ipc_call_slot_t;
+
+static syscall_ipc_call_slot_t g_syscall_ipc_call_slots[PROCESS_MAX_COUNT];
 
 static int
 name_eq(const char *a, const char *b)
@@ -20,6 +30,66 @@ name_eq(const char *a, const char *b)
         return 0;
     }
     return strcmp(a, b) == 0;
+}
+
+void
+syscall_set_ipc_call_echo_endpoint(uint32_t endpoint)
+{
+    g_ipc_call_echo_endpoint = endpoint;
+}
+
+uint32_t
+syscall_ipc_call_echo_endpoint(void)
+{
+    return g_ipc_call_echo_endpoint;
+}
+
+static syscall_ipc_call_slot_t *
+syscall_ipc_call_slot_for_pid(uint32_t pid)
+{
+    syscall_ipc_call_slot_t *empty = 0;
+    if (pid == 0) {
+        return 0;
+    }
+    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        syscall_ipc_call_slot_t *slot = &g_syscall_ipc_call_slots[i];
+        if (slot->in_use && slot->pid == pid) {
+            return slot;
+        }
+        if (!empty && !slot->in_use) {
+            empty = slot;
+        }
+    }
+    if (!empty) {
+        return 0;
+    }
+    empty->in_use = 1;
+    empty->pid = pid;
+    empty->source_endpoint = IPC_ENDPOINT_NONE;
+    return empty;
+}
+
+static int
+syscall_ipc_call_source_endpoint(process_t *proc, uint32_t *out_endpoint)
+{
+    syscall_ipc_call_slot_t *slot = 0;
+    uint32_t endpoint = IPC_ENDPOINT_NONE;
+
+    if (!proc || !out_endpoint) {
+        return IPC_ERR_INVALID;
+    }
+    slot = syscall_ipc_call_slot_for_pid(proc->pid);
+    if (!slot) {
+        return IPC_ERR_FULL;
+    }
+    if (slot->source_endpoint == IPC_ENDPOINT_NONE) {
+        if (ipc_endpoint_create(proc->context_id, &endpoint) != IPC_OK) {
+            return IPC_ERR_FULL;
+        }
+        slot->source_endpoint = endpoint;
+    }
+    *out_endpoint = slot->source_endpoint;
+    return IPC_OK;
 }
 
 static void
@@ -134,8 +204,10 @@ x86_syscall_handler(syscall_frame_t *frame)
     }
     case WASMOS_SYSCALL_IPC_CALL: {
         process_t *proc = process_get(process_current_pid());
-        uint32_t endpoint = (uint32_t)frame->rdi;
+        uint32_t destination = (uint32_t)frame->rdi;
+        uint32_t source_endpoint = IPC_ENDPOINT_NONE;
         uint32_t request_id = g_syscall_ipc_call_next_request_id++;
+        uint32_t owner_context = 0;
         int rc = IPC_ERR_INVALID;
         ipc_message_t req;
         ipc_message_t resp;
@@ -145,25 +217,53 @@ x86_syscall_handler(syscall_frame_t *frame)
         if (request_id == 0) {
             request_id = g_syscall_ipc_call_next_request_id++;
         }
+        rc = syscall_ipc_call_source_endpoint(proc, &source_endpoint);
+        if (rc != IPC_OK) {
+            return (uint64_t)(int64_t)rc;
+        }
+        if (ipc_endpoint_owner(destination, &owner_context) != IPC_OK) {
+            rc = IPC_ERR_INVALID;
+            if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_call_deny_logged &&
+                destination == 0xFFFFFFFFu) {
+                g_ring3_ipc_call_deny_logged = 1;
+                serial_write("[test] ring3 ipc call deny ok\n");
+            }
+            return (uint64_t)(int64_t)rc;
+        }
+        if (owner_context == IPC_CONTEXT_KERNEL &&
+            destination != g_ipc_call_echo_endpoint) {
+            rc = IPC_ERR_PERM;
+            if (name_eq(proc->name, "ring3-smoke") &&
+                !g_ring3_ipc_call_perm_deny_logged) {
+                g_ring3_ipc_call_perm_deny_logged = 1;
+                serial_write("[test] ring3 ipc call perm deny ok\n");
+            }
+            return (uint64_t)(int64_t)rc;
+        }
         req.type = (uint32_t)frame->rsi;
-        req.source = endpoint;
-        req.destination = endpoint;
+        req.source = source_endpoint;
+        req.destination = destination;
         req.request_id = request_id;
         req.arg0 = (uint32_t)frame->rdx;
         req.arg1 = (uint32_t)frame->rcx;
         req.arg2 = (uint32_t)frame->r8;
         req.arg3 = (uint32_t)frame->r9;
-        rc = ipc_send_from(proc->context_id, endpoint, &req);
-        if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_call_deny_logged &&
-            endpoint == 0xFFFFFFFFu && rc == IPC_ERR_INVALID) {
-            g_ring3_ipc_call_deny_logged = 1;
-            serial_write("[test] ring3 ipc call deny ok\n");
+        if (destination == g_ipc_call_echo_endpoint &&
+            g_ipc_call_echo_endpoint != IPC_ENDPOINT_NONE) {
+            frame->rdx = (uint64_t)req.arg0;
+            if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_call_ok_logged &&
+                (uint32_t)frame->rdx == req.arg0) {
+                g_ring3_ipc_call_ok_logged = 1;
+                serial_write("[test] ring3 ipc call ok\n");
+            }
+            return 0;
         }
+        rc = ipc_send_from(proc->context_id, destination, &req);
         if (rc != IPC_OK) {
             return (uint64_t)(int64_t)rc;
         }
         for (;;) {
-            rc = ipc_recv_for(proc->context_id, endpoint, &resp);
+            rc = ipc_recv_for(proc->context_id, source_endpoint, &resp);
             if (rc == IPC_EMPTY) {
                 process_yield(PROCESS_RUN_BLOCKED);
                 continue;
@@ -176,7 +276,7 @@ x86_syscall_handler(syscall_frame_t *frame)
             }
             frame->rdx = (uint64_t)resp.arg0;
             if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_call_ok_logged &&
-                endpoint != 0xFFFFFFFFu && (uint32_t)frame->rdx == req.arg0) {
+                (uint32_t)frame->rdx == req.arg0) {
                 g_ring3_ipc_call_ok_logged = 1;
                 serial_write("[test] ring3 ipc call ok\n");
             }

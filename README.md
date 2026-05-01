@@ -210,7 +210,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
   emitting `[test] ring3 syscall ok` on the first user-mode `getpid` syscall,
   now probes `ipc_notify` with both deny (`[test] ring3 ipc syscall deny ok`)
   and allow (`[test] ring3 ipc syscall ok`) paths, probes `ipc_call` with deny
-  (`[test] ring3 ipc call deny ok`) and loopback allow
+  (`[test] ring3 ipc call deny ok`), permission-denied
+  (`[test] ring3 ipc call perm deny ok`), and echo-allow
   (`[test] ring3 ipc call ok`) paths, and runs a 4096-call CPL3
   `getpid` loop before exit; if the full loop
   completes, the kernel emits `[test] ring3 preempt stress ok` to confirm timer
@@ -369,6 +370,7 @@ cmake --build build --target run-qemu
 cmake --build build --target run-qemu-debug
 cmake --build build --target run-qemu-test
 cmake --build build --target run-qemu-cli-test
+cmake --build build --target run-qemu-ring3-test
 cmake --build build --target run-qemu-ui-test
 ```
 
@@ -377,11 +379,14 @@ Meaning:
 - `run-qemu-debug` starts QEMU paused for GDB
 - `run-qemu-test` performs a compile + boot + halt smoke run
 - `run-qemu-cli-test` runs the full CLI integration suite
+- `run-qemu-ring3-test` configures a shadow `build/ring3` tree with
+  `WASMOS_RING3_SMOKE=ON` and asserts ring3 smoke syscall markers before halt
 - `run-qemu-ui-test` boots QEMU with a graphical display plus `mon:stdio` serial
 
 The repository standard is:
 - use `run-qemu-test` after code changes
 - use `run-qemu-cli-test` before declaring work complete
+- use `run-qemu-ring3-test` when validating ring3 syscall/trampoline progress
 - the `kernel_ide` aggregation target also carries `${LIBC_DIR}/include` so
   CLion and other CMake IDEs can resolve `wasmos/api.h` for indexed WASM
   drivers, services, and C examples

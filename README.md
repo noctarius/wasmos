@@ -197,7 +197,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - growable per-process `wasm3` heaps with a 2 GiB cap
 - x86 privilege-boundary groundwork: IDT `int 0x80` syscall gate is now
   present with a minimal syscall dispatcher (`nop`, `getpid`, `exit`,
-  `yield`, `wait`, `ipc_notify`) as the initial ring3 boundary primitive
+  `yield`, `wait`, `ipc_notify`, `ipc_call`) as the initial ring3 boundary
+  primitive
 - scheduler/context-switch groundwork now carries per-context privilege
   metadata (`cs/ss/user_rsp`) and can restore ring3 contexts via `iretq`
   while retaining the existing ring0 fast-path (`ret`)
@@ -208,7 +209,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   to CPL3 via `process_set_user_entry`, validates syscall boundary flow by
   emitting `[test] ring3 syscall ok` on the first user-mode `getpid` syscall,
   now probes `ipc_notify` with both deny (`[test] ring3 ipc syscall deny ok`)
-  and allow (`[test] ring3 ipc syscall ok`) paths, and runs a 4096-call CPL3
+  and allow (`[test] ring3 ipc syscall ok`) paths, probes `ipc_call` with deny
+  (`[test] ring3 ipc call deny ok`) and loopback allow
+  (`[test] ring3 ipc call ok`) paths, and runs a 4096-call CPL3
   `getpid` loop before exit; if the full loop
   completes, the kernel emits `[test] ring3 preempt stress ok` to confirm timer
   preemption/trampoline flow stayed stable under sustained user-mode syscall

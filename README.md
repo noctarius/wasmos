@@ -24,6 +24,9 @@ The point is not benchmark glory; the point is to explore ideas, run
 experiments, and learn how to better steer coding agents without setting your
 keyboard on fire.
 
+Threading design work is tracked in `THREADING.md`, which defines the planned
+process/thread split, scheduler updates, and phased rollout for kernel threads.
+
 ## WASMOS Kernel Architecture
 
 WASMOS is a minimal x86_64 UEFI bootloader + kernel scaffold that boots a

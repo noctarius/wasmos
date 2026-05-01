@@ -159,6 +159,32 @@ current_process_context(uint32_t *out_context_id)
 }
 
 static int
+wasm_user_va_from_offset(uint32_t context_id,
+                         uint32_t offset,
+                         uint32_t span,
+                         uint64_t *out_user_va)
+{
+    if (context_id == 0 || span == 0 || !out_user_va) {
+        return -1;
+    }
+    mm_context_t *ctx = mm_context_get(context_id);
+    if (!ctx) {
+        return -1;
+    }
+    mem_region_t linear = {0};
+    if (mm_context_region_for_type(ctx, MEM_REGION_WASM_LINEAR, &linear) != 0) {
+        return -1;
+    }
+    uint64_t off = (uint64_t)offset;
+    uint64_t len = (uint64_t)span;
+    if (off > linear.size || len > (linear.size - off)) {
+        return -1;
+    }
+    *out_user_va = linear.base + off;
+    return 0;
+}
+
+static int
 require_io_capability(uint32_t context_id)
 {
     /* Compatibility mode: if no explicit resource caps were configured for this
@@ -892,22 +918,23 @@ m3ApiRawFunction(wasmos_framebuffer_map)
         m3ApiReturn(-1);
     }
 
-    /* Map the physical framebuffer over the caller-provided linear-memory span.
-     * The WASM pointer is an offset into wasm3's linear memory; convert it into
-     * the host virtual address (_mem + offset) that the interpreter uses. */
-    uint64_t mem_size = (uint64_t)m3_GetMemorySize(runtime);
-    uint64_t off = (uint64_t)(uint32_t)ptr;
-    uint64_t map_size = (uint64_t)(uint32_t)size;
-    if (off + map_size > mem_size) {
+    /* Map the physical framebuffer over caller-provided linear-memory pages.
+     * Resolve the WASM offset into the process-owned user VA explicitly. */
+    uint32_t off32 = (uint32_t)ptr;
+    uint32_t map_size32 = (uint32_t)size;
+    if ((uint64_t)off32 + (uint64_t)map_size32 > (uint64_t)m3_GetMemorySize(runtime)) {
         m3ApiReturn(-1);
     }
-
-    uint64_t virt = (uint64_t)(uintptr_t)m3ApiOffsetToPtr((uint32_t)ptr);
+    uint64_t virt = 0;
+    if (wasm_user_va_from_offset(proc->context_id, off32, map_size32, &virt) != 0 ||
+        mm_user_range_permitted(proc->context_id, virt, (uint64_t)map_size32, MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
     if ((virt & 0xFFFULL) != 0) {
         m3ApiReturn(-1);
     }
 
-    uint64_t pages = map_size / 0x1000ULL;
+    uint64_t pages = (uint64_t)map_size32 / 0x1000ULL;
     if (pages == 0) {
         serial_write("[framebuffer-map] zero pages\n");
         m3ApiReturn(-1);

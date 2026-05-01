@@ -235,7 +235,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   switch/restore for safer user-pointer access patterns; migration is underway
   and `wasmos_framebuffer_info` now routes writes through `mm_copy_to_user`.
   The memory layer now also exposes a non-copy validator
-  (`mm_user_range_permitted`) for staged hostcall hardening
+  (`mm_user_range_permitted`) for staged hostcall hardening; framebuffer
+  mapping now resolves WASM linear offsets into process user VAs via an
+  explicit resolver helper before applying mappings
 - unrecoverable CPL3 page faults now terminate only the faulting process
   (`exit_status=-11`) and keep the kernel scheduler alive; kernel-mode unhandled
   faults remain fatal; ring3 smoke mode now includes a dedicated

@@ -1,4 +1,5 @@
 #include "syscall.h"
+#include "ipc.h"
 #include "process.h"
 #include "serial.h"
 #include "string.h"
@@ -6,6 +7,8 @@
 static uint8_t g_ring3_syscall_logged;
 static uint8_t g_ring3_stress_ok_logged;
 static uint32_t g_ring3_getpid_count;
+static uint8_t g_ring3_ipc_deny_logged;
+static uint8_t g_ring3_ipc_ok_logged;
 
 static int
 name_eq(const char *a, const char *b)
@@ -105,6 +108,26 @@ x86_syscall_handler(syscall_frame_t *frame)
             }
             process_yield(PROCESS_RUN_BLOCKED);
         }
+    }
+    case WASMOS_SYSCALL_IPC_NOTIFY: {
+        process_t *proc = process_get(process_current_pid());
+        uint32_t endpoint = (uint32_t)frame->rdi;
+        int rc = IPC_ERR_INVALID;
+        if (!proc) {
+            return (uint64_t)-1;
+        }
+        rc = ipc_notify_from(proc->context_id, endpoint);
+        if (name_eq(proc->name, "ring3-smoke")) {
+            if (!g_ring3_ipc_deny_logged && endpoint == 0xFFFFFFFFu && rc == IPC_ERR_INVALID) {
+                g_ring3_ipc_deny_logged = 1;
+                serial_write("[test] ring3 ipc syscall deny ok\n");
+            }
+            if (!g_ring3_ipc_ok_logged && rc == IPC_OK) {
+                g_ring3_ipc_ok_logged = 1;
+                serial_write("[test] ring3 ipc syscall ok\n");
+            }
+        }
+        return (uint64_t)(int64_t)rc;
     }
     default:
         return (uint64_t)-1;

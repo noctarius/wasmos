@@ -8,7 +8,8 @@ typedef enum {
     WASMOS_SYSCALL_GETPID = 1,
     WASMOS_SYSCALL_EXIT = 2,
     WASMOS_SYSCALL_YIELD = 3,
-    WASMOS_SYSCALL_WAIT = 4
+    WASMOS_SYSCALL_WAIT = 4,
+    WASMOS_SYSCALL_IPC_NOTIFY = 5
 } wasmos_syscall_id_t;
 
 typedef struct {

@@ -8,7 +8,7 @@
 /*
  * fs-fat is the first filesystem service in the stack. Its scope is pragmatic:
  * mount the ESP over the ATA block driver, expose enough IPC to list/cat/cd,
- * feed PM with app blobs, and back the current read-only libc file API.
+ * feed PM with WASMOS-APP blobs, and back the current read-only libc file API.
  */
 
 #define FAT_SECTOR_SIZE 512u
@@ -54,6 +54,8 @@ typedef enum {
 
 typedef enum {
     FAT_READ_FIND_APPS = 0,
+    FAT_READ_FIND_SYSTEM,
+    FAT_READ_FIND_DRIVERS,
     FAT_READ_FIND_FILE,
     FAT_READ_FILE
 } fat_read_stage_t;
@@ -2447,6 +2449,14 @@ fat_build_read_names(void)
     }
 }
 
+static int
+fat_read_name_is_driver(void)
+{
+    return fat_name_eq(g_read_name, "serial") ||
+           fat_name_eq(g_read_name, "keyboard") ||
+           fat_name_eq(g_read_name, "framebuffer");
+}
+
 static uint32_t
 fat_first_data_lba(void)
 {
@@ -2886,7 +2896,7 @@ fat_handle_read_app(void)
 
     if (g_op == FAT_OP_NONE) {
         g_op = FAT_OP_READ_APP;
-        g_read_stage = FAT_READ_FIND_APPS;
+        g_read_stage = fat_read_name_is_driver() ? FAT_READ_FIND_SYSTEM : FAT_READ_FIND_APPS;
         g_read_dir_lba = g_root_dir_lba;
         g_read_dir_sectors = g_root_dir_sectors;
         g_read_sector = 0;
@@ -2920,7 +2930,10 @@ fat_handle_read_app(void)
         return -1;
     }
 
-    if (g_read_stage == FAT_READ_FIND_APPS || g_read_stage == FAT_READ_FIND_FILE) {
+    if (g_read_stage == FAT_READ_FIND_APPS ||
+        g_read_stage == FAT_READ_FIND_SYSTEM ||
+        g_read_stage == FAT_READ_FIND_DRIVERS ||
+        g_read_stage == FAT_READ_FIND_FILE) {
         uint32_t entries_per_sector = g_bytes_per_sector / 32u;
         uint32_t entries_total = entries_per_sector;
         if (g_read_entries_left < entries_total) {
@@ -2992,6 +3005,40 @@ fat_handle_read_app(void)
                 g_read_entries_left = (g_read_dir_sectors * g_bytes_per_sector) / 32u;
                 g_read_sector = 0;
                 g_read_stage = FAT_READ_FIND_FILE;
+                fat_lfn_reset();
+                if (fat_send_block_read(g_read_dir_lba, 1) != 0) {
+                    g_op = FAT_OP_NONE;
+                    return -1;
+                }
+                return FAT_WAITING;
+            }
+
+            if (g_read_stage == FAT_READ_FIND_SYSTEM ||
+                g_read_stage == FAT_READ_FIND_DRIVERS) {
+                const char *wanted = (g_read_stage == FAT_READ_FIND_SYSTEM)
+                                         ? "SYSTEM"
+                                         : "DRIVERS";
+                if (!(ent[11] & 0x10)) {
+                    fat_lfn_reset();
+                    continue;
+                }
+                if (!fat_name_eq(entry_name, wanted)) {
+                    fat_lfn_reset();
+                    continue;
+                }
+                uint16_t cluster = (uint16_t)ent[26] | ((uint16_t)ent[27] << 8);
+                if (cluster < 2) {
+                    g_op = FAT_OP_NONE;
+                    fat_lfn_reset();
+                    return -1;
+                }
+                g_read_dir_lba = fat_lba_for_cluster(cluster);
+                g_read_dir_sectors = g_sectors_per_cluster;
+                g_read_entries_left = (g_read_dir_sectors * g_bytes_per_sector) / 32u;
+                g_read_sector = 0;
+                g_read_stage = (g_read_stage == FAT_READ_FIND_SYSTEM)
+                                   ? FAT_READ_FIND_DRIVERS
+                                   : FAT_READ_FIND_FILE;
                 fat_lfn_reset();
                 if (fat_send_block_read(g_read_dir_lba, 1) != 0) {
                     g_op = FAT_OP_NONE;

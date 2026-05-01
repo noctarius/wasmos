@@ -30,6 +30,8 @@
 
 static uint32_t g_chardev_service_endpoint = IPC_ENDPOINT_NONE;
 static const boot_info_t *g_boot_info;
+extern const uint8_t _binary_ring3_native_probe_bin_start[];
+extern const uint8_t _binary_ring3_native_probe_bin_end[];
 
 typedef struct {
     uint64_t addr;
@@ -638,6 +640,61 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
     return 0;
 }
 
+static int
+spawn_ring3_native_probe_process(uint32_t parent_pid, uint32_t *out_pid)
+{
+    process_t *proc = 0;
+    mm_context_t *ctx = 0;
+    mem_region_t linear = {0};
+    mem_region_t stack = {0};
+    uint8_t *dst = 0;
+    uint64_t user_rip = 0;
+    uint64_t user_rsp = 0;
+    const uint8_t *src = _binary_ring3_native_probe_bin_start;
+    uint32_t code_size = (uint32_t)((uintptr_t)_binary_ring3_native_probe_bin_end -
+                                    (uintptr_t)_binary_ring3_native_probe_bin_start);
+
+    if (!out_pid || !src || code_size == 0) {
+        return -1;
+    }
+    if (process_spawn_as(parent_pid, "ring3-native", ring3_smoke_fallback_entry, 0, out_pid) != 0) {
+        return -1;
+    }
+    proc = process_get(*out_pid);
+    if (!proc) {
+        return -1;
+    }
+    ctx = mm_context_get(proc->context_id);
+    if (!ctx) {
+        return -1;
+    }
+    if (mm_context_region_for_type(ctx, MEM_REGION_WASM_LINEAR, &linear) != 0 ||
+        mm_context_region_for_type(ctx, MEM_REGION_STACK, &stack) != 0) {
+        return -1;
+    }
+    if (linear.phys_base == 0 || linear.size < code_size || stack.base == 0 || stack.size < 16u) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < ctx->region_count; ++i) {
+        mem_region_t *region = &ctx->regions[i];
+        if (region->type == MEM_REGION_WASM_LINEAR) {
+            region->flags |= MEM_REGION_FLAG_EXEC;
+            break;
+        }
+    }
+    dst = (uint8_t *)(uintptr_t)linear.phys_base;
+    for (uint32_t i = 0; i < code_size; ++i) {
+        dst[i] = src[i];
+    }
+    user_rip = linear.base;
+    user_rsp = stack.base + stack.size - 16u;
+    if (process_set_user_entry(*out_pid, user_rip, user_rsp) != 0) {
+        return -1;
+    }
+    serial_printf("[kernel] ring3 native pid=%016llx\n", (unsigned long long)*out_pid);
+    return 0;
+}
+
 static process_run_result_t
 init_entry(process_t *process, void *arg)
 {
@@ -902,6 +959,7 @@ kmain(boot_info_t *boot_info)
     uint32_t preempt_busy_pid = 0;
     uint32_t preempt_observer_pid = 0;
     uint32_t ring3_smoke_pid = 0;
+    uint32_t ring3_native_pid = 0;
     uint32_t idle_pid = 0;
     uint32_t init_pid = 0;
     init_state_t init_state;
@@ -1061,6 +1119,12 @@ kmain(boot_info_t *boot_info)
     if (g_ring3_smoke_enabled) {
         if (spawn_ring3_smoke_process(init_pid, &ring3_smoke_pid) != 0) {
             serial_write("[kernel] ring3 smoke spawn failed\n");
+            for (;;) {
+                __asm__ volatile("hlt");
+            }
+        }
+        if (spawn_ring3_native_probe_process(init_pid, &ring3_native_pid) != 0) {
+            serial_write("[kernel] ring3 native spawn failed\n");
             for (;;) {
                 __asm__ volatile("hlt");
             }

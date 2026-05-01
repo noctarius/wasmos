@@ -204,10 +204,14 @@ The current tree already boots into a usable user-space stack:
   CPL3 `getpid` syscalls before issuing a CPL3 `exit`, and the kernel logs
   `[test] ring3 preempt stress ok` when that loop completes to validate
   timer-preemption trampoline behavior under sustained user-mode syscall
-  traffic. The `run-qemu-ring3-test` harness now also requires
-  `native-call-smoke: ipc-call ok` so native IPC call plumbing is asserted in
-  the same run. Default smoke spawn remains disabled while this path is still
-  being soak-tested.
+  traffic. Ring3 smoke mode also spawns a second compiled native probe process
+  (`ring3-native`) built from C using
+  `lib/libc/include/wasmos/syscall_x86_64.h`; the syscall layer logs
+  `[test] ring3 native abi ok` on first native CPL3 `getpid`. The
+  `run-qemu-ring3-test` harness now also requires `native-call-smoke: ipc-call ok`
+  and `[test] ring3 native abi ok` so both native IPC-call and native syscall
+  header paths are asserted in the same run. Default smoke spawn remains
+  disabled while this path is still being soak-tested.
 - Timer IRQ preemption now performs a ring3-safe trampoline rewrite for CPL3
   frames: return RIP is redirected to the scheduler preempt trampoline and CS
   is rewritten to kernel code selector so `iretq` re-enters ring0 cleanly

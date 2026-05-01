@@ -218,7 +218,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   completes, the kernel emits `[test] ring3 preempt stress ok` to confirm timer
   preemption/trampoline flow stayed stable under sustained user-mode syscall
   traffic; default spawn remains disabled while this path is still being
-  soak-tested
+  soak-tested; ring3 smoke mode also spawns a compiled native probe process
+  (`ring3-native`) built from C against `wasmos/syscall_x86_64.h`, and the
+  syscall layer emits `[test] ring3 native abi ok` when that path executes
 - timer preemption now uses a ring3-safe IRQ trampoline handoff: CPL3 interrupt
   frames are rewritten to return through a kernel CS trampoline before scheduler
   context switch, rather than attempting a user-mode return into kernel text
@@ -385,7 +387,7 @@ Meaning:
 - `run-qemu-cli-test` runs the full CLI integration suite
 - `run-qemu-ring3-test` configures a shadow `build/ring3` tree with
   `WASMOS_RING3_SMOKE=ON` and asserts ring3 smoke syscall markers plus
-  `native-call-smoke: ipc-call ok` before halt
+  `native-call-smoke: ipc-call ok` and `[test] ring3 native abi ok` before halt
 - `run-qemu-ui-test` boots QEMU with a graphical display plus `mon:stdio` serial
 
 The repository standard is:

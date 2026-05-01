@@ -1463,6 +1463,24 @@ m3ApiRawFunction(wasmos_strlen)
     m3ApiReturnType(int32_t)
     m3ApiGetArgMem(const char *, ptr)
 
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(0);
+    }
+    uint64_t ptr_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   1,
+                                   &ptr_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                ptr_user,
+                                1,
+                                MEM_REGION_FLAG_READ) != 0) {
+        m3ApiReturn(0);
+    }
+
     const uint8_t *start = (const uint8_t *)ptr;
     const uint8_t *end = (const uint8_t *)_mem + m3_GetMemorySize(runtime);
     if ((const uint8_t *)ptr < (const uint8_t *)_mem || start >= end) {

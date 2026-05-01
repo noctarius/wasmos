@@ -242,7 +242,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
   host pointers back to user VAs for explicit range-permission preflight before
   writeout; `console_write`/`console_read` now apply the same preflight checks
   (READ for source, WRITE for destination byte). `acpi_rsdp_info` output
-  pointers now also run bridge+WRITE preflight before copy-out
+  pointers now also run bridge+WRITE preflight before copy-out; `strlen` now
+  applies bridge+READ preflight on its input pointer
 - unrecoverable CPL3 page faults now terminate only the faulting process
   (`exit_status=-11`) and keep the kernel scheduler alive; kernel-mode unhandled
   faults remain fatal; ring3 smoke mode now includes a dedicated

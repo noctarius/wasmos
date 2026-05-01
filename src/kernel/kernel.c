@@ -497,10 +497,18 @@ static int
 spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
 {
     /* Ring3 stress loop:
+     * - probe IPC syscall boundary with an invalid notify endpoint (deny path)
+     *   and a process-owned notification endpoint (allow path)
      * - execute many GETPID syscalls from CPL3 to exercise timer-IRQ preempt
      *   + trampoline return under repeated user->kernel transitions
      * - exit cleanly once done. */
     static const uint8_t ring3_code[] = {
+        0xBF, 0xFF, 0xFF, 0xFF, 0xFF, /* mov edi, 0xFFFFFFFF (invalid ep) */
+        0xB8, 0x05, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_IPC_NOTIFY */
+        0xCD, 0x80,                   /* int 0x80 */
+        0xBF, 0x00, 0x00, 0x00, 0x00, /* mov edi, <ring3 notify ep> (patched) */
+        0xB8, 0x05, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_IPC_NOTIFY */
+        0xCD, 0x80,                   /* int 0x80 */
         0xB9, 0x00, 0x10, 0x00, 0x00, /* mov ecx, 4096 */
         0xB8, 0x01, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_GETPID */
         0xCD, 0x80,                   /* int 0x80 */
@@ -519,6 +527,7 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
     uint8_t *dst = 0;
     uint64_t user_rip = 0;
     uint64_t user_rsp = 0;
+    uint32_t ring3_notify_ep = IPC_ENDPOINT_NONE;
 
     if (!out_pid) {
         return -1;
@@ -529,6 +538,10 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
 
     proc = process_get(*out_pid);
     if (!proc) {
+        return -1;
+    }
+    if (ipc_notification_create(proc->context_id, &ring3_notify_ep) != IPC_OK ||
+        ring3_notify_ep == IPC_ENDPOINT_NONE) {
         return -1;
     }
     ctx = mm_context_get(proc->context_id);
@@ -555,6 +568,15 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
     dst = (uint8_t *)(uintptr_t)linear.phys_base;
     for (uint32_t i = 0; i < sizeof(ring3_code); ++i) {
         dst[i] = ring3_code[i];
+    }
+    /* Patch mov edi immediate for the valid ring3-owned notification endpoint.
+     * Layout offset: first mov(5) + mov eax(5) + int80(2) + mov edi opcode(1). */
+    {
+        const uint32_t ep_imm_off = 13u;
+        dst[ep_imm_off + 0] = (uint8_t)(ring3_notify_ep & 0xFFu);
+        dst[ep_imm_off + 1] = (uint8_t)((ring3_notify_ep >> 8) & 0xFFu);
+        dst[ep_imm_off + 2] = (uint8_t)((ring3_notify_ep >> 16) & 0xFFu);
+        dst[ep_imm_off + 3] = (uint8_t)((ring3_notify_ep >> 24) & 0xFFu);
     }
 
     user_rip = linear.base;

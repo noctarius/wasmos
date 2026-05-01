@@ -245,7 +245,8 @@ The current tree already boots into a usable user-space stack:
   user VA for explicit range-permission checks. `wasmos_console_write` and
   `wasmos_console_read` now run the same bridge+permission preflight on their
   pointer arguments before touching user memory. `wasmos_acpi_rsdp_info` now
-  applies the same bridge+WRITE preflight to both output pointers.
+  applies the same bridge+WRITE preflight to both output pointers, and
+  `wasmos_strlen` applies bridge+READ preflight to its input pointer.
 - Unrecoverable user-mode page faults now use process-local failure semantics:
   the kernel marks only the faulting process exited (`-11`) and continues
   scheduling remaining work; unhandled kernel-mode faults remain fatal.

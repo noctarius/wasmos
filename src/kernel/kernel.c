@@ -500,6 +500,47 @@ ring3_smoke_fallback_entry(process_t *process, void *arg)
 }
 
 static int
+map_linear_pages(uint64_t root_table,
+                 uint64_t virt_base,
+                 uint64_t phys_base,
+                 uint32_t size,
+                 uint32_t map_flags)
+{
+    if (!root_table || !virt_base || !phys_base || size == 0) {
+        return -1;
+    }
+    uint64_t page_count = (size + 0xFFFULL) / 0x1000ULL;
+    for (uint64_t i = 0; i < page_count; ++i) {
+        uint64_t v = virt_base + i * 0x1000ULL;
+        uint64_t p = phys_base + i * 0x1000ULL;
+        (void)paging_unmap_4k_in_root(root_table, v);
+        if (paging_map_4k_in_root(root_table, v, p, map_flags) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int
+copy_bytes_into_context(uint32_t context_id, uint64_t dst_virt, const uint8_t *src, uint32_t size)
+{
+    if (context_id == 0 || dst_virt == 0 || !src || size == 0) {
+        return -1;
+    }
+    if (mm_context_activate(context_id) != 0) {
+        return -1;
+    }
+    uint8_t *dst = (uint8_t *)(uintptr_t)dst_virt;
+    for (uint32_t i = 0; i < size; ++i) {
+        dst[i] = src[i];
+    }
+    if (mm_context_activate(0) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int
 spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
 {
     /* Ring3 stress loop:
@@ -550,7 +591,6 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
     mm_context_t *ctx = 0;
     mem_region_t linear = {0};
     mem_region_t stack = {0};
-    uint8_t *dst = 0;
     uint64_t user_rip = 0;
     uint64_t user_rsp = 0;
     uint32_t ring3_notify_ep = IPC_ENDPOINT_NONE;
@@ -589,26 +629,26 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
         mm_context_region_for_type(ctx, MEM_REGION_STACK, &stack) != 0) {
         return -1;
     }
-    if (linear.phys_base == 0 || linear.size < sizeof(ring3_code) ||
-        stack.base == 0 || stack.size < 16u) {
+    if (linear.phys_base == 0 || linear.size < sizeof(ring3_code) || stack.base == 0 || stack.size < 16u) {
         return -1;
     }
 
-    for (uint32_t i = 0; i < ctx->region_count; ++i) {
-        mem_region_t *region = &ctx->regions[i];
-        if (region->type == MEM_REGION_WASM_LINEAR) {
-            region->flags |= MEM_REGION_FLAG_EXEC;
-            region->flags &= ~MEM_REGION_FLAG_WRITE;
-            break;
-        }
+    if (map_linear_pages(ctx->root_table,
+                         linear.base,
+                         linear.phys_base,
+                         (uint32_t)sizeof(ring3_code),
+                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) != 0) {
+        return -1;
     }
-
-    dst = (uint8_t *)(uintptr_t)linear.phys_base;
-    for (uint32_t i = 0; i < sizeof(ring3_code); ++i) {
-        dst[i] = ring3_code[i];
+    if (copy_bytes_into_context(proc->context_id, linear.base, ring3_code, (uint32_t)sizeof(ring3_code)) != 0) {
+        return -1;
     }
+    uint8_t *dst = (uint8_t *)(uintptr_t)linear.base;
     /* Patch mov edi immediate for the valid ring3-owned notification endpoint.
      * Layout offset: first mov(5) + mov eax(5) + int80(2) + mov edi opcode(1). */
+    if (mm_context_activate(proc->context_id) != 0) {
+        return -1;
+    }
     {
         const uint32_t ep_imm_off = 13u;
         dst[ep_imm_off + 0] = (uint8_t)(ring3_notify_ep & 0xFFu);
@@ -630,6 +670,24 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
         dst[ep_imm_off + 2] = (uint8_t)((ring3_call_echo_ep >> 16) & 0xFFu);
         dst[ep_imm_off + 3] = (uint8_t)((ring3_call_echo_ep >> 24) & 0xFFu);
     }
+    if (mm_context_activate(0) != 0) {
+        return -1;
+    }
+    if (map_linear_pages(ctx->root_table,
+                         linear.base,
+                         linear.phys_base,
+                         (uint32_t)sizeof(ring3_code),
+                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_EXEC | MEM_REGION_FLAG_USER) != 0) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < ctx->region_count; ++i) {
+        mem_region_t *region = &ctx->regions[i];
+        if (region->type == MEM_REGION_WASM_LINEAR) {
+            region->flags |= MEM_REGION_FLAG_EXEC;
+            region->flags &= ~MEM_REGION_FLAG_WRITE;
+            break;
+        }
+    }
 
     user_rip = linear.base;
     user_rsp = stack.base + stack.size - 16u;
@@ -648,7 +706,6 @@ spawn_ring3_native_probe_process(uint32_t parent_pid, uint32_t *out_pid)
     mm_context_t *ctx = 0;
     mem_region_t linear = {0};
     mem_region_t stack = {0};
-    uint8_t *dst = 0;
     uint64_t user_rip = 0;
     uint64_t user_rsp = 0;
     const uint8_t *src = _binary_ring3_native_probe_bin_start;
@@ -676,6 +733,23 @@ spawn_ring3_native_probe_process(uint32_t parent_pid, uint32_t *out_pid)
     if (linear.phys_base == 0 || linear.size < code_size || stack.base == 0 || stack.size < 16u) {
         return -1;
     }
+    if (map_linear_pages(ctx->root_table,
+                         linear.base,
+                         linear.phys_base,
+                         code_size,
+                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) != 0) {
+        return -1;
+    }
+    if (copy_bytes_into_context(proc->context_id, linear.base, src, code_size) != 0) {
+        return -1;
+    }
+    if (map_linear_pages(ctx->root_table,
+                         linear.base,
+                         linear.phys_base,
+                         code_size,
+                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_EXEC | MEM_REGION_FLAG_USER) != 0) {
+        return -1;
+    }
     for (uint32_t i = 0; i < ctx->region_count; ++i) {
         mem_region_t *region = &ctx->regions[i];
         if (region->type == MEM_REGION_WASM_LINEAR) {
@@ -683,10 +757,6 @@ spawn_ring3_native_probe_process(uint32_t parent_pid, uint32_t *out_pid)
             region->flags &= ~MEM_REGION_FLAG_WRITE;
             break;
         }
-    }
-    dst = (uint8_t *)(uintptr_t)linear.phys_base;
-    for (uint32_t i = 0; i < code_size; ++i) {
-        dst[i] = src[i];
     }
     user_rip = linear.base;
     user_rsp = stack.base + stack.size - 16u;

@@ -199,6 +199,8 @@ The current tree already boots into a usable user-space stack:
   invalid/permission-denied/allow behavior via invalid-endpoint rejection, a
   kernel-owned permission-denied endpoint, and a kernel echo endpoint,
   logging `[test] ring3 ipc call deny ok`,
+  `[test] ring3 ipc call err rdx zero ok` (error-path secondary return
+  contract), 
   `[test] ring3 ipc call perm deny ok`, and `[test] ring3 ipc call ok` when
   observed. It also issues an explicit CPL3 `yield` syscall and logs
   `[test] ring3 yield syscall ok` when observed. The smoke loop then performs 4096

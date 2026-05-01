@@ -29,6 +29,10 @@ typedef enum {
  * - IPC_NOTIFY:     RDI=endpoint; RAX=ipc_result_t
  * - IPC_CALL:       RDI=endpoint, RSI=type, RDX/RCX/R8/R9=arg0..arg3
  *                   RAX=ipc_result_t (0 on success), RDX=reply arg0 on success
+ *                   RDX=0 on error
+ *                   current behavior blocks by yielding until a reply with a
+ *                   matching request_id is received
+ *                   current reply ABI returns arg0 only (arg1..arg3 ignored)
  */
 typedef struct {
     uint64_t r15;

@@ -242,6 +242,10 @@ x86_syscall_handler(syscall_frame_t *frame)
         if (!proc) {
             return (uint64_t)-1;
         }
+        /* IPC_CALL returns a secondary value in RDX only on success.
+         * Clear it up-front so callers never observe stale register contents on
+         * error paths. */
+        frame->rdx = 0;
         if (request_id == 0) {
             request_id = g_syscall_ipc_call_next_request_id++;
         }
@@ -300,6 +304,9 @@ x86_syscall_handler(syscall_frame_t *frame)
                 return (uint64_t)(int64_t)rc;
             }
             if (resp.request_id != request_id) {
+                /* TODO: Preserve unmatched replies in a per-process inbox so
+                 * IPC_CALL does not drop out-of-order messages while waiting
+                 * for a specific request_id. */
                 continue;
             }
             frame->rdx = (uint64_t)resp.arg0;

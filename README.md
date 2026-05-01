@@ -238,7 +238,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - language-native application entrypoints behind a stable `wasmos_main` ABI
 - native x86_64 ring3 syscall helper header now available at
   `lib/libc/include/wasmos/syscall_x86_64.h` for non-WASM userland code paths
-  that call `int 0x80` directly
+  that call `int 0x80` directly; `ipc_call` currently returns status in `RAX`
+  and reply `arg0` in `RDX` (with `RDX=0` on error), and blocks by yielding
+  until a matching `request_id` reply is received
 
 ## Repository Layout
 - `src/boot/` UEFI bootloader

@@ -23,6 +23,11 @@ typedef struct {
     int64_t rdx;
 } wasmos_sysret2_t;
 
+typedef struct {
+    int64_t status;
+    uint32_t reply_arg0;
+} wasmos_ipc_call_result_t;
+
 static inline int64_t
 wasmos_syscall0(uint64_t id)
 {
@@ -84,6 +89,25 @@ wasmos_sys_ipc_call(uint32_t endpoint,
                     uint32_t arg3)
 {
     return wasmos_syscall6_ret2(WASMOS_SYSCALL_IPC_CALL, endpoint, type, arg0, arg1, arg2, arg3);
+}
+
+/* IPC_CALL contract:
+ * - status == 0: reply_arg0 is valid
+ * - status < 0: reply_arg0 is undefined by caller contract (kernel currently
+ *   zeroes RDX on error to avoid stale register reuse) */
+static inline wasmos_ipc_call_result_t
+wasmos_sys_ipc_call_result(uint32_t endpoint,
+                           uint32_t type,
+                           uint32_t arg0,
+                           uint32_t arg1,
+                           uint32_t arg2,
+                           uint32_t arg3)
+{
+    wasmos_sysret2_t raw = wasmos_sys_ipc_call(endpoint, type, arg0, arg1, arg2, arg3);
+    wasmos_ipc_call_result_t out;
+    out.status = raw.rax;
+    out.reply_arg0 = (uint32_t)raw.rdx;
+    return out;
 }
 
 /* Does not return when syscall path succeeds. */

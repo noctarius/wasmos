@@ -223,6 +223,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   soak-tested; ring3 smoke mode also spawns a compiled native probe process
   (`ring3-native`) built from C against `wasmos/syscall_x86_64.h`, and the
   syscall layer emits `[test] ring3 native abi ok` when that path executes
+- ring3 smoke bootstrap endpoint immediates are now patched in a kernel-local
+  code buffer before one `mm_copy_to_user` upload, instead of direct writes
+  through an activated user CR3 mapping
 - timer preemption now uses a ring3-safe IRQ trampoline handoff: CPL3 interrupt
   frames are rewritten to return through a kernel CS trampoline before scheduler
   context switch, rather than attempting a user-mode return into kernel text

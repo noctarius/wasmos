@@ -20,6 +20,7 @@
 #include "slab.h"
 
 #include <stdint.h>
+#include <string.h>
 #include "wasm3.h"
 
 /*
@@ -567,6 +568,7 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
         0xCD, 0x80,                   /* int 0x80 */
         0xEB, 0xFE                    /* should not return: spin if it does */
     };
+    uint8_t ring3_code_patched[sizeof(ring3_code)];
 
     process_t *proc = 0;
     mm_context_t *ctx = 0;
@@ -621,37 +623,34 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
                          MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) != 0) {
         return -1;
     }
-    if (mm_copy_to_user(proc->context_id, linear.base, ring3_code, (uint32_t)sizeof(ring3_code)) != 0) {
-        return -1;
-    }
-    uint8_t *dst = (uint8_t *)(uintptr_t)linear.base;
+    memcpy(ring3_code_patched, ring3_code, sizeof(ring3_code_patched));
     /* Patch mov edi immediate for the valid ring3-owned notification endpoint.
      * Layout offset: first mov(5) + mov eax(5) + int80(2) + mov edi opcode(1). */
-    if (mm_context_activate(proc->context_id) != 0) {
-        return -1;
-    }
     {
         const uint32_t ep_imm_off = 13u;
-        dst[ep_imm_off + 0] = (uint8_t)(ring3_notify_ep & 0xFFu);
-        dst[ep_imm_off + 1] = (uint8_t)((ring3_notify_ep >> 8) & 0xFFu);
-        dst[ep_imm_off + 2] = (uint8_t)((ring3_notify_ep >> 16) & 0xFFu);
-        dst[ep_imm_off + 3] = (uint8_t)((ring3_notify_ep >> 24) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 0] = (uint8_t)(ring3_notify_ep & 0xFFu);
+        ring3_code_patched[ep_imm_off + 1] = (uint8_t)((ring3_notify_ep >> 8) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 2] = (uint8_t)((ring3_notify_ep >> 16) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 3] = (uint8_t)((ring3_notify_ep >> 24) & 0xFFu);
     }
     {
         const uint32_t ep_imm_off = 47u;
-        dst[ep_imm_off + 0] = (uint8_t)(ring3_call_denied_ep & 0xFFu);
-        dst[ep_imm_off + 1] = (uint8_t)((ring3_call_denied_ep >> 8) & 0xFFu);
-        dst[ep_imm_off + 2] = (uint8_t)((ring3_call_denied_ep >> 16) & 0xFFu);
-        dst[ep_imm_off + 3] = (uint8_t)((ring3_call_denied_ep >> 24) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 0] = (uint8_t)(ring3_call_denied_ep & 0xFFu);
+        ring3_code_patched[ep_imm_off + 1] = (uint8_t)((ring3_call_denied_ep >> 8) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 2] = (uint8_t)((ring3_call_denied_ep >> 16) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 3] = (uint8_t)((ring3_call_denied_ep >> 24) & 0xFFu);
     }
     {
         const uint32_t ep_imm_off = 69u;
-        dst[ep_imm_off + 0] = (uint8_t)(ring3_call_echo_ep & 0xFFu);
-        dst[ep_imm_off + 1] = (uint8_t)((ring3_call_echo_ep >> 8) & 0xFFu);
-        dst[ep_imm_off + 2] = (uint8_t)((ring3_call_echo_ep >> 16) & 0xFFu);
-        dst[ep_imm_off + 3] = (uint8_t)((ring3_call_echo_ep >> 24) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 0] = (uint8_t)(ring3_call_echo_ep & 0xFFu);
+        ring3_code_patched[ep_imm_off + 1] = (uint8_t)((ring3_call_echo_ep >> 8) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 2] = (uint8_t)((ring3_call_echo_ep >> 16) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 3] = (uint8_t)((ring3_call_echo_ep >> 24) & 0xFFu);
     }
-    if (mm_context_activate(0) != 0) {
+    if (mm_copy_to_user(proc->context_id,
+                        linear.base,
+                        ring3_code_patched,
+                        (uint32_t)sizeof(ring3_code_patched)) != 0) {
         return -1;
     }
     if (map_linear_pages(ctx->root_table,

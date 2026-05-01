@@ -216,7 +216,9 @@ The current tree already boots into a usable user-space stack:
   `run-qemu-ring3-test` harness now also requires `native-call-smoke: ipc-call ok`
   and `[test] ring3 native abi ok` so both native IPC-call and native syscall
   header paths are asserted in the same run. Default smoke spawn remains
-  disabled while this path is still being soak-tested. Ring3 bootstrap copying
+  disabled while this path is still being soak-tested. Ring3 smoke endpoint
+  immediates are patched in a kernel-local code buffer before upload, and
+  ring3 bootstrap copying
   now writes through the target context's user virtual mapping (temporary RW
   mapping then RX remap) instead of writing code directly via physical aliases.
 - Regression coverage now includes `tests/test_ring3_smoke_target.py`, which

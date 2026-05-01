@@ -212,7 +212,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
   and allow (`[test] ring3 ipc syscall ok`) paths, probes `ipc_call` with deny
   (`[test] ring3 ipc call deny ok`), permission-denied
   (`[test] ring3 ipc call perm deny ok`), and echo-allow
-  (`[test] ring3 ipc call ok`) paths, and runs a 4096-call CPL3
+  (`[test] ring3 ipc call ok`) paths, issues an explicit CPL3 `yield`
+  (`[test] ring3 yield syscall ok`), and runs a 4096-call CPL3
   `getpid` loop before exit; if the full loop
   completes, the kernel emits `[test] ring3 preempt stress ok` to confirm timer
   preemption/trampoline flow stayed stable under sustained user-mode syscall
@@ -383,7 +384,8 @@ Meaning:
 - `run-qemu-test` performs a compile + boot + halt smoke run
 - `run-qemu-cli-test` runs the full CLI integration suite
 - `run-qemu-ring3-test` configures a shadow `build/ring3` tree with
-  `WASMOS_RING3_SMOKE=ON` and asserts ring3 smoke syscall markers before halt
+  `WASMOS_RING3_SMOKE=ON` and asserts ring3 smoke syscall markers plus
+  `native-call-smoke: ipc-call ok` before halt
 - `run-qemu-ui-test` boots QEMU with a graphical display plus `mon:stdio` serial
 
 The repository standard is:

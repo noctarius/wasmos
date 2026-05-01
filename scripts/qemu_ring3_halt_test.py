@@ -18,11 +18,13 @@ def main():
         cfg = default_config()
 
     required = [
+        b"native-call-smoke: ipc-call ok",
         b"[test] ring3 ipc syscall deny ok",
         b"[test] ring3 ipc syscall ok",
         b"[test] ring3 ipc call deny ok",
         b"[test] ring3 ipc call perm deny ok",
         b"[test] ring3 ipc call ok",
+        b"[test] ring3 yield syscall ok",
         b"[test] ring3 syscall ok",
         b"[test] ring3 preempt stress ok",
         b"wamos> ",

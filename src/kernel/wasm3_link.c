@@ -848,7 +848,16 @@ m3ApiRawFunction(wasmos_framebuffer_info)
         m3ApiReturn(-1);
     }
     m3ApiCheckMem(out_ptr, (uint32_t)len);
-    memcpy(out_ptr, &info, sizeof(info));
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    if (mm_copy_to_user(proc->context_id,
+                        (uint64_t)(uintptr_t)out_ptr,
+                        &info,
+                        sizeof(info)) != 0) {
+        m3ApiReturn(-1);
+    }
     m3ApiReturn(0);
 }
 

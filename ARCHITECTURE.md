@@ -233,7 +233,9 @@ The current tree already boots into a usable user-space stack:
 - A baseline user-pointer copy layer now exists in kernel memory management
   (`mm_copy_from_user` / `mm_copy_to_user`) with user-range permission checks,
   pre-mapping of touched pages, and temporary CR3 switch/restore around the
-  actual copy.
+  actual copy. Hostcall migration has started: `wasmos_framebuffer_info` now
+  writes results through `mm_copy_to_user` instead of direct user-pointer
+  dereference.
 - Unrecoverable user-mode page faults now use process-local failure semantics:
   the kernel marks only the faulting process exited (`-11`) and continues
   scheduling remaining work; unhandled kernel-mode faults remain fatal.

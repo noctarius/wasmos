@@ -185,6 +185,28 @@ wasm_user_va_from_offset(uint32_t context_id,
 }
 
 static int
+wasm_user_va_from_host_ptr(uint32_t context_id,
+                           const uint8_t *mem_base,
+                           uint64_t mem_size,
+                           const void *host_ptr,
+                           uint32_t span,
+                           uint64_t *out_user_va)
+{
+    if (!mem_base || !host_ptr || span == 0 || !out_user_va) {
+        return -1;
+    }
+    const uint8_t *ptr = (const uint8_t *)host_ptr;
+    if (ptr < mem_base) {
+        return -1;
+    }
+    uint64_t off = (uint64_t)(ptr - mem_base);
+    if (off > mem_size || (uint64_t)span > (mem_size - off)) {
+        return -1;
+    }
+    return wasm_user_va_from_offset(context_id, (uint32_t)off, span, out_user_va);
+}
+
+static int
 require_io_capability(uint32_t context_id)
 {
     /* Compatibility mode: if no explicit resource caps were configured for this
@@ -1116,6 +1138,23 @@ m3ApiRawFunction(wasmos_boot_module_name)
         m3ApiReturn(-1);
     }
     m3ApiCheckMem(out_ptr, (uint32_t)out_len);
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t out_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   out_ptr,
+                                   (uint32_t)out_len,
+                                   &out_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                out_user,
+                                (uint64_t)(uint32_t)out_len,
+                                MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
 
     uint32_t name_len = 0;
     if (boot_module_name_at((uint32_t)index, out_ptr, (uint32_t)out_len, &name_len) != 0) {

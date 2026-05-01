@@ -48,14 +48,14 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - UEFI boot via `BOOTX64.EFI`
 - ELF64 kernel loading with aligned/overlap-safe `PT_LOAD` handling
 - versioned `boot_info_t` handoff
-- bootstrap `initfs.img` packaging for early WASMOS modules and boot config
-  with direct CMake dependencies for bootstrap driver/service payloads, so
-  rebuilt native drivers are repacked before QEMU runs
+- bootstrap `initfs.img` packaging for the storage bootstrap path and boot
+  config; display/input drivers now stay on the FAT image and are started by
+  `hw-discovery` after `fs-fat` is available
 - serial-first early boot diagnostics
-- an AssemblyScript `serial` driver loads through `hw-discovery` and calls
+- an AssemblyScript `serial` driver loads from FAT through `hw-discovery` and calls
   `serial_register`, letting the kernel hand off console output from the COM1
   stub to the new service once it is ready
-- an AssemblyScript keyboard driver is launched by `hw-discovery` and polls the
+- an AssemblyScript keyboard driver is launched from FAT by `hw-discovery` and polls the
   PS/2 controller for scancodes; it stays running even if no input arrives so
   the kernel does not need any keyboard-specific logic in its microkernel core
 - native ELF driver loading through the process manager for
@@ -66,6 +66,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   space and paints at native speed without wasm3; it now honors the
   bootloader-captured framebuffer size and ignores larger post-boot Bochs VBE
   geometry until mode-setting can update the kernel framebuffer contract
+- the native framebuffer driver is now a post-FAT startup target: the kernel
+  early framebuffer remains the pre-FAT display path, and `hw-discovery` starts
+  the native framebuffer before `sysinit` launches VT and CLI
 - the native framebuffer driver now explicitly registers its text-control IPC
   endpoint with process-manager so VT receives a valid framebuffer endpoint for
   tty clear/replay control (instead of falling back to logical-only switching)
@@ -262,8 +265,9 @@ The current startup chain is:
 4. `hw-discovery` starts `ata` and `fs-fat`
 5. kernel `init` waits for FAT readiness
 6. kernel `init` asks PM to load `sysinit` from disk
-7. `sysinit` parses the generated boot-config blob and starts its configured
-   late user processes
+7. `hw-discovery` starts post-FAT display/input drivers by name from disk
+8. `sysinit` parses the generated boot-config blob and starts its configured
+   services and late user processes
 
 This is the current stable bootstrap baseline.
 

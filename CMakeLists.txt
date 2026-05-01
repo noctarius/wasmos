@@ -339,13 +339,9 @@ add_custom_command(
           ${WASM_INIT_SMOKE_APP}
           ${WASM_NATIVE_CALL_MIN_APP}
           ${WASM_NATIVE_CALL_SMOKE_APP}
-          ${WASM_KEYBOARD_APP}
           ${WASM_ATA_APP}
           ${WASM_FAT_APP}
-          ${WASM_SERIAL_APP}
-          ${WASM_FRAMEBUFFER_APP}
           ${WASM_HW_DISCOVERY_APP}
-          ${WASM_VT_APP}
           make_wasmos_app
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Building initfs image"
@@ -422,8 +418,13 @@ set(LARGE_READ_COPY_CMD
 set(WRITE_SMOKE_FILE_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/write_smoke.txt ${BUILD_DIR}/esp/write_smoke.txt
 )
+# Keep hardware drivers on the ESP instead of embedding them in initfs;
+# hw-discovery loads them by name after fs-fat is available.
 set(INITFS_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${INITFS_IMG} ${BUILD_DIR}/esp/initfs.img
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SERIAL_APP} ${BUILD_DIR}/esp/system/drivers/serial.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_KEYBOARD_APP} ${BUILD_DIR}/esp/system/drivers/keyboard.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FRAMEBUFFER_APP} ${BUILD_DIR}/esp/system/drivers/framebuffer.wap
 )
 if (RUST_ENABLE)
   set(RUST_HELLO_COPY_CMD

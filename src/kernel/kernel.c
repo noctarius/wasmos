@@ -245,6 +245,12 @@ init_send_fs_probe(process_t *process, init_state_t *state)
 }
 
 static int
+init_post_fat_devices_ready(void)
+{
+    return process_manager_framebuffer_endpoint() != IPC_ENDPOINT_NONE;
+}
+
+static int
 wasmos_endpoint_resolve(uint32_t owner_context_id,
                         const uint8_t *name,
                         uint32_t name_len,
@@ -745,6 +751,15 @@ init_entry(process_t *process, void *arg)
         }
         trace_write("[init] fs probe ok\n");
         state->request_id++;
+        state->phase = 6;
+        return PROCESS_RUN_YIELDED;
+    }
+
+    if (state->phase == 6) {
+        if (!init_post_fat_devices_ready()) {
+            return PROCESS_RUN_YIELDED;
+        }
+        trace_write("[init] post-FAT devices ready\n");
         if (init_send_spawn_name(process, state, "sysinit") != 0) {
             serial_write("[init] sysinit spawn request failed\n");
             process_set_exit_status(process, -1);

@@ -584,8 +584,9 @@ pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t *blob, uint32_t blob_siz
     if (wasmos_app_parse(slot->blob_storage, blob_size, &desc) != 0) {
         return -1;
     }
-    if ((desc.flags & WASMOS_APP_FLAG_DRIVER) != 0 ||
-        (desc.flags & (WASMOS_APP_FLAG_APP | WASMOS_APP_FLAG_SERVICE)) == 0) {
+    if ((desc.flags & (WASMOS_APP_FLAG_APP |
+                       WASMOS_APP_FLAG_SERVICE |
+                       WASMOS_APP_FLAG_DRIVER)) == 0) {
         return -1;
     }
     if (copy_name(slot->name, sizeof(slot->name), desc.name, desc.name_len) != 0) {
@@ -635,6 +636,8 @@ pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t *blob, uint32_t blob_siz
         slot->entry_arg2 = (g_pm.vt_endpoint != IPC_ENDPOINT_NONE)
                                ? g_pm.vt_endpoint
                                : (uint32_t)-1;
+    } else if (name_eq(slot->name, "keyboard")) {
+        slot->entry_arg1 = IPC_ENDPOINT_NONE;
     }
 
     if (process_spawn_as(parent_pid, slot->name, pm_app_entry, slot, out_pid) != 0) {
@@ -642,6 +645,14 @@ pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t *blob, uint32_t blob_siz
         return -1;
     }
     slot->pid = *out_pid;
+    if (name_eq(slot->name, "keyboard") && g_pm.kbd_endpoint == IPC_ENDPOINT_NONE) {
+        process_t *proc = process_get(*out_pid);
+        if (!proc || ipc_endpoint_create(proc->context_id, &g_pm.kbd_endpoint) != IPC_OK) {
+            slot->in_use = 0;
+            return -1;
+        }
+        slot->entry_arg1 = g_pm.kbd_endpoint;
+    }
     if (name_eq(slot->name, "vt") && g_pm.vt_endpoint == IPC_ENDPOINT_NONE) {
         process_t *proc = process_get(*out_pid);
         if (!proc || ipc_endpoint_create(proc->context_id, &g_pm.vt_endpoint) != IPC_OK) {

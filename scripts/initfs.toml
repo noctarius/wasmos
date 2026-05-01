@@ -8,8 +8,6 @@ bootstrap_modules = [
   "native-call-smoke",
   "ata",
   "fs-fat",
-  "serial",
-  "framebuffer",
   "hw-discovery",
 ]
 
@@ -59,31 +57,8 @@ source = "fs_fat.wap"
 [[entries]]
 kind = "wasmos_app"
 flags = ["bootstrap"]
-path = "system/drivers/serial.wap"
-source = "serial.wap"
-
-[[entries]]
-kind = "wasmos_app"
-flags = ["bootstrap"]
-path = "system/drivers/framebuffer.wap"
-source = "framebuffer.wap"
-
-[[entries]]
-kind = "wasmos_app"
-flags = ["bootstrap"]
-path = "system/drivers/keyboard.wap"
-source = "keyboard.wap"
-
-[[entries]]
-kind = "wasmos_app"
-flags = ["bootstrap"]
 path = "system/services/hw_discovery.wap"
 source = "hw_discovery.wap"
-
-[[entries]]
-kind = "wasmos_app"
-path = "apps/vt.wap"
-source = "vt.wap"
 
 [[entries]]
 kind = "config"

@@ -618,6 +618,23 @@ m3ApiRawFunction(wasmos_block_buffer_copy)
         m3ApiReturn(-1);
     }
     m3ApiCheckMem(ptr, (uint32_t)len);
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t ptr_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   (uint32_t)len,
+                                   &ptr_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                ptr_user,
+                                (uint64_t)(uint32_t)len,
+                                MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
 
     const uint8_t *src = (const uint8_t *)(uintptr_t)((uint32_t)phys + (uint32_t)offset);
     for (int32_t i = 0; i < len; ++i) {
@@ -638,6 +655,23 @@ m3ApiRawFunction(wasmos_block_buffer_write)
         m3ApiReturn(-1);
     }
     m3ApiCheckMem(ptr, (uint32_t)len);
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t ptr_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   (uint32_t)len,
+                                   &ptr_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                ptr_user,
+                                (uint64_t)(uint32_t)len,
+                                MEM_REGION_FLAG_READ) != 0) {
+        m3ApiReturn(-1);
+    }
 
     uint8_t *dst = (uint8_t *)(uintptr_t)((uint32_t)phys + (uint32_t)offset);
     for (int32_t i = 0; i < len; ++i) {
@@ -683,6 +717,19 @@ m3ApiRawFunction(wasmos_fs_buffer_copy)
         m3ApiReturn(-1);
     }
     m3ApiCheckMem(ptr, (uint32_t)len);
+    uint64_t ptr_user = 0;
+    if (wasm_user_va_from_host_ptr(context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   (uint32_t)len,
+                                   &ptr_user) != 0 ||
+        mm_user_range_permitted(context_id,
+                                ptr_user,
+                                (uint64_t)(uint32_t)len,
+                                MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
 
     const uint8_t *src = (const uint8_t *)wasm_fs_buffer_for_pid(pid, context_id);
     if (!src) {
@@ -714,6 +761,19 @@ m3ApiRawFunction(wasmos_fs_buffer_write)
         m3ApiReturn(-1);
     }
     m3ApiCheckMem(ptr, (uint32_t)len);
+    uint64_t ptr_user = 0;
+    if (wasm_user_va_from_host_ptr(context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   (uint32_t)len,
+                                   &ptr_user) != 0 ||
+        mm_user_range_permitted(context_id,
+                                ptr_user,
+                                (uint64_t)(uint32_t)len,
+                                MEM_REGION_FLAG_READ) != 0) {
+        m3ApiReturn(-1);
+    }
 
     uint8_t *dst = (uint8_t *)wasm_fs_buffer_for_pid(pid, context_id);
     if (!dst) {
@@ -751,6 +811,23 @@ m3ApiRawFunction(wasmos_early_log_copy)
         m3ApiReturn(0);
     }
     m3ApiCheckMem(ptr, count);
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t ptr_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   count,
+                                   &ptr_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                ptr_user,
+                                count,
+                                MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
     serial_early_log_copy(ptr, start, count);
     m3ApiReturn(0);
 }
@@ -789,6 +866,23 @@ m3ApiRawFunction(wasmos_boot_config_copy)
     }
 
     m3ApiCheckMem(ptr, count);
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t ptr_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   count,
+                                   &ptr_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                ptr_user,
+                                count,
+                                MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
     const uint8_t *src = (const uint8_t *)(uintptr_t)g_wasm_boot_info->boot_config;
     for (uint32_t i = 0; i < count; ++i) {
         ptr[i] = src[start + i];
@@ -898,6 +992,19 @@ m3ApiRawFunction(wasmos_framebuffer_info)
     m3ApiCheckMem(out_ptr, (uint32_t)len);
     process_t *proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t out_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   out_ptr,
+                                   (uint32_t)len,
+                                   &out_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                out_user,
+                                (uint64_t)(uint32_t)len,
+                                MEM_REGION_FLAG_WRITE) != 0) {
         m3ApiReturn(-1);
     }
     if (mm_copy_to_user(proc->context_id,

@@ -238,12 +238,11 @@ IMPORTANT: Create a git commit after each prompt iteration.
   (`mm_user_range_permitted`) for staged hostcall hardening; framebuffer
   and shared-memory mapping now resolve WASM linear offsets into process user
   VAs via an explicit resolver helper before applying mappings. Pointer-bearing
-  `boot_module_name`, `proc_info`, and `proc_info_ex` now also resolve wasm
-  host pointers back to user VAs for explicit range-permission preflight before
-  writeout; `console_write`/`console_read` now apply the same preflight checks
-  (READ for source, WRITE for destination byte). `acpi_rsdp_info` output
-  pointers now also run bridge+WRITE preflight before copy-out; `strlen` now
-  applies bridge+READ preflight on its input pointer
+  hostcalls now resolve wasm host pointers back to user VAs for explicit
+  range-permission preflight (READ or WRITE as appropriate), including
+  `boot_module_name`, `proc_info`, `proc_info_ex`, `console_write`,
+  `console_read`, `acpi_rsdp_info`, `strlen`, block/fs buffer copy+write, and
+  early-log/boot-config copy paths
 - unrecoverable CPL3 page faults now terminate only the faulting process
   (`exit_status=-11`) and keep the kernel scheduler alive; kernel-mode unhandled
   faults remain fatal; ring3 smoke mode now includes a dedicated

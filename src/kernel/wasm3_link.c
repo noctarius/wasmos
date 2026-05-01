@@ -1301,6 +1301,23 @@ m3ApiRawFunction(wasmos_proc_info)
         m3ApiReturn(-1);
     }
     m3ApiCheckMem(buf, (uint32_t)buf_len);
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t buf_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   buf,
+                                   (uint32_t)buf_len,
+                                   &buf_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                buf_user,
+                                (uint64_t)(uint32_t)buf_len,
+                                MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
 
     uint32_t pid = 0;
     const char *name = 0;

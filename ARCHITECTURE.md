@@ -180,7 +180,8 @@ The current tree already boots into a usable user-space stack:
   `lib/libc/include/wasmos/syscall_x86_64.h` that mirrors the current register
   ABI for non-WASM x86_64 userland experiments (`int 0x80` wrappers with
   primary return in `RAX` and optional secondary return in `RDX` for
-  `ipc_call`).
+  `ipc_call`; current `ipc_call` semantics are `RAX=status`, `RDX=reply arg0`
+  on success, `RDX=0` on error, and blocking wait for matching `request_id`).
 - Scheduler context state now tracks privilege-return metadata (`cs`, `ss`,
   `user_rsp`) and context-switch restore now branches to `iretq` for ring3
   contexts while preserving `ret` for ring0 contexts.

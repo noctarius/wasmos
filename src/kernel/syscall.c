@@ -84,6 +84,28 @@ x86_syscall_handler(syscall_frame_t *frame)
         process_yield(PROCESS_RUN_EXITED);
         return 0;
     }
+    case WASMOS_SYSCALL_YIELD:
+        process_yield(PROCESS_RUN_YIELDED);
+        return 0;
+    case WASMOS_SYSCALL_WAIT: {
+        process_t *proc = process_get(process_current_pid());
+        uint32_t target_pid = (uint32_t)frame->rdi;
+        int32_t exit_status = 0;
+        int wait_rc = 0;
+        if (!proc) {
+            return (uint64_t)-1;
+        }
+        for (;;) {
+            wait_rc = process_wait(proc, target_pid, &exit_status);
+            if (wait_rc == 0) {
+                return (uint64_t)(int64_t)exit_status;
+            }
+            if (wait_rc < 0) {
+                return (uint64_t)-1;
+            }
+            process_yield(PROCESS_RUN_BLOCKED);
+        }
+    }
     default:
         return (uint64_t)-1;
     }

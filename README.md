@@ -196,8 +196,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - FAT new-file creation supports long filenames with generated short aliases
 - growable per-process `wasm3` heaps with a 2 GiB cap
 - x86 privilege-boundary groundwork: IDT `int 0x80` syscall gate is now
-  present with a minimal syscall dispatcher (`nop`, `getpid`, `exit`) as the initial
-  ring3 boundary primitive
+  present with a minimal syscall dispatcher (`nop`, `getpid`, `exit`,
+  `yield`, `wait`) as the initial ring3 boundary primitive
 - scheduler/context-switch groundwork now carries per-context privilege
   metadata (`cs/ss/user_rsp`) and can restore ring3 contexts via `iretq`
   while retaining the existing ring0 fast-path (`ret`)

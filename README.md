@@ -226,6 +226,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - ring3 smoke bootstrap endpoint immediates are now patched in a kernel-local
   code buffer before one `mm_copy_to_user` upload, instead of direct writes
   through an activated user CR3 mapping
+- native ELF driver PT_LOAD population now copies bytes/zero-fill through
+  a context-root copy helper (`paging_switch_root` + memcpy/zero + restore)
+  instead of direct dereference in the ambient kernel CR3
 - timer preemption now uses a ring3-safe IRQ trampoline handoff: CPL3 interrupt
   frames are rewritten to return through a kernel CS trampoline before scheduler
   context switch, rather than attempting a user-mode return into kernel text

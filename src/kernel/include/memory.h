@@ -64,5 +64,6 @@ int mm_shared_release(uint32_t id);
 int mm_context_map_physical(uint32_t context_id, uint64_t virt, uint64_t phys, uint64_t size, uint32_t flags);
 int mm_copy_from_user(uint32_t context_id, void *dst, uint64_t user_src, uint64_t size);
 int mm_copy_to_user(uint32_t context_id, uint64_t user_dst, const void *src, uint64_t size);
+int mm_user_range_permitted(uint32_t context_id, uint64_t user_addr, uint64_t size, uint32_t needed_flags);
 
 #endif

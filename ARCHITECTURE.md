@@ -173,8 +173,9 @@ The current tree already boots into a usable user-space stack:
   including exception registers, process identity, stack bounds, CR3/kernel
   text range, and framebuffer geometry/base.
 - x86 syscall boundary groundwork now exists via a DPL3-callable `int 0x80`
-  gate and a minimal syscall dispatcher (`nop`, `getpid`, `exit`) so ring3 transition
-  work can pivot from hostcall-only assumptions to an explicit kernel entry.
+  gate and a minimal syscall dispatcher (`nop`, `getpid`, `exit`, `yield`,
+  `wait`) so ring3 transition work can pivot from hostcall-only assumptions to
+  an explicit kernel entry.
 - Scheduler context state now tracks privilege-return metadata (`cs`, `ss`,
   `user_rsp`) and context-switch restore now branches to `iretq` for ring3
   contexts while preserving `ret` for ring0 contexts.

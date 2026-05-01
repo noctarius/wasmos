@@ -2,6 +2,7 @@
 #include "paging.h"
 #include "physmem.h"
 #include "serial.h"
+#include "string.h"
 
 #define PAGE_SIZE 0x1000ULL
 #define MM_USER_LINEAR_BASE 0x0000008000000000ULL
@@ -195,6 +196,37 @@ mm_region_flags_valid(uint32_t flags)
         return 0;
     }
     return 1;
+}
+
+static int
+mm_ensure_user_range_mapped(mm_context_t *ctx, uint64_t user_addr, uint64_t size, uint32_t needed_flags)
+{
+    if (!ctx || ctx->root_table == 0 || user_addr == 0 || size == 0) {
+        return -1;
+    }
+    uint64_t end = user_addr + size;
+    if (end < user_addr) {
+        return -1;
+    }
+    uint64_t cur = user_addr;
+    while (cur < end) {
+        mem_region_t *region = mm_find_region_for_addr(ctx, cur);
+        if (!region) {
+            return -1;
+        }
+        if (!(region->flags & MEM_REGION_FLAG_USER) ||
+            !(region->flags & MEM_REGION_FLAG_READ) ||
+            ((needed_flags & MEM_REGION_FLAG_WRITE) && !(region->flags & MEM_REGION_FLAG_WRITE))) {
+            return -1;
+        }
+        uint64_t page_base = cur & ~(PAGE_SIZE - 1ULL);
+        uint64_t phys_page = region->phys_base + (page_base - region->base);
+        if (paging_map_4k_in_root(ctx->root_table, page_base, phys_page, region->flags) < 0) {
+            return -1;
+        }
+        cur = page_base + PAGE_SIZE;
+    }
+    return 0;
 }
 
 int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint64_t error_code, uint64_t *out_mapped_base) {
@@ -461,6 +493,59 @@ uint64_t mm_context_root_table(uint32_t id) {
     }
     return ctx->root_table;
 }
+
+int
+mm_copy_from_user(uint32_t context_id, void *dst, uint64_t user_src, uint64_t size)
+{
+    if (context_id == 0 || !dst || user_src == 0 || size == 0) {
+        return -1;
+    }
+    mm_context_t *ctx = mm_context_get(context_id);
+    if (!ctx || ctx->root_table == 0) {
+        return -1;
+    }
+    if (mm_ensure_user_range_mapped(ctx, user_src, size, MEM_REGION_FLAG_READ) != 0) {
+        return -1;
+    }
+
+    uint64_t prev_root = paging_get_current_root_table();
+    if (paging_switch_root(ctx->root_table) != 0) {
+        return -1;
+    }
+    memcpy(dst, (const void *)(uintptr_t)user_src, (size_t)size);
+    if (paging_switch_root(prev_root) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int
+mm_copy_to_user(uint32_t context_id, uint64_t user_dst, const void *src, uint64_t size)
+{
+    if (context_id == 0 || user_dst == 0 || !src || size == 0) {
+        return -1;
+    }
+    mm_context_t *ctx = mm_context_get(context_id);
+    if (!ctx || ctx->root_table == 0) {
+        return -1;
+    }
+    if (mm_ensure_user_range_mapped(ctx, user_dst, size, MEM_REGION_FLAG_WRITE) != 0) {
+        return -1;
+    }
+
+    uint64_t prev_root = paging_get_current_root_table();
+    if (paging_switch_root(ctx->root_table) != 0) {
+        return -1;
+    }
+    memcpy((void *)(uintptr_t)user_dst, src, (size_t)size);
+    if (paging_switch_root(prev_root) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+/* TODO: Migrate pointer-bearing syscall and IPC entry paths to this helper
+ * family so kernel code stops dereferencing user virtual addresses directly. */
 
 int mm_context_map_physical(uint32_t context_id,
                            uint64_t virt,

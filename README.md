@@ -242,6 +242,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
   with user-range validation, on-demand page mapping, and temporary context
   switch/restore for safer user-pointer access patterns; migration is underway
   and `wasmos_framebuffer_info` now routes writes through `mm_copy_to_user`.
+  That hostcall now also writes via the explicitly validated user VA produced
+  by the host-pointer bridge (instead of a raw host pointer reinterpretation).
   The memory layer now also exposes a non-copy validator
   (`mm_user_range_permitted`) for staged hostcall hardening; framebuffer
   and shared-memory mapping now resolve WASM linear offsets into process user

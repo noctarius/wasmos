@@ -115,9 +115,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   failures can be tied to the precise switch stage during diagnostics
 - CLI `cd` now preserves shell-like path semantics for `.` (stay in cwd) and
   `..` (move to parent) instead of forcing root
-- sysinit currently keeps a single interactive CLI instance (default `tty1`)
-  as a conservative fallback while multi-CLI VT registration/mode sequencing is
-  being stabilized; only the foreground tty's CLI consumes keyboard input
+- process-manager assigns CLI home ttys and sysinit launches configured CLI
+  targets with a cap of three concurrent instances (`tty1..tty3`); only the
+  foreground tty's CLI consumes keyboard input
 - VT now owns keyboard input routing and delivers per-tty raw input via
   `VT_IPC_READ_REQ`; in raw mode, extended arrows and nav/edit keys are emitted
   as ANSI escape sequences (`ESC[A/B/C/D`, `ESC[H/F`, `ESC[5~/6~`, `ESC[2~/3~`).

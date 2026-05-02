@@ -78,6 +78,9 @@ The current tree already boots into a usable user-space stack:
   (`shmem_create/map/unmap`, `console_ring_id`) and WASM syscalls
   (`wasmos_shmem_create/map/unmap`) backed by the same kernel shared-memory
   registry.
+- `wasmos_console_read` now mirrors successful user-copy input bytes into the
+  immediate wasm host-pointer view (in addition to `mm_copy_to_user`) to keep
+  serial-input consumers aligned during ring3 copy-path migration.
 - The VT WASM service now maintains explicit per-TTY state (4 tty slots),
   supports active-tty selection (`VT_IPC_SWITCH_TTY`), and stores per-tty
   attributes (`VT_IPC_SET_ATTR_REQ`) while output remains routed through

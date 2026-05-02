@@ -1490,6 +1490,10 @@ m3ApiRawFunction(wasmos_console_read)
     if (mm_copy_to_user(proc->context_id, ptr_user, &out, 1) != 0) {
         m3ApiReturn(-1);
     }
+    /* Compatibility mirror: some current wasm consumers observe the host
+     * pointer view immediately after return; keep both views in sync while
+     * ring3 copy-path visibility is being finalized. */
+    ptr[0] = out;
     m3ApiReturn(1);
 }
 

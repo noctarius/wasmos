@@ -98,7 +98,7 @@ nd_console_read(char *ptr, int len)
     int n = 0;
     while (n < len) {
         uint8_t c = 0;
-        if (serial_read_char(&c) != 0) {
+        if (serial_read_char(&c) <= 0) {
             break;
         }
         ptr[n++] = (char)c;

@@ -946,6 +946,13 @@ add_custom_target(run-qemu-ring3-test
   COMMENT "Configure/build shadow ring3 tree and run ring3 smoke marker test"
   VERBATIM
 )
+add_custom_target(strict-ring3
+  COMMAND ${CMAKE_COMMAND} --build ${BUILD_DIR} --target run-qemu-test
+  COMMAND ${CMAKE_COMMAND} --build ${BUILD_DIR} --target run-qemu-ring3-test
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Run strict ring3 gate profile (run-qemu-test + run-qemu-ring3-test)"
+  VERBATIM
+)
 add_dependencies(run-qemu c_examples services drivers)
 add_dependencies(run-qemu-test c_examples services drivers)
 add_dependencies(run-qemu-cli-test c_examples services drivers)

@@ -1253,6 +1253,7 @@ kmain(boot_info_t *boot_info)
     serial_printf("[kernel] boot_info version=%016llx\n[kernel] boot_info size=%016llx\n",
         (unsigned long long)boot_info->version,
         (unsigned long long)boot_info->size);
+    serial_printf("[mode] strict-ring3=%u\n", (unsigned int)g_ring3_smoke_enabled);
     g_boot_info = boot_info;
     framebuffer_init(boot_info);
     cpu_init();

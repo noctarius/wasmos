@@ -767,8 +767,24 @@ m3ApiRawFunction(wasmos_block_buffer_write)
     }
 
     uint8_t *dst = (uint8_t *)(uintptr_t)((uint32_t)phys + (uint32_t)offset);
-    for (int32_t i = 0; i < len; ++i) {
-        dst[i] = ptr[i];
+    uint32_t copied = 0;
+    uint8_t bounce[256];
+    while (copied < (uint32_t)len) {
+        uint32_t chunk = (uint32_t)len - copied;
+        if (chunk > (uint32_t)sizeof(bounce)) {
+            chunk = (uint32_t)sizeof(bounce);
+        }
+        if (wasm_copy_from_user_sync_views(proc->context_id,
+                                           ptr_user + (uint64_t)copied,
+                                           ptr + copied,
+                                           bounce,
+                                           chunk) != 0) {
+            m3ApiReturn(-1);
+        }
+        for (uint32_t i = 0; i < chunk; ++i) {
+            dst[copied + i] = bounce[i];
+        }
+        copied += chunk;
     }
     m3ApiReturn(0);
 }
@@ -868,12 +884,32 @@ m3ApiRawFunction(wasmos_fs_buffer_write)
         m3ApiReturn(-1);
     }
 
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
     uint8_t *dst = (uint8_t *)wasm_fs_buffer_for_pid(pid, context_id);
     if (!dst) {
         m3ApiReturn(-1);
     }
-    for (int32_t i = 0; i < len; ++i) {
-        dst[offset + i] = ptr[i];
+    uint32_t copied = 0;
+    uint8_t bounce[256];
+    while (copied < (uint32_t)len) {
+        uint32_t chunk = (uint32_t)len - copied;
+        if (chunk > (uint32_t)sizeof(bounce)) {
+            chunk = (uint32_t)sizeof(bounce);
+        }
+        if (wasm_copy_from_user_sync_views(proc->context_id,
+                                           ptr_user + (uint64_t)copied,
+                                           ptr + copied,
+                                           bounce,
+                                           chunk) != 0) {
+            m3ApiReturn(-1);
+        }
+        for (uint32_t i = 0; i < chunk; ++i) {
+            dst[(uint32_t)offset + copied + i] = bounce[i];
+        }
+        copied += chunk;
     }
     m3ApiReturn(0);
 }

@@ -252,7 +252,10 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - unrecoverable CPL3 page faults now terminate only the faulting process
   (`exit_status=-11`) and keep the kernel scheduler alive; kernel-mode unhandled
   faults remain fatal; ring3 smoke mode now includes a dedicated
-  `ring3-fault` injector and asserts `[test] ring3 fault isolate ok`
+  `ring3-fault` injector and asserts `[test] ring3 fault isolate ok`.
+  User-mode fault telemetry now emits structured fault markers with classified
+  reasons (`unmapped`, `write_violation`, `exec_violation`,
+  `user_to_kernel`, `protection`) plus pid/error/address/rip fields
 - capability-based driver resource groundwork: per-context capability registry
   (`io.port`, `irq.route`, `mmio.map`, `dma.buffer`) is now wired into
   WASMOS-APP capability grants, and WASM I/O hostcalls enforce `io.port` when

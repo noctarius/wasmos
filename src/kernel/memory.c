@@ -552,12 +552,25 @@ mm_copy_from_user(uint32_t context_id, void *dst, uint64_t user_src, uint64_t si
     }
 
     uint64_t prev_root = paging_get_current_root_table();
-    if (paging_switch_root(ctx->root_table) != 0) {
-        return -1;
-    }
-    memcpy(dst, (const void *)(uintptr_t)user_src, (size_t)size);
-    if (paging_switch_root(prev_root) != 0) {
-        return -1;
+    uint8_t *dst_bytes = (uint8_t *)dst;
+    uint64_t remaining = size;
+    uint64_t user_cur = user_src;
+    const uint64_t chunk_size = 256ULL;
+    uint8_t bounce[256];
+
+    while (remaining > 0) {
+        uint64_t n = (remaining < chunk_size) ? remaining : chunk_size;
+        if (paging_switch_root(ctx->root_table) != 0) {
+            return -1;
+        }
+        memcpy(bounce, (const void *)(uintptr_t)user_cur, (size_t)n);
+        if (paging_switch_root(prev_root) != 0) {
+            return -1;
+        }
+        memcpy(dst_bytes, bounce, (size_t)n);
+        dst_bytes += n;
+        user_cur += n;
+        remaining -= n;
     }
     return 0;
 }
@@ -577,12 +590,25 @@ mm_copy_to_user(uint32_t context_id, uint64_t user_dst, const void *src, uint64_
     }
 
     uint64_t prev_root = paging_get_current_root_table();
-    if (paging_switch_root(ctx->root_table) != 0) {
-        return -1;
-    }
-    memcpy((void *)(uintptr_t)user_dst, src, (size_t)size);
-    if (paging_switch_root(prev_root) != 0) {
-        return -1;
+    const uint8_t *src_bytes = (const uint8_t *)src;
+    uint64_t remaining = size;
+    uint64_t user_cur = user_dst;
+    const uint64_t chunk_size = 256ULL;
+    uint8_t bounce[256];
+
+    while (remaining > 0) {
+        uint64_t n = (remaining < chunk_size) ? remaining : chunk_size;
+        memcpy(bounce, src_bytes, (size_t)n);
+        if (paging_switch_root(ctx->root_table) != 0) {
+            return -1;
+        }
+        memcpy((void *)(uintptr_t)user_cur, bounce, (size_t)n);
+        if (paging_switch_root(prev_root) != 0) {
+            return -1;
+        }
+        src_bytes += n;
+        user_cur += n;
+        remaining -= n;
     }
     return 0;
 }

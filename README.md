@@ -240,7 +240,10 @@ IMPORTANT: Create a git commit after each prompt iteration.
   instead of the previous broader alias span.
 - kernel memory now provides `mm_copy_from_user` / `mm_copy_to_user` helpers
   with user-range validation, on-demand page mapping, and temporary context
-  switch/restore for safer user-pointer access patterns; migration is underway
+  switch/restore for safer user-pointer access patterns. Copy paths now use a
+  fixed bounce buffer per chunk so kernel-side buffers are read/written only
+  under kernel CR3 and user-side memory is dereferenced only under target user
+  CR3; migration is underway
   and `wasmos_framebuffer_info` now routes writes through `mm_copy_to_user`.
   That hostcall now also writes via the explicitly validated user VA produced
   by the host-pointer bridge (instead of a raw host pointer reinterpretation).

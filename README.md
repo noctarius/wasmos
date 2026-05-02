@@ -243,9 +243,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   instead of the previous broader alias span. User-root setup now verifies
   kernel mapping footprint (allowed PML4 slots/windows only) and emits a
   mapping dump on verification failures for Phase 2 isolation triage.
-- CLI now exposes `kmaps`, which triggers a kernel-side dump/verification of
-  the current process root-table kernel mapping footprint for Phase 2
-  diagnostics.
+- CLI now exposes `kmaps` (current process) and `kmaps all` (all active
+  process contexts), both backed by kernel hostcalls that dump/verify
+  user-root kernel mapping footprint for Phase 2 diagnostics.
 - kernel memory now provides `mm_copy_from_user` / `mm_copy_to_user` helpers
   with user-range validation, on-demand page mapping, and temporary context
   switch/restore for safer user-pointer access patterns. Copy paths now use a

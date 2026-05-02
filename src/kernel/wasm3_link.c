@@ -52,10 +52,11 @@ wasm_copy_to_user_with_host_mirror(uint32_t context_id,
     if (len == 0) {
         return 0;
     }
-    /* Compatibility path: write through both validated user VA and current
-     * wasm host-pointer view. Some early-boot consumers still observe host
-     * memory directly and regress if only user-VA copy is performed. */
-    (void)mm_copy_to_user(context_id, user_dst, src, (uint64_t)len);
+    if (mm_copy_to_user(context_id, user_dst, src, (uint64_t)len) != 0) {
+        return -1;
+    }
+    /* Compatibility path: mirror into current wasm host-pointer view.
+     * Some early-boot consumers still observe host memory directly. */
     memcpy(host_dst, src, (size_t)len);
     return 0;
 }

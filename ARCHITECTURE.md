@@ -226,7 +226,10 @@ The current tree already boots into a usable user-space stack:
   of mapped segment virtual addresses.
 - Regression coverage now includes `tests/test_ring3_smoke_target.py`, which
   executes `cmake --build build --target run-qemu-ring3-test` to keep ring3
-  marker assertions in the standard automated test suite.
+  marker assertions in the standard automated test suite, including structured
+  user fault reason telemetry.
+  Staged-default policy keeps ring3 smoke OFF in normal boot configs and ON
+  in the dedicated ring3 smoke test target.
 - Timer IRQ preemption now performs a ring3-safe trampoline rewrite for CPL3
   frames: return RIP is redirected to the scheduler preempt trampoline and CS
   is rewritten to kernel code selector so `iretq` re-enters ring0 cleanly

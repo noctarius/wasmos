@@ -8,6 +8,8 @@ IMPORTANT: Keep this file and `README.md` up to date with every prompt execution
 and code iteration.
 IMPORTANT: Create a git commit after each prompt iteration.
 Threading design details are maintained in `THREADING.md`.
+Full ring-3 isolation execution planning is tracked in
+`RING3_ISOLATION_PLAN.md`.
 
 ## Goals
 - Boot an x86_64 kernel through UEFI with a deterministic, auditable handoff.

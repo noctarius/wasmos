@@ -582,6 +582,31 @@ m3ApiRawFunction(wasmos_ipc_last_field)
 }
 
 #define WASM_BLOCK_BUFFER_PAGES 2u
+#define WASM_BLOCK_BUFFER_SIZE_BYTES (WASM_BLOCK_BUFFER_PAGES * 4096u)
+
+static int
+wasm_block_buffer_validate_args(wasm_block_slot_t *slot,
+                                int32_t phys,
+                                int32_t len,
+                                int32_t offset)
+{
+    (void)slot;
+    uint64_t start = 0;
+    uint64_t end = 0;
+
+    if (phys <= 0 || len <= 0 || offset < 0) {
+        return -1;
+    }
+    start = (uint64_t)(uint32_t)phys + (uint64_t)(uint32_t)offset;
+    end = start + (uint64_t)(uint32_t)len;
+    if (end < start) {
+        return -1;
+    }
+    if (end > 0x100000000ULL) {
+        return -1;
+    }
+    return 0;
+}
 
 m3ApiRawFunction(wasmos_block_buffer_phys)
 {
@@ -613,8 +638,10 @@ m3ApiRawFunction(wasmos_block_buffer_copy)
     m3ApiGetArgMem(uint8_t *, ptr)
     m3ApiGetArg(int32_t, len)
     m3ApiGetArg(int32_t, offset)
+    uint32_t pid = process_current_pid();
+    wasm_block_slot_t *slot = wasm_block_slot_for_pid(pid);
 
-    if (len <= 0 || offset < 0 || phys <= 0) {
+    if (wasm_block_buffer_validate_args(slot, phys, len, offset) != 0) {
         m3ApiReturn(-1);
     }
     m3ApiCheckMem(ptr, (uint32_t)len);
@@ -650,8 +677,10 @@ m3ApiRawFunction(wasmos_block_buffer_write)
     m3ApiGetArgMem(const uint8_t *, ptr)
     m3ApiGetArg(int32_t, len)
     m3ApiGetArg(int32_t, offset)
+    uint32_t pid = process_current_pid();
+    wasm_block_slot_t *slot = wasm_block_slot_for_pid(pid);
 
-    if (len <= 0 || offset < 0 || phys <= 0) {
+    if (wasm_block_buffer_validate_args(slot, phys, len, offset) != 0) {
         m3ApiReturn(-1);
     }
     m3ApiCheckMem(ptr, (uint32_t)len);

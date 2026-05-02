@@ -1441,7 +1441,10 @@ m3ApiRawFunction(wasmos_console_read)
     if (rc <= 0) {
         m3ApiReturn(rc);
     }
-    ptr[0] = (char)ch;
+    char out = (char)ch;
+    if (mm_copy_to_user(proc->context_id, ptr_user, &out, 1) != 0) {
+        m3ApiReturn(-1);
+    }
     m3ApiReturn(1);
 }
 

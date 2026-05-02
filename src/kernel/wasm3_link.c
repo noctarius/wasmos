@@ -39,6 +39,27 @@ static wasm_block_slot_t g_wasm_block_slots[PROCESS_MAX_COUNT];
 static wasm_fs_peer_slot_t g_wasm_fs_peer_slots[PROCESS_MAX_COUNT];
 static const boot_info_t *g_wasm_boot_info;
 
+static int
+wasm_copy_to_user_with_host_mirror(uint32_t context_id,
+                                   uint64_t user_dst,
+                                   void *host_dst,
+                                   const void *src,
+                                   uint32_t len)
+{
+    if (!host_dst || !src) {
+        return -1;
+    }
+    if (len == 0) {
+        return 0;
+    }
+    /* Compatibility path: write through both validated user VA and current
+     * wasm host-pointer view. Some early-boot consumers still observe host
+     * memory directly and regress if only user-VA copy is performed. */
+    (void)mm_copy_to_user(context_id, user_dst, src, (uint64_t)len);
+    memcpy(host_dst, src, (size_t)len);
+    return 0;
+}
+
 
 static int
 boot_module_name_at(uint32_t index, char *out, uint32_t out_len, uint32_t *out_name_len)
@@ -928,15 +949,12 @@ m3ApiRawFunction(wasmos_boot_config_copy)
         m3ApiReturn(-1);
     }
     const uint8_t *src = (const uint8_t *)(uintptr_t)g_wasm_boot_info->boot_config;
-    (void)mm_copy_to_user(proc->context_id,
-                          ptr_user,
-                          src + start,
-                          count);
-    /* TODO(ring3-phase1): remove this compatibility write once all
-     * boot-config consumers are proven stable on validated user-copy-only
-     * paths in non-strict mode. */
-    for (uint32_t i = 0; i < count; ++i) {
-        ptr[i] = src[start + i];
+    if (wasm_copy_to_user_with_host_mirror(proc->context_id,
+                                           ptr_user,
+                                           ptr,
+                                           src + start,
+                                           count) != 0) {
+        m3ApiReturn(-1);
     }
     m3ApiReturn(0);
 }
@@ -1306,14 +1324,20 @@ m3ApiRawFunction(wasmos_acpi_rsdp_info)
     }
 
     const uint8_t *src = (const uint8_t *)(uintptr_t)g_wasm_boot_info->rsdp;
-    /* TODO(ring3-phase1): migrate this output path to mm_copy_to_user once
-     * ACPI consumer expectations are validated for non-strict mode.
-     * Current direct host-pointer write is retained to avoid regressions
-     * like "ACPI RSDP too small" during hw-discovery startup. */
-    for (uint32_t i = 0; i < len; ++i) {
-        out_ptr[i] = src[i];
+    if (wasm_copy_to_user_with_host_mirror(proc->context_id,
+                                           out_user,
+                                           out_ptr,
+                                           src,
+                                           len) != 0) {
+        m3ApiReturn(-1);
     }
-    *out_len_ptr = len;
+    if (wasm_copy_to_user_with_host_mirror(proc->context_id,
+                                           out_len_user,
+                                           out_len_ptr,
+                                           &len,
+                                           sizeof(len)) != 0) {
+        m3ApiReturn(-1);
+    }
     m3ApiReturn(0);
 }
 
@@ -1346,8 +1370,28 @@ m3ApiRawFunction(wasmos_boot_module_name)
         m3ApiReturn(-1);
     }
 
+    char local_name[64];
     uint32_t name_len = 0;
-    if (boot_module_name_at((uint32_t)index, out_ptr, (uint32_t)out_len, &name_len) != 0) {
+    if (boot_module_name_at((uint32_t)index, local_name, sizeof(local_name), &name_len) != 0) {
+        m3ApiReturn(-1);
+    }
+    uint32_t copy_len = name_len;
+    if (copy_len >= (uint32_t)out_len) {
+        copy_len = (uint32_t)out_len - 1U;
+    }
+    if (wasm_copy_to_user_with_host_mirror(proc->context_id,
+                                           out_user,
+                                           out_ptr,
+                                           local_name,
+                                           copy_len) != 0) {
+        m3ApiReturn(-1);
+    }
+    char nul = '\0';
+    if (wasm_copy_to_user_with_host_mirror(proc->context_id,
+                                           out_user + (uint64_t)copy_len,
+                                           out_ptr + copy_len,
+                                           &nul,
+                                           1) != 0) {
         m3ApiReturn(-1);
     }
     m3ApiReturn((int32_t)name_len);

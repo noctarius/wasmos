@@ -291,12 +291,20 @@ cli_register_vt_writer(void)
         return -1;
     }
     int32_t req_id = g_request_id++;
-    if (wasmos_ipc_send(g_vt_endpoint,
-                        g_vt_client_endpoint,
-                        VT_IPC_REGISTER_WRITER,
-                        req_id,
-                        g_home_tty, 0, 0, 0) != 0) {
-        return -1;
+    uint32_t send_tries = 0;
+    for (;;) {
+        int32_t send_rc = wasmos_ipc_send(g_vt_endpoint,
+                                          g_vt_client_endpoint,
+                                          VT_IPC_REGISTER_WRITER,
+                                          req_id,
+                                          g_home_tty, 0, 0, 0);
+        if (send_rc == 0) {
+            break;
+        }
+        if (send_rc != IPC_ERR_FULL || ++send_tries >= CLI_VT_SEND_RETRIES) {
+            return -1;
+        }
+        (void)wasmos_sched_yield();
     }
 
     for (int tries = 0; tries < CLI_VT_RESP_RETRIES; ++tries) {
@@ -1139,15 +1147,15 @@ initialize(int32_t proc_endpoint,
             }
             g_vt_switch_generation = 1;
             if (g_vt_endpoint >= 0 && cli_register_vt_writer() != 0) {
-                g_phase = CLI_PHASE_FAILED;
-                console_write("[cli] vt writer register failed\n");
-                stall_forever();
+                console_write("[cli] vt writer register failed; serial fallback\n");
+                g_vt_endpoint = -1;
+                g_vt_client_endpoint = -1;
             }
             if (g_vt_endpoint >= 0 &&
                 cli_set_vt_mode((uint32_t)VT_INPUT_MODE_RAW) != 0) {
-                g_phase = CLI_PHASE_FAILED;
-                console_write("[cli] vt mode set failed\n");
-                stall_forever();
+                console_write("[cli] vt mode set failed; serial fallback\n");
+                g_vt_endpoint = -1;
+                g_vt_client_endpoint = -1;
             }
             g_last_seen_active_tty = 0;
             if (g_vt_endpoint >= 0) {
@@ -1193,9 +1201,10 @@ initialize(int32_t proc_endpoint,
             if (g_vt_endpoint >= 0) {
                 have_ch = cli_vt_read_char(&ch);
                 if (have_ch < 0) {
-                    g_phase = CLI_PHASE_FAILED;
-                    console_write("[cli] vt read failed\n");
-                    stall_forever();
+                    console_write("[cli] vt read failed; serial fallback\n");
+                    g_vt_endpoint = -1;
+                    g_vt_client_endpoint = -1;
+                    have_ch = 0;
                 }
                 if (have_ch > 0) {
                     from_vt = 1;

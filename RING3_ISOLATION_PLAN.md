@@ -77,6 +77,10 @@ Known baseline test debt to track during later phases:
   visible while progressing strict-ring3 isolation work.
   TODO: Re-baseline or fix language example output expectations so full CLI test
   suite can be restored to green alongside strict-ring3 gating.
+- Previously observed runtime noise (`[cli] vt writer register failed`,
+  `[sysinit] spawn failed`) is now mitigated in current baseline via VT writer
+  reassignment + CLI serial fallback + conservative sysinit single-CLI startup.
+  `run-qemu-test` and `run-qemu-ring3-test` currently pass with this fallback.
 
 Legacy-path impact:
 - None removed yet; this phase only creates safety rails.

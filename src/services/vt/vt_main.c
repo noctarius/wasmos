@@ -1676,12 +1676,9 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
                 vt_trace_mark(VT_TRACE_WRITER_CONFLICT,
                               (uint16_t)(idx & 0x0FFFu),
                               (uint16_t)((uint32_t)msg.source & 0x0FFFu));
-                (void)vt_ipc_reply_retry(msg.source,
-                                         VT_IPC_ERROR,
-                                         msg.request_id,
-                                         -1,
-                                         0);
-                break;
+                /* Replace stale/previous writer ownership instead of rejecting
+                 * new registrations. This keeps CLI recovery robust when a
+                 * prior writer process exited without an explicit unregister. */
             }
             g_tty_writer_ep[idx] = msg.source;
             vt_trace_mark(VT_TRACE_WRITER_OK,

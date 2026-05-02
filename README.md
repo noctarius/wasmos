@@ -265,6 +265,10 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - ring3 smoke now also asserts syscall ABI width validation for IPC notify:
   a CPL3 `IPC_NOTIFY` with a >32-bit endpoint argument is rejected and emits
   `[test] ring3 ipc syscall arg width deny ok`
+- ring3 fault-policy coverage now asserts expected termination semantics in
+  addition to fault reasons: `ring3-fault`, `ring3-fault-write`, and
+  `ring3-fault-exec` must each terminate with exit status `-11` and emit
+  `[test] ring3 fault* exit status ok` markers
 - capability-based driver resource groundwork: per-context capability registry
   (`io.port`, `irq.route`, `mmio.map`, `dma.buffer`) is now wired into
   WASMOS-APP capability grants, and WASM I/O hostcalls enforce `io.port` when

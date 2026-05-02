@@ -127,6 +127,9 @@ Phase 1 inventory tracker (initial pass):
     bounce-buffer copies across CR3 switches; continue validating size/range
     arithmetic and explicit permission preflight per call site during
     conversion.
+  - Additional caution: a direct `wasmos_acpi_rsdp_info` -> `mm_copy_to_user`
+    swap regressed hw-discovery in non-strict mode (`ACPI RSDP too small`);
+    keep this callsite deferred until ACPI consumer assumptions are aligned.
   - Remaining migration objective: continue replacing direct pointer writes/
     reads in pointer-bearing hostcalls with `mm_copy_to_user` /
     `mm_copy_from_user` where practical.

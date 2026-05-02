@@ -239,7 +239,9 @@ The current tree already boots into a usable user-space stack:
   pages are tracked by intent rather than implicit convention. Paging now also
   rejects user mappings outside the designated user virtual-address slot and
   enforces user W^X (`WRITE+EXEC` denied); ring3 smoke/native code regions are
-  now marked RX after bootstrap copy.
+  now marked RX after bootstrap copy. Child address spaces now share a reduced
+  higher-half kernel alias window (1 GiB) to tighten default kernel mapping
+  exposure under user CR3 roots.
 - A baseline user-pointer copy layer now exists in kernel memory management
   (`mm_copy_from_user` / `mm_copy_to_user`) with user-range permission checks,
   pre-mapping of touched pages, and temporary CR3 switch/restore around the

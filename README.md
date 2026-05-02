@@ -235,7 +235,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - process-owned user regions now carry an explicit user mapping flag from
   memory policy into paging (including intermediate table propagation) so
   ring3-accessible mappings are representable; paging now rejects user mappings
-  outside the dedicated user slot and enforces user W^X (`WRITE+EXEC` denied)
+  outside the dedicated user slot and enforces user W^X (`WRITE+EXEC` denied).
+  Child address spaces now share a reduced higher-half kernel window (1 GiB)
+  instead of the previous broader alias span.
 - kernel memory now provides `mm_copy_from_user` / `mm_copy_to_user` helpers
   with user-range validation, on-demand page mapping, and temporary context
   switch/restore for safer user-pointer access patterns; migration is underway

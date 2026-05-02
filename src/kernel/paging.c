@@ -14,7 +14,10 @@
 #define PT_FLAG_LARGE_PAGE (1ULL << 7)
 
 #define IDENTITY_PD_COUNT 4
-#define HIGHER_HALF_PD_COUNT 2
+/* Keep only the minimum higher-half span shared into child CR3 roots. */
+#define HIGHER_HALF_PD_COUNT 1
+/* TODO: If higher-half kernel allocations grow beyond the first 1 GiB window,
+ * teach child roots to map only the specific additional windows they need. */
 #define HIGHER_HALF_PDPT_INDEX 510
 #define USER_PML4_INDEX 1
 

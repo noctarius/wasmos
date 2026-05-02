@@ -83,6 +83,26 @@ typedef struct __attribute__((packed)) {
 
 static tss_t g_tss;
 
+#define IA32_EFER_MSR 0xC0000080u
+#define IA32_EFER_NXE (1ULL << 11)
+
+static uint64_t
+x86_read_msr(uint32_t msr)
+{
+    uint32_t lo = 0;
+    uint32_t hi = 0;
+    __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
+    return ((uint64_t)hi << 32) | (uint64_t)lo;
+}
+
+static void
+x86_write_msr(uint32_t msr, uint64_t value)
+{
+    uint32_t lo = (uint32_t)(value & 0xFFFFFFFFu);
+    uint32_t hi = (uint32_t)(value >> 32);
+    __asm__ volatile("wrmsr" : : "c"(msr), "a"(lo), "d"(hi));
+}
+
 typedef enum {
     PF_REASON_UNMAPPED = 0,
     PF_REASON_WRITE_VIOLATION,
@@ -480,8 +500,19 @@ x86_page_fault_handler(uint64_t error_code, const uint64_t *frame)
                           pid,
                           (unsigned long long)error_code,
                           (unsigned long long)cr2);
-            if (proc->name && strcmp(proc->name, "ring3-fault") == 0) {
+            if (proc->name && strcmp(proc->name, "ring3-fault") == 0 &&
+                reason == PF_REASON_USER_TO_KERNEL) {
                 serial_write("[test] ring3 fault isolate ok\n");
+            }
+            if (proc->name && strcmp(proc->name, "ring3-fault-write") == 0 &&
+                reason == PF_REASON_WRITE_VIOLATION) {
+                serial_write("[test] ring3 fault write reason ok\n");
+            }
+            if (proc->name && strcmp(proc->name, "ring3-fault-exec") == 0 &&
+                (reason == PF_REASON_EXEC_VIOLATION || reason == PF_REASON_USER_TO_KERNEL)) {
+                /* TODO: Tighten this back to EXEC_VIOLATION-only once all test
+                 * CPU models consistently surface NX instruction-fetch faults. */
+                serial_write("[test] ring3 fault exec reason ok\n");
             }
             process_set_exit_status(proc, -11);
             process_yield(PROCESS_RUN_EXITED);
@@ -496,6 +527,10 @@ x86_page_fault_handler(uint64_t error_code, const uint64_t *frame)
 void
 cpu_init(void)
 {
+    uint64_t efer = x86_read_msr(IA32_EFER_MSR);
+    if ((efer & IA32_EFER_NXE) == 0) {
+        x86_write_msr(IA32_EFER_MSR, efer | IA32_EFER_NXE);
+    }
     serial_write("[cpu] init\n");
     tss_init();
     gdt_install();

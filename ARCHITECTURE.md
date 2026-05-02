@@ -257,7 +257,10 @@ The current tree already boots into a usable user-space stack:
   the kernel marks only the faulting process exited (`-11`) and continues
   scheduling remaining work; unhandled kernel-mode faults remain fatal.
   Ring3 smoke now includes a dedicated `ring3-fault` injector process and
-  asserts `[test] ring3 fault isolate ok` when the fault is contained.
+  asserts `[test] ring3 fault isolate ok` when the fault is contained; it now
+  also includes explicit write/exec fault injectors and assertions
+  (`[test] ring3 fault write reason ok`,
+  `[test] ring3 fault exec reason ok`).
   User-mode fault logs now include structured reason classification
   (`unmapped`, `write_violation`, `exec_violation`, `user_to_kernel`,
   `protection`) together with pid/error/address/rip for deterministic triage.

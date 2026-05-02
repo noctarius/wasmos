@@ -134,6 +134,9 @@ module_index_by_name(const char *name)
         if (wasmos_boot_module_name(i, (int32_t)(uintptr_t)buf, (int32_t)sizeof(buf)) < 0) {
             continue;
         }
+        if (wasmos_sync_user_read((int32_t)(uintptr_t)buf, (int32_t)sizeof(buf)) != 0) {
+            continue;
+        }
         if (str_eq(buf, name)) {
             return i;
         }
@@ -153,6 +156,11 @@ hw_scan_acpi(void)
                                        (int32_t)sizeof(rsdp));
     if (rc != 0) {
         console_write("[hw-discovery] ACPI RSDP not found\n");
+        return;
+    }
+    if (wasmos_sync_user_read((int32_t)(uintptr_t)&length, (int32_t)sizeof(length)) != 0 ||
+        wasmos_sync_user_read((int32_t)(uintptr_t)&rsdp, (int32_t)sizeof(rsdp)) != 0) {
+        console_write("[hw-discovery] ACPI sync failed\n");
         return;
     }
     if (length < 20) {

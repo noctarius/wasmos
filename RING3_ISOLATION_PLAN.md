@@ -112,15 +112,12 @@ Phase 1 inventory tracker (initial pass):
   - Migration item completed: `wasmos_framebuffer_info` now performs
     `mm_copy_to_user` using the validated user VA (`out_user`) rather than a
     raw host pointer reinterpretation.
-  - Migration item advanced: `wasmos_boot_config_copy` now uses the shared
-    output-side coherence bridge (`mm_copy_to_user` using validated user VA
-    + host-view synchronization) for current split-view compatibility.
+  - Migration item completed: `wasmos_boot_config_copy` now uses pure
+    validated user-VA copy semantics (`mm_copy_to_user` path) without
+    host-view mirroring.
   - Remaining direct user-pointer dereference inventory (next migration batch
     candidates):
-    - Output writers: none in current inventory; remaining risk centers on
-      dual-write compatibility paths that still mirror into wasm host pointers
-      for non-strict stability (`wasmos_boot_config_copy`,
-      `wasmos_acpi_rsdp_info`, `wasmos_boot_module_name`).
+    - Output writers: none in current inventory.
     - Input readers still carrying split-view compatibility handling:
       `wasmos_console_write`, `wasmos_strlen`,
       `wasmos_block_buffer_write`, `wasmos_fs_buffer_write`
@@ -131,9 +128,9 @@ Phase 1 inventory tracker (initial pass):
     bounce-buffer copies across CR3 switches; continue validating size/range
     arithmetic and explicit permission preflight per call site during
     conversion.
-  - Additional caution: a direct `wasmos_acpi_rsdp_info` -> `mm_copy_to_user`
-    swap regressed hw-discovery in non-strict mode (`ACPI RSDP too small`);
-    keep this callsite deferred until ACPI consumer assumptions are aligned.
+  - Consumer-boundary hardening: added `wasmos_sync_user_read(ptr,len)` to let
+    WASM services refresh host-view bytes from validated user memory after
+    hostcalls that return data via output buffers.
   - Remaining migration objective: continue replacing direct pointer writes/
     reads in pointer-bearing hostcalls with `mm_copy_to_user` /
     `mm_copy_from_user` where practical, while keeping split-view bridge usage
@@ -177,6 +174,15 @@ Phase 1 inventory tracker (initial pass):
     `ACPI RSDP too small` followed by `#GP` in `init`. Compatibility mirror is
     therefore still required until ACPI/module-name/boot-config consumers are
     fully decoupled from immediate host-pointer visibility.
+  - Strict-mode revalidation (2026-05-02): after wiring `hw-discovery` to call
+    `wasmos_sync_user_read` for ACPI/module-name output buffers, switching
+    `wasmos_acpi_rsdp_info` and `wasmos_boot_module_name` to pure
+    `wasm_copy_to_user` semantics passed `run-qemu-ring3-test`,
+    `run-qemu-cli-test`, and `run-qemu-test`.
+  - Consumer revalidation (2026-05-02): after wiring `sysinit` to call
+    `wasmos_sync_user_read` for boot-config output buffers, switching
+    `wasmos_boot_config_copy` to pure `wasm_copy_to_user` semantics passed
+    `run-qemu-ring3-test`, `run-qemu-cli-test`, and `run-qemu-test`.
 - IPC marshal/unmarshal (`src/kernel/ipc.c`, call sites in `syscall.c` and
   `wasm3_link.c`):
   - Endpoint/context ownership checks are in place; Phase 4 will complete
@@ -205,6 +211,8 @@ Exit criteria:
 Legacy-path impact:
 - Remove any “best effort” bypasses that touch user memory without validation.
 - Keep temporary compatibility only behind explicit flag if absolutely needed.
+
+Phase 1 status (2026-05-02): complete.
 
 ### Phase 2: Kernel Mapping Minimization in User CR3
 

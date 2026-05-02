@@ -254,10 +254,8 @@ The current tree already boots into a usable user-space stack:
   actual copy. Copy helpers now use a fixed bounce buffer per chunk so
   kernel-side source/destination accesses happen under kernel CR3 while
   user-side memory dereferences happen only under target user CR3. Hostcall
-  migration has started with `wasmos_framebuffer_info` using
-  `mm_copy_to_user`; `wasmos_boot_config_copy` is now on a staged
-  `mm_copy_to_user`-first path with a temporary
-  host-pointer fallback during non-strict compatibility soak.
+  migration is broadly in place with `wasmos_framebuffer_info` and
+  `wasmos_boot_config_copy` on pure validated `mm_copy_to_user` semantics.
   Copy helpers now also emit trace-gated (`WASMOS_TRACE`) failure-stage
   diagnostics with op/stage/context/user range/expected-vs-current-root/chunk
   metadata for focused ring3 copy-path regression triage.
@@ -273,11 +271,10 @@ The current tree already boots into a usable user-space stack:
   data through `mm_copy_to_user` in bounded chunks instead of direct writes
   through wasm host pointers. Block-buffer copy/write hostcalls now
   also enforce non-overflowing in-range `phys+offset+len` arithmetic.
-  A small set of early-boot output paths now use a compatibility dual-write
-  helper (`mm_copy_to_user` plus host-pointer mirror) to preserve current
-  non-strict behavior while keeping validated user-VA writes active during
-  staged ring3 boundary hardening (`boot_config_copy`, `acpi_rsdp_info`,
-  `boot_module_name`).
+  Consumer-side boundary sync now uses `wasmos_sync_user_read` for returned
+  output buffers (`acpi_rsdp_info`, `boot_module_name`, `boot_config_copy`),
+  allowing those hostcalls to remain on pure validated user-copy semantics
+  without per-hostcall host-pointer mirror writes.
 - Unrecoverable user-mode page faults now use process-local failure semantics:
   the kernel marks only the faulting process exited (`-11`) and continues
   scheduling remaining work; unhandled kernel-mode faults remain fatal.

@@ -24,10 +24,63 @@
 static uint64_t g_pml4_phys;
 static uint64_t g_current_pml4_phys;
 
+static uint64_t entry_phys(uint64_t entry);
+
 static uint8_t
 is_user_slot_virt(uint64_t virt)
 {
     return (uint8_t)(((virt >> 39) & 0x1FFULL) == USER_PML4_INDEX);
+}
+
+static int
+paging_verify_user_root_impl(uint64_t root_table, int log_failures)
+{
+    if (!root_table || !g_pml4_phys) {
+        return -1;
+    }
+
+    volatile uint64_t *root = (volatile uint64_t *)(uintptr_t)root_table;
+    volatile uint64_t *kernel = (volatile uint64_t *)(uintptr_t)g_pml4_phys;
+
+    if (root[0] != kernel[0] || root[511] != kernel[511]) {
+        if (log_failures) {
+            serial_write("[paging] verify fail: kernel slot mismatch\n");
+        }
+        return -1;
+    }
+
+    for (uint32_t i = 0; i < ENTRIES_PER_TABLE; ++i) {
+        if (i == 0 || i == 511 || i == USER_PML4_INDEX) {
+            continue;
+        }
+        if (root[i] & PT_FLAG_PRESENT) {
+            if (log_failures) {
+                serial_printf("[paging] verify fail: unexpected pml4[%u]=%016llx\n",
+                              (unsigned int)i,
+                              (unsigned long long)root[i]);
+            }
+            return -1;
+        }
+    }
+
+    uint64_t pdpt_high_phys = entry_phys(root[511]);
+    volatile uint64_t *pdpt_high = (volatile uint64_t *)(uintptr_t)pdpt_high_phys;
+    for (uint32_t i = 0; i < ENTRIES_PER_TABLE; ++i) {
+        uint8_t allowed = (i >= HIGHER_HALF_PDPT_INDEX &&
+                           i < (HIGHER_HALF_PDPT_INDEX + HIGHER_HALF_PD_COUNT));
+        uint8_t present = (uint8_t)((pdpt_high[i] & PT_FLAG_PRESENT) != 0);
+        if (present != allowed) {
+            if (log_failures) {
+                serial_printf("[paging] verify fail: pdpt_high[%u]=%016llx allowed=%u\n",
+                              (unsigned int)i,
+                              (unsigned long long)pdpt_high[i],
+                              (unsigned int)allowed);
+            }
+            return -1;
+        }
+    }
+
+    return 0;
 }
 
 
@@ -233,6 +286,10 @@ paging_create_address_space(uint64_t *out_root_table)
      * in slot 511. Slot 1 stays private for process-owned mappings. */
     dst[0] = src[0];
     dst[511] = src[511];
+    if (paging_verify_user_root_impl(root, 1) != 0) {
+        pfa_free_pages(root, 1);
+        return -1;
+    }
     *out_root_table = root;
     return 0;
 }
@@ -386,4 +443,37 @@ int
 paging_unmap_4k(uint64_t virt)
 {
     return paging_unmap_4k_in_root(g_current_pml4_phys, virt);
+}
+
+int
+paging_verify_user_root(uint64_t root_table, int log_failures)
+{
+    return paging_verify_user_root_impl(root_table, log_failures ? 1 : 0);
+}
+
+void
+paging_dump_user_root_kernel_mappings(uint64_t root_table)
+{
+    if (!root_table) {
+        return;
+    }
+    volatile uint64_t *root = (volatile uint64_t *)(uintptr_t)root_table;
+    serial_printf("[paging] dump root=%016llx pml4[0]=%016llx pml4[1]=%016llx pml4[511]=%016llx\n",
+                  (unsigned long long)root_table,
+                  (unsigned long long)root[0],
+                  (unsigned long long)root[1],
+                  (unsigned long long)root[511]);
+    if (!(root[511] & PT_FLAG_PRESENT)) {
+        serial_write("[paging] dump: pml4[511] not present\n");
+        return;
+    }
+    volatile uint64_t *pdpt_high = (volatile uint64_t *)(uintptr_t)entry_phys(root[511]);
+    for (uint32_t i = 0; i < ENTRIES_PER_TABLE; ++i) {
+        if (!(pdpt_high[i] & PT_FLAG_PRESENT)) {
+            continue;
+        }
+        serial_printf("[paging] dump: pdpt_high[%u]=%016llx\n",
+                      (unsigned int)i,
+                      (unsigned long long)pdpt_high[i]);
+    }
 }

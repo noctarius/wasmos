@@ -240,7 +240,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   ring3-accessible mappings are representable; paging now rejects user mappings
   outside the dedicated user slot and enforces user W^X (`WRITE+EXEC` denied).
   Child address spaces now share a reduced higher-half kernel window (1 GiB)
-  instead of the previous broader alias span.
+  instead of the previous broader alias span. User-root setup now verifies
+  kernel mapping footprint (allowed PML4 slots/windows only) and emits a
+  mapping dump on verification failures for Phase 2 isolation triage.
 - kernel memory now provides `mm_copy_from_user` / `mm_copy_to_user` helpers
   with user-range validation, on-demand page mapping, and temporary context
   switch/restore for safer user-pointer access patterns. Copy paths now use a

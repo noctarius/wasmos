@@ -69,6 +69,15 @@ Exit criteria:
 - CI can run strict-ring3 profile deterministically.
 - Mode marker is visible and asserted in relevant tests.
 
+Known baseline test debt to track during later phases:
+- `run-qemu-cli-test` currently has unrelated language-example regressions
+  (`test_hello_go`, `test_hello_rust`, `test_hello_zig` missing expected hello
+  output, with follow-on `BrokenPipeError` in `tearDownClass` after failed
+  expectations). Treat these as pre-existing non-phase-0 blockers; keep them
+  visible while progressing strict-ring3 isolation work.
+  TODO: Re-baseline or fix language example output expectations so full CLI test
+  suite can be restored to green alongside strict-ring3 gating.
+
 Legacy-path impact:
 - None removed yet; this phase only creates safety rails.
 

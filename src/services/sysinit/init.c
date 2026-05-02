@@ -85,6 +85,9 @@ load_boot_targets(void)
     if (wasmos_boot_config_copy((int32_t)(uintptr_t)g_boot_config, size, 0) != 0) {
         return -1;
     }
+    if (wasmos_sync_user_read((int32_t)(uintptr_t)g_boot_config, size) != 0) {
+        return -1;
+    }
     if (memcmp(g_boot_config, BOOT_CONFIG_MAGIC, 8) != 0) {
         return -1;
     }

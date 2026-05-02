@@ -5,6 +5,8 @@
 
 extern int32_t wasmos_console_read(int32_t ptr, int32_t len)
     WASMOS_WASM_IMPORT("wasmos", "console_read");
+extern int32_t wasmos_sync_user_read(int32_t ptr, int32_t len)
+    WASMOS_WASM_IMPORT("wasmos", "sync_user_read");
 extern int32_t wasmos_debug_mark(int32_t tag)
     WASMOS_WASM_IMPORT("wasmos", "debug_mark");
 extern int32_t wasmos_ipc_create_endpoint(void)

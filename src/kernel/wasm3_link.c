@@ -1040,11 +1040,10 @@ m3ApiRawFunction(wasmos_boot_config_copy)
         m3ApiReturn(-1);
     }
     const uint8_t *src = (const uint8_t *)(uintptr_t)g_wasm_boot_info->boot_config;
-    if (wasm_copy_to_user_sync_views(proc->context_id,
-                                     ptr_user,
-                                     ptr,
-                                     src + start,
-                                     count) != 0) {
+    if (wasm_copy_to_user_bytes(proc->context_id,
+                                ptr_user,
+                                src + start,
+                                count) != 0) {
         m3ApiReturn(-1);
     }
     m3ApiReturn(0);
@@ -1415,18 +1414,16 @@ m3ApiRawFunction(wasmos_acpi_rsdp_info)
     }
 
     const uint8_t *src = (const uint8_t *)(uintptr_t)g_wasm_boot_info->rsdp;
-    if (wasm_copy_to_user_sync_views(proc->context_id,
-                                     out_user,
-                                     out_ptr,
-                                     src,
-                                     len) != 0) {
+    if (wasm_copy_to_user_bytes(proc->context_id,
+                                out_user,
+                                src,
+                                len) != 0) {
         m3ApiReturn(-1);
     }
-    if (wasm_copy_to_user_sync_views(proc->context_id,
-                                     out_len_user,
-                                     out_len_ptr,
-                                     &len,
-                                     sizeof(len)) != 0) {
+    if (wasm_copy_to_user_bytes(proc->context_id,
+                                out_len_user,
+                                &len,
+                                sizeof(len)) != 0) {
         m3ApiReturn(-1);
     }
     m3ApiReturn(0);
@@ -1470,19 +1467,17 @@ m3ApiRawFunction(wasmos_boot_module_name)
     if (copy_len >= (uint32_t)out_len) {
         copy_len = (uint32_t)out_len - 1U;
     }
-    if (wasm_copy_to_user_sync_views(proc->context_id,
-                                     out_user,
-                                     out_ptr,
-                                     local_name,
-                                     copy_len) != 0) {
+    if (wasm_copy_to_user_bytes(proc->context_id,
+                                out_user,
+                                local_name,
+                                copy_len) != 0) {
         m3ApiReturn(-1);
     }
     char nul = '\0';
-    if (wasm_copy_to_user_sync_views(proc->context_id,
-                                     out_user + (uint64_t)copy_len,
-                                     out_ptr + copy_len,
-                                     &nul,
-                                     1) != 0) {
+    if (wasm_copy_to_user_bytes(proc->context_id,
+                                out_user + (uint64_t)copy_len,
+                                &nul,
+                                1) != 0) {
         m3ApiReturn(-1);
     }
     m3ApiReturn((int32_t)name_len);
@@ -1593,6 +1588,45 @@ m3ApiRawFunction(wasmos_console_read)
         m3ApiReturn(-1);
     }
     m3ApiReturn(1);
+}
+
+m3ApiRawFunction(wasmos_sync_user_read)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArgMem(uint8_t *, ptr)
+    m3ApiGetArg(int32_t, len)
+
+    if (len < 0) {
+        m3ApiReturn(-1);
+    }
+    if (len == 0) {
+        m3ApiReturn(0);
+    }
+    m3ApiCheckMem(ptr, (uint32_t)len);
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t ptr_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   (uint32_t)len,
+                                   &ptr_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                ptr_user,
+                                (uint64_t)(uint32_t)len,
+                                MEM_REGION_FLAG_READ) != 0) {
+        m3ApiReturn(-1);
+    }
+    if (mm_copy_from_user(proc->context_id,
+                          ptr,
+                          ptr_user,
+                          (uint64_t)(uint32_t)len) != 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn(0);
 }
 
 m3ApiRawFunction(wasmos_input_push)
@@ -1947,6 +1981,7 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "console_write", "i(*i)", wasmos_console_write);
     rc |= wasm3_link_raw(module, "wasmos", "debug_mark", "i(i)", wasmos_debug_mark);
     rc |= wasm3_link_raw(module, "wasmos", "console_read", "i(*i)", wasmos_console_read);
+    rc |= wasm3_link_raw(module, "wasmos", "sync_user_read", "i(*i)", wasmos_sync_user_read);
     rc |= wasm3_link_raw(module, "wasmos", "proc_count", "i()", wasmos_proc_count);
     rc |= wasm3_link_raw(module, "wasmos", "proc_exit", "i(i)", wasmos_proc_exit);
     rc |= wasm3_link_raw(module, "wasmos", "sched_ticks", "i()", wasmos_sched_ticks);

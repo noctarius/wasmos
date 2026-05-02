@@ -246,9 +246,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   switch/restore for safer user-pointer access patterns. Copy paths now use a
   fixed bounce buffer per chunk so kernel-side buffers are read/written only
   under kernel CR3 and user-side memory is dereferenced only under target user
-  CR3; migration is underway and `wasmos_framebuffer_info` now routes writes
-  through `mm_copy_to_user`; `wasmos_boot_config_copy` remains on a staged
-  `mm_copy_to_user`-first path with a temporary compatibility fallback.
+  CR3; pointer-bearing migration is broadly in place and includes
+  `wasmos_framebuffer_info` plus `wasmos_boot_config_copy` on pure validated
+  `mm_copy_to_user` semantics.
   Copy helpers now include trace-gated (`WASMOS_TRACE`) failure-stage
   diagnostics (op/stage/context/user range/expected vs current root/chunk
   metadata) for ring3 copy-path triage without changing non-trace behavior.
@@ -264,10 +264,10 @@ IMPORTANT: Create a git commit after each prompt iteration.
   `console_read`, `acpi_rsdp_info`, `strlen`, block/fs buffer copy+write, and
   early-log/boot-config copy paths; `wasmos_early_log_copy` now moves bytes
   through `mm_copy_to_user` in bounded chunks instead of direct user writes.
-  For a small set of regression-sensitive early-boot outputs
-  (`boot_config_copy`, `acpi_rsdp_info`, `boot_module_name`), writes now use a
-  compatibility dual-write helper (`mm_copy_to_user` + host-pointer mirror)
-  until strict ring3 mode can drop host-pointer mirroring safely.
+  `wasmos_sync_user_read` now lets consumers refresh output buffers from
+  validated user memory after hostcalls (`acpi_rsdp_info`,
+  `boot_module_name`, `boot_config_copy`), removing host-pointer mirror
+  dependency from those paths.
   `wasmos_block_buffer_copy` /
   `wasmos_block_buffer_write` now also reject overflowed/out-of-range
   `phys+offset+len` arithmetic before touching memory.

@@ -857,7 +857,22 @@ m3ApiRawFunction(wasmos_early_log_copy)
                                 MEM_REGION_FLAG_WRITE) != 0) {
         m3ApiReturn(-1);
     }
-    serial_early_log_copy(ptr, start, count);
+    uint32_t copied = 0;
+    uint8_t bounce[256];
+    while (copied < count) {
+        uint32_t chunk = count - copied;
+        if (chunk > (uint32_t)sizeof(bounce)) {
+            chunk = (uint32_t)sizeof(bounce);
+        }
+        serial_early_log_copy(bounce, start + copied, chunk);
+        if (mm_copy_to_user(proc->context_id,
+                            ptr_user + (uint64_t)copied,
+                            bounce,
+                            (uint64_t)chunk) != 0) {
+            m3ApiReturn(-1);
+        }
+        copied += chunk;
+    }
     m3ApiReturn(0);
 }
 

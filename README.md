@@ -259,7 +259,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   range-permission preflight (READ or WRITE as appropriate), including
   `boot_module_name`, `proc_info`, `proc_info_ex`, `console_write`,
   `console_read`, `acpi_rsdp_info`, `strlen`, block/fs buffer copy+write, and
-  early-log/boot-config copy paths. `wasmos_block_buffer_copy` /
+  early-log/boot-config copy paths; `wasmos_early_log_copy` now moves bytes
+  through `mm_copy_to_user` in bounded chunks instead of direct user writes.
+  `wasmos_block_buffer_copy` /
   `wasmos_block_buffer_write` now also reject overflowed/out-of-range
   `phys+offset+len` arithmetic before touching memory.
 - unrecoverable CPL3 page faults now terminate only the faulting process

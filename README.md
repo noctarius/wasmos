@@ -243,8 +243,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   switch/restore for safer user-pointer access patterns. Copy paths now use a
   fixed bounce buffer per chunk so kernel-side buffers are read/written only
   under kernel CR3 and user-side memory is dereferenced only under target user
-  CR3; migration is underway
-  and `wasmos_framebuffer_info` now routes writes through `mm_copy_to_user`.
+  CR3; migration is underway and `wasmos_framebuffer_info` now routes writes
+  through `mm_copy_to_user` while `wasmos_boot_config_copy` is on a staged
+  `mm_copy_to_user`-first path with a temporary compatibility fallback.
   That hostcall now also writes via the explicitly validated user VA produced
   by the host-pointer bridge (instead of a raw host pointer reinterpretation).
   The memory layer now also exposes a non-copy validator

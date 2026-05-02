@@ -110,18 +110,23 @@ Phase 1 inventory tracker (initial pass):
   - Migration item completed: `wasmos_framebuffer_info` now performs
     `mm_copy_to_user` using the validated user VA (`out_user`) rather than a
     raw host pointer reinterpretation.
+  - Migration item in progress: `wasmos_boot_config_copy` now attempts
+    `mm_copy_to_user` using validated user VA (`ptr_user`) first, with a
+    temporary compatibility fallback to host-pointer copy pending cleanup.
   - Remaining direct user-pointer dereference inventory (next migration batch
     candidates):
-    - Output writers: `wasmos_boot_config_copy`, `wasmos_acpi_rsdp_info`,
-      `wasmos_boot_module_name`, `wasmos_early_log_copy`, `wasmos_proc_info`,
-      `wasmos_proc_info_ex`, `wasmos_console_read`
+    - Output writers: `wasmos_boot_config_copy` (fallback path only),
+      `wasmos_acpi_rsdp_info`, `wasmos_boot_module_name`,
+      `wasmos_early_log_copy`, `wasmos_proc_info`, `wasmos_proc_info_ex`,
+      `wasmos_console_read`
     - Input readers: `wasmos_console_write`, `wasmos_strlen`,
       `wasmos_block_buffer_write`, `wasmos_fs_buffer_write`
     - Bidirectional buffer paths: `wasmos_block_buffer_copy`,
       `wasmos_fs_buffer_copy`
-  - Migration caution: current `mm_copy_to_user`/`mm_copy_from_user` switch CR3
-    and use `memcpy`, so source/destination accessibility under the target root
-    must be validated per call site during conversion.
+  - Migration caution: `mm_copy_to_user`/`mm_copy_from_user` now use chunked
+    bounce-buffer copies across CR3 switches; continue validating size/range
+    arithmetic and explicit permission preflight per call site during
+    conversion.
   - Remaining migration objective: continue replacing direct pointer writes/
     reads in pointer-bearing hostcalls with `mm_copy_to_user` /
     `mm_copy_from_user` where practical.

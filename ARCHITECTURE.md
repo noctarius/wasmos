@@ -251,9 +251,10 @@ The current tree already boots into a usable user-space stack:
   actual copy. Copy helpers now use a fixed bounce buffer per chunk so
   kernel-side source/destination accesses happen under kernel CR3 while
   user-side memory dereferences happen only under target user CR3. Hostcall
-  migration has started with `wasmos_framebuffer_info`
-  using `mm_copy_to_user`; it now copies via the validated user VA resolved
-  from the wasm host pointer bridge rather than raw host-pointer casting.
+  migration has started with `wasmos_framebuffer_info` using
+  `mm_copy_to_user`; `wasmos_boot_config_copy` is now on a staged
+  `mm_copy_to_user`-first path with a temporary host-pointer fallback during
+  non-strict compatibility soak.
   A non-copy validator API
   (`mm_user_range_permitted`) is now available for phased hostcall guard
   rollouts. The framebuffer and shared-memory map hostcalls now use an

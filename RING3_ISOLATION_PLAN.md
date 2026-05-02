@@ -117,7 +117,7 @@ Phase 1 inventory tracker (initial pass):
     candidates):
     - Output writers: `wasmos_boot_config_copy` (fallback path only),
       `wasmos_acpi_rsdp_info`, `wasmos_boot_module_name`,
-      `wasmos_early_log_copy`, `wasmos_proc_info`, `wasmos_proc_info_ex`,
+      `wasmos_proc_info`, `wasmos_proc_info_ex`,
       `wasmos_console_read`
     - Input readers: `wasmos_console_write`, `wasmos_strlen`,
       `wasmos_block_buffer_write`, `wasmos_fs_buffer_write`
@@ -133,6 +133,9 @@ Phase 1 inventory tracker (initial pass):
   - Remaining migration objective: continue replacing direct pointer writes/
     reads in pointer-bearing hostcalls with `mm_copy_to_user` /
     `mm_copy_from_user` where practical.
+  - Migration item completed: `wasmos_early_log_copy` now copies into a local
+    bounce buffer and writes to user memory via `mm_copy_to_user` in bounded
+    chunks, removing direct host-pointer output writes from this path.
 - IPC marshal/unmarshal (`src/kernel/ipc.c`, call sites in `syscall.c` and
   `wasm3_link.c`):
   - Endpoint/context ownership checks are in place; Phase 4 will complete

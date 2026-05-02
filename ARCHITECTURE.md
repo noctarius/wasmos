@@ -266,7 +266,9 @@ The current tree already boots into a usable user-space stack:
   wasm3 host pointers back into user VA for explicit `mm_user_range_permitted`
   preflight (READ/WRITE by direction), including boot/module/process metadata,
   console I/O, ACPI info output, strlen input, block/fs buffer transfer paths,
-  and early-log/boot-config copy paths. Block-buffer copy/write hostcalls now
+  and early-log/boot-config copy paths; `wasmos_early_log_copy` now transfers
+  data through `mm_copy_to_user` in bounded chunks instead of direct writes
+  through wasm host pointers. Block-buffer copy/write hostcalls now
   also enforce non-overflowing in-range `phys+offset+len` arithmetic.
 - Unrecoverable user-mode page faults now use process-local failure semantics:
   the kernel marks only the faulting process exited (`-11`) and continues

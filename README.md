@@ -246,6 +246,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   CR3; migration is underway and `wasmos_framebuffer_info` now routes writes
   through `mm_copy_to_user`; `wasmos_boot_config_copy` remains on a staged
   `mm_copy_to_user`-first path with a temporary compatibility fallback.
+  Copy helpers now include trace-gated (`WASMOS_TRACE`) failure-stage
+  diagnostics (op/stage/context/user range/expected vs current root/chunk
+  metadata) for ring3 copy-path triage without changing non-trace behavior.
   That hostcall now also writes via the explicitly validated user VA produced
   by the host-pointer bridge (instead of a raw host pointer reinterpretation).
   The memory layer now also exposes a non-copy validator

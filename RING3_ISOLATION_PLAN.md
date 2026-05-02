@@ -112,9 +112,9 @@ Phase 1 inventory tracker (initial pass):
   - Migration item completed: `wasmos_framebuffer_info` now performs
     `mm_copy_to_user` using the validated user VA (`out_user`) rather than a
     raw host pointer reinterpretation.
-  - Migration item advanced: `wasmos_boot_config_copy` now performs explicit
-    `mm_copy_to_user` using validated user VA (`ptr_user`) and then synchronizes
-    the immediate host-pointer view for current split-view compatibility.
+  - Migration item advanced: `wasmos_boot_config_copy` now uses the shared
+    output-side coherence bridge (`mm_copy_to_user` using validated user VA
+    + host-view synchronization) for current split-view compatibility.
   - Remaining direct user-pointer dereference inventory (next migration batch
     candidates):
     - Output writers: none in current inventory; remaining risk centers on

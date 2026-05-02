@@ -538,6 +538,11 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
         0xBF, 0xFF, 0xFF, 0xFF, 0xFF, /* mov edi, 0xFFFFFFFF (invalid ep) */
         0xB8, 0x05, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_IPC_NOTIFY */
         0xCD, 0x80,                   /* int 0x80 */
+        0x48, 0xBF,                   /* mov rdi, 0x0000000100000000 (arg width invalid) */
+        0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00,
+        0xB8, 0x05, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_IPC_NOTIFY */
+        0xCD, 0x80,                   /* int 0x80 */
         0xBF, 0x00, 0x00, 0x00, 0x00, /* mov edi, <ring3 notify ep> (patched) */
         0xB8, 0x05, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_IPC_NOTIFY */
         0xCD, 0x80,                   /* int 0x80 */
@@ -627,21 +632,21 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
     /* Patch mov edi immediate for the valid ring3-owned notification endpoint.
      * Layout offset: first mov(5) + mov eax(5) + int80(2) + mov edi opcode(1). */
     {
-        const uint32_t ep_imm_off = 13u;
+        const uint32_t ep_imm_off = 30u;
         ring3_code_patched[ep_imm_off + 0] = (uint8_t)(ring3_notify_ep & 0xFFu);
         ring3_code_patched[ep_imm_off + 1] = (uint8_t)((ring3_notify_ep >> 8) & 0xFFu);
         ring3_code_patched[ep_imm_off + 2] = (uint8_t)((ring3_notify_ep >> 16) & 0xFFu);
         ring3_code_patched[ep_imm_off + 3] = (uint8_t)((ring3_notify_ep >> 24) & 0xFFu);
     }
     {
-        const uint32_t ep_imm_off = 47u;
+        const uint32_t ep_imm_off = 64u;
         ring3_code_patched[ep_imm_off + 0] = (uint8_t)(ring3_call_denied_ep & 0xFFu);
         ring3_code_patched[ep_imm_off + 1] = (uint8_t)((ring3_call_denied_ep >> 8) & 0xFFu);
         ring3_code_patched[ep_imm_off + 2] = (uint8_t)((ring3_call_denied_ep >> 16) & 0xFFu);
         ring3_code_patched[ep_imm_off + 3] = (uint8_t)((ring3_call_denied_ep >> 24) & 0xFFu);
     }
     {
-        const uint32_t ep_imm_off = 69u;
+        const uint32_t ep_imm_off = 86u;
         ring3_code_patched[ep_imm_off + 0] = (uint8_t)(ring3_call_echo_ep & 0xFFu);
         ring3_code_patched[ep_imm_off + 1] = (uint8_t)((ring3_call_echo_ep >> 8) & 0xFFu);
         ring3_code_patched[ep_imm_off + 2] = (uint8_t)((ring3_call_echo_ep >> 16) & 0xFFu);

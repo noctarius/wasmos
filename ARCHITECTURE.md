@@ -270,6 +270,11 @@ The current tree already boots into a usable user-space stack:
   data through `mm_copy_to_user` in bounded chunks instead of direct writes
   through wasm host pointers. Block-buffer copy/write hostcalls now
   also enforce non-overflowing in-range `phys+offset+len` arithmetic.
+  A small set of early-boot output paths now use a compatibility dual-write
+  helper (`mm_copy_to_user` plus host-pointer mirror) to preserve current
+  non-strict behavior while keeping validated user-VA writes active during
+  staged ring3 boundary hardening (`boot_config_copy`, `acpi_rsdp_info`,
+  `boot_module_name`).
 - Unrecoverable user-mode page faults now use process-local failure semantics:
   the kernel marks only the faulting process exited (`-11`) and continues
   scheduling remaining work; unhandled kernel-mode faults remain fatal.

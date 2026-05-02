@@ -70,17 +70,15 @@ Exit criteria:
 - Mode marker is visible and asserted in relevant tests.
 
 Known baseline test debt to track during later phases:
-- `run-qemu-cli-test` currently has unrelated language-example regressions
-  (`test_hello_go`, `test_hello_rust`, `test_hello_zig` missing expected hello
-  output, with follow-on `BrokenPipeError` in `tearDownClass` after failed
-  expectations). Treat these as pre-existing non-phase-0 blockers; keep them
-  visible while progressing strict-ring3 isolation work.
-  TODO: Re-baseline or fix language example output expectations so full CLI test
-  suite can be restored to green alongside strict-ring3 gating.
 - Previously observed runtime noise (`[cli] vt writer register failed`,
   `[sysinit] spawn failed`) is now mitigated in current baseline via VT writer
   reassignment + CLI serial fallback + conservative sysinit single-CLI startup.
   `run-qemu-test` and `run-qemu-ring3-test` currently pass with this fallback.
+- Phase-1 strict-mode copy-path debt remains: removing compatibility host-pointer
+  mirror writes for sensitive early output paths still regresses ring3 smoke
+  (`[mode] strict-ring3=1`) at `hw-discovery` (`ACPI RSDP too small`) followed
+  by `#GP` in `init`. Keep dual-write compatibility in place until those
+  consumers are fully decoupled from immediate host-pointer visibility.
 
 Legacy-path impact:
 - None removed yet; this phase only creates safety rails.
@@ -181,10 +179,9 @@ Phase 1 inventory tracker (initial pass):
   - Validation on baseline behavior:
     - `python3 -m unittest tests.test_memory_privilege_foundation_spec`: pass.
     - `cmake --build build --target run-qemu-test`: pass.
-    - `cmake --build build --target run-qemu-cli-test`: same known baseline
-      failures (`test_hello_go`, `test_hello_rust`, `test_hello_zig`) plus
-      follow-on teardown `BrokenPipeError`; no new copy-helper failure markers
-      observed in captured serial output.
+    - `cmake --build build --target run-qemu-cli-test`: pass (`45 tests`, OK)
+      after harness hardening and example-output expectation rebaseline; no new
+      copy-helper failure markers observed in captured serial output.
 
 Exit criteria:
 - Every pointer-bearing kernel entry point is inventory-tracked and migrated.

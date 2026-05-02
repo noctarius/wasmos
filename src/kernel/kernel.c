@@ -64,6 +64,17 @@ static const uint8_t g_skip_wasm_boot = 0;
 static const uint8_t g_ring3_smoke_enabled = WASMOS_RING3_SMOKE_DEFAULT;
 
 typedef struct {
+    uint32_t fault_pid;
+    uint32_t fault_write_pid;
+    uint32_t fault_exec_pid;
+    uint8_t fault_ok;
+    uint8_t fault_write_ok;
+    uint8_t fault_exec_ok;
+    uint8_t done;
+} ring3_fault_policy_state_t;
+static ring3_fault_policy_state_t g_ring3_fault_policy_state;
+
+typedef struct {
     const boot_info_t *boot_info;
     uint8_t started;
     uint8_t phase;
@@ -498,6 +509,68 @@ ring3_smoke_fallback_entry(process_t *process, void *arg)
         process_set_exit_status(process, -1);
     }
     return PROCESS_RUN_EXITED;
+}
+
+static process_run_result_t
+ring3_fault_policy_entry(process_t *process, void *arg)
+{
+    ring3_fault_policy_state_t *state = (ring3_fault_policy_state_t *)arg;
+    int32_t exit_status = 0;
+    int rc = 0;
+
+    if (!process || !state) {
+        return PROCESS_RUN_IDLE;
+    }
+    if (state->done) {
+        return PROCESS_RUN_EXITED;
+    }
+
+    if (!state->fault_ok) {
+        rc = process_get_exit_status(state->fault_pid, &exit_status);
+        if (rc == 0) {
+            if (exit_status == -11) {
+                state->fault_ok = 1;
+                serial_write("[test] ring3 fault exit status ok\n");
+            } else {
+                serial_write("[test] ring3 fault exit status mismatch\n");
+                process_set_exit_status(process, -1);
+                return PROCESS_RUN_EXITED;
+            }
+        }
+    }
+    if (!state->fault_write_ok) {
+        rc = process_get_exit_status(state->fault_write_pid, &exit_status);
+        if (rc == 0) {
+            if (exit_status == -11) {
+                state->fault_write_ok = 1;
+                serial_write("[test] ring3 fault write exit status ok\n");
+            } else {
+                serial_write("[test] ring3 fault write exit status mismatch\n");
+                process_set_exit_status(process, -1);
+                return PROCESS_RUN_EXITED;
+            }
+        }
+    }
+    if (!state->fault_exec_ok) {
+        rc = process_get_exit_status(state->fault_exec_pid, &exit_status);
+        if (rc == 0) {
+            if (exit_status == -11) {
+                state->fault_exec_ok = 1;
+                serial_write("[test] ring3 fault exec exit status ok\n");
+            } else {
+                serial_write("[test] ring3 fault exec exit status mismatch\n");
+                process_set_exit_status(process, -1);
+                return PROCESS_RUN_EXITED;
+            }
+        }
+    }
+
+    if (state->fault_ok && state->fault_write_ok && state->fault_exec_ok) {
+        state->done = 1;
+        process_set_exit_status(process, 0);
+        return PROCESS_RUN_EXITED;
+    }
+    return PROCESS_RUN_YIELDED;
 }
 
 static int
@@ -1161,6 +1234,7 @@ kmain(boot_info_t *boot_info)
     uint32_t ring3_fault_pid = 0;
     uint32_t ring3_fault_write_pid = 0;
     uint32_t ring3_fault_exec_pid = 0;
+    uint32_t ring3_fault_policy_pid = 0;
     uint32_t idle_pid = 0;
     uint32_t init_pid = 0;
     init_state_t init_state;
@@ -1344,6 +1418,20 @@ kmain(boot_info_t *boot_info)
         }
         if (spawn_ring3_fault_exec_probe_process(init_pid, &ring3_fault_exec_pid) != 0) {
             serial_write("[kernel] ring3 fault exec spawn failed\n");
+            for (;;) {
+                __asm__ volatile("hlt");
+            }
+        }
+        g_ring3_fault_policy_state.fault_pid = ring3_fault_pid;
+        g_ring3_fault_policy_state.fault_write_pid = ring3_fault_write_pid;
+        g_ring3_fault_policy_state.fault_exec_pid = ring3_fault_exec_pid;
+        g_ring3_fault_policy_state.fault_ok = 0;
+        g_ring3_fault_policy_state.fault_write_ok = 0;
+        g_ring3_fault_policy_state.fault_exec_ok = 0;
+        g_ring3_fault_policy_state.done = 0;
+        if (process_spawn_as(init_pid, "ring3-fault-policy", ring3_fault_policy_entry,
+                             &g_ring3_fault_policy_state, &ring3_fault_policy_pid) != 0) {
+            serial_write("[kernel] ring3 fault policy spawn failed\n");
             for (;;) {
                 __asm__ volatile("hlt");
             }

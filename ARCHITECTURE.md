@@ -270,6 +270,10 @@ The current tree already boots into a usable user-space stack:
 - Ring3 smoke now additionally verifies syscall ABI width validation for IPC:
   a CPL3 `IPC_NOTIFY` with a >32-bit endpoint is rejected by syscall argument
   parsing and emits `[test] ring3 ipc syscall arg width deny ok`.
+- Ring3 fault policy is now asserted explicitly: a kernel-side watcher process
+  verifies that `ring3-fault`, `ring3-fault-write`, and `ring3-fault-exec`
+  each terminate with exit status `-11`, emitting dedicated
+  `[test] ring3 fault* exit status ok` markers.
 - Capability metadata now feeds a per-context resource-capability registry
   (`io.port`, `irq.route`, `mmio.map`, `dma.buffer`); WASM I/O hostcalls now
   enforce `io.port` when explicit capability policy is configured for the

@@ -40,13 +40,12 @@ static wasm_fs_peer_slot_t g_wasm_fs_peer_slots[PROCESS_MAX_COUNT];
 static const boot_info_t *g_wasm_boot_info;
 
 static int
-wasm_copy_to_user_with_host_mirror(uint32_t context_id,
-                                   uint64_t user_dst,
-                                   void *host_dst,
-                                   const void *src,
-                                   uint32_t len)
+wasm_copy_to_user_bytes(uint32_t context_id,
+                        uint64_t user_dst,
+                        const void *src,
+                        uint32_t len)
 {
-    if (!host_dst || !src) {
+    if (!src) {
         return -1;
     }
     if (len == 0) {
@@ -55,9 +54,6 @@ wasm_copy_to_user_with_host_mirror(uint32_t context_id,
     if (mm_copy_to_user(context_id, user_dst, src, (uint64_t)len) != 0) {
         return -1;
     }
-    /* Compatibility path: mirror into current wasm host-pointer view.
-     * Some early-boot consumers still observe host memory directly. */
-    memcpy(host_dst, src, (size_t)len);
     return 0;
 }
 
@@ -950,13 +946,16 @@ m3ApiRawFunction(wasmos_boot_config_copy)
         m3ApiReturn(-1);
     }
     const uint8_t *src = (const uint8_t *)(uintptr_t)g_wasm_boot_info->boot_config;
-    if (wasm_copy_to_user_with_host_mirror(proc->context_id,
-                                           ptr_user,
-                                           ptr,
-                                           src + start,
-                                           count) != 0) {
+    if (wasm_copy_to_user_bytes(proc->context_id,
+                                ptr_user,
+                                src + start,
+                                count) != 0) {
         m3ApiReturn(-1);
     }
+    /* TODO(ring3): sysinit boot-config consumers still rely on immediate wasm
+     * host-pointer visibility in strict mode. Remove this mirror once boot-
+     * config consumers are fully user-copy decoupled. */
+    memcpy(ptr, src + start, (size_t)count);
     m3ApiReturn(0);
 }
 
@@ -1325,20 +1324,23 @@ m3ApiRawFunction(wasmos_acpi_rsdp_info)
     }
 
     const uint8_t *src = (const uint8_t *)(uintptr_t)g_wasm_boot_info->rsdp;
-    if (wasm_copy_to_user_with_host_mirror(proc->context_id,
-                                           out_user,
-                                           out_ptr,
-                                           src,
-                                           len) != 0) {
+    if (wasm_copy_to_user_bytes(proc->context_id,
+                                out_user,
+                                src,
+                                len) != 0) {
         m3ApiReturn(-1);
     }
-    if (wasm_copy_to_user_with_host_mirror(proc->context_id,
-                                           out_len_user,
-                                           out_len_ptr,
-                                           &len,
-                                           sizeof(len)) != 0) {
+    /* TODO(ring3): ACPI consumers still observe immediate wasm host-pointer
+     * state in this path under strict mode. Keep this temporary host-view
+     * mirror until ACPI-side consumers are fully decoupled. */
+    memcpy(out_ptr, src, (size_t)len);
+    if (wasm_copy_to_user_bytes(proc->context_id,
+                                out_len_user,
+                                &len,
+                                sizeof(len)) != 0) {
         m3ApiReturn(-1);
     }
+    memcpy(out_len_ptr, &len, sizeof(len));
     m3ApiReturn(0);
 }
 
@@ -1380,21 +1382,24 @@ m3ApiRawFunction(wasmos_boot_module_name)
     if (copy_len >= (uint32_t)out_len) {
         copy_len = (uint32_t)out_len - 1U;
     }
-    if (wasm_copy_to_user_with_host_mirror(proc->context_id,
-                                           out_user,
-                                           out_ptr,
-                                           local_name,
-                                           copy_len) != 0) {
+    if (wasm_copy_to_user_bytes(proc->context_id,
+                                out_user,
+                                local_name,
+                                copy_len) != 0) {
         m3ApiReturn(-1);
     }
+    /* TODO(ring3): hw-discovery module-name lookup still depends on immediate
+     * host-pointer visibility in strict mode. Remove this mirror once
+     * boot-module enumeration is fully user-copy decoupled. */
+    memcpy(out_ptr, local_name, (size_t)copy_len);
     char nul = '\0';
-    if (wasm_copy_to_user_with_host_mirror(proc->context_id,
-                                           out_user + (uint64_t)copy_len,
-                                           out_ptr + copy_len,
-                                           &nul,
-                                           1) != 0) {
+    if (wasm_copy_to_user_bytes(proc->context_id,
+                                out_user + (uint64_t)copy_len,
+                                &nul,
+                                1) != 0) {
         m3ApiReturn(-1);
     }
+    out_ptr[copy_len] = '\0';
     m3ApiReturn((int32_t)name_len);
 }
 

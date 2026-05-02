@@ -349,7 +349,9 @@ initialize(int32_t proc_endpoint,
 
         const char *name = g_targets[g_target_index];
         if (str_eq(name, "cli")) {
-            if (proc_running("cli")) {
+            int cli_count = proc_count_named("cli");
+            /* tty0 stays system console; keep one CLI per VT tty1..tty3. */
+            if (cli_count >= 3) {
                 g_target_index++;
                 continue;
             }

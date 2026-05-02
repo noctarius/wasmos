@@ -155,6 +155,12 @@ Phase 1 inventory tracker (initial pass):
     host-pointer view remained empty at that moment. This indicates view
     divergence for some early-boot consumers and explains the observed
     regression sensitivity when host-mirror writes are removed.
+  - Strict-mode experiment result (2026-05-02): disabling host-pointer mirror
+    for the sensitive dual-write paths in `run-qemu-ring3-test`
+    (`[mode] strict-ring3=1`) regressed at `hw-discovery` with
+    `ACPI RSDP too small` followed by `#GP` in `init`. Compatibility mirror is
+    therefore still required until ACPI/module-name/boot-config consumers are
+    fully decoupled from immediate host-pointer visibility.
 - IPC marshal/unmarshal (`src/kernel/ipc.c`, call sites in `syscall.c` and
   `wasm3_link.c`):
   - Endpoint/context ownership checks are in place; Phase 4 will complete

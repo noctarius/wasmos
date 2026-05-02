@@ -124,8 +124,9 @@ Phase 1 inventory tracker (initial pass):
     - Input readers still carrying split-view compatibility handling:
       `wasmos_console_write`, `wasmos_strlen`,
       `wasmos_block_buffer_write`, `wasmos_fs_buffer_write`
-    - Bidirectional buffer paths: `wasmos_block_buffer_copy`,
-      `wasmos_fs_buffer_copy`
+    - Bidirectional buffer paths: migrated to output-side coherence bridge
+      (`wasm_copy_to_user_sync_views`) for
+      `wasmos_block_buffer_copy` and `wasmos_fs_buffer_copy`.
   - Migration caution: `mm_copy_to_user`/`mm_copy_from_user` now use chunked
     bounce-buffer copies across CR3 switches; continue validating size/range
     arithmetic and explicit permission preflight per call site during
@@ -157,6 +158,10 @@ Phase 1 inventory tracker (initial pass):
     `wasmos_fs_buffer_write` now use the same input-side coherence bridge for
     chunked user-buffer ingestion before writing into kernel-owned block/fs
     staging buffers.
+  - Migration item advanced: `wasmos_block_buffer_copy` and
+    `wasmos_fs_buffer_copy` now return output through the output-side
+    coherence bridge (`mm_copy_to_user` + host-view sync) instead of direct
+    host-pointer writes.
   - Compatibility hardening update: added a shared helper for sensitive
     early-boot output hostcalls that performs both `mm_copy_to_user` and a
     host-pointer mirror write. This preserves current non-strict behavior while

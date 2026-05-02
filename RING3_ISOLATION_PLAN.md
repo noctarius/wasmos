@@ -117,7 +117,6 @@ Phase 1 inventory tracker (initial pass):
     candidates):
     - Output writers: `wasmos_boot_config_copy` (fallback path only),
       `wasmos_acpi_rsdp_info`, `wasmos_boot_module_name`,
-      `wasmos_proc_info_ex`,
       `wasmos_console_read`
     - Input readers: `wasmos_console_write`, `wasmos_strlen`,
       `wasmos_block_buffer_write`, `wasmos_fs_buffer_write`
@@ -139,6 +138,10 @@ Phase 1 inventory tracker (initial pass):
   - Migration item completed: `wasmos_proc_info` now returns process names via
     bounded local buffering plus `mm_copy_to_user` (NUL-terminated), removing
     direct host-pointer output writes from this path.
+  - Migration item completed: `wasmos_proc_info_ex` now returns both
+    `parent_pid` and process name via `mm_copy_to_user` (bounded copy +
+    NUL-terminated string), removing direct host-pointer output writes from
+    this path.
 - IPC marshal/unmarshal (`src/kernel/ipc.c`, call sites in `syscall.c` and
   `wasm3_link.c`):
   - Endpoint/context ownership checks are in place; Phase 4 will complete

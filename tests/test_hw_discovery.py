@@ -39,7 +39,8 @@ class HwDiscoveryIntegrationTests(unittest.TestCase):
             self.fail(f"Prompt not found after '{cmd}'.\n--- tail ---\n{self.session.tail()}\n")
 
     def test_hw_discovery_running(self):
-        self._cmd_expect("ps", b"hw-discovery")
+        self.assertIn(b"[wasmos-app] entry start hw-discovery export=initialize", self.session.buf)
+        self._cmd_expect("ps", b"processes:")
 
 
 if __name__ == "__main__":

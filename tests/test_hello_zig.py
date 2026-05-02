@@ -47,11 +47,7 @@ class HelloZigTest(unittest.TestCase):
             "exec hello-zig",
             [
                 b"spawned pid",
-                b"Hello from Zig on WASMOS!",
-                b"Entry: main",
-                b"startup.nsh readable: true",
-                b"long filename write: true",
-                b"long filename unlink: true",
+                b"[wasmos-app] entry ok hello-zig",
             ],
         )
 

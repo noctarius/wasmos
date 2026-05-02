@@ -20,6 +20,8 @@ def main():
     required = [
         b"native-call-smoke: ipc-call ok",
         b"[test] ring3 native abi ok",
+        b"[fault] user-pf pid=",
+        b"reason=user_to_kernel",
         b"[test] ring3 fault isolate ok",
         b"[test] ring3 ipc syscall deny ok",
         b"[test] ring3 ipc syscall ok",

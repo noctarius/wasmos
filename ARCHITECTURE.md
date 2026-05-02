@@ -217,7 +217,8 @@ The current tree already boots into a usable user-space stack:
   `[test] ring3 native abi ok` on first native CPL3 `getpid`. The
   `run-qemu-ring3-test` harness now also requires `native-call-smoke: ipc-call ok`
   and `[test] ring3 native abi ok` so both native IPC-call and native syscall
-  header paths are asserted in the same run. Default smoke spawn remains
+  header paths are asserted in the same run; it now also asserts the boot-time
+  marker `[mode] strict-ring3=1`. Default smoke spawn remains
   disabled while this path is still being soak-tested. Ring3 smoke endpoint
   immediates are patched in a kernel-local code buffer before upload, and
   ring3 bootstrap copying
@@ -850,11 +851,12 @@ Open implementation work is tracked in `TASKS.md`.
 Every architecture-affecting change is expected to keep these green:
 - `cmake --build build --target run-qemu-test`
 - `cmake --build build --target run-qemu-cli-test`
+- `cmake --build build --target strict-ring3`
 
 QEMU backend caveat:
 - the CLI write smoke keeps truncate/append/create plus nested unlink/rmdir
   checks, but avoids one top-level grown-file unlink sequence that can trigger
   a known `vvfat` host assertion on some QEMU builds
 
-The architecture is only considered stable when both the non-interactive boot
-check and the CLI integration suite pass.
+The architecture is only considered stable when non-interactive boot, CLI
+integration, and strict-ring3 gate checks all pass.

@@ -422,6 +422,7 @@ cmake --build build --target run-qemu-debug
 cmake --build build --target run-qemu-test
 cmake --build build --target run-qemu-cli-test
 cmake --build build --target run-qemu-ring3-test
+cmake --build build --target strict-ring3
 cmake --build build --target run-qemu-ui-test
 ```
 
@@ -432,8 +433,11 @@ Meaning:
 - `run-qemu-cli-test` runs the full CLI integration suite
 - `run-qemu-ring3-test` configures a shadow `build/ring3` tree with
   `WASMOS_RING3_SMOKE=ON` and asserts ring3 smoke syscall markers plus
-  `native-call-smoke: ipc-call ok`, `[test] ring3 native abi ok`, and structured
+  `[mode] strict-ring3=1`, `native-call-smoke: ipc-call ok`,
+  `[test] ring3 native abi ok`, and structured
   user fault telemetry (`[fault] user-pf ... reason=user_to_kernel`) before halt
+- `strict-ring3` runs the phase-0 gate profile (`run-qemu-test` then
+  `run-qemu-ring3-test`) in sequence
 - staged-default policy: ring3 smoke stays OFF for normal boot targets, and is
   ON by default in the dedicated `run-qemu-ring3-test` path
 - `run-qemu-ui-test` boots QEMU with a graphical display plus `mon:stdio` serial

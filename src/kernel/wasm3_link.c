@@ -1548,14 +1548,43 @@ m3ApiRawFunction(wasmos_proc_info)
     if (process_info_at((uint32_t)index, &pid, &name) != 0) {
         m3ApiReturn(-1);
     }
-    int32_t i = 0;
+    uint32_t out_cap = (uint32_t)buf_len;
+    uint32_t copied = 0;
+    char bounce[256];
     if (name) {
-        while (name[i] && i < buf_len - 1) {
-            buf[i] = name[i];
-            i++;
+        while (name[copied] && copied + 1U < out_cap) {
+            copied++;
         }
     }
-    buf[i] = '\0';
+    uint32_t out_len = copied + 1U; /* NUL-terminated */
+    for (uint32_t i = 0; i < copied; ++i) {
+        bounce[i % sizeof(bounce)] = name[i];
+        if ((i % sizeof(bounce)) == (sizeof(bounce) - 1U)) {
+            uint32_t chunk_base = i + 1U - (uint32_t)sizeof(bounce);
+            if (mm_copy_to_user(proc->context_id,
+                                buf_user + (uint64_t)chunk_base,
+                                bounce,
+                                (uint64_t)sizeof(bounce)) != 0) {
+                m3ApiReturn(-1);
+            }
+        }
+    }
+    uint32_t tail = copied % (uint32_t)sizeof(bounce);
+    if (tail > 0) {
+        if (mm_copy_to_user(proc->context_id,
+                            buf_user + (uint64_t)(copied - tail),
+                            bounce,
+                            (uint64_t)tail) != 0) {
+            m3ApiReturn(-1);
+        }
+    }
+    bounce[0] = '\0';
+    if (mm_copy_to_user(proc->context_id,
+                        buf_user + (uint64_t)(out_len - 1U),
+                        bounce,
+                        1) != 0) {
+        m3ApiReturn(-1);
+    }
     m3ApiReturn((int32_t)pid);
 }
 

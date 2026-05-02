@@ -144,8 +144,13 @@ class QemuSession:
     def send(self, line: str) -> None:
         if not self.proc or not self.proc.stdin:
             raise RuntimeError("QEMU process not running")
-        self.proc.stdin.write(line.encode("utf-8") + b"\r\n")
-        self.proc.stdin.flush()
+        if self.proc.poll() is not None:
+            return
+        try:
+            self.proc.stdin.write(line.encode("utf-8") + b"\r\n")
+            self.proc.stdin.flush()
+        except BrokenPipeError:
+            return
 
     def force_stop(self) -> None:
         if not self.proc or not self.proc.stdin:

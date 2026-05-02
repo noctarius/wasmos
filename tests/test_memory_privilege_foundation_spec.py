@@ -84,6 +84,13 @@ class MemoryPrivilegeFoundationSpecTest(unittest.TestCase):
             "wasmos_io_out8 should enforce io capability",
         )
 
+    def test_framebuffer_info_uses_validated_user_va_for_copy(self):
+        self._require(
+            self.wasm3_link_src,
+            r"wasmos_framebuffer_info[\s\S]*mm_copy_to_user\(\s*proc->context_id,\s*out_user,",
+            "wasmos_framebuffer_info should copy via the validated user VA, not raw host pointer",
+        )
+
     def test_ring3_context_restore_scaffolding_exists(self):
         self._require(
             self.process_h_src,

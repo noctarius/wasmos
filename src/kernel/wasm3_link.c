@@ -1037,7 +1037,7 @@ m3ApiRawFunction(wasmos_framebuffer_info)
         m3ApiReturn(-1);
     }
     if (mm_copy_to_user(proc->context_id,
-                        (uint64_t)(uintptr_t)out_ptr,
+                        out_user,
                         &info,
                         sizeof(info)) != 0) {
         m3ApiReturn(-1);

@@ -99,6 +99,29 @@ Tasks:
   - `mm_copy_from_user` / `mm_copy_to_user` for copy semantics
 - Add targeted negative tests for each migrated boundary.
 
+Phase 1 inventory tracker (initial pass):
+- Syscall handlers (`src/kernel/syscall.c`):
+  - `x86_syscall_handler` (`wait`, `ipc_notify`, `ipc_call`) currently enforces
+    `u64` -> `u32` cleanliness via `syscall_arg_u32`; `ipc_call` still has a
+    deferred unmatched-reply correlation TODO for Phase 4.
+- WASM hostcalls (`src/kernel/wasm3_link.c`):
+  - Pointer-bearing hostcalls are largely guarded by
+    `wasm_user_va_from_host_ptr` + `mm_user_range_permitted`.
+  - Migration item completed: `wasmos_framebuffer_info` now performs
+    `mm_copy_to_user` using the validated user VA (`out_user`) rather than a
+    raw host pointer reinterpretation.
+  - Remaining migration objective: continue replacing direct pointer writes/
+    reads in pointer-bearing hostcalls with `mm_copy_to_user` /
+    `mm_copy_from_user` where practical.
+- IPC marshal/unmarshal (`src/kernel/ipc.c`, call sites in `syscall.c` and
+  `wasm3_link.c`):
+  - Endpoint/context ownership checks are in place; Phase 4 will complete
+    unmatched-reply preservation and correlation hardening.
+- Native-driver ABI (`src/kernel/native_driver.c`):
+  - Current ABI entry points (`nd_shmem_create/map/unmap`) are scalar-only at
+    the kernel boundary; no direct user-pointer ingestion in these entry points
+    today.
+
 Exit criteria:
 - Every pointer-bearing kernel entry point is inventory-tracked and migrated.
 - No direct user-pointer dereference remains in entry paths.

@@ -249,7 +249,9 @@ The current tree already boots into a usable user-space stack:
   (`mm_copy_from_user` / `mm_copy_to_user`) with user-range permission checks,
   pre-mapping of touched pages, and temporary CR3 switch/restore around the
   actual copy. Hostcall migration has started with `wasmos_framebuffer_info`
-  using `mm_copy_to_user`. A non-copy validator API
+  using `mm_copy_to_user`; it now copies via the validated user VA resolved
+  from the wasm host pointer bridge rather than raw host-pointer casting.
+  A non-copy validator API
   (`mm_user_range_permitted`) is now available for phased hostcall guard
   rollouts. The framebuffer and shared-memory map hostcalls now use an
   explicit WASM-offset to user-VA resolver before remapping linear pages.

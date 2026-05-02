@@ -1547,6 +1547,21 @@ m3ApiRawFunction(wasmos_debug_mark)
     m3ApiReturn(0);
 }
 
+m3ApiRawFunction(wasmos_kmap_dump)
+{
+    m3ApiReturnType(int32_t)
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t root = mm_context_root_table(proc->context_id);
+    if (!root) {
+        m3ApiReturn(-1);
+    }
+    paging_dump_user_root_kernel_mappings(root);
+    m3ApiReturn(paging_verify_user_root(root, 1) == 0 ? 0 : -1);
+}
+
 m3ApiRawFunction(wasmos_console_read)
 {
     m3ApiReturnType(int32_t)
@@ -1980,6 +1995,7 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "ipc_last_field", "i(i)", wasmos_ipc_last_field);
     rc |= wasm3_link_raw(module, "wasmos", "console_write", "i(*i)", wasmos_console_write);
     rc |= wasm3_link_raw(module, "wasmos", "debug_mark", "i(i)", wasmos_debug_mark);
+    rc |= wasm3_link_raw(module, "wasmos", "kmap_dump", "i()", wasmos_kmap_dump);
     rc |= wasm3_link_raw(module, "wasmos", "console_read", "i(*i)", wasmos_console_read);
     rc |= wasm3_link_raw(module, "wasmos", "sync_user_read", "i(*i)", wasmos_sync_user_read);
     rc |= wasm3_link_raw(module, "wasmos", "proc_count", "i()", wasmos_proc_count);

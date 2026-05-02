@@ -141,6 +141,18 @@ Phase 1 inventory tracker (initial pass):
   - Current ABI entry points (`nd_shmem_create/map/unmap`) are scalar-only at
     the kernel boundary; no direct user-pointer ingestion in these entry points
     today.
+- Phase 1 diagnostics update (2026-05-02):
+  - Added trace-gated (`WASMOS_TRACE`) failure-stage instrumentation in
+    `mm_copy_from_user` / `mm_copy_to_user` to report operation, stage,
+    context id, user address/size, expected vs current CR3 root, and failing
+    chunk address/size on copy-path failures.
+  - Validation on baseline behavior:
+    - `python3 -m unittest tests.test_memory_privilege_foundation_spec`: pass.
+    - `cmake --build build --target run-qemu-test`: pass.
+    - `cmake --build build --target run-qemu-cli-test`: same known baseline
+      failures (`test_hello_go`, `test_hello_rust`, `test_hello_zig`) plus
+      follow-on teardown `BrokenPipeError`; no new copy-helper failure markers
+      observed in captured serial output.
 
 Exit criteria:
 - Every pointer-bearing kernel entry point is inventory-tracked and migrated.

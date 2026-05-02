@@ -198,6 +198,38 @@ mm_region_flags_valid(uint32_t flags)
     return 1;
 }
 
+static void
+mm_trace_copy_fail(const char *op,
+                   const char *stage,
+                   uint32_t context_id,
+                   uint64_t user_addr,
+                   uint64_t size,
+                   uint64_t root_expected,
+                   uint64_t root_current,
+                   uint64_t chunk_user_addr,
+                   uint64_t chunk_size)
+{
+    trace_do(serial_write("[mm-copy] fail op="));
+    trace_do(serial_write(op));
+    trace_do(serial_write(" stage="));
+    trace_do(serial_write(stage));
+    trace_do(serial_write(" ctx="));
+    trace_do(serial_write_hex64((uint64_t)context_id));
+    trace_do(serial_write(" user="));
+    trace_do(serial_write_hex64(user_addr));
+    trace_do(serial_write(" size="));
+    trace_do(serial_write_hex64(size));
+    trace_do(serial_write(" root_expected="));
+    trace_do(serial_write_hex64(root_expected));
+    trace_do(serial_write(" root_current="));
+    trace_do(serial_write_hex64(root_current));
+    trace_do(serial_write(" chunk_user="));
+    trace_do(serial_write_hex64(chunk_user_addr));
+    trace_do(serial_write(" chunk_size="));
+    trace_do(serial_write_hex64(chunk_size));
+    trace_do(serial_write("\n"));
+}
+
 static int
 mm_ensure_user_range_mapped(mm_context_t *ctx, uint64_t user_addr, uint64_t size, uint32_t needed_flags)
 {
@@ -541,13 +573,16 @@ int
 mm_copy_from_user(uint32_t context_id, void *dst, uint64_t user_src, uint64_t size)
 {
     if (context_id == 0 || !dst || user_src == 0 || size == 0) {
+        mm_trace_copy_fail("from", "arg", context_id, user_src, size, 0, paging_get_current_root_table(), user_src, 0);
         return -1;
     }
     mm_context_t *ctx = mm_context_get(context_id);
     if (!ctx || ctx->root_table == 0) {
+        mm_trace_copy_fail("from", "ctx", context_id, user_src, size, 0, paging_get_current_root_table(), user_src, 0);
         return -1;
     }
     if (mm_ensure_user_range_mapped(ctx, user_src, size, MEM_REGION_FLAG_READ) != 0) {
+        mm_trace_copy_fail("from", "map", context_id, user_src, size, ctx->root_table, paging_get_current_root_table(), user_src, size);
         return -1;
     }
 
@@ -561,10 +596,12 @@ mm_copy_from_user(uint32_t context_id, void *dst, uint64_t user_src, uint64_t si
     while (remaining > 0) {
         uint64_t n = (remaining < chunk_size) ? remaining : chunk_size;
         if (paging_switch_root(ctx->root_table) != 0) {
+            mm_trace_copy_fail("from", "switch_to_user", context_id, user_src, size, ctx->root_table, paging_get_current_root_table(), user_cur, n);
             return -1;
         }
         memcpy(bounce, (const void *)(uintptr_t)user_cur, (size_t)n);
         if (paging_switch_root(prev_root) != 0) {
+            mm_trace_copy_fail("from", "switch_to_prev", context_id, user_src, size, prev_root, paging_get_current_root_table(), user_cur, n);
             return -1;
         }
         memcpy(dst_bytes, bounce, (size_t)n);
@@ -579,13 +616,16 @@ int
 mm_copy_to_user(uint32_t context_id, uint64_t user_dst, const void *src, uint64_t size)
 {
     if (context_id == 0 || user_dst == 0 || !src || size == 0) {
+        mm_trace_copy_fail("to", "arg", context_id, user_dst, size, 0, paging_get_current_root_table(), user_dst, 0);
         return -1;
     }
     mm_context_t *ctx = mm_context_get(context_id);
     if (!ctx || ctx->root_table == 0) {
+        mm_trace_copy_fail("to", "ctx", context_id, user_dst, size, 0, paging_get_current_root_table(), user_dst, 0);
         return -1;
     }
     if (mm_ensure_user_range_mapped(ctx, user_dst, size, MEM_REGION_FLAG_WRITE) != 0) {
+        mm_trace_copy_fail("to", "map", context_id, user_dst, size, ctx->root_table, paging_get_current_root_table(), user_dst, size);
         return -1;
     }
 
@@ -600,10 +640,12 @@ mm_copy_to_user(uint32_t context_id, uint64_t user_dst, const void *src, uint64_
         uint64_t n = (remaining < chunk_size) ? remaining : chunk_size;
         memcpy(bounce, src_bytes, (size_t)n);
         if (paging_switch_root(ctx->root_table) != 0) {
+            mm_trace_copy_fail("to", "switch_to_user", context_id, user_dst, size, ctx->root_table, paging_get_current_root_table(), user_cur, n);
             return -1;
         }
         memcpy((void *)(uintptr_t)user_cur, bounce, (size_t)n);
         if (paging_switch_root(prev_root) != 0) {
+            mm_trace_copy_fail("to", "switch_to_prev", context_id, user_dst, size, prev_root, paging_get_current_root_table(), user_cur, n);
             return -1;
         }
         src_bytes += n;

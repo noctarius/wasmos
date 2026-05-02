@@ -255,6 +255,9 @@ The current tree already boots into a usable user-space stack:
   `mm_copy_to_user`; `wasmos_boot_config_copy` is now on a staged
   `mm_copy_to_user`-first path with a temporary
   host-pointer fallback during non-strict compatibility soak.
+  Copy helpers now also emit trace-gated (`WASMOS_TRACE`) failure-stage
+  diagnostics with op/stage/context/user range/expected-vs-current-root/chunk
+  metadata for focused ring3 copy-path regression triage.
   A non-copy validator API
   (`mm_user_range_permitted`) is now available for phased hostcall guard
   rollouts. The framebuffer and shared-memory map hostcalls now use an

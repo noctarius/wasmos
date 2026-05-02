@@ -349,9 +349,7 @@ initialize(int32_t proc_endpoint,
 
         const char *name = g_targets[g_target_index];
         if (str_eq(name, "cli")) {
-            int cli_count = proc_count_named("cli");
-            /* tty0 stays system console; keep one CLI per VT tty1..tty3. */
-            if (cli_count >= 3) {
+            if (proc_running("cli")) {
                 g_target_index++;
                 continue;
             }
@@ -366,9 +364,7 @@ initialize(int32_t proc_endpoint,
             log_line("[sysinit] spawn failed\n");
             stall_forever();
         }
-        if (!str_eq(name, "cli")) {
-            g_target_index++;
-        }
+        g_target_index++;
     }
 
     trace_line("[sysinit] exit\n");

@@ -113,9 +113,10 @@ The current tree already boots into a usable user-space stack:
   failures can be mapped to explicit VT control-plane failure paths.
 - CLI `cd` path tracking now keeps standard dot-segment semantics (`.` stays in
   place, `..` resolves to the parent) instead of collapsing both to `/`.
-- Process-manager now assigns a home tty to each CLI instance (`tty1..tty3`)
-  and `sysinit` ensures one CLI per VT-managed tty. CLIs gate input by current
-  VT foreground selection so only the active tty shell reads keystrokes.
+- Process-manager can assign CLI home ttys, but sysinit currently runs a
+  single interactive CLI instance (default `tty1`) as a conservative fallback
+  while multi-CLI VT registration/mode sequencing is being stabilized. CLI
+  input still gates on VT foreground selection.
 - VT now owns keyboard input routing end-to-end and delivers per-tty raw key
   input over `VT_IPC_READ_REQ`. CLI remains the owner of line editing/echo;
   raw mode now emits extended arrows plus nav/edit keys as ANSI escape bytes

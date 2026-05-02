@@ -158,6 +158,9 @@ The current tree already boots into a usable user-space stack:
 - VT can emit compact switch/ownership/drop telemetry through
   `wasmos_debug_mark` into the kernel's global trace stream when
   `WASMOS_TRACE=1`, so race analysis uses existing tracing infrastructure.
+- CLI now includes `kmaps`, backed by a kernel hostcall (`kmap_dump`) that
+  dumps and verifies the active process user-root kernel mapping footprint via
+  paging diagnostics.
 - Known deferred VT issue: an intermittent framebuffer-only prompt
   duplication/misalignment artifact during rapid `Ctrl+Shift+Fn` switching was
   observed earlier. It is currently not reproducible in recent runs, so the

@@ -236,6 +236,8 @@ Progress update (2026-05-02):
   PML4/PDPT exposure.
 - Added source-level regression assertions for verifier presence and
   address-space creation hook in `tests/test_memory_privilege_foundation_spec.py`.
+- Added runtime inspection surface: CLI `kmaps` command calls hostcall
+  `kmap_dump`, which runs dump+verify for the active process root table.
 
 Exit criteria:
 - User roots map only approved kernel transition/support ranges.

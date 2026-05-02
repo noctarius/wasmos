@@ -9,6 +9,8 @@ extern int32_t wasmos_sync_user_read(int32_t ptr, int32_t len)
     WASMOS_WASM_IMPORT("wasmos", "sync_user_read");
 extern int32_t wasmos_debug_mark(int32_t tag)
     WASMOS_WASM_IMPORT("wasmos", "debug_mark");
+extern int32_t wasmos_kmap_dump(void)
+    WASMOS_WASM_IMPORT("wasmos", "kmap_dump");
 extern int32_t wasmos_ipc_create_endpoint(void)
     WASMOS_WASM_IMPORT("wasmos", "ipc_create_endpoint");
 extern int32_t wasmos_ipc_send(int32_t destination_endpoint,

@@ -909,7 +909,21 @@ cli_handle_line(void)
         to_lower(g_line[1]) == 'e' &&
         to_lower(g_line[2]) == 'l' &&
         to_lower(g_line[3]) == 'p') {
-        console_write("commands: help, ps, ls, cat <name>, cd <path>, exec <app>, tty <0-3>, halt, reboot\n");
+        console_write("commands: help, ps, kmaps, ls, cat <name>, cd <path>, exec <app>, tty <0-3>, halt, reboot\n");
+        return 0;
+    }
+    if (g_line_len == 5 &&
+        to_lower(g_line[0]) == 'k' &&
+        to_lower(g_line[1]) == 'm' &&
+        to_lower(g_line[2]) == 'a' &&
+        to_lower(g_line[3]) == 'p' &&
+        to_lower(g_line[4]) == 's') {
+        int32_t rc = wasmos_kmap_dump();
+        if (rc == 0) {
+            console_write("kmaps: dumped\n");
+        } else {
+            console_write("kmaps: failed\n");
+        }
         return 0;
     }
     if (g_line_len > 4 &&
@@ -1164,7 +1178,7 @@ initialize(int32_t proc_endpoint,
                 }
             }
             if (g_home_tty == 1) {
-                console_write("WAMOS CLI\ncommands: help, ps, ls, cat <name>, cd <path>, exec <app>, tty <0-3>, halt, reboot\n");
+                console_write("WAMOS CLI\ncommands: help, ps, kmaps, ls, cat <name>, cd <path>, exec <app>, tty <0-3>, halt, reboot\n");
             }
             g_phase = CLI_PHASE_PROMPT;
             continue;

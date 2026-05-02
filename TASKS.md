@@ -4,6 +4,9 @@ This file tracks implementation work that is still open after the current
 architecture and README cleanup.
 
 IMPORTANT: Keep this file aligned with `README.md` and `ARCHITECTURE.md`.
+Isolation execution baseline: see `RING3_ISOLATION_PLAN.md` for the phased
+design/task plan to reach full ring-3 process isolation and kernel survivability
+under user-space faults.
 
 ## Boot and Platform
 - Add APIC / IOAPIC support and retire the PIC-only interrupt assumption.

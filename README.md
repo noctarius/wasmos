@@ -295,6 +295,7 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - `scripts/` helper scripts and the QEMU test framework
 - `ARCHITECTURE.md` system design and implementation baseline
 - `TASKS.md` open work and follow-up items
+- `RING3_ISOLATION_PLAN.md` phased design/tasks for full ring-3 isolation
 - `wasmo.svg` / `wasmo.webp` repo-local mascot art used by this README
 - `wasmos_wordmark.svg` / `wasmos_wordmark.webp` repo-local wordmark art used
   by this README

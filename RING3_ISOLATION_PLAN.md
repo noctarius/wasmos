@@ -37,113 +37,263 @@ process (or explicitly scoped service domain).
 Remaining work is mostly policy tightening, mapping minimization, and adversarial
 coverage depth.
 
-## Workstreams
+## Ordering Principle
 
-### 1) Kernel Mapping Minimization in User CR3
+Implementation order is optimized for early deletion of non-ring3 code paths.
+That means:
+
+1. Make ring3 path complete and test-gated first.
+2. Turn legacy/non-ring3 behavior into explicit compatibility toggles.
+3. Flip defaults to strict ring3 as soon as tests are green.
+4. Delete compatibility branches immediately after one stabilization cycle.
+
+## Ordered Implementation Plan
+
+Each phase below is intentionally dependency-ordered. Do not skip ahead unless
+all phase exit criteria are met.
+
+### Phase 0: Baseline Hard Gates (Do First)
+
+Objective: prevent regressions while tightening isolation.
+
+Tasks:
+- Add CI gate profile `strict-ring3` that always runs:
+  - `run-qemu-test`
+  - `run-qemu-ring3-test`
+  - new adversarial ring3 tests from this plan as they land
+- Add a boot-time marker that declares active isolation mode:
+  - `[mode] strict-ring3=0/1`
+- Add test helper checks that fail if strict mode is expected but disabled.
+
+Exit criteria:
+- CI can run strict-ring3 profile deterministically.
+- Mode marker is visible and asserted in relevant tests.
+
+Legacy-path impact:
+- None removed yet; this phase only creates safety rails.
+
+### Phase 1: Ring3-Only Syscall/Hostcall Boundary Completion
+
+Objective: complete pointer/length safety so kernel no longer relies on
+trusted caller assumptions.
+
+Tasks:
+- Build an explicit entry-point inventory (file/function list) for:
+  - syscall handlers
+  - hostcalls in `wasm3_link.c`
+  - IPC marshal/unmarshal paths
+  - native-driver ABI functions that consume user-owned arguments
+- For each entry point, enforce:
+  - `u64` -> expected-width validation (reject truncation)
+  - overflow-safe address arithmetic (`base+offset+len`)
+  - `mm_user_range_permitted` preflight where non-copy access is required
+  - `mm_copy_from_user` / `mm_copy_to_user` for copy semantics
+- Add targeted negative tests for each migrated boundary.
+
+Exit criteria:
+- Every pointer-bearing kernel entry point is inventory-tracked and migrated.
+- No direct user-pointer dereference remains in entry paths.
+- Width and overflow negative tests pass.
+
+Legacy-path impact:
+- Remove any “best effort” bypasses that touch user memory without validation.
+- Keep temporary compatibility only behind explicit flag if absolutely needed.
+
+### Phase 2: Kernel Mapping Minimization in User CR3
+
+Objective: remove broad kernel exposure from user-owned page tables.
+
+Tasks:
+- Replace shared “window copy” model with explicit allowlisted kernel mappings
+  required for ring transitions only (trampoline/syscall/interrupt essentials).
+- Add a runtime verifier:
+  - enumerate PML4/PDPT/PD entries for user roots
+  - assert only approved kernel ranges are present
+- Add a debug command or trace dump to print user-root kernel mapping footprint.
+- Add tests that fail when unauthorized kernel ranges appear.
+
+Exit criteria:
+- User roots map only approved kernel transition/support ranges.
+- No general higher-half bulk alias remains in child roots.
+
+Legacy-path impact:
+- Delete old bulk higher-half sharing behavior.
+
+### Phase 3: Strict Capability Default-Deny Flip
+
+Objective: remove implicit privilege in userspace drivers/services.
+
+Tasks:
+- Replace compatibility fallback (`allow when unconfigured`) with strict deny.
+- Require capability declarations for:
+  - IO port
+  - IRQ route/register
+  - MMIO map
+  - DMA buffer
+  - privileged kernel/service endpoints
+- Harden WASMOS-APP capability parsing:
+  - malformed/unknown capability descriptors fail closed
+- Add deny/allow tests per capability class.
+
+Exit criteria:
+- Unconfigured privileged actions are denied by default.
+- Capability tests pass in strict mode.
+
+Legacy-path impact:
+- Remove compatibility-mode privilege grants.
+
+### Phase 4: IPC Isolation + Correlation Hardening
+
+Objective: prevent endpoint spoofing, confused replies, and cross-context abuse.
+
+Tasks:
+- Enforce endpoint ownership and sender context checks on all relevant paths.
+- Resolve unmatched reply TODO:
+  - implement per-process pending-reply queue
+  - preserve unmatched messages until matching waiter or explicit drop policy
+- Add sensitive endpoint allowlists (process manager, memory service, control
+  planes) with explicit deny markers.
+- Add replay/spoof/out-of-order stress tests.
+
+Exit criteria:
+- No request/reply confusion under adversarial ordering.
+- Cross-context spoofing attempts deterministically fail.
+
+Legacy-path impact:
+- Remove message-drop behaviors that silently hide ordering bugs.
+
+### Phase 5: Fault Policy Completion Across User Exception Space
+
+Objective: guarantee user-origin faults are always process-local failures.
+
+Tasks:
+- Expand fault-policy assertions beyond current probes to all relevant user
+  exception vectors handled by kernel trap path.
+- Keep dual assertions for each probe:
+  - classified reason marker
+  - expected termination status marker
+- Add fault-storm test:
+  - multiple ring3 processes repeatedly triggering distinct fault classes
+  - scheduler liveness assertion
+
+Exit criteria:
+- All covered user exception classes terminate offending process only.
+- Kernel remains alive across sustained fault storms.
+
+Legacy-path impact:
+- Remove any remaining user-fault paths that escalate to global panic unless
+  architecturally unrecoverable and not user-originating.
+
+### Phase 6: Scheduler/Trap Robustness Under Malicious Workloads
+
+Objective: prove ring transitions and preemption are stable under abuse.
+
+Tasks:
+- Add long-duration mixed stress:
+  - high-rate syscalls
+  - IPC call/reply churn
+  - periodic forced user faults
+- Add watchdog markers for:
+  - scheduler forward progress
+  - stuck reschedule loops
+  - trap frame integrity violations
+- Validate TSS `rsp0`, trampoline return, and context save/restore invariants
+  under stress.
+
+Exit criteria:
+- No deadlocks or context corruption in sustained stress runs.
+- Kernel continues serving unaffected processes.
+
+Legacy-path impact:
+- Remove temporary trap/preempt compatibility guards introduced during bring-up.
+
+### Phase 7: Memory Service / Shared Mapping Isolation Closure
+
+Objective: ensure pager/shared-memory operations cannot be abused for cross-
+process or kernel mapping escalation.
+
+Tasks:
+- Assert fault-driven mapping only occurs inside owning region policy.
+- Harden shared-memory map/unmap:
+  - explicit ownership checks
+  - explicit permissions for remap into target context
+  - prevent arbitrary physical rebind through forged parameters
+- Add map-forgery/cross-context negative tests.
+
+Exit criteria:
+- Cross-context mapping abuse attempts fail.
+- Shared memory behavior is explicit, revocable, and policy-checked.
+
+Legacy-path impact:
+- Remove implicit remap assumptions and any “caller trusted” physical map paths.
+
+### Phase 8: Strict Mode Default + Compatibility Path Deletion
+
+Objective: finish migration by removing non-ring3 behavior.
+
+Tasks:
+- Flip build/runtime defaults to strict ring3 mode.
+- Keep compatibility mode only as short-lived opt-in fallback.
+- Run one stabilization cycle with strict as default in CI.
+- Delete compatibility code paths and flags after cycle is green.
+- Update docs and test expectations to strict-only.
+
+Exit criteria:
+- Strict ring3 is default everywhere.
+- Compatibility branches are removed from mainline.
+
+Legacy-path impact:
+- This is the explicit deletion phase for all non-ring3 behavior.
+
+## Workstreams (Cross-Cutting Execution Tracks)
+
+The following tracks run across phases but should not violate ordered
+dependencies above.
+
+### A) Kernel Mapping Minimization in User CR3
 
 Objective: remove broad kernel aliasing from user-owned address spaces.
 
-Tasks:
-- Replace fixed shared higher-half window copy with explicit required mapping
-  set for user-root operation.
-- Isolate trampoline/syscall/interrupt-required mappings from general kernel
-  text/data exposure.
-- Add compile/runtime assertions for "user roots contain only approved kernel
-  ranges".
+Primary phase: 2.
 
-Acceptance:
-- No generic higher-half bulk window mapped in user roots.
-- Ring3 smoke + baseline boot tests pass.
-- New test fails if unauthorized kernel range appears in a user root.
-
-### 2) Complete User-Pointer Boundary Migration
+### B) Complete User-Pointer Boundary Migration
 
 Objective: eliminate direct/implicit user-memory dereference in kernel paths.
 
-Tasks:
-- Audit all syscalls, hostcalls, IPC marshal/unmarshal paths, and native-driver
-  ABI entry points for pointer usage.
-- Route all user memory access through `mm_copy_*` or a validated bridge with
-  `mm_user_range_permitted`.
-- Enforce strict overflow checks for every `(ptr, len, offset)` tuple.
-- Add TODO/FIXME markers where migration is intentionally staged.
+Primary phase: 1.
 
-Acceptance:
-- No kernel path dereferences user pointers directly.
-- All pointer-bearing entry points have permission + overflow checks.
-- Negative tests for invalid pointers and overflow cases pass.
-
-### 3) Capability Enforcement: Strict Default-Deny
+### C) Capability Enforcement: Strict Default-Deny
 
 Objective: prevent user-space drivers/services from touching privileged kernel
 resources without explicit capability grants.
 
-Tasks:
-- Remove compatibility "allow if unconfigured" fallbacks.
-- Enforce explicit capability checks for IO port, IRQ routing, MMIO map, DMA,
-  and privileged IPC control paths.
-- Validate capability metadata at load time; fail closed on malformed policy.
+Primary phase: 3.
 
-Acceptance:
-- Uncaped privileged operation attempts are denied deterministically.
-- Capability-based allow/deny regression tests exist for each resource class.
-
-### 4) IPC and Endpoint Hardening
+### D) IPC and Endpoint Hardening
 
 Objective: ensure message transport cannot be abused to escalate privileges or
 break isolation.
 
-Tasks:
-- Harden request/reply ownership checks and request-id correlation handling.
-- Add per-service endpoint allowlists for sensitive control-plane endpoints.
-- Resolve known TODO on unmatched IPC replies (preserve vs drop policy).
+Primary phase: 4.
 
-Acceptance:
-- Cross-context spoofing/replay attempts fail.
-- Out-of-order reply stress test passes without message confusion.
-
-### 5) Fault-Containment Policy Completion
+### E) Fault-Containment Policy Completion
 
 Objective: guarantee user-triggered exceptions never collapse kernel progress.
 
-Tasks:
-- Ensure all user exception vectors map to process-local termination policy
-  where architecturally valid.
-- Keep deterministic error markers and exit-policy assertions for each probe.
-- Add repeated-fault storm test across many ring3 processes.
+Primary phase: 5.
 
-Acceptance:
-- Kernel scheduler remains live after adversarial multi-process fault storms.
-- Fault-policy tests assert both reason and exit semantics.
-
-### 6) Scheduler / Trap Robustness Under Abuse
+### F) Scheduler / Trap Robustness Under Abuse
 
 Objective: ensure trap/interrupt/preempt path cannot be destabilized by ring3
 behavior.
 
-Tasks:
-- Verify TSS stack, trampoline return, and saved context integrity under rapid
-  syscall/fault/preempt interleavings.
-- Add stress harness for high-rate syscalls + IPC + forced faults.
-- Add watchdog assertions for forward progress and no stuck resched loops.
+Primary phase: 6.
 
-Acceptance:
-- Long-running abuse tests do not deadlock kernel scheduling.
-- No context corruption markers under stress.
-
-### 7) Memory Service / Pager Isolation Guarantees
+### G) Memory Service / Pager Isolation Guarantees
 
 Objective: ensure demand-mapping and shared-memory operations stay scoped.
 
-Tasks:
-- Verify fault mapping only within owning region definitions.
-- Ensure shared-memory map/unmap cannot rebind arbitrary physical ranges into
-  user contexts.
-- Add negative tests for cross-context mapping attempts.
-
-Acceptance:
-- Cross-process/map-forgery attempts are denied.
-- Shared memory remains explicit, auditable, and revocable.
+Primary phase: 7.
 
 ## Test Plan Additions
 
@@ -155,6 +305,9 @@ Add ring3-focused adversarial tests (QEMU-driven):
 4. Capability deny matrix (PIO/MMIO/IRQ/DMA/privileged IPC).
 5. Multi-process fault storm with scheduler liveness checks.
 6. Long preempt+syscall stress with watchdog markers.
+7. Unauthorized kernel-range mapping detector in user roots.
+8. Capability malformed-policy rejection at app load.
+9. IPC unmatched-reply preservation/correlation stress.
 
 All above should be part of CI gating for strict isolation mode.
 
@@ -162,8 +315,9 @@ All above should be part of CI gating for strict isolation mode.
 
 1. Keep staged compatibility only behind explicit build/runtime flags.
 2. Introduce strict-isolation mode that is CI-default.
-3. Flip production/default policy to strict after tests are stable.
-4. Remove legacy compatibility paths after one full stabilization cycle.
+3. Finish phases 1-7 and hold strict-mode green for one stabilization cycle.
+4. Flip production/default policy to strict.
+5. Delete compatibility paths and compatibility flags.
 
 ## Definition of Done
 

@@ -66,6 +66,16 @@ class MemoryPrivilegeFoundationSpecTest(unittest.TestCase):
             r"if \(flags & MEM_REGION_FLAG_USER\)[\s\S]*map_flags \|= PT_FLAG_USER",
             "paging.c should map user-flagged regions with PT_FLAG_USER",
         )
+        self._require(
+            self.paging_src,
+            r"paging_verify_user_root_impl[\s\S]*unexpected pml4",
+            "paging.c should verify user roots do not expose unexpected kernel PML4 slots",
+        )
+        self._require(
+            self.paging_src,
+            r"paging_create_address_space[\s\S]*paging_verify_user_root_impl\(root,\s*1\)",
+            "child address-space creation should verify kernel mapping footprint",
+        )
 
     def test_io_hostcalls_check_capability(self):
         self._require(

@@ -227,6 +227,16 @@ Tasks:
 - Add a debug command or trace dump to print user-root kernel mapping footprint.
 - Add tests that fail when unauthorized kernel ranges appear.
 
+Progress update (2026-05-02):
+- Added paging-level user-root kernel-footprint verifier
+  (`paging_verify_user_root`) with dump helper
+  (`paging_dump_user_root_kernel_mappings`).
+- Enforced verifier at child address-space creation and after user context
+  region setup (`mm_context_create`) to fail fast on unauthorized kernel
+  PML4/PDPT exposure.
+- Added source-level regression assertions for verifier presence and
+  address-space creation hook in `tests/test_memory_privilege_foundation_spec.py`.
+
 Exit criteria:
 - User roots map only approved kernel transition/support ranges.
 - No general higher-half bulk alias remains in child roots.

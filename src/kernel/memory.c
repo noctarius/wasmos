@@ -519,6 +519,11 @@ mm_context_t *mm_context_create(uint32_t id) {
                                 MEM_REGION_HEAP) != 0) {
         return 0;
     }
+    if (paging_verify_user_root(ctx->root_table, 1) != 0) {
+        serial_write("[mm] verify user root failed\n");
+        paging_dump_user_root_kernel_mappings(ctx->root_table);
+        return 0;
+    }
     g_context_count++;
     return ctx;
 }

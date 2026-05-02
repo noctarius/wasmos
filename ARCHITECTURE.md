@@ -248,7 +248,10 @@ The current tree already boots into a usable user-space stack:
 - A baseline user-pointer copy layer now exists in kernel memory management
   (`mm_copy_from_user` / `mm_copy_to_user`) with user-range permission checks,
   pre-mapping of touched pages, and temporary CR3 switch/restore around the
-  actual copy. Hostcall migration has started with `wasmos_framebuffer_info`
+  actual copy. Copy helpers now use a fixed bounce buffer per chunk so
+  kernel-side source/destination accesses happen under kernel CR3 while
+  user-side memory dereferences happen only under target user CR3. Hostcall
+  migration has started with `wasmos_framebuffer_info`
   using `mm_copy_to_user`; it now copies via the validated user VA resolved
   from the wasm host pointer bridge rather than raw host-pointer casting.
   A non-copy validator API

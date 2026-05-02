@@ -24,6 +24,10 @@
 
 #define IDT_TYPE_INTERRUPT_GATE 0x8E
 #define IDT_TYPE_INTERRUPT_GATE_USER 0xEE
+/* Keep fault classification constants local to CPU fault handling.
+ * Matches user-slot policy in memory.c. */
+#define USER_VA_MIN 0x0000008000000000ULL
+#define USER_VA_MAX 0x0000010000000000ULL
 
 typedef struct __attribute__((packed)) {
     uint16_t limit;
@@ -78,6 +82,54 @@ typedef struct __attribute__((packed)) {
 } tss_t;
 
 static tss_t g_tss;
+
+typedef enum {
+    PF_REASON_UNMAPPED = 0,
+    PF_REASON_WRITE_VIOLATION,
+    PF_REASON_EXEC_VIOLATION,
+    PF_REASON_USER_TO_KERNEL,
+    PF_REASON_PROTECTION,
+} pf_reason_t;
+
+static pf_reason_t
+pf_classify_reason(uint64_t error_code, uint64_t addr, uint8_t from_user)
+{
+    const uint8_t present = (uint8_t)((error_code & (1ULL << 0)) != 0);
+    const uint8_t write = (uint8_t)((error_code & (1ULL << 1)) != 0);
+    const uint8_t instr = (uint8_t)((error_code & (1ULL << 4)) != 0);
+
+    if (from_user && (addr < USER_VA_MIN || addr >= USER_VA_MAX)) {
+        return PF_REASON_USER_TO_KERNEL;
+    }
+    if (!present) {
+        return PF_REASON_UNMAPPED;
+    }
+    if (instr) {
+        return PF_REASON_EXEC_VIOLATION;
+    }
+    if (write) {
+        return PF_REASON_WRITE_VIOLATION;
+    }
+    return PF_REASON_PROTECTION;
+}
+
+static const char *
+pf_reason_name(pf_reason_t reason)
+{
+    switch (reason) {
+    case PF_REASON_UNMAPPED:
+        return "unmapped";
+    case PF_REASON_WRITE_VIOLATION:
+        return "write_violation";
+    case PF_REASON_EXEC_VIOLATION:
+        return "exec_violation";
+    case PF_REASON_USER_TO_KERNEL:
+        return "user_to_kernel";
+    case PF_REASON_PROTECTION:
+    default:
+        return "protection";
+    }
+}
 
 
 static void
@@ -412,10 +464,18 @@ x86_page_fault_handler(uint64_t error_code, const uint64_t *frame)
 
     /* #PF frame starts with [err, rip, cs, rflags, ...]. */
     uint64_t cs = frame ? frame[2] : 0;
+    uint64_t rip = frame ? frame[1] : 0;
     uint8_t from_user = (uint8_t)((cs & 0x3u) == 0x3u);
+    pf_reason_t reason = pf_classify_reason(error_code, cr2, from_user);
 
     if (memory_service_handle_fault_ipc(proc->context_id, cr2, error_code) != 0) {
         if (from_user) {
+            serial_printf("[fault] user-pf pid=%u reason=%s err=%016llx cr2=%016llx rip=%016llx\n",
+                          pid,
+                          pf_reason_name(reason),
+                          (unsigned long long)error_code,
+                          (unsigned long long)cr2,
+                          (unsigned long long)rip);
             serial_printf("[cpu] user page fault terminate pid=%u err=%016llx cr2=%016llx\n",
                           pid,
                           (unsigned long long)error_code,

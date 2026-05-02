@@ -255,6 +255,9 @@ The current tree already boots into a usable user-space stack:
   scheduling remaining work; unhandled kernel-mode faults remain fatal.
   Ring3 smoke now includes a dedicated `ring3-fault` injector process and
   asserts `[test] ring3 fault isolate ok` when the fault is contained.
+  User-mode fault logs now include structured reason classification
+  (`unmapped`, `write_violation`, `exec_violation`, `user_to_kernel`,
+  `protection`) together with pid/error/address/rip for deterministic triage.
 - Capability metadata now feeds a per-context resource-capability registry
   (`io.port`, `irq.route`, `mmio.map`, `dma.buffer`); WASM I/O hostcalls now
   enforce `io.port` when explicit capability policy is configured for the

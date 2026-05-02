@@ -83,6 +83,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   process identity, stack bounds, CR3, kernel text range, and framebuffer info
 - shared-memory APIs for native drivers (`shmem_create/map/unmap`,
   `console_ring_id`) and WASM syscalls (`wasmos_shmem_create/map/unmap`)
+- ring3 copy-path compatibility fix: `wasmos_console_read` now mirrors
+  successfully copied input bytes into the immediate wasm host-pointer view,
+  preventing zero-byte reads in CLI serial input handling
 - VT service now tracks per-TTY state (4 slots), including active-TTY switching
   via `VT_IPC_SWITCH_TTY` and per-TTY attributes via `VT_IPC_SET_ATTR_REQ`
   while keeping console output routed through `wasmos_console_write`

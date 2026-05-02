@@ -1562,6 +1562,49 @@ m3ApiRawFunction(wasmos_kmap_dump)
     m3ApiReturn(paging_verify_user_root(root, 1) == 0 ? 0 : -1);
 }
 
+m3ApiRawFunction(wasmos_kmap_dump_all)
+{
+    m3ApiReturnType(int32_t)
+    uint32_t count = process_count_active();
+    int failures = 0;
+
+    trace_do(serial_write("[kmap] contexts begin\n"));
+    for (uint32_t i = 0; i < count; ++i) {
+        uint32_t pid = 0;
+        uint32_t parent_pid = 0;
+        const char *name = 0;
+        if (process_info_at_ex(i, &pid, &parent_pid, &name) != 0) {
+            continue;
+        }
+        process_t *proc = process_get(pid);
+        if (!proc || proc->context_id == 0) {
+            continue;
+        }
+        uint64_t root = mm_context_root_table(proc->context_id);
+        if (!root) {
+            failures++;
+            continue;
+        }
+
+        trace_do(serial_write("[kmap] pid="));
+        trace_do(serial_write_hex64((uint64_t)pid));
+        trace_do(serial_write(" parent="));
+        trace_do(serial_write_hex64((uint64_t)parent_pid));
+        trace_do(serial_write(" ctx="));
+        trace_do(serial_write_hex64((uint64_t)proc->context_id));
+        trace_do(serial_write(" name="));
+        trace_do(serial_write(name ? name : "(unknown)"));
+        trace_do(serial_write("\n"));
+
+        paging_dump_user_root_kernel_mappings(root);
+        if (paging_verify_user_root(root, 1) != 0) {
+            failures++;
+        }
+    }
+    trace_do(serial_write("[kmap] contexts end\n"));
+    m3ApiReturn(failures == 0 ? 0 : -1);
+}
+
 m3ApiRawFunction(wasmos_console_read)
 {
     m3ApiReturnType(int32_t)
@@ -1996,6 +2039,7 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "console_write", "i(*i)", wasmos_console_write);
     rc |= wasm3_link_raw(module, "wasmos", "debug_mark", "i(i)", wasmos_debug_mark);
     rc |= wasm3_link_raw(module, "wasmos", "kmap_dump", "i()", wasmos_kmap_dump);
+    rc |= wasm3_link_raw(module, "wasmos", "kmap_dump_all", "i()", wasmos_kmap_dump_all);
     rc |= wasm3_link_raw(module, "wasmos", "console_read", "i(*i)", wasmos_console_read);
     rc |= wasm3_link_raw(module, "wasmos", "sync_user_read", "i(*i)", wasmos_sync_user_read);
     rc |= wasm3_link_raw(module, "wasmos", "proc_count", "i()", wasmos_proc_count);

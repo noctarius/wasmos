@@ -78,6 +78,31 @@ wasm_copy_to_user_sync_views(uint32_t context_id,
     return 0;
 }
 
+static int
+wasm_copy_from_user_sync_views(uint32_t context_id,
+                               uint64_t user_src,
+                               const void *host_src,
+                               void *dst,
+                               uint32_t len)
+{
+    if (!host_src || !dst) {
+        return -1;
+    }
+    if (len == 0) {
+        return 0;
+    }
+    if (mm_copy_from_user(context_id, dst, user_src, (uint64_t)len) != 0) {
+        return -1;
+    }
+    if (memcmp(dst, host_src, (size_t)len) != 0) {
+        memcpy(dst, host_src, (size_t)len);
+        if (mm_copy_to_user(context_id, user_src, host_src, (uint64_t)len) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
 
 static int
 boot_module_name_at(uint32_t index, char *out, uint32_t out_len, uint32_t *out_name_len)
@@ -967,13 +992,13 @@ m3ApiRawFunction(wasmos_boot_config_copy)
         m3ApiReturn(-1);
     }
     const uint8_t *src = (const uint8_t *)(uintptr_t)g_wasm_boot_info->boot_config;
-    if (wasm_copy_to_user_sync_views(proc->context_id,
-                                     ptr_user,
-                                     ptr,
-                                     src + start,
-                                     count) != 0) {
+    if (mm_copy_to_user(proc->context_id,
+                        ptr_user,
+                        src + start,
+                        (uint64_t)count) != 0) {
         m3ApiReturn(-1);
     }
+    memcpy(ptr, src + start, (size_t)count);
     m3ApiReturn(0);
 }
 
@@ -1445,18 +1470,26 @@ m3ApiRawFunction(wasmos_console_write)
 
     preempt_disable();
     char buf[128];
-    int32_t remaining = len;
-    while (remaining > 0) {
-        int32_t chunk = remaining > (int32_t)(sizeof(buf) - 1) ? (int32_t)(sizeof(buf) - 1) : remaining;
-        for (int32_t i = 0; i < chunk; ++i) {
-            buf[i] = ptr[len - remaining + i];
+    uint32_t copied = 0;
+    while (copied < (uint32_t)len) {
+        uint32_t chunk = (uint32_t)len - copied;
+        if (chunk > (uint32_t)(sizeof(buf) - 1U)) {
+            chunk = (uint32_t)(sizeof(buf) - 1U);
+        }
+        if (wasm_copy_from_user_sync_views(proc->context_id,
+                                           ptr_user + (uint64_t)copied,
+                                           ptr + copied,
+                                           buf,
+                                           chunk) != 0) {
+            preempt_enable();
+            m3ApiReturn(-1);
         }
         buf[chunk] = '\0';
         serial_write(buf);
-        remaining -= chunk;
+        wasm_console_write_vt_mirror(buf, (int32_t)chunk);
+        copied += chunk;
     }
     preempt_enable();
-    wasm_console_write_vt_mirror(ptr, len);
     m3ApiReturn(0);
 }
 
@@ -1504,13 +1537,13 @@ m3ApiRawFunction(wasmos_console_read)
         m3ApiReturn(rc);
     }
     char out = (char)ch;
-    if (mm_copy_to_user(proc->context_id, ptr_user, &out, 1) != 0) {
+    if (wasm_copy_to_user_sync_views(proc->context_id,
+                                     ptr_user,
+                                     ptr,
+                                     &out,
+                                     1) != 0) {
         m3ApiReturn(-1);
     }
-    /* Compatibility mirror: some current wasm consumers observe the host
-     * pointer view immediately after return; keep both views in sync while
-     * ring3 copy-path visibility is being finalized. */
-    ptr[0] = out;
     m3ApiReturn(1);
 }
 
@@ -1781,7 +1814,19 @@ m3ApiRawFunction(wasmos_strlen)
         m3ApiReturn(0);
     }
     int32_t len = 0;
-    while (start + len < end && start[len] != '\0') {
+    uint64_t max_len = (uint64_t)(end - start);
+    for (uint64_t i = 0; i < max_len; ++i) {
+        char ch = 0;
+        if (wasm_copy_from_user_sync_views(proc->context_id,
+                                           ptr_user + i,
+                                           start + i,
+                                           &ch,
+                                           1) != 0) {
+            m3ApiReturn(0);
+        }
+        if (ch == '\0') {
+            break;
+        }
         len++;
     }
     m3ApiReturn(len);

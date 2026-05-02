@@ -112,16 +112,17 @@ Phase 1 inventory tracker (initial pass):
   - Migration item completed: `wasmos_framebuffer_info` now performs
     `mm_copy_to_user` using the validated user VA (`out_user`) rather than a
     raw host pointer reinterpretation.
-  - Migration item in progress: `wasmos_boot_config_copy` now attempts
-    `mm_copy_to_user` using validated user VA (`ptr_user`) first, with a
-    temporary compatibility fallback to host-pointer copy pending cleanup.
+  - Migration item advanced: `wasmos_boot_config_copy` now performs explicit
+    `mm_copy_to_user` using validated user VA (`ptr_user`) and then synchronizes
+    the immediate host-pointer view for current split-view compatibility.
   - Remaining direct user-pointer dereference inventory (next migration batch
     candidates):
     - Output writers: none in current inventory; remaining risk centers on
       dual-write compatibility paths that still mirror into wasm host pointers
       for non-strict stability (`wasmos_boot_config_copy`,
       `wasmos_acpi_rsdp_info`, `wasmos_boot_module_name`).
-    - Input readers: `wasmos_console_write`, `wasmos_strlen`,
+    - Input readers still carrying split-view compatibility handling:
+      `wasmos_console_write`, `wasmos_strlen`,
       `wasmos_block_buffer_write`, `wasmos_fs_buffer_write`
     - Bidirectional buffer paths: `wasmos_block_buffer_copy`,
       `wasmos_fs_buffer_copy`
@@ -134,7 +135,8 @@ Phase 1 inventory tracker (initial pass):
     keep this callsite deferred until ACPI consumer assumptions are aligned.
   - Remaining migration objective: continue replacing direct pointer writes/
     reads in pointer-bearing hostcalls with `mm_copy_to_user` /
-    `mm_copy_from_user` where practical.
+    `mm_copy_from_user` where practical, while keeping split-view bridge usage
+    explicit until runtime-level host/user linear-memory coherence is resolved.
   - Migration item completed: `wasmos_early_log_copy` now copies into a local
     bounce buffer and writes to user memory via `mm_copy_to_user` in bounded
     chunks, removing direct host-pointer output writes from this path.
@@ -148,6 +150,9 @@ Phase 1 inventory tracker (initial pass):
   - Migration item completed: `wasmos_console_read` now writes input bytes back
     to user memory through `mm_copy_to_user` instead of direct host-pointer
     writes.
+  - Migration item advanced: `wasmos_console_write` and `wasmos_strlen` now
+    use an input-side coherence bridge (`mm_copy_from_user` first, host-view
+    divergence detect + resync) instead of consuming host pointers directly.
   - Compatibility hardening update: added a shared helper for sensitive
     early-boot output hostcalls that performs both `mm_copy_to_user` and a
     host-pointer mirror write. This preserves current non-strict behavior while

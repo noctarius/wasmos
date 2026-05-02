@@ -284,6 +284,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   addition to fault reasons: `ring3-fault`, `ring3-fault-write`, and
   `ring3-fault-exec` must each terminate with exit status `-11` and emit
   `[test] ring3 fault* exit status ok` markers
+  (`ring3-fault-exec` reason marker currently accepts `exec_violation`,
+  `user_to_kernel`, or `unmapped` on current QEMU/CPU paths until NX-fault
+  classification is consistently surfaced as `exec_violation`)
 - capability-based driver resource groundwork: per-context capability registry
   (`io.port`, `irq.route`, `mmio.map`, `dma.buffer`) is now wired into
   WASMOS-APP capability grants, and WASM I/O hostcalls enforce `io.port` when

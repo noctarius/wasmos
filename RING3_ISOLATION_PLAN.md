@@ -153,6 +153,10 @@ Phase 1 inventory tracker (initial pass):
   - Migration item advanced: `wasmos_console_write` and `wasmos_strlen` now
     use an input-side coherence bridge (`mm_copy_from_user` first, host-view
     divergence detect + resync) instead of consuming host pointers directly.
+  - Migration item advanced: `wasmos_block_buffer_write` and
+    `wasmos_fs_buffer_write` now use the same input-side coherence bridge for
+    chunked user-buffer ingestion before writing into kernel-owned block/fs
+    staging buffers.
   - Compatibility hardening update: added a shared helper for sensitive
     early-boot output hostcalls that performs both `mm_copy_to_user` and a
     host-pointer mirror write. This preserves current non-strict behavior while

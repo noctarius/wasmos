@@ -728,8 +728,12 @@ m3ApiRawFunction(wasmos_block_buffer_copy)
     }
 
     const uint8_t *src = (const uint8_t *)(uintptr_t)((uint32_t)phys + (uint32_t)offset);
-    for (int32_t i = 0; i < len; ++i) {
-        ptr[i] = src[i];
+    if (wasm_copy_to_user_sync_views(proc->context_id,
+                                     ptr_user,
+                                     ptr,
+                                     src,
+                                     (uint32_t)len) != 0) {
+        m3ApiReturn(-1);
     }
     m3ApiReturn(0);
 }
@@ -840,12 +844,20 @@ m3ApiRawFunction(wasmos_fs_buffer_copy)
         m3ApiReturn(-1);
     }
 
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
     const uint8_t *src = (const uint8_t *)wasm_fs_buffer_for_pid(pid, context_id);
     if (!src) {
         m3ApiReturn(-1);
     }
-    for (int32_t i = 0; i < len; ++i) {
-        ptr[i] = src[offset + i];
+    if (wasm_copy_to_user_sync_views(proc->context_id,
+                                     ptr_user,
+                                     ptr,
+                                     src + offset,
+                                     (uint32_t)len) != 0) {
+        m3ApiReturn(-1);
     }
     m3ApiReturn(0);
 }

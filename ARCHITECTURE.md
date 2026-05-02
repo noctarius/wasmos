@@ -253,8 +253,8 @@ The current tree already boots into a usable user-space stack:
   user-side memory dereferences happen only under target user CR3. Hostcall
   migration has started with `wasmos_framebuffer_info` using
   `mm_copy_to_user`; `wasmos_boot_config_copy` is now on a staged
-  `mm_copy_to_user`-first path with a temporary host-pointer fallback during
-  non-strict compatibility soak.
+  `mm_copy_to_user`-first path with a temporary
+  host-pointer fallback during non-strict compatibility soak.
   A non-copy validator API
   (`mm_user_range_permitted`) is now available for phased hostcall guard
   rollouts. The framebuffer and shared-memory map hostcalls now use an

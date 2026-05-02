@@ -1291,6 +1291,10 @@ m3ApiRawFunction(wasmos_acpi_rsdp_info)
     }
 
     const uint8_t *src = (const uint8_t *)(uintptr_t)g_wasm_boot_info->rsdp;
+    /* TODO(ring3-phase1): migrate this output path to mm_copy_to_user once
+     * ACPI consumer expectations are validated for non-strict mode.
+     * Current direct host-pointer write is retained to avoid regressions
+     * like "ACPI RSDP too small" during hw-discovery startup. */
     for (uint32_t i = 0; i < len; ++i) {
         out_ptr[i] = src[i];
     }

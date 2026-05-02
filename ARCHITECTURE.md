@@ -293,6 +293,10 @@ The current tree already boots into a usable user-space stack:
   verifies that `ring3-fault`, `ring3-fault-write`, and `ring3-fault-exec`
   each terminate with exit status `-11`, emitting dedicated
   `[test] ring3 fault* exit status ok` markers.
+  Current `ring3-fault-exec` reason-marker acceptance includes
+  `exec_violation`, `user_to_kernel`, and `unmapped` on existing QEMU/CPU
+  paths until NX instruction-fetch faults classify consistently as
+  `exec_violation`.
 - Capability metadata now feeds a per-context resource-capability registry
   (`io.port`, `irq.route`, `mmio.map`, `dma.buffer`); WASM I/O hostcalls now
   enforce `io.port` when explicit capability policy is configured for the

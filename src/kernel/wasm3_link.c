@@ -1040,13 +1040,13 @@ m3ApiRawFunction(wasmos_boot_config_copy)
         m3ApiReturn(-1);
     }
     const uint8_t *src = (const uint8_t *)(uintptr_t)g_wasm_boot_info->boot_config;
-    if (mm_copy_to_user(proc->context_id,
-                        ptr_user,
-                        src + start,
-                        (uint64_t)count) != 0) {
+    if (wasm_copy_to_user_sync_views(proc->context_id,
+                                     ptr_user,
+                                     ptr,
+                                     src + start,
+                                     count) != 0) {
         m3ApiReturn(-1);
     }
-    memcpy(ptr, src + start, (size_t)count);
     m3ApiReturn(0);
 }
 

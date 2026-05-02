@@ -92,8 +92,8 @@ class MemoryPrivilegeFoundationSpecTest(unittest.TestCase):
         )
         self._require(
             self.wasm3_link_src,
-            r"wasmos_boot_config_copy[\s\S]*mm_copy_to_user\(\s*proc->context_id,\s*ptr_user,",
-            "wasmos_boot_config_copy should copy via mm_copy_to_user using validated user VA",
+            r"wasmos_boot_config_copy[\s\S]*(mm_copy_to_user\(\s*proc->context_id,\s*ptr_user,|wasm_copy_to_user_sync_views\(\s*proc->context_id,\s*ptr_user,)",
+            "wasmos_boot_config_copy should copy via validated user VA (direct copy or coherence helper)",
         )
 
     def test_user_copy_helpers_use_bounce_buffer_across_cr3_switch(self):

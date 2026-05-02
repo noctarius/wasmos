@@ -8,6 +8,7 @@ static uint8_t g_ring3_syscall_logged;
 static uint8_t g_ring3_stress_ok_logged;
 static uint32_t g_ring3_getpid_count;
 static uint8_t g_ring3_ipc_deny_logged;
+static uint8_t g_ring3_ipc_arg_width_deny_logged;
 static uint8_t g_ring3_ipc_ok_logged;
 static uint8_t g_ring3_ipc_call_deny_logged;
 static uint8_t g_ring3_ipc_call_perm_deny_logged;
@@ -235,6 +236,10 @@ x86_syscall_handler(syscall_frame_t *frame)
             return (uint64_t)-1;
         }
         if (syscall_arg_u32(frame->rdi, &endpoint) != 0) {
+            if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_arg_width_deny_logged) {
+                g_ring3_ipc_arg_width_deny_logged = 1;
+                serial_write("[test] ring3 ipc syscall arg width deny ok\n");
+            }
             return (uint64_t)(int64_t)IPC_ERR_INVALID;
         }
         rc = ipc_notify_from(proc->context_id, endpoint);

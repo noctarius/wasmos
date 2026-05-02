@@ -262,6 +262,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   User-mode fault telemetry now emits structured fault markers with classified
   reasons (`unmapped`, `write_violation`, `exec_violation`,
   `user_to_kernel`, `protection`) plus pid/error/address/rip fields
+- ring3 smoke now also asserts syscall ABI width validation for IPC notify:
+  a CPL3 `IPC_NOTIFY` with a >32-bit endpoint argument is rejected and emits
+  `[test] ring3 ipc syscall arg width deny ok`
 - capability-based driver resource groundwork: per-context capability registry
   (`io.port`, `irq.route`, `mmio.map`, `dma.buffer`) is now wired into
   WASMOS-APP capability grants, and WASM I/O hostcalls enforce `io.port` when

@@ -267,6 +267,9 @@ The current tree already boots into a usable user-space stack:
   User-mode fault logs now include structured reason classification
   (`unmapped`, `write_violation`, `exec_violation`, `user_to_kernel`,
   `protection`) together with pid/error/address/rip for deterministic triage.
+- Ring3 smoke now additionally verifies syscall ABI width validation for IPC:
+  a CPL3 `IPC_NOTIFY` with a >32-bit endpoint is rejected by syscall argument
+  parsing and emits `[test] ring3 ipc syscall arg width deny ok`.
 - Capability metadata now feeds a per-context resource-capability registry
   (`io.port`, `irq.route`, `mmio.map`, `dma.buffer`); WASM I/O hostcalls now
   enforce `io.port` when explicit capability policy is configured for the

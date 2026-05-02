@@ -912,6 +912,9 @@ m3ApiRawFunction(wasmos_boot_config_copy)
                                 MEM_REGION_FLAG_WRITE) != 0) {
         m3ApiReturn(-1);
     }
+    /* TODO(ring3-phase1): migrate this output path to mm_copy_to_user once
+     * user-copy helpers support safe kernel-source copy semantics under
+     * temporary target-CR3 activation for this call site. */
     const uint8_t *src = (const uint8_t *)(uintptr_t)g_wasm_boot_info->boot_config;
     for (uint32_t i = 0; i < count; ++i) {
         ptr[i] = src[start + i];

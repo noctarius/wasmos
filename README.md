@@ -239,10 +239,10 @@ IMPORTANT: Create a git commit after each prompt iteration.
   memory policy into paging (including intermediate table propagation) so
   ring3-accessible mappings are representable; paging now rejects user mappings
   outside the dedicated user slot and enforces user W^X (`WRITE+EXEC` denied).
-  Child address spaces now share a reduced higher-half kernel window (1 GiB)
-  instead of the previous broader alias span. User-root setup now verifies
-  kernel mapping footprint (allowed PML4 slots/windows only) and emits a
-  mapping dump on verification failures for Phase 2 isolation triage.
+  Child address spaces now share a reduced higher-half kernel window (32 MiB)
+  instead of a broad alias span. User-root setup now verifies kernel mapping
+  footprint (allowed PML4/PDPT/PD windows only) and emits a mapping dump on
+  verification failures for Phase 2 isolation triage.
 - CLI now exposes `kmaps` (current process) and `kmaps all` (all active
   process contexts), both backed by kernel hostcalls that dump/verify
   user-root kernel mapping footprint for Phase 2 diagnostics.

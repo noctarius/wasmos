@@ -241,6 +241,9 @@ Progress update (2026-05-02):
 - Extended runtime inspection surface: CLI `kmaps all` calls hostcall
   `kmap_dump_all`, which iterates all active processes and runs dump+verify
   for each live context root table.
+- Tightened default higher-half sharing from broad-window behavior to a
+  bounded 32 MiB allowlist (PDE-level), and extended verifier checks to assert
+  allowed PD entries inside the approved higher-half PDPT window.
 
 Exit criteria:
 - User roots map only approved kernel transition/support ranges.

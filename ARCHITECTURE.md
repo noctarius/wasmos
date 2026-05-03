@@ -250,12 +250,12 @@ The current tree already boots into a usable user-space stack:
   rejects user mappings outside the designated user virtual-address slot and
   enforces user W^X (`WRITE+EXEC` denied); ring3 smoke/native code regions are
   now marked RX after bootstrap copy. Child address spaces now share a reduced
-  higher-half kernel alias window (1 GiB) to tighten default kernel mapping
+  higher-half kernel alias window (32 MiB) to tighten default kernel mapping
   exposure under user CR3 roots.
   User-root creation/setup now also runs a paging verifier that asserts only
   allowed kernel PML4 slots are present (`0`, `511`, private user slot `1`) and
-  that higher-half PDPT entries are constrained to the explicit allowlist
-  window; a dump helper logs kernel-footprint entries for triage on failure.
+  that higher-half PDPT/PD entries are constrained to explicit allowlist
+  windows; a dump helper logs kernel-footprint entries for triage on failure.
 - A baseline user-pointer copy layer now exists in kernel memory management
   (`mm_copy_from_user` / `mm_copy_to_user`) with user-range permission checks,
   pre-mapping of touched pages, and temporary CR3 switch/restore around the

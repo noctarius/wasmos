@@ -212,6 +212,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - scheduler dispatch now uses a dedicated higher-half trampoline stack when
   entered from a low-address stack, removing direct low-stack `rsp/rbp`
   rebasing in `process_schedule_once` during transition windows
+- kernel process context startup now stores higher-half `process_trampoline`
+  RIP, and trampoline dispatch canonicalizes process entry pointers to
+  higher-half addresses before invocation, reducing low-slot execute dependence
 - strict ring3 smoke target (`run-qemu-ring3-test`) currently passes end-to-end
   with ring3 syscall/fault-policy/preempt/native markers enabled; remaining
   strict-mode framebuffer panic/MMIO mapping hardening is tracked in

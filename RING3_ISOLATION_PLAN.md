@@ -304,6 +304,9 @@ Progress update (2026-05-03):
   - Scheduler dispatch now uses a dedicated higher-half trampoline stack on
     low-stack ingress (`process_schedule_once`), replacing direct low-stack
     register rebasing in this non-copy transition window.
+  - Kernel scheduler entry pointers now canonicalize to higher-half addresses
+    at spawn/dispatch (`process_trampoline` RIP + entry-call canonicalization),
+    reducing low-slot execute dependence in non-copy runtime paths.
   - Remaining blocker: complete the same stack-safety guarantee for any
     non-copy transition windows that still assume low-slot compatibility.
 

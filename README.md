@@ -158,6 +158,11 @@ IMPORTANT: Create a git commit after each prompt iteration.
   produce CLI-side timeout failures
 - VT switch/write-drop diagnostics now emit compact `wasmos_debug_mark` tags
   (when `WASMOS_TRACE=1`) into the existing global kernel trace stream
+- low-slot retirement now supports `WASMOS_IDENTITY_PD_COUNT=0` in ring3/user
+  roots while preserving a temporary kernel-root bootstrap low slot for early
+  paging bring-up; low-slot sweep level 2 now reports ring0 contexts as
+  deferred (`[diag] low-slot sweep defer ring0 ...`) instead of stripping
+  them, documenting remaining ring0 compatibility work
 - Known deferred issue: an intermittent framebuffer-only prompt duplication /
   spacing artifact during very rapid `Ctrl+Shift+F1..F4` switching was observed
   previously; it has not reproduced again recently, and trace hooks remain in

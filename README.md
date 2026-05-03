@@ -163,6 +163,15 @@ IMPORTANT: Create a git commit after each prompt iteration.
   paging bring-up; low-slot sweep level 2 now reports ring0 contexts as
   deferred (`[diag] low-slot sweep defer ring0 ...`) instead of stripping
   them, documenting remaining ring0 compatibility work
+- early ring0 bootstrap now performs an explicit low-entry to higher-half
+  handoff (`_start` -> `_start_high`) with bootstrap page tables before
+  entering `kmain`; linker VMA/LMA layout now keeps `virt = higher_half_base +
+  phys` for all high sections so bootstrap 2 MiB mapping resolves the correct
+  bytes across `.text/.rodata/.data/.bss`
+- kernel string alias helpers now only translate low-form kernel image pointers
+  (`phys` form) into higher-half form and no longer re-bias already-high
+  pointers, preventing post-`mm_init` printf/trace faults during strict ring3
+  bring-up
 - Known deferred issue: an intermittent framebuffer-only prompt duplication /
   spacing artifact during very rapid `Ctrl+Shift+F1..F4` switching was observed
   previously; it has not reproduced again recently, and trace hooks remain in

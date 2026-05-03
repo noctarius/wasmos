@@ -312,8 +312,10 @@ paging_init(void)
     g_current_pml4_phys = g_pml4_phys;
 
     if (bootstrap_low_slot) {
-        uint64_t high_target =
-            ((uint64_t)(uintptr_t)&&paging_init_after_bootstrap) + KERNEL_HIGHER_HALF_BASE;
+        uint64_t high_target = (uint64_t)(uintptr_t)&&paging_init_after_bootstrap;
+        if (high_target < KERNEL_HIGHER_HALF_BASE) {
+            high_target += KERNEL_HIGHER_HALF_BASE;
+        }
         __asm__ volatile(
             "mov %0, %%cr3\n"
             "jmp *%1\n"

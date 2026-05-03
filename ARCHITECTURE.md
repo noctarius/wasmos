@@ -203,6 +203,15 @@ The current tree already boots into a usable user-space stack:
   low-slot stripping: sweep level 2 logs ring0 contexts as deferred rather than
   removing their low slot, while ring3/user contexts continue to be the active
   strip target.
+- Kernel entry now uses an explicit two-stage bootstrap: low `_start` builds a
+  minimal page-table handoff and jumps to higher-half `_start_high`, which
+  clears `.bss` and calls `kmain`. Linker high-section layout now keeps
+  `vaddr - KERNEL_HIGHER_HALF_BASE == paddr` across all loadable high sections,
+  so bootstrap large-page mappings resolve the same bytes as ELF PT_LOAD
+  population.
+- Early alias helpers for serial/libc string pointers now translate only
+  low-form kernel-image pointers into higher-half form and leave already-high
+  pointers untouched, preventing post-`mm_init` ring0 faults in printf paths.
 - Scheduler now updates TSS `rsp0` per selected process before context switch,
   establishing the kernel-stack landing point used by user-mode trap/syscall
   entry.

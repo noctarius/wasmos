@@ -28,9 +28,15 @@ static inline int serial_ptr_needs_kernel_alias(uintptr_t p)
     if (!serial_high_alias_enabled() || p == 0) {
         return 0;
     }
+    uint64_t base = KERNEL_HIGHER_HALF_BASE;
+    if ((uint64_t)p >= base) {
+        return 0;
+    }
     uint64_t start = (uint64_t)(uintptr_t)&__kernel_start;
     uint64_t end = (uint64_t)(uintptr_t)&__kernel_end;
-    return ((uint64_t)p >= start && (uint64_t)p < end) ? 1 : 0;
+    uint64_t low_start = start - base;
+    uint64_t low_end = end - base;
+    return ((uint64_t)p >= low_start && (uint64_t)p < low_end) ? 1 : 0;
 }
 
 static inline void outb(uint16_t port, uint8_t value) {

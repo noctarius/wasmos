@@ -13,11 +13,15 @@ static inline const char *
 kernel_str_ptr(const char *s)
 {
     uintptr_t p = (uintptr_t)s;
-    uint64_t start = (uint64_t)(uintptr_t)&__kernel_start;
-    uint64_t end = (uint64_t)(uintptr_t)&__kernel_end;
-    if (serial_high_alias_enabled() && p != 0 &&
-        (uint64_t)p >= start && (uint64_t)p < end) {
-        p = (uintptr_t)((uint64_t)p + KERNEL_HIGHER_HALF_BASE);
+    uint64_t base = KERNEL_HIGHER_HALF_BASE;
+    if (serial_high_alias_enabled() && p != 0 && (uint64_t)p < base) {
+        uint64_t start = (uint64_t)(uintptr_t)&__kernel_start;
+        uint64_t end = (uint64_t)(uintptr_t)&__kernel_end;
+        uint64_t low_start = start - base;
+        uint64_t low_end = end - base;
+        if ((uint64_t)p >= low_start && (uint64_t)p < low_end) {
+            p = (uintptr_t)((uint64_t)p + base);
+        }
     }
     return (const char *)p;
 }

@@ -76,14 +76,14 @@ mm_run_on_copy_stack(mm_copy_work_fn fn, void *arg)
     stack_top &= ~(uintptr_t)0xFULL;
     int rc = -1;
     __asm__ volatile(
-        "mov %%rsp, %%r11\n"
+        "mov %%rsp, %%r15\n"
         "mov %[stack_top], %%rsp\n"
         "mov %[arg], %%rdi\n"
         "call *%[fn]\n"
-        "mov %%r11, %%rsp\n"
+        "mov %%r15, %%rsp\n"
         : "=a"(rc)
         : [stack_top] "r"(stack_top), [fn] "r"(fn), [arg] "r"(arg)
-        : "r11", "rdi", "rcx", "rdx", "rsi", "r8", "r9", "r10", "memory", "cc");
+        : "r15", "rdi", "rcx", "rdx", "rsi", "r8", "r9", "r10", "memory", "cc");
     return rc;
 }
 

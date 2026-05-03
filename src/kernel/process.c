@@ -90,9 +90,11 @@ extern uint8_t __kernel_end;
 #define STACK_GUARD_PAGES 1u
 #define STACK_REDZONE_BYTES 4096u
 #define STACK_CANARY_VALUE 0xC0DEC0DEF00DFACEULL
+#define SCHED_TRAMPOLINE_STACK_BYTES 8192u
 /* Phase-2 stack hardening currently relies on the shared higher-half kernel
  * window (64 MiB by default: 32 * 2 MiB PDEs). */
 #define KERNEL_SHARED_HIGHER_HALF_WINDOW_BYTES (64u * 1024u * 1024u)
+static uint8_t g_sched_trampoline_stack[SCHED_TRAMPOLINE_STACK_BYTES] __attribute__((aligned(16)));
 
 static int
 process_alloc_stack(process_t *slot, uint32_t stack_pages)
@@ -159,6 +161,7 @@ process_alloc_stack(process_t *slot, uint32_t stack_pages)
 extern void context_switch(process_context_t *out, process_context_t *in);
 extern void context_switch_to(process_context_t *in);
 static void context_switch_high(process_context_t *out, process_context_t *in);
+static int process_schedule_once_impl(void);
 
 
 static int process_str_eq(const char *a, const char *b) {
@@ -187,6 +190,27 @@ context_switch_high(process_context_t *out, process_context_t *in)
         fn += (uintptr_t)higher_half_base;
     }
     ((void (*)(process_context_t *, process_context_t *))fn)(out, in);
+}
+
+static int
+process_run_on_sched_stack(int (*fn)(void))
+{
+    if (!fn) {
+        return -1;
+    }
+    uintptr_t stack_top = process_kernel_alias_addr(
+        (uintptr_t)&g_sched_trampoline_stack[SCHED_TRAMPOLINE_STACK_BYTES]);
+    stack_top &= ~(uintptr_t)0xFULL;
+    int rc = -1;
+    __asm__ volatile(
+        "mov %%rsp, %%r15\n"
+        "mov %[stack_top], %%rsp\n"
+        "call *%[fn]\n"
+        "mov %%r15, %%rsp\n"
+        : "=a"(rc)
+        : [stack_top] "r"(stack_top), [fn] "r"(fn)
+        : "r15", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "memory", "cc");
+    return rc;
 }
 
 static void process_log_ctx_watch(const char *where) {
@@ -853,29 +877,23 @@ int process_schedule_once(void) {
     uint64_t higher_half_base = paging_get_higher_half_base();
     uintptr_t here = 0;
     uintptr_t rsp_cur = 0;
-    uintptr_t rbp_cur = 0;
     __asm__ volatile("leaq 0f(%%rip), %0\n0:" : "=r"(here));
     __asm__ volatile("mov %%rsp, %0" : "=r"(rsp_cur));
-    __asm__ volatile("mov %%rbp, %0" : "=r"(rbp_cur));
-    if ((uint64_t)rsp_cur < higher_half_base) {
-        uintptr_t rsp_high = rsp_cur + (uintptr_t)higher_half_base;
-        uintptr_t rbp_high = rbp_cur;
-        if ((uint64_t)rbp_cur < higher_half_base) {
-            rbp_high = rbp_cur + (uintptr_t)higher_half_base;
-        }
-        __asm__ volatile(
-            "mov %0, %%rsp\n"
-            "mov %1, %%rbp\n"
-            :
-            : "r"(rsp_high), "r"(rbp_high)
-            : "memory");
-    }
     if ((uint64_t)here < higher_half_base) {
         uintptr_t high_fn = (uintptr_t)&process_schedule_once;
         high_fn += (uintptr_t)higher_half_base;
         int (*fn_high)(void) = (int (*)(void))high_fn;
         return fn_high();
     }
+    if ((uint64_t)rsp_cur < higher_half_base) {
+        /* TODO(ring3-phase2): Delete this trampoline once all scheduler/trap
+         * ingress paths are guaranteed to arrive on higher-half stacks. */
+        return process_run_on_sched_stack(process_schedule_once_impl);
+    }
+    return process_schedule_once_impl();
+}
+
+static int process_schedule_once_impl(void) {
     if (PROCESS_MAX_COUNT == 0) {
         return 1;
     }

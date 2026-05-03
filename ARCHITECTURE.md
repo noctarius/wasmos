@@ -250,6 +250,9 @@ The current tree already boots into a usable user-space stack:
   use a dedicated higher-half copy stack trampoline when entered from
   low-address callers, so temporary user-CR3 switch windows no longer rely on
   low-mapped caller stacks.
+- Scheduler hardening update: `process_schedule_once` now uses a dedicated
+  higher-half trampoline stack when entered from low-address stacks, replacing
+  direct in-place low-stack `rsp/rbp` rebasing in the scheduler entry path.
 - Regression coverage now includes `tests/test_ring3_smoke_target.py`, which
   executes `cmake --build build --target run-qemu-ring3-test` to keep ring3
   marker assertions in the standard automated test suite, including structured

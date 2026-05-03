@@ -245,6 +245,14 @@ Progress update (2026-05-02):
   bounded 32 MiB allowlist (PDE-level), and extended verifier checks to assert
   allowed PD entries inside the approved higher-half PDPT window.
 
+Progress update (2026-05-03):
+- User-root verifier no longer requires `PML4[0]` pointer identity with kernel
+  root; it now verifies higher-half slot parity (`PML4[511]`) plus explicit
+  low-slot PDPT entry allowlist (`IDENTITY_PD_COUNT` only).
+- Child address-space creation now allocates a private low-slot PDPT and copies
+  only allowlisted identity/direct-map entries from the kernel template.
+- Address-space teardown now frees child-private low-slot PDPT pages.
+
 Exit criteria:
 - User roots map only approved kernel transition/support ranges.
 - No general higher-half bulk alias remains in child roots.

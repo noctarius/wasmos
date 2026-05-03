@@ -62,10 +62,14 @@ static const uint8_t g_skip_wasm_boot = 0;
 #ifndef WASMOS_LOW_SLOT_SWEEP_DEFAULT
 #define WASMOS_LOW_SLOT_SWEEP_DEFAULT 0
 #endif
+#ifndef WASMOS_LOW_SLOT_SWEEP_LEVEL_DEFAULT
+#define WASMOS_LOW_SLOT_SWEEP_LEVEL_DEFAULT 1
+#endif
 /* TODO: Re-enable default ring3 smoke spawn after sustained soak confirms
  * preempt-trampoline behavior remains stable across broader workloads. */
 static const uint8_t g_ring3_smoke_enabled = WASMOS_RING3_SMOKE_DEFAULT;
 static const uint8_t g_low_slot_sweep_enabled = WASMOS_LOW_SLOT_SWEEP_DEFAULT;
+static const uint8_t g_low_slot_sweep_level = WASMOS_LOW_SLOT_SWEEP_LEVEL_DEFAULT;
 
 typedef struct {
     uint32_t fault_pid;
@@ -116,7 +120,7 @@ run_low_slot_sweep_diagnostic(void)
         if (!proc || proc->is_idle || proc->context_id == 0) {
             continue;
         }
-        if ((proc->ctx.cs & 0x3u) != 0x3u) {
+        if ((proc->ctx.cs & 0x3u) != 0x3u && g_low_slot_sweep_level < 2u) {
             continue;
         }
         uint64_t root = mm_context_root_table(proc->context_id);
@@ -1311,6 +1315,7 @@ kmain(boot_info_t *boot_info)
         (unsigned long long)boot_info->size);
     serial_printf("[mode] strict-ring3=%u\n", (unsigned int)g_ring3_smoke_enabled);
     serial_printf("[mode] low-slot-sweep=%u\n", (unsigned int)g_low_slot_sweep_enabled);
+    serial_printf("[mode] low-slot-sweep-level=%u\n", (unsigned int)g_low_slot_sweep_level);
     g_boot_info = boot_info;
     framebuffer_init(boot_info);
     cpu_init();

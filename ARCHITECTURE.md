@@ -267,6 +267,11 @@ The current tree already boots into a usable user-space stack:
   `WASMOS_LOW_SLOT_SWEEP=ON`, boot performs a strip+verify pass across eligible
   user-mode contexts and emits first-failure markers for low-slot transition
   triage; default remains OFF to preserve baseline behavior.
+- Sweep diagnostics now support scope levels via
+  `WASMOS_LOW_SLOT_SWEEP_LEVEL` (`1` user-only, `2` include selected non-user
+  contexts).
+- Identity-map breadth is now configurable via `WASMOS_IDENTITY_PD_COUNT`
+  (`0..4`, default `4`) to support phased low-slot reduction trials.
 - Regression coverage now includes `tests/test_ring3_smoke_target.py`, which
   executes `cmake --build build --target run-qemu-ring3-test` to keep ring3
   marker assertions in the standard automated test suite, including structured

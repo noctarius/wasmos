@@ -14,7 +14,14 @@
 #define PT_FLAG_LARGE_PAGE (1ULL << 7)
 #define PT_FLAG_NX (1ULL << 63)
 
-#define IDENTITY_PD_COUNT 4
+#ifndef WASMOS_IDENTITY_PD_COUNT
+#define WASMOS_IDENTITY_PD_COUNT 4
+#endif
+#if (WASMOS_IDENTITY_PD_COUNT < 0) || (WASMOS_IDENTITY_PD_COUNT > 4)
+#error "WASMOS_IDENTITY_PD_COUNT must be in range 0..4"
+#endif
+#define IDENTITY_PD_COUNT ((uint32_t)WASMOS_IDENTITY_PD_COUNT)
+#define IDENTITY_PD_COUNT_MAX 4u
 /* Keep only the minimum higher-half span shared into child CR3 roots. */
 #define HIGHER_HALF_PD_COUNT 1
 /* Limit higher-half sharing to the first 64 MiB window by default. */
@@ -226,7 +233,7 @@ paging_init(void)
     uint64_t pml4_phys = 0;
     uint64_t pdpt_low_phys = 0;
     uint64_t pdpt_high_phys = 0;
-    uint64_t pd_phys[IDENTITY_PD_COUNT] = { 0 };
+    uint64_t pd_phys[IDENTITY_PD_COUNT_MAX] = { 0 };
     uint64_t pd_high_phys[HIGHER_HALF_PD_COUNT] = { 0 };
 
     if (alloc_table(&pml4_phys) != 0 || alloc_table(&pdpt_low_phys) != 0
@@ -253,7 +260,11 @@ paging_init(void)
     volatile uint64_t *pdpt_high =
         (volatile uint64_t *)(uintptr_t)pdpt_high_phys;
 
-    pml4[0] = pdpt_low_phys | PT_FLAG_PRESENT | PT_FLAG_WRITE;
+    if (IDENTITY_PD_COUNT > 0) {
+        pml4[0] = pdpt_low_phys | PT_FLAG_PRESENT | PT_FLAG_WRITE;
+    } else {
+        pml4[0] = 0;
+    }
     pml4[511] = pdpt_high_phys | PT_FLAG_PRESENT | PT_FLAG_WRITE;
 
     for (uint32_t pdpt_idx = 0; pdpt_idx < IDENTITY_PD_COUNT; ++pdpt_idx) {
@@ -336,20 +347,22 @@ paging_create_address_space(uint64_t *out_root_table)
     volatile uint64_t *src = (volatile uint64_t *)(uintptr_t)g_pml4_phys;
     volatile uint64_t *src_pdpt_low = 0;
     volatile uint64_t *dst_pdpt_low = 0;
-    if (!(src[0] & PT_FLAG_PRESENT) || alloc_table(&child_pdpt_low) != 0) {
-        pfa_free_pages(root, 1);
-        return -1;
-    }
-    src_pdpt_low = (volatile uint64_t *)(uintptr_t)entry_phys(src[0]);
-    dst_pdpt_low = (volatile uint64_t *)(uintptr_t)child_pdpt_low;
-    for (uint32_t i = 0; i < IDENTITY_PD_COUNT; ++i) {
-        dst_pdpt_low[i] = src_pdpt_low[i];
+    if (IDENTITY_PD_COUNT > 0) {
+        if (!(src[0] & PT_FLAG_PRESENT) || alloc_table(&child_pdpt_low) != 0) {
+            pfa_free_pages(root, 1);
+            return -1;
+        }
+        src_pdpt_low = (volatile uint64_t *)(uintptr_t)entry_phys(src[0]);
+        dst_pdpt_low = (volatile uint64_t *)(uintptr_t)child_pdpt_low;
+        for (uint32_t i = 0; i < IDENTITY_PD_COUNT; ++i) {
+            dst_pdpt_low[i] = src_pdpt_low[i];
+        }
     }
 
     /* A child address space starts with only the shared kernel mappings:
      * low identity/direct-physical access in slot 0 and the higher-half alias
      * in slot 511. Slot 1 stays private for process-owned mappings. */
-    dst[0] = child_pdpt_low | PT_FLAG_PRESENT | PT_FLAG_WRITE;
+    dst[0] = (IDENTITY_PD_COUNT > 0) ? (child_pdpt_low | PT_FLAG_PRESENT | PT_FLAG_WRITE) : 0;
     dst[511] = src[511];
     if (paging_verify_user_root_impl(root, 1) != 0) {
         pfa_free_pages(child_pdpt_low, 1);

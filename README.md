@@ -221,6 +221,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - ring3 user-entry setup now explicitly verifies `PML4[0]` is absent after
   low-slot stripping (`paging_verify_user_root_no_low_slot`) before enabling
   CPL3 entry
+- optional diagnostic mode `WASMOS_LOW_SLOT_SWEEP` (default OFF) now performs
+  a boot-time strip+verify pass over eligible user-mode contexts and logs the
+  first strip/verify failure for Phase-2 triage (`[diag] low-slot sweep ...`)
 - strict ring3 smoke target (`run-qemu-ring3-test`) currently passes end-to-end
   with ring3 syscall/fault-policy/preempt/native markers enabled; remaining
   strict-mode framebuffer panic/MMIO mapping hardening is tracked in

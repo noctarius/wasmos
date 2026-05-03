@@ -14,6 +14,7 @@ int paging_create_address_space(uint64_t *out_root_table);
 void paging_destroy_address_space(uint64_t root_table);
 int paging_map_4k_in_root(uint64_t root_table, uint64_t virt, uint64_t phys, uint64_t flags);
 int paging_unmap_4k_in_root(uint64_t root_table, uint64_t virt);
+int paging_strip_low_slot_in_root(uint64_t root_table);
 int paging_map_4k(uint64_t virt, uint64_t phys, uint64_t flags);
 int paging_unmap_4k(uint64_t virt);
 int paging_verify_user_root(uint64_t root_table, int log_failures);

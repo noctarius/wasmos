@@ -33,6 +33,7 @@ typedef struct {
     uint64_t cs;
     uint64_t ss;
     uint64_t user_rsp;
+    uint64_t root_table;
 } process_context_t;
 
 _Static_assert(offsetof(process_context_t, r15) == 0, "process_context_t r15 offset mismatch");
@@ -43,6 +44,7 @@ _Static_assert(offsetof(process_context_t, rflags) == 136, "process_context_t rf
 _Static_assert(offsetof(process_context_t, cs) == 144, "process_context_t cs offset mismatch");
 _Static_assert(offsetof(process_context_t, ss) == 152, "process_context_t ss offset mismatch");
 _Static_assert(offsetof(process_context_t, user_rsp) == 160, "process_context_t user_rsp offset mismatch");
+_Static_assert(offsetof(process_context_t, root_table) == 168, "process_context_t root_table offset mismatch");
 
 typedef struct {
     uint64_t r15;

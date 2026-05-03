@@ -1259,6 +1259,8 @@ kmain(boot_info_t *boot_info)
     cpu_init();
 
     mm_init(boot_info);
+    serial_enable_high_alias(1);
+    cpu_relocate_tables_high();
     capability_init();
     slab_init();
     ipc_init();

@@ -26,7 +26,7 @@
 #define USER_PML4_INDEX 1
 
 static uint64_t g_pml4_phys;
-static uint64_t g_current_pml4_phys;
+uint64_t g_current_pml4_phys;
 
 static uint64_t entry_phys(uint64_t entry);
 
@@ -103,25 +103,21 @@ paging_verify_user_root_impl(uint64_t root_table, int log_failures)
         }
     }
 
-    if (!(root[0] & PT_FLAG_PRESENT)) {
-        if (log_failures) {
-            serial_write("[paging] verify fail: pml4[0] absent\n");
-        }
-        return -1;
-    }
-    uint64_t pdpt_low_phys = entry_phys(root[0]);
-    volatile uint64_t *pdpt_low = (volatile uint64_t *)(uintptr_t)pdpt_low_phys;
-    for (uint32_t i = 0; i < ENTRIES_PER_TABLE; ++i) {
-        uint8_t allowed = (uint8_t)(i < IDENTITY_PD_COUNT);
-        uint8_t present = (uint8_t)((pdpt_low[i] & PT_FLAG_PRESENT) != 0);
-        if (present != allowed) {
-            if (log_failures) {
-                serial_printf("[paging] verify fail: pdpt_low[%u]=%016llx allowed=%u\n",
-                              (unsigned int)i,
-                              (unsigned long long)pdpt_low[i],
-                              (unsigned int)allowed);
+    if (root[0] & PT_FLAG_PRESENT) {
+        uint64_t pdpt_low_phys = entry_phys(root[0]);
+        volatile uint64_t *pdpt_low = (volatile uint64_t *)(uintptr_t)pdpt_low_phys;
+        for (uint32_t i = 0; i < ENTRIES_PER_TABLE; ++i) {
+            uint8_t allowed = (uint8_t)(i < IDENTITY_PD_COUNT);
+            uint8_t present = (uint8_t)((pdpt_low[i] & PT_FLAG_PRESENT) != 0);
+            if (present != allowed) {
+                if (log_failures) {
+                    serial_printf("[paging] verify fail: pdpt_low[%u]=%016llx allowed=%u\n",
+                                  (unsigned int)i,
+                                  (unsigned long long)pdpt_low[i],
+                                  (unsigned int)allowed);
+                }
+                return -1;
             }
-            return -1;
         }
     }
 
@@ -155,11 +151,7 @@ alloc_table(uint64_t *out_phys)
     return 0;
 }
 
-static void
-write_cr3(uint64_t value)
-{
-    __asm__ volatile("mov %0, %%cr3" : : "r"(value) : "memory");
-}
+#define WRITE_CR3(value) __asm__ volatile("mov %0, %%cr3" : : "r"(value) : "memory")
 
 static void
 invlpg(uint64_t virt)
@@ -288,7 +280,7 @@ paging_init(void)
 
     g_pml4_phys = pml4_phys;
     g_current_pml4_phys = g_pml4_phys;
-    write_cr3(g_pml4_phys);
+    WRITE_CR3(g_pml4_phys);
 
     serial_printf("[paging] cr3=%016llx\n[paging] higher-half=%016llx\n",
         (unsigned long long)g_pml4_phys,
@@ -314,15 +306,19 @@ paging_get_current_root_table(void)
     return g_current_pml4_phys;
 }
 
-int
+__attribute__((naked)) int
 paging_switch_root(uint64_t root_table)
 {
-    if (!root_table) {
-        return -1;
-    }
-    g_current_pml4_phys = root_table;
-    write_cr3(root_table);
-    return 0;
+    __asm__ volatile(
+        "test %rdi, %rdi\n"
+        "jz 1f\n"
+        "mov %rdi, g_current_pml4_phys(%rip)\n"
+        "mov %rdi, %cr3\n"
+        "xor %eax, %eax\n"
+        "ret\n"
+        "1:\n"
+        "mov $-1, %eax\n"
+        "ret\n");
 }
 
 int
@@ -470,6 +466,27 @@ paging_map_4k_in_root(uint64_t root_table, uint64_t virt, uint64_t phys, uint64_
     pt[pt_idx] = (phys & ~0xFFFULL) | map_flags;
     invlpg(virt);
     return 0;
+}
+
+int
+paging_strip_low_slot_in_root(uint64_t root_table)
+{
+    if (!root_table || root_table == g_pml4_phys) {
+        return -1;
+    }
+    volatile uint64_t *pml4 = (volatile uint64_t *)(uintptr_t)root_table;
+    if (!(pml4[0] & PT_FLAG_PRESENT)) {
+        return paging_verify_user_root_impl(root_table, 0);
+    }
+    uint64_t pdpt_low_phys = entry_phys(pml4[0]);
+    pml4[0] = 0;
+    if (paging_get_current_root_table() == root_table) {
+        WRITE_CR3(root_table);
+    }
+    if (pdpt_low_phys) {
+        pfa_free_pages(pdpt_low_phys, 1);
+    }
+    return paging_verify_user_root_impl(root_table, 0);
 }
 
 int

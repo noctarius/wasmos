@@ -12,12 +12,16 @@
 #define PT_FLAG_WRITE (1ULL << 1)
 #define PT_FLAG_USER (1ULL << 2)
 #define PT_FLAG_LARGE_PAGE (1ULL << 7)
+#define PT_FLAG_NX (1ULL << 63)
 
 #define IDENTITY_PD_COUNT 4
 /* Keep only the minimum higher-half span shared into child CR3 roots. */
 #define HIGHER_HALF_PD_COUNT 1
-/* TODO: If higher-half kernel allocations grow beyond the first 1 GiB window,
- * teach child roots to map only the specific additional windows they need. */
+/* Limit higher-half sharing to the first 32 MiB window by default. */
+#define HIGHER_HALF_PDE_COUNT 16
+/* TODO: If higher-half kernel allocations grow beyond the default 32 MiB
+ * window, teach child roots to map only the specific additional windows they
+ * need. */
 #define HIGHER_HALF_PDPT_INDEX 510
 #define USER_PML4_INDEX 1
 
@@ -77,6 +81,25 @@ paging_verify_user_root_impl(uint64_t root_table, int log_failures)
                               (unsigned int)allowed);
             }
             return -1;
+        }
+        if (!allowed || !present) {
+            continue;
+        }
+        uint64_t pd_phys = entry_phys(pdpt_high[i]);
+        volatile uint64_t *pd = (volatile uint64_t *)(uintptr_t)pd_phys;
+        for (uint32_t pde = 0; pde < ENTRIES_PER_TABLE; ++pde) {
+            uint8_t pde_allowed = (uint8_t)(pde < HIGHER_HALF_PDE_COUNT);
+            uint8_t pde_present = (uint8_t)((pd[pde] & PT_FLAG_PRESENT) != 0);
+            if (pde_present != pde_allowed) {
+                if (log_failures) {
+                    serial_printf("[paging] verify fail: pd_high[%u][%u]=%016llx allowed=%u\n",
+                                  (unsigned int)i,
+                                  (unsigned int)pde,
+                                  (unsigned long long)pd[pde],
+                                  (unsigned int)pde_allowed);
+                }
+                return -1;
+            }
         }
     }
 
@@ -190,6 +213,7 @@ paging_init(void)
     uint64_t pdpt_low_phys = 0;
     uint64_t pdpt_high_phys = 0;
     uint64_t pd_phys[IDENTITY_PD_COUNT] = { 0 };
+    uint64_t pd_high_phys[HIGHER_HALF_PD_COUNT] = { 0 };
 
     if (alloc_table(&pml4_phys) != 0 || alloc_table(&pdpt_low_phys) != 0
         || alloc_table(&pdpt_high_phys) != 0) {
@@ -200,6 +224,12 @@ paging_init(void)
     for (uint32_t i = 0; i < IDENTITY_PD_COUNT; ++i) {
         if (alloc_table(&pd_phys[i]) != 0) {
             serial_write("[paging] pd alloc failed\n");
+            return -1;
+        }
+    }
+    for (uint32_t i = 0; i < HIGHER_HALF_PD_COUNT; ++i) {
+        if (alloc_table(&pd_high_phys[i]) != 0) {
+            serial_write("[paging] high pd alloc failed\n");
             return -1;
         }
     }
@@ -216,17 +246,21 @@ paging_init(void)
         volatile uint64_t *pd = (volatile uint64_t *)(uintptr_t)pd_phys[pdpt_idx];
         pdpt_low[pdpt_idx] = pd_phys[pdpt_idx] | PT_FLAG_PRESENT | PT_FLAG_WRITE;
 
-        if (pdpt_idx < HIGHER_HALF_PD_COUNT) {
-            uint32_t high_idx = HIGHER_HALF_PDPT_INDEX + pdpt_idx;
-            pdpt_high[high_idx] =
-                pd_phys[pdpt_idx] | PT_FLAG_PRESENT | PT_FLAG_WRITE;
-        }
-
         uint64_t phys_base = ((uint64_t)pdpt_idx) * (1ULL << 30);
         for (uint32_t pde_idx = 0; pde_idx < ENTRIES_PER_TABLE; ++pde_idx) {
             uint64_t phys = phys_base + ((uint64_t)pde_idx) * PAGE_SIZE_2M;
             pd[pde_idx] =
                 phys | PT_FLAG_PRESENT | PT_FLAG_WRITE | PT_FLAG_LARGE_PAGE;
+        }
+    }
+    for (uint32_t high_pdpt_idx = 0; high_pdpt_idx < HIGHER_HALF_PD_COUNT; ++high_pdpt_idx) {
+        uint32_t high_idx = HIGHER_HALF_PDPT_INDEX + high_pdpt_idx;
+        volatile uint64_t *high_pd = (volatile uint64_t *)(uintptr_t)pd_high_phys[high_pdpt_idx];
+        uint64_t phys_base = ((uint64_t)high_pdpt_idx) * (1ULL << 30);
+        pdpt_high[high_idx] = pd_high_phys[high_pdpt_idx] | PT_FLAG_PRESENT | PT_FLAG_WRITE;
+        for (uint32_t pde_idx = 0; pde_idx < HIGHER_HALF_PDE_COUNT; ++pde_idx) {
+            uint64_t phys = phys_base + ((uint64_t)pde_idx) * PAGE_SIZE_2M;
+            high_pd[pde_idx] = phys | PT_FLAG_PRESENT | PT_FLAG_WRITE | PT_FLAG_LARGE_PAGE;
         }
     }
 
@@ -389,6 +423,9 @@ paging_map_4k_in_root(uint64_t root_table, uint64_t virt, uint64_t phys, uint64_
     }
     if (flags & MEM_REGION_FLAG_USER) {
         map_flags |= PT_FLAG_USER;
+    }
+    if (!(flags & MEM_REGION_FLAG_EXEC)) {
+        map_flags |= PT_FLAG_NX;
     }
     pt[pt_idx] = (phys & ~0xFFFULL) | map_flags;
     invlpg(virt);

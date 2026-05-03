@@ -17,9 +17,9 @@
 #define IDENTITY_PD_COUNT 4
 /* Keep only the minimum higher-half span shared into child CR3 roots. */
 #define HIGHER_HALF_PD_COUNT 1
-/* Limit higher-half sharing to the first 32 MiB window by default. */
-#define HIGHER_HALF_PDE_COUNT 16
-/* TODO: If higher-half kernel allocations grow beyond the default 32 MiB
+/* Limit higher-half sharing to the first 64 MiB window by default. */
+#define HIGHER_HALF_PDE_COUNT 32
+/* TODO: If higher-half kernel allocations grow beyond the default 64 MiB
  * window, teach child roots to map only the specific additional windows they
  * need. */
 #define HIGHER_HALF_PDPT_INDEX 510

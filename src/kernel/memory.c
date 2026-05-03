@@ -15,6 +15,7 @@ static const uint64_t pf_err_present = 1ULL << 0;
 static const uint64_t pf_err_write = 1ULL << 1;
 static const uint64_t pf_err_user = 1ULL << 2;
 static const uint64_t pf_err_instr = 1ULL << 4;
+static const uint64_t pt_flag_present = 1ULL << 0;
 static const boot_info_t *g_boot_info;
 static mm_context_t g_contexts[MM_MAX_CONTEXTS];
 static uint32_t g_context_count;
@@ -619,6 +620,17 @@ mm_copy_from_user(uint32_t context_id, void *dst, uint64_t user_src, uint64_t si
     }
 
     uint64_t prev_root = paging_get_current_root_table();
+    uint64_t rsp = 0;
+    uint64_t higher_half_base = paging_get_higher_half_base();
+    volatile uint64_t *root_entries = (volatile uint64_t *)(uintptr_t)ctx->root_table;
+    __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
+    if (rsp < higher_half_base && (root_entries[0] & pt_flag_present) == 0) {
+        /* TODO(ring3-phase2): Replace this low-slot compatibility carve-out
+         * with a dedicated stack-safe copy path so low-stack callers are never
+         * required for CR3 switch windows. */
+        mm_trace_copy_fail("from", "stack_low", context_id, user_src, size, ctx->root_table, prev_root, rsp, 0);
+        return -1;
+    }
     uint8_t *dst_bytes = (uint8_t *)dst;
     uint64_t remaining = size;
     uint64_t user_cur = user_src;
@@ -627,12 +639,6 @@ mm_copy_from_user(uint32_t context_id, void *dst, uint64_t user_src, uint64_t si
 
     while (remaining > 0) {
         uint64_t n = (remaining < chunk_size) ? remaining : chunk_size;
-        /* TODO(ring3-phase2): this temporary CR3 switch path still assumes the
-         * current kernel stack is mapped in the target root. Removing child
-         * PML4[0] requires stack-safe copy plumbing (or higher-half kernel
-         * stack mapping under user roots). */
-        /* TODO(ring3-phase2): same dependency as mm_copy_from_user above; this
-         * switch is not safe once child PML4[0] identity mappings are removed. */
         if (paging_switch_root(ctx->root_table) != 0) {
             mm_trace_copy_fail("from", "switch_to_user", context_id, user_src, size, ctx->root_table, paging_get_current_root_table(), user_cur, n);
             return -1;
@@ -668,6 +674,17 @@ mm_copy_to_user(uint32_t context_id, uint64_t user_dst, const void *src, uint64_
     }
 
     uint64_t prev_root = paging_get_current_root_table();
+    uint64_t rsp = 0;
+    uint64_t higher_half_base = paging_get_higher_half_base();
+    volatile uint64_t *root_entries = (volatile uint64_t *)(uintptr_t)ctx->root_table;
+    __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
+    if (rsp < higher_half_base && (root_entries[0] & pt_flag_present) == 0) {
+        /* TODO(ring3-phase2): Replace this low-slot compatibility carve-out
+         * with a dedicated stack-safe copy path so low-stack callers are never
+         * required for CR3 switch windows. */
+        mm_trace_copy_fail("to", "stack_low", context_id, user_dst, size, ctx->root_table, prev_root, rsp, 0);
+        return -1;
+    }
     const uint8_t *src_bytes = (const uint8_t *)src;
     uint64_t remaining = size;
     uint64_t user_cur = user_dst;

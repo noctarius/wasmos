@@ -242,7 +242,7 @@ Progress update (2026-05-02):
   `kmap_dump_all`, which iterates all active processes and runs dump+verify
   for each live context root table.
 - Tightened default higher-half sharing from broad-window behavior to a
-  bounded 32 MiB allowlist (PDE-level), and extended verifier checks to assert
+  bounded 64 MiB allowlist (PDE-level), and extended verifier checks to assert
   allowed PD entries inside the approved higher-half PDPT window.
 
 Progress update (2026-05-03):
@@ -276,6 +276,34 @@ Progress update (2026-05-03):
   more scheduler/user-CR3 execution uses higher-half stack addresses. A
   temporary fallback to unconstrained stack allocation remains in place for
   stability when the bounded shared window cannot satisfy all stacks.
+- Strict-ring3 integration follow-up (2026-05-03):
+  - Fixed deterministic strict-mode crashes uncovered after the low-slot
+    experiment across scheduler/context-switch, IRQ route tables, serial/libc
+    pointer handling, and framebuffer globals.
+  - Context-switch ingress pointers are now canonicalized before dereference
+    in assembly transition paths.
+  - Scheduler RIP validation now accepts both low and higher-half kernel text
+    forms used during transition windows.
+  - Serial/libc pointer remap policy now aliases only low kernel-image
+    pointers; user pointers are no longer remapped into invalid higher-half
+    addresses.
+  - `run-qemu-ring3-test` now passes end-to-end with strict mode enabled,
+    including ring3 smoke, fault-policy, preempt stress, and native ABI checks.
+  - Remaining Phase-2 debt:
+    - remove temporary strict-mode framebuffer write bypass once explicit MMIO
+      mapping guarantees exist for that path
+    - continue reducing/removing low-slot compatibility mappings after all
+      user-CR3 kernel windows are fully higher-half-safe
+- Stack-safety hardening update (2026-05-03):
+  - Scheduler/process stack allocation no longer falls back to low-address
+    pages when higher-half-window allocation fails; process spawn now fails
+    closed in that condition.
+  - `mm_copy_from_user` / `mm_copy_to_user` now explicitly reject low-stack
+    execution (`stack_low` trace stage) before any temporary CR3 switch to a
+    user root, preventing silent dependence on child `PML4[0]` low mappings.
+  - Remaining blocker: provide a dedicated stack-safe copy/transition path so
+    low-slot stripping can be re-enabled without relying on caller stack
+    placement checks.
 
 Exit criteria:
 - User roots map only approved kernel transition/support ranges.

@@ -231,6 +231,10 @@ The current tree already boots into a usable user-space stack:
   ring3 bootstrap copying
   now writes through the target context's user virtual mapping (temporary RW
   mapping then RX remap) instead of writing code directly via physical aliases.
+- Current strict-ring3 checkpoint: `run-qemu-ring3-test` now completes
+  successfully end-to-end with ring3 syscall/fault-policy/preempt/native
+  markers. Remaining strict-mode framebuffer MMIO/panic rendering hardening is
+  tracked in `RING3_ISOLATION_PLAN.md`.
 - Native driver ELF PT_LOAD segment population now uses a chunked
   root-switch copy helper with kernel-side bounce buffering (bytes + zero-fill)
   into the target context rather than direct dereference of mapped segment
@@ -238,7 +242,12 @@ The current tree already boots into a usable user-space stack:
 - Scheduler/process kernel stacks now prefer higher-half virtual addresses
   backed by low physical pages inside the shared higher-half window; this
   reduces low-slot dependency during user-CR3 execution windows, while a
-  temporary allocation fallback keeps stability when that window is exhausted.
+  temporary allocation fallback previously kept stability when that window was
+  exhausted.
+- Phase-2 hardening update: kernel process-stack allocation now fails closed
+  if higher-half-window allocation cannot be satisfied (no low-address fallback
+  path), and user-copy helpers (`mm_copy_from_user` / `mm_copy_to_user`) now
+  reject execution from low-address kernel stacks before switching to user CR3.
 - Regression coverage now includes `tests/test_ring3_smoke_target.py`, which
   executes `cmake --build build --target run-qemu-ring3-test` to keep ring3
   marker assertions in the standard automated test suite, including structured
@@ -255,7 +264,7 @@ The current tree already boots into a usable user-space stack:
   rejects user mappings outside the designated user virtual-address slot and
   enforces user W^X (`WRITE+EXEC` denied); ring3 smoke/native code regions are
   now marked RX after bootstrap copy. Child address spaces now share a reduced
-  higher-half kernel alias window (32 MiB) to tighten default kernel mapping
+  higher-half kernel alias window (64 MiB) to tighten default kernel mapping
   exposure under user CR3 roots.
   User-root creation/setup now also runs a paging verifier that asserts only
   allowed kernel PML4 slots are present (`0`, `511`, private user slot `1`) and

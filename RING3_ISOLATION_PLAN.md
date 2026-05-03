@@ -301,6 +301,9 @@ Progress update (2026-05-03):
   - `mm_copy_from_user` / `mm_copy_to_user` now trampoline through a dedicated
     higher-half copy stack before temporary CR3 switches when needed, removing
     caller low-stack dependence for copy windows.
+  - Scheduler dispatch now uses a dedicated higher-half trampoline stack on
+    low-stack ingress (`process_schedule_once`), replacing direct low-stack
+    register rebasing in this non-copy transition window.
   - Remaining blocker: complete the same stack-safety guarantee for any
     non-copy transition windows that still assume low-slot compatibility.
 

@@ -209,6 +209,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - scheduler/process kernel stacks now require higher-half allocation within the
   shared kernel window; low-address fallback allocation was removed so
   user-CR3 windows do not run on low-mapped stacks
+- scheduler dispatch now uses a dedicated higher-half trampoline stack when
+  entered from a low-address stack, removing direct low-stack `rsp/rbp`
+  rebasing in `process_schedule_once` during transition windows
 - strict ring3 smoke target (`run-qemu-ring3-test`) currently passes end-to-end
   with ring3 syscall/fault-policy/preempt/native markers enabled; remaining
   strict-mode framebuffer panic/MMIO mapping hardening is tracked in

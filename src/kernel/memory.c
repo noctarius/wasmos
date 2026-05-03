@@ -600,6 +600,12 @@ mm_copy_from_user(uint32_t context_id, void *dst, uint64_t user_src, uint64_t si
 
     while (remaining > 0) {
         uint64_t n = (remaining < chunk_size) ? remaining : chunk_size;
+        /* TODO(ring3-phase2): this temporary CR3 switch path still assumes the
+         * current kernel stack is mapped in the target root. Removing child
+         * PML4[0] requires stack-safe copy plumbing (or higher-half kernel
+         * stack mapping under user roots). */
+        /* TODO(ring3-phase2): same dependency as mm_copy_from_user above; this
+         * switch is not safe once child PML4[0] identity mappings are removed. */
         if (paging_switch_root(ctx->root_table) != 0) {
             mm_trace_copy_fail("from", "switch_to_user", context_id, user_src, size, ctx->root_table, paging_get_current_root_table(), user_cur, n);
             return -1;

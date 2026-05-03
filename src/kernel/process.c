@@ -827,6 +827,10 @@ int process_schedule_once(void) {
      * to the scheduled process stack so user-mode interrupts/syscalls have a
      * deterministic kernel stack landing point. */
     cpu_set_kernel_stack((uint64_t)(proc->stack_top - 16u));
+    /* TODO(ring3-phase2): scheduler currently executes with the process CR3
+     * active while still using low-mapped kernel stacks. Full removal of child
+     * PML4[0] requires migrating kernel rsp0/scheduler stacks to a higher-half
+     * mapping that remains valid under user roots. */
     if (mm_context_activate(proc->context_id) != 0) {
         serial_write("[sched] cr3 activate failed\n");
         critical_section_enter();

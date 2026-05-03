@@ -947,6 +947,7 @@ add_custom_target(run-qemu-ring3-test
           -DOVMF_CODE=${OVMF_CODE}
           -DOVMF_VARS=${OVMF_VARS}
           -DWASMOS_TRACE=${WASMOS_TRACE}
+          -DWASMOS_LOW_SLOT_SWEEP=${WASMOS_LOW_SLOT_SWEEP}
           -DWASMOS_RING3_SMOKE=ON
   COMMAND ${CMAKE_COMMAND} --build ${BUILD_DIR}/ring3 --target run-qemu-ring3-check
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

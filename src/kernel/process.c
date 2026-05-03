@@ -409,7 +409,9 @@ static void process_trampoline(void) {
         if (!g_current_process || !g_current_process->entry) {
             g_last_run_result = PROCESS_RUN_IDLE;
         } else {
-            g_last_run_result = g_current_process->entry(g_current_process, g_current_process->arg);
+            uintptr_t entry_ptr = process_kernel_alias_addr((uintptr_t)g_current_process->entry);
+            process_entry_t entry_fn = (process_entry_t)(void *)entry_ptr;
+            g_last_run_result = entry_fn(g_current_process, g_current_process->arg);
         }
         critical_section_enter();
         g_in_scheduler = 1;
@@ -641,7 +643,7 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
     }
     slot->ctx.rsp = slot->stack_top - (STACK_REDZONE_BYTES + 8u);
     slot->ctx.user_rsp = slot->ctx.rsp;
-    slot->ctx.rip = (uint64_t)(uintptr_t)process_trampoline;
+    slot->ctx.rip = (uint64_t)process_kernel_alias_addr((uintptr_t)process_trampoline);
     slot->ctx.rflags = 0x200;
     slot->ctx.cs = KERNEL_CS_SELECTOR;
     slot->ctx.ss = KERNEL_DS_SELECTOR;
@@ -717,7 +719,7 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
     }
     slot->ctx.rsp = slot->stack_top - (STACK_REDZONE_BYTES + 8u);
     slot->ctx.user_rsp = slot->ctx.rsp;
-    slot->ctx.rip = (uint64_t)(uintptr_t)process_trampoline;
+    slot->ctx.rip = (uint64_t)process_kernel_alias_addr((uintptr_t)process_trampoline);
     slot->ctx.rflags = 0x200;
     slot->ctx.cs = KERNEL_CS_SELECTOR;
     slot->ctx.ss = KERNEL_DS_SELECTOR;

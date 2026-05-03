@@ -215,6 +215,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - kernel process context startup now stores higher-half `process_trampoline`
   RIP, and trampoline dispatch canonicalizes process entry pointers to
   higher-half addresses before invocation, reducing low-slot execute dependence
+- context-switch ring0 restore now canonicalizes low-form kernel RIP values to
+  higher-half form before `ret`, reducing low-slot execute dependence in resume
+  paths
 - strict ring3 smoke target (`run-qemu-ring3-test`) currently passes end-to-end
   with ring3 syscall/fault-policy/preempt/native markers enabled; remaining
   strict-mode framebuffer panic/MMIO mapping hardening is tracked in

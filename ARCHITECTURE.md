@@ -257,6 +257,9 @@ The current tree already boots into a usable user-space stack:
   higher-half trampoline RIP at spawn time, and trampoline dispatch
   canonicalizes process entry pointers before call, reducing residual
   low-address execute assumptions in non-copy paths.
+- Context-switch pointer canonicalization update: ring0 restore paths now
+  canonicalize low-form kernel RIP values to higher-half form before `ret`,
+  reducing residual low-slot execute dependence during kernel resume.
 - Regression coverage now includes `tests/test_ring3_smoke_target.py`, which
   executes `cmake --build build --target run-qemu-ring3-test` to keep ring3
   marker assertions in the standard automated test suite, including structured

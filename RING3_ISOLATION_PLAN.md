@@ -307,6 +307,9 @@ Progress update (2026-05-03):
   - Kernel scheduler entry pointers now canonicalize to higher-half addresses
     at spawn/dispatch (`process_trampoline` RIP + entry-call canonicalization),
     reducing low-slot execute dependence in non-copy runtime paths.
+  - Context-switch ring0 restore paths now canonicalize low-form kernel RIP to
+    higher-half before `ret`, reducing low-slot execute dependence for kernel
+    resume.
   - Remaining blocker: complete the same stack-safety guarantee for any
     non-copy transition windows that still assume low-slot compatibility.
 

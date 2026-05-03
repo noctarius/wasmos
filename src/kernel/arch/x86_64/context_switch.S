@@ -126,6 +126,13 @@ context_switch:
     movq %r10, %rsp
     testb $0x3, %sil
     jne 2f
+    testq %rcx, %rcx
+    js 10f
+    pushq %r15
+    movabs $KERNEL_HIGHER_HALF_BASE, %r15
+    addq %r15, %rcx
+    popq %r15
+10:
     subq $16, %rsp
     movq %rax, (%rsp)
     movq %rcx, 8(%rsp)
@@ -209,6 +216,13 @@ context_switch_to:
     movq %r10, %rsp
     testb $0x3, %sil
     jne 3f
+    testq %rcx, %rcx
+    js 11f
+    pushq %r15
+    movabs $KERNEL_HIGHER_HALF_BASE, %r15
+    addq %r15, %rcx
+    popq %r15
+11:
     subq $16, %rsp
     movq %rax, (%rsp)
     movq %rcx, 8(%rsp)

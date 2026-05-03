@@ -91,8 +91,8 @@ extern uint8_t __kernel_end;
 #define STACK_REDZONE_BYTES 4096u
 #define STACK_CANARY_VALUE 0xC0DEC0DEF00DFACEULL
 /* Phase-2 stack hardening currently relies on the shared higher-half kernel
- * window (32 MiB by default: 16 * 2 MiB PDEs). */
-#define KERNEL_SHARED_HIGHER_HALF_WINDOW_BYTES (32u * 1024u * 1024u)
+ * window (64 MiB by default: 32 * 2 MiB PDEs). */
+#define KERNEL_SHARED_HIGHER_HALF_WINDOW_BYTES (64u * 1024u * 1024u)
 
 static int
 process_alloc_stack(process_t *slot, uint32_t stack_pages)
@@ -109,13 +109,11 @@ process_alloc_stack(process_t *slot, uint32_t stack_pages)
     uint64_t base = pfa_alloc_pages_below(total_pages, KERNEL_SHARED_HIGHER_HALF_WINDOW_BYTES);
     uint8_t using_higher_half_stack = 1;
     if (!base) {
-        /* TODO(ring3-phase2): remove this fallback once scheduler/mm_copy no
-         * longer need low-mapped stack availability under user CR3. */
-        base = pfa_alloc_pages(total_pages);
-        using_higher_half_stack = 0;
-        if (!base) {
-            return -1;
-        }
+        /* TODO(ring3-phase2): If stack pressure exceeds the shared higher-half
+         * window, extend the explicit kernel allowlist window instead of
+         * falling back to low-mapped stacks under user CR3 roots. */
+        serial_write("[sched] higher-half stack alloc failed\n");
+        return -1;
     }
 
     uint64_t guard_low = base;

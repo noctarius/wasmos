@@ -206,6 +206,13 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - scheduler/context-switch groundwork now carries per-context privilege
   metadata (`cs/ss/user_rsp`) and can restore ring3 contexts via `iretq`
   while retaining the existing ring0 fast-path (`ret`)
+- scheduler/process kernel stacks now require higher-half allocation within the
+  shared kernel window; low-address fallback allocation was removed so
+  user-CR3 windows do not run on low-mapped stacks
+- strict ring3 smoke target (`run-qemu-ring3-test`) currently passes end-to-end
+  with ring3 syscall/fault-policy/preempt/native markers enabled; remaining
+  strict-mode framebuffer panic/MMIO mapping hardening is tracked in
+  `RING3_ISOLATION_PLAN.md`
 - scheduler now updates TSS `rsp0` per selected process so user-mode trap/syscall
   entry has a deterministic kernel stack landing point
 - kernel startup now includes a ring3 smoke process (`ring3-smoke`) that
@@ -240,7 +247,7 @@ IMPORTANT: Create a git commit after each prompt iteration.
   memory policy into paging (including intermediate table propagation) so
   ring3-accessible mappings are representable; paging now rejects user mappings
   outside the dedicated user slot and enforces user W^X (`WRITE+EXEC` denied).
-  Child address spaces now share a reduced higher-half kernel window (32 MiB)
+  Child address spaces now share a reduced higher-half kernel window (64 MiB)
   instead of a broad alias span. User-root setup now verifies kernel mapping
   footprint (allowed PML4/PDPT/PD windows only) and emits a mapping dump on
   verification failures for Phase 2 isolation triage.

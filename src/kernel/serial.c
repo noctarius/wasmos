@@ -7,6 +7,7 @@
 
 #include "process.h"
 #include "spinlock.h"
+#include "paging.h"
 
 #define COM1_PORT 0x3F8
 #define COM1_STATUS (COM1_PORT + 5)
@@ -19,6 +20,18 @@
 #define SERIAL_READ_STATUS_CHAR 1
 #define SERIAL_READ_STATUS_EMPTY 0
 #define SERIAL_READ_STATUS_ERROR (-1)
+extern uint8_t __kernel_start;
+extern uint8_t __kernel_end;
+
+static inline int serial_ptr_needs_kernel_alias(uintptr_t p)
+{
+    if (!serial_high_alias_enabled() || p == 0) {
+        return 0;
+    }
+    uint64_t start = (uint64_t)(uintptr_t)&__kernel_start;
+    uint64_t end = (uint64_t)(uintptr_t)&__kernel_end;
+    return ((uint64_t)p >= start && (uint64_t)p < end) ? 1 : 0;
+}
 
 static inline void outb(uint16_t port, uint8_t value) {
     __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
@@ -36,6 +49,77 @@ static uint32_t g_early_log_head  = 0;  /* next write index (wraps) */
 static uint32_t g_early_log_count = 0;  /* bytes written, capped at EARLY_LOG_SIZE */
 
 static spinlock_t g_serial_lock = {0};
+static uint8_t g_serial_high_alias_enabled = 0;
+static uint32_t g_console_ring_shmem_id = 0;
+static console_ring_t *g_console_ring = 0;
+
+static inline spinlock_t *
+serial_lock_ptr(void)
+{
+    uintptr_t addr = (uintptr_t)&g_serial_lock;
+    if (g_serial_high_alias_enabled && (uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
+        addr = (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
+    }
+    return (spinlock_t *)(void *)addr;
+}
+
+void serial_enable_high_alias(uint8_t enabled) {
+    g_serial_high_alias_enabled = enabled ? 1 : 0;
+}
+
+uint8_t serial_high_alias_enabled(void) {
+    return g_serial_high_alias_enabled;
+}
+
+static inline console_ring_t **
+serial_console_ring_slot(void)
+{
+    uintptr_t addr = (uintptr_t)&g_console_ring;
+    if (g_serial_high_alias_enabled && (uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
+        addr = (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
+    }
+    return (console_ring_t **)(void *)addr;
+}
+
+static inline uint32_t *
+serial_console_ring_id_slot(void)
+{
+    uintptr_t addr = (uintptr_t)&g_console_ring_shmem_id;
+    if (g_serial_high_alias_enabled && (uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
+        addr = (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
+    }
+    return (uint32_t *)(void *)addr;
+}
+
+static inline uint8_t *
+serial_early_log_buf(void)
+{
+    uintptr_t addr = (uintptr_t)&g_early_log[0];
+    if (g_serial_high_alias_enabled && (uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
+        addr = (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
+    }
+    return (uint8_t *)(void *)addr;
+}
+
+static inline uint32_t *
+serial_early_log_head_slot(void)
+{
+    uintptr_t addr = (uintptr_t)&g_early_log_head;
+    if (g_serial_high_alias_enabled && (uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
+        addr = (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
+    }
+    return (uint32_t *)(void *)addr;
+}
+
+static inline uint32_t *
+serial_early_log_count_slot(void)
+{
+    uintptr_t addr = (uintptr_t)&g_early_log_count;
+    if (g_serial_high_alias_enabled && (uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
+        addr = (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
+    }
+    return (uint32_t *)(void *)addr;
+}
 
 static int serial_tx_ready(void) {
     return (inb(COM1_STATUS) & 0x20) != 0;
@@ -85,9 +169,6 @@ static uint32_t g_serial_remote_reply_endpoint = IPC_ENDPOINT_NONE;
 static uint32_t g_serial_remote_next_request_id = 1;
 static uint32_t g_serial_remote_pending_read_request = 0;
 
-static uint32_t g_console_ring_shmem_id = 0;
-static console_ring_t *g_console_ring = 0;
-
 /* Keyboard input ring — fed by vt via serial_input_push; polled via
  * the wasmos_input_read kernel import before falling back to COM1. */
 #define INPUT_RING_SIZE 64
@@ -102,23 +183,25 @@ static void serial_remote_reset(void) {
 }
 
 static void serial_ring_init(void) {
-    if (g_console_ring) {
+    console_ring_t **ring_slot = serial_console_ring_slot();
+    uint32_t *ring_id_slot = serial_console_ring_id_slot();
+    if (*ring_slot) {
         return;
     }
     uint64_t phys_base = 0;
     if (mm_shared_create(1, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE,
-                         &g_console_ring_shmem_id, &phys_base) != 0) {
+                         ring_id_slot, &phys_base) != 0) {
         return;
     }
-    if (mm_shared_retain(g_console_ring_shmem_id) != 0) {
-        g_console_ring_shmem_id = 0;
+    if (mm_shared_retain(*ring_id_slot) != 0) {
+        *ring_id_slot = 0;
         return;
     }
-    g_console_ring = (console_ring_t *)(uintptr_t)phys_base;
-    g_console_ring->write_pos = 0;
-    g_console_ring->read_pos = 0;
-    g_console_ring->capacity = CONSOLE_RING_DATA_SIZE;
-    g_console_ring->_pad = 0;
+    *ring_slot = (console_ring_t *)(uintptr_t)phys_base;
+    (*ring_slot)->write_pos = 0;
+    (*ring_slot)->read_pos = 0;
+    (*ring_slot)->capacity = CONSOLE_RING_DATA_SIZE;
+    (*ring_slot)->_pad = 0;
 }
 
 static uint32_t serial_remote_next_request_id(void) {
@@ -210,40 +293,42 @@ static int serial_remote_read_char(uint8_t *out_char) {
 }
 
 void serial_input_push(uint8_t ch) {
-    spinlock_lock(&g_serial_lock);
+    spinlock_lock(serial_lock_ptr());
     if (g_input_count < INPUT_RING_SIZE) {
         uint32_t idx = (g_input_head + g_input_count) % INPUT_RING_SIZE;
         g_input_ring[idx] = ch;
         g_input_count++;
     }
-    spinlock_unlock(&g_serial_lock);
+    spinlock_unlock(serial_lock_ptr());
 }
 
 int serial_input_read(uint8_t *out) {
-    spinlock_lock(&g_serial_lock);
+    spinlock_lock(serial_lock_ptr());
     if (g_input_count == 0) {
-        spinlock_unlock(&g_serial_lock);
+        spinlock_unlock(serial_lock_ptr());
         return 0;
     }
     *out = g_input_ring[g_input_head];
     g_input_head = (g_input_head + 1) % INPUT_RING_SIZE;
     g_input_count--;
-    spinlock_unlock(&g_serial_lock);
+    spinlock_unlock(serial_lock_ptr());
     return 1;
 }
 
 uint32_t serial_console_ring_id(void) {
-    if (g_console_ring_shmem_id == 0) {
+    uint32_t *ring_id_slot = serial_console_ring_id_slot();
+    if (*ring_id_slot == 0) {
         serial_ring_init();
     }
-    return g_console_ring_shmem_id;
+    return *ring_id_slot;
 }
 
 void *serial_console_ring_ptr(void) {
-    if (!g_console_ring) {
+    console_ring_t **ring_slot = serial_console_ring_slot();
+    if (!*ring_slot) {
         serial_ring_init();
     }
-    return g_console_ring;
+    return *ring_slot;
 }
 
 int serial_register_remote_driver(uint32_t endpoint) {
@@ -282,25 +367,31 @@ const serial_driver_t *serial_get_driver(void) {
 }
 
 static void serial_put_internal(char c) {
-    if (g_serial_driver && g_serial_driver->put_char) {
-        g_serial_driver->put_char(c);
-    }
+    /* Ring-3 strict mode must not depend on low-address global driver state.
+     * Keep TX path CR3-invariant by using direct COM1 I/O. */
+    com1_serial_put_char(c);
 }
 
 static void serial_ring_write(const char *s) {
-    if (!g_console_ring || !s) {
+    if (g_serial_high_alias_enabled) {
+        /* TODO(ring3): map console ring into strict user-visible kernel window
+         * or route framebuffer logging through a CR3-invariant path. */
         return;
     }
-    uint32_t cap = g_console_ring->capacity;
-    uint32_t wp = g_console_ring->write_pos;
+    console_ring_t *ring = *serial_console_ring_slot();
+    if (!ring || !s) {
+        return;
+    }
+    uint32_t cap = ring->capacity;
+    uint32_t wp = ring->write_pos;
     if (cap == 0) {
         return;
     }
     while (*s) {
-        g_console_ring->data[wp % cap] = (uint8_t)*s++;
+        ring->data[wp % cap] = (uint8_t)*s++;
         wp++;
     }
-    g_console_ring->write_pos = wp;
+    ring->write_pos = wp;
 }
 
 static void serial_transmit(char c) {
@@ -325,14 +416,17 @@ void serial_write(const char *s) {
     if (!s) {
         return;
     }
-    spinlock_lock(&g_serial_lock);
+    spinlock_lock(serial_lock_ptr());
     serial_write_unlocked(s);
-    spinlock_unlock(&g_serial_lock);
+    spinlock_unlock(serial_lock_ptr());
 }
 
 void serial_printf(const char *fmt, ...)
 {
     char buf[512];
+    if (serial_ptr_needs_kernel_alias((uintptr_t)fmt)) {
+        fmt = (const char *)(uintptr_t)((uint64_t)(uintptr_t)fmt + KERNEL_HIGHER_HALF_BASE);
+    }
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
@@ -343,6 +437,9 @@ void serial_printf(const char *fmt, ...)
 void serial_printf_unlocked(const char *fmt, ...)
 {
     char buf[512];
+    if (serial_ptr_needs_kernel_alias((uintptr_t)fmt)) {
+        fmt = (const char *)(uintptr_t)((uint64_t)(uintptr_t)fmt + KERNEL_HIGHER_HALF_BASE);
+    }
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
@@ -378,43 +475,55 @@ void serial_write_unlocked(const char *s) {
     if (!s) {
         return;
     }
-    if (!g_console_ring) {
+    if (g_serial_high_alias_enabled) {
+        uintptr_t sp = (uintptr_t)s;
+        if (serial_ptr_needs_kernel_alias(sp)) {
+            s = (const char *)(uintptr_t)((uint64_t)sp + KERNEL_HIGHER_HALF_BASE);
+        }
+    }
+    if (!*serial_console_ring_slot()) {
         serial_ring_init();
     }
+    uint8_t *early_log = serial_early_log_buf();
+    uint32_t *early_head = serial_early_log_head_slot();
+    uint32_t *early_count = serial_early_log_count_slot();
     preempt_disable();
     serial_ring_write(s);
     for (const char *p = s; *p; ++p) {
         if (*p == '\n') {
             serial_transmit('\r');
-            g_early_log[g_early_log_head] = '\r';
-            g_early_log_head = (g_early_log_head + 1) % EARLY_LOG_SIZE;
-            if (g_early_log_count < EARLY_LOG_SIZE) { g_early_log_count++; }
+            early_log[*early_head] = '\r';
+            *early_head = (*early_head + 1) % EARLY_LOG_SIZE;
+            if (*early_count < EARLY_LOG_SIZE) { (*early_count)++; }
         }
         serial_transmit(*p);
-        g_early_log[g_early_log_head] = (uint8_t)*p;
-        g_early_log_head = (g_early_log_head + 1) % EARLY_LOG_SIZE;
-        if (g_early_log_count < EARLY_LOG_SIZE) { g_early_log_count++; }
+        early_log[*early_head] = (uint8_t)*p;
+        *early_head = (*early_head + 1) % EARLY_LOG_SIZE;
+        if (*early_count < EARLY_LOG_SIZE) { (*early_count)++; }
     }
     preempt_enable();
 }
 
 uint32_t serial_early_log_size(void) {
-    return g_early_log_count;
+    return *serial_early_log_count_slot();
 }
 
 void serial_early_log_copy(uint8_t *dst, uint32_t offset, uint32_t len) {
-    if (!dst || offset >= g_early_log_count) {
+    uint8_t *early_log = serial_early_log_buf();
+    uint32_t early_head = *serial_early_log_head_slot();
+    uint32_t early_count = *serial_early_log_count_slot();
+    if (!dst || offset >= early_count) {
         return;
     }
-    if (len > g_early_log_count - offset) {
-        len = g_early_log_count - offset;
+    if (len > early_count - offset) {
+        len = early_count - offset;
     }
     /* Logical index 0 is the oldest byte. */
-    uint32_t start = (g_early_log_count < EARLY_LOG_SIZE)
+    uint32_t start = (early_count < EARLY_LOG_SIZE)
                    ? 0
-                   : g_early_log_head; /* head = oldest when ring is full */
+                   : early_head; /* head = oldest when ring is full */
     for (uint32_t i = 0; i < len; ++i) {
-        dst[i] = g_early_log[(start + offset + i) % EARLY_LOG_SIZE];
+        dst[i] = early_log[(start + offset + i) % EARLY_LOG_SIZE];
     }
 }
 
@@ -426,8 +535,6 @@ int serial_read_char(uint8_t *out_char) {
     if (rc >= 0) {
         return rc;
     }
-    if (!g_serial_driver || !g_serial_driver->read_char) {
-        return -1;
-    }
-    return g_serial_driver->read_char(out_char);
+    /* Match TX strictness: avoid low-address global driver deref here. */
+    return com1_serial_read_char(out_char);
 }

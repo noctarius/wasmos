@@ -3,6 +3,7 @@
 #include "process.h"
 #include "serial.h"
 #include "string.h"
+#include "paging.h"
 
 static uint8_t g_ring3_syscall_logged;
 static uint8_t g_ring3_stress_ok_logged;
@@ -26,6 +27,19 @@ typedef struct {
 } syscall_ipc_call_slot_t;
 
 static syscall_ipc_call_slot_t g_syscall_ipc_call_slots[PROCESS_MAX_COUNT];
+
+static inline uintptr_t syscall_alias_ptr(uintptr_t p)
+{
+    if ((uint64_t)p < KERNEL_HIGHER_HALF_BASE) {
+        p = (uintptr_t)((uint64_t)p + KERNEL_HIGHER_HALF_BASE);
+    }
+    return p;
+}
+
+static inline syscall_ipc_call_slot_t *syscall_ipc_call_slots_ptr(void)
+{
+    return (syscall_ipc_call_slot_t *)(void *)syscall_alias_ptr((uintptr_t)&g_syscall_ipc_call_slots[0]);
+}
 
 static int
 name_eq(const char *a, const char *b)
@@ -64,12 +78,13 @@ syscall_ipc_call_echo_endpoint(void)
 static syscall_ipc_call_slot_t *
 syscall_ipc_call_slot_for_pid(uint32_t pid)
 {
+    syscall_ipc_call_slot_t *slots = syscall_ipc_call_slots_ptr();
     syscall_ipc_call_slot_t *empty = 0;
     if (pid == 0) {
         return 0;
     }
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        syscall_ipc_call_slot_t *slot = &g_syscall_ipc_call_slots[i];
+        syscall_ipc_call_slot_t *slot = &slots[i];
         if (slot->in_use && !process_get(slot->pid)) {
             slot->in_use = 0;
             slot->pid = 0;

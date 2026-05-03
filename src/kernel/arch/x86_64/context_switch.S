@@ -23,6 +23,9 @@
 .extern g_ctx_restore_rip
 .extern g_ctx_restore_rsp
 .extern g_ctx_restore_rflags
+.extern g_current_pml4_phys
+
+#define KERNEL_HIGHER_HALF_BASE 0xFFFFFFFF80000000
 
 # The context switch path stores and restores the full general-purpose register
 # set plus RIP/RSP/RFLAGS. It also carries CS/SS/user-RSP metadata so ring3
@@ -75,8 +78,15 @@ context_switch:
     movq $0x08, 144(%rdi)
     movq $0x10, 152(%rdi)
     movq %rsp, 160(%rdi)
+    movq %cr3, %rax
+    movq %rax, 168(%rdi)
 
     movq %rsi, %rdx
+    testq %rdx, %rdx
+    js 7f
+    movabs $KERNEL_HIGHER_HALF_BASE, %r15
+    addq %r15, %rdx
+7:
     movq %rsi, g_ctxsw_last_in_ctx(%rip)
     movq 120(%rdx), %rax
     movq %rax, g_ctxsw_last_in_rsp(%rip)
@@ -98,10 +108,22 @@ context_switch:
     movq 72(%rdx), %rsi
     movq 80(%rdx), %rbp
     movq 104(%rdx), %rbx
-    movq 120(%rdx), %rsp
+    movq 120(%rdx), %r10
     movq 136(%rdx), %rax
     movq 128(%rdx), %rcx
     movq 144(%rdx), %rsi
+    movq 160(%rdx), %rdi
+    movq 152(%rdx), %r11
+    testq %rdx, %rdx
+    js 8f
+    movabs $KERNEL_HIGHER_HALF_BASE, %r15
+    addq %r15, %rdx
+8:
+    movq 168(%rdx), %r8
+    movq %r8, g_current_pml4_phys(%rip)
+    movq %r8, %cr3
+    movq 0(%rdx), %r15
+    movq %r10, %rsp
     testb $0x3, %sil
     jne 2f
     subq $16, %rsp
@@ -118,8 +140,7 @@ context_switch:
     movb $0, g_in_context_switch(%rip)
     ret
 2:
-    movq 160(%rdx), %rdi
-    movq 152(%rdx), %rsi
+    movq %r11, %rsi
     subq $40, %rsp
     movq %rcx, 0(%rsp)
     movq 144(%rdx), %r11
@@ -146,6 +167,11 @@ context_switch_to:
     # into the very first runnable task or the preempt trampoline.
     movb $1, g_in_context_switch(%rip)
     movq %rdi, %rdx
+    testq %rdx, %rdx
+    js 6f
+    movabs $KERNEL_HIGHER_HALF_BASE, %r15
+    addq %r15, %rdx
+6:
     movq %rdi, g_ctxsw_last_in_ctx(%rip)
     movq 120(%rdx), %rax
     movq %rax, g_ctxsw_last_in_rsp(%rip)
@@ -165,10 +191,22 @@ context_switch_to:
     movq 72(%rdx), %rsi
     movq 80(%rdx), %rbp
     movq 104(%rdx), %rbx
-    movq 120(%rdx), %rsp
+    movq 120(%rdx), %r10
     movq 136(%rdx), %rax
     movq 128(%rdx), %rcx
     movq 144(%rdx), %rsi
+    movq 160(%rdx), %rdi
+    movq 152(%rdx), %r11
+    testq %rdx, %rdx
+    js 9f
+    movabs $KERNEL_HIGHER_HALF_BASE, %r15
+    addq %r15, %rdx
+9:
+    movq 168(%rdx), %r8
+    movq %r8, g_current_pml4_phys(%rip)
+    movq %r8, %cr3
+    movq 0(%rdx), %r15
+    movq %r10, %rsp
     testb $0x3, %sil
     jne 3f
     subq $16, %rsp
@@ -185,8 +223,7 @@ context_switch_to:
     movb $0, g_in_context_switch(%rip)
     ret
 3:
-    movq 160(%rdx), %rdi
-    movq 152(%rdx), %rsi
+    movq %r11, %rsi
     subq $40, %rsp
     movq %rcx, 0(%rsp)
     movq 144(%rdx), %r11

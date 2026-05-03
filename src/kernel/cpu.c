@@ -5,6 +5,7 @@
 #include "irq.h"
 #include "framebuffer.h"
 #include "syscall.h"
+#include "paging.h"
 #include "stdio.h"
 #include "string.h"
 #include <stdint.h>
@@ -301,10 +302,29 @@ idt_set_gate_ist(uint8_t vector, uintptr_t handler, uint8_t type_attr, uint8_t i
     entry->zero = 0;
 }
 
-static void
-gdt_set_tss(void)
+static uintptr_t
+x86_kernel_handler_addr(uintptr_t handler)
 {
-    uint64_t base = (uint64_t)(uintptr_t)&g_tss;
+    uint64_t higher_half_base = paging_get_higher_half_base();
+    if ((uint64_t)handler < higher_half_base) {
+        return (uintptr_t)(higher_half_base + (uint64_t)handler);
+    }
+    return handler;
+}
+
+static uint64_t
+x86_kernel_data_addr(uint64_t addr)
+{
+    uint64_t higher_half_base = paging_get_higher_half_base();
+    if (addr < higher_half_base) {
+        return higher_half_base + addr;
+    }
+    return addr;
+}
+
+static void
+gdt_set_tss_base(uint64_t base)
+{
     uint32_t limit = (uint32_t)(sizeof(g_tss) - 1u);
     uint64_t low = 0;
     low |= (uint64_t)(limit & 0xFFFFu);
@@ -315,6 +335,12 @@ gdt_set_tss(void)
     uint64_t high = (uint64_t)(base >> 32);
     g_gdt[5] = low;
     g_gdt[6] = high;
+}
+
+static void
+gdt_set_tss(void)
+{
+    gdt_set_tss_base((uint64_t)(uintptr_t)&g_tss);
 }
 
 static void
@@ -348,7 +374,8 @@ idt_install(void)
     }
 
     for (uint32_t vec = 0; vec < EXCEPTION_COUNT; ++vec) {
-        uintptr_t handler = (uintptr_t)x86_exception_stub_table[vec];
+        uintptr_t handler =
+            x86_kernel_handler_addr((uintptr_t)x86_exception_stub_table[vec]);
         idt_set_gate((uint8_t)vec, handler, IDT_TYPE_INTERRUPT_GATE);
     }
 
@@ -540,14 +567,17 @@ cpu_init(void)
     gdt_install();
     idt_install();
     for (uint32_t i = 0; i < IRQ_COUNT; ++i) {
-        uintptr_t handler = (uintptr_t)x86_irq_stub_table[i];
+        uintptr_t handler =
+            x86_kernel_handler_addr((uintptr_t)x86_irq_stub_table[i]);
         if (i == 0) {
             idt_set_gate_ist((uint8_t)(IRQ_VECTOR_BASE + i), handler, IDT_TYPE_INTERRUPT_GATE, IRQ0_IST_INDEX);
         } else {
             idt_set_gate((uint8_t)(IRQ_VECTOR_BASE + i), handler, IDT_TYPE_INTERRUPT_GATE);
         }
     }
-    idt_set_gate((uint8_t)X86_VECTOR_SYSCALL, (uintptr_t)isr_syscall_128, IDT_TYPE_INTERRUPT_GATE_USER);
+    idt_set_gate((uint8_t)X86_VECTOR_SYSCALL,
+                 x86_kernel_handler_addr((uintptr_t)isr_syscall_128),
+                 IDT_TYPE_INTERRUPT_GATE_USER);
     irq_init();
     serial_write("[cpu] gdt/idt ready\n");
     (void)KERNEL_DS_SELECTOR;
@@ -562,6 +592,27 @@ cpu_set_kernel_stack(uint64_t rsp0)
         return;
     }
     g_tss.rsp0 = rsp0;
+}
+
+void
+cpu_relocate_tables_high(void)
+{
+    descriptor_ptr_t gdtr;
+    descriptor_ptr_t idtr;
+    uint16_t tss_selector = KERNEL_TSS_SELECTOR;
+
+    g_tss.rsp0 = x86_kernel_data_addr(g_tss.rsp0);
+    g_tss.ist1 = x86_kernel_data_addr(g_tss.ist1);
+    gdt_set_tss_base(x86_kernel_data_addr((uint64_t)(uintptr_t)&g_tss));
+
+    gdtr.limit = (uint16_t)(sizeof(g_gdt) - 1);
+    gdtr.base = x86_kernel_data_addr((uint64_t)(uintptr_t)&g_gdt[0]);
+    idtr.limit = (uint16_t)(sizeof(g_idt) - 1);
+    idtr.base = x86_kernel_data_addr((uint64_t)(uintptr_t)&g_idt[0]);
+
+    __asm__ volatile("lgdt %0" : : "m"(gdtr) : "memory");
+    __asm__ volatile("lidt %0" : : "m"(idtr) : "memory");
+    __asm__ volatile("ltr %0" : : "r"(tss_selector) : "memory");
 }
 
 void

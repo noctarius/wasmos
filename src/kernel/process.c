@@ -41,6 +41,22 @@ static uint64_t g_ctx_watch_last_logged_rflags;
 static uint64_t g_ctx_watch_last_logged_reason;
 static uint8_t g_preempt_smoke_logged;
 
+static inline uintptr_t
+process_kernel_alias_addr(uintptr_t addr)
+{
+    uint64_t base = KERNEL_HIGHER_HALF_BASE;
+    if ((uint64_t)addr < base) {
+        return (uintptr_t)((uint64_t)addr + base);
+    }
+    return addr;
+}
+
+static inline process_t *
+process_table(void)
+{
+    return (process_t *)(void *)process_kernel_alias_addr((uintptr_t)&g_processes[0]);
+}
+
 volatile uint64_t g_ctxsw_last_out_ctx;
 volatile uint64_t g_ctxsw_last_out_rip;
 volatile uint64_t g_ctxsw_last_out_rsp;
@@ -144,6 +160,7 @@ process_alloc_stack(process_t *slot, uint32_t stack_pages)
 
 extern void context_switch(process_context_t *out, process_context_t *in);
 extern void context_switch_to(process_context_t *in);
+static void context_switch_high(process_context_t *out, process_context_t *in);
 
 
 static int process_str_eq(const char *a, const char *b) {
@@ -161,6 +178,17 @@ static int process_str_eq(const char *a, const char *b) {
         ++b;
     }
     return 1;
+}
+
+static void
+context_switch_high(process_context_t *out, process_context_t *in)
+{
+    uint64_t higher_half_base = paging_get_higher_half_base();
+    uintptr_t fn = (uintptr_t)&context_switch;
+    if ((uint64_t)fn < higher_half_base) {
+        fn += (uintptr_t)higher_half_base;
+    }
+    ((void (*)(process_context_t *, process_context_t *))fn)(out, in);
 }
 
 static void process_log_ctx_watch(const char *where) {
@@ -248,7 +276,17 @@ static void process_validate_context(process_t *proc, const char *where) {
     uint8_t is_user_ctx = (uint8_t)((proc->ctx.cs & 0x3u) == 0x3u);
     uint64_t start = (uint64_t)(uintptr_t)&__kernel_start;
     uint64_t end = (uint64_t)(uintptr_t)&__kernel_end;
-    if (is_user_ctx || (rip >= start && rip < end)) {
+    uint64_t low_start = start;
+    uint64_t low_end = end;
+    uint64_t higher_half = paging_get_higher_half_base();
+    if (start < higher_half) {
+        start += higher_half;
+    }
+    if (end < higher_half) {
+        end += higher_half;
+    }
+    if (is_user_ctx || (rip >= start && rip < end) ||
+        (rip >= low_start && rip < low_end)) {
         return;
     }
     serial_printf(
@@ -353,7 +391,7 @@ static void process_trampoline(void) {
         }
         critical_section_enter();
         g_in_scheduler = 1;
-        context_switch(&g_current_process->ctx, &g_sched_ctx);
+        context_switch_high(&g_current_process->ctx, &g_sched_ctx);
         if (g_ctx_watch_hits != g_ctx_watch_logged) {
             g_ctx_watch_logged = g_ctx_watch_hits;
             process_log_ctx_watch_if_changed();
@@ -411,9 +449,10 @@ process_copy_name(process_t *proc, const char *name)
 }
 
 static process_t *process_find_slot(void) {
+    process_t *table = process_table();
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        if (g_processes[i].state == PROCESS_STATE_UNUSED) {
-            return &g_processes[i];
+        if (table[i].state == PROCESS_STATE_UNUSED) {
+            return &table[i];
         }
     }
     return 0;
@@ -423,9 +462,10 @@ static process_t *process_find_by_pid(uint32_t pid) {
     if (pid == 0) {
         return 0;
     }
+    process_t *table = process_table();
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        if (g_processes[i].pid == pid && g_processes[i].state != PROCESS_STATE_UNUSED) {
-            return &g_processes[i];
+        if (table[i].pid == pid && table[i].state != PROCESS_STATE_UNUSED) {
+            return &table[i];
         }
     }
     return 0;
@@ -435,10 +475,11 @@ static process_t *process_find_by_context_internal(uint32_t context_id) {
     if (context_id == 0) {
         return 0;
     }
+    process_t *table = process_table();
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        if (g_processes[i].context_id == context_id &&
-            g_processes[i].state != PROCESS_STATE_UNUSED) {
-            return &g_processes[i];
+        if (table[i].context_id == context_id &&
+            table[i].state != PROCESS_STATE_UNUSED) {
+            return &table[i];
         }
     }
     return 0;
@@ -532,6 +573,7 @@ void process_init(void) {
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         process_reset_slot(&g_processes[i]);
     }
+    g_sched_ctx.root_table = paging_get_root_table();
 }
 
 int process_spawn(const char *name, process_entry_t entry, void *arg, uint32_t *out_pid) {
@@ -581,6 +623,7 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
     slot->ctx.rflags = 0x200;
     slot->ctx.cs = KERNEL_CS_SELECTOR;
     slot->ctx.ss = KERNEL_DS_SELECTOR;
+    slot->ctx.root_table = ctx->root_table;
     if (process_str_eq(name, "process-manager")) {
         g_ctx_watch_ctx = (uint64_t)(uintptr_t)&slot->ctx;
         g_ctx_watch_last_ctx = g_ctx_watch_ctx;
@@ -656,6 +699,7 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
     slot->ctx.rflags = 0x200;
     slot->ctx.cs = KERNEL_CS_SELECTOR;
     slot->ctx.ss = KERNEL_DS_SELECTOR;
+    slot->ctx.root_table = paging_get_root_table();
     g_idle_process = slot;
     *out_pid = pid;
     return 0;
@@ -674,10 +718,9 @@ process_set_user_entry(uint32_t pid, uint64_t rip, uint64_t user_rsp)
     if (proc->stack_base < higher_half_base || proc->stack_top < higher_half_base) {
         return -1;
     }
-    /* TODO(ring3-phase2): re-enable child low-slot stripping only after kernel
-     * execution during user-root CR3 windows is fully higher-half-safe.
-     * Current repro: stripping low-slot can fault at write_cr3 fetch and
-     * cascade to #DF/triple-fault reset under ring3 smoke. */
+    if (paging_strip_low_slot_in_root(mm_context_root_table(proc->context_id)) != 0) {
+        return -1;
+    }
     proc->ctx.rip = rip;
     proc->ctx.cs = USER_CS_SELECTOR;
     proc->ctx.ss = USER_DS_SELECTOR;
@@ -695,7 +738,8 @@ process_t *process_find_by_context(uint32_t context_id) {
 }
 
 uint32_t process_current_pid(void) {
-    return g_current_pid;
+    uint32_t *pid_ptr = (uint32_t *)(void *)process_kernel_alias_addr((uintptr_t)&g_current_pid);
+    return *pid_ptr;
 }
 
 void process_set_exit_status(process_t *process, int32_t exit_status) {
@@ -710,7 +754,7 @@ void process_yield(process_run_result_t result) {
         return;
     }
     g_last_run_result = result;
-    context_switch(&g_current_process->ctx, &g_sched_ctx);
+    context_switch_high(&g_current_process->ctx, &g_sched_ctx);
 }
 
 void process_block_on_ipc(process_t *process) {
@@ -786,8 +830,9 @@ uint32_t process_wake_by_context(uint32_t context_id) {
     }
 
     uint32_t woken = 0;
+    process_t *table = process_table();
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        process_t *proc = &g_processes[i];
+        process_t *proc = &table[i];
         if (proc->context_id != context_id) {
             continue;
         }
@@ -807,6 +852,32 @@ uint32_t process_wake_by_context(uint32_t context_id) {
 }
 
 int process_schedule_once(void) {
+    uint64_t higher_half_base = paging_get_higher_half_base();
+    uintptr_t here = 0;
+    uintptr_t rsp_cur = 0;
+    uintptr_t rbp_cur = 0;
+    __asm__ volatile("leaq 0f(%%rip), %0\n0:" : "=r"(here));
+    __asm__ volatile("mov %%rsp, %0" : "=r"(rsp_cur));
+    __asm__ volatile("mov %%rbp, %0" : "=r"(rbp_cur));
+    if ((uint64_t)rsp_cur < higher_half_base) {
+        uintptr_t rsp_high = rsp_cur + (uintptr_t)higher_half_base;
+        uintptr_t rbp_high = rbp_cur;
+        if ((uint64_t)rbp_cur < higher_half_base) {
+            rbp_high = rbp_cur + (uintptr_t)higher_half_base;
+        }
+        __asm__ volatile(
+            "mov %0, %%rsp\n"
+            "mov %1, %%rbp\n"
+            :
+            : "r"(rsp_high), "r"(rbp_high)
+            : "memory");
+    }
+    if ((uint64_t)here < higher_half_base) {
+        uintptr_t high_fn = (uintptr_t)&process_schedule_once;
+        high_fn += (uintptr_t)higher_half_base;
+        int (*fn_high)(void) = (int (*)(void))high_fn;
+        return fn_high();
+    }
     if (PROCESS_MAX_COUNT == 0) {
         return 1;
     }
@@ -850,25 +921,17 @@ int process_schedule_once(void) {
      * to the scheduled process stack so user-mode interrupts/syscalls have a
      * deterministic kernel stack landing point. */
     cpu_set_kernel_stack((uint64_t)(proc->stack_top - 16u));
-    /* TODO(ring3-phase2): scheduler currently executes with the process CR3
-     * active while still using low-mapped kernel stacks. Full removal of child
-     * PML4[0] requires migrating kernel rsp0/scheduler stacks to a higher-half
-     * mapping that remains valid under user roots. */
-    if (mm_context_activate(proc->context_id) != 0) {
-        serial_write("[sched] cr3 activate failed\n");
+    g_sched_ctx.root_table = paging_get_root_table();
+    proc->ctx.root_table = mm_context_root_table(proc->context_id);
+    if (proc->ctx.root_table == 0) {
+        serial_write("[sched] target root missing\n");
         critical_section_enter();
         g_current_process = 0;
         g_current_pid = 0;
         critical_section_leave();
         return 1;
     }
-    context_switch(&g_sched_ctx, &proc->ctx);
-    if (mm_context_activate(0) != 0) {
-        serial_write("[sched] root cr3 restore failed\n");
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
-    }
+    context_switch_high(&g_sched_ctx, &proc->ctx);
     process_run_result_t result = g_last_run_result;
     critical_section_enter();
     g_current_process = 0;
@@ -954,6 +1017,15 @@ int process_preempt_from_irq(irq_frame_t *frame) {
 
     uint64_t start = (uint64_t)(uintptr_t)&__kernel_start;
     uint64_t end = (uint64_t)(uintptr_t)&__kernel_end;
+    uint64_t low_start = start;
+    uint64_t low_end = end;
+    uint64_t higher_half = paging_get_higher_half_base();
+    if (start < higher_half) {
+        start += higher_half;
+    }
+    if (end < higher_half) {
+        end += higher_half;
+    }
     if (process_str_eq(g_current_process->name, "process-manager")) {
         static uint8_t logged_frame_dump;
         if (!logged_frame_dump) {
@@ -983,7 +1055,9 @@ int process_preempt_from_irq(irq_frame_t *frame) {
 #endif
         }
     }
-    if ((frame->rip < start || frame->rip >= end) && process_str_eq(g_current_process->name, "process-manager")) {
+    if ((frame->rip < start || frame->rip >= end) &&
+        (frame->rip < low_start || frame->rip >= low_end) &&
+        process_str_eq(g_current_process->name, "process-manager")) {
         static uint8_t logged_bad_frame;
         if (!logged_bad_frame) {
             logged_bad_frame = 1;

@@ -20,6 +20,27 @@ static mm_context_t g_contexts[MM_MAX_CONTEXTS];
 static uint32_t g_context_count;
 static mm_context_t g_root_ctx;
 
+static inline uintptr_t
+mm_kernel_alias_addr(uintptr_t addr)
+{
+    if ((uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
+        return (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
+    }
+    return addr;
+}
+
+static inline mm_context_t *
+mm_context_table(void)
+{
+    return (mm_context_t *)(void *)mm_kernel_alias_addr((uintptr_t)&g_contexts[0]);
+}
+
+static inline uint32_t *
+mm_context_count_ptr(void)
+{
+    return (uint32_t *)(void *)mm_kernel_alias_addr((uintptr_t)&g_context_count);
+}
+
 #define MM_MAX_SHARED 16
 typedef struct {
     uint32_t id;
@@ -485,9 +506,11 @@ mm_context_t *mm_context_get(uint32_t id) {
     if (id == g_root_ctx.id) {
         return &g_root_ctx;
     }
-    for (uint32_t i = 0; i < g_context_count; ++i) {
-        if (g_contexts[i].id == id) {
-            return &g_contexts[i];
+    mm_context_t *table = mm_context_table();
+    uint32_t count = *mm_context_count_ptr();
+    for (uint32_t i = 0; i < count; ++i) {
+        if (table[i].id == id) {
+            return &table[i];
         }
     }
     return 0;
@@ -497,10 +520,12 @@ mm_context_t *mm_context_create(uint32_t id) {
     if (id == g_root_ctx.id) {
         return &g_root_ctx;
     }
-    if (g_context_count >= MM_MAX_CONTEXTS) {
+    uint32_t *count_ptr = mm_context_count_ptr();
+    mm_context_t *table = mm_context_table();
+    if (*count_ptr >= MM_MAX_CONTEXTS) {
         return 0;
     }
-    mm_context_t *ctx = &g_contexts[g_context_count];
+    mm_context_t *ctx = &table[*count_ptr];
     if (mm_context_init(ctx, id) != 0) {
         return 0;
     }
@@ -524,7 +549,7 @@ mm_context_t *mm_context_create(uint32_t id) {
         paging_dump_user_root_kernel_mappings(ctx->root_table);
         return 0;
     }
-    g_context_count++;
+    (*count_ptr)++;
     return ctx;
 }
 
@@ -532,8 +557,10 @@ int mm_context_destroy(uint32_t id) {
     if (id == g_root_ctx.id || id == 0) {
         return -1;
     }
-    for (uint32_t i = 0; i < g_context_count; ++i) {
-        mm_context_t *ctx = &g_contexts[i];
+    uint32_t *count_ptr = mm_context_count_ptr();
+    mm_context_t *table = mm_context_table();
+    for (uint32_t i = 0; i < *count_ptr; ++i) {
+        mm_context_t *ctx = &table[i];
         if (ctx->id != id) {
             continue;
         }
@@ -546,10 +573,10 @@ int mm_context_destroy(uint32_t id) {
             pfa_free_pages(region->phys_base, pages);
         }
         paging_destroy_address_space(ctx->root_table);
-        if (i + 1 < g_context_count) {
-            g_contexts[i] = g_contexts[g_context_count - 1];
+        if (i + 1 < *count_ptr) {
+            table[i] = table[*count_ptr - 1];
         }
-        g_context_count--;
+        (*count_ptr)--;
         return 0;
     }
     return -1;

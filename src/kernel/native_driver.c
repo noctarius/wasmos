@@ -329,13 +329,28 @@ copy_into_root(uint64_t root_table, uint64_t dst_virt, const void *src, uint64_t
         return -1;
     }
     uint64_t prev_root = paging_get_current_root_table();
-    if (paging_switch_root(root_table) != 0) {
-        return -1;
+    const uint8_t *src_bytes = (const uint8_t *)src;
+    uint64_t remaining = size;
+    uint64_t dst_cur = dst_virt;
+    const uint64_t chunk_size = 256ULL;
+    uint8_t bounce[256];
+
+    while (remaining > 0) {
+        uint64_t n = (remaining < chunk_size) ? remaining : chunk_size;
+        memcpy(bounce, src_bytes, (size_t)n);
+        if (paging_switch_root(root_table) != 0) {
+            (void)paging_switch_root(prev_root);
+            return -1;
+        }
+        memcpy((void *)(uintptr_t)dst_cur, bounce, (size_t)n);
+        if (paging_switch_root(prev_root) != 0) {
+            return -1;
+        }
+        src_bytes += n;
+        dst_cur += n;
+        remaining -= n;
     }
-    memcpy((void *)(uintptr_t)dst_virt, src, (size_t)size);
-    if (paging_switch_root(prev_root) != 0) {
-        return -1;
-    }
+
     return 0;
 }
 

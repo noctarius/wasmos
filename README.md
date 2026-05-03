@@ -230,8 +230,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   code buffer before one `mm_copy_to_user` upload, instead of direct writes
   through an activated user CR3 mapping
 - native ELF driver PT_LOAD population now copies bytes/zero-fill through
-  a context-root copy helper (`paging_switch_root` + memcpy/zero + restore)
-  instead of direct dereference in the ambient kernel CR3
+  a context-root copy helper that stages bytes in a kernel bounce buffer
+  before target-root writes (`paging_switch_root` + chunked write + restore),
+  avoiding source dereference dependence on target low-slot mappings
 - timer preemption now uses a ring3-safe IRQ trampoline handoff: CPL3 interrupt
   frames are rewritten to return through a kernel CS trampoline before scheduler
   context switch, rather than attempting a user-mode return into kernel text

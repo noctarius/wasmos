@@ -667,9 +667,17 @@ process_set_user_entry(uint32_t pid, uint64_t rip, uint64_t user_rsp)
     /* TODO: Wire this into process-manager launch policy once the first
      * user-mode service/app path is selected and validated end-to-end. */
     process_t *proc = process_find_by_pid(pid);
+    uint64_t higher_half_base = paging_get_higher_half_base();
     if (!proc || rip == 0 || user_rsp == 0) {
         return -1;
     }
+    if (proc->stack_base < higher_half_base || proc->stack_top < higher_half_base) {
+        return -1;
+    }
+    /* TODO(ring3-phase2): re-enable child low-slot stripping only after kernel
+     * execution during user-root CR3 windows is fully higher-half-safe.
+     * Current repro: stripping low-slot can fault at write_cr3 fetch and
+     * cascade to #DF/triple-fault reset under ring3 smoke. */
     proc->ctx.rip = rip;
     proc->ctx.cs = USER_CS_SELECTOR;
     proc->ctx.ss = USER_DS_SELECTOR;

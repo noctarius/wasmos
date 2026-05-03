@@ -252,6 +252,13 @@ Progress update (2026-05-03):
 - Child address-space creation now allocates a private low-slot PDPT and copies
   only allowlisted identity/direct-map entries from the kernel template.
 - Address-space teardown now frees child-private low-slot PDPT pages.
+- Experimental removal of child `PML4[0]` exposed a concrete blocker: kernel
+  paths that temporarily run under user CR3 roots (`mm_copy_from_user` /
+  `mm_copy_to_user` switch windows and scheduler dispatch window before user
+  context entry) still execute on low-mapped kernel stacks. Next Phase-2 task
+  is to migrate kernel rsp0/scheduler stack execution to higher-half mappings
+  (or equivalent stack-safe copy plumbing) before dropping child low-slot
+  mappings.
 
 Exit criteria:
 - User roots map only approved kernel transition/support ranges.

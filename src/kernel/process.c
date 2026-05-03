@@ -168,6 +168,8 @@ static int process_str_eq(const char *a, const char *b) {
     if (!a || !b) {
         return 0;
     }
+    a = (const char *)(uintptr_t)process_kernel_alias_addr((uintptr_t)a);
+    b = (const char *)(uintptr_t)process_kernel_alias_addr((uintptr_t)b);
     while (*a || *b) {
         if (*a != *b) {
             return 0;
@@ -617,6 +619,10 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
     uint32_t pid = g_next_pid++;
     mm_context_t *ctx = mm_context_create(pid);
     if (!ctx) {
+        return -1;
+    }
+    if (paging_clone_low_slot_in_root(ctx->root_table) != 0) {
+        mm_context_destroy(ctx->id);
         return -1;
     }
 

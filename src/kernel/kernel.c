@@ -120,7 +120,13 @@ run_low_slot_sweep_diagnostic(void)
         if (!proc || proc->is_idle || proc->context_id == 0) {
             continue;
         }
-        if ((proc->ctx.cs & 0x3u) != 0x3u && g_low_slot_sweep_level < 2u) {
+        if ((proc->ctx.cs & 0x3u) != 0x3u) {
+            if (g_low_slot_sweep_level >= 2u) {
+                serial_printf("[diag] low-slot sweep defer ring0: pid=%u name=%s ctx=%u\n",
+                              pid,
+                              name ? name : "(null)",
+                              proc->context_id);
+            }
             continue;
         }
         uint64_t root = mm_context_root_table(proc->context_id);

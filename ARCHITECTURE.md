@@ -196,6 +196,13 @@ The current tree already boots into a usable user-space stack:
 - Scheduler context state now tracks privilege-return metadata (`cs`, `ss`,
   `user_rsp`) and context-switch restore now branches to `iretq` for ring3
   contexts while preserving `ret` for ring0 contexts.
+- Paging table walks now consistently use a higher-half kernel alias once CR3
+  is active, so `IDENTITY_PD_COUNT=0` can run without low-pointer dereferences
+  in the paging subsystem itself. Current transition behavior intentionally
+  keeps a temporary bootstrap low slot in the kernel root and defers ring0
+  low-slot stripping: sweep level 2 logs ring0 contexts as deferred rather than
+  removing their low slot, while ring3/user contexts continue to be the active
+  strip target.
 - Scheduler now updates TSS `rsp0` per selected process before context switch,
   establishing the kernel-stack landing point used by user-mode trap/syscall
   entry.

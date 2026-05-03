@@ -115,6 +115,7 @@ typedef struct process {
     uint64_t ctx_canary_post;
     uintptr_t stack_base;
     uintptr_t stack_top;
+    uintptr_t stack_alloc_base_phys;
     uint32_t stack_pages;
     process_entry_t entry;
     void *arg;

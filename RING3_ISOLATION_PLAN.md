@@ -259,6 +259,11 @@ Progress update (2026-05-03):
   is to migrate kernel rsp0/scheduler stack execution to higher-half mappings
   (or equivalent stack-safe copy plumbing) before dropping child low-slot
   mappings.
+- Scheduler migration progress: process kernel stacks now prefer higher-half
+  virtual placement (physical pages allocated below current shared window) so
+  more scheduler/user-CR3 execution uses higher-half stack addresses. A
+  temporary fallback to unconstrained stack allocation remains in place for
+  stability when the bounded shared window cannot satisfy all stacks.
 
 Exit criteria:
 - User roots map only approved kernel transition/support ranges.

@@ -235,6 +235,10 @@ The current tree already boots into a usable user-space stack:
   root-switch copy helper with kernel-side bounce buffering (bytes + zero-fill)
   into the target context rather than direct dereference of mapped segment
   virtual addresses in the active target root.
+- Scheduler/process kernel stacks now prefer higher-half virtual addresses
+  backed by low physical pages inside the shared higher-half window; this
+  reduces low-slot dependency during user-CR3 execution windows, while a
+  temporary allocation fallback keeps stability when that window is exhausted.
 - Regression coverage now includes `tests/test_ring3_smoke_target.py`, which
   executes `cmake --build build --target run-qemu-ring3-test` to keep ring3
   marker assertions in the standard automated test suite, including structured

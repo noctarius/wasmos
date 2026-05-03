@@ -742,7 +742,11 @@ process_set_user_entry(uint32_t pid, uint64_t rip, uint64_t user_rsp)
     if (proc->stack_base < higher_half_base || proc->stack_top < higher_half_base) {
         return -1;
     }
-    if (paging_strip_low_slot_in_root(mm_context_root_table(proc->context_id)) != 0) {
+    uint64_t user_root = mm_context_root_table(proc->context_id);
+    if (paging_strip_low_slot_in_root(user_root) != 0) {
+        return -1;
+    }
+    if (paging_verify_user_root_no_low_slot(user_root, 1) != 0) {
         return -1;
     }
     proc->ctx.rip = rip;

@@ -545,6 +545,26 @@ paging_verify_user_root(uint64_t root_table, int log_failures)
     return paging_verify_user_root_impl(root_table, log_failures ? 1 : 0);
 }
 
+int
+paging_verify_user_root_no_low_slot(uint64_t root_table, int log_failures)
+{
+    if (paging_verify_user_root_impl(root_table, log_failures ? 1 : 0) != 0) {
+        return -1;
+    }
+    if (!root_table) {
+        return -1;
+    }
+    volatile uint64_t *root = (volatile uint64_t *)(uintptr_t)root_table;
+    if (root[0] & PT_FLAG_PRESENT) {
+        if (log_failures) {
+            serial_printf("[paging] verify fail: low slot still present pml4[0]=%016llx\n",
+                          (unsigned long long)root[0]);
+        }
+        return -1;
+    }
+    return 0;
+}
+
 void
 paging_dump_user_root_kernel_mappings(uint64_t root_table)
 {

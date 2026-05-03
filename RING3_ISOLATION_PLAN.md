@@ -310,6 +310,8 @@ Progress update (2026-05-03):
   - Context-switch ring0 restore paths now canonicalize low-form kernel RIP to
     higher-half before `ret`, reducing low-slot execute dependence for kernel
     resume.
+  - Ring3 user-entry activation now applies an explicit no-low-slot verifier
+    gate (`PML4[0]` absent) after strip and before CPL3 selector commit.
   - Remaining blocker: complete the same stack-safety guarantee for any
     non-copy transition windows that still assume low-slot compatibility.
 

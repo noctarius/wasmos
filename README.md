@@ -218,6 +218,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - context-switch ring0 restore now canonicalizes low-form kernel RIP values to
   higher-half form before `ret`, reducing low-slot execute dependence in resume
   paths
+- ring3 user-entry setup now explicitly verifies `PML4[0]` is absent after
+  low-slot stripping (`paging_verify_user_root_no_low_slot`) before enabling
+  CPL3 entry
 - strict ring3 smoke target (`run-qemu-ring3-test`) currently passes end-to-end
   with ring3 syscall/fault-policy/preempt/native markers enabled; remaining
   strict-mode framebuffer panic/MMIO mapping hardening is tracked in

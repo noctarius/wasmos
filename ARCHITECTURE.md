@@ -260,6 +260,9 @@ The current tree already boots into a usable user-space stack:
 - Context-switch pointer canonicalization update: ring0 restore paths now
   canonicalize low-form kernel RIP values to higher-half form before `ret`,
   reducing residual low-slot execute dependence during kernel resume.
+- Ring3 entry hard gate update: user-entry activation now enforces an explicit
+  no-low-slot verification (`PML4[0]` absent) after stripping low-slot mappings
+  and before committing CPL3 entry selectors.
 - Regression coverage now includes `tests/test_ring3_smoke_target.py`, which
   executes `cmake --build build --target run-qemu-ring3-test` to keep ring3
   marker assertions in the standard automated test suite, including structured

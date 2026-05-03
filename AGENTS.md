@@ -40,6 +40,23 @@ This repository uses Codex CLI to assist with development. Follow these conventi
 - Run QEMU: `cmake --build build --target run-qemu`
 - Run QEMU halt test: `cmake --build build --target run-qemu-test` (default compile+boot+halt check after changes)
 
+## QEMU + GDB Debugging
+- Build the ring3 debug tree first: `cmake --build build --target run-qemu-ring3-test` (or any target that prepares `build/ring3/esp` and `build/ring3/kernel.elf`).
+- Launch QEMU paused with gdbstub:
+  `qemu-system-x86_64 -m 512M -serial mon:stdio -drive if=pflash,format=raw,readonly=on,file=/opt/homebrew/share/qemu/edk2-x86_64-code.fd -nographic -drive format=raw,file=fat:rw:/Volumes/git/wasmos/build/ring3/esp -S -gdb tcp::1234`
+- Attach GDB to symbols:
+  `gdb -q build/ring3/kernel.elf`
+  then run:
+  `target remote :1234`
+- Typical breakpoints for ring3 isolation faults:
+  `b isr_exception_13`
+  `b isr_exception_14`
+  `b x86_page_fault_handler`
+  `b x86_exception_panic_frame`
+  `b x86_syscall_handler`
+- Continue with `c`, inspect with `info registers`, `x/16i $rip`, and `bt`.
+- If reboot loops hide the first fatal fault, run QEMU with `-no-reboot -d int,cpu_reset -D /tmp/qemu-ring3.log` and inspect exception order in `/tmp/qemu-ring3.log` (for example `#PF -> #DF -> Triple fault`).
+
 ## Git
 - Make a git commit after each prompt iteration when changes are made.
 - Do not amend commits unless explicitly requested.

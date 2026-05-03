@@ -259,6 +259,18 @@ Progress update (2026-05-03):
   is to migrate kernel rsp0/scheduler stack execution to higher-half mappings
   (or equivalent stack-safe copy plumbing) before dropping child low-slot
   mappings.
+- Instrumented repro + QEMU exception trace (2026-05-03):
+  - Repro path: `run-qemu-ring3-test` with child low-slot strip enabled.
+  - Observed sequence: expected recoverable page-fault test (`#PF` at
+    `page_fault_test_entry`), then fatal `#PF` at `RIP=write_cr3+0x10`
+    (`0x108b90`) with child root active (`CR3=0x7d4000`), followed by
+    `#DF` and triple fault reset.
+  - Interpretation: stripping `PML4[0]` currently removes a still-required
+    execute mapping for kernel code running during CR3 switch windows; this is
+    not a transient test flake and is deterministic under current layout.
+  - Actionable constraint: do not re-enable low-slot stripping until kernel
+    execution during user-root windows (scheduler/MM copy and transition path)
+    is fully moved to a higher-half-safe mapping model.
 - Scheduler migration progress: process kernel stacks now prefer higher-half
   virtual placement (physical pages allocated below current shared window) so
   more scheduler/user-CR3 execution uses higher-half stack addresses. A

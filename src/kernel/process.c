@@ -74,6 +74,9 @@ extern uint8_t __kernel_end;
 #define STACK_GUARD_PAGES 1u
 #define STACK_REDZONE_BYTES 4096u
 #define STACK_CANARY_VALUE 0xC0DEC0DEF00DFACEULL
+/* Phase-2 stack hardening currently relies on the shared higher-half kernel
+ * window (32 MiB by default: 16 * 2 MiB PDEs). */
+#define KERNEL_SHARED_HIGHER_HALF_WINDOW_BYTES (32u * 1024u * 1024u)
 
 static int
 process_alloc_stack(process_t *slot, uint32_t stack_pages)
@@ -87,31 +90,43 @@ process_alloc_stack(process_t *slot, uint32_t stack_pages)
      * instead of silent memory corruption.
      */
     uint64_t total_pages = (uint64_t)stack_pages + (STACK_GUARD_PAGES * 2u);
-    uint64_t base = pfa_alloc_pages(total_pages);
+    uint64_t base = pfa_alloc_pages_below(total_pages, KERNEL_SHARED_HIGHER_HALF_WINDOW_BYTES);
+    uint8_t using_higher_half_stack = 1;
     if (!base) {
-        return -1;
+        /* TODO(ring3-phase2): remove this fallback once scheduler/mm_copy no
+         * longer need low-mapped stack availability under user CR3. */
+        base = pfa_alloc_pages(total_pages);
+        using_higher_half_stack = 0;
+        if (!base) {
+            return -1;
+        }
     }
 
     uint64_t guard_low = base;
     uint64_t usable_base = base + ((uint64_t)STACK_GUARD_PAGES * PAGE_SIZE);
     uint64_t guard_high = base + ((total_pages - STACK_GUARD_PAGES) * PAGE_SIZE);
+    uint64_t higher_half_base = paging_get_higher_half_base();
+    uint64_t guard_low_virt = using_higher_half_stack ? (higher_half_base + guard_low) : guard_low;
+    uint64_t usable_base_virt = using_higher_half_stack ? (higher_half_base + usable_base) : usable_base;
+    uint64_t guard_high_virt = using_higher_half_stack ? (higher_half_base + guard_high) : guard_high;
 
     for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
-        if (paging_unmap_4k(guard_low + ((uint64_t)i * PAGE_SIZE)) != 0) {
+        if (paging_unmap_4k(guard_low_virt + ((uint64_t)i * PAGE_SIZE)) != 0) {
             serial_write("[sched] guard unmap failed\n");
             return -1;
         }
     }
     for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
-        if (paging_unmap_4k(guard_high + ((uint64_t)i * PAGE_SIZE)) != 0) {
+        if (paging_unmap_4k(guard_high_virt + ((uint64_t)i * PAGE_SIZE)) != 0) {
             serial_write("[sched] guard unmap failed\n");
             return -1;
         }
     }
 
-    slot->stack_base = (uintptr_t)usable_base;
+    slot->stack_base = (uintptr_t)usable_base_virt;
     slot->stack_pages = stack_pages;
-    slot->stack_top = (uintptr_t)guard_high;
+    slot->stack_top = (uintptr_t)guard_high_virt;
+    slot->stack_alloc_base_phys = (uintptr_t)base;
 
     if (slot->stack_base && slot->stack_top > slot->stack_base + sizeof(uint64_t)) {
         /* Canaries catch in-range stack corruption that does not reach the guard
@@ -370,6 +385,7 @@ static void process_reset_slot(process_t *proc) {
     proc->ctx_canary_post = 0;
     proc->stack_base = 0;
     proc->stack_top = 0;
+    proc->stack_alloc_base_phys = 0;
     proc->stack_pages = 0;
     proc->entry = 0;
     proc->arg = 0;
@@ -469,10 +485,9 @@ static void process_reap(process_t *proc) {
     if (!proc) {
         return;
     }
-    if (proc->stack_base && proc->stack_pages) {
+    if (proc->stack_alloc_base_phys && proc->stack_pages) {
         uint64_t total_pages = (uint64_t)proc->stack_pages + (STACK_GUARD_PAGES * 2u);
-        uint64_t stack_alloc_base = (uint64_t)proc->stack_base - ((uint64_t)STACK_GUARD_PAGES * PAGE_SIZE);
-        pfa_free_pages(stack_alloc_base, total_pages);
+        pfa_free_pages((uint64_t)proc->stack_alloc_base_phys, total_pages);
     }
     if (proc->context_id != 0) {
         ipc_endpoints_release_owner(proc->context_id);

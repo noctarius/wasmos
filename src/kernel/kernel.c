@@ -59,9 +59,13 @@ static const uint8_t g_skip_wasm_boot = 0;
 #ifndef WASMOS_RING3_SMOKE_DEFAULT
 #define WASMOS_RING3_SMOKE_DEFAULT 0
 #endif
+#ifndef WASMOS_LOW_SLOT_SWEEP_DEFAULT
+#define WASMOS_LOW_SLOT_SWEEP_DEFAULT 0
+#endif
 /* TODO: Re-enable default ring3 smoke spawn after sustained soak confirms
  * preempt-trampoline behavior remains stable across broader workloads. */
 static const uint8_t g_ring3_smoke_enabled = WASMOS_RING3_SMOKE_DEFAULT;
+static const uint8_t g_low_slot_sweep_enabled = WASMOS_LOW_SLOT_SWEEP_DEFAULT;
 
 typedef struct {
     uint32_t fault_pid;
@@ -90,6 +94,58 @@ typedef struct {
 
 static int
 bytes_eq(const uint8_t *a, uint32_t a_len, const char *b);
+
+static void
+run_low_slot_sweep_diagnostic(void)
+{
+    if (!g_low_slot_sweep_enabled) {
+        return;
+    }
+    uint32_t active = process_count_active();
+    uint32_t pid = 0;
+    uint32_t parent_pid = 0;
+    const char *name = 0;
+    uint8_t failed = 0;
+
+    serial_write("[diag] low-slot sweep start\n");
+    for (uint32_t i = 0; i < active; ++i) {
+        if (process_info_at_ex(i, &pid, &parent_pid, &name) != 0) {
+            continue;
+        }
+        process_t *proc = process_get(pid);
+        if (!proc || proc->is_idle || proc->context_id == 0) {
+            continue;
+        }
+        if ((proc->ctx.cs & 0x3u) != 0x3u) {
+            continue;
+        }
+        uint64_t root = mm_context_root_table(proc->context_id);
+        if (root == 0) {
+            continue;
+        }
+        if (paging_strip_low_slot_in_root(root) != 0) {
+            serial_printf("[diag] low-slot sweep fail: strip pid=%u name=%s ctx=%u root=%016llx\n",
+                          pid,
+                          name ? name : "(null)",
+                          proc->context_id,
+                          (unsigned long long)root);
+            failed = 1;
+            break;
+        }
+        if (paging_verify_user_root_no_low_slot(root, 1) != 0) {
+            serial_printf("[diag] low-slot sweep fail: verify pid=%u name=%s ctx=%u root=%016llx\n",
+                          pid,
+                          name ? name : "(null)",
+                          proc->context_id,
+                          (unsigned long long)root);
+            failed = 1;
+            break;
+        }
+    }
+    if (!failed) {
+        serial_write("[diag] low-slot sweep ok\n");
+    }
+}
 
 static uint32_t
 boot_module_index_by_app_name(const boot_info_t *info, const char *name)
@@ -1254,6 +1310,7 @@ kmain(boot_info_t *boot_info)
         (unsigned long long)boot_info->version,
         (unsigned long long)boot_info->size);
     serial_printf("[mode] strict-ring3=%u\n", (unsigned int)g_ring3_smoke_enabled);
+    serial_printf("[mode] low-slot-sweep=%u\n", (unsigned int)g_low_slot_sweep_enabled);
     g_boot_info = boot_info;
     framebuffer_init(boot_info);
     cpu_init();
@@ -1440,6 +1497,7 @@ kmain(boot_info_t *boot_info)
             }
         }
     }
+    run_low_slot_sweep_diagnostic();
 
     timer_init(250);
     serial_write("[kernel] interrupts on\n");

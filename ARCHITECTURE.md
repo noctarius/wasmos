@@ -263,6 +263,10 @@ The current tree already boots into a usable user-space stack:
 - Ring3 entry hard gate update: user-entry activation now enforces an explicit
   no-low-slot verification (`PML4[0]` absent) after stripping low-slot mappings
   and before committing CPL3 entry selectors.
+- Added guarded low-slot sweep diagnostics: when
+  `WASMOS_LOW_SLOT_SWEEP=ON`, boot performs a strip+verify pass across eligible
+  user-mode contexts and emits first-failure markers for low-slot transition
+  triage; default remains OFF to preserve baseline behavior.
 - Regression coverage now includes `tests/test_ring3_smoke_target.py`, which
   executes `cmake --build build --target run-qemu-ring3-test` to keep ring3
   marker assertions in the standard automated test suite, including structured

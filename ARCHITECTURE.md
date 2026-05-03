@@ -256,6 +256,9 @@ The current tree already boots into a usable user-space stack:
   allowed kernel PML4 slots are present (`0`, `511`, private user slot `1`) and
   that higher-half PDPT/PD entries are constrained to explicit allowlist
   windows; a dump helper logs kernel-footprint entries for triage on failure.
+  Child address spaces now build a private low-slot PDPT from the kernel
+  template (identity/direct-map entries only), so future kernel low-slot growth
+  does not silently widen existing user CR3 roots.
 - A baseline user-pointer copy layer now exists in kernel memory management
   (`mm_copy_from_user` / `mm_copy_to_user`) with user-range permission checks,
   pre-mapping of touched pages, and temporary CR3 switch/restore around the

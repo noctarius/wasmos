@@ -491,7 +491,8 @@ Integration rules:
 Memory model notes:
 - each process owns a separate root page table
 - the scheduler switches CR3 on dispatch and restores the kernel root on return
-- kernel identity/higher-half mappings stay shared across all address spaces
+- user roots keep a private low-slot PDPT snapshot for the identity/direct-map
+  subset and share only the bounded higher-half kernel alias window
 - process-visible WASM linear/stack/heap regions live in a private user window
 - CPU privilege is still ring 0 for all tasks; this is address-space separation,
   not user-mode isolation yet

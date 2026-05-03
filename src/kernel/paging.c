@@ -46,9 +46,9 @@ paging_verify_user_root_impl(uint64_t root_table, int log_failures)
     volatile uint64_t *root = (volatile uint64_t *)(uintptr_t)root_table;
     volatile uint64_t *kernel = (volatile uint64_t *)(uintptr_t)g_pml4_phys;
 
-    if (root[0] != kernel[0] || root[511] != kernel[511]) {
+    if (root[511] != kernel[511]) {
         if (log_failures) {
-            serial_write("[paging] verify fail: kernel slot mismatch\n");
+            serial_write("[paging] verify fail: higher-half slot mismatch\n");
         }
         return -1;
     }
@@ -100,6 +100,28 @@ paging_verify_user_root_impl(uint64_t root_table, int log_failures)
                 }
                 return -1;
             }
+        }
+    }
+
+    if (!(root[0] & PT_FLAG_PRESENT)) {
+        if (log_failures) {
+            serial_write("[paging] verify fail: pml4[0] absent\n");
+        }
+        return -1;
+    }
+    uint64_t pdpt_low_phys = entry_phys(root[0]);
+    volatile uint64_t *pdpt_low = (volatile uint64_t *)(uintptr_t)pdpt_low_phys;
+    for (uint32_t i = 0; i < ENTRIES_PER_TABLE; ++i) {
+        uint8_t allowed = (uint8_t)(i < IDENTITY_PD_COUNT);
+        uint8_t present = (uint8_t)((pdpt_low[i] & PT_FLAG_PRESENT) != 0);
+        if (present != allowed) {
+            if (log_failures) {
+                serial_printf("[paging] verify fail: pdpt_low[%u]=%016llx allowed=%u\n",
+                              (unsigned int)i,
+                              (unsigned long long)pdpt_low[i],
+                              (unsigned int)allowed);
+            }
+            return -1;
         }
     }
 
@@ -310,17 +332,31 @@ paging_create_address_space(uint64_t *out_root_table)
         return -1;
     }
     uint64_t root = 0;
+    uint64_t child_pdpt_low = 0;
     if (alloc_table(&root) != 0) {
         return -1;
     }
     volatile uint64_t *dst = (volatile uint64_t *)(uintptr_t)root;
     volatile uint64_t *src = (volatile uint64_t *)(uintptr_t)g_pml4_phys;
+    volatile uint64_t *src_pdpt_low = 0;
+    volatile uint64_t *dst_pdpt_low = 0;
+    if (!(src[0] & PT_FLAG_PRESENT) || alloc_table(&child_pdpt_low) != 0) {
+        pfa_free_pages(root, 1);
+        return -1;
+    }
+    src_pdpt_low = (volatile uint64_t *)(uintptr_t)entry_phys(src[0]);
+    dst_pdpt_low = (volatile uint64_t *)(uintptr_t)child_pdpt_low;
+    for (uint32_t i = 0; i < IDENTITY_PD_COUNT; ++i) {
+        dst_pdpt_low[i] = src_pdpt_low[i];
+    }
+
     /* A child address space starts with only the shared kernel mappings:
      * low identity/direct-physical access in slot 0 and the higher-half alias
      * in slot 511. Slot 1 stays private for process-owned mappings. */
-    dst[0] = src[0];
+    dst[0] = child_pdpt_low | PT_FLAG_PRESENT | PT_FLAG_WRITE;
     dst[511] = src[511];
     if (paging_verify_user_root_impl(root, 1) != 0) {
+        pfa_free_pages(child_pdpt_low, 1);
         pfa_free_pages(root, 1);
         return -1;
     }
@@ -336,6 +372,7 @@ paging_destroy_address_space(uint64_t root_table)
     }
 
     volatile uint64_t *pml4 = (volatile uint64_t *)(uintptr_t)root_table;
+    volatile uint64_t *kernel = (volatile uint64_t *)(uintptr_t)g_pml4_phys;
     if (pml4[USER_PML4_INDEX] & PT_FLAG_PRESENT) {
         uint64_t pdpt_phys = entry_phys(pml4[USER_PML4_INDEX]);
         volatile uint64_t *pdpt = (volatile uint64_t *)(uintptr_t)pdpt_phys;
@@ -356,6 +393,9 @@ paging_destroy_address_space(uint64_t root_table)
             pfa_free_pages(pd_phys, 1);
         }
         pfa_free_pages(pdpt_phys, 1);
+    }
+    if ((pml4[0] & PT_FLAG_PRESENT) && (!kernel || entry_phys(pml4[0]) != entry_phys(kernel[0]))) {
+        pfa_free_pages(entry_phys(pml4[0]), 1);
     }
     pfa_free_pages(root_table, 1);
 }

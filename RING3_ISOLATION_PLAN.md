@@ -298,12 +298,11 @@ Progress update (2026-05-03):
   - Scheduler/process stack allocation no longer falls back to low-address
     pages when higher-half-window allocation fails; process spawn now fails
     closed in that condition.
-  - `mm_copy_from_user` / `mm_copy_to_user` now explicitly reject low-stack
-    execution (`stack_low` trace stage) before any temporary CR3 switch to a
-    user root, preventing silent dependence on child `PML4[0]` low mappings.
-  - Remaining blocker: provide a dedicated stack-safe copy/transition path so
-    low-slot stripping can be re-enabled without relying on caller stack
-    placement checks.
+  - `mm_copy_from_user` / `mm_copy_to_user` now trampoline through a dedicated
+    higher-half copy stack before temporary CR3 switches when needed, removing
+    caller low-stack dependence for copy windows.
+  - Remaining blocker: complete the same stack-safety guarantee for any
+    non-copy transition windows that still assume low-slot compatibility.
 
 Exit criteria:
 - User roots map only approved kernel transition/support ranges.

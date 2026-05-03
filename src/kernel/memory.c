@@ -11,15 +11,16 @@
 #define MM_USER_IPC_BASE    0x0000008300000000ULL
 #define MM_USER_DEVICE_BASE 0x0000008400000000ULL
 #define MM_USER_SHARED_BASE 0x0000008500000000ULL
+#define MM_COPY_STACK_BYTES 8192u
 static const uint64_t pf_err_present = 1ULL << 0;
 static const uint64_t pf_err_write = 1ULL << 1;
 static const uint64_t pf_err_user = 1ULL << 2;
 static const uint64_t pf_err_instr = 1ULL << 4;
-static const uint64_t pt_flag_present = 1ULL << 0;
 static const boot_info_t *g_boot_info;
 static mm_context_t g_contexts[MM_MAX_CONTEXTS];
 static uint32_t g_context_count;
 static mm_context_t g_root_ctx;
+static uint8_t g_mm_copy_stack[MM_COPY_STACK_BYTES] __attribute__((aligned(16)));
 
 static inline uintptr_t
 mm_kernel_alias_addr(uintptr_t addr)
@@ -55,6 +56,36 @@ typedef struct {
 static mm_shared_region_t g_shared[MM_MAX_SHARED];
 static uint32_t g_shared_next_id = 1;
 static int mm_region_flags_valid(uint32_t flags);
+typedef int (*mm_copy_work_fn)(void *arg);
+
+static int
+mm_run_on_copy_stack(mm_copy_work_fn fn, void *arg)
+{
+    if (!fn) {
+        return -1;
+    }
+
+    uint64_t rsp = 0;
+    uint64_t higher_half_base = paging_get_higher_half_base();
+    __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
+    if (rsp >= higher_half_base) {
+        return fn(arg);
+    }
+
+    uintptr_t stack_top = mm_kernel_alias_addr((uintptr_t)&g_mm_copy_stack[MM_COPY_STACK_BYTES]);
+    stack_top &= ~(uintptr_t)0xFULL;
+    int rc = -1;
+    __asm__ volatile(
+        "mov %%rsp, %%r11\n"
+        "mov %[stack_top], %%rsp\n"
+        "mov %[arg], %%rdi\n"
+        "call *%[fn]\n"
+        "mov %%r11, %%rsp\n"
+        : "=a"(rc)
+        : [stack_top] "r"(stack_top), [fn] "r"(fn), [arg] "r"(arg)
+        : "r11", "rdi", "rcx", "rdx", "rsi", "r8", "r9", "r10", "memory", "cc");
+    return rc;
+}
 
 static uint64_t
 mm_region_virtual_base(mm_context_t *ctx, mem_region_type_t type, uint64_t pages)
@@ -602,6 +633,56 @@ uint64_t mm_context_root_table(uint32_t id) {
     return ctx->root_table;
 }
 
+typedef struct {
+    uint32_t context_id;
+    uint64_t user_addr;
+    uint64_t size;
+    uint64_t root_table;
+    uint64_t prev_root;
+    uint8_t *kernel_ptr;
+} mm_copy_from_user_args_t;
+
+typedef struct {
+    uint32_t context_id;
+    uint64_t user_addr;
+    uint64_t size;
+    uint64_t root_table;
+    uint64_t prev_root;
+    const uint8_t *kernel_ptr;
+} mm_copy_to_user_args_t;
+
+static int
+mm_copy_from_user_impl(void *opaque)
+{
+    mm_copy_from_user_args_t *args = (mm_copy_from_user_args_t *)opaque;
+    if (!args) {
+        return -1;
+    }
+    uint8_t *dst_bytes = args->kernel_ptr;
+    uint64_t remaining = args->size;
+    uint64_t user_cur = args->user_addr;
+    const uint64_t chunk_size = 256ULL;
+    uint8_t bounce[256];
+
+    while (remaining > 0) {
+        uint64_t n = (remaining < chunk_size) ? remaining : chunk_size;
+        if (paging_switch_root(args->root_table) != 0) {
+            mm_trace_copy_fail("from", "switch_to_user", args->context_id, args->user_addr, args->size, args->root_table, paging_get_current_root_table(), user_cur, n);
+            return -1;
+        }
+        memcpy(bounce, (const void *)(uintptr_t)user_cur, (size_t)n);
+        if (paging_switch_root(args->prev_root) != 0) {
+            mm_trace_copy_fail("from", "switch_to_prev", args->context_id, args->user_addr, args->size, args->prev_root, paging_get_current_root_table(), user_cur, n);
+            return -1;
+        }
+        memcpy(dst_bytes, bounce, (size_t)n);
+        dst_bytes += n;
+        user_cur += n;
+        remaining -= n;
+    }
+    return 0;
+}
+
 int
 mm_copy_from_user(uint32_t context_id, void *dst, uint64_t user_src, uint64_t size)
 {
@@ -619,37 +700,43 @@ mm_copy_from_user(uint32_t context_id, void *dst, uint64_t user_src, uint64_t si
         return -1;
     }
 
-    uint64_t prev_root = paging_get_current_root_table();
-    uint64_t rsp = 0;
-    uint64_t higher_half_base = paging_get_higher_half_base();
-    volatile uint64_t *root_entries = (volatile uint64_t *)(uintptr_t)ctx->root_table;
-    __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
-    if (rsp < higher_half_base && (root_entries[0] & pt_flag_present) == 0) {
-        /* TODO(ring3-phase2): Replace this low-slot compatibility carve-out
-         * with a dedicated stack-safe copy path so low-stack callers are never
-         * required for CR3 switch windows. */
-        mm_trace_copy_fail("from", "stack_low", context_id, user_src, size, ctx->root_table, prev_root, rsp, 0);
+    mm_copy_from_user_args_t args = {
+        .context_id = context_id,
+        .user_addr = user_src,
+        .size = size,
+        .root_table = ctx->root_table,
+        .prev_root = paging_get_current_root_table(),
+        .kernel_ptr = (uint8_t *)dst,
+    };
+    return mm_run_on_copy_stack(mm_copy_from_user_impl, &args);
+}
+
+static int
+mm_copy_to_user_impl(void *opaque)
+{
+    mm_copy_to_user_args_t *args = (mm_copy_to_user_args_t *)opaque;
+    if (!args) {
         return -1;
     }
-    uint8_t *dst_bytes = (uint8_t *)dst;
-    uint64_t remaining = size;
-    uint64_t user_cur = user_src;
+    const uint8_t *src_bytes = args->kernel_ptr;
+    uint64_t remaining = args->size;
+    uint64_t user_cur = args->user_addr;
     const uint64_t chunk_size = 256ULL;
     uint8_t bounce[256];
 
     while (remaining > 0) {
         uint64_t n = (remaining < chunk_size) ? remaining : chunk_size;
-        if (paging_switch_root(ctx->root_table) != 0) {
-            mm_trace_copy_fail("from", "switch_to_user", context_id, user_src, size, ctx->root_table, paging_get_current_root_table(), user_cur, n);
+        memcpy(bounce, src_bytes, (size_t)n);
+        if (paging_switch_root(args->root_table) != 0) {
+            mm_trace_copy_fail("to", "switch_to_user", args->context_id, args->user_addr, args->size, args->root_table, paging_get_current_root_table(), user_cur, n);
             return -1;
         }
-        memcpy(bounce, (const void *)(uintptr_t)user_cur, (size_t)n);
-        if (paging_switch_root(prev_root) != 0) {
-            mm_trace_copy_fail("from", "switch_to_prev", context_id, user_src, size, prev_root, paging_get_current_root_table(), user_cur, n);
+        memcpy((void *)(uintptr_t)user_cur, bounce, (size_t)n);
+        if (paging_switch_root(args->prev_root) != 0) {
+            mm_trace_copy_fail("to", "switch_to_prev", args->context_id, args->user_addr, args->size, args->prev_root, paging_get_current_root_table(), user_cur, n);
             return -1;
         }
-        memcpy(dst_bytes, bounce, (size_t)n);
-        dst_bytes += n;
+        src_bytes += n;
         user_cur += n;
         remaining -= n;
     }
@@ -673,41 +760,15 @@ mm_copy_to_user(uint32_t context_id, uint64_t user_dst, const void *src, uint64_
         return -1;
     }
 
-    uint64_t prev_root = paging_get_current_root_table();
-    uint64_t rsp = 0;
-    uint64_t higher_half_base = paging_get_higher_half_base();
-    volatile uint64_t *root_entries = (volatile uint64_t *)(uintptr_t)ctx->root_table;
-    __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
-    if (rsp < higher_half_base && (root_entries[0] & pt_flag_present) == 0) {
-        /* TODO(ring3-phase2): Replace this low-slot compatibility carve-out
-         * with a dedicated stack-safe copy path so low-stack callers are never
-         * required for CR3 switch windows. */
-        mm_trace_copy_fail("to", "stack_low", context_id, user_dst, size, ctx->root_table, prev_root, rsp, 0);
-        return -1;
-    }
-    const uint8_t *src_bytes = (const uint8_t *)src;
-    uint64_t remaining = size;
-    uint64_t user_cur = user_dst;
-    const uint64_t chunk_size = 256ULL;
-    uint8_t bounce[256];
-
-    while (remaining > 0) {
-        uint64_t n = (remaining < chunk_size) ? remaining : chunk_size;
-        memcpy(bounce, src_bytes, (size_t)n);
-        if (paging_switch_root(ctx->root_table) != 0) {
-            mm_trace_copy_fail("to", "switch_to_user", context_id, user_dst, size, ctx->root_table, paging_get_current_root_table(), user_cur, n);
-            return -1;
-        }
-        memcpy((void *)(uintptr_t)user_cur, bounce, (size_t)n);
-        if (paging_switch_root(prev_root) != 0) {
-            mm_trace_copy_fail("to", "switch_to_prev", context_id, user_dst, size, prev_root, paging_get_current_root_table(), user_cur, n);
-            return -1;
-        }
-        src_bytes += n;
-        user_cur += n;
-        remaining -= n;
-    }
-    return 0;
+    mm_copy_to_user_args_t args = {
+        .context_id = context_id,
+        .user_addr = user_dst,
+        .size = size,
+        .root_table = ctx->root_table,
+        .prev_root = paging_get_current_root_table(),
+        .kernel_ptr = (const uint8_t *)src,
+    };
+    return mm_run_on_copy_stack(mm_copy_to_user_impl, &args);
 }
 
 /* TODO: Migrate pointer-bearing syscall and IPC entry paths to this helper

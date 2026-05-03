@@ -111,13 +111,13 @@ class MemoryPrivilegeFoundationSpecTest(unittest.TestCase):
             memory_src = f.read()
         self._require(
             memory_src,
-            r"mm_copy_to_user[\s\S]*uint8_t bounce\[256\][\s\S]*memcpy\(bounce,\s*src_bytes,\s*\(size_t\)n\)[\s\S]*paging_switch_root\(ctx->root_table\)[\s\S]*memcpy\(\(void \*\)\(uintptr_t\)user_cur,\s*bounce,\s*\(size_t\)n\)",
-            "mm_copy_to_user should stage kernel bytes in bounce buffer before user-root write",
+            r"mm_copy_to_user(_impl)?[\s\S]*uint8_t bounce\[256\][\s\S]*memcpy\(bounce,\s*src_bytes,\s*\(size_t\)n\)[\s\S]*paging_switch_root\((ctx->root_table|args->root_table)\)[\s\S]*memcpy\(\(void \*\)\(uintptr_t\)user_cur,\s*bounce,\s*\(size_t\)n\)",
+            "mm_copy_to_user path should stage kernel bytes in bounce buffer before user-root write",
         )
         self._require(
             memory_src,
-            r"mm_copy_from_user[\s\S]*uint8_t bounce\[256\][\s\S]*paging_switch_root\(ctx->root_table\)[\s\S]*memcpy\(bounce,\s*\(const void \*\)\(uintptr_t\)user_cur,\s*\(size_t\)n\)[\s\S]*paging_switch_root\(prev_root\)[\s\S]*memcpy\(dst_bytes,\s*bounce,\s*\(size_t\)n\)",
-            "mm_copy_from_user should stage user bytes in bounce buffer before kernel-root write",
+            r"mm_copy_from_user(_impl)?[\s\S]*uint8_t bounce\[256\][\s\S]*paging_switch_root\((ctx->root_table|args->root_table)\)[\s\S]*memcpy\(bounce,\s*\(const void \*\)\(uintptr_t\)user_cur,\s*\(size_t\)n\)[\s\S]*paging_switch_root\((prev_root|args->prev_root)\)[\s\S]*memcpy\(dst_bytes,\s*bounce,\s*\(size_t\)n\)",
+            "mm_copy_from_user path should stage user bytes in bounce buffer before kernel-root write",
         )
 
     def test_ring3_context_restore_scaffolding_exists(self):

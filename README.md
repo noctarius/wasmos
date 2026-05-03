@@ -259,7 +259,10 @@ IMPORTANT: Create a git commit after each prompt iteration.
   switch/restore for safer user-pointer access patterns. Copy paths now use a
   fixed bounce buffer per chunk so kernel-side buffers are read/written only
   under kernel CR3 and user-side memory is dereferenced only under target user
-  CR3; pointer-bearing migration is broadly in place and includes
+  CR3; copy helpers now also trampoline through a dedicated higher-half kernel
+  copy stack when called from low addresses, so CR3 switch windows no longer
+  depend on caller stack placement; pointer-bearing migration is broadly in
+  place and includes
   `wasmos_framebuffer_info` plus `wasmos_boot_config_copy` on pure validated
   `mm_copy_to_user` semantics.
   Copy helpers now include trace-gated (`WASMOS_TRACE`) failure-stage

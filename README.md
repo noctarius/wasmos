@@ -224,6 +224,11 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - optional diagnostic mode `WASMOS_LOW_SLOT_SWEEP` (default OFF) now performs
   a boot-time strip+verify pass over eligible user-mode contexts and logs the
   first strip/verify failure for Phase-2 triage (`[diag] low-slot sweep ...`)
+- sweep scope can be expanded with `WASMOS_LOW_SLOT_SWEEP_LEVEL`:
+  `1` (default) checks user-mode contexts only, `2` also includes selected
+  non-user contexts for deeper compatibility diagnostics
+- low-slot identity-map width is now tunable with `WASMOS_IDENTITY_PD_COUNT`
+  (`0..4`, default `4`) for phased reduction experiments
 - strict ring3 smoke target (`run-qemu-ring3-test`) currently passes end-to-end
   with ring3 syscall/fault-policy/preempt/native markers enabled; remaining
   strict-mode framebuffer panic/MMIO mapping hardening is tracked in

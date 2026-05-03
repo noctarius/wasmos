@@ -315,6 +315,10 @@ Progress update (2026-05-03):
   - Added guarded sweep mode (`WASMOS_LOW_SLOT_SWEEP`, default OFF) that
     performs strip+verify across eligible user-mode contexts and logs the first
     strip/verify failure path for iterative Phase-2 removal work.
+  - Sweep mode now supports scope level control
+    (`WASMOS_LOW_SLOT_SWEEP_LEVEL`: `1` user-only, `2` include selected
+    non-user contexts) and low-slot map width experiments via
+    `WASMOS_IDENTITY_PD_COUNT` (`0..4`).
   - Remaining blocker: complete the same stack-safety guarantee for any
     non-copy transition windows that still assume low-slot compatibility.
 

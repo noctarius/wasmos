@@ -12,8 +12,8 @@
 #include "wasmos_app.h"
 #include "wasmos_driver_abi.h"
 #include "framebuffer.h"
-#include "capability.h"
 #include "irq.h"
+#include "policy.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -274,31 +274,31 @@ wasm_user_va_from_host_ptr(uint32_t context_id,
 static int
 require_io_capability(uint32_t context_id)
 {
-    return capability_has(context_id, CAP_IO_PORT) ? 0 : -1;
+    return policy_authorize(context_id, POLICY_ACTION_IO_PORT, 0);
 }
 
 static int
 require_mmio_capability(uint32_t context_id)
 {
-    return capability_has(context_id, CAP_MMIO_MAP) ? 0 : -1;
+    return policy_authorize(context_id, POLICY_ACTION_MMIO_MAP, 0);
 }
 
 static int
 require_dma_capability(uint32_t context_id)
 {
-    return capability_has(context_id, CAP_DMA_BUFFER) ? 0 : -1;
+    return policy_authorize(context_id, POLICY_ACTION_DMA_BUFFER, 0);
 }
 
 static int
 require_irq_route_capability(uint32_t context_id)
 {
-    return capability_has(context_id, CAP_IRQ_ROUTE) ? 0 : -1;
+    return policy_authorize(context_id, POLICY_ACTION_IRQ_CONTROL, 0);
 }
 
 static int
 require_system_control_capability(uint32_t context_id)
 {
-    return capability_has(context_id, CAP_SYSTEM_CONTROL) ? 0 : -1;
+    return policy_authorize(context_id, POLICY_ACTION_SYSTEM_CONTROL, 0);
 }
 
 static int

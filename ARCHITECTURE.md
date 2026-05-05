@@ -379,6 +379,9 @@ The current tree already boots into a usable user-space stack:
   Integration coverage now executes capability split probes
   (`irq-route-deny` / `irq-route-allow`) to keep deny-by-default and
   grant-enabled IRQ routing behavior under regression test.
+- Authorization checks for privileged operations are now centralized under
+  `policy_authorize(context, action, arg0)` so capability checks and
+  action-specific policy constraints are evaluated in one kernel path.
 - Capability descriptors are now validated fail-closed during WASMOS-APP pack:
   `make_wasmos_app` rejects unknown capability names and non-zero capability
   flags before artifacts are produced.

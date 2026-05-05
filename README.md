@@ -357,6 +357,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   now assert IRQ route deny-by-default (`irq-route-deny`) and allow-when-granted
   (`irq-route-allow`) behavior, and ATA now carries explicit `irq.route`
   alongside `io.port`
+- policy enforcement now routes through a centralized kernel authorization
+  entrypoint (`policy_authorize`) so hostcalls and IRQ routing share one
+  decision path (capability checks plus resource policy constraints)
 - the WASMOS-APP packer (`make_wasmos_app`) now rejects unknown capability
   names and non-zero capability flags so malformed capability descriptors fail
   closed before runtime

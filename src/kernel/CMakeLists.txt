@@ -42,6 +42,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/cpu.o
   ${BUILD_DIR}/memory.o
   ${BUILD_DIR}/capability.o
+  ${BUILD_DIR}/policy.o
   ${BUILD_DIR}/slab.o
   ${BUILD_DIR}/syscall.o
   ${BUILD_DIR}/libc.o
@@ -89,6 +90,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/libc.c
   ${KERNEL_DIR}/memory.c
   ${KERNEL_DIR}/capability.c
+  ${KERNEL_DIR}/policy.c
   ${KERNEL_DIR}/slab.c
   ${KERNEL_DIR}/syscall.c
   ${KERNEL_DIR}/paging.c
@@ -130,6 +132,7 @@ target_sources(kernel_sources INTERFACE
   ${KERNEL_DIR}/include/ipc.h
   ${KERNEL_DIR}/include/memory.h
   ${KERNEL_DIR}/include/capability.h
+  ${KERNEL_DIR}/include/policy.h
   ${KERNEL_DIR}/include/slab.h
   ${KERNEL_DIR}/include/syscall.h
   ${KERNEL_DIR}/include/memory_service.h
@@ -161,6 +164,7 @@ add_library(kernel_ide OBJECT EXCLUDE_FROM_ALL
   ${KERNEL_DIR}/include/ipc.h
   ${KERNEL_DIR}/include/memory.h
   ${KERNEL_DIR}/include/capability.h
+  ${KERNEL_DIR}/include/policy.h
   ${KERNEL_DIR}/include/slab.h
   ${KERNEL_DIR}/include/syscall.h
   ${KERNEL_DIR}/include/paging.h
@@ -209,6 +213,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel.c -o ${BUILD_DIR}/kernel.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/cpu.c -o ${BUILD_DIR}/cpu.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/capability.c -o ${BUILD_DIR}/capability.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/policy.c -o ${BUILD_DIR}/policy.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/slab.c -o ${BUILD_DIR}/slab.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/syscall.c -o ${BUILD_DIR}/syscall.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/libc.c -o ${BUILD_DIR}/libc.o
@@ -245,6 +250,7 @@ add_custom_command(
   COMMAND ${LLD_PATH} ${LDFLAGS_KERNEL} -o ${BUILD_DIR}/kernel.elf ${KERNEL_OBJS} ${KERNEL_LINK_LIBS}
   DEPENDS ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/include/cpu.h
   ${KERNEL_DIR}/include/ipc.h ${KERNEL_DIR}/include/memory.h ${KERNEL_DIR}/include/capability.h
+  ${KERNEL_DIR}/include/policy.h
   ${KERNEL_DIR}/include/slab.h ${KERNEL_DIR}/include/syscall.h ${KERNEL_DIR}/include/paging.h
           ${KERNEL_DIR}/include/physmem.h ${KERNEL_DIR}/include/process.h ${KERNEL_DIR}/include/process_manager.h
           ${KERNEL_DIR}/include/memory_service.h ${KERNEL_DIR}/include/irq.h ${KERNEL_DIR}/include/timer.h

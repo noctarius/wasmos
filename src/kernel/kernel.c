@@ -666,11 +666,10 @@ preempt_observer_entry(process_t *process, void *arg)
 }
 
 static process_run_result_t
-ring3_smoke_fallback_entry(process_t *process, void *arg)
+ring3_probe_bootstrap_entry(process_t *process, void *arg)
 {
     (void)arg;
     if (process) {
-        serial_write("[test] ring3 fallback path\n");
         process_set_exit_status(process, -1);
     }
     return PROCESS_RUN_EXITED;
@@ -826,7 +825,7 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
     if (!out_pid) {
         return -1;
     }
-    if (process_spawn_as(parent_pid, "ring3-smoke", ring3_smoke_fallback_entry, 0, out_pid) != 0) {
+    if (process_spawn_as(parent_pid, "ring3-smoke", ring3_probe_bootstrap_entry, 0, out_pid) != 0) {
         return -1;
     }
 
@@ -938,7 +937,7 @@ spawn_ring3_native_probe_process(uint32_t parent_pid, uint32_t *out_pid)
     if (!out_pid || !src || code_size == 0) {
         return -1;
     }
-    if (process_spawn_as(parent_pid, "ring3-native", ring3_smoke_fallback_entry, 0, out_pid) != 0) {
+    if (process_spawn_as(parent_pid, "ring3-native", ring3_probe_bootstrap_entry, 0, out_pid) != 0) {
         return -1;
     }
     proc = process_get(*out_pid);
@@ -1067,7 +1066,7 @@ spawn_ring3_fault_probe_named(uint32_t parent_pid,
     if (!out_pid || !name || !code || code_size == 0) {
         return -1;
     }
-    if (process_spawn_as(parent_pid, name, ring3_smoke_fallback_entry, 0, out_pid) != 0) {
+    if (process_spawn_as(parent_pid, name, ring3_probe_bootstrap_entry, 0, out_pid) != 0) {
         return -1;
     }
     proc = process_get(*out_pid);

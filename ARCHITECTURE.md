@@ -370,9 +370,9 @@ The current tree already boots into a usable user-space stack:
   paths until NX instruction-fetch faults classify consistently as
   `exec_violation`.
 - Capability metadata now feeds a per-context resource-capability registry
-  (`io.port`, `irq.route`, `mmio.map`, `dma.buffer`); WASM I/O hostcalls now
-  enforce `io.port` when explicit capability policy is configured for the
-  calling context, while unconfigured contexts remain in compatibility mode.
+  (`io.port`, `irq.route`, `mmio.map`, `dma.buffer`, `system.control`); WASM
+  I/O/MMIO/DMA hostcalls enforce explicit capability checks, and
+  `wasmos_system_halt`/`wasmos_system_reboot` require `system.control`.
 - A minimal fixed-size slab allocator scaffold (`kalloc_small`/`kfree_small`)
   is now available as an optional kernel allocator path for incremental
   migration off ad-hoc static/object-specific allocation patterns.

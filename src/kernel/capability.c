@@ -1,7 +1,7 @@
 #include "capability.h"
 #include "memory.h"
 
-#define CAP_ALL_MASK ((1u << 4) - 1u)
+#define CAP_ALL_MASK ((1u << 5) - 1u)
 
 typedef struct {
     uint8_t configured;
@@ -38,6 +38,8 @@ kind_to_mask(capability_kind_t kind)
         return 1u << 2;
     case CAP_DMA_BUFFER:
         return 1u << 3;
+    case CAP_SYSTEM_CONTROL:
+        return 1u << 4;
     default:
         return 0;
     }
@@ -72,6 +74,8 @@ capability_grant_name(uint32_t context_id, const uint8_t *name, uint32_t name_le
         mask = kind_to_mask(CAP_MMIO_MAP);
     } else if (bytes_eq(name, name_len, "dma.buffer")) {
         mask = kind_to_mask(CAP_DMA_BUFFER);
+    } else if (bytes_eq(name, name_len, "system.control")) {
+        mask = kind_to_mask(CAP_SYSTEM_CONTROL);
     } else {
         return -1;
     }

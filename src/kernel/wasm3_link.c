@@ -289,6 +289,12 @@ require_dma_capability(uint32_t context_id)
 }
 
 static int
+require_system_control_capability(uint32_t context_id)
+{
+    return capability_has(context_id, CAP_SYSTEM_CONTROL) ? 0 : -1;
+}
+
+static int
 wasm_console_should_mirror_to_vt(void)
 {
     process_t *proc = process_get(process_current_pid());
@@ -1357,6 +1363,11 @@ m3ApiRawFunction(wasmos_shmem_unmap)
 m3ApiRawFunction(wasmos_system_halt)
 {
     m3ApiReturnType(int32_t)
+    uint32_t context_id = 0;
+    if (current_process_context(&context_id) != 0 ||
+        require_system_control_capability(context_id) != 0) {
+        m3ApiReturn(-1);
+    }
     outw(0x604, 0x2000);
     outw(0xB004, 0x2000);
     outw(0x4004, 0x3400);
@@ -1369,6 +1380,11 @@ m3ApiRawFunction(wasmos_system_halt)
 m3ApiRawFunction(wasmos_system_reboot)
 {
     m3ApiReturnType(int32_t)
+    uint32_t context_id = 0;
+    if (current_process_context(&context_id) != 0 ||
+        require_system_control_capability(context_id) != 0) {
+        m3ApiReturn(-1);
+    }
     outb(0x64, 0xFE);
     outb(0xCF9, 0x06);
     outb(0xCF9, 0x0E);

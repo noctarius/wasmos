@@ -204,7 +204,8 @@ The current tree already boots into a usable user-space stack:
 - Kernel bootstrap now builds a higher-half shadow of boot metadata consumed
   after scheduler start (boot module table + payload pointers, ACPI RSDP, boot
   config), so ring0 runtime startup paths no longer depend on low-slot
-  bootloader pointers once compatibility mappings are stripped.
+  bootloader pointers once compatibility mappings are stripped. Shadow setup is
+  now a fail-closed boot requirement (no fallback to low-slot pointer paths).
 - wasm3 heap chunk tracking now keeps both physical frame addresses (for free)
   and higher-half virtual bases (for allocation/dereference), preventing
   allocator page faults when low-slot compatibility mappings are removed in

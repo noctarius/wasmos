@@ -32,7 +32,6 @@
 static uint32_t g_chardev_service_endpoint = IPC_ENDPOINT_NONE;
 static const boot_info_t *g_boot_info;
 static boot_info_t g_boot_info_shadow;
-static uint8_t g_boot_info_shadow_ready = 0;
 extern const uint8_t _binary_ring3_native_probe_bin_start[];
 extern const uint8_t _binary_ring3_native_probe_bin_end[];
 
@@ -62,10 +61,10 @@ static const uint8_t g_skip_wasm_boot = 0;
 #define WASMOS_RING3_SMOKE_DEFAULT 0
 #endif
 #ifndef WASMOS_LOW_SLOT_SWEEP_DEFAULT
-#define WASMOS_LOW_SLOT_SWEEP_DEFAULT 0
+#define WASMOS_LOW_SLOT_SWEEP_DEFAULT 1
 #endif
 #ifndef WASMOS_LOW_SLOT_SWEEP_LEVEL_DEFAULT
-#define WASMOS_LOW_SLOT_SWEEP_LEVEL_DEFAULT 1
+#define WASMOS_LOW_SLOT_SWEEP_LEVEL_DEFAULT 2
 #endif
 /* TODO: Re-enable default ring3 smoke spawn after sustained soak confirms
  * preempt-trampoline behavior remains stable across broader workloads. */
@@ -1431,24 +1430,20 @@ kmain(boot_info_t *boot_info)
     cpu_relocate_tables_high();
     capability_init();
     slab_init();
-    if (boot_info_build_shadow(boot_info, &g_boot_info_shadow) == 0) {
-        boot_info = &g_boot_info_shadow;
-        g_boot_info_shadow_ready = 1;
-    } else {
-        g_boot_info_shadow_ready = 0;
-        serial_write("[kernel] boot_info shadow copy failed; low-slot compatibility still required\n");
-        /* TODO: Once strict defaults are flipped, fail closed here instead of
-         * retaining low-slot compatibility behavior on shadow-copy failure. */
+    if (boot_info_build_shadow(boot_info, &g_boot_info_shadow) != 0) {
+        serial_write("[kernel] boot_info shadow copy failed\n");
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
     }
+    boot_info = &g_boot_info_shadow;
     g_boot_info = boot_info;
     ipc_init();
     process_init();
     wasm3_link_init(boot_info);
 
     serial_write("[kernel] wasm3 init on-demand\n");
-    if (g_boot_info_shadow_ready) {
-        serial_write("[kernel] boot_info shadow active\n");
-    }
+    serial_write("[kernel] boot_info shadow active\n");
 
     if (process_spawn_idle("idle", idle_entry, 0, &idle_pid) != 0) {
         serial_write("[kernel] idle spawn failed\n");

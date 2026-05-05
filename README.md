@@ -165,7 +165,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - kernel boot metadata consumers now use a kernel-owned higher-half shadow of
   boot modules, ACPI RSDP, and boot-config blobs, so ring0 startup paths no
   longer depend on direct low-slot bootloader pointers during low-slot
-  compatibility sweeps
+  compatibility sweeps; shadow-copy bring-up now fails closed at boot if this
+  shadow cannot be established
 - wasm3 heap chunks now retain physical metadata while exposing higher-half
   virtual bases to runtime allocation paths, preventing ring0 allocator faults
   after low-slot stripping in strict isolation diagnostics

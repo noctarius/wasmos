@@ -312,7 +312,7 @@ Progress update (2026-05-03):
     resume.
   - Ring3 user-entry activation now applies an explicit no-low-slot verifier
     gate (`PML4[0]` absent) after strip and before CPL3 selector commit.
-  - Added guarded sweep mode (`WASMOS_LOW_SLOT_SWEEP`, default OFF) that
+  - Added guarded sweep mode (`WASMOS_LOW_SLOT_SWEEP`, now default ON) that
     performs strip+verify across eligible user-mode contexts and logs the first
     strip/verify failure path for iterative Phase-2 removal work.
   - Sweep mode now supports scope level control

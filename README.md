@@ -357,6 +357,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   now assert IRQ route deny-by-default (`irq-route-deny`) and allow-when-granted
   (`irq-route-allow`) behavior, and ATA now carries explicit `irq.route`
   alongside `io.port`
+- the WASMOS-APP packer (`make_wasmos_app`) now rejects unknown capability
+  names and non-zero capability flags so malformed capability descriptors fail
+  closed before runtime
 - optional small-object slab allocator scaffold (`kalloc_small`/`kfree_small`)
   added for incremental adoption without replacing existing static tables
 - per-process virtual memory contexts with private user mappings

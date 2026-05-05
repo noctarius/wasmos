@@ -53,6 +53,18 @@ static int parse_u32(const char *s, uint32_t *out) {
     return 0;
 }
 
+static int capability_name_supported(const char *name) {
+    if (!name) {
+        return 0;
+    }
+    return strcmp(name, "ipc.basic") == 0 ||
+           strcmp(name, "io.port") == 0 ||
+           strcmp(name, "irq.route") == 0 ||
+           strcmp(name, "mmio.map") == 0 ||
+           strcmp(name, "dma.buffer") == 0 ||
+           strcmp(name, "system.control") == 0;
+}
+
 int main(int argc, char **argv) {
     if (argc < 11) {
         fprintf(stderr, "usage: %s <in.wasm> <out.wap> <name> <entry> <stack_pages> <heap_pages> <flags> <req_ep_name|- > <req_ep_rights> <cap_count> [<cap_name> <cap_flags>]...\n", argv[0]);
@@ -100,6 +112,14 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "invalid capability entry at index %u\n", i);
                 return 1;
             }
+            if (!capability_name_supported(cap_name)) {
+                fprintf(stderr, "unknown capability '%s' at index %u\n", cap_name, i);
+                return 1;
+            }
+            if (cap_flags != 0) {
+                fprintf(stderr, "unsupported capability flags for '%s' at index %u\n", cap_name, i);
+                return 1;
+            }
             cap_names[i] = cap_name;
             caps[i].name_len = (uint32_t)strlen(cap_name);
             caps[i].flags = cap_flags;
@@ -114,6 +134,14 @@ int main(int argc, char **argv) {
             return 1;
         }
         if (!(cap_name[0] == '-' && cap_name[1] == '\0')) {
+            if (!capability_name_supported(cap_name)) {
+                fprintf(stderr, "unknown legacy capability '%s'\n", cap_name);
+                return 1;
+            }
+            if (cap_flags != 0) {
+                fprintf(stderr, "unsupported legacy capability flags for '%s'\n", cap_name);
+                return 1;
+            }
             cap_count = 1;
             cap_names[0] = cap_name;
             caps[0].name_len = (uint32_t)strlen(cap_name);

@@ -111,6 +111,10 @@ extern int32_t wasmos_shmem_map(int32_t id, int32_t ptr, int32_t size)
     WASMOS_WASM_IMPORT("wasmos", "shmem_map");
 extern int32_t wasmos_shmem_unmap(int32_t id)
     WASMOS_WASM_IMPORT("wasmos", "shmem_unmap");
+extern int32_t wasmos_irq_route(int32_t irq_line, int32_t endpoint)
+    WASMOS_WASM_IMPORT("wasmos", "irq_route");
+extern int32_t wasmos_irq_unroute(int32_t irq_line)
+    WASMOS_WASM_IMPORT("wasmos", "irq_unroute");
 /* vt keyboard input integration */
 extern int32_t wasmos_input_push(int32_t ch)
     WASMOS_WASM_IMPORT("wasmos", "input_push");

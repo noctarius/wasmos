@@ -7,7 +7,8 @@ typedef enum {
     CAP_IO_PORT = 0,
     CAP_IRQ_ROUTE = 1,
     CAP_MMIO_MAP = 2,
-    CAP_DMA_BUFFER = 3
+    CAP_DMA_BUFFER = 3,
+    CAP_SYSTEM_CONTROL = 4
 } capability_kind_t;
 
 void capability_init(void);

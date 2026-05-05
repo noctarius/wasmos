@@ -347,10 +347,11 @@ IMPORTANT: Create a git commit after each prompt iteration.
   (`ring3-fault-exec` reason marker currently accepts `exec_violation`,
   `user_to_kernel`, or `unmapped` on current QEMU/CPU paths until NX-fault
   classification is consistently surfaced as `exec_violation`)
-- capability-based driver resource groundwork: per-context capability registry
-  (`io.port`, `irq.route`, `mmio.map`, `dma.buffer`) is now wired into
-  WASMOS-APP capability grants, and WASM I/O hostcalls enforce `io.port` when
-  a context has explicit capability policy configured
+- capability-based resource controls: per-context capability registry
+  (`io.port`, `irq.route`, `mmio.map`, `dma.buffer`, `system.control`) is now
+  wired into WASMOS-APP capability grants; WASM I/O/MMIO/DMA hostcalls enforce
+  explicit capability checks and system halt/reboot hostcalls require
+  `system.control`
 - optional small-object slab allocator scaffold (`kalloc_small`/`kfree_small`)
   added for incremental adoption without replacing existing static tables
 - per-process virtual memory contexts with private user mappings

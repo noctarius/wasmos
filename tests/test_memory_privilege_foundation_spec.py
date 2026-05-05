@@ -123,6 +123,21 @@ class MemoryPrivilegeFoundationSpecTest(unittest.TestCase):
             r"wasmos_shmem_map[\s\S]*require_dma_capability",
             "wasmos_shmem_map should enforce dma capability",
         )
+        self._require(
+            self.wasm3_link_src,
+            r"require_system_control_capability",
+            "wasm3_link.c should define system control capability requirement helper",
+        )
+        self._require(
+            self.wasm3_link_src,
+            r"wasmos_system_halt[\s\S]*require_system_control_capability",
+            "wasmos_system_halt should enforce system control capability",
+        )
+        self._require(
+            self.wasm3_link_src,
+            r"wasmos_system_reboot[\s\S]*require_system_control_capability",
+            "wasmos_system_reboot should enforce system control capability",
+        )
 
     def test_framebuffer_info_uses_validated_user_va_for_copy(self):
         self._require(

@@ -98,6 +98,31 @@ class MemoryPrivilegeFoundationSpecTest(unittest.TestCase):
             re.compile(r"require_io_capability[\s\S]*capability_context_configured"),
             msg="io capability helper should not keep compatibility-mode implicit allow bypass",
         )
+        self._require(
+            self.wasm3_link_src,
+            r"require_mmio_capability",
+            "wasm3_link.c should define mmio capability requirement helper",
+        )
+        self._require(
+            self.wasm3_link_src,
+            r"wasmos_framebuffer_map[\s\S]*require_mmio_capability",
+            "wasmos_framebuffer_map should enforce mmio capability",
+        )
+        self._require(
+            self.wasm3_link_src,
+            r"require_dma_capability",
+            "wasm3_link.c should define dma capability requirement helper",
+        )
+        self._require(
+            self.wasm3_link_src,
+            r"wasmos_shmem_create[\s\S]*require_dma_capability",
+            "wasmos_shmem_create should enforce dma capability",
+        )
+        self._require(
+            self.wasm3_link_src,
+            r"wasmos_shmem_map[\s\S]*require_dma_capability",
+            "wasmos_shmem_map should enforce dma capability",
+        )
 
     def test_framebuffer_info_uses_validated_user_va_for_copy(self):
         self._require(

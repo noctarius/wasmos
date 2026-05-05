@@ -43,7 +43,7 @@ add_custom_command(
           1
           -
           0
-          ipc.basic
+          io.port
           0
   DEPENDS ${WASM_ATA_DRIVER_WASM} make_wasmos_app
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

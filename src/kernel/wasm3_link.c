@@ -273,13 +273,6 @@ wasm_user_va_from_host_ptr(uint32_t context_id,
 static int
 require_io_capability(uint32_t context_id)
 {
-    /* Compatibility mode: if no explicit resource caps were configured for this
-     * context yet, keep legacy behavior and allow I/O hostcalls. */
-    /* TODO: Flip this to strict-deny by default once all drivers/services
-     * declare resource capabilities in WASMOS-APP metadata. */
-    if (!capability_context_configured(context_id)) {
-        return 0;
-    }
     return capability_has(context_id, CAP_IO_PORT) ? 0 : -1;
 }
 

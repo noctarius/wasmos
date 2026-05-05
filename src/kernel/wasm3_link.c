@@ -277,6 +277,18 @@ require_io_capability(uint32_t context_id)
 }
 
 static int
+require_mmio_capability(uint32_t context_id)
+{
+    return capability_has(context_id, CAP_MMIO_MAP) ? 0 : -1;
+}
+
+static int
+require_dma_capability(uint32_t context_id)
+{
+    return capability_has(context_id, CAP_DMA_BUFFER) ? 0 : -1;
+}
+
+static int
 wasm_console_should_mirror_to_vt(void)
 {
     process_t *proc = process_get(process_current_pid());
@@ -1190,7 +1202,8 @@ m3ApiRawFunction(wasmos_framebuffer_map)
     }
 
     process_t *proc = process_get(process_current_pid());
-    if (!proc || proc->context_id == 0) {
+    if (!proc || proc->context_id == 0 ||
+        require_mmio_capability(proc->context_id) != 0) {
         m3ApiReturn(-1);
     }
 
@@ -1246,6 +1259,12 @@ m3ApiRawFunction(wasmos_shmem_create)
         m3ApiReturn(-1);
     }
 
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0 ||
+        require_dma_capability(proc->context_id) != 0) {
+        m3ApiReturn(-1);
+    }
+
     uint32_t id = 0;
     uint64_t phys = 0;
     uint32_t create_flags = (flags > 0)
@@ -1270,7 +1289,8 @@ m3ApiRawFunction(wasmos_shmem_map)
     }
 
     process_t *proc = process_get(process_current_pid());
-    if (!proc || proc->context_id == 0) {
+    if (!proc || proc->context_id == 0 ||
+        require_dma_capability(proc->context_id) != 0) {
         m3ApiReturn(-1);
     }
     mm_context_t *ctx = mm_context_get(proc->context_id);

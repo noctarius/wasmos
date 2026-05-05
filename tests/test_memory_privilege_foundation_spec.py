@@ -93,6 +93,11 @@ class MemoryPrivilegeFoundationSpecTest(unittest.TestCase):
             r"wasmos_io_out8[\s\S]*require_io_capability",
             "wasmos_io_out8 should enforce io capability",
         )
+        self.assertNotRegex(
+            self.wasm3_link_src,
+            re.compile(r"require_io_capability[\s\S]*capability_context_configured"),
+            msg="io capability helper should not keep compatibility-mode implicit allow bypass",
+        )
 
     def test_framebuffer_info_uses_validated_user_va_for_copy(self):
         self._require(

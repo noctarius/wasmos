@@ -199,10 +199,8 @@ The current tree already boots into a usable user-space stack:
 - Paging table walks now consistently use a higher-half kernel alias once CR3
   is active, so `IDENTITY_PD_COUNT=0` can run without low-pointer dereferences
   in the paging subsystem itself. Current transition behavior intentionally
-  keeps a temporary bootstrap low slot in the kernel root and defers ring0
-  low-slot stripping: sweep level 2 logs ring0 contexts as deferred rather than
-  removing their low slot, while ring3/user contexts continue to be the active
-  strip target.
+  keeps a temporary bootstrap low slot in the kernel root; diagnostic low-slot
+  sweep level 2 now strips/verifies both ring3 and ring0 process roots.
 - Kernel entry now uses an explicit two-stage bootstrap: low `_start` builds a
   minimal page-table handoff and jumps to higher-half `_start_high`, which
   clears `.bss` and calls `kmain`. Linker high-section layout now keeps

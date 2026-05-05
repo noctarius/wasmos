@@ -160,9 +160,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
   (when `WASMOS_TRACE=1`) into the existing global kernel trace stream
 - low-slot retirement now supports `WASMOS_IDENTITY_PD_COUNT=0` in ring3/user
   roots while preserving a temporary kernel-root bootstrap low slot for early
-  paging bring-up; low-slot sweep level 2 now reports ring0 contexts as
-  deferred (`[diag] low-slot sweep defer ring0 ...`) instead of stripping
-  them, documenting remaining ring0 compatibility work
+  paging bring-up; low-slot sweep level 2 now strips/verifies both ring3 and
+  ring0 process roots, so ring0 contexts are no longer deferred in sweep mode
 - early ring0 bootstrap now performs an explicit low-entry to higher-half
   handoff (`_start` -> `_start_high`) with bootstrap page tables before
   entering `kmain`; linker VMA/LMA layout now keeps `virt = higher_half_base +

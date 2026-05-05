@@ -219,11 +219,26 @@ class MemoryPrivilegeFoundationSpecTest(unittest.TestCase):
             "IRQ0 integrity check should allow intentional CS rewrite to kernel selector",
         )
 
-    def test_irq_route_surface_remains_kernel_only_until_capability_api_lands(self):
-        self.assertNotRegex(
+    def test_irq_route_surface_is_exposed_and_capability_gated(self):
+        self._require(
+            self.wasm3_link_src,
+            r"require_irq_route_capability",
+            "wasm3_link.c should define irq-route capability requirement helper",
+        )
+        self._require(
+            self.wasm3_link_src,
+            r"wasmos_irq_route[\s\S]*require_irq_route_capability",
+            "wasmos_irq_route should enforce irq-route capability",
+        )
+        self._require(
+            self.wasm3_link_src,
+            r"wasmos_irq_unroute[\s\S]*require_irq_route_capability",
+            "wasmos_irq_unroute should enforce irq-route capability",
+        )
+        self.assertRegex(
             self.wasm3_link_src,
             re.compile(r"wasm3_link_raw\([^\n]*\"wasmos\",[^\n]*\"irq_"),
-            msg="wasm3 hostcall table should not expose user IRQ routing API before CAP_IRQ_ROUTE gating is implemented",
+            msg="wasm3 hostcall table should expose user IRQ routing API once CAP_IRQ_ROUTE gating is implemented",
         )
 
 

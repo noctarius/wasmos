@@ -371,7 +371,8 @@ The current tree already boots into a usable user-space stack:
   `exec_violation`.
 - Capability metadata now feeds a per-context resource-capability registry
   (`io.port`, `irq.route`, `mmio.map`, `dma.buffer`, `system.control`); WASM
-  I/O/MMIO/DMA hostcalls enforce explicit capability checks, and
+  I/O/MMIO/DMA hostcalls enforce explicit capability checks,
+  `wasmos_irq_route`/`wasmos_irq_unroute` require `irq.route`, and
   `wasmos_system_halt`/`wasmos_system_reboot` require `system.control`.
 - A minimal fixed-size slab allocator scaffold (`kalloc_small`/`kfree_small`)
   is now available as an optional kernel allocator path for incremental

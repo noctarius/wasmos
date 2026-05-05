@@ -379,6 +379,9 @@ The current tree already boots into a usable user-space stack:
   Integration coverage now executes capability split probes
   (`irq-route-deny` / `irq-route-allow`) to keep deny-by-default and
   grant-enabled IRQ routing behavior under regression test.
+- Capability descriptors are now validated fail-closed during WASMOS-APP pack:
+  `make_wasmos_app` rejects unknown capability names and non-zero capability
+  flags before artifacts are produced.
 - A minimal fixed-size slab allocator scaffold (`kalloc_small`/`kfree_small`)
   is now available as an optional kernel allocator path for incremental
   migration off ad-hoc static/object-specific allocation patterns.

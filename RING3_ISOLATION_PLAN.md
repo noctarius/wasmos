@@ -74,11 +74,9 @@ Known baseline test debt to track during later phases:
   `[sysinit] spawn failed`) is now mitigated in current baseline via VT writer
   reassignment + CLI serial fallback + conservative sysinit single-CLI startup.
   `run-qemu-test` and `run-qemu-ring3-test` currently pass with this fallback.
-- Phase-1 strict-mode copy-path debt remains: removing compatibility host-pointer
-  mirror writes for sensitive early output paths still regresses ring3 smoke
-  (`[mode] strict-ring3=1`) at `hw-discovery` (`ACPI RSDP too small`) followed
-  by `#GP` in `init`. Keep dual-write compatibility in place until those
-  consumers are fully decoupled from immediate host-pointer visibility.
+- Phase-1 copy-path compatibility debt is now resolved: sensitive early output
+  consumers were migrated to explicit sync/validated-copy behavior, and strict
+  smoke paths no longer depend on dual-write host-pointer compatibility.
 
 Legacy-path impact:
 - None removed yet; this phase only creates safety rails.
@@ -442,8 +440,10 @@ Legacy-path impact:
 Objective: finish migration by removing non-ring3 behavior.
 
 Tasks:
-- Flip build/runtime defaults to strict ring3 mode.
-- Keep compatibility mode only as short-lived opt-in fallback.
+- Maintain strict ring3 defaults as baseline (`WASMOS_LOW_SLOT_SWEEP=ON`,
+  `WASMOS_LOW_SLOT_SWEEP_LEVEL=2`, `WASMOS_IDENTITY_PD_COUNT=0`).
+- Continue deleting remaining compatibility branches/fallback markers from
+  strict-mode bring-up paths.
 - Run one stabilization cycle with strict as default in CI.
 - Delete compatibility code paths and flags after cycle is green.
 - Update docs and test expectations to strict-only.

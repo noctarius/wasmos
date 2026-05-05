@@ -162,6 +162,13 @@ IMPORTANT: Create a git commit after each prompt iteration.
   roots while preserving a temporary kernel-root bootstrap low slot for early
   paging bring-up; low-slot sweep level 2 now strips/verifies both ring3 and
   ring0 process roots, so ring0 contexts are no longer deferred in sweep mode
+- kernel boot metadata consumers now use a kernel-owned higher-half shadow of
+  boot modules, ACPI RSDP, and boot-config blobs, so ring0 startup paths no
+  longer depend on direct low-slot bootloader pointers during low-slot
+  compatibility sweeps
+- wasm3 heap chunks now retain physical metadata while exposing higher-half
+  virtual bases to runtime allocation paths, preventing ring0 allocator faults
+  after low-slot stripping in strict isolation diagnostics
 - early ring0 bootstrap now performs an explicit low-entry to higher-half
   handoff (`_start` -> `_start_high`) with bootstrap page tables before
   entering `kmain`; linker VMA/LMA layout now keeps `virt = higher_half_base +

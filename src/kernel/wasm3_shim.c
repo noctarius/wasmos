@@ -5,6 +5,7 @@
 #include "serial.h"
 #include "process.h"
 #include "physmem.h"
+#include "paging.h"
 #include "wasm3_shim.h"
 
 #define WASM3_HEAP_DEFAULT_PAGES 1024u
@@ -14,6 +15,7 @@
 #define WASM3_HEAP_MAX_CHUNKS 64u
 
 typedef struct {
+    uint64_t phys;
     uint8_t *base;
     size_t size;
     size_t offset;
@@ -63,6 +65,7 @@ wasm3_heap_slot_init(wasm3_heap_slot_t *slot, uint32_t pid)
     slot->committed_size = 0;
     slot->chunk_count = 0;
     for (uint32_t i = 0; i < WASM3_HEAP_MAX_CHUNKS; ++i) {
+        slot->chunks[i].phys = 0;
         slot->chunks[i].base = 0;
         slot->chunks[i].size = 0;
         slot->chunks[i].offset = 0;
@@ -215,7 +218,8 @@ wasm3_heap_grow(wasm3_heap_slot_t *slot, size_t min_total)
         }
         if (phys) {
             wasm3_heap_chunk_t *chunk = &slot->chunks[slot->chunk_count++];
-            chunk->base = (uint8_t *)(uintptr_t)phys;
+            chunk->phys = phys;
+            chunk->base = (uint8_t *)(uintptr_t)(phys + KERNEL_HIGHER_HALF_BASE);
             chunk->size = (size_t)pages * 4096u;
             chunk->offset = 0;
             slot->committed_size += chunk->size;
@@ -276,8 +280,9 @@ wasm3_heap_release_empty_tail_chunks(wasm3_heap_slot_t *slot)
             break;
         }
         uint64_t pages = ((uint64_t)chunk->size + 4095ULL) / 4096ULL;
-        pfa_free_pages((uint64_t)(uintptr_t)chunk->base, pages);
+        pfa_free_pages(chunk->phys, pages);
         slot->committed_size -= chunk->size;
+        chunk->phys = 0;
         chunk->base = 0;
         chunk->size = 0;
         chunk->offset = 0;
@@ -429,7 +434,7 @@ void wasm3_heap_release(uint32_t pid)
                 continue;
             }
             uint64_t pages = ((uint64_t)chunk->size + 4095ULL) / 4096ULL;
-            pfa_free_pages((uint64_t)(uintptr_t)chunk->base, pages);
+            pfa_free_pages(chunk->phys, pages);
         }
         wasm3_heap_slot_init(slot, 0);
         break;

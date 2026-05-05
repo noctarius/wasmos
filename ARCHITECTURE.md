@@ -201,6 +201,14 @@ The current tree already boots into a usable user-space stack:
   in the paging subsystem itself. Current transition behavior intentionally
   keeps a temporary bootstrap low slot in the kernel root; diagnostic low-slot
   sweep level 2 now strips/verifies both ring3 and ring0 process roots.
+- Kernel bootstrap now builds a higher-half shadow of boot metadata consumed
+  after scheduler start (boot module table + payload pointers, ACPI RSDP, boot
+  config), so ring0 runtime startup paths no longer depend on low-slot
+  bootloader pointers once compatibility mappings are stripped.
+- wasm3 heap chunk tracking now keeps both physical frame addresses (for free)
+  and higher-half virtual bases (for allocation/dereference), preventing
+  allocator page faults when low-slot compatibility mappings are removed in
+  ring0 contexts.
 - Kernel entry now uses an explicit two-stage bootstrap: low `_start` builds a
   minimal page-table handoff and jumps to higher-half `_start_high`, which
   clears `.bss` and calls `kmain`. Linker high-section layout now keeps

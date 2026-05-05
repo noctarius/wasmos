@@ -373,7 +373,8 @@ The current tree already boots into a usable user-space stack:
   (`io.port`, `irq.route`, `mmio.map`, `dma.buffer`, `system.control`); WASM
   app metadata now supports multi-capability grants per payload, and WASM
   I/O/MMIO/DMA hostcalls enforce explicit capability checks,
-  `wasmos_irq_route`/`wasmos_irq_unroute` require `irq.route`, and
+  `wasmos_irq_route`/`wasmos_irq_unroute` require `irq.route` plus a kernel
+  per-app IRQ-line policy allowlist (default deny), and
   `wasmos_system_halt`/`wasmos_system_reboot` require `system.control`.
   Integration coverage now executes capability split probes
   (`irq-route-deny` / `irq-route-allow`) to keep deny-by-default and

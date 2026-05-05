@@ -16,6 +16,12 @@ main(int argc, char **argv)
         return 1;
     }
 
+    rc = wasmos_irq_route(2, endpoint);
+    if (rc != -1) {
+        puts("irq-route-allow: policy deny failed");
+        return 1;
+    }
+
     rc = wasmos_irq_route(1, endpoint);
     if (rc != 0) {
         puts("irq-route-allow: route failed");

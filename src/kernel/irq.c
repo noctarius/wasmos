@@ -32,6 +32,18 @@ static irq_route_t g_irq_routes[IRQ_COUNT];
 static uint8_t g_pic_mask1 = 0xFF;
 static uint8_t g_pic_mask2 = 0xFF;
 
+typedef struct {
+    const char *app_name;
+    uint16_t irq_mask;
+} irq_route_policy_t;
+
+/* Policy is intentionally explicit and default-deny: capability ownership is
+ * necessary but not sufficient for userspace IRQ routing. */
+static const irq_route_policy_t g_irq_route_policy[] = {
+    { "ata",             (uint16_t)((1u << 14) | (1u << 15)) },
+    { "irq-route-allow", (uint16_t)(1u << 1) },
+};
+
 static inline uintptr_t irq_alias_ptr(uintptr_t p)
 {
     if (serial_high_alias_enabled() && (uint64_t)p < KERNEL_HIGHER_HALF_BASE) {
@@ -53,6 +65,46 @@ static inline uint8_t *pic_mask1_slot(void)
 static inline uint8_t *pic_mask2_slot(void)
 {
     return (uint8_t *)(void *)irq_alias_ptr((uintptr_t)&g_pic_mask2);
+}
+
+static int
+str_eq(const char *a, const char *b)
+{
+    if (!a || !b) {
+        return 0;
+    }
+    while (*a && *b) {
+        if (*a != *b) {
+            return 0;
+        }
+        ++a;
+        ++b;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
+static int
+irq_route_policy_allows(uint32_t context_id, uint32_t irq_line)
+{
+    if (context_id == IPC_CONTEXT_KERNEL) {
+        return 1;
+    }
+    if (irq_line >= IRQ_COUNT) {
+        return 0;
+    }
+
+    process_t *proc = process_find_by_context(context_id);
+    if (!proc || !proc->name) {
+        return 0;
+    }
+
+    for (uint32_t i = 0; i < (uint32_t)(sizeof(g_irq_route_policy) / sizeof(g_irq_route_policy[0])); ++i) {
+        if (!str_eq(proc->name, g_irq_route_policy[i].app_name)) {
+            continue;
+        }
+        return (g_irq_route_policy[i].irq_mask & (uint16_t)(1u << irq_line)) != 0;
+    }
+    return 0;
 }
 
 
@@ -192,6 +244,9 @@ int irq_unmask(uint32_t irq_line) {
 int irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint) {
     irq_route_t *routes = irq_routes_ptr();
     if (irq_line >= IRQ_COUNT || endpoint == IPC_ENDPOINT_NONE) {
+        return -1;
+    }
+    if (!irq_route_policy_allows(context_id, irq_line)) {
         return -1;
     }
 

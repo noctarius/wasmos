@@ -352,6 +352,7 @@ IMPORTANT: Create a git commit after each prompt iteration.
   wired into WASMOS-APP capability grants (including multi-capability per app);
   WASM I/O/MMIO/DMA hostcalls enforce
   explicit capability checks, IRQ route/unroute hostcalls require `irq.route`,
+  and kernel IRQ policy enforces per-app line allowlists (default deny),
   and system halt/reboot hostcalls require `system.control`; integration probes
   now assert IRQ route deny-by-default (`irq-route-deny`) and allow-when-granted
   (`irq-route-allow`) behavior, and ATA now carries explicit `irq.route`

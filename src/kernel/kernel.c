@@ -31,6 +31,8 @@
 
 static uint32_t g_chardev_service_endpoint = IPC_ENDPOINT_NONE;
 static const boot_info_t *g_boot_info;
+static boot_info_t g_boot_info_shadow;
+static uint8_t g_boot_info_shadow_ready = 0;
 extern const uint8_t _binary_ring3_native_probe_bin_start[];
 extern const uint8_t _binary_ring3_native_probe_bin_end[];
 
@@ -98,6 +100,110 @@ typedef struct {
 
 static int
 bytes_eq(const uint8_t *a, uint32_t a_len, const char *b);
+static int
+boot_info_build_shadow(const boot_info_t *src, boot_info_t *dst);
+
+static void *
+boot_shadow_alloc_low(uint64_t size_bytes, uint64_t *out_phys)
+{
+    const uint64_t page_size = 0x1000ULL;
+    const uint64_t max_low = 64ULL * 1024ULL * 1024ULL;
+    if (size_bytes == 0) {
+        return 0;
+    }
+    uint64_t pages = (size_bytes + page_size - 1ULL) / page_size;
+    if (pages == 0) {
+        return 0;
+    }
+    uint64_t phys = pfa_alloc_pages_below(pages, max_low);
+    if (!phys) {
+        return 0;
+    }
+    void *low = (void *)(uintptr_t)phys;
+    memset(low, 0, (size_t)(pages * page_size));
+    if (out_phys) {
+        *out_phys = phys;
+    }
+    return low;
+}
+
+static int
+boot_shadow_copy_blob(void **dst_ptr,
+                      const void *src_ptr,
+                      uint64_t size_bytes)
+{
+    if (!dst_ptr) {
+        return -1;
+    }
+    *dst_ptr = 0;
+    if (!src_ptr || size_bytes == 0) {
+        return 0;
+    }
+    uint64_t dst_phys = 0;
+    void *dst_low = boot_shadow_alloc_low(size_bytes, &dst_phys);
+    if (!dst_low) {
+        return -1;
+    }
+    memcpy(dst_low, src_ptr, (size_t)size_bytes);
+    *dst_ptr = (void *)(uintptr_t)(dst_phys + KERNEL_HIGHER_HALF_BASE);
+    return 0;
+}
+
+static int
+boot_info_build_shadow(const boot_info_t *src, boot_info_t *dst)
+{
+    if (!src || !dst) {
+        return -1;
+    }
+    memcpy(dst, src, sizeof(*dst));
+    if (boot_shadow_copy_blob(&dst->rsdp,
+                              src->rsdp,
+                              (uint64_t)src->rsdp_length) != 0) {
+        return -1;
+    }
+    if (boot_shadow_copy_blob(&dst->boot_config,
+                              src->boot_config,
+                              (uint64_t)src->boot_config_size) != 0) {
+        return -1;
+    }
+    if (!(src->flags & BOOT_INFO_FLAG_MODULES_PRESENT) ||
+        !src->modules ||
+        src->module_count == 0 ||
+        src->module_entry_size < sizeof(boot_module_t)) {
+        return 0;
+    }
+
+    uint64_t table_size = (uint64_t)src->module_count * (uint64_t)src->module_entry_size;
+    if (table_size == 0 || table_size > 0xFFFFFFFFULL) {
+        return -1;
+    }
+
+    uint64_t table_phys = 0;
+    void *table_low = boot_shadow_alloc_low(table_size, &table_phys);
+    if (!table_low) {
+        return -1;
+    }
+    memcpy(table_low, src->modules, (size_t)table_size);
+    dst->modules = (void *)(uintptr_t)(table_phys + KERNEL_HIGHER_HALF_BASE);
+
+    uint8_t *mods_low = (uint8_t *)table_low;
+    for (uint32_t i = 0; i < src->module_count; ++i) {
+        boot_module_t *mod = (boot_module_t *)(mods_low + (uint64_t)i * (uint64_t)src->module_entry_size);
+        if (!mod || mod->base == 0 || mod->size == 0) {
+            continue;
+        }
+        if (mod->size > 0xFFFFFFFFULL) {
+            return -1;
+        }
+        void *shadow_blob_high = 0;
+        const void *blob_src = (const void *)(uintptr_t)mod->base;
+        if (boot_shadow_copy_blob(&shadow_blob_high, blob_src, mod->size) != 0) {
+            return -1;
+        }
+        mod->base = (uint64_t)(uintptr_t)shadow_blob_high;
+    }
+    return 0;
+}
 
 static void
 run_low_slot_sweep_diagnostic(void)
@@ -1325,11 +1431,24 @@ kmain(boot_info_t *boot_info)
     cpu_relocate_tables_high();
     capability_init();
     slab_init();
+    if (boot_info_build_shadow(boot_info, &g_boot_info_shadow) == 0) {
+        boot_info = &g_boot_info_shadow;
+        g_boot_info_shadow_ready = 1;
+    } else {
+        g_boot_info_shadow_ready = 0;
+        serial_write("[kernel] boot_info shadow copy failed; low-slot compatibility still required\n");
+        /* TODO: Once strict defaults are flipped, fail closed here instead of
+         * retaining low-slot compatibility behavior on shadow-copy failure. */
+    }
+    g_boot_info = boot_info;
     ipc_init();
     process_init();
     wasm3_link_init(boot_info);
 
     serial_write("[kernel] wasm3 init on-demand\n");
+    if (g_boot_info_shadow_ready) {
+        serial_write("[kernel] boot_info shadow active\n");
+    }
 
     if (process_spawn_idle("idle", idle_entry, 0, &idle_pid) != 0) {
         serial_write("[kernel] idle spawn failed\n");

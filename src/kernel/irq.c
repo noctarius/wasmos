@@ -191,6 +191,9 @@ int irq_unmask(uint32_t irq_line) {
 
 int irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint) {
     irq_route_t *routes = irq_routes_ptr();
+    /* TODO(ring3): add a CAP_IRQ_ROUTE-gated userland registration surface
+     * (hostcall or broker service) with explicit line/endpoint policy checks.
+     * Until then, keep irq_register/irq_unregister kernel-owned only. */
     if (irq_line >= IRQ_COUNT || endpoint == IPC_ENDPOINT_NONE) {
         return -1;
     }

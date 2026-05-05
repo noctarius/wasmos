@@ -349,9 +349,13 @@ IMPORTANT: Create a git commit after each prompt iteration.
   classification is consistently surfaced as `exec_violation`)
 - capability-based resource controls: per-context capability registry
   (`io.port`, `irq.route`, `mmio.map`, `dma.buffer`, `system.control`) is now
-  wired into WASMOS-APP capability grants; WASM I/O/MMIO/DMA hostcalls enforce
+  wired into WASMOS-APP capability grants (including multi-capability per app);
+  WASM I/O/MMIO/DMA hostcalls enforce
   explicit capability checks, IRQ route/unroute hostcalls require `irq.route`,
-  and system halt/reboot hostcalls require `system.control`
+  and system halt/reboot hostcalls require `system.control`; integration probes
+  now assert IRQ route deny-by-default (`irq-route-deny`) and allow-when-granted
+  (`irq-route-allow`) behavior, and ATA now carries explicit `irq.route`
+  alongside `io.port`
 - optional small-object slab allocator scaffold (`kalloc_small`/`kfree_small`)
   added for incremental adoption without replacing existing static tables
 - per-process virtual memory contexts with private user mappings

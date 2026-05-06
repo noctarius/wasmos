@@ -410,6 +410,9 @@ Progress update (2026-05-06):
 - Strict-ring3 deterministic gate extension:
   ring3 runtime now also injects a synthetic kernel-owned `PROC_IPC_STATUS`
   caller and requires deny marker `[test] pm status owner deny ok`.
+- Strict-ring3 deterministic gate extension:
+  ring3 runtime now also injects a synthetic kernel-owned `PROC_IPC_SPAWN`
+  caller and requires deny marker `[test] pm spawn owner deny ok`.
 - Remaining Phase 4 work:
   - extend equivalent adversarial coverage to any additional specialized
     request/reply paths outside current `ipc_call` flow

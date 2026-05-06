@@ -59,5 +59,6 @@ typedef struct {
 uint64_t x86_syscall_handler(syscall_frame_t *frame);
 void syscall_set_ipc_call_echo_endpoint(uint32_t endpoint);
 uint32_t syscall_ipc_call_echo_endpoint(void);
+void syscall_set_ipc_call_control_deny_endpoint(uint32_t endpoint);
 
 #endif

@@ -388,7 +388,10 @@ The current tree already boots into a usable user-space stack:
   mismatch behavior. Ring3 smoke coverage asserts this path via
   `[test] ring3 ipc call correlate ok`. Matching-`request_id` replies are also
   authenticated against expected source endpoint + owner context before accept
-  (`[test] ring3 ipc call source auth ok`).
+  (`[test] ring3 ipc call source auth ok`). Ring3 smoke now also asserts a
+  dedicated control-plane deny path by attempting `ipc_call` to the
+  process-manager endpoint and requiring
+  `[test] ring3 ipc call control deny ok`.
 - Capability descriptors are now validated fail-closed during WASMOS-APP pack:
   `make_wasmos_app` rejects unknown capability names and non-zero capability
   flags before artifacts are produced.

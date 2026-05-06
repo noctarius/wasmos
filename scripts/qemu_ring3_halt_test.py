@@ -36,6 +36,7 @@ def main():
         b"[test] ring3 ipc call deny ok",
         b"[test] ring3 ipc call err rdx zero ok",
         b"[test] ring3 ipc call perm deny ok",
+        b"[test] ring3 ipc call control deny ok",
         b"[test] ring3 ipc call ok",
         b"[test] ring3 ipc call correlate ok",
         b"[test] ring3 ipc call source auth ok",

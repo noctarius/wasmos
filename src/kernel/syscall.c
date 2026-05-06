@@ -13,6 +13,7 @@ static uint8_t g_ring3_ipc_arg_width_deny_logged;
 static uint8_t g_ring3_ipc_ok_logged;
 static uint8_t g_ring3_ipc_call_deny_logged;
 static uint8_t g_ring3_ipc_call_perm_deny_logged;
+static uint8_t g_ring3_ipc_call_control_deny_logged;
 static uint8_t g_ring3_ipc_call_ok_logged;
 static uint8_t g_ring3_ipc_call_err_rdx_zero_logged;
 static uint8_t g_ring3_ipc_call_correlation_logged;
@@ -20,6 +21,7 @@ static uint8_t g_ring3_yield_logged;
 static uint8_t g_ring3_native_abi_logged;
 static uint32_t g_syscall_ipc_call_next_request_id = 1;
 static uint32_t g_ipc_call_echo_endpoint = IPC_ENDPOINT_NONE;
+static uint32_t g_ipc_call_control_deny_endpoint = IPC_ENDPOINT_NONE;
 #define SYSCALL_IPC_PENDING_DEPTH 8u
 
 typedef struct {
@@ -78,6 +80,12 @@ uint32_t
 syscall_ipc_call_echo_endpoint(void)
 {
     return g_ipc_call_echo_endpoint;
+}
+
+void
+syscall_set_ipc_call_control_deny_endpoint(uint32_t endpoint)
+{
+    g_ipc_call_control_deny_endpoint = endpoint;
 }
 
 static syscall_ipc_call_slot_t *
@@ -201,6 +209,12 @@ syscall_ipc_call_source_endpoint(process_t *proc, uint32_t *out_endpoint)
     }
     *out_endpoint = slot->source_endpoint;
     return IPC_OK;
+}
+
+static int
+syscall_ipc_call_kernel_endpoint_allowed(uint32_t destination)
+{
+    return destination == g_ipc_call_echo_endpoint;
 }
 
 static void
@@ -395,12 +409,29 @@ x86_syscall_handler(syscall_frame_t *frame)
             return (uint64_t)(int64_t)rc;
         }
         if (owner_context == IPC_CONTEXT_KERNEL &&
-            destination != g_ipc_call_echo_endpoint) {
+            !syscall_ipc_call_kernel_endpoint_allowed(destination)) {
             rc = IPC_ERR_PERM;
             if (name_eq(proc->name, "ring3-smoke") &&
                 !g_ring3_ipc_call_perm_deny_logged) {
                 g_ring3_ipc_call_perm_deny_logged = 1;
                 serial_write("[test] ring3 ipc call perm deny ok\n");
+            }
+            if (name_eq(proc->name, "ring3-smoke") &&
+                msg_type == 0x00006656u &&
+                !g_ring3_ipc_call_control_deny_logged) {
+                g_ring3_ipc_call_control_deny_logged = 1;
+                serial_write("[test] ring3 ipc call control deny ok\n");
+            }
+            return (uint64_t)(int64_t)rc;
+        }
+        if (destination == g_ipc_call_control_deny_endpoint &&
+            g_ipc_call_control_deny_endpoint != IPC_ENDPOINT_NONE) {
+            rc = IPC_ERR_PERM;
+            if (name_eq(proc->name, "ring3-smoke") &&
+                msg_type == 0x00006656u &&
+                !g_ring3_ipc_call_control_deny_logged) {
+                g_ring3_ipc_call_control_deny_logged = 1;
+                serial_write("[test] ring3 ipc call control deny ok\n");
             }
             return (uint64_t)(int64_t)rc;
         }

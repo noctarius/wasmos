@@ -498,6 +498,36 @@ x86_exception_panic_frame(uint64_t vector, const uint64_t *frame)
 
 
 int
+x86_user_exception_handler(uint64_t vector, const uint64_t *frame)
+{
+    uint32_t pid = process_current_pid();
+    process_t *proc = process_get(pid);
+    uint64_t cs = frame ? frame[2] : 0;
+    uint64_t rip = frame ? frame[1] : 0;
+    uint8_t from_user = (uint8_t)((cs & 0x3u) == 0x3u);
+
+    if (!proc || !from_user) {
+        return -1;
+    }
+    /* TODO(ring3-phase5): Extend process-local handling beyond #UD to the full
+     * user exception set we intend to classify/recover in strict mode. */
+    if (vector != 6) {
+        return -1;
+    }
+
+    serial_printf("[fault] user-exc pid=%u vector=%llu rip=%016llx\n",
+                  pid,
+                  (unsigned long long)vector,
+                  (unsigned long long)rip);
+    if (proc->name && strcmp(proc->name, "ring3-fault-ud") == 0) {
+        serial_write("[test] ring3 fault ud reason ok\n");
+    }
+    process_set_exit_status(proc, -11);
+    process_yield(PROCESS_RUN_EXITED);
+    return 0;
+}
+
+int
 x86_page_fault_handler(uint64_t error_code, const uint64_t *frame)
 {
     uint64_t cr2 = 0;

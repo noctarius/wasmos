@@ -21,6 +21,9 @@ hardware paths that benefit from native execution.
 
 It is designed for experimentation, not production use.
 
+For contributors and coding agents: read `AGENTS.md` before making changes.
+It defines repository workflow and documentation/update conventions.
+
 ## Current Highlights
 - Deterministic UEFI boot handoff (`BOOTX64.EFI` -> `kernel.elf` + `initfs.img`)
 - Microkernel baseline: paging, scheduling, IPC, process lifecycle, exceptions

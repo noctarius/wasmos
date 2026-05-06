@@ -41,6 +41,7 @@ typedef struct {
     uint32_t pid;
     uint32_t reply_endpoint;
     uint32_t request_id;
+    uint32_t owner_context_id;
 } pm_wait_state_t;
 
 typedef struct {
@@ -757,7 +758,13 @@ pm_check_waits(uint32_t pm_context_id)
 {
     for (uint32_t i = 0; i < PM_MAX_WAITERS; ++i) {
         pm_wait_state_t *waiter = &g_pm.waits[i];
+        uint32_t reply_owner_context = 0;
         if (!waiter->in_use) {
+            continue;
+        }
+        if (ipc_endpoint_owner(waiter->reply_endpoint, &reply_owner_context) != IPC_OK ||
+            reply_owner_context != waiter->owner_context_id) {
+            waiter->in_use = 0;
             continue;
         }
         int32_t exit_status = 0;
@@ -998,6 +1005,7 @@ pm_handle_wait(uint32_t pm_context_id, const ipc_message_t *msg)
         waiter->pid = msg->arg0;
         waiter->reply_endpoint = msg->source;
         waiter->request_id = msg->request_id;
+        waiter->owner_context_id = owner_context;
         return 0;
     }
 

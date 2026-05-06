@@ -251,6 +251,18 @@ class MemoryPrivilegeFoundationSpecTest(unittest.TestCase):
             "process-manager FS spawn reply path should authenticate source endpoint before accepting request-id/type",
         )
 
+    def test_pm_wait_reply_revalidates_endpoint_owner(self):
+        self._require(
+            self.process_manager_c_src,
+            r"typedef struct \{[\s\S]*owner_context_id;[\s\S]*\} pm_wait_state_t;",
+            "pm_wait_state_t should retain waiter owner context for async reply authentication",
+        )
+        self._require(
+            self.process_manager_c_src,
+            r"pm_check_waits[\s\S]*ipc_endpoint_owner\(waiter->reply_endpoint,\s*&reply_owner_context\)[\s\S]*reply_owner_context != waiter->owner_context_id[\s\S]*waiter->in_use = 0;",
+            "pm_check_waits should revalidate reply endpoint ownership before delivering wait replies",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

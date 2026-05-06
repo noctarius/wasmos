@@ -703,6 +703,7 @@ pm_poll_spawn(uint32_t pm_context_id)
     }
     g_pm.spawn.in_use = 0;
     if (recv_rc != IPC_OK ||
+        msg.source != g_pm.fs_endpoint ||
         msg.request_id != g_pm.spawn.fs_request_id ||
         msg.type != FS_IPC_RESP) {
         ipc_message_t resp;

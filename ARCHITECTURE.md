@@ -395,7 +395,9 @@ The current tree already boots into a usable user-space stack:
   `[test] ring3 ipc syscall control deny ok`. Ring3 smoke now also asserts a
   dedicated control-plane deny path by attempting `ipc_call` to the
   process-manager endpoint and requiring
-  `[test] ring3 ipc call control deny ok`.
+  `[test] ring3 ipc call control deny ok`. Process-manager's specialized
+  FS-backed spawn reply correlation now also authenticates reply source
+  endpoint (must match `fs-fat`) in addition to `request_id`/message type.
 - Capability descriptors are now validated fail-closed during WASMOS-APP pack:
   `make_wasmos_app` rejects unknown capability names and non-zero capability
   flags before artifacts are produced.

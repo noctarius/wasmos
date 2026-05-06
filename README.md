@@ -372,7 +372,10 @@ IMPORTANT: Create a git commit after each prompt iteration.
   `[test] ring3 ipc syscall control deny ok`.
   Ring3 smoke now also probes a process-manager control-plane `ipc_call`
   attempt and asserts deterministic deny via
-  `[test] ring3 ipc call control deny ok`
+  `[test] ring3 ipc call control deny ok`.
+  Process-manager's specialized FS-backed spawn reply path now also enforces
+  source-endpoint authentication (`msg.source == fs-fat endpoint`) before
+  accepting a correlated `request_id`/type response.
 - the WASMOS-APP packer (`make_wasmos_app`) now rejects unknown capability
   names and non-zero capability flags so malformed capability descriptors fail
   closed before runtime

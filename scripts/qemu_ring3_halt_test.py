@@ -44,6 +44,7 @@ def main():
         b"[test] pm wait reply owner deny ok",
         b"[test] pm kill owner deny ok",
         b"[test] pm status owner deny ok",
+        b"[test] pm spawn owner deny ok",
         b"[test] ring3 yield syscall ok",
         b"[test] ring3 syscall ok",
         b"[test] ring3 preempt stress ok",

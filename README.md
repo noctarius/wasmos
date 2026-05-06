@@ -31,7 +31,7 @@ It defines repository workflow and documentation/update conventions.
 - Storage-first startup chain (`hw-discovery` -> `fs-fat` -> `sysinit`)
 - Usable VT/CLI stack with multi-TTY switching
 - Ring-3 hardening enabled by default in normal test boots
-- Ring-3 smoke includes process-local `#PF` and `#UD` fault-policy checks
+- Ring-3 smoke includes process-local `#PF`, `#UD`, and `#GP` fault-policy checks
 
 ## Quick Start
 

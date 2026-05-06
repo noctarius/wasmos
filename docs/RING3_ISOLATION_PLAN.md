@@ -451,12 +451,17 @@ Progress update (2026-05-06):
   a dedicated `ring3-fault-ud` process executes CPL3 `ud2` (`#UD`, vector 6).
 - Kernel trap path now handles CPL3 `#UD` as process-local termination
   (`-11`) instead of global panic for this covered vector.
+- Added CPL3 `#GP` containment probe in strict ring3 smoke:
+  `ring3-fault-gp` executes a privileged instruction (`cli`) in user mode to
+  trigger vector 13 and assert process-local termination (`-11`).
 - Smoke/gate markers now assert both classification and policy status:
   - `[test] ring3 fault ud reason ok`
   - `[test] ring3 fault ud exit status ok`
+  - `[test] ring3 fault gp reason ok`
+  - `[test] ring3 fault gp exit status ok`
 - Remaining Phase-5 work:
   - extend equivalent process-local handling and coverage to additional
-    user-origin exception vectors beyond current `#PF` and `#UD`
+    user-origin exception vectors beyond current `#PF`, `#UD`, and `#GP`
   - add multi-process mixed fault-storm liveness assertions
 
 Exit criteria:

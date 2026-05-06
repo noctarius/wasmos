@@ -3,7 +3,7 @@
 This document defines how native kernel threads are introduced into WASMOS
 without breaking the current boot/process model.
 
-Keep this document aligned with `README.md`, `ARCHITECTURE.md`, and `TASKS.md`
+Keep this document aligned with `README.md`, `docs/ARCHITECTURE.md`, and `docs/TASKS.md`
 as implementation lands.
 
 ---

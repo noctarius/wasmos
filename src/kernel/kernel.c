@@ -86,6 +86,7 @@ static ring3_fault_policy_state_t g_ring3_fault_policy_state;
 typedef struct {
     const boot_info_t *boot_info;
     uint8_t started;
+    uint8_t pm_wait_owner_test_injected;
     uint8_t phase;
     uint8_t pending_kind;
     uint32_t reply_endpoint;
@@ -1225,6 +1226,7 @@ init_entry(process_t *process, void *arg)
         trace_write("[init] process manager pid=");
         trace_do(serial_write_hex64(pm_pid));
         state->started = 1;
+        state->pm_wait_owner_test_injected = 0;
         if (state->hw_discovery_index == 0xFFFFFFFFu) {
             serial_write("[init] hw-discovery module not found\n");
             process_set_exit_status(process, -1);
@@ -1257,6 +1259,10 @@ init_entry(process_t *process, void *arg)
         uint32_t proc_ep = process_manager_endpoint();
         if (proc_ep == IPC_ENDPOINT_NONE) {
             return PROCESS_RUN_YIELDED;
+        }
+        if (g_ring3_smoke_enabled && !state->pm_wait_owner_test_injected) {
+            process_manager_inject_wait_owner_mismatch_test(process->context_id);
+            state->pm_wait_owner_test_injected = 1;
         }
         if (ipc_endpoint_create(process->context_id, &state->reply_endpoint) != IPC_OK) {
             serial_write("[init] reply endpoint create failed\n");

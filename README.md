@@ -378,7 +378,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   accepting a correlated `request_id`/type response.
   Process-manager async `wait` replies now also revalidate reply endpoint
   ownership against the original waiter context before delivery, dropping stale
-  or re-owned endpoints instead of replying cross-context.
+  or re-owned endpoints instead of replying cross-context. Strict ring3 smoke
+  now injects an owner-mismatch waiter record and requires
+  `[test] pm wait reply owner deny ok`.
 - the WASMOS-APP packer (`make_wasmos_app`) now rejects unknown capability
   names and non-zero capability flags so malformed capability descriptors fail
   closed before runtime

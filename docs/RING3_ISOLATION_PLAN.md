@@ -316,8 +316,19 @@ Progress update (2026-05-03):
     (`WASMOS_LOW_SLOT_SWEEP_LEVEL`: `1` user-only, `2` include selected
     non-user contexts) and low-slot map width experiments via
     `WASMOS_IDENTITY_PD_COUNT` (`0..4`).
-  - Remaining blocker: complete the same stack-safety guarantee for any
-    non-copy transition windows that still assume low-slot compatibility.
+- Phase-2 closure verification (2026-05-06):
+  - Strict defaults are now exercised in the main strict gate:
+    `WASMOS_LOW_SLOT_SWEEP=ON`,
+    `WASMOS_LOW_SLOT_SWEEP_LEVEL=2`,
+    `WASMOS_IDENTITY_PD_COUNT=0`.
+  - `cmake --build build --target strict-ring3` passes, including both
+    `run-qemu-test` and `run-qemu-ring3-test`, with runtime markers:
+    `[mode] low-slot-sweep=1`,
+    `[mode] low-slot-sweep-level=2`,
+    `[diag] low-slot sweep ok`.
+  - This satisfies the outstanding low-slot transition blocker for current
+    strict-ring3 scope; remaining compatibility-path deletion is tracked in
+    Phase 8.
 
 Exit criteria:
 - User roots map only approved kernel transition/support ranges.

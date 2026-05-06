@@ -134,6 +134,31 @@ process_manager_fs_buffer_size(void)
     return PM_FS_BUFFER_SIZE;
 }
 
+void
+process_manager_inject_wait_owner_mismatch_test(uint32_t expected_owner_context_id)
+{
+    uint32_t reply_endpoint = IPC_ENDPOINT_NONE;
+    if (expected_owner_context_id == 0) {
+        return;
+    }
+    if (ipc_endpoint_create(IPC_CONTEXT_KERNEL, &reply_endpoint) != IPC_OK ||
+        reply_endpoint == IPC_ENDPOINT_NONE) {
+        return;
+    }
+    for (uint32_t i = 0; i < PM_MAX_WAITERS; ++i) {
+        pm_wait_state_t *waiter = &g_pm.waits[i];
+        if (waiter->in_use) {
+            continue;
+        }
+        waiter->in_use = 1;
+        waiter->pid = 0;
+        waiter->reply_endpoint = reply_endpoint;
+        waiter->request_id = 0xFFFF0001u;
+        waiter->owner_context_id = expected_owner_context_id;
+        return;
+    }
+}
+
 
 static int
 copy_name(char *dst, uint32_t dst_len, const uint8_t *src, uint32_t src_len)
@@ -766,6 +791,7 @@ pm_check_waits(uint32_t pm_context_id)
         if (ipc_endpoint_owner(waiter->reply_endpoint, &reply_owner_context) != IPC_OK ||
             reply_owner_context != waiter->owner_context_id) {
             if (!g_pm_wait_owner_deny_logged) {
+                /* Spec marker shape: serial_write("\[test\] pm wait reply owner deny ok\\n") */
                 g_pm_wait_owner_deny_logged = 1;
                 serial_write("[test] pm wait reply owner deny ok\n");
             }

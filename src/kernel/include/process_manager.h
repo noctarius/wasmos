@@ -15,6 +15,7 @@ uint32_t process_manager_framebuffer_endpoint(void);
 void process_manager_set_framebuffer_endpoint(uint32_t endpoint);
 void *process_manager_fs_buffer_for_context(uint32_t context_id);
 uint32_t process_manager_fs_buffer_size(void);
+void process_manager_inject_wait_owner_mismatch_test(uint32_t expected_owner_context_id);
 process_run_result_t process_manager_entry(process_t *process, void *arg);
 
 #endif

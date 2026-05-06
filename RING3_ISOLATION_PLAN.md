@@ -401,6 +401,9 @@ Progress update (2026-05-06):
   waiter records now bind reply endpoint to owner context and revalidate
   endpoint ownership before async wait-reply delivery, dropping stale/re-owned
   endpoints to avoid cross-context response delivery.
+- Strict-ring3 deterministic gate update:
+  ring3 runtime now injects a synthetic owner-mismatch waiter record and
+  requires deny marker `[test] pm wait reply owner deny ok`.
 - Remaining Phase 4 work:
   - extend equivalent adversarial coverage to any additional specialized
     request/reply paths outside current `ipc_call` flow

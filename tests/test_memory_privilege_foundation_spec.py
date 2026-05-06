@@ -264,7 +264,7 @@ class MemoryPrivilegeFoundationSpecTest(unittest.TestCase):
         )
         self._require(
             self.process_manager_c_src,
-            r"pm_check_waits[\s\S]*serial_write\(\"\\[test\\] pm wait reply owner deny ok\\\\n\"\)",
+            r"pm_check_waits[\s\S]*serial_write\(\"\[test\] pm wait reply owner deny ok\\n\"\)",
             "pm_check_waits should emit an explicit marker when owner-mismatch drops an async wait reply",
         )
 

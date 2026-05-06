@@ -262,6 +262,11 @@ class MemoryPrivilegeFoundationSpecTest(unittest.TestCase):
             r"pm_check_waits[\s\S]*ipc_endpoint_owner\(waiter->reply_endpoint,\s*&reply_owner_context\)[\s\S]*reply_owner_context != waiter->owner_context_id[\s\S]*waiter->in_use = 0;",
             "pm_check_waits should revalidate reply endpoint ownership before delivering wait replies",
         )
+        self._require(
+            self.process_manager_c_src,
+            r"pm_check_waits[\s\S]*serial_write\(\"\\[test\\] pm wait reply owner deny ok\\\\n\"\)",
+            "pm_check_waits should emit an explicit marker when owner-mismatch drops an async wait reply",
+        )
 
 
 if __name__ == "__main__":

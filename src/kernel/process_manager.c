@@ -80,6 +80,7 @@ typedef struct {
 
 static pm_state_t g_pm;
 static pm_fs_buffer_slot_t g_pm_fs_slots[PROCESS_MAX_COUNT];
+static uint8_t g_pm_wait_owner_deny_logged;
 
 static uint32_t pm_alloc_cli_tty(void);
 
@@ -764,6 +765,10 @@ pm_check_waits(uint32_t pm_context_id)
         }
         if (ipc_endpoint_owner(waiter->reply_endpoint, &reply_owner_context) != IPC_OK ||
             reply_owner_context != waiter->owner_context_id) {
+            if (!g_pm_wait_owner_deny_logged) {
+                g_pm_wait_owner_deny_logged = 1;
+                serial_write("[test] pm wait reply owner deny ok\n");
+            }
             waiter->in_use = 0;
             continue;
         }

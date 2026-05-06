@@ -82,6 +82,7 @@ static pm_state_t g_pm;
 static pm_fs_buffer_slot_t g_pm_fs_slots[PROCESS_MAX_COUNT];
 static uint8_t g_pm_wait_owner_deny_logged;
 static uint8_t g_pm_kill_owner_deny_logged;
+static uint8_t g_pm_status_owner_deny_logged;
 
 static uint32_t pm_alloc_cli_tty(void);
 
@@ -178,6 +179,31 @@ process_manager_inject_kill_owner_deny_test(void)
     msg.source = source_endpoint;
     msg.destination = g_pm.proc_endpoint;
     msg.request_id = 0xFFFF1001u;
+    msg.arg0 = 0;
+    msg.arg1 = 0;
+    msg.arg2 = 0;
+    msg.arg3 = 0;
+    (void)ipc_send_from(IPC_CONTEXT_KERNEL, g_pm.proc_endpoint, &msg);
+}
+
+void
+process_manager_inject_status_owner_deny_test(void)
+{
+    uint32_t source_endpoint = IPC_ENDPOINT_NONE;
+    ipc_message_t msg;
+
+    if (g_pm.proc_endpoint == IPC_ENDPOINT_NONE) {
+        return;
+    }
+    if (ipc_endpoint_create(IPC_CONTEXT_KERNEL, &source_endpoint) != IPC_OK ||
+        source_endpoint == IPC_ENDPOINT_NONE) {
+        return;
+    }
+
+    msg.type = PROC_IPC_STATUS;
+    msg.source = source_endpoint;
+    msg.destination = g_pm.proc_endpoint;
+    msg.request_id = 0xFFFF1002u;
     msg.arg0 = 0;
     msg.arg1 = 0;
     msg.arg2 = 0;
@@ -999,8 +1025,22 @@ pm_handle_kill(uint32_t pm_context_id, const ipc_message_t *msg)
 static int
 pm_handle_status(uint32_t pm_context_id, const ipc_message_t *msg)
 {
+    uint32_t owner_context = 0;
+    process_t *caller = 0;
     process_t *target = process_get(msg->arg0);
     ipc_message_t resp;
+
+    if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
+        return -1;
+    }
+    caller = process_find_by_context(owner_context);
+    if (!caller) {
+        if (!g_pm_status_owner_deny_logged) {
+            g_pm_status_owner_deny_logged = 1;
+            serial_write("[test] pm status owner deny ok\n");
+        }
+        return -1;
+    }
 
     resp.type = PROC_IPC_RESP;
     resp.source = g_pm.proc_endpoint;
@@ -1091,6 +1131,7 @@ process_manager_init(const boot_info_t *boot_info)
     g_pm.started = 0;
     g_pm_wait_owner_deny_logged = 0;
     g_pm_kill_owner_deny_logged = 0;
+    g_pm_status_owner_deny_logged = 0;
     if (boot_info && (boot_info->flags & BOOT_INFO_FLAG_MODULES_PRESENT)) {
         g_pm.module_count = boot_info->module_count;
         g_pm.init_module_index = pm_find_module_index_by_name("sysinit");

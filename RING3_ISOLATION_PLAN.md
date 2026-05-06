@@ -404,6 +404,9 @@ Progress update (2026-05-06):
 - Strict-ring3 deterministic gate update:
   ring3 runtime now injects a synthetic owner-mismatch waiter record and
   requires deny marker `[test] pm wait reply owner deny ok`.
+- Strict-ring3 deterministic gate extension:
+  ring3 runtime now also injects a synthetic kernel-owned `PROC_IPC_KILL`
+  caller and requires deny marker `[test] pm kill owner deny ok`.
 - Remaining Phase 4 work:
   - extend equivalent adversarial coverage to any additional specialized
     request/reply paths outside current `ipc_call` flow

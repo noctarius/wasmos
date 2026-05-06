@@ -16,6 +16,7 @@ class MemoryPrivilegeFoundationSpecTest(unittest.TestCase):
         cls.ctxsw_path = os.path.join(root, "src", "kernel", "arch", "x86_64", "context_switch.S")
         cls.kernel_c_path = os.path.join(root, "src", "kernel", "kernel.c")
         cls.syscall_c_path = os.path.join(root, "src", "kernel", "syscall.c")
+        cls.process_manager_c_path = os.path.join(root, "src", "kernel", "process_manager.c")
         with open(cls.cpu_path, "r", encoding="utf-8") as f:
             cls.cpu_src = f.read()
         with open(cls.isr_path, "r", encoding="utf-8") as f:
@@ -34,6 +35,8 @@ class MemoryPrivilegeFoundationSpecTest(unittest.TestCase):
             cls.kernel_c_src = f.read()
         with open(cls.syscall_c_path, "r", encoding="utf-8") as f:
             cls.syscall_c_src = f.read()
+        with open(cls.process_manager_c_path, "r", encoding="utf-8") as f:
+            cls.process_manager_c_src = f.read()
 
     def _require(self, src: str, pattern: str, msg: str) -> None:
         self.assertRegex(src, re.compile(pattern, re.DOTALL), msg=msg)
@@ -239,6 +242,13 @@ class MemoryPrivilegeFoundationSpecTest(unittest.TestCase):
             self.wasm3_link_src,
             re.compile(r"wasm3_link_raw\([^\n]*\"wasmos\",[^\n]*\"irq_"),
             msg="wasm3 hostcall table should expose user IRQ routing API once CAP_IRQ_ROUTE gating is implemented",
+        )
+
+    def test_pm_spawn_fs_reply_checks_source_endpoint(self):
+        self._require(
+            self.process_manager_c_src,
+            r"pm_poll_spawn[\s\S]*msg\.source != g_pm\.fs_endpoint[\s\S]*msg\.request_id != g_pm\.spawn\.fs_request_id[\s\S]*msg\.type != FS_IPC_RESP",
+            "process-manager FS spawn reply path should authenticate source endpoint before accepting request-id/type",
         )
 
 

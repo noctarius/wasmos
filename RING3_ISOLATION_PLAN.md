@@ -394,6 +394,9 @@ Progress update (2026-05-06):
 - Ring3 runtime coverage now also asserts control-plane deny behavior by
   attempting `ipc_call` to the process-manager endpoint and requiring
   `[test] ring3 ipc call control deny ok`.
+- Process-manager specialized request/reply hardening update:
+  FS-backed spawn response correlation now also requires expected source
+  endpoint (`fs-fat`) in addition to matching `request_id`/response type.
 - Remaining Phase 4 work:
   - extend equivalent adversarial coverage to any additional specialized
     request/reply paths outside current `ipc_call` flow

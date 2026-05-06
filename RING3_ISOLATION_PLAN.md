@@ -102,8 +102,7 @@ Tasks:
 Phase 1 inventory tracker (initial pass):
 - Syscall handlers (`src/kernel/syscall.c`):
   - `x86_syscall_handler` (`wait`, `ipc_notify`, `ipc_call`) currently enforces
-    `u64` -> `u32` cleanliness via `syscall_arg_u32`; `ipc_call` still has a
-    deferred unmatched-reply correlation TODO for Phase 4.
+    `u64` -> `u32` cleanliness via `syscall_arg_u32`.
 - WASM hostcalls (`src/kernel/wasm3_link.c`):
   - Pointer-bearing hostcalls are largely guarded by
     `wasm_user_va_from_host_ptr` + `mm_user_range_permitted`.
@@ -347,6 +346,19 @@ Exit criteria:
 - Unconfigured privileged actions are denied by default.
 - Capability tests pass in strict mode.
 
+Progress update (2026-05-06):
+- Capability authorization is now centralized through
+  `policy_authorize(context, action, arg0)` and used by privileged hostcall and
+  IRQ-route paths.
+- WASMOS-APP capability metadata now supports multi-capability grants per app
+  (removes prior one-grant-per-app limitation).
+- Capability descriptor parsing is fail-closed in `make_wasmos_app`:
+  unknown capability names and non-zero capability flags are rejected at pack
+  time.
+- Runtime coverage includes ring3 deny/allow probes for `irq.route`.
+- Phase 3 is functionally complete for current capability classes; remaining
+  work is extension as new privileged actions are introduced.
+
 Legacy-path impact:
 - Remove compatibility-mode privilege grants.
 
@@ -366,6 +378,20 @@ Tasks:
 Exit criteria:
 - No request/reply confusion under adversarial ordering.
 - Cross-context spoofing attempts deterministically fail.
+
+Progress update (2026-05-06):
+- Implemented per-process bounded pending-reply queues for `ipc_call`, so
+  unmatched out-of-order replies are preserved until matching waiter
+  consumption.
+- `ipc_call` now authenticates matched replies by both expected source endpoint
+  and source endpoint owner context before acceptance.
+- Ring3 runtime coverage now asserts both ordering and authenticity paths via:
+  - `[test] ring3 ipc call correlate ok`
+  - `[test] ring3 ipc call source auth ok`
+- Remaining Phase 4 work:
+  - extend equivalent adversarial coverage to any additional specialized
+    request/reply paths outside current `ipc_call` flow
+  - continue sensitive endpoint allowlist tightening for control planes
 
 Legacy-path impact:
 - Remove message-drop behaviors that silently hide ordering bugs.

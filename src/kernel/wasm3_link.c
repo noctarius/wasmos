@@ -12,6 +12,8 @@
 #include "wasmos_app.h"
 #include "wasmos_driver_abi.h"
 #include "framebuffer.h"
+#include "irq.h"
+#include "policy.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -37,6 +39,70 @@ static wasm_ipc_last_slot_t g_wasm_last_slots[PROCESS_MAX_COUNT];
 static wasm_block_slot_t g_wasm_block_slots[PROCESS_MAX_COUNT];
 static wasm_fs_peer_slot_t g_wasm_fs_peer_slots[PROCESS_MAX_COUNT];
 static const boot_info_t *g_wasm_boot_info;
+
+static int
+wasm_copy_to_user_bytes(uint32_t context_id,
+                        uint64_t user_dst,
+                        const void *src,
+                        uint32_t len)
+{
+    if (!src) {
+        return -1;
+    }
+    if (len == 0) {
+        return 0;
+    }
+    if (mm_copy_to_user(context_id, user_dst, src, (uint64_t)len) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int
+wasm_copy_to_user_sync_views(uint32_t context_id,
+                             uint64_t user_dst,
+                             void *host_dst,
+                             const void *src,
+                             uint32_t len)
+{
+    if (!host_dst || !src) {
+        return -1;
+    }
+    if (wasm_copy_to_user_bytes(context_id, user_dst, src, len) != 0) {
+        return -1;
+    }
+    /* Ring3 migration note:
+     * wasm3 host pointers can diverge from validated user mappings in some
+     * early-output paths; keep both views synchronized until linear-memory
+     * ownership is fully unified. */
+    memcpy(host_dst, src, (size_t)len);
+    return 0;
+}
+
+static int
+wasm_copy_from_user_sync_views(uint32_t context_id,
+                               uint64_t user_src,
+                               const void *host_src,
+                               void *dst,
+                               uint32_t len)
+{
+    if (!host_src || !dst) {
+        return -1;
+    }
+    if (len == 0) {
+        return 0;
+    }
+    if (mm_copy_from_user(context_id, dst, user_src, (uint64_t)len) != 0) {
+        return -1;
+    }
+    if (memcmp(dst, host_src, (size_t)len) != 0) {
+        memcpy(dst, host_src, (size_t)len);
+        if (mm_copy_to_user(context_id, user_src, host_src, (uint64_t)len) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
 
 
 static int
@@ -155,6 +221,145 @@ current_process_context(uint32_t *out_context_id)
 
     *out_context_id = proc->context_id;
     return 0;
+}
+
+static int
+wasm_user_va_from_offset(uint32_t context_id,
+                         uint32_t offset,
+                         uint32_t span,
+                         uint64_t *out_user_va)
+{
+    if (context_id == 0 || span == 0 || !out_user_va) {
+        return -1;
+    }
+    mm_context_t *ctx = mm_context_get(context_id);
+    if (!ctx) {
+        return -1;
+    }
+    mem_region_t linear = {0};
+    if (mm_context_region_for_type(ctx, MEM_REGION_WASM_LINEAR, &linear) != 0) {
+        return -1;
+    }
+    uint64_t off = (uint64_t)offset;
+    uint64_t len = (uint64_t)span;
+    if (off > linear.size || len > (linear.size - off)) {
+        return -1;
+    }
+    *out_user_va = linear.base + off;
+    return 0;
+}
+
+static int
+wasm_user_va_from_host_ptr(uint32_t context_id,
+                           const uint8_t *mem_base,
+                           uint64_t mem_size,
+                           const void *host_ptr,
+                           uint32_t span,
+                           uint64_t *out_user_va)
+{
+    if (!mem_base || !host_ptr || span == 0 || !out_user_va) {
+        return -1;
+    }
+    const uint8_t *ptr = (const uint8_t *)host_ptr;
+    if (ptr < mem_base) {
+        return -1;
+    }
+    uint64_t off = (uint64_t)(ptr - mem_base);
+    if (off > mem_size || (uint64_t)span > (mem_size - off)) {
+        return -1;
+    }
+    return wasm_user_va_from_offset(context_id, (uint32_t)off, span, out_user_va);
+}
+
+static int
+require_io_capability(uint32_t context_id)
+{
+    return policy_authorize(context_id, POLICY_ACTION_IO_PORT, 0);
+}
+
+static int
+require_mmio_capability(uint32_t context_id)
+{
+    return policy_authorize(context_id, POLICY_ACTION_MMIO_MAP, 0);
+}
+
+static int
+require_dma_capability(uint32_t context_id)
+{
+    return policy_authorize(context_id, POLICY_ACTION_DMA_BUFFER, 0);
+}
+
+static int
+require_irq_route_capability(uint32_t context_id)
+{
+    return policy_authorize(context_id, POLICY_ACTION_IRQ_CONTROL, 0);
+}
+
+static int
+require_system_control_capability(uint32_t context_id)
+{
+    return policy_authorize(context_id, POLICY_ACTION_SYSTEM_CONTROL, 0);
+}
+
+static int
+wasm_console_should_mirror_to_vt(void)
+{
+    process_t *proc = process_get(process_current_pid());
+    if (!proc) {
+        return 0;
+    }
+
+    if (proc->name &&
+        memcmp(proc->name, "hello-", 6) == 0 &&
+        (proc->name[6] != '\0')) {
+        return 1;
+    }
+
+    if (proc->parent_pid == 0) {
+        return 0;
+    }
+
+    process_t *parent = process_get(proc->parent_pid);
+    if (!parent || !parent->name) {
+        return 0;
+    }
+
+    /* Restrict mirrored VT output to shell-launched app workloads for now.
+     * FIXME: Replace this parent-name heuristic with explicit per-process
+     * console routing policy once PM exposes tty ownership metadata. */
+    return strcmp(parent->name, "cli") == 0;
+}
+
+static void
+wasm_console_write_vt_mirror(const char *ptr, int32_t len)
+{
+    uint32_t vt_endpoint = process_manager_vt_endpoint();
+    if (vt_endpoint == IPC_ENDPOINT_NONE || !ptr || len <= 0 ||
+        !wasm_console_should_mirror_to_vt()) {
+        return;
+    }
+
+    for (int32_t offset = 0; offset < len; ) {
+        ipc_message_t msg;
+        int32_t chunk[4] = { 0, 0, 0, 0 };
+
+        for (int i = 0; i < 4 && offset < len; ++i, ++offset) {
+            chunk[i] = (int32_t)(uint8_t)ptr[offset];
+        }
+
+        msg.type = VT_IPC_WRITE_REQ;
+        msg.source = IPC_ENDPOINT_NONE;
+        msg.destination = vt_endpoint;
+        msg.request_id = 0;
+        msg.arg0 = (uint32_t)chunk[0];
+        msg.arg1 = (uint32_t)chunk[1];
+        msg.arg2 = (uint32_t)chunk[2];
+        msg.arg3 = (uint32_t)chunk[3];
+
+        if (ipc_send_from(IPC_CONTEXT_KERNEL, vt_endpoint, &msg) != IPC_OK) {
+            break;
+        }
+    }
 }
 
 static wasm_fs_peer_slot_t *
@@ -459,6 +664,31 @@ m3ApiRawFunction(wasmos_ipc_last_field)
 }
 
 #define WASM_BLOCK_BUFFER_PAGES 2u
+#define WASM_BLOCK_BUFFER_SIZE_BYTES (WASM_BLOCK_BUFFER_PAGES * 4096u)
+
+static int
+wasm_block_buffer_validate_args(wasm_block_slot_t *slot,
+                                int32_t phys,
+                                int32_t len,
+                                int32_t offset)
+{
+    (void)slot;
+    uint64_t start = 0;
+    uint64_t end = 0;
+
+    if (phys <= 0 || len <= 0 || offset < 0) {
+        return -1;
+    }
+    start = (uint64_t)(uint32_t)phys + (uint64_t)(uint32_t)offset;
+    end = start + (uint64_t)(uint32_t)len;
+    if (end < start) {
+        return -1;
+    }
+    if (end > 0x100000000ULL) {
+        return -1;
+    }
+    return 0;
+}
 
 m3ApiRawFunction(wasmos_block_buffer_phys)
 {
@@ -490,15 +720,38 @@ m3ApiRawFunction(wasmos_block_buffer_copy)
     m3ApiGetArgMem(uint8_t *, ptr)
     m3ApiGetArg(int32_t, len)
     m3ApiGetArg(int32_t, offset)
+    uint32_t pid = process_current_pid();
+    wasm_block_slot_t *slot = wasm_block_slot_for_pid(pid);
 
-    if (len <= 0 || offset < 0 || phys <= 0) {
+    if (wasm_block_buffer_validate_args(slot, phys, len, offset) != 0) {
         m3ApiReturn(-1);
     }
     m3ApiCheckMem(ptr, (uint32_t)len);
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t ptr_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   (uint32_t)len,
+                                   &ptr_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                ptr_user,
+                                (uint64_t)(uint32_t)len,
+                                MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
 
     const uint8_t *src = (const uint8_t *)(uintptr_t)((uint32_t)phys + (uint32_t)offset);
-    for (int32_t i = 0; i < len; ++i) {
-        ptr[i] = src[i];
+    if (wasm_copy_to_user_sync_views(proc->context_id,
+                                     ptr_user,
+                                     ptr,
+                                     src,
+                                     (uint32_t)len) != 0) {
+        m3ApiReturn(-1);
     }
     m3ApiReturn(0);
 }
@@ -510,15 +763,50 @@ m3ApiRawFunction(wasmos_block_buffer_write)
     m3ApiGetArgMem(const uint8_t *, ptr)
     m3ApiGetArg(int32_t, len)
     m3ApiGetArg(int32_t, offset)
+    uint32_t pid = process_current_pid();
+    wasm_block_slot_t *slot = wasm_block_slot_for_pid(pid);
 
-    if (len <= 0 || offset < 0 || phys <= 0) {
+    if (wasm_block_buffer_validate_args(slot, phys, len, offset) != 0) {
         m3ApiReturn(-1);
     }
     m3ApiCheckMem(ptr, (uint32_t)len);
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t ptr_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   (uint32_t)len,
+                                   &ptr_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                ptr_user,
+                                (uint64_t)(uint32_t)len,
+                                MEM_REGION_FLAG_READ) != 0) {
+        m3ApiReturn(-1);
+    }
 
     uint8_t *dst = (uint8_t *)(uintptr_t)((uint32_t)phys + (uint32_t)offset);
-    for (int32_t i = 0; i < len; ++i) {
-        dst[i] = ptr[i];
+    uint32_t copied = 0;
+    uint8_t bounce[256];
+    while (copied < (uint32_t)len) {
+        uint32_t chunk = (uint32_t)len - copied;
+        if (chunk > (uint32_t)sizeof(bounce)) {
+            chunk = (uint32_t)sizeof(bounce);
+        }
+        if (wasm_copy_from_user_sync_views(proc->context_id,
+                                           ptr_user + (uint64_t)copied,
+                                           ptr + copied,
+                                           bounce,
+                                           chunk) != 0) {
+            m3ApiReturn(-1);
+        }
+        for (uint32_t i = 0; i < chunk; ++i) {
+            dst[copied + i] = bounce[i];
+        }
+        copied += chunk;
     }
     m3ApiReturn(0);
 }
@@ -560,13 +848,34 @@ m3ApiRawFunction(wasmos_fs_buffer_copy)
         m3ApiReturn(-1);
     }
     m3ApiCheckMem(ptr, (uint32_t)len);
+    uint64_t ptr_user = 0;
+    if (wasm_user_va_from_host_ptr(context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   (uint32_t)len,
+                                   &ptr_user) != 0 ||
+        mm_user_range_permitted(context_id,
+                                ptr_user,
+                                (uint64_t)(uint32_t)len,
+                                MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
 
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
     const uint8_t *src = (const uint8_t *)wasm_fs_buffer_for_pid(pid, context_id);
     if (!src) {
         m3ApiReturn(-1);
     }
-    for (int32_t i = 0; i < len; ++i) {
-        ptr[i] = src[offset + i];
+    if (wasm_copy_to_user_sync_views(proc->context_id,
+                                     ptr_user,
+                                     ptr,
+                                     src + offset,
+                                     (uint32_t)len) != 0) {
+        m3ApiReturn(-1);
     }
     m3ApiReturn(0);
 }
@@ -591,13 +900,46 @@ m3ApiRawFunction(wasmos_fs_buffer_write)
         m3ApiReturn(-1);
     }
     m3ApiCheckMem(ptr, (uint32_t)len);
+    uint64_t ptr_user = 0;
+    if (wasm_user_va_from_host_ptr(context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   (uint32_t)len,
+                                   &ptr_user) != 0 ||
+        mm_user_range_permitted(context_id,
+                                ptr_user,
+                                (uint64_t)(uint32_t)len,
+                                MEM_REGION_FLAG_READ) != 0) {
+        m3ApiReturn(-1);
+    }
 
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
     uint8_t *dst = (uint8_t *)wasm_fs_buffer_for_pid(pid, context_id);
     if (!dst) {
         m3ApiReturn(-1);
     }
-    for (int32_t i = 0; i < len; ++i) {
-        dst[offset + i] = ptr[i];
+    uint32_t copied = 0;
+    uint8_t bounce[256];
+    while (copied < (uint32_t)len) {
+        uint32_t chunk = (uint32_t)len - copied;
+        if (chunk > (uint32_t)sizeof(bounce)) {
+            chunk = (uint32_t)sizeof(bounce);
+        }
+        if (wasm_copy_from_user_sync_views(proc->context_id,
+                                           ptr_user + (uint64_t)copied,
+                                           ptr + copied,
+                                           bounce,
+                                           chunk) != 0) {
+            m3ApiReturn(-1);
+        }
+        for (uint32_t i = 0; i < chunk; ++i) {
+            dst[(uint32_t)offset + copied + i] = bounce[i];
+        }
+        copied += chunk;
     }
     m3ApiReturn(0);
 }
@@ -628,7 +970,39 @@ m3ApiRawFunction(wasmos_early_log_copy)
         m3ApiReturn(0);
     }
     m3ApiCheckMem(ptr, count);
-    serial_early_log_copy(ptr, start, count);
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t ptr_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   count,
+                                   &ptr_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                ptr_user,
+                                count,
+                                MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
+    uint32_t copied = 0;
+    uint8_t bounce[256];
+    while (copied < count) {
+        uint32_t chunk = count - copied;
+        if (chunk > (uint32_t)sizeof(bounce)) {
+            chunk = (uint32_t)sizeof(bounce);
+        }
+        serial_early_log_copy(bounce, start + copied, chunk);
+        if (mm_copy_to_user(proc->context_id,
+                            ptr_user + (uint64_t)copied,
+                            bounce,
+                            (uint64_t)chunk) != 0) {
+            m3ApiReturn(-1);
+        }
+        copied += chunk;
+    }
     m3ApiReturn(0);
 }
 
@@ -666,9 +1040,29 @@ m3ApiRawFunction(wasmos_boot_config_copy)
     }
 
     m3ApiCheckMem(ptr, count);
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t ptr_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   count,
+                                   &ptr_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                ptr_user,
+                                count,
+                                MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
     const uint8_t *src = (const uint8_t *)(uintptr_t)g_wasm_boot_info->boot_config;
-    for (uint32_t i = 0; i < count; ++i) {
-        ptr[i] = src[start + i];
+    if (wasm_copy_to_user_bytes(proc->context_id,
+                                ptr_user,
+                                src + start,
+                                count) != 0) {
+        m3ApiReturn(-1);
     }
     m3ApiReturn(0);
 }
@@ -677,7 +1071,11 @@ m3ApiRawFunction(wasmos_io_in8)
 {
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, port)
+    uint32_t context_id = 0;
     if (port < 0 || port > 0xFFFF) {
+        m3ApiReturn(-1);
+    }
+    if (current_process_context(&context_id) != 0 || require_io_capability(context_id) != 0) {
         m3ApiReturn(-1);
     }
     m3ApiReturn((int32_t)inb((uint16_t)port));
@@ -687,7 +1085,11 @@ m3ApiRawFunction(wasmos_io_in16)
 {
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, port)
+    uint32_t context_id = 0;
     if (port < 0 || port > 0xFFFF) {
+        m3ApiReturn(-1);
+    }
+    if (current_process_context(&context_id) != 0 || require_io_capability(context_id) != 0) {
         m3ApiReturn(-1);
     }
     m3ApiReturn((int32_t)inw((uint16_t)port));
@@ -698,7 +1100,11 @@ m3ApiRawFunction(wasmos_io_out8)
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, port)
     m3ApiGetArg(int32_t, value)
+    uint32_t context_id = 0;
     if (port < 0 || port > 0xFFFF || value < 0 || value > 0xFF) {
+        m3ApiReturn(-1);
+    }
+    if (current_process_context(&context_id) != 0 || require_io_capability(context_id) != 0) {
         m3ApiReturn(-1);
     }
     outb((uint16_t)port, (uint8_t)value);
@@ -710,7 +1116,11 @@ m3ApiRawFunction(wasmos_io_out16)
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, port)
     m3ApiGetArg(int32_t, value)
+    uint32_t context_id = 0;
     if (port < 0 || port > 0xFFFF || value < 0 || value > 0xFFFF) {
+        m3ApiReturn(-1);
+    }
+    if (current_process_context(&context_id) != 0 || require_io_capability(context_id) != 0) {
         m3ApiReturn(-1);
     }
     outw((uint16_t)port, (uint16_t)value);
@@ -720,6 +1130,10 @@ m3ApiRawFunction(wasmos_io_out16)
 m3ApiRawFunction(wasmos_io_wait)
 {
     m3ApiReturnType(int32_t)
+    uint32_t context_id = 0;
+    if (current_process_context(&context_id) != 0 || require_io_capability(context_id) != 0) {
+        m3ApiReturn(-1);
+    }
     io_wait();
     m3ApiReturn(0);
 }
@@ -753,7 +1167,29 @@ m3ApiRawFunction(wasmos_framebuffer_info)
         m3ApiReturn(-1);
     }
     m3ApiCheckMem(out_ptr, (uint32_t)len);
-    memcpy(out_ptr, &info, sizeof(info));
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t out_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   out_ptr,
+                                   (uint32_t)len,
+                                   &out_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                out_user,
+                                (uint64_t)(uint32_t)len,
+                                MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
+    if (mm_copy_to_user(proc->context_id,
+                        out_user,
+                        &info,
+                        sizeof(info)) != 0) {
+        m3ApiReturn(-1);
+    }
     m3ApiReturn(0);
 }
 
@@ -779,7 +1215,8 @@ m3ApiRawFunction(wasmos_framebuffer_map)
     }
 
     process_t *proc = process_get(process_current_pid());
-    if (!proc || proc->context_id == 0) {
+    if (!proc || proc->context_id == 0 ||
+        require_mmio_capability(proc->context_id) != 0) {
         m3ApiReturn(-1);
     }
 
@@ -788,22 +1225,23 @@ m3ApiRawFunction(wasmos_framebuffer_map)
         m3ApiReturn(-1);
     }
 
-    /* Map the physical framebuffer over the caller-provided linear-memory span.
-     * The WASM pointer is an offset into wasm3's linear memory; convert it into
-     * the host virtual address (_mem + offset) that the interpreter uses. */
-    uint64_t mem_size = (uint64_t)m3_GetMemorySize(runtime);
-    uint64_t off = (uint64_t)(uint32_t)ptr;
-    uint64_t map_size = (uint64_t)(uint32_t)size;
-    if (off + map_size > mem_size) {
+    /* Map the physical framebuffer over caller-provided linear-memory pages.
+     * Resolve the WASM offset into the process-owned user VA explicitly. */
+    uint32_t off32 = (uint32_t)ptr;
+    uint32_t map_size32 = (uint32_t)size;
+    if ((uint64_t)off32 + (uint64_t)map_size32 > (uint64_t)m3_GetMemorySize(runtime)) {
         m3ApiReturn(-1);
     }
-
-    uint64_t virt = (uint64_t)(uintptr_t)m3ApiOffsetToPtr((uint32_t)ptr);
+    uint64_t virt = 0;
+    if (wasm_user_va_from_offset(proc->context_id, off32, map_size32, &virt) != 0 ||
+        mm_user_range_permitted(proc->context_id, virt, (uint64_t)map_size32, MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
     if ((virt & 0xFFFULL) != 0) {
         m3ApiReturn(-1);
     }
 
-    uint64_t pages = map_size / 0x1000ULL;
+    uint64_t pages = (uint64_t)map_size32 / 0x1000ULL;
     if (pages == 0) {
         serial_write("[framebuffer-map] zero pages\n");
         m3ApiReturn(-1);
@@ -834,6 +1272,12 @@ m3ApiRawFunction(wasmos_shmem_create)
         m3ApiReturn(-1);
     }
 
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0 ||
+        require_dma_capability(proc->context_id) != 0) {
+        m3ApiReturn(-1);
+    }
+
     uint32_t id = 0;
     uint64_t phys = 0;
     uint32_t create_flags = (flags > 0)
@@ -858,7 +1302,8 @@ m3ApiRawFunction(wasmos_shmem_map)
     }
 
     process_t *proc = process_get(process_current_pid());
-    if (!proc || proc->context_id == 0) {
+    if (!proc || proc->context_id == 0 ||
+        require_dma_capability(proc->context_id) != 0) {
         m3ApiReturn(-1);
     }
     mm_context_t *ctx = mm_context_get(proc->context_id);
@@ -877,13 +1322,16 @@ m3ApiRawFunction(wasmos_shmem_map)
         m3ApiReturn(-1);
     }
 
-    uint64_t mem_size = (uint64_t)m3_GetMemorySize(runtime);
-    uint64_t off = (uint64_t)(uint32_t)ptr;
-    if (off + map_size > mem_size) {
+    uint32_t off32 = (uint32_t)ptr;
+    uint32_t map_size32 = (uint32_t)size;
+    if ((uint64_t)off32 + (uint64_t)map_size32 > (uint64_t)m3_GetMemorySize(runtime)) {
         m3ApiReturn(-1);
     }
-
-    uint64_t virt = (uint64_t)(uintptr_t)m3ApiOffsetToPtr((uint32_t)ptr);
+    uint64_t virt = 0;
+    if (wasm_user_va_from_offset(proc->context_id, off32, map_size32, &virt) != 0 ||
+        mm_user_range_permitted(proc->context_id, virt, (uint64_t)map_size32, MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
     if ((virt & 0xFFFULL) != 0) {
         m3ApiReturn(-1);
     }
@@ -919,9 +1367,47 @@ m3ApiRawFunction(wasmos_shmem_unmap)
     m3ApiReturn(mm_shared_release((uint32_t)id));
 }
 
+m3ApiRawFunction(wasmos_irq_route)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, irq_line)
+    m3ApiGetArg(int32_t, endpoint)
+
+    uint32_t context_id = 0;
+    if (irq_line < 0 || endpoint < 0) {
+        m3ApiReturn(-1);
+    }
+    if (current_process_context(&context_id) != 0 ||
+        require_irq_route_capability(context_id) != 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn(irq_register(context_id, (uint32_t)irq_line, (uint32_t)endpoint));
+}
+
+m3ApiRawFunction(wasmos_irq_unroute)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, irq_line)
+
+    uint32_t context_id = 0;
+    if (irq_line < 0) {
+        m3ApiReturn(-1);
+    }
+    if (current_process_context(&context_id) != 0 ||
+        require_irq_route_capability(context_id) != 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn(irq_unregister(context_id, (uint32_t)irq_line));
+}
+
 m3ApiRawFunction(wasmos_system_halt)
 {
     m3ApiReturnType(int32_t)
+    uint32_t context_id = 0;
+    if (current_process_context(&context_id) != 0 ||
+        require_system_control_capability(context_id) != 0) {
+        m3ApiReturn(-1);
+    }
     outw(0x604, 0x2000);
     outw(0xB004, 0x2000);
     outw(0x4004, 0x3400);
@@ -934,6 +1420,11 @@ m3ApiRawFunction(wasmos_system_halt)
 m3ApiRawFunction(wasmos_system_reboot)
 {
     m3ApiReturnType(int32_t)
+    uint32_t context_id = 0;
+    if (current_process_context(&context_id) != 0 ||
+        require_system_control_capability(context_id) != 0) {
+        m3ApiReturn(-1);
+    }
     outb(0x64, 0xFE);
     outb(0xCF9, 0x06);
     outb(0xCF9, 0x0E);
@@ -962,12 +1453,48 @@ m3ApiRawFunction(wasmos_acpi_rsdp_info)
     }
     m3ApiCheckMem(out_ptr, len);
     m3ApiCheckMem(out_len_ptr, sizeof(uint32_t));
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t out_user = 0;
+    uint64_t out_len_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   out_ptr,
+                                   len,
+                                   &out_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                out_user,
+                                len,
+                                MEM_REGION_FLAG_WRITE) != 0 ||
+        wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   out_len_ptr,
+                                   sizeof(uint32_t),
+                                   &out_len_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                out_len_user,
+                                sizeof(uint32_t),
+                                MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
 
     const uint8_t *src = (const uint8_t *)(uintptr_t)g_wasm_boot_info->rsdp;
-    for (uint32_t i = 0; i < len; ++i) {
-        out_ptr[i] = src[i];
+    if (wasm_copy_to_user_bytes(proc->context_id,
+                                out_user,
+                                src,
+                                len) != 0) {
+        m3ApiReturn(-1);
     }
-    *out_len_ptr = len;
+    if (wasm_copy_to_user_bytes(proc->context_id,
+                                out_len_user,
+                                &len,
+                                sizeof(len)) != 0) {
+        m3ApiReturn(-1);
+    }
     m3ApiReturn(0);
 }
 
@@ -982,9 +1509,44 @@ m3ApiRawFunction(wasmos_boot_module_name)
         m3ApiReturn(-1);
     }
     m3ApiCheckMem(out_ptr, (uint32_t)out_len);
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t out_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   out_ptr,
+                                   (uint32_t)out_len,
+                                   &out_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                out_user,
+                                (uint64_t)(uint32_t)out_len,
+                                MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
 
+    char local_name[64];
     uint32_t name_len = 0;
-    if (boot_module_name_at((uint32_t)index, out_ptr, (uint32_t)out_len, &name_len) != 0) {
+    if (boot_module_name_at((uint32_t)index, local_name, sizeof(local_name), &name_len) != 0) {
+        m3ApiReturn(-1);
+    }
+    uint32_t copy_len = name_len;
+    if (copy_len >= (uint32_t)out_len) {
+        copy_len = (uint32_t)out_len - 1U;
+    }
+    if (wasm_copy_to_user_bytes(proc->context_id,
+                                out_user,
+                                local_name,
+                                copy_len) != 0) {
+        m3ApiReturn(-1);
+    }
+    char nul = '\0';
+    if (wasm_copy_to_user_bytes(proc->context_id,
+                                out_user + (uint64_t)copy_len,
+                                &nul,
+                                1) != 0) {
         m3ApiReturn(-1);
     }
     m3ApiReturn((int32_t)name_len);
@@ -1000,18 +1562,44 @@ m3ApiRawFunction(wasmos_console_write)
         m3ApiReturn(-1);
     }
     m3ApiCheckMem(ptr, (uint32_t)len);
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t ptr_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   (uint32_t)len,
+                                   &ptr_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                ptr_user,
+                                (uint64_t)(uint32_t)len,
+                                MEM_REGION_FLAG_READ) != 0) {
+        m3ApiReturn(-1);
+    }
 
     preempt_disable();
     char buf[128];
-    int32_t remaining = len;
-    while (remaining > 0) {
-        int32_t chunk = remaining > (int32_t)(sizeof(buf) - 1) ? (int32_t)(sizeof(buf) - 1) : remaining;
-        for (int32_t i = 0; i < chunk; ++i) {
-            buf[i] = ptr[len - remaining + i];
+    uint32_t copied = 0;
+    while (copied < (uint32_t)len) {
+        uint32_t chunk = (uint32_t)len - copied;
+        if (chunk > (uint32_t)(sizeof(buf) - 1U)) {
+            chunk = (uint32_t)(sizeof(buf) - 1U);
+        }
+        if (wasm_copy_from_user_sync_views(proc->context_id,
+                                           ptr_user + (uint64_t)copied,
+                                           ptr + copied,
+                                           buf,
+                                           chunk) != 0) {
+            preempt_enable();
+            m3ApiReturn(-1);
         }
         buf[chunk] = '\0';
         serial_write(buf);
-        remaining -= chunk;
+        wasm_console_write_vt_mirror(buf, (int32_t)chunk);
+        copied += chunk;
     }
     preempt_enable();
     m3ApiReturn(0);
@@ -1028,6 +1616,69 @@ m3ApiRawFunction(wasmos_debug_mark)
     m3ApiReturn(0);
 }
 
+m3ApiRawFunction(wasmos_kmap_dump)
+{
+    m3ApiReturnType(int32_t)
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t root = mm_context_root_table(proc->context_id);
+    if (!root) {
+        m3ApiReturn(-1);
+    }
+    paging_dump_user_root_kernel_mappings(root);
+    if ((proc->ctx.cs & 0x3u) == 0x3u) {
+        m3ApiReturn(paging_verify_user_root_no_low_slot(root, 1) == 0 ? 0 : -1);
+    }
+    m3ApiReturn(0);
+}
+
+m3ApiRawFunction(wasmos_kmap_dump_all)
+{
+    m3ApiReturnType(int32_t)
+    uint32_t count = process_count_active();
+    int failures = 0;
+
+    trace_do(serial_write("[kmap] contexts begin\n"));
+    for (uint32_t i = 0; i < count; ++i) {
+        uint32_t pid = 0;
+        uint32_t parent_pid = 0;
+        const char *name = 0;
+        if (process_info_at_ex(i, &pid, &parent_pid, &name) != 0) {
+            continue;
+        }
+        process_t *proc = process_get(pid);
+        if (!proc || proc->context_id == 0) {
+            continue;
+        }
+        uint64_t root = mm_context_root_table(proc->context_id);
+        if (!root) {
+            failures++;
+            continue;
+        }
+
+        trace_do(serial_write("[kmap] pid="));
+        trace_do(serial_write_hex64((uint64_t)pid));
+        trace_do(serial_write(" parent="));
+        trace_do(serial_write_hex64((uint64_t)parent_pid));
+        trace_do(serial_write(" ctx="));
+        trace_do(serial_write_hex64((uint64_t)proc->context_id));
+        trace_do(serial_write(" name="));
+        trace_do(serial_write(name ? name : "(unknown)"));
+        trace_do(serial_write("\n"));
+
+        paging_dump_user_root_kernel_mappings(root);
+        if ((proc->ctx.cs & 0x3u) == 0x3u) {
+            if (paging_verify_user_root_no_low_slot(root, 1) != 0) {
+                failures++;
+            }
+        }
+    }
+    trace_do(serial_write("[kmap] contexts end\n"));
+    m3ApiReturn(failures == 0 ? 0 : -1);
+}
+
 m3ApiRawFunction(wasmos_console_read)
 {
     m3ApiReturnType(int32_t)
@@ -1038,13 +1689,76 @@ m3ApiRawFunction(wasmos_console_read)
         m3ApiReturn(-1);
     }
     m3ApiCheckMem(ptr, 1);
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t ptr_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   1,
+                                   &ptr_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                ptr_user,
+                                1,
+                                MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
     uint8_t ch = 0;
     int rc = serial_read_char(&ch);
     if (rc <= 0) {
         m3ApiReturn(rc);
     }
-    ptr[0] = (char)ch;
+    char out = (char)ch;
+    if (wasm_copy_to_user_sync_views(proc->context_id,
+                                     ptr_user,
+                                     ptr,
+                                     &out,
+                                     1) != 0) {
+        m3ApiReturn(-1);
+    }
     m3ApiReturn(1);
+}
+
+m3ApiRawFunction(wasmos_sync_user_read)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArgMem(uint8_t *, ptr)
+    m3ApiGetArg(int32_t, len)
+
+    if (len < 0) {
+        m3ApiReturn(-1);
+    }
+    if (len == 0) {
+        m3ApiReturn(0);
+    }
+    m3ApiCheckMem(ptr, (uint32_t)len);
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t ptr_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   (uint32_t)len,
+                                   &ptr_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                ptr_user,
+                                (uint64_t)(uint32_t)len,
+                                MEM_REGION_FLAG_READ) != 0) {
+        m3ApiReturn(-1);
+    }
+    if (mm_copy_from_user(proc->context_id,
+                          ptr,
+                          ptr_user,
+                          (uint64_t)(uint32_t)len) != 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn(0);
 }
 
 m3ApiRawFunction(wasmos_input_push)
@@ -1127,20 +1841,66 @@ m3ApiRawFunction(wasmos_proc_info)
         m3ApiReturn(-1);
     }
     m3ApiCheckMem(buf, (uint32_t)buf_len);
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t buf_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   buf,
+                                   (uint32_t)buf_len,
+                                   &buf_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                buf_user,
+                                (uint64_t)(uint32_t)buf_len,
+                                MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
 
     uint32_t pid = 0;
     const char *name = 0;
     if (process_info_at((uint32_t)index, &pid, &name) != 0) {
         m3ApiReturn(-1);
     }
-    int32_t i = 0;
+    uint32_t out_cap = (uint32_t)buf_len;
+    uint32_t copied = 0;
+    char bounce[256];
     if (name) {
-        while (name[i] && i < buf_len - 1) {
-            buf[i] = name[i];
-            i++;
+        while (name[copied] && copied + 1U < out_cap) {
+            copied++;
         }
     }
-    buf[i] = '\0';
+    uint32_t out_len = copied + 1U; /* NUL-terminated */
+    for (uint32_t i = 0; i < copied; ++i) {
+        bounce[i % sizeof(bounce)] = name[i];
+        if ((i % sizeof(bounce)) == (sizeof(bounce) - 1U)) {
+            uint32_t chunk_base = i + 1U - (uint32_t)sizeof(bounce);
+            if (mm_copy_to_user(proc->context_id,
+                                buf_user + (uint64_t)chunk_base,
+                                bounce,
+                                (uint64_t)sizeof(bounce)) != 0) {
+                m3ApiReturn(-1);
+            }
+        }
+    }
+    uint32_t tail = copied % (uint32_t)sizeof(bounce);
+    if (tail > 0) {
+        if (mm_copy_to_user(proc->context_id,
+                            buf_user + (uint64_t)(copied - tail),
+                            bounce,
+                            (uint64_t)tail) != 0) {
+            m3ApiReturn(-1);
+        }
+    }
+    bounce[0] = '\0';
+    if (mm_copy_to_user(proc->context_id,
+                        buf_user + (uint64_t)(out_len - 1U),
+                        bounce,
+                        1) != 0) {
+        m3ApiReturn(-1);
+    }
     m3ApiReturn((int32_t)pid);
 }
 
@@ -1157,6 +1917,34 @@ m3ApiRawFunction(wasmos_proc_info_ex)
     }
     m3ApiCheckMem(buf, (uint32_t)buf_len);
     m3ApiCheckMem(parent_ptr, sizeof(uint32_t));
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t buf_user = 0;
+    uint64_t parent_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   buf,
+                                   (uint32_t)buf_len,
+                                   &buf_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                buf_user,
+                                (uint64_t)(uint32_t)buf_len,
+                                MEM_REGION_FLAG_WRITE) != 0 ||
+        wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   parent_ptr,
+                                   sizeof(uint32_t),
+                                   &parent_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                parent_user,
+                                sizeof(uint32_t),
+                                MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
 
     uint32_t pid = 0;
     uint32_t parent_pid = 0;
@@ -1164,16 +1952,50 @@ m3ApiRawFunction(wasmos_proc_info_ex)
     if (process_info_at_ex((uint32_t)index, &pid, &parent_pid, &name) != 0) {
         m3ApiReturn(-1);
     }
-    *parent_ptr = parent_pid;
+    if (mm_copy_to_user(proc->context_id,
+                        parent_user,
+                        &parent_pid,
+                        sizeof(parent_pid)) != 0) {
+        m3ApiReturn(-1);
+    }
 
-    int32_t i = 0;
+    uint32_t out_cap = (uint32_t)buf_len;
+    uint32_t copied = 0;
+    char bounce[256];
     if (name) {
-        while (name[i] && i < buf_len - 1) {
-            buf[i] = name[i];
-            i++;
+        while (name[copied] && copied + 1U < out_cap) {
+            copied++;
         }
     }
-    buf[i] = '\0';
+    uint32_t out_len = copied + 1U; /* NUL-terminated */
+    for (uint32_t i = 0; i < copied; ++i) {
+        bounce[i % sizeof(bounce)] = name[i];
+        if ((i % sizeof(bounce)) == (sizeof(bounce) - 1U)) {
+            uint32_t chunk_base = i + 1U - (uint32_t)sizeof(bounce);
+            if (mm_copy_to_user(proc->context_id,
+                                buf_user + (uint64_t)chunk_base,
+                                bounce,
+                                (uint64_t)sizeof(bounce)) != 0) {
+                m3ApiReturn(-1);
+            }
+        }
+    }
+    uint32_t tail = copied % (uint32_t)sizeof(bounce);
+    if (tail > 0) {
+        if (mm_copy_to_user(proc->context_id,
+                            buf_user + (uint64_t)(copied - tail),
+                            bounce,
+                            (uint64_t)tail) != 0) {
+            m3ApiReturn(-1);
+        }
+    }
+    bounce[0] = '\0';
+    if (mm_copy_to_user(proc->context_id,
+                        buf_user + (uint64_t)(out_len - 1U),
+                        bounce,
+                        1) != 0) {
+        m3ApiReturn(-1);
+    }
     m3ApiReturn((int32_t)pid);
 }
 
@@ -1182,13 +2004,43 @@ m3ApiRawFunction(wasmos_strlen)
     m3ApiReturnType(int32_t)
     m3ApiGetArgMem(const char *, ptr)
 
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(0);
+    }
+    uint64_t ptr_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   ptr,
+                                   1,
+                                   &ptr_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                ptr_user,
+                                1,
+                                MEM_REGION_FLAG_READ) != 0) {
+        m3ApiReturn(0);
+    }
+
     const uint8_t *start = (const uint8_t *)ptr;
     const uint8_t *end = (const uint8_t *)_mem + m3_GetMemorySize(runtime);
     if ((const uint8_t *)ptr < (const uint8_t *)_mem || start >= end) {
         m3ApiReturn(0);
     }
     int32_t len = 0;
-    while (start + len < end && start[len] != '\0') {
+    uint64_t max_len = (uint64_t)(end - start);
+    for (uint64_t i = 0; i < max_len; ++i) {
+        char ch = 0;
+        if (wasm_copy_from_user_sync_views(proc->context_id,
+                                           ptr_user + i,
+                                           start + i,
+                                           &ch,
+                                           1) != 0) {
+            m3ApiReturn(0);
+        }
+        if (ch == '\0') {
+            break;
+        }
         len++;
     }
     m3ApiReturn(len);
@@ -1260,7 +2112,10 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "ipc_last_field", "i(i)", wasmos_ipc_last_field);
     rc |= wasm3_link_raw(module, "wasmos", "console_write", "i(*i)", wasmos_console_write);
     rc |= wasm3_link_raw(module, "wasmos", "debug_mark", "i(i)", wasmos_debug_mark);
+    rc |= wasm3_link_raw(module, "wasmos", "kmap_dump", "i()", wasmos_kmap_dump);
+    rc |= wasm3_link_raw(module, "wasmos", "kmap_dump_all", "i()", wasmos_kmap_dump_all);
     rc |= wasm3_link_raw(module, "wasmos", "console_read", "i(*i)", wasmos_console_read);
+    rc |= wasm3_link_raw(module, "wasmos", "sync_user_read", "i(*i)", wasmos_sync_user_read);
     rc |= wasm3_link_raw(module, "wasmos", "proc_count", "i()", wasmos_proc_count);
     rc |= wasm3_link_raw(module, "wasmos", "proc_exit", "i(i)", wasmos_proc_exit);
     rc |= wasm3_link_raw(module, "wasmos", "sched_ticks", "i()", wasmos_sched_ticks);
@@ -1295,6 +2150,8 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "shmem_create", "i(ii)", wasmos_shmem_create);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_map", "i(iii)", wasmos_shmem_map);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_unmap", "i(i)", wasmos_shmem_unmap);
+    rc |= wasm3_link_raw(module, "wasmos", "irq_route", "i(ii)", wasmos_irq_route);
+    rc |= wasm3_link_raw(module, "wasmos", "irq_unroute", "i(i)", wasmos_irq_unroute);
     rc |= wasm3_link_raw(module, "wasmos", "serial_register", "i(i)", wasmos_serial_register);
     rc |= wasm3_link_raw(module, "wasmos", "input_push", "i(i)", wasmos_input_push);
     rc |= wasm3_link_raw(module, "wasmos", "input_read", "i()", wasmos_input_read);

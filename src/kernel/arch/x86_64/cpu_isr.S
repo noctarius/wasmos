@@ -7,48 +7,53 @@
 .extern x86_exception_panic
 .extern x86_exception_panic_frame
 .extern x86_page_fault_handler
+.extern x86_syscall_handler
 .extern x86_irq_handler
-.extern x86_timer_irq_handler
-.extern x86_irq_iret_corrupt
-.extern process_preempt_trampoline
+ .extern x86_timer_irq_handler
+ .extern x86_irq_iret_corrupt
+ .extern process_preempt_trampoline
 .extern g_irq0_ist_stack
 .extern g_irq0_ist_canary
 .extern x86_irq_ist_corrupt
 
+# Kernel code selector used when the timer preempt path rewrites a CPL3 IRET
+# frame to return through a ring0 scheduler trampoline.
+#define KERNEL_CS_SELECTOR 0x08
+
 .macro PUSH_REGS
-    pushq %r15
-    pushq %r14
-    pushq %r13
-    pushq %r12
-    pushq %r11
-    pushq %r10
-    pushq %r9
-    pushq %r8
-    pushq %rdi
-    pushq %rsi
-    pushq %rbp
-    pushq %rdx
-    pushq %rcx
-    pushq %rbx
     pushq %rax
+    pushq %rbx
+    pushq %rcx
+    pushq %rdx
+    pushq %rbp
+    pushq %rsi
+    pushq %rdi
+    pushq %r8
+    pushq %r9
+    pushq %r10
+    pushq %r11
+    pushq %r12
+    pushq %r13
+    pushq %r14
+    pushq %r15
 .endm
 
 .macro POP_REGS
-    popq %rax
-    popq %rbx
-    popq %rcx
-    popq %rdx
-    popq %rbp
-    popq %rsi
-    popq %rdi
-    popq %r8
-    popq %r9
-    popq %r10
-    popq %r11
-    popq %r12
-    popq %r13
-    popq %r14
     popq %r15
+    popq %r14
+    popq %r13
+    popq %r12
+    popq %r11
+    popq %r10
+    popq %r9
+    popq %r8
+    popq %rdi
+    popq %rsi
+    popq %rbp
+    popq %rdx
+    popq %rcx
+    popq %rbx
+    popq %rax
 .endm
 
 .macro DECL_EXC num
@@ -119,6 +124,7 @@ isr_exception_14:
     # register set so the C handler can inspect and potentially resume.
     PUSH_REGS
     mov 120(%rsp), %rdi
+    leaq 120(%rsp), %rsi
     subq $8, %rsp
     call x86_page_fault_handler
     addq $8, %rsp
@@ -187,7 +193,10 @@ isr_irq_0:
 0:
     movq 24(%rsp), %rax
     cmpq %rax, 176(%rsp)
+    je 5f
+    cmpq $KERNEL_CS_SELECTOR, 176(%rsp)
     jne 1f
+5:
     movq 32(%rsp), %rax
     cmpq %rax, 184(%rsp)
     jne 1f
@@ -236,6 +245,19 @@ DECL_IRQ 12 44
 DECL_IRQ 13 45
 DECL_IRQ 14 46
 DECL_IRQ 15 47
+
+.global isr_syscall_128
+isr_syscall_128:
+    # Syscall boundary (int 0x80). The C handler receives a pointer to the
+    # saved register frame and returns the syscall result in RAX.
+    PUSH_REGS
+    mov %rsp, %rdi
+    subq $8, %rsp
+    call x86_syscall_handler
+    addq $8, %rsp
+    movq %rax, 112(%rsp)
+    POP_REGS
+    iretq
 
 .global x86_exception_stub_table
 x86_exception_stub_table:

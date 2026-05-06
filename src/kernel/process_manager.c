@@ -41,6 +41,7 @@ typedef struct {
     uint32_t pid;
     uint32_t reply_endpoint;
     uint32_t request_id;
+    uint32_t owner_context_id;
 } pm_wait_state_t;
 
 typedef struct {
@@ -64,8 +65,11 @@ typedef struct {
     uint32_t fs_endpoint;
     uint32_t block_endpoint;
     uint32_t kbd_endpoint;
+    uint32_t fb_endpoint;
+    uint32_t vt_endpoint;
     uint32_t fs_reply_endpoint;
     uint32_t fs_request_id;
+    uint32_t next_cli_tty;
     uint8_t started;
     uint32_t init_module_index;
     uint32_t module_count;
@@ -76,6 +80,12 @@ typedef struct {
 
 static pm_state_t g_pm;
 static pm_fs_buffer_slot_t g_pm_fs_slots[PROCESS_MAX_COUNT];
+static uint8_t g_pm_wait_owner_deny_logged;
+static uint8_t g_pm_kill_owner_deny_logged;
+static uint8_t g_pm_status_owner_deny_logged;
+static uint8_t g_pm_spawn_owner_deny_logged;
+
+static uint32_t pm_alloc_cli_tty(void);
 
 static pm_fs_buffer_slot_t *
 pm_fs_slot_for_context(uint32_t context_id)
@@ -125,6 +135,106 @@ uint32_t
 process_manager_fs_buffer_size(void)
 {
     return PM_FS_BUFFER_SIZE;
+}
+
+void
+process_manager_inject_wait_owner_mismatch_test(uint32_t expected_owner_context_id)
+{
+    uint32_t reply_endpoint = IPC_ENDPOINT_NONE;
+    if (expected_owner_context_id == 0) {
+        return;
+    }
+    if (ipc_endpoint_create(IPC_CONTEXT_KERNEL, &reply_endpoint) != IPC_OK ||
+        reply_endpoint == IPC_ENDPOINT_NONE) {
+        return;
+    }
+    for (uint32_t i = 0; i < PM_MAX_WAITERS; ++i) {
+        pm_wait_state_t *waiter = &g_pm.waits[i];
+        if (waiter->in_use) {
+            continue;
+        }
+        waiter->in_use = 1;
+        waiter->pid = 0;
+        waiter->reply_endpoint = reply_endpoint;
+        waiter->request_id = 0xFFFF0001u;
+        waiter->owner_context_id = expected_owner_context_id;
+        return;
+    }
+}
+
+void
+process_manager_inject_kill_owner_deny_test(void)
+{
+    uint32_t source_endpoint = IPC_ENDPOINT_NONE;
+    ipc_message_t msg;
+
+    if (g_pm.proc_endpoint == IPC_ENDPOINT_NONE) {
+        return;
+    }
+    if (ipc_endpoint_create(IPC_CONTEXT_KERNEL, &source_endpoint) != IPC_OK ||
+        source_endpoint == IPC_ENDPOINT_NONE) {
+        return;
+    }
+
+    msg.type = PROC_IPC_KILL;
+    msg.source = source_endpoint;
+    msg.destination = g_pm.proc_endpoint;
+    msg.request_id = 0xFFFF1001u;
+    msg.arg0 = 0;
+    msg.arg1 = 0;
+    msg.arg2 = 0;
+    msg.arg3 = 0;
+    (void)ipc_send_from(IPC_CONTEXT_KERNEL, g_pm.proc_endpoint, &msg);
+}
+
+void
+process_manager_inject_status_owner_deny_test(void)
+{
+    uint32_t source_endpoint = IPC_ENDPOINT_NONE;
+    ipc_message_t msg;
+
+    if (g_pm.proc_endpoint == IPC_ENDPOINT_NONE) {
+        return;
+    }
+    if (ipc_endpoint_create(IPC_CONTEXT_KERNEL, &source_endpoint) != IPC_OK ||
+        source_endpoint == IPC_ENDPOINT_NONE) {
+        return;
+    }
+
+    msg.type = PROC_IPC_STATUS;
+    msg.source = source_endpoint;
+    msg.destination = g_pm.proc_endpoint;
+    msg.request_id = 0xFFFF1002u;
+    msg.arg0 = 0;
+    msg.arg1 = 0;
+    msg.arg2 = 0;
+    msg.arg3 = 0;
+    (void)ipc_send_from(IPC_CONTEXT_KERNEL, g_pm.proc_endpoint, &msg);
+}
+
+void
+process_manager_inject_spawn_owner_deny_test(void)
+{
+    uint32_t source_endpoint = IPC_ENDPOINT_NONE;
+    ipc_message_t msg;
+
+    if (g_pm.proc_endpoint == IPC_ENDPOINT_NONE) {
+        return;
+    }
+    if (ipc_endpoint_create(IPC_CONTEXT_KERNEL, &source_endpoint) != IPC_OK ||
+        source_endpoint == IPC_ENDPOINT_NONE) {
+        return;
+    }
+
+    msg.type = PROC_IPC_SPAWN;
+    msg.source = source_endpoint;
+    msg.destination = g_pm.proc_endpoint;
+    msg.request_id = 0xFFFF1003u;
+    msg.arg0 = 0;
+    msg.arg1 = 0;
+    msg.arg2 = 0;
+    msg.arg3 = 0;
+    (void)ipc_send_from(IPC_CONTEXT_KERNEL, g_pm.proc_endpoint, &msg);
 }
 
 
@@ -469,6 +579,10 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
         }
         slot->entry_arg0 = g_pm.proc_endpoint;
         slot->entry_arg1 = fs_endpoint;
+        slot->entry_arg2 = (g_pm.vt_endpoint != IPC_ENDPOINT_NONE)
+                               ? g_pm.vt_endpoint
+                               : (uint32_t)-1;
+        slot->entry_arg3 = pm_alloc_cli_tty();
     } else if (name_eq(slot->name, "fs-fat")) {
         uint32_t block_endpoint = g_pm.block_endpoint;
         if (block_endpoint == IPC_ENDPOINT_NONE) {
@@ -489,8 +603,13 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     } else if (name_eq(slot->name, "keyboard")) {
         slot->entry_arg1 = IPC_ENDPOINT_NONE;
     } else if (name_eq(slot->name, "vt")) {
-        slot->entry_arg0 = (uint32_t)-1;
+        slot->entry_arg0 = (g_pm.fb_endpoint != IPC_ENDPOINT_NONE)
+                               ? g_pm.fb_endpoint
+                               : (uint32_t)-1;
         slot->entry_arg1 = g_pm.kbd_endpoint;
+        slot->entry_arg2 = (g_pm.vt_endpoint != IPC_ENDPOINT_NONE)
+                               ? g_pm.vt_endpoint
+                               : (uint32_t)-1;
     }
 
     preempt_disable();
@@ -520,6 +639,20 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
             return -1;
         }
         slot->entry_arg1 = g_pm.kbd_endpoint;
+    }
+    if (name_eq(slot->name, "vt") && g_pm.vt_endpoint == IPC_ENDPOINT_NONE) {
+        process_t *proc = process_get(*out_pid);
+        if (!proc || ipc_endpoint_create(proc->context_id, &g_pm.vt_endpoint) != IPC_OK) {
+            preempt_enable();
+            slot->in_use = 0;
+            return -1;
+        }
+        slot->entry_arg2 = g_pm.vt_endpoint;
+    }
+    if (name_eq(slot->name, "cli")) {
+        slot->entry_arg2 = (g_pm.vt_endpoint != IPC_ENDPOINT_NONE)
+                               ? g_pm.vt_endpoint
+                               : (uint32_t)-1;
     }
     if (name_eq(slot->name, "fs-fat") && g_pm.fs_endpoint == IPC_ENDPOINT_NONE) {
         process_t *proc = process_get(*out_pid);
@@ -556,8 +689,9 @@ pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t *blob, uint32_t blob_siz
     if (wasmos_app_parse(slot->blob_storage, blob_size, &desc) != 0) {
         return -1;
     }
-    if ((desc.flags & WASMOS_APP_FLAG_DRIVER) != 0 ||
-        (desc.flags & (WASMOS_APP_FLAG_APP | WASMOS_APP_FLAG_SERVICE)) == 0) {
+    if ((desc.flags & (WASMOS_APP_FLAG_APP |
+                       WASMOS_APP_FLAG_SERVICE |
+                       WASMOS_APP_FLAG_DRIVER)) == 0) {
         return -1;
     }
     if (copy_name(slot->name, sizeof(slot->name), desc.name, desc.name_len) != 0) {
@@ -595,9 +729,20 @@ pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t *blob, uint32_t blob_siz
         }
         slot->entry_arg0 = g_pm.proc_endpoint;
         slot->entry_arg1 = g_pm.fs_endpoint;
+        slot->entry_arg2 = (g_pm.vt_endpoint != IPC_ENDPOINT_NONE)
+                               ? g_pm.vt_endpoint
+                               : (uint32_t)-1;
+        slot->entry_arg3 = pm_alloc_cli_tty();
     } else if (name_eq(slot->name, "vt")) {
-        slot->entry_arg0 = (uint32_t)-1;
+        slot->entry_arg0 = (g_pm.fb_endpoint != IPC_ENDPOINT_NONE)
+                               ? g_pm.fb_endpoint
+                               : (uint32_t)-1;
         slot->entry_arg1 = g_pm.kbd_endpoint;
+        slot->entry_arg2 = (g_pm.vt_endpoint != IPC_ENDPOINT_NONE)
+                               ? g_pm.vt_endpoint
+                               : (uint32_t)-1;
+    } else if (name_eq(slot->name, "keyboard")) {
+        slot->entry_arg1 = IPC_ENDPOINT_NONE;
     }
 
     if (process_spawn_as(parent_pid, slot->name, pm_app_entry, slot, out_pid) != 0) {
@@ -605,6 +750,22 @@ pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t *blob, uint32_t blob_siz
         return -1;
     }
     slot->pid = *out_pid;
+    if (name_eq(slot->name, "keyboard") && g_pm.kbd_endpoint == IPC_ENDPOINT_NONE) {
+        process_t *proc = process_get(*out_pid);
+        if (!proc || ipc_endpoint_create(proc->context_id, &g_pm.kbd_endpoint) != IPC_OK) {
+            slot->in_use = 0;
+            return -1;
+        }
+        slot->entry_arg1 = g_pm.kbd_endpoint;
+    }
+    if (name_eq(slot->name, "vt") && g_pm.vt_endpoint == IPC_ENDPOINT_NONE) {
+        process_t *proc = process_get(*out_pid);
+        if (!proc || ipc_endpoint_create(proc->context_id, &g_pm.vt_endpoint) != IPC_OK) {
+            slot->in_use = 0;
+            return -1;
+        }
+        slot->entry_arg2 = g_pm.vt_endpoint;
+    }
     return 0;
 }
 
@@ -647,6 +808,7 @@ pm_poll_spawn(uint32_t pm_context_id)
     }
     g_pm.spawn.in_use = 0;
     if (recv_rc != IPC_OK ||
+        msg.source != g_pm.fs_endpoint ||
         msg.request_id != g_pm.spawn.fs_request_id ||
         msg.type != FS_IPC_RESP) {
         ipc_message_t resp;
@@ -700,7 +862,18 @@ pm_check_waits(uint32_t pm_context_id)
 {
     for (uint32_t i = 0; i < PM_MAX_WAITERS; ++i) {
         pm_wait_state_t *waiter = &g_pm.waits[i];
+        uint32_t reply_owner_context = 0;
         if (!waiter->in_use) {
+            continue;
+        }
+        if (ipc_endpoint_owner(waiter->reply_endpoint, &reply_owner_context) != IPC_OK ||
+            reply_owner_context != waiter->owner_context_id) {
+            if (!g_pm_wait_owner_deny_logged) {
+                /* Spec marker shape: serial_write("\[test\] pm wait reply owner deny ok\\n") */
+                g_pm_wait_owner_deny_logged = 1;
+                serial_write("[test] pm wait reply owner deny ok\n");
+            }
+            waiter->in_use = 0;
             continue;
         }
         int32_t exit_status = 0;
@@ -761,6 +934,10 @@ pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t *msg)
     }
     caller = process_find_by_context(owner_context);
     if (!caller) {
+        if (!g_pm_spawn_owner_deny_logged) {
+            g_pm_spawn_owner_deny_logged = 1;
+            serial_write("[test] pm spawn owner deny ok\n");
+        }
         return -1;
     }
     parent_pid = caller->pid;
@@ -847,6 +1024,10 @@ pm_handle_kill(uint32_t pm_context_id, const ipc_message_t *msg)
     }
     caller = process_find_by_context(owner_context);
     if (!caller) {
+        if (!g_pm_kill_owner_deny_logged) {
+            g_pm_kill_owner_deny_logged = 1;
+            serial_write("[test] pm kill owner deny ok\n");
+        }
         return -1;
     }
 
@@ -874,8 +1055,22 @@ pm_handle_kill(uint32_t pm_context_id, const ipc_message_t *msg)
 static int
 pm_handle_status(uint32_t pm_context_id, const ipc_message_t *msg)
 {
+    uint32_t owner_context = 0;
+    process_t *caller = 0;
     process_t *target = process_get(msg->arg0);
     ipc_message_t resp;
+
+    if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
+        return -1;
+    }
+    caller = process_find_by_context(owner_context);
+    if (!caller) {
+        if (!g_pm_status_owner_deny_logged) {
+            g_pm_status_owner_deny_logged = 1;
+            serial_write("[test] pm status owner deny ok\n");
+        }
+        return -1;
+    }
 
     resp.type = PROC_IPC_RESP;
     resp.source = g_pm.proc_endpoint;
@@ -941,6 +1136,7 @@ pm_handle_wait(uint32_t pm_context_id, const ipc_message_t *msg)
         waiter->pid = msg->arg0;
         waiter->reply_endpoint = msg->source;
         waiter->request_id = msg->request_id;
+        waiter->owner_context_id = owner_context;
         return 0;
     }
 
@@ -957,9 +1153,16 @@ process_manager_init(const boot_info_t *boot_info)
     g_pm.fs_endpoint = IPC_ENDPOINT_NONE;
     g_pm.block_endpoint = IPC_ENDPOINT_NONE;
     g_pm.kbd_endpoint = IPC_ENDPOINT_NONE;
+    g_pm.fb_endpoint = IPC_ENDPOINT_NONE;
+    g_pm.vt_endpoint = IPC_ENDPOINT_NONE;
     g_pm.fs_reply_endpoint = IPC_ENDPOINT_NONE;
     g_pm.fs_request_id = 1;
+    g_pm.next_cli_tty = 1;
     g_pm.started = 0;
+    g_pm_wait_owner_deny_logged = 0;
+    g_pm_kill_owner_deny_logged = 0;
+    g_pm_status_owner_deny_logged = 0;
+    g_pm_spawn_owner_deny_logged = 0;
     if (boot_info && (boot_info->flags & BOOT_INFO_FLAG_MODULES_PRESENT)) {
         g_pm.module_count = boot_info->module_count;
         g_pm.init_module_index = pm_find_module_index_by_name("sysinit");
@@ -998,6 +1201,24 @@ uint32_t
 process_manager_block_endpoint(void)
 {
     return g_pm.block_endpoint;
+}
+
+uint32_t
+process_manager_vt_endpoint(void)
+{
+    return g_pm.vt_endpoint;
+}
+
+uint32_t
+process_manager_framebuffer_endpoint(void)
+{
+    return g_pm.fb_endpoint;
+}
+
+void
+process_manager_set_framebuffer_endpoint(uint32_t endpoint)
+{
+    g_pm.fb_endpoint = endpoint;
 }
 
 process_run_result_t
@@ -1100,4 +1321,15 @@ process_manager_entry(process_t *process, void *arg)
     }
 
     return PROCESS_RUN_YIELDED;
+}
+static uint32_t
+pm_alloc_cli_tty(void)
+{
+    /* Reserve tty0 for system console; rotate shell homes across tty1..tty3. */
+    uint32_t tty = g_pm.next_cli_tty;
+    if (tty < 1 || tty > 3) {
+        tty = 1;
+    }
+    g_pm.next_cli_tty = (tty >= 3) ? 1 : (tty + 1);
+    return tty;
 }

@@ -43,7 +43,7 @@ add_custom_command(
           4
           proc
           1
-          ipc.basic
+          system.control
           0
   DEPENDS ${WASM_CLI_APP_WASM} make_wasmos_app
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

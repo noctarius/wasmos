@@ -86,7 +86,7 @@ typedef struct wasmos_driver_api {
     /* Returns the shmem id of the kernel console text ring. */
     uint32_t (*console_ring_id)(void);
 
-    /* Deprecated: framebuffer registration moved to console shared ring. */
+    /* Publish framebuffer control endpoint for VT/control-plane clients. */
     int      (*console_register_fb)(uint32_t context_id, uint32_t endpoint);
 } wasmos_driver_api_t;
 

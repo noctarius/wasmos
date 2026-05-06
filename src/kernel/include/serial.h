@@ -10,6 +10,8 @@ typedef struct serial_driver {
 } serial_driver_t;
 
 void serial_init(void);
+void serial_enable_high_alias(uint8_t enabled);
+uint8_t serial_high_alias_enabled(void);
 void serial_write(const char *s);
 void serial_write_unlocked(const char *s);
 void serial_write_hex64(uint64_t value);

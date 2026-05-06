@@ -71,6 +71,12 @@ class CliIntegrationTests(unittest.TestCase):
         self._cmd_expect("ls", b"ata.wap")
         self._cmd_expect("cd /", b"/ wamos>")
 
+    def test_cd_dot_and_dotdot(self):
+        self._cmd_expect("cd /", b"/ wamos>")
+        self._cmd_expect("cd apps", b"/apps wamos>")
+        self._cmd_expect("cd .", b"/apps wamos>")
+        self._cmd_expect("cd ..", b"/ wamos>")
+
     def test_cat_startup(self):
         self._cmd_expect("cat startup.nsh", b"BOOTX64.EFI")
 

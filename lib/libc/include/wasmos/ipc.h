@@ -49,4 +49,41 @@ wasmos_ipc_reply(int32_t reply_endpoint,
                            0);
 }
 
+static inline int32_t
+wasmos_ipc_call(int32_t destination_endpoint,
+                int32_t source_endpoint,
+                int32_t type,
+                int32_t request_id,
+                int32_t arg0,
+                int32_t arg1,
+                int32_t arg2,
+                int32_t arg3,
+                wasmos_ipc_message_t *out_reply)
+{
+    wasmos_ipc_message_t reply;
+    int32_t rc = wasmos_ipc_send(destination_endpoint,
+                                 source_endpoint,
+                                 type,
+                                 request_id,
+                                 arg0,
+                                 arg1,
+                                 arg2,
+                                 arg3);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = wasmos_ipc_recv(source_endpoint);
+    if (rc < 0) {
+        return rc;
+    }
+    wasmos_ipc_message_read_last(&reply);
+    if (reply.request_id != request_id) {
+        return -1;
+    }
+    if (out_reply) {
+        *out_reply = reply;
+    }
+    return 0;
+}
+
 #endif

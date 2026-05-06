@@ -2,7 +2,8 @@
 #include "ipc.h"
 #include "serial.h"
 #include "timer.h"
-#include "process.h"
+#include "policy.h"
+#include "paging.h"
 
 /*
  * irq.c handles PIC setup, IRQ routing, and the minimal interrupt-side work
@@ -31,6 +32,28 @@ static irq_route_t g_irq_routes[IRQ_COUNT];
 static uint8_t g_pic_mask1 = 0xFF;
 static uint8_t g_pic_mask2 = 0xFF;
 
+static inline uintptr_t irq_alias_ptr(uintptr_t p)
+{
+    if (serial_high_alias_enabled() && (uint64_t)p < KERNEL_HIGHER_HALF_BASE) {
+        p = (uintptr_t)((uint64_t)p + KERNEL_HIGHER_HALF_BASE);
+    }
+    return p;
+}
+
+static inline irq_route_t *irq_routes_ptr(void)
+{
+    return (irq_route_t *)(void *)irq_alias_ptr((uintptr_t)&g_irq_routes[0]);
+}
+
+static inline uint8_t *pic_mask1_slot(void)
+{
+    return (uint8_t *)(void *)irq_alias_ptr((uintptr_t)&g_pic_mask1);
+}
+
+static inline uint8_t *pic_mask2_slot(void)
+{
+    return (uint8_t *)(void *)irq_alias_ptr((uintptr_t)&g_pic_mask2);
+}
 
 void x86_irq_iret_corrupt(const uint64_t *saved, const uint64_t *current) {
     serial_write("[irq] iret frame corrupt\n");
@@ -72,8 +95,8 @@ static void io_wait(void) {
 }
 
 static void pic_write_masks(void) {
-    outb(PIC1_DATA, g_pic_mask1);
-    outb(PIC2_DATA, g_pic_mask2);
+    outb(PIC1_DATA, *pic_mask1_slot());
+    outb(PIC2_DATA, *pic_mask2_slot());
 }
 
 static void pic_send_eoi(uint32_t irq_line) {
@@ -98,10 +121,13 @@ static int pic_is_spurious(uint32_t irq_line) {
 }
 
 void irq_init(void) {
+    irq_route_t *routes = irq_routes_ptr();
+    uint8_t *mask1_slot = pic_mask1_slot();
+    uint8_t *mask2_slot = pic_mask2_slot();
     for (uint32_t i = 0; i < IRQ_COUNT; ++i) {
-        g_irq_routes[i].in_use = 0;
-        g_irq_routes[i].owner_context_id = 0;
-        g_irq_routes[i].endpoint = IPC_ENDPOINT_NONE;
+        routes[i].in_use = 0;
+        routes[i].owner_context_id = 0;
+        routes[i].endpoint = IPC_ENDPOINT_NONE;
     }
 
     /* Preserve the pre-existing mask state across the PIC remap so only the
@@ -126,40 +152,48 @@ void irq_init(void) {
     outb(PIC2_DATA, ICW4_8086);
     io_wait();
 
-    g_pic_mask1 = mask1;
-    g_pic_mask2 = mask2;
+    *mask1_slot = mask1;
+    *mask2_slot = mask2;
     pic_write_masks();
     serial_write("[irq] pic remapped\n");
 }
 
 int irq_mask(uint32_t irq_line) {
+    uint8_t *mask1_slot = pic_mask1_slot();
+    uint8_t *mask2_slot = pic_mask2_slot();
     if (irq_line >= IRQ_COUNT) {
         return -1;
     }
     if (irq_line < 8) {
-        g_pic_mask1 |= (uint8_t)(1u << irq_line);
+        *mask1_slot |= (uint8_t)(1u << irq_line);
     } else {
-        g_pic_mask2 |= (uint8_t)(1u << (irq_line - 8));
+        *mask2_slot |= (uint8_t)(1u << (irq_line - 8));
     }
     pic_write_masks();
     return 0;
 }
 
 int irq_unmask(uint32_t irq_line) {
+    uint8_t *mask1_slot = pic_mask1_slot();
+    uint8_t *mask2_slot = pic_mask2_slot();
     if (irq_line >= IRQ_COUNT) {
         return -1;
     }
     if (irq_line < 8) {
-        g_pic_mask1 &= (uint8_t)~(1u << irq_line);
+        *mask1_slot &= (uint8_t)~(1u << irq_line);
     } else {
-        g_pic_mask2 &= (uint8_t)~(1u << (irq_line - 8));
+        *mask2_slot &= (uint8_t)~(1u << (irq_line - 8));
     }
     pic_write_masks();
     return 0;
 }
 
 int irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint) {
+    irq_route_t *routes = irq_routes_ptr();
     if (irq_line >= IRQ_COUNT || endpoint == IPC_ENDPOINT_NONE) {
+        return -1;
+    }
+    if (policy_authorize(context_id, POLICY_ACTION_IRQ_ROUTE, irq_line) != 0) {
         return -1;
     }
 
@@ -169,19 +203,20 @@ int irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint) {
         return -1;
     }
 
-    g_irq_routes[irq_line].in_use = 1;
-    g_irq_routes[irq_line].owner_context_id = context_id;
-    g_irq_routes[irq_line].endpoint = endpoint;
+    routes[irq_line].in_use = 1;
+    routes[irq_line].owner_context_id = context_id;
+    routes[irq_line].endpoint = endpoint;
     irq_unmask(irq_line);
     return 0;
 }
 
 int irq_unregister(uint32_t context_id, uint32_t irq_line) {
+    irq_route_t *routes = irq_routes_ptr();
     if (irq_line >= IRQ_COUNT) {
         return -1;
     }
 
-    irq_route_t *route = &g_irq_routes[irq_line];
+    irq_route_t *route = &routes[irq_line];
     if (!route->in_use) {
         return -1;
     }
@@ -196,6 +231,7 @@ int irq_unregister(uint32_t context_id, uint32_t irq_line) {
 }
 
 void x86_irq_handler(uint64_t vector) {
+    irq_route_t *routes = irq_routes_ptr();
     if (vector < IRQ_VECTOR_BASE || vector >= (IRQ_VECTOR_BASE + IRQ_COUNT)) {
         return;
     }
@@ -210,7 +246,7 @@ void x86_irq_handler(uint64_t vector) {
         return;
     }
 
-    irq_route_t *route = &g_irq_routes[irq_line];
+    irq_route_t *route = &routes[irq_line];
     /* IRQ0 is special because it drives scheduler accounting before any routed
      * notification endpoints are serviced. */
     if (irq_line == 0) {

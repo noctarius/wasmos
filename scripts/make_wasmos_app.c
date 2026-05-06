@@ -53,9 +53,22 @@ static int parse_u32(const char *s, uint32_t *out) {
     return 0;
 }
 
+static int capability_name_supported(const char *name) {
+    if (!name) {
+        return 0;
+    }
+    return strcmp(name, "ipc.basic") == 0 ||
+           strcmp(name, "io.port") == 0 ||
+           strcmp(name, "irq.route") == 0 ||
+           strcmp(name, "mmio.map") == 0 ||
+           strcmp(name, "dma.buffer") == 0 ||
+           strcmp(name, "system.control") == 0;
+}
+
 int main(int argc, char **argv) {
-    if (argc != 12) {
-        fprintf(stderr, "usage: %s <in.wasm> <out.wap> <name> <entry> <stack_pages> <heap_pages> <flags> <req_ep_name|- > <req_ep_rights> <cap_name|- > <cap_flags>\n", argv[0]);
+    if (argc < 11) {
+        fprintf(stderr, "usage: %s <in.wasm> <out.wap> <name> <entry> <stack_pages> <heap_pages> <flags> <req_ep_name|- > <req_ep_rights> <cap_count> [<cap_name> <cap_flags>]...\n", argv[0]);
+        fprintf(stderr, "legacy: %s <in.wasm> <out.wap> <name> <entry> <stack_pages> <heap_pages> <flags> <req_ep_name|- > <req_ep_rights> <cap_name|- > <cap_flags>\n", argv[0]);
         return 1;
     }
 
@@ -64,23 +77,83 @@ int main(int argc, char **argv) {
     const char *name = argv[3];
     const char *entry = argv[4];
     const char *req_ep_name = argv[8];
-    const char *cap_name = argv[10];
     uint32_t stack_pages = 0;
     uint32_t heap_pages = 0;
     uint32_t flags = 0;
     uint32_t req_ep_rights = 0;
-    uint32_t cap_flags = 0;
+    uint32_t cap_count = 0;
+    const uint32_t cap_max = 8;
+    const char *cap_names[8];
+    wasmos_cap_request_t caps[8];
     if (parse_u32(argv[5], &stack_pages) != 0 || parse_u32(argv[6], &heap_pages) != 0) {
         fprintf(stderr, "invalid stack/heap page value\n");
         return 1;
     }
     if (parse_u32(argv[7], &flags) != 0 ||
-        parse_u32(argv[9], &req_ep_rights) != 0 || parse_u32(argv[11], &cap_flags) != 0) {
-        fprintf(stderr, "invalid flags/req_ep_rights/cap_flags value\n");
+        parse_u32(argv[9], &req_ep_rights) != 0) {
+        fprintf(stderr, "invalid flags/req_ep_rights value\n");
         return 1;
     }
     int has_req_ep = !(req_ep_name[0] == '-' && req_ep_name[1] == '\0');
-    int has_cap = !(cap_name[0] == '-' && cap_name[1] == '\0');
+
+    int legacy_mode = 0;
+    if (parse_u32(argv[10], &cap_count) == 0 &&
+        argc == (int)(11u + (cap_count * 2u))) {
+        if (cap_count > cap_max) {
+            fprintf(stderr, "cap_count exceeds max supported entries (%u)\n", cap_max);
+            return 1;
+        }
+        for (uint32_t i = 0; i < cap_count; ++i) {
+            const char *cap_name = argv[11 + (i * 2u)];
+            uint32_t cap_flags = 0;
+            if (!cap_name || cap_name[0] == '\0' ||
+                (cap_name[0] == '-' && cap_name[1] == '\0') ||
+                parse_u32(argv[12 + (i * 2u)], &cap_flags) != 0) {
+                fprintf(stderr, "invalid capability entry at index %u\n", i);
+                return 1;
+            }
+            if (!capability_name_supported(cap_name)) {
+                fprintf(stderr, "unknown capability '%s' at index %u\n", cap_name, i);
+                return 1;
+            }
+            if (cap_flags != 0) {
+                fprintf(stderr, "unsupported capability flags for '%s' at index %u\n", cap_name, i);
+                return 1;
+            }
+            cap_names[i] = cap_name;
+            caps[i].name_len = (uint32_t)strlen(cap_name);
+            caps[i].flags = cap_flags;
+        }
+    } else if (argc == 12) {
+        /* Backward compatibility mode: one optional capability pair. */
+        legacy_mode = 1;
+        const char *cap_name = argv[10];
+        uint32_t cap_flags = 0;
+        if (parse_u32(argv[11], &cap_flags) != 0) {
+            fprintf(stderr, "invalid legacy cap_flags value\n");
+            return 1;
+        }
+        if (!(cap_name[0] == '-' && cap_name[1] == '\0')) {
+            if (!capability_name_supported(cap_name)) {
+                fprintf(stderr, "unknown legacy capability '%s'\n", cap_name);
+                return 1;
+            }
+            if (cap_flags != 0) {
+                fprintf(stderr, "unsupported legacy capability flags for '%s'\n", cap_name);
+                return 1;
+            }
+            cap_count = 1;
+            cap_names[0] = cap_name;
+            caps[0].name_len = (uint32_t)strlen(cap_name);
+            caps[0].flags = cap_flags;
+        }
+    } else {
+        fprintf(stderr, "invalid capability argument layout\n");
+        if (!legacy_mode) {
+            fprintf(stderr, "usage: %s <in.wasm> <out.wap> <name> <entry> <stack_pages> <heap_pages> <flags> <req_ep_name|- > <req_ep_rights> <cap_count> [<cap_name> <cap_flags>]...\n", argv[0]);
+        }
+        return 1;
+    }
 
     FILE *in = fopen(in_path, "rb");
     if (!in) {
@@ -133,14 +206,13 @@ int main(int argc, char **argv) {
     hdr.entry_len = (uint32_t)strlen(entry);
     hdr.wasm_size = (uint32_t)in_size;
     hdr.req_ep_count = has_req_ep ? 1u : 0u;
-    hdr.cap_count = has_cap ? 1u : 0u;
+    hdr.cap_count = cap_count;
     hdr.mem_hint_count = 2;
     hdr.reserved = 0;
 
     wasmos_mem_hint_t stack_hint = { MEM_HINT_STACK, stack_pages, 0 };
     wasmos_mem_hint_t heap_hint = { MEM_HINT_HEAP, heap_pages, 0 };
     wasmos_req_endpoint_t req_ep = { (uint32_t)strlen(req_ep_name), req_ep_rights };
-    wasmos_cap_request_t cap = { (uint32_t)strlen(cap_name), cap_flags };
 
     int ok = 1;
     ok &= fwrite(&hdr, sizeof(hdr), 1, out) == 1;
@@ -150,9 +222,9 @@ int main(int argc, char **argv) {
         ok &= fwrite(&req_ep, sizeof(req_ep), 1, out) == 1;
         ok &= fwrite(req_ep_name, 1, req_ep.name_len, out) == req_ep.name_len;
     }
-    if (has_cap) {
-        ok &= fwrite(&cap, sizeof(cap), 1, out) == 1;
-        ok &= fwrite(cap_name, 1, cap.name_len, out) == cap.name_len;
+    for (uint32_t i = 0; i < cap_count; ++i) {
+        ok &= fwrite(&caps[i], sizeof(caps[i]), 1, out) == 1;
+        ok &= fwrite(cap_names[i], 1, caps[i].name_len, out) == caps[i].name_len;
     }
     ok &= fwrite(&stack_hint, sizeof(stack_hint), 1, out) == 1;
     ok &= fwrite(&heap_hint, sizeof(heap_hint), 1, out) == 1;

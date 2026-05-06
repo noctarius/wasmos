@@ -3,6 +3,7 @@
 #include "physmem.h"
 #include "serial.h"
 #include "paging.h"
+#include "cpu.h"
 #include "wasm3_shim.h"
 #include "ipc.h"
 
@@ -40,6 +41,22 @@ static uint64_t g_ctx_watch_last_logged_rflags;
 static uint64_t g_ctx_watch_last_logged_reason;
 static uint8_t g_preempt_smoke_logged;
 
+static inline uintptr_t
+process_kernel_alias_addr(uintptr_t addr)
+{
+    uint64_t base = KERNEL_HIGHER_HALF_BASE;
+    if ((uint64_t)addr < base) {
+        return (uintptr_t)((uint64_t)addr + base);
+    }
+    return addr;
+}
+
+static inline process_t *
+process_table(void)
+{
+    return (process_t *)(void *)process_kernel_alias_addr((uintptr_t)&g_processes[0]);
+}
+
 volatile uint64_t g_ctxsw_last_out_ctx;
 volatile uint64_t g_ctxsw_last_out_rip;
 volatile uint64_t g_ctxsw_last_out_rsp;
@@ -66,9 +83,18 @@ extern uint8_t __kernel_start;
 extern uint8_t __kernel_end;
 
 #define PAGE_SIZE 0x1000u
+#define KERNEL_CS_SELECTOR 0x08u
+#define KERNEL_DS_SELECTOR 0x10u
+#define USER_CS_SELECTOR   0x1Bu
+#define USER_DS_SELECTOR   0x23u
 #define STACK_GUARD_PAGES 1u
 #define STACK_REDZONE_BYTES 4096u
 #define STACK_CANARY_VALUE 0xC0DEC0DEF00DFACEULL
+#define SCHED_TRAMPOLINE_STACK_BYTES 8192u
+/* Phase-2 stack hardening currently relies on the shared higher-half kernel
+ * window (64 MiB by default: 32 * 2 MiB PDEs). */
+#define KERNEL_SHARED_HIGHER_HALF_WINDOW_BYTES (64u * 1024u * 1024u)
+static uint8_t g_sched_trampoline_stack[SCHED_TRAMPOLINE_STACK_BYTES] __attribute__((aligned(16)));
 
 static int
 process_alloc_stack(process_t *slot, uint32_t stack_pages)
@@ -82,31 +108,41 @@ process_alloc_stack(process_t *slot, uint32_t stack_pages)
      * instead of silent memory corruption.
      */
     uint64_t total_pages = (uint64_t)stack_pages + (STACK_GUARD_PAGES * 2u);
-    uint64_t base = pfa_alloc_pages(total_pages);
+    uint64_t base = pfa_alloc_pages_below(total_pages, KERNEL_SHARED_HIGHER_HALF_WINDOW_BYTES);
+    uint8_t using_higher_half_stack = 1;
     if (!base) {
+        /* TODO(ring3-phase2): If stack pressure exceeds the shared higher-half
+         * window, extend the explicit kernel allowlist window instead of
+         * falling back to low-mapped stacks under user CR3 roots. */
+        serial_write("[sched] higher-half stack alloc failed\n");
         return -1;
     }
 
     uint64_t guard_low = base;
     uint64_t usable_base = base + ((uint64_t)STACK_GUARD_PAGES * PAGE_SIZE);
     uint64_t guard_high = base + ((total_pages - STACK_GUARD_PAGES) * PAGE_SIZE);
+    uint64_t higher_half_base = paging_get_higher_half_base();
+    uint64_t guard_low_virt = using_higher_half_stack ? (higher_half_base + guard_low) : guard_low;
+    uint64_t usable_base_virt = using_higher_half_stack ? (higher_half_base + usable_base) : usable_base;
+    uint64_t guard_high_virt = using_higher_half_stack ? (higher_half_base + guard_high) : guard_high;
 
     for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
-        if (paging_unmap_4k(guard_low + ((uint64_t)i * PAGE_SIZE)) != 0) {
+        if (paging_unmap_4k(guard_low_virt + ((uint64_t)i * PAGE_SIZE)) != 0) {
             serial_write("[sched] guard unmap failed\n");
             return -1;
         }
     }
     for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
-        if (paging_unmap_4k(guard_high + ((uint64_t)i * PAGE_SIZE)) != 0) {
+        if (paging_unmap_4k(guard_high_virt + ((uint64_t)i * PAGE_SIZE)) != 0) {
             serial_write("[sched] guard unmap failed\n");
             return -1;
         }
     }
 
-    slot->stack_base = (uintptr_t)usable_base;
+    slot->stack_base = (uintptr_t)usable_base_virt;
     slot->stack_pages = stack_pages;
-    slot->stack_top = (uintptr_t)guard_high;
+    slot->stack_top = (uintptr_t)guard_high_virt;
+    slot->stack_alloc_base_phys = (uintptr_t)base;
 
     if (slot->stack_base && slot->stack_top > slot->stack_base + sizeof(uint64_t)) {
         /* Canaries catch in-range stack corruption that does not reach the guard
@@ -124,12 +160,16 @@ process_alloc_stack(process_t *slot, uint32_t stack_pages)
 
 extern void context_switch(process_context_t *out, process_context_t *in);
 extern void context_switch_to(process_context_t *in);
+static void context_switch_high(process_context_t *out, process_context_t *in);
+static int process_schedule_once_impl(void);
 
 
 static int process_str_eq(const char *a, const char *b) {
     if (!a || !b) {
         return 0;
     }
+    a = (const char *)(uintptr_t)process_kernel_alias_addr((uintptr_t)a);
+    b = (const char *)(uintptr_t)process_kernel_alias_addr((uintptr_t)b);
     while (*a || *b) {
         if (*a != *b) {
             return 0;
@@ -141,6 +181,38 @@ static int process_str_eq(const char *a, const char *b) {
         ++b;
     }
     return 1;
+}
+
+static void
+context_switch_high(process_context_t *out, process_context_t *in)
+{
+    uint64_t higher_half_base = paging_get_higher_half_base();
+    uintptr_t fn = (uintptr_t)&context_switch;
+    if ((uint64_t)fn < higher_half_base) {
+        fn += (uintptr_t)higher_half_base;
+    }
+    ((void (*)(process_context_t *, process_context_t *))fn)(out, in);
+}
+
+static int
+process_run_on_sched_stack(int (*fn)(void))
+{
+    if (!fn) {
+        return -1;
+    }
+    uintptr_t stack_top = process_kernel_alias_addr(
+        (uintptr_t)&g_sched_trampoline_stack[SCHED_TRAMPOLINE_STACK_BYTES]);
+    stack_top &= ~(uintptr_t)0xFULL;
+    int rc = -1;
+    __asm__ volatile(
+        "mov %%rsp, %%r15\n"
+        "mov %[stack_top], %%rsp\n"
+        "call *%[fn]\n"
+        "mov %%r15, %%rsp\n"
+        : "=a"(rc)
+        : [stack_top] "r"(stack_top), [fn] "r"(fn)
+        : "r15", "rcx", "rdx", "rsi", "rdi", "r8", "r9", "r10", "memory", "cc");
+    return rc;
 }
 
 static void process_log_ctx_watch(const char *where) {
@@ -225,9 +297,20 @@ static void process_validate_context(process_t *proc, const char *where) {
         }
     }
     uint64_t rip = proc->ctx.rip;
+    uint8_t is_user_ctx = (uint8_t)((proc->ctx.cs & 0x3u) == 0x3u);
     uint64_t start = (uint64_t)(uintptr_t)&__kernel_start;
     uint64_t end = (uint64_t)(uintptr_t)&__kernel_end;
-    if (rip >= start && rip < end) {
+    uint64_t low_start = start;
+    uint64_t low_end = end;
+    uint64_t higher_half = paging_get_higher_half_base();
+    if (start < higher_half) {
+        start += higher_half;
+    }
+    if (end < higher_half) {
+        end += higher_half;
+    }
+    if (is_user_ctx || (rip >= start && rip < end) ||
+        (rip >= low_start && rip < low_end)) {
         return;
     }
     serial_printf(
@@ -328,11 +411,13 @@ static void process_trampoline(void) {
         if (!g_current_process || !g_current_process->entry) {
             g_last_run_result = PROCESS_RUN_IDLE;
         } else {
-            g_last_run_result = g_current_process->entry(g_current_process, g_current_process->arg);
+            uintptr_t entry_ptr = process_kernel_alias_addr((uintptr_t)g_current_process->entry);
+            process_entry_t entry_fn = (process_entry_t)(void *)entry_ptr;
+            g_last_run_result = entry_fn(g_current_process, g_current_process->arg);
         }
         critical_section_enter();
         g_in_scheduler = 1;
-        context_switch(&g_current_process->ctx, &g_sched_ctx);
+        context_switch_high(&g_current_process->ctx, &g_sched_ctx);
         if (g_ctx_watch_hits != g_ctx_watch_logged) {
             g_ctx_watch_logged = g_ctx_watch_hits;
             process_log_ctx_watch_if_changed();
@@ -364,6 +449,7 @@ static void process_reset_slot(process_t *proc) {
     proc->ctx_canary_post = 0;
     proc->stack_base = 0;
     proc->stack_top = 0;
+    proc->stack_alloc_base_phys = 0;
     proc->stack_pages = 0;
     proc->entry = 0;
     proc->arg = 0;
@@ -389,9 +475,10 @@ process_copy_name(process_t *proc, const char *name)
 }
 
 static process_t *process_find_slot(void) {
+    process_t *table = process_table();
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        if (g_processes[i].state == PROCESS_STATE_UNUSED) {
-            return &g_processes[i];
+        if (table[i].state == PROCESS_STATE_UNUSED) {
+            return &table[i];
         }
     }
     return 0;
@@ -401,9 +488,10 @@ static process_t *process_find_by_pid(uint32_t pid) {
     if (pid == 0) {
         return 0;
     }
+    process_t *table = process_table();
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        if (g_processes[i].pid == pid && g_processes[i].state != PROCESS_STATE_UNUSED) {
-            return &g_processes[i];
+        if (table[i].pid == pid && table[i].state != PROCESS_STATE_UNUSED) {
+            return &table[i];
         }
     }
     return 0;
@@ -413,10 +501,11 @@ static process_t *process_find_by_context_internal(uint32_t context_id) {
     if (context_id == 0) {
         return 0;
     }
+    process_t *table = process_table();
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        if (g_processes[i].context_id == context_id &&
-            g_processes[i].state != PROCESS_STATE_UNUSED) {
-            return &g_processes[i];
+        if (table[i].context_id == context_id &&
+            table[i].state != PROCESS_STATE_UNUSED) {
+            return &table[i];
         }
     }
     return 0;
@@ -463,10 +552,9 @@ static void process_reap(process_t *proc) {
     if (!proc) {
         return;
     }
-    if (proc->stack_base && proc->stack_pages) {
+    if (proc->stack_alloc_base_phys && proc->stack_pages) {
         uint64_t total_pages = (uint64_t)proc->stack_pages + (STACK_GUARD_PAGES * 2u);
-        uint64_t stack_alloc_base = (uint64_t)proc->stack_base - ((uint64_t)STACK_GUARD_PAGES * PAGE_SIZE);
-        pfa_free_pages(stack_alloc_base, total_pages);
+        pfa_free_pages((uint64_t)proc->stack_alloc_base_phys, total_pages);
     }
     if (proc->context_id != 0) {
         ipc_endpoints_release_owner(proc->context_id);
@@ -511,6 +599,7 @@ void process_init(void) {
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         process_reset_slot(&g_processes[i]);
     }
+    g_sched_ctx.root_table = paging_get_root_table();
 }
 
 int process_spawn(const char *name, process_entry_t entry, void *arg, uint32_t *out_pid) {
@@ -530,6 +619,10 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
     uint32_t pid = g_next_pid++;
     mm_context_t *ctx = mm_context_create(pid);
     if (!ctx) {
+        return -1;
+    }
+    if (paging_clone_low_slot_in_root(ctx->root_table) != 0) {
+        mm_context_destroy(ctx->id);
         return -1;
     }
 
@@ -555,8 +648,12 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
         return -1;
     }
     slot->ctx.rsp = slot->stack_top - (STACK_REDZONE_BYTES + 8u);
-    slot->ctx.rip = (uint64_t)(uintptr_t)process_trampoline;
+    slot->ctx.user_rsp = slot->ctx.rsp;
+    slot->ctx.rip = (uint64_t)process_kernel_alias_addr((uintptr_t)process_trampoline);
     slot->ctx.rflags = 0x200;
+    slot->ctx.cs = KERNEL_CS_SELECTOR;
+    slot->ctx.ss = KERNEL_DS_SELECTOR;
+    slot->ctx.root_table = ctx->root_table;
     if (process_str_eq(name, "process-manager")) {
         g_ctx_watch_ctx = (uint64_t)(uintptr_t)&slot->ctx;
         g_ctx_watch_last_ctx = g_ctx_watch_ctx;
@@ -627,10 +724,42 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
         return -1;
     }
     slot->ctx.rsp = slot->stack_top - (STACK_REDZONE_BYTES + 8u);
-    slot->ctx.rip = (uint64_t)(uintptr_t)process_trampoline;
+    slot->ctx.user_rsp = slot->ctx.rsp;
+    slot->ctx.rip = (uint64_t)process_kernel_alias_addr((uintptr_t)process_trampoline);
     slot->ctx.rflags = 0x200;
+    slot->ctx.cs = KERNEL_CS_SELECTOR;
+    slot->ctx.ss = KERNEL_DS_SELECTOR;
+    slot->ctx.root_table = paging_get_root_table();
     g_idle_process = slot;
     *out_pid = pid;
+    return 0;
+}
+
+int
+process_set_user_entry(uint32_t pid, uint64_t rip, uint64_t user_rsp)
+{
+    /* TODO: Wire this into process-manager launch policy once the first
+     * user-mode service/app path is selected and validated end-to-end. */
+    process_t *proc = process_find_by_pid(pid);
+    uint64_t higher_half_base = paging_get_higher_half_base();
+    if (!proc || rip == 0 || user_rsp == 0) {
+        return -1;
+    }
+    if (proc->stack_base < higher_half_base || proc->stack_top < higher_half_base) {
+        return -1;
+    }
+    uint64_t user_root = mm_context_root_table(proc->context_id);
+    if (paging_strip_low_slot_in_root(user_root) != 0) {
+        return -1;
+    }
+    if (paging_verify_user_root_no_low_slot(user_root, 1) != 0) {
+        return -1;
+    }
+    proc->ctx.rip = rip;
+    proc->ctx.cs = USER_CS_SELECTOR;
+    proc->ctx.ss = USER_DS_SELECTOR;
+    proc->ctx.user_rsp = user_rsp;
+    proc->ctx.rflags = 0x200;
     return 0;
 }
 
@@ -643,7 +772,8 @@ process_t *process_find_by_context(uint32_t context_id) {
 }
 
 uint32_t process_current_pid(void) {
-    return g_current_pid;
+    uint32_t *pid_ptr = (uint32_t *)(void *)process_kernel_alias_addr((uintptr_t)&g_current_pid);
+    return *pid_ptr;
 }
 
 void process_set_exit_status(process_t *process, int32_t exit_status) {
@@ -658,7 +788,7 @@ void process_yield(process_run_result_t result) {
         return;
     }
     g_last_run_result = result;
-    context_switch(&g_current_process->ctx, &g_sched_ctx);
+    context_switch_high(&g_current_process->ctx, &g_sched_ctx);
 }
 
 void process_block_on_ipc(process_t *process) {
@@ -734,8 +864,9 @@ uint32_t process_wake_by_context(uint32_t context_id) {
     }
 
     uint32_t woken = 0;
+    process_t *table = process_table();
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        process_t *proc = &g_processes[i];
+        process_t *proc = &table[i];
         if (proc->context_id != context_id) {
             continue;
         }
@@ -755,6 +886,26 @@ uint32_t process_wake_by_context(uint32_t context_id) {
 }
 
 int process_schedule_once(void) {
+    uint64_t higher_half_base = paging_get_higher_half_base();
+    uintptr_t here = 0;
+    uintptr_t rsp_cur = 0;
+    __asm__ volatile("leaq 0f(%%rip), %0\n0:" : "=r"(here));
+    __asm__ volatile("mov %%rsp, %0" : "=r"(rsp_cur));
+    if ((uint64_t)here < higher_half_base) {
+        uintptr_t high_fn = (uintptr_t)&process_schedule_once;
+        high_fn += (uintptr_t)higher_half_base;
+        int (*fn_high)(void) = (int (*)(void))high_fn;
+        return fn_high();
+    }
+    if ((uint64_t)rsp_cur < higher_half_base) {
+        /* TODO(ring3-phase2): Delete this trampoline once all scheduler/trap
+         * ingress paths are guaranteed to arrive on higher-half stacks. */
+        return process_run_on_sched_stack(process_schedule_once_impl);
+    }
+    return process_schedule_once_impl();
+}
+
+static int process_schedule_once_impl(void) {
     if (PROCESS_MAX_COUNT == 0) {
         return 1;
     }
@@ -794,21 +945,21 @@ int process_schedule_once(void) {
     g_current_pid = proc->pid;
     g_current_process = proc;
     critical_section_leave();
-    if (mm_context_activate(proc->context_id) != 0) {
-        serial_write("[sched] cr3 activate failed\n");
+    /* Ring3 transitions use TSS.rsp0 as the kernel entry stack. Keep it aligned
+     * to the scheduled process stack so user-mode interrupts/syscalls have a
+     * deterministic kernel stack landing point. */
+    cpu_set_kernel_stack((uint64_t)(proc->stack_top - 16u));
+    g_sched_ctx.root_table = paging_get_root_table();
+    proc->ctx.root_table = mm_context_root_table(proc->context_id);
+    if (proc->ctx.root_table == 0) {
+        serial_write("[sched] target root missing\n");
         critical_section_enter();
         g_current_process = 0;
         g_current_pid = 0;
         critical_section_leave();
         return 1;
     }
-    context_switch(&g_sched_ctx, &proc->ctx);
-    if (mm_context_activate(0) != 0) {
-        serial_write("[sched] root cr3 restore failed\n");
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
-    }
+    context_switch_high(&g_sched_ctx, &proc->ctx);
     process_run_result_t result = g_last_run_result;
     critical_section_enter();
     g_current_process = 0;
@@ -894,6 +1045,15 @@ int process_preempt_from_irq(irq_frame_t *frame) {
 
     uint64_t start = (uint64_t)(uintptr_t)&__kernel_start;
     uint64_t end = (uint64_t)(uintptr_t)&__kernel_end;
+    uint64_t low_start = start;
+    uint64_t low_end = end;
+    uint64_t higher_half = paging_get_higher_half_base();
+    if (start < higher_half) {
+        start += higher_half;
+    }
+    if (end < higher_half) {
+        end += higher_half;
+    }
     if (process_str_eq(g_current_process->name, "process-manager")) {
         static uint8_t logged_frame_dump;
         if (!logged_frame_dump) {
@@ -923,7 +1083,9 @@ int process_preempt_from_irq(irq_frame_t *frame) {
 #endif
         }
     }
-    if ((frame->rip < start || frame->rip >= end) && process_str_eq(g_current_process->name, "process-manager")) {
+    if ((frame->rip < start || frame->rip >= end) &&
+        (frame->rip < low_start || frame->rip >= low_end) &&
+        process_str_eq(g_current_process->name, "process-manager")) {
         static uint8_t logged_bad_frame;
         if (!logged_bad_frame) {
             logged_bad_frame = 1;
@@ -993,7 +1155,15 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     g_current_process->ctx.r13 = frame->r13;
     g_current_process->ctx.r14 = frame->r14;
     g_current_process->ctx.r15 = frame->r15;
-    g_current_process->ctx.rsp = (uint64_t)((uintptr_t)frame + sizeof(irq_frame_t));
+    g_current_process->ctx.cs = frame->cs;
+    if ((frame->cs & 0x3u) == 0x3u) {
+        g_current_process->ctx.user_rsp = frame->user_rsp;
+        g_current_process->ctx.ss = frame->user_ss;
+    } else {
+        g_current_process->ctx.rsp = (uint64_t)((uintptr_t)frame + sizeof(irq_frame_t));
+        g_current_process->ctx.user_rsp = g_current_process->ctx.rsp;
+        g_current_process->ctx.ss = KERNEL_DS_SELECTOR;
+    }
     g_current_process->ctx.rip = frame->rip;
     g_current_process->ctx.rflags = frame->rflags;
     if (g_ctx_watch_ctx == (uint64_t)(uintptr_t)&g_current_process->ctx) {
@@ -1020,6 +1190,9 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     ready_queue_enqueue(g_current_process);
     g_last_run_result = PROCESS_RUN_YIELDED;
     process_clear_resched();
+    if ((frame->cs & 0x3u) == 0x3u) {
+        frame->cs = KERNEL_CS_SELECTOR;
+    }
     frame->rip = (uint64_t)(uintptr_t)process_preempt_trampoline;
     return 1;
 }

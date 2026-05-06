@@ -10,11 +10,18 @@ typedef enum {
 } EFI_GRAPHICS_PIXEL_FORMAT;
 
 typedef struct {
+    UINT32 RedMask;
+    UINT32 GreenMask;
+    UINT32 BlueMask;
+    UINT32 ReservedMask;
+} EFI_PIXEL_BITMASK;
+
+typedef struct {
     UINT32 Version;
     UINT32 HorizontalResolution;
     UINT32 VerticalResolution;
     EFI_GRAPHICS_PIXEL_FORMAT PixelFormat;
-    UINT32 PixelInformation;
+    EFI_PIXEL_BITMASK PixelInformation;
     UINT32 PixelsPerScanLine;
 } EFI_GRAPHICS_OUTPUT_MODE_INFORMATION;
 
@@ -24,14 +31,14 @@ typedef struct _EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE {
     EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *Info;
     UINTN SizeOfInfo;
     UINT64 FrameBufferBase;
-    UINT64 FrameBufferSize;
+    UINTN FrameBufferSize;
 } EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE;
 
 typedef struct {
-    EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *Mode;
     void *QueryMode;
     void *SetMode;
     void *Blt;
+    EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *Mode;
 } EFI_GRAPHICS_OUTPUT_PROTOCOL;
 
 typedef EFI_STATUS (EFIAPI *EFI_GOP_SET_MODE)(
@@ -393,7 +400,7 @@ static int capture_framebuffer_snapshot(EFI_SYSTEM_TABLE *system,
     static int gop_locate_failed = 0;
     static int gop_handle_locate_failed = 0;
     static const EFI_GUID gop_guid =
-        { 0x9042a9de, 0x23dc, 0x4a38, { 0x96, 0xfb, 0x7a, 0xd4, 0x76, 0x2b, 0x04, 0x6f } };
+        { 0x9042a9de, 0x23dc, 0x4a38, { 0x96, 0xfb, 0x7a, 0xde, 0xd0, 0x80, 0x51, 0x6a } };
     EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = 0;
     EFI_STATUS status = EFI_NOT_FOUND;
     EFI_HANDLE *handles = 0;

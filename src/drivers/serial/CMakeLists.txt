@@ -37,7 +37,7 @@ if (AS_ENABLE)
             1
             -
             0
-            ipc.basic
+            io.port
             0
     DEPENDS ${WASM_SERIAL_DRIVER_WASM} make_wasmos_app
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

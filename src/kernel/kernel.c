@@ -6,6 +6,7 @@
 #include "paging.h"
 #include "process.h"
 #include "process_manager.h"
+#include "syscall.h"
 #include "serial.h"
 #include "timer.h"
 #include "wasmos_app.h"
@@ -15,8 +16,11 @@
 #include "physmem.h"
 #include "io.h"
 #include "framebuffer.h"
+#include "capability.h"
+#include "slab.h"
 
 #include <stdint.h>
+#include <string.h>
 #include "wasm3.h"
 
 /*
@@ -27,6 +31,9 @@
 
 static uint32_t g_chardev_service_endpoint = IPC_ENDPOINT_NONE;
 static const boot_info_t *g_boot_info;
+static boot_info_t g_boot_info_shadow;
+extern const uint8_t _binary_ring3_native_probe_bin_start[];
+extern const uint8_t _binary_ring3_native_probe_bin_end[];
 
 typedef struct {
     uint64_t addr;
@@ -50,10 +57,44 @@ typedef struct {
 static preempt_test_state_t g_preempt_test_state;
 static const uint8_t g_preempt_test_enabled = 0;
 static const uint8_t g_skip_wasm_boot = 0;
+#ifndef WASMOS_RING3_SMOKE_DEFAULT
+#define WASMOS_RING3_SMOKE_DEFAULT 0
+#endif
+#ifndef WASMOS_RING3_STRICT_DEFAULT
+#define WASMOS_RING3_STRICT_DEFAULT 1
+#endif
+#ifndef WASMOS_LOW_SLOT_SWEEP_DEFAULT
+#define WASMOS_LOW_SLOT_SWEEP_DEFAULT 1
+#endif
+#ifndef WASMOS_LOW_SLOT_SWEEP_LEVEL_DEFAULT
+#define WASMOS_LOW_SLOT_SWEEP_LEVEL_DEFAULT 2
+#endif
+/* Keep adversarial smoke probes opt-in for dedicated ring3 test targets; they
+ * add noise to normal boot/CLI workflows and are not required for baseline
+ * ring3 policy mode. */
+static const uint8_t g_ring3_smoke_enabled = WASMOS_RING3_SMOKE_DEFAULT;
+static const uint8_t g_ring3_strict_enabled = WASMOS_RING3_STRICT_DEFAULT;
+static const uint8_t g_low_slot_sweep_enabled = WASMOS_LOW_SLOT_SWEEP_DEFAULT;
+static const uint8_t g_low_slot_sweep_level = WASMOS_LOW_SLOT_SWEEP_LEVEL_DEFAULT;
+
+typedef struct {
+    uint32_t fault_pid;
+    uint32_t fault_write_pid;
+    uint32_t fault_exec_pid;
+    uint8_t fault_ok;
+    uint8_t fault_write_ok;
+    uint8_t fault_exec_ok;
+    uint8_t done;
+} ring3_fault_policy_state_t;
+static ring3_fault_policy_state_t g_ring3_fault_policy_state;
 
 typedef struct {
     const boot_info_t *boot_info;
     uint8_t started;
+    uint8_t pm_wait_owner_test_injected;
+    uint8_t pm_kill_owner_test_injected;
+    uint8_t pm_status_owner_test_injected;
+    uint8_t pm_spawn_owner_test_injected;
     uint8_t phase;
     uint8_t pending_kind;
     uint32_t reply_endpoint;
@@ -64,9 +105,166 @@ typedef struct {
     uint32_t hw_discovery_index;
     uint8_t wasm3_probe_done;
 } init_state_t;
+static init_state_t g_init_state;
 
 static int
 bytes_eq(const uint8_t *a, uint32_t a_len, const char *b);
+static int
+boot_info_build_shadow(const boot_info_t *src, boot_info_t *dst);
+
+static void *
+boot_shadow_alloc_low(uint64_t size_bytes, uint64_t *out_phys)
+{
+    const uint64_t page_size = 0x1000ULL;
+    const uint64_t max_low = 64ULL * 1024ULL * 1024ULL;
+    if (size_bytes == 0) {
+        return 0;
+    }
+    uint64_t pages = (size_bytes + page_size - 1ULL) / page_size;
+    if (pages == 0) {
+        return 0;
+    }
+    uint64_t phys = pfa_alloc_pages_below(pages, max_low);
+    if (!phys) {
+        return 0;
+    }
+    void *low = (void *)(uintptr_t)phys;
+    memset(low, 0, (size_t)(pages * page_size));
+    if (out_phys) {
+        *out_phys = phys;
+    }
+    return low;
+}
+
+static int
+boot_shadow_copy_blob(void **dst_ptr,
+                      const void *src_ptr,
+                      uint64_t size_bytes)
+{
+    if (!dst_ptr) {
+        return -1;
+    }
+    *dst_ptr = 0;
+    if (!src_ptr || size_bytes == 0) {
+        return 0;
+    }
+    uint64_t dst_phys = 0;
+    void *dst_low = boot_shadow_alloc_low(size_bytes, &dst_phys);
+    if (!dst_low) {
+        return -1;
+    }
+    memcpy(dst_low, src_ptr, (size_t)size_bytes);
+    *dst_ptr = (void *)(uintptr_t)(dst_phys + KERNEL_HIGHER_HALF_BASE);
+    return 0;
+}
+
+static int
+boot_info_build_shadow(const boot_info_t *src, boot_info_t *dst)
+{
+    if (!src || !dst) {
+        return -1;
+    }
+    memcpy(dst, src, sizeof(*dst));
+    if (boot_shadow_copy_blob(&dst->rsdp,
+                              src->rsdp,
+                              (uint64_t)src->rsdp_length) != 0) {
+        return -1;
+    }
+    if (boot_shadow_copy_blob(&dst->boot_config,
+                              src->boot_config,
+                              (uint64_t)src->boot_config_size) != 0) {
+        return -1;
+    }
+    if (!(src->flags & BOOT_INFO_FLAG_MODULES_PRESENT) ||
+        !src->modules ||
+        src->module_count == 0 ||
+        src->module_entry_size < sizeof(boot_module_t)) {
+        return 0;
+    }
+
+    uint64_t table_size = (uint64_t)src->module_count * (uint64_t)src->module_entry_size;
+    if (table_size == 0 || table_size > 0xFFFFFFFFULL) {
+        return -1;
+    }
+
+    uint64_t table_phys = 0;
+    void *table_low = boot_shadow_alloc_low(table_size, &table_phys);
+    if (!table_low) {
+        return -1;
+    }
+    memcpy(table_low, src->modules, (size_t)table_size);
+    dst->modules = (void *)(uintptr_t)(table_phys + KERNEL_HIGHER_HALF_BASE);
+
+    uint8_t *mods_low = (uint8_t *)table_low;
+    for (uint32_t i = 0; i < src->module_count; ++i) {
+        boot_module_t *mod = (boot_module_t *)(mods_low + (uint64_t)i * (uint64_t)src->module_entry_size);
+        if (!mod || mod->base == 0 || mod->size == 0) {
+            continue;
+        }
+        if (mod->size > 0xFFFFFFFFULL) {
+            return -1;
+        }
+        void *shadow_blob_high = 0;
+        const void *blob_src = (const void *)(uintptr_t)mod->base;
+        if (boot_shadow_copy_blob(&shadow_blob_high, blob_src, mod->size) != 0) {
+            return -1;
+        }
+        mod->base = (uint64_t)(uintptr_t)shadow_blob_high;
+    }
+    return 0;
+}
+
+static void
+run_low_slot_sweep_diagnostic(void)
+{
+    if (!g_low_slot_sweep_enabled) {
+        return;
+    }
+    uint32_t active = process_count_active();
+    uint32_t pid = 0;
+    uint32_t parent_pid = 0;
+    const char *name = 0;
+    uint8_t failed = 0;
+
+    serial_write("[diag] low-slot sweep start\n");
+    for (uint32_t i = 0; i < active; ++i) {
+        if (process_info_at_ex(i, &pid, &parent_pid, &name) != 0) {
+            continue;
+        }
+        process_t *proc = process_get(pid);
+        if (!proc || proc->is_idle || proc->context_id == 0) {
+            continue;
+        }
+        if ((proc->ctx.cs & 0x3u) != 0x3u && g_low_slot_sweep_level < 2u) {
+            continue;
+        }
+        uint64_t root = mm_context_root_table(proc->context_id);
+        if (root == 0) {
+            continue;
+        }
+        if (paging_strip_low_slot_in_root(root) != 0) {
+            serial_printf("[diag] low-slot sweep fail: strip pid=%u name=%s ctx=%u root=%016llx\n",
+                          pid,
+                          name ? name : "(null)",
+                          proc->context_id,
+                          (unsigned long long)root);
+            failed = 1;
+            break;
+        }
+        if (paging_verify_user_root_no_low_slot(root, 1) != 0) {
+            serial_printf("[diag] low-slot sweep fail: verify pid=%u name=%s ctx=%u root=%016llx\n",
+                          pid,
+                          name ? name : "(null)",
+                          proc->context_id,
+                          (unsigned long long)root);
+            failed = 1;
+            break;
+        }
+    }
+    if (!failed) {
+        serial_write("[diag] low-slot sweep ok\n");
+    }
+}
 
 static uint32_t
 boot_module_index_by_app_name(const boot_info_t *info, const char *name)
@@ -240,6 +438,12 @@ init_send_fs_probe(process_t *process, init_state_t *state)
 }
 
 static int
+init_post_fat_devices_ready(void)
+{
+    return process_manager_framebuffer_endpoint() != IPC_ENDPOINT_NONE;
+}
+
+static int
 wasmos_endpoint_resolve(uint32_t owner_context_id,
                         const uint8_t *name,
                         uint32_t name_len,
@@ -286,9 +490,10 @@ wasmos_capability_grant(uint32_t owner_context_id,
                         uint32_t name_len,
                         uint32_t flags)
 {
-    (void)owner_context_id;
-    (void)flags;
     if (bytes_eq(name, name_len, "ipc.basic")) {
+        return 0;
+    }
+    if (capability_grant_name(owner_context_id, name, name_len, flags) == 0) {
         return 0;
     }
     return -1;
@@ -471,6 +676,529 @@ preempt_observer_entry(process_t *process, void *arg)
 }
 
 static process_run_result_t
+ring3_probe_bootstrap_entry(process_t *process, void *arg)
+{
+    (void)arg;
+    if (process) {
+        process_set_exit_status(process, -1);
+    }
+    return PROCESS_RUN_EXITED;
+}
+
+static process_run_result_t
+ring3_fault_policy_entry(process_t *process, void *arg)
+{
+    ring3_fault_policy_state_t *state = (ring3_fault_policy_state_t *)arg;
+    int32_t exit_status = 0;
+    int rc = 0;
+
+    if (!process || !state) {
+        return PROCESS_RUN_IDLE;
+    }
+    if (state->done) {
+        return PROCESS_RUN_EXITED;
+    }
+
+    if (!state->fault_ok) {
+        rc = process_get_exit_status(state->fault_pid, &exit_status);
+        if (rc == 0) {
+            if (exit_status == -11) {
+                state->fault_ok = 1;
+                serial_write("[test] ring3 fault exit status ok\n");
+            } else {
+                serial_write("[test] ring3 fault exit status mismatch\n");
+                process_set_exit_status(process, -1);
+                return PROCESS_RUN_EXITED;
+            }
+        }
+    }
+    if (!state->fault_write_ok) {
+        rc = process_get_exit_status(state->fault_write_pid, &exit_status);
+        if (rc == 0) {
+            if (exit_status == -11) {
+                state->fault_write_ok = 1;
+                serial_write("[test] ring3 fault write exit status ok\n");
+            } else {
+                serial_write("[test] ring3 fault write exit status mismatch\n");
+                process_set_exit_status(process, -1);
+                return PROCESS_RUN_EXITED;
+            }
+        }
+    }
+    if (!state->fault_exec_ok) {
+        rc = process_get_exit_status(state->fault_exec_pid, &exit_status);
+        if (rc == 0) {
+            if (exit_status == -11) {
+                state->fault_exec_ok = 1;
+                serial_write("[test] ring3 fault exec exit status ok\n");
+            } else {
+                serial_write("[test] ring3 fault exec exit status mismatch\n");
+                process_set_exit_status(process, -1);
+                return PROCESS_RUN_EXITED;
+            }
+        }
+    }
+
+    if (state->fault_ok && state->fault_write_ok && state->fault_exec_ok) {
+        state->done = 1;
+        process_set_exit_status(process, 0);
+        return PROCESS_RUN_EXITED;
+    }
+    return PROCESS_RUN_YIELDED;
+}
+
+static int
+map_linear_pages(uint64_t root_table,
+                 uint64_t virt_base,
+                 uint64_t phys_base,
+                 uint32_t size,
+                 uint32_t map_flags)
+{
+    if (!root_table || !virt_base || !phys_base || size == 0) {
+        return -1;
+    }
+    uint64_t page_count = (size + 0xFFFULL) / 0x1000ULL;
+    for (uint64_t i = 0; i < page_count; ++i) {
+        uint64_t v = virt_base + i * 0x1000ULL;
+        uint64_t p = phys_base + i * 0x1000ULL;
+        (void)paging_unmap_4k_in_root(root_table, v);
+        if (paging_map_4k_in_root(root_table, v, p, map_flags) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int
+spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
+{
+    /* Ring3 stress loop:
+     * - probe IPC syscall boundary with an invalid notify endpoint (deny path)
+     *   and a process-owned notification endpoint (allow path)
+     * - probe IPC call boundary with invalid/permission-denied endpoints and a
+     *   kernel echo endpoint (allow path)
+     * - issue an explicit YIELD syscall from CPL3
+     * - execute many GETPID syscalls from CPL3 to exercise timer-IRQ preempt
+     *   + trampoline return under repeated user->kernel transitions
+     * - exit cleanly once done. */
+    static const uint8_t ring3_code[] = {
+        0xBF, 0xFF, 0xFF, 0xFF, 0xFF, /* mov edi, 0xFFFFFFFF (invalid ep) */
+        0xB8, 0x05, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_IPC_NOTIFY */
+        0xCD, 0x80,                   /* int 0x80 */
+        0x48, 0xBF,                   /* mov rdi, 0x0000000100000000 (arg width invalid) */
+        0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00,
+        0xB8, 0x05, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_IPC_NOTIFY */
+        0xCD, 0x80,                   /* int 0x80 */
+        0xBF, 0x00, 0x00, 0x00, 0x00, /* mov edi, <ring3 notify ep> (patched) */
+        0xB8, 0x05, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_IPC_NOTIFY */
+        0xCD, 0x80,                   /* int 0x80 */
+        0xBF, 0x00, 0x00, 0x00, 0x00, /* mov edi, <kernel notify control ep> (patched) */
+        0xB8, 0x05, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_IPC_NOTIFY */
+        0xCD, 0x80,                   /* int 0x80 */
+        0xBF, 0xFF, 0xFF, 0xFF, 0xFF, /* mov edi, 0xFFFFFFFF (invalid ep) */
+        0xBE, 0x21, 0x43, 0x00, 0x00, /* mov esi, 0x4321 (msg type) */
+        0xBA, 0xBE, 0xBA, 0xFE, 0xCA, /* mov edx, 0xCAFEBABE (arg0) */
+        0xB8, 0x06, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_IPC_CALL */
+        0xCD, 0x80,                   /* int 0x80 */
+        0xBF, 0x00, 0x00, 0x00, 0x00, /* mov edi, <kernel denied call ep> (patched) */
+        0xBE, 0x55, 0x22, 0x00, 0x00, /* mov esi, 0x2255 (msg type) */
+        0xBA, 0xCD, 0xAB, 0x00, 0x00, /* mov edx, 0x0000ABCD (arg0) */
+        0xB8, 0x06, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_IPC_CALL */
+        0xCD, 0x80,                   /* int 0x80 */
+        0xBF, 0x00, 0x00, 0x00, 0x00, /* mov edi, <process-manager call ep> (patched) */
+        0xBE, 0x56, 0x66, 0x00, 0x00, /* mov esi, 0x6656 (control deny probe type) */
+        0xBA, 0xC0, 0xDE, 0x00, 0x00, /* mov edx, 0x0000DEC0 (arg0) */
+        0xB8, 0x06, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_IPC_CALL */
+        0xCD, 0x80,                   /* int 0x80 */
+        0xBF, 0x00, 0x00, 0x00, 0x00, /* mov edi, <kernel echo call ep> (patched) */
+        0xBE, 0x78, 0x56, 0x00, 0x00, /* mov esi, 0x5678 (msg type) */
+        0xBA, 0xEF, 0xBE, 0xAD, 0xDE, /* mov edx, 0xDEADBEEF (arg0) */
+        0xB8, 0x06, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_IPC_CALL */
+        0xCD, 0x80,                   /* int 0x80 */
+        0xBF, 0x00, 0x00, 0x00, 0x00, /* mov edi, <kernel echo call ep> (patched) */
+        0xBE, 0xBC, 0x9A, 0x00, 0x00, /* mov esi, 0x9ABC (correlation probe type) */
+        0xBA, 0x78, 0x56, 0x34, 0x12, /* mov edx, 0x12345678 (probe arg0) */
+        0xB8, 0x06, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_IPC_CALL */
+        0xCD, 0x80,                   /* int 0x80 */
+        0xBF, 0x00, 0x00, 0x00, 0x00, /* mov edi, <kernel echo call ep> (patched) */
+        0xBE, 0xBD, 0x9A, 0x00, 0x00, /* mov esi, 0x9ABD (source-auth probe type) */
+        0xBA, 0x0D, 0xF0, 0xAD, 0x0B, /* mov edx, 0x0BADF00D (probe arg0) */
+        0xB8, 0x06, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_IPC_CALL */
+        0xCD, 0x80,                   /* int 0x80 */
+        0xB8, 0x03, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_YIELD */
+        0xCD, 0x80,                   /* int 0x80 */
+        0xB9, 0x00, 0x10, 0x00, 0x00, /* mov ecx, 4096 */
+        0xB8, 0x01, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_GETPID */
+        0xCD, 0x80,                   /* int 0x80 */
+        0xFF, 0xC9,                   /* dec ecx */
+        0x75, 0xF5,                   /* jnz <mov eax, GETPID> */
+        0x31, 0xFF,                   /* xor edi, edi (exit status 0) */
+        0xB8, 0x02, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_EXIT */
+        0xCD, 0x80,                   /* int 0x80 */
+        0xEB, 0xFE                    /* should not return: spin if it does */
+    };
+    uint8_t ring3_code_patched[sizeof(ring3_code)];
+
+    process_t *proc = 0;
+    mm_context_t *ctx = 0;
+    mem_region_t linear = {0};
+    mem_region_t stack = {0};
+    uint64_t user_rip = 0;
+    uint64_t user_rsp = 0;
+    uint32_t ring3_notify_ep = IPC_ENDPOINT_NONE;
+    uint32_t ring3_notify_control_ep = IPC_ENDPOINT_NONE;
+    uint32_t ring3_call_denied_ep = IPC_ENDPOINT_NONE;
+    uint32_t ring3_call_control_ep = IPC_ENDPOINT_NONE;
+    uint32_t ring3_call_echo_ep = IPC_ENDPOINT_NONE;
+
+    if (!out_pid) {
+        return -1;
+    }
+    if (process_spawn_as(parent_pid, "ring3-smoke", ring3_probe_bootstrap_entry, 0, out_pid) != 0) {
+        return -1;
+    }
+
+    proc = process_get(*out_pid);
+    if (!proc) {
+        return -1;
+    }
+    if (ipc_notification_create(proc->context_id, &ring3_notify_ep) != IPC_OK ||
+        ring3_notify_ep == IPC_ENDPOINT_NONE) {
+        return -1;
+    }
+    if (ipc_notification_create(IPC_CONTEXT_KERNEL, &ring3_notify_control_ep) != IPC_OK ||
+        ring3_notify_control_ep == IPC_ENDPOINT_NONE) {
+        return -1;
+    }
+    if (ipc_endpoint_create(IPC_CONTEXT_KERNEL, &ring3_call_denied_ep) != IPC_OK ||
+        ring3_call_denied_ep == IPC_ENDPOINT_NONE) {
+        return -1;
+    }
+    if (ipc_endpoint_create(IPC_CONTEXT_KERNEL, &ring3_call_echo_ep) != IPC_OK ||
+        ring3_call_echo_ep == IPC_ENDPOINT_NONE) {
+        return -1;
+    }
+    ring3_call_control_ep = process_manager_endpoint();
+    if (ring3_call_control_ep == IPC_ENDPOINT_NONE) {
+        return -1;
+    }
+    syscall_set_ipc_call_echo_endpoint(ring3_call_echo_ep);
+    syscall_set_ipc_call_control_deny_endpoint(ring3_call_control_ep);
+    syscall_set_ipc_notify_control_deny_endpoint(ring3_notify_control_ep);
+    ctx = mm_context_get(proc->context_id);
+    if (!ctx) {
+        return -1;
+    }
+    if (mm_context_region_for_type(ctx, MEM_REGION_WASM_LINEAR, &linear) != 0 ||
+        mm_context_region_for_type(ctx, MEM_REGION_STACK, &stack) != 0) {
+        return -1;
+    }
+    if (linear.phys_base == 0 || linear.size < sizeof(ring3_code) || stack.base == 0 || stack.size < 16u) {
+        return -1;
+    }
+
+    if (map_linear_pages(ctx->root_table,
+                         linear.base,
+                         linear.phys_base,
+                         (uint32_t)sizeof(ring3_code),
+                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) != 0) {
+        return -1;
+    }
+    memcpy(ring3_code_patched, ring3_code, sizeof(ring3_code_patched));
+    /* Patch mov edi immediate for the valid ring3-owned notification endpoint.
+     * Layout offset: first mov(5) + mov eax(5) + int80(2) + mov edi opcode(1). */
+    {
+        const uint32_t ep_imm_off = 30u;
+        ring3_code_patched[ep_imm_off + 0] = (uint8_t)(ring3_notify_ep & 0xFFu);
+        ring3_code_patched[ep_imm_off + 1] = (uint8_t)((ring3_notify_ep >> 8) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 2] = (uint8_t)((ring3_notify_ep >> 16) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 3] = (uint8_t)((ring3_notify_ep >> 24) & 0xFFu);
+    }
+    {
+        const uint32_t ep_imm_off = 42u;
+        ring3_code_patched[ep_imm_off + 0] = (uint8_t)(ring3_notify_control_ep & 0xFFu);
+        ring3_code_patched[ep_imm_off + 1] = (uint8_t)((ring3_notify_control_ep >> 8) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 2] = (uint8_t)((ring3_notify_control_ep >> 16) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 3] = (uint8_t)((ring3_notify_control_ep >> 24) & 0xFFu);
+    }
+    {
+        const uint32_t ep_imm_off = 76u;
+        ring3_code_patched[ep_imm_off + 0] = (uint8_t)(ring3_call_denied_ep & 0xFFu);
+        ring3_code_patched[ep_imm_off + 1] = (uint8_t)((ring3_call_denied_ep >> 8) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 2] = (uint8_t)((ring3_call_denied_ep >> 16) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 3] = (uint8_t)((ring3_call_denied_ep >> 24) & 0xFFu);
+    }
+    {
+        const uint32_t ep_imm_off = 98u;
+        ring3_code_patched[ep_imm_off + 0] = (uint8_t)(ring3_call_control_ep & 0xFFu);
+        ring3_code_patched[ep_imm_off + 1] = (uint8_t)((ring3_call_control_ep >> 8) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 2] = (uint8_t)((ring3_call_control_ep >> 16) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 3] = (uint8_t)((ring3_call_control_ep >> 24) & 0xFFu);
+    }
+    {
+        const uint32_t ep_imm_off = 120u;
+        ring3_code_patched[ep_imm_off + 0] = (uint8_t)(ring3_call_echo_ep & 0xFFu);
+        ring3_code_patched[ep_imm_off + 1] = (uint8_t)((ring3_call_echo_ep >> 8) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 2] = (uint8_t)((ring3_call_echo_ep >> 16) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 3] = (uint8_t)((ring3_call_echo_ep >> 24) & 0xFFu);
+    }
+    {
+        const uint32_t ep_imm_off = 142u;
+        ring3_code_patched[ep_imm_off + 0] = (uint8_t)(ring3_call_echo_ep & 0xFFu);
+        ring3_code_patched[ep_imm_off + 1] = (uint8_t)((ring3_call_echo_ep >> 8) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 2] = (uint8_t)((ring3_call_echo_ep >> 16) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 3] = (uint8_t)((ring3_call_echo_ep >> 24) & 0xFFu);
+    }
+    {
+        const uint32_t ep_imm_off = 164u;
+        ring3_code_patched[ep_imm_off + 0] = (uint8_t)(ring3_call_echo_ep & 0xFFu);
+        ring3_code_patched[ep_imm_off + 1] = (uint8_t)((ring3_call_echo_ep >> 8) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 2] = (uint8_t)((ring3_call_echo_ep >> 16) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 3] = (uint8_t)((ring3_call_echo_ep >> 24) & 0xFFu);
+    }
+    if (mm_copy_to_user(proc->context_id,
+                        linear.base,
+                        ring3_code_patched,
+                        (uint32_t)sizeof(ring3_code_patched)) != 0) {
+        return -1;
+    }
+    if (map_linear_pages(ctx->root_table,
+                         linear.base,
+                         linear.phys_base,
+                         (uint32_t)sizeof(ring3_code),
+                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_EXEC | MEM_REGION_FLAG_USER) != 0) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < ctx->region_count; ++i) {
+        mem_region_t *region = &ctx->regions[i];
+        if (region->type == MEM_REGION_WASM_LINEAR) {
+            region->flags |= MEM_REGION_FLAG_EXEC;
+            region->flags &= ~MEM_REGION_FLAG_WRITE;
+            break;
+        }
+    }
+
+    user_rip = linear.base;
+    user_rsp = stack.base + stack.size - 16u;
+    if (process_set_user_entry(*out_pid, user_rip, user_rsp) != 0) {
+        return -1;
+    }
+
+    serial_printf("[kernel] ring3 smoke pid=%016llx\n", (unsigned long long)*out_pid);
+    return 0;
+}
+
+static int
+spawn_ring3_native_probe_process(uint32_t parent_pid, uint32_t *out_pid)
+{
+    process_t *proc = 0;
+    mm_context_t *ctx = 0;
+    mem_region_t linear = {0};
+    mem_region_t stack = {0};
+    uint64_t user_rip = 0;
+    uint64_t user_rsp = 0;
+    const uint8_t *src = _binary_ring3_native_probe_bin_start;
+    uint32_t code_size = (uint32_t)((uintptr_t)_binary_ring3_native_probe_bin_end -
+                                    (uintptr_t)_binary_ring3_native_probe_bin_start);
+
+    if (!out_pid || !src || code_size == 0) {
+        return -1;
+    }
+    if (process_spawn_as(parent_pid, "ring3-native", ring3_probe_bootstrap_entry, 0, out_pid) != 0) {
+        return -1;
+    }
+    proc = process_get(*out_pid);
+    if (!proc) {
+        return -1;
+    }
+    ctx = mm_context_get(proc->context_id);
+    if (!ctx) {
+        return -1;
+    }
+    if (mm_context_region_for_type(ctx, MEM_REGION_WASM_LINEAR, &linear) != 0 ||
+        mm_context_region_for_type(ctx, MEM_REGION_STACK, &stack) != 0) {
+        return -1;
+    }
+    if (linear.phys_base == 0 || linear.size < code_size || stack.base == 0 || stack.size < 16u) {
+        return -1;
+    }
+    if (map_linear_pages(ctx->root_table,
+                         linear.base,
+                         linear.phys_base,
+                         code_size,
+                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) != 0) {
+        return -1;
+    }
+    if (mm_copy_to_user(proc->context_id, linear.base, src, code_size) != 0) {
+        return -1;
+    }
+    if (map_linear_pages(ctx->root_table,
+                         linear.base,
+                         linear.phys_base,
+                         code_size,
+                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_EXEC | MEM_REGION_FLAG_USER) != 0) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < ctx->region_count; ++i) {
+        mem_region_t *region = &ctx->regions[i];
+        if (region->type == MEM_REGION_WASM_LINEAR) {
+            region->flags |= MEM_REGION_FLAG_EXEC;
+            region->flags &= ~MEM_REGION_FLAG_WRITE;
+            break;
+        }
+    }
+    user_rip = linear.base;
+    user_rsp = stack.base + stack.size - 16u;
+    if (process_set_user_entry(*out_pid, user_rip, user_rsp) != 0) {
+        return -1;
+    }
+    serial_printf("[kernel] ring3 native pid=%016llx\n", (unsigned long long)*out_pid);
+    return 0;
+}
+
+static int
+spawn_ring3_fault_probe_named(uint32_t parent_pid,
+                              const char *name,
+                              const uint8_t *code,
+                              uint32_t code_size,
+                              uint32_t *out_pid);
+
+static int
+spawn_ring3_fault_probe_process(uint32_t parent_pid, uint32_t *out_pid)
+{
+    static const uint8_t ring3_fault_code[] = {
+        0xB8, 0x01, 0x00, 0x00, 0x00,       /* mov eax, WASMOS_SYSCALL_GETPID */
+        0xCD, 0x80,                         /* int 0x80 */
+        0x48, 0x8B, 0x04, 0x25, 0x00, 0x00, 0x00, 0x00, /* mov rax, [0] */
+        0xEB, 0xFE                          /* spin if fault unexpectedly returns */
+    };
+    return spawn_ring3_fault_probe_named(parent_pid,
+                                         "ring3-fault",
+                                         ring3_fault_code,
+                                         (uint32_t)sizeof(ring3_fault_code),
+                                         out_pid);
+}
+
+static int
+spawn_ring3_fault_write_probe_process(uint32_t parent_pid, uint32_t *out_pid)
+{
+    static const uint8_t ring3_fault_write_code[] = {
+        0xB8, 0x01, 0x00, 0x00, 0x00,       /* mov eax, WASMOS_SYSCALL_GETPID */
+        0xCD, 0x80,                         /* int 0x80 */
+        0xC7, 0x05, 0x00, 0x00, 0x00, 0x00, /* mov dword ptr [rip+0], imm32 */
+        0x34, 0x12, 0x00, 0x00,             /*   0x1234 */
+        0xEB, 0xFE                          /* spin if fault unexpectedly returns */
+    };
+    return spawn_ring3_fault_probe_named(parent_pid,
+                                         "ring3-fault-write",
+                                         ring3_fault_write_code,
+                                         (uint32_t)sizeof(ring3_fault_write_code),
+                                         out_pid);
+}
+
+static int
+spawn_ring3_fault_exec_probe_process(uint32_t parent_pid, uint32_t *out_pid)
+{
+    static const uint8_t ring3_fault_exec_code[] = {
+        0xB8, 0x01, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_GETPID */
+        0xCD, 0x80,                   /* int 0x80 */
+        0x50,                         /* push rax (touch/map stack page) */
+        0x48, 0x8D, 0x44, 0x24, 0x00, /* lea rax, [rsp+0] */
+        0xFF, 0xE0,                   /* jmp rax (stack is mapped but non-exec) */
+        0xEB, 0xFE                    /* spin if fault unexpectedly returns */
+    };
+    return spawn_ring3_fault_probe_named(parent_pid,
+                                         "ring3-fault-exec",
+                                         ring3_fault_exec_code,
+                                         (uint32_t)sizeof(ring3_fault_exec_code),
+                                         out_pid);
+}
+
+static int
+spawn_ring3_fault_probe_named(uint32_t parent_pid,
+                              const char *name,
+                              const uint8_t *code,
+                              uint32_t code_size,
+                              uint32_t *out_pid)
+{
+
+    process_t *proc = 0;
+    mm_context_t *ctx = 0;
+    mem_region_t linear = {0};
+    mem_region_t stack = {0};
+    uint64_t stack_top_page_virt = 0;
+    uint64_t stack_top_page_phys = 0;
+    uint64_t user_rip = 0;
+    uint64_t user_rsp = 0;
+    if (!out_pid || !name || !code || code_size == 0) {
+        return -1;
+    }
+    if (process_spawn_as(parent_pid, name, ring3_probe_bootstrap_entry, 0, out_pid) != 0) {
+        return -1;
+    }
+    proc = process_get(*out_pid);
+    if (!proc) {
+        return -1;
+    }
+    ctx = mm_context_get(proc->context_id);
+    if (!ctx) {
+        return -1;
+    }
+    if (mm_context_region_for_type(ctx, MEM_REGION_WASM_LINEAR, &linear) != 0 ||
+        mm_context_region_for_type(ctx, MEM_REGION_STACK, &stack) != 0) {
+        return -1;
+    }
+    if (linear.phys_base == 0 || linear.size < code_size || stack.base == 0 || stack.size < 16u) {
+        return -1;
+    }
+    if (map_linear_pages(ctx->root_table,
+                         linear.base,
+                         linear.phys_base,
+                         code_size,
+                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) != 0) {
+        return -1;
+    }
+    if (mm_copy_to_user(proc->context_id, linear.base, code, code_size) != 0) {
+        return -1;
+    }
+    if (map_linear_pages(ctx->root_table,
+                         linear.base,
+                         linear.phys_base,
+                         code_size,
+                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_EXEC | MEM_REGION_FLAG_USER) != 0) {
+        return -1;
+    }
+    /* Ensure at least one user stack page is present so exec-fault probes can
+     * reach their NX jump path instead of terminating on a non-present stack
+     * write first. Keep stack non-executable by mapping RW only. */
+    stack_top_page_virt = (stack.base + stack.size - 1u) & ~0xFFFULL;
+    stack_top_page_phys = (stack.phys_base + stack.size - 1u) & ~0xFFFULL;
+    if (map_linear_pages(ctx->root_table,
+                         stack_top_page_virt,
+                         stack_top_page_phys,
+                         0x1000u,
+                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) != 0) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < ctx->region_count; ++i) {
+        mem_region_t *region = &ctx->regions[i];
+        if (region->type == MEM_REGION_WASM_LINEAR) {
+            region->flags |= MEM_REGION_FLAG_EXEC;
+            region->flags &= ~MEM_REGION_FLAG_WRITE;
+            break;
+        }
+    }
+    user_rip = linear.base;
+    user_rsp = stack.base + stack.size - 16u;
+    if (process_set_user_entry(*out_pid, user_rip, user_rsp) != 0) {
+        return -1;
+    }
+    serial_printf("[kernel] %s pid=%016llx\n", name, (unsigned long long)*out_pid);
+    return 0;
+}
+
+static process_run_result_t
 init_entry(process_t *process, void *arg)
 {
     init_state_t *state = (init_state_t *)arg;
@@ -507,6 +1235,10 @@ init_entry(process_t *process, void *arg)
         trace_write("[init] process manager pid=");
         trace_do(serial_write_hex64(pm_pid));
         state->started = 1;
+        state->pm_wait_owner_test_injected = 0;
+        state->pm_kill_owner_test_injected = 0;
+        state->pm_status_owner_test_injected = 0;
+        state->pm_spawn_owner_test_injected = 0;
         if (state->hw_discovery_index == 0xFFFFFFFFu) {
             serial_write("[init] hw-discovery module not found\n");
             process_set_exit_status(process, -1);
@@ -539,6 +1271,22 @@ init_entry(process_t *process, void *arg)
         uint32_t proc_ep = process_manager_endpoint();
         if (proc_ep == IPC_ENDPOINT_NONE) {
             return PROCESS_RUN_YIELDED;
+        }
+        if (g_ring3_smoke_enabled && !state->pm_wait_owner_test_injected) {
+            process_manager_inject_wait_owner_mismatch_test(process->context_id);
+            state->pm_wait_owner_test_injected = 1;
+        }
+        if (g_ring3_smoke_enabled && !state->pm_kill_owner_test_injected) {
+            process_manager_inject_kill_owner_deny_test();
+            state->pm_kill_owner_test_injected = 1;
+        }
+        if (g_ring3_smoke_enabled && !state->pm_status_owner_test_injected) {
+            process_manager_inject_status_owner_deny_test();
+            state->pm_status_owner_test_injected = 1;
+        }
+        if (g_ring3_smoke_enabled && !state->pm_spawn_owner_test_injected) {
+            process_manager_inject_spawn_owner_deny_test();
+            state->pm_spawn_owner_test_injected = 1;
         }
         if (ipc_endpoint_create(process->context_id, &state->reply_endpoint) != IPC_OK) {
             serial_write("[init] reply endpoint create failed\n");
@@ -661,6 +1409,15 @@ init_entry(process_t *process, void *arg)
         }
         trace_write("[init] fs probe ok\n");
         state->request_id++;
+        state->phase = 6;
+        return PROCESS_RUN_YIELDED;
+    }
+
+    if (state->phase == 6) {
+        if (!init_post_fat_devices_ready()) {
+            return PROCESS_RUN_YIELDED;
+        }
+        trace_write("[init] post-FAT devices ready\n");
         if (init_send_spawn_name(process, state, "sysinit") != 0) {
             serial_write("[init] sysinit spawn request failed\n");
             process_set_exit_status(process, -1);
@@ -724,9 +1481,14 @@ kmain(boot_info_t *boot_info)
     process_t *ipc_send_proc = 0;
     uint32_t preempt_busy_pid = 0;
     uint32_t preempt_observer_pid = 0;
+    uint32_t ring3_smoke_pid = 0;
+    uint32_t ring3_native_pid = 0;
+    uint32_t ring3_fault_pid = 0;
+    uint32_t ring3_fault_write_pid = 0;
+    uint32_t ring3_fault_exec_pid = 0;
+    uint32_t ring3_fault_policy_pid = 0;
     uint32_t idle_pid = 0;
     uint32_t init_pid = 0;
-    init_state_t init_state;
 
     (void)boot_info;
 
@@ -742,16 +1504,32 @@ kmain(boot_info_t *boot_info)
     serial_printf("[kernel] boot_info version=%016llx\n[kernel] boot_info size=%016llx\n",
         (unsigned long long)boot_info->version,
         (unsigned long long)boot_info->size);
+    serial_printf("[mode] strict-ring3=%u\n", (unsigned int)g_ring3_strict_enabled);
+    serial_printf("[mode] low-slot-sweep=%u\n", (unsigned int)g_low_slot_sweep_enabled);
+    serial_printf("[mode] low-slot-sweep-level=%u\n", (unsigned int)g_low_slot_sweep_level);
     g_boot_info = boot_info;
     framebuffer_init(boot_info);
     cpu_init();
 
     mm_init(boot_info);
+    serial_enable_high_alias(1);
+    cpu_relocate_tables_high();
+    capability_init();
+    slab_init();
+    if (boot_info_build_shadow(boot_info, &g_boot_info_shadow) != 0) {
+        serial_write("[kernel] boot_info shadow copy failed\n");
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
+    boot_info = &g_boot_info_shadow;
+    g_boot_info = boot_info;
     ipc_init();
     process_init();
     wasm3_link_init(boot_info);
 
     serial_write("[kernel] wasm3 init on-demand\n");
+    serial_write("[kernel] boot_info shadow active\n");
 
     if (process_spawn_idle("idle", idle_entry, 0, &idle_pid) != 0) {
         serial_write("[kernel] idle spawn failed\n");
@@ -760,9 +1538,9 @@ kmain(boot_info_t *boot_info)
         }
     }
 
-    init_state.boot_info = boot_info;
-    init_state.started = 0;
-    if (process_spawn("init", init_entry, &init_state, &init_pid) != 0) {
+    g_init_state.boot_info = boot_info;
+    g_init_state.started = 0;
+    if (process_spawn("init", init_entry, &g_init_state, &init_pid) != 0) {
         serial_write("[kernel] init spawn failed\n");
         for (;;) {
             __asm__ volatile("hlt");
@@ -877,6 +1655,54 @@ kmain(boot_info_t *boot_info)
             }
         }
     }
+
+    if (g_ring3_smoke_enabled) {
+        if (spawn_ring3_smoke_process(init_pid, &ring3_smoke_pid) != 0) {
+            serial_write("[kernel] ring3 smoke spawn failed\n");
+            for (;;) {
+                __asm__ volatile("hlt");
+            }
+        }
+        if (spawn_ring3_native_probe_process(init_pid, &ring3_native_pid) != 0) {
+            serial_write("[kernel] ring3 native spawn failed\n");
+            for (;;) {
+                __asm__ volatile("hlt");
+            }
+        }
+        if (spawn_ring3_fault_probe_process(init_pid, &ring3_fault_pid) != 0) {
+            serial_write("[kernel] ring3 fault spawn failed\n");
+            for (;;) {
+                __asm__ volatile("hlt");
+            }
+        }
+        if (spawn_ring3_fault_write_probe_process(init_pid, &ring3_fault_write_pid) != 0) {
+            serial_write("[kernel] ring3 fault write spawn failed\n");
+            for (;;) {
+                __asm__ volatile("hlt");
+            }
+        }
+        if (spawn_ring3_fault_exec_probe_process(init_pid, &ring3_fault_exec_pid) != 0) {
+            serial_write("[kernel] ring3 fault exec spawn failed\n");
+            for (;;) {
+                __asm__ volatile("hlt");
+            }
+        }
+        g_ring3_fault_policy_state.fault_pid = ring3_fault_pid;
+        g_ring3_fault_policy_state.fault_write_pid = ring3_fault_write_pid;
+        g_ring3_fault_policy_state.fault_exec_pid = ring3_fault_exec_pid;
+        g_ring3_fault_policy_state.fault_ok = 0;
+        g_ring3_fault_policy_state.fault_write_ok = 0;
+        g_ring3_fault_policy_state.fault_exec_ok = 0;
+        g_ring3_fault_policy_state.done = 0;
+        if (process_spawn_as(init_pid, "ring3-fault-policy", ring3_fault_policy_entry,
+                             &g_ring3_fault_policy_state, &ring3_fault_policy_pid) != 0) {
+            serial_write("[kernel] ring3 fault policy spawn failed\n");
+            for (;;) {
+                __asm__ volatile("hlt");
+            }
+        }
+    }
+    run_low_slot_sweep_diagnostic();
 
     timer_init(250);
     serial_write("[kernel] interrupts on\n");

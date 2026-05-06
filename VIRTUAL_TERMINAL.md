@@ -16,10 +16,10 @@ as the implementation evolves.
 1. **Start minimal.** Phase 1 must be small enough to land cleanly and not
    break the boot flow.
 2. **Mechanism vs. policy split.** Framebuffer rendering is a driver concern;
-   terminal emulation is a service concern. The boundary between them is an IPC
-   cell-write interface.
-3. **IPC-first.** Neither component is a kernel subsystem. All communication
-   crosses IPC boundaries exactly as with any other device or service.
+   terminal emulation is a service concern. The current text handoff boundary
+   is a shared-memory console ring.
+3. **IPC-first where it helps.** VT control paths use IPC; high-volume console
+   text uses shared memory to avoid queue pressure.
 4. **Prepared for growth.** Cell model, escape parser slot, and TTY abstraction
    are chosen up front so later phases do not require structural rewrites.
 5. **Framebuffer-native.** All pixel writes go directly to the mapped physical
@@ -31,15 +31,22 @@ as the implementation evolves.
 
 ## Component Split
 
-The VT subsystem is divided into two components that communicate over IPC:
+Current VT-related runtime path:
 
 ```
-keyboard driver ──▶ vt (WASM service) ──▶ framebuffer driver (native, extended)
-  (notification)      escape parser          cell grid, font, pixels
-                      TTY mux                framebuffer map
-                      line discipline        dirty-flag repaint
-                      VT_WRITE / VT_READ     FBTEXT_CELL_WRITE
-                      (public endpoint)      (internal endpoint)
+kernel/services/apps ─▶ wasmos_console_write ─▶ serial_write
+                                               │
+                                               ├─▶ COM1 serial output
+                                               │
+                                               └─▶ shared console ring (1 page)
+                                                       │
+                                                       ▼
+                                         framebuffer driver (native)
+                                         drains ring + renders text cells
+
+keyboard driver ──▶ vt (WASM service) ──▶ kernel input ring
+  (notification)      escape parser
+                      VT_IPC_WRITE_REQ handling
 ```
 
 ### `framebuffer` — Extended Native Framebuffer Driver
@@ -52,31 +59,54 @@ one place — a second native driver mapping the same physical memory would be
 wasteful and confusing.
 
 The driver already exposes raw pixel primitives (`framebuffer_info`,
-`framebuffer_map`, `framebuffer_pixel`). The extension adds a cell-write IPC
-interface on top: given a (col, row, codepoint, fg, bg) tuple, blit the glyph.
-The driver still knows nothing about escape sequences, TTY identity, or line
-editing.
+`framebuffer_map`, `framebuffer_pixel`). Current text rendering is fed from a
+kernel-owned shared console ring that the driver maps through the native driver
+API (`console_ring_id` + `shmem_map`). Control operations (cell write/cursor/
+scroll/clear) remain IPC-based.
 
 ### `vt` — Terminal Emulator Service
 
 **Type:** WASM WASMOS-APP (service)
 
-`vt` implements all terminal policy: parsing escape sequences, managing TTY
-state, routing input from the keyboard driver, and running the line discipline.
-It holds no framebuffer reference; it sends `FBTEXT_CELL_WRITE` IPC messages to
-the framebuffer driver for every cell that changes.
+`vt` currently implements terminal-policy pieces that are already landed:
+- strips ANSI/VT100 escape sequences from `VT_IPC_WRITE_REQ` payload
+- routes keyboard notifications into the kernel input ring
+- forwards printable output through `wasmos_console_write` (which feeds serial
+  and the shared console ring)
+
+`vt` now owns a framebuffer control endpoint and can switch between system-
+console mode (`tty0`) and VT-managed virtual terminals (`tty1+`).
 
 Splitting terminal logic into a WASM service means it can be updated, replaced,
 or crashed without touching the framebuffer driver, and it cannot directly
 corrupt display hardware.
 
-### Phase 1 Pragmatic Exception
+### Implementation Status (March 2026)
 
-Phase 1 adds cell rendering directly to the framebuffer driver binary without
-wiring up the `vt` WASM service yet. The internal code structure must already
-reflect the split — `render.c` contains no terminal logic, `tty.c` contains no
-pixel writes — so adding the `vt` service in Phase 2 is a build and wiring
-change, not a rewrite.
+- Landed:
+  - native framebuffer text renderer
+  - early-log replay in framebuffer driver
+  - kernel shared-memory console ring (serial writer, framebuffer reader)
+  - native driver shared-memory API (`shmem_create/map/unmap`)
+  - WASM shared-memory syscalls (`wasmos_shmem_create/map/unmap`)
+  - `vt` keyboard subscribe + input routing + escape stripping
+  - `vt` core CSI/SGR decode subset:
+    cursor move (`A/B/C/D/H/f`), save/restore cursor (`s/u`), erase (`J/K`),
+    private cursor show/hide (`?25h/l`), and 16-color SGR (`m`)
+  - `vt` per-tty input mode control via `VT_IPC_SET_MODE_REQ`
+    (`VT_INPUT_MODE_RAW`, `VT_INPUT_MODE_CANONICAL`, `VT_INPUT_MODE_ECHO`)
+  - `vt` canonical input history ring with `Up/Down` arrow navigation and
+    `Ctrl+P` / `Ctrl+N` fallback
+  - keyboard `KBD_KEY_NOTIFY` path now sends as strict fire-and-forget
+    (`request_id = 0`)
+  - VT→framebuffer and CLI→VT output paths now cap queue-full retries and drop
+    stale updates on persistent backpressure instead of spinning forever
+- Not landed yet:
+  - full ANSI cursor/color feature set
+  - service-registry-based VT endpoint discovery
+  - deferred debug pass for an intermittent framebuffer-only prompt
+    duplication/misalignment artifact seen during rapid `Ctrl+Shift+Fn`
+    switching (currently not reproducible in recent runs)
 
 ---
 
@@ -166,24 +196,21 @@ rows.
 A fixed 16-color CGA-style palette is embedded in `fb-text`. Phase 1 uses only
 index 0 (black background) and index 15 (white foreground).
 
-### Framebuffer Driver Cell IPC Interface
+### Framebuffer Driver Control IPC Interface
 
 The framebuffer driver exposes a minimal internal IPC endpoint for use by `vt`.
 Clients outside the VT subsystem should not send to this endpoint directly.
 
 | Constant                  | Value  | Direction        | Meaning                                        |
 |---------------------------|--------|------------------|------------------------------------------------|
-| `FBTEXT_CELL_WRITE_REQ`   | 0x600  | vt → framebuffer | Write one cell: col, row, codepoint, fg, bg    |
-| `FBTEXT_CELL_WRITE_RESP`  | 0x680  | framebuffer → vt | Acknowledgment                                 |
-| `FBTEXT_CURSOR_SET_REQ`   | 0x601  | vt → framebuffer | Move cursor to (col, row)                      |
-| `FBTEXT_CURSOR_SET_RESP`  | 0x681  | framebuffer → vt | Acknowledgment                                 |
-| `FBTEXT_SCROLL_REQ`       | 0x602  | vt → framebuffer | Scroll up N rows, clear bottom N rows          |
-| `FBTEXT_SCROLL_RESP`      | 0x682  | framebuffer → vt | Acknowledgment                                 |
-| `FBTEXT_CLEAR_REQ`        | 0x603  | vt → framebuffer | Clear region or full screen                    |
-| `FBTEXT_CLEAR_RESP`       | 0x683  | framebuffer → vt | Acknowledgment                                 |
-| `FBTEXT_ERROR_RESP`       | 0x6FF  | framebuffer → vt | Error, `arg0` = error code                     |
+| `FBTEXT_IPC_CELL_WRITE_REQ` | 0x600 | vt → framebuffer | Write one cell: col, row, codepoint, fg, bg  |
+| `FBTEXT_IPC_CURSOR_SET_REQ` | 0x601 | vt → framebuffer | Move cursor to (col, row)                     |
+| `FBTEXT_IPC_SCROLL_REQ`     | 0x602 | vt → framebuffer | Scroll up N rows, clear bottom N rows         |
+| `FBTEXT_IPC_CLEAR_REQ`      | 0x603 | vt → framebuffer | Clear region or full screen                   |
+| `FBTEXT_IPC_RESP`           | 0x680 | framebuffer → vt | Acknowledgment                                |
+| `FBTEXT_IPC_ERROR`          | 0x6FF | framebuffer → vt | Error, `arg0` = error code                    |
 
-`FBTEXT_CELL_WRITE_REQ` packs col in `arg0`, row in `arg1`, codepoint in
+`FBTEXT_IPC_CELL_WRITE_REQ` packs col in `arg0`, row in `arg1`, codepoint in
 `arg2`, and `(fg << 8) | bg` in `arg3`.
 
 ---
@@ -197,11 +224,13 @@ notification mechanism, not through request/response IPC. The model is:
    keyboard driver (a `KBD_SUBSCRIBE_REQ` IPC call during initialization).
 2. The keyboard driver records `vt`'s notification endpoint.
 3. On each scancode the keyboard driver delivers a `KBD_KEY_NOTIFY` notification
-   to every registered subscriber. The notification carries the raw scancode and
-   a decoded codepoint (or zero if not printable).
-4. `vt` receives the notification in its main loop, feeds the codepoint into the
-   active TTY's input queue (or the escape parser if in raw mode), and echoes
-   back to the framebuffer driver as appropriate.
+   to every registered subscriber. The notification carries the raw set-1
+   scancode (`arg0`), key-up flag (`arg1`), and extended-key prefix flag from
+   `0xE0` (`arg2`).
+4. `vt` receives the notification in its main loop, maps canonical controls
+   (including history navigation), maps raw-mode arrows/nav/edit keys to ANSI
+   escape bytes (`ESC[A/B/C/D`, `ESC[H/F`, `ESC[5~/6~`, `ESC[2~/3~`), and
+   echoes back to the framebuffer driver as appropriate.
 
 This is a pub/sub model: the keyboard driver does not know or care what `vt`
 does with the event. Multiple subscribers (e.g. a future compositor or debugger)
@@ -215,7 +244,7 @@ active and takes over echo responsibility under its line discipline.
 ```
 KBD_SUBSCRIBE_REQ    0x800  vt → keyboard driver   register notification endpoint
 KBD_SUBSCRIBE_RESP   0x880  keyboard → vt          acknowledgment
-KBD_KEY_NOTIFY       0x801  keyboard → subscriber  scancode in arg0, codepoint in arg1
+KBD_KEY_NOTIFY       0x801  keyboard → subscriber  scancode in arg0, keyup in arg1, extended in arg2
 ```
 
 `KBD_KEY_NOTIFY` is fire-and-forget (no response expected) to keep the keyboard
@@ -227,7 +256,11 @@ driver's hot path free of blocking IPC waits.
 
 ### TTY State
 
-Phase 1 has exactly one TTY (`tty0`). The TTY state is a struct in `vt`:
+The current baseline has four TTY slots (`tty0..tty3`):
+- `tty0` is the system console mirror (serial + console ring)
+- `tty1..tty3` are VT-managed virtual terminals
+
+The per-TTY state in `vt` is:
 
 ```c
 typedef struct {
@@ -268,8 +301,8 @@ Priority target sequences for Phase 2:
 
 Unrecognized sequences are silently consumed (no corruption of cell state).
 
-The parser lives in `src/services/vt/escape.c` and is exercised by unit tests
-with no framebuffer or IPC dependency.
+The parser currently lives in `src/services/vt/vt_main.c`. Splitting it into
+`escape.c` with standalone unit coverage remains follow-up refactor work.
 
 ### `vt` Public IPC Interface
 
@@ -285,6 +318,7 @@ with no framebuffer or IPC dependency.
 | `VT_SET_ATTR_RESP`    | 0x782  | vt → client    | Acknowledgment                               |
 | `VT_SWITCH_TTY_REQ`   | 0x703  | client → vt    | Switch active TTY (`arg0` = tty index)       |
 | `VT_SWITCH_TTY_RESP`  | 0x783  | vt → client    | Acknowledgment                               |
+| `VT_SET_MODE_REQ`     | 0x706  | client → vt    | Set input mode bits (`arg0` = mode flags)    |
 | `VT_ERROR_RESP`       | 0x7FF  | vt → client    | Error, `arg0` = error code                   |
 
 `VT_WRITE_REQ` carries up to 4 bytes inline in `arg0`–`arg3` (Phase 1). For
@@ -343,14 +377,14 @@ flat read-only view. `vt` calls these once during startup, replays the bytes
 through its normal character processing path, and then begins consuming live
 output via `VT_WRITE_REQ`.
 
-### Handoff Sequence
+### Handoff Sequence (Current)
 
 1. kernel writes to serial + early_log ring buffer throughout boot
 2. framebuffer driver initializes (maps FB, builds cell grid)
-3. vt starts, calls wasmos_early_log_copy to drain the ring
-4. vt replays bytes through its character path → full boot log appears on screen
-5. vt calls console_set_backend to redirect future kernel output to itself
-6. serial continues as a mirror (debug image) or is silenced (production)
+3. framebuffer driver starts, maps the console ring, replays early-log ring
+4. framebuffer driver drains shared ring continuously in its main loop
+5. vt starts independently for input/escape handling; output still flows
+   through `wasmos_console_write` → `serial_write`
 
 The buffer is never freed; it remains readable after handoff for debuggers or
 a future `dmesg`-style command.
@@ -362,28 +396,23 @@ through a new entry in `wasmos_driver_api_t`:
 
 ```c
 uint32_t (*early_log_size)(void);
-int32_t  (*early_log_copy)(char *ptr, uint32_t len, uint32_t offset);
+void     (*early_log_copy)(uint8_t *dst, uint32_t offset, uint32_t len);
+int      (*shmem_create)(uint64_t pages, uint32_t flags, uint32_t *out_id, void **out_ptr);
+void    *(*shmem_map)(uint32_t id);
+int      (*shmem_unmap)(uint32_t id);
+uint32_t (*console_ring_id)(void);
 ```
 
 ---
 
-## Integration with Existing Console Path
+## Console Path Integration (Current)
 
-Today `wasmos_console_write` routes all output to `serial_write`. The intended
-migration is:
+`wasmos_console_write` routes output to `serial_write`, and `serial_write` now:
+- writes to COM1 for debug/fallback
+- appends bytes into the shared console ring
 
-1. **Phase 1:** Framebuffer driver and `vt` launch but the kernel's
-   `console_write` still goes to serial (and the early log buffer). Services
-   that want framebuffer output call the VT IPC endpoint directly (opt-in).
-2. **Phase 2:** Add a kernel-level `console_set_backend(endpoint)` call. `vt`
-   drains the early log buffer, replays it, then calls `console_set_backend`
-   to redirect future `console_write` output to itself. Serial remains as a
-   mirror.
-3. **Phase 3:** Make mirroring configurable. Production image: VT only. Debug
-   image: VT + serial.
-
-This keeps Phase 1 isolated and ensures the boot console never goes dark if the
-VT components crash or are not present.
+This removes the previous serial→framebuffer text IPC path while preserving a
+serial-first debug console.
 
 ---
 
@@ -412,8 +441,15 @@ Phase 3 adds a line discipline layer inside `vt`:
 - Raw mode flag per TTY for programs that want uncooked input (future shells,
   editors).
 
-The line discipline is accessible through the same `VT_READ_REQ` IPC path; the
-mode flag is set via a new `VT_SET_MODE_REQ` message.
+The line discipline is accessible through the same `VT_READ_REQ` IPC path. The
+mode flag transport (`VT_SET_MODE_REQ`) is now landed; richer cooked-mode
+editing/history behavior remains Phase 3 work. The current cooked baseline now
+handles `Backspace`, `Ctrl+U`, `Ctrl+C`, and per-tty history recall via
+`Up/Down` arrows with `Ctrl+P` / `Ctrl+N` fallback inside VT.
+Raw mode now preserves arrow semantics by emitting ANSI escape bytes
+(`ESC[A/B/C/D`) on `VT_READ_REQ`, and now also emits Home/End (`ESC[H/F`),
+PageUp/PageDown (`ESC[5~/6~`), and Insert/Delete (`ESC[2~/3~`) for extended
+set-1 navigation/edit keys.
 
 ---
 
@@ -426,13 +462,13 @@ compile time (e.g. 500 rows) to avoid dynamic allocation complexity.
 
 ---
 
-## Phase Summary
+## Phase Summary (Updated)
 
 | Phase | Deliverables |
 |-------|-------------|
-| **1** | Extend framebuffer driver: 8×16 font, ASCII cell grid, dirty-flag repaint, `FBTEXT_CELL_WRITE` IPC endpoint, static palette, simple scroll. Internal split between render.c and tty.c enforced from the start. |
-| **2** | Add `vt` WASM service on top. ANSI/VT100 escape parser, SGR colors, multi-TTY with Alt+Fn switching, `console_set_backend` kernel hook. |
-| **3** | UTF-8 + wider glyph table in framebuffer driver, line discipline (cooked/raw, history) in `vt`, scrollback ring buffer, bulk IPC via shared memory. |
+| **1 (done)** | Native framebuffer text rendering, early-log replay, shared console ring drain, serial mirror retained. |
+| **2 (in progress)** | VT escape parsing, keyboard routing, multi-TTY switching, per-tty CLI homes, and baseline history recall landed; remaining: richer ANSI handling and line-discipline polish. |
+| **3 (planned)** | UTF-8 expansion, scrollback, richer VT client API, and tighter shared-memory conventions for bulk text/data paths. |
 
 ---
 

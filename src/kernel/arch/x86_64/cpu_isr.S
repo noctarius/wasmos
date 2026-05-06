@@ -122,11 +122,19 @@ DECL_EXC 12
 isr_exception_13:
     mov %rsp, %rsi
     mov $13, %rdi
+    call x86_user_exception_handler
+    test %eax, %eax
+    jz 2f
+    mov %rsp, %rsi
+    mov $13, %rdi
     call x86_exception_panic_frame
 1:
     cli
     hlt
     jmp 1b
+2:
+    add $8, %rsp
+    iretq
  .global isr_exception_14
 isr_exception_14:
     # Page faults are the only recoverable exception path today. Push the full

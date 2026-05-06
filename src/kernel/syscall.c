@@ -11,6 +11,7 @@ static uint32_t g_ring3_getpid_count;
 static uint8_t g_ring3_ipc_deny_logged;
 static uint8_t g_ring3_ipc_arg_width_deny_logged;
 static uint8_t g_ring3_ipc_ok_logged;
+static uint8_t g_ring3_ipc_control_deny_logged;
 static uint8_t g_ring3_ipc_call_deny_logged;
 static uint8_t g_ring3_ipc_call_perm_deny_logged;
 static uint8_t g_ring3_ipc_call_control_deny_logged;
@@ -22,6 +23,7 @@ static uint8_t g_ring3_native_abi_logged;
 static uint32_t g_syscall_ipc_call_next_request_id = 1;
 static uint32_t g_ipc_call_echo_endpoint = IPC_ENDPOINT_NONE;
 static uint32_t g_ipc_call_control_deny_endpoint = IPC_ENDPOINT_NONE;
+static uint32_t g_ipc_notify_control_deny_endpoint = IPC_ENDPOINT_NONE;
 #define SYSCALL_IPC_PENDING_DEPTH 8u
 
 typedef struct {
@@ -86,6 +88,12 @@ void
 syscall_set_ipc_call_control_deny_endpoint(uint32_t endpoint)
 {
     g_ipc_call_control_deny_endpoint = endpoint;
+}
+
+void
+syscall_set_ipc_notify_control_deny_endpoint(uint32_t endpoint)
+{
+    g_ipc_notify_control_deny_endpoint = endpoint;
 }
 
 static syscall_ipc_call_slot_t *
@@ -348,6 +356,13 @@ x86_syscall_handler(syscall_frame_t *frame)
             if (!g_ring3_ipc_ok_logged && rc == IPC_OK) {
                 g_ring3_ipc_ok_logged = 1;
                 serial_write("[test] ring3 ipc syscall ok\n");
+            }
+            if (!g_ring3_ipc_control_deny_logged &&
+                endpoint == g_ipc_notify_control_deny_endpoint &&
+                g_ipc_notify_control_deny_endpoint != IPC_ENDPOINT_NONE &&
+                rc == IPC_ERR_PERM) {
+                g_ring3_ipc_control_deny_logged = 1;
+                serial_write("[test] ring3 ipc syscall control deny ok\n");
             }
         }
         return (uint64_t)(int64_t)rc;

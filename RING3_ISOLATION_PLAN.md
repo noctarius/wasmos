@@ -388,6 +388,9 @@ Progress update (2026-05-06):
 - Ring3 runtime coverage now asserts both ordering and authenticity paths via:
   - `[test] ring3 ipc call correlate ok`
   - `[test] ring3 ipc call source auth ok`
+- Ring3 runtime coverage now also asserts notification control-plane deny
+  behavior by attempting `ipc_notify` to a kernel-owned control notification
+  endpoint and requiring `[test] ring3 ipc syscall control deny ok`.
 - Ring3 runtime coverage now also asserts control-plane deny behavior by
   attempting `ipc_call` to the process-manager endpoint and requiring
   `[test] ring3 ipc call control deny ok`.

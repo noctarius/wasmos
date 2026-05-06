@@ -260,8 +260,10 @@ IMPORTANT: Create a git commit after each prompt iteration.
   installs a minimal user-mode code blob in the process linear region, switches
   to CPL3 via `process_set_user_entry`, validates syscall boundary flow by
   emitting `[test] ring3 syscall ok` on the first user-mode `getpid` syscall,
-  now probes `ipc_notify` with both deny (`[test] ring3 ipc syscall deny ok`)
-  and allow (`[test] ring3 ipc syscall ok`) paths, probes `ipc_call` with deny
+  now probes `ipc_notify` with invalid-endpoint deny
+  (`[test] ring3 ipc syscall deny ok`), control-endpoint permission deny
+  (`[test] ring3 ipc syscall control deny ok`), and allow
+  (`[test] ring3 ipc syscall ok`) paths, probes `ipc_call` with deny
   (`[test] ring3 ipc call deny ok`, plus error-path `RDX=0` contract marker
   `[test] ring3 ipc call err rdx zero ok`), permission-denied
   (`[test] ring3 ipc call perm deny ok`), and echo-allow
@@ -365,6 +367,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   ring3 smoke asserts this with `[test] ring3 ipc call correlate ok`; matching
   `request_id` replies now also require expected source endpoint ownership and
   source endpoint identity (`[test] ring3 ipc call source auth ok`).
+  Ring3 smoke now also probes a kernel-owned notification control endpoint via
+  `ipc_notify` and asserts deterministic permission deny via
+  `[test] ring3 ipc syscall control deny ok`.
   Ring3 smoke now also probes a process-manager control-plane `ipc_call`
   attempt and asserts deterministic deny via
   `[test] ring3 ipc call control deny ok`

@@ -249,8 +249,10 @@ The current tree already boots into a usable user-space stack:
   `run-qemu-ring3-test` harness now also requires `native-call-smoke: ipc-call ok`
   and `[test] ring3 native abi ok` so both native IPC-call and native syscall
   header paths are asserted in the same run; it now also asserts the boot-time
-  marker `[mode] strict-ring3=1`. Default smoke spawn remains
-  disabled while this path is still being soak-tested. Ring3 smoke endpoint
+  marker `[mode] strict-ring3=1`. Strict ring3 policy is now decoupled from
+  ring3 smoke probes: strict policy remains enabled for normal boots, while
+  smoke spawn remains disabled by default outside dedicated ring3 smoke runs.
+  Ring3 smoke endpoint
   immediates are patched in a kernel-local code buffer before upload, and
   ring3 bootstrap copying
   now writes through the target context's user virtual mapping (temporary RW

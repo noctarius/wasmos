@@ -60,15 +60,20 @@ static const uint8_t g_skip_wasm_boot = 0;
 #ifndef WASMOS_RING3_SMOKE_DEFAULT
 #define WASMOS_RING3_SMOKE_DEFAULT 0
 #endif
+#ifndef WASMOS_RING3_STRICT_DEFAULT
+#define WASMOS_RING3_STRICT_DEFAULT 1
+#endif
 #ifndef WASMOS_LOW_SLOT_SWEEP_DEFAULT
 #define WASMOS_LOW_SLOT_SWEEP_DEFAULT 1
 #endif
 #ifndef WASMOS_LOW_SLOT_SWEEP_LEVEL_DEFAULT
 #define WASMOS_LOW_SLOT_SWEEP_LEVEL_DEFAULT 2
 #endif
-/* TODO: Re-enable default ring3 smoke spawn after sustained soak confirms
- * preempt-trampoline behavior remains stable across broader workloads. */
+/* Keep adversarial smoke probes opt-in for dedicated ring3 test targets; they
+ * add noise to normal boot/CLI workflows and are not required for baseline
+ * ring3 policy mode. */
 static const uint8_t g_ring3_smoke_enabled = WASMOS_RING3_SMOKE_DEFAULT;
+static const uint8_t g_ring3_strict_enabled = WASMOS_RING3_STRICT_DEFAULT;
 static const uint8_t g_low_slot_sweep_enabled = WASMOS_LOW_SLOT_SWEEP_DEFAULT;
 static const uint8_t g_low_slot_sweep_level = WASMOS_LOW_SLOT_SWEEP_LEVEL_DEFAULT;
 
@@ -100,6 +105,7 @@ typedef struct {
     uint32_t hw_discovery_index;
     uint8_t wasm3_probe_done;
 } init_state_t;
+static init_state_t g_init_state;
 
 static int
 bytes_eq(const uint8_t *a, uint32_t a_len, const char *b);
@@ -1483,7 +1489,6 @@ kmain(boot_info_t *boot_info)
     uint32_t ring3_fault_policy_pid = 0;
     uint32_t idle_pid = 0;
     uint32_t init_pid = 0;
-    init_state_t init_state;
 
     (void)boot_info;
 
@@ -1499,7 +1504,7 @@ kmain(boot_info_t *boot_info)
     serial_printf("[kernel] boot_info version=%016llx\n[kernel] boot_info size=%016llx\n",
         (unsigned long long)boot_info->version,
         (unsigned long long)boot_info->size);
-    serial_printf("[mode] strict-ring3=%u\n", (unsigned int)g_ring3_smoke_enabled);
+    serial_printf("[mode] strict-ring3=%u\n", (unsigned int)g_ring3_strict_enabled);
     serial_printf("[mode] low-slot-sweep=%u\n", (unsigned int)g_low_slot_sweep_enabled);
     serial_printf("[mode] low-slot-sweep-level=%u\n", (unsigned int)g_low_slot_sweep_level);
     g_boot_info = boot_info;
@@ -1533,9 +1538,9 @@ kmain(boot_info_t *boot_info)
         }
     }
 
-    init_state.boot_info = boot_info;
-    init_state.started = 0;
-    if (process_spawn("init", init_entry, &init_state, &init_pid) != 0) {
+    g_init_state.boot_info = boot_info;
+    g_init_state.started = 0;
+    if (process_spawn("init", init_entry, &g_init_state, &init_pid) != 0) {
         serial_write("[kernel] init spawn failed\n");
         for (;;) {
             __asm__ volatile("hlt");

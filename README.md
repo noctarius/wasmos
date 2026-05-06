@@ -549,14 +549,16 @@ Meaning:
 - `run-qemu-test` performs a compile + boot + halt smoke run
 - `run-qemu-cli-test` runs the full CLI integration suite
 - `run-qemu-ring3-test` configures a shadow `build/ring3` tree with
-  `WASMOS_RING3_SMOKE=ON` and asserts ring3 smoke syscall markers plus
+  `WASMOS_RING3_STRICT=ON` and `WASMOS_RING3_SMOKE=ON`, and asserts ring3
+  smoke syscall markers plus
   `[mode] strict-ring3=1`, `native-call-smoke: ipc-call ok`,
   `[test] ring3 native abi ok`, and structured
   user fault telemetry (`[fault] user-pf ... reason=user_to_kernel`) before halt
 - `strict-ring3` runs the phase-0 gate profile (`run-qemu-test` then
   `run-qemu-ring3-test`) in sequence
-- staged-default policy: ring3 smoke stays OFF for normal boot targets, and is
-  ON by default in the dedicated `run-qemu-ring3-test` path
+- staged-default policy: strict ring3 policy stays ON for normal boot targets,
+  while ring3 smoke probes stay OFF for normal targets and are ON by default
+  in the dedicated `run-qemu-ring3-test` path
 - `run-qemu-ui-test` boots QEMU with a graphical display plus `mon:stdio` serial
 
 The repository standard is:

@@ -803,6 +803,11 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
         0xBA, 0x78, 0x56, 0x34, 0x12, /* mov edx, 0x12345678 (probe arg0) */
         0xB8, 0x06, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_IPC_CALL */
         0xCD, 0x80,                   /* int 0x80 */
+        0xBF, 0x00, 0x00, 0x00, 0x00, /* mov edi, <kernel echo call ep> (patched) */
+        0xBE, 0xBD, 0x9A, 0x00, 0x00, /* mov esi, 0x9ABD (source-auth probe type) */
+        0xBA, 0x0D, 0xF0, 0xAD, 0x0B, /* mov edx, 0x0BADF00D (probe arg0) */
+        0xB8, 0x06, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_IPC_CALL */
+        0xCD, 0x80,                   /* int 0x80 */
         0xB8, 0x03, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_YIELD */
         0xCD, 0x80,                   /* int 0x80 */
         0xB9, 0x00, 0x10, 0x00, 0x00, /* mov ecx, 4096 */
@@ -896,6 +901,13 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
     }
     {
         const uint32_t ep_imm_off = 108u;
+        ring3_code_patched[ep_imm_off + 0] = (uint8_t)(ring3_call_echo_ep & 0xFFu);
+        ring3_code_patched[ep_imm_off + 1] = (uint8_t)((ring3_call_echo_ep >> 8) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 2] = (uint8_t)((ring3_call_echo_ep >> 16) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 3] = (uint8_t)((ring3_call_echo_ep >> 24) & 0xFFu);
+    }
+    {
+        const uint32_t ep_imm_off = 130u;
         ring3_code_patched[ep_imm_off + 0] = (uint8_t)(ring3_call_echo_ep & 0xFFu);
         ring3_code_patched[ep_imm_off + 1] = (uint8_t)((ring3_call_echo_ep >> 8) & 0xFFu);
         ring3_code_patched[ep_imm_off + 2] = (uint8_t)((ring3_call_echo_ep >> 16) & 0xFFu);

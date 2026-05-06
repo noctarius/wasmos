@@ -38,6 +38,7 @@ def main():
         b"[test] ring3 ipc call perm deny ok",
         b"[test] ring3 ipc call ok",
         b"[test] ring3 ipc call correlate ok",
+        b"[test] ring3 ipc call source auth ok",
         b"[test] ring3 yield syscall ok",
         b"[test] ring3 syscall ok",
         b"[test] ring3 preempt stress ok",

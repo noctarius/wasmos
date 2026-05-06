@@ -19,11 +19,15 @@ static uint8_t g_ring3_yield_logged;
 static uint8_t g_ring3_native_abi_logged;
 static uint32_t g_syscall_ipc_call_next_request_id = 1;
 static uint32_t g_ipc_call_echo_endpoint = IPC_ENDPOINT_NONE;
+#define SYSCALL_IPC_PENDING_DEPTH 8u
 
 typedef struct {
     uint8_t in_use;
     uint32_t pid;
     uint32_t source_endpoint;
+    ipc_message_t pending[SYSCALL_IPC_PENDING_DEPTH];
+    uint32_t pending_head;
+    uint32_t pending_count;
 } syscall_ipc_call_slot_t;
 
 static syscall_ipc_call_slot_t g_syscall_ipc_call_slots[PROCESS_MAX_COUNT];
@@ -89,6 +93,8 @@ syscall_ipc_call_slot_for_pid(uint32_t pid)
             slot->in_use = 0;
             slot->pid = 0;
             slot->source_endpoint = IPC_ENDPOINT_NONE;
+            slot->pending_head = 0;
+            slot->pending_count = 0;
         }
         if (slot->in_use && slot->pid == pid) {
             return slot;
@@ -103,7 +109,49 @@ syscall_ipc_call_slot_for_pid(uint32_t pid)
     empty->in_use = 1;
     empty->pid = pid;
     empty->source_endpoint = IPC_ENDPOINT_NONE;
+    empty->pending_head = 0;
+    empty->pending_count = 0;
     return empty;
+}
+
+static int
+syscall_ipc_pending_enqueue(syscall_ipc_call_slot_t *slot, const ipc_message_t *msg)
+{
+    if (!slot || !msg) {
+        return -1;
+    }
+    /* Explicit drop policy: bounded queue, drop oldest on overflow. */
+    if (slot->pending_count >= SYSCALL_IPC_PENDING_DEPTH) {
+        slot->pending_head = (slot->pending_head + 1u) % SYSCALL_IPC_PENDING_DEPTH;
+        slot->pending_count--;
+    }
+    uint32_t tail = (slot->pending_head + slot->pending_count) % SYSCALL_IPC_PENDING_DEPTH;
+    slot->pending[tail] = *msg;
+    slot->pending_count++;
+    return 0;
+}
+
+static int
+syscall_ipc_pending_take_request(syscall_ipc_call_slot_t *slot, uint32_t request_id, ipc_message_t *out)
+{
+    if (!slot || !out || slot->pending_count == 0) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < slot->pending_count; ++i) {
+        uint32_t idx = (slot->pending_head + i) % SYSCALL_IPC_PENDING_DEPTH;
+        if (slot->pending[idx].request_id != request_id) {
+            continue;
+        }
+        *out = slot->pending[idx];
+        for (uint32_t j = i; j + 1u < slot->pending_count; ++j) {
+            uint32_t from = (slot->pending_head + j + 1u) % SYSCALL_IPC_PENDING_DEPTH;
+            uint32_t to = (slot->pending_head + j) % SYSCALL_IPC_PENDING_DEPTH;
+            slot->pending[to] = slot->pending[from];
+        }
+        slot->pending_count--;
+        return 0;
+    }
+    return -1;
 }
 
 static int
@@ -284,6 +332,7 @@ x86_syscall_handler(syscall_frame_t *frame)
         int rc = IPC_ERR_INVALID;
         ipc_message_t req;
         ipc_message_t resp;
+        syscall_ipc_call_slot_t *slot = 0;
         if (!proc) {
             return (uint64_t)-1;
         }
@@ -301,6 +350,10 @@ x86_syscall_handler(syscall_frame_t *frame)
         frame->rdx = 0;
         if (request_id == 0) {
             request_id = g_syscall_ipc_call_next_request_id++;
+        }
+        slot = syscall_ipc_call_slot_for_pid(proc->pid);
+        if (!slot) {
+            return (uint64_t)(int64_t)IPC_ERR_FULL;
         }
         rc = syscall_ipc_call_source_endpoint(proc, &source_endpoint);
         if (rc != IPC_OK) {
@@ -351,6 +404,15 @@ x86_syscall_handler(syscall_frame_t *frame)
         if (rc != IPC_OK) {
             return (uint64_t)(int64_t)rc;
         }
+        if (syscall_ipc_pending_take_request(slot, request_id, &resp) == 0) {
+            frame->rdx = (uint64_t)resp.arg0;
+            if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_call_ok_logged &&
+                (uint32_t)frame->rdx == req.arg0) {
+                g_ring3_ipc_call_ok_logged = 1;
+                serial_write("[test] ring3 ipc call ok\n");
+            }
+            return 0;
+        }
         for (;;) {
             rc = ipc_recv_for(proc->context_id, source_endpoint, &resp);
             if (rc == IPC_EMPTY) {
@@ -361,9 +423,7 @@ x86_syscall_handler(syscall_frame_t *frame)
                 return (uint64_t)(int64_t)rc;
             }
             if (resp.request_id != request_id) {
-                /* TODO: Preserve unmatched replies in a per-process inbox so
-                 * IPC_CALL does not drop out-of-order messages while waiting
-                 * for a specific request_id. */
+                (void)syscall_ipc_pending_enqueue(slot, &resp);
                 continue;
             }
             frame->rdx = (uint64_t)resp.arg0;

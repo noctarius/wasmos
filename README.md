@@ -410,7 +410,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - `examples/` WASM applications and smoke tests
 - `tests/` QEMU-driven regression tests
 - `scripts/` helper scripts and the QEMU test framework
-- `docs/ARCHITECTURE.md` system design and implementation baseline
+- `docs/ARCHITECTURE.md` architecture index and design entry point
+- `docs/architecture/` feature-level architecture and implementation documents
 - `TASKS.md` open work and follow-up items
 - `docs/RING3_ISOLATION_PLAN.md` phased design/tasks for full ring-3 isolation
 - `wasmo.svg` / `wasmo.webp` repo-local mascot art used by this README

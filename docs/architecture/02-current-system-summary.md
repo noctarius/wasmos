@@ -1,0 +1,403 @@
+## Current System Summary
+The current tree already boots into a usable user-space stack:
+- `BOOTX64.EFI` loads `kernel.elf` plus a single `initfs.img`, gathers the
+  memory map, materializes bootstrap boot modules from the initfs, and exits
+  boot services.
+- The kernel initializes paging, physical memory management, exceptions, the
+  timer, IPC, the scheduler, and the process manager.
+- A kernel-owned `init` process starts `hw-discovery`, waits for `fs-fat` to
+  become ready, and then asks the process manager to load `sysinit` from the
+  FAT filesystem. `hw-discovery` now limits the pre-FAT bootstrap to storage,
+  then starts display/input drivers from FAT by name once `fs-fat` can serve
+  process-manager reads; the kernel early framebuffer is the only display path
+  needed before FAT.
+- `sysinit` is intentionally small and starts the configured post-FAT services
+  and user processes listed in the generated boot-config blob.
+- The initfs also carries a generated binary boot-config blob derived from
+  `scripts/initfs.toml` for config-driven startup. Native framebuffer, serial,
+  keyboard, VT, and CLI payloads stay on the FAT image and are loaded by name
+  after `fs-fat` is available; hardware drivers are still owned by
+  `hw-discovery`, while `sysinit` starts higher-level services/apps.
+- `fs-fat` currently provides read-only open/read/seek/stat primitives for the
+  shared libc layer and the language-native shims.
+- `fs-fat` also supports overwrite-only writes to existing files through the C
+  libc `open/write` path, plus `O_TRUNC` size updates, `O_APPEND` writes for
+  existing files within their current cluster chain, and `O_CREAT` for
+  zero-length 8.3 files in existing directories; FAT12/16 cluster allocation
+  now grows files and newly created files, long-filename creates now emit LFN
+  entries plus a generated short alias, regular-file unlink now reclaims the
+  cluster chain and tombstones the short+LFN dir entries, empty-directory
+  create/remove now allocates a directory cluster plus `.`/`..` entries, and
+  the C stdio shim now exposes `fopen`/`fwrite` write and append modes. The C
+  libc now exposes `unlink`, `mkdir`, and `rmdir`, and the Rust, Zig, Go, and
+  AssemblyScript shims expose matching create/write/append/unlink/mkdir/rmdir
+  helpers. Update modes such as `r+`/`w+`/`a+` and non-ASCII LFN creation
+  remain future work.
+- The runtime host uses `wasm3`, not WAMR.
+- The process manager also supports native ELF drivers wrapped in WASMOS-APP as
+  `FLAG_DRIVER|FLAG_NATIVE`, loaded directly into a process context and called
+  through a kernel-provided function-table ABI.
+- Native framebuffer startup now registers its text-control IPC endpoint back
+  into process-manager state, so downstream VT instances receive a concrete
+  framebuffer endpoint for switch clear/replay control instead of degrading to
+  logical-only tty switching. The driver maps only the framebuffer byte range
+  captured by the bootloader and keeps the boot-provided geometry when Bochs
+  VBE reports a larger post-boot mode, preserving the kernel's framebuffer
+  mapping contract until explicit native-driver mode setting is introduced.
+  It is launched from FAT by `hw-discovery` after the storage bootstrap
+  completes, with the kernel early framebuffer covering pre-FAT diagnostics and
+  panic rendering.
+- Serial-to-framebuffer text handoff now uses a kernel-created shared-memory
+  console ring (1 page). `serial_write` appends bytes into this ring, and the
+  native framebuffer driver maps and drains it, removing the previous
+  serial→framebuffer text IPC message path.
+- Shared-memory primitives now exist for both native-driver ABI
+  (`shmem_create/map/unmap`, `console_ring_id`) and WASM syscalls
+  (`wasmos_shmem_create/map/unmap`) backed by the same kernel shared-memory
+  registry.
+- `wasmos_console_read` now mirrors successful user-copy input bytes into the
+  immediate wasm host-pointer view (in addition to `mm_copy_to_user`) to keep
+  serial-input consumers aligned during ring3 copy-path migration.
+- The VT WASM service now maintains explicit per-TTY state (4 tty slots),
+  supports active-tty selection (`VT_IPC_SWITCH_TTY`), and stores per-tty
+  attributes (`VT_IPC_SET_ATTR_REQ`) while output remains routed through
+  `wasmos_console_write` into the serial/console-ring path.
+- VT tty roles are now split intentionally: `tty0` reflects the system
+  serial/console-ring output, while `tty1+` are VT-managed framebuffers.
+  Framebuffer control IPC now includes a console-mode toggle so VT can disable
+  console-ring drain when non-zero ttys are active and restore it on `tty0`.
+  tty switches clear the framebuffer before replaying the selected tty buffer,
+  and switch-time clear/replay now uses a higher-reliability IPC send path so
+  redraw is not skipped under transient framebuffer queue backpressure; VT now
+  fails switch requests when switch control-plane IPC (console-mode/clear) cannot
+  be delivered so clients do not receive false-positive switch success. VT switch
+  state commit is atomic with successful switch control operations (generation +
+  active tty update only after control success), failed switches restore the
+  prior framebuffer console mode to avoid half-switched states, and replay is
+  intentionally best-effort under sustained queue pressure to avoid repeated
+  switch abort loops. The native framebuffer driver now services control IPC
+  before draining console ring backlog and now drains ring bytes in bounded
+  chunks so switch clear/replay commands are not starved by heavy log traffic.
+  When console mode is re-enabled for `tty0`, the framebuffer now drops stale
+  ring backlog and resumes in live-tail mode, preventing large catch-up floods
+  from monopolizing the display path after long `tty1+` sessions.
+- CLI now receives the VT endpoint from process-manager wiring, switches to
+  `tty1` at startup, and sends terminal output through `VT_IPC_WRITE_REQ`
+  rather than direct console writes. VT write retry budgets were raised to
+  reduce dropped output chunks under queue pressure during larger command
+  bursts. Filesystem `ls`/`cat` output now returns from `fs-fat` over a
+  requester-scoped IPC stream and is rendered by the requesting CLI instance,
+  so multi-tty sessions keep file listings/content on the active tty rather
+  than global console-only output.
+- CLI now exposes VT switch failure codes in `tty` command errors so switch
+  failures can be mapped to explicit VT control-plane failure paths.
+- CLI `cd` path tracking now keeps standard dot-segment semantics (`.` stays in
+  place, `..` resolves to the parent) instead of collapsing both to `/`.
+- Process-manager assigns CLI home ttys and sysinit launches configured CLI
+  targets with a cap of three concurrent instances (`tty1..tty3`). CLI input
+  still gates on VT foreground selection.
+- VT now owns keyboard input routing end-to-end and delivers per-tty raw key
+  input over `VT_IPC_READ_REQ`. CLI remains the owner of line editing/echo;
+  raw mode now emits extended arrows plus nav/edit keys as ANSI escape bytes
+  (`ESC[A/B/C/D`, `ESC[H/F`, `ESC[5~/6~`, `ESC[2~/3~`), CLI now consumes
+  `ESC[A`/`ESC[B` for shell history navigation in raw mode, raw printable keys
+  now honor Shift-modified ASCII symbols (Set-1 map), and serial console
+  reads are retained as fallback for headless/automated test flows.
+- VT now applies a core CSI/SGR subset per tty state (`A/B/C/D/H/f`, `s/u`,
+  `J`, `K`, private `?25h/l`, `m` with 16-color mapping), so replayed tty
+  buffers preserve cursor/erase/color effects across switches.
+- VT now queries framebuffer text geometry during startup and sizes tty state
+  to that runtime grid (with fixed upper bounds) rather than hardcoding 80x25,
+  preventing premature scroll on larger framebuffer text layouts. Per-tty cell
+  storage is now allocated dynamically from WASM linear memory at startup
+  (with explicit memory growth when needed), and VT falls back to default
+  geometry if larger-grid allocation cannot be satisfied.
+- VT write routing now uses caller endpoint ownership to target the correct tty
+  buffer; non-foreground tty writes are buffered without rendering over the
+  active framebuffer.
+- Kernel-hosted WASM `console_write` now also mirrors output into VT as
+  kernel-origin write chunks targeted at the active tty (best-effort, no
+  writer registration/generation token), while still emitting serial output for
+  headless logging and existing diagnostics/tests.
+- VT now accepts `VT_IPC_SET_MODE_REQ` so clients can select per-tty input
+  handling (`raw`, `canonical`, `echo`) through the same owned endpoint used
+  for VT writes/reads.
+- VT canonical input handling now includes baseline in-service line discipline
+  controls (`Backspace`, `Ctrl+U`, `Ctrl+C`) plus per-tty history navigation
+  (`Up/Down` arrows with `Ctrl+P`/`Ctrl+N` fallback), so cooked-mode consumers
+  can rely on VT-side editing/interrupt delivery semantics.
+- VT enforces explicit writer registration (`VT_IPC_REGISTER_WRITER`) and
+  switch-generation write tokens: writes tagged with older generations are
+  dropped after tty switches, and switch replay runs behind a temporary render
+  barrier to avoid in-flight foreground repaint races. VT reply paths now also
+  use bounded retry/yield behavior under queue pressure, reducing lost
+  response windows that previously surfaced as CLI-side switch timeouts.
+- VT can emit compact switch/ownership/drop telemetry through
+  `wasmos_debug_mark` into the kernel's global trace stream when
+  `WASMOS_TRACE=1`, so race analysis uses existing tracing infrastructure.
+- CLI now includes `kmaps` and `kmaps all`, backed by kernel hostcalls
+  (`kmap_dump`, `kmap_dump_all`) that dump and verify either the active
+  process user-root mapping footprint or all active process contexts via
+  paging diagnostics.
+- Known deferred VT issue: an intermittent framebuffer-only prompt
+  duplication/misalignment artifact during rapid `Ctrl+Shift+Fn` switching was
+  observed earlier. It is currently not reproducible in recent runs, so the
+  issue is deferred until a stable repro path is available.
+- VT keyboard hotkeys support `Ctrl+Shift+F1..F4` to switch directly to
+  `tty0..tty3`. While active tty is `tty0`, plain `F2/F3/F4` also switches
+  directly to `tty1..tty3` as a recovery path when modifier tracking is not
+  reliable.
+- Entering `tty0` now renders a short read-only hint line so a blank
+  live-tail console state is visibly intentional and provides immediate switch
+  guidance.
+- Keyboard event delivery into VT is now explicit fire-and-forget
+  (`KBD_IPC_KEY_NOTIFY` with `request_id = 0`), and VT/CLI output transport
+  loops now use bounded `IPC_ERR_FULL` retries so queue backpressure degrades
+  output before it can freeze the interactive path.
+- Fatal CPU exceptions still log to serial and now also render an in-kernel
+  framebuffer panic screen (black background) with key crash diagnostics
+  including exception registers, process identity, stack bounds, CR3/kernel
+  text range, and framebuffer geometry/base.
+- x86 syscall boundary groundwork now exists via a DPL3-callable `int 0x80`
+  gate and a minimal syscall dispatcher (`nop`, `getpid`, `exit`, `yield`,
+  `wait`, `ipc_notify`, `ipc_call`) so ring3 transition work can pivot from
+  hostcall-only assumptions to an explicit kernel entry. Syscall argument
+  handling now enforces 32-bit cleanliness for current 32-bit field-based
+  calls (`wait`, `ipc_notify`, `ipc_call`) before dispatch.
+- The libc include tree now exposes a native-only syscall helper header at
+  `lib/libc/include/wasmos/syscall_x86_64.h` that mirrors the current register
+  ABI for non-WASM x86_64 userland experiments (`int 0x80` wrappers with
+  primary return in `RAX` and optional secondary return in `RDX` for
+  `ipc_call`; current `ipc_call` semantics are `RAX=status`, `RDX=reply arg0`
+  on success, `RDX=0` on error, and blocking wait for matching `request_id`).
+- Scheduler context state now tracks privilege-return metadata (`cs`, `ss`,
+  `user_rsp`) and context-switch restore now branches to `iretq` for ring3
+  contexts while preserving `ret` for ring0 contexts.
+- Paging table walks now consistently use a higher-half kernel alias once CR3
+  is active, so `IDENTITY_PD_COUNT=0` can run without low-pointer dereferences
+  in the paging subsystem itself. Current transition behavior intentionally
+  keeps a temporary bootstrap low slot in the kernel root; diagnostic low-slot
+  sweep level 2 now strips/verifies both ring3 and ring0 process roots.
+- Kernel bootstrap now builds a higher-half shadow of boot metadata consumed
+  after scheduler start (boot module table + payload pointers, ACPI RSDP, boot
+  config), so ring0 runtime startup paths no longer depend on low-slot
+  bootloader pointers once compatibility mappings are stripped. Shadow setup is
+  now a fail-closed boot requirement (no fallback to low-slot pointer paths).
+- wasm3 heap chunk tracking now keeps both physical frame addresses (for free)
+  and higher-half virtual bases (for allocation/dereference), preventing
+  allocator page faults when low-slot compatibility mappings are removed in
+  ring0 contexts.
+- Kernel entry now uses an explicit two-stage bootstrap: low `_start` builds a
+  minimal page-table handoff and jumps to higher-half `_start_high`, which
+  clears `.bss` and calls `kmain`. Linker high-section layout now keeps
+  `vaddr - KERNEL_HIGHER_HALF_BASE == paddr` across all loadable high sections,
+  so bootstrap large-page mappings resolve the same bytes as ELF PT_LOAD
+  population.
+- Early alias helpers for serial/libc string pointers now translate only
+  low-form kernel-image pointers into higher-half form and leave already-high
+  pointers untouched, preventing post-`mm_init` ring0 faults in printf paths.
+- Scheduler now updates TSS `rsp0` per selected process before context switch,
+  establishing the kernel-stack landing point used by user-mode trap/syscall
+  entry.
+- Kernel startup now provisions a dedicated ring3 smoke task (`ring3-smoke`):
+  it copies a tiny user-mode `int 0x80` loop into the process linear region,
+  marks that region executable, and flips the process into CPL3 via
+  `process_set_user_entry`. The syscall handler logs `[test] ring3 syscall ok`
+  on the first CPL3 `getpid` call as an end-to-end transition checkpoint; it
+  now also probes `ipc_notify` deny/allow paths and logs
+  `[test] ring3 ipc syscall deny ok`,
+  `[test] ring3 ipc syscall control deny ok`, and
+  `[test] ring3 ipc syscall ok` from the syscall layer when those outcomes are
+  observed. It also probes `ipc_call` invalid/permission-denied/allow behavior via invalid-endpoint rejection, a
+  kernel-owned permission-denied endpoint, and a kernel echo endpoint,
+  logging `[test] ring3 ipc call deny ok`,
+  `[test] ring3 ipc call err rdx zero ok` (error-path secondary return
+  contract), 
+  `[test] ring3 ipc call perm deny ok`, and `[test] ring3 ipc call ok` when
+  observed. It also issues an explicit CPL3 `yield` syscall and logs
+  `[test] ring3 yield syscall ok` when observed. The smoke loop then performs 4096
+  CPL3 `getpid` syscalls before issuing a CPL3 `exit`, and the kernel logs
+  `[test] ring3 preempt stress ok` when that loop completes to validate
+  timer-preemption trampoline behavior under sustained user-mode syscall
+  traffic. Ring3 smoke mode also spawns a second compiled native probe process
+  (`ring3-native`) built from C using
+  `lib/libc/include/wasmos/syscall_x86_64.h`; the syscall layer logs
+  `[test] ring3 native abi ok` on first native CPL3 `getpid`. The
+  `run-qemu-ring3-test` harness now also requires `native-call-smoke: ipc-call ok`
+  and `[test] ring3 native abi ok` so both native IPC-call and native syscall
+  header paths are asserted in the same run; it now also asserts the boot-time
+  marker `[mode] strict-ring3=1`. Strict ring3 policy is now decoupled from
+  ring3 smoke probes: strict policy remains enabled for normal boots, while
+  smoke spawn remains disabled by default outside dedicated ring3 smoke runs.
+  Ring3 smoke endpoint
+  immediates are patched in a kernel-local code buffer before upload, and
+  ring3 bootstrap copying
+  now writes through the target context's user virtual mapping (temporary RW
+  mapping then RX remap) instead of writing code directly via physical aliases.
+- Current strict-ring3 checkpoint: `run-qemu-ring3-test` now completes
+  successfully end-to-end with ring3 syscall/fault-policy/preempt/native
+  markers. Remaining strict-mode framebuffer MMIO/panic rendering hardening is
+  tracked in `docs/RING3_ISOLATION_PLAN.md`.
+- Native driver ELF PT_LOAD segment population now uses a chunked
+  root-switch copy helper with kernel-side bounce buffering (bytes + zero-fill)
+  into the target context rather than direct dereference of mapped segment
+  virtual addresses in the active target root.
+- Scheduler/process kernel stacks now prefer higher-half virtual addresses
+  backed by low physical pages inside the shared higher-half window; this
+  reduces low-slot dependency during user-CR3 execution windows, while a
+  temporary allocation fallback previously kept stability when that window was
+  exhausted.
+- Phase-2 hardening update: kernel process-stack allocation now fails closed
+  if higher-half-window allocation cannot be satisfied (no low-address fallback
+  path), and user-copy helpers (`mm_copy_from_user` / `mm_copy_to_user`) now
+  use a dedicated higher-half copy stack trampoline when entered from
+  low-address callers, so temporary user-CR3 switch windows no longer rely on
+  low-mapped caller stacks.
+- Scheduler hardening update: `process_schedule_once` now uses a dedicated
+  higher-half trampoline stack when entered from low-address stacks, replacing
+  direct in-place low-stack `rsp/rbp` rebasing in the scheduler entry path.
+- Scheduler pointer canonicalization update: kernel process contexts now store
+  higher-half trampoline RIP at spawn time, and trampoline dispatch
+  canonicalizes process entry pointers before call, reducing residual
+  low-address execute assumptions in non-copy paths.
+- Context-switch pointer canonicalization update: ring0 restore paths now
+  canonicalize low-form kernel RIP values to higher-half form before `ret`,
+  reducing residual low-slot execute dependence during kernel resume.
+- Ring3 entry hard gate update: user-entry activation now enforces an explicit
+  no-low-slot verification (`PML4[0]` absent) after stripping low-slot mappings
+  and before committing CPL3 entry selectors.
+- Added guarded low-slot sweep diagnostics: when
+  `WASMOS_LOW_SLOT_SWEEP=ON`, boot performs a strip+verify pass across eligible
+  user-mode contexts and emits first-failure markers for low-slot transition
+  triage; default remains OFF to preserve baseline behavior.
+- Sweep diagnostics now support scope levels via
+  `WASMOS_LOW_SLOT_SWEEP_LEVEL` (`1` user-only, `2` include selected non-user
+  contexts).
+- Identity-map breadth is now configurable via `WASMOS_IDENTITY_PD_COUNT`
+  (`0..4`, default `4`) to support phased low-slot reduction trials.
+- Regression coverage now includes `tests/test_ring3_smoke_target.py`, which
+  executes `cmake --build build --target run-qemu-ring3-test` to keep ring3
+  marker assertions in the standard automated test suite, including structured
+  user fault reason telemetry.
+  Staged-default policy keeps ring3 smoke OFF in normal boot configs and ON
+  in the dedicated ring3 smoke test target.
+- Timer IRQ preemption now performs a ring3-safe trampoline rewrite for CPL3
+  frames: return RIP is redirected to the scheduler preempt trampoline and CS
+  is rewritten to kernel code selector so `iretq` re-enters ring0 cleanly
+  before the scheduler context switch runs.
+- Memory-region policy now carries an explicit user-access flag into paging
+  mappings (including intermediate page-table entries), so user-accessible
+  pages are tracked by intent rather than implicit convention. Paging now also
+  rejects user mappings outside the designated user virtual-address slot and
+  enforces user W^X (`WRITE+EXEC` denied); ring3 smoke/native code regions are
+  now marked RX after bootstrap copy. Child address spaces now share a reduced
+  higher-half kernel alias window (64 MiB) to tighten default kernel mapping
+  exposure under user CR3 roots.
+  User-root creation/setup now also runs a paging verifier that asserts only
+  allowed kernel PML4 slots are present (`0`, `511`, private user slot `1`) and
+  that higher-half PDPT/PD entries are constrained to explicit allowlist
+  windows; a dump helper logs kernel-footprint entries for triage on failure.
+  Child address spaces now build a private low-slot PDPT from the kernel
+  template (identity/direct-map entries only), so future kernel low-slot growth
+  does not silently widen existing user CR3 roots.
+- A baseline user-pointer copy layer now exists in kernel memory management
+  (`mm_copy_from_user` / `mm_copy_to_user`) with user-range permission checks,
+  pre-mapping of touched pages, and temporary CR3 switch/restore around the
+  actual copy. Copy helpers now use a fixed bounce buffer per chunk so
+  kernel-side source/destination accesses happen under kernel CR3 while
+  user-side memory dereferences happen only under target user CR3. Hostcall
+  migration is broadly in place with `wasmos_framebuffer_info` and
+  `wasmos_boot_config_copy` on pure validated `mm_copy_to_user` semantics.
+  Copy helpers now also emit trace-gated (`WASMOS_TRACE`) failure-stage
+  diagnostics with op/stage/context/user range/expected-vs-current-root/chunk
+  metadata for focused ring3 copy-path regression triage.
+  A non-copy validator API
+  (`mm_user_range_permitted`) is now available for phased hostcall guard
+  rollouts. The framebuffer and shared-memory map hostcalls now use an
+  explicit WASM-offset to user-VA resolver before remapping linear pages.
+  Pointer-bearing hostcalls now broadly use a host-pointer bridge to resolve
+  wasm3 host pointers back into user VA for explicit `mm_user_range_permitted`
+  preflight (READ/WRITE by direction), including boot/module/process metadata,
+  console I/O, ACPI info output, strlen input, block/fs buffer transfer paths,
+  and early-log/boot-config copy paths; `wasmos_early_log_copy` now transfers
+  data through `mm_copy_to_user` in bounded chunks instead of direct writes
+  through wasm host pointers. Block-buffer copy/write hostcalls now
+  also enforce non-overflowing in-range `phys+offset+len` arithmetic.
+  Consumer-side boundary sync now uses `wasmos_sync_user_read` for returned
+  output buffers (`acpi_rsdp_info`, `boot_module_name`, `boot_config_copy`),
+  allowing those hostcalls to remain on pure validated user-copy semantics
+  without per-hostcall host-pointer mirror writes.
+- Unrecoverable user-mode page faults now use process-local failure semantics:
+  the kernel marks only the faulting process exited (`-11`) and continues
+  scheduling remaining work; unhandled kernel-mode faults remain fatal.
+  Ring3 smoke now includes a dedicated `ring3-fault` injector process and
+  asserts `[test] ring3 fault isolate ok` when the fault is contained; it now
+  also includes explicit write/exec fault injectors and assertions
+  (`[test] ring3 fault write reason ok`,
+  `[test] ring3 fault exec reason ok`).
+  User-mode fault logs now include structured reason classification
+  (`unmapped`, `write_violation`, `exec_violation`, `user_to_kernel`,
+  `protection`) together with pid/error/address/rip for deterministic triage.
+- Ring3 smoke now additionally verifies syscall ABI width validation for IPC:
+  a CPL3 `IPC_NOTIFY` with a >32-bit endpoint is rejected by syscall argument
+  parsing and emits `[test] ring3 ipc syscall arg width deny ok`.
+- Ring3 fault policy is now asserted explicitly: a kernel-side watcher process
+  verifies that `ring3-fault`, `ring3-fault-write`, and `ring3-fault-exec`
+  each terminate with exit status `-11`, emitting dedicated
+  `[test] ring3 fault* exit status ok` markers.
+  Current `ring3-fault-exec` reason-marker acceptance includes
+  `exec_violation`, `user_to_kernel`, and `unmapped` on existing QEMU/CPU
+  paths until NX instruction-fetch faults classify consistently as
+  `exec_violation`.
+- Capability metadata now feeds a per-context resource-capability registry
+  (`io.port`, `irq.route`, `mmio.map`, `dma.buffer`, `system.control`); WASM
+  app metadata now supports multi-capability grants per payload, and WASM
+  I/O/MMIO/DMA hostcalls enforce explicit capability checks,
+  `wasmos_irq_route`/`wasmos_irq_unroute` require `irq.route` plus a kernel
+  per-app IRQ-line policy allowlist (default deny), and
+  `wasmos_system_halt`/`wasmos_system_reboot` require `system.control`.
+  Integration coverage now executes capability split probes
+  (`irq-route-deny` / `irq-route-allow`) to keep deny-by-default and
+  grant-enabled IRQ routing behavior under regression test.
+- Authorization checks for privileged operations are now centralized under
+  `policy_authorize(context, action, arg0)` so capability checks and
+  action-specific policy constraints are evaluated in one kernel path.
+- Syscall `ipc_call` reply correlation now keeps unmatched out-of-order replies
+  in a per-process bounded pending queue and consumes matching `request_id`
+  entries before waiting on endpoint receive, closing the previous drop-on-
+  mismatch behavior. Ring3 smoke coverage asserts this path via
+  `[test] ring3 ipc call correlate ok`. Matching-`request_id` replies are also
+  authenticated against expected source endpoint + owner context before accept
+  (`[test] ring3 ipc call source auth ok`). Ring3 smoke now also asserts a
+  dedicated control-plane deny path by attempting `ipc_notify` to a kernel-
+  owned notification endpoint and requiring
+  `[test] ring3 ipc syscall control deny ok`. Ring3 smoke now also asserts a
+  dedicated control-plane deny path by attempting `ipc_call` to the
+  process-manager endpoint and requiring
+  `[test] ring3 ipc call control deny ok`. Process-manager's specialized
+  FS-backed spawn reply correlation now also authenticates reply source
+  endpoint (must match `fs-fat`) in addition to `request_id`/message type.
+  Process-manager async `wait` reply delivery now revalidates endpoint owner
+  context at send time against the original waiter context, preventing
+  cross-context reply delivery if an endpoint is reused/re-owned. Strict
+  ring3 smoke now deterministically injects an owner-mismatch wait record and
+  asserts deny-path marker `[test] pm wait reply owner deny ok`. Strict ring3
+  smoke also injects a synthetic kernel-owned `PROC_IPC_KILL` caller and
+  asserts deny-path marker `[test] pm kill owner deny ok`. Strict ring3 smoke
+  also injects a synthetic kernel-owned `PROC_IPC_STATUS` caller and asserts
+  deny-path marker `[test] pm status owner deny ok`. Strict ring3 smoke also
+  injects a synthetic kernel-owned `PROC_IPC_SPAWN` caller and asserts deny-
+  path marker `[test] pm spawn owner deny ok`.
+- Capability descriptors are now validated fail-closed during WASMOS-APP pack:
+  `make_wasmos_app` rejects unknown capability names and non-zero capability
+  flags before artifacts are produced.
+- A minimal fixed-size slab allocator scaffold (`kalloc_small`/`kfree_small`)
+  is now available as an optional kernel allocator path for incremental
+  migration off ad-hoc static/object-specific allocation patterns.
+- The CMake-only `kernel_ide` aggregation target indexes kernel sources plus
+  selected WASM user-space sources, so it must mirror the libc include root
+  used by those components for editor diagnostics.
+- The top-level documentation now uses repo-local mascot and wordmark assets in
+  `README.md`; this is documentation-only branding and does not affect boot or
+  runtime behavior.
+

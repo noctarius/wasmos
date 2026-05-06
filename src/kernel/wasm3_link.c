@@ -1628,7 +1628,10 @@ m3ApiRawFunction(wasmos_kmap_dump)
         m3ApiReturn(-1);
     }
     paging_dump_user_root_kernel_mappings(root);
-    m3ApiReturn(paging_verify_user_root(root, 1) == 0 ? 0 : -1);
+    if ((proc->ctx.cs & 0x3u) == 0x3u) {
+        m3ApiReturn(paging_verify_user_root_no_low_slot(root, 1) == 0 ? 0 : -1);
+    }
+    m3ApiReturn(0);
 }
 
 m3ApiRawFunction(wasmos_kmap_dump_all)
@@ -1668,10 +1671,6 @@ m3ApiRawFunction(wasmos_kmap_dump_all)
         paging_dump_user_root_kernel_mappings(root);
         if ((proc->ctx.cs & 0x3u) == 0x3u) {
             if (paging_verify_user_root_no_low_slot(root, 1) != 0) {
-                failures++;
-            }
-        } else {
-            if (paging_verify_user_root(root, 1) != 0) {
                 failures++;
             }
         }

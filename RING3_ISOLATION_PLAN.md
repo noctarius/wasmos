@@ -397,6 +397,10 @@ Progress update (2026-05-06):
 - Process-manager specialized request/reply hardening update:
   FS-backed spawn response correlation now also requires expected source
   endpoint (`fs-fat`) in addition to matching `request_id`/response type.
+- Process-manager specialized async-wait hardening update:
+  waiter records now bind reply endpoint to owner context and revalidate
+  endpoint ownership before async wait-reply delivery, dropping stale/re-owned
+  endpoints to avoid cross-context response delivery.
 - Remaining Phase 4 work:
   - extend equivalent adversarial coverage to any additional specialized
     request/reply paths outside current `ipc_call` flow

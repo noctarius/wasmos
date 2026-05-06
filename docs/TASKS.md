@@ -90,6 +90,8 @@ plan toward full ring-3 process isolation and kernel survivability.
 - [ ] Add UTF-8 expansion path for VT rendering/input pipeline.
 - [ ] Add per-tty scrollback.
 - [ ] Extend VT client API where needed for richer terminal behavior.
+- [ ] Add explicit tty-switch behavior tests (`tty 1/2/3`) that verify
+  per-tty shell/input isolation across virtual terminals.
 - [ ] Add focused VT allocator stress tests (`memory.grow` / near-OOM paths).
 - [ ] Evaluate extraction of VT startup allocator helper for shared WASM
   service reuse.

@@ -382,6 +382,10 @@ The current tree already boots into a usable user-space stack:
 - Authorization checks for privileged operations are now centralized under
   `policy_authorize(context, action, arg0)` so capability checks and
   action-specific policy constraints are evaluated in one kernel path.
+- Syscall `ipc_call` reply correlation now keeps unmatched out-of-order replies
+  in a per-process bounded pending queue and consumes matching `request_id`
+  entries before waiting on endpoint receive, closing the previous drop-on-
+  mismatch behavior.
 - Capability descriptors are now validated fail-closed during WASMOS-APP pack:
   `make_wasmos_app` rejects unknown capability names and non-zero capability
   flags before artifacts are produced.

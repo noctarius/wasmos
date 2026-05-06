@@ -360,6 +360,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - policy enforcement now routes through a centralized kernel authorization
   entrypoint (`policy_authorize`) so hostcalls and IRQ routing share one
   decision path (capability checks plus resource policy constraints)
+- syscall `ipc_call` now preserves out-of-order replies in a per-process
+  bounded pending inbox and matches by `request_id` before blocking receives,
+  preventing request/reply confusion under adversarial ordering
 - the WASMOS-APP packer (`make_wasmos_app`) now rejects unknown capability
   names and non-zero capability flags so malformed capability descriptors fail
   closed before runtime

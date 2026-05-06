@@ -7,6 +7,7 @@
 .extern x86_exception_panic
 .extern x86_exception_panic_frame
 .extern x86_page_fault_handler
+.extern x86_user_exception_handler
 .extern x86_syscall_handler
 .extern x86_irq_handler
  .extern x86_timer_irq_handler
@@ -98,11 +99,19 @@ isr_exception_6:
     pushq $0
     mov %rsp, %rsi
     mov $6, %rdi
+    call x86_user_exception_handler
+    test %eax, %eax
+    jz 2f
+    mov %rsp, %rsi
+    mov $6, %rdi
     call x86_exception_panic_frame
 1:
     cli
     hlt
     jmp 1b
+2:
+    add $8, %rsp
+    iretq
 DECL_EXC 7
 DECL_EXC 8
 DECL_EXC 9

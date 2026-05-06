@@ -446,6 +446,19 @@ Tasks:
   - multiple ring3 processes repeatedly triggering distinct fault classes
   - scheduler liveness assertion
 
+Progress update (2026-05-06):
+- Added first non-#PF user-exception containment probe in strict ring3 smoke:
+  a dedicated `ring3-fault-ud` process executes CPL3 `ud2` (`#UD`, vector 6).
+- Kernel trap path now handles CPL3 `#UD` as process-local termination
+  (`-11`) instead of global panic for this covered vector.
+- Smoke/gate markers now assert both classification and policy status:
+  - `[test] ring3 fault ud reason ok`
+  - `[test] ring3 fault ud exit status ok`
+- Remaining Phase-5 work:
+  - extend equivalent process-local handling and coverage to additional
+    user-origin exception vectors beyond current `#PF` and `#UD`
+  - add multi-process mixed fault-storm liveness assertions
+
 Exit criteria:
 - All covered user exception classes terminate offending process only.
 - Kernel remains alive across sustained fault storms.

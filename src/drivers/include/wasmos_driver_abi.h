@@ -63,6 +63,7 @@ enum {
     FS_IPC_CHDIR_REQ = 0x412,
     FS_IPC_READ_APP_REQ = 0x413,
     FS_IPC_RESP = 0x480,
+    FS_IPC_STREAM = 0x481,
     FS_IPC_ERROR = 0x4FF
 };
 
@@ -71,6 +72,8 @@ enum {
     FBTEXT_IPC_CURSOR_SET_REQ  = 0x601,
     FBTEXT_IPC_SCROLL_REQ      = 0x602,
     FBTEXT_IPC_CLEAR_REQ       = 0x603,
+    FBTEXT_IPC_CONSOLE_MODE_REQ = 0x604, /* arg0: 0=ring off, 1=ring on */
+    FBTEXT_IPC_GEOMETRY_REQ    = 0x605,  /* resp: arg0=cols arg1=rows */
     FBTEXT_IPC_RESP            = 0x680,
     FBTEXT_IPC_ERROR           = 0x6FF
 };
@@ -80,8 +83,17 @@ enum {
     VT_IPC_READ_REQ     = 0x701,
     VT_IPC_SET_ATTR_REQ = 0x702,
     VT_IPC_SWITCH_TTY   = 0x703,
+    VT_IPC_GET_ACTIVE_TTY = 0x704,
+    VT_IPC_REGISTER_WRITER = 0x705,
+    VT_IPC_SET_MODE_REQ = 0x706,
     VT_IPC_RESP         = 0x780,
     VT_IPC_ERROR        = 0x7FF
+};
+
+enum {
+    VT_INPUT_MODE_RAW = 0,
+    VT_INPUT_MODE_CANONICAL = 1 << 0,
+    VT_INPUT_MODE_ECHO = 1 << 1
 };
 
 enum {

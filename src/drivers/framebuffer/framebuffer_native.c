@@ -19,6 +19,7 @@
  *   FBTEXT_IPC_CURSOR_SET_REQ  arg0=col  arg1=row
  *   FBTEXT_IPC_SCROLL_REQ      arg0=n_rows
  *   FBTEXT_IPC_CLEAR_REQ       (no args)
+ *   FBTEXT_IPC_GEOMETRY_REQ    resp: arg0=cols arg1=rows
  */
 
 /* IPC_EMPTY and IPC_OK values — must stay in sync with kernel ipc.h. */
@@ -29,6 +30,7 @@
 
 static fbtext_state_t g_state;
 static uint8_t        g_early_log_buf[EARLY_LOG_BUF];
+static uint8_t        g_console_ring_enabled = 1;
 
 static int
 str_len(const char *s)
@@ -56,39 +58,6 @@ write_hex32(wasmos_driver_api_t *api, const char *label, uint32_t v)
     for (int s = 28; s >= 0; s -= 4) buf[i++] = hx[(v >> s) & 0xF];
     buf[i] = '\0';
     api->console_write(buf, i);
-}
-
-/* Target display resolution — change these to switch modes. */
-#define VBE_TARGET_WIDTH  1280
-#define VBE_TARGET_HEIGHT 1024
-
-/* Read/write a Bochs VBE register via I/O ports 0x01CE/0x01CF. */
-static uint16_t
-vbe_read(wasmos_driver_api_t *api, uint16_t index)
-{
-    api->io_out16(0x01CE, index);
-    return api->io_in16(0x01CF);
-}
-
-static void
-vbe_write(wasmos_driver_api_t *api, uint16_t index, uint16_t value)
-{
-    api->io_out16(0x01CE, index);
-    api->io_out16(0x01CF, value);
-}
-
-/* Set the Bochs VBE device to the desired mode.
- * Sequence: disable → set geometry → enable LFB. */
-static void
-vbe_set_mode(wasmos_driver_api_t *api, uint16_t width, uint16_t height)
-{
-    vbe_write(api, 4, 0x00);           /* ENABLE  = disabled            */
-    vbe_write(api, 1, width);          /* XRES                          */
-    vbe_write(api, 2, height);         /* YRES                          */
-    vbe_write(api, 3, 32);             /* BPP     = 32                  */
-    vbe_write(api, 6, width);          /* VIRT_WIDTH = stride in pixels */
-    vbe_write(api, 5, 0);             /* VIRT_Y_OFFSET = 0             */
-    vbe_write(api, 4, 0x41);           /* ENABLE  = enabled | LFB       */
 }
 
 static void
@@ -128,7 +97,7 @@ replay_early_log(wasmos_driver_api_t *api)
 }
 
 static int
-drain_console_ring(console_ring_t *ring)
+drain_console_ring(console_ring_t *ring, uint32_t budget)
 {
     if (!ring || ring->capacity == 0) {
         return 0;
@@ -137,9 +106,11 @@ drain_console_ring(console_ring_t *ring)
     uint32_t rp = ring->read_pos;
     uint32_t wp = ring->write_pos;
     int drained = 0;
-    while (rp != wp) {
+    uint32_t n = 0;
+    while (rp != wp && n < budget) {
         fbtext_put_char(&g_state, ring->data[rp % cap]);
         rp++;
+        n++;
         drained = 1;
     }
     ring->read_pos = rp;
@@ -165,32 +136,21 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
         return 0;
     }
 
-    /* Switch the Bochs VBE device to the desired resolution. */
-    vbe_set_mode(api, VBE_TARGET_WIDTH, VBE_TARGET_HEIGHT);
-
-    /* Read actual VBE geometry before mapping so we allocate the right size.
-     * vbe_set_mode above should have set the target mode; read back to confirm
-     * and derive stride/size. */
+    /* Start from the boot-provided framebuffer geometry. The kernel only maps
+     * the physical framebuffer range captured by the bootloader, so native
+     * driver-side VBE mode changes must not expand the required map size.
+     * TODO: add an explicit mode-set/update-framebuffer-info path before
+     * allowing this driver to reprogram Bochs VBE after ExitBootServices().
+     */
     uint32_t fb_width  = info.framebuffer_width;
     uint32_t fb_height = info.framebuffer_height;
     uint32_t fb_stride = info.framebuffer_stride;
-    {
-        uint16_t vbe_en = vbe_read(api, 4); /* ENABLE */
-        uint16_t vbe_xr = vbe_read(api, 1); /* XRES   */
-        uint16_t vbe_yr = vbe_read(api, 2); /* YRES   */
-        uint16_t vbe_vw = vbe_read(api, 6); /* VIRT_WIDTH = stride in pixels */
-        if ((vbe_en & 0x01u) && vbe_xr && vbe_yr && vbe_vw) {
-            fb_width  = vbe_xr;
-            fb_height = vbe_yr;
-            fb_stride = vbe_vw;
-            write_hex32(api, "[framebuffer] vbe override ", vbe_xr);
-            write_hex32(api, "x", vbe_yr);
-            write_hex32(api, " stride=", vbe_vw);
-            write_str(api, "\n");
-        }
-    }
+    write_hex32(api, "[framebuffer] boot mode ", fb_width);
+    write_hex32(api, "x", fb_height);
+    write_hex32(api, " stride=", fb_stride);
+    write_str(api, "\n");
 
-    /* Compute map size from actual geometry (32bpp = 4 bytes/pixel). */
+    /* Compute map size from boot geometry (32bpp = 4 bytes/pixel). */
     uint32_t size = fb_stride * fb_height * 4u;
     size = (size + 0xFFFu) & ~0xFFFu;
 
@@ -215,6 +175,12 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
         write_str(api, "[framebuffer] ipc endpoint failed\n");
         return -1;
     }
+    /* Derive our context id from current pid (context_id == pid for native). */
+    uint32_t ctx = api->sched_current_pid();
+    if (api->console_register_fb(ctx, ep) != 0) {
+        write_str(api, "[framebuffer] register endpoint failed\n");
+        return -1;
+    }
 
     console_ring_t *ring = (console_ring_t *)api->shmem_map(api->console_ring_id());
     if (!ring) {
@@ -222,15 +188,17 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
         return -1;
     }
 
-    /* Derive our context id from current pid (context_id == pid for native). */
-    uint32_t ctx = api->sched_current_pid();
-
-    /* Main loop: drain console ring, then process control IPC. */
+    /* Main loop: prioritize control IPC so tty switch clear/replay requests
+     * are applied promptly even if console ring backlog is large. */
     nd_ipc_message_t msg;
     for (;;) {
-        int had_ring = drain_console_ring(ring);
         int rc = api->ipc_recv(ctx, ep, &msg);
         if (rc == ND_IPC_EMPTY) {
+            /* Drain ring output in bounded chunks so control IPC gets regular
+             * service windows even under sustained serial log throughput. */
+            int had_ring = g_console_ring_enabled
+                               ? drain_console_ring(ring, 256u)
+                               : 0;
             if (!had_ring) {
                 api->sched_yield();
             }
@@ -281,13 +249,30 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
         case FBTEXT_IPC_CLEAR_REQ:
             fbtext_clear(&g_state);
             break;
+        case FBTEXT_IPC_CONSOLE_MODE_REQ:
+            if (msg.arg0 != 0) {
+                if (!g_console_ring_enabled) {
+                    /* Re-enable in "live tail" mode: drop stale backlog so
+                     * returning to tty0 does not replay minutes of old logs
+                     * and starve subsequent tty control traffic. */
+                    ring->read_pos = ring->write_pos;
+                }
+                g_console_ring_enabled = 1u;
+            } else {
+                g_console_ring_enabled = 0u;
+            }
+            break;
+        case FBTEXT_IPC_GEOMETRY_REQ:
+            resp.arg0 = g_state.cols;
+            resp.arg1 = g_state.rows;
+            break;
         default:
             resp.type = FBTEXT_IPC_ERROR;
             resp.arg0 = (uint32_t)-1;
             break;
         }
 
-        if (msg.source != (uint32_t)~0u) {
+        if (msg.source != (uint32_t)~0u && msg.request_id != 0) {
             api->ipc_send(ctx, msg.source, &resp);
         }
     }

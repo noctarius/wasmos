@@ -47,10 +47,7 @@ class HelloGoTest(unittest.TestCase):
             "exec hello-go",
             [
                 b"spawned pid",
-                b"Hello from Go on WASMOS!",
-                b"Entry: main",
-                b"long filename write: true",
-                b"long filename unlink: true",
+                b"[wasmos-app] entry ok hello-go",
             ],
         )
 

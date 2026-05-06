@@ -16,5 +16,8 @@ typedef struct framebuffer_info {
 void framebuffer_init(const boot_info_t *info);
 int framebuffer_get_info(framebuffer_info_t *out);
 int framebuffer_put_pixel(uint32_t x, uint32_t y, uint32_t color);
+int framebuffer_fill(uint32_t color);
+void framebuffer_panic_begin(void);
+void framebuffer_panic_write(const char *text);
 
 #endif

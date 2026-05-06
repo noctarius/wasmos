@@ -7,8 +7,9 @@
 /*
  * hw-discovery is currently a bootstrap sequencer more than a full device
  * manager. It verifies the ACPI RSDP is present, finds the bootstrap storage
- * driver modules, and asks the process manager to start them in dependency
- * order.
+ * driver modules, and asks the process manager to start ATA/FAT in dependency
+ * order. Once FAT is available, it starts display and input drivers by name
+ * from disk; the kernel early framebuffer is sufficient before that point.
  * TODO: Grow this into a real hardware inventory/policy service instead of a
  * storage-bootstrap sequencer with hardcoded ATA/FAT assumptions.
  */
@@ -60,9 +61,6 @@ static uint8_t g_keyboard_retries = 0;
 static uint8_t g_framebuffer_retries = 0;
 static int32_t g_ata_index = -1;
 static int32_t g_fat_index = -1;
-static int32_t g_serial_index = -1;
-static int32_t g_keyboard_index = -1;
-static int32_t g_framebuffer_index = -1;
 
 static void
 stall_forever(void)
@@ -136,6 +134,9 @@ module_index_by_name(const char *name)
         if (wasmos_boot_module_name(i, (int32_t)(uintptr_t)buf, (int32_t)sizeof(buf)) < 0) {
             continue;
         }
+        if (wasmos_sync_user_read((int32_t)(uintptr_t)buf, (int32_t)sizeof(buf)) != 0) {
+            continue;
+        }
         if (str_eq(buf, name)) {
             return i;
         }
@@ -155,6 +156,11 @@ hw_scan_acpi(void)
                                        (int32_t)sizeof(rsdp));
     if (rc != 0) {
         console_write("[hw-discovery] ACPI RSDP not found\n");
+        return;
+    }
+    if (wasmos_sync_user_read((int32_t)(uintptr_t)&length, (int32_t)sizeof(length)) != 0 ||
+        wasmos_sync_user_read((int32_t)(uintptr_t)&rsdp, (int32_t)sizeof(rsdp)) != 0) {
+        console_write("[hw-discovery] ACPI sync failed\n");
         return;
     }
     if (length < 20) {
@@ -190,9 +196,69 @@ hw_spawn_driver_index(int32_t index)
     return 0;
 }
 
+static void
+pack_name_args(const char *name, uint32_t out[4])
+{
+    out[0] = 0;
+    out[1] = 0;
+    out[2] = 0;
+    out[3] = 0;
+    if (!name) {
+        return;
+    }
+    for (uint32_t i = 0; name[i] && i < 16; ++i) {
+        uint32_t slot = i / 4;
+        uint32_t shift = (i % 4) * 8;
+        out[slot] |= ((uint32_t)(uint8_t)name[i]) << shift;
+    }
+}
+
+static const char *
+target_name(hw_spawn_target_t target)
+{
+    if (target == HW_SPAWN_SERIAL) {
+        return "serial";
+    }
+    if (target == HW_SPAWN_KEYBOARD) {
+        return "keyboard";
+    }
+    if (target == HW_SPAWN_FRAMEBUFFER) {
+        return "framebuffer";
+    }
+    return "";
+}
+
+static int
+hw_spawn_driver_name(hw_spawn_target_t target)
+{
+    const char *name = target_name(target);
+    uint32_t packed[4];
+    if (!name || name[0] == '\0') {
+        return -1;
+    }
+    pack_name_args(name, packed);
+    if (wasmos_ipc_send(g_proc_endpoint,
+                        g_reply_endpoint,
+                        PROC_IPC_SPAWN_NAME,
+                        g_request_id,
+                        (int32_t)packed[0],
+                        (int32_t)packed[1],
+                        (int32_t)packed[2],
+                        (int32_t)packed[3]) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
 static hw_spawn_target_t
 next_spawn_target(void)
 {
+    if (g_need_ata) {
+        return HW_SPAWN_ATA;
+    }
+    if (g_need_fat) {
+        return HW_SPAWN_FAT;
+    }
     if (g_need_serial) {
         return HW_SPAWN_SERIAL;
     }
@@ -201,12 +267,6 @@ next_spawn_target(void)
     }
     if (g_need_framebuffer) {
         return HW_SPAWN_FRAMEBUFFER;
-    }
-    if (g_need_ata) {
-        return HW_SPAWN_ATA;
-    }
-    if (g_need_fat) {
-        return HW_SPAWN_FAT;
     }
     return HW_SPAWN_NONE;
 }
@@ -236,38 +296,34 @@ initialize(int32_t proc_endpoint,
     hw_scan_acpi();
     g_ata_index = module_index_by_name("ata");
     g_fat_index = module_index_by_name("fs-fat");
-    g_serial_index = module_index_by_name("serial");
-    g_keyboard_index = module_index_by_name("keyboard");
-    g_framebuffer_index = module_index_by_name("framebuffer");
     g_need_ata = (g_ata_index >= 0 && !proc_running("ata")) ? 1 : 0;
     g_need_fat = (g_fat_index >= 0 && !proc_running("fs-fat")) ? 1 : 0;
-    g_need_serial = (g_serial_index >= 0 && !proc_running("serial")) ? 1 : 0;
-    g_need_keyboard = (g_keyboard_index >= 0 && !proc_running("keyboard")) ? 1 : 0;
-    g_need_framebuffer = (g_framebuffer_index >= 0 && !proc_running("framebuffer")) ? 1 : 0;
+    g_need_serial = !proc_running("serial") ? 1 : 0;
+    g_need_keyboard = !proc_running("keyboard") ? 1 : 0;
+    g_need_framebuffer = !proc_running("framebuffer") ? 1 : 0;
     g_phase = HW_PHASE_SPAWN;
 
     for (;;) {
         if (g_phase == HW_PHASE_SPAWN) {
-            /* Spawn serial before ATA/FAT so the terminal handoff stays deterministic. */
             hw_spawn_target_t target = next_spawn_target();
             if (target == HW_SPAWN_NONE) {
                 g_phase = HW_PHASE_IDLE;
                 continue;
             }
             if (target == HW_SPAWN_SERIAL) {
-                if (hw_spawn_driver_index(g_serial_index) != 0) {
+                if (hw_spawn_driver_name(target) != 0) {
                     g_phase = HW_PHASE_FAILED;
                     console_write("[hw-discovery] spawn serial failed\n");
                     stall_forever();
                 }
             } else if (target == HW_SPAWN_KEYBOARD) {
-                if (hw_spawn_driver_index(g_keyboard_index) != 0) {
+                if (hw_spawn_driver_name(target) != 0) {
                     g_phase = HW_PHASE_FAILED;
                     console_write("[hw-discovery] spawn keyboard failed\n");
                     stall_forever();
                 }
             } else if (target == HW_SPAWN_FRAMEBUFFER) {
-                if (hw_spawn_driver_index(g_framebuffer_index) != 0) {
+                if (hw_spawn_driver_name(target) != 0) {
                     g_phase = HW_PHASE_FAILED;
                     console_write("[hw-discovery] spawn framebuffer failed\n");
                     stall_forever();

@@ -85,6 +85,9 @@ load_boot_targets(void)
     if (wasmos_boot_config_copy((int32_t)(uintptr_t)g_boot_config, size, 0) != 0) {
         return -1;
     }
+    if (wasmos_sync_user_read((int32_t)(uintptr_t)g_boot_config, size) != 0) {
+        return -1;
+    }
     if (memcmp(g_boot_config, BOOT_CONFIG_MAGIC, 8) != 0) {
         return -1;
     }
@@ -220,6 +223,30 @@ proc_running(const char *name)
     return 0;
 }
 
+static int
+proc_count_named(const char *name)
+{
+    int32_t count = wasmos_proc_count();
+    int matches = 0;
+    if (count <= 0 || !name || !name[0]) {
+        return 0;
+    }
+    if (count > 64) {
+        count = 64;
+    }
+    for (int32_t i = 0; i < count; ++i) {
+        char buf[32];
+        buf[0] = '\0';
+        if (wasmos_proc_info(i, (int32_t)(uintptr_t)buf, (int32_t)sizeof(buf)) <= 0) {
+            continue;
+        }
+        if (str_eq(buf, name)) {
+            matches++;
+        }
+    }
+    return matches;
+}
+
 static void
 pack_name_args(const char *name, uint32_t out[4])
 {
@@ -324,7 +351,14 @@ initialize(int32_t proc_endpoint,
         }
 
         const char *name = g_targets[g_target_index];
-        if (proc_running(name)) {
+        if (str_eq(name, "cli")) {
+            int cli_count = proc_count_named("cli");
+            /* tty0 stays system console; keep one CLI per VT tty1..tty3. */
+            if (cli_count >= 3) {
+                g_target_index++;
+                continue;
+            }
+        } else if (proc_running(name)) {
             g_target_index++;
             continue;
         }

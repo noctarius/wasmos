@@ -59,6 +59,12 @@ set(WASM_NATIVE_CALL_MIN_APP ${BUILD_DIR}/native_call_min.wap)
 set(WASM_NATIVE_CALL_SMOKE_SRC ${EXAMPLES_C_DIR}/native_call_smoke/native_call_smoke.c)
 set(WASM_NATIVE_CALL_SMOKE_WASM ${BUILD_DIR}/native_call_smoke.wasm)
 set(WASM_NATIVE_CALL_SMOKE_APP ${BUILD_DIR}/native_call_smoke.wap)
+set(WASM_IRQ_ROUTE_DENY_SRC ${EXAMPLES_C_DIR}/irq_route_deny/irq_route_deny.c)
+set(WASM_IRQ_ROUTE_DENY_WASM ${BUILD_DIR}/irq_route_deny.wasm)
+set(WASM_IRQ_ROUTE_DENY_APP ${BUILD_DIR}/irq_route_deny.wap)
+set(WASM_IRQ_ROUTE_ALLOW_SRC ${EXAMPLES_C_DIR}/irq_route_allow/irq_route_allow.c)
+set(WASM_IRQ_ROUTE_ALLOW_WASM ${BUILD_DIR}/irq_route_allow.wasm)
+set(WASM_IRQ_ROUTE_ALLOW_APP ${BUILD_DIR}/irq_route_allow.wap)
 set(WASM_ATA_DRIVER_SRC ${DRIVER_WASM_DIR}/ata/ata.c)
 set(WASM_ATA_DRIVER_WASM ${BUILD_DIR}/ata.wasm)
 set(WASM_ATA_APP ${BUILD_DIR}/ata.wap)
@@ -136,6 +142,33 @@ else ()
   set(WASMOS_TRACE_VALUE 0)
 endif ()
 set(WASMOS_TRACE_DEFINE -DWASMOS_TRACE=${WASMOS_TRACE_VALUE})
+option(WASMOS_RING3_STRICT "Enable strict ring3 policy mode by default" ON)
+if (WASMOS_RING3_STRICT)
+  set(WASMOS_RING3_STRICT_VALUE 1)
+else ()
+  set(WASMOS_RING3_STRICT_VALUE 0)
+endif ()
+set(WASMOS_RING3_STRICT_DEFINE -DWASMOS_RING3_STRICT_DEFAULT=${WASMOS_RING3_STRICT_VALUE})
+
+option(WASMOS_RING3_SMOKE "Enable ring3 smoke probe spawn by default" OFF)
+if (WASMOS_RING3_SMOKE)
+  set(WASMOS_RING3_SMOKE_VALUE 1)
+else ()
+  set(WASMOS_RING3_SMOKE_VALUE 0)
+endif ()
+set(WASMOS_RING3_SMOKE_DEFINE -DWASMOS_RING3_SMOKE_DEFAULT=${WASMOS_RING3_SMOKE_VALUE})
+option(WASMOS_LOW_SLOT_SWEEP "Enable low-slot strip+verify diagnostic sweep for user contexts" ON)
+if (WASMOS_LOW_SLOT_SWEEP)
+  set(WASMOS_LOW_SLOT_SWEEP_VALUE 1)
+else ()
+  set(WASMOS_LOW_SLOT_SWEEP_VALUE 0)
+endif ()
+set(WASMOS_LOW_SLOT_SWEEP_DEFINE -DWASMOS_LOW_SLOT_SWEEP_DEFAULT=${WASMOS_LOW_SLOT_SWEEP_VALUE})
+set(WASMOS_LOW_SLOT_SWEEP_LEVEL 2 CACHE STRING "Low-slot sweep level: 1=user-mode only, 2=include selected non-user contexts")
+set(WASMOS_LOW_SLOT_SWEEP_LEVEL_DEFINE -DWASMOS_LOW_SLOT_SWEEP_LEVEL_DEFAULT=${WASMOS_LOW_SLOT_SWEEP_LEVEL})
+
+set(WASMOS_IDENTITY_PD_COUNT 0 CACHE STRING "Low-slot identity PDPT entries to map (0..4) for phased reduction experiments")
+set(WASMOS_IDENTITY_PD_COUNT_DEFINE -DWASMOS_IDENTITY_PD_COUNT=${WASMOS_IDENTITY_PD_COUNT})
 
 set(CLANG clang CACHE STRING "C compiler for freestanding/UEFI builds")
 if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
@@ -250,7 +283,7 @@ get_filename_component(LLD_DIR ${LLD_PATH} DIRECTORY)
 
 set(CFLAGS_COMMON -ffreestanding -fno-stack-protector -fno-builtin -Wall -Wextra -Werror -g)
 set(CFLAGS_EFI ${CFLAGS_COMMON} -target x86_64-unknown-uefi -fshort-wchar -mno-red-zone -B${CLANG_BIN_DIR})
-set(CFLAGS_KERNEL ${CFLAGS_COMMON} -target ${KERNEL_TARGET_TRIPLE} -mno-red-zone -mcmodel=kernel -m64 -I${WASM_DIR} -I${KERNEL_DIR}/include -I${DRIVER_WASM_DIR}/include -B${LLD_DIR} -DWASMOS_ENABLE_PREEMPT_GUARD=1 -DWASMOS_ENABLE_SAFEPOINT=1)
+set(CFLAGS_KERNEL ${CFLAGS_COMMON} -target ${KERNEL_TARGET_TRIPLE} -mno-red-zone -mcmodel=kernel -m64 -fno-jump-tables -I${WASM_DIR} -I${KERNEL_DIR}/include -I${DRIVER_WASM_DIR}/include -B${LLD_DIR} -DWASMOS_ENABLE_PREEMPT_GUARD=1 -DWASMOS_ENABLE_SAFEPOINT=1)
 if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   find_program(LLD_LINK_PATH ${LLD_LINK} HINTS ${LLD_HINTS})
   if (LLD_LINK_PATH)
@@ -339,12 +372,10 @@ add_custom_command(
           ${WASM_INIT_SMOKE_APP}
           ${WASM_NATIVE_CALL_MIN_APP}
           ${WASM_NATIVE_CALL_SMOKE_APP}
-          ${WASM_KEYBOARD_APP}
-  ${WASM_ATA_APP}
-  ${WASM_FAT_APP}
-  ${WASM_SERIAL_APP}
-  ${WASM_HW_DISCOVERY_APP}
-  make_wasmos_app
+          ${WASM_ATA_APP}
+          ${WASM_FAT_APP}
+          ${WASM_HW_DISCOVERY_APP}
+          make_wasmos_app
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Building initfs image"
   VERBATIM
@@ -414,14 +445,25 @@ set(NATIVE_CALL_MIN_COPY_CMD
 set(NATIVE_CALL_SMOKE_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_NATIVE_CALL_SMOKE_APP} ${BUILD_DIR}/esp/apps/native_call_smoke.wap
 )
+set(IRQ_ROUTE_DENY_COPY_CMD
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_IRQ_ROUTE_DENY_APP} ${BUILD_DIR}/esp/apps/irq_route_deny.wap
+)
+set(IRQ_ROUTE_ALLOW_COPY_CMD
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_IRQ_ROUTE_ALLOW_APP} ${BUILD_DIR}/esp/apps/irq_route_allow.wap
+)
 set(LARGE_READ_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/large_read.txt ${BUILD_DIR}/esp/large_read.txt
 )
 set(WRITE_SMOKE_FILE_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/write_smoke.txt ${BUILD_DIR}/esp/write_smoke.txt
 )
+# Keep hardware drivers on the ESP instead of embedding them in initfs;
+# hw-discovery loads them by name after fs-fat is available.
 set(INITFS_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${INITFS_IMG} ${BUILD_DIR}/esp/initfs.img
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SERIAL_APP} ${BUILD_DIR}/esp/system/drivers/serial.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_KEYBOARD_APP} ${BUILD_DIR}/esp/system/drivers/keyboard.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FRAMEBUFFER_APP} ${BUILD_DIR}/esp/system/drivers/framebuffer.wap
 )
 if (RUST_ENABLE)
   set(RUST_HELLO_COPY_CMD
@@ -474,6 +516,8 @@ if (OVMF_VARS)
     ${FS_WRITE_SMOKE_COPY_CMD}
     ${NATIVE_CALL_MIN_COPY_CMD}
     ${NATIVE_CALL_SMOKE_COPY_CMD}
+    ${IRQ_ROUTE_DENY_COPY_CMD}
+    ${IRQ_ROUTE_ALLOW_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
@@ -516,6 +560,8 @@ if (OVMF_VARS)
     ${FS_WRITE_SMOKE_COPY_CMD}
     ${NATIVE_CALL_MIN_COPY_CMD}
     ${NATIVE_CALL_SMOKE_COPY_CMD}
+    ${IRQ_ROUTE_DENY_COPY_CMD}
+    ${IRQ_ROUTE_ALLOW_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
@@ -559,6 +605,8 @@ if (OVMF_VARS)
     ${FS_WRITE_SMOKE_COPY_CMD}
     ${NATIVE_CALL_MIN_COPY_CMD}
     ${NATIVE_CALL_SMOKE_COPY_CMD}
+    ${IRQ_ROUTE_DENY_COPY_CMD}
+    ${IRQ_ROUTE_ALLOW_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
@@ -603,6 +651,8 @@ add_custom_target(run-qemu-cli-test
     ${FS_WRITE_SMOKE_COPY_CMD}
     ${NATIVE_CALL_MIN_COPY_CMD}
     ${NATIVE_CALL_SMOKE_COPY_CMD}
+    ${IRQ_ROUTE_DENY_COPY_CMD}
+    ${IRQ_ROUTE_ALLOW_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
@@ -649,6 +699,8 @@ else ()
     ${FS_WRITE_SMOKE_COPY_CMD}
     ${NATIVE_CALL_MIN_COPY_CMD}
     ${NATIVE_CALL_SMOKE_COPY_CMD}
+    ${IRQ_ROUTE_DENY_COPY_CMD}
+    ${IRQ_ROUTE_ALLOW_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
@@ -689,6 +741,8 @@ else ()
     ${FS_WRITE_SMOKE_COPY_CMD}
     ${NATIVE_CALL_MIN_COPY_CMD}
     ${NATIVE_CALL_SMOKE_COPY_CMD}
+    ${IRQ_ROUTE_DENY_COPY_CMD}
+    ${IRQ_ROUTE_ALLOW_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
@@ -729,6 +783,8 @@ else ()
     ${FS_WRITE_SMOKE_COPY_CMD}
     ${NATIVE_CALL_MIN_COPY_CMD}
     ${NATIVE_CALL_SMOKE_COPY_CMD}
+    ${IRQ_ROUTE_DENY_COPY_CMD}
+    ${IRQ_ROUTE_ALLOW_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
@@ -772,6 +828,8 @@ else ()
     ${FS_WRITE_SMOKE_COPY_CMD}
     ${NATIVE_CALL_MIN_COPY_CMD}
     ${NATIVE_CALL_SMOKE_COPY_CMD}
+    ${IRQ_ROUTE_DENY_COPY_CMD}
+    ${IRQ_ROUTE_ALLOW_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
@@ -814,6 +872,8 @@ else ()
     ${FS_WRITE_SMOKE_COPY_CMD}
     ${NATIVE_CALL_MIN_COPY_CMD}
     ${NATIVE_CALL_SMOKE_COPY_CMD}
+    ${IRQ_ROUTE_DENY_COPY_CMD}
+    ${IRQ_ROUTE_ALLOW_COPY_CMD}
     ${RUST_HELLO_COPY_CMD}
     ${GO_HELLO_COPY_CMD}
     ${ZIG_HELLO_COPY_CMD}
@@ -860,6 +920,8 @@ add_custom_target(run-qemu-ui-test
   ${FS_WRITE_SMOKE_COPY_CMD}
   ${NATIVE_CALL_MIN_COPY_CMD}
   ${NATIVE_CALL_SMOKE_COPY_CMD}
+    ${IRQ_ROUTE_DENY_COPY_CMD}
+    ${IRQ_ROUTE_ALLOW_COPY_CMD}
   ${RUST_HELLO_COPY_CMD}
   ${GO_HELLO_COPY_CMD}
   ${ZIG_HELLO_COPY_CMD}
@@ -877,39 +939,117 @@ add_custom_target(run-qemu-ui-test
   VERBATIM
 )
 endif ()
+add_custom_target(run-qemu-ring3-check
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/devices
+  COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
+  COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
+  ${INITFS_COPY_CMD}
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/apps/vt.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HW_DISCOVERY_APP} ${BUILD_DIR}/esp/system/services/hw_discovery.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wap
+  ${AS_HELLO_COPY_CMD}
+  ${HELLO_C_COPY_CMD}
+  ${CHARDEV_PREEMPT_COPY_CMD}
+  ${INIT_SMOKE_COPY_CMD}
+  ${FS_OPEN_SMOKE_COPY_CMD}
+  ${FS_WRITE_SMOKE_COPY_CMD}
+  ${NATIVE_CALL_MIN_COPY_CMD}
+  ${NATIVE_CALL_SMOKE_COPY_CMD}
+    ${IRQ_ROUTE_DENY_COPY_CMD}
+    ${IRQ_ROUTE_ALLOW_COPY_CMD}
+  ${RUST_HELLO_COPY_CMD}
+  ${GO_HELLO_COPY_CMD}
+  ${ZIG_HELLO_COPY_CMD}
+  ${LARGE_READ_COPY_CMD}
+  ${WRITE_SMOKE_FILE_COPY_CMD}
+  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
+  COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_ring3_halt_test.py
+          --ovmf-code ${OVMF_CODE}
+          ${QEMU_UI_OVMF_VARS_ARG}
+          --esp ${BUILD_DIR}/esp
+  DEPENDS bootloader kernel
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Running QEMU ring3 smoke marker test"
+  VERBATIM
+)
+
+add_custom_target(run-qemu-ring3-test
+  COMMAND ${CMAKE_COMMAND}
+          -S ${CMAKE_SOURCE_DIR}
+          -B ${BUILD_DIR}/ring3
+          -DCLANG=${CLANG}
+          -DLLD=${LLD}
+          -DOBJCOPY=${OBJCOPY}
+          -DOVMF_CODE=${OVMF_CODE}
+          -DOVMF_VARS=${OVMF_VARS}
+          -DWASMOS_TRACE=${WASMOS_TRACE}
+          -DWASMOS_LOW_SLOT_SWEEP=${WASMOS_LOW_SLOT_SWEEP}
+          -DWASMOS_LOW_SLOT_SWEEP_LEVEL=${WASMOS_LOW_SLOT_SWEEP_LEVEL}
+          -DWASMOS_IDENTITY_PD_COUNT=${WASMOS_IDENTITY_PD_COUNT}
+          -DWASMOS_RING3_STRICT=ON
+          -DWASMOS_RING3_SMOKE=ON
+  COMMAND ${CMAKE_COMMAND} --build ${BUILD_DIR}/ring3 --target run-qemu-ring3-check
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Configure/build shadow ring3 tree and run ring3 smoke marker test"
+  VERBATIM
+)
+add_custom_target(strict-ring3
+  COMMAND ${CMAKE_COMMAND} --build ${BUILD_DIR} --target run-qemu-test
+  COMMAND ${CMAKE_COMMAND} --build ${BUILD_DIR} --target run-qemu-ring3-test
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Run strict ring3 gate profile (run-qemu-test + run-qemu-ring3-test)"
+  VERBATIM
+)
 add_dependencies(run-qemu c_examples services drivers)
 add_dependencies(run-qemu-test c_examples services drivers)
 add_dependencies(run-qemu-cli-test c_examples services drivers)
 add_dependencies(run-qemu-debug c_examples services drivers)
+add_dependencies(run-qemu-ring3-check c_examples services drivers)
 add_dependencies(run-qemu make_initfs)
 add_dependencies(run-qemu-ui make_initfs)
 add_dependencies(run-qemu-test make_initfs)
 add_dependencies(run-qemu-cli-test make_initfs)
 add_dependencies(run-qemu-debug make_initfs)
+add_dependencies(run-qemu-ring3-check make_initfs)
 
 if (TARGET assemblyscript_examples)
   add_dependencies(run-qemu assemblyscript_examples)
   add_dependencies(run-qemu-test assemblyscript_examples)
   add_dependencies(run-qemu-cli-test assemblyscript_examples)
   add_dependencies(run-qemu-debug assemblyscript_examples)
+  add_dependencies(run-qemu-ring3-check assemblyscript_examples)
 endif ()
 if (TARGET rust_examples)
   add_dependencies(run-qemu rust_examples)
   add_dependencies(run-qemu-test rust_examples)
   add_dependencies(run-qemu-cli-test rust_examples)
   add_dependencies(run-qemu-debug rust_examples)
+  add_dependencies(run-qemu-ring3-check rust_examples)
 endif ()
 if (TARGET go_examples)
   add_dependencies(run-qemu go_examples)
   add_dependencies(run-qemu-test go_examples)
   add_dependencies(run-qemu-cli-test go_examples)
   add_dependencies(run-qemu-debug go_examples)
+  add_dependencies(run-qemu-ring3-check go_examples)
 endif ()
 if (TARGET zig_examples)
   add_dependencies(run-qemu zig_examples)
   add_dependencies(run-qemu-test zig_examples)
   add_dependencies(run-qemu-cli-test zig_examples)
   add_dependencies(run-qemu-debug zig_examples)
+  add_dependencies(run-qemu-ring3-check zig_examples)
 endif ()
 
 if (TARGET run-qemu-ui-test)

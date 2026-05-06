@@ -4,6 +4,27 @@
 #include "stdio.h"
 #include "stdlib.h"
 #include "serial.h"
+#include "paging.h"
+
+extern uint8_t __kernel_start;
+extern uint8_t __kernel_end;
+
+static inline const char *
+kernel_str_ptr(const char *s)
+{
+    uintptr_t p = (uintptr_t)s;
+    uint64_t base = KERNEL_HIGHER_HALF_BASE;
+    if (serial_high_alias_enabled() && p != 0 && (uint64_t)p < base) {
+        uint64_t start = (uint64_t)(uintptr_t)&__kernel_start;
+        uint64_t end = (uint64_t)(uintptr_t)&__kernel_end;
+        uint64_t low_start = start - base;
+        uint64_t low_end = end - base;
+        if ((uint64_t)p >= low_start && (uint64_t)p < low_end) {
+            p = (uintptr_t)((uint64_t)p + base);
+        }
+    }
+    return (const char *)p;
+}
 
 void *memcpy(void *dst, const void *src, size_t n) {
     uint8_t *d = (uint8_t *)dst;
@@ -64,6 +85,8 @@ size_t strlen(const char *s) {
 }
 
 int strcmp(const char *a, const char *b) {
+    a = kernel_str_ptr(a);
+    b = kernel_str_ptr(b);
     if (!a && !b) {
         return 0;
     }
@@ -98,6 +121,7 @@ static size_t append_str(char *buf, size_t size, size_t pos, const char *s) {
     if (!s) {
         s = "(null)";
     }
+    s = kernel_str_ptr(s);
     while (*s) {
         pos = append_char(buf, size, pos, *s++);
     }
@@ -109,6 +133,7 @@ static size_t append_u64(char *buf, size_t size, size_t pos,
                           int width, char pad) {
     char tmp[32];
     const char *digits = uppercase ? "0123456789ABCDEF" : "0123456789abcdef";
+    digits = kernel_str_ptr(digits);
     int idx = 0;
     if (value == 0) {
         tmp[idx++] = '0';
@@ -140,6 +165,7 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
         return 0;
     }
     buf[0] = '\0';
+    fmt = kernel_str_ptr(fmt);
     size_t pos = 0;
     for (const char *p = fmt; p && *p; ++p) {
         if (*p != '%') {

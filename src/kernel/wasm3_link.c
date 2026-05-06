@@ -1666,8 +1666,14 @@ m3ApiRawFunction(wasmos_kmap_dump_all)
         trace_do(serial_write("\n"));
 
         paging_dump_user_root_kernel_mappings(root);
-        if (paging_verify_user_root(root, 1) != 0) {
-            failures++;
+        if ((proc->ctx.cs & 0x3u) == 0x3u) {
+            if (paging_verify_user_root_no_low_slot(root, 1) != 0) {
+                failures++;
+            }
+        } else {
+            if (paging_verify_user_root(root, 1) != 0) {
+                failures++;
+            }
         }
     }
     trace_do(serial_write("[kmap] contexts end\n"));

@@ -69,3 +69,9 @@ This repository uses Codex CLI to assist with development. Follow these conventi
   do not run `run-qemu-test` and `run-qemu-cli-test` at the same time). They
   share mutable `build/esp` artifacts and parallel runs can cause flaky
   failures like `Error deleting` and boot-config corruption.
+
+## Testing Policy
+- Do not extend source-level unit tests that only assert term/word presence via
+  regex in files (string-presence checks without behavioral validation).
+- Existing string-presence tests are temporary and are expected to be cleaned
+  up/replaced over time; do not add new ones in this style.

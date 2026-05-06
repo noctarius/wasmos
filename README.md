@@ -364,7 +364,10 @@ IMPORTANT: Create a git commit after each prompt iteration.
   bounded pending inbox and matches by `request_id` before blocking receives;
   ring3 smoke asserts this with `[test] ring3 ipc call correlate ok`; matching
   `request_id` replies now also require expected source endpoint ownership and
-  source endpoint identity (`[test] ring3 ipc call source auth ok`)
+  source endpoint identity (`[test] ring3 ipc call source auth ok`).
+  Ring3 smoke now also probes a process-manager control-plane `ipc_call`
+  attempt and asserts deterministic deny via
+  `[test] ring3 ipc call control deny ok`
 - the WASMOS-APP packer (`make_wasmos_app`) now rejects unknown capability
   names and non-zero capability flags so malformed capability descriptors fail
   closed before runtime

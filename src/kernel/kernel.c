@@ -793,6 +793,11 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
         0xBA, 0xCD, 0xAB, 0x00, 0x00, /* mov edx, 0x0000ABCD (arg0) */
         0xB8, 0x06, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_IPC_CALL */
         0xCD, 0x80,                   /* int 0x80 */
+        0xBF, 0x00, 0x00, 0x00, 0x00, /* mov edi, <process-manager call ep> (patched) */
+        0xBE, 0x56, 0x66, 0x00, 0x00, /* mov esi, 0x6656 (control deny probe type) */
+        0xBA, 0xC0, 0xDE, 0x00, 0x00, /* mov edx, 0x0000DEC0 (arg0) */
+        0xB8, 0x06, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_IPC_CALL */
+        0xCD, 0x80,                   /* int 0x80 */
         0xBF, 0x00, 0x00, 0x00, 0x00, /* mov edi, <kernel echo call ep> (patched) */
         0xBE, 0x78, 0x56, 0x00, 0x00, /* mov esi, 0x5678 (msg type) */
         0xBA, 0xEF, 0xBE, 0xAD, 0xDE, /* mov edx, 0xDEADBEEF (arg0) */
@@ -830,6 +835,7 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
     uint64_t user_rsp = 0;
     uint32_t ring3_notify_ep = IPC_ENDPOINT_NONE;
     uint32_t ring3_call_denied_ep = IPC_ENDPOINT_NONE;
+    uint32_t ring3_call_control_ep = IPC_ENDPOINT_NONE;
     uint32_t ring3_call_echo_ep = IPC_ENDPOINT_NONE;
 
     if (!out_pid) {
@@ -855,7 +861,12 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
         ring3_call_echo_ep == IPC_ENDPOINT_NONE) {
         return -1;
     }
+    ring3_call_control_ep = process_manager_endpoint();
+    if (ring3_call_control_ep == IPC_ENDPOINT_NONE) {
+        return -1;
+    }
     syscall_set_ipc_call_echo_endpoint(ring3_call_echo_ep);
+    syscall_set_ipc_call_control_deny_endpoint(ring3_call_control_ep);
     ctx = mm_context_get(proc->context_id);
     if (!ctx) {
         return -1;
@@ -894,10 +905,10 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
     }
     {
         const uint32_t ep_imm_off = 86u;
-        ring3_code_patched[ep_imm_off + 0] = (uint8_t)(ring3_call_echo_ep & 0xFFu);
-        ring3_code_patched[ep_imm_off + 1] = (uint8_t)((ring3_call_echo_ep >> 8) & 0xFFu);
-        ring3_code_patched[ep_imm_off + 2] = (uint8_t)((ring3_call_echo_ep >> 16) & 0xFFu);
-        ring3_code_patched[ep_imm_off + 3] = (uint8_t)((ring3_call_echo_ep >> 24) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 0] = (uint8_t)(ring3_call_control_ep & 0xFFu);
+        ring3_code_patched[ep_imm_off + 1] = (uint8_t)((ring3_call_control_ep >> 8) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 2] = (uint8_t)((ring3_call_control_ep >> 16) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 3] = (uint8_t)((ring3_call_control_ep >> 24) & 0xFFu);
     }
     {
         const uint32_t ep_imm_off = 108u;
@@ -908,6 +919,13 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
     }
     {
         const uint32_t ep_imm_off = 130u;
+        ring3_code_patched[ep_imm_off + 0] = (uint8_t)(ring3_call_echo_ep & 0xFFu);
+        ring3_code_patched[ep_imm_off + 1] = (uint8_t)((ring3_call_echo_ep >> 8) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 2] = (uint8_t)((ring3_call_echo_ep >> 16) & 0xFFu);
+        ring3_code_patched[ep_imm_off + 3] = (uint8_t)((ring3_call_echo_ep >> 24) & 0xFFu);
+    }
+    {
+        const uint32_t ep_imm_off = 152u;
         ring3_code_patched[ep_imm_off + 0] = (uint8_t)(ring3_call_echo_ep & 0xFFu);
         ring3_code_patched[ep_imm_off + 1] = (uint8_t)((ring3_call_echo_ep >> 8) & 0xFFu);
         ring3_code_patched[ep_imm_off + 2] = (uint8_t)((ring3_call_echo_ep >> 16) & 0xFFu);

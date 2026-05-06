@@ -15,6 +15,7 @@ static uint8_t g_ring3_ipc_call_deny_logged;
 static uint8_t g_ring3_ipc_call_perm_deny_logged;
 static uint8_t g_ring3_ipc_call_ok_logged;
 static uint8_t g_ring3_ipc_call_err_rdx_zero_logged;
+static uint8_t g_ring3_ipc_call_correlation_logged;
 static uint8_t g_ring3_yield_logged;
 static uint8_t g_ring3_native_abi_logged;
 static uint32_t g_syscall_ipc_call_next_request_id = 1;
@@ -391,7 +392,22 @@ x86_syscall_handler(syscall_frame_t *frame)
         req.arg2 = arg2;
         req.arg3 = arg3;
         if (destination == g_ipc_call_echo_endpoint &&
-            g_ipc_call_echo_endpoint != IPC_ENDPOINT_NONE) {
+            g_ipc_call_echo_endpoint != IPC_ENDPOINT_NONE &&
+            msg_type == 0x00009ABCu) {
+            ipc_message_t synthetic;
+            synthetic.type = req.type;
+            synthetic.source = req.source;
+            synthetic.destination = req.source;
+            synthetic.request_id = req.request_id;
+            synthetic.arg0 = req.arg0;
+            synthetic.arg1 = req.arg1;
+            synthetic.arg2 = req.arg2;
+            synthetic.arg3 = req.arg3;
+            (void)syscall_ipc_pending_enqueue(slot, &synthetic);
+        }
+        if (destination == g_ipc_call_echo_endpoint &&
+            g_ipc_call_echo_endpoint != IPC_ENDPOINT_NONE &&
+            msg_type != 0x00009ABCu) {
             frame->rdx = (uint64_t)req.arg0;
             if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_call_ok_logged &&
                 (uint32_t)frame->rdx == req.arg0) {
@@ -400,9 +416,13 @@ x86_syscall_handler(syscall_frame_t *frame)
             }
             return 0;
         }
-        rc = ipc_send_from(proc->context_id, destination, &req);
-        if (rc != IPC_OK) {
-            return (uint64_t)(int64_t)rc;
+        if (!(destination == g_ipc_call_echo_endpoint &&
+              g_ipc_call_echo_endpoint != IPC_ENDPOINT_NONE &&
+              msg_type == 0x00009ABCu)) {
+            rc = ipc_send_from(proc->context_id, destination, &req);
+            if (rc != IPC_OK) {
+                return (uint64_t)(int64_t)rc;
+            }
         }
         if (syscall_ipc_pending_take_request(slot, request_id, &resp) == 0) {
             frame->rdx = (uint64_t)resp.arg0;
@@ -410,6 +430,13 @@ x86_syscall_handler(syscall_frame_t *frame)
                 (uint32_t)frame->rdx == req.arg0) {
                 g_ring3_ipc_call_ok_logged = 1;
                 serial_write("[test] ring3 ipc call ok\n");
+            }
+            if (name_eq(proc->name, "ring3-smoke") &&
+                msg_type == 0x00009ABCu &&
+                !g_ring3_ipc_call_correlation_logged &&
+                (uint32_t)frame->rdx == req.arg0) {
+                g_ring3_ipc_call_correlation_logged = 1;
+                serial_write("[test] ring3 ipc call correlate ok\n");
             }
             return 0;
         }

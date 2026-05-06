@@ -142,7 +142,15 @@ else ()
   set(WASMOS_TRACE_VALUE 0)
 endif ()
 set(WASMOS_TRACE_DEFINE -DWASMOS_TRACE=${WASMOS_TRACE_VALUE})
-option(WASMOS_RING3_SMOKE "Enable ring3 smoke spawn by default" OFF)
+option(WASMOS_RING3_STRICT "Enable strict ring3 policy mode by default" ON)
+if (WASMOS_RING3_STRICT)
+  set(WASMOS_RING3_STRICT_VALUE 1)
+else ()
+  set(WASMOS_RING3_STRICT_VALUE 0)
+endif ()
+set(WASMOS_RING3_STRICT_DEFINE -DWASMOS_RING3_STRICT_DEFAULT=${WASMOS_RING3_STRICT_VALUE})
+
+option(WASMOS_RING3_SMOKE "Enable ring3 smoke probe spawn by default" OFF)
 if (WASMOS_RING3_SMOKE)
   set(WASMOS_RING3_SMOKE_VALUE 1)
 else ()
@@ -989,6 +997,7 @@ add_custom_target(run-qemu-ring3-test
           -DWASMOS_LOW_SLOT_SWEEP=${WASMOS_LOW_SLOT_SWEEP}
           -DWASMOS_LOW_SLOT_SWEEP_LEVEL=${WASMOS_LOW_SLOT_SWEEP_LEVEL}
           -DWASMOS_IDENTITY_PD_COUNT=${WASMOS_IDENTITY_PD_COUNT}
+          -DWASMOS_RING3_STRICT=ON
           -DWASMOS_RING3_SMOKE=ON
   COMMAND ${CMAKE_COMMAND} --build ${BUILD_DIR}/ring3 --target run-qemu-ring3-check
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

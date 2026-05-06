@@ -228,9 +228,10 @@ The current tree already boots into a usable user-space stack:
   `process_set_user_entry`. The syscall handler logs `[test] ring3 syscall ok`
   on the first CPL3 `getpid` call as an end-to-end transition checkpoint; it
   now also probes `ipc_notify` deny/allow paths and logs
-  `[test] ring3 ipc syscall deny ok` and `[test] ring3 ipc syscall ok` from the
-  syscall layer when those outcomes are observed. It also probes `ipc_call`
-  invalid/permission-denied/allow behavior via invalid-endpoint rejection, a
+  `[test] ring3 ipc syscall deny ok`,
+  `[test] ring3 ipc syscall control deny ok`, and
+  `[test] ring3 ipc syscall ok` from the syscall layer when those outcomes are
+  observed. It also probes `ipc_call` invalid/permission-denied/allow behavior via invalid-endpoint rejection, a
   kernel-owned permission-denied endpoint, and a kernel echo endpoint,
   logging `[test] ring3 ipc call deny ok`,
   `[test] ring3 ipc call err rdx zero ok` (error-path secondary return
@@ -389,6 +390,9 @@ The current tree already boots into a usable user-space stack:
   `[test] ring3 ipc call correlate ok`. Matching-`request_id` replies are also
   authenticated against expected source endpoint + owner context before accept
   (`[test] ring3 ipc call source auth ok`). Ring3 smoke now also asserts a
+  dedicated control-plane deny path by attempting `ipc_notify` to a kernel-
+  owned notification endpoint and requiring
+  `[test] ring3 ipc syscall control deny ok`. Ring3 smoke now also asserts a
   dedicated control-plane deny path by attempting `ipc_call` to the
   process-manager endpoint and requiring
   `[test] ring3 ipc call control deny ok`.

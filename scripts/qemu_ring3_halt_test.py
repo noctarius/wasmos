@@ -32,6 +32,7 @@ def main():
         b"[test] ring3 fault exec exit status ok",
         b"[test] ring3 ipc syscall deny ok",
         b"[test] ring3 ipc syscall arg width deny ok",
+        b"[test] ring3 ipc syscall control deny ok",
         b"[test] ring3 ipc syscall ok",
         b"[test] ring3 ipc call deny ok",
         b"[test] ring3 ipc call err rdx zero ok",

@@ -6,7 +6,7 @@ with the simplest thing that puts text on the framebuffer, then grow into
 ANSI color, escape handling, multi-TTY, and richer editing without rewiring
 the fundamentals each time.
 
-Keep this document aligned with `README.md`, `docs/ARCHITECTURE.md`, and `TASKS.md`
+Keep this document aligned with `README.md`, `docs/ARCHITECTURE.md`, and `docs/TASKS.md`
 as the implementation evolves.
 
 ---

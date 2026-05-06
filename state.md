@@ -61,5 +61,5 @@ Lockup hardening remains in place:
   spacing artifact during rapid `Ctrl+Shift+Fn` switches. Not reproducing in
   recent runs; keep VT debug-mark traces as the primary future capture path.
 - Extend VT toward richer ANSI semantics and line discipline.
-- Keep docs (`README.md`, `docs/ARCHITECTURE.md`, `TASKS.md`, `docs/architecture/13-virtual-terminal.md`)
+- Keep docs (`README.md`, `docs/ARCHITECTURE.md`, `docs/TASKS.md`, `docs/architecture/13-virtual-terminal.md`)
   aligned as behavior evolves.

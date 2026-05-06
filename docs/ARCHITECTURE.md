@@ -29,6 +29,6 @@ Full ring-3 isolation execution planning is tracked in
 ## Update Rules
 - Update the relevant feature document(s) in `docs/architecture/` when behavior
   changes.
-- Keep cross-document references consistent across `README.md`, `TASKS.md`, and
+- Keep cross-document references consistent across `README.md`, `docs/TASKS.md`, and
   architecture docs.
 - Prefer appending concrete implementation notes over vague roadmap text.

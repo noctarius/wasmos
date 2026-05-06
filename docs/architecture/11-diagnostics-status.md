@@ -60,5 +60,5 @@ These remain visible even with tracing disabled:
 - capability-granted device access
 - broader config-driven startup policy beyond the current `sysinit.spawn` list
 
-Open implementation work is tracked in `TASKS.md`.
+Open implementation work is tracked in `docs/TASKS.md`.
 

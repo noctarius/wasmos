@@ -118,7 +118,7 @@ Boot sequence (high level):
 - `docs/architecture/`: feature-level architecture docs
 - `docs/RING3_ISOLATION_PLAN.md`: ring-3 isolation plan
 - `docs/THREADING.md`: threading design and rollout
-- `TASKS.md`: active and planned work
+- `docs/TASKS.md`: active and planned work
 - `AGENTS.md`: contributor/agent workflow and repository rules
 
 ## Runtime Model (Brief)

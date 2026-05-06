@@ -7,8 +7,8 @@ This repository uses Codex CLI to assist with development. Follow these conventi
 - The project is a minimal x86_64 UEFI boot + kernel scaffold intended to host a WASM runtime (wasm3).
 
 ## Always Do
-- Read `README.md` and `ARCHITECTURE.md` at the start of a new task.
-- Keep `README.md` and `ARCHITECTURE.md` updated with meaningful changes and new behaviors.
+- Read `README.md` and `docs/ARCHITECTURE.md` at the start of a new task.
+- Keep `README.md` and `docs/ARCHITECTURE.md` updated with meaningful changes and new behaviors.
 - Add a short `TODO` or `FIXME` comment at the relevant source location when you
   identify a real known gap or deferred issue that is intentionally left in
   place.

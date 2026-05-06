@@ -24,7 +24,7 @@ The point is not benchmark glory; the point is to explore ideas, run
 experiments, and learn how to better steer coding agents without setting your
 keyboard on fire.
 
-Threading design work is tracked in `THREADING.md`, which defines the planned
+Threading design work is tracked in `docs/THREADING.md`, which defines the planned
 process/thread split, scheduler updates, and phased rollout for kernel threads.
 
 ## WASMOS Kernel Architecture
@@ -43,7 +43,7 @@ The project is intentionally narrow:
 If the boot log feels a little too serious, Wasmo is here to remind you that
 the system still boots better when the mascot is confident.
 
-IMPORTANT: Keep this file and `ARCHITECTURE.md` up to date with every prompt
+IMPORTANT: Keep this file and `docs/ARCHITECTURE.md` up to date with every prompt
 execution and code iteration.
 IMPORTANT: Create a git commit after each prompt iteration.
 
@@ -253,7 +253,7 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - strict ring3 smoke target (`run-qemu-ring3-test`) currently passes end-to-end
   with ring3 syscall/fault-policy/preempt/native markers enabled; remaining
   strict-mode framebuffer panic/MMIO mapping hardening is tracked in
-  `RING3_ISOLATION_PLAN.md`
+  `docs/RING3_ISOLATION_PLAN.md`
 - scheduler now updates TSS `rsp0` per selected process so user-mode trap/syscall
   entry has a deterministic kernel stack landing point
 - kernel startup now includes a ring3 smoke process (`ring3-smoke`) that
@@ -410,9 +410,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - `examples/` WASM applications and smoke tests
 - `tests/` QEMU-driven regression tests
 - `scripts/` helper scripts and the QEMU test framework
-- `ARCHITECTURE.md` system design and implementation baseline
+- `docs/ARCHITECTURE.md` system design and implementation baseline
 - `TASKS.md` open work and follow-up items
-- `RING3_ISOLATION_PLAN.md` phased design/tasks for full ring-3 isolation
+- `docs/RING3_ISOLATION_PLAN.md` phased design/tasks for full ring-3 isolation
 - `wasmo.svg` / `wasmo.webp` repo-local mascot art used by this README
 - `wasmos_wordmark.svg` / `wasmos_wordmark.webp` repo-local wordmark art used
   by this README
@@ -739,7 +739,7 @@ Current QEMU note:
 - keep changes small and explicit
 - do not modify vendored dependencies
 - keep build logic in per-component `CMakeLists.txt` files
-- update `README.md` and `ARCHITECTURE.md` when behavior changes
+- update `README.md` and `docs/ARCHITECTURE.md` when behavior changes
 - commit after each prompt iteration
 
 ## Open Work

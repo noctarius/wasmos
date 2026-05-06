@@ -3,8 +3,8 @@
 This file tracks implementation work that is still open after the current
 architecture and README cleanup.
 
-IMPORTANT: Keep this file aligned with `README.md` and `ARCHITECTURE.md`.
-Isolation execution baseline: see `RING3_ISOLATION_PLAN.md` for the phased
+IMPORTANT: Keep this file aligned with `README.md` and `docs/ARCHITECTURE.md`.
+Isolation execution baseline: see `docs/RING3_ISOLATION_PLAN.md` for the phased
 design/task plan to reach full ring-3 process isolation and kernel survivability
 under user-space faults.
 
@@ -90,7 +90,7 @@ under user-space faults.
   beyond bootstrap apps and boot config.
 - Add full FAT32 support.
 - Add ext4 support.
-- Add a minimal custom filesystem (CFS_CUSTOM_FILE_SYSTEM.md).
+- Add a minimal custom filesystem (`docs/CFS_CUSTOM_FILE_SYSTEM.md`).
 
 ## Userland and CLI
 - Extend `ps` with more process-level information and memory and CPU usage.

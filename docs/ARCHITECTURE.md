@@ -7,9 +7,9 @@ next layers that still need to be built.
 IMPORTANT: Keep this file and `README.md` up to date with every prompt execution
 and code iteration.
 IMPORTANT: Create a git commit after each prompt iteration.
-Threading design details are maintained in `THREADING.md`.
+Threading design details are maintained in `docs/THREADING.md`.
 Full ring-3 isolation execution planning is tracked in
-`RING3_ISOLATION_PLAN.md`.
+`docs/RING3_ISOLATION_PLAN.md`.
 
 ## Goals
 - Boot an x86_64 kernel through UEFI with a deterministic, auditable handoff.
@@ -260,7 +260,7 @@ The current tree already boots into a usable user-space stack:
 - Current strict-ring3 checkpoint: `run-qemu-ring3-test` now completes
   successfully end-to-end with ring3 syscall/fault-policy/preempt/native
   markers. Remaining strict-mode framebuffer MMIO/panic rendering hardening is
-  tracked in `RING3_ISOLATION_PLAN.md`.
+  tracked in `docs/RING3_ISOLATION_PLAN.md`.
 - Native driver ELF PT_LOAD segment population now uses a chunked
   root-switch copy helper with kernel-side bounce buffering (bytes + zero-fill)
   into the target context rather than direct dereference of mapped segment

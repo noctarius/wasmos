@@ -156,6 +156,25 @@ syscall_ipc_pending_take_request(syscall_ipc_call_slot_t *slot, uint32_t request
 }
 
 static int
+syscall_ipc_reply_authentic(const ipc_message_t *resp,
+                            uint32_t expected_source_endpoint,
+                            uint32_t expected_owner_context)
+{
+    uint32_t reply_owner_context = 0;
+    if (!resp || resp->source == IPC_ENDPOINT_NONE) {
+        return 0;
+    }
+    if (expected_source_endpoint != IPC_ENDPOINT_NONE &&
+        resp->source != expected_source_endpoint) {
+        return 0;
+    }
+    if (ipc_endpoint_owner(resp->source, &reply_owner_context) != IPC_OK) {
+        return 0;
+    }
+    return reply_owner_context == expected_owner_context;
+}
+
+static int
 syscall_ipc_call_source_endpoint(process_t *proc, uint32_t *out_endpoint)
 {
     syscall_ipc_call_slot_t *slot = 0;
@@ -330,6 +349,8 @@ x86_syscall_handler(syscall_frame_t *frame)
         uint32_t source_endpoint = IPC_ENDPOINT_NONE;
         uint32_t request_id = g_syscall_ipc_call_next_request_id++;
         uint32_t owner_context = 0;
+        uint32_t expected_reply_source = IPC_ENDPOINT_NONE;
+        uint32_t expected_reply_owner_context = 0;
         int rc = IPC_ERR_INVALID;
         ipc_message_t req;
         ipc_message_t resp;
@@ -391,6 +412,8 @@ x86_syscall_handler(syscall_frame_t *frame)
         req.arg1 = arg1;
         req.arg2 = arg2;
         req.arg3 = arg3;
+        expected_reply_source = destination;
+        expected_reply_owner_context = owner_context;
         if (destination == g_ipc_call_echo_endpoint &&
             g_ipc_call_echo_endpoint != IPC_ENDPOINT_NONE &&
             msg_type == 0x00009ABCu) {
@@ -403,11 +426,32 @@ x86_syscall_handler(syscall_frame_t *frame)
             synthetic.arg1 = req.arg1;
             synthetic.arg2 = req.arg2;
             synthetic.arg3 = req.arg3;
+            expected_reply_source = req.source;
+            expected_reply_owner_context = proc->context_id;
             (void)syscall_ipc_pending_enqueue(slot, &synthetic);
         }
         if (destination == g_ipc_call_echo_endpoint &&
             g_ipc_call_echo_endpoint != IPC_ENDPOINT_NONE &&
-            msg_type != 0x00009ABCu) {
+            msg_type == 0x00009ABDu) {
+            ipc_message_t forged;
+            ipc_message_t synthetic;
+            forged.type = req.type;
+            forged.source = req.source; /* wrong source: caller endpoint */
+            forged.destination = req.source;
+            forged.request_id = req.request_id;
+            forged.arg0 = req.arg0;
+            forged.arg1 = req.arg1;
+            forged.arg2 = req.arg2;
+            forged.arg3 = req.arg3;
+            synthetic = forged;
+            synthetic.source = destination; /* expected source */
+            (void)syscall_ipc_pending_enqueue(slot, &forged);
+            (void)syscall_ipc_pending_enqueue(slot, &synthetic);
+        }
+        if (destination == g_ipc_call_echo_endpoint &&
+            g_ipc_call_echo_endpoint != IPC_ENDPOINT_NONE &&
+            msg_type != 0x00009ABCu &&
+            msg_type != 0x00009ABDu) {
             frame->rdx = (uint64_t)req.arg0;
             if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_call_ok_logged &&
                 (uint32_t)frame->rdx == req.arg0) {
@@ -418,13 +462,18 @@ x86_syscall_handler(syscall_frame_t *frame)
         }
         if (!(destination == g_ipc_call_echo_endpoint &&
               g_ipc_call_echo_endpoint != IPC_ENDPOINT_NONE &&
-              msg_type == 0x00009ABCu)) {
+              (msg_type == 0x00009ABCu || msg_type == 0x00009ABDu))) {
             rc = ipc_send_from(proc->context_id, destination, &req);
             if (rc != IPC_OK) {
                 return (uint64_t)(int64_t)rc;
             }
         }
-        if (syscall_ipc_pending_take_request(slot, request_id, &resp) == 0) {
+        while (syscall_ipc_pending_take_request(slot, request_id, &resp) == 0) {
+            if (!syscall_ipc_reply_authentic(&resp,
+                                             expected_reply_source,
+                                             expected_reply_owner_context)) {
+                continue;
+            }
             frame->rdx = (uint64_t)resp.arg0;
             if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_call_ok_logged &&
                 (uint32_t)frame->rdx == req.arg0) {
@@ -437,6 +486,11 @@ x86_syscall_handler(syscall_frame_t *frame)
                 (uint32_t)frame->rdx == req.arg0) {
                 g_ring3_ipc_call_correlation_logged = 1;
                 serial_write("[test] ring3 ipc call correlate ok\n");
+            }
+            if (name_eq(proc->name, "ring3-smoke") &&
+                msg_type == 0x00009ABDu &&
+                (uint32_t)frame->rdx == req.arg0) {
+                serial_write("[test] ring3 ipc call source auth ok\n");
             }
             return 0;
         }
@@ -451,6 +505,11 @@ x86_syscall_handler(syscall_frame_t *frame)
             }
             if (resp.request_id != request_id) {
                 (void)syscall_ipc_pending_enqueue(slot, &resp);
+                continue;
+            }
+            if (!syscall_ipc_reply_authentic(&resp,
+                                             expected_reply_source,
+                                             expected_reply_owner_context)) {
                 continue;
             }
             frame->rdx = (uint64_t)resp.arg0;

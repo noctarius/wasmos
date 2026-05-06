@@ -404,7 +404,9 @@ The current tree already boots into a usable user-space stack:
   ring3 smoke now deterministically injects an owner-mismatch wait record and
   asserts deny-path marker `[test] pm wait reply owner deny ok`. Strict ring3
   smoke also injects a synthetic kernel-owned `PROC_IPC_KILL` caller and
-  asserts deny-path marker `[test] pm kill owner deny ok`.
+  asserts deny-path marker `[test] pm kill owner deny ok`. Strict ring3 smoke
+  also injects a synthetic kernel-owned `PROC_IPC_STATUS` caller and asserts
+  deny-path marker `[test] pm status owner deny ok`.
 - Capability descriptors are now validated fail-closed during WASMOS-APP pack:
   `make_wasmos_app` rejects unknown capability names and non-zero capability
   flags before artifacts are produced.

@@ -382,7 +382,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   now injects an owner-mismatch waiter record and requires
   `[test] pm wait reply owner deny ok`. Strict ring3 smoke now also injects a
   synthetic kernel-owned `PROC_IPC_KILL` caller and requires
-  `[test] pm kill owner deny ok`.
+  `[test] pm kill owner deny ok`. Strict ring3 smoke also injects a synthetic
+  kernel-owned `PROC_IPC_STATUS` caller and requires
+  `[test] pm status owner deny ok`.
 - the WASMOS-APP packer (`make_wasmos_app`) now rejects unknown capability
   names and non-zero capability flags so malformed capability descriptors fail
   closed before runtime

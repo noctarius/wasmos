@@ -17,6 +17,7 @@ void *process_manager_fs_buffer_for_context(uint32_t context_id);
 uint32_t process_manager_fs_buffer_size(void);
 void process_manager_inject_wait_owner_mismatch_test(uint32_t expected_owner_context_id);
 void process_manager_inject_kill_owner_deny_test(void);
+void process_manager_inject_status_owner_deny_test(void);
 process_run_result_t process_manager_entry(process_t *process, void *arg);
 
 #endif

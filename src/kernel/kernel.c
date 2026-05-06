@@ -88,6 +88,7 @@ typedef struct {
     uint8_t started;
     uint8_t pm_wait_owner_test_injected;
     uint8_t pm_kill_owner_test_injected;
+    uint8_t pm_status_owner_test_injected;
     uint8_t phase;
     uint8_t pending_kind;
     uint32_t reply_endpoint;
@@ -1229,6 +1230,7 @@ init_entry(process_t *process, void *arg)
         state->started = 1;
         state->pm_wait_owner_test_injected = 0;
         state->pm_kill_owner_test_injected = 0;
+        state->pm_status_owner_test_injected = 0;
         if (state->hw_discovery_index == 0xFFFFFFFFu) {
             serial_write("[init] hw-discovery module not found\n");
             process_set_exit_status(process, -1);
@@ -1269,6 +1271,10 @@ init_entry(process_t *process, void *arg)
         if (g_ring3_smoke_enabled && !state->pm_kill_owner_test_injected) {
             process_manager_inject_kill_owner_deny_test();
             state->pm_kill_owner_test_injected = 1;
+        }
+        if (g_ring3_smoke_enabled && !state->pm_status_owner_test_injected) {
+            process_manager_inject_status_owner_deny_test();
+            state->pm_status_owner_test_injected = 1;
         }
         if (ipc_endpoint_create(process->context_id, &state->reply_endpoint) != IPC_OK) {
             serial_write("[init] reply endpoint create failed\n");

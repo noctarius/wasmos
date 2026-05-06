@@ -24,6 +24,7 @@ Full ring-3 isolation execution planning is tracked in
 - [CLI and User-Space Baseline](architecture/10-cli-and-user-space.md)
 - [Diagnostics and Status](architecture/11-diagnostics-status.md)
 - [Repository Map and Validation Baseline](architecture/12-repo-map-and-validation.md)
+- [Virtual Terminal](architecture/13-virtual-terminal.md)
 
 ## Update Rules
 - Update the relevant feature document(s) in `docs/architecture/` when behavior

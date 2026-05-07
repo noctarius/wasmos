@@ -586,6 +586,10 @@ Status update (2026-05-07):
     rejected as expected.
   - emits `[test] shmem grant allow ok` when access succeeds after explicit
     owner grant.
+- Added strict ring3 cross-process shmem smoke markers using live ring3
+  contexts (`ring3-smoke` owner, `ring3-native` target):
+  - emits `[test] ring3 shmem owner deny ok` before grant.
+  - emits `[test] ring3 shmem grant allow ok` after explicit owner grant.
 
 Tasks:
 - Assert fault-driven mapping only occurs inside owning region policy.

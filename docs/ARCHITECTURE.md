@@ -16,7 +16,9 @@ scope; Phase 5 fault-policy expansion coverage is in place for `#PF`, `#UD`,
 probes; Phase 6 scheduler/trap robustness is closed for current scope
 (watchdog + mixed-stress + trap-integrity rollout complete, with one noted
 transient CLI fs-smoke flake); Phase 7 memory-service/shared-mapping isolation
-closure is next.
+is in progress with owner-bound shared-memory checks, explicit grants, and
+strict ring3 cross-process shmem deny/allow smoke markers now gated in
+`run-qemu-ring3-test`.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

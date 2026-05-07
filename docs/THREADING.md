@@ -38,13 +38,21 @@ Today the kernel equates one schedulable unit with one `process_t`.
 `process_context_t` is embedded directly in `process_t`, and the ready queue
 holds PIDs.
 
+After ring3-isolation rollout, this baseline also includes strict kernel-entry
+hardening tied to the scheduled process:
+
+- per-process kernel stacks with guard pages and canaries
+- scheduler-managed TSS `rsp0` updates on dispatch
+- strict user/root separation checks that assume kernel ingress lands on a
+  valid higher-half kernel stack
+
 This prevents:
 
 - concurrent activities in one process without process duplication
 - thread-local blocking semantics
 - multi-threaded native drivers/services in one address space
 
-Threading requires splitting:
+Threading still requires splitting:
 
 - **Resource container:** process
 - **Execution container:** thread
@@ -183,6 +191,8 @@ Helper APIs:
 - decrement current thread slice
 - mark reschedule when slice expires
 - preserve current ring3 trampoline handling, but target thread context
+- preserve strict trap-frame validation and watchdog liveness checks already
+  enforced in ring3 smoke
 
 ## 5.4 Context Format
 
@@ -191,6 +201,16 @@ Reuse existing `process_context_t` layout for thread contexts so
 
 Any assembly symbol names referring to process-context should be renamed only
 if needed for readability; binary layout must stay stable.
+
+## 5.5 Kernel Stack Contract (Ring3 Constraint)
+
+Thread scheduling must preserve the current ring3 kernel-entry contract:
+
+- each runnable thread has its own kernel stack (guard pages + canaries)
+- scheduler refreshes TSS `rsp0` to the selected thread kernel stack before
+  returning to user mode
+- stack allocation continues to use the higher-half-safe mapping model used by
+  strict ring3 validation (no regression to low-slot kernel stack exposure)
 
 ---
 
@@ -363,6 +383,8 @@ Exit criteria:
 
 - existing boot flow unchanged
 - existing tests pass
+- strict ring3 baseline remains green (`run-qemu-test`,
+  `run-qemu-ring3-test`, `run-qemu-cli-test`)
 - no process-manager contract changes
 
 ## Phase B: Internal Multi-thread Enablement

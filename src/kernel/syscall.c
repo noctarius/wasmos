@@ -346,10 +346,7 @@ x86_syscall_handler(syscall_frame_t *frame)
             serial_write("[test] ring3 thread exit syscall ok\n");
         }
         process_set_exit_status(proc, (int32_t)frame->rdi);
-        /* FIXME(threading-phase-c): Route THREAD_EXIT through true thread-only
-         * teardown once user-visible multi-thread lifecycle is implemented.
-         * Current baseline intentionally aliases to process-group exit. */
-        process_yield(PROCESS_RUN_EXITED);
+        process_yield(PROCESS_RUN_THREAD_EXITED);
         return 0;
     }
     case WASMOS_SYSCALL_WAIT: {

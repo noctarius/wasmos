@@ -39,8 +39,8 @@ typedef enum {
  *                   current reply ABI returns arg0 only (arg1..arg3 ignored)
  * - GETTID:         RAX=tid
  * - THREAD_YIELD:   RAX=0
- * - THREAD_EXIT:    RDI=exit_status; current Phase C baseline aliases to
- *                   process-group exit until per-thread user teardown lands
+ * - THREAD_EXIT:    RDI=exit_status; exits the current thread. If it is the
+ *                   final live thread in the process, process exit follows.
  */
 typedef struct {
     uint64_t r15;

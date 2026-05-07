@@ -86,7 +86,8 @@ typedef enum {
     PROCESS_RUN_YIELDED = 0,
     PROCESS_RUN_IDLE = 1,
     PROCESS_RUN_BLOCKED = 2,
-    PROCESS_RUN_EXITED = 3
+    PROCESS_RUN_EXITED = 3,
+    PROCESS_RUN_THREAD_EXITED = 4
 } process_run_result_t;
 
 typedef enum {

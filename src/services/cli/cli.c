@@ -19,7 +19,7 @@ typedef enum {
     CLI_PHASE_FAILED
 } cli_phase_t;
 
-#define CLI_MAX_PROCS 16
+#define CLI_MAX_PROCS 48
 #define CLI_HISTORY_MAX 8
 
 static cli_phase_t g_phase = CLI_PHASE_INIT;
@@ -1094,6 +1094,13 @@ cli_handle_line(void)
                                               (int32_t)sizeof(names[i]),
                                               (int32_t)(uintptr_t)&parent);
             if (pid <= 0) {
+                pids[i] = 0;
+                parents[i] = 0;
+                names[i][0] = '\0';
+                continue;
+            }
+            if (wasmos_sync_user_read((int32_t)(uintptr_t)names[i], (int32_t)sizeof(names[i])) != 0 ||
+                wasmos_sync_user_read((int32_t)(uintptr_t)&parent, (int32_t)sizeof(parent)) != 0) {
                 pids[i] = 0;
                 parents[i] = 0;
                 names[i][0] = '\0';

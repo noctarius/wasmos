@@ -153,6 +153,7 @@ void critical_section_leave(void);
 void preempt_safepoint(void);
 void pm_preempt_safe_enter(void);
 void pm_preempt_safe_leave(void);
+uint64_t process_watchdog_issue_count(void);
 uint32_t process_count_active(void);
 uint32_t process_ready_count(void);
 int process_info_at(uint32_t index, uint32_t *out_pid, const char **out_name);

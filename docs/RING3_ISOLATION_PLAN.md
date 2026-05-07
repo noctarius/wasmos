@@ -520,6 +520,11 @@ Status update (2026-05-07):
     context capture.
   - emits `[watchdog] trap frame invalid ...` and skips preempt if malformed
     frame data is observed.
+- Added stabilization pass markers/cleanup:
+  - ring3 fault-policy completion now asserts watchdog counters remained clean
+    and emits `[test] ring3 watchdog clean ok`.
+  - removed temporary process-manager-specific preempt frame trace guards that
+    were only used during strict-ring3 bring-up.
 
 Tasks:
 - Add long-duration mixed stress:

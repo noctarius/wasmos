@@ -899,6 +899,13 @@ ring3_fault_policy_entry(process_t *process, void *arg)
                 return PROCESS_RUN_YIELDED;
             }
         }
+        if (process_watchdog_issue_count() == 0) {
+            serial_write("[test] ring3 watchdog clean ok\n");
+        } else {
+            serial_write("[test] ring3 watchdog clean mismatch\n");
+            process_set_exit_status(process, -1);
+            return PROCESS_RUN_EXITED;
+        }
         state->done = 1;
         process_set_exit_status(process, 0);
         return PROCESS_RUN_EXITED;

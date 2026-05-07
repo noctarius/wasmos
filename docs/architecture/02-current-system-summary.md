@@ -236,7 +236,7 @@ The current tree already boots into a usable user-space stack:
 - Current strict-ring3 checkpoint: `run-qemu-ring3-test` now completes
   successfully end-to-end with ring3 syscall/fault-policy/preempt/native
   markers. Remaining strict-mode framebuffer MMIO/panic rendering hardening is
-  tracked in `docs/RING3_ISOLATION_PLAN.md`.
+  tracked in `docs/architecture/14-ring3-isolation-and-separation.md`.
 - Native driver ELF PT_LOAD segment population now uses a chunked
   root-switch copy helper with kernel-side bounce buffering (bytes + zero-fill)
   into the target context rather than direct dereference of mapped segment
@@ -275,7 +275,8 @@ The current tree already boots into a usable user-space stack:
   marker assertions in the standard automated test suite, including structured
   user fault reason telemetry.
   Staged-default policy keeps ring3 smoke OFF in normal boot configs and ON
-  in the dedicated ring3 smoke test target.
+  in the dedicated ring3 smoke test target; isolation model status is now
+  tracked in `docs/architecture/14-ring3-isolation-and-separation.md`.
 - Timer IRQ preemption now performs a ring3-safe trampoline rewrite for CPL3
   frames: return RIP is redirected to the scheduler preempt trampoline and CS
   is rewritten to kernel code selector so `iretq` re-enters ring0 cleanly

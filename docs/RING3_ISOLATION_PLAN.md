@@ -598,18 +598,25 @@ Status update (2026-05-07):
   - `shmtgt` verifies pre-grant map deny, post-grant map allow, and
     post-revoke map deny.
   - `shmownr` coordinates grant/revoke and emits completion marker.
+- Extended negative-path coverage and closure hardening:
+  - app-pair e2e now validates forged shared-ID map deny, map-argument policy
+    deny, and stale revoked-ID deny.
+  - kernel boot smoke now validates a shared-memory misuse matrix:
+    forged IDs, wrong-owner grant/revoke rejection, pre/post-grant map
+    deny/allow behavior, revoke idempotence, and release-balance checks.
+  - strict ring3 gate now emits `[test] ring3 shmem misuse matrix ok`.
+  - `mm_shared_map` ordering hardened to retain access before region insertion
+    and rollback retain on insertion failure to avoid partial-state leakage.
 
 Tasks:
-- Assert fault-driven mapping only occurs inside owning region policy.
-- Harden shared-memory map/unmap:
-  - explicit ownership checks
-  - explicit permissions for remap into target context
-  - prevent arbitrary physical rebind through forged parameters
-- Add map-forgery/cross-context negative tests.
+- Completed.
 
 Exit criteria:
 - Cross-context mapping abuse attempts fail.
 - Shared memory behavior is explicit, revocable, and policy-checked.
+
+Result:
+- Closed for current strict-ring3 scope.
 
 Legacy-path impact:
 - Remove implicit remap assumptions and any “caller trusted” physical map paths.

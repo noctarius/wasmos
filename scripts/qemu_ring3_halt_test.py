@@ -64,6 +64,8 @@ def main():
         b"[test] ring3 yield syscall ok",
         b"[test] ring3 syscall ok",
         b"[test] ring3 preempt stress ok",
+        b"[test] ring3 shmem owner deny ok",
+        b"[test] ring3 shmem grant allow ok",
     ]
 
     with QemuSession(cfg, timeout_s=args.timeout) as session:

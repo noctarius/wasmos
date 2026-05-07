@@ -954,6 +954,46 @@ run_shmem_owner_isolation_test(uint32_t owner_context_id, uint32_t foreign_conte
     }
 }
 
+static void
+run_ring3_shmem_isolation_test(uint32_t owner_context_id, uint32_t foreign_context_id)
+{
+    uint32_t shmem_id = 0;
+    uint64_t phys = 0;
+    uint64_t pages = 0;
+
+    if (owner_context_id == 0 || foreign_context_id == 0 || owner_context_id == foreign_context_id) {
+        serial_write("[test] ring3 shmem setup failed\n");
+        return;
+    }
+    if (mm_shared_create(owner_context_id, 1, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE,
+                         &shmem_id, &phys) != 0 || shmem_id == 0 || phys == 0) {
+        serial_write("[test] ring3 shmem setup failed\n");
+        return;
+    }
+    if (mm_shared_retain(owner_context_id, shmem_id) != 0) {
+        serial_write("[test] ring3 shmem setup failed\n");
+        return;
+    }
+    if (mm_shared_get_phys(foreign_context_id, shmem_id, &phys, &pages) == 0 ||
+        mm_shared_retain(foreign_context_id, shmem_id) == 0 ||
+        mm_shared_release(foreign_context_id, shmem_id) == 0) {
+        serial_write("[test] ring3 shmem owner deny mismatch\n");
+    } else {
+        serial_write("[test] ring3 shmem owner deny ok\n");
+    }
+    if (mm_shared_grant(owner_context_id, shmem_id, foreign_context_id) != 0 ||
+        mm_shared_get_phys(foreign_context_id, shmem_id, &phys, &pages) != 0 ||
+        mm_shared_retain(foreign_context_id, shmem_id) != 0 ||
+        mm_shared_release(foreign_context_id, shmem_id) != 0) {
+        serial_write("[test] ring3 shmem grant allow mismatch\n");
+    } else {
+        serial_write("[test] ring3 shmem grant allow ok\n");
+    }
+    if (mm_shared_release(owner_context_id, shmem_id) != 0) {
+        serial_write("[test] ring3 shmem cleanup failed\n");
+    }
+}
+
 static int
 map_linear_pages(uint64_t root_table,
                  uint64_t virt_base,
@@ -2026,6 +2066,13 @@ kmain(boot_info_t *boot_info)
             for (;;) {
                 __asm__ volatile("hlt");
             }
+        }
+        process_t *ring3_smoke_proc = process_get(ring3_smoke_pid);
+        process_t *ring3_native_proc = process_get(ring3_native_pid);
+        if (!ring3_smoke_proc || !ring3_native_proc) {
+            serial_write("[test] ring3 shmem setup failed\n");
+        } else {
+            run_ring3_shmem_isolation_test(ring3_smoke_proc->context_id, ring3_native_proc->context_id);
         }
         if (spawn_ring3_fault_probe_process(init_pid, &ring3_fault_pid) != 0) {
             serial_write("[kernel] ring3 fault spawn failed\n");

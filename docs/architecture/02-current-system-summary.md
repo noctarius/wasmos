@@ -344,6 +344,9 @@ The current tree already boots into a usable user-space stack:
   Ring3 smoke now also includes a dedicated divide-error injector
   (`ring3-fault-de`) and asserts `[test] ring3 fault de reason ok` when a CPL3
   `#DE` is contained to the faulting process.
+  Ring3 smoke now also includes a dedicated debug-exception injector
+  (`ring3-fault-db`) and asserts `[test] ring3 fault db reason ok` when a CPL3
+  `#DB` is contained to the faulting process.
   User-mode fault logs now include structured reason classification
   (`unmapped`, `write_violation`, `exec_violation`, `user_to_kernel`,
   `protection`) together with pid/error/address/rip for deterministic triage.
@@ -353,7 +356,8 @@ The current tree already boots into a usable user-space stack:
 - Ring3 fault policy is now asserted explicitly: a kernel-side watcher process
   verifies that `ring3-fault`, `ring3-fault-write`, `ring3-fault-exec`,
   `ring3-fault-ud`, `ring3-fault-gp`, and `ring3-fault-de` each terminate with
-  exit status `-11`, emitting dedicated
+  exit status `-11`; `ring3-fault-db` is also asserted with the same policy,
+  emitting dedicated
   `[test] ring3 fault* exit status ok` markers.
   Current `ring3-fault-exec` reason-marker acceptance includes
   `exec_violation`, `user_to_kernel`, and `unmapped` on existing QEMU/CPU

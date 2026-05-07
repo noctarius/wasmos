@@ -19,7 +19,9 @@ transient CLI fs-smoke flake); Phase 7 memory-service/shared-mapping isolation
 is closed for current strict scope with owner-bound checks, explicit grants/
 revoke, strict ring3 cross-process deny/allow markers, app-pair forged/stale
 negative checks, kernel misuse-matrix gate markers, and shared-map state
-ordering hardening.
+ordering hardening; Phase 8 compatibility-path deletion has started with the
+`WASMOS_RING3_STRICT` toggle removed and strict marker output fixed at
+`[mode] strict-ring3=1`.
 Kernel boot smoke now also runs a shared-memory misuse matrix (forged IDs,
 wrong-owner grant/revoke attempts, pre/post-grant map deny/allow, idempotent
 revoke, and release-balance checks) with strict-ring3 gate marker output.

@@ -60,9 +60,6 @@ static const uint8_t g_skip_wasm_boot = 0;
 #ifndef WASMOS_RING3_SMOKE_DEFAULT
 #define WASMOS_RING3_SMOKE_DEFAULT 0
 #endif
-#ifndef WASMOS_RING3_STRICT_DEFAULT
-#define WASMOS_RING3_STRICT_DEFAULT 1
-#endif
 #ifndef WASMOS_LOW_SLOT_SWEEP_DEFAULT
 #define WASMOS_LOW_SLOT_SWEEP_DEFAULT 1
 #endif
@@ -73,7 +70,6 @@ static const uint8_t g_skip_wasm_boot = 0;
  * add noise to normal boot/CLI workflows and are not required for baseline
  * ring3 policy mode. */
 static const uint8_t g_ring3_smoke_enabled = WASMOS_RING3_SMOKE_DEFAULT;
-static const uint8_t g_ring3_strict_enabled = WASMOS_RING3_STRICT_DEFAULT;
 static const uint8_t g_low_slot_sweep_enabled = WASMOS_LOW_SLOT_SWEEP_DEFAULT;
 static const uint8_t g_low_slot_sweep_level = WASMOS_LOW_SLOT_SWEEP_LEVEL_DEFAULT;
 
@@ -1982,7 +1978,7 @@ kmain(boot_info_t *boot_info)
     serial_printf("[kernel] boot_info version=%016llx\n[kernel] boot_info size=%016llx\n",
         (unsigned long long)boot_info->version,
         (unsigned long long)boot_info->size);
-    serial_printf("[mode] strict-ring3=%u\n", (unsigned int)g_ring3_strict_enabled);
+    serial_write("[mode] strict-ring3=1\n");
     serial_printf("[mode] low-slot-sweep=%u\n", (unsigned int)g_low_slot_sweep_enabled);
     serial_printf("[mode] low-slot-sweep-level=%u\n", (unsigned int)g_low_slot_sweep_level);
     g_boot_info = boot_info;

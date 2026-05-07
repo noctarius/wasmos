@@ -225,8 +225,7 @@ The current tree already boots into a usable user-space stack:
   `[test] ring3 native abi ok` on first native CPL3 `getpid`. The
   `run-qemu-ring3-test` harness now also requires `native-call-smoke: ipc-call ok`
   and `[test] ring3 native abi ok` so both native IPC-call and native syscall
-  header paths are asserted in the same run; it now also asserts the boot-time
-  marker `[mode] strict-ring3=1`. Strict ring3 policy is now decoupled from
+  header paths are asserted in the same run. Strict ring3 policy is now decoupled from
   ring3 smoke probes: strict policy remains enabled for normal boots, while
   smoke spawn remains disabled by default outside dedicated ring3 smoke runs.
   Ring3 smoke endpoint
@@ -237,7 +236,7 @@ The current tree already boots into a usable user-space stack:
 - Current strict-ring3 checkpoint: `run-qemu-ring3-test` now completes
   successfully end-to-end with ring3 syscall/fault-policy/preempt/native
   markers. Remaining strict-mode framebuffer MMIO/panic rendering hardening is
-  tracked in `docs/RING3_ISOLATION_PLAN.md`.
+  tracked in `docs/architecture/14-ring3-isolation-and-separation.md`.
 - Native driver ELF PT_LOAD segment population now uses a chunked
   root-switch copy helper with kernel-side bounce buffering (bytes + zero-fill)
   into the target context rather than direct dereference of mapped segment
@@ -266,21 +265,18 @@ The current tree already boots into a usable user-space stack:
 - Ring3 entry hard gate update: user-entry activation now enforces an explicit
   no-low-slot verification (`PML4[0]` absent) after stripping low-slot mappings
   and before committing CPL3 entry selectors.
-- Added guarded low-slot sweep diagnostics: when
-  `WASMOS_LOW_SLOT_SWEEP=ON`, boot performs a strip+verify pass across eligible
-  user-mode contexts and emits first-failure markers for low-slot transition
-  triage; default remains OFF to preserve baseline behavior.
-- Sweep diagnostics now support scope levels via
-  `WASMOS_LOW_SLOT_SWEEP_LEVEL` (`1` user-only, `2` include selected non-user
-  contexts).
-- Identity-map breadth is now configurable via `WASMOS_IDENTITY_PD_COUNT`
-  (`0..4`, default `4`) to support phased low-slot reduction trials.
+- Guarded low-slot sweep diagnostics are now strict baseline behavior: boot
+  always performs strip+verify across eligible contexts and emits first-failure
+  markers for low-slot transition triage.
+- Low-slot identity-map breadth is now fixed at strict baseline width
+  (`IDENTITY_PD_COUNT=0`) in paging.
 - Regression coverage now includes `tests/test_ring3_smoke_target.py`, which
   executes `cmake --build build --target run-qemu-ring3-test` to keep ring3
   marker assertions in the standard automated test suite, including structured
   user fault reason telemetry.
   Staged-default policy keeps ring3 smoke OFF in normal boot configs and ON
-  in the dedicated ring3 smoke test target.
+  in the dedicated ring3 smoke test target; isolation model status is now
+  tracked in `docs/architecture/14-ring3-isolation-and-separation.md`.
 - Timer IRQ preemption now performs a ring3-safe trampoline rewrite for CPL3
   frames: return RIP is redirected to the scheduler preempt trampoline and CS
   is rewritten to kernel code selector so `iretq` re-enters ring0 cleanly
@@ -335,6 +331,22 @@ The current tree already boots into a usable user-space stack:
   also includes explicit write/exec fault injectors and assertions
   (`[test] ring3 fault write reason ok`,
   `[test] ring3 fault exec reason ok`).
+  Ring3 smoke now also includes a dedicated invalid-opcode injector
+  (`ring3-fault-ud`) and asserts `[test] ring3 fault ud reason ok` when a CPL3
+  `#UD` is contained to the faulting process.
+  Ring3 smoke now also includes a dedicated general-protection injector
+  (`ring3-fault-gp`) and asserts `[test] ring3 fault gp reason ok` when a CPL3
+  `#GP` is contained to the faulting process.
+  Ring3 smoke now also includes a dedicated divide-error injector
+  (`ring3-fault-de`) and asserts `[test] ring3 fault de reason ok` when a CPL3
+  `#DE` is contained to the faulting process.
+  Ring3 smoke now also includes a dedicated debug-exception injector
+  (`ring3-fault-db`) and asserts `[test] ring3 fault db reason ok` when a CPL3
+  `#DB` is contained to the faulting process.
+  Ring3 smoke now also includes dedicated probes for `#OF`, `#NM`, `#SS`, and
+  `#AC` with corresponding reason markers
+  (`[test] ring3 fault of|nm|ss|ac reason ok`) and deterministic `-11`
+  termination policy assertions.
   User-mode fault logs now include structured reason classification
   (`unmapped`, `write_violation`, `exec_violation`, `user_to_kernel`,
   `protection`) together with pid/error/address/rip for deterministic triage.
@@ -342,7 +354,9 @@ The current tree already boots into a usable user-space stack:
   a CPL3 `IPC_NOTIFY` with a >32-bit endpoint is rejected by syscall argument
   parsing and emits `[test] ring3 ipc syscall arg width deny ok`.
 - Ring3 fault policy is now asserted explicitly: a kernel-side watcher process
-  verifies that `ring3-fault`, `ring3-fault-write`, and `ring3-fault-exec`
+  verifies that `ring3-fault`, `ring3-fault-write`, `ring3-fault-exec`,
+  `ring3-fault-ud`, `ring3-fault-gp`, `ring3-fault-de`, `ring3-fault-db`,
+  `ring3-fault-of`, `ring3-fault-nm`, `ring3-fault-ss`, and `ring3-fault-ac`
   each terminate with exit status `-11`, emitting dedicated
   `[test] ring3 fault* exit status ok` markers.
   Current `ring3-fault-exec` reason-marker acceptance includes
@@ -400,4 +414,3 @@ The current tree already boots into a usable user-space stack:
 - The top-level documentation now uses repo-local mascot and wordmark assets in
   `README.md`; this is documentation-only branding and does not affect boot or
   runtime behavior.
-

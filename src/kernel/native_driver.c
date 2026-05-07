@@ -233,10 +233,10 @@ static int
 nd_shmem_create(uint64_t pages, uint32_t flags, uint32_t *out_id, void **out_ptr)
 {
     uint64_t phys = 0;
-    if (mm_shared_create(pages, flags, out_id, &phys) != 0) {
+    if (mm_shared_create(0, pages, flags, out_id, &phys) != 0) {
         return -1;
     }
-    if (mm_shared_retain(*out_id) != 0) {
+    if (mm_shared_retain(0, *out_id) != 0) {
         return -1;
     }
     if (out_ptr) {
@@ -250,10 +250,10 @@ nd_shmem_map(uint32_t id)
 {
     uint64_t base = 0;
     uint64_t pages = 0;
-    if (mm_shared_get_phys(id, &base, &pages) != 0 || pages == 0) {
+    if (mm_shared_get_phys(0, id, &base, &pages) != 0 || pages == 0) {
         return 0;
     }
-    if (mm_shared_retain(id) != 0) {
+    if (mm_shared_retain(0, id) != 0) {
         return 0;
     }
     return (void *)(uintptr_t)base;
@@ -262,7 +262,7 @@ nd_shmem_map(uint32_t id)
 static int
 nd_shmem_unmap(uint32_t id)
 {
-    return mm_shared_release(id);
+    return mm_shared_release(0, id);
 }
 
 static uint32_t

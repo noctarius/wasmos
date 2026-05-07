@@ -7,11 +7,12 @@
 .extern x86_exception_panic
 .extern x86_exception_panic_frame
 .extern x86_page_fault_handler
+.extern x86_user_exception_handler
 .extern x86_syscall_handler
 .extern x86_irq_handler
- .extern x86_timer_irq_handler
- .extern x86_irq_iret_corrupt
- .extern process_preempt_trampoline
+.extern x86_timer_irq_handler
+.extern x86_irq_iret_corrupt
+.extern process_preempt_trampoline
 .extern g_irq0_ist_stack
 .extern g_irq0_ist_canary
 .extern x86_irq_ist_corrupt
@@ -69,10 +70,33 @@ isr_exception_\num:
     jmp 1b
 .endm
 
-DECL_EXC 0
- .global isr_exception_1
+.global isr_exception_0
+isr_exception_0:
+    pushq $0
+    mov %rsp, %rsi
+    mov $0, %rdi
+    call x86_user_exception_handler
+    test %eax, %eax
+    jz 2f
+    mov %rsp, %rsi
+    mov $0, %rdi
+    call x86_exception_panic_frame
+1:
+    cli
+    hlt
+    jmp 1b
+2:
+    add $8, %rsp
+    iretq
+
+.global isr_exception_1
 isr_exception_1:
     pushq $0
+    mov %rsp, %rsi
+    mov $1, %rdi
+    call x86_user_exception_handler
+    test %eax, %eax
+    jz 2f
     mov %rsp, %rsi
     mov $1, %rdi
     call x86_exception_panic_frame
@@ -80,8 +104,13 @@ isr_exception_1:
     cli
     hlt
     jmp 1b
+2:
+    add $8, %rsp
+    iretq
+
 DECL_EXC 2
- .global isr_exception_3
+
+.global isr_exception_3
 isr_exception_3:
     pushq $0
     mov %rsp, %rsi
@@ -91,11 +120,35 @@ isr_exception_3:
     cli
     hlt
     jmp 1b
-DECL_EXC 4
+
+ .global isr_exception_4
+isr_exception_4:
+    pushq $0
+    mov %rsp, %rsi
+    mov $4, %rdi
+    call x86_user_exception_handler
+    test %eax, %eax
+    jz 2f
+    mov %rsp, %rsi
+    mov $4, %rdi
+    call x86_exception_panic_frame
+1:
+    cli
+    hlt
+    jmp 1b
+2:
+    add $8, %rsp
+    iretq
 DECL_EXC 5
- .global isr_exception_6
+
+.global isr_exception_6
 isr_exception_6:
     pushq $0
+    mov %rsp, %rsi
+    mov $6, %rdi
+    call x86_user_exception_handler
+    test %eax, %eax
+    jz 2f
     mov %rsp, %rsi
     mov $6, %rdi
     call x86_exception_panic_frame
@@ -103,14 +156,57 @@ isr_exception_6:
     cli
     hlt
     jmp 1b
-DECL_EXC 7
+2:
+    add $8, %rsp
+    iretq
+
+ .global isr_exception_7
+isr_exception_7:
+    pushq $0
+    mov %rsp, %rsi
+    mov $7, %rdi
+    call x86_user_exception_handler
+    test %eax, %eax
+    jz 2f
+    mov %rsp, %rsi
+    mov $7, %rdi
+    call x86_exception_panic_frame
+1:
+    cli
+    hlt
+    jmp 1b
+2:
+    add $8, %rsp
+    iretq
 DECL_EXC 8
 DECL_EXC 9
 DECL_EXC 10
 DECL_EXC 11
-DECL_EXC 12
- .global isr_exception_13
+ .global isr_exception_12
+isr_exception_12:
+    mov %rsp, %rsi
+    mov $12, %rdi
+    call x86_user_exception_handler
+    test %eax, %eax
+    jz 2f
+    mov %rsp, %rsi
+    mov $12, %rdi
+    call x86_exception_panic_frame
+1:
+    cli
+    hlt
+    jmp 1b
+2:
+    add $8, %rsp
+    iretq
+
+.global isr_exception_13
 isr_exception_13:
+    mov %rsp, %rsi
+    mov $13, %rdi
+    call x86_user_exception_handler
+    test %eax, %eax
+    jz 2f
     mov %rsp, %rsi
     mov $13, %rdi
     call x86_exception_panic_frame
@@ -118,7 +214,11 @@ isr_exception_13:
     cli
     hlt
     jmp 1b
- .global isr_exception_14
+2:
+    add $8, %rsp
+    iretq
+
+.global isr_exception_14
 isr_exception_14:
     # Page faults are the only recoverable exception path today. Push the full
     # register set so the C handler can inspect and potentially resume.
@@ -137,9 +237,26 @@ isr_exception_14:
     POP_REGS
     add $8, %rsp
     iretq
+
 DECL_EXC 15
 DECL_EXC 16
-DECL_EXC 17
+ .global isr_exception_17
+isr_exception_17:
+    mov %rsp, %rsi
+    mov $17, %rdi
+    call x86_user_exception_handler
+    test %eax, %eax
+    jz 2f
+    mov %rsp, %rsi
+    mov $17, %rdi
+    call x86_exception_panic_frame
+1:
+    cli
+    hlt
+    jmp 1b
+2:
+    add $8, %rsp
+    iretq
 DECL_EXC 18
 DECL_EXC 19
 DECL_EXC 20
@@ -155,7 +272,7 @@ DECL_EXC 29
 DECL_EXC 30
 DECL_EXC 31
 
- .global isr_irq_0
+.global isr_irq_0
 isr_irq_0:
     # IRQ0 is special because it drives timer preemption. Capture the IRET frame,
     # preserve a small canary-protected scratch area, and let the C timer path

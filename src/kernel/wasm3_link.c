@@ -1283,7 +1283,7 @@ m3ApiRawFunction(wasmos_shmem_create)
     uint32_t create_flags = (flags > 0)
                                 ? (uint32_t)flags
                                 : (MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE);
-    if (mm_shared_create((uint64_t)(uint32_t)pages, create_flags, &id, &phys) != 0) {
+    if (mm_shared_create(proc->context_id, (uint64_t)(uint32_t)pages, create_flags, &id, &phys) != 0) {
         m3ApiReturn(-1);
     }
     (void)phys;
@@ -1313,7 +1313,8 @@ m3ApiRawFunction(wasmos_shmem_map)
 
     uint64_t phys_base = 0;
     uint64_t shared_pages = 0;
-    if (mm_shared_get_phys((uint32_t)id, &phys_base, &shared_pages) != 0 || shared_pages == 0) {
+    if (mm_shared_get_phys(proc->context_id, (uint32_t)id, &phys_base, &shared_pages) != 0 ||
+        shared_pages == 0) {
         m3ApiReturn(-1);
     }
     uint64_t map_size = (uint64_t)(uint32_t)size;
@@ -1348,10 +1349,54 @@ m3ApiRawFunction(wasmos_shmem_map)
         }
     }
 
-    if (mm_shared_retain((uint32_t)id) != 0) {
+    if (mm_shared_retain(proc->context_id, (uint32_t)id) != 0) {
         m3ApiReturn(-1);
     }
     m3ApiReturn(0);
+}
+
+m3ApiRawFunction(wasmos_shmem_grant)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, id)
+    m3ApiGetArg(int32_t, target_pid)
+
+    process_t *proc = process_get(process_current_pid());
+    process_t *target = 0;
+    if (id <= 0 || target_pid <= 0) {
+        m3ApiReturn(-1);
+    }
+    if (!proc || proc->context_id == 0 ||
+        require_dma_capability(proc->context_id) != 0) {
+        m3ApiReturn(-1);
+    }
+    target = process_get((uint32_t)target_pid);
+    if (!target || target->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn(mm_shared_grant(proc->context_id, (uint32_t)id, target->context_id));
+}
+
+m3ApiRawFunction(wasmos_shmem_revoke)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, id)
+    m3ApiGetArg(int32_t, target_pid)
+
+    process_t *proc = process_get(process_current_pid());
+    process_t *target = 0;
+    if (id <= 0 || target_pid <= 0) {
+        m3ApiReturn(-1);
+    }
+    if (!proc || proc->context_id == 0 ||
+        require_dma_capability(proc->context_id) != 0) {
+        m3ApiReturn(-1);
+    }
+    target = process_get((uint32_t)target_pid);
+    if (!target || target->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn(mm_shared_revoke(proc->context_id, (uint32_t)id, target->context_id));
 }
 
 m3ApiRawFunction(wasmos_shmem_unmap)
@@ -1364,7 +1409,11 @@ m3ApiRawFunction(wasmos_shmem_unmap)
     }
     /* FIXME: This currently only releases shared-region ownership/refcount.
      * It does not restore the previous linear-memory page mappings. */
-    m3ApiReturn(mm_shared_release((uint32_t)id));
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn(mm_shared_release(proc->context_id, (uint32_t)id));
 }
 
 m3ApiRawFunction(wasmos_irq_route)
@@ -2148,6 +2197,8 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "framebuffer_map", "i(ii)", wasmos_framebuffer_map);
     rc |= wasm3_link_raw(module, "wasmos", "framebuffer_pixel", "i(iii)", wasmos_framebuffer_pixel);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_create", "i(ii)", wasmos_shmem_create);
+    rc |= wasm3_link_raw(module, "wasmos", "shmem_grant", "i(ii)", wasmos_shmem_grant);
+    rc |= wasm3_link_raw(module, "wasmos", "shmem_revoke", "i(ii)", wasmos_shmem_revoke);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_map", "i(iii)", wasmos_shmem_map);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_unmap", "i(i)", wasmos_shmem_unmap);
     rc |= wasm3_link_raw(module, "wasmos", "irq_route", "i(ii)", wasmos_irq_route);

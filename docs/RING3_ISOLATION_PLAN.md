@@ -56,7 +56,7 @@ all phase exit criteria are met.
 
 Objective: prevent regressions while tightening isolation.
 
-Tasks:
+Tasks (next-cycle hardening candidates after closure):
 - Add CI gate profile `strict-ring3` that always runs:
   - `run-qemu-test`
   - `run-qemu-ring3-test`
@@ -525,6 +525,22 @@ Status update (2026-05-07):
     and emits `[test] ring3 watchdog clean ok`.
   - removed temporary process-manager-specific preempt frame trace guards that
     were only used during strict-ring3 bring-up.
+- Flaky test note (2026-05-07):
+  - Observed one transient `run-qemu-cli-test` failure in filesystem smoke with
+    `Error handling renames (-5)` / `Error deleting`, followed by downstream
+    prompt-detection timeout.
+  - Immediate re-run passed (`Ran 50 tests ... OK`) without code changes,
+    indicating mutable-artifact test flake rather than a deterministic scheduler
+    or trap-path regression.
+  - Follow-up item: revisit CLI test harness image/reset isolation for fs-smoke
+    cases before treating this as product-code instability.
+
+Phase closure (2026-05-07):
+- Phase 6 exit criteria are considered met for current scope:
+  - sustained mixed abuse markers and strict ring3 smoke remain green
+  - watchdog/trap integrity markers are present and clean on passing runs
+  - no deterministic deadlock/context-corruption regression introduced by the
+    Phase 6 hardening set
 
 Tasks:
 - Add long-duration mixed stress:

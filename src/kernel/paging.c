@@ -14,13 +14,8 @@
 #define PT_FLAG_LARGE_PAGE (1ULL << 7)
 #define PT_FLAG_NX (1ULL << 63)
 
-#ifndef WASMOS_IDENTITY_PD_COUNT
-#define WASMOS_IDENTITY_PD_COUNT 4
-#endif
-#if (WASMOS_IDENTITY_PD_COUNT < 0) || (WASMOS_IDENTITY_PD_COUNT > 4)
-#error "WASMOS_IDENTITY_PD_COUNT must be in range 0..4"
-#endif
-#define IDENTITY_PD_COUNT ((uint32_t)WASMOS_IDENTITY_PD_COUNT)
+/* Strict ring3 baseline keeps low-slot identity-map breadth fixed. */
+#define IDENTITY_PD_COUNT 0u
 #define IDENTITY_PD_COUNT_MAX 4u
 /* Keep only the minimum higher-half span shared into child CR3 roots. */
 #define HIGHER_HALF_PD_COUNT 1

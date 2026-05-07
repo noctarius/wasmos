@@ -20,11 +20,12 @@ is closed for current strict scope with owner-bound checks, explicit grants/
 revoke, strict ring3 cross-process deny/allow markers, app-pair forged/stale
 negative checks, kernel misuse-matrix gate markers, and shared-map state
 ordering hardening; Phase 8 compatibility-path deletion has started with the
-`WASMOS_RING3_STRICT` toggle removed and strict marker output fixed at
-`[mode] strict-ring3=1`.
+`WASMOS_RING3_STRICT` toggle removed, plus removal of low-slot strict-mode configuration
+knobs (`WASMOS_LOW_SLOT_SWEEP`, `WASMOS_LOW_SLOT_SWEEP_LEVEL`,
+`WASMOS_IDENTITY_PD_COUNT`) in favor of fixed strict baseline behavior.
 Kernel boot smoke now also runs a shared-memory misuse matrix (forged IDs,
 wrong-owner grant/revoke attempts, pre/post-grant map deny/allow, idempotent
-revoke, and release-balance checks) with strict-ring3 gate marker output.
+revoke, and release-balance checks) in the strict-ring3 gate.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

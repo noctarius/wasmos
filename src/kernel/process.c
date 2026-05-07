@@ -24,11 +24,12 @@ static volatile uint8_t g_need_resched;
 
 static process_t *process_find_by_pid(uint32_t pid);
 static void process_trampoline(void);
-static uint32_t g_ready_queue[PROCESS_MAX_COUNT];
+static uint32_t g_ready_queue[THREAD_MAX_COUNT];
 static uint32_t g_ready_head;
 static uint32_t g_ready_tail;
 static uint32_t g_ready_count;
 static process_t *g_current_process;
+static thread_t *g_current_thread;
 
 static process_run_result_t g_last_run_result;
 process_context_t g_sched_ctx;
@@ -171,6 +172,8 @@ extern void context_switch(process_context_t *out, process_context_t *in);
 extern void context_switch_to(process_context_t *in);
 static void context_switch_high(process_context_t *out, process_context_t *in);
 static int process_schedule_once_impl(void);
+static thread_t *process_main_thread(process_t *proc);
+static process_t *process_owner_for_thread(thread_t *thread);
 
 
 static int process_str_eq(const char *a, const char *b) {
@@ -345,7 +348,29 @@ static void ready_queue_reset(void) {
     g_ready_count = 0;
 }
 
-static int ready_queue_enqueue(process_t *proc) {
+static thread_t *
+process_main_thread(process_t *proc)
+{
+    if (!proc || proc->main_tid == 0) {
+        return 0;
+    }
+    return thread_get(proc->main_tid);
+}
+
+static process_t *
+process_owner_for_thread(thread_t *thread)
+{
+    if (!thread || thread->owner_pid == 0) {
+        return 0;
+    }
+    return process_find_by_pid(thread->owner_pid);
+}
+
+static int ready_queue_enqueue(thread_t *thread) {
+    if (!thread) {
+        return 0;
+    }
+    process_t *proc = process_owner_for_thread(thread);
     if (!proc || proc->in_ready_queue) {
         return 0;
     }
@@ -354,28 +379,30 @@ static int ready_queue_enqueue(process_t *proc) {
     if (proc->is_idle) {
         return 0;
     }
-    if (g_ready_count >= PROCESS_MAX_COUNT) {
+    if (g_ready_count >= THREAD_MAX_COUNT) {
         return -1;
     }
-    g_ready_queue[g_ready_tail] = proc->pid;
-    g_ready_tail = (g_ready_tail + 1u) % PROCESS_MAX_COUNT;
+    g_ready_queue[g_ready_tail] = thread->tid;
+    g_ready_tail = (g_ready_tail + 1u) % THREAD_MAX_COUNT;
     g_ready_count++;
     proc->in_ready_queue = 1;
     return 0;
 }
 
-static process_t *ready_queue_dequeue(void) {
+static thread_t *ready_queue_dequeue(void) {
     while (g_ready_count > 0) {
-        uint32_t pid = g_ready_queue[g_ready_head];
-        g_ready_head = (g_ready_head + 1u) % PROCESS_MAX_COUNT;
+        uint32_t tid = g_ready_queue[g_ready_head];
+        g_ready_head = (g_ready_head + 1u) % THREAD_MAX_COUNT;
         g_ready_count--;
-        process_t *proc = process_find_by_pid(pid);
-        if (!proc) {
+        thread_t *thread = thread_get(tid);
+        process_t *proc = process_owner_for_thread(thread);
+        if (!thread || !proc) {
             continue;
         }
         proc->in_ready_queue = 0;
-        if (proc->state == PROCESS_STATE_READY) {
-            return proc;
+        if (thread->state == THREAD_STATE_READY &&
+            proc->state == PROCESS_STATE_READY) {
+            return thread;
         }
     }
     return 0;
@@ -542,7 +569,7 @@ static void process_wake_waiters(uint32_t target_pid) {
         proc->block_reason = PROCESS_BLOCK_NONE;
         proc->wait_target_pid = 0;
         proc->state = PROCESS_STATE_READY;
-        ready_queue_enqueue(proc);
+        ready_queue_enqueue(process_main_thread(proc));
     }
 }
 
@@ -595,6 +622,7 @@ void process_init(void) {
     g_need_resched = 0;
     ready_queue_reset();
     g_current_process = 0;
+    g_current_thread = 0;
     g_last_run_result = PROCESS_RUN_IDLE;
     g_preempt_disable_count = 0;
     g_idle_process = 0;
@@ -678,6 +706,15 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
     if (thread_spawn_main(pid, name ? name : "", &slot->main_tid) != 0) {
         return -1;
     }
+    {
+        thread_t *main_thread = process_main_thread(slot);
+        if (!main_thread) {
+            return -1;
+        }
+        main_thread->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
+        main_thread->ticks_remaining = main_thread->time_slice_ticks;
+        main_thread->ticks_total = 0;
+    }
     slot->thread_count = 1;
     slot->live_thread_count = 1;
     uint32_t stack_pages = (PROCESS_STACK_SIZE + PAGE_SIZE - 1u) / PAGE_SIZE;
@@ -714,7 +751,7 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
         trace_write("[sched] spawn preempt-busy stack top=");
         trace_do(serial_write_hex64(slot->stack_top));
     }
-    ready_queue_enqueue(slot);
+    ready_queue_enqueue(process_main_thread(slot));
     *out_pid = pid;
     return 0;
 }
@@ -761,6 +798,15 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
     }
     if (thread_spawn_main(pid, name ? name : "", &slot->main_tid) != 0) {
         return -1;
+    }
+    {
+        thread_t *main_thread = process_main_thread(slot);
+        if (!main_thread) {
+            return -1;
+        }
+        main_thread->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
+        main_thread->ticks_remaining = main_thread->time_slice_ticks;
+        main_thread->ticks_total = 0;
     }
     slot->thread_count = 1;
     slot->live_thread_count = 1;
@@ -934,7 +980,7 @@ uint32_t process_wake_by_context(uint32_t context_id) {
         if (proc->main_tid != 0) {
             thread_set_state(proc->main_tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
         }
-        ready_queue_enqueue(proc);
+        ready_queue_enqueue(process_main_thread(proc));
         woken++;
     }
     return woken;
@@ -965,10 +1011,12 @@ static int process_schedule_once_impl(void) {
         return 1;
     }
 
-    process_t *proc = ready_queue_dequeue();
-    if (!proc || proc->state != PROCESS_STATE_READY || !proc->entry) {
+    thread_t *thread = ready_queue_dequeue();
+    process_t *proc = process_owner_for_thread(thread);
+    if (!thread || !proc || proc->state != PROCESS_STATE_READY || !proc->entry) {
         if (g_idle_process && g_idle_process->state == PROCESS_STATE_READY) {
             proc = g_idle_process;
+            thread = process_main_thread(proc);
         } else {
             return 1;
         }
@@ -992,17 +1040,18 @@ static int process_schedule_once_impl(void) {
     }
 
     proc->state = PROCESS_STATE_RUNNING;
-    if (proc->main_tid != 0) {
-        thread_set_state(proc->main_tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
-    }
-    if (proc->ticks_remaining == 0) {
-        proc->ticks_remaining = proc->time_slice_ticks;
+    if (thread && thread->tid != 0) {
+        thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
+        if (thread->ticks_remaining == 0) {
+            thread->ticks_remaining = thread->time_slice_ticks;
+        }
     }
     process_validate_context(proc, "schedule");
     critical_section_enter();
     g_current_pid = proc->pid;
     g_current_process = proc;
-    thread_set_current(proc->main_tid);
+    g_current_thread = thread;
+    thread_set_current(thread ? thread->tid : 0);
     critical_section_leave();
     /* Ring3 transitions use TSS.rsp0 as the kernel entry stack. Keep it aligned
      * to the scheduled process stack so user-mode interrupts/syscalls have a
@@ -1015,6 +1064,7 @@ static int process_schedule_once_impl(void) {
         critical_section_enter();
         g_current_process = 0;
         g_current_pid = 0;
+        g_current_thread = 0;
         thread_set_current(0);
         critical_section_leave();
         return 1;
@@ -1029,6 +1079,7 @@ static int process_schedule_once_impl(void) {
     critical_section_enter();
     g_current_process = 0;
     g_current_pid = 0;
+    g_current_thread = 0;
     thread_set_current(0);
     critical_section_leave();
 
@@ -1043,20 +1094,20 @@ static int process_schedule_once_impl(void) {
                 proc->block_reason = PROCESS_BLOCK_IPC;
             }
         }
-        if (proc->main_tid != 0) {
+        if (thread && thread->tid != 0) {
             thread_block_reason_t reason = (proc->block_reason == PROCESS_BLOCK_WAIT)
                                                ? THREAD_BLOCK_WAIT_PROCESS
                                                : THREAD_BLOCK_IPC;
-            thread_set_state(proc->main_tid, THREAD_STATE_BLOCKED, reason);
+            thread_set_state(thread->tid, THREAD_STATE_BLOCKED, reason);
         }
     } else {
         proc->state = PROCESS_STATE_READY;
         proc->block_reason = PROCESS_BLOCK_NONE;
         proc->wait_target_pid = 0;
-        if (proc->main_tid != 0) {
-            thread_set_state(proc->main_tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
+        if (thread && thread->tid != 0) {
+            thread_set_state(thread->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
         }
-        ready_queue_enqueue(proc);
+        ready_queue_enqueue(process_main_thread(proc));
     }
 
     g_last_index = proc->pid;
@@ -1066,7 +1117,7 @@ static int process_schedule_once_impl(void) {
 
 void process_tick(void) {
     uint64_t now = timer_ticks();
-    if (g_current_pid == 0) {
+    if (g_current_pid == 0 || !g_current_thread) {
         g_resched_pending_since_tick = 0;
         return;
     }
@@ -1074,10 +1125,10 @@ void process_tick(void) {
     if (!proc || proc->state != PROCESS_STATE_RUNNING) {
         return;
     }
-    proc->ticks_total++;
-    if (proc->ticks_remaining > 0) {
-        proc->ticks_remaining--;
-        if (proc->ticks_remaining == 0) {
+    g_current_thread->ticks_total++;
+    if (g_current_thread->ticks_remaining > 0) {
+        g_current_thread->ticks_remaining--;
+        if (g_current_thread->ticks_remaining == 0) {
             g_need_resched = 1;
             if (!g_preempt_smoke_logged) {
                 g_preempt_smoke_logged = 1;
@@ -1221,7 +1272,7 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     if (g_current_process->main_tid != 0) {
         thread_set_state(g_current_process->main_tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
     }
-    ready_queue_enqueue(g_current_process);
+    ready_queue_enqueue(process_main_thread(g_current_process));
     g_last_run_result = PROCESS_RUN_YIELDED;
     process_clear_resched();
     if ((frame->cs & 0x3u) == 0x3u) {

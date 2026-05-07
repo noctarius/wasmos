@@ -400,8 +400,10 @@ Current status:
 - in progress
 - kernel now allocates a `thread_t` main thread per spawned process and mirrors
   baseline process state transitions into that thread record
-- scheduler dispatch and ready-queue ownership are still process-driven in this
-  step (intentional for behavior-preserving rollout)
+- scheduler ready queue now stores `tid` entries and derives process ownership
+  from the dequeued thread
+- scheduler quantum/run accounting is now thread-owned (`thread_t`), while
+  externally visible behavior remains one-thread-per-process
 
 Exit criteria:
 

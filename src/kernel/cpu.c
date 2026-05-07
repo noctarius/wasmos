@@ -531,20 +531,16 @@ x86_user_exception_handler(uint64_t vector, const uint64_t *frame)
     if (proc->name && strcmp(proc->name, "ring3-fault-db") == 0 && vector == 1) {
         serial_write("[test] ring3 fault db reason ok\n");
     }
-    if (proc->name && strcmp(proc->name, "ring3-fault-of") == 0 &&
-        (vector == 4 || vector == 6 || vector == 13)) {
+    if (proc->name && strcmp(proc->name, "ring3-fault-of") == 0 && vector == 13) {
         serial_write("[test] ring3 fault of reason ok\n");
     }
-    if (proc->name && strcmp(proc->name, "ring3-fault-nm") == 0 &&
-        (vector == 7 || vector == 6)) {
+    if (proc->name && strcmp(proc->name, "ring3-fault-nm") == 0 && vector == 6) {
         serial_write("[test] ring3 fault nm reason ok\n");
     }
-    if (proc->name && strcmp(proc->name, "ring3-fault-ss") == 0 &&
-        (vector == 12 || vector == 13)) {
+    if (proc->name && strcmp(proc->name, "ring3-fault-ss") == 0 && vector == 13) {
         serial_write("[test] ring3 fault ss reason ok\n");
     }
-    if (proc->name && strcmp(proc->name, "ring3-fault-ac") == 0 &&
-        (vector == 17 || vector == 6 || vector == 13)) {
+    if (proc->name && strcmp(proc->name, "ring3-fault-ac") == 0 && vector == 6) {
         serial_write("[test] ring3 fault ac reason ok\n");
     }
     if (proc->name && strcmp(proc->name, "ring3-fault-gp") == 0 && vector == 13) {

@@ -10,7 +10,6 @@ IMPORTANT: Create a git commit after each prompt iteration.
 Threading design details are maintained in `docs/THREADING.md`.
 Ring-3 isolation architecture and separation model are documented in
 `docs/architecture/14-ring3-isolation-and-separation.md`.
-`docs/RING3_ISOLATION_PLAN.md` is now a compact closure/deferred-work archive.
 Latest checkpoint: Phase 2 mapping minimization is closed for current strict
 scope; Phase 5 fault-policy expansion coverage is in place for `#PF`, `#UD`,
 `#GP`, `#DE`, `#DB`, `#OF`, `#NM`, `#SS`, and `#AC` process-local termination

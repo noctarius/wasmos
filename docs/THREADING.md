@@ -308,6 +308,22 @@ User/kernel ABI rules:
 - argument convention remains current register ABI
 - unsupported syscalls return existing error convention
 
+## 8.1 User API Direction (Continuation-Style Wrapper)
+
+User-facing threading APIs should default to a continuation-like model layered
+on top of raw thread syscalls rather than exposing a POSIX `pthread` surface.
+
+Direction for later user-space/libc work:
+
+- keep kernel ABI minimal and explicit (`thread_create`, `thread_yield`,
+  `thread_join`, `thread_exit`, `thread_detach`, `gettid`)
+- provide higher-level helpers that model spawn/yield/await flows
+- allow runtimes/services to hide syscall details behind continuation/task
+  handles
+
+This keeps runtime integration simple for WASM-first workloads while preserving
+the existing non-goal of POSIX-complete pthread compatibility.
+
 ---
 
 ## 9. Ring3 Integration

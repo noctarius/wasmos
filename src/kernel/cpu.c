@@ -509,8 +509,9 @@ x86_user_exception_handler(uint64_t vector, const uint64_t *frame)
     if (!proc || !from_user) {
         return -1;
     }
-    /* TODO(ring3-phase5): Extend process-local handling beyond #UD to the full
-     * user exception set we intend to classify/recover in strict mode. */
+    /* TODO(ring3-phase5): Expand strict-mode process-local handling to the
+     * remaining user vectors we still do not probe/classify explicitly
+     * (for example #BR/#NP/#MF/#XM) once stable repro payloads are available. */
     if (vector != 0 && vector != 1 && vector != 4 &&
         vector != 6 && vector != 7 &&
         vector != 12 && vector != 13 && vector != 17) {

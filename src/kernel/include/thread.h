@@ -35,8 +35,15 @@ typedef struct thread {
 
 void thread_init(void);
 int thread_spawn_main(uint32_t owner_pid, const char *name, uint32_t *out_tid);
+int thread_spawn_in_owner(uint32_t owner_pid,
+                          const char *name,
+                          thread_state_t initial_state,
+                          thread_block_reason_t initial_reason,
+                          uint32_t *out_tid);
 thread_t *thread_get(uint32_t tid);
 thread_t *thread_find_main_for_pid(uint32_t owner_pid);
+void thread_mark_owner_exited(uint32_t owner_pid, int32_t exit_status);
+void thread_reap_owner(uint32_t owner_pid);
 void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t reason);
 void thread_set_exit_status(uint32_t tid, int32_t exit_status);
 void thread_reap(uint32_t tid);

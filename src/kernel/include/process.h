@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define PROCESS_MAX_COUNT 32
+#define PROCESS_MAX_COUNT 48
 #define PROCESS_NAME_MAX 64
 // Round-robin scheduler time slice (fixed ticks per run).
 #define PROCESS_DEFAULT_SLICE_TICKS 5u
@@ -153,6 +153,7 @@ void critical_section_leave(void);
 void preempt_safepoint(void);
 void pm_preempt_safe_enter(void);
 void pm_preempt_safe_leave(void);
+uint64_t process_watchdog_issue_count(void);
 uint32_t process_count_active(void);
 uint32_t process_ready_count(void);
 int process_info_at(uint32_t index, uint32_t *out_pid, const char **out_name);

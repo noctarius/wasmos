@@ -4,8 +4,9 @@ This file tracks active implementation work after the architecture/docs
 reorganization.
 
 IMPORTANT: Keep this file aligned with `README.md` and `docs/ARCHITECTURE.md`.
-Isolation execution baseline: see `docs/RING3_ISOLATION_PLAN.md` for the phased
-plan toward full ring-3 process isolation and kernel survivability.
+Isolation execution baseline: see
+`docs/architecture/14-ring3-isolation-and-separation.md` for the current ring-3
+separation model and deferred hardening backlog.
 
 ## Status Sweep (from `docs/architecture/*`)
 
@@ -22,9 +23,9 @@ plan toward full ring-3 process isolation and kernel survivability.
   bounded queue-backpressure behavior, and baseline line discipline controls.
 
 ### Open / Remaining
-- [ ] Full ring-3 isolation completion per `docs/RING3_ISOLATION_PLAN.md`
-  (remove remaining compatibility assumptions, close remaining survivability
-  and hardening gaps).
+- [ ] Continue post-closure ring-3 hardening per
+  `docs/architecture/14-ring3-isolation-and-separation.md`
+  (boundary cleanup, adversarial coverage expansion, and flake reduction).
 - [ ] Service registry and discoverability model (including VT endpoint
   discovery migration away from fixed/wired assumptions).
 - [ ] Supervision and restart policy for long-running services/drivers.

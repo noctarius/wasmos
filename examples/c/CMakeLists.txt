@@ -460,10 +460,102 @@ add_custom_command(
   VERBATIM
 )
 
-add_custom_target(c_examples DEPENDS ${WASM_HELLO_C_APP} ${WASM_CHARDEV_CLIENT_APP} ${WASM_CHARDEV_PREEMPT_APP} ${WASM_INIT_SMOKE_APP} ${WASM_FS_OPEN_SMOKE_APP} ${WASM_FS_WRITE_SMOKE_APP} ${WASM_NATIVE_CALL_MIN_APP} ${WASM_NATIVE_CALL_SMOKE_APP} ${WASM_IRQ_ROUTE_DENY_APP} ${WASM_IRQ_ROUTE_ALLOW_APP})
+add_custom_command(
+  OUTPUT ${WASM_SHMEM_OWNER_WASM}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
+          ${WASMOS_TRACE_DEFINE}
+          -Wl,--no-entry -Wl,--strip-all
+          -Wl,-z,stack-size=4096
+          -Wl,--initial-memory=65536
+          -Wl,--max-memory=65536
+          -Wl,--allow-undefined
+          -Wl,--export=wasmos_main
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          ${WASM_LIBC_C_SOURCES}
+          ${WASM_SHMEM_OWNER_SRC}
+          -o ${WASM_SHMEM_OWNER_WASM}
+  DEPENDS ${WASM_SHMEM_OWNER_SRC} ${WASM_LIBC_C_SOURCES} ${LIBC_DIR}/include/stdio.h
+          ${LIBC_DIR}/include/stdlib.h ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/unistd.h
+          ${LIBC_DIR}/include/fcntl.h ${LIBC_DIR}/include/wasmos/imports.h
+          ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Building wasm shmem-owner module"
+  VERBATIM
+)
+
+add_custom_command(
+  OUTPUT ${WASM_SHMEM_OWNER_APP}
+  COMMAND ${WASMOS_APP_PACKER}
+          ${WASM_SHMEM_OWNER_WASM}
+          ${WASM_SHMEM_OWNER_APP}
+          shmownr
+          wasmos_main
+          16
+          16
+          4
+          -
+          0
+          1
+          dma.buffer
+          0
+  DEPENDS ${WASM_SHMEM_OWNER_WASM} make_wasmos_app
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Packing wasm shmownr as WASMOS-APP"
+  VERBATIM
+)
+
+add_custom_command(
+  OUTPUT ${WASM_SHMEM_TARGET_WASM}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
+          ${WASMOS_TRACE_DEFINE}
+          -Wl,--no-entry -Wl,--strip-all
+          -Wl,-z,stack-size=4096
+          -Wl,--initial-memory=65536
+          -Wl,--max-memory=65536
+          -Wl,--allow-undefined
+          -Wl,--export=wasmos_main
+          -I${LIBC_DIR}/include
+          -I${DRIVER_WASM_DIR}/include
+          ${WASM_LIBC_C_SOURCES}
+          ${WASM_SHMEM_TARGET_SRC}
+          -o ${WASM_SHMEM_TARGET_WASM}
+  DEPENDS ${WASM_SHMEM_TARGET_SRC} ${WASM_LIBC_C_SOURCES} ${LIBC_DIR}/include/stdio.h
+          ${LIBC_DIR}/include/stdlib.h ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/unistd.h
+          ${LIBC_DIR}/include/fcntl.h ${LIBC_DIR}/include/wasmos/imports.h
+          ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Building wasm shmem-target module"
+  VERBATIM
+)
+
+add_custom_command(
+  OUTPUT ${WASM_SHMEM_TARGET_APP}
+  COMMAND ${WASMOS_APP_PACKER}
+          ${WASM_SHMEM_TARGET_WASM}
+          ${WASM_SHMEM_TARGET_APP}
+          shmtgt
+          wasmos_main
+          16
+          16
+          4
+          -
+          0
+          1
+          dma.buffer
+          0
+  DEPENDS ${WASM_SHMEM_TARGET_WASM} make_wasmos_app
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Packing wasm shmtgt as WASMOS-APP"
+  VERBATIM
+)
+
+add_custom_target(c_examples DEPENDS ${WASM_HELLO_C_APP} ${WASM_CHARDEV_CLIENT_APP} ${WASM_CHARDEV_PREEMPT_APP} ${WASM_INIT_SMOKE_APP} ${WASM_FS_OPEN_SMOKE_APP} ${WASM_FS_WRITE_SMOKE_APP} ${WASM_NATIVE_CALL_MIN_APP} ${WASM_NATIVE_CALL_SMOKE_APP} ${WASM_IRQ_ROUTE_DENY_APP} ${WASM_IRQ_ROUTE_ALLOW_APP} ${WASM_SHMEM_OWNER_APP} ${WASM_SHMEM_TARGET_APP})
 add_custom_target(chardev_client_blob DEPENDS ${WASM_CHARDEV_CLIENT_BLOB})
 
-set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_HELLO_C_APP} ${WASM_CHARDEV_CLIENT_APP} ${WASM_CHARDEV_PREEMPT_APP} ${WASM_INIT_SMOKE_APP} ${WASM_FS_OPEN_SMOKE_APP} ${WASM_FS_WRITE_SMOKE_APP} ${WASM_NATIVE_CALL_MIN_APP} ${WASM_NATIVE_CALL_SMOKE_APP} ${WASM_IRQ_ROUTE_DENY_APP} ${WASM_IRQ_ROUTE_ALLOW_APP})
+set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_HELLO_C_APP} ${WASM_CHARDEV_CLIENT_APP} ${WASM_CHARDEV_PREEMPT_APP} ${WASM_INIT_SMOKE_APP} ${WASM_FS_OPEN_SMOKE_APP} ${WASM_FS_WRITE_SMOKE_APP} ${WASM_NATIVE_CALL_MIN_APP} ${WASM_NATIVE_CALL_SMOKE_APP} ${WASM_IRQ_ROUTE_DENY_APP} ${WASM_IRQ_ROUTE_ALLOW_APP} ${WASM_SHMEM_OWNER_APP} ${WASM_SHMEM_TARGET_APP})
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS c_examples)
 set_property(GLOBAL APPEND PROPERTY WASMOS_KERNEL_BLOBS ${WASM_CHARDEV_CLIENT_BLOB})
 set_property(GLOBAL APPEND PROPERTY WASMOS_KERNEL_BLOB_TARGETS chardev_client_blob)

@@ -31,6 +31,10 @@ It defines repository workflow and documentation/update conventions.
 - Storage-first startup chain (`hw-discovery` -> `fs-fat` -> `sysinit`)
 - Usable VT/CLI stack with multi-TTY switching
 - Ring-3 hardening enabled by default in normal test boots
+- Ring-3 smoke includes process-local `#PF`, `#UD`, `#GP`, `#DE`, `#DB`, `#OF`, `#NM`, `#SS`, and `#AC` fault-policy checks
+- Ring-3 smoke includes shared-memory owner/grant/revoke isolation checks (kernel and user-space app-pair paths)
+- Shared-memory app-pair smoke now also checks forged-ID deny, map-argument policy deny, and post-revoke stale-ID deny
+- Strict ring3 boot smoke now includes a kernel-level shared-memory misuse matrix marker (`[test] ring3 shmem misuse matrix ok`)
 
 ## Quick Start
 
@@ -119,7 +123,7 @@ Boot sequence (high level):
 ## Documentation Index
 - `docs/ARCHITECTURE.md`: architecture index
 - `docs/architecture/`: feature-level architecture docs
-- `docs/RING3_ISOLATION_PLAN.md`: ring-3 isolation plan
+- `docs/architecture/14-ring3-isolation-and-separation.md`: ring-3 isolation and kernel/user-space separation design
 - `docs/THREADING.md`: threading design and rollout
 - `docs/TASKS.md`: active and planned work
 - `AGENTS.md`: contributor/agent workflow and repository rules

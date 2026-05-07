@@ -70,7 +70,24 @@ isr_exception_\num:
     jmp 1b
 .endm
 
-DECL_EXC 0
+ .global isr_exception_0
+isr_exception_0:
+    pushq $0
+    mov %rsp, %rsi
+    mov $0, %rdi
+    call x86_user_exception_handler
+    test %eax, %eax
+    jz 2f
+    mov %rsp, %rsi
+    mov $0, %rdi
+    call x86_exception_panic_frame
+1:
+    cli
+    hlt
+    jmp 1b
+2:
+    add $8, %rsp
+    iretq
  .global isr_exception_1
 isr_exception_1:
     pushq $0

@@ -501,6 +501,16 @@ Legacy-path impact:
 
 Objective: prove ring transitions and preemption are stable under abuse.
 
+Status update (2026-05-07):
+- Added first scheduler watchdog markers in `process.c`:
+  - forward-progress marker: emits `[test] sched progress ok` after sustained
+    context-switch activity in strict-ring3 boots.
+  - reschedule-stall marker: emits `[watchdog] resched stall ...` if
+    `g_need_resched` remains pending past a bounded tick threshold.
+- Baseline validation remains green after marker rollout:
+  - `cmake --build build --target run-qemu-test`
+  - `cmake --build build --target run-qemu-ring3-test`
+
 Tasks:
 - Add long-duration mixed stress:
   - high-rate syscalls

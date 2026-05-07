@@ -11,9 +11,10 @@ Threading design details are maintained in `docs/THREADING.md`.
 Full ring-3 isolation execution planning is tracked in
 `docs/RING3_ISOLATION_PLAN.md`.
 Latest checkpoint: Phase 2 mapping minimization is closed for current strict
-scope; Phase 5 fault-policy expansion is in progress with covered `#PF`, `#UD`,
+scope; Phase 5 fault-policy expansion coverage is in place for `#PF`, `#UD`,
 `#GP`, `#DE`, `#DB`, `#OF`, `#NM`, `#SS`, and `#AC` process-local termination
-probes.
+probes; Phase 6 scheduler/trap robustness has started with scheduler forward-
+progress and reschedule-stall watchdog markers.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

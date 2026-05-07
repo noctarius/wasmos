@@ -137,6 +137,8 @@ static int
 spawn_ring3_fault_gp_probe_process(uint32_t parent_pid, uint32_t *out_pid);
 static void
 run_shmem_owner_isolation_test(uint32_t owner_context_id, uint32_t foreign_context_id);
+static void
+run_shmem_misuse_matrix_test(uint32_t owner_context_id, uint32_t foreign_context_id, uint8_t ring3_mode);
 
 static void *
 boot_shadow_alloc_low(uint64_t size_bytes, uint64_t *out_phys)
@@ -991,6 +993,85 @@ run_ring3_shmem_isolation_test(uint32_t owner_context_id, uint32_t foreign_conte
     }
     if (mm_shared_release(owner_context_id, shmem_id) != 0) {
         serial_write("[test] ring3 shmem cleanup failed\n");
+    }
+}
+
+static void
+run_shmem_misuse_matrix_test(uint32_t owner_context_id, uint32_t foreign_context_id, uint8_t ring3_mode)
+{
+    uint32_t shmem_id = 0;
+    uint64_t phys = 0;
+    uint64_t pages = 0;
+    uint64_t map_base = 0;
+    uint8_t ok = 1;
+    mm_context_t *foreign_ctx = 0;
+
+    if (owner_context_id == 0 || foreign_context_id == 0 || owner_context_id == foreign_context_id) {
+        return;
+    }
+    foreign_ctx = mm_context_get(foreign_context_id);
+    if (!foreign_ctx) {
+        ok = 0;
+        goto done;
+    }
+
+    if (mm_shared_create(owner_context_id, 1, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE,
+                         &shmem_id, &phys) != 0 || shmem_id == 0 || phys == 0) {
+        ok = 0;
+        goto done;
+    }
+    if (mm_shared_retain(owner_context_id, shmem_id) != 0) {
+        ok = 0;
+        goto done;
+    }
+
+    if (mm_shared_get_phys(foreign_context_id, shmem_id + 0x100, &phys, &pages) == 0 ||
+        mm_shared_retain(foreign_context_id, shmem_id + 0x100) == 0 ||
+        mm_shared_release(foreign_context_id, shmem_id + 0x100) == 0 ||
+        mm_shared_map(foreign_ctx, shmem_id + 0x100, MEM_REGION_FLAG_READ, &map_base) == 0) {
+        ok = 0;
+    }
+
+    if (mm_shared_grant(foreign_context_id, shmem_id, owner_context_id) == 0 ||
+        mm_shared_revoke(foreign_context_id, shmem_id, owner_context_id) == 0) {
+        ok = 0;
+    }
+
+    if (mm_shared_map(foreign_ctx, shmem_id, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, &map_base) == 0) {
+        ok = 0;
+    }
+    if (mm_shared_grant(owner_context_id, shmem_id, foreign_context_id) != 0) {
+        ok = 0;
+    }
+    if (mm_shared_map(foreign_ctx, shmem_id, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, &map_base) != 0 ||
+        map_base == 0 ||
+        mm_shared_unmap(foreign_ctx, shmem_id) != 0) {
+        ok = 0;
+    }
+    if (mm_shared_revoke(owner_context_id, shmem_id, foreign_context_id) != 0 ||
+        mm_shared_revoke(owner_context_id, shmem_id, foreign_context_id) != 0) {
+        ok = 0;
+    }
+    if (mm_shared_map(foreign_ctx, shmem_id, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, &map_base) == 0 ||
+        mm_shared_release(foreign_context_id, shmem_id) == 0) {
+        ok = 0;
+    }
+
+done:
+    if (shmem_id) {
+        if (mm_shared_release(owner_context_id, shmem_id) != 0) {
+            ok = 0;
+        }
+        if (mm_shared_release(owner_context_id, shmem_id) == 0) {
+            ok = 0;
+        }
+    }
+    if (ring3_mode) {
+        serial_write(ok ? "[test] ring3 shmem misuse matrix ok\n"
+                        : "[test] ring3 shmem misuse matrix mismatch\n");
+    } else {
+        serial_write(ok ? "[test] shmem misuse matrix ok\n"
+                        : "[test] shmem misuse matrix mismatch\n");
     }
 }
 
@@ -1997,6 +2078,9 @@ kmain(boot_info_t *boot_info)
     }
     g_chardev_service_endpoint = chardev_endpoint;
     run_shmem_owner_isolation_test(mem_service_proc->context_id, chardev_proc->context_id);
+    run_shmem_misuse_matrix_test(mem_service_proc->context_id,
+                                 chardev_proc->context_id,
+                                 g_ring3_smoke_enabled);
 
     wasmos_app_set_policy_hooks(wasmos_endpoint_resolve, wasmos_capability_grant);
 

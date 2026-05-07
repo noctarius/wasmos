@@ -21,6 +21,9 @@ strict ring3 cross-process shmem deny/allow smoke markers now gated in
 `run-qemu-ring3-test`; revoke semantics and user-space shmem
 grant/revoke end-to-end smoke are now included, including forged-ID and
 stale-revoked-ID negative checks plus map-argument policy deny coverage.
+Kernel boot smoke now also runs a shared-memory misuse matrix (forged IDs,
+wrong-owner grant/revoke attempts, pre/post-grant map deny/allow, idempotent
+revoke, and release-balance checks) with strict-ring3 gate marker output.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

@@ -454,10 +454,10 @@ Progress update (2026-05-06):
   assert process-local termination (`-11`).
 - Added strict-ring3 probes for vectors commonly surfaced as user-origin
   transition faults during bring-up:
-  - `ring3-fault-of` (`#OF` intent; accepts observed `#GP/#UD` fallbacks)
-  - `ring3-fault-nm` (`#NM` intent; accepts observed fallback classification)
-  - `ring3-fault-ss` (`#SS` intent; accepts observed `#GP` fallback)
-  - `ring3-fault-ac` (`#AC` intent; accepts observed fallback classification)
+  - `ring3-fault-of` (strict expected vector: `#GP`, 13)
+  - `ring3-fault-nm` (strict expected vector: `#UD`, 6 on current smoke payload)
+  - `ring3-fault-ss` (strict expected vector: `#GP`, 13 on current smoke payload)
+  - `ring3-fault-ac` (strict expected vector: `#UD`, 6 on current smoke payload)
 - Smoke/gate markers now assert both classification and policy status:
   - `[test] ring3 fault ud reason ok`
   - `[test] ring3 fault ud exit status ok`

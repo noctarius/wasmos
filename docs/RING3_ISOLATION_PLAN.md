@@ -62,7 +62,7 @@ Tasks (next-cycle hardening candidates after closure):
   - `run-qemu-ring3-test`
   - new adversarial ring3 tests from this plan as they land
 - Add a boot-time marker that declares active isolation mode:
-  - `[mode] strict-ring3=0/1`
+  - `[mode] strict-ring3=1`
 - Add test helper checks that fail if strict mode is expected but disabled.
 
 Exit criteria:
@@ -624,6 +624,16 @@ Legacy-path impact:
 ### Phase 8: Strict Mode Default + Compatibility Path Deletion
 
 Objective: finish migration by removing non-ring3 behavior.
+
+Status update (2026-05-07):
+- Removed the transitional strict-mode compatibility toggle path:
+  - deleted `WASMOS_RING3_STRICT` CMake option and kernel compile define wiring
+  - removed `-DWASMOS_RING3_STRICT=ON` shadow configure override in
+    `run-qemu-ring3-test`
+  - kernel boot marker now always emits `[mode] strict-ring3=1`
+- Validation after removal:
+  - `cmake --build build --target run-qemu-test` passes
+  - `cmake --build build --target run-qemu-ring3-test` passes
 
 Tasks:
 - Maintain strict ring3 defaults as baseline (`WASMOS_LOW_SLOT_SWEEP=ON`,

@@ -13,5 +13,5 @@ _start(void)
         (void)wasmos_sys_getpid();
     }
 
-    wasmos_sys_exit(0);
+    wasmos_sys_thread_exit(0);
 }

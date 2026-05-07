@@ -21,6 +21,7 @@ static uint8_t g_ring3_ipc_call_err_rdx_zero_logged;
 static uint8_t g_ring3_ipc_call_correlation_logged;
 static uint8_t g_ring3_yield_logged;
 static uint8_t g_ring3_thread_yield_logged;
+static uint8_t g_ring3_thread_exit_logged;
 static uint8_t g_ring3_native_abi_logged;
 static uint8_t g_ring3_native_gettid_logged;
 static uint32_t g_syscall_ipc_call_next_request_id = 1;
@@ -334,6 +335,23 @@ x86_syscall_handler(syscall_frame_t *frame)
         }
         process_yield(PROCESS_RUN_YIELDED);
         return 0;
+    case WASMOS_SYSCALL_THREAD_EXIT: {
+        process_t *proc = process_get(process_current_pid());
+        if (!proc) {
+            return (uint64_t)-1;
+        }
+        if (!g_ring3_thread_exit_logged && (frame->cs & 0x3u) == 0x3u &&
+            name_eq(proc->name, "ring3-native")) {
+            g_ring3_thread_exit_logged = 1;
+            serial_write("[test] ring3 thread exit syscall ok\n");
+        }
+        process_set_exit_status(proc, (int32_t)frame->rdi);
+        /* FIXME(threading-phase-c): Route THREAD_EXIT through true thread-only
+         * teardown once user-visible multi-thread lifecycle is implemented.
+         * Current baseline intentionally aliases to process-group exit. */
+        process_yield(PROCESS_RUN_EXITED);
+        return 0;
+    }
     case WASMOS_SYSCALL_WAIT: {
         process_t *proc = process_get(process_current_pid());
         uint32_t target_pid = 0;

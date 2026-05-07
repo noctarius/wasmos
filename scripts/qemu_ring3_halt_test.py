@@ -22,6 +22,7 @@ def main():
         b"native-call-smoke: ipc-call ok",
         b"[test] ring3 native abi ok",
         b"[test] ring3 native gettid ok",
+        b"[test] ring3 thread exit syscall ok",
         b"[fault] user-pf pid=",
         b"reason=user_to_kernel",
         b"reason=write_violation",

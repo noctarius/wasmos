@@ -515,6 +515,11 @@ Status update (2026-05-07):
     while IPC deny/allow probes continue in the same CPL3 loop.
   - `ring3-fault-policy` now respawns alternating `#UD/#GP` fault probes for
     multiple rounds and emits `[test] ring3 mixed stress ok` on completion.
+- Added trap-frame integrity watchdog guard in `process_preempt_from_irq`:
+  - validates CS privilege shape and basic IRET frame sanity before preempt
+    context capture.
+  - emits `[watchdog] trap frame invalid ...` and skips preempt if malformed
+    frame data is observed.
 
 Tasks:
 - Add long-duration mixed stress:

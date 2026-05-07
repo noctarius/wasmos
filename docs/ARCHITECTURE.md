@@ -16,11 +16,10 @@ scope; Phase 5 fault-policy expansion coverage is in place for `#PF`, `#UD`,
 probes; Phase 6 scheduler/trap robustness is closed for current scope
 (watchdog + mixed-stress + trap-integrity rollout complete, with one noted
 transient CLI fs-smoke flake); Phase 7 memory-service/shared-mapping isolation
-is in progress with owner-bound shared-memory checks, explicit grants, and
-strict ring3 cross-process shmem deny/allow smoke markers now gated in
-`run-qemu-ring3-test`; revoke semantics and user-space shmem
-grant/revoke end-to-end smoke are now included, including forged-ID and
-stale-revoked-ID negative checks plus map-argument policy deny coverage.
+is closed for current strict scope with owner-bound checks, explicit grants/
+revoke, strict ring3 cross-process deny/allow markers, app-pair forged/stale
+negative checks, kernel misuse-matrix gate markers, and shared-map state
+ordering hardening.
 Kernel boot smoke now also runs a shared-memory misuse matrix (forged IDs,
 wrong-owner grant/revoke attempts, pre/post-grant map deny/allow, idempotent
 revoke, and release-balance checks) with strict-ring3 gate marker output.

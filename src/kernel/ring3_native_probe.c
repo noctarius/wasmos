@@ -6,6 +6,8 @@ _start(void)
 {
     (void)wasmos_sys_ipc_notify(0xFFFFFFFFu);
     (void)wasmos_sys_yield();
+    (void)wasmos_sys_gettid();
+    (void)wasmos_sys_thread_yield();
 
     for (uint32_t i = 0; i < 128u; ++i) {
         (void)wasmos_sys_getpid();

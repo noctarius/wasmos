@@ -33,7 +33,8 @@ Threading rollout (`docs/THREADING.md`) remains in Phase B with current-scope
 exit criterion satisfied: scheduler-active internal worker threads (dedicated
 kernel stacks + worker entrypoints) plus targeted multi-thread IPC stress are
 validated in baseline smoke (`[test] threading internal worker ok`,
-`[test] threading ipc stress ok`).
+`[test] threading ipc stress ok`). Phase C has started with initial native
+ring3 syscall coverage for `gettid` and `thread_yield`.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

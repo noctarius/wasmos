@@ -61,13 +61,12 @@ Tasks (next-cycle hardening candidates after closure):
   - `run-qemu-test`
   - `run-qemu-ring3-test`
   - new adversarial ring3 tests from this plan as they land
-- Add a boot-time marker that declares active isolation mode:
-  - `[mode] strict-ring3=1`
-- Add test helper checks that fail if strict mode is expected but disabled.
+- Add strict behavioral marker checks that fail when isolation regresses
+  (fault-policy, IPC-deny/allow, shared-memory isolation, and sweep diagnostics).
 
 Exit criteria:
 - CI can run strict-ring3 profile deterministically.
-- Mode marker is visible and asserted in relevant tests.
+- Strict behavioral markers are asserted in relevant tests.
 
 Known baseline test debt to track during later phases:
 - Previously observed runtime noise (`[cli] vt writer register failed`,
@@ -309,18 +308,11 @@ Progress update (2026-05-03):
     resume.
   - Ring3 user-entry activation now applies an explicit no-low-slot verifier
     gate (`PML4[0]` absent) after strip and before CPL3 selector commit.
-  - Added guarded sweep mode (`WASMOS_LOW_SLOT_SWEEP`, now default ON) that
-    performs strip+verify across eligible user-mode contexts and logs the first
-    strip/verify failure path for iterative Phase-2 removal work.
-  - Sweep mode now supports scope level control
-    (`WASMOS_LOW_SLOT_SWEEP_LEVEL`: `1` user-only, `2` include selected
-    non-user contexts) and low-slot map width experiments via
-    `WASMOS_IDENTITY_PD_COUNT` (`0..4`).
+  - Added guarded sweep mode that performs strip+verify across eligible
+    contexts and logs the first strip/verify failure path for iterative
+    Phase-2 removal work.
 - Phase-2 closure verification (2026-05-06):
-  - Strict defaults are now exercised in the main strict gate:
-    `WASMOS_LOW_SLOT_SWEEP=ON`,
-    `WASMOS_LOW_SLOT_SWEEP_LEVEL=2`,
-    `WASMOS_IDENTITY_PD_COUNT=0`.
+  - Strict low-slot baseline is exercised in the main strict gate.
   - `cmake --build build --target strict-ring3` passes, including both
     `run-qemu-test` and `run-qemu-ring3-test`, with runtime markers:
     `[mode] low-slot-sweep=1`,
@@ -630,14 +622,20 @@ Status update (2026-05-07):
   - deleted `WASMOS_RING3_STRICT` CMake option and kernel compile define wiring
   - removed `-DWASMOS_RING3_STRICT=ON` shadow configure override in
     `run-qemu-ring3-test`
-  - kernel boot marker now always emits `[mode] strict-ring3=1`
+- Removed transitional low-slot strict-mode knobs:
+  - deleted `WASMOS_LOW_SLOT_SWEEP`, `WASMOS_LOW_SLOT_SWEEP_LEVEL`, and
+    `WASMOS_IDENTITY_PD_COUNT` CMake configurability for kernel strict paths
+  - paging identity-map breadth is fixed at strict baseline (`IDENTITY_PD_COUNT=0`)
+- Removed redundant fixed-value boot mode serial markers from `kmain`
+  (`strict-ring3` and low-slot sweep mode lines); ring3 smoke checks now rely
+  on behavioral/fault-policy markers instead of static mode-value prints.
 - Validation after removal:
   - `cmake --build build --target run-qemu-test` passes
   - `cmake --build build --target run-qemu-ring3-test` passes
 
 Tasks:
-- Maintain strict ring3 defaults as baseline (`WASMOS_LOW_SLOT_SWEEP=ON`,
-  `WASMOS_LOW_SLOT_SWEEP_LEVEL=2`, `WASMOS_IDENTITY_PD_COUNT=0`).
+- Maintain strict ring3 low-slot baseline behavior (`IDENTITY_PD_COUNT=0` and
+  boot-time low-slot sweep diagnostic execution).
 - Continue deleting remaining compatibility branches/fallback markers from
   strict-mode bring-up paths.
 - Run one stabilization cycle with strict as default in CI.

@@ -225,8 +225,7 @@ The current tree already boots into a usable user-space stack:
   `[test] ring3 native abi ok` on first native CPL3 `getpid`. The
   `run-qemu-ring3-test` harness now also requires `native-call-smoke: ipc-call ok`
   and `[test] ring3 native abi ok` so both native IPC-call and native syscall
-  header paths are asserted in the same run; it now also asserts the boot-time
-  marker `[mode] strict-ring3=1`. Strict ring3 policy is now decoupled from
+  header paths are asserted in the same run. Strict ring3 policy is now decoupled from
   ring3 smoke probes: strict policy remains enabled for normal boots, while
   smoke spawn remains disabled by default outside dedicated ring3 smoke runs.
   Ring3 smoke endpoint
@@ -266,15 +265,11 @@ The current tree already boots into a usable user-space stack:
 - Ring3 entry hard gate update: user-entry activation now enforces an explicit
   no-low-slot verification (`PML4[0]` absent) after stripping low-slot mappings
   and before committing CPL3 entry selectors.
-- Added guarded low-slot sweep diagnostics: when
-  `WASMOS_LOW_SLOT_SWEEP=ON`, boot performs a strip+verify pass across eligible
-  user-mode contexts and emits first-failure markers for low-slot transition
-  triage; default is ON for strict-ring3 baseline validation.
-- Sweep diagnostics now support scope levels via
-  `WASMOS_LOW_SLOT_SWEEP_LEVEL` (`1` user-only, `2` include selected non-user
-  contexts).
-- Identity-map breadth is now configurable via `WASMOS_IDENTITY_PD_COUNT`
-  (`0..4`, default `0`) to support phased low-slot reduction trials.
+- Guarded low-slot sweep diagnostics are now strict baseline behavior: boot
+  always performs strip+verify across eligible contexts and emits first-failure
+  markers for low-slot transition triage.
+- Low-slot identity-map breadth is now fixed at strict baseline width
+  (`IDENTITY_PD_COUNT=0`) in paging.
 - Regression coverage now includes `tests/test_ring3_smoke_target.py`, which
   executes `cmake --build build --target run-qemu-ring3-test` to keep ring3
   marker assertions in the standard automated test suite, including structured

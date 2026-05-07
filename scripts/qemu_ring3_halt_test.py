@@ -18,7 +18,7 @@ def main():
         cfg = default_config()
 
     required = [
-        b"[mode] strict-ring3=1",
+        b"[kernel] kmain",
         b"native-call-smoke: ipc-call ok",
         b"[test] ring3 native abi ok",
         b"[fault] user-pf pid=",

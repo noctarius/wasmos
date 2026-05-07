@@ -557,15 +557,16 @@ int mm_shared_map(mm_context_t *ctx, uint32_t id, uint32_t flags, uint64_t *out_
     if (flags) {
         effective_flags &= flags;
     }
-    uint64_t virt_base = mm_region_virtual_base(ctx, MEM_REGION_SHARED, region->pages);
-    if (virt_base == 0 || mm_context_add_region(ctx, virt_base, region->pages * PAGE_SIZE,
-                                                effective_flags, MEM_REGION_SHARED) != 0) {
-        return -1;
-    }
-    ctx->regions[ctx->region_count - 1].phys_base = region->base;
     if (mm_shared_retain(ctx->id, id) != 0) {
         return -1;
     }
+    uint64_t virt_base = mm_region_virtual_base(ctx, MEM_REGION_SHARED, region->pages);
+    if (virt_base == 0 || mm_context_add_region(ctx, virt_base, region->pages * PAGE_SIZE,
+                                                effective_flags, MEM_REGION_SHARED) != 0) {
+        (void)mm_shared_release(ctx->id, id);
+        return -1;
+    }
+    ctx->regions[ctx->region_count - 1].phys_base = region->base;
     if (out_base) {
         *out_base = virt_base;
     }

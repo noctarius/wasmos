@@ -239,6 +239,7 @@ static int process_schedule_once_impl(void);
 static thread_t *process_main_thread(process_t *proc);
 static process_t *process_owner_for_thread(thread_t *thread);
 static thread_t *process_thread_for_transition(process_t *proc);
+static thread_t *process_first_owner_ready_thread(process_t *proc);
 static void process_sched_invariant_fail(const char *msg, uint64_t a, uint64_t b);
 static void process_set_blocked(process_t *proc, thread_t *thread, process_block_reason_t reason, thread_block_reason_t thread_reason);
 static void process_set_ready(process_t *proc, thread_t *thread);
@@ -445,6 +446,27 @@ process_thread_for_transition(process_t *proc)
         return g_current_thread;
     }
     return process_main_thread(proc);
+}
+
+static thread_t *
+process_first_owner_ready_thread(process_t *proc)
+{
+    if (!proc) {
+        return 0;
+    }
+    for (uint32_t i = 0;; ++i) {
+        uint32_t tid = 0;
+        thread_t *thread = 0;
+        if (thread_owner_tid_at(proc->pid, i, &tid) != 0) {
+            break;
+        }
+        thread = thread_get(tid);
+        if (!thread || thread->state != THREAD_STATE_READY) {
+            continue;
+        }
+        return thread;
+    }
+    return 0;
 }
 
 static int ready_queue_enqueue(thread_t *thread) {
@@ -1291,6 +1313,24 @@ static int process_schedule_once_impl(void) {
             }
         } else {
             process_mark_exited(proc, proc->exit_status);
+        }
+    } else if (result == PROCESS_RUN_THREAD_EXITED) {
+        thread_t *next = 0;
+        thread_set_state(thread->tid, THREAD_STATE_ZOMBIE, THREAD_BLOCK_NONE);
+        thread_set_exit_status(thread->tid, proc->exit_status);
+        if (proc->live_thread_count > 0) {
+            proc->live_thread_count--;
+        }
+        if (proc->live_thread_count == 0) {
+            process_mark_exited(proc, proc->exit_status);
+        } else {
+            next = process_first_owner_ready_thread(proc);
+            if (next) {
+                process_set_ready(proc, next);
+                ready_queue_enqueue(next);
+            } else {
+                proc->state = PROCESS_STATE_BLOCKED;
+            }
         }
     } else if (result == PROCESS_RUN_BLOCKED) {
         if (proc->state == PROCESS_STATE_READY) {

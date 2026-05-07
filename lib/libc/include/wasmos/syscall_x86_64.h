@@ -125,8 +125,6 @@ wasmos_sys_exit(int32_t status)
     }
 }
 
-/* Phase C baseline: THREAD_EXIT currently follows process-group exit behavior
- * until user-visible per-thread teardown semantics are wired end-to-end. */
 static inline void
 wasmos_sys_thread_exit(int32_t status)
 {

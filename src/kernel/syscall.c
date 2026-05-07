@@ -1,6 +1,7 @@
 #include "syscall.h"
 #include "ipc.h"
 #include "process.h"
+#include "thread.h"
 #include "serial.h"
 #include "string.h"
 #include "paging.h"
@@ -19,7 +20,9 @@ static uint8_t g_ring3_ipc_call_ok_logged;
 static uint8_t g_ring3_ipc_call_err_rdx_zero_logged;
 static uint8_t g_ring3_ipc_call_correlation_logged;
 static uint8_t g_ring3_yield_logged;
+static uint8_t g_ring3_thread_yield_logged;
 static uint8_t g_ring3_native_abi_logged;
+static uint8_t g_ring3_native_gettid_logged;
 static uint32_t g_syscall_ipc_call_next_request_id = 1;
 static uint32_t g_ipc_call_echo_endpoint = IPC_ENDPOINT_NONE;
 static uint32_t g_ipc_call_control_deny_endpoint = IPC_ENDPOINT_NONE;
@@ -291,6 +294,15 @@ x86_syscall_handler(syscall_frame_t *frame)
             }
         }
         return process_current_pid();
+    case WASMOS_SYSCALL_GETTID:
+        if (!g_ring3_native_gettid_logged && (frame->cs & 0x3u) == 0x3u) {
+            process_t *proc = process_get(process_current_pid());
+            if (proc && name_eq(proc->name, "ring3-native")) {
+                g_ring3_native_gettid_logged = 1;
+                serial_write("[test] ring3 native gettid ok\n");
+            }
+        }
+        return thread_current_tid();
     case WASMOS_SYSCALL_EXIT: {
         process_t *proc = process_get(process_current_pid());
         if (!proc) {
@@ -307,6 +319,17 @@ x86_syscall_handler(syscall_frame_t *frame)
                 (frame->cs & 0x3u) == 0x3u) {
                 g_ring3_yield_logged = 1;
                 serial_write("[test] ring3 yield syscall ok\n");
+            }
+        }
+        process_yield(PROCESS_RUN_YIELDED);
+        return 0;
+    case WASMOS_SYSCALL_THREAD_YIELD:
+        if (!g_ring3_thread_yield_logged) {
+            process_t *proc = process_get(process_current_pid());
+            if (proc && name_eq(proc->name, "ring3-native") &&
+                (frame->cs & 0x3u) == 0x3u) {
+                g_ring3_thread_yield_logged = 1;
+                serial_write("[test] ring3 thread yield syscall ok\n");
             }
         }
         process_yield(PROCESS_RUN_YIELDED);

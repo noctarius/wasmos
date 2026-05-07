@@ -37,6 +37,7 @@ It defines repository workflow and documentation/update conventions.
 - Strict ring3 boot smoke now includes a kernel-level shared-memory misuse matrix marker (`[test] ring3 shmem misuse matrix ok`)
 - Kernel threading Phase B now includes schedulable internal worker threads with per-thread kernel stacks (`[test] threading internal worker ok`)
 - Kernel threading Phase B now includes a targeted multi-thread IPC stress marker (`[test] threading ipc stress ok`)
+- Threading Phase C syscall baseline now includes native ring3 `gettid` and `thread_yield` coverage (`[test] ring3 native gettid ok`, `[test] ring3 thread yield syscall ok`)
 
 ## Quick Start
 

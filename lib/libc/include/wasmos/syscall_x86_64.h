@@ -15,7 +15,9 @@ typedef enum {
     WASMOS_SYSCALL_YIELD = 3,
     WASMOS_SYSCALL_WAIT = 4,
     WASMOS_SYSCALL_IPC_NOTIFY = 5,
-    WASMOS_SYSCALL_IPC_CALL = 6
+    WASMOS_SYSCALL_IPC_CALL = 6,
+    WASMOS_SYSCALL_GETTID = 7,
+    WASMOS_SYSCALL_THREAD_YIELD = 8
 } wasmos_syscall_id_t;
 
 typedef struct {
@@ -73,7 +75,9 @@ wasmos_syscall6_ret2(uint64_t id,
 
 static inline int64_t wasmos_sys_nop(void) { return wasmos_syscall0(WASMOS_SYSCALL_NOP); }
 static inline int64_t wasmos_sys_getpid(void) { return wasmos_syscall0(WASMOS_SYSCALL_GETPID); }
+static inline int64_t wasmos_sys_gettid(void) { return wasmos_syscall0(WASMOS_SYSCALL_GETTID); }
 static inline int64_t wasmos_sys_yield(void) { return wasmos_syscall0(WASMOS_SYSCALL_YIELD); }
+static inline int64_t wasmos_sys_thread_yield(void) { return wasmos_syscall0(WASMOS_SYSCALL_THREAD_YIELD); }
 static inline int64_t wasmos_sys_wait(uint32_t pid) { return wasmos_syscall1(WASMOS_SYSCALL_WAIT, pid); }
 static inline int64_t wasmos_sys_ipc_notify(uint32_t endpoint)
 {

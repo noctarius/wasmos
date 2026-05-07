@@ -10,7 +10,9 @@ typedef enum {
     WASMOS_SYSCALL_YIELD = 3,
     WASMOS_SYSCALL_WAIT = 4,
     WASMOS_SYSCALL_IPC_NOTIFY = 5,
-    WASMOS_SYSCALL_IPC_CALL = 6
+    WASMOS_SYSCALL_IPC_CALL = 6,
+    WASMOS_SYSCALL_GETTID = 7,
+    WASMOS_SYSCALL_THREAD_YIELD = 8
 } wasmos_syscall_id_t;
 
 /* int 0x80 syscall ABI (current minimal contract):
@@ -34,6 +36,8 @@ typedef enum {
  *                   current behavior blocks by yielding until a reply with a
  *                   matching request_id is received
  *                   current reply ABI returns arg0 only (arg1..arg3 ignored)
+ * - GETTID:         RAX=tid
+ * - THREAD_YIELD:   RAX=0
  */
 typedef struct {
     uint64_t r15;

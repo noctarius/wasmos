@@ -441,6 +441,13 @@ Exit criteria:
 - Expose create/join/exit/yield in syscall table and libc shims.
 - Add sample user program and integration tests.
 
+Current status:
+
+- in progress
+- syscall ABI now includes `gettid` and `thread_yield` for native ring3
+  callers, with strict ring3 smoke markers:
+  `[test] ring3 native gettid ok` and `[test] ring3 thread yield syscall ok`
+
 Exit criteria:
 
 - user-level thread smoke tests pass under `run-qemu-test`

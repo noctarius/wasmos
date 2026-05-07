@@ -142,6 +142,7 @@ int process_wait(process_t *process, uint32_t target_pid, int32_t *out_exit_stat
 int process_kill(uint32_t pid, int32_t exit_status);
 int process_get_exit_status(uint32_t pid, int32_t *out_exit_status);
 uint32_t process_wake_by_context(uint32_t context_id);
+int process_wake_thread(uint32_t tid);
 int process_schedule_once(void);
 void process_yield(process_run_result_t result);
 void process_tick(void);

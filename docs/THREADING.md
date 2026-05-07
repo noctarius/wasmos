@@ -418,6 +418,12 @@ Exit criteria:
 - Enable kernel/native components to spawn extra threads.
 - IPC wait/wake semantics migrated to thread-level.
 
+Current status:
+
+- in progress
+- IPC endpoints now track a waiting `tid` and prefer targeted thread wakeup
+  before falling back to context-wide wake behavior
+
 Exit criteria:
 
 - targeted kernel stress test with multi-threaded IPC passes

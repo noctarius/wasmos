@@ -999,6 +999,29 @@ uint32_t process_wake_by_context(uint32_t context_id) {
     return woken;
 }
 
+int
+process_wake_thread(uint32_t tid)
+{
+    if (tid == 0) {
+        return 0;
+    }
+    thread_t *thread = thread_get(tid);
+    process_t *proc = process_owner_for_thread(thread);
+    if (!thread || !proc) {
+        return 0;
+    }
+    if (thread->state != THREAD_STATE_BLOCKED) {
+        return 0;
+    }
+    if (proc->state != PROCESS_STATE_BLOCKED &&
+        !(proc->state == PROCESS_STATE_RUNNING && proc == g_current_process)) {
+        return 0;
+    }
+    process_set_ready(proc, thread);
+    ready_queue_enqueue(thread);
+    return 1;
+}
+
 int process_schedule_once(void) {
     uint64_t higher_half_base = paging_get_higher_half_base();
     uintptr_t here = 0;

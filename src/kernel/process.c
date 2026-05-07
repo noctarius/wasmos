@@ -1113,102 +1113,6 @@ int process_preempt_from_irq(irq_frame_t *frame) {
         }
     }
 
-    uint64_t start = (uint64_t)(uintptr_t)&__kernel_start;
-    uint64_t end = (uint64_t)(uintptr_t)&__kernel_end;
-    uint64_t low_start = start;
-    uint64_t low_end = end;
-    uint64_t higher_half = paging_get_higher_half_base();
-    if (start < higher_half) {
-        start += higher_half;
-    }
-    if (end < higher_half) {
-        end += higher_half;
-    }
-    if (process_str_eq(g_current_process->name, "process-manager")) {
-        static uint8_t logged_frame_dump;
-        if (!logged_frame_dump) {
-            logged_frame_dump = 1;
-            trace_write("[irq] pm preempt frame dump\n");
-            trace_write("[irq] frame ptr=");
-            trace_do(serial_write_hex64((uint64_t)(uintptr_t)frame));
-            trace_write("[irq] frame rip=");
-            trace_do(serial_write_hex64(frame->rip));
-            trace_write("[irq] frame cs=");
-            trace_do(serial_write_hex64(frame->cs));
-            trace_write("[irq] frame rflags=");
-            trace_do(serial_write_hex64(frame->rflags));
-#if WASMOS_TRACE
-            uint64_t *raw = (uint64_t *)(uintptr_t)frame;
-            for (uint32_t i = 0; i < 8; ++i) {
-                trace_write("[irq] frame qword ");
-                trace_do(serial_write_hex64(i));
-                trace_do(serial_write_hex64(raw[i]));
-            }
-            uint64_t *tail = (uint64_t *)((uintptr_t)frame + 120);
-            for (uint32_t i = 0; i < 4; ++i) {
-                trace_write("[irq] iret qword ");
-                trace_do(serial_write_hex64(i));
-                trace_do(serial_write_hex64(tail[i]));
-            }
-#endif
-        }
-    }
-    if ((frame->rip < start || frame->rip >= end) &&
-        (frame->rip < low_start || frame->rip >= low_end) &&
-        process_str_eq(g_current_process->name, "process-manager")) {
-        static uint8_t logged_bad_frame;
-        if (!logged_bad_frame) {
-            logged_bad_frame = 1;
-            trace_write("[irq] bad frame rip for pm\n");
-            trace_write("[irq] frame ptr=");
-            trace_do(serial_write_hex64((uint64_t)(uintptr_t)frame));
-            trace_write("[irq] frame rip=");
-            trace_do(serial_write_hex64(frame->rip));
-            trace_write("[irq] frame cs=");
-            trace_do(serial_write_hex64(frame->cs));
-            trace_write("[irq] frame rflags=");
-            trace_do(serial_write_hex64(frame->rflags));
-            trace_write("[irq] frame rax=");
-            trace_do(serial_write_hex64(frame->rax));
-            trace_write("[irq] frame rbx=");
-            trace_do(serial_write_hex64(frame->rbx));
-            trace_write("[irq] frame rcx=");
-            trace_do(serial_write_hex64(frame->rcx));
-            trace_write("[irq] frame rdx=");
-            trace_do(serial_write_hex64(frame->rdx));
-            trace_write("[irq] frame rbp=");
-            trace_do(serial_write_hex64(frame->rbp));
-            trace_write("[irq] frame rsi=");
-            trace_do(serial_write_hex64(frame->rsi));
-            trace_write("[irq] frame rdi=");
-            trace_do(serial_write_hex64(frame->rdi));
-            trace_write("[irq] frame r8=");
-            trace_do(serial_write_hex64(frame->r8));
-            trace_write("[irq] frame r9=");
-            trace_do(serial_write_hex64(frame->r9));
-            trace_write("[irq] frame r10=");
-            trace_do(serial_write_hex64(frame->r10));
-            trace_write("[irq] frame r11=");
-            trace_do(serial_write_hex64(frame->r11));
-            trace_write("[irq] frame r12=");
-            trace_do(serial_write_hex64(frame->r12));
-            trace_write("[irq] frame r13=");
-            trace_do(serial_write_hex64(frame->r13));
-            trace_write("[irq] frame r14=");
-            trace_do(serial_write_hex64(frame->r14));
-            trace_write("[irq] frame r15=");
-            trace_do(serial_write_hex64(frame->r15));
-#if WASMOS_TRACE
-            uint64_t *raw = (uint64_t *)(uintptr_t)frame;
-            for (uint32_t i = 0; i < 8; ++i) {
-                trace_write("[irq] frame qword ");
-                trace_do(serial_write_hex64(i));
-                trace_do(serial_write_hex64(raw[i]));
-            }
-#endif
-        }
-    }
-
     process_validate_context(g_current_process, "preempt");
     g_current_process->ctx.rax = frame->rax;
     g_current_process->ctx.rbx = frame->rbx;
@@ -1312,6 +1216,10 @@ void pm_preempt_safe_leave(void) {
     if (g_pm_preempt_safe_depth > 0) {
         g_pm_preempt_safe_depth--;
     }
+}
+
+uint64_t process_watchdog_issue_count(void) {
+    return g_resched_stall_reports + g_trap_frame_invalid_reports;
 }
 
 uint32_t process_count_active(void) {

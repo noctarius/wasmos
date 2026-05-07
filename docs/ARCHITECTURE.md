@@ -19,7 +19,8 @@ transient CLI fs-smoke flake); Phase 7 memory-service/shared-mapping isolation
 is in progress with owner-bound shared-memory checks, explicit grants, and
 strict ring3 cross-process shmem deny/allow smoke markers now gated in
 `run-qemu-ring3-test`; revoke semantics and user-space shmem
-grant/revoke end-to-end smoke are now included.
+grant/revoke end-to-end smoke are now included, including forged-ID and
+stale-revoked-ID negative checks plus map-argument policy deny coverage.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

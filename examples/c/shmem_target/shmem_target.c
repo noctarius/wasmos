@@ -14,6 +14,7 @@ typedef struct {
     int32_t shmem_id;
     int32_t owner_pid;
     int32_t target_pid;
+    int32_t round;
 } shmem_sync_t;
 
 static int
@@ -68,6 +69,18 @@ main(int argc, char **argv)
         puts("[test] shmem e2e setup no-owner-stage0");
         return 1;
     }
+
+    if (wasmos_shmem_map(sync.shmem_id + 0x1234, SHMEM_MAP_OFF, SHMEM_MAP_SIZE) == 0) {
+        puts("[test] shmem e2e forged id deny mismatch");
+        return 1;
+    }
+    puts("[test] shmem e2e forged id deny ok");
+
+    if (wasmos_shmem_map(sync.shmem_id, SHMEM_MAP_OFF + 1, SHMEM_MAP_SIZE) == 0) {
+        puts("[test] shmem e2e map policy deny mismatch");
+        return 1;
+    }
+    puts("[test] shmem e2e map policy deny ok");
 
     if (wasmos_shmem_map(sync.shmem_id, SHMEM_MAP_OFF, SHMEM_MAP_SIZE) == 0) {
         puts("[test] shmem e2e pregrant deny mismatch");
@@ -125,6 +138,27 @@ main(int argc, char **argv)
     sync.stage = 5;
     if (sync_write(&sync) != 0) {
         puts("[test] shmem e2e setup write-stage5-failed");
+        return 1;
+    }
+
+    for (spins = 0; spins < 3000; ++spins) {
+        if (sync_read(&sync) == 0 && sync.stage == 90) {
+            break;
+        }
+        (void)wasmos_sched_yield();
+    }
+    if (sync.stage != 90) {
+        puts("[test] shmem e2e stale no-stage90");
+        return 1;
+    }
+    if (wasmos_shmem_map(sync.shmem_id, SHMEM_MAP_OFF, SHMEM_MAP_SIZE) == 0) {
+        puts("[test] shmem e2e stale deny mismatch");
+        return 1;
+    }
+    puts("[test] shmem e2e stale revoke deny ok");
+    sync.stage = 91;
+    if (sync_write(&sync) != 0) {
+        puts("[test] shmem e2e stale write-stage91-failed");
         return 1;
     }
 

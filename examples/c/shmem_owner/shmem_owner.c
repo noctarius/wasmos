@@ -13,6 +13,7 @@ typedef struct {
     int32_t shmem_id;
     int32_t owner_pid;
     int32_t target_pid;
+    int32_t round;
 } shmem_sync_t;
 
 static int
@@ -138,6 +139,22 @@ main(int argc, char **argv)
 
     if (wasmos_shmem_unmap(shmem_id) != 0) {
         puts("[test] shmem e2e owner map failed");
+        return 1;
+    }
+
+    sync.stage = 90;
+    if (sync_write(&sync) != 0) {
+        puts("[test] shmem e2e stale write-stage90-failed");
+        return 1;
+    }
+    for (spins = 0; spins < 3000; ++spins) {
+        if (sync_read(&sync) == 0 && sync.stage == 91) {
+            break;
+        }
+        (void)wasmos_sched_yield();
+    }
+    if (sync.stage != 91) {
+        puts("[test] shmem e2e stale no-stage91");
         return 1;
     }
 

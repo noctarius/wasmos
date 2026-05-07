@@ -7,6 +7,7 @@
 #include "wasm3_shim.h"
 #include "ipc.h"
 #include "timer.h"
+#include "thread.h"
 
 /*
  * process.c contains the single-core scheduler, process table, run queue, and
@@ -442,6 +443,10 @@ static void process_reset_slot(process_t *proc) {
     proc->pid = 0;
     proc->parent_pid = 0;
     proc->context_id = 0;
+    proc->main_tid = 0;
+    proc->thread_count = 0;
+    proc->live_thread_count = 0;
+    proc->exiting = 0;
     proc->state = PROCESS_STATE_UNUSED;
     proc->block_reason = PROCESS_BLOCK_NONE;
     proc->wait_target_pid = 0;
@@ -546,6 +551,7 @@ static void process_mark_exited(process_t *proc, int32_t exit_status) {
         return;
     }
     proc->exit_status = exit_status;
+    proc->exiting = 1;
     proc->block_reason = PROCESS_BLOCK_NONE;
     proc->wait_target_pid = 0;
     /* TODO: Add safe automatic reaping for exited kernel-owned children that
@@ -553,6 +559,11 @@ static void process_mark_exited(process_t *proc, int32_t exit_status) {
      * a subsystem-specific reap path (for example the process manager) handles
      * them. */
     proc->state = PROCESS_STATE_ZOMBIE;
+    if (proc->main_tid != 0) {
+        thread_set_exit_status(proc->main_tid, exit_status);
+        thread_set_state(proc->main_tid, THREAD_STATE_ZOMBIE, THREAD_BLOCK_NONE);
+    }
+    proc->live_thread_count = 0;
     process_wake_waiters(proc->pid);
 }
 
@@ -570,6 +581,9 @@ static void process_reap(process_t *proc) {
     }
     if (proc->pid != 0) {
         wasm3_heap_release(proc->pid);
+    }
+    if (proc->main_tid != 0) {
+        thread_reap(proc->main_tid);
     }
     process_reset_slot(proc);
 }
@@ -609,6 +623,7 @@ void process_init(void) {
     g_ctx_restore_rflags = 0;
     g_pm_stack_watch = 0;
     g_pm_preempt_safe_depth = 0;
+    thread_init();
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         process_reset_slot(&g_processes[i]);
     }
@@ -642,6 +657,10 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
     slot->pid = pid;
     slot->parent_pid = parent_pid;
     slot->context_id = ctx->id;
+    slot->main_tid = 0;
+    slot->thread_count = 0;
+    slot->live_thread_count = 0;
+    slot->exiting = 0;
     slot->state = PROCESS_STATE_READY;
     slot->block_reason = PROCESS_BLOCK_NONE;
     slot->wait_target_pid = 0;
@@ -656,6 +675,11 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
     if (process_copy_name(slot, name ? name : "") != 0) {
         return -1;
     }
+    if (thread_spawn_main(pid, name ? name : "", &slot->main_tid) != 0) {
+        return -1;
+    }
+    slot->thread_count = 1;
+    slot->live_thread_count = 1;
     uint32_t stack_pages = (PROCESS_STACK_SIZE + PAGE_SIZE - 1u) / PAGE_SIZE;
     if (process_alloc_stack(slot, stack_pages) != 0) {
         return -1;
@@ -717,6 +741,10 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
     slot->pid = pid;
     slot->parent_pid = 0;
     slot->context_id = ctx->id;
+    slot->main_tid = 0;
+    slot->thread_count = 0;
+    slot->live_thread_count = 0;
+    slot->exiting = 0;
     slot->state = PROCESS_STATE_READY;
     slot->block_reason = PROCESS_BLOCK_NONE;
     slot->wait_target_pid = 0;
@@ -731,6 +759,11 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
     if (process_copy_name(slot, name ? name : "") != 0) {
         return -1;
     }
+    if (thread_spawn_main(pid, name ? name : "", &slot->main_tid) != 0) {
+        return -1;
+    }
+    slot->thread_count = 1;
+    slot->live_thread_count = 1;
     slot->is_idle = 1;
     uint32_t stack_pages = (PROCESS_STACK_SIZE + PAGE_SIZE - 1u) / PAGE_SIZE;
     if (process_alloc_stack(slot, stack_pages) != 0) {
@@ -811,6 +844,9 @@ void process_block_on_ipc(process_t *process) {
     process->state = PROCESS_STATE_BLOCKED;
     process->block_reason = PROCESS_BLOCK_IPC;
     process->wait_target_pid = 0;
+    if (process->main_tid != 0) {
+        thread_set_state(process->main_tid, THREAD_STATE_BLOCKED, THREAD_BLOCK_IPC);
+    }
 }
 
 int process_wait(process_t *process, uint32_t target_pid, int32_t *out_exit_status) {
@@ -838,6 +874,9 @@ int process_wait(process_t *process, uint32_t target_pid, int32_t *out_exit_stat
 
     process->block_reason = PROCESS_BLOCK_WAIT;
     process->wait_target_pid = target_pid;
+    if (process->main_tid != 0) {
+        thread_set_state(process->main_tid, THREAD_STATE_BLOCKED, THREAD_BLOCK_WAIT_PROCESS);
+    }
     return 1;
 }
 
@@ -892,6 +931,9 @@ uint32_t process_wake_by_context(uint32_t context_id) {
         }
         proc->block_reason = PROCESS_BLOCK_NONE;
         proc->state = PROCESS_STATE_READY;
+        if (proc->main_tid != 0) {
+            thread_set_state(proc->main_tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
+        }
         ready_queue_enqueue(proc);
         woken++;
     }
@@ -950,6 +992,9 @@ static int process_schedule_once_impl(void) {
     }
 
     proc->state = PROCESS_STATE_RUNNING;
+    if (proc->main_tid != 0) {
+        thread_set_state(proc->main_tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
+    }
     if (proc->ticks_remaining == 0) {
         proc->ticks_remaining = proc->time_slice_ticks;
     }
@@ -957,6 +1002,7 @@ static int process_schedule_once_impl(void) {
     critical_section_enter();
     g_current_pid = proc->pid;
     g_current_process = proc;
+    thread_set_current(proc->main_tid);
     critical_section_leave();
     /* Ring3 transitions use TSS.rsp0 as the kernel entry stack. Keep it aligned
      * to the scheduled process stack so user-mode interrupts/syscalls have a
@@ -969,6 +1015,7 @@ static int process_schedule_once_impl(void) {
         critical_section_enter();
         g_current_process = 0;
         g_current_pid = 0;
+        thread_set_current(0);
         critical_section_leave();
         return 1;
     }
@@ -982,6 +1029,7 @@ static int process_schedule_once_impl(void) {
     critical_section_enter();
     g_current_process = 0;
     g_current_pid = 0;
+    thread_set_current(0);
     critical_section_leave();
 
     if (result == PROCESS_RUN_EXITED) {
@@ -995,10 +1043,19 @@ static int process_schedule_once_impl(void) {
                 proc->block_reason = PROCESS_BLOCK_IPC;
             }
         }
+        if (proc->main_tid != 0) {
+            thread_block_reason_t reason = (proc->block_reason == PROCESS_BLOCK_WAIT)
+                                               ? THREAD_BLOCK_WAIT_PROCESS
+                                               : THREAD_BLOCK_IPC;
+            thread_set_state(proc->main_tid, THREAD_STATE_BLOCKED, reason);
+        }
     } else {
         proc->state = PROCESS_STATE_READY;
         proc->block_reason = PROCESS_BLOCK_NONE;
         proc->wait_target_pid = 0;
+        if (proc->main_tid != 0) {
+            thread_set_state(proc->main_tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
+        }
         ready_queue_enqueue(proc);
     }
 
@@ -1161,6 +1218,9 @@ int process_preempt_from_irq(irq_frame_t *frame) {
 
     g_current_process->state = PROCESS_STATE_READY;
     g_current_process->block_reason = PROCESS_BLOCK_NONE;
+    if (g_current_process->main_tid != 0) {
+        thread_set_state(g_current_process->main_tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
+    }
     ready_queue_enqueue(g_current_process);
     g_last_run_result = PROCESS_RUN_YIELDED;
     process_clear_resched();

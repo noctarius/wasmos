@@ -51,6 +51,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/runtime_context.o
   ${BUILD_DIR}/ipc.o
   ${BUILD_DIR}/process.o
+  ${BUILD_DIR}/thread.o
   ${BUILD_DIR}/spinlock.o
   ${BUILD_DIR}/memory_service.o
   ${BUILD_DIR}/irq.o
@@ -98,6 +99,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/runtime_context.c
   ${KERNEL_DIR}/ipc.c
   ${KERNEL_DIR}/process.c
+  ${KERNEL_DIR}/thread.c
   ${KERNEL_DIR}/spinlock.c
   ${KERNEL_DIR}/memory_service.c
   ${KERNEL_DIR}/irq.c
@@ -140,6 +142,7 @@ target_sources(kernel_sources INTERFACE
   ${KERNEL_DIR}/include/physmem.h
   ${KERNEL_DIR}/include/runtime_context.h
   ${KERNEL_DIR}/include/process.h
+  ${KERNEL_DIR}/include/thread.h
   ${KERNEL_DIR}/include/process_manager.h
   ${KERNEL_DIR}/include/irq.h
   ${KERNEL_DIR}/include/timer.h
@@ -171,6 +174,7 @@ add_library(kernel_ide OBJECT EXCLUDE_FROM_ALL
   ${KERNEL_DIR}/include/physmem.h
   ${KERNEL_DIR}/include/runtime_context.h
   ${KERNEL_DIR}/include/process.h
+  ${KERNEL_DIR}/include/thread.h
   ${KERNEL_DIR}/include/process_manager.h
   ${KERNEL_DIR}/include/memory_service.h
   ${KERNEL_DIR}/include/irq.h
@@ -223,6 +227,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/runtime_context.c -o ${BUILD_DIR}/runtime_context.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/ipc.c -o ${BUILD_DIR}/ipc.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process.c -o ${BUILD_DIR}/process.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/thread.c -o ${BUILD_DIR}/thread.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/spinlock.c -o ${BUILD_DIR}/spinlock.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory_service.c -o ${BUILD_DIR}/memory_service.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/irq.c -o ${BUILD_DIR}/irq.o
@@ -253,6 +258,7 @@ add_custom_command(
   ${KERNEL_DIR}/include/policy.h
   ${KERNEL_DIR}/include/slab.h ${KERNEL_DIR}/include/syscall.h ${KERNEL_DIR}/include/paging.h
           ${KERNEL_DIR}/include/physmem.h ${KERNEL_DIR}/include/process.h ${KERNEL_DIR}/include/process_manager.h
+          ${KERNEL_DIR}/include/thread.h
           ${KERNEL_DIR}/include/memory_service.h ${KERNEL_DIR}/include/irq.h ${KERNEL_DIR}/include/timer.h
           ${KERNEL_DIR}/include/serial.h ${KERNEL_DIR}/include/wasmos_app.h
           ${KERNEL_DIR}/include/native_driver.h ${KERNEL_DIR}/include/spinlock.h

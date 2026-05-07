@@ -577,6 +577,9 @@ Status update (2026-05-07):
     `mm_shared_grant(owner,id,target)`.
   - access checks now allow owner, kernel context `0`, or explicitly granted
     contexts.
+  - added user-facing hostcall surface `wasmos_shmem_grant(id,target_pid)`
+    (DMA-capability-gated, PID->context validated) for controlled grant wiring
+    from user-space services.
 - Added cross-context negative smoke marker in kernel boot tests:
   - emits `[test] shmem owner deny ok` when foreign-context `get_phys`,
     `retain`, and `release` attempts against an owner-bound shared ID are all

@@ -45,6 +45,7 @@ static uint8_t g_sched_progress_logged;
 static uint64_t g_sched_switch_count;
 static uint64_t g_resched_pending_since_tick;
 static uint64_t g_resched_stall_reports;
+static uint64_t g_trap_frame_invalid_reports;
 
 static inline uintptr_t
 process_kernel_alias_addr(uintptr_t addr)
@@ -601,6 +602,7 @@ void process_init(void) {
     g_sched_switch_count = 0;
     g_resched_pending_since_tick = 0;
     g_resched_stall_reports = 0;
+    g_trap_frame_invalid_reports = 0;
     g_ctx_restore_ctx = 0;
     g_ctx_restore_rip = 0;
     g_ctx_restore_rsp = 0;
@@ -1077,6 +1079,38 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     }
     if (g_current_process->in_hostcall) {
         return 0;
+    }
+    {
+        uint64_t cs = frame->cs;
+        uint8_t from_user = (uint8_t)((cs & 0x3u) == 0x3u);
+        uint8_t from_kernel = (uint8_t)((cs & 0x3u) == 0x0u);
+        uint8_t valid = 1;
+
+        if ((!from_user && !from_kernel) || frame->rip == 0) {
+            valid = 0;
+        } else if (from_kernel && cs != KERNEL_CS_SELECTOR) {
+            valid = 0;
+        } else if (from_user) {
+            if ((frame->user_ss & 0x3u) != 0x3u || frame->user_rsp == 0) {
+                valid = 0;
+            }
+        }
+        if (!valid) {
+            g_trap_frame_invalid_reports++;
+            serial_write("[watchdog] trap frame invalid cs=");
+            serial_write_hex64(frame->cs);
+            serial_write("[watchdog] rip=");
+            serial_write_hex64(frame->rip);
+            serial_write("[watchdog] user_ss=");
+            serial_write_hex64(frame->user_ss);
+            serial_write("[watchdog] user_rsp=");
+            serial_write_hex64(frame->user_rsp);
+            serial_write("[watchdog] reports=");
+            serial_write_hex64(g_trap_frame_invalid_reports);
+            serial_write("\n");
+            process_clear_resched();
+            return 0;
+        }
     }
 
     uint64_t start = (uint64_t)(uintptr_t)&__kernel_start;

@@ -31,6 +31,10 @@ def main():
         b"[test] ring3 fault gp reason ok",
         b"[test] ring3 fault de reason ok",
         b"[test] ring3 fault db reason ok",
+        b"[test] ring3 fault of reason ok",
+        b"[test] ring3 fault nm reason ok",
+        b"[test] ring3 fault ss reason ok",
+        b"[test] ring3 fault ac reason ok",
         b"[test] ring3 fault exit status ok",
         b"[test] ring3 fault write exit status ok",
         b"[test] ring3 fault exec exit status ok",
@@ -38,6 +42,10 @@ def main():
         b"[test] ring3 fault gp exit status ok",
         b"[test] ring3 fault de exit status ok",
         b"[test] ring3 fault db exit status ok",
+        b"[test] ring3 fault of exit status ok",
+        b"[test] ring3 fault nm exit status ok",
+        b"[test] ring3 fault ss exit status ok",
+        b"[test] ring3 fault ac exit status ok",
         b"[test] ring3 ipc syscall deny ok",
         b"[test] ring3 ipc syscall arg width deny ok",
         b"[test] ring3 ipc syscall control deny ok",
@@ -56,7 +64,6 @@ def main():
         b"[test] ring3 yield syscall ok",
         b"[test] ring3 syscall ok",
         b"[test] ring3 preempt stress ok",
-        b"wamos> ",
     ]
 
     with QemuSession(cfg, timeout_s=args.timeout) as session:

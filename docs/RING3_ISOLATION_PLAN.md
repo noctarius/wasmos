@@ -460,6 +460,12 @@ Progress update (2026-05-06):
 - Added CPL3 `#DB` containment probe in strict ring3 smoke:
   `ring3-fault-db` executes `icebp/int1` in user mode to trigger vector 1 and
   assert process-local termination (`-11`).
+- Added strict-ring3 probes for vectors commonly surfaced as user-origin
+  transition faults during bring-up:
+  - `ring3-fault-of` (`#OF` intent; accepts observed `#GP/#UD` fallbacks)
+  - `ring3-fault-nm` (`#NM` intent; accepts observed fallback classification)
+  - `ring3-fault-ss` (`#SS` intent; accepts observed `#GP` fallback)
+  - `ring3-fault-ac` (`#AC` intent; accepts observed fallback classification)
 - Smoke/gate markers now assert both classification and policy status:
   - `[test] ring3 fault ud reason ok`
   - `[test] ring3 fault ud exit status ok`
@@ -469,10 +475,18 @@ Progress update (2026-05-06):
   - `[test] ring3 fault de exit status ok`
   - `[test] ring3 fault db reason ok`
   - `[test] ring3 fault db exit status ok`
+  - `[test] ring3 fault of reason ok`
+  - `[test] ring3 fault of exit status ok`
+  - `[test] ring3 fault nm reason ok`
+  - `[test] ring3 fault nm exit status ok`
+  - `[test] ring3 fault ss reason ok`
+  - `[test] ring3 fault ss exit status ok`
+  - `[test] ring3 fault ac reason ok`
+  - `[test] ring3 fault ac exit status ok`
 - Remaining Phase-5 work:
   - extend equivalent process-local handling and coverage to additional
     user-origin exception vectors beyond current `#PF`, `#UD`, `#GP`, `#DE`,
-    and `#DB`
+    `#DB`, `#OF`, `#NM`, `#SS`, and `#AC`
   - add multi-process mixed fault-storm liveness assertions
 
 Exit criteria:

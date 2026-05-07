@@ -121,7 +121,24 @@ isr_exception_3:
     hlt
     jmp 1b
 
-DECL_EXC 4
+ .global isr_exception_4
+isr_exception_4:
+    pushq $0
+    mov %rsp, %rsi
+    mov $4, %rdi
+    call x86_user_exception_handler
+    test %eax, %eax
+    jz 2f
+    mov %rsp, %rsi
+    mov $4, %rdi
+    call x86_exception_panic_frame
+1:
+    cli
+    hlt
+    jmp 1b
+2:
+    add $8, %rsp
+    iretq
 DECL_EXC 5
 
 .global isr_exception_6
@@ -143,12 +160,45 @@ isr_exception_6:
     add $8, %rsp
     iretq
 
-DECL_EXC 7
+ .global isr_exception_7
+isr_exception_7:
+    pushq $0
+    mov %rsp, %rsi
+    mov $7, %rdi
+    call x86_user_exception_handler
+    test %eax, %eax
+    jz 2f
+    mov %rsp, %rsi
+    mov $7, %rdi
+    call x86_exception_panic_frame
+1:
+    cli
+    hlt
+    jmp 1b
+2:
+    add $8, %rsp
+    iretq
 DECL_EXC 8
 DECL_EXC 9
 DECL_EXC 10
 DECL_EXC 11
-DECL_EXC 12
+ .global isr_exception_12
+isr_exception_12:
+    mov %rsp, %rsi
+    mov $12, %rdi
+    call x86_user_exception_handler
+    test %eax, %eax
+    jz 2f
+    mov %rsp, %rsi
+    mov $12, %rdi
+    call x86_exception_panic_frame
+1:
+    cli
+    hlt
+    jmp 1b
+2:
+    add $8, %rsp
+    iretq
 
 .global isr_exception_13
 isr_exception_13:
@@ -190,7 +240,23 @@ isr_exception_14:
 
 DECL_EXC 15
 DECL_EXC 16
-DECL_EXC 17
+ .global isr_exception_17
+isr_exception_17:
+    mov %rsp, %rsi
+    mov $17, %rdi
+    call x86_user_exception_handler
+    test %eax, %eax
+    jz 2f
+    mov %rsp, %rsi
+    mov $17, %rdi
+    call x86_exception_panic_frame
+1:
+    cli
+    hlt
+    jmp 1b
+2:
+    add $8, %rsp
+    iretq
 DECL_EXC 18
 DECL_EXC 19
 DECL_EXC 20

@@ -168,6 +168,70 @@ process_alloc_stack(process_t *slot, uint32_t stack_pages)
     return 0;
 }
 
+static int
+process_alloc_thread_stack(thread_t *thread, uint32_t stack_pages)
+{
+    if (!thread || stack_pages == 0) {
+        return -1;
+    }
+    uint64_t total_pages = (uint64_t)stack_pages + (STACK_GUARD_PAGES * 2u);
+    uint64_t base = pfa_alloc_pages_below(total_pages, KERNEL_SHARED_HIGHER_HALF_WINDOW_BYTES);
+    if (!base) {
+        serial_write("[sched] worker stack alloc failed\n");
+        return -1;
+    }
+
+    uint64_t guard_low = base;
+    uint64_t usable_base = base + ((uint64_t)STACK_GUARD_PAGES * PAGE_SIZE);
+    uint64_t guard_high = base + ((total_pages - STACK_GUARD_PAGES) * PAGE_SIZE);
+    uint64_t higher_half_base = paging_get_higher_half_base();
+    uint64_t guard_low_virt = higher_half_base + guard_low;
+    uint64_t usable_base_virt = higher_half_base + usable_base;
+    uint64_t guard_high_virt = higher_half_base + guard_high;
+
+    for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
+        if (paging_unmap_4k(guard_low_virt + ((uint64_t)i * PAGE_SIZE)) != 0) {
+            serial_write("[sched] worker guard unmap failed\n");
+            return -1;
+        }
+    }
+    for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
+        if (paging_unmap_4k(guard_high_virt + ((uint64_t)i * PAGE_SIZE)) != 0) {
+            serial_write("[sched] worker guard unmap failed\n");
+            return -1;
+        }
+    }
+
+    thread->kstack_base = (uintptr_t)usable_base_virt;
+    thread->kstack_top = (uintptr_t)guard_high_virt;
+    thread->kstack_alloc_base_phys = (uintptr_t)base;
+    thread->kstack_pages = stack_pages;
+    return 0;
+}
+
+static process_run_result_t
+process_run_worker_on_stack(process_t *proc, thread_t *thread)
+{
+    process_thread_worker_entry_t entry =
+        (process_thread_worker_entry_t)(uintptr_t)process_kernel_alias_addr(thread->worker_entry);
+    uintptr_t stack_top = thread->kstack_top - 16u;
+    stack_top &= ~(uintptr_t)0xFULL;
+    process_run_result_t rc = PROCESS_RUN_EXITED;
+    __asm__ volatile(
+        "mov %%rsp, %%r15\n"
+        "mov %[stack_top], %%rsp\n"
+        "call *%[entry]\n"
+        "mov %%r15, %%rsp\n"
+        : "=a"(rc)
+        : [stack_top] "r"(stack_top),
+          [entry] "r"(entry),
+          "D"(proc),
+          "S"(thread->tid),
+          "d"(thread->worker_arg)
+        : "r15", "rcx", "r8", "r9", "r10", "r11", "memory", "cc");
+    return rc;
+}
+
 extern void context_switch(process_context_t *out, process_context_t *in);
 extern void context_switch_to(process_context_t *in);
 static void context_switch_high(process_context_t *out, process_context_t *in);
@@ -391,7 +455,7 @@ static int ready_queue_enqueue(thread_t *thread) {
         process_sched_invariant_fail("enqueue non-ready thread", thread->tid, thread->state);
     }
     process_t *proc = process_owner_for_thread(thread);
-    if (!proc || proc->in_ready_queue) {
+    if (!proc || thread->in_ready_queue) {
         return 0;
     }
     /* The idle task is scheduled as a fallback only and never participates in
@@ -405,7 +469,7 @@ static int ready_queue_enqueue(thread_t *thread) {
     g_ready_queue[g_ready_tail] = thread->tid;
     g_ready_tail = (g_ready_tail + 1u) % THREAD_MAX_COUNT;
     g_ready_count++;
-    proc->in_ready_queue = 1;
+    thread->in_ready_queue = 1;
     return 0;
 }
 
@@ -420,7 +484,7 @@ static thread_t *ready_queue_dequeue(void) {
             process_sched_invariant_fail("dequeue owner missing", tid, (uint64_t)(uintptr_t)proc);
             continue;
         }
-        proc->in_ready_queue = 0;
+        thread->in_ready_queue = 0;
         if (thread->state == THREAD_STATE_READY &&
             proc->state == PROCESS_STATE_READY) {
             return thread;
@@ -615,6 +679,24 @@ static void process_mark_exited(process_t *proc, int32_t exit_status) {
 static void process_reap(process_t *proc) {
     if (!proc) {
         return;
+    }
+    for (uint32_t i = 0;; ++i) {
+        uint32_t tid = 0;
+        if (thread_owner_tid_at(proc->pid, i, &tid) != 0) {
+            break;
+        }
+        thread_t *thread = thread_get(tid);
+        if (!thread) {
+            continue;
+        }
+        if (thread->kstack_alloc_base_phys && thread->kstack_pages) {
+            uint64_t total_pages = (uint64_t)thread->kstack_pages + (STACK_GUARD_PAGES * 2u);
+            pfa_free_pages((uint64_t)thread->kstack_alloc_base_phys, total_pages);
+            thread->kstack_alloc_base_phys = 0;
+            thread->kstack_pages = 0;
+            thread->kstack_base = 0;
+            thread->kstack_top = 0;
+        }
     }
     if (proc->stack_alloc_base_phys && proc->stack_pages) {
         uint64_t total_pages = (uint64_t)proc->stack_pages + (STACK_GUARD_PAGES * 2u);
@@ -866,6 +948,52 @@ process_thread_spawn_internal(uint32_t owner_pid, const char *name, uint32_t *ou
      * API currently allocates lifecycle-tracked thread records so kernel-native
      * services can adopt multi-thread structure incrementally before per-thread
      * context/stack scheduling lands. */
+    return 0;
+}
+
+int
+process_thread_spawn_worker_internal(uint32_t owner_pid,
+                                     const char *name,
+                                     process_thread_worker_entry_t entry,
+                                     void *arg,
+                                     uint32_t *out_tid)
+{
+    process_t *owner = process_find_by_pid(owner_pid);
+    thread_t *thread = 0;
+    uint32_t tid = 0;
+    uint32_t stack_pages = 0;
+    if (!owner || !entry || !out_tid) {
+        return -1;
+    }
+    if (owner->state == PROCESS_STATE_UNUSED || owner->state == PROCESS_STATE_ZOMBIE || owner->exiting) {
+        return -1;
+    }
+    if (thread_spawn_in_owner(owner_pid,
+                              name ? name : "",
+                              THREAD_STATE_READY,
+                              THREAD_BLOCK_NONE,
+                              &tid) != 0) {
+        return -1;
+    }
+    thread = thread_get(tid);
+    if (!thread) {
+        return -1;
+    }
+    stack_pages = (PROCESS_STACK_SIZE + PAGE_SIZE - 1u) / PAGE_SIZE;
+    if (process_alloc_thread_stack(thread, stack_pages) != 0) {
+        thread_reap(tid);
+        return -1;
+    }
+    thread->is_kernel_worker = 1;
+    thread->worker_entry = (uintptr_t)entry;
+    thread->worker_arg = arg;
+    thread->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
+    thread->ticks_remaining = thread->time_slice_ticks;
+    thread->ticks_total = 0;
+    owner->thread_count++;
+    owner->live_thread_count++;
+    ready_queue_enqueue(thread);
+    *out_tid = tid;
     return 0;
 }
 
@@ -1129,7 +1257,11 @@ static int process_schedule_once_impl(void) {
         critical_section_leave();
         return 1;
     }
-    context_switch_high(&g_sched_ctx, &proc->ctx);
+    if (thread->is_kernel_worker) {
+        g_last_run_result = process_run_worker_on_stack(proc, thread);
+    } else {
+        context_switch_high(&g_sched_ctx, &proc->ctx);
+    }
     g_sched_switch_count++;
     if (!g_sched_progress_logged && g_sched_switch_count >= SCHED_PROGRESS_MARKER_SWITCHES) {
         g_sched_progress_logged = 1;
@@ -1144,7 +1276,22 @@ static int process_schedule_once_impl(void) {
     critical_section_leave();
 
     if (result == PROCESS_RUN_EXITED) {
-        process_mark_exited(proc, proc->exit_status);
+        if (thread->is_kernel_worker && thread->tid != proc->main_tid) {
+            thread_set_state(thread->tid, THREAD_STATE_ZOMBIE, THREAD_BLOCK_NONE);
+            thread_set_exit_status(thread->tid, proc->exit_status);
+            if (proc->live_thread_count > 0) {
+                proc->live_thread_count--;
+            }
+            if (proc->live_thread_count > 0) {
+                thread_t *main_thread = process_main_thread(proc);
+                if (main_thread && main_thread->state != THREAD_STATE_ZOMBIE) {
+                    process_set_ready(proc, main_thread);
+                    ready_queue_enqueue(main_thread);
+                }
+            }
+        } else {
+            process_mark_exited(proc, proc->exit_status);
+        }
     } else if (result == PROCESS_RUN_BLOCKED) {
         if (proc->state == PROCESS_STATE_READY) {
             proc->block_reason = PROCESS_BLOCK_NONE;

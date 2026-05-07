@@ -424,8 +424,11 @@ Current status:
 - IPC endpoints now track a waiting `tid` and prefer targeted thread wakeup
   before falling back to context-wide wake behavior
 - internal kernel API `process_thread_spawn_internal` now allocates additional
-  per-process `thread_t` records with lifecycle accounting (dispatch remains
-  deferred to the next Phase B step)
+  per-process `thread_t` records with lifecycle accounting
+- internal kernel worker threads are now schedulable with dedicated per-thread
+  kernel stacks and explicit worker entrypoints; kernel smoke emits
+  `[test] threading internal worker ok` when worker scheduling/lifecycle
+  completes successfully
 
 Exit criteria:
 

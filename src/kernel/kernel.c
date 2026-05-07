@@ -5,6 +5,7 @@
 #include "memory_service.h"
 #include "paging.h"
 #include "process.h"
+#include "thread.h"
 #include "process_manager.h"
 #include "syscall.h"
 #include "serial.h"
@@ -55,6 +56,21 @@ typedef struct {
     uint8_t stop_busy;
 } preempt_test_state_t;
 static preempt_test_state_t g_preempt_test_state;
+typedef struct {
+    uint32_t worker_a_tid;
+    uint32_t worker_b_tid;
+    uint8_t worker_a_ran;
+    uint8_t worker_b_ran;
+    uint8_t spawned;
+    uint8_t done;
+} threading_internal_smoke_state_t;
+typedef struct {
+    threading_internal_smoke_state_t *state;
+    uint8_t which;
+} threading_internal_worker_arg_t;
+static threading_internal_smoke_state_t g_threading_internal_smoke_state;
+static threading_internal_worker_arg_t g_threading_worker_a_arg;
+static threading_internal_worker_arg_t g_threading_worker_b_arg;
 static const uint8_t g_preempt_test_enabled = 0;
 static const uint8_t g_skip_wasm_boot = 0;
 #ifndef WASMOS_RING3_SMOKE_DEFAULT
@@ -679,6 +695,68 @@ preempt_observer_entry(process_t *process, void *arg)
         serial_write("[test] preempt ok\n");
         state->done = 1;
         state->stop_busy = 1;
+        process_set_exit_status(process, 0);
+        return PROCESS_RUN_EXITED;
+    }
+    return PROCESS_RUN_YIELDED;
+}
+
+static process_run_result_t
+threading_internal_worker_entry(process_t *process, uint32_t tid, void *arg)
+{
+    threading_internal_worker_arg_t *worker_arg = (threading_internal_worker_arg_t *)arg;
+    (void)process;
+    (void)tid;
+    if (!worker_arg || !worker_arg->state) {
+        return PROCESS_RUN_EXITED;
+    }
+    if (worker_arg->which == 0) {
+        worker_arg->state->worker_a_ran = 1;
+    } else {
+        worker_arg->state->worker_b_ran = 1;
+    }
+    return PROCESS_RUN_EXITED;
+}
+
+static process_run_result_t
+threading_internal_smoke_entry(process_t *process, void *arg)
+{
+    threading_internal_smoke_state_t *state = (threading_internal_smoke_state_t *)arg;
+    thread_t *a = 0;
+    thread_t *b = 0;
+    if (!process || !state) {
+        return PROCESS_RUN_IDLE;
+    }
+    if (state->done) {
+        return PROCESS_RUN_EXITED;
+    }
+    if (!state->spawned) {
+        if (process_thread_spawn_worker_internal(process->pid,
+                                                 "thr-smoke-a",
+                                                 threading_internal_worker_entry,
+                                                 &g_threading_worker_a_arg,
+                                                 &state->worker_a_tid) != 0 ||
+            process_thread_spawn_worker_internal(process->pid,
+                                                 "thr-smoke-b",
+                                                 threading_internal_worker_entry,
+                                                 &g_threading_worker_b_arg,
+                                                 &state->worker_b_tid) != 0) {
+            serial_write("[test] threading internal worker spawn failed\n");
+            process_set_exit_status(process, -1);
+            return PROCESS_RUN_EXITED;
+        }
+        state->spawned = 1;
+        return PROCESS_RUN_YIELDED;
+    }
+    a = thread_get(state->worker_a_tid);
+    b = thread_get(state->worker_b_tid);
+    if (a && b &&
+        a->state == THREAD_STATE_ZOMBIE &&
+        b->state == THREAD_STATE_ZOMBIE &&
+        state->worker_a_ran &&
+        state->worker_b_ran) {
+        serial_write("[test] threading internal worker ok\n");
+        state->done = 1;
         process_set_exit_status(process, 0);
         return PROCESS_RUN_EXITED;
     }
@@ -1933,6 +2011,7 @@ kmain(boot_info_t *boot_info)
     process_t *ipc_send_proc = 0;
     uint32_t preempt_busy_pid = 0;
     uint32_t preempt_observer_pid = 0;
+    uint32_t threading_internal_smoke_pid = 0;
     uint32_t ring3_smoke_pid = 0;
     uint32_t ring3_native_pid = 0;
     uint32_t ring3_fault_pid = 0;
@@ -2114,6 +2193,22 @@ kmain(boot_info_t *boot_info)
             for (;;) {
                 __asm__ volatile("hlt");
             }
+        }
+    }
+
+    g_threading_internal_smoke_state = (threading_internal_smoke_state_t){0};
+    g_threading_worker_a_arg.state = &g_threading_internal_smoke_state;
+    g_threading_worker_a_arg.which = 0;
+    g_threading_worker_b_arg.state = &g_threading_internal_smoke_state;
+    g_threading_worker_b_arg.which = 1;
+    if (process_spawn_as(init_pid,
+                         "threading-internal-smoke",
+                         threading_internal_smoke_entry,
+                         &g_threading_internal_smoke_state,
+                         &threading_internal_smoke_pid) != 0) {
+        serial_write("[kernel] threading internal smoke spawn failed\n");
+        for (;;) {
+            __asm__ volatile("hlt");
         }
     }
 

@@ -314,10 +314,8 @@ Progress update (2026-05-03):
 - Phase-2 closure verification (2026-05-06):
   - Strict low-slot baseline is exercised in the main strict gate.
   - `cmake --build build --target strict-ring3` passes, including both
-    `run-qemu-test` and `run-qemu-ring3-test`, with runtime markers:
-    `[mode] low-slot-sweep=1`,
-    `[mode] low-slot-sweep-level=2`,
-    `[diag] low-slot sweep ok`.
+    `run-qemu-test` and `run-qemu-ring3-test`, with runtime sweep diagnostics
+    (for example `[diag] low-slot sweep ok`).
   - This satisfies the outstanding low-slot transition blocker for current
     strict-ring3 scope; remaining compatibility-path deletion is tracked in
     Phase 8.

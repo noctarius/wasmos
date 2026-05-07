@@ -454,14 +454,20 @@ Progress update (2026-05-06):
 - Added CPL3 `#GP` containment probe in strict ring3 smoke:
   `ring3-fault-gp` executes a privileged instruction (`cli`) in user mode to
   trigger vector 13 and assert process-local termination (`-11`).
+- Added CPL3 `#DE` containment probe in strict ring3 smoke:
+  `ring3-fault-de` executes a divide-by-zero path in user mode to trigger
+  vector 0 and assert process-local termination (`-11`).
 - Smoke/gate markers now assert both classification and policy status:
   - `[test] ring3 fault ud reason ok`
   - `[test] ring3 fault ud exit status ok`
   - `[test] ring3 fault gp reason ok`
   - `[test] ring3 fault gp exit status ok`
+  - `[test] ring3 fault de reason ok`
+  - `[test] ring3 fault de exit status ok`
 - Remaining Phase-5 work:
   - extend equivalent process-local handling and coverage to additional
-    user-origin exception vectors beyond current `#PF`, `#UD`, and `#GP`
+    user-origin exception vectors beyond current `#PF`, `#UD`, `#GP`, and
+    `#DE`
   - add multi-process mixed fault-storm liveness assertions
 
 Exit criteria:

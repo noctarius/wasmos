@@ -397,7 +397,7 @@ Add explicit assertions and diagnostic trace marks around these edges.
 
 Current status:
 
-- in progress
+- scheduler-internal migration complete for Phase A scope
 - kernel now allocates a `thread_t` main thread per spawned process and mirrors
   baseline process state transitions into that thread record
 - scheduler ready queue now stores `tid` entries and derives process ownership

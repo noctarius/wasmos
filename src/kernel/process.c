@@ -175,6 +175,10 @@ static int process_schedule_once_impl(void);
 static thread_t *process_main_thread(process_t *proc);
 static process_t *process_owner_for_thread(thread_t *thread);
 static thread_t *process_thread_for_transition(process_t *proc);
+static void process_sched_invariant_fail(const char *msg, uint64_t a, uint64_t b);
+static void process_set_blocked(process_t *proc, thread_t *thread, process_block_reason_t reason, thread_block_reason_t thread_reason);
+static void process_set_ready(process_t *proc, thread_t *thread);
+static void process_set_running(process_t *proc, thread_t *thread);
 
 
 static int process_str_eq(const char *a, const char *b) {
@@ -383,6 +387,9 @@ static int ready_queue_enqueue(thread_t *thread) {
     if (!thread) {
         return 0;
     }
+    if (thread->state != THREAD_STATE_READY) {
+        process_sched_invariant_fail("enqueue non-ready thread", thread->tid, thread->state);
+    }
     process_t *proc = process_owner_for_thread(thread);
     if (!proc || proc->in_ready_queue) {
         return 0;
@@ -410,6 +417,7 @@ static thread_t *ready_queue_dequeue(void) {
         thread_t *thread = thread_get(tid);
         process_t *proc = process_owner_for_thread(thread);
         if (!thread || !proc) {
+            process_sched_invariant_fail("dequeue owner missing", tid, (uint64_t)(uintptr_t)proc);
             continue;
         }
         proc->in_ready_queue = 0;
@@ -900,13 +908,9 @@ void process_block_on_ipc(process_t *process) {
     if (!process) {
         return;
     }
-    process->state = PROCESS_STATE_BLOCKED;
-    process->block_reason = PROCESS_BLOCK_IPC;
-    process->wait_target_pid = 0;
     thread_t *thread = process_thread_for_transition(process);
-    if (thread && thread->tid != 0) {
-        thread_set_state(thread->tid, THREAD_STATE_BLOCKED, THREAD_BLOCK_IPC);
-    }
+    process_set_blocked(process, thread, PROCESS_BLOCK_IPC, THREAD_BLOCK_IPC);
+    process->wait_target_pid = 0;
 }
 
 int process_wait(process_t *process, uint32_t target_pid, int32_t *out_exit_status) {
@@ -932,12 +936,9 @@ int process_wait(process_t *process, uint32_t target_pid, int32_t *out_exit_stat
         return 0;
     }
 
-    process->block_reason = PROCESS_BLOCK_WAIT;
-    process->wait_target_pid = target_pid;
     thread_t *thread = process_thread_for_transition(process);
-    if (thread && thread->tid != 0) {
-        thread_set_state(thread->tid, THREAD_STATE_BLOCKED, THREAD_BLOCK_WAIT_PROCESS);
-    }
+    process_set_blocked(process, thread, PROCESS_BLOCK_WAIT, THREAD_BLOCK_WAIT_PROCESS);
+    process->wait_target_pid = target_pid;
     return 1;
 }
 
@@ -990,12 +991,8 @@ uint32_t process_wake_by_context(uint32_t context_id) {
             !(proc->state == PROCESS_STATE_RUNNING && proc == g_current_process)) {
             continue;
         }
-        proc->block_reason = PROCESS_BLOCK_NONE;
-        proc->state = PROCESS_STATE_READY;
         thread_t *thread = process_thread_for_transition(proc);
-        if (thread && thread->tid != 0) {
-            thread_set_state(thread->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
-        }
+        process_set_ready(proc, thread);
         ready_queue_enqueue(thread);
         woken++;
     }
@@ -1055,18 +1052,21 @@ static int process_schedule_once_impl(void) {
         }
     }
 
-    proc->state = PROCESS_STATE_RUNNING;
-    if (thread && thread->tid != 0) {
-        thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
-        if (thread->ticks_remaining == 0) {
-            thread->ticks_remaining = thread->time_slice_ticks;
-        }
+    process_set_running(proc, thread);
+    if (thread->ticks_remaining == 0) {
+        thread->ticks_remaining = thread->time_slice_ticks;
+    }
+    if (thread->time_slice_ticks == 0) {
+        process_sched_invariant_fail("zero time slice", thread->tid, 0);
     }
     process_validate_context(proc, "schedule");
     critical_section_enter();
     g_current_pid = proc->pid;
     g_current_process = proc;
     g_current_thread = thread;
+    if (g_current_thread->owner_pid != g_current_process->pid) {
+        process_sched_invariant_fail("current owner mismatch", g_current_thread->owner_pid, g_current_process->pid);
+    }
     thread_set_current(thread ? thread->tid : 0);
     critical_section_leave();
     /* Ring3 transitions use TSS.rsp0 as the kernel entry stack. Keep it aligned
@@ -1105,24 +1105,17 @@ static int process_schedule_once_impl(void) {
         if (proc->state == PROCESS_STATE_READY) {
             proc->block_reason = PROCESS_BLOCK_NONE;
         } else {
-            proc->state = PROCESS_STATE_BLOCKED;
             if (proc->block_reason == PROCESS_BLOCK_NONE) {
                 proc->block_reason = PROCESS_BLOCK_IPC;
             }
+            process_set_blocked(proc, thread, proc->block_reason, THREAD_BLOCK_IPC);
         }
-        if (thread && thread->tid != 0) {
-            thread_block_reason_t reason = (proc->block_reason == PROCESS_BLOCK_WAIT)
-                                               ? THREAD_BLOCK_WAIT_PROCESS
-                                               : THREAD_BLOCK_IPC;
-            thread_set_state(thread->tid, THREAD_STATE_BLOCKED, reason);
-        }
-    } else {
-        proc->state = PROCESS_STATE_READY;
-        proc->block_reason = PROCESS_BLOCK_NONE;
-        proc->wait_target_pid = 0;
-        if (thread && thread->tid != 0) {
+        if (proc->state == PROCESS_STATE_READY) {
             thread_set_state(thread->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
         }
+    } else {
+        process_set_ready(proc, thread);
+        proc->wait_target_pid = 0;
         ready_queue_enqueue(process_main_thread(proc));
     }
 
@@ -1283,12 +1276,8 @@ int process_preempt_from_irq(irq_frame_t *frame) {
         trace_do(serial_write_hex64(g_ctx_watch_last_rflags));
     }
 
-    g_current_process->state = PROCESS_STATE_READY;
-    g_current_process->block_reason = PROCESS_BLOCK_NONE;
     thread_t *thread = process_thread_for_transition(g_current_process);
-    if (thread && thread->tid != 0) {
-        thread_set_state(thread->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
-    }
+    process_set_ready(g_current_process, thread);
     ready_queue_enqueue(thread);
     g_last_run_result = PROCESS_RUN_YIELDED;
     process_clear_resched();
@@ -1404,4 +1393,52 @@ int process_info_at_ex(uint32_t index, uint32_t *out_pid, uint32_t *out_parent_p
         current++;
     }
     return -1;
+}
+static void
+process_sched_invariant_fail(const char *msg, uint64_t a, uint64_t b)
+{
+    serial_write("[sched] invariant fail: ");
+    serial_write(msg ? msg : "(unknown)");
+    serial_write("\n[sched] a=");
+    serial_write_hex64(a);
+    serial_write("[sched] b=");
+    serial_write_hex64(b);
+    for (;;) {
+        __asm__ volatile("cli; hlt");
+    }
+}
+
+static void
+process_set_blocked(process_t *proc,
+                    thread_t *thread,
+                    process_block_reason_t reason,
+                    thread_block_reason_t thread_reason)
+{
+    if (!proc || !thread) {
+        process_sched_invariant_fail("set_blocked null", (uint64_t)(uintptr_t)proc, (uint64_t)(uintptr_t)thread);
+    }
+    proc->state = PROCESS_STATE_BLOCKED;
+    proc->block_reason = reason;
+    thread_set_state(thread->tid, THREAD_STATE_BLOCKED, thread_reason);
+}
+
+static void
+process_set_ready(process_t *proc, thread_t *thread)
+{
+    if (!proc || !thread) {
+        process_sched_invariant_fail("set_ready null", (uint64_t)(uintptr_t)proc, (uint64_t)(uintptr_t)thread);
+    }
+    proc->state = PROCESS_STATE_READY;
+    proc->block_reason = PROCESS_BLOCK_NONE;
+    thread_set_state(thread->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
+}
+
+static void
+process_set_running(process_t *proc, thread_t *thread)
+{
+    if (!proc || !thread) {
+        process_sched_invariant_fail("set_running null", (uint64_t)(uintptr_t)proc, (uint64_t)(uintptr_t)thread);
+    }
+    proc->state = PROCESS_STATE_RUNNING;
+    thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
 }

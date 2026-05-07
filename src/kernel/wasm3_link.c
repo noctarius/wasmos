@@ -1377,6 +1377,28 @@ m3ApiRawFunction(wasmos_shmem_grant)
     m3ApiReturn(mm_shared_grant(proc->context_id, (uint32_t)id, target->context_id));
 }
 
+m3ApiRawFunction(wasmos_shmem_revoke)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, id)
+    m3ApiGetArg(int32_t, target_pid)
+
+    process_t *proc = process_get(process_current_pid());
+    process_t *target = 0;
+    if (id <= 0 || target_pid <= 0) {
+        m3ApiReturn(-1);
+    }
+    if (!proc || proc->context_id == 0 ||
+        require_dma_capability(proc->context_id) != 0) {
+        m3ApiReturn(-1);
+    }
+    target = process_get((uint32_t)target_pid);
+    if (!target || target->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn(mm_shared_revoke(proc->context_id, (uint32_t)id, target->context_id));
+}
+
 m3ApiRawFunction(wasmos_shmem_unmap)
 {
     m3ApiReturnType(int32_t)
@@ -2176,6 +2198,7 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "framebuffer_pixel", "i(iii)", wasmos_framebuffer_pixel);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_create", "i(ii)", wasmos_shmem_create);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_grant", "i(ii)", wasmos_shmem_grant);
+    rc |= wasm3_link_raw(module, "wasmos", "shmem_revoke", "i(ii)", wasmos_shmem_revoke);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_map", "i(iii)", wasmos_shmem_map);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_unmap", "i(i)", wasmos_shmem_unmap);
     rc |= wasm3_link_raw(module, "wasmos", "irq_route", "i(ii)", wasmos_irq_route);

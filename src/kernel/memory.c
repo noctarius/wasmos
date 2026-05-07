@@ -485,6 +485,34 @@ int mm_shared_grant(uint32_t owner_context_id, uint32_t id, uint32_t target_cont
     return 0;
 }
 
+int mm_shared_revoke(uint32_t owner_context_id, uint32_t id, uint32_t target_context_id) {
+    mm_shared_region_t *region = mm_shared_find(id);
+    uint8_t i = 0;
+    if (!region || target_context_id == 0) {
+        return -1;
+    }
+    if (owner_context_id != 0 && region->owner_context_id != owner_context_id) {
+        return -1;
+    }
+    if (region->owner_context_id == target_context_id) {
+        return 0;
+    }
+    for (i = 0; i < region->grant_count && i < MM_MAX_SHARED_GRANTS; ++i) {
+        if (region->grant_contexts[i] != target_context_id) {
+            continue;
+        }
+        for (uint8_t j = i; j + 1 < region->grant_count; ++j) {
+            region->grant_contexts[j] = region->grant_contexts[j + 1];
+        }
+        if (region->grant_count > 0) {
+            region->grant_count--;
+            region->grant_contexts[region->grant_count] = 0;
+        }
+        return 0;
+    }
+    return 0;
+}
+
 int mm_shared_get_phys(uint32_t owner_context_id, uint32_t id,
                        uint64_t *out_base, uint64_t *out_pages) {
     if (!out_base || !out_pages) {

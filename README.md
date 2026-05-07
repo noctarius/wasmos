@@ -32,6 +32,7 @@ It defines repository workflow and documentation/update conventions.
 - Usable VT/CLI stack with multi-TTY switching
 - Ring-3 hardening enabled by default in normal test boots
 - Ring-3 smoke includes process-local `#PF`, `#UD`, `#GP`, `#DE`, `#DB`, `#OF`, `#NM`, `#SS`, and `#AC` fault-policy checks
+- Ring-3 smoke includes shared-memory owner/grant/revoke isolation checks (kernel and user-space app-pair paths)
 
 ## Quick Start
 

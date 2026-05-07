@@ -590,6 +590,14 @@ Status update (2026-05-07):
   contexts (`ring3-smoke` owner, `ring3-native` target):
   - emits `[test] ring3 shmem owner deny ok` before grant.
   - emits `[test] ring3 shmem grant allow ok` after explicit owner grant.
+- Added shared-memory revoke semantics:
+  - owner context can revoke access to a specific target context via
+    `mm_shared_revoke(owner,id,target)`.
+  - added user-facing hostcall surface `wasmos_shmem_revoke(id,target_pid)`.
+- Added user-space end-to-end app-pair smoke for shmem grant+revoke:
+  - `shmtgt` verifies pre-grant map deny, post-grant map allow, and
+    post-revoke map deny.
+  - `shmownr` coordinates grant/revoke and emits completion marker.
 
 Tasks:
 - Assert fault-driven mapping only occurs inside owning region policy.

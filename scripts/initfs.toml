@@ -44,6 +44,16 @@ source = "native_call_smoke.wap"
 
 [[entries]]
 kind = "wasmos_app"
+path = "apps/shmtgt.wap"
+source = "shmtgt.wap"
+
+[[entries]]
+kind = "wasmos_app"
+path = "apps/shmownr.wap"
+source = "shmownr.wap"
+
+[[entries]]
+kind = "wasmos_app"
 flags = ["bootstrap"]
 path = "system/drivers/ata.wap"
 source = "ata.wap"

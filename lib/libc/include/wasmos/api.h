@@ -109,6 +109,8 @@ extern int32_t wasmos_shmem_create(int32_t pages, int32_t flags)
     WASMOS_WASM_IMPORT("wasmos", "shmem_create");
 extern int32_t wasmos_shmem_grant(int32_t id, int32_t target_pid)
     WASMOS_WASM_IMPORT("wasmos", "shmem_grant");
+extern int32_t wasmos_shmem_revoke(int32_t id, int32_t target_pid)
+    WASMOS_WASM_IMPORT("wasmos", "shmem_revoke");
 extern int32_t wasmos_shmem_map(int32_t id, int32_t ptr, int32_t size)
     WASMOS_WASM_IMPORT("wasmos", "shmem_map");
 extern int32_t wasmos_shmem_unmap(int32_t id)

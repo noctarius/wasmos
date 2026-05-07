@@ -510,6 +510,11 @@ Status update (2026-05-07):
 - Baseline validation remains green after marker rollout:
   - `cmake --build build --target run-qemu-test`
   - `cmake --build build --target run-qemu-ring3-test`
+- Added mixed abuse rollout in `kernel.c`:
+  - extended `ring3-smoke` syscall churn (`GETPID` loop from 4096 to 16384)
+    while IPC deny/allow probes continue in the same CPL3 loop.
+  - `ring3-fault-policy` now respawns alternating `#UD/#GP` fault probes for
+    multiple rounds and emits `[test] ring3 mixed stress ok` on completion.
 
 Tasks:
 - Add long-duration mixed stress:

@@ -100,9 +100,13 @@ typedef struct {
     uint8_t fault_nm_ok;
     uint8_t fault_ss_ok;
     uint8_t fault_ac_ok;
+    uint32_t churn_pid;
+    uint8_t churn_round;
+    uint8_t churn_done;
     uint8_t done;
 } ring3_fault_policy_state_t;
 static ring3_fault_policy_state_t g_ring3_fault_policy_state;
+static const uint8_t g_ring3_fault_churn_rounds = 6;
 
 typedef struct {
     const boot_info_t *boot_info;
@@ -127,6 +131,10 @@ static int
 bytes_eq(const uint8_t *a, uint32_t a_len, const char *b);
 static int
 boot_info_build_shadow(const boot_info_t *src, boot_info_t *dst);
+static int
+spawn_ring3_fault_ud_probe_process(uint32_t parent_pid, uint32_t *out_pid);
+static int
+spawn_ring3_fault_gp_probe_process(uint32_t parent_pid, uint32_t *out_pid);
 
 static void *
 boot_shadow_alloc_low(uint64_t size_bytes, uint64_t *out_phys)
@@ -863,6 +871,34 @@ ring3_fault_policy_entry(process_t *process, void *arg)
         state->fault_ud_ok && state->fault_gp_ok && state->fault_de_ok &&
         state->fault_db_ok && state->fault_of_ok && state->fault_nm_ok &&
         state->fault_ss_ok && state->fault_ac_ok) {
+        if (!state->churn_done) {
+            if (state->churn_round >= g_ring3_fault_churn_rounds) {
+                state->churn_done = 1;
+                serial_write("[test] ring3 mixed stress ok\n");
+            } else {
+                if (state->churn_pid == 0) {
+                    int spawn_rc = ((state->churn_round & 1u) == 0u)
+                        ? spawn_ring3_fault_ud_probe_process(process->parent_pid, &state->churn_pid)
+                        : spawn_ring3_fault_gp_probe_process(process->parent_pid, &state->churn_pid);
+                    if (spawn_rc != 0 || state->churn_pid == 0) {
+                        serial_write("[test] ring3 mixed stress spawn failed\n");
+                        process_set_exit_status(process, -1);
+                        return PROCESS_RUN_EXITED;
+                    }
+                }
+                rc = process_get_exit_status(state->churn_pid, &exit_status);
+                if (rc == 0) {
+                    if (exit_status != -11) {
+                        serial_write("[test] ring3 mixed stress exit status mismatch\n");
+                        process_set_exit_status(process, -1);
+                        return PROCESS_RUN_EXITED;
+                    }
+                    state->churn_pid = 0;
+                    state->churn_round++;
+                }
+                return PROCESS_RUN_YIELDED;
+            }
+        }
         state->done = 1;
         process_set_exit_status(process, 0);
         return PROCESS_RUN_EXITED;
@@ -951,7 +987,7 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
         0xCD, 0x80,                   /* int 0x80 */
         0xB8, 0x03, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_YIELD */
         0xCD, 0x80,                   /* int 0x80 */
-        0xB9, 0x00, 0x10, 0x00, 0x00, /* mov ecx, 4096 */
+        0xB9, 0x00, 0x40, 0x00, 0x00, /* mov ecx, 16384 */
         0xB8, 0x01, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_GETPID */
         0xCD, 0x80,                   /* int 0x80 */
         0xFF, 0xC9,                   /* dec ecx */
@@ -2030,6 +2066,9 @@ kmain(boot_info_t *boot_info)
         g_ring3_fault_policy_state.fault_nm_ok = 0;
         g_ring3_fault_policy_state.fault_ss_ok = 0;
         g_ring3_fault_policy_state.fault_ac_ok = 0;
+        g_ring3_fault_policy_state.churn_pid = 0;
+        g_ring3_fault_policy_state.churn_round = 0;
+        g_ring3_fault_policy_state.churn_done = 0;
         g_ring3_fault_policy_state.done = 0;
         if (process_spawn_as(init_pid, "ring3-fault-policy", ring3_fault_policy_entry,
                              &g_ring3_fault_policy_state, &ring3_fault_policy_pid) != 0) {

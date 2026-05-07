@@ -566,6 +566,13 @@ Legacy-path impact:
 Objective: ensure pager/shared-memory operations cannot be abused for cross-
 process or kernel mapping escalation.
 
+Status update (2026-05-07):
+- Started shared-memory ownership hardening:
+  - shared regions are now owner-context-bound at creation time.
+  - `shmem_map/unmap` and underlying retain/release/get-phys paths now reject
+    cross-context use of forged shared IDs (kernel context `0` remains
+    supervisor-only bypass for native/kernel-owned paths).
+
 Tasks:
 - Assert fault-driven mapping only occurs inside owning region policy.
 - Harden shared-memory map/unmap:

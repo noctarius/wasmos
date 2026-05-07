@@ -46,6 +46,7 @@ mm_context_count_ptr(void)
 #define MM_MAX_SHARED 16
 typedef struct {
     uint32_t id;
+    uint32_t owner_context_id;
     uint8_t in_use;
     uint32_t refcount;
     uint64_t base;
@@ -208,6 +209,19 @@ static mm_shared_region_t *mm_shared_find(uint32_t id) {
         }
     }
     return 0;
+}
+
+static int
+mm_shared_owner_allowed(const mm_shared_region_t *region, uint32_t owner_context_id)
+{
+    if (!region) {
+        return 0;
+    }
+    /* Context 0 is kernel/supervisor and may inspect or manage any region. */
+    if (owner_context_id == 0) {
+        return 1;
+    }
+    return region->owner_context_id == owner_context_id;
 }
 
 static int mm_shared_free_if_unused(mm_shared_region_t *region) {
@@ -398,7 +412,8 @@ int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint64_t error_code
     return 0;
 }
 
-int mm_shared_create(uint64_t pages, uint32_t flags, uint32_t *out_id, uint64_t *out_base) {
+int mm_shared_create(uint32_t owner_context_id, uint64_t pages, uint32_t flags,
+                     uint32_t *out_id, uint64_t *out_base) {
     if (!out_id || !out_base || pages == 0) {
         return -1;
     }
@@ -421,6 +436,7 @@ int mm_shared_create(uint64_t pages, uint32_t flags, uint32_t *out_id, uint64_t 
         id = g_shared_next_id++;
     }
     g_shared[slot].id = id;
+    g_shared[slot].owner_context_id = owner_context_id;
     g_shared[slot].in_use = 1;
     g_shared[slot].refcount = 0;
     g_shared[slot].base = base;
@@ -431,12 +447,13 @@ int mm_shared_create(uint64_t pages, uint32_t flags, uint32_t *out_id, uint64_t 
     return 0;
 }
 
-int mm_shared_get_phys(uint32_t id, uint64_t *out_base, uint64_t *out_pages) {
+int mm_shared_get_phys(uint32_t owner_context_id, uint32_t id,
+                       uint64_t *out_base, uint64_t *out_pages) {
     if (!out_base || !out_pages) {
         return -1;
     }
     mm_shared_region_t *region = mm_shared_find(id);
-    if (!region) {
+    if (!region || !mm_shared_owner_allowed(region, owner_context_id)) {
         return -1;
     }
     *out_base = region->base;
@@ -444,18 +461,18 @@ int mm_shared_get_phys(uint32_t id, uint64_t *out_base, uint64_t *out_pages) {
     return 0;
 }
 
-int mm_shared_retain(uint32_t id) {
+int mm_shared_retain(uint32_t owner_context_id, uint32_t id) {
     mm_shared_region_t *region = mm_shared_find(id);
-    if (!region) {
+    if (!region || !mm_shared_owner_allowed(region, owner_context_id)) {
         return -1;
     }
     region->refcount++;
     return 0;
 }
 
-int mm_shared_release(uint32_t id) {
+int mm_shared_release(uint32_t owner_context_id, uint32_t id) {
     mm_shared_region_t *region = mm_shared_find(id);
-    if (!region || region->refcount == 0) {
+    if (!region || !mm_shared_owner_allowed(region, owner_context_id) || region->refcount == 0) {
         return -1;
     }
     region->refcount--;
@@ -467,7 +484,7 @@ int mm_shared_map(mm_context_t *ctx, uint32_t id, uint32_t flags, uint64_t *out_
         return -1;
     }
     mm_shared_region_t *region = mm_shared_find(id);
-    if (!region) {
+    if (!region || !mm_shared_owner_allowed(region, ctx->id)) {
         return -1;
     }
     uint32_t effective_flags = region->flags;
@@ -480,7 +497,7 @@ int mm_shared_map(mm_context_t *ctx, uint32_t id, uint32_t flags, uint64_t *out_
         return -1;
     }
     ctx->regions[ctx->region_count - 1].phys_base = region->base;
-    if (mm_shared_retain(id) != 0) {
+    if (mm_shared_retain(ctx->id, id) != 0) {
         return -1;
     }
     if (out_base) {
@@ -494,7 +511,7 @@ int mm_shared_unmap(mm_context_t *ctx, uint32_t id) {
         return -1;
     }
     mm_shared_region_t *region = mm_shared_find(id);
-    if (!region) {
+    if (!region || !mm_shared_owner_allowed(region, ctx->id)) {
         return -1;
     }
 
@@ -514,7 +531,7 @@ int mm_shared_unmap(mm_context_t *ctx, uint32_t id) {
     if (!found) {
         return -1;
     }
-    return mm_shared_release(id);
+    return mm_shared_release(ctx->id, id);
 }
 
 int mm_context_alloc_region(mm_context_t *ctx, uint64_t pages, uint32_t flags, mem_region_type_t type) {

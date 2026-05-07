@@ -71,6 +71,25 @@ typedef struct {
 static threading_internal_smoke_state_t g_threading_internal_smoke_state;
 static threading_internal_worker_arg_t g_threading_worker_a_arg;
 static threading_internal_worker_arg_t g_threading_worker_b_arg;
+typedef struct {
+    uint32_t endpoint;
+    uint32_t sender_endpoint;
+    uint32_t receiver_tid;
+    uint32_t sender_tid;
+    uint32_t sent_count;
+    uint32_t recv_count;
+    uint32_t recv_empty_count;
+    uint8_t sender_done;
+    uint8_t spawned;
+    uint8_t done;
+} threading_ipc_stress_state_t;
+typedef struct {
+    threading_ipc_stress_state_t *state;
+    uint8_t is_sender;
+} threading_ipc_worker_arg_t;
+static threading_ipc_stress_state_t g_threading_ipc_stress_state;
+static threading_ipc_worker_arg_t g_threading_ipc_receiver_arg;
+static threading_ipc_worker_arg_t g_threading_ipc_sender_arg;
 static const uint8_t g_preempt_test_enabled = 0;
 static const uint8_t g_skip_wasm_boot = 0;
 #ifndef WASMOS_RING3_SMOKE_DEFAULT
@@ -756,6 +775,101 @@ threading_internal_smoke_entry(process_t *process, void *arg)
         state->worker_a_ran &&
         state->worker_b_ran) {
         serial_write("[test] threading internal worker ok\n");
+        state->done = 1;
+        process_set_exit_status(process, 0);
+        return PROCESS_RUN_EXITED;
+    }
+    return PROCESS_RUN_YIELDED;
+}
+
+static process_run_result_t
+threading_ipc_worker_entry(process_t *process, uint32_t tid, void *arg)
+{
+    threading_ipc_worker_arg_t *worker_arg = (threading_ipc_worker_arg_t *)arg;
+    threading_ipc_stress_state_t *state = 0;
+    ipc_message_t msg;
+    const uint32_t target_messages = 8u;
+    if (!process || !worker_arg || !(state = worker_arg->state)) {
+        return PROCESS_RUN_EXITED;
+    }
+
+    if (worker_arg->is_sender) {
+        if (state->recv_empty_count == 0) {
+            return PROCESS_RUN_YIELDED;
+        }
+        if (state->sent_count >= target_messages) {
+            state->sender_done = 1;
+            return PROCESS_RUN_EXITED;
+        }
+        msg.type = 1;
+        msg.source = state->sender_endpoint;
+        msg.destination = IPC_ENDPOINT_NONE;
+        msg.request_id = state->sent_count + 1u;
+        msg.arg0 = state->sent_count;
+        msg.arg1 = 0;
+        msg.arg2 = 0;
+        msg.arg3 = 0;
+        if (ipc_send_from(process->context_id, state->endpoint, &msg) != IPC_OK) {
+            return PROCESS_RUN_EXITED;
+        }
+        state->sent_count++;
+        return PROCESS_RUN_YIELDED;
+    }
+
+    if (state->recv_count >= target_messages) {
+        return PROCESS_RUN_EXITED;
+    }
+    if (ipc_recv_for(process->context_id, state->endpoint, &msg) == IPC_EMPTY) {
+        state->recv_empty_count++;
+        return PROCESS_RUN_YIELDED;
+    }
+    state->recv_count++;
+    return PROCESS_RUN_YIELDED;
+}
+
+static process_run_result_t
+threading_ipc_stress_entry(process_t *process, void *arg)
+{
+    threading_ipc_stress_state_t *state = (threading_ipc_stress_state_t *)arg;
+    thread_t *receiver = 0;
+    thread_t *sender = 0;
+    if (!process || !state) {
+        return PROCESS_RUN_IDLE;
+    }
+    if (state->done) {
+        return PROCESS_RUN_EXITED;
+    }
+    if (!state->spawned) {
+        if (ipc_endpoint_create(process->context_id, &state->endpoint) != IPC_OK ||
+            ipc_endpoint_create(process->context_id, &state->sender_endpoint) != IPC_OK ||
+            process_thread_spawn_worker_internal(process->pid,
+                                                 "thr-ipc-recv",
+                                                 threading_ipc_worker_entry,
+                                                 &g_threading_ipc_receiver_arg,
+                                                 &state->receiver_tid) != 0 ||
+            process_thread_spawn_worker_internal(process->pid,
+                                                 "thr-ipc-send",
+                                                 threading_ipc_worker_entry,
+                                                 &g_threading_ipc_sender_arg,
+                                                 &state->sender_tid) != 0) {
+            serial_write("[test] threading ipc stress setup failed\n");
+            process_set_exit_status(process, -1);
+            return PROCESS_RUN_EXITED;
+        }
+        state->spawned = 1;
+        return PROCESS_RUN_YIELDED;
+    }
+
+    receiver = thread_get(state->receiver_tid);
+    sender = thread_get(state->sender_tid);
+    if (receiver && sender &&
+        receiver->state == THREAD_STATE_ZOMBIE &&
+        sender->state == THREAD_STATE_ZOMBIE &&
+        state->sender_done &&
+        state->sent_count == 8u &&
+        state->recv_count == 8u &&
+        state->recv_empty_count > 0) {
+        serial_write("[test] threading ipc stress ok\n");
         state->done = 1;
         process_set_exit_status(process, 0);
         return PROCESS_RUN_EXITED;
@@ -2012,6 +2126,7 @@ kmain(boot_info_t *boot_info)
     uint32_t preempt_busy_pid = 0;
     uint32_t preempt_observer_pid = 0;
     uint32_t threading_internal_smoke_pid = 0;
+    uint32_t threading_ipc_stress_pid = 0;
     uint32_t ring3_smoke_pid = 0;
     uint32_t ring3_native_pid = 0;
     uint32_t ring3_fault_pid = 0;
@@ -2207,6 +2322,23 @@ kmain(boot_info_t *boot_info)
                          &g_threading_internal_smoke_state,
                          &threading_internal_smoke_pid) != 0) {
         serial_write("[kernel] threading internal smoke spawn failed\n");
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
+    g_threading_ipc_stress_state = (threading_ipc_stress_state_t){0};
+    g_threading_ipc_stress_state.endpoint = IPC_ENDPOINT_NONE;
+    g_threading_ipc_stress_state.sender_endpoint = IPC_ENDPOINT_NONE;
+    g_threading_ipc_receiver_arg.state = &g_threading_ipc_stress_state;
+    g_threading_ipc_receiver_arg.is_sender = 0;
+    g_threading_ipc_sender_arg.state = &g_threading_ipc_stress_state;
+    g_threading_ipc_sender_arg.is_sender = 1;
+    if (process_spawn_as(init_pid,
+                         "threading-ipc-stress",
+                         threading_ipc_stress_entry,
+                         &g_threading_ipc_stress_state,
+                         &threading_ipc_stress_pid) != 0) {
+        serial_write("[kernel] threading ipc stress spawn failed\n");
         for (;;) {
             __asm__ volatile("hlt");
         }

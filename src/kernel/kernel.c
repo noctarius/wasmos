@@ -85,6 +85,10 @@ typedef struct {
     uint32_t fault_gp_pid;
     uint32_t fault_de_pid;
     uint32_t fault_db_pid;
+    uint32_t fault_of_pid;
+    uint32_t fault_nm_pid;
+    uint32_t fault_ss_pid;
+    uint32_t fault_ac_pid;
     uint8_t fault_ok;
     uint8_t fault_write_ok;
     uint8_t fault_exec_ok;
@@ -92,6 +96,10 @@ typedef struct {
     uint8_t fault_gp_ok;
     uint8_t fault_de_ok;
     uint8_t fault_db_ok;
+    uint8_t fault_of_ok;
+    uint8_t fault_nm_ok;
+    uint8_t fault_ss_ok;
+    uint8_t fault_ac_ok;
     uint8_t done;
 } ring3_fault_policy_state_t;
 static ring3_fault_policy_state_t g_ring3_fault_policy_state;
@@ -798,10 +806,63 @@ ring3_fault_policy_entry(process_t *process, void *arg)
             }
         }
     }
+    if (!state->fault_of_ok) {
+        rc = process_get_exit_status(state->fault_of_pid, &exit_status);
+        if (rc == 0) {
+            if (exit_status == -11) {
+                state->fault_of_ok = 1;
+                serial_write("[test] ring3 fault of exit status ok\n");
+            } else {
+                serial_write("[test] ring3 fault of exit status mismatch\n");
+                process_set_exit_status(process, -1);
+                return PROCESS_RUN_EXITED;
+            }
+        }
+    }
+    if (!state->fault_nm_ok) {
+        rc = process_get_exit_status(state->fault_nm_pid, &exit_status);
+        if (rc == 0) {
+            if (exit_status == -11) {
+                state->fault_nm_ok = 1;
+                serial_write("[test] ring3 fault nm exit status ok\n");
+            } else {
+                serial_write("[test] ring3 fault nm exit status mismatch\n");
+                process_set_exit_status(process, -1);
+                return PROCESS_RUN_EXITED;
+            }
+        }
+    }
+    if (!state->fault_ss_ok) {
+        rc = process_get_exit_status(state->fault_ss_pid, &exit_status);
+        if (rc == 0) {
+            if (exit_status == -11) {
+                state->fault_ss_ok = 1;
+                serial_write("[test] ring3 fault ss exit status ok\n");
+            } else {
+                serial_write("[test] ring3 fault ss exit status mismatch\n");
+                process_set_exit_status(process, -1);
+                return PROCESS_RUN_EXITED;
+            }
+        }
+    }
+    if (!state->fault_ac_ok) {
+        rc = process_get_exit_status(state->fault_ac_pid, &exit_status);
+        if (rc == 0) {
+            if (exit_status == -11) {
+                state->fault_ac_ok = 1;
+                serial_write("[test] ring3 fault ac exit status ok\n");
+            } else {
+                serial_write("[test] ring3 fault ac exit status mismatch\n");
+                process_set_exit_status(process, -1);
+                return PROCESS_RUN_EXITED;
+            }
+        }
+    }
 
     if (state->fault_ok && state->fault_write_ok && state->fault_exec_ok &&
         state->fault_ud_ok && state->fault_gp_ok && state->fault_de_ok &&
-        state->fault_db_ok) {
+        state->fault_db_ok && state->fault_of_ok && state->fault_nm_ok &&
+        state->fault_ss_ok && state->fault_ac_ok) {
         state->done = 1;
         process_set_exit_status(process, 0);
         return PROCESS_RUN_EXITED;
@@ -1244,6 +1305,82 @@ spawn_ring3_fault_db_probe_process(uint32_t parent_pid, uint32_t *out_pid)
 }
 
 static int
+spawn_ring3_fault_of_probe_process(uint32_t parent_pid, uint32_t *out_pid)
+{
+    static const uint8_t ring3_fault_of_code[] = {
+        0xB8, 0x01, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_GETPID */
+        0xCD, 0x80,                   /* int 0x80 */
+        0xCD, 0x04,                   /* int 4 (may classify as #OF/#GP) */
+        0x0F, 0x0B,                   /* ud2 fallback */
+        0xEB, 0xFE                    /* spin if fault unexpectedly returns */
+    };
+    return spawn_ring3_fault_probe_named(parent_pid,
+                                         "ring3-fault-of",
+                                         ring3_fault_of_code,
+                                         (uint32_t)sizeof(ring3_fault_of_code),
+                                         out_pid);
+}
+
+static int
+spawn_ring3_fault_nm_probe_process(uint32_t parent_pid, uint32_t *out_pid)
+{
+    static const uint8_t ring3_fault_nm_code[] = {
+        0xB8, 0x01, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_GETPID */
+        0xCD, 0x80,                   /* int 0x80 */
+        0xD9, 0xE8,                   /* fld1 (may classify as #NM) */
+        0x0F, 0x0B,                   /* ud2 fallback */
+        0xEB, 0xFE                    /* spin if fault unexpectedly returns */
+    };
+    return spawn_ring3_fault_probe_named(parent_pid,
+                                         "ring3-fault-nm",
+                                         ring3_fault_nm_code,
+                                         (uint32_t)sizeof(ring3_fault_nm_code),
+                                         out_pid);
+}
+
+static int
+spawn_ring3_fault_ss_probe_process(uint32_t parent_pid, uint32_t *out_pid)
+{
+    static const uint8_t ring3_fault_ss_code[] = {
+        0xB8, 0x01, 0x00, 0x00, 0x00,                   /* mov eax, WASMOS_SYSCALL_GETPID */
+        0xCD, 0x80,                                     /* int 0x80 */
+        0x48, 0xBC, 0x00, 0x00, 0x00, 0x00,             /* movabs rsp, */
+        0x00, 0x00, 0x01, 0x00,                         /*   0x0001000000000000 (non-canonical) */
+        0x50,                                           /* push rax -> #SS/#GP */
+        0x0F, 0x0B,                                     /* ud2 fallback */
+        0xEB, 0xFE                                      /* spin if fault unexpectedly returns */
+    };
+    return spawn_ring3_fault_probe_named(parent_pid,
+                                         "ring3-fault-ss",
+                                         ring3_fault_ss_code,
+                                         (uint32_t)sizeof(ring3_fault_ss_code),
+                                         out_pid);
+}
+
+static int
+spawn_ring3_fault_ac_probe_process(uint32_t parent_pid, uint32_t *out_pid)
+{
+    static const uint8_t ring3_fault_ac_code[] = {
+        0xB8, 0x01, 0x00, 0x00, 0x00,             /* mov eax, WASMOS_SYSCALL_GETPID */
+        0xCD, 0x80,                               /* int 0x80 */
+        0x9C,                                     /* pushfq */
+        0x58,                                     /* pop rax */
+        0x48, 0x0D, 0x00, 0x00, 0x04, 0x00,       /* or rax, 0x40000 (AC) */
+        0x50,                                     /* push rax */
+        0x9D,                                     /* popfq */
+        0x48, 0x8D, 0x44, 0x24, 0x01,             /* lea rax, [rsp+1] */
+        0x8B, 0x00,                               /* mov eax, [rax] (unaligned read) */
+        0x0F, 0x0B,                               /* ud2 fallback */
+        0xEB, 0xFE                                /* spin if fault unexpectedly returns */
+    };
+    return spawn_ring3_fault_probe_named(parent_pid,
+                                         "ring3-fault-ac",
+                                         ring3_fault_ac_code,
+                                         (uint32_t)sizeof(ring3_fault_ac_code),
+                                         out_pid);
+}
+
+static int
 spawn_ring3_fault_probe_named(uint32_t parent_pid,
                               const char *name,
                               const uint8_t *code,
@@ -1618,6 +1755,10 @@ kmain(boot_info_t *boot_info)
     uint32_t ring3_fault_gp_pid = 0;
     uint32_t ring3_fault_de_pid = 0;
     uint32_t ring3_fault_db_pid = 0;
+    uint32_t ring3_fault_of_pid = 0;
+    uint32_t ring3_fault_nm_pid = 0;
+    uint32_t ring3_fault_ss_pid = 0;
+    uint32_t ring3_fault_ac_pid = 0;
     uint32_t ring3_fault_policy_pid = 0;
     uint32_t idle_pid = 0;
     uint32_t init_pid = 0;
@@ -1843,6 +1984,30 @@ kmain(boot_info_t *boot_info)
                 __asm__ volatile("hlt");
             }
         }
+        if (spawn_ring3_fault_of_probe_process(init_pid, &ring3_fault_of_pid) != 0) {
+            serial_write("[kernel] ring3 fault of spawn failed\n");
+            for (;;) {
+                __asm__ volatile("hlt");
+            }
+        }
+        if (spawn_ring3_fault_nm_probe_process(init_pid, &ring3_fault_nm_pid) != 0) {
+            serial_write("[kernel] ring3 fault nm spawn failed\n");
+            for (;;) {
+                __asm__ volatile("hlt");
+            }
+        }
+        if (spawn_ring3_fault_ss_probe_process(init_pid, &ring3_fault_ss_pid) != 0) {
+            serial_write("[kernel] ring3 fault ss spawn failed\n");
+            for (;;) {
+                __asm__ volatile("hlt");
+            }
+        }
+        if (spawn_ring3_fault_ac_probe_process(init_pid, &ring3_fault_ac_pid) != 0) {
+            serial_write("[kernel] ring3 fault ac spawn failed\n");
+            for (;;) {
+                __asm__ volatile("hlt");
+            }
+        }
         g_ring3_fault_policy_state.fault_pid = ring3_fault_pid;
         g_ring3_fault_policy_state.fault_write_pid = ring3_fault_write_pid;
         g_ring3_fault_policy_state.fault_exec_pid = ring3_fault_exec_pid;
@@ -1850,6 +2015,10 @@ kmain(boot_info_t *boot_info)
         g_ring3_fault_policy_state.fault_gp_pid = ring3_fault_gp_pid;
         g_ring3_fault_policy_state.fault_de_pid = ring3_fault_de_pid;
         g_ring3_fault_policy_state.fault_db_pid = ring3_fault_db_pid;
+        g_ring3_fault_policy_state.fault_of_pid = ring3_fault_of_pid;
+        g_ring3_fault_policy_state.fault_nm_pid = ring3_fault_nm_pid;
+        g_ring3_fault_policy_state.fault_ss_pid = ring3_fault_ss_pid;
+        g_ring3_fault_policy_state.fault_ac_pid = ring3_fault_ac_pid;
         g_ring3_fault_policy_state.fault_ok = 0;
         g_ring3_fault_policy_state.fault_write_ok = 0;
         g_ring3_fault_policy_state.fault_exec_ok = 0;
@@ -1857,6 +2026,10 @@ kmain(boot_info_t *boot_info)
         g_ring3_fault_policy_state.fault_gp_ok = 0;
         g_ring3_fault_policy_state.fault_de_ok = 0;
         g_ring3_fault_policy_state.fault_db_ok = 0;
+        g_ring3_fault_policy_state.fault_of_ok = 0;
+        g_ring3_fault_policy_state.fault_nm_ok = 0;
+        g_ring3_fault_policy_state.fault_ss_ok = 0;
+        g_ring3_fault_policy_state.fault_ac_ok = 0;
         g_ring3_fault_policy_state.done = 0;
         if (process_spawn_as(init_pid, "ring3-fault-policy", ring3_fault_policy_entry,
                              &g_ring3_fault_policy_state, &ring3_fault_policy_pid) != 0) {

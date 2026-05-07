@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define PROCESS_MAX_COUNT 32
+#define PROCESS_MAX_COUNT 48
 #define PROCESS_NAME_MAX 64
 // Round-robin scheduler time slice (fixed ticks per run).
 #define PROCESS_DEFAULT_SLICE_TICKS 5u

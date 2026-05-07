@@ -44,6 +44,7 @@ mm_context_count_ptr(void)
 }
 
 #define MM_MAX_SHARED 16
+#define MM_MAX_SHARED_GRANTS 8
 typedef struct {
     uint32_t id;
     uint32_t owner_context_id;
@@ -52,6 +53,8 @@ typedef struct {
     uint64_t base;
     uint64_t pages;
     uint32_t flags;
+    uint32_t grant_contexts[MM_MAX_SHARED_GRANTS];
+    uint8_t grant_count;
 } mm_shared_region_t;
 
 static mm_shared_region_t g_shared[MM_MAX_SHARED];
@@ -212,16 +215,25 @@ static mm_shared_region_t *mm_shared_find(uint32_t id) {
 }
 
 static int
-mm_shared_owner_allowed(const mm_shared_region_t *region, uint32_t owner_context_id)
+mm_shared_access_allowed(const mm_shared_region_t *region, uint32_t context_id)
 {
+    uint8_t i = 0;
     if (!region) {
         return 0;
     }
     /* Context 0 is kernel/supervisor and may inspect or manage any region. */
-    if (owner_context_id == 0) {
+    if (context_id == 0) {
         return 1;
     }
-    return region->owner_context_id == owner_context_id;
+    if (region->owner_context_id == context_id) {
+        return 1;
+    }
+    for (i = 0; i < region->grant_count && i < MM_MAX_SHARED_GRANTS; ++i) {
+        if (region->grant_contexts[i] == context_id) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static int mm_shared_free_if_unused(mm_shared_region_t *region) {
@@ -442,8 +454,34 @@ int mm_shared_create(uint32_t owner_context_id, uint64_t pages, uint32_t flags,
     g_shared[slot].base = base;
     g_shared[slot].pages = pages;
     g_shared[slot].flags = flags;
+    g_shared[slot].grant_count = 0;
+    memset(g_shared[slot].grant_contexts, 0, sizeof(g_shared[slot].grant_contexts));
     *out_id = id;
     *out_base = base;
+    return 0;
+}
+
+int mm_shared_grant(uint32_t owner_context_id, uint32_t id, uint32_t target_context_id) {
+    mm_shared_region_t *region = mm_shared_find(id);
+    uint8_t i = 0;
+    if (!region || target_context_id == 0) {
+        return -1;
+    }
+    if (owner_context_id != 0 && region->owner_context_id != owner_context_id) {
+        return -1;
+    }
+    if (region->owner_context_id == target_context_id) {
+        return 0;
+    }
+    for (i = 0; i < region->grant_count && i < MM_MAX_SHARED_GRANTS; ++i) {
+        if (region->grant_contexts[i] == target_context_id) {
+            return 0;
+        }
+    }
+    if (region->grant_count >= MM_MAX_SHARED_GRANTS) {
+        return -1;
+    }
+    region->grant_contexts[region->grant_count++] = target_context_id;
     return 0;
 }
 
@@ -453,7 +491,7 @@ int mm_shared_get_phys(uint32_t owner_context_id, uint32_t id,
         return -1;
     }
     mm_shared_region_t *region = mm_shared_find(id);
-    if (!region || !mm_shared_owner_allowed(region, owner_context_id)) {
+    if (!region || !mm_shared_access_allowed(region, owner_context_id)) {
         return -1;
     }
     *out_base = region->base;
@@ -463,7 +501,7 @@ int mm_shared_get_phys(uint32_t owner_context_id, uint32_t id,
 
 int mm_shared_retain(uint32_t owner_context_id, uint32_t id) {
     mm_shared_region_t *region = mm_shared_find(id);
-    if (!region || !mm_shared_owner_allowed(region, owner_context_id)) {
+    if (!region || !mm_shared_access_allowed(region, owner_context_id)) {
         return -1;
     }
     region->refcount++;
@@ -472,7 +510,7 @@ int mm_shared_retain(uint32_t owner_context_id, uint32_t id) {
 
 int mm_shared_release(uint32_t owner_context_id, uint32_t id) {
     mm_shared_region_t *region = mm_shared_find(id);
-    if (!region || !mm_shared_owner_allowed(region, owner_context_id) || region->refcount == 0) {
+    if (!region || !mm_shared_access_allowed(region, owner_context_id) || region->refcount == 0) {
         return -1;
     }
     region->refcount--;
@@ -484,7 +522,7 @@ int mm_shared_map(mm_context_t *ctx, uint32_t id, uint32_t flags, uint64_t *out_
         return -1;
     }
     mm_shared_region_t *region = mm_shared_find(id);
-    if (!region || !mm_shared_owner_allowed(region, ctx->id)) {
+    if (!region || !mm_shared_access_allowed(region, ctx->id)) {
         return -1;
     }
     uint32_t effective_flags = region->flags;
@@ -511,7 +549,7 @@ int mm_shared_unmap(mm_context_t *ctx, uint32_t id) {
         return -1;
     }
     mm_shared_region_t *region = mm_shared_find(id);
-    if (!region || !mm_shared_owner_allowed(region, ctx->id)) {
+    if (!region || !mm_shared_access_allowed(region, ctx->id)) {
         return -1;
     }
 

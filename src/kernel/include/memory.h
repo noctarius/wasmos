@@ -59,6 +59,7 @@ int mm_shared_create(uint32_t owner_context_id, uint64_t pages, uint32_t flags,
                      uint32_t *out_id, uint64_t *out_base);
 int mm_shared_map(mm_context_t *ctx, uint32_t id, uint32_t flags, uint64_t *out_base);
 int mm_shared_unmap(mm_context_t *ctx, uint32_t id);
+int mm_shared_grant(uint32_t owner_context_id, uint32_t id, uint32_t target_context_id);
 int mm_shared_get_phys(uint32_t owner_context_id, uint32_t id, uint64_t *out_base, uint64_t *out_pages);
 int mm_shared_retain(uint32_t owner_context_id, uint32_t id);
 int mm_shared_release(uint32_t owner_context_id, uint32_t id);

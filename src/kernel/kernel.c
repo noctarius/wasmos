@@ -930,6 +930,10 @@ run_shmem_owner_isolation_test(uint32_t owner_context_id, uint32_t foreign_conte
         serial_write("[test] shmem owner setup failed\n");
         return;
     }
+    if (mm_shared_retain(owner_context_id, shmem_id) != 0) {
+        serial_write("[test] shmem owner setup failed\n");
+        return;
+    }
     if (mm_shared_get_phys(foreign_context_id, shmem_id, &phys, &pages) == 0 ||
         mm_shared_retain(foreign_context_id, shmem_id) == 0 ||
         mm_shared_release(foreign_context_id, shmem_id) == 0) {
@@ -937,8 +941,15 @@ run_shmem_owner_isolation_test(uint32_t owner_context_id, uint32_t foreign_conte
     } else {
         serial_write("[test] shmem owner deny ok\n");
     }
-    if (mm_shared_retain(owner_context_id, shmem_id) != 0 ||
-        mm_shared_release(owner_context_id, shmem_id) != 0) {
+    if (mm_shared_grant(owner_context_id, shmem_id, foreign_context_id) != 0 ||
+        mm_shared_get_phys(foreign_context_id, shmem_id, &phys, &pages) != 0 ||
+        mm_shared_retain(foreign_context_id, shmem_id) != 0 ||
+        mm_shared_release(foreign_context_id, shmem_id) != 0) {
+        serial_write("[test] shmem grant allow mismatch\n");
+    } else {
+        serial_write("[test] shmem grant allow ok\n");
+    }
+    if (mm_shared_release(owner_context_id, shmem_id) != 0) {
         serial_write("[test] shmem owner cleanup failed\n");
     }
 }

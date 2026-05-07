@@ -65,6 +65,20 @@ thread_init(void)
 int
 thread_spawn_main(uint32_t owner_pid, const char *name, uint32_t *out_tid)
 {
+    return thread_spawn_in_owner(owner_pid,
+                                 name,
+                                 THREAD_STATE_READY,
+                                 THREAD_BLOCK_NONE,
+                                 out_tid);
+}
+
+int
+thread_spawn_in_owner(uint32_t owner_pid,
+                      const char *name,
+                      thread_state_t initial_state,
+                      thread_block_reason_t initial_reason,
+                      uint32_t *out_tid)
+{
     if (owner_pid == 0 || !out_tid) {
         return -1;
     }
@@ -74,11 +88,8 @@ thread_spawn_main(uint32_t owner_pid, const char *name, uint32_t *out_tid)
     }
     slot->tid = g_next_tid++;
     slot->owner_pid = owner_pid;
-    slot->state = THREAD_STATE_READY;
-    slot->block_reason = THREAD_BLOCK_NONE;
-    /* TODO(threading-phase-a): Scheduler still dispatches process_t directly.
-     * Keep slice accounting mirrored here until ready-queue ownership moves to
-     * thread_t in Phase B. */
+    slot->state = initial_state;
+    slot->block_reason = initial_reason;
     slot->time_slice_ticks = 0;
     slot->ticks_remaining = 0;
     slot->ticks_total = 0;
@@ -118,6 +129,44 @@ thread_find_main_for_pid(uint32_t owner_pid)
         }
     }
     return 0;
+}
+
+void
+thread_mark_owner_exited(uint32_t owner_pid, int32_t exit_status)
+{
+    if (owner_pid == 0) {
+        return;
+    }
+    for (uint32_t i = 0; i < THREAD_MAX_COUNT; ++i) {
+        thread_t *thread = &g_threads[i];
+        if (thread->state == THREAD_STATE_UNUSED || thread->owner_pid != owner_pid) {
+            continue;
+        }
+        thread->exit_status = exit_status;
+        thread->state = THREAD_STATE_ZOMBIE;
+        thread->block_reason = THREAD_BLOCK_NONE;
+        if (g_current_tid == thread->tid) {
+            g_current_tid = 0;
+        }
+    }
+}
+
+void
+thread_reap_owner(uint32_t owner_pid)
+{
+    if (owner_pid == 0) {
+        return;
+    }
+    for (uint32_t i = 0; i < THREAD_MAX_COUNT; ++i) {
+        thread_t *thread = &g_threads[i];
+        if (thread->state == THREAD_STATE_UNUSED || thread->owner_pid != owner_pid) {
+            continue;
+        }
+        if (g_current_tid == thread->tid) {
+            g_current_tid = 0;
+        }
+        thread_reset_slot(thread);
+    }
 }
 
 void

@@ -423,6 +423,9 @@ Current status:
 - in progress
 - IPC endpoints now track a waiting `tid` and prefer targeted thread wakeup
   before falling back to context-wide wake behavior
+- internal kernel API `process_thread_spawn_internal` now allocates additional
+  per-process `thread_t` records with lifecycle accounting (dispatch remains
+  deferred to the next Phase B step)
 
 Exit criteria:
 

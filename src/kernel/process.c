@@ -607,10 +607,7 @@ static void process_mark_exited(process_t *proc, int32_t exit_status) {
      * a subsystem-specific reap path (for example the process manager) handles
      * them. */
     proc->state = PROCESS_STATE_ZOMBIE;
-    if (proc->main_tid != 0) {
-        thread_set_exit_status(proc->main_tid, exit_status);
-        thread_set_state(proc->main_tid, THREAD_STATE_ZOMBIE, THREAD_BLOCK_NONE);
-    }
+    thread_mark_owner_exited(proc->pid, exit_status);
     proc->live_thread_count = 0;
     process_wake_waiters(proc->pid);
 }
@@ -630,9 +627,7 @@ static void process_reap(process_t *proc) {
     if (proc->pid != 0) {
         wasm3_heap_release(proc->pid);
     }
-    if (proc->main_tid != 0) {
-        thread_reap(proc->main_tid);
-    }
+    thread_reap_owner(proc->pid);
     process_reset_slot(proc);
 }
 
@@ -845,6 +840,32 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
     slot->ctx.root_table = paging_get_root_table();
     g_idle_process = slot;
     *out_pid = pid;
+    return 0;
+}
+
+int
+process_thread_spawn_internal(uint32_t owner_pid, const char *name, uint32_t *out_tid)
+{
+    process_t *owner = process_find_by_pid(owner_pid);
+    if (!owner || !out_tid) {
+        return -1;
+    }
+    if (owner->state == PROCESS_STATE_UNUSED || owner->state == PROCESS_STATE_ZOMBIE || owner->exiting) {
+        return -1;
+    }
+    if (thread_spawn_in_owner(owner_pid,
+                              name ? name : "",
+                              THREAD_STATE_BLOCKED,
+                              THREAD_BLOCK_NONE,
+                              out_tid) != 0) {
+        return -1;
+    }
+    owner->thread_count++;
+    owner->live_thread_count++;
+    /* TODO(threading-phase-b): Additional threads are not yet dispatched. This
+     * API currently allocates lifecycle-tracked thread records so kernel-native
+     * services can adopt multi-thread structure incrementally before per-thread
+     * context/stack scheduling lands. */
     return 0;
 }
 

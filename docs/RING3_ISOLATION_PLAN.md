@@ -457,6 +457,9 @@ Progress update (2026-05-06):
 - Added CPL3 `#DE` containment probe in strict ring3 smoke:
   `ring3-fault-de` executes a divide-by-zero path in user mode to trigger
   vector 0 and assert process-local termination (`-11`).
+- Added CPL3 `#DB` containment probe in strict ring3 smoke:
+  `ring3-fault-db` executes `icebp/int1` in user mode to trigger vector 1 and
+  assert process-local termination (`-11`).
 - Smoke/gate markers now assert both classification and policy status:
   - `[test] ring3 fault ud reason ok`
   - `[test] ring3 fault ud exit status ok`
@@ -464,10 +467,12 @@ Progress update (2026-05-06):
   - `[test] ring3 fault gp exit status ok`
   - `[test] ring3 fault de reason ok`
   - `[test] ring3 fault de exit status ok`
+  - `[test] ring3 fault db reason ok`
+  - `[test] ring3 fault db exit status ok`
 - Remaining Phase-5 work:
   - extend equivalent process-local handling and coverage to additional
-    user-origin exception vectors beyond current `#PF`, `#UD`, `#GP`, and
-    `#DE`
+    user-origin exception vectors beyond current `#PF`, `#UD`, `#GP`, `#DE`,
+    and `#DB`
   - add multi-process mixed fault-storm liveness assertions
 
 Exit criteria:

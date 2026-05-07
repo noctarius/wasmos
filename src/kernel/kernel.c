@@ -84,12 +84,14 @@ typedef struct {
     uint32_t fault_ud_pid;
     uint32_t fault_gp_pid;
     uint32_t fault_de_pid;
+    uint32_t fault_db_pid;
     uint8_t fault_ok;
     uint8_t fault_write_ok;
     uint8_t fault_exec_ok;
     uint8_t fault_ud_ok;
     uint8_t fault_gp_ok;
     uint8_t fault_de_ok;
+    uint8_t fault_db_ok;
     uint8_t done;
 } ring3_fault_policy_state_t;
 static ring3_fault_policy_state_t g_ring3_fault_policy_state;
@@ -783,9 +785,23 @@ ring3_fault_policy_entry(process_t *process, void *arg)
             }
         }
     }
+    if (!state->fault_db_ok) {
+        rc = process_get_exit_status(state->fault_db_pid, &exit_status);
+        if (rc == 0) {
+            if (exit_status == -11) {
+                state->fault_db_ok = 1;
+                serial_write("[test] ring3 fault db exit status ok\n");
+            } else {
+                serial_write("[test] ring3 fault db exit status mismatch\n");
+                process_set_exit_status(process, -1);
+                return PROCESS_RUN_EXITED;
+            }
+        }
+    }
 
     if (state->fault_ok && state->fault_write_ok && state->fault_exec_ok &&
-        state->fault_ud_ok && state->fault_gp_ok && state->fault_de_ok) {
+        state->fault_ud_ok && state->fault_gp_ok && state->fault_de_ok &&
+        state->fault_db_ok) {
         state->done = 1;
         process_set_exit_status(process, 0);
         return PROCESS_RUN_EXITED;
@@ -1212,6 +1228,22 @@ spawn_ring3_fault_de_probe_process(uint32_t parent_pid, uint32_t *out_pid)
 }
 
 static int
+spawn_ring3_fault_db_probe_process(uint32_t parent_pid, uint32_t *out_pid)
+{
+    static const uint8_t ring3_fault_db_code[] = {
+        0xB8, 0x01, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_GETPID */
+        0xCD, 0x80,                   /* int 0x80 */
+        0xF1,                         /* icebp/int1 -> #DB */
+        0xEB, 0xFE                    /* spin if fault unexpectedly returns */
+    };
+    return spawn_ring3_fault_probe_named(parent_pid,
+                                         "ring3-fault-db",
+                                         ring3_fault_db_code,
+                                         (uint32_t)sizeof(ring3_fault_db_code),
+                                         out_pid);
+}
+
+static int
 spawn_ring3_fault_probe_named(uint32_t parent_pid,
                               const char *name,
                               const uint8_t *code,
@@ -1585,6 +1617,7 @@ kmain(boot_info_t *boot_info)
     uint32_t ring3_fault_ud_pid = 0;
     uint32_t ring3_fault_gp_pid = 0;
     uint32_t ring3_fault_de_pid = 0;
+    uint32_t ring3_fault_db_pid = 0;
     uint32_t ring3_fault_policy_pid = 0;
     uint32_t idle_pid = 0;
     uint32_t init_pid = 0;
@@ -1804,18 +1837,26 @@ kmain(boot_info_t *boot_info)
                 __asm__ volatile("hlt");
             }
         }
+        if (spawn_ring3_fault_db_probe_process(init_pid, &ring3_fault_db_pid) != 0) {
+            serial_write("[kernel] ring3 fault db spawn failed\n");
+            for (;;) {
+                __asm__ volatile("hlt");
+            }
+        }
         g_ring3_fault_policy_state.fault_pid = ring3_fault_pid;
         g_ring3_fault_policy_state.fault_write_pid = ring3_fault_write_pid;
         g_ring3_fault_policy_state.fault_exec_pid = ring3_fault_exec_pid;
         g_ring3_fault_policy_state.fault_ud_pid = ring3_fault_ud_pid;
         g_ring3_fault_policy_state.fault_gp_pid = ring3_fault_gp_pid;
         g_ring3_fault_policy_state.fault_de_pid = ring3_fault_de_pid;
+        g_ring3_fault_policy_state.fault_db_pid = ring3_fault_db_pid;
         g_ring3_fault_policy_state.fault_ok = 0;
         g_ring3_fault_policy_state.fault_write_ok = 0;
         g_ring3_fault_policy_state.fault_exec_ok = 0;
         g_ring3_fault_policy_state.fault_ud_ok = 0;
         g_ring3_fault_policy_state.fault_gp_ok = 0;
         g_ring3_fault_policy_state.fault_de_ok = 0;
+        g_ring3_fault_policy_state.fault_db_ok = 0;
         g_ring3_fault_policy_state.done = 0;
         if (process_spawn_as(init_pid, "ring3-fault-policy", ring3_fault_policy_entry,
                              &g_ring3_fault_policy_state, &ring3_fault_policy_pid) != 0) {

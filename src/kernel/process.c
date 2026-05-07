@@ -6,6 +6,7 @@
 #include "cpu.h"
 #include "wasm3_shim.h"
 #include "ipc.h"
+#include "timer.h"
 
 /*
  * process.c contains the single-core scheduler, process table, run queue, and
@@ -40,6 +41,10 @@ static uint64_t g_ctx_watch_last_logged_rsp;
 static uint64_t g_ctx_watch_last_logged_rflags;
 static uint64_t g_ctx_watch_last_logged_reason;
 static uint8_t g_preempt_smoke_logged;
+static uint8_t g_sched_progress_logged;
+static uint64_t g_sched_switch_count;
+static uint64_t g_resched_pending_since_tick;
+static uint64_t g_resched_stall_reports;
 
 static inline uintptr_t
 process_kernel_alias_addr(uintptr_t addr)
@@ -91,6 +96,8 @@ extern uint8_t __kernel_end;
 #define STACK_REDZONE_BYTES 4096u
 #define STACK_CANARY_VALUE 0xC0DEC0DEF00DFACEULL
 #define SCHED_TRAMPOLINE_STACK_BYTES 8192u
+#define SCHED_PROGRESS_MARKER_SWITCHES 256ull
+#define SCHED_RESCHED_STALL_TICKS 512ull
 /* Phase-2 stack hardening currently relies on the shared higher-half kernel
  * window (64 MiB by default: 32 * 2 MiB PDEs). */
 #define KERNEL_SHARED_HIGHER_HALF_WINDOW_BYTES (64u * 1024u * 1024u)
@@ -590,6 +597,10 @@ void process_init(void) {
     g_ctx_watch_last_logged_rflags = 0;
     g_ctx_watch_last_logged_reason = 0;
     g_preempt_smoke_logged = 0;
+    g_sched_progress_logged = 0;
+    g_sched_switch_count = 0;
+    g_resched_pending_since_tick = 0;
+    g_resched_stall_reports = 0;
     g_ctx_restore_ctx = 0;
     g_ctx_restore_rip = 0;
     g_ctx_restore_rsp = 0;
@@ -960,6 +971,11 @@ static int process_schedule_once_impl(void) {
         return 1;
     }
     context_switch_high(&g_sched_ctx, &proc->ctx);
+    g_sched_switch_count++;
+    if (!g_sched_progress_logged && g_sched_switch_count >= SCHED_PROGRESS_MARKER_SWITCHES) {
+        g_sched_progress_logged = 1;
+        serial_write("[test] sched progress ok\n");
+    }
     process_run_result_t result = g_last_run_result;
     critical_section_enter();
     g_current_process = 0;
@@ -990,7 +1006,9 @@ static int process_schedule_once_impl(void) {
 }
 
 void process_tick(void) {
+    uint64_t now = timer_ticks();
     if (g_current_pid == 0) {
+        g_resched_pending_since_tick = 0;
         return;
     }
     process_t *proc = process_find_by_pid(g_current_pid);
@@ -1008,6 +1026,23 @@ void process_tick(void) {
             }
         }
     }
+    if (g_need_resched) {
+        if (g_resched_pending_since_tick == 0) {
+            g_resched_pending_since_tick = now;
+        } else if ((now - g_resched_pending_since_tick) >= SCHED_RESCHED_STALL_TICKS) {
+            g_resched_stall_reports++;
+            serial_write("[watchdog] resched stall ticks=");
+            serial_write_hex64(now - g_resched_pending_since_tick);
+            serial_write("[watchdog] pid=");
+            serial_write_hex64(g_current_pid);
+            serial_write("[watchdog] reports=");
+            serial_write_hex64(g_resched_stall_reports);
+            serial_write("\n");
+            g_resched_pending_since_tick = now;
+        }
+    } else {
+        g_resched_pending_since_tick = 0;
+    }
 }
 
 int process_should_resched(void) {
@@ -1016,6 +1051,7 @@ int process_should_resched(void) {
 
 void process_clear_resched(void) {
     g_need_resched = 0;
+    g_resched_pending_since_tick = 0;
 }
 
 int process_preempt_from_irq(irq_frame_t *frame) {

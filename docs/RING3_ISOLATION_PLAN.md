@@ -572,10 +572,17 @@ Status update (2026-05-07):
   - `shmem_map/unmap` and underlying retain/release/get-phys paths now reject
     cross-context use of forged shared IDs (kernel context `0` remains
     supervisor-only bypass for native/kernel-owned paths).
+- Added explicit grant semantics for shared regions:
+  - owner context can grant access to specific target contexts via
+    `mm_shared_grant(owner,id,target)`.
+  - access checks now allow owner, kernel context `0`, or explicitly granted
+    contexts.
 - Added cross-context negative smoke marker in kernel boot tests:
   - emits `[test] shmem owner deny ok` when foreign-context `get_phys`,
     `retain`, and `release` attempts against an owner-bound shared ID are all
     rejected as expected.
+  - emits `[test] shmem grant allow ok` when access succeeds after explicit
+    owner grant.
 
 Tasks:
 - Assert fault-driven mapping only occurs inside owning region policy.

@@ -29,9 +29,11 @@ green strict stabilization cycle (`run-qemu-test`, `run-qemu-ring3-test`,
 Kernel boot smoke now also runs a shared-memory misuse matrix (forged IDs,
 wrong-owner grant/revoke attempts, pre/post-grant map deny/allow, idempotent
 revoke, and release-balance checks) in the strict-ring3 gate.
-Threading rollout (`docs/THREADING.md`) is in Phase B with scheduler-active
-internal worker threads (dedicated kernel stacks + worker entrypoints) now
-validated in baseline smoke (`[test] threading internal worker ok`).
+Threading rollout (`docs/THREADING.md`) remains in Phase B with current-scope
+exit criterion satisfied: scheduler-active internal worker threads (dedicated
+kernel stacks + worker entrypoints) plus targeted multi-thread IPC stress are
+validated in baseline smoke (`[test] threading internal worker ok`,
+`[test] threading ipc stress ok`).
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

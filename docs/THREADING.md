@@ -420,7 +420,7 @@ Exit criteria:
 
 Current status:
 
-- in progress
+- exit criterion satisfied for current scope
 - IPC endpoints now track a waiting `tid` and prefer targeted thread wakeup
   before falling back to context-wide wake behavior
 - internal kernel API `process_thread_spawn_internal` now allocates additional
@@ -429,6 +429,8 @@ Current status:
   kernel stacks and explicit worker entrypoints; kernel smoke emits
   `[test] threading internal worker ok` when worker scheduling/lifecycle
   completes successfully
+- targeted kernel multi-thread IPC stress smoke now runs in baseline boot and
+  emits `[test] threading ipc stress ok` on pass
 
 Exit criteria:
 

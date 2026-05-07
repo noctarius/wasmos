@@ -1307,7 +1307,7 @@ static int process_schedule_once_impl(void) {
     } else {
         process_set_ready(proc, thread);
         proc->wait_target_pid = 0;
-        ready_queue_enqueue(process_main_thread(proc));
+        ready_queue_enqueue(thread);
     }
 
     g_last_index = proc->pid;

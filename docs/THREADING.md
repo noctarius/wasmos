@@ -447,6 +447,10 @@ Current status:
 - syscall ABI now includes `gettid` and `thread_yield` for native ring3
   callers, with strict ring3 smoke markers:
   `[test] ring3 native gettid ok` and `[test] ring3 thread yield syscall ok`
+- syscall ABI now also includes `thread_exit` with strict ring3 smoke marker
+  `[test] ring3 thread exit syscall ok`; full per-thread user teardown
+  semantics remain deferred until user-visible multi-thread lifecycle support
+  lands
 
 Exit criteria:
 

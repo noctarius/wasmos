@@ -17,7 +17,8 @@ typedef enum {
     WASMOS_SYSCALL_IPC_NOTIFY = 5,
     WASMOS_SYSCALL_IPC_CALL = 6,
     WASMOS_SYSCALL_GETTID = 7,
-    WASMOS_SYSCALL_THREAD_YIELD = 8
+    WASMOS_SYSCALL_THREAD_YIELD = 8,
+    WASMOS_SYSCALL_THREAD_EXIT = 9
 } wasmos_syscall_id_t;
 
 typedef struct {
@@ -119,6 +120,17 @@ static inline void
 wasmos_sys_exit(int32_t status)
 {
     (void)wasmos_syscall1(WASMOS_SYSCALL_EXIT, (uint32_t)status);
+    for (;;) {
+        __asm__ volatile("hlt");
+    }
+}
+
+/* Phase C baseline: THREAD_EXIT currently follows process-group exit behavior
+ * until user-visible per-thread teardown semantics are wired end-to-end. */
+static inline void
+wasmos_sys_thread_exit(int32_t status)
+{
+    (void)wasmos_syscall1(WASMOS_SYSCALL_THREAD_EXIT, (uint32_t)status);
     for (;;) {
         __asm__ volatile("hlt");
     }

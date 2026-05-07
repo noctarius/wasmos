@@ -12,7 +12,8 @@ typedef enum {
     WASMOS_SYSCALL_IPC_NOTIFY = 5,
     WASMOS_SYSCALL_IPC_CALL = 6,
     WASMOS_SYSCALL_GETTID = 7,
-    WASMOS_SYSCALL_THREAD_YIELD = 8
+    WASMOS_SYSCALL_THREAD_YIELD = 8,
+    WASMOS_SYSCALL_THREAD_EXIT = 9
 } wasmos_syscall_id_t;
 
 /* int 0x80 syscall ABI (current minimal contract):
@@ -38,6 +39,8 @@ typedef enum {
  *                   current reply ABI returns arg0 only (arg1..arg3 ignored)
  * - GETTID:         RAX=tid
  * - THREAD_YIELD:   RAX=0
+ * - THREAD_EXIT:    RDI=exit_status; current Phase C baseline aliases to
+ *                   process-group exit until per-thread user teardown lands
  */
 typedef struct {
     uint64_t r15;

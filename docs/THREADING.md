@@ -379,6 +379,14 @@ Add explicit assertions and diagnostic trace marks around these edges.
 - Keep one thread per process functionally.
 - Preserve all current user-visible behavior.
 
+Current status:
+
+- in progress
+- kernel now allocates a `thread_t` main thread per spawned process and mirrors
+  baseline process state transitions into that thread record
+- scheduler dispatch and ready-queue ownership are still process-driven in this
+  step (intentional for behavior-preserving rollout)
+
 Exit criteria:
 
 - existing boot flow unchanged

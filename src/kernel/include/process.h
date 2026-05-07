@@ -102,6 +102,10 @@ typedef struct process {
     uint32_t pid;
     uint32_t parent_pid;
     uint32_t context_id;
+    uint32_t main_tid;
+    uint32_t thread_count;
+    uint32_t live_thread_count;
+    uint8_t exiting;
     process_state_t state;
     process_block_reason_t block_reason;
     uint32_t wait_target_pid;

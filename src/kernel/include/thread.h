@@ -25,6 +25,14 @@ typedef struct thread {
     uint32_t owner_pid;
     thread_state_t state;
     thread_block_reason_t block_reason;
+    uint8_t in_ready_queue;
+    uint8_t is_kernel_worker;
+    uintptr_t kstack_base;
+    uintptr_t kstack_top;
+    uintptr_t kstack_alloc_base_phys;
+    uint32_t kstack_pages;
+    uintptr_t worker_entry;
+    void *worker_arg;
     uint32_t time_slice_ticks;
     uint32_t ticks_remaining;
     uint64_t ticks_total;
@@ -42,6 +50,7 @@ int thread_spawn_in_owner(uint32_t owner_pid,
                           uint32_t *out_tid);
 thread_t *thread_get(uint32_t tid);
 thread_t *thread_find_main_for_pid(uint32_t owner_pid);
+int thread_owner_tid_at(uint32_t owner_pid, uint32_t index, uint32_t *out_tid);
 void thread_mark_owner_exited(uint32_t owner_pid, int32_t exit_status);
 void thread_reap_owner(uint32_t owner_pid);
 void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t reason);

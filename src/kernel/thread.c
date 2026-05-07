@@ -16,6 +16,14 @@ thread_reset_slot(thread_t *thread)
     thread->owner_pid = 0;
     thread->state = THREAD_STATE_UNUSED;
     thread->block_reason = THREAD_BLOCK_NONE;
+    thread->in_ready_queue = 0;
+    thread->is_kernel_worker = 0;
+    thread->kstack_base = 0;
+    thread->kstack_top = 0;
+    thread->kstack_alloc_base_phys = 0;
+    thread->kstack_pages = 0;
+    thread->worker_entry = 0;
+    thread->worker_arg = 0;
     thread->time_slice_ticks = 0;
     thread->ticks_remaining = 0;
     thread->ticks_total = 0;
@@ -90,6 +98,14 @@ thread_spawn_in_owner(uint32_t owner_pid,
     slot->owner_pid = owner_pid;
     slot->state = initial_state;
     slot->block_reason = initial_reason;
+    slot->in_ready_queue = 0;
+    slot->is_kernel_worker = 0;
+    slot->kstack_base = 0;
+    slot->kstack_top = 0;
+    slot->kstack_alloc_base_phys = 0;
+    slot->kstack_pages = 0;
+    slot->worker_entry = 0;
+    slot->worker_arg = 0;
     slot->time_slice_ticks = 0;
     slot->ticks_remaining = 0;
     slot->ticks_total = 0;
@@ -129,6 +145,27 @@ thread_find_main_for_pid(uint32_t owner_pid)
         }
     }
     return 0;
+}
+
+int
+thread_owner_tid_at(uint32_t owner_pid, uint32_t index, uint32_t *out_tid)
+{
+    if (owner_pid == 0 || !out_tid) {
+        return -1;
+    }
+    uint32_t current = 0;
+    for (uint32_t i = 0; i < THREAD_MAX_COUNT; ++i) {
+        thread_t *thread = &g_threads[i];
+        if (thread->state == THREAD_STATE_UNUSED || thread->owner_pid != owner_pid) {
+            continue;
+        }
+        if (current == index) {
+            *out_tid = thread->tid;
+            return 0;
+        }
+        current++;
+    }
+    return -1;
 }
 
 void

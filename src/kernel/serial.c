@@ -195,11 +195,11 @@ static void serial_ring_init(void) {
         return;
     }
     uint64_t phys_base = 0;
-    if (mm_shared_create(1, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE,
+    if (mm_shared_create(0, 1, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE,
                          ring_id_slot, &phys_base) != 0) {
         return;
     }
-    if (mm_shared_retain(*ring_id_slot) != 0) {
+    if (mm_shared_retain(0, *ring_id_slot) != 0) {
         *ring_id_slot = 0;
         return;
     }

@@ -1283,7 +1283,7 @@ m3ApiRawFunction(wasmos_shmem_create)
     uint32_t create_flags = (flags > 0)
                                 ? (uint32_t)flags
                                 : (MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE);
-    if (mm_shared_create((uint64_t)(uint32_t)pages, create_flags, &id, &phys) != 0) {
+    if (mm_shared_create(proc->context_id, (uint64_t)(uint32_t)pages, create_flags, &id, &phys) != 0) {
         m3ApiReturn(-1);
     }
     (void)phys;
@@ -1313,7 +1313,8 @@ m3ApiRawFunction(wasmos_shmem_map)
 
     uint64_t phys_base = 0;
     uint64_t shared_pages = 0;
-    if (mm_shared_get_phys((uint32_t)id, &phys_base, &shared_pages) != 0 || shared_pages == 0) {
+    if (mm_shared_get_phys(proc->context_id, (uint32_t)id, &phys_base, &shared_pages) != 0 ||
+        shared_pages == 0) {
         m3ApiReturn(-1);
     }
     uint64_t map_size = (uint64_t)(uint32_t)size;
@@ -1348,7 +1349,7 @@ m3ApiRawFunction(wasmos_shmem_map)
         }
     }
 
-    if (mm_shared_retain((uint32_t)id) != 0) {
+    if (mm_shared_retain(proc->context_id, (uint32_t)id) != 0) {
         m3ApiReturn(-1);
     }
     m3ApiReturn(0);
@@ -1364,7 +1365,11 @@ m3ApiRawFunction(wasmos_shmem_unmap)
     }
     /* FIXME: This currently only releases shared-region ownership/refcount.
      * It does not restore the previous linear-memory page mappings. */
-    m3ApiReturn(mm_shared_release((uint32_t)id));
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn(mm_shared_release(proc->context_id, (uint32_t)id));
 }
 
 m3ApiRawFunction(wasmos_irq_route)

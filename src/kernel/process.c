@@ -174,6 +174,7 @@ static void context_switch_high(process_context_t *out, process_context_t *in);
 static int process_schedule_once_impl(void);
 static thread_t *process_main_thread(process_t *proc);
 static process_t *process_owner_for_thread(thread_t *thread);
+static thread_t *process_thread_for_transition(process_t *proc);
 
 
 static int process_str_eq(const char *a, const char *b) {
@@ -364,6 +365,18 @@ process_owner_for_thread(thread_t *thread)
         return 0;
     }
     return process_find_by_pid(thread->owner_pid);
+}
+
+static thread_t *
+process_thread_for_transition(process_t *proc)
+{
+    if (!proc) {
+        return 0;
+    }
+    if (g_current_process == proc && g_current_thread) {
+        return g_current_thread;
+    }
+    return process_main_thread(proc);
 }
 
 static int ready_queue_enqueue(thread_t *thread) {
@@ -890,8 +903,9 @@ void process_block_on_ipc(process_t *process) {
     process->state = PROCESS_STATE_BLOCKED;
     process->block_reason = PROCESS_BLOCK_IPC;
     process->wait_target_pid = 0;
-    if (process->main_tid != 0) {
-        thread_set_state(process->main_tid, THREAD_STATE_BLOCKED, THREAD_BLOCK_IPC);
+    thread_t *thread = process_thread_for_transition(process);
+    if (thread && thread->tid != 0) {
+        thread_set_state(thread->tid, THREAD_STATE_BLOCKED, THREAD_BLOCK_IPC);
     }
 }
 
@@ -920,8 +934,9 @@ int process_wait(process_t *process, uint32_t target_pid, int32_t *out_exit_stat
 
     process->block_reason = PROCESS_BLOCK_WAIT;
     process->wait_target_pid = target_pid;
-    if (process->main_tid != 0) {
-        thread_set_state(process->main_tid, THREAD_STATE_BLOCKED, THREAD_BLOCK_WAIT_PROCESS);
+    thread_t *thread = process_thread_for_transition(process);
+    if (thread && thread->tid != 0) {
+        thread_set_state(thread->tid, THREAD_STATE_BLOCKED, THREAD_BLOCK_WAIT_PROCESS);
     }
     return 1;
 }
@@ -977,10 +992,11 @@ uint32_t process_wake_by_context(uint32_t context_id) {
         }
         proc->block_reason = PROCESS_BLOCK_NONE;
         proc->state = PROCESS_STATE_READY;
-        if (proc->main_tid != 0) {
-            thread_set_state(proc->main_tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
+        thread_t *thread = process_thread_for_transition(proc);
+        if (thread && thread->tid != 0) {
+            thread_set_state(thread->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
         }
-        ready_queue_enqueue(process_main_thread(proc));
+        ready_queue_enqueue(thread);
         woken++;
     }
     return woken;
@@ -1269,10 +1285,11 @@ int process_preempt_from_irq(irq_frame_t *frame) {
 
     g_current_process->state = PROCESS_STATE_READY;
     g_current_process->block_reason = PROCESS_BLOCK_NONE;
-    if (g_current_process->main_tid != 0) {
-        thread_set_state(g_current_process->main_tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
+    thread_t *thread = process_thread_for_transition(g_current_process);
+    if (thread && thread->tid != 0) {
+        thread_set_state(thread->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
     }
-    ready_queue_enqueue(process_main_thread(g_current_process));
+    ready_queue_enqueue(thread);
     g_last_run_result = PROCESS_RUN_YIELDED;
     process_clear_resched();
     if ((frame->cs & 0x3u) == 0x3u) {

@@ -39,7 +39,7 @@ It defines repository workflow and documentation/update conventions.
 - Kernel threading Phase B now includes a targeted multi-thread IPC stress marker (`[test] threading ipc stress ok`)
 - Threading Phase C syscall baseline now includes native ring3 `gettid` and `thread_yield` coverage (`[test] ring3 native gettid ok`, `[test] ring3 thread yield syscall ok`)
 - Threading Phase C syscall baseline now includes native ring3 `thread_exit` coverage (`[test] ring3 thread exit syscall ok`)
-- Threading Phase C now includes native ring3 `thread_create` ABI scaffolding with strict smoke coverage (`[test] ring3 thread create syscall scaffold ok`); per-thread user-context scheduling is the remaining step
+- Threading Phase C now includes native ring3 `thread_create` coverage with per-thread user context setup (`[test] ring3 thread create syscall ok`)
 
 ## Quick Start
 

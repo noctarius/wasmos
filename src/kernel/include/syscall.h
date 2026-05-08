@@ -43,8 +43,8 @@ typedef enum {
  * - THREAD_EXIT:    RDI=exit_status; exits the current thread. If it is the
  *                   final live thread in the process, process exit follows.
  * - THREAD_CREATE:  RDI=entry_rip, RSI=user_stack_top; RAX=tid on success.
- *                   Phase C scaffold currently returns -1 until per-thread
- *                   user-context scheduling is implemented.
+ *                   New thread is created in the caller process with user-mode
+ *                   RIP/RSP/CS/SS/root-table context initialized per-thread.
  */
 typedef struct {
     uint64_t r15;

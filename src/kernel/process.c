@@ -240,6 +240,7 @@ static thread_t *process_main_thread(process_t *proc);
 static process_t *process_owner_for_thread(thread_t *thread);
 static thread_t *process_thread_for_transition(process_t *proc);
 static thread_t *process_first_owner_ready_thread(process_t *proc);
+static process_context_t *process_sched_ctx_for_thread(process_t *proc, thread_t *thread);
 static void process_sched_invariant_fail(const char *msg, uint64_t a, uint64_t b);
 static void process_set_blocked(process_t *proc, thread_t *thread, process_block_reason_t reason, thread_block_reason_t thread_reason);
 static void process_set_ready(process_t *proc, thread_t *thread);
@@ -469,6 +470,18 @@ process_first_owner_ready_thread(process_t *proc)
     return 0;
 }
 
+static process_context_t *
+process_sched_ctx_for_thread(process_t *proc, thread_t *thread)
+{
+    if (!proc || !thread) {
+        return 0;
+    }
+    if (thread->is_kernel_worker) {
+        return &proc->ctx;
+    }
+    return &thread->ctx;
+}
+
 static int ready_queue_enqueue(thread_t *thread) {
     if (!thread) {
         return 0;
@@ -560,7 +573,12 @@ static void process_trampoline(void) {
         }
         critical_section_enter();
         g_in_scheduler = 1;
-        context_switch_high(&g_current_process->ctx, &g_sched_ctx);
+        process_context_t *ctx = process_sched_ctx_for_thread(g_current_process, g_current_thread);
+        if (!ctx) {
+            g_last_run_result = PROCESS_RUN_IDLE;
+            continue;
+        }
+        context_switch_high(ctx, &g_sched_ctx);
         if (g_ctx_watch_hits != g_ctx_watch_logged) {
             g_ctx_watch_logged = g_ctx_watch_hits;
             process_log_ctx_watch_if_changed();
@@ -848,6 +866,12 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
     slot->ctx.cs = KERNEL_CS_SELECTOR;
     slot->ctx.ss = KERNEL_DS_SELECTOR;
     slot->ctx.root_table = ctx->root_table;
+    {
+        thread_t *main_thread = process_main_thread(slot);
+        if (main_thread) {
+            main_thread->ctx = slot->ctx;
+        }
+    }
     if (process_str_eq(name, "process-manager")) {
         g_ctx_watch_ctx = (uint64_t)(uintptr_t)&slot->ctx;
         g_ctx_watch_last_ctx = g_ctx_watch_ctx;
@@ -942,6 +966,12 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
     slot->ctx.cs = KERNEL_CS_SELECTOR;
     slot->ctx.ss = KERNEL_DS_SELECTOR;
     slot->ctx.root_table = paging_get_root_table();
+    {
+        thread_t *main_thread = process_main_thread(slot);
+        if (main_thread) {
+            main_thread->ctx = slot->ctx;
+        }
+    }
     g_idle_process = slot;
     *out_pid = pid;
     return 0;
@@ -1044,6 +1074,13 @@ process_set_user_entry(uint32_t pid, uint64_t rip, uint64_t user_rsp)
     proc->ctx.ss = USER_DS_SELECTOR;
     proc->ctx.user_rsp = user_rsp;
     proc->ctx.rflags = 0x200;
+    {
+        thread_t *main_thread = process_main_thread(proc);
+        if (main_thread) {
+            main_thread->ctx = proc->ctx;
+            main_thread->ctx.root_table = user_root;
+        }
+    }
     return 0;
 }
 
@@ -1072,7 +1109,11 @@ void process_yield(process_run_result_t result) {
         return;
     }
     g_last_run_result = result;
-    context_switch_high(&g_current_process->ctx, &g_sched_ctx);
+    process_context_t *ctx = process_sched_ctx_for_thread(g_current_process, g_current_thread);
+    if (!ctx) {
+        return;
+    }
+    context_switch_high(ctx, &g_sched_ctx);
 }
 
 void process_block_on_ipc(process_t *process) {
@@ -1253,6 +1294,10 @@ static int process_schedule_once_impl(void) {
     if (thread->time_slice_ticks == 0) {
         process_sched_invariant_fail("zero time slice", thread->tid, 0);
     }
+    process_context_t *run_ctx = process_sched_ctx_for_thread(proc, thread);
+    if (run_ctx) {
+        proc->ctx = *run_ctx;
+    }
     process_validate_context(proc, "schedule");
     critical_section_enter();
     g_current_pid = proc->pid;
@@ -1268,8 +1313,18 @@ static int process_schedule_once_impl(void) {
      * deterministic kernel stack landing point. */
     cpu_set_kernel_stack((uint64_t)(proc->stack_top - 16u));
     g_sched_ctx.root_table = paging_get_root_table();
-    proc->ctx.root_table = mm_context_root_table(proc->context_id);
-    if (proc->ctx.root_table == 0) {
+    if (!run_ctx) {
+        serial_write("[sched] thread ctx missing\n");
+        critical_section_enter();
+        g_current_process = 0;
+        g_current_pid = 0;
+        g_current_thread = 0;
+        thread_set_current(0);
+        critical_section_leave();
+        return 1;
+    }
+    run_ctx->root_table = mm_context_root_table(proc->context_id);
+    if (run_ctx->root_table == 0) {
         serial_write("[sched] target root missing\n");
         critical_section_enter();
         g_current_process = 0;
@@ -1282,7 +1337,7 @@ static int process_schedule_once_impl(void) {
     if (thread->is_kernel_worker) {
         g_last_run_result = process_run_worker_on_stack(proc, thread);
     } else {
-        context_switch_high(&g_sched_ctx, &proc->ctx);
+        context_switch_high(&g_sched_ctx, run_ctx);
     }
     g_sched_switch_count++;
     if (!g_sched_progress_logged && g_sched_switch_count >= SCHED_PROGRESS_MARKER_SWITCHES) {
@@ -1462,37 +1517,43 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     }
 
     process_validate_context(g_current_process, "preempt");
-    g_current_process->ctx.rax = frame->rax;
-    g_current_process->ctx.rbx = frame->rbx;
-    g_current_process->ctx.rcx = frame->rcx;
-    g_current_process->ctx.rdx = frame->rdx;
-    g_current_process->ctx.rbp = frame->rbp;
-    g_current_process->ctx.rsi = frame->rsi;
-    g_current_process->ctx.rdi = frame->rdi;
-    g_current_process->ctx.r8 = frame->r8;
-    g_current_process->ctx.r9 = frame->r9;
-    g_current_process->ctx.r10 = frame->r10;
-    g_current_process->ctx.r11 = frame->r11;
-    g_current_process->ctx.r12 = frame->r12;
-    g_current_process->ctx.r13 = frame->r13;
-    g_current_process->ctx.r14 = frame->r14;
-    g_current_process->ctx.r15 = frame->r15;
-    g_current_process->ctx.cs = frame->cs;
-    if ((frame->cs & 0x3u) == 0x3u) {
-        g_current_process->ctx.user_rsp = frame->user_rsp;
-        g_current_process->ctx.ss = frame->user_ss;
-    } else {
-        g_current_process->ctx.rsp = (uint64_t)((uintptr_t)frame + sizeof(irq_frame_t));
-        g_current_process->ctx.user_rsp = g_current_process->ctx.rsp;
-        g_current_process->ctx.ss = KERNEL_DS_SELECTOR;
+    process_context_t *ctx = process_sched_ctx_for_thread(g_current_process, g_current_thread);
+    if (!ctx) {
+        process_clear_resched();
+        return 0;
     }
-    g_current_process->ctx.rip = frame->rip;
-    g_current_process->ctx.rflags = frame->rflags;
-    if (g_ctx_watch_ctx == (uint64_t)(uintptr_t)&g_current_process->ctx) {
+    ctx->rax = frame->rax;
+    ctx->rbx = frame->rbx;
+    ctx->rcx = frame->rcx;
+    ctx->rdx = frame->rdx;
+    ctx->rbp = frame->rbp;
+    ctx->rsi = frame->rsi;
+    ctx->rdi = frame->rdi;
+    ctx->r8 = frame->r8;
+    ctx->r9 = frame->r9;
+    ctx->r10 = frame->r10;
+    ctx->r11 = frame->r11;
+    ctx->r12 = frame->r12;
+    ctx->r13 = frame->r13;
+    ctx->r14 = frame->r14;
+    ctx->r15 = frame->r15;
+    ctx->cs = frame->cs;
+    if ((frame->cs & 0x3u) == 0x3u) {
+        ctx->user_rsp = frame->user_rsp;
+        ctx->ss = frame->user_ss;
+    } else {
+        ctx->rsp = (uint64_t)((uintptr_t)frame + sizeof(irq_frame_t));
+        ctx->user_rsp = ctx->rsp;
+        ctx->ss = KERNEL_DS_SELECTOR;
+    }
+    ctx->rip = frame->rip;
+    ctx->rflags = frame->rflags;
+    g_current_process->ctx = *ctx;
+    if (g_ctx_watch_ctx == (uint64_t)(uintptr_t)ctx) {
         g_ctx_watch_last_ctx = g_ctx_watch_ctx;
-        g_ctx_watch_last_rip = g_current_process->ctx.rip;
-        g_ctx_watch_last_rsp = g_current_process->ctx.rsp;
-        g_ctx_watch_last_rflags = g_current_process->ctx.rflags;
+        g_ctx_watch_last_rip = ctx->rip;
+        g_ctx_watch_last_rsp = ctx->rsp;
+        g_ctx_watch_last_rflags = ctx->rflags;
         g_ctx_watch_reason = 2;
         g_ctx_watch_hits++;
         trace_write("[sched] ctxwatch preempt pid=");

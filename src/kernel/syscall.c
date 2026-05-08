@@ -1,5 +1,6 @@
 #include "syscall.h"
 #include "ipc.h"
+#include "memory.h"
 #include "process.h"
 #include "thread.h"
 #include "serial.h"
@@ -30,6 +31,8 @@ static uint32_t g_ipc_call_echo_endpoint = IPC_ENDPOINT_NONE;
 static uint32_t g_ipc_call_control_deny_endpoint = IPC_ENDPOINT_NONE;
 static uint32_t g_ipc_notify_control_deny_endpoint = IPC_ENDPOINT_NONE;
 #define SYSCALL_IPC_PENDING_DEPTH 8u
+#define USER_CS_SELECTOR 0x1Bu
+#define USER_DS_SELECTOR 0x23u
 
 typedef struct {
     uint8_t in_use;
@@ -352,19 +355,60 @@ x86_syscall_handler(syscall_frame_t *frame)
     }
     case WASMOS_SYSCALL_THREAD_CREATE: {
         process_t *proc = process_get(process_current_pid());
+        thread_t *thread = 0;
+        uint32_t tid = 0;
+        uint64_t entry_rip = frame->rdi;
+        uint64_t user_stack_top = frame->rsi;
+        uint64_t user_root = 0;
         if (!proc) {
             return (uint64_t)-1;
         }
         if (!g_ring3_thread_create_logged && (frame->cs & 0x3u) == 0x3u &&
             name_eq(proc->name, "ring3-native")) {
             g_ring3_thread_create_logged = 1;
-            serial_write("[test] ring3 thread create syscall scaffold ok\n");
+            serial_write("[test] ring3 thread create syscall ok\n");
         }
-        /* FIXME(threading-phase-c): Implement per-thread user register context
-         * (RIP/RSP/CS/SS) and thread-owned context switching before enabling
-         * THREAD_CREATE for user mode. Current scheduler still executes user
-         * mode through process-owned ctx (`proc->ctx`) only. */
-        return (uint64_t)-1;
+        if (user_stack_top == 0 || entry_rip == 0) {
+            return (uint64_t)-1;
+        }
+        if ((user_stack_top & 0xFULL) != 0) {
+            user_stack_top &= ~0xFULL;
+        }
+        if (thread_spawn_in_owner(proc->pid,
+                                  "user-thread",
+                                  THREAD_STATE_BLOCKED,
+                                  THREAD_BLOCK_NONE,
+                                  &tid) != 0) {
+            return (uint64_t)-1;
+        }
+        thread = thread_get(tid);
+        if (!thread) {
+            thread_reap(tid);
+            return (uint64_t)-1;
+        }
+        user_root = mm_context_root_table(proc->context_id);
+        if (user_root == 0) {
+            thread_reap(tid);
+            return (uint64_t)-1;
+        }
+        thread->ctx.rip = entry_rip;
+        thread->ctx.user_rsp = user_stack_top;
+        thread->ctx.cs = USER_CS_SELECTOR;
+        thread->ctx.ss = USER_DS_SELECTOR;
+        thread->ctx.rflags = 0x200;
+        thread->ctx.root_table = user_root;
+        thread->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
+        thread->ticks_remaining = thread->time_slice_ticks;
+        thread->ticks_total = 0;
+        proc->thread_count++;
+        proc->live_thread_count++;
+        if (process_wake_thread(tid) == 0) {
+            proc->thread_count--;
+            proc->live_thread_count--;
+            thread_reap(tid);
+            return (uint64_t)-1;
+        }
+        return tid;
     }
     case WASMOS_SYSCALL_WAIT: {
         process_t *proc = process_get(process_current_pid());

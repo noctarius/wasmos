@@ -2357,6 +2357,10 @@ kmain(boot_info_t *boot_info)
                 __asm__ volatile("hlt");
             }
         }
+        /* TODO(threading-phase-c): Integrate the dedicated ring3 thread
+         * lifecycle probe into strict startup once process-slot headroom is
+         * increased or late-spawn sequencing avoids ring3 mixed-stress spawn
+         * pressure in the current boot path. */
         process_t *ring3_smoke_proc = process_get(ring3_smoke_pid);
         process_t *ring3_native_proc = process_get(ring3_native_pid);
         if (!ring3_smoke_proc || !ring3_native_proc) {

@@ -491,6 +491,9 @@ Test discipline:
 
 - keep test binaries tiny and deterministic
 - avoid parallel integration test runs (shared mutable `build/esp`)
+- keep cross-thread ring3 lifecycle smoke on a dedicated opt-in target
+  (`run-qemu-ring3-threading-test`) so baseline strict ring3 startup remains
+  deterministic
 
 ---
 

@@ -1,5 +1,5 @@
 set(LDFLAGS_KERNEL -nostdlib -T ${KERNEL_DIR}/arch/x86_64/linker.ld)
-set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -mcmodel=kernel ${WASMOS_TRACE_DEFINE} ${WASMOS_RING3_SMOKE_DEFINE} -I${WASM_DIR}/wasm3/source -Wno-unused-parameter)
+set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -mcmodel=kernel ${WASMOS_TRACE_DEFINE} ${WASMOS_RING3_SMOKE_DEFINE} ${WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFINE} -I${WASM_DIR}/wasm3/source -Wno-unused-parameter)
 set(CFLAGS_WASM3 ${CFLAGS_KERNEL} -I${WASM_DIR}/wasm3/source -Dd_m3HasFloat=0 -Wno-unused-parameter -Wno-unused-variable)
 
 set(RING3_NATIVE_PROBE_SRC ${KERNEL_DIR}/ring3_native_probe.c)

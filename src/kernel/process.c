@@ -692,10 +692,17 @@ static void process_wake_waiters(uint32_t target_pid) {
         if (proc->wait_target_pid != target_pid) {
             continue;
         }
+        thread_t *waiter = process_thread_for_transition(proc);
         proc->block_reason = PROCESS_BLOCK_NONE;
         proc->wait_target_pid = 0;
-        proc->state = PROCESS_STATE_READY;
-        ready_queue_enqueue(process_main_thread(proc));
+        if (!waiter) {
+            /* TODO(threading-phase-d): If no waiter thread can be resolved,
+             * add per-thread wait-target bookkeeping so wake paths can remain
+             * precise under future multi-waiter semantics. */
+            continue;
+        }
+        process_set_ready(proc, waiter);
+        ready_queue_enqueue(waiter);
     }
 }
 

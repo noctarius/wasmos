@@ -457,10 +457,9 @@ Current status:
   runnable through the existing scheduler path
 - syscall ABI now also includes initial `thread_join` handling and strict
   native ring3 coverage markers (`[test] ring3 thread join syscall ok`,
-  `[test] ring3 thread join self deny ok`); current scope validates syscall
-  entry plus self-join rejection, while full cross-thread join success coverage
-  remains a follow-up once strict startup headroom allows a dedicated ring3
-  lifecycle probe process
+  `[test] ring3 thread join self deny ok`); dedicated strict ring3 threading
+  smoke now runs via `run-qemu-ring3-threading-test` and validates join/detach
+  syscall lifecycle signals without changing baseline strict startup pressure
 - syscall ABI now also includes initial `thread_detach` handling and strict
   native ring3 coverage markers (`[test] ring3 thread detach syscall ok`,
   `[test] ring3 thread detach invalid deny ok`); detached threads are now
@@ -473,6 +472,13 @@ Exit criteria:
 ## Phase D: Ring3 + Hardening
 
 - Full ring3 thread context handling, join/kill race hardening, trace coverage.
+
+Current status:
+
+- in progress
+- wait-target wakeups now resume the actual blocked waiter thread selected via
+  scheduler transition state (instead of always waking process main thread),
+  which hardens process-exit wake behavior for multi-thread waiters
 
 ---
 

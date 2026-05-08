@@ -98,6 +98,7 @@ cmake --build build --target run-qemu-ui-test
 cmake --build build --target run-qemu-test
 cmake --build build --target run-qemu-cli-test
 cmake --build build --target run-qemu-ring3-test
+cmake --build build --target run-qemu-ring3-threading-test
 ```
 
 Target summary:
@@ -106,6 +107,7 @@ Target summary:
 - `run-qemu-test`: compile + boot + halt smoke
 - `run-qemu-cli-test`: CLI integration suite
 - `run-qemu-ring3-test`: strict ring-3 smoke path
+- `run-qemu-ring3-threading-test`: opt-in strict ring-3 threading smoke (ring3-threading spawn + ring3 thread `create`/`join`/`detach` syscall markers)
 
 ## Startup Model
 Boot sequence (high level):

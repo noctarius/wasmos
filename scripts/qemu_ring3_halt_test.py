@@ -10,6 +10,7 @@ def main():
     parser.add_argument("--ovmf-vars", default="")
     parser.add_argument("--esp", default="")
     parser.add_argument("--timeout", type=int, default=120)
+    parser.add_argument("--require-threading", action="store_true")
     args = parser.parse_args()
 
     if args.ovmf_code or args.esp:
@@ -75,6 +76,15 @@ def main():
         b"[test] ring3 shmem owner deny ok",
         b"[test] ring3 shmem grant allow ok",
     ]
+    if args.require_threading:
+        required.extend(
+            [
+                b"[kernel] ring3 threading pid=",
+                b"[test] ring3 thread create syscall ok",
+                b"[test] ring3 thread join syscall ok",
+                b"[test] ring3 thread detach syscall ok",
+            ]
+        )
 
     with QemuSession(cfg, timeout_s=args.timeout) as session:
         for needle in required:

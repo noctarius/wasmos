@@ -35,6 +35,8 @@ static const boot_info_t *g_boot_info;
 static boot_info_t g_boot_info_shadow;
 extern const uint8_t _binary_ring3_native_probe_bin_start[];
 extern const uint8_t _binary_ring3_native_probe_bin_end[];
+extern const uint8_t _binary_ring3_thread_lifecycle_probe_bin_start[];
+extern const uint8_t _binary_ring3_thread_lifecycle_probe_bin_end[];
 
 typedef struct {
     uint64_t addr;
@@ -95,10 +97,15 @@ static const uint8_t g_skip_wasm_boot = 0;
 #ifndef WASMOS_RING3_SMOKE_DEFAULT
 #define WASMOS_RING3_SMOKE_DEFAULT 0
 #endif
+#ifndef WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFAULT
+#define WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFAULT 0
+#endif
 /* Keep adversarial smoke probes opt-in for dedicated ring3 test targets; they
  * add noise to normal boot/CLI workflows and are not required for baseline
  * ring3 policy mode. */
 static const uint8_t g_ring3_smoke_enabled = WASMOS_RING3_SMOKE_DEFAULT;
+static const uint8_t g_ring3_thread_lifecycle_smoke_enabled =
+    WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFAULT;
 
 typedef struct {
     uint32_t fault_pid;
@@ -1560,6 +1567,74 @@ spawn_ring3_native_probe_process(uint32_t parent_pid, uint32_t *out_pid)
 }
 
 static int
+spawn_ring3_thread_lifecycle_probe_process(uint32_t parent_pid, uint32_t *out_pid)
+{
+    process_t *proc = 0;
+    mm_context_t *ctx = 0;
+    mem_region_t linear = {0};
+    mem_region_t stack = {0};
+    uint64_t user_rip = 0;
+    uint64_t user_rsp = 0;
+    const uint8_t *src = _binary_ring3_thread_lifecycle_probe_bin_start;
+    uint32_t code_size = (uint32_t)((uintptr_t)_binary_ring3_thread_lifecycle_probe_bin_end -
+                                    (uintptr_t)_binary_ring3_thread_lifecycle_probe_bin_start);
+
+    if (!out_pid || !src || code_size == 0) {
+        return -1;
+    }
+    if (process_spawn_as(parent_pid, "ring3-threading", ring3_probe_bootstrap_entry, 0, out_pid) != 0) {
+        return -1;
+    }
+    proc = process_get(*out_pid);
+    if (!proc) {
+        return -1;
+    }
+    ctx = mm_context_get(proc->context_id);
+    if (!ctx) {
+        return -1;
+    }
+    if (mm_context_region_for_type(ctx, MEM_REGION_WASM_LINEAR, &linear) != 0 ||
+        mm_context_region_for_type(ctx, MEM_REGION_STACK, &stack) != 0) {
+        return -1;
+    }
+    if (linear.phys_base == 0 || linear.size < code_size || stack.base == 0 || stack.size < 16u) {
+        return -1;
+    }
+    if (map_linear_pages(ctx->root_table,
+                         linear.base,
+                         linear.phys_base,
+                         code_size,
+                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) != 0) {
+        return -1;
+    }
+    if (mm_copy_to_user(proc->context_id, linear.base, src, code_size) != 0) {
+        return -1;
+    }
+    if (map_linear_pages(ctx->root_table,
+                         linear.base,
+                         linear.phys_base,
+                         code_size,
+                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_EXEC | MEM_REGION_FLAG_USER) != 0) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < ctx->region_count; ++i) {
+        mem_region_t *region = &ctx->regions[i];
+        if (region->type == MEM_REGION_WASM_LINEAR) {
+            region->flags |= MEM_REGION_FLAG_EXEC;
+            region->flags &= ~MEM_REGION_FLAG_WRITE;
+            break;
+        }
+    }
+    user_rip = linear.base;
+    user_rsp = stack.base + stack.size - 16u;
+    if (process_set_user_entry(*out_pid, user_rip, user_rsp) != 0) {
+        return -1;
+    }
+    serial_printf("[kernel] ring3 threading pid=%016llx\n", (unsigned long long)*out_pid);
+    return 0;
+}
+
+static int
 spawn_ring3_fault_probe_named(uint32_t parent_pid,
                               const char *name,
                               const uint8_t *code,
@@ -2129,6 +2204,7 @@ kmain(boot_info_t *boot_info)
     uint32_t threading_ipc_stress_pid = 0;
     uint32_t ring3_smoke_pid = 0;
     uint32_t ring3_native_pid = 0;
+    uint32_t ring3_threading_pid = 0;
     uint32_t ring3_fault_pid = 0;
     uint32_t ring3_fault_write_pid = 0;
     uint32_t ring3_fault_exec_pid = 0;
@@ -2357,10 +2433,14 @@ kmain(boot_info_t *boot_info)
                 __asm__ volatile("hlt");
             }
         }
-        /* TODO(threading-phase-c): Integrate the dedicated ring3 thread
-         * lifecycle probe into strict startup once process-slot headroom is
-         * increased or late-spawn sequencing avoids ring3 mixed-stress spawn
-         * pressure in the current boot path. */
+        if (g_ring3_thread_lifecycle_smoke_enabled) {
+            if (spawn_ring3_thread_lifecycle_probe_process(init_pid, &ring3_threading_pid) != 0) {
+                serial_write("[kernel] ring3 threading spawn failed\n");
+                for (;;) {
+                    __asm__ volatile("hlt");
+                }
+            }
+        }
         process_t *ring3_smoke_proc = process_get(ring3_smoke_pid);
         process_t *ring3_native_proc = process_get(ring3_native_pid);
         if (!ring3_smoke_proc || !ring3_native_proc) {

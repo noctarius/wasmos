@@ -37,7 +37,11 @@ validated in baseline smoke (`[test] threading internal worker ok`,
 coverage for `gettid`, `thread_yield`, `thread_exit`, functional
 `thread_create` with per-thread user context setup, and initial
 `thread_join` and `thread_detach` path coverage (including self-join deny and
-detach invalid-argument deny markers).
+detach invalid-argument deny markers). A separate opt-in strict ring3
+thread-lifecycle profile is now available via `run-qemu-ring3-threading-test`
+to validate strict ring3 threading signals (ring3-threading spawn plus thread
+create/join/detach syscall markers) without altering baseline strict startup
+behavior.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

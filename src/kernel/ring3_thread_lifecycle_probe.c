@@ -1,13 +1,18 @@
 #include <stdint.h>
 #include "wasmos/syscall_x86_64.h"
 
-static uint8_t g_join_stack[4096] __attribute__((aligned(16)));
-static uint8_t g_detach_stack[4096] __attribute__((aligned(16)));
+static uint64_t
+stack_aligned(uint64_t sp)
+{
+    return sp & ~0xFULL;
+}
 
 static uint64_t
-stack_top_for(uint8_t *stack, uint64_t size)
+current_sp(void)
 {
-    return ((uint64_t)(uintptr_t)(stack + size)) & ~0xFULL;
+    uint64_t sp = 0;
+    __asm__ volatile("mov %%rsp, %0" : "=r"(sp));
+    return sp;
 }
 
 static void
@@ -25,14 +30,17 @@ detach_helper_thread(void)
 void
 _start(void)
 {
-    int64_t join_tid = wasmos_sys_thread_create((uint64_t)(uintptr_t)join_helper_thread,
-                                                stack_top_for(g_join_stack, sizeof(g_join_stack)));
+    uint64_t sp = stack_aligned(current_sp());
+    uint64_t join_stack_top = stack_aligned(sp - 0x200u);
+    uint64_t detach_stack_top = stack_aligned(sp - 0x800u);
+
+    int64_t join_tid = wasmos_sys_thread_create((uint64_t)(uintptr_t)join_helper_thread, join_stack_top);
     if (join_tid > 0) {
         (void)wasmos_sys_thread_join((uint32_t)join_tid);
     }
 
-    int64_t detach_tid = wasmos_sys_thread_create((uint64_t)(uintptr_t)detach_helper_thread,
-                                                  stack_top_for(g_detach_stack, sizeof(g_detach_stack)));
+    int64_t detach_tid =
+        wasmos_sys_thread_create((uint64_t)(uintptr_t)detach_helper_thread, detach_stack_top);
     if (detach_tid > 0) {
         (void)wasmos_sys_thread_detach((uint32_t)detach_tid);
         (void)wasmos_sys_thread_join((uint32_t)detach_tid);

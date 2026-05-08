@@ -1,66 +1,54 @@
 #include <stdint.h>
 #include "wasmos/syscall_x86_64.h"
-#include "wasmos/thread_x86_64.h"
 
-static uint8_t g_join_stack[0x600];
-static uint8_t g_detach_stack[0x600];
-static int32_t g_spawn_join_status;
-static int32_t g_spawn_detach_status;
-static int32_t g_join_result;
-static int32_t g_detach_result;
+static uint64_t
+stack_aligned(uint64_t sp)
+{
+    return sp & ~0xFULL;
+}
+
+static uint64_t
+current_sp(void)
+{
+    uint64_t sp = 0;
+    __asm__ volatile("mov %%rsp, %0" : "=r"(sp));
+    return sp;
+}
 
 static void
-join_helper_thread(void *arg)
+join_helper_thread(void)
 {
-    (void)arg;
     wasmos_sys_thread_exit(7);
 }
 
 static void
-detach_helper_thread(void *arg)
+detach_helper_thread(void)
 {
-    (void)arg;
     wasmos_sys_thread_exit(0);
-}
-
-static void
-capture_status(void *ctx, int32_t status)
-{
-    int32_t *slot = (int32_t *)ctx;
-    if (slot) {
-        *slot = status;
-    }
 }
 
 void
 _start(void)
 {
-    uint32_t join_tid = 0;
-    uint32_t detach_tid = 0;
+    uint64_t sp = stack_aligned(current_sp());
+    uint64_t join_stack_top = stack_aligned(sp);
+    uint64_t detach_stack_top = stack_aligned(sp - 0x80u);
 
-    g_spawn_join_status = wasmos_thread_spawn_cont(g_join_stack,
-                                                   sizeof(g_join_stack),
-                                                   join_helper_thread,
-                                                   NULL,
-                                                   capture_status,
-                                                   &g_spawn_join_status,
-                                                   &join_tid);
-    if (g_spawn_join_status > 0) {
-        g_join_result = wasmos_thread_join_cont(join_tid, capture_status, &g_join_result);
+    int64_t join_tid = wasmos_sys_thread_create((uint64_t)(uintptr_t)join_helper_thread, join_stack_top);
+    if (join_tid > 0) {
+        (void)wasmos_sys_thread_join((uint32_t)join_tid);
     }
 
-    g_spawn_detach_status = wasmos_thread_spawn_cont(g_detach_stack,
-                                                     sizeof(g_detach_stack),
-                                                     detach_helper_thread,
-                                                     NULL,
-                                                     capture_status,
-                                                     &g_spawn_detach_status,
-                                                     &detach_tid);
-    if (g_spawn_detach_status > 0) {
-        g_detach_result = wasmos_thread_detach_cont(detach_tid, capture_status, &g_detach_result);
-        (void)wasmos_sys_thread_join(detach_tid);
+    int64_t detach_tid =
+        wasmos_sys_thread_create((uint64_t)(uintptr_t)detach_helper_thread, detach_stack_top);
+    if (detach_tid > 0) {
+        (void)wasmos_sys_thread_detach((uint32_t)detach_tid);
+        (void)wasmos_sys_thread_join((uint32_t)detach_tid);
     }
 
+    /* TODO(threading): migrate this probe to wasmos/thread_x86_64.h once
+     * ring3-threading startup guarantees writable user stack space for wrapper
+     * bootstrap metadata writes. */
     for (uint32_t i = 0; i < 16u; ++i) {
         (void)wasmos_sys_thread_yield();
     }

@@ -464,8 +464,10 @@ Current status:
   native ring3 coverage markers (`[test] ring3 thread detach syscall ok`,
   `[test] ring3 thread detach invalid deny ok`); detached threads are now
   marked non-joinable and auto-reaped on exit in scheduler exit paths
-- native ring3 lifecycle probe now uses a user-facing continuation-style thread
-  wrapper API (`wasmos/thread_x86_64.h`) for spawn/join/detach flow coverage
+- user-facing continuation-style thread wrapper API
+  (`wasmos/thread_x86_64.h`) is now available for native ring3 callers; the
+  strict lifecycle probe currently keeps raw-syscall flow until its early
+  stack-writability constraints are widened
 
 Exit criteria:
 

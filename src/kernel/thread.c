@@ -59,6 +59,7 @@ thread_reset_slot(thread_t *thread)
     thread->ticks_total = 0;
     thread_clear_ctx(&thread->ctx);
     thread->join_waiter_tid = 0;
+    thread->detached = 0;
     thread->exit_status = 0;
     for (uint32_t i = 0; i < THREAD_NAME_MAX; ++i) {
         thread->name_storage[i] = '\0';
@@ -143,6 +144,7 @@ thread_spawn_in_owner(uint32_t owner_pid,
     slot->ticks_total = 0;
     thread_clear_ctx(&slot->ctx);
     slot->join_waiter_tid = 0;
+    slot->detached = 0;
     slot->exit_status = 0;
     if (thread_copy_name(slot, name ? name : "") != 0) {
         thread_reset_slot(slot);

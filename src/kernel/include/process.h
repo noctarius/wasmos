@@ -148,6 +148,7 @@ void process_set_exit_status(process_t *process, int32_t exit_status);
 void process_block_on_ipc(process_t *process);
 int process_wait(process_t *process, uint32_t target_pid, int32_t *out_exit_status);
 int process_thread_join(process_t *process, uint32_t target_tid, int32_t *out_exit_status);
+int process_thread_detach(process_t *process, uint32_t target_tid);
 int process_kill(uint32_t pid, int32_t exit_status);
 int process_get_exit_status(uint32_t pid, int32_t *out_exit_status);
 uint32_t process_wake_by_context(uint32_t context_id);

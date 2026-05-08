@@ -15,7 +15,8 @@ typedef enum {
     WASMOS_SYSCALL_THREAD_YIELD = 8,
     WASMOS_SYSCALL_THREAD_EXIT = 9,
     WASMOS_SYSCALL_THREAD_CREATE = 10,
-    WASMOS_SYSCALL_THREAD_JOIN = 11
+    WASMOS_SYSCALL_THREAD_JOIN = 11,
+    WASMOS_SYSCALL_THREAD_DETACH = 12
 } wasmos_syscall_id_t;
 
 /* int 0x80 syscall ABI (current minimal contract):
@@ -48,6 +49,8 @@ typedef enum {
  *                   RIP/RSP/CS/SS/root-table context initialized per-thread.
  * - THREAD_JOIN:    RDI=target_tid; RAX=target_exit_status on success, -1 on
  *                   error. Calling thread blocks until target exits.
+ * - THREAD_DETACH:  RDI=target_tid; RAX=0 on success, -1 on error. Detached
+ *                   threads are not joinable and are reaped automatically.
  */
 typedef struct {
     uint64_t r15;

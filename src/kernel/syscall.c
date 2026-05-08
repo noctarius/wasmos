@@ -28,8 +28,11 @@ static uint8_t g_ring3_native_gettid_logged;
 static uint8_t g_ring3_thread_create_logged;
 static uint8_t g_ring3_thread_join_logged;
 static uint8_t g_ring3_thread_join_self_deny_logged;
+static uint8_t g_ring3_thread_join_helper_ok_logged;
 static uint8_t g_ring3_thread_detach_logged;
 static uint8_t g_ring3_thread_detach_invalid_deny_logged;
+static uint8_t g_ring3_thread_detach_helper_ok_logged;
+static uint8_t g_ring3_thread_detach_join_deny_logged;
 static uint32_t g_syscall_ipc_call_next_request_id = 1;
 static uint32_t g_ipc_call_echo_endpoint = IPC_ENDPOINT_NONE;
 static uint32_t g_ipc_call_control_deny_endpoint = IPC_ENDPOINT_NONE;
@@ -434,6 +437,13 @@ x86_syscall_handler(syscall_frame_t *frame)
         for (;;) {
             join_rc = process_thread_join(proc, target_tid, &exit_status);
             if (join_rc == 0) {
+                if (!g_ring3_thread_join_helper_ok_logged &&
+                    (frame->cs & 0x3u) == 0x3u &&
+                    name_eq(proc->name, "ring3-threading") &&
+                    target_tid != self_tid) {
+                    g_ring3_thread_join_helper_ok_logged = 1;
+                    serial_write("[test] ring3 thread join helper ok\n");
+                }
                 return (uint64_t)(int64_t)exit_status;
             }
             if (join_rc < 0) {
@@ -443,6 +453,13 @@ x86_syscall_handler(syscall_frame_t *frame)
                     target_tid == self_tid) {
                     g_ring3_thread_join_self_deny_logged = 1;
                     serial_write("[test] ring3 thread join self deny ok\n");
+                }
+                if (!g_ring3_thread_detach_join_deny_logged &&
+                    (frame->cs & 0x3u) == 0x3u &&
+                    name_eq(proc->name, "ring3-threading") &&
+                    target_tid != self_tid) {
+                    g_ring3_thread_detach_join_deny_logged = 1;
+                    serial_write("[test] ring3 thread detach join deny ok\n");
                 }
                 return (uint64_t)-1;
             }
@@ -474,6 +491,13 @@ x86_syscall_handler(syscall_frame_t *frame)
                 serial_write("[test] ring3 thread detach invalid deny ok\n");
             }
             return (uint64_t)-1;
+        }
+        if (!g_ring3_thread_detach_helper_ok_logged &&
+            (frame->cs & 0x3u) == 0x3u &&
+            name_eq(proc->name, "ring3-threading") &&
+            target_tid != thread_current_tid()) {
+            g_ring3_thread_detach_helper_ok_logged = 1;
+            serial_write("[test] ring3 thread detach helper ok\n");
         }
         return 0;
     }

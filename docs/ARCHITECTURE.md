@@ -38,8 +38,8 @@ coverage for `gettid`, `thread_yield`, `thread_exit`, functional
 `thread_create` with per-thread user context setup, and initial
 `thread_join` and `thread_detach` path coverage (including self-join deny and
 detach invalid-argument deny markers), plus a user-facing continuation-style
-native thread wrapper API (`wasmos/thread_x86_64.h`) exercised by ring3
-thread lifecycle smoke. A separate opt-in strict ring3
+native thread wrapper API (`wasmos/thread_x86_64.h`) for native ring3
+callers. A separate opt-in strict ring3
 thread-lifecycle profile is now available via `run-qemu-ring3-threading-test`
 to validate strict ring3 threading signals (ring3-threading spawn plus thread
 create/join/detach syscall markers). The lifecycle profile now also checks

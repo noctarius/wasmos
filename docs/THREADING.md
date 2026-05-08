@@ -443,7 +443,7 @@ Exit criteria:
 
 Current status:
 
-- in progress
+- complete for current scope
 - syscall ABI now includes `gettid` and `thread_yield` for native ring3
   callers, with strict ring3 smoke markers:
   `[test] ring3 native gettid ok` and `[test] ring3 thread yield syscall ok`
@@ -464,6 +464,8 @@ Current status:
   native ring3 coverage markers (`[test] ring3 thread detach syscall ok`,
   `[test] ring3 thread detach invalid deny ok`); detached threads are now
   marked non-joinable and auto-reaped on exit in scheduler exit paths
+- native ring3 lifecycle probe now uses a user-facing continuation-style thread
+  wrapper API (`wasmos/thread_x86_64.h`) for spawn/join/detach flow coverage
 
 Exit criteria:
 

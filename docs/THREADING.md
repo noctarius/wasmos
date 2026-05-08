@@ -451,6 +451,10 @@ Current status:
   `[test] ring3 thread exit syscall ok`; scheduler path now exits only the
   calling thread and preserves process execution while other threads remain
   live
+- syscall ABI now also includes `thread_create` as a validated scaffold
+  (`[test] ring3 thread create syscall scaffold ok`); current handler returns
+  `-1` until per-thread user register context (thread-owned RIP/RSP/CS/SS)
+  scheduling replaces process-owned user context dispatch
 
 Exit criteria:
 

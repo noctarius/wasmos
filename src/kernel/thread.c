@@ -58,6 +58,7 @@ thread_reset_slot(thread_t *thread)
     thread->ticks_remaining = 0;
     thread->ticks_total = 0;
     thread_clear_ctx(&thread->ctx);
+    thread->wait_target_pid = 0;
     thread->join_waiter_tid = 0;
     thread->detached = 0;
     thread->exit_status = 0;
@@ -143,6 +144,7 @@ thread_spawn_in_owner(uint32_t owner_pid,
     slot->ticks_remaining = 0;
     slot->ticks_total = 0;
     thread_clear_ctx(&slot->ctx);
+    slot->wait_target_pid = 0;
     slot->join_waiter_tid = 0;
     slot->detached = 0;
     slot->exit_status = 0;

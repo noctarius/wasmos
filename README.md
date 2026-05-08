@@ -42,6 +42,7 @@ It defines repository workflow and documentation/update conventions.
 - Threading Phase C now includes native ring3 `thread_create` coverage with per-thread user context setup (`[test] ring3 thread create syscall ok`)
 - Threading Phase C syscall baseline now includes native ring3 `thread_join` entry and self-join deny coverage (`[test] ring3 thread join syscall ok`, `[test] ring3 thread join self deny ok`)
 - Threading Phase C syscall baseline now includes native ring3 `thread_detach` entry and invalid-argument deny coverage (`[test] ring3 thread detach syscall ok`, `[test] ring3 thread detach invalid deny ok`)
+- Threading lifecycle smoke now also validates kill-while-blocked wait wakeup behavior (`[test] threading wait kill wake ok`)
 
 ## Quick Start
 
@@ -107,7 +108,7 @@ Target summary:
 - `run-qemu-test`: compile + boot + halt smoke
 - `run-qemu-cli-test`: CLI integration suite
 - `run-qemu-ring3-test`: strict ring-3 smoke path
-- `run-qemu-ring3-threading-test`: opt-in strict ring-3 threading smoke (ring3-threading spawn + ring3 thread `create`/`join`/`detach` syscall markers)
+- `run-qemu-ring3-threading-test`: opt-in strict ring-3 threading smoke (ring3-threading spawn + ring3 thread `create`/`join`/`detach` syscall markers + wait/kill wake marker)
 
 ## Startup Model
 Boot sequence (high level):

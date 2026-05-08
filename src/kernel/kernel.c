@@ -61,8 +61,14 @@ static preempt_test_state_t g_preempt_test_state;
 typedef struct {
     uint32_t worker_a_tid;
     uint32_t worker_b_tid;
+    uint32_t wait_killer_tid;
+    uint32_t wait_target_pid;
     uint8_t worker_a_ran;
     uint8_t worker_b_ran;
+    uint8_t wait_started;
+    uint8_t wait_done;
+    uint8_t wait_kill_sent;
+    int32_t wait_exit_status;
     uint8_t spawned;
     uint8_t done;
 } threading_internal_smoke_state_t;
@@ -745,11 +751,38 @@ threading_internal_worker_entry(process_t *process, uint32_t tid, void *arg)
 }
 
 static process_run_result_t
+threading_wait_target_entry(process_t *process, void *arg)
+{
+    (void)process;
+    (void)arg;
+    return PROCESS_RUN_YIELDED;
+}
+
+static process_run_result_t
+threading_wait_killer_entry(process_t *process, uint32_t tid, void *arg)
+{
+    threading_internal_smoke_state_t *state = (threading_internal_smoke_state_t *)arg;
+    (void)tid;
+    if (!process || !state || state->wait_target_pid == 0 || !state->wait_started) {
+        return PROCESS_RUN_YIELDED;
+    }
+    if (!state->wait_kill_sent) {
+        if (process_kill(state->wait_target_pid, 42) != 0) {
+            return PROCESS_RUN_EXITED;
+        }
+        state->wait_kill_sent = 1;
+    }
+    return PROCESS_RUN_EXITED;
+}
+
+static process_run_result_t
 threading_internal_smoke_entry(process_t *process, void *arg)
 {
     threading_internal_smoke_state_t *state = (threading_internal_smoke_state_t *)arg;
     thread_t *a = 0;
     thread_t *b = 0;
+    int32_t exit_status = 0;
+    int wait_rc = 0;
     if (!process || !state) {
         return PROCESS_RUN_IDLE;
     }
@@ -771,8 +804,38 @@ threading_internal_smoke_entry(process_t *process, void *arg)
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
+        if (g_ring3_thread_lifecycle_smoke_enabled) {
+            if (process_spawn_as(process->pid,
+                                 "thr-wait-target",
+                                 threading_wait_target_entry,
+                                 0,
+                                 &state->wait_target_pid) != 0 ||
+                process_thread_spawn_worker_internal(process->pid,
+                                                     "thr-wait-killer",
+                                                     threading_wait_killer_entry,
+                                                     state,
+                                                     &state->wait_killer_tid) != 0) {
+                serial_write("[test] threading wait/kill setup failed\n");
+                process_set_exit_status(process, -1);
+                return PROCESS_RUN_EXITED;
+            }
+        }
         state->spawned = 1;
         return PROCESS_RUN_YIELDED;
+    }
+    if (g_ring3_thread_lifecycle_smoke_enabled && !state->wait_done) {
+        state->wait_started = 1;
+        wait_rc = process_wait(process, state->wait_target_pid, &exit_status);
+        if (wait_rc == 0) {
+            state->wait_done = 1;
+            state->wait_exit_status = exit_status;
+        } else if (wait_rc < 0) {
+            serial_write("[test] threading wait/kill failed\n");
+            process_set_exit_status(process, -1);
+            return PROCESS_RUN_EXITED;
+        } else {
+            return PROCESS_RUN_BLOCKED;
+        }
     }
     a = thread_get(state->worker_a_tid);
     b = thread_get(state->worker_b_tid);
@@ -780,8 +843,13 @@ threading_internal_smoke_entry(process_t *process, void *arg)
         a->state == THREAD_STATE_ZOMBIE &&
         b->state == THREAD_STATE_ZOMBIE &&
         state->worker_a_ran &&
-        state->worker_b_ran) {
+        state->worker_b_ran &&
+        (!g_ring3_thread_lifecycle_smoke_enabled ||
+         (state->wait_done && state->wait_exit_status == 42))) {
         serial_write("[test] threading internal worker ok\n");
+        if (g_ring3_thread_lifecycle_smoke_enabled) {
+            serial_write("[test] threading wait kill wake ok\n");
+        }
         state->done = 1;
         process_set_exit_status(process, 0);
         return PROCESS_RUN_EXITED;

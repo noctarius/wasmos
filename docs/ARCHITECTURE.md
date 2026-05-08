@@ -40,8 +40,9 @@ coverage for `gettid`, `thread_yield`, `thread_exit`, functional
 detach invalid-argument deny markers). A separate opt-in strict ring3
 thread-lifecycle profile is now available via `run-qemu-ring3-threading-test`
 to validate strict ring3 threading signals (ring3-threading spawn plus thread
-create/join/detach syscall markers) without altering baseline strict startup
-behavior.
+create/join/detach syscall markers). The lifecycle profile now also checks
+kill-while-blocked wait wakeup behavior via `[test] threading wait kill wake ok`
+without altering baseline strict startup behavior.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

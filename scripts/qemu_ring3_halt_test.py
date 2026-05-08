@@ -83,6 +83,7 @@ def main():
                 b"[test] ring3 thread create syscall ok",
                 b"[test] ring3 thread join syscall ok",
                 b"[test] ring3 thread detach syscall ok",
+                b"[test] threading wait kill wake ok",
             ]
         )
 

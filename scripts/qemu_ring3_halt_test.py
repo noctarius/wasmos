@@ -24,6 +24,8 @@ def main():
         b"[test] ring3 native gettid ok",
         b"[test] ring3 thread exit syscall ok",
         b"[test] ring3 thread create syscall ok",
+        b"[test] ring3 thread join syscall ok",
+        b"[test] ring3 thread join self deny ok",
         b"[fault] user-pf pid=",
         b"reason=user_to_kernel",
         b"reason=write_violation",

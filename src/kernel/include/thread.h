@@ -39,6 +39,7 @@ typedef struct thread {
     uint32_t ticks_remaining;
     uint64_t ticks_total;
     process_context_t ctx;
+    uint32_t wait_target_pid;
     uint32_t join_waiter_tid;
     uint8_t detached;
     int32_t exit_status;

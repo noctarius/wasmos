@@ -461,6 +461,10 @@ Current status:
   entry plus self-join rejection, while full cross-thread join success coverage
   remains a follow-up once ring3-native creates and joins helper threads in the
   strict smoke path
+- syscall ABI now also includes initial `thread_detach` handling and strict
+  native ring3 coverage markers (`[test] ring3 thread detach syscall ok`,
+  `[test] ring3 thread detach invalid deny ok`); detached threads are now
+  marked non-joinable and auto-reaped on exit in scheduler exit paths
 
 Exit criteria:
 

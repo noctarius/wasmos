@@ -36,7 +36,8 @@ validated in baseline smoke (`[test] threading internal worker ok`,
 `[test] threading ipc stress ok`). Phase C now includes native ring3 syscall
 coverage for `gettid`, `thread_yield`, `thread_exit`, functional
 `thread_create` with per-thread user context setup, and initial
-`thread_join` path coverage (including self-join deny).
+`thread_join` and `thread_detach` path coverage (including self-join deny and
+detach invalid-argument deny markers).
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

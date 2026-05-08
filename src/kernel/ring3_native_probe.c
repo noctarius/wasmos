@@ -10,6 +10,8 @@ _start(void)
     (void)wasmos_sys_thread_yield();
     (void)wasmos_sys_thread_create(0, 0);
     (void)wasmos_sys_thread_join((uint32_t)wasmos_sys_gettid());
+    (void)wasmos_sys_thread_detach((uint32_t)wasmos_sys_gettid());
+    (void)wasmos_sys_thread_detach(0);
 
     for (uint32_t i = 0; i < 128u; ++i) {
         (void)wasmos_sys_getpid();

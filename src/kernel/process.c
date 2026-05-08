@@ -1176,6 +1176,9 @@ process_thread_join(process_t *process, uint32_t target_tid, int32_t *out_exit_s
     if (target->owner_pid != process->pid || caller->owner_pid != process->pid) {
         return -1;
     }
+    if (target->detached) {
+        return -1;
+    }
     if (target->state == THREAD_STATE_ZOMBIE) {
         if (out_exit_status) {
             *out_exit_status = target->exit_status;
@@ -1186,8 +1189,6 @@ process_thread_join(process_t *process, uint32_t target_tid, int32_t *out_exit_s
         }
         return 0;
     }
-    /* FIXME(threading-phase-c): Add detach-state tracking so join can reject
-     * detached threads explicitly once THREAD_DETACH is implemented. */
     if (target->join_waiter_tid != 0 && target->join_waiter_tid != caller_tid) {
         return -1;
     }
@@ -1195,6 +1196,38 @@ process_thread_join(process_t *process, uint32_t target_tid, int32_t *out_exit_s
     process_set_blocked(process, caller, PROCESS_BLOCK_WAIT, THREAD_BLOCK_WAIT_THREAD);
     process->wait_target_pid = 0;
     return 1;
+}
+
+int
+process_thread_detach(process_t *process, uint32_t target_tid)
+{
+    thread_t *target = 0;
+    uint32_t caller_tid = 0;
+    if (!process || target_tid == 0) {
+        return -1;
+    }
+    caller_tid = thread_current_tid();
+    if (caller_tid == 0) {
+        return -1;
+    }
+    target = thread_get(target_tid);
+    if (!target) {
+        return -1;
+    }
+    if (target->owner_pid != process->pid) {
+        return -1;
+    }
+    if (target->join_waiter_tid != 0 && target->join_waiter_tid != caller_tid) {
+        return -1;
+    }
+    target->detached = 1;
+    if (target->state == THREAD_STATE_ZOMBIE) {
+        thread_reap(target->tid);
+        if (process->thread_count > 0) {
+            process->thread_count--;
+        }
+    }
+    return 0;
 }
 
 int process_kill(uint32_t pid, int32_t exit_status) {
@@ -1396,10 +1429,13 @@ static int process_schedule_once_impl(void) {
     critical_section_leave();
 
     if (result == PROCESS_RUN_EXITED) {
+        uint8_t reap_detached = 0;
+        uint32_t exited_tid = thread->tid;
         if (thread->is_kernel_worker && thread->tid != proc->main_tid) {
             thread_set_state(thread->tid, THREAD_STATE_ZOMBIE, THREAD_BLOCK_NONE);
             thread_set_exit_status(thread->tid, proc->exit_status);
             process_wake_thread_joiner(proc, thread);
+            reap_detached = thread->detached;
             if (proc->live_thread_count > 0) {
                 proc->live_thread_count--;
             }
@@ -1413,11 +1449,20 @@ static int process_schedule_once_impl(void) {
         } else {
             process_mark_exited(proc, proc->exit_status);
         }
+        if (reap_detached) {
+            thread_reap(exited_tid);
+            if (proc->thread_count > 0) {
+                proc->thread_count--;
+            }
+        }
     } else if (result == PROCESS_RUN_THREAD_EXITED) {
         thread_t *next = 0;
+        uint8_t reap_detached = 0;
+        uint32_t exited_tid = thread->tid;
         thread_set_state(thread->tid, THREAD_STATE_ZOMBIE, THREAD_BLOCK_NONE);
         thread_set_exit_status(thread->tid, proc->exit_status);
         process_wake_thread_joiner(proc, thread);
+        reap_detached = thread->detached;
         if (proc->live_thread_count > 0) {
             proc->live_thread_count--;
         }
@@ -1430,6 +1475,12 @@ static int process_schedule_once_impl(void) {
                 ready_queue_enqueue(next);
             } else {
                 proc->state = PROCESS_STATE_BLOCKED;
+            }
+        }
+        if (reap_detached) {
+            thread_reap(exited_tid);
+            if (proc->thread_count > 0) {
+                proc->thread_count--;
             }
         }
     } else if (result == PROCESS_RUN_BLOCKED) {

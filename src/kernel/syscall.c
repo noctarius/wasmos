@@ -26,6 +26,8 @@ static uint8_t g_ring3_thread_exit_logged;
 static uint8_t g_ring3_native_abi_logged;
 static uint8_t g_ring3_native_gettid_logged;
 static uint8_t g_ring3_thread_create_logged;
+static uint8_t g_ring3_thread_join_logged;
+static uint8_t g_ring3_thread_join_self_deny_logged;
 static uint32_t g_syscall_ipc_call_next_request_id = 1;
 static uint32_t g_ipc_call_echo_endpoint = IPC_ENDPOINT_NONE;
 static uint32_t g_ipc_call_control_deny_endpoint = IPC_ENDPOINT_NONE;
@@ -409,6 +411,41 @@ x86_syscall_handler(syscall_frame_t *frame)
             return (uint64_t)-1;
         }
         return tid;
+    }
+    case WASMOS_SYSCALL_THREAD_JOIN: {
+        process_t *proc = process_get(process_current_pid());
+        uint32_t target_tid = 0;
+        int join_rc = -1;
+        int32_t exit_status = 0;
+        uint32_t self_tid = thread_current_tid();
+        if (!proc) {
+            return (uint64_t)-1;
+        }
+        if (!g_ring3_thread_join_logged && (frame->cs & 0x3u) == 0x3u &&
+            name_eq(proc->name, "ring3-native")) {
+            g_ring3_thread_join_logged = 1;
+            serial_write("[test] ring3 thread join syscall ok\n");
+        }
+        if (syscall_arg_u32(frame->rdi, &target_tid) != 0) {
+            return (uint64_t)-1;
+        }
+        for (;;) {
+            join_rc = process_thread_join(proc, target_tid, &exit_status);
+            if (join_rc == 0) {
+                return (uint64_t)(int64_t)exit_status;
+            }
+            if (join_rc < 0) {
+                if (!g_ring3_thread_join_self_deny_logged &&
+                    (frame->cs & 0x3u) == 0x3u &&
+                    name_eq(proc->name, "ring3-native") &&
+                    target_tid == self_tid) {
+                    g_ring3_thread_join_self_deny_logged = 1;
+                    serial_write("[test] ring3 thread join self deny ok\n");
+                }
+                return (uint64_t)-1;
+            }
+            process_yield(PROCESS_RUN_BLOCKED);
+        }
     }
     case WASMOS_SYSCALL_WAIT: {
         process_t *proc = process_get(process_current_pid());

@@ -40,6 +40,7 @@ It defines repository workflow and documentation/update conventions.
 - Threading Phase C syscall baseline now includes native ring3 `gettid` and `thread_yield` coverage (`[test] ring3 native gettid ok`, `[test] ring3 thread yield syscall ok`)
 - Threading Phase C syscall baseline now includes native ring3 `thread_exit` coverage (`[test] ring3 thread exit syscall ok`)
 - Threading Phase C now includes native ring3 `thread_create` coverage with per-thread user context setup (`[test] ring3 thread create syscall ok`)
+- Threading Phase C syscall baseline now includes native ring3 `thread_join` entry and self-join deny coverage (`[test] ring3 thread join syscall ok`, `[test] ring3 thread join self deny ok`)
 
 ## Quick Start
 

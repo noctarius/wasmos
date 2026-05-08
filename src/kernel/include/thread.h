@@ -18,7 +18,8 @@ typedef enum {
 typedef enum {
     THREAD_BLOCK_NONE = 0,
     THREAD_BLOCK_IPC,
-    THREAD_BLOCK_WAIT_PROCESS
+    THREAD_BLOCK_WAIT_PROCESS,
+    THREAD_BLOCK_WAIT_THREAD
 } thread_block_reason_t;
 
 typedef struct thread {
@@ -38,6 +39,7 @@ typedef struct thread {
     uint32_t ticks_remaining;
     uint64_t ticks_total;
     process_context_t ctx;
+    uint32_t join_waiter_tid;
     int32_t exit_status;
     char name_storage[THREAD_NAME_MAX];
     const char *name;

@@ -34,8 +34,9 @@ exit criterion satisfied: scheduler-active internal worker threads (dedicated
 kernel stacks + worker entrypoints) plus targeted multi-thread IPC stress are
 validated in baseline smoke (`[test] threading internal worker ok`,
 `[test] threading ipc stress ok`). Phase C now includes native ring3 syscall
-coverage for `gettid`, `thread_yield`, `thread_exit`, and functional
-`thread_create` with per-thread user context setup.
+coverage for `gettid`, `thread_yield`, `thread_exit`, functional
+`thread_create` with per-thread user context setup, and initial
+`thread_join` path coverage (including self-join deny).
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

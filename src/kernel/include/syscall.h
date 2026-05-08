@@ -14,7 +14,8 @@ typedef enum {
     WASMOS_SYSCALL_GETTID = 7,
     WASMOS_SYSCALL_THREAD_YIELD = 8,
     WASMOS_SYSCALL_THREAD_EXIT = 9,
-    WASMOS_SYSCALL_THREAD_CREATE = 10
+    WASMOS_SYSCALL_THREAD_CREATE = 10,
+    WASMOS_SYSCALL_THREAD_JOIN = 11
 } wasmos_syscall_id_t;
 
 /* int 0x80 syscall ABI (current minimal contract):
@@ -45,6 +46,8 @@ typedef enum {
  * - THREAD_CREATE:  RDI=entry_rip, RSI=user_stack_top; RAX=tid on success.
  *                   New thread is created in the caller process with user-mode
  *                   RIP/RSP/CS/SS/root-table context initialized per-thread.
+ * - THREAD_JOIN:    RDI=target_tid; RAX=target_exit_status on success, -1 on
+ *                   error. Calling thread blocks until target exits.
  */
 typedef struct {
     uint64_t r15;

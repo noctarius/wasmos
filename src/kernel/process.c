@@ -241,6 +241,7 @@ static process_t *process_owner_for_thread(thread_t *thread);
 static thread_t *process_thread_for_transition(process_t *proc);
 static thread_t *process_first_owner_ready_thread(process_t *proc);
 static process_context_t *process_sched_ctx_for_thread(process_t *proc, thread_t *thread);
+static void process_wake_thread_joiner(process_t *owner, thread_t *exited);
 static void process_sched_invariant_fail(const char *msg, uint64_t a, uint64_t b);
 static void process_set_blocked(process_t *proc, thread_t *thread, process_block_reason_t reason, thread_block_reason_t thread_reason);
 static void process_set_ready(process_t *proc, thread_t *thread);
@@ -1154,6 +1155,48 @@ int process_wait(process_t *process, uint32_t target_pid, int32_t *out_exit_stat
     return 1;
 }
 
+int
+process_thread_join(process_t *process, uint32_t target_tid, int32_t *out_exit_status)
+{
+    thread_t *target = 0;
+    thread_t *caller = 0;
+    uint32_t caller_tid = 0;
+    if (!process || target_tid == 0) {
+        return -1;
+    }
+    caller_tid = thread_current_tid();
+    if (caller_tid == 0 || caller_tid == target_tid) {
+        return -1;
+    }
+    target = thread_get(target_tid);
+    caller = thread_get(caller_tid);
+    if (!target || !caller) {
+        return -1;
+    }
+    if (target->owner_pid != process->pid || caller->owner_pid != process->pid) {
+        return -1;
+    }
+    if (target->state == THREAD_STATE_ZOMBIE) {
+        if (out_exit_status) {
+            *out_exit_status = target->exit_status;
+        }
+        thread_reap(target->tid);
+        if (process->thread_count > 0) {
+            process->thread_count--;
+        }
+        return 0;
+    }
+    /* FIXME(threading-phase-c): Add detach-state tracking so join can reject
+     * detached threads explicitly once THREAD_DETACH is implemented. */
+    if (target->join_waiter_tid != 0 && target->join_waiter_tid != caller_tid) {
+        return -1;
+    }
+    target->join_waiter_tid = caller_tid;
+    process_set_blocked(process, caller, PROCESS_BLOCK_WAIT, THREAD_BLOCK_WAIT_THREAD);
+    process->wait_target_pid = 0;
+    return 1;
+}
+
 int process_kill(uint32_t pid, int32_t exit_status) {
     process_t *target = process_find_by_pid(pid);
     if (!target) {
@@ -1356,6 +1399,7 @@ static int process_schedule_once_impl(void) {
         if (thread->is_kernel_worker && thread->tid != proc->main_tid) {
             thread_set_state(thread->tid, THREAD_STATE_ZOMBIE, THREAD_BLOCK_NONE);
             thread_set_exit_status(thread->tid, proc->exit_status);
+            process_wake_thread_joiner(proc, thread);
             if (proc->live_thread_count > 0) {
                 proc->live_thread_count--;
             }
@@ -1373,6 +1417,7 @@ static int process_schedule_once_impl(void) {
         thread_t *next = 0;
         thread_set_state(thread->tid, THREAD_STATE_ZOMBIE, THREAD_BLOCK_NONE);
         thread_set_exit_status(thread->tid, proc->exit_status);
+        process_wake_thread_joiner(proc, thread);
         if (proc->live_thread_count > 0) {
             proc->live_thread_count--;
         }
@@ -1733,4 +1778,31 @@ process_set_running(process_t *proc, thread_t *thread)
     }
     proc->state = PROCESS_STATE_RUNNING;
     thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
+}
+
+static void
+process_wake_thread_joiner(process_t *owner, thread_t *exited)
+{
+    thread_t *waiter = 0;
+    uint32_t waiter_tid = 0;
+    if (!owner || !exited) {
+        return;
+    }
+    waiter_tid = exited->join_waiter_tid;
+    if (waiter_tid == 0) {
+        return;
+    }
+    exited->join_waiter_tid = 0;
+    waiter = thread_get(waiter_tid);
+    if (!waiter) {
+        return;
+    }
+    if (waiter->owner_pid != owner->pid) {
+        return;
+    }
+    if (waiter->state != THREAD_STATE_BLOCKED) {
+        return;
+    }
+    process_set_ready(owner, waiter);
+    ready_queue_enqueue(waiter);
 }

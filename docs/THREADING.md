@@ -455,6 +455,12 @@ Current status:
   marker (`[test] ring3 thread create syscall ok`); new threads now start with
   thread-owned user register context (RIP/RSP/CS/SS/root-table) and are queued
   runnable through the existing scheduler path
+- syscall ABI now also includes initial `thread_join` handling and strict
+  native ring3 coverage markers (`[test] ring3 thread join syscall ok`,
+  `[test] ring3 thread join self deny ok`); current scope validates syscall
+  entry plus self-join rejection, while full cross-thread join success coverage
+  remains a follow-up once ring3-native creates and joins helper threads in the
+  strict smoke path
 
 Exit criteria:
 

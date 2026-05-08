@@ -13,7 +13,8 @@ typedef enum {
     WASMOS_SYSCALL_IPC_CALL = 6,
     WASMOS_SYSCALL_GETTID = 7,
     WASMOS_SYSCALL_THREAD_YIELD = 8,
-    WASMOS_SYSCALL_THREAD_EXIT = 9
+    WASMOS_SYSCALL_THREAD_EXIT = 9,
+    WASMOS_SYSCALL_THREAD_CREATE = 10
 } wasmos_syscall_id_t;
 
 /* int 0x80 syscall ABI (current minimal contract):
@@ -41,6 +42,9 @@ typedef enum {
  * - THREAD_YIELD:   RAX=0
  * - THREAD_EXIT:    RDI=exit_status; exits the current thread. If it is the
  *                   final live thread in the process, process exit follows.
+ * - THREAD_CREATE:  RDI=entry_rip, RSI=user_stack_top; RAX=tid on success.
+ *                   Phase C scaffold currently returns -1 until per-thread
+ *                   user-context scheduling is implemented.
  */
 typedef struct {
     uint64_t r15;

@@ -34,7 +34,7 @@ exit criterion satisfied: scheduler-active internal worker threads (dedicated
 kernel stacks + worker entrypoints) plus targeted multi-thread IPC stress are
 validated in baseline smoke (`[test] threading internal worker ok`,
 `[test] threading ipc stress ok`). Phase C has started with initial native
-ring3 syscall coverage for `gettid`, `thread_yield`, and `thread_exit`.
+ring3 syscall coverage for `gettid`, `thread_yield`, `thread_exit`, plus a `thread_create` ABI scaffold.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

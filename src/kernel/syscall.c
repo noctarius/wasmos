@@ -24,6 +24,7 @@ static uint8_t g_ring3_thread_yield_logged;
 static uint8_t g_ring3_thread_exit_logged;
 static uint8_t g_ring3_native_abi_logged;
 static uint8_t g_ring3_native_gettid_logged;
+static uint8_t g_ring3_thread_create_logged;
 static uint32_t g_syscall_ipc_call_next_request_id = 1;
 static uint32_t g_ipc_call_echo_endpoint = IPC_ENDPOINT_NONE;
 static uint32_t g_ipc_call_control_deny_endpoint = IPC_ENDPOINT_NONE;
@@ -348,6 +349,22 @@ x86_syscall_handler(syscall_frame_t *frame)
         process_set_exit_status(proc, (int32_t)frame->rdi);
         process_yield(PROCESS_RUN_THREAD_EXITED);
         return 0;
+    }
+    case WASMOS_SYSCALL_THREAD_CREATE: {
+        process_t *proc = process_get(process_current_pid());
+        if (!proc) {
+            return (uint64_t)-1;
+        }
+        if (!g_ring3_thread_create_logged && (frame->cs & 0x3u) == 0x3u &&
+            name_eq(proc->name, "ring3-native")) {
+            g_ring3_thread_create_logged = 1;
+            serial_write("[test] ring3 thread create syscall scaffold ok\n");
+        }
+        /* FIXME(threading-phase-c): Implement per-thread user register context
+         * (RIP/RSP/CS/SS) and thread-owned context switching before enabling
+         * THREAD_CREATE for user mode. Current scheduler still executes user
+         * mode through process-owned ctx (`proc->ctx`) only. */
+        return (uint64_t)-1;
     }
     case WASMOS_SYSCALL_WAIT: {
         process_t *proc = process_get(process_current_pid());

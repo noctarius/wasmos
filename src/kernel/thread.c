@@ -7,6 +7,36 @@ static uint32_t g_next_tid;
 static uint32_t g_current_tid;
 
 static void
+thread_clear_ctx(process_context_t *ctx)
+{
+    if (!ctx) {
+        return;
+    }
+    ctx->r15 = 0;
+    ctx->r14 = 0;
+    ctx->r13 = 0;
+    ctx->r12 = 0;
+    ctx->r11 = 0;
+    ctx->r10 = 0;
+    ctx->r9 = 0;
+    ctx->r8 = 0;
+    ctx->rdi = 0;
+    ctx->rsi = 0;
+    ctx->rbp = 0;
+    ctx->rdx = 0;
+    ctx->rcx = 0;
+    ctx->rbx = 0;
+    ctx->rax = 0;
+    ctx->rsp = 0;
+    ctx->rip = 0;
+    ctx->rflags = 0;
+    ctx->cs = 0;
+    ctx->ss = 0;
+    ctx->user_rsp = 0;
+    ctx->root_table = 0;
+}
+
+static void
 thread_reset_slot(thread_t *thread)
 {
     if (!thread) {
@@ -27,6 +57,7 @@ thread_reset_slot(thread_t *thread)
     thread->time_slice_ticks = 0;
     thread->ticks_remaining = 0;
     thread->ticks_total = 0;
+    thread_clear_ctx(&thread->ctx);
     thread->exit_status = 0;
     for (uint32_t i = 0; i < THREAD_NAME_MAX; ++i) {
         thread->name_storage[i] = '\0';
@@ -109,6 +140,7 @@ thread_spawn_in_owner(uint32_t owner_pid,
     slot->time_slice_ticks = 0;
     slot->ticks_remaining = 0;
     slot->ticks_total = 0;
+    thread_clear_ctx(&slot->ctx);
     slot->exit_status = 0;
     if (thread_copy_name(slot, name ? name : "") != 0) {
         thread_reset_slot(slot);

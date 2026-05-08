@@ -2,6 +2,7 @@
 #define WASMOS_THREAD_H
 
 #include <stdint.h>
+#include "process.h"
 
 #define THREAD_MAX_COUNT 128
 #define THREAD_NAME_MAX 64
@@ -36,6 +37,7 @@ typedef struct thread {
     uint32_t time_slice_ticks;
     uint32_t ticks_remaining;
     uint64_t ticks_total;
+    process_context_t ctx;
     int32_t exit_status;
     char name_storage[THREAD_NAME_MAX];
     const char *name;

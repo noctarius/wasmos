@@ -27,6 +27,12 @@ detach_helper_thread(void)
     wasmos_sys_thread_exit(0);
 }
 
+static void
+post_exit_helper_thread(void)
+{
+    wasmos_sys_thread_exit(9);
+}
+
 void
 _start(void)
 {
@@ -44,6 +50,16 @@ _start(void)
     if (detach_tid > 0) {
         (void)wasmos_sys_thread_detach((uint32_t)detach_tid);
         (void)wasmos_sys_thread_join((uint32_t)detach_tid);
+    }
+
+    /* Join-after-exit ordering probe: let target finish, then join. */
+    int64_t post_exit_tid =
+        wasmos_sys_thread_create((uint64_t)(uintptr_t)post_exit_helper_thread, detach_stack_top);
+    if (post_exit_tid > 0) {
+        for (uint32_t i = 0; i < 8u; ++i) {
+            (void)wasmos_sys_thread_yield();
+        }
+        (void)wasmos_sys_thread_join((uint32_t)post_exit_tid);
     }
 
     /* TODO(threading): migrate this probe to wasmos/thread_x86_64.h once

@@ -486,6 +486,9 @@ Current status:
 - dedicated threading smoke now includes a kill-while-blocked wait regression
   marker (`[test] threading wait kill wake ok`) to verify blocked waiters wake
   and observe kill exit status on target termination
+- dedicated threading smoke now also includes a focused join-after-exit probe
+  in the lifecycle app path to preserve regression coverage while keeping the
+  strict threading gate deterministic
 
 ---
 

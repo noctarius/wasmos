@@ -36,7 +36,7 @@ It defines repository workflow and documentation/update conventions.
 - Shared-memory app-pair smoke now also checks forged-ID deny, map-argument policy deny, and post-revoke stale-ID deny
 - Strict ring3 boot smoke now includes a kernel-level shared-memory misuse matrix marker (`[test] ring3 shmem misuse matrix ok`)
 - Kernel threading Phase B now includes schedulable internal worker threads with per-thread kernel stacks (`[test] threading internal worker ok`)
-- Kernel threading internal smoke now also validates in-process thread-join wake ordering (`[test] threading join wake order ok`)
+- Kernel threading join-order smoke now validates in-process thread-join wake ordering in a dedicated probe path (`[test] threading join wake order ok`)
 - Kernel threading Phase B now includes a targeted multi-thread IPC stress marker (`[test] threading ipc stress ok`)
 - Threading Phase C syscall baseline now includes native ring3 `gettid` and `thread_yield` coverage (`[test] ring3 native gettid ok`, `[test] ring3 thread yield syscall ok`)
 - Threading Phase C syscall baseline now includes native ring3 `thread_exit` coverage (`[test] ring3 thread exit syscall ok`)

@@ -52,6 +52,11 @@ Forward note: future deterministic kernel race/integration tests should use a
 centralized hook/instrumentation layer around kernel transition points (for
 example scheduler/process/thread lifecycle events) so orchestration logic does
 not spread as ad-hoc test fragments across runtime code paths.
+Build configuration now has a Kconfig-compatible entry point (`Kconfig`) plus
+`configs/wasmos_defconfig`, with CMake importing `build/.config` through
+`scripts/kconfig_to_cmake.py` when present. The imported scope is currently
+intentionally narrow (existing CMake toggles and a few key scalar values) to
+preserve minimalism and keep behavior deterministic.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

@@ -209,6 +209,29 @@ process_alloc_thread_stack(thread_t *thread, uint32_t stack_pages)
     return 0;
 }
 
+static void
+process_restore_stack_guard_mappings(uint64_t alloc_base_phys, uint32_t stack_pages)
+{
+    if (!alloc_base_phys || stack_pages == 0) {
+        return;
+    }
+    uint64_t total_pages = (uint64_t)stack_pages + (STACK_GUARD_PAGES * 2u);
+    uint64_t guard_low = alloc_base_phys;
+    uint64_t guard_high = alloc_base_phys + ((total_pages - STACK_GUARD_PAGES) * PAGE_SIZE);
+    uint64_t higher_half_base = paging_get_higher_half_base();
+
+    for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
+        uint64_t phys = guard_low + ((uint64_t)i * PAGE_SIZE);
+        uint64_t virt = higher_half_base + phys;
+        (void)paging_map_4k(virt, phys, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE);
+    }
+    for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
+        uint64_t phys = guard_high + ((uint64_t)i * PAGE_SIZE);
+        uint64_t virt = higher_half_base + phys;
+        (void)paging_map_4k(virt, phys, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE);
+    }
+}
+
 static process_run_result_t
 process_run_worker_on_stack(process_t *proc, thread_t *thread)
 {
@@ -762,6 +785,8 @@ static void process_reap(process_t *proc) {
         }
         if (thread->kstack_alloc_base_phys && thread->kstack_pages) {
             uint64_t total_pages = (uint64_t)thread->kstack_pages + (STACK_GUARD_PAGES * 2u);
+            process_restore_stack_guard_mappings((uint64_t)thread->kstack_alloc_base_phys,
+                                                 thread->kstack_pages);
             pfa_free_pages((uint64_t)thread->kstack_alloc_base_phys, total_pages);
             thread->kstack_alloc_base_phys = 0;
             thread->kstack_pages = 0;
@@ -771,6 +796,8 @@ static void process_reap(process_t *proc) {
     }
     if (proc->stack_alloc_base_phys && proc->stack_pages) {
         uint64_t total_pages = (uint64_t)proc->stack_pages + (STACK_GUARD_PAGES * 2u);
+        process_restore_stack_guard_mappings((uint64_t)proc->stack_alloc_base_phys,
+                                             proc->stack_pages);
         pfa_free_pages((uint64_t)proc->stack_alloc_base_phys, total_pages);
     }
     if (proc->context_id != 0) {

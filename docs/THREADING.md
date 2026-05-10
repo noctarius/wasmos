@@ -480,7 +480,7 @@ Exit criteria:
 
 Current status:
 
-- in progress
+- complete for current scope
 - wait-target wakeups now resume the actual blocked waiter thread selected via
   scheduler transition state (instead of always waking process main thread),
   which hardens process-exit wake behavior for multi-thread waiters
@@ -496,6 +496,12 @@ Current status:
 - dedicated threading lifecycle probe now uses dedicated per-thread user stacks
   (instead of tightly-offset current-`rsp` reuse) to keep detach/join deny
   marker emission deterministic under scheduler/fault pressure
+- dedicated strict-threading smoke now also validates join-after-kill ordering
+  and kill-during-join waiter wakeup markers (`[test] threading join after kill
+  order ok`, `[test] threading join kill wake ok`)
+- stack teardown now restores guard-page mappings before stack pages are
+  returned to the physical allocator so recycled pages remain reachable via the
+  shared higher-half alias window under strict threading stress
 
 ---
 

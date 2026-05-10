@@ -44,7 +44,12 @@ thread-lifecycle profile is now available via `run-qemu-ring3-threading-test`
 to validate strict ring3 threading signals (ring3-threading spawn plus thread
 create/join/detach syscall markers). The lifecycle profile now also checks
 kill-while-blocked wait wakeup behavior via `[test] threading wait kill wake ok`
-without altering baseline strict startup behavior.
+plus join-after-kill ordering and kill-during-join wakeup markers
+(`[test] threading join after kill order ok`,
+`[test] threading join kill wake ok`) without altering baseline strict startup
+behavior. Stack teardown now restores guard-page mappings before allocator free
+so recycled pages remain reachable through the shared higher-half alias window
+under strict threading stress.
 Forward note: future deterministic kernel race/integration tests should use a
 centralized hook/instrumentation layer around kernel transition points (for
 example scheduler/process/thread lifecycle events) so orchestration logic does

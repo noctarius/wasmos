@@ -45,6 +45,7 @@ It defines repository workflow and documentation/update conventions.
 - Threading Phase C syscall baseline now includes native ring3 `thread_detach` entry plus invalid-argument and detach-then-join deny coverage (`[test] ring3 thread detach syscall ok`, `[test] ring3 thread detach invalid deny ok`, `[test] ring3 thread detach join deny ok`)
 - Threading Phase C now includes a user-facing continuation-style native thread API wrapper (`wasmos/thread_x86_64.h`) for native ring3 callers
 - Threading lifecycle smoke now also validates kill-while-blocked wait wakeup behavior (`[test] threading wait kill wake ok`)
+- Threading Phase D hardening markers now include join-after-kill ordering and kill-during-join waiter wakeup checks (`[test] threading join after kill order ok`, `[test] threading join kill wake ok`)
 
 ## Quick Start
 

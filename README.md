@@ -73,8 +73,10 @@ cmake -S . -B build
 
 Notes:
 - `kconfig-defconfig` seeds `build/.config` from `configs/wasmos_defconfig`.
-- `menuconfig` reuses upstream `menuconfig` if installed and then imports
-  `build/.config` into CMake cache settings.
+- `menuconfig` auto-detects a frontend binary (`menuconfig`, `kconfig-mconf`,
+  or `mconf`), then imports `build/.config` into CMake cache settings.
+- If no frontend is installed, the target fails with an explicit install hint
+  (for macOS: `brew install kconfig-frontends`).
 - Current Kconfig symbols cover the core toggles already used by CMake:
   language example switches, tracing/ring3 smoke flags, kernel target triple,
   and QEMU GDB port.

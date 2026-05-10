@@ -458,15 +458,22 @@ if (WASMOS_MENUCONFIG_BIN)
   )
 else ()
   add_custom_target(menuconfig
-    COMMAND ${CMAKE_COMMAND} -E echo
-            "menuconfig frontend not found (expected one of: menuconfig, nconfig, kconfig-mconf, mconf)."
-    COMMAND ${CMAKE_COMMAND} -E echo
-            "Install a compatible Kconfig frontend and re-run, or edit ${WASMOS_DOTCONFIG} manually then run: cmake -S . -B build"
-    COMMAND ${CMAKE_COMMAND} -E false
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/kconfiglib_menuconfig.py
+            --kconfig ${CMAKE_SOURCE_DIR}/Kconfig
+            --config ${WASMOS_DOTCONFIG}
+            --defconfig ${CMAKE_SOURCE_DIR}/configs/wasmos_defconfig
     COMMENT "Run menuconfig and import .config into CMake cache"
     VERBATIM
   )
 endif ()
+add_custom_target(kconfiglib-menuconfig
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/kconfiglib_menuconfig.py
+          --kconfig ${CMAKE_SOURCE_DIR}/Kconfig
+          --config ${WASMOS_DOTCONFIG}
+          --defconfig ${CMAKE_SOURCE_DIR}/configs/wasmos_defconfig
+  COMMENT "Run kconfiglib interactive config editor"
+  VERBATIM
+)
 if (AS_ENABLE)
   set(AS_HELLO_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${AS_HELLO_APP} ${BUILD_DIR}/esp/apps/hello_as.wap

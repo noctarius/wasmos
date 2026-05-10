@@ -1,0 +1,41 @@
+mainmenu "WASMOS Configuration"
+
+menu "Build Options"
+
+config AS_ENABLE
+    bool "Enable AssemblyScript example builds"
+    default y
+
+config RUST_ENABLE
+    bool "Enable Rust example builds"
+    default y
+
+config GO_ENABLE
+    bool "Enable Go (TinyGo) example builds"
+    default y
+
+config ZIG_ENABLE
+    bool "Enable Zig example builds"
+    default y
+
+config WASMOS_TRACE
+    bool "Enable verbose kernel and userland tracing"
+    default n
+
+config WASMOS_RING3_SMOKE
+    bool "Enable ring3 smoke probe spawn by default"
+    default n
+
+config WASMOS_RING3_THREAD_LIFECYCLE_SMOKE
+    bool "Enable dedicated ring3 thread lifecycle helper probe spawn by default"
+    default n
+
+config KERNEL_TARGET_TRIPLE
+    string "Kernel target triple"
+    default "x86_64-elf"
+
+config QEMU_GDB_PORT
+    int "QEMU gdb port for run-qemu-debug"
+    default 1234
+
+endmenu

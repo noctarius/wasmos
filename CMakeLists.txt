@@ -194,6 +194,23 @@ set(CMAKE_ASM_COMPILER ${CLANG} CACHE FILEPATH "Use LLVM clang for all ASM build
 project(wasmos C ASM)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
+set(WASMOS_DOTCONFIG ${CMAKE_BINARY_DIR}/.config CACHE FILEPATH "Path to Kconfig .config")
+set(WASMOS_KCONFIG_IMPORT ${CMAKE_BINARY_DIR}/wasmos_kconfig.cmake)
+
+if (EXISTS ${WASMOS_DOTCONFIG})
+  execute_process(
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/kconfig_to_cmake.py
+            --input ${WASMOS_DOTCONFIG}
+            --output ${WASMOS_KCONFIG_IMPORT}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    RESULT_VARIABLE WASMOS_KCONFIG_IMPORT_RESULT
+  )
+  if (NOT WASMOS_KCONFIG_IMPORT_RESULT EQUAL 0)
+    message(FATAL_ERROR "Failed to import ${WASMOS_DOTCONFIG} into CMake cache.")
+  endif ()
+  include(${WASMOS_KCONFIG_IMPORT})
+endif ()
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 
@@ -417,6 +434,26 @@ add_dependencies(kernel wasm_driver_blobs)
 
 # QEMU helper
 set(QEMU_GDB_PORT 1234 CACHE STRING "QEMU gdb port for run-qemu-debug")
+add_custom_target(kconfig-defconfig
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          ${CMAKE_SOURCE_DIR}/configs/wasmos_defconfig
+          ${WASMOS_DOTCONFIG}
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/kconfig_to_cmake.py
+          --input ${WASMOS_DOTCONFIG}
+          --output ${WASMOS_KCONFIG_IMPORT}
+  COMMENT "Seeding ${WASMOS_DOTCONFIG} from configs/wasmos_defconfig"
+  VERBATIM
+)
+add_custom_target(menuconfig
+  COMMAND ${CMAKE_COMMAND} -E env KCONFIG_CONFIG=${WASMOS_DOTCONFIG}
+          menuconfig ${CMAKE_SOURCE_DIR}/Kconfig
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/kconfig_to_cmake.py
+          --input ${WASMOS_DOTCONFIG}
+          --output ${WASMOS_KCONFIG_IMPORT}
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Run menuconfig and import .config into CMake cache"
+  VERBATIM
+)
 if (AS_ENABLE)
   set(AS_HELLO_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${AS_HELLO_APP} ${BUILD_DIR}/esp/apps/hello_as.wap

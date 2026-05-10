@@ -64,6 +64,21 @@ macOS note:
 cmake -S . -B build
 ```
 
+Optional Kconfig-style flow:
+```sh
+cmake --build build --target kconfig-defconfig
+cmake --build build --target menuconfig
+cmake -S . -B build
+```
+
+Notes:
+- `kconfig-defconfig` seeds `build/.config` from `configs/wasmos_defconfig`.
+- `menuconfig` reuses upstream `menuconfig` if installed and then imports
+  `build/.config` into CMake cache settings.
+- Current Kconfig symbols cover the core toggles already used by CMake:
+  language example switches, tracing/ring3 smoke flags, kernel target triple,
+  and QEMU GDB port.
+
 If tool autodiscovery fails:
 ```sh
 cmake -S . -B build \

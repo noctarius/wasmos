@@ -1,10 +1,10 @@
-# Threading Design Document
+# Threading and Lifecycle Architecture
 
-This document defines how native kernel threads are introduced into WASMOS
-without breaking the current boot/process model.
+This document defines the kernel threading architecture, lifecycle semantics,
+and ring3 hardening model for WASMOS.
 
-Keep this document aligned with `README.md`, `docs/ARCHITECTURE.md`, and `docs/TASKS.md`
-as implementation lands.
+Keep this document aligned with `README.md`, `docs/ARCHITECTURE.md`, and
+`docs/TASKS.md` as implementation lands.
 
 ---
 

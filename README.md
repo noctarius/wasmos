@@ -137,7 +137,7 @@ Boot sequence (high level):
 - `docs/ARCHITECTURE.md`: architecture index
 - `docs/architecture/`: feature-level architecture docs
 - `docs/architecture/14-ring3-isolation-and-separation.md`: ring-3 isolation and kernel/user-space separation design
-- `docs/THREADING.md`: threading design and rollout
+- `docs/architecture/15-threading-and-lifecycle.md`: threading design and rollout
 - `docs/TASKS.md`: active and planned work
 - `AGENTS.md`: contributor/agent workflow and repository rules
 

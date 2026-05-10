@@ -7,7 +7,8 @@ Detailed design and implementation status now live in focused documents under
 IMPORTANT: Keep this file and `README.md` up to date with every prompt execution
 and code iteration.
 IMPORTANT: Create a git commit after each prompt iteration.
-Threading design details are maintained in `docs/THREADING.md`.
+Threading design details are maintained in
+`docs/architecture/15-threading-and-lifecycle.md`.
 Ring-3 isolation architecture and separation model are documented in
 `docs/architecture/14-ring3-isolation-and-separation.md`.
 Latest checkpoint: Phase 2 mapping minimization is closed for current strict
@@ -29,17 +30,14 @@ green strict stabilization cycle (`run-qemu-test`, `run-qemu-ring3-test`,
 Kernel boot smoke now also runs a shared-memory misuse matrix (forged IDs,
 wrong-owner grant/revoke attempts, pre/post-grant map deny/allow, idempotent
 revoke, and release-balance checks) in the strict-ring3 gate.
-Threading rollout (`docs/THREADING.md`) remains in Phase B with current-scope
-exit criterion satisfied: scheduler-active internal worker threads (dedicated
-kernel stacks + worker entrypoints) plus targeted multi-thread IPC stress are
-validated in baseline smoke (`[test] threading internal worker ok`,
-`[test] threading join wake order ok`, `[test] threading ipc stress ok`). Phase C now includes native ring3 syscall
-coverage for `gettid`, `thread_yield`, `thread_exit`, functional
-`thread_create` with per-thread user context setup, and initial
-`thread_join` and `thread_detach` path coverage (including self-join deny and
-detach invalid-argument and detach-then-join deny markers), plus a user-facing continuation-style
-native thread wrapper API (`wasmos/thread_x86_64.h`) for native ring3
-callers. A separate opt-in strict ring3
+Threading rollout (`docs/architecture/15-threading-and-lifecycle.md`) is
+closed through Phase D for current scope: scheduler-active internal worker
+threads (dedicated kernel stacks + worker entrypoints), targeted multi-thread
+IPC stress, and native ring3 syscall coverage (`gettid`, `thread_yield`,
+`thread_exit`, `thread_create`, `thread_join`, `thread_detach`, including
+deny-path markers) are validated in smoke. A user-facing continuation-style
+native thread wrapper API (`wasmos/thread_x86_64.h`) is available for native
+ring3 callers. A separate opt-in strict ring3
 thread-lifecycle profile is now available via `run-qemu-ring3-threading-test`
 to validate strict ring3 threading signals (ring3-threading spawn plus thread
 create/join/detach syscall markers). The lifecycle profile now also checks
@@ -70,6 +68,7 @@ not spread as ad-hoc test fragments across runtime code paths.
 - [Repository Map and Validation Baseline](architecture/12-repo-map-and-validation.md)
 - [Virtual Terminal](architecture/13-virtual-terminal.md)
 - [Ring3 Isolation and Separation](architecture/14-ring3-isolation-and-separation.md)
+- [Threading and Lifecycle](architecture/15-threading-and-lifecycle.md)
 
 ## Update Rules
 - Update the relevant feature document(s) in `docs/architecture/` when behavior

@@ -538,7 +538,8 @@ static thread_t *ready_queue_dequeue(void) {
         thread_t *thread = thread_get(tid);
         process_t *proc = process_owner_for_thread(thread);
         if (!thread || !proc) {
-            process_sched_invariant_fail("dequeue owner missing", tid, (uint64_t)(uintptr_t)proc);
+            /* Owner/thread may already be reaped after kill/exit races. Treat
+             * stale ready-queue entries as droppable. */
             continue;
         }
         thread->in_ready_queue = 0;

@@ -42,10 +42,11 @@ separation model and deferred hardening backlog.
   `thread_join` (including self-join deny), and `thread_detach` (including
   invalid-argument deny and detach-then-join deny) with strict lifecycle gate
   coverage in `run-qemu-ring3-threading-test`.
-- [ ] Threading Phase D (next): harden join/kill race handling so blocked
-  joiners are deterministically released during process-group kill, with
-  explicit regression markers for kill-during-join and join-after-kill
-  ordering in strict ring3 threading smoke.
+- [ ] Threading Phase D (in progress): harden join/kill race handling so
+  blocked joiners are deterministically released during process-group kill;
+  remaining work includes explicit strict-threading regression markers for
+  kill-during-join/join-after-kill ordering and tighter per-thread cleanup
+  invariants on non-main-thread ring3 lifecycle edges.
 - [ ] Add scheduler observability and latency instrumentation beyond basic `ps`
   metrics.
 - [ ] Add priorities and/or execution budgets.

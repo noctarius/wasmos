@@ -33,7 +33,7 @@ Threading rollout (`docs/THREADING.md`) remains in Phase B with current-scope
 exit criterion satisfied: scheduler-active internal worker threads (dedicated
 kernel stacks + worker entrypoints) plus targeted multi-thread IPC stress are
 validated in baseline smoke (`[test] threading internal worker ok`,
-`[test] threading ipc stress ok`). Phase C now includes native ring3 syscall
+`[test] threading join wake order ok`, `[test] threading ipc stress ok`). Phase C now includes native ring3 syscall
 coverage for `gettid`, `thread_yield`, `thread_exit`, functional
 `thread_create` with per-thread user context setup, and initial
 `thread_join` and `thread_detach` path coverage (including self-join deny and
@@ -45,6 +45,10 @@ to validate strict ring3 threading signals (ring3-threading spawn plus thread
 create/join/detach syscall markers). The lifecycle profile now also checks
 kill-while-blocked wait wakeup behavior via `[test] threading wait kill wake ok`
 without altering baseline strict startup behavior.
+Forward note: future deterministic kernel race/integration tests should use a
+centralized hook/instrumentation layer around kernel transition points (for
+example scheduler/process/thread lifecycle events) so orchestration logic does
+not spread as ad-hoc test fragments across runtime code paths.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

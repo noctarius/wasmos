@@ -2,6 +2,8 @@ mainmenu "WASMOS Configuration"
 
 menu "Build Options"
 
+menu "Examples"
+
 config AS_ENABLE
     bool "Enable AssemblyScript example builds"
     default y
@@ -17,6 +19,8 @@ config GO_ENABLE
 config ZIG_ENABLE
     bool "Enable Zig example builds"
     default y
+
+endmenu
 
 config WASMOS_TRACE
     bool "Enable verbose kernel and userland tracing"

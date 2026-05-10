@@ -456,7 +456,7 @@ x86_syscall_handler(syscall_frame_t *frame)
                 }
                 if (!g_ring3_thread_detach_join_deny_logged &&
                     (frame->cs & 0x3u) == 0x3u &&
-                    !name_eq(proc->name, "ring3-native") &&
+                    name_eq(proc->name, "ring3-threading") &&
                     target_tid != self_tid) {
                     g_ring3_thread_detach_join_deny_logged = 1;
                     serial_write("[test] ring3 thread detach join deny ok\n");
@@ -498,6 +498,14 @@ x86_syscall_handler(syscall_frame_t *frame)
             target_tid != thread_current_tid()) {
             g_ring3_thread_detach_helper_ok_logged = 1;
             serial_write("[test] ring3 thread detach helper ok\n");
+        }
+        if (!g_ring3_thread_detach_join_deny_logged &&
+            (frame->cs & 0x3u) == 0x3u &&
+            name_eq(proc->name, "ring3-native")) {
+            if (process_thread_join(proc, target_tid, 0) < 0) {
+                g_ring3_thread_detach_join_deny_logged = 1;
+                serial_write("[test] ring3 thread detach join deny ok\n");
+            }
         }
         return 0;
     }

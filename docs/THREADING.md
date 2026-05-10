@@ -462,8 +462,9 @@ Current status:
   syscall lifecycle signals without changing baseline strict startup pressure
 - syscall ABI now also includes initial `thread_detach` handling and strict
   native ring3 coverage markers (`[test] ring3 thread detach syscall ok`,
-  `[test] ring3 thread detach invalid deny ok`); detached threads are now
-  marked non-joinable and auto-reaped on exit in scheduler exit paths
+  `[test] ring3 thread detach invalid deny ok`,
+  `[test] ring3 thread detach join deny ok`); detached threads are now marked
+  non-joinable and auto-reaped on exit in scheduler exit paths
 - user-facing continuation-style thread wrapper API
   (`wasmos/thread_x86_64.h`) is now available for native ring3 callers; the
   strict lifecycle probe currently keeps raw-syscall flow until its early
@@ -489,6 +490,9 @@ Current status:
 - dedicated threading smoke now also includes a focused join-after-exit probe
   in the lifecycle app path to preserve regression coverage while keeping the
   strict threading gate deterministic
+- dedicated threading lifecycle probe now uses dedicated per-thread user stacks
+  (instead of tightly-offset current-`rsp` reuse) to keep detach/join deny
+  marker emission deterministic under scheduler/fault pressure
 
 ---
 

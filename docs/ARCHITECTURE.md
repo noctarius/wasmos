@@ -37,7 +37,7 @@ validated in baseline smoke (`[test] threading internal worker ok`,
 coverage for `gettid`, `thread_yield`, `thread_exit`, functional
 `thread_create` with per-thread user context setup, and initial
 `thread_join` and `thread_detach` path coverage (including self-join deny and
-detach invalid-argument deny markers), plus a user-facing continuation-style
+detach invalid-argument and detach-then-join deny markers), plus a user-facing continuation-style
 native thread wrapper API (`wasmos/thread_x86_64.h`) for native ring3
 callers. A separate opt-in strict ring3
 thread-lifecycle profile is now available via `run-qemu-ring3-threading-test`

@@ -1,5 +1,6 @@
 #include "ipc.h"
 #include "process.h"
+#include "thread.h"
 #include "spinlock.h"
 #include "paging.h"
 
@@ -19,6 +20,7 @@ typedef struct {
     uint32_t tail;
     uint32_t count;
     uint32_t notify_count;
+    uint32_t waiter_tid;
 } ipc_endpoint_t;
 
 static ipc_endpoint_t g_endpoints[IPC_MAX_ENDPOINTS];
@@ -61,6 +63,7 @@ void ipc_init(void) {
         table[i].tail = 0;
         table[i].count = 0;
         table[i].notify_count = 0;
+        table[i].waiter_tid = 0;
     }
 }
 
@@ -78,6 +81,7 @@ int ipc_endpoint_create(uint32_t owner_context_id, uint32_t *out_endpoint) {
             table[i].tail = 0;
             table[i].count = 0;
             table[i].notify_count = 0;
+            table[i].waiter_tid = 0;
             *out_endpoint = i;
             return IPC_OK;
         }
@@ -99,6 +103,7 @@ int ipc_notification_create(uint32_t owner_context_id, uint32_t *out_endpoint) {
             table[i].tail = 0;
             table[i].count = 0;
             table[i].notify_count = 0;
+            table[i].waiter_tid = 0;
             *out_endpoint = i;
             return IPC_OK;
         }
@@ -160,9 +165,14 @@ int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_messa
     ep->tail = (ep->tail + 1u) % IPC_QUEUE_DEPTH;
     ep->count++;
     uint32_t owner_context_id = ep->owner_context_id;
+    uint32_t waiter_tid = ep->waiter_tid;
+    ep->waiter_tid = 0;
     spinlock_unlock(&ep->lock);
-    /* Wake the destination owner after releasing the queue lock so the scheduler
-     * sees a consistent endpoint state if the process runs immediately. */
+    /* Prefer waking a specific waiting thread. Fallback to context-wide wakeup
+     * preserves legacy behavior when no explicit waiter is registered. */
+    if (waiter_tid != 0 && process_wake_thread(waiter_tid) > 0) {
+        return IPC_OK;
+    }
     process_wake_by_context(owner_context_id);
     return IPC_OK;
 }
@@ -183,6 +193,7 @@ int ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t 
 
     spinlock_lock(&ep->lock);
     if (ep->count == 0) {
+        ep->waiter_tid = thread_current_tid();
         spinlock_unlock(&ep->lock);
         return IPC_EMPTY;
     }
@@ -190,6 +201,7 @@ int ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t 
     *out_message = ep->queue[ep->head];
     ep->head = (ep->head + 1u) % IPC_QUEUE_DEPTH;
     ep->count--;
+    ep->waiter_tid = 0;
     spinlock_unlock(&ep->lock);
     return IPC_OK;
 }
@@ -211,7 +223,12 @@ int ipc_notify_from(uint32_t sender_context_id, uint32_t endpoint) {
     if (ep->notify_count != UINT32_MAX) {
         ep->notify_count++;
     }
+    uint32_t waiter_tid = ep->waiter_tid;
+    ep->waiter_tid = 0;
     spinlock_unlock(&ep->lock);
+    if (waiter_tid != 0 && process_wake_thread(waiter_tid) > 0) {
+        return IPC_OK;
+    }
     process_wake_by_context(ep->owner_context_id);
     return IPC_OK;
 }
@@ -231,10 +248,12 @@ int ipc_wait_for(uint32_t receiver_context_id, uint32_t endpoint) {
 
     spinlock_lock(&ep->lock);
     if (ep->notify_count == 0) {
+        ep->waiter_tid = thread_current_tid();
         spinlock_unlock(&ep->lock);
         return IPC_EMPTY;
     }
     ep->notify_count--;
+    ep->waiter_tid = 0;
     spinlock_unlock(&ep->lock);
     return IPC_OK;
 }
@@ -275,6 +294,7 @@ ipc_endpoints_release_owner(uint32_t owner_context_id)
         ep->tail = 0;
         ep->count = 0;
         ep->notify_count = 0;
+        ep->waiter_tid = 0;
         spinlock_unlock(&ep->lock);
     }
 }

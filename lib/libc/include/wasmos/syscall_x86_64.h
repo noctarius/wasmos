@@ -15,7 +15,13 @@ typedef enum {
     WASMOS_SYSCALL_YIELD = 3,
     WASMOS_SYSCALL_WAIT = 4,
     WASMOS_SYSCALL_IPC_NOTIFY = 5,
-    WASMOS_SYSCALL_IPC_CALL = 6
+    WASMOS_SYSCALL_IPC_CALL = 6,
+    WASMOS_SYSCALL_GETTID = 7,
+    WASMOS_SYSCALL_THREAD_YIELD = 8,
+    WASMOS_SYSCALL_THREAD_EXIT = 9,
+    WASMOS_SYSCALL_THREAD_CREATE = 10,
+    WASMOS_SYSCALL_THREAD_JOIN = 11,
+    WASMOS_SYSCALL_THREAD_DETACH = 12
 } wasmos_syscall_id_t;
 
 typedef struct {
@@ -73,7 +79,21 @@ wasmos_syscall6_ret2(uint64_t id,
 
 static inline int64_t wasmos_sys_nop(void) { return wasmos_syscall0(WASMOS_SYSCALL_NOP); }
 static inline int64_t wasmos_sys_getpid(void) { return wasmos_syscall0(WASMOS_SYSCALL_GETPID); }
+static inline int64_t wasmos_sys_gettid(void) { return wasmos_syscall0(WASMOS_SYSCALL_GETTID); }
 static inline int64_t wasmos_sys_yield(void) { return wasmos_syscall0(WASMOS_SYSCALL_YIELD); }
+static inline int64_t wasmos_sys_thread_yield(void) { return wasmos_syscall0(WASMOS_SYSCALL_THREAD_YIELD); }
+static inline int64_t wasmos_sys_thread_create(uint64_t entry_rip, uint64_t user_stack_top)
+{
+    return wasmos_syscall6_ret2(WASMOS_SYSCALL_THREAD_CREATE, entry_rip, user_stack_top, 0, 0, 0, 0).rax;
+}
+static inline int64_t wasmos_sys_thread_join(uint32_t tid)
+{
+    return wasmos_syscall1(WASMOS_SYSCALL_THREAD_JOIN, tid);
+}
+static inline int64_t wasmos_sys_thread_detach(uint32_t tid)
+{
+    return wasmos_syscall1(WASMOS_SYSCALL_THREAD_DETACH, tid);
+}
 static inline int64_t wasmos_sys_wait(uint32_t pid) { return wasmos_syscall1(WASMOS_SYSCALL_WAIT, pid); }
 static inline int64_t wasmos_sys_ipc_notify(uint32_t endpoint)
 {
@@ -115,6 +135,15 @@ static inline void
 wasmos_sys_exit(int32_t status)
 {
     (void)wasmos_syscall1(WASMOS_SYSCALL_EXIT, (uint32_t)status);
+    for (;;) {
+        __asm__ volatile("hlt");
+    }
+}
+
+static inline void
+wasmos_sys_thread_exit(int32_t status)
+{
+    (void)wasmos_syscall1(WASMOS_SYSCALL_THREAD_EXIT, (uint32_t)status);
     for (;;) {
         __asm__ volatile("hlt");
     }

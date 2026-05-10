@@ -1,10 +1,10 @@
-# Threading Design Document
+# Threading and Lifecycle Architecture
 
-This document defines how native kernel threads are introduced into WASMOS
-without breaking the current boot/process model.
+This document defines the kernel threading architecture, lifecycle semantics,
+and ring3 hardening model for WASMOS.
 
-Keep this document aligned with `README.md`, `docs/ARCHITECTURE.md`, and `docs/TASKS.md`
-as implementation lands.
+Keep this document aligned with `README.md`, `docs/ARCHITECTURE.md`, and
+`docs/TASKS.md` as implementation lands.
 
 ---
 
@@ -38,13 +38,21 @@ Today the kernel equates one schedulable unit with one `process_t`.
 `process_context_t` is embedded directly in `process_t`, and the ready queue
 holds PIDs.
 
+After ring3-isolation rollout, this baseline also includes strict kernel-entry
+hardening tied to the scheduled process:
+
+- per-process kernel stacks with guard pages and canaries
+- scheduler-managed TSS `rsp0` updates on dispatch
+- strict user/root separation checks that assume kernel ingress lands on a
+  valid higher-half kernel stack
+
 This prevents:
 
 - concurrent activities in one process without process duplication
 - thread-local blocking semantics
 - multi-threaded native drivers/services in one address space
 
-Threading requires splitting:
+Threading still requires splitting:
 
 - **Resource container:** process
 - **Execution container:** thread
@@ -183,6 +191,8 @@ Helper APIs:
 - decrement current thread slice
 - mark reschedule when slice expires
 - preserve current ring3 trampoline handling, but target thread context
+- preserve strict trap-frame validation and watchdog liveness checks already
+  enforced in ring3 smoke
 
 ## 5.4 Context Format
 
@@ -191,6 +201,16 @@ Reuse existing `process_context_t` layout for thread contexts so
 
 Any assembly symbol names referring to process-context should be renamed only
 if needed for readability; binary layout must stay stable.
+
+## 5.5 Kernel Stack Contract (Ring3 Constraint)
+
+Thread scheduling must preserve the current ring3 kernel-entry contract:
+
+- each runnable thread has its own kernel stack (guard pages + canaries)
+- scheduler refreshes TSS `rsp0` to the selected thread kernel stack before
+  returning to user mode
+- stack allocation continues to use the higher-half-safe mapping model used by
+  strict ring3 validation (no regression to low-slot kernel stack exposure)
 
 ---
 
@@ -288,6 +308,22 @@ User/kernel ABI rules:
 - argument convention remains current register ABI
 - unsupported syscalls return existing error convention
 
+## 8.1 User API Direction (Continuation-Style Wrapper)
+
+User-facing threading APIs should default to a continuation-like model layered
+on top of raw thread syscalls rather than exposing a POSIX `pthread` surface.
+
+Direction for later user-space/libc work:
+
+- keep kernel ABI minimal and explicit (`thread_create`, `thread_yield`,
+  `thread_join`, `thread_exit`, `thread_detach`, `gettid`)
+- provide higher-level helpers that model spawn/yield/await flows
+- allow runtimes/services to hide syscall details behind continuation/task
+  handles
+
+This keeps runtime integration simple for WASM-first workloads while preserving
+the existing non-goal of POSIX-complete pthread compatibility.
+
 ---
 
 ## 9. Ring3 Integration
@@ -359,16 +395,42 @@ Add explicit assertions and diagnostic trace marks around these edges.
 - Keep one thread per process functionally.
 - Preserve all current user-visible behavior.
 
+Current status:
+
+- scheduler-internal migration complete for Phase A scope
+- kernel now allocates a `thread_t` main thread per spawned process and mirrors
+  baseline process state transitions into that thread record
+- scheduler ready queue now stores `tid` entries and derives process ownership
+  from the dequeued thread
+- scheduler quantum/run accounting is now thread-owned (`thread_t`), while
+  externally visible behavior remains one-thread-per-process
+
 Exit criteria:
 
 - existing boot flow unchanged
 - existing tests pass
+- strict ring3 baseline remains green (`run-qemu-test`,
+  `run-qemu-ring3-test`, `run-qemu-cli-test`)
 - no process-manager contract changes
 
 ## Phase B: Internal Multi-thread Enablement
 
 - Enable kernel/native components to spawn extra threads.
 - IPC wait/wake semantics migrated to thread-level.
+
+Current status:
+
+- exit criterion satisfied for current scope
+- IPC endpoints now track a waiting `tid` and prefer targeted thread wakeup
+  before falling back to context-wide wake behavior
+- internal kernel API `process_thread_spawn_internal` now allocates additional
+  per-process `thread_t` records with lifecycle accounting
+- internal kernel worker threads are now schedulable with dedicated per-thread
+  kernel stacks and explicit worker entrypoints; kernel smoke emits
+  `[test] threading internal worker ok` when worker scheduling/lifecycle
+  completes successfully
+- targeted kernel multi-thread IPC stress smoke now runs in baseline boot and
+  emits `[test] threading ipc stress ok` on pass
 
 Exit criteria:
 
@@ -379,6 +441,35 @@ Exit criteria:
 - Expose create/join/exit/yield in syscall table and libc shims.
 - Add sample user program and integration tests.
 
+Current status:
+
+- complete for current scope
+- syscall ABI now includes `gettid` and `thread_yield` for native ring3
+  callers, with strict ring3 smoke markers:
+  `[test] ring3 native gettid ok` and `[test] ring3 thread yield syscall ok`
+- syscall ABI now also includes `thread_exit` with strict ring3 smoke marker
+  `[test] ring3 thread exit syscall ok`; scheduler path now exits only the
+  calling thread and preserves process execution while other threads remain
+  live
+- syscall ABI now includes functional `thread_create` with strict ring3 smoke
+  marker (`[test] ring3 thread create syscall ok`); new threads now start with
+  thread-owned user register context (RIP/RSP/CS/SS/root-table) and are queued
+  runnable through the existing scheduler path
+- syscall ABI now also includes initial `thread_join` handling and strict
+  native ring3 coverage markers (`[test] ring3 thread join syscall ok`,
+  `[test] ring3 thread join self deny ok`); dedicated strict ring3 threading
+  smoke now runs via `run-qemu-ring3-threading-test` and validates join/detach
+  syscall lifecycle signals without changing baseline strict startup pressure
+- syscall ABI now also includes initial `thread_detach` handling and strict
+  native ring3 coverage markers (`[test] ring3 thread detach syscall ok`,
+  `[test] ring3 thread detach invalid deny ok`,
+  `[test] ring3 thread detach join deny ok`); detached threads are now marked
+  non-joinable and auto-reaped on exit in scheduler exit paths
+- user-facing continuation-style thread wrapper API
+  (`wasmos/thread_x86_64.h`) is now available for native ring3 callers; the
+  strict lifecycle probe currently keeps raw-syscall flow until its early
+  stack-writability constraints are widened
+
 Exit criteria:
 
 - user-level thread smoke tests pass under `run-qemu-test`
@@ -386,6 +477,31 @@ Exit criteria:
 ## Phase D: Ring3 + Hardening
 
 - Full ring3 thread context handling, join/kill race hardening, trace coverage.
+
+Current status:
+
+- complete for current scope
+- wait-target wakeups now resume the actual blocked waiter thread selected via
+  scheduler transition state (instead of always waking process main thread),
+  which hardens process-exit wake behavior for multi-thread waiters
+- dedicated threading smoke now includes a kill-while-blocked wait regression
+  marker (`[test] threading wait kill wake ok`) to verify blocked waiters wake
+  and observe kill exit status on target termination
+- baseline now includes a dedicated threading join-order smoke probe that
+  validates in-process join wake ordering with a delayed target and blocked
+  waiter (`[test] threading join wake order ok`)
+- dedicated threading smoke now also includes a focused join-after-exit probe
+  in the lifecycle app path to preserve regression coverage while keeping the
+  strict threading gate deterministic
+- dedicated threading lifecycle probe now uses dedicated per-thread user stacks
+  (instead of tightly-offset current-`rsp` reuse) to keep detach/join deny
+  marker emission deterministic under scheduler/fault pressure
+- dedicated strict-threading smoke now also validates join-after-kill ordering
+  and kill-during-join waiter wakeup markers (`[test] threading join after kill
+  order ok`, `[test] threading join kill wake ok`)
+- stack teardown now restores guard-page mappings before stack pages are
+  returned to the physical allocator so recycled pages remain reachable via the
+  shared higher-half alias window under strict threading stress
 
 ---
 
@@ -404,6 +520,9 @@ Test discipline:
 
 - keep test binaries tiny and deterministic
 - avoid parallel integration test runs (shared mutable `build/esp`)
+- keep cross-thread ring3 lifecycle smoke on a dedicated opt-in target
+  (`run-qemu-ring3-threading-test`) so baseline strict ring3 startup remains
+  deterministic
 
 ---
 

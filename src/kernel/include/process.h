@@ -86,7 +86,8 @@ typedef enum {
     PROCESS_RUN_YIELDED = 0,
     PROCESS_RUN_IDLE = 1,
     PROCESS_RUN_BLOCKED = 2,
-    PROCESS_RUN_EXITED = 3
+    PROCESS_RUN_EXITED = 3,
+    PROCESS_RUN_THREAD_EXITED = 4
 } process_run_result_t;
 
 typedef enum {
@@ -97,11 +98,16 @@ typedef enum {
 
 struct process;
 typedef process_run_result_t (*process_entry_t)(struct process *process, void *arg);
+typedef process_run_result_t (*process_thread_worker_entry_t)(struct process *process, uint32_t tid, void *arg);
 
 typedef struct process {
     uint32_t pid;
     uint32_t parent_pid;
     uint32_t context_id;
+    uint32_t main_tid;
+    uint32_t thread_count;
+    uint32_t live_thread_count;
+    uint8_t exiting;
     process_state_t state;
     process_block_reason_t block_reason;
     uint32_t wait_target_pid;
@@ -129,15 +135,24 @@ void process_init(void);
 int process_spawn(const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
 int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
 int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
+int process_thread_spawn_internal(uint32_t owner_pid, const char *name, uint32_t *out_tid);
+int process_thread_spawn_worker_internal(uint32_t owner_pid,
+                                         const char *name,
+                                         process_thread_worker_entry_t entry,
+                                         void *arg,
+                                         uint32_t *out_tid);
 process_t *process_get(uint32_t pid);
 process_t *process_find_by_context(uint32_t context_id);
 uint32_t process_current_pid(void);
 void process_set_exit_status(process_t *process, int32_t exit_status);
 void process_block_on_ipc(process_t *process);
 int process_wait(process_t *process, uint32_t target_pid, int32_t *out_exit_status);
+int process_thread_join(process_t *process, uint32_t target_tid, int32_t *out_exit_status);
+int process_thread_detach(process_t *process, uint32_t target_tid);
 int process_kill(uint32_t pid, int32_t exit_status);
 int process_get_exit_status(uint32_t pid, int32_t *out_exit_status);
 uint32_t process_wake_by_context(uint32_t context_id);
+int process_wake_thread(uint32_t tid);
 int process_schedule_once(void);
 void process_yield(process_run_result_t result);
 void process_tick(void);

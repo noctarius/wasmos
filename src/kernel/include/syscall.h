@@ -10,7 +10,13 @@ typedef enum {
     WASMOS_SYSCALL_YIELD = 3,
     WASMOS_SYSCALL_WAIT = 4,
     WASMOS_SYSCALL_IPC_NOTIFY = 5,
-    WASMOS_SYSCALL_IPC_CALL = 6
+    WASMOS_SYSCALL_IPC_CALL = 6,
+    WASMOS_SYSCALL_GETTID = 7,
+    WASMOS_SYSCALL_THREAD_YIELD = 8,
+    WASMOS_SYSCALL_THREAD_EXIT = 9,
+    WASMOS_SYSCALL_THREAD_CREATE = 10,
+    WASMOS_SYSCALL_THREAD_JOIN = 11,
+    WASMOS_SYSCALL_THREAD_DETACH = 12
 } wasmos_syscall_id_t;
 
 /* int 0x80 syscall ABI (current minimal contract):
@@ -34,6 +40,17 @@ typedef enum {
  *                   current behavior blocks by yielding until a reply with a
  *                   matching request_id is received
  *                   current reply ABI returns arg0 only (arg1..arg3 ignored)
+ * - GETTID:         RAX=tid
+ * - THREAD_YIELD:   RAX=0
+ * - THREAD_EXIT:    RDI=exit_status; exits the current thread. If it is the
+ *                   final live thread in the process, process exit follows.
+ * - THREAD_CREATE:  RDI=entry_rip, RSI=user_stack_top; RAX=tid on success.
+ *                   New thread is created in the caller process with user-mode
+ *                   RIP/RSP/CS/SS/root-table context initialized per-thread.
+ * - THREAD_JOIN:    RDI=target_tid; RAX=target_exit_status on success, -1 on
+ *                   error. Calling thread blocks until target exits.
+ * - THREAD_DETACH:  RDI=target_tid; RAX=0 on success, -1 on error. Detached
+ *                   threads are not joinable and are reaped automatically.
  */
 typedef struct {
     uint64_t r15;

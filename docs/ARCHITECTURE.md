@@ -7,7 +7,8 @@ Detailed design and implementation status now live in focused documents under
 IMPORTANT: Keep this file and `README.md` up to date with every prompt execution
 and code iteration.
 IMPORTANT: Create a git commit after each prompt iteration.
-Threading design details are maintained in `docs/THREADING.md`.
+Threading design details are maintained in
+`docs/architecture/15-threading-and-lifecycle.md`.
 Ring-3 isolation architecture and separation model are documented in
 `docs/architecture/14-ring3-isolation-and-separation.md`.
 Latest checkpoint: Phase 2 mapping minimization is closed for current strict
@@ -29,6 +30,28 @@ green strict stabilization cycle (`run-qemu-test`, `run-qemu-ring3-test`,
 Kernel boot smoke now also runs a shared-memory misuse matrix (forged IDs,
 wrong-owner grant/revoke attempts, pre/post-grant map deny/allow, idempotent
 revoke, and release-balance checks) in the strict-ring3 gate.
+Threading rollout (`docs/architecture/15-threading-and-lifecycle.md`) is
+closed through Phase D for current scope: scheduler-active internal worker
+threads (dedicated kernel stacks + worker entrypoints), targeted multi-thread
+IPC stress, and native ring3 syscall coverage (`gettid`, `thread_yield`,
+`thread_exit`, `thread_create`, `thread_join`, `thread_detach`, including
+deny-path markers) are validated in smoke. A user-facing continuation-style
+native thread wrapper API (`wasmos/thread_x86_64.h`) is available for native
+ring3 callers. A separate opt-in strict ring3
+thread-lifecycle profile is now available via `run-qemu-ring3-threading-test`
+to validate strict ring3 threading signals (ring3-threading spawn plus thread
+create/join/detach syscall markers). The lifecycle profile now also checks
+kill-while-blocked wait wakeup behavior via `[test] threading wait kill wake ok`
+plus join-after-kill ordering and kill-during-join wakeup markers
+(`[test] threading join after kill order ok`,
+`[test] threading join kill wake ok`) without altering baseline strict startup
+behavior. Stack teardown now restores guard-page mappings before allocator free
+so recycled pages remain reachable through the shared higher-half alias window
+under strict threading stress.
+Forward note: future deterministic kernel race/integration tests should use a
+centralized hook/instrumentation layer around kernel transition points (for
+example scheduler/process/thread lifecycle events) so orchestration logic does
+not spread as ad-hoc test fragments across runtime code paths.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)
@@ -45,6 +68,7 @@ revoke, and release-balance checks) in the strict-ring3 gate.
 - [Repository Map and Validation Baseline](architecture/12-repo-map-and-validation.md)
 - [Virtual Terminal](architecture/13-virtual-terminal.md)
 - [Ring3 Isolation and Separation](architecture/14-ring3-isolation-and-separation.md)
+- [Threading and Lifecycle](architecture/15-threading-and-lifecycle.md)
 
 ## Update Rules
 - Update the relevant feature document(s) in `docs/architecture/` when behavior

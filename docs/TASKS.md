@@ -44,9 +44,11 @@ separation model and deferred hardening backlog.
   coverage in `run-qemu-ring3-threading-test`.
 - [ ] Threading Phase D (in progress): harden join/kill race handling so
   blocked joiners are deterministically released during process-group kill;
-  remaining work includes explicit strict-threading regression markers for
-  kill-during-join/join-after-kill ordering and tighter per-thread cleanup
-  invariants on non-main-thread ring3 lifecycle edges.
+  current baseline now includes in-process join wake ordering coverage
+  (`[test] threading join wake order ok`); remaining work includes explicit
+  strict-threading regression markers for kill-during-join/join-after-kill
+  ordering and tighter per-thread cleanup invariants on non-main-thread ring3
+  lifecycle edges.
 - [ ] Add scheduler observability and latency instrumentation beyond basic `ps`
   metrics.
 - [ ] Add priorities and/or execution budgets.

@@ -444,7 +444,7 @@ add_custom_target(kconfig-defconfig
   COMMENT "Seeding ${WASMOS_DOTCONFIG} from configs/wasmos_defconfig"
   VERBATIM
 )
-find_program(WASMOS_MENUCONFIG_BIN NAMES menuconfig kconfig-mconf mconf)
+find_program(WASMOS_MENUCONFIG_BIN NAMES menuconfig nconfig kconfig-mconf mconf)
 if (WASMOS_MENUCONFIG_BIN)
   add_custom_target(menuconfig
     COMMAND ${CMAKE_COMMAND} -E env KCONFIG_CONFIG=${WASMOS_DOTCONFIG}
@@ -459,9 +459,9 @@ if (WASMOS_MENUCONFIG_BIN)
 else ()
   add_custom_target(menuconfig
     COMMAND ${CMAKE_COMMAND} -E echo
-            "menuconfig frontend not found (expected one of: menuconfig, kconfig-mconf, mconf)."
+            "menuconfig frontend not found (expected one of: menuconfig, nconfig, kconfig-mconf, mconf)."
     COMMAND ${CMAKE_COMMAND} -E echo
-            "Install a Kconfig frontend and re-run. On macOS: brew install kconfig-frontends"
+            "Install a compatible Kconfig frontend and re-run, or edit ${WASMOS_DOTCONFIG} manually then run: cmake -S . -B build"
     COMMAND ${CMAKE_COMMAND} -E false
     COMMENT "Run menuconfig and import .config into CMake cache"
     VERBATIM

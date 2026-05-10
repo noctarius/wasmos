@@ -57,6 +57,9 @@ Build configuration now has a Kconfig-compatible entry point (`Kconfig`) plus
 `scripts/kconfig_to_cmake.py` when present. The imported scope is currently
 intentionally narrow (existing CMake toggles and a few key scalar values) to
 preserve minimalism and keep behavior deterministic.
+When native `menuconfig`-style frontends are unavailable, build configuration
+can be edited through the in-repo `kconfiglib` interactive fallback script
+(`scripts/kconfiglib_menuconfig.py`), exposed via CMake targets.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

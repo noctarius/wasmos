@@ -74,8 +74,10 @@ cmake -S . -B build
 Notes:
 - `kconfig-defconfig` seeds `build/.config` from `configs/wasmos_defconfig`.
 - `menuconfig` auto-detects a frontend binary (`menuconfig`, `nconfig`,
-  `kconfig-mconf`, or `mconf`), then imports `build/.config` into CMake cache
-  settings.
+  `kconfig-mconf`, or `mconf`); if none are found, it falls back to the repo's
+  Python `kconfiglib` interactive editor.
+- `kconfiglib-menuconfig` runs the Python `kconfiglib` editor directly.
+- Python fallback requirement: `python3 -m pip install kconfiglib`.
 - If no frontend is installed, you can still edit `build/.config` directly and
   re-run `cmake -S . -B build` to import the changes.
 - Current Kconfig symbols cover the core toggles already used by CMake:

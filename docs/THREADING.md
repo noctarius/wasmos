@@ -487,8 +487,9 @@ Current status:
 - dedicated threading smoke now includes a kill-while-blocked wait regression
   marker (`[test] threading wait kill wake ok`) to verify blocked waiters wake
   and observe kill exit status on target termination
-- baseline threading internal smoke now validates in-process join wake ordering
-  with a delayed target and blocked waiter (`[test] threading join wake order ok`)
+- baseline now includes a dedicated threading join-order smoke probe that
+  validates in-process join wake ordering with a delayed target and blocked
+  waiter (`[test] threading join wake order ok`)
 - dedicated threading smoke now also includes a focused join-after-exit probe
   in the lifecycle app path to preserve regression coverage while keeping the
   strict threading gate deterministic

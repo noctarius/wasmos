@@ -444,16 +444,29 @@ add_custom_target(kconfig-defconfig
   COMMENT "Seeding ${WASMOS_DOTCONFIG} from configs/wasmos_defconfig"
   VERBATIM
 )
-add_custom_target(menuconfig
-  COMMAND ${CMAKE_COMMAND} -E env KCONFIG_CONFIG=${WASMOS_DOTCONFIG}
-          menuconfig ${CMAKE_SOURCE_DIR}/Kconfig
-  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/kconfig_to_cmake.py
-          --input ${WASMOS_DOTCONFIG}
-          --output ${WASMOS_KCONFIG_IMPORT}
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Run menuconfig and import .config into CMake cache"
-  VERBATIM
-)
+find_program(WASMOS_MENUCONFIG_BIN NAMES menuconfig kconfig-mconf mconf)
+if (WASMOS_MENUCONFIG_BIN)
+  add_custom_target(menuconfig
+    COMMAND ${CMAKE_COMMAND} -E env KCONFIG_CONFIG=${WASMOS_DOTCONFIG}
+            ${WASMOS_MENUCONFIG_BIN} ${CMAKE_SOURCE_DIR}/Kconfig
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/kconfig_to_cmake.py
+            --input ${WASMOS_DOTCONFIG}
+            --output ${WASMOS_KCONFIG_IMPORT}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Run menuconfig and import .config into CMake cache"
+    VERBATIM
+  )
+else ()
+  add_custom_target(menuconfig
+    COMMAND ${CMAKE_COMMAND} -E echo
+            "menuconfig frontend not found (expected one of: menuconfig, kconfig-mconf, mconf)."
+    COMMAND ${CMAKE_COMMAND} -E echo
+            "Install a Kconfig frontend and re-run. On macOS: brew install kconfig-frontends"
+    COMMAND ${CMAKE_COMMAND} -E false
+    COMMENT "Run menuconfig and import .config into CMake cache"
+    VERBATIM
+  )
+endif ()
 if (AS_ENABLE)
   set(AS_HELLO_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${AS_HELLO_APP} ${BUILD_DIR}/esp/apps/hello_as.wap

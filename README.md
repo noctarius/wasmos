@@ -35,6 +35,17 @@ It defines repository workflow and documentation/update conventions.
 - Ring-3 smoke includes shared-memory owner/grant/revoke isolation checks (kernel and user-space app-pair paths)
 - Shared-memory app-pair smoke now also checks forged-ID deny, map-argument policy deny, and post-revoke stale-ID deny
 - Strict ring3 boot smoke now includes a kernel-level shared-memory misuse matrix marker (`[test] ring3 shmem misuse matrix ok`)
+- Kernel threading Phase B now includes schedulable internal worker threads with per-thread kernel stacks (`[test] threading internal worker ok`)
+- Kernel threading join-order smoke now validates in-process thread-join wake ordering in a dedicated probe path (`[test] threading join wake order ok`)
+- Kernel threading Phase B now includes a targeted multi-thread IPC stress marker (`[test] threading ipc stress ok`)
+- Threading Phase C syscall baseline now includes native ring3 `gettid` and `thread_yield` coverage (`[test] ring3 native gettid ok`, `[test] ring3 thread yield syscall ok`)
+- Threading Phase C syscall baseline now includes native ring3 `thread_exit` coverage (`[test] ring3 thread exit syscall ok`)
+- Threading Phase C now includes native ring3 `thread_create` coverage with per-thread user context setup (`[test] ring3 thread create syscall ok`)
+- Threading Phase C syscall baseline now includes native ring3 `thread_join` entry and self-join deny coverage (`[test] ring3 thread join syscall ok`, `[test] ring3 thread join self deny ok`)
+- Threading Phase C syscall baseline now includes native ring3 `thread_detach` entry plus invalid-argument and detach-then-join deny coverage (`[test] ring3 thread detach syscall ok`, `[test] ring3 thread detach invalid deny ok`, `[test] ring3 thread detach join deny ok`)
+- Threading Phase C now includes a user-facing continuation-style native thread API wrapper (`wasmos/thread_x86_64.h`) for native ring3 callers
+- Threading lifecycle smoke now also validates kill-while-blocked wait wakeup behavior (`[test] threading wait kill wake ok`)
+- Threading Phase D hardening markers now include join-after-kill ordering and kill-during-join waiter wakeup checks (`[test] threading join after kill order ok`, `[test] threading join kill wake ok`)
 
 ## Quick Start
 
@@ -91,6 +102,7 @@ cmake --build build --target run-qemu-ui-test
 cmake --build build --target run-qemu-test
 cmake --build build --target run-qemu-cli-test
 cmake --build build --target run-qemu-ring3-test
+cmake --build build --target run-qemu-ring3-threading-test
 ```
 
 Target summary:
@@ -99,6 +111,7 @@ Target summary:
 - `run-qemu-test`: compile + boot + halt smoke
 - `run-qemu-cli-test`: CLI integration suite
 - `run-qemu-ring3-test`: strict ring-3 smoke path
+- `run-qemu-ring3-threading-test`: opt-in strict ring-3 threading smoke (ring3-threading spawn + ring3 thread `create`/`join`/`detach` syscall markers including detach-then-join deny + wait/kill wake marker)
 
 ## Startup Model
 Boot sequence (high level):
@@ -124,7 +137,7 @@ Boot sequence (high level):
 - `docs/ARCHITECTURE.md`: architecture index
 - `docs/architecture/`: feature-level architecture docs
 - `docs/architecture/14-ring3-isolation-and-separation.md`: ring-3 isolation and kernel/user-space separation design
-- `docs/THREADING.md`: threading design and rollout
+- `docs/architecture/15-threading-and-lifecycle.md`: threading design and rollout
 - `docs/TASKS.md`: active and planned work
 - `AGENTS.md`: contributor/agent workflow and repository rules
 

@@ -10,6 +10,7 @@ def main():
     parser.add_argument("--ovmf-vars", default="")
     parser.add_argument("--esp", default="")
     parser.add_argument("--timeout", type=int, default=120)
+    parser.add_argument("--require-threading", action="store_true")
     args = parser.parse_args()
 
     if args.ovmf_code or args.esp:
@@ -21,6 +22,13 @@ def main():
         b"[kernel] kmain",
         b"native-call-smoke: ipc-call ok",
         b"[test] ring3 native abi ok",
+        b"[test] ring3 native gettid ok",
+        b"[test] ring3 thread exit syscall ok",
+        b"[test] ring3 thread create syscall ok",
+        b"[test] ring3 thread join syscall ok",
+        b"[test] ring3 thread join self deny ok",
+        b"[test] ring3 thread detach syscall ok",
+        b"[test] ring3 thread detach invalid deny ok",
         b"[fault] user-pf pid=",
         b"reason=user_to_kernel",
         b"reason=write_violation",
@@ -62,11 +70,25 @@ def main():
         b"[test] pm status owner deny ok",
         b"[test] pm spawn owner deny ok",
         b"[test] ring3 yield syscall ok",
+        b"[test] ring3 thread yield syscall ok",
         b"[test] ring3 syscall ok",
         b"[test] ring3 preempt stress ok",
         b"[test] ring3 shmem owner deny ok",
         b"[test] ring3 shmem grant allow ok",
     ]
+    if args.require_threading:
+        required.extend(
+            [
+                b"[kernel] ring3 threading pid=",
+                b"[test] ring3 thread create syscall ok",
+                b"[test] ring3 thread join syscall ok",
+                b"[test] ring3 thread join self deny ok",
+                b"[test] ring3 thread detach syscall ok",
+                b"[test] ring3 thread detach invalid deny ok",
+                b"[test] ring3 thread detach join deny ok",
+                b"[test] threading wait kill wake ok",
+            ]
+        )
 
     with QemuSession(cfg, timeout_s=args.timeout) as session:
         for needle in required:

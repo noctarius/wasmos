@@ -37,6 +37,19 @@ separation model and deferred hardening backlog.
   relying on synthesized bootstrap `boot_module_t` records.
 
 ## Scheduling and Process Model
+- [x] Threading Phase C closure (current scope): native ring3 syscall baseline
+  covers `gettid`, `thread_yield`, `thread_exit`, `thread_create`,
+  `thread_join` (including self-join deny), and `thread_detach` (including
+  invalid-argument deny and detach-then-join deny) with strict lifecycle gate
+  coverage in `run-qemu-ring3-threading-test`.
+- [x] Threading Phase D closure (current scope): join/kill race handling is
+  hardened so blocked joiners are deterministically released during
+  process-group kill, with dedicated strict-threading regression markers for
+  join wake ordering and kill edges (`[test] threading join wake order ok`,
+  `[test] threading join after kill order ok`, `[test] threading join kill wake ok`,
+  `[test] threading wait kill wake ok`); stack teardown now restores guard-page
+  mappings before allocator free to keep recycled pages safely reachable in the
+  shared higher-half window.
 - [ ] Add scheduler observability and latency instrumentation beyond basic `ps`
   metrics.
 - [ ] Add priorities and/or execution budgets.

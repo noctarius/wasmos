@@ -1,6 +1,8 @@
 #include "syscall.h"
 #include "ipc.h"
+#include "memory.h"
 #include "process.h"
+#include "thread.h"
 #include "serial.h"
 #include "string.h"
 #include "paging.h"
@@ -19,12 +21,25 @@ static uint8_t g_ring3_ipc_call_ok_logged;
 static uint8_t g_ring3_ipc_call_err_rdx_zero_logged;
 static uint8_t g_ring3_ipc_call_correlation_logged;
 static uint8_t g_ring3_yield_logged;
+static uint8_t g_ring3_thread_yield_logged;
+static uint8_t g_ring3_thread_exit_logged;
 static uint8_t g_ring3_native_abi_logged;
+static uint8_t g_ring3_native_gettid_logged;
+static uint8_t g_ring3_thread_create_logged;
+static uint8_t g_ring3_thread_join_logged;
+static uint8_t g_ring3_thread_join_self_deny_logged;
+static uint8_t g_ring3_thread_join_helper_ok_logged;
+static uint8_t g_ring3_thread_detach_logged;
+static uint8_t g_ring3_thread_detach_invalid_deny_logged;
+static uint8_t g_ring3_thread_detach_helper_ok_logged;
+static uint8_t g_ring3_thread_detach_join_deny_logged;
 static uint32_t g_syscall_ipc_call_next_request_id = 1;
 static uint32_t g_ipc_call_echo_endpoint = IPC_ENDPOINT_NONE;
 static uint32_t g_ipc_call_control_deny_endpoint = IPC_ENDPOINT_NONE;
 static uint32_t g_ipc_notify_control_deny_endpoint = IPC_ENDPOINT_NONE;
 #define SYSCALL_IPC_PENDING_DEPTH 8u
+#define USER_CS_SELECTOR 0x1Bu
+#define USER_DS_SELECTOR 0x23u
 
 typedef struct {
     uint8_t in_use;
@@ -291,6 +306,15 @@ x86_syscall_handler(syscall_frame_t *frame)
             }
         }
         return process_current_pid();
+    case WASMOS_SYSCALL_GETTID:
+        if (!g_ring3_native_gettid_logged && (frame->cs & 0x3u) == 0x3u) {
+            process_t *proc = process_get(process_current_pid());
+            if (proc && name_eq(proc->name, "ring3-native")) {
+                g_ring3_native_gettid_logged = 1;
+                serial_write("[test] ring3 native gettid ok\n");
+            }
+        }
+        return thread_current_tid();
     case WASMOS_SYSCALL_EXIT: {
         process_t *proc = process_get(process_current_pid());
         if (!proc) {
@@ -311,6 +335,180 @@ x86_syscall_handler(syscall_frame_t *frame)
         }
         process_yield(PROCESS_RUN_YIELDED);
         return 0;
+    case WASMOS_SYSCALL_THREAD_YIELD:
+        if (!g_ring3_thread_yield_logged) {
+            process_t *proc = process_get(process_current_pid());
+            if (proc && name_eq(proc->name, "ring3-native") &&
+                (frame->cs & 0x3u) == 0x3u) {
+                g_ring3_thread_yield_logged = 1;
+                serial_write("[test] ring3 thread yield syscall ok\n");
+            }
+        }
+        process_yield(PROCESS_RUN_YIELDED);
+        return 0;
+    case WASMOS_SYSCALL_THREAD_EXIT: {
+        process_t *proc = process_get(process_current_pid());
+        if (!proc) {
+            return (uint64_t)-1;
+        }
+        if (!g_ring3_thread_exit_logged && (frame->cs & 0x3u) == 0x3u &&
+            name_eq(proc->name, "ring3-native")) {
+            g_ring3_thread_exit_logged = 1;
+            serial_write("[test] ring3 thread exit syscall ok\n");
+        }
+        process_set_exit_status(proc, (int32_t)frame->rdi);
+        process_yield(PROCESS_RUN_THREAD_EXITED);
+        return 0;
+    }
+    case WASMOS_SYSCALL_THREAD_CREATE: {
+        process_t *proc = process_get(process_current_pid());
+        thread_t *thread = 0;
+        uint32_t tid = 0;
+        uint64_t entry_rip = frame->rdi;
+        uint64_t user_stack_top = frame->rsi;
+        uint64_t user_root = 0;
+        if (!proc) {
+            return (uint64_t)-1;
+        }
+        if (!g_ring3_thread_create_logged && (frame->cs & 0x3u) == 0x3u &&
+            name_eq(proc->name, "ring3-native")) {
+            g_ring3_thread_create_logged = 1;
+            serial_write("[test] ring3 thread create syscall ok\n");
+        }
+        if (user_stack_top == 0 || entry_rip == 0) {
+            return (uint64_t)-1;
+        }
+        if ((user_stack_top & 0xFULL) != 0) {
+            user_stack_top &= ~0xFULL;
+        }
+        if (thread_spawn_in_owner(proc->pid,
+                                  "user-thread",
+                                  THREAD_STATE_BLOCKED,
+                                  THREAD_BLOCK_NONE,
+                                  &tid) != 0) {
+            return (uint64_t)-1;
+        }
+        thread = thread_get(tid);
+        if (!thread) {
+            thread_reap(tid);
+            return (uint64_t)-1;
+        }
+        user_root = mm_context_root_table(proc->context_id);
+        if (user_root == 0) {
+            thread_reap(tid);
+            return (uint64_t)-1;
+        }
+        thread->ctx.rip = entry_rip;
+        thread->ctx.user_rsp = user_stack_top;
+        thread->ctx.cs = USER_CS_SELECTOR;
+        thread->ctx.ss = USER_DS_SELECTOR;
+        thread->ctx.rflags = 0x200;
+        thread->ctx.root_table = user_root;
+        thread->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
+        thread->ticks_remaining = thread->time_slice_ticks;
+        thread->ticks_total = 0;
+        proc->thread_count++;
+        proc->live_thread_count++;
+        if (process_wake_thread(tid) == 0) {
+            proc->thread_count--;
+            proc->live_thread_count--;
+            thread_reap(tid);
+            return (uint64_t)-1;
+        }
+        return tid;
+    }
+    case WASMOS_SYSCALL_THREAD_JOIN: {
+        process_t *proc = process_get(process_current_pid());
+        uint32_t target_tid = 0;
+        int join_rc = -1;
+        int32_t exit_status = 0;
+        uint32_t self_tid = thread_current_tid();
+        if (!proc) {
+            return (uint64_t)-1;
+        }
+        if (!g_ring3_thread_join_logged && (frame->cs & 0x3u) == 0x3u &&
+            name_eq(proc->name, "ring3-native")) {
+            g_ring3_thread_join_logged = 1;
+            serial_write("[test] ring3 thread join syscall ok\n");
+        }
+        if (syscall_arg_u32(frame->rdi, &target_tid) != 0) {
+            return (uint64_t)-1;
+        }
+        for (;;) {
+            join_rc = process_thread_join(proc, target_tid, &exit_status);
+            if (join_rc == 0) {
+                if (!g_ring3_thread_join_helper_ok_logged &&
+                    (frame->cs & 0x3u) == 0x3u &&
+                    !name_eq(proc->name, "ring3-native") &&
+                    target_tid != self_tid) {
+                    g_ring3_thread_join_helper_ok_logged = 1;
+                    serial_write("[test] ring3 thread join helper ok\n");
+                }
+                return (uint64_t)(int64_t)exit_status;
+            }
+            if (join_rc < 0) {
+                if (!g_ring3_thread_join_self_deny_logged &&
+                    (frame->cs & 0x3u) == 0x3u &&
+                    name_eq(proc->name, "ring3-native") &&
+                    target_tid == self_tid) {
+                    g_ring3_thread_join_self_deny_logged = 1;
+                    serial_write("[test] ring3 thread join self deny ok\n");
+                }
+                if (!g_ring3_thread_detach_join_deny_logged &&
+                    (frame->cs & 0x3u) == 0x3u &&
+                    name_eq(proc->name, "ring3-threading") &&
+                    target_tid != self_tid) {
+                    g_ring3_thread_detach_join_deny_logged = 1;
+                    serial_write("[test] ring3 thread detach join deny ok\n");
+                }
+                return (uint64_t)-1;
+            }
+            process_yield(PROCESS_RUN_BLOCKED);
+        }
+    }
+    case WASMOS_SYSCALL_THREAD_DETACH: {
+        process_t *proc = process_get(process_current_pid());
+        uint32_t target_tid = 0;
+        int detach_rc = -1;
+        if (!proc) {
+            return (uint64_t)-1;
+        }
+        if (!g_ring3_thread_detach_logged && (frame->cs & 0x3u) == 0x3u &&
+            name_eq(proc->name, "ring3-native")) {
+            g_ring3_thread_detach_logged = 1;
+            serial_write("[test] ring3 thread detach syscall ok\n");
+        }
+        if (syscall_arg_u32(frame->rdi, &target_tid) != 0) {
+            return (uint64_t)-1;
+        }
+        detach_rc = process_thread_detach(proc, target_tid);
+        if (detach_rc < 0) {
+            if (!g_ring3_thread_detach_invalid_deny_logged &&
+                (frame->cs & 0x3u) == 0x3u &&
+                name_eq(proc->name, "ring3-native") &&
+                target_tid == 0) {
+                g_ring3_thread_detach_invalid_deny_logged = 1;
+                serial_write("[test] ring3 thread detach invalid deny ok\n");
+            }
+            return (uint64_t)-1;
+        }
+        if (!g_ring3_thread_detach_helper_ok_logged &&
+            (frame->cs & 0x3u) == 0x3u &&
+            !name_eq(proc->name, "ring3-native") &&
+            target_tid != thread_current_tid()) {
+            g_ring3_thread_detach_helper_ok_logged = 1;
+            serial_write("[test] ring3 thread detach helper ok\n");
+        }
+        if (!g_ring3_thread_detach_join_deny_logged &&
+            (frame->cs & 0x3u) == 0x3u &&
+            name_eq(proc->name, "ring3-native")) {
+            if (process_thread_join(proc, target_tid, 0) < 0) {
+                g_ring3_thread_detach_join_deny_logged = 1;
+                serial_write("[test] ring3 thread detach join deny ok\n");
+            }
+        }
+        return 0;
+    }
     case WASMOS_SYSCALL_WAIT: {
         process_t *proc = process_get(process_current_pid());
         uint32_t target_pid = 0;

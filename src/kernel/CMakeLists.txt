@@ -1,5 +1,5 @@
 set(LDFLAGS_KERNEL -nostdlib -T ${KERNEL_DIR}/arch/x86_64/linker.ld)
-set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -mcmodel=kernel ${WASMOS_TRACE_DEFINE} ${WASMOS_RING3_SMOKE_DEFINE} -I${WASM_DIR}/wasm3/source -Wno-unused-parameter)
+set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -mcmodel=kernel ${WASMOS_TRACE_DEFINE} ${WASMOS_RING3_SMOKE_DEFINE} ${WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFINE} -I${WASM_DIR}/wasm3/source -Wno-unused-parameter)
 set(CFLAGS_WASM3 ${CFLAGS_KERNEL} -I${WASM_DIR}/wasm3/source -Dd_m3HasFloat=0 -Wno-unused-parameter -Wno-unused-variable)
 
 set(RING3_NATIVE_PROBE_SRC ${KERNEL_DIR}/ring3_native_probe.c)
@@ -7,6 +7,11 @@ set(RING3_NATIVE_PROBE_OBJ ${BUILD_DIR}/ring3_native_probe.o)
 set(RING3_NATIVE_PROBE_ELF ${BUILD_DIR}/ring3_native_probe.elf)
 set(RING3_NATIVE_PROBE_BIN ${BUILD_DIR}/ring3_native_probe.bin)
 set(RING3_NATIVE_PROBE_BLOB ${BUILD_DIR}/ring3_native_probe_blob.o)
+set(RING3_THREADING_PROBE_SRC ${KERNEL_DIR}/ring3_thread_lifecycle_probe.c)
+set(RING3_THREADING_PROBE_OBJ ${BUILD_DIR}/ring3_thread_lifecycle_probe.o)
+set(RING3_THREADING_PROBE_ELF ${BUILD_DIR}/ring3_thread_lifecycle_probe.elf)
+set(RING3_THREADING_PROBE_BIN ${BUILD_DIR}/ring3_thread_lifecycle_probe.bin)
+set(RING3_THREADING_PROBE_BLOB ${BUILD_DIR}/ring3_thread_lifecycle_probe_blob.o)
 
 add_custom_command(
   OUTPUT ${RING3_NATIVE_PROBE_BLOB}
@@ -34,6 +39,32 @@ add_custom_target(ring3_native_probe_blob DEPENDS ${RING3_NATIVE_PROBE_BLOB})
 set_property(GLOBAL APPEND PROPERTY WASMOS_KERNEL_BLOBS ${RING3_NATIVE_PROBE_BLOB})
 set_property(GLOBAL APPEND PROPERTY WASMOS_KERNEL_BLOB_TARGETS ring3_native_probe_blob)
 
+add_custom_command(
+  OUTPUT ${RING3_THREADING_PROBE_BLOB}
+  COMMAND ${CLANG} --target=x86_64-unknown-none-elf -Os -ffreestanding -fno-builtin
+          -fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables
+          -fomit-frame-pointer -mno-red-zone -nostdlib
+          -I${LIBC_DIR}/include
+          -c ${RING3_THREADING_PROBE_SRC}
+          -o ${RING3_THREADING_PROBE_OBJ}
+  COMMAND ${LLD_PATH} -nostdlib -T ${KERNEL_DIR}/arch/x86_64/ring3_native.ld
+          -o ${RING3_THREADING_PROBE_ELF}
+          ${RING3_THREADING_PROBE_OBJ}
+  COMMAND ${OBJCOPY} --output-target=binary ${RING3_THREADING_PROBE_ELF} ${RING3_THREADING_PROBE_BIN}
+  COMMAND ${OBJCOPY} --input-target=binary --output-target=elf64-x86-64
+          --binary-architecture=i386:x86-64
+          ring3_thread_lifecycle_probe.bin ring3_thread_lifecycle_probe_blob.o
+  DEPENDS ${RING3_THREADING_PROBE_SRC} ${KERNEL_DIR}/arch/x86_64/ring3_native.ld
+          ${LIBC_DIR}/include/wasmos/syscall_x86_64.h
+  WORKING_DIRECTORY ${BUILD_DIR}
+  COMMENT "Building ring3 thread lifecycle probe blob"
+  VERBATIM
+)
+
+add_custom_target(ring3_thread_lifecycle_probe_blob DEPENDS ${RING3_THREADING_PROBE_BLOB})
+set_property(GLOBAL APPEND PROPERTY WASMOS_KERNEL_BLOBS ${RING3_THREADING_PROBE_BLOB})
+set_property(GLOBAL APPEND PROPERTY WASMOS_KERNEL_BLOB_TARGETS ring3_thread_lifecycle_probe_blob)
+
 set(KERNEL_OBJS
   ${BUILD_DIR}/entry.o
   ${BUILD_DIR}/context_switch.o
@@ -51,6 +82,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/runtime_context.o
   ${BUILD_DIR}/ipc.o
   ${BUILD_DIR}/process.o
+  ${BUILD_DIR}/thread.o
   ${BUILD_DIR}/spinlock.o
   ${BUILD_DIR}/memory_service.o
   ${BUILD_DIR}/irq.o
@@ -98,6 +130,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/runtime_context.c
   ${KERNEL_DIR}/ipc.c
   ${KERNEL_DIR}/process.c
+  ${KERNEL_DIR}/thread.c
   ${KERNEL_DIR}/spinlock.c
   ${KERNEL_DIR}/memory_service.c
   ${KERNEL_DIR}/irq.c
@@ -140,6 +173,7 @@ target_sources(kernel_sources INTERFACE
   ${KERNEL_DIR}/include/physmem.h
   ${KERNEL_DIR}/include/runtime_context.h
   ${KERNEL_DIR}/include/process.h
+  ${KERNEL_DIR}/include/thread.h
   ${KERNEL_DIR}/include/process_manager.h
   ${KERNEL_DIR}/include/irq.h
   ${KERNEL_DIR}/include/timer.h
@@ -171,6 +205,7 @@ add_library(kernel_ide OBJECT EXCLUDE_FROM_ALL
   ${KERNEL_DIR}/include/physmem.h
   ${KERNEL_DIR}/include/runtime_context.h
   ${KERNEL_DIR}/include/process.h
+  ${KERNEL_DIR}/include/thread.h
   ${KERNEL_DIR}/include/process_manager.h
   ${KERNEL_DIR}/include/memory_service.h
   ${KERNEL_DIR}/include/irq.h
@@ -223,6 +258,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/runtime_context.c -o ${BUILD_DIR}/runtime_context.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/ipc.c -o ${BUILD_DIR}/ipc.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process.c -o ${BUILD_DIR}/process.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/thread.c -o ${BUILD_DIR}/thread.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/spinlock.c -o ${BUILD_DIR}/spinlock.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory_service.c -o ${BUILD_DIR}/memory_service.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/irq.c -o ${BUILD_DIR}/irq.o
@@ -253,6 +289,7 @@ add_custom_command(
   ${KERNEL_DIR}/include/policy.h
   ${KERNEL_DIR}/include/slab.h ${KERNEL_DIR}/include/syscall.h ${KERNEL_DIR}/include/paging.h
           ${KERNEL_DIR}/include/physmem.h ${KERNEL_DIR}/include/process.h ${KERNEL_DIR}/include/process_manager.h
+          ${KERNEL_DIR}/include/thread.h
           ${KERNEL_DIR}/include/memory_service.h ${KERNEL_DIR}/include/irq.h ${KERNEL_DIR}/include/timer.h
           ${KERNEL_DIR}/include/serial.h ${KERNEL_DIR}/include/wasmos_app.h
           ${KERNEL_DIR}/include/native_driver.h ${KERNEL_DIR}/include/spinlock.h

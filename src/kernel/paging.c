@@ -21,6 +21,9 @@
 #define HIGHER_HALF_PD_COUNT 1
 /* Limit higher-half sharing to the first 64 MiB window by default. */
 #define HIGHER_HALF_PDE_COUNT 32
+/* Page-table allocations must stay inside the mapped shared higher-half
+ * window so zero_page/table_ptr always access mapped memory. */
+#define KERNEL_SHARED_HIGHER_HALF_WINDOW_BYTES (64u * 1024u * 1024u)
 /* TODO: If higher-half kernel allocations grow beyond the default 64 MiB
  * window, teach child roots to map only the specific additional windows they
  * need. */
@@ -144,7 +147,7 @@ alloc_table(uint64_t *out_phys)
         return -1;
     }
 
-    uint64_t phys = pfa_alloc_pages(1);
+    uint64_t phys = pfa_alloc_pages_below(1, KERNEL_SHARED_HIGHER_HALF_WINDOW_BYTES);
     if (!phys) {
         return -1;
     }

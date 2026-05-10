@@ -63,6 +63,10 @@ typedef struct {
     uint32_t worker_b_tid;
     uint32_t wait_killer_tid;
     uint32_t wait_target_pid;
+    uint32_t wait_join_target_tid;
+    uint32_t wait_join_waiter_tid;
+    uint8_t wait_join_spawned;
+    uint8_t wait_join_blocked;
     uint8_t worker_a_ran;
     uint8_t worker_b_ran;
     uint8_t wait_started;
@@ -79,6 +83,12 @@ typedef struct {
 static threading_internal_smoke_state_t g_threading_internal_smoke_state;
 static threading_internal_worker_arg_t g_threading_worker_a_arg;
 static threading_internal_worker_arg_t g_threading_worker_b_arg;
+typedef struct {
+    threading_internal_smoke_state_t *state;
+    uint8_t role;
+} threading_wait_join_worker_arg_t;
+static threading_wait_join_worker_arg_t g_threading_wait_join_target_arg;
+static threading_wait_join_worker_arg_t g_threading_wait_join_waiter_arg;
 typedef struct {
     uint32_t target_tid;
     uint32_t waiter_tid;
@@ -768,10 +778,30 @@ threading_internal_worker_entry(process_t *process, uint32_t tid, void *arg)
 }
 
 static process_run_result_t
+threading_wait_join_worker_entry(process_t *process, uint32_t tid, void *arg);
+
+static process_run_result_t
 threading_wait_target_entry(process_t *process, void *arg)
 {
-    (void)process;
-    (void)arg;
+    threading_internal_smoke_state_t *state = (threading_internal_smoke_state_t *)arg;
+    if (!process || !state) {
+        return PROCESS_RUN_YIELDED;
+    }
+    if (!state->wait_join_spawned) {
+        if (process_thread_spawn_worker_internal(process->pid,
+                                                 "thr-wait-join-target",
+                                                 threading_wait_join_worker_entry,
+                                                 &g_threading_wait_join_target_arg,
+                                                 &state->wait_join_target_tid) != 0 ||
+            process_thread_spawn_worker_internal(process->pid,
+                                                 "thr-wait-join-waiter",
+                                                 threading_wait_join_worker_entry,
+                                                 &g_threading_wait_join_waiter_arg,
+                                                 &state->wait_join_waiter_tid) != 0) {
+            return PROCESS_RUN_EXITED;
+        }
+        state->wait_join_spawned = 1;
+    }
     return PROCESS_RUN_YIELDED;
 }
 
@@ -783,11 +813,38 @@ threading_wait_killer_entry(process_t *process, uint32_t tid, void *arg)
     if (!process || !state || state->wait_target_pid == 0 || !state->wait_started) {
         return PROCESS_RUN_YIELDED;
     }
+    if (!state->wait_join_blocked) {
+        return PROCESS_RUN_YIELDED;
+    }
     if (!state->wait_kill_sent) {
         if (process_kill(state->wait_target_pid, 42) != 0) {
             return PROCESS_RUN_EXITED;
         }
         state->wait_kill_sent = 1;
+    }
+    return PROCESS_RUN_EXITED;
+}
+
+static process_run_result_t
+threading_wait_join_worker_entry(process_t *process, uint32_t tid, void *arg)
+{
+    threading_wait_join_worker_arg_t *worker_arg = (threading_wait_join_worker_arg_t *)arg;
+    int32_t exit_status = -1;
+    int join_rc = -1;
+    (void)tid;
+    if (!process || !worker_arg || !worker_arg->state) {
+        return PROCESS_RUN_EXITED;
+    }
+    if (worker_arg->role == 0) {
+        if (!worker_arg->state->wait_join_blocked) {
+            return PROCESS_RUN_YIELDED;
+        }
+        return PROCESS_RUN_YIELDED;
+    }
+    join_rc = process_thread_join(process, worker_arg->state->wait_join_target_tid, &exit_status);
+    if (join_rc > 0) {
+        worker_arg->state->wait_join_blocked = 1;
+        return PROCESS_RUN_BLOCKED;
     }
     return PROCESS_RUN_EXITED;
 }
@@ -906,7 +963,7 @@ threading_internal_smoke_entry(process_t *process, void *arg)
             if (process_spawn_as(process->pid,
                                  "thr-wait-target",
                                  threading_wait_target_entry,
-                                 0,
+                                 state,
                                  &state->wait_target_pid) != 0 ||
                 process_thread_spawn_worker_internal(process->pid,
                                                      "thr-wait-killer",
@@ -941,9 +998,14 @@ threading_internal_smoke_entry(process_t *process, void *arg)
         state->worker_a_ran &&
         state->worker_b_ran &&
         (!g_ring3_thread_lifecycle_smoke_enabled ||
-         (state->wait_done && state->wait_exit_status == 42))) {
+         (state->wait_done &&
+          state->wait_exit_status == 42 &&
+          state->wait_join_blocked &&
+          state->wait_kill_sent))) {
         serial_write("[test] threading internal worker ok\n");
         if (g_ring3_thread_lifecycle_smoke_enabled) {
+            serial_write("[test] threading join after kill order ok\n");
+            serial_write("[test] threading join kill wake ok\n");
             serial_write("[test] threading wait kill wake ok\n");
         }
         state->done = 1;
@@ -2557,6 +2619,10 @@ kmain(boot_info_t *boot_info)
     g_threading_worker_a_arg.which = 0;
     g_threading_worker_b_arg.state = &g_threading_internal_smoke_state;
     g_threading_worker_b_arg.which = 1;
+    g_threading_wait_join_target_arg.state = &g_threading_internal_smoke_state;
+    g_threading_wait_join_target_arg.role = 0;
+    g_threading_wait_join_waiter_arg.state = &g_threading_internal_smoke_state;
+    g_threading_wait_join_waiter_arg.role = 1;
     g_threading_join_order_smoke_state = (threading_join_order_smoke_state_t){0};
     g_threading_join_target_arg.state = &g_threading_join_order_smoke_state;
     g_threading_join_target_arg.role = 0;

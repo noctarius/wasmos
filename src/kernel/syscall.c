@@ -23,6 +23,7 @@ static uint8_t g_ring3_ipc_call_err_rdx_zero_logged;
 static uint8_t g_ring3_ipc_call_correlation_logged;
 static uint8_t g_ring3_ipc_call_out_of_order_retain_logged;
 static uint8_t g_ring3_ipc_call_spoof_invalid_source_deny_logged;
+static uint8_t g_ring3_ipc_call_owner_sender_stress_logged;
 static uint8_t g_ring3_yield_logged;
 static uint8_t g_ring3_thread_yield_logged;
 static uint8_t g_ring3_thread_exit_logged;
@@ -604,6 +605,7 @@ x86_syscall_handler(syscall_frame_t *frame)
         uint32_t expected_reply_source = IPC_ENDPOINT_NONE;
         uint32_t expected_reply_owner_context = 0;
         uint32_t injected_out_of_order_request_id = 0;
+        uint32_t dropped_inauth_replies = 0;
         uint8_t injected_invalid_source_spoof = 0;
         int rc = IPC_ERR_INVALID;
         ipc_message_t req;
@@ -776,6 +778,7 @@ x86_syscall_handler(syscall_frame_t *frame)
             if (!syscall_ipc_reply_authentic(&resp,
                                              expected_reply_source,
                                              expected_reply_owner_context)) {
+                dropped_inauth_replies++;
                 continue;
             }
             frame->rdx = (uint64_t)resp.arg0;
@@ -811,6 +814,11 @@ x86_syscall_handler(syscall_frame_t *frame)
                         serial_write("[test] ring3 ipc call out-of-order retain ok\n");
                     }
                 }
+                if (!g_ring3_ipc_call_owner_sender_stress_logged &&
+                    dropped_inauth_replies >= 2u) {
+                    g_ring3_ipc_call_owner_sender_stress_logged = 1;
+                    serial_write("[test] ring3 ipc owner+sender stress ok\n");
+                }
             }
             return 0;
         }
@@ -830,6 +838,7 @@ x86_syscall_handler(syscall_frame_t *frame)
             if (!syscall_ipc_reply_authentic(&resp,
                                              expected_reply_source,
                                              expected_reply_owner_context)) {
+                dropped_inauth_replies++;
                 continue;
             }
             frame->rdx = (uint64_t)resp.arg0;

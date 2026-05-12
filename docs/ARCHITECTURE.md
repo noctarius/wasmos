@@ -65,6 +65,9 @@ Strict ring3 IPC-call adversarial coverage now also includes invalid-source
 spoof denial with marker `[test] ring3 ipc call spoof invalid source deny ok`.
 Control-plane deny assertions now also include explicit endpoint-policy deny
 coverage marker (`[test] ring3 ipc call control endpoint deny ok`).
+Ring3 IPC stress coverage now also includes endpoint-ownership + sender-context
+authentication stress marker (`[test] ring3 ipc owner+sender stress ok`) after
+multiple inauthentic reply drops in the adversarial call path.
 Forward note: future deterministic kernel race/integration tests should use a
 centralized hook/instrumentation layer around kernel transition points (for
 example scheduler/process/thread lifecycle events) so orchestration logic does

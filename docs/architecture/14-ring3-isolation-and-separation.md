@@ -67,6 +67,8 @@ kernel and other processes continue.
   reply authentication (`[test] ring3 ipc call spoof invalid source deny ok`).
 - Strict ring3 smoke includes explicit control-endpoint deny coverage in IPC
   call policy checks (`[test] ring3 ipc call control endpoint deny ok`).
+- Strict ring3 smoke includes sender/owner authentication stress coverage in
+  IPC call reply validation (`[test] ring3 ipc owner+sender stress ok`).
 - Control-plane endpoints include explicit deny-path assertions in ring3 smoke.
 
 ### Fault Containment Policy

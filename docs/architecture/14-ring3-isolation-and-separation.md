@@ -61,6 +61,8 @@ kernel and other processes continue.
 - Reply acceptance is correlated by request identity and authenticated source.
 - Strict ring3 smoke includes stale/future `request_id` replay-denial coverage
   in the IPC call correlation path (`[test] ring3 ipc call stale id deny ok`).
+- Strict ring3 smoke also checks out-of-order pending-reply retention behavior
+  (`[test] ring3 ipc call out-of-order retain ok`).
 - Control-plane endpoints include explicit deny-path assertions in ring3 smoke.
 
 ### Fault Containment Policy

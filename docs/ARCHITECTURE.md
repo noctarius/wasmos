@@ -59,6 +59,8 @@ Hostcall argument hardening now rejects negative endpoint values in
 Strict ring3 IPC-call adversarial coverage now includes a stale/future
 `request_id` replay-denial marker (`[test] ring3 ipc call stale id deny ok`) in
 the request/reply correlation path.
+Strict ring3 IPC-call adversarial coverage now also checks out-of-order pending
+reply retention with marker `[test] ring3 ipc call out-of-order retain ok`.
 Forward note: future deterministic kernel race/integration tests should use a
 centralized hook/instrumentation layer around kernel transition points (for
 example scheduler/process/thread lifecycle events) so orchestration logic does

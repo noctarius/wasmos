@@ -12,8 +12,9 @@ Purpose: Track all deferred ring-3 hardening tasks and block merge until all are
 - [ ] Replace any remaining direct user-pointer dereferences with validated copy helpers (`mm_copy_from_user`, `mm_copy_to_user`) where applicable.
 - [ ] Ensure explicit user-VA resolution and range checks on pointer-bearing hostcalls.
 - [ ] Audit syscall/hostcall argument width handling (`u64 -> u32` truncation deny).
-  - Done in this slice: syscall-side signed status width checks for `EXIT` and `THREAD_EXIT` now enforce strict `i32` sign-extension validity.
-  - Remaining: hostcall-side argument width audit.
+  - Done so far: syscall-side signed status width checks for `EXIT` and `THREAD_EXIT` now enforce strict `i32` sign-extension validity.
+  - Done in this slice: hostcall-side endpoint width check hardened for `wasmos_serial_register` (negative endpoints now rejected before `uint32_t` conversion).
+  - Remaining: broader hostcall-width sweep as additional endpoint/ID surfaces evolve.
 - [x] Add/update tests for all changed hostcall boundary behaviors (validated via strict QEMU gates in section F for this slice).
 
 ## B) Adversarial IPC Coverage Expansion

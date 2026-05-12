@@ -39,6 +39,9 @@ kernel and other processes continue.
 - Syscall argument width checks reject lossy `u64 -> u32` truncation.
 - Signed status syscall arguments (`EXIT`, `THREAD_EXIT`) must be valid
   sign-extended 32-bit values; lossy 64-bit forms are rejected.
+- Hostcall endpoint arguments that cross signed/unsigned boundaries are
+  validated before conversion (for example `wasmos_serial_register` rejects
+  negative endpoint IDs).
 - Pointer-bearing hostcalls use explicit user-VA resolution and range checks.
 - Copy semantics rely on validated copy helpers (`mm_copy_from_user`,
   `mm_copy_to_user`) rather than direct user-pointer dereference.

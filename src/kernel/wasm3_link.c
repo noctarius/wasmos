@@ -41,6 +41,16 @@ static wasm_fs_peer_slot_t g_wasm_fs_peer_slots[PROCESS_MAX_COUNT];
 static const boot_info_t *g_wasm_boot_info;
 
 static int
+wasm_arg_u32_nonneg(int32_t raw, uint32_t *out)
+{
+    if (!out || raw < 0) {
+        return -1;
+    }
+    *out = (uint32_t)raw;
+    return 0;
+}
+
+static int
 wasm_copy_to_user_bytes(uint32_t context_id,
                         uint64_t user_dst,
                         const void *src,
@@ -1836,7 +1846,11 @@ m3ApiRawFunction(wasmos_serial_register)
 {
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, endpoint)
-    m3ApiReturn(serial_register_remote_driver((uint32_t)endpoint));
+    uint32_t endpoint_u32 = 0;
+    if (wasm_arg_u32_nonneg(endpoint, &endpoint_u32) != 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn(serial_register_remote_driver(endpoint_u32));
 }
 
 m3ApiRawFunction(wasmos_proc_count)

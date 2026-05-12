@@ -157,7 +157,8 @@ nd_framebuffer_map(uint32_t size)
                                   virt + i * PAGE_SIZE,
                                   phys + i * PAGE_SIZE,
                                   MEM_REGION_FLAG_READ |
-                                      MEM_REGION_FLAG_WRITE) < 0) {
+                                      MEM_REGION_FLAG_WRITE |
+                                      MEM_REGION_FLAG_USER) < 0) {
             return (void *)0;
         }
     }

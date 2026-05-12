@@ -48,6 +48,10 @@ plus join-after-kill ordering and kill-during-join wakeup markers
 behavior. Stack teardown now restores guard-page mappings before allocator free
 so recycled pages remain reachable through the shared higher-half alias window
 under strict threading stress.
+Ring3 mapping hardening now requires explicit `MEM_REGION_FLAG_USER` for
+user-slot mappings in `paging_map_4k_in_root`; legacy implicit user-slot flag
+bridging is removed, and ring3 hostcall map paths were updated to pass
+explicit user mapping flags.
 Forward note: future deterministic kernel race/integration tests should use a
 centralized hook/instrumentation layer around kernel transition points (for
 example scheduler/process/thread lifecycle events) so orchestration logic does

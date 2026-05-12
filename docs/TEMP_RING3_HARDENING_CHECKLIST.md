@@ -25,7 +25,8 @@ Purpose: Track all deferred ring-3 hardening tasks and block merge until all are
   - Existing spoofed-source probe remains in place (`[test] ring3 ipc call source auth ok`) and continues to validate reply-source ownership/authentication.
 - [x] Add stronger out-of-order reply queue retention/match/drop tests.
   - Added out-of-order reply retention check in strict ring3 IPC call path with marker: `[test] ring3 ipc call out-of-order retain ok`.
-- [ ] Extend control-plane endpoint deny-path assertions.
+- [x] Extend control-plane endpoint deny-path assertions.
+  - Added explicit control-endpoint deny marker in strict ring3 IPC call path: `[test] ring3 ipc call control endpoint deny ok`.
 - [ ] Verify endpoint ownership + sender-context checks under stress.
 
 ## C) Fault-Policy Coverage Expansion

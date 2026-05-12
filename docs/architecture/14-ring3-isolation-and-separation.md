@@ -31,6 +31,9 @@ kernel and other processes continue.
   and emit explicit failure markers on violation.
 - Identity-map breadth used for transition support is fixed to strict baseline
   (`IDENTITY_PD_COUNT=0`).
+- User-slot page mapping now requires explicit `MEM_REGION_FLAG_USER` in
+  mapping calls; implicit user-slot compatibility flag bridging has been
+  removed from the page-map path.
 
 ### Kernel Entry Safety
 - Syscall argument width checks reject lossy `u64 -> u32` truncation.

@@ -1253,7 +1253,9 @@ m3ApiRawFunction(wasmos_framebuffer_map)
         if (paging_map_4k_in_root(ctx->root_table,
                                  cur_virt,
                                  cur_phys,
-                                 MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE) < 0) {
+                                 MEM_REGION_FLAG_READ |
+                                     MEM_REGION_FLAG_WRITE |
+                                     MEM_REGION_FLAG_USER) < 0) {
             m3ApiReturn(-1);
         }
         cur_virt += 0x1000ULL;
@@ -1344,7 +1346,9 @@ m3ApiRawFunction(wasmos_shmem_map)
         if (paging_map_4k_in_root(ctx->root_table,
                                   cur_virt,
                                   cur_phys,
-                                  MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE) < 0) {
+                                  MEM_REGION_FLAG_READ |
+                                      MEM_REGION_FLAG_WRITE |
+                                      MEM_REGION_FLAG_USER) < 0) {
             m3ApiReturn(-1);
         }
     }

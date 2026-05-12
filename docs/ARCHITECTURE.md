@@ -54,6 +54,8 @@ bridging is removed, and ring3 hostcall map paths were updated to pass
 explicit user mapping flags.
 Syscall argument hardening now also enforces strict signed-32 width checks for
 `EXIT` and `THREAD_EXIT` status arguments, rejecting lossy 64-bit values.
+Hostcall argument hardening now rejects negative endpoint values in
+`wasmos_serial_register` before endpoint-ID conversion to `uint32_t`.
 Forward note: future deterministic kernel race/integration tests should use a
 centralized hook/instrumentation layer around kernel transition points (for
 example scheduler/process/thread lifecycle events) so orchestration logic does

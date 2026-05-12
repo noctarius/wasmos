@@ -33,6 +33,7 @@ It defines repository workflow and documentation/update conventions.
 - Ring-3 hardening enabled by default in normal test boots
 - Ring-3 user-slot mapping now requires explicit `MEM_REGION_FLAG_USER` (legacy implicit bridge removed from page-map path)
 - Syscall boundary now rejects lossy 64-bit-to-32-bit exit-status arguments (`EXIT` / `THREAD_EXIT` require valid signed-32 representation)
+- Hostcall boundary now rejects negative endpoint IDs in `wasmos_serial_register` before `uint32_t` conversion
 - Ring-3 smoke includes process-local `#PF`, `#UD`, `#GP`, `#DE`, `#DB`, `#OF`, `#NM`, `#SS`, and `#AC` fault-policy checks
 - Ring-3 smoke includes shared-memory owner/grant/revoke isolation checks (kernel and user-space app-pair paths)
 - Shared-memory app-pair smoke now also checks forged-ID deny, map-argument policy deny, and post-revoke stale-ID deny

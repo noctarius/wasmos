@@ -87,6 +87,20 @@ syscall_arg_u32(uint64_t raw, uint32_t *out)
     return 0;
 }
 
+static int
+syscall_arg_i32(uint64_t raw, int32_t *out)
+{
+    if (!out) {
+        return -1;
+    }
+    uint64_t sign_extended = (uint64_t)(int64_t)(int32_t)raw;
+    if (sign_extended != raw) {
+        return -1;
+    }
+    *out = (int32_t)raw;
+    return 0;
+}
+
 void
 syscall_set_ipc_call_echo_endpoint(uint32_t endpoint)
 {
@@ -317,10 +331,14 @@ x86_syscall_handler(syscall_frame_t *frame)
         return thread_current_tid();
     case WASMOS_SYSCALL_EXIT: {
         process_t *proc = process_get(process_current_pid());
+        int32_t exit_status = 0;
         if (!proc) {
             return (uint64_t)-1;
         }
-        process_set_exit_status(proc, (int32_t)frame->rdi);
+        if (syscall_arg_i32(frame->rdi, &exit_status) != 0) {
+            return (uint64_t)-1;
+        }
+        process_set_exit_status(proc, exit_status);
         process_yield(PROCESS_RUN_EXITED);
         return 0;
     }
@@ -348,7 +366,11 @@ x86_syscall_handler(syscall_frame_t *frame)
         return 0;
     case WASMOS_SYSCALL_THREAD_EXIT: {
         process_t *proc = process_get(process_current_pid());
+        int32_t exit_status = 0;
         if (!proc) {
+            return (uint64_t)-1;
+        }
+        if (syscall_arg_i32(frame->rdi, &exit_status) != 0) {
             return (uint64_t)-1;
         }
         if (!g_ring3_thread_exit_logged && (frame->cs & 0x3u) == 0x3u &&
@@ -356,7 +378,7 @@ x86_syscall_handler(syscall_frame_t *frame)
             g_ring3_thread_exit_logged = 1;
             serial_write("[test] ring3 thread exit syscall ok\n");
         }
-        process_set_exit_status(proc, (int32_t)frame->rdi);
+        process_set_exit_status(proc, exit_status);
         process_yield(PROCESS_RUN_THREAD_EXITED);
         return 0;
     }

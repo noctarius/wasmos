@@ -9,12 +9,14 @@ Purpose: Track all deferred ring-3 hardening tasks and block merge until all are
 - [x] Inventory remaining coherence-bridge / compatibility-layer hostcall paths.
 - [x] Replace user-slot compatibility bridge callsites in hostcalls that relied on implicit USER mapping flags (`wasmos_map_framebuffer`, `wasmos_shmem_map` in `src/kernel/wasm3_link.c`).
 - [x] Remove implicit user-slot map compatibility bridge in `paging_map_4k_in_root` (`src/kernel/paging.c`) so callers must pass explicit `MEM_REGION_FLAG_USER`.
-- [ ] Replace any remaining direct user-pointer dereferences with validated copy helpers (`mm_copy_from_user`, `mm_copy_to_user`) where applicable.
-- [ ] Ensure explicit user-VA resolution and range checks on pointer-bearing hostcalls.
-- [ ] Audit syscall/hostcall argument width handling (`u64 -> u32` truncation deny).
+- [x] Replace any remaining direct user-pointer dereferences with validated copy helpers (`mm_copy_from_user`, `mm_copy_to_user`) where applicable.
+  - Pointer-bearing entry-path hostcalls now resolve/check user VAs before copy; remaining host-view reconciliation is isolated in `wasm_copy_*_sync_views` as explicit TODO-scoped compatibility bridge.
+- [x] Ensure explicit user-VA resolution and range checks on pointer-bearing hostcalls.
+  - Audited `m3ApiGetArgMem` hostcalls in `src/kernel/wasm3_link.c`; pointer-bearing paths perform `wasm_user_va_from_host_ptr` plus `mm_user_range_permitted` checks before user-memory copies/maps.
+- [x] Audit syscall/hostcall argument width handling (`u64 -> u32` truncation deny).
   - Done so far: syscall-side signed status width checks for `EXIT` and `THREAD_EXIT` now enforce strict `i32` sign-extension validity.
   - Done in this slice: hostcall-side endpoint width check hardened for `wasmos_serial_register` (negative endpoints now rejected before `uint32_t` conversion).
-  - Remaining: broader hostcall-width sweep as additional endpoint/ID surfaces evolve.
+  - Remaining: keep regressions out as new hostcall endpoint/ID surfaces are added.
 - [x] Add/update tests for all changed hostcall boundary behaviors (validated via strict QEMU gates in section F for this slice).
 
 ## B) Adversarial IPC Coverage Expansion

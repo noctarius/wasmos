@@ -52,6 +52,8 @@ Ring3 mapping hardening now requires explicit `MEM_REGION_FLAG_USER` for
 user-slot mappings in `paging_map_4k_in_root`; legacy implicit user-slot flag
 bridging is removed, and ring3 hostcall map paths were updated to pass
 explicit user mapping flags.
+Syscall argument hardening now also enforces strict signed-32 width checks for
+`EXIT` and `THREAD_EXIT` status arguments, rejecting lossy 64-bit values.
 Forward note: future deterministic kernel race/integration tests should use a
 centralized hook/instrumentation layer around kernel transition points (for
 example scheduler/process/thread lifecycle events) so orchestration logic does

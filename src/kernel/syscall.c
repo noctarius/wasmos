@@ -17,6 +17,7 @@ static uint8_t g_ring3_ipc_control_deny_logged;
 static uint8_t g_ring3_ipc_call_deny_logged;
 static uint8_t g_ring3_ipc_call_perm_deny_logged;
 static uint8_t g_ring3_ipc_call_control_deny_logged;
+static uint8_t g_ring3_ipc_call_control_endpoint_deny_logged;
 static uint8_t g_ring3_ipc_call_ok_logged;
 static uint8_t g_ring3_ipc_call_err_rdx_zero_logged;
 static uint8_t g_ring3_ipc_call_correlation_logged;
@@ -671,6 +672,11 @@ x86_syscall_handler(syscall_frame_t *frame)
                 !g_ring3_ipc_call_control_deny_logged) {
                 g_ring3_ipc_call_control_deny_logged = 1;
                 serial_write("[test] ring3 ipc call control deny ok\n");
+            }
+            if (name_eq(proc->name, "ring3-smoke") &&
+                !g_ring3_ipc_call_control_endpoint_deny_logged) {
+                g_ring3_ipc_call_control_endpoint_deny_logged = 1;
+                serial_write("[test] ring3 ipc call control endpoint deny ok\n");
             }
             return (uint64_t)(int64_t)rc;
         }

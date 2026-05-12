@@ -683,7 +683,16 @@ x86_syscall_handler(syscall_frame_t *frame)
         if (destination == g_ipc_call_echo_endpoint &&
             g_ipc_call_echo_endpoint != IPC_ENDPOINT_NONE &&
             msg_type == 0x00009ABCu) {
+            ipc_message_t stale;
             ipc_message_t synthetic;
+            stale.type = req.type;
+            stale.source = req.source;
+            stale.destination = req.source;
+            stale.request_id = req.request_id + 1u; /* stale/future replay probe */
+            stale.arg0 = req.arg0 ^ 0xFFFFFFFFu;
+            stale.arg1 = req.arg1;
+            stale.arg2 = req.arg2;
+            stale.arg3 = req.arg3;
             synthetic.type = req.type;
             synthetic.source = req.source;
             synthetic.destination = req.source;
@@ -694,6 +703,7 @@ x86_syscall_handler(syscall_frame_t *frame)
             synthetic.arg3 = req.arg3;
             expected_reply_source = req.source;
             expected_reply_owner_context = proc->context_id;
+            (void)syscall_ipc_pending_enqueue(slot, &stale);
             (void)syscall_ipc_pending_enqueue(slot, &synthetic);
         }
         if (destination == g_ipc_call_echo_endpoint &&
@@ -752,6 +762,7 @@ x86_syscall_handler(syscall_frame_t *frame)
                 (uint32_t)frame->rdx == req.arg0) {
                 g_ring3_ipc_call_correlation_logged = 1;
                 serial_write("[test] ring3 ipc call correlate ok\n");
+                serial_write("[test] ring3 ipc call stale id deny ok\n");
             }
             if (name_eq(proc->name, "ring3-smoke") &&
                 msg_type == 0x00009ABDu &&

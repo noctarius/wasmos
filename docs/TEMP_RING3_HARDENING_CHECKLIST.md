@@ -19,7 +19,9 @@ Purpose: Track all deferred ring-3 hardening tasks and block merge until all are
 
 ## B) Adversarial IPC Coverage Expansion
 - [ ] Add spoofed-source request/reply abuse tests.
-- [ ] Add stale/cross-process reply-identity misuse tests.
+- [x] Add stale/cross-process reply-identity misuse tests.
+  - Added stale/future request-id replay probe in ring3 IPC call correlation path with strict marker: `[test] ring3 ipc call stale id deny ok`.
+  - Existing spoofed-source probe remains in place (`[test] ring3 ipc call source auth ok`) and continues to validate reply-source ownership/authentication.
 - [ ] Add stronger out-of-order reply queue retention/match/drop tests.
 - [ ] Extend control-plane endpoint deny-path assertions.
 - [ ] Verify endpoint ownership + sender-context checks under stress.

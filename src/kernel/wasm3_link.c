@@ -81,7 +81,8 @@ wasm_copy_to_user_sync_views(uint32_t context_id,
     if (wasm_copy_to_user_bytes(context_id, user_dst, src, len) != 0) {
         return -1;
     }
-    /* Ring3 migration note:
+    /* TODO: Remove host-view sync once linear-memory ownership converges.
+     * Ring3 migration note:
      * wasm3 host pointers can diverge from validated user mappings in some
      * early-output paths; keep both views synchronized until linear-memory
      * ownership is fully unified. */
@@ -105,6 +106,8 @@ wasm_copy_from_user_sync_views(uint32_t context_id,
     if (mm_copy_from_user(context_id, dst, user_src, (uint64_t)len) != 0) {
         return -1;
     }
+    /* TODO: Remove host-view reconciliation once linear-memory ownership
+     * converges and user copy helpers are the single source of truth. */
     if (memcmp(dst, host_src, (size_t)len) != 0) {
         memcpy(dst, host_src, (size_t)len);
         if (mm_copy_to_user(context_id, user_src, host_src, (uint64_t)len) != 0) {

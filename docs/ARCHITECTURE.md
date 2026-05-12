@@ -68,6 +68,9 @@ coverage marker (`[test] ring3 ipc call control endpoint deny ok`).
 Ring3 IPC stress coverage now also includes endpoint-ownership + sender-context
 authentication stress marker (`[test] ring3 ipc owner+sender stress ok`) after
 multiple inauthentic reply drops in the adversarial call path.
+Hostcall pointer-boundary audit now verifies explicit user-VA resolution/range
+checks across pointer-bearing entry paths; the remaining host-view sync bridge
+in `wasm_copy_*_sync_views` is now explicitly tracked with TODOs.
 Forward note: future deterministic kernel race/integration tests should use a
 centralized hook/instrumentation layer around kernel transition points (for
 example scheduler/process/thread lifecycle events) so orchestration logic does

@@ -42,6 +42,10 @@ kernel and other processes continue.
 - Hostcall endpoint arguments that cross signed/unsigned boundaries are
   validated before conversion (for example `wasmos_serial_register` rejects
   negative endpoint IDs).
+- Pointer-bearing hostcall entry paths are audited to perform explicit user-VA
+  resolution and range checks before copy/map operations; remaining host-view
+  sync bridge behavior is isolated to `wasm_copy_*_sync_views` with TODO
+  tracking.
 - Pointer-bearing hostcalls use explicit user-VA resolution and range checks.
 - Copy semantics rely on validated copy helpers (`mm_copy_from_user`,
   `mm_copy_to_user`) rather than direct user-pointer dereference.

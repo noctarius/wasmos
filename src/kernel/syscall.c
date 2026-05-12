@@ -20,6 +20,7 @@ static uint8_t g_ring3_ipc_call_control_deny_logged;
 static uint8_t g_ring3_ipc_call_ok_logged;
 static uint8_t g_ring3_ipc_call_err_rdx_zero_logged;
 static uint8_t g_ring3_ipc_call_correlation_logged;
+static uint8_t g_ring3_ipc_call_out_of_order_retain_logged;
 static uint8_t g_ring3_yield_logged;
 static uint8_t g_ring3_thread_yield_logged;
 static uint8_t g_ring3_thread_exit_logged;
@@ -600,6 +601,7 @@ x86_syscall_handler(syscall_frame_t *frame)
         uint32_t owner_context = 0;
         uint32_t expected_reply_source = IPC_ENDPOINT_NONE;
         uint32_t expected_reply_owner_context = 0;
+        uint32_t injected_out_of_order_request_id = 0;
         int rc = IPC_ERR_INVALID;
         ipc_message_t req;
         ipc_message_t resp;
@@ -709,8 +711,17 @@ x86_syscall_handler(syscall_frame_t *frame)
         if (destination == g_ipc_call_echo_endpoint &&
             g_ipc_call_echo_endpoint != IPC_ENDPOINT_NONE &&
             msg_type == 0x00009ABDu) {
+            ipc_message_t out_of_order;
             ipc_message_t forged;
             ipc_message_t synthetic;
+            out_of_order.type = req.type;
+            out_of_order.source = destination;
+            out_of_order.destination = req.source;
+            out_of_order.request_id = req.request_id + 1u; /* unrelated reply */
+            out_of_order.arg0 = req.arg0 ^ 0x01010101u;
+            out_of_order.arg1 = req.arg1;
+            out_of_order.arg2 = req.arg2;
+            out_of_order.arg3 = req.arg3;
             forged.type = req.type;
             forged.source = req.source; /* wrong source: caller endpoint */
             forged.destination = req.source;
@@ -721,6 +732,8 @@ x86_syscall_handler(syscall_frame_t *frame)
             forged.arg3 = req.arg3;
             synthetic = forged;
             synthetic.source = destination; /* expected source */
+            injected_out_of_order_request_id = out_of_order.request_id;
+            (void)syscall_ipc_pending_enqueue(slot, &out_of_order);
             (void)syscall_ipc_pending_enqueue(slot, &forged);
             (void)syscall_ipc_pending_enqueue(slot, &synthetic);
         }
@@ -768,6 +781,16 @@ x86_syscall_handler(syscall_frame_t *frame)
                 msg_type == 0x00009ABDu &&
                 (uint32_t)frame->rdx == req.arg0) {
                 serial_write("[test] ring3 ipc call source auth ok\n");
+                if (!g_ring3_ipc_call_out_of_order_retain_logged &&
+                    injected_out_of_order_request_id != 0) {
+                    ipc_message_t retained;
+                    if (syscall_ipc_pending_take_request(slot,
+                                                         injected_out_of_order_request_id,
+                                                         &retained) == 0) {
+                        g_ring3_ipc_call_out_of_order_retain_logged = 1;
+                        serial_write("[test] ring3 ipc call out-of-order retain ok\n");
+                    }
+                }
             }
             return 0;
         }

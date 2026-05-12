@@ -38,6 +38,7 @@ It defines repository workflow and documentation/update conventions.
 - Ring-3 IPC adversarial coverage now includes out-of-order pending-reply retention marker (`[test] ring3 ipc call out-of-order retain ok`)
 - Ring-3 IPC adversarial coverage now includes invalid-source spoof denial marker (`[test] ring3 ipc call spoof invalid source deny ok`)
 - Ring-3 IPC control-plane deny coverage now includes explicit endpoint-policy marker (`[test] ring3 ipc call control endpoint deny ok`)
+- Ring-3 IPC stress now includes endpoint-ownership + sender-context auth marker (`[test] ring3 ipc owner+sender stress ok`)
 - Ring-3 smoke includes process-local `#PF`, `#UD`, `#GP`, `#DE`, `#DB`, `#OF`, `#NM`, `#SS`, and `#AC` fault-policy checks
 - Ring-3 smoke includes shared-memory owner/grant/revoke isolation checks (kernel and user-space app-pair paths)
 - Shared-memory app-pair smoke now also checks forged-ID deny, map-argument policy deny, and post-revoke stale-ID deny

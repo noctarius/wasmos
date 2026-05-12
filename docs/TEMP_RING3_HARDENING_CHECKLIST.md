@@ -27,7 +27,8 @@ Purpose: Track all deferred ring-3 hardening tasks and block merge until all are
   - Added out-of-order reply retention check in strict ring3 IPC call path with marker: `[test] ring3 ipc call out-of-order retain ok`.
 - [x] Extend control-plane endpoint deny-path assertions.
   - Added explicit control-endpoint deny marker in strict ring3 IPC call path: `[test] ring3 ipc call control endpoint deny ok`.
-- [ ] Verify endpoint ownership + sender-context checks under stress.
+- [x] Verify endpoint ownership + sender-context checks under stress.
+  - Added strict stress marker in IPC call source-auth path after multiple inauthentic reply drops: `[test] ring3 ipc owner+sender stress ok`.
 
 ## C) Fault-Policy Coverage Expansion
 - [ ] Add additional user-origin exception probes beyond current baseline set.

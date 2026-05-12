@@ -56,6 +56,9 @@ Syscall argument hardening now also enforces strict signed-32 width checks for
 `EXIT` and `THREAD_EXIT` status arguments, rejecting lossy 64-bit values.
 Hostcall argument hardening now rejects negative endpoint values in
 `wasmos_serial_register` before endpoint-ID conversion to `uint32_t`.
+Strict ring3 IPC-call adversarial coverage now includes a stale/future
+`request_id` replay-denial marker (`[test] ring3 ipc call stale id deny ok`) in
+the request/reply correlation path.
 Forward note: future deterministic kernel race/integration tests should use a
 centralized hook/instrumentation layer around kernel transition points (for
 example scheduler/process/thread lifecycle events) so orchestration logic does

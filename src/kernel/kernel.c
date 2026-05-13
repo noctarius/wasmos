@@ -1317,8 +1317,8 @@ ring3_fault_policy_entry(process_t *process, void *arg)
             } else {
                 if (state->churn_pid == 0) {
                     int spawn_rc = ((state->churn_round & 1u) == 0u)
-                        ? spawn_ring3_fault_ud_probe_process(process->parent_pid, &state->churn_pid)
-                        : spawn_ring3_fault_gp_probe_process(process->parent_pid, &state->churn_pid);
+                        ? spawn_ring3_fault_ud_probe_process(process->pid, &state->churn_pid)
+                        : spawn_ring3_fault_gp_probe_process(process->pid, &state->churn_pid);
                     if (spawn_rc != 0 || state->churn_pid == 0) {
                         serial_write("[test] ring3 mixed stress spawn failed\n");
                         process_set_exit_status(process, -1);
@@ -1329,6 +1329,11 @@ ring3_fault_policy_entry(process_t *process, void *arg)
                 if (rc == 0) {
                     if (exit_status != -11) {
                         serial_write("[test] ring3 mixed stress exit status mismatch\n");
+                        process_set_exit_status(process, -1);
+                        return PROCESS_RUN_EXITED;
+                    }
+                    if (process_wait(process, state->churn_pid, &exit_status) != 0) {
+                        serial_write("[test] ring3 mixed stress reap failed\n");
                         process_set_exit_status(process, -1);
                         return PROCESS_RUN_EXITED;
                     }

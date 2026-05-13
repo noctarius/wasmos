@@ -25,7 +25,7 @@ separation model and deferred hardening backlog.
 ### Open / Remaining
 - [ ] Continue post-closure ring-3 hardening per
   `docs/architecture/14-ring3-isolation-and-separation.md`
-  (boundary cleanup, dedicated multi-process fault-storm suite, and CLI flake reduction).
+  (boundary cleanup and CLI flake reduction).
 - [ ] Service registry and discoverability model (including VT endpoint
   discovery migration away from fixed/wired assumptions).
 - [ ] Supervision and restart policy for long-running services/drivers.

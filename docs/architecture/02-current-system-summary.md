@@ -5,9 +5,9 @@ The current tree already boots into a usable user-space stack:
   boot services.
 - The kernel initializes paging, physical memory management, exceptions, the
   timer, IPC, the scheduler, and the process manager.
-- A kernel-owned `init` process starts `hw-discovery`, waits for `fs-fat` to
+- A kernel-owned `init` process starts `device-manager`, waits for `fs-fat` to
   become ready, and then asks the process manager to load `sysinit` from the
-  FAT filesystem. `hw-discovery` now limits the pre-FAT bootstrap to storage,
+  FAT filesystem. `device-manager` now limits the pre-FAT bootstrap to storage,
   then starts display/input drivers from FAT by name once `fs-fat` can serve
   process-manager reads; the kernel early framebuffer is the only display path
   needed before FAT.
@@ -17,7 +17,7 @@ The current tree already boots into a usable user-space stack:
   `scripts/initfs.toml` for config-driven startup. Native framebuffer, serial,
   keyboard, VT, and CLI payloads stay on the FAT image and are loaded by name
   after `fs-fat` is available; hardware drivers are still owned by
-  `hw-discovery`, while `sysinit` starts higher-level services/apps.
+  `device-manager`, while `sysinit` starts higher-level services/apps.
 - `fs-fat` currently provides read-only open/read/seek/stat primitives for the
   shared libc layer and the language-native shims.
 - `fs-fat` also supports overwrite-only writes to existing files through the C
@@ -44,7 +44,7 @@ The current tree already boots into a usable user-space stack:
   captured by the bootloader and keeps the boot-provided geometry when Bochs
   VBE reports a larger post-boot mode, preserving the kernel's framebuffer
   mapping contract until explicit native-driver mode setting is introduced.
-  It is launched from FAT by `hw-discovery` after the storage bootstrap
+  It is launched from FAT by `device-manager` after the storage bootstrap
   completes, with the kernel early framebuffer covering pre-FAT diagnostics and
   panic rendering.
 - Serial-to-framebuffer text handoff now uses a kernel-created shared-memory

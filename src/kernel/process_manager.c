@@ -591,7 +591,7 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
         }
         slot->entry_arg0 = block_endpoint;
         slot->entry_arg1 = IPC_ENDPOINT_NONE;
-    } else if (name_eq(slot->name, "hw-discovery")) {
+    } else if (name_eq(slot->name, "device-manager")) {
         if (g_pm.proc_endpoint == IPC_ENDPOINT_NONE) {
             slot->in_use = 0;
             return -1;

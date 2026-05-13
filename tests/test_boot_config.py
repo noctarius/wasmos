@@ -48,7 +48,7 @@ def _corrupt_sysinit_offset(initfs_blob: bytes) -> bytes:
 class BootConfigManifestTests(unittest.TestCase):
     def test_build_boot_config_rejects_empty_sysinit_spawn(self):
         manifest = {
-            "boot": {"bootstrap_modules": ["hw-discovery"]},
+            "boot": {"bootstrap_modules": ["device-manager"]},
             "sysinit": {"spawn": []},
         }
         with self.assertRaisesRegex(ValueError, "sysinit.spawn must list at least one process"):
@@ -56,7 +56,7 @@ class BootConfigManifestTests(unittest.TestCase):
 
     def test_build_boot_config_rejects_duplicate_sysinit_spawn(self):
         manifest = {
-            "boot": {"bootstrap_modules": ["hw-discovery"]},
+            "boot": {"bootstrap_modules": ["device-manager"]},
             "sysinit": {"spawn": ["cli", "cli"]},
         }
         with self.assertRaisesRegex(ValueError, "sysinit.spawn names must be unique"):
@@ -64,7 +64,7 @@ class BootConfigManifestTests(unittest.TestCase):
 
     def test_build_boot_config_rejects_long_sysinit_name(self):
         manifest = {
-            "boot": {"bootstrap_modules": ["hw-discovery"]},
+            "boot": {"bootstrap_modules": ["device-manager"]},
             "sysinit": {"spawn": ["abcdefghijklmnopq"]},
         }
         with self.assertRaisesRegex(ValueError, "16-byte PM spawn ABI"):

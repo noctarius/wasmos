@@ -73,8 +73,8 @@ Current bootstrap use:
 2. The bootloader loads `kernel.elf` and `initfs.img`.
 3. The bootloader exits boot services and jumps to kernel entry.
 4. The kernel initializes core subsystems and spawns the kernel `init` task.
-5. `init` starts `hw-discovery` from the bootstrap module set exposed by initfs.
-6. `hw-discovery` starts `ata` and `fs-fat`.
+5. `init` starts `device-manager` from the bootstrap module set exposed by initfs.
+6. `device-manager` starts `ata` and `fs-fat`.
 7. `init` waits for FAT readiness, then loads `sysinit` from disk through the
    process manager.
 8. `sysinit` reads the boot config and starts the configured late user
@@ -82,11 +82,11 @@ Current bootstrap use:
 9. The CLI becomes the visible interactive shell.
 
 A minimal COM1-based serial stub keeps the console alive during the steps above.
-The AssemblyScript `serial` driver now loads via `hw-discovery` and invokes
+The AssemblyScript `serial` driver now loads via `device-manager` and invokes
 `serial_register()` so console output can switch over from the stub to the new
 service as soon as the driver is available.
 
-- `hw-discovery` merely starts the keyboard WASMOS app alongside the other
+- `device-manager` merely starts the keyboard WASMOS app alongside the other
   bootstrap drivers; the AssemblyScript driver now polls the PS/2 controller for
   scancodes itself so keyboard presence remains a user-space concern instead of
   spinning kernel knowledge into the microkernel core.

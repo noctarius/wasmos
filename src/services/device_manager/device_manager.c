@@ -5,7 +5,7 @@
 #include "wasmos_driver_abi.h"
 
 /*
- * hw-discovery is currently a bootstrap sequencer more than a full device
+ * device-manager is currently a bootstrap sequencer more than a full device
  * manager. It verifies the ACPI RSDP is present, finds the bootstrap storage
  * driver modules, and asks the process manager to start ATA/FAT in dependency
  * order. Once FAT is available, it starts display and input drivers by name
@@ -155,26 +155,26 @@ hw_scan_acpi(void)
                                        (int32_t)(uintptr_t)&length,
                                        (int32_t)sizeof(rsdp));
     if (rc != 0) {
-        console_write("[hw-discovery] ACPI RSDP not found\n");
+        console_write("[device-manager] ACPI RSDP not found\n");
         return;
     }
     if (wasmos_sync_user_read((int32_t)(uintptr_t)&length, (int32_t)sizeof(length)) != 0 ||
         wasmos_sync_user_read((int32_t)(uintptr_t)&rsdp, (int32_t)sizeof(rsdp)) != 0) {
-        console_write("[hw-discovery] ACPI sync failed\n");
+        console_write("[device-manager] ACPI sync failed\n");
         return;
     }
     if (length < 20) {
-        console_write("[hw-discovery] ACPI RSDP too small\n");
+        console_write("[device-manager] ACPI RSDP too small\n");
         return;
     }
     if (!(rsdp.signature[0] == 'R' && rsdp.signature[1] == 'S' &&
           rsdp.signature[2] == 'D' && rsdp.signature[3] == ' ' &&
           rsdp.signature[4] == 'P' && rsdp.signature[5] == 'T' &&
           rsdp.signature[6] == 'R' && rsdp.signature[7] == ' ')) {
-        console_write("[hw-discovery] ACPI RSDP signature mismatch\n");
+        console_write("[device-manager] ACPI RSDP signature mismatch\n");
         return;
     }
-    console_write("[hw-discovery] ACPI RSDP ok\n");
+    console_write("[device-manager] ACPI RSDP ok\n");
 }
 
 static int
@@ -283,12 +283,12 @@ initialize(int32_t proc_endpoint,
     g_reply_endpoint = wasmos_ipc_create_endpoint();
     if (g_reply_endpoint < 0) {
         g_phase = HW_PHASE_FAILED;
-        console_write("[hw-discovery] failed to create reply endpoint\n");
+        console_write("[device-manager] failed to create reply endpoint\n");
         stall_forever();
     }
     if (proc_endpoint < 0 || module_count <= 0) {
         g_phase = HW_PHASE_FAILED;
-        console_write("[hw-discovery] invalid init args\n");
+        console_write("[device-manager] invalid init args\n");
         stall_forever();
     }
     g_proc_endpoint = proc_endpoint;
@@ -313,31 +313,31 @@ initialize(int32_t proc_endpoint,
             if (target == HW_SPAWN_SERIAL) {
                 if (hw_spawn_driver_name(target) != 0) {
                     g_phase = HW_PHASE_FAILED;
-                    console_write("[hw-discovery] spawn serial failed\n");
+                    console_write("[device-manager] spawn serial failed\n");
                     stall_forever();
                 }
             } else if (target == HW_SPAWN_KEYBOARD) {
                 if (hw_spawn_driver_name(target) != 0) {
                     g_phase = HW_PHASE_FAILED;
-                    console_write("[hw-discovery] spawn keyboard failed\n");
+                    console_write("[device-manager] spawn keyboard failed\n");
                     stall_forever();
                 }
             } else if (target == HW_SPAWN_FRAMEBUFFER) {
                 if (hw_spawn_driver_name(target) != 0) {
                     g_phase = HW_PHASE_FAILED;
-                    console_write("[hw-discovery] spawn framebuffer failed\n");
+                    console_write("[device-manager] spawn framebuffer failed\n");
                     stall_forever();
                 }
             } else if (target == HW_SPAWN_ATA) {
                 if (hw_spawn_driver_index(g_ata_index) != 0) {
                     g_phase = HW_PHASE_FAILED;
-                    console_write("[hw-discovery] spawn ata failed\n");
+                    console_write("[device-manager] spawn ata failed\n");
                     stall_forever();
                 }
             } else if (target == HW_SPAWN_FAT) {
                 if (hw_spawn_driver_index(g_fat_index) != 0) {
                     g_phase = HW_PHASE_FAILED;
-                    console_write("[hw-discovery] spawn fs-fat failed\n");
+                    console_write("[device-manager] spawn fs-fat failed\n");
                     stall_forever();
                 }
             }
@@ -350,7 +350,7 @@ initialize(int32_t proc_endpoint,
             int32_t recv_rc = wasmos_ipc_recv(g_reply_endpoint);
             if (recv_rc < 0) {
                 g_phase = HW_PHASE_FAILED;
-                console_write("[hw-discovery] spawn recv failed\n");
+                console_write("[device-manager] spawn recv failed\n");
                 stall_forever();
             }
 
@@ -358,7 +358,7 @@ initialize(int32_t proc_endpoint,
             int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
             if (resp_req != g_request_id) {
                 g_phase = HW_PHASE_FAILED;
-                console_write("[hw-discovery] spawn response mismatch\n");
+                console_write("[device-manager] spawn response mismatch\n");
                 stall_forever();
             }
             g_request_id++;
@@ -411,7 +411,7 @@ initialize(int32_t proc_endpoint,
             }
 
             g_phase = HW_PHASE_FAILED;
-            console_write("[hw-discovery] spawn response invalid\n");
+            console_write("[device-manager] spawn response invalid\n");
             stall_forever();
         }
 
@@ -420,7 +420,7 @@ initialize(int32_t proc_endpoint,
             continue;
         }
 
-        console_write("[hw-discovery] failed\n");
+        console_write("[device-manager] failed\n");
         stall_forever();
     }
 }

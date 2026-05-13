@@ -13,8 +13,11 @@ Ring-3 isolation architecture and separation model are documented in
 `docs/architecture/14-ring3-isolation-and-separation.md`.
 Latest checkpoint: Phase 2 mapping minimization is closed for current strict
 scope; Phase 5 fault-policy expansion coverage is in place for `#PF`, `#UD`,
-`#GP`, `#DE`, `#DB`, `#OF`, `#NM`, `#SS`, and `#AC` process-local termination
-probes; Phase 6 scheduler/trap robustness is closed for current scope
+`#GP`, `#DE`, `#DB`, `#BP`, `#OF`, `#NM`, `#SS`, and `#AC` process-local
+termination probes, with explicit containment liveness marker
+(`[test] ring3 containment liveness ok`) and mixed abuse churn marker
+(`[test] ring3 mixed stress ok`); Phase 6 scheduler/trap robustness is closed
+for current scope
 (watchdog + mixed-stress + trap-integrity rollout complete, with one noted
 transient CLI fs-smoke flake); Phase 7 memory-service/shared-mapping isolation
 is closed for current strict scope with owner-bound checks, explicit grants/

@@ -79,10 +79,15 @@ kernel and other processes continue.
 - User-origin fault classes covered by current strict smoke terminate only the
   faulting process with deterministic policy status (`-11`).
 - Covered exception/fault probes currently include:
-  - `#PF`, `#UD`, `#GP`, `#DE`, `#DB`
+  - `#PF`, `#UD`, `#GP`, `#DE`, `#DB`, `#BP`
   - strict expected-vector probes for `ring3-fault-of`, `ring3-fault-nm`,
     `ring3-fault-ss`, and `ring3-fault-ac` under current payload behavior
 - Fault-policy checks assert both reason markers and termination status markers.
+- Containment liveness is asserted after probe completion
+  (`[test] ring3 containment liveness ok`) to verify the parent/init path
+  remains alive while only offending tasks are terminated.
+- Mixed abuse churn is asserted with strict marker (`[test] ring3 mixed stress ok`)
+  by repeatedly combining fault probes with ongoing scheduler activity.
 
 ### Scheduler and Trap Robustness
 - Strict ring3 validation includes watchdog markers for forward progress and

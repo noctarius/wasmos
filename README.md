@@ -40,7 +40,9 @@ It defines repository workflow and documentation/update conventions.
 - Ring-3 IPC control-plane deny coverage now includes explicit endpoint-policy marker (`[test] ring3 ipc call control endpoint deny ok`)
 - Ring-3 IPC stress now includes endpoint-ownership + sender-context auth marker (`[test] ring3 ipc owner+sender stress ok`)
 - Hostcall pointer paths now consistently validate user VA/range before copies; remaining host-view sync bridge is explicitly tracked with TODOs
-- Ring-3 smoke includes process-local `#PF`, `#UD`, `#GP`, `#DE`, `#DB`, `#OF`, `#NM`, `#SS`, and `#AC` fault-policy checks
+- Ring-3 smoke includes process-local `#PF`, `#UD`, `#GP`, `#DE`, `#DB`, `#BP`, `#OF`, `#NM`, `#SS`, and `#AC` fault-policy checks
+- Ring-3 fault-policy smoke now includes containment liveness marker (`[test] ring3 containment liveness ok`)
+- Ring-3 fault-policy mixed-churn liveness marker remains enforced (`[test] ring3 mixed stress ok`)
 - Ring-3 smoke includes shared-memory owner/grant/revoke isolation checks (kernel and user-space app-pair paths)
 - Shared-memory app-pair smoke now also checks forged-ID deny, map-argument policy deny, and post-revoke stale-ID deny
 - Strict ring3 boot smoke now includes a kernel-level shared-memory misuse matrix marker (`[test] ring3 shmem misuse matrix ok`)

@@ -33,10 +33,14 @@ Purpose: Track all deferred ring-3 hardening tasks and block merge until all are
   - Added strict stress marker in IPC call source-auth path after multiple inauthentic reply drops: `[test] ring3 ipc owner+sender stress ok`.
 
 ## C) Fault-Policy Coverage Expansion
-- [ ] Add additional user-origin exception probes beyond current baseline set.
-- [ ] Assert process-local containment (faulting process terminated; kernel/other processes remain live).
-- [ ] Assert deterministic policy markers/reason + termination status markers for each probe.
-- [ ] Add mixed abuse scenarios (fault + syscall + IPC churn) for liveness validation.
+- [x] Add additional user-origin exception probes beyond current baseline set.
+  - Added `ring3-fault-bp` (`int3`) probe with strict marker: `[test] ring3 fault bp exit status ok`.
+- [x] Assert process-local containment (faulting process terminated; kernel/other processes remain live).
+  - Added containment liveness marker in fault-policy runner: `[test] ring3 containment liveness ok`.
+- [x] Assert deterministic policy markers/reason + termination status markers for each probe.
+  - Strict status markers now include `#BP` alongside existing probes, all validating deterministic `-11` policy exits.
+- [x] Add mixed abuse scenarios (fault + syscall + IPC churn) for liveness validation.
+  - Mixed churn loop remains enforced with strict marker: `[test] ring3 mixed stress ok`.
 
 ## D) Dedicated Multi-Process Fault-Storm Liveness Suite
 - [ ] Add strict ring3 multi-process fault-storm suite target/profile.
@@ -56,10 +60,10 @@ Purpose: Track all deferred ring-3 hardening tasks and block merge until all are
 - [ ] Any new/updated suite targets added by this branch.
 
 ## G) Documentation Alignment Before Merge
-- [ ] Update `README.md` highlights if behavior/test markers change.
-- [ ] Update `docs/ARCHITECTURE.md` checkpoint text for landed hardening work.
-- [ ] Update `docs/architecture/14-ring3-isolation-and-separation.md` with concrete closure notes.
-- [ ] Update `docs/TASKS.md` open items to reflect what is closed vs still deferred.
+- [x] Update `README.md` highlights if behavior/test markers change.
+- [x] Update `docs/ARCHITECTURE.md` checkpoint text for landed hardening work.
+- [x] Update `docs/architecture/14-ring3-isolation-and-separation.md` with concrete closure notes.
+- [x] Update `docs/TASKS.md` open items to reflect what is closed vs still deferred.
 
 ## H) Final Branch Exit Criteria
 - [ ] All tasks above complete.

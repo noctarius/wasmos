@@ -124,7 +124,8 @@ The following are intentionally deferred beyond initial strict closure:
 - extend specialized IPC request/reply adversarial coverage
 - extend user-origin exception coverage beyond current set
 - add dedicated multi-process mixed fault-storm liveness suite
-- harden CLI fs-smoke harness image/reset isolation to eliminate known flake
+- continue monitoring CLI harness stability after ESP-isolation and deterministic
+  suite-status rollout
 
 ### Design Status
 The ring3 strict-mode/default isolation migration (Phases 0-8) is closed for

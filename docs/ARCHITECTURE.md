@@ -18,8 +18,8 @@ termination probes, with explicit containment liveness marker
 (`[test] ring3 containment liveness ok`) and mixed abuse churn marker
 (`[test] ring3 mixed stress ok`); Phase 6 scheduler/trap robustness is closed
 for current scope
-(watchdog + mixed-stress + trap-integrity rollout complete, with one noted
-transient CLI fs-smoke flake); Phase 7 memory-service/shared-mapping isolation
+(watchdog + mixed-stress + trap-integrity rollout complete); Phase 7
+memory-service/shared-mapping isolation
 is closed for current strict scope with owner-bound checks, explicit grants/
 revoke, strict ring3 cross-process deny/allow markers, app-pair forged/stale
 negative checks, kernel misuse-matrix gate markers, and shared-map state
@@ -74,6 +74,9 @@ multiple inauthentic reply drops in the adversarial call path.
 Dedicated strict ring3 fault-storm validation is now available via
 `run-qemu-ring3-fault-storm-test` and asserts forward progress/watchdog markers
 plus trap-frame integrity under repeated mixed fault churn.
+CLI smoke flake reduction now uses per-session isolated ESP runs
+(`WASMOS_QEMU_ISOLATE_ESP=1`) and deterministic suite status markers from
+`scripts/run_unittest_suite.py`.
 Hostcall pointer-boundary audit now verifies explicit user-VA resolution/range
 checks across pointer-bearing entry paths; the remaining host-view sync bridge
 in `wasm_copy_*_sync_views` is now explicitly tracked with TODOs.

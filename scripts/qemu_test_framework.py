@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 import argparse
+import atexit
 import os
 import re
 import selectors
 import subprocess
 import sys
+import tempfile
 import time
+import shutil
 from dataclasses import dataclass
 from typing import Optional, Pattern, Union
 
@@ -17,6 +20,7 @@ class QemuConfig:
     esp_dir: str
     nographic: bool = True
     display: str = ""
+    isolate_esp: bool = False
 
 
 def _read_cmake_cache(cache_path: str) -> dict:
@@ -41,9 +45,15 @@ def default_config(build_dir: str = "build") -> QemuConfig:
     ovmf_code = os.environ.get("WASMOS_OVMF_CODE", cache.get("OVMF_CODE", ""))
     ovmf_vars = os.environ.get("WASMOS_OVMF_VARS", cache.get("OVMF_VARS", ""))
     esp_dir = os.environ.get("WASMOS_ESP", os.path.join(build_dir, "esp"))
+    isolate_esp = os.environ.get("WASMOS_QEMU_ISOLATE_ESP", "0") == "1"
     if not ovmf_code:
         raise RuntimeError("OVMF_CODE not set (WASMOS_OVMF_CODE or CMakeCache.txt)")
-    return QemuConfig(ovmf_code=ovmf_code, ovmf_vars=ovmf_vars, esp_dir=esp_dir)
+    return QemuConfig(
+        ovmf_code=ovmf_code,
+        ovmf_vars=ovmf_vars,
+        esp_dir=esp_dir,
+        isolate_esp=isolate_esp,
+    )
 
 
 def build_qemu_cmd(cfg: QemuConfig) -> list:
@@ -77,6 +87,13 @@ class QemuSession:
         self.proc: Optional[subprocess.Popen] = None
         self.selector: Optional[selectors.BaseSelector] = None
         self.buf = b""
+        self._esp_runtime_dir: Optional[str] = None
+
+    def _cleanup_esp_runtime_dir(self) -> None:
+        if not self._esp_runtime_dir:
+            return
+        shutil.rmtree(self._esp_runtime_dir, ignore_errors=True)
+        self._esp_runtime_dir = None
 
     def start(self) -> None:
         if not os.path.exists(self.cfg.ovmf_code):
@@ -86,7 +103,23 @@ class QemuSession:
         if not os.path.isdir(self.cfg.esp_dir):
             raise FileNotFoundError(f"ESP dir not found: {self.cfg.esp_dir}")
 
-        cmd = build_qemu_cmd(self.cfg)
+        runtime_cfg = self.cfg
+        if self.cfg.isolate_esp:
+            temp_root = tempfile.mkdtemp(prefix="wasmos-esp-")
+            runtime_esp = os.path.join(temp_root, "esp")
+            shutil.copytree(self.cfg.esp_dir, runtime_esp)
+            runtime_cfg = QemuConfig(
+                ovmf_code=self.cfg.ovmf_code,
+                ovmf_vars=self.cfg.ovmf_vars,
+                esp_dir=runtime_esp,
+                nographic=self.cfg.nographic,
+                display=self.cfg.display,
+                isolate_esp=False,
+            )
+            self._esp_runtime_dir = temp_root
+            atexit.register(self._cleanup_esp_runtime_dir)
+
+        cmd = build_qemu_cmd(runtime_cfg)
         self.proc = subprocess.Popen(
             cmd,
             stdin=subprocess.PIPE,
@@ -133,6 +166,7 @@ class QemuSession:
                     except Exception:
                         pass
             self.proc = None
+            self._cleanup_esp_runtime_dir()
 
     def __enter__(self):
         self.start()

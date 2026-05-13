@@ -12,7 +12,7 @@ if SCRIPTS not in sys.path:
 from qemu_test_framework import QemuSession, default_config
 
 
-class HwDiscoveryIntegrationTests(unittest.TestCase):
+class DeviceManagerIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cfg = default_config()
@@ -38,8 +38,8 @@ class HwDiscoveryIntegrationTests(unittest.TestCase):
         if not ok:
             self.fail(f"Prompt not found after '{cmd}'.\n--- tail ---\n{self.session.tail()}\n")
 
-    def test_hw_discovery_running(self):
-        self.assertIn(b"[wasmos-app] entry start hw-discovery export=initialize", self.session.buf)
+    def test_device_manager_running(self):
+        self.assertIn(b"[wasmos-app] entry start device-manager export=initialize", self.session.buf)
         self._cmd_expect("ps", b"processes:")
 
 

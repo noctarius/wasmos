@@ -88,8 +88,9 @@ separation model and deferred hardening backlog.
   out-of-tree or behind explicit opt-in integration points.
 
 ## Drivers and Services
-- [ ] Add `driver-manager`.
-- [ ] Extend `hw-discovery` beyond ACPI/storage bootstrap.
+- [ ] Split `device-manager` into inventory/policy/lifecycle responsibilities
+  and add dedicated bus services (`pci-bus`, `acpi-bus`).
+- [ ] Extend `device-manager` beyond ACPI/storage bootstrap.
 - [ ] Add PCI device inventory and driver matching.
 - [ ] Add hotplug/event publication.
 - [ ] Add filesystem/mountpoint manager (`mount-manager`) and VFS layer.

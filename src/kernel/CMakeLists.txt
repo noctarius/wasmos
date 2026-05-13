@@ -224,7 +224,7 @@ add_library(kernel_ide OBJECT EXCLUDE_FROM_ALL
   ${DRIVER_WASM_DIR}/fs_fat/fs_fat.c
   ${SERVICES_DIR}/sysinit/init.c
   ${SERVICES_DIR}/cli/cli.c
-  ${SERVICES_DIR}/hw_discovery/hw_discovery.c
+  ${SERVICES_DIR}/device_manager/device_manager.c
 )
 target_include_directories(kernel_ide PRIVATE
   ${KERNEL_DIR}/include

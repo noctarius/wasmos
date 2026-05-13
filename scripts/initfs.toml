@@ -8,7 +8,7 @@ bootstrap_modules = [
   "native-call-smoke",
   "ata",
   "fs-fat",
-  "hw-discovery",
+  "device-manager",
 ]
 
 [sysinit]
@@ -67,8 +67,8 @@ source = "fs_fat.wap"
 [[entries]]
 kind = "wasmos_app"
 flags = ["bootstrap"]
-path = "system/services/hw_discovery.wap"
-source = "hw_discovery.wap"
+path = "system/services/device_manager.wap"
+source = "device_manager.wap"
 
 [[entries]]
 kind = "config"

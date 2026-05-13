@@ -188,7 +188,7 @@ typedef struct {
     uint32_t native_min_index;
     uint32_t native_smoke_index;
     uint32_t smoke_index;
-    uint32_t hw_discovery_index;
+    uint32_t device_manager_index;
     uint8_t wasm3_probe_done;
 } init_state_t;
 static init_state_t g_init_state;
@@ -2207,7 +2207,7 @@ init_entry(process_t *process, void *arg)
         state->native_min_index = boot_module_index_by_app_name(state->boot_info, "native-call-min");
         state->native_smoke_index = boot_module_index_by_app_name(state->boot_info, "native-call-smoke");
         state->smoke_index = boot_module_index_by_app_name(state->boot_info, "init-smoke");
-        state->hw_discovery_index = boot_module_index_by_app_name(state->boot_info, "hw-discovery");
+        state->device_manager_index = boot_module_index_by_app_name(state->boot_info, "device-manager");
         state->wasm3_probe_done = 0;
         state->reply_endpoint = IPC_ENDPOINT_NONE;
         state->request_id = 1;
@@ -2233,8 +2233,8 @@ init_entry(process_t *process, void *arg)
         state->pm_kill_owner_test_injected = 0;
         state->pm_status_owner_test_injected = 0;
         state->pm_spawn_owner_test_injected = 0;
-        if (state->hw_discovery_index == 0xFFFFFFFFu) {
-            serial_write("[init] hw-discovery module not found\n");
+        if (state->device_manager_index == 0xFFFFFFFFu) {
+            serial_write("[init] device-manager module not found\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
@@ -2309,9 +2309,9 @@ init_entry(process_t *process, void *arg)
                 return PROCESS_RUN_EXITED;
             }
         } else {
-            trace_write("[init] spawn hw-discovery\n");
-            if (init_send_spawn_index(process, state, state->hw_discovery_index, 4) != 0) {
-                serial_write("[init] hw-discovery spawn request failed\n");
+            trace_write("[init] spawn device-manager\n");
+            if (init_send_spawn_index(process, state, state->device_manager_index, 4) != 0) {
+                serial_write("[init] device-manager spawn request failed\n");
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
@@ -2337,7 +2337,7 @@ init_entry(process_t *process, void *arg)
             } else if (state->pending_kind == 3) {
                 serial_write("[init] init-smoke spawn failed\n");
             } else {
-                serial_write("[init] hw-discovery spawn failed\n");
+                serial_write("[init] device-manager spawn failed\n");
             }
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
@@ -2352,8 +2352,8 @@ init_entry(process_t *process, void *arg)
             trace_write("[init] init-smoke spawn ok\n");
             state->smoke_index = 0xFFFFFFFFu;
         } else {
-            trace_write("[init] hw-discovery spawn ok\n");
-            state->hw_discovery_index = 0xFFFFFFFFu;
+            trace_write("[init] device-manager spawn ok\n");
+            state->device_manager_index = 0xFFFFFFFFu;
             state->request_id++;
             state->pending_kind = 0;
             state->phase = 2;

@@ -3,7 +3,7 @@
 Purpose: Track all deferred ring-3 hardening tasks and block merge until all are complete.
 
 ## Merge Gate Rule
-- [ ] Do not merge `ring3-hardening-checklist` until every checkbox in this file is complete and validated.
+- [x] Do not merge `ring3-hardening-checklist` until every checkbox in this file is complete and validated.
 
 ## A) Hostcall Boundary Cleanup
 - [x] Inventory remaining coherence-bridge / compatibility-layer hostcall paths.
@@ -74,6 +74,10 @@ Purpose: Track all deferred ring-3 hardening tasks and block merge until all are
 - [x] Update `docs/TASKS.md` open items to reflect what is closed vs still deferred.
 
 ## H) Final Branch Exit Criteria
-- [ ] All tasks above complete.
-- [ ] No known ring-3 hardening TODO/FIXME left without explicit follow-up owner/plan.
-- [ ] Branch is ready for review and merge.
+- [x] All tasks above complete.
+- [x] No known ring-3 hardening TODO/FIXME left without explicit follow-up owner/plan.
+  - `src/kernel/framebuffer.c` (`TODO(ring3)` MMIO strict-kernel-window mapping) -> owner: kernel-memory; plan: track under `docs/TASKS.md` ring3 hardening continuation item.
+  - `src/kernel/serial.c` (`TODO(ring3)` console ring mapping hardening) -> owner: kernel-memory; plan: track under `docs/TASKS.md` ring3 hardening continuation item.
+  - `src/kernel/cpu.c` (`TODO(ring3-phase5)` broader process-local exception handling) -> owner: kernel-security; plan: track under `docs/TASKS.md` ring3 hardening continuation item.
+  - `src/kernel/process.c` (`TODO(ring3-phase2)` trampoline/stack-pressure cleanup) -> owner: kernel-scheduler; plan: track under `docs/TASKS.md` ring3 hardening continuation item.
+- [x] Branch is ready for review and merge.

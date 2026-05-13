@@ -43,6 +43,7 @@ It defines repository workflow and documentation/update conventions.
 - Ring-3 smoke includes process-local `#PF`, `#UD`, `#GP`, `#DE`, `#DB`, `#BP`, `#OF`, `#NM`, `#SS`, and `#AC` fault-policy checks
 - Ring-3 fault-policy smoke now includes containment liveness marker (`[test] ring3 containment liveness ok`)
 - Ring-3 fault-policy mixed-churn liveness marker remains enforced (`[test] ring3 mixed stress ok`)
+- Dedicated strict ring-3 multi-process fault-storm profile is available via `run-qemu-ring3-fault-storm-test` and asserts watchdog cleanliness/progress (`[test] ring3 watchdog clean ok`, `[test] sched progress ok`)
 - Ring-3 smoke includes shared-memory owner/grant/revoke isolation checks (kernel and user-space app-pair paths)
 - Shared-memory app-pair smoke now also checks forged-ID deny, map-argument policy deny, and post-revoke stale-ID deny
 - Strict ring3 boot smoke now includes a kernel-level shared-memory misuse matrix marker (`[test] ring3 shmem misuse matrix ok`)

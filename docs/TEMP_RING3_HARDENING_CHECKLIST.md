@@ -43,10 +43,14 @@ Purpose: Track all deferred ring-3 hardening tasks and block merge until all are
   - Mixed churn loop remains enforced with strict marker: `[test] ring3 mixed stress ok`.
 
 ## D) Dedicated Multi-Process Fault-Storm Liveness Suite
-- [ ] Add strict ring3 multi-process fault-storm suite target/profile.
-- [ ] Include watchdog/progress markers for forward progress.
-- [ ] Include trap-frame integrity assertions under repeated fault load.
-- [ ] Document expected markers and failure signatures in test output.
+- [x] Add strict ring3 multi-process fault-storm suite target/profile.
+  - Added dedicated target: `run-qemu-ring3-fault-storm-test` (with marker runner `run-qemu-ring3-fault-storm-check`).
+- [x] Include watchdog/progress markers for forward progress.
+  - Suite requires `[test] ring3 watchdog clean ok` and `[test] sched progress ok`.
+- [x] Include trap-frame integrity assertions under repeated fault load.
+  - Suite rejects trap-frame watchdog fault marker: `[watchdog] trap frame invalid cs=`.
+- [x] Document expected markers and failure signatures in test output.
+  - Marker expectations and fail markers are codified in `scripts/qemu_ring3_fault_storm_test.py`.
 
 ## E) CLI Smoke Flake Reduction
 - [ ] Harden test image/reset isolation in CLI smoke harness.
@@ -57,7 +61,8 @@ Purpose: Track all deferred ring-3 hardening tasks and block merge until all are
 - [x] `cmake --build build --target run-qemu-test`
 - [x] `cmake --build build --target run-qemu-ring3-test`
 - [x] `cmake --build build --target run-qemu-cli-test`
-- [ ] Any new/updated suite targets added by this branch.
+- [x] Any new/updated suite targets added by this branch.
+  - `cmake --build build --target run-qemu-ring3-fault-storm-test`
 
 ## G) Documentation Alignment Before Merge
 - [x] Update `README.md` highlights if behavior/test markers change.

@@ -94,6 +94,11 @@ kernel and other processes continue.
   trap-frame integrity.
 - Mixed stress runs combine syscall churn, IPC deny/allow probes, and repeated
   fault probes to validate kernel liveness under abuse.
+- Dedicated multi-process fault-storm profile
+  (`run-qemu-ring3-fault-storm-test`) additionally asserts:
+  - `[test] ring3 watchdog clean ok`
+  - `[test] sched progress ok`
+  - absence of trap-frame watchdog invalid marker (`[watchdog] trap frame invalid cs=`)
 
 ### Shared Memory / Pager Isolation
 - Shared regions are owner-context bound.
@@ -107,6 +112,7 @@ Primary strict regression gates are:
 - `cmake --build build --target run-qemu-test`
 - `cmake --build build --target run-qemu-ring3-test`
 - `cmake --build build --target run-qemu-cli-test`
+- `cmake --build build --target run-qemu-ring3-fault-storm-test`
 
 These gates assert behavioral markers for memory isolation, IPC isolation,
 shared-memory policy, fault containment, and scheduler liveness.

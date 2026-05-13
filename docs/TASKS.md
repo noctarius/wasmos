@@ -25,7 +25,10 @@ separation model and deferred hardening backlog.
 ### Open / Remaining
 - [ ] Continue post-closure ring-3 hardening per
   `docs/architecture/14-ring3-isolation-and-separation.md`
-  (boundary cleanup, adversarial coverage expansion, and flake reduction).
+  (boundary cleanup and CLI flake reduction).
+  - Owner: kernel-security + kernel-memory + kernel-scheduler.
+  - Includes explicit follow-ups for ring3 TODOs in `src/kernel/framebuffer.c`,
+    `src/kernel/serial.c`, `src/kernel/cpu.c`, and `src/kernel/process.c`.
 - [ ] Service registry and discoverability model (including VT endpoint
   discovery migration away from fixed/wired assumptions).
 - [ ] Supervision and restart policy for long-running services/drivers.

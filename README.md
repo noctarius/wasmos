@@ -31,7 +31,20 @@ It defines repository workflow and documentation/update conventions.
 - Storage-first startup chain (`hw-discovery` -> `fs-fat` -> `sysinit`)
 - Usable VT/CLI stack with multi-TTY switching
 - Ring-3 hardening enabled by default in normal test boots
-- Ring-3 smoke includes process-local `#PF`, `#UD`, `#GP`, `#DE`, `#DB`, `#OF`, `#NM`, `#SS`, and `#AC` fault-policy checks
+- Ring-3 user-slot mapping now requires explicit `MEM_REGION_FLAG_USER` (legacy implicit bridge removed from page-map path)
+- Syscall boundary now rejects lossy 64-bit-to-32-bit exit-status arguments (`EXIT` / `THREAD_EXIT` require valid signed-32 representation)
+- Hostcall boundary now rejects negative endpoint IDs in `wasmos_serial_register` before `uint32_t` conversion
+- Ring-3 IPC adversarial coverage now includes stale/future `request_id` replay denial marker (`[test] ring3 ipc call stale id deny ok`)
+- Ring-3 IPC adversarial coverage now includes out-of-order pending-reply retention marker (`[test] ring3 ipc call out-of-order retain ok`)
+- Ring-3 IPC adversarial coverage now includes invalid-source spoof denial marker (`[test] ring3 ipc call spoof invalid source deny ok`)
+- Ring-3 IPC control-plane deny coverage now includes explicit endpoint-policy marker (`[test] ring3 ipc call control endpoint deny ok`)
+- Ring-3 IPC stress now includes endpoint-ownership + sender-context auth marker (`[test] ring3 ipc owner+sender stress ok`)
+- Hostcall pointer paths now consistently validate user VA/range before copies; remaining host-view sync bridge is explicitly tracked with TODOs
+- Ring-3 smoke includes process-local `#PF`, `#UD`, `#GP`, `#DE`, `#DB`, `#BP`, `#OF`, `#NM`, `#SS`, and `#AC` fault-policy checks
+- Ring-3 fault-policy smoke now includes containment liveness marker (`[test] ring3 containment liveness ok`)
+- Ring-3 fault-policy mixed-churn liveness marker remains enforced (`[test] ring3 mixed stress ok`)
+- Dedicated strict ring-3 multi-process fault-storm profile is available via `run-qemu-ring3-fault-storm-test` and asserts watchdog cleanliness/progress (`[test] ring3 watchdog clean ok`, `[test] sched progress ok`)
+- CLI integration target now isolates each QEMU session to a private ESP copy (`WASMOS_QEMU_ISOLATE_ESP=1`) and emits deterministic suite status marker (`[test] cli suite status ok`)
 - Ring-3 smoke includes shared-memory owner/grant/revoke isolation checks (kernel and user-space app-pair paths)
 - Shared-memory app-pair smoke now also checks forged-ID deny, map-argument policy deny, and post-revoke stale-ID deny
 - Strict ring3 boot smoke now includes a kernel-level shared-memory misuse matrix marker (`[test] ring3 shmem misuse matrix ok`)

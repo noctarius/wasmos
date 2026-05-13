@@ -31,9 +31,21 @@ kernel and other processes continue.
   and emit explicit failure markers on violation.
 - Identity-map breadth used for transition support is fixed to strict baseline
   (`IDENTITY_PD_COUNT=0`).
+- User-slot page mapping now requires explicit `MEM_REGION_FLAG_USER` in
+  mapping calls; implicit user-slot compatibility flag bridging has been
+  removed from the page-map path.
 
 ### Kernel Entry Safety
 - Syscall argument width checks reject lossy `u64 -> u32` truncation.
+- Signed status syscall arguments (`EXIT`, `THREAD_EXIT`) must be valid
+  sign-extended 32-bit values; lossy 64-bit forms are rejected.
+- Hostcall endpoint arguments that cross signed/unsigned boundaries are
+  validated before conversion (for example `wasmos_serial_register` rejects
+  negative endpoint IDs).
+- Pointer-bearing hostcall entry paths are audited to perform explicit user-VA
+  resolution and range checks before copy/map operations; remaining host-view
+  sync bridge behavior is isolated to `wasm_copy_*_sync_views` with TODO
+  tracking.
 - Pointer-bearing hostcalls use explicit user-VA resolution and range checks.
 - Copy semantics rely on validated copy helpers (`mm_copy_from_user`,
   `mm_copy_to_user`) rather than direct user-pointer dereference.
@@ -51,22 +63,42 @@ kernel and other processes continue.
   paths.
 - Pending-reply queues preserve out-of-order replies until proper match/drop.
 - Reply acceptance is correlated by request identity and authenticated source.
+- Strict ring3 smoke includes stale/future `request_id` replay-denial coverage
+  in the IPC call correlation path (`[test] ring3 ipc call stale id deny ok`).
+- Strict ring3 smoke also checks out-of-order pending-reply retention behavior
+  (`[test] ring3 ipc call out-of-order retain ok`).
+- Strict ring3 smoke includes invalid-source spoof denial coverage in IPC call
+  reply authentication (`[test] ring3 ipc call spoof invalid source deny ok`).
+- Strict ring3 smoke includes explicit control-endpoint deny coverage in IPC
+  call policy checks (`[test] ring3 ipc call control endpoint deny ok`).
+- Strict ring3 smoke includes sender/owner authentication stress coverage in
+  IPC call reply validation (`[test] ring3 ipc owner+sender stress ok`).
 - Control-plane endpoints include explicit deny-path assertions in ring3 smoke.
 
 ### Fault Containment Policy
 - User-origin fault classes covered by current strict smoke terminate only the
   faulting process with deterministic policy status (`-11`).
 - Covered exception/fault probes currently include:
-  - `#PF`, `#UD`, `#GP`, `#DE`, `#DB`
+  - `#PF`, `#UD`, `#GP`, `#DE`, `#DB`, `#BP`
   - strict expected-vector probes for `ring3-fault-of`, `ring3-fault-nm`,
     `ring3-fault-ss`, and `ring3-fault-ac` under current payload behavior
 - Fault-policy checks assert both reason markers and termination status markers.
+- Containment liveness is asserted after probe completion
+  (`[test] ring3 containment liveness ok`) to verify the parent/init path
+  remains alive while only offending tasks are terminated.
+- Mixed abuse churn is asserted with strict marker (`[test] ring3 mixed stress ok`)
+  by repeatedly combining fault probes with ongoing scheduler activity.
 
 ### Scheduler and Trap Robustness
 - Strict ring3 validation includes watchdog markers for forward progress and
   trap-frame integrity.
 - Mixed stress runs combine syscall churn, IPC deny/allow probes, and repeated
   fault probes to validate kernel liveness under abuse.
+- Dedicated multi-process fault-storm profile
+  (`run-qemu-ring3-fault-storm-test`) additionally asserts:
+  - `[test] ring3 watchdog clean ok`
+  - `[test] sched progress ok`
+  - absence of trap-frame watchdog invalid marker (`[watchdog] trap frame invalid cs=`)
 
 ### Shared Memory / Pager Isolation
 - Shared regions are owner-context bound.
@@ -80,6 +112,7 @@ Primary strict regression gates are:
 - `cmake --build build --target run-qemu-test`
 - `cmake --build build --target run-qemu-ring3-test`
 - `cmake --build build --target run-qemu-cli-test`
+- `cmake --build build --target run-qemu-ring3-fault-storm-test`
 
 These gates assert behavioral markers for memory isolation, IPC isolation,
 shared-memory policy, fault containment, and scheduler liveness.
@@ -91,7 +124,8 @@ The following are intentionally deferred beyond initial strict closure:
 - extend specialized IPC request/reply adversarial coverage
 - extend user-origin exception coverage beyond current set
 - add dedicated multi-process mixed fault-storm liveness suite
-- harden CLI fs-smoke harness image/reset isolation to eliminate known flake
+- continue monitoring CLI harness stability after ESP-isolation and deterministic
+  suite-status rollout
 
 ### Design Status
 The ring3 strict-mode/default isolation migration (Phases 0-8) is closed for

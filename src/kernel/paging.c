@@ -476,9 +476,7 @@ paging_map_4k_in_root(uint64_t root_table, uint64_t virt, uint64_t phys, uint64_
 
     uint8_t user_slot = is_user_slot_virt(virt);
     if (user_slot && !(flags & MEM_REGION_FLAG_USER)) {
-        /* Compatibility bridge while callers are migrated: addresses in the
-         * dedicated user slot are always user-accessible mappings. */
-        flags |= MEM_REGION_FLAG_USER;
+        return -1;
     }
     if (!user_slot && (flags & MEM_REGION_FLAG_USER)) {
         return -1;

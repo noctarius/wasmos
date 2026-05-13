@@ -41,6 +41,16 @@ static wasm_fs_peer_slot_t g_wasm_fs_peer_slots[PROCESS_MAX_COUNT];
 static const boot_info_t *g_wasm_boot_info;
 
 static int
+wasm_arg_u32_nonneg(int32_t raw, uint32_t *out)
+{
+    if (!out || raw < 0) {
+        return -1;
+    }
+    *out = (uint32_t)raw;
+    return 0;
+}
+
+static int
 wasm_copy_to_user_bytes(uint32_t context_id,
                         uint64_t user_dst,
                         const void *src,
@@ -71,7 +81,8 @@ wasm_copy_to_user_sync_views(uint32_t context_id,
     if (wasm_copy_to_user_bytes(context_id, user_dst, src, len) != 0) {
         return -1;
     }
-    /* Ring3 migration note:
+    /* TODO: Remove host-view sync once linear-memory ownership converges.
+     * Ring3 migration note:
      * wasm3 host pointers can diverge from validated user mappings in some
      * early-output paths; keep both views synchronized until linear-memory
      * ownership is fully unified. */
@@ -95,6 +106,8 @@ wasm_copy_from_user_sync_views(uint32_t context_id,
     if (mm_copy_from_user(context_id, dst, user_src, (uint64_t)len) != 0) {
         return -1;
     }
+    /* TODO: Remove host-view reconciliation once linear-memory ownership
+     * converges and user copy helpers are the single source of truth. */
     if (memcmp(dst, host_src, (size_t)len) != 0) {
         memcpy(dst, host_src, (size_t)len);
         if (mm_copy_to_user(context_id, user_src, host_src, (uint64_t)len) != 0) {
@@ -1253,7 +1266,9 @@ m3ApiRawFunction(wasmos_framebuffer_map)
         if (paging_map_4k_in_root(ctx->root_table,
                                  cur_virt,
                                  cur_phys,
-                                 MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE) < 0) {
+                                 MEM_REGION_FLAG_READ |
+                                     MEM_REGION_FLAG_WRITE |
+                                     MEM_REGION_FLAG_USER) < 0) {
             m3ApiReturn(-1);
         }
         cur_virt += 0x1000ULL;
@@ -1344,7 +1359,9 @@ m3ApiRawFunction(wasmos_shmem_map)
         if (paging_map_4k_in_root(ctx->root_table,
                                   cur_virt,
                                   cur_phys,
-                                  MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE) < 0) {
+                                  MEM_REGION_FLAG_READ |
+                                      MEM_REGION_FLAG_WRITE |
+                                      MEM_REGION_FLAG_USER) < 0) {
             m3ApiReturn(-1);
         }
     }
@@ -1832,7 +1849,11 @@ m3ApiRawFunction(wasmos_serial_register)
 {
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, endpoint)
-    m3ApiReturn(serial_register_remote_driver((uint32_t)endpoint));
+    uint32_t endpoint_u32 = 0;
+    if (wasm_arg_u32_nonneg(endpoint, &endpoint_u32) != 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn(serial_register_remote_driver(endpoint_u32));
 }
 
 m3ApiRawFunction(wasmos_proc_count)

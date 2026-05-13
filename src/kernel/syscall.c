@@ -17,9 +17,13 @@ static uint8_t g_ring3_ipc_control_deny_logged;
 static uint8_t g_ring3_ipc_call_deny_logged;
 static uint8_t g_ring3_ipc_call_perm_deny_logged;
 static uint8_t g_ring3_ipc_call_control_deny_logged;
+static uint8_t g_ring3_ipc_call_control_endpoint_deny_logged;
 static uint8_t g_ring3_ipc_call_ok_logged;
 static uint8_t g_ring3_ipc_call_err_rdx_zero_logged;
 static uint8_t g_ring3_ipc_call_correlation_logged;
+static uint8_t g_ring3_ipc_call_out_of_order_retain_logged;
+static uint8_t g_ring3_ipc_call_spoof_invalid_source_deny_logged;
+static uint8_t g_ring3_ipc_call_owner_sender_stress_logged;
 static uint8_t g_ring3_yield_logged;
 static uint8_t g_ring3_thread_yield_logged;
 static uint8_t g_ring3_thread_exit_logged;
@@ -84,6 +88,20 @@ syscall_arg_u32(uint64_t raw, uint32_t *out)
         return -1;
     }
     *out = (uint32_t)raw;
+    return 0;
+}
+
+static int
+syscall_arg_i32(uint64_t raw, int32_t *out)
+{
+    if (!out) {
+        return -1;
+    }
+    uint64_t sign_extended = (uint64_t)(int64_t)(int32_t)raw;
+    if (sign_extended != raw) {
+        return -1;
+    }
+    *out = (int32_t)raw;
     return 0;
 }
 
@@ -317,10 +335,14 @@ x86_syscall_handler(syscall_frame_t *frame)
         return thread_current_tid();
     case WASMOS_SYSCALL_EXIT: {
         process_t *proc = process_get(process_current_pid());
+        int32_t exit_status = 0;
         if (!proc) {
             return (uint64_t)-1;
         }
-        process_set_exit_status(proc, (int32_t)frame->rdi);
+        if (syscall_arg_i32(frame->rdi, &exit_status) != 0) {
+            return (uint64_t)-1;
+        }
+        process_set_exit_status(proc, exit_status);
         process_yield(PROCESS_RUN_EXITED);
         return 0;
     }
@@ -348,7 +370,11 @@ x86_syscall_handler(syscall_frame_t *frame)
         return 0;
     case WASMOS_SYSCALL_THREAD_EXIT: {
         process_t *proc = process_get(process_current_pid());
+        int32_t exit_status = 0;
         if (!proc) {
+            return (uint64_t)-1;
+        }
+        if (syscall_arg_i32(frame->rdi, &exit_status) != 0) {
             return (uint64_t)-1;
         }
         if (!g_ring3_thread_exit_logged && (frame->cs & 0x3u) == 0x3u &&
@@ -356,7 +382,7 @@ x86_syscall_handler(syscall_frame_t *frame)
             g_ring3_thread_exit_logged = 1;
             serial_write("[test] ring3 thread exit syscall ok\n");
         }
-        process_set_exit_status(proc, (int32_t)frame->rdi);
+        process_set_exit_status(proc, exit_status);
         process_yield(PROCESS_RUN_THREAD_EXITED);
         return 0;
     }
@@ -578,6 +604,9 @@ x86_syscall_handler(syscall_frame_t *frame)
         uint32_t owner_context = 0;
         uint32_t expected_reply_source = IPC_ENDPOINT_NONE;
         uint32_t expected_reply_owner_context = 0;
+        uint32_t injected_out_of_order_request_id = 0;
+        uint32_t dropped_inauth_replies = 0;
+        uint8_t injected_invalid_source_spoof = 0;
         int rc = IPC_ERR_INVALID;
         ipc_message_t req;
         ipc_message_t resp;
@@ -646,6 +675,11 @@ x86_syscall_handler(syscall_frame_t *frame)
                 g_ring3_ipc_call_control_deny_logged = 1;
                 serial_write("[test] ring3 ipc call control deny ok\n");
             }
+            if (name_eq(proc->name, "ring3-smoke") &&
+                !g_ring3_ipc_call_control_endpoint_deny_logged) {
+                g_ring3_ipc_call_control_endpoint_deny_logged = 1;
+                serial_write("[test] ring3 ipc call control endpoint deny ok\n");
+            }
             return (uint64_t)(int64_t)rc;
         }
         req.type = msg_type;
@@ -661,7 +695,16 @@ x86_syscall_handler(syscall_frame_t *frame)
         if (destination == g_ipc_call_echo_endpoint &&
             g_ipc_call_echo_endpoint != IPC_ENDPOINT_NONE &&
             msg_type == 0x00009ABCu) {
+            ipc_message_t stale;
             ipc_message_t synthetic;
+            stale.type = req.type;
+            stale.source = req.source;
+            stale.destination = req.source;
+            stale.request_id = req.request_id + 1u; /* stale/future replay probe */
+            stale.arg0 = req.arg0 ^ 0xFFFFFFFFu;
+            stale.arg1 = req.arg1;
+            stale.arg2 = req.arg2;
+            stale.arg3 = req.arg3;
             synthetic.type = req.type;
             synthetic.source = req.source;
             synthetic.destination = req.source;
@@ -672,13 +715,28 @@ x86_syscall_handler(syscall_frame_t *frame)
             synthetic.arg3 = req.arg3;
             expected_reply_source = req.source;
             expected_reply_owner_context = proc->context_id;
+            (void)syscall_ipc_pending_enqueue(slot, &stale);
             (void)syscall_ipc_pending_enqueue(slot, &synthetic);
         }
         if (destination == g_ipc_call_echo_endpoint &&
             g_ipc_call_echo_endpoint != IPC_ENDPOINT_NONE &&
             msg_type == 0x00009ABDu) {
+            ipc_message_t out_of_order;
+            ipc_message_t invalid_source;
             ipc_message_t forged;
             ipc_message_t synthetic;
+            out_of_order.type = req.type;
+            out_of_order.source = destination;
+            out_of_order.destination = req.source;
+            out_of_order.request_id = req.request_id + 1u; /* unrelated reply */
+            out_of_order.arg0 = req.arg0 ^ 0x01010101u;
+            out_of_order.arg1 = req.arg1;
+            out_of_order.arg2 = req.arg2;
+            out_of_order.arg3 = req.arg3;
+            invalid_source = out_of_order;
+            invalid_source.request_id = req.request_id;
+            invalid_source.source = IPC_ENDPOINT_NONE; /* invalid spoof */
+            invalid_source.arg0 = req.arg0 ^ 0xA5A5A5A5u;
             forged.type = req.type;
             forged.source = req.source; /* wrong source: caller endpoint */
             forged.destination = req.source;
@@ -689,6 +747,10 @@ x86_syscall_handler(syscall_frame_t *frame)
             forged.arg3 = req.arg3;
             synthetic = forged;
             synthetic.source = destination; /* expected source */
+            injected_out_of_order_request_id = out_of_order.request_id;
+            (void)syscall_ipc_pending_enqueue(slot, &out_of_order);
+            (void)syscall_ipc_pending_enqueue(slot, &invalid_source);
+            injected_invalid_source_spoof = 1;
             (void)syscall_ipc_pending_enqueue(slot, &forged);
             (void)syscall_ipc_pending_enqueue(slot, &synthetic);
         }
@@ -716,6 +778,7 @@ x86_syscall_handler(syscall_frame_t *frame)
             if (!syscall_ipc_reply_authentic(&resp,
                                              expected_reply_source,
                                              expected_reply_owner_context)) {
+                dropped_inauth_replies++;
                 continue;
             }
             frame->rdx = (uint64_t)resp.arg0;
@@ -730,11 +793,32 @@ x86_syscall_handler(syscall_frame_t *frame)
                 (uint32_t)frame->rdx == req.arg0) {
                 g_ring3_ipc_call_correlation_logged = 1;
                 serial_write("[test] ring3 ipc call correlate ok\n");
+                serial_write("[test] ring3 ipc call stale id deny ok\n");
             }
             if (name_eq(proc->name, "ring3-smoke") &&
                 msg_type == 0x00009ABDu &&
                 (uint32_t)frame->rdx == req.arg0) {
                 serial_write("[test] ring3 ipc call source auth ok\n");
+                if (!g_ring3_ipc_call_spoof_invalid_source_deny_logged &&
+                    injected_invalid_source_spoof) {
+                    g_ring3_ipc_call_spoof_invalid_source_deny_logged = 1;
+                    serial_write("[test] ring3 ipc call spoof invalid source deny ok\n");
+                }
+                if (!g_ring3_ipc_call_out_of_order_retain_logged &&
+                    injected_out_of_order_request_id != 0) {
+                    ipc_message_t retained;
+                    if (syscall_ipc_pending_take_request(slot,
+                                                         injected_out_of_order_request_id,
+                                                         &retained) == 0) {
+                        g_ring3_ipc_call_out_of_order_retain_logged = 1;
+                        serial_write("[test] ring3 ipc call out-of-order retain ok\n");
+                    }
+                }
+                if (!g_ring3_ipc_call_owner_sender_stress_logged &&
+                    dropped_inauth_replies >= 2u) {
+                    g_ring3_ipc_call_owner_sender_stress_logged = 1;
+                    serial_write("[test] ring3 ipc owner+sender stress ok\n");
+                }
             }
             return 0;
         }
@@ -754,6 +838,7 @@ x86_syscall_handler(syscall_frame_t *frame)
             if (!syscall_ipc_reply_authentic(&resp,
                                              expected_reply_source,
                                              expected_reply_owner_context)) {
+                dropped_inauth_replies++;
                 continue;
             }
             frame->rdx = (uint64_t)resp.arg0;

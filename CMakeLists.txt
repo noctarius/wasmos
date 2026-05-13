@@ -733,8 +733,9 @@ add_custom_target(run-qemu-cli-test
             WASMOS_OVMF_CODE=${OVMF_CODE}
             WASMOS_OVMF_VARS=${OVMF_VARS}
             WASMOS_ESP=${BUILD_DIR}/esp
+            WASMOS_QEMU_ISOLATE_ESP=1
             PYTHONDONTWRITEBYTECODE=1
-            python3 -m unittest discover -s tests
+            ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/run_unittest_suite.py --start-dir tests
     DEPENDS bootloader kernel
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT \"Running QEMU CLI integration tests\"
@@ -964,7 +965,9 @@ else ()
             WASMOS_OVMF_CODE=${OVMF_CODE}
             WASMOS_OVMF_VARS=${OVMF_VARS}
             WASMOS_ESP=${BUILD_DIR}/esp
-            python3 -m unittest discover -s tests
+            WASMOS_QEMU_ISOLATE_ESP=1
+            PYTHONDONTWRITEBYTECODE=1
+            ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/run_unittest_suite.py --start-dir tests
     DEPENDS bootloader kernel
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT \"Running QEMU CLI integration tests\"
@@ -1116,6 +1119,54 @@ add_custom_target(run-qemu-ring3-threading-check
   VERBATIM
 )
 
+add_custom_target(run-qemu-ring3-fault-storm-check
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/devices
+  COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
+  COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
+  ${INITFS_COPY_CMD}
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/apps/vt.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HW_DISCOVERY_APP} ${BUILD_DIR}/esp/system/services/hw_discovery.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wap
+  ${AS_HELLO_COPY_CMD}
+  ${HELLO_C_COPY_CMD}
+  ${CHARDEV_PREEMPT_COPY_CMD}
+  ${INIT_SMOKE_COPY_CMD}
+  ${FS_OPEN_SMOKE_COPY_CMD}
+  ${FS_WRITE_SMOKE_COPY_CMD}
+  ${NATIVE_CALL_MIN_COPY_CMD}
+  ${NATIVE_CALL_SMOKE_COPY_CMD}
+  ${SHMEM_OWNER_COPY_CMD}
+  ${SHMEM_TARGET_COPY_CMD}
+    ${IRQ_ROUTE_DENY_COPY_CMD}
+    ${IRQ_ROUTE_ALLOW_COPY_CMD}
+  ${RUST_HELLO_COPY_CMD}
+  ${GO_HELLO_COPY_CMD}
+  ${ZIG_HELLO_COPY_CMD}
+  ${LARGE_READ_COPY_CMD}
+  ${WRITE_SMOKE_FILE_COPY_CMD}
+  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
+  COMMAND ${Python3_EXECUTABLE}
+          ${CMAKE_SOURCE_DIR}/scripts/qemu_ring3_fault_storm_test.py
+          --ovmf-code ${OVMF_CODE}
+          ${QEMU_UI_OVMF_VARS_ARG}
+          --esp ${BUILD_DIR}/esp
+  DEPENDS bootloader kernel
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Running QEMU ring3 multi-process fault-storm marker test"
+  VERBATIM
+)
+
 add_custom_target(run-qemu-ring3-test
   COMMAND ${CMAKE_COMMAND}
           -S ${CMAKE_SOURCE_DIR}
@@ -1149,6 +1200,22 @@ add_custom_target(run-qemu-ring3-threading-test
   COMMENT "Configure/build shadow threading ring3 tree and run lifecycle marker test"
   VERBATIM
 )
+add_custom_target(run-qemu-ring3-fault-storm-test
+  COMMAND ${CMAKE_COMMAND}
+          -S ${CMAKE_SOURCE_DIR}
+          -B ${BUILD_DIR}/ring3-fault-storm
+          -DCLANG=${CLANG}
+          -DLLD=${LLD}
+          -DOBJCOPY=${OBJCOPY}
+          -DOVMF_CODE=${OVMF_CODE}
+          -DOVMF_VARS=${OVMF_VARS}
+          -DWASMOS_TRACE=${WASMOS_TRACE}
+          -DWASMOS_RING3_SMOKE=ON
+  COMMAND ${CMAKE_COMMAND} --build ${BUILD_DIR}/ring3-fault-storm --target run-qemu-ring3-fault-storm-check
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Configure/build shadow ring3 fault-storm tree and run dedicated marker test"
+  VERBATIM
+)
 add_custom_target(strict-ring3
   COMMAND ${CMAKE_COMMAND} --build ${BUILD_DIR} --target run-qemu-test
   COMMAND ${CMAKE_COMMAND} --build ${BUILD_DIR} --target run-qemu-ring3-test
@@ -1162,6 +1229,7 @@ add_dependencies(run-qemu-cli-test c_examples services drivers)
 add_dependencies(run-qemu-debug c_examples services drivers)
 add_dependencies(run-qemu-ring3-check c_examples services drivers)
 add_dependencies(run-qemu-ring3-threading-check c_examples services drivers)
+add_dependencies(run-qemu-ring3-fault-storm-check c_examples services drivers)
 add_dependencies(make_initfs c_examples)
 add_dependencies(run-qemu make_initfs)
 add_dependencies(run-qemu-ui make_initfs)
@@ -1170,6 +1238,7 @@ add_dependencies(run-qemu-cli-test make_initfs)
 add_dependencies(run-qemu-debug make_initfs)
 add_dependencies(run-qemu-ring3-check make_initfs)
 add_dependencies(run-qemu-ring3-threading-check make_initfs)
+add_dependencies(run-qemu-ring3-fault-storm-check make_initfs)
 
 if (TARGET assemblyscript_examples)
   add_dependencies(run-qemu assemblyscript_examples)
@@ -1178,6 +1247,7 @@ if (TARGET assemblyscript_examples)
   add_dependencies(run-qemu-debug assemblyscript_examples)
   add_dependencies(run-qemu-ring3-check assemblyscript_examples)
   add_dependencies(run-qemu-ring3-threading-check assemblyscript_examples)
+  add_dependencies(run-qemu-ring3-fault-storm-check assemblyscript_examples)
 endif ()
 if (TARGET rust_examples)
   add_dependencies(run-qemu rust_examples)
@@ -1186,6 +1256,7 @@ if (TARGET rust_examples)
   add_dependencies(run-qemu-debug rust_examples)
   add_dependencies(run-qemu-ring3-check rust_examples)
   add_dependencies(run-qemu-ring3-threading-check rust_examples)
+  add_dependencies(run-qemu-ring3-fault-storm-check rust_examples)
 endif ()
 if (TARGET go_examples)
   add_dependencies(run-qemu go_examples)
@@ -1194,6 +1265,7 @@ if (TARGET go_examples)
   add_dependencies(run-qemu-debug go_examples)
   add_dependencies(run-qemu-ring3-check go_examples)
   add_dependencies(run-qemu-ring3-threading-check go_examples)
+  add_dependencies(run-qemu-ring3-fault-storm-check go_examples)
 endif ()
 if (TARGET zig_examples)
   add_dependencies(run-qemu zig_examples)
@@ -1202,6 +1274,7 @@ if (TARGET zig_examples)
   add_dependencies(run-qemu-debug zig_examples)
   add_dependencies(run-qemu-ring3-check zig_examples)
   add_dependencies(run-qemu-ring3-threading-check zig_examples)
+  add_dependencies(run-qemu-ring3-fault-storm-check zig_examples)
 endif ()
 
 if (TARGET run-qemu-ui-test)

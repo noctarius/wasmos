@@ -53,9 +53,12 @@ Purpose: Track all deferred ring-3 hardening tasks and block merge until all are
   - Marker expectations and fail markers are codified in `scripts/qemu_ring3_fault_storm_test.py`.
 
 ## E) CLI Smoke Flake Reduction
-- [ ] Harden test image/reset isolation in CLI smoke harness.
-- [ ] Remove known flaky ordering/reset hazards around shared mutable artifacts.
-- [ ] Stabilize deterministic pass/fail signaling for CLI smoke.
+- [x] Harden test image/reset isolation in CLI smoke harness.
+  - CLI suite now runs with isolated per-session ESP copies (`WASMOS_QEMU_ISOLATE_ESP=1`).
+- [x] Remove known flaky ordering/reset hazards around shared mutable artifacts.
+  - `QemuSession` now supports isolated runtime ESP trees to avoid cross-test mutable artifact contention.
+- [x] Stabilize deterministic pass/fail signaling for CLI smoke.
+  - CLI target now runs via `scripts/run_unittest_suite.py` and emits explicit marker (`[test] cli suite status ok` / failed).
 
 ## F) Required Validation Before Merge
 - [x] `cmake --build build --target run-qemu-test`

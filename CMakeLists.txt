@@ -733,8 +733,9 @@ add_custom_target(run-qemu-cli-test
             WASMOS_OVMF_CODE=${OVMF_CODE}
             WASMOS_OVMF_VARS=${OVMF_VARS}
             WASMOS_ESP=${BUILD_DIR}/esp
+            WASMOS_QEMU_ISOLATE_ESP=1
             PYTHONDONTWRITEBYTECODE=1
-            python3 -m unittest discover -s tests
+            ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/run_unittest_suite.py --start-dir tests
     DEPENDS bootloader kernel
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT \"Running QEMU CLI integration tests\"
@@ -964,7 +965,9 @@ else ()
             WASMOS_OVMF_CODE=${OVMF_CODE}
             WASMOS_OVMF_VARS=${OVMF_VARS}
             WASMOS_ESP=${BUILD_DIR}/esp
-            python3 -m unittest discover -s tests
+            WASMOS_QEMU_ISOLATE_ESP=1
+            PYTHONDONTWRITEBYTECODE=1
+            ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/run_unittest_suite.py --start-dir tests
     DEPENDS bootloader kernel
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT \"Running QEMU CLI integration tests\"

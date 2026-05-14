@@ -3,12 +3,12 @@
 ### Implemented Drivers
 - `ata`
   - PIO ATA block driver
-  - owns the `block` endpoint
+  - creates and registers the `block` endpoint via PM service registry
   - supports identify and read operations
 - `fs-fat`
   - FAT12/16/32 filesystem driver
-  - consumes the `block` endpoint
-  - owns the `fs` endpoint
+  - looks up the `block` endpoint via PM service registry
+  - creates and registers the `fs` endpoint via PM service registry
   - supports root/subdirectory listing, `cat`, `cd`, PM app loading, and the
     minimal shared libc read-only file API
   - follows FAT12/16 cluster chains for multi-cluster file reads on the
@@ -26,8 +26,8 @@
 - `process-manager`
   - validates WASMOS-APP containers
   - creates process/runtime state
-  - resolves required endpoints
   - resolves metadata-declared entry argument bindings
+  - provides `register`/`lookup` service-registry IPC for endpoint discovery
   - starts entries
   - exposes `spawn`, `spawn by name`, `wait`, `kill`, and `status`
 - `device-manager`
@@ -37,6 +37,8 @@
   - starts post-FAT display/input drivers by name from disk
 - `pci-bus`
   - enumerates PCI config space in user space
+  - looks up `device-manager` inventory endpoint (`devmgr.inv`) via PM service
+    registry
   - publishes normalized device records to `device-manager`
 - `sysinit`
   - intentionally narrow

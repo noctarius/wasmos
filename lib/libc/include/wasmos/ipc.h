@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "wasmos/api.h"
+#include "wasmos_driver_abi.h"
 typedef struct {
     int32_t type;
     int32_t request_id;
@@ -84,6 +85,75 @@ wasmos_ipc_call(int32_t destination_endpoint,
         *out_reply = reply;
     }
     return 0;
+}
+
+static inline void
+wasmos_ipc_pack_name16(const char *name, int32_t out_args[4])
+{
+    if (!out_args) {
+        return;
+    }
+    out_args[0] = 0;
+    out_args[1] = 0;
+    out_args[2] = 0;
+    out_args[3] = 0;
+    if (!name) {
+        return;
+    }
+    for (int32_t i = 0; name[i] && i < 16; ++i) {
+        int32_t slot = i / 4;
+        int32_t shift = (i % 4) * 8;
+        out_args[slot] |= ((int32_t)(uint8_t)name[i]) << shift;
+    }
+}
+
+static inline int32_t
+wasmos_svc_register(int32_t proc_endpoint,
+                    int32_t service_endpoint,
+                    const char *service_name,
+                    int32_t request_id)
+{
+    int32_t args[4];
+    wasmos_ipc_message_t resp;
+    wasmos_ipc_pack_name16(service_name, args);
+    if (wasmos_ipc_call(proc_endpoint,
+                        service_endpoint,
+                        SVC_IPC_REGISTER_REQ,
+                        request_id,
+                        args[0],
+                        args[1],
+                        args[2],
+                        args[3],
+                        &resp) != 0) {
+        return -1;
+    }
+    return (resp.type == SVC_IPC_REGISTER_RESP) ? resp.arg0 : -1;
+}
+
+static inline int32_t
+wasmos_svc_lookup(int32_t proc_endpoint,
+                  int32_t reply_endpoint,
+                  const char *service_name,
+                  int32_t request_id)
+{
+    int32_t args[4];
+    wasmos_ipc_message_t resp;
+    wasmos_ipc_pack_name16(service_name, args);
+    if (wasmos_ipc_call(proc_endpoint,
+                        reply_endpoint,
+                        SVC_IPC_LOOKUP_REQ,
+                        request_id,
+                        args[0],
+                        args[1],
+                        args[2],
+                        args[3],
+                        &resp) != 0) {
+        return -1;
+    }
+    if (resp.type != SVC_IPC_LOOKUP_RESP || resp.arg0 < 0) {
+        return -1;
+    }
+    return resp.arg0;
 }
 
 #endif

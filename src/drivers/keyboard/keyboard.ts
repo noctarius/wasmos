@@ -5,6 +5,8 @@ const KEYBOARD_OBF_FLAG: i32 = 0x01;
 const KBD_IPC_SUBSCRIBE_REQ:  i32 = 0x800;
 const KBD_IPC_SUBSCRIBE_RESP: i32 = 0x880;
 const KBD_IPC_KEY_NOTIFY:     i32 = 0x801;
+const SVC_IPC_REGISTER_REQ:   i32 = 0x220;
+const SVC_IPC_REGISTER_RESP:  i32 = 0x2A0;
 
 @external("wasmos", "console_write")
 declare function console_write(ptr: i32, len: i32): i32;
@@ -16,6 +18,10 @@ declare function io_wait(): i32;
 declare function sched_yield(): i32;
 @external("wasmos", "ipc_try_recv")
 declare function ipc_try_recv(endpoint: i32): i32;
+@external("wasmos", "ipc_recv")
+declare function ipc_recv(endpoint: i32): i32;
+@external("wasmos", "ipc_create_endpoint")
+declare function ipc_create_endpoint(): i32;
 @external("wasmos", "ipc_last_field")
 declare function ipc_last_field(field: i32): i32;
 @external("wasmos", "ipc_send")
@@ -91,9 +97,25 @@ function drainIpc(): void {
   }
 }
 
-export function initialize(_proc_endpoint: i32, kbd_endpoint: i32,
+export function initialize(_proc_endpoint: i32, _arg1: i32,
                             _arg2: i32, _arg3: i32): i32 {
-  g_kbd_ep = kbd_endpoint;
+  g_kbd_ep = ipc_create_endpoint();
+  if (g_kbd_ep >= 0) {
+    let kbd_name = 0x0064626B; /* "kbd\0" */
+    let req_id = 1;
+    if (ipc_send(_proc_endpoint, g_kbd_ep, SVC_IPC_REGISTER_REQ, req_id,
+                 kbd_name, 0, 0, 0) == 0) {
+      if (ipc_recv(g_kbd_ep) == 1) {
+        if (ipc_last_field(0) != SVC_IPC_REGISTER_RESP || ipc_last_field(1) != req_id || ipc_last_field(2) != 0) {
+          g_kbd_ep = -1;
+        }
+      } else {
+        g_kbd_ep = -1;
+      }
+    } else {
+      g_kbd_ep = -1;
+    }
+  }
 
   if (g_kbd_ep < 0) {
     writeString("[keyboard] no IPC endpoint, log-only mode\n");

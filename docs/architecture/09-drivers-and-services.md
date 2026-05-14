@@ -240,3 +240,37 @@ Phase 6: Observability and policy hardening
   - unauthorized MMIO/PIO/IRQ requests are denied by kernel checks
 - Lifecycle:
   - supervised restart policy behaves as configured under fault injection
+
+#### Next Implementation Slice (Do This First)
+Scope: implement the smallest end-to-end discovery pipeline that replaces
+hardcoded storage startup order with PCI-driven ATA-first policy.
+
+1. Add `pci-bus` user-space service
+- Enumerate bus/device/function via PCI config-space access.
+- Publish one normalized record per discovered function.
+- Include class/subclass/prog-if and vendor/device IDs in each record.
+
+2. Add `device-manager` in-memory registry
+- Accept `DEVMGR_PUBLISH_DEVICE` records from `pci-bus`.
+- Store records in a fixed-capacity table (minimal dynamic behavior first).
+- Expose a debug dump marker/log for boot-time verification.
+
+3. Add first matching rule set (storage only)
+- Select PCI mass-storage class devices (`class=0x01`).
+- Prioritize ATA/IDE-compatible controllers first for current boot baseline.
+- Keep non-storage classes ignored in this slice.
+
+4. Replace hardcoded storage spawn with match-driven spawn
+- Spawn `ata` only when a matching controller record exists.
+- Keep `fs-fat` dependency-ordered after successful `ata` startup.
+- Preserve current retry/backoff behavior while changing only selection logic.
+
+5. Keep post-storage behavior unchanged
+- Continue loading non-storage drivers/services only after FAT readiness.
+- Do not introduce hotplug, restart supervision, or broader capability policy
+  in this first slice.
+
+Exit criteria:
+- QEMU baseline boots with `device-manager` using PCI inventory + match flow.
+- `ata`/`fs-fat` still come up reliably and `sysinit` startup remains green.
+- `run-qemu-test` passes with no regression in existing boot markers.

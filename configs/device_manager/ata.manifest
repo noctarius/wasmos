@@ -1,0 +1,13 @@
+# ATA driver match/capability manifest for device-manager.
+# Values are hexadecimal unless noted.
+driver=ata
+class=0x01
+subclass=any
+prog_if=any
+vendor=any
+device=any
+cap_io_port=1
+io_port_min=0x01F0
+io_port_max=0x03F7
+cap_irq=1
+irq_mask=0xC000

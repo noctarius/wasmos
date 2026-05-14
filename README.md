@@ -28,7 +28,7 @@ It defines repository workflow and documentation/update conventions.
 - Deterministic UEFI boot handoff (`BOOTX64.EFI` -> `kernel.elf` + `initfs.img`)
 - Microkernel baseline: paging, scheduling, IPC, process lifecycle, exceptions
 - WASM-first runtime model with optional native driver payloads
-- Storage-first startup chain (`device-manager` -> `pci-bus` -> `ata` -> `fs-fat` -> `sysinit`) with manifest-driven PCI matching
+- Storage-first startup chain (`device-manager` -> `pci-bus` -> `ata` -> `fs-fat` -> `sysinit`) with PCI-inventory-driven matching
 - Spawn-time driver capability profiles for PCI paths (PIO range + IRQ mask)
 - PM service registry for user-space endpoint discovery (`register`/`lookup`)
 - Usable VT/CLI stack with multi-TTY switching
@@ -153,7 +153,10 @@ Boot sequence (high level):
 1. `BOOTX64.EFI` loads `kernel.elf` and `initfs.img`
 2. Kernel boots, initializes core subsystems, starts `init`
 3. `init` starts `device-manager`
-4. `device-manager` starts `pci-bus` (via PM endpoint lookup), consumes inventory, matches driver manifests against discovered PCI records, then starts storage drivers/services (`ata`, `fs-fat`) with spawn-time capability profiles
+4. `device-manager` starts `pci-bus` (via PM endpoint lookup), consumes inventory, applies early PCI matching rules, then starts storage drivers/services (`ata`, `fs-fat`) with spawn-time capability profiles
+
+Current ATA match/capability policy source:
+- `configs/device_manager/ata.manifest` (compiled into a generated header for `device-manager`)
 5. `init` requests `sysinit` load from FAT via process manager
 6. `sysinit` starts configured services/apps from boot config
 

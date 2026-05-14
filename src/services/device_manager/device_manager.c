@@ -4,6 +4,7 @@
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
 #include "wasmos_driver_abi.h"
+#include "device_manager_manifest.h"
 
 /*
  * device-manager coordinates early hardware startup in user space.
@@ -43,10 +44,7 @@ typedef enum {
     HW_SPAWN_FRAMEBUFFER
 } hw_spawn_target_t;
 
-#define PCI_CLASS_MASS_STORAGE 0x01
 #define DEVICE_REGISTRY_CAP 64
-#define MATCH_ANY_U8 0xFFu
-#define MATCH_ANY_U16 0xFFFFu
 
 typedef struct {
     uint32_t cap_flags;
@@ -54,18 +52,6 @@ typedef struct {
     uint16_t io_port_max;
     uint16_t irq_mask;
 } spawn_caps_t;
-
-typedef struct {
-    const char *driver_name;
-    uint8_t class_code;
-    uint8_t subclass;
-    uint8_t prog_if;
-    uint16_t vendor_id;
-    uint16_t device_id;
-    uint8_t required;
-    uint8_t optional;
-    spawn_caps_t caps;
-} driver_manifest_t;
 
 typedef struct {
     uint8_t bus;
@@ -105,12 +91,6 @@ static pci_device_record_t g_registry[DEVICE_REGISTRY_CAP];
 static uint32_t g_registry_count = 0;
 static uint8_t g_ata_match = 0;
 static spawn_caps_t g_ata_caps;
-
-static const driver_manifest_t g_manifests[] = {
-    { "ata", PCI_CLASS_MASS_STORAGE, MATCH_ANY_U8, MATCH_ANY_U8, MATCH_ANY_U16, MATCH_ANY_U16, 1, 0,
-      { DEVMGR_CAP_IO_PORT | DEVMGR_CAP_IRQ, 0x01F0, 0x03F7, (uint16_t)((1u << 14) | (1u << 15)) } },
-    /* TODO: Expand manifest table once additional PCI-backed drivers land. */
-};
 
 static void
 stall_forever(void)
@@ -351,39 +331,28 @@ registry_add_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3)
 }
 
 static void
-apply_manifest_matches(void)
+apply_pci_matches(void)
 {
     g_ata_match = 0;
     g_ata_caps.cap_flags = 0;
-    g_ata_caps.io_port_min = 0;
-    g_ata_caps.io_port_max = 0;
-    g_ata_caps.irq_mask = 0;
+    if (ATA_MANIFEST_CAP_IO_PORT) {
+        g_ata_caps.cap_flags |= DEVMGR_CAP_IO_PORT;
+    }
+    if (ATA_MANIFEST_CAP_IRQ) {
+        g_ata_caps.cap_flags |= DEVMGR_CAP_IRQ;
+    }
+    g_ata_caps.io_port_min = (uint16_t)ATA_MANIFEST_IO_PORT_MIN;
+    g_ata_caps.io_port_max = (uint16_t)ATA_MANIFEST_IO_PORT_MAX;
+    g_ata_caps.irq_mask = (uint16_t)ATA_MANIFEST_IRQ_MASK;
+
     for (uint32_t i = 0; i < g_registry_count; ++i) {
         const pci_device_record_t *rec = &g_registry[i];
-        for (uint32_t m = 0; m < (uint32_t)(sizeof(g_manifests) / sizeof(g_manifests[0])); ++m) {
-            const driver_manifest_t *manifest = &g_manifests[m];
-            if (manifest->class_code != MATCH_ANY_U8 && rec->class_code != manifest->class_code) {
-                continue;
+        if (rec->class_code == (uint8_t)ATA_MANIFEST_CLASS) {
+            g_ata_match = 1;
+            if (rec->irq_hint < 16u) {
+                g_ata_caps.irq_mask = (uint16_t)(1u << rec->irq_hint);
             }
-            if (manifest->subclass != MATCH_ANY_U8 && rec->subclass != manifest->subclass) {
-                continue;
-            }
-            if (manifest->prog_if != MATCH_ANY_U8 && rec->prog_if != manifest->prog_if) {
-                continue;
-            }
-            if (manifest->vendor_id != MATCH_ANY_U16 && rec->vendor_id != manifest->vendor_id) {
-                continue;
-            }
-            if (manifest->device_id != MATCH_ANY_U16 && rec->device_id != manifest->device_id) {
-                continue;
-            }
-            if (str_eq(manifest->driver_name, "ata")) {
-                g_ata_match = 1;
-                g_ata_caps = manifest->caps;
-                if (rec->irq_hint < 16u) {
-                    g_ata_caps.irq_mask = (uint16_t)(1u << rec->irq_hint);
-                }
-            }
+            break;
         }
     }
 }
@@ -415,7 +384,7 @@ consume_pci_inventory(void)
             break;
         }
     }
-    apply_manifest_matches();
+    apply_pci_matches();
 }
 
 static hw_spawn_target_t

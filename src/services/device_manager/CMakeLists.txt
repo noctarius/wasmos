@@ -6,6 +6,21 @@ set(WASM_LIBC_C_SOURCES
   ${LIBC_DIR}/src/unistd.c
 )
 
+set(WASM_DEVICE_MANAGER_MANIFEST_HEADER ${BUILD_DIR}/device_manager_manifest.h)
+
+add_custom_command(
+  OUTPUT ${WASM_DEVICE_MANAGER_MANIFEST_HEADER}
+  COMMAND ${CMAKE_COMMAND}
+          -DINPUT=${CMAKE_SOURCE_DIR}/configs/device_manager/ata.manifest
+          -DOUTPUT=${WASM_DEVICE_MANAGER_MANIFEST_HEADER}
+          -P ${CMAKE_SOURCE_DIR}/scripts/generate_device_manager_manifest.cmake
+  DEPENDS ${CMAKE_SOURCE_DIR}/configs/device_manager/ata.manifest
+          ${CMAKE_SOURCE_DIR}/scripts/generate_device_manager_manifest.cmake
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Generating device-manager ATA manifest header"
+  VERBATIM
+)
+
 add_custom_command(
   OUTPUT ${WASM_DEVICE_MANAGER_WASM}
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
@@ -18,6 +33,7 @@ add_custom_command(
           -Wl,--allow-undefined
           -Wl,--export=initialize
           -I${LIBC_DIR}/include
+          -I${BUILD_DIR}
           -I${DRIVER_WASM_DIR}/include
           ${WASM_LIBC_C_SOURCES}
           ${WASM_DEVICE_MANAGER_SRC}
@@ -26,6 +42,7 @@ add_custom_command(
           ${LIBC_DIR}/include/stdio.h ${LIBC_DIR}/include/stdlib.h ${LIBC_DIR}/include/string.h
           ${LIBC_DIR}/include/wasmos/api.h ${LIBC_DIR}/include/wasmos/ipc.h
           ${LIBC_DIR}/include/wasmos/imports.h ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
+          ${WASM_DEVICE_MANAGER_MANIFEST_HEADER}
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Building wasm device-manager module"
   VERBATIM

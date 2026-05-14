@@ -93,12 +93,14 @@ Service dependency wiring now uses PM-hosted registry IPC (`SVC_IPC_REGISTER_REQ
 and `SVC_IPC_LOOKUP_REQ`) so drivers/services create/register their own
 endpoints and discover dependencies at runtime instead of PM-injected
 per-application endpoint bindings.
-Device discovery now includes manifest-driven PCI matching in `device-manager`
+Device discovery now includes PCI-inventory-driven matching in `device-manager`
 with enriched `pci-bus` inventory records (class/subclass/prog-if plus minimal
 MMIO/IRQ hints). PM now accepts a capability-profile spawn request variant for
 module spawns, and kernel policy enforces spawn-time PIO port-range and IRQ
 line restrictions (defaulting to coarse app capabilities when no spawn profile
-is provided).
+is provided). ATA match/capability values now come from
+`configs/device_manager/ata.manifest`, transformed at build time into a
+generated header consumed by `device-manager`.
 When native `menuconfig`-style frontends are unavailable, build configuration
 can be edited through the in-repo `kconfiglib` interactive fallback script
 (`scripts/kconfiglib_menuconfig.py`), exposed via CMake targets.

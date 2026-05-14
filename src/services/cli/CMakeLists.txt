@@ -43,8 +43,15 @@ add_custom_command(
           4
           proc
           1
+          1
           system.control
           0
+          --entry-arg-bindings
+          4
+          proc.endpoint
+          fs.endpoint
+          vt.endpoint.or-neg1
+          cli.tty.alloc
   DEPENDS ${WASM_CLI_APP_WASM} make_wasmos_app
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm CLI as WASMOS-APP"

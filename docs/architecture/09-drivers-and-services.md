@@ -27,6 +27,7 @@
   - validates WASMOS-APP containers
   - creates process/runtime state
   - resolves required endpoints
+  - resolves metadata-declared entry argument bindings
   - starts entries
   - exposes `spawn`, `spawn by name`, `wait`, `kill`, and `status`
 - `device-manager`

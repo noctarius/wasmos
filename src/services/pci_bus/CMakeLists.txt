@@ -43,8 +43,12 @@ add_custom_command(
           2
           proc
           1
+          1
           io.port
           0
+          --entry-arg-bindings
+          1
+          devmgr.inventory.endpoint
   DEPENDS ${WASM_PCI_BUS_WASM} make_wasmos_app
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm pci-bus as WASMOS-APP"

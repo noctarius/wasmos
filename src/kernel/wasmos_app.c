@@ -18,9 +18,24 @@ typedef struct __attribute__((packed)) {
     uint32_t wasm_size;
     uint32_t req_ep_count;
     uint32_t cap_count;
+    uint32_t entry_arg_binding_count;
     uint32_t mem_hint_count;
     uint32_t reserved;
-} wasmos_app_header_t;
+} wasmos_app_header_v2_t;
+
+typedef struct __attribute__((packed)) {
+    char magic[8];
+    uint16_t version;
+    uint16_t header_size;
+    uint32_t flags;
+    uint32_t name_len;
+    uint32_t entry_len;
+    uint32_t wasm_size;
+    uint32_t req_ep_count;
+    uint32_t cap_count;
+    uint32_t mem_hint_count;
+    uint32_t reserved;
+} wasmos_app_header_v1_t;
 
 typedef struct __attribute__((packed)) {
     uint32_t name_len;
@@ -31,6 +46,10 @@ typedef struct __attribute__((packed)) {
     uint32_t name_len;
     uint32_t flags;
 } wasmos_cap_request_t;
+
+typedef struct __attribute__((packed)) {
+    uint32_t name_len;
+} wasmos_entry_arg_binding_t;
 
 typedef struct __attribute__((packed)) {
     uint32_t kind;
@@ -84,51 +103,94 @@ copy_ascii_field(char *dst, uint32_t dst_size, const uint8_t *src, uint32_t src_
 int
 wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out_desc)
 {
-    if (!blob || !out_desc || blob_size < sizeof(wasmos_app_header_t)) {
+    if (!blob || !out_desc || blob_size < sizeof(wasmos_app_header_v1_t)) {
         return -1;
     }
-
-    const wasmos_app_header_t *hdr = (const wasmos_app_header_t *)blob;
-    if (hdr->version != WASMOS_APP_VERSION ||
-        hdr->header_size != sizeof(wasmos_app_header_t) ||
-        hdr->reserved != 0) {
+    const wasmos_app_header_v1_t *hdr_v1 = (const wasmos_app_header_v1_t *)blob;
+    uint32_t version = hdr_v1->version;
+    uint32_t header_size = 0;
+    uint32_t flags = 0;
+    uint32_t name_len = 0;
+    uint32_t entry_len = 0;
+    uint32_t wasm_size = 0;
+    uint32_t req_ep_count = 0;
+    uint32_t cap_count = 0;
+    uint32_t entry_arg_binding_count = 0;
+    uint32_t mem_hint_count = 0;
+    uint32_t reserved = 0;
+    if (version == 1u) {
+        if (blob_size < sizeof(wasmos_app_header_v1_t)) {
+            return -1;
+        }
+        header_size = hdr_v1->header_size;
+        flags = hdr_v1->flags;
+        name_len = hdr_v1->name_len;
+        entry_len = hdr_v1->entry_len;
+        wasm_size = hdr_v1->wasm_size;
+        req_ep_count = hdr_v1->req_ep_count;
+        cap_count = hdr_v1->cap_count;
+        mem_hint_count = hdr_v1->mem_hint_count;
+        reserved = hdr_v1->reserved;
+    } else if (version == WASMOS_APP_VERSION) {
+        if (blob_size < sizeof(wasmos_app_header_v2_t)) {
+            return -1;
+        }
+        const wasmos_app_header_v2_t *hdr_v2 = (const wasmos_app_header_v2_t *)blob;
+        header_size = hdr_v2->header_size;
+        flags = hdr_v2->flags;
+        name_len = hdr_v2->name_len;
+        entry_len = hdr_v2->entry_len;
+        wasm_size = hdr_v2->wasm_size;
+        req_ep_count = hdr_v2->req_ep_count;
+        cap_count = hdr_v2->cap_count;
+        entry_arg_binding_count = hdr_v2->entry_arg_binding_count;
+        mem_hint_count = hdr_v2->mem_hint_count;
+        reserved = hdr_v2->reserved;
+    } else {
+        return -1;
+    }
+    if ((version == 1u && header_size != sizeof(wasmos_app_header_v1_t)) ||
+        (version == WASMOS_APP_VERSION && header_size != sizeof(wasmos_app_header_v2_t)) ||
+        reserved != 0) {
         return -1;
     }
     for (uint32_t i = 0; i < 8; ++i) {
-        if ((uint8_t)hdr->magic[i] != (uint8_t)WASMOS_APP_MAGIC[i]) {
+        if ((uint8_t)hdr_v1->magic[i] != (uint8_t)WASMOS_APP_MAGIC[i]) {
             return -1;
         }
     }
-    if (hdr->req_ep_count > WASMOS_APP_MAX_REQUIRED_ENDPOINTS ||
-        hdr->cap_count > WASMOS_APP_MAX_CAP_REQUESTS) {
+    if (req_ep_count > WASMOS_APP_MAX_REQUIRED_ENDPOINTS ||
+        cap_count > WASMOS_APP_MAX_CAP_REQUESTS ||
+        entry_arg_binding_count > WASMOS_APP_MAX_ENTRY_ARG_BINDINGS) {
         return -1;
     }
     /* NATIVE is only meaningful for drivers; reject any other combination. */
-    if ((hdr->flags & WASMOS_APP_FLAG_NATIVE) &&
-        !(hdr->flags & WASMOS_APP_FLAG_DRIVER)) {
+    if ((flags & WASMOS_APP_FLAG_NATIVE) &&
+        !(flags & WASMOS_APP_FLAG_DRIVER)) {
         return -1;
     }
 
     out_desc->req_ep_count = 0;
     out_desc->cap_count = 0;
+    out_desc->entry_arg_binding_count = 0;
 
     /* The parser walks the blob linearly in the same order the packer writes it:
      * fixed header, name, entry, endpoint table, capability table, mem hints,
      * then raw WASM bytes. */
-    uint32_t off = hdr->header_size;
-    if (check_bounds(off, hdr->name_len, blob_size) != 0) {
+    uint32_t off = header_size;
+    if (check_bounds(off, name_len, blob_size) != 0) {
         return -1;
     }
     const uint8_t *name = &blob[off];
-    off += hdr->name_len;
+    off += name_len;
 
-    if (check_bounds(off, hdr->entry_len, blob_size) != 0) {
+    if (check_bounds(off, entry_len, blob_size) != 0) {
         return -1;
     }
     const uint8_t *entry = &blob[off];
-    off += hdr->entry_len;
+    off += entry_len;
 
-    for (uint32_t i = 0; i < hdr->req_ep_count; ++i) {
+    for (uint32_t i = 0; i < req_ep_count; ++i) {
         if (check_bounds(off, sizeof(wasmos_req_endpoint_t), blob_size) != 0) {
             return -1;
         }
@@ -144,7 +206,7 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
         out_desc->req_ep_count++;
     }
 
-    for (uint32_t i = 0; i < hdr->cap_count; ++i) {
+    for (uint32_t i = 0; i < cap_count; ++i) {
         if (check_bounds(off, sizeof(wasmos_cap_request_t), blob_size) != 0) {
             return -1;
         }
@@ -160,9 +222,24 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
         out_desc->cap_count++;
     }
 
+    for (uint32_t i = 0; i < entry_arg_binding_count; ++i) {
+        if (check_bounds(off, sizeof(wasmos_entry_arg_binding_t), blob_size) != 0) {
+            return -1;
+        }
+        const wasmos_entry_arg_binding_t *binding = (const wasmos_entry_arg_binding_t *)&blob[off];
+        off += sizeof(wasmos_entry_arg_binding_t);
+        if (check_bounds(off, binding->name_len, blob_size) != 0) {
+            return -1;
+        }
+        out_desc->entry_arg_bindings[i].name = &blob[off];
+        out_desc->entry_arg_bindings[i].name_len = binding->name_len;
+        off += binding->name_len;
+        out_desc->entry_arg_binding_count++;
+    }
+
     uint32_t stack_pages_hint = 0;
     uint32_t heap_pages_hint = 0;
-    for (uint32_t i = 0; i < hdr->mem_hint_count; ++i) {
+    for (uint32_t i = 0; i < mem_hint_count; ++i) {
         if (check_bounds(off, sizeof(wasmos_mem_hint_t), blob_size) != 0) {
             return -1;
         }
@@ -175,19 +252,19 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
         }
     }
 
-    if (check_bounds(off, hdr->wasm_size, blob_size) != 0) {
+    if (check_bounds(off, wasm_size, blob_size) != 0) {
         return -1;
     }
 
     out_desc->blob = blob;
     out_desc->blob_size = blob_size;
-    out_desc->flags = hdr->flags;
+    out_desc->flags = flags;
     out_desc->name = name;
-    out_desc->name_len = hdr->name_len;
+    out_desc->name_len = name_len;
     out_desc->entry = entry;
-    out_desc->entry_len = hdr->entry_len;
+    out_desc->entry_len = entry_len;
     out_desc->wasm_bytes = &blob[off];
-    out_desc->wasm_size = hdr->wasm_size;
+    out_desc->wasm_size = wasm_size;
     out_desc->stack_pages_hint = stack_pages_hint;
     out_desc->heap_pages_hint = heap_pages_hint;
     return 0;

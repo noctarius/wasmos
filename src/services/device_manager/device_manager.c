@@ -45,6 +45,27 @@ typedef enum {
 
 #define PCI_CLASS_MASS_STORAGE 0x01
 #define DEVICE_REGISTRY_CAP 64
+#define MATCH_ANY_U8 0xFFu
+#define MATCH_ANY_U16 0xFFFFu
+
+typedef struct {
+    uint32_t cap_flags;
+    uint16_t io_port_min;
+    uint16_t io_port_max;
+    uint16_t irq_mask;
+} spawn_caps_t;
+
+typedef struct {
+    const char *driver_name;
+    uint8_t class_code;
+    uint8_t subclass;
+    uint8_t prog_if;
+    uint16_t vendor_id;
+    uint16_t device_id;
+    uint8_t required;
+    uint8_t optional;
+    spawn_caps_t caps;
+} driver_manifest_t;
 
 typedef struct {
     uint8_t bus;
@@ -55,6 +76,8 @@ typedef struct {
     uint8_t prog_if;
     uint16_t vendor_id;
     uint16_t device_id;
+    uint8_t mmio_hint;
+    uint8_t irq_hint;
 } pci_device_record_t;
 
 static hw_phase_t g_phase = HW_PHASE_INIT;
@@ -80,7 +103,14 @@ static int32_t g_ata_index = -1;
 static int32_t g_fat_index = -1;
 static pci_device_record_t g_registry[DEVICE_REGISTRY_CAP];
 static uint32_t g_registry_count = 0;
-static uint8_t g_storage_controller_present = 0;
+static uint8_t g_ata_match = 0;
+static spawn_caps_t g_ata_caps;
+
+static const driver_manifest_t g_manifests[] = {
+    { "ata", PCI_CLASS_MASS_STORAGE, MATCH_ANY_U8, MATCH_ANY_U8, MATCH_ANY_U16, MATCH_ANY_U16, 1, 0,
+      { DEVMGR_CAP_IO_PORT | DEVMGR_CAP_IRQ, 0x01F0, 0x03F7, (uint16_t)((1u << 14) | (1u << 15)) } },
+    /* TODO: Expand manifest table once additional PCI-backed drivers land. */
+};
 
 static void
 stall_forever(void)
@@ -214,6 +244,34 @@ hw_spawn_driver_index(int32_t index)
     return 0;
 }
 
+static int
+hw_spawn_driver_index_caps(int32_t index, const spawn_caps_t *caps)
+{
+    uint32_t flags = 0;
+    uint32_t io_packed = 0;
+    uint32_t irq_mask = 0;
+    if (!caps) {
+        return hw_spawn_driver_index(index);
+    }
+    flags = caps->cap_flags;
+    io_packed = ((uint32_t)caps->io_port_min) | ((uint32_t)caps->io_port_max << 16);
+    irq_mask = caps->irq_mask;
+    if (index < 0) {
+        return -1;
+    }
+    if (wasmos_ipc_send(g_proc_endpoint,
+                        g_reply_endpoint,
+                        PROC_IPC_SPAWN_CAPS,
+                        g_request_id,
+                        index,
+                        (int32_t)flags,
+                        (int32_t)io_packed,
+                        (int32_t)irq_mask) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
 static void
 pack_name_args(const char *name, uint32_t out[4])
 {
@@ -254,6 +312,8 @@ hw_spawn_driver_name(hw_spawn_target_t target)
     if (!name || name[0] == '\0') {
         return -1;
     }
+    /* FIXME: PROC_IPC_SPAWN_NAME currently lacks capability-profile plumbing.
+     * Serial/keyboard/framebuffer still rely on app-declared coarse caps. */
     pack_name_args(name, packed);
     if (wasmos_ipc_send(g_proc_endpoint,
                         g_reply_endpoint,
@@ -269,7 +329,7 @@ hw_spawn_driver_name(hw_spawn_target_t target)
 }
 
 static void
-registry_add_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2)
+registry_add_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3)
 {
     if (g_registry_count >= DEVICE_REGISTRY_CAP) {
         return;
@@ -286,8 +346,45 @@ registry_add_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2)
     rec->prog_if = (uint8_t)((v1 >> 16) & 0xFFu);
     rec->vendor_id = (uint16_t)(v1 & 0xFFFFu);
     rec->device_id = (uint16_t)(v2 & 0xFFFFu);
-    if (rec->class_code == PCI_CLASS_MASS_STORAGE) {
-        g_storage_controller_present = 1;
+    rec->mmio_hint = (uint8_t)((uint32_t)arg3 & 0xFFu);
+    rec->irq_hint = (uint8_t)(((uint32_t)arg3 >> 8) & 0xFFu);
+}
+
+static void
+apply_manifest_matches(void)
+{
+    g_ata_match = 0;
+    g_ata_caps.cap_flags = 0;
+    g_ata_caps.io_port_min = 0;
+    g_ata_caps.io_port_max = 0;
+    g_ata_caps.irq_mask = 0;
+    for (uint32_t i = 0; i < g_registry_count; ++i) {
+        const pci_device_record_t *rec = &g_registry[i];
+        for (uint32_t m = 0; m < (uint32_t)(sizeof(g_manifests) / sizeof(g_manifests[0])); ++m) {
+            const driver_manifest_t *manifest = &g_manifests[m];
+            if (manifest->class_code != MATCH_ANY_U8 && rec->class_code != manifest->class_code) {
+                continue;
+            }
+            if (manifest->subclass != MATCH_ANY_U8 && rec->subclass != manifest->subclass) {
+                continue;
+            }
+            if (manifest->prog_if != MATCH_ANY_U8 && rec->prog_if != manifest->prog_if) {
+                continue;
+            }
+            if (manifest->vendor_id != MATCH_ANY_U16 && rec->vendor_id != manifest->vendor_id) {
+                continue;
+            }
+            if (manifest->device_id != MATCH_ANY_U16 && rec->device_id != manifest->device_id) {
+                continue;
+            }
+            if (str_eq(manifest->driver_name, "ata")) {
+                g_ata_match = 1;
+                g_ata_caps = manifest->caps;
+                if (rec->irq_hint < 16u) {
+                    g_ata_caps.irq_mask = (uint16_t)(1u << rec->irq_hint);
+                }
+            }
+        }
     }
 }
 
@@ -295,11 +392,9 @@ static void
 consume_pci_inventory(void)
 {
     if (g_inventory_endpoint < 0) {
-        g_storage_controller_present = 1;
         return;
     }
     g_registry_count = 0;
-    g_storage_controller_present = 0;
     console_write("[device-manager] waiting for pci-bus inventory\n");
     for (;;) {
         if (wasmos_ipc_recv(g_inventory_endpoint) < 0) {
@@ -311,7 +406,8 @@ consume_pci_inventory(void)
             int32_t arg0 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
             int32_t arg1 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
             int32_t arg2 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
-            registry_add_from_ipc(arg0, arg1, arg2);
+            int32_t arg3 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
+            registry_add_from_ipc(arg0, arg1, arg2, arg3);
             continue;
         }
         if (msg_type == DEVMGR_PCI_SCAN_DONE) {
@@ -319,6 +415,7 @@ consume_pci_inventory(void)
             break;
         }
     }
+    apply_manifest_matches();
 }
 
 static hw_spawn_target_t
@@ -397,7 +494,12 @@ initialize(int32_t proc_endpoint,
                 continue;
             }
             if (target == HW_SPAWN_PCI_BUS) {
-                if (hw_spawn_driver_index(g_pci_bus_index) != 0) {
+                spawn_caps_t pci_caps;
+                pci_caps.cap_flags = DEVMGR_CAP_IO_PORT;
+                pci_caps.io_port_min = 0x0CF8;
+                pci_caps.io_port_max = 0x0CFF;
+                pci_caps.irq_mask = 0;
+                if (hw_spawn_driver_index_caps(g_pci_bus_index, &pci_caps) != 0) {
                     g_phase = HW_PHASE_FAILED;
                     console_write("[device-manager] spawn pci-bus failed\n");
                     stall_forever();
@@ -421,7 +523,7 @@ initialize(int32_t proc_endpoint,
                     stall_forever();
                 }
             } else if (target == HW_SPAWN_ATA) {
-                if (hw_spawn_driver_index(g_ata_index) != 0) {
+                if (hw_spawn_driver_index_caps(g_ata_index, &g_ata_caps) != 0) {
                     g_phase = HW_PHASE_FAILED;
                     console_write("[device-manager] spawn ata failed\n");
                     stall_forever();
@@ -517,7 +619,7 @@ initialize(int32_t proc_endpoint,
 
         if (g_phase == HW_PHASE_WAIT_INVENTORY) {
             consume_pci_inventory();
-            g_need_ata = (g_ata_index >= 0 && g_storage_controller_present && !proc_running("ata")) ? 1 : 0;
+            g_need_ata = (g_ata_index >= 0 && g_ata_match && !proc_running("ata")) ? 1 : 0;
             g_need_fat = (g_fat_index >= 0 && g_need_ata && !proc_running("fs-fat")) ? 1 : 0;
             if (!g_need_ata && g_ata_index >= 0 && !proc_running("ata")) {
                 console_write("[device-manager] fallback: boot ata despite no PCI storage match\n");

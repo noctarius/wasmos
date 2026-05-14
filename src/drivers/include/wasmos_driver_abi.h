@@ -27,6 +27,7 @@ enum {
     PROC_IPC_KILL = 0x202,
     PROC_IPC_STATUS = 0x203,
     PROC_IPC_SPAWN_NAME = 0x204,
+    PROC_IPC_SPAWN_CAPS = 0x205,
     PROC_IPC_RESP = 0x280,
     PROC_IPC_ERROR = 0x2FF
 };
@@ -113,6 +114,12 @@ enum {
 enum {
     DEVMGR_PUBLISH_DEVICE = 0x900,
     DEVMGR_PCI_SCAN_DONE  = 0x901
+};
+
+enum {
+    DEVMGR_CAP_IO_PORT  = 1 << 0,
+    DEVMGR_CAP_MMIO_MAP = 1 << 1,
+    DEVMGR_CAP_IRQ      = 1 << 2
 };
 
 enum {

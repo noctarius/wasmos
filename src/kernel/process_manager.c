@@ -4,6 +4,7 @@
 #include "wasmos_app.h"
 #include "native_driver.h"
 #include "wasm_chardev.h"
+#include "capability.h"
 #include "physmem.h"
 
 /*
@@ -54,6 +55,14 @@ typedef struct {
     uint32_t fs_request_id;
     char name[32];
 } pm_spawn_state_t;
+
+typedef struct {
+    uint8_t valid;
+    uint32_t cap_flags;
+    uint16_t io_port_min;
+    uint16_t io_port_max;
+    uint16_t irq_mask;
+} pm_spawn_caps_t;
 
 typedef struct {
     uint8_t in_use;
@@ -711,6 +720,29 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
 }
 
 static int
+pm_apply_spawn_caps(uint32_t pid, const pm_spawn_caps_t *caps)
+{
+    process_t *proc = 0;
+    uint32_t packed_io = 0;
+    if (!caps || !caps->valid) {
+        return 0;
+    }
+    proc = process_get(pid);
+    if (!proc || proc->context_id == 0) {
+        return -1;
+    }
+    packed_io = ((uint32_t)caps->io_port_min) | ((uint32_t)caps->io_port_max << 16);
+    if (capability_set_spawn_profile(proc->context_id,
+                                     caps->cap_flags,
+                                     (uint16_t)(packed_io & 0xFFFFu),
+                                     (uint16_t)((packed_io >> 16) & 0xFFFFu),
+                                     caps->irq_mask) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int
 pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t *blob, uint32_t blob_size, uint32_t *out_pid)
 {
     if (!blob || blob_size == 0 || !out_pid) {
@@ -952,6 +984,51 @@ pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t *msg)
     trace_write_unlocked("[pm] spawn resp rc=");
     trace_do(serial_write_hex64((uint64_t)(uint32_t)rc));
     return rc;
+}
+
+static int
+pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t *msg)
+{
+    pm_spawn_caps_t caps = {0};
+    uint32_t owner_context = 0;
+    process_t *caller = 0;
+    uint32_t parent_pid = 0;
+    uint32_t pid = 0;
+    trace_write("[pm] spawn caps index=");
+    trace_do(serial_write_hex64(msg->arg0));
+    if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
+        return -1;
+    }
+    caller = process_find_by_context(owner_context);
+    if (!caller) {
+        return -1;
+    }
+    parent_pid = caller->pid;
+    caps.valid = 1;
+    caps.cap_flags = msg->arg1;
+    caps.io_port_min = (uint16_t)((uint32_t)msg->arg2 & 0xFFFFu);
+    caps.io_port_max = (uint16_t)(((uint32_t)msg->arg2 >> 16) & 0xFFFFu);
+    caps.irq_mask = (uint16_t)((uint32_t)msg->arg3 & 0xFFFFu);
+    if ((caps.cap_flags & DEVMGR_CAP_IO_PORT) == 0) {
+        caps.io_port_min = 0;
+        caps.io_port_max = 0;
+    }
+    if (pm_spawn_module(parent_pid, msg->arg0, &pid) != 0) {
+        return -1;
+    }
+    if (pm_apply_spawn_caps(pid, &caps) != 0) {
+        return -1;
+    }
+    ipc_message_t resp;
+    resp.type = PROC_IPC_RESP;
+    resp.source = g_pm.proc_endpoint;
+    resp.destination = msg->source;
+    resp.request_id = msg->request_id;
+    resp.arg0 = pid;
+    resp.arg1 = 0;
+    resp.arg2 = 0;
+    resp.arg3 = 0;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
 }
 
 static int
@@ -1413,6 +1490,9 @@ process_manager_entry(process_t *process, void *arg)
     switch (msg.type) {
         case PROC_IPC_SPAWN:
             rc = pm_handle_spawn(process->context_id, &msg);
+            break;
+        case PROC_IPC_SPAWN_CAPS:
+            rc = pm_handle_spawn_caps(process->context_id, &msg);
             break;
         case PROC_IPC_SPAWN_NAME:
             rc = pm_handle_spawn_name(process->context_id, &msg);

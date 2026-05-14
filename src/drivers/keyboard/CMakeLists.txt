@@ -36,8 +36,12 @@ if (AS_ENABLE)
             1
             -
             0
+            1
             io.port
             0
+            --entry-arg-bindings
+            1
+            proc.endpoint
     DEPENDS ${WASM_KEYBOARD_DRIVER_WASM} make_wasmos_app
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Packing keyboard driver as WASMOS-APP"

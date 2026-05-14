@@ -68,6 +68,9 @@ def parse_wasmos_app(data):
     wasm_size, off = read_u32_le(data, off)
     req_ep_count, off = read_u32_le(data, off)
     cap_count, off = read_u32_le(data, off)
+    entry_arg_binding_count = 0
+    if version >= 2:
+        entry_arg_binding_count, off = read_u32_le(data, off)
     mem_hint_count, off = read_u32_le(data, off)
     _reserved, off = read_u32_le(data, off)
     header_end = header_size
@@ -80,6 +83,9 @@ def parse_wasmos_app(data):
     for _ in range(cap_count):
         _name_len, off = read_u32_le(data, off)
         _flags, off = read_u32_le(data, off)
+        _, off = read_bytes(data, off, _name_len)
+    for _ in range(entry_arg_binding_count):
+        _name_len, off = read_u32_le(data, off)
         _, off = read_bytes(data, off, _name_len)
     for _ in range(mem_hint_count):
         _, off = read_u32_le(data, off)

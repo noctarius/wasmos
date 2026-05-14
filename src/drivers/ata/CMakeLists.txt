@@ -48,6 +48,9 @@ add_custom_command(
           0
           irq.route
           0
+          --entry-arg-bindings
+          1
+          proc.endpoint
   DEPENDS ${WASM_ATA_DRIVER_WASM} make_wasmos_app
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm ATA as WASMOS-APP"

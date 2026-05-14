@@ -32,6 +32,7 @@ typedef struct {
     uint32_t entry_arg1;
     uint32_t entry_arg2;
     uint32_t entry_arg3;
+    uint8_t entry_arg_binding_kind[4];
     wasmos_app_instance_t app;
     char name[64];
 } pm_app_state_t;
@@ -371,6 +372,216 @@ pm_find_module_index_by_name(const char *name)
     return 0xFFFFFFFFu;
 }
 
+typedef enum {
+    PM_ARG_NONE = 0,
+    PM_ARG_PROC_ENDPOINT,
+    PM_ARG_MODULE_COUNT,
+    PM_ARG_INIT_MODULE_INDEX,
+    PM_ARG_FS_ENDPOINT,
+    PM_ARG_BLOCK_ENDPOINT,
+    PM_ARG_KBD_ENDPOINT,
+    PM_ARG_FB_ENDPOINT,
+    PM_ARG_VT_ENDPOINT,
+    PM_ARG_VT_ENDPOINT_OR_NEG1,
+    PM_ARG_DEVMGR_INVENTORY_ENDPOINT,
+    PM_ARG_CLI_TTY_ALLOC,
+    PM_ARG_CHARDEV_ENDPOINT,
+    PM_ARG_CONST_NEG1,
+    PM_ARG_PROVIDE_BLOCK_ENDPOINT,
+    PM_ARG_PROVIDE_FS_ENDPOINT,
+    PM_ARG_PROVIDE_KBD_ENDPOINT,
+    PM_ARG_PROVIDE_VT_ENDPOINT,
+    PM_ARG_PROVIDE_DEVMGR_INVENTORY_ENDPOINT
+} pm_arg_kind_t;
+
+static int
+bytes_eq_lit(const uint8_t *name, uint32_t name_len, const char *lit)
+{
+    if (!name || !lit) {
+        return 0;
+    }
+    uint32_t i = 0;
+    while (lit[i]) {
+        if (i >= name_len || name[i] != (uint8_t)lit[i]) {
+            return 0;
+        }
+        i++;
+    }
+    return i == name_len;
+}
+
+static pm_arg_kind_t
+pm_arg_kind_from_binding(const uint8_t *name, uint32_t name_len)
+{
+    if (bytes_eq_lit(name, name_len, "none")) return PM_ARG_NONE;
+    if (bytes_eq_lit(name, name_len, "proc.endpoint")) return PM_ARG_PROC_ENDPOINT;
+    if (bytes_eq_lit(name, name_len, "module.count")) return PM_ARG_MODULE_COUNT;
+    if (bytes_eq_lit(name, name_len, "init.module.index")) return PM_ARG_INIT_MODULE_INDEX;
+    if (bytes_eq_lit(name, name_len, "fs.endpoint")) return PM_ARG_FS_ENDPOINT;
+    if (bytes_eq_lit(name, name_len, "block.endpoint")) return PM_ARG_BLOCK_ENDPOINT;
+    if (bytes_eq_lit(name, name_len, "kbd.endpoint")) return PM_ARG_KBD_ENDPOINT;
+    if (bytes_eq_lit(name, name_len, "fb.endpoint")) return PM_ARG_FB_ENDPOINT;
+    if (bytes_eq_lit(name, name_len, "vt.endpoint")) return PM_ARG_VT_ENDPOINT;
+    if (bytes_eq_lit(name, name_len, "vt.endpoint.or-neg1")) return PM_ARG_VT_ENDPOINT_OR_NEG1;
+    if (bytes_eq_lit(name, name_len, "devmgr.inventory.endpoint")) return PM_ARG_DEVMGR_INVENTORY_ENDPOINT;
+    if (bytes_eq_lit(name, name_len, "cli.tty.alloc")) return PM_ARG_CLI_TTY_ALLOC;
+    if (bytes_eq_lit(name, name_len, "chardev.endpoint")) return PM_ARG_CHARDEV_ENDPOINT;
+    if (bytes_eq_lit(name, name_len, "const.neg1")) return PM_ARG_CONST_NEG1;
+    if (bytes_eq_lit(name, name_len, "provide.block.endpoint")) return PM_ARG_PROVIDE_BLOCK_ENDPOINT;
+    if (bytes_eq_lit(name, name_len, "provide.fs.endpoint")) return PM_ARG_PROVIDE_FS_ENDPOINT;
+    if (bytes_eq_lit(name, name_len, "provide.kbd.endpoint")) return PM_ARG_PROVIDE_KBD_ENDPOINT;
+    if (bytes_eq_lit(name, name_len, "provide.vt.endpoint")) return PM_ARG_PROVIDE_VT_ENDPOINT;
+    if (bytes_eq_lit(name, name_len, "provide.devmgr.inventory.endpoint")) return PM_ARG_PROVIDE_DEVMGR_INVENTORY_ENDPOINT;
+    return PM_ARG_NONE;
+}
+
+static int
+pm_resolve_pre_spawn_arg(pm_arg_kind_t kind, uint32_t *out_value)
+{
+    if (!out_value) {
+        return -1;
+    }
+    switch (kind) {
+    case PM_ARG_NONE:
+        *out_value = 0;
+        return 0;
+    case PM_ARG_PROC_ENDPOINT:
+        if (g_pm.proc_endpoint == IPC_ENDPOINT_NONE) return -1;
+        *out_value = g_pm.proc_endpoint;
+        return 0;
+    case PM_ARG_MODULE_COUNT:
+        *out_value = g_pm.module_count;
+        return 0;
+    case PM_ARG_INIT_MODULE_INDEX:
+        *out_value = g_pm.init_module_index;
+        return 0;
+    case PM_ARG_FS_ENDPOINT:
+        if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE) return -1;
+        *out_value = g_pm.fs_endpoint;
+        return 0;
+    case PM_ARG_BLOCK_ENDPOINT:
+        if (g_pm.block_endpoint == IPC_ENDPOINT_NONE) return -1;
+        *out_value = g_pm.block_endpoint;
+        return 0;
+    case PM_ARG_KBD_ENDPOINT:
+        if (g_pm.kbd_endpoint == IPC_ENDPOINT_NONE) return -1;
+        *out_value = g_pm.kbd_endpoint;
+        return 0;
+    case PM_ARG_FB_ENDPOINT:
+        if (g_pm.fb_endpoint == IPC_ENDPOINT_NONE) return -1;
+        *out_value = g_pm.fb_endpoint;
+        return 0;
+    case PM_ARG_VT_ENDPOINT:
+        if (g_pm.vt_endpoint == IPC_ENDPOINT_NONE) return -1;
+        *out_value = g_pm.vt_endpoint;
+        return 0;
+    case PM_ARG_VT_ENDPOINT_OR_NEG1:
+        *out_value = (g_pm.vt_endpoint != IPC_ENDPOINT_NONE) ? g_pm.vt_endpoint : (uint32_t)-1;
+        return 0;
+    case PM_ARG_DEVMGR_INVENTORY_ENDPOINT:
+        if (g_pm.devmgr_inventory_endpoint == IPC_ENDPOINT_NONE) return -1;
+        *out_value = g_pm.devmgr_inventory_endpoint;
+        return 0;
+    case PM_ARG_CLI_TTY_ALLOC:
+        *out_value = pm_alloc_cli_tty();
+        return 0;
+    case PM_ARG_CHARDEV_ENDPOINT: {
+        uint32_t ep = IPC_ENDPOINT_NONE;
+        if (wasm_chardev_endpoint(&ep) != 0 || ep == IPC_ENDPOINT_NONE) return -1;
+        *out_value = ep;
+        return 0;
+    }
+    case PM_ARG_CONST_NEG1:
+        *out_value = (uint32_t)-1;
+        return 0;
+    case PM_ARG_PROVIDE_BLOCK_ENDPOINT:
+    case PM_ARG_PROVIDE_FS_ENDPOINT:
+    case PM_ARG_PROVIDE_KBD_ENDPOINT:
+    case PM_ARG_PROVIDE_VT_ENDPOINT:
+    case PM_ARG_PROVIDE_DEVMGR_INVENTORY_ENDPOINT:
+        *out_value = IPC_ENDPOINT_NONE;
+        return 0;
+    default:
+        return -1;
+    }
+}
+
+static int
+pm_apply_entry_bindings(pm_app_state_t *slot, const wasmos_app_desc_t *desc)
+{
+    if (!slot || !desc) {
+        return -1;
+    }
+    slot->entry_argc = 4;
+    slot->entry_arg0 = 0;
+    slot->entry_arg1 = 0;
+    slot->entry_arg2 = 0;
+    slot->entry_arg3 = 0;
+    for (uint32_t i = 0; i < 4; ++i) {
+        slot->entry_arg_binding_kind[i] = (uint8_t)PM_ARG_NONE;
+    }
+    for (uint32_t i = 0; i < desc->entry_arg_binding_count && i < 4; ++i) {
+        pm_arg_kind_t kind = pm_arg_kind_from_binding(desc->entry_arg_bindings[i].name,
+                                                      desc->entry_arg_bindings[i].name_len);
+        uint32_t value = 0;
+        if (pm_resolve_pre_spawn_arg(kind, &value) != 0) {
+            return -1;
+        }
+        slot->entry_arg_binding_kind[i] = (uint8_t)kind;
+        if (i == 0) slot->entry_arg0 = value;
+        else if (i == 1) slot->entry_arg1 = value;
+        else if (i == 2) slot->entry_arg2 = value;
+        else slot->entry_arg3 = value;
+    }
+    return 0;
+}
+
+static int
+pm_apply_post_spawn_bindings(pm_app_state_t *slot, uint32_t pid)
+{
+    if (!slot) {
+        return -1;
+    }
+    process_t *proc = process_get(pid);
+    for (uint32_t i = 0; i < 4; ++i) {
+        uint32_t kind = slot->entry_arg_binding_kind[i];
+        uint32_t value = 0;
+        if (kind == PM_ARG_PROVIDE_BLOCK_ENDPOINT) {
+            if (g_pm.block_endpoint == IPC_ENDPOINT_NONE) {
+                if (!proc || ipc_endpoint_create(proc->context_id, &g_pm.block_endpoint) != IPC_OK) return -1;
+            }
+            value = g_pm.block_endpoint;
+        } else if (kind == PM_ARG_PROVIDE_FS_ENDPOINT) {
+            if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE) {
+                if (!proc || ipc_endpoint_create(proc->context_id, &g_pm.fs_endpoint) != IPC_OK) return -1;
+            }
+            value = g_pm.fs_endpoint;
+        } else if (kind == PM_ARG_PROVIDE_KBD_ENDPOINT) {
+            if (g_pm.kbd_endpoint == IPC_ENDPOINT_NONE) {
+                if (!proc || ipc_endpoint_create(proc->context_id, &g_pm.kbd_endpoint) != IPC_OK) return -1;
+            }
+            value = g_pm.kbd_endpoint;
+        } else if (kind == PM_ARG_PROVIDE_VT_ENDPOINT) {
+            if (g_pm.vt_endpoint == IPC_ENDPOINT_NONE) {
+                if (!proc || ipc_endpoint_create(proc->context_id, &g_pm.vt_endpoint) != IPC_OK) return -1;
+            }
+            value = g_pm.vt_endpoint;
+        } else if (kind == PM_ARG_PROVIDE_DEVMGR_INVENTORY_ENDPOINT) {
+            if (g_pm.devmgr_inventory_endpoint == IPC_ENDPOINT_NONE) {
+                if (!proc || ipc_endpoint_create(proc->context_id, &g_pm.devmgr_inventory_endpoint) != IPC_OK) return -1;
+            }
+            value = g_pm.devmgr_inventory_endpoint;
+        } else {
+            continue;
+        }
+        if (i == 0) slot->entry_arg0 = value;
+        else if (i == 1) slot->entry_arg1 = value;
+        else if (i == 2) slot->entry_arg2 = value;
+        else slot->entry_arg3 = value;
+    }
+    return 0;
+}
+
 static process_run_result_t
 pm_app_entry(process_t *process, void *arg)
 {
@@ -554,70 +765,10 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     slot->blob = (const uint8_t *)(uintptr_t)mod->base;
     slot->blob_size = (uint32_t)mod->size;
     slot->started = 0;
-    slot->entry_argc = 4;
-    slot->entry_arg0 = 0;
-    slot->entry_arg1 = 0;
-    slot->entry_arg2 = 0;
-    slot->entry_arg3 = 0;
     slot->in_use = 1;
-
-    if (name_eq(slot->name, "sysinit")) {
-        slot->entry_arg0 = g_pm.proc_endpoint;
-        slot->entry_arg1 = g_pm.module_count;
-        slot->entry_arg2 = g_pm.init_module_index;
-    } else if (name_eq(slot->name, "chardev-client")) {
-        uint32_t chardev_endpoint = IPC_ENDPOINT_NONE;
-        if (wasm_chardev_endpoint(&chardev_endpoint) != 0) {
-            slot->in_use = 0;
-            return -1;
-        }
-        slot->entry_arg0 = chardev_endpoint;
-    } else if (name_eq(slot->name, "cli")) {
-        uint32_t fs_endpoint = g_pm.fs_endpoint;
-        if (fs_endpoint == IPC_ENDPOINT_NONE) {
-            slot->in_use = 0;
-            return -1;
-        }
-        slot->entry_arg0 = g_pm.proc_endpoint;
-        slot->entry_arg1 = fs_endpoint;
-        slot->entry_arg2 = (g_pm.vt_endpoint != IPC_ENDPOINT_NONE)
-                               ? g_pm.vt_endpoint
-                               : (uint32_t)-1;
-        slot->entry_arg3 = pm_alloc_cli_tty();
-    } else if (name_eq(slot->name, "fs-fat")) {
-        uint32_t block_endpoint = g_pm.block_endpoint;
-        if (block_endpoint == IPC_ENDPOINT_NONE) {
-            slot->in_use = 0;
-            return -1;
-        }
-        slot->entry_arg0 = block_endpoint;
-        slot->entry_arg1 = IPC_ENDPOINT_NONE;
-    } else if (name_eq(slot->name, "device-manager")) {
-        if (g_pm.proc_endpoint == IPC_ENDPOINT_NONE) {
-            slot->in_use = 0;
-            return -1;
-        }
-        slot->entry_arg0 = g_pm.proc_endpoint;
-        slot->entry_arg1 = g_pm.module_count;
-        slot->entry_arg2 = g_pm.devmgr_inventory_endpoint;
-    } else if (name_eq(slot->name, "pci-bus")) {
-        if (g_pm.devmgr_inventory_endpoint == IPC_ENDPOINT_NONE) {
-            slot->in_use = 0;
-            return -1;
-        }
-        slot->entry_arg0 = g_pm.devmgr_inventory_endpoint;
-    } else if (name_eq(slot->name, "ata")) {
-        slot->entry_arg0 = IPC_ENDPOINT_NONE;
-    } else if (name_eq(slot->name, "keyboard")) {
-        slot->entry_arg1 = IPC_ENDPOINT_NONE;
-    } else if (name_eq(slot->name, "vt")) {
-        slot->entry_arg0 = (g_pm.fb_endpoint != IPC_ENDPOINT_NONE)
-                               ? g_pm.fb_endpoint
-                               : (uint32_t)-1;
-        slot->entry_arg1 = g_pm.kbd_endpoint;
-        slot->entry_arg2 = (g_pm.vt_endpoint != IPC_ENDPOINT_NONE)
-                               ? g_pm.vt_endpoint
-                               : (uint32_t)-1;
+    if (pm_apply_entry_bindings(slot, &desc) != 0) {
+        slot->in_use = 0;
+        return -1;
     }
 
     preempt_disable();
@@ -630,55 +781,10 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     slot->pid = *out_pid;
     trace_write("[pm] spawn pid ");
     trace_do(serial_write_hex64(*out_pid));
-    if (name_eq(slot->name, "ata") && g_pm.block_endpoint == IPC_ENDPOINT_NONE) {
-        process_t *proc = process_get(*out_pid);
-        if (!proc || ipc_endpoint_create(proc->context_id, &g_pm.block_endpoint) != IPC_OK) {
-            preempt_enable();
-            slot->in_use = 0;
-            return -1;
-        }
-        slot->entry_arg0 = g_pm.block_endpoint;
-    }
-    if (name_eq(slot->name, "device-manager") && g_pm.devmgr_inventory_endpoint == IPC_ENDPOINT_NONE) {
-        process_t *proc = process_get(*out_pid);
-        if (!proc || ipc_endpoint_create(proc->context_id, &g_pm.devmgr_inventory_endpoint) != IPC_OK) {
-            preempt_enable();
-            slot->in_use = 0;
-            return -1;
-        }
-        slot->entry_arg2 = g_pm.devmgr_inventory_endpoint;
-    }
-    if (name_eq(slot->name, "keyboard") && g_pm.kbd_endpoint == IPC_ENDPOINT_NONE) {
-        process_t *proc = process_get(*out_pid);
-        if (!proc || ipc_endpoint_create(proc->context_id, &g_pm.kbd_endpoint) != IPC_OK) {
-            preempt_enable();
-            slot->in_use = 0;
-            return -1;
-        }
-        slot->entry_arg1 = g_pm.kbd_endpoint;
-    }
-    if (name_eq(slot->name, "vt") && g_pm.vt_endpoint == IPC_ENDPOINT_NONE) {
-        process_t *proc = process_get(*out_pid);
-        if (!proc || ipc_endpoint_create(proc->context_id, &g_pm.vt_endpoint) != IPC_OK) {
-            preempt_enable();
-            slot->in_use = 0;
-            return -1;
-        }
-        slot->entry_arg2 = g_pm.vt_endpoint;
-    }
-    if (name_eq(slot->name, "cli")) {
-        slot->entry_arg2 = (g_pm.vt_endpoint != IPC_ENDPOINT_NONE)
-                               ? g_pm.vt_endpoint
-                               : (uint32_t)-1;
-    }
-    if (name_eq(slot->name, "fs-fat") && g_pm.fs_endpoint == IPC_ENDPOINT_NONE) {
-        process_t *proc = process_get(*out_pid);
-        if (!proc || ipc_endpoint_create(proc->context_id, &g_pm.fs_endpoint) != IPC_OK) {
-            preempt_enable();
-            slot->in_use = 0;
-            return -1;
-        }
-        slot->entry_arg1 = g_pm.fs_endpoint;
+    if (pm_apply_post_spawn_bindings(slot, *out_pid) != 0) {
+        preempt_enable();
+        slot->in_use = 0;
+        return -1;
     }
     preempt_enable();
     return 0;
@@ -718,54 +824,10 @@ pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t *blob, uint32_t blob_siz
     slot->blob = slot->blob_storage;
     slot->blob_size = blob_size;
     slot->started = 0;
-    slot->entry_argc = 4;
-    slot->entry_arg0 = 0;
-    slot->entry_arg1 = 0;
-    slot->entry_arg2 = 0;
-    slot->entry_arg3 = 0;
     slot->in_use = 1;
-
-    if (name_eq(slot->name, "chardev-client") || name_eq(slot->name, "chardev-preempt")) {
-        uint32_t chardev_endpoint = IPC_ENDPOINT_NONE;
-        if (wasm_chardev_endpoint(&chardev_endpoint) != 0) {
-            slot->in_use = 0;
-            return -1;
-        }
-        slot->entry_argc = 4;
-        slot->entry_arg0 = chardev_endpoint;
-    } else if (name_eq(slot->name, "sysinit")) {
-        if (g_pm.proc_endpoint == IPC_ENDPOINT_NONE) {
-            slot->in_use = 0;
-            return -1;
-        }
-        slot->entry_arg0 = g_pm.proc_endpoint;
-    } else if (name_eq(slot->name, "cli")) {
-        if (g_pm.proc_endpoint == IPC_ENDPOINT_NONE || g_pm.fs_endpoint == IPC_ENDPOINT_NONE) {
-            slot->in_use = 0;
-            return -1;
-        }
-        slot->entry_arg0 = g_pm.proc_endpoint;
-        slot->entry_arg1 = g_pm.fs_endpoint;
-        slot->entry_arg2 = (g_pm.vt_endpoint != IPC_ENDPOINT_NONE)
-                               ? g_pm.vt_endpoint
-                               : (uint32_t)-1;
-        slot->entry_arg3 = pm_alloc_cli_tty();
-    } else if (name_eq(slot->name, "vt")) {
-        slot->entry_arg0 = (g_pm.fb_endpoint != IPC_ENDPOINT_NONE)
-                               ? g_pm.fb_endpoint
-                               : (uint32_t)-1;
-        slot->entry_arg1 = g_pm.kbd_endpoint;
-        slot->entry_arg2 = (g_pm.vt_endpoint != IPC_ENDPOINT_NONE)
-                               ? g_pm.vt_endpoint
-                               : (uint32_t)-1;
-    } else if (name_eq(slot->name, "pci-bus")) {
-        if (g_pm.devmgr_inventory_endpoint == IPC_ENDPOINT_NONE) {
-            slot->in_use = 0;
-            return -1;
-        }
-        slot->entry_arg0 = g_pm.devmgr_inventory_endpoint;
-    } else if (name_eq(slot->name, "keyboard")) {
-        slot->entry_arg1 = IPC_ENDPOINT_NONE;
+    if (pm_apply_entry_bindings(slot, &desc) != 0) {
+        slot->in_use = 0;
+        return -1;
     }
 
     if (process_spawn_as(parent_pid, slot->name, pm_app_entry, slot, out_pid) != 0) {
@@ -773,21 +835,9 @@ pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t *blob, uint32_t blob_siz
         return -1;
     }
     slot->pid = *out_pid;
-    if (name_eq(slot->name, "keyboard") && g_pm.kbd_endpoint == IPC_ENDPOINT_NONE) {
-        process_t *proc = process_get(*out_pid);
-        if (!proc || ipc_endpoint_create(proc->context_id, &g_pm.kbd_endpoint) != IPC_OK) {
-            slot->in_use = 0;
-            return -1;
-        }
-        slot->entry_arg1 = g_pm.kbd_endpoint;
-    }
-    if (name_eq(slot->name, "vt") && g_pm.vt_endpoint == IPC_ENDPOINT_NONE) {
-        process_t *proc = process_get(*out_pid);
-        if (!proc || ipc_endpoint_create(proc->context_id, &g_pm.vt_endpoint) != IPC_OK) {
-            slot->in_use = 0;
-            return -1;
-        }
-        slot->entry_arg2 = g_pm.vt_endpoint;
+    if (pm_apply_post_spawn_bindings(slot, *out_pid) != 0) {
+        slot->in_use = 0;
+        return -1;
     }
     return 0;
 }

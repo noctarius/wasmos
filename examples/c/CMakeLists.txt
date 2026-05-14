@@ -98,8 +98,12 @@ add_custom_command(
           4
           chardev
           1
+          1
           ipc.basic
           0
+          --entry-arg-bindings
+          1
+          chardev.endpoint
   DEPENDS ${WASM_CHARDEV_CLIENT_WASM} make_wasmos_app
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm chardev client as WASMOS-APP"
@@ -142,8 +146,12 @@ add_custom_command(
           4
           chardev
           1
+          1
           ipc.basic
           0
+          --entry-arg-bindings
+          1
+          chardev.endpoint
   DEPENDS ${WASM_CHARDEV_PREEMPT_WASM} make_wasmos_app
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm chardev preempt as WASMOS-APP"

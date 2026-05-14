@@ -19,10 +19,14 @@ set(WASM_HELLO_ZIG_LIBC_SRC ${LIBC_DIR}/zig/wasmos.zig)
 
 if (ZIG_AVAILABLE)
   set(WASM_HELLO_ZIG_STAGE_DIR ${BUILD_DIR}/zig_hello_src)
+  set(WASM_HELLO_ZIG_CACHE_DIR ${BUILD_DIR}/zig_cache)
+  set(WASM_HELLO_ZIG_GLOBAL_CACHE_DIR ${BUILD_DIR}/zig_global_cache)
   add_custom_command(
     OUTPUT ${WASM_HELLO_ZIG_WASM}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${WASM_HELLO_ZIG_STAGE_DIR}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${WASM_HELLO_ZIG_CACHE_DIR}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${WASM_HELLO_ZIG_GLOBAL_CACHE_DIR}
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${WASM_HELLO_ZIG_SRC} ${WASM_HELLO_ZIG_STAGE_DIR}/hello_zig.zig
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${WASM_HELLO_ZIG_LIBC_SRC} ${WASM_HELLO_ZIG_STAGE_DIR}/wasmos.zig
     COMMAND ${ZIG_EXECUTABLE}
@@ -32,6 +36,8 @@ if (ZIG_AVAILABLE)
             -fno-entry
             -fstrip
             --export=wasmos_main
+            --cache-dir ${WASM_HELLO_ZIG_CACHE_DIR}
+            --global-cache-dir ${WASM_HELLO_ZIG_GLOBAL_CACHE_DIR}
             -femit-bin=${WASM_HELLO_ZIG_WASM}
             ${WASM_HELLO_ZIG_STAGE_DIR}/hello_zig.zig
     DEPENDS ${WASM_HELLO_ZIG_SRC} ${WASM_HELLO_ZIG_LIBC_SRC}

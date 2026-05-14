@@ -43,8 +43,14 @@ add_custom_command(
           2
           proc
           1
+          1
           ipc.basic
           0
+          --entry-arg-bindings
+          3
+          proc.endpoint
+          module.count
+          init.module.index
   DEPENDS ${WASM_INIT_APP_WASM} make_wasmos_app
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm init as WASMOS-APP"

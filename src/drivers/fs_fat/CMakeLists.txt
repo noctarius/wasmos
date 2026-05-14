@@ -48,8 +48,8 @@ add_custom_command(
           0
           --entry-arg-bindings
           2
+          proc.endpoint
           block.endpoint
-          provide.fs.endpoint
   DEPENDS ${WASM_FAT_DRIVER_WASM} make_wasmos_app
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm FAT as WASMOS-APP"

@@ -2,6 +2,7 @@
 #include "stdio.h"
 #include "string.h"
 #include "wasmos/api.h"
+#include "wasmos/ipc.h"
 #include "wasmos_driver_abi.h"
 
 /*
@@ -347,9 +348,10 @@ next_spawn_target(void)
 WASMOS_WASM_EXPORT int32_t
 initialize(int32_t proc_endpoint,
            int32_t module_count,
-           int32_t inventory_endpoint,
+           int32_t ignored_arg2,
            int32_t ignored_arg3)
 {
+    (void)ignored_arg2;
     (void)ignored_arg3;
 
     g_reply_endpoint = wasmos_ipc_create_endpoint();
@@ -365,7 +367,15 @@ initialize(int32_t proc_endpoint,
     }
     g_proc_endpoint = proc_endpoint;
     g_module_count = module_count;
-    g_inventory_endpoint = inventory_endpoint;
+    g_inventory_endpoint = wasmos_ipc_create_endpoint();
+    if (g_inventory_endpoint < 0) {
+        console_write("[device-manager] inventory endpoint create failed\n");
+        stall_forever();
+    }
+    if (wasmos_svc_register(g_proc_endpoint, g_inventory_endpoint, "devmgr.inv", 1) != 0) {
+        console_write("[device-manager] inventory register failed\n");
+        stall_forever();
+    }
     hw_scan_acpi();
     g_pci_bus_index = module_index_by_name("pci-bus");
     g_ata_index = module_index_by_name("ata");

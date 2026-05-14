@@ -3,6 +3,7 @@
 #include "stdio.h"
 #include "string.h"
 #include "wasmos/api.h"
+#include "wasmos/ipc.h"
 #include "wasmos_driver_abi.h"
 
 /*
@@ -1155,10 +1156,12 @@ cli_handle_line(void)
 
 WASMOS_WASM_EXPORT int32_t
 initialize(int32_t proc_endpoint,
-           int32_t fs_endpoint,
-           int32_t vt_endpoint,
-           int32_t home_tty_arg)
+           int32_t home_tty_arg,
+           int32_t ignored_arg2,
+           int32_t ignored_arg3)
 {
+    (void)ignored_arg2;
+    (void)ignored_arg3;
     g_phase = CLI_PHASE_INIT;
 
     for (;;) {
@@ -1177,8 +1180,8 @@ initialize(int32_t proc_endpoint,
                 stall_forever();
             }
             g_proc_endpoint = proc_endpoint;
-            g_fs_endpoint = fs_endpoint;
-            g_vt_endpoint = vt_endpoint;
+            g_fs_endpoint = wasmos_svc_lookup(g_proc_endpoint, g_reply_endpoint, "fs", 1);
+            g_vt_endpoint = wasmos_svc_lookup(g_proc_endpoint, g_reply_endpoint, "vt", 2);
             if (home_tty_arg >= 1 && home_tty_arg <= 3) {
                 g_home_tty = home_tty_arg;
             } else {

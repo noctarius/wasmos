@@ -89,6 +89,10 @@ Build configuration now has a Kconfig-compatible entry point (`Kconfig`) plus
 `scripts/kconfig_to_cmake.py` when present. The imported scope is currently
 intentionally narrow (existing CMake toggles and a few key scalar values) to
 preserve minimalism and keep behavior deterministic.
+Service dependency wiring now uses PM-hosted registry IPC (`SVC_IPC_REGISTER_REQ`
+and `SVC_IPC_LOOKUP_REQ`) so drivers/services create/register their own
+endpoints and discover dependencies at runtime instead of PM-injected
+per-application endpoint bindings.
 When native `menuconfig`-style frontends are unavailable, build configuration
 can be edited through the in-repo `kconfiglib` interactive fallback script
 (`scripts/kconfiglib_menuconfig.py`), exposed via CMake targets.

@@ -138,6 +138,7 @@ wasmos_svc_lookup(int32_t proc_endpoint,
 {
     int32_t args[4];
     wasmos_ipc_message_t resp;
+    uint32_t endpoint_raw;
     wasmos_ipc_pack_name16(service_name, args);
     if (wasmos_ipc_call(proc_endpoint,
                         reply_endpoint,
@@ -150,10 +151,14 @@ wasmos_svc_lookup(int32_t proc_endpoint,
                         &resp) != 0) {
         return -1;
     }
-    if (resp.type != SVC_IPC_LOOKUP_RESP || resp.arg0 < 0) {
+    if (resp.type != SVC_IPC_LOOKUP_RESP) {
         return -1;
     }
-    return resp.arg0;
+    endpoint_raw = (uint32_t)resp.arg0;
+    if (endpoint_raw == 0xFFFFFFFFu) {
+        return -1;
+    }
+    return (int32_t)endpoint_raw;
 }
 
 #endif

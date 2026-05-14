@@ -1175,18 +1175,6 @@ pm_service_set(const char *name, uint32_t endpoint, uint32_t owner_context_id)
 static uint32_t
 pm_service_lookup(const char *name)
 {
-    if (name_eq(name, "block") && g_pm.block_endpoint != IPC_ENDPOINT_NONE) {
-        return g_pm.block_endpoint;
-    }
-    if (name_eq(name, "fs") && g_pm.fs_endpoint != IPC_ENDPOINT_NONE) {
-        return g_pm.fs_endpoint;
-    }
-    if (name_eq(name, "vt") && g_pm.vt_endpoint != IPC_ENDPOINT_NONE) {
-        return g_pm.vt_endpoint;
-    }
-    if (name_eq(name, "fb") && g_pm.fb_endpoint != IPC_ENDPOINT_NONE) {
-        return g_pm.fb_endpoint;
-    }
     for (uint32_t i = 0; i < PM_SERVICE_REGISTRY_CAP; ++i) {
         if (!g_pm.services[i].in_use) {
             continue;
@@ -1224,10 +1212,10 @@ pm_handle_service_register(uint32_t pm_context_id, const ipc_message_t *msg)
     if (pm_service_set(name, msg->source, owner_context_id) != 0) {
         return -1;
     }
-    if (name_eq(name, "fs")) {
-        g_pm.fs_endpoint = msg->source;
-    } else if (name_eq(name, "block")) {
+    if (name_eq(name, "block")) {
         g_pm.block_endpoint = msg->source;
+    } else if (name_eq(name, "fs")) {
+        g_pm.fs_endpoint = msg->source;
     } else if (name_eq(name, "vt")) {
         g_pm.vt_endpoint = msg->source;
     } else if (name_eq(name, "fb")) {

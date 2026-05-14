@@ -74,12 +74,12 @@ initialize(int32_t proc_endpoint,
                                             source_endpoint,
                                             "devmgr.inv",
                                             1 + attempts);
-        if (devmgr_endpoint >= 0) {
+        if (devmgr_endpoint != -1) {
             break;
         }
         (void)wasmos_sched_yield();
     }
-    if (devmgr_endpoint < 0) {
+    if (devmgr_endpoint == -1) {
         return -1;
     }
     int32_t request_id = 1;

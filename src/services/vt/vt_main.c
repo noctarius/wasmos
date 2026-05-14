@@ -1542,12 +1542,12 @@ initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2, int32_t arg3)
     }
     vt_init_ttys();
 
-    if (g_kbd_ep >= 0) {
+    if (g_kbd_ep != -1) {
         (void)wasmos_ipc_send(g_kbd_ep, g_vt_ep, KBD_IPC_SUBSCRIBE_REQ,
                               1, 0, 0, 0, 0);
     }
 
-    if (g_fb_ep >= 0) {
+    if (g_fb_ep != -1) {
         vt_fb_console_mode(1);
     }
 

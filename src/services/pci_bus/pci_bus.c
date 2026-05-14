@@ -31,6 +31,8 @@ publish_record(int32_t devmgr_endpoint,
                uint8_t prog_if,
                uint16_t vendor_id,
                uint16_t device_id,
+               uint8_t mmio_hint,
+               uint8_t irq_hint,
                int32_t request_id)
 {
     uint32_t arg0 = ((uint32_t)bus << 24) |
@@ -41,6 +43,7 @@ publish_record(int32_t devmgr_endpoint,
                     ((uint32_t)prog_if << 16) |
                     (uint32_t)vendor_id;
     uint32_t arg2 = (uint32_t)device_id;
+    uint32_t arg3 = ((uint32_t)irq_hint << 8) | (uint32_t)mmio_hint;
     (void)wasmos_ipc_send(devmgr_endpoint,
                           source_endpoint,
                           DEVMGR_PUBLISH_DEVICE,
@@ -48,7 +51,7 @@ publish_record(int32_t devmgr_endpoint,
                           (int32_t)arg0,
                           (int32_t)arg1,
                           (int32_t)arg2,
-                          0);
+                          (int32_t)arg3);
 }
 
 WASMOS_WASM_EXPORT int32_t
@@ -99,6 +102,10 @@ initialize(int32_t proc_endpoint,
                 uint8_t class_code = (uint8_t)((class_reg >> 24) & 0xFFu);
                 uint8_t subclass = (uint8_t)((class_reg >> 16) & 0xFFu);
                 uint8_t prog_if = (uint8_t)((class_reg >> 8) & 0xFFu);
+                uint32_t bar0 = pci_config_read32((uint8_t)bus, device, function, 0x10);
+                uint8_t mmio_hint = ((bar0 & 0x1u) == 0u && (bar0 & 0xFFFFFFF0u) != 0u) ? 1u : 0u;
+                uint32_t irq_reg = pci_config_read32((uint8_t)bus, device, function, 0x3C);
+                uint8_t irq_hint = (uint8_t)(irq_reg & 0xFFu);
                 publish_record(devmgr_endpoint,
                                source_endpoint,
                                (uint8_t)bus,
@@ -109,6 +116,8 @@ initialize(int32_t proc_endpoint,
                                prog_if,
                                vendor_id,
                                device_id,
+                               mmio_hint,
+                               irq_hint,
                                request_id++);
                 uint32_t header_reg = pci_config_read32((uint8_t)bus, device, 0, 0x0C);
                 if (function == 0 && (((header_reg >> 16) & 0x80u) == 0)) {

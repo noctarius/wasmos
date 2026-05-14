@@ -41,6 +41,9 @@ policy_irq_route_allows(uint32_t context_id, uint32_t irq_line)
     if (irq_line >= IRQ_COUNT) {
         return 0;
     }
+    if (capability_spawn_profile_configured(context_id)) {
+        return capability_irq_line_allowed(context_id, irq_line);
+    }
     process_t *proc = process_find_by_context(context_id);
     if (!proc || !proc->name) {
         return 0;
@@ -59,9 +62,21 @@ policy_authorize(uint32_t context_id, policy_action_t action, uint32_t arg0)
 {
     switch (action) {
     case POLICY_ACTION_IO_PORT:
-        return capability_has(context_id, CAP_IO_PORT) ? 0 : -1;
+        if (!capability_has(context_id, CAP_IO_PORT)) {
+            return -1;
+        }
+        if (!capability_spawn_profile_configured(context_id)) {
+            return 0;
+        }
+        return capability_io_port_allowed(context_id, (uint16_t)arg0) ? 0 : -1;
     case POLICY_ACTION_MMIO_MAP:
-        return capability_has(context_id, CAP_MMIO_MAP) ? 0 : -1;
+        if (!capability_has(context_id, CAP_MMIO_MAP)) {
+            return -1;
+        }
+        if (!capability_spawn_profile_configured(context_id)) {
+            return 0;
+        }
+        return capability_mmio_allowed(context_id) ? 0 : -1;
     case POLICY_ACTION_DMA_BUFFER:
         return capability_has(context_id, CAP_DMA_BUFFER) ? 0 : -1;
     case POLICY_ACTION_IRQ_CONTROL:

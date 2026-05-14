@@ -5,6 +5,11 @@
 
 typedef struct {
     uint8_t configured;
+    uint8_t spawn_profile_configured;
+    uint8_t io_port_range_valid;
+    uint16_t io_port_min;
+    uint16_t io_port_max;
+    uint16_t irq_mask;
     uint32_t mask;
 } capability_context_state_t;
 
@@ -50,6 +55,11 @@ capability_init(void)
 {
     for (uint32_t i = 0; i <= MM_MAX_CONTEXTS; ++i) {
         g_cap_ctx[i].configured = 0;
+        g_cap_ctx[i].spawn_profile_configured = 0;
+        g_cap_ctx[i].io_port_range_valid = 0;
+        g_cap_ctx[i].io_port_min = 0;
+        g_cap_ctx[i].io_port_max = 0;
+        g_cap_ctx[i].irq_mask = 0;
         g_cap_ctx[i].mask = 0;
     }
     /* Kernel context has all capabilities by construction. */
@@ -105,4 +115,71 @@ capability_context_configured(uint32_t context_id)
         return 0;
     }
     return g_cap_ctx[context_id].configured != 0;
+}
+
+int
+capability_set_spawn_profile(uint32_t context_id,
+                             uint32_t cap_flags,
+                             uint16_t io_port_min,
+                             uint16_t io_port_max,
+                             uint16_t irq_mask)
+{
+    if (context_id > MM_MAX_CONTEXTS) {
+        return -1;
+    }
+    capability_context_state_t *ctx = &g_cap_ctx[context_id];
+    ctx->spawn_profile_configured = 1;
+    ctx->io_port_range_valid = (cap_flags & (1u << 0)) ? 1u : 0u;
+    ctx->io_port_min = io_port_min;
+    ctx->io_port_max = io_port_max;
+    ctx->irq_mask = (cap_flags & (1u << 2)) ? irq_mask : 0;
+    return 0;
+}
+
+int
+capability_spawn_profile_configured(uint32_t context_id)
+{
+    if (context_id > MM_MAX_CONTEXTS) {
+        return 0;
+    }
+    return g_cap_ctx[context_id].spawn_profile_configured != 0;
+}
+
+int
+capability_io_port_allowed(uint32_t context_id, uint16_t port)
+{
+    if (context_id > MM_MAX_CONTEXTS) {
+        return 0;
+    }
+    const capability_context_state_t *ctx = &g_cap_ctx[context_id];
+    if (!ctx->spawn_profile_configured || !ctx->io_port_range_valid) {
+        return 0;
+    }
+    return (port >= ctx->io_port_min && port <= ctx->io_port_max) ? 1 : 0;
+}
+
+int
+capability_irq_line_allowed(uint32_t context_id, uint32_t irq_line)
+{
+    if (context_id > MM_MAX_CONTEXTS || irq_line >= 16) {
+        return 0;
+    }
+    const capability_context_state_t *ctx = &g_cap_ctx[context_id];
+    if (!ctx->spawn_profile_configured) {
+        return 0;
+    }
+    return ((ctx->irq_mask & (uint16_t)(1u << irq_line)) != 0) ? 1 : 0;
+}
+
+int
+capability_mmio_allowed(uint32_t context_id)
+{
+    if (context_id > MM_MAX_CONTEXTS) {
+        return 0;
+    }
+    const capability_context_state_t *ctx = &g_cap_ctx[context_id];
+    if (!ctx->spawn_profile_configured) {
+        return 0;
+    }
+    return (ctx->mask & (1u << 2)) != 0;
 }

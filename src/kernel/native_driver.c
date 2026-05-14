@@ -8,6 +8,7 @@
 #include "framebuffer.h"
 #include "ipc.h"
 #include "io.h"
+#include "policy.h"
 #include <string.h>
 #include <stddef.h>
 
@@ -171,10 +172,43 @@ nd_framebuffer_pixel(uint32_t x, uint32_t y, uint32_t color)
     return framebuffer_put_pixel(x, y, color);
 }
 
-static uint8_t  nd_io_in8(uint16_t port)                  { return inb(port); }
-static uint16_t nd_io_in16(uint16_t port)                 { return inw(port); }
-static void     nd_io_out8(uint16_t port, uint8_t val)    { outb(port, val); }
-static void     nd_io_out16(uint16_t port, uint16_t val)  { outw(port, val); }
+static int
+nd_io_allowed(uint16_t port)
+{
+    process_t *proc = process_get(process_current_pid());
+    if (!proc) {
+        return 0;
+    }
+    return policy_authorize(proc->context_id, POLICY_ACTION_IO_PORT, port) == 0;
+}
+
+static uint8_t
+nd_io_in8(uint16_t port)
+{
+    return nd_io_allowed(port) ? inb(port) : 0xFF;
+}
+
+static uint16_t
+nd_io_in16(uint16_t port)
+{
+    return nd_io_allowed(port) ? inw(port) : 0xFFFF;
+}
+
+static void
+nd_io_out8(uint16_t port, uint8_t val)
+{
+    if (nd_io_allowed(port)) {
+        outb(port, val);
+    }
+}
+
+static void
+nd_io_out16(uint16_t port, uint16_t val)
+{
+    if (nd_io_allowed(port)) {
+        outw(port, val);
+    }
+}
 
 static uint32_t
 nd_ipc_create_endpoint(void)

@@ -1108,6 +1108,20 @@ m3ApiRawFunction(wasmos_io_in16)
     m3ApiReturn((int32_t)inw((uint16_t)port));
 }
 
+m3ApiRawFunction(wasmos_io_in32)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, port)
+    uint32_t context_id = 0;
+    if (port < 0 || port > 0xFFFF) {
+        m3ApiReturn(-1);
+    }
+    if (current_process_context(&context_id) != 0 || require_io_capability(context_id) != 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn((int32_t)inl((uint16_t)port));
+}
+
 m3ApiRawFunction(wasmos_io_out8)
 {
     m3ApiReturnType(int32_t)
@@ -1137,6 +1151,22 @@ m3ApiRawFunction(wasmos_io_out16)
         m3ApiReturn(-1);
     }
     outw((uint16_t)port, (uint16_t)value);
+    m3ApiReturn(0);
+}
+
+m3ApiRawFunction(wasmos_io_out32)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, port)
+    m3ApiGetArg(int32_t, value)
+    uint32_t context_id = 0;
+    if (port < 0 || port > 0xFFFF) {
+        m3ApiReturn(-1);
+    }
+    if (current_process_context(&context_id) != 0 || require_io_capability(context_id) != 0) {
+        m3ApiReturn(-1);
+    }
+    outl((uint16_t)port, (uint32_t)value);
     m3ApiReturn(0);
 }
 
@@ -2211,8 +2241,10 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "boot_module_name", "i(i*i)", wasmos_boot_module_name);
     rc |= wasm3_link_raw(module, "wasmos", "io_in8", "i(i)", wasmos_io_in8);
     rc |= wasm3_link_raw(module, "wasmos", "io_in16", "i(i)", wasmos_io_in16);
+    rc |= wasm3_link_raw(module, "wasmos", "io_in32", "i(i)", wasmos_io_in32);
     rc |= wasm3_link_raw(module, "wasmos", "io_out8", "i(ii)", wasmos_io_out8);
     rc |= wasm3_link_raw(module, "wasmos", "io_out16", "i(ii)", wasmos_io_out16);
+    rc |= wasm3_link_raw(module, "wasmos", "io_out32", "i(ii)", wasmos_io_out32);
     rc |= wasm3_link_raw(module, "wasmos", "io_wait", "i()", wasmos_io_wait);
     rc |= wasm3_link_raw(module, "wasmos", "framebuffer_info", "i(ii)", wasmos_framebuffer_info);
     rc |= wasm3_link_raw(module, "wasmos", "framebuffer_map", "i(ii)", wasmos_framebuffer_map);

@@ -6,6 +6,7 @@ bootstrap_modules = [
   "init-smoke",
   "native-call-min",
   "native-call-smoke",
+  "pci-bus",
   "ata",
   "fs-fat",
   "device-manager",
@@ -51,6 +52,12 @@ source = "shmtgt.wap"
 kind = "wasmos_app"
 path = "apps/shmownr.wap"
 source = "shmownr.wap"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/services/pci_bus.wap"
+source = "pci_bus.wap"
 
 [[entries]]
 kind = "wasmos_app"

@@ -84,10 +84,14 @@ extern int32_t wasmos_io_in8(int32_t port)
     WASMOS_WASM_IMPORT("wasmos", "io_in8");
 extern int32_t wasmos_io_in16(int32_t port)
     WASMOS_WASM_IMPORT("wasmos", "io_in16");
+extern int32_t wasmos_io_in32(int32_t port)
+    WASMOS_WASM_IMPORT("wasmos", "io_in32");
 extern int32_t wasmos_io_out8(int32_t port, int32_t value)
     WASMOS_WASM_IMPORT("wasmos", "io_out8");
 extern int32_t wasmos_io_out16(int32_t port, int32_t value)
     WASMOS_WASM_IMPORT("wasmos", "io_out16");
+extern int32_t wasmos_io_out32(int32_t port, int32_t value)
+    WASMOS_WASM_IMPORT("wasmos", "io_out32");
 extern int32_t wasmos_io_wait(void)
     WASMOS_WASM_IMPORT("wasmos", "io_wait");
 typedef struct {

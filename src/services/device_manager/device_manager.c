@@ -5,13 +5,10 @@
 #include "wasmos_driver_abi.h"
 
 /*
- * device-manager is currently a bootstrap sequencer more than a full device
- * manager. It verifies the ACPI RSDP is present, finds the bootstrap storage
- * driver modules, and asks the process manager to start ATA/FAT in dependency
- * order. Once FAT is available, it starts display and input drivers by name
- * from disk; the kernel early framebuffer is sufficient before that point.
- * TODO: Grow this into a real hardware inventory/policy service instead of a
- * storage-bootstrap sequencer with hardcoded ATA/FAT assumptions.
+ * device-manager coordinates early hardware startup in user space.
+ * In this slice, a separate pci-bus service performs enumeration and publishes
+ * records over IPC; device-manager consumes those records and selects storage
+ * bootstrap (ata/fs-fat) before post-FAT drivers.
  */
 
 typedef struct __attribute__((packed)) {
@@ -30,25 +27,43 @@ typedef enum {
     HW_PHASE_INIT = 0,
     HW_PHASE_SPAWN,
     HW_PHASE_WAIT,
+    HW_PHASE_WAIT_INVENTORY,
     HW_PHASE_IDLE,
     HW_PHASE_FAILED
 } hw_phase_t;
 
 typedef enum {
     HW_SPAWN_NONE = 0,
+    HW_SPAWN_PCI_BUS,
+    HW_SPAWN_ATA,
+    HW_SPAWN_FAT,
     HW_SPAWN_SERIAL,
     HW_SPAWN_KEYBOARD,
-    HW_SPAWN_FRAMEBUFFER,
-    HW_SPAWN_ATA,
-    HW_SPAWN_FAT
+    HW_SPAWN_FRAMEBUFFER
 } hw_spawn_target_t;
+
+#define PCI_CLASS_MASS_STORAGE 0x01
+#define DEVICE_REGISTRY_CAP 64
+
+typedef struct {
+    uint8_t bus;
+    uint8_t device;
+    uint8_t function;
+    uint8_t class_code;
+    uint8_t subclass;
+    uint8_t prog_if;
+    uint16_t vendor_id;
+    uint16_t device_id;
+} pci_device_record_t;
 
 static hw_phase_t g_phase = HW_PHASE_INIT;
 static hw_spawn_target_t g_pending = HW_SPAWN_NONE;
 static int32_t g_reply_endpoint = -1;
 static int32_t g_proc_endpoint = -1;
+static int32_t g_inventory_endpoint = -1;
 static int32_t g_request_id = 1;
 static int32_t g_module_count = 0;
+static uint8_t g_need_pci_bus = 0;
 static uint8_t g_need_ata = 0;
 static uint8_t g_need_fat = 0;
 static uint8_t g_need_serial = 0;
@@ -59,8 +74,12 @@ static uint8_t g_fat_retries = 0;
 static uint8_t g_serial_retries = 0;
 static uint8_t g_keyboard_retries = 0;
 static uint8_t g_framebuffer_retries = 0;
+static int32_t g_pci_bus_index = -1;
 static int32_t g_ata_index = -1;
 static int32_t g_fat_index = -1;
+static pci_device_record_t g_registry[DEVICE_REGISTRY_CAP];
+static uint32_t g_registry_count = 0;
+static uint8_t g_storage_controller_present = 0;
 
 static void
 stall_forever(void)
@@ -147,8 +166,6 @@ module_index_by_name(const char *name)
 static void
 hw_scan_acpi(void)
 {
-    /* For now the service only validates that the bootloader passed a usable
-     * RSDP. Richer ACPI parsing and device publication are future work. */
     acpi_rsdp_t rsdp;
     uint32_t length = 0;
     int32_t rc = wasmos_acpi_rsdp_info((int32_t)(uintptr_t)&rsdp,
@@ -250,9 +267,65 @@ hw_spawn_driver_name(hw_spawn_target_t target)
     return 0;
 }
 
+static void
+registry_add_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2)
+{
+    if (g_registry_count >= DEVICE_REGISTRY_CAP) {
+        return;
+    }
+    pci_device_record_t *rec = &g_registry[g_registry_count++];
+    uint32_t v0 = (uint32_t)arg0;
+    uint32_t v1 = (uint32_t)arg1;
+    uint32_t v2 = (uint32_t)arg2;
+    rec->bus = (uint8_t)((v0 >> 24) & 0xFFu);
+    rec->device = (uint8_t)((v0 >> 16) & 0xFFu);
+    rec->function = (uint8_t)((v0 >> 8) & 0xFFu);
+    rec->class_code = (uint8_t)(v0 & 0xFFu);
+    rec->subclass = (uint8_t)((v1 >> 24) & 0xFFu);
+    rec->prog_if = (uint8_t)((v1 >> 16) & 0xFFu);
+    rec->vendor_id = (uint16_t)(v1 & 0xFFFFu);
+    rec->device_id = (uint16_t)(v2 & 0xFFFFu);
+    if (rec->class_code == PCI_CLASS_MASS_STORAGE) {
+        g_storage_controller_present = 1;
+    }
+}
+
+static void
+consume_pci_inventory(void)
+{
+    if (g_inventory_endpoint < 0) {
+        g_storage_controller_present = 1;
+        return;
+    }
+    g_registry_count = 0;
+    g_storage_controller_present = 0;
+    console_write("[device-manager] waiting for pci-bus inventory\n");
+    for (;;) {
+        if (wasmos_ipc_recv(g_inventory_endpoint) < 0) {
+            console_write("[device-manager] pci inventory recv failed\n");
+            break;
+        }
+        int32_t msg_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+        if (msg_type == DEVMGR_PUBLISH_DEVICE) {
+            int32_t arg0 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+            int32_t arg1 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+            int32_t arg2 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
+            registry_add_from_ipc(arg0, arg1, arg2);
+            continue;
+        }
+        if (msg_type == DEVMGR_PCI_SCAN_DONE) {
+            console_write("[device-manager] pci-bus scan complete\n");
+            break;
+        }
+    }
+}
+
 static hw_spawn_target_t
 next_spawn_target(void)
 {
+    if (g_need_pci_bus) {
+        return HW_SPAWN_PCI_BUS;
+    }
     if (g_need_ata) {
         return HW_SPAWN_ATA;
     }
@@ -274,10 +347,9 @@ next_spawn_target(void)
 WASMOS_WASM_EXPORT int32_t
 initialize(int32_t proc_endpoint,
            int32_t module_count,
-           int32_t ignored_arg2,
+           int32_t inventory_endpoint,
            int32_t ignored_arg3)
 {
-    (void)ignored_arg2;
     (void)ignored_arg3;
 
     g_reply_endpoint = wasmos_ipc_create_endpoint();
@@ -293,11 +365,15 @@ initialize(int32_t proc_endpoint,
     }
     g_proc_endpoint = proc_endpoint;
     g_module_count = module_count;
+    g_inventory_endpoint = inventory_endpoint;
     hw_scan_acpi();
+    g_pci_bus_index = module_index_by_name("pci-bus");
     g_ata_index = module_index_by_name("ata");
     g_fat_index = module_index_by_name("fs-fat");
-    g_need_ata = (g_ata_index >= 0 && !proc_running("ata")) ? 1 : 0;
-    g_need_fat = (g_fat_index >= 0 && !proc_running("fs-fat")) ? 1 : 0;
+
+    g_need_pci_bus = (g_pci_bus_index >= 0 && !proc_running("pci-bus")) ? 1 : 0;
+    g_need_ata = 0;
+    g_need_fat = 0;
     g_need_serial = !proc_running("serial") ? 1 : 0;
     g_need_keyboard = !proc_running("keyboard") ? 1 : 0;
     g_need_framebuffer = !proc_running("framebuffer") ? 1 : 0;
@@ -310,7 +386,13 @@ initialize(int32_t proc_endpoint,
                 g_phase = HW_PHASE_IDLE;
                 continue;
             }
-            if (target == HW_SPAWN_SERIAL) {
+            if (target == HW_SPAWN_PCI_BUS) {
+                if (hw_spawn_driver_index(g_pci_bus_index) != 0) {
+                    g_phase = HW_PHASE_FAILED;
+                    console_write("[device-manager] spawn pci-bus failed\n");
+                    stall_forever();
+                }
+            } else if (target == HW_SPAWN_SERIAL) {
                 if (hw_spawn_driver_name(target) != 0) {
                     g_phase = HW_PHASE_FAILED;
                     console_write("[device-manager] spawn serial failed\n");
@@ -363,6 +445,12 @@ initialize(int32_t proc_endpoint,
             }
             g_request_id++;
             if (resp_type == PROC_IPC_RESP) {
+                if (g_pending == HW_SPAWN_PCI_BUS) {
+                    g_need_pci_bus = 0;
+                    g_pending = HW_SPAWN_NONE;
+                    g_phase = HW_PHASE_WAIT_INVENTORY;
+                    continue;
+                }
                 if (g_pending == HW_SPAWN_SERIAL) {
                     g_need_serial = 0;
                 } else if (g_pending == HW_SPAWN_KEYBOARD) {
@@ -404,6 +492,8 @@ initialize(int32_t proc_endpoint,
                     if (g_fat_retries > 8) {
                         g_need_fat = 0;
                     }
+                } else if (g_pending == HW_SPAWN_PCI_BUS) {
+                    g_need_pci_bus = 0;
                 }
                 g_pending = HW_SPAWN_NONE;
                 g_phase = HW_PHASE_SPAWN;
@@ -413,6 +503,19 @@ initialize(int32_t proc_endpoint,
             g_phase = HW_PHASE_FAILED;
             console_write("[device-manager] spawn response invalid\n");
             stall_forever();
+        }
+
+        if (g_phase == HW_PHASE_WAIT_INVENTORY) {
+            consume_pci_inventory();
+            g_need_ata = (g_ata_index >= 0 && g_storage_controller_present && !proc_running("ata")) ? 1 : 0;
+            g_need_fat = (g_fat_index >= 0 && g_need_ata && !proc_running("fs-fat")) ? 1 : 0;
+            if (!g_need_ata && g_ata_index >= 0 && !proc_running("ata")) {
+                console_write("[device-manager] fallback: boot ata despite no PCI storage match\n");
+                g_need_ata = 1;
+                g_need_fat = (g_fat_index >= 0 && !proc_running("fs-fat")) ? 1 : 0;
+            }
+            g_phase = HW_PHASE_SPAWN;
+            continue;
         }
 
         if (g_phase == HW_PHASE_IDLE) {

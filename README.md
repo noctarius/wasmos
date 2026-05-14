@@ -28,7 +28,7 @@ It defines repository workflow and documentation/update conventions.
 - Deterministic UEFI boot handoff (`BOOTX64.EFI` -> `kernel.elf` + `initfs.img`)
 - Microkernel baseline: paging, scheduling, IPC, process lifecycle, exceptions
 - WASM-first runtime model with optional native driver payloads
-- Storage-first startup chain (`device-manager` -> `fs-fat` -> `sysinit`)
+- Storage-first startup chain (`device-manager` -> `pci-bus` -> `ata` -> `fs-fat` -> `sysinit`)
 - Usable VT/CLI stack with multi-TTY switching
 - Ring-3 hardening enabled by default in normal test boots
 - Ring-3 user-slot mapping now requires explicit `MEM_REGION_FLAG_USER` (legacy implicit bridge removed from page-map path)
@@ -151,7 +151,7 @@ Boot sequence (high level):
 1. `BOOTX64.EFI` loads `kernel.elf` and `initfs.img`
 2. Kernel boots, initializes core subsystems, starts `init`
 3. `init` starts `device-manager`
-4. `device-manager` starts storage drivers/services (`ata`, `fs-fat`)
+4. `device-manager` starts `pci-bus`, consumes inventory, then starts storage drivers/services (`ata`, `fs-fat`)
 5. `init` requests `sysinit` load from FAT via process manager
 6. `sysinit` starts configured services/apps from boot config
 

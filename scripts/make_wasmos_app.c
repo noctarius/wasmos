@@ -12,6 +12,8 @@
 
 #define MEM_HINT_STACK 1u
 #define MEM_HINT_HEAP 2u
+#define MATCH_ANY_U8 0xFFu
+#define MATCH_ANY_U16 0xFFFFu
 
 typedef struct __attribute__((packed)) {
     char magic[8];
@@ -25,6 +27,14 @@ typedef struct __attribute__((packed)) {
     uint32_t cap_count;
     uint32_t entry_arg_binding_count;
     uint32_t mem_hint_count;
+    uint8_t driver_match_class;
+    uint8_t driver_match_subclass;
+    uint8_t driver_match_prog_if;
+    uint8_t driver_match_reserved0;
+    uint16_t driver_match_vendor_id;
+    uint16_t driver_match_device_id;
+    uint16_t driver_io_port_min;
+    uint16_t driver_io_port_max;
     uint32_t reserved;
 } wasmos_app_header_t;
 
@@ -55,6 +65,23 @@ static int parse_u32(const char *s, uint32_t *out) {
         return -1;
     }
     *out = (uint32_t)v;
+    return 0;
+}
+
+static int parse_u16_any(const char *s, uint16_t *out, uint16_t any_value) {
+    if (!s || !out) {
+        return -1;
+    }
+    if (strcmp(s, "any") == 0) {
+        *out = any_value;
+        return 0;
+    }
+    char *end = NULL;
+    unsigned long v = strtoul(s, &end, 0);
+    if (!*s || (end && *end != '\0') || v > 0xFFFFUL) {
+        return -1;
+    }
+    *out = (uint16_t)v;
     return 0;
 }
 
@@ -93,6 +120,13 @@ int main(int argc, char **argv) {
     uint32_t entry_arg_binding_count = 0;
     const uint32_t entry_arg_binding_max = 4;
     const char *entry_arg_bindings[4];
+    uint8_t driver_match_class = MATCH_ANY_U8;
+    uint8_t driver_match_subclass = MATCH_ANY_U8;
+    uint8_t driver_match_prog_if = MATCH_ANY_U8;
+    uint16_t driver_match_vendor_id = MATCH_ANY_U16;
+    uint16_t driver_match_device_id = MATCH_ANY_U16;
+    uint16_t driver_io_port_min = 0;
+    uint16_t driver_io_port_max = 0;
     if (parse_u32(argv[5], &stack_pages) != 0 || parse_u32(argv[6], &heap_pages) != 0) {
         fprintf(stderr, "invalid stack/heap page value\n");
         return 1;
@@ -138,28 +172,54 @@ int main(int argc, char **argv) {
         }
         int next = min_tail;
         if (argc > next) {
-            if (strcmp(argv[next], "--entry-arg-bindings") != 0) {
-                fprintf(stderr, "unknown trailing argument '%s'\n", argv[next]);
-                return 1;
-            }
-            next++;
-            if (next >= argc || parse_u32(argv[next], &entry_arg_binding_count) != 0) {
-                fprintf(stderr, "invalid entry arg binding count\n");
-                return 1;
-            }
-            next++;
-            if (entry_arg_binding_count > entry_arg_binding_max ||
-                argc != next + (int)entry_arg_binding_count) {
-                fprintf(stderr, "invalid entry arg bindings layout\n");
-                return 1;
-            }
-            for (uint32_t i = 0; i < entry_arg_binding_count; ++i) {
-                const char *binding = argv[next + (int)i];
-                if (!binding || binding[0] == '\0') {
-                    fprintf(stderr, "invalid entry arg binding at index %u\n", i);
+            while (next < argc) {
+                if (strcmp(argv[next], "--entry-arg-bindings") == 0) {
+                    next++;
+                    if (next >= argc || parse_u32(argv[next], &entry_arg_binding_count) != 0) {
+                        fprintf(stderr, "invalid entry arg binding count\n");
+                        return 1;
+                    }
+                    next++;
+                    if (entry_arg_binding_count > entry_arg_binding_max ||
+                        argc < next + (int)entry_arg_binding_count) {
+                        fprintf(stderr, "invalid entry arg bindings layout\n");
+                        return 1;
+                    }
+                    for (uint32_t i = 0; i < entry_arg_binding_count; ++i) {
+                        const char *binding = argv[next + (int)i];
+                        if (!binding || binding[0] == '\0') {
+                            fprintf(stderr, "invalid entry arg binding at index %u\n", i);
+                            return 1;
+                        }
+                        entry_arg_bindings[i] = binding;
+                    }
+                    next += (int)entry_arg_binding_count;
+                } else if (strcmp(argv[next], "--driver-match") == 0) {
+                    if (next + 7 >= argc) {
+                        fprintf(stderr, "invalid --driver-match layout\n");
+                        return 1;
+                    }
+                    uint16_t cls = 0;
+                    uint16_t sub = 0;
+                    uint16_t prog = 0;
+                    if (parse_u16_any(argv[next + 1], &cls, MATCH_ANY_U8) != 0 ||
+                        parse_u16_any(argv[next + 2], &sub, MATCH_ANY_U8) != 0 ||
+                        parse_u16_any(argv[next + 3], &prog, MATCH_ANY_U8) != 0 ||
+                        parse_u16_any(argv[next + 4], &driver_match_vendor_id, MATCH_ANY_U16) != 0 ||
+                        parse_u16_any(argv[next + 5], &driver_match_device_id, MATCH_ANY_U16) != 0 ||
+                        parse_u16_any(argv[next + 6], &driver_io_port_min, 0) != 0 ||
+                        parse_u16_any(argv[next + 7], &driver_io_port_max, 0) != 0) {
+                        fprintf(stderr, "invalid --driver-match value\n");
+                        return 1;
+                    }
+                    driver_match_class = (uint8_t)cls;
+                    driver_match_subclass = (uint8_t)sub;
+                    driver_match_prog_if = (uint8_t)prog;
+                    next += 8;
+                } else {
+                    fprintf(stderr, "unknown trailing argument '%s'\n", argv[next]);
                     return 1;
                 }
-                entry_arg_bindings[i] = binding;
             }
         }
     } else if (argc == 12) {
@@ -247,6 +307,14 @@ int main(int argc, char **argv) {
     hdr.cap_count = cap_count;
     hdr.entry_arg_binding_count = entry_arg_binding_count;
     hdr.mem_hint_count = 2;
+    hdr.driver_match_class = driver_match_class;
+    hdr.driver_match_subclass = driver_match_subclass;
+    hdr.driver_match_prog_if = driver_match_prog_if;
+    hdr.driver_match_reserved0 = 0;
+    hdr.driver_match_vendor_id = driver_match_vendor_id;
+    hdr.driver_match_device_id = driver_match_device_id;
+    hdr.driver_io_port_min = driver_io_port_min;
+    hdr.driver_io_port_max = driver_io_port_max;
     hdr.reserved = 0;
 
     wasmos_mem_hint_t stack_hint = { MEM_HINT_STACK, stack_pages, 0 };

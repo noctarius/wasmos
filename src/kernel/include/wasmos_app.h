@@ -14,6 +14,10 @@
 #define WASMOS_APP_FLAG_NEEDS_PRIV (1u << 3)
 /* Native ELF payload; only valid when combined with FLAG_DRIVER. */
 #define WASMOS_APP_FLAG_NATIVE     (1u << 4)
+#define WASMOS_APP_FLAG_STORAGE_BOOTSTRAP (1u << 5)
+
+#define WASMOS_DRIVER_MATCH_ANY_U8 0xFFu
+#define WASMOS_DRIVER_MATCH_ANY_U16 0xFFFFu
 
 #define WASMOS_APP_MEM_HINT_LINEAR 0u
 #define WASMOS_APP_MEM_HINT_STACK  1u
@@ -54,6 +58,13 @@ typedef struct {
     uint32_t entry_len;
     uint32_t stack_pages_hint;
     uint32_t heap_pages_hint;
+    uint8_t driver_match_class;
+    uint8_t driver_match_subclass;
+    uint8_t driver_match_prog_if;
+    uint16_t driver_match_vendor_id;
+    uint16_t driver_match_device_id;
+    uint16_t driver_io_port_min;
+    uint16_t driver_io_port_max;
     uint32_t req_ep_count;
     wasmos_app_req_endpoint_t req_eps[WASMOS_APP_MAX_REQUIRED_ENDPOINTS];
     uint32_t cap_count;

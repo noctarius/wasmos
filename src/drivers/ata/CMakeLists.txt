@@ -40,7 +40,7 @@ add_custom_command(
           initialize
           16
           16
-          1
+          33
           -
           0
           2
@@ -51,6 +51,14 @@ add_custom_command(
           --entry-arg-bindings
           1
           proc.endpoint
+          --driver-match
+          0x01
+          any
+          any
+          any
+          any
+          0x01F0
+          0x03F7
   DEPENDS ${WASM_ATA_DRIVER_WASM} make_wasmos_app
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm ATA as WASMOS-APP"

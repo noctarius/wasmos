@@ -4,7 +4,6 @@
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
 #include "wasmos_driver_abi.h"
-#include "device_manager_manifest.h"
 
 /*
  * device-manager coordinates early hardware startup in user space.
@@ -45,6 +44,8 @@ typedef enum {
 } hw_spawn_target_t;
 
 #define DEVICE_REGISTRY_CAP 64
+#define MATCH_ANY_U8 0xFFu
+#define MATCH_ANY_U16 0xFFFFu
 
 typedef struct {
     uint32_t cap_flags;
@@ -74,23 +75,22 @@ static int32_t g_inventory_endpoint = -1;
 static int32_t g_request_id = 1;
 static int32_t g_module_count = 0;
 static uint8_t g_need_pci_bus = 0;
-static uint8_t g_need_ata = 0;
+static uint8_t g_need_storage = 0;
 static uint8_t g_need_fat = 0;
 static uint8_t g_need_serial = 0;
 static uint8_t g_need_keyboard = 0;
 static uint8_t g_need_framebuffer = 0;
-static uint8_t g_ata_retries = 0;
+static uint8_t g_storage_retries = 0;
 static uint8_t g_fat_retries = 0;
 static uint8_t g_serial_retries = 0;
 static uint8_t g_keyboard_retries = 0;
 static uint8_t g_framebuffer_retries = 0;
 static int32_t g_pci_bus_index = -1;
-static int32_t g_ata_index = -1;
 static int32_t g_fat_index = -1;
 static pci_device_record_t g_registry[DEVICE_REGISTRY_CAP];
 static uint32_t g_registry_count = 0;
-static uint8_t g_ata_match = 0;
-static spawn_caps_t g_ata_caps;
+static int32_t g_selected_storage_index = -1;
+static spawn_caps_t g_selected_storage_caps;
 
 static void
 stall_forever(void)
@@ -331,28 +331,118 @@ registry_add_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3)
 }
 
 static void
+reset_selected_storage(void)
+{
+    g_selected_storage_index = -1;
+    g_selected_storage_caps.cap_flags = 0;
+    g_selected_storage_caps.io_port_min = 0;
+    g_selected_storage_caps.io_port_max = 0;
+    g_selected_storage_caps.irq_mask = 0;
+}
+
+static int
+query_driver_module_meta(int32_t module_index,
+                         uint8_t *out_class_code,
+                         uint8_t *out_subclass,
+                         uint8_t *out_prog_if,
+                         uint16_t *out_vendor_id,
+                         uint16_t *out_device_id,
+                         uint8_t *out_storage_bootstrap,
+                         spawn_caps_t *out_caps)
+{
+    if (!out_class_code || !out_subclass || !out_prog_if ||
+        !out_vendor_id || !out_device_id || !out_storage_bootstrap || !out_caps) {
+        return -1;
+    }
+    if (wasmos_ipc_send(g_proc_endpoint,
+                        g_reply_endpoint,
+                        PROC_IPC_MODULE_META,
+                        g_request_id,
+                        module_index,
+                        0,
+                        0,
+                        0) != 0) {
+        return -1;
+    }
+    if (wasmos_ipc_recv(g_reply_endpoint) < 0) {
+        return -1;
+    }
+    int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+    int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+    if (resp_req != g_request_id) {
+        return -1;
+    }
+    g_request_id++;
+    if (resp_type != PROC_IPC_RESP) {
+        return -1;
+    }
+    uint32_t arg1 = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+    uint32_t arg2 = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
+    uint32_t arg3 = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
+    *out_class_code = (uint8_t)((arg1 >> 24) & 0xFFu);
+    *out_subclass = (uint8_t)((arg1 >> 16) & 0xFFu);
+    *out_prog_if = (uint8_t)((arg1 >> 8) & 0xFFu);
+    *out_storage_bootstrap = (uint8_t)(arg1 & 0x1u);
+    *out_vendor_id = (uint16_t)((arg2 >> 16) & 0xFFFFu);
+    *out_device_id = (uint16_t)(arg2 & 0xFFFFu);
+    out_caps->cap_flags = (uint32_t)((arg3 >> 16) & 0xFFFFu);
+    out_caps->io_port_min = (uint16_t)(arg3 & 0xFFFFu);
+    out_caps->io_port_max = 0xFFFFu;
+    out_caps->irq_mask = (uint16_t)((1u << 14) | (1u << 15));
+    return 0;
+}
+
+static int
+match_any_or_u8(uint8_t actual, uint8_t expected)
+{
+    return (expected == MATCH_ANY_U8 || actual == expected) ? 1 : 0;
+}
+
+static int
+match_any_or_u16(uint16_t actual, uint16_t expected)
+{
+    return (expected == MATCH_ANY_U16 || actual == expected) ? 1 : 0;
+}
+
+static void
 apply_pci_matches(void)
 {
-    g_ata_match = 0;
-    g_ata_caps.cap_flags = 0;
-    if (ATA_MANIFEST_CAP_IO_PORT) {
-        g_ata_caps.cap_flags |= DEVMGR_CAP_IO_PORT;
-    }
-    if (ATA_MANIFEST_CAP_IRQ) {
-        g_ata_caps.cap_flags |= DEVMGR_CAP_IRQ;
-    }
-    g_ata_caps.io_port_min = (uint16_t)ATA_MANIFEST_IO_PORT_MIN;
-    g_ata_caps.io_port_max = (uint16_t)ATA_MANIFEST_IO_PORT_MAX;
-    g_ata_caps.irq_mask = (uint16_t)ATA_MANIFEST_IRQ_MASK;
-
-    for (uint32_t i = 0; i < g_registry_count; ++i) {
-        const pci_device_record_t *rec = &g_registry[i];
-        if (rec->class_code == (uint8_t)ATA_MANIFEST_CLASS) {
-            g_ata_match = 1;
-            if (rec->irq_hint < 16u) {
-                g_ata_caps.irq_mask = (uint16_t)(1u << rec->irq_hint);
+    reset_selected_storage();
+    for (int32_t module_index = 0; module_index < g_module_count; ++module_index) {
+        uint8_t class_code = 0;
+        uint8_t subclass = 0;
+        uint8_t prog_if = 0;
+        uint16_t vendor_id = 0;
+        uint16_t device_id = 0;
+        uint8_t storage_bootstrap = 0;
+        spawn_caps_t caps;
+        if (query_driver_module_meta(module_index,
+                                     &class_code,
+                                     &subclass,
+                                     &prog_if,
+                                     &vendor_id,
+                                     &device_id,
+                                     &storage_bootstrap,
+                                     &caps) != 0 ||
+            !storage_bootstrap) {
+            continue;
+        }
+        for (uint32_t i = 0; i < g_registry_count; ++i) {
+            const pci_device_record_t *rec = &g_registry[i];
+            if (!match_any_or_u8(rec->class_code, class_code) ||
+                !match_any_or_u8(rec->subclass, subclass) ||
+                !match_any_or_u8(rec->prog_if, prog_if) ||
+                !match_any_or_u16(rec->vendor_id, vendor_id) ||
+                !match_any_or_u16(rec->device_id, device_id)) {
+                continue;
             }
-            break;
+            g_selected_storage_index = module_index;
+            g_selected_storage_caps = caps;
+            if ((g_selected_storage_caps.cap_flags & DEVMGR_CAP_IRQ) != 0 &&
+                rec->irq_hint < 16u) {
+                g_selected_storage_caps.irq_mask = (uint16_t)(1u << rec->irq_hint);
+            }
+            return;
         }
     }
 }
@@ -387,13 +477,43 @@ consume_pci_inventory(void)
     apply_pci_matches();
 }
 
+static int
+select_fallback_storage_driver(void)
+{
+    reset_selected_storage();
+    for (int32_t module_index = 0; module_index < g_module_count; ++module_index) {
+        uint8_t class_code = 0;
+        uint8_t subclass = 0;
+        uint8_t prog_if = 0;
+        uint16_t vendor_id = 0;
+        uint16_t device_id = 0;
+        uint8_t storage_bootstrap = 0;
+        spawn_caps_t caps;
+        if (query_driver_module_meta(module_index,
+                                     &class_code,
+                                     &subclass,
+                                     &prog_if,
+                                     &vendor_id,
+                                     &device_id,
+                                     &storage_bootstrap,
+                                     &caps) != 0 ||
+            !storage_bootstrap) {
+            continue;
+        }
+        g_selected_storage_index = module_index;
+        g_selected_storage_caps = caps;
+        return 0;
+    }
+    return -1;
+}
+
 static hw_spawn_target_t
 next_spawn_target(void)
 {
     if (g_need_pci_bus) {
         return HW_SPAWN_PCI_BUS;
     }
-    if (g_need_ata) {
+    if (g_need_storage) {
         return HW_SPAWN_ATA;
     }
     if (g_need_fat) {
@@ -444,11 +564,10 @@ initialize(int32_t proc_endpoint,
     }
     hw_scan_acpi();
     g_pci_bus_index = module_index_by_name("pci-bus");
-    g_ata_index = module_index_by_name("ata");
     g_fat_index = module_index_by_name("fs-fat");
 
     g_need_pci_bus = (g_pci_bus_index >= 0 && !proc_running("pci-bus")) ? 1 : 0;
-    g_need_ata = 0;
+    g_need_storage = 0;
     g_need_fat = 0;
     g_need_serial = !proc_running("serial") ? 1 : 0;
     g_need_keyboard = !proc_running("keyboard") ? 1 : 0;
@@ -492,9 +611,9 @@ initialize(int32_t proc_endpoint,
                     stall_forever();
                 }
             } else if (target == HW_SPAWN_ATA) {
-                if (hw_spawn_driver_index_caps(g_ata_index, &g_ata_caps) != 0) {
+                if (hw_spawn_driver_index_caps(g_selected_storage_index, &g_selected_storage_caps) != 0) {
                     g_phase = HW_PHASE_FAILED;
-                    console_write("[device-manager] spawn ata failed\n");
+                    console_write("[device-manager] spawn storage driver failed\n");
                     stall_forever();
                 }
             } else if (target == HW_SPAWN_FAT) {
@@ -539,7 +658,7 @@ initialize(int32_t proc_endpoint,
                 } else if (g_pending == HW_SPAWN_FRAMEBUFFER) {
                     g_need_framebuffer = 0;
                 } else if (g_pending == HW_SPAWN_ATA) {
-                    g_need_ata = 0;
+                    g_need_storage = 0;
                 } else if (g_pending == HW_SPAWN_FAT) {
                     g_need_fat = 0;
                 }
@@ -564,9 +683,9 @@ initialize(int32_t proc_endpoint,
                         g_need_framebuffer = 0;
                     }
                 } else if (g_pending == HW_SPAWN_ATA) {
-                    g_ata_retries++;
-                    if (g_ata_retries > 8) {
-                        g_need_ata = 0;
+                    g_storage_retries++;
+                    if (g_storage_retries > 8) {
+                        g_need_storage = 0;
                     }
                 } else if (g_pending == HW_SPAWN_FAT) {
                     g_fat_retries++;
@@ -588,11 +707,11 @@ initialize(int32_t proc_endpoint,
 
         if (g_phase == HW_PHASE_WAIT_INVENTORY) {
             consume_pci_inventory();
-            g_need_ata = (g_ata_index >= 0 && g_ata_match && !proc_running("ata")) ? 1 : 0;
-            g_need_fat = (g_fat_index >= 0 && g_need_ata && !proc_running("fs-fat")) ? 1 : 0;
-            if (!g_need_ata && g_ata_index >= 0 && !proc_running("ata")) {
-                console_write("[device-manager] fallback: boot ata despite no PCI storage match\n");
-                g_need_ata = 1;
+            g_need_storage = (g_selected_storage_index >= 0) ? 1 : 0;
+            g_need_fat = (g_fat_index >= 0 && g_need_storage && !proc_running("fs-fat")) ? 1 : 0;
+            if (!g_need_storage && select_fallback_storage_driver() == 0) {
+                console_write("[device-manager] fallback: boot storage driver despite no PCI match\n");
+                g_need_storage = 1;
                 g_need_fat = (g_fat_index >= 0 && !proc_running("fs-fat")) ? 1 : 0;
             }
             g_phase = HW_PHASE_SPAWN;

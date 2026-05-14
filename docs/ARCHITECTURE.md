@@ -98,9 +98,9 @@ with enriched `pci-bus` inventory records (class/subclass/prog-if plus minimal
 MMIO/IRQ hints). PM now accepts a capability-profile spawn request variant for
 module spawns, and kernel policy enforces spawn-time PIO port-range and IRQ
 line restrictions (defaulting to coarse app capabilities when no spawn profile
-is provided). ATA match/capability values now come from
-`configs/device_manager/ata.manifest`, transformed at build time into a
-generated header consumed by `device-manager`.
+is provided). Driver match/capability values are embedded in each driver
+WASMOS-APP package; `device-manager` requests module metadata from PM at
+runtime and matches those records against `pci-bus` inventory.
 When native `menuconfig`-style frontends are unavailable, build configuration
 can be edited through the in-repo `kconfiglib` interactive fallback script
 (`scripts/kconfiglib_menuconfig.py`), exposed via CMake targets.

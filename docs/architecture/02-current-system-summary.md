@@ -7,10 +7,11 @@ The current tree already boots into a usable user-space stack:
   timer, IPC, the scheduler, and the process manager.
 - A kernel-owned `init` process starts `device-manager`, waits for `fs-fat` to
   become ready, and then asks the process manager to load `sysinit` from the
-  FAT filesystem. `device-manager` now limits the pre-FAT bootstrap to storage,
-  then starts display/input drivers from FAT by name once `fs-fat` can serve
-  process-manager reads; the kernel early framebuffer is the only display path
-  needed before FAT.
+  FAT filesystem. `device-manager` starts the separate `pci-bus` service to
+  enumerate PCI inventory in user space, uses that inventory to drive the
+  storage bootstrap, then starts display/input drivers from FAT by name once
+  `fs-fat` can serve process-manager reads; the kernel early framebuffer is the
+  only display path needed before FAT.
 - `sysinit` is intentionally small and starts the configured post-FAT services
   and user processes listed in the generated boot-config blob.
 - The initfs also carries a generated binary boot-config blob derived from

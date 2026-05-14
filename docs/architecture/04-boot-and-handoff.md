@@ -74,7 +74,8 @@ Current bootstrap use:
 3. The bootloader exits boot services and jumps to kernel entry.
 4. The kernel initializes core subsystems and spawns the kernel `init` task.
 5. `init` starts `device-manager` from the bootstrap module set exposed by initfs.
-6. `device-manager` starts `ata` and `fs-fat`.
+6. `device-manager` starts `pci-bus`, consumes inventory records, then starts
+   `ata` and `fs-fat`.
 7. `init` waits for FAT readiness, then loads `sysinit` from disk through the
    process manager.
 8. `sysinit` reads the boot config and starts the configured late user
@@ -99,4 +100,3 @@ service as soon as the driver is available.
 
 This split is intentional: it keeps bootloader policy minimal and prevents
 `sysinit` from becoming a second bootstrap coordinator.
-

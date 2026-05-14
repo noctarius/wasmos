@@ -31,8 +31,12 @@
   - exposes `spawn`, `spawn by name`, `wait`, `kill`, and `status`
 - `device-manager`
   - scans ACPI RSDP data
-  - starts the early storage driver chain
+  - starts `pci-bus` and consumes published PCI inventory
+  - starts the early storage driver chain using inventory-based matching
   - starts post-FAT display/input drivers by name from disk
+- `pci-bus`
+  - enumerates PCI config space in user space
+  - publishes normalized device records to `device-manager`
 - `sysinit`
   - intentionally narrow
   - starts post-FAT services and late user processes from the generated boot
@@ -46,12 +50,13 @@ Current startup chain:
 2. initfs contributes bootstrap `boot_module_t` entries for `device-manager`,
    `ata`, `fs-fat`, and the current smoke/bootstrap apps
 3. kernel `init` spawns `device-manager`
-4. `device-manager` starts the storage chain: `ata` and `fs-fat`
-5. `device-manager` starts post-FAT hardware drivers by name: `serial`,
+4. `device-manager` spawns `pci-bus` and waits for scan completion
+5. `device-manager` starts the storage chain: `ata` and `fs-fat`
+6. `device-manager` starts post-FAT hardware drivers by name: `serial`,
    `keyboard`, and `framebuffer`
-6. kernel `init` waits for a successful FAT readiness probe
-7. kernel `init` loads `sysinit` from disk via PM
-8. `sysinit` loads the configured `sysinit.spawn` services/processes from disk,
+7. kernel `init` waits for a successful FAT readiness probe
+8. kernel `init` loads `sysinit` from disk via PM
+9. `sysinit` loads the configured `sysinit.spawn` services/processes from disk,
    including `vt` and `cli`
 
 This is the current stable bootstrap baseline.

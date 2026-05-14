@@ -720,6 +720,18 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
 }
 
 static int
+pm_module_desc(uint32_t module_index, wasmos_app_desc_t *out_desc)
+{
+    const boot_module_t *mod = pm_module_at(module_index);
+    if (!mod || !out_desc ||
+        mod->type != BOOT_MODULE_TYPE_WASMOS_APP ||
+        mod->base == 0 || mod->size == 0 || mod->size > 0xFFFFFFFFULL) {
+        return -1;
+    }
+    return wasmos_app_parse((const uint8_t *)(uintptr_t)mod->base, (uint32_t)mod->size, out_desc);
+}
+
+static int
 pm_apply_spawn_caps(uint32_t pid, const pm_spawn_caps_t *caps)
 {
     process_t *proc = 0;
@@ -1028,6 +1040,75 @@ pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t *msg)
     resp.arg1 = 0;
     resp.arg2 = 0;
     resp.arg3 = 0;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
+}
+
+static int
+pm_handle_module_meta(uint32_t pm_context_id, const ipc_message_t *msg)
+{
+    uint32_t owner_context = 0;
+    process_t *caller = 0;
+    wasmos_app_desc_t desc;
+    uint32_t cap_flags = 0;
+    uint32_t packed_match = 0;
+    uint32_t packed_vendor_device = 0;
+    uint32_t packed_caps_ports = 0;
+
+    if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
+        return -1;
+    }
+    caller = process_find_by_context(owner_context);
+    if (!caller) {
+        return -1;
+    }
+    if (pm_module_desc(msg->arg0, &desc) != 0) {
+        return -1;
+    }
+    if ((desc.flags & WASMOS_APP_FLAG_DRIVER) == 0) {
+        return -1;
+    }
+    if (desc.driver_match_class == WASMOS_DRIVER_MATCH_ANY_U8 &&
+        desc.driver_match_subclass == WASMOS_DRIVER_MATCH_ANY_U8 &&
+        desc.driver_match_prog_if == WASMOS_DRIVER_MATCH_ANY_U8 &&
+        desc.driver_match_vendor_id == WASMOS_DRIVER_MATCH_ANY_U16 &&
+        desc.driver_match_device_id == WASMOS_DRIVER_MATCH_ANY_U16) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < desc.cap_count; ++i) {
+        if (desc.caps[i].name_len == 7 &&
+            desc.caps[i].name[0] == 'i' && desc.caps[i].name[1] == 'o' &&
+            desc.caps[i].name[2] == '.' && desc.caps[i].name[3] == 'p' &&
+            desc.caps[i].name[4] == 'o' && desc.caps[i].name[5] == 'r' &&
+            desc.caps[i].name[6] == 't') {
+            cap_flags |= DEVMGR_CAP_IO_PORT;
+        } else if (desc.caps[i].name_len == 9 &&
+                   desc.caps[i].name[0] == 'i' && desc.caps[i].name[1] == 'r' &&
+                   desc.caps[i].name[2] == 'q' && desc.caps[i].name[3] == '.' &&
+                   desc.caps[i].name[4] == 'r' && desc.caps[i].name[5] == 'o' &&
+                   desc.caps[i].name[6] == 'u' && desc.caps[i].name[7] == 't' &&
+                   desc.caps[i].name[8] == 'e') {
+            cap_flags |= DEVMGR_CAP_IRQ;
+        }
+    }
+
+    packed_match = ((uint32_t)desc.driver_match_class << 24) |
+                   ((uint32_t)desc.driver_match_subclass << 16) |
+                   ((uint32_t)desc.driver_match_prog_if << 8) |
+                   (((desc.flags & WASMOS_APP_FLAG_STORAGE_BOOTSTRAP) != 0) ? 1u : 0u);
+    packed_vendor_device = ((uint32_t)desc.driver_match_vendor_id << 16) |
+                           (uint32_t)desc.driver_match_device_id;
+    packed_caps_ports = ((uint32_t)cap_flags << 16) |
+                        ((uint32_t)desc.driver_io_port_min & 0xFFFFu);
+
+    ipc_message_t resp;
+    resp.type = PROC_IPC_RESP;
+    resp.source = g_pm.proc_endpoint;
+    resp.destination = msg->source;
+    resp.request_id = msg->request_id;
+    resp.arg0 = msg->arg0;
+    resp.arg1 = packed_match;
+    resp.arg2 = packed_vendor_device;
+    resp.arg3 = packed_caps_ports;
     return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
 }
 
@@ -1496,6 +1577,9 @@ process_manager_entry(process_t *process, void *arg)
             break;
         case PROC_IPC_SPAWN_NAME:
             rc = pm_handle_spawn_name(process->context_id, &msg);
+            break;
+        case PROC_IPC_MODULE_META:
+            rc = pm_handle_module_meta(process->context_id, &msg);
             break;
         case PROC_IPC_KILL:
             rc = pm_handle_kill(process->context_id, &msg);

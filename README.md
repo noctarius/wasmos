@@ -155,8 +155,9 @@ Boot sequence (high level):
 3. `init` starts `device-manager`
 4. `device-manager` starts `pci-bus` (via PM endpoint lookup), consumes inventory, applies early PCI matching rules, then starts storage drivers/services (`ata`, `fs-fat`) with spawn-time capability profiles
 
-Current ATA match/capability policy source:
-- `configs/device_manager/ata.manifest` (compiled into a generated header for `device-manager`)
+Current driver match/capability policy source:
+- driver metadata is embedded in each driver’s WASMOS-APP package
+- `device-manager` queries module metadata from process-manager at runtime and matches against PCI inventory
 5. `init` requests `sysinit` load from FAT via process manager
 6. `sysinit` starts configured services/apps from boot config
 

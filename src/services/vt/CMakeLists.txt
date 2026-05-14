@@ -43,8 +43,12 @@ add_custom_command(
           2
           proc
           1
+          1
           ipc.basic
           0
+          --entry-arg-bindings
+          1
+          proc.endpoint
   DEPENDS ${WASM_VT_APP_WASM} make_wasmos_app
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm vt as WASMOS-APP"

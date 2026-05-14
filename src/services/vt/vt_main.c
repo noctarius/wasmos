@@ -1510,21 +1510,21 @@ vt_handle_key_notify(int32_t scancode, int32_t keyup, int32_t extended)
 }
 
 WASMOS_WASM_EXPORT int32_t
-initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3)
+initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2, int32_t arg3)
 {
+    (void)arg1;
+    (void)arg2;
     (void)arg3;
 
-    g_fb_ep = fb_endpoint;
-    g_kbd_ep = kbd_endpoint;
-
-    if (arg2 >= 0) {
-        g_vt_ep = arg2;
-    } else {
-        g_vt_ep = wasmos_ipc_create_endpoint();
-        if (g_vt_ep < 0) {
-            return -1;
-        }
+    g_vt_ep = wasmos_ipc_create_endpoint();
+    if (g_vt_ep < 0) {
+        return -1;
     }
+    if (wasmos_svc_register(proc_endpoint, g_vt_ep, "vt", 1) != 0) {
+        return -1;
+    }
+    g_fb_ep = wasmos_svc_lookup(proc_endpoint, g_vt_ep, "fb", 2);
+    g_kbd_ep = wasmos_svc_lookup(proc_endpoint, g_vt_ep, "kbd", 3);
 
     vt_query_geometry();
     vt_reset_tty_cells();
@@ -1542,12 +1542,12 @@ initialize(int32_t fb_endpoint, int32_t kbd_endpoint, int32_t arg2, int32_t arg3
     }
     vt_init_ttys();
 
-    if (g_kbd_ep >= 0) {
+    if (g_kbd_ep != -1) {
         (void)wasmos_ipc_send(g_kbd_ep, g_vt_ep, KBD_IPC_SUBSCRIBE_REQ,
                               1, 0, 0, 0, 0);
     }
 
-    if (g_fb_ep >= 0) {
+    if (g_fb_ep != -1) {
         vt_fb_console_mode(1);
     }
 

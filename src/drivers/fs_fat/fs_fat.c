@@ -3,6 +3,7 @@
 #include "stdio.h"
 #include "string.h"
 #include "wasmos/api.h"
+#include "wasmos/ipc.h"
 #include "wasmos_driver_abi.h"
 
 /*
@@ -352,7 +353,7 @@ fat_send_block_read(uint32_t lba, uint32_t count)
 {
     /* Block reads are asynchronous at the protocol level even though the driver
      * currently processes one filesystem operation at a time. */
-    if (g_block_endpoint < 0 || g_reply_endpoint < 0 || g_block_buf_phys < 0) {
+    if (g_block_endpoint == -1 || g_reply_endpoint < 0 || g_block_buf_phys < 0) {
         return -1;
     }
     g_wait_lba = lba;
@@ -379,7 +380,7 @@ fat_send_block_read(uint32_t lba, uint32_t count)
 static int
 fat_send_block_write(uint32_t lba, uint32_t count)
 {
-    if (g_block_endpoint < 0 || g_reply_endpoint < 0 || g_block_buf_phys < 0) {
+    if (g_block_endpoint == -1 || g_reply_endpoint < 0 || g_block_buf_phys < 0) {
         return -1;
     }
     g_wait_lba = lba;
@@ -3775,16 +3776,25 @@ fat_send_fs_response(int32_t status)
 }
 
 WASMOS_WASM_EXPORT int32_t
-initialize(int32_t block_endpoint,
-           int32_t fs_endpoint,
+initialize(int32_t proc_endpoint,
+           int32_t block_endpoint,
            int32_t ignored_arg2,
            int32_t ignored_arg3)
 {
+    (void)proc_endpoint;
     (void)ignored_arg2;
     (void)ignored_arg3;
 
+    g_fs_endpoint = wasmos_ipc_create_endpoint();
+    if (g_fs_endpoint < 0) {
+        fat_log("failed to create fs endpoint\n");
+        fat_stall();
+    }
+    if (wasmos_svc_register(proc_endpoint, g_fs_endpoint, "fs", 1) != 0) {
+        fat_log("failed to register fs endpoint\n");
+        fat_stall();
+    }
     g_block_endpoint = block_endpoint;
-    g_fs_endpoint = fs_endpoint;
     g_reply_endpoint = wasmos_ipc_create_endpoint();
     if (g_reply_endpoint < 0) {
         fat_log("failed to create reply endpoint\n");

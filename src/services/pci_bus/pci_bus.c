@@ -2,6 +2,7 @@
 #include "stdio.h"
 #include "string.h"
 #include "wasmos/api.h"
+#include "wasmos/ipc.h"
 #include "wasmos_driver_abi.h"
 
 #define PCI_CFG_ADDR_PORT 0xCF8
@@ -51,7 +52,7 @@ publish_record(int32_t devmgr_endpoint,
 }
 
 WASMOS_WASM_EXPORT int32_t
-initialize(int32_t devmgr_endpoint,
+initialize(int32_t proc_endpoint,
            int32_t ignored_arg1,
            int32_t ignored_arg2,
            int32_t ignored_arg3)
@@ -59,12 +60,26 @@ initialize(int32_t devmgr_endpoint,
     (void)ignored_arg1;
     (void)ignored_arg2;
     (void)ignored_arg3;
-    if (devmgr_endpoint < 0) {
+    if (proc_endpoint < 0) {
         return -1;
     }
 
     int32_t source_endpoint = wasmos_ipc_create_endpoint();
     if (source_endpoint < 0) {
+        return -1;
+    }
+    int32_t devmgr_endpoint = -1;
+    for (int32_t attempts = 0; attempts < 1024; ++attempts) {
+        devmgr_endpoint = wasmos_svc_lookup(proc_endpoint,
+                                            source_endpoint,
+                                            "devmgr.inv",
+                                            1 + attempts);
+        if (devmgr_endpoint != -1) {
+            break;
+        }
+        (void)wasmos_sched_yield();
+    }
+    if (devmgr_endpoint == -1) {
         return -1;
     }
     int32_t request_id = 1;

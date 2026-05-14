@@ -6,7 +6,7 @@
 #include "wasm_driver.h"
 
 #define WASMOS_APP_MAGIC "WASMOSAP"
-#define WASMOS_APP_VERSION 1u
+#define WASMOS_APP_VERSION 2u
 
 #define WASMOS_APP_FLAG_DRIVER     (1u << 0)
 #define WASMOS_APP_FLAG_SERVICE    (1u << 1)
@@ -23,6 +23,7 @@
 
 #define WASMOS_APP_MAX_REQUIRED_ENDPOINTS 8u
 #define WASMOS_APP_MAX_CAP_REQUESTS 8u
+#define WASMOS_APP_MAX_ENTRY_ARG_BINDINGS 4u
 
 typedef struct {
     const uint8_t *name;
@@ -35,6 +36,11 @@ typedef struct {
     uint32_t name_len;
     uint32_t flags;
 } wasmos_app_cap_request_t;
+
+typedef struct {
+    const uint8_t *name;
+    uint32_t name_len;
+} wasmos_app_entry_arg_binding_t;
 
 typedef struct {
     const uint8_t *blob;
@@ -52,6 +58,8 @@ typedef struct {
     wasmos_app_req_endpoint_t req_eps[WASMOS_APP_MAX_REQUIRED_ENDPOINTS];
     uint32_t cap_count;
     wasmos_app_cap_request_t caps[WASMOS_APP_MAX_CAP_REQUESTS];
+    uint32_t entry_arg_binding_count;
+    wasmos_app_entry_arg_binding_t entry_arg_bindings[WASMOS_APP_MAX_ENTRY_ARG_BINDINGS];
 } wasmos_app_desc_t;
 
 typedef int (*wasmos_app_endpoint_resolver_t)(uint32_t owner_context_id,

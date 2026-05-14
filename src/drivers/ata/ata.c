@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include "wasmos/api.h"
+#include "wasmos/ipc.h"
 #include "wasmos_driver_abi.h"
 
 /*
@@ -255,7 +256,7 @@ ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t arg0, int32
 }
 
 WASMOS_WASM_EXPORT int32_t
-initialize(int32_t block_endpoint,
+initialize(int32_t proc_endpoint,
            int32_t ignored_arg1,
            int32_t ignored_arg2,
            int32_t ignored_arg3)
@@ -264,7 +265,14 @@ initialize(int32_t block_endpoint,
     (void)ignored_arg2;
     (void)ignored_arg3;
 
-    g_block_endpoint = block_endpoint;
+    g_block_endpoint = wasmos_ipc_create_endpoint();
+    if (g_block_endpoint < 0) {
+        return -1;
+    }
+    if (wasmos_svc_register(proc_endpoint, g_block_endpoint, "block", 1) != 0) {
+        wasmos_console_write((int32_t)(uintptr_t)"[ata] svc register failed\n", 26);
+        return -1;
+    }
     g_present = 0;
     g_sector_count = 0;
     uint16_t identify_words[256];

@@ -4,7 +4,7 @@
 #include <string.h>
 
 #define MAGIC "WASMOSAP"
-#define VERSION 1u
+#define VERSION 2u
 #define FLAG_DRIVER (1u << 0)
 #define FLAG_SERVICE (1u << 1)
 #define FLAG_APP (1u << 2)
@@ -23,6 +23,7 @@ typedef struct __attribute__((packed)) {
     uint32_t wasm_size;
     uint32_t req_ep_count;
     uint32_t cap_count;
+    uint32_t entry_arg_binding_count;
     uint32_t mem_hint_count;
     uint32_t reserved;
 } wasmos_app_header_t;
@@ -36,6 +37,10 @@ typedef struct __attribute__((packed)) {
     uint32_t name_len;
     uint32_t flags;
 } wasmos_cap_request_t;
+
+typedef struct __attribute__((packed)) {
+    uint32_t name_len;
+} wasmos_entry_arg_binding_t;
 
 typedef struct __attribute__((packed)) {
     uint32_t kind;
@@ -85,6 +90,9 @@ int main(int argc, char **argv) {
     const uint32_t cap_max = 8;
     const char *cap_names[8];
     wasmos_cap_request_t caps[8];
+    uint32_t entry_arg_binding_count = 0;
+    const uint32_t entry_arg_binding_max = 4;
+    const char *entry_arg_bindings[4];
     if (parse_u32(argv[5], &stack_pages) != 0 || parse_u32(argv[6], &heap_pages) != 0) {
         fprintf(stderr, "invalid stack/heap page value\n");
         return 1;
@@ -97,8 +105,12 @@ int main(int argc, char **argv) {
     int has_req_ep = !(req_ep_name[0] == '-' && req_ep_name[1] == '\0');
 
     int legacy_mode = 0;
-    if (parse_u32(argv[10], &cap_count) == 0 &&
-        argc == (int)(11u + (cap_count * 2u))) {
+    if (parse_u32(argv[10], &cap_count) == 0) {
+        int min_tail = (int)(11u + (cap_count * 2u));
+        if (argc < min_tail) {
+            fprintf(stderr, "invalid capability argument layout\n");
+            return 1;
+        }
         if (cap_count > cap_max) {
             fprintf(stderr, "cap_count exceeds max supported entries (%u)\n", cap_max);
             return 1;
@@ -123,6 +135,32 @@ int main(int argc, char **argv) {
             cap_names[i] = cap_name;
             caps[i].name_len = (uint32_t)strlen(cap_name);
             caps[i].flags = cap_flags;
+        }
+        int next = min_tail;
+        if (argc > next) {
+            if (strcmp(argv[next], "--entry-arg-bindings") != 0) {
+                fprintf(stderr, "unknown trailing argument '%s'\n", argv[next]);
+                return 1;
+            }
+            next++;
+            if (next >= argc || parse_u32(argv[next], &entry_arg_binding_count) != 0) {
+                fprintf(stderr, "invalid entry arg binding count\n");
+                return 1;
+            }
+            next++;
+            if (entry_arg_binding_count > entry_arg_binding_max ||
+                argc != next + (int)entry_arg_binding_count) {
+                fprintf(stderr, "invalid entry arg bindings layout\n");
+                return 1;
+            }
+            for (uint32_t i = 0; i < entry_arg_binding_count; ++i) {
+                const char *binding = argv[next + (int)i];
+                if (!binding || binding[0] == '\0') {
+                    fprintf(stderr, "invalid entry arg binding at index %u\n", i);
+                    return 1;
+                }
+                entry_arg_bindings[i] = binding;
+            }
         }
     } else if (argc == 12) {
         /* Backward compatibility mode: one optional capability pair. */
@@ -207,12 +245,14 @@ int main(int argc, char **argv) {
     hdr.wasm_size = (uint32_t)in_size;
     hdr.req_ep_count = has_req_ep ? 1u : 0u;
     hdr.cap_count = cap_count;
+    hdr.entry_arg_binding_count = entry_arg_binding_count;
     hdr.mem_hint_count = 2;
     hdr.reserved = 0;
 
     wasmos_mem_hint_t stack_hint = { MEM_HINT_STACK, stack_pages, 0 };
     wasmos_mem_hint_t heap_hint = { MEM_HINT_HEAP, heap_pages, 0 };
     wasmos_req_endpoint_t req_ep = { (uint32_t)strlen(req_ep_name), req_ep_rights };
+    wasmos_entry_arg_binding_t entry_arg_binding_hdrs[4];
 
     int ok = 1;
     ok &= fwrite(&hdr, sizeof(hdr), 1, out) == 1;
@@ -225,6 +265,12 @@ int main(int argc, char **argv) {
     for (uint32_t i = 0; i < cap_count; ++i) {
         ok &= fwrite(&caps[i], sizeof(caps[i]), 1, out) == 1;
         ok &= fwrite(cap_names[i], 1, caps[i].name_len, out) == caps[i].name_len;
+    }
+    for (uint32_t i = 0; i < entry_arg_binding_count; ++i) {
+        entry_arg_binding_hdrs[i].name_len = (uint32_t)strlen(entry_arg_bindings[i]);
+        ok &= fwrite(&entry_arg_binding_hdrs[i], sizeof(entry_arg_binding_hdrs[i]), 1, out) == 1;
+        ok &= fwrite(entry_arg_bindings[i], 1, entry_arg_binding_hdrs[i].name_len, out) ==
+              entry_arg_binding_hdrs[i].name_len;
     }
     ok &= fwrite(&stack_hint, sizeof(stack_hint), 1, out) == 1;
     ok &= fwrite(&heap_hint, sizeof(heap_hint), 1, out) == 1;

@@ -109,6 +109,31 @@ static uint8_t g_pm_spawn_owner_deny_logged;
 static uint32_t pm_alloc_cli_tty(void);
 static int pm_service_set(const char *name, uint32_t endpoint, uint32_t owner_context_id);
 static uint32_t pm_driver_cap_flags_from_desc(const wasmos_app_desc_t *desc);
+static int name_eq(const char *a, const char *b);
+
+static void
+pm_update_well_known_service_endpoint(const char *name, uint32_t endpoint)
+{
+    typedef struct {
+        const char *name;
+        uint32_t *slot;
+    } pm_service_slot_t;
+    pm_service_slot_t slots[] = {
+        {"block", &g_pm.block_endpoint},
+        {"fs", &g_pm.fs_endpoint},
+        {"vt", &g_pm.vt_endpoint},
+        {"fb", &g_pm.fb_endpoint},
+    };
+    if (!name) {
+        return;
+    }
+    for (uint32_t i = 0; i < (uint32_t)(sizeof(slots) / sizeof(slots[0])); ++i) {
+        if (name_eq(name, slots[i].name)) {
+            *slots[i].slot = endpoint;
+            return;
+        }
+    }
+}
 
 static pm_fs_buffer_slot_t *
 pm_fs_slot_for_context(uint32_t context_id)
@@ -1491,15 +1516,7 @@ pm_handle_service_register(uint32_t pm_context_id, const ipc_message_t *msg)
     if (pm_service_set(name, msg->source, owner_context_id) != 0) {
         return -1;
     }
-    if (name_eq(name, "block")) {
-        g_pm.block_endpoint = msg->source;
-    } else if (name_eq(name, "fs")) {
-        g_pm.fs_endpoint = msg->source;
-    } else if (name_eq(name, "vt")) {
-        g_pm.vt_endpoint = msg->source;
-    } else if (name_eq(name, "fb")) {
-        g_pm.fb_endpoint = msg->source;
-    }
+    pm_update_well_known_service_endpoint(name, msg->source);
     resp.type = SVC_IPC_REGISTER_RESP;
     resp.source = g_pm.proc_endpoint;
     resp.destination = msg->source;

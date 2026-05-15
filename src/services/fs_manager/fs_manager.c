@@ -107,7 +107,7 @@ static fs_client_state_t *client_state(int32_t source) {
 
 static int lookup_backends(void) {
     if (g_backend_boot < 0) {
-        g_backend_boot = wasmos_svc_lookup(g_proc_endpoint, g_reply_endpoint, "fs.boot", 1);
+        g_backend_boot = wasmos_svc_lookup(g_proc_endpoint, g_reply_endpoint, "fs", 1);
     }
     if (g_backend_init < 0) {
         g_backend_init = wasmos_svc_lookup(g_proc_endpoint, g_reply_endpoint, "fs.init", 1);
@@ -182,8 +182,8 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
         log_msg("[fs-manager] endpoint init failed\n");
         stall_forever();
     }
-    if (wasmos_svc_register(g_proc_endpoint, g_fs_endpoint, "fs", 1) != 0) {
-        log_msg("[fs-manager] register fs failed\n");
+    if (wasmos_svc_register(g_proc_endpoint, g_fs_endpoint, "fs.vfs", 1) != 0) {
+        log_msg("[fs-manager] register fs.vfs failed\n");
         stall_forever();
     }
 

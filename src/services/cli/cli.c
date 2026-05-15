@@ -1180,7 +1180,10 @@ initialize(int32_t proc_endpoint,
                 stall_forever();
             }
             g_proc_endpoint = proc_endpoint;
-            g_fs_endpoint = wasmos_svc_lookup(g_proc_endpoint, g_reply_endpoint, "fs", 1);
+            g_fs_endpoint = wasmos_svc_lookup(g_proc_endpoint, g_reply_endpoint, "fs.vfs", 1);
+            if (g_fs_endpoint < 0) {
+                g_fs_endpoint = wasmos_svc_lookup(g_proc_endpoint, g_reply_endpoint, "fs", 1);
+            }
             g_vt_endpoint = wasmos_svc_lookup(g_proc_endpoint, g_reply_endpoint, "vt", 2);
             if (home_tty_arg >= 1 && home_tty_arg <= 3) {
                 g_home_tty = home_tty_arg;

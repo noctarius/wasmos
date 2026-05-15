@@ -94,8 +94,10 @@ and `SVC_IPC_LOOKUP_REQ`) so drivers/services create/register their own
 endpoints and discover dependencies at runtime instead of PM-injected
 per-application endpoint bindings.
 Filesystem namespace now starts from a virtual root (`/`) with explicit mount
-subtrees (`/boot` -> FAT, `/init` -> initfs view) as the baseline for
-extensible multi-mount routing.
+subtrees and split backend responsibilities: `fs-fat` remains the active `fs`
+endpoint for boot/FAT routing, while `fs-init` provides initfs listing
+responsibilities as a separate backend (`fs.init`). `fs-manager` remains
+scaffolded for the follow-up endpoint handover.
 Device discovery now includes PCI-inventory-driven matching in `device-manager`
 with enriched `pci-bus` inventory records (class/subclass/prog-if plus minimal
 MMIO/IRQ hints). PM now accepts a capability-profile spawn request variant for

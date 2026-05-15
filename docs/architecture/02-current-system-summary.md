@@ -5,9 +5,10 @@ The current tree already boots into a usable user-space stack:
   boot services.
 - The kernel initializes paging, physical memory management, exceptions, the
   timer, IPC, the scheduler, and the process manager.
-- A kernel-owned `init` process starts `device-manager`, waits for `fs-fat` to
-  become ready, and then asks the process manager to load `sysinit` from the
-  FAT filesystem. `device-manager` starts the separate `pci-bus` service to
+- A kernel-owned `init` process starts `device-manager`, waits for `fs` (served
+  by `fs-fat`) to become ready, and then asks the process manager to load
+  `sysinit` from the FAT filesystem. `device-manager` starts the separate
+  `pci-bus` service to
   enumerate PCI inventory in user space, uses that inventory to drive the
   storage bootstrap, then starts display/input drivers from FAT by name once
   `fs-fat` can serve process-manager reads; the kernel early framebuffer is the
@@ -19,8 +20,12 @@ The current tree already boots into a usable user-space stack:
   keyboard, VT, and CLI payloads stay on the FAT image and are loaded by name
   after `fs-fat` is available; hardware drivers are still owned by
   `device-manager`, while `sysinit` starts higher-level services/apps.
-- `fs-fat` currently provides read-only open/read/seek/stat primitives for the
-  shared libc layer and the language-native shims.
+- `fs-fat` remains the active `fs` endpoint and provides FAT-backed
+  open/read/seek/stat primitives for the shared
+  libc layer and the language-native shims.
+- `fs-init` is now a separate initfs-listing backend (`fs.init`) so initfs
+  namespace handling no longer lives in `fs-fat`; `fs-manager` remains
+  scaffolded for follow-up mount-manager handover.
 - `fs-fat` also supports overwrite-only writes to existing files through the C
   libc `open/write` path, plus `O_TRUNC` size updates, `O_APPEND` writes for
   existing files within their current cluster chain, and `O_CREAT` for

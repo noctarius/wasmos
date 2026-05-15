@@ -7,9 +7,7 @@
 #include "wasmos_driver_abi.h"
 
 /*
- * fs-fat is the first filesystem service in the stack. Its scope is pragmatic:
- * mount the ESP over the ATA block driver, expose enough IPC to list/cat/cd,
- * feed PM with WASMOS-APP blobs, and back the current read-only libc file API.
+ * fs-fat is the FAT backend service for the ESP filesystem.
  */
 
 #define FAT_SECTOR_SIZE 512u
@@ -62,9 +60,7 @@ typedef enum {
 } fat_read_stage_t;
 
 typedef enum {
-    VFS_MOUNT_ROOT = 0,
-    VFS_MOUNT_BOOT,
-    VFS_MOUNT_INIT
+    VFS_MOUNT_BOOT = 0
 } vfs_mount_t;
 
 static int32_t g_block_endpoint = -1;
@@ -93,7 +89,7 @@ static uint32_t g_dir_sectors = 0;
 static int32_t g_cwd_source = -1;
 static uint16_t g_cwd_cluster = 0;
 static uint8_t g_cwd_root = 1;
-static vfs_mount_t g_cwd_mount = VFS_MOUNT_ROOT;
+static vfs_mount_t g_cwd_mount = VFS_MOUNT_BOOT;
 
 static fat_op_t g_op = FAT_OP_NONE;
 static fat_cat_stage_t g_cat_stage = FAT_CAT_SCAN;
@@ -169,8 +165,6 @@ typedef struct {
 static fat_open_file_t g_open_files[FAT_MAX_OPEN_FILES];
 
 static int vfs_translate_path(const char *in, char *out, uint32_t out_len, uint8_t *out_is_init);
-static int vfs_emit_root_listing(void);
-static int vfs_emit_init_listing(void);
 
 static void fat_lfn_reset(void);
 static void fat_lfn_finalize(void);
@@ -671,56 +665,15 @@ vfs_translate_path(const char *in, char *out, uint32_t out_len, uint8_t *out_is_
             out[j] = '\0';
             return in[pos] == '\0' ? 0 : -1;
         }
-        if (vfs_starts_with(in, "/init")) {
-            *out_is_init = 1;
-            return -1;
-        }
         return -1;
     }
-    if (g_cwd_mount == VFS_MOUNT_BOOT) {
-        uint32_t i = 0;
-        while (in[i] && i + 1 < out_len) {
-            out[i] = in[i];
-            i++;
-        }
-        out[i] = '\0';
-        return in[i] == '\0' ? 0 : -1;
+    uint32_t i = 0;
+    while (in[i] && i + 1 < out_len) {
+        out[i] = in[i];
+        i++;
     }
-    if (g_cwd_mount == VFS_MOUNT_INIT) {
-        *out_is_init = 1;
-    }
-    return -1;
-}
-
-static int
-vfs_emit_root_listing(void)
-{
-    console_write("init/\n");
-    console_write("boot/\n");
-    return 0;
-}
-
-static int
-vfs_emit_init_listing(void)
-{
-    for (int32_t i = 0; i < 256; ++i) {
-        char name[64];
-        int32_t name_len = 0;
-        name[0] = '\0';
-        name_len = wasmos_boot_module_name(i, (int32_t)(uintptr_t)name, (int32_t)sizeof(name));
-        if (name_len < 0) {
-            break;
-        }
-        if (name_len >= (int32_t)sizeof(name)) {
-            name_len = (int32_t)sizeof(name) - 1;
-        }
-        if (wasmos_sync_user_read((int32_t)(uintptr_t)name, name_len + 1) != 0) {
-            continue;
-        }
-        console_write(name);
-        console_write("\n");
-    }
-    return 0;
+    out[i] = '\0';
+    return in[i] == '\0' ? 0 : -1;
 }
 
 static void
@@ -3774,39 +3727,12 @@ fat_ipc_dispatch(int32_t type,
     }
 
     if (type == FS_IPC_LIST_ROOT_REQ) {
-        if (g_fs_req.source != g_cwd_source) {
-            g_cwd_mount = VFS_MOUNT_ROOT;
-            g_cwd_root = 1;
-        }
-        if (g_cwd_mount == VFS_MOUNT_ROOT) {
-            return vfs_emit_root_listing();
-        }
-        if (g_cwd_mount == VFS_MOUNT_INIT) {
-            return vfs_emit_init_listing();
-        }
         return fat_handle_list();
     }
     if (type == FS_IPC_CAT_ROOT_REQ) {
         if (g_op == FAT_OP_NONE) {
             fat_unpack_name((uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3,
                             g_target_name, sizeof(g_target_name));
-        }
-        if (g_fs_req.source != g_cwd_source) {
-            g_cwd_mount = VFS_MOUNT_ROOT;
-            g_cwd_root = 1;
-        }
-        if (g_cwd_mount == VFS_MOUNT_ROOT) {
-            if (fat_name_eq(g_target_name, "INIT")) {
-                return vfs_emit_init_listing();
-            }
-            if (fat_name_eq(g_target_name, "BOOT")) {
-                console_write("mount: /boot (fat)\n");
-                return 0;
-            }
-            return -1;
-        }
-        if (g_cwd_mount == VFS_MOUNT_INIT) {
-            return vfs_emit_init_listing();
         }
         return fat_handle_cat();
     }
@@ -3818,49 +3744,10 @@ fat_ipc_dispatch(int32_t type,
             fat_unpack_name((uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3,
                             g_dir_name, sizeof(g_dir_name));
             if (g_dir_name[0] == '\0' || (g_dir_name[0] == '/' && g_dir_name[1] == '\0')) {
-                g_cwd_mount = VFS_MOUNT_ROOT;
-                g_cwd_root = 1;
-                g_cwd_source = g_fs_req.source;
-                return 0;
-            }
-            if (fat_name_eq(g_dir_name, "..") && g_cwd_mount == VFS_MOUNT_INIT) {
-                g_cwd_mount = VFS_MOUNT_ROOT;
-                g_cwd_root = 1;
-                g_cwd_cluster = 0;
-                g_dir_lba = 0;
-                g_dir_sectors = 0;
-                g_cwd_source = g_fs_req.source;
-                return 0;
-            }
-            if (fat_name_eq(g_dir_name, "BOOT") || fat_name_eq(g_dir_name, "/BOOT")) {
                 g_cwd_mount = VFS_MOUNT_BOOT;
                 g_cwd_root = 1;
-                g_cwd_cluster = 0;
-                g_dir_lba = 0;
-                g_dir_sectors = 0;
                 g_cwd_source = g_fs_req.source;
                 return 0;
-            }
-            if (fat_name_eq(g_dir_name, "INIT") || fat_name_eq(g_dir_name, "/INIT")) {
-                g_cwd_mount = VFS_MOUNT_INIT;
-                g_cwd_root = 1;
-                g_cwd_cluster = 0;
-                g_dir_lba = 0;
-                g_dir_sectors = 0;
-                g_cwd_source = g_fs_req.source;
-                return 0;
-            }
-            if (fat_name_eq(g_dir_name, "..") && g_cwd_mount == VFS_MOUNT_BOOT && g_cwd_root) {
-                g_cwd_mount = VFS_MOUNT_ROOT;
-                g_cwd_root = 1;
-                g_cwd_cluster = 0;
-                g_dir_lba = 0;
-                g_dir_sectors = 0;
-                g_cwd_source = g_fs_req.source;
-                return 0;
-            }
-            if (g_cwd_mount != VFS_MOUNT_BOOT) {
-                return -1;
             }
         }
         return fat_handle_chdir();
@@ -4005,7 +3892,7 @@ initialize(int32_t proc_endpoint,
     g_cwd_root = 1;
     g_cwd_source = -1;
     g_cwd_cluster = 0;
-    g_cwd_mount = VFS_MOUNT_ROOT;
+    g_cwd_mount = VFS_MOUNT_BOOT;
     g_dir_lba = 0;
     g_dir_sectors = 0;
     g_read_name[0] = '\0';

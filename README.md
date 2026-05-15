@@ -162,9 +162,9 @@ Current driver match/capability policy source:
 - all in-tree apps, drivers, and services now provide `linker.metadata` metadata consumed by `make_wasmos_app`
 Current FS namespace model:
 - `/` is a virtual root mount
-- `/boot` maps to the initial FAT filesystem (ESP-backed via `fs-fat`)
-- `/init` is a virtual initfs namespace view (module-name listing path for now)
-- `fs-manager` service scaffold now exists as the intended future VFS/mount orchestrator; current boot path still uses `fs-fat` as active `fs` endpoint
+- `/boot` maps to the initial FAT filesystem (ESP-backed via `fs-fat`, active `fs` endpoint)
+- `/init` metadata/listing responsibilities are now separated into `fs-init` (`fs.init`)
+- `fs-manager` remains scaffolded for the follow-up full `fs` endpoint handover
 5. `init` requests `sysinit` load from FAT via process manager
 6. `sysinit` starts configured services/apps from boot config
 

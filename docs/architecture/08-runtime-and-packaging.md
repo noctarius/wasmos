@@ -67,8 +67,9 @@ Current packaging input:
 
 Current filesystem namespace baseline:
 - `/` is a virtual root mountpoint
-- `/boot` routes to FAT-backed filesystem operations
-- `/init` exposes initfs-oriented listing view for early module visibility
+- `/boot` routes to `fs-fat` backend operations (active `fs` endpoint)
+- initfs listing responsibilities are split into `fs-init` (`fs.init`)
+- `fs-manager` is scaffolded for follow-up full mount-manager handover
 
 ### Language ABI Strategy
 Applications no longer need to implement the raw startup ABI directly:

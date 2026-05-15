@@ -158,6 +158,7 @@ Boot sequence (high level):
 Current driver match/capability policy source:
 - driver metadata is embedded in each driver’s WASMOS-APP package
 - `device-manager` queries module metadata from process-manager at runtime and matches against PCI inventory
+- process-manager now also supports initfs metadata lookup by module path (`PROC_IPC_MODULE_META_PATH`) so driver startup can resolve metadata without relying only on boot-module indices
 - all in-tree apps, drivers, and services now provide `linker.metadata` metadata consumed by `make_wasmos_app`
 5. `init` requests `sysinit` load from FAT via process manager
 6. `sysinit` starts configured services/apps from boot config

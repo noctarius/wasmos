@@ -100,7 +100,10 @@ module spawns, and kernel policy enforces spawn-time PIO port-range and IRQ
 line restrictions (defaulting to coarse app capabilities when no spawn profile
 is provided). Driver match/capability values are embedded in each driver
 WASMOS-APP package; `device-manager` requests module metadata from PM at
-runtime and matches those records against `pci-bus` inventory.
+runtime and matches those records against `pci-bus` inventory. PM now also
+exposes initfs metadata lookup by module path (`PROC_IPC_MODULE_META_PATH`) so
+early user-space can resolve driver metadata without depending only on the
+initial boot-module index list.
 When native `menuconfig`-style frontends are unavailable, build configuration
 can be edited through the in-repo `kconfiglib` interactive fallback script
 (`scripts/kconfiglib_menuconfig.py`), exposed via CMake targets.

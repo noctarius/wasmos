@@ -29,6 +29,7 @@ static int32_t g_line_len = 0;
 static int32_t g_reply_endpoint = -1;
 static int32_t g_vt_client_endpoint = -1;
 static int32_t g_fs_endpoint = -1;
+static int32_t g_devmgr_endpoint = -1;
 static int32_t g_proc_endpoint = -1;
 static int32_t g_vt_endpoint = -1;
 static int32_t g_home_tty = 1;
@@ -767,6 +768,99 @@ cli_send_proc(int32_t type, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_
     return 0;
 }
 
+static int
+cli_send_devmgr(uint32_t index)
+{
+    if (g_devmgr_endpoint < 0 || g_reply_endpoint < 0) {
+        return -1;
+    }
+    int32_t req_id = g_request_id++;
+    if (wasmos_ipc_send(g_devmgr_endpoint, g_reply_endpoint, DEVMGR_QUERY_MOUNT_REQ, req_id, (int32_t)index, 0, 0, 0) != 0) {
+        return -1;
+    }
+    if (wasmos_ipc_recv(g_reply_endpoint) < 0) {
+        return -1;
+    }
+    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req_id) {
+        return -1;
+    }
+    return 0;
+}
+
+static int
+buf_append_hex_u8(char *buf, int pos, int cap, uint8_t value)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    if (pos + 2 >= cap) {
+        return pos;
+    }
+    buf[pos++] = hex[(value >> 4) & 0xFu];
+    buf[pos++] = hex[value & 0xFu];
+    return pos;
+}
+
+static int
+buf_append_hex_u16(char *buf, int pos, int cap, uint16_t value)
+{
+    pos = buf_append_hex_u8(buf, pos, cap, (uint8_t)((value >> 8) & 0xFFu));
+    pos = buf_append_hex_u8(buf, pos, cap, (uint8_t)(value & 0xFFu));
+    return pos;
+}
+
+static void
+cli_show_mounts(void)
+{
+    console_write("mounts:\n");
+    for (uint32_t i = 0; i < 8; ++i) {
+        if (cli_send_devmgr(i) != 0) {
+            break;
+        }
+        int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+        if (resp_type == DEVMGR_QUERY_DONE) {
+            break;
+        }
+        if (resp_type != DEVMGR_MOUNT_INFO) {
+            break;
+        }
+        uint32_t mount_id = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+        uint32_t a1 = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+        uint32_t a2 = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
+        uint32_t a3 = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
+        char line[192];
+        int pos = 0;
+        pos = buf_append_str(line, pos, (int)sizeof(line), (mount_id == 0) ? "/boot -> fs-fat" : "/init -> fs-init");
+        if (mount_id == 0 && (a3 & (1u << 31)) != 0) {
+            uint8_t bus = (uint8_t)((a1 >> 24) & 0xFFu);
+            uint8_t dev = (uint8_t)((a1 >> 16) & 0xFFu);
+            uint8_t fun = (uint8_t)((a1 >> 8) & 0xFFu);
+            uint8_t class_code = (uint8_t)(a1 & 0xFFu);
+            uint8_t subclass = (uint8_t)((a2 >> 24) & 0xFFu);
+            uint8_t prog_if = (uint8_t)((a2 >> 16) & 0xFFu);
+            uint16_t vendor = (uint16_t)(a2 & 0xFFFFu);
+            uint16_t device = (uint16_t)(a3 & 0xFFFFu);
+            pos = buf_append_str(line, pos, (int)sizeof(line), " pci ");
+            pos = buf_append_hex_u8(line, pos, (int)sizeof(line), bus);
+            pos = buf_append_str(line, pos, (int)sizeof(line), ":");
+            pos = buf_append_hex_u8(line, pos, (int)sizeof(line), dev);
+            pos = buf_append_str(line, pos, (int)sizeof(line), ".");
+            pos = buf_append_hex_u8(line, pos, (int)sizeof(line), fun);
+            pos = buf_append_str(line, pos, (int)sizeof(line), " class ");
+            pos = buf_append_hex_u8(line, pos, (int)sizeof(line), class_code);
+            pos = buf_append_str(line, pos, (int)sizeof(line), ":");
+            pos = buf_append_hex_u8(line, pos, (int)sizeof(line), subclass);
+            pos = buf_append_str(line, pos, (int)sizeof(line), ":");
+            pos = buf_append_hex_u8(line, pos, (int)sizeof(line), prog_if);
+            pos = buf_append_str(line, pos, (int)sizeof(line), " vid:did ");
+            pos = buf_append_hex_u16(line, pos, (int)sizeof(line), vendor);
+            pos = buf_append_str(line, pos, (int)sizeof(line), ":");
+            pos = buf_append_hex_u16(line, pos, (int)sizeof(line), device);
+        }
+        pos = buf_append_str(line, pos, (int)sizeof(line), "\n");
+        line[pos] = '\0';
+        console_write(line);
+    }
+}
+
 static void
 set_cwd_path(const char *path)
 {
@@ -910,7 +1004,16 @@ cli_handle_line(void)
         to_lower(g_line[1]) == 'e' &&
         to_lower(g_line[2]) == 'l' &&
         to_lower(g_line[3]) == 'p') {
-        console_write("commands: help, ps, kmaps [all], ls, cat <name>, cd <path>, exec <app>, tty <0-3>, halt, reboot\n");
+        console_write("commands: help, ps, kmaps [all], ls, cat <name>, cd <path>, mount, exec <app>, tty <0-3>, halt, reboot\n");
+        return 0;
+    }
+    if (g_line_len == 5 &&
+        to_lower(g_line[0]) == 'm' &&
+        to_lower(g_line[1]) == 'o' &&
+        to_lower(g_line[2]) == 'u' &&
+        to_lower(g_line[3]) == 'n' &&
+        to_lower(g_line[4]) == 't') {
+        cli_show_mounts();
         return 0;
     }
     if (g_line_len == 5 &&
@@ -1184,6 +1287,7 @@ initialize(int32_t proc_endpoint,
             if (g_fs_endpoint < 0) {
                 g_fs_endpoint = wasmos_svc_lookup(g_proc_endpoint, g_reply_endpoint, "fs", 1);
             }
+            g_devmgr_endpoint = wasmos_svc_lookup(g_proc_endpoint, g_reply_endpoint, "devmgr.query", 1);
             g_vt_endpoint = wasmos_svc_lookup(g_proc_endpoint, g_reply_endpoint, "vt", 2);
             if (home_tty_arg >= 1 && home_tty_arg <= 3) {
                 g_home_tty = home_tty_arg;
@@ -1209,7 +1313,7 @@ initialize(int32_t proc_endpoint,
                 }
             }
             if (g_home_tty == 1) {
-                console_write("WAMOS CLI\ncommands: help, ps, kmaps [all], ls, cat <name>, cd <path>, exec <app>, tty <0-3>, halt, reboot\n");
+                console_write("WAMOS CLI\ncommands: help, ps, kmaps [all], ls, cat <name>, cd <path>, mount, exec <app>, tty <0-3>, halt, reboot\n");
             }
             g_phase = CLI_PHASE_PROMPT;
             continue;

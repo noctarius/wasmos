@@ -75,6 +75,7 @@ typedef struct {
     int32_t reply_endpoint;
     int32_t proc_endpoint;
     int32_t inventory_endpoint;
+    int32_t query_endpoint;
     int32_t request_id;
     int32_t module_count;
     uint8_t need_pci_bus;
@@ -103,6 +104,8 @@ typedef struct {
     int32_t selected_storage_index;
     spawn_caps_t selected_storage_caps;
     spawn_caps_t selected_serial_caps;
+    uint8_t selected_storage_has_record;
+    pci_device_record_t selected_storage_record;
 } device_manager_state_t;
 
 static device_manager_state_t g_dm = {
@@ -111,6 +114,7 @@ static device_manager_state_t g_dm = {
     .reply_endpoint = -1,
     .proc_endpoint = -1,
     .inventory_endpoint = -1,
+    .query_endpoint = -1,
     .request_id = 1,
     .module_count = 0,
     .selected_storage_index = -1,
@@ -382,6 +386,7 @@ static void
 reset_selected_storage(void)
 {
     g_dm.selected_storage_index = -1;
+    g_dm.selected_storage_has_record = 0;
     g_dm.selected_storage_caps.cap_flags = 0;
     g_dm.selected_storage_caps.io_port_min = 0;
     g_dm.selected_storage_caps.io_port_max = 0;
@@ -535,6 +540,8 @@ apply_pci_matches(void)
                 }
                 g_dm.selected_storage_index = module_index;
                 g_dm.selected_storage_caps = caps;
+                g_dm.selected_storage_record = *rec;
+                g_dm.selected_storage_has_record = 1;
                 if ((g_dm.selected_storage_caps.cap_flags & DEVMGR_CAP_IRQ) != 0 &&
                     rec->irq_hint < 16u) {
                     g_dm.selected_storage_caps.irq_mask = (uint16_t)(1u << rec->irq_hint);
@@ -627,6 +634,45 @@ next_spawn_target(void)
     return HW_SPAWN_NONE;
 }
 
+static void
+handle_query_endpoint(void)
+{
+    if (g_dm.query_endpoint < 0) {
+        return;
+    }
+    if (wasmos_ipc_recv(g_dm.query_endpoint) < 0) {
+        return;
+    }
+    int32_t type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+    int32_t req_id = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+    int32_t source = wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE);
+    int32_t index = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+    if (type != DEVMGR_QUERY_MOUNT_REQ) {
+        (void)wasmos_ipc_send(source, g_dm.query_endpoint, FS_IPC_ERROR, req_id, type, 0, 0, 0);
+        return;
+    }
+    if (index == 0) {
+        uint32_t a1 = 0;
+        uint32_t a2 = 0;
+        uint32_t a3 = 0;
+        if (g_dm.selected_storage_has_record) {
+            const pci_device_record_t *rec = &g_dm.selected_storage_record;
+            a1 = ((uint32_t)rec->bus << 24) | ((uint32_t)rec->device << 16) |
+                 ((uint32_t)rec->function << 8) | (uint32_t)rec->class_code;
+            a2 = ((uint32_t)rec->subclass << 24) | ((uint32_t)rec->prog_if << 16) |
+                 (uint32_t)rec->vendor_id;
+            a3 = (uint32_t)rec->device_id | ((uint32_t)1u << 31);
+        }
+        (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_MOUNT_INFO, req_id, 0, (int32_t)a1, (int32_t)a2, (int32_t)a3);
+        return;
+    }
+    if (index == 1) {
+        (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_MOUNT_INFO, req_id, 1, 0, 0, 0);
+        return;
+    }
+    (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_QUERY_DONE, req_id, 0, 0, 0, 0);
+}
+
 WASMOS_WASM_EXPORT int32_t
 initialize(int32_t proc_endpoint,
            int32_t module_count,
@@ -656,6 +702,12 @@ initialize(int32_t proc_endpoint,
     }
     if (wasmos_svc_register(g_dm.proc_endpoint, g_dm.inventory_endpoint, "devmgr.inv", 1) != 0) {
         console_write("[device-manager] inventory register failed\n");
+        stall_forever();
+    }
+    g_dm.query_endpoint = wasmos_ipc_create_endpoint();
+    if (g_dm.query_endpoint < 0 ||
+        wasmos_svc_register(g_dm.proc_endpoint, g_dm.query_endpoint, "devmgr.query", 1) != 0) {
+        console_write("[device-manager] query register failed\n");
         stall_forever();
     }
     hw_scan_acpi();
@@ -866,7 +918,7 @@ initialize(int32_t proc_endpoint,
         }
 
         if (g_dm.phase == HW_PHASE_IDLE) {
-            (void)wasmos_ipc_recv(g_dm.reply_endpoint);
+            handle_query_endpoint();
             continue;
         }
 

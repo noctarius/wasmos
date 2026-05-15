@@ -60,12 +60,16 @@ typedef enum {
 } fat_read_stage_t;
 
 typedef enum {
-    VFS_MOUNT_BOOT = 0
+    VFS_MOUNT_ROOT = 0,
+    VFS_MOUNT_BOOT,
+    VFS_MOUNT_INIT
 } vfs_mount_t;
 
 static int32_t g_block_endpoint = -1;
 static int32_t g_fs_endpoint = -1;
 static int32_t g_reply_endpoint = -1;
+static int32_t g_proc_endpoint = -1;
+static int32_t g_initfs_endpoint = -1;
 static int32_t g_block_req_id = 1;
 static int32_t g_block_buf_phys = -1;
 static uint8_t g_sector_buf[FAT_MAX_SECTOR_BYTES];
@@ -165,6 +169,8 @@ typedef struct {
 static fat_open_file_t g_open_files[FAT_MAX_OPEN_FILES];
 
 static int vfs_translate_path(const char *in, char *out, uint32_t out_len, uint8_t *out_is_init);
+static int vfs_emit_root_listing(void);
+static int vfs_proxy_initfs(int32_t type, int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3, int32_t *out_status);
 
 static void fat_lfn_reset(void);
 static void fat_lfn_finalize(void);
@@ -665,6 +671,14 @@ vfs_translate_path(const char *in, char *out, uint32_t out_len, uint8_t *out_is_
             out[j] = '\0';
             return in[pos] == '\0' ? 0 : -1;
         }
+        if (vfs_starts_with(in, "/init")) {
+            *out_is_init = 1;
+            return -1;
+        }
+        return -1;
+    }
+    if (g_cwd_mount == VFS_MOUNT_INIT) {
+        *out_is_init = 1;
         return -1;
     }
     uint32_t i = 0;
@@ -674,6 +688,50 @@ vfs_translate_path(const char *in, char *out, uint32_t out_len, uint8_t *out_is_
     }
     out[i] = '\0';
     return in[i] == '\0' ? 0 : -1;
+}
+
+static int
+vfs_emit_root_listing(void)
+{
+    console_write("init/\n");
+    console_write("boot/\n");
+    return 0;
+}
+
+static int
+vfs_proxy_initfs(int32_t type, int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3, int32_t *out_status)
+{
+    if (g_initfs_endpoint < 0) {
+        g_initfs_endpoint = wasmos_svc_lookup(g_proc_endpoint, g_reply_endpoint, "fs.init", 1);
+    }
+    if (g_initfs_endpoint < 0) {
+        return -1;
+    }
+    if (wasmos_ipc_send(g_initfs_endpoint, g_reply_endpoint, type, g_fs_req.request_id, arg0, arg1, arg2, arg3) != 0) {
+        return -1;
+    }
+    for (;;) {
+        if (wasmos_ipc_recv(g_reply_endpoint) < 0) {
+            return -1;
+        }
+        int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+        int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+        int32_t rr0 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+        int32_t rr1 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+        int32_t rr2 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
+        int32_t rr3 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
+        if (resp_req != g_fs_req.request_id) {
+            continue;
+        }
+        if (resp_type == FS_IPC_STREAM) {
+            (void)wasmos_ipc_send(g_fs_req.source, g_fs_endpoint, resp_type, g_fs_req.request_id, rr0, rr1, rr2, rr3);
+            continue;
+        }
+        if (out_status) {
+            *out_status = rr0;
+        }
+        return (resp_type == FS_IPC_RESP) ? 0 : -1;
+    }
 }
 
 static void
@@ -3727,12 +3785,37 @@ fat_ipc_dispatch(int32_t type,
     }
 
     if (type == FS_IPC_LIST_ROOT_REQ) {
+        if (g_fs_req.source != g_cwd_source) {
+            g_cwd_mount = VFS_MOUNT_ROOT;
+            g_cwd_root = 1;
+        }
+        if (g_cwd_mount == VFS_MOUNT_ROOT) {
+            return vfs_emit_root_listing();
+        }
+        if (g_cwd_mount == VFS_MOUNT_INIT) {
+            int32_t proxied = 0;
+            return vfs_proxy_initfs(type, arg0, arg1, arg2, arg3, &proxied);
+        }
         return fat_handle_list();
     }
     if (type == FS_IPC_CAT_ROOT_REQ) {
         if (g_op == FAT_OP_NONE) {
             fat_unpack_name((uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3,
                             g_target_name, sizeof(g_target_name));
+        }
+        if (g_cwd_mount == VFS_MOUNT_ROOT) {
+            if (fat_name_eq(g_target_name, "INIT")) {
+                int32_t proxied = 0;
+                return vfs_proxy_initfs(FS_IPC_LIST_ROOT_REQ, 0, 0, 0, 0, &proxied);
+            }
+            if (fat_name_eq(g_target_name, "BOOT")) {
+                return 0;
+            }
+            return -1;
+        }
+        if (g_cwd_mount == VFS_MOUNT_INIT) {
+            int32_t proxied = 0;
+            return vfs_proxy_initfs(type, arg0, arg1, arg2, arg3, &proxied);
         }
         return fat_handle_cat();
     }
@@ -3744,10 +3827,41 @@ fat_ipc_dispatch(int32_t type,
             fat_unpack_name((uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3,
                             g_dir_name, sizeof(g_dir_name));
             if (g_dir_name[0] == '\0' || (g_dir_name[0] == '/' && g_dir_name[1] == '\0')) {
+                g_cwd_mount = VFS_MOUNT_ROOT;
+                g_cwd_root = 1;
+                g_cwd_source = g_fs_req.source;
+                return 0;
+            }
+            if (fat_name_eq(g_dir_name, "INIT") || fat_name_eq(g_dir_name, "/INIT")) {
+                int32_t proxied = 0;
+                if (vfs_proxy_initfs(FS_IPC_CHDIR_REQ, arg0, arg1, arg2, arg3, &proxied) != 0) {
+                    return -1;
+                }
+                g_cwd_mount = VFS_MOUNT_INIT;
+                g_cwd_root = 1;
+                g_cwd_source = g_fs_req.source;
+                return 0;
+            }
+            if (fat_name_eq(g_dir_name, "..") && g_cwd_mount == VFS_MOUNT_INIT) {
+                g_cwd_mount = VFS_MOUNT_ROOT;
+                g_cwd_root = 1;
+                g_cwd_source = g_fs_req.source;
+                return 0;
+            }
+            if (fat_name_eq(g_dir_name, "BOOT") || fat_name_eq(g_dir_name, "/BOOT")) {
                 g_cwd_mount = VFS_MOUNT_BOOT;
                 g_cwd_root = 1;
                 g_cwd_source = g_fs_req.source;
                 return 0;
+            }
+            if (fat_name_eq(g_dir_name, "..") && g_cwd_mount == VFS_MOUNT_BOOT && g_cwd_root) {
+                g_cwd_mount = VFS_MOUNT_ROOT;
+                g_cwd_root = 1;
+                g_cwd_source = g_fs_req.source;
+                return 0;
+            }
+            if (g_cwd_mount != VFS_MOUNT_BOOT) {
+                return -1;
             }
         }
         return fat_handle_chdir();
@@ -3856,7 +3970,7 @@ initialize(int32_t proc_endpoint,
            int32_t ignored_arg2,
            int32_t ignored_arg3)
 {
-    (void)proc_endpoint;
+    g_proc_endpoint = proc_endpoint;
     (void)ignored_arg2;
     (void)ignored_arg3;
 
@@ -3892,7 +4006,7 @@ initialize(int32_t proc_endpoint,
     g_cwd_root = 1;
     g_cwd_source = -1;
     g_cwd_cluster = 0;
-    g_cwd_mount = VFS_MOUNT_BOOT;
+    g_cwd_mount = VFS_MOUNT_ROOT;
     g_dir_lba = 0;
     g_dir_sectors = 0;
     g_read_name[0] = '\0';

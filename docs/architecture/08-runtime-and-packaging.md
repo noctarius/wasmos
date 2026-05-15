@@ -65,6 +65,11 @@ Current packaging input:
   `PROC_IPC_MODULE_META_PATH` (returns sanitized metadata fields to user-space
   callers and keeps PM-only loader internals private)
 
+Current filesystem namespace baseline:
+- `/` is a virtual root mountpoint
+- `/boot` routes to FAT-backed filesystem operations
+- `/init` exposes initfs-oriented listing view for early module visibility
+
 ### Language ABI Strategy
 Applications no longer need to implement the raw startup ABI directly:
 - the C shim exports `wasmos_main` and calls `main(int argc, char **argv)`

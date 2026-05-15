@@ -705,11 +705,16 @@ vfs_emit_init_listing(void)
 {
     for (int32_t i = 0; i < 256; ++i) {
         char name[64];
+        int32_t name_len = 0;
         name[0] = '\0';
-        if (wasmos_boot_module_name(i, (int32_t)(uintptr_t)name, (int32_t)sizeof(name)) != 0) {
+        name_len = wasmos_boot_module_name(i, (int32_t)(uintptr_t)name, (int32_t)sizeof(name));
+        if (name_len < 0) {
             break;
         }
-        if (wasmos_sync_user_read((int32_t)(uintptr_t)name, (int32_t)sizeof(name)) != 0) {
+        if (name_len >= (int32_t)sizeof(name)) {
+            name_len = (int32_t)sizeof(name) - 1;
+        }
+        if (wasmos_sync_user_read((int32_t)(uintptr_t)name, name_len + 1) != 0) {
             continue;
         }
         console_write(name);
@@ -3818,6 +3823,15 @@ fat_ipc_dispatch(int32_t type,
                 g_cwd_source = g_fs_req.source;
                 return 0;
             }
+            if (fat_name_eq(g_dir_name, "..") && g_cwd_mount == VFS_MOUNT_INIT) {
+                g_cwd_mount = VFS_MOUNT_ROOT;
+                g_cwd_root = 1;
+                g_cwd_cluster = 0;
+                g_dir_lba = 0;
+                g_dir_sectors = 0;
+                g_cwd_source = g_fs_req.source;
+                return 0;
+            }
             if (fat_name_eq(g_dir_name, "BOOT") || fat_name_eq(g_dir_name, "/BOOT")) {
                 g_cwd_mount = VFS_MOUNT_BOOT;
                 g_cwd_root = 1;
@@ -3829,6 +3843,15 @@ fat_ipc_dispatch(int32_t type,
             }
             if (fat_name_eq(g_dir_name, "INIT") || fat_name_eq(g_dir_name, "/INIT")) {
                 g_cwd_mount = VFS_MOUNT_INIT;
+                g_cwd_root = 1;
+                g_cwd_cluster = 0;
+                g_dir_lba = 0;
+                g_dir_sectors = 0;
+                g_cwd_source = g_fs_req.source;
+                return 0;
+            }
+            if (fat_name_eq(g_dir_name, "..") && g_cwd_mount == VFS_MOUNT_BOOT && g_cwd_root) {
+                g_cwd_mount = VFS_MOUNT_ROOT;
                 g_cwd_root = 1;
                 g_cwd_cluster = 0;
                 g_dir_lba = 0;

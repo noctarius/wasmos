@@ -133,6 +133,26 @@ line_starts_with_ci(const char *s)
     return 1;
 }
 
+static int
+str_ends_with(const char *s, const char *suffix)
+{
+    int32_t slen = 0;
+    int32_t xlen = 0;
+    if (!s || !suffix) {
+        return 0;
+    }
+    while (s[slen]) {
+        slen++;
+    }
+    while (suffix[xlen]) {
+        xlen++;
+    }
+    if (slen < xlen) {
+        return 0;
+    }
+    return strcmp(s + (slen - xlen), suffix) == 0;
+}
+
 static void
 console_write(const char *s)
 {
@@ -1013,14 +1033,8 @@ cli_extract_exec_name(const char *input, char *out, uint32_t out_len)
     while (out[len]) {
         len++;
     }
-    if (len >= 10) {
-        const char *ext = out + (len - 10);
-        if (ext[0] == '.' &&
-            ext[1] == 'w' && ext[2] == 'a' && ext[3] == 's' && ext[4] == 'm' &&
-            ext[5] == 'o' && ext[6] == 's' && ext[7] == 'a' && ext[8] == 'p' &&
-            ext[9] == 'p') {
-            out[len - 10] = '\0';
-        }
+    if (str_ends_with(out, ".wap")) {
+        out[len - 4] = '\0';
     }
 }
 

@@ -160,6 +160,10 @@ Current driver match/capability policy source:
 - `device-manager` queries module metadata from process-manager at runtime and matches against PCI inventory
 - process-manager now also supports initfs metadata lookup by module path (`PROC_IPC_MODULE_META_PATH`) so driver startup can resolve metadata without relying only on boot-module indices
 - all in-tree apps, drivers, and services now provide `linker.metadata` metadata consumed by `make_wasmos_app`
+Current FS namespace model:
+- `/` is a virtual root mount
+- `/boot` maps to the initial FAT filesystem (ESP-backed via `fs-fat`)
+- `/init` is a virtual initfs namespace view (module-name listing path for now)
 5. `init` requests `sysinit` load from FAT via process manager
 6. `sysinit` starts configured services/apps from boot config
 

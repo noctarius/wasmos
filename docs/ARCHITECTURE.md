@@ -93,6 +93,9 @@ Service dependency wiring now uses PM-hosted registry IPC (`SVC_IPC_REGISTER_REQ
 and `SVC_IPC_LOOKUP_REQ`) so drivers/services create/register their own
 endpoints and discover dependencies at runtime instead of PM-injected
 per-application endpoint bindings.
+Filesystem namespace now starts from a virtual root (`/`) with explicit mount
+subtrees (`/boot` -> FAT, `/init` -> initfs view) as the baseline for
+extensible multi-mount routing.
 Device discovery now includes PCI-inventory-driven matching in `device-manager`
 with enriched `pci-bus` inventory records (class/subclass/prog-if plus minimal
 MMIO/IRQ hints). PM now accepts a capability-profile spawn request variant for

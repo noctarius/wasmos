@@ -61,6 +61,12 @@ typedef enum {
     FAT_READ_FILE
 } fat_read_stage_t;
 
+typedef enum {
+    VFS_MOUNT_ROOT = 0,
+    VFS_MOUNT_BOOT,
+    VFS_MOUNT_INIT
+} vfs_mount_t;
+
 static int32_t g_block_endpoint = -1;
 static int32_t g_fs_endpoint = -1;
 static int32_t g_reply_endpoint = -1;
@@ -87,6 +93,7 @@ static uint32_t g_dir_sectors = 0;
 static int32_t g_cwd_source = -1;
 static uint16_t g_cwd_cluster = 0;
 static uint8_t g_cwd_root = 1;
+static vfs_mount_t g_cwd_mount = VFS_MOUNT_ROOT;
 
 static fat_op_t g_op = FAT_OP_NONE;
 static fat_cat_stage_t g_cat_stage = FAT_CAT_SCAN;
@@ -160,6 +167,10 @@ typedef struct {
 } fat_dir_entry_info_t;
 
 static fat_open_file_t g_open_files[FAT_MAX_OPEN_FILES];
+
+static int vfs_translate_path(const char *in, char *out, uint32_t out_len, uint8_t *out_is_init);
+static int vfs_emit_root_listing(void);
+static int vfs_emit_init_listing(void);
 
 static void fat_lfn_reset(void);
 static void fat_lfn_finalize(void);
@@ -623,6 +634,90 @@ fat_unpack_name(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char
     out[pos] = '\0';
 }
 
+static int
+vfs_starts_with(const char *s, const char *prefix)
+{
+    uint32_t i = 0;
+    if (!s || !prefix) return 0;
+    while (prefix[i]) {
+        if (s[i] != prefix[i]) return 0;
+        i++;
+    }
+    return 1;
+}
+
+static int
+vfs_translate_path(const char *in, char *out, uint32_t out_len, uint8_t *out_is_init)
+{
+    uint32_t pos = 0;
+    if (!in || !out || out_len < 2 || !out_is_init) {
+        return -1;
+    }
+    *out_is_init = 0;
+    if (in[0] == '/') {
+        if (vfs_starts_with(in, "/boot")) {
+            pos = 5;
+            while (in[pos] == '/') pos++;
+            if (in[pos] == '\0') {
+                out[0] = '/';
+                out[1] = '\0';
+                return 0;
+            }
+            uint32_t j = 0;
+            out[j++] = '/';
+            while (in[pos] && j + 1 < out_len) {
+                out[j++] = in[pos++];
+            }
+            out[j] = '\0';
+            return in[pos] == '\0' ? 0 : -1;
+        }
+        if (vfs_starts_with(in, "/init")) {
+            *out_is_init = 1;
+            return -1;
+        }
+        return -1;
+    }
+    if (g_cwd_mount == VFS_MOUNT_BOOT) {
+        uint32_t i = 0;
+        while (in[i] && i + 1 < out_len) {
+            out[i] = in[i];
+            i++;
+        }
+        out[i] = '\0';
+        return in[i] == '\0' ? 0 : -1;
+    }
+    if (g_cwd_mount == VFS_MOUNT_INIT) {
+        *out_is_init = 1;
+    }
+    return -1;
+}
+
+static int
+vfs_emit_root_listing(void)
+{
+    console_write("init/\n");
+    console_write("boot/\n");
+    return 0;
+}
+
+static int
+vfs_emit_init_listing(void)
+{
+    for (int32_t i = 0; i < 256; ++i) {
+        char name[64];
+        name[0] = '\0';
+        if (wasmos_boot_module_name(i, (int32_t)(uintptr_t)name, (int32_t)sizeof(name)) != 0) {
+            break;
+        }
+        if (wasmos_sync_user_read((int32_t)(uintptr_t)name, (int32_t)sizeof(name)) != 0) {
+            continue;
+        }
+        console_write(name);
+        console_write("\n");
+    }
+    return 0;
+}
+
 static void
 fat_write_name(const char *name, uint32_t len)
 {
@@ -953,10 +1048,12 @@ static int
 fat_handle_open(void)
 {
     char path[FAT_MAX_PATH];
+    char fat_path[FAT_MAX_PATH];
     fat_dir_entry_info_t entry = { 0 };
     int32_t fd = -1;
     uint32_t path_len = (uint32_t)g_fs_req.arg0;
     int32_t access_mode = g_fs_req.arg1 & 1;
+    uint8_t path_is_init = 0;
 
     if ((g_fs_req.arg1 & ~((int32_t)FAT_OPEN_APPEND | (int32_t)FAT_OPEN_CREAT | (int32_t)FAT_OPEN_TRUNC | 1)) != 0 ||
         path_len == 0 || path_len >= sizeof(path)) {
@@ -973,9 +1070,12 @@ fat_handle_open(void)
         return -1;
     }
     path[path_len] = '\0';
+    if (vfs_translate_path(path, fat_path, sizeof(fat_path), &path_is_init) != 0 || path_is_init) {
+        return -1;
+    }
 
-    if (fat_resolve_path(path, &entry) != 0 || !entry.valid) {
-        if ((g_fs_req.arg1 & FAT_OPEN_CREAT) == 0 || fat_create_empty_file(path, &entry) != 0) {
+    if (fat_resolve_path(fat_path, &entry) != 0 || !entry.valid) {
+        if ((g_fs_req.arg1 & FAT_OPEN_CREAT) == 0 || fat_create_empty_file(fat_path, &entry) != 0) {
             return -1;
         }
     }
@@ -2078,8 +2178,10 @@ static int
 fat_handle_stat(void)
 {
     char path[FAT_MAX_PATH];
+    char fat_path[FAT_MAX_PATH];
     fat_dir_entry_info_t entry = { 0 };
     uint32_t path_len = (uint32_t)g_fs_req.arg0;
+    uint8_t path_is_init = 0;
 
     if (g_fs_req.arg1 != 0 || path_len == 0 || path_len >= sizeof(path)) {
         return -1;
@@ -2091,8 +2193,11 @@ fat_handle_stat(void)
         return -1;
     }
     path[path_len] = '\0';
+    if (vfs_translate_path(path, fat_path, sizeof(fat_path), &path_is_init) != 0 || path_is_init) {
+        return -1;
+    }
 
-    if (fat_resolve_path(path, &entry) != 0 || !entry.valid) {
+    if (fat_resolve_path(fat_path, &entry) != 0 || !entry.valid) {
         return -1;
     }
 
@@ -2107,6 +2212,8 @@ fat_handle_unlink(void)
 {
     char path[FAT_MAX_PATH];
     uint32_t path_len = (uint32_t)g_fs_req.arg0;
+    char fat_path[FAT_MAX_PATH];
+    uint8_t path_is_init = 0;
 
     if (g_fs_req.arg1 != 0 || path_len == 0 || path_len >= sizeof(path)) {
         return -1;
@@ -2118,8 +2225,11 @@ fat_handle_unlink(void)
         return -1;
     }
     path[path_len] = '\0';
+    if (vfs_translate_path(path, fat_path, sizeof(fat_path), &path_is_init) != 0 || path_is_init) {
+        return -1;
+    }
 
-    if (fat_unlink_path(path) != 0) {
+    if (fat_unlink_path(fat_path) != 0) {
         return -1;
     }
 
@@ -2133,6 +2243,8 @@ fat_handle_mkdir(void)
 {
     char path[FAT_MAX_PATH];
     uint32_t path_len = (uint32_t)g_fs_req.arg0;
+    char fat_path[FAT_MAX_PATH];
+    uint8_t path_is_init = 0;
 
     if (g_fs_req.arg1 != 0 || path_len == 0 || path_len >= sizeof(path)) {
         return -1;
@@ -2144,8 +2256,11 @@ fat_handle_mkdir(void)
         return -1;
     }
     path[path_len] = '\0';
+    if (vfs_translate_path(path, fat_path, sizeof(fat_path), &path_is_init) != 0 || path_is_init) {
+        return -1;
+    }
 
-    if (fat_create_directory(path) != 0) {
+    if (fat_create_directory(fat_path) != 0) {
         return -1;
     }
 
@@ -2159,6 +2274,8 @@ fat_handle_rmdir(void)
 {
     char path[FAT_MAX_PATH];
     uint32_t path_len = (uint32_t)g_fs_req.arg0;
+    char fat_path[FAT_MAX_PATH];
+    uint8_t path_is_init = 0;
 
     if (g_fs_req.arg1 != 0 || path_len == 0 || path_len >= sizeof(path)) {
         return -1;
@@ -2170,8 +2287,11 @@ fat_handle_rmdir(void)
         return -1;
     }
     path[path_len] = '\0';
+    if (vfs_translate_path(path, fat_path, sizeof(fat_path), &path_is_init) != 0 || path_is_init) {
+        return -1;
+    }
 
-    if (fat_rmdir_path(path) != 0) {
+    if (fat_rmdir_path(fat_path) != 0) {
         return -1;
     }
 
@@ -3185,6 +3305,7 @@ fat_handle_chdir(void)
             return -1;
         }
         if (next == 0) {
+            g_cwd_mount = VFS_MOUNT_BOOT;
             g_cwd_root = g_chdir_root;
             g_cwd_cluster = g_chdir_cluster;
             if (g_cwd_root) {
@@ -3279,6 +3400,7 @@ fat_handle_chdir(void)
             return -1;
         }
         if (next == 0) {
+            g_cwd_mount = VFS_MOUNT_BOOT;
             g_cwd_cluster = g_chdir_cluster;
             g_dir_lba = fat_lba_for_cluster(cluster);
             g_dir_sectors = g_sectors_per_cluster;
@@ -3648,7 +3770,14 @@ fat_ipc_dispatch(int32_t type,
 
     if (type == FS_IPC_LIST_ROOT_REQ) {
         if (g_fs_req.source != g_cwd_source) {
+            g_cwd_mount = VFS_MOUNT_ROOT;
             g_cwd_root = 1;
+        }
+        if (g_cwd_mount == VFS_MOUNT_ROOT) {
+            return vfs_emit_root_listing();
+        }
+        if (g_cwd_mount == VFS_MOUNT_INIT) {
+            return vfs_emit_init_listing();
         }
         return fat_handle_list();
     }
@@ -3658,7 +3787,21 @@ fat_ipc_dispatch(int32_t type,
                             g_target_name, sizeof(g_target_name));
         }
         if (g_fs_req.source != g_cwd_source) {
+            g_cwd_mount = VFS_MOUNT_ROOT;
             g_cwd_root = 1;
+        }
+        if (g_cwd_mount == VFS_MOUNT_ROOT) {
+            if (fat_name_eq(g_target_name, "INIT")) {
+                return vfs_emit_init_listing();
+            }
+            if (fat_name_eq(g_target_name, "BOOT")) {
+                console_write("mount: /boot (fat)\n");
+                return 0;
+            }
+            return -1;
+        }
+        if (g_cwd_mount == VFS_MOUNT_INIT) {
+            return vfs_emit_init_listing();
         }
         return fat_handle_cat();
     }
@@ -3670,9 +3813,31 @@ fat_ipc_dispatch(int32_t type,
             fat_unpack_name((uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3,
                             g_dir_name, sizeof(g_dir_name));
             if (g_dir_name[0] == '\0' || (g_dir_name[0] == '/' && g_dir_name[1] == '\0')) {
+                g_cwd_mount = VFS_MOUNT_ROOT;
                 g_cwd_root = 1;
                 g_cwd_source = g_fs_req.source;
                 return 0;
+            }
+            if (fat_name_eq(g_dir_name, "BOOT") || fat_name_eq(g_dir_name, "/BOOT")) {
+                g_cwd_mount = VFS_MOUNT_BOOT;
+                g_cwd_root = 1;
+                g_cwd_cluster = 0;
+                g_dir_lba = 0;
+                g_dir_sectors = 0;
+                g_cwd_source = g_fs_req.source;
+                return 0;
+            }
+            if (fat_name_eq(g_dir_name, "INIT") || fat_name_eq(g_dir_name, "/INIT")) {
+                g_cwd_mount = VFS_MOUNT_INIT;
+                g_cwd_root = 1;
+                g_cwd_cluster = 0;
+                g_dir_lba = 0;
+                g_dir_sectors = 0;
+                g_cwd_source = g_fs_req.source;
+                return 0;
+            }
+            if (g_cwd_mount != VFS_MOUNT_BOOT) {
+                return -1;
             }
         }
         return fat_handle_chdir();
@@ -3817,6 +3982,7 @@ initialize(int32_t proc_endpoint,
     g_cwd_root = 1;
     g_cwd_source = -1;
     g_cwd_cluster = 0;
+    g_cwd_mount = VFS_MOUNT_ROOT;
     g_dir_lba = 0;
     g_dir_sectors = 0;
     g_read_name[0] = '\0';

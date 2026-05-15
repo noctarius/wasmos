@@ -9,6 +9,7 @@ bootstrap_modules = [
   "pci-bus",
   "ata",
   "fs-fat",
+  "fs-manager",
   "device-manager",
 ]
 
@@ -70,6 +71,12 @@ kind = "wasmos_app"
 flags = ["bootstrap"]
 path = "system/drivers/fs_fat.wap"
 source = "fs_fat.wap"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/services/fs_manager.wap"
+source = "fs_manager.wap"
 
 [[entries]]
 kind = "wasmos_app"

@@ -108,6 +108,7 @@ static uint8_t g_pm_spawn_owner_deny_logged;
 
 static uint32_t pm_alloc_cli_tty(void);
 static int pm_service_set(const char *name, uint32_t endpoint, uint32_t owner_context_id);
+static uint32_t pm_driver_cap_flags_from_desc(const wasmos_app_desc_t *desc);
 
 static pm_fs_buffer_slot_t *
 pm_fs_slot_for_context(uint32_t context_id)
@@ -1077,22 +1078,7 @@ pm_handle_module_meta(uint32_t pm_context_id, const ipc_message_t *msg)
         return -1;
     }
     match = &desc.driver_matches[match_index];
-    for (uint32_t i = 0; i < desc.cap_count; ++i) {
-        if (desc.caps[i].name_len == 7 &&
-            desc.caps[i].name[0] == 'i' && desc.caps[i].name[1] == 'o' &&
-            desc.caps[i].name[2] == '.' && desc.caps[i].name[3] == 'p' &&
-            desc.caps[i].name[4] == 'o' && desc.caps[i].name[5] == 'r' &&
-            desc.caps[i].name[6] == 't') {
-            cap_flags |= DEVMGR_CAP_IO_PORT;
-        } else if (desc.caps[i].name_len == 9 &&
-                   desc.caps[i].name[0] == 'i' && desc.caps[i].name[1] == 'r' &&
-                   desc.caps[i].name[2] == 'q' && desc.caps[i].name[3] == '.' &&
-                   desc.caps[i].name[4] == 'r' && desc.caps[i].name[5] == 'o' &&
-                   desc.caps[i].name[6] == 'u' && desc.caps[i].name[7] == 't' &&
-                   desc.caps[i].name[8] == 'e') {
-            cap_flags |= DEVMGR_CAP_IRQ;
-        }
-    }
+    cap_flags = pm_driver_cap_flags_from_desc(&desc);
 
     packed_match = ((uint32_t)match->class_code << 24) |
                    ((uint32_t)match->subclass << 16) |
@@ -1125,18 +1111,9 @@ pm_driver_cap_flags_from_desc(const wasmos_app_desc_t *desc)
         return 0;
     }
     for (uint32_t i = 0; i < desc->cap_count; ++i) {
-        if (desc->caps[i].name_len == 7 &&
-            desc->caps[i].name[0] == 'i' && desc->caps[i].name[1] == 'o' &&
-            desc->caps[i].name[2] == '.' && desc->caps[i].name[3] == 'p' &&
-            desc->caps[i].name[4] == 'o' && desc->caps[i].name[5] == 'r' &&
-            desc->caps[i].name[6] == 't') {
+        if (bytes_eq_lit(desc->caps[i].name, desc->caps[i].name_len, "io.port")) {
             cap_flags |= DEVMGR_CAP_IO_PORT;
-        } else if (desc->caps[i].name_len == 9 &&
-                   desc->caps[i].name[0] == 'i' && desc->caps[i].name[1] == 'r' &&
-                   desc->caps[i].name[2] == 'q' && desc->caps[i].name[3] == '.' &&
-                   desc->caps[i].name[4] == 'r' && desc->caps[i].name[5] == 'o' &&
-                   desc->caps[i].name[6] == 'u' && desc->caps[i].name[7] == 't' &&
-                   desc->caps[i].name[8] == 'e') {
+        } else if (bytes_eq_lit(desc->caps[i].name, desc->caps[i].name_len, "irq.route")) {
             cap_flags |= DEVMGR_CAP_IRQ;
         }
     }

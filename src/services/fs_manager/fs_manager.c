@@ -117,10 +117,19 @@ static int lookup_backends(void) {
 
 static int send_virtual_root_listing(int32_t source, int32_t req_id) {
     const char *root_listing = "init/\nboot/\n";
-    if (wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_STREAM, req_id,
-                        (int32_t)(uintptr_t)root_listing,
-                        (int32_t)strlen(root_listing), 0, 0) != 0) {
-        return -1;
+    uint32_t pos = 0;
+    uint32_t len = (uint32_t)strlen(root_listing);
+    while (pos < len) {
+        int32_t a0 = (int32_t)(uint8_t)root_listing[pos++];
+        int32_t a1 = 0;
+        int32_t a2 = 0;
+        int32_t a3 = 0;
+        if (pos < len) a1 = (int32_t)(uint8_t)root_listing[pos++];
+        if (pos < len) a2 = (int32_t)(uint8_t)root_listing[pos++];
+        if (pos < len) a3 = (int32_t)(uint8_t)root_listing[pos++];
+        if (wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_STREAM, req_id, a0, a1, a2, a3) != 0) {
+            return -1;
+        }
     }
     return wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, req_id, 0, 0, 0, 0);
 }

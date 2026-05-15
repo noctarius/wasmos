@@ -34,18 +34,11 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_HELLO_C_APP}
   COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_HELLO_C_WASM}
-          ${WASM_HELLO_C_APP}
-          hello-c
-          wasmos_main
-          16
-          16
-          4
-          -
-          0
-          ipc.basic
-          0
+          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/hello-c.linker.manifest
+          --in ${WASM_HELLO_C_WASM}
+          --out ${WASM_HELLO_C_APP}
   DEPENDS ${WASM_HELLO_C_WASM} make_wasmos_app
+          ${CMAKE_CURRENT_SOURCE_DIR}/hello-c.linker.manifest
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm hello-c as WASMOS-APP"
   VERBATIM
@@ -89,22 +82,11 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_CHARDEV_CLIENT_APP}
   COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_CHARDEV_CLIENT_WASM}
-          ${WASM_CHARDEV_CLIENT_APP}
-          chardev-client
-          wasmos_main
-          16
-          16
-          4
-          chardev
-          1
-          1
-          ipc.basic
-          0
-          --entry-arg-bindings
-          1
-          chardev.endpoint
+          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/chardev-client.linker.manifest
+          --in ${WASM_CHARDEV_CLIENT_WASM}
+          --out ${WASM_CHARDEV_CLIENT_APP}
   DEPENDS ${WASM_CHARDEV_CLIENT_WASM} make_wasmos_app
+          ${CMAKE_CURRENT_SOURCE_DIR}/chardev-client.linker.manifest
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm chardev client as WASMOS-APP"
   VERBATIM
@@ -137,22 +119,11 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_CHARDEV_PREEMPT_APP}
   COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_CHARDEV_PREEMPT_WASM}
-          ${WASM_CHARDEV_PREEMPT_APP}
-          chardev-preempt
-          wasmos_main
-          16
-          16
-          4
-          chardev
-          1
-          1
-          ipc.basic
-          0
-          --entry-arg-bindings
-          1
-          chardev.endpoint
+          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/chardev-preempt.linker.manifest
+          --in ${WASM_CHARDEV_PREEMPT_WASM}
+          --out ${WASM_CHARDEV_PREEMPT_APP}
   DEPENDS ${WASM_CHARDEV_PREEMPT_WASM} make_wasmos_app
+          ${CMAKE_CURRENT_SOURCE_DIR}/chardev-preempt.linker.manifest
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm chardev preempt as WASMOS-APP"
   VERBATIM
@@ -185,18 +156,11 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_INIT_SMOKE_APP}
   COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_INIT_SMOKE_WASM}
-          ${WASM_INIT_SMOKE_APP}
-          init-smoke
-          wasmos_main
-          16
-          16
-          4
-          -
-          0
-          -
-          0
+          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/init-smoke.linker.manifest
+          --in ${WASM_INIT_SMOKE_WASM}
+          --out ${WASM_INIT_SMOKE_APP}
   DEPENDS ${WASM_INIT_SMOKE_WASM} make_wasmos_app
+          ${CMAKE_CURRENT_SOURCE_DIR}/init-smoke.linker.manifest
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm init smoke as WASMOS-APP"
   VERBATIM
@@ -229,18 +193,11 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_NATIVE_CALL_SMOKE_APP}
   COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_NATIVE_CALL_SMOKE_WASM}
-          ${WASM_NATIVE_CALL_SMOKE_APP}
-          native-call-smoke
-          wasmos_main
-          16
-          16
-          4
-          -
-          0
-          -
-          0
+          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/native-call-smoke.linker.manifest
+          --in ${WASM_NATIVE_CALL_SMOKE_WASM}
+          --out ${WASM_NATIVE_CALL_SMOKE_APP}
   DEPENDS ${WASM_NATIVE_CALL_SMOKE_WASM} make_wasmos_app
+          ${CMAKE_CURRENT_SOURCE_DIR}/native-call-smoke.linker.manifest
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm native call smoke as WASMOS-APP"
   VERBATIM
@@ -274,18 +231,11 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_FS_OPEN_SMOKE_APP}
   COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_FS_OPEN_SMOKE_WASM}
-          ${WASM_FS_OPEN_SMOKE_APP}
-          fs-open-smoke
-          wasmos_main
-          16
-          16
-          4
-          -
-          0
-          ipc.basic
-          0
+          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/fs-open-smoke.linker.manifest
+          --in ${WASM_FS_OPEN_SMOKE_WASM}
+          --out ${WASM_FS_OPEN_SMOKE_APP}
   DEPENDS ${WASM_FS_OPEN_SMOKE_WASM} make_wasmos_app
+          ${CMAKE_CURRENT_SOURCE_DIR}/fs-open-smoke.linker.manifest
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm fs open smoke as WASMOS-APP"
   VERBATIM
@@ -319,18 +269,11 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_FS_WRITE_SMOKE_APP}
   COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_FS_WRITE_SMOKE_WASM}
-          ${WASM_FS_WRITE_SMOKE_APP}
-          fs-write-smoke
-          wasmos_main
-          16
-          16
-          4
-          -
-          0
-          ipc.basic
-          0
+          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/fs-write-smoke.linker.manifest
+          --in ${WASM_FS_WRITE_SMOKE_WASM}
+          --out ${WASM_FS_WRITE_SMOKE_APP}
   DEPENDS ${WASM_FS_WRITE_SMOKE_WASM} make_wasmos_app
+          ${CMAKE_CURRENT_SOURCE_DIR}/fs-write-smoke.linker.manifest
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm fs write smoke as WASMOS-APP"
   VERBATIM
@@ -363,18 +306,11 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_NATIVE_CALL_MIN_APP}
   COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_NATIVE_CALL_MIN_WASM}
-          ${WASM_NATIVE_CALL_MIN_APP}
-          native-call-min
-          wasmos_main
-          16
-          16
-          4
-          -
-          0
-          -
-          0
+          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/native-call-min.linker.manifest
+          --in ${WASM_NATIVE_CALL_MIN_WASM}
+          --out ${WASM_NATIVE_CALL_MIN_APP}
   DEPENDS ${WASM_NATIVE_CALL_MIN_WASM} make_wasmos_app
+          ${CMAKE_CURRENT_SOURCE_DIR}/native-call-min.linker.manifest
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm native call min as WASMOS-APP"
   VERBATIM
@@ -407,18 +343,11 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_IRQ_ROUTE_DENY_APP}
   COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_IRQ_ROUTE_DENY_WASM}
-          ${WASM_IRQ_ROUTE_DENY_APP}
-          irq-route-deny
-          wasmos_main
-          16
-          16
-          4
-          -
-          0
-          -
-          0
+          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/irq-route-deny.linker.manifest
+          --in ${WASM_IRQ_ROUTE_DENY_WASM}
+          --out ${WASM_IRQ_ROUTE_DENY_APP}
   DEPENDS ${WASM_IRQ_ROUTE_DENY_WASM} make_wasmos_app
+          ${CMAKE_CURRENT_SOURCE_DIR}/irq-route-deny.linker.manifest
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm irq-route-deny as WASMOS-APP"
   VERBATIM
@@ -451,18 +380,11 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_IRQ_ROUTE_ALLOW_APP}
   COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_IRQ_ROUTE_ALLOW_WASM}
-          ${WASM_IRQ_ROUTE_ALLOW_APP}
-          irq-route-allow
-          wasmos_main
-          16
-          16
-          4
-          -
-          0
-          irq.route
-          0
+          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/irq-route-allow.linker.manifest
+          --in ${WASM_IRQ_ROUTE_ALLOW_WASM}
+          --out ${WASM_IRQ_ROUTE_ALLOW_APP}
   DEPENDS ${WASM_IRQ_ROUTE_ALLOW_WASM} make_wasmos_app
+          ${CMAKE_CURRENT_SOURCE_DIR}/irq-route-allow.linker.manifest
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm irq-route-allow as WASMOS-APP"
   VERBATIM
@@ -496,19 +418,11 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_SHMEM_OWNER_APP}
   COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_SHMEM_OWNER_WASM}
-          ${WASM_SHMEM_OWNER_APP}
-          shmownr
-          wasmos_main
-          16
-          16
-          4
-          -
-          0
-          1
-          dma.buffer
-          0
+          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/shmownr.linker.manifest
+          --in ${WASM_SHMEM_OWNER_WASM}
+          --out ${WASM_SHMEM_OWNER_APP}
   DEPENDS ${WASM_SHMEM_OWNER_WASM} make_wasmos_app
+          ${CMAKE_CURRENT_SOURCE_DIR}/shmownr.linker.manifest
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm shmownr as WASMOS-APP"
   VERBATIM
@@ -542,19 +456,11 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_SHMEM_TARGET_APP}
   COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_SHMEM_TARGET_WASM}
-          ${WASM_SHMEM_TARGET_APP}
-          shmtgt
-          wasmos_main
-          16
-          16
-          4
-          -
-          0
-          1
-          dma.buffer
-          0
+          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/shmtgt.linker.manifest
+          --in ${WASM_SHMEM_TARGET_WASM}
+          --out ${WASM_SHMEM_TARGET_APP}
   DEPENDS ${WASM_SHMEM_TARGET_WASM} make_wasmos_app
+          ${CMAKE_CURRENT_SOURCE_DIR}/shmtgt.linker.manifest
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm shmtgt as WASMOS-APP"
   VERBATIM

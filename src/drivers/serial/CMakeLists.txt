@@ -28,18 +28,11 @@ if (AS_ENABLE)
   add_custom_command(
     OUTPUT ${WASM_SERIAL_APP}
     COMMAND ${WASMOS_APP_PACKER}
-            ${WASM_SERIAL_DRIVER_WASM}
-            ${WASM_SERIAL_APP}
-            serial
-            initialize
-            16
-            16
-            1
-            -
-            0
-            io.port
-            0
+            --manifest ${DRIVER_WASM_DIR}/serial/linker.manifest
+            --in ${WASM_SERIAL_DRIVER_WASM}
+            --out ${WASM_SERIAL_APP}
     DEPENDS ${WASM_SERIAL_DRIVER_WASM} make_wasmos_app
+            ${DRIVER_WASM_DIR}/serial/linker.manifest
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Packing serial driver as WASMOS-APP"
     VERBATIM

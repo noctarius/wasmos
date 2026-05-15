@@ -49,18 +49,11 @@ if (ZIG_AVAILABLE)
   add_custom_command(
     OUTPUT ${WASM_HELLO_ZIG_APP}
     COMMAND ${WASMOS_APP_PACKER}
-            ${WASM_HELLO_ZIG_WASM}
-            ${WASM_HELLO_ZIG_APP}
-            hello-zig
-            wasmos_main
-            2
-            2
-            4
-            -
-            0
-            ipc.basic
-            0
+            --manifest ${CMAKE_CURRENT_SOURCE_DIR}/linker.manifest
+            --in ${WASM_HELLO_ZIG_WASM}
+            --out ${WASM_HELLO_ZIG_APP}
     DEPENDS ${WASM_HELLO_ZIG_WASM} make_wasmos_app
+            ${CMAKE_CURRENT_SOURCE_DIR}/linker.manifest
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Packing Zig hello as WASMOS-APP"
     VERBATIM

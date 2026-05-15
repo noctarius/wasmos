@@ -34,23 +34,11 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_DEVICE_MANAGER_APP}
   COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_DEVICE_MANAGER_WASM}
-          ${WASM_DEVICE_MANAGER_APP}
-          device-manager
-          initialize
-          64
-          64
-          2
-          proc
-          1
-          1
-          ipc.basic
-          0
-          --entry-arg-bindings
-          2
-          proc.endpoint
-          module.count
+          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/linker.manifest
+          --in ${WASM_DEVICE_MANAGER_WASM}
+          --out ${WASM_DEVICE_MANAGER_APP}
   DEPENDS ${WASM_DEVICE_MANAGER_WASM} make_wasmos_app
+          ${CMAKE_CURRENT_SOURCE_DIR}/linker.manifest
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm device-manager as WASMOS-APP"
   VERBATIM

@@ -30,18 +30,11 @@ if (RUST_ENABLE)
   add_custom_command(
     OUTPUT ${WASM_HELLO_RUST_APP}
     COMMAND ${WASMOS_APP_PACKER}
-            ${WASM_HELLO_RUST_WASM}
-            ${WASM_HELLO_RUST_APP}
-            hello-rust
-            wasmos_main
-            16
-            16
-            4
-            -
-            0
-            ipc.basic
-            0
+            --manifest ${CMAKE_CURRENT_SOURCE_DIR}/linker.manifest
+            --in ${WASM_HELLO_RUST_WASM}
+            --out ${WASM_HELLO_RUST_APP}
     DEPENDS ${WASM_HELLO_RUST_WASM} make_wasmos_app
+            ${CMAKE_CURRENT_SOURCE_DIR}/linker.manifest
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Packing wasm hello-rust as WASMOS-APP"
     VERBATIM

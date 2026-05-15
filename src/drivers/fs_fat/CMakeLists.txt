@@ -34,23 +34,11 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_FAT_APP}
   COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_FAT_DRIVER_WASM}
-          ${WASM_FAT_APP}
-          fs-fat
-          initialize
-          16
-          16
-          2
-          block
-          1
-          1
-          ipc.basic
-          0
-          --entry-arg-bindings
-          2
-          proc.endpoint
-          block.endpoint
+          --manifest ${DRIVER_WASM_DIR}/fs_fat/linker.manifest
+          --in ${WASM_FAT_DRIVER_WASM}
+          --out ${WASM_FAT_APP}
   DEPENDS ${WASM_FAT_DRIVER_WASM} make_wasmos_app
+          ${DRIVER_WASM_DIR}/fs_fat/linker.manifest
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm FAT as WASMOS-APP"
   VERBATIM

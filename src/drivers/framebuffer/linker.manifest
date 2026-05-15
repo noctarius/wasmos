@@ -1,0 +1,16 @@
+version = 1
+
+[package]
+name = "framebuffer"
+entry = "initialize"
+kind = "driver"
+native = true
+
+[resources]
+stack_pages = 0
+heap_pages = 0
+
+[ipc]
+required_endpoint_name = "-"
+required_endpoint_rights = 0
+entry_arg_bindings = []

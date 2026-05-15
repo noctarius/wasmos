@@ -67,6 +67,12 @@ add_custom_command(
   VERBATIM
 )
 
-add_custom_target(framebuffer_app DEPENDS ${WASM_FRAMEBUFFER_APP})
+add_custom_target(framebuffer_app
+  DEPENDS ${WASM_FRAMEBUFFER_APP}
+  SOURCES
+    ${NATIVE_FRAMEBUFFER_DRIVER_SRC}
+    ${NATIVE_FRAMEBUFFER_RENDER_SRC}
+    ${DRIVER_WASM_DIR}/framebuffer/linker.metadata
+)
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_FRAMEBUFFER_APP})
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS framebuffer_app)

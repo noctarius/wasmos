@@ -44,7 +44,10 @@ add_custom_command(
   VERBATIM
 )
 
-add_custom_target(sysinit_app DEPENDS ${WASM_INIT_APP})
+add_custom_target(sysinit_app
+  DEPENDS ${WASM_INIT_APP}
+  SOURCES ${WASM_INIT_APP_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
+)
 
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_INIT_APP})
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS sysinit_app)

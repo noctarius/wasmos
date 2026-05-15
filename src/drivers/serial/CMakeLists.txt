@@ -38,7 +38,10 @@ if (AS_ENABLE)
     VERBATIM
   )
 
-  add_custom_target(serial_app DEPENDS ${WASM_SERIAL_APP})
+  add_custom_target(serial_app
+    DEPENDS ${WASM_SERIAL_APP}
+    SOURCES ${WASM_SERIAL_DRIVER_SRC} ${DRIVER_WASM_DIR}/serial/linker.metadata
+  )
   set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_SERIAL_APP})
   set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS serial_app)
 endif ()

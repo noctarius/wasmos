@@ -44,7 +44,10 @@ add_custom_command(
   VERBATIM
 )
 
-add_custom_target(ata_app DEPENDS ${WASM_ATA_APP})
+add_custom_target(ata_app
+  DEPENDS ${WASM_ATA_APP}
+  SOURCES ${WASM_ATA_DRIVER_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
+)
 
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_ATA_APP})
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS ata_app)

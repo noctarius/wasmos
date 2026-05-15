@@ -44,7 +44,10 @@ add_custom_command(
   VERBATIM
 )
 
-add_custom_target(vt_app DEPENDS ${WASM_VT_APP})
+add_custom_target(vt_app
+  DEPENDS ${WASM_VT_APP}
+  SOURCES ${WASM_VT_APP_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
+)
 
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_VT_APP})
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS vt_app)

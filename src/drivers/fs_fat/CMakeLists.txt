@@ -44,7 +44,10 @@ add_custom_command(
   VERBATIM
 )
 
-add_custom_target(fs_fat_app DEPENDS ${WASM_FAT_APP})
+add_custom_target(fs_fat_app
+  DEPENDS ${WASM_FAT_APP}
+  SOURCES ${WASM_FAT_DRIVER_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
+)
 
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_FAT_APP})
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS fs_fat_app)

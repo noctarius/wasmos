@@ -95,6 +95,7 @@ typedef struct {
     uint32_t registry_count;
     int32_t selected_storage_index;
     spawn_caps_t selected_storage_caps;
+    spawn_caps_t selected_serial_caps;
 } device_manager_state_t;
 
 static device_manager_state_t g_dm = {
@@ -446,6 +447,50 @@ match_any_or_u16(uint16_t actual, uint16_t expected)
     return (expected == MATCH_ANY_U16 || actual == expected) ? 1 : 0;
 }
 
+static int
+select_pci_matched_driver(int32_t module_index, spawn_caps_t *out_caps)
+{
+    uint8_t class_code = 0, subclass = 0, prog_if = 0, storage_bootstrap = 0, match_count = 0;
+    uint16_t vendor_id = 0, device_id = 0;
+    spawn_caps_t caps;
+    if (module_index < 0 || !out_caps) {
+        return -1;
+    }
+    if (query_driver_module_meta(module_index, 0,
+                                 &class_code, &subclass, &prog_if,
+                                 &vendor_id, &device_id,
+                                 &storage_bootstrap, &match_count, &caps) != 0 ||
+        match_count == 0) {
+        return -1;
+    }
+    for (uint32_t m = 0; m < match_count; ++m) {
+        if (m != 0) {
+            if (query_driver_module_meta(module_index, m,
+                                         &class_code, &subclass, &prog_if,
+                                         &vendor_id, &device_id,
+                                         &storage_bootstrap, &match_count, &caps) != 0) {
+                continue;
+            }
+        }
+        for (uint32_t i = 0; i < g_dm.registry_count; ++i) {
+            const pci_device_record_t *rec = &g_dm.registry[i];
+            if (!match_any_or_u8(rec->class_code, class_code) ||
+                !match_any_or_u8(rec->subclass, subclass) ||
+                !match_any_or_u8(rec->prog_if, prog_if) ||
+                !match_any_or_u16(rec->vendor_id, vendor_id) ||
+                !match_any_or_u16(rec->device_id, device_id)) {
+                continue;
+            }
+            *out_caps = caps;
+            if ((out_caps->cap_flags & DEVMGR_CAP_IRQ) != 0 && rec->irq_hint < 16u) {
+                out_caps->irq_mask = (uint16_t)(1u << rec->irq_hint);
+            }
+            return 0;
+        }
+    }
+    return -1;
+}
+
 static void
 apply_pci_matches(void)
 {
@@ -608,7 +653,9 @@ initialize(int32_t proc_endpoint,
     g_dm.need_pci_bus = (g_dm.pci_bus_index >= 0 && !proc_running("pci-bus")) ? 1 : 0;
     g_dm.need_storage = 0;
     g_dm.need_fat = 0;
-    g_dm.need_serial = !proc_running("serial") ? 1 : 0;
+    /* Serial is resolved from PCI inventory matches when pci-bus is started
+     * by this service; if pci-bus is already running, keep legacy fallback. */
+    g_dm.need_serial = g_dm.need_pci_bus ? 0 : (!proc_running("serial") ? 1 : 0);
     g_dm.need_keyboard = !proc_running("keyboard") ? 1 : 0;
     g_dm.need_framebuffer = !proc_running("framebuffer") ? 1 : 0;
     g_dm.phase = HW_PHASE_SPAWN;
@@ -632,11 +679,7 @@ initialize(int32_t proc_endpoint,
                     stall_forever();
                 }
             } else if (target == HW_SPAWN_SERIAL) {
-                /* FIXME: Remove PROC_IPC_SPAWN_NAME fallback once PM supports
-                 * FS-backed metadata-path lookup (serial/keyboard/framebuffer
-                 * are not guaranteed in early boot-module index set). */
-                if ((g_dm.serial_index >= 0 && hw_spawn_driver_index(g_dm.serial_index) != 0) ||
-                    (g_dm.serial_index < 0 && hw_spawn_driver_name(target) != 0)) {
+                if (hw_spawn_driver_index_caps(g_dm.serial_index, &g_dm.selected_serial_caps) != 0) {
                     g_dm.phase = HW_PHASE_FAILED;
                     console_write("[device-manager] spawn serial failed\n");
                     stall_forever();
@@ -754,6 +797,13 @@ initialize(int32_t proc_endpoint,
             consume_pci_inventory();
             g_dm.need_storage = (g_dm.selected_storage_index >= 0) ? 1 : 0;
             g_dm.need_fat = (g_dm.fat_index >= 0 && g_dm.need_storage && !proc_running("fs-fat")) ? 1 : 0;
+            if (g_dm.serial_index >= 0 &&
+                !proc_running("serial") &&
+                select_pci_matched_driver(g_dm.serial_index, &g_dm.selected_serial_caps) == 0) {
+                g_dm.need_serial = 1;
+            } else {
+                g_dm.need_serial = 0;
+            }
             if (!g_dm.need_storage && select_fallback_storage_driver() == 0) {
                 console_write("[device-manager] fallback: boot storage driver despite no PCI match\n");
                 g_dm.need_storage = 1;

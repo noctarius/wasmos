@@ -233,6 +233,11 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
                 (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
                 continue;
             }
+            if (str_ieq(path, "..") && state->mount == FS_MOUNT_INIT) {
+                state->mount = FS_MOUNT_ROOT;
+                (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
+                continue;
+            }
             if (str_ieq(path, "..") && state->mount == FS_MOUNT_ROOT) {
                 (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
                 continue;

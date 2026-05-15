@@ -44,7 +44,10 @@ add_custom_command(
   VERBATIM
 )
 
-add_custom_target(pci_bus_app DEPENDS ${WASM_PCI_BUS_APP})
+add_custom_target(pci_bus_app
+  DEPENDS ${WASM_PCI_BUS_APP}
+  SOURCES ${WASM_PCI_BUS_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
+)
 
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_PCI_BUS_APP})
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS pci_bus_app)

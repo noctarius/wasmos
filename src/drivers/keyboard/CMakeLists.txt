@@ -37,7 +37,10 @@ if (AS_ENABLE)
     VERBATIM
   )
 
-  add_custom_target(keyboard_app DEPENDS ${WASM_KEYBOARD_APP})
+  add_custom_target(keyboard_app
+    DEPENDS ${WASM_KEYBOARD_APP}
+    SOURCES ${WASM_KEYBOARD_DRIVER_SRC} ${DRIVER_WASM_DIR}/keyboard/linker.metadata
+  )
   set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_KEYBOARD_APP})
   set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS keyboard_app)
 endif ()

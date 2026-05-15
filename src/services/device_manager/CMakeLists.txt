@@ -44,7 +44,10 @@ add_custom_command(
   VERBATIM
 )
 
-add_custom_target(device_manager_app DEPENDS ${WASM_DEVICE_MANAGER_APP})
+add_custom_target(device_manager_app
+  DEPENDS ${WASM_DEVICE_MANAGER_APP}
+  SOURCES ${WASM_DEVICE_MANAGER_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
+)
 
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_DEVICE_MANAGER_APP})
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS device_manager_app)

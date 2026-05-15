@@ -666,6 +666,9 @@ initialize(int32_t proc_endpoint,
         g_dm.fs_init_index = module_index_by_name("fs-init");
     }
     (void)query_module_meta_by_path("system/services/fs_manager.wap", &g_dm.fs_manager_index);
+    if (g_dm.fs_manager_index < 0) {
+        g_dm.fs_manager_index = module_index_by_name("fs-manager");
+    }
     (void)query_module_meta_by_path("system/drivers/serial.wap", &g_dm.serial_index);
     (void)query_module_meta_by_path("system/drivers/keyboard.wap", &g_dm.keyboard_index);
     (void)query_module_meta_by_path("system/drivers/framebuffer.wap", &g_dm.framebuffer_index);
@@ -674,7 +677,7 @@ initialize(int32_t proc_endpoint,
     g_dm.need_storage = 0;
     g_dm.need_fat = 0;
     g_dm.need_fs_init = 0;
-    g_dm.need_fs_manager = 0;
+    g_dm.need_fs_manager = (g_dm.fs_manager_index >= 0 && !proc_running("fs-manager")) ? 1 : 0;
     /* Serial is resolved from PCI inventory matches when pci-bus is started
      * by this service; if pci-bus is already running, keep legacy fallback. */
     g_dm.need_serial = g_dm.need_pci_bus ? 0 : (!proc_running("serial") ? 1 : 0);
@@ -843,7 +846,7 @@ initialize(int32_t proc_endpoint,
             g_dm.need_storage = (g_dm.selected_storage_index >= 0) ? 1 : 0;
             g_dm.need_fat = (g_dm.fat_index >= 0 && g_dm.need_storage && !proc_running("fs-fat")) ? 1 : 0;
             g_dm.need_fs_init = (g_dm.fs_init_index >= 0 && !proc_running("fs-init")) ? 1 : 0;
-            g_dm.need_fs_manager = 0;
+            g_dm.need_fs_manager = (g_dm.fs_manager_index >= 0 && !proc_running("fs-manager")) ? 1 : 0;
             if (g_dm.serial_index >= 0 &&
                 !proc_running("serial") &&
                 select_pci_matched_driver(g_dm.serial_index, &g_dm.selected_serial_caps) == 0) {
@@ -856,7 +859,7 @@ initialize(int32_t proc_endpoint,
                 g_dm.need_storage = 1;
                 g_dm.need_fat = (g_dm.fat_index >= 0 && !proc_running("fs-fat")) ? 1 : 0;
                 g_dm.need_fs_init = (g_dm.fs_init_index >= 0 && !proc_running("fs-init")) ? 1 : 0;
-                g_dm.need_fs_manager = 0;
+                g_dm.need_fs_manager = (g_dm.fs_manager_index >= 0 && !proc_running("fs-manager")) ? 1 : 0;
             }
             g_dm.phase = HW_PHASE_SPAWN;
             continue;

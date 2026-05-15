@@ -36,11 +36,11 @@ if (GO_AVAILABLE)
   add_custom_command(
     OUTPUT ${WASM_HELLO_GO_APP}
     COMMAND ${WASMOS_APP_PACKER}
-            --manifest ${CMAKE_CURRENT_SOURCE_DIR}/linker.manifest
+            --manifest ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
             --in ${WASM_HELLO_GO_WASM}
             --out ${WASM_HELLO_GO_APP}
     DEPENDS ${WASM_HELLO_GO_WASM} make_wasmos_app
-            ${CMAKE_CURRENT_SOURCE_DIR}/linker.manifest
+            ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Packing wasm hello-go as WASMOS-APP"
     VERBATIM

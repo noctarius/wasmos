@@ -31,11 +31,11 @@ if (AS_ENABLE)
   add_custom_command(
     OUTPUT ${AS_HELLO_APP}
     COMMAND ${WASMOS_APP_PACKER}
-            --manifest ${CMAKE_CURRENT_SOURCE_DIR}/linker.manifest
+            --manifest ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
             --in ${AS_HELLO_WASM}
             --out ${AS_HELLO_APP}
     DEPENDS ${AS_HELLO_WASM} make_wasmos_app
-            ${CMAKE_CURRENT_SOURCE_DIR}/linker.manifest
+            ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Packing AssemblyScript hello as WASMOS-APP"
     VERBATIM

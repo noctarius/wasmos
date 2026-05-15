@@ -34,11 +34,11 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_ATA_APP}
   COMMAND ${WASMOS_APP_PACKER}
-          --manifest ${DRIVER_WASM_DIR}/ata/linker.manifest
+          --manifest ${DRIVER_WASM_DIR}/ata/linker.metadata
           --in ${WASM_ATA_DRIVER_WASM}
           --out ${WASM_ATA_APP}
   DEPENDS ${WASM_ATA_DRIVER_WASM} make_wasmos_app
-          ${DRIVER_WASM_DIR}/ata/linker.manifest
+          ${DRIVER_WASM_DIR}/ata/linker.metadata
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm ATA as WASMOS-APP"
   VERBATIM

@@ -164,6 +164,7 @@ Current FS namespace model:
 - `/` is a virtual root mount
 - `/boot` maps to the initial FAT filesystem (ESP-backed via `fs-fat`)
 - `/init` is a virtual initfs namespace view (module-name listing path for now)
+- `fs-manager` service scaffold now exists as the intended future VFS/mount orchestrator; current boot path still uses `fs-fat` as active `fs` endpoint
 5. `init` requests `sysinit` load from FAT via process manager
 6. `sysinit` starts configured services/apps from boot config
 

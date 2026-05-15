@@ -1,0 +1,20 @@
+version = 1
+
+[package]
+name = "fs-manager"
+entry = "initialize"
+kind = "service"
+native = false
+
+[resources]
+stack_pages = 32
+heap_pages = 32
+
+[ipc]
+required_endpoint_name = "proc"
+required_endpoint_rights = 1
+entry_arg_bindings = ["proc.endpoint"]
+
+[[capabilities]]
+name = "system.control"
+flags = 0

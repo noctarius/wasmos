@@ -87,6 +87,9 @@ static uint8_t g_keyboard_retries = 0;
 static uint8_t g_framebuffer_retries = 0;
 static int32_t g_pci_bus_index = -1;
 static int32_t g_fat_index = -1;
+static int32_t g_serial_index = -1;
+static int32_t g_keyboard_index = -1;
+static int32_t g_framebuffer_index = -1;
 static pci_device_record_t g_registry[DEVICE_REGISTRY_CAP];
 static uint32_t g_registry_count = 0;
 static int32_t g_selected_storage_index = -1;
@@ -252,49 +255,26 @@ hw_spawn_driver_index_caps(int32_t index, const spawn_caps_t *caps)
     return 0;
 }
 
-static void
-pack_name_args(const char *name, uint32_t out[4])
-{
-    out[0] = 0;
-    out[1] = 0;
-    out[2] = 0;
-    out[3] = 0;
-    if (!name) {
-        return;
-    }
-    for (uint32_t i = 0; name[i] && i < 16; ++i) {
-        uint32_t slot = i / 4;
-        uint32_t shift = (i % 4) * 8;
-        out[slot] |= ((uint32_t)(uint8_t)name[i]) << shift;
-    }
-}
-
-static const char *
-target_name(hw_spawn_target_t target)
-{
-    if (target == HW_SPAWN_SERIAL) {
-        return "serial";
-    }
-    if (target == HW_SPAWN_KEYBOARD) {
-        return "keyboard";
-    }
-    if (target == HW_SPAWN_FRAMEBUFFER) {
-        return "framebuffer";
-    }
-    return "";
-}
-
 static int
 hw_spawn_driver_name(hw_spawn_target_t target)
 {
-    const char *name = target_name(target);
-    uint32_t packed[4];
-    if (!name || name[0] == '\0') {
+    const char *name = 0;
+    uint32_t packed[4] = {0, 0, 0, 0};
+    if (target == HW_SPAWN_SERIAL) {
+        name = "serial";
+    } else if (target == HW_SPAWN_KEYBOARD) {
+        name = "keyboard";
+    } else if (target == HW_SPAWN_FRAMEBUFFER) {
+        name = "framebuffer";
+    }
+    if (!name) {
         return -1;
     }
-    /* FIXME: PROC_IPC_SPAWN_NAME currently lacks capability-profile plumbing.
-     * Serial/keyboard/framebuffer still rely on app-declared coarse caps. */
-    pack_name_args(name, packed);
+    for (uint32_t i = 0; name[i] && i < 16u; ++i) {
+        uint32_t slot = i / 4u;
+        uint32_t shift = (i % 4u) * 8u;
+        packed[slot] |= ((uint32_t)(uint8_t)name[i]) << shift;
+    }
     if (wasmos_ipc_send(g_proc_endpoint,
                         g_reply_endpoint,
                         PROC_IPC_SPAWN_NAME,
@@ -306,6 +286,46 @@ hw_spawn_driver_name(hw_spawn_target_t target)
         return -1;
     }
     return 0;
+}
+
+static int
+query_module_meta_by_path(const char *path, int32_t *out_index)
+{
+    uint32_t path_len = 0;
+    if (!path || !out_index) {
+        return -1;
+    }
+    *out_index = -1;
+    while (path[path_len] != '\0') {
+        path_len++;
+    }
+    if (path_len == 0 || path_len > 95u) {
+        return -1;
+    }
+    if (wasmos_ipc_send(g_proc_endpoint,
+                        g_reply_endpoint,
+                        PROC_IPC_MODULE_META_PATH,
+                        g_request_id,
+                        (int32_t)(uintptr_t)path,
+                        (int32_t)path_len,
+                        PROC_MODULE_SOURCE_INITFS,
+                        0) != 0) {
+        return -1;
+    }
+    if (wasmos_ipc_recv(g_reply_endpoint) < 0) {
+        return -1;
+    }
+    int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+    int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+    if (resp_req != g_request_id) {
+        return -1;
+    }
+    g_request_id++;
+    if (resp_type != PROC_IPC_RESP) {
+        return -1;
+    }
+    *out_index = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+    return (*out_index >= 0) ? 0 : -1;
 }
 
 static void
@@ -563,6 +583,9 @@ initialize(int32_t proc_endpoint,
     hw_scan_acpi();
     g_pci_bus_index = module_index_by_name("pci-bus");
     g_fat_index = module_index_by_name("fs-fat");
+    (void)query_module_meta_by_path("system/drivers/serial.wap", &g_serial_index);
+    (void)query_module_meta_by_path("system/drivers/keyboard.wap", &g_keyboard_index);
+    (void)query_module_meta_by_path("system/drivers/framebuffer.wap", &g_framebuffer_index);
 
     g_need_pci_bus = (g_pci_bus_index >= 0 && !proc_running("pci-bus")) ? 1 : 0;
     g_need_storage = 0;
@@ -591,19 +614,25 @@ initialize(int32_t proc_endpoint,
                     stall_forever();
                 }
             } else if (target == HW_SPAWN_SERIAL) {
-                if (hw_spawn_driver_name(target) != 0) {
+                /* FIXME: Remove PROC_IPC_SPAWN_NAME fallback once PM supports
+                 * FS-backed metadata-path lookup (serial/keyboard/framebuffer
+                 * are not guaranteed in early boot-module index set). */
+                if ((g_serial_index >= 0 && hw_spawn_driver_index(g_serial_index) != 0) ||
+                    (g_serial_index < 0 && hw_spawn_driver_name(target) != 0)) {
                     g_phase = HW_PHASE_FAILED;
                     console_write("[device-manager] spawn serial failed\n");
                     stall_forever();
                 }
             } else if (target == HW_SPAWN_KEYBOARD) {
-                if (hw_spawn_driver_name(target) != 0) {
+                if ((g_keyboard_index >= 0 && hw_spawn_driver_index(g_keyboard_index) != 0) ||
+                    (g_keyboard_index < 0 && hw_spawn_driver_name(target) != 0)) {
                     g_phase = HW_PHASE_FAILED;
                     console_write("[device-manager] spawn keyboard failed\n");
                     stall_forever();
                 }
             } else if (target == HW_SPAWN_FRAMEBUFFER) {
-                if (hw_spawn_driver_name(target) != 0) {
+                if ((g_framebuffer_index >= 0 && hw_spawn_driver_index(g_framebuffer_index) != 0) ||
+                    (g_framebuffer_index < 0 && hw_spawn_driver_name(target) != 0)) {
                     g_phase = HW_PHASE_FAILED;
                     console_write("[device-manager] spawn framebuffer failed\n");
                     stall_forever();

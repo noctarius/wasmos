@@ -61,6 +61,9 @@ Current packaging input:
   `--manifest <file> --in <module> --out <app>`
 - driver manifests can carry zero or more `[[matches]]` records so one driver
   can advertise multiple valid PCI identification mappings
+- process-manager supports initfs metadata lookup by module path via
+  `PROC_IPC_MODULE_META_PATH` (returns sanitized metadata fields to user-space
+  callers and keeps PM-only loader internals private)
 
 ### Language ABI Strategy
 Applications no longer need to implement the raw startup ABI directly:

@@ -101,6 +101,38 @@ to_lower(char c)
     return (char)tolower((unsigned char)c);
 }
 
+static int
+line_eq_ci(const char *s)
+{
+    int32_t i = 0;
+    if (!s) {
+        return 0;
+    }
+    while (s[i]) {
+        if (i >= g_line_len || to_lower(g_line[i]) != to_lower(s[i])) {
+            return 0;
+        }
+        i++;
+    }
+    return i == g_line_len;
+}
+
+static int
+line_starts_with_ci(const char *s)
+{
+    int32_t i = 0;
+    if (!s) {
+        return 0;
+    }
+    while (s[i]) {
+        if (i >= g_line_len || to_lower(g_line[i]) != to_lower(s[i])) {
+            return 0;
+        }
+        i++;
+    }
+    return 1;
+}
+
 static void
 console_write(const char *s)
 {
@@ -999,29 +1031,15 @@ cli_handle_line(void)
     if (g_line_len == 0) {
         return 0;
     }
-    if (g_line_len == 4 &&
-        to_lower(g_line[0]) == 'h' &&
-        to_lower(g_line[1]) == 'e' &&
-        to_lower(g_line[2]) == 'l' &&
-        to_lower(g_line[3]) == 'p') {
+    if (line_eq_ci("help")) {
         console_write("commands: help, ps, kmaps [all], ls, cat <name>, cd <path>, mount, exec <app>, tty <0-3>, halt, reboot\n");
         return 0;
     }
-    if (g_line_len == 5 &&
-        to_lower(g_line[0]) == 'm' &&
-        to_lower(g_line[1]) == 'o' &&
-        to_lower(g_line[2]) == 'u' &&
-        to_lower(g_line[3]) == 'n' &&
-        to_lower(g_line[4]) == 't') {
+    if (line_eq_ci("mount")) {
         cli_show_mounts();
         return 0;
     }
-    if (g_line_len == 5 &&
-        to_lower(g_line[0]) == 'k' &&
-        to_lower(g_line[1]) == 'm' &&
-        to_lower(g_line[2]) == 'a' &&
-        to_lower(g_line[3]) == 'p' &&
-        to_lower(g_line[4]) == 's') {
+    if (line_eq_ci("kmaps")) {
         int32_t rc = wasmos_kmap_dump();
         if (rc == 0) {
             console_write("kmaps: dumped\n");
@@ -1030,16 +1048,7 @@ cli_handle_line(void)
         }
         return 0;
     }
-    if (g_line_len == 9 &&
-        to_lower(g_line[0]) == 'k' &&
-        to_lower(g_line[1]) == 'm' &&
-        to_lower(g_line[2]) == 'a' &&
-        to_lower(g_line[3]) == 'p' &&
-        to_lower(g_line[4]) == 's' &&
-        g_line[5] == ' ' &&
-        to_lower(g_line[6]) == 'a' &&
-        to_lower(g_line[7]) == 'l' &&
-        to_lower(g_line[8]) == 'l') {
+    if (line_eq_ci("kmaps all")) {
         int32_t rc = wasmos_kmap_dump_all();
         if (rc == 0) {
             console_write("kmaps all: dumped\n");
@@ -1048,11 +1057,7 @@ cli_handle_line(void)
         }
         return 0;
     }
-    if (g_line_len > 4 &&
-        to_lower(g_line[0]) == 't' &&
-        to_lower(g_line[1]) == 't' &&
-        to_lower(g_line[2]) == 'y' &&
-        g_line[3] == ' ') {
+    if (g_line_len > 4 && line_starts_with_ci("tty ")) {
         int32_t tty = (int32_t)(g_line[4] - '0');
         if (g_line[4] < '0' || g_line[4] > '3' || g_line[5] != '\0') {
             console_write("tty usage: tty <0-3>\n");
@@ -1077,10 +1082,7 @@ cli_handle_line(void)
         }
         return 0;
     }
-    if (g_line_len > 3 &&
-        to_lower(g_line[0]) == 'c' &&
-        to_lower(g_line[1]) == 'd' &&
-        g_line[2] == ' ') {
+    if (g_line_len > 3 && line_starts_with_ci("cd ")) {
         const char *path = &g_line[3];
         if (str_eq(path, "/")) {
             set_cwd_root();
@@ -1117,12 +1119,7 @@ cli_handle_line(void)
         g_pending_kind = PENDING_CD;
         return 1;
     }
-    if (g_line_len > 5 &&
-        to_lower(g_line[0]) == 'e' &&
-        to_lower(g_line[1]) == 'x' &&
-        to_lower(g_line[2]) == 'e' &&
-        to_lower(g_line[3]) == 'c' &&
-        g_line[4] == ' ') {
+    if (g_line_len > 5 && line_starts_with_ci("exec ")) {
         char name[32];
         name[0] = '\0';
         cli_extract_exec_name(&g_line[5], name, sizeof(name));
@@ -1143,27 +1140,15 @@ cli_handle_line(void)
         g_pending_kind = PENDING_EXEC;
         return 1;
     }
-    if (g_line_len == 4 &&
-        to_lower(g_line[0]) == 'h' &&
-        to_lower(g_line[1]) == 'a' &&
-        to_lower(g_line[2]) == 'l' &&
-        to_lower(g_line[3]) == 't') {
+    if (line_eq_ci("halt")) {
         wasmos_system_halt();
         return 0;
     }
-    if (g_line_len == 6 &&
-        to_lower(g_line[0]) == 'r' &&
-        to_lower(g_line[1]) == 'e' &&
-        to_lower(g_line[2]) == 'b' &&
-        to_lower(g_line[3]) == 'o' &&
-        to_lower(g_line[4]) == 'o' &&
-        to_lower(g_line[5]) == 't') {
+    if (line_eq_ci("reboot")) {
         wasmos_system_reboot();
         return 0;
     }
-    if (g_line_len == 2 &&
-        to_lower(g_line[0]) == 'p' &&
-        to_lower(g_line[1]) == 's') {
+    if (line_eq_ci("ps")) {
         uint32_t pids[CLI_MAX_PROCS];
         uint32_t parents[CLI_MAX_PROCS];
         char names[CLI_MAX_PROCS][32];
@@ -1231,9 +1216,7 @@ cli_handle_line(void)
         }
         return 0;
     }
-    if (g_line_len == 2 &&
-        to_lower(g_line[0]) == 'l' &&
-        to_lower(g_line[1]) == 's') {
+    if (line_eq_ci("ls")) {
         if (cli_send_fs(FS_IPC_LIST_ROOT_REQ, 0, 0, 0, 0) != 0) {
             console_write("ls failed\n");
             return 0;
@@ -1241,8 +1224,7 @@ cli_handle_line(void)
         g_pending_kind = PENDING_LIST;
         return 1;
     }
-    if (g_line_len > 4 && to_lower(g_line[0]) == 'c' && to_lower(g_line[1]) == 'a' &&
-        to_lower(g_line[2]) == 't' && g_line[3] == ' ') {
+    if (g_line_len > 4 && line_starts_with_ci("cat ")) {
         char *name = &g_line[4];
         uint32_t packed[4];
         cli_pack_name(name, packed);

@@ -41,6 +41,30 @@ typedef struct __attribute__((packed)) {
     uint32_t wasm_size;
     uint32_t req_ep_count;
     uint32_t cap_count;
+    uint32_t entry_arg_binding_count;
+    uint32_t mem_hint_count;
+    uint8_t driver_match_class;
+    uint8_t driver_match_subclass;
+    uint8_t driver_match_prog_if;
+    uint8_t driver_match_reserved0;
+    uint16_t driver_match_vendor_id;
+    uint16_t driver_match_device_id;
+    uint16_t driver_io_port_min;
+    uint16_t driver_io_port_max;
+    uint32_t driver_match_count;
+    uint32_t reserved;
+} wasmos_app_header_v3_t;
+
+typedef struct __attribute__((packed)) {
+    char magic[8];
+    uint16_t version;
+    uint16_t header_size;
+    uint32_t flags;
+    uint32_t name_len;
+    uint32_t entry_len;
+    uint32_t wasm_size;
+    uint32_t req_ep_count;
+    uint32_t cap_count;
     uint32_t mem_hint_count;
     uint32_t reserved;
 } wasmos_app_header_v1_t;
@@ -126,13 +150,19 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
     uint32_t entry_arg_binding_count = 0;
     uint32_t mem_hint_count = 0;
     uint32_t reserved = 0;
-    uint8_t driver_match_class = WASMOS_DRIVER_MATCH_ANY_U8;
-    uint8_t driver_match_subclass = WASMOS_DRIVER_MATCH_ANY_U8;
-    uint8_t driver_match_prog_if = WASMOS_DRIVER_MATCH_ANY_U8;
-    uint16_t driver_match_vendor_id = WASMOS_DRIVER_MATCH_ANY_U16;
-    uint16_t driver_match_device_id = WASMOS_DRIVER_MATCH_ANY_U16;
-    uint16_t driver_io_port_min = 0;
-    uint16_t driver_io_port_max = 0;
+    wasmos_app_driver_match_t driver_matches[WASMOS_APP_MAX_DRIVER_MATCHES];
+    for (uint32_t i = 0; i < WASMOS_APP_MAX_DRIVER_MATCHES; ++i) {
+        driver_matches[i].class_code = WASMOS_DRIVER_MATCH_ANY_U8;
+        driver_matches[i].subclass = WASMOS_DRIVER_MATCH_ANY_U8;
+        driver_matches[i].prog_if = WASMOS_DRIVER_MATCH_ANY_U8;
+        driver_matches[i].reserved0 = 0;
+        driver_matches[i].vendor_id = WASMOS_DRIVER_MATCH_ANY_U16;
+        driver_matches[i].device_id = WASMOS_DRIVER_MATCH_ANY_U16;
+        driver_matches[i].io_port_min = 0;
+        driver_matches[i].io_port_max = 0;
+        driver_matches[i].priority = 0;
+    }
+    uint32_t driver_match_count = 0;
     if (version == 1u) {
         if (blob_size < sizeof(wasmos_app_header_v1_t)) {
             return -1;
@@ -146,7 +176,7 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
         cap_count = hdr_v1->cap_count;
         mem_hint_count = hdr_v1->mem_hint_count;
         reserved = hdr_v1->reserved;
-    } else if (version == WASMOS_APP_VERSION) {
+    } else if (version == 2u) {
         if (blob_size < sizeof(wasmos_app_header_v2_t)) {
             return -1;
         }
@@ -160,19 +190,48 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
         cap_count = hdr_v2->cap_count;
         entry_arg_binding_count = hdr_v2->entry_arg_binding_count;
         mem_hint_count = hdr_v2->mem_hint_count;
-        driver_match_class = hdr_v2->driver_match_class;
-        driver_match_subclass = hdr_v2->driver_match_subclass;
-        driver_match_prog_if = hdr_v2->driver_match_prog_if;
-        driver_match_vendor_id = hdr_v2->driver_match_vendor_id;
-        driver_match_device_id = hdr_v2->driver_match_device_id;
-        driver_io_port_min = hdr_v2->driver_io_port_min;
-        driver_io_port_max = hdr_v2->driver_io_port_max;
         reserved = hdr_v2->reserved;
+        if (hdr_v2->driver_match_class != WASMOS_DRIVER_MATCH_ANY_U8 ||
+            hdr_v2->driver_match_subclass != WASMOS_DRIVER_MATCH_ANY_U8 ||
+            hdr_v2->driver_match_prog_if != WASMOS_DRIVER_MATCH_ANY_U8 ||
+            hdr_v2->driver_match_vendor_id != WASMOS_DRIVER_MATCH_ANY_U16 ||
+            hdr_v2->driver_match_device_id != WASMOS_DRIVER_MATCH_ANY_U16) {
+            driver_match_count = 1;
+            driver_matches[0].class_code = hdr_v2->driver_match_class;
+            driver_matches[0].subclass = hdr_v2->driver_match_subclass;
+            driver_matches[0].prog_if = hdr_v2->driver_match_prog_if;
+            driver_matches[0].reserved0 = 0;
+            driver_matches[0].vendor_id = hdr_v2->driver_match_vendor_id;
+            driver_matches[0].device_id = hdr_v2->driver_match_device_id;
+            driver_matches[0].io_port_min = hdr_v2->driver_io_port_min;
+            driver_matches[0].io_port_max = hdr_v2->driver_io_port_max;
+            driver_matches[0].priority = 0;
+        }
+    } else if (version == WASMOS_APP_VERSION) {
+        if (blob_size < sizeof(wasmos_app_header_v3_t)) {
+            return -1;
+        }
+        const wasmos_app_header_v3_t *hdr_v3 = (const wasmos_app_header_v3_t *)blob;
+        header_size = hdr_v3->header_size;
+        flags = hdr_v3->flags;
+        name_len = hdr_v3->name_len;
+        entry_len = hdr_v3->entry_len;
+        wasm_size = hdr_v3->wasm_size;
+        req_ep_count = hdr_v3->req_ep_count;
+        cap_count = hdr_v3->cap_count;
+        entry_arg_binding_count = hdr_v3->entry_arg_binding_count;
+        mem_hint_count = hdr_v3->mem_hint_count;
+        driver_match_count = hdr_v3->driver_match_count;
+        if (driver_match_count > WASMOS_APP_MAX_DRIVER_MATCHES) {
+            return -1;
+        }
+        reserved = hdr_v3->reserved;
     } else {
         return -1;
     }
     if ((version == 1u && header_size != sizeof(wasmos_app_header_v1_t)) ||
-        (version == WASMOS_APP_VERSION && header_size != sizeof(wasmos_app_header_v2_t)) ||
+        (version == 2u && header_size != sizeof(wasmos_app_header_v2_t)) ||
+        (version == WASMOS_APP_VERSION && header_size != sizeof(wasmos_app_header_v3_t)) ||
         reserved != 0) {
         return -1;
     }
@@ -259,6 +318,15 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
         out_desc->entry_arg_binding_count++;
     }
 
+    for (uint32_t i = 0; i < driver_match_count; ++i) {
+        if (check_bounds(off, sizeof(wasmos_app_driver_match_t), blob_size) != 0) {
+            return -1;
+        }
+        const wasmos_app_driver_match_t *m = (const wasmos_app_driver_match_t *)&blob[off];
+        driver_matches[i] = *m;
+        off += sizeof(wasmos_app_driver_match_t);
+    }
+
     uint32_t stack_pages_hint = 0;
     uint32_t heap_pages_hint = 0;
     for (uint32_t i = 0; i < mem_hint_count; ++i) {
@@ -289,13 +357,10 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
     out_desc->wasm_size = wasm_size;
     out_desc->stack_pages_hint = stack_pages_hint;
     out_desc->heap_pages_hint = heap_pages_hint;
-    out_desc->driver_match_class = driver_match_class;
-    out_desc->driver_match_subclass = driver_match_subclass;
-    out_desc->driver_match_prog_if = driver_match_prog_if;
-    out_desc->driver_match_vendor_id = driver_match_vendor_id;
-    out_desc->driver_match_device_id = driver_match_device_id;
-    out_desc->driver_io_port_min = driver_io_port_min;
-    out_desc->driver_io_port_max = driver_io_port_max;
+    out_desc->driver_match_count = driver_match_count;
+    for (uint32_t i = 0; i < driver_match_count; ++i) {
+        out_desc->driver_matches[i] = driver_matches[i];
+    }
     return 0;
 }
 

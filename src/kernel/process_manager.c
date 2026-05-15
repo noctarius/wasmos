@@ -1049,10 +1049,14 @@ pm_handle_module_meta(uint32_t pm_context_id, const ipc_message_t *msg)
     uint32_t owner_context = 0;
     process_t *caller = 0;
     wasmos_app_desc_t desc;
+    uint32_t match_index = msg->arg1;
+    uint32_t match_count = 0;
+    wasmos_app_driver_match_t *match = 0;
     uint32_t cap_flags = 0;
     uint32_t packed_match = 0;
     uint32_t packed_vendor_device = 0;
-    uint32_t packed_caps_ports = 0;
+    uint32_t packed_caps = 0;
+    uint32_t packed_io = 0;
 
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
         return -1;
@@ -1067,13 +1071,11 @@ pm_handle_module_meta(uint32_t pm_context_id, const ipc_message_t *msg)
     if ((desc.flags & WASMOS_APP_FLAG_DRIVER) == 0) {
         return -1;
     }
-    if (desc.driver_match_class == WASMOS_DRIVER_MATCH_ANY_U8 &&
-        desc.driver_match_subclass == WASMOS_DRIVER_MATCH_ANY_U8 &&
-        desc.driver_match_prog_if == WASMOS_DRIVER_MATCH_ANY_U8 &&
-        desc.driver_match_vendor_id == WASMOS_DRIVER_MATCH_ANY_U16 &&
-        desc.driver_match_device_id == WASMOS_DRIVER_MATCH_ANY_U16) {
+    match_count = desc.driver_match_count;
+    if (match_count == 0 || match_index >= match_count) {
         return -1;
     }
+    match = &desc.driver_matches[match_index];
     for (uint32_t i = 0; i < desc.cap_count; ++i) {
         if (desc.caps[i].name_len == 7 &&
             desc.caps[i].name[0] == 'i' && desc.caps[i].name[1] == 'o' &&
@@ -1091,24 +1093,26 @@ pm_handle_module_meta(uint32_t pm_context_id, const ipc_message_t *msg)
         }
     }
 
-    packed_match = ((uint32_t)desc.driver_match_class << 24) |
-                   ((uint32_t)desc.driver_match_subclass << 16) |
-                   ((uint32_t)desc.driver_match_prog_if << 8) |
-                   (((desc.flags & WASMOS_APP_FLAG_STORAGE_BOOTSTRAP) != 0) ? 1u : 0u);
-    packed_vendor_device = ((uint32_t)desc.driver_match_vendor_id << 16) |
-                           (uint32_t)desc.driver_match_device_id;
-    packed_caps_ports = ((uint32_t)cap_flags << 16) |
-                        ((uint32_t)desc.driver_io_port_min & 0xFFFFu);
+    packed_match = ((uint32_t)match->class_code << 24) |
+                   ((uint32_t)match->subclass << 16) |
+                   ((uint32_t)match->prog_if << 8) |
+                   ((((desc.flags & WASMOS_APP_FLAG_STORAGE_BOOTSTRAP) != 0) ? 1u : 0u) |
+                    ((match_count & 0x7Fu) << 1));
+    packed_vendor_device = ((uint32_t)match->vendor_id << 16) |
+                           (uint32_t)match->device_id;
+    packed_caps = (uint32_t)cap_flags;
+    packed_io = ((uint32_t)match->io_port_max << 16) |
+                ((uint32_t)match->io_port_min & 0xFFFFu);
 
     ipc_message_t resp;
     resp.type = PROC_IPC_RESP;
     resp.source = g_pm.proc_endpoint;
     resp.destination = msg->source;
     resp.request_id = msg->request_id;
-    resp.arg0 = msg->arg0;
+    resp.arg0 = packed_io;
     resp.arg1 = packed_match;
     resp.arg2 = packed_vendor_device;
-    resp.arg3 = packed_caps_ports;
+    resp.arg3 = packed_caps;
     return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
 }
 

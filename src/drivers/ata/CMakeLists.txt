@@ -34,32 +34,11 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_ATA_APP}
   COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_ATA_DRIVER_WASM}
-          ${WASM_ATA_APP}
-          ata
-          initialize
-          16
-          16
-          33
-          -
-          0
-          2
-          io.port
-          0
-          irq.route
-          0
-          --entry-arg-bindings
-          1
-          proc.endpoint
-          --driver-match
-          0x01
-          any
-          any
-          any
-          any
-          0x01F0
-          0x03F7
+          --manifest ${DRIVER_WASM_DIR}/ata/linker.manifest
+          --in ${WASM_ATA_DRIVER_WASM}
+          --out ${WASM_ATA_APP}
   DEPENDS ${WASM_ATA_DRIVER_WASM} make_wasmos_app
+          ${DRIVER_WASM_DIR}/ata/linker.manifest
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm ATA as WASMOS-APP"
   VERBATIM

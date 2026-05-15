@@ -1,0 +1,20 @@
+version = 1
+
+[package]
+name = "serial"
+entry = "initialize"
+kind = "driver"
+native = false
+
+[resources]
+stack_pages = 16
+heap_pages = 16
+
+[ipc]
+required_endpoint_name = "-"
+required_endpoint_rights = 0
+entry_arg_bindings = []
+
+[[capabilities]]
+name = "io.port"
+flags = 0

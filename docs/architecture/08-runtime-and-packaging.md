@@ -54,6 +54,14 @@ Current entry expectations:
 - drivers and services export `initialize`
 - native drivers use ELF `e_entry` to point at `initialize(wasmos_driver_api_t *, int, int, int)`
 
+Current packaging input:
+- all in-tree app/driver/service modules define metadata in colocated TOML
+  `linker.manifest` files
+- `scripts/make_wasmos_app.c` consumes those manifests via
+  `--manifest <file> --in <module> --out <app>`
+- driver manifests can carry zero or more `[[matches]]` records so one driver
+  can advertise multiple valid PCI identification mappings
+
 ### Language ABI Strategy
 Applications no longer need to implement the raw startup ABI directly:
 - the C shim exports `wasmos_main` and calls `main(int argc, char **argv)`
@@ -64,4 +72,3 @@ Applications no longer need to implement the raw startup ABI directly:
 - the Zig shim exports `wasmos_main` and keeps a Zig-native `main`
 
 This keeps the external ABI stable while presenting language-native entrypoints.
-

@@ -34,24 +34,11 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_INIT_APP}
   COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_INIT_APP_WASM}
-          ${WASM_INIT_APP}
-          sysinit
-          initialize
-          64
-          64
-          2
-          proc
-          1
-          1
-          ipc.basic
-          0
-          --entry-arg-bindings
-          3
-          proc.endpoint
-          module.count
-          init.module.index
+          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/linker.manifest
+          --in ${WASM_INIT_APP_WASM}
+          --out ${WASM_INIT_APP}
   DEPENDS ${WASM_INIT_APP_WASM} make_wasmos_app
+          ${CMAKE_CURRENT_SOURCE_DIR}/linker.manifest
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm init as WASMOS-APP"
   VERBATIM

@@ -158,7 +158,7 @@ Boot sequence (high level):
 Current driver match/capability policy source:
 - driver metadata is embedded in each driver’s WASMOS-APP package
 - `device-manager` queries module metadata from process-manager at runtime and matches against PCI inventory
-- ATA now uses `src/drivers/ata/linker.manifest` as the packer manifest source
+- all in-tree apps, drivers, and services now provide `linker.manifest` metadata consumed by `make_wasmos_app`
 5. `init` requests `sysinit` load from FAT via process manager
 6. `sysinit` starts configured services/apps from boot config
 

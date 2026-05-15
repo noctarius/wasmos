@@ -1,0 +1,20 @@
+version = 1
+
+[package]
+name = "vt"
+entry = "initialize"
+kind = "service"
+native = false
+
+[resources]
+stack_pages = 16
+heap_pages = 16
+
+[ipc]
+required_endpoint_name = "proc"
+required_endpoint_rights = 1
+entry_arg_bindings = ["proc.endpoint"]
+
+[[capabilities]]
+name = "ipc.basic"
+flags = 0

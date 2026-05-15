@@ -1,6 +1,3 @@
-# FLAG_DRIVER=1, FLAG_NATIVE=16 -> 17
-set(NATIVE_FRAMEBUFFER_FLAGS 17)
-
 set(NATIVE_FB_CFLAGS
     --target=x86_64-elf
     -ffreestanding -fno-builtin -fno-stack-protector
@@ -60,18 +57,11 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_FRAMEBUFFER_APP}
   COMMAND ${WASMOS_APP_PACKER}
-          ${NATIVE_FRAMEBUFFER_DRIVER_ELF}
-          ${WASM_FRAMEBUFFER_APP}
-          framebuffer
-          initialize
-          0
-          0
-          ${NATIVE_FRAMEBUFFER_FLAGS}
-          -
-          0
-          -
-          0
+          --manifest ${DRIVER_WASM_DIR}/framebuffer/linker.manifest
+          --in ${NATIVE_FRAMEBUFFER_DRIVER_ELF}
+          --out ${WASM_FRAMEBUFFER_APP}
   DEPENDS ${NATIVE_FRAMEBUFFER_DRIVER_ELF} make_wasmos_app
+          ${DRIVER_WASM_DIR}/framebuffer/linker.manifest
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing native framebuffer driver as WASMOS-APP"
   VERBATIM

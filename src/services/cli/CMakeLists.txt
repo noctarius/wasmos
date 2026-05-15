@@ -34,23 +34,11 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_CLI_APP}
   COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_CLI_APP_WASM}
-          ${WASM_CLI_APP}
-          cli
-          initialize
-          16
-          16
-          4
-          proc
-          1
-          1
-          system.control
-          0
-          --entry-arg-bindings
-          2
-          proc.endpoint
-          cli.tty.alloc
+          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/linker.manifest
+          --in ${WASM_CLI_APP_WASM}
+          --out ${WASM_CLI_APP}
   DEPENDS ${WASM_CLI_APP_WASM} make_wasmos_app
+          ${CMAKE_CURRENT_SOURCE_DIR}/linker.manifest
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm CLI as WASMOS-APP"
   VERBATIM

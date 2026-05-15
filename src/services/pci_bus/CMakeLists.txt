@@ -34,22 +34,11 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_PCI_BUS_APP}
   COMMAND ${WASMOS_APP_PACKER}
-          ${WASM_PCI_BUS_WASM}
-          ${WASM_PCI_BUS_APP}
-          pci-bus
-          initialize
-          64
-          64
-          2
-          proc
-          1
-          1
-          io.port
-          0
-          --entry-arg-bindings
-          1
-          proc.endpoint
+          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/linker.manifest
+          --in ${WASM_PCI_BUS_WASM}
+          --out ${WASM_PCI_BUS_APP}
   DEPENDS ${WASM_PCI_BUS_WASM} make_wasmos_app
+          ${CMAKE_CURRENT_SOURCE_DIR}/linker.manifest
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm pci-bus as WASMOS-APP"
   VERBATIM

@@ -1,0 +1,36 @@
+version = 1
+
+[package]
+name = "ata"
+entry = "initialize"
+kind = "driver"
+native = false
+storage_bootstrap = true
+
+[resources]
+stack_pages = 16
+heap_pages = 16
+
+[ipc]
+required_endpoint_name = "-"
+required_endpoint_rights = 0
+entry_arg_bindings = ["proc.endpoint"]
+
+[[capabilities]]
+name = "io.port"
+flags = 0
+
+[[capabilities]]
+name = "irq.route"
+flags = 0
+
+[[matches]]
+bus = "pci"
+class = 0x01
+subclass = "any"
+prog_if = "any"
+vendor = "any"
+device = "any"
+io_port_min = 0x01F0
+io_port_max = 0x03F7
+priority = 100

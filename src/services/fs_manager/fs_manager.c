@@ -17,6 +17,7 @@ typedef struct {
     uint8_t in_use;
     int32_t source;
     fs_mount_t mount;
+    uint16_t mount_depth;
 } fs_client_state_t;
 
 static int32_t g_proc_endpoint = -1;
@@ -99,6 +100,7 @@ static fs_client_state_t *client_state(int32_t source) {
             g_clients[i].in_use = 1;
             g_clients[i].source = source;
             g_clients[i].mount = FS_MOUNT_ROOT;
+            g_clients[i].mount_depth = 0;
             return &g_clients[i];
         }
     }
@@ -230,11 +232,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
 
             if (str_ieq(path, "") || str_ieq(path, "/")) {
                 state->mount = FS_MOUNT_ROOT;
-                (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
-                continue;
-            }
-            if (str_ieq(path, "..") && state->mount == FS_MOUNT_INIT) {
-                state->mount = FS_MOUNT_ROOT;
+                state->mount_depth = 0;
                 (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
                 continue;
             }
@@ -242,10 +240,16 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
                 (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
                 continue;
             }
+            if (str_ieq(path, "..") && state->mount != FS_MOUNT_ROOT && state->mount_depth == 0) {
+                state->mount = FS_MOUNT_ROOT;
+                (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
+                continue;
+            }
             if (str_ieq(path, "init") || str_ieq(path, "/init")) {
                 int32_t s0, s1, s2, s3;
                 int32_t rr_t, rr0, rr1, rr2, rr3;
                 state->mount = FS_MOUNT_INIT;
+                state->mount_depth = 0;
                 pack_name("/", &s0, &s1, &s2, &s3);
                 if (forward_request(g_backend_init, FS_IPC_CHDIR_REQ, request_id, s0, s1, s2, s3,
                                     source, &rr_t, &rr0, &rr1, &rr2, &rr3) != 0) {
@@ -260,6 +264,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
                 int32_t s0, s1, s2, s3;
                 int32_t rr_t, rr0, rr1, rr2, rr3;
                 state->mount = FS_MOUNT_BOOT;
+                state->mount_depth = 0;
                 pack_name("/", &s0, &s1, &s2, &s3);
                 if (forward_request(g_backend_boot, FS_IPC_CHDIR_REQ, request_id, s0, s1, s2, s3,
                                     source, &rr_t, &rr0, &rr1, &rr2, &rr3) != 0) {
@@ -279,6 +284,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             unpack_name((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, name, sizeof(name));
             if (str_ieq(name, "init")) {
                 state->mount = FS_MOUNT_INIT;
+                state->mount_depth = 0;
                 if (forward_request(g_backend_init, FS_IPC_LIST_ROOT_REQ, request_id, 0, 0, 0, 0,
                                     source, &resp_type, &r0, &r1, &r2, &r3) != 0) {
                     state->mount = FS_MOUNT_ROOT;
@@ -289,6 +295,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
                 continue;
             } else if (str_ieq(name, "boot")) {
                 state->mount = FS_MOUNT_BOOT;
+                state->mount_depth = 0;
                 (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
                 continue;
             } else {
@@ -319,8 +326,24 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             unpack_name((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, path, sizeof(path));
             if (str_ieq(path, "..") && state->mount != FS_MOUNT_ROOT) {
                 state->mount = FS_MOUNT_ROOT;
+                state->mount_depth = 0;
                 (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
                 continue;
+            }
+        }
+        if (type == FS_IPC_CHDIR_REQ && resp_type == FS_IPC_RESP && state->mount != FS_MOUNT_ROOT) {
+            char path[32];
+            unpack_name((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, path, sizeof(path));
+            if (str_ieq(path, "..")) {
+                if (state->mount_depth > 0) {
+                    state->mount_depth--;
+                }
+            } else if (!str_ieq(path, ".") && !str_ieq(path, "")) {
+                if (path[0] == '/') {
+                    state->mount_depth = (path[1] == '\0') ? 0 : 1;
+                } else if (state->mount_depth < 0xFFFFu) {
+                    state->mount_depth++;
+                }
             }
         }
 

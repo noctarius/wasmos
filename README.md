@@ -32,6 +32,7 @@ It defines repository workflow and documentation/update conventions.
 - Spawn-time driver capability profiles for PCI paths (PIO range + IRQ mask)
 - PM service registry for user-space endpoint discovery (`register`/`lookup`)
 - Usable VT/CLI stack with multi-TTY switching
+- CLI now includes `mount` command for active mount/device inspection
 - Ring-3 hardening enabled by default in normal test boots
 - Ring-3 user-slot mapping now requires explicit `MEM_REGION_FLAG_USER` (legacy implicit bridge removed from page-map path)
 - Syscall boundary now rejects lossy 64-bit-to-32-bit exit-status arguments (`EXIT` / `THREAD_EXIT` require valid signed-32 representation)

@@ -5,7 +5,7 @@
 #include <ctype.h>
 
 #define MAGIC "WASMOSAP"
-#define VERSION 2u
+#define VERSION 3u
 #define FLAG_DRIVER (1u << 0)
 #define FLAG_SERVICE (1u << 1)
 #define FLAG_APP (1u << 2)
@@ -36,6 +36,7 @@ typedef struct __attribute__((packed)) {
     uint16_t driver_match_device_id;
     uint16_t driver_io_port_min;
     uint16_t driver_io_port_max;
+    uint32_t driver_match_count;
     uint32_t reserved;
 } wasmos_app_header_t;
 
@@ -58,6 +59,18 @@ typedef struct __attribute__((packed)) {
     uint32_t min_pages;
     uint32_t max_pages;
 } wasmos_mem_hint_t;
+
+typedef struct __attribute__((packed)) {
+    uint8_t class_code;
+    uint8_t subclass;
+    uint8_t prog_if;
+    uint8_t reserved0;
+    uint16_t vendor_id;
+    uint16_t device_id;
+    uint16_t io_port_min;
+    uint16_t io_port_max;
+    uint32_t priority;
+} wasmos_driver_match_t;
 
 static int parse_u32(const char *s, uint32_t *out) {
     char *end = NULL;
@@ -376,28 +389,18 @@ int main(int argc, char **argv) {
             caps[i].flags = lm.caps[i].flags;
         }
 
-        uint8_t driver_match_class = MATCH_ANY_U8;
-        uint8_t driver_match_subclass = MATCH_ANY_U8;
-        uint8_t driver_match_prog_if = MATCH_ANY_U8;
-        uint16_t driver_match_vendor_id = MATCH_ANY_U16;
-        uint16_t driver_match_device_id = MATCH_ANY_U16;
-        uint16_t driver_io_port_min = 0;
-        uint16_t driver_io_port_max = 0;
-        if (lm.match_count > 0) {
-            /* TODO: promote to variable-length match list in WASMOS-APP header. */
-            manifest_match_t *best = &lm.matches[0];
-            for (uint32_t i = 1; i < lm.match_count; ++i) {
-                if (lm.matches[i].priority > best->priority) {
-                    best = &lm.matches[i];
-                }
-            }
-            driver_match_class = best->class_code;
-            driver_match_subclass = best->subclass;
-            driver_match_prog_if = best->prog_if;
-            driver_match_vendor_id = best->vendor_id;
-            driver_match_device_id = best->device_id;
-            driver_io_port_min = best->io_port_min;
-            driver_io_port_max = best->io_port_max;
+        wasmos_driver_match_t driver_matches[8];
+        uint32_t driver_match_count = lm.match_count;
+        for (uint32_t i = 0; i < driver_match_count; ++i) {
+            driver_matches[i].class_code = lm.matches[i].class_code;
+            driver_matches[i].subclass = lm.matches[i].subclass;
+            driver_matches[i].prog_if = lm.matches[i].prog_if;
+            driver_matches[i].reserved0 = 0;
+            driver_matches[i].vendor_id = lm.matches[i].vendor_id;
+            driver_matches[i].device_id = lm.matches[i].device_id;
+            driver_matches[i].io_port_min = lm.matches[i].io_port_min;
+            driver_matches[i].io_port_max = lm.matches[i].io_port_max;
+            driver_matches[i].priority = lm.matches[i].priority;
         }
 
         FILE *in = fopen(in_path, "rb");
@@ -453,14 +456,15 @@ int main(int argc, char **argv) {
         hdr.cap_count = cap_count;
         hdr.entry_arg_binding_count = lm.entry_arg_binding_count;
         hdr.mem_hint_count = 2;
-        hdr.driver_match_class = driver_match_class;
-        hdr.driver_match_subclass = driver_match_subclass;
-        hdr.driver_match_prog_if = driver_match_prog_if;
+        hdr.driver_match_class = (driver_match_count > 0) ? driver_matches[0].class_code : MATCH_ANY_U8;
+        hdr.driver_match_subclass = (driver_match_count > 0) ? driver_matches[0].subclass : MATCH_ANY_U8;
+        hdr.driver_match_prog_if = (driver_match_count > 0) ? driver_matches[0].prog_if : MATCH_ANY_U8;
         hdr.driver_match_reserved0 = 0;
-        hdr.driver_match_vendor_id = driver_match_vendor_id;
-        hdr.driver_match_device_id = driver_match_device_id;
-        hdr.driver_io_port_min = driver_io_port_min;
-        hdr.driver_io_port_max = driver_io_port_max;
+        hdr.driver_match_vendor_id = (driver_match_count > 0) ? driver_matches[0].vendor_id : MATCH_ANY_U16;
+        hdr.driver_match_device_id = (driver_match_count > 0) ? driver_matches[0].device_id : MATCH_ANY_U16;
+        hdr.driver_io_port_min = (driver_match_count > 0) ? driver_matches[0].io_port_min : 0;
+        hdr.driver_io_port_max = (driver_match_count > 0) ? driver_matches[0].io_port_max : 0;
+        hdr.driver_match_count = driver_match_count;
         hdr.reserved = 0;
 
         wasmos_mem_hint_t stack_hint = { MEM_HINT_STACK, lm.stack_pages, 0 };
@@ -485,6 +489,9 @@ int main(int argc, char **argv) {
             ok &= fwrite(&entry_arg_binding_hdrs[i], sizeof(entry_arg_binding_hdrs[i]), 1, outf) == 1;
             ok &= fwrite(lm.entry_arg_bindings[i], 1, entry_arg_binding_hdrs[i].name_len, outf) ==
                   entry_arg_binding_hdrs[i].name_len;
+        }
+        for (uint32_t i = 0; i < driver_match_count; ++i) {
+            ok &= fwrite(&driver_matches[i], sizeof(driver_matches[i]), 1, outf) == 1;
         }
         ok &= fwrite(&stack_hint, sizeof(stack_hint), 1, outf) == 1;
         ok &= fwrite(&heap_hint, sizeof(heap_hint), 1, outf) == 1;
@@ -523,6 +530,7 @@ int main(int argc, char **argv) {
     uint16_t driver_match_device_id = MATCH_ANY_U16;
     uint16_t driver_io_port_min = 0;
     uint16_t driver_io_port_max = 0;
+    uint32_t driver_match_count = 0;
     if (parse_u32(argv[5], &stack_pages) != 0 || parse_u32(argv[6], &heap_pages) != 0) {
         fprintf(stderr, "invalid stack/heap page value\n");
         return 1;
@@ -611,6 +619,7 @@ int main(int argc, char **argv) {
                     driver_match_class = (uint8_t)cls;
                     driver_match_subclass = (uint8_t)sub;
                     driver_match_prog_if = (uint8_t)prog;
+                    driver_match_count = 1;
                     next += 8;
                 } else {
                     fprintf(stderr, "unknown trailing argument '%s'\n", argv[next]);
@@ -711,6 +720,7 @@ int main(int argc, char **argv) {
     hdr.driver_match_device_id = driver_match_device_id;
     hdr.driver_io_port_min = driver_io_port_min;
     hdr.driver_io_port_max = driver_io_port_max;
+    hdr.driver_match_count = driver_match_count;
     hdr.reserved = 0;
 
     wasmos_mem_hint_t stack_hint = { MEM_HINT_STACK, stack_pages, 0 };
@@ -735,6 +745,19 @@ int main(int argc, char **argv) {
         ok &= fwrite(&entry_arg_binding_hdrs[i], sizeof(entry_arg_binding_hdrs[i]), 1, out) == 1;
         ok &= fwrite(entry_arg_bindings[i], 1, entry_arg_binding_hdrs[i].name_len, out) ==
               entry_arg_binding_hdrs[i].name_len;
+    }
+    if (driver_match_count > 0) {
+        wasmos_driver_match_t dm;
+        dm.class_code = driver_match_class;
+        dm.subclass = driver_match_subclass;
+        dm.prog_if = driver_match_prog_if;
+        dm.reserved0 = 0;
+        dm.vendor_id = driver_match_vendor_id;
+        dm.device_id = driver_match_device_id;
+        dm.io_port_min = driver_io_port_min;
+        dm.io_port_max = driver_io_port_max;
+        dm.priority = 0;
+        ok &= fwrite(&dm, sizeof(dm), 1, out) == 1;
     }
     ok &= fwrite(&stack_hint, sizeof(stack_hint), 1, out) == 1;
     ok &= fwrite(&heap_hint, sizeof(heap_hint), 1, out) == 1;

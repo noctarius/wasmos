@@ -342,16 +342,18 @@ reset_selected_storage(void)
 
 static int
 query_driver_module_meta(int32_t module_index,
+                         uint32_t match_index,
                          uint8_t *out_class_code,
                          uint8_t *out_subclass,
                          uint8_t *out_prog_if,
                          uint16_t *out_vendor_id,
                          uint16_t *out_device_id,
                          uint8_t *out_storage_bootstrap,
+                         uint8_t *out_match_count,
                          spawn_caps_t *out_caps)
 {
     if (!out_class_code || !out_subclass || !out_prog_if ||
-        !out_vendor_id || !out_device_id || !out_storage_bootstrap || !out_caps) {
+        !out_vendor_id || !out_device_id || !out_storage_bootstrap || !out_match_count || !out_caps) {
         return -1;
     }
     if (wasmos_ipc_send(g_proc_endpoint,
@@ -359,7 +361,7 @@ query_driver_module_meta(int32_t module_index,
                         PROC_IPC_MODULE_META,
                         g_request_id,
                         module_index,
-                        0,
+                        (int32_t)match_index,
                         0,
                         0) != 0) {
         return -1;
@@ -376,6 +378,7 @@ query_driver_module_meta(int32_t module_index,
     if (resp_type != PROC_IPC_RESP) {
         return -1;
     }
+    uint32_t arg0 = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
     uint32_t arg1 = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
     uint32_t arg2 = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
     uint32_t arg3 = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
@@ -383,11 +386,12 @@ query_driver_module_meta(int32_t module_index,
     *out_subclass = (uint8_t)((arg1 >> 16) & 0xFFu);
     *out_prog_if = (uint8_t)((arg1 >> 8) & 0xFFu);
     *out_storage_bootstrap = (uint8_t)(arg1 & 0x1u);
+    *out_match_count = (uint8_t)((arg1 >> 1) & 0x7Fu);
     *out_vendor_id = (uint16_t)((arg2 >> 16) & 0xFFFFu);
     *out_device_id = (uint16_t)(arg2 & 0xFFFFu);
-    out_caps->cap_flags = (uint32_t)((arg3 >> 16) & 0xFFFFu);
-    out_caps->io_port_min = (uint16_t)(arg3 & 0xFFFFu);
-    out_caps->io_port_max = 0xFFFFu;
+    out_caps->cap_flags = arg3 & 0xFFFFu;
+    out_caps->io_port_min = (uint16_t)(arg0 & 0xFFFFu);
+    out_caps->io_port_max = (uint16_t)((arg0 >> 16) & 0xFFFFu);
     out_caps->irq_mask = (uint16_t)((1u << 14) | (1u << 15));
     return 0;
 }
@@ -409,40 +413,42 @@ apply_pci_matches(void)
 {
     reset_selected_storage();
     for (int32_t module_index = 0; module_index < g_module_count; ++module_index) {
-        uint8_t class_code = 0;
-        uint8_t subclass = 0;
-        uint8_t prog_if = 0;
-        uint16_t vendor_id = 0;
-        uint16_t device_id = 0;
-        uint8_t storage_bootstrap = 0;
+        uint8_t class_code = 0, subclass = 0, prog_if = 0, storage_bootstrap = 0, match_count = 0;
+        uint16_t vendor_id = 0, device_id = 0;
         spawn_caps_t caps;
-        if (query_driver_module_meta(module_index,
-                                     &class_code,
-                                     &subclass,
-                                     &prog_if,
-                                     &vendor_id,
-                                     &device_id,
-                                     &storage_bootstrap,
-                                     &caps) != 0 ||
-            !storage_bootstrap) {
+        if (query_driver_module_meta(module_index, 0,
+                                     &class_code, &subclass, &prog_if,
+                                     &vendor_id, &device_id,
+                                     &storage_bootstrap, &match_count, &caps) != 0 ||
+            !storage_bootstrap || match_count == 0) {
             continue;
         }
-        for (uint32_t i = 0; i < g_registry_count; ++i) {
-            const pci_device_record_t *rec = &g_registry[i];
-            if (!match_any_or_u8(rec->class_code, class_code) ||
-                !match_any_or_u8(rec->subclass, subclass) ||
-                !match_any_or_u8(rec->prog_if, prog_if) ||
-                !match_any_or_u16(rec->vendor_id, vendor_id) ||
-                !match_any_or_u16(rec->device_id, device_id)) {
-                continue;
+        for (uint32_t m = 0; m < match_count; ++m) {
+            if (m != 0) {
+                if (query_driver_module_meta(module_index, m,
+                                             &class_code, &subclass, &prog_if,
+                                             &vendor_id, &device_id,
+                                             &storage_bootstrap, &match_count, &caps) != 0) {
+                    continue;
+                }
             }
-            g_selected_storage_index = module_index;
-            g_selected_storage_caps = caps;
-            if ((g_selected_storage_caps.cap_flags & DEVMGR_CAP_IRQ) != 0 &&
-                rec->irq_hint < 16u) {
-                g_selected_storage_caps.irq_mask = (uint16_t)(1u << rec->irq_hint);
+            for (uint32_t i = 0; i < g_registry_count; ++i) {
+                const pci_device_record_t *rec = &g_registry[i];
+                if (!match_any_or_u8(rec->class_code, class_code) ||
+                    !match_any_or_u8(rec->subclass, subclass) ||
+                    !match_any_or_u8(rec->prog_if, prog_if) ||
+                    !match_any_or_u16(rec->vendor_id, vendor_id) ||
+                    !match_any_or_u16(rec->device_id, device_id)) {
+                    continue;
+                }
+                g_selected_storage_index = module_index;
+                g_selected_storage_caps = caps;
+                if ((g_selected_storage_caps.cap_flags & DEVMGR_CAP_IRQ) != 0 &&
+                    rec->irq_hint < 16u) {
+                    g_selected_storage_caps.irq_mask = (uint16_t)(1u << rec->irq_hint);
+                }
+                return;
             }
-            return;
         }
     }
 }
@@ -482,22 +488,14 @@ select_fallback_storage_driver(void)
 {
     reset_selected_storage();
     for (int32_t module_index = 0; module_index < g_module_count; ++module_index) {
-        uint8_t class_code = 0;
-        uint8_t subclass = 0;
-        uint8_t prog_if = 0;
-        uint16_t vendor_id = 0;
-        uint16_t device_id = 0;
-        uint8_t storage_bootstrap = 0;
+        uint8_t class_code = 0, subclass = 0, prog_if = 0, storage_bootstrap = 0, match_count = 0;
+        uint16_t vendor_id = 0, device_id = 0;
         spawn_caps_t caps;
-        if (query_driver_module_meta(module_index,
-                                     &class_code,
-                                     &subclass,
-                                     &prog_if,
-                                     &vendor_id,
-                                     &device_id,
-                                     &storage_bootstrap,
-                                     &caps) != 0 ||
-            !storage_bootstrap) {
+        if (query_driver_module_meta(module_index, 0,
+                                     &class_code, &subclass, &prog_if,
+                                     &vendor_id, &device_id,
+                                     &storage_bootstrap, &match_count, &caps) != 0 ||
+            !storage_bootstrap || match_count == 0) {
             continue;
         }
         g_selected_storage_index = module_index;

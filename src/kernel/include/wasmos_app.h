@@ -6,7 +6,7 @@
 #include "wasm_driver.h"
 
 #define WASMOS_APP_MAGIC "WASMOSAP"
-#define WASMOS_APP_VERSION 2u
+#define WASMOS_APP_VERSION 3u
 
 #define WASMOS_APP_FLAG_DRIVER     (1u << 0)
 #define WASMOS_APP_FLAG_SERVICE    (1u << 1)
@@ -28,6 +28,7 @@
 #define WASMOS_APP_MAX_REQUIRED_ENDPOINTS 8u
 #define WASMOS_APP_MAX_CAP_REQUESTS 8u
 #define WASMOS_APP_MAX_ENTRY_ARG_BINDINGS 4u
+#define WASMOS_APP_MAX_DRIVER_MATCHES 8u
 
 typedef struct {
     const uint8_t *name;
@@ -47,6 +48,18 @@ typedef struct {
 } wasmos_app_entry_arg_binding_t;
 
 typedef struct {
+    uint8_t class_code;
+    uint8_t subclass;
+    uint8_t prog_if;
+    uint8_t reserved0;
+    uint16_t vendor_id;
+    uint16_t device_id;
+    uint16_t io_port_min;
+    uint16_t io_port_max;
+    uint32_t priority;
+} wasmos_app_driver_match_t;
+
+typedef struct {
     const uint8_t *blob;
     uint32_t blob_size;
     uint32_t flags;
@@ -58,13 +71,8 @@ typedef struct {
     uint32_t entry_len;
     uint32_t stack_pages_hint;
     uint32_t heap_pages_hint;
-    uint8_t driver_match_class;
-    uint8_t driver_match_subclass;
-    uint8_t driver_match_prog_if;
-    uint16_t driver_match_vendor_id;
-    uint16_t driver_match_device_id;
-    uint16_t driver_io_port_min;
-    uint16_t driver_io_port_max;
+    uint32_t driver_match_count;
+    wasmos_app_driver_match_t driver_matches[WASMOS_APP_MAX_DRIVER_MATCHES];
     uint32_t req_ep_count;
     wasmos_app_req_endpoint_t req_eps[WASMOS_APP_MAX_REQUIRED_ENDPOINTS];
     uint32_t cap_count;

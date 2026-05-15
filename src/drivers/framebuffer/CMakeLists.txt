@@ -57,11 +57,11 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_FRAMEBUFFER_APP}
   COMMAND ${WASMOS_APP_PACKER}
-          --manifest ${DRIVER_WASM_DIR}/framebuffer/linker.manifest
+          --manifest ${DRIVER_WASM_DIR}/framebuffer/linker.metadata
           --in ${NATIVE_FRAMEBUFFER_DRIVER_ELF}
           --out ${WASM_FRAMEBUFFER_APP}
   DEPENDS ${NATIVE_FRAMEBUFFER_DRIVER_ELF} make_wasmos_app
-          ${DRIVER_WASM_DIR}/framebuffer/linker.manifest
+          ${DRIVER_WASM_DIR}/framebuffer/linker.metadata
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing native framebuffer driver as WASMOS-APP"
   VERBATIM

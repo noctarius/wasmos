@@ -34,11 +34,11 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_VT_APP}
   COMMAND ${WASMOS_APP_PACKER}
-          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/linker.manifest
+          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
           --in ${WASM_VT_APP_WASM}
           --out ${WASM_VT_APP}
   DEPENDS ${WASM_VT_APP_WASM} make_wasmos_app
-          ${CMAKE_CURRENT_SOURCE_DIR}/linker.manifest
+          ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm vt as WASMOS-APP"
   VERBATIM

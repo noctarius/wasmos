@@ -34,11 +34,11 @@ add_custom_command(
 add_custom_command(
   OUTPUT ${WASM_INIT_APP}
   COMMAND ${WASMOS_APP_PACKER}
-          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/linker.manifest
+          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
           --in ${WASM_INIT_APP_WASM}
           --out ${WASM_INIT_APP}
   DEPENDS ${WASM_INIT_APP_WASM} make_wasmos_app
-          ${CMAKE_CURRENT_SOURCE_DIR}/linker.manifest
+          ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Packing wasm init as WASMOS-APP"
   VERBATIM

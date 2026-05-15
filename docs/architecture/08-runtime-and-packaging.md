@@ -56,7 +56,7 @@ Current entry expectations:
 
 Current packaging input:
 - all in-tree app/driver/service modules define metadata in colocated TOML
-  `linker.manifest` files
+  `linker.metadata` files
 - `scripts/make_wasmos_app.c` consumes those manifests via
   `--manifest <file> --in <module> --out <app>`
 - driver manifests can carry zero or more `[[matches]]` records so one driver

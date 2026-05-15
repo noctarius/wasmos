@@ -27,11 +27,11 @@ if (AS_ENABLE)
   add_custom_command(
     OUTPUT ${WASM_KEYBOARD_APP}
     COMMAND ${WASMOS_APP_PACKER}
-            --manifest ${DRIVER_WASM_DIR}/keyboard/linker.manifest
+            --manifest ${DRIVER_WASM_DIR}/keyboard/linker.metadata
             --in ${WASM_KEYBOARD_DRIVER_WASM}
             --out ${WASM_KEYBOARD_APP}
     DEPENDS ${WASM_KEYBOARD_DRIVER_WASM} make_wasmos_app
-            ${DRIVER_WASM_DIR}/keyboard/linker.manifest
+            ${DRIVER_WASM_DIR}/keyboard/linker.metadata
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Packing keyboard driver as WASMOS-APP"
     VERBATIM

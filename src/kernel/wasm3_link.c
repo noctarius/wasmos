@@ -409,7 +409,7 @@ wasm_fs_buffer_for_pid(uint32_t pid, uint32_t context_id)
     if (peer && peer->valid && peer->peer_context_id != 0) {
         target_context = peer->peer_context_id;
     }
-    return process_manager_fs_buffer_for_context(target_context);
+    return process_manager_buffer_for_context(PM_BUFFER_KIND_FS, target_context);
 }
 
 m3ApiRawFunction(wasmos_ipc_create_endpoint)
@@ -918,7 +918,7 @@ m3ApiRawFunction(wasmos_block_buffer_write)
 m3ApiRawFunction(wasmos_fs_buffer_size)
 {
     m3ApiReturnType(int32_t)
-    m3ApiReturn((int32_t)process_manager_fs_buffer_size());
+    m3ApiReturn((int32_t)process_manager_buffer_size(PM_BUFFER_KIND_FS));
 }
 
 m3ApiRawFunction(wasmos_fs_endpoint)
@@ -948,7 +948,7 @@ m3ApiRawFunction(wasmos_fs_buffer_copy)
     if (current_process_context(&context_id) != 0) {
         m3ApiReturn(-1);
     }
-    uint32_t max_len = process_manager_fs_buffer_size();
+    uint32_t max_len = process_manager_buffer_size(PM_BUFFER_KIND_FS);
     if ((uint32_t)offset + (uint32_t)len > max_len) {
         m3ApiReturn(-1);
     }
@@ -1005,7 +1005,7 @@ m3ApiRawFunction(wasmos_fs_buffer_write)
     if (current_process_context(&context_id) != 0) {
         m3ApiReturn(-1);
     }
-    uint32_t max_len = process_manager_fs_buffer_size();
+    uint32_t max_len = process_manager_buffer_size(PM_BUFFER_KIND_FS);
     if ((uint32_t)offset + (uint32_t)len > max_len) {
         m3ApiReturn(-1);
     }

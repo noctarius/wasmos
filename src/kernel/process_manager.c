@@ -306,41 +306,6 @@ process_manager_buffer_borrow_flags(uint32_t kind, uint32_t context_id)
     return 0;
 }
 
-void *
-process_manager_fs_buffer_for_context(uint32_t context_id)
-{
-    return process_manager_buffer_for_context(PM_BUFFER_KIND_FS, context_id);
-}
-
-uint32_t
-process_manager_fs_buffer_size(void)
-{
-    return process_manager_buffer_size(PM_BUFFER_KIND_FS);
-}
-
-int
-process_manager_fs_buffer_borrow_context(uint32_t borrower_context_id,
-                                         uint32_t source_context_id,
-                                         uint32_t flags)
-{
-    return process_manager_buffer_borrow_context(PM_BUFFER_KIND_FS,
-                                                 borrower_context_id,
-                                                 source_context_id,
-                                                 flags);
-}
-
-int
-process_manager_fs_buffer_release_context(uint32_t borrower_context_id)
-{
-    return process_manager_buffer_release_context(PM_BUFFER_KIND_FS, borrower_context_id);
-}
-
-uint32_t
-process_manager_fs_buffer_borrow_flags(uint32_t context_id)
-{
-    return process_manager_buffer_borrow_flags(PM_BUFFER_KIND_FS, context_id);
-}
-
 void
 process_manager_inject_wait_owner_mismatch_test(uint32_t expected_owner_context_id)
 {
@@ -1045,8 +1010,8 @@ pm_poll_spawn(uint32_t pm_context_id)
 
     uint32_t pid = 0;
     uint32_t size = (uint32_t)msg.arg0;
-    const uint8_t *fs_blob = (const uint8_t *)process_manager_fs_buffer_for_context(pm_context_id);
-    if (size == 0 || size > process_manager_fs_buffer_size() || !fs_blob ||
+    const uint8_t *fs_blob = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FS, pm_context_id);
+    if (size == 0 || size > process_manager_buffer_size(PM_BUFFER_KIND_FS) || !fs_blob ||
         pm_spawn_from_buffer(g_pm.spawn.parent_pid,
                              fs_blob,
                              size,

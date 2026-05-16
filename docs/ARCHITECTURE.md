@@ -128,7 +128,10 @@ WASMOS-APP package; `device-manager` requests module metadata from PM at
 runtime and matches those records against `pci-bus` inventory. PM now also
 exposes initfs metadata lookup by module path (`PROC_IPC_MODULE_META_PATH`) so
 early user-space can resolve driver metadata without depending only on the
-initial boot-module index list.
+initial boot-module index list. WASMOS-APP metadata parsing/mapping helpers are
+now extracted into a dedicated kernel module (`wasmos_app_meta`) and user-space
+libc includes convenience helpers for these PM metadata IPC calls
+(`lib/libc/include/wasmos/proc.h`).
 When native `menuconfig`-style frontends are unavailable, build configuration
 can be edited through the in-repo `kconfiglib` interactive fallback script
 (`scripts/kconfiglib_menuconfig.py`), exposed via CMake targets.

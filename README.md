@@ -35,6 +35,7 @@ It defines repository workflow and documentation/update conventions.
 - CLI now includes `mount` command for active mount/device inspection
 - libc `read`/`write` now route stdio FDs (`0`/`1`/`2`) to console hostcalls
 - libc and language wrappers now provide line-oriented console input helpers (`readline`)
+- libc now includes process-manager metadata helper APIs in `wasmos/proc.h` (`PROC_IPC_MODULE_META` / `PROC_IPC_MODULE_META_PATH`)
 - libc string/ctype/stdio coverage now includes common helpers (`memmove`, `strnlen`, `strchr`/`strrchr`, `strcpy`/`strncpy`, `isspace`/`isdigit`/`isxdigit`/etc., `getchar`/`putchar`/`fputs`)
 - drivers/services CMake now also emits IDE-only C source targets with include paths so editor indexers can resolve headers in non-native WASM modules
 - drivers/services CMake now uses shared root helper functions for wasm-C compile/packaging + IDE-target wiring, reducing per-module duplication
@@ -165,6 +166,7 @@ Current driver match/capability policy source:
 - driver metadata is embedded in each driver’s WASMOS-APP package
 - `device-manager` queries module metadata from process-manager at runtime and matches against PCI inventory
 - process-manager now also supports initfs metadata lookup by module path (`PROC_IPC_MODULE_META_PATH`) so driver startup can resolve metadata without relying only on boot-module indices
+- kernel `.wap` metadata parsing/mapping helpers are now extracted into `wasmos_app_meta` so process-manager logic can reuse a focused metadata module
 - all in-tree apps, drivers, and services now provide `linker.metadata` metadata consumed by `make_wasmos_app`
 Current FS namespace model:
 - `fs-manager` is the canonical `fs` endpoint for PM/runtime file I/O and CLI mount namespace routing (registered as `fs.vfs`)

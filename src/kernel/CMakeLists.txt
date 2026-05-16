@@ -89,6 +89,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/timer.o
   ${BUILD_DIR}/process_manager.o
   ${BUILD_DIR}/wasmos_app.o
+  ${BUILD_DIR}/wasmos_app_meta.o
   ${BUILD_DIR}/native_driver.o
   ${BUILD_DIR}/wasm_driver.o
   ${BUILD_DIR}/wasm_chardev.o
@@ -137,6 +138,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/timer.c
   ${KERNEL_DIR}/process_manager.c
   ${KERNEL_DIR}/wasmos_app.c
+  ${KERNEL_DIR}/wasmos_app_meta.c
   ${KERNEL_DIR}/native_driver.c
   ${KERNEL_DIR}/wasm_driver.c
   ${KERNEL_DIR}/wasm_chardev.c
@@ -182,6 +184,7 @@ target_sources(kernel_sources INTERFACE
   ${KERNEL_DIR}/include/wasm_chardev.h
   ${KERNEL_DIR}/include/wasm_driver.h
   ${KERNEL_DIR}/include/wasmos_app.h
+  ${KERNEL_DIR}/include/wasmos_app_meta.h
   ${KERNEL_DIR}/include/wasm3_link.h
   ${KERNEL_DIR}/wasm3_probe.h
   ${KERNEL_DIR}/include/io.h
@@ -265,6 +268,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/timer.c -o ${BUILD_DIR}/timer.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager.c -o ${BUILD_DIR}/process_manager.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_app.c -o ${BUILD_DIR}/wasmos_app.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_app_meta.c -o ${BUILD_DIR}/wasmos_app_meta.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/native_driver.c -o ${BUILD_DIR}/native_driver.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_driver.c -o ${BUILD_DIR}/wasm_driver.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_chardev.c -o ${BUILD_DIR}/wasm_chardev.o
@@ -292,6 +296,7 @@ add_custom_command(
           ${KERNEL_DIR}/include/thread.h
           ${KERNEL_DIR}/include/memory_service.h ${KERNEL_DIR}/include/irq.h ${KERNEL_DIR}/include/timer.h
           ${KERNEL_DIR}/include/serial.h ${KERNEL_DIR}/include/wasmos_app.h
+          ${KERNEL_DIR}/include/wasmos_app_meta.h
           ${KERNEL_DIR}/include/native_driver.h ${KERNEL_DIR}/include/spinlock.h
           ${KERNEL_DIR}/include/wasm_driver.h ${KERNEL_DIR}/include/wasm_chardev.h
           ${KERNEL_DIR}/include/framebuffer.h

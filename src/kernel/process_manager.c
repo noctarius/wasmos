@@ -8,6 +8,7 @@
 #include "physmem.h"
 #include "memory.h"
 #include "string.h"
+#include "wasmos_app_meta.h"
 
 /*
  * The process manager is the bridge between filesystem-visible WASMOS-APP
@@ -109,7 +110,6 @@ static uint8_t g_pm_spawn_owner_deny_logged;
 
 static uint32_t pm_alloc_cli_tty(void);
 static int pm_service_set(const char *name, uint32_t endpoint, uint32_t owner_context_id);
-static uint32_t pm_driver_cap_flags_from_desc(const wasmos_app_desc_t *desc);
 static int name_eq(const char *a, const char *b);
 
 static void
@@ -849,18 +849,6 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
 }
 
 static int
-pm_module_desc(uint32_t module_index, wasmos_app_desc_t *out_desc)
-{
-    const boot_module_t *mod = pm_module_at(module_index);
-    if (!mod || !out_desc ||
-        mod->type != BOOT_MODULE_TYPE_WASMOS_APP ||
-        mod->base == 0 || mod->size == 0 || mod->size > 0xFFFFFFFFULL) {
-        return -1;
-    }
-    return wasmos_app_parse((const uint8_t *)(uintptr_t)mod->base, (uint32_t)mod->size, out_desc);
-}
-
-static int
 pm_apply_spawn_caps(uint32_t pid, const pm_spawn_caps_t *caps)
 {
     process_t *proc = 0;
@@ -1193,7 +1181,7 @@ pm_handle_module_meta(uint32_t pm_context_id, const ipc_message_t *msg)
     if (!caller) {
         return -1;
     }
-    if (pm_module_desc(msg->arg0, &desc) != 0) {
+    if (wasmos_app_module_desc(g_pm.boot_info, msg->arg0, &desc) != 0) {
         return -1;
     }
     if ((desc.flags & WASMOS_APP_FLAG_DRIVER) == 0) {
@@ -1204,7 +1192,7 @@ pm_handle_module_meta(uint32_t pm_context_id, const ipc_message_t *msg)
         return -1;
     }
     match = &desc.driver_matches[match_index];
-    cap_flags = pm_driver_cap_flags_from_desc(&desc);
+    cap_flags = wasmos_app_driver_cap_flags(&desc);
 
     packed_match = ((uint32_t)match->class_code << 24) |
                    ((uint32_t)match->subclass << 16) |
@@ -1227,84 +1215,6 @@ pm_handle_module_meta(uint32_t pm_context_id, const ipc_message_t *msg)
     resp.arg2 = packed_vendor_device;
     resp.arg3 = packed_caps;
     return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
-}
-
-static uint32_t
-pm_driver_cap_flags_from_desc(const wasmos_app_desc_t *desc)
-{
-    uint32_t cap_flags = 0;
-    if (!desc) {
-        return 0;
-    }
-    for (uint32_t i = 0; i < desc->cap_count; ++i) {
-        if (bytes_eq_lit(desc->caps[i].name, desc->caps[i].name_len, "io.port")) {
-            cap_flags |= DEVMGR_CAP_IO_PORT;
-        } else if (bytes_eq_lit(desc->caps[i].name, desc->caps[i].name_len, "irq.route")) {
-            cap_flags |= DEVMGR_CAP_IRQ;
-        }
-    }
-    return cap_flags;
-}
-
-static int
-pm_module_desc_by_initfs_path(const char *path, uint32_t *out_module_index, wasmos_app_desc_t *out_desc)
-{
-    const boot_info_t *info = g_pm.boot_info;
-    const uint8_t *initfs_base = 0;
-    const uint8_t *entries_base = 0;
-    const wasmos_initfs_header_t *hdr = 0;
-    uint32_t module_index = 0xFFFFFFFFu;
-
-    if (!path || !out_desc || !out_module_index || !info || !info->initfs || info->initfs_size == 0) {
-        return -1;
-    }
-    if ((info->flags & BOOT_INFO_FLAG_INITFS_PRESENT) == 0) {
-        return -1;
-    }
-
-    initfs_base = (const uint8_t *)(uintptr_t)info->initfs;
-    if (info->initfs_size < sizeof(wasmos_initfs_header_t)) {
-        return -1;
-    }
-    hdr = (const wasmos_initfs_header_t *)initfs_base;
-    if (hdr->magic[0] != 'W' || hdr->magic[1] != 'M' || hdr->magic[2] != 'I' || hdr->magic[3] != 'N' ||
-        hdr->magic[4] != 'I' || hdr->magic[5] != 'T' || hdr->magic[6] != 'F' || hdr->magic[7] != 'S') {
-        return -1;
-    }
-    if (hdr->entry_size < sizeof(wasmos_initfs_entry_t) || hdr->header_size > info->initfs_size) {
-        return -1;
-    }
-    if (hdr->entry_count > ((info->initfs_size - hdr->header_size) / hdr->entry_size)) {
-        return -1;
-    }
-    entries_base = initfs_base + hdr->header_size;
-
-    for (uint32_t i = 0; i < hdr->entry_count; ++i) {
-        const wasmos_initfs_entry_t *entry = (const wasmos_initfs_entry_t *)(entries_base + (i * hdr->entry_size));
-        if (entry->type != WASMOS_INITFS_ENTRY_WASMOS_APP) {
-            continue;
-        }
-        if (!name_eq(entry->path, path)) {
-            continue;
-        }
-        if (entry->offset >= info->initfs_size || entry->size == 0 ||
-            entry->size > (info->initfs_size - entry->offset)) {
-            return -1;
-        }
-        if (wasmos_app_parse(initfs_base + entry->offset, entry->size, out_desc) != 0) {
-            return -1;
-        }
-        for (uint32_t m = 0; m < g_pm.module_count; ++m) {
-            const boot_module_t *mod = pm_module_at(m);
-            if (mod && name_eq(mod->name, path)) {
-                module_index = m;
-                break;
-            }
-        }
-        *out_module_index = module_index;
-        return 0;
-    }
-    return -1;
 }
 
 static int
@@ -1337,7 +1247,7 @@ pm_handle_module_meta_path(uint32_t pm_context_id, const ipc_message_t *msg)
     path[path_len] = '\0';
 
     if (source == PROC_MODULE_SOURCE_INITFS) {
-        if (pm_module_desc_by_initfs_path(path, &module_index, &desc) != 0) {
+        if (wasmos_app_module_desc_by_initfs_path(g_pm.boot_info, path, &module_index, &desc) != 0) {
             return -1;
         }
     } else if (source == PROC_MODULE_SOURCE_FS) {
@@ -1347,7 +1257,7 @@ pm_handle_module_meta_path(uint32_t pm_context_id, const ipc_message_t *msg)
         return -1;
     }
 
-    cap_flags = pm_driver_cap_flags_from_desc(&desc);
+    cap_flags = wasmos_app_driver_cap_flags(&desc);
     resp.type = PROC_IPC_RESP;
     resp.source = g_pm.proc_endpoint;
     resp.destination = msg->source;

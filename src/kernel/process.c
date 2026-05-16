@@ -1,4 +1,5 @@
 #include "process.h"
+#include "klog.h"
 #include "memory.h"
 #include "physmem.h"
 #include "serial.h"
@@ -125,7 +126,7 @@ process_alloc_stack(process_t *slot, uint32_t stack_pages)
         /* TODO(ring3-phase2): If stack pressure exceeds the shared higher-half
          * window, extend the explicit kernel allowlist window instead of
          * falling back to low-mapped stacks under user CR3 roots. */
-        serial_write("[sched] higher-half stack alloc failed\n");
+        klog_write("[sched] higher-half stack alloc failed\n");
         return -1;
     }
 
@@ -139,13 +140,13 @@ process_alloc_stack(process_t *slot, uint32_t stack_pages)
 
     for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
         if (paging_unmap_4k(guard_low_virt + ((uint64_t)i * PAGE_SIZE)) != 0) {
-            serial_write("[sched] guard unmap failed\n");
+            klog_write("[sched] guard unmap failed\n");
             return -1;
         }
     }
     for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
         if (paging_unmap_4k(guard_high_virt + ((uint64_t)i * PAGE_SIZE)) != 0) {
-            serial_write("[sched] guard unmap failed\n");
+            klog_write("[sched] guard unmap failed\n");
             return -1;
         }
     }
@@ -178,7 +179,7 @@ process_alloc_thread_stack(thread_t *thread, uint32_t stack_pages)
     uint64_t total_pages = (uint64_t)stack_pages + (STACK_GUARD_PAGES * 2u);
     uint64_t base = pfa_alloc_pages_below(total_pages, KERNEL_SHARED_HIGHER_HALF_WINDOW_BYTES);
     if (!base) {
-        serial_write("[sched] worker stack alloc failed\n");
+        klog_write("[sched] worker stack alloc failed\n");
         return -1;
     }
 
@@ -192,13 +193,13 @@ process_alloc_thread_stack(thread_t *thread, uint32_t stack_pages)
 
     for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
         if (paging_unmap_4k(guard_low_virt + ((uint64_t)i * PAGE_SIZE)) != 0) {
-            serial_write("[sched] worker guard unmap failed\n");
+            klog_write("[sched] worker guard unmap failed\n");
             return -1;
         }
     }
     for (uint32_t i = 0; i < STACK_GUARD_PAGES; ++i) {
         if (paging_unmap_4k(guard_high_virt + ((uint64_t)i * PAGE_SIZE)) != 0) {
-            serial_write("[sched] worker guard unmap failed\n");
+            klog_write("[sched] worker guard unmap failed\n");
             return -1;
         }
     }
@@ -371,7 +372,7 @@ static void process_validate_context(process_t *proc, const char *where) {
     }
     if (proc->ctx_canary_pre != PROCESS_CTX_CANARY_VALUE ||
         proc->ctx_canary_post != PROCESS_CTX_CANARY_VALUE) {
-        serial_printf(
+        klog_printf(
             "[sched] ctx canary corrupt pid=%016llx\n"
             "[sched] name=%s\n"
             "[sched] ctx canary pre=%016llx\n"
@@ -404,7 +405,7 @@ static void process_validate_context(process_t *proc, const char *where) {
         if (!is_user_ctx) {
             uint64_t rsp = proc->ctx.rsp;
             if (rsp < higher_half) {
-                serial_printf(
+                klog_printf(
                     "[sched] invalid rsp in %s pid=%016llx\n"
                     "[sched] name=%s\n"
                     "[sched] rip=%016llx\n"
@@ -423,7 +424,7 @@ static void process_validate_context(process_t *proc, const char *where) {
         }
         return;
     }
-    serial_printf(
+    klog_printf(
         "[sched] invalid rip in %s pid=%016llx\n"
         "[sched] name=%s\n"
         "[sched] rip=%016llx\n"
@@ -1390,13 +1391,13 @@ static int process_schedule_once_impl(void) {
 
     if (proc->ctx_canary_pre != PROCESS_CTX_CANARY_VALUE ||
         proc->ctx_canary_post != PROCESS_CTX_CANARY_VALUE) {
-        serial_write("[sched] ctx canary corrupt before restore pid=");
+        klog_write("[sched] ctx canary corrupt before restore pid=");
         serial_write_hex64(proc->pid);
-        serial_write("[sched] name=");
-        serial_write(proc->name ? proc->name : "(null)");
-        serial_write("\n[sched] ctx canary pre=");
+        klog_write("[sched] name=");
+        klog_write(proc->name ? proc->name : "(null)");
+        klog_write("\n[sched] ctx canary pre=");
         serial_write_hex64(proc->ctx_canary_pre);
-        serial_write("[sched] ctx canary post=");
+        klog_write("[sched] ctx canary post=");
         serial_write_hex64(proc->ctx_canary_post);
         process_log_ctxsw_state();
         process_log_ctx_watch("pre-restore-canary");
@@ -1432,7 +1433,7 @@ static int process_schedule_once_impl(void) {
     cpu_set_kernel_stack((uint64_t)(proc->stack_top - 16u));
     g_sched_ctx.root_table = paging_get_root_table();
     if (!run_ctx) {
-        serial_write("[sched] thread ctx missing\n");
+        klog_write("[sched] thread ctx missing\n");
         critical_section_enter();
         g_current_process = 0;
         g_current_pid = 0;
@@ -1443,7 +1444,7 @@ static int process_schedule_once_impl(void) {
     }
     run_ctx->root_table = mm_context_root_table(proc->context_id);
     if (run_ctx->root_table == 0) {
-        serial_write("[sched] target root missing\n");
+        klog_write("[sched] target root missing\n");
         critical_section_enter();
         g_current_process = 0;
         g_current_pid = 0;
@@ -1460,7 +1461,7 @@ static int process_schedule_once_impl(void) {
     g_sched_switch_count++;
     if (!g_sched_progress_logged && g_sched_switch_count >= SCHED_PROGRESS_MARKER_SWITCHES) {
         g_sched_progress_logged = 1;
-        serial_write("[test] sched progress ok\n");
+        klog_write("[test] sched progress ok\n");
     }
     process_run_result_t result = g_last_run_result;
     critical_section_enter();
@@ -1582,7 +1583,7 @@ void process_tick(void) {
             g_need_resched = 1;
             if (!g_preempt_smoke_logged) {
                 g_preempt_smoke_logged = 1;
-                serial_write("[test] preempt ok\n");
+                klog_write("[test] preempt ok\n");
             }
         }
     }
@@ -1591,13 +1592,13 @@ void process_tick(void) {
             g_resched_pending_since_tick = now;
         } else if ((now - g_resched_pending_since_tick) >= SCHED_RESCHED_STALL_TICKS) {
             g_resched_stall_reports++;
-            serial_write("[watchdog] resched stall ticks=");
+            klog_write("[watchdog] resched stall ticks=");
             serial_write_hex64(now - g_resched_pending_since_tick);
-            serial_write("[watchdog] pid=");
+            klog_write("[watchdog] pid=");
             serial_write_hex64(g_current_pid);
-            serial_write("[watchdog] reports=");
+            klog_write("[watchdog] reports=");
             serial_write_hex64(g_resched_stall_reports);
-            serial_write("\n");
+            klog_write("\n");
             g_resched_pending_since_tick = now;
         }
     } else {
@@ -1655,17 +1656,17 @@ int process_preempt_from_irq(irq_frame_t *frame) {
         }
         if (!valid) {
             g_trap_frame_invalid_reports++;
-            serial_write("[watchdog] trap frame invalid cs=");
+            klog_write("[watchdog] trap frame invalid cs=");
             serial_write_hex64(frame->cs);
-            serial_write("[watchdog] rip=");
+            klog_write("[watchdog] rip=");
             serial_write_hex64(frame->rip);
-            serial_write("[watchdog] user_ss=");
+            klog_write("[watchdog] user_ss=");
             serial_write_hex64(frame->user_ss);
-            serial_write("[watchdog] user_rsp=");
+            klog_write("[watchdog] user_rsp=");
             serial_write_hex64(frame->user_rsp);
-            serial_write("[watchdog] reports=");
+            klog_write("[watchdog] reports=");
             serial_write_hex64(g_trap_frame_invalid_reports);
-            serial_write("\n");
+            klog_write("\n");
             process_clear_resched();
             return 0;
         }
@@ -1839,11 +1840,11 @@ int process_info_at_ex(uint32_t index, uint32_t *out_pid, uint32_t *out_parent_p
 static void
 process_sched_invariant_fail(const char *msg, uint64_t a, uint64_t b)
 {
-    serial_write("[sched] invariant fail: ");
-    serial_write(msg ? msg : "(unknown)");
-    serial_write("\n[sched] a=");
+    klog_write("[sched] invariant fail: ");
+    klog_write(msg ? msg : "(unknown)");
+    klog_write("\n[sched] a=");
     serial_write_hex64(a);
-    serial_write("[sched] b=");
+    klog_write("[sched] b=");
     serial_write_hex64(b);
     for (;;) {
         __asm__ volatile("cli; hlt");

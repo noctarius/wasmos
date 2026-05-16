@@ -1,4 +1,5 @@
 #include <stddef.h>
+#include "klog.h"
 #include <stdint.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -330,7 +331,7 @@ wasm3_alloc(size_t size, int zero)
     if (!chunk || aligned_offset == 0 || aligned_offset + total > chunk->size) {
         /* Ensure new chunks account for the worst-case alignment slop. */
         if (wasm3_heap_grow(slot, total + align) != 0) {
-            serial_printf(
+            klog_printf(
                 "[wasm3-heap] grow failed pid=%016llx\n"
                 "[wasm3-heap] req=%016llx\n"
                 "[wasm3-heap] committed=%016llx\n"
@@ -620,7 +621,7 @@ int fprintf(FILE *stream, const char *fmt, ...)
     va_start(ap, fmt);
     int rc = format_to_buffer(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    serial_write(buf);
+    klog_write(buf);
     return rc;
 }
 
@@ -631,7 +632,7 @@ int printf(const char *fmt, ...)
     va_start(ap, fmt);
     int rc = format_to_buffer(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    serial_write(buf);
+    klog_write(buf);
     return rc;
 }
 

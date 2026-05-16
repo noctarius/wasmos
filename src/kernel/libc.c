@@ -1,4 +1,5 @@
 #include <stdarg.h>
+#include "klog.h"
 #include <stdint.h>
 #include "string.h"
 #include "ctype.h"
@@ -416,7 +417,7 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
 }
 
 void abort(void) {
-    serial_write("[kernel] abort\n");
+    klog_write("[kernel] abort\n");
     for (;;) {
         __asm__ volatile("hlt");
     }

@@ -1,4 +1,5 @@
 #include "process_manager.h"
+#include "klog.h"
 #include "process_manager_internal.h"
 #include "ipc.h"
 #include "serial.h"
@@ -135,7 +136,7 @@ pm_handle_kill(uint32_t pm_context_id, const ipc_message_t *msg)
     if (!caller) {
         if (!g_pm_kill_owner_deny_logged) {
             g_pm_kill_owner_deny_logged = 1;
-            serial_write("[test] pm kill owner deny ok\n");
+            klog_write("[test] pm kill owner deny ok\n");
         }
         return -1;
     }
@@ -176,7 +177,7 @@ pm_handle_status(uint32_t pm_context_id, const ipc_message_t *msg)
     if (!caller) {
         if (!g_pm_status_owner_deny_logged) {
             g_pm_status_owner_deny_logged = 1;
-            serial_write("[test] pm status owner deny ok\n");
+            klog_write("[test] pm status owner deny ok\n");
         }
         return -1;
     }
@@ -325,12 +326,12 @@ process_manager_entry(process_t *process, void *arg)
 
     if (!g_pm.started) {
         if (ipc_endpoint_create(process->context_id, &g_pm.proc_endpoint) != IPC_OK) {
-            serial_write("[pm] endpoint create failed\n");
+            klog_write("[pm] endpoint create failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
         if (ipc_endpoint_create(process->context_id, &g_pm.fs_reply_endpoint) != IPC_OK) {
-            serial_write("[pm] fs reply endpoint create failed\n");
+            klog_write("[pm] fs reply endpoint create failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }

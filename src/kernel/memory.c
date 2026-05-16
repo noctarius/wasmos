@@ -1,4 +1,5 @@
 #include "memory.h"
+#include "klog.h"
 #include "paging.h"
 #include "physmem.h"
 #include "serial.h"
@@ -123,12 +124,12 @@ mm_region_virtual_base(mm_context_t *ctx, mem_region_type_t type, uint64_t pages
 void mm_init(const boot_info_t *boot_info) {
     g_boot_info = boot_info;
     g_context_count = 0;
-    serial_write("[mm] init\n");
+    klog_write("[mm] init\n");
     pfa_init(boot_info);
     if (paging_init() != 0) {
-        serial_write("[mm] paging init failed\n");
+        klog_write("[mm] paging init failed\n");
     } else {
-        serial_write("[mm] paging init\n");
+        klog_write("[mm] paging init\n");
     }
 
     if (mm_context_init(&g_root_ctx, 0) == 0) {
@@ -140,7 +141,7 @@ void mm_init(const boot_info_t *boot_info) {
         mm_context_alloc_region(&g_root_ctx, 2, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, MEM_REGION_DEVICE);
     }
 
-    serial_printf("[mm] ctx0 regions=0x%016llX\n",
+    klog_printf("[mm] ctx0 regions=0x%016llX\n",
                   (unsigned long long)g_root_ctx.region_count);
 
 }
@@ -278,25 +279,25 @@ mm_trace_copy_fail(const char *op,
                    uint64_t chunk_user_addr,
                    uint64_t chunk_size)
 {
-    trace_do(serial_write("[mm-copy] fail op="));
-    trace_do(serial_write(op));
-    trace_do(serial_write(" stage="));
-    trace_do(serial_write(stage));
-    trace_do(serial_write(" ctx="));
+    trace_do(klog_write("[mm-copy] fail op="));
+    trace_do(klog_write(op));
+    trace_do(klog_write(" stage="));
+    trace_do(klog_write(stage));
+    trace_do(klog_write(" ctx="));
     trace_do(serial_write_hex64((uint64_t)context_id));
-    trace_do(serial_write(" user="));
+    trace_do(klog_write(" user="));
     trace_do(serial_write_hex64(user_addr));
-    trace_do(serial_write(" size="));
+    trace_do(klog_write(" size="));
     trace_do(serial_write_hex64(size));
-    trace_do(serial_write(" root_expected="));
+    trace_do(klog_write(" root_expected="));
     trace_do(serial_write_hex64(root_expected));
-    trace_do(serial_write(" root_current="));
+    trace_do(klog_write(" root_current="));
     trace_do(serial_write_hex64(root_current));
-    trace_do(serial_write(" chunk_user="));
+    trace_do(klog_write(" chunk_user="));
     trace_do(serial_write_hex64(chunk_user_addr));
-    trace_do(serial_write(" chunk_size="));
+    trace_do(klog_write(" chunk_size="));
     trace_do(serial_write_hex64(chunk_size));
-    trace_do(serial_write("\n"));
+    trace_do(klog_write("\n"));
 }
 
 static int
@@ -651,7 +652,7 @@ mm_context_t *mm_context_create(uint32_t id) {
         return 0;
     }
     if (paging_verify_user_root(ctx->root_table, 1) != 0) {
-        serial_write("[mm] verify user root failed\n");
+        klog_write("[mm] verify user root failed\n");
         paging_dump_user_root_kernel_mappings(ctx->root_table);
         return 0;
     }

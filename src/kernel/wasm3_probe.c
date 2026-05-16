@@ -1,4 +1,5 @@
 #include <stddef.h>
+#include "klog.h"
 #include <stdint.h>
 #include "boot.h"
 #include "serial.h"
@@ -32,16 +33,16 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
     preempt_disable();
     wasm3_heap_configure(process_current_pid(), 0, 2ULL * 1024ULL * 1024ULL * 1024ULL);
     if (wasm3_heap_probe_growth(6u * 1024u * 1024u) != 0) {
-        serial_write("[wasm3] heap growth probe failed\n");
+        klog_write("[wasm3] heap growth probe failed\n");
         preempt_enable();
         wasm3_heap_restore_pid(previous_pid);
         return -1;
     }
-    serial_write("[test] wasm heap grow ok\n");
+    klog_write("[test] wasm heap grow ok\n");
     const boot_module_t *mod = probe_module_at(info, module_index);
     if (!mod || mod->type != BOOT_MODULE_TYPE_WASMOS_APP || mod->base == 0 ||
         mod->size == 0 || mod->size > 0xFFFFFFFFULL) {
-        serial_write("[wasm3] invalid module\n");
+        klog_write("[wasm3] invalid module\n");
         preempt_enable();
         wasm3_heap_restore_pid(previous_pid);
         return -1;
@@ -51,13 +52,13 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
     if (wasmos_app_parse((const uint8_t *)(uintptr_t)mod->base,
                          (uint32_t)mod->size,
                          &desc) != 0) {
-        serial_write("[wasm3] parse failed\n");
+        klog_write("[wasm3] parse failed\n");
         preempt_enable();
         wasm3_heap_restore_pid(previous_pid);
         return -1;
     }
     if (desc.entry_len == 0 || desc.entry_len >= sizeof(entry_name)) {
-        serial_write("[wasm3] invalid entry name\n");
+        klog_write("[wasm3] invalid entry name\n");
         preempt_enable();
         wasm3_heap_restore_pid(previous_pid);
         return -1;
@@ -69,7 +70,7 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
 
     IM3Environment env = m3_NewEnvironment();
     if (!env) {
-        serial_write("[wasm3] env alloc failed\n");
+        klog_write("[wasm3] env alloc failed\n");
         preempt_enable();
         wasm3_heap_restore_pid(previous_pid);
         return -1;
@@ -77,7 +78,7 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
 
     IM3Runtime runtime = m3_NewRuntime(env, 64 * 1024, NULL);
     if (!runtime) {
-        serial_write("[wasm3] runtime alloc failed\n");
+        klog_write("[wasm3] runtime alloc failed\n");
         m3_FreeEnvironment(env);
         preempt_enable();
         wasm3_heap_restore_pid(previous_pid);
@@ -87,9 +88,9 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
     IM3Module module = NULL;
     M3Result res = m3_ParseModule(env, &module, desc.wasm_bytes, desc.wasm_size);
     if (res) {
-        serial_write("[wasm3] parse module failed: ");
-        serial_write(res);
-        serial_write("\n");
+        klog_write("[wasm3] parse module failed: ");
+        klog_write(res);
+        klog_write("\n");
         m3_FreeRuntime(runtime);
         m3_FreeEnvironment(env);
         preempt_enable();
@@ -99,9 +100,9 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
 
     res = m3_LoadModule(runtime, module);
     if (res) {
-        serial_write("[wasm3] load module failed: ");
-        serial_write(res);
-        serial_write("\n");
+        klog_write("[wasm3] load module failed: ");
+        klog_write(res);
+        klog_write("\n");
         m3_FreeRuntime(runtime);
         m3_FreeEnvironment(env);
         preempt_enable();
@@ -110,18 +111,18 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
     }
 
     if (wasm3_link_wasmos(module) != 0) {
-        serial_write("[wasm3] link wasmos failed\n");
+        klog_write("[wasm3] link wasmos failed\n");
     }
     if (wasm3_link_env(module) != 0) {
-        serial_write("[wasm3] link env failed\n");
+        klog_write("[wasm3] link env failed\n");
     }
 
     IM3Function func = NULL;
     res = m3_FindFunction(&func, runtime, entry_name);
     if (res) {
-        serial_write("[wasm3] find entry failed: ");
-        serial_write(res);
-        serial_write("\n");
+        klog_write("[wasm3] find entry failed: ");
+        klog_write(res);
+        klog_write("\n");
         m3_FreeRuntime(runtime);
         m3_FreeEnvironment(env);
         preempt_enable();
@@ -136,18 +137,18 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
     const void *args[4] = { &a0, &a1, &a2, &a3 };
     res = m3_Call(func, 4, args);
     if (res) {
-        serial_write("[wasm3] call failed: ");
-        serial_write(res);
-        serial_write("\n");
+        klog_write("[wasm3] call failed: ");
+        klog_write(res);
+        klog_write("\n");
         M3ErrorInfo info;
         m3_GetErrorInfo(runtime, &info);
         if (info.message) {
-            serial_write("[wasm3] error message: ");
-            serial_write(info.message);
-            serial_write("\n");
+            klog_write("[wasm3] error message: ");
+            klog_write(info.message);
+            klog_write("\n");
         }
     } else {
-        serial_write("[wasm3] call ok\n");
+        klog_write("[wasm3] call ok\n");
     }
 
     m3_FreeRuntime(runtime);

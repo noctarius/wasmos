@@ -1,4 +1,5 @@
 #include "process_manager_internal.h"
+#include "klog.h"
 #include "process_manager.h"
 #include "serial.h"
 #include "string.h"
@@ -140,16 +141,16 @@ pm_handle_service_register(uint32_t pm_context_id, const ipc_message_t *msg)
     }
     track_fs = (strcmp(name, "fs") == 0) || (strcmp(name, "fs.vfs") == 0);
     if (ipc_endpoint_owner(msg->source, &owner_context_id) != IPC_OK) {
-        if (track_fs) serial_write("[pm] fs register owner lookup failed\n");
+        if (track_fs) klog_write("[pm] fs register owner lookup failed\n");
         return -1;
     }
     if (ipc_endpoint_owner(msg->source, &endpoint_owner) != IPC_OK ||
         endpoint_owner != owner_context_id) {
-        if (track_fs) serial_write("[pm] fs register endpoint owner mismatch\n");
+        if (track_fs) klog_write("[pm] fs register endpoint owner mismatch\n");
         return -1;
     }
     if (pm_service_set(name, msg->source, owner_context_id) != 0) {
-        if (track_fs) serial_write("[pm] fs register service set failed\n");
+        if (track_fs) klog_write("[pm] fs register service set failed\n");
         return -1;
     }
     pm_update_well_known_service_endpoint(name, msg->source);

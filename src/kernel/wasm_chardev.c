@@ -1,4 +1,5 @@
 #include "wasm_chardev.h"
+#include "klog.h"
 #include "serial.h"
 #include "wasm_driver.h"
 
@@ -33,16 +34,16 @@ wasm_chardev_init(uint32_t owner_context_id)
 
     g_owner_context_id = owner_context_id;
     if (wasm_driver_start(&g_chardev_driver, &manifest, owner_context_id) != 0) {
-        serial_write("[chardev] wasm driver start failed\n");
+        klog_write("[chardev] wasm driver start failed\n");
         return -1;
     }
 
     if (wasm_driver_endpoint(&g_chardev_driver, &g_entry_args[0]) != 0) {
-        serial_write("[chardev] endpoint lookup failed\n");
+        klog_write("[chardev] endpoint lookup failed\n");
         return -1;
     }
 
-    serial_write("[chardev] wasm chardev ready (ipc)\n");
+    klog_write("[chardev] wasm chardev ready (ipc)\n");
     return 0;
 }
 

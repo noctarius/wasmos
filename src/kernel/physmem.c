@@ -1,4 +1,5 @@
 #include "physmem.h"
+#include "klog.h"
 #include "serial.h"
 
 #define PAGE_SIZE 0x1000ULL
@@ -116,16 +117,16 @@ static void reserve_range(uint64_t base, uint64_t size) {
 void pfa_init(const boot_info_t *boot_info) {
     g_range_count = 0;
     if (!boot_info || !boot_info->memory_map || boot_info->memory_desc_size == 0) {
-        serial_write("[pfa] no memory map\n");
+        klog_write("[pfa] no memory map\n");
         return;
     }
 
-    serial_write("[pfa] init\n");
+    klog_write("[pfa] init\n");
 
     uint64_t desc_size = boot_info->memory_desc_size;
     uint64_t count = boot_info->memory_map_size / desc_size;
     if (count > 4096) {
-        serial_write("[pfa] map too large, capping descriptors\n");
+        klog_write("[pfa] map too large, capping descriptors\n");
         count = 4096;
     }
 
@@ -142,10 +143,10 @@ void pfa_init(const boot_info_t *boot_info) {
     uint64_t kernel_size = (uint64_t)(uintptr_t)&__kernel_end - kernel_base;
     reserve_range(kernel_base, kernel_size);
 
-    serial_printf("[pfa] ranges=0x%016llX\n", (unsigned long long)g_range_count);
+    klog_printf("[pfa] ranges=0x%016llX\n", (unsigned long long)g_range_count);
 
     uint64_t test = pfa_alloc_pages(1);
-    serial_printf("[pfa] test alloc=0x%016llX\n", (unsigned long long)test);
+    klog_printf("[pfa] test alloc=0x%016llX\n", (unsigned long long)test);
 }
 
 uint64_t pfa_alloc_pages(uint64_t pages) {

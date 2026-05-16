@@ -1,4 +1,5 @@
 #include <stddef.h>
+#include "klog.h"
 #include "wasmos_app.h"
 #include "serial.h"
 
@@ -368,10 +369,10 @@ int
 wasmos_app_call_entry(wasmos_app_instance_t *instance)
 {
     if (!instance || !instance->active) {
-        serial_write("[wasmos-app] entry skipped (inactive)\n");
+        klog_write("[wasmos-app] entry skipped (inactive)\n");
         return -1;
     }
-    serial_printf("[wasmos-app] entry start %s export=%s\n",
+    klog_printf("[wasmos-app] entry start %s export=%s\n",
         instance->name, instance->entry);
     /* Entry dispatch is centralized here so drivers, services, and applications
      * all produce the same diagnostic framing around their actual export call. */
@@ -379,7 +380,7 @@ wasmos_app_call_entry(wasmos_app_instance_t *instance)
                                        instance->entry,
                                        instance->entry_argc,
                                        instance->entry_argv);
-    serial_printf("[wasmos-app] entry rc=%016llx\n[wasmos-app] entry %s %s\n",
+    klog_printf("[wasmos-app] entry rc=%016llx\n[wasmos-app] entry %s %s\n",
         (unsigned long long)(uint32_t)rc,
         rc == 0 ? "ok" : "failed",
         instance->name);
@@ -398,14 +399,14 @@ wasmos_app_start(wasmos_app_instance_t *instance,
     }
     if (copy_ascii_field(instance->name, sizeof(instance->name), desc->name, desc->name_len) != 0 ||
         copy_ascii_field(instance->entry, sizeof(instance->entry), desc->entry, desc->entry_len) != 0) {
-        serial_write("[wasmos-app] invalid name or entry\n");
+        klog_write("[wasmos-app] invalid name or entry\n");
         return -1;
     }
 
     instance->resolved_ep_count = 0;
     for (uint32_t i = 0; i < desc->req_ep_count; ++i) {
         if (!g_endpoint_resolver) {
-            serial_write("[wasmos-app] endpoint resolver missing\n");
+            klog_write("[wasmos-app] endpoint resolver missing\n");
             return -1;
         }
         uint32_t endpoint = IPC_ENDPOINT_NONE;
@@ -415,7 +416,7 @@ wasmos_app_start(wasmos_app_instance_t *instance,
                                 desc->req_eps[i].rights,
                                 &endpoint) != 0 ||
             endpoint == IPC_ENDPOINT_NONE) {
-            serial_write("[wasmos-app] endpoint resolve failed\n");
+            klog_write("[wasmos-app] endpoint resolve failed\n");
             return -1;
         }
         instance->resolved_eps[instance->resolved_ep_count++] = endpoint;
@@ -423,14 +424,14 @@ wasmos_app_start(wasmos_app_instance_t *instance,
 
     for (uint32_t i = 0; i < desc->cap_count; ++i) {
         if (!g_capability_granter) {
-            serial_write("[wasmos-app] capability granter missing\n");
+            klog_write("[wasmos-app] capability granter missing\n");
             return -1;
         }
         if (g_capability_granter(owner_context_id,
                                  desc->caps[i].name,
                                  desc->caps[i].name_len,
                                  desc->caps[i].flags) != 0) {
-            serial_write("[wasmos-app] capability grant failed\n");
+            klog_write("[wasmos-app] capability grant failed\n");
             return -1;
         }
     }
@@ -454,7 +455,7 @@ wasmos_app_start(wasmos_app_instance_t *instance,
     }
 
     if (wasm_driver_start(&instance->driver, &manifest, owner_context_id) != 0) {
-        serial_write("[wasmos-app] start failed\n");
+        klog_write("[wasmos-app] start failed\n");
         return -1;
     }
 

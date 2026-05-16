@@ -1,4 +1,5 @@
 #include "process_manager_internal.h"
+#include "klog.h"
 #include "process_manager.h"
 #include "capability.h"
 #include "memory.h"
@@ -181,7 +182,7 @@ pm_app_entry(process_t *process, void *arg)
     if (!state->started) {
         wasmos_app_desc_t desc;
         if (wasmos_app_parse(state->blob, state->blob_size, &desc) != 0) {
-            serial_write("[pm] app parse failed\n");
+            klog_write("[pm] app parse failed\n");
             process_set_exit_status(process, -1);
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD)
             preempt_enable();
@@ -217,7 +218,7 @@ pm_app_entry(process_t *process, void *arg)
                              process->context_id,
                              init_args,
                              state->entry_argc) != 0) {
-            serial_write("[pm] app start failed\n");
+            klog_write("[pm] app start failed\n");
             process_set_exit_status(process, -1);
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD)
             preempt_enable();
@@ -230,7 +231,7 @@ pm_app_entry(process_t *process, void *arg)
     {
         int entry_rc = wasmos_app_call_entry(&state->app);
         if (entry_rc != 0) {
-            serial_write("[pm] app entry failed\n");
+            klog_write("[pm] app entry failed\n");
             process_set_exit_status(process, -1);
         } else {
             process_set_exit_status(process, 0);
@@ -467,7 +468,7 @@ pm_check_waits(uint32_t pm_context_id)
             reply_owner_context != waiter->owner_context_id) {
             if (!g_pm_wait_owner_deny_logged) {
                 g_pm_wait_owner_deny_logged = 1;
-                serial_write("[test] pm wait reply owner deny ok\n");
+                klog_write("[test] pm wait reply owner deny ok\n");
             }
             waiter->in_use = 0;
             continue;
@@ -530,7 +531,7 @@ pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t *msg)
     if (!caller) {
         if (!g_pm_spawn_owner_deny_logged) {
             g_pm_spawn_owner_deny_logged = 1;
-            serial_write("[test] pm spawn owner deny ok\n");
+            klog_write("[test] pm spawn owner deny ok\n");
         }
         return -1;
     }

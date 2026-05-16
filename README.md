@@ -36,6 +36,7 @@ It defines repository workflow and documentation/update conventions.
 - libc `read`/`write` now route stdio FDs (`0`/`1`/`2`) to console hostcalls
 - libc and language wrappers now provide line-oriented console input helpers (`readline`)
 - libc now includes process-manager metadata helper APIs in `wasmos/proc.h` (`PROC_IPC_MODULE_META` / `PROC_IPC_MODULE_META_PATH`)
+- kernel process-manager internals are now split into focused modules (`process_manager_buffers`, `process_manager_services`, `process_manager_spawn`) to keep lifecycle, registry, and buffer-borrow logic isolated
 - libc string/ctype/stdio coverage now includes common helpers (`memmove`, `strnlen`, `strchr`/`strrchr`, `strcpy`/`strncpy`, `isspace`/`isdigit`/`isxdigit`/etc., `getchar`/`putchar`/`fputs`)
 - drivers/services CMake now also emits IDE-only C source targets with include paths so editor indexers can resolve headers in non-native WASM modules
 - drivers/services CMake now uses shared root helper functions for wasm-C compile/packaging + IDE-target wiring, reducing per-module duplication

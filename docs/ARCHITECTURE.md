@@ -96,6 +96,10 @@ per-application endpoint bindings.
 libc stdio compatibility now includes direct console-backed `read`/`write`
 handling for `STDIN_FILENO`/`STDOUT_FILENO`/`STDERR_FILENO` (0/1/2), while
 filesystem reads/writes continue to use FS IPC descriptors (`>=3`).
+Process-manager internals are now split into focused kernel modules
+(`process_manager_buffers`, `process_manager_services`, `process_manager_spawn`)
+so buffer borrowing, service-registry IPC, and spawn/metadata handling evolve
+independently while preserving the same PM external IPC contract.
 Line-oriented console input helpers are now exposed in libc and language
 wrappers (`readline` in C stdio plus AssemblyScript/Go/Rust/Zig wrapper APIs)
 as thin loops over `console_read`.

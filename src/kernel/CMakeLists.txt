@@ -88,6 +88,9 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/irq.o
   ${BUILD_DIR}/timer.o
   ${BUILD_DIR}/process_manager.o
+  ${BUILD_DIR}/process_manager_buffers.o
+  ${BUILD_DIR}/process_manager_services.o
+  ${BUILD_DIR}/process_manager_spawn.o
   ${BUILD_DIR}/wasmos_app.o
   ${BUILD_DIR}/wasmos_app_meta.o
   ${BUILD_DIR}/native_driver.o
@@ -137,6 +140,9 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/irq.c
   ${KERNEL_DIR}/timer.c
   ${KERNEL_DIR}/process_manager.c
+  ${KERNEL_DIR}/process_manager_buffers.c
+  ${KERNEL_DIR}/process_manager_services.c
+  ${KERNEL_DIR}/process_manager_spawn.c
   ${KERNEL_DIR}/wasmos_app.c
   ${KERNEL_DIR}/wasmos_app_meta.c
   ${KERNEL_DIR}/native_driver.c
@@ -177,6 +183,7 @@ target_sources(kernel_sources INTERFACE
   ${KERNEL_DIR}/include/process.h
   ${KERNEL_DIR}/include/thread.h
   ${KERNEL_DIR}/include/process_manager.h
+  ${KERNEL_DIR}/include/process_manager_internal.h
   ${KERNEL_DIR}/include/irq.h
   ${KERNEL_DIR}/include/timer.h
   ${KERNEL_DIR}/include/serial.h
@@ -267,6 +274,9 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/irq.c -o ${BUILD_DIR}/irq.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/timer.c -o ${BUILD_DIR}/timer.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager.c -o ${BUILD_DIR}/process_manager.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_buffers.c -o ${BUILD_DIR}/process_manager_buffers.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_services.c -o ${BUILD_DIR}/process_manager_services.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_spawn.c -o ${BUILD_DIR}/process_manager_spawn.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_app.c -o ${BUILD_DIR}/wasmos_app.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_app_meta.c -o ${BUILD_DIR}/wasmos_app_meta.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/native_driver.c -o ${BUILD_DIR}/native_driver.o
@@ -293,6 +303,7 @@ add_custom_command(
   ${KERNEL_DIR}/include/policy.h
   ${KERNEL_DIR}/include/slab.h ${KERNEL_DIR}/include/syscall.h ${KERNEL_DIR}/include/paging.h
           ${KERNEL_DIR}/include/physmem.h ${KERNEL_DIR}/include/process.h ${KERNEL_DIR}/include/process_manager.h
+          ${KERNEL_DIR}/include/process_manager_internal.h
           ${KERNEL_DIR}/include/thread.h
           ${KERNEL_DIR}/include/memory_service.h ${KERNEL_DIR}/include/irq.h ${KERNEL_DIR}/include/timer.h
           ${KERNEL_DIR}/include/serial.h ${KERNEL_DIR}/include/wasmos_app.h

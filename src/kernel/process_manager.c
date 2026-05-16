@@ -2,7 +2,6 @@
 #include "klog.h"
 #include "process_manager_internal.h"
 #include "ipc.h"
-#include "string.h"
 
 pm_state_t g_pm;
 uint8_t g_pm_wait_owner_deny_logged;

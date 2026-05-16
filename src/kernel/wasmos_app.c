@@ -1,4 +1,3 @@
-#include <stddef.h>
 #include "klog.h"
 #include "wasmos_app.h"
 

@@ -26,24 +26,6 @@ static uint32_t g_range_count;
 extern uint8_t __kernel_start;
 extern uint8_t __kernel_end;
 
-static void write_hex(uint64_t value) {
-    char buf[21];
-    static const char hex[] = "0123456789ABCDEF";
-    buf[0] = '0';
-    buf[1] = 'x';
-    for (int i = 0; i < 16; ++i) {
-        buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
-    }
-    buf[18] = '\n';
-    buf[19] = '\0';
-    serial_write(buf);
-}
-
-static void log_hex(const char *label, uint64_t value) {
-    serial_write(label);
-    write_hex(value);
-}
-
 static int is_usable(uint32_t type) {
     return type == EFI_MEMORY_TYPE_CONVENTIONAL ||
            type == EFI_MEMORY_TYPE_BOOT_SERVICES_CODE ||
@@ -160,10 +142,10 @@ void pfa_init(const boot_info_t *boot_info) {
     uint64_t kernel_size = (uint64_t)(uintptr_t)&__kernel_end - kernel_base;
     reserve_range(kernel_base, kernel_size);
 
-    log_hex("[pfa] ranges=", g_range_count);
+    serial_printf("[pfa] ranges=0x%016llX\n", (unsigned long long)g_range_count);
 
     uint64_t test = pfa_alloc_pages(1);
-    log_hex("[pfa] test alloc=", test);
+    serial_printf("[pfa] test alloc=0x%016llX\n", (unsigned long long)test);
 }
 
 uint64_t pfa_alloc_pages(uint64_t pages) {

@@ -147,6 +147,16 @@ read(int fd, void *buf, size_t count)
     if (count == 0) {
         return 0;
     }
+    if (fd == STDIN_FILENO) {
+        int32_t got = wasmos_console_read((int32_t)(uintptr_t)buf, (int32_t)count);
+        if (got < 0) {
+            return -1;
+        }
+        return (ssize_t)got;
+    }
+    if (fd == STDOUT_FILENO || fd == STDERR_FILENO) {
+        return -1;
+    }
 
     chunk_max = (size_t)wasmos_fs_buffer_size();
     if (chunk_max == 0) {
@@ -192,6 +202,16 @@ write(int fd, const void *buf, size_t count)
     }
     if (count == 0) {
         return 0;
+    }
+    if (fd == STDOUT_FILENO || fd == STDERR_FILENO) {
+        int32_t wrote = wasmos_console_write((int32_t)(uintptr_t)buf, (int32_t)count);
+        if (wrote < 0) {
+            return -1;
+        }
+        return (ssize_t)count;
+    }
+    if (fd == STDIN_FILENO) {
+        return -1;
     }
 
     chunk_max = (size_t)wasmos_fs_buffer_size();

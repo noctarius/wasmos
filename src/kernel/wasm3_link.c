@@ -498,7 +498,7 @@ process_name_eq(const char *a, const char *b)
     return *a == '\0' && *b == '\0';
 }
 
-m3ApiRawFunction(wasmos_ipc_send_kernel)
+m3ApiRawFunction(wasmos_ipc_forward)
 {
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, destination_endpoint)
@@ -510,6 +510,8 @@ m3ApiRawFunction(wasmos_ipc_send_kernel)
     m3ApiGetArg(int32_t, arg2)
     m3ApiGetArg(int32_t, arg3)
     ipc_message_t req;
+    uint32_t context_id = 0;
+    uint32_t source_owner = 0;
     uint32_t pid = process_current_pid();
     process_t *proc = process_get(pid);
 
@@ -519,6 +521,16 @@ m3ApiRawFunction(wasmos_ipc_send_kernel)
     }
     if (destination_endpoint < 0 || source_endpoint < 0) {
         m3ApiReturn(IPC_ERR_INVALID);
+    }
+    if ((uint32_t)type != FS_IPC_READ_APP_REQ) {
+        m3ApiReturn(IPC_ERR_PERM);
+    }
+    if (current_process_context(&context_id) != 0) {
+        m3ApiReturn(IPC_ERR_PERM);
+    }
+    if (ipc_endpoint_owner((uint32_t)source_endpoint, &source_owner) != IPC_OK ||
+        source_owner == 0 || source_owner == context_id) {
+        m3ApiReturn(IPC_ERR_PERM);
     }
 
     req.type = (uint32_t)type;
@@ -2264,7 +2276,7 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "ipc_create_endpoint", "i()", wasmos_ipc_create_endpoint);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_create_notification", "i()", wasmos_ipc_create_notification);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_send", "i(iiiiiiii)", wasmos_ipc_send);
-    rc |= wasm3_link_raw(module, "wasmos", "ipc_send_kernel", "i(iiiiiiii)", wasmos_ipc_send_kernel);
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_forward", "i(iiiiiiii)", wasmos_ipc_forward);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_recv", "i(i)", wasmos_ipc_recv);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_try_recv", "i(i)", wasmos_ipc_try_recv);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_wait", "i(i)", wasmos_ipc_wait);

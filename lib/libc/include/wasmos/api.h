@@ -3,6 +3,10 @@
 
 #include "wasmos/imports.h"
 
+#define WASMOS_BUFFER_KIND_FS 1
+#define WASMOS_BUFFER_GRANT_READ 0x1
+#define WASMOS_BUFFER_GRANT_WRITE 0x2
+
 extern int32_t wasmos_console_read(int32_t ptr, int32_t len)
     WASMOS_WASM_IMPORT("wasmos", "console_read");
 extern int32_t wasmos_console_write(int32_t ptr, int32_t len)
@@ -30,6 +34,10 @@ extern int32_t wasmos_fs_buffer_borrow(int32_t source_endpoint, int32_t flags)
     WASMOS_WASM_IMPORT("wasmos", "fs_buffer_borrow");
 extern int32_t wasmos_fs_buffer_release(void)
     WASMOS_WASM_IMPORT("wasmos", "fs_buffer_release");
+extern int32_t wasmos_buffer_borrow(int32_t kind, int32_t source_endpoint, int32_t flags)
+    WASMOS_WASM_IMPORT("wasmos", "buffer_borrow");
+extern int32_t wasmos_buffer_release(int32_t kind)
+    WASMOS_WASM_IMPORT("wasmos", "buffer_release");
 extern int32_t wasmos_ipc_recv(int32_t endpoint)
     WASMOS_WASM_IMPORT("wasmos", "ipc_recv");
 extern int32_t wasmos_ipc_try_recv(int32_t endpoint)

@@ -190,8 +190,8 @@ pm_fs_slot_find(uint32_t context_id)
     return 0;
 }
 
-void *
-process_manager_fs_buffer_for_context(uint32_t context_id)
+static void *
+pm_fs_buffer_for_context(uint32_t context_id)
 {
     pm_fs_buffer_slot_t *slot = pm_fs_slot_for_context(context_id);
     if (!slot) {
@@ -206,16 +206,16 @@ process_manager_fs_buffer_for_context(uint32_t context_id)
     return (void *)(uintptr_t)slot->buffer_phys;
 }
 
-uint32_t
-process_manager_fs_buffer_size(void)
+static uint32_t
+pm_fs_buffer_size(void)
 {
     return PM_FS_BUFFER_SIZE;
 }
 
-int
-process_manager_fs_buffer_borrow_context(uint32_t borrower_context_id,
-                                         uint32_t source_context_id,
-                                         uint32_t flags)
+static int
+pm_fs_buffer_borrow_context(uint32_t borrower_context_id,
+                            uint32_t source_context_id,
+                            uint32_t flags)
 {
     pm_fs_buffer_slot_t *borrower = 0;
     pm_fs_buffer_slot_t *source = 0;
@@ -235,8 +235,8 @@ process_manager_fs_buffer_borrow_context(uint32_t borrower_context_id,
     return 0;
 }
 
-int
-process_manager_fs_buffer_release_context(uint32_t borrower_context_id)
+static int
+pm_fs_buffer_release_context(uint32_t borrower_context_id)
 {
     pm_fs_buffer_slot_t *borrower = pm_fs_slot_find(borrower_context_id);
     if (!borrower) {
@@ -248,14 +248,97 @@ process_manager_fs_buffer_release_context(uint32_t borrower_context_id)
     return 0;
 }
 
-uint32_t
-process_manager_fs_buffer_borrow_flags(uint32_t context_id)
+static uint32_t
+pm_fs_buffer_borrow_flags(uint32_t context_id)
 {
     pm_fs_buffer_slot_t *slot = pm_fs_slot_find(context_id);
     if (!slot || !slot->borrow_active) {
         return 0;
     }
     return (uint32_t)(slot->borrow_flags & 0x3u);
+}
+
+void *
+process_manager_buffer_for_context(uint32_t kind, uint32_t context_id)
+{
+    if (kind == PM_BUFFER_KIND_FS) {
+        return pm_fs_buffer_for_context(context_id);
+    }
+    return 0;
+}
+
+uint32_t
+process_manager_buffer_size(uint32_t kind)
+{
+    if (kind == PM_BUFFER_KIND_FS) {
+        return pm_fs_buffer_size();
+    }
+    return 0;
+}
+
+int
+process_manager_buffer_borrow_context(uint32_t kind,
+                                      uint32_t borrower_context_id,
+                                      uint32_t source_context_id,
+                                      uint32_t flags)
+{
+    if (kind == PM_BUFFER_KIND_FS) {
+        return pm_fs_buffer_borrow_context(borrower_context_id, source_context_id, flags);
+    }
+    return -1;
+}
+
+int
+process_manager_buffer_release_context(uint32_t kind, uint32_t borrower_context_id)
+{
+    if (kind == PM_BUFFER_KIND_FS) {
+        return pm_fs_buffer_release_context(borrower_context_id);
+    }
+    return -1;
+}
+
+uint32_t
+process_manager_buffer_borrow_flags(uint32_t kind, uint32_t context_id)
+{
+    if (kind == PM_BUFFER_KIND_FS) {
+        return pm_fs_buffer_borrow_flags(context_id);
+    }
+    return 0;
+}
+
+void *
+process_manager_fs_buffer_for_context(uint32_t context_id)
+{
+    return process_manager_buffer_for_context(PM_BUFFER_KIND_FS, context_id);
+}
+
+uint32_t
+process_manager_fs_buffer_size(void)
+{
+    return process_manager_buffer_size(PM_BUFFER_KIND_FS);
+}
+
+int
+process_manager_fs_buffer_borrow_context(uint32_t borrower_context_id,
+                                         uint32_t source_context_id,
+                                         uint32_t flags)
+{
+    return process_manager_buffer_borrow_context(PM_BUFFER_KIND_FS,
+                                                 borrower_context_id,
+                                                 source_context_id,
+                                                 flags);
+}
+
+int
+process_manager_fs_buffer_release_context(uint32_t borrower_context_id)
+{
+    return process_manager_buffer_release_context(PM_BUFFER_KIND_FS, borrower_context_id);
+}
+
+uint32_t
+process_manager_fs_buffer_borrow_flags(uint32_t context_id)
+{
+    return process_manager_buffer_borrow_flags(PM_BUFFER_KIND_FS, context_id);
 }
 
 void

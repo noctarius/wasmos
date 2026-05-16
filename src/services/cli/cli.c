@@ -839,26 +839,6 @@ cli_send_devmgr(uint32_t index)
     return 0;
 }
 
-static int
-buf_append_hex_u8(char *buf, int pos, int cap, uint8_t value)
-{
-    static const char hex[] = "0123456789ABCDEF";
-    if (pos + 2 >= cap) {
-        return pos;
-    }
-    buf[pos++] = hex[(value >> 4) & 0xFu];
-    buf[pos++] = hex[value & 0xFu];
-    return pos;
-}
-
-static int
-buf_append_hex_u16(char *buf, int pos, int cap, uint16_t value)
-{
-    pos = buf_append_hex_u8(buf, pos, cap, (uint8_t)((value >> 8) & 0xFFu));
-    pos = buf_append_hex_u8(buf, pos, cap, (uint8_t)(value & 0xFFu));
-    return pos;
-}
-
 static void
 cli_show_mounts(void)
 {
@@ -879,8 +859,13 @@ cli_show_mounts(void)
         uint32_t a2 = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
         uint32_t a3 = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
         char line[192];
-        int pos = 0;
-        pos = buf_append_str(line, pos, (int)sizeof(line), (mount_id == 0) ? "/boot -> fs-fat" : "/init -> fs-init");
+        int line_len = snprintf(line, sizeof(line), "%s", (mount_id == 0) ? "/boot -> fs-fat" : "/init -> fs-init");
+        if (line_len < 0) {
+            line_len = 0;
+        }
+        if (line_len >= (int)sizeof(line)) {
+            line_len = (int)sizeof(line) - 1;
+        }
         if (mount_id == 0 && (a3 & (1u << 31)) != 0) {
             uint8_t bus = (uint8_t)((a1 >> 24) & 0xFFu);
             uint8_t dev = (uint8_t)((a1 >> 16) & 0xFFu);
@@ -890,25 +875,30 @@ cli_show_mounts(void)
             uint8_t prog_if = (uint8_t)((a2 >> 16) & 0xFFu);
             uint16_t vendor = (uint16_t)(a2 & 0xFFFFu);
             uint16_t device = (uint16_t)(a3 & 0xFFFFu);
-            pos = buf_append_str(line, pos, (int)sizeof(line), " pci ");
-            pos = buf_append_hex_u8(line, pos, (int)sizeof(line), bus);
-            pos = buf_append_str(line, pos, (int)sizeof(line), ":");
-            pos = buf_append_hex_u8(line, pos, (int)sizeof(line), dev);
-            pos = buf_append_str(line, pos, (int)sizeof(line), ".");
-            pos = buf_append_hex_u8(line, pos, (int)sizeof(line), fun);
-            pos = buf_append_str(line, pos, (int)sizeof(line), " class ");
-            pos = buf_append_hex_u8(line, pos, (int)sizeof(line), class_code);
-            pos = buf_append_str(line, pos, (int)sizeof(line), ":");
-            pos = buf_append_hex_u8(line, pos, (int)sizeof(line), subclass);
-            pos = buf_append_str(line, pos, (int)sizeof(line), ":");
-            pos = buf_append_hex_u8(line, pos, (int)sizeof(line), prog_if);
-            pos = buf_append_str(line, pos, (int)sizeof(line), " vid:did ");
-            pos = buf_append_hex_u16(line, pos, (int)sizeof(line), vendor);
-            pos = buf_append_str(line, pos, (int)sizeof(line), ":");
-            pos = buf_append_hex_u16(line, pos, (int)sizeof(line), device);
+            int extra_len = snprintf(line + line_len, sizeof(line) - (size_t)line_len,
+                                     " pci %02X:%02X.%02X class %02X:%02X:%02X vid:did %04X:%04X",
+                                     (unsigned int)bus,
+                                     (unsigned int)dev,
+                                     (unsigned int)fun,
+                                     (unsigned int)class_code,
+                                     (unsigned int)subclass,
+                                     (unsigned int)prog_if,
+                                     (unsigned int)vendor,
+                                     (unsigned int)device);
+            if (extra_len > 0) {
+                line_len += extra_len;
+                if (line_len >= (int)sizeof(line)) {
+                    line_len = (int)sizeof(line) - 1;
+                }
+            }
         }
-        pos = buf_append_str(line, pos, (int)sizeof(line), "\n");
-        line[pos] = '\0';
+        if (line_len + 1 < (int)sizeof(line)) {
+            line[line_len++] = '\n';
+            line[line_len] = '\0';
+        } else {
+            line[sizeof(line) - 2] = '\n';
+            line[sizeof(line) - 1] = '\0';
+        }
         console_write(line);
     }
 }

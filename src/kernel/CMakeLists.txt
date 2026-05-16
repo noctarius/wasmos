@@ -87,6 +87,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/spinlock.o
   ${BUILD_DIR}/memory_service.o
   ${BUILD_DIR}/irq.o
+  ${BUILD_DIR}/irq_x86_64.o
   ${BUILD_DIR}/timer.o
   ${BUILD_DIR}/process_manager.o
   ${BUILD_DIR}/process_manager_buffers.o
@@ -140,6 +141,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/spinlock.c
   ${KERNEL_DIR}/memory_service.c
   ${KERNEL_DIR}/irq.c
+  ${KERNEL_DIR}/arch/x86_64/irq_x86_64.c
   ${KERNEL_DIR}/timer.c
   ${KERNEL_DIR}/process_manager.c
   ${KERNEL_DIR}/process_manager_buffers.c
@@ -275,6 +277,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/spinlock.c -o ${BUILD_DIR}/spinlock.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory_service.c -o ${BUILD_DIR}/memory_service.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/irq.c -o ${BUILD_DIR}/irq.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/irq_x86_64.c -o ${BUILD_DIR}/irq_x86_64.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/timer.c -o ${BUILD_DIR}/timer.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager.c -o ${BUILD_DIR}/process_manager.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_buffers.c -o ${BUILD_DIR}/process_manager_buffers.o
@@ -310,6 +313,7 @@ add_custom_command(
           ${KERNEL_DIR}/include/process_manager_internal.h
           ${KERNEL_DIR}/include/thread.h
           ${KERNEL_DIR}/include/memory_service.h ${KERNEL_DIR}/include/irq.h ${KERNEL_DIR}/include/timer.h
+          ${KERNEL_DIR}/include/arch/x86_64/irq_x86_64.h
           ${KERNEL_DIR}/include/serial.h ${KERNEL_DIR}/include/wasmos_app.h
           ${KERNEL_DIR}/include/wasmos_app_meta.h
           ${KERNEL_DIR}/include/native_driver.h ${KERNEL_DIR}/include/spinlock.h

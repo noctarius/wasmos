@@ -118,6 +118,9 @@ Kernel CPU code now has an explicit architecture split: generic entrypoints in
 `src/kernel/cpu.c` delegate to x86_64 internals in
 `src/kernel/arch/x86_64/cpu_x86_64.c`, clarifying the portability boundary for
 future non-x86 targets.
+Kernel IRQ code now follows the same pattern: generic IRQ entrypoints in
+`src/kernel/irq.c` delegate to x86_64 PIC/IRQ routing internals in
+`src/kernel/arch/x86_64/irq_x86_64.c`.
 Filesystem namespace now starts from a virtual root (`/`) with explicit mount
 subtrees and split backend responsibilities: `fs-manager` is the canonical
 filesystem IPC entrypoint (`fs.vfs`) and routes requests to registered backend

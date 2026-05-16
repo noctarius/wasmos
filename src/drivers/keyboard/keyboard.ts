@@ -1,3 +1,5 @@
+import { std } from "./wasmos";
+
 const KEYBOARD_STATUS_PORT: i32 = 0x64;
 const KEYBOARD_DATA_PORT: i32 = 0x60;
 const KEYBOARD_OBF_FLAG: i32 = 0x01;
@@ -8,8 +10,6 @@ const KBD_IPC_KEY_NOTIFY:     i32 = 0x801;
 const SVC_IPC_REGISTER_REQ:   i32 = 0x220;
 const SVC_IPC_REGISTER_RESP:  i32 = 0x2A0;
 
-@external("wasmos", "console_write")
-declare function console_write(ptr: i32, len: i32): i32;
 @external("wasmos", "io_in8")
 declare function io_in8(port: i32): i32;
 @external("wasmos", "io_wait")
@@ -37,9 +37,9 @@ let g_subs3: i32 = -1;
 let g_kbd_ep: i32 = -1;
 let g_extended_pending: i32 = 0;
 function writeString(text: string): void {
-  if (text.length == 0) { return; }
-  let bytes = Uint8Array.wrap(String.UTF8.encode(text, false));
-  console_write(bytes.dataStart as i32, bytes.byteLength as i32);
+  if (text.length != 0) {
+    std.printf(text);
+  }
 }
 
 function readScancode(): i32 {

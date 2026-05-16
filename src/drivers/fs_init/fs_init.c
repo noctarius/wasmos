@@ -13,7 +13,7 @@ console_write(const char *s)
     if (!s) {
         return;
     }
-    wasmos_console_write((int32_t)(uintptr_t)s, (int32_t)strlen(s));
+    (void)printf("%s", s);
 }
 
 static void
@@ -85,8 +85,7 @@ emit_init_listing(void)
         if (wasmos_sync_user_read((int32_t)(uintptr_t)name, name_len + 1) != 0) {
             continue;
         }
-        console_write(name);
-        console_write("\n");
+        (void)printf("%s\n", name);
     }
     return 0;
 }

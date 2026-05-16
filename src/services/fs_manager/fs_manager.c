@@ -38,7 +38,7 @@ static void stall_forever(void) {
 
 static void log_msg(const char *s) {
     if (!s) return;
-    wasmos_console_write((int32_t)(uintptr_t)s, (int32_t)strlen(s));
+    (void)printf("%s", s);
 }
 
 static int str_ieq(const char *a, const char *b) {

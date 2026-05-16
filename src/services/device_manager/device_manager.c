@@ -138,23 +138,16 @@ stall_forever(void)
     }
 }
 
-static uint32_t
-str_len(const char *s)
-{
-    return (uint32_t)strlen(s);
-}
-
 static void
 console_write(const char *s)
 {
     if (!s) {
         return;
     }
-    uint32_t len = str_len(s);
-    if (len == 0) {
+    if (s[0] == '\0') {
         return;
     }
-    wasmos_console_write((int32_t)(uintptr_t)s, (int32_t)len);
+    (void)printf("%s", s);
 }
 
 static int

@@ -27,26 +27,6 @@ stall_forever(void)
     }
 }
 
-static int
-str_ieq(const char *a, const char *b)
-{
-    if (!a || !b) {
-        return 0;
-    }
-    while (*a && *b) {
-        char ca = *a;
-        char cb = *b;
-        if (ca >= 'A' && ca <= 'Z') ca = (char)(ca + ('a' - 'A'));
-        if (cb >= 'A' && cb <= 'Z') cb = (char)(cb + ('a' - 'A'));
-        if (ca != cb) {
-            return 0;
-        }
-        a++;
-        b++;
-    }
-    return (*a == '\0' && *b == '\0') ? 1 : 0;
-}
-
 static void
 unpack_name(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char *out, uint32_t out_len)
 {
@@ -128,7 +108,10 @@ initialize(int32_t proc_endpoint,
         } else if (type == FS_IPC_CHDIR_REQ) {
             char name[32];
             unpack_name((uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3, name, sizeof(name));
-            status = (str_ieq(name, "/") || str_ieq(name, "..") || str_ieq(name, "init") || str_ieq(name, "/init")) ? 0 : -1;
+            status = (strcasecmp(name, "/") == 0 ||
+                      strcasecmp(name, "..") == 0 ||
+                      strcasecmp(name, "init") == 0 ||
+                      strcasecmp(name, "/init") == 0) ? 0 : -1;
         } else if (type == FS_IPC_READY_REQ) {
             status = 0;
         }

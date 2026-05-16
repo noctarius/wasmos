@@ -114,10 +114,10 @@ Filesystem namespace now starts from a virtual root (`/`) with explicit mount
 subtrees and split backend responsibilities: `fs-manager` is the canonical
 filesystem IPC entrypoint (`fs.vfs`) and routes requests to registered backend
 drivers; `fs-fat` provides boot/FAT routing and `fs-init` provides initfs
-listing. Cross-context filesystem buffer sharing is now modeled as explicit
-borrow/release grants (`fs_buffer_borrow`, `fs_buffer_release`) with read/write
-access bits, so `fs-manager` can proxy requests while backends continue to use
-zero-copy FS-buffer access against borrowed caller buffers.
+listing. Cross-context buffer sharing now uses a generic kernel borrow/release
+primitive (`buffer_borrow`, `buffer_release`) with typed buffer classes and
+read/write access bits; the FS class currently backs `fs-manager` proxying so
+backends keep zero-copy FS-buffer access against borrowed caller buffers.
 Device discovery now includes PCI-inventory-driven matching in `device-manager`
 with enriched `pci-bus` inventory records (class/subclass/prog-if plus minimal
 MMIO/IRQ hints). PM now accepts a capability-profile spawn request variant for

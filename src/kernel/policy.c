@@ -3,6 +3,7 @@
 #include "ipc.h"
 #include "irq.h"
 #include "process.h"
+#include "string.h"
 
 typedef struct {
     const char *app_name;
@@ -15,22 +16,6 @@ static const irq_route_policy_t g_irq_route_policy[] = {
     { "ata",             (uint16_t)((1u << 14) | (1u << 15)) },
     { "irq-route-allow", (uint16_t)(1u << 1) },
 };
-
-static int
-str_eq(const char *a, const char *b)
-{
-    if (!a || !b) {
-        return 0;
-    }
-    while (*a && *b) {
-        if (*a != *b) {
-            return 0;
-        }
-        ++a;
-        ++b;
-    }
-    return *a == '\0' && *b == '\0';
-}
 
 static int
 policy_irq_route_allows(uint32_t context_id, uint32_t irq_line)
@@ -49,7 +34,7 @@ policy_irq_route_allows(uint32_t context_id, uint32_t irq_line)
         return 0;
     }
     for (uint32_t i = 0; i < (uint32_t)(sizeof(g_irq_route_policy) / sizeof(g_irq_route_policy[0])); ++i) {
-        if (!str_eq(proc->name, g_irq_route_policy[i].app_name)) {
+        if (strcmp(proc->name, g_irq_route_policy[i].app_name) != 0) {
             continue;
         }
         return (g_irq_route_policy[i].irq_mask & (uint16_t)(1u << irq_line)) != 0;

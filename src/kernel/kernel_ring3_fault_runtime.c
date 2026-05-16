@@ -1,7 +1,7 @@
 #include "kernel_ring3_fault_runtime.h"
 
+#include "klog.h"
 #include "process.h"
-#include "serial.h"
 
 typedef struct {
     ring3_fault_policy_probes_t probes;
@@ -47,9 +47,9 @@ ring3_fault_policy_entry(process_t *process, void *arg)
         if (rc == 0) {
             if (exit_status == -11) {
                 state->fault_ok = 1;
-                serial_write("[test] ring3 fault exit status ok\n");
+                klog_write("[test] ring3 fault exit status ok\n");
             } else {
-                serial_write("[test] ring3 fault exit status mismatch\n");
+                klog_write("[test] ring3 fault exit status mismatch\n");
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
@@ -60,9 +60,9 @@ ring3_fault_policy_entry(process_t *process, void *arg)
         if (rc == 0) {
             if (exit_status == -11) {
                 state->fault_write_ok = 1;
-                serial_write("[test] ring3 fault write exit status ok\n");
+                klog_write("[test] ring3 fault write exit status ok\n");
             } else {
-                serial_write("[test] ring3 fault write exit status mismatch\n");
+                klog_write("[test] ring3 fault write exit status mismatch\n");
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
@@ -73,9 +73,9 @@ ring3_fault_policy_entry(process_t *process, void *arg)
         if (rc == 0) {
             if (exit_status == -11) {
                 state->fault_exec_ok = 1;
-                serial_write("[test] ring3 fault exec exit status ok\n");
+                klog_write("[test] ring3 fault exec exit status ok\n");
             } else {
-                serial_write("[test] ring3 fault exec exit status mismatch\n");
+                klog_write("[test] ring3 fault exec exit status mismatch\n");
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
@@ -86,9 +86,9 @@ ring3_fault_policy_entry(process_t *process, void *arg)
         if (rc == 0) {
             if (exit_status == -11) {
                 state->fault_ud_ok = 1;
-                serial_write("[test] ring3 fault ud exit status ok\n");
+                klog_write("[test] ring3 fault ud exit status ok\n");
             } else {
-                serial_write("[test] ring3 fault ud exit status mismatch\n");
+                klog_write("[test] ring3 fault ud exit status mismatch\n");
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
@@ -99,9 +99,9 @@ ring3_fault_policy_entry(process_t *process, void *arg)
         if (rc == 0) {
             if (exit_status == -11) {
                 state->fault_gp_ok = 1;
-                serial_write("[test] ring3 fault gp exit status ok\n");
+                klog_write("[test] ring3 fault gp exit status ok\n");
             } else {
-                serial_write("[test] ring3 fault gp exit status mismatch\n");
+                klog_write("[test] ring3 fault gp exit status mismatch\n");
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
@@ -112,9 +112,9 @@ ring3_fault_policy_entry(process_t *process, void *arg)
         if (rc == 0) {
             if (exit_status == -11) {
                 state->fault_de_ok = 1;
-                serial_write("[test] ring3 fault de exit status ok\n");
+                klog_write("[test] ring3 fault de exit status ok\n");
             } else {
-                serial_write("[test] ring3 fault de exit status mismatch\n");
+                klog_write("[test] ring3 fault de exit status mismatch\n");
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
@@ -125,9 +125,9 @@ ring3_fault_policy_entry(process_t *process, void *arg)
         if (rc == 0) {
             if (exit_status == -11) {
                 state->fault_db_ok = 1;
-                serial_write("[test] ring3 fault db exit status ok\n");
+                klog_write("[test] ring3 fault db exit status ok\n");
             } else {
-                serial_write("[test] ring3 fault db exit status mismatch\n");
+                klog_write("[test] ring3 fault db exit status mismatch\n");
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
@@ -138,9 +138,9 @@ ring3_fault_policy_entry(process_t *process, void *arg)
         if (rc == 0) {
             if (exit_status == -11) {
                 state->fault_bp_ok = 1;
-                serial_write("[test] ring3 fault bp exit status ok\n");
+                klog_write("[test] ring3 fault bp exit status ok\n");
             } else {
-                serial_write("[test] ring3 fault bp exit status mismatch\n");
+                klog_write("[test] ring3 fault bp exit status mismatch\n");
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
@@ -151,9 +151,9 @@ ring3_fault_policy_entry(process_t *process, void *arg)
         if (rc == 0) {
             if (exit_status == -11) {
                 state->fault_of_ok = 1;
-                serial_write("[test] ring3 fault of exit status ok\n");
+                klog_write("[test] ring3 fault of exit status ok\n");
             } else {
-                serial_write("[test] ring3 fault of exit status mismatch\n");
+                klog_write("[test] ring3 fault of exit status mismatch\n");
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
@@ -164,9 +164,9 @@ ring3_fault_policy_entry(process_t *process, void *arg)
         if (rc == 0) {
             if (exit_status == -11) {
                 state->fault_nm_ok = 1;
-                serial_write("[test] ring3 fault nm exit status ok\n");
+                klog_write("[test] ring3 fault nm exit status ok\n");
             } else {
-                serial_write("[test] ring3 fault nm exit status mismatch\n");
+                klog_write("[test] ring3 fault nm exit status mismatch\n");
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
@@ -177,9 +177,9 @@ ring3_fault_policy_entry(process_t *process, void *arg)
         if (rc == 0) {
             if (exit_status == -11) {
                 state->fault_ss_ok = 1;
-                serial_write("[test] ring3 fault ss exit status ok\n");
+                klog_write("[test] ring3 fault ss exit status ok\n");
             } else {
-                serial_write("[test] ring3 fault ss exit status mismatch\n");
+                klog_write("[test] ring3 fault ss exit status mismatch\n");
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
@@ -190,9 +190,9 @@ ring3_fault_policy_entry(process_t *process, void *arg)
         if (rc == 0) {
             if (exit_status == -11) {
                 state->fault_ac_ok = 1;
-                serial_write("[test] ring3 fault ac exit status ok\n");
+                klog_write("[test] ring3 fault ac exit status ok\n");
             } else {
-                serial_write("[test] ring3 fault ac exit status mismatch\n");
+                klog_write("[test] ring3 fault ac exit status mismatch\n");
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
@@ -205,24 +205,24 @@ ring3_fault_policy_entry(process_t *process, void *arg)
         state->fault_ss_ok && state->fault_ac_ok) {
         process_t *init_proc = process_get(process->parent_pid);
         if (!init_proc || init_proc->state == PROCESS_STATE_ZOMBIE) {
-            serial_write("[test] ring3 containment liveness mismatch\n");
+            klog_write("[test] ring3 containment liveness mismatch\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
         if (!state->containment_ok_logged) {
             state->containment_ok_logged = 1;
-            serial_write("[test] ring3 containment liveness ok\n");
+            klog_write("[test] ring3 containment liveness ok\n");
         }
         if (!state->churn_done) {
             if (state->churn_round >= state->churn_rounds) {
                 state->churn_done = 1;
-                serial_write("[test] ring3 mixed stress ok\n");
+                klog_write("[test] ring3 mixed stress ok\n");
             } else {
                 if (state->churn_pid == 0) {
                     if (!g_ring3_fault_churn_spawn ||
                         g_ring3_fault_churn_spawn(process->pid, state->churn_round, &state->churn_pid) != 0 ||
                         state->churn_pid == 0) {
-                        serial_write("[test] ring3 mixed stress spawn failed\n");
+                        klog_write("[test] ring3 mixed stress spawn failed\n");
                         process_set_exit_status(process, -1);
                         return PROCESS_RUN_EXITED;
                     }
@@ -230,12 +230,12 @@ ring3_fault_policy_entry(process_t *process, void *arg)
                 rc = process_get_exit_status(state->churn_pid, &exit_status);
                 if (rc == 0) {
                     if (exit_status != -11) {
-                        serial_write("[test] ring3 mixed stress exit status mismatch\n");
+                        klog_write("[test] ring3 mixed stress exit status mismatch\n");
                         process_set_exit_status(process, -1);
                         return PROCESS_RUN_EXITED;
                     }
                     if (process_wait(process, state->churn_pid, &exit_status) != 0) {
-                        serial_write("[test] ring3 mixed stress reap failed\n");
+                        klog_write("[test] ring3 mixed stress reap failed\n");
                         process_set_exit_status(process, -1);
                         return PROCESS_RUN_EXITED;
                     }
@@ -246,9 +246,9 @@ ring3_fault_policy_entry(process_t *process, void *arg)
             }
         }
         if (process_watchdog_issue_count() == 0) {
-            serial_write("[test] ring3 watchdog clean ok\n");
+            klog_write("[test] ring3 watchdog clean ok\n");
         } else {
-            serial_write("[test] ring3 watchdog clean mismatch\n");
+            klog_write("[test] ring3 watchdog clean mismatch\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
@@ -278,7 +278,7 @@ kernel_ring3_fault_policy_spawn(uint32_t init_pid,
                          ring3_fault_policy_entry,
                          &g_ring3_fault_policy_state,
                          &ring3_fault_policy_pid) != 0) {
-        serial_write("[kernel] ring3 fault policy spawn failed\n");
+        klog_write("[kernel] ring3 fault policy spawn failed\n");
         return -1;
     }
     return 0;

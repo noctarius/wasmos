@@ -1,6 +1,7 @@
 #include "kernel_init_runtime.h"
 
 #include "ipc.h"
+#include "klog.h"
 #include "process_manager.h"
 #include "serial.h"
 #include "wasmos_app.h"
@@ -157,7 +158,7 @@ init_send_fs_probe(process_t *process, init_state_t *state)
     fs_ep = process_manager_fs_endpoint();
     if (fs_ep == IPC_ENDPOINT_NONE) {
         if (!logged_fs_wait) {
-            serial_write("[init] waiting for fs service endpoint\n");
+            klog_write("[init] waiting for fs service endpoint\n");
             logged_fs_wait = 1;
         }
         return 1;
@@ -215,7 +216,7 @@ kernel_init_entry(process_t *process, void *arg)
 
         process_manager_init(state->boot_info);
         if (process_spawn_as(process->pid, "process-manager", process_manager_entry, 0, &pm_pid) != 0) {
-            serial_write("[init] process manager spawn failed\n");
+            klog_write("[init] process manager spawn failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
@@ -228,7 +229,7 @@ kernel_init_entry(process_t *process, void *arg)
         state->pm_status_owner_test_injected = 0;
         state->pm_spawn_owner_test_injected = 0;
         if (state->device_manager_index == 0xFFFFFFFFu) {
-            serial_write("[init] device-manager module not found\n");
+            klog_write("[init] device-manager module not found\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
@@ -277,35 +278,35 @@ kernel_init_entry(process_t *process, void *arg)
             state->pm_spawn_owner_test_injected = 1;
         }
         if (ipc_endpoint_create(process->context_id, &state->reply_endpoint) != IPC_OK) {
-            serial_write("[init] reply endpoint create failed\n");
+            klog_write("[init] reply endpoint create failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
         if (state->native_min_index != 0xFFFFFFFFu) {
             trace_write("[init] spawn native-call-min\n");
             if (init_send_spawn_index(process, state, state->native_min_index, 1) != 0) {
-                serial_write("[init] native-call-min spawn request failed\n");
+                klog_write("[init] native-call-min spawn request failed\n");
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
         } else if (state->native_smoke_index != 0xFFFFFFFFu) {
             trace_write("[init] spawn native-call-smoke\n");
             if (init_send_spawn_index(process, state, state->native_smoke_index, 2) != 0) {
-                serial_write("[init] native-call-smoke spawn request failed\n");
+                klog_write("[init] native-call-smoke spawn request failed\n");
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
         } else if (state->smoke_index != 0xFFFFFFFFu) {
             trace_write("[init] spawn init-smoke\n");
             if (init_send_spawn_index(process, state, state->smoke_index, 3) != 0) {
-                serial_write("[init] init-smoke spawn request failed\n");
+                klog_write("[init] init-smoke spawn request failed\n");
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
         } else {
             trace_write("[init] spawn device-manager\n");
             if (init_send_spawn_index(process, state, state->device_manager_index, 4) != 0) {
-                serial_write("[init] device-manager spawn request failed\n");
+                klog_write("[init] device-manager spawn request failed\n");
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
@@ -325,13 +326,13 @@ kernel_init_entry(process_t *process, void *arg)
         }
         if (msg.request_id != state->request_id || msg.type == PROC_IPC_ERROR) {
             if (state->pending_kind == 1) {
-                serial_write("[init] native-call-min spawn failed\n");
+                klog_write("[init] native-call-min spawn failed\n");
             } else if (state->pending_kind == 2) {
-                serial_write("[init] native-call-smoke spawn failed\n");
+                klog_write("[init] native-call-smoke spawn failed\n");
             } else if (state->pending_kind == 3) {
-                serial_write("[init] init-smoke spawn failed\n");
+                klog_write("[init] init-smoke spawn failed\n");
             } else {
-                serial_write("[init] device-manager spawn failed\n");
+                klog_write("[init] device-manager spawn failed\n");
             }
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;

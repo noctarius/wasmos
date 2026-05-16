@@ -1,9 +1,9 @@
 #include "kernel_threading_selftest_runtime.h"
 
 #include "ipc.h"
+#include "klog.h"
 #include "process.h"
 #include "thread.h"
-#include "serial.h"
 
 typedef struct {
     uint32_t worker_a_tid;
@@ -201,7 +201,7 @@ threading_join_order_smoke_entry(process_t *process, void *arg)
                                                  threading_join_order_worker_entry,
                                                  &g_threading_join_target_arg,
                                                  &state->target_tid) != 0) {
-            serial_write("[test] threading join wake order failed\n");
+            klog_write("[test] threading join wake order failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
@@ -210,7 +210,7 @@ threading_join_order_smoke_entry(process_t *process, void *arg)
                                                  threading_join_order_worker_entry,
                                                  &g_threading_join_waiter_arg,
                                                  &state->waiter_tid) != 0) {
-            serial_write("[test] threading join wake order failed\n");
+            klog_write("[test] threading join wake order failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
@@ -226,7 +226,7 @@ threading_join_order_smoke_entry(process_t *process, void *arg)
         state->target_exited &&
         state->waiter_done &&
         state->waiter_exit_status == 11) {
-        serial_write("[test] threading join wake order ok\n");
+        klog_write("[test] threading join wake order ok\n");
         state->done = 1;
         process_set_exit_status(process, 0);
         return PROCESS_RUN_EXITED;
@@ -289,7 +289,7 @@ threading_internal_smoke_entry(process_t *process, void *arg)
                                                  threading_internal_worker_entry,
                                                  &g_threading_worker_b_arg,
                                                  &state->worker_b_tid) != 0) {
-            serial_write("[test] threading internal worker spawn failed\n");
+            klog_write("[test] threading internal worker spawn failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
@@ -304,7 +304,7 @@ threading_internal_smoke_entry(process_t *process, void *arg)
                                                      threading_wait_killer_entry,
                                                      state,
                                                      &state->wait_killer_tid) != 0) {
-                serial_write("[test] threading wait/kill setup failed\n");
+                klog_write("[test] threading wait/kill setup failed\n");
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
@@ -319,7 +319,7 @@ threading_internal_smoke_entry(process_t *process, void *arg)
             state->wait_done = 1;
             state->wait_exit_status = exit_status;
         } else if (wait_rc < 0) {
-            serial_write("[test] threading wait/kill failed\n");
+            klog_write("[test] threading wait/kill failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         } else {
@@ -336,11 +336,11 @@ threading_internal_smoke_entry(process_t *process, void *arg)
           state->wait_exit_status == 42 &&
           state->wait_join_blocked &&
           state->wait_kill_sent))) {
-        serial_write("[test] threading internal worker ok\n");
+        klog_write("[test] threading internal worker ok\n");
         if (g_ring3_thread_lifecycle_smoke_enabled) {
-            serial_write("[test] threading join after kill order ok\n");
-            serial_write("[test] threading join kill wake ok\n");
-            serial_write("[test] threading wait kill wake ok\n");
+            klog_write("[test] threading join after kill order ok\n");
+            klog_write("[test] threading join kill wake ok\n");
+            klog_write("[test] threading wait kill wake ok\n");
         }
         state->done = 1;
         process_set_exit_status(process, 0);
@@ -420,7 +420,7 @@ threading_ipc_stress_entry(process_t *process, void *arg)
                                                  threading_ipc_worker_entry,
                                                  &g_threading_ipc_sender_arg,
                                                  &state->sender_tid) != 0) {
-            serial_write("[test] threading ipc stress setup failed\n");
+            klog_write("[test] threading ipc stress setup failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
@@ -437,7 +437,7 @@ threading_ipc_stress_entry(process_t *process, void *arg)
         state->sent_count == 8u &&
         state->recv_count == 8u &&
         state->recv_empty_count > 0) {
-        serial_write("[test] threading ipc stress ok\n");
+        klog_write("[test] threading ipc stress ok\n");
         state->done = 1;
         process_set_exit_status(process, 0);
         return PROCESS_RUN_EXITED;
@@ -473,7 +473,7 @@ kernel_threading_selftest_spawn(uint32_t init_pid, uint8_t ring3_thread_lifecycl
                          threading_internal_smoke_entry,
                          &g_threading_internal_smoke_state,
                          &threading_internal_smoke_pid) != 0) {
-        serial_write("[kernel] threading internal smoke spawn failed\n");
+        klog_write("[kernel] threading internal smoke spawn failed\n");
         return -1;
     }
     if (process_spawn_as(init_pid,
@@ -481,7 +481,7 @@ kernel_threading_selftest_spawn(uint32_t init_pid, uint8_t ring3_thread_lifecycl
                          threading_join_order_smoke_entry,
                          &g_threading_join_order_smoke_state,
                          &threading_join_order_smoke_pid) != 0) {
-        serial_write("[kernel] threading join-order smoke spawn failed\n");
+        klog_write("[kernel] threading join-order smoke spawn failed\n");
         return -1;
     }
     g_threading_ipc_stress_state = (threading_ipc_stress_state_t){0};
@@ -496,7 +496,7 @@ kernel_threading_selftest_spawn(uint32_t init_pid, uint8_t ring3_thread_lifecycl
                          threading_ipc_stress_entry,
                          &g_threading_ipc_stress_state,
                          &threading_ipc_stress_pid) != 0) {
-        serial_write("[kernel] threading ipc stress spawn failed\n");
+        klog_write("[kernel] threading ipc stress spawn failed\n");
         return -1;
     }
 

@@ -86,6 +86,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/slab.o
   ${BUILD_DIR}/syscall.o
   ${BUILD_DIR}/libc.o
+  ${BUILD_DIR}/klog.o
   ${BUILD_DIR}/paging.o
   ${BUILD_DIR}/physmem.o
   ${BUILD_DIR}/runtime_context.o
@@ -149,6 +150,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/slab.c
   ${KERNEL_DIR}/syscall.c
   ${KERNEL_DIR}/paging.c
+  ${KERNEL_DIR}/klog.c
   ${KERNEL_DIR}/physmem.c
   ${KERNEL_DIR}/runtime_context.c
   ${KERNEL_DIR}/ipc.c
@@ -196,6 +198,7 @@ target_sources(kernel_sources INTERFACE
   ${KERNEL_DIR}/include/policy.h
   ${KERNEL_DIR}/include/slab.h
   ${KERNEL_DIR}/include/syscall.h
+  ${KERNEL_DIR}/include/klog.h
   ${KERNEL_DIR}/include/memory_service.h
   ${KERNEL_DIR}/include/paging.h
   ${KERNEL_DIR}/include/physmem.h
@@ -300,6 +303,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/slab.c -o ${BUILD_DIR}/slab.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/syscall.c -o ${BUILD_DIR}/syscall.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/libc.c -o ${BUILD_DIR}/libc.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/klog.c -o ${BUILD_DIR}/klog.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory.c -o ${BUILD_DIR}/memory.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/paging.c -o ${BUILD_DIR}/paging.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/physmem.c -o ${BUILD_DIR}/physmem.o
@@ -350,6 +354,7 @@ add_custom_command(
   ${KERNEL_DIR}/include/ipc.h ${KERNEL_DIR}/include/memory.h ${KERNEL_DIR}/include/capability.h
   ${KERNEL_DIR}/include/policy.h
   ${KERNEL_DIR}/include/slab.h ${KERNEL_DIR}/include/syscall.h ${KERNEL_DIR}/include/paging.h
+  ${KERNEL_DIR}/include/klog.h
           ${KERNEL_DIR}/include/physmem.h ${KERNEL_DIR}/include/process.h ${KERNEL_DIR}/include/process_manager.h
           ${KERNEL_DIR}/include/process_manager_internal.h
           ${KERNEL_DIR}/include/thread.h

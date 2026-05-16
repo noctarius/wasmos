@@ -152,6 +152,9 @@ Ring3 multi-probe orchestration previously embedded in `kmain` is now routed
 through `src/kernel/kernel_ring3_suite_runtime.c`, which coordinates smoke,
 native/thread-lifecycle probes, ring3 fault probe set creation, and handoff
 into the fault-policy runtime.
+Kernel runtime decomposition now also uses a lightweight logging facade
+(`src/kernel/klog.c`) so split `kernel_*` modules call `klog_*` helpers rather
+than binding directly to serial primitives.
 Filesystem namespace now starts from a virtual root (`/`) with explicit mount
 subtrees and split backend responsibilities: `fs-manager` is the canonical
 filesystem IPC entrypoint (`fs.vfs`) and routes requests to registered backend

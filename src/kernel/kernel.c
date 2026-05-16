@@ -9,6 +9,7 @@
 #include "process_manager.h"
 #include "syscall.h"
 #include "serial.h"
+#include "klog.h"
 #include "timer.h"
 #include "wasmos_app.h"
 #include "wasm_chardev.h"
@@ -179,15 +180,15 @@ kmain(boot_info_t *boot_info)
     (void)boot_info;
 
     serial_init();
-    serial_write("[kernel] kmain\n");
+    klog_write("[kernel] kmain\n");
     if (!boot_info || boot_info->version != BOOT_INFO_VERSION ||
         boot_info->size < sizeof(boot_info_t)) {
-        serial_write("[kernel] invalid boot_info\n");
+        klog_write("[kernel] invalid boot_info\n");
         for (;;) {
             __asm__ volatile("hlt");
         }
     }
-    serial_printf("[kernel] boot_info version=%016llx\n[kernel] boot_info size=%016llx\n",
+    klog_printf("[kernel] boot_info version=%016llx\n[kernel] boot_info size=%016llx\n",
         (unsigned long long)boot_info->version,
         (unsigned long long)boot_info->size);
     g_boot_info = boot_info;
@@ -200,7 +201,7 @@ kmain(boot_info_t *boot_info)
     capability_init();
     slab_init();
     if (boot_info_build_shadow(boot_info, &g_boot_info_shadow) != 0) {
-        serial_write("[kernel] boot_info shadow copy failed\n");
+        klog_write("[kernel] boot_info shadow copy failed\n");
         for (;;) {
             __asm__ volatile("hlt");
         }
@@ -211,11 +212,11 @@ kmain(boot_info_t *boot_info)
     process_init();
     wasm3_link_init(boot_info);
 
-    serial_write("[kernel] wasm3 init on-demand\n");
-    serial_write("[kernel] boot_info shadow active\n");
+    klog_write("[kernel] wasm3 init on-demand\n");
+    klog_write("[kernel] boot_info shadow active\n");
 
     if (process_spawn_idle("idle", idle_entry, 0, &idle_pid) != 0) {
-        serial_write("[kernel] idle spawn failed\n");
+        klog_write("[kernel] idle spawn failed\n");
         for (;;) {
             __asm__ volatile("hlt");
         }
@@ -223,16 +224,16 @@ kmain(boot_info_t *boot_info)
 
     kernel_init_state_reset(&g_init_state, boot_info);
     if (process_spawn("init", kernel_init_entry, &g_init_state, &init_pid) != 0) {
-        serial_write("[kernel] init spawn failed\n");
+        klog_write("[kernel] init spawn failed\n");
         for (;;) {
             __asm__ volatile("hlt");
         }
     }
 
-    serial_printf("[kernel] init pid=%016llx\n", (unsigned long long)init_pid);
+    klog_printf("[kernel] init pid=%016llx\n", (unsigned long long)init_pid);
 
     if (process_spawn_as(init_pid, "mem-service", memory_service_entry, 0, &mem_service_pid) != 0) {
-        serial_write("[kernel] mem service spawn failed\n");
+        klog_write("[kernel] mem service spawn failed\n");
         for (;;) {
             __asm__ volatile("hlt");
         }
@@ -240,7 +241,7 @@ kmain(boot_info_t *boot_info)
 
     mem_service_proc = process_get(mem_service_pid);
     if (!mem_service_proc) {
-        serial_write("[kernel] mem service lookup failed\n");
+        klog_write("[kernel] mem service lookup failed\n");
         for (;;) {
             __asm__ volatile("hlt");
         }
@@ -248,34 +249,34 @@ kmain(boot_info_t *boot_info)
 
     if (ipc_endpoint_create(mem_service_proc->context_id, &mem_service_endpoint) != IPC_OK ||
         ipc_endpoint_create(IPC_CONTEXT_KERNEL, &mem_reply_endpoint) != IPC_OK) {
-        serial_write("[kernel] mem service endpoint create failed\n");
+        klog_write("[kernel] mem service endpoint create failed\n");
         for (;;) {
             __asm__ volatile("hlt");
         }
     }
 
     memory_service_register(mem_service_proc->context_id, mem_service_endpoint, mem_reply_endpoint);
-    serial_write("[kernel] mem service ready\n");
+    klog_write("[kernel] mem service ready\n");
 
     if (process_spawn_as(init_pid, "chardev-server", chardev_server_entry, 0, &chardev_pid) != 0) {
-        serial_write("[kernel] chardev process spawn failed\n");
+        klog_write("[kernel] chardev process spawn failed\n");
         for (;;) {
             __asm__ volatile("hlt");
         }
     }
 
-    serial_printf("[kernel] chardev pid=%016llx\n", (unsigned long long)chardev_pid);
+    klog_printf("[kernel] chardev pid=%016llx\n", (unsigned long long)chardev_pid);
 
     chardev_proc = process_get(chardev_pid);
     if (!chardev_proc || wasm_chardev_init(chardev_proc->context_id) != 0) {
-        serial_write("[kernel] chardev service init failed\n");
+        klog_write("[kernel] chardev service init failed\n");
         for (;;) {
             __asm__ volatile("hlt");
         }
     }
 
     if (wasm_chardev_endpoint(&chardev_endpoint) != 0) {
-        serial_write("[kernel] chardev endpoint lookup failed\n");
+        klog_write("[kernel] chardev endpoint lookup failed\n");
         for (;;) {
             __asm__ volatile("hlt");
         }
@@ -312,9 +313,9 @@ kmain(boot_info_t *boot_info)
     run_low_slot_sweep_diagnostic();
 
     timer_init(250);
-    serial_write("[kernel] interrupts on\n");
+    klog_write("[kernel] interrupts on\n");
     cpu_enable_interrupts();
 
-    serial_write("[kernel] scheduler loop\n");
+    klog_write("[kernel] scheduler loop\n");
     run_kernel_loop();
 }

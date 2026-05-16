@@ -4,6 +4,7 @@
 #include "physmem.h"
 #include "process.h"
 #include "memory.h"
+#include "klog.h"
 #include "serial.h"
 #include "string.h"
 #include "timer.h"
@@ -111,7 +112,7 @@ kernel_boot_run_low_slot_sweep_diagnostic(void)
     const char *name = 0;
     uint8_t failed = 0;
 
-    serial_write("[diag] low-slot sweep start\n");
+    klog_write("[diag] low-slot sweep start\n");
     for (uint32_t i = 0; i < active; ++i) {
         if (process_info_at_ex(i, &pid, &parent_pid, &name) != 0) {
             continue;
@@ -125,20 +126,20 @@ kernel_boot_run_low_slot_sweep_diagnostic(void)
             continue;
         }
         if (paging_strip_low_slot_in_root(root) != 0) {
-            serial_printf("[diag] low-slot sweep fail: strip pid=%u name=%s ctx=%u root=%016llx\n",
+            klog_printf("[diag] low-slot sweep fail: strip pid=%u name=%s ctx=%u root=%016llx\n",
                           pid, name ? name : "(null)", proc->context_id, (unsigned long long)root);
             failed = 1;
             break;
         }
         if (paging_verify_user_root_no_low_slot(root, 1) != 0) {
-            serial_printf("[diag] low-slot sweep fail: verify pid=%u name=%s ctx=%u root=%016llx\n",
+            klog_printf("[diag] low-slot sweep fail: verify pid=%u name=%s ctx=%u root=%016llx\n",
                           pid, name ? name : "(null)", proc->context_id, (unsigned long long)root);
             failed = 1;
             break;
         }
     }
     if (!failed) {
-        serial_write("[diag] low-slot sweep ok\n");
+        klog_write("[diag] low-slot sweep ok\n");
     }
 }
 

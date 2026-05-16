@@ -35,7 +35,6 @@ typedef struct {
     uint32_t entry_arg1;
     uint32_t entry_arg2;
     uint32_t entry_arg3;
-    uint8_t entry_arg_binding_kind[4];
     wasmos_app_instance_t app;
     char name[64];
 } pm_app_state_t;
@@ -86,10 +85,8 @@ typedef struct {
     uint32_t proc_endpoint;
     uint32_t fs_endpoint;
     uint32_t block_endpoint;
-    uint32_t kbd_endpoint;
     uint32_t fb_endpoint;
     uint32_t vt_endpoint;
-    uint32_t devmgr_inventory_endpoint;
     uint32_t fs_reply_endpoint;
     uint32_t fs_request_id;
     uint32_t next_cli_tty;
@@ -632,9 +629,6 @@ pm_apply_entry_bindings(pm_app_state_t *slot, const wasmos_app_desc_t *desc)
     slot->entry_arg1 = 0;
     slot->entry_arg2 = 0;
     slot->entry_arg3 = 0;
-    for (uint32_t i = 0; i < 4; ++i) {
-        slot->entry_arg_binding_kind[i] = (uint8_t)PM_ARG_NONE;
-    }
     for (uint32_t i = 0; i < desc->entry_arg_binding_count && i < 4; ++i) {
         pm_arg_kind_t kind = pm_arg_kind_from_binding(desc->entry_arg_bindings[i].name,
                                                       desc->entry_arg_bindings[i].name_len);
@@ -642,7 +636,6 @@ pm_apply_entry_bindings(pm_app_state_t *slot, const wasmos_app_desc_t *desc)
         if (pm_resolve_pre_spawn_arg(kind, &value) != 0) {
             return -1;
         }
-        slot->entry_arg_binding_kind[i] = (uint8_t)kind;
         if (i == 0) slot->entry_arg0 = value;
         else if (i == 1) slot->entry_arg1 = value;
         else if (i == 2) slot->entry_arg2 = value;
@@ -1689,10 +1682,8 @@ process_manager_init(const boot_info_t *boot_info)
     g_pm.proc_endpoint = IPC_ENDPOINT_NONE;
     g_pm.fs_endpoint = IPC_ENDPOINT_NONE;
     g_pm.block_endpoint = IPC_ENDPOINT_NONE;
-    g_pm.kbd_endpoint = IPC_ENDPOINT_NONE;
     g_pm.fb_endpoint = IPC_ENDPOINT_NONE;
     g_pm.vt_endpoint = IPC_ENDPOINT_NONE;
-    g_pm.devmgr_inventory_endpoint = IPC_ENDPOINT_NONE;
     g_pm.fs_reply_endpoint = IPC_ENDPOINT_NONE;
     g_pm.fs_request_id = 1;
     g_pm.next_cli_tty = 1;

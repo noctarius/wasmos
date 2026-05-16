@@ -535,33 +535,17 @@ typedef enum {
     PM_ARG_CONST_NEG1
 } pm_arg_kind_t;
 
-static int
-bytes_eq_lit(const uint8_t *name, uint32_t name_len, const char *lit)
-{
-    if (!name || !lit) {
-        return 0;
-    }
-    uint32_t i = 0;
-    while (lit[i]) {
-        if (i >= name_len || name[i] != (uint8_t)lit[i]) {
-            return 0;
-        }
-        i++;
-    }
-    return i == name_len;
-}
-
 static pm_arg_kind_t
 pm_arg_kind_from_binding(const uint8_t *name, uint32_t name_len)
 {
-    if (bytes_eq_lit(name, name_len, "none")) return PM_ARG_NONE;
-    if (bytes_eq_lit(name, name_len, "proc.endpoint")) return PM_ARG_PROC_ENDPOINT;
-    if (bytes_eq_lit(name, name_len, "module.count")) return PM_ARG_MODULE_COUNT;
-    if (bytes_eq_lit(name, name_len, "init.module.index")) return PM_ARG_INIT_MODULE_INDEX;
-    if (bytes_eq_lit(name, name_len, "block.endpoint")) return PM_ARG_BLOCK_ENDPOINT;
-    if (bytes_eq_lit(name, name_len, "cli.tty.alloc")) return PM_ARG_CLI_TTY_ALLOC;
-    if (bytes_eq_lit(name, name_len, "chardev.endpoint")) return PM_ARG_CHARDEV_ENDPOINT;
-    if (bytes_eq_lit(name, name_len, "const.neg1")) return PM_ARG_CONST_NEG1;
+    if (str_eq_bytes(name, name_len, "none")) return PM_ARG_NONE;
+    if (str_eq_bytes(name, name_len, "proc.endpoint")) return PM_ARG_PROC_ENDPOINT;
+    if (str_eq_bytes(name, name_len, "module.count")) return PM_ARG_MODULE_COUNT;
+    if (str_eq_bytes(name, name_len, "init.module.index")) return PM_ARG_INIT_MODULE_INDEX;
+    if (str_eq_bytes(name, name_len, "block.endpoint")) return PM_ARG_BLOCK_ENDPOINT;
+    if (str_eq_bytes(name, name_len, "cli.tty.alloc")) return PM_ARG_CLI_TTY_ALLOC;
+    if (str_eq_bytes(name, name_len, "chardev.endpoint")) return PM_ARG_CHARDEV_ENDPOINT;
+    if (str_eq_bytes(name, name_len, "const.neg1")) return PM_ARG_CONST_NEG1;
     return PM_ARG_NONE;
 }
 

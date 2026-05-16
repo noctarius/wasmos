@@ -16,6 +16,7 @@ int strcasecmp(const char *a, const char *b);
 char *strcpy(char *dst, const char *src);
 char *strncpy(char *dst, const char *src, size_t n);
 int str_copy_bytes(char *dst, size_t dst_len, const uint8_t *src, size_t src_len);
+int str_eq_bytes(const uint8_t *bytes, size_t bytes_len, const char *lit);
 char *strchr(const char *s, int ch);
 char *strrchr(const char *s, int ch);
 

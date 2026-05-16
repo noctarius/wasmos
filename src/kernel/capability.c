@@ -1,5 +1,6 @@
 #include "capability.h"
 #include "memory.h"
+#include "string.h"
 
 #define CAP_ALL_MASK ((1u << 5) - 1u)
 
@@ -14,22 +15,6 @@ typedef struct {
 } capability_context_state_t;
 
 static capability_context_state_t g_cap_ctx[MM_MAX_CONTEXTS + 1];
-
-static int
-bytes_eq(const uint8_t *a, uint32_t len, const char *b)
-{
-    if (!a || !b) {
-        return 0;
-    }
-    uint32_t i = 0;
-    while (b[i]) {
-        if (i >= len || a[i] != (const uint8_t)b[i]) {
-            return 0;
-        }
-        i++;
-    }
-    return i == len;
-}
 
 static uint32_t
 kind_to_mask(capability_kind_t kind)
@@ -76,15 +61,15 @@ capability_grant_name(uint32_t context_id, const uint8_t *name, uint32_t name_le
     }
 
     uint32_t mask = 0;
-    if (bytes_eq(name, name_len, "io.port")) {
+    if (str_eq_bytes(name, name_len, "io.port")) {
         mask = kind_to_mask(CAP_IO_PORT);
-    } else if (bytes_eq(name, name_len, "irq.route")) {
+    } else if (str_eq_bytes(name, name_len, "irq.route")) {
         mask = kind_to_mask(CAP_IRQ_ROUTE);
-    } else if (bytes_eq(name, name_len, "mmio.map")) {
+    } else if (str_eq_bytes(name, name_len, "mmio.map")) {
         mask = kind_to_mask(CAP_MMIO_MAP);
-    } else if (bytes_eq(name, name_len, "dma.buffer")) {
+    } else if (str_eq_bytes(name, name_len, "dma.buffer")) {
         mask = kind_to_mask(CAP_DMA_BUFFER);
-    } else if (bytes_eq(name, name_len, "system.control")) {
+    } else if (str_eq_bytes(name, name_len, "system.control")) {
         mask = kind_to_mask(CAP_SYSTEM_CONTROL);
     } else {
         return -1;

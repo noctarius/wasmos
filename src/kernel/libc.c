@@ -212,6 +212,21 @@ int str_copy_bytes(char *dst, size_t dst_len, const uint8_t *src, size_t src_len
     return 0;
 }
 
+int str_eq_bytes(const uint8_t *bytes, size_t bytes_len, const char *lit) {
+    size_t i = 0;
+    if (!bytes || !lit) {
+        return 0;
+    }
+    lit = kernel_str_ptr(lit);
+    while (lit[i]) {
+        if (i >= bytes_len || bytes[i] != (const uint8_t)lit[i]) {
+            return 0;
+        }
+        i++;
+    }
+    return i == bytes_len;
+}
+
 char *strchr(const char *s, int ch) {
     if (!s) {
         return 0;

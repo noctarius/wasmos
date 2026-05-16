@@ -19,22 +19,6 @@ app_meta_module_at(const boot_info_t *boot_info, uint32_t index)
     return (const boot_module_t *)(mods + index * boot_info->module_entry_size);
 }
 
-static int
-bytes_eq_lit(const uint8_t *name, uint32_t name_len, const char *lit)
-{
-    uint32_t i = 0;
-    if (!name || !lit) {
-        return 0;
-    }
-    while (lit[i]) {
-        if (i >= name_len || name[i] != (uint8_t)lit[i]) {
-            return 0;
-        }
-        i++;
-    }
-    return i == name_len;
-}
-
 uint32_t
 wasmos_app_driver_cap_flags(const wasmos_app_desc_t *desc)
 {
@@ -43,9 +27,9 @@ wasmos_app_driver_cap_flags(const wasmos_app_desc_t *desc)
         return 0;
     }
     for (uint32_t i = 0; i < desc->cap_count; ++i) {
-        if (bytes_eq_lit(desc->caps[i].name, desc->caps[i].name_len, "io.port")) {
+        if (str_eq_bytes(desc->caps[i].name, desc->caps[i].name_len, "io.port")) {
             cap_flags |= DEVMGR_CAP_IO_PORT;
-        } else if (bytes_eq_lit(desc->caps[i].name, desc->caps[i].name_len, "irq.route")) {
+        } else if (str_eq_bytes(desc->caps[i].name, desc->caps[i].name_len, "irq.route")) {
             cap_flags |= DEVMGR_CAP_IRQ;
         }
     }

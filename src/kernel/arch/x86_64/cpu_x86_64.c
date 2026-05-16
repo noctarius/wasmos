@@ -5,7 +5,6 @@
 #include "memory_service.h"
 #include "irq.h"
 #include "framebuffer.h"
-#include "syscall.h"
 #include "paging.h"
 #include "stdio.h"
 #include "string.h"

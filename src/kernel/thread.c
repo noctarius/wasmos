@@ -1,7 +1,5 @@
 #include "thread.h"
 
-#include <stddef.h>
-
 static thread_t g_threads[THREAD_MAX_COUNT];
 static uint32_t g_next_tid;
 static uint32_t g_current_tid;

@@ -3,7 +3,6 @@
 #include "klog.h"
 #include "memory.h"
 #include "paging.h"
-#include "physmem.h"
 #include "process.h"
 
 extern const uint8_t _binary_ring3_native_probe_bin_start[];

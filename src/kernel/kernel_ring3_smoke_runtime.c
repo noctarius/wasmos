@@ -4,7 +4,6 @@
 #include "klog.h"
 #include "memory.h"
 #include "paging.h"
-#include "physmem.h"
 #include "process.h"
 #include "process_manager.h"
 #include "syscall.h"

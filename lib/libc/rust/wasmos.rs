@@ -32,6 +32,7 @@ pub const O_TRUNC: i32 = 0x0200;
 #[link(wasm_import_module = "wasmos")]
 unsafe extern "C" {
     fn console_write(ptr: i32, len: i32) -> i32;
+    fn console_read(ptr: i32, len: i32) -> i32;
     fn ipc_create_endpoint() -> i32;
     fn ipc_send(
         destination_endpoint: i32,
@@ -156,7 +157,7 @@ fn fs_request(msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> Resu
 }
 
 pub mod std {
-    use super::{fmt, raw_write, Error, Write};
+    use super::{console_read, fmt, raw_write, Error, Write};
 
     pub struct Writer;
 
@@ -181,6 +182,29 @@ pub mod std {
 
     pub fn printf(args: fmt::Arguments<'_>) -> Result<(), Error> {
         print(args)
+    }
+
+    pub fn readline(buffer: &mut [u8]) -> Result<usize, Error> {
+        if buffer.len() <= 1 {
+            return Err(Error::InvalidArgument);
+        }
+        let mut pos = 0usize;
+        while pos + 1 < buffer.len() {
+            let got = unsafe { console_read(buffer[pos..].as_mut_ptr() as i32, 1) };
+            if got < 0 {
+                buffer[0] = 0;
+                return Err(Error::HostCallFailed);
+            }
+            if got == 0 {
+                break;
+            }
+            pos += 1;
+            if buffer[pos - 1] == b'\n' {
+                break;
+            }
+        }
+        buffer[pos] = 0;
+        Ok(pos)
     }
 }
 

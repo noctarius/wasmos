@@ -49,6 +49,8 @@ const (
 
 //go:wasmimport wasmos console_write
 func consoleWrite(ptr uint32, len uint32) int32
+//go:wasmimport wasmos console_read
+func consoleRead(ptr uint32, len uint32) int32
 
 //go:wasmimport wasmos ipc_create_endpoint
 func ipcCreateEndpoint() int32
@@ -229,6 +231,29 @@ func (stdAPI) Println(s string) Error {
 
 func (stdAPI) Printf(s string) Error {
 	return rawWriteString(s)
+}
+
+func (stdAPI) ReadLine(buffer []byte) (int, Error) {
+	if len(buffer) <= 1 {
+		return 0, ErrInvalidArgument
+	}
+	pos := 0
+	for pos+1 < len(buffer) {
+		got := consoleRead(uint32(uintptr(unsafe.Pointer(&buffer[pos]))), 1)
+		if got < 0 {
+			buffer[0] = 0
+			return 0, ErrHostCallFailed
+		}
+		if got == 0 {
+			break
+		}
+		pos++
+		if buffer[pos-1] == '\n' {
+			break
+		}
+	}
+	buffer[pos] = 0
+	return pos, ErrOK
 }
 
 func (File) Invalid() File {

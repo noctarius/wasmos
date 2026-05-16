@@ -511,6 +511,34 @@ getc(FILE *stream)
     return fgetc(stream);
 }
 
+int
+readline(char *s, int size)
+{
+    int pos = 0;
+
+    if (!s || size <= 1) {
+        return -1;
+    }
+
+    while (pos + 1 < size) {
+        unsigned char ch = 0;
+        ssize_t rc = read(STDIN_FILENO, &ch, 1u);
+        if (rc < 0) {
+            s[0] = '\0';
+            return -1;
+        }
+        if (rc == 0) {
+            break;
+        }
+        s[pos++] = (char)ch;
+        if (ch == '\n') {
+            break;
+        }
+    }
+    s[pos] = '\0';
+    return pos;
+}
+
 char *
 fgets(char *s, int size, FILE *stream)
 {

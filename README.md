@@ -43,6 +43,7 @@ It defines repository workflow and documentation/update conventions.
 - kernel boot-shadow copy, low-slot diagnostic, and scheduler-loop runtime are now extracted into `src/kernel/kernel_boot_runtime.c`, further narrowing `kernel.c` responsibilities
 - baseline kernel selftests (page-fault recovery, IPC wake/send, optional preempt probe) are now extracted into `src/kernel/kernel_selftest_runtime.c`
 - kernel threading selftests (internal-worker/join-order/ipc-stress orchestration) are now extracted into `src/kernel/kernel_threading_selftest_runtime.c`
+- ring3 fault-policy orchestration (fault-status checks, containment liveness, churn/watchdog validation) is now extracted into `src/kernel/kernel_ring3_fault_runtime.c`
 - libc string/ctype/stdio coverage now includes common helpers (`memmove`, `strnlen`, `strchr`/`strrchr`, `strcpy`/`strncpy`, `isspace`/`isdigit`/`isxdigit`/etc., `getchar`/`putchar`/`fputs`)
 - drivers/services CMake now also emits IDE-only C source targets with include paths so editor indexers can resolve headers in non-native WASM modules
 - drivers/services CMake now uses shared root helper functions for wasm-C compile/packaging + IDE-target wiring, reducing per-module duplication

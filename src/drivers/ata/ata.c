@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include "stdio.h"
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
 #include "wasmos_driver_abi.h"
@@ -270,7 +271,7 @@ initialize(int32_t proc_endpoint,
         return -1;
     }
     if (wasmos_svc_register(proc_endpoint, g_block_endpoint, "block", 1) != 0) {
-        wasmos_console_write((int32_t)(uintptr_t)"[ata] svc register failed\n", 26);
+        (void)printf("[ata] svc register failed\n");
         return -1;
     }
     g_present = 0;

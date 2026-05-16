@@ -8,6 +8,31 @@
 #define PCI_CFG_ADDR_PORT 0xCF8
 #define PCI_CFG_DATA_PORT 0xCFC
 
+static void
+log_record(uint8_t bus,
+           uint8_t device,
+           uint8_t function,
+           uint8_t class_code,
+           uint8_t subclass,
+           uint8_t prog_if,
+           uint16_t vendor_id,
+           uint16_t device_id,
+           uint8_t mmio_hint,
+           uint8_t irq_hint)
+{
+    (void)printf("[pci-bus] dev %02X:%02X.%02X class %02X:%02X:%02X vid:did %04X:%04X mmio %02X irq %02X\n",
+                 (unsigned)bus,
+                 (unsigned)device,
+                 (unsigned)function,
+                 (unsigned)class_code,
+                 (unsigned)subclass,
+                 (unsigned)prog_if,
+                 (unsigned)vendor_id,
+                 (unsigned)device_id,
+                 (unsigned)mmio_hint,
+                 (unsigned)irq_hint);
+}
+
 static uint32_t
 pci_config_read32(uint8_t bus, uint8_t device, uint8_t function, uint8_t reg)
 {
@@ -106,6 +131,16 @@ initialize(int32_t proc_endpoint,
                 uint8_t mmio_hint = ((bar0 & 0x1u) == 0u && (bar0 & 0xFFFFFFF0u) != 0u) ? 1u : 0u;
                 uint32_t irq_reg = pci_config_read32((uint8_t)bus, device, function, 0x3C);
                 uint8_t irq_hint = (uint8_t)(irq_reg & 0xFFu);
+                log_record((uint8_t)bus,
+                           device,
+                           function,
+                           class_code,
+                           subclass,
+                           prog_if,
+                           vendor_id,
+                           device_id,
+                           mmio_hint,
+                           irq_hint);
                 publish_record(devmgr_endpoint,
                                source_endpoint,
                                (uint8_t)bus,

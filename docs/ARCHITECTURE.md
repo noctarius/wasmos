@@ -140,6 +140,10 @@ Ring3 fault-policy orchestration (fault-exit verification, containment
 liveness, mixed churn progression, and watchdog cleanliness gate) is now split
 into `src/kernel/kernel_ring3_fault_runtime.c`, further reducing policy-heavy
 test control flow embedded in `src/kernel/kernel.c`.
+Ring3 probe/fault process construction helpers (native/thread-lifecycle probe
+setup and fault-probe image staging/entry wiring) are now split into
+`src/kernel/kernel_ring3_probe_runtime.c`, reducing low-level probe bootstrapping
+code in `src/kernel/kernel.c`.
 Filesystem namespace now starts from a virtual root (`/`) with explicit mount
 subtrees and split backend responsibilities: `fs-manager` is the canonical
 filesystem IPC entrypoint (`fs.vfs`) and routes requests to registered backend

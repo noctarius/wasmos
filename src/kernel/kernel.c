@@ -24,6 +24,7 @@
 #include "kernel_selftest_runtime.h"
 #include "kernel_threading_selftest_runtime.h"
 #include "kernel_ring3_fault_runtime.h"
+#include "kernel_ring3_probe_runtime.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -38,10 +39,6 @@
 static uint32_t g_chardev_service_endpoint = IPC_ENDPOINT_NONE;
 static const boot_info_t *g_boot_info;
 static boot_info_t g_boot_info_shadow;
-extern const uint8_t _binary_ring3_native_probe_bin_start[];
-extern const uint8_t _binary_ring3_native_probe_bin_end[];
-extern const uint8_t _binary_ring3_thread_lifecycle_probe_bin_start[];
-extern const uint8_t _binary_ring3_thread_lifecycle_probe_bin_end[];
 
 static const uint8_t g_preempt_test_enabled = 0;
 #ifndef WASMOS_RING3_SMOKE_DEFAULT
@@ -69,12 +66,6 @@ static init_state_t g_init_state;
 
 static int
 boot_info_build_shadow(const boot_info_t *src, boot_info_t *dst);
-static int
-spawn_ring3_fault_ud_probe_process(uint32_t parent_pid, uint32_t *out_pid);
-static int
-spawn_ring3_fault_gp_probe_process(uint32_t parent_pid, uint32_t *out_pid);
-static int
-spawn_ring3_fault_bp_probe_process(uint32_t parent_pid, uint32_t *out_pid);
 static int
 spawn_ring3_fault_churn_probe_process(uint32_t parent_pid, uint8_t churn_round, uint32_t *out_pid);
 static void
@@ -582,447 +573,12 @@ spawn_ring3_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
 }
 
 static int
-spawn_ring3_native_probe_process(uint32_t parent_pid, uint32_t *out_pid)
-{
-    process_t *proc = 0;
-    mm_context_t *ctx = 0;
-    mem_region_t linear = {0};
-    mem_region_t stack = {0};
-    uint64_t user_rip = 0;
-    uint64_t user_rsp = 0;
-    const uint8_t *src = _binary_ring3_native_probe_bin_start;
-    uint32_t code_size = (uint32_t)((uintptr_t)_binary_ring3_native_probe_bin_end -
-                                    (uintptr_t)_binary_ring3_native_probe_bin_start);
-
-    if (!out_pid || !src || code_size == 0) {
-        return -1;
-    }
-    if (process_spawn_as(parent_pid, "ring3-native", ring3_probe_bootstrap_entry, 0, out_pid) != 0) {
-        return -1;
-    }
-    proc = process_get(*out_pid);
-    if (!proc) {
-        return -1;
-    }
-    ctx = mm_context_get(proc->context_id);
-    if (!ctx) {
-        return -1;
-    }
-    if (mm_context_region_for_type(ctx, MEM_REGION_WASM_LINEAR, &linear) != 0 ||
-        mm_context_region_for_type(ctx, MEM_REGION_STACK, &stack) != 0) {
-        return -1;
-    }
-    if (linear.phys_base == 0 || linear.size < code_size || stack.base == 0 || stack.size < 16u) {
-        return -1;
-    }
-    if (map_linear_pages(ctx->root_table,
-                         linear.base,
-                         linear.phys_base,
-                         code_size,
-                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) != 0) {
-        return -1;
-    }
-    if (mm_copy_to_user(proc->context_id, linear.base, src, code_size) != 0) {
-        return -1;
-    }
-    if (map_linear_pages(ctx->root_table,
-                         linear.base,
-                         linear.phys_base,
-                         code_size,
-                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_EXEC | MEM_REGION_FLAG_USER) != 0) {
-        return -1;
-    }
-    for (uint32_t i = 0; i < ctx->region_count; ++i) {
-        mem_region_t *region = &ctx->regions[i];
-        if (region->type == MEM_REGION_WASM_LINEAR) {
-            region->flags |= MEM_REGION_FLAG_EXEC;
-            region->flags &= ~MEM_REGION_FLAG_WRITE;
-            break;
-        }
-    }
-    user_rip = linear.base;
-    user_rsp = stack.base + stack.size - 16u;
-    if (process_set_user_entry(*out_pid, user_rip, user_rsp) != 0) {
-        return -1;
-    }
-    serial_printf("[kernel] ring3 native pid=%016llx\n", (unsigned long long)*out_pid);
-    return 0;
-}
-
-static int
-spawn_ring3_thread_lifecycle_probe_process(uint32_t parent_pid, uint32_t *out_pid)
-{
-    process_t *proc = 0;
-    mm_context_t *ctx = 0;
-    mem_region_t linear = {0};
-    mem_region_t stack = {0};
-    uint64_t user_rip = 0;
-    uint64_t user_rsp = 0;
-    const uint8_t *src = _binary_ring3_thread_lifecycle_probe_bin_start;
-    uint32_t code_size = (uint32_t)((uintptr_t)_binary_ring3_thread_lifecycle_probe_bin_end -
-                                    (uintptr_t)_binary_ring3_thread_lifecycle_probe_bin_start);
-
-    if (!out_pid || !src || code_size == 0) {
-        return -1;
-    }
-    if (process_spawn_as(parent_pid, "ring3-threading", ring3_probe_bootstrap_entry, 0, out_pid) != 0) {
-        return -1;
-    }
-    proc = process_get(*out_pid);
-    if (!proc) {
-        return -1;
-    }
-    ctx = mm_context_get(proc->context_id);
-    if (!ctx) {
-        return -1;
-    }
-    if (mm_context_region_for_type(ctx, MEM_REGION_WASM_LINEAR, &linear) != 0 ||
-        mm_context_region_for_type(ctx, MEM_REGION_STACK, &stack) != 0) {
-        return -1;
-    }
-    if (linear.phys_base == 0 || linear.size < code_size || stack.base == 0 || stack.size < 16u) {
-        return -1;
-    }
-    if (map_linear_pages(ctx->root_table,
-                         linear.base,
-                         linear.phys_base,
-                         code_size,
-                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) != 0) {
-        return -1;
-    }
-    if (mm_copy_to_user(proc->context_id, linear.base, src, code_size) != 0) {
-        return -1;
-    }
-    if (map_linear_pages(ctx->root_table,
-                         linear.base,
-                         linear.phys_base,
-                         code_size,
-                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_EXEC | MEM_REGION_FLAG_USER) != 0) {
-        return -1;
-    }
-    for (uint32_t i = 0; i < ctx->region_count; ++i) {
-        mem_region_t *region = &ctx->regions[i];
-        if (region->type == MEM_REGION_WASM_LINEAR) {
-            region->flags |= MEM_REGION_FLAG_EXEC;
-            region->flags &= ~MEM_REGION_FLAG_WRITE;
-            break;
-        }
-    }
-    user_rip = linear.base;
-    user_rsp = stack.base + stack.size - 16u;
-    if (process_set_user_entry(*out_pid, user_rip, user_rsp) != 0) {
-        return -1;
-    }
-    serial_printf("[kernel] ring3 threading pid=%016llx\n", (unsigned long long)*out_pid);
-    return 0;
-}
-
-static int
-spawn_ring3_fault_probe_named(uint32_t parent_pid,
-                              const char *name,
-                              const uint8_t *code,
-                              uint32_t code_size,
-                              uint32_t *out_pid);
-
-static int
-spawn_ring3_fault_probe_process(uint32_t parent_pid, uint32_t *out_pid)
-{
-    static const uint8_t ring3_fault_code[] = {
-        0xB8, 0x01, 0x00, 0x00, 0x00,       /* mov eax, WASMOS_SYSCALL_GETPID */
-        0xCD, 0x80,                         /* int 0x80 */
-        0x48, 0x8B, 0x04, 0x25, 0x00, 0x00, 0x00, 0x00, /* mov rax, [0] */
-        0xEB, 0xFE                          /* spin if fault unexpectedly returns */
-    };
-    return spawn_ring3_fault_probe_named(parent_pid,
-                                         "ring3-fault",
-                                         ring3_fault_code,
-                                         (uint32_t)sizeof(ring3_fault_code),
-                                         out_pid);
-}
-
-static int
-spawn_ring3_fault_write_probe_process(uint32_t parent_pid, uint32_t *out_pid)
-{
-    static const uint8_t ring3_fault_write_code[] = {
-        0xB8, 0x01, 0x00, 0x00, 0x00,       /* mov eax, WASMOS_SYSCALL_GETPID */
-        0xCD, 0x80,                         /* int 0x80 */
-        0xC7, 0x05, 0x00, 0x00, 0x00, 0x00, /* mov dword ptr [rip+0], imm32 */
-        0x34, 0x12, 0x00, 0x00,             /*   0x1234 */
-        0xEB, 0xFE                          /* spin if fault unexpectedly returns */
-    };
-    return spawn_ring3_fault_probe_named(parent_pid,
-                                         "ring3-fault-write",
-                                         ring3_fault_write_code,
-                                         (uint32_t)sizeof(ring3_fault_write_code),
-                                         out_pid);
-}
-
-static int
-spawn_ring3_fault_exec_probe_process(uint32_t parent_pid, uint32_t *out_pid)
-{
-    static const uint8_t ring3_fault_exec_code[] = {
-        0xB8, 0x01, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_GETPID */
-        0xCD, 0x80,                   /* int 0x80 */
-        0x50,                         /* push rax (touch/map stack page) */
-        0x48, 0x8D, 0x44, 0x24, 0x00, /* lea rax, [rsp+0] */
-        0xFF, 0xE0,                   /* jmp rax (stack is mapped but non-exec) */
-        0xEB, 0xFE                    /* spin if fault unexpectedly returns */
-    };
-    return spawn_ring3_fault_probe_named(parent_pid,
-                                         "ring3-fault-exec",
-                                         ring3_fault_exec_code,
-                                         (uint32_t)sizeof(ring3_fault_exec_code),
-                                         out_pid);
-}
-
-static int
-spawn_ring3_fault_ud_probe_process(uint32_t parent_pid, uint32_t *out_pid)
-{
-    static const uint8_t ring3_fault_ud_code[] = {
-        0xB8, 0x01, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_GETPID */
-        0xCD, 0x80,                   /* int 0x80 */
-        0x0F, 0x0B,                   /* ud2 */
-        0xEB, 0xFE                    /* spin if fault unexpectedly returns */
-    };
-    return spawn_ring3_fault_probe_named(parent_pid,
-                                         "ring3-fault-ud",
-                                         ring3_fault_ud_code,
-                                         (uint32_t)sizeof(ring3_fault_ud_code),
-                                         out_pid);
-}
-
-static int
-spawn_ring3_fault_gp_probe_process(uint32_t parent_pid, uint32_t *out_pid)
-{
-    static const uint8_t ring3_fault_gp_code[] = {
-        0xB8, 0x01, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_GETPID */
-        0xCD, 0x80,                   /* int 0x80 */
-        0xFA,                         /* cli (privileged in CPL3 -> #GP) */
-        0xEB, 0xFE                    /* spin if fault unexpectedly returns */
-    };
-    return spawn_ring3_fault_probe_named(parent_pid,
-                                         "ring3-fault-gp",
-                                         ring3_fault_gp_code,
-                                         (uint32_t)sizeof(ring3_fault_gp_code),
-                                         out_pid);
-}
-
-static int
 spawn_ring3_fault_churn_probe_process(uint32_t parent_pid, uint8_t churn_round, uint32_t *out_pid)
 {
     if ((churn_round & 1u) == 0u) {
-        return spawn_ring3_fault_ud_probe_process(parent_pid, out_pid);
+        return kernel_ring3_spawn_fault_ud_probe(parent_pid, out_pid);
     }
-    return spawn_ring3_fault_gp_probe_process(parent_pid, out_pid);
-}
-
-static int
-spawn_ring3_fault_de_probe_process(uint32_t parent_pid, uint32_t *out_pid)
-{
-    static const uint8_t ring3_fault_de_code[] = {
-        0xB8, 0x01, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_GETPID */
-        0xCD, 0x80,                   /* int 0x80 */
-        0x31, 0xD2,                   /* xor edx, edx */
-        0x31, 0xC0,                   /* xor eax, eax */
-        0xF7, 0xF2,                   /* div edx -> #DE */
-        0xEB, 0xFE                    /* spin if fault unexpectedly returns */
-    };
-    return spawn_ring3_fault_probe_named(parent_pid,
-                                         "ring3-fault-de",
-                                         ring3_fault_de_code,
-                                         (uint32_t)sizeof(ring3_fault_de_code),
-                                         out_pid);
-}
-
-static int
-spawn_ring3_fault_db_probe_process(uint32_t parent_pid, uint32_t *out_pid)
-{
-    static const uint8_t ring3_fault_db_code[] = {
-        0xB8, 0x01, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_GETPID */
-        0xCD, 0x80,                   /* int 0x80 */
-        0xF1,                         /* icebp/int1 -> #DB */
-        0xEB, 0xFE                    /* spin if fault unexpectedly returns */
-    };
-    return spawn_ring3_fault_probe_named(parent_pid,
-                                         "ring3-fault-db",
-                                         ring3_fault_db_code,
-                                         (uint32_t)sizeof(ring3_fault_db_code),
-                                         out_pid);
-}
-
-static int
-spawn_ring3_fault_bp_probe_process(uint32_t parent_pid, uint32_t *out_pid)
-{
-    static const uint8_t ring3_fault_bp_code[] = {
-        0xB8, 0x01, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_GETPID */
-        0xCD, 0x80,                   /* int 0x80 */
-        0xCC,                         /* int3 -> #BP */
-        0xEB, 0xFE                    /* spin if fault unexpectedly returns */
-    };
-    return spawn_ring3_fault_probe_named(parent_pid,
-                                         "ring3-fault-bp",
-                                         ring3_fault_bp_code,
-                                         (uint32_t)sizeof(ring3_fault_bp_code),
-                                         out_pid);
-}
-
-static int
-spawn_ring3_fault_of_probe_process(uint32_t parent_pid, uint32_t *out_pid)
-{
-    static const uint8_t ring3_fault_of_code[] = {
-        0xB8, 0x01, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_GETPID */
-        0xCD, 0x80,                   /* int 0x80 */
-        0xCD, 0x04,                   /* int 4 (may classify as #OF/#GP) */
-        0x0F, 0x0B,                   /* ud2 fallback */
-        0xEB, 0xFE                    /* spin if fault unexpectedly returns */
-    };
-    return spawn_ring3_fault_probe_named(parent_pid,
-                                         "ring3-fault-of",
-                                         ring3_fault_of_code,
-                                         (uint32_t)sizeof(ring3_fault_of_code),
-                                         out_pid);
-}
-
-static int
-spawn_ring3_fault_nm_probe_process(uint32_t parent_pid, uint32_t *out_pid)
-{
-    static const uint8_t ring3_fault_nm_code[] = {
-        0xB8, 0x01, 0x00, 0x00, 0x00, /* mov eax, WASMOS_SYSCALL_GETPID */
-        0xCD, 0x80,                   /* int 0x80 */
-        0xD9, 0xE8,                   /* fld1 (may classify as #NM) */
-        0x0F, 0x0B,                   /* ud2 fallback */
-        0xEB, 0xFE                    /* spin if fault unexpectedly returns */
-    };
-    return spawn_ring3_fault_probe_named(parent_pid,
-                                         "ring3-fault-nm",
-                                         ring3_fault_nm_code,
-                                         (uint32_t)sizeof(ring3_fault_nm_code),
-                                         out_pid);
-}
-
-static int
-spawn_ring3_fault_ss_probe_process(uint32_t parent_pid, uint32_t *out_pid)
-{
-    static const uint8_t ring3_fault_ss_code[] = {
-        0xB8, 0x01, 0x00, 0x00, 0x00,                   /* mov eax, WASMOS_SYSCALL_GETPID */
-        0xCD, 0x80,                                     /* int 0x80 */
-        0x48, 0xBC, 0x00, 0x00, 0x00, 0x00,             /* movabs rsp, */
-        0x00, 0x00, 0x01, 0x00,                         /*   0x0001000000000000 (non-canonical) */
-        0x50,                                           /* push rax -> #SS/#GP */
-        0x0F, 0x0B,                                     /* ud2 fallback */
-        0xEB, 0xFE                                      /* spin if fault unexpectedly returns */
-    };
-    return spawn_ring3_fault_probe_named(parent_pid,
-                                         "ring3-fault-ss",
-                                         ring3_fault_ss_code,
-                                         (uint32_t)sizeof(ring3_fault_ss_code),
-                                         out_pid);
-}
-
-static int
-spawn_ring3_fault_ac_probe_process(uint32_t parent_pid, uint32_t *out_pid)
-{
-    static const uint8_t ring3_fault_ac_code[] = {
-        0xB8, 0x01, 0x00, 0x00, 0x00,             /* mov eax, WASMOS_SYSCALL_GETPID */
-        0xCD, 0x80,                               /* int 0x80 */
-        0x9C,                                     /* pushfq */
-        0x58,                                     /* pop rax */
-        0x48, 0x0D, 0x00, 0x00, 0x04, 0x00,       /* or rax, 0x40000 (AC) */
-        0x50,                                     /* push rax */
-        0x9D,                                     /* popfq */
-        0x48, 0x8D, 0x44, 0x24, 0x01,             /* lea rax, [rsp+1] */
-        0x8B, 0x00,                               /* mov eax, [rax] (unaligned read) */
-        0x0F, 0x0B,                               /* ud2 fallback */
-        0xEB, 0xFE                                /* spin if fault unexpectedly returns */
-    };
-    return spawn_ring3_fault_probe_named(parent_pid,
-                                         "ring3-fault-ac",
-                                         ring3_fault_ac_code,
-                                         (uint32_t)sizeof(ring3_fault_ac_code),
-                                         out_pid);
-}
-
-static int
-spawn_ring3_fault_probe_named(uint32_t parent_pid,
-                              const char *name,
-                              const uint8_t *code,
-                              uint32_t code_size,
-                              uint32_t *out_pid)
-{
-
-    process_t *proc = 0;
-    mm_context_t *ctx = 0;
-    mem_region_t linear = {0};
-    mem_region_t stack = {0};
-    uint64_t stack_top_page_virt = 0;
-    uint64_t stack_top_page_phys = 0;
-    uint64_t user_rip = 0;
-    uint64_t user_rsp = 0;
-    if (!out_pid || !name || !code || code_size == 0) {
-        return -1;
-    }
-    if (process_spawn_as(parent_pid, name, ring3_probe_bootstrap_entry, 0, out_pid) != 0) {
-        return -1;
-    }
-    proc = process_get(*out_pid);
-    if (!proc) {
-        return -1;
-    }
-    ctx = mm_context_get(proc->context_id);
-    if (!ctx) {
-        return -1;
-    }
-    if (mm_context_region_for_type(ctx, MEM_REGION_WASM_LINEAR, &linear) != 0 ||
-        mm_context_region_for_type(ctx, MEM_REGION_STACK, &stack) != 0) {
-        return -1;
-    }
-    if (linear.phys_base == 0 || linear.size < code_size || stack.base == 0 || stack.size < 16u) {
-        return -1;
-    }
-    if (map_linear_pages(ctx->root_table,
-                         linear.base,
-                         linear.phys_base,
-                         code_size,
-                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) != 0) {
-        return -1;
-    }
-    if (mm_copy_to_user(proc->context_id, linear.base, code, code_size) != 0) {
-        return -1;
-    }
-    if (map_linear_pages(ctx->root_table,
-                         linear.base,
-                         linear.phys_base,
-                         code_size,
-                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_EXEC | MEM_REGION_FLAG_USER) != 0) {
-        return -1;
-    }
-    /* Ensure at least one user stack page is present so exec-fault probes can
-     * reach their NX jump path instead of terminating on a non-present stack
-     * write first. Keep stack non-executable by mapping RW only. */
-    stack_top_page_virt = (stack.base + stack.size - 1u) & ~0xFFFULL;
-    stack_top_page_phys = (stack.phys_base + stack.size - 1u) & ~0xFFFULL;
-    if (map_linear_pages(ctx->root_table,
-                         stack_top_page_virt,
-                         stack_top_page_phys,
-                         0x1000u,
-                         MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) != 0) {
-        return -1;
-    }
-    for (uint32_t i = 0; i < ctx->region_count; ++i) {
-        mem_region_t *region = &ctx->regions[i];
-        if (region->type == MEM_REGION_WASM_LINEAR) {
-            region->flags |= MEM_REGION_FLAG_EXEC;
-            region->flags &= ~MEM_REGION_FLAG_WRITE;
-            break;
-        }
-    }
-    user_rip = linear.base;
-    user_rsp = stack.base + stack.size - 16u;
-    if (process_set_user_entry(*out_pid, user_rip, user_rsp) != 0) {
-        return -1;
-    }
-    serial_printf("[kernel] %s pid=%016llx\n", name, (unsigned long long)*out_pid);
-    return 0;
+    return kernel_ring3_spawn_fault_gp_probe(parent_pid, out_pid);
 }
 
 static void
@@ -1190,14 +746,14 @@ kmain(boot_info_t *boot_info)
                 __asm__ volatile("hlt");
             }
         }
-        if (spawn_ring3_native_probe_process(init_pid, &ring3_native_pid) != 0) {
+        if (kernel_ring3_spawn_native_probe(init_pid, &ring3_native_pid) != 0) {
             serial_write("[kernel] ring3 native spawn failed\n");
             for (;;) {
                 __asm__ volatile("hlt");
             }
         }
         if (g_ring3_thread_lifecycle_smoke_enabled) {
-            if (spawn_ring3_thread_lifecycle_probe_process(init_pid, &ring3_threading_pid) != 0) {
+            if (kernel_ring3_spawn_thread_lifecycle_probe(init_pid, &ring3_threading_pid) != 0) {
                 serial_write("[kernel] ring3 threading spawn failed\n");
                 for (;;) {
                     __asm__ volatile("hlt");
@@ -1211,73 +767,73 @@ kmain(boot_info_t *boot_info)
         } else {
             run_ring3_shmem_isolation_test(ring3_smoke_proc->context_id, ring3_native_proc->context_id);
         }
-        if (spawn_ring3_fault_probe_process(init_pid, &ring3_fault_pid) != 0) {
+        if (kernel_ring3_spawn_fault_probe(init_pid, &ring3_fault_pid) != 0) {
             serial_write("[kernel] ring3 fault spawn failed\n");
             for (;;) {
                 __asm__ volatile("hlt");
             }
         }
-        if (spawn_ring3_fault_write_probe_process(init_pid, &ring3_fault_write_pid) != 0) {
+        if (kernel_ring3_spawn_fault_write_probe(init_pid, &ring3_fault_write_pid) != 0) {
             serial_write("[kernel] ring3 fault write spawn failed\n");
             for (;;) {
                 __asm__ volatile("hlt");
             }
         }
-        if (spawn_ring3_fault_exec_probe_process(init_pid, &ring3_fault_exec_pid) != 0) {
+        if (kernel_ring3_spawn_fault_exec_probe(init_pid, &ring3_fault_exec_pid) != 0) {
             serial_write("[kernel] ring3 fault exec spawn failed\n");
             for (;;) {
                 __asm__ volatile("hlt");
             }
         }
-        if (spawn_ring3_fault_ud_probe_process(init_pid, &ring3_fault_ud_pid) != 0) {
+        if (kernel_ring3_spawn_fault_ud_probe(init_pid, &ring3_fault_ud_pid) != 0) {
             serial_write("[kernel] ring3 fault ud spawn failed\n");
             for (;;) {
                 __asm__ volatile("hlt");
             }
         }
-        if (spawn_ring3_fault_gp_probe_process(init_pid, &ring3_fault_gp_pid) != 0) {
+        if (kernel_ring3_spawn_fault_gp_probe(init_pid, &ring3_fault_gp_pid) != 0) {
             serial_write("[kernel] ring3 fault gp spawn failed\n");
             for (;;) {
                 __asm__ volatile("hlt");
             }
         }
-        if (spawn_ring3_fault_de_probe_process(init_pid, &ring3_fault_de_pid) != 0) {
+        if (kernel_ring3_spawn_fault_de_probe(init_pid, &ring3_fault_de_pid) != 0) {
             serial_write("[kernel] ring3 fault de spawn failed\n");
             for (;;) {
                 __asm__ volatile("hlt");
             }
         }
-        if (spawn_ring3_fault_db_probe_process(init_pid, &ring3_fault_db_pid) != 0) {
+        if (kernel_ring3_spawn_fault_db_probe(init_pid, &ring3_fault_db_pid) != 0) {
             serial_write("[kernel] ring3 fault db spawn failed\n");
             for (;;) {
                 __asm__ volatile("hlt");
             }
         }
-        if (spawn_ring3_fault_bp_probe_process(init_pid, &ring3_fault_bp_pid) != 0) {
+        if (kernel_ring3_spawn_fault_bp_probe(init_pid, &ring3_fault_bp_pid) != 0) {
             serial_write("[kernel] ring3 fault bp spawn failed\n");
             for (;;) {
                 __asm__ volatile("hlt");
             }
         }
-        if (spawn_ring3_fault_of_probe_process(init_pid, &ring3_fault_of_pid) != 0) {
+        if (kernel_ring3_spawn_fault_of_probe(init_pid, &ring3_fault_of_pid) != 0) {
             serial_write("[kernel] ring3 fault of spawn failed\n");
             for (;;) {
                 __asm__ volatile("hlt");
             }
         }
-        if (spawn_ring3_fault_nm_probe_process(init_pid, &ring3_fault_nm_pid) != 0) {
+        if (kernel_ring3_spawn_fault_nm_probe(init_pid, &ring3_fault_nm_pid) != 0) {
             serial_write("[kernel] ring3 fault nm spawn failed\n");
             for (;;) {
                 __asm__ volatile("hlt");
             }
         }
-        if (spawn_ring3_fault_ss_probe_process(init_pid, &ring3_fault_ss_pid) != 0) {
+        if (kernel_ring3_spawn_fault_ss_probe(init_pid, &ring3_fault_ss_pid) != 0) {
             serial_write("[kernel] ring3 fault ss spawn failed\n");
             for (;;) {
                 __asm__ volatile("hlt");
             }
         }
-        if (spawn_ring3_fault_ac_probe_process(init_pid, &ring3_fault_ac_pid) != 0) {
+        if (kernel_ring3_spawn_fault_ac_probe(init_pid, &ring3_fault_ac_pid) != 0) {
             serial_write("[kernel] ring3 fault ac spawn failed\n");
             for (;;) {
                 __asm__ volatile("hlt");

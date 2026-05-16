@@ -76,6 +76,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/kernel_ring3_fault_runtime.o
   ${BUILD_DIR}/kernel_ring3_probe_runtime.o
   ${BUILD_DIR}/kernel_ring3_smoke_runtime.o
+  ${BUILD_DIR}/kernel_ring3_suite_runtime.o
   ${BUILD_DIR}/kernel_threading_selftest_runtime.o
   ${BUILD_DIR}/cpu.o
   ${BUILD_DIR}/cpu_x86_64.o
@@ -137,6 +138,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/kernel_ring3_fault_runtime.c
   ${KERNEL_DIR}/kernel_ring3_probe_runtime.c
   ${KERNEL_DIR}/kernel_ring3_smoke_runtime.c
+  ${KERNEL_DIR}/kernel_ring3_suite_runtime.c
   ${KERNEL_DIR}/kernel_threading_selftest_runtime.c
   ${KERNEL_DIR}/cpu.c
   ${KERNEL_DIR}/arch/x86_64/cpu_x86_64.c
@@ -206,6 +208,7 @@ target_sources(kernel_sources INTERFACE
   ${KERNEL_DIR}/include/kernel_ring3_fault_runtime.h
   ${KERNEL_DIR}/include/kernel_ring3_probe_runtime.h
   ${KERNEL_DIR}/include/kernel_ring3_smoke_runtime.h
+  ${KERNEL_DIR}/include/kernel_ring3_suite_runtime.h
   ${KERNEL_DIR}/include/kernel_threading_selftest_runtime.h
   ${KERNEL_DIR}/include/process_manager.h
   ${KERNEL_DIR}/include/process_manager_internal.h
@@ -288,6 +291,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel_ring3_fault_runtime.c -o ${BUILD_DIR}/kernel_ring3_fault_runtime.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel_ring3_probe_runtime.c -o ${BUILD_DIR}/kernel_ring3_probe_runtime.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel_ring3_smoke_runtime.c -o ${BUILD_DIR}/kernel_ring3_smoke_runtime.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel_ring3_suite_runtime.c -o ${BUILD_DIR}/kernel_ring3_suite_runtime.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel_threading_selftest_runtime.c -o ${BUILD_DIR}/kernel_threading_selftest_runtime.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/cpu.c -o ${BUILD_DIR}/cpu.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/cpu_x86_64.c -o ${BUILD_DIR}/cpu_x86_64.o
@@ -340,6 +344,7 @@ add_custom_command(
   ${KERNEL_DIR}/include/kernel_ring3_fault_runtime.h
   ${KERNEL_DIR}/include/kernel_ring3_probe_runtime.h
   ${KERNEL_DIR}/include/kernel_ring3_smoke_runtime.h
+  ${KERNEL_DIR}/include/kernel_ring3_suite_runtime.h
   ${KERNEL_DIR}/include/kernel_threading_selftest_runtime.h
   ${KERNEL_DIR}/include/arch/x86_64/cpu_x86_64.h
   ${KERNEL_DIR}/include/ipc.h ${KERNEL_DIR}/include/memory.h ${KERNEL_DIR}/include/capability.h

@@ -148,6 +148,10 @@ Ring3 smoke/runtime selftests (ring3 smoke process image patching/staging and
 shared-memory owner/misuse isolation checks) are now split into
 `src/kernel/kernel_ring3_smoke_runtime.c`, further reducing test-heavy runtime
 paths in `src/kernel/kernel.c`.
+Ring3 multi-probe orchestration previously embedded in `kmain` is now routed
+through `src/kernel/kernel_ring3_suite_runtime.c`, which coordinates smoke,
+native/thread-lifecycle probes, ring3 fault probe set creation, and handoff
+into the fault-policy runtime.
 Filesystem namespace now starts from a virtual root (`/`) with explicit mount
 subtrees and split backend responsibilities: `fs-manager` is the canonical
 filesystem IPC entrypoint (`fs.vfs`) and routes requests to registered backend

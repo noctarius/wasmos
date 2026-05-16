@@ -26,15 +26,15 @@ extern int32_t wasmos_ipc_send(int32_t destination_endpoint,
                                int32_t arg2,
                                int32_t arg3)
     WASMOS_WASM_IMPORT("wasmos", "ipc_send");
-extern int32_t wasmos_ipc_send_kernel(int32_t destination_endpoint,
-                                      int32_t source_endpoint,
-                                      int32_t type,
-                                      int32_t request_id,
-                                      int32_t arg0,
-                                      int32_t arg1,
-                                      int32_t arg2,
-                                      int32_t arg3)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_send_kernel");
+extern int32_t wasmos_ipc_forward(int32_t destination_endpoint,
+                                  int32_t source_endpoint,
+                                  int32_t type,
+                                  int32_t request_id,
+                                  int32_t arg0,
+                                  int32_t arg1,
+                                  int32_t arg2,
+                                  int32_t arg3)
+    WASMOS_WASM_IMPORT("wasmos", "ipc_forward");
 extern int32_t wasmos_ipc_recv(int32_t endpoint)
     WASMOS_WASM_IMPORT("wasmos", "ipc_recv");
 extern int32_t wasmos_ipc_try_recv(int32_t endpoint)

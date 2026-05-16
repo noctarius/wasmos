@@ -121,6 +121,7 @@ pm_update_well_known_service_endpoint(const char *name, uint32_t endpoint)
     pm_service_slot_t slots[] = {
         {"block", &g_pm.block_endpoint},
         {"fs", &g_pm.fs_endpoint},
+        {"fs.vfs", &g_pm.fs_endpoint},
         {"vt", &g_pm.vt_endpoint},
         {"fb", &g_pm.fb_endpoint},
     };
@@ -872,7 +873,6 @@ pm_poll_spawn(uint32_t pm_context_id)
     }
     g_pm.spawn.in_use = 0;
     if (recv_rc != IPC_OK ||
-        msg.source != g_pm.fs_endpoint ||
         msg.request_id != g_pm.spawn.fs_request_id ||
         msg.type != FS_IPC_RESP) {
         ipc_message_t resp;

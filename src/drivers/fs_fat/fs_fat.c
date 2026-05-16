@@ -3910,11 +3910,6 @@ initialize(int32_t proc_endpoint,
         g_open_files[i].dir_index = 0;
     }
 
-    if (wasmos_svc_register(proc_endpoint, g_fs_endpoint, "fs", 1) != 0) {
-        fat_log("service register failed\n");
-        fat_stall();
-    }
-
     int32_t fsmgr_endpoint = -1;
     for (;;) {
         fsmgr_endpoint = wasmos_svc_lookup(proc_endpoint, g_reply_endpoint, "fs.vfs", 1);

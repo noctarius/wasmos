@@ -433,6 +433,20 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             fs_backend_t *fallback_boot = backend_first_of_kind(FSMGR_BACKEND_BOOT);
             backend = fallback_boot ? fallback_boot->endpoint : -1;
         }
+        if (type == FS_IPC_READ_APP_REQ) {
+            if (backend < 0 ||
+                wasmos_ipc_send_kernel(backend,
+                                       source,
+                                       type,
+                                       request_id,
+                                       arg0,
+                                       arg1f,
+                                       arg2f,
+                                       arg3f) != 0) {
+                (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
+            }
+            continue;
+        }
         int32_t resp_type = FS_IPC_ERROR;
         int32_t r0 = -1, r1 = 0, r2 = 0, r3 = 0;
         if (forward_request(backend, type, request_id, arg0, arg1f, arg2f, arg3f,

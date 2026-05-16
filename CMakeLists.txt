@@ -325,6 +325,94 @@ function(wasmos_add_wasm_c_app_target target_name)
   )
 endfunction()
 
+function(wasmos_add_native_c_app_target target_name)
+  set(options)
+  set(oneValueArgs OUTPUT_ELF OUTPUT_APP MANIFEST ENTRYPOINT IMAGE_BASE COMPILE_COMMENT LINK_COMMENT PACK_COMMENT)
+  set(multiValueArgs SOURCES INCLUDES COMPILE_FLAGS HEADER_DEPS LINK_FLAGS)
+  cmake_parse_arguments(WASMOS_NATIVE "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+  if (NOT WASMOS_NATIVE_SOURCES OR NOT WASMOS_NATIVE_OUTPUT_ELF OR NOT WASMOS_NATIVE_OUTPUT_APP OR
+      NOT WASMOS_NATIVE_MANIFEST OR NOT WASMOS_NATIVE_ENTRYPOINT)
+    message(FATAL_ERROR "wasmos_add_native_c_app_target(${target_name}) requires SOURCES, OUTPUT_ELF, OUTPUT_APP, MANIFEST, ENTRYPOINT")
+  endif ()
+
+  set(_native_include_flags)
+  foreach(_inc IN LISTS WASMOS_NATIVE_INCLUDES)
+    list(APPEND _native_include_flags -I${_inc})
+  endforeach()
+
+  set(_native_obj_outputs)
+  foreach(_src IN LISTS WASMOS_NATIVE_SOURCES)
+    get_filename_component(_src_we ${_src} NAME_WE)
+    set(_obj ${BUILD_DIR}/${target_name}_${_src_we}.o)
+    list(APPEND _native_obj_outputs ${_obj})
+    add_custom_command(
+      OUTPUT ${_obj}
+      COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+      COMMAND ${CLANG} ${WASMOS_NATIVE_COMPILE_FLAGS} ${_native_include_flags}
+              ${_src}
+              -o ${_obj}
+      DEPENDS ${_src} ${WASMOS_NATIVE_HEADER_DEPS}
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+      COMMENT "Compiling ${_src_we}.c"
+      VERBATIM
+    )
+  endforeach()
+
+  set(_image_base)
+  if (WASMOS_NATIVE_IMAGE_BASE)
+    set(_image_base --image-base=${WASMOS_NATIVE_IMAGE_BASE})
+  endif ()
+
+  set(_link_comment "Linking native driver")
+  if (WASMOS_NATIVE_LINK_COMMENT)
+    set(_link_comment ${WASMOS_NATIVE_LINK_COMMENT})
+  endif ()
+
+  add_custom_command(
+    OUTPUT ${WASMOS_NATIVE_OUTPUT_ELF}
+    COMMAND ${LLD_PATH}
+            ${_image_base}
+            -e ${WASMOS_NATIVE_ENTRYPOINT}
+            -static
+            ${WASMOS_NATIVE_LINK_FLAGS}
+            ${_native_obj_outputs}
+            -o ${WASMOS_NATIVE_OUTPUT_ELF}
+    DEPENDS ${_native_obj_outputs}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT ${_link_comment}
+    VERBATIM
+  )
+
+  set(_pack_comment "Packing native driver as WASMOS-APP")
+  if (WASMOS_NATIVE_PACK_COMMENT)
+    set(_pack_comment ${WASMOS_NATIVE_PACK_COMMENT})
+  endif ()
+  add_custom_command(
+    OUTPUT ${WASMOS_NATIVE_OUTPUT_APP}
+    COMMAND ${WASMOS_APP_PACKER}
+            --manifest ${WASMOS_NATIVE_MANIFEST}
+            --in ${WASMOS_NATIVE_OUTPUT_ELF}
+            --out ${WASMOS_NATIVE_OUTPUT_APP}
+    DEPENDS ${WASMOS_NATIVE_OUTPUT_ELF} make_wasmos_app ${WASMOS_NATIVE_MANIFEST}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT ${_pack_comment}
+    VERBATIM
+  )
+
+  add_custom_target(${target_name}
+    DEPENDS ${WASMOS_NATIVE_OUTPUT_APP}
+    SOURCES ${WASMOS_NATIVE_SOURCES} ${WASMOS_NATIVE_MANIFEST}
+  )
+  set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASMOS_NATIVE_OUTPUT_APP})
+  set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS ${target_name})
+
+  wasmos_add_ide_c_target(${target_name}_ide
+    SOURCES ${WASMOS_NATIVE_SOURCES}
+    INCLUDES ${WASMOS_NATIVE_INCLUDES}
+  )
+endfunction()
+
 set(WASMOS_DOTCONFIG ${CMAKE_BINARY_DIR}/.config CACHE FILEPATH "Path to Kconfig .config")
 set(WASMOS_KCONFIG_IMPORT ${CMAKE_BINARY_DIR}/wasmos_kconfig.cmake)
 

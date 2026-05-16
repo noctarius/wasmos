@@ -136,6 +136,10 @@ Threading-focused kernel selftests (internal worker lifecycle, join-order wake
 checks, and in-kernel IPC stress probes) are now split into
 `src/kernel/kernel_threading_selftest_runtime.c`, keeping `kmain` focused on
 high-level bootstrap sequencing.
+Ring3 fault-policy orchestration (fault-exit verification, containment
+liveness, mixed churn progression, and watchdog cleanliness gate) is now split
+into `src/kernel/kernel_ring3_fault_runtime.c`, further reducing policy-heavy
+test control flow embedded in `src/kernel/kernel.c`.
 Filesystem namespace now starts from a virtual root (`/`) with explicit mount
 subtrees and split backend responsibilities: `fs-manager` is the canonical
 filesystem IPC entrypoint (`fs.vfs`) and routes requests to registered backend

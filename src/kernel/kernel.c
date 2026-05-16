@@ -23,6 +23,7 @@
 #include "kernel_boot_runtime.h"
 #include "kernel_selftest_runtime.h"
 #include "kernel_threading_selftest_runtime.h"
+#include "kernel_ring3_fault_runtime.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -62,38 +63,6 @@ kernel_ring3_smoke_enabled(void)
     return g_ring3_smoke_enabled;
 }
 
-typedef struct {
-    uint32_t fault_pid;
-    uint32_t fault_write_pid;
-    uint32_t fault_exec_pid;
-    uint32_t fault_ud_pid;
-    uint32_t fault_gp_pid;
-    uint32_t fault_de_pid;
-    uint32_t fault_db_pid;
-    uint32_t fault_bp_pid;
-    uint32_t fault_of_pid;
-    uint32_t fault_nm_pid;
-    uint32_t fault_ss_pid;
-    uint32_t fault_ac_pid;
-    uint8_t fault_ok;
-    uint8_t fault_write_ok;
-    uint8_t fault_exec_ok;
-    uint8_t fault_ud_ok;
-    uint8_t fault_gp_ok;
-    uint8_t fault_de_ok;
-    uint8_t fault_db_ok;
-    uint8_t fault_bp_ok;
-    uint8_t fault_of_ok;
-    uint8_t fault_nm_ok;
-    uint8_t fault_ss_ok;
-    uint8_t fault_ac_ok;
-    uint8_t containment_ok_logged;
-    uint32_t churn_pid;
-    uint8_t churn_round;
-    uint8_t churn_done;
-    uint8_t done;
-} ring3_fault_policy_state_t;
-static ring3_fault_policy_state_t g_ring3_fault_policy_state;
 static const uint8_t g_ring3_fault_churn_rounds = 6;
 
 static init_state_t g_init_state;
@@ -106,6 +75,8 @@ static int
 spawn_ring3_fault_gp_probe_process(uint32_t parent_pid, uint32_t *out_pid);
 static int
 spawn_ring3_fault_bp_probe_process(uint32_t parent_pid, uint32_t *out_pid);
+static int
+spawn_ring3_fault_churn_probe_process(uint32_t parent_pid, uint8_t churn_round, uint32_t *out_pid);
 static void
 run_shmem_owner_isolation_test(uint32_t owner_context_id, uint32_t foreign_context_id);
 static void
@@ -208,238 +179,6 @@ ring3_probe_bootstrap_entry(process_t *process, void *arg)
         process_set_exit_status(process, -1);
     }
     return PROCESS_RUN_EXITED;
-}
-
-static process_run_result_t
-ring3_fault_policy_entry(process_t *process, void *arg)
-{
-    ring3_fault_policy_state_t *state = (ring3_fault_policy_state_t *)arg;
-    int32_t exit_status = 0;
-    int rc = 0;
-
-    if (!process || !state) {
-        return PROCESS_RUN_IDLE;
-    }
-    if (state->done) {
-        return PROCESS_RUN_EXITED;
-    }
-
-    if (!state->fault_ok) {
-        rc = process_get_exit_status(state->fault_pid, &exit_status);
-        if (rc == 0) {
-            if (exit_status == -11) {
-                state->fault_ok = 1;
-                serial_write("[test] ring3 fault exit status ok\n");
-            } else {
-                serial_write("[test] ring3 fault exit status mismatch\n");
-                process_set_exit_status(process, -1);
-                return PROCESS_RUN_EXITED;
-            }
-        }
-    }
-    if (!state->fault_write_ok) {
-        rc = process_get_exit_status(state->fault_write_pid, &exit_status);
-        if (rc == 0) {
-            if (exit_status == -11) {
-                state->fault_write_ok = 1;
-                serial_write("[test] ring3 fault write exit status ok\n");
-            } else {
-                serial_write("[test] ring3 fault write exit status mismatch\n");
-                process_set_exit_status(process, -1);
-                return PROCESS_RUN_EXITED;
-            }
-        }
-    }
-    if (!state->fault_exec_ok) {
-        rc = process_get_exit_status(state->fault_exec_pid, &exit_status);
-        if (rc == 0) {
-            if (exit_status == -11) {
-                state->fault_exec_ok = 1;
-                serial_write("[test] ring3 fault exec exit status ok\n");
-            } else {
-                serial_write("[test] ring3 fault exec exit status mismatch\n");
-                process_set_exit_status(process, -1);
-                return PROCESS_RUN_EXITED;
-            }
-        }
-    }
-    if (!state->fault_ud_ok) {
-        rc = process_get_exit_status(state->fault_ud_pid, &exit_status);
-        if (rc == 0) {
-            if (exit_status == -11) {
-                state->fault_ud_ok = 1;
-                serial_write("[test] ring3 fault ud exit status ok\n");
-            } else {
-                serial_write("[test] ring3 fault ud exit status mismatch\n");
-                process_set_exit_status(process, -1);
-                return PROCESS_RUN_EXITED;
-            }
-        }
-    }
-    if (!state->fault_gp_ok) {
-        rc = process_get_exit_status(state->fault_gp_pid, &exit_status);
-        if (rc == 0) {
-            if (exit_status == -11) {
-                state->fault_gp_ok = 1;
-                serial_write("[test] ring3 fault gp exit status ok\n");
-            } else {
-                serial_write("[test] ring3 fault gp exit status mismatch\n");
-                process_set_exit_status(process, -1);
-                return PROCESS_RUN_EXITED;
-            }
-        }
-    }
-    if (!state->fault_de_ok) {
-        rc = process_get_exit_status(state->fault_de_pid, &exit_status);
-        if (rc == 0) {
-            if (exit_status == -11) {
-                state->fault_de_ok = 1;
-                serial_write("[test] ring3 fault de exit status ok\n");
-            } else {
-                serial_write("[test] ring3 fault de exit status mismatch\n");
-                process_set_exit_status(process, -1);
-                return PROCESS_RUN_EXITED;
-            }
-        }
-    }
-    if (!state->fault_db_ok) {
-        rc = process_get_exit_status(state->fault_db_pid, &exit_status);
-        if (rc == 0) {
-            if (exit_status == -11) {
-                state->fault_db_ok = 1;
-                serial_write("[test] ring3 fault db exit status ok\n");
-            } else {
-                serial_write("[test] ring3 fault db exit status mismatch\n");
-                process_set_exit_status(process, -1);
-                return PROCESS_RUN_EXITED;
-            }
-        }
-    }
-    if (!state->fault_bp_ok) {
-        rc = process_get_exit_status(state->fault_bp_pid, &exit_status);
-        if (rc == 0) {
-            if (exit_status == -11) {
-                state->fault_bp_ok = 1;
-                serial_write("[test] ring3 fault bp exit status ok\n");
-            } else {
-                serial_write("[test] ring3 fault bp exit status mismatch\n");
-                process_set_exit_status(process, -1);
-                return PROCESS_RUN_EXITED;
-            }
-        }
-    }
-    if (!state->fault_of_ok) {
-        rc = process_get_exit_status(state->fault_of_pid, &exit_status);
-        if (rc == 0) {
-            if (exit_status == -11) {
-                state->fault_of_ok = 1;
-                serial_write("[test] ring3 fault of exit status ok\n");
-            } else {
-                serial_write("[test] ring3 fault of exit status mismatch\n");
-                process_set_exit_status(process, -1);
-                return PROCESS_RUN_EXITED;
-            }
-        }
-    }
-    if (!state->fault_nm_ok) {
-        rc = process_get_exit_status(state->fault_nm_pid, &exit_status);
-        if (rc == 0) {
-            if (exit_status == -11) {
-                state->fault_nm_ok = 1;
-                serial_write("[test] ring3 fault nm exit status ok\n");
-            } else {
-                serial_write("[test] ring3 fault nm exit status mismatch\n");
-                process_set_exit_status(process, -1);
-                return PROCESS_RUN_EXITED;
-            }
-        }
-    }
-    if (!state->fault_ss_ok) {
-        rc = process_get_exit_status(state->fault_ss_pid, &exit_status);
-        if (rc == 0) {
-            if (exit_status == -11) {
-                state->fault_ss_ok = 1;
-                serial_write("[test] ring3 fault ss exit status ok\n");
-            } else {
-                serial_write("[test] ring3 fault ss exit status mismatch\n");
-                process_set_exit_status(process, -1);
-                return PROCESS_RUN_EXITED;
-            }
-        }
-    }
-    if (!state->fault_ac_ok) {
-        rc = process_get_exit_status(state->fault_ac_pid, &exit_status);
-        if (rc == 0) {
-            if (exit_status == -11) {
-                state->fault_ac_ok = 1;
-                serial_write("[test] ring3 fault ac exit status ok\n");
-            } else {
-                serial_write("[test] ring3 fault ac exit status mismatch\n");
-                process_set_exit_status(process, -1);
-                return PROCESS_RUN_EXITED;
-            }
-        }
-    }
-
-    if (state->fault_ok && state->fault_write_ok && state->fault_exec_ok &&
-        state->fault_ud_ok && state->fault_gp_ok && state->fault_de_ok &&
-        state->fault_db_ok && state->fault_bp_ok && state->fault_of_ok && state->fault_nm_ok &&
-        state->fault_ss_ok && state->fault_ac_ok) {
-        process_t *init_proc = process_get(process->parent_pid);
-        if (!init_proc || init_proc->state == PROCESS_STATE_ZOMBIE) {
-            serial_write("[test] ring3 containment liveness mismatch\n");
-            process_set_exit_status(process, -1);
-            return PROCESS_RUN_EXITED;
-        }
-        if (!state->containment_ok_logged) {
-            state->containment_ok_logged = 1;
-            serial_write("[test] ring3 containment liveness ok\n");
-        }
-        if (!state->churn_done) {
-            if (state->churn_round >= g_ring3_fault_churn_rounds) {
-                state->churn_done = 1;
-                serial_write("[test] ring3 mixed stress ok\n");
-            } else {
-                if (state->churn_pid == 0) {
-                    int spawn_rc = ((state->churn_round & 1u) == 0u)
-                        ? spawn_ring3_fault_ud_probe_process(process->pid, &state->churn_pid)
-                        : spawn_ring3_fault_gp_probe_process(process->pid, &state->churn_pid);
-                    if (spawn_rc != 0 || state->churn_pid == 0) {
-                        serial_write("[test] ring3 mixed stress spawn failed\n");
-                        process_set_exit_status(process, -1);
-                        return PROCESS_RUN_EXITED;
-                    }
-                }
-                rc = process_get_exit_status(state->churn_pid, &exit_status);
-                if (rc == 0) {
-                    if (exit_status != -11) {
-                        serial_write("[test] ring3 mixed stress exit status mismatch\n");
-                        process_set_exit_status(process, -1);
-                        return PROCESS_RUN_EXITED;
-                    }
-                    if (process_wait(process, state->churn_pid, &exit_status) != 0) {
-                        serial_write("[test] ring3 mixed stress reap failed\n");
-                        process_set_exit_status(process, -1);
-                        return PROCESS_RUN_EXITED;
-                    }
-                    state->churn_pid = 0;
-                    state->churn_round++;
-                }
-                return PROCESS_RUN_YIELDED;
-            }
-        }
-        if (process_watchdog_issue_count() == 0) {
-            serial_write("[test] ring3 watchdog clean ok\n");
-        } else {
-            serial_write("[test] ring3 watchdog clean mismatch\n");
-            process_set_exit_status(process, -1);
-            return PROCESS_RUN_EXITED;
-        }
-        state->done = 1;
-        process_set_exit_status(process, 0);
-        return PROCESS_RUN_EXITED;
-    }
-    return PROCESS_RUN_YIELDED;
 }
 
 static void
@@ -1069,6 +808,15 @@ spawn_ring3_fault_gp_probe_process(uint32_t parent_pid, uint32_t *out_pid)
 }
 
 static int
+spawn_ring3_fault_churn_probe_process(uint32_t parent_pid, uint8_t churn_round, uint32_t *out_pid)
+{
+    if ((churn_round & 1u) == 0u) {
+        return spawn_ring3_fault_ud_probe_process(parent_pid, out_pid);
+    }
+    return spawn_ring3_fault_gp_probe_process(parent_pid, out_pid);
+}
+
+static int
 spawn_ring3_fault_de_probe_process(uint32_t parent_pid, uint32_t *out_pid)
 {
     static const uint8_t ring3_fault_de_code[] = {
@@ -1308,7 +1056,6 @@ kmain(boot_info_t *boot_info)
     uint32_t ring3_fault_nm_pid = 0;
     uint32_t ring3_fault_ss_pid = 0;
     uint32_t ring3_fault_ac_pid = 0;
-    uint32_t ring3_fault_policy_pid = 0;
     uint32_t idle_pid = 0;
     uint32_t init_pid = 0;
 
@@ -1536,38 +1283,24 @@ kmain(boot_info_t *boot_info)
                 __asm__ volatile("hlt");
             }
         }
-        g_ring3_fault_policy_state.fault_pid = ring3_fault_pid;
-        g_ring3_fault_policy_state.fault_write_pid = ring3_fault_write_pid;
-        g_ring3_fault_policy_state.fault_exec_pid = ring3_fault_exec_pid;
-        g_ring3_fault_policy_state.fault_ud_pid = ring3_fault_ud_pid;
-        g_ring3_fault_policy_state.fault_gp_pid = ring3_fault_gp_pid;
-        g_ring3_fault_policy_state.fault_de_pid = ring3_fault_de_pid;
-        g_ring3_fault_policy_state.fault_db_pid = ring3_fault_db_pid;
-        g_ring3_fault_policy_state.fault_bp_pid = ring3_fault_bp_pid;
-        g_ring3_fault_policy_state.fault_of_pid = ring3_fault_of_pid;
-        g_ring3_fault_policy_state.fault_nm_pid = ring3_fault_nm_pid;
-        g_ring3_fault_policy_state.fault_ss_pid = ring3_fault_ss_pid;
-        g_ring3_fault_policy_state.fault_ac_pid = ring3_fault_ac_pid;
-        g_ring3_fault_policy_state.fault_ok = 0;
-        g_ring3_fault_policy_state.fault_write_ok = 0;
-        g_ring3_fault_policy_state.fault_exec_ok = 0;
-        g_ring3_fault_policy_state.fault_ud_ok = 0;
-        g_ring3_fault_policy_state.fault_gp_ok = 0;
-        g_ring3_fault_policy_state.fault_de_ok = 0;
-        g_ring3_fault_policy_state.fault_db_ok = 0;
-        g_ring3_fault_policy_state.fault_bp_ok = 0;
-        g_ring3_fault_policy_state.fault_of_ok = 0;
-        g_ring3_fault_policy_state.fault_nm_ok = 0;
-        g_ring3_fault_policy_state.fault_ss_ok = 0;
-        g_ring3_fault_policy_state.fault_ac_ok = 0;
-        g_ring3_fault_policy_state.containment_ok_logged = 0;
-        g_ring3_fault_policy_state.churn_pid = 0;
-        g_ring3_fault_policy_state.churn_round = 0;
-        g_ring3_fault_policy_state.churn_done = 0;
-        g_ring3_fault_policy_state.done = 0;
-        if (process_spawn_as(init_pid, "ring3-fault-policy", ring3_fault_policy_entry,
-                             &g_ring3_fault_policy_state, &ring3_fault_policy_pid) != 0) {
-            serial_write("[kernel] ring3 fault policy spawn failed\n");
+        ring3_fault_policy_probes_t fault_probes = {
+            .fault_pid = ring3_fault_pid,
+            .fault_write_pid = ring3_fault_write_pid,
+            .fault_exec_pid = ring3_fault_exec_pid,
+            .fault_ud_pid = ring3_fault_ud_pid,
+            .fault_gp_pid = ring3_fault_gp_pid,
+            .fault_de_pid = ring3_fault_de_pid,
+            .fault_db_pid = ring3_fault_db_pid,
+            .fault_bp_pid = ring3_fault_bp_pid,
+            .fault_of_pid = ring3_fault_of_pid,
+            .fault_nm_pid = ring3_fault_nm_pid,
+            .fault_ss_pid = ring3_fault_ss_pid,
+            .fault_ac_pid = ring3_fault_ac_pid
+        };
+        if (kernel_ring3_fault_policy_spawn(init_pid,
+                                            &fault_probes,
+                                            g_ring3_fault_churn_rounds,
+                                            spawn_ring3_fault_churn_probe_process) != 0) {
             for (;;) {
                 __asm__ volatile("hlt");
             }

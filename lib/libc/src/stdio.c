@@ -1,6 +1,6 @@
 #include "stdio.h"
 #include "string.h"
-#include "wasmos/imports.h"
+#include "wasmos/api.h"
 
 #include <stdint.h>
 

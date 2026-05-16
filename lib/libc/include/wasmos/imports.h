@@ -12,7 +12,4 @@
 #define WASMOS_WASM_EXPORT
 #endif
 
-extern int32_t wasmos_console_write(int32_t ptr, int32_t len)
-    WASMOS_WASM_IMPORT("wasmos", "console_write");
-
 #endif

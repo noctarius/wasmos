@@ -1,6 +1,7 @@
 #include <stdarg.h>
 #include <stdint.h>
 #include "string.h"
+#include "ctype.h"
 #include "stdio.h"
 #include "stdlib.h"
 #include "serial.h"
@@ -144,6 +145,32 @@ int strncmp(const char *a, const char *b, size_t n) {
         }
     }
     return 0;
+}
+
+int strcasecmp(const char *a, const char *b) {
+    if (a == b) {
+        return 0;
+    }
+    a = kernel_str_ptr(a);
+    b = kernel_str_ptr(b);
+    if (!a && !b) {
+        return 0;
+    }
+    if (!a) {
+        return -1;
+    }
+    if (!b) {
+        return 1;
+    }
+    for (;;) {
+        unsigned char ca = (unsigned char)tolower((unsigned char)*a);
+        unsigned char cb = (unsigned char)tolower((unsigned char)*b);
+        if (ca != cb || ca == '\0' || cb == '\0') {
+            return (int)ca - (int)cb;
+        }
+        a++;
+        b++;
+    }
 }
 
 char *strcpy(char *dst, const char *src) {

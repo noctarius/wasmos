@@ -41,20 +41,6 @@ static void log_msg(const char *s) {
     (void)printf("%s", s);
 }
 
-static int str_ieq(const char *a, const char *b) {
-    if (!a || !b) return 0;
-    while (*a && *b) {
-        char ca = *a;
-        char cb = *b;
-        if (ca >= 'A' && ca <= 'Z') ca = (char)(ca + ('a' - 'A'));
-        if (cb >= 'A' && cb <= 'Z') cb = (char)(cb + ('a' - 'A'));
-        if (ca != cb) return 0;
-        a++;
-        b++;
-    }
-    return (*a == '\0' && *b == '\0') ? 1 : 0;
-}
-
 static void unpack_name(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char *out, uint32_t out_len) {
     uint32_t args[4] = { arg0, arg1, arg2, arg3 };
     uint32_t pos = 0;
@@ -230,22 +216,22 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             char path[32];
             unpack_name((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, path, sizeof(path));
 
-            if (str_ieq(path, "") || str_ieq(path, "/")) {
+            if (strcasecmp(path, "") == 0 || strcasecmp(path, "/") == 0) {
                 state->mount = FS_MOUNT_ROOT;
                 state->mount_depth = 0;
                 (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
                 continue;
             }
-            if (str_ieq(path, "..") && state->mount == FS_MOUNT_ROOT) {
+            if (strcasecmp(path, "..") == 0 && state->mount == FS_MOUNT_ROOT) {
                 (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
                 continue;
             }
-            if (str_ieq(path, "..") && state->mount != FS_MOUNT_ROOT && state->mount_depth == 0) {
+            if (strcasecmp(path, "..") == 0 && state->mount != FS_MOUNT_ROOT && state->mount_depth == 0) {
                 state->mount = FS_MOUNT_ROOT;
                 (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
                 continue;
             }
-            if (str_ieq(path, "init") || str_ieq(path, "/init")) {
+            if (strcasecmp(path, "init") == 0 || strcasecmp(path, "/init") == 0) {
                 int32_t s0, s1, s2, s3;
                 int32_t rr_t, rr0, rr1, rr2, rr3;
                 state->mount = FS_MOUNT_INIT;
@@ -260,7 +246,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
                 (void)wasmos_ipc_send(source, g_fs_endpoint, rr_t, request_id, rr0, rr1, rr2, rr3);
                 continue;
             }
-            if (str_ieq(path, "boot") || str_ieq(path, "/boot")) {
+            if (strcasecmp(path, "boot") == 0 || strcasecmp(path, "/boot") == 0) {
                 int32_t s0, s1, s2, s3;
                 int32_t rr_t, rr0, rr1, rr2, rr3;
                 state->mount = FS_MOUNT_BOOT;
@@ -282,7 +268,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             int32_t resp_type = FS_IPC_ERROR;
             int32_t r0 = -1, r1 = 0, r2 = 0, r3 = 0;
             unpack_name((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, name, sizeof(name));
-            if (str_ieq(name, "init")) {
+            if (strcasecmp(name, "init") == 0) {
                 state->mount = FS_MOUNT_INIT;
                 state->mount_depth = 0;
                 if (forward_request(g_backend_init, FS_IPC_LIST_ROOT_REQ, request_id, 0, 0, 0, 0,
@@ -293,7 +279,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
                 }
                 (void)wasmos_ipc_send(source, g_fs_endpoint, resp_type, request_id, r0, r1, r2, r3);
                 continue;
-            } else if (str_ieq(name, "boot")) {
+            } else if (strcasecmp(name, "boot") == 0) {
                 state->mount = FS_MOUNT_BOOT;
                 state->mount_depth = 0;
                 (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
@@ -312,7 +298,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             if (type == FS_IPC_CHDIR_REQ && state->mount != FS_MOUNT_ROOT) {
                 char path[32];
                 unpack_name((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, path, sizeof(path));
-                if (str_ieq(path, "..")) {
+                if (strcasecmp(path, "..") == 0) {
                     state->mount = FS_MOUNT_ROOT;
                     (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
                     continue;
@@ -324,7 +310,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
         if (type == FS_IPC_CHDIR_REQ && resp_type == FS_IPC_ERROR) {
             char path[32];
             unpack_name((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, path, sizeof(path));
-            if (str_ieq(path, "..") && state->mount != FS_MOUNT_ROOT) {
+            if (strcasecmp(path, "..") == 0 && state->mount != FS_MOUNT_ROOT) {
                 state->mount = FS_MOUNT_ROOT;
                 state->mount_depth = 0;
                 (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
@@ -334,11 +320,11 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
         if (type == FS_IPC_CHDIR_REQ && resp_type == FS_IPC_RESP && state->mount != FS_MOUNT_ROOT) {
             char path[32];
             unpack_name((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, path, sizeof(path));
-            if (str_ieq(path, "..")) {
+            if (strcasecmp(path, "..") == 0) {
                 if (state->mount_depth > 0) {
                     state->mount_depth--;
                 }
-            } else if (!str_ieq(path, ".") && !str_ieq(path, "")) {
+            } else if (strcasecmp(path, ".") != 0 && strcasecmp(path, "") != 0) {
                 if (path[0] == '/') {
                     state->mount_depth = (path[1] == '\0') ? 0 : 1;
                 } else if (state->mount_depth < 0xFFFFu) {

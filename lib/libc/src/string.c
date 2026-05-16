@@ -1,4 +1,5 @@
 #include "string.h"
+#include "ctype.h"
 
 size_t
 strlen(const char *s)
@@ -69,6 +70,30 @@ strncmp(const char *lhs, const char *rhs, size_t count)
         }
     }
     return 0;
+}
+
+int
+strcasecmp(const char *lhs, const char *rhs)
+{
+    size_t i = 0;
+
+    if (lhs == rhs) {
+        return 0;
+    }
+    if (!lhs) {
+        return -1;
+    }
+    if (!rhs) {
+        return 1;
+    }
+    for (;;) {
+        unsigned char a = (unsigned char)tolower((unsigned char)lhs[i]);
+        unsigned char b = (unsigned char)tolower((unsigned char)rhs[i]);
+        if (a != b || a == '\0' || b == '\0') {
+            return (int)a - (int)b;
+        }
+        i++;
+    }
 }
 
 char *

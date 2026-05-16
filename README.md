@@ -39,6 +39,7 @@ It defines repository workflow and documentation/update conventions.
 - kernel process-manager internals are now split into focused modules (`process_manager_buffers`, `process_manager_services`, `process_manager_spawn`) to keep lifecycle, registry, and buffer-borrow logic isolated
 - kernel CPU implementation is now split into generic dispatch (`src/kernel/cpu.c`) and x86_64-specific internals (`src/kernel/arch/x86_64/cpu_x86_64.c`)
 - kernel IRQ implementation is now split into generic dispatch (`src/kernel/irq.c`) and x86_64-specific internals (`src/kernel/arch/x86_64/irq_x86_64.c`)
+- kernel init-process bootstrap state machine is now extracted into `src/kernel/kernel_init_runtime.c` (`kernel_init_entry`), reducing `kernel.c` orchestration surface
 - libc string/ctype/stdio coverage now includes common helpers (`memmove`, `strnlen`, `strchr`/`strrchr`, `strcpy`/`strncpy`, `isspace`/`isdigit`/`isxdigit`/etc., `getchar`/`putchar`/`fputs`)
 - drivers/services CMake now also emits IDE-only C source targets with include paths so editor indexers can resolve headers in non-native WASM modules
 - drivers/services CMake now uses shared root helper functions for wasm-C compile/packaging + IDE-target wiring, reducing per-module duplication

@@ -6,7 +6,6 @@
 #include <stdint.h>
 #include <string.h>
 
-static void framebuffer_log_hex64(uint64_t value);
 static void framebuffer_draw_char(uint32_t col, uint32_t row, char ch, uint32_t fg, uint32_t bg);
 static void framebuffer_panic_newline(void);
 
@@ -52,35 +51,16 @@ static inline uint32_t *panic_bg_slot(void)
     return (uint32_t *)(void *)framebuffer_alias_ptr((uintptr_t)&g_panic_bg);
 }
 
-static void framebuffer_log_hex64(uint64_t value)
-{
-    char buf[21];
-    static const char hex[] = "0123456789ABCDEF";
-    buf[0] = '0';
-    buf[1] = 'x';
-    for (int i = 0; i < 16; ++i) {
-        buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
-    }
-    buf[18] = '\0';
-    serial_write(buf);
-}
-
 void framebuffer_init(const boot_info_t *info)
 {
     framebuffer_info_t *fb = framebuffer_info_slot();
-    serial_write("[framebuffer] init ");
-    framebuffer_log_hex64(info ? (uint64_t)(uintptr_t)info->framebuffer_base : 0);
-    serial_write(" ");
-    framebuffer_log_hex64(info ? (uint64_t)info->framebuffer_size : 0);
-    serial_write(" ");
-    framebuffer_log_hex64(info ? info->framebuffer_width : 0);
-    serial_write(" ");
-    framebuffer_log_hex64(info ? info->framebuffer_height : 0);
-    serial_write(" ");
-    framebuffer_log_hex64(info ? info->framebuffer_pixels_per_scanline : 0);
-    serial_write(" flags=");
-    framebuffer_log_hex64(info ? info->flags : 0);
-    serial_write("\n");
+    serial_printf("[framebuffer] init 0x%016llX 0x%016llX 0x%016llX 0x%016llX 0x%016llX flags=0x%016llX\n",
+                  (unsigned long long)(info ? (uint64_t)(uintptr_t)info->framebuffer_base : 0),
+                  (unsigned long long)(info ? (uint64_t)info->framebuffer_size : 0),
+                  (unsigned long long)(info ? info->framebuffer_width : 0),
+                  (unsigned long long)(info ? info->framebuffer_height : 0),
+                  (unsigned long long)(info ? info->framebuffer_pixels_per_scanline : 0),
+                  (unsigned long long)(info ? info->flags : 0));
 
     if (!info || !(info->flags & BOOT_INFO_FLAG_GOP_PRESENT) ||
         !info->framebuffer_base || info->framebuffer_size == 0 ||
@@ -92,9 +72,8 @@ void framebuffer_init(const boot_info_t *info)
     fb->framebuffer_width = info->framebuffer_width;
     fb->framebuffer_height = info->framebuffer_height;
     fb->framebuffer_stride = info->framebuffer_pixels_per_scanline;
-    serial_write("[framebuffer] stride=");
-    framebuffer_log_hex64(info->framebuffer_pixels_per_scanline);
-    serial_write("\n");
+    serial_printf("[framebuffer] stride=0x%016llX\n",
+                  (unsigned long long)info->framebuffer_pixels_per_scanline);
 }
 
 int framebuffer_get_info(framebuffer_info_t *out)

@@ -140,18 +140,8 @@ void mm_init(const boot_info_t *boot_info) {
         mm_context_alloc_region(&g_root_ctx, 2, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE, MEM_REGION_DEVICE);
     }
 
-    serial_write("[mm] ctx0 regions=");
-    char buf[21];
-    static const char hex[] = "0123456789ABCDEF";
-    uint64_t value = g_root_ctx.region_count;
-    buf[0] = '0';
-    buf[1] = 'x';
-    for (int i = 0; i < 16; ++i) {
-        buf[2 + i] = hex[(value >> ((15 - i) * 4)) & 0xF];
-    }
-    buf[18] = '\n';
-    buf[19] = '\0';
-    serial_write(buf);
+    serial_printf("[mm] ctx0 regions=0x%016llX\n",
+                  (unsigned long long)g_root_ctx.region_count);
 
 }
 

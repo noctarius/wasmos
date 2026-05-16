@@ -51,3 +51,8 @@ add_custom_target(cli_app
 
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_CLI_APP})
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS cli_app)
+
+wasmos_add_ide_c_target(cli_ide
+  SOURCES ${WASM_CLI_APP_SRC}
+  INCLUDES ${LIBC_DIR}/include ${DRIVER_WASM_DIR}/include
+)

@@ -51,3 +51,8 @@ add_custom_target(vt_app
 
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_VT_APP})
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS vt_app)
+
+wasmos_add_ide_c_target(vt_ide
+  SOURCES ${WASM_VT_APP_SRC}
+  INCLUDES ${LIBC_DIR}/include ${DRIVER_WASM_DIR}/include
+)

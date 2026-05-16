@@ -44,5 +44,10 @@ add_custom_command(
 
 add_custom_target(chardev_driver_blob DEPENDS ${WASM_CHARDEV_DRIVER_BLOB})
 
+wasmos_add_ide_c_target(chardev_ide
+  SOURCES ${WASM_CHARDEV_DRIVER_SRC}
+  INCLUDES ${LIBC_DIR}/include ${DRIVER_WASM_DIR}/include
+)
+
 set_property(GLOBAL APPEND PROPERTY WASMOS_KERNEL_BLOBS ${WASM_CHARDEV_DRIVER_BLOB})
 set_property(GLOBAL APPEND PROPERTY WASMOS_KERNEL_BLOB_TARGETS chardev_driver_blob)

@@ -104,6 +104,9 @@ utility layers with common string/ctype/stdio helpers (`memmove`, `strnlen`,
 `strchr`/`strrchr`, `strcpy`/`strncpy`, `isspace`/`isdigit`/`isxdigit`,
 `getchar`/`putchar`/`fputs`) to reduce ad-hoc reimplementation in services and
 drivers.
+Build metadata now also includes IDE-only C source/object targets for
+drivers/services so language servers can resolve libc/driver headers for
+WASM-module sources that are primarily built via custom commands.
 Filesystem namespace now starts from a virtual root (`/`) with explicit mount
 subtrees and split backend responsibilities: `fs-fat` remains the active `fs`
 endpoint for boot/FAT routing, while `fs-init` provides initfs listing

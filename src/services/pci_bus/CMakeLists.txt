@@ -51,3 +51,8 @@ add_custom_target(pci_bus_app
 
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_PCI_BUS_APP})
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS pci_bus_app)
+
+wasmos_add_ide_c_target(pci_bus_ide
+  SOURCES ${WASM_PCI_BUS_SRC}
+  INCLUDES ${LIBC_DIR}/include ${DRIVER_WASM_DIR}/include
+)

@@ -51,3 +51,8 @@ add_custom_target(ata_app
 
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_ATA_APP})
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS ata_app)
+
+wasmos_add_ide_c_target(ata_ide
+  SOURCES ${WASM_ATA_DRIVER_SRC}
+  INCLUDES ${LIBC_DIR}/include ${DRIVER_WASM_DIR}/include
+)

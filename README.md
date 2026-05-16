@@ -36,6 +36,7 @@ It defines repository workflow and documentation/update conventions.
 - libc `read`/`write` now route stdio FDs (`0`/`1`/`2`) to console hostcalls
 - libc and language wrappers now provide line-oriented console input helpers (`readline`)
 - libc string/ctype/stdio coverage now includes common helpers (`memmove`, `strnlen`, `strchr`/`strrchr`, `strcpy`/`strncpy`, `isspace`/`isdigit`/`isxdigit`/etc., `getchar`/`putchar`/`fputs`)
+- drivers/services CMake now also emits IDE-only C source targets with include paths so editor indexers can resolve headers in non-native WASM modules
 - Ring-3 hardening enabled by default in normal test boots
 - Ring-3 user-slot mapping now requires explicit `MEM_REGION_FLAG_USER` (legacy implicit bridge removed from page-map path)
 - Syscall boundary now rejects lossy 64-bit-to-32-bit exit-status arguments (`EXIT` / `THREAD_EXIT` require valid signed-32 representation)

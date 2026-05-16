@@ -51,3 +51,8 @@ add_custom_target(fs_manager_app
 
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_FS_MANAGER_APP})
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS fs_manager_app)
+
+wasmos_add_ide_c_target(fs_manager_ide
+  SOURCES ${WASM_FS_MANAGER_SRC}
+  INCLUDES ${LIBC_DIR}/include ${DRIVER_WASM_DIR}/include
+)

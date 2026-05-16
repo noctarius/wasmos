@@ -76,3 +76,8 @@ add_custom_target(framebuffer_app
 )
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_FRAMEBUFFER_APP})
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS framebuffer_app)
+
+wasmos_add_ide_c_target(framebuffer_ide
+  SOURCES ${NATIVE_FRAMEBUFFER_DRIVER_SRC} ${NATIVE_FRAMEBUFFER_RENDER_SRC}
+  INCLUDES ${DRIVER_WASM_DIR}/include ${DRIVER_WASM_DIR}/framebuffer
+)

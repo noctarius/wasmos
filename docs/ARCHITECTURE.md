@@ -155,6 +155,9 @@ into the fault-policy runtime.
 Kernel runtime decomposition now also uses a lightweight logging facade
 (`src/kernel/klog.c`) so split `kernel_*` modules call `klog_*` helpers rather
 than binding directly to serial primitives.
+The same `klog_*` facade is now used across broader kernel implementation files
+(memory/paging/process/syscall/wasm loader paths), so log routing is no longer
+hardwired at individual callsites.
 Filesystem namespace now starts from a virtual root (`/`) with explicit mount
 subtrees and split backend responsibilities: `fs-manager` is the canonical
 filesystem IPC entrypoint (`fs.vfs`) and routes requests to registered backend

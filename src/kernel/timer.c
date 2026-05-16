@@ -1,4 +1,5 @@
 #include "timer.h"
+#include "klog.h"
 #include "irq.h"
 #include "io.h"
 #include "serial.h"
@@ -40,7 +41,7 @@ void timer_init(uint32_t hz) {
     outb(PIT_CH0_PORT, (uint8_t)((divisor >> 8) & 0xFFu));
 
     irq_unmask(0);
-    serial_write("[timer] pit init\n");
+    klog_write("[timer] pit init\n");
 }
 
 void timer_handle_irq(void) {

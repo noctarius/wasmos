@@ -1,4 +1,5 @@
 #include "paging.h"
+#include "klog.h"
 #include "physmem.h"
 #include "serial.h"
 #include "memory.h"
@@ -54,7 +55,7 @@ paging_verify_user_root_impl(uint64_t root_table, int log_failures)
 
     if (root[511] != kernel[511]) {
         if (log_failures) {
-            serial_write("[paging] verify fail: higher-half slot mismatch\n");
+            klog_write("[paging] verify fail: higher-half slot mismatch\n");
         }
         return -1;
     }
@@ -65,7 +66,7 @@ paging_verify_user_root_impl(uint64_t root_table, int log_failures)
         }
         if (root[i] & PT_FLAG_PRESENT) {
             if (log_failures) {
-                serial_printf("[paging] verify fail: unexpected pml4[%u]=%016llx\n",
+                klog_printf("[paging] verify fail: unexpected pml4[%u]=%016llx\n",
                               (unsigned int)i,
                               (unsigned long long)root[i]);
             }
@@ -81,7 +82,7 @@ paging_verify_user_root_impl(uint64_t root_table, int log_failures)
         uint8_t present = (uint8_t)((pdpt_high[i] & PT_FLAG_PRESENT) != 0);
         if (present != allowed) {
             if (log_failures) {
-                serial_printf("[paging] verify fail: pdpt_high[%u]=%016llx allowed=%u\n",
+                klog_printf("[paging] verify fail: pdpt_high[%u]=%016llx allowed=%u\n",
                               (unsigned int)i,
                               (unsigned long long)pdpt_high[i],
                               (unsigned int)allowed);
@@ -98,7 +99,7 @@ paging_verify_user_root_impl(uint64_t root_table, int log_failures)
             uint8_t pde_present = (uint8_t)((pd[pde] & PT_FLAG_PRESENT) != 0);
             if (pde_present != pde_allowed) {
                 if (log_failures) {
-                    serial_printf("[paging] verify fail: pd_high[%u][%u]=%016llx allowed=%u\n",
+                    klog_printf("[paging] verify fail: pd_high[%u][%u]=%016llx allowed=%u\n",
                                   (unsigned int)i,
                                   (unsigned int)pde,
                                   (unsigned long long)pd[pde],
@@ -117,7 +118,7 @@ paging_verify_user_root_impl(uint64_t root_table, int log_failures)
             uint8_t present = (uint8_t)((pdpt_low[i] & PT_FLAG_PRESENT) != 0);
             if (present != allowed) {
                 if (log_failures) {
-                    serial_printf("[paging] verify fail: pdpt_low[%u]=%016llx allowed=%u\n",
+                    klog_printf("[paging] verify fail: pdpt_low[%u]=%016llx allowed=%u\n",
                                   (unsigned int)i,
                                   (unsigned long long)pdpt_low[i],
                                   (unsigned int)allowed);
@@ -248,7 +249,7 @@ paging_init(void)
 
     if (alloc_table(&pml4_phys) != 0 || alloc_table(&pdpt_low_phys) != 0
         || alloc_table(&pdpt_high_phys) != 0) {
-        serial_write("[paging] table alloc failed\n");
+        klog_write("[paging] table alloc failed\n");
         return -1;
     }
 
@@ -262,13 +263,13 @@ paging_init(void)
 
     for (uint32_t i = 0; i < identity_pd_count; ++i) {
         if (alloc_table(&pd_phys[i]) != 0) {
-            serial_write("[paging] pd alloc failed\n");
+            klog_write("[paging] pd alloc failed\n");
             return -1;
         }
     }
     for (uint32_t i = 0; i < HIGHER_HALF_PD_COUNT; ++i) {
         if (alloc_table(&pd_high_phys[i]) != 0) {
-            serial_write("[paging] high pd alloc failed\n");
+            klog_write("[paging] high pd alloc failed\n");
             return -1;
         }
     }
@@ -331,7 +332,7 @@ paging_init_after_bootstrap:
          * the first CR3 handoff. User roots already honor IDENTITY_PD_COUNT=0. */
     }
 
-    serial_printf("[paging] cr3=%016llx\n[paging] higher-half=%016llx\n",
+    klog_printf("[paging] cr3=%016llx\n[paging] higher-half=%016llx\n",
         (unsigned long long)g_pml4_phys,
         (unsigned long long)KERNEL_HIGHER_HALF_BASE);
     return 0;
@@ -628,7 +629,7 @@ paging_verify_user_root_no_low_slot(uint64_t root_table, int log_failures)
     volatile uint64_t *root = table_ptr(root_table);
     if (root[0] & PT_FLAG_PRESENT) {
         if (log_failures) {
-            serial_printf("[paging] verify fail: low slot still present pml4[0]=%016llx\n",
+            klog_printf("[paging] verify fail: low slot still present pml4[0]=%016llx\n",
                           (unsigned long long)root[0]);
         }
         return -1;
@@ -643,13 +644,13 @@ paging_dump_user_root_kernel_mappings(uint64_t root_table)
         return;
     }
     volatile uint64_t *root = table_ptr(root_table);
-    serial_printf("[paging] dump root=%016llx pml4[0]=%016llx pml4[1]=%016llx pml4[511]=%016llx\n",
+    klog_printf("[paging] dump root=%016llx pml4[0]=%016llx pml4[1]=%016llx pml4[511]=%016llx\n",
                   (unsigned long long)root_table,
                   (unsigned long long)root[0],
                   (unsigned long long)root[1],
                   (unsigned long long)root[511]);
     if (!(root[511] & PT_FLAG_PRESENT)) {
-        serial_write("[paging] dump: pml4[511] not present\n");
+        klog_write("[paging] dump: pml4[511] not present\n");
         return;
     }
     volatile uint64_t *pdpt_high = table_ptr(entry_phys(root[511]));
@@ -657,7 +658,7 @@ paging_dump_user_root_kernel_mappings(uint64_t root_table)
         if (!(pdpt_high[i] & PT_FLAG_PRESENT)) {
             continue;
         }
-        serial_printf("[paging] dump: pdpt_high[%u]=%016llx\n",
+        klog_printf("[paging] dump: pdpt_high[%u]=%016llx\n",
                       (unsigned int)i,
                       (unsigned long long)pdpt_high[i]);
     }

@@ -1,4 +1,5 @@
 #include "native_driver.h"
+#include "klog.h"
 #include "memory.h"
 #include "paging.h"
 #include "physmem.h"
@@ -84,7 +85,7 @@ nd_console_write(const char *ptr, int len)
                         : remaining;
         memcpy(buf, ptr + (len - remaining), (uint32_t)chunk);
         buf[chunk] = '\0';
-        serial_write(buf);
+        klog_write(buf);
         remaining -= chunk;
     }
     return 0;
@@ -492,23 +493,23 @@ native_driver_start(uint32_t context_id,
                     const char *name,
                     const uint32_t *init_argv, uint32_t init_argc)
 {
-    serial_write("[native-driver] loading ");
-    serial_write(name ? name : "?");
-    serial_write("\n");
+    klog_write("[native-driver] loading ");
+    klog_write(name ? name : "?");
+    klog_write("\n");
 
     if (elf_validate(elf_data, elf_size) != 0) {
-        serial_write("[native-driver] ELF validation failed\n");
+        klog_write("[native-driver] ELF validation failed\n");
         return -1;
     }
 
     mm_context_t *ctx = mm_context_get(context_id);
     if (!ctx || ctx->root_table == 0) {
-        serial_write("[native-driver] no memory context\n");
+        klog_write("[native-driver] no memory context\n");
         return -1;
     }
 
     if (load_segments(elf_data, elf_size, ctx->root_table) != 0) {
-        serial_write("[native-driver] segment load failed\n");
+        klog_write("[native-driver] segment load failed\n");
         return -1;
     }
 
@@ -540,11 +541,11 @@ native_driver_start(uint32_t context_id,
     api.console_ring_id     = nd_console_ring_id;
     api.console_register_fb = nd_console_register_fb;
 
-    serial_write("[native-driver] calling initialize\n");
+    klog_write("[native-driver] calling initialize\n");
     int rc = entry(&api,
                    (int)(init_argc > 0 ? init_argv[0] : 0),
                    (int)(init_argc > 1 ? init_argv[1] : 0),
                    (int)(init_argc > 2 ? init_argv[2] : 0));
-    serial_write("[native-driver] initialize returned\n");
+    klog_write("[native-driver] initialize returned\n");
     return rc;
 }

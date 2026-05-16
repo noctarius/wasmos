@@ -1,4 +1,5 @@
 #include "wasm_driver.h"
+#include "klog.h"
 #include "process.h"
 #include "serial.h"
 #include "wasm3_link.h"
@@ -7,20 +8,20 @@
 static void
 log_wasm3_error(const char *prefix, const char *error, IM3Runtime runtime)
 {
-    serial_write(prefix);
+    klog_write(prefix);
     if (error && error[0]) {
-        serial_write(error);
+        klog_write(error);
     } else {
-        serial_write("unknown");
+        klog_write("unknown");
     }
-    serial_write("\n");
+    klog_write("\n");
     if (runtime) {
         M3ErrorInfo info;
         m3_GetErrorInfo(runtime, &info);
         if (info.message && info.message[0]) {
-            serial_write("[wasm-driver] detail: ");
-            serial_write(info.message);
-            serial_write("\n");
+            klog_write("[wasm-driver] detail: ");
+            klog_write(info.message);
+            klog_write("\n");
         }
     }
 }
@@ -97,7 +98,7 @@ wasm_driver_start(wasm_driver_t *driver,
 
     driver->env = m3_NewEnvironment();
     if (!driver->env) {
-        serial_write("[wasm-driver] env alloc failed\n");
+        klog_write("[wasm-driver] env alloc failed\n");
         wasm_driver_leave_runtime(previous_pid);
         return -1;
     }
@@ -105,7 +106,7 @@ wasm_driver_start(wasm_driver_t *driver,
     uint32_t stack_size = driver->manifest.stack_size ? driver->manifest.stack_size : (64u * 1024u);
     driver->runtime = m3_NewRuntime(driver->env, stack_size, NULL);
     if (!driver->runtime) {
-        serial_write("[wasm-driver] runtime alloc failed\n");
+        klog_write("[wasm-driver] runtime alloc failed\n");
         m3_FreeEnvironment(driver->env);
         driver->env = 0;
         wasm_driver_leave_runtime(previous_pid);
@@ -139,7 +140,7 @@ wasm_driver_start(wasm_driver_t *driver,
     }
 
     if (wasm3_link_wasmos(driver->module) != 0 || wasm3_link_env(driver->module) != 0) {
-        serial_write("[wasm-driver] link failed\n");
+        klog_write("[wasm-driver] link failed\n");
         m3_FreeRuntime(driver->runtime);
         m3_FreeEnvironment(driver->env);
         driver->runtime = 0;
@@ -150,7 +151,7 @@ wasm_driver_start(wasm_driver_t *driver,
     }
 
     if (ipc_endpoint_create(owner_context_id, &driver->endpoint) != 0) {
-        serial_write("[wasm-driver] endpoint allocation failed\n");
+        klog_write("[wasm-driver] endpoint allocation failed\n");
         m3_FreeRuntime(driver->runtime);
         m3_FreeEnvironment(driver->env);
         wasm_driver_reset(driver);
@@ -159,7 +160,7 @@ wasm_driver_start(wasm_driver_t *driver,
     }
 
     driver->active = 1;
-    serial_write("[wasm-driver] started\n");
+    klog_write("[wasm-driver] started\n");
     wasm_driver_leave_runtime(previous_pid);
     return 0;
 }
@@ -205,7 +206,7 @@ wasm_driver_call_entry(wasm_driver_t *driver)
 
     argc = driver->manifest.entry_argc;
     if (argc > 4) {
-        serial_write("[wasm-driver] entry args too large\n");
+        klog_write("[wasm-driver] entry args too large\n");
         return -1;
     }
     for (uint32_t i = 0; i < argc; ++i) {

@@ -1,4 +1,5 @@
 #include "framebuffer.h"
+#include "klog.h"
 #include "serial.h"
 #include "paging.h"
 #include "../drivers/framebuffer/font_8x16.h"
@@ -54,7 +55,7 @@ static inline uint32_t *panic_bg_slot(void)
 void framebuffer_init(const boot_info_t *info)
 {
     framebuffer_info_t *fb = framebuffer_info_slot();
-    serial_printf("[framebuffer] init 0x%016llX 0x%016llX 0x%016llX 0x%016llX 0x%016llX flags=0x%016llX\n",
+    klog_printf("[framebuffer] init 0x%016llX 0x%016llX 0x%016llX 0x%016llX 0x%016llX flags=0x%016llX\n",
                   (unsigned long long)(info ? (uint64_t)(uintptr_t)info->framebuffer_base : 0),
                   (unsigned long long)(info ? (uint64_t)info->framebuffer_size : 0),
                   (unsigned long long)(info ? info->framebuffer_width : 0),
@@ -72,7 +73,7 @@ void framebuffer_init(const boot_info_t *info)
     fb->framebuffer_width = info->framebuffer_width;
     fb->framebuffer_height = info->framebuffer_height;
     fb->framebuffer_stride = info->framebuffer_pixels_per_scanline;
-    serial_printf("[framebuffer] stride=0x%016llX\n",
+    klog_printf("[framebuffer] stride=0x%016llX\n",
                   (unsigned long long)info->framebuffer_pixels_per_scanline);
 }
 

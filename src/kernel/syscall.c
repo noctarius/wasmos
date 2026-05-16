@@ -1,4 +1,5 @@
 #include "syscall.h"
+#include "klog.h"
 #include "ipc.h"
 #include "memory.h"
 #include "process.h"
@@ -275,7 +276,7 @@ syscall_trace_ring3_once(syscall_frame_t *frame)
         return;
     }
     g_ring3_syscall_logged = 1;
-    serial_write("[test] ring3 syscall ok\n");
+    klog_write("[test] ring3 syscall ok\n");
 }
 
 static void
@@ -299,7 +300,7 @@ syscall_trace_ring3_stress(syscall_frame_t *frame)
     }
     if ((uint32_t)frame->rax == WASMOS_SYSCALL_EXIT && g_ring3_getpid_count >= 4096u) {
         g_ring3_stress_ok_logged = 1;
-        serial_write("[test] ring3 preempt stress ok\n");
+        klog_write("[test] ring3 preempt stress ok\n");
     }
 }
 
@@ -320,7 +321,7 @@ x86_syscall_handler(syscall_frame_t *frame)
             process_t *proc = process_get(process_current_pid());
             if (proc && name_eq(proc->name, "ring3-native")) {
                 g_ring3_native_abi_logged = 1;
-                serial_write("[test] ring3 native abi ok\n");
+                klog_write("[test] ring3 native abi ok\n");
             }
         }
         return process_current_pid();
@@ -329,7 +330,7 @@ x86_syscall_handler(syscall_frame_t *frame)
             process_t *proc = process_get(process_current_pid());
             if (proc && name_eq(proc->name, "ring3-native")) {
                 g_ring3_native_gettid_logged = 1;
-                serial_write("[test] ring3 native gettid ok\n");
+                klog_write("[test] ring3 native gettid ok\n");
             }
         }
         return thread_current_tid();
@@ -352,7 +353,7 @@ x86_syscall_handler(syscall_frame_t *frame)
             if (proc && name_eq(proc->name, "ring3-smoke") &&
                 (frame->cs & 0x3u) == 0x3u) {
                 g_ring3_yield_logged = 1;
-                serial_write("[test] ring3 yield syscall ok\n");
+                klog_write("[test] ring3 yield syscall ok\n");
             }
         }
         process_yield(PROCESS_RUN_YIELDED);
@@ -363,7 +364,7 @@ x86_syscall_handler(syscall_frame_t *frame)
             if (proc && name_eq(proc->name, "ring3-native") &&
                 (frame->cs & 0x3u) == 0x3u) {
                 g_ring3_thread_yield_logged = 1;
-                serial_write("[test] ring3 thread yield syscall ok\n");
+                klog_write("[test] ring3 thread yield syscall ok\n");
             }
         }
         process_yield(PROCESS_RUN_YIELDED);
@@ -380,7 +381,7 @@ x86_syscall_handler(syscall_frame_t *frame)
         if (!g_ring3_thread_exit_logged && (frame->cs & 0x3u) == 0x3u &&
             name_eq(proc->name, "ring3-native")) {
             g_ring3_thread_exit_logged = 1;
-            serial_write("[test] ring3 thread exit syscall ok\n");
+            klog_write("[test] ring3 thread exit syscall ok\n");
         }
         process_set_exit_status(proc, exit_status);
         process_yield(PROCESS_RUN_THREAD_EXITED);
@@ -399,7 +400,7 @@ x86_syscall_handler(syscall_frame_t *frame)
         if (!g_ring3_thread_create_logged && (frame->cs & 0x3u) == 0x3u &&
             name_eq(proc->name, "ring3-native")) {
             g_ring3_thread_create_logged = 1;
-            serial_write("[test] ring3 thread create syscall ok\n");
+            klog_write("[test] ring3 thread create syscall ok\n");
         }
         if (user_stack_top == 0 || entry_rip == 0) {
             return (uint64_t)-1;
@@ -455,7 +456,7 @@ x86_syscall_handler(syscall_frame_t *frame)
         if (!g_ring3_thread_join_logged && (frame->cs & 0x3u) == 0x3u &&
             name_eq(proc->name, "ring3-native")) {
             g_ring3_thread_join_logged = 1;
-            serial_write("[test] ring3 thread join syscall ok\n");
+            klog_write("[test] ring3 thread join syscall ok\n");
         }
         if (syscall_arg_u32(frame->rdi, &target_tid) != 0) {
             return (uint64_t)-1;
@@ -468,7 +469,7 @@ x86_syscall_handler(syscall_frame_t *frame)
                     !name_eq(proc->name, "ring3-native") &&
                     target_tid != self_tid) {
                     g_ring3_thread_join_helper_ok_logged = 1;
-                    serial_write("[test] ring3 thread join helper ok\n");
+                    klog_write("[test] ring3 thread join helper ok\n");
                 }
                 return (uint64_t)(int64_t)exit_status;
             }
@@ -478,14 +479,14 @@ x86_syscall_handler(syscall_frame_t *frame)
                     name_eq(proc->name, "ring3-native") &&
                     target_tid == self_tid) {
                     g_ring3_thread_join_self_deny_logged = 1;
-                    serial_write("[test] ring3 thread join self deny ok\n");
+                    klog_write("[test] ring3 thread join self deny ok\n");
                 }
                 if (!g_ring3_thread_detach_join_deny_logged &&
                     (frame->cs & 0x3u) == 0x3u &&
                     name_eq(proc->name, "ring3-threading") &&
                     target_tid != self_tid) {
                     g_ring3_thread_detach_join_deny_logged = 1;
-                    serial_write("[test] ring3 thread detach join deny ok\n");
+                    klog_write("[test] ring3 thread detach join deny ok\n");
                 }
                 return (uint64_t)-1;
             }
@@ -502,7 +503,7 @@ x86_syscall_handler(syscall_frame_t *frame)
         if (!g_ring3_thread_detach_logged && (frame->cs & 0x3u) == 0x3u &&
             name_eq(proc->name, "ring3-native")) {
             g_ring3_thread_detach_logged = 1;
-            serial_write("[test] ring3 thread detach syscall ok\n");
+            klog_write("[test] ring3 thread detach syscall ok\n");
         }
         if (syscall_arg_u32(frame->rdi, &target_tid) != 0) {
             return (uint64_t)-1;
@@ -514,7 +515,7 @@ x86_syscall_handler(syscall_frame_t *frame)
                 name_eq(proc->name, "ring3-native") &&
                 target_tid == 0) {
                 g_ring3_thread_detach_invalid_deny_logged = 1;
-                serial_write("[test] ring3 thread detach invalid deny ok\n");
+                klog_write("[test] ring3 thread detach invalid deny ok\n");
             }
             return (uint64_t)-1;
         }
@@ -523,14 +524,14 @@ x86_syscall_handler(syscall_frame_t *frame)
             !name_eq(proc->name, "ring3-native") &&
             target_tid != thread_current_tid()) {
             g_ring3_thread_detach_helper_ok_logged = 1;
-            serial_write("[test] ring3 thread detach helper ok\n");
+            klog_write("[test] ring3 thread detach helper ok\n");
         }
         if (!g_ring3_thread_detach_join_deny_logged &&
             (frame->cs & 0x3u) == 0x3u &&
             name_eq(proc->name, "ring3-native")) {
             if (process_thread_join(proc, target_tid, 0) < 0) {
                 g_ring3_thread_detach_join_deny_logged = 1;
-                serial_write("[test] ring3 thread detach join deny ok\n");
+                klog_write("[test] ring3 thread detach join deny ok\n");
             }
         }
         return 0;
@@ -567,7 +568,7 @@ x86_syscall_handler(syscall_frame_t *frame)
         if (syscall_arg_u32(frame->rdi, &endpoint) != 0) {
             if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_arg_width_deny_logged) {
                 g_ring3_ipc_arg_width_deny_logged = 1;
-                serial_write("[test] ring3 ipc syscall arg width deny ok\n");
+                klog_write("[test] ring3 ipc syscall arg width deny ok\n");
             }
             return (uint64_t)(int64_t)IPC_ERR_INVALID;
         }
@@ -575,18 +576,18 @@ x86_syscall_handler(syscall_frame_t *frame)
         if (name_eq(proc->name, "ring3-smoke")) {
             if (!g_ring3_ipc_deny_logged && endpoint == 0xFFFFFFFFu && rc == IPC_ERR_INVALID) {
                 g_ring3_ipc_deny_logged = 1;
-                serial_write("[test] ring3 ipc syscall deny ok\n");
+                klog_write("[test] ring3 ipc syscall deny ok\n");
             }
             if (!g_ring3_ipc_ok_logged && rc == IPC_OK) {
                 g_ring3_ipc_ok_logged = 1;
-                serial_write("[test] ring3 ipc syscall ok\n");
+                klog_write("[test] ring3 ipc syscall ok\n");
             }
             if (!g_ring3_ipc_control_deny_logged &&
                 endpoint == g_ipc_notify_control_deny_endpoint &&
                 g_ipc_notify_control_deny_endpoint != IPC_ENDPOINT_NONE &&
                 rc == IPC_ERR_PERM) {
                 g_ring3_ipc_control_deny_logged = 1;
-                serial_write("[test] ring3 ipc syscall control deny ok\n");
+                klog_write("[test] ring3 ipc syscall control deny ok\n");
             }
         }
         return (uint64_t)(int64_t)rc;
@@ -642,10 +643,10 @@ x86_syscall_handler(syscall_frame_t *frame)
             if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_call_deny_logged &&
                 destination == 0xFFFFFFFFu) {
                 g_ring3_ipc_call_deny_logged = 1;
-                serial_write("[test] ring3 ipc call deny ok\n");
+                klog_write("[test] ring3 ipc call deny ok\n");
                 if (!g_ring3_ipc_call_err_rdx_zero_logged && frame->rdx == 0) {
                     g_ring3_ipc_call_err_rdx_zero_logged = 1;
-                    serial_write("[test] ring3 ipc call err rdx zero ok\n");
+                    klog_write("[test] ring3 ipc call err rdx zero ok\n");
                 }
             }
             return (uint64_t)(int64_t)rc;
@@ -656,13 +657,13 @@ x86_syscall_handler(syscall_frame_t *frame)
             if (name_eq(proc->name, "ring3-smoke") &&
                 !g_ring3_ipc_call_perm_deny_logged) {
                 g_ring3_ipc_call_perm_deny_logged = 1;
-                serial_write("[test] ring3 ipc call perm deny ok\n");
+                klog_write("[test] ring3 ipc call perm deny ok\n");
             }
             if (name_eq(proc->name, "ring3-smoke") &&
                 msg_type == 0x00006656u &&
                 !g_ring3_ipc_call_control_deny_logged) {
                 g_ring3_ipc_call_control_deny_logged = 1;
-                serial_write("[test] ring3 ipc call control deny ok\n");
+                klog_write("[test] ring3 ipc call control deny ok\n");
             }
             return (uint64_t)(int64_t)rc;
         }
@@ -673,12 +674,12 @@ x86_syscall_handler(syscall_frame_t *frame)
                 msg_type == 0x00006656u &&
                 !g_ring3_ipc_call_control_deny_logged) {
                 g_ring3_ipc_call_control_deny_logged = 1;
-                serial_write("[test] ring3 ipc call control deny ok\n");
+                klog_write("[test] ring3 ipc call control deny ok\n");
             }
             if (name_eq(proc->name, "ring3-smoke") &&
                 !g_ring3_ipc_call_control_endpoint_deny_logged) {
                 g_ring3_ipc_call_control_endpoint_deny_logged = 1;
-                serial_write("[test] ring3 ipc call control endpoint deny ok\n");
+                klog_write("[test] ring3 ipc call control endpoint deny ok\n");
             }
             return (uint64_t)(int64_t)rc;
         }
@@ -762,7 +763,7 @@ x86_syscall_handler(syscall_frame_t *frame)
             if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_call_ok_logged &&
                 (uint32_t)frame->rdx == req.arg0) {
                 g_ring3_ipc_call_ok_logged = 1;
-                serial_write("[test] ring3 ipc call ok\n");
+                klog_write("[test] ring3 ipc call ok\n");
             }
             return 0;
         }
@@ -785,24 +786,24 @@ x86_syscall_handler(syscall_frame_t *frame)
             if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_call_ok_logged &&
                 (uint32_t)frame->rdx == req.arg0) {
                 g_ring3_ipc_call_ok_logged = 1;
-                serial_write("[test] ring3 ipc call ok\n");
+                klog_write("[test] ring3 ipc call ok\n");
             }
             if (name_eq(proc->name, "ring3-smoke") &&
                 msg_type == 0x00009ABCu &&
                 !g_ring3_ipc_call_correlation_logged &&
                 (uint32_t)frame->rdx == req.arg0) {
                 g_ring3_ipc_call_correlation_logged = 1;
-                serial_write("[test] ring3 ipc call correlate ok\n");
-                serial_write("[test] ring3 ipc call stale id deny ok\n");
+                klog_write("[test] ring3 ipc call correlate ok\n");
+                klog_write("[test] ring3 ipc call stale id deny ok\n");
             }
             if (name_eq(proc->name, "ring3-smoke") &&
                 msg_type == 0x00009ABDu &&
                 (uint32_t)frame->rdx == req.arg0) {
-                serial_write("[test] ring3 ipc call source auth ok\n");
+                klog_write("[test] ring3 ipc call source auth ok\n");
                 if (!g_ring3_ipc_call_spoof_invalid_source_deny_logged &&
                     injected_invalid_source_spoof) {
                     g_ring3_ipc_call_spoof_invalid_source_deny_logged = 1;
-                    serial_write("[test] ring3 ipc call spoof invalid source deny ok\n");
+                    klog_write("[test] ring3 ipc call spoof invalid source deny ok\n");
                 }
                 if (!g_ring3_ipc_call_out_of_order_retain_logged &&
                     injected_out_of_order_request_id != 0) {
@@ -811,13 +812,13 @@ x86_syscall_handler(syscall_frame_t *frame)
                                                          injected_out_of_order_request_id,
                                                          &retained) == 0) {
                         g_ring3_ipc_call_out_of_order_retain_logged = 1;
-                        serial_write("[test] ring3 ipc call out-of-order retain ok\n");
+                        klog_write("[test] ring3 ipc call out-of-order retain ok\n");
                     }
                 }
                 if (!g_ring3_ipc_call_owner_sender_stress_logged &&
                     dropped_inauth_replies >= 2u) {
                     g_ring3_ipc_call_owner_sender_stress_logged = 1;
-                    serial_write("[test] ring3 ipc owner+sender stress ok\n");
+                    klog_write("[test] ring3 ipc owner+sender stress ok\n");
                 }
             }
             return 0;
@@ -845,7 +846,7 @@ x86_syscall_handler(syscall_frame_t *frame)
             if (name_eq(proc->name, "ring3-smoke") && !g_ring3_ipc_call_ok_logged &&
                 (uint32_t)frame->rdx == req.arg0) {
                 g_ring3_ipc_call_ok_logged = 1;
-                serial_write("[test] ring3 ipc call ok\n");
+                klog_write("[test] ring3 ipc call ok\n");
             }
             return 0;
         }

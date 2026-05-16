@@ -1,4 +1,5 @@
 #include "boot.h"
+#include "klog.h"
 #include "ipc.h"
 #include "io.h"
 #include "physmem.h"
@@ -1394,7 +1395,7 @@ m3ApiRawFunction(wasmos_framebuffer_map)
 
     uint64_t pages = (uint64_t)map_size32 / 0x1000ULL;
     if (pages == 0) {
-        serial_write("[framebuffer-map] zero pages\n");
+        klog_write("[framebuffer-map] zero pages\n");
         m3ApiReturn(-1);
     }
     uint64_t cur_virt = virt;
@@ -1801,7 +1802,7 @@ m3ApiRawFunction(wasmos_console_write)
             m3ApiReturn(-1);
         }
         buf[chunk] = '\0';
-        serial_write(buf);
+        klog_write(buf);
         wasm_console_write_vt_mirror(buf, (int32_t)chunk);
         copied += chunk;
     }
@@ -1844,7 +1845,7 @@ m3ApiRawFunction(wasmos_kmap_dump_all)
     uint32_t count = process_count_active();
     int failures = 0;
 
-    trace_do(serial_write("[kmap] contexts begin\n"));
+    trace_do(klog_write("[kmap] contexts begin\n"));
     for (uint32_t i = 0; i < count; ++i) {
         uint32_t pid = 0;
         uint32_t parent_pid = 0;
@@ -1862,15 +1863,15 @@ m3ApiRawFunction(wasmos_kmap_dump_all)
             continue;
         }
 
-        trace_do(serial_write("[kmap] pid="));
+        trace_do(klog_write("[kmap] pid="));
         trace_do(serial_write_hex64((uint64_t)pid));
-        trace_do(serial_write(" parent="));
+        trace_do(klog_write(" parent="));
         trace_do(serial_write_hex64((uint64_t)parent_pid));
-        trace_do(serial_write(" ctx="));
+        trace_do(klog_write(" ctx="));
         trace_do(serial_write_hex64((uint64_t)proc->context_id));
-        trace_do(serial_write(" name="));
-        trace_do(serial_write(name ? name : "(unknown)"));
-        trace_do(serial_write("\n"));
+        trace_do(klog_write(" name="));
+        trace_do(klog_write(name ? name : "(unknown)"));
+        trace_do(klog_write("\n"));
 
         paging_dump_user_root_kernel_mappings(root);
         if ((proc->ctx.cs & 0x3u) == 0x3u) {
@@ -1879,7 +1880,7 @@ m3ApiRawFunction(wasmos_kmap_dump_all)
             }
         }
     }
-    trace_do(serial_write("[kmap] contexts end\n"));
+    trace_do(klog_write("[kmap] contexts end\n"));
     m3ApiReturn(failures == 0 ? 0 : -1);
 }
 
@@ -2278,11 +2279,11 @@ m3ApiRawFunction(wasmos_env_abort)
 static void
 wasm3_link_error(const char *name, const char *res)
 {
-    serial_write("[wasm3] link failed ");
-    serial_write(name);
-    serial_write(": ");
-    serial_write(res ? res : "unknown");
-    serial_write("\n");
+    klog_write("[wasm3] link failed ");
+    klog_write(name);
+    klog_write(": ");
+    klog_write(res ? res : "unknown");
+    klog_write("\n");
 }
 
 static int
@@ -2372,7 +2373,7 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "input_push", "i(i)", wasmos_input_push);
     rc |= wasm3_link_raw(module, "wasmos", "input_read", "i()", wasmos_input_read);
     if (rc != 0) {
-        serial_write("[kernel] wasm3 link errors\n");
+        klog_write("[kernel] wasm3 link errors\n");
         return -1;
     }
     return 0;
@@ -2388,7 +2389,7 @@ wasm3_link_env(IM3Module module)
     rc |= wasm3_link_raw(module, "env", "strlen", "i(*)", wasmos_strlen);
     rc |= wasm3_link_raw(module, "env", "abort", "v(iiii)", wasmos_env_abort);
     if (rc != 0) {
-        serial_write("[kernel] wasm3 env link errors\n");
+        klog_write("[kernel] wasm3 env link errors\n");
         return -1;
     }
     return 0;

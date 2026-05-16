@@ -7,6 +7,7 @@
 #include "capability.h"
 #include "physmem.h"
 #include "memory.h"
+#include "string.h"
 
 /*
  * The process manager is the bridge between filesystem-visible WASMOS-APP
@@ -405,19 +406,6 @@ process_manager_inject_spawn_owner_deny_test(void)
 
 
 static int
-copy_name(char *dst, uint32_t dst_len, const uint8_t *src, uint32_t src_len)
-{
-    if (!dst || !src || dst_len == 0 || src_len == 0 || src_len >= dst_len) {
-        return -1;
-    }
-    for (uint32_t i = 0; i < src_len; ++i) {
-        dst[i] = (char)src[i];
-    }
-    dst[src_len] = '\0';
-    return 0;
-}
-
-static int
 name_eq(const char *a, const char *b)
 {
     if (!a || !b) {
@@ -526,7 +514,7 @@ pm_find_module_index_by_name(const char *name)
             continue;
         }
         char temp[64];
-        if (copy_name(temp, sizeof(temp), desc.name, desc.name_len) != 0) {
+        if (str_copy_bytes(temp, sizeof(temp), desc.name, desc.name_len) != 0) {
             continue;
         }
         if (name_eq(temp, name)) {
@@ -825,7 +813,7 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
         return -1;
     }
 
-    if (copy_name(slot->name, sizeof(slot->name), desc.name, desc.name_len) != 0) {
+    if (str_copy_bytes(slot->name, sizeof(slot->name), desc.name, desc.name_len) != 0) {
         return -1;
     }
     trace_write("[pm] spawn module ");
@@ -922,7 +910,7 @@ pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t *blob, uint32_t blob_siz
                        WASMOS_APP_FLAG_DRIVER)) == 0) {
         return -1;
     }
-    if (copy_name(slot->name, sizeof(slot->name), desc.name, desc.name_len) != 0) {
+    if (str_copy_bytes(slot->name, sizeof(slot->name), desc.name, desc.name_len) != 0) {
         return -1;
     }
 

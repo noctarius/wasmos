@@ -2,6 +2,7 @@
 #define WASMOS_STRING_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 void *memcpy(void *dst, const void *src, size_t n);
 void *memset(void *dst, int c, size_t n);
@@ -14,6 +15,7 @@ int strncmp(const char *a, const char *b, size_t n);
 int strcasecmp(const char *a, const char *b);
 char *strcpy(char *dst, const char *src);
 char *strncpy(char *dst, const char *src, size_t n);
+int str_copy_bytes(char *dst, size_t dst_len, const uint8_t *src, size_t src_len);
 char *strchr(const char *s, int ch);
 char *strrchr(const char *s, int ch);
 

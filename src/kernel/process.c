@@ -8,6 +8,7 @@
 #include "ipc.h"
 #include "timer.h"
 #include "thread.h"
+#include "string.h"
 
 /*
  * process.c contains the single-core scheduler, process table, run queue, and
@@ -271,25 +272,6 @@ static void process_set_ready(process_t *proc, thread_t *thread);
 static void process_set_running(process_t *proc, thread_t *thread);
 static thread_t *process_find_waiter_for_target(process_t *proc, uint32_t target_pid);
 
-
-static int process_str_eq(const char *a, const char *b) {
-    if (!a || !b) {
-        return 0;
-    }
-    a = (const char *)(uintptr_t)process_kernel_alias_addr((uintptr_t)a);
-    b = (const char *)(uintptr_t)process_kernel_alias_addr((uintptr_t)b);
-    while (*a || *b) {
-        if (*a != *b) {
-            return 0;
-        }
-        if (*a == '\0') {
-            break;
-        }
-        ++a;
-        ++b;
-    }
-    return 1;
-}
 
 static void
 context_switch_high(process_context_t *out, process_context_t *in)
@@ -930,7 +912,7 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
             main_thread->ctx = slot->ctx;
         }
     }
-    if (process_str_eq(name, "process-manager")) {
+    if (strcmp(name, "process-manager") == 0) {
         g_ctx_watch_ctx = (uint64_t)(uintptr_t)&slot->ctx;
         g_ctx_watch_last_ctx = g_ctx_watch_ctx;
         g_ctx_watch_hits = 0;
@@ -943,7 +925,7 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
             trace_do(serial_write_hex64((uint64_t)(uintptr_t)g_pm_stack_watch));
         }
     }
-    if (process_str_eq(name, "preempt-busy")) {
+    if (strcmp(name, "preempt-busy") == 0) {
         trace_write("[sched] spawn preempt-busy rip=");
         trace_do(serial_write_hex64(slot->ctx.rip));
         trace_write("[sched] spawn preempt-busy rsp=");
@@ -1642,7 +1624,7 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     if (g_in_context_switch) {
         return 0;
     }
-    if (g_current_process && process_str_eq(g_current_process->name, "process-manager") &&
+    if (g_current_process && strcmp(g_current_process->name, "process-manager") == 0 &&
         g_pm_preempt_safe_depth == 0) {
         return 0;
     }

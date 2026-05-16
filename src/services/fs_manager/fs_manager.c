@@ -44,6 +44,23 @@ static void stall_forever(void) {
     }
 }
 
+static int32_t
+borrow_flags_for_type(int32_t type)
+{
+    if (type == FS_IPC_OPEN_REQ ||
+        type == FS_IPC_STAT_REQ ||
+        type == FS_IPC_UNLINK_REQ ||
+        type == FS_IPC_MKDIR_REQ ||
+        type == FS_IPC_RMDIR_REQ ||
+        type == FS_IPC_WRITE_REQ) {
+        return 0x1; /* read */
+    }
+    if (type == FS_IPC_READ_REQ || type == FS_IPC_READ_APP_REQ) {
+        return 0x2; /* write */
+    }
+    return 0;
+}
+
 static void log_msg(const char *s) {
     if (!s) return;
     (void)printf("%s", s);
@@ -433,24 +450,22 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             fs_backend_t *fallback_boot = backend_first_of_kind(FSMGR_BACKEND_BOOT);
             backend = fallback_boot ? fallback_boot->endpoint : -1;
         }
-        if (type == FS_IPC_READ_APP_REQ) {
-            if (backend < 0 ||
-                wasmos_ipc_forward(backend,
-                                   source,
-                                   type,
-                                   request_id,
-                                   arg0,
-                                   arg1f,
-                                   arg2f,
-                                   arg3f) != 0) {
-                (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
-            }
-            continue;
-        }
         int32_t resp_type = FS_IPC_ERROR;
         int32_t r0 = -1, r1 = 0, r2 = 0, r3 = 0;
+        int32_t borrow_flags = borrow_flags_for_type(type);
+        int32_t borrowed = 0;
+        if (borrow_flags != 0) {
+            if (wasmos_fs_buffer_borrow(source, borrow_flags) != 0) {
+                (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
+                continue;
+            }
+            borrowed = 1;
+        }
         if (forward_request(backend, type, request_id, arg0, arg1f, arg2f, arg3f,
                             source, &resp_type, &r0, &r1, &r2, &r3) != 0) {
+            if (borrowed) {
+                (void)wasmos_fs_buffer_release();
+            }
             if (type == FS_IPC_CHDIR_REQ && state->mount != FS_MOUNT_ROOT) {
                 char path[32];
                 unpack_name((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, path, sizeof(path));
@@ -463,6 +478,9 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             }
             (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
             continue;
+        }
+        if (borrowed) {
+            (void)wasmos_fs_buffer_release();
         }
         if (type == FS_IPC_CHDIR_REQ && resp_type == FS_IPC_ERROR) {
             char path[32];
@@ -490,7 +508,6 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
                 }
             }
         }
-
         (void)wasmos_ipc_send(source, g_fs_endpoint, resp_type, request_id, r0, r1, r2, r3);
     }
 }

@@ -169,7 +169,7 @@ Current driver match/capability policy source:
 Current FS namespace model:
 - `fs-manager` is the canonical `fs` endpoint for PM/runtime file I/O and CLI mount namespace routing (registered as `fs.vfs`)
 - `fs-fat` and `fs-init` are backend filesystem drivers registered into `fs-manager`
-- `FS_IPC_READ_APP_REQ` is forwarded by `fs-manager` with caller reply-endpoint preservation so PM spawn-by-name payloads still land in the caller-owned FS buffer
+- `fs-manager` now borrows caller FS buffers with explicit read/write grants (`fs_buffer_borrow`/`fs_buffer_release`) before backend proxying so forwarded filesystem operations can stay zero-copy across contexts
 - `/` is virtual in `fs.vfs`, with `/boot` routed to FAT and `/init` routed to `fs-init` (`fs.init`)
 5. `init` requests `sysinit` load from FAT via process manager
 6. `sysinit` starts configured services/apps from boot config

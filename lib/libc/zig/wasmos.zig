@@ -29,6 +29,7 @@ pub const O_CREAT: i32 = 0x0040;
 pub const O_TRUNC: i32 = 0x0200;
 
 extern "wasmos" fn console_write(ptr: i32, len: i32) callconv(.c) i32;
+extern "wasmos" fn console_read(ptr: i32, len: i32) callconv(.c) i32;
 extern "wasmos" fn ipc_create_endpoint() callconv(.c) i32;
 extern "wasmos" fn ipc_send(
     destination_endpoint: i32,
@@ -154,6 +155,29 @@ pub const stdlib = struct {
 
     pub fn println(comptime fmt: []const u8, args: anytype) Error!void {
         try print(fmt ++ "\n", args);
+    }
+
+    pub fn readline(buffer: []u8) Error!usize {
+        if (buffer.len <= 1) {
+            return Error.InvalidArgument;
+        }
+        var pos: usize = 0;
+        while (pos + 1 < buffer.len) {
+            const got = console_read(@intCast(@intFromPtr(buffer.ptr + pos)), 1);
+            if (got < 0) {
+                buffer[0] = 0;
+                return Error.HostCallFailed;
+            }
+            if (got == 0) {
+                break;
+            }
+            pos += 1;
+            if (buffer[pos - 1] == '\n') {
+                break;
+            }
+        }
+        buffer[pos] = 0;
+        return pos;
     }
 };
 

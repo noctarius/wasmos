@@ -96,6 +96,9 @@ per-application endpoint bindings.
 libc stdio compatibility now includes direct console-backed `read`/`write`
 handling for `STDIN_FILENO`/`STDOUT_FILENO`/`STDERR_FILENO` (0/1/2), while
 filesystem reads/writes continue to use FS IPC descriptors (`>=3`).
+Line-oriented console input helpers are now exposed in libc and language
+wrappers (`readline` in C stdio plus AssemblyScript/Go/Rust/Zig wrapper APIs)
+as thin loops over `console_read`.
 Filesystem namespace now starts from a virtual root (`/`) with explicit mount
 subtrees and split backend responsibilities: `fs-fat` remains the active `fs`
 endpoint for boot/FAT routing, while `fs-init` provides initfs listing

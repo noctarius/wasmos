@@ -27,6 +27,8 @@ export const O_TRUNC: i32 = 0x0200;
 
 @external("wasmos", "console_write")
 declare function console_write(ptr: i32, len: i32): i32;
+@external("wasmos", "console_read")
+declare function console_read(ptr: i32, len: i32): i32;
 @external("wasmos", "ipc_create_endpoint")
 declare function ipc_create_endpoint(): i32;
 @external("wasmos", "ipc_send")
@@ -152,6 +154,31 @@ export namespace std {
 
   export function println(text: string): bool {
     return writeStringRaw(text + "\n");
+  }
+
+  export function readline(maxLen: i32 = 128): string | null {
+    if (maxLen <= 1) {
+      return null;
+    }
+    const limit = maxLen > 1024 ? 1024 : maxLen;
+    const out = new Uint8Array(limit);
+    let pos: i32 = 0;
+    while (pos + 1 < limit) {
+      const got = console_read((out.dataStart as i32) + pos, 1);
+      if (got < 0) {
+        return null;
+      }
+      if (got == 0) {
+        break;
+      }
+      if (out[pos] == 10) {
+        pos += 1;
+        break;
+      }
+      pos += 1;
+    }
+    out[pos] = 0;
+    return String.UTF8.decode(out.buffer, false);
   }
 }
 

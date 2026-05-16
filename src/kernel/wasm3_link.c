@@ -482,6 +482,58 @@ m3ApiRawFunction(wasmos_ipc_send)
     m3ApiReturn(rc);
 }
 
+static int
+process_name_eq(const char *a, const char *b)
+{
+    if (!a || !b) {
+        return 0;
+    }
+    while (*a && *b) {
+        if (*a != *b) {
+            return 0;
+        }
+        a++;
+        b++;
+    }
+    return *a == '\0' && *b == '\0';
+}
+
+m3ApiRawFunction(wasmos_ipc_send_kernel)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, destination_endpoint)
+    m3ApiGetArg(int32_t, source_endpoint)
+    m3ApiGetArg(int32_t, type)
+    m3ApiGetArg(int32_t, request_id)
+    m3ApiGetArg(int32_t, arg0)
+    m3ApiGetArg(int32_t, arg1)
+    m3ApiGetArg(int32_t, arg2)
+    m3ApiGetArg(int32_t, arg3)
+    ipc_message_t req;
+    uint32_t pid = process_current_pid();
+    process_t *proc = process_get(pid);
+
+    /* FIXME: Replace name-based proxy permission with a dedicated capability. */
+    if (!proc || !process_name_eq(proc->name, "fs-manager")) {
+        m3ApiReturn(IPC_ERR_PERM);
+    }
+    if (destination_endpoint < 0 || source_endpoint < 0) {
+        m3ApiReturn(IPC_ERR_INVALID);
+    }
+
+    req.type = (uint32_t)type;
+    req.source = (uint32_t)source_endpoint;
+    req.destination = (uint32_t)destination_endpoint;
+    req.request_id = (uint32_t)request_id;
+    req.arg0 = (uint32_t)arg0;
+    req.arg1 = (uint32_t)arg1;
+    req.arg2 = (uint32_t)arg2;
+    req.arg3 = (uint32_t)arg3;
+
+    preempt_safepoint();
+    m3ApiReturn(ipc_send((uint32_t)destination_endpoint, &req));
+}
+
 m3ApiRawFunction(wasmos_ipc_recv)
 {
     m3ApiReturnType(int32_t)
@@ -2212,6 +2264,7 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "ipc_create_endpoint", "i()", wasmos_ipc_create_endpoint);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_create_notification", "i()", wasmos_ipc_create_notification);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_send", "i(iiiiiiii)", wasmos_ipc_send);
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_send_kernel", "i(iiiiiiii)", wasmos_ipc_send_kernel);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_recv", "i(i)", wasmos_ipc_recv);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_try_recv", "i(i)", wasmos_ipc_try_recv);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_wait", "i(i)", wasmos_ipc_wait);

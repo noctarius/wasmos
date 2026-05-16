@@ -167,9 +167,9 @@ Current driver match/capability policy source:
 - process-manager now also supports initfs metadata lookup by module path (`PROC_IPC_MODULE_META_PATH`) so driver startup can resolve metadata without relying only on boot-module indices
 - all in-tree apps, drivers, and services now provide `linker.metadata` metadata consumed by `make_wasmos_app`
 Current FS namespace model:
-- `fs-fat` remains the canonical `fs` endpoint for PM/runtime file I/O and
-  process spawn-by-name payload loads
-- `fs-manager` provides the virtual mount namespace for CLI via `fs.vfs`
+- `fs-manager` is the canonical `fs` endpoint for PM/runtime file I/O and CLI mount namespace routing (registered as `fs.vfs`)
+- `fs-fat` and `fs-init` are backend filesystem drivers registered into `fs-manager`
+- `FS_IPC_READ_APP_REQ` is forwarded by `fs-manager` with caller reply-endpoint preservation so PM spawn-by-name payloads still land in the caller-owned FS buffer
 - `/` is virtual in `fs.vfs`, with `/boot` routed to FAT and `/init` routed to `fs-init` (`fs.init`)
 5. `init` requests `sysinit` load from FAT via process manager
 6. `sysinit` starts configured services/apps from boot config

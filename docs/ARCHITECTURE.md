@@ -111,11 +111,12 @@ Drivers/services CMake wiring is now centralized through shared root helper
 functions for wasm-C module compilation/packing and IDE companion targets,
 replacing duplicated per-component custom-command blocks.
 Filesystem namespace now starts from a virtual root (`/`) with explicit mount
-subtrees and split backend responsibilities: `fs-fat` remains the active `fs`
-endpoint for boot/FAT routing (including PM spawn-name module loads), while
-`fs-init` provides initfs listing
-responsibilities as a separate backend (`fs.init`). `fs-manager` remains
-scaffolded for the follow-up endpoint handover.
+subtrees and split backend responsibilities: `fs-manager` is the canonical
+filesystem IPC entrypoint (`fs.vfs`) and routes requests to registered backend
+drivers; `fs-fat` provides boot/FAT routing and `fs-init` provides initfs
+listing. For spawn-by-name payload loads (`FS_IPC_READ_APP_REQ`), `fs-manager`
+preserves the original caller reply endpoint when forwarding so backend writes
+land in the caller-owned FS buffer context.
 Device discovery now includes PCI-inventory-driven matching in `device-manager`
 with enriched `pci-bus` inventory records (class/subclass/prog-if plus minimal
 MMIO/IRQ hints). PM now accepts a capability-profile spawn request variant for

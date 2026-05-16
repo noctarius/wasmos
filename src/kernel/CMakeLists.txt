@@ -71,6 +71,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/cpu_isr.o
   ${BUILD_DIR}/kernel.o
   ${BUILD_DIR}/cpu.o
+  ${BUILD_DIR}/cpu_x86_64.o
   ${BUILD_DIR}/memory.o
   ${BUILD_DIR}/capability.o
   ${BUILD_DIR}/policy.o
@@ -123,6 +124,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/arch/x86_64/cpu_isr.S
   ${KERNEL_DIR}/kernel.c
   ${KERNEL_DIR}/cpu.c
+  ${KERNEL_DIR}/arch/x86_64/cpu_x86_64.c
   ${KERNEL_DIR}/libc.c
   ${KERNEL_DIR}/memory.c
   ${KERNEL_DIR}/capability.c
@@ -257,6 +259,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/cpu_isr.S -o ${BUILD_DIR}/cpu_isr.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel.c -o ${BUILD_DIR}/kernel.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/cpu.c -o ${BUILD_DIR}/cpu.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/cpu_x86_64.c -o ${BUILD_DIR}/cpu_x86_64.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/capability.c -o ${BUILD_DIR}/capability.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/policy.c -o ${BUILD_DIR}/policy.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/slab.c -o ${BUILD_DIR}/slab.o
@@ -299,6 +302,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_parse.c -o ${BUILD_DIR}/wasm3_parse.o
   COMMAND ${LLD_PATH} ${LDFLAGS_KERNEL} -o ${BUILD_DIR}/kernel.elf ${KERNEL_OBJS} ${KERNEL_LINK_LIBS}
   DEPENDS ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/include/cpu.h
+  ${KERNEL_DIR}/include/arch/x86_64/cpu_x86_64.h
   ${KERNEL_DIR}/include/ipc.h ${KERNEL_DIR}/include/memory.h ${KERNEL_DIR}/include/capability.h
   ${KERNEL_DIR}/include/policy.h
   ${KERNEL_DIR}/include/slab.h ${KERNEL_DIR}/include/syscall.h ${KERNEL_DIR}/include/paging.h

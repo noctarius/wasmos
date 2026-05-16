@@ -112,7 +112,8 @@ functions for wasm-C module compilation/packing and IDE companion targets,
 replacing duplicated per-component custom-command blocks.
 Filesystem namespace now starts from a virtual root (`/`) with explicit mount
 subtrees and split backend responsibilities: `fs-fat` remains the active `fs`
-endpoint for boot/FAT routing, while `fs-init` provides initfs listing
+endpoint for boot/FAT routing (including PM spawn-name module loads), while
+`fs-init` provides initfs listing
 responsibilities as a separate backend (`fs.init`). `fs-manager` remains
 scaffolded for the follow-up endpoint handover.
 Device discovery now includes PCI-inventory-driven matching in `device-manager`

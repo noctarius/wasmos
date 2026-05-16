@@ -499,6 +499,7 @@ init_send_fs_probe(process_t *process, init_state_t *state)
     uint32_t fs_ep;
     ipc_message_t msg;
     int send_rc;
+    static uint8_t logged_fs_wait;
 
     if (!process || !state) {
         return -1;
@@ -508,8 +509,13 @@ init_send_fs_probe(process_t *process, init_state_t *state)
      * listing side effects. */
     fs_ep = process_manager_fs_endpoint();
     if (fs_ep == IPC_ENDPOINT_NONE) {
+        if (!logged_fs_wait) {
+            serial_write("[init] waiting for fs service endpoint\n");
+            logged_fs_wait = 1;
+        }
         return 1;
     }
+    logged_fs_wait = 0;
     msg.type = FS_IPC_READY_REQ;
     msg.source = state->reply_endpoint;
     msg.destination = fs_ep;
@@ -530,7 +536,7 @@ init_send_fs_probe(process_t *process, init_state_t *state)
 static int
 init_post_fat_devices_ready(void)
 {
-    return process_manager_framebuffer_endpoint() != IPC_ENDPOINT_NONE;
+    return 1;
 }
 
 static int
@@ -2368,7 +2374,6 @@ init_entry(process_t *process, void *arg)
     if (state->phase == 2) {
         int rc = init_send_fs_probe(process, state);
         if (rc < 0) {
-            serial_write("[init] fs probe request failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
@@ -2388,7 +2393,6 @@ init_entry(process_t *process, void *arg)
             return PROCESS_RUN_YIELDED;
         }
         if (msg.request_id != state->request_id) {
-            serial_write("[init] fs probe response mismatch\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
@@ -2397,11 +2401,9 @@ init_entry(process_t *process, void *arg)
             return PROCESS_RUN_YIELDED;
         }
         if (msg.type != FS_IPC_RESP || msg.arg0 != 0) {
-            serial_write("[init] fs probe failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
-        trace_write("[init] fs probe ok\n");
         state->request_id++;
         state->phase = 6;
         return PROCESS_RUN_YIELDED;
@@ -2413,9 +2415,7 @@ init_entry(process_t *process, void *arg)
         }
         trace_write("[init] post-FAT devices ready\n");
         if (init_send_spawn_name(process, state, "sysinit") != 0) {
-            serial_write("[init] sysinit spawn request failed\n");
-            process_set_exit_status(process, -1);
-            return PROCESS_RUN_EXITED;
+            return PROCESS_RUN_YIELDED;
         }
         return PROCESS_RUN_YIELDED;
     }
@@ -2429,10 +2429,14 @@ init_entry(process_t *process, void *arg)
         if (recv_rc != IPC_OK) {
             return PROCESS_RUN_YIELDED;
         }
-        if (msg.request_id != state->request_id || msg.type == PROC_IPC_ERROR) {
-            serial_write("[init] sysinit spawn failed\n");
+        if (msg.request_id != state->request_id) {
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
+        }
+        if (msg.type == PROC_IPC_ERROR) {
+            state->request_id++;
+            state->phase = 6;
+            return PROCESS_RUN_YIELDED;
         }
         trace_write("[init] sysinit spawn ok\n");
         state->pending_kind = 0;

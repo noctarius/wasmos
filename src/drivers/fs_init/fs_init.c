@@ -6,6 +6,7 @@
 #include "wasmos_driver_abi.h"
 
 static int32_t g_fs_endpoint = -1;
+static int32_t g_reply_endpoint = -1;
 
 static void
 console_write(const char *s)
@@ -70,6 +71,20 @@ emit_init_listing(void)
     return 0;
 }
 
+static int
+str_ieq(const char *a, const char *b)
+{
+    if (!a || !b) return 0;
+    for (;;) {
+        char ca = *a++;
+        char cb = *b++;
+        if (ca >= 'A' && ca <= 'Z') ca = (char)(ca - 'A' + 'a');
+        if (cb >= 'A' && cb <= 'Z') cb = (char)(cb - 'A' + 'a');
+        if (ca != cb) return 0;
+        if (ca == '\0') return 1;
+    }
+}
+
 WASMOS_WASM_EXPORT int32_t
 initialize(int32_t proc_endpoint,
            int32_t ignored_arg1,
@@ -81,14 +96,36 @@ initialize(int32_t proc_endpoint,
     (void)ignored_arg3;
 
     g_fs_endpoint = wasmos_ipc_create_endpoint();
-    if (g_fs_endpoint < 0) {
+    g_reply_endpoint = wasmos_ipc_create_endpoint();
+    if (g_fs_endpoint < 0 || g_reply_endpoint < 0) {
         console_write("[fs-init] endpoint create failed\n");
         stall_forever();
     }
-    if (wasmos_svc_register(proc_endpoint, g_fs_endpoint, "fs.init", 1) != 0) {
-        console_write("[fs-init] register fs.init failed\n");
+    int32_t fsmgr_endpoint = -1;
+    for (;;) {
+        fsmgr_endpoint = wasmos_svc_lookup(proc_endpoint, g_reply_endpoint, "fs.vfs", 1);
+        if (fsmgr_endpoint >= 0) {
+            break;
+        }
+        (void)wasmos_sched_yield();
+    }
+    if (wasmos_ipc_send(fsmgr_endpoint,
+                        g_reply_endpoint,
+                        FSMGR_IPC_REGISTER_BACKEND_REQ,
+                        1,
+                        FSMGR_BACKEND_INIT,
+                        g_fs_endpoint,
+                        0,
+                        0) != 0) {
+        console_write("[fs-init] register fs-manager send failed\n");
         stall_forever();
     }
+    if (wasmos_ipc_recv(g_reply_endpoint) < 0 ||
+        wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != FSMGR_IPC_REGISTER_BACKEND_RESP) {
+        console_write("[fs-init] register fs-manager failed\n");
+        stall_forever();
+    }
+    console_write("[fs-init] register fs-manager ok\n");
 
     for (;;) {
         if (wasmos_ipc_recv(g_fs_endpoint) < 0) {
@@ -108,10 +145,10 @@ initialize(int32_t proc_endpoint,
         } else if (type == FS_IPC_CHDIR_REQ) {
             char name[32];
             unpack_name((uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3, name, sizeof(name));
-            status = (strcasecmp(name, "/") == 0 ||
-                      strcasecmp(name, "..") == 0 ||
-                      strcasecmp(name, "init") == 0 ||
-                      strcasecmp(name, "/init") == 0) ? 0 : -1;
+            status = (str_ieq(name, "/") ||
+                      str_ieq(name, "..") ||
+                      str_ieq(name, "init") ||
+                      str_ieq(name, "/init")) ? 0 : -1;
         } else if (type == FS_IPC_READY_REQ) {
             status = 0;
         }

@@ -1496,6 +1496,7 @@ pm_handle_service_register(uint32_t pm_context_id, const ipc_message_t *msg)
     char name[17];
     uint32_t owner_context_id = 0;
     uint32_t endpoint_owner = 0;
+    int track_fs = 0;
     ipc_message_t resp;
     unpack_name_args((uint32_t)msg->arg0,
                      (uint32_t)msg->arg1,
@@ -1506,14 +1507,18 @@ pm_handle_service_register(uint32_t pm_context_id, const ipc_message_t *msg)
     if (name[0] == '\0') {
         return -1;
     }
+    track_fs = name_eq(name, "fs") || name_eq(name, "fs.vfs");
     if (ipc_endpoint_owner(msg->source, &owner_context_id) != IPC_OK) {
+        if (track_fs) serial_write("[pm] fs register owner lookup failed\n");
         return -1;
     }
     if (ipc_endpoint_owner(msg->source, &endpoint_owner) != IPC_OK ||
         endpoint_owner != owner_context_id) {
+        if (track_fs) serial_write("[pm] fs register endpoint owner mismatch\n");
         return -1;
     }
     if (pm_service_set(name, msg->source, owner_context_id) != 0) {
+        if (track_fs) serial_write("[pm] fs register service set failed\n");
         return -1;
     }
     pm_update_well_known_service_endpoint(name, msg->source);
@@ -1772,3 +1777,4 @@ pm_alloc_cli_tty(void)
     g_pm.next_cli_tty = (tty >= 3) ? 1 : (tty + 1);
     return tty;
 }
+    int track_fs = 0;

@@ -1687,6 +1687,9 @@ int process_preempt_from_irq(irq_frame_t *frame) {
             process_clear_resched();
             return 0;
         }
+        if (from_kernel) {
+            return 0;
+        }
     }
 
     process_validate_context(g_current_process, "preempt");
@@ -1711,14 +1714,8 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     ctx->r14 = frame->r14;
     ctx->r15 = frame->r15;
     ctx->cs = frame->cs;
-    if ((frame->cs & 0x3u) == 0x3u) {
-        ctx->user_rsp = frame->user_rsp;
-        ctx->ss = frame->user_ss;
-    } else {
-        ctx->rsp = (uint64_t)((uintptr_t)frame + sizeof(irq_frame_t));
-        ctx->user_rsp = ctx->rsp;
-        ctx->ss = KERNEL_DS_SELECTOR;
-    }
+    ctx->user_rsp = frame->user_rsp;
+    ctx->ss = frame->user_ss;
     ctx->rip = frame->rip;
     ctx->rflags = frame->rflags;
     g_current_process->ctx = *ctx;
@@ -1746,10 +1743,8 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     ready_queue_enqueue(thread);
     g_last_run_result = PROCESS_RUN_YIELDED;
     process_clear_resched();
-    if ((frame->cs & 0x3u) == 0x3u) {
-        frame->cs = KERNEL_CS_SELECTOR;
-    }
-    frame->rip = (uint64_t)(uintptr_t)process_preempt_trampoline;
+    frame->cs = KERNEL_CS_SELECTOR;
+    frame->rip = (uint64_t)process_kernel_alias_addr((uintptr_t)process_preempt_trampoline);
     return 1;
 }
 

@@ -107,6 +107,9 @@ drivers.
 Build metadata now also includes IDE-only C source/object targets for
 drivers/services so language servers can resolve libc/driver headers for
 WASM-module sources that are primarily built via custom commands.
+Drivers/services CMake wiring is now centralized through shared root helper
+functions for wasm-C module compilation/packing and IDE companion targets,
+replacing duplicated per-component custom-command blocks.
 Filesystem namespace now starts from a virtual root (`/`) with explicit mount
 subtrees and split backend responsibilities: `fs-fat` remains the active `fs`
 endpoint for boot/FAT routing, while `fs-init` provides initfs listing

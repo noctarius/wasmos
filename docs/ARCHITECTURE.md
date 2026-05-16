@@ -93,6 +93,9 @@ Service dependency wiring now uses PM-hosted registry IPC (`SVC_IPC_REGISTER_REQ
 and `SVC_IPC_LOOKUP_REQ`) so drivers/services create/register their own
 endpoints and discover dependencies at runtime instead of PM-injected
 per-application endpoint bindings.
+libc stdio compatibility now includes direct console-backed `read`/`write`
+handling for `STDIN_FILENO`/`STDOUT_FILENO`/`STDERR_FILENO` (0/1/2), while
+filesystem reads/writes continue to use FS IPC descriptors (`>=3`).
 Filesystem namespace now starts from a virtual root (`/`) with explicit mount
 subtrees and split backend responsibilities: `fs-fat` remains the active `fs`
 endpoint for boot/FAT routing, while `fs-init` provides initfs listing

@@ -51,3 +51,8 @@ add_custom_target(fs_init_app
 
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_INITFS_APP})
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS fs_init_app)
+
+wasmos_add_ide_c_target(fs_init_ide
+  SOURCES ${WASM_INITFS_DRIVER_SRC}
+  INCLUDES ${LIBC_DIR}/include ${DRIVER_WASM_DIR}/include
+)

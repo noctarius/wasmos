@@ -51,3 +51,8 @@ add_custom_target(fs_fat_app
 
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_FAT_APP})
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS fs_fat_app)
+
+wasmos_add_ide_c_target(fs_fat_ide
+  SOURCES ${WASM_FAT_DRIVER_SRC}
+  INCLUDES ${LIBC_DIR}/include ${DRIVER_WASM_DIR}/include
+)

@@ -51,3 +51,8 @@ add_custom_target(sysinit_app
 
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_INIT_APP})
 set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS sysinit_app)
+
+wasmos_add_ide_c_target(sysinit_ide
+  SOURCES ${WASM_INIT_APP_SRC}
+  INCLUDES ${LIBC_DIR}/include ${DRIVER_WASM_DIR}/include
+)

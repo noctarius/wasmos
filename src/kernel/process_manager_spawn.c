@@ -4,7 +4,6 @@
 #include "capability.h"
 #include "memory.h"
 #include "native_driver.h"
-#include "serial.h"
 #include "string.h"
 #include "wasm_chardev.h"
 #include "wasmos_app_meta.h"

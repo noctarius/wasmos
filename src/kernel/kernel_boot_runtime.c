@@ -5,7 +5,6 @@
 #include "process.h"
 #include "memory.h"
 #include "klog.h"
-#include "serial.h"
 #include "string.h"
 #include "timer.h"
 

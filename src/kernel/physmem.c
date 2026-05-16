@@ -1,6 +1,5 @@
 #include "physmem.h"
 #include "klog.h"
-#include "serial.h"
 
 #define PAGE_SIZE 0x1000ULL
 

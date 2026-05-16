@@ -1,7 +1,6 @@
 #include "process_manager_internal.h"
 #include "klog.h"
 #include "process_manager.h"
-#include "serial.h"
 #include "string.h"
 
 void

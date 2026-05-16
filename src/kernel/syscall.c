@@ -4,7 +4,6 @@
 #include "memory.h"
 #include "process.h"
 #include "thread.h"
-#include "serial.h"
 #include "string.h"
 #include "paging.h"
 

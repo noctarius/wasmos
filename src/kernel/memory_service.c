@@ -1,6 +1,5 @@
 #include "memory_service.h"
 #include "memory.h"
-#include "serial.h"
 
 static uint32_t g_mem_service_context;
 static uint32_t g_mem_service_endpoint = IPC_ENDPOINT_NONE;

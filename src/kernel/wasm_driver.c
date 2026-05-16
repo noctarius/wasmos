@@ -1,7 +1,6 @@
 #include "wasm_driver.h"
 #include "klog.h"
 #include "process.h"
-#include "serial.h"
 #include "wasm3_link.h"
 #include "wasm3_shim.h"
 

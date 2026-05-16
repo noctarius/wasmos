@@ -37,12 +37,6 @@ declare function io_wait(): i32;
 
 let g_endpoint: i32 = -1;
 
-function writeString(text: string): void {
-  if (text.length != 0) {
-    std.printf(text);
-  }
-}
-
 function serial_init_hw(): void {
   io_out8(COM1_PORT + 1, 0x00);
   io_out8(COM1_PORT + 3, 0x80);
@@ -122,16 +116,16 @@ export function initialize(_proc_endpoint: i32, _module_count: i32, _arg2: i32, 
 
   g_endpoint = ipc_create_endpoint();
   if (g_endpoint < 0) {
-    writeString("[serial] endpoint failure\n");
+    std.printf("[serial] endpoint failure\n");
     return -1;
   }
   if (serial_register(g_endpoint) != 0) {
-    writeString("[serial] register failure\n");
+    std.printf("[serial] register failure\n");
     return -1;
   }
 
   serial_init_hw();
-  writeString("[serial] driver ready\n");
+  std.printf("[serial] driver ready\n");
 
   for (;;) {
     handle_message();

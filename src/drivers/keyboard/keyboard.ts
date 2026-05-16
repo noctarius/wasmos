@@ -36,11 +36,6 @@ let g_subs3: i32 = -1;
 
 let g_kbd_ep: i32 = -1;
 let g_extended_pending: i32 = 0;
-function writeString(text: string): void {
-  if (text.length != 0) {
-    std.printf(text);
-  }
-}
 
 function readScancode(): i32 {
   if ((io_in8(KEYBOARD_STATUS_PORT) & KEYBOARD_OBF_FLAG) == 0) {
@@ -118,7 +113,7 @@ export function initialize(_proc_endpoint: i32, _arg1: i32,
   }
 
   if (g_kbd_ep < 0) {
-    writeString("[keyboard] no IPC endpoint, log-only mode\n");
+    std.printf("[keyboard] no IPC endpoint, log-only mode\n");
     for (;;) {
       readScancode();
       io_wait();
@@ -127,7 +122,7 @@ export function initialize(_proc_endpoint: i32, _arg1: i32,
     return 0;
   }
 
-  writeString("[keyboard] driver starting\n");
+  std.printf("[keyboard] driver starting\n");
 
   for (;;) {
     /* 1. Process any pending subscribe requests. */

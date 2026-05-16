@@ -3,20 +3,14 @@
 #include "ipc.h"
 #include "memory.h"
 #include "memory_service.h"
-#include "paging.h"
 #include "process.h"
-#include "thread.h"
 #include "process_manager.h"
-#include "syscall.h"
 #include "serial.h"
 #include "klog.h"
 #include "timer.h"
 #include "wasmos_app.h"
 #include "wasm_chardev.h"
-#include "wasm3_probe.h"
 #include "wasm3_link.h"
-#include "physmem.h"
-#include "io.h"
 #include "framebuffer.h"
 #include "capability.h"
 #include "slab.h"
@@ -29,7 +23,6 @@
 
 #include <stdint.h>
 #include <string.h>
-#include "wasm3.h"
 
 /*
  * kernel.c owns the high-level bootstrap choreography after the architecture
@@ -64,21 +57,6 @@ kernel_ring3_smoke_enabled(void)
 static const uint8_t g_ring3_fault_churn_rounds = 6;
 
 static init_state_t g_init_state;
-
-static int
-boot_info_build_shadow(const boot_info_t *src, boot_info_t *dst);
-
-static int
-boot_info_build_shadow(const boot_info_t *src, boot_info_t *dst)
-{
-    return kernel_boot_build_bootinfo_shadow(src, dst);
-}
-
-static void
-run_low_slot_sweep_diagnostic(void)
-{
-    kernel_boot_run_low_slot_sweep_diagnostic();
-}
 
 static int
 wasmos_endpoint_resolve(uint32_t owner_context_id,
@@ -157,13 +135,6 @@ idle_entry(process_t *process, void *arg)
     }
 }
 
-
-static void
-run_kernel_loop(void)
-{
-    kernel_boot_run_scheduler_loop();
-}
-
 void
 kmain(boot_info_t *boot_info)
 {
@@ -200,7 +171,7 @@ kmain(boot_info_t *boot_info)
     cpu_relocate_tables_high();
     capability_init();
     slab_init();
-    if (boot_info_build_shadow(boot_info, &g_boot_info_shadow) != 0) {
+    if (kernel_boot_build_bootinfo_shadow(boot_info, &g_boot_info_shadow) != 0) {
         klog_write("[kernel] boot_info shadow copy failed\n");
         for (;;) {
             __asm__ volatile("hlt");
@@ -310,12 +281,12 @@ kmain(boot_info_t *boot_info)
             }
         }
     }
-    run_low_slot_sweep_diagnostic();
+    kernel_boot_run_low_slot_sweep_diagnostic();
 
     timer_init(250);
     klog_write("[kernel] interrupts on\n");
     cpu_enable_interrupts();
 
     klog_write("[kernel] scheduler loop\n");
-    run_kernel_loop();
+    kernel_boot_run_scheduler_loop();
 }

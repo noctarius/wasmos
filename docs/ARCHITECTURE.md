@@ -125,6 +125,9 @@ Kernel bootstrap orchestration is now partially split by moving the init-process
 runtime state machine (`kernel_init_entry` plus spawn/probe IPC helpers) into
 `src/kernel/kernel_init_runtime.c`, reducing direct responsibility in
 `src/kernel/kernel.c`.
+Kernel boot-runtime utilities (boot-info shadow copy, low-slot diagnostic, and
+main scheduler-loop driver) are now split into `src/kernel/kernel_boot_runtime.c`
+to keep `kmain` focused on high-level sequencing.
 Filesystem namespace now starts from a virtual root (`/`) with explicit mount
 subtrees and split backend responsibilities: `fs-manager` is the canonical
 filesystem IPC entrypoint (`fs.vfs`) and routes requests to registered backend

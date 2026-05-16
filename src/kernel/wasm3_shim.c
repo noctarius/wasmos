@@ -3,7 +3,6 @@
 #include <stdint.h>
 #include <stdarg.h>
 #include <stdio.h>
-#include "serial.h"
 #include "process.h"
 #include "physmem.h"
 #include "paging.h"

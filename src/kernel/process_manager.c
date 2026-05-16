@@ -2,7 +2,6 @@
 #include "klog.h"
 #include "process_manager_internal.h"
 #include "ipc.h"
-#include "serial.h"
 #include "string.h"
 
 pm_state_t g_pm;

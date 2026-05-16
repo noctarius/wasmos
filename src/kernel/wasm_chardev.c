@@ -1,6 +1,5 @@
 #include "wasm_chardev.h"
 #include "klog.h"
-#include "serial.h"
 #include "wasm_driver.h"
 
 extern const uint8_t _binary_chardev_server_wasm_start[];

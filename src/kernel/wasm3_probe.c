@@ -2,7 +2,6 @@
 #include "klog.h"
 #include <stdint.h>
 #include "boot.h"
-#include "serial.h"
 #include "wasmos_app.h"
 #include "wasm3.h"
 #include "wasm3_link.h"

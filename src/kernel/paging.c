@@ -1,7 +1,6 @@
 #include "paging.h"
 #include "klog.h"
 #include "physmem.h"
-#include "serial.h"
 #include "memory.h"
 #include <stdint.h>
 

@@ -1,7 +1,6 @@
 #include <stddef.h>
 #include "klog.h"
 #include "wasmos_app.h"
-#include "serial.h"
 
 /*
  * WASMOS-APP parsing is kept separate from process-manager policy so the binary

@@ -114,6 +114,10 @@ WASM-module sources that are primarily built via custom commands.
 Drivers/services CMake wiring is now centralized through shared root helper
 functions for wasm-C module compilation/packing and IDE companion targets,
 replacing duplicated per-component custom-command blocks.
+Kernel CPU code now has an explicit architecture split: generic entrypoints in
+`src/kernel/cpu.c` delegate to x86_64 internals in
+`src/kernel/arch/x86_64/cpu_x86_64.c`, clarifying the portability boundary for
+future non-x86 targets.
 Filesystem namespace now starts from a virtual root (`/`) with explicit mount
 subtrees and split backend responsibilities: `fs-manager` is the canonical
 filesystem IPC entrypoint (`fs.vfs`) and routes requests to registered backend

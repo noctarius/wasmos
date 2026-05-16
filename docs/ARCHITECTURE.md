@@ -128,6 +128,10 @@ runtime state machine (`kernel_init_entry` plus spawn/probe IPC helpers) into
 Kernel boot-runtime utilities (boot-info shadow copy, low-slot diagnostic, and
 main scheduler-loop driver) are now split into `src/kernel/kernel_boot_runtime.c`
 to keep `kmain` focused on high-level sequencing.
+Baseline kernel selftest orchestration (page-fault recovery probe, IPC wake/send
+probe, and optional preempt observer/busy probe) is now split into
+`src/kernel/kernel_selftest_runtime.c`, reducing inline test scaffolding in
+`src/kernel/kernel.c`.
 Filesystem namespace now starts from a virtual root (`/`) with explicit mount
 subtrees and split backend responsibilities: `fs-manager` is the canonical
 filesystem IPC entrypoint (`fs.vfs`) and routes requests to registered backend

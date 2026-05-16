@@ -1,12 +1,12 @@
 #include "kernel_ring3_smoke_runtime.h"
 
 #include "ipc.h"
+#include "klog.h"
 #include "memory.h"
 #include "paging.h"
 #include "physmem.h"
 #include "process.h"
 #include "process_manager.h"
-#include "serial.h"
 #include "syscall.h"
 
 #include <string.h>
@@ -33,30 +33,30 @@ kernel_shmem_owner_isolation_test(uint32_t owner_context_id, uint32_t foreign_co
     }
     if (mm_shared_create(owner_context_id, 1, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE,
                          &shmem_id, &phys) != 0 || shmem_id == 0 || phys == 0) {
-        serial_write("[test] shmem owner setup failed\n");
+        klog_write("[test] shmem owner setup failed\n");
         return;
     }
     if (mm_shared_retain(owner_context_id, shmem_id) != 0) {
-        serial_write("[test] shmem owner setup failed\n");
+        klog_write("[test] shmem owner setup failed\n");
         return;
     }
     if (mm_shared_get_phys(foreign_context_id, shmem_id, &phys, &pages) == 0 ||
         mm_shared_retain(foreign_context_id, shmem_id) == 0 ||
         mm_shared_release(foreign_context_id, shmem_id) == 0) {
-        serial_write("[test] shmem owner deny mismatch\n");
+        klog_write("[test] shmem owner deny mismatch\n");
     } else {
-        serial_write("[test] shmem owner deny ok\n");
+        klog_write("[test] shmem owner deny ok\n");
     }
     if (mm_shared_grant(owner_context_id, shmem_id, foreign_context_id) != 0 ||
         mm_shared_get_phys(foreign_context_id, shmem_id, &phys, &pages) != 0 ||
         mm_shared_retain(foreign_context_id, shmem_id) != 0 ||
         mm_shared_release(foreign_context_id, shmem_id) != 0) {
-        serial_write("[test] shmem grant allow mismatch\n");
+        klog_write("[test] shmem grant allow mismatch\n");
     } else {
-        serial_write("[test] shmem grant allow ok\n");
+        klog_write("[test] shmem grant allow ok\n");
     }
     if (mm_shared_release(owner_context_id, shmem_id) != 0) {
-        serial_write("[test] shmem owner cleanup failed\n");
+        klog_write("[test] shmem owner cleanup failed\n");
     }
 }
 
@@ -68,35 +68,35 @@ kernel_ring3_shmem_isolation_test(uint32_t owner_context_id, uint32_t foreign_co
     uint64_t pages = 0;
 
     if (owner_context_id == 0 || foreign_context_id == 0 || owner_context_id == foreign_context_id) {
-        serial_write("[test] ring3 shmem setup failed\n");
+        klog_write("[test] ring3 shmem setup failed\n");
         return;
     }
     if (mm_shared_create(owner_context_id, 1, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE,
                          &shmem_id, &phys) != 0 || shmem_id == 0 || phys == 0) {
-        serial_write("[test] ring3 shmem setup failed\n");
+        klog_write("[test] ring3 shmem setup failed\n");
         return;
     }
     if (mm_shared_retain(owner_context_id, shmem_id) != 0) {
-        serial_write("[test] ring3 shmem setup failed\n");
+        klog_write("[test] ring3 shmem setup failed\n");
         return;
     }
     if (mm_shared_get_phys(foreign_context_id, shmem_id, &phys, &pages) == 0 ||
         mm_shared_retain(foreign_context_id, shmem_id) == 0 ||
         mm_shared_release(foreign_context_id, shmem_id) == 0) {
-        serial_write("[test] ring3 shmem owner deny mismatch\n");
+        klog_write("[test] ring3 shmem owner deny mismatch\n");
     } else {
-        serial_write("[test] ring3 shmem owner deny ok\n");
+        klog_write("[test] ring3 shmem owner deny ok\n");
     }
     if (mm_shared_grant(owner_context_id, shmem_id, foreign_context_id) != 0 ||
         mm_shared_get_phys(foreign_context_id, shmem_id, &phys, &pages) != 0 ||
         mm_shared_retain(foreign_context_id, shmem_id) != 0 ||
         mm_shared_release(foreign_context_id, shmem_id) != 0) {
-        serial_write("[test] ring3 shmem grant allow mismatch\n");
+        klog_write("[test] ring3 shmem grant allow mismatch\n");
     } else {
-        serial_write("[test] ring3 shmem grant allow ok\n");
+        klog_write("[test] ring3 shmem grant allow ok\n");
     }
     if (mm_shared_release(owner_context_id, shmem_id) != 0) {
-        serial_write("[test] ring3 shmem cleanup failed\n");
+        klog_write("[test] ring3 shmem cleanup failed\n");
     }
 }
 
@@ -167,10 +167,10 @@ done:
         }
     }
     if (ring3_mode) {
-        serial_write(ok ? "[test] ring3 shmem misuse matrix ok\n"
+        klog_write(ok ? "[test] ring3 shmem misuse matrix ok\n"
                         : "[test] ring3 shmem misuse matrix mismatch\n");
     } else {
-        serial_write(ok ? "[test] shmem misuse matrix ok\n"
+        klog_write(ok ? "[test] shmem misuse matrix ok\n"
                         : "[test] shmem misuse matrix mismatch\n");
     }
 }
@@ -295,6 +295,6 @@ kernel_ring3_spawn_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
     if (process_set_user_entry(*out_pid, user_rip, user_rsp) != 0) {
         return -1;
     }
-    serial_printf("[kernel] ring3 smoke pid=%016llx\n", (unsigned long long)*out_pid);
+    klog_printf("[kernel] ring3 smoke pid=%016llx\n", (unsigned long long)*out_pid);
     return 0;
 }

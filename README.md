@@ -47,6 +47,7 @@ It defines repository workflow and documentation/update conventions.
 - ring3 probe/fault spawn helpers (native/thread-lifecycle probe setup and ring3 fault-probe builders) are now extracted into `src/kernel/kernel_ring3_probe_runtime.c`
 - ring3 smoke + shared-memory isolation selftest runtime (ring3 smoke process staging and shmem owner/misuse checks) is now extracted into `src/kernel/kernel_ring3_smoke_runtime.c`
 - ring3 suite orchestration in `kmain` is now collapsed into `src/kernel/kernel_ring3_suite_runtime.c` (spawns smoke/native/threading/fault probes and wires fault-policy runtime)
+- kernel runtime modules now log via a small `klog` facade (`src/kernel/klog.c`) instead of calling serial APIs directly, keeping logging backend indirection centralized
 - libc string/ctype/stdio coverage now includes common helpers (`memmove`, `strnlen`, `strchr`/`strrchr`, `strcpy`/`strncpy`, `isspace`/`isdigit`/`isxdigit`/etc., `getchar`/`putchar`/`fputs`)
 - drivers/services CMake now also emits IDE-only C source targets with include paths so editor indexers can resolve headers in non-native WASM modules
 - drivers/services CMake now uses shared root helper functions for wasm-C compile/packaging + IDE-target wiring, reducing per-module duplication

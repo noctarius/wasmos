@@ -1,10 +1,10 @@
 #include "kernel_ring3_probe_runtime.h"
 
+#include "klog.h"
 #include "memory.h"
 #include "paging.h"
 #include "physmem.h"
 #include "process.h"
-#include "serial.h"
 
 extern const uint8_t _binary_ring3_native_probe_bin_start[];
 extern const uint8_t _binary_ring3_native_probe_bin_end[];
@@ -107,7 +107,7 @@ kernel_ring3_spawn_native_probe(uint32_t parent_pid, uint32_t *out_pid)
     if (process_set_user_entry(*out_pid, user_rip, user_rsp) != 0) {
         return -1;
     }
-    serial_printf("[kernel] ring3 native pid=%016llx\n", (unsigned long long)*out_pid);
+    klog_printf("[kernel] ring3 native pid=%016llx\n", (unsigned long long)*out_pid);
     return 0;
 }
 
@@ -175,7 +175,7 @@ kernel_ring3_spawn_thread_lifecycle_probe(uint32_t parent_pid, uint32_t *out_pid
     if (process_set_user_entry(*out_pid, user_rip, user_rsp) != 0) {
         return -1;
     }
-    serial_printf("[kernel] ring3 threading pid=%016llx\n", (unsigned long long)*out_pid);
+    klog_printf("[kernel] ring3 threading pid=%016llx\n", (unsigned long long)*out_pid);
     return 0;
 }
 
@@ -254,7 +254,7 @@ spawn_ring3_fault_probe_named(uint32_t parent_pid,
     if (process_set_user_entry(*out_pid, user_rip, user_rsp) != 0) {
         return -1;
     }
-    serial_printf("[kernel] %s pid=%016llx\n", name, (unsigned long long)*out_pid);
+    klog_printf("[kernel] %s pid=%016llx\n", name, (unsigned long long)*out_pid);
     return 0;
 }
 

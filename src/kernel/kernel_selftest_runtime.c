@@ -1,10 +1,10 @@
 #include "kernel_selftest_runtime.h"
 
 #include "ipc.h"
+#include "klog.h"
 #include "memory.h"
 #include "paging.h"
 #include "process.h"
-#include "serial.h"
 
 typedef struct {
     uint64_t addr;
@@ -40,18 +40,18 @@ page_fault_test_entry(process_t *process, void *arg)
         mm_context_t *ctx = mm_context_get(process->context_id);
         mem_region_t linear;
         if (!ctx || mm_context_region_for_type(ctx, MEM_REGION_WASM_LINEAR, &linear) != 0) {
-            serial_write("[test] page fault region lookup failed\n");
+            klog_write("[test] page fault region lookup failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
         state->addr = linear.base;
         if (mm_handle_page_fault(process->context_id, state->addr, 0, 0) != 0) {
-            serial_write("[test] page fault seed map failed\n");
+            klog_write("[test] page fault seed map failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
         if (paging_unmap_4k(state->addr) != 0) {
-            serial_write("[test] page fault unmap failed\n");
+            klog_write("[test] page fault unmap failed\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
@@ -61,7 +61,7 @@ page_fault_test_entry(process_t *process, void *arg)
     volatile uint8_t *ptr = (volatile uint8_t *)(uintptr_t)state->addr;
     uint8_t value = *ptr;
     *ptr = (uint8_t)(value + 1);
-    serial_write("[test] page fault recovered\n");
+    klog_write("[test] page fault recovered\n");
     process_set_exit_status(process, 0);
     return PROCESS_RUN_EXITED;
 }
@@ -79,7 +79,7 @@ ipc_wait_test_entry(process_t *process, void *arg)
         return PROCESS_RUN_EXITED;
     }
     if (state->endpoint == IPC_ENDPOINT_NONE) {
-        serial_write("[test] ipc endpoint missing\n");
+        klog_write("[test] ipc endpoint missing\n");
         process_set_exit_status(process, -1);
         return PROCESS_RUN_EXITED;
     }
@@ -90,12 +90,12 @@ ipc_wait_test_entry(process_t *process, void *arg)
         return PROCESS_RUN_BLOCKED;
     }
     if (rc != IPC_OK) {
-        serial_write("[test] ipc recv failed\n");
+        klog_write("[test] ipc recv failed\n");
         process_set_exit_status(process, -1);
         return PROCESS_RUN_EXITED;
     }
 
-    serial_write("[test] ipc wake ok\n");
+    klog_write("[test] ipc wake ok\n");
     state->done = 1;
     process_set_exit_status(process, 0);
     return PROCESS_RUN_EXITED;
@@ -114,7 +114,7 @@ ipc_send_test_entry(process_t *process, void *arg)
         return PROCESS_RUN_EXITED;
     }
     if (state->endpoint == IPC_ENDPOINT_NONE || state->sender_endpoint == IPC_ENDPOINT_NONE) {
-        serial_write("[test] ipc sender endpoint missing\n");
+        klog_write("[test] ipc sender endpoint missing\n");
         process_set_exit_status(process, -1);
         return PROCESS_RUN_EXITED;
     }
@@ -133,7 +133,7 @@ ipc_send_test_entry(process_t *process, void *arg)
     msg.arg2 = 0;
     msg.arg3 = 0;
     if (ipc_send_from(process->context_id, state->endpoint, &msg) != IPC_OK) {
-        serial_write("[test] ipc send failed\n");
+        klog_write("[test] ipc send failed\n");
         process_set_exit_status(process, -1);
         return PROCESS_RUN_EXITED;
     }
@@ -171,7 +171,7 @@ preempt_observer_entry(process_t *process, void *arg)
 
     state->observer_runs++;
     if (state->observer_runs >= 3) {
-        serial_write("[test] preempt ok\n");
+        klog_write("[test] preempt ok\n");
         state->done = 1;
         state->stop_busy = 1;
         process_set_exit_status(process, 0);
@@ -194,11 +194,11 @@ kernel_selftest_spawn_baseline(uint32_t init_pid, uint8_t preempt_test_enabled)
     g_pf_test_state.addr = 0;
     g_pf_test_state.stage = 0;
     if (process_spawn_as(init_pid, "pagefault-test", page_fault_test_entry, &g_pf_test_state, &pf_test_pid) != 0) {
-        serial_write("[kernel] page fault test spawn failed\n");
+        klog_write("[kernel] page fault test spawn failed\n");
         return -1;
     }
 
-    serial_printf("[kernel] page fault test pid=%016llx\n", (unsigned long long)pf_test_pid);
+    klog_printf("[kernel] page fault test pid=%016llx\n", (unsigned long long)pf_test_pid);
 
     g_ipc_test_state.endpoint = IPC_ENDPOINT_NONE;
     g_ipc_test_state.sender_endpoint = IPC_ENDPOINT_NONE;
@@ -206,20 +206,20 @@ kernel_selftest_spawn_baseline(uint32_t init_pid, uint8_t preempt_test_enabled)
     g_ipc_test_state.done = 0;
     if (process_spawn_as(init_pid, "ipc-wait-test", ipc_wait_test_entry, &g_ipc_test_state, &ipc_wait_pid) != 0 ||
         process_spawn_as(init_pid, "ipc-send-test", ipc_send_test_entry, &g_ipc_test_state, &ipc_send_pid) != 0) {
-        serial_write("[kernel] ipc test spawn failed\n");
+        klog_write("[kernel] ipc test spawn failed\n");
         return -1;
     }
 
     ipc_wait_proc = process_get(ipc_wait_pid);
     ipc_send_proc = process_get(ipc_send_pid);
     if (!ipc_wait_proc || !ipc_send_proc) {
-        serial_write("[kernel] ipc test lookup failed\n");
+        klog_write("[kernel] ipc test lookup failed\n");
         return -1;
     }
 
     if (ipc_endpoint_create(ipc_wait_proc->context_id, &g_ipc_test_state.endpoint) != IPC_OK ||
         ipc_endpoint_create(ipc_send_proc->context_id, &g_ipc_test_state.sender_endpoint) != IPC_OK) {
-        serial_write("[kernel] ipc test endpoint create failed\n");
+        klog_write("[kernel] ipc test endpoint create failed\n");
         return -1;
     }
 
@@ -230,7 +230,7 @@ kernel_selftest_spawn_baseline(uint32_t init_pid, uint8_t preempt_test_enabled)
         if (process_spawn_as(init_pid, "preempt-busy", preempt_busy_entry, &g_preempt_test_state, &preempt_busy_pid) != 0 ||
             process_spawn_as(init_pid, "preempt-observer", preempt_observer_entry, &g_preempt_test_state,
                              &preempt_observer_pid) != 0) {
-            serial_write("[kernel] preempt test spawn failed\n");
+            klog_write("[kernel] preempt test spawn failed\n");
             return -1;
         }
     }

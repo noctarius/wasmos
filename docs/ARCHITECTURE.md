@@ -144,6 +144,10 @@ Ring3 probe/fault process construction helpers (native/thread-lifecycle probe
 setup and fault-probe image staging/entry wiring) are now split into
 `src/kernel/kernel_ring3_probe_runtime.c`, reducing low-level probe bootstrapping
 code in `src/kernel/kernel.c`.
+Ring3 smoke/runtime selftests (ring3 smoke process image patching/staging and
+shared-memory owner/misuse isolation checks) are now split into
+`src/kernel/kernel_ring3_smoke_runtime.c`, further reducing test-heavy runtime
+paths in `src/kernel/kernel.c`.
 Filesystem namespace now starts from a virtual root (`/`) with explicit mount
 subtrees and split backend responsibilities: `fs-manager` is the canonical
 filesystem IPC entrypoint (`fs.vfs`) and routes requests to registered backend

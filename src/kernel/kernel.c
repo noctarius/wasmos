@@ -194,8 +194,6 @@ typedef struct {
 static init_state_t g_init_state;
 
 static int
-bytes_eq(const uint8_t *a, uint32_t a_len, const char *b);
-static int
 boot_info_build_shadow(const boot_info_t *src, boot_info_t *dst);
 static int
 spawn_ring3_fault_ud_probe_process(uint32_t parent_pid, uint32_t *out_pid);
@@ -381,29 +379,13 @@ boot_module_index_by_app_name(const boot_info_t *info, const char *name)
         if (wasmos_app_parse((const uint8_t *)(uintptr_t)mod->base, (uint32_t)mod->size, &desc) != 0) {
             continue;
         }
-        if (bytes_eq(desc.name, desc.name_len, name)) {
+        if (str_eq_bytes(desc.name, desc.name_len, name)) {
             return i;
         }
     }
     return 0xFFFFFFFFu;
 }
 
-
-static int
-bytes_eq(const uint8_t *a, uint32_t a_len, const char *b)
-{
-    if (!a || !b) {
-        return 0;
-    }
-    uint32_t i = 0;
-    while (b[i]) {
-        if (i >= a_len || a[i] != (uint8_t)b[i]) {
-            return 0;
-        }
-        i++;
-    }
-    return i == a_len;
-}
 
 static void
 pack_name_args(const char *name, uint32_t out[4])
@@ -551,26 +533,26 @@ wasmos_endpoint_resolve(uint32_t owner_context_id,
     if (!out_endpoint) {
         return -1;
     }
-    if (bytes_eq(name, name_len, "chardev") &&
+    if (str_eq_bytes(name, name_len, "chardev") &&
         g_chardev_service_endpoint != IPC_ENDPOINT_NONE) {
         *out_endpoint = g_chardev_service_endpoint;
         return 0;
     }
-    if (bytes_eq(name, name_len, "proc")) {
+    if (str_eq_bytes(name, name_len, "proc")) {
         uint32_t proc_ep = process_manager_endpoint();
         if (proc_ep != IPC_ENDPOINT_NONE) {
             *out_endpoint = proc_ep;
             return 0;
         }
     }
-    if (bytes_eq(name, name_len, "block")) {
+    if (str_eq_bytes(name, name_len, "block")) {
         uint32_t block_ep = process_manager_block_endpoint();
         if (block_ep != IPC_ENDPOINT_NONE) {
             *out_endpoint = block_ep;
             return 0;
         }
     }
-    if (bytes_eq(name, name_len, "fs")) {
+    if (str_eq_bytes(name, name_len, "fs")) {
         uint32_t fs_ep = process_manager_fs_endpoint();
         if (fs_ep != IPC_ENDPOINT_NONE) {
             *out_endpoint = fs_ep;
@@ -586,7 +568,7 @@ wasmos_capability_grant(uint32_t owner_context_id,
                         uint32_t name_len,
                         uint32_t flags)
 {
-    if (bytes_eq(name, name_len, "ipc.basic")) {
+    if (str_eq_bytes(name, name_len, "ipc.basic")) {
         return 0;
     }
     if (capability_grant_name(owner_context_id, name, name_len, flags) == 0) {

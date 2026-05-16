@@ -66,24 +66,6 @@ static void log_msg(const char *s) {
     (void)printf("%s", s);
 }
 
-static int str_ieq(const char *a, const char *b) {
-    if (!a || !b) {
-        return 0;
-    }
-    for (;;) {
-        char ca = *a++;
-        char cb = *b++;
-        if (ca >= 'A' && ca <= 'Z') ca = (char)(ca - 'A' + 'a');
-        if (cb >= 'A' && cb <= 'Z') cb = (char)(cb - 'A' + 'a');
-        if (ca != cb) {
-            return 0;
-        }
-        if (ca == '\0') {
-            return 1;
-        }
-    }
-}
-
 static void str_copy(char *dst, uint32_t dst_len, const char *src) {
     uint32_t i = 0;
     if (!dst || dst_len == 0) return;
@@ -184,7 +166,7 @@ backend_find_by_name(const char *name)
         return 0;
     }
     for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
-        if (g_backends[i].in_use && str_ieq(g_backends[i].mount_name, name)) {
+        if (g_backends[i].in_use && strcasecmp(g_backends[i].mount_name, name) == 0) {
             return &g_backends[i];
         }
     }
@@ -380,18 +362,18 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             char path[32];
             unpack_name((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, path, sizeof(path));
 
-            if (str_ieq(path, "") || str_ieq(path, "/")) {
+            if (strcasecmp(path, "") == 0 || strcasecmp(path, "/") == 0) {
                 state->mount = FS_MOUNT_ROOT;
                 state->backend_endpoint = -1;
                 state->mount_depth = 0;
                 (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
                 continue;
             }
-            if (str_ieq(path, "..") && state->mount == FS_MOUNT_ROOT) {
+            if (strcasecmp(path, "..") == 0 && state->mount == FS_MOUNT_ROOT) {
                 (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
                 continue;
             }
-            if (str_ieq(path, "..") && state->mount != FS_MOUNT_ROOT && state->mount_depth == 0) {
+            if (strcasecmp(path, "..") == 0 && state->mount != FS_MOUNT_ROOT && state->mount_depth == 0) {
                 state->mount = FS_MOUNT_ROOT;
                 state->backend_endpoint = -1;
                 (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
@@ -469,7 +451,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             if (type == FS_IPC_CHDIR_REQ && state->mount != FS_MOUNT_ROOT) {
                 char path[32];
                 unpack_name((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, path, sizeof(path));
-                if (str_ieq(path, "..")) {
+                if (strcasecmp(path, "..") == 0) {
                     state->mount = FS_MOUNT_ROOT;
                     state->backend_endpoint = -1;
                     (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, request_id, 0, 0, 0, 0);
@@ -485,7 +467,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
         if (type == FS_IPC_CHDIR_REQ && resp_type == FS_IPC_ERROR) {
             char path[32];
             unpack_name((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, path, sizeof(path));
-            if (str_ieq(path, "..") && state->mount != FS_MOUNT_ROOT) {
+            if (strcasecmp(path, "..") == 0 && state->mount != FS_MOUNT_ROOT) {
                 state->mount = FS_MOUNT_ROOT;
                 state->backend_endpoint = -1;
                 state->mount_depth = 0;
@@ -496,11 +478,11 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
         if (type == FS_IPC_CHDIR_REQ && resp_type == FS_IPC_RESP && state->mount != FS_MOUNT_ROOT) {
             char path[32];
             unpack_name((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, path, sizeof(path));
-            if (str_ieq(path, "..")) {
+            if (strcasecmp(path, "..") == 0) {
                 if (state->mount_depth > 0) {
                     state->mount_depth--;
                 }
-            } else if (!str_ieq(path, ".") && !str_ieq(path, "")) {
+            } else if (strcasecmp(path, ".") != 0 && strcasecmp(path, "") != 0) {
                 if (path[0] == '/') {
                     state->mount_depth = (path[1] == '\0') ? 0 : 1;
                 } else if (state->mount_depth < 0xFFFFu) {

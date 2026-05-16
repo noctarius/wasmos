@@ -71,20 +71,6 @@ emit_init_listing(void)
     return 0;
 }
 
-static int
-str_ieq(const char *a, const char *b)
-{
-    if (!a || !b) return 0;
-    for (;;) {
-        char ca = *a++;
-        char cb = *b++;
-        if (ca >= 'A' && ca <= 'Z') ca = (char)(ca - 'A' + 'a');
-        if (cb >= 'A' && cb <= 'Z') cb = (char)(cb - 'A' + 'a');
-        if (ca != cb) return 0;
-        if (ca == '\0') return 1;
-    }
-}
-
 WASMOS_WASM_EXPORT int32_t
 initialize(int32_t proc_endpoint,
            int32_t ignored_arg1,
@@ -145,10 +131,10 @@ initialize(int32_t proc_endpoint,
         } else if (type == FS_IPC_CHDIR_REQ) {
             char name[32];
             unpack_name((uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3, name, sizeof(name));
-            status = (str_ieq(name, "/") ||
-                      str_ieq(name, "..") ||
-                      str_ieq(name, "init") ||
-                      str_ieq(name, "/init")) ? 0 : -1;
+            status = (strcasecmp(name, "/") == 0 ||
+                      strcasecmp(name, "..") == 0 ||
+                      strcasecmp(name, "init") == 0 ||
+                      strcasecmp(name, "/init") == 0) ? 0 : -1;
         } else if (type == FS_IPC_READY_REQ) {
             status = 0;
         }

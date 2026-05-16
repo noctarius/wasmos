@@ -1,3 +1,5 @@
+import { std } from "./wasmos";
+
 const COM1_PORT: i32 = 0x3F8;
 const COM1_STATUS: i32 = COM1_PORT + 5;
 
@@ -16,8 +18,6 @@ const SERIAL_READ_STATUS_CHAR: i32 = 1;
 const SERIAL_READ_STATUS_EMPTY: i32 = 0;
 const SERIAL_READ_STATUS_ERROR: i32 = -1;
 
-@external("wasmos", "console_write")
-declare function console_write(ptr: i32, len: i32): i32;
 @external("wasmos", "ipc_create_endpoint")
 declare function ipc_create_endpoint(): i32;
 @external("wasmos", "ipc_recv")
@@ -38,11 +38,9 @@ declare function io_wait(): i32;
 let g_endpoint: i32 = -1;
 
 function writeString(text: string): void {
-  if (text.length == 0) {
-    return;
+  if (text.length != 0) {
+    std.printf(text);
   }
-  let bytes = Uint8Array.wrap(String.UTF8.encode(text, false));
-  console_write(bytes.dataStart as i32, bytes.byteLength as i32);
 }
 
 function serial_init_hw(): void {

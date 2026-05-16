@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include "stdio.h"
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
 #include "wasmos_driver_abi.h"
@@ -149,38 +150,7 @@ vt_heap_init(void)
 static void
 vt_log_alloc_failure(const char *tag, int32_t code)
 {
-    static const char prefix[] = "[vt] alloc failed: ";
-    static const char sep[] = " code=";
-    char num[16];
-    int n = 0;
-    int32_t v = code;
-    if (v == 0) {
-        num[n++] = '0';
-    } else {
-        if (v < 0) {
-            num[n++] = '-';
-            v = -v;
-        }
-        int32_t p = 1;
-        while (v / p >= 10) {
-            p *= 10;
-        }
-        while (p > 0) {
-            num[n++] = (char)('0' + ((v / p) % 10));
-            p /= 10;
-        }
-    }
-    (void)wasmos_console_write((int32_t)(uintptr_t)prefix, (int32_t)(sizeof(prefix) - 1u));
-    if (tag) {
-        int32_t len = 0;
-        while (tag[len]) {
-            len++;
-        }
-        (void)wasmos_console_write((int32_t)(uintptr_t)tag, len);
-    }
-    (void)wasmos_console_write((int32_t)(uintptr_t)sep, (int32_t)(sizeof(sep) - 1u));
-    (void)wasmos_console_write((int32_t)(uintptr_t)num, n);
-    (void)wasmos_console_write((int32_t)(uintptr_t)"\n", 1);
+    printf("[vt] alloc failed: %s code=%d\n", tag ? tag : "unknown", (int)code);
 }
 
 static void *

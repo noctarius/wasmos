@@ -11,6 +11,7 @@ if (AS_ENABLE)
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${WASM_KEYBOARD_STAGE_DIR}
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${WASM_KEYBOARD_DRIVER_SRC} ${WASM_KEYBOARD_STAGE_DIR}/keyboard.ts
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${LIBC_DIR}/assemblyscript/wasmos.ts ${WASM_KEYBOARD_STAGE_DIR}/wasmos.ts
     COMMAND ${ASC_EXECUTABLE}
             ${WASM_KEYBOARD_ENTRY_SRC}
             --target release
@@ -18,7 +19,7 @@ if (AS_ENABLE)
             --runtime stub
             --noAssert
             --outFile ${WASM_KEYBOARD_DRIVER_WASM}
-    DEPENDS ${WASM_KEYBOARD_DRIVER_SRC}
+    DEPENDS ${WASM_KEYBOARD_DRIVER_SRC} ${LIBC_DIR}/assemblyscript/wasmos.ts
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Building AssemblyScript keyboard driver module"
     VERBATIM

@@ -14,6 +14,20 @@ strlen(const char *s)
     return len;
 }
 
+size_t
+strnlen(const char *s, size_t max_len)
+{
+    size_t len = 0;
+
+    if (!s) {
+        return 0;
+    }
+    while (len < max_len && s[len] != '\0') {
+        len++;
+    }
+    return len;
+}
+
 int
 strcmp(const char *lhs, const char *rhs)
 {
@@ -57,6 +71,79 @@ strncmp(const char *lhs, const char *rhs, size_t count)
     return 0;
 }
 
+char *
+strcpy(char *dest, const char *src)
+{
+    size_t i = 0;
+
+    if (!dest || !src) {
+        return dest;
+    }
+    do {
+        dest[i] = src[i];
+    } while (src[i++] != '\0');
+    return dest;
+}
+
+char *
+strncpy(char *dest, const char *src, size_t count)
+{
+    size_t i = 0;
+
+    if (!dest || !src) {
+        return dest;
+    }
+    while (i < count && src[i] != '\0') {
+        dest[i] = src[i];
+        i++;
+    }
+    while (i < count) {
+        dest[i++] = '\0';
+    }
+    return dest;
+}
+
+char *
+strchr(const char *s, int ch)
+{
+    char needle = (char)ch;
+
+    if (!s) {
+        return 0;
+    }
+    for (;;) {
+        if (*s == needle) {
+            return (char *)s;
+        }
+        if (*s == '\0') {
+            break;
+        }
+        s++;
+    }
+    return 0;
+}
+
+char *
+strrchr(const char *s, int ch)
+{
+    const char *last = 0;
+    char needle = (char)ch;
+
+    if (!s) {
+        return 0;
+    }
+    for (;;) {
+        if (*s == needle) {
+            last = s;
+        }
+        if (*s == '\0') {
+            break;
+        }
+        s++;
+    }
+    return (char *)last;
+}
+
 void *
 memcpy(void *dest, const void *src, size_t count)
 {
@@ -68,6 +155,27 @@ memcpy(void *dest, const void *src, size_t count)
     }
     for (size_t i = 0; i < count; ++i) {
         out[i] = in[i];
+    }
+    return dest;
+}
+
+void *
+memmove(void *dest, const void *src, size_t count)
+{
+    unsigned char *out = (unsigned char *)dest;
+    const unsigned char *in = (const unsigned char *)src;
+
+    if (!dest || !src || dest == src || count == 0) {
+        return dest;
+    }
+    if (out < in) {
+        for (size_t i = 0; i < count; ++i) {
+            out[i] = in[i];
+        }
+    } else {
+        for (size_t i = count; i > 0; --i) {
+            out[i - 1] = in[i - 1];
+        }
     }
     return dest;
 }

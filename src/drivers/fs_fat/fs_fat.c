@@ -3856,16 +3856,11 @@ initialize(int32_t proc_endpoint,
            int32_t ignored_arg2,
            int32_t ignored_arg3)
 {
-    (void)ignored_arg2;
     (void)ignored_arg3;
 
     g_fs_endpoint = wasmos_ipc_create_endpoint();
     if (g_fs_endpoint < 0) {
         fat_log("failed to create fs endpoint\n");
-        fat_stall();
-    }
-    if (wasmos_svc_register(proc_endpoint, g_fs_endpoint, "fs", 1) != 0) {
-        fat_log("failed to register fs endpoint\n");
         fat_stall();
     }
     g_block_endpoint = block_endpoint;
@@ -3914,6 +3909,40 @@ initialize(int32_t proc_endpoint,
         g_open_files[i].dir_sector = 0;
         g_open_files[i].dir_index = 0;
     }
+
+    if (wasmos_svc_register(proc_endpoint, g_fs_endpoint, "fs", 1) != 0) {
+        fat_log("service register failed\n");
+        fat_stall();
+    }
+
+    int32_t fsmgr_endpoint = -1;
+    for (;;) {
+        fsmgr_endpoint = wasmos_svc_lookup(proc_endpoint, g_reply_endpoint, "fs.vfs", 1);
+        if (fsmgr_endpoint >= 0) {
+            break;
+        }
+        (void)wasmos_sched_yield();
+    }
+    if (wasmos_ipc_send(fsmgr_endpoint,
+                        g_reply_endpoint,
+                        FSMGR_IPC_REGISTER_BACKEND_REQ,
+                        1,
+                        FSMGR_BACKEND_BOOT,
+                        g_fs_endpoint,
+                        0,
+                        0) != 0) {
+        fat_log("fs-manager register send failed\n");
+        fat_stall();
+    }
+    if (wasmos_ipc_recv(g_reply_endpoint) < 0) {
+        fat_log("fs-manager register recv failed\n");
+        fat_stall();
+    }
+    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != FSMGR_IPC_REGISTER_BACKEND_RESP) {
+        fat_log("fs-manager register bad response\n");
+        fat_stall();
+    }
+    fat_log("fs-manager register ok\n");
 
     for (;;) {
         if (g_fs_req.in_use) {

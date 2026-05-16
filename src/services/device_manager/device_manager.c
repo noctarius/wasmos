@@ -606,14 +606,14 @@ next_spawn_target(void)
     if (g_dm.need_storage) {
         return HW_SPAWN_ATA;
     }
+    if (g_dm.need_fs_manager) {
+        return HW_SPAWN_FS_MANAGER;
+    }
     if (g_dm.need_fat) {
         return HW_SPAWN_FAT;
     }
     if (g_dm.need_fs_init) {
         return HW_SPAWN_FS_INIT;
-    }
-    if (g_dm.need_fs_manager) {
-        return HW_SPAWN_FS_MANAGER;
     }
     if (g_dm.need_serial) {
         return HW_SPAWN_SERIAL;

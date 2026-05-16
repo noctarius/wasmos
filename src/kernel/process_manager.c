@@ -110,7 +110,6 @@ static uint8_t g_pm_spawn_owner_deny_logged;
 
 static uint32_t pm_alloc_cli_tty(void);
 static int pm_service_set(const char *name, uint32_t endpoint, uint32_t owner_context_id);
-static int name_eq(const char *a, const char *b);
 
 static void
 pm_update_well_known_service_endpoint(const char *name, uint32_t endpoint)
@@ -130,7 +129,7 @@ pm_update_well_known_service_endpoint(const char *name, uint32_t endpoint)
         return;
     }
     for (uint32_t i = 0; i < (uint32_t)(sizeof(slots) / sizeof(slots[0])); ++i) {
-        if (name_eq(name, slots[i].name)) {
+        if (strcmp(name, slots[i].name) == 0) {
             *slots[i].slot = endpoint;
             return;
         }
@@ -405,23 +404,6 @@ process_manager_inject_spawn_owner_deny_test(void)
 }
 
 
-static int
-name_eq(const char *a, const char *b)
-{
-    if (!a || !b) {
-        return 0;
-    }
-    while (*a && *b) {
-        if (*a != *b) {
-            return 0;
-        }
-        a++;
-        b++;
-    }
-    return *a == '\0' && *b == '\0';
-}
-
-
 static void
 unpack_name_args(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char *out, uint32_t out_len)
 {
@@ -517,7 +499,7 @@ pm_find_module_index_by_name(const char *name)
         if (str_copy_bytes(temp, sizeof(temp), desc.name, desc.name_len) != 0) {
             continue;
         }
-        if (name_eq(temp, name)) {
+        if (strcmp(temp, name) == 0) {
             return i;
         }
     }
@@ -1447,7 +1429,7 @@ pm_service_set(const char *name, uint32_t endpoint, uint32_t owner_context_id)
             }
             continue;
         }
-        if (!name_eq(entry->name, name)) {
+        if (strcmp(entry->name, name) != 0) {
             continue;
         }
         if (entry->owner_context_id != owner_context_id) {
@@ -1478,7 +1460,7 @@ pm_service_lookup(const char *name)
         if (!g_pm.services[i].in_use) {
             continue;
         }
-        if (name_eq(g_pm.services[i].name, name)) {
+        if (strcmp(g_pm.services[i].name, name) == 0) {
             return g_pm.services[i].endpoint;
         }
     }
@@ -1502,7 +1484,7 @@ pm_handle_service_register(uint32_t pm_context_id, const ipc_message_t *msg)
     if (name[0] == '\0') {
         return -1;
     }
-    track_fs = name_eq(name, "fs") || name_eq(name, "fs.vfs");
+    track_fs = (strcmp(name, "fs") == 0) || (strcmp(name, "fs.vfs") == 0);
     if (ipc_endpoint_owner(msg->source, &owner_context_id) != IPC_OK) {
         if (track_fs) serial_write("[pm] fs register owner lookup failed\n");
         return -1;

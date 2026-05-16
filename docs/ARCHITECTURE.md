@@ -99,6 +99,11 @@ filesystem reads/writes continue to use FS IPC descriptors (`>=3`).
 Line-oriented console input helpers are now exposed in libc and language
 wrappers (`readline` in C stdio plus AssemblyScript/Go/Rust/Zig wrapper APIs)
 as thin loops over `console_read`.
+Minimal libc coverage was also expanded in both user-space and kernel-space
+utility layers with common string/ctype/stdio helpers (`memmove`, `strnlen`,
+`strchr`/`strrchr`, `strcpy`/`strncpy`, `isspace`/`isdigit`/`isxdigit`,
+`getchar`/`putchar`/`fputs`) to reduce ad-hoc reimplementation in services and
+drivers.
 Filesystem namespace now starts from a virtual root (`/`) with explicit mount
 subtrees and split backend responsibilities: `fs-fat` remains the active `fs`
 endpoint for boot/FAT routing, while `fs-init` provides initfs listing

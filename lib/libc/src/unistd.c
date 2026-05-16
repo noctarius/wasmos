@@ -512,6 +512,52 @@ getc(FILE *stream)
 }
 
 int
+getchar(void)
+{
+    unsigned char ch = 0;
+    ssize_t rc = read(STDIN_FILENO, &ch, 1u);
+
+    if (rc <= 0) {
+        return EOF;
+    }
+    return (int)ch;
+}
+
+int
+putchar(int ch)
+{
+    unsigned char out = (unsigned char)ch;
+    ssize_t rc = write(STDOUT_FILENO, &out, 1u);
+
+    if (rc != 1) {
+        return EOF;
+    }
+    return (int)out;
+}
+
+int
+fputs(const char *s, FILE *stream)
+{
+    size_t len;
+    ssize_t rc;
+
+    if (!s || !stream || stream->fd < 0) {
+        return -1;
+    }
+    len = strlen(s);
+    rc = write(stream->fd, s, len);
+    if (rc < 0) {
+        stream->error = 1;
+        return -1;
+    }
+    if ((size_t)rc < len) {
+        stream->error = 1;
+        return -1;
+    }
+    return 0;
+}
+
+int
 readline(char *s, int size)
 {
     int pos = 0;

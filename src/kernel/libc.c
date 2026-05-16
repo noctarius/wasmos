@@ -84,6 +84,18 @@ size_t strlen(const char *s) {
     return len;
 }
 
+size_t strnlen(const char *s, size_t max_len) {
+    if (!s) {
+        return 0;
+    }
+    s = kernel_str_ptr(s);
+    size_t len = 0;
+    while (len < max_len && s[len]) {
+        len++;
+    }
+    return len;
+}
+
 int strcmp(const char *a, const char *b) {
     a = kernel_str_ptr(a);
     b = kernel_str_ptr(b);
@@ -107,6 +119,96 @@ int strcmp(const char *a, const char *b) {
         return 0;
     }
     return (*a < *b) ? -1 : 1;
+}
+
+int strncmp(const char *a, const char *b, size_t n) {
+    if (n == 0 || a == b) {
+        return 0;
+    }
+    a = kernel_str_ptr(a);
+    b = kernel_str_ptr(b);
+    if (!a && !b) {
+        return 0;
+    }
+    if (!a) {
+        return -1;
+    }
+    if (!b) {
+        return 1;
+    }
+    for (size_t i = 0; i < n; ++i) {
+        unsigned char ca = (unsigned char)a[i];
+        unsigned char cb = (unsigned char)b[i];
+        if (ca != cb || ca == '\0' || cb == '\0') {
+            return (int)ca - (int)cb;
+        }
+    }
+    return 0;
+}
+
+char *strcpy(char *dst, const char *src) {
+    if (!dst || !src) {
+        return dst;
+    }
+    src = kernel_str_ptr(src);
+    size_t i = 0;
+    do {
+        dst[i] = src[i];
+    } while (src[i++] != '\0');
+    return dst;
+}
+
+char *strncpy(char *dst, const char *src, size_t n) {
+    if (!dst || !src) {
+        return dst;
+    }
+    src = kernel_str_ptr(src);
+    size_t i = 0;
+    while (i < n && src[i] != '\0') {
+        dst[i] = src[i];
+        i++;
+    }
+    while (i < n) {
+        dst[i++] = '\0';
+    }
+    return dst;
+}
+
+char *strchr(const char *s, int ch) {
+    if (!s) {
+        return 0;
+    }
+    s = kernel_str_ptr(s);
+    char needle = (char)ch;
+    for (;;) {
+        if (*s == needle) {
+            return (char *)s;
+        }
+        if (*s == '\0') {
+            break;
+        }
+        s++;
+    }
+    return 0;
+}
+
+char *strrchr(const char *s, int ch) {
+    const char *last = 0;
+    if (!s) {
+        return 0;
+    }
+    s = kernel_str_ptr(s);
+    char needle = (char)ch;
+    for (;;) {
+        if (*s == needle) {
+            last = s;
+        }
+        if (*s == '\0') {
+            break;
+        }
+        s++;
+    }
+    return (char *)last;
 }
 
 static size_t append_char(char *buf, size_t size, size_t pos, char ch) {
@@ -265,4 +367,41 @@ void abort(void) {
     for (;;) {
         __asm__ volatile("hlt");
     }
+}
+
+int tolower(int ch) {
+    if (ch >= 'A' && ch <= 'Z') {
+        return ch + ('a' - 'A');
+    }
+    return ch;
+}
+
+int toupper(int ch) {
+    if (ch >= 'a' && ch <= 'z') {
+        return ch - ('a' - 'A');
+    }
+    return ch;
+}
+
+int isspace(int ch) {
+    return ch == ' ' || ch == '\t' || ch == '\n' ||
+           ch == '\r' || ch == '\f' || ch == '\v';
+}
+
+int isdigit(int ch) {
+    return ch >= '0' && ch <= '9';
+}
+
+int isalpha(int ch) {
+    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z');
+}
+
+int isalnum(int ch) {
+    return isalpha(ch) || isdigit(ch);
+}
+
+int isxdigit(int ch) {
+    return isdigit(ch) ||
+           (ch >= 'a' && ch <= 'f') ||
+           (ch >= 'A' && ch <= 'F');
 }

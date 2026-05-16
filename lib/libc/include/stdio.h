@@ -15,6 +15,9 @@ typedef struct {
 
 int putsn(const char *s, size_t len);
 int puts(const char *s);
+int fputs(const char *s, FILE *stream);
+int putchar(int ch);
+int getchar(void);
 int readline(char *s, int size);
 int vsnprintf(char *buffer, size_t size, const char *format, va_list args);
 int snprintf(char *buffer, size_t size, const char *format, ...);

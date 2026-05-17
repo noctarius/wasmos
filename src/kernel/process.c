@@ -267,11 +267,24 @@ static thread_t *process_thread_for_transition(process_t *proc);
 static thread_t *process_first_owner_ready_thread(process_t *proc);
 static process_context_t *process_sched_ctx_for_thread(process_t *proc, thread_t *thread);
 static void process_wake_thread_joiner(process_t *owner, thread_t *exited);
+static void process_reap(process_t *proc);
 static void process_sched_invariant_fail(const char *msg, uint64_t a, uint64_t b);
 static void process_set_blocked(process_t *proc, thread_t *thread, process_block_reason_t reason, thread_block_reason_t thread_reason);
 static void process_set_ready(process_t *proc, thread_t *thread);
 static void process_set_running(process_t *proc, thread_t *thread);
+static uint8_t process_has_waiters(uint32_t target_pid);
+static void process_try_auto_reap(process_t *proc);
+static process_run_result_t process_thread_spawn_default_worker(process_t *process, uint32_t tid, void *arg);
 
+
+static process_run_result_t
+process_thread_spawn_default_worker(process_t *process, uint32_t tid, void *arg)
+{
+    (void)process;
+    (void)tid;
+    (void)arg;
+    return PROCESS_RUN_THREAD_EXITED;
+}
 
 static void
 context_switch_high(process_context_t *out, process_context_t *in)
@@ -637,6 +650,7 @@ static void process_reset_slot(process_t *proc) {
     proc->in_ready_queue = 0;
     proc->is_idle = 0;
     proc->in_hostcall = 0;
+    proc->auto_reap = 0;
     proc->ctx = (process_context_t){0};
     proc->ctx_canary_pre = 0;
     proc->ctx_canary_post = 0;
@@ -758,14 +772,54 @@ static void process_mark_exited(process_t *proc, int32_t exit_status) {
     proc->exiting = 1;
     proc->block_reason = PROCESS_BLOCK_NONE;
     proc->wait_target_pid = 0;
-    /* TODO: Add safe automatic reaping for exited kernel-owned children that
-     * are never waited on. Today they remain zombies until an explicit wait or
-     * a subsystem-specific reap path (for example the process manager) handles
-     * them. */
     proc->state = PROCESS_STATE_ZOMBIE;
     thread_mark_owner_exited(proc->pid, exit_status);
     proc->live_thread_count = 0;
     process_wake_waiters(proc->pid);
+}
+
+static uint8_t
+process_has_waiters(uint32_t target_pid)
+{
+    if (target_pid == 0) {
+        return 0;
+    }
+    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        process_t *proc = &g_processes[i];
+        if (proc->state == PROCESS_STATE_UNUSED || proc->state == PROCESS_STATE_ZOMBIE) {
+            continue;
+        }
+        for (uint32_t j = 0;; ++j) {
+            uint32_t tid = 0;
+            thread_t *waiter = 0;
+            if (thread_owner_tid_at(proc->pid, j, &tid) != 0) {
+                break;
+            }
+            waiter = thread_get(tid);
+            if (!waiter || waiter->state != THREAD_STATE_BLOCKED) {
+                continue;
+            }
+            if (waiter->block_reason != THREAD_BLOCK_WAIT_PROCESS) {
+                continue;
+            }
+            if (waiter->wait_target_pid == target_pid) {
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static void
+process_try_auto_reap(process_t *proc)
+{
+    if (!proc || proc->state != PROCESS_STATE_ZOMBIE || !proc->auto_reap) {
+        return;
+    }
+    if (process_has_waiters(proc->pid)) {
+        return;
+    }
+    process_reap(proc);
 }
 
 static void process_reap(process_t *proc) {
@@ -1036,27 +1090,14 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
 int
 process_thread_spawn_internal(uint32_t owner_pid, const char *name, uint32_t *out_tid)
 {
-    process_t *owner = process_find_by_pid(owner_pid);
-    if (!owner || !out_tid) {
-        return -1;
-    }
-    if (owner->state == PROCESS_STATE_UNUSED || owner->state == PROCESS_STATE_ZOMBIE || owner->exiting) {
-        return -1;
-    }
-    if (thread_spawn_in_owner(owner_pid,
-                              name ? name : "",
-                              THREAD_STATE_BLOCKED,
-                              THREAD_BLOCK_NONE,
-                              out_tid) != 0) {
-        return -1;
-    }
-    owner->thread_count++;
-    owner->live_thread_count++;
-    /* TODO(threading-phase-b): Additional threads are not yet dispatched. This
-     * API currently allocates lifecycle-tracked thread records so kernel-native
-     * services can adopt multi-thread structure incrementally before per-thread
-     * context/stack scheduling lands. */
-    return 0;
+    /* Compatibility shim: preserve legacy signature but create a schedulable
+     * worker thread that immediately exits when no explicit entry point exists.
+     */
+    return process_thread_spawn_worker_internal(owner_pid,
+                                                name ? name : "thread-worker",
+                                                process_thread_spawn_default_worker,
+                                                0,
+                                                out_tid);
 }
 
 int
@@ -1372,6 +1413,19 @@ int process_kill(uint32_t pid, int32_t exit_status) {
         return 0;
     }
     process_mark_exited(target, exit_status);
+    process_try_auto_reap(target);
+    return 0;
+}
+
+int
+process_set_auto_reap(uint32_t pid, uint8_t enabled)
+{
+    process_t *proc = process_find_by_pid(pid);
+    if (!proc || proc->state == PROCESS_STATE_UNUSED) {
+        return -1;
+    }
+    proc->auto_reap = enabled ? 1u : 0u;
+    process_try_auto_reap(proc);
     return 0;
 }
 
@@ -1554,6 +1608,7 @@ static int process_schedule_once_impl(void) {
     if (proc->state == PROCESS_STATE_ZOMBIE || proc->exiting) {
         /* A concurrent kill/exit can mark the owner zombie while this thread
          * is still returning from its timeslice. Never requeue it afterwards. */
+        process_try_auto_reap(proc);
         g_last_index = proc->pid;
         g_need_resched = 0;
         return 1;
@@ -1639,6 +1694,7 @@ static int process_schedule_once_impl(void) {
     }
 
     g_last_index = proc->pid;
+    process_try_auto_reap(proc);
     g_need_resched = 0;
     return (result == PROCESS_RUN_YIELDED) ? 0 : 1;
 }

@@ -118,6 +118,7 @@ typedef struct process {
     uint8_t in_ready_queue;
     uint8_t is_idle;
     uint8_t in_hostcall;
+    uint8_t auto_reap;
     uint64_t ctx_canary_pre;
     process_context_t ctx;
     uint64_t ctx_canary_post;
@@ -167,6 +168,7 @@ int process_thread_join(process_t *process, uint32_t target_tid, int32_t *out_ex
 int process_thread_detach(process_t *process, uint32_t target_tid);
 int process_kill(uint32_t pid, int32_t exit_status);
 int process_get_exit_status(uint32_t pid, int32_t *out_exit_status);
+int process_set_auto_reap(uint32_t pid, uint8_t enabled);
 uint32_t process_wake_by_context(uint32_t context_id);
 int process_wake_thread(uint32_t tid);
 int process_schedule_once(void);

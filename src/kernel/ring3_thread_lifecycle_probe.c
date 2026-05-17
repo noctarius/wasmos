@@ -1,11 +1,6 @@
 #include <stdint.h>
 #include "wasmos/syscall_x86_64.h"
-
-static uint64_t
-stack_aligned(uint64_t sp)
-{
-    return sp & ~0xFULL;
-}
+#include "wasmos/thread_x86_64.h"
 
 enum {
     PROBE_STACK_SIZE = 4096
@@ -14,12 +9,6 @@ enum {
 static uint8_t g_probe_join_stack[PROBE_STACK_SIZE] __attribute__((aligned(16)));
 static uint8_t g_probe_detach_stack[PROBE_STACK_SIZE] __attribute__((aligned(16)));
 static uint8_t g_probe_post_exit_stack[PROBE_STACK_SIZE] __attribute__((aligned(16)));
-
-static uint64_t
-stack_top(uint8_t *stack, uint32_t stack_size)
-{
-    return stack_aligned((uint64_t)(uintptr_t)(stack + stack_size));
-}
 
 static void
 join_helper_thread(void)
@@ -39,38 +28,62 @@ post_exit_helper_thread(void)
     wasmos_sys_thread_exit(9);
 }
 
+typedef struct {
+    int32_t status;
+} probe_cont_t;
+
+static void
+probe_cont_cb(void *ctx, int32_t status)
+{
+    probe_cont_t *state = (probe_cont_t *)ctx;
+    if (state) {
+        state->status = status;
+    }
+}
+
 void
 _start(void)
 {
-    uint64_t join_stack_top = stack_top(g_probe_join_stack, PROBE_STACK_SIZE);
-    uint64_t detach_stack_top = stack_top(g_probe_detach_stack, PROBE_STACK_SIZE);
-    uint64_t post_exit_stack_top = stack_top(g_probe_post_exit_stack, PROBE_STACK_SIZE);
+    probe_cont_t cont = {0};
+    uint32_t join_tid = 0;
+    uint32_t detach_tid = 0;
+    uint32_t post_exit_tid = 0;
 
-    int64_t join_tid = wasmos_sys_thread_create((uint64_t)(uintptr_t)join_helper_thread, join_stack_top);
-    if (join_tid > 0) {
-        (void)wasmos_sys_thread_join((uint32_t)join_tid);
+    if (wasmos_thread_spawn_cont(g_probe_join_stack,
+                                 PROBE_STACK_SIZE,
+                                 (wasmos_thread_entry_fn_t)join_helper_thread,
+                                 0,
+                                 probe_cont_cb,
+                                 &cont,
+                                 &join_tid) > 0) {
+        (void)wasmos_thread_join_cont(join_tid, probe_cont_cb, &cont);
     }
 
-    int64_t detach_tid =
-        wasmos_sys_thread_create((uint64_t)(uintptr_t)detach_helper_thread, detach_stack_top);
-    if (detach_tid > 0) {
-        (void)wasmos_sys_thread_detach((uint32_t)detach_tid);
-        (void)wasmos_sys_thread_join((uint32_t)detach_tid);
+    if (wasmos_thread_spawn_cont(g_probe_detach_stack,
+                                 PROBE_STACK_SIZE,
+                                 (wasmos_thread_entry_fn_t)detach_helper_thread,
+                                 0,
+                                 probe_cont_cb,
+                                 &cont,
+                                 &detach_tid) > 0) {
+        (void)wasmos_thread_detach_cont(detach_tid, probe_cont_cb, &cont);
+        (void)wasmos_thread_join_cont(detach_tid, probe_cont_cb, &cont);
     }
 
     /* Join-after-exit ordering probe: let target finish, then join. */
-    int64_t post_exit_tid =
-        wasmos_sys_thread_create((uint64_t)(uintptr_t)post_exit_helper_thread, post_exit_stack_top);
-    if (post_exit_tid > 0) {
+    if (wasmos_thread_spawn_cont(g_probe_post_exit_stack,
+                                 PROBE_STACK_SIZE,
+                                 (wasmos_thread_entry_fn_t)post_exit_helper_thread,
+                                 0,
+                                 probe_cont_cb,
+                                 &cont,
+                                 &post_exit_tid) > 0) {
         for (uint32_t i = 0; i < 8u; ++i) {
             (void)wasmos_sys_thread_yield();
         }
-        (void)wasmos_sys_thread_join((uint32_t)post_exit_tid);
+        (void)wasmos_thread_join_cont(post_exit_tid, probe_cont_cb, &cont);
     }
 
-    /* TODO(threading): migrate this probe to wasmos/thread_x86_64.h once
-     * ring3-threading startup guarantees writable user stack space for wrapper
-     * bootstrap metadata writes. */
     for (uint32_t i = 0; i < 16u; ++i) {
         (void)wasmos_sys_thread_yield();
     }

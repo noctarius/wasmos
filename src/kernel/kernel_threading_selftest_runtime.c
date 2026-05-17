@@ -355,7 +355,7 @@ threading_ipc_worker_entry(process_t *process, uint32_t tid, void *arg)
     threading_ipc_worker_arg_t *worker_arg = (threading_ipc_worker_arg_t *)arg;
     threading_ipc_stress_state_t *state = 0;
     ipc_message_t msg;
-    const uint32_t target_messages = 8u;
+    const uint32_t target_messages = 32u;
     (void)tid;
     if (!process || !worker_arg || !(state = worker_arg->state)) {
         return PROCESS_RUN_EXITED;
@@ -434,8 +434,8 @@ threading_ipc_stress_entry(process_t *process, void *arg)
         receiver->state == THREAD_STATE_ZOMBIE &&
         sender->state == THREAD_STATE_ZOMBIE &&
         state->sender_done &&
-        state->sent_count == 8u &&
-        state->recv_count == 8u &&
+        state->sent_count == 32u &&
+        state->recv_count == 32u &&
         state->recv_empty_count > 0) {
         klog_write("[test] threading ipc stress ok\n");
         state->done = 1;
@@ -476,6 +476,7 @@ kernel_threading_selftest_spawn(uint32_t init_pid, uint8_t ring3_thread_lifecycl
         klog_write("[kernel] threading internal smoke spawn failed\n");
         return -1;
     }
+    (void)process_set_auto_reap(threading_internal_smoke_pid, 1);
     if (process_spawn_as(init_pid,
                          "threading-join-order-smoke",
                          threading_join_order_smoke_entry,
@@ -484,6 +485,7 @@ kernel_threading_selftest_spawn(uint32_t init_pid, uint8_t ring3_thread_lifecycl
         klog_write("[kernel] threading join-order smoke spawn failed\n");
         return -1;
     }
+    (void)process_set_auto_reap(threading_join_order_smoke_pid, 1);
     g_threading_ipc_stress_state = (threading_ipc_stress_state_t){0};
     g_threading_ipc_stress_state.endpoint = IPC_ENDPOINT_NONE;
     g_threading_ipc_stress_state.sender_endpoint = IPC_ENDPOINT_NONE;
@@ -499,6 +501,7 @@ kernel_threading_selftest_spawn(uint32_t init_pid, uint8_t ring3_thread_lifecycl
         klog_write("[kernel] threading ipc stress spawn failed\n");
         return -1;
     }
+    (void)process_set_auto_reap(threading_ipc_stress_pid, 1);
 
     return 0;
 }

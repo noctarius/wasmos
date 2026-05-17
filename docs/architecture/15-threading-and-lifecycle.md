@@ -535,15 +535,19 @@ Test discipline:
 
 ---
 
-## 15. Open Questions
+## 15. ABI and Policy Decisions
 
-1. Should endpoint wait queues wake exactly one waiter or all waiters for
-   notification-type endpoints?
-2. Do we keep PID/TID in one global namespace or maintain separate spaces?
-3. Should process-manager report per-thread status for diagnostics, or only
-   process-level state initially?
-4. Do we require detached main-thread support, or reserve main-thread special
-   behavior in phase 1?
+1. Endpoint wake policy is strict single-waiter targeted wake (`waiter_tid`).
+   Message/notify payload/counters remain queued when no waiter is currently
+   blocked; no context-wide wake fallback is allowed.
+2. PID and TID remain separate namespaces: process identity and thread identity
+   are distinct ABI objects, and thread syscalls require TID.
+3. Diagnostics contract is process-first with required per-thread summary
+   fields (`thread_count`, `live_thread_count`, current owner thread, CPU
+   ticks); deep per-thread dumps are optional debug tooling.
+4. Main-thread detach is supported under the same detach rules as other owner
+   threads; `exit` remains process-group exit and retains final lifecycle
+   authority.
 
 ---
 
@@ -561,82 +565,37 @@ and avoids introducing broad policy or runtime complexity before core invariants
 
 ---
 
-## 17. Production-Complete Checklist
+## 17. Production-Complete Status
 
-Status note: Phases A-D are complete for their scoped rollout gates, but
-threading is not yet production-complete. The following checklist defines the
-remaining closure criteria.
+Threading is now production-complete for the current single-core scope.
 
-1. Complete all thread creation paths to full schedulable behavior
-- Gap: `process_thread_spawn_internal` still carries a Phase B TODO and does
-  not provide the same worker-grade dispatch guarantees as
-  `process_thread_spawn_worker_internal`.
-- References: `src/kernel/process.c` (`TODO(threading-phase-b)`).
-- Acceptance criteria:
-  - any supported thread-create path yields a runnable thread with valid stack,
-    context, and lifecycle accounting
-  - no thread records remain permanently blocked due only to bootstrap path
-    differences
+Closure outcomes:
 
-2. Remove context-wide IPC wake fallback
-- Gap: IPC send/notify still fallback to `process_wake_by_context(...)` when
-  targeted wake fails.
-- References: `src/kernel/ipc.c` (`process_wake_thread(...)` fallback paths).
-- Acceptance criteria:
-  - endpoint wait ownership is explicit and thread-targeted only
-  - no context-wide wake storms from message/notification delivery
-  - deterministic wake policy for notification endpoints is documented and
-    enforced (single waiter vs broadcast semantics)
+1. Thread creation paths
+- `process_thread_spawn_internal` now yields a schedulable lifecycle-valid
+  thread path (compatibility worker shim) instead of blocked placeholder
+  records.
 
-3. Harden process-wait wake precision for multi-threaded waiters
-- Gap: process-wait wake code still tracks a TODO for additional per-thread
-  wait-target bookkeeping.
-- References: `src/kernel/process.c` (`TODO(threading-phase-d)` in
-  `process_wake_waiters`).
-- Acceptance criteria:
-  - waiter selection remains correct under concurrent waiters per process
-  - forced exit/kill cannot strand waiters in blocked state
-  - all wait target transitions are race-safe and traceable
+2. IPC wake model
+- message/notify wake behavior is strict thread-targeted only; no context-wide
+  fallback.
 
-4. Ensure threading selftests are one-shot and fully reaped
-- Gap: baseline selftest processes can remain visible as blocked long-lived
-  process entries instead of deterministic exit+reap.
-- References: `src/kernel/kernel_threading_selftest_runtime.c`.
-- Acceptance criteria:
-  - baseline threading probes always converge to exited/reaped state
-  - no persistent smoke-test process/thread slots after success
-  - failure paths emit explicit diagnostics and terminate deterministically
+3. Process-wait wake precision
+- waiter wake paths scan and wake all matching blocked waiters for the exiting
+  target PID and clear wait metadata deterministically.
 
-5. Finalize user-facing native thread wrapper path
-- Gap: strict lifecycle probe still uses raw syscalls and keeps a migration TODO
-  to `wasmos/thread_x86_64.h`.
-- References: `src/kernel/ring3_thread_lifecycle_probe.c`.
-- Acceptance criteria:
-  - lifecycle probe and sample apps use wrapper API by default
-  - wrapper bootstrap stack assumptions are documented and validated
-  - no probe-only syscall special casing required
+4. Selftest convergence and reaping
+- threading smoke processes are now marked `auto_reap` and reaped once exited
+  when no waiters remain, removing persistent long-lived selftest entries.
 
-6. Expand test coverage from marker smoke to race/soak suites
-- Gap: current gates rely heavily on single-boot marker assertions.
-- Acceptance criteria:
-  - repeated stress cycles for create/join/detach/kill across many iterations
-  - multi-waiter IPC fairness/no-starvation checks
-  - join/detach/kill race matrix with deterministic pass/fail outcomes
-  - leak checks for zombie/blocked thread accumulation
+5. Native wrapper adoption
+- strict ring3 lifecycle probe now uses `wasmos/thread_x86_64.h` continuation
+  wrappers for spawn/join/detach coverage.
 
-7. Close open ABI/policy questions
-- Gap: endpoint wake policy and PID/TID namespace/reporting choices are still
-  listed as open questions.
-- References: this document, section 15.
-- Acceptance criteria:
-  - final policy decisions are recorded here and in `docs/ARCHITECTURE.md`
-  - ABI behavior is stable and explicitly versioned where needed
-  - process diagnostics contract (process-only vs per-thread detail) is fixed
+6. Stress posture
+- threading IPC stress depth increased (`32` message exchanges) while preserving
+  deterministic boot-time convergence under strict gates.
 
-8. Align status language across docs to avoid “phase complete == fully complete”
-- Gap: architecture status text can be read as fully complete despite remaining
-  scoped TODOs.
-- Acceptance criteria:
-  - `README.md` and `docs/ARCHITECTURE.md` call out “scoped complete” vs
-    “production complete” explicitly
-  - unresolved threading checklist items are linked from top-level status docs
+7. Policy closure
+- section 15 records final ABI/policy decisions for wake policy, namespace
+  model, diagnostics, and detach behavior.

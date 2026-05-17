@@ -1,5 +1,6 @@
 #include "process_manager.h"
 #include "process_manager_internal.h"
+#include "framebuffer.h"
 #include "physmem.h"
 
 typedef struct {
@@ -12,6 +13,7 @@ typedef struct {
 } pm_fs_buffer_slot_t;
 
 static pm_fs_buffer_slot_t g_pm_fs_slots[PROCESS_MAX_COUNT];
+static pm_fs_buffer_slot_t g_pm_fb_slots[PROCESS_MAX_COUNT];
 
 static pm_fs_buffer_slot_t *
 pm_fs_slot_for_context(uint32_t context_id)
@@ -132,11 +134,128 @@ pm_fs_buffer_borrow_flags(uint32_t context_id)
     return (uint32_t)(slot->borrow_flags & 0x3u);
 }
 
+static pm_fs_buffer_slot_t *
+pm_fb_slot_for_context(uint32_t context_id)
+{
+    pm_fs_buffer_slot_t *empty = 0;
+
+    if (context_id == 0) {
+        return 0;
+    }
+
+    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        if (g_pm_fb_slots[i].in_use && g_pm_fb_slots[i].context_id == context_id) {
+            return &g_pm_fb_slots[i];
+        }
+        if (!empty && !g_pm_fb_slots[i].in_use) {
+            empty = &g_pm_fb_slots[i];
+        }
+    }
+
+    if (!empty) {
+        return 0;
+    }
+    empty->in_use = 1;
+    empty->context_id = context_id;
+    empty->borrow_active = 0;
+    empty->borrow_flags = 0;
+    empty->borrow_source_context_id = 0;
+    empty->buffer_phys = 0;
+    return empty;
+}
+
+static pm_fs_buffer_slot_t *
+pm_fb_slot_find(uint32_t context_id)
+{
+    if (context_id == 0) {
+        return 0;
+    }
+    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        if (g_pm_fb_slots[i].in_use && g_pm_fb_slots[i].context_id == context_id) {
+            return &g_pm_fb_slots[i];
+        }
+    }
+    return 0;
+}
+
+static void *
+pm_fb_buffer_for_context(uint32_t context_id)
+{
+    pm_fs_buffer_slot_t *slot = pm_fb_slot_find(context_id);
+    framebuffer_info_t fb_info = {0};
+    if (!slot || !slot->borrow_active || slot->borrow_source_context_id != 0) {
+        return 0;
+    }
+    if (framebuffer_get_info(&fb_info) != 0 || fb_info.framebuffer_base == 0) {
+        return 0;
+    }
+    return (void *)(uintptr_t)fb_info.framebuffer_base;
+}
+
+static uint32_t
+pm_fb_buffer_size(void)
+{
+    framebuffer_info_t fb_info = {0};
+    if (framebuffer_get_info(&fb_info) != 0) {
+        return 0;
+    }
+    if (fb_info.framebuffer_size > 0xFFFFFFFFu) {
+        return 0xFFFFFFFFu;
+    }
+    return (uint32_t)fb_info.framebuffer_size;
+}
+
+static int
+pm_fb_buffer_borrow_context(uint32_t borrower_context_id,
+                            uint32_t source_context_id,
+                            uint32_t flags)
+{
+    pm_fs_buffer_slot_t *borrower = 0;
+    if (borrower_context_id == 0 || source_context_id != 0 ||
+        (flags & (PM_BUFFER_BORROW_READ | PM_BUFFER_BORROW_WRITE)) == 0) {
+        return -1;
+    }
+    borrower = pm_fb_slot_for_context(borrower_context_id);
+    if (!borrower) {
+        return -1;
+    }
+    borrower->borrow_active = 1;
+    borrower->borrow_source_context_id = 0;
+    borrower->borrow_flags = (uint8_t)(flags & (PM_BUFFER_BORROW_READ | PM_BUFFER_BORROW_WRITE));
+    return 0;
+}
+
+static int
+pm_fb_buffer_release_context(uint32_t borrower_context_id)
+{
+    pm_fs_buffer_slot_t *borrower = pm_fb_slot_find(borrower_context_id);
+    if (!borrower) {
+        return -1;
+    }
+    borrower->borrow_active = 0;
+    borrower->borrow_source_context_id = 0;
+    borrower->borrow_flags = 0;
+    return 0;
+}
+
+static uint32_t
+pm_fb_buffer_borrow_flags(uint32_t context_id)
+{
+    pm_fs_buffer_slot_t *slot = pm_fb_slot_find(context_id);
+    if (!slot || !slot->borrow_active) {
+        return 0;
+    }
+    return (uint32_t)(slot->borrow_flags & (PM_BUFFER_BORROW_READ | PM_BUFFER_BORROW_WRITE));
+}
+
 void *
 process_manager_buffer_for_context(uint32_t kind, uint32_t context_id)
 {
     if (kind == PM_BUFFER_KIND_FS) {
         return pm_fs_buffer_for_context(context_id);
+    }
+    if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
+        return pm_fb_buffer_for_context(context_id);
     }
     return 0;
 }
@@ -146,6 +265,9 @@ process_manager_buffer_size(uint32_t kind)
 {
     if (kind == PM_BUFFER_KIND_FS) {
         return pm_fs_buffer_size();
+    }
+    if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
+        return pm_fb_buffer_size();
     }
     return 0;
 }
@@ -159,6 +281,9 @@ process_manager_buffer_borrow_context(uint32_t kind,
     if (kind == PM_BUFFER_KIND_FS) {
         return pm_fs_buffer_borrow_context(borrower_context_id, source_context_id, flags);
     }
+    if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
+        return pm_fb_buffer_borrow_context(borrower_context_id, source_context_id, flags);
+    }
     return -1;
 }
 
@@ -168,6 +293,9 @@ process_manager_buffer_release_context(uint32_t kind, uint32_t borrower_context_
     if (kind == PM_BUFFER_KIND_FS) {
         return pm_fs_buffer_release_context(borrower_context_id);
     }
+    if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
+        return pm_fb_buffer_release_context(borrower_context_id);
+    }
     return -1;
 }
 
@@ -176,6 +304,9 @@ process_manager_buffer_borrow_flags(uint32_t kind, uint32_t context_id)
 {
     if (kind == PM_BUFFER_KIND_FS) {
         return pm_fs_buffer_borrow_flags(context_id);
+    }
+    if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
+        return pm_fb_buffer_borrow_flags(context_id);
     }
     return 0;
 }

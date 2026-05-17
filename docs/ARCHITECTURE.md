@@ -208,6 +208,10 @@ DMA Phase 2 transport is now wired: `device-manager` sends
 payload from caller memory before spawn-profile apply; invalid schemas (unknown
 cap bits, malformed ranges, malformed variable-length DMA window payloads) are
 rejected fail-closed.
+DMA Phase 3 storage integration is now in-tree on the ATA bootstrap path:
+driver read/write requests attempt borrow-based DMA map/sync/unmap lifecycle
+first and emit one-shot active/fallback markers, while deny/range/unavailable
+results deterministically fall back to the existing PIO/copy path.
 When native `menuconfig`-style frontends are unavailable, build configuration
 can be edited through the in-repo `kconfiglib` interactive fallback script
 (`scripts/kconfiglib_menuconfig.py`), exposed via CMake targets.

@@ -40,6 +40,10 @@ static int32_t g_block_endpoint = -1;
 static uint32_t g_sector_count = 0;
 static uint8_t g_present = 0;
 static uint8_t g_sector_buf[ATA_SECTOR_SIZE];
+static uint8_t g_dma_read_ok_logged = 0;
+static uint8_t g_dma_write_ok_logged = 0;
+static uint8_t g_dma_read_fallback_logged = 0;
+static uint8_t g_dma_write_fallback_logged = 0;
 
 static uint8_t
 ata_read_status(void)
@@ -199,6 +203,116 @@ ata_send_resp(int32_t reply_ep, int32_t req_id, int32_t type, int32_t status, in
                     0);
 }
 
+static void
+ata_log(const char *s)
+{
+    if (!s) {
+        return;
+    }
+    (void)printf("%s", s);
+}
+
+static void
+ata_log_dma_active(uint8_t is_write)
+{
+    if (is_write) {
+        if (!g_dma_write_ok_logged) {
+            g_dma_write_ok_logged = 1;
+            ata_log("[ata] dma write path active\n");
+        }
+    } else {
+        if (!g_dma_read_ok_logged) {
+            g_dma_read_ok_logged = 1;
+            ata_log("[ata] dma read path active\n");
+        }
+    }
+}
+
+static void
+ata_log_dma_fallback(uint8_t is_write, int32_t rc)
+{
+    if (is_write) {
+        if (!g_dma_write_fallback_logged) {
+            g_dma_write_fallback_logged = 1;
+            (void)printf("[ata] dma write fallback rc=%d\n", (int)rc);
+        }
+    } else {
+        if (!g_dma_read_fallback_logged) {
+            g_dma_read_fallback_logged = 1;
+            (void)printf("[ata] dma read fallback rc=%d\n", (int)rc);
+        }
+    }
+}
+
+static int
+ata_dma_prepare(int32_t source_endpoint,
+                uint32_t offset,
+                uint32_t length,
+                uint32_t direction_flags,
+                int32_t *out_device_addr)
+{
+    int32_t rc = 0;
+    if (!out_device_addr || source_endpoint < 0 || length == 0) {
+        return WASMOS_DMA_STATUS_INVALID;
+    }
+    rc = wasmos_buffer_borrow(WASMOS_BUFFER_KIND_FS,
+                              source_endpoint,
+                              (direction_flags & WASMOS_DMA_DIR_FROM_DEVICE) ? WASMOS_BUFFER_GRANT_WRITE : WASMOS_BUFFER_GRANT_READ);
+    if (rc != 0) {
+        return rc;
+    }
+    rc = wasmos_dma_map_borrow(WASMOS_BUFFER_KIND_FS,
+                               source_endpoint,
+                               (int32_t)offset,
+                               (int32_t)length,
+                               (int32_t)direction_flags);
+    if (rc < 0) {
+        (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_FS);
+        return rc;
+    }
+    *out_device_addr = rc;
+    if ((direction_flags & WASMOS_DMA_DIR_TO_DEVICE) != 0) {
+        rc = wasmos_dma_sync_borrow(WASMOS_BUFFER_KIND_FS,
+                                    (int32_t)offset,
+                                    (int32_t)length,
+                                    WASMOS_DMA_SYNC_TO_DEVICE);
+        if (rc != WASMOS_DMA_STATUS_OK) {
+            (void)wasmos_dma_unmap_borrow(WASMOS_BUFFER_KIND_FS, source_endpoint);
+            (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_FS);
+            return rc;
+        }
+    }
+    return WASMOS_DMA_STATUS_OK;
+}
+
+static int
+ata_dma_finish(int32_t source_endpoint,
+               uint32_t offset,
+               uint32_t length,
+               uint32_t direction_flags)
+{
+    int rc = WASMOS_DMA_STATUS_OK;
+    if ((direction_flags & WASMOS_DMA_DIR_FROM_DEVICE) != 0) {
+        rc = wasmos_dma_sync_borrow(WASMOS_BUFFER_KIND_FS,
+                                    (int32_t)offset,
+                                    (int32_t)length,
+                                    WASMOS_DMA_SYNC_FROM_DEVICE);
+        if (rc != WASMOS_DMA_STATUS_OK) {
+            (void)wasmos_dma_unmap_borrow(WASMOS_BUFFER_KIND_FS, source_endpoint);
+            (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_FS);
+            return -1;
+        }
+    }
+    if (wasmos_dma_unmap_borrow(WASMOS_BUFFER_KIND_FS, source_endpoint) != WASMOS_DMA_STATUS_OK) {
+        (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_FS);
+        return -1;
+    }
+    if (wasmos_buffer_release(WASMOS_BUFFER_KIND_FS) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
 static int
 ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t arg0, int32_t arg1, int32_t arg2)
 {
@@ -213,11 +327,34 @@ ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t arg0, int32
     }
 
     if (type == BLOCK_IPC_READ_REQ) {
+        int32_t dma_rc = WASMOS_DMA_STATUS_DENY;
+        int32_t dma_addr = 0;
+        uint32_t byte_count = 0;
         if (arg2 <= 0 || arg2 > (int32_t)ATA_MAX_READ_SECTORS || arg0 <= 0) {
             ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 2, 0);
             return 0;
         }
+        byte_count = (uint32_t)arg2 * ATA_SECTOR_SIZE;
+        dma_rc = ata_dma_prepare(source,
+                                 0u,
+                                 byte_count,
+                                 WASMOS_DMA_DIR_FROM_DEVICE,
+                                 &dma_addr);
+        if (dma_rc != WASMOS_DMA_STATUS_OK) {
+            ata_log_dma_fallback(0, dma_rc);
+        } else {
+            (void)dma_addr;
+            ata_log_dma_active(0);
+        }
         if (ata_read_lba28((uint32_t)arg1, (uint8_t)arg2, (uint32_t)arg0) != 0) {
+            if (dma_rc == WASMOS_DMA_STATUS_OK) {
+                (void)ata_dma_finish(source, 0u, byte_count, WASMOS_DMA_DIR_FROM_DEVICE);
+            }
+            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 3, 0);
+            return 0;
+        }
+        if (dma_rc == WASMOS_DMA_STATUS_OK &&
+            ata_dma_finish(source, 0u, byte_count, WASMOS_DMA_DIR_FROM_DEVICE) != 0) {
             ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 3, 0);
             return 0;
         }
@@ -233,11 +370,34 @@ ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t arg0, int32
     }
 
     if (type == BLOCK_IPC_WRITE_REQ) {
+        int32_t dma_rc = WASMOS_DMA_STATUS_DENY;
+        int32_t dma_addr = 0;
+        uint32_t byte_count = 0;
         if (arg2 <= 0 || arg2 > (int32_t)ATA_MAX_READ_SECTORS || arg0 <= 0) {
             ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 2, 0);
             return 0;
         }
+        byte_count = (uint32_t)arg2 * ATA_SECTOR_SIZE;
+        dma_rc = ata_dma_prepare(source,
+                                 0u,
+                                 byte_count,
+                                 WASMOS_DMA_DIR_TO_DEVICE,
+                                 &dma_addr);
+        if (dma_rc != WASMOS_DMA_STATUS_OK) {
+            ata_log_dma_fallback(1, dma_rc);
+        } else {
+            (void)dma_addr;
+            ata_log_dma_active(1);
+        }
         if (ata_write_lba28((uint32_t)arg1, (uint8_t)arg2, (uint32_t)arg0) != 0) {
+            if (dma_rc == WASMOS_DMA_STATUS_OK) {
+                (void)ata_dma_finish(source, 0u, byte_count, WASMOS_DMA_DIR_TO_DEVICE);
+            }
+            ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 5, 0);
+            return 0;
+        }
+        if (dma_rc == WASMOS_DMA_STATUS_OK &&
+            ata_dma_finish(source, 0u, byte_count, WASMOS_DMA_DIR_TO_DEVICE) != 0) {
             ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 5, 0);
             return 0;
         }

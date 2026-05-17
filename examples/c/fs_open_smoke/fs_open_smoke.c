@@ -15,14 +15,14 @@ main(int argc, char **argv)
     (void)argc;
     (void)argv;
 
-    if (stat("/large_read.txt", &st) != 0 ||
+    if (stat("/boot/large_read.txt", &st) != 0 ||
         st.st_size != 6858u ||
         (st.st_mode & S_IFMT) != S_IFREG) {
         puts("fs-open-smoke: stat failed");
         return 1;
     }
 
-    file = fopen("/large_read.txt", "r");
+    file = fopen("/boot/large_read.txt", "r");
     if (!file) {
         puts("fs-open-smoke: open failed");
         return 1;

@@ -24,7 +24,7 @@ main(int argc, char **argv)
     (void)argc;
     (void)argv;
 
-    fd = open("/write_smoke.txt", O_RDONLY);
+    fd = open("/boot/write_smoke.txt", O_RDONLY);
     if (fd < 0) {
         puts("fs-write-smoke: open read failed");
         return 1;
@@ -36,17 +36,17 @@ main(int argc, char **argv)
         return 1;
     }
 
-    fd = open("/create.txt", O_WRONLY | O_CREAT | O_TRUNC);
+    fd = open("/boot/create.txt", O_WRONLY | O_CREAT | O_TRUNC);
     if (fd < 0) {
         puts("fs-write-smoke: create open failed");
         return 1;
     }
     close(fd);
-    if (stat("/create.txt", &st) != 0 || st.st_size != 0) {
+    if (stat("/boot/create.txt", &st) != 0 || st.st_size != 0) {
         puts("fs-write-smoke: create stat failed");
         return 1;
     }
-    fd = open("/create.txt", O_RDONLY);
+    fd = open("/boot/create.txt", O_RDONLY);
     if (fd < 0) {
         puts("fs-write-smoke: create reopen failed");
         return 1;
@@ -60,7 +60,7 @@ main(int argc, char **argv)
     for (size_t i = 0; i < sizeof(grow_pattern); ++i) {
         grow_pattern[i] = (char)('A' + (i % 23u));
     }
-    fd = open("/create.txt", O_WRONLY | O_TRUNC);
+    fd = open("/boot/create.txt", O_WRONLY | O_TRUNC);
     if (fd < 0) {
         puts("fs-write-smoke: grow open failed");
         return 1;
@@ -71,11 +71,11 @@ main(int argc, char **argv)
         puts("fs-write-smoke: grow write failed");
         return 1;
     }
-    if (stat("/create.txt", &st) != 0 || st.st_size != (off_t)sizeof(grow_pattern)) {
+    if (stat("/boot/create.txt", &st) != 0 || st.st_size != (off_t)sizeof(grow_pattern)) {
         puts("fs-write-smoke: grow stat failed");
         return 1;
     }
-    fd = open("/create.txt", O_RDONLY);
+    fd = open("/boot/create.txt", O_RDONLY);
     if (fd < 0) {
         puts("fs-write-smoke: grow reopen failed");
         return 1;
@@ -86,45 +86,45 @@ main(int argc, char **argv)
         puts("fs-write-smoke: grow verify failed");
         return 1;
     }
-    if (mkdir("/create_dir", 0) != 0) {
+    if (mkdir("/boot/create_dir", 0) != 0) {
         puts("fs-write-smoke: mkdir failed");
         return 1;
     }
-    if (stat("/create_dir", &st) != 0 || (st.st_mode & S_IFMT) != S_IFDIR) {
+    if (stat("/boot/create_dir", &st) != 0 || (st.st_mode & S_IFMT) != S_IFDIR) {
         puts("fs-write-smoke: mkdir stat failed");
         return 1;
     }
-    fd = open("/create_dir/nested.txt", O_WRONLY | O_CREAT | O_TRUNC);
+    fd = open("/boot/create_dir/nested.txt", O_WRONLY | O_CREAT | O_TRUNC);
     if (fd < 0) {
         puts("fs-write-smoke: nested create failed");
         return 1;
     }
     close(fd);
-    if (rmdir("/create_dir") == 0) {
+    if (rmdir("/boot/create_dir") == 0) {
         puts("fs-write-smoke: non-empty rmdir passed");
         return 1;
     }
-    if (unlink("/create_dir/nested.txt") != 0) {
+    if (unlink("/boot/create_dir/nested.txt") != 0) {
         puts("fs-write-smoke: nested unlink failed");
         return 1;
     }
-    if (rmdir("/create_dir") != 0) {
+    if (rmdir("/boot/create_dir") != 0) {
         puts("fs-write-smoke: rmdir failed");
         return 1;
     }
-    if (stat("/create_dir", &st) == 0) {
+    if (stat("/boot/create_dir", &st) == 0) {
         puts("fs-write-smoke: rmdir stat failed");
         return 1;
     }
     /* Keep /create.txt for subsequent truncate/write checks; deleting this
      * grown file can trip QEMU vvfat host assertions on some versions. */
-    fd = open("/create.txt", O_WRONLY | O_CREAT | O_TRUNC);
+    fd = open("/boot/create.txt", O_WRONLY | O_CREAT | O_TRUNC);
     if (fd < 0) {
         puts("fs-write-smoke: recreate open failed");
         return 1;
     }
     close(fd);
-    stream = fopen("/stdio.txt", "wb");
+    stream = fopen("/boot/stdio.txt", "wb");
     if (!stream) {
         puts("fs-write-smoke: stdio write open failed");
         return 1;
@@ -134,7 +134,7 @@ main(int argc, char **argv)
         puts("fs-write-smoke: stdio write failed");
         return 1;
     }
-    stream = fopen("/stdio.txt", "ab");
+    stream = fopen("/boot/stdio.txt", "ab");
     if (!stream) {
         puts("fs-write-smoke: stdio append open failed");
         return 1;
@@ -144,7 +144,7 @@ main(int argc, char **argv)
         puts("fs-write-smoke: stdio append failed");
         return 1;
     }
-    stream = fopen("/stdio.txt", "rb");
+    stream = fopen("/boot/stdio.txt", "rb");
     if (!stream) {
         puts("fs-write-smoke: stdio read open failed");
         return 1;
@@ -156,7 +156,7 @@ main(int argc, char **argv)
         return 1;
     }
 
-    fd = open("/write_smoke.txt", O_WRONLY | O_TRUNC);
+    fd = open("/boot/write_smoke.txt", O_WRONLY | O_TRUNC);
     if (fd < 0) {
         puts("fs-write-smoke: open write failed");
         return 1;
@@ -167,12 +167,12 @@ main(int argc, char **argv)
         puts("fs-write-smoke: write failed");
         return 1;
     }
-    if (stat("/write_smoke.txt", &st) != 0 || st.st_size != (off_t)(sizeof(updated) - 1u)) {
+    if (stat("/boot/write_smoke.txt", &st) != 0 || st.st_size != (off_t)(sizeof(updated) - 1u)) {
         puts("fs-write-smoke: truncate stat failed");
         return 1;
     }
 
-    fd = open("/write_smoke.txt", O_RDONLY);
+    fd = open("/boot/write_smoke.txt", O_RDONLY);
     if (fd < 0) {
         puts("fs-write-smoke: reopen failed");
         return 1;
@@ -184,7 +184,7 @@ main(int argc, char **argv)
         return 1;
     }
 
-    fd = open("/write_smoke.txt", O_WRONLY | O_TRUNC);
+    fd = open("/boot/write_smoke.txt", O_WRONLY | O_TRUNC);
     if (fd < 0) {
         puts("fs-write-smoke: reopen write failed");
         return 1;
@@ -196,7 +196,7 @@ main(int argc, char **argv)
         return 1;
     }
 
-    fd = open("/write_smoke.txt", O_WRONLY | O_APPEND);
+    fd = open("/boot/write_smoke.txt", O_WRONLY | O_APPEND);
     if (fd < 0) {
         puts("fs-write-smoke: append open failed");
         return 1;
@@ -207,12 +207,12 @@ main(int argc, char **argv)
         puts("fs-write-smoke: append failed");
         return 1;
     }
-    if (stat("/write_smoke.txt", &st) != 0 || st.st_size != (off_t)(sizeof(appended) - 1u)) {
+    if (stat("/boot/write_smoke.txt", &st) != 0 || st.st_size != (off_t)(sizeof(appended) - 1u)) {
         puts("fs-write-smoke: append stat failed");
         return 1;
     }
 
-    fd = open("/write_smoke.txt", O_RDONLY);
+    fd = open("/boot/write_smoke.txt", O_RDONLY);
     if (fd < 0) {
         puts("fs-write-smoke: append reopen failed");
         return 1;
@@ -224,7 +224,7 @@ main(int argc, char **argv)
         return 1;
     }
 
-    fd = open("/write_smoke.txt", O_WRONLY | O_TRUNC);
+    fd = open("/boot/write_smoke.txt", O_WRONLY | O_TRUNC);
     if (fd < 0) {
         puts("fs-write-smoke: final restore open failed");
         return 1;
@@ -236,7 +236,7 @@ main(int argc, char **argv)
         return 1;
     }
 
-    fd = open("/write_smoke.txt", O_RDONLY);
+    fd = open("/boot/write_smoke.txt", O_RDONLY);
     if (fd < 0) {
         puts("fs-write-smoke: final reopen failed");
         return 1;

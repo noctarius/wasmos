@@ -43,10 +43,10 @@ class VtCliLockupRegressionTests(unittest.TestCase):
         commands = (
             ("help", b"commands:"),
             ("ps", b"processes:"),
-            ("ls", b"apps"),
+            ("ls", b"boot/"),
             ("help", b"commands:"),
             ("ps", b"processes:"),
-            ("ls", b"apps"),
+            ("ls", b"boot/"),
             ("help", b"commands:"),
             ("ps", b"processes:"),
         )
@@ -69,7 +69,7 @@ class VtCliLockupRegressionTests(unittest.TestCase):
         plan = [
             ("help", b"commands:"),
             ("ps", b"processes:"),
-            ("ls", b"apps"),
+            ("ls", b"boot/"),
             ("help", b"commands:"),
             ("ps", b"processes:"),
         ]

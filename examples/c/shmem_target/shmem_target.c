@@ -5,7 +5,7 @@
 #include "unistd.h"
 #include "wasmos/api.h"
 
-#define SHMEM_SYNC_PATH "/shmem_e2e.bin"
+#define SHMEM_SYNC_PATH "/boot/shmem_e2e.bin"
 #define SHMEM_MAP_OFF   0x2000
 #define SHMEM_MAP_SIZE  0x1000
 

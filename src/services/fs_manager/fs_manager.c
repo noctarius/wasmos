@@ -403,30 +403,6 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             }
         }
 
-        if (type == FS_IPC_CAT_ROOT_REQ && state->mount == FS_MOUNT_ROOT) {
-            char name[32];
-            int32_t resp_type = FS_IPC_ERROR;
-            int32_t r0 = -1, r1 = 0, r2 = 0, r3 = 0;
-            unpack_name((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, name, sizeof(name));
-            fs_backend_t *target = backend_find_by_name(name);
-            if (!target) {
-                (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
-                continue;
-            }
-            state->mount = FS_MOUNT_BACKEND;
-            state->backend_endpoint = target->endpoint;
-            state->mount_depth = 0;
-            if (forward_request(target->endpoint, FS_IPC_LIST_ROOT_REQ, request_id, 0, 0, 0, 0,
-                                source, &resp_type, &r0, &r1, &r2, &r3) != 0) {
-                state->mount = FS_MOUNT_ROOT;
-                state->backend_endpoint = -1;
-                (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
-                continue;
-            }
-            (void)wasmos_ipc_send(source, g_fs_endpoint, resp_type, request_id, r0, r1, r2, r3);
-            continue;
-        }
-
         int32_t backend = state->backend_endpoint;
         if (backend < 0) {
             fs_backend_t *fallback_boot = backend_first_of_kind(FSMGR_BACKEND_BOOT);

@@ -1229,15 +1229,23 @@ cli_handle_line(void)
         return 1;
     }
     if (g_line_len > 4 && line_starts_with_ci("cat ")) {
-        char *name = &g_line[4];
-        uint32_t packed[4];
-        cli_pack_name(name, packed);
-        if (cli_send_fs(FS_IPC_CAT_ROOT_REQ, packed[0], packed[1], packed[2], packed[3]) != 0) {
-            console_write("cat failed\n");
+        char *path = &g_line[4];
+        FILE *f = fopen(path, "r");
+        if (!f) {
+            console_write("fs failed\n");
             return 0;
         }
-        g_pending_kind = PENDING_CAT;
-        return 1;
+        for (;;) {
+            char chunk[65];
+            size_t n = fread(chunk, 1, 64, f);
+            if (n == 0) {
+                break;
+            }
+            chunk[n] = '\0';
+            console_write(chunk);
+        }
+        (void)fclose(f);
+        return 0;
     }
     console_write("unknown command\n");
     return 0;

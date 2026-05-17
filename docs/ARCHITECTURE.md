@@ -170,6 +170,9 @@ read/write access bits; the FS class currently backs `fs-manager` proxying so
 backends keep zero-copy FS-buffer access against borrowed caller buffers. Native
 framebuffer mapping now also uses this generic borrow path via a dedicated
 framebuffer buffer class, replacing the prior framebuffer-specific map path.
+CLI file reads now go through regular FS open/read/close flows using current
+cwd/session mount state; the dedicated root-cat filesystem IPC opcode path is
+removed from the FS ABI and service/driver dispatch.
 Native driver startup now also enforces an explicit ABI magic/version contract
 between kernel and native modules, so mismatched artifacts fail fast instead of
 calling corrupted function-table pointers.

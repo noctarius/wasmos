@@ -73,6 +73,18 @@ extern int32_t wasmos_sched_current_pid(void)
     WASMOS_WASM_IMPORT("wasmos", "sched_current_pid");
 extern int32_t wasmos_sched_yield(void)
     WASMOS_WASM_IMPORT("wasmos", "sched_yield");
+extern int32_t wasmos_thread_gettid(void)
+    WASMOS_WASM_IMPORT("wasmos", "thread_gettid");
+extern int32_t wasmos_thread_create(int32_t entry_token, int32_t arg0, int32_t arg1, int32_t flags)
+    WASMOS_WASM_IMPORT("wasmos", "thread_create");
+extern int32_t wasmos_thread_yield(void)
+    WASMOS_WASM_IMPORT("wasmos", "thread_yield");
+extern int32_t wasmos_thread_exit(int32_t status)
+    WASMOS_WASM_IMPORT("wasmos", "thread_exit");
+extern int32_t wasmos_thread_join(int32_t tid)
+    WASMOS_WASM_IMPORT("wasmos", "thread_join");
+extern int32_t wasmos_thread_detach(int32_t tid)
+    WASMOS_WASM_IMPORT("wasmos", "thread_detach");
 extern int32_t wasmos_proc_info(int32_t index, int32_t ptr, int32_t len)
     WASMOS_WASM_IMPORT("wasmos", "proc_info");
 extern int32_t wasmos_proc_info_ex(int32_t index, int32_t ptr, int32_t len, int32_t parent_ptr)

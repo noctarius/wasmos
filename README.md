@@ -106,6 +106,7 @@ It defines repository workflow and documentation/update conventions.
 - Threading Phase D hardening markers now include join-after-kill ordering and kill-during-join waiter wakeup checks (`[test] threading join after kill order ok`, `[test] threading join kill wake ok`)
 - Threading runtime now also includes dedicated kernel-stack-backed user thread creation (`THREAD_CREATE`) and syscall trap-frame-to-thread-context synchronization for blocking/yielding syscall reschedules, preventing stale-RIP resume and first-dispatch context-switch faults
 - Threading rollout is production-complete for the current single-core scope; final ABI/policy and closure status are tracked in `docs/architecture/15-threading-and-lifecycle.md` sections 15 and 17
+- WASM hostcall surface now exposes thread lifecycle wrappers (`thread_gettid`, `thread_yield`, `thread_exit`, `thread_join`, `thread_detach`) via `lib/libc/include/wasmos/thread.h`; WASM `thread_create` remains explicitly deferred pending per-thread VM bootstrap wiring
 
 ## Quick Start
 

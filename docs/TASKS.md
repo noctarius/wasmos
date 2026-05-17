@@ -96,8 +96,15 @@ separation model and deferred hardening backlog.
   - Enforced borrow grant compatibility with DMA direction flags.
   - Enforced spawn-profile DMA direction + max-bytes + window-range checks.
   - Added fail-closed mapped-state behavior for borrow release/unmap ordering.
-- [ ] DMA Phase 2: implement `PROC_IPC_SPAWN_CAPS_V2` end-to-end transport in
+- [x] DMA Phase 2: implement `PROC_IPC_SPAWN_CAPS_V2` end-to-end transport in
   `device-manager` + process-manager and wire descriptor parsing/validation.
+  - `device-manager` now sends spawn capability descriptors via
+    `PROC_IPC_SPAWN_CAPS_V2` payload pointer/size contract.
+  - Process-manager now copies descriptors from caller memory and validates cap
+    bitmask, IO range ordering, DMA direction flags, max-bytes, and DMA window
+    overflow semantics before applying spawn profile.
+  - Invalid and unsupported descriptors (including current multi-window DMA
+    payloads) are rejected fail-closed.
 - [ ] DMA Phase 3: integrate first storage-path driver flow on borrow-based DMA
   with deterministic fallback path and deny-path coverage markers.
 - [ ] Evaluate broader SLAB allocator rollout for kernel and user-space heaps.

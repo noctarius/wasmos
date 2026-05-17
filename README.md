@@ -70,6 +70,9 @@ It defines repository workflow and documentation/update conventions.
 - Native framebuffer driver borrow path now also attempts kernel-managed
   borrow-based DMA map/sync/unmap lifecycle with explicit active/fallback
   boot markers (`[framebuffer] dma path active` / `[framebuffer] dma fallback active`)
+- Framebuffer DMA hardening now includes a kernel selftest matrix marker
+  (`[test] framebuffer dma phase4 matrix ok`) for wrong-source deny, repeated
+  map/sync/unmap churn, and stale-unmap deny behavior
 - Ring-3 user-slot mapping now requires explicit `MEM_REGION_FLAG_USER` (legacy implicit bridge removed from page-map path)
 - Syscall boundary now rejects lossy 64-bit-to-32-bit exit-status arguments (`EXIT` / `THREAD_EXIT` require valid signed-32 representation)
 - Hostcall boundary now rejects negative endpoint IDs in `wasmos_serial_register` before `uint32_t` conversion

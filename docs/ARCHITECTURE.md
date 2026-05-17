@@ -215,6 +215,9 @@ results deterministically fall back to the existing PIO/copy path.
 Native framebuffer borrow mapping now also attempts the same borrow-attached
 DMA lifecycle in kernel native-driver plumbing, with one-shot boot markers for
 active/fallback path visibility.
+Framebuffer DMA validation now also includes a lightweight phase-4 matrix
+marker in kernel native-driver plumbing that checks wrong-source deny behavior,
+repeated map/sync/unmap churn stability, and stale-unmap deny semantics.
 When native `menuconfig`-style frontends are unavailable, build configuration
 can be edited through the in-repo `kconfiglib` interactive fallback script
 (`scripts/kconfiglib_menuconfig.py`), exposed via CMake targets.

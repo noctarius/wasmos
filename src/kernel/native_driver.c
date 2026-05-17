@@ -70,6 +70,7 @@ typedef struct {
 
 static uint8_t g_fb_dma_active_logged = 0;
 static uint8_t g_fb_dma_fallback_logged = 0;
+static uint8_t g_fb_dma_phase4_logged = 0;
 
 /* -------------------------------------------------------------------------
  * API implementations
@@ -159,6 +160,56 @@ nd_buffer_borrow(uint32_t kind, uint32_t source_context_id,
     }
 
     if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
+        if (!g_fb_dma_phase4_logged) {
+            uint8_t deny_ok = 0;
+            uint8_t churn_ok = 1;
+            uint8_t stale_unmap_ok = 0;
+            uint64_t test_addr = 0;
+            /* Phase-4 coverage: wrong-source mapping must be denied. */
+            if (process_manager_buffer_dma_map(kind,
+                                               proc->context_id,
+                                               source_context_id + 1u,
+                                               0u,
+                                               size,
+                                               WASMOS_DMA_DIR_BIDIR,
+                                               &test_addr) != 0) {
+                deny_ok = 1;
+            }
+            /* Phase-4 coverage: repeated map/sync/unmap cycles remain stable. */
+            for (uint32_t i = 0; i < 4u; ++i) {
+                if (process_manager_buffer_dma_map(kind,
+                                                   proc->context_id,
+                                                   source_context_id,
+                                                   0u,
+                                                   size,
+                                                   WASMOS_DMA_DIR_BIDIR,
+                                                   &test_addr) != 0 ||
+                    process_manager_buffer_dma_sync(kind,
+                                                    proc->context_id,
+                                                    0u,
+                                                    size,
+                                                    WASMOS_DMA_SYNC_BIDIR) != 0 ||
+                    process_manager_buffer_dma_unmap(kind,
+                                                     proc->context_id,
+                                                     source_context_id) != 0) {
+                    churn_ok = 0;
+                    break;
+                }
+            }
+            /* Phase-4 coverage: stale unmap must be denied when not mapped. */
+            if (process_manager_buffer_dma_unmap(kind,
+                                                 proc->context_id,
+                                                 source_context_id) != 0) {
+                stale_unmap_ok = 1;
+            }
+            if (deny_ok && churn_ok && stale_unmap_ok) {
+                klog_write("[test] framebuffer dma phase4 matrix ok\n");
+            } else {
+                klog_write("[test] framebuffer dma phase4 matrix mismatch\n");
+            }
+            g_fb_dma_phase4_logged = 1;
+        }
+
         uint64_t device_addr = 0;
         if (process_manager_buffer_dma_map(kind,
                                            proc->context_id,

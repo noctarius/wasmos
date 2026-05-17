@@ -306,8 +306,32 @@ syscall_trace_ring3_stress(syscall_frame_t *frame)
 uint64_t
 x86_syscall_handler(syscall_frame_t *frame)
 {
+    thread_t *current_thread = 0;
     if (!frame) {
         return (uint64_t)-1;
+    }
+    current_thread = thread_get(thread_current_tid());
+    /* Keep thread-resume context aligned with the latest syscall trap frame so
+     * any blocking/yielding syscall resumes at the correct post-syscall RIP. */
+    if (current_thread && (frame->cs & 0x3u) == 0x3u) {
+        current_thread->ctx.rax = frame->rax;
+        current_thread->ctx.rbx = frame->rbx;
+        current_thread->ctx.rcx = frame->rcx;
+        current_thread->ctx.rdx = frame->rdx;
+        current_thread->ctx.rbp = frame->rbp;
+        current_thread->ctx.rsi = frame->rsi;
+        current_thread->ctx.rdi = frame->rdi;
+        current_thread->ctx.r8 = frame->r8;
+        current_thread->ctx.r9 = frame->r9;
+        current_thread->ctx.r10 = frame->r10;
+        current_thread->ctx.r11 = frame->r11;
+        current_thread->ctx.r12 = frame->r12;
+        current_thread->ctx.r13 = frame->r13;
+        current_thread->ctx.r14 = frame->r14;
+        current_thread->ctx.r15 = frame->r15;
+        current_thread->ctx.cs = frame->cs;
+        current_thread->ctx.rip = frame->rip;
+        current_thread->ctx.rflags = frame->rflags;
     }
     syscall_trace_ring3_stress(frame);
     syscall_trace_ring3_once(frame);
@@ -388,11 +412,9 @@ x86_syscall_handler(syscall_frame_t *frame)
     }
     case WASMOS_SYSCALL_THREAD_CREATE: {
         process_t *proc = process_get(process_current_pid());
-        thread_t *thread = 0;
         uint32_t tid = 0;
         uint64_t entry_rip = frame->rdi;
         uint64_t user_stack_top = frame->rsi;
-        uint64_t user_root = 0;
         if (!proc) {
             return (uint64_t)-1;
         }
@@ -401,44 +423,11 @@ x86_syscall_handler(syscall_frame_t *frame)
             g_ring3_thread_create_logged = 1;
             klog_write("[test] ring3 thread create syscall ok\n");
         }
-        if (user_stack_top == 0 || entry_rip == 0) {
-            return (uint64_t)-1;
-        }
-        if ((user_stack_top & 0xFULL) != 0) {
-            user_stack_top &= ~0xFULL;
-        }
-        if (thread_spawn_in_owner(proc->pid,
-                                  "user-thread",
-                                  THREAD_STATE_BLOCKED,
-                                  THREAD_BLOCK_NONE,
-                                  &tid) != 0) {
-            return (uint64_t)-1;
-        }
-        thread = thread_get(tid);
-        if (!thread) {
-            thread_reap(tid);
-            return (uint64_t)-1;
-        }
-        user_root = mm_context_root_table(proc->context_id);
-        if (user_root == 0) {
-            thread_reap(tid);
-            return (uint64_t)-1;
-        }
-        thread->ctx.rip = entry_rip;
-        thread->ctx.user_rsp = user_stack_top;
-        thread->ctx.cs = USER_CS_SELECTOR;
-        thread->ctx.ss = USER_DS_SELECTOR;
-        thread->ctx.rflags = 0x200;
-        thread->ctx.root_table = user_root;
-        thread->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
-        thread->ticks_remaining = thread->time_slice_ticks;
-        thread->ticks_total = 0;
-        proc->thread_count++;
-        proc->live_thread_count++;
-        if (process_wake_thread(tid) == 0) {
-            proc->thread_count--;
-            proc->live_thread_count--;
-            thread_reap(tid);
+        if (process_thread_spawn_user_internal(proc->pid,
+                                               "user-thread",
+                                               entry_rip,
+                                               user_stack_top,
+                                               &tid) != 0) {
             return (uint64_t)-1;
         }
         return tid;

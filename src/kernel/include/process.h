@@ -152,6 +152,11 @@ int process_thread_spawn_worker_internal(uint32_t owner_pid,
                                          process_thread_worker_entry_t entry,
                                          void *arg,
                                          uint32_t *out_tid);
+int process_thread_spawn_user_internal(uint32_t owner_pid,
+                                       const char *name,
+                                       uint64_t entry_rip,
+                                       uint64_t user_stack_top,
+                                       uint32_t *out_tid);
 process_t *process_get(uint32_t pid);
 process_t *process_find_by_context(uint32_t context_id);
 uint32_t process_current_pid(void);

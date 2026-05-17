@@ -455,6 +455,12 @@ Current status:
   marker (`[test] ring3 thread create syscall ok`); new threads now start with
   thread-owned user register context (RIP/RSP/CS/SS/root-table) and are queued
   runnable through the existing scheduler path
+- user-thread syscall spawn path now allocates a dedicated per-thread kernel
+  stack and initializes scheduler `ctx.rsp` before wakeup, preventing
+  context-switch faults when the first user-created thread is dispatched
+- syscall trap handling now snapshots the active user frame into the current
+  thread context before any blocking/yielding syscall reschedule path, so
+  resumed threads continue at the correct post-syscall RIP
 - syscall ABI now also includes initial `thread_join` handling and strict
   native ring3 coverage markers (`[test] ring3 thread join syscall ok`,
   `[test] ring3 thread join self deny ok`); dedicated strict ring3 threading

@@ -16,6 +16,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - Threading remains scope-complete through Phase D, but not production-complete:
   see the explicit closure checklist in
   `docs/architecture/15-threading-and-lifecycle.md` section 17.
+- Recent threading runtime hardening (user-thread kernel-stack setup for
+  `THREAD_CREATE` and syscall frame/context synchronization for yield/block
+  paths) is documented in `docs/architecture/15-threading-and-lifecycle.md`.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

@@ -28,7 +28,7 @@ It defines repository workflow and documentation/update conventions.
 - Deterministic UEFI boot handoff (`BOOTX64.EFI` -> `kernel.elf` + `initfs.img`)
 - Microkernel baseline: paging, scheduling, IPC, process lifecycle, exceptions
 - WASM-first runtime model with optional native driver payloads
-- Storage-first startup chain (`device-manager` -> `pci-bus` -> `ata` -> `fs-fat` -> `sysinit`) with PCI-inventory-driven matching
+- FS-first startup chain (`init` -> `fs-manager` -> `fs-init` -> `device-manager` -> `pci-bus` -> `ata` -> `fs-fat` -> `sysinit`) with PCI-inventory-driven matching
 - Spawn-time driver capability profiles for PCI paths (PIO range + IRQ mask)
 - PM service registry for user-space endpoint discovery (`register`/`lookup`)
 - Usable VT/CLI stack with multi-TTY switching
@@ -60,6 +60,10 @@ It defines repository workflow and documentation/update conventions.
   callers (`dma_map_borrow`, `dma_sync_borrow`, `dma_unmap_borrow`) with
   owner-context validation, borrow-grant checks, capability direction/range
   checks, and fail-closed unmap/release behavior
+- Phase 2 spawn-caps-v2 transport is now wired end-to-end between
+  `device-manager` and process-manager (`PROC_IPC_SPAWN_CAPS_V2`) with
+  descriptor copy/validation and fail-closed rejection for invalid/multi-window
+  DMA descriptors
 - Ring-3 user-slot mapping now requires explicit `MEM_REGION_FLAG_USER` (legacy implicit bridge removed from page-map path)
 - Syscall boundary now rejects lossy 64-bit-to-32-bit exit-status arguments (`EXIT` / `THREAD_EXIT` require valid signed-32 representation)
 - Hostcall boundary now rejects negative endpoint IDs in `wasmos_serial_register` before `uint32_t` conversion
@@ -179,7 +183,7 @@ Target summary:
 Boot sequence (high level):
 1. `BOOTX64.EFI` loads `kernel.elf` and `initfs.img`
 2. Kernel boots, initializes core subsystems, starts `init`
-3. `init` starts `device-manager`
+3. `init` starts `fs-manager`, then `fs-init`, then `device-manager`
 4. `device-manager` starts `pci-bus` (via PM endpoint lookup), consumes inventory, applies early PCI matching rules, then starts storage drivers/services (`ata`, `fs-fat`) with spawn-time capability profiles
 
 Current driver match/capability policy source:
@@ -191,6 +195,7 @@ Current driver match/capability policy source:
 Current FS namespace model:
 - `fs-manager` is the canonical `fs` endpoint for PM/runtime file I/O and CLI mount namespace routing (registered as `fs.vfs`)
 - `fs-fat` and `fs-init` are backend filesystem drivers registered into `fs-manager`
+- bootstrapping now brings up `fs-manager` + `fs-init` before `device-manager`, so later startup lookups can resolve via the VFS namespace rather than only early boot-module ordering
 - kernel now exposes generic cross-context buffer borrows (`buffer_borrow`/`buffer_release`) with typed buffer classes and read/write grants; `fs-manager` uses the FS class for zero-copy backend proxying
 - native framebuffer driver mapping now uses the same generic borrow path (`PM_BUFFER_KIND_FRAMEBUFFER`) instead of a dedicated framebuffer mapper callback
 - native driver ABI now has explicit magic/version fields and fails fast on mismatch to avoid mixed-kernel/driver function-table corruption

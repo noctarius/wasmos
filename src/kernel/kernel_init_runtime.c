@@ -29,6 +29,8 @@ kernel_init_state_reset(init_state_t *state, const boot_info_t *boot_info)
     state->native_min_index = 0xFFFFFFFFu;
     state->native_smoke_index = 0xFFFFFFFFu;
     state->smoke_index = 0xFFFFFFFFu;
+    state->fs_manager_index = 0xFFFFFFFFu;
+    state->fs_init_index = 0xFFFFFFFFu;
     state->device_manager_index = 0xFFFFFFFFu;
     state->wasm3_probe_done = 0;
 }
@@ -202,6 +204,8 @@ kernel_init_entry(process_t *process, void *arg)
         state->native_min_index = boot_module_index_by_app_name(state->boot_info, "native-call-min");
         state->native_smoke_index = boot_module_index_by_app_name(state->boot_info, "native-call-smoke");
         state->smoke_index = boot_module_index_by_app_name(state->boot_info, "init-smoke");
+        state->fs_manager_index = boot_module_index_by_app_name(state->boot_info, "fs-manager");
+        state->fs_init_index = boot_module_index_by_app_name(state->boot_info, "fs-init");
         state->device_manager_index = boot_module_index_by_app_name(state->boot_info, "device-manager");
         state->wasm3_probe_done = 0;
         state->reply_endpoint = IPC_ENDPOINT_NONE;
@@ -228,6 +232,16 @@ kernel_init_entry(process_t *process, void *arg)
         state->pm_kill_owner_test_injected = 0;
         state->pm_status_owner_test_injected = 0;
         state->pm_spawn_owner_test_injected = 0;
+        if (state->fs_manager_index == 0xFFFFFFFFu) {
+            klog_write("[init] fs-manager module not found\n");
+            process_set_exit_status(process, -1);
+            return PROCESS_RUN_EXITED;
+        }
+        if (state->fs_init_index == 0xFFFFFFFFu) {
+            klog_write("[init] fs-init module not found\n");
+            process_set_exit_status(process, -1);
+            return PROCESS_RUN_EXITED;
+        }
         if (state->device_manager_index == 0xFFFFFFFFu) {
             klog_write("[init] device-manager module not found\n");
             process_set_exit_status(process, -1);
@@ -303,14 +317,28 @@ kernel_init_entry(process_t *process, void *arg)
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
+        } else if (state->fs_manager_index != 0xFFFFFFFFu) {
+            trace_write("[init] spawn fs-manager\n");
+            if (init_send_spawn_index(process, state, state->fs_manager_index, 4) != 0) {
+                klog_write("[init] fs-manager spawn request failed\n");
+                process_set_exit_status(process, -1);
+                return PROCESS_RUN_EXITED;
+            }
+        } else if (state->fs_init_index != 0xFFFFFFFFu) {
+            trace_write("[init] spawn fs-init\n");
+            if (init_send_spawn_index(process, state, state->fs_init_index, 5) != 0) {
+                klog_write("[init] fs-init spawn request failed\n");
+                process_set_exit_status(process, -1);
+                return PROCESS_RUN_EXITED;
+            }
         } else {
             trace_write("[init] spawn device-manager\n");
-            if (init_send_spawn_index(process, state, state->device_manager_index, 4) != 0) {
+            if (init_send_spawn_index(process, state, state->device_manager_index, 6) != 0) {
                 klog_write("[init] device-manager spawn request failed\n");
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
-            state->pending_kind = 4;
+            state->pending_kind = 6;
         }
         return PROCESS_RUN_YIELDED;
     }
@@ -331,6 +359,10 @@ kernel_init_entry(process_t *process, void *arg)
                 klog_write("[init] native-call-smoke spawn failed\n");
             } else if (state->pending_kind == 3) {
                 klog_write("[init] init-smoke spawn failed\n");
+            } else if (state->pending_kind == 4) {
+                klog_write("[init] fs-manager spawn failed\n");
+            } else if (state->pending_kind == 5) {
+                klog_write("[init] fs-init spawn failed\n");
             } else {
                 klog_write("[init] device-manager spawn failed\n");
             }
@@ -346,6 +378,12 @@ kernel_init_entry(process_t *process, void *arg)
         } else if (state->pending_kind == 3) {
             trace_write("[init] init-smoke spawn ok\n");
             state->smoke_index = 0xFFFFFFFFu;
+        } else if (state->pending_kind == 4) {
+            trace_write("[init] fs-manager spawn ok\n");
+            state->fs_manager_index = 0xFFFFFFFFu;
+        } else if (state->pending_kind == 5) {
+            trace_write("[init] fs-init spawn ok\n");
+            state->fs_init_index = 0xFFFFFFFFu;
         } else {
             trace_write("[init] device-manager spawn ok\n");
             state->device_manager_index = 0xFFFFFFFFu;

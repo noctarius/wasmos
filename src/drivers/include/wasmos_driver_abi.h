@@ -30,7 +30,9 @@ enum {
     PROC_IPC_SPAWN_CAPS = 0x205,
     PROC_IPC_MODULE_META = 0x206,
     PROC_IPC_MODULE_META_PATH = 0x207,
-    /* Spawn with extended capability descriptor payload (Phase 0 DMA contract). */
+    /* Spawn with extended capability descriptor payload:
+     * arg0=module_index arg1=user_ptr(wasmos_spawn_caps_v2_t)
+     * arg2=sizeof(wasmos_spawn_caps_v2_t) arg3=reserved(0). */
     PROC_IPC_SPAWN_CAPS_V2 = 0x208,
     PROC_IPC_RESP = 0x280,
     PROC_IPC_ERROR = 0x2FF

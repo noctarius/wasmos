@@ -176,6 +176,10 @@ calling corrupted function-table pointers.
 Process-manager name-based spawns now expose transient busy rejection in
 `PROC_IPC_ERROR.arg1` (`-2`), and early boot callers (`sysinit`,
 `device-manager`) treat it as retryable to avoid cross-service spawn races.
+Init-process bootstrap now brings up filesystem control-plane services in order
+(`fs-manager`, then `fs-init`) before `device-manager`, so later module/path
+resolution can route through the VFS namespace instead of relying only on early
+boot-module index ordering.
 Device discovery now includes PCI-inventory-driven matching in `device-manager`
 with enriched `pci-bus` inventory records (class/subclass/prog-if plus minimal
 MMIO/IRQ hints). PM now accepts a capability-profile spawn request variant for
@@ -199,6 +203,11 @@ WASM hostcalls (`dma_map_borrow`, `dma_sync_borrow`, `dma_unmap_borrow`) and
 enforces borrower/source ownership checks, borrow grant compatibility with DMA
 direction, spawn-profile DMA direction/max-bytes checks, DMA window-range
 validation, and fail-closed release/unmap state semantics.
+DMA Phase 2 transport is now wired: `device-manager` sends
+`PROC_IPC_SPAWN_CAPS_V2` descriptors and process-manager copies+validates the
+payload from caller memory before spawn-profile apply; invalid schemas (unknown
+cap bits, malformed ranges, unsupported multi-window DMA descriptors) are
+rejected fail-closed.
 When native `menuconfig`-style frontends are unavailable, build configuration
 can be edited through the in-repo `kconfiglib` interactive fallback script
 (`scripts/kconfiglib_menuconfig.py`), exposed via CMake targets.

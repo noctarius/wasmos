@@ -183,10 +183,15 @@ proc_running(const char *name)
 static int
 module_index_by_name(const char *name)
 {
-    if (!name || g_dm.module_count <= 0) {
+    int32_t scan_limit = g_dm.module_count;
+    if (!name) {
         return -1;
     }
-    for (int32_t i = 0; i < g_dm.module_count; ++i) {
+    if (scan_limit <= 0) {
+        /* Fallback when module.count startup binding is unavailable/malformed. */
+        scan_limit = 64;
+    }
+    for (int32_t i = 0; i < scan_limit; ++i) {
         char buf[32];
         buf[0] = '\0';
         if (wasmos_boot_module_name(i, (int32_t)(uintptr_t)buf, (int32_t)sizeof(buf)) < 0) {
@@ -201,6 +206,7 @@ module_index_by_name(const char *name)
     }
     return -1;
 }
+
 
 static void
 hw_scan_acpi(void)
@@ -255,26 +261,41 @@ hw_spawn_driver_index(int32_t index)
 static int
 hw_spawn_driver_index_caps(int32_t index, const spawn_caps_t *caps)
 {
-    uint32_t flags = 0;
+    wasmos_spawn_caps_v2_t caps_v2;
     uint32_t io_packed = 0;
-    uint32_t irq_mask = 0;
     if (!caps) {
         return hw_spawn_driver_index(index);
     }
-    flags = caps->cap_flags;
-    io_packed = ((uint32_t)caps->io_port_min) | ((uint32_t)caps->io_port_max << 16);
-    irq_mask = caps->irq_mask;
     if (index < 0) {
         return -1;
     }
+    if ((caps->cap_flags & DEVMGR_CAP_DMA) == 0) {
+        io_packed = ((uint32_t)caps->io_port_min) | ((uint32_t)caps->io_port_max << 16);
+        if (wasmos_ipc_send(g_dm.proc_endpoint,
+                            g_dm.reply_endpoint,
+                            PROC_IPC_SPAWN_CAPS,
+                            g_dm.request_id,
+                            index,
+                            (int32_t)caps->cap_flags,
+                            (int32_t)io_packed,
+                            (int32_t)caps->irq_mask) != 0) {
+            return -1;
+        }
+        return 0;
+    }
+    memset(&caps_v2, 0, sizeof(caps_v2));
+    caps_v2.cap_flags = caps->cap_flags;
+    caps_v2.io_port_min = caps->io_port_min;
+    caps_v2.io_port_max = caps->io_port_max;
+    caps_v2.irq_mask = caps->irq_mask;
     if (wasmos_ipc_send(g_dm.proc_endpoint,
                         g_dm.reply_endpoint,
-                        PROC_IPC_SPAWN_CAPS,
+                        PROC_IPC_SPAWN_CAPS_V2,
                         g_dm.request_id,
                         index,
-                        (int32_t)flags,
-                        (int32_t)io_packed,
-                        (int32_t)irq_mask) != 0) {
+                        (int32_t)(uintptr_t)&caps_v2,
+                        (int32_t)sizeof(caps_v2),
+                        0) != 0) {
         return -1;
     }
     return 0;
@@ -606,14 +627,8 @@ next_spawn_target(void)
     if (g_dm.need_storage) {
         return HW_SPAWN_ATA;
     }
-    if (g_dm.need_fs_manager) {
-        return HW_SPAWN_FS_MANAGER;
-    }
     if (g_dm.need_fat) {
         return HW_SPAWN_FAT;
-    }
-    if (g_dm.need_fs_init) {
-        return HW_SPAWN_FS_INIT;
     }
     if (g_dm.need_serial) {
         return HW_SPAWN_SERIAL;
@@ -631,7 +646,7 @@ static int
 has_pending_spawn_needs(void)
 {
     return g_dm.need_pci_bus || g_dm.need_storage || g_dm.need_fat ||
-           g_dm.need_fs_init || g_dm.need_fs_manager || g_dm.need_serial ||
+           g_dm.need_serial ||
            g_dm.need_keyboard || g_dm.need_framebuffer;
 }
 
@@ -712,8 +727,14 @@ initialize(int32_t proc_endpoint,
         stall_forever();
     }
     hw_scan_acpi();
-    g_dm.pci_bus_index = module_index_by_name("pci-bus");
-    g_dm.fat_index = module_index_by_name("fs-fat");
+    (void)query_module_meta_by_path("system/services/pci_bus.wap", PROC_MODULE_SOURCE_INITFS, &g_dm.pci_bus_index);
+    if (g_dm.pci_bus_index < 0) {
+        g_dm.pci_bus_index = module_index_by_name("pci-bus");
+    }
+    (void)query_module_meta_by_path("system/drivers/fs_fat.wap", PROC_MODULE_SOURCE_INITFS, &g_dm.fat_index);
+    if (g_dm.fat_index < 0) {
+        g_dm.fat_index = module_index_by_name("fs-fat");
+    }
     (void)query_module_meta_by_path("system/drivers/fs_init.wap", PROC_MODULE_SOURCE_INITFS, &g_dm.fs_init_index);
     if (g_dm.fs_init_index < 0) {
         g_dm.fs_init_index = module_index_by_name("fs-init");
@@ -727,11 +748,13 @@ initialize(int32_t proc_endpoint,
     (void)query_module_meta_by_path("/boot/system/drivers/keyboard.wap", PROC_MODULE_SOURCE_FS, &g_dm.keyboard_index);
     (void)query_module_meta_by_path("/boot/system/drivers/framebuffer.wap", PROC_MODULE_SOURCE_FS, &g_dm.framebuffer_index);
 
-    g_dm.need_pci_bus = (g_dm.pci_bus_index >= 0 && !proc_running("pci-bus")) ? 1 : 0;
+    /* Bootstrap policy: always bring up pci-bus when present in initfs.
+     * Runtime dedup/restart policy is handled by later lifecycle phases. */
+    g_dm.need_pci_bus = (g_dm.pci_bus_index >= 0) ? 1 : 0;
     g_dm.need_storage = 0;
     g_dm.need_fat = 0;
     g_dm.need_fs_init = 0;
-    g_dm.need_fs_manager = (g_dm.fs_manager_index >= 0 && !proc_running("fs-manager")) ? 1 : 0;
+    g_dm.need_fs_manager = 0;
     /* Serial is resolved from PCI inventory matches when pci-bus is started
      * by this service; if pci-bus is already running, keep legacy fallback. */
     g_dm.need_serial = g_dm.need_pci_bus ? 0 : (!proc_running("serial") ? 1 : 0);
@@ -791,18 +814,6 @@ initialize(int32_t proc_endpoint,
                 if (hw_spawn_driver_index(g_dm.fat_index) != 0) {
                     g_dm.phase = HW_PHASE_FAILED;
                     console_write("[device-manager] spawn fs-fat failed\n");
-                    stall_forever();
-                }
-            } else if (target == HW_SPAWN_FS_INIT) {
-                if (hw_spawn_driver_index(g_dm.fs_init_index) != 0) {
-                    g_dm.phase = HW_PHASE_FAILED;
-                    console_write("[device-manager] spawn fs-init failed\n");
-                    stall_forever();
-                }
-            } else if (target == HW_SPAWN_FS_MANAGER) {
-                if (hw_spawn_driver_index(g_dm.fs_manager_index) != 0) {
-                    g_dm.phase = HW_PHASE_FAILED;
-                    console_write("[device-manager] spawn fs-manager failed\n");
                     stall_forever();
                 }
             }
@@ -910,8 +921,8 @@ initialize(int32_t proc_endpoint,
             consume_pci_inventory();
             g_dm.need_storage = (g_dm.selected_storage_index >= 0) ? 1 : 0;
             g_dm.need_fat = (g_dm.fat_index >= 0 && g_dm.need_storage && !proc_running("fs-fat")) ? 1 : 0;
-            g_dm.need_fs_init = (g_dm.fs_init_index >= 0 && !proc_running("fs-init")) ? 1 : 0;
-            g_dm.need_fs_manager = (g_dm.fs_manager_index >= 0 && !proc_running("fs-manager")) ? 1 : 0;
+            g_dm.need_fs_init = 0;
+            g_dm.need_fs_manager = 0;
             if (g_dm.serial_index >= 0 &&
                 !proc_running("serial") &&
                 select_pci_matched_driver(g_dm.serial_index, &g_dm.selected_serial_caps) == 0) {
@@ -923,8 +934,8 @@ initialize(int32_t proc_endpoint,
                 console_write("[device-manager] fallback: boot storage driver despite no PCI match\n");
                 g_dm.need_storage = 1;
                 g_dm.need_fat = (g_dm.fat_index >= 0 && !proc_running("fs-fat")) ? 1 : 0;
-                g_dm.need_fs_init = (g_dm.fs_init_index >= 0 && !proc_running("fs-init")) ? 1 : 0;
-                g_dm.need_fs_manager = (g_dm.fs_manager_index >= 0 && !proc_running("fs-manager")) ? 1 : 0;
+                g_dm.need_fs_init = 0;
+                g_dm.need_fs_manager = 0;
             }
             g_dm.phase = HW_PHASE_SPAWN;
             continue;

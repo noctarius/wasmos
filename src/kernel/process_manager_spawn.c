@@ -611,11 +611,99 @@ pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t *msg)
 int
 pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t *msg)
 {
-    (void)pm_context_id;
-    (void)msg;
-    /* FIXME: Phase 0 defines the v2 DMA-capable contract IDs and schema.
-     * Transport/parsing and policy enforcement are implemented in Phase 1+. */
-    return -1;
+    pm_spawn_caps_t caps = {0};
+    wasmos_spawn_caps_v2_t in_caps;
+    uint32_t owner_context = 0;
+    process_t *caller = 0;
+    uint32_t parent_pid = 0;
+    uint32_t pid = 0;
+    uint32_t known_cap_mask = DEVMGR_CAP_IO_PORT |
+                              DEVMGR_CAP_MMIO_MAP |
+                              DEVMGR_CAP_IRQ |
+                              DEVMGR_CAP_DMA;
+    uint64_t win_end = 0;
+
+    if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
+        return -1;
+    }
+    caller = process_find_by_context(owner_context);
+    if (!caller) {
+        return -1;
+    }
+    parent_pid = caller->pid;
+    if (msg->arg1 == 0 || (uint32_t)msg->arg2 != (uint32_t)sizeof(in_caps)) {
+        return -1;
+    }
+    if (mm_copy_from_user(owner_context,
+                          &in_caps,
+                          (uint64_t)(uint32_t)msg->arg1,
+                          sizeof(in_caps)) != 0) {
+        return -1;
+    }
+
+    if ((in_caps.cap_flags & ~known_cap_mask) != 0) {
+        return -1;
+    }
+    if ((in_caps.cap_flags & DEVMGR_CAP_IO_PORT) != 0 &&
+        in_caps.io_port_min > in_caps.io_port_max) {
+        return -1;
+    }
+
+    caps.valid = 1;
+    caps.cap_flags = in_caps.cap_flags;
+    caps.io_port_min = in_caps.io_port_min;
+    caps.io_port_max = in_caps.io_port_max;
+    caps.irq_mask = in_caps.irq_mask;
+    caps.dma_direction_flags = 0;
+    caps.dma_max_bytes = 0;
+    caps.dma_window_base = 0;
+    caps.dma_window_length = 0;
+
+    if ((caps.cap_flags & DEVMGR_CAP_IO_PORT) == 0) {
+        caps.io_port_min = 0;
+        caps.io_port_max = 0;
+    }
+    if ((caps.cap_flags & DEVMGR_CAP_DMA) != 0) {
+        if ((in_caps.dma.direction_flags & ~WASMOS_DMA_DIR_BIDIR) != 0 ||
+            in_caps.dma.direction_flags == 0 ||
+            in_caps.dma.max_bytes == 0 ||
+            in_caps.dma.window_count == 0 ||
+            in_caps.dma.window_count > 4) {
+            return -1;
+        }
+        if (in_caps.dma.window_count != 1) {
+            /* TODO: Extend kernel spawn-profile storage to preserve multi-window DMA policy. */
+            return -1;
+        }
+        if (in_caps.dma.windows[0].length == 0) {
+            return -1;
+        }
+        win_end = in_caps.dma.windows[0].base + in_caps.dma.windows[0].length;
+        if (win_end < in_caps.dma.windows[0].base) {
+            return -1;
+        }
+        caps.dma_direction_flags = in_caps.dma.direction_flags;
+        caps.dma_max_bytes = in_caps.dma.max_bytes;
+        caps.dma_window_base = in_caps.dma.windows[0].base;
+        caps.dma_window_length = in_caps.dma.windows[0].length;
+    }
+
+    if (pm_spawn_module(parent_pid, msg->arg0, &pid) != 0) {
+        return -1;
+    }
+    if (pm_apply_spawn_caps(pid, &caps) != 0) {
+        return -1;
+    }
+    ipc_message_t resp;
+    resp.type = PROC_IPC_RESP;
+    resp.source = g_pm.proc_endpoint;
+    resp.destination = msg->source;
+    resp.request_id = msg->request_id;
+    resp.arg0 = pid;
+    resp.arg1 = 0;
+    resp.arg2 = 0;
+    resp.arg3 = 0;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
 }
 
 int

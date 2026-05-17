@@ -291,10 +291,12 @@ kernel_init_entry(process_t *process, void *arg)
             process_manager_inject_spawn_owner_deny_test();
             state->pm_spawn_owner_test_injected = 1;
         }
-        if (ipc_endpoint_create(process->context_id, &state->reply_endpoint) != IPC_OK) {
-            klog_write("[init] reply endpoint create failed\n");
-            process_set_exit_status(process, -1);
-            return PROCESS_RUN_EXITED;
+        if (state->reply_endpoint == IPC_ENDPOINT_NONE) {
+            if (ipc_endpoint_create(process->context_id, &state->reply_endpoint) != IPC_OK) {
+                klog_write("[init] reply endpoint create failed\n");
+                process_set_exit_status(process, -1);
+                return PROCESS_RUN_EXITED;
+            }
         }
         if (state->native_min_index != 0xFFFFFFFFu) {
             trace_write("[init] spawn native-call-min\n");
@@ -352,7 +354,22 @@ kernel_init_entry(process_t *process, void *arg)
         if (recv_rc != IPC_OK) {
             return PROCESS_RUN_YIELDED;
         }
-        if (msg.request_id != state->request_id || msg.type == PROC_IPC_ERROR) {
+        if (msg.request_id != state->request_id) {
+            process_set_exit_status(process, -1);
+            return PROCESS_RUN_EXITED;
+        }
+        if (msg.type == PROC_IPC_ERROR) {
+            uint32_t op = msg.arg0;
+            uint32_t err = msg.arg1;
+            if (op == PROC_IPC_SPAWN &&
+                (err == (uint32_t)-1 || err == (uint32_t)-2)) {
+                /* PM spawn can transiently fail while slots/services churn
+                 * during strict ring3 threading smoke; retry same phase. */
+                state->request_id++;
+                state->pending_kind = 0;
+                state->phase = 0;
+                return PROCESS_RUN_YIELDED;
+            }
             if (state->pending_kind == 1) {
                 klog_write("[init] native-call-min spawn failed\n");
             } else if (state->pending_kind == 2) {

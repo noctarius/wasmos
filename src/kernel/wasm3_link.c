@@ -2468,7 +2468,10 @@ m3ApiRawFunction(wasmos_proc_info_stats)
         uint32_t current_tid;
         uint32_t context_id;
         uint64_t cpu_ticks;
-        uint64_t mem_bytes;
+        uint64_t vm_total_bytes;
+        uint64_t thread_kstack_total_bytes;
+        uint64_t wasm_heap_committed_bytes;
+        uint64_t rss_est_bytes;
     } wasm_proc_stats_t;
 
     m3ApiReturnType(int32_t)
@@ -2539,7 +2542,10 @@ m3ApiRawFunction(wasmos_proc_info_stats)
         .current_tid = stats.current_tid,
         .context_id = stats.context_id,
         .cpu_ticks = stats.cpu_ticks,
-        .mem_bytes = stats.mem_bytes
+        .vm_total_bytes = stats.vm_total_bytes,
+        .thread_kstack_total_bytes = stats.thread_kstack_total_bytes,
+        .wasm_heap_committed_bytes = stats.wasm_heap_committed_bytes,
+        .rss_est_bytes = stats.rss_est_bytes
     };
     if (mm_copy_to_user(proc->context_id,
                         parent_user,

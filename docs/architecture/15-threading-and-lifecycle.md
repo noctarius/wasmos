@@ -630,3 +630,9 @@ Closure outcomes:
 7. Policy closure
 - section 15 records final ABI/policy decisions for wake policy, namespace
   model, diagnostics, and detach behavior.
+
+Diagnostics note:
+- `ps` process stats now expose separate memory facets:
+  virtual-memory total, aggregate kernel-thread stack bytes, committed wasm3
+  heap bytes, and an RSS estimate placeholder (currently equal to virtual total
+  until per-context resident-page tracking lands).

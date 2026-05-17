@@ -140,7 +140,10 @@ typedef struct {
     uint32_t current_tid;
     uint32_t context_id;
     uint64_t cpu_ticks;
-    uint64_t mem_bytes;
+    uint64_t vm_total_bytes;
+    uint64_t thread_kstack_total_bytes;
+    uint64_t wasm_heap_committed_bytes;
+    uint64_t rss_est_bytes;
 } process_stats_t;
 
 void process_init(void);

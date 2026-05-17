@@ -11,6 +11,10 @@ typedef struct {
     uint16_t io_port_min;
     uint16_t io_port_max;
     uint16_t irq_mask;
+    uint32_t dma_direction_flags;
+    uint32_t dma_max_bytes;
+    uint64_t dma_window_base;
+    uint64_t dma_window_length;
     uint32_t mask;
 } capability_context_state_t;
 
@@ -45,6 +49,10 @@ capability_init(void)
         g_cap_ctx[i].io_port_min = 0;
         g_cap_ctx[i].io_port_max = 0;
         g_cap_ctx[i].irq_mask = 0;
+        g_cap_ctx[i].dma_direction_flags = 0;
+        g_cap_ctx[i].dma_max_bytes = 0;
+        g_cap_ctx[i].dma_window_base = 0;
+        g_cap_ctx[i].dma_window_length = 0;
         g_cap_ctx[i].mask = 0;
     }
     /* Kernel context has all capabilities by construction. */
@@ -107,7 +115,11 @@ capability_set_spawn_profile(uint32_t context_id,
                              uint32_t cap_flags,
                              uint16_t io_port_min,
                              uint16_t io_port_max,
-                             uint16_t irq_mask)
+                             uint16_t irq_mask,
+                             uint32_t dma_direction_flags,
+                             uint32_t dma_max_bytes,
+                             uint64_t dma_window_base,
+                             uint64_t dma_window_length)
 {
     if (context_id > MM_MAX_CONTEXTS) {
         return -1;
@@ -118,6 +130,17 @@ capability_set_spawn_profile(uint32_t context_id,
     ctx->io_port_min = io_port_min;
     ctx->io_port_max = io_port_max;
     ctx->irq_mask = (cap_flags & (1u << 2)) ? irq_mask : 0;
+    if ((cap_flags & (1u << 3)) != 0) {
+        ctx->dma_direction_flags = dma_direction_flags;
+        ctx->dma_max_bytes = dma_max_bytes;
+        ctx->dma_window_base = dma_window_base;
+        ctx->dma_window_length = dma_window_length;
+    } else {
+        ctx->dma_direction_flags = 0;
+        ctx->dma_max_bytes = 0;
+        ctx->dma_window_base = 0;
+        ctx->dma_window_length = 0;
+    }
     return 0;
 }
 
@@ -167,4 +190,54 @@ capability_mmio_allowed(uint32_t context_id)
         return 0;
     }
     return (ctx->mask & (1u << 2)) != 0;
+}
+
+int
+capability_dma_direction_allowed(uint32_t context_id, uint32_t direction_flags)
+{
+    if (context_id > MM_MAX_CONTEXTS || direction_flags == 0) {
+        return 0;
+    }
+    const capability_context_state_t *ctx = &g_cap_ctx[context_id];
+    if (!ctx->spawn_profile_configured || (ctx->mask & (1u << 3)) == 0) {
+        return 0;
+    }
+    return (ctx->dma_direction_flags & direction_flags) == direction_flags;
+}
+
+int
+capability_dma_range_allowed(uint32_t context_id, uint64_t base, uint64_t length)
+{
+    if (context_id > MM_MAX_CONTEXTS || length == 0) {
+        return 0;
+    }
+    const capability_context_state_t *ctx = &g_cap_ctx[context_id];
+    if (!ctx->spawn_profile_configured || (ctx->mask & (1u << 3)) == 0) {
+        return 0;
+    }
+    if (ctx->dma_window_length == 0) {
+        return 0;
+    }
+    if (base < ctx->dma_window_base) {
+        return 0;
+    }
+    uint64_t end = base + length;
+    uint64_t win_end = ctx->dma_window_base + ctx->dma_window_length;
+    if (end < base || win_end < ctx->dma_window_base) {
+        return 0;
+    }
+    return end <= win_end;
+}
+
+uint32_t
+capability_dma_max_bytes(uint32_t context_id)
+{
+    if (context_id > MM_MAX_CONTEXTS) {
+        return 0;
+    }
+    const capability_context_state_t *ctx = &g_cap_ctx[context_id];
+    if (!ctx->spawn_profile_configured || (ctx->mask & (1u << 3)) == 0) {
+        return 0;
+    }
+    return ctx->dma_max_bytes;
 }

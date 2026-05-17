@@ -30,6 +30,8 @@ enum {
     PROC_IPC_SPAWN_CAPS = 0x205,
     PROC_IPC_MODULE_META = 0x206,
     PROC_IPC_MODULE_META_PATH = 0x207,
+    /* Spawn with extended capability descriptor payload (Phase 0 DMA contract). */
+    PROC_IPC_SPAWN_CAPS_V2 = 0x208,
     PROC_IPC_RESP = 0x280,
     PROC_IPC_ERROR = 0x2FF
 };
@@ -139,7 +141,52 @@ enum {
 enum {
     DEVMGR_CAP_IO_PORT  = 1 << 0,
     DEVMGR_CAP_MMIO_MAP = 1 << 1,
-    DEVMGR_CAP_IRQ      = 1 << 2
+    DEVMGR_CAP_IRQ      = 1 << 2,
+    DEVMGR_CAP_DMA      = 1 << 3
+};
+
+enum {
+    WASMOS_DMA_DIR_TO_DEVICE   = 1 << 0,
+    WASMOS_DMA_DIR_FROM_DEVICE = 1 << 1,
+    WASMOS_DMA_DIR_BIDIR = WASMOS_DMA_DIR_TO_DEVICE | WASMOS_DMA_DIR_FROM_DEVICE
+};
+
+enum {
+    WASMOS_DMA_STATUS_OK = 0,
+    WASMOS_DMA_STATUS_DENY = -1,
+    WASMOS_DMA_STATUS_INVALID = -2,
+    WASMOS_DMA_STATUS_RANGE = -3,
+    WASMOS_DMA_STATUS_UNAVAILABLE = -4
+};
+
+typedef struct __attribute__((packed)) {
+    uint64_t base;
+    uint64_t length;
+} wasmos_dma_window_t;
+
+typedef struct __attribute__((packed)) {
+    uint32_t direction_flags;
+    uint32_t max_bytes;
+    uint32_t window_count;
+    uint32_t reserved0;
+    wasmos_dma_window_t windows[4];
+} wasmos_spawn_dma_caps_t;
+
+typedef struct __attribute__((packed)) {
+    uint32_t cap_flags;
+    uint16_t io_port_min;
+    uint16_t io_port_max;
+    uint16_t irq_mask;
+    uint16_t reserved0;
+    wasmos_spawn_dma_caps_t dma;
+} wasmos_spawn_caps_v2_t;
+
+enum {
+    PROC_IPC_DMA_MAP_BORROW_REQ = 0x230,
+    PROC_IPC_DMA_SYNC_BORROW_REQ = 0x231,
+    PROC_IPC_DMA_UNMAP_BORROW_REQ = 0x232,
+    PROC_IPC_DMA_BORROW_RESP = 0x2B0,
+    PROC_IPC_DMA_BORROW_ERROR = 0x2BF
 };
 
 enum {

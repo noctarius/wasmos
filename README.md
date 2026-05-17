@@ -53,6 +53,9 @@ It defines repository workflow and documentation/update conventions.
 - drivers/services CMake now also emits IDE-only C source targets with include paths so editor indexers can resolve headers in non-native WASM modules
 - drivers/services CMake now uses shared root helper functions for wasm-C compile/packaging + IDE-target wiring, reducing per-module duplication
 - Ring-3 hardening enabled by default in normal test boots
+- Phase 0 DMA contract scaffolding is now defined: DMA capability bit
+  (`DEVMGR_CAP_DMA`), direction/status constants, spawn-caps-v2 IPC id, and
+  shared ABI structs for DMA spawn descriptors (`wasmos_spawn_caps_v2_t`)
 - Ring-3 user-slot mapping now requires explicit `MEM_REGION_FLAG_USER` (legacy implicit bridge removed from page-map path)
 - Syscall boundary now rejects lossy 64-bit-to-32-bit exit-status arguments (`EXIT` / `THREAD_EXIT` require valid signed-32 representation)
 - Hostcall boundary now rejects negative endpoint IDs in `wasmos_serial_register` before `uint32_t` conversion

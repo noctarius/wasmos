@@ -52,6 +52,10 @@ typedef struct {
     uint16_t io_port_min;
     uint16_t io_port_max;
     uint16_t irq_mask;
+    uint32_t dma_direction_flags;
+    uint32_t dma_max_bytes;
+    uint64_t dma_window_base;
+    uint64_t dma_window_length;
 } pm_spawn_caps_t;
 
 typedef struct {
@@ -98,6 +102,7 @@ int pm_handle_service_lookup(uint32_t pm_context_id, const ipc_message_t *msg);
 
 int pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t *msg);
 int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t *msg);
+int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t *msg);
 int pm_handle_spawn_name(uint32_t pm_context_id, const ipc_message_t *msg);
 uint32_t pm_find_module_index_by_name(const char *name);
 void pm_poll_spawn(uint32_t pm_context_id);

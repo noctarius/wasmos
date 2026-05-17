@@ -190,6 +190,10 @@ initial boot-module index list. WASMOS-APP metadata parsing/mapping helpers are
 now extracted into a dedicated kernel module (`wasmos_app_meta`) and user-space
 libc includes convenience helpers for these PM metadata IPC calls
 (`lib/libc/include/wasmos/proc.h`).
+DMA Phase 0 scaffolding is now in-tree: shared ABI constants/types define
+`DEVMGR_CAP_DMA`, DMA direction/status values, `PROC_IPC_SPAWN_CAPS_V2`, and
+`wasmos_spawn_caps_v2_t`; PM currently fail-closes legacy `PROC_IPC_SPAWN_CAPS`
+requests that set DMA flags until v2 descriptor transport is implemented.
 When native `menuconfig`-style frontends are unavailable, build configuration
 can be edited through the in-repo `kconfiglib` interactive fallback script
 (`scripts/kconfiglib_menuconfig.py`), exposed via CMake targets.

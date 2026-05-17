@@ -2,6 +2,22 @@
 #include "ctype.h"
 #include <stdint.h>
 
+static inline void
+copy8_forward(unsigned char *out, const unsigned char *in)
+{
+    uint64_t v;
+    __builtin_memcpy(&v, in, sizeof(v));
+    __builtin_memcpy(out, &v, sizeof(v));
+}
+
+static inline void
+copy8_backward(unsigned char *out, const unsigned char *in)
+{
+    uint64_t v;
+    __builtin_memcpy(&v, in, sizeof(v));
+    __builtin_memcpy(out, &v, sizeof(v));
+}
+
 size_t
 strlen(const char *s)
 {
@@ -181,16 +197,16 @@ memcpy(void *dest, const void *src, size_t count)
     }
     /* TODO: memcpy remains intentionally non-overlap-safe; use memmove when ranges can overlap. */
     while (count >= 32) {
-        *(uint64_t *)(void *)(out) = *(const uint64_t *)(const void *)(in);
-        *(uint64_t *)(void *)(out + 8) = *(const uint64_t *)(const void *)(in + 8);
-        *(uint64_t *)(void *)(out + 16) = *(const uint64_t *)(const void *)(in + 16);
-        *(uint64_t *)(void *)(out + 24) = *(const uint64_t *)(const void *)(in + 24);
+        copy8_forward(out, in);
+        copy8_forward(out + 8, in + 8);
+        copy8_forward(out + 16, in + 16);
+        copy8_forward(out + 24, in + 24);
         out += 32;
         in += 32;
         count -= 32;
     }
     while (count >= 8) {
-        *(uint64_t *)(void *)(out) = *(const uint64_t *)(const void *)(in);
+        copy8_forward(out, in);
         out += 8;
         in += 8;
         count -= 8;
@@ -213,16 +229,16 @@ memmove(void *dest, const void *src, size_t count)
     }
     if (out < in || (size_t)(out - in) >= count) {
         while (count >= 32) {
-            *(uint64_t *)(void *)(out) = *(const uint64_t *)(const void *)(in);
-            *(uint64_t *)(void *)(out + 8) = *(const uint64_t *)(const void *)(in + 8);
-            *(uint64_t *)(void *)(out + 16) = *(const uint64_t *)(const void *)(in + 16);
-            *(uint64_t *)(void *)(out + 24) = *(const uint64_t *)(const void *)(in + 24);
+            copy8_forward(out, in);
+            copy8_forward(out + 8, in + 8);
+            copy8_forward(out + 16, in + 16);
+            copy8_forward(out + 24, in + 24);
             out += 32;
             in += 32;
             count -= 32;
         }
         while (count >= 8) {
-            *(uint64_t *)(void *)(out) = *(const uint64_t *)(const void *)(in);
+            copy8_forward(out, in);
             out += 8;
             in += 8;
             count -= 8;
@@ -237,16 +253,16 @@ memmove(void *dest, const void *src, size_t count)
         while (count >= 32) {
             out -= 32;
             in -= 32;
-            *(uint64_t *)(void *)(out) = *(const uint64_t *)(const void *)(in);
-            *(uint64_t *)(void *)(out + 8) = *(const uint64_t *)(const void *)(in + 8);
-            *(uint64_t *)(void *)(out + 16) = *(const uint64_t *)(const void *)(in + 16);
-            *(uint64_t *)(void *)(out + 24) = *(const uint64_t *)(const void *)(in + 24);
+            copy8_backward(out, in);
+            copy8_backward(out + 8, in + 8);
+            copy8_backward(out + 16, in + 16);
+            copy8_backward(out + 24, in + 24);
             count -= 32;
         }
         while (count >= 8) {
             out -= 8;
             in -= 8;
-            *(uint64_t *)(void *)(out) = *(const uint64_t *)(const void *)(in);
+            copy8_backward(out, in);
             count -= 8;
         }
         while (count > 0) {

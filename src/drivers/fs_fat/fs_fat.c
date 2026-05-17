@@ -292,8 +292,7 @@ console_write(const char *s)
         g_fs_req.source >= 0 &&
         g_fs_req.request_id != 0 &&
         g_fs_endpoint >= 0 &&
-        (g_fs_req.type == FS_IPC_LIST_ROOT_REQ ||
-         g_fs_req.type == FS_IPC_CAT_ROOT_REQ)) {
+        (g_fs_req.type == FS_IPC_LIST_ROOT_REQ)) {
         uint32_t pos = 0;
         while (pos < (uint32_t)len) {
             int32_t a0 = 0;
@@ -3721,13 +3720,6 @@ fat_ipc_dispatch(int32_t type,
 
     if (type == FS_IPC_LIST_ROOT_REQ) {
         return fat_handle_list();
-    }
-    if (type == FS_IPC_CAT_ROOT_REQ) {
-        if (g_op == FAT_OP_NONE) {
-            fat_unpack_name((uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3,
-                            g_target_name, sizeof(g_target_name));
-        }
-        return fat_handle_cat();
     }
     if (type == FS_IPC_CHDIR_REQ) {
         if (g_op != FAT_OP_NONE && g_op != FAT_OP_CHDIR) {

@@ -28,22 +28,34 @@ kernel_str_ptr(const char *s)
     return (const char *)p;
 }
 
+static inline void copy8_forward(uint8_t *d, const uint8_t *s) {
+    uint64_t v;
+    __builtin_memcpy(&v, s, sizeof(v));
+    __builtin_memcpy(d, &v, sizeof(v));
+}
+
+static inline void copy8_backward(uint8_t *d, const uint8_t *s) {
+    uint64_t v;
+    __builtin_memcpy(&v, s, sizeof(v));
+    __builtin_memcpy(d, &v, sizeof(v));
+}
+
 void *memcpy(void *dst, const void *src, size_t n) {
     uint8_t *d = (uint8_t *)dst;
     const uint8_t *s = (const uint8_t *)src;
 
     /* TODO: memcpy remains intentionally non-overlap-safe; use memmove when ranges can overlap. */
     while (n >= 32) {
-        *(uint64_t *)(void *)(d) = *(const uint64_t *)(const void *)(s);
-        *(uint64_t *)(void *)(d + 8) = *(const uint64_t *)(const void *)(s + 8);
-        *(uint64_t *)(void *)(d + 16) = *(const uint64_t *)(const void *)(s + 16);
-        *(uint64_t *)(void *)(d + 24) = *(const uint64_t *)(const void *)(s + 24);
+        copy8_forward(d, s);
+        copy8_forward(d + 8, s + 8);
+        copy8_forward(d + 16, s + 16);
+        copy8_forward(d + 24, s + 24);
         d += 32;
         s += 32;
         n -= 32;
     }
     while (n >= 8) {
-        *(uint64_t *)(void *)(d) = *(const uint64_t *)(const void *)(s);
+        copy8_forward(d, s);
         d += 8;
         s += 8;
         n -= 8;
@@ -72,16 +84,16 @@ void *memmove(void *dst, const void *src, size_t n) {
     }
     if (d < s || (size_t)(d - s) >= n) {
         while (n >= 32) {
-            *(uint64_t *)(void *)(d) = *(const uint64_t *)(const void *)(s);
-            *(uint64_t *)(void *)(d + 8) = *(const uint64_t *)(const void *)(s + 8);
-            *(uint64_t *)(void *)(d + 16) = *(const uint64_t *)(const void *)(s + 16);
-            *(uint64_t *)(void *)(d + 24) = *(const uint64_t *)(const void *)(s + 24);
+            copy8_forward(d, s);
+            copy8_forward(d + 8, s + 8);
+            copy8_forward(d + 16, s + 16);
+            copy8_forward(d + 24, s + 24);
             d += 32;
             s += 32;
             n -= 32;
         }
         while (n >= 8) {
-            *(uint64_t *)(void *)(d) = *(const uint64_t *)(const void *)(s);
+            copy8_forward(d, s);
             d += 8;
             s += 8;
             n -= 8;
@@ -96,16 +108,16 @@ void *memmove(void *dst, const void *src, size_t n) {
         while (n >= 32) {
             d -= 32;
             s -= 32;
-            *(uint64_t *)(void *)(d) = *(const uint64_t *)(const void *)(s);
-            *(uint64_t *)(void *)(d + 8) = *(const uint64_t *)(const void *)(s + 8);
-            *(uint64_t *)(void *)(d + 16) = *(const uint64_t *)(const void *)(s + 16);
-            *(uint64_t *)(void *)(d + 24) = *(const uint64_t *)(const void *)(s + 24);
+            copy8_backward(d, s);
+            copy8_backward(d + 8, s + 8);
+            copy8_backward(d + 16, s + 16);
+            copy8_backward(d + 24, s + 24);
             n -= 32;
         }
         while (n >= 8) {
             d -= 8;
             s -= 8;
-            *(uint64_t *)(void *)(d) = *(const uint64_t *)(const void *)(s);
+            copy8_backward(d, s);
             n -= 8;
         }
         while (n > 0) {

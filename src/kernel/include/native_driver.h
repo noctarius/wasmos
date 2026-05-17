@@ -12,5 +12,7 @@ int native_driver_start(uint32_t context_id,
                         const uint8_t *elf_data, uint32_t elf_size,
                         const char *name,
                         const uint32_t *init_argv, uint32_t init_argc);
+uint64_t native_driver_heap_committed_bytes(uint32_t pid);
+void native_driver_heap_release(uint32_t pid);
 
 #endif

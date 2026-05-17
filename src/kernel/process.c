@@ -11,6 +11,7 @@
 #include "thread.h"
 #include "string.h"
 #include "wasm3_shim.h"
+#include "native_driver.h"
 
 /*
  * process.c contains the single-core scheduler, process table, run queue, and
@@ -859,6 +860,7 @@ static void process_reap(process_t *proc) {
     }
     if (proc->pid != 0) {
         wasm3_heap_release(proc->pid);
+        native_driver_heap_release(proc->pid);
     }
     thread_reap_owner(proc->pid);
     process_reset_slot(proc);
@@ -2068,7 +2070,9 @@ process_info_at_stats(uint32_t index,
             out_stats->cpu_ticks = process_sum_thread_ticks(proc);
             out_stats->vm_total_bytes = process_context_mem_bytes(proc);
             out_stats->thread_kstack_total_bytes = process_thread_kstack_total_bytes(proc);
-            out_stats->wasm_heap_committed_bytes = wasm3_heap_committed_bytes(proc->pid);
+            out_stats->heap_committed_bytes =
+                wasm3_heap_committed_bytes(proc->pid) +
+                native_driver_heap_committed_bytes(proc->pid);
             /* TODO(memory-rss): Replace this estimate with real resident-page
              * accounting once per-context page presence tracking is available.
              */

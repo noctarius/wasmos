@@ -68,10 +68,73 @@ typedef struct {
 } elf64_phdr_t;
 
 #define PAGE_SIZE 0x1000ULL
+#define ND_HEAP_SLOTS PROCESS_MAX_COUNT
 
 static uint8_t g_fb_dma_active_logged = 0;
 static uint8_t g_fb_dma_fallback_logged = 0;
 static uint8_t g_fb_dma_phase4_logged = 0;
+static uint32_t g_nd_heap_pid[ND_HEAP_SLOTS];
+static uint64_t g_nd_heap_bytes[ND_HEAP_SLOTS];
+
+static void
+nd_heap_set(uint32_t pid, uint64_t bytes)
+{
+    uint32_t empty = ND_HEAP_SLOTS;
+    if (pid == 0) {
+        return;
+    }
+    critical_section_enter();
+    for (uint32_t i = 0; i < ND_HEAP_SLOTS; ++i) {
+        if (g_nd_heap_pid[i] == pid) {
+            g_nd_heap_bytes[i] = bytes;
+            critical_section_leave();
+            return;
+        }
+        if (empty == ND_HEAP_SLOTS && g_nd_heap_pid[i] == 0) {
+            empty = i;
+        }
+    }
+    if (empty < ND_HEAP_SLOTS) {
+        g_nd_heap_pid[empty] = pid;
+        g_nd_heap_bytes[empty] = bytes;
+    }
+    critical_section_leave();
+}
+
+uint64_t
+native_driver_heap_committed_bytes(uint32_t pid)
+{
+    uint64_t bytes = 0;
+    if (pid == 0) {
+        return 0;
+    }
+    critical_section_enter();
+    for (uint32_t i = 0; i < ND_HEAP_SLOTS; ++i) {
+        if (g_nd_heap_pid[i] == pid) {
+            bytes = g_nd_heap_bytes[i];
+            break;
+        }
+    }
+    critical_section_leave();
+    return bytes;
+}
+
+void
+native_driver_heap_release(uint32_t pid)
+{
+    if (pid == 0) {
+        return;
+    }
+    critical_section_enter();
+    for (uint32_t i = 0; i < ND_HEAP_SLOTS; ++i) {
+        if (g_nd_heap_pid[i] == pid) {
+            g_nd_heap_pid[i] = 0;
+            g_nd_heap_bytes[i] = 0;
+            break;
+        }
+    }
+    critical_section_leave();
+}
 
 /* -------------------------------------------------------------------------
  * API implementations
@@ -542,9 +605,10 @@ zero_into_root(uint64_t root_table, uint64_t dst_virt, uint64_t size)
 }
 
 static int
-load_segments(const uint8_t *elf_data, uint32_t elf_size, uint64_t root_table)
+load_segments(const uint8_t *elf_data, uint32_t elf_size, uint64_t root_table, uint64_t *out_bytes)
 {
     const elf64_ehdr_t *hdr = (const elf64_ehdr_t *)elf_data;
+    uint64_t total_bytes = 0;
 
     for (uint16_t i = 0; i < hdr->e_phnum; ++i) {
         uint64_t ph_off = hdr->e_phoff + (uint64_t)i * sizeof(elf64_phdr_t);
@@ -615,6 +679,10 @@ load_segments(const uint8_t *elf_data, uint32_t elf_size, uint64_t root_table)
                                             final_flags);
             }
         }
+        total_bytes += alloc_pages * PAGE_SIZE;
+    }
+    if (out_bytes) {
+        *out_bytes = total_bytes;
     }
     return 0;
 }
@@ -629,6 +697,8 @@ native_driver_start(uint32_t context_id,
                     const char *name,
                     const uint32_t *init_argv, uint32_t init_argc)
 {
+    uint32_t pid = process_current_pid();
+    uint64_t loaded_bytes = 0;
     klog_write("[native-driver] loading ");
     klog_write(name ? name : "?");
     klog_write("\n");
@@ -644,10 +714,11 @@ native_driver_start(uint32_t context_id,
         return -1;
     }
 
-    if (load_segments(elf_data, elf_size, ctx->root_table) != 0) {
+    if (load_segments(elf_data, elf_size, ctx->root_table, &loaded_bytes) != 0) {
         klog_write("[native-driver] segment load failed\n");
         return -1;
     }
+    nd_heap_set(pid, loaded_bytes);
 
     const elf64_ehdr_t *hdr = (const elf64_ehdr_t *)elf_data;
     native_driver_entry_fn_t entry =

@@ -38,6 +38,19 @@ extern int32_t wasmos_buffer_borrow(int32_t kind, int32_t source_endpoint, int32
     WASMOS_WASM_IMPORT("wasmos", "buffer_borrow");
 extern int32_t wasmos_buffer_release(int32_t kind)
     WASMOS_WASM_IMPORT("wasmos", "buffer_release");
+extern int32_t wasmos_dma_map_borrow(int32_t borrow_kind,
+                                     int32_t source_endpoint,
+                                     int32_t offset,
+                                     int32_t length,
+                                     int32_t direction_flags)
+    WASMOS_WASM_IMPORT("wasmos", "dma_map_borrow");
+extern int32_t wasmos_dma_sync_borrow(int32_t borrow_kind,
+                                      int32_t offset,
+                                      int32_t length,
+                                      int32_t sync_op)
+    WASMOS_WASM_IMPORT("wasmos", "dma_sync_borrow");
+extern int32_t wasmos_dma_unmap_borrow(int32_t borrow_kind, int32_t source_endpoint)
+    WASMOS_WASM_IMPORT("wasmos", "dma_unmap_borrow");
 extern int32_t wasmos_ipc_recv(int32_t endpoint)
     WASMOS_WASM_IMPORT("wasmos", "ipc_recv");
 extern int32_t wasmos_ipc_try_recv(int32_t endpoint)

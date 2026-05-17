@@ -356,6 +356,9 @@ process_manager_entry(process_t *process, void *arg)
         case PROC_IPC_SPAWN_CAPS:
             rc = pm_handle_spawn_caps(process->context_id, &msg);
             break;
+        case PROC_IPC_SPAWN_CAPS_V2:
+            rc = pm_handle_spawn_caps_v2(process->context_id, &msg);
+            break;
         case PROC_IPC_SPAWN_NAME:
             rc = pm_handle_spawn_name(process->context_id, &msg);
             break;

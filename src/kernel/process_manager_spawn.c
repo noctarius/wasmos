@@ -312,7 +312,11 @@ pm_apply_spawn_caps(uint32_t pid, const pm_spawn_caps_t *caps)
                                      caps->cap_flags,
                                      (uint16_t)(packed_io & 0xFFFFu),
                                      (uint16_t)((packed_io >> 16) & 0xFFFFu),
-                                     caps->irq_mask) != 0) {
+                                     caps->irq_mask,
+                                     caps->dma_direction_flags,
+                                     caps->dma_max_bytes,
+                                     caps->dma_window_base,
+                                     caps->dma_window_length) != 0) {
         return -1;
     }
     return 0;
@@ -573,9 +577,18 @@ pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t *msg)
     caps.io_port_min = (uint16_t)((uint32_t)msg->arg2 & 0xFFFFu);
     caps.io_port_max = (uint16_t)(((uint32_t)msg->arg2 >> 16) & 0xFFFFu);
     caps.irq_mask = (uint16_t)((uint32_t)msg->arg3 & 0xFFFFu);
+    caps.dma_direction_flags = 0;
+    caps.dma_max_bytes = 0;
+    caps.dma_window_base = 0;
+    caps.dma_window_length = 0;
     if ((caps.cap_flags & DEVMGR_CAP_IO_PORT) == 0) {
         caps.io_port_min = 0;
         caps.io_port_max = 0;
+    }
+    if ((caps.cap_flags & DEVMGR_CAP_DMA) != 0) {
+        /* FIXME: PROC_IPC_SPAWN_CAPS cannot carry DMA descriptor schema.
+         * Accept DMA only via PROC_IPC_SPAWN_CAPS_V2 once wired end-to-end. */
+        return -1;
     }
     if (pm_spawn_module(parent_pid, msg->arg0, &pid) != 0) {
         return -1;
@@ -593,6 +606,16 @@ pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t *msg)
     resp.arg2 = 0;
     resp.arg3 = 0;
     return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
+}
+
+int
+pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t *msg)
+{
+    (void)pm_context_id;
+    (void)msg;
+    /* FIXME: Phase 0 defines the v2 DMA-capable contract IDs and schema.
+     * Transport/parsing and policy enforcement are implemented in Phase 1+. */
+    return -1;
 }
 
 int

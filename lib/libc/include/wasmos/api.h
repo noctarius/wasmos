@@ -99,7 +99,7 @@ typedef struct {
     uint64_t cpu_ticks;
     uint64_t vm_total_bytes;
     uint64_t thread_kstack_total_bytes;
-    uint64_t wasm_heap_committed_bytes;
+    uint64_t heap_committed_bytes;
     uint64_t rss_est_bytes;
 } wasmos_proc_stats_t;
 extern int32_t wasmos_proc_info_stats(int32_t index,

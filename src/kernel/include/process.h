@@ -142,7 +142,7 @@ typedef struct {
     uint64_t cpu_ticks;
     uint64_t vm_total_bytes;
     uint64_t thread_kstack_total_bytes;
-    uint64_t wasm_heap_committed_bytes;
+    uint64_t heap_committed_bytes;
     uint64_t rss_est_bytes;
 } process_stats_t;
 

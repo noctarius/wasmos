@@ -801,7 +801,7 @@ cli_print_ps_table(int32_t count,
                    char names[][32],
                    const wasmos_proc_stats_t *stats)
 {
-    console_write(" pid ppid state thr/live vm(bytes) kstack(bytes) wasmheap(bytes) rss_est(bytes) cpu(ticks) name\n");
+    console_write(" pid ppid state thr/live vm(bytes) kstack(bytes) heap(bytes) rss_est(bytes) cpu(ticks) name\n");
     for (int32_t i = 0; i < count; ++i) {
         if (pids[i] == 0) {
             continue;
@@ -822,7 +822,7 @@ cli_print_ps_table(int32_t count,
         pos = buf_append_spaces(row, pos, (int)sizeof(row), 1);
         pos = buf_append_u64_width(row, pos, (int)sizeof(row), stats[i].thread_kstack_total_bytes, 13);
         pos = buf_append_spaces(row, pos, (int)sizeof(row), 1);
-        pos = buf_append_u64_width(row, pos, (int)sizeof(row), stats[i].wasm_heap_committed_bytes, 14);
+        pos = buf_append_u64_width(row, pos, (int)sizeof(row), stats[i].heap_committed_bytes, 11);
         pos = buf_append_spaces(row, pos, (int)sizeof(row), 1);
         pos = buf_append_u64_width(row, pos, (int)sizeof(row), stats[i].rss_est_bytes, 14);
         pos = buf_append_spaces(row, pos, (int)sizeof(row), 1);

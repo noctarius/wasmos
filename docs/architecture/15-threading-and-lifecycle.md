@@ -490,6 +490,9 @@ Current status:
 - wait-target wakeups now resume the actual blocked waiter thread selected via
   scheduler transition state (instead of always waking process main thread),
   which hardens process-exit wake behavior for multi-thread waiters
+- process-exit wake paths now wake all matching blocked waiters for a target
+  PID within an owner process (not just first match), reducing missed-wakeup
+  risk under multi-waiter scenarios
 - dedicated threading smoke now includes a kill-while-blocked wait regression
   marker (`[test] threading wait kill wake ok`) to verify blocked waiters wake
   and observe kill exit status on target termination

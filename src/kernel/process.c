@@ -271,7 +271,6 @@ static void process_sched_invariant_fail(const char *msg, uint64_t a, uint64_t b
 static void process_set_blocked(process_t *proc, thread_t *thread, process_block_reason_t reason, thread_block_reason_t thread_reason);
 static void process_set_ready(process_t *proc, thread_t *thread);
 static void process_set_running(process_t *proc, thread_t *thread);
-static thread_t *process_find_waiter_for_target(process_t *proc, uint32_t target_pid);
 
 
 static void
@@ -711,26 +710,42 @@ static void process_wake_waiters(uint32_t target_pid) {
     }
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         process_t *proc = &g_processes[i];
+        uint8_t woke_any = 0;
         if (proc->state == PROCESS_STATE_UNUSED || proc->state == PROCESS_STATE_ZOMBIE) {
             continue;
         }
-        thread_t *waiter = process_find_waiter_for_target(proc, target_pid);
-        if (!waiter) {
-            /* TODO(threading-phase-d): If no waiter thread can be resolved,
-             * add per-thread wait-target bookkeeping so wake paths can remain
-             * precise under future multi-waiter semantics. */
-            continue;
+        for (uint32_t j = 0;; ++j) {
+            uint32_t tid = 0;
+            thread_t *waiter = 0;
+            if (thread_owner_tid_at(proc->pid, j, &tid) != 0) {
+                break;
+            }
+            waiter = thread_get(tid);
+            if (!waiter || waiter->state != THREAD_STATE_BLOCKED) {
+                continue;
+            }
+            if (waiter->block_reason != THREAD_BLOCK_WAIT_PROCESS) {
+                continue;
+            }
+            if (waiter->wait_target_pid != target_pid) {
+                continue;
+            }
+            waiter->wait_target_pid = 0;
+            woke_any = 1;
+            if (proc == g_current_process &&
+                proc->state == PROCESS_STATE_RUNNING &&
+                g_current_thread &&
+                g_current_thread->tid != waiter->tid) {
+                thread_set_state(waiter->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
+                ready_queue_enqueue(waiter);
+            } else {
+                process_set_ready(proc, waiter);
+                ready_queue_enqueue(waiter);
+            }
         }
-        proc->block_reason = PROCESS_BLOCK_NONE;
-        waiter->wait_target_pid = 0;
-        if (proc == g_current_process &&
-            proc->state == PROCESS_STATE_RUNNING &&
-            g_current_thread &&
-            g_current_thread->tid != waiter->tid) {
-            thread_set_state(waiter->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
-        } else {
-            process_set_ready(proc, waiter);
-            ready_queue_enqueue(waiter);
+        if (woke_any && proc->state == PROCESS_STATE_BLOCKED) {
+            proc->state = PROCESS_STATE_READY;
+            proc->block_reason = PROCESS_BLOCK_NONE;
         }
     }
 }
@@ -2002,33 +2017,6 @@ process_set_blocked(process_t *proc,
     proc->state = PROCESS_STATE_BLOCKED;
     proc->block_reason = reason;
     thread_set_state(thread->tid, THREAD_STATE_BLOCKED, thread_reason);
-}
-
-static thread_t *
-process_find_waiter_for_target(process_t *proc, uint32_t target_pid)
-{
-    if (!proc || target_pid == 0) {
-        return 0;
-    }
-    for (uint32_t i = 0;; ++i) {
-        uint32_t tid = 0;
-        thread_t *thread = 0;
-        if (thread_owner_tid_at(proc->pid, i, &tid) != 0) {
-            break;
-        }
-        thread = thread_get(tid);
-        if (!thread || thread->state != THREAD_STATE_BLOCKED) {
-            continue;
-        }
-        if (thread->block_reason != THREAD_BLOCK_WAIT_PROCESS) {
-            continue;
-        }
-        if (thread->wait_target_pid != target_pid) {
-            continue;
-        }
-        return thread;
-    }
-    return 0;
 }
 
 static void

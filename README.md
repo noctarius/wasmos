@@ -107,6 +107,7 @@ It defines repository workflow and documentation/update conventions.
 - Threading runtime now also includes dedicated kernel-stack-backed user thread creation (`THREAD_CREATE`) and syscall trap-frame-to-thread-context synchronization for blocking/yielding syscall reschedules, preventing stale-RIP resume and first-dispatch context-switch faults
 - Threading rollout is production-complete for the current single-core scope; final ABI/policy and closure status are tracked in `docs/architecture/15-threading-and-lifecycle.md` sections 15 and 17
 - WASM hostcall surface now exposes thread lifecycle wrappers (`thread_gettid`, `thread_create`, `thread_yield`, `thread_exit`, `thread_join`, `thread_detach`) via `lib/libc/include/wasmos/thread.h`; `thread_create` now spawns a kernel thread with a dedicated wasm3 VM/runtime instance per spawned thread export
+- CLI `ps` memory diagnostics now split into `vm(bytes)`, `kstack(bytes)`, `wasmheap(bytes)`, and `rss_est(bytes)` instead of one opaque memory column
 
 ## Quick Start
 

@@ -442,6 +442,25 @@ void wasm3_heap_release(uint32_t pid)
     critical_section_leave();
 }
 
+uint64_t
+wasm3_heap_committed_bytes(uint32_t pid)
+{
+    uint64_t committed = 0;
+    if (pid == 0) {
+        return 0;
+    }
+    critical_section_enter();
+    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        if (g_wasm3_heaps[i].pid != pid) {
+            continue;
+        }
+        committed = (uint64_t)g_wasm3_heaps[i].committed_size;
+        break;
+    }
+    critical_section_leave();
+    return committed;
+}
+
 void *realloc(void *ptr, size_t size)
 {
     if (!ptr) {

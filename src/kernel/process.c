@@ -10,6 +10,7 @@
 #include "timer.h"
 #include "thread.h"
 #include "string.h"
+#include "wasm3_shim.h"
 
 /*
  * process.c contains the single-core scheduler, process table, run queue, and
@@ -2009,6 +2010,31 @@ process_context_mem_bytes(const process_t *proc)
     return bytes;
 }
 
+static uint64_t
+process_thread_kstack_total_bytes(const process_t *proc)
+{
+    uint64_t total = 0;
+    if (!proc || proc->pid == 0) {
+        return 0;
+    }
+    if (proc->stack_pages != 0) {
+        total += (uint64_t)proc->stack_pages * PAGE_SIZE;
+    }
+    for (uint32_t i = 0;; ++i) {
+        uint32_t tid = 0;
+        thread_t *thread = 0;
+        if (thread_owner_tid_at(proc->pid, i, &tid) != 0) {
+            break;
+        }
+        thread = thread_get(tid);
+        if (!thread || thread->owner_pid != proc->pid) {
+            continue;
+        }
+        total += (uint64_t)thread->kstack_pages * PAGE_SIZE;
+    }
+    return total;
+}
+
 int
 process_info_at_stats(uint32_t index,
                       uint32_t *out_pid,
@@ -2040,7 +2066,13 @@ process_info_at_stats(uint32_t index,
                     : 0;
             out_stats->context_id = proc->context_id;
             out_stats->cpu_ticks = process_sum_thread_ticks(proc);
-            out_stats->mem_bytes = process_context_mem_bytes(proc);
+            out_stats->vm_total_bytes = process_context_mem_bytes(proc);
+            out_stats->thread_kstack_total_bytes = process_thread_kstack_total_bytes(proc);
+            out_stats->wasm_heap_committed_bytes = wasm3_heap_committed_bytes(proc->pid);
+            /* TODO(memory-rss): Replace this estimate with real resident-page
+             * accounting once per-context page presence tracking is available.
+             */
+            out_stats->rss_est_bytes = out_stats->vm_total_bytes;
             return 0;
         }
         current++;

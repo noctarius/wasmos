@@ -56,6 +56,10 @@ It defines repository workflow and documentation/update conventions.
 - Phase 0 DMA contract scaffolding is now defined: DMA capability bit
   (`DEVMGR_CAP_DMA`), direction/status constants, spawn-caps-v2 IPC id, and
   shared ABI structs for DMA spawn descriptors (`wasmos_spawn_caps_v2_t`)
+- Phase 1 borrow-based DMA hostcall enforcement is now in kernel for WASM
+  callers (`dma_map_borrow`, `dma_sync_borrow`, `dma_unmap_borrow`) with
+  owner-context validation, borrow-grant checks, capability direction/range
+  checks, and fail-closed unmap/release behavior
 - Ring-3 user-slot mapping now requires explicit `MEM_REGION_FLAG_USER` (legacy implicit bridge removed from page-map path)
 - Syscall boundary now rejects lossy 64-bit-to-32-bit exit-status arguments (`EXIT` / `THREAD_EXIT` require valid signed-32 representation)
 - Hostcall boundary now rejects negative endpoint IDs in `wasmos_serial_register` before `uint32_t` conversion

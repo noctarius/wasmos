@@ -379,6 +379,10 @@ For language wrappers (Rust/Go/Zig/AssemblyScript SDK layers):
 - optional user-level fibers/green-threads are allowed inside one OS thread,
   but are additive scheduling abstractions and do not replace kernel-thread
   join/detach semantics
+- current hostcall wrapper baseline now includes `thread_gettid`,
+  `thread_yield`, `thread_exit`, `thread_join`, and `thread_detach`; WASM
+  `thread_create` remains a documented TODO until per-thread VM bootstrap
+  metadata/runtime instantiation is wired
 
 ---
 

@@ -16,6 +16,7 @@
 #include "irq.h"
 #include "policy.h"
 #include "capability.h"
+#include "thread.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -2176,6 +2177,82 @@ m3ApiRawFunction(wasmos_sched_yield)
     m3ApiReturn(0);
 }
 
+m3ApiRawFunction(wasmos_thread_gettid)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiReturn((int32_t)thread_current_tid());
+}
+
+m3ApiRawFunction(wasmos_thread_create)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, entry_token)
+    m3ApiGetArg(int32_t, arg0)
+    m3ApiGetArg(int32_t, arg1)
+    m3ApiGetArg(int32_t, flags)
+    (void)entry_token;
+    (void)arg0;
+    (void)arg1;
+    (void)flags;
+    /* TODO(threading-vm): Implement WASM thread_create by instantiating a
+     * dedicated VM runtime per spawned thread and wiring bootstrap metadata. */
+    m3ApiReturn(-1);
+}
+
+m3ApiRawFunction(wasmos_thread_yield)
+{
+    m3ApiReturnType(int32_t)
+    process_yield(PROCESS_RUN_YIELDED);
+    m3ApiReturn(0);
+}
+
+m3ApiRawFunction(wasmos_thread_exit)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, status)
+    process_t *proc = process_get(process_current_pid());
+    if (!proc) {
+        m3ApiReturn(-1);
+    }
+    process_set_exit_status(proc, status);
+    process_yield(PROCESS_RUN_THREAD_EXITED);
+    m3ApiReturn(0);
+}
+
+m3ApiRawFunction(wasmos_thread_join)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, tid)
+    process_t *proc = process_get(process_current_pid());
+    uint32_t target_tid = 0;
+    int32_t exit_status = 0;
+    int rc = 0;
+    if (!proc || wasm_arg_u32_nonneg(tid, &target_tid) != 0) {
+        m3ApiReturn(-1);
+    }
+    rc = process_thread_join(proc, target_tid, &exit_status);
+    if (rc > 0) {
+        process_yield(PROCESS_RUN_BLOCKED);
+        m3ApiReturn(0);
+    }
+    if (rc < 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn(exit_status);
+}
+
+m3ApiRawFunction(wasmos_thread_detach)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, tid)
+    process_t *proc = process_get(process_current_pid());
+    uint32_t target_tid = 0;
+    if (!proc || wasm_arg_u32_nonneg(tid, &target_tid) != 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn(process_thread_detach(proc, target_tid));
+}
+
 m3ApiRawFunction(wasmos_proc_info)
 {
     m3ApiReturnType(int32_t)
@@ -2609,6 +2686,12 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "sched_ready_count", "i()", wasmos_sched_ready_count);
     rc |= wasm3_link_raw(module, "wasmos", "sched_current_pid", "i()", wasmos_sched_current_pid);
     rc |= wasm3_link_raw(module, "wasmos", "sched_yield", "i()", wasmos_sched_yield);
+    rc |= wasm3_link_raw(module, "wasmos", "thread_gettid", "i()", wasmos_thread_gettid);
+    rc |= wasm3_link_raw(module, "wasmos", "thread_create", "i(iiii)", wasmos_thread_create);
+    rc |= wasm3_link_raw(module, "wasmos", "thread_yield", "i()", wasmos_thread_yield);
+    rc |= wasm3_link_raw(module, "wasmos", "thread_exit", "i(i)", wasmos_thread_exit);
+    rc |= wasm3_link_raw(module, "wasmos", "thread_join", "i(i)", wasmos_thread_join);
+    rc |= wasm3_link_raw(module, "wasmos", "thread_detach", "i(i)", wasmos_thread_detach);
     rc |= wasm3_link_raw(module, "wasmos", "proc_info", "i(i*i)", wasmos_proc_info);
     rc |= wasm3_link_raw(module, "wasmos", "proc_info_ex", "i(i*i*)", wasmos_proc_info_ex);
     rc |= wasm3_link_raw(module, "wasmos", "proc_info_stats", "i(i*i**)", wasmos_proc_info_stats);

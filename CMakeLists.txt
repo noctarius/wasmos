@@ -787,7 +787,6 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SERIAL_APP} ${BUILD_DIR}/esp/system/drivers/serial.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_KEYBOARD_APP} ${BUILD_DIR}/esp/system/drivers/keyboard.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/apps/gfx_compositor.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfx_compositor.wap
@@ -836,7 +835,6 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_KEYBOARD_APP} ${BUILD_DIR}/esp/system/drivers/keyboard.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/apps/gfx_compositor.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfx_compositor.wap
@@ -886,7 +884,6 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/apps/gfx_compositor.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfx_compositor.wap
@@ -937,7 +934,6 @@ add_custom_target(run-qemu-cli-test
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/apps/gfx_compositor.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfx_compositor.wap
@@ -991,7 +987,6 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/apps/gfx_compositor.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfx_compositor.wap
@@ -1038,7 +1033,6 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/apps/gfx_compositor.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfx_compositor.wap
@@ -1085,7 +1079,6 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/apps/gfx_compositor.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfx_compositor.wap
@@ -1135,7 +1128,6 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/apps/gfx_compositor.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfx_compositor.wap
@@ -1184,7 +1176,6 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/apps/gfx_compositor.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfx_compositor.wap
@@ -1241,7 +1232,6 @@ add_custom_target(run-qemu-ui-test
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/apps/gfx_compositor.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfx_compositor.wap
@@ -1290,7 +1280,6 @@ add_custom_target(run-qemu-ring3-check
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/apps/gfx_compositor.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfx_compositor.wap
@@ -1340,7 +1329,6 @@ add_custom_target(run-qemu-ring3-threading-check
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/apps/gfx_compositor.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfx_compositor.wap
@@ -1391,7 +1379,6 @@ add_custom_target(run-qemu-ring3-fault-storm-check
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/apps/gfx_compositor.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfx_compositor.wap

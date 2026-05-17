@@ -4,10 +4,7 @@
 #include <stdint.h>
 #include "wasmos/api.h"
 
-/* WASM runtime thread wrappers.
- * thread_create is reserved for VM-per-thread bootstrap and currently returns
- * a negative status until that runtime path is enabled in kernel hostcalls.
- */
+/* WASM runtime thread wrappers layered over wasmos hostcalls. */
 
 static inline int32_t
 wasmos_thread_current_tid(void)

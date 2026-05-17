@@ -3,6 +3,32 @@
 #include "process.h"
 #include "wasm3_link.h"
 #include "wasm3_shim.h"
+#include "thread.h"
+#include "string.h"
+
+#define WASM_DRIVER_THREAD_SLOTS 64u
+
+typedef struct {
+    uint8_t in_use;
+    uint32_t owner_pid;
+    uint32_t owner_context_id;
+    const uint8_t *module_bytes;
+    uint32_t module_size;
+    uint32_t stack_size;
+    uint32_t heap_size;
+    char export_name[64];
+    uint32_t argc;
+    uint32_t argv[4];
+} wasm_driver_thread_slot_t;
+
+typedef struct {
+    uint8_t in_use;
+    uint32_t owner_pid;
+    wasm_driver_t *driver;
+} wasm_driver_registry_slot_t;
+
+static wasm_driver_thread_slot_t g_wasm_driver_thread_slots[WASM_DRIVER_THREAD_SLOTS];
+static wasm_driver_registry_slot_t g_wasm_driver_registry[PROCESS_MAX_COUNT];
 
 static void
 log_wasm3_error(const char *prefix, const char *error, IM3Runtime runtime)
@@ -63,6 +89,169 @@ wasm_driver_enter_runtime(const wasm_driver_t *driver)
 {
     preempt_disable();
     return wasm_driver_bind_owner_pid(driver);
+}
+
+static void
+wasm_driver_registry_set(uint32_t owner_pid, wasm_driver_t *driver)
+{
+    if (owner_pid == 0 || !driver) {
+        return;
+    }
+    critical_section_enter();
+    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        if (g_wasm_driver_registry[i].in_use &&
+            g_wasm_driver_registry[i].owner_pid == owner_pid) {
+            g_wasm_driver_registry[i].driver = driver;
+            critical_section_leave();
+            return;
+        }
+    }
+    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        if (!g_wasm_driver_registry[i].in_use) {
+            g_wasm_driver_registry[i].in_use = 1;
+            g_wasm_driver_registry[i].owner_pid = owner_pid;
+            g_wasm_driver_registry[i].driver = driver;
+            break;
+        }
+    }
+    critical_section_leave();
+}
+
+static void
+wasm_driver_registry_clear(uint32_t owner_pid, wasm_driver_t *driver)
+{
+    if (owner_pid == 0 || !driver) {
+        return;
+    }
+    critical_section_enter();
+    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        if (!g_wasm_driver_registry[i].in_use ||
+            g_wasm_driver_registry[i].owner_pid != owner_pid) {
+            continue;
+        }
+        if (g_wasm_driver_registry[i].driver == driver) {
+            g_wasm_driver_registry[i].in_use = 0;
+            g_wasm_driver_registry[i].owner_pid = 0;
+            g_wasm_driver_registry[i].driver = 0;
+            break;
+        }
+    }
+    critical_section_leave();
+}
+
+static wasm_driver_t *
+wasm_driver_registry_get(uint32_t owner_pid)
+{
+    wasm_driver_t *driver = 0;
+    if (owner_pid == 0) {
+        return 0;
+    }
+    critical_section_enter();
+    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        if (g_wasm_driver_registry[i].in_use &&
+            g_wasm_driver_registry[i].owner_pid == owner_pid) {
+            driver = g_wasm_driver_registry[i].driver;
+            break;
+        }
+    }
+    critical_section_leave();
+    return driver;
+}
+
+static wasm_driver_thread_slot_t *
+wasm_driver_thread_slot_alloc(void)
+{
+    wasm_driver_thread_slot_t *slot = 0;
+    critical_section_enter();
+    for (uint32_t i = 0; i < WASM_DRIVER_THREAD_SLOTS; ++i) {
+        if (!g_wasm_driver_thread_slots[i].in_use) {
+            slot = &g_wasm_driver_thread_slots[i];
+            slot->in_use = 1;
+            break;
+        }
+    }
+    critical_section_leave();
+    return slot;
+}
+
+static void
+wasm_driver_thread_slot_free(wasm_driver_thread_slot_t *slot)
+{
+    if (!slot) {
+        return;
+    }
+    critical_section_enter();
+    *slot = (wasm_driver_thread_slot_t){0};
+    critical_section_leave();
+}
+
+static process_run_result_t
+wasm_driver_vm_thread_entry(process_t *process, uint32_t tid, void *arg)
+{
+    wasm_driver_thread_slot_t *slot = (wasm_driver_thread_slot_t *)arg;
+    IM3Environment env = 0;
+    IM3Runtime runtime = 0;
+    IM3Module module = 0;
+    IM3Function func = 0;
+    M3Result res = 0;
+    int rc = -1;
+    uint32_t bind_prev = 0xFFFFFFFFu;
+    const void *call_args[4];
+    (void)tid;
+    if (!process || !slot || !slot->in_use) {
+        return PROCESS_RUN_EXITED;
+    }
+    call_args[0] = &slot->argv[0];
+    call_args[1] = &slot->argv[1];
+    call_args[2] = &slot->argv[2];
+    call_args[3] = &slot->argv[3];
+    wasm3_heap_configure(slot->owner_pid, slot->heap_size, 2ULL * 1024ULL * 1024ULL * 1024ULL);
+    preempt_disable();
+    bind_prev = wasm3_heap_bind_pid(slot->owner_pid);
+    env = m3_NewEnvironment();
+    if (!env) {
+        goto out;
+    }
+    runtime = m3_NewRuntime(env, slot->stack_size ? slot->stack_size : (64u * 1024u), 0);
+    if (!runtime) {
+        goto out;
+    }
+    res = m3_ParseModule(env, &module, slot->module_bytes, slot->module_size);
+    if (res) {
+        goto out;
+    }
+    res = m3_LoadModule(runtime, module);
+    if (res) {
+        goto out;
+    }
+    if (wasm3_link_wasmos(module) != 0 || wasm3_link_env(module) != 0) {
+        goto out;
+    }
+    res = m3_FindFunction(&func, runtime, slot->export_name);
+    if (res) {
+        goto out;
+    }
+    res = m3_Call(func, slot->argc, call_args);
+    if (res) {
+        goto out;
+    }
+    rc = 0;
+out:
+    if (runtime) {
+        m3_FreeRuntime(runtime);
+    } else if (module) {
+        m3_FreeModule(module);
+    }
+    if (env) {
+        m3_FreeEnvironment(env);
+    }
+    if (bind_prev != 0xFFFFFFFFu) {
+        wasm3_heap_restore_pid(bind_prev);
+    }
+    preempt_enable();
+    process_set_exit_status(process, rc);
+    wasm_driver_thread_slot_free(slot);
+    return PROCESS_RUN_THREAD_EXITED;
 }
 
 static void
@@ -159,6 +348,7 @@ wasm_driver_start(wasm_driver_t *driver,
     }
 
     driver->active = 1;
+    wasm_driver_registry_set(driver->owner_pid, driver);
     klog_write("[wasm-driver] started\n");
     wasm_driver_leave_runtime(previous_pid);
     return 0;
@@ -177,6 +367,7 @@ wasm_driver_stop(wasm_driver_t *driver)
     if (driver->env) {
         m3_FreeEnvironment(driver->env);
     }
+    wasm_driver_registry_clear(driver->owner_pid, driver);
     wasm_driver_leave_runtime(previous_pid);
     wasm_driver_reset(driver);
 }
@@ -286,5 +477,56 @@ wasm_driver_call_unlocked(wasm_driver_t *driver,
         return -1;
     }
     wasm_driver_leave_runtime(previous_pid);
+    return 0;
+}
+
+int
+wasm_driver_spawn_vm_thread(uint32_t owner_pid,
+                            const char *export_name,
+                            uint32_t argc,
+                            const uint32_t *argv,
+                            uint32_t *out_tid)
+{
+    wasm_driver_t *driver = 0;
+    wasm_driver_thread_slot_t *slot = 0;
+    uint32_t tid = 0;
+    if (owner_pid == 0 || !export_name || !out_tid || argc > 4u) {
+        return -1;
+    }
+    driver = wasm_driver_registry_get(owner_pid);
+    if (!driver || !driver->active || !driver->manifest.module_bytes ||
+        driver->manifest.module_size == 0 || driver->owner_context_id == 0) {
+        return -1;
+    }
+    slot = wasm_driver_thread_slot_alloc();
+    if (!slot) {
+        return -1;
+    }
+    slot->owner_pid = owner_pid;
+    slot->owner_context_id = driver->owner_context_id;
+    slot->module_bytes = driver->manifest.module_bytes;
+    slot->module_size = driver->manifest.module_size;
+    slot->stack_size = driver->manifest.stack_size ? driver->manifest.stack_size : (64u * 1024u);
+    slot->heap_size = driver->manifest.heap_size ? driver->manifest.heap_size : (64u * 1024u);
+    slot->argc = argc;
+    for (uint32_t i = 0; i < argc; ++i) {
+        slot->argv[i] = argv ? argv[i] : 0;
+    }
+    if (str_copy_bytes(slot->export_name,
+                       sizeof(slot->export_name),
+                       (const uint8_t *)export_name,
+                       strlen(export_name)) != 0) {
+        wasm_driver_thread_slot_free(slot);
+        return -1;
+    }
+    if (process_thread_spawn_worker_internal(owner_pid,
+                                             "wasm-vm-thread",
+                                             wasm_driver_vm_thread_entry,
+                                             slot,
+                                             &tid) != 0) {
+        wasm_driver_thread_slot_free(slot);
+        return -1;
+    }
+    *out_tid = tid;
     return 0;
 }

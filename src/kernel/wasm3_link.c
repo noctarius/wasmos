@@ -17,6 +17,7 @@
 #include "policy.h"
 #include "capability.h"
 #include "thread.h"
+#include "wasm_driver.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -2190,13 +2191,48 @@ m3ApiRawFunction(wasmos_thread_create)
     m3ApiGetArg(int32_t, arg0)
     m3ApiGetArg(int32_t, arg1)
     m3ApiGetArg(int32_t, flags)
-    (void)entry_token;
-    (void)arg0;
-    (void)arg1;
-    (void)flags;
-    /* TODO(threading-vm): Implement WASM thread_create by instantiating a
-     * dedicated VM runtime per spawned thread and wiring bootstrap metadata. */
-    m3ApiReturn(-1);
+    process_t *proc = process_get(process_current_pid());
+    uint64_t mem_size = (uint64_t)m3_GetMemorySize(runtime);
+    const char *entry_name = 0;
+    uint32_t argv[2];
+    uint32_t tid = 0;
+    uint32_t argc = 2u;
+    if (!proc || proc->pid == 0 || entry_token <= 0) {
+        m3ApiReturn(-1);
+    }
+    if ((uint64_t)(uint32_t)entry_token >= mem_size) {
+        m3ApiReturn(-1);
+    }
+    entry_name = (const char *)((const uint8_t *)_mem + (uint32_t)entry_token);
+    /* Require NUL-terminated export names in-bounds to avoid host pointer
+     * leaks outside linear memory. */
+    {
+        uint64_t i = 0;
+        uint64_t max = mem_size - (uint64_t)(uint32_t)entry_token;
+        uint8_t terminated = 0;
+        for (; i < max && i < 64u; ++i) {
+            if (entry_name[i] == '\0') {
+                terminated = 1;
+                break;
+            }
+        }
+        if (!terminated) {
+            m3ApiReturn(-1);
+        }
+    }
+    if ((flags & 0x1) == 0) {
+        argc = 0u;
+    }
+    argv[0] = (uint32_t)arg0;
+    argv[1] = (uint32_t)arg1;
+    if (wasm_driver_spawn_vm_thread(proc->pid,
+                                    entry_name,
+                                    argc,
+                                    argv,
+                                    &tid) != 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn((int32_t)tid);
 }
 
 m3ApiRawFunction(wasmos_thread_yield)

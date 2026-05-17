@@ -203,11 +203,11 @@ WASM hostcalls (`dma_map_borrow`, `dma_sync_borrow`, `dma_unmap_borrow`) and
 enforces borrower/source ownership checks, borrow grant compatibility with DMA
 direction, spawn-profile DMA direction/max-bytes checks, DMA window-range
 validation, and fail-closed release/unmap state semantics.
-DMA Phase 2 transport is now wired: `device-manager` sends
-`PROC_IPC_SPAWN_CAPS_V2` descriptors and process-manager copies+validates the
-payload from caller memory before spawn-profile apply; invalid schemas (unknown
-cap bits, malformed ranges, malformed variable-length DMA window payloads) are
-rejected fail-closed.
+DMA Phase 2 transport is now wired in process-manager: PM accepts
+`PROC_IPC_SPAWN_CAPS_V2` descriptors, copies+validates payloads from caller
+memory before spawn-profile apply, and rejects invalid schemas (unknown cap
+bits, malformed ranges, malformed variable-length DMA window payloads)
+fail-closed.
 DMA Phase 3 storage integration is now in-tree on the ATA bootstrap path:
 driver read/write requests attempt borrow-based DMA map/sync/unmap lifecycle
 first and emit one-shot active/fallback markers, while deny/range/unavailable

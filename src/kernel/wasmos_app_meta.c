@@ -31,6 +31,8 @@ wasmos_app_driver_cap_flags(const wasmos_app_desc_t *desc)
             cap_flags |= DEVMGR_CAP_IO_PORT;
         } else if (str_eq_bytes(desc->caps[i].name, desc->caps[i].name_len, "irq.route")) {
             cap_flags |= DEVMGR_CAP_IRQ;
+        } else if (str_eq_bytes(desc->caps[i].name, desc->caps[i].name_len, "dma.buffer")) {
+            cap_flags |= DEVMGR_CAP_DMA;
         }
     }
     return cap_flags;

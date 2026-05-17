@@ -315,8 +315,8 @@ pm_apply_spawn_caps(uint32_t pid, const pm_spawn_caps_t *caps)
                                      caps->irq_mask,
                                      caps->dma_direction_flags,
                                      caps->dma_max_bytes,
-                                     caps->dma_window_base,
-                                     caps->dma_window_length) != 0) {
+                                     caps->dma_window_count,
+                                     caps->dma_windows) != 0) {
         return -1;
     }
     return 0;
@@ -579,8 +579,7 @@ pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t *msg)
     caps.irq_mask = (uint16_t)((uint32_t)msg->arg3 & 0xFFFFu);
     caps.dma_direction_flags = 0;
     caps.dma_max_bytes = 0;
-    caps.dma_window_base = 0;
-    caps.dma_window_length = 0;
+    caps.dma_window_count = 0;
     if ((caps.cap_flags & DEVMGR_CAP_IO_PORT) == 0) {
         caps.io_port_min = 0;
         caps.io_port_max = 0;
@@ -621,6 +620,8 @@ pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t *msg)
                               DEVMGR_CAP_MMIO_MAP |
                               DEVMGR_CAP_IRQ |
                               DEVMGR_CAP_DMA;
+    uint32_t payload_size = 0;
+    uint32_t expected_size = 0;
     uint64_t win_end = 0;
 
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
@@ -631,7 +632,8 @@ pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t *msg)
         return -1;
     }
     parent_pid = caller->pid;
-    if (msg->arg1 == 0 || (uint32_t)msg->arg2 != (uint32_t)sizeof(in_caps)) {
+    payload_size = (uint32_t)msg->arg2;
+    if (msg->arg1 == 0 || payload_size < (uint32_t)sizeof(in_caps)) {
         return -1;
     }
     if (mm_copy_from_user(owner_context,
@@ -656,8 +658,7 @@ pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t *msg)
     caps.irq_mask = in_caps.irq_mask;
     caps.dma_direction_flags = 0;
     caps.dma_max_bytes = 0;
-    caps.dma_window_base = 0;
-    caps.dma_window_length = 0;
+    caps.dma_window_count = 0;
 
     if ((caps.cap_flags & DEVMGR_CAP_IO_PORT) == 0) {
         caps.io_port_min = 0;
@@ -668,24 +669,33 @@ pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t *msg)
             in_caps.dma.direction_flags == 0 ||
             in_caps.dma.max_bytes == 0 ||
             in_caps.dma.window_count == 0 ||
-            in_caps.dma.window_count > 4) {
+            in_caps.dma.window_count > PM_DMA_WINDOW_LIMIT) {
             return -1;
         }
-        if (in_caps.dma.window_count != 1) {
-            /* TODO: Extend kernel spawn-profile storage to preserve multi-window DMA policy. */
+        expected_size = WASMOS_SPAWN_CAPS_V2_SIZE(in_caps.dma.window_count);
+        if (payload_size != expected_size) {
             return -1;
         }
-        if (in_caps.dma.windows[0].length == 0) {
+        if (mm_copy_from_user(owner_context,
+                              caps.dma_windows,
+                              (uint64_t)(uint32_t)msg->arg1 + sizeof(in_caps),
+                              (uint64_t)in_caps.dma.window_count * sizeof(wasmos_dma_window_t)) != 0) {
             return -1;
         }
-        win_end = in_caps.dma.windows[0].base + in_caps.dma.windows[0].length;
-        if (win_end < in_caps.dma.windows[0].base) {
-            return -1;
+        for (uint32_t i = 0; i < in_caps.dma.window_count; ++i) {
+            if (caps.dma_windows[i].length == 0) {
+                return -1;
+            }
+            win_end = caps.dma_windows[i].base + caps.dma_windows[i].length;
+            if (win_end < caps.dma_windows[i].base) {
+                return -1;
+            }
         }
         caps.dma_direction_flags = in_caps.dma.direction_flags;
         caps.dma_max_bytes = in_caps.dma.max_bytes;
-        caps.dma_window_base = in_caps.dma.windows[0].base;
-        caps.dma_window_length = in_caps.dma.windows[0].length;
+        caps.dma_window_count = in_caps.dma.window_count;
+    } else if (payload_size != (uint32_t)sizeof(in_caps)) {
+        return -1;
     }
 
     if (pm_spawn_module(parent_pid, msg->arg0, &pid) != 0) {

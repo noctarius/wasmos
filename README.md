@@ -62,8 +62,8 @@ It defines repository workflow and documentation/update conventions.
   checks, and fail-closed unmap/release behavior
 - Phase 2 spawn-caps-v2 transport is now wired end-to-end between
   `device-manager` and process-manager (`PROC_IPC_SPAWN_CAPS_V2`) with
-  descriptor copy/validation and fail-closed rejection for invalid/multi-window
-  DMA descriptors
+  descriptor copy/validation and fail-closed rejection for invalid DMA
+  descriptor payloads (including malformed variable-length window lists)
 - Ring-3 user-slot mapping now requires explicit `MEM_REGION_FLAG_USER` (legacy implicit bridge removed from page-map path)
 - Syscall boundary now rejects lossy 64-bit-to-32-bit exit-status arguments (`EXIT` / `THREAD_EXIT` require valid signed-32 representation)
 - Hostcall boundary now rejects negative endpoint IDs in `wasmos_serial_register` before `uint32_t` conversion

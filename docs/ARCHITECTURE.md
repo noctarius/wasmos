@@ -206,7 +206,7 @@ validation, and fail-closed release/unmap state semantics.
 DMA Phase 2 transport is now wired: `device-manager` sends
 `PROC_IPC_SPAWN_CAPS_V2` descriptors and process-manager copies+validates the
 payload from caller memory before spawn-profile apply; invalid schemas (unknown
-cap bits, malformed ranges, unsupported multi-window DMA descriptors) are
+cap bits, malformed ranges, malformed variable-length DMA window payloads) are
 rejected fail-closed.
 When native `menuconfig`-style frontends are unavailable, build configuration
 can be edited through the in-repo `kconfiglib` interactive fallback script

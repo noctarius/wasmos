@@ -103,8 +103,8 @@ separation model and deferred hardening backlog.
   - Process-manager now copies descriptors from caller memory and validates cap
     bitmask, IO range ordering, DMA direction flags, max-bytes, and DMA window
     overflow semantics before applying spawn profile.
-  - Invalid and unsupported descriptors (including current multi-window DMA
-    payloads) are rejected fail-closed.
+  - `PROC_IPC_SPAWN_CAPS_V2` now uses variable-length DMA window payloads and
+    rejects malformed size/count/range descriptors fail-closed.
 - [ ] DMA Phase 3: integrate first storage-path driver flow on borrow-based DMA
   with deterministic fallback path and deny-path coverage markers.
 - [ ] Evaluate broader SLAB allocator rollout for kernel and user-space heaps.

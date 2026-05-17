@@ -261,7 +261,6 @@ hw_spawn_driver_index(int32_t index)
 static int
 hw_spawn_driver_index_caps(int32_t index, const spawn_caps_t *caps)
 {
-    wasmos_spawn_caps_v2_t caps_v2;
     uint32_t io_packed = 0;
     if (!caps) {
         return hw_spawn_driver_index(index);
@@ -283,22 +282,9 @@ hw_spawn_driver_index_caps(int32_t index, const spawn_caps_t *caps)
         }
         return 0;
     }
-    memset(&caps_v2, 0, sizeof(caps_v2));
-    caps_v2.cap_flags = caps->cap_flags;
-    caps_v2.io_port_min = caps->io_port_min;
-    caps_v2.io_port_max = caps->io_port_max;
-    caps_v2.irq_mask = caps->irq_mask;
-    if (wasmos_ipc_send(g_dm.proc_endpoint,
-                        g_dm.reply_endpoint,
-                        PROC_IPC_SPAWN_CAPS_V2,
-                        g_dm.request_id,
-                        index,
-                        (int32_t)(uintptr_t)&caps_v2,
-                        (int32_t)sizeof(caps_v2),
-                        0) != 0) {
-        return -1;
-    }
-    return 0;
+    /* TODO: Driver metadata currently does not provide DMA windows/max-bytes.
+     * Reject DMA spawn-caps requests until policy windows are sourced from metadata. */
+    return -1;
 }
 
 static int

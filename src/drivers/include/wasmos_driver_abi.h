@@ -31,8 +31,8 @@ enum {
     PROC_IPC_MODULE_META = 0x206,
     PROC_IPC_MODULE_META_PATH = 0x207,
     /* Spawn with extended capability descriptor payload:
-     * arg0=module_index arg1=user_ptr(wasmos_spawn_caps_v2_t)
-     * arg2=sizeof(wasmos_spawn_caps_v2_t) arg3=reserved(0). */
+     * arg0=module_index arg1=user_ptr(wasmos_spawn_caps_v2_t + windows[])
+     * arg2=payload_size_bytes arg3=reserved(0). */
     PROC_IPC_SPAWN_CAPS_V2 = 0x208,
     PROC_IPC_RESP = 0x280,
     PROC_IPC_ERROR = 0x2FF
@@ -177,7 +177,6 @@ typedef struct __attribute__((packed)) {
     uint32_t max_bytes;
     uint32_t window_count;
     uint32_t reserved0;
-    wasmos_dma_window_t windows[4];
 } wasmos_spawn_dma_caps_t;
 
 typedef struct __attribute__((packed)) {
@@ -187,7 +186,11 @@ typedef struct __attribute__((packed)) {
     uint16_t irq_mask;
     uint16_t reserved0;
     wasmos_spawn_dma_caps_t dma;
+    wasmos_dma_window_t windows[];
 } wasmos_spawn_caps_v2_t;
+
+#define WASMOS_SPAWN_CAPS_V2_SIZE(window_count) \
+    (sizeof(wasmos_spawn_caps_v2_t) + ((uint32_t)(window_count) * (uint32_t)sizeof(wasmos_dma_window_t)))
 
 enum {
     PROC_IPC_DMA_MAP_BORROW_REQ = 0x230,

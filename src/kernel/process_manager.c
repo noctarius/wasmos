@@ -396,7 +396,7 @@ process_manager_entry(process_t *process, void *arg)
         resp.destination = msg.source;
         resp.request_id = msg.request_id;
         resp.arg0 = msg.type;
-        resp.arg1 = 0;
+        resp.arg1 = (uint32_t)rc;
         resp.arg2 = 0;
         resp.arg3 = 0;
         ipc_send_from(process->context_id, msg.source, &resp);

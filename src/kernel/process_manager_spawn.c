@@ -625,7 +625,7 @@ pm_handle_spawn_name(uint32_t pm_context_id, const ipc_message_t *msg)
         return -1;
     }
     if (g_pm.spawn.in_use) {
-        return -1;
+        return -2;
     }
     uint32_t fs_req_id = 0;
     if (pm_send_fs_read(pm_context_id, name, &fs_req_id) != 0) {

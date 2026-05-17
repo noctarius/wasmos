@@ -112,6 +112,7 @@ static char g_read_name[32];
 static char g_read_name_ext[32];
 static char g_read_name_alt[32];
 static char g_read_name_alt_ext[32];
+static char g_read_name_short_ext[16];
 static uint32_t g_read_dir_lba = 0;
 static uint32_t g_read_dir_sectors = 0;
 static uint32_t g_read_sector = 0;
@@ -2472,6 +2473,7 @@ fat_build_read_names(void)
     g_read_name_ext[0] = '\0';
     g_read_name_alt[0] = '\0';
     g_read_name_alt_ext[0] = '\0';
+    g_read_name_short_ext[0] = '\0';
     if (g_read_name[0] == '\0') {
         return;
     }
@@ -2518,6 +2520,30 @@ fat_build_read_names(void)
             g_read_name_alt_ext[pos++] = suffix[s++];
         }
         g_read_name_alt_ext[pos] = '\0';
+    }
+    /* FAT 8.3 fallback for long driver/module names written without LFN
+     * entries (e.g. framebuffer -> FRAMEB~1.WAP). */
+    uint32_t base_len = 0;
+    while (g_read_name[base_len] && g_read_name[base_len] != '.' && base_len < 31u) {
+        base_len++;
+    }
+    if (!fat_name_has_dot(g_read_name) && base_len > 8u) {
+        uint32_t w = 0;
+        while (w < 6u && g_read_name[w] && w + 1 < sizeof(g_read_name_short_ext)) {
+            g_read_name_short_ext[w] = g_read_name[w];
+            w++;
+        }
+        if (w + 7 < sizeof(g_read_name_short_ext)) {
+            g_read_name_short_ext[w++] = '~';
+            g_read_name_short_ext[w++] = '1';
+            g_read_name_short_ext[w++] = '.';
+            g_read_name_short_ext[w++] = 'w';
+            g_read_name_short_ext[w++] = 'a';
+            g_read_name_short_ext[w++] = 'p';
+            g_read_name_short_ext[w] = '\0';
+        } else {
+            g_read_name_short_ext[0] = '\0';
+        }
     }
 }
 
@@ -3126,7 +3152,8 @@ fat_handle_read_app(void)
             if (!fat_name_eq(entry_name, g_read_name) &&
                 !fat_name_eq(entry_name, g_read_name_ext) &&
                 (!g_read_name_alt[0] || !fat_name_eq(entry_name, g_read_name_alt)) &&
-                (!g_read_name_alt_ext[0] || !fat_name_eq(entry_name, g_read_name_alt_ext))) {
+                (!g_read_name_alt_ext[0] || !fat_name_eq(entry_name, g_read_name_alt_ext)) &&
+                (!g_read_name_short_ext[0] || !fat_name_eq(entry_name, g_read_name_short_ext))) {
                 fat_lfn_reset();
                 continue;
             }
@@ -3886,6 +3913,7 @@ initialize(int32_t proc_endpoint,
     g_read_name_ext[0] = '\0';
     g_read_name_alt[0] = '\0';
     g_read_name_alt_ext[0] = '\0';
+    g_read_name_short_ext[0] = '\0';
     g_file_cluster = 0;
     for (uint32_t i = 0; i < FAT_MAX_OPEN_FILES; ++i) {
         g_open_files[i].in_use = 0;

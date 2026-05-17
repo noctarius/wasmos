@@ -279,29 +279,39 @@ spawn_named(const char *name)
     /* PM's by-name spawn path currently accepts up to sixteen bytes packed into
      * the four IPC argument slots. */
     pack_name_args(name, packed);
-    if (wasmos_ipc_send(g_proc_endpoint, g_reply_endpoint,
-                        PROC_IPC_SPAWN_NAME,
-                        g_spawn_request_id,
-                        (int32_t)packed[0],
-                        (int32_t)packed[1],
-                        (int32_t)packed[2],
-                        (int32_t)packed[3]) != 0) {
+    for (uint32_t attempt = 0; attempt < 128u; ++attempt) {
+        if (wasmos_ipc_send(g_proc_endpoint, g_reply_endpoint,
+                            PROC_IPC_SPAWN_NAME,
+                            g_spawn_request_id,
+                            (int32_t)packed[0],
+                            (int32_t)packed[1],
+                            (int32_t)packed[2],
+                            (int32_t)packed[3]) != 0) {
+            return -1;
+        }
+
+        int32_t recv_rc = wasmos_ipc_recv(g_reply_endpoint);
+        if (recv_rc < 0) {
+            return -1;
+        }
+
+        int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+        int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+        if (resp_req != g_spawn_request_id) {
+            return -1;
+        }
+        if (resp_type == PROC_IPC_RESP) {
+            g_spawn_request_id++;
+            return 0;
+        }
+        if (resp_type == PROC_IPC_ERROR &&
+            wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1) == -2) {
+            wasmos_sched_yield();
+            continue;
+        }
         return -1;
     }
-
-    int32_t recv_rc = wasmos_ipc_recv(g_reply_endpoint);
-    if (recv_rc < 0) {
-        return -1;
-    }
-
-    int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
-    int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
-    if (resp_req != g_spawn_request_id || resp_type != PROC_IPC_RESP) {
-        return -1;
-    }
-
-    g_spawn_request_id++;
-    return 0;
+    return -1;
 }
 
 WASMOS_WASM_EXPORT int32_t

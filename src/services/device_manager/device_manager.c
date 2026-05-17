@@ -314,7 +314,7 @@ hw_spawn_driver_name(hw_spawn_target_t target)
 }
 
 static int
-query_module_meta_by_path(const char *path, int32_t *out_index)
+query_module_meta_by_path(const char *path, uint32_t source, int32_t *out_index)
 {
     uint32_t path_len = 0;
     if (!path || !out_index) {
@@ -333,7 +333,7 @@ query_module_meta_by_path(const char *path, int32_t *out_index)
                         g_dm.request_id,
                         (int32_t)(uintptr_t)path,
                         (int32_t)path_len,
-                        PROC_MODULE_SOURCE_INITFS,
+                        (int32_t)source,
                         0) != 0) {
         return -1;
     }
@@ -627,6 +627,14 @@ next_spawn_target(void)
     return HW_SPAWN_NONE;
 }
 
+static int
+has_pending_spawn_needs(void)
+{
+    return g_dm.need_pci_bus || g_dm.need_storage || g_dm.need_fat ||
+           g_dm.need_fs_init || g_dm.need_fs_manager || g_dm.need_serial ||
+           g_dm.need_keyboard || g_dm.need_framebuffer;
+}
+
 static void
 handle_query_endpoint(void)
 {
@@ -706,17 +714,18 @@ initialize(int32_t proc_endpoint,
     hw_scan_acpi();
     g_dm.pci_bus_index = module_index_by_name("pci-bus");
     g_dm.fat_index = module_index_by_name("fs-fat");
-    (void)query_module_meta_by_path("system/drivers/fs_init.wap", &g_dm.fs_init_index);
+    (void)query_module_meta_by_path("system/drivers/fs_init.wap", PROC_MODULE_SOURCE_INITFS, &g_dm.fs_init_index);
     if (g_dm.fs_init_index < 0) {
         g_dm.fs_init_index = module_index_by_name("fs-init");
     }
-    (void)query_module_meta_by_path("system/services/fs_manager.wap", &g_dm.fs_manager_index);
+    (void)query_module_meta_by_path("system/services/fs_manager.wap", PROC_MODULE_SOURCE_INITFS, &g_dm.fs_manager_index);
     if (g_dm.fs_manager_index < 0) {
         g_dm.fs_manager_index = module_index_by_name("fs-manager");
     }
-    (void)query_module_meta_by_path("system/drivers/serial.wap", &g_dm.serial_index);
-    (void)query_module_meta_by_path("system/drivers/keyboard.wap", &g_dm.keyboard_index);
-    (void)query_module_meta_by_path("system/drivers/framebuffer.wap", &g_dm.framebuffer_index);
+    /* Boot-time hardware drivers live on /boot and are not part of initfs. */
+    (void)query_module_meta_by_path("/boot/system/drivers/serial.wap", PROC_MODULE_SOURCE_FS, &g_dm.serial_index);
+    (void)query_module_meta_by_path("/boot/system/drivers/keyboard.wap", PROC_MODULE_SOURCE_FS, &g_dm.keyboard_index);
+    (void)query_module_meta_by_path("/boot/system/drivers/framebuffer.wap", PROC_MODULE_SOURCE_FS, &g_dm.framebuffer_index);
 
     g_dm.need_pci_bus = (g_dm.pci_bus_index >= 0 && !proc_running("pci-bus")) ? 1 : 0;
     g_dm.need_storage = 0;
@@ -734,6 +743,10 @@ initialize(int32_t proc_endpoint,
         if (g_dm.phase == HW_PHASE_SPAWN) {
             hw_spawn_target_t target = next_spawn_target();
             if (target == HW_SPAWN_NONE) {
+                if (has_pending_spawn_needs()) {
+                    wasmos_sched_yield();
+                    continue;
+                }
                 g_dm.phase = HW_PHASE_IDLE;
                 continue;
             }
@@ -841,6 +854,13 @@ initialize(int32_t proc_endpoint,
                 continue;
             }
             if (resp_type == PROC_IPC_ERROR) {
+                int32_t resp_code = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+                if (resp_code == -2) {
+                    wasmos_sched_yield();
+                    g_dm.pending = HW_SPAWN_NONE;
+                    g_dm.phase = HW_PHASE_SPAWN;
+                    continue;
+                }
                 if (g_dm.pending == HW_SPAWN_SERIAL) {
                     g_dm.serial_retries++;
                     if (g_dm.serial_retries > 8) {
@@ -911,6 +931,10 @@ initialize(int32_t proc_endpoint,
         }
 
         if (g_dm.phase == HW_PHASE_IDLE) {
+            if (next_spawn_target() != HW_SPAWN_NONE) {
+                g_dm.phase = HW_PHASE_SPAWN;
+                continue;
+            }
             handle_query_endpoint();
             continue;
         }

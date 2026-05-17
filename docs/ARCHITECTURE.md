@@ -171,6 +171,9 @@ framebuffer buffer class, replacing the prior framebuffer-specific map path.
 Native driver startup now also enforces an explicit ABI magic/version contract
 between kernel and native modules, so mismatched artifacts fail fast instead of
 calling corrupted function-table pointers.
+Process-manager name-based spawns now expose transient busy rejection in
+`PROC_IPC_ERROR.arg1` (`-2`), and early boot callers (`sysinit`,
+`device-manager`) treat it as retryable to avoid cross-service spawn races.
 Device discovery now includes PCI-inventory-driven matching in `device-manager`
 with enriched `pci-bus` inventory records (class/subclass/prog-if plus minimal
 MMIO/IRQ hints). PM now accepts a capability-profile spawn request variant for

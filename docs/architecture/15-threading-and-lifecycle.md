@@ -549,3 +549,85 @@ scheduler/process infrastructure:
 This preserves the current microkernel split, enables incremental delivery,
 and avoids introducing broad policy or runtime complexity before core invariants
 (preemption, IPC wakeup, lifecycle safety) are proven.
+
+---
+
+## 17. Production-Complete Checklist
+
+Status note: Phases A-D are complete for their scoped rollout gates, but
+threading is not yet production-complete. The following checklist defines the
+remaining closure criteria.
+
+1. Complete all thread creation paths to full schedulable behavior
+- Gap: `process_thread_spawn_internal` still carries a Phase B TODO and does
+  not provide the same worker-grade dispatch guarantees as
+  `process_thread_spawn_worker_internal`.
+- References: `src/kernel/process.c` (`TODO(threading-phase-b)`).
+- Acceptance criteria:
+  - any supported thread-create path yields a runnable thread with valid stack,
+    context, and lifecycle accounting
+  - no thread records remain permanently blocked due only to bootstrap path
+    differences
+
+2. Remove context-wide IPC wake fallback
+- Gap: IPC send/notify still fallback to `process_wake_by_context(...)` when
+  targeted wake fails.
+- References: `src/kernel/ipc.c` (`process_wake_thread(...)` fallback paths).
+- Acceptance criteria:
+  - endpoint wait ownership is explicit and thread-targeted only
+  - no context-wide wake storms from message/notification delivery
+  - deterministic wake policy for notification endpoints is documented and
+    enforced (single waiter vs broadcast semantics)
+
+3. Harden process-wait wake precision for multi-threaded waiters
+- Gap: process-wait wake code still tracks a TODO for additional per-thread
+  wait-target bookkeeping.
+- References: `src/kernel/process.c` (`TODO(threading-phase-d)` in
+  `process_wake_waiters`).
+- Acceptance criteria:
+  - waiter selection remains correct under concurrent waiters per process
+  - forced exit/kill cannot strand waiters in blocked state
+  - all wait target transitions are race-safe and traceable
+
+4. Ensure threading selftests are one-shot and fully reaped
+- Gap: baseline selftest processes can remain visible as blocked long-lived
+  process entries instead of deterministic exit+reap.
+- References: `src/kernel/kernel_threading_selftest_runtime.c`.
+- Acceptance criteria:
+  - baseline threading probes always converge to exited/reaped state
+  - no persistent smoke-test process/thread slots after success
+  - failure paths emit explicit diagnostics and terminate deterministically
+
+5. Finalize user-facing native thread wrapper path
+- Gap: strict lifecycle probe still uses raw syscalls and keeps a migration TODO
+  to `wasmos/thread_x86_64.h`.
+- References: `src/kernel/ring3_thread_lifecycle_probe.c`.
+- Acceptance criteria:
+  - lifecycle probe and sample apps use wrapper API by default
+  - wrapper bootstrap stack assumptions are documented and validated
+  - no probe-only syscall special casing required
+
+6. Expand test coverage from marker smoke to race/soak suites
+- Gap: current gates rely heavily on single-boot marker assertions.
+- Acceptance criteria:
+  - repeated stress cycles for create/join/detach/kill across many iterations
+  - multi-waiter IPC fairness/no-starvation checks
+  - join/detach/kill race matrix with deterministic pass/fail outcomes
+  - leak checks for zombie/blocked thread accumulation
+
+7. Close open ABI/policy questions
+- Gap: endpoint wake policy and PID/TID namespace/reporting choices are still
+  listed as open questions.
+- References: this document, section 15.
+- Acceptance criteria:
+  - final policy decisions are recorded here and in `docs/ARCHITECTURE.md`
+  - ABI behavior is stable and explicitly versioned where needed
+  - process diagnostics contract (process-only vs per-thread detail) is fixed
+
+8. Align status language across docs to avoid “phase complete == fully complete”
+- Gap: architecture status text can be read as fully complete despite remaining
+  scoped TODOs.
+- Acceptance criteria:
+  - `README.md` and `docs/ARCHITECTURE.md` call out “scoped complete” vs
+    “production complete” explicitly
+  - unresolved threading checklist items are linked from top-level status docs

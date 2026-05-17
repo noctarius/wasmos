@@ -19,6 +19,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - Recent threading runtime hardening (user-thread kernel-stack setup for
   `THREAD_CREATE` and syscall frame/context synchronization for yield/block
   paths) is documented in `docs/architecture/15-threading-and-lifecycle.md`.
+- Graphics/compositor Phase 0 scaffold (shared ABI constants and minimal
+  `gfx-compositor` endpoint handshake path) is tracked in
+  `docs/architecture/17-graphics-framebuffer-and-compositor.md`.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

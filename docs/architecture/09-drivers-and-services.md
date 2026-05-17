@@ -99,6 +99,9 @@ Current use:
 - hotplug handling
 - capability-based MMIO/PIO/DMA/IRQ grants
 
+DMA-specific design details, rollout phases, and done gates are tracked in
+`docs/architecture/16-dma-transfers.md`.
+
 ### Device-Manager Design (MINIX-Style)
 Goal: evolve the current bootstrap sequencer into a user-space hardware
 discovery and driver lifecycle service, while keeping the kernel policy-light.

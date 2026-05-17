@@ -123,6 +123,13 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
     (void)module_count;
     (void)arg2;
     (void)arg3;
+    if (!api ||
+        api->abi_magic != WASMOS_NATIVE_ABI_MAGIC ||
+        api->abi_version != WASMOS_NATIVE_ABI_VERSION ||
+        !api->console_write ||
+        !api->buffer_borrow) {
+        return -2;
+    }
 
     write_str(api, "[framebuffer] probing\n");
 
@@ -155,14 +162,9 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
     size = (size + 0xFFFu) & ~0xFFFu;
 
     write_str(api, "[framebuffer] mapping\n");
-    void *fb = 0;
-    if (api->buffer_borrow) {
-        fb = api->buffer_borrow(ND_BUFFER_KIND_FRAMEBUFFER, 0,
-                                ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE,
-                                size);
-    } else if (api->framebuffer_map) {
-        fb = api->framebuffer_map(size);
-    }
+    void *fb = api->buffer_borrow(ND_BUFFER_KIND_FRAMEBUFFER, 0,
+                                  ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE,
+                                  size);
     if (!fb) {
         write_str(api, "[framebuffer] map failed\n");
         return -1;

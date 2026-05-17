@@ -3,16 +3,18 @@ package main
 import "unsafe"
 
 const (
-	fsIPCOpenReq   int32 = 0x400
-	fsIPCReadReq   int32 = 0x401
-	fsIPCWriteReq  int32 = 0x406
-	fsIPCCloseReq  int32 = 0x402
-	fsIPCStatReq   int32 = 0x403
-	fsIPCSeekReq   int32 = 0x405
-	fsIPCUnlinkReq int32 = 0x407
-	fsIPCMkdirReq  int32 = 0x408
-	fsIPCRmdirReq  int32 = 0x409
-	fsIPCResp      int32 = 0x480
+	fsIPCOpenReq    int32 = 0x400
+	fsIPCReadReq    int32 = 0x401
+	fsIPCWriteReq   int32 = 0x406
+	fsIPCCloseReq   int32 = 0x402
+	fsIPCStatReq    int32 = 0x403
+	fsIPCSeekReq    int32 = 0x405
+	fsIPCUnlinkReq  int32 = 0x407
+	fsIPCMkdirReq   int32 = 0x408
+	fsIPCRmdirReq   int32 = 0x409
+	fsIPCReaddirReq int32 = 0x410
+	fsIPCResp       int32 = 0x480
+	fsIPCStream     int32 = 0x481
 )
 
 const (
@@ -20,6 +22,8 @@ const (
 	ipcFieldRequestID int32 = 1
 	ipcFieldArg0      int32 = 2
 	ipcFieldArg1      int32 = 3
+	ipcFieldArg2      int32 = 4
+	ipcFieldArg3      int32 = 5
 )
 
 const (
@@ -49,6 +53,7 @@ const (
 
 //go:wasmimport wasmos console_write
 func consoleWrite(ptr uint32, len uint32) int32
+
 //go:wasmimport wasmos console_read
 func consoleRead(ptr uint32, len uint32) int32
 
@@ -211,6 +216,59 @@ func fsRequest(msgType int32, arg0 int32, arg1 int32, arg2 int32, arg3 int32) (i
 		return -1, 0, ErrBadResponse
 	}
 	return ipcLastField(ipcFieldArg0), ipcLastField(ipcFieldArg1), ErrOK
+}
+
+func fsRequestStream(msgType int32, arg0 int32, arg1 int32, arg2 int32, arg3 int32, out []byte) (int, Error) {
+	endpoint := fsEndpoint()
+	if endpoint < 0 || len(out) == 0 {
+		return 0, ErrNotAvailable
+	}
+	replyEndpoint, err := ensureFSReplyEndpoint()
+	if err != ErrOK {
+		return 0, err
+	}
+	requestID := nextFSRequestID()
+	if ipcSend(endpoint, replyEndpoint, msgType, requestID, arg0, arg1, arg2, arg3) != 0 {
+		return 0, ErrHostCallFailed
+	}
+	outLen := 0
+	for {
+		if ipcRecv(replyEndpoint) < 0 {
+			return 0, ErrHostCallFailed
+		}
+		if ipcLastField(ipcFieldRequestID) != requestID {
+			continue
+		}
+		t := ipcLastField(ipcFieldType)
+		if t == fsIPCStream {
+			args := [4]int32{
+				ipcLastField(ipcFieldArg0),
+				ipcLastField(ipcFieldArg1),
+				ipcLastField(ipcFieldArg2),
+				ipcLastField(ipcFieldArg3),
+			}
+			for i := 0; i < 4; i++ {
+				c := byte(args[i] & 0xFF)
+				if c == 0 {
+					continue
+				}
+				if outLen+1 >= len(out) {
+					out[len(out)-1] = 0
+					return outLen, ErrOK
+				}
+				out[outLen] = c
+				outLen++
+			}
+			continue
+		}
+		if t != fsIPCResp || ipcLastField(ipcFieldArg0) != 0 {
+			return 0, ErrBadResponse
+		}
+		if outLen < len(out) {
+			out[outLen] = 0
+		}
+		return outLen, ErrOK
+	}
 }
 
 func (stdAPI) WriteString(s string) Error {
@@ -427,4 +485,8 @@ func (fsAPI) Rmdir(path string) Error {
 	}
 	_, _, err = fsRequest(fsIPCRmdirReq, int32(pathLen), 0, 0, 0)
 	return err
+}
+
+func (fsAPI) ReadDir(buffer []byte) (int, Error) {
+	return fsRequestStream(fsIPCReaddirReq, 0, 0, 0, 0, buffer)
 }

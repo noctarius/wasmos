@@ -34,6 +34,7 @@ It defines repository workflow and documentation/update conventions.
 - Usable VT/CLI stack with multi-TTY switching
 - CLI now includes `mount` command for active mount/device inspection
 - CLI `cat` now uses regular libc file I/O against the current working directory (no dedicated root-cat FS IPC opcode)
+- libc now includes `listdir` (`FS_IPC_READDIR_REQ` + stream response handling) and language wrappers expose matching directory-read helpers (`ReadDir`/`read_dir`/`readDir`)
 - libc `read`/`write` now route stdio FDs (`0`/`1`/`2`) to console hostcalls
 - libc and language wrappers now provide line-oriented console input helpers (`readline`)
 - libc now includes process-manager metadata helper APIs in `wasmos/proc.h` (`PROC_IPC_MODULE_META` / `PROC_IPC_MODULE_META_PATH`)

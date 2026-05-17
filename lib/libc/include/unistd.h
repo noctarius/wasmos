@@ -20,5 +20,6 @@ off_t lseek(int fd, off_t offset, int whence);
 int stat(const char *path, struct stat *st);
 int unlink(const char *path);
 int rmdir(const char *path);
+ssize_t listdir(char *buf, size_t count);
 
 #endif

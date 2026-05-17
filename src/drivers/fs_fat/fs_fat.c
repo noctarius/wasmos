@@ -292,7 +292,7 @@ console_write(const char *s)
         g_fs_req.source >= 0 &&
         g_fs_req.request_id != 0 &&
         g_fs_endpoint >= 0 &&
-        (g_fs_req.type == FS_IPC_LIST_ROOT_REQ)) {
+        (g_fs_req.type == FS_IPC_READDIR_REQ)) {
         uint32_t pos = 0;
         while (pos < (uint32_t)len) {
             int32_t a0 = 0;
@@ -3718,7 +3718,7 @@ fat_ipc_dispatch(int32_t type,
         return rc;
     }
 
-    if (type == FS_IPC_LIST_ROOT_REQ) {
+    if (type == FS_IPC_READDIR_REQ) {
         return fat_handle_list();
     }
     if (type == FS_IPC_CHDIR_REQ) {

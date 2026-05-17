@@ -10,12 +10,16 @@ const FS_IPC_SEEK_REQ: i32 = 0x405;
 const FS_IPC_UNLINK_REQ: i32 = 0x407;
 const FS_IPC_MKDIR_REQ: i32 = 0x408;
 const FS_IPC_RMDIR_REQ: i32 = 0x409;
+const FS_IPC_READDIR_REQ: i32 = 0x410;
 const FS_IPC_RESP: i32 = 0x480;
+const FS_IPC_STREAM: i32 = 0x481;
 
 const IPC_FIELD_TYPE: i32 = 0;
 const IPC_FIELD_REQUEST_ID: i32 = 1;
 const IPC_FIELD_ARG0: i32 = 2;
 const IPC_FIELD_ARG1: i32 = 3;
+const IPC_FIELD_ARG2: i32 = 4;
+const IPC_FIELD_ARG3: i32 = 5;
 
 pub const SEEK_SET: i32 = 0;
 pub const SEEK_CUR: i32 = 1;
@@ -132,6 +136,58 @@ fn fsRequest(msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32) Error!st
         .arg0 = ipc_last_field(IPC_FIELD_ARG0),
         .arg1 = ipc_last_field(IPC_FIELD_ARG1),
     };
+}
+
+fn fsRequestStream(msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32, out: []u8) Error!usize {
+    const endpoint = fs_endpoint();
+    if (endpoint < 0 or out.len == 0) {
+        return Error.NotAvailable;
+    }
+
+    const reply_endpoint = try ensureFsReplyEndpoint();
+    const request_id = nextFsRequestId();
+    if (ipc_send(endpoint, reply_endpoint, msg_type, request_id, arg0, arg1, arg2, arg3) != 0) {
+        return Error.HostCallFailed;
+    }
+
+    var out_len: usize = 0;
+    while (true) {
+        if (ipc_recv(reply_endpoint) < 0) {
+            return Error.HostCallFailed;
+        }
+        if (ipc_last_field(IPC_FIELD_REQUEST_ID) != request_id) {
+            continue;
+        }
+
+        const response_type = ipc_last_field(IPC_FIELD_TYPE);
+        if (response_type == FS_IPC_STREAM) {
+            const args = [4]i32{
+                ipc_last_field(IPC_FIELD_ARG0),
+                ipc_last_field(IPC_FIELD_ARG1),
+                ipc_last_field(IPC_FIELD_ARG2),
+                ipc_last_field(IPC_FIELD_ARG3),
+            };
+            for (args) |a| {
+                const c: u8 = @intCast(a & 0xFF);
+                if (c == 0) continue;
+                if (out_len + 1 >= out.len) {
+                    out[out.len - 1] = 0;
+                    return out_len;
+                }
+                out[out_len] = c;
+                out_len += 1;
+            }
+            continue;
+        }
+
+        if (response_type != FS_IPC_RESP or ipc_last_field(IPC_FIELD_ARG0) != 0) {
+            return Error.BadResponse;
+        }
+        if (out_len < out.len) {
+            out[out_len] = 0;
+        }
+        return out_len;
+    }
 }
 
 pub const stdlib = struct {
@@ -348,5 +404,9 @@ pub const fs = struct {
     pub fn rmdir(path: []const u8) Error!void {
         const path_len = try stagePath(path);
         _ = try fsRequest(FS_IPC_RMDIR_REQ, @intCast(path_len), 0, 0, 0);
+    }
+
+    pub fn readDir(buffer: []u8) Error!usize {
+        return fsRequestStream(FS_IPC_READDIR_REQ, 0, 0, 0, 0, buffer);
     }
 };

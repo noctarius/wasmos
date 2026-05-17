@@ -11,12 +11,16 @@ const FS_IPC_SEEK_REQ: i32 = 0x405;
 const FS_IPC_UNLINK_REQ: i32 = 0x407;
 const FS_IPC_MKDIR_REQ: i32 = 0x408;
 const FS_IPC_RMDIR_REQ: i32 = 0x409;
+const FS_IPC_READDIR_REQ: i32 = 0x410;
 const FS_IPC_RESP: i32 = 0x480;
+const FS_IPC_STREAM: i32 = 0x481;
 
 const IPC_FIELD_TYPE: i32 = 0;
 const IPC_FIELD_REQUEST_ID: i32 = 1;
 const IPC_FIELD_ARG0: i32 = 2;
 const IPC_FIELD_ARG1: i32 = 3;
+const IPC_FIELD_ARG2: i32 = 4;
+const IPC_FIELD_ARG3: i32 = 5;
 
 pub const SEEK_SET: i32 = 0;
 pub const SEEK_CUR: i32 = 1;
@@ -156,6 +160,58 @@ fn fs_request(msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> Resu
     ))
 }
 
+fn fs_request_stream(msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32, out: &mut [u8]) -> Result<usize, Error> {
+    let endpoint = unsafe { fs_endpoint() };
+    if endpoint < 0 || out.is_empty() {
+        return Err(Error::NotAvailable);
+    }
+    let reply_endpoint = ensure_fs_reply_endpoint()?;
+    let request_id = next_fs_request_id();
+    if unsafe { ipc_send(endpoint, reply_endpoint, msg_type, request_id, arg0, arg1, arg2, arg3) } != 0 {
+        return Err(Error::HostCallFailed);
+    }
+
+    let mut out_len = 0usize;
+    loop {
+        if unsafe { ipc_recv(reply_endpoint) } < 0 {
+            return Err(Error::HostCallFailed);
+        }
+        let response_request_id = unsafe { ipc_last_field(IPC_FIELD_REQUEST_ID) };
+        if response_request_id != request_id {
+            continue;
+        }
+        let response_type = unsafe { ipc_last_field(IPC_FIELD_TYPE) };
+        if response_type == FS_IPC_STREAM {
+            let args = [
+                unsafe { ipc_last_field(IPC_FIELD_ARG0) },
+                unsafe { ipc_last_field(IPC_FIELD_ARG1) },
+                unsafe { ipc_last_field(IPC_FIELD_ARG2) },
+                unsafe { ipc_last_field(IPC_FIELD_ARG3) },
+            ];
+            for a in args {
+                let c = (a & 0xFF) as u8;
+                if c == 0 {
+                    continue;
+                }
+                if out_len + 1 >= out.len() {
+                    out[out.len() - 1] = 0;
+                    return Ok(out_len);
+                }
+                out[out_len] = c;
+                out_len += 1;
+            }
+            continue;
+        }
+        if response_type != FS_IPC_RESP || unsafe { ipc_last_field(IPC_FIELD_ARG0) } != 0 {
+            return Err(Error::BadResponse);
+        }
+        if out_len < out.len() {
+            out[out_len] = 0;
+        }
+        return Ok(out_len);
+    }
+}
+
 pub mod std {
     use super::{console_read, fmt, raw_write, Error, Write};
 
@@ -212,7 +268,7 @@ pub mod fs {
     use super::{
         fs_buffer_copy, fs_buffer_size, fs_buffer_write, fs_request, Error, FS_IPC_CLOSE_REQ,
         FS_IPC_MKDIR_REQ, FS_IPC_OPEN_REQ, FS_IPC_READ_REQ, FS_IPC_RMDIR_REQ, FS_IPC_SEEK_REQ,
-        FS_IPC_STAT_REQ, FS_IPC_UNLINK_REQ, FS_IPC_WRITE_REQ,
+        FS_IPC_STAT_REQ, FS_IPC_UNLINK_REQ, FS_IPC_WRITE_REQ, FS_IPC_READDIR_REQ, fs_request_stream,
         O_APPEND, O_CREAT, O_RDONLY, O_TRUNC, O_WRONLY, S_IFDIR, S_IFREG,
     };
 
@@ -395,5 +451,9 @@ pub mod fs {
         let path_len = stage_path(path)?;
         let _ = fs_request(FS_IPC_RMDIR_REQ, path_len as i32, 0, 0, 0)?;
         Ok(())
+    }
+
+    pub fn read_dir(buffer: &mut [u8]) -> Result<usize, Error> {
+        fs_request_stream(FS_IPC_READDIR_REQ, 0, 0, 0, 0, buffer)
     }
 }

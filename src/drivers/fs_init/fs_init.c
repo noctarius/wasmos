@@ -126,7 +126,7 @@ initialize(int32_t proc_endpoint,
         int32_t arg3 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
         int32_t status = -1;
 
-        if (type == FS_IPC_LIST_ROOT_REQ) {
+        if (type == FS_IPC_READDIR_REQ) {
             status = emit_init_listing();
         } else if (type == FS_IPC_CHDIR_REQ) {
             char name[32];

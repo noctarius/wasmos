@@ -7,12 +7,16 @@ const FS_IPC_SEEK_REQ: i32 = 0x405;
 const FS_IPC_UNLINK_REQ: i32 = 0x407;
 const FS_IPC_MKDIR_REQ: i32 = 0x408;
 const FS_IPC_RMDIR_REQ: i32 = 0x409;
+const FS_IPC_READDIR_REQ: i32 = 0x410;
 const FS_IPC_RESP: i32 = 0x480;
+const FS_IPC_STREAM: i32 = 0x481;
 
 const IPC_FIELD_TYPE: i32 = 0;
 const IPC_FIELD_REQUEST_ID: i32 = 1;
 const IPC_FIELD_ARG0: i32 = 2;
 const IPC_FIELD_ARG1: i32 = 3;
+const IPC_FIELD_ARG2: i32 = 4;
+const IPC_FIELD_ARG3: i32 = 5;
 
 export const SEEK_SET: i32 = 0;
 export const SEEK_CUR: i32 = 1;
@@ -137,6 +141,64 @@ function fsRequest(type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32): FsRes
     return null;
   }
   return new FsResponse(ipc_last_field(IPC_FIELD_ARG0), ipc_last_field(IPC_FIELD_ARG1));
+}
+
+function fsRequestStream(
+  type: i32,
+  arg0: i32,
+  arg1: i32,
+  arg2: i32,
+  arg3: i32,
+  out: Uint8Array
+): i32 {
+  const endpoint = fs_endpoint();
+  const replyEndpoint = ensureFsReplyEndpoint();
+  if (endpoint < 0 || replyEndpoint < 0 || out.length == 0) {
+    return -1;
+  }
+
+  const requestId = nextFsRequestId();
+  if (ipc_send(endpoint, replyEndpoint, type, requestId, arg0, arg1, arg2, arg3) != 0) {
+    return -1;
+  }
+
+  let outLen: i32 = 0;
+  while (true) {
+    if (ipc_recv(replyEndpoint) < 0) {
+      return -1;
+    }
+    if (ipc_last_field(IPC_FIELD_REQUEST_ID) != requestId) {
+      continue;
+    }
+
+    const respType = ipc_last_field(IPC_FIELD_TYPE);
+    if (respType == FS_IPC_STREAM) {
+      const a0 = ipc_last_field(IPC_FIELD_ARG0);
+      const a1 = ipc_last_field(IPC_FIELD_ARG1);
+      const a2 = ipc_last_field(IPC_FIELD_ARG2);
+      const a3 = ipc_last_field(IPC_FIELD_ARG3);
+      const bytes = [a0, a1, a2, a3];
+      for (let i = 0; i < 4; ++i) {
+        const c = <u8>(bytes[i] & 0xFF);
+        if (c == 0) {
+          continue;
+        }
+        if (outLen + 1 >= out.length) {
+          out[out.length - 1] = 0;
+          return outLen;
+        }
+        out[outLen] = c;
+        outLen += 1;
+      }
+      continue;
+    }
+
+    if (respType != FS_IPC_RESP || ipc_last_field(IPC_FIELD_ARG0) != 0) {
+      return -1;
+    }
+    out[outLen] = 0;
+    return outLen;
+  }
 }
 
 export namespace std {
@@ -339,6 +401,18 @@ export namespace fs {
 
     const response = fsRequest(FS_IPC_RMDIR_REQ, pathBytes.length - 1, 0, 0, 0);
     return response != null && response.arg0 == 0;
+  }
+
+  export function readDir(maxLen: i32 = 512): string | null {
+    if (maxLen <= 1) {
+      return null;
+    }
+    const out = new Uint8Array(maxLen);
+    const got = fsRequestStream(FS_IPC_READDIR_REQ, 0, 0, 0, 0, out);
+    if (got < 0) {
+      return null;
+    }
+    return String.UTF8.decodeUnsafe(out.dataStart, got, false);
   }
 
   export function readFile(path: string): Uint8Array | null {

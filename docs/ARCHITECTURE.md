@@ -173,6 +173,9 @@ framebuffer buffer class, replacing the prior framebuffer-specific map path.
 CLI file reads now go through regular FS open/read/close flows using current
 cwd/session mount state; the dedicated root-cat filesystem IPC opcode path is
 removed from the FS ABI and service/driver dispatch.
+Directory listing now uses `FS_IPC_READDIR_REQ` plus streamed `FS_IPC_STREAM`
+responses end-to-end, and libc/language wrappers expose matching readdir-style
+helpers instead of root-list shortcut opcodes.
 Native driver startup now also enforces an explicit ABI magic/version contract
 between kernel and native modules, so mismatched artifacts fail fast instead of
 calling corrupted function-table pointers.

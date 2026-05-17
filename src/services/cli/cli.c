@@ -1221,7 +1221,7 @@ cli_handle_line(void)
         return 0;
     }
     if (line_eq_ci("ls")) {
-        if (cli_send_fs(FS_IPC_LIST_ROOT_REQ, 0, 0, 0, 0) != 0) {
+        if (cli_send_fs(FS_IPC_READDIR_REQ, 0, 0, 0, 0) != 0) {
             console_write("ls failed\n");
             return 0;
         }

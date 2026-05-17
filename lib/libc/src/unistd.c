@@ -107,6 +107,60 @@ libc_fs_request(int32_t type,
     return 0;
 }
 
+static ssize_t
+libc_fs_request_stream(int32_t type, int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3,
+                       char *out, size_t out_cap)
+{
+    int32_t fs_endpoint = libc_fs_endpoint();
+    int32_t reply_endpoint = libc_fs_reply_endpoint();
+    wasmos_ipc_message_t reply;
+    int32_t request_id;
+    size_t out_len = 0;
+
+    if (fs_endpoint < 0 || reply_endpoint < 0 || !out || out_cap == 0) {
+        return -1;
+    }
+
+    request_id = g_fs_request_id++;
+    if (g_fs_request_id < 1) {
+        g_fs_request_id = 1;
+    }
+
+    if (wasmos_ipc_send(fs_endpoint, reply_endpoint, type, request_id, arg0, arg1, arg2, arg3) != 0) {
+        return -1;
+    }
+
+    for (;;) {
+        if (wasmos_ipc_recv(reply_endpoint) < 0) {
+            return -1;
+        }
+        wasmos_ipc_message_read_last(&reply);
+        if (reply.request_id != request_id) {
+            continue;
+        }
+        if (reply.type == FS_IPC_STREAM) {
+            int32_t args[4] = { reply.arg0, reply.arg1, reply.arg2, reply.arg3 };
+            for (int i = 0; i < 4; ++i) {
+                char c = (char)(args[i] & 0xFF);
+                if (c == '\0') {
+                    continue;
+                }
+                if (out_len + 1 >= out_cap) {
+                    out[out_cap - 1] = '\0';
+                    return (ssize_t)out_len;
+                }
+                out[out_len++] = c;
+            }
+            continue;
+        }
+        if (reply.type != FS_IPC_RESP || reply.arg0 != 0) {
+            return -1;
+        }
+        out[out_len < out_cap ? out_len : (out_cap - 1)] = '\0';
+        return (ssize_t)out_len;
+    }
+}
+
 int
 open(const char *path, int flags, ...)
 {
@@ -335,6 +389,12 @@ rmdir(const char *path)
         return -1;
     }
     return libc_fs_request(FS_IPC_RMDIR_REQ, (int32_t)path_len, 0, 0, 0, NULL, NULL);
+}
+
+ssize_t
+listdir(char *buf, size_t count)
+{
+    return libc_fs_request_stream(FS_IPC_READDIR_REQ, 0, 0, 0, 0, buf, count);
 }
 
 FILE *

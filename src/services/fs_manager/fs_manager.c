@@ -353,7 +353,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             continue;
         }
 
-        if (type == FS_IPC_LIST_ROOT_REQ && state->mount == FS_MOUNT_ROOT) {
+        if (type == FS_IPC_READDIR_REQ && state->mount == FS_MOUNT_ROOT) {
             (void)send_virtual_root_listing(source, request_id);
             continue;
         }

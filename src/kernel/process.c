@@ -1091,6 +1091,75 @@ process_thread_spawn_worker_internal(uint32_t owner_pid,
 }
 
 int
+process_thread_spawn_user_internal(uint32_t owner_pid,
+                                   const char *name,
+                                   uint64_t entry_rip,
+                                   uint64_t user_stack_top,
+                                   uint32_t *out_tid)
+{
+    process_t *owner = process_find_by_pid(owner_pid);
+    thread_t *thread = 0;
+    uint32_t tid = 0;
+    uint32_t stack_pages = 0;
+    uint64_t user_root = 0;
+    if (!owner || !out_tid || entry_rip == 0 || user_stack_top == 0) {
+        return -1;
+    }
+    if (owner->state == PROCESS_STATE_UNUSED || owner->state == PROCESS_STATE_ZOMBIE || owner->exiting) {
+        return -1;
+    }
+    if ((user_stack_top & 0xFULL) != 0) {
+        user_stack_top &= ~0xFULL;
+    }
+    if (thread_spawn_in_owner(owner_pid,
+                              name ? name : "user-thread",
+                              THREAD_STATE_BLOCKED,
+                              THREAD_BLOCK_NONE,
+                              &tid) != 0) {
+        return -1;
+    }
+    thread = thread_get(tid);
+    if (!thread) {
+        thread_reap(tid);
+        return -1;
+    }
+    stack_pages = (PROCESS_STACK_SIZE + PAGE_SIZE - 1u) / PAGE_SIZE;
+    if (process_alloc_thread_stack(thread, stack_pages) != 0) {
+        thread_reap(tid);
+        return -1;
+    }
+    user_root = mm_context_root_table(owner->context_id);
+    if (user_root == 0) {
+        thread_reap(tid);
+        return -1;
+    }
+    thread->ctx.rip = entry_rip;
+    thread->ctx.cs = USER_CS_SELECTOR;
+    thread->ctx.ss = USER_DS_SELECTOR;
+    thread->ctx.user_rsp = user_stack_top;
+    thread->ctx.rsp = thread->kstack_top - (STACK_REDZONE_BYTES + 8u);
+    thread->ctx.rflags = 0x200;
+    thread->ctx.root_table = user_root;
+    thread->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
+    thread->ticks_remaining = thread->time_slice_ticks;
+    thread->ticks_total = 0;
+    owner->thread_count++;
+    owner->live_thread_count++;
+    if (process_wake_thread(tid) == 0) {
+        if (owner->thread_count > 0) {
+            owner->thread_count--;
+        }
+        if (owner->live_thread_count > 0) {
+            owner->live_thread_count--;
+        }
+        thread_reap(tid);
+        return -1;
+    }
+    *out_tid = tid;
+    return 0;
+}
+
+int
 process_set_user_entry(uint32_t pid, uint64_t rip, uint64_t user_rsp)
 {
     /* TODO: Wire this into process-manager launch policy once the first
@@ -1344,10 +1413,6 @@ process_wake_thread(uint32_t tid)
     if (thread->state != THREAD_STATE_BLOCKED) {
         return 0;
     }
-    if (proc->state != PROCESS_STATE_BLOCKED &&
-        !(proc->state == PROCESS_STATE_RUNNING && proc == g_current_process)) {
-        return 0;
-    }
     process_set_ready(proc, thread);
     ready_queue_enqueue(thread);
     return 1;
@@ -1380,7 +1445,7 @@ static int process_schedule_once_impl(void) {
 
     thread_t *thread = ready_queue_dequeue();
     process_t *proc = process_owner_for_thread(thread);
-    if (!thread || !proc || proc->state != PROCESS_STATE_READY || !proc->entry) {
+    if (!thread || !proc || thread->state != THREAD_STATE_READY || !proc->entry) {
         if (g_idle_process && g_idle_process->state == PROCESS_STATE_READY) {
             proc = g_idle_process;
             thread = process_main_thread(proc);
@@ -1535,25 +1600,22 @@ static int process_schedule_once_impl(void) {
             }
         }
     } else if (result == PROCESS_RUN_BLOCKED) {
-        if (thread->block_reason == THREAD_BLOCK_WAIT_PROCESS) {
-            thread_t *next = process_first_owner_ready_thread(proc);
-            if (next && next->tid != thread->tid) {
-                proc->state = PROCESS_STATE_READY;
-                proc->block_reason = PROCESS_BLOCK_NONE;
-                ready_queue_enqueue(next);
-            } else {
-                process_set_blocked(proc, thread, PROCESS_BLOCK_WAIT, THREAD_BLOCK_WAIT_PROCESS);
-            }
-        } else if (proc->state == PROCESS_STATE_READY) {
-            proc->block_reason = PROCESS_BLOCK_NONE;
+        thread_t *next = 0;
+        /* Keep the caller thread blocked with its existing block reason, then
+         * continue running another ready owner thread when available. */
+        if (thread->block_reason == THREAD_BLOCK_NONE) {
+            process_set_blocked(proc, thread, PROCESS_BLOCK_IPC, THREAD_BLOCK_IPC);
         } else {
+            proc->state = PROCESS_STATE_BLOCKED;
             if (proc->block_reason == PROCESS_BLOCK_NONE) {
-                proc->block_reason = PROCESS_BLOCK_IPC;
+                proc->block_reason = PROCESS_BLOCK_WAIT;
             }
-            process_set_blocked(proc, thread, proc->block_reason, THREAD_BLOCK_IPC);
         }
-        if (proc->state == PROCESS_STATE_READY) {
-            thread_set_state(thread->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
+        next = process_first_owner_ready_thread(proc);
+        if (next && next->tid != thread->tid) {
+            proc->state = PROCESS_STATE_READY;
+            proc->block_reason = PROCESS_BLOCK_NONE;
+            ready_queue_enqueue(next);
         }
     } else {
         process_set_ready(proc, thread);

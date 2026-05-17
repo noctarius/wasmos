@@ -18,6 +18,7 @@ bootstrap_modules = [
 spawn = [
   "chardev-client",
   "vt",
+  "gfx-compositor",
   "cli",
 ]
 
@@ -90,6 +91,11 @@ kind = "wasmos_app"
 flags = ["bootstrap"]
 path = "system/services/device_manager.wap"
 source = "device_manager.wap"
+
+[[entries]]
+kind = "wasmos_app"
+path = "system/services/gfx_compositor.wap"
+source = "gfx_compositor.wap"
 
 [[entries]]
 kind = "config"

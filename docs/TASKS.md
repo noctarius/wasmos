@@ -98,7 +98,7 @@ separation model and deferred hardening backlog.
   - Added fail-closed mapped-state behavior for borrow release/unmap ordering.
 - [x] DMA Phase 2: implement `PROC_IPC_SPAWN_CAPS_V2` end-to-end transport in
   `device-manager` + process-manager and wire descriptor parsing/validation.
-  - `device-manager` now sends spawn capability descriptors via
+  - Process-manager now accepts spawn capability descriptors via
     `PROC_IPC_SPAWN_CAPS_V2` payload pointer/size contract.
   - Process-manager now copies descriptors from caller memory and validates cap
     bitmask, IO range ordering, DMA direction flags, max-bytes, and DMA window

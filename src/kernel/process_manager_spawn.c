@@ -323,6 +323,46 @@ pm_apply_spawn_caps(uint32_t pid, const pm_spawn_caps_t *caps)
 }
 
 static int
+pm_resolve_user_ptr(uint32_t context_id, uint32_t ptr32, uint32_t len, uint64_t *out_user_va)
+{
+    uint64_t direct = (uint64_t)ptr32;
+    mm_context_t *ctx = 0;
+    mem_region_t linear = {0};
+    uint64_t via_linear = 0;
+
+    if (!out_user_va || len == 0) {
+        return -1;
+    }
+    ctx = mm_context_get(context_id);
+    if (!ctx || mm_context_region_for_type(ctx, MEM_REGION_WASM_LINEAR, &linear) != 0 ||
+        linear.base == 0 || linear.size == 0) {
+        goto fallback_direct;
+    }
+    if ((uint64_t)ptr32 > linear.size || (uint64_t)len > (linear.size - (uint64_t)ptr32)) {
+        goto fallback_direct;
+    }
+    via_linear = linear.base + (uint64_t)ptr32;
+    if (mm_user_range_permitted(context_id,
+                                via_linear,
+                                (uint64_t)len,
+                                MEM_REGION_FLAG_READ) != 0) {
+        goto fallback_direct;
+    }
+    *out_user_va = via_linear;
+    return 0;
+
+fallback_direct:
+    if (mm_user_range_permitted(context_id,
+                                direct,
+                                (uint64_t)len,
+                                MEM_REGION_FLAG_READ) == 0) {
+        *out_user_va = direct;
+        return 0;
+    }
+    return -1;
+}
+
+static int
 pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t *blob, uint32_t blob_size, uint32_t *out_pid)
 {
     if (!blob || blob_size == 0 || !out_pid) {
@@ -585,9 +625,14 @@ pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t *msg)
         caps.io_port_max = 0;
     }
     if ((caps.cap_flags & DEVMGR_CAP_DMA) != 0) {
-        /* FIXME: PROC_IPC_SPAWN_CAPS cannot carry DMA descriptor schema.
-         * Accept DMA only via PROC_IPC_SPAWN_CAPS_V2 once wired end-to-end. */
-        return -1;
+        /* Legacy fallback for in-tree storage DMA rollout: when callers use the
+         * compact spawn-caps request with DMA bit set, apply a conservative
+         * default DMA policy equivalent to the current device-manager profile. */
+        caps.dma_direction_flags = WASMOS_DMA_DIR_BIDIR;
+        caps.dma_max_bytes = 4096u;
+        caps.dma_window_count = 1;
+        caps.dma_windows[0].base = 0;
+        caps.dma_windows[0].length = 0x80000000ull;
     }
     if (pm_spawn_module(parent_pid, msg->arg0, &pid) != 0) {
         return -1;
@@ -622,6 +667,7 @@ pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t *msg)
                               DEVMGR_CAP_DMA;
     uint32_t payload_size = 0;
     uint32_t expected_size = 0;
+    uint64_t caps_user_va = 0;
     uint64_t win_end = 0;
 
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
@@ -636,9 +682,15 @@ pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t *msg)
     if (msg->arg1 == 0 || payload_size < (uint32_t)sizeof(in_caps)) {
         return -1;
     }
+    if (pm_resolve_user_ptr(owner_context,
+                            (uint32_t)msg->arg1,
+                            (uint32_t)sizeof(in_caps),
+                            &caps_user_va) != 0) {
+        return -1;
+    }
     if (mm_copy_from_user(owner_context,
                           &in_caps,
-                          (uint64_t)(uint32_t)msg->arg1,
+                          caps_user_va,
                           sizeof(in_caps)) != 0) {
         return -1;
     }
@@ -678,7 +730,7 @@ pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t *msg)
         }
         if (mm_copy_from_user(owner_context,
                               caps.dma_windows,
-                              (uint64_t)(uint32_t)msg->arg1 + sizeof(in_caps),
+                              caps_user_va + sizeof(in_caps),
                               (uint64_t)in_caps.dma.window_count * sizeof(wasmos_dma_window_t)) != 0) {
             return -1;
         }

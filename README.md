@@ -61,7 +61,7 @@ It defines repository workflow and documentation/update conventions.
   owner-context validation, borrow-grant checks, capability direction/range
   checks, and fail-closed unmap/release behavior
 - Phase 2 spawn-caps-v2 transport is now wired end-to-end between
-  `device-manager` and process-manager (`PROC_IPC_SPAWN_CAPS_V2`) with
+  process-manager IPC and kernel validation (`PROC_IPC_SPAWN_CAPS_V2`) with
   descriptor copy/validation and fail-closed rejection for invalid DMA
   descriptor payloads (including malformed variable-length window lists)
 - Phase 3 storage-path integration now attempts borrow-based DMA lifecycle in

@@ -161,6 +161,10 @@ Implementation note:
 - If DMA policy denies/unavailable/range checks fail, ATA falls back
   deterministically to the existing PIO/copy data path so bootstrap remains
   stable.
+- Native framebuffer borrow path now also validates borrow-attached DMA wiring
+  through kernel native-driver plumbing: framebuffer buffer borrows attempt
+  DMA map/sync/unmap and emit one-shot `[framebuffer] dma path active` or
+  `[framebuffer] dma fallback active` markers.
 
 Phase 4: Validation and hardening
 - Tasks:

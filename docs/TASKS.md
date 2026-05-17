@@ -113,6 +113,9 @@ separation model and deferred hardening backlog.
   - Deterministic fallback remains active: deny/range/unavailable DMA results
     fall back to existing PIO/copy transfer path without breaking bootstrap.
   - ATA emits one-shot coverage markers for both DMA-active and fallback paths.
+  - Native framebuffer borrow path now also attempts borrow-based DMA
+    map/sync/unmap in kernel native-driver plumbing and emits one-shot active/
+    fallback markers for additional path validation.
 - [ ] Evaluate broader SLAB allocator rollout for kernel and user-space heaps.
 
 ## Runtime and Loading

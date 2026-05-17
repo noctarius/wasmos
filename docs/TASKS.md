@@ -79,6 +79,21 @@ separation model and deferred hardening backlog.
 - [ ] Continue kernel/user boundary hardening under strict ring-3 defaults.
 - [ ] Extend capability-granted MMIO/PIO/DMA/IRQ resource assignment breadth
   and policy coverage.
+- [x] DMA Phase 0: define shared capability/ABI contract scaffolding.
+  - Added `DEVMGR_CAP_DMA`, DMA direction/status constants, and
+    `PROC_IPC_SPAWN_CAPS_V2` contract ids in shared ABI headers.
+  - Added `wasmos_spawn_caps_v2_t` + DMA window/direction/max-bytes schema
+    types for spawn-profile transport.
+  - Added kernel spawn-profile storage/query fields for DMA descriptors
+    (direction/max-bytes/window base+length) for future policy enforcement.
+  - Added explicit fail-closed behavior: legacy `PROC_IPC_SPAWN_CAPS` denies
+    DMA flag usage until v2 descriptor transport is implemented.
+- [ ] DMA Phase 1: implement borrow-buffer-based DMA map/sync/unmap enforcement
+  in kernel (owner/context checks, direction checks, window/range checks).
+- [ ] DMA Phase 2: implement `PROC_IPC_SPAWN_CAPS_V2` end-to-end transport in
+  `device-manager` + process-manager and wire descriptor parsing/validation.
+- [ ] DMA Phase 3: integrate first storage-path driver flow on borrow-based DMA
+  with deterministic fallback path and deny-path coverage markers.
 - [ ] Evaluate broader SLAB allocator rollout for kernel and user-space heaps.
 
 ## Runtime and Loading

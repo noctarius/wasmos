@@ -120,23 +120,17 @@ nd_framebuffer_info(nd_framebuffer_info_t *out)
 }
 
 /*
- * Map the physical framebuffer into the driver's address space at
- * ND_DEVICE_VIRT_BASE and return that virtual pointer.
- * The driver process has no pre-allocated device region; pages are mapped
- * directly into its root page table.
+ * Borrow a process-manager buffer kind and map it into the driver's address
+ * space at ND_DEVICE_VIRT_BASE.
  */
 static void *
-nd_framebuffer_map(uint32_t size)
+nd_buffer_borrow(uint32_t kind, uint32_t source_context_id,
+                 uint32_t flags, uint32_t size)
 {
     if (size == 0 || (size & (uint32_t)(PAGE_SIZE - 1)) != 0) {
         return (void *)0;
     }
-
-    framebuffer_info_t info;
-    if (framebuffer_get_info(&info) != 0) {
-        return (void *)0;
-    }
-    if ((uint64_t)size > info.framebuffer_size) {
+    if (flags == 0) {
         return (void *)0;
     }
 
@@ -148,23 +142,55 @@ nd_framebuffer_map(uint32_t size)
     if (!ctx || ctx->root_table == 0) {
         return (void *)0;
     }
+    if (process_manager_buffer_borrow_context(kind, proc->context_id,
+                                              source_context_id, flags) != 0) {
+        return (void *)0;
+    }
+
+    void *buffer = process_manager_buffer_for_context(kind, proc->context_id);
+    uint32_t max_size = process_manager_buffer_size(kind);
+    if (!buffer || max_size == 0 || size > max_size) {
+        (void)process_manager_buffer_release_context(kind, proc->context_id);
+        return (void *)0;
+    }
 
     uint64_t virt = ND_DEVICE_VIRT_BASE;
-    uint64_t phys = info.framebuffer_base;
+    uint64_t phys = (uint64_t)(uintptr_t)buffer;
     uint64_t pages = (uint64_t)size / PAGE_SIZE;
 
     for (uint64_t i = 0; i < pages; ++i) {
         (void)paging_unmap_4k_in_root(ctx->root_table, virt + i * PAGE_SIZE);
+        /* TODO: enforce PM_BUFFER_BORROW_READ/WRITE mapping permissions instead
+         * of always mapping RW for borrowed native buffers. */
         if (paging_map_4k_in_root(ctx->root_table,
                                   virt + i * PAGE_SIZE,
                                   phys + i * PAGE_SIZE,
                                   MEM_REGION_FLAG_READ |
                                       MEM_REGION_FLAG_WRITE |
                                       MEM_REGION_FLAG_USER) < 0) {
+            (void)process_manager_buffer_release_context(kind, proc->context_id);
             return (void *)0;
         }
     }
     return (void *)(uintptr_t)virt;
+}
+
+static int
+nd_buffer_release(uint32_t kind)
+{
+    process_t *proc = process_get(process_current_pid());
+    if (!proc) {
+        return -1;
+    }
+    return process_manager_buffer_release_context(kind, proc->context_id);
+}
+
+static void *
+nd_framebuffer_map(uint32_t size)
+{
+    return nd_buffer_borrow(PM_BUFFER_KIND_FRAMEBUFFER, 0,
+                            PM_BUFFER_BORROW_READ | PM_BUFFER_BORROW_WRITE,
+                            size);
 }
 
 static int
@@ -521,6 +547,8 @@ native_driver_start(uint32_t context_id,
     api.console_write       = nd_console_write;
     api.console_read        = nd_console_read;
     api.framebuffer_info    = nd_framebuffer_info;
+    api.buffer_borrow       = nd_buffer_borrow;
+    api.buffer_release      = nd_buffer_release;
     api.framebuffer_map     = nd_framebuffer_map;
     api.framebuffer_pixel   = nd_framebuffer_pixel;
     api.io_in8              = nd_io_in8;

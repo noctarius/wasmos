@@ -7,6 +7,10 @@
 #include "wasmos_driver_abi.h"
 
 #define PM_BUFFER_KIND_FS 1u
+#define PM_BUFFER_KIND_FRAMEBUFFER 2u
+
+#define PM_BUFFER_BORROW_READ  0x1u
+#define PM_BUFFER_BORROW_WRITE 0x2u
 
 int process_manager_init(const boot_info_t *boot_info);
 uint32_t process_manager_endpoint(void);

@@ -165,7 +165,9 @@ drivers; `fs-fat` provides boot/FAT routing and `fs-init` provides initfs
 listing. Cross-context buffer sharing now uses a generic kernel borrow/release
 primitive (`buffer_borrow`, `buffer_release`) with typed buffer classes and
 read/write access bits; the FS class currently backs `fs-manager` proxying so
-backends keep zero-copy FS-buffer access against borrowed caller buffers.
+backends keep zero-copy FS-buffer access against borrowed caller buffers. Native
+framebuffer mapping now also uses this generic borrow path via a dedicated
+framebuffer buffer class, replacing the prior framebuffer-specific map path.
 Device discovery now includes PCI-inventory-driven matching in `device-manager`
 with enriched `pci-bus` inventory records (class/subclass/prog-if plus minimal
 MMIO/IRQ hints). PM now accepts a capability-profile spawn request variant for

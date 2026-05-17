@@ -9,6 +9,8 @@ and code iteration.
 IMPORTANT: Create a git commit after each prompt iteration.
 Threading design details are maintained in
 `docs/architecture/15-threading-and-lifecycle.md`.
+DMA transfer design and rollout details are maintained in
+`docs/architecture/16-dma-transfers.md`.
 Ring-3 isolation architecture and separation model are documented in
 `docs/architecture/14-ring3-isolation-and-separation.md`.
 Latest checkpoint: Phase 2 mapping minimization is closed for current strict
@@ -208,6 +210,7 @@ can be edited through the in-repo `kconfiglib` interactive fallback script
 - [Virtual Terminal](architecture/13-virtual-terminal.md)
 - [Ring3 Isolation and Separation](architecture/14-ring3-isolation-and-separation.md)
 - [Threading and Lifecycle](architecture/15-threading-and-lifecycle.md)
+- [DMA Transfers](architecture/16-dma-transfers.md)
 
 ## Update Rules
 - Update the relevant feature document(s) in `docs/architecture/` when behavior

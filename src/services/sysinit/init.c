@@ -267,103 +267,6 @@ pack_name_args(const char *name, uint32_t out[4])
     }
 }
 
-static void
-name_hyphen_to_underscore(const char *src, char *dst, uint32_t dst_len)
-{
-    uint32_t i = 0;
-    if (!dst || dst_len == 0) {
-        return;
-    }
-    if (!src) {
-        dst[0] = '\0';
-        return;
-    }
-    while (src[i] && i + 1 < dst_len) {
-        char c = src[i];
-        dst[i] = (c == '-') ? '_' : c;
-        i++;
-    }
-    dst[i] = '\0';
-}
-
-static int
-query_module_index_by_path(const char *path, int32_t source_kind, int32_t *out_module_index)
-{
-    uint32_t path_len = 0;
-    if (!path || !out_module_index) {
-        return -1;
-    }
-    while (path[path_len] != '\0') {
-        path_len++;
-    }
-    if (path_len == 0 || path_len > 95u) {
-        return -1;
-    }
-    if (wasmos_ipc_send(g_proc_endpoint,
-                        g_reply_endpoint,
-                        PROC_IPC_MODULE_META_PATH,
-                        g_spawn_request_id,
-                        (int32_t)(uintptr_t)path,
-                        (int32_t)path_len,
-                        source_kind,
-                        0) != 0) {
-        return -1;
-    }
-    if (wasmos_ipc_recv(g_reply_endpoint) < 0) {
-        return -1;
-    }
-    int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
-    int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
-    if (resp_req != g_spawn_request_id) {
-        return -1;
-    }
-    g_spawn_request_id++;
-    if (resp_type != PROC_IPC_RESP) {
-        return -1;
-    }
-    *out_module_index = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-    return (*out_module_index >= 0) ? 0 : -1;
-}
-
-static int
-spawn_module_index(int32_t module_index)
-{
-    if (module_index < 0) {
-        return -1;
-    }
-    for (uint32_t attempt = 0; attempt < 128u; ++attempt) {
-        if (wasmos_ipc_send(g_proc_endpoint,
-                            g_reply_endpoint,
-                            PROC_IPC_SPAWN,
-                            g_spawn_request_id,
-                            module_index,
-                            0,
-                            0,
-                            0) != 0) {
-            return -1;
-        }
-        if (wasmos_ipc_recv(g_reply_endpoint) < 0) {
-            return -1;
-        }
-        int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
-        int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
-        if (resp_req != g_spawn_request_id) {
-            return -1;
-        }
-        if (resp_type == PROC_IPC_RESP) {
-            g_spawn_request_id++;
-            return 0;
-        }
-        if (resp_type == PROC_IPC_ERROR &&
-            wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1) == -2) {
-            (void)wasmos_sched_yield();
-            continue;
-        }
-        return -1;
-    }
-    return -1;
-}
-
 static int
 spawn_named(const char *name)
 {
@@ -409,34 +312,6 @@ spawn_named(const char *name)
         return -1;
     }
     return -1;
-}
-
-static int
-spawn_target(const char *name)
-{
-    char norm[32];
-    char path[96];
-    int32_t module_index = -1;
-
-    if (!name || name[0] == '\0') {
-        return -1;
-    }
-
-    name_hyphen_to_underscore(name, norm, sizeof(norm));
-    if (snprintf(path, sizeof(path), "/boot/system/services/%s.wap", norm) > 0 &&
-        query_module_index_by_path(path, PROC_MODULE_SOURCE_FS, &module_index) == 0 &&
-        spawn_module_index(module_index) == 0) {
-        return 0;
-    }
-    if (snprintf(path, sizeof(path), "/boot/apps/%s.wap", norm) > 0 &&
-        query_module_index_by_path(path, PROC_MODULE_SOURCE_FS, &module_index) == 0 &&
-        spawn_module_index(module_index) == 0) {
-        return 0;
-    }
-
-    /* Fallback for legacy modules that are still only discoverable by packed
-     * short name through PM's spawn-name path. */
-    return spawn_named(name);
 }
 
 WASMOS_WASM_EXPORT int32_t
@@ -500,7 +375,7 @@ initialize(int32_t proc_endpoint,
         trace_line("[sysinit] spawn ");
         trace_line(name);
         trace_line("\n");
-        if (spawn_target(name) != 0) {
+        if (spawn_named(name) != 0) {
             log_line("[sysinit] spawn failed\n");
             stall_forever();
         }

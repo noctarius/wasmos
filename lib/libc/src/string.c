@@ -1,5 +1,6 @@
 #include "string.h"
 #include "ctype.h"
+#include <stdint.h>
 
 size_t
 strlen(const char *s)
@@ -178,8 +179,25 @@ memcpy(void *dest, const void *src, size_t count)
     if (!dest || !src) {
         return dest;
     }
-    for (size_t i = 0; i < count; ++i) {
-        out[i] = in[i];
+    /* TODO: memcpy remains intentionally non-overlap-safe; use memmove when ranges can overlap. */
+    while (count >= 32) {
+        *(uint64_t *)(void *)(out) = *(const uint64_t *)(const void *)(in);
+        *(uint64_t *)(void *)(out + 8) = *(const uint64_t *)(const void *)(in + 8);
+        *(uint64_t *)(void *)(out + 16) = *(const uint64_t *)(const void *)(in + 16);
+        *(uint64_t *)(void *)(out + 24) = *(const uint64_t *)(const void *)(in + 24);
+        out += 32;
+        in += 32;
+        count -= 32;
+    }
+    while (count >= 8) {
+        *(uint64_t *)(void *)(out) = *(const uint64_t *)(const void *)(in);
+        out += 8;
+        in += 8;
+        count -= 8;
+    }
+    while (count > 0) {
+        *out++ = *in++;
+        count--;
     }
     return dest;
 }
@@ -193,13 +211,49 @@ memmove(void *dest, const void *src, size_t count)
     if (!dest || !src || dest == src || count == 0) {
         return dest;
     }
-    if (out < in) {
-        for (size_t i = 0; i < count; ++i) {
-            out[i] = in[i];
+    if (out < in || (size_t)(out - in) >= count) {
+        while (count >= 32) {
+            *(uint64_t *)(void *)(out) = *(const uint64_t *)(const void *)(in);
+            *(uint64_t *)(void *)(out + 8) = *(const uint64_t *)(const void *)(in + 8);
+            *(uint64_t *)(void *)(out + 16) = *(const uint64_t *)(const void *)(in + 16);
+            *(uint64_t *)(void *)(out + 24) = *(const uint64_t *)(const void *)(in + 24);
+            out += 32;
+            in += 32;
+            count -= 32;
+        }
+        while (count >= 8) {
+            *(uint64_t *)(void *)(out) = *(const uint64_t *)(const void *)(in);
+            out += 8;
+            in += 8;
+            count -= 8;
+        }
+        while (count > 0) {
+            *out++ = *in++;
+            count--;
         }
     } else {
-        for (size_t i = count; i > 0; --i) {
-            out[i - 1] = in[i - 1];
+        out += count;
+        in += count;
+        while (count >= 32) {
+            out -= 32;
+            in -= 32;
+            *(uint64_t *)(void *)(out) = *(const uint64_t *)(const void *)(in);
+            *(uint64_t *)(void *)(out + 8) = *(const uint64_t *)(const void *)(in + 8);
+            *(uint64_t *)(void *)(out + 16) = *(const uint64_t *)(const void *)(in + 16);
+            *(uint64_t *)(void *)(out + 24) = *(const uint64_t *)(const void *)(in + 24);
+            count -= 32;
+        }
+        while (count >= 8) {
+            out -= 8;
+            in -= 8;
+            *(uint64_t *)(void *)(out) = *(const uint64_t *)(const void *)(in);
+            count -= 8;
+        }
+        while (count > 0) {
+            out--;
+            in--;
+            *out = *in;
+            count--;
         }
     }
     return dest;

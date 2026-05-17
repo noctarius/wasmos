@@ -50,6 +50,11 @@ static char g_history_scratch[sizeof(g_line)];
 static int32_t g_history_scratch_len = 0;
 static uint8_t g_history_have_scratch = 0;
 static uint8_t g_esc_state = 0;
+static uint32_t g_ps_pids[CLI_MAX_PROCS];
+static uint32_t g_ps_parents[CLI_MAX_PROCS];
+static char g_ps_names[CLI_MAX_PROCS][32];
+static wasmos_proc_stats_t g_ps_stats[CLI_MAX_PROCS];
+static uint8_t g_ps_visited[CLI_MAX_PROCS];
 /* Keep in sync with kernel ipc.h */
 #define IPC_ERR_FULL (-3)
 #define CLI_VT_SEND_RETRIES 16384
@@ -698,6 +703,133 @@ buf_append_u32(char *buf, int pos, int cap, uint32_t v)
 }
 
 static int
+buf_append_u64(char *buf, int pos, int cap, uint64_t v)
+{
+    if (v == 0) {
+        if (pos + 1 < cap) { buf[pos++] = '0'; }
+        return pos;
+    }
+    char tmp[24];
+    int tpos = 0;
+    while (v > 0 && tpos < (int)sizeof(tmp)) {
+        tmp[tpos++] = (char)('0' + (v % 10ULL));
+        v /= 10ULL;
+    }
+    for (int i = tpos - 1; i >= 0 && pos + 1 < cap; --i) {
+        buf[pos++] = tmp[i];
+    }
+    return pos;
+}
+
+static int
+buf_append_spaces(char *buf, int pos, int cap, int n)
+{
+    for (int i = 0; i < n && pos + 1 < cap; ++i) {
+        buf[pos++] = ' ';
+    }
+    return pos;
+}
+
+static int
+buf_append_u32_width(char *buf, int pos, int cap, uint32_t v, int width)
+{
+    char tmp[12];
+    int tpos = 0;
+    if (v == 0) {
+        tmp[tpos++] = '0';
+    } else {
+        while (v > 0 && tpos < (int)sizeof(tmp)) {
+            tmp[tpos++] = (char)('0' + (v % 10));
+            v /= 10;
+        }
+    }
+    int pad = width - tpos;
+    pos = buf_append_spaces(buf, pos, cap, pad > 0 ? pad : 0);
+    for (int i = tpos - 1; i >= 0 && pos + 1 < cap; --i) {
+        buf[pos++] = tmp[i];
+    }
+    return pos;
+}
+
+static int
+buf_append_u64_width(char *buf, int pos, int cap, uint64_t v, int width)
+{
+    char tmp[24];
+    int tpos = 0;
+    if (v == 0) {
+        tmp[tpos++] = '0';
+    } else {
+        while (v > 0 && tpos < (int)sizeof(tmp)) {
+            tmp[tpos++] = (char)('0' + (v % 10ULL));
+            v /= 10ULL;
+        }
+    }
+    int pad = width - tpos;
+    pos = buf_append_spaces(buf, pos, cap, pad > 0 ? pad : 0);
+    for (int i = tpos - 1; i >= 0 && pos + 1 < cap; --i) {
+        buf[pos++] = tmp[i];
+    }
+    return pos;
+}
+
+static int
+buf_append_str_width(char *buf, int pos, int cap, const char *s, int width)
+{
+    int start = pos;
+    pos = buf_append_str(buf, pos, cap, s);
+    int written = pos - start;
+    int pad = width - written;
+    return buf_append_spaces(buf, pos, cap, pad > 0 ? pad : 0);
+}
+
+static const char *
+cli_proc_state_name(uint32_t state)
+{
+    switch (state) {
+    case 1: return "ready";
+    case 2: return "run";
+    case 3: return "blk";
+    case 4: return "zmb";
+    default: return "unk";
+    }
+}
+
+static void
+cli_print_ps_table(int32_t count,
+                   const uint32_t *pids,
+                   const uint32_t *parents,
+                   char names[][32],
+                   const wasmos_proc_stats_t *stats)
+{
+    console_write(" pid ppid state thr/live mem(bytes) cpu(ticks) name\n");
+    for (int32_t i = 0; i < count; ++i) {
+        if (pids[i] == 0) {
+            continue;
+        }
+        char row[192];
+        int pos = 0;
+        pos = buf_append_u32_width(row, pos, (int)sizeof(row), pids[i], 4);
+        pos = buf_append_spaces(row, pos, (int)sizeof(row), 1);
+        pos = buf_append_u32_width(row, pos, (int)sizeof(row), parents[i], 4);
+        pos = buf_append_spaces(row, pos, (int)sizeof(row), 1);
+        pos = buf_append_str_width(row, pos, (int)sizeof(row), cli_proc_state_name(stats[i].state), 5);
+        pos = buf_append_spaces(row, pos, (int)sizeof(row), 1);
+        pos = buf_append_u32(row, pos, (int)sizeof(row), stats[i].thread_count);
+        pos = buf_append_str(row, pos, (int)sizeof(row), "/");
+        pos = buf_append_u32_width(row, pos, (int)sizeof(row), stats[i].live_thread_count, 1);
+        pos = buf_append_spaces(row, pos, (int)sizeof(row), 4);
+        pos = buf_append_u64_width(row, pos, (int)sizeof(row), stats[i].mem_bytes, 10);
+        pos = buf_append_spaces(row, pos, (int)sizeof(row), 1);
+        pos = buf_append_u64_width(row, pos, (int)sizeof(row), stats[i].cpu_ticks, 10);
+        pos = buf_append_spaces(row, pos, (int)sizeof(row), 1);
+        pos = buf_append_str(row, pos, (int)sizeof(row), names[i]);
+        pos = buf_append_str(row, pos, (int)sizeof(row), "\n");
+        row[pos] = '\0';
+        console_write(row);
+    }
+}
+
+static int
 cli_find_index_by_pid(uint32_t count, const uint32_t *pids, uint32_t pid)
 {
     for (uint32_t i = 0; i < count; ++i) {
@@ -1036,7 +1168,7 @@ cli_handle_line(void)
         return 0;
     }
     if (line_eq_ci("help")) {
-        console_write("commands: help, ps, kmaps [all], ls, cat <name>, cd <path>, mount, exec <app>, tty <0-3>, halt, reboot\n");
+        console_write("commands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, exec <app>, tty <0-3>, halt, reboot\n");
         return 0;
     }
     if (line_eq_ci("mount")) {
@@ -1152,11 +1284,9 @@ cli_handle_line(void)
         wasmos_system_reboot();
         return 0;
     }
-    if (line_eq_ci("ps")) {
-        uint32_t pids[CLI_MAX_PROCS];
-        uint32_t parents[CLI_MAX_PROCS];
-        char names[CLI_MAX_PROCS][32];
-        uint8_t visited[CLI_MAX_PROCS];
+    if (line_eq_ci("ps") || line_eq_ci("ps tree") || line_eq_ci("ps all")) {
+        int show_tree = line_eq_ci("ps tree") || line_eq_ci("ps all");
+        int show_table = !line_eq_ci("ps tree");
 
         int32_t count = wasmos_proc_count();
         if (count <= 0) {
@@ -1182,40 +1312,49 @@ cli_handle_line(void)
         }
         for (int32_t i = 0; i < count; ++i) {
             uint32_t parent = 0;
-            int32_t pid = wasmos_proc_info_ex(i,
-                                              (int32_t)(uintptr_t)names[i],
-                                              (int32_t)sizeof(names[i]),
-                                              (int32_t)(uintptr_t)&parent);
+            int32_t pid = wasmos_proc_info_stats(i,
+                                                 (int32_t)(uintptr_t)g_ps_names[i],
+                                                 (int32_t)sizeof(g_ps_names[i]),
+                                                 (int32_t)(uintptr_t)&parent,
+                                                 (int32_t)(uintptr_t)&g_ps_stats[i]);
             if (pid <= 0) {
-                pids[i] = 0;
-                parents[i] = 0;
-                names[i][0] = '\0';
+                g_ps_pids[i] = 0;
+                g_ps_parents[i] = 0;
+                g_ps_names[i][0] = '\0';
+                g_ps_stats[i] = (wasmos_proc_stats_t){0};
                 continue;
             }
-            if (wasmos_sync_user_read((int32_t)(uintptr_t)names[i], (int32_t)sizeof(names[i])) != 0 ||
-                wasmos_sync_user_read((int32_t)(uintptr_t)&parent, (int32_t)sizeof(parent)) != 0) {
-                pids[i] = 0;
-                parents[i] = 0;
-                names[i][0] = '\0';
+            if (wasmos_sync_user_read((int32_t)(uintptr_t)g_ps_names[i], (int32_t)sizeof(g_ps_names[i])) != 0 ||
+                wasmos_sync_user_read((int32_t)(uintptr_t)&parent, (int32_t)sizeof(parent)) != 0 ||
+                wasmos_sync_user_read((int32_t)(uintptr_t)&g_ps_stats[i], (int32_t)sizeof(g_ps_stats[i])) != 0) {
+                g_ps_pids[i] = 0;
+                g_ps_parents[i] = 0;
+                g_ps_names[i][0] = '\0';
+                g_ps_stats[i] = (wasmos_proc_stats_t){0};
                 continue;
             }
-            pids[i] = (uint32_t)pid;
-            parents[i] = parent;
-            visited[i] = 0;
+            g_ps_pids[i] = (uint32_t)pid;
+            g_ps_parents[i] = parent;
+            g_ps_visited[i] = 0;
         }
-        console_write("tree:\n");
-        for (int32_t i = 0; i < count; ++i) {
-            if (pids[i] == 0) {
-                continue;
-            }
-            int parent_index = cli_find_index_by_pid((uint32_t)count, pids, parents[i]);
-            if (parents[i] == 0 || parent_index < 0 || parents[i] == pids[i]) {
-                cli_print_tree((uint32_t)i, (uint32_t)count, pids, parents, names, visited, 0);
-            }
+        if (show_table) {
+            cli_print_ps_table(count, g_ps_pids, g_ps_parents, g_ps_names, g_ps_stats);
         }
-        for (int32_t i = 0; i < count; ++i) {
-            if (pids[i] != 0 && !visited[i]) {
-                cli_print_tree((uint32_t)i, (uint32_t)count, pids, parents, names, visited, 0);
+        if (show_tree) {
+            console_write("tree:\n");
+            for (int32_t i = 0; i < count; ++i) {
+                if (g_ps_pids[i] == 0) {
+                    continue;
+                }
+                int parent_index = cli_find_index_by_pid((uint32_t)count, g_ps_pids, g_ps_parents[i]);
+                if (g_ps_parents[i] == 0 || parent_index < 0 || g_ps_parents[i] == g_ps_pids[i]) {
+                    cli_print_tree((uint32_t)i, (uint32_t)count, g_ps_pids, g_ps_parents, g_ps_names, g_ps_visited, 0);
+                }
+            }
+            for (int32_t i = 0; i < count; ++i) {
+                if (g_ps_pids[i] != 0 && !g_ps_visited[i]) {
+                    cli_print_tree((uint32_t)i, (uint32_t)count, g_ps_pids, g_ps_parents, g_ps_names, g_ps_visited, 0);
+                }
             }
         }
         return 0;
@@ -1307,7 +1446,7 @@ initialize(int32_t proc_endpoint,
                 }
             }
             if (g_home_tty == 1) {
-                console_write("WAMOS CLI\ncommands: help, ps, kmaps [all], ls, cat <name>, cd <path>, mount, exec <app>, tty <0-3>, halt, reboot\n");
+                console_write("WAMOS CLI\ncommands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, exec <app>, tty <0-3>, halt, reboot\n");
             }
             g_phase = CLI_PHASE_PROMPT;
             continue;

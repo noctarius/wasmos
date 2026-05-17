@@ -1837,6 +1837,83 @@ int process_info_at_ex(uint32_t index, uint32_t *out_pid, uint32_t *out_parent_p
     }
     return -1;
 }
+
+static uint64_t
+process_sum_thread_ticks(const process_t *proc)
+{
+    uint64_t total = 0;
+    if (!proc || proc->pid == 0) {
+        return 0;
+    }
+    for (uint32_t i = 0;; ++i) {
+        uint32_t tid = 0;
+        if (thread_owner_tid_at(proc->pid, i, &tid) != 0) {
+            break;
+        }
+        thread_t *thread = thread_get(tid);
+        if (!thread || thread->owner_pid != proc->pid) {
+            continue;
+        }
+        total += thread->ticks_total;
+    }
+    return total;
+}
+
+static uint64_t
+process_context_mem_bytes(const process_t *proc)
+{
+    if (!proc || proc->context_id == 0) {
+        return 0;
+    }
+    mm_context_t *ctx = mm_context_get(proc->context_id);
+    if (!ctx) {
+        return 0;
+    }
+    uint64_t bytes = 0;
+    for (uint32_t i = 0; i < ctx->region_count; ++i) {
+        bytes += ctx->regions[i].size;
+    }
+    return bytes;
+}
+
+int
+process_info_at_stats(uint32_t index,
+                      uint32_t *out_pid,
+                      uint32_t *out_parent_pid,
+                      const char **out_name,
+                      process_stats_t *out_stats)
+{
+    if (!out_pid || !out_parent_pid || !out_name || !out_stats) {
+        return -1;
+    }
+    uint32_t current = 0;
+    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        process_t *proc = &g_processes[i];
+        if (proc->state == PROCESS_STATE_UNUSED ||
+            proc->state == PROCESS_STATE_ZOMBIE) {
+            continue;
+        }
+        if (current == index) {
+            *out_pid = proc->pid;
+            *out_parent_pid = proc->parent_pid;
+            *out_name = proc->name ? proc->name : "";
+            out_stats->state = (uint32_t)proc->state;
+            out_stats->block_reason = (uint32_t)proc->block_reason;
+            out_stats->thread_count = proc->thread_count;
+            out_stats->live_thread_count = proc->live_thread_count;
+            out_stats->current_tid =
+                (g_current_process && g_current_process->pid == proc->pid && g_current_thread)
+                    ? g_current_thread->tid
+                    : 0;
+            out_stats->context_id = proc->context_id;
+            out_stats->cpu_ticks = process_sum_thread_ticks(proc);
+            out_stats->mem_bytes = process_context_mem_bytes(proc);
+            return 0;
+        }
+        current++;
+    }
+    return -1;
+}
 static void
 process_sched_invariant_fail(const char *msg, uint64_t a, uint64_t b)
 {

@@ -131,6 +131,17 @@ typedef struct process {
     const char *name;
 } process_t;
 
+typedef struct {
+    uint32_t state;
+    uint32_t block_reason;
+    uint32_t thread_count;
+    uint32_t live_thread_count;
+    uint32_t current_tid;
+    uint32_t context_id;
+    uint64_t cpu_ticks;
+    uint64_t mem_bytes;
+} process_stats_t;
+
 void process_init(void);
 int process_spawn(const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
 int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
@@ -173,6 +184,11 @@ uint32_t process_count_active(void);
 uint32_t process_ready_count(void);
 int process_info_at(uint32_t index, uint32_t *out_pid, const char **out_name);
 int process_info_at_ex(uint32_t index, uint32_t *out_pid, uint32_t *out_parent_pid, const char **out_name);
+int process_info_at_stats(uint32_t index,
+                          uint32_t *out_pid,
+                          uint32_t *out_parent_pid,
+                          const char **out_name,
+                          process_stats_t *out_stats);
 int process_set_user_entry(uint32_t pid, uint64_t rip, uint64_t user_rsp);
 
 #endif

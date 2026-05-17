@@ -2,6 +2,9 @@
 #define WASMOS_CAPABILITY_H
 
 #include <stdint.h>
+#include "wasmos_driver_abi.h"
+
+#define CAPABILITY_DMA_WINDOW_LIMIT 16u
 
 typedef enum {
     CAP_IO_PORT = 0,
@@ -22,8 +25,8 @@ int capability_set_spawn_profile(uint32_t context_id,
                                  uint16_t irq_mask,
                                  uint32_t dma_direction_flags,
                                  uint32_t dma_max_bytes,
-                                 uint64_t dma_window_base,
-                                 uint64_t dma_window_length);
+                                 uint32_t dma_window_count,
+                                 const wasmos_dma_window_t *dma_windows);
 int capability_spawn_profile_configured(uint32_t context_id);
 int capability_io_port_allowed(uint32_t context_id, uint16_t port);
 int capability_irq_line_allowed(uint32_t context_id, uint32_t irq_line);

@@ -13,8 +13,8 @@ typedef struct {
     uint16_t irq_mask;
     uint32_t dma_direction_flags;
     uint32_t dma_max_bytes;
-    uint64_t dma_window_base;
-    uint64_t dma_window_length;
+    uint32_t dma_window_count;
+    wasmos_dma_window_t dma_windows[CAPABILITY_DMA_WINDOW_LIMIT];
     uint32_t mask;
 } capability_context_state_t;
 
@@ -51,8 +51,11 @@ capability_init(void)
         g_cap_ctx[i].irq_mask = 0;
         g_cap_ctx[i].dma_direction_flags = 0;
         g_cap_ctx[i].dma_max_bytes = 0;
-        g_cap_ctx[i].dma_window_base = 0;
-        g_cap_ctx[i].dma_window_length = 0;
+        g_cap_ctx[i].dma_window_count = 0;
+        for (uint32_t w = 0; w < CAPABILITY_DMA_WINDOW_LIMIT; ++w) {
+            g_cap_ctx[i].dma_windows[w].base = 0;
+            g_cap_ctx[i].dma_windows[w].length = 0;
+        }
         g_cap_ctx[i].mask = 0;
     }
     /* Kernel context has all capabilities by construction. */
@@ -118,8 +121,8 @@ capability_set_spawn_profile(uint32_t context_id,
                              uint16_t irq_mask,
                              uint32_t dma_direction_flags,
                              uint32_t dma_max_bytes,
-                             uint64_t dma_window_base,
-                             uint64_t dma_window_length)
+                             uint32_t dma_window_count,
+                             const wasmos_dma_window_t *dma_windows)
 {
     if (context_id > MM_MAX_CONTEXTS) {
         return -1;
@@ -131,15 +134,28 @@ capability_set_spawn_profile(uint32_t context_id,
     ctx->io_port_max = io_port_max;
     ctx->irq_mask = (cap_flags & (1u << 2)) ? irq_mask : 0;
     if ((cap_flags & (1u << 3)) != 0) {
+        if (dma_window_count == 0 || dma_window_count > CAPABILITY_DMA_WINDOW_LIMIT || !dma_windows) {
+            return -1;
+        }
         ctx->dma_direction_flags = dma_direction_flags;
         ctx->dma_max_bytes = dma_max_bytes;
-        ctx->dma_window_base = dma_window_base;
-        ctx->dma_window_length = dma_window_length;
+        ctx->dma_window_count = dma_window_count;
+        for (uint32_t w = 0; w < CAPABILITY_DMA_WINDOW_LIMIT; ++w) {
+            if (dma_windows && w < dma_window_count) {
+                ctx->dma_windows[w] = dma_windows[w];
+            } else {
+                ctx->dma_windows[w].base = 0;
+                ctx->dma_windows[w].length = 0;
+            }
+        }
     } else {
         ctx->dma_direction_flags = 0;
         ctx->dma_max_bytes = 0;
-        ctx->dma_window_base = 0;
-        ctx->dma_window_length = 0;
+        ctx->dma_window_count = 0;
+        for (uint32_t w = 0; w < CAPABILITY_DMA_WINDOW_LIMIT; ++w) {
+            ctx->dma_windows[w].base = 0;
+            ctx->dma_windows[w].length = 0;
+        }
     }
     return 0;
 }
@@ -215,18 +231,25 @@ capability_dma_range_allowed(uint32_t context_id, uint64_t base, uint64_t length
     if (!ctx->spawn_profile_configured || (ctx->mask & (1u << 3)) == 0) {
         return 0;
     }
-    if (ctx->dma_window_length == 0) {
-        return 0;
-    }
-    if (base < ctx->dma_window_base) {
+    if (ctx->dma_window_count == 0 || ctx->dma_window_count > CAPABILITY_DMA_WINDOW_LIMIT) {
         return 0;
     }
     uint64_t end = base + length;
-    uint64_t win_end = ctx->dma_window_base + ctx->dma_window_length;
-    if (end < base || win_end < ctx->dma_window_base) {
+    if (end < base) {
         return 0;
     }
-    return end <= win_end;
+    for (uint32_t w = 0; w < ctx->dma_window_count; ++w) {
+        uint64_t win_base = ctx->dma_windows[w].base;
+        uint64_t win_len = ctx->dma_windows[w].length;
+        uint64_t win_end = win_base + win_len;
+        if (win_len == 0 || win_end < win_base) {
+            continue;
+        }
+        if (base >= win_base && end <= win_end) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 uint32_t

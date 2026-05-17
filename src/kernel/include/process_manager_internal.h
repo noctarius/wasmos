@@ -6,11 +6,13 @@
 #include "ipc.h"
 #include "process.h"
 #include "wasmos_app.h"
+#include "wasmos_driver_abi.h"
 
 #define PM_MAX_MANAGED_APPS 16u
 #define PM_MAX_WAITERS 8u
 #define PM_FS_BUFFER_SIZE (256u * 1024u)
 #define PM_SERVICE_REGISTRY_CAP 32u
+#define PM_DMA_WINDOW_LIMIT 16u
 
 typedef struct {
     uint8_t in_use;
@@ -54,8 +56,8 @@ typedef struct {
     uint16_t irq_mask;
     uint32_t dma_direction_flags;
     uint32_t dma_max_bytes;
-    uint64_t dma_window_base;
-    uint64_t dma_window_length;
+    uint32_t dma_window_count;
+    wasmos_dma_window_t dma_windows[PM_DMA_WINDOW_LIMIT];
 } pm_spawn_caps_t;
 
 typedef struct {

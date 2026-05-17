@@ -7,7 +7,7 @@ export function main(args: Array<string>): i32 {
     std.println("unexpected args");
   }
   if (!printed) {
-    const path = "/assemblyscript-long-file-check.txt";
+    const path = "/boot/assemblyscript-long-file-check.txt";
     const content = String.UTF8.encode("assemblyscript shim long filename\n", false);
     const contentBytes = Uint8Array.wrap(content);
     let writeOk = false;
@@ -37,7 +37,7 @@ export function main(args: Array<string>): i32 {
       }
     }
     printed = true;
-    const startup = fs.readTextFile("/startup.nsh");
+    const startup = fs.readTextFile("/boot/startup.nsh");
     const readable = startup != null && startup.indexOf("BOOTX64.EFI") >= 0;
     std.println("Hello from AssemblyScript on WASMOS!");
     std.println("This is a tiny WASMOS-APP written in AS.");

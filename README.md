@@ -64,6 +64,9 @@ It defines repository workflow and documentation/update conventions.
   `device-manager` and process-manager (`PROC_IPC_SPAWN_CAPS_V2`) with
   descriptor copy/validation and fail-closed rejection for invalid DMA
   descriptor payloads (including malformed variable-length window lists)
+- Phase 3 storage-path integration now attempts borrow-based DMA lifecycle in
+  ATA read/write request handling with deterministic fallback to the existing
+  PIO/copy path and explicit one-shot fallback/active markers
 - Ring-3 user-slot mapping now requires explicit `MEM_REGION_FLAG_USER` (legacy implicit bridge removed from page-map path)
 - Syscall boundary now rejects lossy 64-bit-to-32-bit exit-status arguments (`EXIT` / `THREAD_EXIT` require valid signed-32 representation)
 - Hostcall boundary now rejects negative endpoint IDs in `wasmos_serial_register` before `uint32_t` conversion

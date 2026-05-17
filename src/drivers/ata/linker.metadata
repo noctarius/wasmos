@@ -24,6 +24,10 @@ flags = 0
 name = "irq.route"
 flags = 0
 
+[[capabilities]]
+name = "dma.buffer"
+flags = 0
+
 [[matches]]
 bus = "pci"
 class = 0x01

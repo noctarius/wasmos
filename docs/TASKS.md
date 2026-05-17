@@ -105,8 +105,14 @@ separation model and deferred hardening backlog.
     overflow semantics before applying spawn profile.
   - `PROC_IPC_SPAWN_CAPS_V2` now uses variable-length DMA window payloads and
     rejects malformed size/count/range descriptors fail-closed.
-- [ ] DMA Phase 3: integrate first storage-path driver flow on borrow-based DMA
+- [x] DMA Phase 3: integrate first storage-path driver flow on borrow-based DMA
   with deterministic fallback path and deny-path coverage markers.
+  - ATA storage path now attempts borrow-based DMA lifecycle
+    (`buffer_borrow` + `dma_map_borrow` + `dma_sync_borrow` + `dma_unmap_borrow`)
+    for block read/write requests.
+  - Deterministic fallback remains active: deny/range/unavailable DMA results
+    fall back to existing PIO/copy transfer path without breaking bootstrap.
+  - ATA emits one-shot coverage markers for both DMA-active and fallback paths.
 - [ ] Evaluate broader SLAB allocator rollout for kernel and user-space heaps.
 
 ## Runtime and Loading

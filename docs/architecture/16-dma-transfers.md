@@ -144,7 +144,7 @@ Phase 2: Driver capability plumbing
 - Done gate:
   - spawned DMA driver receives only declared windows and denied-default holds
 
-Phase 3: Storage-path integration
+Phase 3: Storage-path integration (implemented)
 - Tasks:
   - integrate one driver path to use borrow-based DMA APIs (first target:
     storage stack)
@@ -153,6 +153,14 @@ Phase 3: Storage-path integration
 - Done gate:
   - selected storage path performs DMA-backed transfer from borrowed buffers in
     QEMU smoke
+Implementation note:
+- ATA block read/write now attempts a borrow-based DMA lifecycle
+  (`buffer_borrow` + `dma_map_borrow` + `dma_sync_borrow` +
+  `dma_unmap_borrow`) before the transfer path and emits one-shot
+  `[ata] dma ... active|fallback` markers for observability.
+- If DMA policy denies/unavailable/range checks fail, ATA falls back
+  deterministically to the existing PIO/copy data path so bootstrap remains
+  stable.
 
 Phase 4: Validation and hardening
 - Tasks:

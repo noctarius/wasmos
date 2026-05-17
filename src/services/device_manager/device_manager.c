@@ -48,6 +48,10 @@ typedef enum {
 #define DEVICE_REGISTRY_CAP 64
 #define MATCH_ANY_U8 0xFFu
 #define MATCH_ANY_U16 0xFFFFu
+/* FIXME: Replace static DMA policy constants with metadata-sourced windows/limits. */
+#define DEVMGR_DMA_MAX_BYTES 4096u
+#define DEVMGR_DMA_WINDOW_BASE 0ull
+#define DEVMGR_DMA_WINDOW_LENGTH 0x80000000ull
 
 typedef struct {
     uint32_t cap_flags;
@@ -261,6 +265,8 @@ hw_spawn_driver_index(int32_t index)
 static int
 hw_spawn_driver_index_caps(int32_t index, const spawn_caps_t *caps)
 {
+    uint8_t caps_buf[WASMOS_SPAWN_CAPS_V2_SIZE(1)];
+    wasmos_spawn_caps_v2_t *caps_v2 = (wasmos_spawn_caps_v2_t *)(void *)caps_buf;
     uint32_t io_packed = 0;
     if (!caps) {
         return hw_spawn_driver_index(index);
@@ -282,9 +288,27 @@ hw_spawn_driver_index_caps(int32_t index, const spawn_caps_t *caps)
         }
         return 0;
     }
-    /* DMA spawn-caps remain fail-closed here because this path has no
-     * window/max-bytes payload source to build a valid v2 descriptor. */
-    return -1;
+    memset(caps_buf, 0, sizeof(caps_buf));
+    caps_v2->cap_flags = caps->cap_flags;
+    caps_v2->io_port_min = caps->io_port_min;
+    caps_v2->io_port_max = caps->io_port_max;
+    caps_v2->irq_mask = caps->irq_mask;
+    caps_v2->dma.direction_flags = WASMOS_DMA_DIR_BIDIR;
+    caps_v2->dma.max_bytes = DEVMGR_DMA_MAX_BYTES;
+    caps_v2->dma.window_count = 1;
+    caps_v2->windows[0].base = DEVMGR_DMA_WINDOW_BASE;
+    caps_v2->windows[0].length = DEVMGR_DMA_WINDOW_LENGTH;
+    if (wasmos_ipc_send(g_dm.proc_endpoint,
+                        g_dm.reply_endpoint,
+                        PROC_IPC_SPAWN_CAPS_V2,
+                        g_dm.request_id,
+                        index,
+                        (int32_t)(uintptr_t)caps_buf,
+                        (int32_t)sizeof(caps_buf),
+                        0) != 0) {
+        return -1;
+    }
+    return 0;
 }
 
 static int

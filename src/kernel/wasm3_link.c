@@ -508,15 +508,18 @@ wasm_buffer_borrow_impl(int32_t kind, int32_t source_endpoint, int32_t flags)
     uint32_t pid = process_current_pid();
     process_t *proc = process_get(pid);
 
-    /* FIXME: Replace name-based proxy permission with a dedicated capability. */
-    if (!proc || !process_name_eq(proc->name, "fs-manager")) {
-        return IPC_ERR_PERM;
-    }
     if (kind != (int32_t)PM_BUFFER_KIND_FILESYSTEM ||
-        source_endpoint < 0 || flags <= 0 || (flags & ~0x3) != 0) {
+        flags <= 0 || (flags & ~0x3) != 0) {
         return IPC_ERR_INVALID;
     }
     if (current_process_context(&context_id) != 0) {
+        return IPC_ERR_PERM;
+    }
+    /* FIXME: Replace mixed role/capability proxy permission with a dedicated
+     * borrow capability once non-FS DMA users are fully profiled. */
+    if (!proc ||
+        (!process_name_eq(proc->name, "fs-manager") &&
+         !capability_has(context_id, CAP_DMA_BUFFER))) {
         return IPC_ERR_PERM;
     }
     if (ipc_endpoint_owner((uint32_t)source_endpoint, &source_owner) != IPC_OK ||
@@ -533,13 +536,15 @@ wasm_buffer_release_impl(int32_t kind)
     uint32_t pid = process_current_pid();
     process_t *proc = process_get(pid);
 
-    if (!proc || !process_name_eq(proc->name, "fs-manager")) {
-        return IPC_ERR_PERM;
-    }
     if (kind != (int32_t)PM_BUFFER_KIND_FILESYSTEM) {
         return IPC_ERR_INVALID;
     }
     if (current_process_context(&context_id) != 0) {
+        return IPC_ERR_PERM;
+    }
+    if (!proc ||
+        (!process_name_eq(proc->name, "fs-manager") &&
+         !capability_has(context_id, CAP_DMA_BUFFER))) {
         return IPC_ERR_PERM;
     }
     return process_manager_buffer_release_context((uint32_t)kind, context_id);
@@ -576,7 +581,7 @@ m3ApiRawFunction(wasmos_dma_map_borrow)
     uint32_t max_bytes = 0;
     uint64_t device_addr = 0;
 
-    if (kind < 0 || source_endpoint < 0 || offset < 0 ||
+    if (kind < 0 || offset < 0 ||
         length <= 0 || direction_flags <= 0) {
         m3ApiReturn(WASMOS_DMA_STATUS_INVALID);
     }
@@ -659,7 +664,7 @@ m3ApiRawFunction(wasmos_dma_unmap_borrow)
     uint32_t context_id = 0;
     uint32_t source_owner = 0;
 
-    if (kind < 0 || source_endpoint < 0) {
+    if (kind < 0) {
         m3ApiReturn(WASMOS_DMA_STATUS_INVALID);
     }
     if (current_process_context(&context_id) != 0 ||

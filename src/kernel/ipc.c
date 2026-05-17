@@ -164,16 +164,14 @@ int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_messa
     ep->queue[ep->tail] = msg;
     ep->tail = (ep->tail + 1u) % IPC_QUEUE_DEPTH;
     ep->count++;
-    uint32_t owner_context_id = ep->owner_context_id;
     uint32_t waiter_tid = ep->waiter_tid;
     ep->waiter_tid = 0;
     spinlock_unlock(&ep->lock);
-    /* Prefer waking a specific waiting thread. Fallback to context-wide wakeup
-     * preserves legacy behavior when no explicit waiter is registered. */
-    if (waiter_tid != 0 && process_wake_thread(waiter_tid) > 0) {
-        return IPC_OK;
+    /* Strict thread-targeted wake: payload remains queued if no waiter thread
+     * is currently blocked on this endpoint. */
+    if (waiter_tid != 0) {
+        (void)process_wake_thread(waiter_tid);
     }
-    process_wake_by_context(owner_context_id);
     return IPC_OK;
 }
 
@@ -226,10 +224,11 @@ int ipc_notify_from(uint32_t sender_context_id, uint32_t endpoint) {
     uint32_t waiter_tid = ep->waiter_tid;
     ep->waiter_tid = 0;
     spinlock_unlock(&ep->lock);
-    if (waiter_tid != 0 && process_wake_thread(waiter_tid) > 0) {
-        return IPC_OK;
+    /* Strict thread-targeted wake: notification count is retained if no waiter
+     * is currently blocked on this endpoint. */
+    if (waiter_tid != 0) {
+        (void)process_wake_thread(waiter_tid);
     }
-    process_wake_by_context(ep->owner_context_id);
     return IPC_OK;
 }
 

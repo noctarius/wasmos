@@ -185,14 +185,6 @@ nd_buffer_release(uint32_t kind)
     return process_manager_buffer_release_context(kind, proc->context_id);
 }
 
-static void *
-nd_framebuffer_map(uint32_t size)
-{
-    return nd_buffer_borrow(PM_BUFFER_KIND_FRAMEBUFFER, 0,
-                            PM_BUFFER_BORROW_READ | PM_BUFFER_BORROW_WRITE,
-                            size);
-}
-
 static int
 nd_framebuffer_pixel(uint32_t x, uint32_t y, uint32_t color)
 {
@@ -544,12 +536,10 @@ native_driver_start(uint32_t context_id,
         (native_driver_entry_fn_t)(uintptr_t)hdr->e_entry;
 
     wasmos_driver_api_t api;
+    memset(&api, 0, sizeof(api));
     api.console_write       = nd_console_write;
     api.console_read        = nd_console_read;
     api.framebuffer_info    = nd_framebuffer_info;
-    api.buffer_borrow       = nd_buffer_borrow;
-    api.buffer_release      = nd_buffer_release;
-    api.framebuffer_map     = nd_framebuffer_map;
     api.framebuffer_pixel   = nd_framebuffer_pixel;
     api.io_in8              = nd_io_in8;
     api.io_in16             = nd_io_in16;
@@ -568,12 +558,19 @@ native_driver_start(uint32_t context_id,
     api.shmem_unmap         = nd_shmem_unmap;
     api.console_ring_id     = nd_console_ring_id;
     api.console_register_fb = nd_console_register_fb;
+    api.buffer_borrow       = nd_buffer_borrow;
+    api.buffer_release      = nd_buffer_release;
+    api.abi_magic           = WASMOS_NATIVE_ABI_MAGIC;
+    api.abi_version         = WASMOS_NATIVE_ABI_VERSION;
 
     klog_write("[native-driver] calling initialize\n");
     int rc = entry(&api,
                    (int)(init_argc > 0 ? init_argv[0] : 0),
                    (int)(init_argc > 1 ? init_argv[1] : 0),
                    (int)(init_argc > 2 ? init_argv[2] : 0));
+    if (rc == -2) {
+        klog_write("[native-driver] ABI mismatch\n");
+    }
     klog_write("[native-driver] initialize returned\n");
     return rc;
 }

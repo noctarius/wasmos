@@ -44,10 +44,6 @@ typedef struct wasmos_driver_api {
     /* Framebuffer — framebuffer_map maps the physical framebuffer into the
      * driver's device address region and returns a virtual pointer to it. */
     int      (*framebuffer_info)(nd_framebuffer_info_t *out);
-    void    *(*buffer_borrow)(uint32_t kind, uint32_t source_context_id,
-                              uint32_t flags, uint32_t size);
-    int      (*buffer_release)(uint32_t kind);
-    /* Deprecated legacy helper; use buffer_borrow with kind=FRAMEBUFFER. */
     void    *(*framebuffer_map)(uint32_t size);
     int      (*framebuffer_pixel)(uint32_t x, uint32_t y, uint32_t color);
 
@@ -92,6 +88,12 @@ typedef struct wasmos_driver_api {
 
     /* Publish framebuffer control endpoint for VT/control-plane clients. */
     int      (*console_register_fb)(uint32_t context_id, uint32_t endpoint);
+
+    /* Generic borrowed-buffer path. Kept after legacy fields to preserve
+     * ABI layout for older native binaries that only know framebuffer_map. */
+    void    *(*buffer_borrow)(uint32_t kind, uint32_t source_context_id,
+                              uint32_t flags, uint32_t size);
+    int      (*buffer_release)(uint32_t kind);
 } wasmos_driver_api_t;
 
 #define ND_BUFFER_KIND_FS          1u

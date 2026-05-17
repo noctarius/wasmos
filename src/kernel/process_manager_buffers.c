@@ -277,7 +277,7 @@ pm_fb_buffer_borrow_flags(uint32_t context_id)
 void *
 process_manager_buffer_for_context(uint32_t kind, uint32_t context_id)
 {
-    if (kind == PM_BUFFER_KIND_FS) {
+    if (kind == PM_BUFFER_KIND_FILESYSTEM) {
         return pm_fs_buffer_for_context(context_id);
     }
     if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
@@ -289,7 +289,7 @@ process_manager_buffer_for_context(uint32_t kind, uint32_t context_id)
 uint32_t
 process_manager_buffer_size(uint32_t kind)
 {
-    if (kind == PM_BUFFER_KIND_FS) {
+    if (kind == PM_BUFFER_KIND_FILESYSTEM) {
         return pm_fs_buffer_size();
     }
     if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
@@ -304,7 +304,7 @@ process_manager_buffer_borrow_context(uint32_t kind,
                                       uint32_t source_context_id,
                                       uint32_t flags)
 {
-    if (kind == PM_BUFFER_KIND_FS) {
+    if (kind == PM_BUFFER_KIND_FILESYSTEM) {
         return pm_fs_buffer_borrow_context(borrower_context_id, source_context_id, flags);
     }
     if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
@@ -316,7 +316,7 @@ process_manager_buffer_borrow_context(uint32_t kind,
 int
 process_manager_buffer_release_context(uint32_t kind, uint32_t borrower_context_id)
 {
-    if (kind == PM_BUFFER_KIND_FS) {
+    if (kind == PM_BUFFER_KIND_FILESYSTEM) {
         return pm_fs_buffer_release_context(borrower_context_id);
     }
     if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
@@ -328,7 +328,7 @@ process_manager_buffer_release_context(uint32_t kind, uint32_t borrower_context_
 uint32_t
 process_manager_buffer_borrow_flags(uint32_t kind, uint32_t context_id)
 {
-    if (kind == PM_BUFFER_KIND_FS) {
+    if (kind == PM_BUFFER_KIND_FILESYSTEM) {
         return pm_fs_buffer_borrow_flags(context_id);
     }
     if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
@@ -340,7 +340,7 @@ process_manager_buffer_borrow_flags(uint32_t kind, uint32_t context_id)
 static pm_fs_buffer_slot_t *
 pm_slot_find_by_kind(uint32_t kind, uint32_t context_id)
 {
-    if (kind == PM_BUFFER_KIND_FS) {
+    if (kind == PM_BUFFER_KIND_FILESYSTEM) {
         return pm_fs_slot_find(context_id);
     }
     if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {

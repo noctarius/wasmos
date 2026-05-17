@@ -6,7 +6,7 @@
 #include "process.h"
 #include "wasmos_driver_abi.h"
 
-#define PM_BUFFER_KIND_FS 1u
+#define PM_BUFFER_KIND_FILESYSTEM 1u
 #define PM_BUFFER_KIND_FRAMEBUFFER 2u
 
 #define PM_BUFFER_BORROW_READ  0x1u

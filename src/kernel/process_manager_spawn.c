@@ -430,8 +430,8 @@ pm_poll_spawn(uint32_t pm_context_id)
 
     uint32_t pid = 0;
     uint32_t size = (uint32_t)msg.arg0;
-    const uint8_t *fs_blob = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FS, pm_context_id);
-    if (size == 0 || size > process_manager_buffer_size(PM_BUFFER_KIND_FS) || !fs_blob ||
+    const uint8_t *fs_blob = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
+    if (size == 0 || size > process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM) || !fs_blob ||
         pm_spawn_from_buffer(g_pm.spawn.parent_pid, fs_blob, size, &pid) != 0) {
         ipc_message_t resp;
         resp.type = PROC_IPC_ERROR;

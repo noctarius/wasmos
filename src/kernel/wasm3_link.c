@@ -411,7 +411,7 @@ wasm_fs_buffer_for_pid(uint32_t pid, uint32_t context_id)
     if (peer && peer->valid && peer->peer_context_id != 0) {
         target_context = peer->peer_context_id;
     }
-    return process_manager_buffer_for_context(PM_BUFFER_KIND_FS, target_context);
+    return process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, target_context);
 }
 
 m3ApiRawFunction(wasmos_ipc_create_endpoint)
@@ -512,7 +512,7 @@ wasm_buffer_borrow_impl(int32_t kind, int32_t source_endpoint, int32_t flags)
     if (!proc || !process_name_eq(proc->name, "fs-manager")) {
         return IPC_ERR_PERM;
     }
-    if (kind != (int32_t)PM_BUFFER_KIND_FS ||
+    if (kind != (int32_t)PM_BUFFER_KIND_FILESYSTEM ||
         source_endpoint < 0 || flags <= 0 || (flags & ~0x3) != 0) {
         return IPC_ERR_INVALID;
     }
@@ -536,7 +536,7 @@ wasm_buffer_release_impl(int32_t kind)
     if (!proc || !process_name_eq(proc->name, "fs-manager")) {
         return IPC_ERR_PERM;
     }
-    if (kind != (int32_t)PM_BUFFER_KIND_FS) {
+    if (kind != (int32_t)PM_BUFFER_KIND_FILESYSTEM) {
         return IPC_ERR_INVALID;
     }
     if (current_process_context(&context_id) != 0) {
@@ -681,13 +681,13 @@ m3ApiRawFunction(wasmos_fs_buffer_borrow)
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, source_endpoint)
     m3ApiGetArg(int32_t, flags)
-    m3ApiReturn(wasm_buffer_borrow_impl((int32_t)PM_BUFFER_KIND_FS, source_endpoint, flags));
+    m3ApiReturn(wasm_buffer_borrow_impl((int32_t)PM_BUFFER_KIND_FILESYSTEM, source_endpoint, flags));
 }
 
 m3ApiRawFunction(wasmos_fs_buffer_release)
 {
     m3ApiReturnType(int32_t)
-    m3ApiReturn(wasm_buffer_release_impl((int32_t)PM_BUFFER_KIND_FS));
+    m3ApiReturn(wasm_buffer_release_impl((int32_t)PM_BUFFER_KIND_FILESYSTEM));
 }
 
 m3ApiRawFunction(wasmos_buffer_borrow)
@@ -1051,7 +1051,7 @@ m3ApiRawFunction(wasmos_block_buffer_write)
 m3ApiRawFunction(wasmos_fs_buffer_size)
 {
     m3ApiReturnType(int32_t)
-    m3ApiReturn((int32_t)process_manager_buffer_size(PM_BUFFER_KIND_FS));
+    m3ApiReturn((int32_t)process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM));
 }
 
 m3ApiRawFunction(wasmos_fs_endpoint)
@@ -1081,7 +1081,7 @@ m3ApiRawFunction(wasmos_fs_buffer_copy)
     if (current_process_context(&context_id) != 0) {
         m3ApiReturn(-1);
     }
-    uint32_t max_len = process_manager_buffer_size(PM_BUFFER_KIND_FS);
+    uint32_t max_len = process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM);
     if ((uint32_t)offset + (uint32_t)len > max_len) {
         m3ApiReturn(-1);
     }
@@ -1104,7 +1104,7 @@ m3ApiRawFunction(wasmos_fs_buffer_copy)
     if (!proc || proc->context_id == 0) {
         m3ApiReturn(-1);
     }
-    borrow_flags = process_manager_buffer_borrow_flags(PM_BUFFER_KIND_FS, context_id);
+    borrow_flags = process_manager_buffer_borrow_flags(PM_BUFFER_KIND_FILESYSTEM, context_id);
     if (borrow_flags != 0 && (borrow_flags & 0x1u) == 0) {
         m3ApiReturn(-1);
     }
@@ -1138,7 +1138,7 @@ m3ApiRawFunction(wasmos_fs_buffer_write)
     if (current_process_context(&context_id) != 0) {
         m3ApiReturn(-1);
     }
-    uint32_t max_len = process_manager_buffer_size(PM_BUFFER_KIND_FS);
+    uint32_t max_len = process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM);
     if ((uint32_t)offset + (uint32_t)len > max_len) {
         m3ApiReturn(-1);
     }
@@ -1161,7 +1161,7 @@ m3ApiRawFunction(wasmos_fs_buffer_write)
     if (!proc || proc->context_id == 0) {
         m3ApiReturn(-1);
     }
-    borrow_flags = process_manager_buffer_borrow_flags(PM_BUFFER_KIND_FS, context_id);
+    borrow_flags = process_manager_buffer_borrow_flags(PM_BUFFER_KIND_FILESYSTEM, context_id);
     if (borrow_flags != 0 && (borrow_flags & 0x2u) == 0) {
         m3ApiReturn(-1);
     }

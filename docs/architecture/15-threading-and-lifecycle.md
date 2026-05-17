@@ -264,16 +264,13 @@ thread-group termination:
 
 ## 7.1 IPC
 
-Current IPC wakeups use `process_wake_by_context(context_id)`.
-
 Threading adds endpoint-level wait ownership:
 
 - `ipc_recv_for` blocks current thread
 - endpoint wait queue stores waiting TIDs
-- send/notify wakes one (or more for notifications if required) waiting thread
-
-Compatibility fallback may wake all threads in same context during transition,
-but final behavior should be targeted wakeup to avoid thundering-herd behavior.
+- send/notify wakes the recorded waiter TID only
+- if no waiter is blocked, message payload/notification count remains queued
+  for a later receiver
 
 ## 7.2 Wait APIs
 
@@ -339,18 +336,49 @@ side-table hooks for later extension.
 
 ---
 
-## 10. WASM Runtime Considerations
+## 10. WASM Runtime Thread Mapping
 
-Phase 1 threads are kernel/native scheduling primitives; wasm3 remains
-single-threaded per runtime instance.
+Thread syscalls (`thread_create`, `thread_join`, `thread_detach`, `thread_exit`)
+are kernel-thread primitives. For WASM workloads, the runtime mapping policy is
+VM-per-thread rather than single-VM concurrent entry.
 
-Practical policy for initial rollout:
+### 10.1 Baseline Policy
 
-- one runtime instance per WASM process thread entrypoint (main thread)
-- no concurrent hostcalls into same wasm3 instance
-- native services/drivers may exploit additional threads first
+- each runnable WASM thread maps to its own wasm3 VM instance
+- each VM instance has isolated interpreter stack/register state
+- threads in one process still share process address space/capabilities via
+  kernel objects (`context_id`, IPC endpoints, shared memory handles)
+- no concurrent execution enters the same wasm3 VM instance
 
-WASM shared-memory atomics/thread proposal support is explicitly deferred.
+### 10.2 Lifecycle Mapping
+
+- `thread_create`:
+  runtime allocates VM instance + thread bootstrap record, then requests kernel
+  thread creation for that entrypoint
+- `thread_exit`:
+  runtime tears down per-thread VM instance; kernel handles TID lifecycle and
+  join wakeup
+- `thread_join`:
+  joins kernel thread, then collects runtime-level completion status for that VM
+- `thread_detach`:
+  runtime marks VM thread non-joinable; kernel auto-reaps detached thread slot
+  on exit
+
+### 10.3 Data Sharing and Synchronization
+
+- VM internals are not implicitly shared between threads
+- cross-thread data sharing must use explicit shared-memory/IPC contracts
+- WASM shared-memory atomics/thread proposal remains deferred for current scope
+
+### 10.4 Language Wrapper Direction
+
+For language wrappers (Rust/Go/Zig/AssemblyScript SDK layers):
+
+- expose thread API as runtime wrappers over kernel thread syscalls
+- wrappers should create/manage one VM instance per OS thread
+- optional user-level fibers/green-threads are allowed inside one OS thread,
+  but are additive scheduling abstractions and do not replace kernel-thread
+  join/detach semantics
 
 ---
 
@@ -472,9 +500,8 @@ Current status:
   `[test] ring3 thread detach join deny ok`); detached threads are now marked
   non-joinable and auto-reaped on exit in scheduler exit paths
 - user-facing continuation-style thread wrapper API
-  (`wasmos/thread_x86_64.h`) is now available for native ring3 callers; the
-  strict lifecycle probe currently keeps raw-syscall flow until its early
-  stack-writability constraints are widened
+  (`wasmos/thread_x86_64.h`) is now available for native ring3 callers and the
+  strict lifecycle probe uses that wrapper path for spawn/join/detach coverage
 
 Exit criteria:
 

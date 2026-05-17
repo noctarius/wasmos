@@ -282,8 +282,8 @@ hw_spawn_driver_index_caps(int32_t index, const spawn_caps_t *caps)
         }
         return 0;
     }
-    /* TODO: Driver metadata currently does not provide DMA windows/max-bytes.
-     * Reject DMA spawn-caps requests until policy windows are sourced from metadata. */
+    /* DMA spawn-caps remain fail-closed here because this path has no
+     * window/max-bytes payload source to build a valid v2 descriptor. */
     return -1;
 }
 

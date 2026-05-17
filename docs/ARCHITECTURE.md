@@ -212,6 +212,9 @@ DMA Phase 3 storage integration is now in-tree on the ATA bootstrap path:
 driver read/write requests attempt borrow-based DMA map/sync/unmap lifecycle
 first and emit one-shot active/fallback markers, while deny/range/unavailable
 results deterministically fall back to the existing PIO/copy path.
+Native framebuffer borrow mapping now also attempts the same borrow-attached
+DMA lifecycle in kernel native-driver plumbing, with one-shot boot markers for
+active/fallback path visibility.
 When native `menuconfig`-style frontends are unavailable, build configuration
 can be edited through the in-repo `kconfiglib` interactive fallback script
 (`scripts/kconfiglib_menuconfig.py`), exposed via CMake targets.

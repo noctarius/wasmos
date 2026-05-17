@@ -10,6 +10,7 @@
 #include "ipc.h"
 #include "io.h"
 #include "policy.h"
+#include "wasmos_driver_abi.h"
 #include <string.h>
 #include <stddef.h>
 
@@ -66,6 +67,9 @@ typedef struct {
 } elf64_phdr_t;
 
 #define PAGE_SIZE 0x1000ULL
+
+static uint8_t g_fb_dma_active_logged = 0;
+static uint8_t g_fb_dma_fallback_logged = 0;
 
 /* -------------------------------------------------------------------------
  * API implementations
@@ -154,6 +158,31 @@ nd_buffer_borrow(uint32_t kind, uint32_t source_context_id,
         return (void *)0;
     }
 
+    if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
+        uint64_t device_addr = 0;
+        if (process_manager_buffer_dma_map(kind,
+                                           proc->context_id,
+                                           source_context_id,
+                                           0u,
+                                           size,
+                                           WASMOS_DMA_DIR_BIDIR,
+                                           &device_addr) == 0 &&
+            process_manager_buffer_dma_sync(kind,
+                                            proc->context_id,
+                                            0u,
+                                            size,
+                                            WASMOS_DMA_SYNC_BIDIR) == 0) {
+            (void)device_addr;
+            if (!g_fb_dma_active_logged) {
+                g_fb_dma_active_logged = 1;
+                klog_write("[framebuffer] dma path active\n");
+            }
+        } else if (!g_fb_dma_fallback_logged) {
+            g_fb_dma_fallback_logged = 1;
+            klog_write("[framebuffer] dma fallback active\n");
+        }
+    }
+
     uint64_t virt = ND_DEVICE_VIRT_BASE;
     uint64_t phys = (uint64_t)(uintptr_t)buffer;
     uint64_t pages = (uint64_t)size / PAGE_SIZE;
@@ -181,6 +210,20 @@ nd_buffer_release(uint32_t kind)
     process_t *proc = process_get(process_current_pid());
     if (!proc) {
         return -1;
+    }
+    if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
+        uint32_t source_context_id =
+            process_manager_buffer_borrow_source_context(kind, proc->context_id);
+        if (source_context_id != 0) {
+            (void)process_manager_buffer_dma_sync(kind,
+                                                  proc->context_id,
+                                                  0u,
+                                                  process_manager_buffer_size(kind),
+                                                  WASMOS_DMA_SYNC_BIDIR);
+            (void)process_manager_buffer_dma_unmap(kind,
+                                                   proc->context_id,
+                                                   source_context_id);
+        }
     }
     return process_manager_buffer_release_context(kind, proc->context_id);
 }

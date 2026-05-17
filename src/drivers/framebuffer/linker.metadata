@@ -14,3 +14,7 @@ heap_pages = 0
 required_endpoint_name = "-"
 required_endpoint_rights = 0
 entry_arg_bindings = []
+
+[[capabilities]]
+name = "dma.buffer"
+flags = 0

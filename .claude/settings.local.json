@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la /Volumes/git/wasmos/src/kernel/*.c)",
+      "Bash(grep -r \"preempt_disable\\\\|preempt_enable\" /Volumes/git/wasmos/src/kernel/*.c -n)",
+      "Bash(file /Volumes/git/wasmos/scripts/*.py)",
+      "Bash(grep -n \"early_log\\\\|ring_buf\\\\|log_buf\\\\|console_buf\" /Volumes/git/wasmos/src/kernel/*.c /Volumes/git/wasmos/src/kernel/include/*.h)"
+    ]
+  }
+}

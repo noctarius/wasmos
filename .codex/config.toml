@@ -1,0 +1,24 @@
+[mcp_servers.postbrain]
+url = "https://postbrain.simplyblock.ai/mcp"
+bearer_token_env_var = "POSTBRAIN_TOKEN"
+
+[mcp_servers.postbrain.tools.list_scopes]
+approval_mode = "approve"
+
+[mcp_servers.postbrain.tools.session_begin]
+approval_mode = "approve"
+
+[mcp_servers.postbrain.tools.recall]
+approval_mode = "approve"
+
+[mcp_servers.postbrain.tools.context]
+approval_mode = "approve"
+
+[mcp_servers.postbrain.tools.knowledge_detail]
+approval_mode = "approve"
+
+[mcp_servers.postbrain.tools.publish]
+approval_mode = "approve"
+
+[mcp_servers.postbrain.tools.remember]
+approval_mode = "approve"

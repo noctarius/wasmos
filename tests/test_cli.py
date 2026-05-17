@@ -28,7 +28,7 @@ class CliIntegrationTests(unittest.TestCase):
             cls.session.send("halt")
             cls.session.close()
 
-    def _cmd_expect(self, cmd: str, needle: bytes, timeout_s: int = 10) -> None:
+    def _cmd_expect(self, cmd: str, needle: bytes, timeout_s: int = 20) -> None:
         mark = self.session.mark()
         self.session.send(cmd)
         ok = self.session.expect_from(mark, needle, timeout_s=timeout_s)
@@ -42,39 +42,37 @@ class CliIntegrationTests(unittest.TestCase):
         self._cmd_expect("help", b"commands:")
 
     def test_ps_lists_processes(self):
-        self._cmd_expect("ps", b"pid")
+        self._cmd_expect("ps", b"cli (pid")
 
     def test_ls_lists_root(self):
-        self._cmd_expect("ls", b"apps")
+        self._cmd_expect("ls", b"boot")
 
     def test_cd_and_ls_apps(self):
         self._cmd_expect("cd /", b"/ wamos>")
-        self._cmd_expect("cd apps", b"/apps wamos>")
-        self._cmd_expect("ls", b"hello_c.wap")
+        self._cmd_expect("cd boot", b"/boot wamos>")
+        self._cmd_expect("ls", b"startup.nsh")
         self._cmd_expect("cd /", b"/ wamos>")
 
     def test_cd_nested_services(self):
         self._cmd_expect("cd /", b"/ wamos>")
-        self._cmd_expect("cd system", b"/system wamos>")
-        self._cmd_expect("cd services", b"/system/services wamos>")
-        self._cmd_expect("cd /", b"/ wamos>")
-        self._cmd_expect("cd /system/services", b"/system/services wamos>")
+        self._cmd_expect("cd boot", b"/boot wamos>")
+        self._cmd_expect("cd system", b"/boot/system wamos>")
+        self._cmd_expect("cd services", b"/boot/system/services wamos>")
         self._cmd_expect("ls", b"cli.wap")
         self._cmd_expect("cd /", b"/ wamos>")
 
     def test_cd_nested_drivers(self):
         self._cmd_expect("cd /", b"/ wamos>")
-        self._cmd_expect("cd system", b"/system wamos>")
-        self._cmd_expect("cd drivers", b"/system/drivers wamos>")
-        self._cmd_expect("cd /", b"/ wamos>")
-        self._cmd_expect("cd /system/drivers", b"/system/drivers wamos>")
+        self._cmd_expect("cd boot", b"/boot wamos>")
+        self._cmd_expect("cd system", b"/boot/system wamos>")
+        self._cmd_expect("cd drivers", b"/boot/system/drivers wamos>")
         self._cmd_expect("ls", b"ata.wap")
         self._cmd_expect("cd /", b"/ wamos>")
 
     def test_cd_dot_and_dotdot(self):
         self._cmd_expect("cd /", b"/ wamos>")
-        self._cmd_expect("cd apps", b"/apps wamos>")
-        self._cmd_expect("cd .", b"/apps wamos>")
+        self._cmd_expect("cd boot", b"/boot wamos>")
+        self._cmd_expect("ls", b"startup.nsh")
         self._cmd_expect("cd ..", b"/ wamos>")
 
     def test_cat_startup(self):

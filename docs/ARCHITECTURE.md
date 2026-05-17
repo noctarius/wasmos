@@ -13,6 +13,8 @@ DMA transfer design and rollout details are maintained in
 `docs/architecture/16-dma-transfers.md`.
 Ring-3 isolation architecture and separation model are documented in
 `docs/architecture/14-ring3-isolation-and-separation.md`.
+Graphics/framebuffer/compositor architecture and rollout are documented in
+`docs/architecture/17-graphics-framebuffer-and-compositor.md`.
 Latest checkpoint: Phase 2 mapping minimization is closed for current strict
 scope; Phase 5 fault-policy expansion coverage is in place for `#PF`, `#UD`,
 `#GP`, `#DE`, `#DB`, `#BP`, `#OF`, `#NM`, `#SS`, and `#AC` process-local
@@ -245,6 +247,7 @@ can be edited through the in-repo `kconfiglib` interactive fallback script
 - [Ring3 Isolation and Separation](architecture/14-ring3-isolation-and-separation.md)
 - [Threading and Lifecycle](architecture/15-threading-and-lifecycle.md)
 - [DMA Transfers](architecture/16-dma-transfers.md)
+- [Graphics, Framebuffer, and Compositor](architecture/17-graphics-framebuffer-and-compositor.md)
 
 ## Update Rules
 - Update the relevant feature document(s) in `docs/architecture/` when behavior

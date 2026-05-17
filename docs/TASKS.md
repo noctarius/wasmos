@@ -117,10 +117,11 @@ separation model and deferred hardening backlog.
     map/sync/unmap in kernel native-driver plumbing and emits one-shot active/
     fallback markers for additional path validation.
 - [ ] Evaluate broader SLAB allocator rollout for kernel and user-space heaps.
-- [ ] DMA Phase 4: expand validation/hardening around framebuffer DMA path.
+- [x] DMA Phase 4: expand validation/hardening around framebuffer DMA path.
   - Kernel native-driver framebuffer borrow path now emits
     `[test] framebuffer dma phase4 matrix ok|mismatch` covering wrong-source
-    deny, repeated map/sync/unmap churn, and stale-unmap deny semantics.
+    deny, oversize/out-of-range deny, DMA-window policy checks, repeated
+    map/sync/unmap churn, and stale-unmap deny semantics.
 
 ## Runtime and Loading
 - [ ] Enforce WASMOS-APP heap `max_pages` (current runtime cap is global).

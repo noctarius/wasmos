@@ -11,6 +11,7 @@
 #include "io.h"
 #include "policy.h"
 #include "wasmos_driver_abi.h"
+#include "capability.h"
 #include <string.h>
 #include <stddef.h>
 
@@ -162,6 +163,8 @@ nd_buffer_borrow(uint32_t kind, uint32_t source_context_id,
     if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
         if (!g_fb_dma_phase4_logged) {
             uint8_t deny_ok = 0;
+            uint8_t range_ok = 0;
+            uint8_t window_ok = 0;
             uint8_t churn_ok = 1;
             uint8_t stale_unmap_ok = 0;
             uint64_t test_addr = 0;
@@ -174,6 +177,27 @@ nd_buffer_borrow(uint32_t kind, uint32_t source_context_id,
                                                WASMOS_DMA_DIR_BIDIR,
                                                &test_addr) != 0) {
                 deny_ok = 1;
+            }
+            /* Phase-4 coverage: oversize/out-of-range mapping must be denied. */
+            if (process_manager_buffer_dma_map(kind,
+                                               proc->context_id,
+                                               source_context_id,
+                                               max_size,
+                                               1u,
+                                               WASMOS_DMA_DIR_BIDIR,
+                                               &test_addr) != 0 &&
+                process_manager_buffer_dma_map(kind,
+                                               proc->context_id,
+                                               source_context_id,
+                                               0u,
+                                               max_size + 1u,
+                                               WASMOS_DMA_DIR_BIDIR,
+                                               &test_addr) != 0) {
+                range_ok = 1;
+            }
+            /* Phase-4 coverage: window policy helper must reject out-of-window range. */
+            if (capability_dma_range_allowed(proc->context_id, 0x0000000100000000ULL, 4096u) == 0) {
+                window_ok = 1;
             }
             /* Phase-4 coverage: repeated map/sync/unmap cycles remain stable. */
             for (uint32_t i = 0; i < 4u; ++i) {
@@ -202,7 +226,7 @@ nd_buffer_borrow(uint32_t kind, uint32_t source_context_id,
                                                  source_context_id) != 0) {
                 stale_unmap_ok = 1;
             }
-            if (deny_ok && churn_ok && stale_unmap_ok) {
+            if (deny_ok && range_ok && window_ok && churn_ok && stale_unmap_ok) {
                 klog_write("[test] framebuffer dma phase4 matrix ok\n");
             } else {
                 klog_write("[test] framebuffer dma phase4 matrix mismatch\n");

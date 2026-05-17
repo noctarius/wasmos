@@ -13,9 +13,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - Ring-3 strict isolation/hardening, threading phase rollout, DMA rollout,
   filesystem/PM service discovery, and CLI/runtime updates are tracked in the
   dedicated docs under `docs/architecture/`.
-- Threading remains scope-complete through Phase D, but not production-complete:
-  see the explicit closure checklist in
-  `docs/architecture/15-threading-and-lifecycle.md` section 17.
+- Threading is production-complete for the current single-core scope; final
+  ABI/policy decisions and closure status are in
+  `docs/architecture/15-threading-and-lifecycle.md` sections 15 and 17.
 - Recent threading runtime hardening (user-thread kernel-stack setup for
   `THREAD_CREATE` and syscall frame/context synchronization for yield/block
   paths) is documented in `docs/architecture/15-threading-and-lifecycle.md`.

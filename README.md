@@ -232,6 +232,7 @@ Current FS namespace model:
 - `docs/architecture/14-ring3-isolation-and-separation.md`: ring-3 isolation and kernel/user-space separation design
 - `docs/architecture/15-threading-and-lifecycle.md`: threading design and rollout
 - `docs/architecture/16-dma-transfers.md`: DMA transfer capability model, phased rollout plan, and validation gates
+- `docs/architecture/17-graphics-framebuffer-and-compositor.md`: microkernel graphics stack design (framebuffer driver, shared-buffer IPC model, compositor ABI, and phased implementation plan)
 - `docs/TASKS.md`: active and planned work
 - `AGENTS.md`: contributor/agent workflow and repository rules
 

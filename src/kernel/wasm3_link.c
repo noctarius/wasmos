@@ -15,6 +15,7 @@
 #include "framebuffer.h"
 #include "irq.h"
 #include "policy.h"
+#include "capability.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -542,6 +543,137 @@ wasm_buffer_release_impl(int32_t kind)
         return IPC_ERR_PERM;
     }
     return process_manager_buffer_release_context((uint32_t)kind, context_id);
+}
+
+static int
+dma_direction_borrow_allowed(uint32_t borrow_flags, uint32_t direction_flags)
+{
+    if (direction_flags == 0) {
+        return 0;
+    }
+    if ((direction_flags & WASMOS_DMA_DIR_TO_DEVICE) != 0 &&
+        (borrow_flags & PM_BUFFER_BORROW_READ) == 0) {
+        return 0;
+    }
+    if ((direction_flags & WASMOS_DMA_DIR_FROM_DEVICE) != 0 &&
+        (borrow_flags & PM_BUFFER_BORROW_WRITE) == 0) {
+        return 0;
+    }
+    return 1;
+}
+
+m3ApiRawFunction(wasmos_dma_map_borrow)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, kind)
+    m3ApiGetArg(int32_t, source_endpoint)
+    m3ApiGetArg(int32_t, offset)
+    m3ApiGetArg(int32_t, length)
+    m3ApiGetArg(int32_t, direction_flags)
+    uint32_t context_id = 0;
+    uint32_t source_owner = 0;
+    uint32_t borrow_flags = 0;
+    uint32_t max_bytes = 0;
+    uint64_t device_addr = 0;
+
+    if (kind < 0 || source_endpoint < 0 || offset < 0 ||
+        length <= 0 || direction_flags <= 0) {
+        m3ApiReturn(WASMOS_DMA_STATUS_INVALID);
+    }
+    if (current_process_context(&context_id) != 0 ||
+        require_dma_capability(context_id) != 0) {
+        m3ApiReturn(WASMOS_DMA_STATUS_DENY);
+    }
+    if (ipc_endpoint_owner((uint32_t)source_endpoint, &source_owner) != IPC_OK ||
+        source_owner == 0 || source_owner == context_id) {
+        m3ApiReturn(WASMOS_DMA_STATUS_DENY);
+    }
+    if (process_manager_buffer_borrow_source_context((uint32_t)kind, context_id) != source_owner) {
+        m3ApiReturn(WASMOS_DMA_STATUS_DENY);
+    }
+    borrow_flags = process_manager_buffer_borrow_flags((uint32_t)kind, context_id);
+    if (!dma_direction_borrow_allowed(borrow_flags, (uint32_t)direction_flags)) {
+        m3ApiReturn(WASMOS_DMA_STATUS_DENY);
+    }
+    if (!capability_dma_direction_allowed(context_id, (uint32_t)direction_flags)) {
+        m3ApiReturn(WASMOS_DMA_STATUS_DENY);
+    }
+    max_bytes = capability_dma_max_bytes(context_id);
+    if (max_bytes == 0 || (uint32_t)length > max_bytes) {
+        m3ApiReturn(WASMOS_DMA_STATUS_RANGE);
+    }
+    if (process_manager_buffer_dma_map((uint32_t)kind,
+                                       context_id,
+                                       source_owner,
+                                       (uint32_t)offset,
+                                       (uint32_t)length,
+                                       (uint32_t)direction_flags,
+                                       &device_addr) != 0) {
+        m3ApiReturn(WASMOS_DMA_STATUS_DENY);
+    }
+    if (!capability_dma_range_allowed(context_id, device_addr, (uint64_t)(uint32_t)length)) {
+        (void)process_manager_buffer_dma_unmap((uint32_t)kind, context_id, source_owner);
+        m3ApiReturn(WASMOS_DMA_STATUS_RANGE);
+    }
+    if (device_addr > 0x7FFFFFFFULL) {
+        (void)process_manager_buffer_dma_unmap((uint32_t)kind, context_id, source_owner);
+        m3ApiReturn(WASMOS_DMA_STATUS_UNAVAILABLE);
+    }
+    m3ApiReturn((int32_t)device_addr);
+}
+
+m3ApiRawFunction(wasmos_dma_sync_borrow)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, kind)
+    m3ApiGetArg(int32_t, offset)
+    m3ApiGetArg(int32_t, length)
+    m3ApiGetArg(int32_t, sync_op)
+    uint32_t context_id = 0;
+
+    if (kind < 0 || offset < 0 || length <= 0 ||
+        (sync_op != WASMOS_DMA_SYNC_TO_DEVICE &&
+         sync_op != WASMOS_DMA_SYNC_FROM_DEVICE &&
+         sync_op != WASMOS_DMA_SYNC_BIDIR)) {
+        m3ApiReturn(WASMOS_DMA_STATUS_INVALID);
+    }
+    if (current_process_context(&context_id) != 0 ||
+        require_dma_capability(context_id) != 0) {
+        m3ApiReturn(WASMOS_DMA_STATUS_DENY);
+    }
+    if (process_manager_buffer_dma_sync((uint32_t)kind,
+                                        context_id,
+                                        (uint32_t)offset,
+                                        (uint32_t)length,
+                                        (uint32_t)sync_op) != 0) {
+        m3ApiReturn(WASMOS_DMA_STATUS_DENY);
+    }
+    m3ApiReturn(WASMOS_DMA_STATUS_OK);
+}
+
+m3ApiRawFunction(wasmos_dma_unmap_borrow)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, kind)
+    m3ApiGetArg(int32_t, source_endpoint)
+    uint32_t context_id = 0;
+    uint32_t source_owner = 0;
+
+    if (kind < 0 || source_endpoint < 0) {
+        m3ApiReturn(WASMOS_DMA_STATUS_INVALID);
+    }
+    if (current_process_context(&context_id) != 0 ||
+        require_dma_capability(context_id) != 0) {
+        m3ApiReturn(WASMOS_DMA_STATUS_DENY);
+    }
+    if (ipc_endpoint_owner((uint32_t)source_endpoint, &source_owner) != IPC_OK ||
+        source_owner == 0 || source_owner == context_id) {
+        m3ApiReturn(WASMOS_DMA_STATUS_DENY);
+    }
+    if (process_manager_buffer_dma_unmap((uint32_t)kind, context_id, source_owner) != 0) {
+        m3ApiReturn(WASMOS_DMA_STATUS_DENY);
+    }
+    m3ApiReturn(WASMOS_DMA_STATUS_OK);
 }
 
 m3ApiRawFunction(wasmos_fs_buffer_borrow)
@@ -2318,6 +2450,9 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "fs_buffer_release", "i()", wasmos_fs_buffer_release);
     rc |= wasm3_link_raw(module, "wasmos", "buffer_borrow", "i(iii)", wasmos_buffer_borrow);
     rc |= wasm3_link_raw(module, "wasmos", "buffer_release", "i(i)", wasmos_buffer_release);
+    rc |= wasm3_link_raw(module, "wasmos", "dma_map_borrow", "i(iiiii)", wasmos_dma_map_borrow);
+    rc |= wasm3_link_raw(module, "wasmos", "dma_sync_borrow", "i(iiii)", wasmos_dma_sync_borrow);
+    rc |= wasm3_link_raw(module, "wasmos", "dma_unmap_borrow", "i(ii)", wasmos_dma_unmap_borrow);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_recv", "i(i)", wasmos_ipc_recv);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_try_recv", "i(i)", wasmos_ipc_try_recv);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_wait", "i(i)", wasmos_ipc_wait);

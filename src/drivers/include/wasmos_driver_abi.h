@@ -159,6 +159,12 @@ enum {
     WASMOS_DMA_STATUS_UNAVAILABLE = -4
 };
 
+enum {
+    WASMOS_DMA_SYNC_TO_DEVICE = 1,
+    WASMOS_DMA_SYNC_FROM_DEVICE = 2,
+    WASMOS_DMA_SYNC_BIDIR = 3
+};
+
 typedef struct __attribute__((packed)) {
     uint64_t base;
     uint64_t length;

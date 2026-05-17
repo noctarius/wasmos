@@ -194,6 +194,11 @@ DMA Phase 0 scaffolding is now in-tree: shared ABI constants/types define
 `DEVMGR_CAP_DMA`, DMA direction/status values, `PROC_IPC_SPAWN_CAPS_V2`, and
 `wasmos_spawn_caps_v2_t`; PM currently fail-closes legacy `PROC_IPC_SPAWN_CAPS`
 requests that set DMA flags until v2 descriptor transport is implemented.
+DMA Phase 1 enforcement is now in-tree for borrow-buffer paths: kernel exports
+WASM hostcalls (`dma_map_borrow`, `dma_sync_borrow`, `dma_unmap_borrow`) and
+enforces borrower/source ownership checks, borrow grant compatibility with DMA
+direction, spawn-profile DMA direction/max-bytes checks, DMA window-range
+validation, and fail-closed release/unmap state semantics.
 When native `menuconfig`-style frontends are unavailable, build configuration
 can be edited through the in-repo `kconfiglib` interactive fallback script
 (`scripts/kconfiglib_menuconfig.py`), exposed via CMake targets.

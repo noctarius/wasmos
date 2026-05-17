@@ -88,8 +88,14 @@ separation model and deferred hardening backlog.
     (direction/max-bytes/window base+length) for future policy enforcement.
   - Added explicit fail-closed behavior: legacy `PROC_IPC_SPAWN_CAPS` denies
     DMA flag usage until v2 descriptor transport is implemented.
-- [ ] DMA Phase 1: implement borrow-buffer-based DMA map/sync/unmap enforcement
+- [x] DMA Phase 1: implement borrow-buffer-based DMA map/sync/unmap enforcement
   in kernel (owner/context checks, direction checks, window/range checks).
+  - Added WASM hostcalls `dma_map_borrow`, `dma_sync_borrow`,
+    `dma_unmap_borrow` in kernel link layer.
+  - Enforced source-endpoint ownership checks + borrow-source context matching.
+  - Enforced borrow grant compatibility with DMA direction flags.
+  - Enforced spawn-profile DMA direction + max-bytes + window-range checks.
+  - Added fail-closed mapped-state behavior for borrow release/unmap ordering.
 - [ ] DMA Phase 2: implement `PROC_IPC_SPAWN_CAPS_V2` end-to-end transport in
   `device-manager` + process-manager and wire descriptor parsing/validation.
 - [ ] DMA Phase 3: integrate first storage-path driver flow on borrow-based DMA

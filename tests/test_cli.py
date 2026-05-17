@@ -42,7 +42,15 @@ class CliIntegrationTests(unittest.TestCase):
         self._cmd_expect("help", b"commands:")
 
     def test_ps_lists_processes(self):
-        self._cmd_expect("ps", b"cli (pid")
+        self._cmd_expect("ps", b"mem(bytes) cpu(ticks) name")
+
+    def test_ps_tree_lists_hierarchy(self):
+        self._cmd_expect("ps tree", b"tree:")
+        self._cmd_expect("ps tree", b"cli (pid")
+
+    def test_ps_all_lists_table_and_tree(self):
+        self._cmd_expect("ps all", b"pid ppid state thr/live mem(bytes) cpu(ticks) name")
+        self._cmd_expect("ps all", b"tree:")
 
     def test_ls_lists_root(self):
         self._cmd_expect("ls", b"boot")

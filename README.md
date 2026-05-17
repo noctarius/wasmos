@@ -33,6 +33,7 @@ It defines repository workflow and documentation/update conventions.
 - PM service registry for user-space endpoint discovery (`register`/`lookup`)
 - Usable VT/CLI stack with multi-TTY switching
 - CLI now includes `mount` command for active mount/device inspection
+- CLI `ps` now supports table/tree views (`ps`, `ps tree`, `ps all`) and includes per-process thread counts, memory footprint bytes, scheduler state, and cumulative CPU ticks
 - CLI `cat` now uses regular libc file I/O against the current working directory (no dedicated root-cat FS IPC opcode)
 - libc now includes `listdir` (`FS_IPC_READDIR_REQ` + stream response handling) and language wrappers expose matching directory-read helpers (`ReadDir`/`read_dir`/`readDir`)
 - libc `read`/`write` now route stdio FDs (`0`/`1`/`2`) to console hostcalls

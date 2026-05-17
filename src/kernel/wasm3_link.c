@@ -2345,6 +2345,140 @@ m3ApiRawFunction(wasmos_proc_info_ex)
     m3ApiReturn((int32_t)pid);
 }
 
+m3ApiRawFunction(wasmos_proc_info_stats)
+{
+    typedef struct {
+        uint32_t state;
+        uint32_t block_reason;
+        uint32_t thread_count;
+        uint32_t live_thread_count;
+        uint32_t current_tid;
+        uint32_t context_id;
+        uint64_t cpu_ticks;
+        uint64_t mem_bytes;
+    } wasm_proc_stats_t;
+
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, index)
+    m3ApiGetArgMem(char *, buf)
+    m3ApiGetArg(int32_t, buf_len)
+    m3ApiGetArgMem(uint32_t *, parent_ptr)
+    m3ApiGetArgMem(wasm_proc_stats_t *, stats_ptr)
+
+    if (index < 0 || buf_len <= 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiCheckMem(buf, (uint32_t)buf_len);
+    m3ApiCheckMem(parent_ptr, sizeof(uint32_t));
+    m3ApiCheckMem(stats_ptr, sizeof(wasm_proc_stats_t));
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t buf_user = 0;
+    uint64_t parent_user = 0;
+    uint64_t stats_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   buf,
+                                   (uint32_t)buf_len,
+                                   &buf_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                buf_user,
+                                (uint64_t)(uint32_t)buf_len,
+                                MEM_REGION_FLAG_WRITE) != 0 ||
+        wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   parent_ptr,
+                                   sizeof(uint32_t),
+                                   &parent_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                parent_user,
+                                sizeof(uint32_t),
+                                MEM_REGION_FLAG_WRITE) != 0 ||
+        wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   stats_ptr,
+                                   sizeof(wasm_proc_stats_t),
+                                   &stats_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                stats_user,
+                                sizeof(wasm_proc_stats_t),
+                                MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
+
+    uint32_t pid = 0;
+    uint32_t parent_pid = 0;
+    const char *name = 0;
+    process_stats_t stats = {0};
+    if (process_info_at_stats((uint32_t)index, &pid, &parent_pid, &name, &stats) != 0) {
+        m3ApiReturn(-1);
+    }
+    wasm_proc_stats_t out_stats = {
+        .state = stats.state,
+        .block_reason = stats.block_reason,
+        .thread_count = stats.thread_count,
+        .live_thread_count = stats.live_thread_count,
+        .current_tid = stats.current_tid,
+        .context_id = stats.context_id,
+        .cpu_ticks = stats.cpu_ticks,
+        .mem_bytes = stats.mem_bytes
+    };
+    if (mm_copy_to_user(proc->context_id,
+                        parent_user,
+                        &parent_pid,
+                        sizeof(parent_pid)) != 0 ||
+        mm_copy_to_user(proc->context_id,
+                        stats_user,
+                        &out_stats,
+                        sizeof(out_stats)) != 0) {
+        m3ApiReturn(-1);
+    }
+
+    uint32_t out_cap = (uint32_t)buf_len;
+    uint32_t copied = 0;
+    char bounce[256];
+    if (name) {
+        while (name[copied] && copied + 1U < out_cap) {
+            copied++;
+        }
+    }
+    uint32_t out_len = copied + 1U;
+    for (uint32_t i = 0; i < copied; ++i) {
+        bounce[i % sizeof(bounce)] = name[i];
+        if ((i % sizeof(bounce)) == (sizeof(bounce) - 1U)) {
+            uint32_t chunk_base = i + 1U - (uint32_t)sizeof(bounce);
+            if (mm_copy_to_user(proc->context_id,
+                                buf_user + (uint64_t)chunk_base,
+                                bounce,
+                                (uint64_t)sizeof(bounce)) != 0) {
+                m3ApiReturn(-1);
+            }
+        }
+    }
+    uint32_t tail = copied % (uint32_t)sizeof(bounce);
+    if (tail > 0) {
+        if (mm_copy_to_user(proc->context_id,
+                            buf_user + (uint64_t)(copied - tail),
+                            bounce,
+                            (uint64_t)tail) != 0) {
+            m3ApiReturn(-1);
+        }
+    }
+    bounce[0] = '\0';
+    if (mm_copy_to_user(proc->context_id,
+                        buf_user + (uint64_t)(out_len - 1U),
+                        bounce,
+                        1) != 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn((int32_t)pid);
+}
+
 m3ApiRawFunction(wasmos_strlen)
 {
     m3ApiReturnType(int32_t)
@@ -2477,6 +2611,7 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "sched_yield", "i()", wasmos_sched_yield);
     rc |= wasm3_link_raw(module, "wasmos", "proc_info", "i(i*i)", wasmos_proc_info);
     rc |= wasm3_link_raw(module, "wasmos", "proc_info_ex", "i(i*i*)", wasmos_proc_info_ex);
+    rc |= wasm3_link_raw(module, "wasmos", "proc_info_stats", "i(i*i**)", wasmos_proc_info_stats);
     rc |= wasm3_link_raw(module, "wasmos", "block_buffer_phys", "i()", wasmos_block_buffer_phys);
     rc |= wasm3_link_raw(module, "wasmos", "block_buffer_copy", "i(i*ii)", wasmos_block_buffer_copy);
     rc |= wasm3_link_raw(module, "wasmos", "block_buffer_write", "i(i*ii)", wasmos_block_buffer_write);

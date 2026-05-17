@@ -77,6 +77,22 @@ extern int32_t wasmos_proc_info(int32_t index, int32_t ptr, int32_t len)
     WASMOS_WASM_IMPORT("wasmos", "proc_info");
 extern int32_t wasmos_proc_info_ex(int32_t index, int32_t ptr, int32_t len, int32_t parent_ptr)
     WASMOS_WASM_IMPORT("wasmos", "proc_info_ex");
+typedef struct {
+    uint32_t state;
+    uint32_t block_reason;
+    uint32_t thread_count;
+    uint32_t live_thread_count;
+    uint32_t current_tid;
+    uint32_t context_id;
+    uint64_t cpu_ticks;
+    uint64_t mem_bytes;
+} wasmos_proc_stats_t;
+extern int32_t wasmos_proc_info_stats(int32_t index,
+                                      int32_t ptr,
+                                      int32_t len,
+                                      int32_t parent_ptr,
+                                      int32_t stats_ptr)
+    WASMOS_WASM_IMPORT("wasmos", "proc_info_stats");
 extern int32_t wasmos_system_halt(void)
     WASMOS_WASM_IMPORT("wasmos", "system_halt");
 extern int32_t wasmos_system_reboot(void)

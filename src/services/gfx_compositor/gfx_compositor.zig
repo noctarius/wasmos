@@ -327,6 +327,7 @@ fn buffer_alloc(owner_endpoint: u32, width: u32, height: u32) ?usize {
     var shmem_id: u32 = 0;
     var mapped_ptr: ?*anyopaque = null;
     if (api().shmem_create.?(pages, 0, &shmem_id, @ptrCast(&mapped_ptr)) != 0 or shmem_id == 0) {
+        logMsg("[gfx] alloc shmem_create failed\n");
         return null;
     }
     if (mapped_ptr != null) {
@@ -338,11 +339,13 @@ fn buffer_alloc(owner_endpoint: u32, width: u32, height: u32) ?usize {
         api().ipc_endpoint_owner.?(owner_endpoint, &owner_context_id) != 0 or
         owner_context_id == 0)
     {
+        logMsg("[gfx] alloc endpoint_owner failed\n");
         return null;
     }
     if (api().shmem_grant == null or
         api().shmem_grant.?(shmem_id, owner_context_id) != 0)
     {
+        logMsg("[gfx] alloc shmem_grant failed\n");
         return null;
     }
 

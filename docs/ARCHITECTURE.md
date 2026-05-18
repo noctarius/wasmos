@@ -32,6 +32,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   `ALLOC_SHARED_BUFFER` (opaque random 32-bit `buffer_id` + shmem backing),
   `RELEASE_SHARED_BUFFER`, and `PRESENT_WINDOW` by `buffer_id` with
   shmem-backed damage rect lists.
+- Graphics validation now also includes a wasm `gfx-smoke` app available under
+  `/boot/apps/gfx_smoke.wap` for manual CLI execution, keeping compositor tests
+  opt-in at runtime instead of sysinit auto-spawn.
 - Software composition now redraws clipped dirty regions in stable z-order,
   including overlap with higher-z windows; invalid/missing damage falls back to
   full-frame redraw.

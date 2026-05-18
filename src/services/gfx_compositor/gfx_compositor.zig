@@ -754,12 +754,12 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
         }
         if (rc != IPC_OK) return -1;
 
-        if (!gfx_header_valid(msg.arg2, msg.arg3)) {
-            reply_unsupported(&msg);
-            continue;
+        var opcode: u16 = @intCast(msg.type & 0xFFFF);
+        if (gfx_header_valid(msg.arg2, msg.arg3)) {
+            opcode = gfx_header_opcode(msg.arg3);
         }
 
-        switch (gfx_header_opcode(msg.arg3)) {
+        switch (opcode) {
             c.GFX_IPC_CREATE_WINDOW => handle_create_window(&msg),
             c.GFX_IPC_DESTROY_WINDOW => handle_destroy_window(&msg),
             c.GFX_IPC_RESIZE_WINDOW => handle_resize_window(&msg),

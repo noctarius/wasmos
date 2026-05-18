@@ -96,6 +96,7 @@ It defines repository workflow and documentation/update conventions.
 - Graphics compositor baseline now includes owner-checked window lifecycle (`CREATE`/`DESTROY`/`RESIZE`), compositor-managed shared buffer allocation (`ALLOC_SHARED_BUFFER`) with opaque random 32-bit `buffer_id`, and present-by-buffer with shmem-backed damage lists (`PRESENT_WINDOW`: `arg1=buffer_id`, `arg2=damage_count`, `arg3=damage_shmem_id`)
 - Graphics compositor software path now composes in z-order, redraws clipped dirty regions from damage rects (including overlap with higher z-windows), and falls back to full-frame redraw when damage payloads are missing/invalid
 - Graphics compositor now includes `RELEASE_SHARED_BUFFER` handle invalidation/detach flow and explicit owner-deny hardening markers (`[test] gfx window owner deny ok`, `[test] gfx buffer owner deny ok`); backing shmem reclaim remains pending native ABI destroy support
+- New wasm app `gfx-smoke` is built into `/boot/apps/gfx_smoke.wap` for manual CLI launch (`exec /boot/apps/gfx_smoke`) so compositor validation can run on demand without auto-spawning over the VT/CLI surface
 - Ring-3 smoke includes shared-memory owner/grant/revoke isolation checks (kernel and user-space app-pair paths)
 - Shared-memory app-pair smoke now also checks forged-ID deny, map-argument policy deny, and post-revoke stale-ID deny
 - Strict ring3 boot smoke now includes a kernel-level shared-memory misuse matrix marker (`[test] ring3 shmem misuse matrix ok`)

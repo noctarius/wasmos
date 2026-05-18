@@ -12,6 +12,7 @@ const GFX_FB_LOOKUP_RETRIES: u32 = 2048;
 const GFX_MAX_WINDOWS: usize = 32;
 const GFX_WINDOW_MIN_DIM: u32 = 1;
 const GFX_WINDOW_MAX_DIM: u32 = 8192;
+const GFX_MAX_DAMAGE_RECTS: u32 = 256;
 
 var g_api: ?*c.wasmos_driver_api_t = null;
 var g_proc_endpoint: u32 = IPC_ENDPOINT_NONE;
@@ -303,6 +304,67 @@ fn fill_rect(x0: u32, y0: u32, w: u32, h: u32, color: u32) void {
     }
 }
 
+fn window_origin(slot_idx: usize, out_x: *u32, out_y: *u32) void {
+    const width = g_fb_info.framebuffer_width;
+    const height = g_fb_info.framebuffer_height;
+    const tile_w: u32 = if (width > 40) width / 2 else width;
+    const tile_h: u32 = if (height > 40) height / 2 else height;
+    const gap: u32 = 8;
+    var active_idx: u32 = 0;
+    var i: usize = 0;
+    while (i < g_windows.len) : (i += 1) {
+        if (!g_windows[i].in_use) {
+            continue;
+        }
+        if (i == slot_idx) {
+            const col = active_idx & 1;
+            const row = active_idx >> 1;
+            out_x.* = gap + col * tile_w;
+            out_y.* = gap + row * tile_h;
+            return;
+        }
+        active_idx += 1;
+    }
+    out_x.* = 0;
+    out_y.* = 0;
+}
+
+fn blit_window_damage(slot_idx: usize, src_pixels: [*]const u32, rect: c.gfx_rect_t) i32 {
+    if (rect.w <= 0 or rect.h <= 0 or rect.x < 0 or rect.y < 0) {
+        return c.GFX_STATUS_INVALID;
+    }
+    const win = g_windows[slot_idx];
+    const rw: u32 = @intCast(rect.w);
+    const rh: u32 = @intCast(rect.h);
+    const rx: u32 = @intCast(rect.x);
+    const ry: u32 = @intCast(rect.y);
+    if (rx >= win.width or ry >= win.height) {
+        return c.GFX_STATUS_INVALID;
+    }
+    if (rw > (win.width - rx) or rh > (win.height - ry)) {
+        return c.GFX_STATUS_INVALID;
+    }
+
+    var origin_x: u32 = 0;
+    var origin_y: u32 = 0;
+    window_origin(slot_idx, &origin_x, &origin_y);
+    if (origin_x >= g_fb_info.framebuffer_width or origin_y >= g_fb_info.framebuffer_height) {
+        return c.GFX_STATUS_OK;
+    }
+    const clip_w = @min(rw, g_fb_info.framebuffer_width - origin_x);
+    const clip_h = @min(rh, g_fb_info.framebuffer_height - origin_y);
+    var y: u32 = 0;
+    while (y < clip_h) : (y += 1) {
+        var x: u32 = 0;
+        while (x < clip_w) : (x += 1) {
+            const src_idx_u64 = @as(u64, ry + y) * @as(u64, win.width) + @as(u64, rx + x);
+            const src_idx: usize = @intCast(src_idx_u64);
+            _ = api().framebuffer_pixel.?(origin_x + x, origin_y + y, src_pixels[src_idx]);
+        }
+    }
+    return c.GFX_STATUS_OK;
+}
+
 fn compose_frame() i32 {
     if (!g_fb_info_valid) {
         return c.GFX_STATUS_IO;
@@ -369,6 +431,8 @@ fn compose_frame() i32 {
 fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
     const window_id: u32 = msg.arg0;
     const shmem_id: u32 = msg.arg1;
+    const damage_count: u32 = msg.arg2;
+    const damage_shmem_id: u32 = msg.arg3;
     if (window_id == 0) {
         reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
         return;
@@ -385,9 +449,46 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
         g_windows[slot_idx].shmem_id = shmem_id;
         g_windows[slot_idx].has_buffer = true;
     }
-    // TODO(gfx-phase1): Consume damage rect payload/count to avoid full-frame
-    // redraw on every present in the fallback software path.
-    reply_with_status(msg, compose_frame(), 0, 0, 0);
+    if (!g_windows[slot_idx].has_buffer or g_windows[slot_idx].shmem_id == 0) {
+        reply_with_status(msg, compose_frame(), 0, 0, 0);
+        return;
+    }
+    if (damage_count == 0 or damage_shmem_id == 0 or damage_count > GFX_MAX_DAMAGE_RECTS) {
+        reply_with_status(msg, compose_frame(), 0, 0, 0);
+        return;
+    }
+
+    const pixel_count_u64 = @as(u64, g_windows[slot_idx].width) * @as(u64, g_windows[slot_idx].height);
+    const byte_count_u64 = pixel_count_u64 * 4;
+    if (pixel_count_u64 == 0 or byte_count_u64 > 0xFFFF_FFFF) {
+        reply_with_status(msg, compose_frame(), 0, 0, 0);
+        return;
+    }
+
+    const src_ptr_raw = api().shmem_map.?(g_windows[slot_idx].shmem_id);
+    if (src_ptr_raw == null) {
+        reply_with_status(msg, compose_frame(), 0, 0, 0);
+        return;
+    }
+    const src_pixels: [*]const u32 = @ptrCast(@alignCast(src_ptr_raw.?));
+    defer _ = api().shmem_unmap.?(g_windows[slot_idx].shmem_id);
+
+    const dmg_ptr_raw = api().shmem_map.?(damage_shmem_id);
+    if (dmg_ptr_raw == null) {
+        reply_with_status(msg, compose_frame(), 0, 0, 0);
+        return;
+    }
+    const dmg_rects: [*]const c.gfx_rect_t = @ptrCast(@alignCast(dmg_ptr_raw.?));
+    defer _ = api().shmem_unmap.?(damage_shmem_id);
+
+    var i: u32 = 0;
+    while (i < damage_count) : (i += 1) {
+        if (blit_window_damage(slot_idx, src_pixels, dmg_rects[@intCast(i)]) != c.GFX_STATUS_OK) {
+            reply_with_status(msg, compose_frame(), 0, 0, 0);
+            return;
+        }
+    }
+    reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
 }
 
 pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int, arg2: c_int, arg3: c_int) c_int {

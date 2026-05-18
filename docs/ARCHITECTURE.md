@@ -32,8 +32,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   `PRESENT_WINDOW` handling with a deterministic software fallback compose path
   (placeholder rectangle composition via framebuffer pixel API).
 - Graphics/compositor baseline now also supports buffer-backed present in the
-  fallback path (`PRESENT_WINDOW` shmem id), with full-frame redraw and
-  damage-rect optimization deferred.
+  fallback path (`PRESENT_WINDOW` shmem id) and now consumes shmem-backed
+  damage rect lists for clipped dirty-region blits; invalid/missing damage
+  input falls back to full-frame redraw.
 - Process-manager runtime bookkeeping now grows on demand (`apps`, `waits`,
   and `services` use internal linked-list pools), removing fixed small slot
   caps from PM-managed state.

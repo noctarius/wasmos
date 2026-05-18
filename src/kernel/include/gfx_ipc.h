@@ -35,8 +35,14 @@ enum {
  *                           arg3=(version<<16)|opcode
  * - GFX_IPC_DESTROY_WINDOW: arg0=window_id arg1..arg3 reserved
  * - GFX_IPC_PRESENT_WINDOW: arg0=window_id arg1=shmem_id(argb/xrgb pixels)
- *                           arg2=damage_count (reserved/ignored in baseline)
- *                           arg3 reserved
+ *                           arg2=damage_count arg3=damage_shmem_id
  */
+
+typedef struct {
+    int32_t x;
+    int32_t y;
+    int32_t w;
+    int32_t h;
+} gfx_rect_t;
 
 #endif

@@ -30,6 +30,15 @@ enum {
     GFX_IPC_ERROR = 0x02FF
 };
 
+/* Provisional v1 message argument contracts:
+ * - GFX_IPC_CREATE_WINDOW:  arg0=width arg1=height arg2=GFX_IPC_ABI_MAGIC
+ *                           arg3=gfx_ipc_header_pack(version, opcode)
+ * - GFX_IPC_DESTROY_WINDOW: arg0=window_id arg1..arg3 reserved
+ * - GFX_IPC_PRESENT_WINDOW: arg0=window_id arg1=shmem_id(argb/xrgb pixels)
+ *                           arg2=damage_count (reserved/ignored in baseline)
+ *                           arg3 reserved
+ */
+
 enum {
     GFX_STATUS_OK = 0,
     GFX_STATUS_INVALID = -1,

@@ -31,6 +31,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - Graphics/compositor baseline now also includes owner-checked
   `PRESENT_WINDOW` handling with a deterministic software fallback compose path
   (placeholder rectangle composition via framebuffer pixel API).
+- Graphics/compositor baseline now also supports buffer-backed present in the
+  fallback path (`PRESENT_WINDOW` shmem id), with full-frame redraw and
+  damage-rect optimization deferred.
 - Process-manager runtime bookkeeping now grows on demand (`apps`, `waits`,
   and `services` use internal linked-list pools), removing fixed small slot
   caps from PM-managed state.

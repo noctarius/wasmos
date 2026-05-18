@@ -341,6 +341,10 @@ Current implementation notes:
   a deterministic software fallback compose pass (clear + per-window placeholder
   rectangles via native framebuffer pixel writes). Real client-buffer blit and
   damage-rect consumption remains a tracked TODO for Phase 1 completion.
+- Baseline present payload semantics are now documented in shared headers:
+  `arg0=window_id`, `arg1=shmem_id`, `arg2=damage_count`, `arg3=reserved`.
+  The compositor now attempts shmem-backed pixel blit for each window when a
+  buffer id is provided; damage-count is currently accepted but ignored.
 
 ### Phase 1: Single-Mode Software Composition
 

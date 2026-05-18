@@ -166,6 +166,25 @@ poll_gfx_focus_event(int32_t gfx_ep, int32_t reply_ep, int32_t *req, int32_t exp
     return -1;
 }
 
+static void
+poll_gfx_key_events_once(int32_t gfx_ep, int32_t reply_ep, int32_t *req)
+{
+    gfx_reply_t ev;
+    if (send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_POLL_EVENT, 0, 0, 0, 0, &ev) != 0 ||
+        ev.status != GFX_STATUS_OK) {
+        return;
+    }
+    if (ev.arg1 == GFX_EVENT_KEY) {
+        char msg[96];
+        int n = snprintf(msg, sizeof(msg),
+                         "[test] gfx smoke event key sc=%d flags=%d\n",
+                         ev.arg2, ev.arg3);
+        if (n > 0) {
+            (void)putsn(msg, (size_t)n);
+        }
+    }
+}
+
 int
 main(int argc, char **argv)
 {
@@ -284,6 +303,7 @@ main(int argc, char **argv)
             puts("[test] gfx smoke present-loop failed");
             return GFX_SMOKE_E_PRESENT_LOOP;
         }
+        poll_gfx_key_events_once(gfx_ep, reply_ep, &req);
         (void)wasmos_sched_yield();
     }
     puts("[test] gfx smoke visible done");
@@ -297,6 +317,7 @@ main(int argc, char **argv)
             if ((now - start_ticks) >= GFX_HOLD_TICKS) {
                 break;
             }
+            poll_gfx_key_events_once(gfx_ep, reply_ep, &req);
             (void)wasmos_sched_yield();
         }
     }

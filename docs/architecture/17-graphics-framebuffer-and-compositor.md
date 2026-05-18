@@ -334,19 +334,16 @@ Current implementation notes:
   `fb`, probes text geometry through existing `FBTEXT_IPC_GEOMETRY_REQ`, and
   emits `[test] gfx compositor handshake ok` on successful handshake.
 - App-facing dispatch now validates ABI magic/version, decodes opcode, and
-  implements a minimal owner-checked window table for
-  `GFX_IPC_CREATE_WINDOW`/`GFX_IPC_DESTROY_WINDOW` with `GFX_STATUS_*`
-  replies; other opcodes remain fail-closed as unsupported.
-- Baseline `GFX_IPC_PRESENT_WINDOW` handling is now wired with owner checks and
-  a deterministic software fallback compose pass (clear + per-window placeholder
-  rectangles via native framebuffer pixel writes). Real client-buffer blit and
-  damage-rect consumption remains a tracked TODO for Phase 1 completion.
-- Baseline present payload semantics are now documented in shared headers:
-  `arg0=window_id`, `arg1=shmem_id`, `arg2=damage_count`,
+  implements owner-checked window lifecycle handling for
+  `GFX_IPC_CREATE_WINDOW`/`GFX_IPC_DESTROY_WINDOW`/`GFX_IPC_RESIZE_WINDOW`.
+- Baseline `GFX_IPC_ALLOC_SHARED_BUFFER` is now wired and returns opaque random
+  32-bit `buffer_id` handles backed by shmem allocations plus stride metadata.
+- Baseline `GFX_IPC_PRESENT_WINDOW` now presents by `buffer_id` with payload
+  semantics: `arg0=window_id`, `arg1=buffer_id`, `arg2=damage_count`,
   `arg3=damage_shmem_id`.
-- The compositor now attempts shmem-backed pixel blit for each window and
-  applies clipped dirty-rect updates from the damage list when provided.
-  Missing/invalid damage data falls back to full-frame redraw.
+- Software composition now performs clipped dirty-region redraw in stable
+  z-order and repaints overlap with higher-z windows; missing/invalid damage
+  payloads fail closed to full-frame redraw.
 
 ### Phase 1: Single-Mode Software Composition
 

@@ -34,7 +34,11 @@ enum {
  * - GFX_IPC_CREATE_WINDOW:  arg0=width arg1=height arg2=GFX_IPC_ABI_MAGIC
  *                           arg3=gfx_ipc_header_pack(version, opcode)
  * - GFX_IPC_DESTROY_WINDOW: arg0=window_id arg1..arg3 reserved
- * - GFX_IPC_PRESENT_WINDOW: arg0=window_id arg1=shmem_id(argb/xrgb pixels)
+ * - GFX_IPC_RESIZE_WINDOW:  arg0=window_id arg1=width arg2=height
+ * - GFX_IPC_ALLOC_SHARED_BUFFER:
+ *                           arg0=window_id(0=unbound) arg1=width arg2=height
+ *                           reply: arg1=buffer_id arg2=shmem_id arg3=stride
+ * - GFX_IPC_PRESENT_WINDOW: arg0=window_id arg1=buffer_id
  *                           arg2=damage_count arg3=damage_shmem_id
  */
 

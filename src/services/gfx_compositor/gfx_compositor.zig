@@ -336,17 +336,18 @@ fn buffer_alloc(owner_endpoint: u32, width: u32, height: u32) ?usize {
 
     var owner_context_id: u32 = 0;
     if (api().ipc_endpoint_owner == null or
-        api().ipc_endpoint_owner.?(owner_endpoint, &owner_context_id) != 0 or
-        owner_context_id == 0)
+        api().ipc_endpoint_owner.?(owner_endpoint, &owner_context_id) != 0)
     {
         logMsg("[gfx] alloc endpoint_owner failed\n");
         return null;
     }
-    if (api().shmem_grant == null or
-        api().shmem_grant.?(shmem_id, owner_context_id) != 0)
-    {
-        logMsg("[gfx] alloc shmem_grant failed\n");
-        return null;
+    if (owner_context_id != 0) {
+        if (api().shmem_grant == null or
+            api().shmem_grant.?(shmem_id, owner_context_id) != 0)
+        {
+            logMsg("[gfx] alloc shmem_grant failed\n");
+            return null;
+        }
     }
 
     const idx = slot_idx.?;

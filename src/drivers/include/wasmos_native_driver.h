@@ -78,8 +78,12 @@ typedef struct wasmos_driver_api {
      * shmem_unmap releases this process's mapping reference. */
     int      (*shmem_create)(uint64_t pages, uint32_t flags,
                              uint32_t *out_id, void **out_ptr);
+    int      (*shmem_grant)(uint32_t id, uint32_t target_context_id);
     void    *(*shmem_map)(uint32_t id);
     int      (*shmem_unmap)(uint32_t id);
+
+    /* Endpoint owner/context lookup for request attribution. */
+    int      (*ipc_endpoint_owner)(uint32_t endpoint, uint32_t *out_owner_context_id);
 
     /* Returns the shmem id of the kernel console text ring. */
     uint32_t (*console_ring_id)(void);
@@ -103,7 +107,7 @@ typedef struct wasmos_driver_api {
 #define ND_BUFFER_BORROW_WRITE     0x2u
 
 #define WASMOS_NATIVE_ABI_MAGIC   0x574E4150u /* 'WNAP' */
-#define WASMOS_NATIVE_ABI_VERSION 2u
+#define WASMOS_NATIVE_ABI_VERSION 3u
 
 /* Entry point that every native driver must provide via ELF e_entry. */
 typedef int (*native_driver_entry_fn_t)(wasmos_driver_api_t *api,

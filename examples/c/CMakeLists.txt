@@ -210,8 +210,8 @@ add_custom_command(
           ${WASMOS_TRACE_DEFINE}
           -Wl,--no-entry -Wl,--strip-all
           -Wl,-z,stack-size=4096
-          -Wl,--initial-memory=65536
-          -Wl,--max-memory=65536
+          -Wl,--initial-memory=1048576
+          -Wl,--max-memory=1048576
           -Wl,--allow-undefined
           -Wl,--export=wasmos_main
           -I${LIBC_DIR}/include

@@ -21,10 +21,14 @@ var g_gfx_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_fb_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_vt_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_kbd_endpoint: u32 = IPC_ENDPOINT_NONE;
+var g_mouse_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_overlay_locked: bool = false;
 var g_next_window_id: u32 = 1;
 var g_next_z: u32 = 1;
 var g_focused_window_id: u32 = 0;
+var g_pointer_x: i32 = 0;
+var g_pointer_y: i32 = 0;
+var g_pointer_buttons: u32 = 0;
 var g_rng_state: u32 = 0xA5A5_5A5A;
 var g_damage_marker_logged: bool = false;
 var g_window_owner_deny_logged: bool = false;
@@ -223,6 +227,19 @@ fn lookup_kbd_endpoint() i32 {
     return -1;
 }
 
+fn lookup_mouse_endpoint() i32 {
+    var i: u32 = 0;
+    while (i < GFX_FB_LOOKUP_RETRIES) : (i += 1) {
+        const ep = svc_lookup("mouse", GFX_REQUEST_BASE + 0x1C0 + i);
+        if (ep >= 0) {
+            g_mouse_endpoint = @bitCast(ep);
+            return 0;
+        }
+        api().sched_yield.?();
+    }
+    return -1;
+}
+
 fn subscribe_keyboard() i32 {
     if (g_kbd_endpoint == IPC_ENDPOINT_NONE) return -1;
     var reply: c.nd_ipc_message_t = undefined;
@@ -231,6 +248,19 @@ fn subscribe_keyboard() i32 {
         return -1;
     }
     if (reply.type != c.KBD_IPC_SUBSCRIBE_RESP or @as(i32, @bitCast(reply.arg0)) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+fn subscribe_mouse() i32 {
+    if (g_mouse_endpoint == IPC_ENDPOINT_NONE) return -1;
+    var reply: c.nd_ipc_message_t = undefined;
+    const req_id: u32 = GFX_REQUEST_BASE + GFX_FB_LOOKUP_RETRIES + 4;
+    if (ipc_call(g_mouse_endpoint, req_id, c.MOUSE_IPC_SUBSCRIBE_REQ, 0, 0, 0, 0, &reply) != 0) {
+        return -1;
+    }
+    if (reply.type != c.MOUSE_IPC_SUBSCRIBE_RESP or @as(i32, @bitCast(reply.arg0)) != 0) {
         return -1;
     }
     return 0;
@@ -347,6 +377,77 @@ fn focus_window(window_idx: usize) void {
 
     g_focused_window_id = win.window_id;
     event_push(win.owner_endpoint, c.GFX_EVENT_FOCUS_GAINED, win.window_id, 0, 0);
+}
+
+fn window_topmost_at(x: i32, y: i32) ?usize {
+    var best: ?usize = null;
+    var best_z: u32 = 0;
+    var i: usize = 0;
+    while (i < g_windows.len) : (i += 1) {
+        if (!g_windows[i].in_use) continue;
+        const win = g_windows[i];
+        const wx2 = win.x + @as(i32, @intCast(win.width));
+        const wy2 = win.y + @as(i32, @intCast(win.height));
+        if (x < win.x or y < win.y or x >= wx2 or y >= wy2) continue;
+        if (best == null or win.z >= best_z) {
+            best = i;
+            best_z = win.z;
+        }
+    }
+    return best;
+}
+
+fn raise_window(window_idx: usize) void {
+    g_next_z +%= 1;
+    if (g_next_z == 0) g_next_z = 1;
+    g_windows[window_idx].z = g_next_z;
+}
+
+fn pack_s16_pair(dx: i32, dy: i32) u32 {
+    const dx16: u16 = @bitCast(@as(i16, @truncate(dx)));
+    const dy16: u16 = @bitCast(@as(i16, @truncate(dy)));
+    return @as(u32, dx16) | (@as(u32, dy16) << 16);
+}
+
+fn clamp(v: i32, lo: i32, hi: i32) i32 {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
+    const dx8: i8 = @bitCast(@as(u8, @truncate(msg.arg0)));
+    const dy8: i8 = @bitCast(@as(u8, @truncate(msg.arg1)));
+    const dx: i32 = @as(i32, dx8);
+    const dy: i32 = @as(i32, dy8);
+    const buttons: u32 = msg.arg2 & 0x7;
+
+    if (g_fb_info_valid) {
+        const max_x: i32 = @intCast(g_fb_info.framebuffer_width);
+        const max_y: i32 = @intCast(g_fb_info.framebuffer_height);
+        const hi_x = if (max_x > 0) max_x - 1 else 0;
+        const hi_y = if (max_y > 0) max_y - 1 else 0;
+        g_pointer_x = clamp(g_pointer_x + dx, 0, hi_x);
+        g_pointer_y = clamp(g_pointer_y + dy, 0, hi_y);
+    }
+
+    const left_down_now = (buttons & 0x1) != 0;
+    const left_down_prev = (g_pointer_buttons & 0x1) != 0;
+    if (left_down_now and !left_down_prev) {
+        if (window_topmost_at(g_pointer_x, g_pointer_y)) |idx| {
+            raise_window(idx);
+            focus_window(idx);
+            _ = compose_full();
+        }
+    }
+    g_pointer_buttons = buttons;
+
+    if (g_focused_window_id != 0) {
+        if (window_find_by_id(g_focused_window_id)) |focused_idx| {
+            const focused = g_windows[focused_idx];
+            event_push(focused.owner_endpoint, c.GFX_EVENT_POINTER, pack_s16_pair(dx, dy), buttons, 0);
+        }
+    }
 }
 
 fn fb_set_overlay_lock(lock: bool) void {
@@ -986,6 +1087,9 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
         if (lookup_kbd_endpoint() == 0) {
             _ = subscribe_keyboard();
         }
+        if (lookup_mouse_endpoint() == 0) {
+            _ = subscribe_mouse();
+        }
         log_fb_geometry_probe();
         logMsg("[test] gfx compositor handshake ok\n");
     }
@@ -1031,6 +1135,7 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
                     }
                 }
             },
+            c.MOUSE_IPC_MOVE_NOTIFY => handle_mouse_notify(&msg),
             c.GFX_IPC_CREATE_WINDOW => handle_create_window(&msg),
             c.GFX_IPC_DESTROY_WINDOW => handle_destroy_window(&msg),
             c.GFX_IPC_RESIZE_WINDOW => handle_resize_window(&msg),

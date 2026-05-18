@@ -39,6 +39,10 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - Graphics/compositor input routing now subscribes to keyboard driver
   notifications and exposes focused-window events through `GFX_IPC_POLL_EVENT`
   (`FOCUS_GAINED`, `FOCUS_LOST`, `KEY`).
+- Graphics/compositor input routing now also subscribes to mouse-driver move
+  notifications, emits focused pointer events (`POINTER`) through
+  `GFX_IPC_POLL_EVENT`, and applies click-to-focus + raise-on-click policy for
+  topmost hit-tested windows.
 - Input-driver baseline now also includes a wasm `mouse` driver with
   subscription IPC (`MOUSE_IPC_SUBSCRIBE_REQ` + `MOUSE_IPC_MOVE_NOTIFY`) that
   emits PS/2 packet-derived movement deltas and button masks to subscribers.

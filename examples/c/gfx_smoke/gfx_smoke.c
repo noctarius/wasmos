@@ -9,12 +9,11 @@
 #define GFX_REQ_BASE 0x6A00
 #define FBPP 4
 #define BUFFER_PTR 0x4000
-#define DAMAGE_PTR 0x1000
 #define PAGE_SIZE 4096
 #define GFX_W 64
 #define GFX_H 64
-#define GFX_RESIZE_W 96
-#define GFX_RESIZE_H 72
+#define GFX_RESIZE_W 80
+#define GFX_RESIZE_H 48
 
 typedef struct {
     int32_t status;
@@ -94,8 +93,6 @@ main(int argc, char **argv)
     int32_t buffer_id;
     int32_t shmem_id;
     int32_t stride_bytes;
-    int32_t damage_shmem_id;
-    gfx_rect_t *damage;
 
     if (proc_endpoint <= 0 || reply_ep < 0) {
         puts("[test] gfx smoke setup failed");
@@ -144,18 +141,8 @@ main(int argc, char **argv)
         return 1;
     }
 
-    damage_shmem_id = wasmos_shmem_create(1, 0);
-    if (damage_shmem_id <= 0 || wasmos_shmem_map(damage_shmem_id, DAMAGE_PTR, 4096) != 0) {
-        puts("[test] gfx smoke damage alloc failed");
-        return 1;
-    }
-    damage = (gfx_rect_t *)(uintptr_t)DAMAGE_PTR;
-    damage[0].x = 0;
-    damage[0].y = 0;
-    damage[0].w = GFX_W;
-    damage[0].h = GFX_H;
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW,
-                 window_id, buffer_id, 1, damage_shmem_id, &reply) != 0 ||
+                 window_id, buffer_id, 0, 0, &reply) != 0 ||
         reply.status != GFX_STATUS_OK) {
         puts("[test] gfx smoke present1 failed");
         return 1;
@@ -167,16 +154,23 @@ main(int argc, char **argv)
         return 1;
     }
 
-    damage[0].w = GFX_RESIZE_W;
-    damage[0].h = GFX_RESIZE_H;
+    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_ALLOC_SHARED_BUFFER,
+                 window_id, GFX_RESIZE_W, GFX_RESIZE_H, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+        puts("[test] gfx smoke resize-alloc failed");
+        return 1;
+    }
+    buffer_id = reply.arg1;
+    shmem_id = reply.arg2;
+    stride_bytes = reply.arg3;
+
     puts("[test] gfx smoke visible start");
     for (uint32_t frame = 0; frame < 240u; ++frame) {
-        if (fill_pattern(shmem_id, GFX_W, GFX_H, stride_bytes, frame + 2u) != 0) {
+        if (fill_pattern(shmem_id, GFX_RESIZE_W, GFX_RESIZE_H, stride_bytes, frame + 2u) != 0) {
             puts("[test] gfx smoke paint-loop failed");
             return 1;
         }
         if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW,
-                     window_id, buffer_id, 1, damage_shmem_id, &reply) != 0 ||
+                     window_id, buffer_id, 0, 0, &reply) != 0 ||
             reply.status != GFX_STATUS_OK) {
             puts("[test] gfx smoke present-loop failed");
             return 1;
@@ -186,7 +180,7 @@ main(int argc, char **argv)
     puts("[test] gfx smoke visible done");
 
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW,
-                 window_id, buffer_id + 1, 1, damage_shmem_id, &reply) != 0 ||
+                 window_id, buffer_id + 1, 0, 0, &reply) != 0 ||
         reply.status != GFX_STATUS_INVALID) {
         puts("[test] gfx smoke invalid-buffer deny failed");
         return 1;
@@ -214,7 +208,6 @@ main(int argc, char **argv)
         return 1;
     }
 
-    (void)wasmos_shmem_unmap(damage_shmem_id);
     puts("[test] gfx smoke app ok");
     return 0;
 }

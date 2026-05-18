@@ -8,6 +8,10 @@
 #include "wasmos/ipc.h"
 #include "wasmos_driver_abi.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 static inline void
 wasmos_proc_pack_name16(const char *name, int32_t out_args[4])
 {
@@ -104,5 +108,9 @@ wasmos_proc_module_meta_path(int32_t proc_endpoint,
     if (out_cap_flags) *out_cap_flags = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
     return 0;
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

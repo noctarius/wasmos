@@ -7,7 +7,7 @@ export function main(args: Array<string>): i32 {
     std.println("unexpected args");
   }
   if (!printed) {
-    const path = "/boot/assemblyscript-long-file-check.txt";
+    const path = "assemblyscript-long-file-check.txt";
     const content = String.UTF8.encode("assemblyscript shim long filename\n", false);
     const contentBytes = Uint8Array.wrap(content);
     let writeOk = false;

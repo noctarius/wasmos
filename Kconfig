@@ -34,6 +34,27 @@ config WASMOS_RING3_THREAD_LIFECYCLE_SMOKE
     bool "Enable dedicated ring3 thread lifecycle helper probe spawn by default"
     default n
 
+config WASMOS_PM_TEST_HOOKS
+    bool "Enable process-manager test inject hooks"
+    default n
+
+choice
+    prompt "Process-manager list backend"
+    default WASMOS_PM_LIST_LINKED
+
+config WASMOS_PM_LIST_LINKED
+    bool "Linked list"
+
+config WASMOS_PM_LIST_ARRAY_CHUNK
+    bool "Array-chunk list (growable)"
+
+endchoice
+
+config WASMOS_PM_LIST_ARRAY_CHUNK_CAP
+    int "Array-chunk list capacity per chunk"
+    default 16
+    depends on WASMOS_PM_LIST_ARRAY_CHUNK
+
 config KERNEL_TARGET_TRIPLE
     string "Kernel target triple"
     default "x86_64-elf"

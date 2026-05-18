@@ -1,5 +1,6 @@
 set(LDFLAGS_KERNEL -nostdlib -T ${KERNEL_DIR}/arch/x86_64/linker.ld)
-set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -mcmodel=kernel ${WASMOS_TRACE_DEFINE} ${WASMOS_RING3_SMOKE_DEFINE} ${WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFINE} -I${WASM_DIR}/wasm3/source -Wno-unused-parameter)
+set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -mcmodel=kernel ${WASMOS_TRACE_DEFINE} ${WASMOS_RING3_SMOKE_DEFINE} ${WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFINE} ${WASMOS_PM_TEST_HOOKS_DEFINE} ${WASMOS_PM_LIST_DEFINE} ${WASMOS_PM_LIST_CAP_DEFINE} -I${WASM_DIR}/wasm3/source -Wno-unused-parameter)
+set(CXXFLAGS_KERNEL ${CFLAGS_KERNEL} -fno-exceptions -fno-rtti -fno-threadsafe-statics -Wno-deprecated)
 set(CFLAGS_WASM3 ${CFLAGS_KERNEL} -I${WASM_DIR}/wasm3/source -Dd_m3HasFloat=0 -Wno-unused-parameter -Wno-unused-variable)
 
 set(RING3_NATIVE_PROBE_SRC ${KERNEL_DIR}/ring3_native_probe.c)
@@ -87,6 +88,9 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/syscall.o
   ${BUILD_DIR}/libc.o
   ${BUILD_DIR}/klog.o
+  ${BUILD_DIR}/list.o
+  ${BUILD_DIR}/list_linked.o
+  ${BUILD_DIR}/list_array_chunk.o
   ${BUILD_DIR}/paging.o
   ${BUILD_DIR}/physmem.o
   ${BUILD_DIR}/runtime_context.o
@@ -151,6 +155,9 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/syscall.c
   ${KERNEL_DIR}/paging.c
   ${KERNEL_DIR}/klog.c
+  ${KERNEL_DIR}/list.c
+  ${KERNEL_DIR}/list_linked.c
+  ${KERNEL_DIR}/list_array_chunk.c
   ${KERNEL_DIR}/physmem.c
   ${KERNEL_DIR}/runtime_context.c
   ${KERNEL_DIR}/ipc.c
@@ -161,7 +168,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/irq.c
   ${KERNEL_DIR}/arch/x86_64/irq_x86_64.c
   ${KERNEL_DIR}/timer.c
-  ${KERNEL_DIR}/process_manager.c
+  ${KERNEL_DIR}/process_manager.cpp
   ${KERNEL_DIR}/process_manager_buffers.c
   ${KERNEL_DIR}/process_manager_services.c
   ${KERNEL_DIR}/process_manager_spawn.c
@@ -199,6 +206,7 @@ target_sources(kernel_sources INTERFACE
   ${KERNEL_DIR}/include/slab.h
   ${KERNEL_DIR}/include/syscall.h
   ${KERNEL_DIR}/include/klog.h
+  ${KERNEL_DIR}/include/list.h
   ${KERNEL_DIR}/include/memory_service.h
   ${KERNEL_DIR}/include/paging.h
   ${KERNEL_DIR}/include/physmem.h
@@ -304,6 +312,9 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/syscall.c -o ${BUILD_DIR}/syscall.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/libc.c -o ${BUILD_DIR}/libc.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/klog.c -o ${BUILD_DIR}/klog.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/list.c -o ${BUILD_DIR}/list.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/list_linked.c -o ${BUILD_DIR}/list_linked.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/list_array_chunk.c -o ${BUILD_DIR}/list_array_chunk.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory.c -o ${BUILD_DIR}/memory.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/paging.c -o ${BUILD_DIR}/paging.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/physmem.c -o ${BUILD_DIR}/physmem.o
@@ -316,7 +327,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/irq.c -o ${BUILD_DIR}/irq.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/irq_x86_64.c -o ${BUILD_DIR}/irq_x86_64.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/timer.c -o ${BUILD_DIR}/timer.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager.c -o ${BUILD_DIR}/process_manager.o
+  COMMAND ${CMAKE_CXX_COMPILER} ${CXXFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager.cpp -o ${BUILD_DIR}/process_manager.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_buffers.c -o ${BUILD_DIR}/process_manager_buffers.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_services.c -o ${BUILD_DIR}/process_manager_services.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_spawn.c -o ${BUILD_DIR}/process_manager_spawn.o
@@ -355,6 +366,7 @@ add_custom_command(
   ${KERNEL_DIR}/include/policy.h
   ${KERNEL_DIR}/include/slab.h ${KERNEL_DIR}/include/syscall.h ${KERNEL_DIR}/include/paging.h
   ${KERNEL_DIR}/include/klog.h
+  ${KERNEL_DIR}/include/list.h
           ${KERNEL_DIR}/include/physmem.h ${KERNEL_DIR}/include/process.h ${KERNEL_DIR}/include/process_manager.h
           ${KERNEL_DIR}/include/process_manager_internal.h
           ${KERNEL_DIR}/include/thread.h

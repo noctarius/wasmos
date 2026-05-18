@@ -244,9 +244,9 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
         entry_arg_binding_count > WASMOS_APP_MAX_ENTRY_ARG_BINDINGS) {
         return -1;
     }
-    /* NATIVE is only meaningful for drivers; reject any other combination. */
+    /* Native payloads are privileged and valid for driver/service kinds. */
     if ((flags & WASMOS_APP_FLAG_NATIVE) &&
-        !(flags & WASMOS_APP_FLAG_DRIVER)) {
+        !(flags & (WASMOS_APP_FLAG_DRIVER | WASMOS_APP_FLAG_SERVICE))) {
         return -1;
     }
 

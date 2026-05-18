@@ -410,7 +410,16 @@ wasm_fs_buffer_for_pid(uint32_t pid, uint32_t context_id)
 {
     uint32_t target_context = context_id;
     wasm_fs_peer_slot_t *peer = wasm_fs_peer_slot_for_pid(pid);
-    if (peer && peer->valid && peer->peer_context_id != 0) {
+    process_t *proc = process_get(pid);
+    uint8_t is_fs_manager = (proc && proc->name && strcmp(proc->name, "fs-manager") == 0) ? 1u : 0u;
+    if (is_fs_manager) {
+        /* fs-manager relays through explicit buffer borrows; peer-slot
+         * redirection can point at backend replies and corrupt relay writes. */
+        return process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, target_context);
+    }
+    if (peer &&
+        peer->valid &&
+        peer->peer_context_id != 0) {
         target_context = peer->peer_context_id;
     }
     return process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, target_context);
@@ -448,6 +457,24 @@ m3ApiRawFunction(wasmos_ipc_create_notification)
     }
     preempt_safepoint();
     m3ApiReturn((int32_t)endpoint);
+}
+
+m3ApiRawFunction(wasmos_ipc_endpoint_owner)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, endpoint)
+    uint32_t owner_context_id = 0;
+
+    preempt_safepoint();
+    if (endpoint < 0) {
+        m3ApiReturn(-1);
+    }
+    if (ipc_endpoint_owner((uint32_t)endpoint, &owner_context_id) != IPC_OK ||
+        owner_context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    preempt_safepoint();
+    m3ApiReturn((int32_t)owner_context_id);
 }
 
 m3ApiRawFunction(wasmos_ipc_send)
@@ -755,7 +782,8 @@ m3ApiRawFunction(wasmos_ipc_recv)
                     slot->message.type >= FS_IPC_OPEN_REQ &&
                     slot->message.type <= FS_IPC_READ_APP_REQ) {
                     uint32_t owner_context = 0;
-                    if (ipc_endpoint_owner(slot->message.source, &owner_context) == IPC_OK &&
+                    int owner_rc = ipc_endpoint_owner(slot->message.source, &owner_context);
+                    if (owner_rc == IPC_OK &&
                         owner_context != 0) {
                         peer->valid = 1;
                         peer->peer_context_id = owner_context;
@@ -790,7 +818,8 @@ m3ApiRawFunction(wasmos_ipc_recv)
             slot->message.type >= FS_IPC_OPEN_REQ &&
             slot->message.type <= FS_IPC_READ_APP_REQ) {
             uint32_t owner_context = 0;
-            if (ipc_endpoint_owner(slot->message.source, &owner_context) == IPC_OK &&
+            int owner_rc = ipc_endpoint_owner(slot->message.source, &owner_context);
+            if (owner_rc == IPC_OK &&
                 owner_context != 0) {
                 peer->valid = 1;
                 peer->peer_context_id = owner_context;
@@ -2463,6 +2492,7 @@ m3ApiRawFunction(wasmos_proc_info_stats)
     typedef struct {
         uint32_t state;
         uint32_t block_reason;
+        uint32_t is_wasm;
         uint32_t thread_count;
         uint32_t live_thread_count;
         uint32_t current_tid;
@@ -2537,6 +2567,7 @@ m3ApiRawFunction(wasmos_proc_info_stats)
     wasm_proc_stats_t out_stats = {
         .state = stats.state,
         .block_reason = stats.block_reason,
+        .is_wasm = stats.is_wasm,
         .thread_count = stats.thread_count,
         .live_thread_count = stats.live_thread_count,
         .current_tid = stats.current_tid,
@@ -2703,6 +2734,7 @@ wasm3_link_wasmos(IM3Module module)
     int rc = 0;
     rc |= wasm3_link_raw(module, "wasmos", "ipc_create_endpoint", "i()", wasmos_ipc_create_endpoint);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_create_notification", "i()", wasmos_ipc_create_notification);
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_endpoint_owner", "i(i)", wasmos_ipc_endpoint_owner);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_send", "i(iiiiiiii)", wasmos_ipc_send);
     rc |= wasm3_link_raw(module, "wasmos", "fs_buffer_borrow", "i(ii)", wasmos_fs_buffer_borrow);
     rc |= wasm3_link_raw(module, "wasmos", "fs_buffer_release", "i()", wasmos_fs_buffer_release);

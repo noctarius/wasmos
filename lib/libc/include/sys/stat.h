@@ -4,6 +4,10 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct stat {
     uint32_t st_mode;
     uint32_t st_size;
@@ -14,5 +18,9 @@ struct stat {
 #define S_IFDIR 0x4000u
 
 int mkdir(const char *path, mode_t mode);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

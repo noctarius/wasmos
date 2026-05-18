@@ -54,6 +54,7 @@ typedef enum {
 typedef enum {
     FAT_READ_FIND_APPS = 0,
     FAT_READ_FIND_SYSTEM,
+    FAT_READ_FIND_SERVICES,
     FAT_READ_FIND_DRIVERS,
     FAT_READ_FIND_FILE,
     FAT_READ_FILE
@@ -120,6 +121,7 @@ static uint32_t g_read_offset = 0;
 static uint32_t g_read_size = 0;
 static uint32_t g_read_max = 0;
 static fat_read_stage_t g_read_stage = FAT_READ_FIND_APPS;
+static uint8_t g_read_driver_mode = 0;
 static char g_lfn_buf[FAT_LFN_MAX + 1u];
 static uint8_t g_lfn_total = 0;
 static uint8_t g_lfn_seen = 0;
@@ -1024,14 +1026,21 @@ fat_handle_open(void)
         return -1;
     }
     if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+        fat_log("open copy path failed\n");
         return -1;
     }
     path[path_len] = '\0';
     if (vfs_translate_path(path, fat_path, sizeof(fat_path), &path_is_init) != 0 || path_is_init) {
+        fat_log("open translate failed ");
+        fat_write_full(path);
+        fat_log("\n");
         return -1;
     }
 
     if (fat_resolve_path(fat_path, &entry) != 0 || !entry.valid) {
+        fat_log("open resolve miss ");
+        fat_write_full(fat_path);
+        fat_log("\n");
         if ((g_fs_req.arg1 & FAT_OPEN_CREAT) == 0 || fat_create_empty_file(fat_path, &entry) != 0) {
             return -1;
         }
@@ -2967,7 +2976,8 @@ fat_handle_read_app(void)
 
     if (g_op == FAT_OP_NONE) {
         g_op = FAT_OP_READ_APP;
-        g_read_stage = fat_read_name_is_driver() ? FAT_READ_FIND_SYSTEM : FAT_READ_FIND_APPS;
+        g_read_driver_mode = (uint8_t)fat_read_name_is_driver();
+        g_read_stage = FAT_READ_FIND_SYSTEM;
         g_read_dir_lba = g_root_dir_lba;
         g_read_dir_sectors = g_root_dir_sectors;
         g_read_sector = 0;
@@ -3003,6 +3013,7 @@ fat_handle_read_app(void)
 
     if (g_read_stage == FAT_READ_FIND_APPS ||
         g_read_stage == FAT_READ_FIND_SYSTEM ||
+        g_read_stage == FAT_READ_FIND_SERVICES ||
         g_read_stage == FAT_READ_FIND_DRIVERS ||
         g_read_stage == FAT_READ_FIND_FILE) {
         uint32_t entries_per_sector = g_bytes_per_sector / 32u;
@@ -3014,6 +3025,19 @@ fat_handle_read_app(void)
         for (uint32_t i = 0; i < entries_total; ++i) {
             uint8_t *ent = g_sector_buf + i * 32u;
             if (ent[0] == 0x00) {
+                if (g_read_stage == FAT_READ_FIND_SERVICES) {
+                    g_read_dir_lba = g_root_dir_lba;
+                    g_read_dir_sectors = g_root_dir_sectors;
+                    g_read_entries_left = g_root_entry_count;
+                    g_read_sector = 0;
+                    g_read_stage = FAT_READ_FIND_APPS;
+                    fat_lfn_reset();
+                    if (fat_send_block_read(g_read_dir_lba, 1) != 0) {
+                        g_op = FAT_OP_NONE;
+                        return -1;
+                    }
+                    return FAT_WAITING;
+                }
                 g_op = FAT_OP_NONE;
                 fat_lfn_reset();
                 return -1;
@@ -3085,10 +3109,14 @@ fat_handle_read_app(void)
             }
 
             if (g_read_stage == FAT_READ_FIND_SYSTEM ||
+                g_read_stage == FAT_READ_FIND_SERVICES ||
                 g_read_stage == FAT_READ_FIND_DRIVERS) {
-                const char *wanted = (g_read_stage == FAT_READ_FIND_SYSTEM)
-                                         ? "SYSTEM"
-                                         : "DRIVERS";
+                const char *wanted = "SYSTEM";
+                if (g_read_stage == FAT_READ_FIND_SERVICES) {
+                    wanted = "SERVICES";
+                } else if (g_read_stage == FAT_READ_FIND_DRIVERS) {
+                    wanted = "DRIVERS";
+                }
                 if (!(ent[11] & 0x10)) {
                     fat_lfn_reset();
                     continue;
@@ -3107,9 +3135,13 @@ fat_handle_read_app(void)
                 g_read_dir_sectors = g_sectors_per_cluster;
                 g_read_entries_left = (g_read_dir_sectors * g_bytes_per_sector) / 32u;
                 g_read_sector = 0;
-                g_read_stage = (g_read_stage == FAT_READ_FIND_SYSTEM)
-                                   ? FAT_READ_FIND_DRIVERS
-                                   : FAT_READ_FIND_FILE;
+                if (g_read_stage == FAT_READ_FIND_SYSTEM) {
+                    g_read_stage = g_read_driver_mode
+                                       ? FAT_READ_FIND_DRIVERS
+                                       : FAT_READ_FIND_SERVICES;
+                } else {
+                    g_read_stage = FAT_READ_FIND_FILE;
+                }
                 fat_lfn_reset();
                 if (fat_send_block_read(g_read_dir_lba, 1) != 0) {
                     g_op = FAT_OP_NONE;
@@ -3160,6 +3192,19 @@ fat_handle_read_app(void)
         }
 
         if (g_read_entries_left <= entries_total) {
+            if (g_read_stage == FAT_READ_FIND_SERVICES) {
+                g_read_dir_lba = g_root_dir_lba;
+                g_read_dir_sectors = g_root_dir_sectors;
+                g_read_entries_left = g_root_entry_count;
+                g_read_sector = 0;
+                g_read_stage = FAT_READ_FIND_APPS;
+                fat_lfn_reset();
+                if (fat_send_block_read(g_read_dir_lba, 1) != 0) {
+                    g_op = FAT_OP_NONE;
+                    return -1;
+                }
+                return FAT_WAITING;
+            }
             g_op = FAT_OP_NONE;
             fat_lfn_reset();
             return -1;

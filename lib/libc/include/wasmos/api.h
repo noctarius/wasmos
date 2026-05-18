@@ -3,6 +3,10 @@
 
 #include "wasmos/imports.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define WASMOS_BUFFER_KIND_FS 1
 #define WASMOS_BUFFER_GRANT_READ 0x1
 #define WASMOS_BUFFER_GRANT_WRITE 0x2
@@ -21,6 +25,8 @@ extern int32_t wasmos_kmap_dump_all(void)
     WASMOS_WASM_IMPORT("wasmos", "kmap_dump_all");
 extern int32_t wasmos_ipc_create_endpoint(void)
     WASMOS_WASM_IMPORT("wasmos", "ipc_create_endpoint");
+extern int32_t wasmos_ipc_endpoint_owner(int32_t endpoint)
+    WASMOS_WASM_IMPORT("wasmos", "ipc_endpoint_owner");
 extern int32_t wasmos_ipc_send(int32_t destination_endpoint,
                                int32_t source_endpoint,
                                int32_t type,
@@ -92,6 +98,7 @@ extern int32_t wasmos_proc_info_ex(int32_t index, int32_t ptr, int32_t len, int3
 typedef struct {
     uint32_t state;
     uint32_t block_reason;
+    uint32_t is_wasm;
     uint32_t thread_count;
     uint32_t live_thread_count;
     uint32_t current_tid;
@@ -186,4 +193,9 @@ extern int32_t wasmos_input_push(int32_t ch)
     WASMOS_WASM_IMPORT("wasmos", "input_push");
 extern int32_t wasmos_input_read(void)
     WASMOS_WASM_IMPORT("wasmos", "input_read");
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif

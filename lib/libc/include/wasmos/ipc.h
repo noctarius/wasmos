@@ -5,6 +5,18 @@
 
 #include "wasmos/api.h"
 #include "wasmos_driver_abi.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#ifndef WASMOS_IPC_ERR_FULL
+#define WASMOS_IPC_ERR_FULL (-3)
+#endif
+
+#ifndef WASMOS_IPC_SEND_RETRY_LIMIT
+#define WASMOS_IPC_SEND_RETRY_LIMIT 4096
+#endif
 typedef struct {
     int32_t type;
     int32_t request_id;
@@ -15,6 +27,18 @@ typedef struct {
     int32_t source;
     int32_t destination;
 } wasmos_ipc_message_t;
+
+static inline int32_t
+wasmos_ipc_call_retry(int32_t destination_endpoint,
+                      int32_t source_endpoint,
+                      int32_t type,
+                      int32_t request_id,
+                      int32_t arg0,
+                      int32_t arg1,
+                      int32_t arg2,
+                      int32_t arg3,
+                      wasmos_ipc_message_t *out_reply,
+                      int32_t send_retry_limit);
 
 static inline void
 wasmos_ipc_message_read_last(wasmos_ipc_message_t *message)
@@ -51,6 +75,41 @@ wasmos_ipc_reply(int32_t reply_endpoint,
 }
 
 static inline int32_t
+wasmos_ipc_send_retry(int32_t destination_endpoint,
+                      int32_t source_endpoint,
+                      int32_t type,
+                      int32_t request_id,
+                      int32_t arg0,
+                      int32_t arg1,
+                      int32_t arg2,
+                      int32_t arg3,
+                      int32_t retry_limit)
+{
+    int32_t tries = 0;
+    int32_t rc;
+    if (retry_limit <= 0) {
+        retry_limit = WASMOS_IPC_SEND_RETRY_LIMIT;
+    }
+    for (;;) {
+        rc = wasmos_ipc_send(destination_endpoint,
+                             source_endpoint,
+                             type,
+                             request_id,
+                             arg0,
+                             arg1,
+                             arg2,
+                             arg3);
+        if (rc == 0) {
+            return 0;
+        }
+        if (rc != WASMOS_IPC_ERR_FULL || ++tries >= retry_limit) {
+            return rc;
+        }
+        (void)wasmos_sched_yield();
+    }
+}
+
+static inline int32_t
 wasmos_ipc_call(int32_t destination_endpoint,
                 int32_t source_endpoint,
                 int32_t type,
@@ -61,15 +120,40 @@ wasmos_ipc_call(int32_t destination_endpoint,
                 int32_t arg3,
                 wasmos_ipc_message_t *out_reply)
 {
-    wasmos_ipc_message_t reply;
-    int32_t rc = wasmos_ipc_send(destination_endpoint,
+    return wasmos_ipc_call_retry(destination_endpoint,
                                  source_endpoint,
                                  type,
                                  request_id,
                                  arg0,
                                  arg1,
                                  arg2,
-                                 arg3);
+                                 arg3,
+                                 out_reply,
+                                 WASMOS_IPC_SEND_RETRY_LIMIT);
+}
+
+static inline int32_t
+wasmos_ipc_call_retry(int32_t destination_endpoint,
+                      int32_t source_endpoint,
+                      int32_t type,
+                      int32_t request_id,
+                      int32_t arg0,
+                      int32_t arg1,
+                      int32_t arg2,
+                      int32_t arg3,
+                      wasmos_ipc_message_t *out_reply,
+                      int32_t send_retry_limit)
+{
+    wasmos_ipc_message_t reply;
+    int32_t rc = wasmos_ipc_send_retry(destination_endpoint,
+                                       source_endpoint,
+                                       type,
+                                       request_id,
+                                       arg0,
+                                       arg1,
+                                       arg2,
+                                       arg3,
+                                       send_retry_limit);
     if (rc != 0) {
         return rc;
     }
@@ -160,5 +244,9 @@ wasmos_svc_lookup(int32_t proc_endpoint,
     }
     return (int32_t)endpoint_raw;
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

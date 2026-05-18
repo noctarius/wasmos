@@ -323,6 +323,19 @@ Validation:
 - unit tests for parser bounds/overflow/unknown-cmd rejection
 - boot smoke marker for compositor-driver endpoint handshake
 
+Current implementation notes:
+
+- Shared ABI constants/opcode scaffolding now exists in:
+  - `lib/libc/include/wasmos/gfx_ipc.h`
+  - `src/kernel/include/gfx_ipc.h`
+- A minimal `gfx-compositor` service is now present at
+  `src/services/gfx_compositor/`.
+- The service registers endpoint name `gfx`, resolves framebuffer endpoint
+  `fb`, probes text geometry through existing `FBTEXT_IPC_GEOMETRY_REQ`, and
+  emits `[test] gfx compositor handshake ok` on successful handshake.
+- App-facing command dispatch remains fail-closed/unsupported until Phase 1
+  parser + window state are implemented.
+
 ### Phase 1: Single-Mode Software Composition
 
 Tasks:

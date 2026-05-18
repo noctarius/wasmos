@@ -119,6 +119,7 @@ typedef struct process {
     uint8_t is_idle;
     uint8_t in_hostcall;
     uint8_t auto_reap;
+    uint8_t is_wasm;
     uint64_t ctx_canary_pre;
     process_context_t ctx;
     uint64_t ctx_canary_post;
@@ -135,6 +136,7 @@ typedef struct process {
 typedef struct {
     uint32_t state;
     uint32_t block_reason;
+    uint32_t is_wasm;
     uint32_t thread_count;
     uint32_t live_thread_count;
     uint32_t current_tid;
@@ -199,6 +201,7 @@ int process_info_at_stats(uint32_t index,
                           uint32_t *out_parent_pid,
                           const char **out_name,
                           process_stats_t *out_stats);
+int process_set_runtime_is_wasm(uint32_t pid, uint8_t is_wasm);
 int process_set_user_entry(uint32_t pid, uint64_t rip, uint64_t user_rsp);
 
 #endif

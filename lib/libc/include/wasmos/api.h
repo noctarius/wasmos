@@ -98,6 +98,7 @@ extern int32_t wasmos_proc_info_ex(int32_t index, int32_t ptr, int32_t len, int3
 typedef struct {
     uint32_t state;
     uint32_t block_reason;
+    uint32_t is_wasm;
     uint32_t thread_count;
     uint32_t live_thread_count;
     uint32_t current_tid;

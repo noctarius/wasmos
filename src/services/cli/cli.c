@@ -801,7 +801,7 @@ cli_print_ps_table(int32_t count,
                    char names[][32],
                    const wasmos_proc_stats_t *stats)
 {
-    console_write(" pid ppid state thr/live vm(bytes) kstack(bytes) heap(bytes) rss_est(bytes) cpu(ticks) name\n");
+    console_write(" pid ppid state wasm thr/live vm(bytes) kstack(bytes) heap(bytes) rss_est(bytes) cpu(ticks) name\n");
     for (int32_t i = 0; i < count; ++i) {
         if (pids[i] == 0) {
             continue;
@@ -813,6 +813,12 @@ cli_print_ps_table(int32_t count,
         pos = buf_append_u32_width(row, pos, (int)sizeof(row), parents[i], 4);
         pos = buf_append_spaces(row, pos, (int)sizeof(row), 1);
         pos = buf_append_str_width(row, pos, (int)sizeof(row), cli_proc_state_name(stats[i].state), 5);
+        pos = buf_append_spaces(row, pos, (int)sizeof(row), 1);
+        pos = buf_append_str_width(row,
+                                   pos,
+                                   (int)sizeof(row),
+                                   stats[i].is_wasm ? "true" : "false",
+                                   5);
         pos = buf_append_spaces(row, pos, (int)sizeof(row), 1);
         pos = buf_append_u32(row, pos, (int)sizeof(row), stats[i].thread_count);
         pos = buf_append_str(row, pos, (int)sizeof(row), "/");
@@ -852,6 +858,7 @@ cli_print_tree(uint32_t index,
                const uint32_t *pids,
                const uint32_t *parents,
                const char names[][32],
+               const wasmos_proc_stats_t *stats,
                uint8_t *visited,
                uint32_t depth)
 {
@@ -869,6 +876,8 @@ cli_print_tree(uint32_t index,
     pos = buf_append_str(buf, pos, (int)sizeof(buf), names[index]);
     pos = buf_append_str(buf, pos, (int)sizeof(buf), " (pid ");
     pos = buf_append_u32(buf, pos, (int)sizeof(buf), pids[index]);
+    pos = buf_append_str(buf, pos, (int)sizeof(buf), ", wasm=");
+    pos = buf_append_str(buf, pos, (int)sizeof(buf), stats[index].is_wasm ? "true" : "false");
     pos = buf_append_str(buf, pos, (int)sizeof(buf), ")\n");
     buf[pos] = '\0';
     console_write(buf);
@@ -876,7 +885,7 @@ cli_print_tree(uint32_t index,
     uint32_t pid = pids[index];
     for (uint32_t i = 0; i < count; ++i) {
         if (parents[i] == pid && i != index) {
-            cli_print_tree(i, count, pids, parents, names, visited, depth + 1);
+            cli_print_tree(i, count, pids, parents, names, stats, visited, depth + 1);
         }
     }
 }
@@ -1387,12 +1396,26 @@ cli_handle_line(void)
                 }
                 int parent_index = cli_find_index_by_pid((uint32_t)count, g_ps_pids, g_ps_parents[i]);
                 if (g_ps_parents[i] == 0 || parent_index < 0 || g_ps_parents[i] == g_ps_pids[i]) {
-                    cli_print_tree((uint32_t)i, (uint32_t)count, g_ps_pids, g_ps_parents, g_ps_names, g_ps_visited, 0);
+                    cli_print_tree((uint32_t)i,
+                                   (uint32_t)count,
+                                   g_ps_pids,
+                                   g_ps_parents,
+                                   g_ps_names,
+                                   g_ps_stats,
+                                   g_ps_visited,
+                                   0);
                 }
             }
             for (int32_t i = 0; i < count; ++i) {
                 if (g_ps_pids[i] != 0 && !g_ps_visited[i]) {
-                    cli_print_tree((uint32_t)i, (uint32_t)count, g_ps_pids, g_ps_parents, g_ps_names, g_ps_visited, 0);
+                    cli_print_tree((uint32_t)i,
+                                   (uint32_t)count,
+                                   g_ps_pids,
+                                   g_ps_parents,
+                                   g_ps_names,
+                                   g_ps_stats,
+                                   g_ps_visited,
+                                   0);
                 }
             }
         }

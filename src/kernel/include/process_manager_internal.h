@@ -42,6 +42,7 @@ typedef struct {
     uint32_t reply_endpoint;
     uint32_t request_id;
     uint32_t parent_pid;
+    uint32_t parent_context_id;
     uint32_t fs_request_id;
     char name[32];
 } pm_spawn_state_t;
@@ -73,6 +74,7 @@ typedef struct {
     uint32_t fb_endpoint;
     uint32_t vt_endpoint;
     uint32_t fs_reply_endpoint;
+    uint32_t fs_ctrl_endpoint;
     uint32_t fs_request_id;
     uint32_t next_cli_tty;
     uint8_t started;

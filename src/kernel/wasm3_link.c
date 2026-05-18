@@ -459,6 +459,24 @@ m3ApiRawFunction(wasmos_ipc_create_notification)
     m3ApiReturn((int32_t)endpoint);
 }
 
+m3ApiRawFunction(wasmos_ipc_endpoint_owner)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, endpoint)
+    uint32_t owner_context_id = 0;
+
+    preempt_safepoint();
+    if (endpoint < 0) {
+        m3ApiReturn(-1);
+    }
+    if (ipc_endpoint_owner((uint32_t)endpoint, &owner_context_id) != IPC_OK ||
+        owner_context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    preempt_safepoint();
+    m3ApiReturn((int32_t)owner_context_id);
+}
+
 m3ApiRawFunction(wasmos_ipc_send)
 {
     m3ApiReturnType(int32_t)
@@ -2714,6 +2732,7 @@ wasm3_link_wasmos(IM3Module module)
     int rc = 0;
     rc |= wasm3_link_raw(module, "wasmos", "ipc_create_endpoint", "i()", wasmos_ipc_create_endpoint);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_create_notification", "i()", wasmos_ipc_create_notification);
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_endpoint_owner", "i(i)", wasmos_ipc_endpoint_owner);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_send", "i(iiiiiiii)", wasmos_ipc_send);
     rc |= wasm3_link_raw(module, "wasmos", "fs_buffer_borrow", "i(ii)", wasmos_fs_buffer_borrow);
     rc |= wasm3_link_raw(module, "wasmos", "fs_buffer_release", "i()", wasmos_fs_buffer_release);

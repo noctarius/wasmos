@@ -34,6 +34,10 @@ config WASMOS_RING3_THREAD_LIFECYCLE_SMOKE
     bool "Enable dedicated ring3 thread lifecycle helper probe spawn by default"
     default n
 
+config WASMOS_PM_TEST_HOOKS
+    bool "Enable process-manager test inject hooks"
+    default n
+
 choice
     prompt "Process-manager list backend"
     default WASMOS_PM_LIST_LINKED

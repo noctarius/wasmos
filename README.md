@@ -148,6 +148,7 @@ Notes:
 - Current Kconfig symbols cover the core toggles already used by CMake:
   language example switches, tracing/ring3 smoke flags, kernel target triple,
   and QEMU GDB port.
+  It also includes `WASMOS_PM_TEST_HOOKS` for process-manager test injection hooks.
 
 If tool autodiscovery fails:
 ```sh

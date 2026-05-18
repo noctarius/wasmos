@@ -31,6 +31,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - Higher-level components may use C++, while low-level kernel boundaries stay
   C/ASM. WASM C++ build policy is no exceptions/RTTI and explicit C ABI at
   integration points.
+- Process-manager test injection hooks are now behind a dedicated Kconfig/CMake
+  switch (`WASMOS_PM_TEST_HOOKS`) and are no-op when disabled.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

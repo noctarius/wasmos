@@ -3,8 +3,6 @@ extern "C" {
 #include "klog.h"
 #include "process_manager_internal.h"
 #include "ipc.h"
-#include "stdlib.h"
-#include "string.h"
 }
 
 #ifndef WASMOS_PM_LIST_IMPL
@@ -15,6 +13,10 @@ extern "C" {
 #define WASMOS_PM_LIST_ARRAY_CHUNK_CAP 16u
 #endif
 
+#ifndef WASMOS_PM_TEST_HOOKS
+#define WASMOS_PM_TEST_HOOKS 0
+#endif
+
 pm_state_t g_pm;
 uint8_t g_pm_wait_owner_deny_logged;
 uint8_t g_pm_kill_owner_deny_logged;
@@ -23,6 +25,17 @@ uint8_t g_pm_spawn_owner_deny_logged;
 
 class ProcessManager {
 public:
+    typedef struct {
+        uint32_t type;
+        uint32_t request_id;
+        uint32_t arg0;
+        uint32_t arg1;
+        uint32_t arg2;
+        uint32_t arg3;
+        uint32_t expected_owner_context_id;
+        uint8_t wait_owner_mismatch;
+    } inject_request_t;
+
     pm_wait_state_t *wait_slot_acquire(void)
     {
         list_iter_t it;
@@ -47,29 +60,32 @@ public:
         return tty;
     }
 
-    void inject_wait_owner_mismatch_test(uint32_t expected_owner_context_id)
+    void inject(const inject_request_t *request)
     {
-        uint32_t reply_endpoint = IPC_ENDPOINT_NONE;
-        if (expected_owner_context_id == 0) {
+#if WASMOS_PM_TEST_HOOKS
+        if (!request) {
             return;
         }
-        if (ipc_endpoint_create(IPC_CONTEXT_KERNEL, &reply_endpoint) != IPC_OK ||
-            reply_endpoint == IPC_ENDPOINT_NONE) {
+        if (request->wait_owner_mismatch) {
+            uint32_t reply_endpoint = IPC_ENDPOINT_NONE;
+            if (request->expected_owner_context_id == 0) {
+                return;
+            }
+            if (ipc_endpoint_create(IPC_CONTEXT_KERNEL, &reply_endpoint) != IPC_OK ||
+                reply_endpoint == IPC_ENDPOINT_NONE) {
+                return;
+            }
+            pm_wait_state_t *waiter = wait_slot_acquire();
+            if (!waiter) {
+                return;
+            }
+            waiter->in_use = 1;
+            waiter->pid = 0;
+            waiter->reply_endpoint = reply_endpoint;
+            waiter->request_id = request->request_id;
+            waiter->owner_context_id = request->expected_owner_context_id;
             return;
         }
-        pm_wait_state_t *waiter = wait_slot_acquire();
-        if (!waiter) {
-            return;
-        }
-        waiter->in_use = 1;
-        waiter->pid = 0;
-        waiter->reply_endpoint = reply_endpoint;
-        waiter->request_id = 0xFFFF0001u;
-        waiter->owner_context_id = expected_owner_context_id;
-    }
-
-    void inject_owner_deny_test(uint32_t type, uint32_t request_id)
-    {
         uint32_t source_endpoint = IPC_ENDPOINT_NONE;
         ipc_message_t msg;
 
@@ -81,15 +97,18 @@ public:
             return;
         }
 
-        msg.type = type;
+        msg.type = request->type;
         msg.source = source_endpoint;
         msg.destination = g_pm.proc_endpoint;
-        msg.request_id = request_id;
-        msg.arg0 = 0;
-        msg.arg1 = 0;
-        msg.arg2 = 0;
-        msg.arg3 = 0;
+        msg.request_id = request->request_id;
+        msg.arg0 = request->arg0;
+        msg.arg1 = request->arg1;
+        msg.arg2 = request->arg2;
+        msg.arg3 = request->arg3;
         (void)ipc_send_from(IPC_CONTEXT_KERNEL, g_pm.proc_endpoint, &msg);
+#else
+        (void)request;
+#endif
     }
 
     int init(const boot_info_t *boot_info)
@@ -378,19 +397,55 @@ uint32_t pm_alloc_cli_tty(void) { return g_process_manager.alloc_cli_tty(); }
 
 void process_manager_inject_wait_owner_mismatch_test(uint32_t expected_owner_context_id)
 {
-    g_process_manager.inject_wait_owner_mismatch_test(expected_owner_context_id);
+    ProcessManager::inject_request_t request;
+    request.type = 0;
+    request.request_id = 0xFFFF0001u;
+    request.arg0 = 0;
+    request.arg1 = 0;
+    request.arg2 = 0;
+    request.arg3 = 0;
+    request.expected_owner_context_id = expected_owner_context_id;
+    request.wait_owner_mismatch = 1;
+    g_process_manager.inject(&request);
 }
 void process_manager_inject_kill_owner_deny_test(void)
 {
-    g_process_manager.inject_owner_deny_test(PROC_IPC_KILL, 0xFFFF1001u);
+    ProcessManager::inject_request_t request;
+    request.type = PROC_IPC_KILL;
+    request.request_id = 0xFFFF1001u;
+    request.arg0 = 0;
+    request.arg1 = 0;
+    request.arg2 = 0;
+    request.arg3 = 0;
+    request.expected_owner_context_id = 0;
+    request.wait_owner_mismatch = 0;
+    g_process_manager.inject(&request);
 }
 void process_manager_inject_status_owner_deny_test(void)
 {
-    g_process_manager.inject_owner_deny_test(PROC_IPC_STATUS, 0xFFFF1002u);
+    ProcessManager::inject_request_t request;
+    request.type = PROC_IPC_STATUS;
+    request.request_id = 0xFFFF1002u;
+    request.arg0 = 0;
+    request.arg1 = 0;
+    request.arg2 = 0;
+    request.arg3 = 0;
+    request.expected_owner_context_id = 0;
+    request.wait_owner_mismatch = 0;
+    g_process_manager.inject(&request);
 }
 void process_manager_inject_spawn_owner_deny_test(void)
 {
-    g_process_manager.inject_owner_deny_test(PROC_IPC_SPAWN, 0xFFFF1003u);
+    ProcessManager::inject_request_t request;
+    request.type = PROC_IPC_SPAWN;
+    request.request_id = 0xFFFF1003u;
+    request.arg0 = 0;
+    request.arg1 = 0;
+    request.arg2 = 0;
+    request.arg3 = 0;
+    request.expected_owner_context_id = 0;
+    request.wait_owner_mismatch = 0;
+    g_process_manager.inject(&request);
 }
 
 int process_manager_init(const boot_info_t *boot_info) { return g_process_manager.init(boot_info); }

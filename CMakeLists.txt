@@ -1575,6 +1575,8 @@ add_custom_target(run-kernel-unit-tests
           -I${KERNEL_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_list.c
           ${KERNEL_DIR}/list.c
+          ${KERNEL_DIR}/list_linked.c
+          ${KERNEL_DIR}/list_array_chunk.c
           -o ${BUILD_DIR}/test_list
   COMMAND ${BUILD_DIR}/test_list
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

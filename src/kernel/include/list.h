@@ -9,30 +9,21 @@ typedef enum {
     LIST_IMPL_ARRAY_CHUNK = 1
 } list_impl_t;
 
-typedef struct list_linked_node {
-    struct list_linked_node *next;
-    uint8_t payload[];
-} list_linked_node_t;
-
-typedef struct list_array_chunk {
-    struct list_array_chunk *next;
-    uint32_t capacity;
-    uint8_t slots[];
-} list_array_chunk_t;
+typedef struct list_ops list_ops_t;
 
 typedef struct {
     uint32_t elem_size;
     list_impl_t impl;
-    uint32_t array_chunk_capacity;
-    list_linked_node_t *linked_head;
-    list_array_chunk_t *array_head;
+    uint32_t config_value;
+    const list_ops_t *ops;
+    void *impl_state;
 } list_t;
 
 typedef struct {
     list_t *list;
-    list_linked_node_t *linked_node;
-    list_array_chunk_t *array_chunk;
-    uint32_t array_index;
+    void *state0;
+    void *state1;
+    uint32_t index;
 } list_iter_t;
 
 int list_init(list_t *list, uint32_t elem_size, list_impl_t impl, uint32_t array_chunk_capacity);

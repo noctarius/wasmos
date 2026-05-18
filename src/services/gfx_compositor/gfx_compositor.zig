@@ -34,6 +34,8 @@ const window_slot_t = struct {
     window_id: u32 = 0,
     width: u32 = 0,
     height: u32 = 0,
+    shmem_id: u32 = 0,
+    has_buffer: bool = false,
 };
 
 var g_windows: [GFX_MAX_WINDOWS]window_slot_t = [_]window_slot_t{.{}} ** GFX_MAX_WINDOWS;
@@ -326,13 +328,39 @@ fn compose_frame() i32 {
         const max_h = if (tile_h > gap * 2) tile_h - gap * 2 else 1;
         const draw_w = @min(g_windows[i].width, max_w);
         const draw_h = @min(g_windows[i].height, max_h);
-        const tone = @as(u32, (g_windows[i].window_id * 37) & 0x7F);
-        const body_color = 0x203040 | (tone << 16) | ((tone >> 1) << 8);
-        fill_rect(origin_x, origin_y, draw_w, draw_h, body_color);
-        fill_rect(origin_x, origin_y, draw_w, 2, 0xE0E0E0);
-        fill_rect(origin_x, origin_y, 2, draw_h, 0xE0E0E0);
-        fill_rect(origin_x + draw_w - 2, origin_y, 2, draw_h, 0x707070);
-        fill_rect(origin_x, origin_y + draw_h - 2, draw_w, 2, 0x707070);
+        var rendered_from_buffer = false;
+        if (g_windows[i].has_buffer and g_windows[i].shmem_id != 0 and draw_w != 0 and draw_h != 0) {
+            const pixel_count_u64 = @as(u64, g_windows[i].width) * @as(u64, g_windows[i].height);
+            const byte_count_u64 = pixel_count_u64 * 4;
+            if (pixel_count_u64 != 0 and byte_count_u64 <= 0xFFFF_FFFF) {
+                const src_ptr_raw = api().shmem_map.?(g_windows[i].shmem_id);
+                if (src_ptr_raw != null) {
+                    const src_pixels: [*]const u32 = @ptrCast(@alignCast(src_ptr_raw.?));
+                    var by: u32 = 0;
+                    while (by < draw_h) : (by += 1) {
+                        var bx: u32 = 0;
+                        while (bx < draw_w) : (bx += 1) {
+                            const idx_u64 = @as(u64, by) * @as(u64, g_windows[i].width) + @as(u64, bx);
+                            const idx: usize = @intCast(idx_u64);
+                            _ = api().framebuffer_pixel.?(origin_x + bx, origin_y + by, src_pixels[idx]);
+                        }
+                    }
+                    _ = api().shmem_unmap.?(g_windows[i].shmem_id);
+                    rendered_from_buffer = true;
+                }
+            }
+        }
+        if (!rendered_from_buffer) {
+            const tone = @as(u32, (g_windows[i].window_id * 37) & 0x7F);
+            const body_color = 0x203040 | (tone << 16) | ((tone >> 1) << 8);
+            fill_rect(origin_x, origin_y, draw_w, draw_h, body_color);
+        }
+        if (draw_w >= 2 and draw_h >= 2) {
+            fill_rect(origin_x, origin_y, draw_w, 2, 0xE0E0E0);
+            fill_rect(origin_x, origin_y, 2, draw_h, 0xE0E0E0);
+            fill_rect(origin_x + draw_w - 2, origin_y, 2, draw_h, 0x707070);
+            fill_rect(origin_x, origin_y + draw_h - 2, draw_w, 2, 0x707070);
+        }
         active_idx += 1;
     }
     return c.GFX_STATUS_OK;
@@ -340,6 +368,7 @@ fn compose_frame() i32 {
 
 fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
     const window_id: u32 = msg.arg0;
+    const shmem_id: u32 = msg.arg1;
     if (window_id == 0) {
         reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
         return;
@@ -352,8 +381,12 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
         reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
         return;
     }
-    // TODO(gfx-phase1): Use client buffer IDs + damage rects from PRESENT
-    // payload for real blit/composition instead of placeholder rectangles.
+    if (shmem_id != 0) {
+        g_windows[slot_idx].shmem_id = shmem_id;
+        g_windows[slot_idx].has_buffer = true;
+    }
+    // TODO(gfx-phase1): Consume damage rect payload/count to avoid full-frame
+    // redraw on every present in the fallback software path.
     reply_with_status(msg, compose_frame(), 0, 0, 0);
 }
 

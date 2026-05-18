@@ -13,6 +13,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - Ring-3 strict isolation/hardening, threading phase rollout, DMA rollout,
   filesystem/PM service discovery, and CLI/runtime updates are tracked in the
   dedicated docs under `docs/architecture/`.
+- CLI `ps` process diagnostics now also expose runtime kind (`wasm` true/false
+  in table view and `wasm=true|false` annotations in tree view), sourced from
+  process-manager spawn metadata.
 - Threading is production-complete for the current single-core scope; final
   ABI/policy decisions and closure status are in
   `docs/architecture/15-threading-and-lifecycle.md` sections 15 and 17.

@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "boot.h"
 #include "ipc.h"
+#include "list.h"
 #include "process.h"
 #include "wasmos_app.h"
 #include "wasmos_driver_abi.h"
@@ -64,21 +65,6 @@ typedef struct {
     char name[17];
 } pm_service_entry_t;
 
-typedef struct pm_app_node {
-    pm_app_state_t state;
-    struct pm_app_node *next;
-} pm_app_node_t;
-
-typedef struct pm_wait_node {
-    pm_wait_state_t state;
-    struct pm_wait_node *next;
-} pm_wait_node_t;
-
-typedef struct pm_service_node {
-    pm_service_entry_t entry;
-    struct pm_service_node *next;
-} pm_service_node_t;
-
 typedef struct {
     const boot_info_t *boot_info;
     uint32_t proc_endpoint;
@@ -92,10 +78,10 @@ typedef struct {
     uint8_t started;
     uint32_t init_module_index;
     uint32_t module_count;
-    pm_app_node_t *apps_head;
-    pm_wait_node_t *waits_head;
+    list_t apps;
+    list_t waits;
     pm_spawn_state_t spawn;
-    pm_service_node_t *services_head;
+    list_t services;
 } pm_state_t;
 
 extern pm_state_t g_pm;

@@ -5,6 +5,14 @@
 #include "stdlib.h"
 #include "string.h"
 
+#ifndef WASMOS_PM_LIST_IMPL
+#define WASMOS_PM_LIST_IMPL LIST_IMPL_LINKED
+#endif
+
+#ifndef WASMOS_PM_LIST_ARRAY_CHUNK_CAP
+#define WASMOS_PM_LIST_ARRAY_CHUNK_CAP 16u
+#endif
+
 pm_state_t g_pm;
 uint8_t g_pm_wait_owner_deny_logged;
 uint8_t g_pm_kill_owner_deny_logged;
@@ -14,22 +22,16 @@ uint8_t g_pm_spawn_owner_deny_logged;
 pm_wait_state_t *
 pm_wait_slot_acquire(void)
 {
-    pm_wait_node_t *node = g_pm.waits_head;
-    while (node) {
-        if (!node->state.in_use) {
-            return &node->state;
+    list_iter_t it;
+    pm_wait_state_t *waiter = (pm_wait_state_t *)list_first(&g_pm.waits, &it);
+    while (waiter) {
+        if (!waiter->in_use) {
+            return waiter;
         }
-        node = node->next;
+        waiter = (pm_wait_state_t *)list_next(&it);
     }
-    node = (pm_wait_node_t *)malloc(sizeof(pm_wait_node_t));
-    if (!node) {
-        return 0;
-    }
-    memset(node, 0, sizeof(pm_wait_node_t));
-    node->state.reply_endpoint = IPC_ENDPOINT_NONE;
-    node->next = g_pm.waits_head;
-    g_pm.waits_head = node;
-    return &node->state;
+    waiter = (pm_wait_state_t *)list_alloc(&g_pm.waits);
+    return waiter;
 }
 
 uint32_t
@@ -290,10 +292,25 @@ process_manager_init(const boot_info_t *boot_info)
         g_pm.module_count = boot_info->module_count;
         g_pm.init_module_index = pm_find_module_index_by_name("sysinit");
     }
-    g_pm.apps_head = 0;
-    g_pm.waits_head = 0;
+    if (list_init(&g_pm.apps,
+                  sizeof(pm_app_state_t),
+                  (list_impl_t)WASMOS_PM_LIST_IMPL,
+                  WASMOS_PM_LIST_ARRAY_CHUNK_CAP) != 0) {
+        return -1;
+    }
+    if (list_init(&g_pm.waits,
+                  sizeof(pm_wait_state_t),
+                  (list_impl_t)WASMOS_PM_LIST_IMPL,
+                  WASMOS_PM_LIST_ARRAY_CHUNK_CAP) != 0) {
+        return -1;
+    }
+    if (list_init(&g_pm.services,
+                  sizeof(pm_service_entry_t),
+                  (list_impl_t)WASMOS_PM_LIST_IMPL,
+                  WASMOS_PM_LIST_ARRAY_CHUNK_CAP) != 0) {
+        return -1;
+    }
     g_pm.spawn.in_use = 0;
-    g_pm.services_head = 0;
     return 0;
 }
 

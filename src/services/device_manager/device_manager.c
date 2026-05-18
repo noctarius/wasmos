@@ -285,31 +285,35 @@ hw_spawn_driver_index_caps(int32_t index, const spawn_caps_t *caps)
 static int
 hw_spawn_driver_name(hw_spawn_target_t target)
 {
-    const char *name = 0;
-    uint32_t packed[4] = {0, 0, 0, 0};
+    const char *path = 0;
+    uint32_t path_len = 0;
     if (target == HW_SPAWN_SERIAL) {
-        name = "serial";
+        path = "/boot/system/drivers/serial.wap";
     } else if (target == HW_SPAWN_KEYBOARD) {
-        name = "keyboard";
+        path = "/boot/system/drivers/keyboard.wap";
     } else if (target == HW_SPAWN_FRAMEBUFFER) {
-        name = "framebuffer";
+        path = "/boot/system/drivers/framebuf.wap";
     }
-    if (!name) {
+    if (!path) {
         return -1;
     }
-    for (uint32_t i = 0; name[i] && i < 16u; ++i) {
-        uint32_t slot = i / 4u;
-        uint32_t shift = (i % 4u) * 8u;
-        packed[slot] |= ((uint32_t)(uint8_t)name[i]) << shift;
+    while (path[path_len]) {
+        path_len++;
+    }
+    if (path_len == 0 || path_len > 95u) {
+        return -1;
+    }
+    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+        return -1;
     }
     if (wasmos_ipc_send(g_dm.proc_endpoint,
                         g_dm.reply_endpoint,
-                        PROC_IPC_SPAWN_NAME,
+                        PROC_IPC_SPAWN_PATH,
                         g_dm.request_id,
-                        (int32_t)packed[0],
-                        (int32_t)packed[1],
-                        (int32_t)packed[2],
-                        (int32_t)packed[3]) != 0) {
+                        0,
+                        (int32_t)path_len,
+                        0,
+                        0) != 0) {
         return -1;
     }
     return 0;
@@ -727,7 +731,7 @@ initialize(int32_t proc_endpoint,
     /* Boot-time hardware drivers live on /boot and are not part of initfs. */
     (void)query_module_meta_by_path("/boot/system/drivers/serial.wap", PROC_MODULE_SOURCE_FS, &g_dm.serial_index);
     (void)query_module_meta_by_path("/boot/system/drivers/keyboard.wap", PROC_MODULE_SOURCE_FS, &g_dm.keyboard_index);
-    (void)query_module_meta_by_path("/boot/system/drivers/framebuffer.wap", PROC_MODULE_SOURCE_FS, &g_dm.framebuffer_index);
+    (void)query_module_meta_by_path("/boot/system/drivers/framebuf.wap", PROC_MODULE_SOURCE_FS, &g_dm.framebuffer_index);
 
     /* Bootstrap policy: always bring up pci-bus when present in initfs.
      * Runtime dedup/restart policy is handled by later lifecycle phases. */

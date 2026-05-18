@@ -1026,14 +1026,21 @@ fat_handle_open(void)
         return -1;
     }
     if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+        fat_log("open copy path failed\n");
         return -1;
     }
     path[path_len] = '\0';
     if (vfs_translate_path(path, fat_path, sizeof(fat_path), &path_is_init) != 0 || path_is_init) {
+        fat_log("open translate failed ");
+        fat_write_full(path);
+        fat_log("\n");
         return -1;
     }
 
     if (fat_resolve_path(fat_path, &entry) != 0 || !entry.valid) {
+        fat_log("open resolve miss ");
+        fat_write_full(fat_path);
+        fat_log("\n");
         if ((g_fs_req.arg1 & FAT_OPEN_CREAT) == 0 || fat_create_empty_file(fat_path, &entry) != 0) {
             return -1;
         }

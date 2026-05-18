@@ -362,6 +362,9 @@ process_manager_entry(process_t *process, void *arg)
         case PROC_IPC_SPAWN_NAME:
             rc = pm_handle_spawn_name(process->context_id, &msg);
             break;
+        case PROC_IPC_SPAWN_PATH:
+            rc = pm_handle_spawn_path(process->context_id, &msg);
+            break;
         case PROC_IPC_MODULE_META:
             rc = pm_handle_module_meta(process->context_id, &msg);
             break;

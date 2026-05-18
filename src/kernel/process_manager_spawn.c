@@ -439,6 +439,83 @@ pm_send_fs_read(uint32_t pm_context_id, const char *name, uint32_t *out_req_id)
     return 0;
 }
 
+static int
+pm_recv_fs_reply(uint32_t source_context_id,
+                 uint32_t source_endpoint,
+                 uint32_t request_id,
+                 ipc_message_t *out_msg)
+{
+    ipc_message_t msg;
+    for (;;) {
+        int rc = ipc_recv_for(source_context_id, source_endpoint, &msg);
+        if (rc == IPC_EMPTY) {
+            process_yield(PROCESS_RUN_BLOCKED);
+            continue;
+        }
+        if (rc != IPC_OK) {
+            return -1;
+        }
+        if (msg.request_id != request_id) {
+            continue;
+        }
+        if (out_msg) {
+            *out_msg = msg;
+        }
+        return 0;
+    }
+}
+
+static int
+pm_fs_read_blob_for_spawn(uint32_t pm_context_id,
+                          const char *path,
+                          uint32_t path_len,
+                          uint32_t *out_blob_size)
+{
+    uint8_t *pm_fs_buf = 0;
+    uint32_t max = 0;
+    uint32_t req_id = 0;
+    ipc_message_t reply;
+
+    if (!path || path_len == 0 || !out_blob_size) {
+        return -1;
+    }
+    pm_fs_buf = (uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
+    max = process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM);
+    if (!pm_fs_buf || max == 0 || path_len >= max) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < path_len; ++i) {
+        pm_fs_buf[i] = (uint8_t)path[i];
+    }
+    if (pm_fs_buf[0] == '\0') {
+        klog_write("[pm] spawn_path path empty\n");
+        return -1;
+    }
+
+    req_id = g_pm.fs_request_id++;
+    ipc_message_t req = {
+        .type = FS_IPC_READ_PATH_REQ,
+        .source = g_pm.fs_reply_endpoint,
+        .destination = g_pm.fs_endpoint,
+        .request_id = req_id,
+        .arg0 = (int32_t)path_len,
+        .arg1 = 0,
+        .arg2 = 0,
+        .arg3 = 0
+    };
+    if (ipc_send_from(pm_context_id, g_pm.fs_endpoint, &req) != IPC_OK) {
+        return -1;
+    }
+    if (pm_recv_fs_reply(pm_context_id, g_pm.fs_reply_endpoint, req_id, &reply) != 0 ||
+        reply.type != FS_IPC_RESP ||
+        reply.arg0 <= 0 ||
+        (uint32_t)reply.arg0 > max) {
+        return -1;
+    }
+    *out_blob_size = (uint32_t)reply.arg0;
+    return 0;
+}
+
 void
 pm_poll_spawn(uint32_t pm_context_id)
 {
@@ -817,6 +894,65 @@ pm_handle_spawn_name(uint32_t pm_context_id, const ipc_message_t *msg)
         }
     }
     return 0;
+}
+
+int
+pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
+{
+    uint32_t owner_context = 0;
+    process_t *caller = 0;
+    uint32_t parent_pid = 0;
+    uint32_t path_len = (uint32_t)msg->arg1;
+    const uint8_t *caller_fs_buf = 0;
+    char path[256];
+    const uint8_t *pm_fs_buf = 0;
+    uint32_t blob_size = 0;
+    uint32_t pid = 0;
+
+    if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
+        return -1;
+    }
+    caller = process_find_by_context(owner_context);
+    if (!caller) {
+        return -1;
+    }
+    parent_pid = caller->pid;
+    if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE || path_len == 0 || path_len >= sizeof(path)) {
+        return -1;
+    }
+    caller_fs_buf = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, owner_context);
+    if (!caller_fs_buf || path_len >= process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM)) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < path_len; ++i) {
+        path[i] = (char)caller_fs_buf[i];
+    }
+    path[path_len] = '\0';
+
+    pm_fs_buf = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
+    if (!pm_fs_buf) {
+        return -1;
+    }
+    if (pm_fs_read_blob_for_spawn(pm_context_id,
+                                  path,
+                                  path_len,
+                                  &blob_size) != 0) {
+        return -1;
+    }
+    if (pm_spawn_from_buffer(parent_pid, pm_fs_buf, blob_size, &pid) != 0) {
+        return -1;
+    }
+
+    ipc_message_t resp;
+    resp.type = PROC_IPC_RESP;
+    resp.source = g_pm.proc_endpoint;
+    resp.destination = msg->source;
+    resp.request_id = msg->request_id;
+    resp.arg0 = pid;
+    resp.arg1 = 0;
+    resp.arg2 = 0;
+    resp.arg3 = 0;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
 }
 
 int

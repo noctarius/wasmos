@@ -410,7 +410,16 @@ wasm_fs_buffer_for_pid(uint32_t pid, uint32_t context_id)
 {
     uint32_t target_context = context_id;
     wasm_fs_peer_slot_t *peer = wasm_fs_peer_slot_for_pid(pid);
-    if (peer && peer->valid && peer->peer_context_id != 0) {
+    process_t *proc = process_get(pid);
+    uint8_t is_fs_manager = (proc && proc->name && strcmp(proc->name, "fs-manager") == 0) ? 1u : 0u;
+    if (is_fs_manager) {
+        /* fs-manager relays through explicit buffer borrows; peer-slot
+         * redirection can point at backend replies and corrupt relay writes. */
+        return process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, target_context);
+    }
+    if (peer &&
+        peer->valid &&
+        peer->peer_context_id != 0) {
         target_context = peer->peer_context_id;
     }
     return process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, target_context);
@@ -755,7 +764,8 @@ m3ApiRawFunction(wasmos_ipc_recv)
                     slot->message.type >= FS_IPC_OPEN_REQ &&
                     slot->message.type <= FS_IPC_READ_APP_REQ) {
                     uint32_t owner_context = 0;
-                    if (ipc_endpoint_owner(slot->message.source, &owner_context) == IPC_OK &&
+                    int owner_rc = ipc_endpoint_owner(slot->message.source, &owner_context);
+                    if (owner_rc == IPC_OK &&
                         owner_context != 0) {
                         peer->valid = 1;
                         peer->peer_context_id = owner_context;
@@ -790,7 +800,8 @@ m3ApiRawFunction(wasmos_ipc_recv)
             slot->message.type >= FS_IPC_OPEN_REQ &&
             slot->message.type <= FS_IPC_READ_APP_REQ) {
             uint32_t owner_context = 0;
-            if (ipc_endpoint_owner(slot->message.source, &owner_context) == IPC_OK &&
+            int owner_rc = ipc_endpoint_owner(slot->message.source, &owner_context);
+            if (owner_rc == IPC_OK &&
                 owner_context != 0) {
                 peer->valid = 1;
                 peer->peer_context_id = owner_context;

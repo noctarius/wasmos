@@ -1138,31 +1138,39 @@ cli_trim_name(char *name)
 }
 
 static void
-cli_extract_exec_name(const char *input, char *out, uint32_t out_len)
+cli_extract_exec_path(const char *input, char *out, uint32_t out_len)
 {
     uint32_t start = 0;
     uint32_t end = 0;
     if (!input || !out || out_len == 0) {
         return;
     }
-    while (input[end]) {
-        if (input[end] == '/' || input[end] == '\\') {
-            start = end + 1;
-        }
+    while (input[start] == ' ' || input[start] == '\t') {
+        start++;
+    }
+    end = start;
+    while (input[end] && input[end] != ' ' && input[end] != '\t') {
         end++;
     }
-    uint32_t len = 0;
-    for (uint32_t i = start; i < end && len + 1 < out_len; ++i) {
-        out[len++] = to_lower(input[i]);
+    uint32_t len = 0u;
+    for (uint32_t i = start; i < end && len + 1u < out_len; ++i) {
+        char c = input[i];
+        out[len++] = (c == '\\') ? '/' : c;
     }
     out[len] = '\0';
     cli_trim_name(out);
-    len = 0;
-    while (out[len]) {
-        len++;
+    if (out[0] == '\0') {
+        return;
     }
-    if (str_ends_with(out, ".wap")) {
-        out[len - 4] = '\0';
+    if (!str_ends_with(out, ".wap")) {
+        uint32_t n = str_len(out);
+        if (n + 4u + 1u < out_len) {
+            out[n++] = '.';
+            out[n++] = 'w';
+            out[n++] = 'a';
+            out[n++] = 'p';
+            out[n] = '\0';
+        }
     }
 }
 
@@ -1262,20 +1270,45 @@ cli_handle_line(void)
         return 1;
     }
     if (g_line_len > 5 && line_starts_with_ci("exec ")) {
-        char name[32];
-        name[0] = '\0';
-        cli_extract_exec_name(&g_line[5], name, sizeof(name));
-        if (name[0] == '\0') {
+        char path[96];
+        char resolved[96];
+        path[0] = '\0';
+        resolved[0] = '\0';
+        cli_extract_exec_path(&g_line[5], path, sizeof(path));
+        if (path[0] == '\0') {
             console_write("exec failed\n");
             return 0;
         }
-        if (str_len(name) > 15) {
-            console_write("exec name too long\n");
+        if (path[0] == '/') {
+            if (snprintf(resolved, sizeof(resolved), "%s", path) <= 0) {
+                console_write("exec failed\n");
+                return 0;
+            }
+        } else if (g_cwd[0] == '/' && g_cwd[1] == '\0') {
+            if (snprintf(resolved, sizeof(resolved), "/%s", path) <= 0) {
+                console_write("exec failed\n");
+                return 0;
+            }
+        } else {
+            if (snprintf(resolved, sizeof(resolved), "%s/%s", g_cwd, path) <= 0) {
+                console_write("exec failed\n");
+                return 0;
+            }
+        }
+        uint32_t path_len = (uint32_t)str_len(resolved);
+        if (path_len == 0u || path_len > 95u) {
+            console_write("exec path too long\n");
             return 0;
         }
-        uint32_t packed[4];
-        cli_pack_name(name, packed);
-        if (cli_send_proc(PROC_IPC_SPAWN_NAME, packed[0], packed[1], packed[2], packed[3]) != 0) {
+        if (wasmos_fs_buffer_write((int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
+            console_write("exec failed\n");
+            return 0;
+        }
+        if (cli_send_proc(PROC_IPC_SPAWN_PATH,
+                          0,
+                          (int32_t)path_len,
+                          0,
+                          0) != 0) {
             console_write("exec failed\n");
             return 0;
         }

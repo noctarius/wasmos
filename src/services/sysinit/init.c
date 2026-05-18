@@ -247,46 +247,61 @@ proc_count_named(const char *name)
     return matches;
 }
 
-static void
-pack_name_args(const char *name, uint32_t out[4])
-{
-    if (!out) {
-        return;
-    }
-    for (uint32_t i = 0; i < 4; ++i) {
-        out[i] = 0;
-    }
-    if (!name) {
-        return;
-    }
-    uint32_t idx = 0;
-    for (uint32_t i = 0; name[i] && idx < 16; ++i, ++idx) {
-        uint32_t slot = idx / 4;
-        uint32_t shift = (idx % 4) * 8;
-        out[slot] |= ((uint32_t)(uint8_t)name[i]) << shift;
-    }
-}
-
 static int
-spawn_named(const char *name)
+target_spawn_path(const char *name, char *out, uint32_t out_len)
 {
-    uint32_t packed[4];
-
-    if (!name || name[0] == '\0') {
+    const char *src = 0;
+    uint32_t i = 0;
+    if (!name || !out || out_len == 0) {
+        return -1;
+    }
+    if (str_eq(name, "chardev-client")) {
+        src = "/boot/apps/chardev_client.wap";
+    } else if (str_eq(name, "vt")) {
+        src = "/boot/system/services/vt.wap";
+    } else if (str_eq(name, "cli")) {
+        src = "/boot/system/services/cli.wap";
+    } else if (str_eq(name, "gfx-compositor")) {
+        src = "/boot/system/services/gfxcomp.wap";
+    } else {
         return -1;
     }
 
-    /* PM's by-name spawn path currently accepts up to sixteen bytes packed into
-     * the four IPC argument slots. */
-    pack_name_args(name, packed);
+    while (src[i] != '\0') {
+        if (i + 1u >= out_len) {
+            return -1;
+        }
+        out[i] = src[i];
+        i++;
+    }
+    out[i] = '\0';
+    return 0;
+}
+
+static int
+spawn_path(const char *path)
+{
+    uint32_t path_len = 0;
+    if (!path || path[0] == '\0') {
+        return -1;
+    }
+    while (path[path_len]) {
+        path_len++;
+    }
+    if (path_len == 0 || path_len > 240u) {
+        return -1;
+    }
+    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+        return -1;
+    }
     for (uint32_t attempt = 0; attempt < 128u; ++attempt) {
         if (wasmos_ipc_send(g_proc_endpoint, g_reply_endpoint,
-                            PROC_IPC_SPAWN_NAME,
+                            PROC_IPC_SPAWN_PATH,
                             g_spawn_request_id,
-                            (int32_t)packed[0],
-                            (int32_t)packed[1],
-                            (int32_t)packed[2],
-                            (int32_t)packed[3]) != 0) {
+                            0,
+                            (int32_t)path_len,
+                            0,
+                            0) != 0) {
             return -1;
         }
 
@@ -375,8 +390,12 @@ initialize(int32_t proc_endpoint,
         trace_line("[sysinit] spawn ");
         trace_line(name);
         trace_line("\n");
-        if (spawn_named(name) != 0) {
-            log_line("[sysinit] spawn failed\n");
+        char path[96];
+        if (target_spawn_path(name, path, sizeof(path)) != 0 ||
+            spawn_path(path) != 0) {
+            log_line("[sysinit] spawn failed: ");
+            log_line(name);
+            log_line("\n");
             stall_forever();
         }
         g_target_index++;

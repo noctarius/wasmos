@@ -106,6 +106,7 @@ int pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t *msg);
 int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t *msg);
 int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t *msg);
 int pm_handle_spawn_name(uint32_t pm_context_id, const ipc_message_t *msg);
+int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg);
 uint32_t pm_find_module_index_by_name(const char *name);
 void pm_poll_spawn(uint32_t pm_context_id);
 void pm_check_waits(uint32_t pm_context_id);

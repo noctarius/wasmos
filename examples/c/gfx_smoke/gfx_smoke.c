@@ -119,7 +119,13 @@ main(int argc, char **argv)
 
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_ALLOC_SHARED_BUFFER,
                  window_id, 320, 180, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
-        puts("[test] gfx smoke alloc failed");
+        char buf[96];
+        int n = snprintf(buf, sizeof(buf),
+                         "[test] gfx smoke alloc failed status=%d a1=%d a2=%d a3=%d\n",
+                         reply.status, reply.arg1, reply.arg2, reply.arg3);
+        if (n > 0) {
+            (void)putsn(buf, (size_t)n);
+        }
         return 1;
     }
     buffer_id = reply.arg1;

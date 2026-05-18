@@ -338,6 +338,10 @@ Current implementation notes:
   `GFX_IPC_CREATE_WINDOW`/`GFX_IPC_DESTROY_WINDOW`/`GFX_IPC_RESIZE_WINDOW`.
 - Baseline `GFX_IPC_ALLOC_SHARED_BUFFER` is now wired and returns opaque random
   32-bit `buffer_id` handles backed by shmem allocations plus stride metadata.
+- Baseline `GFX_IPC_RELEASE_SHARED_BUFFER` is now wired: it invalidates the
+  compositor handle, detaches any bound windows, and rejects non-owner callers.
+  Backing page reclaim is deferred until native driver ABI exposes shmem
+  destroy/release support.
 - Baseline `GFX_IPC_PRESENT_WINDOW` now presents by `buffer_id` with payload
   semantics: `arg0=window_id`, `arg1=buffer_id`, `arg2=damage_count`,
   `arg3=damage_shmem_id`.

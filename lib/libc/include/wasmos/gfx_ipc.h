@@ -26,6 +26,7 @@ enum {
     GFX_IPC_SUBMIT_COMMANDS = 0x0204,
     GFX_IPC_PRESENT_WINDOW = 0x0205,
     GFX_IPC_POLL_EVENT = 0x0206,
+    GFX_IPC_RELEASE_SHARED_BUFFER = 0x0207,
     GFX_IPC_RESP = 0x0280,
     GFX_IPC_ERROR = 0x02FF
 };
@@ -40,6 +41,8 @@ enum {
  *                           reply: arg1=buffer_id arg2=shmem_id arg3=stride
  * - GFX_IPC_PRESENT_WINDOW: arg0=window_id arg1=buffer_id
  *                           arg2=damage_count arg3=damage_shmem_id
+ * - GFX_IPC_RELEASE_SHARED_BUFFER:
+ *                           arg0=buffer_id arg1..arg3 reserved
  */
 
 typedef struct {

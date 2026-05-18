@@ -40,9 +40,10 @@ The current tree already boots into a usable user-space stack:
   helpers. Update modes such as `r+`/`w+`/`a+` and non-ASCII LFN creation
   remain future work.
 - The runtime host uses `wasm3`, not WAMR.
-- The process manager also supports native ELF drivers wrapped in WASMOS-APP as
-  `FLAG_DRIVER|FLAG_NATIVE`, loaded directly into a process context and called
-  through a kernel-provided function-table ABI.
+- The process manager also supports native ELF privileged modules wrapped in
+  WASMOS-APP as `FLAG_NATIVE` plus `FLAG_DRIVER` or `FLAG_SERVICE`, loaded
+  directly into a process context and called through a kernel-provided
+  function-table ABI.
 - Native framebuffer startup now registers its text-control IPC endpoint back
   into process-manager state, so downstream VT instances receive a concrete
   framebuffer endpoint for switch clear/replay control instead of degrading to

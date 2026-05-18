@@ -1,0 +1,239 @@
+const c = @cImport({
+    @cInclude("wasmos_native_driver.h");
+    @cInclude("wasmos_driver_abi.h");
+    @cInclude("wasmos/gfx_ipc.h");
+});
+
+const IPC_OK: i32 = 0;
+const IPC_EMPTY: i32 = 1;
+const IPC_ENDPOINT_NONE: u32 = 0xFFFF_FFFF;
+const GFX_REQUEST_BASE: u32 = 0x7000;
+const GFX_FB_LOOKUP_RETRIES: u32 = 2048;
+
+var g_api: ?*c.wasmos_driver_api_t = null;
+var g_proc_endpoint: u32 = IPC_ENDPOINT_NONE;
+var g_gfx_endpoint: u32 = IPC_ENDPOINT_NONE;
+var g_fb_endpoint: u32 = IPC_ENDPOINT_NONE;
+
+fn api() *c.wasmos_driver_api_t {
+    return g_api.?;
+}
+
+fn ctxId() u32 {
+    return api().sched_current_pid.?();
+}
+
+fn logMsg(msg: []const u8) void {
+    _ = api().console_write.?(msg.ptr, @intCast(msg.len));
+}
+
+fn packName16(name: []const u8, out: *[4]u32) void {
+    out.* = .{ 0, 0, 0, 0 };
+    var i: usize = 0;
+    while (i < name.len and i < 16) : (i += 1) {
+        const slot: usize = i / 4;
+        const shift: u5 = @intCast((i % 4) * 8);
+        out[slot] |= (@as(u32, name[i]) << shift);
+    }
+}
+
+fn svc_register(name: []const u8, request_id: u32) i32 {
+    var args: [4]u32 = undefined;
+    var msg: c.nd_ipc_message_t = undefined;
+    packName16(name, &args);
+
+    msg.type = c.SVC_IPC_REGISTER_REQ;
+    msg.source = g_gfx_endpoint;
+    msg.destination = g_proc_endpoint;
+    msg.request_id = request_id;
+    msg.arg0 = args[0];
+    msg.arg1 = args[1];
+    msg.arg2 = args[2];
+    msg.arg3 = args[3];
+    if (api().ipc_send.?(ctxId(), g_proc_endpoint, &msg) != IPC_OK) {
+        return -1;
+    }
+    while (true) {
+        const rc = api().ipc_recv.?(ctxId(), g_gfx_endpoint, &msg);
+        if (rc == IPC_EMPTY) {
+            api().sched_yield.?();
+            continue;
+        }
+        if (rc != IPC_OK) {
+            return -1;
+        }
+        if (msg.request_id == request_id) {
+            break;
+        }
+    }
+    if (msg.type != c.SVC_IPC_REGISTER_RESP) {
+        return -1;
+    }
+    return @bitCast(msg.arg0);
+}
+
+fn svc_lookup(name: []const u8, request_id: u32) i32 {
+    var args: [4]u32 = undefined;
+    var msg: c.nd_ipc_message_t = undefined;
+    packName16(name, &args);
+
+    msg.type = c.SVC_IPC_LOOKUP_REQ;
+    msg.source = g_gfx_endpoint;
+    msg.destination = g_proc_endpoint;
+    msg.request_id = request_id;
+    msg.arg0 = args[0];
+    msg.arg1 = args[1];
+    msg.arg2 = args[2];
+    msg.arg3 = args[3];
+    if (api().ipc_send.?(ctxId(), g_proc_endpoint, &msg) != IPC_OK) {
+        return -1;
+    }
+    while (true) {
+        const rc = api().ipc_recv.?(ctxId(), g_gfx_endpoint, &msg);
+        if (rc == IPC_EMPTY) {
+            api().sched_yield.?();
+            continue;
+        }
+        if (rc != IPC_OK) {
+            return -1;
+        }
+        if (msg.request_id == request_id) {
+            break;
+        }
+    }
+    if (msg.type != c.SVC_IPC_LOOKUP_RESP) {
+        return -1;
+    }
+    if (msg.arg0 == IPC_ENDPOINT_NONE) {
+        return -1;
+    }
+    return @bitCast(msg.arg0);
+}
+
+fn lookup_fb_endpoint() i32 {
+    var i: u32 = 0;
+    while (i < GFX_FB_LOOKUP_RETRIES) : (i += 1) {
+        const ep = svc_lookup("fb", GFX_REQUEST_BASE + i);
+        if (ep >= 0) {
+            g_fb_endpoint = @bitCast(ep);
+            return 0;
+        }
+        api().sched_yield.?();
+    }
+    return -1;
+}
+
+fn ipc_call(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t) i32 {
+    var req: c.nd_ipc_message_t = undefined;
+    req.type = msg_type;
+    req.source = g_gfx_endpoint;
+    req.destination = destination;
+    req.request_id = request_id;
+    req.arg0 = arg0;
+    req.arg1 = arg1;
+    req.arg2 = arg2;
+    req.arg3 = arg3;
+    if (api().ipc_send.?(ctxId(), destination, &req) != IPC_OK) {
+        return -1;
+    }
+
+    while (true) {
+        const rc = api().ipc_recv.?(ctxId(), g_gfx_endpoint, out);
+        if (rc == IPC_EMPTY) {
+            api().sched_yield.?();
+            continue;
+        }
+        if (rc != IPC_OK) {
+            return -1;
+        }
+        if (out.request_id == request_id) {
+            return 0;
+        }
+    }
+}
+
+fn log_fb_geometry_probe() void {
+    var reply: c.nd_ipc_message_t = undefined;
+    const req_id: u32 = GFX_REQUEST_BASE + GFX_FB_LOOKUP_RETRIES + 1;
+    if (ipc_call(g_fb_endpoint, req_id, c.FBTEXT_IPC_GEOMETRY_REQ, 0, 0, 0, 0, &reply) != 0) {
+        logMsg("[gfx] fb geometry probe failed\n");
+        return;
+    }
+    if (reply.type == c.FBTEXT_IPC_RESP) {
+        logMsg("[gfx] fb geometry cols/rows ok\n");
+    }
+}
+
+fn reply_unsupported(msg: *const c.nd_ipc_message_t) void {
+    var resp: c.nd_ipc_message_t = undefined;
+    if (msg.source == IPC_ENDPOINT_NONE or msg.request_id == 0) {
+        return;
+    }
+    resp.type = c.GFX_IPC_RESP;
+    resp.source = g_gfx_endpoint;
+    resp.destination = msg.source;
+    resp.request_id = msg.request_id;
+    const status: i32 = c.GFX_STATUS_UNSUPPORTED;
+    resp.arg0 = @bitCast(status);
+    resp.arg1 = 0;
+    resp.arg2 = 0;
+    resp.arg3 = 0;
+    _ = api().ipc_send.?(ctxId(), msg.source, &resp);
+}
+
+fn gfx_header_valid(magic: u32, ver_opcode: u32) bool {
+    const version: u16 = @intCast(ver_opcode >> 16);
+    return magic == c.GFX_IPC_ABI_MAGIC and version == c.GFX_IPC_ABI_VERSION;
+}
+
+pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int, arg2: c_int, arg3: c_int) c_int {
+    _ = arg2;
+    _ = arg3;
+
+    g_api = driver_api;
+
+    if (driver_api.abi_magic != c.WASMOS_NATIVE_ABI_MAGIC or
+        driver_api.abi_version != c.WASMOS_NATIVE_ABI_VERSION)
+    {
+        return -2;
+    }
+
+    g_proc_endpoint = @bitCast(module_count);
+    if (g_proc_endpoint == IPC_ENDPOINT_NONE) {
+        return -1;
+    }
+
+    g_gfx_endpoint = api().ipc_create_endpoint.?();
+    if (g_gfx_endpoint == IPC_ENDPOINT_NONE) {
+        return -1;
+    }
+
+    if (svc_register("gfx", 1) != 0) {
+        logMsg("[gfx] register failed\n");
+        return -1;
+    }
+
+    if (lookup_fb_endpoint() != 0) {
+        logMsg("[gfx] fb endpoint unavailable\n");
+    } else {
+        log_fb_geometry_probe();
+        logMsg("[test] gfx compositor handshake ok\n");
+    }
+
+    while (true) {
+        var msg: c.nd_ipc_message_t = undefined;
+        const rc = api().ipc_recv.?(ctxId(), g_gfx_endpoint, &msg);
+        if (rc == IPC_EMPTY) {
+            api().sched_yield.?();
+            continue;
+        }
+        if (rc != IPC_OK) {
+            return -1;
+        }
+        if (!gfx_header_valid(msg.arg2, msg.arg3)) {
+            reply_unsupported(&msg);
+            continue;
+        }
+        reply_unsupported(&msg);
+    }
+}

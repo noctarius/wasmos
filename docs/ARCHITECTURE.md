@@ -25,6 +25,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - Process-manager runtime bookkeeping now grows on demand (`apps`, `waits`,
   and `services` use internal linked-list pools), removing fixed small slot
   caps from PM-managed state.
+- Kernel dynamic container baseline now includes a centralized `list`
+  interface with selectable backends (linked vs growable array-chunk);
+  process-manager list backend selection is wired through Kconfig.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

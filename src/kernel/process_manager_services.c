@@ -1,7 +1,6 @@
 #include "process_manager_internal.h"
 #include "klog.h"
 #include "process_manager.h"
-#include "stdlib.h"
 #include "string.h"
 
 void
@@ -75,19 +74,19 @@ pm_update_well_known_service_endpoint(const char *name, uint32_t endpoint)
 int
 pm_service_set(const char *name, uint32_t endpoint, uint32_t owner_context_id)
 {
-    pm_service_node_t *empty_node = 0;
-    pm_service_node_t *node = g_pm.services_head;
-    while (node) {
-        pm_service_entry_t *entry = &node->entry;
+    pm_service_entry_t *empty = 0;
+    list_iter_t it;
+    pm_service_entry_t *entry = (pm_service_entry_t *)list_first(&g_pm.services, &it);
+    while (entry) {
         if (!entry->in_use) {
-            if (!empty_node) {
-                empty_node = node;
+            if (!empty) {
+                empty = entry;
             }
-            node = node->next;
+            entry = (pm_service_entry_t *)list_next(&it);
             continue;
         }
         if (strcmp(entry->name, name) != 0) {
-            node = node->next;
+            entry = (pm_service_entry_t *)list_next(&it);
             continue;
         }
         if (entry->owner_context_id != owner_context_id) {
@@ -96,22 +95,17 @@ pm_service_set(const char *name, uint32_t endpoint, uint32_t owner_context_id)
         entry->endpoint = endpoint;
         return 0;
     }
-
-    if (!empty_node) {
-        empty_node = (pm_service_node_t *)malloc(sizeof(pm_service_node_t));
-        if (!empty_node) {
+    if (!empty) {
+        empty = (pm_service_entry_t *)list_alloc(&g_pm.services);
+        if (!empty) {
             return -1;
         }
-        memset(empty_node, 0, sizeof(pm_service_node_t));
-        empty_node->next = g_pm.services_head;
-        g_pm.services_head = empty_node;
     }
-
-    empty_node->entry.in_use = 1;
-    empty_node->entry.endpoint = endpoint;
-    empty_node->entry.owner_context_id = owner_context_id;
-    for (uint32_t i = 0; i < sizeof(empty_node->entry.name); ++i) {
-        empty_node->entry.name[i] = name[i];
+    empty->in_use = 1;
+    empty->endpoint = endpoint;
+    empty->owner_context_id = owner_context_id;
+    for (uint32_t i = 0; i < sizeof(empty->name); ++i) {
+        empty->name[i] = name[i];
         if (!name[i]) {
             break;
         }
@@ -122,12 +116,13 @@ pm_service_set(const char *name, uint32_t endpoint, uint32_t owner_context_id)
 uint32_t
 pm_service_lookup(const char *name)
 {
-    pm_service_node_t *node = g_pm.services_head;
-    while (node) {
-        if (node->entry.in_use && strcmp(node->entry.name, name) == 0) {
-            return node->entry.endpoint;
+    list_iter_t it;
+    pm_service_entry_t *entry = (pm_service_entry_t *)list_first(&g_pm.services, &it);
+    while (entry) {
+        if (entry->in_use && strcmp(entry->name, name) == 0) {
+            return entry->endpoint;
         }
-        node = node->next;
+        entry = (pm_service_entry_t *)list_next(&it);
     }
     return IPC_ENDPOINT_NONE;
 }

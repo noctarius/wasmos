@@ -194,6 +194,32 @@ endif ()
 set(WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFINE
     -DWASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFAULT=${WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_VALUE})
 
+if (NOT DEFINED WASMOS_PM_LIST_LINKED_INITIALIZED)
+  set(WASMOS_PM_LIST_LINKED ON CACHE BOOL "Use linked-list backend for process-manager dynamic lists" FORCE)
+  set(WASMOS_PM_LIST_LINKED_INITIALIZED ON CACHE BOOL "Set when WASMOS_PM_LIST_LINKED default is initialized" FORCE)
+endif ()
+option(WASMOS_PM_LIST_LINKED "Use linked-list backend for process-manager dynamic lists" ON)
+
+if (NOT DEFINED WASMOS_PM_LIST_ARRAY_CHUNK_INITIALIZED)
+  set(WASMOS_PM_LIST_ARRAY_CHUNK OFF CACHE BOOL "Use array-chunk backend for process-manager dynamic lists" FORCE)
+  set(WASMOS_PM_LIST_ARRAY_CHUNK_INITIALIZED ON CACHE BOOL "Set when WASMOS_PM_LIST_ARRAY_CHUNK default is initialized" FORCE)
+endif ()
+option(WASMOS_PM_LIST_ARRAY_CHUNK "Use array-chunk backend for process-manager dynamic lists" OFF)
+
+if (NOT DEFINED WASMOS_PM_LIST_ARRAY_CHUNK_CAP_INITIALIZED)
+  set(WASMOS_PM_LIST_ARRAY_CHUNK_CAP 16 CACHE STRING "Array-chunk capacity for process-manager list backend" FORCE)
+  set(WASMOS_PM_LIST_ARRAY_CHUNK_CAP_INITIALIZED ON CACHE BOOL "Set when WASMOS_PM_LIST_ARRAY_CHUNK_CAP default is initialized" FORCE)
+endif ()
+set(WASMOS_PM_LIST_ARRAY_CHUNK_CAP "${WASMOS_PM_LIST_ARRAY_CHUNK_CAP}" CACHE STRING "Array-chunk capacity for process-manager list backend")
+
+if (WASMOS_PM_LIST_ARRAY_CHUNK)
+  set(WASMOS_PM_LIST_IMPL_VALUE 1)
+else ()
+  set(WASMOS_PM_LIST_IMPL_VALUE 0)
+endif ()
+set(WASMOS_PM_LIST_DEFINE -DWASMOS_PM_LIST_IMPL=${WASMOS_PM_LIST_IMPL_VALUE})
+set(WASMOS_PM_LIST_CAP_DEFINE -DWASMOS_PM_LIST_ARRAY_CHUNK_CAP=${WASMOS_PM_LIST_ARRAY_CHUNK_CAP})
+
 set(CLANG clang CACHE STRING "C compiler for freestanding/UEFI builds")
 if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
   set(LLD ld.lld CACHE STRING "Linker (lld or ld.lld)")
@@ -1266,6 +1292,7 @@ add_custom_target(run-qemu-ui-test
   COMMENT "Running QEMU UI test"
   VERBATIM
 )
+
 endif ()
 add_custom_target(run-qemu-ring3-check
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
@@ -1542,3 +1569,15 @@ if (TARGET run-qemu-ui-test)
     add_dependencies(run-qemu-ui-test zig_examples)
   endif ()
 endif ()
+
+add_custom_target(run-kernel-unit-tests
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror
+          -I${KERNEL_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_list.c
+          ${KERNEL_DIR}/list.c
+          -o ${BUILD_DIR}/test_list
+  COMMAND ${BUILD_DIR}/test_list
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Running host kernel unit tests"
+  VERBATIM
+)

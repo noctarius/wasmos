@@ -416,6 +416,10 @@ pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t *blob, uint32_t blob_siz
         return -1;
     }
     slot->pid = *out_pid;
+    if (process_set_runtime_is_wasm(*out_pid, (desc.flags & WASMOS_APP_FLAG_NATIVE) == 0 ? 1u : 0u) != 0) {
+        slot->in_use = 0;
+        return -1;
+    }
     if (pm_apply_post_spawn_bindings(slot, *out_pid) != 0) {
         slot->in_use = 0;
         return -1;

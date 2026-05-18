@@ -156,6 +156,22 @@ main(int argc, char **argv)
 
     damage[0].w = 400;
     damage[0].h = 220;
+    puts("[test] gfx smoke visible start");
+    for (uint32_t frame = 0; frame < 240u; ++frame) {
+        if (fill_pattern(shmem_id, 320, 180, stride_bytes, frame + 2u) != 0) {
+            puts("[test] gfx smoke paint-loop failed");
+            return 1;
+        }
+        if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW,
+                     window_id, buffer_id, 1, damage_shmem_id, &reply) != 0 ||
+            reply.status != GFX_STATUS_OK) {
+            puts("[test] gfx smoke present-loop failed");
+            return 1;
+        }
+        (void)wasmos_sched_yield();
+    }
+    puts("[test] gfx smoke visible done");
+
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW,
                  window_id, buffer_id + 1, 1, damage_shmem_id, &reply) != 0 ||
         reply.status != GFX_STATUS_INVALID) {

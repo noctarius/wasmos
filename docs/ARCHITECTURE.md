@@ -28,6 +28,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - Kernel dynamic container baseline now includes a centralized `list`
   interface with selectable backends (linked vs growable array-chunk);
   process-manager list backend selection is wired through Kconfig.
+- Higher-level components may use C++, while low-level kernel boundaries stay
+  C/ASM. WASM C++ build policy is no exceptions/RTTI and explicit C ABI at
+  integration points.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)
@@ -54,3 +57,13 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - Keep cross-document references consistent across `README.md`, `docs/TASKS.md`, and
   architecture docs.
 - Prefer appending concrete implementation notes over vague roadmap text.
+
+## C++ Policy
+- C++ is allowed for higher-level kernel subsystems, drivers, services, and apps.
+- Keep boot/handoff, arch traps/interrupt paths, paging/MM primitives, and syscall/hostcall ABI boundaries in C/ASM.
+- Enforce constrained C++ runtime usage for WASM modules:
+  - `-fno-exceptions`
+  - `-fno-rtti`
+  - `-fno-threadsafe-statics`
+  - `-fno-use-cxa-atexit`
+- Maintain C ABI compatibility at subsystem boundaries with `extern "C"` declarations in shared headers.

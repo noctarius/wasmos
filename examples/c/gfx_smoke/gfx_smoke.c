@@ -10,6 +10,7 @@
 #define FBPP 4
 #define BUFFER_PTR 0x20000
 #define DAMAGE_PTR 0x30000
+#define PAGE_SIZE 4096
 
 typedef struct {
     int32_t status;
@@ -21,7 +22,9 @@ typedef struct {
 static int
 fill_pattern(int32_t shmem_id, int32_t width, int32_t height, int32_t stride_bytes, uint32_t phase)
 {
-    if (wasmos_shmem_map(shmem_id, BUFFER_PTR, stride_bytes * height) != 0) {
+    int32_t byte_len = stride_bytes * height;
+    int32_t map_len = (byte_len + (PAGE_SIZE - 1)) & ~(PAGE_SIZE - 1);
+    if (wasmos_shmem_map(shmem_id, BUFFER_PTR, map_len) != 0) {
         return -1;
     }
     uint8_t *base = (uint8_t *)(uintptr_t)BUFFER_PTR;

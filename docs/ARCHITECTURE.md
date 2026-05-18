@@ -32,6 +32,13 @@ IMPORTANT: Create a git commit after each prompt iteration.
   `ALLOC_SHARED_BUFFER` (opaque random 32-bit `buffer_id` + shmem backing),
   `RELEASE_SHARED_BUFFER`, and `PRESENT_WINDOW` by `buffer_id` with
   shmem-backed damage rect lists.
+- Graphics/compositor lifecycle hardening now enforces window-generation-aware
+  buffer validity (pre-resize stale buffers denied on present), explicit
+  in-use buffer release denial, and deterministic owner/binding validation for
+  present/release transitions.
+- Graphics/compositor input routing now subscribes to keyboard driver
+  notifications and exposes focused-window events through `GFX_IPC_POLL_EVENT`
+  (`FOCUS_GAINED`, `FOCUS_LOST`, `KEY`).
 - Graphics validation now also includes a wasm `gfx-smoke` app available under
   `/boot/apps/gfx_smoke.wap` for manual CLI execution, keeping compositor tests
   opt-in at runtime instead of sysinit auto-spawn.

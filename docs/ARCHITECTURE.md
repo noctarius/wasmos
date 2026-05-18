@@ -28,13 +28,12 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - Graphics/compositor baseline now also includes typed compositor opcode
   dispatch and minimal window lifecycle handling (`CREATE_WINDOW` /
   `DESTROY_WINDOW`) with owner-checked state slots and `GFX_STATUS_*` replies.
-- Graphics/compositor baseline now also includes owner-checked
-  `PRESENT_WINDOW` handling with a deterministic software fallback compose path
-  (placeholder rectangle composition via framebuffer pixel API).
-- Graphics/compositor baseline now also supports buffer-backed present in the
-  fallback path (`PRESENT_WINDOW` shmem id) and now consumes shmem-backed
-  damage rect lists for clipped dirty-region blits; invalid/missing damage
-  input falls back to full-frame redraw.
+- Graphics/compositor baseline now also includes `RESIZE_WINDOW`,
+  `ALLOC_SHARED_BUFFER` (opaque random 32-bit `buffer_id` + shmem backing),
+  and `PRESENT_WINDOW` by `buffer_id` with shmem-backed damage rect lists.
+- Software composition now redraws clipped dirty regions in stable z-order,
+  including overlap with higher-z windows; invalid/missing damage falls back to
+  full-frame redraw.
 - Process-manager runtime bookkeeping now grows on demand (`apps`, `waits`,
   and `services` use internal linked-list pools), removing fixed small slot
   caps from PM-managed state.

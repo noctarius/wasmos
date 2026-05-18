@@ -38,6 +38,10 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - Native-driver ABI now includes endpoint-owner lookup and shmem grant
   callbacks so native services (including `gfx-compositor`) can share
   compositor-owned shmem buffers with requesting wasm clients.
+- WASM hostcall surface now also includes kernel-managed shared-memory
+  auto-mapping (`shmem_map_auto`) that returns a process-local linear-memory
+  offset from a managed tail window, removing hardcoded map offsets in clients
+  such as `gfx-smoke`.
 - Software composition now redraws clipped dirty regions in stable z-order,
   including overlap with higher-z windows; invalid/missing damage falls back to
   full-frame redraw.

@@ -98,6 +98,7 @@ It defines repository workflow and documentation/update conventions.
 - Graphics compositor now includes `RELEASE_SHARED_BUFFER` handle invalidation/detach flow and explicit owner-deny hardening markers (`[test] gfx window owner deny ok`, `[test] gfx buffer owner deny ok`); backing shmem reclaim remains pending native ABI destroy support
 - New wasm app `gfx-smoke` is built into `/boot/apps/gfx_smoke.wap` for manual CLI launch (`exec /boot/apps/gfx_smoke`) so compositor validation can run on demand without auto-spawning over the VT/CLI surface
 - Native driver ABI v3 now exposes endpoint-owner lookup and shared-memory grant hooks (`ipc_endpoint_owner`, `shmem_grant`); `gfx-compositor` uses these to grant compositor-allocated buffer shmem to the requesting client context so client-side buffer mapping succeeds
+- WASM shared memory now also provides kernel-managed automatic linear-memory tail mapping (`wasmos_shmem_map_auto`) so apps can map shmem without hardcoded VA offsets; `gfx-smoke` uses this path
 - Ring-3 smoke includes shared-memory owner/grant/revoke isolation checks (kernel and user-space app-pair paths)
 - Shared-memory app-pair smoke now also checks forged-ID deny, map-argument policy deny, and post-revoke stale-ID deny
 - Strict ring3 boot smoke now includes a kernel-level shared-memory misuse matrix marker (`[test] ring3 shmem misuse matrix ok`)

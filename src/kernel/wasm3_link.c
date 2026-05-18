@@ -22,6 +22,8 @@
 #include <stdint.h>
 #include <string.h>
 
+extern M3Result ResizeMemory(IM3Runtime io_runtime, uint32_t i_numPages);
+
 typedef struct {
     uint32_t pid;
     uint8_t valid;
@@ -1679,6 +1681,105 @@ m3ApiRawFunction(wasmos_shmem_map)
     m3ApiReturn(0);
 }
 
+m3ApiRawFunction(wasmos_shmem_map_auto)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, id)
+    m3ApiGetArg(int32_t, size)
+
+    if (id <= 0 || size <= 0 || (size & 0xFFF) != 0) {
+        m3ApiReturn(-1);
+    }
+
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0 ||
+        require_dma_capability(proc->context_id) != 0) {
+        m3ApiReturn(-1);
+    }
+    mm_context_t *ctx = mm_context_get(proc->context_id);
+    if (!ctx || ctx->root_table == 0) {
+        m3ApiReturn(-1);
+    }
+
+    uint64_t phys_base = 0;
+    uint64_t shared_pages = 0;
+    if (mm_shared_get_phys(proc->context_id, (uint32_t)id, &phys_base, &shared_pages) != 0 ||
+        shared_pages == 0) {
+        m3ApiReturn(-1);
+    }
+
+    uint64_t map_size = (uint64_t)(uint32_t)size;
+    uint64_t needed_size = shared_pages * 0x1000ULL;
+    if (map_size < needed_size) {
+        m3ApiReturn(-1);
+    }
+
+    uint64_t mem_size = (uint64_t)m3_GetMemorySize(runtime);
+    uint64_t off64 = 0;
+    uint8_t found = 0;
+    for (off64 = 0x4000ULL; off64 + map_size <= mem_size; off64 += 0x1000ULL) {
+        uint64_t probe_virt = 0;
+        if (wasm_user_va_from_offset(proc->context_id, (uint32_t)off64, (uint32_t)map_size, &probe_virt) != 0) {
+            continue;
+        }
+        if (mm_user_range_permitted(proc->context_id, probe_virt, (uint64_t)(uint32_t)map_size, MEM_REGION_FLAG_WRITE) != 0) {
+            continue;
+        }
+        if ((probe_virt & 0xFFFULL) != 0) {
+            continue;
+        }
+        found = 1;
+        break;
+    }
+    if (!found) {
+        off64 = (mem_size + 0xFFFULL) & ~0xFFFULL;
+        uint64_t required = off64 + map_size;
+        if (required > mem_size) {
+            uint32_t pages = (uint32_t)((required + 0xFFFFULL) >> 16);
+            if (ResizeMemory(runtime, pages) != m3Err_none) {
+                m3ApiReturn(-1);
+            }
+            mem_size = (uint64_t)m3_GetMemorySize(runtime);
+            if (required > mem_size) {
+                m3ApiReturn(-1);
+            }
+        }
+    }
+
+    uint32_t off32 = (uint32_t)off64;
+    uint32_t map_size32 = (uint32_t)map_size;
+    uint64_t virt = 0;
+    if (wasm_user_va_from_offset(proc->context_id, off32, map_size32, &virt) != 0 ||
+        mm_user_range_permitted(proc->context_id, virt, (uint64_t)map_size32, MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
+    if ((virt & 0xFFFULL) != 0) {
+        m3ApiReturn(-1);
+    }
+
+    for (uint64_t i = 0; i < shared_pages; ++i) {
+        uint64_t cur_virt = virt + (i * 0x1000ULL);
+        uint64_t cur_phys = phys_base + (i * 0x1000ULL);
+        (void)paging_unmap_4k_in_root(ctx->root_table, cur_virt);
+        if (paging_map_4k_in_root(ctx->root_table,
+                                  cur_virt,
+                                  cur_phys,
+                                  MEM_REGION_FLAG_READ |
+                                      MEM_REGION_FLAG_WRITE |
+                                      MEM_REGION_FLAG_USER) < 0) {
+            m3ApiReturn(-1);
+        }
+    }
+    if (mm_shared_retain(proc->context_id, (uint32_t)id) != 0) {
+        m3ApiReturn(-1);
+    }
+
+    /* FIXME(shmem-map-auto): unmap currently only drops shared refs and does
+     * not reclaim or reuse grown linear-memory pages for future map_auto
+     * allocations. */
+    m3ApiReturn((int32_t)off32);
+}
+
 m3ApiRawFunction(wasmos_shmem_grant)
 {
     m3ApiReturnType(int32_t)
@@ -2798,6 +2899,7 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "shmem_grant", "i(ii)", wasmos_shmem_grant);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_revoke", "i(ii)", wasmos_shmem_revoke);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_map", "i(iii)", wasmos_shmem_map);
+    rc |= wasm3_link_raw(module, "wasmos", "shmem_map_auto", "i(ii)", wasmos_shmem_map_auto);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_unmap", "i(i)", wasmos_shmem_unmap);
     rc |= wasm3_link_raw(module, "wasmos", "irq_route", "i(ii)", wasmos_irq_route);
     rc |= wasm3_link_raw(module, "wasmos", "irq_unroute", "i(i)", wasmos_irq_unroute);

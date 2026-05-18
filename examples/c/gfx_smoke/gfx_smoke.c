@@ -8,12 +8,11 @@
 
 #define GFX_REQ_BASE 0x6A00
 #define FBPP 4
-#define BUFFER_PTR 0x4000
 #define PAGE_SIZE 4096
 #define GFX_W 64
 #define GFX_H 64
-#define GFX_RESIZE_W 160
-#define GFX_RESIZE_H 90
+#define GFX_RESIZE_W 80
+#define GFX_RESIZE_H 48
 #define GFX_FRAME_COUNT 8
 
 typedef struct {
@@ -40,11 +39,12 @@ create_damage_rect_shmem(int32_t gfx_ep, int32_t width, int32_t height)
         puts("[test] gfx smoke damage grant failed");
         return -1;
     }
-    if (wasmos_shmem_map(shmem_id, BUFFER_PTR, PAGE_SIZE) != 0) {
+    int32_t map_ptr = wasmos_shmem_map_auto(shmem_id, PAGE_SIZE);
+    if (map_ptr < 0) {
         puts("[test] gfx smoke damage map failed");
         return -1;
     }
-    gfx_rect_t *rect = (gfx_rect_t *)(uintptr_t)BUFFER_PTR;
+    gfx_rect_t *rect = (gfx_rect_t *)(uintptr_t)(uint32_t)map_ptr;
     rect->x = 0;
     rect->y = 0;
     rect->w = width;
@@ -61,11 +61,12 @@ fill_pattern(int32_t shmem_id, int32_t width, int32_t height, int32_t stride_byt
 {
     int32_t byte_len = stride_bytes * height;
     int32_t map_len = (byte_len + (PAGE_SIZE - 1)) & ~(PAGE_SIZE - 1);
-    if (wasmos_shmem_map(shmem_id, BUFFER_PTR, map_len) != 0) {
+    int32_t map_ptr = wasmos_shmem_map_auto(shmem_id, map_len);
+    if (map_ptr < 0) {
         puts("[test] gfx smoke shmem map failed");
         return -1;
     }
-    uint8_t *base = (uint8_t *)(uintptr_t)BUFFER_PTR;
+    uint8_t *base = (uint8_t *)(uintptr_t)(uint32_t)map_ptr;
     for (int32_t y = 0; y < height; ++y) {
         uint32_t *row = (uint32_t *)(void *)(base + (y * stride_bytes));
         for (int32_t x = 0; x < width; ++x) {

@@ -41,6 +41,8 @@ enum {
  *                           reply: arg1=buffer_id arg2=shmem_id arg3=stride
  * - GFX_IPC_PRESENT_WINDOW: arg0=window_id arg1=buffer_id
  *                           arg2=damage_count arg3=damage_shmem_id
+ * - GFX_IPC_POLL_EVENT:     arg0..arg3 reserved
+ *                           reply: arg1=event_type arg2=event_arg1 arg3=event_arg2
  * - GFX_IPC_RELEASE_SHARED_BUFFER:
  *                           arg0=buffer_id arg1..arg3 reserved
  */
@@ -59,6 +61,13 @@ enum {
     GFX_STATUS_UNSUPPORTED = -3,
     GFX_STATUS_BUSY = -4,
     GFX_STATUS_IO = -5
+};
+
+enum {
+    GFX_EVENT_NONE = 0,
+    GFX_EVENT_FOCUS_GAINED = 1,
+    GFX_EVENT_FOCUS_LOST = 2,
+    GFX_EVENT_KEY = 3
 };
 
 typedef struct {

@@ -10,6 +10,7 @@ const GFX_FB_LOOKUP_RETRIES: u32 = 2048;
 const GFX_MAX_WINDOWS: usize = 32;
 const GFX_MAX_BUFFERS: usize = 64;
 const GFX_MAX_DAMAGE_RECTS: u32 = 256;
+const GFX_MAX_EVENTS: usize = 128;
 const GFX_WINDOW_MIN_DIM: u32 = 1;
 const GFX_WINDOW_MAX_DIM: u32 = 8192;
 const PAGE_SIZE: u64 = 4096;
@@ -19,9 +20,11 @@ var g_proc_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_gfx_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_fb_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_vt_endpoint: u32 = IPC_ENDPOINT_NONE;
+var g_kbd_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_overlay_locked: bool = false;
 var g_next_window_id: u32 = 1;
 var g_next_z: u32 = 1;
+var g_focused_window_id: u32 = 0;
 var g_rng_state: u32 = 0xA5A5_5A5A;
 var g_damage_marker_logged: bool = false;
 var g_window_owner_deny_logged: bool = false;
@@ -47,7 +50,13 @@ const window_slot_t = struct {
     width: u32 = 0,
     height: u32 = 0,
     z: u32 = 0,
+    generation: u32 = 1,
     current_buffer_id: u32 = 0,
+};
+
+const buffer_state_t = enum(u8) {
+    allocated = 0,
+    acquired = 1,
 };
 
 const buffer_slot_t = struct {
@@ -58,10 +67,24 @@ const buffer_slot_t = struct {
     width: u32 = 0,
     height: u32 = 0,
     stride_bytes: u32 = 0,
+    state: buffer_state_t = .allocated,
+    bound_window_id: u32 = 0,
+    bound_window_generation: u32 = 0,
+};
+
+const gfx_event_t = struct {
+    endpoint: u32 = IPC_ENDPOINT_NONE,
+    event_type: u32 = 0,
+    arg1: u32 = 0,
+    arg2: u32 = 0,
+    arg3: u32 = 0,
 };
 
 var g_windows: [GFX_MAX_WINDOWS]window_slot_t = [_]window_slot_t{.{}} ** GFX_MAX_WINDOWS;
 var g_buffers: [GFX_MAX_BUFFERS]buffer_slot_t = [_]buffer_slot_t{.{}} ** GFX_MAX_BUFFERS;
+var g_events: [GFX_MAX_EVENTS]gfx_event_t = [_]gfx_event_t{.{}} ** GFX_MAX_EVENTS;
+var g_event_head: usize = 0;
+var g_event_tail: usize = 0;
 
 fn api() *c.wasmos_driver_api_t {
     return g_api.?;
@@ -187,6 +210,32 @@ fn lookup_vt_endpoint() i32 {
     return -1;
 }
 
+fn lookup_kbd_endpoint() i32 {
+    var i: u32 = 0;
+    while (i < GFX_FB_LOOKUP_RETRIES) : (i += 1) {
+        const ep = svc_lookup("kbd", GFX_REQUEST_BASE + 0x180 + i);
+        if (ep >= 0) {
+            g_kbd_endpoint = @bitCast(ep);
+            return 0;
+        }
+        api().sched_yield.?();
+    }
+    return -1;
+}
+
+fn subscribe_keyboard() i32 {
+    if (g_kbd_endpoint == IPC_ENDPOINT_NONE) return -1;
+    var reply: c.nd_ipc_message_t = undefined;
+    const req_id: u32 = GFX_REQUEST_BASE + GFX_FB_LOOKUP_RETRIES + 3;
+    if (ipc_call(g_kbd_endpoint, req_id, c.KBD_IPC_SUBSCRIBE_REQ, 0, 0, 0, 0, &reply) != 0) {
+        return -1;
+    }
+    if (reply.type != c.KBD_IPC_SUBSCRIBE_RESP or @as(i32, @bitCast(reply.arg0)) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
 fn ipc_call(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t) i32 {
     var req: c.nd_ipc_message_t = undefined;
     req.type = msg_type;
@@ -249,6 +298,55 @@ fn active_presented_window_count() usize {
         if (g_windows[i].in_use and g_windows[i].current_buffer_id != 0) count += 1;
     }
     return count;
+}
+
+fn event_push(endpoint: u32, event_type: u32, arg1: u32, arg2: u32, arg3: u32) void {
+    const next_tail = (g_event_tail + 1) % g_events.len;
+    if (next_tail == g_event_head) {
+        g_event_head = (g_event_head + 1) % g_events.len;
+    }
+    g_events[g_event_tail] = .{
+        .endpoint = endpoint,
+        .event_type = event_type,
+        .arg1 = arg1,
+        .arg2 = arg2,
+        .arg3 = arg3,
+    };
+    g_event_tail = next_tail;
+}
+
+fn event_pop_for(endpoint: u32, out: *gfx_event_t) bool {
+    var i = g_event_head;
+    while (i != g_event_tail) : (i = (i + 1) % g_events.len) {
+        if (g_events[i].endpoint != endpoint) continue;
+        out.* = g_events[i];
+        g_events[i] = .{};
+        while (g_event_head != g_event_tail and g_events[g_event_head].endpoint == IPC_ENDPOINT_NONE) {
+            g_event_head = (g_event_head + 1) % g_events.len;
+        }
+        if (g_event_head == g_event_tail) {
+            g_event_head = 0;
+            g_event_tail = 0;
+        }
+        return true;
+    }
+    return false;
+}
+
+fn focus_window(window_idx: usize) void {
+    const win = g_windows[window_idx];
+    if (!win.in_use) return;
+    if (g_focused_window_id == win.window_id) return;
+
+    if (g_focused_window_id != 0) {
+        if (window_find_by_id(g_focused_window_id)) |old_idx| {
+            const old = g_windows[old_idx];
+            event_push(old.owner_endpoint, c.GFX_EVENT_FOCUS_LOST, old.window_id, 0, 0);
+        }
+    }
+
+    g_focused_window_id = win.window_id;
+    event_push(win.owner_endpoint, c.GFX_EVENT_FOCUS_GAINED, win.window_id, 0, 0);
 }
 
 fn fb_set_overlay_lock(lock: bool) void {
@@ -325,6 +423,7 @@ fn window_alloc(owner_endpoint: u32, width: u32, height: u32) ?usize {
         g_windows[i].width = width;
         g_windows[i].height = height;
         g_windows[i].z = g_next_z;
+        g_windows[i].generation = 1;
         g_windows[i].current_buffer_id = 0;
 
         if (g_fb_info_valid) {
@@ -428,7 +527,18 @@ fn buffer_alloc(owner_endpoint: u32, width: u32, height: u32) ?usize {
     g_buffers[idx].width = width;
     g_buffers[idx].height = height;
     g_buffers[idx].stride_bytes = @intCast(stride_u64);
+    g_buffers[idx].state = .allocated;
+    g_buffers[idx].bound_window_id = 0;
+    g_buffers[idx].bound_window_generation = 0;
     return idx;
+}
+
+fn window_buffer_in_use(buffer_id: u32) bool {
+    var i: usize = 0;
+    while (i < g_windows.len) : (i += 1) {
+        if (g_windows[i].in_use and g_windows[i].current_buffer_id == buffer_id) return true;
+    }
+    return false;
 }
 
 fn fill_rect(x0: i32, y0: i32, w: i32, h: i32, color: u32) void {
@@ -608,6 +718,9 @@ fn handle_destroy_window(msg: *const c.nd_ipc_message_t) void {
         reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
         return;
     }
+    if (g_focused_window_id == window_id) {
+        g_focused_window_id = 0;
+    }
     g_windows[slot_idx] = .{};
     sync_console_mode_for_windows();
     _ = compose_full();
@@ -634,6 +747,9 @@ fn handle_resize_window(msg: *const c.nd_ipc_message_t) void {
         reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
         return;
     }
+    g_windows[slot_idx].generation +%= 1;
+    if (g_windows[slot_idx].generation == 0) g_windows[slot_idx].generation = 1;
+    g_windows[slot_idx].current_buffer_id = 0;
     g_windows[slot_idx].width = width;
     g_windows[slot_idx].height = height;
     _ = compose_full();
@@ -676,7 +792,8 @@ fn handle_alloc_shared_buffer(msg: *const c.nd_ipc_message_t) void {
 
     if (window_id != 0) {
         if (window_find_by_id(window_id)) |window_idx| {
-            g_windows[window_idx].current_buffer_id = buf.buffer_id;
+            g_buffers[buf_idx].bound_window_id = window_id;
+            g_buffers[buf_idx].bound_window_generation = g_windows[window_idx].generation;
         }
     }
 
@@ -699,6 +816,11 @@ fn handle_release_shared_buffer(msg: *const c.nd_ipc_message_t) void {
             logMsg("[test] gfx buffer owner deny ok\n");
         }
         reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
+        return;
+    }
+
+    if (window_buffer_in_use(buffer_id)) {
+        reply_with_status(msg, c.GFX_STATUS_BUSY, 0, 0, 0);
         return;
     }
 
@@ -756,7 +878,25 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
         return;
     }
 
+    if (buf.bound_window_id != 0) {
+        if (buf.bound_window_id != window_id or
+            buf.bound_window_generation != g_windows[window_idx].generation)
+        {
+            reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+            return;
+        }
+    }
+
+    if (buf.state == .acquired and g_windows[window_idx].current_buffer_id != buffer_id) {
+        reply_with_status(msg, c.GFX_STATUS_BUSY, 0, 0, 0);
+        return;
+    }
+
     g_windows[window_idx].current_buffer_id = buffer_id;
+    g_buffers[buf_idx].state = .acquired;
+    g_buffers[buf_idx].bound_window_id = window_id;
+    g_buffers[buf_idx].bound_window_generation = g_windows[window_idx].generation;
+    focus_window(window_idx);
     sync_console_mode_for_windows();
 
     if (damage_count == 0 or damage_shmem_id == 0 or damage_count > GFX_MAX_DAMAGE_RECTS) {
@@ -806,6 +946,15 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
     reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
 }
 
+fn handle_poll_event(msg: *const c.nd_ipc_message_t) void {
+    var ev: gfx_event_t = .{};
+    if (event_pop_for(msg.source, &ev)) {
+        reply_with_status(msg, c.GFX_STATUS_OK, ev.event_type, ev.arg1, ev.arg2);
+        return;
+    }
+    reply_with_status(msg, c.GFX_STATUS_OK, c.GFX_EVENT_NONE, 0, 0);
+}
+
 pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int, arg2: c_int, arg3: c_int) c_int {
     _ = arg2;
     _ = arg3;
@@ -834,6 +983,9 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
         logMsg("[gfx] fb endpoint unavailable\n");
     } else {
         _ = lookup_vt_endpoint();
+        if (lookup_kbd_endpoint() == 0) {
+            _ = subscribe_keyboard();
+        }
         log_fb_geometry_probe();
         logMsg("[test] gfx compositor handshake ok\n");
     }
@@ -870,12 +1022,22 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
         }
 
         switch (opcode) {
+            c.KBD_IPC_KEY_NOTIFY => {
+                if (g_focused_window_id != 0) {
+                    if (window_find_by_id(g_focused_window_id)) |focused_idx| {
+                        const focused = g_windows[focused_idx];
+                        const key_flags = (msg.arg1 & 1) | ((msg.arg2 & 1) << 1);
+                        event_push(focused.owner_endpoint, c.GFX_EVENT_KEY, msg.arg0, key_flags, 0);
+                    }
+                }
+            },
             c.GFX_IPC_CREATE_WINDOW => handle_create_window(&msg),
             c.GFX_IPC_DESTROY_WINDOW => handle_destroy_window(&msg),
             c.GFX_IPC_RESIZE_WINDOW => handle_resize_window(&msg),
             c.GFX_IPC_ALLOC_SHARED_BUFFER => handle_alloc_shared_buffer(&msg),
             c.GFX_IPC_RELEASE_SHARED_BUFFER => handle_release_shared_buffer(&msg),
             c.GFX_IPC_PRESENT_WINDOW => handle_present_window(&msg),
+            c.GFX_IPC_POLL_EVENT => handle_poll_event(&msg),
             else => reply_unsupported(&msg),
         }
     }

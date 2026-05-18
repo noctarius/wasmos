@@ -308,6 +308,19 @@ main(int argc, char **argv)
         return GFX_SMOKE_E_INVALID_DENY;
     }
 
+    /* Release is intentionally denied for buffers currently in-use by a live
+     * window, so destroy first to detach presentation state. */
+    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_DESTROY_WINDOW,
+                 window_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+        puts("[test] gfx smoke destroy failed");
+        return GFX_SMOKE_E_DESTROY;
+    }
+    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RESIZE_WINDOW,
+                 window_id, 200, 120, 0, &reply) != 0 || reply.status != GFX_STATUS_INVALID) {
+        puts("[test] gfx smoke post-destroy deny failed");
+        return GFX_SMOKE_E_POST_DESTROY;
+    }
+
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER,
                  buffer_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
         puts("[test] gfx smoke release1 failed");
@@ -321,17 +334,6 @@ main(int argc, char **argv)
                  buffer_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_INVALID) {
         puts("[test] gfx smoke release2 deny failed");
         return GFX_SMOKE_E_RELEASE2;
-    }
-
-    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_DESTROY_WINDOW,
-                 window_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
-        puts("[test] gfx smoke destroy failed");
-        return GFX_SMOKE_E_DESTROY;
-    }
-    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RESIZE_WINDOW,
-                 window_id, 200, 120, 0, &reply) != 0 || reply.status != GFX_STATUS_INVALID) {
-        puts("[test] gfx smoke post-destroy deny failed");
-        return GFX_SMOKE_E_POST_DESTROY;
     }
 
     puts("[test] gfx smoke app ok");

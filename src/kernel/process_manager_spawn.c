@@ -470,6 +470,39 @@ pm_recv_fs_reply(uint32_t source_context_id,
 }
 
 static int
+pm_inherit_child_cwd(uint32_t pm_context_id, uint32_t parent_context_id, uint32_t child_pid)
+{
+    process_t *child = 0;
+    ipc_message_t req;
+    uint32_t req_id = 0;
+
+    if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE ||
+        g_pm.fs_ctrl_endpoint == IPC_ENDPOINT_NONE ||
+        parent_context_id == 0 ||
+        child_pid == 0) {
+        return 0;
+    }
+    child = process_get(child_pid);
+    if (!child || child->context_id == 0) {
+        return -1;
+    }
+
+    req_id = g_pm.fs_request_id++;
+    req.type = FSMGR_IPC_CLONE_CWD_REQ;
+    req.source = g_pm.fs_ctrl_endpoint;
+    req.destination = g_pm.fs_endpoint;
+    req.request_id = req_id;
+    req.arg0 = parent_context_id;
+    req.arg1 = child->context_id;
+    req.arg2 = 0;
+    req.arg3 = 0;
+    if (ipc_send_from(pm_context_id, g_pm.fs_endpoint, &req) != IPC_OK) {
+        return -1;
+    }
+    return 0;
+}
+
+static int
 pm_fs_read_blob_for_spawn(uint32_t pm_context_id,
                           const char *path,
                           uint32_t path_len,
@@ -566,6 +599,7 @@ pm_poll_spawn(uint32_t pm_context_id)
         ipc_send_from(pm_context_id, g_pm.spawn.reply_endpoint, &resp);
         return;
     }
+    (void)pm_inherit_child_cwd(pm_context_id, g_pm.spawn.parent_context_id, pid);
 
     ipc_message_t resp;
     resp.type = PROC_IPC_RESP;
@@ -674,6 +708,7 @@ pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t *msg)
     if (pm_spawn_module(parent_pid, msg->arg0, &pid) != 0) {
         return -1;
     }
+    (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);
 
     ipc_message_t resp;
     resp.type = PROC_IPC_RESP;
@@ -728,6 +763,7 @@ pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t *msg)
     if (pm_spawn_module(parent_pid, msg->arg0, &pid) != 0) {
         return -1;
     }
+    (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);
     if (pm_apply_spawn_caps(pid, &caps) != 0) {
         return -1;
     }
@@ -844,6 +880,7 @@ pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t *msg)
     if (pm_spawn_module(parent_pid, msg->arg0, &pid) != 0) {
         return -1;
     }
+    (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);
     if (pm_apply_spawn_caps(pid, &caps) != 0) {
         return -1;
     }
@@ -900,6 +937,7 @@ pm_handle_spawn_name(uint32_t pm_context_id, const ipc_message_t *msg)
     g_pm.spawn.reply_endpoint = msg->source;
     g_pm.spawn.request_id = msg->request_id;
     g_pm.spawn.parent_pid = parent_pid;
+    g_pm.spawn.parent_context_id = owner_context;
     g_pm.spawn.fs_request_id = fs_req_id;
     for (uint32_t i = 0; i < sizeof(g_pm.spawn.name); ++i) {
         g_pm.spawn.name[i] = name[i];
@@ -956,6 +994,7 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
     if (pm_spawn_from_buffer(parent_pid, pm_fs_buf, blob_size, &pid) != 0) {
         return -1;
     }
+    (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);
 
     ipc_message_t resp;
     resp.type = PROC_IPC_RESP;

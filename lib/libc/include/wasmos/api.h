@@ -21,6 +21,8 @@ extern int32_t wasmos_kmap_dump_all(void)
     WASMOS_WASM_IMPORT("wasmos", "kmap_dump_all");
 extern int32_t wasmos_ipc_create_endpoint(void)
     WASMOS_WASM_IMPORT("wasmos", "ipc_create_endpoint");
+extern int32_t wasmos_ipc_endpoint_owner(int32_t endpoint)
+    WASMOS_WASM_IMPORT("wasmos", "ipc_endpoint_owner");
 extern int32_t wasmos_ipc_send(int32_t destination_endpoint,
                                int32_t source_endpoint,
                                int32_t type,

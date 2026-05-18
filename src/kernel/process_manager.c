@@ -281,6 +281,7 @@ process_manager_init(const boot_info_t *boot_info)
     g_pm.fb_endpoint = IPC_ENDPOINT_NONE;
     g_pm.vt_endpoint = IPC_ENDPOINT_NONE;
     g_pm.fs_reply_endpoint = IPC_ENDPOINT_NONE;
+    g_pm.fs_ctrl_endpoint = IPC_ENDPOINT_NONE;
     g_pm.fs_request_id = 1;
     g_pm.next_cli_tty = 1;
     g_pm.started = 0;
@@ -349,12 +350,22 @@ process_manager_entry(process_t *process, void *arg)
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
+        if (ipc_endpoint_create(process->context_id, &g_pm.fs_ctrl_endpoint) != IPC_OK) {
+            klog_write("[pm] fs ctrl endpoint create failed\n");
+            process_set_exit_status(process, -1);
+            return PROCESS_RUN_EXITED;
+        }
         g_pm.started = 1;
     }
 
     pm_check_waits(process->context_id);
     pm_reap_apps(process);
     pm_poll_spawn(process->context_id);
+    if (g_pm.fs_ctrl_endpoint != IPC_ENDPOINT_NONE) {
+        ipc_message_t ignored;
+        while (ipc_recv_for(process->context_id, g_pm.fs_ctrl_endpoint, &ignored) == IPC_OK) {
+        }
+    }
 
     int recv_rc = ipc_recv_for(process->context_id, g_pm.proc_endpoint, &msg);
     if (recv_rc == IPC_EMPTY) {

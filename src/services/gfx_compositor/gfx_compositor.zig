@@ -333,6 +333,19 @@ fn buffer_alloc(owner_endpoint: u32, width: u32, height: u32) ?usize {
         _ = api().shmem_unmap.?(shmem_id);
     }
 
+    var owner_context_id: u32 = 0;
+    if (api().ipc_endpoint_owner == null or
+        api().ipc_endpoint_owner.?(owner_endpoint, &owner_context_id) != 0 or
+        owner_context_id == 0)
+    {
+        return null;
+    }
+    if (api().shmem_grant == null or
+        api().shmem_grant.?(shmem_id, owner_context_id) != 0)
+    {
+        return null;
+    }
+
     const idx = slot_idx.?;
     g_buffers[idx].in_use = true;
     g_buffers[idx].owner_endpoint = owner_endpoint;

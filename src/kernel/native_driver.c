@@ -500,6 +500,18 @@ nd_shmem_unmap(uint32_t id)
     return mm_shared_release(0, id);
 }
 
+static int
+nd_shmem_grant(uint32_t id, uint32_t target_context_id)
+{
+    return mm_shared_grant(0, id, target_context_id);
+}
+
+static int
+nd_ipc_endpoint_owner(uint32_t endpoint, uint32_t *out_owner_context_id)
+{
+    return ipc_endpoint_owner(endpoint, out_owner_context_id);
+}
+
 static uint32_t
 nd_console_ring_id(void)
 {
@@ -743,8 +755,10 @@ native_driver_start(uint32_t context_id,
     api.early_log_size      = nd_early_log_size;
     api.early_log_copy      = nd_early_log_copy;
     api.shmem_create        = nd_shmem_create;
+    api.shmem_grant         = nd_shmem_grant;
     api.shmem_map           = nd_shmem_map;
     api.shmem_unmap         = nd_shmem_unmap;
+    api.ipc_endpoint_owner  = nd_ipc_endpoint_owner;
     api.console_ring_id     = nd_console_ring_id;
     api.console_register_fb = nd_console_register_fb;
     api.buffer_borrow       = nd_buffer_borrow;

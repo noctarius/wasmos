@@ -35,6 +35,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - Graphics validation now also includes a wasm `gfx-smoke` app available under
   `/boot/apps/gfx_smoke.wap` for manual CLI execution, keeping compositor tests
   opt-in at runtime instead of sysinit auto-spawn.
+- Native-driver ABI now includes endpoint-owner lookup and shmem grant
+  callbacks so native services (including `gfx-compositor`) can share
+  compositor-owned shmem buffers with requesting wasm clients.
 - Software composition now redraws clipped dirty regions in stable z-order,
   including overlap with higher-z windows; invalid/missing damage falls back to
   full-frame redraw.

@@ -886,10 +886,11 @@ int mm_context_map_physical(uint32_t context_id,
     }
 
     uint64_t current_virt = virt;
-    uint64_t current_phys = phys;
+        uint64_t current_phys = phys;
     for (uint64_t i = 0; i < pages; ++i) {
         (void)paging_unmap_4k_in_root(ctx->root_table, current_virt);
-        if (paging_map_4k_in_root(ctx->root_table, current_virt, current_phys, flags) != 0) {
+        int map_rc = paging_map_4k_in_root(ctx->root_table, current_virt, current_phys, flags);
+        if (map_rc != 0) {
             return -1;
         }
         current_virt += PAGE_SIZE;

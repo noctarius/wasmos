@@ -8,7 +8,7 @@ native = false
 
 [resources]
 stack_pages = 16
-heap_pages = 16
+heap_pages = 2048
 
 [ipc]
 required_endpoint_name = "proc"

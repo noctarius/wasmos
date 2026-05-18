@@ -106,8 +106,8 @@ extern uint8_t __kernel_end;
 #define SCHED_PROGRESS_MARKER_SWITCHES 256ull
 #define SCHED_RESCHED_STALL_TICKS 512ull
 /* Phase-2 stack hardening currently relies on the shared higher-half kernel
- * window (64 MiB by default: 32 * 2 MiB PDEs). */
-#define KERNEL_SHARED_HIGHER_HALF_WINDOW_BYTES (64u * 1024u * 1024u)
+ * window (512 MiB by default: 256 * 2 MiB PDEs). Keep in sync with paging.c. */
+#define KERNEL_SHARED_HIGHER_HALF_WINDOW_BYTES (512u * 1024u * 1024u)
 static uint8_t g_sched_trampoline_stack[SCHED_TRAMPOLINE_STACK_BYTES] __attribute__((aligned(16)));
 
 static int

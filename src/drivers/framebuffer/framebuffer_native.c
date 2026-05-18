@@ -31,6 +31,8 @@
 static fbtext_state_t g_state;
 static uint8_t        g_early_log_buf[EARLY_LOG_BUF];
 static uint8_t        g_console_ring_enabled = 1;
+static uint8_t        g_text_plane_enabled = 1;
+static uint8_t        g_gfx_overlay_lock = 0;
 
 static int
 str_len(const char *s)
@@ -231,6 +233,9 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
 
         switch (msg.type) {
         case FBTEXT_IPC_CELL_WRITE_REQ: {
+            if (!g_text_plane_enabled || g_gfx_overlay_lock) {
+                break;
+            }
             uint16_t col       = (uint16_t)msg.arg0;
             uint16_t row       = (uint16_t)msg.arg1;
             uint32_t codepoint = msg.arg2;
@@ -246,6 +251,9 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
             break;
         }
         case FBTEXT_IPC_CURSOR_SET_REQ:
+            if (!g_text_plane_enabled || g_gfx_overlay_lock) {
+                break;
+            }
             if ((uint16_t)msg.arg0 < g_state.cols &&
                 (uint16_t)msg.arg1 < g_state.rows) {
                 g_state.cursor.col = (uint16_t)msg.arg0;
@@ -253,9 +261,15 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
             }
             break;
         case FBTEXT_IPC_SCROLL_REQ:
+            if (!g_text_plane_enabled || g_gfx_overlay_lock) {
+                break;
+            }
             fbtext_scroll_up(&g_state, (uint16_t)msg.arg0);
             break;
         case FBTEXT_IPC_CLEAR_REQ:
+            if (!g_text_plane_enabled || g_gfx_overlay_lock) {
+                break;
+            }
             fbtext_clear(&g_state);
             break;
         case FBTEXT_IPC_CONSOLE_MODE_REQ:
@@ -274,6 +288,9 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
         case FBTEXT_IPC_GEOMETRY_REQ:
             resp.arg0 = g_state.cols;
             resp.arg1 = g_state.rows;
+            break;
+        case FBTEXT_IPC_GFX_OVERLAY_REQ:
+            g_gfx_overlay_lock = (msg.arg0 != 0) ? 1u : 0u;
             break;
         default:
             resp.type = FBTEXT_IPC_ERROR;

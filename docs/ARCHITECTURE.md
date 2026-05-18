@@ -30,7 +30,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
   `DESTROY_WINDOW`) with owner-checked state slots and `GFX_STATUS_*` replies.
 - Graphics/compositor baseline now also includes `RESIZE_WINDOW`,
   `ALLOC_SHARED_BUFFER` (opaque random 32-bit `buffer_id` + shmem backing),
-  and `PRESENT_WINDOW` by `buffer_id` with shmem-backed damage rect lists.
+  `RELEASE_SHARED_BUFFER`, and `PRESENT_WINDOW` by `buffer_id` with
+  shmem-backed damage rect lists.
 - Software composition now redraws clipped dirty regions in stable z-order,
   including overlap with higher-z windows; invalid/missing damage falls back to
   full-frame redraw.

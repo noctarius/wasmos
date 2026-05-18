@@ -22,6 +22,8 @@ var g_next_window_id: u32 = 1;
 var g_next_z: u32 = 1;
 var g_rng_state: u32 = 0xA5A5_5A5A;
 var g_damage_marker_logged: bool = false;
+var g_window_owner_deny_logged: bool = false;
+var g_buffer_owner_deny_logged: bool = false;
 
 var g_fb_info: c.nd_framebuffer_info_t = .{
     .framebuffer_base = 0,
@@ -279,6 +281,19 @@ fn buffer_find_by_id(buffer_id: u32) ?usize {
     return null;
 }
 
+fn detach_buffer_from_windows(buffer_id: u32) bool {
+    var changed = false;
+    var i: usize = 0;
+    while (i < g_windows.len) : (i += 1) {
+        if (!g_windows[i].in_use) continue;
+        if (g_windows[i].current_buffer_id == buffer_id) {
+            g_windows[i].current_buffer_id = 0;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
 fn buffer_generate_id() ?u32 {
     var attempts: u32 = 0;
     while (attempts < 64) : (attempts += 1) {
@@ -489,6 +504,10 @@ fn handle_destroy_window(msg: *const c.nd_ipc_message_t) void {
         return;
     };
     if (g_windows[slot_idx].owner_endpoint != msg.source) {
+        if (!g_window_owner_deny_logged) {
+            g_window_owner_deny_logged = true;
+            logMsg("[test] gfx window owner deny ok\n");
+        }
         reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
         return;
     }
@@ -510,6 +529,10 @@ fn handle_resize_window(msg: *const c.nd_ipc_message_t) void {
         return;
     };
     if (g_windows[slot_idx].owner_endpoint != msg.source) {
+        if (!g_window_owner_deny_logged) {
+            g_window_owner_deny_logged = true;
+            logMsg("[test] gfx window owner deny ok\n");
+        }
         reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
         return;
     }
@@ -534,6 +557,10 @@ fn handle_alloc_shared_buffer(msg: *const c.nd_ipc_message_t) void {
             return;
         };
         if (g_windows[window_idx].owner_endpoint != msg.source) {
+            if (!g_window_owner_deny_logged) {
+                g_window_owner_deny_logged = true;
+                logMsg("[test] gfx window owner deny ok\n");
+            }
             reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
             return;
         }
@@ -558,6 +585,36 @@ fn handle_alloc_shared_buffer(msg: *const c.nd_ipc_message_t) void {
     reply_with_status(msg, c.GFX_STATUS_OK, buf.buffer_id, buf.shmem_id, buf.stride_bytes);
 }
 
+fn handle_release_shared_buffer(msg: *const c.nd_ipc_message_t) void {
+    const buffer_id = msg.arg0;
+    if (buffer_id == 0) {
+        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        return;
+    }
+    const buf_idx = buffer_find_by_id(buffer_id) orelse {
+        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        return;
+    };
+    if (g_buffers[buf_idx].owner_endpoint != msg.source) {
+        if (!g_buffer_owner_deny_logged) {
+            g_buffer_owner_deny_logged = true;
+            logMsg("[test] gfx buffer owner deny ok\n");
+        }
+        reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
+        return;
+    }
+
+    const changed = detach_buffer_from_windows(buffer_id);
+    // TODO(gfx-buffer-release): native driver ABI currently has map/unmap but
+    // no shmem-destroy primitive; this releases compositor references and
+    // invalidates handle usage, but backing pages are not reclaimed yet.
+    g_buffers[buf_idx] = .{};
+    if (changed) {
+        _ = compose_full();
+    }
+    reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
+}
+
 fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
     const window_id = msg.arg0;
     const buffer_id = msg.arg1;
@@ -574,6 +631,10 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
         return;
     };
     if (g_windows[window_idx].owner_endpoint != msg.source) {
+        if (!g_window_owner_deny_logged) {
+            g_window_owner_deny_logged = true;
+            logMsg("[test] gfx window owner deny ok\n");
+        }
         reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
         return;
     }
@@ -584,6 +645,10 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
     };
     const buf = g_buffers[buf_idx];
     if (buf.owner_endpoint != msg.source) {
+        if (!g_buffer_owner_deny_logged) {
+            g_buffer_owner_deny_logged = true;
+            logMsg("[test] gfx buffer owner deny ok\n");
+        }
         reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
         return;
     }
@@ -699,6 +764,7 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
             c.GFX_IPC_DESTROY_WINDOW => handle_destroy_window(&msg),
             c.GFX_IPC_RESIZE_WINDOW => handle_resize_window(&msg),
             c.GFX_IPC_ALLOC_SHARED_BUFFER => handle_alloc_shared_buffer(&msg),
+            c.GFX_IPC_RELEASE_SHARED_BUFFER => handle_release_shared_buffer(&msg),
             c.GFX_IPC_PRESENT_WINDOW => handle_present_window(&msg),
             else => reply_unsupported(&msg),
         }

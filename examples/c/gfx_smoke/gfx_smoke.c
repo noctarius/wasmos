@@ -43,7 +43,8 @@ enum {
     GFX_SMOKE_E_UNMAP1 = 27,
     GFX_SMOKE_E_RELEASE2 = 28,
     GFX_SMOKE_E_DESTROY = 29,
-    GFX_SMOKE_E_POST_DESTROY = 30
+    GFX_SMOKE_E_POST_DESTROY = 30,
+    GFX_SMOKE_E_EVENT_FOCUS = 31
 };
 
 static int32_t
@@ -144,6 +145,27 @@ send_gfx(int32_t gfx_ep,
     return 0;
 }
 
+static int
+poll_gfx_focus_event(int32_t gfx_ep, int32_t reply_ep, int32_t *req, int32_t expected_window_id)
+{
+    gfx_reply_t ev;
+    for (int i = 0; i < 96; ++i) {
+        if (send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_POLL_EVENT, 0, 0, 0, 0, &ev) != 0 ||
+            ev.status != GFX_STATUS_OK) {
+            return -1;
+        }
+        if (ev.arg1 == GFX_EVENT_NONE) {
+            (void)wasmos_sched_yield();
+            continue;
+        }
+        if (ev.arg1 == GFX_EVENT_FOCUS_GAINED && ev.arg2 == expected_window_id) {
+            puts("[test] gfx smoke event focus-gained");
+            return 0;
+        }
+    }
+    return -1;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -218,6 +240,10 @@ main(int argc, char **argv)
         reply.status != GFX_STATUS_OK) {
         puts("[test] gfx smoke present1 failed");
         return GFX_SMOKE_E_PRESENT0;
+    }
+    if (poll_gfx_focus_event(gfx_ep, reply_ep, &req, window_id) != 0) {
+        puts("[test] gfx smoke event focus missing");
+        return GFX_SMOKE_E_EVENT_FOCUS;
     }
 
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RESIZE_WINDOW,

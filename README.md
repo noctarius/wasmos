@@ -40,6 +40,7 @@ It defines repository workflow and documentation/update conventions.
 - libc and language wrappers now provide line-oriented console input helpers (`readline`)
 - libc now includes process-manager metadata helper APIs in `wasmos/proc.h` (`PROC_IPC_MODULE_META` / `PROC_IPC_MODULE_META_PATH`)
 - kernel process-manager internals are now split into focused modules (`process_manager_buffers`, `process_manager_services`, `process_manager_spawn`) to keep lifecycle, registry, and buffer-borrow logic isolated
+- process-manager runtime bookkeeping (`apps`, `waits`, `services`) now grows on demand via internal linked-list pools instead of fixed small slot arrays
 - kernel CPU implementation is now split into generic dispatch (`src/kernel/cpu.c`) and x86_64-specific internals (`src/kernel/arch/x86_64/cpu_x86_64.c`)
 - kernel IRQ implementation is now split into generic dispatch (`src/kernel/irq.c`) and x86_64-specific internals (`src/kernel/arch/x86_64/irq_x86_64.c`)
 - kernel init-process bootstrap state machine is now extracted into `src/kernel/kernel_init_runtime.c` (`kernel_init_entry`), reducing `kernel.c` orchestration surface

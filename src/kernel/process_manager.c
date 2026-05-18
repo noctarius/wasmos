@@ -2,12 +2,35 @@
 #include "klog.h"
 #include "process_manager_internal.h"
 #include "ipc.h"
+#include "stdlib.h"
+#include "string.h"
 
 pm_state_t g_pm;
 uint8_t g_pm_wait_owner_deny_logged;
 uint8_t g_pm_kill_owner_deny_logged;
 uint8_t g_pm_status_owner_deny_logged;
 uint8_t g_pm_spawn_owner_deny_logged;
+
+pm_wait_state_t *
+pm_wait_slot_acquire(void)
+{
+    pm_wait_node_t *node = g_pm.waits_head;
+    while (node) {
+        if (!node->state.in_use) {
+            return &node->state;
+        }
+        node = node->next;
+    }
+    node = (pm_wait_node_t *)malloc(sizeof(pm_wait_node_t));
+    if (!node) {
+        return 0;
+    }
+    memset(node, 0, sizeof(pm_wait_node_t));
+    node->state.reply_endpoint = IPC_ENDPOINT_NONE;
+    node->next = g_pm.waits_head;
+    g_pm.waits_head = node;
+    return &node->state;
+}
 
 uint32_t
 pm_alloc_cli_tty(void)
@@ -31,18 +54,15 @@ process_manager_inject_wait_owner_mismatch_test(uint32_t expected_owner_context_
         reply_endpoint == IPC_ENDPOINT_NONE) {
         return;
     }
-    for (uint32_t i = 0; i < PM_MAX_WAITERS; ++i) {
-        pm_wait_state_t *waiter = &g_pm.waits[i];
-        if (waiter->in_use) {
-            continue;
-        }
-        waiter->in_use = 1;
-        waiter->pid = 0;
-        waiter->reply_endpoint = reply_endpoint;
-        waiter->request_id = 0xFFFF0001u;
-        waiter->owner_context_id = expected_owner_context_id;
+    pm_wait_state_t *waiter = pm_wait_slot_acquire();
+    if (!waiter) {
         return;
     }
+    waiter->in_use = 1;
+    waiter->pid = 0;
+    waiter->reply_endpoint = reply_endpoint;
+    waiter->request_id = 0xFFFF0001u;
+    waiter->owner_context_id = expected_owner_context_id;
 }
 
 void
@@ -235,20 +255,16 @@ pm_handle_wait(uint32_t pm_context_id, const ipc_message_t *msg)
         return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
     }
 
-    for (uint32_t i = 0; i < PM_MAX_WAITERS; ++i) {
-        pm_wait_state_t *waiter = &g_pm.waits[i];
-        if (waiter->in_use) {
-            continue;
-        }
-        waiter->in_use = 1;
-        waiter->pid = msg->arg0;
-        waiter->reply_endpoint = msg->source;
-        waiter->request_id = msg->request_id;
-        waiter->owner_context_id = owner_context;
-        return 0;
+    pm_wait_state_t *waiter = pm_wait_slot_acquire();
+    if (!waiter) {
+        return -1;
     }
-
-    return -1;
+    waiter->in_use = 1;
+    waiter->pid = msg->arg0;
+    waiter->reply_endpoint = msg->source;
+    waiter->request_id = msg->request_id;
+    waiter->owner_context_id = owner_context;
+    return 0;
 }
 
 int
@@ -274,27 +290,10 @@ process_manager_init(const boot_info_t *boot_info)
         g_pm.module_count = boot_info->module_count;
         g_pm.init_module_index = pm_find_module_index_by_name("sysinit");
     }
-    for (uint32_t i = 0; i < PM_MAX_MANAGED_APPS; ++i) {
-        g_pm.apps[i].in_use = 0;
-        g_pm.apps[i].pid = 0;
-        g_pm.apps[i].blob = 0;
-        g_pm.apps[i].blob_size = 0;
-        g_pm.apps[i].started = 0;
-        g_pm.apps[i].name[0] = '\0';
-    }
-    for (uint32_t i = 0; i < PM_MAX_WAITERS; ++i) {
-        g_pm.waits[i].in_use = 0;
-        g_pm.waits[i].pid = 0;
-        g_pm.waits[i].reply_endpoint = IPC_ENDPOINT_NONE;
-        g_pm.waits[i].request_id = 0;
-    }
+    g_pm.apps_head = 0;
+    g_pm.waits_head = 0;
     g_pm.spawn.in_use = 0;
-    for (uint32_t i = 0; i < PM_SERVICE_REGISTRY_CAP; ++i) {
-        g_pm.services[i].in_use = 0;
-        g_pm.services[i].endpoint = IPC_ENDPOINT_NONE;
-        g_pm.services[i].owner_context_id = 0;
-        g_pm.services[i].name[0] = '\0';
-    }
+    g_pm.services_head = 0;
     return 0;
 }
 

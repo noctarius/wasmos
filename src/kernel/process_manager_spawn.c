@@ -7,6 +7,8 @@
 #include "string.h"
 #include "wasm_chardev.h"
 #include "wasmos_app_meta.h"
+#include "stdlib.h"
+#include "string.h"
 
 static const boot_module_t *
 pm_module_at(uint32_t index)
@@ -57,12 +59,22 @@ pm_find_module_index_by_name(const char *name)
 static pm_app_state_t *
 pm_find_app_slot(void)
 {
-    for (uint32_t i = 0; i < PM_MAX_MANAGED_APPS; ++i) {
-        if (!g_pm.apps[i].in_use) {
-            return &g_pm.apps[i];
+    pm_app_node_t *node = g_pm.apps_head;
+    while (node) {
+        if (!node->state.in_use) {
+            return &node->state;
         }
+        node = node->next;
     }
-    return 0;
+
+    node = (pm_app_node_t *)malloc(sizeof(pm_app_node_t));
+    if (!node) {
+        return 0;
+    }
+    memset(node, 0, sizeof(pm_app_node_t));
+    node->next = g_pm.apps_head;
+    g_pm.apps_head = node;
+    return &node->state;
 }
 
 typedef enum {
@@ -578,10 +590,12 @@ pm_poll_spawn(uint32_t pm_context_id)
 void
 pm_check_waits(uint32_t pm_context_id)
 {
-    for (uint32_t i = 0; i < PM_MAX_WAITERS; ++i) {
-        pm_wait_state_t *waiter = &g_pm.waits[i];
+    pm_wait_node_t *node = g_pm.waits_head;
+    while (node) {
+        pm_wait_state_t *waiter = &node->state;
         uint32_t reply_owner_context = 0;
         if (!waiter->in_use) {
+            node = node->next;
             continue;
         }
         if (ipc_endpoint_owner(waiter->reply_endpoint, &reply_owner_context) != IPC_OK ||
@@ -591,11 +605,13 @@ pm_check_waits(uint32_t pm_context_id)
                 klog_write("[test] pm wait reply owner deny ok\n");
             }
             waiter->in_use = 0;
+            node = node->next;
             continue;
         }
         int32_t exit_status = 0;
         int rc = process_get_exit_status(waiter->pid, &exit_status);
         if (rc != 0) {
+            node = node->next;
             continue;
         }
 
@@ -610,6 +626,7 @@ pm_check_waits(uint32_t pm_context_id)
         resp.arg3 = 0;
         ipc_send_from(pm_context_id, waiter->reply_endpoint, &resp);
         waiter->in_use = 0;
+        node = node->next;
     }
 }
 
@@ -619,21 +636,26 @@ pm_reap_apps(process_t *owner)
     if (!owner) {
         return;
     }
-    for (uint32_t i = 0; i < PM_MAX_MANAGED_APPS; ++i) {
-        pm_app_state_t *app = &g_pm.apps[i];
+    pm_app_node_t *node = g_pm.apps_head;
+    while (node) {
+        pm_app_state_t *app = &node->state;
         if (!app->in_use || app->pid == 0) {
+            node = node->next;
             continue;
         }
         int32_t exit_status = 0;
         if (process_get_exit_status(app->pid, &exit_status) != 0) {
+            node = node->next;
             continue;
         }
         if (process_wait(owner, app->pid, &exit_status) != 0) {
+            node = node->next;
             continue;
         }
         wasmos_app_stop(&app->app);
         app->in_use = 0;
         app->pid = 0;
+        node = node->next;
     }
 }
 

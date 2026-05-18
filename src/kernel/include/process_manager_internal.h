@@ -8,10 +8,7 @@
 #include "wasmos_app.h"
 #include "wasmos_driver_abi.h"
 
-#define PM_MAX_MANAGED_APPS 16u
-#define PM_MAX_WAITERS 8u
 #define PM_FS_BUFFER_SIZE (256u * 1024u)
-#define PM_SERVICE_REGISTRY_CAP 32u
 #define PM_DMA_WINDOW_LIMIT 16u
 
 typedef struct {
@@ -67,6 +64,21 @@ typedef struct {
     char name[17];
 } pm_service_entry_t;
 
+typedef struct pm_app_node {
+    pm_app_state_t state;
+    struct pm_app_node *next;
+} pm_app_node_t;
+
+typedef struct pm_wait_node {
+    pm_wait_state_t state;
+    struct pm_wait_node *next;
+} pm_wait_node_t;
+
+typedef struct pm_service_node {
+    pm_service_entry_t entry;
+    struct pm_service_node *next;
+} pm_service_node_t;
+
 typedef struct {
     const boot_info_t *boot_info;
     uint32_t proc_endpoint;
@@ -80,10 +92,10 @@ typedef struct {
     uint8_t started;
     uint32_t init_module_index;
     uint32_t module_count;
-    pm_app_state_t apps[PM_MAX_MANAGED_APPS];
-    pm_wait_state_t waits[PM_MAX_WAITERS];
+    pm_app_node_t *apps_head;
+    pm_wait_node_t *waits_head;
     pm_spawn_state_t spawn;
-    pm_service_entry_t services[PM_SERVICE_REGISTRY_CAP];
+    pm_service_node_t *services_head;
 } pm_state_t;
 
 extern pm_state_t g_pm;
@@ -111,6 +123,7 @@ uint32_t pm_find_module_index_by_name(const char *name);
 void pm_poll_spawn(uint32_t pm_context_id);
 void pm_check_waits(uint32_t pm_context_id);
 void pm_reap_apps(process_t *owner);
+pm_wait_state_t *pm_wait_slot_acquire(void);
 
 int pm_handle_module_meta(uint32_t pm_context_id, const ipc_message_t *msg);
 int pm_handle_module_meta_path(uint32_t pm_context_id, const ipc_message_t *msg);

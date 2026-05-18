@@ -337,6 +337,10 @@ Current implementation notes:
   implements a minimal owner-checked window table for
   `GFX_IPC_CREATE_WINDOW`/`GFX_IPC_DESTROY_WINDOW` with `GFX_STATUS_*`
   replies; other opcodes remain fail-closed as unsupported.
+- Baseline `GFX_IPC_PRESENT_WINDOW` handling is now wired with owner checks and
+  a deterministic software fallback compose pass (clear + per-window placeholder
+  rectangles via native framebuffer pixel writes). Real client-buffer blit and
+  damage-rect consumption remains a tracked TODO for Phase 1 completion.
 
 ### Phase 1: Single-Mode Software Composition
 

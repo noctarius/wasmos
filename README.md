@@ -94,6 +94,7 @@ It defines repository workflow and documentation/update conventions.
 - CLI integration target now isolates each QEMU session to a private ESP copy (`WASMOS_QEMU_ISOLATE_ESP=1`) and emits deterministic suite status marker (`[test] cli suite status ok`)
 - Graphics Phase 0 scaffold is now in-tree: shared compositor/display IPC ABI constants (`wasmos/gfx_ipc.h`), a native Zig `gfx-compositor` service that registers `gfx`, probes framebuffer text geometry, and emits handshake marker (`[test] gfx compositor handshake ok`) when `fb` is reachable
 - Graphics compositor IPC baseline now includes validated opcode dispatch with in-memory window ownership/state tracking and working `GFX_IPC_CREATE_WINDOW` / `GFX_IPC_DESTROY_WINDOW` replies (`GFX_STATUS_*`), while remaining opcodes still return `GFX_STATUS_UNSUPPORTED`
+- Graphics compositor baseline now also handles `GFX_IPC_PRESENT_WINDOW` with owner checks and a minimal software compose pass (background + deterministic window rectangles) via native framebuffer pixel writes; real client-buffer blit/damage handling remains explicitly TODO
 - Ring-3 smoke includes shared-memory owner/grant/revoke isolation checks (kernel and user-space app-pair paths)
 - Shared-memory app-pair smoke now also checks forged-ID deny, map-argument policy deny, and post-revoke stale-ID deny
 - Strict ring3 boot smoke now includes a kernel-level shared-memory misuse matrix marker (`[test] ring3 shmem misuse matrix ok`)

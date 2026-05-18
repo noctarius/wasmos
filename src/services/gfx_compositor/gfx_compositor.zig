@@ -1,7 +1,5 @@
 const c = @cImport({
-    @cInclude("wasmos_native_driver.h");
-    @cInclude("wasmos_driver_abi.h");
-    @cInclude("wasmos/gfx_ipc.h");
+    @cInclude("gfx_compositor_imports.h");
 });
 
 const IPC_OK: i32 = 0;

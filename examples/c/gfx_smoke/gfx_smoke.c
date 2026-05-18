@@ -9,7 +9,7 @@
 #define GFX_REQ_BASE 0x6A00
 #define FBPP 4
 #define BUFFER_PTR 0x4000
-#define DAMAGE_PTR 0x9000
+#define DAMAGE_PTR 0x1000
 #define PAGE_SIZE 4096
 #define GFX_W 64
 #define GFX_H 64

@@ -140,6 +140,14 @@ enum {
 };
 
 enum {
+    MOUSE_IPC_SUBSCRIBE_REQ  = 0x810,
+    MOUSE_IPC_SUBSCRIBE_RESP = 0x890,
+    /* arg0=dx (signed 8-bit in low byte), arg1=dy (signed 8-bit in low byte),
+     * arg2=buttons (bit0=left bit1=right bit2=middle), arg3=flags reserved. */
+    MOUSE_IPC_MOVE_NOTIFY    = 0x811
+};
+
+enum {
     DEVMGR_PUBLISH_DEVICE = 0x900,
     DEVMGR_PCI_SCAN_DONE  = 0x901,
     DEVMGR_QUERY_MOUNT_REQ = 0x902,

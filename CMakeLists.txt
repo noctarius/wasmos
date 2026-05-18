@@ -89,6 +89,9 @@ set(WASM_SERIAL_APP ${BUILD_DIR}/serial.wap)
 set(WASM_KEYBOARD_DRIVER_SRC ${DRIVER_WASM_DIR}/keyboard/keyboard.ts)
 set(WASM_KEYBOARD_DRIVER_WASM ${BUILD_DIR}/keyboard.wasm)
 set(WASM_KEYBOARD_APP ${BUILD_DIR}/keyboard.wap)
+set(WASM_MOUSE_DRIVER_SRC ${DRIVER_WASM_DIR}/mouse/mouse.ts)
+set(WASM_MOUSE_DRIVER_WASM ${BUILD_DIR}/mouse.wasm)
+set(WASM_MOUSE_APP ${BUILD_DIR}/mouse.wap)
 set(WASM_FRAMEBUFFER_APP ${BUILD_DIR}/framebuffer.wap)
 set(NATIVE_FRAMEBUFFER_DRIVER_SRC ${DRIVER_WASM_DIR}/framebuffer/framebuffer_native.c)
 set(NATIVE_FRAMEBUFFER_RENDER_SRC ${DRIVER_WASM_DIR}/framebuffer/render.c)
@@ -886,6 +889,7 @@ set(INITFS_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${INITFS_IMG} ${BUILD_DIR}/esp/initfs.img
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SERIAL_APP} ${BUILD_DIR}/esp/system/drivers/serial.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_KEYBOARD_APP} ${BUILD_DIR}/esp/system/drivers/keyboard.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_MOUSE_APP} ${BUILD_DIR}/esp/system/drivers/mouse.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FRAMEBUFFER_APP} ${BUILD_DIR}/esp/system/drivers/framebuf.wap
 )
 if (RUST_ENABLE)

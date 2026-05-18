@@ -342,9 +342,11 @@ Current implementation notes:
   rectangles via native framebuffer pixel writes). Real client-buffer blit and
   damage-rect consumption remains a tracked TODO for Phase 1 completion.
 - Baseline present payload semantics are now documented in shared headers:
-  `arg0=window_id`, `arg1=shmem_id`, `arg2=damage_count`, `arg3=reserved`.
-  The compositor now attempts shmem-backed pixel blit for each window when a
-  buffer id is provided; damage-count is currently accepted but ignored.
+  `arg0=window_id`, `arg1=shmem_id`, `arg2=damage_count`,
+  `arg3=damage_shmem_id`.
+- The compositor now attempts shmem-backed pixel blit for each window and
+  applies clipped dirty-rect updates from the damage list when provided.
+  Missing/invalid damage data falls back to full-frame redraw.
 
 ### Phase 1: Single-Mode Software Composition
 

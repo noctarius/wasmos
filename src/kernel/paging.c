@@ -19,12 +19,13 @@
 #define IDENTITY_PD_COUNT_MAX 4u
 /* Keep only the minimum higher-half span shared into child CR3 roots. */
 #define HIGHER_HALF_PD_COUNT 1
-/* Limit higher-half sharing to the first 64 MiB window by default. */
-#define HIGHER_HALF_PDE_COUNT 32
+/* Limit higher-half sharing to the first 512 MiB window by default. */
+#define HIGHER_HALF_PDE_COUNT 256
 /* Page-table allocations must stay inside the mapped shared higher-half
  * window so zero_page/table_ptr always access mapped memory. */
-#define KERNEL_SHARED_HIGHER_HALF_WINDOW_BYTES (64u * 1024u * 1024u)
-/* TODO: If higher-half kernel allocations grow beyond the default 64 MiB
+/* Keep this consistent with HIGHER_HALF_PDE_COUNT (2 MiB per PDE). */
+#define KERNEL_SHARED_HIGHER_HALF_WINDOW_BYTES (512u * 1024u * 1024u)
+/* TODO: If higher-half kernel allocations grow beyond the default 512 MiB
  * window, teach child roots to map only the specific additional windows they
  * need. */
 #define HIGHER_HALF_PDPT_INDEX 510
@@ -513,10 +514,6 @@ paging_map_4k_in_root(uint64_t root_table, uint64_t virt, uint64_t phys, uint64_
     uint64_t pt_phys = entry_phys(pd[pd_idx]);
     volatile uint64_t *pt = table_ptr(pt_phys);
 
-    if (pt[pt_idx] & PT_FLAG_PRESENT) {
-        return 1;
-    }
-
     uint64_t map_flags = PT_FLAG_PRESENT;
     if (flags & MEM_REGION_FLAG_WRITE) {
         map_flags |= PT_FLAG_WRITE;
@@ -526,6 +523,13 @@ paging_map_4k_in_root(uint64_t root_table, uint64_t virt, uint64_t phys, uint64_
     }
     if (!(flags & MEM_REGION_FLAG_EXEC)) {
         map_flags |= PT_FLAG_NX;
+    }
+    if (pt[pt_idx] & PT_FLAG_PRESENT) {
+        /* Allow explicit remap updates (e.g. shared-memory overlays on wasm
+         * linear pages) by replacing present 4K PTEs in place. */
+        pt[pt_idx] = (phys & ~0xFFFULL) | map_flags;
+        invlpg(virt);
+        return 0;
     }
     pt[pt_idx] = (phys & ~0xFFFULL) | map_flags;
     invlpg(virt);

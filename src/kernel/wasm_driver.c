@@ -476,6 +476,11 @@ wasm_driver_call_unlocked(wasm_driver_t *driver,
         wasm_driver_leave_runtime(previous_pid);
         return -1;
     }
+    {
+        int32_t ret_i32 = 0;
+        const void *ret_ptrs[1] = { &ret_i32 };
+        (void)m3_GetResults(func, 1, ret_ptrs);
+    }
     wasm_driver_leave_runtime(previous_pid);
     return 0;
 }

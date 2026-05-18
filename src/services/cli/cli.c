@@ -336,10 +336,8 @@ cli_is_foreground(void)
             g_last_seen_active_tty = active_tty;
         }
     }
-    if (g_home_tty == 1 && g_last_seen_active_tty == 0) {
-        (void)cli_switch_tty(1, 0, 0);
-        return 1;
-    }
+    /* Do not forcibly reclaim tty1 while tty0 is active; compositor may
+     * temporarily own tty0 for graphics presentation. */
     return g_last_seen_active_tty == g_home_tty;
 }
 

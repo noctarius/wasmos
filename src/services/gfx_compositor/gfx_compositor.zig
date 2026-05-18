@@ -18,6 +18,8 @@ var g_api: ?*c.wasmos_driver_api_t = null;
 var g_proc_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_gfx_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_fb_endpoint: u32 = IPC_ENDPOINT_NONE;
+var g_vt_endpoint: u32 = IPC_ENDPOINT_NONE;
+var g_overlay_locked: bool = false;
 var g_next_window_id: u32 = 1;
 var g_next_z: u32 = 1;
 var g_rng_state: u32 = 0xA5A5_5A5A;
@@ -34,6 +36,7 @@ var g_fb_info: c.nd_framebuffer_info_t = .{
     .framebuffer_reserved = 0,
 };
 var g_fb_info_valid: bool = false;
+var g_fb_pixels: ?[*]volatile u32 = null;
 
 const window_slot_t = struct {
     in_use: bool = false,
@@ -171,6 +174,19 @@ fn lookup_fb_endpoint() i32 {
     return -1;
 }
 
+fn lookup_vt_endpoint() i32 {
+    var i: u32 = 0;
+    while (i < GFX_FB_LOOKUP_RETRIES) : (i += 1) {
+        const ep = svc_lookup("vt", GFX_REQUEST_BASE + 0x100 + i);
+        if (ep >= 0) {
+            g_vt_endpoint = @bitCast(ep);
+            return 0;
+        }
+        api().sched_yield.?();
+    }
+    return -1;
+}
+
 fn ipc_call(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t) i32 {
     var req: c.nd_ipc_message_t = undefined;
     req.type = msg_type;
@@ -203,6 +219,64 @@ fn log_fb_geometry_probe() void {
     }
     if (reply.type == c.FBTEXT_IPC_RESP) {
         logMsg("[gfx] fb geometry cols/rows ok\n");
+    }
+}
+
+fn try_switch_to_gfx_tty() void {
+    if (g_vt_endpoint == IPC_ENDPOINT_NONE) return;
+    var reply: c.nd_ipc_message_t = undefined;
+    const req_id: u32 = GFX_REQUEST_BASE + GFX_FB_LOOKUP_RETRIES + 2;
+    if (ipc_call(g_vt_endpoint, req_id, c.VT_IPC_SWITCH_TTY, 0, 0, 0, 0, &reply) == 0 and
+        reply.type == c.VT_IPC_RESP)
+    {
+        logMsg("[gfx] switched to tty0 for compositor output\n");
+    }
+}
+
+fn active_window_count() usize {
+    var count: usize = 0;
+    var i: usize = 0;
+    while (i < g_windows.len) : (i += 1) {
+        if (g_windows[i].in_use) count += 1;
+    }
+    return count;
+}
+
+fn active_presented_window_count() usize {
+    var count: usize = 0;
+    var i: usize = 0;
+    while (i < g_windows.len) : (i += 1) {
+        if (g_windows[i].in_use and g_windows[i].current_buffer_id != 0) count += 1;
+    }
+    return count;
+}
+
+fn fb_set_overlay_lock(lock: bool) void {
+    if (g_fb_endpoint == IPC_ENDPOINT_NONE) return;
+    var reply: c.nd_ipc_message_t = undefined;
+    const req_id: u32 = GFX_REQUEST_BASE + GFX_FB_LOOKUP_RETRIES + 9;
+    _ = ipc_call(g_fb_endpoint, req_id, c.FBTEXT_IPC_GFX_OVERLAY_REQ, if (lock) 1 else 0, 0, 0, 0, &reply);
+}
+
+fn sync_console_mode_for_windows() void {
+    const has_presented_windows = active_presented_window_count() > 0;
+    if (has_presented_windows and !g_overlay_locked) {
+        try_switch_to_gfx_tty();
+        fb_set_overlay_lock(true);
+        g_overlay_locked = true;
+        if (g_fb_info_valid) {
+            _ = compose_region(.{
+                .x = 0,
+                .y = 0,
+                .w = @intCast(g_fb_info.framebuffer_width),
+                .h = @intCast(g_fb_info.framebuffer_height),
+            });
+        }
+        return;
+    }
+    if (!has_presented_windows and g_overlay_locked) {
+        fb_set_overlay_lock(false);
+        g_overlay_locked = false;
     }
 }
 
@@ -358,7 +432,7 @@ fn buffer_alloc(owner_endpoint: u32, width: u32, height: u32) ?usize {
 }
 
 fn fill_rect(x0: i32, y0: i32, w: i32, h: i32, color: u32) void {
-    if (!g_fb_info_valid or w <= 0 or h <= 0) return;
+    if (!g_fb_info_valid or g_fb_pixels == null or w <= 0 or h <= 0) return;
     var sx = x0;
     var sy = y0;
     var ex = x0 + w;
@@ -371,11 +445,15 @@ fn fill_rect(x0: i32, y0: i32, w: i32, h: i32, color: u32) void {
     if (ey > max_y) ey = max_y;
     if (sx >= ex or sy >= ey) return;
 
+    const stride: usize = @intCast(g_fb_info.framebuffer_stride);
+    const fb = g_fb_pixels.?;
     var y = sy;
     while (y < ey) : (y += 1) {
+        const row_base: usize = @as(usize, @intCast(y)) * stride;
         var x = sx;
         while (x < ex) : (x += 1) {
-            _ = api().framebuffer_pixel.?(@intCast(x), @intCast(y), color);
+            const idx: usize = row_base + @as(usize, @intCast(x));
+            fb[idx] = color;
         }
     }
 }
@@ -399,11 +477,14 @@ fn draw_window_placeholder(win: window_slot_t, clip: c.gfx_rect_t) void {
 }
 
 fn draw_window_buffer(win: window_slot_t, buf: buffer_slot_t, clip: c.gfx_rect_t) bool {
+    if (g_fb_pixels == null) return false;
     const src_ptr_raw = api().shmem_map.?(buf.shmem_id);
     if (src_ptr_raw == null) return false;
     defer _ = api().shmem_unmap.?(buf.shmem_id);
 
     const src_pixels: [*]const u32 = @ptrCast(@alignCast(src_ptr_raw.?));
+    const dst_pixels = g_fb_pixels.?;
+    const dst_stride: usize = @intCast(g_fb_info.framebuffer_stride);
 
     var y: i32 = 0;
     while (y < clip.h) : (y += 1) {
@@ -416,8 +497,11 @@ fn draw_window_buffer(win: window_slot_t, buf: buffer_slot_t, clip: c.gfx_rect_t
             const sy: u32 = @intCast(sy_i32);
             if (sx >= buf.width or sy >= buf.height) continue;
             const idx_u64 = @as(u64, sy) * @as(u64, buf.width) + @as(u64, sx);
-            const idx: usize = @intCast(idx_u64);
-            _ = api().framebuffer_pixel.?(@intCast(clip.x + x), @intCast(clip.y + y), src_pixels[idx]);
+            const src_idx: usize = @intCast(idx_u64);
+            const dx: usize = @intCast(clip.x + x);
+            const dy: usize = @intCast(clip.y + y);
+            const dst_idx: usize = dy * dst_stride + dx;
+            dst_pixels[dst_idx] = src_pixels[src_idx];
         }
     }
     return true;
@@ -525,6 +609,7 @@ fn handle_destroy_window(msg: *const c.nd_ipc_message_t) void {
         return;
     }
     g_windows[slot_idx] = .{};
+    sync_console_mode_for_windows();
     _ = compose_full();
     reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
 }
@@ -672,6 +757,7 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
     }
 
     g_windows[window_idx].current_buffer_id = buffer_id;
+    sync_console_mode_for_windows();
 
     if (damage_count == 0 or damage_shmem_id == 0 or damage_count > GFX_MAX_DAMAGE_RECTS) {
         reply_with_status(msg, compose_full(), 0, 0, 0);
@@ -747,6 +833,7 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
     if (lookup_fb_endpoint() != 0) {
         logMsg("[gfx] fb endpoint unavailable\n");
     } else {
+        _ = lookup_vt_endpoint();
         log_fb_geometry_probe();
         logMsg("[test] gfx compositor handshake ok\n");
     }
@@ -756,6 +843,16 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
         g_fb_info.framebuffer_height != 0)
     {
         g_fb_info_valid = true;
+        const fb_size_u64: u64 = @as(u64, g_fb_info.framebuffer_stride) *
+            @as(u64, g_fb_info.framebuffer_height) * 4;
+        if (fb_size_u64 > 0 and fb_size_u64 <= 0xFFFF_FFFF) {
+            const fb_ptr = api().buffer_borrow.?(c.ND_BUFFER_KIND_FRAMEBUFFER, 0, c.ND_BUFFER_BORROW_READ | c.ND_BUFFER_BORROW_WRITE, @intCast(fb_size_u64));
+            if (fb_ptr != null) {
+                g_fb_pixels = @ptrCast(@alignCast(fb_ptr.?));
+            } else {
+                logMsg("[gfx] framebuffer borrow failed\n");
+            }
+        }
     }
 
     while (true) {

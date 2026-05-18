@@ -268,6 +268,24 @@ wasm_user_va_from_offset(uint32_t context_id,
     return 0;
 }
 
+static void
+wasm_linear_region_sync_size(mm_context_t *ctx, uint64_t required_size)
+{
+    if (!ctx || required_size == 0) {
+        return;
+    }
+    for (uint32_t i = 0; i < ctx->region_count; ++i) {
+        mem_region_t *region = &ctx->regions[i];
+        if (region->type != MEM_REGION_WASM_LINEAR) {
+            continue;
+        }
+        if (required_size > region->size) {
+            region->size = required_size;
+        }
+        return;
+    }
+}
+
 static int
 wasm_user_va_from_host_ptr(uint32_t context_id,
                            const uint8_t *mem_base,
@@ -1555,8 +1573,12 @@ m3ApiRawFunction(wasmos_framebuffer_map)
         m3ApiReturn(-1);
     }
     uint64_t virt = 0;
-    if (wasm_user_va_from_offset(proc->context_id, off32, map_size32, &virt) != 0 ||
-        mm_user_range_permitted(proc->context_id, virt, (uint64_t)map_size32, MEM_REGION_FLAG_WRITE) != 0) {
+    int va_rc = wasm_user_va_from_offset(proc->context_id, off32, map_size32, &virt);
+    int perm_rc = 0;
+    if (va_rc == 0) {
+        perm_rc = mm_user_range_permitted(proc->context_id, virt, (uint64_t)map_size32, MEM_REGION_FLAG_WRITE);
+    }
+    if (va_rc != 0 || perm_rc != 0) {
         m3ApiReturn(-1);
     }
     if ((virt & 0xFFFULL) != 0) {
@@ -1661,18 +1683,14 @@ m3ApiRawFunction(wasmos_shmem_map)
         m3ApiReturn(-1);
     }
 
-    for (uint64_t i = 0; i < shared_pages; ++i) {
-        uint64_t cur_virt = virt + (i * 0x1000ULL);
-        uint64_t cur_phys = phys_base + (i * 0x1000ULL);
-        (void)paging_unmap_4k_in_root(ctx->root_table, cur_virt);
-        if (paging_map_4k_in_root(ctx->root_table,
-                                  cur_virt,
-                                  cur_phys,
-                                  MEM_REGION_FLAG_READ |
-                                      MEM_REGION_FLAG_WRITE |
-                                      MEM_REGION_FLAG_USER) < 0) {
-            m3ApiReturn(-1);
-        }
+    if (mm_context_map_physical(proc->context_id,
+                                virt,
+                                phys_base,
+                                needed_size,
+                                MEM_REGION_FLAG_READ |
+                                    MEM_REGION_FLAG_WRITE |
+                                    MEM_REGION_FLAG_USER) != 0) {
+        m3ApiReturn(-1);
     }
 
     if (mm_shared_retain(proc->context_id, (uint32_t)id) != 0) {
@@ -1703,8 +1721,8 @@ m3ApiRawFunction(wasmos_shmem_map_auto)
 
     uint64_t phys_base = 0;
     uint64_t shared_pages = 0;
-    if (mm_shared_get_phys(proc->context_id, (uint32_t)id, &phys_base, &shared_pages) != 0 ||
-        shared_pages == 0) {
+    int get_phys_rc = mm_shared_get_phys(proc->context_id, (uint32_t)id, &phys_base, &shared_pages);
+    if (get_phys_rc != 0 || shared_pages == 0) {
         m3ApiReturn(-1);
     }
 
@@ -1715,6 +1733,7 @@ m3ApiRawFunction(wasmos_shmem_map_auto)
     }
 
     uint64_t mem_size = (uint64_t)m3_GetMemorySize(runtime);
+    wasm_linear_region_sync_size(ctx, mem_size);
     uint64_t off64 = 0;
     uint8_t found = 0;
     for (off64 = 0x4000ULL; off64 + map_size <= mem_size; off64 += 0x1000ULL) {
@@ -1725,7 +1744,7 @@ m3ApiRawFunction(wasmos_shmem_map_auto)
         if (mm_user_range_permitted(proc->context_id, probe_virt, (uint64_t)(uint32_t)map_size, MEM_REGION_FLAG_WRITE) != 0) {
             continue;
         }
-        if ((probe_virt & 0xFFFULL) != 0) {
+    if ((probe_virt & 0xFFFULL) != 0) {
             continue;
         }
         found = 1;
@@ -1740,6 +1759,7 @@ m3ApiRawFunction(wasmos_shmem_map_auto)
                 m3ApiReturn(-1);
             }
             mem_size = (uint64_t)m3_GetMemorySize(runtime);
+            wasm_linear_region_sync_size(ctx, mem_size);
             if (required > mem_size) {
                 m3ApiReturn(-1);
             }
@@ -1757,18 +1777,14 @@ m3ApiRawFunction(wasmos_shmem_map_auto)
         m3ApiReturn(-1);
     }
 
-    for (uint64_t i = 0; i < shared_pages; ++i) {
-        uint64_t cur_virt = virt + (i * 0x1000ULL);
-        uint64_t cur_phys = phys_base + (i * 0x1000ULL);
-        (void)paging_unmap_4k_in_root(ctx->root_table, cur_virt);
-        if (paging_map_4k_in_root(ctx->root_table,
-                                  cur_virt,
-                                  cur_phys,
-                                  MEM_REGION_FLAG_READ |
-                                      MEM_REGION_FLAG_WRITE |
-                                      MEM_REGION_FLAG_USER) < 0) {
-            m3ApiReturn(-1);
-        }
+    if (mm_context_map_physical(proc->context_id,
+                                virt,
+                                phys_base,
+                                needed_size,
+                                MEM_REGION_FLAG_READ |
+                                    MEM_REGION_FLAG_WRITE |
+                                    MEM_REGION_FLAG_USER) != 0) {
+        m3ApiReturn(-1);
     }
     if (mm_shared_retain(proc->context_id, (uint32_t)id) != 0) {
         m3ApiReturn(-1);

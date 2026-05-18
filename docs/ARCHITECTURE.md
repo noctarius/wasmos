@@ -28,6 +28,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - Graphics/compositor baseline now also includes typed compositor opcode
   dispatch and minimal window lifecycle handling (`CREATE_WINDOW` /
   `DESTROY_WINDOW`) with owner-checked state slots and `GFX_STATUS_*` replies.
+- Graphics/compositor baseline now also includes owner-checked
+  `PRESENT_WINDOW` handling with a deterministic software fallback compose path
+  (placeholder rectangle composition via framebuffer pixel API).
 - Process-manager runtime bookkeeping now grows on demand (`apps`, `waits`,
   and `services` use internal linked-list pools), removing fixed small slot
   caps from PM-managed state.

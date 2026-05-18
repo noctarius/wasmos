@@ -18,6 +18,15 @@ var g_proc_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_gfx_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_fb_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_next_window_id: u32 = 1;
+var g_fb_info: c.nd_framebuffer_info_t = .{
+    .framebuffer_base = 0,
+    .framebuffer_size = 0,
+    .framebuffer_width = 0,
+    .framebuffer_height = 0,
+    .framebuffer_stride = 0,
+    .framebuffer_reserved = 0,
+};
+var g_fb_info_valid: bool = false;
 
 const window_slot_t = struct {
     in_use: bool = false,
@@ -272,6 +281,82 @@ fn handle_destroy_window(msg: *const c.nd_ipc_message_t) void {
     reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
 }
 
+fn fill_rect(x0: u32, y0: u32, w: u32, h: u32, color: u32) void {
+    if (w == 0 or h == 0 or !g_fb_info_valid) {
+        return;
+    }
+    const max_w = g_fb_info.framebuffer_width;
+    const max_h = g_fb_info.framebuffer_height;
+    if (x0 >= max_w or y0 >= max_h) {
+        return;
+    }
+    const x1 = @min(x0 + w, max_w);
+    const y1 = @min(y0 + h, max_h);
+    var y = y0;
+    while (y < y1) : (y += 1) {
+        var x = x0;
+        while (x < x1) : (x += 1) {
+            _ = api().framebuffer_pixel.?(x, y, color);
+        }
+    }
+}
+
+fn compose_frame() i32 {
+    if (!g_fb_info_valid) {
+        return c.GFX_STATUS_IO;
+    }
+    const width = g_fb_info.framebuffer_width;
+    const height = g_fb_info.framebuffer_height;
+    const tile_w: u32 = if (width > 40) width / 2 else width;
+    const tile_h: u32 = if (height > 40) height / 2 else height;
+    const gap: u32 = 8;
+    var active_idx: u32 = 0;
+
+    fill_rect(0, 0, width, height, 0x101820);
+    var i: usize = 0;
+    while (i < g_windows.len) : (i += 1) {
+        if (!g_windows[i].in_use) {
+            continue;
+        }
+        const col = active_idx & 1;
+        const row = active_idx >> 1;
+        const origin_x = gap + col * tile_w;
+        const origin_y = gap + row * tile_h;
+        const max_w = if (tile_w > gap * 2) tile_w - gap * 2 else 1;
+        const max_h = if (tile_h > gap * 2) tile_h - gap * 2 else 1;
+        const draw_w = @min(g_windows[i].width, max_w);
+        const draw_h = @min(g_windows[i].height, max_h);
+        const tone = @as(u32, (g_windows[i].window_id * 37) & 0x7F);
+        const body_color = 0x203040 | (tone << 16) | ((tone >> 1) << 8);
+        fill_rect(origin_x, origin_y, draw_w, draw_h, body_color);
+        fill_rect(origin_x, origin_y, draw_w, 2, 0xE0E0E0);
+        fill_rect(origin_x, origin_y, 2, draw_h, 0xE0E0E0);
+        fill_rect(origin_x + draw_w - 2, origin_y, 2, draw_h, 0x707070);
+        fill_rect(origin_x, origin_y + draw_h - 2, draw_w, 2, 0x707070);
+        active_idx += 1;
+    }
+    return c.GFX_STATUS_OK;
+}
+
+fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
+    const window_id: u32 = msg.arg0;
+    if (window_id == 0) {
+        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        return;
+    }
+    const slot_idx = window_find_by_id(window_id) orelse {
+        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        return;
+    };
+    if (g_windows[slot_idx].owner_endpoint != msg.source) {
+        reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
+        return;
+    }
+    // TODO(gfx-phase1): Use client buffer IDs + damage rects from PRESENT
+    // payload for real blit/composition instead of placeholder rectangles.
+    reply_with_status(msg, compose_frame(), 0, 0, 0);
+}
+
 pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int, arg2: c_int, arg3: c_int) c_int {
     _ = arg2;
     _ = arg3;
@@ -305,6 +390,12 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
         log_fb_geometry_probe();
         logMsg("[test] gfx compositor handshake ok\n");
     }
+    if (api().framebuffer_info.?(&g_fb_info) == 0 and
+        g_fb_info.framebuffer_width != 0 and
+        g_fb_info.framebuffer_height != 0)
+    {
+        g_fb_info_valid = true;
+    }
 
     while (true) {
         var msg: c.nd_ipc_message_t = undefined;
@@ -324,6 +415,7 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
         switch (opcode) {
             c.GFX_IPC_CREATE_WINDOW => handle_create_window(&msg),
             c.GFX_IPC_DESTROY_WINDOW => handle_destroy_window(&msg),
+            c.GFX_IPC_PRESENT_WINDOW => handle_present_window(&msg),
             else => reply_unsupported(&msg),
         }
     }

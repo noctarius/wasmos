@@ -90,7 +90,7 @@ main(int argc, char **argv)
     int32_t damage_shmem_id;
     gfx_rect_t *damage;
 
-    if (proc_endpoint < 0 || reply_ep < 0) {
+    if (proc_endpoint <= 0 || reply_ep < 0) {
         puts("[test] gfx smoke setup failed");
         return 1;
     }

@@ -11,9 +11,9 @@ stack_pages = 16
 heap_pages = 16
 
 [ipc]
-required_endpoint_name = "-"
+required_endpoint_name = "proc"
 required_endpoint_rights = 0
-entry_arg_bindings = []
+entry_arg_bindings = ["proc.endpoint"]
 
 [[capabilities]]
 name = "ipc.basic"

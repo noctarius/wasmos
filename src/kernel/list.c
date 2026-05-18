@@ -104,6 +104,51 @@ list_alloc(list_t *list)
     return chunk->slots + 1;
 }
 
+int
+list_remove(list_t *list, void *elem)
+{
+    if (!list || !elem) {
+        return -1;
+    }
+    if (list->impl == LIST_IMPL_LINKED) {
+        list_linked_node_t *prev = 0;
+        list_linked_node_t *node = list->linked_head;
+        while (node) {
+            if ((void *)node->payload == elem) {
+                if (prev) {
+                    prev->next = node->next;
+                } else {
+                    list->linked_head = node->next;
+                }
+                free(node);
+                return 0;
+            }
+            prev = node;
+            node = node->next;
+        }
+        return -1;
+    }
+
+    uint32_t stride = list_array_stride(list);
+    list_array_chunk_t *chunk = list->array_head;
+    while (chunk) {
+        for (uint32_t i = 0; i < chunk->capacity; ++i) {
+            uint8_t *slot = list_array_slot_addr(chunk, stride, i);
+            if ((void *)(slot + 1) != elem) {
+                continue;
+            }
+            if (slot[0] == 0) {
+                return -1;
+            }
+            slot[0] = 0;
+            memset(slot + 1, 0, list->elem_size);
+            return 0;
+        }
+        chunk = chunk->next;
+    }
+    return -1;
+}
+
 void *
 list_first(list_t *list, list_iter_t *iter)
 {

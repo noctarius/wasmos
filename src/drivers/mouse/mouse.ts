@@ -126,6 +126,9 @@ function readAuxByte(): i32 {
     return -1;
   }
   if ((st & STATUS_AUX) == 0) {
+    /* Drain non-AUX (typically keyboard) bytes so we do not spin forever on
+     * a full output buffer that does not belong to the mouse stream. */
+    let _ = io_in8(CTRL_DATA_PORT);
     return -1;
   }
   return io_in8(CTRL_DATA_PORT) & 0xFF;

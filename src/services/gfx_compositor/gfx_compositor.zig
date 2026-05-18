@@ -330,10 +330,6 @@ fn buffer_alloc(owner_endpoint: u32, width: u32, height: u32) ?usize {
         logMsg("[gfx] alloc shmem_create failed\n");
         return null;
     }
-    if (mapped_ptr != null) {
-        _ = api().shmem_unmap.?(shmem_id);
-    }
-
     var owner_context_id: u32 = 0;
     if (api().ipc_endpoint_owner == null or
         api().ipc_endpoint_owner.?(owner_endpoint, &owner_context_id) != 0)

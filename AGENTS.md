@@ -156,7 +156,12 @@ This repository uses Codex CLI to assist with development. Follow these conventi
   failures like `Error deleting` and boot-config corruption.
 
 ## Testing Policy
-- Do not extend source-level unit tests that only assert term/word presence via
-  regex in files (string-presence checks without behavioral validation).
-- Existing string-presence tests are temporary and are expected to be cleaned
-  up/replaced over time; do not add new ones in this style.
+- Valid unit tests MUST verify runtime behavior, outputs, state transitions, or API contracts.
+- Unit tests MUST NOT use source-text presence assertions (for example regex/string matching
+  against repository files to check whether specific words, sentences, or lines still exist).
+  These tests are invalid because they are brittle and do not verify behavior.
+- Changes that do NOT affect runtime behavior do not require test execution. This includes
+  comment-only edits, typo fixes, pure documentation updates, symbol/function renames without
+  semantic changes, formatting-only changes, and other refactors that preserve behavior.
+- Do not add or extend source-text presence tests; existing ones are temporary and should be
+  cleaned up/replaced over time.

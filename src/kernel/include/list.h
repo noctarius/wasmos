@@ -38,6 +38,7 @@ typedef struct {
 int list_init(list_t *list, uint32_t elem_size, list_impl_t impl, uint32_t array_chunk_capacity);
 void list_destroy(list_t *list);
 void *list_alloc(list_t *list);
+int list_remove(list_t *list, void *elem);
 void *list_first(list_t *list, list_iter_t *iter);
 void *list_next(list_iter_t *iter);
 

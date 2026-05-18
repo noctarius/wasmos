@@ -14,7 +14,7 @@
 #define GFX_RESIZE_W 320
 #define GFX_RESIZE_H 180
 #define GFX_FRAME_COUNT 8
-#define GFX_HOLD_TICKS 180
+#define GFX_HOLD_TICKS 900
 
 typedef struct {
     int32_t status;

@@ -48,6 +48,10 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - Process-manager runtime bookkeeping now grows on demand (`apps`, `waits`,
   and `services` use internal linked-list pools), removing fixed small slot
   caps from PM-managed state.
+- Memory-management design now includes a phased migration plan to remove
+  duplicated hardcoded physical-window limits, introduce intent-based
+  allocation policy, and decouple kernel-internal allocations from DMA-style
+  low-address constraints.
 - Kernel dynamic container baseline now includes a centralized `list`
   interface with selectable backends (linked vs growable array-chunk);
   process-manager list backend selection is wired through Kconfig.

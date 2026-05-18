@@ -67,7 +67,9 @@ enum {
     GFX_EVENT_NONE = 0,
     GFX_EVENT_FOCUS_GAINED = 1,
     GFX_EVENT_FOCUS_LOST = 2,
-    GFX_EVENT_KEY = 3
+    GFX_EVENT_KEY = 3,
+    /* arg2 packs dx/dy as signed16: low16=dx high16=dy, arg3=button mask */
+    GFX_EVENT_POINTER = 4
 };
 
 typedef struct {

@@ -4,7 +4,7 @@ version = 1
 name = "gfx-compositor"
 entry = "initialize"
 kind = "service"
-native = false
+native = true
 
 [resources]
 stack_pages = 16

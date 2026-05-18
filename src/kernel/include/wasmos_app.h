@@ -12,7 +12,7 @@
 #define WASMOS_APP_FLAG_SERVICE    (1u << 1)
 #define WASMOS_APP_FLAG_APP        (1u << 2)
 #define WASMOS_APP_FLAG_NEEDS_PRIV (1u << 3)
-/* Native ELF payload; only valid when combined with FLAG_DRIVER. */
+/* Native ELF payload; valid for privileged service/driver payloads. */
 #define WASMOS_APP_FLAG_NATIVE     (1u << 4)
 #define WASMOS_APP_FLAG_STORAGE_BOOTSTRAP (1u << 5)
 

@@ -12,8 +12,9 @@
 #define PAGE_SIZE 4096
 #define GFX_W 64
 #define GFX_H 64
-#define GFX_RESIZE_W 80
-#define GFX_RESIZE_H 48
+#define GFX_RESIZE_W 160
+#define GFX_RESIZE_H 90
+#define GFX_FRAME_COUNT 8
 
 typedef struct {
     int32_t status;
@@ -22,12 +23,46 @@ typedef struct {
     int32_t arg3;
 } gfx_reply_t;
 
+static int32_t
+create_damage_rect_shmem(int32_t gfx_ep, int32_t width, int32_t height)
+{
+    int32_t shmem_id = wasmos_shmem_create(1, 0);
+    if (shmem_id <= 0) {
+        puts("[test] gfx smoke damage alloc failed");
+        return -1;
+    }
+    int32_t gfx_owner = wasmos_ipc_endpoint_owner(gfx_ep);
+    if (gfx_owner <= 0) {
+        puts("[test] gfx smoke damage owner failed");
+        return -1;
+    }
+    if (wasmos_shmem_grant(shmem_id, gfx_owner) != 0) {
+        puts("[test] gfx smoke damage grant failed");
+        return -1;
+    }
+    if (wasmos_shmem_map(shmem_id, BUFFER_PTR, PAGE_SIZE) != 0) {
+        puts("[test] gfx smoke damage map failed");
+        return -1;
+    }
+    gfx_rect_t *rect = (gfx_rect_t *)(uintptr_t)BUFFER_PTR;
+    rect->x = 0;
+    rect->y = 0;
+    rect->w = width;
+    rect->h = height;
+    if (wasmos_shmem_unmap(shmem_id) != 0) {
+        puts("[test] gfx smoke damage unmap failed");
+        return -1;
+    }
+    return shmem_id;
+}
+
 static int
 fill_pattern(int32_t shmem_id, int32_t width, int32_t height, int32_t stride_bytes, uint32_t phase)
 {
     int32_t byte_len = stride_bytes * height;
     int32_t map_len = (byte_len + (PAGE_SIZE - 1)) & ~(PAGE_SIZE - 1);
     if (wasmos_shmem_map(shmem_id, BUFFER_PTR, map_len) != 0) {
+        puts("[test] gfx smoke shmem map failed");
         return -1;
     }
     uint8_t *base = (uint8_t *)(uintptr_t)BUFFER_PTR;
@@ -40,7 +75,11 @@ fill_pattern(int32_t shmem_id, int32_t width, int32_t height, int32_t stride_byt
             row[x] = (0xFFu << 24) | (r << 16) | (g << 8) | b;
         }
     }
-    return wasmos_shmem_unmap(shmem_id);
+    if (wasmos_shmem_unmap(shmem_id) != 0) {
+        puts("[test] gfx smoke shmem unmap failed");
+        return -1;
+    }
+    return 0;
 }
 
 static int
@@ -92,6 +131,7 @@ main(int argc, char **argv)
     int32_t window_id;
     int32_t buffer_id;
     int32_t shmem_id;
+    int32_t damage_shmem_id;
     int32_t stride_bytes;
 
     if (proc_endpoint <= 0 || reply_ep < 0) {
@@ -162,15 +202,19 @@ main(int argc, char **argv)
     buffer_id = reply.arg1;
     shmem_id = reply.arg2;
     stride_bytes = reply.arg3;
+    damage_shmem_id = create_damage_rect_shmem(gfx_ep, GFX_RESIZE_W, GFX_RESIZE_H);
+    if (damage_shmem_id < 0) {
+        return 1;
+    }
 
     puts("[test] gfx smoke visible start");
-    for (uint32_t frame = 0; frame < 240u; ++frame) {
+    for (uint32_t frame = 0; frame < GFX_FRAME_COUNT; ++frame) {
         if (fill_pattern(shmem_id, GFX_RESIZE_W, GFX_RESIZE_H, stride_bytes, frame + 2u) != 0) {
             puts("[test] gfx smoke paint-loop failed");
             return 1;
         }
         if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW,
-                     window_id, buffer_id, 0, 0, &reply) != 0 ||
+                     window_id, buffer_id, 1, damage_shmem_id, &reply) != 0 ||
             reply.status != GFX_STATUS_OK) {
             puts("[test] gfx smoke present-loop failed");
             return 1;

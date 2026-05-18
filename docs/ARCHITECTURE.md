@@ -25,6 +25,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - Graphics/compositor Phase 0 scaffold (shared ABI constants and minimal
   native Zig `gfx-compositor` endpoint handshake path) is tracked in
   `docs/architecture/17-graphics-framebuffer-and-compositor.md`.
+- Graphics/compositor baseline now also includes typed compositor opcode
+  dispatch and minimal window lifecycle handling (`CREATE_WINDOW` /
+  `DESTROY_WINDOW`) with owner-checked state slots and `GFX_STATUS_*` replies.
 - Process-manager runtime bookkeeping now grows on demand (`apps`, `waits`,
   and `services` use internal linked-list pools), removing fixed small slot
   caps from PM-managed state.

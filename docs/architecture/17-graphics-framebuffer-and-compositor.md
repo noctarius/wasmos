@@ -333,8 +333,10 @@ Current implementation notes:
 - The service registers endpoint name `gfx`, resolves framebuffer endpoint
   `fb`, probes text geometry through existing `FBTEXT_IPC_GEOMETRY_REQ`, and
   emits `[test] gfx compositor handshake ok` on successful handshake.
-- App-facing command dispatch remains fail-closed/unsupported until Phase 1
-  parser + window state are implemented.
+- App-facing dispatch now validates ABI magic/version, decodes opcode, and
+  implements a minimal owner-checked window table for
+  `GFX_IPC_CREATE_WINDOW`/`GFX_IPC_DESTROY_WINDOW` with `GFX_STATUS_*`
+  replies; other opcodes remain fail-closed as unsupported.
 
 ### Phase 1: Single-Mode Software Composition
 

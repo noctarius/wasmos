@@ -9,11 +9,25 @@ const IPC_EMPTY: i32 = 1;
 const IPC_ENDPOINT_NONE: u32 = 0xFFFF_FFFF;
 const GFX_REQUEST_BASE: u32 = 0x7000;
 const GFX_FB_LOOKUP_RETRIES: u32 = 2048;
+const GFX_MAX_WINDOWS: usize = 32;
+const GFX_WINDOW_MIN_DIM: u32 = 1;
+const GFX_WINDOW_MAX_DIM: u32 = 8192;
 
 var g_api: ?*c.wasmos_driver_api_t = null;
 var g_proc_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_gfx_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_fb_endpoint: u32 = IPC_ENDPOINT_NONE;
+var g_next_window_id: u32 = 1;
+
+const window_slot_t = struct {
+    in_use: bool = false,
+    owner_endpoint: u32 = IPC_ENDPOINT_NONE,
+    window_id: u32 = 0,
+    width: u32 = 0,
+    height: u32 = 0,
+};
+
+var g_windows: [GFX_MAX_WINDOWS]window_slot_t = [_]window_slot_t{.{}} ** GFX_MAX_WINDOWS;
 
 fn api() *c.wasmos_driver_api_t {
     return g_api.?;
@@ -165,6 +179,10 @@ fn log_fb_geometry_probe() void {
 }
 
 fn reply_unsupported(msg: *const c.nd_ipc_message_t) void {
+    reply_with_status(msg, c.GFX_STATUS_UNSUPPORTED, 0, 0, 0);
+}
+
+fn reply_with_status(msg: *const c.nd_ipc_message_t, status: i32, arg1: u32, arg2: u32, arg3: u32) void {
     var resp: c.nd_ipc_message_t = undefined;
     if (msg.source == IPC_ENDPOINT_NONE or msg.request_id == 0) {
         return;
@@ -173,17 +191,85 @@ fn reply_unsupported(msg: *const c.nd_ipc_message_t) void {
     resp.source = g_gfx_endpoint;
     resp.destination = msg.source;
     resp.request_id = msg.request_id;
-    const status: i32 = c.GFX_STATUS_UNSUPPORTED;
     resp.arg0 = @bitCast(status);
-    resp.arg1 = 0;
-    resp.arg2 = 0;
-    resp.arg3 = 0;
+    resp.arg1 = arg1;
+    resp.arg2 = arg2;
+    resp.arg3 = arg3;
     _ = api().ipc_send.?(ctxId(), msg.source, &resp);
 }
 
 fn gfx_header_valid(magic: u32, ver_opcode: u32) bool {
     const version: u16 = @intCast(ver_opcode >> 16);
     return magic == c.GFX_IPC_ABI_MAGIC and version == c.GFX_IPC_ABI_VERSION;
+}
+
+fn gfx_header_opcode(ver_opcode: u32) u16 {
+    return @intCast(ver_opcode & 0xFFFF);
+}
+
+fn window_find_by_id(id: u32) ?usize {
+    var i: usize = 0;
+    while (i < g_windows.len) : (i += 1) {
+        if (g_windows[i].in_use and g_windows[i].window_id == id) {
+            return i;
+        }
+    }
+    return null;
+}
+
+fn window_alloc(owner_endpoint: u32, width: u32, height: u32) ?usize {
+    var i: usize = 0;
+    while (i < g_windows.len) : (i += 1) {
+        if (g_windows[i].in_use) {
+            continue;
+        }
+        g_windows[i].in_use = true;
+        g_windows[i].owner_endpoint = owner_endpoint;
+        g_windows[i].window_id = g_next_window_id;
+        g_windows[i].width = width;
+        g_windows[i].height = height;
+        g_next_window_id +%= 1;
+        if (g_next_window_id == 0) {
+            g_next_window_id = 1;
+        }
+        return i;
+    }
+    return null;
+}
+
+fn handle_create_window(msg: *const c.nd_ipc_message_t) void {
+    const width: u32 = msg.arg0;
+    const height: u32 = msg.arg1;
+    if (width < GFX_WINDOW_MIN_DIM or height < GFX_WINDOW_MIN_DIM or
+        width > GFX_WINDOW_MAX_DIM or height > GFX_WINDOW_MAX_DIM)
+    {
+        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        return;
+    }
+    const slot_idx = window_alloc(msg.source, width, height) orelse {
+        reply_with_status(msg, c.GFX_STATUS_BUSY, 0, 0, 0);
+        return;
+    };
+    const win = g_windows[slot_idx];
+    reply_with_status(msg, c.GFX_STATUS_OK, win.window_id, win.width, win.height);
+}
+
+fn handle_destroy_window(msg: *const c.nd_ipc_message_t) void {
+    const window_id: u32 = msg.arg0;
+    if (window_id == 0) {
+        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        return;
+    }
+    const slot_idx = window_find_by_id(window_id) orelse {
+        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        return;
+    };
+    if (g_windows[slot_idx].owner_endpoint != msg.source) {
+        reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
+        return;
+    }
+    g_windows[slot_idx] = .{};
+    reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
 }
 
 pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int, arg2: c_int, arg3: c_int) c_int {
@@ -234,6 +320,11 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
             reply_unsupported(&msg);
             continue;
         }
-        reply_unsupported(&msg);
+        const opcode = gfx_header_opcode(msg.arg3);
+        switch (opcode) {
+            c.GFX_IPC_CREATE_WINDOW => handle_create_window(&msg),
+            c.GFX_IPC_DESTROY_WINDOW => handle_destroy_window(&msg),
+            else => reply_unsupported(&msg),
+        }
     }
 }

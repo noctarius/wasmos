@@ -13,12 +13,29 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - Ring-3 strict isolation/hardening, threading phase rollout, DMA rollout,
   filesystem/PM service discovery, and CLI/runtime updates are tracked in the
   dedicated docs under `docs/architecture/`.
+- CLI `ps` process diagnostics now also expose runtime kind (`wasm` true/false
+  in table view and `wasm=true|false` annotations in tree view), sourced from
+  process-manager spawn metadata.
 - Threading is production-complete for the current single-core scope; final
   ABI/policy decisions and closure status are in
   `docs/architecture/15-threading-and-lifecycle.md` sections 15 and 17.
 - Recent threading runtime hardening (user-thread kernel-stack setup for
   `THREAD_CREATE` and syscall frame/context synchronization for yield/block
   paths) is documented in `docs/architecture/15-threading-and-lifecycle.md`.
+- Graphics/compositor Phase 0 scaffold (shared ABI constants and minimal
+  native Zig `gfx-compositor` endpoint handshake path) is tracked in
+  `docs/architecture/17-graphics-framebuffer-and-compositor.md`.
+- Process-manager runtime bookkeeping now grows on demand (`apps`, `waits`,
+  and `services` use internal linked-list pools), removing fixed small slot
+  caps from PM-managed state.
+- Kernel dynamic container baseline now includes a centralized `list`
+  interface with selectable backends (linked vs growable array-chunk);
+  process-manager list backend selection is wired through Kconfig.
+- Higher-level components may use C++, while low-level kernel boundaries stay
+  C/ASM. WASM C++ build policy is no exceptions/RTTI and explicit C ABI at
+  integration points.
+- Process-manager test injection hooks are now behind a dedicated Kconfig/CMake
+  switch (`WASMOS_PM_TEST_HOOKS`) and are no-op when disabled.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)
@@ -45,3 +62,13 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - Keep cross-document references consistent across `README.md`, `docs/TASKS.md`, and
   architecture docs.
 - Prefer appending concrete implementation notes over vague roadmap text.
+
+## C++ Policy
+- C++ is allowed for higher-level kernel subsystems, drivers, services, and apps.
+- Keep boot/handoff, arch traps/interrupt paths, paging/MM primitives, and syscall/hostcall ABI boundaries in C/ASM.
+- Enforce constrained C++ runtime usage for WASM modules:
+  - `-fno-exceptions`
+  - `-fno-rtti`
+  - `-fno-threadsafe-statics`
+  - `-fno-use-cxa-atexit`
+- Maintain C ABI compatibility at subsystem boundaries with `extern "C"` declarations in shared headers.

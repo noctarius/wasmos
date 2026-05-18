@@ -22,6 +22,9 @@
     virtual region through the native-driver API
   - paints a gradient on the standard QEMU VGA framebuffer when the device is present
 
+Native payload policy:
+- `FLAG_NATIVE` is valid for privileged module kinds (`FLAG_DRIVER` and `FLAG_SERVICE`).
+
 ### Implemented Services
 - `process-manager`
   - validates WASMOS-APP containers

@@ -33,13 +33,15 @@ It defines repository workflow and documentation/update conventions.
 - PM service registry for user-space endpoint discovery (`register`/`lookup`)
 - Usable VT/CLI stack with multi-TTY switching
 - CLI now includes `mount` command for active mount/device inspection
-- CLI `ps` now supports table/tree views (`ps`, `ps tree`, `ps all`) and includes per-process thread counts, memory footprint bytes, scheduler state, and cumulative CPU ticks
+- CLI `ps` now supports table/tree views (`ps`, `ps tree`, `ps all`) and includes per-process WASM runtime flag (`wasm` / `wasm=true|false`), thread counts, memory footprint bytes, scheduler state, and cumulative CPU ticks
 - CLI `cat` now uses regular libc file I/O against the current working directory (no dedicated root-cat FS IPC opcode)
 - libc now includes `listdir` (`FS_IPC_READDIR_REQ` + stream response handling) and language wrappers expose matching directory-read helpers (`ReadDir`/`read_dir`/`readDir`)
 - libc `read`/`write` now route stdio FDs (`0`/`1`/`2`) to console hostcalls
 - libc and language wrappers now provide line-oriented console input helpers (`readline`)
 - libc now includes process-manager metadata helper APIs in `wasmos/proc.h` (`PROC_IPC_MODULE_META` / `PROC_IPC_MODULE_META_PATH`)
 - kernel process-manager internals are now split into focused modules (`process_manager_buffers`, `process_manager_services`, `process_manager_spawn`) to keep lifecycle, registry, and buffer-borrow logic isolated
+- process-manager runtime bookkeeping (`apps`, `waits`, `services`) now grows on demand via internal linked-list pools instead of fixed small slot arrays
+- kernel now provides a shared dynamic list module (`list`) with pluggable backends (linked list and growable array-chunk); process-manager uses this interface and backend selection is configurable via Kconfig
 - kernel CPU implementation is now split into generic dispatch (`src/kernel/cpu.c`) and x86_64-specific internals (`src/kernel/arch/x86_64/cpu_x86_64.c`)
 - kernel IRQ implementation is now split into generic dispatch (`src/kernel/irq.c`) and x86_64-specific internals (`src/kernel/arch/x86_64/irq_x86_64.c`)
 - kernel init-process bootstrap state machine is now extracted into `src/kernel/kernel_init_runtime.c` (`kernel_init_entry`), reducing `kernel.c` orchestration surface
@@ -90,6 +92,7 @@ It defines repository workflow and documentation/update conventions.
 - Ring-3 fault-policy mixed-churn liveness marker remains enforced (`[test] ring3 mixed stress ok`)
 - Dedicated strict ring-3 multi-process fault-storm profile is available via `run-qemu-ring3-fault-storm-test` and asserts watchdog cleanliness/progress (`[test] ring3 watchdog clean ok`, `[test] sched progress ok`)
 - CLI integration target now isolates each QEMU session to a private ESP copy (`WASMOS_QEMU_ISOLATE_ESP=1`) and emits deterministic suite status marker (`[test] cli suite status ok`)
+- Graphics Phase 0 scaffold is now in-tree: shared compositor/display IPC ABI constants (`wasmos/gfx_ipc.h`), a native Zig `gfx-compositor` service that registers `gfx`, probes framebuffer text geometry, and emits handshake marker (`[test] gfx compositor handshake ok`) when `fb` is reachable
 - Ring-3 smoke includes shared-memory owner/grant/revoke isolation checks (kernel and user-space app-pair paths)
 - Shared-memory app-pair smoke now also checks forged-ID deny, map-argument policy deny, and post-revoke stale-ID deny
 - Strict ring3 boot smoke now includes a kernel-level shared-memory misuse matrix marker (`[test] ring3 shmem misuse matrix ok`)
@@ -145,6 +148,7 @@ Notes:
 - Current Kconfig symbols cover the core toggles already used by CMake:
   language example switches, tracing/ring3 smoke flags, kernel target triple,
   and QEMU GDB port.
+  It also includes `WASMOS_PM_TEST_HOOKS` for process-manager test injection hooks.
 
 If tool autodiscovery fails:
 ```sh
@@ -165,6 +169,24 @@ cmake -S . -B build \
   -DOVMF_VARS=/path/to/OVMF_VARS.fd
 ```
 
+### C++ Usage
+- C++ is supported for higher-level kernel, driver, service, and app code.
+- Low-level boot/arch/interrupt/memory-management and ABI boundary code stays C/ASM.
+- WASM C++ modules are built with `-fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-use-cxa-atexit`.
+- Keep kernel/syscall/hostcall interfaces C ABI stable (`extern "C"` at boundaries).
+- Prefer "C with classes" style and explicit ownership; avoid hidden runtime-heavy patterns.
+
+WASM C++ app target helper:
+```cmake
+wasmos_add_wasm_cpp_app_target(my_cpp_app
+  SOURCE ${CMAKE_SOURCE_DIR}/examples/cpp/my_app.cpp
+  OUTPUT_WASM ${BUILD_DIR}/my_app.wasm
+  OUTPUT_APP ${BUILD_DIR}/my_app.wap
+  MANIFEST ${CMAKE_SOURCE_DIR}/examples/cpp/my_app.manifest.toml
+  EXPORT wasmos_main
+)
+```
+
 ### Build
 ```sh
 cmake --build build --target bootloader
@@ -181,6 +203,7 @@ cmake --build build --target run-qemu-ui-test
 
 ### Test
 ```sh
+cmake --build build --target run-kernel-unit-tests
 cmake --build build --target run-qemu-test
 cmake --build build --target run-qemu-cli-test
 cmake --build build --target run-qemu-ring3-test

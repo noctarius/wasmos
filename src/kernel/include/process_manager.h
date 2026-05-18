@@ -6,6 +6,10 @@
 #include "process.h"
 #include "wasmos_driver_abi.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define PM_BUFFER_KIND_FILESYSTEM 1u
 #define PM_BUFFER_KIND_FRAMEBUFFER 2u
 
@@ -48,5 +52,9 @@ void process_manager_inject_kill_owner_deny_test(void);
 void process_manager_inject_status_owner_deny_test(void);
 void process_manager_inject_spawn_owner_deny_test(void);
 process_run_result_t process_manager_entry(process_t *process, void *arg);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

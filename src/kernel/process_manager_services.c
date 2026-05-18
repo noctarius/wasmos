@@ -75,15 +75,18 @@ int
 pm_service_set(const char *name, uint32_t endpoint, uint32_t owner_context_id)
 {
     pm_service_entry_t *empty = 0;
-    for (uint32_t i = 0; i < PM_SERVICE_REGISTRY_CAP; ++i) {
-        pm_service_entry_t *entry = &g_pm.services[i];
+    list_iter_t it;
+    pm_service_entry_t *entry = (pm_service_entry_t *)list_first(&g_pm.services, &it);
+    while (entry) {
         if (!entry->in_use) {
             if (!empty) {
                 empty = entry;
             }
+            entry = (pm_service_entry_t *)list_next(&it);
             continue;
         }
         if (strcmp(entry->name, name) != 0) {
+            entry = (pm_service_entry_t *)list_next(&it);
             continue;
         }
         if (entry->owner_context_id != owner_context_id) {
@@ -93,7 +96,10 @@ pm_service_set(const char *name, uint32_t endpoint, uint32_t owner_context_id)
         return 0;
     }
     if (!empty) {
-        return -1;
+        empty = (pm_service_entry_t *)list_alloc(&g_pm.services);
+        if (!empty) {
+            return -1;
+        }
     }
     empty->in_use = 1;
     empty->endpoint = endpoint;
@@ -110,13 +116,13 @@ pm_service_set(const char *name, uint32_t endpoint, uint32_t owner_context_id)
 uint32_t
 pm_service_lookup(const char *name)
 {
-    for (uint32_t i = 0; i < PM_SERVICE_REGISTRY_CAP; ++i) {
-        if (!g_pm.services[i].in_use) {
-            continue;
+    list_iter_t it;
+    pm_service_entry_t *entry = (pm_service_entry_t *)list_first(&g_pm.services, &it);
+    while (entry) {
+        if (entry->in_use && strcmp(entry->name, name) == 0) {
+            return entry->endpoint;
         }
-        if (strcmp(g_pm.services[i].name, name) == 0) {
-            return g_pm.services[i].endpoint;
-        }
+        entry = (pm_service_entry_t *)list_next(&it);
     }
     return IPC_ENDPOINT_NONE;
 }

@@ -23,7 +23,7 @@ typedef struct {
 
 typedef struct {
     uint8_t in_use;
-    int32_t source;
+    int32_t context_id;
     fs_mount_t mount;
     int32_t backend_endpoint;
     uint16_t mount_depth;
@@ -140,16 +140,28 @@ static void pack_name(const char *name, int32_t *arg0, int32_t *arg1, int32_t *a
     *arg3 = (int32_t)packed[3];
 }
 
-static fs_client_state_t *client_state(int32_t source) {
+static fs_client_state_t *
+client_state_lookup(int32_t context_id)
+{
     for (uint32_t i = 0; i < FS_CLIENT_CAP; ++i) {
-        if (g_clients[i].in_use && g_clients[i].source == source) {
+        if (g_clients[i].in_use && g_clients[i].context_id == context_id) {
             return &g_clients[i];
         }
+    }
+    return 0;
+}
+
+static fs_client_state_t *
+client_state(int32_t context_id)
+{
+    fs_client_state_t *state = client_state_lookup(context_id);
+    if (state) {
+        return state;
     }
     for (uint32_t i = 0; i < FS_CLIENT_CAP; ++i) {
         if (!g_clients[i].in_use) {
             g_clients[i].in_use = 1;
-            g_clients[i].source = source;
+            g_clients[i].context_id = context_id;
             g_clients[i].mount = FS_MOUNT_ROOT;
             g_clients[i].backend_endpoint = -1;
             g_clients[i].mount_depth = 0;
@@ -331,6 +343,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
         int32_t type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
         int32_t request_id = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
         int32_t source = wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE);
+        int32_t source_owner = wasmos_ipc_endpoint_owner(source);
         int32_t arg0 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
         int32_t arg1f = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
         int32_t arg2f = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
@@ -347,9 +360,138 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             continue;
         }
 
-        fs_client_state_t *state = client_state(source);
+        if (type == FSMGR_IPC_CLONE_CWD_REQ) {
+            fs_client_state_t *src_state = 0;
+            fs_client_state_t *dst_state = 0;
+            int32_t src_context_id = arg0;
+            int32_t dst_context_id = arg1f;
+            int32_t proc_owner = wasmos_ipc_endpoint_owner(g_proc_endpoint);
+            if (source_owner <= 0 ||
+                proc_owner <= 0 ||
+                source_owner != proc_owner ||
+                src_context_id <= 0 ||
+                dst_context_id <= 0) {
+                (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
+                continue;
+            }
+            src_state = client_state(src_context_id);
+            dst_state = client_state(dst_context_id);
+            if (!src_state || !dst_state) {
+                (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
+                continue;
+            }
+            dst_state->mount = src_state->mount;
+            dst_state->backend_endpoint = src_state->backend_endpoint;
+            dst_state->mount_depth = src_state->mount_depth;
+            (void)wasmos_ipc_send(source, g_fs_endpoint, FSMGR_IPC_CLONE_CWD_RESP, request_id, 0, 0, 0, 0);
+            continue;
+        }
+
+        if (source_owner <= 0) {
+            (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
+            continue;
+        }
+
+        fs_client_state_t *state = client_state(source_owner);
         if (!state) {
             (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
+            continue;
+        }
+
+        if (type == FS_IPC_READ_PATH_REQ) {
+            int32_t backend = state->backend_endpoint;
+            int32_t resp_type = FS_IPC_ERROR;
+            int32_t r0 = -1, r1 = 0, r2 = 0, r3 = 0;
+            int32_t open_t = FS_IPC_ERROR, open0 = -1, open1 = 0, open2 = 0, open3 = 0;
+            int32_t read_t = FS_IPC_ERROR, read0 = -1, read1 = 0, read2 = 0, read3 = 0;
+            int32_t close_t = FS_IPC_ERROR, close0 = -1, close1 = 0, close2 = 0, close3 = 0;
+            int32_t fd = -1;
+            int32_t path_len = arg0;
+            int32_t fs_buf_size = wasmos_fs_buffer_size();
+            uint8_t scratch[256];
+
+            if (path_len <= 0 ||
+                path_len >= fs_buf_size ||
+                path_len >= (int32_t)sizeof(scratch)) {
+                (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
+                continue;
+            }
+            if (backend < 0) {
+                fs_backend_t *fallback_boot = backend_first_of_kind(FSMGR_BACKEND_BOOT);
+                backend = fallback_boot ? fallback_boot->endpoint : -1;
+            }
+            if (backend < 0) {
+                (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
+                continue;
+            }
+            if (wasmos_buffer_borrow(WASMOS_BUFFER_KIND_FS,
+                                     source,
+                                     WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE) != 0) {
+                (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
+                continue;
+            }
+            if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)scratch, path_len, 0) != 0) {
+                (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_FS);
+                (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
+                continue;
+            }
+            if (scratch[0] != '/') {
+                (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_FS);
+                (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
+                continue;
+            }
+            if (wasmos_buffer_release(WASMOS_BUFFER_KIND_FS) != 0) {
+                (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
+                continue;
+            }
+            if (wasmos_fs_buffer_write((int32_t)(uintptr_t)scratch, path_len, 0) != 0) {
+                (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
+                continue;
+            }
+            if (forward_request(backend, FS_IPC_OPEN_REQ, request_id, path_len, 0, 0, 0,
+                                source, &open_t, &open0, &open1, &open2, &open3) != 0 ||
+                open_t != FS_IPC_RESP || open0 < 0) {
+                (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
+                continue;
+            }
+            fd = open0;
+            if (forward_request(backend, FS_IPC_READ_REQ, request_id, fd, fs_buf_size, 0, 0,
+                                source, &read_t, &read0, &read1, &read2, &read3) != 0 ||
+                read_t != FS_IPC_RESP || read0 <= 0 || read0 > fs_buf_size) {
+                (void)forward_request(backend, FS_IPC_CLOSE_REQ, request_id, fd, 0, 0, 0,
+                                      source, &close_t, &close0, &close1, &close2, &close3);
+                (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
+                continue;
+            }
+            (void)forward_request(backend, FS_IPC_CLOSE_REQ, request_id, fd, 0, 0, 0,
+                                  source, &close_t, &close0, &close1, &close2, &close3);
+            {
+                int32_t copied = 0;
+                while (copied < read0) {
+                    int32_t chunk = read0 - copied;
+                    if (chunk > (int32_t)sizeof(scratch)) {
+                        chunk = (int32_t)sizeof(scratch);
+                    }
+                    if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)scratch, chunk, copied) != 0) {
+                        (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
+                        goto read_path_done;
+                    }
+                    if (wasmos_buffer_borrow(WASMOS_BUFFER_KIND_FS, source, WASMOS_BUFFER_GRANT_WRITE) != 0) {
+                        (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
+                        goto read_path_done;
+                    }
+                    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)scratch, chunk, copied) != 0 ||
+                        wasmos_buffer_release(WASMOS_BUFFER_KIND_FS) != 0) {
+                        (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
+                        goto read_path_done;
+                    }
+                    copied += chunk;
+                }
+            }
+            resp_type = FS_IPC_RESP;
+            r0 = read0;
+            (void)wasmos_ipc_send(source, g_fs_endpoint, resp_type, request_id, r0, r1, r2, r3);
+read_path_done:
             continue;
         }
 

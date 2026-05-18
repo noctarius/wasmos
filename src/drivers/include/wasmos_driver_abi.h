@@ -34,6 +34,10 @@ enum {
      * arg0=module_index arg1=user_ptr(wasmos_spawn_caps_v2_t + windows[])
      * arg2=payload_size_bytes arg3=reserved(0). */
     PROC_IPC_SPAWN_CAPS_V2 = 0x208,
+    /* Spawn from explicit app path:
+     * caller must place path bytes at FS buffer offset 0.
+     * arg0=reserved(0) arg1=path_len arg2=reserved arg3=reserved. */
+    PROC_IPC_SPAWN_PATH = 0x209,
     PROC_IPC_RESP = 0x280,
     PROC_IPC_ERROR = 0x2FF
 };
@@ -81,6 +85,7 @@ enum {
     FS_IPC_READDIR_REQ = 0x410,
     FS_IPC_CHDIR_REQ = 0x412,
     FS_IPC_READ_APP_REQ = 0x413,
+    FS_IPC_READ_PATH_REQ = 0x414,
     FS_IPC_RESP = 0x480,
     FS_IPC_STREAM = 0x481,
     FS_IPC_ERROR = 0x4FF
@@ -88,7 +93,9 @@ enum {
 
 enum {
     FSMGR_IPC_REGISTER_BACKEND_REQ = 0x420,
-    FSMGR_IPC_REGISTER_BACKEND_RESP = 0x4A0
+    FSMGR_IPC_CLONE_CWD_REQ = 0x421,
+    FSMGR_IPC_REGISTER_BACKEND_RESP = 0x4A0,
+    FSMGR_IPC_CLONE_CWD_RESP = 0x4A1
 };
 
 enum {

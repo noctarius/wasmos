@@ -653,6 +653,7 @@ static void process_reset_slot(process_t *proc) {
     proc->is_idle = 0;
     proc->in_hostcall = 0;
     proc->auto_reap = 0;
+    proc->is_wasm = 0;
     proc->ctx = (process_context_t){0};
     proc->ctx_canary_pre = 0;
     proc->ctx_canary_post = 0;
@@ -949,6 +950,7 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
     slot->ticks_total = 0;
     slot->ctx_canary_pre = PROCESS_CTX_CANARY_VALUE;
     slot->ctx_canary_post = PROCESS_CTX_CANARY_VALUE;
+    slot->is_wasm = 0;
     slot->entry = entry;
     slot->arg = arg;
     if (process_copy_name(slot, name ? name : "") != 0) {
@@ -1048,6 +1050,7 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
     slot->ticks_total = 0;
     slot->ctx_canary_pre = PROCESS_CTX_CANARY_VALUE;
     slot->ctx_canary_post = PROCESS_CTX_CANARY_VALUE;
+    slot->is_wasm = 0;
     slot->entry = entry;
     slot->arg = arg;
     if (process_copy_name(slot, name ? name : "") != 0) {
@@ -2060,6 +2063,7 @@ process_info_at_stats(uint32_t index,
             *out_name = proc->name ? proc->name : "";
             out_stats->state = (uint32_t)proc->state;
             out_stats->block_reason = (uint32_t)proc->block_reason;
+            out_stats->is_wasm = (uint32_t)proc->is_wasm;
             out_stats->thread_count = proc->thread_count;
             out_stats->live_thread_count = proc->live_thread_count;
             out_stats->current_tid =
@@ -2082,6 +2086,17 @@ process_info_at_stats(uint32_t index,
         current++;
     }
     return -1;
+}
+
+int
+process_set_runtime_is_wasm(uint32_t pid, uint8_t is_wasm)
+{
+    process_t *proc = process_get(pid);
+    if (!proc) {
+        return -1;
+    }
+    proc->is_wasm = is_wasm ? 1u : 0u;
+    return 0;
 }
 static void
 process_sched_invariant_fail(const char *msg, uint64_t a, uint64_t b)

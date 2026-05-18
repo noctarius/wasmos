@@ -4,6 +4,10 @@
 #include <stddef.h>
 #include <stdarg.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct {
     int fd;
     int mode;
@@ -35,5 +39,9 @@ long ftell(FILE *stream);
 int feof(FILE *stream);
 int ferror(FILE *stream);
 void clearerr(FILE *stream);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

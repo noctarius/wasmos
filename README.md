@@ -168,6 +168,24 @@ cmake -S . -B build \
   -DOVMF_VARS=/path/to/OVMF_VARS.fd
 ```
 
+### C++ Usage
+- C++ is supported for higher-level kernel, driver, service, and app code.
+- Low-level boot/arch/interrupt/memory-management and ABI boundary code stays C/ASM.
+- WASM C++ modules are built with `-fno-exceptions -fno-rtti -fno-threadsafe-statics -fno-use-cxa-atexit`.
+- Keep kernel/syscall/hostcall interfaces C ABI stable (`extern "C"` at boundaries).
+- Prefer "C with classes" style and explicit ownership; avoid hidden runtime-heavy patterns.
+
+WASM C++ app target helper:
+```cmake
+wasmos_add_wasm_cpp_app_target(my_cpp_app
+  SOURCE ${CMAKE_SOURCE_DIR}/examples/cpp/my_app.cpp
+  OUTPUT_WASM ${BUILD_DIR}/my_app.wasm
+  OUTPUT_APP ${BUILD_DIR}/my_app.wap
+  MANIFEST ${CMAKE_SOURCE_DIR}/examples/cpp/my_app.manifest.toml
+  EXPORT wasmos_main
+)
+```
+
 ### Build
 ```sh
 cmake --build build --target bootloader

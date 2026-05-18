@@ -3,6 +3,10 @@
 
 #include "wasmos/imports.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define WASMOS_BUFFER_KIND_FS 1
 #define WASMOS_BUFFER_GRANT_READ 0x1
 #define WASMOS_BUFFER_GRANT_WRITE 0x2
@@ -188,4 +192,9 @@ extern int32_t wasmos_input_push(int32_t ch)
     WASMOS_WASM_IMPORT("wasmos", "input_push");
 extern int32_t wasmos_input_read(void)
     WASMOS_WASM_IMPORT("wasmos", "input_read");
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif

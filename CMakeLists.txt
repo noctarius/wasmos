@@ -244,8 +244,17 @@ endif ()
 set(CLANG ${CLANG_PATH} CACHE STRING "C compiler for freestanding/UEFI builds" FORCE)
 set(CMAKE_C_COMPILER ${CLANG} CACHE FILEPATH "Use LLVM clang for all C builds" FORCE)
 set(CMAKE_ASM_COMPILER ${CLANG} CACHE FILEPATH "Use LLVM clang for all ASM builds" FORCE)
+get_filename_component(CLANG_BIN_DIR ${CLANG} DIRECTORY)
+find_program(CLANGXX_PATH clang++ HINTS ${CLANG_BIN_DIR} ${LLVM_HINTS} NO_DEFAULT_PATH)
+if (NOT CLANGXX_PATH)
+  find_program(CLANGXX_PATH clang++)
+endif ()
+if (NOT CLANGXX_PATH)
+  message(FATAL_ERROR "clang++ not found. Install LLVM clang++ for C++ WASM modules.")
+endif ()
+set(CMAKE_CXX_COMPILER ${CLANGXX_PATH} CACHE FILEPATH "Use LLVM clang++ for all C++ builds" FORCE)
 
-project(wasmos C ASM)
+project(wasmos C CXX ASM)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 include(CMakeParseArguments)
 
@@ -352,6 +361,87 @@ function(wasmos_add_wasm_c_app_target target_name)
     SOURCES ${WASMOS_APP_SOURCE}
     INCLUDES ${LIBC_DIR}/include ${DRIVER_WASM_DIR}/include
   )
+endfunction()
+
+function(wasmos_add_wasm_cpp_app_target target_name)
+  set(options NO_BUILTIN)
+  set(oneValueArgs SOURCE OUTPUT_WASM OUTPUT_APP MANIFEST EXPORT STACK_SIZE INITIAL_MEMORY MAX_MEMORY BUILD_COMMENT PACK_COMMENT)
+  cmake_parse_arguments(WASMOS_APP "${options}" "${oneValueArgs}" "" ${ARGN})
+
+  if (NOT WASMOS_APP_SOURCE OR NOT WASMOS_APP_OUTPUT_WASM OR NOT WASMOS_APP_OUTPUT_APP OR
+      NOT WASMOS_APP_MANIFEST OR NOT WASMOS_APP_EXPORT)
+    message(FATAL_ERROR "wasmos_add_wasm_cpp_app_target(${target_name}) requires SOURCE, OUTPUT_WASM, OUTPUT_APP, MANIFEST, EXPORT")
+  endif ()
+
+  set(_wasmos_extra_flags ${WASMOS_WASM_CXX_FLAGS})
+  if (WASMOS_APP_NO_BUILTIN)
+    list(APPEND _wasmos_extra_flags -fno-builtin)
+  endif ()
+
+  set(_stack_size 4096)
+  if (WASMOS_APP_STACK_SIZE)
+    set(_stack_size ${WASMOS_APP_STACK_SIZE})
+  endif ()
+  set(_initial_memory 65536)
+  if (WASMOS_APP_INITIAL_MEMORY)
+    set(_initial_memory ${WASMOS_APP_INITIAL_MEMORY})
+  endif ()
+  set(_max_memory 65536)
+  if (WASMOS_APP_MAX_MEMORY)
+    set(_max_memory ${WASMOS_APP_MAX_MEMORY})
+  endif ()
+
+  set(_build_comment "Building wasm C++ module")
+  if (WASMOS_APP_BUILD_COMMENT)
+    set(_build_comment ${WASMOS_APP_BUILD_COMMENT})
+  endif ()
+  set(_pack_comment "Packing wasm C++ as WASMOS-APP")
+  if (WASMOS_APP_PACK_COMMENT)
+    set(_pack_comment ${WASMOS_APP_PACK_COMMENT})
+  endif ()
+
+  add_custom_command(
+    OUTPUT ${WASMOS_APP_OUTPUT_WASM}
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+    COMMAND ${CMAKE_CXX_COMPILER} --target=wasm32 -Oz -nostdlib
+            ${_wasmos_extra_flags}
+            ${WASMOS_TRACE_DEFINE}
+            -Wl,--no-entry -Wl,--strip-all
+            -Wl,-z,stack-size=${_stack_size}
+            -Wl,--initial-memory=${_initial_memory}
+            -Wl,--max-memory=${_max_memory}
+            -Wl,--allow-undefined
+            -Wl,--export=${WASMOS_APP_EXPORT}
+            -I${LIBC_DIR}/include
+            -I${DRIVER_WASM_DIR}/include
+            ${WASMOS_LIBC_C_SOURCES}
+            ${WASMOS_APP_SOURCE}
+            -o ${WASMOS_APP_OUTPUT_WASM}
+    DEPENDS ${WASMOS_APP_SOURCE} ${WASMOS_LIBC_C_SOURCES} ${WASMOS_LIBC_INCLUDE_DEPS}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT ${_build_comment}
+    VERBATIM
+  )
+
+  add_custom_command(
+    OUTPUT ${WASMOS_APP_OUTPUT_APP}
+    COMMAND ${WASMOS_APP_PACKER}
+            --manifest ${WASMOS_APP_MANIFEST}
+            --in ${WASMOS_APP_OUTPUT_WASM}
+            --out ${WASMOS_APP_OUTPUT_APP}
+    DEPENDS ${WASMOS_APP_OUTPUT_WASM} make_wasmos_app ${WASMOS_APP_MANIFEST}
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT ${_pack_comment}
+    VERBATIM
+  )
+
+  add_custom_target(${target_name}
+    DEPENDS ${WASMOS_APP_OUTPUT_APP}
+    SOURCES ${WASMOS_APP_SOURCE} ${WASMOS_APP_MANIFEST}
+  )
+
+  set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASMOS_APP_OUTPUT_APP})
+  set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS ${target_name})
 endfunction()
 
 function(wasmos_add_native_c_app_target target_name)
@@ -461,6 +551,15 @@ endif ()
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+set(WASMOS_WASM_CXX_FLAGS
+  -fno-exceptions
+  -fno-rtti
+  -fno-threadsafe-statics
+  -fno-use-cxa-atexit
+)
 
 set(INITFS_TOML ${CMAKE_SOURCE_DIR}/scripts/initfs.toml)
 set(INITFS_IMG ${BUILD_DIR}/initfs.img)

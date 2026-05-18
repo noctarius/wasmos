@@ -6,6 +6,10 @@
 #include "wasmos/api.h"
 #include "wasmos_driver_abi.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #ifndef WASMOS_IPC_ERR_FULL
 #define WASMOS_IPC_ERR_FULL (-3)
 #endif
@@ -240,5 +244,9 @@ wasmos_svc_lookup(int32_t proc_endpoint,
     }
     return (int32_t)endpoint_raw;
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

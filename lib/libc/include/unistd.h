@@ -5,6 +5,10 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
@@ -21,5 +25,9 @@ int stat(const char *path, struct stat *st);
 int unlink(const char *path);
 int rmdir(const char *path);
 ssize_t listdir(char *buf, size_t count);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

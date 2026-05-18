@@ -336,6 +336,8 @@ Current implementation notes:
 - App-facing dispatch now validates ABI magic/version, decodes opcode, and
   implements owner-checked window lifecycle handling for
   `GFX_IPC_CREATE_WINDOW`/`GFX_IPC_DESTROY_WINDOW`/`GFX_IPC_RESIZE_WINDOW`.
+  Current dispatch accepts canonical opcode-in-`type` requests and still
+  accepts header-packed create requests for compatibility.
 - Baseline `GFX_IPC_ALLOC_SHARED_BUFFER` is now wired and returns opaque random
   32-bit `buffer_id` handles backed by shmem allocations plus stride metadata.
 - Baseline `GFX_IPC_RELEASE_SHARED_BUFFER` is now wired: it invalidates the
@@ -348,6 +350,9 @@ Current implementation notes:
 - Software composition now performs clipped dirty-region redraw in stable
   z-order and repaints overlap with higher-z windows; missing/invalid damage
   payloads fail closed to full-frame redraw.
+- A wasm smoke client now exists at `examples/c/gfx_smoke/gfx_smoke.c` and is
+  copied to `/boot/apps/gfx_smoke.wap` for manual CLI launch (`exec
+  /boot/apps/gfx_smoke`), avoiding automatic startup overlap with VT/CLI.
 
 ### Phase 1: Single-Mode Software Composition
 

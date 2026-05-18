@@ -4,6 +4,7 @@ add_subdirectory(fs_fat)
 add_subdirectory(fs_init)
 add_subdirectory(serial)
 add_subdirectory(keyboard)
+add_subdirectory(mouse)
 add_subdirectory(framebuffer)
 
 add_custom_target(drivers DEPENDS
@@ -12,6 +13,7 @@ add_custom_target(drivers DEPENDS
   fs_init_app
   serial_app
   keyboard_app
+  mouse_app
   framebuffer_app
   chardev_driver_blob
 )

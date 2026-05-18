@@ -2,13 +2,13 @@ package main
 
 func Main(args []string) int32 {
 	_ = args
-	const path = "/go-long-file-check.txt"
+	const path = "go-long-file-check.txt"
 	content := []byte("go shim long filename\n")
 	_ = std.Puts("Hello from Go on WASMOS!\n")
 	_ = std.Puts("This is a tiny WASMOS-APP written in Go.\n")
 	_ = std.Printf("Entry: main\n")
 
-	file, err := fs.OpenRead("/startup.nsh")
+	file, err := fs.OpenRead("/boot/startup.nsh")
 	if err != ErrOK {
 		_ = std.Puts("startup.nsh readable: false\n")
 		return 0

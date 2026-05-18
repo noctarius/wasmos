@@ -5,10 +5,10 @@ var printed: bool = false;
 
 pub fn main() u8 {
     if (!printed) {
-        const path = "/zig-long-file-check.txt";
+        const path = "zig-long-file-check.txt";
         const content = "zig shim long filename\n";
         var long_file_ok = false;
-        var file = wasmos.fs.openRead("/startup.nsh") catch |err| {
+        var file = wasmos.fs.openRead("/boot/startup.nsh") catch |err| {
             printed = true;
             _ = wasmos.stdlib.println("Hello from Zig on WASMOS!", .{}) catch {};
             _ = wasmos.stdlib.println("This is a tiny WASMOS-APP written in Zig.", .{}) catch {};

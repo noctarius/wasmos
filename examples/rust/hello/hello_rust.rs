@@ -12,7 +12,7 @@ fn panic(_info: &PanicInfo) -> ! {
 
 fn main(_args: &[&str]) -> i32 {
     static mut PRINTED: bool = false;
-    const PATH: &str = "/rust-long-file-check.txt";
+    const PATH: &str = "rust-long-file-check.txt";
     const CONTENT: &[u8] = b"rust shim long filename\n";
 
     unsafe {

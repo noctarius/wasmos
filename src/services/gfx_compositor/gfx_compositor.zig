@@ -20,6 +20,7 @@ const CHROME_BORDER: i32 = 1;
 const CHROME_TITLE_H: i32 = 14;
 const CHROME_CLOSE_SZ: i32 = 10;
 const CHROME_CLOSE_PAD: i32 = 2;
+const CHROME_CLOSE_HIT_W: i32 = 24;
 
 var g_api: ?*c.wasmos_driver_api_t = null;
 var g_proc_endpoint: u32 = IPC_ENDPOINT_NONE;
@@ -32,6 +33,7 @@ var g_overlay_locked: bool = false;
 var g_next_window_id: u32 = 1;
 var g_next_z: u32 = 1;
 var g_focused_window_id: u32 = 0;
+var g_drag_window_id: u32 = 0;
 var g_pointer_x: i32 = 0;
 var g_pointer_y: i32 = 0;
 var g_pointer_buttons: u32 = 0;
@@ -43,6 +45,7 @@ var g_kbd_subscribed: bool = false;
 var g_mouse_subscribed: bool = false;
 var g_idle_housekeeping_counter: u32 = 0;
 var g_runtime_lookup_req_id: u32 = GFX_REQUEST_BASE + 0x4000;
+var g_close_emit_logged: bool = false;
 
 var g_fb_info: c.nd_framebuffer_info_t = .{
     .framebuffer_base = 0,
@@ -475,13 +478,14 @@ fn focus_window(window_idx: usize) void {
     event_push(win.owner_endpoint, c.GFX_EVENT_FOCUS_GAINED, win.window_id, 0, 0);
 }
 
-fn blur_focused_window() void {
-    if (g_focused_window_id == 0) return;
+fn blur_focused_window() bool {
+    if (g_focused_window_id == 0) return false;
     if (window_find_by_id(g_focused_window_id)) |focused_idx| {
         const focused = g_windows[focused_idx];
         event_push(focused.owner_endpoint, c.GFX_EVENT_FOCUS_LOST, focused.window_id, 0, 0);
     }
     g_focused_window_id = 0;
+    return true;
 }
 
 fn window_topmost_at(x: i32, y: i32) ?usize {
@@ -543,20 +547,57 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
         _ = compose_region(cursor_rect_at(g_pointer_x, g_pointer_y));
     }
 
+    const prev_buttons = g_pointer_buttons;
     const left_down_now = (buttons & 0x1) != 0;
-    const left_down_prev = (g_pointer_buttons & 0x1) != 0;
+    const left_down_prev = (prev_buttons & 0x1) != 0;
+
+    if (!left_down_now and left_down_prev) {
+        g_drag_window_id = 0;
+    }
+
+    if (left_down_now and g_drag_window_id != 0 and (dx != 0 or dy != 0)) {
+        if (window_find_by_id(g_drag_window_id)) |drag_idx| {
+            if (g_fb_info_valid) {
+                const max_x: i32 = @intCast(g_fb_info.framebuffer_width);
+                const max_y: i32 = @intCast(g_fb_info.framebuffer_height);
+                const ww: i32 = @intCast(g_windows[drag_idx].width);
+                const wh: i32 = @intCast(g_windows[drag_idx].height);
+                const hi_x = if (max_x > ww) max_x - ww else 0;
+                const hi_y = if (max_y > wh) max_y - wh else 0;
+                g_windows[drag_idx].x = clamp(g_windows[drag_idx].x + dx, 0, hi_x);
+                g_windows[drag_idx].y = clamp(g_windows[drag_idx].y + dy, 0, hi_y);
+            } else {
+                g_windows[drag_idx].x += dx;
+                g_windows[drag_idx].y += dy;
+            }
+            _ = compose_full();
+        } else {
+            g_drag_window_id = 0;
+        }
+    }
+
     if (left_down_now and !left_down_prev) {
         if (window_topmost_at(g_pointer_x, g_pointer_y)) |idx| {
-            const hit_close = point_in_rect(g_pointer_x, g_pointer_y, window_close_rect(g_windows[idx]));
+            const hit_close = point_in_rect(g_pointer_x, g_pointer_y, window_close_hit_rect(g_windows[idx]));
+            const hit_title = point_in_rect(g_pointer_x, g_pointer_y, window_title_rect(g_windows[idx]));
             raise_window(idx);
             focus_window(idx);
             if (hit_close) {
                 const win = g_windows[idx];
+                if (!g_close_emit_logged) {
+                    g_close_emit_logged = true;
+                    logMsg("[gfx] close-request emitted\n");
+                }
                 event_push(win.owner_endpoint, c.GFX_EVENT_CLOSE_REQUEST, win.window_id, 0, 0);
+            } else if (hit_title) {
+                g_drag_window_id = g_windows[idx].window_id;
             }
             _ = compose_full();
         } else {
-            blur_focused_window();
+            if (blur_focused_window()) {
+                _ = compose_full();
+            }
+            g_drag_window_id = 0;
         }
     }
     g_pointer_buttons = buttons;
@@ -564,7 +605,9 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
     if (g_focused_window_id != 0) {
         if (window_find_by_id(g_focused_window_id)) |focused_idx| {
             const focused = g_windows[focused_idx];
-            event_push(focused.owner_endpoint, c.GFX_EVENT_POINTER, pack_s16_pair(dx, dy), buttons, 0);
+            if (dx != 0 or dy != 0 or buttons != prev_buttons) {
+                event_push(focused.owner_endpoint, c.GFX_EVENT_POINTER, pack_s16_pair(dx, dy), buttons, 0);
+            }
         }
     }
 }
@@ -837,6 +880,26 @@ fn window_close_rect(win: window_slot_t) c.gfx_rect_t {
         .y = win.y + CHROME_CLOSE_PAD,
         .w = CHROME_CLOSE_SZ,
         .h = CHROME_CLOSE_SZ,
+    };
+}
+
+fn window_close_hit_rect(win: window_slot_t) c.gfx_rect_t {
+    const ww: i32 = @intCast(win.width);
+    return .{
+        .x = win.x + ww - CHROME_CLOSE_HIT_W,
+        .y = win.y,
+        .w = CHROME_CLOSE_HIT_W,
+        .h = CHROME_TITLE_H,
+    };
+}
+
+fn window_title_rect(win: window_slot_t) c.gfx_rect_t {
+    const ww: i32 = @intCast(win.width);
+    return .{
+        .x = win.x + CHROME_BORDER,
+        .y = win.y,
+        .w = ww - (CHROME_BORDER * 2),
+        .h = CHROME_TITLE_H,
     };
 }
 

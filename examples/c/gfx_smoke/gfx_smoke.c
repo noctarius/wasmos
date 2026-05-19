@@ -159,16 +159,20 @@ static int
 fill_wasmos_logo(uint8_t *base, int32_t width, int32_t height, int32_t stride_bytes)
 {
     const uint32_t bg = 0xFF171A22u;
-    const int32_t mascot_w = 500;
-    const int32_t mascot_h = 500;
+    const int32_t mascot_src_w = 128;
+    const int32_t mascot_src_h = 128;
+    const int32_t mascot_draw_w = 500;
+    const int32_t mascot_draw_h = 500;
     fill_rect(base, width, height, stride_bytes, 0, 0, width, height, bg);
-    const int32_t off_x = (width - mascot_w) / 2;
-    const int32_t off_y = (height - mascot_h) / 2;
-    for (int32_t y = 0; y < mascot_h; ++y) {
+    const int32_t off_x = (width - mascot_draw_w) / 2;
+    const int32_t off_y = (height - mascot_draw_h) / 2;
+    for (int32_t y = 0; y < mascot_draw_h; ++y) {
         uint32_t *dst_row = (uint32_t *)(void *)(base + ((off_y + y) * (width * FBPP)));
-        const int32_t src_row_off = y * mascot_w * 4;
-        for (int32_t x = 0; x < mascot_w; ++x) {
-            const int32_t i = src_row_off + (x * 4);
+        const int32_t sy = (y * mascot_src_h) / mascot_draw_h;
+        const int32_t src_row_off = sy * mascot_src_w * 4;
+        for (int32_t x = 0; x < mascot_draw_w; ++x) {
+            const int32_t sx = (x * mascot_src_w) / mascot_draw_w;
+            const int32_t i = src_row_off + (sx * 4);
             const uint32_t sr = wasmo_mascot_rgba[i + 0];
             const uint32_t sg = wasmo_mascot_rgba[i + 1];
             const uint32_t sb = wasmo_mascot_rgba[i + 2];

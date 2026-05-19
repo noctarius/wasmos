@@ -53,6 +53,10 @@
 - Graphics/compositor now emits resize notifications (`GFX_EVENT_RESIZE`) to
   window owners during pointer-driven resize; current smoke validation
   reallocates and re-presents buffers on that event.
+- Graphics/compositor design phase for text now targets a dedicated
+  `font-service` (glyph rasterization + metrics + shared atlas IPC) instead of
+  a fixed built-in compositor font path; OTF-first bring-up is acceptable, but
+  long-term compatibility target is OpenType across both OTF and TTF outlines.
 - Input-driver baseline now also includes a wasm `mouse` driver with
   subscription IPC (`MOUSE_IPC_SUBSCRIBE_REQ` + `MOUSE_IPC_MOVE_NOTIFY`) that
   emits PS/2 packet-derived movement deltas and button masks to subscribers.

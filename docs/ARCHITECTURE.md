@@ -43,6 +43,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
   notifications, emits focused pointer events (`POINTER`) through
   `GFX_IPC_POLL_EVENT`, and applies click-to-focus + raise-on-click policy for
   topmost hit-tested windows.
+- Graphics/compositor now also renders a software cursor overlay above window
+  composition and repaints old/new cursor rectangles on movement, making
+  pointer position/focus interactions directly visible during bring-up.
 - Input-driver baseline now also includes a wasm `mouse` driver with
   subscription IPC (`MOUSE_IPC_SUBSCRIBE_REQ` + `MOUSE_IPC_MOVE_NOTIFY`) that
   emits PS/2 packet-derived movement deltas and button masks to subscribers.

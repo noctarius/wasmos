@@ -14,6 +14,8 @@ const GFX_MAX_EVENTS: usize = 128;
 const GFX_WINDOW_MIN_DIM: u32 = 1;
 const GFX_WINDOW_MAX_DIM: u32 = 8192;
 const PAGE_SIZE: u64 = 4096;
+const CURSOR_W: i32 = 9;
+const CURSOR_H: i32 = 14;
 
 var g_api: ?*c.wasmos_driver_api_t = null;
 var g_proc_endpoint: u32 = IPC_ENDPOINT_NONE;
@@ -416,6 +418,8 @@ fn clamp(v: i32, lo: i32, hi: i32) i32 {
 }
 
 fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
+    const old_x = g_pointer_x;
+    const old_y = g_pointer_y;
     const dx8: i8 = @bitCast(@as(u8, @truncate(msg.arg0)));
     const dy8: i8 = @bitCast(@as(u8, @truncate(msg.arg1)));
     const dx: i32 = @as(i32, dx8);
@@ -429,6 +433,11 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
         const hi_y = if (max_y > 0) max_y - 1 else 0;
         g_pointer_x = clamp(g_pointer_x + dx, 0, hi_x);
         g_pointer_y = clamp(g_pointer_y + dy, 0, hi_y);
+    }
+
+    if (g_overlay_locked and (old_x != g_pointer_x or old_y != g_pointer_y)) {
+        _ = compose_region(cursor_rect_at(old_x, old_y));
+        _ = compose_region(cursor_rect_at(g_pointer_x, g_pointer_y));
     }
 
     const left_down_now = (buttons & 0x1) != 0;
@@ -681,6 +690,30 @@ fn rect_from_window(slot: window_slot_t) c.gfx_rect_t {
     return .{ .x = slot.x, .y = slot.y, .w = @intCast(slot.width), .h = @intCast(slot.height) };
 }
 
+fn cursor_rect_at(x: i32, y: i32) c.gfx_rect_t {
+    return .{ .x = x, .y = y, .w = CURSOR_W, .h = CURSOR_H };
+}
+
+fn draw_cursor_overlay(region: c.gfx_rect_t) void {
+    if (!g_fb_info_valid or g_fb_pixels == null) return;
+    const cr = cursor_rect_at(g_pointer_x, g_pointer_y);
+    if (!rect_intersects(region, cr)) return;
+
+    var y: i32 = 0;
+    while (y < CURSOR_H) : (y += 1) {
+        var x: i32 = 0;
+        while (x < CURSOR_W) : (x += 1) {
+            if (x > y) continue;
+            const px = g_pointer_x + x;
+            const py = g_pointer_y + y;
+            if (px < region.x or py < region.y or px >= region.x + region.w or py >= region.y + region.h) continue;
+            const edge = (x == 0 or y == 0 or x == y);
+            const color: u32 = if (edge) 0xFF000000 else 0xFFFFFFFF;
+            fill_rect(px, py, 1, 1, color);
+        }
+    }
+}
+
 fn draw_window_placeholder(win: window_slot_t, clip: c.gfx_rect_t) void {
     const tone = @as(u32, (win.window_id * 37) & 0x7F);
     const body_color = 0x203040 | (tone << 16) | ((tone >> 1) << 8);
@@ -766,6 +799,10 @@ fn compose_region(region: c.gfx_rect_t) i32 {
         if (!rendered) {
             draw_window_placeholder(win, clip);
         }
+    }
+
+    if (g_overlay_locked) {
+        draw_cursor_overlay(region);
     }
 
     return c.GFX_STATUS_OK;
@@ -1099,6 +1136,8 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
         g_fb_info.framebuffer_height != 0)
     {
         g_fb_info_valid = true;
+        g_pointer_x = @intCast(g_fb_info.framebuffer_width / 2);
+        g_pointer_y = @intCast(g_fb_info.framebuffer_height / 2);
         const fb_size_u64: u64 = @as(u64, g_fb_info.framebuffer_stride) *
             @as(u64, g_fb_info.framebuffer_height) * 4;
         if (fb_size_u64 > 0 and fb_size_u64 <= 0xFFFF_FFFF) {

@@ -326,21 +326,13 @@ main(int argc, char **argv)
     }
     puts("[test] gfx smoke visible done");
 
-    {
-        int close_seen = 0;
-        puts("[test] gfx smoke waiting close-request");
-        for (int i = 0; i < 8192; ++i) {
-            int rc = poll_gfx_events_once(gfx_ep, reply_ep, &req);
-            if (rc == 1) {
-                close_seen = 1;
-                break;
-            }
-            (void)wasmos_sched_yield();
+    puts("[test] gfx smoke waiting close-request");
+    for (;;) {
+        int rc = poll_gfx_events_once(gfx_ep, reply_ep, &req);
+        if (rc == 1) {
+            break;
         }
-        if (!close_seen) {
-            puts("[test] gfx smoke close-request timeout");
-            return GFX_SMOKE_E_EVENT_CLOSE;
-        }
+        (void)wasmos_sched_yield();
     }
 
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW,

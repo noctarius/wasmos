@@ -34,6 +34,7 @@ add_custom_command(
           -femit-bin=${FONT_SERVICE_ZIG_OBJ}
           ${WASM_FONT_SERVICE_SRC}
   DEPENDS ${WASM_FONT_SERVICE_SRC}
+          ${CMAKE_CURRENT_SOURCE_DIR}/zig_utils.zig
           ${CMAKE_CURRENT_SOURCE_DIR}/font_service_imports.h
           ${DRIVER_WASM_DIR}/include/wasmos_native_driver.h
           ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h

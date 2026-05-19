@@ -472,13 +472,7 @@ main(int argc, char **argv)
                 }
             }
         } else if (ev.arg1 == GFX_EVENT_POINTER) {
-            int16_t dx = (int16_t)(ev.arg2 & 0xFFFF);
-            int16_t dy = (int16_t)((ev.arg2 >> 16) & 0xFFFF);
-            char msg[112];
-            int n = snprintf(msg, sizeof(msg),
-                             "[test] gfx smoke event ptr dx=%d dy=%d btn=%d\n",
-                             (int)dx, (int)dy, ev.arg3);
-            if (n > 0) (void)putsn(msg, (size_t)n);
+            (void)ev;
         } else if (ev.arg1 == GFX_EVENT_FOCUS_GAINED) {
             puts("[test] gfx smoke event focus-gained");
         } else if (ev.arg1 == GFX_EVENT_FOCUS_LOST) {

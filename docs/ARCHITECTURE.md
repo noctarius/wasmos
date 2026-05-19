@@ -43,6 +43,10 @@ IMPORTANT: Create a git commit after each prompt iteration.
   notifications, emits focused pointer events (`POINTER`) through
   `GFX_IPC_POLL_EVENT`, and applies click-to-focus + raise-on-click policy for
   topmost hit-tested windows.
+- Graphics/compositor now also performs runtime input subscription recovery
+  (for late-started `kbd`/`mouse` services) and idle orphan-state cleanup so
+  dead client endpoints cannot leave stale windows/buffers/events or persistent
+  overlay mode.
 - Graphics/compositor now also renders a software cursor overlay above window
   composition and repaints old/new cursor rectangles on movement, making
   pointer position/focus interactions directly visible during bring-up.

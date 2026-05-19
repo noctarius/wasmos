@@ -9,6 +9,7 @@ const REQ_BASE: u32 = 0xA000;
 const PM_FS_BUFFER_SIZE: usize = 256 * 1024;
 const MAX_FONTS: usize = 3;
 const MAX_HANDLES: usize = 16;
+const O_RDONLY: u32 = 0;
 
 const font_handle_t = struct {
     in_use: bool = false,
@@ -143,7 +144,12 @@ fn ipc_call(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u
 }
 
 fn fs_borrow_rw() ?[*]u8 {
-    const p = api().buffer_borrow.?(c.ND_BUFFER_KIND_FS, ctxId(), c.ND_BUFFER_BORROW_READ | c.ND_BUFFER_BORROW_WRITE, PM_FS_BUFFER_SIZE);
+    const p = api().buffer_borrow.?(
+        c.ND_BUFFER_KIND_FS,
+        ctxId(),
+        c.ND_BUFFER_BORROW_READ | c.ND_BUFFER_BORROW_WRITE,
+        PM_FS_BUFFER_SIZE,
+    );
     if (p == null) return null;
     return @ptrCast(@alignCast(p.?));
 }
@@ -212,33 +218,80 @@ fn parse_ttf_metrics(f: *loaded_font_t) bool {
 
 fn read_file_into_shmem(path: []const u8, out_shmem_id: *u32, out_ptr: *[*]u8, out_len: *usize) i32 {
     if (g_fs_endpoint == IPC_ENDPOINT_NONE) return -1;
-    const fs_buf = fs_borrow_rw() orelse return -1;
-    defer fs_release();
-
-    if (path.len == 0 or path.len >= PM_FS_BUFFER_SIZE) return -1;
-    byte_copy(fs_buf, path.ptr, path.len);
+    const fs_buf_path = fs_borrow_rw() orelse {
+        logMsg("[font] fs buffer borrow failed\n");
+        return -1;
+    };
+    if (path.len == 0 or path.len + 1 >= PM_FS_BUFFER_SIZE) return -1;
+    byte_copy(fs_buf_path, path.ptr, path.len);
+    fs_buf_path[path.len] = 0;
 
     var reply: c.nd_ipc_message_t = undefined;
-    const req = g_req_id;
+    const req_open = g_req_id;
     g_req_id +%= 1;
-    if (ipc_call(g_fs_endpoint, req, c.FS_IPC_READ_PATH_REQ, @intCast(path.len), 0, 0, 0, &reply) != 0) return -1;
-    if (reply.type != c.FS_IPC_RESP or @as(i32, @bitCast(reply.arg0)) <= 0) return -1;
+    if (ipc_call(g_fs_endpoint, req_open, c.FS_IPC_OPEN_REQ, @intCast(path.len), O_RDONLY, 0, 0, &reply) != 0) {
+        logMsg("[font] open call failed: ");
+        logMsg(path);
+        logMsg("\n");
+        return -1;
+    }
+    if (reply.type != c.FS_IPC_RESP or @as(i32, @bitCast(reply.arg0)) < 0) {
+        logMsg("[font] open failed: ");
+        logMsg(path);
+        logMsg("\n");
+        return -1;
+    }
+    fs_release();
+    const fd: i32 = @bitCast(reply.arg0);
 
-    const len: usize = @intCast(reply.arg0);
-    if (len > PM_FS_BUFFER_SIZE) return -1;
-
-    const pages = (len + 4095) / 4096;
+    const pages = PM_FS_BUFFER_SIZE / 4096;
     var shmem_id: u32 = 0;
     var mapped_ptr: ?*anyopaque = null;
     if (api().shmem_create.?(pages, 0, &shmem_id, @ptrCast(&mapped_ptr)) != 0 or shmem_id == 0 or mapped_ptr == null) {
+        const req_close_fail = g_req_id;
+        g_req_id +%= 1;
+        _ = ipc_call(g_fs_endpoint, req_close_fail, c.FS_IPC_CLOSE_REQ, @bitCast(fd), 0, 0, 0, &reply);
         return -1;
     }
     const dst: [*]u8 = @ptrCast(@alignCast(mapped_ptr.?));
-    byte_copy(dst, fs_buf, len);
+    var total: usize = 0;
+    while (total < PM_FS_BUFFER_SIZE) {
+        const req_read = g_req_id;
+        g_req_id +%= 1;
+        const remaining = PM_FS_BUFFER_SIZE - total;
+        const chunk_req: u32 = @intCast(if (remaining > 4096) 4096 else remaining);
+        if (ipc_call(g_fs_endpoint, req_read, c.FS_IPC_READ_REQ, @bitCast(fd), chunk_req, 0, 0, &reply) != 0 or reply.type != c.FS_IPC_RESP) {
+            logMsg("[font] read call failed: ");
+            logMsg(path);
+            logMsg("\n");
+            break;
+        }
+        const got_i32: i32 = @bitCast(reply.arg0);
+        if (got_i32 <= 0) break;
+        const got: usize = @intCast(got_i32);
+        if (got > chunk_req) break;
+        if (got > 0) {
+            const fs_buf_read = fs_borrow_rw() orelse break;
+            byte_copy(dst + total, fs_buf_read, got);
+            fs_release();
+            total += got;
+        }
+        if (got < chunk_req) break;
+    }
+
+    const req_close = g_req_id;
+    g_req_id +%= 1;
+    _ = ipc_call(g_fs_endpoint, req_close, c.FS_IPC_CLOSE_REQ, @bitCast(fd), 0, 0, 0, &reply);
+    if (total == 0) {
+        logMsg("[font] read empty: ");
+        logMsg(path);
+        logMsg("\n");
+        return -1;
+    }
 
     out_shmem_id.* = shmem_id;
     out_ptr.* = dst;
-    out_len.* = len;
+    out_len.* = total;
     return 0;
 }
 
@@ -397,23 +450,36 @@ fn handle_raster_glyph(req: *const c.nd_ipc_message_t) void {
 }
 
 fn load_builtin_fonts() void {
-    const paths = [_][]const u8{
+    const primary_paths = [_][]const u8{
         "/boot/system/fonts/roboto.ttf",
         "/boot/system/fonts/roboto_mono.ttf",
         "/boot/system/fonts/roboto_serif.ttf",
+    };
+    const fallback_paths_rel = [_][]const u8{
+        "../fonts/roboto.ttf",
+        "../fonts/roboto_mono.ttf",
+        "../fonts/roboto_serif.ttf",
+    };
+    const fallback_paths_abs2 = [_][]const u8{
+        "/system/fonts/roboto.ttf",
+        "/system/fonts/roboto_mono.ttf",
+        "/system/fonts/roboto_serif.ttf",
     };
     const ids = [_]u32{ c.FONT_ID_ROBOTO, c.FONT_ID_ROBOTO_MONO, c.FONT_ID_NOTO_SERIF };
     const labels = [_][]const u8{ "roboto", "roboto-mono", "roboto-serif" };
 
     var i: usize = 0;
-    while (i < paths.len and i < g_fonts.len) : (i += 1) {
+    while (i < primary_paths.len and i < g_fonts.len) : (i += 1) {
         logMsg("[font] loading ");
         logMsg(labels[i]);
         logMsg("\n");
         var sid: u32 = 0;
         var ptr: [*]u8 = undefined;
         var len: usize = 0;
-        if (read_file_into_shmem(paths[i], &sid, &ptr, &len) != 0) {
+        if (read_file_into_shmem(primary_paths[i], &sid, &ptr, &len) != 0 and
+            read_file_into_shmem(fallback_paths_rel[i], &sid, &ptr, &len) != 0 and
+            read_file_into_shmem(fallback_paths_abs2[i], &sid, &ptr, &len) != 0)
+        {
             logMsg("[font] load failed\n");
             continue;
         }

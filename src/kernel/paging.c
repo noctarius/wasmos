@@ -459,7 +459,58 @@ paging_clone_low_slot_in_root(uint64_t root_table)
     if (!(src[0] & PT_FLAG_PRESENT)) {
         return -1;
     }
-    dst[0] = src[0];
+    uint64_t src_pdpt_phys = entry_phys(src[0]);
+    volatile uint64_t *src_pdpt = table_ptr(src_pdpt_phys);
+    uint64_t new_pdpt_phys = 0;
+    if (alloc_table(&new_pdpt_phys) != 0) {
+        return -1;
+    }
+    volatile uint64_t *new_pdpt = table_ptr(new_pdpt_phys);
+
+    for (uint32_t pdpt_i = 0; pdpt_i < ENTRIES_PER_TABLE; ++pdpt_i) {
+        uint64_t pdpt_entry = src_pdpt[pdpt_i];
+        if (!(pdpt_entry & PT_FLAG_PRESENT)) {
+            continue;
+        }
+
+        uint64_t src_pd_phys = entry_phys(pdpt_entry);
+        uint64_t new_pd_phys = 0;
+        if (alloc_table(&new_pd_phys) != 0) {
+            pfa_free_pages(new_pdpt_phys, 1);
+            return -1;
+        }
+        volatile uint64_t *src_pd = table_ptr(src_pd_phys);
+        volatile uint64_t *new_pd = table_ptr(new_pd_phys);
+
+        for (uint32_t pd_i = 0; pd_i < ENTRIES_PER_TABLE; ++pd_i) {
+            uint64_t pd_entry = src_pd[pd_i];
+            if (!(pd_entry & PT_FLAG_PRESENT)) {
+                continue;
+            }
+            if (pd_entry & PT_FLAG_LARGE_PAGE) {
+                new_pd[pd_i] = pd_entry;
+                continue;
+            }
+
+            uint64_t src_pt_phys = entry_phys(pd_entry);
+            uint64_t new_pt_phys = 0;
+            if (alloc_table(&new_pt_phys) != 0) {
+                pfa_free_pages(new_pd_phys, 1);
+                pfa_free_pages(new_pdpt_phys, 1);
+                return -1;
+            }
+            volatile uint64_t *src_pt = table_ptr(src_pt_phys);
+            volatile uint64_t *new_pt = table_ptr(new_pt_phys);
+            for (uint32_t pt_i = 0; pt_i < ENTRIES_PER_TABLE; ++pt_i) {
+                new_pt[pt_i] = src_pt[pt_i];
+            }
+            new_pd[pd_i] = (new_pt_phys & ~0xFFFULL) | (pd_entry & 0xFFFULL);
+        }
+
+        new_pdpt[pdpt_i] = (new_pd_phys & ~0xFFFULL) | (pdpt_entry & 0xFFFULL);
+    }
+
+    dst[0] = (new_pdpt_phys & ~0xFFFULL) | (src[0] & 0xFFFULL);
     return 0;
 }
 

@@ -14,7 +14,6 @@
 #define GFX_RESIZE_W 320
 #define GFX_RESIZE_H 180
 #define GFX_FRAME_COUNT 8
-#define GFX_HOLD_TICKS 900
 
 typedef struct {
     int32_t status;
@@ -44,7 +43,8 @@ enum {
     GFX_SMOKE_E_RELEASE2 = 28,
     GFX_SMOKE_E_DESTROY = 29,
     GFX_SMOKE_E_POST_DESTROY = 30,
-    GFX_SMOKE_E_EVENT_FOCUS = 31
+    GFX_SMOKE_E_EVENT_FOCUS = 31,
+    GFX_SMOKE_E_EVENT_CLOSE = 32
 };
 
 static int32_t
@@ -166,13 +166,13 @@ poll_gfx_focus_event(int32_t gfx_ep, int32_t reply_ep, int32_t *req, int32_t exp
     return -1;
 }
 
-static void
+static int
 poll_gfx_events_once(int32_t gfx_ep, int32_t reply_ep, int32_t *req)
 {
     gfx_reply_t ev;
     if (send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_POLL_EVENT, 0, 0, 0, 0, &ev) != 0 ||
         ev.status != GFX_STATUS_OK) {
-        return;
+        return -1;
     }
     if (ev.arg1 == GFX_EVENT_KEY) {
         char msg[96];
@@ -196,7 +196,11 @@ poll_gfx_events_once(int32_t gfx_ep, int32_t reply_ep, int32_t *req)
         if (n > 0) {
             (void)putsn(msg, (size_t)n);
         }
+    } else if (ev.arg1 == GFX_EVENT_CLOSE_REQUEST) {
+        puts("[test] gfx smoke event close-request");
+        return 1;
     }
+    return 0;
 }
 
 int
@@ -317,22 +321,25 @@ main(int argc, char **argv)
             puts("[test] gfx smoke present-loop failed");
             return GFX_SMOKE_E_PRESENT_LOOP;
         }
-        poll_gfx_events_once(gfx_ep, reply_ep, &req);
+        (void)poll_gfx_events_once(gfx_ep, reply_ep, &req);
         (void)wasmos_sched_yield();
     }
     puts("[test] gfx smoke visible done");
+
     {
-        int32_t start_ticks = wasmos_sched_ticks();
-        while (start_ticks >= 0) {
-            int32_t now = wasmos_sched_ticks();
-            if (now < 0) {
+        int close_seen = 0;
+        puts("[test] gfx smoke waiting close-request");
+        for (int i = 0; i < 8192; ++i) {
+            int rc = poll_gfx_events_once(gfx_ep, reply_ep, &req);
+            if (rc == 1) {
+                close_seen = 1;
                 break;
             }
-            if ((now - start_ticks) >= GFX_HOLD_TICKS) {
-                break;
-            }
-            poll_gfx_events_once(gfx_ep, reply_ep, &req);
             (void)wasmos_sched_yield();
+        }
+        if (!close_seen) {
+            puts("[test] gfx smoke close-request timeout");
+            return GFX_SMOKE_E_EVENT_CLOSE;
         }
     }
 

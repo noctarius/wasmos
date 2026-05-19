@@ -59,14 +59,8 @@ var g_kbd_subscribed: bool = false;
 var g_mouse_subscribed: bool = false;
 var g_idle_housekeeping_counter: u32 = 0;
 var g_runtime_lookup_req_id: u32 = GFX_REQUEST_BASE + 0x4000;
-var g_close_emit_logged: bool = false;
-var g_title_dbg_lookup_ok_logged: bool = false;
-var g_title_dbg_open_ok_logged: bool = false;
 var g_title_dbg_open_fail_logged: bool = false;
 var g_title_dbg_prime_fail_logged: bool = false;
-var g_title_dbg_draw_logged: bool = false;
-var g_title_dbg_glyph_stats_logged: bool = false;
-var g_title_dbg_glyph_alpha_logged: bool = false;
 var g_dirty_pending: bool = false;
 var g_dirty_full: bool = false;
 var g_dirty_rect: c.gfx_rect_t = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
@@ -361,10 +355,6 @@ fn ensure_font_title_ready_lazy() void {
         g_runtime_lookup_req_id +%= 1;
         if (ep < 0) return;
         g_font_endpoint = @bitCast(ep);
-        if (!g_title_dbg_lookup_ok_logged) {
-            g_title_dbg_lookup_ok_logged = true;
-            logMsg("[dbg-title] font lookup ok\n");
-        }
     }
     if (open_title_font_handle() != 0) {
         if (!g_title_dbg_open_fail_logged) {
@@ -372,10 +362,6 @@ fn ensure_font_title_ready_lazy() void {
             logMsg("[dbg-title] font open failed\n");
         }
         return;
-    }
-    if (!g_title_dbg_open_ok_logged) {
-        g_title_dbg_open_ok_logged = true;
-        logMsg("[dbg-title] font open ok\n");
     }
     request_repaint_full();
 }
@@ -884,10 +870,6 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
             focus_window(idx);
             if (hit_close) {
                 const win = g_windows[idx];
-                if (!g_close_emit_logged) {
-                    g_close_emit_logged = true;
-                    logMsg("[gfx] close-request emitted\n");
-                }
                 g_drag_window_id = 0;
                 g_resize_window_id = 0;
                 event_drop_for(win.owner_endpoint);
@@ -1369,7 +1351,6 @@ fn prime_title_glyph_step() void {
     if (g_font_prime_index >= TITLE_GLYPHS.len) return;
     const cp: u32 = TITLE_GLYPHS[g_font_prime_index];
     if (glyph_cache_insert_from_font(cp)) {
-        logMsg("[dbg-title] glyph primed\n");
         g_font_prime_index += 1;
         request_repaint_full();
         return;
@@ -1397,10 +1378,6 @@ fn init_title_glyph_cache_startup() void {
 fn draw_window_title_text(win: window_slot_t, clip: c.gfx_rect_t) void {
     _ = clip;
     if (g_font_endpoint == IPC_ENDPOINT_NONE or g_font_title_handle == 0) return;
-    if (!g_title_dbg_draw_logged) {
-        g_title_dbg_draw_logged = true;
-        logMsg("[dbg-title] draw called\n");
-    }
     const cr = window_close_rect(win);
     const title_clip = window_title_rect(win);
     var pen_x: i32 = win.x + CHROME_BORDER + 4;
@@ -1428,33 +1405,6 @@ fn draw_window_title_text(win: window_slot_t, clip: c.gfx_rect_t) void {
     while (i < n) : (i += 1) {
         const ch: u32 = label[i];
         const g = glyph_cache_get(ch) orelse break;
-        if (!g_title_dbg_glyph_stats_logged and ch == 'w') {
-            g_title_dbg_glyph_stats_logged = true;
-            if (g.mask_len > 0 and g.w > 0 and g.h > 0) {
-                logMsg("[dbg-title] glyph w nonzero\n");
-            } else {
-                logMsg("[dbg-title] glyph w empty\n");
-            }
-            var nonzero: usize = 0;
-            var max_a: u8 = 0;
-            var t: usize = 0;
-            while (t < g.mask_len) : (t += 1) {
-                const a = g.mask_data[t];
-                if (a != 0) nonzero += 1;
-                if (a > max_a) max_a = a;
-            }
-            if (!g_title_dbg_glyph_alpha_logged) {
-                g_title_dbg_glyph_alpha_logged = true;
-                if (nonzero > 0 and max_a > 0) {
-                    logMsg("[dbg-title] glyph alpha nonzero\n");
-                } else {
-                    logMsg("[dbg-title] glyph alpha empty\n");
-                }
-                if (@as(i32, g.y0) > 16 or @as(i32, g.y0) < -32) {
-                    logMsg("[dbg-title] glyph y0 out-of-range\n");
-                }
-            }
-        }
         if (g.mask_len > 0 and g.w > 0 and g.h > 0) {
             draw_glyph_mask(
                 pen_x + @as(i32, g.x0),

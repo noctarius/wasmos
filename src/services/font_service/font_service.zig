@@ -343,7 +343,7 @@ fn load_builtin_fonts() void {
     const paths = [_][]const u8{
         "/boot/system/fonts/roboto.ttf",
         "/boot/system/fonts/roboto_mono.ttf",
-        "/boot/system/fonts/noto_serif.ttf",
+        "/boot/system/fonts/roboto_serif.ttf",
     };
     const ids = [_]u32{ c.FONT_ID_ROBOTO, c.FONT_ID_ROBOTO_MONO, c.FONT_ID_NOTO_SERIF };
 

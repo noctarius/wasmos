@@ -35,6 +35,7 @@ It defines repository workflow and documentation/update conventions.
 - Borrow-based DMA path is integrated across capability contract, hostcalls, spawn transport, and storage/framebuffer paths (with validated fallback behavior).
 - Graphics stack is active: framebuffer driver, native Zig `gfx-compositor`, shared-buffer present/damage model, and app-facing IPC ABI.
 - Compositor interaction supports focus/z-order, pointer/key events, move/resize/close window controls, software cursor/chrome, and live resize notifications.
+- Native Zig `font-service` scaffold is now available (`/boot/system/services/fontsvc.wap`) with TTF loading path and basic font-open/metrics IPC.
 - Manual graphics smoke app (`/boot/apps/gfx_smoke.wap`) validates multi-window focus/raise/drag/resize/close behavior; PS/2 mouse driver is available at `/boot/system/drivers/mouse.wap`.
 
 ## Quick Start

@@ -423,6 +423,11 @@ Validation:
 - TODO(phase-3): define glyph-atlas shmem layout and lifetime semantics.
 - NOTE(text): current scope is TTF-only (`glyf`) for simpler bring-up and
   integration.
+- Current baseline now includes a native Zig `font-service` scaffold
+  (`src/services/font_service/`) that registers `font`, loads TTF blobs from
+  `/boot/system/fonts/*.ttf` through `fs.vfs`, and serves owner-scoped
+  `OPEN_FONT` + `GET_METRICS` requests. `RASTER_GLYPH` remains intentionally
+  unimplemented pending parser/raster backend integration.
 - TODO(phase-4): define per-display multi-head ABI (display id routing).
 - FIXME(security): once event ABI lands, add explicit sequence-number anti-replay
   checks on compositor input event dequeue protocol.

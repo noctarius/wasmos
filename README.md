@@ -92,21 +92,10 @@ It defines repository workflow and documentation/update conventions.
 - Ring-3 fault-policy mixed-churn liveness marker remains enforced (`[test] ring3 mixed stress ok`)
 - Dedicated strict ring-3 multi-process fault-storm profile is available via `run-qemu-ring3-fault-storm-test` and asserts watchdog cleanliness/progress (`[test] ring3 watchdog clean ok`, `[test] sched progress ok`)
 - CLI integration target now isolates each QEMU session to a private ESP copy (`WASMOS_QEMU_ISOLATE_ESP=1`) and emits deterministic suite status marker (`[test] cli suite status ok`)
-- Graphics Phase 0 scaffold is now in-tree: shared compositor/display IPC ABI constants (`wasmos/gfx_ipc.h`), a native Zig `gfx-compositor` service that registers `gfx`, probes framebuffer text geometry, and emits handshake marker (`[test] gfx compositor handshake ok`) when `fb` is reachable
-- Graphics compositor baseline now includes owner-checked window lifecycle (`CREATE`/`DESTROY`/`RESIZE`), compositor-managed shared buffer allocation (`ALLOC_SHARED_BUFFER`) with opaque random 32-bit `buffer_id`, and present-by-buffer with shmem-backed damage lists (`PRESENT_WINDOW`: `arg1=buffer_id`, `arg2=damage_count`, `arg3=damage_shmem_id`)
-- Graphics compositor now enforces window-generation-aware shared-buffer lifecycle: resize invalidates prior window-bound buffers for present, release denies in-use buffers, and present rejects stale/foreign buffer-window pairs with explicit status errors
-- Graphics compositor now subscribes to keyboard notifications and exposes focused-window input via `GFX_IPC_POLL_EVENT` (`FOCUS_GAINED`/`FOCUS_LOST`/`KEY`) so gfx clients can consume input without VT text-plane coupling
-- Graphics compositor now also subscribes to mouse notifications, emits focused-client pointer deltas via `GFX_IPC_POLL_EVENT` (`POINTER`), and applies click-to-focus with raise-on-click z-order updates
-- Graphics compositor now retries keyboard/mouse service lookup+subscribe at runtime (for late-started input drivers) and periodically reclaims orphaned windows/buffers/events from dead client endpoints so overlay mode cannot stick after client exit
-- Graphics compositor now draws a software cursor overlay (topmost) and repaints old/new cursor regions on pointer movement so focus/click behavior is visually testable
-- Graphics compositor now draws minimal window chrome (border/title + close box) and emits `GFX_EVENT_CLOSE_REQUEST` on close-box click so clients can exit on user action instead of fixed timers
-- Graphics compositor now supports pointer-driven drag-to-move on the window title bar (excluding the close-hit zone), with movement clamped to framebuffer bounds
-- Graphics compositor now supports pointer-driven bottom-right corner resize with live geometry updates clamped to framebuffer bounds and window min/max dimension policy
-- Graphics compositor now emits `GFX_EVENT_RESIZE` during pointer-driven resize; `gfx-smoke` consumes this event and reallocates/repaints/presents new-sized buffers live
-- New wasm `mouse` driver baseline is available under `/boot/system/drivers/mouse.wap` with subscriber IPC (`MOUSE_IPC_SUBSCRIBE_REQ`/`MOUSE_IPC_MOVE_NOTIFY`) for PS/2 packet delta/button events
-- Graphics compositor software path now composes in z-order, redraws clipped dirty regions from damage rects (including overlap with higher z-windows), and falls back to full-frame redraw when damage payloads are missing/invalid
-- Graphics compositor now includes `RELEASE_SHARED_BUFFER` handle invalidation/detach flow and explicit owner-deny hardening markers (`[test] gfx window owner deny ok`, `[test] gfx buffer owner deny ok`); backing shmem reclaim remains pending native ABI destroy support
-- New wasm app `gfx-smoke` is built into `/boot/apps/gfx_smoke.wap` for manual CLI launch (`exec /boot/apps/gfx_smoke`) and now exercises a two-window flow (focus/raise/drag/close across both windows) so compositor interaction validation can run on demand without auto-spawning over the VT/CLI surface
+- Graphics stack baseline is in-tree: shared IPC ABI (`wasmos/gfx_ipc.h`), native Zig `gfx-compositor`, and framebuffer integration.
+- Compositor capabilities include window lifecycle, shared-buffer present/damage flow, input focus/events, pointer-driven move/resize/close interactions, and software cursor/chrome rendering.
+- Manual graphics validation app: `/boot/apps/gfx_smoke.wap` (multi-window focus/raise/drag/resize/close behavior).
+- PS/2 mouse input driver is available at `/boot/system/drivers/mouse.wap`.
 - Native driver ABI v3 now exposes endpoint-owner lookup and shared-memory grant hooks (`ipc_endpoint_owner`, `shmem_grant`); `gfx-compositor` uses these to grant compositor-allocated buffer shmem to the requesting client context so client-side buffer mapping succeeds
 - WASM shared memory now also provides kernel-managed automatic linear-memory tail mapping (`wasmos_shmem_map_auto`) so apps can map shmem without hardcoded VA offsets; `gfx-smoke` uses this path
 - Ring-3 smoke includes shared-memory owner/grant/revoke isolation checks (kernel and user-space app-pair paths)

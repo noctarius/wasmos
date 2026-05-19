@@ -16,6 +16,7 @@ const GFX_MAX_GLYPH_BYTES: usize = 4096;
 const FONT_INIT_MAX_ATTEMPTS: u32 = 64;
 const FONT_INIT_RETRY_MASK: u32 = 0x3F;
 const TITLE_GLYPHS: []const u8 = "win 0123456789";
+const GFX_TITLE_TEXT_ENABLED: bool = true;
 const GFX_WINDOW_MIN_DIM: u32 = 1;
 const GFX_WINDOW_MAX_DIM: u32 = 8192;
 const PAGE_SIZE: u64 = 4096;
@@ -36,6 +37,7 @@ var g_vt_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_kbd_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_mouse_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_font_endpoint: u32 = IPC_ENDPOINT_NONE;
+var g_font_client_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_font_title_handle: u32 = 0;
 var g_font_init_failed: bool = false;
 var g_font_init_attempts: u32 = 0;
@@ -58,6 +60,13 @@ var g_mouse_subscribed: bool = false;
 var g_idle_housekeeping_counter: u32 = 0;
 var g_runtime_lookup_req_id: u32 = GFX_REQUEST_BASE + 0x4000;
 var g_close_emit_logged: bool = false;
+var g_title_dbg_lookup_ok_logged: bool = false;
+var g_title_dbg_open_ok_logged: bool = false;
+var g_title_dbg_open_fail_logged: bool = false;
+var g_title_dbg_prime_fail_logged: bool = false;
+var g_title_dbg_draw_logged: bool = false;
+var g_title_dbg_glyph_stats_logged: bool = false;
+var g_title_dbg_glyph_alpha_logged: bool = false;
 var g_dirty_pending: bool = false;
 var g_dirty_full: bool = false;
 var g_dirty_rect: c.gfx_rect_t = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
@@ -229,6 +238,39 @@ fn svc_lookup(name: []const u8, request_id: u32) i32 {
     return @bitCast(msg.arg0);
 }
 
+fn svc_lookup_from(source_endpoint: u32, name: []const u8, request_id: u32) i32 {
+    var args: [4]u32 = undefined;
+    var msg: c.nd_ipc_message_t = undefined;
+    packName16(name, &args);
+
+    msg.type = c.SVC_IPC_LOOKUP_REQ;
+    msg.source = source_endpoint;
+    msg.destination = g_proc_endpoint;
+    msg.request_id = request_id;
+    msg.arg0 = args[0];
+    msg.arg1 = args[1];
+    msg.arg2 = args[2];
+    msg.arg3 = args[3];
+    if (api().ipc_send.?(ctxId(), g_proc_endpoint, &msg) != IPC_OK) {
+        return -1;
+    }
+    while (true) {
+        const rc = api().ipc_recv.?(ctxId(), source_endpoint, &msg);
+        if (rc == IPC_EMPTY) {
+            api().sched_yield.?();
+            continue;
+        }
+        if (rc != IPC_OK) {
+            return -1;
+        }
+        if (msg.request_id == request_id) break;
+    }
+    if (msg.type != c.SVC_IPC_LOOKUP_RESP or msg.arg0 == IPC_ENDPOINT_NONE) {
+        return -1;
+    }
+    return @bitCast(msg.arg0);
+}
+
 fn lookup_fb_endpoint() i32 {
     var i: u32 = 0;
     while (i < GFX_FB_LOOKUP_RETRIES) : (i += 1) {
@@ -299,7 +341,7 @@ fn open_title_font_handle() i32 {
     var reply: c.nd_ipc_message_t = undefined;
     const req_id = g_runtime_lookup_req_id;
     g_runtime_lookup_req_id +%= 1;
-    if (ipc_call_budgeted(g_font_endpoint, req_id, c.FONT_IPC_OPEN_FONT_REQ, c.FONT_ID_ROBOTO, 10, 0, 0, &reply, 4) != 0) {
+    if (font_ipc_call_budgeted(g_font_endpoint, req_id, c.FONT_IPC_OPEN_FONT_REQ, c.FONT_ID_ROBOTO, 10, 0, 0, &reply, 32) != 0) {
         return -1;
     }
     if (reply.type != c.FONT_IPC_RESP or @as(i32, @bitCast(reply.arg0)) != c.FONT_STATUS_OK) {
@@ -313,18 +355,28 @@ fn ensure_font_title_ready_lazy() void {
     if (g_font_title_handle != 0 or g_font_init_failed) return;
     if (active_window_count() == 0) return;
     if ((g_idle_housekeeping_counter & FONT_INIT_RETRY_MASK) != 0) return;
-    if (g_font_init_attempts >= FONT_INIT_MAX_ATTEMPTS) {
-        g_font_init_failed = true;
-        return;
-    }
-    g_font_init_attempts +%= 1;
+    if (g_font_client_endpoint == IPC_ENDPOINT_NONE) return;
     if (g_font_endpoint == IPC_ENDPOINT_NONE) {
-        const ep = svc_lookup("font", g_runtime_lookup_req_id);
+        const ep = svc_lookup_from(g_font_client_endpoint, "font", g_runtime_lookup_req_id);
         g_runtime_lookup_req_id +%= 1;
         if (ep < 0) return;
         g_font_endpoint = @bitCast(ep);
+        if (!g_title_dbg_lookup_ok_logged) {
+            g_title_dbg_lookup_ok_logged = true;
+            logMsg("[dbg-title] font lookup ok\n");
+        }
     }
-    if (open_title_font_handle() != 0) return;
+    if (open_title_font_handle() != 0) {
+        if (!g_title_dbg_open_fail_logged) {
+            g_title_dbg_open_fail_logged = true;
+            logMsg("[dbg-title] font open failed\n");
+        }
+        return;
+    }
+    if (!g_title_dbg_open_ok_logged) {
+        g_title_dbg_open_ok_logged = true;
+        logMsg("[dbg-title] font open ok\n");
+    }
     request_repaint_full();
 }
 
@@ -478,6 +530,33 @@ fn ipc_call_budgeted(destination: u32, request_id: u32, msg_type: u32, arg0: u32
     var polls: u32 = 0;
     while (true) {
         const rc = api().ipc_recv.?(ctxId(), g_gfx_endpoint, out);
+        if (rc == IPC_EMPTY) {
+            if (polls >= max_empty_polls) return -1;
+            polls +%= 1;
+            api().sched_yield.?();
+            continue;
+        }
+        if (rc != IPC_OK) return -1;
+        if (out.request_id == request_id) return 0;
+    }
+}
+
+fn font_ipc_call_budgeted(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t, max_empty_polls: u32) i32 {
+    if (g_font_client_endpoint == IPC_ENDPOINT_NONE) return -1;
+    var req: c.nd_ipc_message_t = undefined;
+    req.type = msg_type;
+    req.source = g_font_client_endpoint;
+    req.destination = destination;
+    req.request_id = request_id;
+    req.arg0 = arg0;
+    req.arg1 = arg1;
+    req.arg2 = arg2;
+    req.arg3 = arg3;
+    if (api().ipc_send.?(ctxId(), destination, &req) != IPC_OK) return -1;
+
+    var polls: u32 = 0;
+    while (true) {
+        const rc = api().ipc_recv.?(ctxId(), g_font_client_endpoint, out);
         if (rc == IPC_EMPTY) {
             if (polls >= max_empty_polls) return -1;
             polls +%= 1;
@@ -1163,8 +1242,9 @@ fn draw_window_chrome(win: window_slot_t, clip: c.gfx_rect_t, focused: bool) voi
     fill_rect(cr.x + 2, cr.y + 2, 1, cr.h - 4, close_fg);
     fill_rect(cr.x + cr.w - 3, cr.y + 2, 1, cr.h - 4, close_fg);
 
-    // Disabled until font IPC is fully decoupled from compositor responsiveness.
-    // draw_window_title_text(win, clip);
+    if (GFX_TITLE_TEXT_ENABLED) {
+        draw_window_title_text(win, clip);
+    }
 }
 
 fn blend_u8(dst: u32, src: u32, alpha: u8) u32 {
@@ -1229,7 +1309,7 @@ fn glyph_cache_insert_from_font(codepoint: u32) bool {
     var reply: c.nd_ipc_message_t = undefined;
     const req_id = g_runtime_lookup_req_id;
     g_runtime_lookup_req_id +%= 1;
-    if (ipc_call_budgeted(g_font_endpoint, req_id, c.FONT_IPC_RASTER_GLYPH_REQ, g_font_title_handle, codepoint, 0, 0, &reply, 4) != 0) {
+    if (font_ipc_call_budgeted(g_font_endpoint, req_id, c.FONT_IPC_RASTER_GLYPH_REQ, g_font_title_handle, codepoint, 0, 0, &reply, 32) != 0) {
         return false;
     }
     if (reply.type != c.FONT_IPC_RESP or @as(i32, @bitCast(reply.arg0)) != c.FONT_STATUS_OK) {
@@ -1266,7 +1346,7 @@ fn glyph_cache_insert_from_font(codepoint: u32) bool {
         mask_len = pixel_count;
     }
 
-    g_glyph_cache[slot] = .{
+    var entry = glyph_cache_entry_t{
         .valid = true,
         .codepoint = codepoint,
         .shmem_id = shmem_id,
@@ -1276,11 +1356,18 @@ fn glyph_cache_insert_from_font(codepoint: u32) bool {
         .y0 = y0,
         .mask_len = mask_len,
     };
+    if (mask_len > 0) {
+        var j: usize = 0;
+        while (j < mask_len) : (j += 1) {
+            entry.mask_data[j] = g_glyph_cache[slot].mask_data[j];
+        }
+    }
+    g_glyph_cache[slot] = entry;
     return true;
 }
 
-fn glyph_cache_get(codepoint: u32) ?glyph_cache_entry_t {
-    if (glyph_cache_lookup(codepoint)) |idx| return g_glyph_cache[idx];
+fn glyph_cache_get(codepoint: u32) ?*const glyph_cache_entry_t {
+    if (glyph_cache_lookup(codepoint)) |idx| return &g_glyph_cache[idx];
     return null;
 }
 
@@ -1289,18 +1376,37 @@ fn prime_title_glyph_step() void {
     if (g_font_prime_index >= TITLE_GLYPHS.len) return;
     const cp: u32 = TITLE_GLYPHS[g_font_prime_index];
     if (glyph_cache_insert_from_font(cp)) {
+        logMsg("[dbg-title] glyph primed\n");
         g_font_prime_index += 1;
         request_repaint_full();
         return;
     }
-    g_font_init_attempts +%= 1;
-    if (g_font_init_attempts >= FONT_INIT_MAX_ATTEMPTS) {
-        g_font_init_failed = true;
+    if (!g_title_dbg_prime_fail_logged) {
+        g_title_dbg_prime_fail_logged = true;
+        logMsg("[dbg-title] glyph prime failed\n");
+    }
+}
+
+fn init_title_glyph_cache_startup() void {
+    if (!GFX_TITLE_TEXT_ENABLED) return;
+    if (g_font_client_endpoint == IPC_ENDPOINT_NONE) return;
+    const ep = svc_lookup_from(g_font_client_endpoint, "font", g_runtime_lookup_req_id);
+    g_runtime_lookup_req_id +%= 1;
+    if (ep < 0) return;
+    g_font_endpoint = @bitCast(ep);
+    if (open_title_font_handle() != 0) return;
+    var i: usize = 0;
+    while (i < TITLE_GLYPHS.len) : (i += 1) {
+        _ = glyph_cache_insert_from_font(TITLE_GLYPHS[i]);
     }
 }
 
 fn draw_window_title_text(win: window_slot_t, clip: c.gfx_rect_t) void {
     if (g_font_endpoint == IPC_ENDPOINT_NONE or g_font_title_handle == 0) return;
+    if (!g_title_dbg_draw_logged) {
+        g_title_dbg_draw_logged = true;
+        logMsg("[dbg-title] draw called\n");
+    }
     const cr = window_close_rect(win);
     var pen_x: i32 = win.x + CHROME_BORDER + 4;
     const base_y: i32 = win.y + CHROME_TITLE_H - 4;
@@ -1326,7 +1432,35 @@ fn draw_window_title_text(win: window_slot_t, clip: c.gfx_rect_t) void {
     var i: usize = 0;
     while (i < n) : (i += 1) {
         const ch: u32 = label[i];
-        const g = glyph_cache_get(ch) orelse break;
+        const gp = glyph_cache_get(ch) orelse break;
+        const g = gp.*;
+        if (!g_title_dbg_glyph_stats_logged and ch == 'w') {
+            g_title_dbg_glyph_stats_logged = true;
+            if (g.mask_len > 0 and g.w > 0 and g.h > 0) {
+                logMsg("[dbg-title] glyph w nonzero\n");
+            } else {
+                logMsg("[dbg-title] glyph w empty\n");
+            }
+            var nonzero: usize = 0;
+            var max_a: u8 = 0;
+            var t: usize = 0;
+            while (t < g.mask_len) : (t += 1) {
+                const a = g.mask_data[t];
+                if (a != 0) nonzero += 1;
+                if (a > max_a) max_a = a;
+            }
+            if (!g_title_dbg_glyph_alpha_logged) {
+                g_title_dbg_glyph_alpha_logged = true;
+                if (nonzero > 0 and max_a > 0) {
+                    logMsg("[dbg-title] glyph alpha nonzero\n");
+                } else {
+                    logMsg("[dbg-title] glyph alpha empty\n");
+                }
+                if (@as(i32, g.y0) > 16 or @as(i32, g.y0) < -32) {
+                    logMsg("[dbg-title] glyph y0 out-of-range\n");
+                }
+            }
+        }
         if (g.mask_len > 0 and g.w > 0 and g.h > 0) {
             draw_glyph_mask(
                 pen_x + @as(i32, g.x0),
@@ -1739,6 +1873,8 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
 
     g_gfx_endpoint = api().ipc_create_endpoint.?();
     if (g_gfx_endpoint == IPC_ENDPOINT_NONE) return -1;
+    g_font_client_endpoint = api().ipc_create_endpoint.?();
+    if (g_font_client_endpoint == IPC_ENDPOINT_NONE) return -1;
 
     if (svc_register("gfx", 1) != 0) {
         logMsg("[gfx] register failed\n");
@@ -1777,14 +1913,16 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
             }
         }
     }
+    init_title_glyph_cache_startup();
 
     while (true) {
         var msg: c.nd_ipc_message_t = undefined;
         const rc = api().ipc_recv.?(ctxId(), g_gfx_endpoint, &msg);
         if (rc == IPC_EMPTY) {
-            // Disabled until non-regressing integration is ready.
-            // ensure_font_title_ready_lazy();
-            // prime_title_glyph_step();
+            if (GFX_TITLE_TEXT_ENABLED) {
+                ensure_font_title_ready_lazy();
+                prime_title_glyph_step();
+            }
             flush_repaint_if_pending();
             g_idle_housekeeping_counter +%= 1;
             if ((g_idle_housekeeping_counter & 0x3F) == 0) {

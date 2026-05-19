@@ -10,6 +10,7 @@ const PM_FS_BUFFER_SIZE: usize = 256 * 1024;
 const MAX_FONTS: usize = 3;
 const MAX_HANDLES: usize = 16;
 const O_RDONLY: u32 = 0;
+const RASTER_SCRATCH_BYTES: usize = 4096;
 
 const font_handle_t = struct {
     in_use: bool = false,
@@ -41,6 +42,10 @@ var g_req_id: u32 = REQ_BASE;
 var g_next_handle_id: u32 = 1;
 var g_fonts: [MAX_FONTS]loaded_font_t = [_]loaded_font_t{.{}} ** MAX_FONTS;
 var g_handles: [MAX_HANDLES]font_handle_t = [_]font_handle_t{.{}} ** MAX_HANDLES;
+var g_raster_scratch_shmem_id: u32 = 0;
+var g_raster_scratch_ptr: ?[*]u8 = null;
+var g_raster_scratch_cap: usize = 0;
+var g_dbg_raster_logged: bool = false;
 
 fn api() *c.wasmos_driver_api_t {
     return g_api.?;
@@ -437,16 +442,58 @@ fn handle_raster_glyph(req: *const c.nd_ipc_message_t) void {
     }
 
     const pixel_count: usize = @intCast(w * hgt);
-    const pages = (pixel_count + 4095) / 4096;
-    var shmem_id: u32 = 0;
-    var mapped_ptr: ?*anyopaque = null;
-    if (api().shmem_create.?(pages, 0, &shmem_id, @ptrCast(&mapped_ptr)) != 0 or shmem_id == 0 or mapped_ptr == null) {
+    if (pixel_count > RASTER_SCRATCH_BYTES) {
         reply_with_status(req, c.FONT_STATUS_IO, 0, 0, 0);
         return;
     }
-    const dst: [*]u8 = @ptrCast(@alignCast(mapped_ptr.?));
+
+    if (g_raster_scratch_ptr == null or g_raster_scratch_shmem_id == 0 or g_raster_scratch_cap < pixel_count) {
+        var scratch_id: u32 = 0;
+        var scratch_ptr_raw: ?*anyopaque = null;
+        const pages = (RASTER_SCRATCH_BYTES + 4095) / 4096;
+        if (api().shmem_create.?(pages, 0, &scratch_id, @ptrCast(&scratch_ptr_raw)) != 0 or scratch_id == 0 or scratch_ptr_raw == null) {
+            reply_with_status(req, c.FONT_STATUS_IO, 0, 0, 0);
+            return;
+        }
+        g_raster_scratch_shmem_id = scratch_id;
+        g_raster_scratch_ptr = @ptrCast(@alignCast(scratch_ptr_raw.?));
+        g_raster_scratch_cap = pages * 4096;
+    }
+
+    var owner_context_id: u32 = 0;
+    if (api().ipc_endpoint_owner == null or
+        api().ipc_endpoint_owner.?(req.source, &owner_context_id) != 0 or
+        owner_context_id == 0)
+    {
+        reply_with_status(req, c.FONT_STATUS_IO, 0, 0, 0);
+        return;
+    }
+    if (api().shmem_grant == null or
+        api().shmem_grant.?(g_raster_scratch_shmem_id, owner_context_id) != 0)
+    {
+        reply_with_status(req, c.FONT_STATUS_IO, 0, 0, 0);
+        return;
+    }
+
+    const dst: [*]u8 = g_raster_scratch_ptr.?;
     c.stbtt_MakeCodepointBitmap(&f.font_info, dst, @intCast(w), @intCast(hgt), @intCast(w), scale, scale, @bitCast(codepoint));
-    reply_with_status(req, c.FONT_STATUS_OK, shmem_id, pack_u16_pair(@intCast(w), @intCast(hgt)), pack_s16_pair(x0, y0));
+    if (!g_dbg_raster_logged and codepoint == 'w') {
+        g_dbg_raster_logged = true;
+        var nz: usize = 0;
+        var mx: u8 = 0;
+        var i: usize = 0;
+        while (i < pixel_count) : (i += 1) {
+            const a = dst[i];
+            if (a != 0) nz += 1;
+            if (a > mx) mx = a;
+        }
+        if (nz > 0 and mx > 0) {
+            logMsg("[dbg-font] raster nonzero\n");
+        } else {
+            logMsg("[dbg-font] raster empty\n");
+        }
+    }
+    reply_with_status(req, c.FONT_STATUS_OK, g_raster_scratch_shmem_id, pack_u16_pair(@intCast(w), @intCast(hgt)), pack_s16_pair(x0, y0));
 }
 
 fn load_builtin_fonts() void {

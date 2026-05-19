@@ -59,6 +59,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - Graphics/compositor pointer interaction now also includes bottom-right
   corner live-resize behavior with dimension clamping to framebuffer extents
   and window min/max policy limits.
+- Graphics/compositor now emits resize notifications (`GFX_EVENT_RESIZE`) to
+  window owners during pointer-driven resize; current smoke validation
+  reallocates and re-presents buffers on that event.
 - Input-driver baseline now also includes a wasm `mouse` driver with
   subscription IPC (`MOUSE_IPC_SUBSCRIBE_REQ` + `MOUSE_IPC_MOVE_NOTIFY`) that
   emits PS/2 packet-derived movement deltas and button masks to subscribers.

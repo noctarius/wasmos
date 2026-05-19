@@ -99,6 +99,7 @@ const buffer_slot_t = struct {
     owner_endpoint: u32 = IPC_ENDPOINT_NONE,
     buffer_id: u32 = 0,
     shmem_id: u32 = 0,
+    mapped_ptr: ?[*]u32 = null,
     width: u32 = 0,
     height: u32 = 0,
     stride_bytes: u32 = 0,
@@ -1045,7 +1046,7 @@ fn buffer_alloc(owner_endpoint: u32, width: u32, height: u32) ?usize {
     const buffer_id = buffer_generate_id() orelse return null;
     var shmem_id: u32 = 0;
     var mapped_ptr: ?*anyopaque = null;
-    if (api().shmem_create.?(pages, 0, &shmem_id, @ptrCast(&mapped_ptr)) != 0 or shmem_id == 0) {
+    if (api().shmem_create.?(pages, 0, &shmem_id, @ptrCast(&mapped_ptr)) != 0 or shmem_id == 0 or mapped_ptr == null) {
         logMsg("[gfx] alloc shmem_create failed\n");
         return null;
     }
@@ -1070,6 +1071,7 @@ fn buffer_alloc(owner_endpoint: u32, width: u32, height: u32) ?usize {
     g_buffers[idx].owner_endpoint = owner_endpoint;
     g_buffers[idx].buffer_id = buffer_id;
     g_buffers[idx].shmem_id = shmem_id;
+    g_buffers[idx].mapped_ptr = @ptrCast(@alignCast(mapped_ptr.?));
     g_buffers[idx].width = width;
     g_buffers[idx].height = height;
     g_buffers[idx].stride_bytes = @intCast(stride_u64);
@@ -1423,11 +1425,14 @@ fn draw_window_title_text(win: window_slot_t, clip: c.gfx_rect_t) void {
 
 fn draw_window_buffer(win: window_slot_t, buf: buffer_slot_t, clip: c.gfx_rect_t) bool {
     if (g_fb_pixels == null) return false;
-    const src_ptr_raw = api().shmem_map.?(buf.shmem_id);
-    if (src_ptr_raw == null) return false;
-    defer _ = api().shmem_unmap.?(buf.shmem_id);
-
-    const src_pixels: [*]const u32 = @ptrCast(@alignCast(src_ptr_raw.?));
+    const src_pixels: [*]const u32 = if (buf.mapped_ptr) |p|
+        @ptrCast(p)
+    else blk: {
+        const src_ptr_raw = api().shmem_map.?(buf.shmem_id);
+        if (src_ptr_raw == null) return false;
+        defer _ = api().shmem_unmap.?(buf.shmem_id);
+        break :blk @ptrCast(@alignCast(src_ptr_raw.?));
+    };
     const dst_pixels = g_fb_pixels.?;
     const dst_stride: usize = @intCast(g_fb_info.framebuffer_stride);
 

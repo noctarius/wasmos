@@ -56,6 +56,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - Graphics/compositor pointer interaction now also includes title-bar
   drag-to-move behavior (close zone excluded), with window coordinates clamped
   to framebuffer extents.
+- Graphics/compositor pointer interaction now also includes bottom-right
+  corner live-resize behavior with dimension clamping to framebuffer extents
+  and window min/max policy limits.
 - Input-driver baseline now also includes a wasm `mouse` driver with
   subscription IPC (`MOUSE_IPC_SUBSCRIBE_REQ` + `MOUSE_IPC_MOVE_NOTIFY`) that
   emits PS/2 packet-derived movement deltas and button masks to subscribers.

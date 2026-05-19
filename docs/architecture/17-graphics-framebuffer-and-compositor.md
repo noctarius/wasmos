@@ -386,13 +386,23 @@ Validation:
 
 Tasks:
 
-- implement `DRAW_TEXT` with fixed font atlas path
+- add a dedicated `font-service` (WASM or native) with IPC for:
+  - `open_font(path,size,style)` -> `font_handle`
+  - `get_metrics(font_handle)` -> ascent/descent/line_gap
+  - `raster_glyph(font_handle,codepoint,px_size)` -> glyph bitmap/metrics
+  - optional kerning lookup for adjacent glyph pairs
+- use shared-memory glyph atlases between compositor/apps and `font-service`
+- define glyph cache key and eviction policy
+- implement `DRAW_TEXT` to consume glyph atlas entries (not fixed built-in
+  compositor fonts)
 - add basic input event queue ABI (`GFX_IPC_POLL_EVENT`)
 - connect VT input focus ownership with compositor window focus
 
 Validation:
 
 - smoke for text draw correctness bounds and event delivery ownership
+- smoke for repeated glyph rendering with cache hits/misses and stable metrics
+- negative tests for malformed font payloads and out-of-range atlas accesses
 
 ### Phase 4: Zero-Copy Candidates and Hardware Planes (Optional)
 
@@ -408,7 +418,13 @@ Validation:
 
 ## 11. Implementation Notes and Deferred Gaps
 
-- TODO(phase-3): define stable font asset packaging and font-id namespace.
+- TODO(phase-3): define stable font-service IPC header and versioning policy.
+- TODO(phase-3): define font asset packaging/path policy for `/boot/fonts`.
+- TODO(phase-3): define glyph-atlas shmem layout and lifetime semantics.
+- NOTE(text): OTF-only is not sufficient for broad app compatibility; the
+  target should be OpenType in SFNT containers, meaning both OTF (CFF/CFF2)
+  and TTF (glyf). Implementation may ship OTF-first, but ABI should not
+  preclude TTF support.
 - TODO(phase-4): define per-display multi-head ABI (display id routing).
 - FIXME(security): once event ABI lands, add explicit sequence-number anti-replay
   checks on compositor input event dequeue protocol.

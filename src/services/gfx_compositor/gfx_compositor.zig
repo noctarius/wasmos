@@ -48,6 +48,9 @@ var g_mouse_subscribed: bool = false;
 var g_idle_housekeeping_counter: u32 = 0;
 var g_runtime_lookup_req_id: u32 = GFX_REQUEST_BASE + 0x4000;
 var g_close_emit_logged: bool = false;
+var g_dirty_pending: bool = false;
+var g_dirty_full: bool = false;
+var g_dirty_rect: c.gfx_rect_t = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 
 var g_fb_info: c.nd_framebuffer_info_t = .{
     .framebuffer_base = 0,
@@ -331,7 +334,7 @@ fn cleanup_orphaned_state() void {
     prune_events_for_dead_endpoints();
     if (changed) {
         sync_console_mode_for_windows();
-        _ = compose_full();
+        request_repaint_full();
     }
 }
 
@@ -548,6 +551,46 @@ fn clamp(v: i32, lo: i32, hi: i32) i32 {
     return v;
 }
 
+fn rect_union(a: c.gfx_rect_t, b: c.gfx_rect_t) c.gfx_rect_t {
+    const x0 = if (a.x < b.x) a.x else b.x;
+    const y0 = if (a.y < b.y) a.y else b.y;
+    const a_x1 = a.x + a.w;
+    const a_y1 = a.y + a.h;
+    const b_x1 = b.x + b.w;
+    const b_y1 = b.y + b.h;
+    const x1 = if (a_x1 > b_x1) a_x1 else b_x1;
+    const y1 = if (a_y1 > b_y1) a_y1 else b_y1;
+    return .{ .x = x0, .y = y0, .w = x1 - x0, .h = y1 - y0 };
+}
+
+fn request_repaint_rect(r: c.gfx_rect_t) void {
+    if (r.w <= 0 or r.h <= 0) return;
+    if (g_dirty_full) return;
+    if (!g_dirty_pending) {
+        g_dirty_rect = r;
+        g_dirty_pending = true;
+        return;
+    }
+    g_dirty_rect = rect_union(g_dirty_rect, r);
+}
+
+fn request_repaint_full() void {
+    g_dirty_pending = true;
+    g_dirty_full = true;
+}
+
+fn flush_repaint_if_pending() void {
+    if (!g_dirty_pending) return;
+    if (g_dirty_full) {
+        _ = compose_full();
+    } else {
+        _ = compose_region(g_dirty_rect);
+    }
+    g_dirty_pending = false;
+    g_dirty_full = false;
+    g_dirty_rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
+}
+
 fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
     const old_x = g_pointer_x;
     const old_y = g_pointer_y;
@@ -567,8 +610,8 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
     }
 
     if (g_overlay_locked and (old_x != g_pointer_x or old_y != g_pointer_y)) {
-        _ = compose_region(cursor_rect_at(old_x, old_y));
-        _ = compose_region(cursor_rect_at(g_pointer_x, g_pointer_y));
+        request_repaint_rect(cursor_rect_at(old_x, old_y));
+        request_repaint_rect(cursor_rect_at(g_pointer_x, g_pointer_y));
     }
 
     const prev_buttons = g_pointer_buttons;
@@ -606,8 +649,8 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
             g_windows[resize_idx].width = @intCast(new_w);
             g_windows[resize_idx].height = @intCast(new_h);
             const new_wr = rect_from_window(g_windows[resize_idx]);
-            _ = compose_region(old_wr);
-            _ = compose_region(new_wr);
+            request_repaint_rect(old_wr);
+            request_repaint_rect(new_wr);
             if (g_windows[resize_idx].width != old_w or g_windows[resize_idx].height != old_h) {
                 const win = g_windows[resize_idx];
                 event_push(win.owner_endpoint, c.GFX_EVENT_RESIZE, win.window_id, pack_u16_pair(win.width, win.height), 0);
@@ -634,8 +677,8 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
                 g_windows[drag_idx].y += dy;
             }
             const new_wr = rect_from_window(g_windows[drag_idx]);
-            _ = compose_region(old_wr);
-            _ = compose_region(new_wr);
+            request_repaint_rect(old_wr);
+            request_repaint_rect(new_wr);
         } else {
             g_drag_window_id = 0;
         }
@@ -663,10 +706,10 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
                 g_drag_window_id = g_windows[idx].window_id;
                 g_resize_window_id = 0;
             }
-            _ = compose_full();
+            request_repaint_full();
         } else {
             if (blur_focused_window()) {
-                _ = compose_full();
+                request_repaint_full();
             }
             g_drag_window_id = 0;
             g_resize_window_id = 0;
@@ -697,14 +740,7 @@ fn sync_console_mode_for_windows() void {
         try_switch_to_gfx_tty();
         fb_set_overlay_lock(true);
         g_overlay_locked = true;
-        if (g_fb_info_valid) {
-            _ = compose_region(.{
-                .x = 0,
-                .y = 0,
-                .w = @intCast(g_fb_info.framebuffer_width),
-                .h = @intCast(g_fb_info.framebuffer_height),
-            });
-        }
+        request_repaint_full();
         return;
     }
     if (!has_presented_windows and g_overlay_locked) {
@@ -1156,7 +1192,7 @@ fn handle_destroy_window(msg: *const c.nd_ipc_message_t) void {
     }
     g_windows[slot_idx] = .{};
     sync_console_mode_for_windows();
-    _ = compose_full();
+    request_repaint_full();
     reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
 }
 
@@ -1185,7 +1221,7 @@ fn handle_resize_window(msg: *const c.nd_ipc_message_t) void {
     g_windows[slot_idx].current_buffer_id = 0;
     g_windows[slot_idx].width = width;
     g_windows[slot_idx].height = height;
-    _ = compose_full();
+    request_repaint_full();
     reply_with_status(msg, c.GFX_STATUS_OK, width, height, 0);
 }
 
@@ -1263,7 +1299,7 @@ fn handle_release_shared_buffer(msg: *const c.nd_ipc_message_t) void {
     // invalidates handle usage, but backing pages are not reclaimed yet.
     g_buffers[buf_idx] = .{};
     if (changed) {
-        _ = compose_full();
+        request_repaint_full();
     }
     reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
 }
@@ -1333,13 +1369,15 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
     sync_console_mode_for_windows();
 
     if (damage_count == 0 or damage_shmem_id == 0 or damage_count > GFX_MAX_DAMAGE_RECTS) {
-        reply_with_status(msg, compose_full(), 0, 0, 0);
+        request_repaint_full();
+        reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
         return;
     }
 
     const dmg_ptr_raw = api().shmem_map.?(damage_shmem_id);
     if (dmg_ptr_raw == null) {
-        reply_with_status(msg, compose_full(), 0, 0, 0);
+        request_repaint_full();
+        reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
         return;
     }
     defer _ = api().shmem_unmap.?(damage_shmem_id);
@@ -1349,7 +1387,8 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
     while (i < damage_count) : (i += 1) {
         const r = dmg_rects[@intCast(i)];
         if (r.w <= 0 or r.h <= 0 or r.x < 0 or r.y < 0) {
-            reply_with_status(msg, compose_full(), 0, 0, 0);
+            request_repaint_full();
+            reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
             return;
         }
         const rw: u32 = @intCast(r.w);
@@ -1359,7 +1398,8 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
         if (rx >= g_windows[window_idx].width or ry >= g_windows[window_idx].height or
             rw > (g_windows[window_idx].width - rx) or rh > (g_windows[window_idx].height - ry))
         {
-            reply_with_status(msg, compose_full(), 0, 0, 0);
+            request_repaint_full();
+            reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
             return;
         }
 
@@ -1369,7 +1409,7 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
             .w = r.w,
             .h = r.h,
         };
-        _ = compose_region(screen_rect);
+        request_repaint_rect(screen_rect);
     }
 
     if (!g_damage_marker_logged) {
@@ -1449,6 +1489,7 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
         var msg: c.nd_ipc_message_t = undefined;
         const rc = api().ipc_recv.?(ctxId(), g_gfx_endpoint, &msg);
         if (rc == IPC_EMPTY) {
+            flush_repaint_if_pending();
             g_idle_housekeeping_counter +%= 1;
             if ((g_idle_housekeeping_counter & 0x3F) == 0) {
                 refresh_input_subscriptions_runtime();
@@ -1484,5 +1525,6 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
             c.GFX_IPC_POLL_EVENT => handle_poll_event(&msg),
             else => reply_unsupported(&msg),
         }
+        flush_repaint_if_pending();
     }
 }

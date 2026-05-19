@@ -9,7 +9,7 @@
 #include "wasmos_app.h"
 #include "wasmos_driver_abi.h"
 
-#define PM_FS_BUFFER_SIZE (256u * 1024u)
+#define PM_FS_BUFFER_SIZE (2u * 1024u * 1024u)
 #define PM_DMA_WINDOW_LIMIT 16u
 
 typedef struct {

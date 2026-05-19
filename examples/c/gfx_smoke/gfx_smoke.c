@@ -113,8 +113,10 @@ map_shared_buffer_ptr(int32_t shmem_id, int32_t stride_bytes, int32_t height, ui
 static int
 fill_pattern(uint8_t *base, int32_t width, int32_t height, int32_t stride_bytes, uint32_t phase)
 {
+    (void)stride_bytes;
+    const int32_t packed_stride = width * FBPP;
     for (int32_t y = 0; y < height; ++y) {
-        uint32_t *row = (uint32_t *)(void *)(base + (y * stride_bytes));
+        uint32_t *row = (uint32_t *)(void *)(base + (y * packed_stride));
         for (int32_t x = 0; x < width; ++x) {
             uint32_t r = (uint32_t)((x + (int32_t)phase) & 0xFF);
             uint32_t g = (uint32_t)((y + (int32_t)(phase * 3u)) & 0xFF);
@@ -136,6 +138,8 @@ fill_rect(uint8_t *base,
           int32_t h,
           uint32_t color)
 {
+    (void)stride_bytes;
+    const int32_t packed_stride = width * FBPP;
     if (w <= 0 || h <= 0) return;
     int32_t x0 = x < 0 ? 0 : x;
     int32_t y0 = y < 0 ? 0 : y;
@@ -144,7 +148,7 @@ fill_rect(uint8_t *base,
     if (x1 > width) x1 = width;
     if (y1 > height) y1 = height;
     for (int32_t yy = y0; yy < y1; ++yy) {
-        uint32_t *row = (uint32_t *)(void *)(base + (yy * stride_bytes));
+        uint32_t *row = (uint32_t *)(void *)(base + (yy * packed_stride));
         for (int32_t xx = x0; xx < x1; ++xx) {
             row[xx] = color;
         }
@@ -161,7 +165,7 @@ fill_wasmos_logo(uint8_t *base, int32_t width, int32_t height, int32_t stride_by
     const int32_t off_x = (width - mascot_w) / 2;
     const int32_t off_y = (height - mascot_h) / 2;
     for (int32_t y = 0; y < mascot_h; ++y) {
-        uint32_t *dst_row = (uint32_t *)(void *)(base + ((off_y + y) * stride_bytes));
+        uint32_t *dst_row = (uint32_t *)(void *)(base + ((off_y + y) * (width * FBPP)));
         const int32_t src_row_off = y * mascot_w * 4;
         for (int32_t x = 0; x < mascot_w; ++x) {
             const int32_t i = src_row_off + (x * 4);

@@ -23,7 +23,7 @@ const PAGE_SIZE: u64 = 4096;
 const CURSOR_W: i32 = 9;
 const CURSOR_H: i32 = 14;
 const CHROME_BORDER: i32 = 1;
-const CHROME_TITLE_H: i32 = 14;
+const CHROME_TITLE_H: i32 = 18;
 const CHROME_CLOSE_SZ: i32 = 10;
 const CHROME_CLOSE_PAD: i32 = 2;
 const CHROME_CLOSE_HIT_W: i32 = 24;
@@ -1176,9 +1176,10 @@ fn draw_window_placeholder(win: window_slot_t, clip: c.gfx_rect_t) void {
 
 fn window_close_rect(win: window_slot_t) c.gfx_rect_t {
     const ww: i32 = @intCast(win.width);
+    const close_y = win.y + (CHROME_TITLE_H - CHROME_CLOSE_SZ) / 2;
     return .{
         .x = win.x + ww - CHROME_CLOSE_PAD - CHROME_CLOSE_SZ,
-        .y = win.y + CHROME_CLOSE_PAD,
+        .y = close_y,
         .w = CHROME_CLOSE_SZ,
         .h = CHROME_CLOSE_SZ,
     };
@@ -1323,7 +1324,16 @@ fn glyph_cache_insert_from_font(codepoint: u32) bool {
     const h: i32 = @as(i32, @intCast((packed_wh >> 16) & 0xFFFF));
     const x0: i16 = @bitCast(@as(u16, @truncate(packed_xy & 0xFFFF)));
     const y0: i16 = @bitCast(@as(u16, @truncate((packed_xy >> 16) & 0xFFFF)));
-    var mask_len: usize = 0;
+    var entry = glyph_cache_entry_t{
+        .valid = true,
+        .codepoint = codepoint,
+        .shmem_id = shmem_id,
+        .w = w,
+        .h = h,
+        .x0 = x0,
+        .y0 = y0,
+        .mask_len = 0,
+    };
     if (shmem_id != 0 and w > 0 and h > 0) {
         const ptr = api().shmem_map.?(shmem_id);
         if (ptr == null) return false;
@@ -1340,27 +1350,10 @@ fn glyph_cache_insert_from_font(codepoint: u32) bool {
         }
         var j: usize = 0;
         while (j < pixel_count) : (j += 1) {
-            g_glyph_cache[slot].mask_data[j] = mask_src[j];
+            entry.mask_data[j] = mask_src[j];
         }
         _ = api().shmem_unmap.?(shmem_id);
-        mask_len = pixel_count;
-    }
-
-    var entry = glyph_cache_entry_t{
-        .valid = true,
-        .codepoint = codepoint,
-        .shmem_id = shmem_id,
-        .w = w,
-        .h = h,
-        .x0 = x0,
-        .y0 = y0,
-        .mask_len = mask_len,
-    };
-    if (mask_len > 0) {
-        var j: usize = 0;
-        while (j < mask_len) : (j += 1) {
-            entry.mask_data[j] = g_glyph_cache[slot].mask_data[j];
-        }
+        entry.mask_len = pixel_count;
     }
     g_glyph_cache[slot] = entry;
     return true;
@@ -1402,14 +1395,16 @@ fn init_title_glyph_cache_startup() void {
 }
 
 fn draw_window_title_text(win: window_slot_t, clip: c.gfx_rect_t) void {
+    _ = clip;
     if (g_font_endpoint == IPC_ENDPOINT_NONE or g_font_title_handle == 0) return;
     if (!g_title_dbg_draw_logged) {
         g_title_dbg_draw_logged = true;
         logMsg("[dbg-title] draw called\n");
     }
     const cr = window_close_rect(win);
+    const title_clip = window_title_rect(win);
     var pen_x: i32 = win.x + CHROME_BORDER + 4;
-    const base_y: i32 = win.y + CHROME_TITLE_H - 4;
+    const base_y: i32 = win.y + CHROME_TITLE_H - 6;
     var label: [24]u8 = undefined;
     const prefix = "win ";
     var n: usize = 0;
@@ -1432,8 +1427,7 @@ fn draw_window_title_text(win: window_slot_t, clip: c.gfx_rect_t) void {
     var i: usize = 0;
     while (i < n) : (i += 1) {
         const ch: u32 = label[i];
-        const gp = glyph_cache_get(ch) orelse break;
-        const g = gp.*;
+        const g = glyph_cache_get(ch) orelse break;
         if (!g_title_dbg_glyph_stats_logged and ch == 'w') {
             g_title_dbg_glyph_stats_logged = true;
             if (g.mask_len > 0 and g.w > 0 and g.h > 0) {
@@ -1468,7 +1462,7 @@ fn draw_window_title_text(win: window_slot_t, clip: c.gfx_rect_t) void {
                 g.w,
                 g.h,
                 @ptrCast(&g.mask_data[0]),
-                clip,
+                title_clip,
                 0xFFFFFFFF,
             );
         }

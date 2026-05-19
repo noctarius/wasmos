@@ -60,14 +60,10 @@ fn logMsg(msg: []const u8) void {
     _ = api().console_write.?(msg.ptr, @intCast(msg.len));
 }
 
-fn packName16(name: []const u8, out: *[4]u32) void {
-    zu.packName16(name, out);
-}
-
 fn svc_register(name: []const u8, request_id: u32) i32 {
     var args: [4]u32 = undefined;
     var msg: c.nd_ipc_message_t = undefined;
-    packName16(name, &args);
+    zu.packName16(name, &args);
 
     msg.type = c.SVC_IPC_REGISTER_REQ;
     msg.source = g_font_endpoint;
@@ -95,7 +91,7 @@ fn svc_register(name: []const u8, request_id: u32) i32 {
 fn svc_lookup(name: []const u8, request_id: u32) i32 {
     var args: [4]u32 = undefined;
     var msg: c.nd_ipc_message_t = undefined;
-    packName16(name, &args);
+    zu.packName16(name, &args);
 
     msg.type = c.SVC_IPC_LOOKUP_REQ;
     msg.source = g_font_endpoint;
@@ -158,37 +154,17 @@ fn fs_release() void {
     _ = api().buffer_release.?(c.ND_BUFFER_KIND_FS);
 }
 
-fn byte_copy(dst: [*]u8, src: [*]const u8, len: usize) void {
-    zu.byteCopy(dst, src, len);
-}
-
-fn be_u16(data: []const u8, off: usize) ?u16 {
-    return zu.beU16(data, off);
-}
-
-fn be_i16(data: []const u8, off: usize) ?i16 {
-    return zu.beI16(data, off);
-}
-
-fn be_u32(data: []const u8, off: usize) ?u32 {
-    return zu.beU32(data, off);
-}
-
-fn find_table(data: []const u8, tag: [4]u8) ?usize {
-    return zu.findTable(data, tag);
-}
-
 fn parse_ttf_metrics(f: *loaded_font_t) bool {
     if (f.ptr == null or f.len < 12) return false;
     const data: []const u8 = f.ptr.?[0..f.len];
 
-    const head_off = find_table(data, .{ 'h', 'e', 'a', 'd' }) orelse return false;
-    const hhea_off = find_table(data, .{ 'h', 'h', 'e', 'a' }) orelse return false;
+    const head_off = zu.find_table(data, .{ 'h', 'e', 'a', 'd' }) orelse return false;
+    const hhea_off = zu.find_table(data, .{ 'h', 'h', 'e', 'a' }) orelse return false;
 
-    const upem = be_u16(data, head_off + 18) orelse return false;
-    const asc = be_i16(data, hhea_off + 4) orelse return false;
-    const desc = be_i16(data, hhea_off + 6) orelse return false;
-    const gap = be_i16(data, hhea_off + 8) orelse return false;
+    const upem = zu.be_u16(data, head_off + 18) orelse return false;
+    const asc = zu.be_i16(data, hhea_off + 4) orelse return false;
+    const desc = zu.be_i16(data, hhea_off + 6) orelse return false;
+    const gap = zu.be_i16(data, hhea_off + 8) orelse return false;
 
     if (upem == 0) return false;
     f.units_per_em = upem;
@@ -205,7 +181,7 @@ fn read_file_into_shmem(path: []const u8, out_shmem_id: *u32, out_ptr: *[*]u8, o
         return -1;
     };
     if (path.len == 0 or path.len + 1 >= PM_FS_BUFFER_SIZE) return -1;
-    byte_copy(fs_buf_path, path.ptr, path.len);
+    zu.byte_copy(fs_buf_path, path.ptr, path.len);
     fs_buf_path[path.len] = 0;
 
     var reply: c.nd_ipc_message_t = undefined;
@@ -254,7 +230,7 @@ fn read_file_into_shmem(path: []const u8, out_shmem_id: *u32, out_ptr: *[*]u8, o
         if (got > chunk_req) break;
         if (got > 0) {
             const fs_buf_read = fs_borrow_rw() orelse break;
-            byte_copy(dst + total, fs_buf_read, got);
+            zu.byte_copy(dst + total, fs_buf_read, got);
             fs_release();
             total += got;
         }
@@ -296,14 +272,6 @@ fn handle_slot_by_id(handle_id: u32) ?usize {
 fn scaled_i16(v: i16, px: u32, upem: u16) i32 {
     const num: i64 = @as(i64, v) * @as(i64, @intCast(px));
     return @intCast(@divTrunc(num, @as(i64, upem)));
-}
-
-fn pack_u16_pair(a: u32, b: u32) u32 {
-    return zu.packU16Pair(a, b);
-}
-
-fn pack_s16_pair(a: i32, b: i32) u32 {
-    return zu.packS16Pair(a, b);
 }
 
 fn reply_with_status(req: *const c.nd_ipc_message_t, status: i32, arg1: u32, arg2: u32, arg3: u32) void {
@@ -410,7 +378,7 @@ fn handle_raster_glyph(req: *const c.nd_ipc_message_t) void {
     const w: i32 = x1 - x0;
     const hgt: i32 = y1 - y0;
     if (w <= 0 or hgt <= 0) {
-        reply_with_status(req, c.FONT_STATUS_OK, 0, 0, pack_s16_pair(x0, y0));
+        reply_with_status(req, c.FONT_STATUS_OK, 0, 0, zu.pack_s16_pair(x0, y0));
         return;
     }
 
@@ -466,7 +434,7 @@ fn handle_raster_glyph(req: *const c.nd_ipc_message_t) void {
             logMsg("[dbg-font] raster empty\n");
         }
     }
-    reply_with_status(req, c.FONT_STATUS_OK, g_raster_scratch_shmem_id, pack_u16_pair(@intCast(w), @intCast(hgt)), pack_s16_pair(x0, y0));
+    reply_with_status(req, c.FONT_STATUS_OK, g_raster_scratch_shmem_id, zu.pack_u16_pair(@intCast(w), @intCast(hgt)), zu.pack_s16_pair(x0, y0));
 }
 
 fn load_builtin_fonts() void {

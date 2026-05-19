@@ -61,7 +61,8 @@ IMPORTANT: Create a git commit after each prompt iteration.
   emits PS/2 packet-derived movement deltas and button masks to subscribers.
 - Graphics validation now also includes a wasm `gfx-smoke` app available under
   `/boot/apps/gfx_smoke.wap` for manual CLI execution, keeping compositor tests
-  opt-in at runtime instead of sysinit auto-spawn.
+  opt-in at runtime instead of sysinit auto-spawn; the smoke scenario now
+  covers two concurrent windows and close-event teardown of each window.
 - Native-driver ABI now includes endpoint-owner lookup and shmem grant
   callbacks so native services (including `gfx-compositor`) can share
   compositor-owned shmem buffers with requesting wasm clients.

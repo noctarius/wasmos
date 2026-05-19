@@ -1,0 +1,30 @@
+#ifndef WASMOS_FONT_IPC_H
+#define WASMOS_FONT_IPC_H
+
+#include <stdint.h>
+
+enum {
+    FONT_IPC_OPEN_FONT_REQ = 0xA00,
+    FONT_IPC_GET_METRICS_REQ = 0xA01,
+    FONT_IPC_RASTER_GLYPH_REQ = 0xA02,
+
+    FONT_IPC_RESP = 0xA80,
+    FONT_IPC_ERROR = 0xAFF
+};
+
+enum {
+    FONT_ID_ROBOTO = 1,
+    FONT_ID_ROBOTO_MONO = 2,
+    FONT_ID_NOTO_SERIF = 3
+};
+
+enum {
+    FONT_STATUS_OK = 0,
+    FONT_STATUS_INVALID = -1,
+    FONT_STATUS_PERMISSION = -2,
+    FONT_STATUS_UNSUPPORTED = -3,
+    FONT_STATUS_IO = -4,
+    FONT_STATUS_BUSY = -5
+};
+
+#endif

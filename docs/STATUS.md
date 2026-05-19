@@ -56,6 +56,10 @@
 - Graphics/compositor design phase for text now targets a dedicated
   `font-service` (glyph rasterization + metrics + shared atlas IPC) instead of
   a fixed built-in compositor font path; current bring-up scope is TTF-only.
+- Native Zig `font-service` baseline now builds and is packaged as
+  `/boot/system/services/fontsvc.wap`, with `font` endpoint registration,
+  TTF file load from `/boot/system/fonts/*.ttf`, and owner-checked
+  `OPEN_FONT` + `GET_METRICS` IPC; glyph raster IPC is still TODO.
 - Input-driver baseline now also includes a wasm `mouse` driver with
   subscription IPC (`MOUSE_IPC_SUBSCRIBE_REQ` + `MOUSE_IPC_MOVE_NOTIFY`) that
   emits PS/2 packet-derived movement deltas and button masks to subscribers.

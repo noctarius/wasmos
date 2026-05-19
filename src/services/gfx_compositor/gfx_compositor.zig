@@ -16,6 +16,10 @@ const GFX_WINDOW_MAX_DIM: u32 = 8192;
 const PAGE_SIZE: u64 = 4096;
 const CURSOR_W: i32 = 9;
 const CURSOR_H: i32 = 14;
+const CHROME_BORDER: i32 = 1;
+const CHROME_TITLE_H: i32 = 14;
+const CHROME_CLOSE_SZ: i32 = 10;
+const CHROME_CLOSE_PAD: i32 = 2;
 
 var g_api: ?*c.wasmos_driver_api_t = null;
 var g_proc_endpoint: u32 = IPC_ENDPOINT_NONE;
@@ -543,8 +547,13 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
     const left_down_prev = (g_pointer_buttons & 0x1) != 0;
     if (left_down_now and !left_down_prev) {
         if (window_topmost_at(g_pointer_x, g_pointer_y)) |idx| {
+            const hit_close = point_in_rect(g_pointer_x, g_pointer_y, window_close_rect(g_windows[idx]));
             raise_window(idx);
             focus_window(idx);
+            if (hit_close) {
+                const win = g_windows[idx];
+                event_push(win.owner_endpoint, c.GFX_EVENT_CLOSE_REQUEST, win.window_id, 0, 0);
+            }
             _ = compose_full();
         } else {
             blur_focused_window();
@@ -821,6 +830,44 @@ fn draw_window_placeholder(win: window_slot_t, clip: c.gfx_rect_t) void {
     fill_rect(clip.x, clip.y, clip.w, clip.h, body_color);
 }
 
+fn window_close_rect(win: window_slot_t) c.gfx_rect_t {
+    const ww: i32 = @intCast(win.width);
+    return .{
+        .x = win.x + ww - CHROME_CLOSE_PAD - CHROME_CLOSE_SZ,
+        .y = win.y + CHROME_CLOSE_PAD,
+        .w = CHROME_CLOSE_SZ,
+        .h = CHROME_CLOSE_SZ,
+    };
+}
+
+fn point_in_rect(x: i32, y: i32, r: c.gfx_rect_t) bool {
+    return x >= r.x and y >= r.y and x < r.x + r.w and y < r.y + r.h;
+}
+
+fn draw_window_chrome(win: window_slot_t, clip: c.gfx_rect_t, focused: bool) void {
+    const wr = rect_from_window(win);
+    if (!rect_intersects(clip, wr)) return;
+
+    const border_color: u32 = if (focused) 0xFF7EC8FF else 0xFF5A6A7A;
+    const title_color: u32 = if (focused) 0xFF173A53 else 0xFF202A33;
+    const close_bg: u32 = 0xFFC43A3A;
+    const close_fg: u32 = 0xFFFFFFFF;
+
+    fill_rect(win.x, win.y, @intCast(win.width), CHROME_BORDER, border_color);
+    fill_rect(win.x, win.y, CHROME_BORDER, @intCast(win.height), border_color);
+    fill_rect(win.x + @as(i32, @intCast(win.width)) - CHROME_BORDER, win.y, CHROME_BORDER, @intCast(win.height), border_color);
+    fill_rect(win.x, win.y + @as(i32, @intCast(win.height)) - CHROME_BORDER, @intCast(win.width), CHROME_BORDER, border_color);
+    const ww: i32 = @intCast(win.width);
+    fill_rect(win.x + CHROME_BORDER, win.y + CHROME_BORDER, ww - (CHROME_BORDER * 2), CHROME_TITLE_H - CHROME_BORDER, title_color);
+
+    const cr = window_close_rect(win);
+    fill_rect(cr.x, cr.y, cr.w, cr.h, close_bg);
+    fill_rect(cr.x + 2, cr.y + 2, cr.w - 4, 1, close_fg);
+    fill_rect(cr.x + 2, cr.y + cr.h - 3, cr.w - 4, 1, close_fg);
+    fill_rect(cr.x + 2, cr.y + 2, 1, cr.h - 4, close_fg);
+    fill_rect(cr.x + cr.w - 3, cr.y + 2, 1, cr.h - 4, close_fg);
+}
+
 fn draw_window_buffer(win: window_slot_t, buf: buffer_slot_t, clip: c.gfx_rect_t) bool {
     if (g_fb_pixels == null) return false;
     const src_ptr_raw = api().shmem_map.?(buf.shmem_id);
@@ -900,6 +947,7 @@ fn compose_region(region: c.gfx_rect_t) i32 {
         if (!rendered) {
             draw_window_placeholder(win, clip);
         }
+        draw_window_chrome(win, clip, g_focused_window_id == win.window_id);
     }
 
     if (g_overlay_locked) {

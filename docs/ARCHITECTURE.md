@@ -50,6 +50,9 @@ IMPORTANT: Create a git commit after each prompt iteration.
 - Graphics/compositor now also renders a software cursor overlay above window
   composition and repaints old/new cursor rectangles on movement, making
   pointer position/focus interactions directly visible during bring-up.
+- Graphics/compositor now also renders minimal window chrome (title/border and
+  a close button hit target) and emits `GFX_EVENT_CLOSE_REQUEST` for focused
+  clients when that close box is clicked.
 - Input-driver baseline now also includes a wasm `mouse` driver with
   subscription IPC (`MOUSE_IPC_SUBSCRIBE_REQ` + `MOUSE_IPC_MOVE_NOTIFY`) that
   emits PS/2 packet-derived movement deltas and button masks to subscribers.

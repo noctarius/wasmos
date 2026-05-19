@@ -23,6 +23,7 @@ add_custom_command(
           -O ReleaseSmall
           -fstrip
           -I ${CMAKE_SOURCE_DIR}
+          -I ${CMAKE_SOURCE_DIR}/libs/stb
           -I ${CMAKE_CURRENT_SOURCE_DIR}
           -I ${DRIVER_WASM_DIR}/include
           -I ${LIBC_DIR}/include
@@ -33,6 +34,7 @@ add_custom_command(
           ${DRIVER_WASM_DIR}/include/wasmos_native_driver.h
           ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
           ${LIBC_DIR}/include/wasmos/font_ipc.h
+          ${CMAKE_SOURCE_DIR}/libs/stb/stb_truetype.h
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Building native Zig font-service object"
   VERBATIM

@@ -462,6 +462,22 @@ fn event_pop_for(endpoint: u32, out: *gfx_event_t) bool {
     return false;
 }
 
+fn event_drop_pointer_for(endpoint: u32) void {
+    var i: usize = 0;
+    while (i < g_events.len) : (i += 1) {
+        if (g_events[i].endpoint == endpoint and g_events[i].event_type == c.GFX_EVENT_POINTER) {
+            g_events[i] = .{};
+        }
+    }
+    while (g_event_head != g_event_tail and g_events[g_event_head].endpoint == IPC_ENDPOINT_NONE) {
+        g_event_head = (g_event_head + 1) % g_events.len;
+    }
+    if (g_event_head == g_event_tail) {
+        g_event_head = 0;
+        g_event_tail = 0;
+    }
+}
+
 fn focus_window(window_idx: usize) void {
     const win = g_windows[window_idx];
     if (!win.in_use) return;
@@ -588,6 +604,7 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
                     g_close_emit_logged = true;
                     logMsg("[gfx] close-request emitted\n");
                 }
+                event_drop_pointer_for(win.owner_endpoint);
                 event_push(win.owner_endpoint, c.GFX_EVENT_CLOSE_REQUEST, win.window_id, 0, 0);
             } else if (hit_title) {
                 g_drag_window_id = g_windows[idx].window_id;

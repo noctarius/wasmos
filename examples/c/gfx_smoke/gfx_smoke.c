@@ -17,8 +17,8 @@
 #define GFX_FRAME_COUNT 8
 #define GFX2_W 220
 #define GFX2_H 140
-#define GFX3_W 320
-#define GFX3_H 120
+#define GFX3_W 560
+#define GFX3_H 560
 
 typedef struct {
     int32_t status;
@@ -155,8 +155,8 @@ static int
 fill_wasmos_logo(uint8_t *base, int32_t width, int32_t height, int32_t stride_bytes)
 {
     const uint32_t bg = 0xFF171A22u;
-    const int32_t mascot_w = 96;
-    const int32_t mascot_h = 96;
+    const int32_t mascot_w = 500;
+    const int32_t mascot_h = 500;
     fill_rect(base, width, height, stride_bytes, 0, 0, width, height, bg);
     const int32_t off_x = (width - mascot_w) / 2;
     const int32_t off_y = (height - mascot_h) / 2;

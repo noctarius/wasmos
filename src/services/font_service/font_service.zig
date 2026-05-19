@@ -502,16 +502,6 @@ fn load_builtin_fonts() void {
         "/boot/system/fonts/roboto_mono.ttf",
         "/boot/system/fonts/roboto_serif.ttf",
     };
-    const fallback_paths_rel = [_][]const u8{
-        "../fonts/roboto.ttf",
-        "../fonts/roboto_mono.ttf",
-        "../fonts/roboto_serif.ttf",
-    };
-    const fallback_paths_abs2 = [_][]const u8{
-        "/system/fonts/roboto.ttf",
-        "/system/fonts/roboto_mono.ttf",
-        "/system/fonts/roboto_serif.ttf",
-    };
     const ids = [_]u32{ c.FONT_ID_ROBOTO, c.FONT_ID_ROBOTO_MONO, c.FONT_ID_NOTO_SERIF };
     const labels = [_][]const u8{ "roboto", "roboto-mono", "roboto-serif" };
 
@@ -523,9 +513,7 @@ fn load_builtin_fonts() void {
         var sid: u32 = 0;
         var ptr: [*]u8 = undefined;
         var len: usize = 0;
-        if (read_file_into_shmem(primary_paths[i], &sid, &ptr, &len) != 0 and
-            read_file_into_shmem(fallback_paths_rel[i], &sid, &ptr, &len) != 0 and
-            read_file_into_shmem(fallback_paths_abs2[i], &sid, &ptr, &len) != 0)
+        if (read_file_into_shmem(primary_paths[i], &sid, &ptr, &len) != 0)
         {
             logMsg("[font] load failed\n");
             continue;

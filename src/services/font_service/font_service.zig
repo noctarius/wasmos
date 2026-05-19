@@ -1,7 +1,5 @@
 const c = @cImport({
-    @cInclude("../../drivers/include/wasmos_native_driver.h");
-    @cInclude("../../drivers/include/wasmos_driver_abi.h");
-    @cInclude("../../../lib/libc/include/wasmos/font_ipc.h");
+    @cInclude("font_service_imports.h");
 });
 
 const IPC_OK: i32 = 0;

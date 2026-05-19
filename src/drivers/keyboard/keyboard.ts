@@ -3,6 +3,7 @@ import { std } from "./wasmos";
 const KEYBOARD_STATUS_PORT: i32 = 0x64;
 const KEYBOARD_DATA_PORT: i32 = 0x60;
 const KEYBOARD_OBF_FLAG: i32 = 0x01;
+const KEYBOARD_AUX_FLAG: i32 = 0x20;
 
 const KBD_IPC_SUBSCRIBE_REQ:  i32 = 0x800;
 const KBD_IPC_SUBSCRIBE_RESP: i32 = 0x880;
@@ -38,7 +39,12 @@ let g_kbd_ep: i32 = -1;
 let g_extended_pending: i32 = 0;
 
 function readScancode(): i32 {
-  if ((io_in8(KEYBOARD_STATUS_PORT) & KEYBOARD_OBF_FLAG) == 0) {
+  let status = io_in8(KEYBOARD_STATUS_PORT);
+  if ((status & KEYBOARD_OBF_FLAG) == 0) {
+    return -1;
+  }
+  if ((status & KEYBOARD_AUX_FLAG) != 0) {
+    /* AUX (mouse) byte: leave for mouse driver. */
     return -1;
   }
   return io_in8(KEYBOARD_DATA_PORT) & 0xFF;

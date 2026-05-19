@@ -9,10 +9,8 @@ pub fn packName16(name: []const u8, out: *[4]u32) void {
 }
 
 pub fn byteCopy(dst: [*]u8, src: [*]const u8, len: usize) void {
-    var i: usize = 0;
-    while (i < len) : (i += 1) {
-        dst[i] = src[i];
-    }
+    if (len == 0) return;
+    _ = c.memcpy(@ptrCast(dst), @ptrCast(src), len);
 }
 
 pub fn beU16(data: []const u8, off: usize) ?u16 {
@@ -57,3 +55,6 @@ pub fn packS16Pair(a: i32, b: i32) u32 {
     const b16: u16 = @bitCast(@as(i16, @truncate(b)));
     return @as(u32, a16) | (@as(u32, b16) << 16);
 }
+const c = @cImport({
+    @cInclude("string.h");
+});

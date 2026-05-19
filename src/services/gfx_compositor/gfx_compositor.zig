@@ -35,6 +35,10 @@ var g_rng_state: u32 = 0xA5A5_5A5A;
 var g_damage_marker_logged: bool = false;
 var g_window_owner_deny_logged: bool = false;
 var g_buffer_owner_deny_logged: bool = false;
+var g_kbd_subscribed: bool = false;
+var g_mouse_subscribed: bool = false;
+var g_idle_housekeeping_counter: u32 = 0;
+var g_runtime_lookup_req_id: u32 = GFX_REQUEST_BASE + 0x4000;
 
 var g_fb_info: c.nd_framebuffer_info_t = .{
     .framebuffer_base = 0,
@@ -252,6 +256,7 @@ fn subscribe_keyboard() i32 {
     if (reply.type != c.KBD_IPC_SUBSCRIBE_RESP or @as(i32, @bitCast(reply.arg0)) != 0) {
         return -1;
     }
+    g_kbd_subscribed = true;
     return 0;
 }
 
@@ -265,7 +270,92 @@ fn subscribe_mouse() i32 {
     if (reply.type != c.MOUSE_IPC_SUBSCRIBE_RESP or @as(i32, @bitCast(reply.arg0)) != 0) {
         return -1;
     }
+    g_mouse_subscribed = true;
     return 0;
+}
+
+fn endpoint_alive(endpoint: u32) bool {
+    if (endpoint == IPC_ENDPOINT_NONE) return false;
+    if (api().ipc_endpoint_owner == null) return true;
+    var owner_context_id: u32 = 0;
+    return api().ipc_endpoint_owner.?(endpoint, &owner_context_id) == 0;
+}
+
+fn prune_events_for_dead_endpoints() void {
+    var i: usize = 0;
+    while (i < g_events.len) : (i += 1) {
+        const ep = g_events[i].endpoint;
+        if (ep != IPC_ENDPOINT_NONE and !endpoint_alive(ep)) {
+            g_events[i] = .{};
+        }
+    }
+    while (g_event_head != g_event_tail and g_events[g_event_head].endpoint == IPC_ENDPOINT_NONE) {
+        g_event_head = (g_event_head + 1) % g_events.len;
+    }
+    if (g_event_head == g_event_tail) {
+        g_event_head = 0;
+        g_event_tail = 0;
+    }
+}
+
+fn cleanup_orphaned_state() void {
+    var changed = false;
+    var i: usize = 0;
+    while (i < g_windows.len) : (i += 1) {
+        if (!g_windows[i].in_use) continue;
+        if (endpoint_alive(g_windows[i].owner_endpoint)) continue;
+        if (g_focused_window_id == g_windows[i].window_id) {
+            g_focused_window_id = 0;
+        }
+        g_windows[i] = .{};
+        changed = true;
+    }
+
+    i = 0;
+    while (i < g_buffers.len) : (i += 1) {
+        if (!g_buffers[i].in_use) continue;
+        if (endpoint_alive(g_buffers[i].owner_endpoint)) continue;
+        g_buffers[i] = .{};
+        changed = true;
+    }
+
+    prune_events_for_dead_endpoints();
+    if (changed) {
+        sync_console_mode_for_windows();
+        _ = compose_full();
+    }
+}
+
+fn refresh_input_subscriptions_runtime() void {
+    if (g_kbd_subscribed and !endpoint_alive(g_kbd_endpoint)) {
+        g_kbd_subscribed = false;
+        g_kbd_endpoint = IPC_ENDPOINT_NONE;
+    }
+    if (g_mouse_subscribed and !endpoint_alive(g_mouse_endpoint)) {
+        g_mouse_subscribed = false;
+        g_mouse_endpoint = IPC_ENDPOINT_NONE;
+    }
+
+    if (!g_kbd_subscribed) {
+        if (g_kbd_endpoint == IPC_ENDPOINT_NONE or !endpoint_alive(g_kbd_endpoint)) {
+            const ep = svc_lookup("kbd", g_runtime_lookup_req_id);
+            g_runtime_lookup_req_id +%= 1;
+            if (ep >= 0) g_kbd_endpoint = @bitCast(ep);
+        }
+        if (g_kbd_endpoint != IPC_ENDPOINT_NONE and subscribe_keyboard() != 0) {
+            g_kbd_subscribed = false;
+        }
+    }
+    if (!g_mouse_subscribed) {
+        if (g_mouse_endpoint == IPC_ENDPOINT_NONE or !endpoint_alive(g_mouse_endpoint)) {
+            const ep = svc_lookup("mouse", g_runtime_lookup_req_id);
+            g_runtime_lookup_req_id +%= 1;
+            if (ep >= 0) g_mouse_endpoint = @bitCast(ep);
+        }
+        if (g_mouse_endpoint != IPC_ENDPOINT_NONE and subscribe_mouse() != 0) {
+            g_mouse_subscribed = false;
+        }
+    }
 }
 
 fn ipc_call(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t) i32 {
@@ -381,6 +471,15 @@ fn focus_window(window_idx: usize) void {
     event_push(win.owner_endpoint, c.GFX_EVENT_FOCUS_GAINED, win.window_id, 0, 0);
 }
 
+fn blur_focused_window() void {
+    if (g_focused_window_id == 0) return;
+    if (window_find_by_id(g_focused_window_id)) |focused_idx| {
+        const focused = g_windows[focused_idx];
+        event_push(focused.owner_endpoint, c.GFX_EVENT_FOCUS_LOST, focused.window_id, 0, 0);
+    }
+    g_focused_window_id = 0;
+}
+
 fn window_topmost_at(x: i32, y: i32) ?usize {
     var best: ?usize = null;
     var best_z: u32 = 0;
@@ -447,6 +546,8 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
             raise_window(idx);
             focus_window(idx);
             _ = compose_full();
+        } else {
+            blur_focused_window();
         }
     }
     g_pointer_buttons = buttons;
@@ -1154,6 +1255,11 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
         var msg: c.nd_ipc_message_t = undefined;
         const rc = api().ipc_recv.?(ctxId(), g_gfx_endpoint, &msg);
         if (rc == IPC_EMPTY) {
+            g_idle_housekeeping_counter +%= 1;
+            if ((g_idle_housekeeping_counter & 0x3F) == 0) {
+                refresh_input_subscriptions_runtime();
+                cleanup_orphaned_state();
+            }
             api().sched_yield.?();
             continue;
         }

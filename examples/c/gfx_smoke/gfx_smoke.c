@@ -167,7 +167,7 @@ poll_gfx_focus_event(int32_t gfx_ep, int32_t reply_ep, int32_t *req, int32_t exp
 }
 
 static void
-poll_gfx_key_events_once(int32_t gfx_ep, int32_t reply_ep, int32_t *req)
+poll_gfx_events_once(int32_t gfx_ep, int32_t reply_ep, int32_t *req)
 {
     gfx_reply_t ev;
     if (send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_POLL_EVENT, 0, 0, 0, 0, &ev) != 0 ||
@@ -179,6 +179,20 @@ poll_gfx_key_events_once(int32_t gfx_ep, int32_t reply_ep, int32_t *req)
         int n = snprintf(msg, sizeof(msg),
                          "[test] gfx smoke event key sc=%d flags=%d\n",
                          ev.arg2, ev.arg3);
+        if (n > 0) {
+            (void)putsn(msg, (size_t)n);
+        }
+    } else if (ev.arg1 == GFX_EVENT_FOCUS_GAINED) {
+        puts("[test] gfx smoke event focus-gained");
+    } else if (ev.arg1 == GFX_EVENT_FOCUS_LOST) {
+        puts("[test] gfx smoke event focus-lost");
+    } else if (ev.arg1 == GFX_EVENT_POINTER) {
+        int16_t dx = (int16_t)(ev.arg2 & 0xFFFF);
+        int16_t dy = (int16_t)((ev.arg2 >> 16) & 0xFFFF);
+        char msg[112];
+        int n = snprintf(msg, sizeof(msg),
+                         "[test] gfx smoke event ptr dx=%d dy=%d btn=%d\n",
+                         (int)dx, (int)dy, ev.arg3);
         if (n > 0) {
             (void)putsn(msg, (size_t)n);
         }
@@ -303,7 +317,7 @@ main(int argc, char **argv)
             puts("[test] gfx smoke present-loop failed");
             return GFX_SMOKE_E_PRESENT_LOOP;
         }
-        poll_gfx_key_events_once(gfx_ep, reply_ep, &req);
+        poll_gfx_events_once(gfx_ep, reply_ep, &req);
         (void)wasmos_sched_yield();
     }
     puts("[test] gfx smoke visible done");
@@ -317,7 +331,7 @@ main(int argc, char **argv)
             if ((now - start_ticks) >= GFX_HOLD_TICKS) {
                 break;
             }
-            poll_gfx_key_events_once(gfx_ep, reply_ep, &req);
+            poll_gfx_events_once(gfx_ep, reply_ep, &req);
             (void)wasmos_sched_yield();
         }
     }

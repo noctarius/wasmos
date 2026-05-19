@@ -196,6 +196,7 @@ static void *
 nd_buffer_borrow(uint32_t kind, uint32_t source_context_id,
                  uint32_t flags, uint32_t size)
 {
+    uint8_t borrowed = 0;
     if (size == 0 || (size & (uint32_t)(PAGE_SIZE - 1)) != 0) {
         return (void *)0;
     }
@@ -211,15 +212,20 @@ nd_buffer_borrow(uint32_t kind, uint32_t source_context_id,
     if (!ctx || ctx->root_table == 0) {
         return (void *)0;
     }
-    if (process_manager_buffer_borrow_context(kind, proc->context_id,
-                                              source_context_id, flags) != 0) {
-        return (void *)0;
+    if (source_context_id != proc->context_id) {
+        if (process_manager_buffer_borrow_context(kind, proc->context_id,
+                                                  source_context_id, flags) != 0) {
+            return (void *)0;
+        }
+        borrowed = 1;
     }
 
     void *buffer = process_manager_buffer_for_context(kind, proc->context_id);
     uint32_t max_size = process_manager_buffer_size(kind);
     if (!buffer || max_size == 0 || size > max_size) {
-        (void)process_manager_buffer_release_context(kind, proc->context_id);
+        if (borrowed) {
+            (void)process_manager_buffer_release_context(kind, proc->context_id);
+        }
         return (void *)0;
     }
 

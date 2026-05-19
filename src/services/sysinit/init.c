@@ -257,6 +257,8 @@ target_spawn_path(const char *name, char *out, uint32_t out_len)
     }
     if (str_eq(name, "chardev-client")) {
         src = "/boot/apps/chardev_client.wap";
+    } else if (str_eq(name, "font-service")) {
+        src = "/boot/system/services/fontsvc.wap";
     } else if (str_eq(name, "vt")) {
         src = "/boot/system/services/vt.wap";
     } else if (str_eq(name, "cli")) {
@@ -376,6 +378,19 @@ initialize(int32_t proc_endpoint,
         }
 
         const char *name = g_targets[g_target_index];
+        if (str_eq(name, "gfx-compositor") && !proc_running("font-service")) {
+            char dep_path[96];
+            trace_line("[sysinit] spawn font-service (dep)\n");
+            if (target_spawn_path("font-service", dep_path, sizeof(dep_path)) != 0 ||
+                spawn_path(dep_path) != 0) {
+                log_line("[sysinit] spawn failed: font-service\n");
+                stall_forever();
+            }
+            /* Let service registration settle before compositor starts. */
+            for (uint32_t wait = 0; wait < 16u; ++wait) {
+                wasmos_sched_yield();
+            }
+        }
         if (str_eq(name, "cli")) {
             int cli_count = proc_count_named("cli");
             /* tty0 stays system console; keep one CLI per VT tty1..tty3. */

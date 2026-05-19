@@ -11,6 +11,11 @@ const GFX_MAX_WINDOWS: usize = 32;
 const GFX_MAX_BUFFERS: usize = 64;
 const GFX_MAX_DAMAGE_RECTS: u32 = 256;
 const GFX_MAX_EVENTS: usize = 128;
+const GFX_MAX_GLYPH_CACHE: usize = 64;
+const GFX_MAX_GLYPH_BYTES: usize = 4096;
+const FONT_INIT_MAX_ATTEMPTS: u32 = 64;
+const FONT_INIT_RETRY_MASK: u32 = 0x3F;
+const TITLE_GLYPHS: []const u8 = "win 0123456789";
 const GFX_WINDOW_MIN_DIM: u32 = 1;
 const GFX_WINDOW_MAX_DIM: u32 = 8192;
 const PAGE_SIZE: u64 = 4096;
@@ -30,6 +35,11 @@ var g_fb_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_vt_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_kbd_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_mouse_endpoint: u32 = IPC_ENDPOINT_NONE;
+var g_font_endpoint: u32 = IPC_ENDPOINT_NONE;
+var g_font_title_handle: u32 = 0;
+var g_font_init_failed: bool = false;
+var g_font_init_attempts: u32 = 0;
+var g_font_prime_index: usize = 0;
 var g_overlay_locked: bool = false;
 var g_next_window_id: u32 = 1;
 var g_next_z: u32 = 1;
@@ -102,9 +112,22 @@ const gfx_event_t = struct {
     arg3: u32 = 0,
 };
 
+const glyph_cache_entry_t = struct {
+    valid: bool = false,
+    codepoint: u32 = 0,
+    shmem_id: u32 = 0,
+    w: i32 = 0,
+    h: i32 = 0,
+    x0: i16 = 0,
+    y0: i16 = 0,
+    mask_len: usize = 0,
+    mask_data: [GFX_MAX_GLYPH_BYTES]u8 = [_]u8{0} ** GFX_MAX_GLYPH_BYTES,
+};
+
 var g_windows: [GFX_MAX_WINDOWS]window_slot_t = [_]window_slot_t{.{}} ** GFX_MAX_WINDOWS;
 var g_buffers: [GFX_MAX_BUFFERS]buffer_slot_t = [_]buffer_slot_t{.{}} ** GFX_MAX_BUFFERS;
 var g_events: [GFX_MAX_EVENTS]gfx_event_t = [_]gfx_event_t{.{}} ** GFX_MAX_EVENTS;
+var g_glyph_cache: [GFX_MAX_GLYPH_CACHE]glyph_cache_entry_t = [_]glyph_cache_entry_t{.{}} ** GFX_MAX_GLYPH_CACHE;
 var g_event_head: usize = 0;
 var g_event_tail: usize = 0;
 
@@ -258,6 +281,53 @@ fn lookup_mouse_endpoint() i32 {
     return -1;
 }
 
+fn lookup_font_endpoint() i32 {
+    var i: u32 = 0;
+    while (i < GFX_FB_LOOKUP_RETRIES) : (i += 1) {
+        const ep = svc_lookup("font", GFX_REQUEST_BASE + 0x240 + i);
+        if (ep >= 0) {
+            g_font_endpoint = @bitCast(ep);
+            return 0;
+        }
+        api().sched_yield.?();
+    }
+    return -1;
+}
+
+fn open_title_font_handle() i32 {
+    if (g_font_endpoint == IPC_ENDPOINT_NONE) return -1;
+    var reply: c.nd_ipc_message_t = undefined;
+    const req_id = g_runtime_lookup_req_id;
+    g_runtime_lookup_req_id +%= 1;
+    if (ipc_call_budgeted(g_font_endpoint, req_id, c.FONT_IPC_OPEN_FONT_REQ, c.FONT_ID_ROBOTO, 10, 0, 0, &reply, 4) != 0) {
+        return -1;
+    }
+    if (reply.type != c.FONT_IPC_RESP or @as(i32, @bitCast(reply.arg0)) != c.FONT_STATUS_OK) {
+        return -1;
+    }
+    g_font_title_handle = reply.arg1;
+    return if (g_font_title_handle == 0) -1 else 0;
+}
+
+fn ensure_font_title_ready_lazy() void {
+    if (g_font_title_handle != 0 or g_font_init_failed) return;
+    if (active_window_count() == 0) return;
+    if ((g_idle_housekeeping_counter & FONT_INIT_RETRY_MASK) != 0) return;
+    if (g_font_init_attempts >= FONT_INIT_MAX_ATTEMPTS) {
+        g_font_init_failed = true;
+        return;
+    }
+    g_font_init_attempts +%= 1;
+    if (g_font_endpoint == IPC_ENDPOINT_NONE) {
+        const ep = svc_lookup("font", g_runtime_lookup_req_id);
+        g_runtime_lookup_req_id +%= 1;
+        if (ep < 0) return;
+        g_font_endpoint = @bitCast(ep);
+    }
+    if (open_title_font_handle() != 0) return;
+    request_repaint_full();
+}
+
 fn subscribe_keyboard() i32 {
     if (g_kbd_endpoint == IPC_ENDPOINT_NONE) return -1;
     var reply: c.nd_ipc_message_t = undefined;
@@ -393,6 +463,32 @@ fn ipc_call(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u
     }
 }
 
+fn ipc_call_budgeted(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t, max_empty_polls: u32) i32 {
+    var req: c.nd_ipc_message_t = undefined;
+    req.type = msg_type;
+    req.source = g_gfx_endpoint;
+    req.destination = destination;
+    req.request_id = request_id;
+    req.arg0 = arg0;
+    req.arg1 = arg1;
+    req.arg2 = arg2;
+    req.arg3 = arg3;
+    if (api().ipc_send.?(ctxId(), destination, &req) != IPC_OK) return -1;
+
+    var polls: u32 = 0;
+    while (true) {
+        const rc = api().ipc_recv.?(ctxId(), g_gfx_endpoint, out);
+        if (rc == IPC_EMPTY) {
+            if (polls >= max_empty_polls) return -1;
+            polls +%= 1;
+            api().sched_yield.?();
+            continue;
+        }
+        if (rc != IPC_OK) return -1;
+        if (out.request_id == request_id) return 0;
+    }
+}
+
 fn log_fb_geometry_probe() void {
     var reply: c.nd_ipc_message_t = undefined;
     const req_id: u32 = GFX_REQUEST_BASE + GFX_FB_LOOKUP_RETRIES + 1;
@@ -471,6 +567,22 @@ fn event_drop_pointer_for(endpoint: u32) void {
     var i: usize = 0;
     while (i < g_events.len) : (i += 1) {
         if (g_events[i].endpoint == endpoint and g_events[i].event_type == c.GFX_EVENT_POINTER) {
+            g_events[i] = .{};
+        }
+    }
+    while (g_event_head != g_event_tail and g_events[g_event_head].endpoint == IPC_ENDPOINT_NONE) {
+        g_event_head = (g_event_head + 1) % g_events.len;
+    }
+    if (g_event_head == g_event_tail) {
+        g_event_head = 0;
+        g_event_tail = 0;
+    }
+}
+
+fn event_drop_for(endpoint: u32) void {
+    var i: usize = 0;
+    while (i < g_events.len) : (i += 1) {
+        if (g_events[i].endpoint == endpoint) {
             g_events[i] = .{};
         }
     }
@@ -697,7 +809,9 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
                     g_close_emit_logged = true;
                     logMsg("[gfx] close-request emitted\n");
                 }
-                event_drop_pointer_for(win.owner_endpoint);
+                g_drag_window_id = 0;
+                g_resize_window_id = 0;
+                event_drop_for(win.owner_endpoint);
                 event_push(win.owner_endpoint, c.GFX_EVENT_CLOSE_REQUEST, win.window_id, 0, 0);
             } else if (hit_resize) {
                 g_resize_window_id = g_windows[idx].window_id;
@@ -1048,6 +1162,185 @@ fn draw_window_chrome(win: window_slot_t, clip: c.gfx_rect_t, focused: bool) voi
     fill_rect(cr.x + 2, cr.y + cr.h - 3, cr.w - 4, 1, close_fg);
     fill_rect(cr.x + 2, cr.y + 2, 1, cr.h - 4, close_fg);
     fill_rect(cr.x + cr.w - 3, cr.y + 2, 1, cr.h - 4, close_fg);
+
+    // Disabled until font IPC is fully decoupled from compositor responsiveness.
+    // draw_window_title_text(win, clip);
+}
+
+fn blend_u8(dst: u32, src: u32, alpha: u8) u32 {
+    if (alpha == 0) return dst;
+    if (alpha == 255) return src;
+    const a: u32 = alpha;
+    const inv: u32 = 255 - a;
+    const dr: u32 = (dst >> 16) & 0xFF;
+    const dg: u32 = (dst >> 8) & 0xFF;
+    const db: u32 = dst & 0xFF;
+    const sr: u32 = (src >> 16) & 0xFF;
+    const sg: u32 = (src >> 8) & 0xFF;
+    const sb: u32 = src & 0xFF;
+    const r: u32 = (sr * a + dr * inv) / 255;
+    const g: u32 = (sg * a + dg * inv) / 255;
+    const b: u32 = (sb * a + db * inv) / 255;
+    return 0xFF000000 | (r << 16) | (g << 8) | b;
+}
+
+fn draw_glyph_mask(dst_x: i32, dst_y: i32, glyph_w: i32, glyph_h: i32, mask: [*]const u8, clip: c.gfx_rect_t, color: u32) void {
+    if (g_fb_pixels == null or !g_fb_info_valid) return;
+    const fb = g_fb_pixels.?;
+    const stride: usize = @intCast(g_fb_info.framebuffer_stride);
+    var y: i32 = 0;
+    while (y < glyph_h) : (y += 1) {
+        const py = dst_y + y;
+        if (py < clip.y or py >= clip.y + clip.h) continue;
+        if (py < 0 or py >= @as(i32, @intCast(g_fb_info.framebuffer_height))) continue;
+        var x: i32 = 0;
+        while (x < glyph_w) : (x += 1) {
+            const px = dst_x + x;
+            if (px < clip.x or px >= clip.x + clip.w) continue;
+            if (px < 0 or px >= @as(i32, @intCast(g_fb_info.framebuffer_width))) continue;
+            const a = mask[@as(usize, @intCast(y * glyph_w + x))];
+            if (a == 0) continue;
+            const idx: usize = @as(usize, @intCast(py)) * stride + @as(usize, @intCast(px));
+            fb[idx] = blend_u8(fb[idx], color, a);
+        }
+    }
+}
+
+fn glyph_cache_lookup(codepoint: u32) ?usize {
+    var i: usize = 0;
+    while (i < g_glyph_cache.len) : (i += 1) {
+        if (g_glyph_cache[i].valid and g_glyph_cache[i].codepoint == codepoint) return i;
+    }
+    return null;
+}
+
+fn glyph_cache_slot_for_new() ?usize {
+    var i: usize = 0;
+    while (i < g_glyph_cache.len) : (i += 1) {
+        if (!g_glyph_cache[i].valid) return i;
+    }
+    return null;
+}
+
+fn glyph_cache_insert_from_font(codepoint: u32) bool {
+    if (glyph_cache_lookup(codepoint) != null) return true;
+    if (g_font_endpoint == IPC_ENDPOINT_NONE or g_font_title_handle == 0) return false;
+    const slot = glyph_cache_slot_for_new() orelse return false;
+    var reply: c.nd_ipc_message_t = undefined;
+    const req_id = g_runtime_lookup_req_id;
+    g_runtime_lookup_req_id +%= 1;
+    if (ipc_call_budgeted(g_font_endpoint, req_id, c.FONT_IPC_RASTER_GLYPH_REQ, g_font_title_handle, codepoint, 0, 0, &reply, 4) != 0) {
+        return false;
+    }
+    if (reply.type != c.FONT_IPC_RESP or @as(i32, @bitCast(reply.arg0)) != c.FONT_STATUS_OK) {
+        return false;
+    }
+
+    const shmem_id = reply.arg1;
+    const packed_wh = reply.arg2;
+    const packed_xy = reply.arg3;
+    const w: i32 = @as(i32, @intCast(packed_wh & 0xFFFF));
+    const h: i32 = @as(i32, @intCast((packed_wh >> 16) & 0xFFFF));
+    const x0: i16 = @bitCast(@as(u16, @truncate(packed_xy & 0xFFFF)));
+    const y0: i16 = @bitCast(@as(u16, @truncate((packed_xy >> 16) & 0xFFFF)));
+    var mask_len: usize = 0;
+    if (shmem_id != 0 and w > 0 and h > 0) {
+        const ptr = api().shmem_map.?(shmem_id);
+        if (ptr == null) return false;
+        const mask_src: [*]const u8 = @ptrCast(@alignCast(ptr.?));
+        const pixel_count_i32 = w * h;
+        if (pixel_count_i32 < 0) {
+            _ = api().shmem_unmap.?(shmem_id);
+            return false;
+        }
+        const pixel_count: usize = @intCast(pixel_count_i32);
+        if (pixel_count > GFX_MAX_GLYPH_BYTES) {
+            _ = api().shmem_unmap.?(shmem_id);
+            return false;
+        }
+        var j: usize = 0;
+        while (j < pixel_count) : (j += 1) {
+            g_glyph_cache[slot].mask_data[j] = mask_src[j];
+        }
+        _ = api().shmem_unmap.?(shmem_id);
+        mask_len = pixel_count;
+    }
+
+    g_glyph_cache[slot] = .{
+        .valid = true,
+        .codepoint = codepoint,
+        .shmem_id = shmem_id,
+        .w = w,
+        .h = h,
+        .x0 = x0,
+        .y0 = y0,
+        .mask_len = mask_len,
+    };
+    return true;
+}
+
+fn glyph_cache_get(codepoint: u32) ?glyph_cache_entry_t {
+    if (glyph_cache_lookup(codepoint)) |idx| return g_glyph_cache[idx];
+    return null;
+}
+
+fn prime_title_glyph_step() void {
+    if (g_font_title_handle == 0 or g_font_init_failed) return;
+    if (g_font_prime_index >= TITLE_GLYPHS.len) return;
+    const cp: u32 = TITLE_GLYPHS[g_font_prime_index];
+    if (glyph_cache_insert_from_font(cp)) {
+        g_font_prime_index += 1;
+        request_repaint_full();
+        return;
+    }
+    g_font_init_attempts +%= 1;
+    if (g_font_init_attempts >= FONT_INIT_MAX_ATTEMPTS) {
+        g_font_init_failed = true;
+    }
+}
+
+fn draw_window_title_text(win: window_slot_t, clip: c.gfx_rect_t) void {
+    if (g_font_endpoint == IPC_ENDPOINT_NONE or g_font_title_handle == 0) return;
+    const cr = window_close_rect(win);
+    var pen_x: i32 = win.x + CHROME_BORDER + 4;
+    const base_y: i32 = win.y + CHROME_TITLE_H - 4;
+    var label: [24]u8 = undefined;
+    const prefix = "win ";
+    var n: usize = 0;
+    while (n < prefix.len) : (n += 1) label[n] = prefix[n];
+    var id = win.window_id;
+    var tmp: [10]u8 = undefined;
+    var digits: usize = 0;
+    while (true) {
+        tmp[digits] = @intCast('0' + (id % 10));
+        digits += 1;
+        id /= 10;
+        if (id == 0 or digits == tmp.len) break;
+    }
+    var d: usize = 0;
+    while (d < digits and n < label.len) : (d += 1) {
+        label[n] = tmp[digits - 1 - d];
+        n += 1;
+    }
+
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const ch: u32 = label[i];
+        const g = glyph_cache_get(ch) orelse break;
+        if (g.mask_len > 0 and g.w > 0 and g.h > 0) {
+            draw_glyph_mask(
+                pen_x + @as(i32, g.x0),
+                base_y + @as(i32, g.y0),
+                g.w,
+                g.h,
+                @ptrCast(&g.mask_data[0]),
+                clip,
+                0xFFFFFFFF,
+            );
+        }
+        pen_x += if (g.w > 0) g.w + 1 else 4;
+        if (pen_x >= cr.x - 4) break;
+    }
 }
 
 fn draw_window_buffer(win: window_slot_t, buf: buffer_slot_t, clip: c.gfx_rect_t) bool {
@@ -1489,6 +1782,9 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
         var msg: c.nd_ipc_message_t = undefined;
         const rc = api().ipc_recv.?(ctxId(), g_gfx_endpoint, &msg);
         if (rc == IPC_EMPTY) {
+            // Disabled until non-regressing integration is ready.
+            // ensure_font_title_ready_lazy();
+            // prime_title_glyph_step();
             flush_repaint_if_pending();
             g_idle_housekeeping_counter +%= 1;
             if ((g_idle_housekeeping_counter & 0x3F) == 0) {

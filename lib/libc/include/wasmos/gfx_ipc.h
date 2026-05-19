@@ -71,7 +71,9 @@ enum {
     /* arg2 packs dx/dy as signed16: low16=dx high16=dy, arg3=button mask */
     GFX_EVENT_POINTER = 4,
     /* arg2=window_id, arg3 reserved */
-    GFX_EVENT_CLOSE_REQUEST = 5
+    GFX_EVENT_CLOSE_REQUEST = 5,
+    /* arg2=window_id, arg3 packs width/height as u16: low16=width high16=height */
+    GFX_EVENT_RESIZE = 6
 };
 
 typedef struct {

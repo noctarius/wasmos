@@ -102,6 +102,7 @@ It defines repository workflow and documentation/update conventions.
 - Graphics compositor now draws minimal window chrome (border/title + close box) and emits `GFX_EVENT_CLOSE_REQUEST` on close-box click so clients can exit on user action instead of fixed timers
 - Graphics compositor now supports pointer-driven drag-to-move on the window title bar (excluding the close-hit zone), with movement clamped to framebuffer bounds
 - Graphics compositor now supports pointer-driven bottom-right corner resize with live geometry updates clamped to framebuffer bounds and window min/max dimension policy
+- Graphics compositor now emits `GFX_EVENT_RESIZE` during pointer-driven resize; `gfx-smoke` consumes this event and reallocates/repaints/presents new-sized buffers live
 - New wasm `mouse` driver baseline is available under `/boot/system/drivers/mouse.wap` with subscriber IPC (`MOUSE_IPC_SUBSCRIBE_REQ`/`MOUSE_IPC_MOVE_NOTIFY`) for PS/2 packet delta/button events
 - Graphics compositor software path now composes in z-order, redraws clipped dirty regions from damage rects (including overlap with higher z-windows), and falls back to full-frame redraw when damage payloads are missing/invalid
 - Graphics compositor now includes `RELEASE_SHARED_BUFFER` handle invalidation/detach flow and explicit owner-deny hardening markers (`[test] gfx window owner deny ok`, `[test] gfx buffer owner deny ok`); backing shmem reclaim remains pending native ABI destroy support

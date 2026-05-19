@@ -536,6 +536,12 @@ fn pack_s16_pair(dx: i32, dy: i32) u32 {
     return @as(u32, dx16) | (@as(u32, dy16) << 16);
 }
 
+fn pack_u16_pair(a: u32, b: u32) u32 {
+    const a16: u16 = @intCast(a & 0xFFFF);
+    const b16: u16 = @intCast(b & 0xFFFF);
+    return @as(u32, a16) | (@as(u32, b16) << 16);
+}
+
 fn clamp(v: i32, lo: i32, hi: i32) i32 {
     if (v < lo) return lo;
     if (v > hi) return hi;
@@ -595,11 +601,17 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
             if (max_h < min_h) max_h = min_h;
             new_w = clamp(new_w, min_w, max_w);
             new_h = clamp(new_h, min_h, max_h);
+            const old_w = g_windows[resize_idx].width;
+            const old_h = g_windows[resize_idx].height;
             g_windows[resize_idx].width = @intCast(new_w);
             g_windows[resize_idx].height = @intCast(new_h);
             const new_wr = rect_from_window(g_windows[resize_idx]);
             _ = compose_region(old_wr);
             _ = compose_region(new_wr);
+            if (g_windows[resize_idx].width != old_w or g_windows[resize_idx].height != old_h) {
+                const win = g_windows[resize_idx];
+                event_push(win.owner_endpoint, c.GFX_EVENT_RESIZE, win.window_id, pack_u16_pair(win.width, win.height), 0);
+            }
         } else {
             g_resize_window_id = 0;
         }

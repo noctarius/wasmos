@@ -9,6 +9,8 @@ This repository uses Codex CLI to assist with development. Follow these conventi
 ## Always Do
 - Read `README.md` and `docs/ARCHITECTURE.md` at the start of a new task.
 - Keep `README.md` and `docs/ARCHITECTURE.md` updated with meaningful changes and new behaviors.
+- Keep `README.md` high-level and stable: do not append per-iteration or
+  changelog-style feature bullets for each incremental step.
 - Add a short `TODO` or `FIXME` comment at the relevant source location when you
   identify a real known gap or deferred issue that is intentionally left in
   place.

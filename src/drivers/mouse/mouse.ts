@@ -126,10 +126,8 @@ function readAuxByte(): i32 {
     return -1;
   }
   if ((st & STATUS_AUX) == 0) {
-    /* Drain non-AUX (typically keyboard) bytes so we do not spin forever on
-     * a full output buffer that does not belong to the mouse stream. */
-    let _ = io_in8(CTRL_DATA_PORT);
-    return -1;
+    /* Not our byte: leave it for keyboard driver. */
+    return -2;
   }
   return io_in8(CTRL_DATA_PORT) & 0xFF;
 }
@@ -255,9 +253,13 @@ export function initialize(proc_endpoint: i32, _arg1: i32,
     let b = readAuxByte();
     if (b >= 0) {
       handleAuxByte(b);
+      io_wait();
+    } else {
+      /* No mouse data (or keyboard-owned data in output buffer): back off to
+       * avoid hot polling contention on the shared PS/2 controller ports. */
+      sched_yield();
+      sched_yield();
     }
-
-    io_wait();
     sched_yield();
   }
 

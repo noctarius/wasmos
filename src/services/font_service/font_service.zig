@@ -24,6 +24,8 @@ const loaded_font_t = struct {
     shmem_id: u32 = 0,
     ptr: ?[*]const u8 = null,
     len: usize = 0,
+    font_info: c.stbtt_fontinfo = undefined,
+    font_info_ready: bool = false,
     units_per_em: u16 = 0,
     ascent: i16 = 0,
     descent: i16 = 0,
@@ -261,6 +263,18 @@ fn scaled_i16(v: i16, px: u32, upem: u16) i32 {
     return @intCast(@divTrunc(num, @as(i64, upem)));
 }
 
+fn pack_u16_pair(a: u32, b: u32) u32 {
+    const a16: u16 = @intCast(a & 0xFFFF);
+    const b16: u16 = @intCast(b & 0xFFFF);
+    return @as(u32, a16) | (@as(u32, b16) << 16);
+}
+
+fn pack_s16_pair(a: i32, b: i32) u32 {
+    const a16: u16 = @bitCast(@as(i16, @truncate(a)));
+    const b16: u16 = @bitCast(@as(i16, @truncate(b)));
+    return @as(u32, a16) | (@as(u32, b16) << 16);
+}
+
 fn reply_with_status(req: *const c.nd_ipc_message_t, status: i32, arg1: u32, arg2: u32, arg3: u32) void {
     if (req.source == IPC_ENDPOINT_NONE or req.request_id == 0) return;
     var resp: c.nd_ipc_message_t = undefined;
@@ -334,9 +348,52 @@ fn handle_get_metrics(req: *const c.nd_ipc_message_t) void {
 }
 
 fn handle_raster_glyph(req: *const c.nd_ipc_message_t) void {
-    // TODO(font-raster): wire stb_truetype glyph rasterization path and return
-    // shmem-backed bitmap payload/metrics once the parser backend is integrated.
-    reply_with_status(req, c.FONT_STATUS_UNSUPPORTED, 0, 0, 0);
+    const handle_id = req.arg0;
+    const codepoint = req.arg1;
+    const hs = handle_slot_by_id(handle_id) orelse {
+        reply_with_status(req, c.FONT_STATUS_INVALID, 0, 0, 0);
+        return;
+    };
+    const h = g_handles[hs];
+    if (h.owner_endpoint != req.source) {
+        reply_with_status(req, c.FONT_STATUS_PERMISSION, 0, 0, 0);
+        return;
+    }
+    const fs = font_slot_by_id(h.font_id) orelse {
+        reply_with_status(req, c.FONT_STATUS_INVALID, 0, 0, 0);
+        return;
+    };
+    const f = &g_fonts[fs];
+    if (!f.available or !f.font_info_ready) {
+        reply_with_status(req, c.FONT_STATUS_IO, 0, 0, 0);
+        return;
+    }
+
+    const scale = c.stbtt_ScaleForPixelHeight(&f.font_info, @floatFromInt(h.px_size));
+    c.wasmos_stbtt_alloc_reset();
+    var x0: c_int = 0;
+    var y0: c_int = 0;
+    var x1: c_int = 0;
+    var y1: c_int = 0;
+    c.stbtt_GetCodepointBitmapBox(&f.font_info, @bitCast(codepoint), scale, scale, &x0, &y0, &x1, &y1);
+    const w: i32 = x1 - x0;
+    const hgt: i32 = y1 - y0;
+    if (w <= 0 or hgt <= 0) {
+        reply_with_status(req, c.FONT_STATUS_OK, 0, 0, pack_s16_pair(x0, y0));
+        return;
+    }
+
+    const pixel_count: usize = @intCast(w * hgt);
+    const pages = (pixel_count + 4095) / 4096;
+    var shmem_id: u32 = 0;
+    var mapped_ptr: ?*anyopaque = null;
+    if (api().shmem_create.?(pages, 0, &shmem_id, @ptrCast(&mapped_ptr)) != 0 or shmem_id == 0 or mapped_ptr == null) {
+        reply_with_status(req, c.FONT_STATUS_IO, 0, 0, 0);
+        return;
+    }
+    const dst: [*]u8 = @ptrCast(@alignCast(mapped_ptr.?));
+    c.stbtt_MakeCodepointBitmap(&f.font_info, dst, @intCast(w), @intCast(hgt), @intCast(w), scale, scale, @bitCast(codepoint));
+    reply_with_status(req, c.FONT_STATUS_OK, shmem_id, pack_u16_pair(@intCast(w), @intCast(hgt)), pack_s16_pair(x0, y0));
 }
 
 fn load_builtin_fonts() void {
@@ -346,13 +403,18 @@ fn load_builtin_fonts() void {
         "/boot/system/fonts/roboto_serif.ttf",
     };
     const ids = [_]u32{ c.FONT_ID_ROBOTO, c.FONT_ID_ROBOTO_MONO, c.FONT_ID_NOTO_SERIF };
+    const labels = [_][]const u8{ "roboto", "roboto-mono", "roboto-serif" };
 
     var i: usize = 0;
     while (i < paths.len and i < g_fonts.len) : (i += 1) {
+        logMsg("[font] loading ");
+        logMsg(labels[i]);
+        logMsg("\n");
         var sid: u32 = 0;
         var ptr: [*]u8 = undefined;
         var len: usize = 0;
         if (read_file_into_shmem(paths[i], &sid, &ptr, &len) != 0) {
+            logMsg("[font] load failed\n");
             continue;
         }
         g_fonts[i] = .{
@@ -361,15 +423,26 @@ fn load_builtin_fonts() void {
             .shmem_id = sid,
             .ptr = @ptrCast(ptr),
             .len = len,
+            .font_info = undefined,
+            .font_info_ready = false,
             .units_per_em = 0,
             .ascent = 0,
             .descent = 0,
             .line_gap = 0,
         };
-        if (!parse_ttf_metrics(&g_fonts[i])) {
+        const offset = c.stbtt_GetFontOffsetForIndex(@ptrCast(ptr), 0);
+        if (offset < 0 or c.stbtt_InitFont(&g_fonts[i].font_info, @ptrCast(ptr), offset) == 0) {
             g_fonts[i].available = false;
+            logMsg("[font] stb init failed\n");
             continue;
         }
+        g_fonts[i].font_info_ready = true;
+        if (!parse_ttf_metrics(&g_fonts[i])) {
+            g_fonts[i].available = false;
+            logMsg("[font] metrics parse failed\n");
+            continue;
+        }
+        logMsg("[font] loaded ok\n");
     }
 }
 

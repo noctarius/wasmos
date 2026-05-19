@@ -276,6 +276,7 @@ include(CMakeParseArguments)
 
 set(WASMOS_LIBC_C_SOURCES
   ${LIBC_DIR}/src/ctype.c
+  ${LIBC_DIR}/src/math.c
   ${LIBC_DIR}/src/stdlib.c
   ${LIBC_DIR}/src/string.c
   ${LIBC_DIR}/src/stdio.c

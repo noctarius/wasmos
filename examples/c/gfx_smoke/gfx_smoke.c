@@ -199,15 +199,7 @@ poll_gfx_events_once(int32_t gfx_ep, int32_t reply_ep, int32_t *req, int32_t *ou
     } else if (ev.arg1 == GFX_EVENT_FOCUS_LOST) {
         puts("[test] gfx smoke event focus-lost");
     } else if (ev.arg1 == GFX_EVENT_POINTER) {
-        int16_t dx = (int16_t)(ev.arg2 & 0xFFFF);
-        int16_t dy = (int16_t)((ev.arg2 >> 16) & 0xFFFF);
-        char msg[112];
-        int n = snprintf(msg, sizeof(msg),
-                         "[test] gfx smoke event ptr dx=%d dy=%d btn=%d\n",
-                         (int)dx, (int)dy, ev.arg3);
-        if (n > 0) {
-            (void)putsn(msg, (size_t)n);
-        }
+        /* keep pointer events silent to reduce log noise during compositor debug */
     } else if (ev.arg1 == GFX_EVENT_CLOSE_REQUEST) {
         puts("[test] gfx smoke event close-request");
         if (out_close_window_id) {

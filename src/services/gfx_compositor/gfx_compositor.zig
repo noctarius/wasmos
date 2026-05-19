@@ -21,6 +21,7 @@ const CHROME_TITLE_H: i32 = 14;
 const CHROME_CLOSE_SZ: i32 = 10;
 const CHROME_CLOSE_PAD: i32 = 2;
 const CHROME_CLOSE_HIT_W: i32 = 24;
+const CHROME_RESIZE_HANDLE_SZ: i32 = 12;
 
 var g_api: ?*c.wasmos_driver_api_t = null;
 var g_proc_endpoint: u32 = IPC_ENDPOINT_NONE;
@@ -34,6 +35,7 @@ var g_next_window_id: u32 = 1;
 var g_next_z: u32 = 1;
 var g_focused_window_id: u32 = 0;
 var g_drag_window_id: u32 = 0;
+var g_resize_window_id: u32 = 0;
 var g_pointer_x: i32 = 0;
 var g_pointer_y: i32 = 0;
 var g_pointer_buttons: u32 = 0;
@@ -569,6 +571,38 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
 
     if (!left_down_now and left_down_prev) {
         g_drag_window_id = 0;
+        g_resize_window_id = 0;
+    }
+
+    if (left_down_now and g_resize_window_id != 0 and (dx != 0 or dy != 0)) {
+        if (window_find_by_id(g_resize_window_id)) |resize_idx| {
+            const old_wr = rect_from_window(g_windows[resize_idx]);
+            var new_w: i32 = @as(i32, @intCast(g_windows[resize_idx].width)) + dx;
+            var new_h: i32 = @as(i32, @intCast(g_windows[resize_idx].height)) + dy;
+            const min_w: i32 = @intCast(GFX_WINDOW_MIN_DIM);
+            const min_h: i32 = @intCast(GFX_WINDOW_MIN_DIM);
+            var max_w: i32 = @intCast(GFX_WINDOW_MAX_DIM);
+            var max_h: i32 = @intCast(GFX_WINDOW_MAX_DIM);
+            if (g_fb_info_valid) {
+                const fb_w: i32 = @intCast(g_fb_info.framebuffer_width);
+                const fb_h: i32 = @intCast(g_fb_info.framebuffer_height);
+                const bound_w = fb_w - g_windows[resize_idx].x;
+                const bound_h = fb_h - g_windows[resize_idx].y;
+                if (bound_w < max_w) max_w = bound_w;
+                if (bound_h < max_h) max_h = bound_h;
+            }
+            if (max_w < min_w) max_w = min_w;
+            if (max_h < min_h) max_h = min_h;
+            new_w = clamp(new_w, min_w, max_w);
+            new_h = clamp(new_h, min_h, max_h);
+            g_windows[resize_idx].width = @intCast(new_w);
+            g_windows[resize_idx].height = @intCast(new_h);
+            const new_wr = rect_from_window(g_windows[resize_idx]);
+            _ = compose_region(old_wr);
+            _ = compose_region(new_wr);
+        } else {
+            g_resize_window_id = 0;
+        }
     }
 
     if (left_down_now and g_drag_window_id != 0 and (dx != 0 or dy != 0)) {
@@ -598,6 +632,7 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
     if (left_down_now and !left_down_prev) {
         if (window_topmost_at(g_pointer_x, g_pointer_y)) |idx| {
             const hit_close = point_in_rect(g_pointer_x, g_pointer_y, window_close_hit_rect(g_windows[idx]));
+            const hit_resize = point_in_rect(g_pointer_x, g_pointer_y, window_resize_rect(g_windows[idx]));
             const hit_title = point_in_rect(g_pointer_x, g_pointer_y, window_title_rect(g_windows[idx]));
             raise_window(idx);
             focus_window(idx);
@@ -609,8 +644,12 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
                 }
                 event_drop_pointer_for(win.owner_endpoint);
                 event_push(win.owner_endpoint, c.GFX_EVENT_CLOSE_REQUEST, win.window_id, 0, 0);
+            } else if (hit_resize) {
+                g_resize_window_id = g_windows[idx].window_id;
+                g_drag_window_id = 0;
             } else if (hit_title) {
                 g_drag_window_id = g_windows[idx].window_id;
+                g_resize_window_id = 0;
             }
             _ = compose_full();
         } else {
@@ -618,6 +657,7 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
                 _ = compose_full();
             }
             g_drag_window_id = 0;
+            g_resize_window_id = 0;
         }
     }
     g_pointer_buttons = buttons;
@@ -920,6 +960,17 @@ fn window_title_rect(win: window_slot_t) c.gfx_rect_t {
         .y = win.y,
         .w = ww - (CHROME_BORDER * 2),
         .h = CHROME_TITLE_H,
+    };
+}
+
+fn window_resize_rect(win: window_slot_t) c.gfx_rect_t {
+    const ww: i32 = @intCast(win.width);
+    const wh: i32 = @intCast(win.height);
+    return .{
+        .x = win.x + ww - CHROME_RESIZE_HANDLE_SZ,
+        .y = win.y + wh - CHROME_RESIZE_HANDLE_SZ,
+        .w = CHROME_RESIZE_HANDLE_SZ,
+        .h = CHROME_RESIZE_HANDLE_SZ,
     };
 }
 

@@ -1401,6 +1401,7 @@ add_custom_target(run-qemu-ui-test
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/fonts
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/devices
   COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
   COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
@@ -1413,6 +1414,9 @@ add_custom_target(run-qemu-ui-test
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfxcomp.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FONT_SERVICE_APP} ${BUILD_DIR}/esp/system/services/fontsvc.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/system/fonts/Roboto-Regular.ttf ${BUILD_DIR}/esp/system/fonts/roboto.ttf
+  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/system/fonts/RobotoMono-Regular.ttf ${BUILD_DIR}/esp/system/fonts/roboto_mono.ttf
+  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/system/fonts/RobotoSerif-Regular.ttf ${BUILD_DIR}/esp/system/fonts/roboto_serif.ttf
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardev_client.wap

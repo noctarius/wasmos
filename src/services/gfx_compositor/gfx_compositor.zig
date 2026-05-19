@@ -573,6 +573,7 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
 
     if (left_down_now and g_drag_window_id != 0 and (dx != 0 or dy != 0)) {
         if (window_find_by_id(g_drag_window_id)) |drag_idx| {
+            const old_wr = rect_from_window(g_windows[drag_idx]);
             if (g_fb_info_valid) {
                 const max_x: i32 = @intCast(g_fb_info.framebuffer_width);
                 const max_y: i32 = @intCast(g_fb_info.framebuffer_height);
@@ -586,7 +587,9 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
                 g_windows[drag_idx].x += dx;
                 g_windows[drag_idx].y += dy;
             }
-            _ = compose_full();
+            const new_wr = rect_from_window(g_windows[drag_idx]);
+            _ = compose_region(old_wr);
+            _ = compose_region(new_wr);
         } else {
             g_drag_window_id = 0;
         }

@@ -3,7 +3,7 @@
 - `src/kernel/`: kernel core, runtime hosting, scheduler, IPC, memory
 - `src/drivers/`: WASM and native drivers
 - `src/services/`: WASM services
-- `lib/libc/`: shared user-space libc surface and language shims
+- `src/libc/`: shared user-space libc surface and language shims
 - `examples/`: application examples and smoke apps
 - `tests/`: QEMU-driven integration and regression tests
 

@@ -2,7 +2,7 @@
 #![no_main]
 
 use core::panic::PanicInfo;
-#[path = "../../../lib/libc/rust/wasmos.rs"]
+#[path = "../../../src/libc/rust/wasmos.rs"]
 mod wasmos;
 
 #[panic_handler]

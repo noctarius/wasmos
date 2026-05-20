@@ -172,7 +172,7 @@ The current tree already boots into a usable user-space stack:
   handling now enforces 32-bit cleanliness for current 32-bit field-based
   calls (`wait`, `ipc_notify`, `ipc_call`) before dispatch.
 - The libc include tree now exposes a native-only syscall helper header at
-  `lib/libc/include/wasmos/syscall_x86_64.h` that mirrors the current register
+  `src/libc/include/wasmos/syscall_x86_64.h` that mirrors the current register
   ABI for non-WASM x86_64 userland experiments (`int 0x80` wrappers with
   primary return in `RAX` and optional secondary return in `RDX` for
   `ipc_call`; current `ipc_call` semantics are `RAX=status`, `RDX=reply arg0`
@@ -228,7 +228,7 @@ The current tree already boots into a usable user-space stack:
   timer-preemption trampoline behavior under sustained user-mode syscall
   traffic. Ring3 smoke mode also spawns a second compiled native probe process
   (`ring3-native`) built from C using
-  `lib/libc/include/wasmos/syscall_x86_64.h`; the syscall layer logs
+  `src/libc/include/wasmos/syscall_x86_64.h`; the syscall layer logs
   `[test] ring3 native abi ok` on first native CPL3 `getpid`. The
   `run-qemu-ring3-test` harness now also requires `native-call-smoke: ipc-call ok`
   and `[test] ring3 native abi ok` so both native IPC-call and native syscall

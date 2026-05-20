@@ -1592,7 +1592,18 @@ handle_query_message_fields(void)
     }
     if (index == 2) {
         if (g_dm.user_mount_ready) {
-            (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_MOUNT_INFO, req_id, 2, 0, 0, 0);
+            uint32_t a1 = 0;
+            uint32_t a2 = 0;
+            uint32_t a3 = 0;
+            if (g_dm.selected_storage_has_record) {
+                const pci_device_record_t *rec = &g_dm.selected_storage_record;
+                a1 = ((uint32_t)rec->bus << 24) | ((uint32_t)rec->device << 16) |
+                     ((uint32_t)rec->function << 8) | (uint32_t)rec->class_code;
+                a2 = ((uint32_t)rec->subclass << 24) | ((uint32_t)rec->prog_if << 16) |
+                     (uint32_t)rec->vendor_id;
+                a3 = (uint32_t)rec->device_id | ((uint32_t)1u << 31);
+            }
+            (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_MOUNT_INFO, req_id, 2, (int32_t)a1, (int32_t)a2, (int32_t)a3);
         } else {
             (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_QUERY_DONE, req_id, 0, 0, 0, 0);
         }

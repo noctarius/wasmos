@@ -1270,7 +1270,7 @@ cli_show_mounts(void)
         if (line_len >= (int)sizeof(line)) {
             line_len = (int)sizeof(line) - 1;
         }
-        if (mount_id == 0 && (a3 & (1u << 31)) != 0) {
+        if ((mount_id == 0 || mount_id == 2) && (a3 & (1u << 31)) != 0) {
             uint8_t bus = (uint8_t)((a1 >> 24) & 0xFFu);
             uint8_t dev = (uint8_t)((a1 >> 16) & 0xFFu);
             uint8_t fun = (uint8_t)((a1 >> 8) & 0xFFu);

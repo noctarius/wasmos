@@ -280,11 +280,9 @@ public:
         return 0;
     }
 
-    process_run_result_t entry(process_t *process, void *arg)
+    process_run_result_t entry(process_t *process, void *)
     {
         ipc_message_t msg;
-
-        (void)arg;
 
         if (!process) {
             return PROCESS_RUN_IDLE;

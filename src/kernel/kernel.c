@@ -59,14 +59,12 @@ static const uint8_t g_ring3_fault_churn_rounds = 6;
 static init_state_t g_init_state;
 
 static int
-wasmos_endpoint_resolve(uint32_t owner_context_id,
+wasmos_endpoint_resolve(uint32_t,
                         const uint8_t *name,
                         uint32_t name_len,
-                        uint32_t rights,
+                        uint32_t,
                         uint32_t *out_endpoint)
 {
-    (void)owner_context_id;
-    (void)rights;
     if (!out_endpoint) {
         return -1;
     }
@@ -117,7 +115,6 @@ wasmos_capability_grant(uint32_t owner_context_id,
 static process_run_result_t
 chardev_server_entry(process_t *process, void *arg)
 {
-    (void)process;
     (void)arg;
 
     int rc = wasm_chardev_run();
@@ -126,10 +123,8 @@ chardev_server_entry(process_t *process, void *arg)
 }
 
 static process_run_result_t
-idle_entry(process_t *process, void *arg)
+idle_entry(process_t *, void *)
 {
-    (void)process;
-    (void)arg;
     for (;;) {
         __asm__ volatile("hlt");
     }
@@ -147,8 +142,6 @@ kmain(boot_info_t *boot_info)
     uint32_t mem_reply_endpoint = IPC_ENDPOINT_NONE;
     uint32_t idle_pid = 0;
     uint32_t init_pid = 0;
-
-    (void)boot_info;
 
     serial_init();
     klog_write("[kernel] kmain\n");

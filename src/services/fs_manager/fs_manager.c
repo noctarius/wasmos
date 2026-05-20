@@ -18,6 +18,15 @@ typedef struct {
     uint8_t kind;
     int32_t endpoint;
     uint8_t slot;
+    uint8_t has_meta;
+    uint8_t unit;
+    uint8_t bus;
+    uint8_t device_fn;
+    uint8_t class_code;
+    uint8_t subclass;
+    uint8_t prog_if;
+    uint16_t vendor_id;
+    uint16_t device_id;
     char mount_name[16];
 } fs_backend_t;
 
@@ -78,6 +87,16 @@ static void str_copy(char *dst, uint32_t dst_len, const char *src) {
         ++i;
     }
     dst[i] = '\0';
+}
+
+static void str_to_lower_ascii(char *s)
+{
+    if (!s) return;
+    for (uint32_t i = 0; s[i]; ++i) {
+        if (s[i] >= 'A' && s[i] <= 'Z') {
+            s[i] = (char)(s[i] - 'A' + 'a');
+        }
+    }
 }
 
 static void set_mount_name(fs_backend_t *slot, const char *base) {
@@ -225,6 +244,8 @@ backend_register(uint8_t kind, int32_t endpoint)
     }
     slot->kind = kind;
     slot->endpoint = endpoint;
+    slot->has_meta = 0;
+    slot->unit = 0xFFu;
     if (kind == FSMGR_BACKEND_BOOT) {
         if (slot->slot == 0) {
             str_copy(slot->mount_name, sizeof(slot->mount_name), "boot");
@@ -239,6 +260,42 @@ backend_register(uint8_t kind, int32_t endpoint)
         set_mount_name(slot, "fs");
     }
     return slot;
+}
+
+static void
+backend_refresh_boot_meta(fs_backend_t *slot, int32_t req_seed)
+{
+    int32_t devmgr = -1;
+    int32_t req_id = req_seed;
+    if (!slot || slot->kind != FSMGR_BACKEND_BOOT || g_proc_endpoint < 0 || g_reply_endpoint < 0) {
+        return;
+    }
+    devmgr = wasmos_svc_lookup(g_proc_endpoint, g_reply_endpoint, "devmgr.query", 1);
+    if (devmgr < 0) {
+        return;
+    }
+    if (wasmos_ipc_send(devmgr, g_reply_endpoint, DEVMGR_QUERY_MOUNT_REQ, req_id, 0, 0, 0, 0) != 0 ||
+        wasmos_ipc_recv(g_reply_endpoint) < 0 ||
+        wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req_id ||
+        wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != DEVMGR_MOUNT_INFO) {
+        return;
+    }
+    {
+        uint32_t a1 = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+        uint32_t a2 = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
+        uint32_t a3 = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
+        if ((a3 & (1u << 31)) == 0u) {
+            return;
+        }
+        slot->has_meta = 1;
+        slot->bus = (uint8_t)((a1 >> 24) & 0xFFu);
+        slot->device_fn = (uint8_t)((a1 >> 8) & 0xFFu);
+        slot->class_code = (uint8_t)(a1 & 0xFFu);
+        slot->subclass = (uint8_t)((a2 >> 24) & 0xFFu);
+        slot->prog_if = (uint8_t)((a2 >> 16) & 0xFFu);
+        slot->vendor_id = (uint16_t)(a2 & 0xFFFFu);
+        slot->device_id = (uint16_t)(a3 & 0xFFFFu);
+    }
 }
 
 static int
@@ -297,9 +354,33 @@ fsmgr_emit_mounts(int32_t source, int32_t req_id)
         }
         n = snprintf(mounts + pos,
                      sizeof(mounts) - pos,
-                     "/%s -> %s\n",
+                     "/%s -> %s",
                      g_backends[i].mount_name,
                      kind);
+        if (n > 0 && g_backends[i].kind == FSMGR_BACKEND_BOOT && g_backends[i].has_meta) {
+            uint8_t dev = (uint8_t)((g_backends[i].device_fn >> 4) & 0x1Fu);
+            uint8_t fun = (uint8_t)(g_backends[i].device_fn & 0x07u);
+            int m = snprintf(mounts + pos + (uint32_t)n,
+                             sizeof(mounts) - (pos + (uint32_t)n),
+                             " pci %02X:%02X.%02X class %02X:%02X:%02X vid:did %04X:%04X unit %u",
+                             (unsigned)g_backends[i].bus,
+                             (unsigned)dev,
+                             (unsigned)fun,
+                             (unsigned)g_backends[i].class_code,
+                             (unsigned)g_backends[i].subclass,
+                             (unsigned)g_backends[i].prog_if,
+                             (unsigned)g_backends[i].vendor_id,
+                             (unsigned)g_backends[i].device_id,
+                             (unsigned)g_backends[i].unit);
+            if (m > 0) {
+                n += m;
+            }
+        }
+        if (n > 0 && pos + (uint32_t)n + 1u < sizeof(mounts)) {
+            mounts[pos + (uint32_t)n] = '\n';
+            mounts[pos + (uint32_t)n + 1u] = '\0';
+            n += 1;
+        }
         if (n <= 0) {
             continue;
         }
@@ -405,6 +486,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             if (!registered) {
                 (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
             } else {
+                registered->unit = (uint8_t)(arg3f & 0xFF);
                 if (mount_len > 0 && mount_len < (int32_t)sizeof(registered->mount_name)) {
                     char mount_name[16];
                     int32_t copy_len = mount_len;
@@ -419,10 +501,12 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
                             } else {
                                 str_copy(registered->mount_name, sizeof(registered->mount_name), mount_name);
                             }
+                            str_to_lower_ascii(registered->mount_name);
                         }
                         (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_FS);
                     }
                 }
+                backend_refresh_boot_meta(registered, request_id + 1);
                 (void)wasmos_ipc_send(source, g_fs_endpoint, FSMGR_IPC_REGISTER_BACKEND_RESP, request_id, 0, registered->slot, 0, 0);
             }
             continue;

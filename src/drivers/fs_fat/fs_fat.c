@@ -630,16 +630,17 @@ fat_unpack_name(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char
 }
 
 static int
-fat_resolve_mount_alias(int32_t proc_endpoint, char *out_mount, uint32_t out_mount_len)
+fat_resolve_mount_alias(int32_t proc_endpoint, char *out_mount, uint32_t out_mount_len, uint8_t *out_unit)
 {
     int32_t devmgr_endpoint = -1;
     int32_t req_id = 41;
     int32_t unit = 0;
     uint32_t packed[4];
-    if (!out_mount || out_mount_len < 2u) {
+    if (!out_mount || out_mount_len < 2u || !out_unit) {
         return -1;
     }
     out_mount[0] = '\0';
+    *out_unit = 0;
     if (wasmos_ipc_send(g_block_endpoint, g_reply_endpoint, BLOCK_IPC_IDENTIFY_REQ, req_id, 0, 0, 0, 0) != 0 ||
         wasmos_ipc_recv(g_reply_endpoint) < 0) {
         return -1;
@@ -649,6 +650,7 @@ fat_resolve_mount_alias(int32_t proc_endpoint, char *out_mount, uint32_t out_mou
         return -1;
     }
     unit = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
+    *out_unit = (uint8_t)(unit & 0xFF);
     devmgr_endpoint = wasmos_svc_lookup(proc_endpoint, g_reply_endpoint, "devmgr.query", 1);
     if (devmgr_endpoint < 0) {
         return -1;
@@ -3990,6 +3992,7 @@ initialize(int32_t proc_endpoint,
 
     int32_t fsmgr_endpoint = -1;
     char mount_alias[16];
+    uint8_t mount_unit = 0;
     int32_t mount_alias_len = 0;
     if (fat_ensure_ready() != 0) {
         fat_log("boot init failed\n");
@@ -4002,7 +4005,7 @@ initialize(int32_t proc_endpoint,
         }
         (void)wasmos_sched_yield();
     }
-    if (fat_resolve_mount_alias(proc_endpoint, mount_alias, sizeof(mount_alias)) != 0) {
+    if (fat_resolve_mount_alias(proc_endpoint, mount_alias, sizeof(mount_alias), &mount_unit) != 0) {
         fat_log("mount alias resolve failed\n");
         fat_stall();
     }
@@ -4019,7 +4022,7 @@ initialize(int32_t proc_endpoint,
                         FSMGR_BACKEND_BOOT,
                         g_fs_endpoint,
                         mount_alias_len,
-                        0) != 0) {
+                        (int32_t)mount_unit) != 0) {
         fat_log("fs-manager register send failed\n");
         fat_stall();
     }

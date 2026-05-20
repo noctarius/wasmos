@@ -5,39 +5,7 @@
 #include "wasmos/ipc.h"
 #include "wasmos/libsys.h"
 #include "wasmos_driver_abi.h"
-
-#define FS_CLIENT_CAP 16
-#define FS_BACKEND_CAP 8
-
-typedef enum {
-    FS_MOUNT_ROOT = 0,
-    FS_MOUNT_BACKEND = 1
-} fs_mount_t;
-
-typedef struct {
-    uint8_t in_use;
-    uint8_t kind;
-    int32_t endpoint;
-    uint8_t slot;
-    uint8_t has_meta;
-    uint8_t unit;
-    uint8_t bus;
-    uint8_t device_fn;
-    uint8_t class_code;
-    uint8_t subclass;
-    uint8_t prog_if;
-    uint16_t vendor_id;
-    uint16_t device_id;
-    char mount_name[16];
-} fs_backend_t;
-
-typedef struct {
-    uint8_t in_use;
-    int32_t context_id;
-    fs_mount_t mount;
-    int32_t backend_endpoint;
-    uint16_t mount_depth;
-} fs_client_state_t;
+#include "fs_manager_types.h"
 
 static int32_t g_proc_endpoint = -1;
 static int32_t g_fs_endpoint = -1;
@@ -67,39 +35,15 @@ static void log_msg(const char *s) {
     (void)printf("%s", s);
 }
 
-static void str_copy(char *dst, uint32_t dst_len, const char *src) {
-    uint32_t i = 0;
-    if (!dst || dst_len == 0) return;
-    if (!src) {
-        dst[0] = '\0';
-        return;
-    }
-    while (i + 1 < dst_len && src[i]) {
-        dst[i] = src[i];
-        ++i;
-    }
-    dst[i] = '\0';
-}
-
-static void str_to_lower_ascii(char *s)
-{
-    if (!s) return;
-    for (uint32_t i = 0; s[i]; ++i) {
-        if (s[i] >= 'A' && s[i] <= 'Z') {
-            s[i] = (char)(s[i] - 'A' + 'a');
-        }
-    }
-}
-
 static void set_mount_name(fs_backend_t *slot, const char *base) {
     char buf[16];
     uint8_t tmp[3];
     uint32_t n = 0;
     uint32_t pos = 0;
     if (!slot) return;
-    str_copy(buf, sizeof(buf), base);
+    wasmos_sys_strcpy(buf, sizeof(buf), base);
     if (slot->slot == 0) {
-        str_copy(slot->mount_name, sizeof(slot->mount_name), buf);
+        wasmos_sys_strcpy(slot->mount_name, sizeof(slot->mount_name), buf);
         return;
     }
     while (buf[pos] && pos + 1 < sizeof(buf)) {
@@ -114,41 +58,7 @@ static void set_mount_name(fs_backend_t *slot, const char *base) {
         buf[pos++] = (char)tmp[--n];
     }
     buf[pos] = '\0';
-    str_copy(slot->mount_name, sizeof(slot->mount_name), buf);
-}
-
-static void unpack_name(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char *out, uint32_t out_len) {
-    uint32_t args[4] = { arg0, arg1, arg2, arg3 };
-    uint32_t pos = 0;
-    if (!out || out_len == 0) return;
-    for (uint32_t i = 0; i < 4 && pos + 1 < out_len; ++i) {
-        uint32_t v = args[i];
-        for (uint32_t b = 0; b < 4 && pos + 1 < out_len; ++b) {
-            char c = (char)(v & 0xFFu);
-            if (c == '\0') {
-                out[pos] = '\0';
-                return;
-            }
-            out[pos++] = c;
-            v >>= 8u;
-        }
-    }
-    out[pos] = '\0';
-}
-
-static void pack_name(const char *name, int32_t *arg0, int32_t *arg1, int32_t *arg2, int32_t *arg3) {
-    uint32_t packed[4] = {0, 0, 0, 0};
-    if (name) {
-        for (uint32_t i = 0; name[i] && i < 16u; ++i) {
-            uint32_t slot = i / 4u;
-            uint32_t shift = (i % 4u) * 8u;
-            packed[slot] |= ((uint32_t)(uint8_t)name[i]) << shift;
-        }
-    }
-    *arg0 = (int32_t)packed[0];
-    *arg1 = (int32_t)packed[1];
-    *arg2 = (int32_t)packed[2];
-    *arg3 = (int32_t)packed[3];
+    wasmos_sys_strcpy(slot->mount_name, sizeof(slot->mount_name), buf);
 }
 
 static fs_client_state_t *
@@ -240,9 +150,9 @@ backend_register(uint8_t kind, int32_t endpoint)
     slot->unit = 0xFFu;
     if (kind == FSMGR_BACKEND_BOOT) {
         if (slot->slot == 0) {
-            str_copy(slot->mount_name, sizeof(slot->mount_name), "boot");
+            wasmos_sys_strcpy(slot->mount_name, sizeof(slot->mount_name), "boot");
         } else if (slot->slot == 1) {
-            str_copy(slot->mount_name, sizeof(slot->mount_name), "user");
+            wasmos_sys_strcpy(slot->mount_name, sizeof(slot->mount_name), "user");
         } else {
             set_mount_name(slot, "boot");
         }
@@ -331,7 +241,7 @@ fsmgr_emit_mounts(int32_t source, int32_t req_id)
 {
     char mounts[384];
     uint32_t pos = 0;
-    str_copy(mounts, sizeof(mounts), "mounts:\n");
+    wasmos_sys_strcpy(mounts, sizeof(mounts), "mounts:\n");
     pos = (uint32_t)strlen(mounts);
     for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
         const char *kind = "fs";
@@ -381,14 +291,14 @@ fsmgr_emit_mounts(int32_t source, int32_t req_id)
             break;
         }
     }
-    if (wasmos_buffer_borrow(WASMOS_BUFFER_KIND_FS, source, WASMOS_BUFFER_GRANT_WRITE) != 0) {
+    if (wasmos_sys_buffer_write_to(WASMOS_BUFFER_KIND_FS,
+                                   source,
+                                   WASMOS_BUFFER_GRANT_WRITE,
+                                   mounts,
+                                   (int32_t)pos,
+                                   0) != 0) {
         return -1;
     }
-    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)mounts, (int32_t)pos, 0) != 0) {
-        (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_FS);
-        return -1;
-    }
-    (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_FS);
     return wasmos_ipc_send(source, g_fs_endpoint, FSMGR_IPC_QUERY_MOUNTS_RESP, req_id, (int32_t)pos, 0, 0, 0);
 }
 
@@ -475,11 +385,11 @@ handle_register_backend_req(int32_t source, int32_t request_id, int32_t arg0, in
             if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)mount_name, copy_len, 0) == 0) {
                 mount_name[copy_len] = '\0';
                 if (mount_name[0] == '/') {
-                    str_copy(registered->mount_name, sizeof(registered->mount_name), &mount_name[1]);
-                } else {
-                    str_copy(registered->mount_name, sizeof(registered->mount_name), mount_name);
-                }
-                str_to_lower_ascii(registered->mount_name);
+                                wasmos_sys_strcpy(registered->mount_name, sizeof(registered->mount_name), &mount_name[1]);
+                            } else {
+                                wasmos_sys_strcpy(registered->mount_name, sizeof(registered->mount_name), mount_name);
+                            }
+                            wasmos_sys_to_lower_ascii(registered->mount_name);
             }
             (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_FS);
         }
@@ -638,12 +548,12 @@ handle_read_path_req(fs_client_state_t *state, int32_t source, int32_t request_i
                 send_fs_error(source, request_id);
                 return 1;
             }
-            if (wasmos_buffer_borrow(WASMOS_BUFFER_KIND_FS, source, WASMOS_BUFFER_GRANT_WRITE) != 0) {
-                send_fs_error(source, request_id);
-                return 1;
-            }
-            if (wasmos_fs_buffer_write((int32_t)(uintptr_t)scratch, chunk, copied) != 0 ||
-                wasmos_buffer_release(WASMOS_BUFFER_KIND_FS) != 0) {
+            if (wasmos_sys_buffer_write_to(WASMOS_BUFFER_KIND_FS,
+                                           source,
+                                           WASMOS_BUFFER_GRANT_WRITE,
+                                           scratch,
+                                           chunk,
+                                           copied) != 0) {
                 send_fs_error(source, request_id);
                 return 1;
             }
@@ -666,7 +576,7 @@ handle_chdir_mount(fs_client_state_t *state,
                    int32_t arg3f)
 {
     char path[32];
-    unpack_name((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, path, sizeof(path));
+    wasmos_sys_ipc_unpack_name16((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, path, sizeof(path));
 
     if (strcasecmp(path, "") == 0 || strcasecmp(path, "/") == 0) {
         state->mount = FS_MOUNT_ROOT;
@@ -697,7 +607,14 @@ handle_chdir_mount(fs_client_state_t *state,
             state->mount = FS_MOUNT_BACKEND;
             state->backend_endpoint = target->endpoint;
             state->mount_depth = 0;
-            pack_name("/", &s0, &s1, &s2, &s3);
+            {
+                int32_t args[4];
+                wasmos_sys_ipc_pack_name16("/", args);
+                s0 = args[0];
+                s1 = args[1];
+                s2 = args[2];
+                s3 = args[3];
+            }
             if (forward_request(target->endpoint, FS_IPC_CHDIR_REQ, request_id, s0, s1, s2, s3,
                                 source, &rr_t, &rr0, &rr1, &rr2, &rr3) != 0) {
                 state->mount = FS_MOUNT_ROOT;
@@ -807,7 +724,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             }
             if (type == FS_IPC_CHDIR_REQ && state->mount != FS_MOUNT_ROOT) {
                 char path[32];
-                unpack_name((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, path, sizeof(path));
+                wasmos_sys_ipc_unpack_name16((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, path, sizeof(path));
                 if (strcasecmp(path, "..") == 0) {
                     state->mount = FS_MOUNT_ROOT;
                     state->backend_endpoint = -1;
@@ -823,7 +740,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
         }
         if (type == FS_IPC_CHDIR_REQ && resp_type == FS_IPC_ERROR) {
             char path[32];
-            unpack_name((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, path, sizeof(path));
+            wasmos_sys_ipc_unpack_name16((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, path, sizeof(path));
             if (strcasecmp(path, "..") == 0 && state->mount != FS_MOUNT_ROOT) {
                 state->mount = FS_MOUNT_ROOT;
                 state->backend_endpoint = -1;
@@ -834,7 +751,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
         }
         if (type == FS_IPC_CHDIR_REQ && resp_type == FS_IPC_RESP && state->mount != FS_MOUNT_ROOT) {
             char path[32];
-            unpack_name((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, path, sizeof(path));
+            wasmos_sys_ipc_unpack_name16((uint32_t)arg0, (uint32_t)arg1f, (uint32_t)arg2f, (uint32_t)arg3f, path, sizeof(path));
             if (strcasecmp(path, "..") == 0) {
                 if (state->mount_depth > 0) {
                     state->mount_depth--;

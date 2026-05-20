@@ -3,6 +3,7 @@
 #include "string.h"
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
+#include "wasmos/libsys.h"
 #include "wasmos_driver_abi.h"
 
 #define INITFS_MAX_OPEN_FILES 16
@@ -73,17 +74,6 @@ str_copy(char *dst, uint32_t dst_len, const char *src)
         i++;
     }
     dst[i] = '\0';
-}
-
-static void
-stall_forever(void)
-{
-    int32_t endpoint = wasmos_ipc_create_endpoint();
-    for (;;) {
-        if (endpoint >= 0) {
-            (void)wasmos_ipc_recv(endpoint);
-        }
-    }
 }
 
 static void
@@ -492,11 +482,11 @@ initialize(int32_t proc_endpoint,
     g_reply_endpoint = wasmos_ipc_create_endpoint();
     if (g_fs_endpoint < 0 || g_reply_endpoint < 0) {
         console_write("[fs-init] endpoint create failed\n");
-        stall_forever();
+        wasmos_sys_ipc_recv_loop();
     }
     if (initfs_build_index() != 0) {
         console_write("[fs-init] initfs index build failed\n");
-        stall_forever();
+        wasmos_sys_ipc_recv_loop();
     }
     for (int32_t i = 0; i < INITFS_MAX_CLIENTS; ++i) {
         g_clients[i].in_use = 0;
@@ -505,7 +495,7 @@ initialize(int32_t proc_endpoint,
     }
     if (wasmos_svc_register(proc_endpoint, g_fs_endpoint, "initfs.rules", 1) != 0) {
         console_write("[fs-init] register initfs.rules failed\n");
-        stall_forever();
+        wasmos_sys_ipc_recv_loop();
     }
 
     int32_t fsmgr_endpoint = -1;
@@ -526,12 +516,12 @@ initialize(int32_t proc_endpoint,
                         0,
                         0) != 0) {
         console_write("[fs-init] register fs-manager send failed\n");
-        stall_forever();
+        wasmos_sys_ipc_recv_loop();
     }
     if (wasmos_ipc_recv(g_reply_endpoint) < 0 ||
         wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != FSMGR_IPC_REGISTER_BACKEND_RESP) {
         console_write("[fs-init] register fs-manager failed\n");
-        stall_forever();
+        wasmos_sys_ipc_recv_loop();
     }
     console_write("[fs-init] register fs-manager ok\n");
 

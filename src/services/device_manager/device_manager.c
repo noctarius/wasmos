@@ -192,17 +192,6 @@ static device_manager_state_t g_dm = {
 };
 
 static void
-stall_forever(void)
-{
-    int32_t endpoint = wasmos_ipc_create_endpoint();
-    for (;;) {
-        if (endpoint >= 0) {
-            (void)wasmos_ipc_recv(endpoint);
-        }
-    }
-}
-
-static void
 console_write(const char *s)
 {
     if (!s) {
@@ -1459,33 +1448,33 @@ initialize(int32_t proc_endpoint,
     if (g_dm.reply_endpoint < 0) {
         g_dm.phase = HW_PHASE_FAILED;
         console_write("[device-manager] failed to create reply endpoint\n");
-        stall_forever();
+        wasmos_sys_ipc_recv_loop();
     }
     if (proc_endpoint < 0 || module_count <= 0) {
         g_dm.phase = HW_PHASE_FAILED;
         console_write("[device-manager] invalid init args\n");
-        stall_forever();
+        wasmos_sys_ipc_recv_loop();
     }
     g_dm.proc_endpoint = proc_endpoint;
     g_dm.module_count = module_count;
     g_dm.inventory_endpoint = wasmos_ipc_create_endpoint();
     if (g_dm.inventory_endpoint < 0) {
         console_write("[device-manager] inventory endpoint create failed\n");
-        stall_forever();
+        wasmos_sys_ipc_recv_loop();
     }
     if (wasmos_svc_register(g_dm.proc_endpoint, g_dm.inventory_endpoint, "devmgr.inv", 1) != 0) {
         console_write("[device-manager] inventory register failed\n");
-        stall_forever();
+        wasmos_sys_ipc_recv_loop();
     }
     g_dm.query_endpoint = g_dm.inventory_endpoint;
     if (wasmos_svc_register(g_dm.proc_endpoint, g_dm.query_endpoint, "devmgr.query", 1) != 0) {
         console_write("[device-manager] query register failed\n");
-        stall_forever();
+        wasmos_sys_ipc_recv_loop();
     }
     g_dm.rule_reply_endpoint = wasmos_ipc_create_endpoint();
     if (g_dm.rule_reply_endpoint < 0) {
         console_write("[device-manager] rules reply endpoint create failed\n");
-        stall_forever();
+        wasmos_sys_ipc_recv_loop();
     }
     log_rule_roots_once();
     load_rules_if_available();
@@ -1542,39 +1531,39 @@ initialize(int32_t proc_endpoint,
                 if (hw_spawn_driver_index_caps(g_dm.pci_bus_index, &pci_caps) != 0) {
                     g_dm.phase = HW_PHASE_FAILED;
                     console_write("[device-manager] spawn pci-bus failed\n");
-                    stall_forever();
+                    wasmos_sys_ipc_recv_loop();
                 }
             } else if (target == HW_SPAWN_RULE_PATH) {
                 if (hw_spawn_rule_target(g_dm.rule_spawn_path) != 0) {
                     g_dm.phase = HW_PHASE_FAILED;
                     console_write("[device-manager] spawn rule path failed\n");
-                    stall_forever();
+                    wasmos_sys_ipc_recv_loop();
                 }
             } else if (target == HW_SPAWN_SERIAL) {
                 if (hw_spawn_driver_index_caps(g_dm.serial_index, &g_dm.selected_serial_caps) != 0) {
                     g_dm.phase = HW_PHASE_FAILED;
                     console_write("[device-manager] spawn serial failed\n");
-                    stall_forever();
+                    wasmos_sys_ipc_recv_loop();
                 }
             } else if (target == HW_SPAWN_KEYBOARD) {
                 if ((g_dm.keyboard_index >= 0 && hw_spawn_driver_index(g_dm.keyboard_index) != 0) ||
                     (g_dm.keyboard_index < 0 && hw_spawn_driver_name(target) != 0)) {
                     g_dm.phase = HW_PHASE_FAILED;
                     console_write("[device-manager] spawn keyboard failed\n");
-                    stall_forever();
+                    wasmos_sys_ipc_recv_loop();
                 }
             } else if (target == HW_SPAWN_FRAMEBUFFER) {
                 if ((g_dm.framebuffer_index >= 0 && hw_spawn_driver_index(g_dm.framebuffer_index) != 0) ||
                     (g_dm.framebuffer_index < 0 && hw_spawn_driver_name(target) != 0)) {
                     g_dm.phase = HW_PHASE_FAILED;
                     console_write("[device-manager] spawn framebuffer failed\n");
-                    stall_forever();
+                    wasmos_sys_ipc_recv_loop();
                 }
             } else if (target == HW_SPAWN_FAT) {
                 if (hw_spawn_driver_index(g_dm.fat_index) != 0) {
                     g_dm.phase = HW_PHASE_FAILED;
                     console_write("[device-manager] spawn fs-fat failed\n");
-                    stall_forever();
+                    wasmos_sys_ipc_recv_loop();
                 }
             }
             g_dm.pending = target;
@@ -1587,7 +1576,7 @@ initialize(int32_t proc_endpoint,
             if (recv_rc < 0) {
                 g_dm.phase = HW_PHASE_FAILED;
                 console_write("[device-manager] spawn recv failed\n");
-                stall_forever();
+                wasmos_sys_ipc_recv_loop();
             }
 
             int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
@@ -1595,7 +1584,7 @@ initialize(int32_t proc_endpoint,
             if (resp_req != g_dm.request_id) {
                 g_dm.phase = HW_PHASE_FAILED;
                 console_write("[device-manager] spawn response mismatch\n");
-                stall_forever();
+                wasmos_sys_ipc_recv_loop();
             }
             g_dm.request_id++;
             if (resp_type == PROC_IPC_RESP) {
@@ -1695,7 +1684,7 @@ initialize(int32_t proc_endpoint,
 
             g_dm.phase = HW_PHASE_FAILED;
             console_write("[device-manager] spawn response invalid\n");
-            stall_forever();
+            wasmos_sys_ipc_recv_loop();
         }
 
         if (g_dm.phase == HW_PHASE_WAIT_INVENTORY) {
@@ -1753,6 +1742,6 @@ initialize(int32_t proc_endpoint,
         }
 
         console_write("[device-manager] failed\n");
-        stall_forever();
+        wasmos_sys_ipc_recv_loop();
     }
 }

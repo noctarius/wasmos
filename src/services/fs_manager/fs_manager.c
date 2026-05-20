@@ -3,6 +3,7 @@
 #include "string.h"
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
+#include "wasmos/libsys.h"
 #include "wasmos_driver_abi.h"
 
 #define FS_CLIENT_CAP 16
@@ -43,15 +44,6 @@ static int32_t g_fs_endpoint = -1;
 static int32_t g_reply_endpoint = -1;
 static fs_client_state_t g_clients[FS_CLIENT_CAP];
 static fs_backend_t g_backends[FS_BACKEND_CAP];
-
-static void stall_forever(void) {
-    int32_t endpoint = wasmos_ipc_create_endpoint();
-    for (;;) {
-        if (endpoint >= 0) {
-            (void)wasmos_ipc_recv(endpoint);
-        }
-    }
-}
 
 static int32_t
 borrow_flags_for_type(int32_t type)
@@ -731,11 +723,11 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
     log_msg("[fs-manager] init start\n");
     if (g_proc_endpoint < 0 || g_reply_endpoint < 0 || g_fs_endpoint < 0) {
         log_msg("[fs-manager] endpoint init failed\n");
-        stall_forever();
+        wasmos_sys_ipc_recv_loop();
     }
     if (wasmos_svc_register(g_proc_endpoint, g_fs_endpoint, "fs.vfs", 1) != 0) {
         log_msg("[fs-manager] register fs.vfs failed\n");
-        stall_forever();
+        wasmos_sys_ipc_recv_loop();
     }
     log_msg("[fs-manager] services registered\n");
 

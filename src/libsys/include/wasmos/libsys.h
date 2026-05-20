@@ -13,9 +13,9 @@ extern "C" {
 #endif
 
 static inline int32_t
-wasmos_sys_recv_matching(int32_t reply_endpoint,
-                         int32_t request_id,
-                         wasmos_ipc_message_t *out_reply)
+wasmos_sys_ipc_recv_matching(int32_t reply_endpoint,
+                             int32_t request_id,
+                             wasmos_ipc_message_t *out_reply)
 {
     for (;;) {
         if (wasmos_ipc_recv(reply_endpoint) < 0) {
@@ -30,6 +30,17 @@ wasmos_sys_recv_matching(int32_t reply_endpoint,
             *out_reply = msg;
         }
         return 0;
+    }
+}
+
+static inline void
+wasmos_sys_ipc_recv_loop(void)
+{
+    int32_t endpoint = wasmos_ipc_create_endpoint();
+    for (;;) {
+        if (endpoint >= 0) {
+            (void)wasmos_ipc_recv(endpoint);
+        }
     }
 }
 
@@ -112,7 +123,7 @@ wasmos_sys_fs_read_path(int32_t fs_endpoint,
                         0) != 0) {
         return -1;
     }
-    if (wasmos_sys_recv_matching(reply_endpoint, request_id, &resp) != 0) {
+    if (wasmos_sys_ipc_recv_matching(reply_endpoint, request_id, &resp) != 0) {
         return -1;
     }
     if (resp.type != FS_IPC_RESP) {

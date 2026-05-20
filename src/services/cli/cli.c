@@ -4,6 +4,7 @@
 #include "string.h"
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
+#include "wasmos/libsys.h"
 #include "wasmos_driver_abi.h"
 
 /*
@@ -71,17 +72,6 @@ static cli_env_var_t g_env[CLI_ENV_MAX];
 #define CLI_VT_SEND_RETRIES 16384
 #define CLI_REQ_SEND_RETRIES 8192
 #define CLI_VT_RESP_RETRIES 4096
-
-static void
-stall_forever(void)
-{
-    int32_t endpoint = wasmos_ipc_create_endpoint();
-    for (;;) {
-        if (endpoint >= 0) {
-            (void)wasmos_ipc_recv(endpoint);
-        }
-    }
-}
 
 enum {
     PENDING_NONE = 0,
@@ -1878,13 +1868,13 @@ initialize(int32_t proc_endpoint,
             if (g_reply_endpoint < 0) {
                 g_phase = CLI_PHASE_FAILED;
                 console_write("[cli] failed to create reply endpoint\n");
-                stall_forever();
+                wasmos_sys_ipc_recv_loop();
             }
             g_vt_client_endpoint = wasmos_ipc_create_endpoint();
             if (g_vt_client_endpoint < 0) {
                 g_phase = CLI_PHASE_FAILED;
                 console_write("[cli] failed to create vt endpoint\n");
-                stall_forever();
+                wasmos_sys_ipc_recv_loop();
             }
             g_proc_endpoint = proc_endpoint;
             g_fs_endpoint = wasmos_svc_lookup(g_proc_endpoint, g_reply_endpoint, "fs.vfs", 1);
@@ -1974,7 +1964,7 @@ initialize(int32_t proc_endpoint,
                 if (rc < 0) {
                     g_phase = CLI_PHASE_FAILED;
                     console_write("[cli] console read failed\n");
-                    stall_forever();
+                    wasmos_sys_ipc_recv_loop();
                 }
                 if (rc > 0) {
                     have_ch = 1;
@@ -2041,7 +2031,7 @@ initialize(int32_t proc_endpoint,
             if (recv_rc < 0) {
                 g_phase = CLI_PHASE_FAILED;
                 console_write("[cli] ipc recv failed\n");
-                stall_forever();
+                wasmos_sys_ipc_recv_loop();
             }
             int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
             int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
@@ -2073,7 +2063,7 @@ initialize(int32_t proc_endpoint,
             if (resp_req != g_pending_req) {
                 g_phase = CLI_PHASE_FAILED;
                 console_write("[cli] ipc response mismatch\n");
-                stall_forever();
+                wasmos_sys_ipc_recv_loop();
             }
             if (resp_type == PROC_IPC_ERROR) {
                 console_write("exec failed\n");
@@ -2082,7 +2072,7 @@ initialize(int32_t proc_endpoint,
             } else if (resp_type != FS_IPC_RESP && resp_type != PROC_IPC_RESP) {
                 g_phase = CLI_PHASE_FAILED;
                 console_write("[cli] ipc response invalid\n");
-                stall_forever();
+                wasmos_sys_ipc_recv_loop();
             } else if (g_pending_kind == PENDING_EXEC && resp_type == PROC_IPC_RESP) {
                 {
                 char pbuf[32];
@@ -2128,6 +2118,6 @@ initialize(int32_t proc_endpoint,
         }
 
         console_write("[cli] failed\n");
-        stall_forever();
+        wasmos_sys_ipc_recv_loop();
     }
 }

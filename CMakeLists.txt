@@ -25,6 +25,7 @@ set(BUILD_DIR ${CMAKE_BINARY_DIR})
 set(BOOT_DIR ${CMAKE_SOURCE_DIR}/src/boot)
 set(KERNEL_DIR ${CMAKE_SOURCE_DIR}/src/kernel)
 set(LIBC_DIR ${CMAKE_SOURCE_DIR}/src/libc)
+set(LIBSYS_DIR ${CMAKE_SOURCE_DIR}/src/libsys)
 set(WASM3_DIR ${CMAKE_SOURCE_DIR}/libs/wasm3)
 set(DRIVER_WASM_DIR ${CMAKE_SOURCE_DIR}/src/drivers)
 set(EXAMPLES_C_DIR ${CMAKE_SOURCE_DIR}/examples/c)
@@ -292,6 +293,7 @@ set(WASMOS_LIBC_INCLUDE_DEPS
   ${LIBC_DIR}/include/wasmos/api.h
   ${LIBC_DIR}/include/wasmos/ipc.h
   ${LIBC_DIR}/include/wasmos/imports.h
+  ${LIBSYS_DIR}/include/wasmos/libsys.h
   ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
 )
 
@@ -345,6 +347,7 @@ function(wasmos_add_wasm_c_app_target target_name)
             -Wl,--allow-undefined
             -Wl,--export=${WASMOS_APP_EXPORT}
             -I${LIBC_DIR}/include
+            -I${LIBSYS_DIR}/include
             -I${DRIVER_WASM_DIR}/include
             ${WASMOS_LIBC_C_SOURCES}
             ${WASMOS_APP_SOURCE}
@@ -377,7 +380,7 @@ function(wasmos_add_wasm_c_app_target target_name)
 
   wasmos_add_ide_c_target(${target_name}_ide
     SOURCES ${WASMOS_APP_SOURCE}
-    INCLUDES ${LIBC_DIR}/include ${DRIVER_WASM_DIR}/include
+    INCLUDES ${LIBC_DIR}/include ${LIBSYS_DIR}/include ${DRIVER_WASM_DIR}/include
   )
 endfunction()
 

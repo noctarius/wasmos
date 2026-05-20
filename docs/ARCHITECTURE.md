@@ -45,3 +45,8 @@ Status snapshot has been moved to [STATUS.md](STATUS.md).
   - `-fno-threadsafe-statics`
   - `-fno-use-cxa-atexit`
 - Maintain C ABI compatibility at subsystem boundaries with `extern "C"` declarations in shared headers.
+
+## Shared Service/Driver Helpers
+- `src/libsys` is the shared utility layer for user-space drivers/services.
+- Scope is intentionally narrow and explicit: common IPC wait/call patterns, buffer borrow/release helpers, and filesystem path-read helpers.
+- Keep `libsys` lightweight and dependency-free; it should reduce duplicated control-flow/error handling without hiding protocol behavior.

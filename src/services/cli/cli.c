@@ -53,6 +53,8 @@ static char g_history_scratch[sizeof(g_line)];
 static int32_t g_history_scratch_len = 0;
 static uint8_t g_history_have_scratch = 0;
 static uint8_t g_esc_state = 0;
+static uint8_t g_vt_read_backoff = 0;
+static uint8_t g_fg_query_backoff = 0;
 static uint32_t g_ps_pids[CLI_MAX_PROCS];
 static uint32_t g_ps_parents[CLI_MAX_PROCS];
 static char g_ps_names[CLI_MAX_PROCS][32];
@@ -581,12 +583,17 @@ cli_is_foreground(void)
     if (g_vt_endpoint < 0 || g_home_tty <= 0) {
         return 1;
     }
+    if (g_fg_query_backoff > 0) {
+        g_fg_query_backoff--;
+        return g_last_seen_active_tty == g_home_tty;
+    }
     int32_t active_tty = cli_query_active_tty(NULL);
     if (active_tty >= 0) {
         if (!(g_home_tty == 1 && active_tty == 0)) {
             g_last_seen_active_tty = active_tty;
         }
     }
+    g_fg_query_backoff = (g_last_seen_active_tty == g_home_tty) ? 31 : 3;
     /* Do not forcibly reclaim tty1 while tty0 is active; compositor may
      * temporarily own tty0 for graphics presentation. */
     return g_last_seen_active_tty == g_home_tty;
@@ -1939,15 +1946,21 @@ initialize(int32_t proc_endpoint,
             int32_t from_vt = 0;
             char ch = '\0';
             if (g_vt_endpoint >= 0) {
-                have_ch = cli_vt_read_char(&ch);
-                if (have_ch < 0) {
-                    console_write("[cli] vt read failed; serial fallback\n");
-                    g_vt_endpoint = -1;
-                    g_vt_client_endpoint = -1;
-                    have_ch = 0;
-                }
-                if (have_ch > 0) {
-                    from_vt = 1;
+                if (g_vt_read_backoff > 0) {
+                    g_vt_read_backoff--;
+                } else {
+                    have_ch = cli_vt_read_char(&ch);
+                    if (have_ch < 0) {
+                        console_write("[cli] vt read failed; serial fallback\n");
+                        g_vt_endpoint = -1;
+                        g_vt_client_endpoint = -1;
+                        have_ch = 0;
+                    } else if (have_ch == 0) {
+                        /* Avoid hammering VT read IPC when no key is pending. */
+                        g_vt_read_backoff = 7;
+                    } else {
+                        from_vt = 1;
+                    }
                 }
             }
             if (!have_ch) {

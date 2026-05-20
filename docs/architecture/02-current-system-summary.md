@@ -29,6 +29,10 @@ The current tree already boots into a usable user-space stack:
 - QEMU runtime wiring now attaches repo-root `userfs/` as a second FAT drive.
   `fs-manager` reserves `/user` as the secondary FAT mount name when a second
   boot-kind backend is registered.
+- `device-manager` now reserves dual policy roots for upcoming udev-like
+  behavior:
+  - `/init/devmgr/rules` for bootstrap rules from initfs
+  - `/boot/system/devmgr/rules` for runtime override rules from FAT
 - `fs-fat` also supports overwrite-only writes to existing files through the C
   libc `open/write` path, plus `O_TRUNC` size updates, `O_APPEND` writes for
   existing files within their current cluster chain, and `O_CREAT` for
@@ -258,6 +262,24 @@ The current tree already boots into a usable user-space stack:
   exhausted.
 - Phase-2 hardening update: kernel process-stack allocation now fails closed
   if higher-half-window allocation cannot be satisfied (no low-address fallback
+
+## Device-Manager Target State (Planned)
+- Discovery sources:
+  - `pci-bus`
+  - future `usb-bus`
+  - future virtual providers (`virt-bus` style publishers)
+- Unified lifecycle events:
+  - `DEVICE_ADD`
+  - `DEVICE_REMOVE`
+  - `DEVICE_CHANGE`
+  - `BIND_OK` / `BIND_FAIL`
+  - `UNBIND_OK` / `UNBIND_FAIL`
+- Rule-driven policy:
+  - bootstrap rules loaded from `/init/devmgr/rules`
+  - runtime overrides loaded from `/boot/system/devmgr/rules`
+  - rules can select drivers, capability profiles, and mount-point aliases
+  - mount points become dynamic policy outcomes instead of fixed compile-time
+    constants
   path), and user-copy helpers (`mm_copy_from_user` / `mm_copy_to_user`) now
   use a dedicated higher-half copy stack trampoline when entered from
   low-address callers, so temporary user-CR3 switch windows no longer rely on

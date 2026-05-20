@@ -22,6 +22,9 @@ typedef enum {
 
 #define CLI_MAX_PROCS 48
 #define CLI_HISTORY_MAX 8
+#define CLI_ENV_MAX 16
+#define CLI_ENV_NAME_MAX 24
+#define CLI_ENV_VALUE_MAX 96
 
 static cli_phase_t g_phase = CLI_PHASE_INIT;
 static char g_line[128];
@@ -55,6 +58,12 @@ static uint32_t g_ps_parents[CLI_MAX_PROCS];
 static char g_ps_names[CLI_MAX_PROCS][32];
 static wasmos_proc_stats_t g_ps_stats[CLI_MAX_PROCS];
 static uint8_t g_ps_visited[CLI_MAX_PROCS];
+typedef struct {
+    uint8_t in_use;
+    char name[CLI_ENV_NAME_MAX];
+    char value[CLI_ENV_VALUE_MAX];
+} cli_env_var_t;
+static cli_env_var_t g_env[CLI_ENV_MAX];
 /* Keep in sync with kernel ipc.h */
 #define IPC_ERR_FULL (-3)
 #define CLI_VT_SEND_RETRIES 16384
@@ -172,6 +181,232 @@ str_starts_with_ci(const char *s, const char *prefix)
         i++;
     }
     return 1;
+}
+
+static void
+console_write(const char *s);
+
+static int
+str_find_char(const char *s, char ch)
+{
+    int32_t i = 0;
+    if (!s) {
+        return -1;
+    }
+    while (s[i]) {
+        if (s[i] == ch) {
+            return i;
+        }
+        i++;
+    }
+    return -1;
+}
+
+static int
+cli_env_find_index(const char *name)
+{
+    int i;
+    if (!name || !name[0]) {
+        return -1;
+    }
+    for (i = 0; i < CLI_ENV_MAX; ++i) {
+        if (g_env[i].in_use && str_eq(g_env[i].name, name)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static const char *
+cli_env_get(const char *name)
+{
+    int idx = cli_env_find_index(name);
+    if (idx < 0) {
+        return 0;
+    }
+    return g_env[idx].value;
+}
+
+static int
+cli_env_set(const char *name, const char *value)
+{
+    int i = 0;
+    int idx = -1;
+    int empty = -1;
+    if (!name || !name[0]) {
+        return -1;
+    }
+    if (str_len(name) >= CLI_ENV_NAME_MAX) {
+        return -1;
+    }
+    idx = cli_env_find_index(name);
+    if (!value || value[0] == '\0') {
+        if (idx >= 0) {
+            g_env[idx].in_use = 0;
+            g_env[idx].name[0] = '\0';
+            g_env[idx].value[0] = '\0';
+        }
+        return 0;
+    }
+    if (str_len(value) >= CLI_ENV_VALUE_MAX) {
+        return -1;
+    }
+    if (idx < 0) {
+        for (i = 0; i < CLI_ENV_MAX; ++i) {
+            if (!g_env[i].in_use) {
+                empty = i;
+                break;
+            }
+        }
+        if (empty < 0) {
+            return -1;
+        }
+        idx = empty;
+        g_env[idx].in_use = 1;
+    }
+    (void)snprintf(g_env[idx].name, sizeof(g_env[idx].name), "%s", name);
+    (void)snprintf(g_env[idx].value, sizeof(g_env[idx].value), "%s", value);
+    return 0;
+}
+
+static void
+cli_env_init_defaults(void)
+{
+    for (int i = 0; i < CLI_ENV_MAX; ++i) {
+        g_env[i].in_use = 0;
+        g_env[i].name[0] = '\0';
+        g_env[i].value[0] = '\0';
+    }
+    (void)cli_env_set("PATH", "/boot/apps:/boot/system/services:/boot/system/drivers");
+}
+
+static int
+cli_env_apply_export_line(const char *line)
+{
+    int32_t start = 0;
+    int32_t eq = -1;
+    char name[CLI_ENV_NAME_MAX];
+    char value[CLI_ENV_VALUE_MAX];
+    int32_t nlen = 0;
+    int32_t vlen = 0;
+    if (!line) {
+        return -1;
+    }
+    while (line[start] == ' ' || line[start] == '\t') {
+        start++;
+    }
+    eq = str_find_char(&line[start], '=');
+    if (eq <= 0) {
+        return -1;
+    }
+    nlen = eq;
+    while (nlen > 0 && (line[start + nlen - 1] == ' ' || line[start + nlen - 1] == '\t')) {
+        nlen--;
+    }
+    if (nlen <= 0 || nlen >= (int32_t)sizeof(name)) {
+        return -1;
+    }
+    for (int32_t i = 0; i < nlen; ++i) {
+        name[i] = line[start + i];
+    }
+    name[nlen] = '\0';
+    {
+        int32_t value_start = start + eq + 1;
+        while (line[value_start] == ' ' || line[value_start] == '\t') {
+            value_start++;
+        }
+        while (line[value_start + vlen] && vlen + 1 < (int32_t)sizeof(value)) {
+            value[vlen] = line[value_start + vlen];
+            vlen++;
+        }
+        value[vlen] = '\0';
+        while (vlen > 0 && (value[vlen - 1] == ' ' || value[vlen - 1] == '\t')) {
+            value[vlen - 1] = '\0';
+            vlen--;
+        }
+    }
+    return cli_env_set(name, value);
+}
+
+static int
+cli_echo_env_expr(const char *expr)
+{
+    char name[CLI_ENV_NAME_MAX];
+    int32_t i = 0;
+    int32_t nlen = 0;
+    const char *value = 0;
+    if (!expr) {
+        return -1;
+    }
+    while (expr[i] == ' ' || expr[i] == '\t') {
+        i++;
+    }
+    if (expr[i] != '$' || expr[i + 1] != '{') {
+        return -1;
+    }
+    i += 2;
+    while (expr[i] && expr[i] != '}' && nlen + 1 < (int32_t)sizeof(name)) {
+        name[nlen++] = expr[i++];
+    }
+    if (expr[i] != '}' || nlen <= 0) {
+        return -1;
+    }
+    name[nlen] = '\0';
+    i++;
+    while (expr[i] == ' ' || expr[i] == '\t') {
+        i++;
+    }
+    if (expr[i] != '\0') {
+        return -1;
+    }
+    value = cli_env_get(name);
+    if (value) {
+        console_write(value);
+    }
+    console_write("\n");
+    return 0;
+}
+
+static int
+cli_resolve_path_from_pathvar(const char *prog, char *resolved, uint32_t resolved_len)
+{
+    char candidate[96];
+    const char *path = cli_env_get("PATH");
+    int32_t i = 0;
+    int32_t seg_start = 0;
+    if (!path || !prog || !prog[0]) {
+        return -1;
+    }
+    while (1) {
+        if (path[i] == ':' || path[i] == '\0') {
+            int32_t seg_len = i - seg_start;
+            if (seg_len > 0 && seg_len < (int32_t)sizeof(candidate)) {
+                int32_t pos = 0;
+                for (int32_t j = 0; j < seg_len && pos + 1 < (int32_t)sizeof(candidate); ++j) {
+                    candidate[pos++] = path[seg_start + j];
+                }
+                if (pos > 0 && candidate[pos - 1] != '/' && pos + 1 < (int32_t)sizeof(candidate)) {
+                    candidate[pos++] = '/';
+                }
+                for (int32_t j = 0; prog[j] && pos + 1 < (int32_t)sizeof(candidate); ++j) {
+                    candidate[pos++] = prog[j];
+                }
+                candidate[pos] = '\0';
+                FILE *f = fopen(candidate, "r");
+                if (f) {
+                    (void)fclose(f);
+                    (void)snprintf(resolved, resolved_len, "%s", candidate);
+                    return 0;
+                }
+            }
+            if (path[i] == '\0') {
+                break;
+            }
+            seg_start = i + 1;
+        }
+        i++;
+    }
+    return -1;
 }
 
 static void
@@ -1214,6 +1449,18 @@ cli_resolve_exec_path(const char *input, char *resolved, uint32_t resolved_len)
         if (snprintf(resolved, resolved_len, "%s", path) <= 0) {
             return -1;
         }
+    } else if (str_find_char(path, '/') < 0) {
+        if (cli_resolve_path_from_pathvar(path, resolved, resolved_len) != 0) {
+            if (g_cwd[0] == '/' && g_cwd[1] == '\0') {
+                if (snprintf(resolved, resolved_len, "/%s", path) <= 0) {
+                    return -1;
+                }
+            } else {
+                if (snprintf(resolved, resolved_len, "%s/%s", g_cwd, path) <= 0) {
+                    return -1;
+                }
+            }
+        }
     } else if (g_cwd[0] == '/' && g_cwd[1] == '\0') {
         if (snprintf(resolved, resolved_len, "/%s", path) <= 0) {
             return -1;
@@ -1382,7 +1629,7 @@ cli_handle_line(void)
         return 0;
     }
     if (line_eq_ci("help")) {
-        console_write("commands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, exec <app>, script <file>, tty <0-3>, halt, reboot\n");
+        console_write("commands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, exec <app>, script <file>, export VAR=<value>, echo ${VAR}, tty <0-3>, halt, reboot\n");
         return 0;
     }
     if (line_eq_ci("mount")) {
@@ -1505,6 +1752,18 @@ cli_handle_line(void)
             return 0;
         }
         console_write("script ok\n");
+        return 0;
+    }
+    if (g_line_len > 7 && line_starts_with_ci("export ")) {
+        if (cli_env_apply_export_line(&g_line[7]) != 0) {
+            console_write("export usage: export VAR=<value>\n");
+        }
+        return 0;
+    }
+    if (g_line_len > 5 && line_starts_with_ci("echo ")) {
+        if (cli_echo_env_expr(&g_line[5]) != 0) {
+            console_write("echo usage: echo ${VAR}\n");
+        }
         return 0;
     }
     if (line_eq_ci("halt")) {
@@ -1647,6 +1906,7 @@ initialize(int32_t proc_endpoint,
 
     for (;;) {
         if (g_phase == CLI_PHASE_INIT) {
+            cli_env_init_defaults();
             set_cwd_root();
             g_reply_endpoint = wasmos_ipc_create_endpoint();
             if (g_reply_endpoint < 0) {
@@ -1691,7 +1951,7 @@ initialize(int32_t proc_endpoint,
                 }
             }
             if (g_home_tty == 1) {
-                console_write("WAMOS CLI\ncommands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, exec <app>, script <file>, tty <0-3>, halt, reboot\n");
+                console_write("WAMOS CLI\ncommands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, exec <app>, script <file>, export VAR=<value>, echo ${VAR}, tty <0-3>, halt, reboot\n");
             }
             g_phase = CLI_PHASE_PROMPT;
             continue;

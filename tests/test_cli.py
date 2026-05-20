@@ -86,5 +86,21 @@ class CliIntegrationTests(unittest.TestCase):
     def test_cat_startup(self):
         self._cmd_expect("cat startup.nsh", b"BOOTX64.EFI")
 
+    def test_export_and_echo_variable(self):
+        self._cmd_expect("export FOO=bar", b"wamos> ")
+        self._cmd_expect("echo ${FOO}", b"bar")
+        self._cmd_expect("export FOO=", b"wamos> ")
+        mark = self.session.mark()
+        self.session.send("echo ${FOO}")
+        self.assertTrue(self.session.expect_from(mark, b"\n", timeout_s=20), self.session.tail())
+        self.assertTrue(self.session.expect_from(mark, b"wamos> ", timeout_s=20), self.session.tail())
+
+    def test_path_lookup_for_exec(self):
+        self._cmd_expect("cd /", b"/ wamos>")
+        self._cmd_expect("export PATH=/boot/apps", b"wamos> ")
+        self._cmd_expect("exec init_smoke", b"spawned pid ")
+        self._cmd_expect("export PATH=", b"wamos> ")
+        self._cmd_expect("exec init_smoke", b"exec failed")
+
 if __name__ == "__main__":
     unittest.main()

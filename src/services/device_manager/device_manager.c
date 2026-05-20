@@ -1408,6 +1408,8 @@ initialize(int32_t proc_endpoint,
                 continue;
             }
             handle_query_endpoint();
+            /* Idle poll loop: yield to avoid starving other services. */
+            wasmos_sched_yield();
             continue;
         }
 

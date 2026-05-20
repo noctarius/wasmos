@@ -3,6 +3,7 @@
 #include "string.h"
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
+#include "wasmos/libsys.h"
 #include "wasmos_driver_abi.h"
 
 /*
@@ -608,49 +609,22 @@ load_block_fs_rules(const char *text)
 static int
 read_rules_file(const char *path, char *out_text, uint32_t out_text_len)
 {
-    int32_t path_len = 0;
-    int32_t resp_type = 0;
-    int32_t resp_req = 0;
-    int32_t read_len = 0;
-    int32_t req_id = 0;
+    int32_t read_len = -1;
     if (!path || !out_text || out_text_len < 2u) {
         return -1;
     }
     if (ensure_fs_endpoint() != 0) {
         return -1;
     }
-    path_len = str_len(path);
-    if (path_len <= 0 || path_len >= wasmos_fs_buffer_size()) {
-        return -1;
-    }
-    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, path_len, 0) != 0) {
-        return -1;
-    }
-    req_id = g_dm.request_id++;
-    if (wasmos_ipc_send(g_dm.fs_endpoint, g_dm.reply_endpoint, FS_IPC_READ_PATH_REQ, req_id,
-                        path_len, 0, 0, 0) != 0 ||
-        wasmos_ipc_recv(g_dm.reply_endpoint) < 0) {
-        return -1;
-    }
-    resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
-    if (resp_req != req_id) {
-        return -1;
-    }
-    resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
-    if (resp_type != FS_IPC_RESP) {
-        return -1;
-    }
-    read_len = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+    read_len = wasmos_sys_fs_read_path(g_dm.fs_endpoint,
+                                       g_dm.reply_endpoint,
+                                       g_dm.request_id++,
+                                       path,
+                                       out_text,
+                                       (int32_t)out_text_len);
     if (read_len < 0) {
         return -1;
     }
-    if (read_len >= (int32_t)out_text_len) {
-        read_len = (int32_t)out_text_len - 1;
-    }
-    if (read_len > 0 && wasmos_fs_buffer_copy((int32_t)(uintptr_t)out_text, read_len, 0) != 0) {
-        return -1;
-    }
-    out_text[read_len] = '\0';
     return read_len;
 }
 

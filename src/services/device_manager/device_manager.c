@@ -35,6 +35,7 @@ typedef enum {
 
 typedef enum {
     HW_SPAWN_NONE = 0,
+    HW_SPAWN_RULE_PATH,
     HW_SPAWN_PCI_BUS,
     HW_SPAWN_ATA,
     HW_SPAWN_FAT,
@@ -52,6 +53,7 @@ typedef enum {
 #define DEVMGR_RULES_BOOT_ROOT "/boot/system/devmgr/rules"
 #define DEVMGR_RULE_FILE "default.rules"
 #define DEVMGR_RULE_TEXT_CAP 1024
+#define DEVMGR_RULE_BOOTSTRAP_ATA_PATH "/boot/system/drivers/ata.wap"
 
 typedef struct {
     uint32_t cap_flags;
@@ -119,6 +121,9 @@ typedef struct {
     int32_t rules_boot_request_id;
     uint16_t rules_init_active;
     uint16_t rules_boot_active;
+    uint8_t rule_spawn_pending;
+    uint8_t rule_spawn_retries;
+    char rule_spawn_path[96];
 } device_manager_state_t;
 
 static device_manager_state_t g_dm = {
@@ -147,6 +152,9 @@ static device_manager_state_t g_dm = {
     .rules_boot_request_id = -1,
     .rules_init_active = 0,
     .rules_boot_active = 0,
+    .rule_spawn_pending = 0,
+    .rule_spawn_retries = 0,
+    .rule_spawn_path = {0},
 };
 
 static void
@@ -270,6 +278,20 @@ count_active_rules(const char *text)
     return count;
 }
 
+static void
+seed_bootstrap_rule_spawn_once(void)
+{
+    if (g_dm.rule_spawn_pending || g_dm.rule_spawn_path[0] != '\0') {
+        return;
+    }
+    /* TODO: replace this bootstrap seed with parsed /init/devmgr/rules once
+     * fs.vfs read-path supports /init roots for rule-file loading. */
+    str_copy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), DEVMGR_RULE_BOOTSTRAP_ATA_PATH);
+    g_dm.rule_spawn_pending = 1;
+    g_dm.rules_init_active = 1;
+    console_write("[device-manager] bootstrap rule spawn: " DEVMGR_RULE_BOOTSTRAP_ATA_PATH "\n");
+}
+
 static int
 ensure_fs_endpoint(void)
 {
@@ -387,7 +409,7 @@ load_rules_if_available(void)
 {
     if (!g_dm.rules_init_loaded && proc_running("fs-init")) {
         g_dm.rules_init_loaded = 1;
-        g_dm.rules_init_active = 0;
+        seed_bootstrap_rule_spawn_once();
         console_write("[device-manager] init rule scan deferred (vfs /init read path pending)\n");
     }
     kick_boot_rules_read_async();
@@ -539,6 +561,35 @@ hw_spawn_driver_name(hw_spawn_target_t target)
         path = "/boot/system/drivers/framebuf.wap";
     }
     if (!path) {
+        return -1;
+    }
+    while (path[path_len]) {
+        path_len++;
+    }
+    if (path_len == 0 || path_len > 95u) {
+        return -1;
+    }
+    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+        return -1;
+    }
+    if (wasmos_ipc_send(g_dm.proc_endpoint,
+                        g_dm.reply_endpoint,
+                        PROC_IPC_SPAWN_PATH,
+                        g_dm.request_id,
+                        0,
+                        (int32_t)path_len,
+                        0,
+                        0) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int
+hw_spawn_driver_path(const char *path)
+{
+    uint32_t path_len = 0;
+    if (!path || path[0] == '\0') {
         return -1;
     }
     while (path[path_len]) {
@@ -850,6 +901,9 @@ select_fallback_storage_driver(void)
 static hw_spawn_target_t
 next_spawn_target(void)
 {
+    if (g_dm.rule_spawn_pending && g_dm.rule_spawn_path[0] != '\0') {
+        return HW_SPAWN_RULE_PATH;
+    }
     if (g_dm.need_pci_bus) {
         return HW_SPAWN_PCI_BUS;
     }
@@ -874,7 +928,8 @@ next_spawn_target(void)
 static int
 has_pending_spawn_needs(void)
 {
-    return g_dm.need_pci_bus || g_dm.need_storage || g_dm.need_fat ||
+    return g_dm.rule_spawn_pending ||
+           g_dm.need_pci_bus || g_dm.need_storage || g_dm.need_fat ||
            g_dm.need_serial ||
            g_dm.need_keyboard || g_dm.need_framebuffer;
 }
@@ -1026,6 +1081,12 @@ initialize(int32_t proc_endpoint,
                     console_write("[device-manager] spawn pci-bus failed\n");
                     stall_forever();
                 }
+            } else if (target == HW_SPAWN_RULE_PATH) {
+                if (hw_spawn_driver_path(g_dm.rule_spawn_path) != 0) {
+                    g_dm.phase = HW_PHASE_FAILED;
+                    console_write("[device-manager] spawn rule path failed\n");
+                    stall_forever();
+                }
             } else if (target == HW_SPAWN_SERIAL) {
                 if (hw_spawn_driver_index_caps(g_dm.serial_index, &g_dm.selected_serial_caps) != 0) {
                     g_dm.phase = HW_PHASE_FAILED;
@@ -1086,6 +1147,9 @@ initialize(int32_t proc_endpoint,
                     g_dm.pending = HW_SPAWN_NONE;
                     g_dm.phase = HW_PHASE_WAIT_INVENTORY;
                     continue;
+                }
+                if (g_dm.pending == HW_SPAWN_RULE_PATH) {
+                    g_dm.rule_spawn_pending = 0;
                 }
                 if (g_dm.pending == HW_SPAWN_SERIAL) {
                     g_dm.need_serial = 0;
@@ -1148,6 +1212,11 @@ initialize(int32_t proc_endpoint,
                     g_dm.need_fs_manager = 0;
                 } else if (g_dm.pending == HW_SPAWN_PCI_BUS) {
                     g_dm.need_pci_bus = 0;
+                } else if (g_dm.pending == HW_SPAWN_RULE_PATH) {
+                    g_dm.rule_spawn_retries++;
+                    if (g_dm.rule_spawn_retries > 8) {
+                        g_dm.rule_spawn_pending = 0;
+                    }
                 }
                 g_dm.pending = HW_SPAWN_NONE;
                 g_dm.phase = HW_PHASE_SPAWN;
@@ -1161,7 +1230,7 @@ initialize(int32_t proc_endpoint,
 
         if (g_dm.phase == HW_PHASE_WAIT_INVENTORY) {
             consume_pci_inventory();
-            g_dm.need_storage = (g_dm.selected_storage_index >= 0) ? 1 : 0;
+            g_dm.need_storage = (g_dm.selected_storage_index >= 0 && !proc_running("ata")) ? 1 : 0;
             g_dm.need_fat = (g_dm.fat_index >= 0 && g_dm.need_storage && !proc_running("fs-fat")) ? 1 : 0;
             g_dm.need_fs_init = 0;
             g_dm.need_fs_manager = 0;
@@ -1174,7 +1243,7 @@ initialize(int32_t proc_endpoint,
             }
             if (!g_dm.need_storage && select_fallback_storage_driver() == 0) {
                 console_write("[device-manager] fallback: boot storage driver despite no PCI match\n");
-                g_dm.need_storage = 1;
+                g_dm.need_storage = !proc_running("ata") ? 1 : 0;
                 g_dm.need_fat = (g_dm.fat_index >= 0 && !proc_running("fs-fat")) ? 1 : 0;
                 g_dm.need_fs_init = 0;
                 g_dm.need_fs_manager = 0;
@@ -1196,4 +1265,19 @@ initialize(int32_t proc_endpoint,
         console_write("[device-manager] failed\n");
         stall_forever();
     }
+}
+static int
+str_starts_with(const char *s, const char *prefix)
+{
+    int32_t i = 0;
+    if (!s || !prefix) {
+        return 0;
+    }
+    while (prefix[i]) {
+        if (s[i] != prefix[i]) {
+            return 0;
+        }
+        i++;
+    }
+    return 1;
 }

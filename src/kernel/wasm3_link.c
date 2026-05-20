@@ -488,6 +488,11 @@ wasm_fs_buffer_for_pid(uint32_t pid, uint32_t context_id)
     process_t *proc = process_get(pid);
     uint8_t is_fs_manager = (proc && proc->name && strcmp(proc->name, "fs-manager") == 0) ? 1u : 0u;
     if (is_fs_manager) {
+        uint32_t borrowed_source = process_manager_buffer_borrow_source_context(PM_BUFFER_KIND_FILESYSTEM,
+                                                                                 context_id);
+        if (borrowed_source != 0) {
+            target_context = borrowed_source;
+        }
         /* fs-manager relays through explicit buffer borrows; peer-slot
          * redirection can point at backend replies and corrupt relay writes. */
         return process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, target_context);

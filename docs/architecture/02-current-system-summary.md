@@ -33,12 +33,11 @@ The current tree already boots into a usable user-space stack:
   behavior:
   - `/init/devmgr/rules` for bootstrap rules from initfs
   - `/boot/system/devmgr/rules` for runtime override rules from FAT
-  - current scaffold seeds the first rule-spawned driver as ATA from bootstrap
-    rule intent (`/boot/system/drivers/ata.wap`), performs non-blocking
-    boot-root rules-file reads via a dedicated reply endpoint
-    (`/boot/system/devmgr/rules/default.rules`), and tracks active
-    non-comment line counts; `/init/...` rule-file reads are still deferred
-    pending VFS `/init` path-read support in the read-path flow
+  - current implementation parses `spawn_path=...` rules from
+    `/init/devmgr/rules/default.rules` for bootstrap driver spawn (including
+    ATA), then performs non-blocking boot-root rules-file reads via a
+    dedicated reply endpoint (`/boot/system/devmgr/rules/default.rules`) and
+    can update the queued rule-spawn path from runtime override content
 - `fs-fat` also supports overwrite-only writes to existing files through the C
   libc `open/write` path, plus `O_TRUNC` size updates, `O_APPEND` writes for
   existing files within their current cluster chain, and `O_CREAT` for

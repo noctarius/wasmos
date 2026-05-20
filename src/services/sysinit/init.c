@@ -256,7 +256,7 @@ target_spawn_path(const char *name, char *out, uint32_t out_len)
         return -1;
     }
     if (str_eq(name, "chardev-client")) {
-        src = "/boot/apps/chardev_client.wap";
+        src = "/boot/apps/chardevc.wap";
     } else if (str_eq(name, "font-service")) {
         src = "/boot/system/services/fontsvc.wap";
     } else if (str_eq(name, "vt")) {
@@ -408,6 +408,11 @@ initialize(int32_t proc_endpoint,
         char path[96];
         if (target_spawn_path(name, path, sizeof(path)) != 0 ||
             spawn_path(path) != 0) {
+            if (str_eq(name, "chardev-client")) {
+                log_line("[sysinit] optional spawn failed: chardev-client\n");
+                g_target_index++;
+                continue;
+            }
             log_line("[sysinit] spawn failed: ");
             log_line(name);
             log_line("\n");

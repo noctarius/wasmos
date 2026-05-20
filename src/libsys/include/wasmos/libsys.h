@@ -35,6 +35,40 @@ wasmos_sys_ipc_recv_matching(int32_t reply_endpoint,
 }
 
 static inline void
+wasmos_sys_ipc_pack_name16(const char *name, int32_t out_args[4])
+{
+    wasmos_ipc_pack_name16(name, out_args);
+}
+
+static inline void
+wasmos_sys_ipc_unpack_name16(uint32_t arg0,
+                             uint32_t arg1,
+                             uint32_t arg2,
+                             uint32_t arg3,
+                             char *out,
+                             uint32_t out_len)
+{
+    uint32_t args[4] = { arg0, arg1, arg2, arg3 };
+    uint32_t pos = 0;
+    if (!out || out_len == 0) {
+        return;
+    }
+    for (uint32_t i = 0; i < 4 && pos + 1 < out_len; ++i) {
+        uint32_t v = args[i];
+        for (uint32_t b = 0; b < 4 && pos + 1 < out_len; ++b) {
+            char c = (char)(v & 0xFFu);
+            if (c == '\0') {
+                out[pos] = '\0';
+                return;
+            }
+            out[pos++] = c;
+            v >>= 8u;
+        }
+    }
+    out[pos] = '\0';
+}
+
+static inline void
 wasmos_sys_ipc_recv_loop(void)
 {
     int32_t endpoint = wasmos_ipc_create_endpoint();

@@ -108,6 +108,17 @@ wasmos_sys_to_upper(int c)
     return toupper((unsigned char)c);
 }
 
+static inline void
+wasmos_sys_to_lower_ascii(char *s)
+{
+    if (!s) {
+        return;
+    }
+    for (uint32_t i = 0; s[i] != '\0'; ++i) {
+        s[i] = (char)wasmos_sys_to_lower((unsigned char)s[i]);
+    }
+}
+
 #ifdef __cplusplus
 }
 #endif

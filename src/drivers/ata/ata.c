@@ -395,7 +395,14 @@ ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t arg0, int32
     }
 
     if (type == BLOCK_IPC_IDENTIFY_REQ) {
-        ata_send_resp(source, req_id, BLOCK_IPC_IDENTIFY_RESP, 0, (int32_t)g_unit_sectors[unit]);
+        wasmos_ipc_send(source,
+                        g_block_endpoint,
+                        BLOCK_IPC_IDENTIFY_RESP,
+                        req_id,
+                        0,
+                        (int32_t)g_unit_sectors[unit],
+                        (int32_t)unit,
+                        0);
         return 0;
     }
 

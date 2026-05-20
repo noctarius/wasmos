@@ -359,9 +359,28 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
         if (type == FSMGR_IPC_REGISTER_BACKEND_REQ) {
             int32_t backend_endpoint = arg1f > 0 ? arg1f : source;
             fs_backend_t *registered = backend_register((uint8_t)arg0, backend_endpoint);
+            int32_t mount_len = arg2f;
             if (!registered) {
                 (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
             } else {
+                if (mount_len > 0 && mount_len < (int32_t)sizeof(registered->mount_name)) {
+                    char mount_name[16];
+                    int32_t copy_len = mount_len;
+                    if (copy_len >= (int32_t)sizeof(mount_name)) {
+                        copy_len = (int32_t)sizeof(mount_name) - 1;
+                    }
+                    if (wasmos_buffer_borrow(WASMOS_BUFFER_KIND_FS, source, WASMOS_BUFFER_GRANT_READ) == 0) {
+                        if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)mount_name, copy_len, 0) == 0) {
+                            mount_name[copy_len] = '\0';
+                            if (mount_name[0] == '/') {
+                                str_copy(registered->mount_name, sizeof(registered->mount_name), &mount_name[1]);
+                            } else {
+                                str_copy(registered->mount_name, sizeof(registered->mount_name), mount_name);
+                            }
+                        }
+                        (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_FS);
+                    }
+                }
                 (void)wasmos_ipc_send(source, g_fs_endpoint, FSMGR_IPC_REGISTER_BACKEND_RESP, request_id, 0, registered->slot, 0, 0);
             }
             continue;

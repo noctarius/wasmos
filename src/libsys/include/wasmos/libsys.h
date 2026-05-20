@@ -7,6 +7,7 @@
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
 #include "wasmos/sha256.h"
+#include "wasmos/libsys_string.h"
 
 #ifdef __cplusplus
 extern "C" {

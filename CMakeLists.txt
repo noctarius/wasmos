@@ -294,6 +294,7 @@ set(WASMOS_LIBC_INCLUDE_DEPS
   ${LIBC_DIR}/include/wasmos/ipc.h
   ${LIBC_DIR}/include/wasmos/imports.h
   ${LIBSYS_DIR}/include/wasmos/libsys.h
+  ${LIBSYS_DIR}/include/wasmos/libsys_string.h
   ${LIBSYS_DIR}/include/wasmos/sha256.h
   ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
 )

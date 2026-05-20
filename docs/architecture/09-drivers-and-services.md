@@ -38,6 +38,9 @@ Native payload policy:
   - starts `pci-bus` and consumes published PCI inventory
   - starts the early storage driver chain using inventory-based matching
   - starts post-FAT display/input drivers by name from disk
+  - reserves udev-like policy rule roots:
+    - `/init/devmgr/rules` (bootstrap policy from initfs)
+    - `/boot/system/devmgr/rules` (runtime override policy from FAT)
 - `pci-bus`
   - enumerates PCI config space in user space
   - looks up `device-manager` inventory endpoint (`devmgr.inv`) via PM service
@@ -182,6 +185,8 @@ Phase 1: Internal registry and explicit state machine
   - add in-memory device registry structure to `device-manager`
   - replace hardcoded spawn order with data-driven bootstrap plan entries
   - encode per-driver retry/backoff policy table
+  - load bootstrap device policy rules from `/init/devmgr/rules` and overlay
+    runtime overrides from `/boot/system/devmgr/rules` once storage is online
   - emit deterministic state transition logs for diagnostics
 - Exit criteria:
   - no behavior regression in current `ata`/`fs-fat`/`serial`/`keyboard`/

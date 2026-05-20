@@ -1,0 +1,3 @@
+# WASMOS device-manager persistent rules (boot FAT)
+# Loaded from /boot/system/devmgr/rules after storage is online.
+# Entries here are intended to override or extend initfs bootstrap rules.

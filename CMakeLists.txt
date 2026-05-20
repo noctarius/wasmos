@@ -739,6 +739,9 @@ set_target_properties(make_wasmos_app PROPERTIES
 set(WASMOS_APP_PACKER $<TARGET_FILE:make_wasmos_app>)
 add_custom_command(
   OUTPUT ${INITFS_IMG} ${INITFS_CONFIG_BIN}
+  COMMAND ${CMAKE_COMMAND} -E copy
+          ${CMAKE_SOURCE_DIR}/scripts/initfs/devmgr/rules/default.rules
+          ${BUILD_DIR}/devmgr_rules_init_default.rules
   COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/make_initfs.py
           --manifest ${INITFS_TOML}
           --build-dir ${BUILD_DIR}
@@ -746,6 +749,7 @@ add_custom_command(
           --config-output ${INITFS_CONFIG_BIN}
   DEPENDS ${CMAKE_SOURCE_DIR}/scripts/make_initfs.py
           ${INITFS_TOML}
+          ${CMAKE_SOURCE_DIR}/scripts/initfs/devmgr/rules/default.rules
           ${WASM_CHARDEV_CLIENT_APP}
           ${WASM_INIT_SMOKE_APP}
           ${WASM_NATIVE_CALL_MIN_APP}
@@ -892,6 +896,11 @@ set(WRITE_SMOKE_FILE_COPY_CMD
 # device-manager loads them by name after fs-fat is available.
 set(INITFS_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${INITFS_IMG} ${BUILD_DIR}/esp/initfs.img
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/devmgr
+  COMMAND ${CMAKE_COMMAND} -E rm -rf ${BUILD_DIR}/esp/system/devmgr/rules
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          ${CMAKE_SOURCE_DIR}/scripts/system/devmgr/rules
+          ${BUILD_DIR}/esp/system/devmgr/rules
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/fonts
   COMMAND ${CMAKE_COMMAND} -E rm -f ${BUILD_DIR}/esp/system/fonts/noto_serif.ttf
   COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/system/fonts/Roboto-Regular.ttf ${BUILD_DIR}/esp/system/fonts/roboto.ttf

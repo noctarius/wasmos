@@ -1,0 +1,3 @@
+# WASMOS device-manager bootstrap rules (initfs)
+# Loaded from /init/devmgr/rules during early boot.
+# Syntax/parser is introduced incrementally; this file is intentionally minimal.

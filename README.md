@@ -166,6 +166,7 @@ Current FS namespace model:
 - native driver ABI now has explicit magic/version fields and fails fast on mismatch to avoid mixed-kernel/driver function-table corruption
 - PM `spawn_name` busy responses now carry a transient error code (`arg1=-2`); `sysinit` and `device-manager` retry/yield on busy so boot-time service/driver spawns no longer race each other
 - QEMU now wires a second FAT source directory from repo-root `userfs/`; `fs.vfs` reserves `/user` for that secondary FAT backend while `/boot` remains the primary FAT mount and `/init` is routed to `fs-init` (`fs.init`)
+- device-manager rule roots are now reserved at `/init/devmgr/rules` (bootstrap) and `/boot/system/devmgr/rules` (runtime override) as the starting point for udev-like dynamic device/mount policy
 5. `init` requests `sysinit` load from FAT via process manager
 6. `sysinit` starts configured services/apps from boot config
 
@@ -177,6 +178,8 @@ Current FS namespace model:
 - `src/libc/`: shared user-space libc + shims
 - `examples/`: sample/smoke apps
 - `userfs/`: host-backed user filesystem directory attached as a second FAT drive in QEMU
+- `scripts/initfs/devmgr/rules/`: bootstrap device-manager rules packaged into initfs at `/init/devmgr/rules`
+- `scripts/system/devmgr/rules/`: runtime override rules copied to ESP at `/boot/system/devmgr/rules`
 - `tests/`: QEMU-driven tests
 - `scripts/`: build/test helpers
 - `docs/`: architecture/design docs

@@ -27,6 +27,23 @@ User-space policy:
   - owns dynamic filesystem mount policy decisions
 - Kernel remains mechanism-only for transport/capability enforcement.
 
+### Unified Block-Device Identity Direction
+- All storage providers (ATA, AHCI, NVMe, USB mass-storage, virtual block)
+  must normalize to `bus=block` records in `device-manager`.
+- Canonical block identity format:
+  - `block:<parent-address>:<unit>`
+  - examples:
+    - `block:pci:00:01.01:ata0`
+    - `block:pci:00:01.01:ata1`
+    - `block:pci:00:04.00:nvme-ns1`
+    - `block:usb:1-3.2:lun0`
+- Each canonical identity also carries a deterministic hash-derived ID
+  (SHA-256 over canonical identity, stored and exposed as a short operational
+  identifier) for easier CLI/rule usage.
+- Rules and mount policy should match `bus=block` records plus metadata
+  (parent bus, removable, size, filesystem probe data) rather than matching
+  specific transport-driver names.
+
 ### Privilege Model
 - Today all processes still execute in ring 0 with per-process kernel data
   structures and separate runtime contexts.

@@ -37,6 +37,7 @@
 #define ATA_MAX_READ_SECTORS 8u
 
 static int32_t g_block_endpoint = -1;
+static int32_t g_devmgr_endpoint = -1;
 static uint32_t g_sector_count = 0;
 static uint8_t g_present = 0;
 static uint8_t g_sector_buf[ATA_SECTOR_SIZE];
@@ -82,12 +83,12 @@ ata_wait_drq(void)
 }
 
 static int
-ata_identify(uint16_t *out_words)
+ata_identify_unit(uint8_t unit, uint16_t *out_words)
 {
     if (!out_words) {
         return -1;
     }
-    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_HDDEVSEL, 0xA0);
+    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_HDDEVSEL, (uint8_t)(0xA0u | ((unit & 1u) << 4)));
     wasmos_io_wait();
     wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_SECCOUNT0, 0);
     wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_LBA0, 0);
@@ -106,6 +107,29 @@ ata_identify(uint16_t *out_words)
         out_words[i] = (uint16_t)wasmos_io_in16(ATA_PRIMARY_BASE + ATA_REG_DATA);
     }
     return 0;
+}
+
+static void
+ata_publish_block_device(uint8_t unit, uint32_t sectors, uint8_t present)
+{
+    if (g_devmgr_endpoint < 0 || g_block_endpoint < 0) {
+        return;
+    }
+    uint32_t flags = 0;
+    if (present) {
+        flags |= 1u;
+    }
+    if (unit == 0 && g_present) {
+        flags |= 2u;
+    }
+    (void)wasmos_ipc_send(g_devmgr_endpoint,
+                          g_block_endpoint,
+                          DEVMGR_PUBLISH_BLOCK_DEVICE,
+                          0,
+                          (int32_t)unit,
+                          (int32_t)sectors,
+                          (int32_t)flags,
+                          0);
 }
 
 static int
@@ -434,13 +458,33 @@ initialize(int32_t proc_endpoint,
         (void)printf("[ata] svc register failed\n");
         return -1;
     }
+    g_devmgr_endpoint = -1;
+    for (int32_t attempts = 0; attempts < 256; ++attempts) {
+        g_devmgr_endpoint = wasmos_svc_lookup(proc_endpoint,
+                                              g_block_endpoint,
+                                              "devmgr.inv",
+                                              1 + attempts);
+        if (g_devmgr_endpoint >= 0) {
+            break;
+        }
+        (void)wasmos_sched_yield();
+    }
     g_present = 0;
     g_sector_count = 0;
-    uint16_t identify_words[256];
-    if (ata_identify(identify_words) == 0) {
-        uint32_t lba28 = ((uint32_t)identify_words[61] << 16) | identify_words[60];
-        g_sector_count = lba28;
-        g_present = 1;
+    for (uint8_t unit = 0; unit < 2; ++unit) {
+        uint16_t identify_words[256];
+        uint8_t unit_present = 0;
+        uint32_t unit_sectors = 0;
+        if (ata_identify_unit(unit, identify_words) == 0) {
+            uint32_t lba28 = ((uint32_t)identify_words[61] << 16) | identify_words[60];
+            unit_sectors = lba28;
+            unit_present = 1;
+            if (unit == 0) {
+                g_sector_count = unit_sectors;
+                g_present = 1;
+            }
+        }
+        ata_publish_block_device(unit, unit_sectors, unit_present);
     }
 
     /* Drivers are long-running processes: initialize once, then block in the

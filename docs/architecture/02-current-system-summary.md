@@ -285,6 +285,25 @@ The current tree already boots into a usable user-space stack:
   - rules can select drivers, capability profiles, and mount-point aliases
   - mount points become dynamic policy outcomes instead of fixed compile-time
     constants
+- Unified block-device records (planned target state):
+  - all transport-specific mass-storage devices normalize into `bus=block`
+    records in `device-manager`
+  - canonical identity format:
+    - `block:<parent-address>:<unit>`
+    - where parent-address encodes discovery origin (for example PCI BDF or
+      USB topology path) and unit is local child identity under the controller
+  - examples:
+    - `block:pci:00:01.01:ata0`
+    - `block:pci:00:01.01:ata1`
+    - `block:pci:00:04.00:nvme-ns1`
+    - `block:usb:1-3.2:lun0`
+  - each record also includes a deterministic hash-derived device ID
+    (SHA-256 over canonical identity; exposed as a shorter operational ID for
+    rules/CLI)
+  - optional compatibility aliases such as `block0` may exist for transition,
+    but canonical IDs remain authoritative
+  - driver/mount binding decisions should match normalized `block` records
+    instead of hardcoded transport-driver names
   path), and user-copy helpers (`mm_copy_from_user` / `mm_copy_to_user`) now
   use a dedicated higher-half copy stack trampoline when entered from
   low-address callers, so temporary user-CR3 switch windows no longer rely on

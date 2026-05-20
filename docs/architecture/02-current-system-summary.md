@@ -34,11 +34,13 @@ The current tree already boots into a usable user-space stack:
   - `/init/devmgr/rules` for bootstrap rules from initfs
   - `/boot/system/devmgr/rules` for runtime override rules from FAT
   - current implementation parses `spawn_path=...` (bootstrap driver spawn)
-    and `block_fs ...` rules from `/init/devmgr/rules/default.rules`; ATA is
-    spawned by `spawn_path`, and `fs-fat` is spawned only after a matching
-    published block-device event
+    and multiple `block_fs ...` rules from `/init/devmgr/rules/default.rules`;
+    ATA is spawned by `spawn_path`, and `fs-fat` instances are spawned only
+    after matching published block-device events
   - `block_fs` currently supports `unit=...|any`, `spawn_path=...`, and
-    `mount=...` (mount is stored as a policy hint for the mount-manager path)
+    `mount=...`; current flow uses this for boot/user backend naming
+    (`/boot`/`/user`) and leaves richer dynamic mount-policy plumbing as
+    follow-up
   - device-manager then performs non-blocking boot-root rules-file reads via a
     dedicated reply endpoint (`/boot/system/devmgr/rules/default.rules`) and
     can update queued runtime policy from override content

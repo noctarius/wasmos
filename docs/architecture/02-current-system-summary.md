@@ -26,6 +26,9 @@ The current tree already boots into a usable user-space stack:
 - `fs-init` is now a separate initfs-listing backend (`fs.init`) so initfs
   namespace handling no longer lives in `fs-fat`; `fs-manager` remains
   scaffolded for follow-up mount-manager handover.
+- QEMU runtime wiring now attaches repo-root `userfs/` as a second FAT drive.
+  `fs-manager` reserves `/user` as the secondary FAT mount name when a second
+  boot-kind backend is registered.
 - `fs-fat` also supports overwrite-only writes to existing files through the C
   libc `open/write` path, plus `O_TRUNC` size updates, `O_APPEND` writes for
   existing files within their current cluster chain, and `O_CREAT` for

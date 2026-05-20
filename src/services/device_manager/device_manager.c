@@ -671,6 +671,12 @@ handle_query_endpoint(void)
         (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_MOUNT_INFO, req_id, 1, 0, 0, 0);
         return;
     }
+    if (index == 2) {
+        /* TODO: publish /user only when secondary-disk ATA/fs-fat backend
+         * registration is fully wired end-to-end. */
+        (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_MOUNT_INFO, req_id, 2, 0, 0, 0);
+        return;
+    }
     (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_QUERY_DONE, req_id, 0, 0, 0, 0);
 }
 

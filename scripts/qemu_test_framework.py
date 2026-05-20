@@ -18,9 +18,17 @@ class QemuConfig:
     ovmf_code: str
     ovmf_vars: str
     esp_dir: str
+    userfs_dir: str = ""
     nographic: bool = True
     display: str = ""
     isolate_esp: bool = False
+
+    def __post_init__(self) -> None:
+        if self.userfs_dir:
+            return
+        env_userfs = os.environ.get("WASMOS_USERFS", "")
+        if env_userfs:
+            self.userfs_dir = env_userfs
 
 
 def _read_cmake_cache(cache_path: str) -> dict:
@@ -45,6 +53,9 @@ def default_config(build_dir: str = "build") -> QemuConfig:
     ovmf_code = os.environ.get("WASMOS_OVMF_CODE", cache.get("OVMF_CODE", ""))
     ovmf_vars = os.environ.get("WASMOS_OVMF_VARS", cache.get("OVMF_VARS", ""))
     esp_dir = os.environ.get("WASMOS_ESP", os.path.join(build_dir, "esp"))
+    source_dir = cache.get("CMAKE_HOME_DIRECTORY", os.getcwd())
+    userfs_default = os.path.join(source_dir, "userfs")
+    userfs_dir = os.environ.get("WASMOS_USERFS", userfs_default)
     isolate_esp = os.environ.get("WASMOS_QEMU_ISOLATE_ESP", "0") == "1"
     if not ovmf_code:
         raise RuntimeError("OVMF_CODE not set (WASMOS_OVMF_CODE or CMakeCache.txt)")
@@ -52,6 +63,7 @@ def default_config(build_dir: str = "build") -> QemuConfig:
         ovmf_code=ovmf_code,
         ovmf_vars=ovmf_vars,
         esp_dir=esp_dir,
+        userfs_dir=userfs_dir,
         isolate_esp=isolate_esp,
     )
 
@@ -74,6 +86,8 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
     if cfg.ovmf_vars:
         cmd += ["-drive", f"if=pflash,format=raw,file={cfg.ovmf_vars}"]
     cmd += ["-drive", f"format=raw,file=fat:rw:{cfg.esp_dir}"]
+    if cfg.userfs_dir:
+        cmd += ["-drive", f"format=raw,file=fat:rw:{cfg.userfs_dir}"]
     return cmd
 
 
@@ -112,6 +126,7 @@ class QemuSession:
                 ovmf_code=self.cfg.ovmf_code,
                 ovmf_vars=self.cfg.ovmf_vars,
                 esp_dir=runtime_esp,
+                userfs_dir=self.cfg.userfs_dir,
                 nographic=self.cfg.nographic,
                 display=self.cfg.display,
                 isolate_esp=False,
@@ -282,11 +297,13 @@ def main():
     parser.add_argument("--ovmf-code", default="")
     parser.add_argument("--ovmf-vars", default="")
     parser.add_argument("--esp", default="")
+    parser.add_argument("--userfs", default="")
     parser.add_argument("--timeout", type=int, default=120)
     args = parser.parse_args()
 
     if args.ovmf_code or args.esp:
-        cfg = QemuConfig(args.ovmf_code, args.ovmf_vars, args.esp)
+        userfs = args.userfs or os.environ.get("WASMOS_USERFS", os.path.join(os.getcwd(), "userfs"))
+        cfg = QemuConfig(args.ovmf_code, args.ovmf_vars, args.esp, userfs)
     else:
         cfg = default_config()
 

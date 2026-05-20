@@ -1395,6 +1395,7 @@ cli_extract_exec_path(const char *input, char *out, uint32_t out_len)
 static int
 cli_resolve_exec_path(const char *input, char *resolved, uint32_t resolved_len)
 {
+    int n = 0;
     char path[96];
     path[0] = '\0';
     if (!input || !resolved || resolved_len == 0) {
@@ -1406,27 +1407,32 @@ cli_resolve_exec_path(const char *input, char *resolved, uint32_t resolved_len)
         return -1;
     }
     if (path[0] == '/') {
-        if (snprintf(resolved, resolved_len, "%s", path) <= 0) {
+        n = snprintf(resolved, resolved_len, "%s", path);
+        if (n < 0 || (uint32_t)n >= resolved_len) {
             return -1;
         }
     } else if (str_find_char(path, '/') < 0) {
         if (cli_resolve_path_from_pathvar(path, resolved, resolved_len) != 0) {
             if (g_cwd[0] == '/' && g_cwd[1] == '\0') {
-                if (snprintf(resolved, resolved_len, "/%s", path) <= 0) {
+                n = snprintf(resolved, resolved_len, "/%s", path);
+                if (n < 0 || (uint32_t)n >= resolved_len) {
                     return -1;
                 }
             } else {
-                if (snprintf(resolved, resolved_len, "%s/%s", g_cwd, path) <= 0) {
+                n = snprintf(resolved, resolved_len, "%s/%s", g_cwd, path);
+                if (n < 0 || (uint32_t)n >= resolved_len) {
                     return -1;
                 }
             }
         }
     } else if (g_cwd[0] == '/' && g_cwd[1] == '\0') {
-        if (snprintf(resolved, resolved_len, "/%s", path) <= 0) {
+        n = snprintf(resolved, resolved_len, "/%s", path);
+        if (n < 0 || (uint32_t)n >= resolved_len) {
             return -1;
         }
     } else {
-        if (snprintf(resolved, resolved_len, "%s/%s", g_cwd, path) <= 0) {
+        n = snprintf(resolved, resolved_len, "%s/%s", g_cwd, path);
+        if (n < 0 || (uint32_t)n >= resolved_len) {
             return -1;
         }
     }

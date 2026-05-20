@@ -174,7 +174,7 @@ Current FS namespace model:
 - `src/kernel/`: kernel core
 - `src/drivers/`: drivers (WASM and native)
 - `src/services/`: services
-- `lib/libc/`: shared user-space libc + shims
+- `src/libc/`: shared user-space libc + shims
 - `examples/`: sample/smoke apps
 - `tests/`: QEMU-driven tests
 - `scripts/`: build/test helpers

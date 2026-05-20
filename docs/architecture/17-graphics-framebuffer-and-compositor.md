@@ -326,7 +326,7 @@ Validation:
 Current implementation notes:
 
 - Shared ABI constants/opcode scaffolding now exists in:
-  - `lib/libc/include/wasmos/gfx_ipc.h`
+  - `src/libc/include/wasmos/gfx_ipc.h`
   - `src/kernel/include/gfx_ipc.h`
 - A minimal `gfx-compositor` service is now present at
   `src/services/gfx_compositor/`.
@@ -436,7 +436,7 @@ Validation:
 
 Expected initial placement (subject to minimal naming adjustments):
 
-- kernel ABI headers: `lib/libc/include/wasmos/` and matching kernel includes
+- kernel ABI headers: `src/libc/include/wasmos/` and matching kernel includes
 - compositor service: `src/services/gfx-compositor/`
 - framebuffer driver: `src/drivers/framebuffer/` (native path)
 - tests: `tests/` with QEMU markers similar to existing runtime smoke gates

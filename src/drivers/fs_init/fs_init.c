@@ -8,7 +8,9 @@
 static int32_t g_fs_endpoint = -1;
 static int32_t g_reply_endpoint = -1;
 static const char k_bootstrap_rules_path[] = "/devmgr/rules/default.rules";
-static const char k_bootstrap_rules_text[] = "spawn_path=system/drivers/ata.wap\n";
+static const char k_bootstrap_rules_text[] =
+    "spawn_path=system/drivers/ata.wap\n"
+    "block_fs unit=0 mount=/boot spawn_path=system/drivers/fs_fat.wap\n";
 static const int32_t k_bootstrap_rules_fd = 1;
 /* TODO: replace this bootstrap-rules shim with generic initfs file open/read
  * support so fs-init can serve arbitrary initfs file content via VFS. */

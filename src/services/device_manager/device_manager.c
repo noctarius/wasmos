@@ -135,6 +135,11 @@ typedef struct {
     uint8_t rule_spawn_pending;
     uint8_t rule_spawn_retries;
     char rule_spawn_path[96];
+    uint8_t block_fs_rule_active;
+    uint8_t block_fs_rule_spawned;
+    uint8_t block_fs_rule_unit;
+    char block_fs_rule_mount[16];
+    char block_fs_rule_path[96];
 } device_manager_state_t;
 
 static device_manager_state_t g_dm = {
@@ -168,6 +173,11 @@ static device_manager_state_t g_dm = {
     .rule_spawn_pending = 0,
     .rule_spawn_retries = 0,
     .rule_spawn_path = {0},
+    .block_fs_rule_active = 0,
+    .block_fs_rule_spawned = 0,
+    .block_fs_rule_unit = 0xFFu,
+    .block_fs_rule_mount = {0},
+    .block_fs_rule_path = {0},
 };
 
 static void
@@ -476,6 +486,98 @@ extract_rule_spawn_path(const char *text, char *out_path, uint32_t out_len)
 }
 
 static int
+extract_block_fs_rule(const char *text,
+                      char *out_path,
+                      uint32_t out_path_len,
+                      char *out_mount,
+                      uint32_t out_mount_len,
+                      uint8_t *out_unit)
+{
+    if (!text || !out_path || out_path_len == 0 || !out_mount || out_mount_len == 0 || !out_unit) {
+        return -1;
+    }
+    out_path[0] = '\0';
+    out_mount[0] = '\0';
+    *out_unit = 0xFFu;
+    for (int32_t i = 0;;) {
+        int32_t line_start = i;
+        int32_t line_end = i;
+        char line_buf[192];
+        uint32_t line_len = 0;
+        char *line = 0;
+        while (text[line_end] && text[line_end] != '\n') {
+            line_end++;
+        }
+        line_len = (uint32_t)(line_end - line_start);
+        if (line_len >= sizeof(line_buf)) {
+            line_len = sizeof(line_buf) - 1u;
+        }
+        for (uint32_t j = 0; j < line_len; ++j) {
+            line_buf[j] = text[line_start + (int32_t)j];
+        }
+        line_buf[line_len] = '\0';
+        line = (char *)trim_left(line_buf);
+        if (line[0] && line[0] != '#') {
+            if (strncmp(line, "block_fs", 8) == 0 && (line[8] == '\0' || str_is_space(line[8]))) {
+                char path[96];
+                char mount[16];
+                uint8_t unit = 0xFFu;
+                char *cur = line + 8;
+                path[0] = '\0';
+                mount[0] = '\0';
+                while (*cur) {
+                    char *tok = cur;
+                    char *eq = 0;
+                    while (*tok && str_is_space(*tok)) {
+                        tok++;
+                    }
+                    if (!*tok) {
+                        break;
+                    }
+                    cur = tok;
+                    while (*cur && !str_is_space(*cur)) {
+                        cur++;
+                    }
+                    if (*cur) {
+                        *cur++ = '\0';
+                    }
+                    eq = strchr(tok, '=');
+                    if (!eq) {
+                        continue;
+                    }
+                    *eq++ = '\0';
+                    if (strcmp(tok, "spawn_path") == 0) {
+                        str_copy(path, sizeof(path), eq);
+                    } else if (strcmp(tok, "mount") == 0) {
+                        str_copy(mount, sizeof(mount), eq);
+                    } else if (strcmp(tok, "unit") == 0) {
+                        if (strcmp(eq, "any") == 0) {
+                            unit = 0xFFu;
+                        } else if (eq[0] >= '0' && eq[0] <= '9' && eq[1] == '\0') {
+                            unit = (uint8_t)(eq[0] - '0');
+                        }
+                    }
+                }
+                if (path[0]) {
+                    if (!mount[0]) {
+                        str_copy(mount, sizeof(mount), "/");
+                    }
+                    str_copy(out_path, out_path_len, path);
+                    str_copy(out_mount, out_mount_len, mount);
+                    *out_unit = unit;
+                    return 0;
+                }
+            }
+        }
+        if (text[line_end] == '\0') {
+            break;
+        }
+        i = line_end + 1;
+    }
+    return -1;
+}
+
+static int
 read_rules_file(const char *path, char *out_text, uint32_t out_text_len)
 {
     int32_t initfs_endpoint = -1;
@@ -674,6 +776,19 @@ poll_boot_rules_async(void)
         g_dm.rule_spawn_pending = 1;
         console_write("[device-manager] boot rules queued spawn_path\n");
     }
+    {
+        char fs_path[96];
+        char fs_mount[16];
+        uint8_t fs_unit = 0xFFu;
+        if (extract_block_fs_rule(text, fs_path, sizeof(fs_path), fs_mount, sizeof(fs_mount), &fs_unit) == 0) {
+            g_dm.block_fs_rule_active = 1;
+            g_dm.block_fs_rule_spawned = 0;
+            g_dm.block_fs_rule_unit = fs_unit;
+            str_copy(g_dm.block_fs_rule_path, sizeof(g_dm.block_fs_rule_path), fs_path);
+            str_copy(g_dm.block_fs_rule_mount, sizeof(g_dm.block_fs_rule_mount), fs_mount);
+            console_write("[device-manager] boot rules loaded block_fs\n");
+        }
+    }
     g_dm.rules_boot_loaded = 1;
     snprintf(msg, sizeof(msg), "[device-manager] loaded boot rules: %d active\n", (int)g_dm.rules_boot_active);
     console_write(msg);
@@ -697,6 +812,19 @@ load_rules_if_available(void)
             if (extract_rule_spawn_path(text, g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path)) == 0) {
                 g_dm.rule_spawn_pending = 1;
                 console_write("[device-manager] init rules queued spawn_path\n");
+            }
+            {
+                char fs_path[96];
+                char fs_mount[16];
+                uint8_t fs_unit = 0xFFu;
+                if (extract_block_fs_rule(text, fs_path, sizeof(fs_path), fs_mount, sizeof(fs_mount), &fs_unit) == 0) {
+                    g_dm.block_fs_rule_active = 1;
+                    g_dm.block_fs_rule_spawned = 0;
+                    g_dm.block_fs_rule_unit = fs_unit;
+                    str_copy(g_dm.block_fs_rule_path, sizeof(g_dm.block_fs_rule_path), fs_path);
+                    str_copy(g_dm.block_fs_rule_mount, sizeof(g_dm.block_fs_rule_mount), fs_mount);
+                    console_write("[device-manager] init rules loaded block_fs\n");
+                }
             }
         } else if (!g_dm.rules_init_fail_logged) {
             g_dm.rules_init_fail_logged = 1;
@@ -934,6 +1062,14 @@ hw_spawn_rule_target(const char *rule_path)
         }
         module_index = module_index_by_name(name);
         if (module_index < 0) {
+            for (uint32_t i = 0; name[i]; ++i) {
+                if (name[i] == '_') {
+                    name[i] = '-';
+                }
+            }
+            module_index = module_index_by_name(name);
+        }
+        if (module_index < 0) {
             return -1;
         }
     }
@@ -1057,6 +1193,16 @@ registry_add_block_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t ar
                        (unsigned)rec->present,
                        (unsigned)rec->sector_count);
         console_write(msg);
+    }
+    if (rec->present &&
+        g_dm.block_fs_rule_active &&
+        !g_dm.block_fs_rule_spawned &&
+        (g_dm.block_fs_rule_unit == 0xFFu || g_dm.block_fs_rule_unit == rec->unit)) {
+        str_copy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), g_dm.block_fs_rule_path);
+        g_dm.rule_spawn_pending = 1;
+        g_dm.rule_spawn_retries = 0;
+        g_dm.need_fat = 0;
+        console_write("[device-manager] block_fs rule queued spawn\n");
     }
 }
 
@@ -1529,8 +1675,9 @@ initialize(int32_t proc_endpoint,
                 }
                 if (g_dm.pending == HW_SPAWN_RULE_PATH) {
                     g_dm.rule_spawn_pending = 0;
-                    if (g_dm.fat_index >= 0 && !proc_running("fs-fat")) {
-                        g_dm.need_fat = 1;
+                    if (g_dm.block_fs_rule_active &&
+                        strcmp(g_dm.rule_spawn_path, g_dm.block_fs_rule_path) == 0) {
+                        g_dm.block_fs_rule_spawned = 1;
                     }
                 }
                 if (g_dm.pending == HW_SPAWN_SERIAL) {
@@ -1605,7 +1752,7 @@ initialize(int32_t proc_endpoint,
 
         if (g_dm.phase == HW_PHASE_WAIT_INVENTORY) {
             consume_pci_inventory();
-            g_dm.need_fat = (g_dm.fat_index >= 0 && !proc_running("fs-fat")) ? 1 : 0;
+            g_dm.need_fat = 0;
             g_dm.need_fs_init = 0;
             g_dm.need_fs_manager = 0;
             if (g_dm.serial_index >= 0 &&
@@ -1622,9 +1769,6 @@ initialize(int32_t proc_endpoint,
         if (g_dm.phase == HW_PHASE_IDLE) {
             load_rules_if_available();
             consume_inventory_events_nonblocking();
-            if (g_dm.fat_index >= 0 && proc_running("ata") && !proc_running("fs-fat")) {
-                g_dm.need_fat = 1;
-            }
             if (next_spawn_target() != HW_SPAWN_NONE) {
                 g_dm.phase = HW_PHASE_SPAWN;
                 continue;

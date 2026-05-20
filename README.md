@@ -29,7 +29,7 @@ It defines repository workflow and documentation/update conventions.
 - WASM-first userspace runtime (wasm3) with optional native drivers/services where hardware paths benefit from native execution.
 - Service-driven startup chain with endpoint registry and discovery (`register`/`lookup`) plus PCI-inventory-driven driver bring-up.
 - Practical VT/CLI environment with multi-TTY switching, fail-fast script execution (`script <file>`), basic environment variables (`export`, `echo ${VAR}`), PATH-based app lookup, and core inspection commands (`ps`, `kmaps`, `mount`, `exec`, etc.).
-- Device-manager policy roots are defined for udev-like evolution: `/init/devmgr/rules` (bootstrap) and `/boot/system/devmgr/rules` (runtime override). ATA bring-up is now rule-driven (`spawn_path=...`) from `/init/devmgr/rules/default.rules`, with runtime override parsing from `/boot/system/devmgr/rules/default.rules` once `fs-fat` is live.
+- Device-manager policy roots are defined for udev-like evolution: `/init/devmgr/rules` (bootstrap) and `/boot/system/devmgr/rules` (runtime override). Storage bring-up is rule-driven from `/init/devmgr/rules/default.rules`: `spawn_path=...` boots ATA, then `block_fs ...` spawns `fs-fat` after a matching published block-device record.
 - Ring-3 isolation/hardening enabled by default, with stress/fault/self-test coverage across IPC, faults, threading, and shared memory.
 - Thread lifecycle support is available end-to-end (`thread_create`, `thread_join`, `thread_detach`, `thread_yield`, `thread_exit`) for ring3.
 - Shared-memory and capability plumbing supports owner/grant/revoke flows, including compositor/client buffer sharing and auto-mapping helpers.
@@ -150,7 +150,7 @@ Boot sequence (high level):
 1. `BOOTX64.EFI` loads `kernel.elf` and `initfs.img`
 2. Kernel boots, initializes core subsystems, starts `init`
 3. `init` starts `fs-manager`, then `fs-init`, then `device-manager`
-4. `device-manager` starts `pci-bus` (via PM endpoint lookup), consumes inventory, applies early PCI matching rules, then starts storage drivers/services (`ata`, `fs-fat`) with spawn-time capability profiles
+4. `device-manager` starts `pci-bus` (via PM endpoint lookup), consumes inventory, applies early PCI matching rules, then starts storage drivers/services through rules (`spawn_path` for ATA, `block_fs` after block registration for `fs-fat`)
 
 Current driver match/capability policy source:
 - driver metadata is embedded in each driver’s WASMOS-APP package

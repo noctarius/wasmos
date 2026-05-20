@@ -10,7 +10,7 @@ typedef struct framebuffer_info {
     uint32_t framebuffer_width;
     uint32_t framebuffer_height;
     uint32_t framebuffer_stride;
-    uint32_t framebuffer_reserved;
+    uint32_t framebuffer_gop_pixel_format;
 } framebuffer_info_t;
 
 void framebuffer_init(const boot_info_t *info);

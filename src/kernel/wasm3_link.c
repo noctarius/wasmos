@@ -41,9 +41,18 @@ typedef struct {
     uint32_t peer_context_id;
 } wasm_fs_peer_slot_t;
 
+typedef struct {
+    uint32_t pid;
+    uint32_t shmem_id;
+    uint32_t offset;
+    uint32_t size;
+    uint8_t valid;
+} wasm_shmem_linear_map_t;
+
 static wasm_ipc_last_slot_t g_wasm_last_slots[PROCESS_MAX_COUNT];
 static wasm_block_slot_t g_wasm_block_slots[PROCESS_MAX_COUNT];
 static wasm_fs_peer_slot_t g_wasm_fs_peer_slots[PROCESS_MAX_COUNT];
+static wasm_shmem_linear_map_t g_wasm_shmem_maps[PROCESS_MAX_COUNT * 4];
 static const boot_info_t *g_wasm_boot_info;
 
 static int
@@ -175,6 +184,52 @@ wasm_ipc_slots_init(void)
         g_wasm_fs_peer_slots[i].pid = 0;
         g_wasm_fs_peer_slots[i].valid = 0;
         g_wasm_fs_peer_slots[i].peer_context_id = 0;
+    }
+    for (uint32_t i = 0; i < (PROCESS_MAX_COUNT * 4); ++i) {
+        g_wasm_shmem_maps[i].pid = 0;
+        g_wasm_shmem_maps[i].shmem_id = 0;
+        g_wasm_shmem_maps[i].offset = 0;
+        g_wasm_shmem_maps[i].size = 0;
+        g_wasm_shmem_maps[i].valid = 0;
+    }
+}
+
+static void
+wasm_shmem_map_track(uint32_t pid, uint32_t shmem_id, uint32_t offset, uint32_t size)
+{
+    wasm_shmem_linear_map_t *empty = 0;
+    for (uint32_t i = 0; i < (PROCESS_MAX_COUNT * 4); ++i) {
+        wasm_shmem_linear_map_t *slot = &g_wasm_shmem_maps[i];
+        if (slot->valid &&
+            slot->pid == pid &&
+            slot->shmem_id == shmem_id &&
+            slot->offset == offset)
+        {
+            slot->size = size;
+            return;
+        }
+        if (!empty && !slot->valid) {
+            empty = slot;
+        }
+    }
+    if (empty) {
+        empty->pid = pid;
+        empty->shmem_id = shmem_id;
+        empty->offset = offset;
+        empty->size = size;
+        empty->valid = 1;
+    }
+}
+
+static void
+wasm_shmem_map_untrack(uint32_t pid, uint32_t shmem_id)
+{
+    for (uint32_t i = 0; i < (PROCESS_MAX_COUNT * 4); ++i) {
+        wasm_shmem_linear_map_t *slot = &g_wasm_shmem_maps[i];
+        if (!slot->valid) continue;
+        if (slot->pid == pid && slot->shmem_id == shmem_id) {
+            slot->valid = 0;
+        }
     }
 }
 
@@ -1696,6 +1751,7 @@ m3ApiRawFunction(wasmos_shmem_map)
     if (mm_shared_retain(proc->context_id, (uint32_t)id) != 0) {
         m3ApiReturn(-1);
     }
+    wasm_shmem_map_track(proc->pid, (uint32_t)id, off32, map_size32);
     m3ApiReturn(0);
 }
 
@@ -1736,7 +1792,16 @@ m3ApiRawFunction(wasmos_shmem_map_auto)
     wasm_linear_region_sync_size(ctx, mem_size);
     uint64_t off64 = 0;
     uint8_t found = 0;
-    for (off64 = 0x4000ULL; off64 + map_size <= mem_size; off64 += 0x1000ULL) {
+    /* Keep auto-mapped shared pages away from low linear-memory where
+     * module data/rodata/heap metadata commonly live. */
+    const uint64_t map_auto_min_off = 0x200000ULL;
+    uint64_t scan_off = map_auto_min_off;
+    if (scan_off < 0x4000ULL) {
+        scan_off = 0x4000ULL;
+    }
+    scan_off = (scan_off + 0xFFFULL) & ~0xFFFULL;
+
+    for (off64 = scan_off; off64 + map_size <= mem_size; off64 += 0x1000ULL) {
         uint64_t probe_virt = 0;
         if (wasm_user_va_from_offset(proc->context_id, (uint32_t)off64, (uint32_t)map_size, &probe_virt) != 0) {
             continue;
@@ -1789,6 +1854,7 @@ m3ApiRawFunction(wasmos_shmem_map_auto)
     if (mm_shared_retain(proc->context_id, (uint32_t)id) != 0) {
         m3ApiReturn(-1);
     }
+    wasm_shmem_map_track(proc->pid, (uint32_t)id, off32, map_size32);
 
     /* FIXME(shmem-map-auto): unmap currently only drops shared refs and does
      * not reclaim or reuse grown linear-memory pages for future map_auto
@@ -1854,7 +1920,53 @@ m3ApiRawFunction(wasmos_shmem_unmap)
     if (!proc || proc->context_id == 0) {
         m3ApiReturn(-1);
     }
+    wasm_shmem_map_untrack(proc->pid, (uint32_t)id);
     m3ApiReturn(mm_shared_release(proc->context_id, (uint32_t)id));
+}
+
+m3ApiRawFunction(wasmos_shmem_flush)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, id)
+    m3ApiGetArg(int32_t, ptr)
+    m3ApiGetArg(int32_t, size)
+
+    if (id <= 0 || ptr < 0 || size <= 0) {
+        m3ApiReturn(-1);
+    }
+
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0 ||
+        require_dma_capability(proc->context_id) != 0) {
+        m3ApiReturn(-1);
+    }
+
+    uint64_t phys_base = 0;
+    uint64_t shared_pages = 0;
+    if (mm_shared_get_phys(proc->context_id, (uint32_t)id, &phys_base, &shared_pages) != 0 ||
+        shared_pages == 0 || phys_base == 0) {
+        m3ApiReturn(-1);
+    }
+
+    uint32_t mem_size = 0;
+    uint8_t *mem_base = m3_GetMemory(runtime, &mem_size, 0);
+    if (!mem_base || mem_size == 0) {
+        m3ApiReturn(-1);
+    }
+
+    uint32_t off32 = (uint32_t)ptr;
+    uint32_t len32 = (uint32_t)size;
+    if ((uint64_t)off32 + (uint64_t)len32 > (uint64_t)mem_size) {
+        m3ApiReturn(-1);
+    }
+
+    uint64_t max_len = shared_pages * 0x1000ULL;
+    if ((uint64_t)len32 > max_len) {
+        m3ApiReturn(-1);
+    }
+
+    memcpy((void *)(uintptr_t)phys_base, mem_base + off32, (size_t)len32);
+    m3ApiReturn(0);
 }
 
 m3ApiRawFunction(wasmos_irq_route)
@@ -2916,6 +3028,7 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "shmem_revoke", "i(ii)", wasmos_shmem_revoke);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_map", "i(iii)", wasmos_shmem_map);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_map_auto", "i(ii)", wasmos_shmem_map_auto);
+    rc |= wasm3_link_raw(module, "wasmos", "shmem_flush", "i(iii)", wasmos_shmem_flush);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_unmap", "i(i)", wasmos_shmem_unmap);
     rc |= wasm3_link_raw(module, "wasmos", "irq_route", "i(ii)", wasmos_irq_route);
     rc |= wasm3_link_raw(module, "wasmos", "irq_unroute", "i(i)", wasmos_irq_unroute);

@@ -73,6 +73,8 @@ void framebuffer_init(const boot_info_t *info)
     fb->framebuffer_width = info->framebuffer_width;
     fb->framebuffer_height = info->framebuffer_height;
     fb->framebuffer_stride = info->framebuffer_pixels_per_scanline;
+    fb->framebuffer_gop_pixel_format = (uint32_t)((info->flags & BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_MASK) >>
+                                          BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_SHIFT);
     klog_printf("[framebuffer] stride=0x%016llX\n",
                   (unsigned long long)info->framebuffer_pixels_per_scanline);
 }

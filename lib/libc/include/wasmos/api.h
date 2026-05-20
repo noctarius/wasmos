@@ -165,7 +165,7 @@ typedef struct {
     uint32_t framebuffer_width;
     uint32_t framebuffer_height;
     uint32_t framebuffer_stride;
-    uint32_t framebuffer_reserved;
+    uint32_t framebuffer_gop_pixel_format;
 } wasmos_framebuffer_info_t;
 
 extern int32_t wasmos_framebuffer_info(wasmos_framebuffer_info_t *info, int32_t info_len)
@@ -184,6 +184,8 @@ extern int32_t wasmos_shmem_map(int32_t id, int32_t ptr, int32_t size)
     WASMOS_WASM_IMPORT("wasmos", "shmem_map");
 extern int32_t wasmos_shmem_map_auto(int32_t id, int32_t size)
     WASMOS_WASM_IMPORT("wasmos", "shmem_map_auto");
+extern int32_t wasmos_shmem_flush(int32_t id, int32_t ptr, int32_t size)
+    WASMOS_WASM_IMPORT("wasmos", "shmem_flush");
 extern int32_t wasmos_shmem_unmap(int32_t id)
     WASMOS_WASM_IMPORT("wasmos", "shmem_unmap");
 extern int32_t wasmos_irq_route(int32_t irq_line, int32_t endpoint)

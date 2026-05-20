@@ -556,6 +556,14 @@ pm_fs_read_blob_for_spawn(uint32_t pm_context_id,
         reply.type != FS_IPC_RESP ||
         reply.arg0 <= 0 ||
         (uint32_t)reply.arg0 > max) {
+        klog_write("[pm] spawn_path fs read failed: ");
+        for (uint32_t i = 0; i < path_len; ++i) {
+            char c[2];
+            c[0] = path[i];
+            c[1] = '\0';
+            klog_write(c);
+        }
+        klog_write("\n");
         return -1;
     }
     *out_blob_size = (uint32_t)reply.arg0;

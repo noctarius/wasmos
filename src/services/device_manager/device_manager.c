@@ -37,7 +37,6 @@ typedef enum {
     HW_SPAWN_NONE = 0,
     HW_SPAWN_RULE_PATH,
     HW_SPAWN_PCI_BUS,
-    HW_SPAWN_ATA,
     HW_SPAWN_FAT,
     HW_SPAWN_FS_INIT,
     HW_SPAWN_FS_MANAGER,
@@ -53,7 +52,6 @@ typedef enum {
 #define DEVMGR_RULES_BOOT_ROOT "/boot/system/devmgr/rules"
 #define DEVMGR_RULE_FILE "default.rules"
 #define DEVMGR_RULE_TEXT_CAP 1024
-#define DEVMGR_RULE_BOOTSTRAP_ATA_PATH "/boot/system/drivers/ata.wap"
 
 typedef struct {
     uint32_t cap_flags;
@@ -87,14 +85,12 @@ typedef struct {
     int32_t request_id;
     int32_t module_count;
     uint8_t need_pci_bus;
-    uint8_t need_storage;
     uint8_t need_fat;
     uint8_t need_serial;
     uint8_t need_fs_init;
     uint8_t need_fs_manager;
     uint8_t need_keyboard;
     uint8_t need_framebuffer;
-    uint8_t storage_retries;
     uint8_t fat_retries;
     uint8_t serial_retries;
     uint8_t fs_init_retries;
@@ -115,6 +111,8 @@ typedef struct {
     uint8_t selected_storage_has_record;
     pci_device_record_t selected_storage_record;
     uint8_t rules_roots_logged;
+    uint8_t idle_logged;
+    uint8_t rules_init_fail_logged;
     uint8_t rules_init_loaded;
     uint8_t rules_boot_loaded;
     uint8_t rules_boot_request_pending;
@@ -146,6 +144,8 @@ static device_manager_state_t g_dm = {
     .keyboard_index = -1,
     .framebuffer_index = -1,
     .rules_roots_logged = 0,
+    .idle_logged = 0,
+    .rules_init_fail_logged = 0,
     .rules_init_loaded = 0,
     .rules_boot_loaded = 0,
     .rules_boot_request_pending = 0,
@@ -194,6 +194,9 @@ log_rule_roots_once(void)
 }
 
 static int proc_running(const char *name);
+static int ensure_fs_endpoint(void);
+static int query_module_meta_by_path(const char *path, uint32_t source, int32_t *out_index);
+static int module_index_by_name(const char *name);
 
 static int32_t
 str_len(const char *s)
@@ -278,18 +281,154 @@ count_active_rules(const char *text)
     return count;
 }
 
-static void
-seed_bootstrap_rule_spawn_once(void)
+static const char *
+trim_left(const char *s)
 {
-    if (g_dm.rule_spawn_pending || g_dm.rule_spawn_path[0] != '\0') {
-        return;
+    if (!s) {
+        return s;
     }
-    /* TODO: replace this bootstrap seed with parsed /init/devmgr/rules once
-     * fs.vfs read-path supports /init roots for rule-file loading. */
-    str_copy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), DEVMGR_RULE_BOOTSTRAP_ATA_PATH);
-    g_dm.rule_spawn_pending = 1;
-    g_dm.rules_init_active = 1;
-    console_write("[device-manager] bootstrap rule spawn: " DEVMGR_RULE_BOOTSTRAP_ATA_PATH "\n");
+    while (*s && str_is_space(*s)) {
+        s++;
+    }
+    return s;
+}
+
+static int
+extract_rule_spawn_path(const char *text, char *out_path, uint32_t out_len)
+{
+    int32_t i = 0;
+    if (!text || !out_path || out_len == 0) {
+        return -1;
+    }
+    out_path[0] = '\0';
+    for (;;) {
+        int32_t line_start = i;
+        int32_t line_end = i;
+        const char *line = 0;
+        const char *key = "spawn_path=";
+        uint32_t key_len = 11;
+        uint32_t key_i = 0;
+        const char *value = 0;
+        uint32_t n = 0;
+        while (text[line_end] && text[line_end] != '\n') {
+            line_end++;
+        }
+        line = trim_left(&text[line_start]);
+        if (*line && *line != '#') {
+            while (key_i < key_len && line[key_i] == key[key_i]) {
+                key_i++;
+            }
+            if (key_i == key_len) {
+                value = line + key_len;
+                while (value < &text[line_end] && str_is_space(*value)) {
+                    value++;
+                }
+                while (&value[n] < &text[line_end] && value[n] && !str_is_space(value[n])) {
+                    n++;
+                }
+                if (n > 0 && n + 1u < out_len) {
+                    for (uint32_t j = 0; j < n; ++j) {
+                        out_path[j] = value[j];
+                    }
+                    out_path[n] = '\0';
+                    return 0;
+                }
+            }
+        }
+        if (text[line_end] == '\0') {
+            break;
+        }
+        i = line_end + 1;
+    }
+    return -1;
+}
+
+static int
+read_rules_file(const char *path, char *out_text, uint32_t out_text_len)
+{
+    int32_t initfs_endpoint = -1;
+    uint32_t is_init_path = 0;
+    int32_t path_len = 0;
+    int32_t resp_type = 0;
+    int32_t resp_req = 0;
+    int32_t read_len = 0;
+    int32_t req_id = 0;
+    if (!path || !out_text || out_text_len < 2u) {
+        return -1;
+    }
+    is_init_path = (path[0] == '/' && path[1] == 'i' && path[2] == 'n' && path[3] == 'i' && path[4] == 't' && path[5] == '/');
+    if (is_init_path) {
+        initfs_endpoint = wasmos_svc_lookup(g_dm.proc_endpoint, g_dm.reply_endpoint, "initfs.rules", 1);
+        if (initfs_endpoint < 0) {
+            return -1;
+        }
+    } else {
+        if (ensure_fs_endpoint() != 0) {
+            return -1;
+        }
+    }
+    if (is_init_path) {
+        uint32_t packed[4] = {0, 0, 0, 0};
+        const char *name = DEVMGR_RULE_FILE;
+        int32_t fd = -1;
+        for (uint32_t i = 0; name[i] && i < 16u; ++i) {
+            uint32_t slot = i / 4u;
+            uint32_t shift = (i % 4u) * 8u;
+            packed[slot] |= ((uint32_t)(uint8_t)name[i]) << shift;
+        }
+        req_id = g_dm.request_id++;
+        if (wasmos_ipc_send(initfs_endpoint, g_dm.reply_endpoint, FS_IPC_OPEN_REQ, req_id,
+                            (int32_t)packed[0], (int32_t)packed[1], (int32_t)packed[2], (int32_t)packed[3]) != 0 ||
+            wasmos_ipc_recv(g_dm.reply_endpoint) < 0) {
+            return -1;
+        }
+        resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+        resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+        fd = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+        if (resp_req != req_id || resp_type != FS_IPC_RESP || fd < 0) {
+            return -1;
+        }
+        req_id = g_dm.request_id++;
+        if (wasmos_ipc_send(initfs_endpoint, g_dm.reply_endpoint, FS_IPC_READ_REQ, req_id,
+                            fd, wasmos_fs_buffer_size(), 0, 0) != 0 ||
+            wasmos_ipc_recv(g_dm.reply_endpoint) < 0) {
+            return -1;
+        }
+    } else {
+        path_len = str_len(path);
+        if (path_len <= 0 || path_len >= wasmos_fs_buffer_size()) {
+            return -1;
+        }
+        if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, path_len, 0) != 0) {
+            return -1;
+        }
+        req_id = g_dm.request_id++;
+        if (wasmos_ipc_send(g_dm.fs_endpoint, g_dm.reply_endpoint, FS_IPC_READ_PATH_REQ, req_id,
+                            path_len, 0, 0, 0) != 0 ||
+            wasmos_ipc_recv(g_dm.reply_endpoint) < 0) {
+            return -1;
+        }
+    }
+    resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+    if (resp_req != req_id) {
+        return -1;
+    }
+    resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+    if (resp_type != FS_IPC_RESP) {
+        return -1;
+    }
+    read_len = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+    if (read_len < 0) {
+        return -1;
+    }
+    if (read_len >= (int32_t)out_text_len) {
+        read_len = (int32_t)out_text_len - 1;
+    }
+    if (read_len > 0 && wasmos_fs_buffer_copy((int32_t)(uintptr_t)out_text, read_len, 0) != 0) {
+        return -1;
+    }
+    out_text[read_len] = '\0';
+    return read_len;
 }
 
 static int
@@ -399,6 +538,10 @@ poll_boot_rules_async(void)
     }
     text[read_len] = '\0';
     g_dm.rules_boot_active = count_active_rules(text);
+    if (extract_rule_spawn_path(text, g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path)) == 0) {
+        g_dm.rule_spawn_pending = 1;
+        console_write("[device-manager] boot rules queued spawn_path\n");
+    }
     g_dm.rules_boot_loaded = 1;
     snprintf(msg, sizeof(msg), "[device-manager] loaded boot rules: %d active\n", (int)g_dm.rules_boot_active);
     console_write(msg);
@@ -407,10 +550,26 @@ poll_boot_rules_async(void)
 static void
 load_rules_if_available(void)
 {
-    if (!g_dm.rules_init_loaded && proc_running("fs-init")) {
-        g_dm.rules_init_loaded = 1;
-        seed_bootstrap_rule_spawn_once();
-        console_write("[device-manager] init rule scan deferred (vfs /init read path pending)\n");
+    if (!g_dm.rules_init_loaded) {
+        char path[96];
+        char text[DEVMGR_RULE_TEXT_CAP];
+        int32_t read_len = -1;
+        path[0] = '\0';
+        str_copy(path, sizeof(path), DEVMGR_RULES_INIT_ROOT);
+        str_append(path, sizeof(path), "/");
+        str_append(path, sizeof(path), DEVMGR_RULE_FILE);
+        read_len = read_rules_file(path, text, sizeof(text));
+        if (read_len >= 0) {
+            g_dm.rules_init_loaded = 1;
+            g_dm.rules_init_active = count_active_rules(text);
+            if (extract_rule_spawn_path(text, g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path)) == 0) {
+                g_dm.rule_spawn_pending = 1;
+                console_write("[device-manager] init rules queued spawn_path\n");
+            }
+        } else if (!g_dm.rules_init_fail_logged) {
+            g_dm.rules_init_fail_logged = 1;
+            console_write("[device-manager] init rules read failed (will retry)\n");
+        }
     }
     kick_boot_rules_read_async();
     poll_boot_rules_async();
@@ -612,6 +771,44 @@ hw_spawn_driver_path(const char *path)
         return -1;
     }
     return 0;
+}
+
+static int
+hw_spawn_rule_target(const char *rule_path)
+{
+    int32_t module_index = -1;
+    if (!rule_path || rule_path[0] == '\0') {
+        return -1;
+    }
+    if (rule_path[0] == '/') {
+        return hw_spawn_driver_path(rule_path);
+    }
+    if (query_module_meta_by_path(rule_path, PROC_MODULE_SOURCE_INITFS, &module_index) != 0 || module_index < 0) {
+        const char *tail = rule_path;
+        char name[32];
+        uint32_t n = 0;
+        for (uint32_t i = 0; rule_path[i] != '\0'; ++i) {
+            if (rule_path[i] == '/') {
+                tail = &rule_path[i + 1];
+            }
+        }
+        while (tail[n] && tail[n] != '.' && n + 1u < sizeof(name)) {
+            name[n] = tail[n];
+            n++;
+        }
+        name[n] = '\0';
+        if (name[0] == '\0') {
+            return -1;
+        }
+        module_index = module_index_by_name(name);
+        if (module_index < 0) {
+            return -1;
+        }
+    }
+    if (module_index == g_dm.selected_storage_index && g_dm.selected_storage_caps.cap_flags != 0) {
+        return hw_spawn_driver_index_caps(module_index, &g_dm.selected_storage_caps);
+    }
+    return hw_spawn_driver_index(module_index);
 }
 
 static int
@@ -876,42 +1073,21 @@ consume_pci_inventory(void)
     apply_pci_matches();
 }
 
-static int
-select_fallback_storage_driver(void)
-{
-    reset_selected_storage();
-    for (int32_t module_index = 0; module_index < g_dm.module_count; ++module_index) {
-        uint8_t class_code = 0, subclass = 0, prog_if = 0, storage_bootstrap = 0, match_count = 0;
-        uint16_t vendor_id = 0, device_id = 0;
-        spawn_caps_t caps;
-        if (query_driver_module_meta(module_index, 0,
-                                     &class_code, &subclass, &prog_if,
-                                     &vendor_id, &device_id,
-                                     &storage_bootstrap, &match_count, &caps) != 0 ||
-            !storage_bootstrap || match_count == 0) {
-            continue;
-        }
-        g_dm.selected_storage_index = module_index;
-        g_dm.selected_storage_caps = caps;
-        return 0;
-    }
-    return -1;
-}
-
 static hw_spawn_target_t
 next_spawn_target(void)
 {
-    if (g_dm.rule_spawn_pending && g_dm.rule_spawn_path[0] != '\0') {
-        return HW_SPAWN_RULE_PATH;
-    }
+    uint8_t fat_ready = proc_running("fs-fat") ? 1u : 0u;
     if (g_dm.need_pci_bus) {
         return HW_SPAWN_PCI_BUS;
     }
-    if (g_dm.need_storage) {
-        return HW_SPAWN_ATA;
+    if (g_dm.rule_spawn_pending && g_dm.rule_spawn_path[0] != '\0') {
+        return HW_SPAWN_RULE_PATH;
     }
     if (g_dm.need_fat) {
         return HW_SPAWN_FAT;
+    }
+    if (!fat_ready) {
+        return HW_SPAWN_NONE;
     }
     if (g_dm.need_serial) {
         return HW_SPAWN_SERIAL;
@@ -925,22 +1101,13 @@ next_spawn_target(void)
     return HW_SPAWN_NONE;
 }
 
-static int
-has_pending_spawn_needs(void)
-{
-    return g_dm.rule_spawn_pending ||
-           g_dm.need_pci_bus || g_dm.need_storage || g_dm.need_fat ||
-           g_dm.need_serial ||
-           g_dm.need_keyboard || g_dm.need_framebuffer;
-}
-
 static void
 handle_query_endpoint(void)
 {
     if (g_dm.query_endpoint < 0) {
         return;
     }
-    if (wasmos_ipc_recv(g_dm.query_endpoint) < 0) {
+    if (wasmos_ipc_try_recv(g_dm.query_endpoint) <= 0) {
         return;
     }
     int32_t type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
@@ -1048,7 +1215,6 @@ initialize(int32_t proc_endpoint,
     /* Bootstrap policy: always bring up pci-bus when present in initfs.
      * Runtime dedup/restart policy is handled by later lifecycle phases. */
     g_dm.need_pci_bus = (g_dm.pci_bus_index >= 0) ? 1 : 0;
-    g_dm.need_storage = 0;
     g_dm.need_fat = 0;
     g_dm.need_fs_init = 0;
     g_dm.need_fs_manager = 0;
@@ -1063,13 +1229,11 @@ initialize(int32_t proc_endpoint,
         if (g_dm.phase == HW_PHASE_SPAWN) {
             hw_spawn_target_t target = next_spawn_target();
             if (target == HW_SPAWN_NONE) {
-                if (has_pending_spawn_needs()) {
-                    wasmos_sched_yield();
-                    continue;
-                }
+                g_dm.idle_logged = 1;
                 g_dm.phase = HW_PHASE_IDLE;
                 continue;
             }
+            g_dm.idle_logged = 0;
             if (target == HW_SPAWN_PCI_BUS) {
                 spawn_caps_t pci_caps;
                 pci_caps.cap_flags = DEVMGR_CAP_IO_PORT;
@@ -1082,7 +1246,7 @@ initialize(int32_t proc_endpoint,
                     stall_forever();
                 }
             } else if (target == HW_SPAWN_RULE_PATH) {
-                if (hw_spawn_driver_path(g_dm.rule_spawn_path) != 0) {
+                if (hw_spawn_rule_target(g_dm.rule_spawn_path) != 0) {
                     g_dm.phase = HW_PHASE_FAILED;
                     console_write("[device-manager] spawn rule path failed\n");
                     stall_forever();
@@ -1105,12 +1269,6 @@ initialize(int32_t proc_endpoint,
                     (g_dm.framebuffer_index < 0 && hw_spawn_driver_name(target) != 0)) {
                     g_dm.phase = HW_PHASE_FAILED;
                     console_write("[device-manager] spawn framebuffer failed\n");
-                    stall_forever();
-                }
-            } else if (target == HW_SPAWN_ATA) {
-                if (hw_spawn_driver_index_caps(g_dm.selected_storage_index, &g_dm.selected_storage_caps) != 0) {
-                    g_dm.phase = HW_PHASE_FAILED;
-                    console_write("[device-manager] spawn storage driver failed\n");
                     stall_forever();
                 }
             } else if (target == HW_SPAWN_FAT) {
@@ -1150,6 +1308,9 @@ initialize(int32_t proc_endpoint,
                 }
                 if (g_dm.pending == HW_SPAWN_RULE_PATH) {
                     g_dm.rule_spawn_pending = 0;
+                    if (g_dm.fat_index >= 0 && !proc_running("fs-fat")) {
+                        g_dm.need_fat = 1;
+                    }
                 }
                 if (g_dm.pending == HW_SPAWN_SERIAL) {
                     g_dm.need_serial = 0;
@@ -1157,8 +1318,6 @@ initialize(int32_t proc_endpoint,
                     g_dm.need_keyboard = 0;
                 } else if (g_dm.pending == HW_SPAWN_FRAMEBUFFER) {
                     g_dm.need_framebuffer = 0;
-                } else if (g_dm.pending == HW_SPAWN_ATA) {
-                    g_dm.need_storage = 0;
                 } else if (g_dm.pending == HW_SPAWN_FAT) {
                     g_dm.need_fat = 0;
                 } else if (g_dm.pending == HW_SPAWN_FS_INIT) {
@@ -1193,11 +1352,6 @@ initialize(int32_t proc_endpoint,
                     if (g_dm.framebuffer_retries > 8) {
                         g_dm.need_framebuffer = 0;
                     }
-                } else if (g_dm.pending == HW_SPAWN_ATA) {
-                    g_dm.storage_retries++;
-                    if (g_dm.storage_retries > 8) {
-                        g_dm.need_storage = 0;
-                    }
                 } else if (g_dm.pending == HW_SPAWN_FAT) {
                     g_dm.fat_retries++;
                     if (g_dm.fat_retries > 8) {
@@ -1230,8 +1384,7 @@ initialize(int32_t proc_endpoint,
 
         if (g_dm.phase == HW_PHASE_WAIT_INVENTORY) {
             consume_pci_inventory();
-            g_dm.need_storage = (g_dm.selected_storage_index >= 0 && !proc_running("ata")) ? 1 : 0;
-            g_dm.need_fat = (g_dm.fat_index >= 0 && g_dm.need_storage && !proc_running("fs-fat")) ? 1 : 0;
+            g_dm.need_fat = (g_dm.fat_index >= 0 && !proc_running("fs-fat")) ? 1 : 0;
             g_dm.need_fs_init = 0;
             g_dm.need_fs_manager = 0;
             if (g_dm.serial_index >= 0 &&
@@ -1241,19 +1394,15 @@ initialize(int32_t proc_endpoint,
             } else {
                 g_dm.need_serial = 0;
             }
-            if (!g_dm.need_storage && select_fallback_storage_driver() == 0) {
-                console_write("[device-manager] fallback: boot storage driver despite no PCI match\n");
-                g_dm.need_storage = !proc_running("ata") ? 1 : 0;
-                g_dm.need_fat = (g_dm.fat_index >= 0 && !proc_running("fs-fat")) ? 1 : 0;
-                g_dm.need_fs_init = 0;
-                g_dm.need_fs_manager = 0;
-            }
             g_dm.phase = HW_PHASE_SPAWN;
             continue;
         }
 
         if (g_dm.phase == HW_PHASE_IDLE) {
             load_rules_if_available();
+            if (g_dm.fat_index >= 0 && proc_running("ata") && !proc_running("fs-fat")) {
+                g_dm.need_fat = 1;
+            }
             if (next_spawn_target() != HW_SPAWN_NONE) {
                 g_dm.phase = HW_PHASE_SPAWN;
                 continue;
@@ -1265,19 +1414,4 @@ initialize(int32_t proc_endpoint,
         console_write("[device-manager] failed\n");
         stall_forever();
     }
-}
-static int
-str_starts_with(const char *s, const char *prefix)
-{
-    int32_t i = 0;
-    if (!s || !prefix) {
-        return 0;
-    }
-    while (prefix[i]) {
-        if (s[i] != prefix[i]) {
-            return 0;
-        }
-        i++;
-    }
-    return 1;
 }

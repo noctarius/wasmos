@@ -49,25 +49,31 @@ pm_pack_name_args(const char *name, uint32_t out[4])
 void
 pm_update_well_known_service_endpoint(const char *name, uint32_t endpoint)
 {
-    typedef struct {
-        const char *name;
-        uint32_t *slot;
-    } pm_service_slot_t;
-    pm_service_slot_t slots[] = {
-        {"block", &g_pm.block_endpoint},
-        {"fs", &g_pm.fs_endpoint},
-        {"fs.vfs", &g_pm.fs_endpoint},
-        {"vt", &g_pm.vt_endpoint},
-        {"fb", &g_pm.fb_endpoint},
-    };
     if (!name) {
         return;
     }
-    for (uint32_t i = 0; i < (uint32_t)(sizeof(slots) / sizeof(slots[0])); ++i) {
-        if (strcmp(name, slots[i].name) == 0) {
-            *slots[i].slot = endpoint;
-            return;
+    if (strcmp(name, "fs.vfs") == 0) {
+        g_pm.fs_endpoint = endpoint;
+        return;
+    }
+    if (strcmp(name, "fs") == 0) {
+        /* Keep path-based process spawns on VFS once it is available. */
+        if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE) {
+            g_pm.fs_endpoint = endpoint;
         }
+        return;
+    }
+    if (strcmp(name, "block") == 0) {
+        g_pm.block_endpoint = endpoint;
+        return;
+    }
+    if (strcmp(name, "vt") == 0) {
+        g_pm.vt_endpoint = endpoint;
+        return;
+    }
+    if (strcmp(name, "fb") == 0) {
+        g_pm.fb_endpoint = endpoint;
+        return;
     }
 }
 

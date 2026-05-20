@@ -50,6 +50,8 @@ typedef enum {
 #define MATCH_ANY_U16 0xFFFFu
 #define DEVMGR_RULES_INIT_ROOT "/init/devmgr/rules"
 #define DEVMGR_RULES_BOOT_ROOT "/boot/system/devmgr/rules"
+#define DEVMGR_RULE_FILE "default.rules"
+#define DEVMGR_RULE_TEXT_CAP 1024
 
 typedef struct {
     uint32_t cap_flags;
@@ -78,6 +80,8 @@ typedef struct {
     int32_t proc_endpoint;
     int32_t inventory_endpoint;
     int32_t query_endpoint;
+    int32_t rule_reply_endpoint;
+    int32_t fs_endpoint;
     int32_t request_id;
     int32_t module_count;
     uint8_t need_pci_bus;
@@ -111,6 +115,8 @@ typedef struct {
     uint8_t rules_roots_logged;
     uint8_t rules_init_loaded;
     uint8_t rules_boot_loaded;
+    uint8_t rules_boot_request_pending;
+    int32_t rules_boot_request_id;
     uint16_t rules_init_active;
     uint16_t rules_boot_active;
 } device_manager_state_t;
@@ -122,6 +128,8 @@ static device_manager_state_t g_dm = {
     .proc_endpoint = -1,
     .inventory_endpoint = -1,
     .query_endpoint = -1,
+    .rule_reply_endpoint = -1,
+    .fs_endpoint = -1,
     .request_id = 1,
     .module_count = 0,
     .selected_storage_index = -1,
@@ -135,6 +143,8 @@ static device_manager_state_t g_dm = {
     .rules_roots_logged = 0,
     .rules_init_loaded = 0,
     .rules_boot_loaded = 0,
+    .rules_boot_request_pending = 0,
+    .rules_boot_request_id = -1,
     .rules_init_active = 0,
     .rules_boot_active = 0,
 };
@@ -177,19 +187,211 @@ log_rule_roots_once(void)
 
 static int proc_running(const char *name);
 
+static int32_t
+str_len(const char *s)
+{
+    return (int32_t)strlen(s);
+}
+
+static void
+str_copy(char *dst, uint32_t dst_len, const char *src)
+{
+    uint32_t i = 0;
+    if (!dst || dst_len == 0) {
+        return;
+    }
+    if (!src) {
+        dst[0] = '\0';
+        return;
+    }
+    while (i + 1u < dst_len && src[i]) {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = '\0';
+}
+
+static void
+str_append(char *dst, uint32_t dst_len, const char *src)
+{
+    uint32_t pos = 0;
+    if (!dst || dst_len == 0 || !src) {
+        return;
+    }
+    while (pos + 1u < dst_len && dst[pos]) {
+        pos++;
+    }
+    for (uint32_t i = 0; src[i] && pos + 1u < dst_len; ++i) {
+        dst[pos++] = src[i];
+    }
+    dst[pos] = '\0';
+}
+
+static int
+str_is_space(char c)
+{
+    return c == ' ' || c == '\t' || c == '\r' || c == '\n';
+}
+
+static uint16_t
+count_active_rules(const char *text)
+{
+    uint16_t count = 0;
+    uint8_t saw_non_space = 0;
+    uint8_t line_comment = 0;
+    if (!text) {
+        return 0;
+    }
+    for (int32_t i = 0;; ++i) {
+        char c = text[i];
+        if (c == '\0' || c == '\n') {
+            if (saw_non_space && !line_comment) {
+                count++;
+            }
+            saw_non_space = 0;
+            line_comment = 0;
+            if (c == '\0') {
+                break;
+            }
+            continue;
+        }
+        if (!saw_non_space && str_is_space(c)) {
+            continue;
+        }
+        if (!saw_non_space && c == '#') {
+            line_comment = 1;
+            saw_non_space = 1;
+            continue;
+        }
+        if (!saw_non_space) {
+            saw_non_space = 1;
+        }
+    }
+    return count;
+}
+
+static int
+ensure_fs_endpoint(void)
+{
+    if (g_dm.fs_endpoint >= 0) {
+        return 0;
+    }
+    g_dm.fs_endpoint = wasmos_svc_lookup(g_dm.proc_endpoint, g_dm.reply_endpoint, "fs.vfs", 1);
+    if (g_dm.fs_endpoint < 0) {
+        g_dm.fs_endpoint = wasmos_svc_lookup(g_dm.proc_endpoint, g_dm.reply_endpoint, "fs", 1);
+    }
+    return (g_dm.fs_endpoint >= 0) ? 0 : -1;
+}
+
+static void
+kick_boot_rules_read_async(void)
+{
+    char path[96];
+    int32_t path_len = 0;
+    if (g_dm.rules_boot_loaded || g_dm.rules_boot_request_pending) {
+        return;
+    }
+    if (!proc_running("fs-fat")) {
+        return;
+    }
+    if (ensure_fs_endpoint() != 0) {
+        return;
+    }
+    path[0] = '\0';
+    str_copy(path, sizeof(path), DEVMGR_RULES_BOOT_ROOT);
+    str_append(path, sizeof(path), "/");
+    str_append(path, sizeof(path), DEVMGR_RULE_FILE);
+    path_len = str_len(path);
+    if (path_len <= 0 || path_len > 95 || path_len >= wasmos_fs_buffer_size()) {
+        g_dm.rules_boot_loaded = 1;
+        g_dm.rules_boot_active = 0;
+        console_write("[device-manager] boot rules invalid path; skipping\n");
+        return;
+    }
+    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, path_len, 0) != 0) {
+        g_dm.rules_boot_loaded = 1;
+        g_dm.rules_boot_active = 0;
+        console_write("[device-manager] boot rules buffer write failed; skipping\n");
+        return;
+    }
+    g_dm.rules_boot_request_id = g_dm.request_id++;
+    if (wasmos_ipc_send(g_dm.fs_endpoint,
+                        g_dm.rule_reply_endpoint,
+                        FS_IPC_READ_PATH_REQ,
+                        g_dm.rules_boot_request_id,
+                        path_len,
+                        0,
+                        0,
+                        0) != 0) {
+        g_dm.rules_boot_loaded = 1;
+        g_dm.rules_boot_active = 0;
+        console_write("[device-manager] boot rules request send failed; skipping\n");
+        return;
+    }
+    g_dm.rules_boot_request_pending = 1;
+}
+
+static void
+poll_boot_rules_async(void)
+{
+    int32_t recv_rc = 0;
+    int32_t resp_req = 0;
+    int32_t resp_type = 0;
+    int32_t read_len = 0;
+    char text[DEVMGR_RULE_TEXT_CAP];
+    char msg[128];
+    if (!g_dm.rules_boot_request_pending) {
+        return;
+    }
+    recv_rc = wasmos_ipc_try_recv(g_dm.rule_reply_endpoint);
+    if (recv_rc <= 0) {
+        return;
+    }
+    resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
+    if (resp_req != g_dm.rules_boot_request_id) {
+        return;
+    }
+    g_dm.rules_boot_request_pending = 0;
+    resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+    if (resp_type != FS_IPC_RESP) {
+        g_dm.rules_boot_loaded = 1;
+        g_dm.rules_boot_active = 0;
+        console_write("[device-manager] boot rules unavailable; skipping\n");
+        return;
+    }
+    read_len = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+    if (read_len < 0) {
+        g_dm.rules_boot_loaded = 1;
+        g_dm.rules_boot_active = 0;
+        console_write("[device-manager] boot rules read length invalid; skipping\n");
+        return;
+    }
+    if (read_len >= (int32_t)sizeof(text)) {
+        read_len = (int32_t)sizeof(text) - 1;
+    }
+    if (read_len > 0 && wasmos_fs_buffer_copy((int32_t)(uintptr_t)text, read_len, 0) != 0) {
+        g_dm.rules_boot_loaded = 1;
+        g_dm.rules_boot_active = 0;
+        console_write("[device-manager] boot rules copy failed; skipping\n");
+        return;
+    }
+    text[read_len] = '\0';
+    g_dm.rules_boot_active = count_active_rules(text);
+    g_dm.rules_boot_loaded = 1;
+    snprintf(msg, sizeof(msg), "[device-manager] loaded boot rules: %d active\n", (int)g_dm.rules_boot_active);
+    console_write(msg);
+}
+
 static void
 load_rules_if_available(void)
 {
     if (!g_dm.rules_init_loaded && proc_running("fs-init")) {
         g_dm.rules_init_loaded = 1;
         g_dm.rules_init_active = 0;
-        console_write("[device-manager] init rule scan deferred\n");
+        console_write("[device-manager] init rule scan deferred (vfs /init read path pending)\n");
     }
-    if (!g_dm.rules_boot_loaded && proc_running("fs-fat")) {
-        g_dm.rules_boot_loaded = 1;
-        g_dm.rules_boot_active = 0;
-        console_write("[device-manager] boot rule scan deferred\n");
-    }
+    kick_boot_rules_read_async();
+    poll_boot_rules_async();
 }
 
 static int
@@ -757,6 +959,11 @@ initialize(int32_t proc_endpoint,
     if (g_dm.query_endpoint < 0 ||
         wasmos_svc_register(g_dm.proc_endpoint, g_dm.query_endpoint, "devmgr.query", 1) != 0) {
         console_write("[device-manager] query register failed\n");
+        stall_forever();
+    }
+    g_dm.rule_reply_endpoint = wasmos_ipc_create_endpoint();
+    if (g_dm.rule_reply_endpoint < 0) {
+        console_write("[device-manager] rules reply endpoint create failed\n");
         stall_forever();
     }
     log_rule_roots_once();

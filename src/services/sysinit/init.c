@@ -2,6 +2,7 @@
 #include "stdio.h"
 #include "string.h"
 #include "wasmos/api.h"
+#include "wasmos/libsys.h"
 #include "wasmos_driver_abi.h"
 
 /*
@@ -146,17 +147,6 @@ load_boot_targets(void)
     }
 
     return 0;
-}
-
-static void
-stall_forever(void)
-{
-    int32_t endpoint = wasmos_ipc_create_endpoint();
-    for (;;) {
-        if (endpoint >= 0) {
-            (void)wasmos_ipc_recv(endpoint);
-        }
-    }
 }
 
 static void
@@ -349,19 +339,19 @@ initialize(int32_t proc_endpoint,
     trace_mark(0x1102);
     if (g_reply_endpoint < 0) {
         log_line("[sysinit] failed to create reply endpoint\n");
-        stall_forever();
+        wasmos_sys_ipc_recv_loop();
     }
 
     if (proc_endpoint < 0) {
         log_line("[sysinit] invalid init args\n");
-        stall_forever();
+        wasmos_sys_ipc_recv_loop();
     }
 
     g_proc_endpoint = proc_endpoint;
     g_target_index = 0;
     if (load_boot_targets() != 0) {
         log_line("[sysinit] invalid boot config\n");
-        stall_forever();
+        wasmos_sys_ipc_recv_loop();
     }
     trace_line("[sysinit] start\n");
     trace_mark(0x1103);
@@ -384,7 +374,7 @@ initialize(int32_t proc_endpoint,
             if (target_spawn_path("font-service", dep_path, sizeof(dep_path)) != 0 ||
                 spawn_path(dep_path) != 0) {
                 log_line("[sysinit] spawn failed: font-service\n");
-                stall_forever();
+                wasmos_sys_ipc_recv_loop();
             }
             /* Let service registration settle before compositor starts. */
             for (uint32_t wait = 0; wait < 16u; ++wait) {
@@ -416,7 +406,7 @@ initialize(int32_t proc_endpoint,
             log_line("[sysinit] spawn failed: ");
             log_line(name);
             log_line("\n");
-            stall_forever();
+            wasmos_sys_ipc_recv_loop();
         }
         g_target_index++;
     }

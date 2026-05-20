@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import os
 
 from qemu_test_framework import QemuConfig, QemuSession, default_config
 
@@ -9,12 +10,14 @@ def main():
     parser.add_argument("--ovmf-code", default="")
     parser.add_argument("--ovmf-vars", default="")
     parser.add_argument("--esp", default="")
+    parser.add_argument("--userfs", default="")
     parser.add_argument("--timeout", type=int, default=120)
     parser.add_argument("--require-threading", action="store_true")
     args = parser.parse_args()
 
     if args.ovmf_code or args.esp:
-        cfg = QemuConfig(args.ovmf_code, args.ovmf_vars, args.esp)
+        userfs = args.userfs or os.environ.get("WASMOS_USERFS", os.path.join(os.getcwd(), "userfs"))
+        cfg = QemuConfig(args.ovmf_code, args.ovmf_vars, args.esp, userfs)
     else:
         cfg = default_config()
 

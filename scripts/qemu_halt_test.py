@@ -11,11 +11,13 @@ def main():
     parser.add_argument("--ovmf-code", default="")
     parser.add_argument("--ovmf-vars", default="")
     parser.add_argument("--esp", default="")
+    parser.add_argument("--userfs", default="")
     parser.add_argument("--timeout", type=int, default=120)
     args = parser.parse_args()
 
     if args.ovmf_code or args.esp:
-        cfg = QemuConfig(args.ovmf_code, args.ovmf_vars, args.esp)
+        userfs = args.userfs or os.environ.get("WASMOS_USERFS", os.path.join(os.getcwd(), "userfs"))
+        cfg = QemuConfig(args.ovmf_code, args.ovmf_vars, args.esp, userfs)
     else:
         cfg = default_config()
 

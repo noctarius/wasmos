@@ -1255,7 +1255,15 @@ cli_show_mounts(void)
         uint32_t a2 = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
         uint32_t a3 = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
         char line[192];
-        int line_len = snprintf(line, sizeof(line), "%s", (mount_id == 0) ? "/boot -> fs-fat" : "/init -> fs-init");
+        const char *mount_desc = "/unknown";
+        if (mount_id == 0) {
+            mount_desc = "/boot -> fs-fat";
+        } else if (mount_id == 1) {
+            mount_desc = "/init -> fs-init";
+        } else if (mount_id == 2) {
+            mount_desc = "/user -> fs-fat";
+        }
+        int line_len = snprintf(line, sizeof(line), "%s", mount_desc);
         if (line_len < 0) {
             line_len = 0;
         }

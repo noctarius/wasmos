@@ -165,7 +165,7 @@ Current FS namespace model:
 - native framebuffer driver mapping now uses the same generic borrow path (`PM_BUFFER_KIND_FRAMEBUFFER`) instead of a dedicated framebuffer mapper callback
 - native driver ABI now has explicit magic/version fields and fails fast on mismatch to avoid mixed-kernel/driver function-table corruption
 - PM `spawn_name` busy responses now carry a transient error code (`arg1=-2`); `sysinit` and `device-manager` retry/yield on busy so boot-time service/driver spawns no longer race each other
-- `/` is virtual in `fs.vfs`, with `/boot` routed to FAT and `/init` routed to `fs-init` (`fs.init`)
+- QEMU now wires a second FAT source directory from repo-root `userfs/`; `fs.vfs` reserves `/user` for that secondary FAT backend while `/boot` remains the primary FAT mount and `/init` is routed to `fs-init` (`fs.init`)
 5. `init` requests `sysinit` load from FAT via process manager
 6. `sysinit` starts configured services/apps from boot config
 
@@ -176,6 +176,7 @@ Current FS namespace model:
 - `src/services/`: services
 - `src/libc/`: shared user-space libc + shims
 - `examples/`: sample/smoke apps
+- `userfs/`: host-backed user filesystem directory attached as a second FAT drive in QEMU
 - `tests/`: QEMU-driven tests
 - `scripts/`: build/test helpers
 - `docs/`: architecture/design docs

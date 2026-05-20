@@ -33,6 +33,7 @@ set(EXAMPLES_RUST_DIR ${CMAKE_SOURCE_DIR}/examples/rust)
 set(EXAMPLES_AS_DIR ${CMAKE_SOURCE_DIR}/examples/assemblyscript)
 set(EXAMPLES_ZIG_DIR ${CMAKE_SOURCE_DIR}/examples/zig)
 set(SERVICES_DIR ${CMAKE_SOURCE_DIR}/src/services)
+set(USERFS_DIR ${CMAKE_SOURCE_DIR}/userfs)
 
 set(WASM_CHARDEV_DRIVER_SRC ${DRIVER_WASM_DIR}/chardev/chardev_server.c)
 set(WASM_CHARDEV_DRIVER_WASM ${BUILD_DIR}/chardev_server.wasm)
@@ -970,6 +971,7 @@ if (OVMF_VARS)
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
+            -drive format=raw,file=fat:rw:${USERFS_DIR}
     DEPENDS bootloader kernel
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU"
@@ -1021,6 +1023,7 @@ if (OVMF_VARS)
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
+            -drive format=raw,file=fat:rw:${USERFS_DIR}
     DEPENDS bootloader kernel
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU (paused for GDB on port ${QEMU_GDB_PORT})"
@@ -1131,6 +1134,7 @@ add_custom_target(run-qemu-cli-test
             WASMOS_OVMF_CODE=${OVMF_CODE}
             WASMOS_OVMF_VARS=${OVMF_VARS}
             WASMOS_ESP=${BUILD_DIR}/esp
+            WASMOS_USERFS=${USERFS_DIR}
             WASMOS_QEMU_ISOLATE_ESP=1
             PYTHONDONTWRITEBYTECODE=1
             ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/run_unittest_suite.py --start-dir tests
@@ -1185,6 +1189,7 @@ else ()
     COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
+            -drive format=raw,file=fat:rw:${USERFS_DIR}
     DEPENDS bootloader kernel
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU"
@@ -1233,6 +1238,7 @@ else ()
     COMMAND qemu-system-x86_64 -m 512M -serial mon:stdio
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
+            -drive format=raw,file=fat:rw:${USERFS_DIR}
     DEPENDS bootloader kernel
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU"
@@ -1282,6 +1288,7 @@ else ()
             -S -gdb tcp::${QEMU_GDB_PORT}
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
+            -drive format=raw,file=fat:rw:${USERFS_DIR}
     DEPENDS bootloader kernel
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running in QEMU (paused for GDB on port ${QEMU_GDB_PORT})"
@@ -1383,6 +1390,7 @@ else ()
             WASMOS_OVMF_CODE=${OVMF_CODE}
             WASMOS_OVMF_VARS=${OVMF_VARS}
             WASMOS_ESP=${BUILD_DIR}/esp
+            WASMOS_USERFS=${USERFS_DIR}
             WASMOS_QEMU_ISOLATE_ESP=1
             PYTHONDONTWRITEBYTECODE=1
             ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/run_unittest_suite.py --start-dir tests

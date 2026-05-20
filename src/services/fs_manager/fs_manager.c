@@ -226,7 +226,13 @@ backend_register(uint8_t kind, int32_t endpoint)
     slot->kind = kind;
     slot->endpoint = endpoint;
     if (kind == FSMGR_BACKEND_BOOT) {
-        set_mount_name(slot, "boot");
+        if (slot->slot == 0) {
+            set_mount_name(slot, "boot");
+        } else if (slot->slot == 1) {
+            set_mount_name(slot, "user");
+        } else {
+            set_mount_name(slot, "boot");
+        }
     } else if (kind == FSMGR_BACKEND_INIT) {
         set_mount_name(slot, "init");
     } else {

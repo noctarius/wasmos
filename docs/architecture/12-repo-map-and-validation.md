@@ -5,6 +5,7 @@
 - `src/services/`: WASM services
 - `src/libc/`: shared user-space libc surface and language shims
 - `examples/`: application examples and smoke apps
+- `userfs/`: host-backed content exposed to QEMU as the secondary FAT source
 - `tests/`: QEMU-driven integration and regression tests
 
 ## Validation Baseline

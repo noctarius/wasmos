@@ -73,9 +73,12 @@ typedef struct __attribute__((packed)) {
 } wasmos_driver_match_t;
 
 static int parse_u32(const char *s, uint32_t *out) {
+    if (!s || !out || !*s) {
+        return -1;
+    }
     char *end = NULL;
     unsigned long v = strtoul(s, &end, 10);
-    if (!s || !*s || (end && *end != '\0') || v > 0xFFFFFFFFUL) {
+    if ((end && *end != '\0') || v > 0xFFFFFFFFUL) {
         return -1;
     }
     *out = (uint32_t)v;
@@ -170,9 +173,12 @@ typedef struct {
 static int
 parse_u32_auto(const char *s, uint32_t *out)
 {
+    if (!s || !out || !*s) {
+        return -1;
+    }
     char *end = NULL;
     unsigned long v = strtoul(s, &end, 0);
-    if (!s || !*s || (end && *end != '\0') || v > 0xFFFFFFFFUL) {
+    if ((end && *end != '\0') || v > 0xFFFFFFFFUL) {
         return -1;
     }
     *out = (uint32_t)v;
@@ -182,6 +188,9 @@ parse_u32_auto(const char *s, uint32_t *out)
 static int
 manifest_parse_bool(const char *s, uint8_t *out)
 {
+    if (!s || !out) {
+        return -1;
+    }
     if (strcmp(s, "true") == 0) {
         *out = 1;
         return 0;

@@ -4,6 +4,7 @@
 #include "wasmos/api.h"
 #include "wasmos/libsys.h"
 #include "wasmos_driver_abi.h"
+#include "sysinit_types.h"
 
 /*
  * sysinit has been deliberately narrowed. It no longer owns early bootstrap or
@@ -12,25 +13,23 @@
  * the filesystem path is already available.
  */
 
-static int32_t g_reply_endpoint = -1;
-static int32_t g_spawn_request_id = 1;
-static int32_t g_proc_endpoint = -1;
-static int32_t g_target_index = 0;
+static sysinit_state_t g_state = {
+    .reply_endpoint = -1,
+    .spawn_request_id = 1,
+    .proc_endpoint = -1,
+    .target_index = 0,
+    .target_count = 0,
+    .targets = { 0 },
+};
 static int32_t (*volatile g_console_write)(int32_t, int32_t);
 static int32_t (*volatile g_debug_mark)(int32_t);
 static uint8_t g_boot_config[512];
-static int32_t g_target_count = 0;
-static const char *g_targets[16];
 /* TODO: Lift the small fixed limits once sysinit needs larger startup sets or
  * richer boot policy than the current manifest-driven name list. */
 
 #ifndef WASMOS_TRACE
 #define WASMOS_TRACE 0
 #endif
-
-#define BOOT_CONFIG_MAGIC "WCFG0001"
-#define BOOT_CONFIG_VERSION 1u
-#define SYSINIT_MAX_TARGET_NAME_LEN 16u
 
 static uint32_t
 load_u32_le(const uint8_t *src)
@@ -98,8 +97,7 @@ load_boot_targets(void)
     sysinit_count = load_u32_le(g_boot_config + 16);
     string_table_size = load_u32_le(g_boot_config + 20);
     if (version != BOOT_CONFIG_VERSION ||
-        sysinit_count == 0 ||
-        sysinit_count > (uint32_t)(sizeof(g_targets) / sizeof(g_targets[0]))) {
+        sysinit_count == 0 || sysinit_count > SYSINIT_MAX_TARGETS) {
         return -1;
     }
     if (boot_count > 0xFFFFFFFFu - sysinit_count) {
@@ -117,7 +115,7 @@ load_boot_targets(void)
         return -1;
     }
 
-    g_target_count = 0;
+    g_state.target_count = 0;
     for (uint32_t i = 0; i < sysinit_count; ++i) {
         uint32_t offset_pos = offsets_base + i * 4u;
         uint32_t string_offset;
@@ -136,14 +134,14 @@ load_boot_targets(void)
         }
 
         name = (const char *)(g_boot_config + strings_base + string_offset);
-        for (int32_t j = 0; j < g_target_count; ++j) {
-            if (str_eq(g_targets[j], name)) {
+        for (int32_t j = 0; j < g_state.target_count; ++j) {
+            if (str_eq(g_state.targets[j], name)) {
                 return -1;
             }
         }
 
-        g_targets[g_target_count] = name;
-        g_target_count++;
+        g_state.targets[g_state.target_count] = name;
+        g_state.target_count++;
     }
 
     return 0;
@@ -192,8 +190,8 @@ proc_running(const char *name)
     if (count <= 0) {
         return 0;
     }
-    if (count > 64) {
-        count = 64;
+    if (count > SYSINIT_MAX_PROC_SNAPSHOT) {
+        count = SYSINIT_MAX_PROC_SNAPSHOT;
     }
     trace_line("[sysinit] proc snapshot\n");
     for (int32_t i = 0; i < count; ++i) {
@@ -221,8 +219,8 @@ proc_count_named(const char *name)
     if (count <= 0 || !name || !name[0]) {
         return 0;
     }
-    if (count > 64) {
-        count = 64;
+    if (count > SYSINIT_MAX_PROC_SNAPSHOT) {
+        count = SYSINIT_MAX_PROC_SNAPSHOT;
     }
     for (int32_t i = 0; i < count; ++i) {
         char buf[32];
@@ -286,10 +284,11 @@ spawn_path(const char *path)
     if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
         return -1;
     }
-    for (uint32_t attempt = 0; attempt < 128u; ++attempt) {
-        if (wasmos_ipc_send(g_proc_endpoint, g_reply_endpoint,
+    for (uint32_t attempt = 0; attempt < SYSINIT_MAX_SPAWN_ATTEMPTS; ++attempt) {
+        if (wasmos_ipc_send(g_state.proc_endpoint,
+                            g_state.reply_endpoint,
                             PROC_IPC_SPAWN_PATH,
-                            g_spawn_request_id,
+                            g_state.spawn_request_id,
                             0,
                             (int32_t)path_len,
                             0,
@@ -297,18 +296,18 @@ spawn_path(const char *path)
             return -1;
         }
 
-        int32_t recv_rc = wasmos_ipc_recv(g_reply_endpoint);
+        int32_t recv_rc = wasmos_ipc_recv(g_state.reply_endpoint);
         if (recv_rc < 0) {
             return -1;
         }
 
         int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
         int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
-        if (resp_req != g_spawn_request_id) {
+        if (resp_req != g_state.spawn_request_id) {
             return -1;
         }
         if (resp_type == PROC_IPC_RESP) {
-            g_spawn_request_id++;
+            g_state.spawn_request_id++;
             return 0;
         }
         if (resp_type == PROC_IPC_ERROR &&
@@ -319,6 +318,57 @@ spawn_path(const char *path)
         return -1;
     }
     return -1;
+}
+
+static void
+fatal_stall(const char *msg)
+{
+    log_line(msg);
+    wasmos_sys_ipc_recv_loop();
+}
+
+static void
+spawn_font_dependency_or_stall(void)
+{
+    char dep_path[96];
+    trace_line("[sysinit] spawn font-service (dep)\n");
+    if (target_spawn_path("font-service", dep_path, sizeof(dep_path)) != 0 ||
+        spawn_path(dep_path) != 0) {
+        fatal_stall("[sysinit] spawn failed: font-service\n");
+    }
+    /* Let service registration settle before compositor starts. */
+    for (uint32_t wait = 0; wait < SYSINIT_DEP_SETTLE_YIELDS; ++wait) {
+        wasmos_sched_yield();
+    }
+}
+
+static int
+should_skip_target(const char *name)
+{
+    if (str_eq(name, "cli")) {
+        int cli_count = proc_count_named("cli");
+        /* tty0 stays system console; keep one CLI per VT tty1..tty3. */
+        return cli_count >= 3;
+    }
+    return proc_running(name);
+}
+
+static void
+spawn_target_or_handle_optional(const char *name)
+{
+    char path[96];
+    if (target_spawn_path(name, path, sizeof(path)) == 0 &&
+        spawn_path(path) == 0) {
+        return;
+    }
+    if (str_eq(name, "chardev-client")) {
+        log_line("[sysinit] optional spawn failed: chardev-client\n");
+        return;
+    }
+    log_line("[sysinit] spawn failed: ");
+    log_line(name);
+    log_line("\n");
+    wasmos_sys_ipc_recv_loop();
 }
 
 WASMOS_WASM_EXPORT int32_t
@@ -335,23 +385,20 @@ initialize(int32_t proc_endpoint,
     g_debug_mark = wasmos_debug_mark;
     trace_mark(0x1101);
 
-    g_reply_endpoint = wasmos_ipc_create_endpoint();
+    g_state.reply_endpoint = wasmos_ipc_create_endpoint();
     trace_mark(0x1102);
-    if (g_reply_endpoint < 0) {
-        log_line("[sysinit] failed to create reply endpoint\n");
-        wasmos_sys_ipc_recv_loop();
+    if (g_state.reply_endpoint < 0) {
+        fatal_stall("[sysinit] failed to create reply endpoint\n");
     }
 
     if (proc_endpoint < 0) {
-        log_line("[sysinit] invalid init args\n");
-        wasmos_sys_ipc_recv_loop();
+        fatal_stall("[sysinit] invalid init args\n");
     }
 
-    g_proc_endpoint = proc_endpoint;
-    g_target_index = 0;
+    g_state.proc_endpoint = proc_endpoint;
+    g_state.target_index = 0;
     if (load_boot_targets() != 0) {
-        log_line("[sysinit] invalid boot config\n");
-        wasmos_sys_ipc_recv_loop();
+        fatal_stall("[sysinit] invalid boot config\n");
     }
     trace_line("[sysinit] start\n");
     trace_mark(0x1103);
@@ -361,54 +408,25 @@ initialize(int32_t proc_endpoint,
      * late-start targets are running, then idle forever waiting for any future
      * extension point. */
     for (;;) {
-        if (g_target_index >= g_target_count) {
+        if (g_state.target_index >= g_state.target_count) {
             trace_line("[sysinit] idle wait\n");
-            (void)wasmos_ipc_recv(g_reply_endpoint);
+            (void)wasmos_ipc_recv(g_state.reply_endpoint);
             continue;
         }
 
-        const char *name = g_targets[g_target_index];
+        const char *name = g_state.targets[g_state.target_index];
         if (str_eq(name, "gfx-compositor") && !proc_running("font-service")) {
-            char dep_path[96];
-            trace_line("[sysinit] spawn font-service (dep)\n");
-            if (target_spawn_path("font-service", dep_path, sizeof(dep_path)) != 0 ||
-                spawn_path(dep_path) != 0) {
-                log_line("[sysinit] spawn failed: font-service\n");
-                wasmos_sys_ipc_recv_loop();
-            }
-            /* Let service registration settle before compositor starts. */
-            for (uint32_t wait = 0; wait < 16u; ++wait) {
-                wasmos_sched_yield();
-            }
+            spawn_font_dependency_or_stall();
         }
-        if (str_eq(name, "cli")) {
-            int cli_count = proc_count_named("cli");
-            /* tty0 stays system console; keep one CLI per VT tty1..tty3. */
-            if (cli_count >= 3) {
-                g_target_index++;
-                continue;
-            }
-        } else if (proc_running(name)) {
-            g_target_index++;
+        if (should_skip_target(name)) {
+            g_state.target_index++;
             continue;
         }
         trace_line("[sysinit] spawn ");
         trace_line(name);
         trace_line("\n");
-        char path[96];
-        if (target_spawn_path(name, path, sizeof(path)) != 0 ||
-            spawn_path(path) != 0) {
-            if (str_eq(name, "chardev-client")) {
-                log_line("[sysinit] optional spawn failed: chardev-client\n");
-                g_target_index++;
-                continue;
-            }
-            log_line("[sysinit] spawn failed: ");
-            log_line(name);
-            log_line("\n");
-            wasmos_sys_ipc_recv_loop();
-        }
-        g_target_index++;
+        spawn_target_or_handle_optional(name);
+        g_state.target_index++;
     }
 
     trace_line("[sysinit] exit\n");

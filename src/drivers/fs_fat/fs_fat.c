@@ -630,6 +630,54 @@ fat_unpack_name(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char
 }
 
 static int
+fat_resolve_mount_alias(int32_t proc_endpoint, char *out_mount, uint32_t out_mount_len)
+{
+    int32_t devmgr_endpoint = -1;
+    int32_t req_id = 41;
+    int32_t unit = 0;
+    uint32_t packed[4];
+    if (!out_mount || out_mount_len < 2u) {
+        return -1;
+    }
+    out_mount[0] = '\0';
+    if (wasmos_ipc_send(g_block_endpoint, g_reply_endpoint, BLOCK_IPC_IDENTIFY_REQ, req_id, 0, 0, 0, 0) != 0 ||
+        wasmos_ipc_recv(g_reply_endpoint) < 0) {
+        return -1;
+    }
+    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != BLOCK_IPC_IDENTIFY_RESP ||
+        wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req_id) {
+        return -1;
+    }
+    unit = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
+    devmgr_endpoint = wasmos_svc_lookup(proc_endpoint, g_reply_endpoint, "devmgr.query", 1);
+    if (devmgr_endpoint < 0) {
+        return -1;
+    }
+    req_id++;
+    if (wasmos_ipc_send(devmgr_endpoint,
+                        g_reply_endpoint,
+                        DEVMGR_QUERY_BLOCK_MOUNT_REQ,
+                        req_id,
+                        unit,
+                        0,
+                        0,
+                        0) != 0 ||
+        wasmos_ipc_recv(g_reply_endpoint) < 0) {
+        return -1;
+    }
+    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != DEVMGR_BLOCK_MOUNT_INFO ||
+        wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req_id) {
+        return -1;
+    }
+    packed[0] = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+    packed[1] = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+    packed[2] = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
+    packed[3] = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
+    fat_unpack_name(packed[0], packed[1], packed[2], packed[3], out_mount, out_mount_len);
+    return out_mount[0] ? 0 : -1;
+}
+
+static int
 vfs_starts_with(const char *s, const char *prefix)
 {
     uint32_t i = 0;
@@ -3941,6 +3989,8 @@ initialize(int32_t proc_endpoint,
     }
 
     int32_t fsmgr_endpoint = -1;
+    char mount_alias[16];
+    int32_t mount_alias_len = 0;
     if (fat_ensure_ready() != 0) {
         fat_log("boot init failed\n");
         fat_stall();
@@ -3952,13 +4002,23 @@ initialize(int32_t proc_endpoint,
         }
         (void)wasmos_sched_yield();
     }
+    if (fat_resolve_mount_alias(proc_endpoint, mount_alias, sizeof(mount_alias)) != 0) {
+        fat_log("mount alias resolve failed\n");
+        fat_stall();
+    }
+    mount_alias_len = (int32_t)strlen(mount_alias);
+    if (mount_alias_len <= 0 || mount_alias_len >= wasmos_fs_buffer_size() ||
+        wasmos_fs_buffer_write((int32_t)(uintptr_t)mount_alias, mount_alias_len, 0) != 0) {
+        fat_log("mount alias buffer write failed\n");
+        fat_stall();
+    }
     if (wasmos_ipc_send(fsmgr_endpoint,
                         g_reply_endpoint,
                         FSMGR_IPC_REGISTER_BACKEND_REQ,
                         1,
                         FSMGR_BACKEND_BOOT,
                         g_fs_endpoint,
-                        0,
+                        mount_alias_len,
                         0) != 0) {
         fat_log("fs-manager register send failed\n");
         fat_stall();

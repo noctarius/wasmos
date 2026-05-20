@@ -1530,8 +1530,41 @@ handle_query_message_fields(void)
     int32_t req_id = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
     int32_t source = wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE);
     int32_t index = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-    if (type != DEVMGR_QUERY_MOUNT_REQ) {
+    if (type != DEVMGR_QUERY_MOUNT_REQ && type != DEVMGR_QUERY_BLOCK_MOUNT_REQ) {
         (void)wasmos_ipc_send(source, g_dm.query_endpoint, FS_IPC_ERROR, req_id, type, 0, 0, 0);
+        return;
+    }
+    if (type == DEVMGR_QUERY_BLOCK_MOUNT_REQ) {
+        uint8_t unit = (uint8_t)((uint32_t)index & 0xFFu);
+        const char *mount = 0;
+        uint32_t packed[4] = {0, 0, 0, 0};
+        for (uint32_t i = 0; i < g_dm.block_fs_rule_count; ++i) {
+            block_fs_rule_t *rule = &g_dm.block_fs_rules[i];
+            if (!rule->active) {
+                continue;
+            }
+            if (rule->unit == unit || rule->unit == 0xFFu) {
+                mount = rule->mount;
+                break;
+            }
+        }
+        if (!mount || mount[0] == '\0') {
+            (void)wasmos_ipc_send(source, g_dm.query_endpoint, FS_IPC_ERROR, req_id, -1, 0, 0, 0);
+            return;
+        }
+        for (uint32_t i = 0; mount[i] && i < 16u; ++i) {
+            uint32_t slot = i / 4u;
+            uint32_t shift = (i % 4u) * 8u;
+            packed[slot] |= ((uint32_t)(uint8_t)mount[i]) << shift;
+        }
+        (void)wasmos_ipc_send(source,
+                              g_dm.query_endpoint,
+                              DEVMGR_BLOCK_MOUNT_INFO,
+                              req_id,
+                              (int32_t)packed[0],
+                              (int32_t)packed[1],
+                              (int32_t)packed[2],
+                              (int32_t)packed[3]);
         return;
     }
     if (index == 0) {
@@ -1746,9 +1779,9 @@ initialize(int32_t proc_endpoint,
                         block_fs_rule_t *rule = &g_dm.block_fs_rules[g_dm.active_rule_spawn_index];
                         rule->spawned = 1;
                         rule->queued = 0;
-                        if (strcmp(rule->mount, "/boot") == 0 || strcmp(rule->mount, "boot") == 0) {
+                        if (rule->unit == 0) {
                             g_dm.boot_mount_ready = 1;
-                        } else if (strcmp(rule->mount, "/user") == 0 || strcmp(rule->mount, "user") == 0) {
+                        } else if (rule->unit == 1) {
                             g_dm.user_mount_ready = 1;
                         }
                         g_dm.active_rule_spawn_index = -1;

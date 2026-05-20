@@ -161,7 +161,7 @@ Current driver match/capability policy source:
 Current FS namespace model:
 - `fs-manager` is the canonical `fs` endpoint for PM/runtime file I/O and CLI mount namespace routing (registered as `fs.vfs`)
 - `mount` reporting is now served directly by `fs-manager` (`FSMGR_IPC_QUERY_MOUNTS_REQ`) so filesystem mount ownership/query no longer depends on device-manager mount indices
-- `fs-fat` and `fs-init` are backend filesystem drivers registered into `fs-manager`
+- `fs-fat` and `fs-init` are backend filesystem drivers registered into `fs-manager`; `fs-init` now serves real initfs file entries through normal filesystem open/read/readdir operations (no embedded fallback payload for `default.rules`)
 - bootstrapping now brings up `fs-manager` + `fs-init` before `device-manager`, so later startup lookups can resolve via the VFS namespace rather than only early boot-module ordering
 - kernel now exposes generic cross-context buffer borrows (`buffer_borrow`/`buffer_release`) with typed buffer classes and read/write grants; `fs-manager` uses the FS class for zero-copy backend proxying
 - native framebuffer driver mapping now uses the same generic borrow path (`PM_BUFFER_KIND_FRAMEBUFFER`) instead of a dedicated framebuffer mapper callback

@@ -608,8 +608,6 @@ load_block_fs_rules(const char *text)
 static int
 read_rules_file(const char *path, char *out_text, uint32_t out_text_len)
 {
-    int32_t initfs_endpoint = -1;
-    uint32_t is_init_path = 0;
     int32_t path_len = 0;
     int32_t resp_type = 0;
     int32_t resp_req = 0;
@@ -618,58 +616,21 @@ read_rules_file(const char *path, char *out_text, uint32_t out_text_len)
     if (!path || !out_text || out_text_len < 2u) {
         return -1;
     }
-    is_init_path = (path[0] == '/' && path[1] == 'i' && path[2] == 'n' && path[3] == 'i' && path[4] == 't' && path[5] == '/');
-    if (is_init_path) {
-        initfs_endpoint = wasmos_svc_lookup(g_dm.proc_endpoint, g_dm.reply_endpoint, "initfs.rules", 1);
-        if (initfs_endpoint < 0) {
-            return -1;
-        }
-    } else {
-        if (ensure_fs_endpoint() != 0) {
-            return -1;
-        }
+    if (ensure_fs_endpoint() != 0) {
+        return -1;
     }
-    if (is_init_path) {
-        uint32_t packed[4] = {0, 0, 0, 0};
-        const char *name = DEVMGR_RULE_FILE;
-        int32_t fd = -1;
-        for (uint32_t i = 0; name[i] && i < 16u; ++i) {
-            uint32_t slot = i / 4u;
-            uint32_t shift = (i % 4u) * 8u;
-            packed[slot] |= ((uint32_t)(uint8_t)name[i]) << shift;
-        }
-        req_id = g_dm.request_id++;
-        if (wasmos_ipc_send(initfs_endpoint, g_dm.reply_endpoint, FS_IPC_OPEN_REQ, req_id,
-                            (int32_t)packed[0], (int32_t)packed[1], (int32_t)packed[2], (int32_t)packed[3]) != 0 ||
-            wasmos_ipc_recv(g_dm.reply_endpoint) < 0) {
-            return -1;
-        }
-        resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
-        resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
-        fd = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-        if (resp_req != req_id || resp_type != FS_IPC_RESP || fd < 0) {
-            return -1;
-        }
-        req_id = g_dm.request_id++;
-        if (wasmos_ipc_send(initfs_endpoint, g_dm.reply_endpoint, FS_IPC_READ_REQ, req_id,
-                            fd, wasmos_fs_buffer_size(), 0, 0) != 0 ||
-            wasmos_ipc_recv(g_dm.reply_endpoint) < 0) {
-            return -1;
-        }
-    } else {
-        path_len = str_len(path);
-        if (path_len <= 0 || path_len >= wasmos_fs_buffer_size()) {
-            return -1;
-        }
-        if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, path_len, 0) != 0) {
-            return -1;
-        }
-        req_id = g_dm.request_id++;
-        if (wasmos_ipc_send(g_dm.fs_endpoint, g_dm.reply_endpoint, FS_IPC_READ_PATH_REQ, req_id,
-                            path_len, 0, 0, 0) != 0 ||
-            wasmos_ipc_recv(g_dm.reply_endpoint) < 0) {
-            return -1;
-        }
+    path_len = str_len(path);
+    if (path_len <= 0 || path_len >= wasmos_fs_buffer_size()) {
+        return -1;
+    }
+    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, path_len, 0) != 0) {
+        return -1;
+    }
+    req_id = g_dm.request_id++;
+    if (wasmos_ipc_send(g_dm.fs_endpoint, g_dm.reply_endpoint, FS_IPC_READ_PATH_REQ, req_id,
+                        path_len, 0, 0, 0) != 0 ||
+        wasmos_ipc_recv(g_dm.reply_endpoint) < 0) {
+        return -1;
     }
     resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
     if (resp_req != req_id) {

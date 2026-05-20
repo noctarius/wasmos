@@ -1,7 +1,7 @@
 set(LDFLAGS_KERNEL -nostdlib -T ${KERNEL_DIR}/arch/x86_64/linker.ld)
-set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -mcmodel=kernel ${WASMOS_TRACE_DEFINE} ${WASMOS_RING3_SMOKE_DEFINE} ${WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFINE} ${WASMOS_PM_TEST_HOOKS_DEFINE} ${WASMOS_PM_LIST_DEFINE} ${WASMOS_PM_LIST_CAP_DEFINE} -I${WASM_DIR}/wasm3/source -Wno-unused-parameter)
+set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -mcmodel=kernel ${WASMOS_TRACE_DEFINE} ${WASMOS_RING3_SMOKE_DEFINE} ${WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFINE} ${WASMOS_PM_TEST_HOOKS_DEFINE} ${WASMOS_PM_LIST_DEFINE} ${WASMOS_PM_LIST_CAP_DEFINE} -I${WASM3_DIR}/source -Wno-unused-parameter)
 set(CXXFLAGS_KERNEL ${CFLAGS_KERNEL} -fno-exceptions -fno-rtti -fno-threadsafe-statics -Wno-deprecated)
-set(CFLAGS_WASM3 ${CFLAGS_KERNEL} -I${WASM_DIR}/wasm3/source -Dd_m3HasFloat=0 -Wno-unused-parameter -Wno-unused-variable)
+set(CFLAGS_WASM3 ${CFLAGS_KERNEL} -I${WASM3_DIR}/source -Dd_m3HasFloat=0 -Wno-unused-parameter -Wno-unused-variable)
 
 set(RING3_NATIVE_PROBE_SRC ${KERNEL_DIR}/ring3_native_probe.c)
 set(RING3_NATIVE_PROBE_OBJ ${BUILD_DIR}/ring3_native_probe.o)
@@ -182,16 +182,16 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/wasm3_shim.c
   ${KERNEL_DIR}/serial.c
   ${KERNEL_DIR}/framebuffer.c
-  ${WASM_DIR}/wasm3/source/m3_code.c
-  ${WASM_DIR}/wasm3/source/m3_bind.c
-  ${WASM_DIR}/wasm3/source/m3_compile.c
-  ${WASM_DIR}/wasm3/source/m3_core.c
-  ${WASM_DIR}/wasm3/source/m3_env.c
-  ${WASM_DIR}/wasm3/source/m3_exec.c
-  ${WASM_DIR}/wasm3/source/m3_function.c
-  ${WASM_DIR}/wasm3/source/m3_info.c
-  ${WASM_DIR}/wasm3/source/m3_module.c
-  ${WASM_DIR}/wasm3/source/m3_parse.c
+  ${WASM3_DIR}/source/m3_code.c
+  ${WASM3_DIR}/source/m3_bind.c
+  ${WASM3_DIR}/source/m3_compile.c
+  ${WASM3_DIR}/source/m3_core.c
+  ${WASM3_DIR}/source/m3_env.c
+  ${WASM3_DIR}/source/m3_exec.c
+  ${WASM3_DIR}/source/m3_function.c
+  ${WASM3_DIR}/source/m3_info.c
+  ${WASM3_DIR}/source/m3_module.c
+  ${WASM3_DIR}/source/m3_parse.c
 )
 
 add_library(kernel_sources INTERFACE)
@@ -236,7 +236,7 @@ target_sources(kernel_sources INTERFACE
   ${KERNEL_DIR}/include/io.h
   ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
 )
-target_include_directories(kernel_sources INTERFACE ${KERNEL_DIR}/include ${WASM_DIR} ${DRIVER_WASM_DIR}/include)
+target_include_directories(kernel_sources INTERFACE ${KERNEL_DIR}/include ${WASM3_DIR} ${DRIVER_WASM_DIR}/include)
 
 # IDE aggregation target for CLion indexing (not part of the build).
 add_library(kernel_ide OBJECT EXCLUDE_FROM_ALL
@@ -280,8 +280,8 @@ target_include_directories(kernel_ide PRIVATE
   ${KERNEL_DIR}/include
   ${LIBC_DIR}/include
   ${DRIVER_WASM_DIR}/include
-  ${WASM_DIR}
-  ${WASM_DIR}/wasm3/source
+  ${WASM3_DIR}
+  ${WASM3_DIR}/source
 )
 target_compile_definitions(kernel_ide PRIVATE WASMOS_TRACE=${WASMOS_TRACE_VALUE})
 
@@ -341,16 +341,16 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm3_shim.c -o ${BUILD_DIR}/wasm3_shim.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/serial.c -o ${BUILD_DIR}/serial.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/framebuffer.c -o ${BUILD_DIR}/framebuffer.o
-  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_code.c -o ${BUILD_DIR}/wasm3_code.o
-  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_bind.c -o ${BUILD_DIR}/wasm3_bind.o
-  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_compile.c -o ${BUILD_DIR}/wasm3_compile.o
-  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_core.c -o ${BUILD_DIR}/wasm3_core.o
-  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_env.c -o ${BUILD_DIR}/wasm3_env.o
-  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_exec.c -o ${BUILD_DIR}/wasm3_exec.o
-  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_function.c -o ${BUILD_DIR}/wasm3_function.o
-  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_info.c -o ${BUILD_DIR}/wasm3_info.o
-  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_module.c -o ${BUILD_DIR}/wasm3_module.o
-  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM_DIR}/wasm3/source/m3_parse.c -o ${BUILD_DIR}/wasm3_parse.o
+  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM3_DIR}/source/m3_code.c -o ${BUILD_DIR}/wasm3_code.o
+  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM3_DIR}/source/m3_bind.c -o ${BUILD_DIR}/wasm3_bind.o
+  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM3_DIR}/source/m3_compile.c -o ${BUILD_DIR}/wasm3_compile.o
+  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM3_DIR}/source/m3_core.c -o ${BUILD_DIR}/wasm3_core.o
+  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM3_DIR}/source/m3_env.c -o ${BUILD_DIR}/wasm3_env.o
+  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM3_DIR}/source/m3_exec.c -o ${BUILD_DIR}/wasm3_exec.o
+  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM3_DIR}/source/m3_function.c -o ${BUILD_DIR}/wasm3_function.o
+  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM3_DIR}/source/m3_info.c -o ${BUILD_DIR}/wasm3_info.o
+  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM3_DIR}/source/m3_module.c -o ${BUILD_DIR}/wasm3_module.o
+  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM3_DIR}/source/m3_parse.c -o ${BUILD_DIR}/wasm3_parse.o
   COMMAND ${LLD_PATH} ${LDFLAGS_KERNEL} -o ${BUILD_DIR}/kernel.elf ${KERNEL_OBJS} ${KERNEL_LINK_LIBS}
   DEPENDS ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/include/cpu.h
   ${KERNEL_DIR}/include/kernel_init_runtime.h

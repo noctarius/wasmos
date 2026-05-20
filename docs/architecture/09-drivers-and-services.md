@@ -62,8 +62,8 @@ Current startup chain:
 4. `device-manager` spawns `pci-bus` and waits for scan completion
 5. `device-manager` starts the storage chain via rules:
    - `spawn_path=...` bootstrap rule spawns `ata`
-   - `block_fs ...` rule spawns `fs-fat` only after matching block-device
-     registration (for example ATA unit `0`)
+   - `block_fs ...` rules spawn `fs-fat` only after matching block-device
+     registration (for example ATA unit `0` -> `/boot`, unit `1` -> `/user`)
 6. `device-manager` starts post-FAT hardware drivers by name: `serial`,
    `keyboard`, and `framebuffer`
 7. kernel `init` waits for a successful FAT readiness probe

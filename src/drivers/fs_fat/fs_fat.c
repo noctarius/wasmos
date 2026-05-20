@@ -3941,6 +3941,10 @@ initialize(int32_t proc_endpoint,
     }
 
     int32_t fsmgr_endpoint = -1;
+    if (fat_ensure_ready() != 0) {
+        fat_log("boot init failed\n");
+        fat_stall();
+    }
     for (;;) {
         fsmgr_endpoint = wasmos_svc_lookup(proc_endpoint, g_reply_endpoint, "fs.vfs", 1);
         if (fsmgr_endpoint >= 0) {

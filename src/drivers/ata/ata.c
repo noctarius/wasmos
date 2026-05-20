@@ -35,16 +35,22 @@
 
 #define ATA_SECTOR_SIZE 512u
 #define ATA_MAX_READ_SECTORS 8u
+#define ATA_UNIT_COUNT 2u
+#define ATA_CLIENT_MAP_CAP 8u
 
 static int32_t g_block_endpoint = -1;
 static int32_t g_devmgr_endpoint = -1;
 static uint32_t g_sector_count = 0;
 static uint8_t g_present = 0;
+static uint32_t g_unit_sectors[ATA_UNIT_COUNT];
+static uint8_t g_unit_present[ATA_UNIT_COUNT];
 static uint8_t g_sector_buf[ATA_SECTOR_SIZE];
 static uint8_t g_dma_read_ok_logged = 0;
 static uint8_t g_dma_write_ok_logged = 0;
 static uint8_t g_dma_read_fallback_logged = 0;
 static uint8_t g_dma_write_fallback_logged = 0;
+static int32_t g_client_owner[ATA_CLIENT_MAP_CAP];
+static uint8_t g_client_unit[ATA_CLIENT_MAP_CAP];
 
 static uint8_t
 ata_read_status(void)
@@ -133,7 +139,7 @@ ata_publish_block_device(uint8_t unit, uint32_t sectors, uint8_t present)
 }
 
 static int
-ata_read_lba28(uint32_t lba, uint8_t count, uint32_t buffer_phys)
+ata_read_lba28(uint8_t unit, uint32_t lba, uint8_t count, uint32_t buffer_phys)
 {
     if (count == 0 || count > ATA_MAX_READ_SECTORS || buffer_phys == 0) {
         return -1;
@@ -143,7 +149,7 @@ ata_read_lba28(uint32_t lba, uint8_t count, uint32_t buffer_phys)
         return -1;
     }
 
-    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_HDDEVSEL, 0xE0 | ((lba >> 24) & 0x0F));
+    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_HDDEVSEL, (uint8_t)(0xE0u | ((unit & 1u) << 4) | ((lba >> 24) & 0x0Fu)));
     wasmos_io_wait();
     wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_SECCOUNT0, count);
     wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_LBA0, (uint8_t)(lba & 0xFF));
@@ -173,7 +179,7 @@ ata_read_lba28(uint32_t lba, uint8_t count, uint32_t buffer_phys)
 }
 
 static int
-ata_write_lba28(uint32_t lba, uint8_t count, uint32_t buffer_phys)
+ata_write_lba28(uint8_t unit, uint32_t lba, uint8_t count, uint32_t buffer_phys)
 {
     if (count == 0 || count > ATA_MAX_READ_SECTORS || buffer_phys == 0) {
         return -1;
@@ -183,7 +189,7 @@ ata_write_lba28(uint32_t lba, uint8_t count, uint32_t buffer_phys)
         return -1;
     }
 
-    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_HDDEVSEL, 0xE0 | ((lba >> 24) & 0x0F));
+    wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_HDDEVSEL, (uint8_t)(0xE0u | ((unit & 1u) << 4) | ((lba >> 24) & 0x0Fu)));
     wasmos_io_wait();
     wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_SECCOUNT0, count);
     wasmos_io_out8(ATA_PRIMARY_BASE + ATA_REG_LBA0, (uint8_t)(lba & 0xFF));
@@ -338,15 +344,58 @@ ata_dma_finish(int32_t source_endpoint,
 }
 
 static int
+ata_assign_unit_for_source(int32_t source, uint8_t *out_unit)
+{
+    if (!out_unit || source < 0) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
+        if (g_client_owner[i] == source) {
+            *out_unit = g_client_unit[i];
+            return 0;
+        }
+    }
+    for (uint32_t unit = 0; unit < ATA_UNIT_COUNT; ++unit) {
+        uint8_t claimed = 0;
+        if (!g_unit_present[unit]) {
+            continue;
+        }
+        for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
+            if (g_client_owner[i] >= 0 && g_client_unit[i] == unit) {
+                claimed = 1;
+                break;
+            }
+        }
+        if (claimed) {
+            continue;
+        }
+        for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
+            if (g_client_owner[i] < 0) {
+                g_client_owner[i] = source;
+                g_client_unit[i] = (uint8_t)unit;
+                *out_unit = (uint8_t)unit;
+                return 0;
+            }
+        }
+    }
+    return -1;
+}
+
+static int
 ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t arg0, int32_t arg1, int32_t arg2)
 {
+    uint8_t unit = 0;
     if (!g_present) {
+        ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 1, 0);
+        return 0;
+    }
+    if (ata_assign_unit_for_source(source, &unit) != 0 || !g_unit_present[unit]) {
         ata_send_resp(source, req_id, BLOCK_IPC_ERROR, 1, 0);
         return 0;
     }
 
     if (type == BLOCK_IPC_IDENTIFY_REQ) {
-        ata_send_resp(source, req_id, BLOCK_IPC_IDENTIFY_RESP, 0, (int32_t)g_sector_count);
+        ata_send_resp(source, req_id, BLOCK_IPC_IDENTIFY_RESP, 0, (int32_t)g_unit_sectors[unit]);
         return 0;
     }
 
@@ -370,7 +419,7 @@ ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t arg0, int32
             (void)dma_addr;
             ata_log_dma_active(0);
         }
-        if (ata_read_lba28((uint32_t)arg1, (uint8_t)arg2, (uint32_t)arg0) != 0) {
+        if (ata_read_lba28(unit, (uint32_t)arg1, (uint8_t)arg2, (uint32_t)arg0) != 0) {
             if (dma_rc == WASMOS_DMA_STATUS_OK) {
                 (void)ata_dma_finish(source, 0u, byte_count, WASMOS_DMA_DIR_FROM_DEVICE);
             }
@@ -413,7 +462,7 @@ ata_handle_ipc(int32_t type, int32_t source, int32_t req_id, int32_t arg0, int32
             (void)dma_addr;
             ata_log_dma_active(1);
         }
-        if (ata_write_lba28((uint32_t)arg1, (uint8_t)arg2, (uint32_t)arg0) != 0) {
+        if (ata_write_lba28(unit, (uint32_t)arg1, (uint8_t)arg2, (uint32_t)arg0) != 0) {
             if (dma_rc == WASMOS_DMA_STATUS_OK) {
                 (void)ata_dma_finish(source, 0u, byte_count, WASMOS_DMA_DIR_TO_DEVICE);
             }
@@ -471,7 +520,15 @@ initialize(int32_t proc_endpoint,
     }
     g_present = 0;
     g_sector_count = 0;
-    for (uint8_t unit = 0; unit < 2; ++unit) {
+    for (uint32_t i = 0; i < ATA_UNIT_COUNT; ++i) {
+        g_unit_present[i] = 0;
+        g_unit_sectors[i] = 0;
+    }
+    for (uint32_t i = 0; i < ATA_CLIENT_MAP_CAP; ++i) {
+        g_client_owner[i] = -1;
+        g_client_unit[i] = 0;
+    }
+    for (uint8_t unit = 0; unit < ATA_UNIT_COUNT; ++unit) {
         uint16_t identify_words[256];
         uint8_t unit_present = 0;
         uint32_t unit_sectors = 0;
@@ -483,6 +540,11 @@ initialize(int32_t proc_endpoint,
                 g_sector_count = unit_sectors;
                 g_present = 1;
             }
+        }
+        g_unit_present[unit] = unit_present;
+        g_unit_sectors[unit] = unit_sectors;
+        if (unit_present) {
+            g_present = 1;
         }
         ata_publish_block_device(unit, unit_sectors, unit_present);
     }

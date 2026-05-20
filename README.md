@@ -29,7 +29,7 @@ It defines repository workflow and documentation/update conventions.
 - WASM-first userspace runtime (wasm3) with optional native drivers/services where hardware paths benefit from native execution.
 - Service-driven startup chain with endpoint registry and discovery (`register`/`lookup`) plus PCI-inventory-driven driver bring-up.
 - Practical VT/CLI environment with multi-TTY switching, fail-fast script execution (`script <file>`), basic environment variables (`export`, `echo ${VAR}`), PATH-based app lookup, and core inspection commands (`ps`, `kmaps`, `mount`, `exec`, etc.).
-- Device-manager policy roots are defined for udev-like evolution: `/init/devmgr/rules` (bootstrap) and `/boot/system/devmgr/rules` (runtime override). Storage bring-up is rule-driven from `/init/devmgr/rules/default.rules`: `spawn_path=...` boots ATA, then `block_fs ...` spawns `fs-fat` after a matching published block-device record.
+- Device-manager policy roots are defined for udev-like evolution: `/init/devmgr/rules` (bootstrap) and `/boot/system/devmgr/rules` (runtime override). Storage bring-up is rule-driven from `/init/devmgr/rules/default.rules`: `spawn_path=...` boots ATA, then one or more `block_fs ...` rules spawn `fs-fat` instances after matching published block-device records (for example `unit=0` -> `/boot`, `unit=1` -> `/user`).
 - Ring-3 isolation/hardening enabled by default, with stress/fault/self-test coverage across IPC, faults, threading, and shared memory.
 - Thread lifecycle support is available end-to-end (`thread_create`, `thread_join`, `thread_detach`, `thread_yield`, `thread_exit`) for ring3.
 - Shared-memory and capability plumbing supports owner/grant/revoke flows, including compositor/client buffer sharing and auto-mapping helpers.

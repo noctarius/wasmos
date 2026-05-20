@@ -53,6 +53,7 @@ typedef enum {
 #define DEVMGR_RULES_BOOT_ROOT "/boot/system/devmgr/rules"
 #define DEVMGR_RULE_FILE "default.rules"
 #define DEVMGR_RULE_TEXT_CAP 1024
+#define BLOCK_FS_RULE_CAP 8
 
 typedef struct {
     uint32_t cap_flags;
@@ -83,6 +84,15 @@ typedef struct {
     char canonical_id[64];
     char hash_id[17];
 } block_device_record_t;
+
+typedef struct {
+    uint8_t active;
+    uint8_t queued;
+    uint8_t spawned;
+    uint8_t unit;
+    char mount[16];
+    char spawn_path[96];
+} block_fs_rule_t;
 
 typedef struct {
     hw_phase_t phase;
@@ -135,11 +145,11 @@ typedef struct {
     uint8_t rule_spawn_pending;
     uint8_t rule_spawn_retries;
     char rule_spawn_path[96];
-    uint8_t block_fs_rule_active;
-    uint8_t block_fs_rule_spawned;
-    uint8_t block_fs_rule_unit;
-    char block_fs_rule_mount[16];
-    char block_fs_rule_path[96];
+    int32_t active_rule_spawn_index;
+    block_fs_rule_t block_fs_rules[BLOCK_FS_RULE_CAP];
+    uint32_t block_fs_rule_count;
+    uint8_t boot_mount_ready;
+    uint8_t user_mount_ready;
 } device_manager_state_t;
 
 static device_manager_state_t g_dm = {
@@ -173,11 +183,11 @@ static device_manager_state_t g_dm = {
     .rule_spawn_pending = 0,
     .rule_spawn_retries = 0,
     .rule_spawn_path = {0},
-    .block_fs_rule_active = 0,
-    .block_fs_rule_spawned = 0,
-    .block_fs_rule_unit = 0xFFu,
-    .block_fs_rule_mount = {0},
-    .block_fs_rule_path = {0},
+    .active_rule_spawn_index = -1,
+    .block_fs_rules = {0},
+    .block_fs_rule_count = 0,
+    .boot_mount_ready = 0,
+    .user_mount_ready = 0,
 };
 
 static void
@@ -338,6 +348,8 @@ log_rule_roots_once(void)
 static int proc_running(const char *name);
 static int ensure_fs_endpoint(void);
 static int query_module_meta_by_path(const char *path, uint32_t source, int32_t *out_index);
+static void queue_block_fs_rule_spawns(void);
+static void queue_block_fs_rules_for_known_devices(void);
 static int module_index_by_name(const char *name);
 
 static int32_t
@@ -486,87 +498,103 @@ extract_rule_spawn_path(const char *text, char *out_path, uint32_t out_len)
 }
 
 static int
-extract_block_fs_rule(const char *text,
-                      char *out_path,
-                      uint32_t out_path_len,
-                      char *out_mount,
-                      uint32_t out_mount_len,
-                      uint8_t *out_unit)
+parse_block_fs_rule_line(const char *line, block_fs_rule_t *out_rule)
 {
-    if (!text || !out_path || out_path_len == 0 || !out_mount || out_mount_len == 0 || !out_unit) {
+    char path[96];
+    char mount[16];
+    uint8_t unit = 0xFFu;
+    char *cur = 0;
+    char line_buf[192];
+    uint32_t line_len = 0;
+    if (!line || !out_rule) {
         return -1;
     }
-    out_path[0] = '\0';
-    out_mount[0] = '\0';
-    *out_unit = 0xFFu;
+    while (line[line_len] && line[line_len] != '\n' && line_len + 1u < sizeof(line_buf)) {
+        line_buf[line_len] = line[line_len];
+        line_len++;
+    }
+    line_buf[line_len] = '\0';
+    line = trim_left(line_buf);
+    if (!(strncmp(line, "block_fs", 8) == 0 && (line[8] == '\0' || str_is_space(line[8])))) {
+        return -1;
+    }
+    path[0] = '\0';
+    mount[0] = '\0';
+    cur = (char *)(line + 8);
+    while (*cur) {
+        char *tok = cur;
+        char *eq = 0;
+        while (*tok && str_is_space(*tok)) {
+            tok++;
+        }
+        if (!*tok) {
+            break;
+        }
+        cur = tok;
+        while (*cur && !str_is_space(*cur)) {
+            cur++;
+        }
+        if (*cur) {
+            *cur++ = '\0';
+        }
+        eq = strchr(tok, '=');
+        if (!eq) {
+            continue;
+        }
+        *eq++ = '\0';
+        if (strcmp(tok, "spawn_path") == 0) {
+            str_copy(path, sizeof(path), eq);
+        } else if (strcmp(tok, "mount") == 0) {
+            str_copy(mount, sizeof(mount), eq);
+        } else if (strcmp(tok, "unit") == 0) {
+            if (strcmp(eq, "any") == 0) {
+                unit = 0xFFu;
+            } else if (eq[0] >= '0' && eq[0] <= '9' && eq[1] == '\0') {
+                unit = (uint8_t)(eq[0] - '0');
+            }
+        }
+    }
+    if (!path[0]) {
+        return -1;
+    }
+    if (!mount[0]) {
+        str_copy(mount, sizeof(mount), "/");
+    }
+    out_rule->active = 1;
+    out_rule->queued = 0;
+    out_rule->spawned = 0;
+    out_rule->unit = unit;
+    str_copy(out_rule->mount, sizeof(out_rule->mount), mount);
+    str_copy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
+    return 0;
+}
+
+static void
+load_block_fs_rules(const char *text)
+{
+    uint32_t out_count = 0;
+    if (!text) {
+        return;
+    }
+    g_dm.active_rule_spawn_index = -1;
+    g_dm.boot_mount_ready = 0;
+    g_dm.user_mount_ready = 0;
+    for (uint32_t i = 0; i < BLOCK_FS_RULE_CAP; ++i) {
+        g_dm.block_fs_rules[i].active = 0;
+        g_dm.block_fs_rules[i].queued = 0;
+        g_dm.block_fs_rules[i].spawned = 0;
+    }
     for (int32_t i = 0;;) {
         int32_t line_start = i;
         int32_t line_end = i;
-        char line_buf[192];
-        uint32_t line_len = 0;
-        char *line = 0;
+        const char *line = 0;
         while (text[line_end] && text[line_end] != '\n') {
             line_end++;
         }
-        line_len = (uint32_t)(line_end - line_start);
-        if (line_len >= sizeof(line_buf)) {
-            line_len = sizeof(line_buf) - 1u;
-        }
-        for (uint32_t j = 0; j < line_len; ++j) {
-            line_buf[j] = text[line_start + (int32_t)j];
-        }
-        line_buf[line_len] = '\0';
-        line = (char *)trim_left(line_buf);
-        if (line[0] && line[0] != '#') {
-            if (strncmp(line, "block_fs", 8) == 0 && (line[8] == '\0' || str_is_space(line[8]))) {
-                char path[96];
-                char mount[16];
-                uint8_t unit = 0xFFu;
-                char *cur = line + 8;
-                path[0] = '\0';
-                mount[0] = '\0';
-                while (*cur) {
-                    char *tok = cur;
-                    char *eq = 0;
-                    while (*tok && str_is_space(*tok)) {
-                        tok++;
-                    }
-                    if (!*tok) {
-                        break;
-                    }
-                    cur = tok;
-                    while (*cur && !str_is_space(*cur)) {
-                        cur++;
-                    }
-                    if (*cur) {
-                        *cur++ = '\0';
-                    }
-                    eq = strchr(tok, '=');
-                    if (!eq) {
-                        continue;
-                    }
-                    *eq++ = '\0';
-                    if (strcmp(tok, "spawn_path") == 0) {
-                        str_copy(path, sizeof(path), eq);
-                    } else if (strcmp(tok, "mount") == 0) {
-                        str_copy(mount, sizeof(mount), eq);
-                    } else if (strcmp(tok, "unit") == 0) {
-                        if (strcmp(eq, "any") == 0) {
-                            unit = 0xFFu;
-                        } else if (eq[0] >= '0' && eq[0] <= '9' && eq[1] == '\0') {
-                            unit = (uint8_t)(eq[0] - '0');
-                        }
-                    }
-                }
-                if (path[0]) {
-                    if (!mount[0]) {
-                        str_copy(mount, sizeof(mount), "/");
-                    }
-                    str_copy(out_path, out_path_len, path);
-                    str_copy(out_mount, out_mount_len, mount);
-                    *out_unit = unit;
-                    return 0;
-                }
+        line = trim_left(&text[line_start]);
+        if (line[0] && line[0] != '#' && out_count < BLOCK_FS_RULE_CAP) {
+            if (parse_block_fs_rule_line(line, &g_dm.block_fs_rules[out_count]) == 0) {
+                out_count++;
             }
         }
         if (text[line_end] == '\0') {
@@ -574,7 +602,7 @@ extract_block_fs_rule(const char *text,
         }
         i = line_end + 1;
     }
-    return -1;
+    g_dm.block_fs_rule_count = out_count;
 }
 
 static int
@@ -776,18 +804,10 @@ poll_boot_rules_async(void)
         g_dm.rule_spawn_pending = 1;
         console_write("[device-manager] boot rules queued spawn_path\n");
     }
-    {
-        char fs_path[96];
-        char fs_mount[16];
-        uint8_t fs_unit = 0xFFu;
-        if (extract_block_fs_rule(text, fs_path, sizeof(fs_path), fs_mount, sizeof(fs_mount), &fs_unit) == 0) {
-            g_dm.block_fs_rule_active = 1;
-            g_dm.block_fs_rule_spawned = 0;
-            g_dm.block_fs_rule_unit = fs_unit;
-            str_copy(g_dm.block_fs_rule_path, sizeof(g_dm.block_fs_rule_path), fs_path);
-            str_copy(g_dm.block_fs_rule_mount, sizeof(g_dm.block_fs_rule_mount), fs_mount);
-            console_write("[device-manager] boot rules loaded block_fs\n");
-        }
+    load_block_fs_rules(text);
+    if (g_dm.block_fs_rule_count > 0) {
+        console_write("[device-manager] boot rules loaded block_fs\n");
+        queue_block_fs_rules_for_known_devices();
     }
     g_dm.rules_boot_loaded = 1;
     snprintf(msg, sizeof(msg), "[device-manager] loaded boot rules: %d active\n", (int)g_dm.rules_boot_active);
@@ -813,18 +833,10 @@ load_rules_if_available(void)
                 g_dm.rule_spawn_pending = 1;
                 console_write("[device-manager] init rules queued spawn_path\n");
             }
-            {
-                char fs_path[96];
-                char fs_mount[16];
-                uint8_t fs_unit = 0xFFu;
-                if (extract_block_fs_rule(text, fs_path, sizeof(fs_path), fs_mount, sizeof(fs_mount), &fs_unit) == 0) {
-                    g_dm.block_fs_rule_active = 1;
-                    g_dm.block_fs_rule_spawned = 0;
-                    g_dm.block_fs_rule_unit = fs_unit;
-                    str_copy(g_dm.block_fs_rule_path, sizeof(g_dm.block_fs_rule_path), fs_path);
-                    str_copy(g_dm.block_fs_rule_mount, sizeof(g_dm.block_fs_rule_mount), fs_mount);
-                    console_write("[device-manager] init rules loaded block_fs\n");
-                }
+            load_block_fs_rules(text);
+            if (g_dm.block_fs_rule_count > 0) {
+                console_write("[device-manager] init rules loaded block_fs\n");
+                queue_block_fs_rules_for_known_devices();
             }
         } else if (!g_dm.rules_init_fail_logged) {
             g_dm.rules_init_fail_logged = 1;
@@ -1142,6 +1154,46 @@ registry_add_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3)
 }
 
 static void
+queue_block_fs_rule_spawns(void)
+{
+    if (g_dm.rule_spawn_pending) {
+        return;
+    }
+    for (uint32_t i = 0; i < g_dm.block_fs_rule_count; ++i) {
+        block_fs_rule_t *rule = &g_dm.block_fs_rules[i];
+        if (!rule->active || !rule->queued || rule->spawned) {
+            continue;
+        }
+        str_copy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
+        g_dm.rule_spawn_pending = 1;
+        g_dm.rule_spawn_retries = 0;
+        g_dm.active_rule_spawn_index = (int32_t)i;
+        return;
+    }
+}
+
+static void
+queue_block_fs_rules_for_known_devices(void)
+{
+    for (uint32_t bi = 0; bi < g_dm.block_registry_count; ++bi) {
+        const block_device_record_t *rec = &g_dm.block_registry[bi];
+        if (!rec->in_use || !rec->present) {
+            continue;
+        }
+        for (uint32_t ri = 0; ri < g_dm.block_fs_rule_count; ++ri) {
+            block_fs_rule_t *rule = &g_dm.block_fs_rules[ri];
+            if (!rule->active || rule->spawned || rule->queued) {
+                continue;
+            }
+            if (rule->unit == 0xFFu || rule->unit == rec->unit) {
+                rule->queued = 1;
+            }
+        }
+    }
+    queue_block_fs_rule_spawns();
+}
+
+static void
 registry_add_block_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3)
 {
     (void)arg3;
@@ -1194,15 +1246,23 @@ registry_add_block_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t ar
                        (unsigned)rec->sector_count);
         console_write(msg);
     }
-    if (rec->present &&
-        g_dm.block_fs_rule_active &&
-        !g_dm.block_fs_rule_spawned &&
-        (g_dm.block_fs_rule_unit == 0xFFu || g_dm.block_fs_rule_unit == rec->unit)) {
-        str_copy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), g_dm.block_fs_rule_path);
-        g_dm.rule_spawn_pending = 1;
-        g_dm.rule_spawn_retries = 0;
-        g_dm.need_fat = 0;
-        console_write("[device-manager] block_fs rule queued spawn\n");
+    if (rec->present) {
+        uint8_t queued_any = 0;
+        for (uint32_t i = 0; i < g_dm.block_fs_rule_count; ++i) {
+            block_fs_rule_t *rule = &g_dm.block_fs_rules[i];
+            if (!rule->active || rule->spawned || rule->queued) {
+                continue;
+            }
+            if (rule->unit == 0xFFu || rule->unit == rec->unit) {
+                rule->queued = 1;
+                queued_any = 1;
+            }
+        }
+        if (queued_any) {
+            queue_block_fs_rule_spawns();
+            g_dm.need_fat = 0;
+            console_write("[device-manager] block_fs rule queued spawn\n");
+        }
     }
 }
 
@@ -1490,13 +1550,19 @@ handle_query_message_fields(void)
         return;
     }
     if (index == 1) {
-        (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_MOUNT_INFO, req_id, 1, 0, 0, 0);
+        if (g_dm.boot_mount_ready) {
+            (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_MOUNT_INFO, req_id, 1, 0, 0, 0);
+        } else {
+            (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_QUERY_DONE, req_id, 0, 0, 0, 0);
+        }
         return;
     }
     if (index == 2) {
-        /* TODO: publish /user only when secondary-disk ATA/fs-fat backend
-         * registration is fully wired end-to-end. */
-        (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_MOUNT_INFO, req_id, 2, 0, 0, 0);
+        if (g_dm.user_mount_ready) {
+            (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_MOUNT_INFO, req_id, 2, 0, 0, 0);
+        } else {
+            (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_QUERY_DONE, req_id, 0, 0, 0, 0);
+        }
         return;
     }
     (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_QUERY_DONE, req_id, 0, 0, 0, 0);
@@ -1675,10 +1741,19 @@ initialize(int32_t proc_endpoint,
                 }
                 if (g_dm.pending == HW_SPAWN_RULE_PATH) {
                     g_dm.rule_spawn_pending = 0;
-                    if (g_dm.block_fs_rule_active &&
-                        strcmp(g_dm.rule_spawn_path, g_dm.block_fs_rule_path) == 0) {
-                        g_dm.block_fs_rule_spawned = 1;
+                    if (g_dm.active_rule_spawn_index >= 0 &&
+                        g_dm.active_rule_spawn_index < (int32_t)g_dm.block_fs_rule_count) {
+                        block_fs_rule_t *rule = &g_dm.block_fs_rules[g_dm.active_rule_spawn_index];
+                        rule->spawned = 1;
+                        rule->queued = 0;
+                        if (strcmp(rule->mount, "/boot") == 0 || strcmp(rule->mount, "boot") == 0) {
+                            g_dm.boot_mount_ready = 1;
+                        } else if (strcmp(rule->mount, "/user") == 0 || strcmp(rule->mount, "user") == 0) {
+                            g_dm.user_mount_ready = 1;
+                        }
+                        g_dm.active_rule_spawn_index = -1;
                     }
+                    queue_block_fs_rule_spawns();
                 }
                 if (g_dm.pending == HW_SPAWN_SERIAL) {
                     g_dm.need_serial = 0;
@@ -1738,6 +1813,13 @@ initialize(int32_t proc_endpoint,
                     g_dm.rule_spawn_retries++;
                     if (g_dm.rule_spawn_retries > 8) {
                         g_dm.rule_spawn_pending = 0;
+                        if (g_dm.active_rule_spawn_index >= 0 &&
+                            g_dm.active_rule_spawn_index < (int32_t)g_dm.block_fs_rule_count) {
+                            g_dm.block_fs_rules[g_dm.active_rule_spawn_index].queued = 0;
+                        }
+                        g_dm.active_rule_spawn_index = -1;
+                    } else {
+                        g_dm.rule_spawn_pending = 1;
                     }
                 }
                 g_dm.pending = HW_SPAWN_NONE;

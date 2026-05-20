@@ -150,6 +150,36 @@ discovery and driver lifecycle service, while keeping the kernel policy-light.
   - state (`discovered`, `bound`, `active`, `removed`, `failed`)
 - Bus services publish records; they do not decide binding policy.
 
+#### `device_record` v0-draft (Normative)
+- Schema version: `record_version = 1`
+- Required fields:
+  - `record_version: u16`
+  - `device_uid: u64`
+    - manager-assigned stable id for the lifetime of this discovered device
+  - `bus_type: enum`
+    - `pci | usb | virt`
+  - `bus_addr: string[64]`
+    - normalized address token (examples: `0000:00:01.1`, `usb:1-2.3`)
+  - `event_gen: u32`
+    - monotonic generation incremented on each state-changing event
+  - `state: enum`
+    - `discovered | bound | active | removed | failed`
+  - `attr_count: u16`
+  - `attrs[attr_count]`
+    - tuple: `key:string[32]`, `value:string[96]`
+- Optional fields:
+  - `caps_hint`
+    - `io_port_min:u16`, `io_port_max:u16`
+    - `mmio_base:u64`, `mmio_len:u64`
+    - `irq_line:u16`, `dma_hint:u32`
+  - `bound_driver:string[96]`
+  - `service_ref_count:u8`
+  - `service_refs[service_ref_count]: string[32]`
+- Identity and idempotence key:
+  - `(bus_type, bus_addr, event_gen)`
+- Required normalized attribute keys for `pci` records:
+  - `vendor_id`, `device_id`, `class`, `subclass`, `prog_if`, `revision`
+
 #### Device Event Model (Planned)
 - Event types:
   - `DEVMGR_DEVICE_ADD`
@@ -161,6 +191,27 @@ discovery and driver lifecycle service, while keeping the kernel policy-light.
   for replay after service restart.
 - Removal is authoritative: once `REMOVE` is committed, active bindings must be
   torn down and exported services revoked.
+
+#### `device_event` v0-draft (Normative)
+- Required fields:
+  - `event_version: u16` (`1`)
+  - `event_type: enum`
+    - `DEVMGR_DEVICE_ADD`
+    - `DEVMGR_DEVICE_REMOVE`
+    - `DEVMGR_DEVICE_CHANGE`
+    - `DEVMGR_BIND_RESULT`
+    - `DEVMGR_UNBIND_RESULT`
+  - `device_uid: u64`
+  - `bus_type: enum`
+  - `bus_addr: string[64]`
+  - `event_gen: u32`
+  - `status: i32` (`0` success, negative error codes)
+  - `source_service: string[32]`
+- Replay semantics:
+  - duplicate events for same `(bus_type,bus_addr,event_gen,event_type)` are
+    ignored after first successful apply
+- Ordering:
+  - `REMOVE` with higher `event_gen` supersedes all older add/change events
 
 #### Rule System (Planned)
 - Rule roots (in load order):
@@ -174,6 +225,79 @@ discovery and driver lifecycle service, while keeping the kernel policy-light.
   - spawn capability profile selection
   - startup policy (`critical`, `optional`, `on-demand`)
   - mount policy (filesystem alias/path/priority)
+
+#### `devmgr_rule` v0-draft (Normative)
+- File format: TOML (`*.rules`)
+- Top-level:
+  - `rule_version = 1`
+  - one or more `[[rule]]` entries
+- `[[rule]]` required fields:
+  - `id: string` (stable unique id per root)
+  - `priority: i32` (higher value evaluates first)
+  - `enabled: bool` (default `true`)
+  - `stop_processing: bool` (default `false`)
+- Match section (`[rule.match]`):
+  - `bus_type: string | "*" ` (optional)
+  - `event: string | "*"` (optional)
+  - `state: string | "*"` (optional)
+  - zero or more `[[rule.match.attr]]` predicates:
+    - `key`
+    - `op` (`eq | prefix | glob`)
+    - `value`
+- Actions section:
+  - one or more `[[rule.action]]`
+  - `type = "bind_driver"`:
+    - `module_path`
+    - `caps_profile` (optional)
+    - `startup_policy` (`critical|optional|on_demand`)
+  - `type = "set_mount"`:
+    - `path`
+    - `fs_type`
+    - `source_selector` (for example `device_uid:<n>` or `bus_addr:<str>`)
+    - `flags` (optional string list)
+  - `type = "set_alias"`:
+    - `name`
+    - `target`
+  - `type = "deny"`:
+    - `reason`
+- Minimal example:
+```toml
+rule_version = 1
+
+[[rule]]
+id = "pci-ata-primary"
+priority = 100
+
+[rule.match]
+bus_type = "pci"
+event = "DEVMGR_DEVICE_ADD"
+
+[[rule.match.attr]]
+key = "class"
+op = "eq"
+value = "01"
+
+[[rule.action]]
+type = "bind_driver"
+module_path = "/boot/system/drivers/ata.wap"
+startup_policy = "critical"
+```
+
+#### Rule Evaluation and Precedence (Normative)
+- Load order:
+  1. `/init/devmgr/rules`
+  2. `/boot/system/devmgr/rules`
+- Merge model:
+  - same `rule.id` in later roots overrides earlier definition
+  - distinct ids are appended
+- Evaluation order:
+  - sort by `priority` descending, then `id` lexical ascending
+  - skip disabled rules
+  - apply first matching rule actions in-order
+  - if `stop_processing = true`, terminate evaluation
+- Conflict rule:
+  - `deny` action at a given priority blocks `bind_driver` actions at the same
+    or lower priority for the same device/event cycle
 
 #### Dynamic Mount Policy (Planned)
 - Filesystem mounts are outcomes of rule evaluation, not fixed to `/boot`,

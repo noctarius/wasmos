@@ -363,7 +363,7 @@ initfs_fd_alloc(int32_t file_index)
             g_open_files[i].in_use = 1;
             g_open_files[i].entry_index = file_index;
             g_open_files[i].offset = 0;
-            return i + 1;
+            return i + 3;
         }
     }
     return -1;
@@ -372,13 +372,13 @@ initfs_fd_alloc(int32_t file_index)
 static initfs_fd_t *
 initfs_fd_lookup(int32_t fd)
 {
-    if (fd <= 0 || fd > INITFS_MAX_OPEN_FILES) {
+    if (fd < 3 || fd >= (3 + INITFS_MAX_OPEN_FILES)) {
         return 0;
     }
-    if (!g_open_files[fd - 1].in_use) {
+    if (!g_open_files[fd - 3].in_use) {
         return 0;
     }
-    return &g_open_files[fd - 1];
+    return &g_open_files[fd - 3];
 }
 
 static int

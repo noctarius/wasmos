@@ -86,6 +86,14 @@ class CliIntegrationTests(unittest.TestCase):
         self._cmd_expect("ls", b"default.rules")
         self._cmd_expect("cd /", b"/ wamos>")
 
+    def test_initfs_cat_default_rules(self):
+        self._cmd_expect("cd /", b"/ wamos>")
+        self._cmd_expect("cd init", b"/init wamos>")
+        self._cmd_expect("cd devmgr", b"/init/devmgr wamos>")
+        self._cmd_expect("cd rules", b"/init/devmgr/rules wamos>")
+        self._cmd_expect("cat default.rules", b"spawn_path=system/drivers/ata.wap")
+        self._cmd_expect("cd /", b"/ wamos>")
+
     def test_cd_dot_and_dotdot(self):
         self._cmd_expect("cd /", b"/ wamos>")
         self._cmd_expect("cd boot", b"/boot wamos>")

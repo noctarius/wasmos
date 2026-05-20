@@ -46,7 +46,6 @@ var g_handles: [MAX_HANDLES]font_handle_t = [_]font_handle_t{.{}} ** MAX_HANDLES
 var g_raster_scratch_shmem_id: u32 = 0;
 var g_raster_scratch_ptr: ?[*]u8 = null;
 var g_raster_scratch_cap: usize = 0;
-var g_dbg_raster_logged: bool = false;
 
 fn api() *c.wasmos_driver_api_t {
     return g_api.?;
@@ -418,22 +417,6 @@ fn handle_raster_glyph(req: *const c.nd_ipc_message_t) void {
 
     const dst: [*]u8 = g_raster_scratch_ptr.?;
     c.stbtt_MakeCodepointBitmap(&f.font_info, dst, @intCast(w), @intCast(hgt), @intCast(w), scale, scale, @bitCast(codepoint));
-    if (!g_dbg_raster_logged and codepoint == 'w') {
-        g_dbg_raster_logged = true;
-        var nz: usize = 0;
-        var mx: u8 = 0;
-        var i: usize = 0;
-        while (i < pixel_count) : (i += 1) {
-            const a = dst[i];
-            if (a != 0) nz += 1;
-            if (a > mx) mx = a;
-        }
-        if (nz > 0 and mx > 0) {
-            logMsg("[dbg-font] raster nonzero\n");
-        } else {
-            logMsg("[dbg-font] raster empty\n");
-        }
-    }
     reply_with_status(req, c.FONT_STATUS_OK, g_raster_scratch_shmem_id, zu.packU16Pair(@intCast(w), @intCast(hgt)), zu.packS16Pair(x0, y0));
 }
 

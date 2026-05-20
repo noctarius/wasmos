@@ -523,7 +523,8 @@ static int capture_framebuffer_snapshot(EFI_SYSTEM_TABLE *system,
     snapshot->width = mode_info->HorizontalResolution;
     snapshot->height = mode_info->VerticalResolution;
     snapshot->stride = mode_info->PixelsPerScanLine;
-    snapshot->flags = BOOT_INFO_FLAG_GOP_PRESENT;
+    snapshot->flags = BOOT_INFO_FLAG_GOP_PRESENT |
+                      ((((uint32_t)mode_info->PixelFormat) & 0xFu) << BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_SHIFT);
     return 0;
 }
 

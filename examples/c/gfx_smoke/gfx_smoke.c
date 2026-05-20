@@ -89,6 +89,10 @@ create_damage_rect_shmem(int32_t gfx_ep, int32_t width, int32_t height)
     rect->y = 0;
     rect->w = width;
     rect->h = height;
+    if (wasmos_shmem_flush(shmem_id, map_ptr, (int32_t)sizeof(gfx_rect_t)) != 0) {
+        puts("[test] gfx smoke damage flush failed");
+        return -1;
+    }
     if (wasmos_shmem_unmap(shmem_id) != 0) {
         puts("[test] gfx smoke damage unmap failed");
         return -1;
@@ -107,6 +111,18 @@ map_shared_buffer_ptr(int32_t shmem_id, int32_t stride_bytes, int32_t height, ui
         return -1;
     }
     *out_base = (uint8_t *)(uintptr_t)(uint32_t)map_ptr;
+    return 0;
+}
+
+static int
+flush_shared_buffer_ptr(int32_t shmem_id, uint8_t *base, int32_t stride_bytes, int32_t height)
+{
+    int32_t byte_len = stride_bytes * height;
+    int32_t ptr = (int32_t)(uintptr_t)base;
+    if (wasmos_shmem_flush(shmem_id, ptr, byte_len) != 0) {
+        puts("[test] gfx smoke shmem flush failed");
+        return -1;
+    }
     return 0;
 }
 
@@ -159,8 +175,8 @@ static int
 fill_wasmos_logo(uint8_t *base, int32_t width, int32_t height, int32_t stride_bytes)
 {
     const uint32_t bg = 0xFF171A22u;
-    const int32_t mascot_src_w = 128;
-    const int32_t mascot_src_h = 128;
+    const int32_t mascot_src_w = WASMO_MASCOT_RGBA_WIDTH;
+    const int32_t mascot_src_h = WASMO_MASCOT_RGBA_HEIGHT;
     const int32_t mascot_draw_w = 500;
     const int32_t mascot_draw_h = 500;
     fill_rect(base, width, height, stride_bytes, 0, 0, width, height, bg);
@@ -177,15 +193,9 @@ fill_wasmos_logo(uint8_t *base, int32_t width, int32_t height, int32_t stride_by
             const uint32_t sg = wasmo_mascot_rgba[i + 1];
             const uint32_t sb = wasmo_mascot_rgba[i + 2];
             const uint32_t sa = wasmo_mascot_rgba[i + 3];
-            uint32_t dst = dst_row[off_x + x];
-            uint32_t dr = (dst >> 16) & 0xFFu;
-            uint32_t dg = (dst >> 8) & 0xFFu;
-            uint32_t db = dst & 0xFFu;
-            uint32_t inv = 255u - sa;
-            uint32_t rr = (sr * sa + dr * inv) / 255u;
-            uint32_t rg = (sg * sa + dg * inv) / 255u;
-            uint32_t rb = (sb * sa + db * inv) / 255u;
-            dst_row[off_x + x] = (0xFFu << 24) | (rr << 16) | (rg << 8) | rb;
+            if (sa > 8u) {
+                dst_row[off_x + x] = (0xFFu << 24) | (sr << 16) | (sg << 8) | sb;
+            }
         }
     }
 
@@ -313,6 +323,9 @@ handle_resize_realloc(int32_t gfx_ep, int32_t reply_ep, int32_t *req, gfx_window
         puts("[test] gfx smoke resize paint failed");
         return -1;
     }
+    if (flush_shared_buffer_ptr(new_shmem_id, new_base, new_stride, new_h) != 0) {
+        return -1;
+    }
     if (send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_PRESENT_WINDOW,
                  win->window_id, new_buffer_id, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
         puts("[test] gfx smoke resize present failed");
@@ -419,6 +432,9 @@ main(int argc, char **argv)
         puts("[test] gfx smoke paint1 failed");
         return GFX_SMOKE_E_PAINT0;
     }
+    if (flush_shared_buffer_ptr(shmem_id, mapped_base, stride_bytes, GFX_H) != 0) {
+        return GFX_SMOKE_E_PAINT0;
+    }
 
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW,
                  window_id, buffer_id, 0, 0, &reply) != 0 ||
@@ -470,8 +486,11 @@ main(int argc, char **argv)
             puts("[test] gfx smoke paint-loop failed");
             return GFX_SMOKE_E_PAINT_LOOP;
         }
-        if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW,
-                     window_id, buffer_id, 1, damage_shmem_id, &reply) != 0 ||
+        if (flush_shared_buffer_ptr(shmem_id, mapped_base, stride_bytes, GFX_RESIZE_H) != 0) {
+            return GFX_SMOKE_E_PRESENT_LOOP;
+        }
+    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW,
+                 window_id, buffer_id, 1, damage_shmem_id, &reply) != 0 ||
             reply.status != GFX_STATUS_OK) {
             puts("[test] gfx smoke present-loop failed");
             return GFX_SMOKE_E_PRESENT_LOOP;
@@ -505,6 +524,9 @@ main(int argc, char **argv)
     if (fill_pattern(mapped_base2, GFX2_W, GFX2_H, stride_bytes2, 42u) != 0) {
         puts("[test] gfx smoke paint2 failed");
         return GFX_SMOKE_E_PAINT_LOOP;
+    }
+    if (flush_shared_buffer_ptr(shmem_id2, mapped_base2, stride_bytes2, GFX2_H) != 0) {
+        return GFX_SMOKE_E_PRESENT_LOOP;
     }
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW,
                  window_id2, buffer_id2, 0, 0, &reply) != 0 ||
@@ -544,6 +566,9 @@ main(int argc, char **argv)
     if (fill_wasmos_logo(mapped_base3, GFX3_W, GFX3_H, stride_bytes3) != 0) {
         puts("[test] gfx smoke paint3 failed");
         return GFX_SMOKE_E_PAINT_LOOP;
+    }
+    if (flush_shared_buffer_ptr(shmem_id3, mapped_base3, stride_bytes3, GFX3_H) != 0) {
+        return GFX_SMOKE_E_PRESENT_LOOP;
     }
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW,
                  window_id3, buffer_id3, 0, 0, &reply) != 0 ||

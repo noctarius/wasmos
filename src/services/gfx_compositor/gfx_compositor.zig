@@ -71,7 +71,7 @@ var g_fb_info: c.nd_framebuffer_info_t = .{
     .framebuffer_width = 0,
     .framebuffer_height = 0,
     .framebuffer_stride = 0,
-    .framebuffer_reserved = 0,
+    .framebuffer_gop_pixel_format = 0,
 };
 var g_fb_info_valid: bool = false;
 var g_fb_pixels: ?[*]volatile u32 = null;
@@ -99,7 +99,6 @@ const buffer_slot_t = struct {
     owner_endpoint: u32 = IPC_ENDPOINT_NONE,
     buffer_id: u32 = 0,
     shmem_id: u32 = 0,
-    mapped_ptr: ?[*]u32 = null,
     width: u32 = 0,
     height: u32 = 0,
     stride_bytes: u32 = 0,
@@ -145,6 +144,42 @@ fn ctxId() u32 {
 
 fn logMsg(msg: []const u8) void {
     _ = api().console_write.?(msg.ptr, @intCast(msg.len));
+}
+
+fn logHex32(prefix: []const u8, v: u32) void {
+    var buf: [64]u8 = undefined;
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < prefix.len and n < buf.len) : (i += 1) {
+        buf[n] = prefix[i];
+        n += 1;
+    }
+    if (n + 10 >= buf.len) return;
+    buf[n] = '0'; n += 1;
+    buf[n] = 'x'; n += 1;
+    const hex = "0123456789abcdef";
+    var shift: i32 = 28;
+    while (shift >= 0) : (shift -= 4) {
+        const d: u8 = @intCast((v >> @intCast(shift)) & 0xF);
+        buf[n] = hex[d];
+        n += 1;
+    }
+    buf[n] = '\n';
+    n += 1;
+    _ = api().console_write.?(buf[0..n].ptr, @intCast(n));
+}
+
+fn packFbPixel(r: u32, g: u32, b: u32) u32 {
+    const fmt = g_fb_info.framebuffer_gop_pixel_format & 0xF;
+    // GOP PixelFormat:
+    // 0 = PixelRedGreenBlueReserved8BitPerColor
+    // 1 = PixelBlueGreenRedReserved8BitPerColor
+    // Fallback: treat as BGR layout used by common OVMF/QEMU paths.
+    return switch (fmt) {
+        0 => (0xFF << 24) | (b << 16) | (g << 8) | r,
+        1 => (0xFF << 24) | (r << 16) | (g << 8) | b,
+        else => (0xFF << 24) | (r << 16) | (g << 8) | b,
+    };
 }
 
 fn rand_u32() u32 {
@@ -1071,7 +1106,6 @@ fn buffer_alloc(owner_endpoint: u32, width: u32, height: u32) ?usize {
     g_buffers[idx].owner_endpoint = owner_endpoint;
     g_buffers[idx].buffer_id = buffer_id;
     g_buffers[idx].shmem_id = shmem_id;
-    g_buffers[idx].mapped_ptr = @ptrCast(@alignCast(mapped_ptr.?));
     g_buffers[idx].width = width;
     g_buffers[idx].height = height;
     g_buffers[idx].stride_bytes = @intCast(stride_u64);
@@ -1425,14 +1459,13 @@ fn draw_window_title_text(win: window_slot_t, clip: c.gfx_rect_t) void {
 
 fn draw_window_buffer(win: window_slot_t, buf: buffer_slot_t, clip: c.gfx_rect_t) bool {
     if (g_fb_pixels == null) return false;
-    const src_pixels: [*]const u32 = if (buf.mapped_ptr) |p|
-        @ptrCast(p)
-    else blk: {
-        const src_ptr_raw = api().shmem_map.?(buf.shmem_id);
-        if (src_ptr_raw == null) return false;
-        defer _ = api().shmem_unmap.?(buf.shmem_id);
-        break :blk @ptrCast(@alignCast(src_ptr_raw.?));
-    };
+    const src_ptr_raw = api().shmem_map.?(buf.shmem_id);
+    if (src_ptr_raw == null) {
+        logMsg("[gfx] draw shmem_map failed\n");
+        return false;
+    }
+    defer _ = api().shmem_unmap.?(buf.shmem_id);
+    const src_pixels: [*]const u32 = @ptrCast(@alignCast(src_ptr_raw.?));
     const dst_pixels = g_fb_pixels.?;
     const dst_stride: usize = @intCast(g_fb_info.framebuffer_stride);
 
@@ -1451,7 +1484,13 @@ fn draw_window_buffer(win: window_slot_t, buf: buffer_slot_t, clip: c.gfx_rect_t
             const dx: usize = @intCast(clip.x + x);
             const dy: usize = @intCast(clip.y + y);
             const dst_idx: usize = dy * dst_stride + dx;
-            dst_pixels[dst_idx] = src_pixels[src_idx];
+            const px = src_pixels[src_idx];
+            // Client buffers are treated as opaque RGB surfaces for now.
+            // Decode bytes explicitly to avoid alpha-channel convention mismatch.
+            const b: u32 = px & 0xFF;
+            const g: u32 = (px >> 8) & 0xFF;
+            const r: u32 = (px >> 16) & 0xFF;
+            dst_pixels[dst_idx] = packFbPixel(r, g, b);
         }
     }
     return true;

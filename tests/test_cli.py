@@ -77,6 +77,15 @@ class CliIntegrationTests(unittest.TestCase):
         self._cmd_expect("ls", b"ata.wap")
         self._cmd_expect("cd /", b"/ wamos>")
 
+    def test_initfs_nested_relative_cd(self):
+        self._cmd_expect("cd /", b"/ wamos>")
+        self._cmd_expect("cd init", b"/init wamos>")
+        self._cmd_expect("cd devmgr", b"/init/devmgr wamos>")
+        self._cmd_expect("ls", b"rules/")
+        self._cmd_expect("cd rules", b"/init/devmgr/rules wamos>")
+        self._cmd_expect("ls", b"default.rules")
+        self._cmd_expect("cd /", b"/ wamos>")
+
     def test_cd_dot_and_dotdot(self):
         self._cmd_expect("cd /", b"/ wamos>")
         self._cmd_expect("cd boot", b"/boot wamos>")

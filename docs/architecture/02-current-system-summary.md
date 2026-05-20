@@ -23,9 +23,10 @@ The current tree already boots into a usable user-space stack:
 - `fs-fat` remains the active `fs` endpoint and provides FAT-backed
   open/read/seek/stat primitives for the shared
   libc layer and the language-native shims.
-- `fs-init` is now a separate initfs-listing backend (`fs.init`) so initfs
-  namespace handling no longer lives in `fs-fat`; `fs-manager` remains
-  scaffolded for follow-up mount-manager handover.
+- `fs-init` is now a separate initfs backend (`fs.init`) that serves initfs
+  entries as normal file content (`open/read/readdir`) so bootstrap policy
+  files under `/init` are file-backed instead of hardcoded in driver code;
+  `fs-manager` remains scaffolded for follow-up mount-manager handover.
 - QEMU runtime wiring now attaches repo-root `userfs/` as a second FAT drive.
   `fs-manager` reserves `/user` as the secondary FAT mount name when a second
   boot-kind backend is registered.

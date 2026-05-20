@@ -173,6 +173,66 @@ boot_module_name_at(uint32_t index, char *out, uint32_t out_len, uint32_t *out_n
     return 0;
 }
 
+static int
+initfs_header_get(const wasmos_initfs_header_t **out_hdr, const uint8_t **out_base)
+{
+    const wasmos_initfs_header_t *hdr = 0;
+    const uint8_t *base = 0;
+    uint64_t entries_bytes = 0;
+    uint64_t entries_end = 0;
+
+    if (!out_hdr || !out_base ||
+        !g_wasm_boot_info ||
+        !(g_wasm_boot_info->flags & BOOT_INFO_FLAG_INITFS_PRESENT) ||
+        !g_wasm_boot_info->initfs ||
+        g_wasm_boot_info->initfs_size < sizeof(wasmos_initfs_header_t)) {
+        return -1;
+    }
+
+    base = (const uint8_t *)g_wasm_boot_info->initfs;
+    hdr = (const wasmos_initfs_header_t *)base;
+    if (memcmp(hdr->magic, WASMOS_INITFS_MAGIC, sizeof(hdr->magic)) != 0 ||
+        hdr->version != WASMOS_INITFS_VERSION ||
+        hdr->header_size < sizeof(wasmos_initfs_header_t) ||
+        hdr->entry_size != sizeof(wasmos_initfs_entry_t)) {
+        return -1;
+    }
+    entries_bytes = (uint64_t)hdr->entry_count * (uint64_t)hdr->entry_size;
+    entries_end = (uint64_t)hdr->header_size + entries_bytes;
+    if (entries_end > (uint64_t)g_wasm_boot_info->initfs_size) {
+        return -1;
+    }
+    *out_hdr = hdr;
+    *out_base = base;
+    return 0;
+}
+
+static int
+initfs_entry_at(uint32_t index, wasmos_initfs_entry_t *out)
+{
+    const wasmos_initfs_header_t *hdr = 0;
+    const uint8_t *base = 0;
+    const uint8_t *entries_base = 0;
+    uint64_t payload_end = 0;
+    if (!out || initfs_header_get(&hdr, &base) != 0) {
+        return -1;
+    }
+    if (index >= hdr->entry_count) {
+        return -1;
+    }
+
+    entries_base = base + hdr->header_size;
+
+    const wasmos_initfs_entry_t *entry =
+        (const wasmos_initfs_entry_t *)(entries_base + ((uint64_t)index * hdr->entry_size));
+    payload_end = (uint64_t)entry->offset + (uint64_t)entry->size;
+    if (payload_end > (uint64_t)g_wasm_boot_info->initfs_size) {
+        return -1;
+    }
+    *out = *entry;
+    return 0;
+}
+
 static void
 wasm_ipc_slots_init(void)
 {
@@ -2159,6 +2219,211 @@ m3ApiRawFunction(wasmos_boot_module_name)
     m3ApiReturn((int32_t)name_len);
 }
 
+m3ApiRawFunction(wasmos_initfs_entry_count)
+{
+    m3ApiReturnType(int32_t)
+    const wasmos_initfs_header_t *hdr = 0;
+    const uint8_t *base = 0;
+    if (initfs_header_get(&hdr, &base) != 0) {
+        m3ApiReturn(-1);
+    }
+    if (hdr->entry_count > 0x7FFFFFFFu) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn((int32_t)hdr->entry_count);
+}
+
+m3ApiRawFunction(wasmos_initfs_entry_name)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, index)
+    m3ApiGetArgMem(char *, out_ptr)
+    m3ApiGetArg(int32_t, out_len)
+
+    if (index < 0 || out_len <= 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiCheckMem(out_ptr, (uint32_t)out_len);
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t out_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   out_ptr,
+                                   (uint32_t)out_len,
+                                   &out_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                out_user,
+                                (uint64_t)(uint32_t)out_len,
+                                MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
+
+    wasmos_initfs_entry_t entry;
+    if (initfs_entry_at((uint32_t)index, &entry) != 0) {
+        m3ApiReturn(-1);
+    }
+    uint32_t name_len = 0;
+    while (name_len < sizeof(entry.path) && entry.path[name_len] != '\0') {
+        name_len++;
+    }
+    uint32_t copy_len = name_len;
+    if (copy_len >= (uint32_t)out_len) {
+        copy_len = (uint32_t)out_len - 1U;
+    }
+    if (copy_len > 0 &&
+        wasm_copy_to_user_bytes(proc->context_id, out_user, entry.path, copy_len) != 0) {
+        m3ApiReturn(-1);
+    }
+    {
+        char nul = '\0';
+        if (wasm_copy_to_user_bytes(proc->context_id, out_user + (uint64_t)copy_len, &nul, 1) != 0) {
+            m3ApiReturn(-1);
+        }
+    }
+    m3ApiReturn((int32_t)name_len);
+}
+
+m3ApiRawFunction(wasmos_initfs_entry_size)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, index)
+    wasmos_initfs_entry_t entry;
+    if (index < 0 || initfs_entry_at((uint32_t)index, &entry) != 0) {
+        m3ApiReturn(-1);
+    }
+    if (entry.size > 0x7FFFFFFFu) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn((int32_t)entry.size);
+}
+
+m3ApiRawFunction(wasmos_initfs_entry_copy)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, index)
+    m3ApiGetArgMem(uint8_t *, out_ptr)
+    m3ApiGetArg(int32_t, len)
+    m3ApiGetArg(int32_t, offset)
+
+    if (index < 0 || len <= 0 || offset < 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiCheckMem(out_ptr, (uint32_t)len);
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t out_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   out_ptr,
+                                   (uint32_t)len,
+                                   &out_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                out_user,
+                                (uint64_t)(uint32_t)len,
+                                MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
+
+    wasmos_initfs_entry_t entry;
+    if (initfs_entry_at((uint32_t)index, &entry) != 0) {
+        m3ApiReturn(-1);
+    }
+    if ((uint32_t)offset >= entry.size) {
+        m3ApiReturn(0);
+    }
+    uint32_t copy_len = (uint32_t)len;
+    uint32_t available = entry.size - (uint32_t)offset;
+    if (copy_len > available) {
+        copy_len = available;
+    }
+    const uint8_t *src = (const uint8_t *)g_wasm_boot_info->initfs + entry.offset + (uint32_t)offset;
+    if (wasm_copy_to_user_sync_views(proc->context_id, out_user, out_ptr, src, copy_len) != 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn((int32_t)copy_len);
+}
+
+m3ApiRawFunction(wasmos_initfs_find_path)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArgMem(const char *, path_ptr)
+    m3ApiGetArg(int32_t, path_len)
+
+    if (path_len <= 0 || path_len >= 112) {
+        m3ApiReturn(-1);
+    }
+    m3ApiCheckMem(path_ptr, (uint32_t)path_len);
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t path_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   path_ptr,
+                                   (uint32_t)path_len,
+                                   &path_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                path_user,
+                                (uint64_t)(uint32_t)path_len,
+                                MEM_REGION_FLAG_READ) != 0) {
+        m3ApiReturn(-1);
+    }
+
+    char local_path[112];
+    if (mm_copy_from_user(proc->context_id, local_path, path_user, (uint64_t)(uint32_t)path_len) != 0) {
+        m3ApiReturn(-1);
+    }
+    local_path[path_len] = '\0';
+
+    uint32_t ri = 0;
+    while (local_path[ri] == '/') {
+        ri++;
+    }
+    if ((local_path[ri] == 'i' || local_path[ri] == 'I') &&
+        (local_path[ri + 1] == 'n' || local_path[ri + 1] == 'N') &&
+        (local_path[ri + 2] == 'i' || local_path[ri + 2] == 'I') &&
+        (local_path[ri + 3] == 't' || local_path[ri + 3] == 'T') &&
+        local_path[ri + 4] == '/') {
+        ri += 5;
+    }
+    if (local_path[ri] == '\0') {
+        m3ApiReturn(-1);
+    }
+    const wasmos_initfs_header_t *hdr = 0;
+    const uint8_t *base = 0;
+    if (initfs_header_get(&hdr, &base) != 0) {
+        m3ApiReturn(-1);
+    }
+    for (uint32_t i = 0; i < hdr->entry_count; ++i) {
+        wasmos_initfs_entry_t entry;
+        if (initfs_entry_at(i, &entry) != 0) {
+            continue;
+        }
+        if (strcasecmp(entry.path, &local_path[ri]) == 0) {
+            m3ApiReturn((int32_t)i);
+        }
+        const char *base_name = entry.path;
+        for (uint32_t j = 0; entry.path[j] != '\0'; ++j) {
+            if (entry.path[j] == '/') {
+                base_name = &entry.path[j + 1];
+            }
+        }
+        if (strcasecmp(base_name, &local_path[ri]) == 0) {
+            m3ApiReturn((int32_t)i);
+        }
+    }
+    m3ApiReturn(-1);
+}
+
 m3ApiRawFunction(wasmos_console_write)
 {
     m3ApiReturnType(int32_t)
@@ -3018,6 +3283,11 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "system_reboot", "i()", wasmos_system_reboot);
     rc |= wasm3_link_raw(module, "wasmos", "acpi_rsdp_info", "i(**i)", wasmos_acpi_rsdp_info);
     rc |= wasm3_link_raw(module, "wasmos", "boot_module_name", "i(i*i)", wasmos_boot_module_name);
+    rc |= wasm3_link_raw(module, "wasmos", "initfs_entry_count", "i()", wasmos_initfs_entry_count);
+    rc |= wasm3_link_raw(module, "wasmos", "initfs_entry_name", "i(i*i)", wasmos_initfs_entry_name);
+    rc |= wasm3_link_raw(module, "wasmos", "initfs_entry_size", "i(i)", wasmos_initfs_entry_size);
+    rc |= wasm3_link_raw(module, "wasmos", "initfs_entry_copy", "i(i*ii)", wasmos_initfs_entry_copy);
+    rc |= wasm3_link_raw(module, "wasmos", "initfs_find_path", "i(*i)", wasmos_initfs_find_path);
     rc |= wasm3_link_raw(module, "wasmos", "io_in8", "i(i)", wasmos_io_in8);
     rc |= wasm3_link_raw(module, "wasmos", "io_in16", "i(i)", wasmos_io_in16);
     rc |= wasm3_link_raw(module, "wasmos", "io_in32", "i(i)", wasmos_io_in32);

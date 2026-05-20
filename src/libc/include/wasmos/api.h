@@ -123,6 +123,16 @@ extern int32_t wasmos_acpi_rsdp_info(int32_t out_ptr, int32_t out_len_ptr, int32
     WASMOS_WASM_IMPORT("wasmos", "acpi_rsdp_info");
 extern int32_t wasmos_boot_module_name(int32_t index, int32_t buf, int32_t buf_len)
     WASMOS_WASM_IMPORT("wasmos", "boot_module_name");
+extern int32_t wasmos_initfs_entry_count(void)
+    WASMOS_WASM_IMPORT("wasmos", "initfs_entry_count");
+extern int32_t wasmos_initfs_entry_name(int32_t index, int32_t buf, int32_t buf_len)
+    WASMOS_WASM_IMPORT("wasmos", "initfs_entry_name");
+extern int32_t wasmos_initfs_entry_size(int32_t index)
+    WASMOS_WASM_IMPORT("wasmos", "initfs_entry_size");
+extern int32_t wasmos_initfs_entry_copy(int32_t index, int32_t buf, int32_t len, int32_t offset)
+    WASMOS_WASM_IMPORT("wasmos", "initfs_entry_copy");
+extern int32_t wasmos_initfs_find_path(int32_t path_ptr, int32_t path_len)
+    WASMOS_WASM_IMPORT("wasmos", "initfs_find_path");
 extern int32_t wasmos_block_buffer_phys(void)
     WASMOS_WASM_IMPORT("wasmos", "block_buffer_phys");
 extern int32_t wasmos_block_buffer_copy(int32_t phys, int32_t ptr, int32_t len, int32_t offset)

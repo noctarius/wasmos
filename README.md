@@ -160,6 +160,7 @@ Current driver match/capability policy source:
 - all in-tree apps, drivers, and services now provide `linker.metadata` metadata consumed by `make_wasmos_app`
 Current FS namespace model:
 - `fs-manager` is the canonical `fs` endpoint for PM/runtime file I/O and CLI mount namespace routing (registered as `fs.vfs`)
+- `mount` reporting is now served directly by `fs-manager` (`FSMGR_IPC_QUERY_MOUNTS_REQ`) so filesystem mount ownership/query no longer depends on device-manager mount indices
 - `fs-fat` and `fs-init` are backend filesystem drivers registered into `fs-manager`
 - bootstrapping now brings up `fs-manager` + `fs-init` before `device-manager`, so later startup lookups can resolve via the VFS namespace rather than only early boot-module ordering
 - kernel now exposes generic cross-context buffer borrows (`buffer_borrow`/`buffer_release`) with typed buffer classes and read/write grants; `fs-manager` uses the FS class for zero-copy backend proxying

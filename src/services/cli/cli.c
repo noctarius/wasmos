@@ -1216,95 +1216,40 @@ cli_send_proc(int32_t type, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_
     return 0;
 }
 
-static int
-cli_send_devmgr(uint32_t index)
-{
-    if (g_devmgr_endpoint < 0 || g_reply_endpoint < 0) {
-        return -1;
-    }
-    int32_t req_id = g_request_id++;
-    if (wasmos_ipc_send(g_devmgr_endpoint, g_reply_endpoint, DEVMGR_QUERY_MOUNT_REQ, req_id, (int32_t)index, 0, 0, 0) != 0) {
-        return -1;
-    }
-    if (wasmos_ipc_recv(g_reply_endpoint) < 0) {
-        return -1;
-    }
-    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req_id) {
-        return -1;
-    }
-    return 0;
-}
-
 static void
 cli_show_mounts(void)
 {
-    console_write("mounts:\n");
-    for (uint32_t i = 0; i < 8; ++i) {
-        if (cli_send_devmgr(i) != 0) {
-            break;
-        }
-        int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
-        if (resp_type == DEVMGR_QUERY_DONE) {
-            break;
-        }
-        if (resp_type != DEVMGR_MOUNT_INFO) {
-            break;
-        }
-        uint32_t mount_id = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-        uint32_t a1 = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
-        uint32_t a2 = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
-        uint32_t a3 = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
-        char line[192];
-        const char *mount_desc = "/unknown";
-        if (mount_id == 0) {
-            mount_desc = "/boot -> fs-fat";
-        } else if (mount_id == 1) {
-            mount_desc = "/init -> fs-init";
-        } else if (mount_id == 2) {
-            mount_desc = "/user -> fs-fat";
-        }
-        int line_len = snprintf(line, sizeof(line), "%s", mount_desc);
-        if (line_len < 0) {
-            line_len = 0;
-        }
-        if (line_len >= (int)sizeof(line)) {
-            line_len = (int)sizeof(line) - 1;
-        }
-        if ((mount_id == 0 || mount_id == 2) && (a3 & (1u << 31)) != 0) {
-            uint8_t bus = (uint8_t)((a1 >> 24) & 0xFFu);
-            uint8_t dev = (uint8_t)((a1 >> 16) & 0xFFu);
-            uint8_t fun = (uint8_t)((a1 >> 8) & 0xFFu);
-            uint8_t class_code = (uint8_t)(a1 & 0xFFu);
-            uint8_t subclass = (uint8_t)((a2 >> 24) & 0xFFu);
-            uint8_t prog_if = (uint8_t)((a2 >> 16) & 0xFFu);
-            uint16_t vendor = (uint16_t)(a2 & 0xFFFFu);
-            uint16_t device = (uint16_t)(a3 & 0xFFFFu);
-            int extra_len = snprintf(line + line_len, sizeof(line) - (size_t)line_len,
-                                     " pci %02X:%02X.%02X class %02X:%02X:%02X vid:did %04X:%04X",
-                                     (unsigned int)bus,
-                                     (unsigned int)dev,
-                                     (unsigned int)fun,
-                                     (unsigned int)class_code,
-                                     (unsigned int)subclass,
-                                     (unsigned int)prog_if,
-                                     (unsigned int)vendor,
-                                     (unsigned int)device);
-            if (extra_len > 0) {
-                line_len += extra_len;
-                if (line_len >= (int)sizeof(line)) {
-                    line_len = (int)sizeof(line) - 1;
-                }
-            }
-        }
-        if (line_len + 1 < (int)sizeof(line)) {
-            line[line_len++] = '\n';
-            line[line_len] = '\0';
-        } else {
-            line[sizeof(line) - 2] = '\n';
-            line[sizeof(line) - 1] = '\0';
-        }
-        console_write(line);
+    char buf[384];
+    int32_t req_id = 0;
+    int32_t resp_type = 0;
+    int32_t n = 0;
+    if (g_fs_endpoint < 0 || g_reply_endpoint < 0) {
+        console_write("mount failed\n");
+        return;
     }
+    req_id = g_request_id++;
+    if (wasmos_ipc_send(g_fs_endpoint, g_reply_endpoint, FSMGR_IPC_QUERY_MOUNTS_REQ, req_id, 0, 0, 0, 0) != 0 ||
+        wasmos_ipc_recv(g_reply_endpoint) < 0 ||
+        wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req_id) {
+        console_write("mount failed\n");
+        return;
+    }
+    resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+    if (resp_type != FSMGR_IPC_QUERY_MOUNTS_RESP) {
+        console_write("mount failed\n");
+        return;
+    }
+    n = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+    if (n <= 0 || n >= (int32_t)sizeof(buf)) {
+        console_write("mount failed\n");
+        return;
+    }
+    if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)buf, n, 0) != 0) {
+        console_write("mount failed\n");
+        return;
+    }
+    buf[n] = '\0';
+    console_write(buf);
 }
 
 static void

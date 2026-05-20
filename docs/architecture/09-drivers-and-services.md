@@ -311,6 +311,9 @@ startup_policy = "critical"
   - assign mount priority/fallback behavior when multiple candidates exist
 - `fs-manager` remains the namespace router, while `device-manager` owns mount
   intent and updates.
+- Mount table query/reporting is an `fs-manager` responsibility; CLI/tooling
+  should query `fs.vfs` for mount state instead of relying on fixed
+  device-manager mount indices.
 
 #### Capability and Security Model
 - Driver launch requires a capability manifest attached to spawn request:

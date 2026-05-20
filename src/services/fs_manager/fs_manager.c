@@ -277,6 +277,48 @@ send_virtual_root_listing(int32_t source, int32_t req_id)
     return wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_RESP, req_id, 0, 0, 0, 0);
 }
 
+static int
+fsmgr_emit_mounts(int32_t source, int32_t req_id)
+{
+    char mounts[384];
+    uint32_t pos = 0;
+    str_copy(mounts, sizeof(mounts), "mounts:\n");
+    pos = (uint32_t)strlen(mounts);
+    for (uint32_t i = 0; i < FS_BACKEND_CAP; ++i) {
+        const char *kind = "fs";
+        int n = 0;
+        if (!g_backends[i].in_use) {
+            continue;
+        }
+        if (g_backends[i].kind == FSMGR_BACKEND_BOOT) {
+            kind = "fs-fat";
+        } else if (g_backends[i].kind == FSMGR_BACKEND_INIT) {
+            kind = "fs-init";
+        }
+        n = snprintf(mounts + pos,
+                     sizeof(mounts) - pos,
+                     "/%s -> %s\n",
+                     g_backends[i].mount_name,
+                     kind);
+        if (n <= 0) {
+            continue;
+        }
+        pos += (uint32_t)n;
+        if (pos + 1u >= sizeof(mounts)) {
+            break;
+        }
+    }
+    if (wasmos_buffer_borrow(WASMOS_BUFFER_KIND_FS, source, WASMOS_BUFFER_GRANT_WRITE) != 0) {
+        return -1;
+    }
+    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)mounts, (int32_t)pos, 0) != 0) {
+        (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_FS);
+        return -1;
+    }
+    (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_FS);
+    return wasmos_ipc_send(source, g_fs_endpoint, FSMGR_IPC_QUERY_MOUNTS_RESP, req_id, (int32_t)pos, 0, 0, 0);
+}
+
 static int forward_request(int32_t backend_endpoint,
                            int32_t type,
                            int32_t req_id,
@@ -410,6 +452,12 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             dst_state->backend_endpoint = src_state->backend_endpoint;
             dst_state->mount_depth = src_state->mount_depth;
             (void)wasmos_ipc_send(source, g_fs_endpoint, FSMGR_IPC_CLONE_CWD_RESP, request_id, 0, 0, 0, 0);
+            continue;
+        }
+        if (type == FSMGR_IPC_QUERY_MOUNTS_REQ) {
+            if (fsmgr_emit_mounts(source, request_id) != 0) {
+                (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
+            }
             continue;
         }
 

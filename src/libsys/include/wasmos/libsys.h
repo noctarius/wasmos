@@ -80,6 +80,29 @@ wasmos_sys_ipc_recv_loop(void)
 }
 
 static inline int32_t
+wasmos_sys_svc_lookup_retry(int32_t proc_endpoint,
+                            int32_t reply_endpoint,
+                            const char *service_name,
+                            int32_t request_id_base,
+                            int32_t attempts)
+{
+    if (attempts <= 0) {
+        attempts = 1;
+    }
+    for (int32_t i = 0; i < attempts; ++i) {
+        int32_t endpoint = wasmos_svc_lookup(proc_endpoint,
+                                             reply_endpoint,
+                                             service_name,
+                                             request_id_base + i);
+        if (endpoint >= 0) {
+            return endpoint;
+        }
+        (void)wasmos_sched_yield();
+    }
+    return -1;
+}
+
+static inline int32_t
 wasmos_sys_buffer_copy_from(int32_t kind,
                             int32_t source_endpoint,
                             int32_t borrow_flags,

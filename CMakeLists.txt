@@ -298,6 +298,7 @@ set(WASMOS_LIBC_INCLUDE_DEPS
   ${LIBSYS_DIR}/include/wasmos/sha256.h
   ${SERVICES_DIR}/fs_manager/fs_manager_types.h
   ${SERVICES_DIR}/device_manager/device_manager_types.h
+  ${SERVICES_DIR}/pci_bus/pci_bus_types.h
   ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
 )
 

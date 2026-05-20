@@ -1438,7 +1438,7 @@ cli_resolve_exec_path(const char *input, char *resolved, uint32_t resolved_len)
     }
     {
         uint32_t path_len = (uint32_t)str_len(resolved);
-        if (path_len == 0u || path_len > 95u) {
+        if (path_len == 0u || path_len >= resolved_len) {
             return -1;
         }
     }

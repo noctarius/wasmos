@@ -247,16 +247,6 @@ static int serial_remote_send_message(uint32_t type,
     return rc;
 }
 
-static int __attribute__((unused)) serial_remote_transmit(uint8_t value) {
-    if (serial_remote_send_message(SERIAL_DRIVER_WRITE_REQ,
-                                   serial_remote_next_request_id(),
-                                   (uint32_t)value,
-                                   0) != IPC_OK) {
-        return 0;
-    }
-    return 1;
-}
-
 static int serial_remote_read_char(uint8_t *out_char) {
     if (!out_char || g_serial_remote_endpoint == IPC_ENDPOINT_NONE ||
         g_serial_remote_reply_endpoint == IPC_ENDPOINT_NONE) {

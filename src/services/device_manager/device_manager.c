@@ -1102,14 +1102,8 @@ next_spawn_target(void)
 }
 
 static void
-handle_query_endpoint(void)
+handle_query_message_fields(void)
 {
-    if (g_dm.query_endpoint < 0) {
-        return;
-    }
-    if (wasmos_ipc_try_recv(g_dm.query_endpoint) <= 0) {
-        return;
-    }
     int32_t type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
     int32_t req_id = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
     int32_t source = wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE);
@@ -1144,6 +1138,18 @@ handle_query_endpoint(void)
         return;
     }
     (void)wasmos_ipc_send(source, g_dm.query_endpoint, DEVMGR_QUERY_DONE, req_id, 0, 0, 0, 0);
+}
+
+static void
+handle_query_endpoint(void)
+{
+    if (g_dm.query_endpoint < 0) {
+        return;
+    }
+    if (wasmos_ipc_try_recv(g_dm.query_endpoint) <= 0) {
+        return;
+    }
+    handle_query_message_fields();
 }
 
 WASMOS_WASM_EXPORT int32_t
@@ -1407,8 +1413,15 @@ initialize(int32_t proc_endpoint,
                 g_dm.phase = HW_PHASE_SPAWN;
                 continue;
             }
-            handle_query_endpoint();
-            /* Idle poll loop: yield to avoid starving other services. */
+            if (g_dm.rules_boot_request_pending) {
+                handle_query_endpoint();
+                wasmos_sched_yield();
+                continue;
+            }
+            if (wasmos_ipc_recv(g_dm.query_endpoint) >= 0) {
+                handle_query_message_fields();
+                continue;
+            }
             wasmos_sched_yield();
             continue;
         }

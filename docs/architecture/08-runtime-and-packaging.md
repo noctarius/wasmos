@@ -73,6 +73,8 @@ Current filesystem namespace baseline:
 - `fs-manager` is scaffolded for follow-up full mount-manager handover
 - device-manager rule roots are expected at `/init/devmgr/rules` (bootstrap)
   and `/boot/system/devmgr/rules` (runtime override)
+- rule syntax and evaluation semantics are specified in
+  `docs/architecture/09-drivers-and-services.md` (`devmgr_rule` v0-draft)
 
 ### Language ABI Strategy
 Applications no longer need to implement the raw startup ABI directly:

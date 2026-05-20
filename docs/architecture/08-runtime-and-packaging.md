@@ -68,8 +68,11 @@ Current packaging input:
 Current filesystem namespace baseline:
 - `/` is a virtual root mountpoint
 - `/boot` routes to `fs-fat` backend operations (active `fs` endpoint)
+- `/user` is reserved for the secondary FAT backend source
 - initfs listing responsibilities are split into `fs-init` (`fs.init`)
 - `fs-manager` is scaffolded for follow-up full mount-manager handover
+- device-manager rule roots are expected at `/init/devmgr/rules` (bootstrap)
+  and `/boot/system/devmgr/rules` (runtime override)
 
 ### Language ABI Strategy
 Applications no longer need to implement the raw startup ABI directly:

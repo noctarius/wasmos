@@ -96,3 +96,8 @@ source = "device_manager.wap"
 kind = "config"
 path = "config/bootcfg.bin"
 generated = "boot_config"
+
+[[entries]]
+kind = "data"
+path = "devmgr/rules/default.rules"
+source = "devmgr_rules_init_default.rules"

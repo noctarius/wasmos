@@ -48,6 +48,8 @@ typedef enum {
 #define DEVICE_REGISTRY_CAP 64
 #define MATCH_ANY_U8 0xFFu
 #define MATCH_ANY_U16 0xFFFFu
+#define DEVMGR_RULES_INIT_ROOT "/init/devmgr/rules"
+#define DEVMGR_RULES_BOOT_ROOT "/boot/system/devmgr/rules"
 
 typedef struct {
     uint32_t cap_flags;
@@ -106,6 +108,7 @@ typedef struct {
     spawn_caps_t selected_serial_caps;
     uint8_t selected_storage_has_record;
     pci_device_record_t selected_storage_record;
+    uint8_t rules_roots_logged;
 } device_manager_state_t;
 
 static device_manager_state_t g_dm = {
@@ -125,6 +128,7 @@ static device_manager_state_t g_dm = {
     .fs_manager_index = -1,
     .keyboard_index = -1,
     .framebuffer_index = -1,
+    .rules_roots_logged = 0,
 };
 
 static void
@@ -148,6 +152,20 @@ console_write(const char *s)
         return;
     }
     (void)printf("%s", s);
+}
+
+static void
+log_rule_roots_once(void)
+{
+    if (g_dm.rules_roots_logged) {
+        return;
+    }
+    g_dm.rules_roots_logged = 1;
+    console_write("[device-manager] rule roots: " DEVMGR_RULES_INIT_ROOT " (bootstrap), "
+                  DEVMGR_RULES_BOOT_ROOT " (override)\n");
+    /* TODO: load + parse rules from init root first and then overlay boot root
+     * after fs-fat is ready; this requires a dedicated fs.vfs rules reader and
+     * dynamic bind/unbind policy path. */
 }
 
 static int
@@ -717,6 +735,7 @@ initialize(int32_t proc_endpoint,
         console_write("[device-manager] query register failed\n");
         stall_forever();
     }
+    log_rule_roots_once();
     hw_scan_acpi();
     (void)query_module_meta_by_path("system/services/pci_bus.wap", PROC_MODULE_SOURCE_INITFS, &g_dm.pci_bus_index);
     if (g_dm.pci_bus_index < 0) {

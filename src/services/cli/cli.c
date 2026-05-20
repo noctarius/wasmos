@@ -158,6 +158,22 @@ str_ends_with(const char *s, const char *suffix)
     return strcmp(s + (slen - xlen), suffix) == 0;
 }
 
+static int
+str_starts_with_ci(const char *s, const char *prefix)
+{
+    int32_t i = 0;
+    if (!s || !prefix) {
+        return 0;
+    }
+    while (prefix[i]) {
+        if (!s[i] || to_lower(s[i]) != to_lower(prefix[i])) {
+            return 0;
+        }
+        i++;
+    }
+    return 1;
+}
+
 static void
 console_write(const char *s)
 {
@@ -1182,6 +1198,183 @@ cli_extract_exec_path(const char *input, char *out, uint32_t out_len)
 }
 
 static int
+cli_resolve_exec_path(const char *input, char *resolved, uint32_t resolved_len)
+{
+    char path[96];
+    path[0] = '\0';
+    if (!input || !resolved || resolved_len == 0) {
+        return -1;
+    }
+    resolved[0] = '\0';
+    cli_extract_exec_path(input, path, sizeof(path));
+    if (path[0] == '\0') {
+        return -1;
+    }
+    if (path[0] == '/') {
+        if (snprintf(resolved, resolved_len, "%s", path) <= 0) {
+            return -1;
+        }
+    } else if (g_cwd[0] == '/' && g_cwd[1] == '\0') {
+        if (snprintf(resolved, resolved_len, "/%s", path) <= 0) {
+            return -1;
+        }
+    } else {
+        if (snprintf(resolved, resolved_len, "%s/%s", g_cwd, path) <= 0) {
+            return -1;
+        }
+    }
+    {
+        uint32_t path_len = (uint32_t)str_len(resolved);
+        if (path_len == 0u || path_len > 95u) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static int
+cli_spawn_exec_path(const char *input, int32_t *out_pid)
+{
+    char resolved[96];
+    uint32_t path_len = 0;
+    if (!input || !out_pid) {
+        return -1;
+    }
+    *out_pid = -1;
+    if (cli_resolve_exec_path(input, resolved, sizeof(resolved)) != 0) {
+        return -1;
+    }
+    path_len = (uint32_t)str_len(resolved);
+    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
+        return -1;
+    }
+    if (cli_send_proc(PROC_IPC_SPAWN_PATH, 0, path_len, 0, 0) != 0) {
+        return -1;
+    }
+    if (wasmos_ipc_recv(g_reply_endpoint) < 0) {
+        return -1;
+    }
+    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != g_pending_req) {
+        return -1;
+    }
+    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != PROC_IPC_RESP) {
+        return -1;
+    }
+    *out_pid = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+    return (*out_pid > 0) ? 0 : -1;
+}
+
+static int
+cli_wait_for_pid_exit(int32_t pid, int32_t *out_exit_status)
+{
+    if (pid <= 0 || !out_exit_status) {
+        return -1;
+    }
+    *out_exit_status = -1;
+    if (cli_send_proc(PROC_IPC_WAIT, (uint32_t)pid, 0, 0, 0) != 0) {
+        return -1;
+    }
+    if (wasmos_ipc_recv(g_reply_endpoint) < 0) {
+        return -1;
+    }
+    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != g_pending_req) {
+        return -1;
+    }
+    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != PROC_IPC_RESP) {
+        return -1;
+    }
+    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0) != pid) {
+        return -1;
+    }
+    *out_exit_status = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+    return 0;
+}
+
+static int
+cli_run_script(const char *script_path)
+{
+    FILE *f = 0;
+    char line[128];
+    int32_t line_no = 0;
+    if (!script_path || script_path[0] == '\0') {
+        return -1;
+    }
+    f = fopen(script_path, "r");
+    if (!f) {
+        return -1;
+    }
+    for (;;) {
+        if (!fgets(line, (int)sizeof(line), f)) {
+            break;
+        }
+        line_no++;
+        int32_t start = 0;
+        int32_t end = 0;
+        while (line[start] == ' ' || line[start] == '\t') {
+            start++;
+        }
+        end = start;
+        while (line[end] && line[end] != '\n' && line[end] != '\r') {
+            end++;
+        }
+        while (end > start && (line[end - 1] == ' ' || line[end - 1] == '\t')) {
+            end--;
+        }
+        line[end] = '\0';
+        if (line[start] == '\0' || line[start] == '#') {
+            continue;
+        }
+        /* TODO: keep script v1 intentionally minimal (single command token,
+         * optional "exec " prefix, no quoting/arguments/control flow). */
+        const char *exec_input = &line[start];
+        if (str_starts_with_ci(exec_input, "exec ") || str_starts_with_ci(exec_input, "exec\t")) {
+            exec_input = &line[start + 5];
+        }
+        int32_t pid = -1;
+        int32_t exit_status = 0;
+        if (cli_spawn_exec_path(exec_input, &pid) != 0) {
+            char buf[96];
+            int n = snprintf(buf, sizeof(buf), "script failed at line %d: spawn failed\n", (int)line_no);
+            if (n > 0) {
+                console_write(buf);
+            } else {
+                console_write("script failed: spawn failed\n");
+            }
+            (void)fclose(f);
+            return -1;
+        }
+        if (cli_wait_for_pid_exit(pid, &exit_status) != 0) {
+            char buf[96];
+            int n = snprintf(buf, sizeof(buf), "script failed at line %d: wait failed\n", (int)line_no);
+            if (n > 0) {
+                console_write(buf);
+            } else {
+                console_write("script failed: wait failed\n");
+            }
+            (void)fclose(f);
+            return -1;
+        }
+        if (exit_status != 0) {
+            char buf[128];
+            int n = snprintf(buf,
+                             sizeof(buf),
+                             "script failed at line %d: exit %d\n",
+                             (int)line_no,
+                             (int)exit_status);
+            if (n > 0) {
+                console_write(buf);
+            } else {
+                console_write("script failed: non-zero exit\n");
+            }
+            (void)fclose(f);
+            return -1;
+        }
+    }
+    (void)fclose(f);
+    return 0;
+}
+
+static int
 cli_handle_line(void)
 {
     g_line[g_line_len] = '\0';
@@ -1189,7 +1382,7 @@ cli_handle_line(void)
         return 0;
     }
     if (line_eq_ci("help")) {
-        console_write("commands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, exec <app>, tty <0-3>, halt, reboot\n");
+        console_write("commands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, exec <app>, script <file>, tty <0-3>, halt, reboot\n");
         return 0;
     }
     if (line_eq_ci("mount")) {
@@ -1277,36 +1470,13 @@ cli_handle_line(void)
         return 1;
     }
     if (g_line_len > 5 && line_starts_with_ci("exec ")) {
-        char path[96];
         char resolved[96];
-        path[0] = '\0';
-        resolved[0] = '\0';
-        cli_extract_exec_path(&g_line[5], path, sizeof(path));
-        if (path[0] == '\0') {
+        uint32_t path_len = 0;
+        if (cli_resolve_exec_path(&g_line[5], resolved, sizeof(resolved)) != 0) {
             console_write("exec failed\n");
             return 0;
         }
-        if (path[0] == '/') {
-            if (snprintf(resolved, sizeof(resolved), "%s", path) <= 0) {
-                console_write("exec failed\n");
-                return 0;
-            }
-        } else if (g_cwd[0] == '/' && g_cwd[1] == '\0') {
-            if (snprintf(resolved, sizeof(resolved), "/%s", path) <= 0) {
-                console_write("exec failed\n");
-                return 0;
-            }
-        } else {
-            if (snprintf(resolved, sizeof(resolved), "%s/%s", g_cwd, path) <= 0) {
-                console_write("exec failed\n");
-                return 0;
-            }
-        }
-        uint32_t path_len = (uint32_t)str_len(resolved);
-        if (path_len == 0u || path_len > 95u) {
-            console_write("exec path too long\n");
-            return 0;
-        }
+        path_len = (uint32_t)str_len(resolved);
         if (wasmos_fs_buffer_write((int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
             console_write("exec failed\n");
             return 0;
@@ -1321,6 +1491,21 @@ cli_handle_line(void)
         }
         g_pending_kind = PENDING_EXEC;
         return 1;
+    }
+    if (g_line_len > 7 && line_starts_with_ci("script ")) {
+        const char *path = &g_line[7];
+        while (*path == ' ' || *path == '\t') {
+            path++;
+        }
+        if (*path == '\0') {
+            console_write("script failed\n");
+            return 0;
+        }
+        if (cli_run_script(path) != 0) {
+            return 0;
+        }
+        console_write("script ok\n");
+        return 0;
     }
     if (line_eq_ci("halt")) {
         wasmos_system_halt();
@@ -1506,7 +1691,7 @@ initialize(int32_t proc_endpoint,
                 }
             }
             if (g_home_tty == 1) {
-                console_write("WAMOS CLI\ncommands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, exec <app>, tty <0-3>, halt, reboot\n");
+                console_write("WAMOS CLI\ncommands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, exec <app>, script <file>, tty <0-3>, halt, reboot\n");
             }
             g_phase = CLI_PHASE_PROMPT;
             continue;

@@ -28,7 +28,7 @@ It defines repository workflow and documentation/update conventions.
 - Deterministic UEFI boot handoff (`BOOTX64.EFI` -> `kernel.elf` + `initfs.img`) with a small x86_64 microkernel baseline (paging, scheduler, IPC, process lifecycle, exceptions).
 - WASM-first userspace runtime (wasm3) with optional native drivers/services where hardware paths benefit from native execution.
 - Service-driven startup chain with endpoint registry and discovery (`register`/`lookup`) plus PCI-inventory-driven driver bring-up.
-- Practical VT/CLI environment with multi-TTY switching and core inspection commands (`ps`, `kmaps`, `mount`, `exec`, etc.).
+- Practical VT/CLI environment with multi-TTY switching, fail-fast script execution (`script <file>`), and core inspection commands (`ps`, `kmaps`, `mount`, `exec`, etc.).
 - Ring-3 isolation/hardening enabled by default, with stress/fault/self-test coverage across IPC, faults, threading, and shared memory.
 - Thread lifecycle support is available end-to-end (`thread_create`, `thread_join`, `thread_detach`, `thread_yield`, `thread_exit`) for ring3.
 - Shared-memory and capability plumbing supports owner/grant/revoke flows, including compositor/client buffer sharing and auto-mapping helpers.

@@ -6,26 +6,13 @@
 #include "wasmos/ipc.h"
 #include "wasmos/libsys.h"
 #include "wasmos_driver_abi.h"
+#include "cli_types.h"
 
 /*
  * The CLI is a small user-space shell used both for manual interaction and as a
  * regression target. It is intentionally synchronous from the user's point of
  * view but yields while idle so background processes continue to run.
  */
-
-typedef enum {
-    CLI_PHASE_INIT = 0,
-    CLI_PHASE_PROMPT,
-    CLI_PHASE_READ,
-    CLI_PHASE_WAIT_IPC,
-    CLI_PHASE_FAILED
-} cli_phase_t;
-
-#define CLI_MAX_PROCS 48
-#define CLI_HISTORY_MAX 8
-#define CLI_ENV_MAX 16
-#define CLI_ENV_NAME_MAX 24
-#define CLI_ENV_VALUE_MAX 96
 
 static cli_phase_t g_phase = CLI_PHASE_INIT;
 static char g_line[128];
@@ -61,38 +48,7 @@ static uint32_t g_ps_parents[CLI_MAX_PROCS];
 static char g_ps_names[CLI_MAX_PROCS][32];
 static wasmos_proc_stats_t g_ps_stats[CLI_MAX_PROCS];
 static uint8_t g_ps_visited[CLI_MAX_PROCS];
-typedef struct {
-    uint8_t in_use;
-    char name[CLI_ENV_NAME_MAX];
-    char value[CLI_ENV_VALUE_MAX];
-} cli_env_var_t;
 static cli_env_var_t g_env[CLI_ENV_MAX];
-/* Keep in sync with kernel ipc.h */
-#define IPC_ERR_FULL (-3)
-#define CLI_VT_SEND_RETRIES 16384
-#define CLI_REQ_SEND_RETRIES 8192
-#define CLI_VT_RESP_RETRIES 4096
-
-enum {
-    PENDING_NONE = 0,
-    PENDING_LIST,
-    PENDING_CAT,
-    PENDING_CD,
-    PENDING_CD_CHAIN,
-    PENDING_EXEC
-};
-
-static int32_t
-str_len(const char *s)
-{
-    return (int32_t)strlen(s);
-}
-
-static int
-str_eq(const char *a, const char *b)
-{
-    return strcmp(a, b) == 0;
-}
 
 static void
 set_cwd_root(void)
@@ -104,7 +60,7 @@ set_cwd_root(void)
 static char
 to_lower(char c)
 {
-    return (char)tolower((unsigned char)c);
+    return wasmos_sys_to_lower(c);
 }
 
 static int
@@ -156,7 +112,7 @@ str_ends_with(const char *s, const char *suffix)
     if (slen < xlen) {
         return 0;
     }
-    return strcmp(s + (slen - xlen), suffix) == 0;
+    return wasmos_sys_strcmp(s + (slen - xlen), suffix) == 0;
 }
 
 static int
@@ -202,7 +158,7 @@ cli_env_find_index(const char *name)
         return -1;
     }
     for (i = 0; i < CLI_ENV_MAX; ++i) {
-        if (g_env[i].in_use && str_eq(g_env[i].name, name)) {
+        if (g_env[i].in_use && wasmos_sys_streq(g_env[i].name, name)) {
             return i;
         }
     }
@@ -228,7 +184,7 @@ cli_env_set(const char *name, const char *value)
     if (!name || !name[0]) {
         return -1;
     }
-    if (str_len(name) >= CLI_ENV_NAME_MAX) {
+    if (wasmos_sys_strlen(name) >= CLI_ENV_NAME_MAX) {
         return -1;
     }
     idx = cli_env_find_index(name);
@@ -240,7 +196,7 @@ cli_env_set(const char *name, const char *value)
         }
         return 0;
     }
-    if (str_len(value) >= CLI_ENV_VALUE_MAX) {
+    if (wasmos_sys_strlen(value) >= CLI_ENV_VALUE_MAX) {
         return -1;
     }
     if (idx < 0) {
@@ -407,7 +363,7 @@ console_write(const char *s)
     if (!s) {
         return;
     }
-    uint32_t len = (uint32_t)strlen(s);
+    uint32_t len = (uint32_t)wasmos_sys_strlen(s);
     if (len == 0) {
         return;
     }
@@ -421,26 +377,15 @@ console_write(const char *s)
             for (int i = 0; i < 4 && pos < len; ++i, ++pos) {
                 args[i] = (int32_t)(uint8_t)s[pos];
             }
-            uint32_t tries = 0;
-            for (;;) {
-                int32_t rc = wasmos_ipc_send(g_vt_endpoint,
-                                             g_vt_client_endpoint,
-                                             VT_IPC_WRITE_REQ,
-                                             (int32_t)g_vt_switch_generation,
-                                             args[0], args[1], args[2], args[3]);
-                if (rc == 0) {
-                    break;
-                }
-                if (rc != IPC_ERR_FULL) {
-                    break;
-                }
-                /* FIXME: if VT endpoint remains full we drop this chunk to
-                 * avoid freezing the CLI input loop behind output backpressure. */
-                if (++tries >= CLI_VT_SEND_RETRIES) {
-                    break;
-                }
-                (void)wasmos_sched_yield();
-            }
+            (void)wasmos_sys_ipc_send_retry(g_vt_endpoint,
+                                            g_vt_client_endpoint,
+                                            VT_IPC_WRITE_REQ,
+                                            (int32_t)g_vt_switch_generation,
+                                            args[0],
+                                            args[1],
+                                            args[2],
+                                            args[3],
+                                            CLI_VT_SEND_RETRIES);
         }
     }
     putsn(s, len);
@@ -508,23 +453,20 @@ cli_switch_tty(int32_t tty, int wait_resp, int32_t *out_error)
     }
 
     int32_t req_id = wait_resp ? g_request_id++ : 0;
-    uint32_t tries = 0;
-    for (;;) {
-        int32_t rc = wasmos_ipc_send(g_vt_endpoint,
-                                     g_vt_client_endpoint,
-                                     VT_IPC_SWITCH_TTY,
-                                     req_id,
-                                     tty, 0, 0, 0);
-        if (rc == 0) {
-            break;
+    int32_t send_rc = wasmos_sys_ipc_send_retry(g_vt_endpoint,
+                                                g_vt_client_endpoint,
+                                                VT_IPC_SWITCH_TTY,
+                                                req_id,
+                                                tty,
+                                                0,
+                                                0,
+                                                0,
+                                                CLI_VT_SEND_RETRIES);
+    if (send_rc != 0) {
+        if (out_error) {
+            *out_error = send_rc;
         }
-        if (rc != IPC_ERR_FULL || ++tries >= CLI_VT_SEND_RETRIES) {
-            if (out_error) {
-                *out_error = rc;
-            }
-            return -1;
-        }
-        (void)wasmos_sched_yield();
+        return -1;
     }
 
     if (!wait_resp) {
@@ -596,20 +538,17 @@ cli_register_vt_writer(void)
         return -1;
     }
     int32_t req_id = g_request_id++;
-    uint32_t send_tries = 0;
-    for (;;) {
-        int32_t send_rc = wasmos_ipc_send(g_vt_endpoint,
-                                          g_vt_client_endpoint,
-                                          VT_IPC_REGISTER_WRITER,
-                                          req_id,
-                                          g_home_tty, 0, 0, 0);
-        if (send_rc == 0) {
-            break;
-        }
-        if (send_rc != IPC_ERR_FULL || ++send_tries >= CLI_VT_SEND_RETRIES) {
-            return -1;
-        }
-        (void)wasmos_sched_yield();
+    int32_t send_rc = wasmos_sys_ipc_send_retry(g_vt_endpoint,
+                                                g_vt_client_endpoint,
+                                                VT_IPC_REGISTER_WRITER,
+                                                req_id,
+                                                g_home_tty,
+                                                0,
+                                                0,
+                                                0,
+                                                CLI_VT_SEND_RETRIES);
+    if (send_rc != 0) {
+        return -1;
     }
 
     for (int tries = 0; tries < CLI_VT_RESP_RETRIES; ++tries) {
@@ -683,20 +622,17 @@ cli_vt_read_char(char *out_ch)
     }
 
     int32_t req_id = g_request_id++;
-    uint32_t tries = 0;
-    for (;;) {
-        int32_t rc = wasmos_ipc_send(g_vt_endpoint,
-                                     g_vt_client_endpoint,
-                                     VT_IPC_READ_REQ,
-                                     req_id,
-                                     g_home_tty, 0, 0, 0);
-        if (rc == 0) {
-            break;
-        }
-        if (rc != IPC_ERR_FULL || ++tries >= CLI_VT_SEND_RETRIES) {
-            return -1;
-        }
-        (void)wasmos_sched_yield();
+    int32_t send_rc = wasmos_sys_ipc_send_retry(g_vt_endpoint,
+                                                g_vt_client_endpoint,
+                                                VT_IPC_READ_REQ,
+                                                req_id,
+                                                g_home_tty,
+                                                0,
+                                                0,
+                                                0,
+                                                CLI_VT_SEND_RETRIES);
+    if (send_rc != 0) {
+        return -1;
     }
 
     for (int wait = 0; wait < 32; ++wait) {
@@ -737,7 +673,7 @@ console_prompt(void)
     char buf[80];
     int32_t pos = 0;
     if (g_cwd[0]) {
-        int32_t cwd_len = str_len(g_cwd);
+        int32_t cwd_len = wasmos_sys_strlen(g_cwd);
         if (cwd_len > (int32_t)(sizeof(buf) - 9)) {
             cwd_len = (int32_t)(sizeof(buf) - 9);
         }
@@ -1139,18 +1075,15 @@ cli_print_tree(uint32_t index,
 static void
 cli_pack_name(const char *name, uint32_t out[4])
 {
-    for (uint32_t i = 0; i < 4; ++i) {
-        out[i] = 0;
-    }
-    if (!name) {
+    int32_t packed[4] = { 0, 0, 0, 0 };
+    if (!out) {
         return;
     }
-    uint32_t idx = 0;
-    for (uint32_t i = 0; name[i] && idx < 16; ++i, ++idx) {
-        uint32_t slot = idx / 4;
-        uint32_t shift = (idx % 4) * 8;
-        out[slot] |= ((uint32_t)(uint8_t)name[i]) << shift;
-    }
+    wasmos_sys_ipc_pack_name16(name, packed);
+    out[0] = (uint32_t)packed[0];
+    out[1] = (uint32_t)packed[1];
+    out[2] = (uint32_t)packed[2];
+    out[3] = (uint32_t)packed[3];
 }
 
 static int
@@ -1162,23 +1095,16 @@ cli_send_fs(int32_t type, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t 
     /* The CLI tracks one outstanding request at a time, which keeps the state
      * machine small and makes the Python QEMU tests deterministic. */
     int32_t req_id = g_request_id++;
-    uint32_t tries = 0;
-    for (;;) {
-        int32_t rc = wasmos_ipc_send(g_fs_endpoint,
-                                     g_reply_endpoint,
-                                     type,
-                                     req_id,
-                                     (int32_t)arg0,
-                                     (int32_t)arg1,
-                                     (int32_t)arg2,
-                                     (int32_t)arg3);
-        if (rc == 0) {
-            break;
-        }
-        if (rc != IPC_ERR_FULL || ++tries >= CLI_REQ_SEND_RETRIES) {
-            return -1;
-        }
-        (void)wasmos_sched_yield();
+    if (wasmos_sys_ipc_send_retry(g_fs_endpoint,
+                                  g_reply_endpoint,
+                                  type,
+                                  req_id,
+                                  (int32_t)arg0,
+                                  (int32_t)arg1,
+                                  (int32_t)arg2,
+                                  (int32_t)arg3,
+                                  CLI_REQ_SEND_RETRIES) != 0) {
+        return -1;
     }
     g_pending_req = req_id;
     return 0;
@@ -1191,23 +1117,16 @@ cli_send_proc(int32_t type, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_
         return -1;
     }
     int32_t req_id = g_request_id++;
-    uint32_t tries = 0;
-    for (;;) {
-        int32_t rc = wasmos_ipc_send(g_proc_endpoint,
-                                     g_reply_endpoint,
-                                     type,
-                                     req_id,
-                                     (int32_t)arg0,
-                                     (int32_t)arg1,
-                                     (int32_t)arg2,
-                                     (int32_t)arg3);
-        if (rc == 0) {
-            break;
-        }
-        if (rc != IPC_ERR_FULL || ++tries >= CLI_REQ_SEND_RETRIES) {
-            return -1;
-        }
-        (void)wasmos_sched_yield();
+    if (wasmos_sys_ipc_send_retry(g_proc_endpoint,
+                                  g_reply_endpoint,
+                                  type,
+                                  req_id,
+                                  (int32_t)arg0,
+                                  (int32_t)arg1,
+                                  (int32_t)arg2,
+                                  (int32_t)arg3,
+                                  CLI_REQ_SEND_RETRIES) != 0) {
+        return -1;
     }
     g_pending_req = req_id;
     return 0;
@@ -1252,10 +1171,10 @@ cli_show_mounts(void)
 static void
 set_cwd_path(const char *path)
 {
-    if (!path || !path[0] || str_eq(path, ".")) {
+    if (!path || !path[0] || wasmos_sys_streq(path, ".")) {
         return;
     }
-    if (str_eq(path, "/")) {
+    if (wasmos_sys_streq(path, "/")) {
         set_cwd_root();
         return;
     }
@@ -1371,7 +1290,7 @@ cli_extract_exec_path(const char *input, char *out, uint32_t out_len)
         return;
     }
     if (!str_ends_with(out, ".wap")) {
-        uint32_t n = str_len(out);
+        uint32_t n = (uint32_t)wasmos_sys_strlen(out);
         if (n + 4u + 1u < out_len) {
             out[n++] = '.';
             out[n++] = 'w';
@@ -1427,7 +1346,7 @@ cli_resolve_exec_path(const char *input, char *resolved, uint32_t resolved_len)
         }
     }
     {
-        uint32_t path_len = (uint32_t)str_len(resolved);
+        uint32_t path_len = (uint32_t)wasmos_sys_strlen(resolved);
         if (path_len == 0u || path_len >= resolved_len) {
             return -1;
         }
@@ -1447,7 +1366,7 @@ cli_spawn_exec_path(const char *input, int32_t *out_pid)
     if (cli_resolve_exec_path(input, resolved, sizeof(resolved)) != 0) {
         return -1;
     }
-    path_len = (uint32_t)str_len(resolved);
+    path_len = (uint32_t)wasmos_sys_strlen(resolved);
     if (wasmos_fs_buffer_write((int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
         return -1;
     }
@@ -1637,7 +1556,7 @@ cli_handle_line(void)
     }
     if (g_line_len > 3 && line_starts_with_ci("cd ")) {
         const char *path = &g_line[3];
-        if (str_eq(path, "/")) {
+        if (wasmos_sys_streq(path, "/")) {
             set_cwd_root();
             if (cli_send_fs(FS_IPC_CHDIR_REQ, 0, 0, 0, 0) != 0) {
                 console_write("cd failed\n");
@@ -1647,7 +1566,7 @@ cli_handle_line(void)
             g_pending_kind = PENDING_CD;
             return 1;
         }
-        if (path[0] == '/' && str_len(path) >= 16) {
+        if (path[0] == '/' && wasmos_sys_strlen(path) >= 16) {
             uint32_t i = 0;
             while (path[i] && i + 1 < sizeof(g_pending_cd_path)) {
                 g_pending_cd_path[i] = path[i];
@@ -1679,7 +1598,7 @@ cli_handle_line(void)
             console_write("exec failed\n");
             return 0;
         }
-        path_len = (uint32_t)str_len(resolved);
+        path_len = (uint32_t)wasmos_sys_strlen(resolved);
         if (wasmos_fs_buffer_write((int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
             console_write("exec failed\n");
             return 0;
@@ -1877,12 +1796,28 @@ initialize(int32_t proc_endpoint,
                 wasmos_sys_ipc_recv_loop();
             }
             g_proc_endpoint = proc_endpoint;
-            g_fs_endpoint = wasmos_svc_lookup(g_proc_endpoint, g_reply_endpoint, "fs.vfs", 1);
+            g_fs_endpoint = wasmos_sys_svc_lookup_retry(g_proc_endpoint,
+                                                        g_reply_endpoint,
+                                                        "fs.vfs",
+                                                        1,
+                                                        64);
             if (g_fs_endpoint < 0) {
-                g_fs_endpoint = wasmos_svc_lookup(g_proc_endpoint, g_reply_endpoint, "fs", 1);
+                g_fs_endpoint = wasmos_sys_svc_lookup_retry(g_proc_endpoint,
+                                                            g_reply_endpoint,
+                                                            "fs",
+                                                            1,
+                                                            64);
             }
-            g_devmgr_endpoint = wasmos_svc_lookup(g_proc_endpoint, g_reply_endpoint, "devmgr.query", 1);
-            g_vt_endpoint = wasmos_svc_lookup(g_proc_endpoint, g_reply_endpoint, "vt", 2);
+            g_devmgr_endpoint = wasmos_sys_svc_lookup_retry(g_proc_endpoint,
+                                                            g_reply_endpoint,
+                                                            "devmgr.query",
+                                                            1,
+                                                            64);
+            g_vt_endpoint = wasmos_sys_svc_lookup_retry(g_proc_endpoint,
+                                                        g_reply_endpoint,
+                                                        "vt",
+                                                        2,
+                                                        64);
             if (home_tty_arg >= 1 && home_tty_arg <= 3) {
                 g_home_tty = home_tty_arg;
             } else {

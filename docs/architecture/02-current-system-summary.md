@@ -33,6 +33,9 @@ The current tree already boots into a usable user-space stack:
   behavior:
   - `/init/devmgr/rules` for bootstrap rules from initfs
   - `/boot/system/devmgr/rules` for runtime override rules from FAT
+  - current scaffold tracks staged bootstrap/override scan state and emits
+    deferred scan markers; rules-file parsing and action evaluation are planned
+    follow-up work
 - `fs-fat` also supports overwrite-only writes to existing files through the C
   libc `open/write` path, plus `O_TRUNC` size updates, `O_APPEND` writes for
   existing files within their current cluster chain, and `O_CREAT` for

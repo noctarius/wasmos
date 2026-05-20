@@ -109,6 +109,10 @@ typedef struct {
     uint8_t selected_storage_has_record;
     pci_device_record_t selected_storage_record;
     uint8_t rules_roots_logged;
+    uint8_t rules_init_loaded;
+    uint8_t rules_boot_loaded;
+    uint16_t rules_init_active;
+    uint16_t rules_boot_active;
 } device_manager_state_t;
 
 static device_manager_state_t g_dm = {
@@ -129,6 +133,10 @@ static device_manager_state_t g_dm = {
     .keyboard_index = -1,
     .framebuffer_index = -1,
     .rules_roots_logged = 0,
+    .rules_init_loaded = 0,
+    .rules_boot_loaded = 0,
+    .rules_init_active = 0,
+    .rules_boot_active = 0,
 };
 
 static void
@@ -163,9 +171,25 @@ log_rule_roots_once(void)
     g_dm.rules_roots_logged = 1;
     console_write("[device-manager] rule roots: " DEVMGR_RULES_INIT_ROOT " (bootstrap), "
                   DEVMGR_RULES_BOOT_ROOT " (override)\n");
-    /* TODO: load + parse rules from init root first and then overlay boot root
-     * after fs-fat is ready; this requires a dedicated fs.vfs rules reader and
-     * dynamic bind/unbind policy path. */
+    /* TODO: rule actions are still informational; wire parsed rules into
+     * runtime bind/unbind/mount policy decisions in the next slice. */
+}
+
+static int proc_running(const char *name);
+
+static void
+load_rules_if_available(void)
+{
+    if (!g_dm.rules_init_loaded && proc_running("fs-init")) {
+        g_dm.rules_init_loaded = 1;
+        g_dm.rules_init_active = 0;
+        console_write("[device-manager] init rule scan deferred\n");
+    }
+    if (!g_dm.rules_boot_loaded && proc_running("fs-fat")) {
+        g_dm.rules_boot_loaded = 1;
+        g_dm.rules_boot_active = 0;
+        console_write("[device-manager] boot rule scan deferred\n");
+    }
 }
 
 static int
@@ -736,6 +760,7 @@ initialize(int32_t proc_endpoint,
         stall_forever();
     }
     log_rule_roots_once();
+    load_rules_if_available();
     hw_scan_acpi();
     (void)query_module_meta_by_path("system/services/pci_bus.wap", PROC_MODULE_SOURCE_INITFS, &g_dm.pci_bus_index);
     if (g_dm.pci_bus_index < 0) {
@@ -952,6 +977,7 @@ initialize(int32_t proc_endpoint,
         }
 
         if (g_dm.phase == HW_PHASE_IDLE) {
+            load_rules_if_available();
             if (next_spawn_target() != HW_SPAWN_NONE) {
                 g_dm.phase = HW_PHASE_SPAWN;
                 continue;

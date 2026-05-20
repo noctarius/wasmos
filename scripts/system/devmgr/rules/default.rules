@@ -2,3 +2,4 @@
 # Loaded from /boot/system/devmgr/rules after storage is online.
 # Entries here are intended to override or extend initfs bootstrap rules.
 spawn_path=/boot/system/drivers/ata.wap
+block_fs unit=0 mount=/boot spawn_path=/boot/system/drivers/fs_fat.wap

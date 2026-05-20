@@ -23,7 +23,7 @@ This repository uses Codex CLI to assist with development. Follow these conventi
 - Do not introduce large frameworks or heavy dependencies.
 - Do not add extra documentation files unless explicitly asked.
 - Do not break the boot flow or kernel entry contract.
-- NEVER modify code in `libs/wasm/wasm3` or in any other dependency imported via git subtree.
+- NEVER modify code in `libs/wasm3` or in any other dependency imported via git subtree.
 
 ## Code Style
 - Keep C/ASM code minimal and explicit.

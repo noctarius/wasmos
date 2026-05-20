@@ -229,52 +229,6 @@ static void queue_block_fs_rule_spawns(void);
 static void queue_block_fs_rules_for_known_devices(void);
 static int module_index_by_name(const char *name);
 
-static int32_t
-str_len(const char *s)
-{
-    return (int32_t)strlen(s);
-}
-
-static void
-str_copy(char *dst, uint32_t dst_len, const char *src)
-{
-    uint32_t i = 0;
-    if (!dst || dst_len == 0) {
-        return;
-    }
-    if (!src) {
-        dst[0] = '\0';
-        return;
-    }
-    while (i + 1u < dst_len && src[i]) {
-        dst[i] = src[i];
-        i++;
-    }
-    dst[i] = '\0';
-}
-
-static void
-str_append(char *dst, uint32_t dst_len, const char *src)
-{
-    uint32_t pos = 0;
-    if (!dst || dst_len == 0 || !src) {
-        return;
-    }
-    while (pos + 1u < dst_len && dst[pos]) {
-        pos++;
-    }
-    for (uint32_t i = 0; src[i] && pos + 1u < dst_len; ++i) {
-        dst[pos++] = src[i];
-    }
-    dst[pos] = '\0';
-}
-
-static int
-str_is_space(char c)
-{
-    return c == ' ' || c == '\t' || c == '\r' || c == '\n';
-}
-
 static uint16_t
 count_active_rules(const char *text)
 {
@@ -297,7 +251,7 @@ count_active_rules(const char *text)
             }
             continue;
         }
-        if (!saw_non_space && str_is_space(c)) {
+        if (!saw_non_space && wasmos_sys_is_space(c)) {
             continue;
         }
         if (!saw_non_space && c == '#') {
@@ -318,7 +272,7 @@ trim_left(const char *s)
     if (!s) {
         return s;
     }
-    while (*s && str_is_space(*s)) {
+    while (*s && wasmos_sys_is_space(*s)) {
         s++;
     }
     return s;
@@ -351,10 +305,10 @@ extract_rule_spawn_path(const char *text, char *out_path, uint32_t out_len)
             }
             if (key_i == key_len) {
                 value = line + key_len;
-                while (value < &text[line_end] && str_is_space(*value)) {
+                while (value < &text[line_end] && wasmos_sys_is_space(*value)) {
                     value++;
                 }
-                while (&value[n] < &text[line_end] && value[n] && !str_is_space(value[n])) {
+                while (&value[n] < &text[line_end] && value[n] && !wasmos_sys_is_space(value[n])) {
                     n++;
                 }
                 if (n > 0 && n + 1u < out_len) {
@@ -392,7 +346,7 @@ parse_block_fs_rule_line(const char *line, block_fs_rule_t *out_rule)
     }
     line_buf[line_len] = '\0';
     line = trim_left(line_buf);
-    if (!(strncmp(line, "block_fs", 8) == 0 && (line[8] == '\0' || str_is_space(line[8])))) {
+    if (!(strncmp(line, "block_fs", 8) == 0 && (line[8] == '\0' || wasmos_sys_is_space(line[8])))) {
         return -1;
     }
     path[0] = '\0';
@@ -401,14 +355,14 @@ parse_block_fs_rule_line(const char *line, block_fs_rule_t *out_rule)
     while (*cur) {
         char *tok = cur;
         char *eq = 0;
-        while (*tok && str_is_space(*tok)) {
+        while (*tok && wasmos_sys_is_space(*tok)) {
             tok++;
         }
         if (!*tok) {
             break;
         }
         cur = tok;
-        while (*cur && !str_is_space(*cur)) {
+        while (*cur && !wasmos_sys_is_space(*cur)) {
             cur++;
         }
         if (*cur) {
@@ -420,9 +374,9 @@ parse_block_fs_rule_line(const char *line, block_fs_rule_t *out_rule)
         }
         *eq++ = '\0';
         if (strcmp(tok, "spawn_path") == 0) {
-            str_copy(path, sizeof(path), eq);
+            wasmos_sys_strcpy(path, sizeof(path), eq);
         } else if (strcmp(tok, "mount") == 0) {
-            str_copy(mount, sizeof(mount), eq);
+            wasmos_sys_strcpy(mount, sizeof(mount), eq);
         } else if (strcmp(tok, "unit") == 0) {
             if (strcmp(eq, "any") == 0) {
                 unit = 0xFFu;
@@ -435,14 +389,14 @@ parse_block_fs_rule_line(const char *line, block_fs_rule_t *out_rule)
         return -1;
     }
     if (!mount[0]) {
-        str_copy(mount, sizeof(mount), "/");
+        wasmos_sys_strcpy(mount, sizeof(mount), "/");
     }
     out_rule->active = 1;
     out_rule->queued = 0;
     out_rule->spawned = 0;
     out_rule->unit = unit;
-    str_copy(out_rule->mount, sizeof(out_rule->mount), mount);
-    str_copy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
+    wasmos_sys_strcpy(out_rule->mount, sizeof(out_rule->mount), mount);
+    wasmos_sys_strcpy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
     return 0;
 }
 
@@ -532,10 +486,10 @@ kick_boot_rules_read_async(void)
         return;
     }
     path[0] = '\0';
-    str_copy(path, sizeof(path), DEVMGR_RULES_BOOT_ROOT);
-    str_append(path, sizeof(path), "/");
-    str_append(path, sizeof(path), DEVMGR_RULE_FILE);
-    path_len = str_len(path);
+    wasmos_sys_strcpy(path, sizeof(path), DEVMGR_RULES_BOOT_ROOT);
+    wasmos_sys_str_append(path, sizeof(path), "/");
+    wasmos_sys_str_append(path, sizeof(path), DEVMGR_RULE_FILE);
+    path_len = wasmos_sys_strlen(path);
     if (path_len <= 0 || path_len > 95 || path_len >= wasmos_fs_buffer_size()) {
         g_dm.rules_boot_loaded = 1;
         g_dm.rules_boot_active = 0;
@@ -633,9 +587,9 @@ load_rules_if_available(void)
         char text[DEVMGR_RULE_TEXT_CAP];
         int32_t read_len = -1;
         path[0] = '\0';
-        str_copy(path, sizeof(path), DEVMGR_RULES_INIT_ROOT);
-        str_append(path, sizeof(path), "/");
-        str_append(path, sizeof(path), DEVMGR_RULE_FILE);
+        wasmos_sys_strcpy(path, sizeof(path), DEVMGR_RULES_INIT_ROOT);
+        wasmos_sys_str_append(path, sizeof(path), "/");
+        wasmos_sys_str_append(path, sizeof(path), DEVMGR_RULE_FILE);
         read_len = read_rules_file(path, text, sizeof(text));
         if (read_len >= 0) {
             g_dm.rules_init_loaded = 1;
@@ -659,12 +613,6 @@ load_rules_if_available(void)
 }
 
 static int
-str_eq(const char *a, const char *b)
-{
-    return strcmp(a, b) == 0;
-}
-
-static int
 proc_running(const char *name)
 {
     int32_t count = wasmos_proc_count();
@@ -681,7 +629,7 @@ proc_running(const char *name)
         if (pid <= 0) {
             continue;
         }
-        if (str_eq(buf, name)) {
+        if (wasmos_sys_streq(buf, name)) {
             return 1;
         }
     }
@@ -708,7 +656,7 @@ module_index_by_name(const char *name)
         if (wasmos_sync_user_read((int32_t)(uintptr_t)buf, (int32_t)sizeof(buf)) != 0) {
             continue;
         }
-        if (str_eq(buf, name)) {
+        if (wasmos_sys_streq(buf, name)) {
             return i;
         }
     }
@@ -975,7 +923,7 @@ queue_block_fs_rule_spawns(void)
         if (!rule->active || !rule->queued || rule->spawned) {
             continue;
         }
-        str_copy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
+        wasmos_sys_strcpy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
         g_dm.rule_spawn_pending = 1;
         g_dm.rule_spawn_retries = 0;
         g_dm.active_rule_spawn_index = (int32_t)i;

@@ -138,6 +138,53 @@ discovery and driver lifecycle service, while keeping the kernel policy-light.
 - Kernel:
   - exports mechanism syscalls/hostcalls only (no driver matching policy)
 
+#### Cross-Bus Device Model (Planned)
+- Canonical `device_record` fields:
+  - `device_id` (stable manager-assigned id)
+  - `bus_type` (`pci`, `usb`, `virt`, ...)
+  - `bus_addr` (bus-native address token)
+  - `class`/`subclass`/`prog_if` when applicable
+  - `vendor_id`/`device_id` when applicable
+  - transport-specific attributes map (string key/value)
+  - capability hints (MMIO/PIO/IRQ/DMA candidates)
+  - state (`discovered`, `bound`, `active`, `removed`, `failed`)
+- Bus services publish records; they do not decide binding policy.
+
+#### Device Event Model (Planned)
+- Event types:
+  - `DEVMGR_DEVICE_ADD`
+  - `DEVMGR_DEVICE_REMOVE`
+  - `DEVMGR_DEVICE_CHANGE`
+  - `DEVMGR_BIND_RESULT`
+  - `DEVMGR_UNBIND_RESULT`
+- Events are idempotent by `(bus_type, bus_addr, generation)` and must be safe
+  for replay after service restart.
+- Removal is authoritative: once `REMOVE` is committed, active bindings must be
+  torn down and exported services revoked.
+
+#### Rule System (Planned)
+- Rule roots (in load order):
+  1. `/init/devmgr/rules` (bootstrap defaults)
+  2. `/boot/system/devmgr/rules` (runtime override/extension)
+- Override semantics:
+  - later roots can replace or disable earlier matches by rule id/priority
+  - deny rules take precedence over permissive defaults at equal priority
+- Rule outputs:
+  - target driver/service module
+  - spawn capability profile selection
+  - startup policy (`critical`, `optional`, `on-demand`)
+  - mount policy (filesystem alias/path/priority)
+
+#### Dynamic Mount Policy (Planned)
+- Filesystem mounts are outcomes of rule evaluation, not fixed to `/boot`,
+  `/user`, `/init`.
+- Example policy knobs:
+  - bind a discovered block device to `/user`
+  - remap same backend to an alternate path by override rule
+  - assign mount priority/fallback behavior when multiple candidates exist
+- `fs-manager` remains the namespace router, while `device-manager` owns mount
+  intent and updates.
+
 #### Capability and Security Model
 - Driver launch requires a capability manifest attached to spawn request:
   - `cap.ipc`: endpoint allow-list
@@ -203,6 +250,8 @@ Phase 2: Bus inventory services
   - publish records to `device-manager` through `DEVMGR_PUBLISH_DEVICE`
 - Exit criteria:
   - registry snapshot reports discovered PCI devices on QEMU baseline
+  - bus-agnostic record schema supports first `usb-bus` integration without
+    rewriting `device-manager` core registry paths
 
 Phase 3: Driver matching and capability manifests
 - Tasks:
@@ -237,6 +286,8 @@ Phase 5: Interrupt ownership and hotplug pipeline
   - support dynamic driver start/stop for add/remove events
 - Exit criteria:
   - hotplug event can create/destroy driver instance without reboot
+  - mount policy update path handles add/remove without reboot (including
+    filesystem unmount on remove and remount-on-readd behavior)
 
 Phase 6: Observability and policy hardening
 - Tasks:

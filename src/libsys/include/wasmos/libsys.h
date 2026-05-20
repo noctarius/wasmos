@@ -103,6 +103,42 @@ wasmos_sys_svc_lookup_retry(int32_t proc_endpoint,
 }
 
 static inline int32_t
+wasmos_sys_ipc_send_retry(int32_t destination_endpoint,
+                          int32_t source_endpoint,
+                          int32_t type,
+                          int32_t request_id,
+                          int32_t arg0,
+                          int32_t arg1,
+                          int32_t arg2,
+                          int32_t arg3,
+                          int32_t retries)
+{
+    /* Keep in sync with kernel ipc.h */
+    const int32_t ipc_err_full = -3;
+    int32_t tries = 0;
+    if (retries <= 0) {
+        retries = 1;
+    }
+    for (;;) {
+        int32_t rc = wasmos_ipc_send(destination_endpoint,
+                                     source_endpoint,
+                                     type,
+                                     request_id,
+                                     arg0,
+                                     arg1,
+                                     arg2,
+                                     arg3);
+        if (rc == 0 || rc != ipc_err_full) {
+            return rc;
+        }
+        if (++tries >= retries) {
+            return ipc_err_full;
+        }
+        (void)wasmos_sched_yield();
+    }
+}
+
+static inline int32_t
 wasmos_sys_buffer_copy_from(int32_t kind,
                             int32_t source_endpoint,
                             int32_t borrow_flags,

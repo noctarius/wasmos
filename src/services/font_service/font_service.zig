@@ -173,44 +173,20 @@ fn parse_ttf_metrics(f: *loaded_font_t) bool {
     return true;
 }
 
-fn read_file_into_shmem(path: []const u8, out_shmem_id: *u32, out_ptr: *[*]u8, out_len: *usize) i32 {
-    if (g_fs_endpoint == IPC_ENDPOINT_NONE) return -1;
-    const fs_buf_path = fs_borrow_rw() orelse {
-        logMsg("[font] fs buffer borrow failed\n");
-        return -1;
-    };
-    if (path.len == 0 or path.len + 1 >= PM_FS_BUFFER_SIZE) return -1;
-    zu.byteCopy(fs_buf_path, path.ptr, path.len);
-    fs_buf_path[path.len] = 0;
+fn log_path_issue(prefix: []const u8, path: []const u8) void {
+    logMsg(prefix);
+    logMsg(path);
+    logMsg("\n");
+}
 
-    var reply: c.nd_ipc_message_t = undefined;
-    const req_open = g_req_id;
+fn close_fd_best_effort(fd: i32, reply: *c.nd_ipc_message_t) void {
+    const req_close = g_req_id;
     g_req_id +%= 1;
-    if (ipc_call(g_fs_endpoint, req_open, c.FS_IPC_OPEN_REQ, @intCast(path.len), O_RDONLY, 0, 0, &reply) != 0) {
-        logMsg("[font] open call failed: ");
-        logMsg(path);
-        logMsg("\n");
-        return -1;
-    }
-    if (reply.type != c.FS_IPC_RESP or @as(i32, @bitCast(reply.arg0)) < 0) {
-        logMsg("[font] open failed: ");
-        logMsg(path);
-        logMsg("\n");
-        return -1;
-    }
-    fs_release();
-    const fd: i32 = @bitCast(reply.arg0);
+    _ = ipc_call(g_fs_endpoint, req_close, c.FS_IPC_CLOSE_REQ, @bitCast(fd), 0, 0, 0, reply);
+}
 
-    const pages = PM_FS_BUFFER_SIZE / 4096;
-    var shmem_id: u32 = 0;
-    var mapped_ptr: ?*anyopaque = null;
-    if (api().shmem_create.?(pages, 0, &shmem_id, @ptrCast(&mapped_ptr)) != 0 or shmem_id == 0 or mapped_ptr == null) {
-        const req_close_fail = g_req_id;
-        g_req_id +%= 1;
-        _ = ipc_call(g_fs_endpoint, req_close_fail, c.FS_IPC_CLOSE_REQ, @bitCast(fd), 0, 0, 0, &reply);
-        return -1;
-    }
-    const dst: [*]u8 = @ptrCast(@alignCast(mapped_ptr.?));
+fn read_fd_into_shmem(fd: i32, path: []const u8, dst: [*]u8) usize {
+    var reply: c.nd_ipc_message_t = undefined;
     var total: usize = 0;
     while (total < PM_FS_BUFFER_SIZE) {
         const req_read = g_req_id;
@@ -218,9 +194,7 @@ fn read_file_into_shmem(path: []const u8, out_shmem_id: *u32, out_ptr: *[*]u8, o
         const remaining = PM_FS_BUFFER_SIZE - total;
         const chunk_req: u32 = @intCast(if (remaining > 4096) 4096 else remaining);
         if (ipc_call(g_fs_endpoint, req_read, c.FS_IPC_READ_REQ, @bitCast(fd), chunk_req, 0, 0, &reply) != 0 or reply.type != c.FS_IPC_RESP) {
-            logMsg("[font] read call failed: ");
-            logMsg(path);
-            logMsg("\n");
+            log_path_issue("[font] read call failed: ", path);
             break;
         }
         const got_i32: i32 = @bitCast(reply.arg0);
@@ -235,14 +209,46 @@ fn read_file_into_shmem(path: []const u8, out_shmem_id: *u32, out_ptr: *[*]u8, o
         }
         if (got < chunk_req) break;
     }
+    return total;
+}
 
-    const req_close = g_req_id;
+fn read_file_into_shmem(path: []const u8, out_shmem_id: *u32, out_ptr: *[*]u8, out_len: *usize) i32 {
+    if (g_fs_endpoint == IPC_ENDPOINT_NONE) return -1;
+    const fs_buf_path = fs_borrow_rw() orelse {
+        logMsg("[font] fs buffer borrow failed\n");
+        return -1;
+    };
+    if (path.len == 0 or path.len + 1 >= PM_FS_BUFFER_SIZE) return -1;
+    zu.byteCopy(fs_buf_path, path.ptr, path.len);
+    fs_buf_path[path.len] = 0;
+
+    var reply: c.nd_ipc_message_t = undefined;
+    const req_open = g_req_id;
     g_req_id +%= 1;
-    _ = ipc_call(g_fs_endpoint, req_close, c.FS_IPC_CLOSE_REQ, @bitCast(fd), 0, 0, 0, &reply);
+    if (ipc_call(g_fs_endpoint, req_open, c.FS_IPC_OPEN_REQ, @intCast(path.len), O_RDONLY, 0, 0, &reply) != 0) {
+        log_path_issue("[font] open call failed: ", path);
+        return -1;
+    }
+    if (reply.type != c.FS_IPC_RESP or @as(i32, @bitCast(reply.arg0)) < 0) {
+        log_path_issue("[font] open failed: ", path);
+        return -1;
+    }
+    fs_release();
+    const fd: i32 = @bitCast(reply.arg0);
+
+    const pages = PM_FS_BUFFER_SIZE / 4096;
+    var shmem_id: u32 = 0;
+    var mapped_ptr: ?*anyopaque = null;
+    if (api().shmem_create.?(pages, 0, &shmem_id, @ptrCast(&mapped_ptr)) != 0 or shmem_id == 0 or mapped_ptr == null) {
+        close_fd_best_effort(fd, &reply);
+        return -1;
+    }
+    const dst: [*]u8 = @ptrCast(@alignCast(mapped_ptr.?));
+    const total = read_fd_into_shmem(fd, path, dst);
+
+    close_fd_best_effort(fd, &reply);
     if (total == 0) {
-        logMsg("[font] read empty: ");
-        logMsg(path);
-        logMsg("\n");
+        log_path_issue("[font] read empty: ", path);
         return -1;
     }
 

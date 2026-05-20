@@ -804,6 +804,120 @@ fn flush_repaint_if_pending() void {
     g_dirty_rect = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
 }
 
+fn pointer_update_position(dx: i32, dy: i32) void {
+    if (!g_fb_info_valid) return;
+    const max_x: i32 = @intCast(g_fb_info.framebuffer_width);
+    const max_y: i32 = @intCast(g_fb_info.framebuffer_height);
+    const hi_x = if (max_x > 0) max_x - 1 else 0;
+    const hi_y = if (max_y > 0) max_y - 1 else 0;
+    g_pointer_x = clamp(g_pointer_x + dx, 0, hi_x);
+    g_pointer_y = clamp(g_pointer_y + dy, 0, hi_y);
+}
+
+fn handle_mouse_resize(dx: i32, dy: i32, left_down_now: bool) void {
+    if (!left_down_now or g_resize_window_id == 0 or (dx == 0 and dy == 0)) return;
+    if (window_find_by_id(g_resize_window_id)) |resize_idx| {
+        const old_wr = rect_from_window(g_windows[resize_idx]);
+        var new_w: i32 = @as(i32, @intCast(g_windows[resize_idx].width)) + dx;
+        var new_h: i32 = @as(i32, @intCast(g_windows[resize_idx].height)) + dy;
+        const min_w: i32 = @intCast(GFX_WINDOW_MIN_DIM);
+        const min_h: i32 = @intCast(GFX_WINDOW_MIN_DIM);
+        var max_w: i32 = @intCast(GFX_WINDOW_MAX_DIM);
+        var max_h: i32 = @intCast(GFX_WINDOW_MAX_DIM);
+        if (g_fb_info_valid) {
+            const fb_w: i32 = @intCast(g_fb_info.framebuffer_width);
+            const fb_h: i32 = @intCast(g_fb_info.framebuffer_height);
+            const bound_w = fb_w - g_windows[resize_idx].x;
+            const bound_h = fb_h - g_windows[resize_idx].y;
+            if (bound_w < max_w) max_w = bound_w;
+            if (bound_h < max_h) max_h = bound_h;
+        }
+        if (max_w < min_w) max_w = min_w;
+        if (max_h < min_h) max_h = min_h;
+        new_w = clamp(new_w, min_w, max_w);
+        new_h = clamp(new_h, min_h, max_h);
+        const old_w = g_windows[resize_idx].width;
+        const old_h = g_windows[resize_idx].height;
+        g_windows[resize_idx].width = @intCast(new_w);
+        g_windows[resize_idx].height = @intCast(new_h);
+        const new_wr = rect_from_window(g_windows[resize_idx]);
+        request_repaint_rect(old_wr);
+        request_repaint_rect(new_wr);
+        if (g_windows[resize_idx].width != old_w or g_windows[resize_idx].height != old_h) {
+            const win = g_windows[resize_idx];
+            event_push(win.owner_endpoint, c.GFX_EVENT_RESIZE, win.window_id, pack_u16_pair(win.width, win.height), 0);
+        }
+    } else {
+        g_resize_window_id = 0;
+    }
+}
+
+fn handle_mouse_drag(dx: i32, dy: i32, left_down_now: bool) void {
+    if (!left_down_now or g_drag_window_id == 0 or (dx == 0 and dy == 0)) return;
+    if (window_find_by_id(g_drag_window_id)) |drag_idx| {
+        const old_wr = rect_from_window(g_windows[drag_idx]);
+        if (g_fb_info_valid) {
+            const max_x: i32 = @intCast(g_fb_info.framebuffer_width);
+            const max_y: i32 = @intCast(g_fb_info.framebuffer_height);
+            const ww: i32 = @intCast(g_windows[drag_idx].width);
+            const wh: i32 = @intCast(g_windows[drag_idx].height);
+            const hi_x = if (max_x > ww) max_x - ww else 0;
+            const hi_y = if (max_y > wh) max_y - wh else 0;
+            g_windows[drag_idx].x = clamp(g_windows[drag_idx].x + dx, 0, hi_x);
+            g_windows[drag_idx].y = clamp(g_windows[drag_idx].y + dy, 0, hi_y);
+        } else {
+            g_windows[drag_idx].x += dx;
+            g_windows[drag_idx].y += dy;
+        }
+        const new_wr = rect_from_window(g_windows[drag_idx]);
+        request_repaint_rect(old_wr);
+        request_repaint_rect(new_wr);
+    } else {
+        g_drag_window_id = 0;
+    }
+}
+
+fn handle_mouse_press_transition(left_down_now: bool, left_down_prev: bool) void {
+    if (!left_down_now or left_down_prev) return;
+    if (window_topmost_at(g_pointer_x, g_pointer_y)) |idx| {
+        const hit_close = point_in_rect(g_pointer_x, g_pointer_y, window_close_hit_rect(g_windows[idx]));
+        const hit_resize = point_in_rect(g_pointer_x, g_pointer_y, window_resize_rect(g_windows[idx]));
+        const hit_title = point_in_rect(g_pointer_x, g_pointer_y, window_title_rect(g_windows[idx]));
+        raise_window(idx);
+        focus_window(idx);
+        if (hit_close) {
+            const win = g_windows[idx];
+            g_drag_window_id = 0;
+            g_resize_window_id = 0;
+            event_drop_for(win.owner_endpoint);
+            event_push(win.owner_endpoint, c.GFX_EVENT_CLOSE_REQUEST, win.window_id, 0, 0);
+        } else if (hit_resize) {
+            g_resize_window_id = g_windows[idx].window_id;
+            g_drag_window_id = 0;
+        } else if (hit_title) {
+            g_drag_window_id = g_windows[idx].window_id;
+            g_resize_window_id = 0;
+        }
+        request_repaint_full();
+    } else {
+        if (blur_focused_window()) {
+            request_repaint_full();
+        }
+        g_drag_window_id = 0;
+        g_resize_window_id = 0;
+    }
+}
+
+fn maybe_emit_pointer_event(dx: i32, dy: i32, buttons: u32, prev_buttons: u32) void {
+    if (g_focused_window_id == 0) return;
+    if (window_find_by_id(g_focused_window_id)) |focused_idx| {
+        const focused = g_windows[focused_idx];
+        if (dx != 0 or dy != 0 or buttons != prev_buttons) {
+            event_push(focused.owner_endpoint, c.GFX_EVENT_POINTER, pack_s16_pair(dx, dy), buttons, 0);
+        }
+    }
+}
+
 fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
     const old_x = g_pointer_x;
     const old_y = g_pointer_y;
@@ -813,14 +927,7 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
     const dy: i32 = @as(i32, dy8);
     const buttons: u32 = msg.arg2 & 0x7;
 
-    if (g_fb_info_valid) {
-        const max_x: i32 = @intCast(g_fb_info.framebuffer_width);
-        const max_y: i32 = @intCast(g_fb_info.framebuffer_height);
-        const hi_x = if (max_x > 0) max_x - 1 else 0;
-        const hi_y = if (max_y > 0) max_y - 1 else 0;
-        g_pointer_x = clamp(g_pointer_x + dx, 0, hi_x);
-        g_pointer_y = clamp(g_pointer_y + dy, 0, hi_y);
-    }
+    pointer_update_position(dx, dy);
 
     if (g_overlay_locked and (old_x != g_pointer_x or old_y != g_pointer_y)) {
         request_repaint_rect(cursor_rect_at(old_x, old_y));
@@ -836,106 +943,11 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
         g_resize_window_id = 0;
     }
 
-    if (left_down_now and g_resize_window_id != 0 and (dx != 0 or dy != 0)) {
-        if (window_find_by_id(g_resize_window_id)) |resize_idx| {
-            const old_wr = rect_from_window(g_windows[resize_idx]);
-            var new_w: i32 = @as(i32, @intCast(g_windows[resize_idx].width)) + dx;
-            var new_h: i32 = @as(i32, @intCast(g_windows[resize_idx].height)) + dy;
-            const min_w: i32 = @intCast(GFX_WINDOW_MIN_DIM);
-            const min_h: i32 = @intCast(GFX_WINDOW_MIN_DIM);
-            var max_w: i32 = @intCast(GFX_WINDOW_MAX_DIM);
-            var max_h: i32 = @intCast(GFX_WINDOW_MAX_DIM);
-            if (g_fb_info_valid) {
-                const fb_w: i32 = @intCast(g_fb_info.framebuffer_width);
-                const fb_h: i32 = @intCast(g_fb_info.framebuffer_height);
-                const bound_w = fb_w - g_windows[resize_idx].x;
-                const bound_h = fb_h - g_windows[resize_idx].y;
-                if (bound_w < max_w) max_w = bound_w;
-                if (bound_h < max_h) max_h = bound_h;
-            }
-            if (max_w < min_w) max_w = min_w;
-            if (max_h < min_h) max_h = min_h;
-            new_w = clamp(new_w, min_w, max_w);
-            new_h = clamp(new_h, min_h, max_h);
-            const old_w = g_windows[resize_idx].width;
-            const old_h = g_windows[resize_idx].height;
-            g_windows[resize_idx].width = @intCast(new_w);
-            g_windows[resize_idx].height = @intCast(new_h);
-            const new_wr = rect_from_window(g_windows[resize_idx]);
-            request_repaint_rect(old_wr);
-            request_repaint_rect(new_wr);
-            if (g_windows[resize_idx].width != old_w or g_windows[resize_idx].height != old_h) {
-                const win = g_windows[resize_idx];
-                event_push(win.owner_endpoint, c.GFX_EVENT_RESIZE, win.window_id, pack_u16_pair(win.width, win.height), 0);
-            }
-        } else {
-            g_resize_window_id = 0;
-        }
-    }
-
-    if (left_down_now and g_drag_window_id != 0 and (dx != 0 or dy != 0)) {
-        if (window_find_by_id(g_drag_window_id)) |drag_idx| {
-            const old_wr = rect_from_window(g_windows[drag_idx]);
-            if (g_fb_info_valid) {
-                const max_x: i32 = @intCast(g_fb_info.framebuffer_width);
-                const max_y: i32 = @intCast(g_fb_info.framebuffer_height);
-                const ww: i32 = @intCast(g_windows[drag_idx].width);
-                const wh: i32 = @intCast(g_windows[drag_idx].height);
-                const hi_x = if (max_x > ww) max_x - ww else 0;
-                const hi_y = if (max_y > wh) max_y - wh else 0;
-                g_windows[drag_idx].x = clamp(g_windows[drag_idx].x + dx, 0, hi_x);
-                g_windows[drag_idx].y = clamp(g_windows[drag_idx].y + dy, 0, hi_y);
-            } else {
-                g_windows[drag_idx].x += dx;
-                g_windows[drag_idx].y += dy;
-            }
-            const new_wr = rect_from_window(g_windows[drag_idx]);
-            request_repaint_rect(old_wr);
-            request_repaint_rect(new_wr);
-        } else {
-            g_drag_window_id = 0;
-        }
-    }
-
-    if (left_down_now and !left_down_prev) {
-        if (window_topmost_at(g_pointer_x, g_pointer_y)) |idx| {
-            const hit_close = point_in_rect(g_pointer_x, g_pointer_y, window_close_hit_rect(g_windows[idx]));
-            const hit_resize = point_in_rect(g_pointer_x, g_pointer_y, window_resize_rect(g_windows[idx]));
-            const hit_title = point_in_rect(g_pointer_x, g_pointer_y, window_title_rect(g_windows[idx]));
-            raise_window(idx);
-            focus_window(idx);
-            if (hit_close) {
-                const win = g_windows[idx];
-                g_drag_window_id = 0;
-                g_resize_window_id = 0;
-                event_drop_for(win.owner_endpoint);
-                event_push(win.owner_endpoint, c.GFX_EVENT_CLOSE_REQUEST, win.window_id, 0, 0);
-            } else if (hit_resize) {
-                g_resize_window_id = g_windows[idx].window_id;
-                g_drag_window_id = 0;
-            } else if (hit_title) {
-                g_drag_window_id = g_windows[idx].window_id;
-                g_resize_window_id = 0;
-            }
-            request_repaint_full();
-        } else {
-            if (blur_focused_window()) {
-                request_repaint_full();
-            }
-            g_drag_window_id = 0;
-            g_resize_window_id = 0;
-        }
-    }
+    handle_mouse_resize(dx, dy, left_down_now);
+    handle_mouse_drag(dx, dy, left_down_now);
+    handle_mouse_press_transition(left_down_now, left_down_prev);
     g_pointer_buttons = buttons;
-
-    if (g_focused_window_id != 0) {
-        if (window_find_by_id(g_focused_window_id)) |focused_idx| {
-            const focused = g_windows[focused_idx];
-            if (dx != 0 or dy != 0 or buttons != prev_buttons) {
-                event_push(focused.owner_endpoint, c.GFX_EVENT_POINTER, pack_s16_pair(dx, dy), buttons, 0);
-            }
-        }
-    }
+    maybe_emit_pointer_event(dx, dy, buttons, prev_buttons);
 }
 
 fn fb_set_overlay_lock(lock: bool) void {

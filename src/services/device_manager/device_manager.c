@@ -46,11 +46,11 @@ static device_manager_state_t g_dm = {
     .rule_spawn_pending = 0,
     .rule_spawn_retries = 0,
     .rule_spawn_path = {0},
-    .framebuffer_rule_active = 0,
-    .framebuffer_rule_spawn_path = {0},
     .active_rule_spawn_index = -1,
     .block_fs_rules = {0},
     .block_fs_rule_count = 0,
+    .pci_fb_rules = {0},
+    .pci_fb_rule_count = 0,
     .boot_mount_ready = 0,
     .user_mount_ready = 0,
 };
@@ -227,13 +227,11 @@ poll_boot_rules_async(void)
         g_dm.rule_spawn_pending = 1;
         console_write("[device-manager] boot rules queued spawn_path\n");
     }
-    if (dm_rules_extract_framebuffer_spawn_path(text,
-                                                g_dm.framebuffer_rule_spawn_path,
-                                                sizeof(g_dm.framebuffer_rule_spawn_path)) == 0) {
-        g_dm.framebuffer_rule_active = 1;
-        console_write("[device-manager] boot rules set framebuffer_spawn_path\n");
-    }
     dm_rules_load_block_fs(&g_dm, text);
+    dm_rules_load_pci_fb(&g_dm, text);
+    if (g_dm.pci_fb_rule_count > 0) {
+        console_write("[device-manager] boot rules loaded pci_framebuffer\n");
+    }
     if (g_dm.block_fs_rule_count > 0) {
         console_write("[device-manager] boot rules loaded block_fs\n");
         queue_block_fs_rules_for_known_devices();
@@ -262,13 +260,11 @@ load_rules_if_available(void)
                 g_dm.rule_spawn_pending = 1;
                 console_write("[device-manager] init rules queued spawn_path\n");
             }
-            if (dm_rules_extract_framebuffer_spawn_path(text,
-                                                        g_dm.framebuffer_rule_spawn_path,
-                                                        sizeof(g_dm.framebuffer_rule_spawn_path)) == 0) {
-                g_dm.framebuffer_rule_active = 1;
-                console_write("[device-manager] init rules set framebuffer_spawn_path\n");
-            }
             dm_rules_load_block_fs(&g_dm, text);
+            dm_rules_load_pci_fb(&g_dm, text);
+            if (g_dm.pci_fb_rule_count > 0) {
+                console_write("[device-manager] init rules loaded pci_framebuffer\n");
+            }
             if (g_dm.block_fs_rule_count > 0) {
                 console_write("[device-manager] init rules loaded block_fs\n");
                 queue_block_fs_rules_for_known_devices();
@@ -523,8 +519,22 @@ hw_spawn_rule_target(const char *rule_path)
 static int
 spawn_framebuffer_target(void)
 {
-    if (g_dm.framebuffer_rule_active && g_dm.framebuffer_rule_spawn_path[0] != '\0') {
-        return hw_spawn_rule_target(g_dm.framebuffer_rule_spawn_path);
+    for (uint32_t ri = 0; ri < g_dm.pci_fb_rule_count; ++ri) {
+        pci_fb_rule_t *rule = &g_dm.pci_fb_rules[ri];
+        if (!rule->active || rule->spawn_path[0] == '\0') {
+            continue;
+        }
+        for (uint32_t di = 0; di < g_dm.registry_count; ++di) {
+            const pci_device_record_t *rec = &g_dm.registry[di];
+            if ((rule->class_code != MATCH_ANY_U8 && rec->class_code != rule->class_code) ||
+                (rule->subclass != MATCH_ANY_U8 && rec->subclass != rule->subclass) ||
+                (rule->prog_if != MATCH_ANY_U8 && rec->prog_if != rule->prog_if) ||
+                (rule->vendor_id != MATCH_ANY_U16 && rec->vendor_id != rule->vendor_id) ||
+                (rule->device_id != MATCH_ANY_U16 && rec->device_id != rule->device_id)) {
+                continue;
+            }
+            return hw_spawn_rule_target(rule->spawn_path);
+        }
     }
     if (g_dm.framebuffer_index >= 0) {
         return hw_spawn_driver_index(g_dm.framebuffer_index);

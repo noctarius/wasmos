@@ -12,6 +12,7 @@
 #define DEVMGR_RULE_FILE "default.rules"
 #define DEVMGR_RULE_TEXT_CAP 1024
 #define BLOCK_FS_RULE_CAP 8
+#define PCI_FB_RULE_CAP 8
 
 typedef struct __attribute__((packed)) {
     char signature[8];
@@ -86,6 +87,16 @@ typedef struct {
 } block_fs_rule_t;
 
 typedef struct {
+    uint8_t active;
+    uint8_t class_code;
+    uint8_t subclass;
+    uint8_t prog_if;
+    uint16_t vendor_id;
+    uint16_t device_id;
+    char spawn_path[96];
+} pci_fb_rule_t;
+
+typedef struct {
     hw_phase_t phase;
     hw_spawn_target_t pending;
     int32_t reply_endpoint;
@@ -136,11 +147,11 @@ typedef struct {
     uint8_t rule_spawn_pending;
     uint8_t rule_spawn_retries;
     char rule_spawn_path[96];
-    uint8_t framebuffer_rule_active;
-    char framebuffer_rule_spawn_path[96];
     int32_t active_rule_spawn_index;
     block_fs_rule_t block_fs_rules[BLOCK_FS_RULE_CAP];
     uint32_t block_fs_rule_count;
+    pci_fb_rule_t pci_fb_rules[PCI_FB_RULE_CAP];
+    uint32_t pci_fb_rule_count;
     uint8_t boot_mount_ready;
     uint8_t user_mount_ready;
 } device_manager_state_t;

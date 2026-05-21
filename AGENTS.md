@@ -11,6 +11,10 @@ This repository uses Codex CLI to assist with development. Follow these conventi
 - Keep `README.md` and `docs/ARCHITECTURE.md` updated with meaningful changes and new behaviors.
 - Keep `README.md` high-level and stable: do not append per-iteration or
   changelog-style feature bullets for each incremental step.
+- Keep `libc` and its wrappers in sync, and keep `libsys` and its wrappers in
+  sync across runtime-specific variants. Any API/behavior change in one side
+  must be reflected in the corresponding wrapper/variant in the same change
+  set.
 - Add a short `TODO` or `FIXME` comment at the relevant source location when you
   identify a real known gap or deferred issue that is intentionally left in
   place.

@@ -61,26 +61,22 @@ fn logMsg(msg: []const u8) void {
 }
 
 fn svc_register(name: []const u8, request_id: u32) i32 {
-    return sys.svcRegister(c.nd_ipc_message_t,
+    return sys.svcRegister(c, c.nd_ipc_message_t,
         api(),
         g_proc_endpoint,
         g_font_endpoint,
         name,
         request_id,
-        c.SVC_IPC_REGISTER_REQ,
-        c.SVC_IPC_REGISTER_RESP,
     );
 }
 
 fn svc_lookup(name: []const u8, request_id: u32) i32 {
-    return sys.svcLookup(c.nd_ipc_message_t,
+    return sys.svcLookup(c, c.nd_ipc_message_t,
         api(),
         g_proc_endpoint,
         g_font_endpoint,
         name,
         request_id,
-        c.SVC_IPC_LOOKUP_REQ,
-        c.SVC_IPC_LOOKUP_RESP,
     );
 }
 

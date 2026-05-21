@@ -60,10 +60,10 @@ add_custom_command(
           -O2
           -I ${DRIVER_WASM_DIR}/include
           -I ${LIBSYS_NATIVE_DIR}/include
-          -c ${LIBSYS_NATIVE_DIR}/zig/libsys_exports.c
+          -c ${LIBSYS_NATIVE_DIR}/zig/libsys_native.c
           -o ${GFX_COMPOSITOR_LIBSYS_EXPORTS_OBJ}
-  DEPENDS ${LIBSYS_NATIVE_DIR}/zig/libsys_exports.c
-          ${LIBSYS_NATIVE_DIR}/include/wasmos/libsys_native_exports.h
+  DEPENDS ${LIBSYS_NATIVE_DIR}/zig/libsys_native.c
+          ${LIBSYS_NATIVE_DIR}/include/wasmos/libsys_native.h
           ${DRIVER_WASM_DIR}/include/wasmos_native_driver.h
           ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

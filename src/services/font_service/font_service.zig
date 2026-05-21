@@ -146,9 +146,8 @@ fn read_fd_into_shmem(fd: i32, path: []const u8, dst: [*]u8) usize {
         const got: usize = @intCast(got_i32);
         if (got > chunk_req) break;
         if (got > 0) {
-            const fs_buf_read = fs_borrow_rw() orelse break;
-            zu.byteCopy(dst + total, fs_buf_read, got);
-            fs_release();
+            const rc = sys.bufferCopyFrom(api(), c.ND_BUFFER_KIND_FS, ctxId(), c.ND_BUFFER_BORROW_READ | c.ND_BUFFER_BORROW_WRITE, dst + total, @intCast(got), 0);
+            if (rc != 0) break;
             total += got;
         }
         if (got < chunk_req) break;

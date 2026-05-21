@@ -38,6 +38,33 @@ pub fn ipcCall(api: anytype, source_endpoint: u32, destination: u32, request_id:
     return c.wasmos_sys_ipc_call_native(asApi(api), source_endpoint, destination, request_id, msg_type, arg0, arg1, arg2, arg3, asMsg(out_message));
 }
 
+pub fn ipcCallBudgeted(api: anytype, recv_endpoint: u32, source_endpoint: u32, destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out_message: anytype, max_empty_polls: u32) i32 {
+    var req: c.nd_ipc_message_t = .{
+        .type = msg_type,
+        .source = source_endpoint,
+        .destination = destination,
+        .request_id = request_id,
+        .arg0 = arg0,
+        .arg1 = arg1,
+        .arg2 = arg2,
+        .arg3 = arg3,
+    };
+    if (asApi(api).ipc_send.?(asApi(api).sched_current_pid.?(), destination, &req) != IPC_OK) return -1;
+
+    var polls: u32 = 0;
+    while (true) {
+        const rc = asApi(api).ipc_recv.?(asApi(api).sched_current_pid.?(), recv_endpoint, asMsg(out_message));
+        if (rc == IPC_EMPTY) {
+            if (polls >= max_empty_polls) return -1;
+            polls +%= 1;
+            asApi(api).sched_yield.?();
+            continue;
+        }
+        if (rc != IPC_OK) return -1;
+        if (asMsg(out_message).request_id == request_id) return 0;
+    }
+}
+
 pub fn svcRegister(api: anytype, proc_endpoint: u32, source_endpoint: u32, name: []const u8, request_id: u32) i32 {
     return c.wasmos_sys_svc_register_native(asApi(api), proc_endpoint, source_endpoint, name.ptr, @intCast(name.len), request_id);
 }
@@ -48,6 +75,12 @@ pub fn svcLookup(api: anytype, proc_endpoint: u32, source_endpoint: u32, name: [
 
 pub fn svcLookupRetry(api: anytype, proc_endpoint: u32, source_endpoint: u32, name: []const u8, request_id_base: u32, attempts: u32) i32 {
     return c.wasmos_sys_svc_lookup_retry_native(asApi(api), proc_endpoint, source_endpoint, name.ptr, @intCast(name.len), request_id_base, attempts);
+}
+
+pub fn svcLookupEndpointRetry(api: anytype, proc_endpoint: u32, source_endpoint: u32, name: []const u8, request_id_base: u32, attempts: u32) ?u32 {
+    const ep = svcLookupRetry(api, proc_endpoint, source_endpoint, name, request_id_base, attempts);
+    if (ep < 0) return null;
+    return @bitCast(ep);
 }
 
 pub fn bufferCopyFrom(api: anytype, kind: u32, source_endpoint: u32, borrow_flags: u32, dst: [*]u8, len: i32, offset: i32) i32 {

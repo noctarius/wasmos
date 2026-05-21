@@ -206,68 +206,28 @@ fn svc_lookup_from(source_endpoint: u32, name: []const u8, request_id: u32) i32 
 }
 
 fn lookup_fb_endpoint() i32 {
-    var i: u32 = 0;
-    while (i < GFX_FB_LOOKUP_RETRIES) : (i += 1) {
-        const ep = svc_lookup("fb", GFX_REQUEST_BASE + i);
-        if (ep >= 0) {
-            g_fb_endpoint = @bitCast(ep);
-            return 0;
-        }
-        api().sched_yield.?();
-    }
-    return -1;
+    g_fb_endpoint = sys.svcLookupEndpointRetry(api(), g_proc_endpoint, g_gfx_endpoint, "fb", GFX_REQUEST_BASE, GFX_FB_LOOKUP_RETRIES) orelse return -1;
+    return 0;
 }
 
 fn lookup_vt_endpoint() i32 {
-    var i: u32 = 0;
-    while (i < GFX_FB_LOOKUP_RETRIES) : (i += 1) {
-        const ep = svc_lookup("vt", GFX_REQUEST_BASE + 0x100 + i);
-        if (ep >= 0) {
-            g_vt_endpoint = @bitCast(ep);
-            return 0;
-        }
-        api().sched_yield.?();
-    }
-    return -1;
+    g_vt_endpoint = sys.svcLookupEndpointRetry(api(), g_proc_endpoint, g_gfx_endpoint, "vt", GFX_REQUEST_BASE + 0x100, GFX_FB_LOOKUP_RETRIES) orelse return -1;
+    return 0;
 }
 
 fn lookup_kbd_endpoint() i32 {
-    var i: u32 = 0;
-    while (i < GFX_FB_LOOKUP_RETRIES) : (i += 1) {
-        const ep = svc_lookup("kbd", GFX_REQUEST_BASE + 0x180 + i);
-        if (ep >= 0) {
-            g_kbd_endpoint = @bitCast(ep);
-            return 0;
-        }
-        api().sched_yield.?();
-    }
-    return -1;
+    g_kbd_endpoint = sys.svcLookupEndpointRetry(api(), g_proc_endpoint, g_gfx_endpoint, "kbd", GFX_REQUEST_BASE + 0x180, GFX_FB_LOOKUP_RETRIES) orelse return -1;
+    return 0;
 }
 
 fn lookup_mouse_endpoint() i32 {
-    var i: u32 = 0;
-    while (i < GFX_FB_LOOKUP_RETRIES) : (i += 1) {
-        const ep = svc_lookup("mouse", GFX_REQUEST_BASE + 0x1C0 + i);
-        if (ep >= 0) {
-            g_mouse_endpoint = @bitCast(ep);
-            return 0;
-        }
-        api().sched_yield.?();
-    }
-    return -1;
+    g_mouse_endpoint = sys.svcLookupEndpointRetry(api(), g_proc_endpoint, g_gfx_endpoint, "mouse", GFX_REQUEST_BASE + 0x1C0, GFX_FB_LOOKUP_RETRIES) orelse return -1;
+    return 0;
 }
 
 fn lookup_font_endpoint() i32 {
-    var i: u32 = 0;
-    while (i < GFX_FB_LOOKUP_RETRIES) : (i += 1) {
-        const ep = svc_lookup("font", GFX_REQUEST_BASE + 0x240 + i);
-        if (ep >= 0) {
-            g_font_endpoint = @bitCast(ep);
-            return 0;
-        }
-        api().sched_yield.?();
-    }
-    return -1;
+    g_font_endpoint = sys.svcLookupEndpointRetry(api(), g_proc_endpoint, g_gfx_endpoint, "font", GFX_REQUEST_BASE + 0x240, GFX_FB_LOOKUP_RETRIES) orelse return -1;
+    return 0;
 }
 
 fn open_title_font_handle() i32 {
@@ -423,56 +383,12 @@ fn ipc_call(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u
 }
 
 fn ipc_call_budgeted(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t, max_empty_polls: u32) i32 {
-    var req: c.nd_ipc_message_t = undefined;
-    req.type = msg_type;
-    req.source = g_gfx_endpoint;
-    req.destination = destination;
-    req.request_id = request_id;
-    req.arg0 = arg0;
-    req.arg1 = arg1;
-    req.arg2 = arg2;
-    req.arg3 = arg3;
-    if (api().ipc_send.?(ctxId(), destination, &req) != IPC_OK) return -1;
-
-    var polls: u32 = 0;
-    while (true) {
-        const rc = api().ipc_recv.?(ctxId(), g_gfx_endpoint, out);
-        if (rc == IPC_EMPTY) {
-            if (polls >= max_empty_polls) return -1;
-            polls +%= 1;
-            api().sched_yield.?();
-            continue;
-        }
-        if (rc != IPC_OK) return -1;
-        if (out.request_id == request_id) return 0;
-    }
+    return sys.ipcCallBudgeted(api(), g_gfx_endpoint, g_gfx_endpoint, destination, request_id, msg_type, arg0, arg1, arg2, arg3, out, max_empty_polls);
 }
 
 fn font_ipc_call_budgeted(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t, max_empty_polls: u32) i32 {
     if (g_font_client_endpoint == IPC_ENDPOINT_NONE) return -1;
-    var req: c.nd_ipc_message_t = undefined;
-    req.type = msg_type;
-    req.source = g_font_client_endpoint;
-    req.destination = destination;
-    req.request_id = request_id;
-    req.arg0 = arg0;
-    req.arg1 = arg1;
-    req.arg2 = arg2;
-    req.arg3 = arg3;
-    if (api().ipc_send.?(ctxId(), destination, &req) != IPC_OK) return -1;
-
-    var polls: u32 = 0;
-    while (true) {
-        const rc = api().ipc_recv.?(ctxId(), g_font_client_endpoint, out);
-        if (rc == IPC_EMPTY) {
-            if (polls >= max_empty_polls) return -1;
-            polls +%= 1;
-            api().sched_yield.?();
-            continue;
-        }
-        if (rc != IPC_OK) return -1;
-        if (out.request_id == request_id) return 0;
-    }
+    return sys.ipcCallBudgeted(api(), g_font_client_endpoint, g_font_client_endpoint, destination, request_id, msg_type, arg0, arg1, arg2, arg3, out, max_empty_polls);
 }
 
 fn log_fb_geometry_probe() void {

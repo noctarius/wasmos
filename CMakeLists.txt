@@ -108,7 +108,10 @@ set(WASM_INIT_APP ${BUILD_DIR}/sysinit.wap)
 set(WASM_CLI_APP_SRC ${SERVICES_DIR}/cli/cli.c)
 set(WASM_CLI_APP_WASM ${BUILD_DIR}/cli.wasm)
 set(WASM_CLI_APP ${BUILD_DIR}/cli.wap)
-set(WASM_DEVICE_MANAGER_SRC ${SERVICES_DIR}/device_manager/device_manager.c)
+set(WASM_DEVICE_MANAGER_SOURCES
+  ${SERVICES_DIR}/device_manager/device_manager.c
+  ${SERVICES_DIR}/device_manager/device_manager_rules.c
+)
 set(WASM_DEVICE_MANAGER_WASM ${BUILD_DIR}/device_manager.wasm)
 set(WASM_DEVICE_MANAGER_APP ${BUILD_DIR}/device_manager.wap)
 set(WASM_PCI_BUS_SRC ${SERVICES_DIR}/pci_bus/pci_bus.c)
@@ -310,11 +313,17 @@ set(WASMOS_LIBC_INCLUDE_DEPS
 function(wasmos_add_wasm_c_app_target target_name)
   set(options NO_BUILTIN)
   set(oneValueArgs SOURCE OUTPUT_WASM OUTPUT_APP MANIFEST EXPORT STACK_SIZE INITIAL_MEMORY MAX_MEMORY BUILD_COMMENT PACK_COMMENT)
-  cmake_parse_arguments(WASMOS_APP "${options}" "${oneValueArgs}" "" ${ARGN})
+  set(multiValueArgs SOURCES)
+  cmake_parse_arguments(WASMOS_APP "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
-  if (NOT WASMOS_APP_SOURCE OR NOT WASMOS_APP_OUTPUT_WASM OR NOT WASMOS_APP_OUTPUT_APP OR
+  set(_wasmos_sources ${WASMOS_APP_SOURCES})
+  if (NOT _wasmos_sources AND WASMOS_APP_SOURCE)
+    set(_wasmos_sources ${WASMOS_APP_SOURCE})
+  endif ()
+
+  if (NOT _wasmos_sources OR NOT WASMOS_APP_OUTPUT_WASM OR NOT WASMOS_APP_OUTPUT_APP OR
       NOT WASMOS_APP_MANIFEST OR NOT WASMOS_APP_EXPORT)
-    message(FATAL_ERROR "wasmos_add_wasm_c_app_target(${target_name}) requires SOURCE, OUTPUT_WASM, OUTPUT_APP, MANIFEST, EXPORT")
+    message(FATAL_ERROR "wasmos_add_wasm_c_app_target(${target_name}) requires SOURCE or SOURCES, OUTPUT_WASM, OUTPUT_APP, MANIFEST, EXPORT")
   endif ()
 
   set(_wasmos_extra_flags)
@@ -360,9 +369,9 @@ function(wasmos_add_wasm_c_app_target target_name)
             -I${LIBSYS_WASM_DIR}/include
             -I${DRIVER_WASM_DIR}/include
             ${WASMOS_LIBC_C_SOURCES}
-            ${WASMOS_APP_SOURCE}
+            ${_wasmos_sources}
             -o ${WASMOS_APP_OUTPUT_WASM}
-    DEPENDS ${WASMOS_APP_SOURCE} ${WASMOS_LIBC_C_SOURCES} ${WASMOS_LIBC_INCLUDE_DEPS}
+    DEPENDS ${_wasmos_sources} ${WASMOS_LIBC_C_SOURCES} ${WASMOS_LIBC_INCLUDE_DEPS}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT ${_build_comment}
     VERBATIM
@@ -382,14 +391,14 @@ function(wasmos_add_wasm_c_app_target target_name)
 
   add_custom_target(${target_name}
     DEPENDS ${WASMOS_APP_OUTPUT_APP}
-    SOURCES ${WASMOS_APP_SOURCE} ${WASMOS_APP_MANIFEST}
+    SOURCES ${_wasmos_sources} ${WASMOS_APP_MANIFEST}
   )
 
   set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASMOS_APP_OUTPUT_APP})
   set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS ${target_name})
 
   wasmos_add_ide_c_target(${target_name}_ide
-    SOURCES ${WASMOS_APP_SOURCE}
+    SOURCES ${_wasmos_sources}
     INCLUDES ${LIBC_DIR}/include ${LIBSYS_WASM_DIR}/include ${DRIVER_WASM_DIR}/include
   )
 endfunction()

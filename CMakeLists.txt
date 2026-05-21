@@ -102,6 +102,9 @@ set(NATIVE_FRAMEBUFFER_RENDER_SRC ${DRIVER_WASM_DIR}/framebuffer/render.c)
 set(NATIVE_FRAMEBUFFER_DRIVER_ELF ${BUILD_DIR}/framebuffer_native.elf)
 set(NATIVE_FRAMEBUFFER_DRIVER_OBJ ${BUILD_DIR}/framebuffer_native.o)
 set(NATIVE_FRAMEBUFFER_RENDER_OBJ ${BUILD_DIR}/framebuffer_render.o)
+set(WASM_FRAMEBUFFER_PCI_APP ${BUILD_DIR}/framebuffer_pci.wap)
+set(NATIVE_FRAMEBUFFER_PCI_DRIVER_SRC ${DRIVER_WASM_DIR}/framebuffer_pci/framebuffer_pci_native.c)
+set(NATIVE_FRAMEBUFFER_PCI_DRIVER_ELF ${BUILD_DIR}/framebuffer_pci_native.elf)
 set(WASM_INIT_APP_SRC ${SERVICES_DIR}/sysinit/init.c)
 set(WASM_INIT_APP_WASM ${BUILD_DIR}/init.wasm)
 set(WASM_INIT_APP ${BUILD_DIR}/sysinit.wap)
@@ -934,6 +937,7 @@ set(INITFS_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_KEYBOARD_APP} ${BUILD_DIR}/esp/system/drivers/keyboard.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_MOUSE_APP} ${BUILD_DIR}/esp/system/drivers/mouse.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FRAMEBUFFER_APP} ${BUILD_DIR}/esp/system/drivers/framebuf.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FRAMEBUFFER_PCI_APP} ${BUILD_DIR}/esp/system/drivers/framebuf_pci.wap
 )
 if (RUST_ENABLE)
   set(RUST_HELLO_COPY_CMD

@@ -1,0 +1,28 @@
+set(NATIVE_FB_PCI_CFLAGS
+    --target=x86_64-elf
+    -ffreestanding -fno-builtin -fno-stack-protector
+    -fno-pic -fno-pie
+    -mno-red-zone
+    -mcmodel=small
+    -Oz -c
+    -Wall -Wextra
+)
+
+wasmos_add_native_c_app_target(framebuffer_pci_app
+  SOURCES
+    ${NATIVE_FRAMEBUFFER_PCI_DRIVER_SRC}
+    ${NATIVE_FRAMEBUFFER_RENDER_SRC}
+  OUTPUT_ELF ${NATIVE_FRAMEBUFFER_PCI_DRIVER_ELF}
+  OUTPUT_APP ${WASM_FRAMEBUFFER_PCI_APP}
+  MANIFEST ${DRIVER_WASM_DIR}/framebuffer_pci/linker.metadata
+  ENTRYPOINT initialize
+  IMAGE_BASE 0x10000000
+  COMPILE_FLAGS ${NATIVE_FB_PCI_CFLAGS}
+  INCLUDES ${DRIVER_WASM_DIR}/include ${DRIVER_WASM_DIR}/framebuffer
+  HEADER_DEPS
+    ${DRIVER_WASM_DIR}/include/wasmos_native_driver.h
+    ${DRIVER_WASM_DIR}/framebuffer/fbtext_internal.h
+    ${DRIVER_WASM_DIR}/framebuffer/font_8x16.h
+  LINK_COMMENT "Linking native framebuffer-pci driver"
+  PACK_COMMENT "Packing native framebuffer-pci driver as WASMOS-APP"
+)

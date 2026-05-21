@@ -46,6 +46,8 @@ static device_manager_state_t g_dm = {
     .rule_spawn_pending = 0,
     .rule_spawn_retries = 0,
     .rule_spawn_path = {0},
+    .framebuffer_rule_active = 0,
+    .framebuffer_rule_spawn_path = {0},
     .active_rule_spawn_index = -1,
     .block_fs_rules = {0},
     .block_fs_rule_count = 0,
@@ -90,6 +92,7 @@ static int query_module_meta_by_path(const char *path, uint32_t source, int32_t 
 static void queue_block_fs_rule_spawns(void);
 static void queue_block_fs_rules_for_known_devices(void);
 static int module_index_by_name(const char *name);
+static int spawn_framebuffer_target(void);
 
 static int
 read_rules_file(const char *path, char *out_text, uint32_t out_text_len)
@@ -224,6 +227,12 @@ poll_boot_rules_async(void)
         g_dm.rule_spawn_pending = 1;
         console_write("[device-manager] boot rules queued spawn_path\n");
     }
+    if (dm_rules_extract_framebuffer_spawn_path(text,
+                                                g_dm.framebuffer_rule_spawn_path,
+                                                sizeof(g_dm.framebuffer_rule_spawn_path)) == 0) {
+        g_dm.framebuffer_rule_active = 1;
+        console_write("[device-manager] boot rules set framebuffer_spawn_path\n");
+    }
     dm_rules_load_block_fs(&g_dm, text);
     if (g_dm.block_fs_rule_count > 0) {
         console_write("[device-manager] boot rules loaded block_fs\n");
@@ -252,6 +261,12 @@ load_rules_if_available(void)
             if (dm_rules_extract_spawn_path(text, g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path)) == 0) {
                 g_dm.rule_spawn_pending = 1;
                 console_write("[device-manager] init rules queued spawn_path\n");
+            }
+            if (dm_rules_extract_framebuffer_spawn_path(text,
+                                                        g_dm.framebuffer_rule_spawn_path,
+                                                        sizeof(g_dm.framebuffer_rule_spawn_path)) == 0) {
+                g_dm.framebuffer_rule_active = 1;
+                console_write("[device-manager] init rules set framebuffer_spawn_path\n");
             }
             dm_rules_load_block_fs(&g_dm, text);
             if (g_dm.block_fs_rule_count > 0) {
@@ -503,6 +518,18 @@ hw_spawn_rule_target(const char *rule_path)
         return hw_spawn_driver_index_caps(module_index, &g_dm.selected_storage_caps);
     }
     return hw_spawn_driver_index(module_index);
+}
+
+static int
+spawn_framebuffer_target(void)
+{
+    if (g_dm.framebuffer_rule_active && g_dm.framebuffer_rule_spawn_path[0] != '\0') {
+        return hw_spawn_rule_target(g_dm.framebuffer_rule_spawn_path);
+    }
+    if (g_dm.framebuffer_index >= 0) {
+        return hw_spawn_driver_index(g_dm.framebuffer_index);
+    }
+    return hw_spawn_driver_name(HW_SPAWN_FRAMEBUFFER);
 }
 
 static int
@@ -1156,8 +1183,7 @@ initialize(int32_t proc_endpoint,
                     wasmos_sys_ipc_recv_loop();
                 }
             } else if (target == HW_SPAWN_FRAMEBUFFER) {
-                if ((g_dm.framebuffer_index >= 0 && hw_spawn_driver_index(g_dm.framebuffer_index) != 0) ||
-                    (g_dm.framebuffer_index < 0 && hw_spawn_driver_name(target) != 0)) {
+                if (spawn_framebuffer_target() != 0) {
                     g_dm.phase = HW_PHASE_FAILED;
                     console_write("[device-manager] spawn framebuffer failed\n");
                     wasmos_sys_ipc_recv_loop();

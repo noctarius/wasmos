@@ -2,5 +2,6 @@
 # Loaded from /init/devmgr/rules during early boot.
 # Syntax/parser is introduced incrementally; this file is intentionally minimal.
 spawn_path=system/drivers/ata.wap
+framebuffer_spawn_path=/boot/system/drivers/framebuf.wap
 block_fs unit=0 mount=/boot spawn_path=system/drivers/fs_fat.wap
 block_fs unit=1 mount=/user spawn_path=system/drivers/fs_fat.wap

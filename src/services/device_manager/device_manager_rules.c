@@ -51,20 +51,23 @@ dm_rules_count_active(const char *text)
     return count;
 }
 
-int
-dm_rules_extract_spawn_path(const char *text, char *out_path, uint32_t out_len)
+static int
+extract_key_path(const char *text, const char *key, char *out_path, uint32_t out_len)
 {
     int32_t i = 0;
+    uint32_t key_len = 0;
     if (!text || !out_path || out_len == 0) {
         return -1;
     }
+    if (!key || key[0] == '\0') {
+        return -1;
+    }
+    key_len = (uint32_t)strlen(key);
     out_path[0] = '\0';
     for (;;) {
         int32_t line_start = i;
         int32_t line_end = i;
         const char *line = 0;
-        const char *key = "spawn_path=";
-        uint32_t key_len = 11;
         uint32_t key_i = 0;
         const char *value = 0;
         uint32_t n = 0;
@@ -99,6 +102,18 @@ dm_rules_extract_spawn_path(const char *text, char *out_path, uint32_t out_len)
         i = line_end + 1;
     }
     return -1;
+}
+
+int
+dm_rules_extract_spawn_path(const char *text, char *out_path, uint32_t out_len)
+{
+    return extract_key_path(text, "spawn_path=", out_path, out_len);
+}
+
+int
+dm_rules_extract_framebuffer_spawn_path(const char *text, char *out_path, uint32_t out_len)
+{
+    return extract_key_path(text, "framebuffer_spawn_path=", out_path, out_len);
 }
 
 static int

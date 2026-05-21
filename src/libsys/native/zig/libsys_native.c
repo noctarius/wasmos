@@ -13,6 +13,91 @@ byte_copy(uint8_t *dst, const uint8_t *src, uint32_t len)
 }
 
 void
+wasmos_sys_byte_copy_native(uint8_t *dst, const uint8_t *src, uint32_t len)
+{
+    byte_copy(dst, src, len);
+}
+
+int32_t
+wasmos_sys_be_u16_native(const uint8_t *data, uint32_t data_len, uint32_t off, uint16_t *out)
+{
+    if (!data || !out || off + 2u > data_len) {
+        return -1;
+    }
+    *out = (uint16_t)(((uint16_t)data[off] << 8u) | (uint16_t)data[off + 1u]);
+    return 0;
+}
+
+int32_t
+wasmos_sys_be_i16_native(const uint8_t *data, uint32_t data_len, uint32_t off, int16_t *out)
+{
+    uint16_t u = 0;
+    if (!out || wasmos_sys_be_u16_native(data, data_len, off, &u) != 0) {
+        return -1;
+    }
+    *out = (int16_t)u;
+    return 0;
+}
+
+int32_t
+wasmos_sys_be_u32_native(const uint8_t *data, uint32_t data_len, uint32_t off, uint32_t *out)
+{
+    if (!data || !out || off + 4u > data_len) {
+        return -1;
+    }
+    *out = ((uint32_t)data[off] << 24u) |
+           ((uint32_t)data[off + 1u] << 16u) |
+           ((uint32_t)data[off + 2u] << 8u) |
+           (uint32_t)data[off + 3u];
+    return 0;
+}
+
+int32_t
+wasmos_sys_find_table_native(const uint8_t *data, uint32_t data_len, const uint8_t tag[4], uint32_t *out_offset)
+{
+    uint16_t num_tables = 0;
+    uint32_t i = 0;
+    if (!data || !tag || !out_offset) {
+        return -1;
+    }
+    if (wasmos_sys_be_u16_native(data, data_len, 4u, &num_tables) != 0) {
+        return -1;
+    }
+    for (i = 0; i < (uint32_t)num_tables; ++i) {
+        uint32_t rec = 12u + i * 16u;
+        uint32_t offset = 0;
+        if (rec + 16u > data_len) {
+            return -1;
+        }
+        if (data[rec] != tag[0] || data[rec + 1u] != tag[1] || data[rec + 2u] != tag[2] || data[rec + 3u] != tag[3]) {
+            continue;
+        }
+        if (wasmos_sys_be_u32_native(data, data_len, rec + 8u, &offset) != 0) {
+            return -1;
+        }
+        *out_offset = offset;
+        return 0;
+    }
+    return -1;
+}
+
+uint32_t
+wasmos_sys_pack_u16_pair_native(uint32_t a, uint32_t b)
+{
+    uint16_t a16 = (uint16_t)(a & 0xFFFFu);
+    uint16_t b16 = (uint16_t)(b & 0xFFFFu);
+    return (uint32_t)a16 | ((uint32_t)b16 << 16u);
+}
+
+uint32_t
+wasmos_sys_pack_s16_pair_native(int32_t a, int32_t b)
+{
+    uint16_t a16 = (uint16_t)(int16_t)a;
+    uint16_t b16 = (uint16_t)(int16_t)b;
+    return (uint32_t)a16 | ((uint32_t)b16 << 16u);
+}
+
+void
 wasmos_sys_ipc_pack_name16_native(const uint8_t *name, uint32_t name_len, uint32_t out_args[4])
 {
     uint32_t i = 0;

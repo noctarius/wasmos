@@ -95,3 +95,39 @@ pub fn fsReadPath(api: anytype, fs_endpoint: u32, reply_endpoint: u32, request_i
     if (out_text.len == 0) return -1;
     return c.wasmos_sys_fs_read_path_native(asApi(api), fs_endpoint, reply_endpoint, request_id, path.ptr, @intCast(path.len), out_text.ptr, @intCast(out_text.len));
 }
+
+pub fn byteCopy(dst: [*]u8, src: [*]const u8, len: usize) void {
+    c.wasmos_sys_byte_copy_native(dst, src, @intCast(len));
+}
+
+pub fn beU16(data: []const u8, off: usize) ?u16 {
+    var v: u16 = 0;
+    if (c.wasmos_sys_be_u16_native(data.ptr, @intCast(data.len), @intCast(off), &v) != 0) return null;
+    return v;
+}
+
+pub fn beI16(data: []const u8, off: usize) ?i16 {
+    var v: i16 = 0;
+    if (c.wasmos_sys_be_i16_native(data.ptr, @intCast(data.len), @intCast(off), &v) != 0) return null;
+    return v;
+}
+
+pub fn beU32(data: []const u8, off: usize) ?u32 {
+    var v: u32 = 0;
+    if (c.wasmos_sys_be_u32_native(data.ptr, @intCast(data.len), @intCast(off), &v) != 0) return null;
+    return v;
+}
+
+pub fn findTable(data: []const u8, tag: [4]u8) ?usize {
+    var off: u32 = 0;
+    if (c.wasmos_sys_find_table_native(data.ptr, @intCast(data.len), &tag, &off) != 0) return null;
+    return @intCast(off);
+}
+
+pub fn packU16Pair(a: u32, b: u32) u32 {
+    return c.wasmos_sys_pack_u16_pair_native(a, b);
+}
+
+pub fn packS16Pair(a: i32, b: i32) u32 {
+    return c.wasmos_sys_pack_s16_pair_native(a, b);
+}

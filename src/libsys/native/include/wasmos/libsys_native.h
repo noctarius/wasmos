@@ -22,6 +22,13 @@ int32_t wasmos_sys_svc_lookup_native(wasmos_driver_api_t *api, uint32_t proc_end
 int32_t wasmos_sys_buffer_copy_from_native(wasmos_driver_api_t *api, uint32_t kind, uint32_t source_endpoint, uint32_t borrow_flags, void *dst, int32_t len, int32_t offset);
 int32_t wasmos_sys_buffer_write_to_native(wasmos_driver_api_t *api, uint32_t kind, uint32_t source_endpoint, uint32_t borrow_flags, const void *src, int32_t len, int32_t offset);
 int32_t wasmos_sys_fs_read_path_native(wasmos_driver_api_t *api, uint32_t fs_endpoint, uint32_t reply_endpoint, uint32_t request_id, const uint8_t *path, uint32_t path_len, uint8_t *out_text, int32_t out_text_len);
+void wasmos_sys_byte_copy_native(uint8_t *dst, const uint8_t *src, uint32_t len);
+int32_t wasmos_sys_be_u16_native(const uint8_t *data, uint32_t data_len, uint32_t off, uint16_t *out);
+int32_t wasmos_sys_be_i16_native(const uint8_t *data, uint32_t data_len, uint32_t off, int16_t *out);
+int32_t wasmos_sys_be_u32_native(const uint8_t *data, uint32_t data_len, uint32_t off, uint32_t *out);
+int32_t wasmos_sys_find_table_native(const uint8_t *data, uint32_t data_len, const uint8_t tag[4], uint32_t *out_offset);
+uint32_t wasmos_sys_pack_u16_pair_native(uint32_t a, uint32_t b);
+uint32_t wasmos_sys_pack_s16_pair_native(int32_t a, int32_t b);
 
 #ifdef __cplusplus
 }

@@ -2,7 +2,6 @@ const c = @cImport({
     @cInclude("font_service_imports.h");
 });
 const sys = @import("libsys");
-const zu = @import("zig_utils.zig");
 
 const IPC_OK: i32 = 0;
 const IPC_EMPTY: i32 = 1;
@@ -101,13 +100,13 @@ fn parse_ttf_metrics(f: *loaded_font_t) bool {
     if (f.ptr == null or f.len < 12) return false;
     const data: []const u8 = f.ptr.?[0..f.len];
 
-    const head_off = zu.findTable(data, .{ 'h', 'e', 'a', 'd' }) orelse return false;
-    const hhea_off = zu.findTable(data, .{ 'h', 'h', 'e', 'a' }) orelse return false;
+    const head_off = sys.findTable(data, .{ 'h', 'e', 'a', 'd' }) orelse return false;
+    const hhea_off = sys.findTable(data, .{ 'h', 'h', 'e', 'a' }) orelse return false;
 
-    const upem = zu.beU16(data, head_off + 18) orelse return false;
-    const asc = zu.beI16(data, hhea_off + 4) orelse return false;
-    const desc = zu.beI16(data, hhea_off + 6) orelse return false;
-    const gap = zu.beI16(data, hhea_off + 8) orelse return false;
+    const upem = sys.beU16(data, head_off + 18) orelse return false;
+    const asc = sys.beI16(data, hhea_off + 4) orelse return false;
+    const desc = sys.beI16(data, hhea_off + 6) orelse return false;
+    const gap = sys.beI16(data, hhea_off + 8) orelse return false;
 
     if (upem == 0) return false;
     f.units_per_em = upem;
@@ -162,7 +161,7 @@ fn read_file_into_shmem(path: []const u8, out_shmem_id: *u32, out_ptr: *[*]u8, o
         return -1;
     };
     if (path.len == 0 or path.len + 1 >= PM_FS_BUFFER_SIZE) return -1;
-    zu.byteCopy(fs_buf_path, path.ptr, path.len);
+    sys.byteCopy(fs_buf_path, path.ptr, path.len);
     fs_buf_path[path.len] = 0;
 
     var reply: c.nd_ipc_message_t = undefined;
@@ -326,7 +325,7 @@ fn handle_raster_glyph(req: *const c.nd_ipc_message_t) void {
     const w: i32 = x1 - x0;
     const hgt: i32 = y1 - y0;
     if (w <= 0 or hgt <= 0) {
-        reply_with_status(req, c.FONT_STATUS_OK, 0, 0, zu.packS16Pair(x0, y0));
+        reply_with_status(req, c.FONT_STATUS_OK, 0, 0, sys.packS16Pair(x0, y0));
         return;
     }
 
@@ -366,7 +365,7 @@ fn handle_raster_glyph(req: *const c.nd_ipc_message_t) void {
 
     const dst: [*]u8 = g_raster_scratch_ptr.?;
     c.stbtt_MakeCodepointBitmap(&f.font_info, dst, @intCast(w), @intCast(hgt), @intCast(w), scale, scale, @bitCast(codepoint));
-    reply_with_status(req, c.FONT_STATUS_OK, g_raster_scratch_shmem_id, zu.packU16Pair(@intCast(w), @intCast(hgt)), zu.packS16Pair(x0, y0));
+    reply_with_status(req, c.FONT_STATUS_OK, g_raster_scratch_shmem_id, sys.packU16Pair(@intCast(w), @intCast(hgt)), sys.packS16Pair(x0, y0));
 }
 
 fn load_builtin_fonts() void {

@@ -1,3 +1,6 @@
+const abi = @import("c_abi.zig");
+const c = abi.c;
+
 pub const IPC_OK: i32 = 0;
 pub const IPC_EMPTY: i32 = 1;
 pub const IPC_ENDPOINT_NONE: u32 = 0xFFFF_FFFF;
@@ -47,12 +50,12 @@ pub fn ipcCall(comptime Msg: type, api: anytype, source_endpoint: u32, destinati
     return ipcRecvMatching(api, source_endpoint, request_id, out_message);
 }
 
-pub fn svcRegister(comptime C: type, comptime Msg: type, api: anytype, proc_endpoint: u32, source_endpoint: u32, name: []const u8, request_id: u32) i32 {
+pub fn svcRegister(comptime Msg: type, api: anytype, proc_endpoint: u32, source_endpoint: u32, name: []const u8, request_id: u32) i32 {
     var args: [4]u32 = undefined;
     var msg: Msg = undefined;
     packName16(name, &args);
 
-    msg.type = C.SVC_IPC_REGISTER_REQ;
+    msg.type = c.SVC_IPC_REGISTER_REQ;
     msg.source = source_endpoint;
     msg.destination = proc_endpoint;
     msg.request_id = request_id;
@@ -68,18 +71,18 @@ pub fn svcRegister(comptime C: type, comptime Msg: type, api: anytype, proc_endp
     if (ipcRecvMatching(api, source_endpoint, request_id, &msg) != 0) {
         return -1;
     }
-    if (msg.type != C.SVC_IPC_REGISTER_RESP) {
+    if (msg.type != c.SVC_IPC_REGISTER_RESP) {
         return -1;
     }
     return @bitCast(msg.arg0);
 }
 
-pub fn svcLookup(comptime C: type, comptime Msg: type, api: anytype, proc_endpoint: u32, source_endpoint: u32, name: []const u8, request_id: u32) i32 {
+pub fn svcLookup(comptime Msg: type, api: anytype, proc_endpoint: u32, source_endpoint: u32, name: []const u8, request_id: u32) i32 {
     var args: [4]u32 = undefined;
     var msg: Msg = undefined;
     packName16(name, &args);
 
-    msg.type = C.SVC_IPC_LOOKUP_REQ;
+    msg.type = c.SVC_IPC_LOOKUP_REQ;
     msg.source = source_endpoint;
     msg.destination = proc_endpoint;
     msg.request_id = request_id;
@@ -95,20 +98,20 @@ pub fn svcLookup(comptime C: type, comptime Msg: type, api: anytype, proc_endpoi
     if (ipcRecvMatching(api, source_endpoint, request_id, &msg) != 0) {
         return -1;
     }
-    if (msg.type != C.SVC_IPC_LOOKUP_RESP or msg.arg0 == IPC_ENDPOINT_NONE) {
+    if (msg.type != c.SVC_IPC_LOOKUP_RESP or msg.arg0 == IPC_ENDPOINT_NONE) {
         return -1;
     }
     return @bitCast(msg.arg0);
 }
 
-pub fn svcLookupRetry(comptime C: type, comptime Msg: type, api: anytype, proc_endpoint: u32, source_endpoint: u32, name: []const u8, request_id_base: u32, attempts: u32) i32 {
+pub fn svcLookupRetry(comptime Msg: type, api: anytype, proc_endpoint: u32, source_endpoint: u32, name: []const u8, request_id_base: u32, attempts: u32) i32 {
     var max_attempts = attempts;
     if (max_attempts == 0) {
         max_attempts = 1;
     }
     var i: u32 = 0;
     while (i < max_attempts) : (i += 1) {
-        const ep = svcLookup(C, Msg, api, proc_endpoint, source_endpoint, name, request_id_base + i);
+        const ep = svcLookup(Msg, api, proc_endpoint, source_endpoint, name, request_id_base + i);
         if (ep >= 0) {
             return ep;
         }

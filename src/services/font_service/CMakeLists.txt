@@ -26,17 +26,19 @@ add_custom_command(
           -target x86_64-freestanding
           -O ReleaseSmall
           -fstrip
+          --dep libsys
           -I ${CMAKE_SOURCE_DIR}
           -I ${CMAKE_SOURCE_DIR}/libs/stb
           -I ${CMAKE_CURRENT_SOURCE_DIR}
           -I ${DRIVER_WASM_DIR}/include
           -I ${LIBC_DIR}/include
-          --dep libsys
           -Mroot=${WASM_FONT_SERVICE_SRC}
+          -I ${DRIVER_WASM_DIR}/include
           -Mlibsys=${LIBSYS_DIR}/zig/libsys.zig
           -femit-bin=${FONT_SERVICE_ZIG_OBJ}
   DEPENDS ${WASM_FONT_SERVICE_SRC}
           ${LIBSYS_DIR}/zig/libsys.zig
+          ${LIBSYS_DIR}/zig/c_abi.zig
           ${CMAKE_CURRENT_SOURCE_DIR}/zig_utils.zig
           ${CMAKE_CURRENT_SOURCE_DIR}/font_service_imports.h
           ${DRIVER_WASM_DIR}/include/wasmos_native_driver.h

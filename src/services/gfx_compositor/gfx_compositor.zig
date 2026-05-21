@@ -194,15 +194,15 @@ fn rand_u32() u32 {
 }
 
 fn svc_register(name: []const u8, request_id: u32) i32 {
-    return sys.svcRegister(c, c.nd_ipc_message_t, api(), g_proc_endpoint, g_gfx_endpoint, name, request_id);
+    return sys.svcRegister(c.nd_ipc_message_t, api(), g_proc_endpoint, g_gfx_endpoint, name, request_id);
 }
 
 fn svc_lookup(name: []const u8, request_id: u32) i32 {
-    return sys.svcLookup(c, c.nd_ipc_message_t, api(), g_proc_endpoint, g_gfx_endpoint, name, request_id);
+    return sys.svcLookup(c.nd_ipc_message_t, api(), g_proc_endpoint, g_gfx_endpoint, name, request_id);
 }
 
 fn svc_lookup_from(source_endpoint: u32, name: []const u8, request_id: u32) i32 {
-    return sys.svcLookup(c, c.nd_ipc_message_t, api(), g_proc_endpoint, source_endpoint, name, request_id);
+    return sys.svcLookup(c.nd_ipc_message_t, api(), g_proc_endpoint, source_endpoint, name, request_id);
 }
 
 fn lookup_fb_endpoint() i32 {

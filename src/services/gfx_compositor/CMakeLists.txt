@@ -12,6 +12,7 @@ if (NOT ZIG_EXECUTABLE)
 endif ()
 
 set(GFX_COMPOSITOR_ZIG_OBJ ${BUILD_DIR}/gfx_compositor_zig.o)
+set(GFX_COMPOSITOR_LIBSYS_EXPORTS_OBJ ${BUILD_DIR}/gfx_compositor_libsys_exports.o)
 set(GFX_COMPOSITOR_ELF ${WASM_GFX_COMPOSITOR_WASM})
 
 add_custom_command(
@@ -27,13 +28,15 @@ add_custom_command(
           -I ${CMAKE_CURRENT_SOURCE_DIR}
           -I ${DRIVER_WASM_DIR}/include
           -I ${LIBC_DIR}/include
+          -I ${LIBSYS_NATIVE_DIR}/include
           -Mroot=${WASM_GFX_COMPOSITOR_SRC}
           -I ${DRIVER_WASM_DIR}/include
-          -Mlibsys=${LIBSYS_DIR}/zig/libsys.zig
+          -I ${LIBSYS_NATIVE_DIR}/include
+          -Mlibsys=${LIBSYS_NATIVE_DIR}/zig/libsys.zig
           -femit-bin=${GFX_COMPOSITOR_ZIG_OBJ}
   DEPENDS ${WASM_GFX_COMPOSITOR_SRC}
-          ${LIBSYS_DIR}/zig/libsys.zig
-          ${LIBSYS_DIR}/zig/c_abi.zig
+          ${LIBSYS_NATIVE_DIR}/zig/libsys.zig
+          ${LIBSYS_NATIVE_DIR}/zig/c_abi.zig
           ${CMAKE_CURRENT_SOURCE_DIR}/gfx_compositor_imports.h
           ${DRIVER_WASM_DIR}/include/wasmos_native_driver.h
           ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
@@ -44,13 +47,40 @@ add_custom_command(
 )
 
 add_custom_command(
+  OUTPUT ${GFX_COMPOSITOR_LIBSYS_EXPORTS_OBJ}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG}
+          -target ${KERNEL_TARGET_TRIPLE}
+          -ffreestanding
+          -fno-stack-protector
+          -fno-pic
+          -fno-pie
+          -fno-builtin
+          -nostdlib
+          -O2
+          -I ${DRIVER_WASM_DIR}/include
+          -I ${LIBSYS_NATIVE_DIR}/include
+          -c ${LIBSYS_NATIVE_DIR}/zig/libsys_exports.c
+          -o ${GFX_COMPOSITOR_LIBSYS_EXPORTS_OBJ}
+  DEPENDS ${LIBSYS_NATIVE_DIR}/zig/libsys_exports.c
+          ${LIBSYS_NATIVE_DIR}/include/wasmos/libsys_native_exports.h
+          ${DRIVER_WASM_DIR}/include/wasmos_native_driver.h
+          ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Building gfx-compositor libsys exports object"
+  VERBATIM
+)
+
+add_custom_command(
   OUTPUT ${GFX_COMPOSITOR_ELF}
   COMMAND ${LLD_PATH}
           -e initialize
           -static
           ${GFX_COMPOSITOR_ZIG_OBJ}
+          ${GFX_COMPOSITOR_LIBSYS_EXPORTS_OBJ}
           -o ${GFX_COMPOSITOR_ELF}
   DEPENDS ${GFX_COMPOSITOR_ZIG_OBJ}
+          ${GFX_COMPOSITOR_LIBSYS_EXPORTS_OBJ}
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Linking native Zig gfx-compositor service"
   VERBATIM

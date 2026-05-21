@@ -26,6 +26,8 @@ set(BOOT_DIR ${CMAKE_SOURCE_DIR}/src/boot)
 set(KERNEL_DIR ${CMAKE_SOURCE_DIR}/src/kernel)
 set(LIBC_DIR ${CMAKE_SOURCE_DIR}/src/libc)
 set(LIBSYS_DIR ${CMAKE_SOURCE_DIR}/src/libsys)
+set(LIBSYS_WASM_DIR ${LIBSYS_DIR}/wasm)
+set(LIBSYS_NATIVE_DIR ${LIBSYS_DIR}/native)
 set(WASM3_DIR ${CMAKE_SOURCE_DIR}/libs/wasm3)
 set(DRIVER_WASM_DIR ${CMAKE_SOURCE_DIR}/src/drivers)
 set(EXAMPLES_C_DIR ${CMAKE_SOURCE_DIR}/examples/c)
@@ -293,9 +295,9 @@ set(WASMOS_LIBC_INCLUDE_DEPS
   ${LIBC_DIR}/include/wasmos/api.h
   ${LIBC_DIR}/include/wasmos/ipc.h
   ${LIBC_DIR}/include/wasmos/imports.h
-  ${LIBSYS_DIR}/include/wasmos/libsys.h
-  ${LIBSYS_DIR}/include/wasmos/libsys_string.h
-  ${LIBSYS_DIR}/include/wasmos/sha256.h
+  ${LIBSYS_WASM_DIR}/include/wasmos/libsys.h
+  ${LIBSYS_WASM_DIR}/include/wasmos/libsys_string.h
+  ${LIBSYS_WASM_DIR}/include/wasmos/sha256.h
   ${SERVICES_DIR}/fs_manager/fs_manager_types.h
   ${SERVICES_DIR}/device_manager/device_manager_types.h
   ${SERVICES_DIR}/pci_bus/pci_bus_types.h
@@ -355,7 +357,7 @@ function(wasmos_add_wasm_c_app_target target_name)
             -Wl,--allow-undefined
             -Wl,--export=${WASMOS_APP_EXPORT}
             -I${LIBC_DIR}/include
-            -I${LIBSYS_DIR}/include
+            -I${LIBSYS_WASM_DIR}/include
             -I${DRIVER_WASM_DIR}/include
             ${WASMOS_LIBC_C_SOURCES}
             ${WASMOS_APP_SOURCE}
@@ -388,7 +390,7 @@ function(wasmos_add_wasm_c_app_target target_name)
 
   wasmos_add_ide_c_target(${target_name}_ide
     SOURCES ${WASMOS_APP_SOURCE}
-    INCLUDES ${LIBC_DIR}/include ${LIBSYS_DIR}/include ${DRIVER_WASM_DIR}/include
+    INCLUDES ${LIBC_DIR}/include ${LIBSYS_WASM_DIR}/include ${DRIVER_WASM_DIR}/include
   )
 endfunction()
 

@@ -194,15 +194,15 @@ fn rand_u32() u32 {
 }
 
 fn svc_register(name: []const u8, request_id: u32) i32 {
-    return sys.svcRegister(c.nd_ipc_message_t, api(), g_proc_endpoint, g_gfx_endpoint, name, request_id);
+    return sys.svcRegister(api(), g_proc_endpoint, g_gfx_endpoint, name, request_id);
 }
 
 fn svc_lookup(name: []const u8, request_id: u32) i32 {
-    return sys.svcLookup(c.nd_ipc_message_t, api(), g_proc_endpoint, g_gfx_endpoint, name, request_id);
+    return sys.svcLookup(api(), g_proc_endpoint, g_gfx_endpoint, name, request_id);
 }
 
 fn svc_lookup_from(source_endpoint: u32, name: []const u8, request_id: u32) i32 {
-    return sys.svcLookup(c.nd_ipc_message_t, api(), g_proc_endpoint, source_endpoint, name, request_id);
+    return sys.svcLookup(api(), g_proc_endpoint, source_endpoint, name, request_id);
 }
 
 fn lookup_fb_endpoint() i32 {
@@ -419,7 +419,7 @@ fn refresh_input_subscriptions_runtime() void {
 }
 
 fn ipc_call(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t) i32 {
-    return sys.ipcCall(c.nd_ipc_message_t, api(), g_gfx_endpoint, destination, request_id, msg_type, arg0, arg1, arg2, arg3, out);
+    return sys.ipcCall(api(), g_gfx_endpoint, destination, request_id, msg_type, arg0, arg1, arg2, arg3, out);
 }
 
 fn ipc_call_budgeted(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t, max_empty_polls: u32) i32 {

@@ -136,6 +136,8 @@ typedef struct {
     uint8_t rule_spawn_pending;
     uint8_t rule_spawn_retries;
     char rule_spawn_path[96];
+    uint8_t framebuffer_rule_active;
+    char framebuffer_rule_spawn_path[96];
     int32_t active_rule_spawn_index;
     block_fs_rule_t block_fs_rules[BLOCK_FS_RULE_CAP];
     uint32_t block_fs_rule_count;

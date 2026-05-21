@@ -26,9 +26,12 @@ add_custom_command(
           -I ${CMAKE_CURRENT_SOURCE_DIR}
           -I ${DRIVER_WASM_DIR}/include
           -I ${LIBC_DIR}/include
+          --dep libsys
+          -Mroot=${WASM_GFX_COMPOSITOR_SRC}
+          -Mlibsys=${LIBSYS_DIR}/zig/libsys.zig
           -femit-bin=${GFX_COMPOSITOR_ZIG_OBJ}
-          ${WASM_GFX_COMPOSITOR_SRC}
   DEPENDS ${WASM_GFX_COMPOSITOR_SRC}
+          ${LIBSYS_DIR}/zig/libsys.zig
           ${CMAKE_CURRENT_SOURCE_DIR}/gfx_compositor_imports.h
           ${DRIVER_WASM_DIR}/include/wasmos_native_driver.h
           ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h

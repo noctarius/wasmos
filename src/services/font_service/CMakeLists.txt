@@ -12,6 +12,7 @@ if (NOT ZIG_EXECUTABLE)
 endif ()
 
 set(FONT_SERVICE_ZIG_OBJ ${BUILD_DIR}/font_service_zig.o)
+set(FONT_SERVICE_LIBSYS_EXPORTS_OBJ ${BUILD_DIR}/font_service_libsys_exports.o)
 set(FONT_SERVICE_STB_OBJ ${BUILD_DIR}/font_service_stb.o)
 set(FONT_SERVICE_LIBC_CTYPE_OBJ ${BUILD_DIR}/font_service_libc_ctype.o)
 set(FONT_SERVICE_LIBC_STRING_OBJ ${BUILD_DIR}/font_service_libc_string.o)
@@ -32,13 +33,15 @@ add_custom_command(
           -I ${CMAKE_CURRENT_SOURCE_DIR}
           -I ${DRIVER_WASM_DIR}/include
           -I ${LIBC_DIR}/include
+          -I ${LIBSYS_NATIVE_DIR}/include
           -Mroot=${WASM_FONT_SERVICE_SRC}
           -I ${DRIVER_WASM_DIR}/include
-          -Mlibsys=${LIBSYS_DIR}/zig/libsys.zig
+          -I ${LIBSYS_NATIVE_DIR}/include
+          -Mlibsys=${LIBSYS_NATIVE_DIR}/zig/libsys.zig
           -femit-bin=${FONT_SERVICE_ZIG_OBJ}
   DEPENDS ${WASM_FONT_SERVICE_SRC}
-          ${LIBSYS_DIR}/zig/libsys.zig
-          ${LIBSYS_DIR}/zig/c_abi.zig
+          ${LIBSYS_NATIVE_DIR}/zig/libsys.zig
+          ${LIBSYS_NATIVE_DIR}/zig/c_abi.zig
           ${CMAKE_CURRENT_SOURCE_DIR}/zig_utils.zig
           ${CMAKE_CURRENT_SOURCE_DIR}/font_service_imports.h
           ${DRIVER_WASM_DIR}/include/wasmos_native_driver.h
@@ -47,6 +50,31 @@ add_custom_command(
           ${CMAKE_SOURCE_DIR}/libs/stb/stb_truetype.h
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Building native Zig font-service object"
+  VERBATIM
+)
+
+add_custom_command(
+  OUTPUT ${FONT_SERVICE_LIBSYS_EXPORTS_OBJ}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG}
+          -target ${KERNEL_TARGET_TRIPLE}
+          -ffreestanding
+          -fno-stack-protector
+          -fno-pic
+          -fno-pie
+          -fno-builtin
+          -nostdlib
+          -O2
+          -I ${DRIVER_WASM_DIR}/include
+          -I ${LIBSYS_NATIVE_DIR}/include
+          -c ${LIBSYS_NATIVE_DIR}/zig/libsys_exports.c
+          -o ${FONT_SERVICE_LIBSYS_EXPORTS_OBJ}
+  DEPENDS ${LIBSYS_NATIVE_DIR}/zig/libsys_exports.c
+          ${LIBSYS_NATIVE_DIR}/include/wasmos/libsys_native_exports.h
+          ${DRIVER_WASM_DIR}/include/wasmos_native_driver.h
+          ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Building font-service libsys exports object"
   VERBATIM
 )
 
@@ -146,12 +174,14 @@ add_custom_command(
           -e initialize
           -static
           ${FONT_SERVICE_ZIG_OBJ}
+          ${FONT_SERVICE_LIBSYS_EXPORTS_OBJ}
           ${FONT_SERVICE_STB_OBJ}
           ${FONT_SERVICE_LIBC_CTYPE_OBJ}
           ${FONT_SERVICE_LIBC_STRING_OBJ}
           ${FONT_SERVICE_LIBC_MATH_OBJ}
           -o ${FONT_SERVICE_ELF}
   DEPENDS ${FONT_SERVICE_ZIG_OBJ}
+          ${FONT_SERVICE_LIBSYS_EXPORTS_OBJ}
           ${FONT_SERVICE_STB_OBJ}
           ${FONT_SERVICE_LIBC_CTYPE_OBJ}
           ${FONT_SERVICE_LIBC_STRING_OBJ}

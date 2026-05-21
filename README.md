@@ -27,8 +27,7 @@ It defines repository workflow and documentation/update conventions.
 ## Current Highlights
 - Deterministic UEFI boot handoff (`BOOTX64.EFI` -> `kernel.elf` + `initfs.img`) with a small x86_64 microkernel baseline (paging, scheduler, IPC, process lifecycle, exceptions).
 - WASM-first userspace runtime (wasm3) with optional native drivers/services where hardware paths benefit from native execution.
-- Shared `libsys` helper layer for services/drivers is now available (header-first) for common IPC/buffer/file-access patterns, IPC send-retry flow-control helpers, and SHA-256 helpers on top of the raw WASMOS hostcalls.
-- Shared `libsys` helper layer now also provides a Zig wrapper module for native Zig services/drivers so common service-lookup/IPC-call/name-pack patterns stay aligned across C and Zig components.
+- Shared `libsys` helper layer is split by runtime: `src/libsys/wasm` (hostcall-backed C helpers for wasm-compiled apps/services/drivers) and `src/libsys/native` (native-driver-backed helpers + Zig wrappers for native Zig services/drivers).
 - Service-driven startup chain with endpoint registry and discovery (`register`/`lookup`) plus PCI-inventory-driven driver bring-up.
 - Practical VT/CLI environment with multi-TTY switching, fail-fast script execution (`script <file>`), basic environment variables (`export`, `echo ${VAR}`), PATH-based app lookup, and core inspection commands (`ps`, `kmaps`, `mount`, `exec`, etc.).
 - Device-manager policy roots are defined for udev-like evolution: `/init/devmgr/rules` (bootstrap) and `/boot/system/devmgr/rules` (runtime override). Storage bring-up is rule-driven from `/init/devmgr/rules/default.rules`: `spawn_path=...` boots ATA, then one or more `block_fs ...` rules spawn `fs-fat` instances after matching published block-device records (for example `unit=0` -> `/boot`, `unit=1` -> `/user`).

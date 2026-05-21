@@ -61,8 +61,7 @@ fn logMsg(msg: []const u8) void {
 }
 
 fn svc_register(name: []const u8, request_id: u32) i32 {
-    return sys.svcRegister(c.nd_ipc_message_t,
-        api(),
+    return sys.svcRegister(api(),
         g_proc_endpoint,
         g_font_endpoint,
         name,
@@ -71,8 +70,7 @@ fn svc_register(name: []const u8, request_id: u32) i32 {
 }
 
 fn svc_lookup(name: []const u8, request_id: u32) i32 {
-    return sys.svcLookup(c.nd_ipc_message_t,
-        api(),
+    return sys.svcLookup(api(),
         g_proc_endpoint,
         g_font_endpoint,
         name,
@@ -81,7 +79,7 @@ fn svc_lookup(name: []const u8, request_id: u32) i32 {
 }
 
 fn ipc_call(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t) i32 {
-    return sys.ipcCall(c.nd_ipc_message_t, api(), g_font_endpoint, destination, request_id, msg_type, arg0, arg1, arg2, arg3, out);
+    return sys.ipcCall(api(), g_font_endpoint, destination, request_id, msg_type, arg0, arg1, arg2, arg3, out);
 }
 
 fn fs_borrow_rw() ?[*]u8 {

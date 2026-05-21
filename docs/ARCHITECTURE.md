@@ -47,7 +47,8 @@ Status snapshot has been moved to [STATUS.md](STATUS.md).
 - Maintain C ABI compatibility at subsystem boundaries with `extern "C"` declarations in shared headers.
 
 ## Shared Service/Driver Helpers
-- `src/libsys` is the shared utility layer for user-space drivers/services.
+- `src/libsys` is split by runtime:
+  - `src/libsys/wasm` for wasm-compiled apps/services/drivers (hostcall-backed C helpers).
+  - `src/libsys/native` for native services/drivers (C exports plus Zig wrappers).
 - Scope is intentionally narrow and explicit: common IPC wait/call patterns, IPC send-retry flow-control helpers, name pack/unpack helpers, buffer borrow/release helpers, filesystem path-read helpers, libc-style string/ctype adapters, and small shared primitives such as SHA-256.
-- Scope is intentionally narrow and explicit: common IPC wait/call patterns, IPC send-retry flow-control helpers, name pack/unpack helpers, buffer borrow/release helpers, filesystem path-read helpers, libc-style string/ctype adapters, and small shared primitives such as SHA-256, with equivalent wrappers available for native Zig services/drivers.
 - Keep `libsys` lightweight and dependency-free; it should reduce duplicated control-flow/error handling without hiding protocol behavior.

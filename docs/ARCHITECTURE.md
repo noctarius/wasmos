@@ -49,4 +49,5 @@ Status snapshot has been moved to [STATUS.md](STATUS.md).
 ## Shared Service/Driver Helpers
 - `src/libsys` is the shared utility layer for user-space drivers/services.
 - Scope is intentionally narrow and explicit: common IPC wait/call patterns, IPC send-retry flow-control helpers, name pack/unpack helpers, buffer borrow/release helpers, filesystem path-read helpers, libc-style string/ctype adapters, and small shared primitives such as SHA-256.
+- Scope is intentionally narrow and explicit: common IPC wait/call patterns, IPC send-retry flow-control helpers, name pack/unpack helpers, buffer borrow/release helpers, filesystem path-read helpers, libc-style string/ctype adapters, and small shared primitives such as SHA-256, with equivalent wrappers available for native Zig services/drivers.
 - Keep `libsys` lightweight and dependency-free; it should reduce duplicated control-flow/error handling without hiding protocol behavior.

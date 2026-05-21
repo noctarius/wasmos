@@ -1,6 +1,7 @@
 const c = @cImport({
     @cInclude("gfx_compositor_imports.h");
 });
+const sys = @import("libsys");
 
 const IPC_OK: i32 = 0;
 const IPC_EMPTY: i32 = 1;
@@ -192,113 +193,16 @@ fn rand_u32() u32 {
     return x;
 }
 
-fn packName16(name: []const u8, out: *[4]u32) void {
-    out.* = .{ 0, 0, 0, 0 };
-    var i: usize = 0;
-    while (i < name.len and i < 16) : (i += 1) {
-        const slot: usize = i / 4;
-        const shift: u5 = @intCast((i % 4) * 8);
-        out[slot] |= (@as(u32, name[i]) << shift);
-    }
-}
-
 fn svc_register(name: []const u8, request_id: u32) i32 {
-    var args: [4]u32 = undefined;
-    var msg: c.nd_ipc_message_t = undefined;
-    packName16(name, &args);
-
-    msg.type = c.SVC_IPC_REGISTER_REQ;
-    msg.source = g_gfx_endpoint;
-    msg.destination = g_proc_endpoint;
-    msg.request_id = request_id;
-    msg.arg0 = args[0];
-    msg.arg1 = args[1];
-    msg.arg2 = args[2];
-    msg.arg3 = args[3];
-    if (api().ipc_send.?(ctxId(), g_proc_endpoint, &msg) != IPC_OK) {
-        return -1;
-    }
-    while (true) {
-        const rc = api().ipc_recv.?(ctxId(), g_gfx_endpoint, &msg);
-        if (rc == IPC_EMPTY) {
-            api().sched_yield.?();
-            continue;
-        }
-        if (rc != IPC_OK) {
-            return -1;
-        }
-        if (msg.request_id == request_id) break;
-    }
-    if (msg.type != c.SVC_IPC_REGISTER_RESP) {
-        return -1;
-    }
-    return @bitCast(msg.arg0);
+    return sys.svcRegister(c.nd_ipc_message_t, api(), g_proc_endpoint, g_gfx_endpoint, name, request_id, c.SVC_IPC_REGISTER_REQ, c.SVC_IPC_REGISTER_RESP);
 }
 
 fn svc_lookup(name: []const u8, request_id: u32) i32 {
-    var args: [4]u32 = undefined;
-    var msg: c.nd_ipc_message_t = undefined;
-    packName16(name, &args);
-
-    msg.type = c.SVC_IPC_LOOKUP_REQ;
-    msg.source = g_gfx_endpoint;
-    msg.destination = g_proc_endpoint;
-    msg.request_id = request_id;
-    msg.arg0 = args[0];
-    msg.arg1 = args[1];
-    msg.arg2 = args[2];
-    msg.arg3 = args[3];
-    if (api().ipc_send.?(ctxId(), g_proc_endpoint, &msg) != IPC_OK) {
-        return -1;
-    }
-    while (true) {
-        const rc = api().ipc_recv.?(ctxId(), g_gfx_endpoint, &msg);
-        if (rc == IPC_EMPTY) {
-            api().sched_yield.?();
-            continue;
-        }
-        if (rc != IPC_OK) {
-            return -1;
-        }
-        if (msg.request_id == request_id) break;
-    }
-    if (msg.type != c.SVC_IPC_LOOKUP_RESP or msg.arg0 == IPC_ENDPOINT_NONE) {
-        return -1;
-    }
-    return @bitCast(msg.arg0);
+    return sys.svcLookup(c.nd_ipc_message_t, api(), g_proc_endpoint, g_gfx_endpoint, name, request_id, c.SVC_IPC_LOOKUP_REQ, c.SVC_IPC_LOOKUP_RESP);
 }
 
 fn svc_lookup_from(source_endpoint: u32, name: []const u8, request_id: u32) i32 {
-    var args: [4]u32 = undefined;
-    var msg: c.nd_ipc_message_t = undefined;
-    packName16(name, &args);
-
-    msg.type = c.SVC_IPC_LOOKUP_REQ;
-    msg.source = source_endpoint;
-    msg.destination = g_proc_endpoint;
-    msg.request_id = request_id;
-    msg.arg0 = args[0];
-    msg.arg1 = args[1];
-    msg.arg2 = args[2];
-    msg.arg3 = args[3];
-    if (api().ipc_send.?(ctxId(), g_proc_endpoint, &msg) != IPC_OK) {
-        return -1;
-    }
-    while (true) {
-        const rc = api().ipc_recv.?(ctxId(), source_endpoint, &msg);
-        if (rc == IPC_EMPTY) {
-            api().sched_yield.?();
-            continue;
-        }
-        if (rc != IPC_OK) {
-            return -1;
-        }
-        if (msg.request_id == request_id) break;
-    }
-    if (msg.type != c.SVC_IPC_LOOKUP_RESP or msg.arg0 == IPC_ENDPOINT_NONE) {
-        return -1;
-    }
-    return @bitCast(msg.arg0);
+    return sys.svcLookup(c.nd_ipc_message_t, api(), g_proc_endpoint, source_endpoint, name, request_id, c.SVC_IPC_LOOKUP_REQ, c.SVC_IPC_LOOKUP_RESP);
 }
 
 fn lookup_fb_endpoint() i32 {
@@ -515,26 +419,7 @@ fn refresh_input_subscriptions_runtime() void {
 }
 
 fn ipc_call(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t) i32 {
-    var req: c.nd_ipc_message_t = undefined;
-    req.type = msg_type;
-    req.source = g_gfx_endpoint;
-    req.destination = destination;
-    req.request_id = request_id;
-    req.arg0 = arg0;
-    req.arg1 = arg1;
-    req.arg2 = arg2;
-    req.arg3 = arg3;
-    if (api().ipc_send.?(ctxId(), destination, &req) != IPC_OK) return -1;
-
-    while (true) {
-        const rc = api().ipc_recv.?(ctxId(), g_gfx_endpoint, out);
-        if (rc == IPC_EMPTY) {
-            api().sched_yield.?();
-            continue;
-        }
-        if (rc != IPC_OK) return -1;
-        if (out.request_id == request_id) return 0;
-    }
+    return sys.ipcCall(c.nd_ipc_message_t, api(), g_gfx_endpoint, destination, request_id, msg_type, arg0, arg1, arg2, arg3, out);
 }
 
 fn ipc_call_budgeted(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t, max_empty_polls: u32) i32 {

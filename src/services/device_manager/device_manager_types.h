@@ -96,6 +96,9 @@ typedef struct {
 
 typedef struct {
     uint8_t active;
+    uint8_t bus;
+    uint8_t slot;
+    uint8_t function;
     uint8_t class_code;
     uint8_t subclass;
     uint8_t prog_if;

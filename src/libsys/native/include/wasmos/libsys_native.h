@@ -34,6 +34,8 @@ typedef struct {
     wasmos_driver_api_t *api;
     uint32_t receiver_endpoint;
     uint32_t next_request_id;
+    void (*default_on_message)(void *user, const nd_ipc_message_t *msg);
+    void *default_user;
     wasmos_sys_native_intent_t intents[WASMOS_SYS_NATIVE_INTENT_MAX];
     wasmos_sys_native_handler_t handlers[WASMOS_SYS_NATIVE_HANDLER_MAX];
 } wasmos_sys_native_event_loop_t;
@@ -54,6 +56,7 @@ int32_t wasmos_sys_be_u32_native(const uint8_t *data, uint32_t data_len, uint32_
 int32_t wasmos_sys_find_table_native(const uint8_t *data, uint32_t data_len, const uint8_t tag[4], uint32_t *out_offset);
 uint32_t wasmos_sys_pack_u16_pair_native(uint32_t a, uint32_t b);
 uint32_t wasmos_sys_pack_s16_pair_native(int32_t a, int32_t b);
+uint32_t wasmos_sys_hex_u32_native(uint32_t value, uint8_t *out, uint32_t out_len);
 void wasmos_sys_native_event_loop_init(wasmos_sys_native_event_loop_t *loop,
                                        wasmos_driver_api_t *api,
                                        uint32_t receiver_endpoint,
@@ -62,6 +65,9 @@ int32_t wasmos_sys_native_event_register(wasmos_sys_native_event_loop_t *loop,
                                          uint32_t msg_type,
                                          void (*on_message)(void *user, const nd_ipc_message_t *msg),
                                          void *user);
+int32_t wasmos_sys_native_event_set_default(wasmos_sys_native_event_loop_t *loop,
+                                            void (*on_message)(void *user, const nd_ipc_message_t *msg),
+                                            void *user);
 int32_t wasmos_sys_native_intent_send(wasmos_sys_native_event_loop_t *loop,
                                       uint32_t destination_endpoint,
                                       uint32_t source_endpoint,
@@ -73,6 +79,17 @@ int32_t wasmos_sys_native_intent_send(wasmos_sys_native_event_loop_t *loop,
                                       void (*on_resolve)(void *user, const nd_ipc_message_t *msg),
                                       void *user,
                                       uint32_t *out_request_id);
+int32_t wasmos_sys_native_intent_send_with_request_id(wasmos_sys_native_event_loop_t *loop,
+                                                      uint32_t destination_endpoint,
+                                                      uint32_t source_endpoint,
+                                                      uint32_t request_id,
+                                                      uint32_t msg_type,
+                                                      uint32_t arg0,
+                                                      uint32_t arg1,
+                                                      uint32_t arg2,
+                                                      uint32_t arg3,
+                                                      void (*on_resolve)(void *user, const nd_ipc_message_t *msg),
+                                                      void *user);
 int32_t wasmos_sys_native_event_loop_poll(wasmos_sys_native_event_loop_t *loop, uint32_t budget);
 
 #ifdef __cplusplus

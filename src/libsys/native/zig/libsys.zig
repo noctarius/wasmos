@@ -133,16 +133,29 @@ pub fn packS16Pair(a: i32, b: i32) u32 {
     return c.wasmos_sys_pack_s16_pair_native(a, b);
 }
 
+pub fn hexU32(value: u32, out: []u8) usize {
+    if (out.len == 0) return 0;
+    return @intCast(c.wasmos_sys_hex_u32_native(value, out.ptr, @intCast(out.len)));
+}
+
 pub fn eventLoopInit(loop: *NativeEventLoop, api: anytype, receiver_endpoint: u32, request_id_base: u32) void {
     c.wasmos_sys_native_event_loop_init(loop, asApi(api), receiver_endpoint, request_id_base);
 }
 
-pub fn eventRegister(loop: *NativeEventLoop, msg_type: u32, on_message: *const fn (?*anyopaque, ?*const c.nd_ipc_message_t) callconv(.c) void, user: ?*anyopaque) i32 {
-    return c.wasmos_sys_native_event_register(loop, msg_type, on_message, user);
+pub fn eventRegister(loop: *NativeEventLoop, msg_type: u32, on_message: *const fn (?*anyopaque, ?*const anyopaque) callconv(.c) void, user: ?*anyopaque) i32 {
+    return c.wasmos_sys_native_event_register(loop, msg_type, @ptrCast(on_message), user);
 }
 
-pub fn intentSend(loop: *NativeEventLoop, destination_endpoint: u32, source_endpoint: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, on_resolve: *const fn (?*anyopaque, ?*const c.nd_ipc_message_t) callconv(.c) void, user: ?*anyopaque, out_request_id: ?*u32) i32 {
-    return c.wasmos_sys_native_intent_send(loop, destination_endpoint, source_endpoint, msg_type, arg0, arg1, arg2, arg3, on_resolve, user, out_request_id);
+pub fn eventSetDefault(loop: *NativeEventLoop, on_message: *const fn (?*anyopaque, ?*const anyopaque) callconv(.c) void, user: ?*anyopaque) i32 {
+    return c.wasmos_sys_native_event_set_default(loop, @ptrCast(on_message), user);
+}
+
+pub fn intentSend(loop: *NativeEventLoop, destination_endpoint: u32, source_endpoint: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, on_resolve: *const fn (?*anyopaque, ?*const anyopaque) callconv(.c) void, user: ?*anyopaque, out_request_id: ?*u32) i32 {
+    return c.wasmos_sys_native_intent_send(loop, destination_endpoint, source_endpoint, msg_type, arg0, arg1, arg2, arg3, @ptrCast(on_resolve), user, out_request_id);
+}
+
+pub fn intentSendWithRequestId(loop: *NativeEventLoop, destination_endpoint: u32, source_endpoint: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, on_resolve: *const fn (?*anyopaque, ?*const anyopaque) callconv(.c) void, user: ?*anyopaque) i32 {
+    return c.wasmos_sys_native_intent_send_with_request_id(loop, destination_endpoint, source_endpoint, request_id, msg_type, arg0, arg1, arg2, arg3, @ptrCast(on_resolve), user);
 }
 
 pub fn eventLoopPoll(loop: *NativeEventLoop, budget: u32) i32 {

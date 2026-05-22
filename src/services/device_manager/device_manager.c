@@ -103,6 +103,108 @@ static void queue_pci_match_rule_spawns(void);
 static void queue_block_fs_rule_spawns(void);
 static void queue_block_fs_rules_for_known_devices(void);
 static int module_index_by_name(const char *name);
+static void filter_boot_override_rules(void);
+static uint16_t count_loaded_active_rules(void);
+
+static int
+str_contains(const char *s, const char *needle)
+{
+    uint32_t i = 0;
+    uint32_t nlen = 0;
+    if (!s || !needle || needle[0] == '\0') {
+        return 0;
+    }
+    while (needle[nlen] != '\0') {
+        nlen++;
+    }
+    for (i = 0; s[i] != '\0'; ++i) {
+        uint32_t j = 0;
+        while (needle[j] != '\0' && s[i + j] != '\0' && s[i + j] == needle[j]) {
+            j++;
+        }
+        if (j == nlen) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int
+is_boot_override_forbidden_path(const char *path)
+{
+    if (!path || path[0] == '\0') {
+        return 0;
+    }
+    if (str_contains(path, "system/drivers/ata.wap")) {
+        return 1;
+    }
+    if (str_contains(path, "system/drivers/fs_fat.wap")) {
+        return 1;
+    }
+    return 0;
+}
+
+static void
+filter_boot_override_rules(void)
+{
+    for (uint32_t i = 0; i < g_dm.always_spawn_rule_count; ++i) {
+        always_spawn_rule_t *rule = &g_dm.always_spawn_rules[i];
+        if (!rule->active) {
+            continue;
+        }
+        if (is_boot_override_forbidden_path(rule->spawn_path)) {
+            rule->active = 0;
+            rule->queued = 0;
+            rule->spawned = 0;
+            console_write("[device-manager] boot rule dropped (bootstrap-owned driver)\n");
+        }
+    }
+    for (uint32_t i = 0; i < g_dm.block_fs_rule_count; ++i) {
+        block_fs_rule_t *rule = &g_dm.block_fs_rules[i];
+        if (!rule->active) {
+            continue;
+        }
+        if (is_boot_override_forbidden_path(rule->spawn_path)) {
+            rule->active = 0;
+            rule->queued = 0;
+            rule->spawned = 0;
+            console_write("[device-manager] boot rule dropped (bootstrap-owned driver)\n");
+        }
+    }
+    for (uint32_t i = 0; i < g_dm.pci_match_rule_count; ++i) {
+        pci_match_rule_t *rule = &g_dm.pci_match_rules[i];
+        if (!rule->active) {
+            continue;
+        }
+        if (is_boot_override_forbidden_path(rule->spawn_path)) {
+            rule->active = 0;
+            rule->spawned_device_mask = 0;
+            console_write("[device-manager] boot rule dropped (bootstrap-owned driver)\n");
+        }
+    }
+}
+
+static uint16_t
+count_loaded_active_rules(void)
+{
+    uint16_t count = 0;
+    for (uint32_t i = 0; i < g_dm.always_spawn_rule_count; ++i) {
+        if (g_dm.always_spawn_rules[i].active) {
+            count++;
+        }
+    }
+    for (uint32_t i = 0; i < g_dm.block_fs_rule_count; ++i) {
+        if (g_dm.block_fs_rules[i].active) {
+            count++;
+        }
+    }
+    for (uint32_t i = 0; i < g_dm.pci_match_rule_count; ++i) {
+        if (g_dm.pci_match_rules[i].active) {
+            count++;
+        }
+    }
+    return count;
+}
 
 static int
 read_rules_file(const char *path, char *out_text, uint32_t out_text_len)
@@ -258,10 +360,11 @@ poll_boot_rules_async(void)
     }
     g_dm.rules_boot_failures = 0;
     text[read_len] = '\0';
-    g_dm.rules_boot_active = dm_rules_count_active(text);
     dm_rules_load_always_spawn(&g_dm, text);
     dm_rules_load_block_fs(&g_dm, text);
     dm_rules_load_pci_match(&g_dm, text);
+    filter_boot_override_rules();
+    g_dm.rules_boot_active = count_loaded_active_rules();
     if (g_dm.always_spawn_rule_count > 0) {
         console_write("[device-manager] boot rules loaded always_spawn\n");
         queue_always_spawn_rules();
@@ -511,6 +614,13 @@ hw_spawn_rule_target(const char *rule_path)
         }
         if (module_index < 0) {
             /* Rule paths may target drivers only available on /boot. */
+            char boot_path[96];
+            boot_path[0] = '\0';
+            wasmos_sys_strcpy(boot_path, sizeof(boot_path), "/boot/");
+            wasmos_sys_str_append(boot_path, sizeof(boot_path), rule_path);
+            if (hw_spawn_driver_path(boot_path) == 0) {
+                return 0;
+            }
             return hw_spawn_driver_path(rule_path);
         }
     }

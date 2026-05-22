@@ -1,8 +1,5 @@
 # WASMOS device-manager persistent rules (boot FAT)
 # Loaded from /boot/system/devmgr/rules after storage is online.
 # Entries here are intended to override or extend initfs bootstrap rules.
-SUBSYSTEM=="pci", ATTR{class}=="0x01", ATTR{subclass}=="0x01", RUN+="system/drivers/ata.wap"
 SUBSYSTEM=="boot", ACTION=="add", RUN+="system/drivers/keyboard.wap"
 SUBSYSTEM=="pci", ATTR{class}=="0x03", ATTR{subclass}=="0x00", ATTR{prog_if}=="0x00", RUN+="system/drivers/fbpci.wap"
-SUBSYSTEM=="block", ATTR{unit}=="0", ENV{MOUNT}="/user", RUN+="system/drivers/fs_fat.wap"
-SUBSYSTEM=="block", ATTR{unit}=="1", ENV{MOUNT}="/boot", RUN+="system/drivers/fs_fat.wap"

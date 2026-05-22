@@ -46,6 +46,8 @@ The current tree already boots into a usable user-space stack:
   - device-manager then performs non-blocking boot-root rules-file reads via a
     dedicated reply endpoint (`/boot/system/devmgr/rules/default.rules`) and
     can update queued runtime policy from override content
+  - runtime override rules from `/boot` are filtered so bootstrap storage
+    drivers (`ata`, `fs-fat`) remain owned by `/init` rule matching only
 - `fs-fat` also supports overwrite-only writes to existing files through the C
   libc `open/write` path, plus `O_TRUNC` size updates, `O_APPEND` writes for
   existing files within their current cluster chain, and `O_CREAT` for

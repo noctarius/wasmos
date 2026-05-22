@@ -1787,6 +1787,13 @@ add_custom_target(run-kernel-unit-tests
           ${KERNEL_DIR}/list_array_chunk.c
           -o ${BUILD_DIR}/test_list
   COMMAND ${BUILD_DIR}/test_list
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${SERVICES_DIR}/device_manager
+          -I${LIBSYS_WASM_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_device_manager_rules.c
+          ${SERVICES_DIR}/device_manager/device_manager_rules.c
+          -o ${BUILD_DIR}/test_device_manager_rules
+  COMMAND ${BUILD_DIR}/test_device_manager_rules
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Running host kernel unit tests"
   VERBATIM

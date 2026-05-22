@@ -1,8 +1,6 @@
 # WASMOS device-manager bootstrap rules (initfs)
 # Loaded from /init/devmgr/rules during early boot.
-# Syntax/parser is introduced incrementally; this file is intentionally minimal.
-always_spawn spawn_path=system/drivers/ata.wap
-always_spawn spawn_path=system/drivers/keyboard.wap
-pci_framebuffer class=03 spawn_path=system/drivers/fbpci.wap
-block_fs unit=0 mount=/boot spawn_path=system/drivers/fs_fat.wap
-block_fs unit=1 mount=/user spawn_path=system/drivers/fs_fat.wap
+# udev-style syntax only.
+SUBSYSTEM=="boot", ACTION=="add", RUN+="system/drivers/ata.wap"
+SUBSYSTEM=="block", ATTR{unit}=="0", ENV{MOUNT}="/boot", RUN+="system/drivers/fs_fat.wap"
+SUBSYSTEM=="block", ATTR{unit}=="1", ENV{MOUNT}="/user", RUN+="system/drivers/fs_fat.wap"

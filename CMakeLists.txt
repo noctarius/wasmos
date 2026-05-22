@@ -938,6 +938,9 @@ set(INITFS_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_MOUSE_APP} ${BUILD_DIR}/esp/system/drivers/mouse.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FRAMEBUFFER_APP} ${BUILD_DIR}/esp/system/drivers/framebuf.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FRAMEBUFFER_PCI_APP} ${BUILD_DIR}/esp/system/drivers/framebuf_pci.wap
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${USERFS_DIR}
+  COMMAND ${CMAKE_COMMAND} -E rm -rf ${USERFS_DIR}/system
+  COMMAND ${CMAKE_COMMAND} -E copy_directory ${BUILD_DIR}/esp/system ${USERFS_DIR}/system
 )
 if (RUST_ENABLE)
   set(RUST_HELLO_COPY_CMD

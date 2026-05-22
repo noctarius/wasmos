@@ -147,6 +147,8 @@ typedef struct {
     uint8_t rules_init_loaded;
     uint8_t rules_boot_loaded;
     uint8_t rules_boot_request_pending;
+    uint16_t rules_boot_retry_delay;
+    uint8_t rules_boot_failures;
     int32_t rules_boot_request_id;
     uint16_t rules_init_active;
     uint16_t rules_boot_active;

@@ -38,6 +38,8 @@ static device_manager_state_t g_dm = {
     .rules_init_loaded = 0,
     .rules_boot_loaded = 0,
     .rules_boot_request_pending = 0,
+    .rules_boot_retry_delay = 0,
+    .rules_boot_failures = 0,
     .rules_boot_request_id = -1,
     .rules_init_active = 0,
     .rules_boot_active = 0,
@@ -145,7 +147,11 @@ kick_boot_rules_read_async(void)
     if (g_dm.rules_boot_loaded || g_dm.rules_boot_request_pending) {
         return;
     }
-    if (!proc_running("fs-fat")) {
+    if (g_dm.rules_boot_retry_delay > 0) {
+        g_dm.rules_boot_retry_delay--;
+        return;
+    }
+    if (!g_dm.boot_mount_ready) {
         return;
     }
     if (ensure_fs_endpoint() != 0) {
@@ -208,27 +214,49 @@ poll_boot_rules_async(void)
     g_dm.rules_boot_request_pending = 0;
     resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
     if (resp_type != FS_IPC_RESP) {
-        g_dm.rules_boot_loaded = 1;
-        g_dm.rules_boot_active = 0;
-        console_write("[device-manager] boot rules unavailable; skipping\n");
+        if (g_dm.rules_boot_failures < 255u) {
+            g_dm.rules_boot_failures++;
+        }
+        if (g_dm.rules_boot_failures >= 8u) {
+            g_dm.rules_boot_loaded = 1;
+            g_dm.rules_boot_active = 0;
+            console_write("[device-manager] boot rules unavailable; using bootstrap rules\n");
+            return;
+        }
+        g_dm.rules_boot_retry_delay = 64;
         return;
     }
     read_len = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
     if (read_len < 0) {
-        g_dm.rules_boot_loaded = 1;
-        g_dm.rules_boot_active = 0;
-        console_write("[device-manager] boot rules read length invalid; skipping\n");
+        if (g_dm.rules_boot_failures < 255u) {
+            g_dm.rules_boot_failures++;
+        }
+        if (g_dm.rules_boot_failures >= 8u) {
+            g_dm.rules_boot_loaded = 1;
+            g_dm.rules_boot_active = 0;
+            console_write("[device-manager] boot rules unavailable; using bootstrap rules\n");
+            return;
+        }
+        g_dm.rules_boot_retry_delay = 64;
         return;
     }
     if (read_len >= (int32_t)sizeof(text)) {
         read_len = (int32_t)sizeof(text) - 1;
     }
     if (read_len > 0 && wasmos_fs_buffer_copy((int32_t)(uintptr_t)text, read_len, 0) != 0) {
-        g_dm.rules_boot_loaded = 1;
-        g_dm.rules_boot_active = 0;
-        console_write("[device-manager] boot rules copy failed; skipping\n");
+        if (g_dm.rules_boot_failures < 255u) {
+            g_dm.rules_boot_failures++;
+        }
+        if (g_dm.rules_boot_failures >= 8u) {
+            g_dm.rules_boot_loaded = 1;
+            g_dm.rules_boot_active = 0;
+            console_write("[device-manager] boot rules unavailable; using bootstrap rules\n");
+            return;
+        }
+        g_dm.rules_boot_retry_delay = 64;
         return;
     }
+    g_dm.rules_boot_failures = 0;
     text[read_len] = '\0';
     g_dm.rules_boot_active = dm_rules_count_active(text);
     dm_rules_load_always_spawn(&g_dm, text);
@@ -1163,6 +1191,7 @@ initialize(int32_t proc_endpoint,
     g_dm.phase = HW_PHASE_SPAWN;
 
     for (;;) {
+        handle_query_endpoint();
         if (g_dm.phase == HW_PHASE_SPAWN) {
             hw_spawn_target_t target = next_spawn_target();
             if (target == HW_SPAWN_NONE) {
@@ -1244,10 +1273,10 @@ initialize(int32_t proc_endpoint,
                             block_fs_rule_t *rule = &g_dm.block_fs_rules[g_dm.active_rule_spawn_index];
                             rule->spawned = 1;
                             rule->queued = 0;
-                            if (rule->unit == 0) {
+                            if (wasmos_sys_streq(rule->mount, "/boot")) {
                                 g_dm.boot_mount_ready = 1;
                                 queue_always_spawn_rules();
-                            } else if (rule->unit == 1) {
+                            } else if (wasmos_sys_streq(rule->mount, "/user")) {
                                 g_dm.user_mount_ready = 1;
                             }
                         }
@@ -1372,12 +1401,7 @@ initialize(int32_t proc_endpoint,
                 g_dm.phase = HW_PHASE_SPAWN;
                 continue;
             }
-            if (g_dm.rules_boot_request_pending) {
-                handle_query_endpoint();
-                wasmos_sched_yield();
-                continue;
-            }
-            if (wasmos_ipc_recv(g_dm.query_endpoint) >= 0) {
+            if (wasmos_ipc_try_recv(g_dm.query_endpoint) > 0) {
                 int32_t msg_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
                 if (msg_type == DEVMGR_PUBLISH_BLOCK_DEVICE) {
                     int32_t arg0 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);

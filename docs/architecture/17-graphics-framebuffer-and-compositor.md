@@ -17,9 +17,10 @@ can present multiple independent app surfaces on a single scanout.
 Current implementation note:
 - `gfx-compositor` now uses the native `libsys` event-loop + intent helpers for
   its primary IPC endpoint. Incoming messages are dispatched through registered
-  handlers, and compositor outbound request/reply calls on the same endpoint use
-  intent-backed waits so unrelated incoming events/requests are still serviced
-  while waiting for replies.
+  handlers, and compositor outbound request/reply calls (including runtime
+  service lookups and font RPCs) on the same endpoint use intent-backed waits so
+  unrelated incoming events/requests are still serviced while waiting for
+  replies.
 
 ## 2. Component Model
 

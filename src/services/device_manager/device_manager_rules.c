@@ -2,34 +2,6 @@
 #include "wasmos/libsys_string.h"
 #include "device_manager_rules.h"
 
-static const char *
-trim_left(const char *s)
-{
-    if (!s) {
-        return s;
-    }
-    while (*s && wasmos_sys_is_space(*s)) {
-        s++;
-    }
-    return s;
-}
-
-static void
-trim_right(char *s)
-{
-    int32_t i = 0;
-    if (!s) {
-        return;
-    }
-    while (s[i] != '\0') {
-        i++;
-    }
-    while (i > 0 && wasmos_sys_is_space(s[i - 1])) {
-        s[i - 1] = '\0';
-        i--;
-    }
-}
-
 static int
 copy_rule_line(const char *line, char *out, uint32_t out_len)
 {
@@ -53,7 +25,7 @@ copy_rule_line(const char *line, char *out, uint32_t out_len)
             break;
         }
     }
-    trim_right(out);
+    wasmos_sys_trim_right(out);
     return 0;
 }
 
@@ -89,7 +61,7 @@ next_csv_token(char **cursor)
         p++;
     }
     *cursor = p;
-    trim_right(start);
+    wasmos_sys_trim_right(start);
     return start;
 }
 
@@ -287,7 +259,7 @@ parse_always_spawn_rule_line(const char *line, always_spawn_rule_t *out_rule)
     sub[0] = '\0';
     cur = line_buf;
     while ((tok = next_csv_token(&cur)) != 0) {
-        tok = (char *)trim_left(tok);
+        tok = (char *)wasmos_sys_trim_left(tok);
         if (extract_op_value(tok, "SUBSYSTEM", "==", sub, sizeof(sub)) == 0) {
             continue;
         }
@@ -324,7 +296,7 @@ dm_rules_load_always_spawn(device_manager_state_t *state, const char *text)
         while (text[line_end] && text[line_end] != '\n') {
             line_end++;
         }
-        line = trim_left(&text[line_start]);
+        line = wasmos_sys_trim_left(&text[line_start]);
         if (line[0] && line[0] != '#' && out_count < ALWAYS_SPAWN_RULE_CAP) {
             if (parse_always_spawn_rule_line(line, &state->always_spawn_rules[out_count]) == 0) {
                 out_count++;
@@ -363,7 +335,7 @@ parse_block_fs_rule_line(const char *line, block_fs_rule_t *out_rule)
     sub[0] = '\0';
     cur = line_buf;
     while ((tok = next_csv_token(&cur)) != 0) {
-        tok = (char *)trim_left(tok);
+        tok = (char *)wasmos_sys_trim_left(tok);
         if (extract_op_value(tok, "SUBSYSTEM", "==", sub, sizeof(sub)) == 0) {
             continue;
         }
@@ -418,7 +390,7 @@ dm_rules_load_block_fs(device_manager_state_t *state, const char *text)
         while (text[line_end] && text[line_end] != '\n') {
             line_end++;
         }
-        line = trim_left(&text[line_start]);
+        line = wasmos_sys_trim_left(&text[line_start]);
         if (line[0] && line[0] != '#' && out_count < BLOCK_FS_RULE_CAP) {
             if (parse_block_fs_rule_line(line, &state->block_fs_rules[out_count]) == 0) {
                 out_count++;
@@ -462,7 +434,7 @@ parse_pci_fb_rule_line(const char *line, pci_fb_rule_t *out_rule)
     sub[0] = '\0';
     cur = line_buf;
     while ((tok = next_csv_token(&cur)) != 0) {
-        tok = (char *)trim_left(tok);
+        tok = (char *)wasmos_sys_trim_left(tok);
         if (extract_op_value(tok, "SUBSYSTEM", "==", sub, sizeof(sub)) == 0) {
             continue;
         }
@@ -553,7 +525,7 @@ dm_rules_load_pci_fb(device_manager_state_t *state, const char *text)
         while (text[line_end] && text[line_end] != '\n') {
             line_end++;
         }
-        line = trim_left(&text[line_start]);
+        line = wasmos_sys_trim_left(&text[line_start]);
         if (line[0] && line[0] != '#' && out_count < PCI_FB_RULE_CAP) {
             if (parse_pci_fb_rule_line(line, &state->pci_fb_rules[out_count]) == 0) {
                 out_count++;

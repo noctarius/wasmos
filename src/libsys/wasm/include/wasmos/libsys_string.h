@@ -119,6 +119,54 @@ wasmos_sys_to_lower_ascii(char *s)
     }
 }
 
+static inline const char *
+wasmos_sys_trim_left(const char *s)
+{
+    if (!s) {
+        return s;
+    }
+    while (*s && wasmos_sys_is_space(*s)) {
+        s++;
+    }
+    return s;
+}
+
+static inline void
+wasmos_sys_trim_right(char *s)
+{
+    int32_t i = 0;
+    if (!s) {
+        return;
+    }
+    while (s[i] != '\0') {
+        i++;
+    }
+    while (i > 0 && wasmos_sys_is_space(s[i - 1])) {
+        s[i - 1] = '\0';
+        i--;
+    }
+}
+
+static inline char *
+wasmos_sys_trim(char *s)
+{
+    const char *left = 0;
+    uint32_t n = 0;
+    if (!s) {
+        return s;
+    }
+    left = wasmos_sys_trim_left(s);
+    if (left != s) {
+        while (left[n] != '\0') {
+            s[n] = left[n];
+            n++;
+        }
+        s[n] = '\0';
+    }
+    wasmos_sys_trim_right(s);
+    return s;
+}
+
 #ifdef __cplusplus
 }
 #endif

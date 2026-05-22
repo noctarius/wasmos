@@ -405,7 +405,7 @@ dm_rules_load_block_fs(device_manager_state_t *state, const char *text)
 }
 
 static int
-parse_pci_fb_rule_line(const char *line, pci_fb_rule_t *out_rule)
+parse_pci_match_rule_line(const char *line, pci_match_rule_t *out_rule)
 {
     char line_buf[320];
     char path[96];
@@ -508,15 +508,15 @@ parse_pci_fb_rule_line(const char *line, pci_fb_rule_t *out_rule)
 }
 
 void
-dm_rules_load_pci_fb(device_manager_state_t *state, const char *text)
+dm_rules_load_pci_match(device_manager_state_t *state, const char *text)
 {
     uint32_t out_count = 0;
     if (!state || !text) {
         return;
     }
-    for (uint32_t i = 0; i < PCI_FB_RULE_CAP; ++i) {
-        state->pci_fb_rules[i].active = 0;
-        state->pci_fb_rules[i].spawned_device_mask = 0;
+    for (uint32_t i = 0; i < PCI_MATCH_RULE_CAP; ++i) {
+        state->pci_match_rules[i].active = 0;
+        state->pci_match_rules[i].spawned_device_mask = 0;
     }
     for (int32_t i = 0;;) {
         int32_t line_start = i;
@@ -526,8 +526,8 @@ dm_rules_load_pci_fb(device_manager_state_t *state, const char *text)
             line_end++;
         }
         line = wasmos_sys_trim_left(&text[line_start]);
-        if (line[0] && line[0] != '#' && out_count < PCI_FB_RULE_CAP) {
-            if (parse_pci_fb_rule_line(line, &state->pci_fb_rules[out_count]) == 0) {
+        if (line[0] && line[0] != '#' && out_count < PCI_MATCH_RULE_CAP) {
+            if (parse_pci_match_rule_line(line, &state->pci_match_rules[out_count]) == 0) {
                 out_count++;
             }
         }
@@ -536,5 +536,5 @@ dm_rules_load_pci_fb(device_manager_state_t *state, const char *text)
         }
         i = line_end + 1;
     }
-    state->pci_fb_rule_count = out_count;
+    state->pci_match_rule_count = out_count;
 }

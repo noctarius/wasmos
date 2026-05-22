@@ -13,7 +13,7 @@
 #define DEVMGR_RULE_TEXT_CAP 1024
 #define ALWAYS_SPAWN_RULE_CAP 8
 #define BLOCK_FS_RULE_CAP 8
-#define PCI_FB_RULE_CAP 8
+#define PCI_MATCH_RULE_CAP 8
 
 typedef struct __attribute__((packed)) {
     char signature[8];
@@ -106,7 +106,7 @@ typedef struct {
     uint16_t device_id;
     uint64_t spawned_device_mask;
     char spawn_path[96];
-} pci_fb_rule_t;
+} pci_match_rule_t;
 
 typedef struct {
     hw_phase_t phase;
@@ -160,8 +160,8 @@ typedef struct {
     uint32_t always_spawn_rule_count;
     block_fs_rule_t block_fs_rules[BLOCK_FS_RULE_CAP];
     uint32_t block_fs_rule_count;
-    pci_fb_rule_t pci_fb_rules[PCI_FB_RULE_CAP];
-    uint32_t pci_fb_rule_count;
+    pci_match_rule_t pci_match_rules[PCI_MATCH_RULE_CAP];
+    uint32_t pci_match_rule_count;
     uint8_t boot_mount_ready;
     uint8_t user_mount_ready;
 } device_manager_state_t;

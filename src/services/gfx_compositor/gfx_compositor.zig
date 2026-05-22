@@ -374,7 +374,10 @@ fn refresh_input_subscriptions_runtime() void {
 }
 
 fn ipc_call(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t) i32 {
-    _ = request_id;
+    return ipc_call_budgeted(destination, request_id, msg_type, arg0, arg1, arg2, arg3, out, 1024);
+}
+
+fn ipc_call_budgeted(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t, max_empty_polls: u32) i32 {
     const cb_store = struct {
         fn onResolve(user: ?*anyopaque, msg_raw: ?*const anyopaque) callconv(.c) void {
             const state: *struct { done: bool, resp: c.nd_ipc_message_t } = @ptrCast(@alignCast(user.?));
@@ -384,26 +387,22 @@ fn ipc_call(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u
         }
     }.onResolve;
     var state = struct { done: bool, resp: c.nd_ipc_message_t }{ .done = false, .resp = undefined };
-    if (sys.intentSend(&g_ipc_loop, destination, g_gfx_endpoint, msg_type, arg0, arg1, arg2, arg3, cb_store, @ptrCast(&state), null) != 0) {
+    if (sys.intentSendWithRequestId(&g_ipc_loop, destination, g_gfx_endpoint, request_id, msg_type, arg0, arg1, arg2, arg3, cb_store, @ptrCast(&state)) != 0) {
         return -1;
     }
-    var spins: u32 = 0;
+    var empty_polls: u32 = 0;
+    const poll_limit = if (max_empty_polls == 0) 1 else max_empty_polls;
     while (!state.done) {
         const handled = sys.eventLoopPoll(&g_ipc_loop, 8);
         if (handled < 0) return -1;
         if (handled == 0) {
-            if (spins >= 1024) return -1;
-            spins +%= 1;
+            if (empty_polls >= poll_limit) return -1;
+            empty_polls +%= 1;
             api().sched_yield.?();
         }
     }
     out.* = state.resp;
     return 0;
-}
-
-fn ipc_call_budgeted(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t, max_empty_polls: u32) i32 {
-    _ = max_empty_polls;
-    return ipc_call(destination, request_id, msg_type, arg0, arg1, arg2, arg3, out);
 }
 
 fn font_ipc_call_budgeted(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t, max_empty_polls: u32) i32 {

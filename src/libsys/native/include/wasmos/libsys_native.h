@@ -73,6 +73,17 @@ int32_t wasmos_sys_native_intent_send(wasmos_sys_native_event_loop_t *loop,
                                       void (*on_resolve)(void *user, const nd_ipc_message_t *msg),
                                       void *user,
                                       uint32_t *out_request_id);
+int32_t wasmos_sys_native_intent_send_with_request_id(wasmos_sys_native_event_loop_t *loop,
+                                                      uint32_t destination_endpoint,
+                                                      uint32_t source_endpoint,
+                                                      uint32_t request_id,
+                                                      uint32_t msg_type,
+                                                      uint32_t arg0,
+                                                      uint32_t arg1,
+                                                      uint32_t arg2,
+                                                      uint32_t arg3,
+                                                      void (*on_resolve)(void *user, const nd_ipc_message_t *msg),
+                                                      void *user);
 int32_t wasmos_sys_native_event_loop_poll(wasmos_sys_native_event_loop_t *loop, uint32_t budget);
 
 #ifdef __cplusplus

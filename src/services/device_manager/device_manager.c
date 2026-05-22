@@ -581,6 +581,9 @@ queue_pci_fb_rule_spawns(void)
                 continue;
             }
             if ((rule->class_code != MATCH_ANY_U8 && rec->class_code != rule->class_code) ||
+                (rule->bus != MATCH_ANY_U8 && rec->bus != rule->bus) ||
+                (rule->slot != MATCH_ANY_U8 && rec->device != rule->slot) ||
+                (rule->function != MATCH_ANY_U8 && rec->function != rule->function) ||
                 (rule->subclass != MATCH_ANY_U8 && rec->subclass != rule->subclass) ||
                 (rule->prog_if != MATCH_ANY_U8 && rec->prog_if != rule->prog_if) ||
                 (rule->vendor_id != MATCH_ANY_U16 && rec->vendor_id != rule->vendor_id) ||

@@ -442,6 +442,9 @@ parse_pci_fb_rule_line(const char *line, pci_fb_rule_t *out_rule)
     char sub[32];
     char tmp[64];
     uint8_t class_code = MATCH_ANY_U8;
+    uint8_t bus = MATCH_ANY_U8;
+    uint8_t slot = MATCH_ANY_U8;
+    uint8_t function = MATCH_ANY_U8;
     uint8_t subclass = MATCH_ANY_U8;
     uint8_t prog_if = MATCH_ANY_U8;
     uint16_t vendor_id = MATCH_ANY_U16;
@@ -468,6 +471,24 @@ parse_pci_fb_rule_line(const char *line, pci_fb_rule_t *out_rule)
         }
         if (extract_op_value(tok, "ATTR{class}", "==", tmp, sizeof(tmp)) == 0) {
             if (parse_u8_hex(tmp, &class_code) != 0) {
+                return -1;
+            }
+            continue;
+        }
+        if (extract_op_value(tok, "ATTR{bus}", "==", tmp, sizeof(tmp)) == 0) {
+            if (parse_u8_hex(tmp, &bus) != 0) {
+                return -1;
+            }
+            continue;
+        }
+        if (extract_op_value(tok, "ATTR{slot}", "==", tmp, sizeof(tmp)) == 0) {
+            if (parse_u8_hex(tmp, &slot) != 0) {
+                return -1;
+            }
+            continue;
+        }
+        if (extract_op_value(tok, "ATTR{function}", "==", tmp, sizeof(tmp)) == 0) {
+            if (parse_u8_hex(tmp, &function) != 0) {
                 return -1;
             }
             continue;
@@ -501,6 +522,9 @@ parse_pci_fb_rule_line(const char *line, pci_fb_rule_t *out_rule)
         return -1;
     }
     out_rule->active = 1;
+    out_rule->bus = bus;
+    out_rule->slot = slot;
+    out_rule->function = function;
     out_rule->class_code = class_code;
     out_rule->subclass = subclass;
     out_rule->prog_if = prog_if;

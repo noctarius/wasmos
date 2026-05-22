@@ -241,6 +241,7 @@ discovery and driver lifecycle service, while keeping the kernel policy-light.
   - append action: `KEY+="value"`
 - Current accepted keys:
   - `SUBSYSTEM` (`"boot" | "pci" | "block"`)
+  - `ATTR{bus}`, `ATTR{slot}`, `ATTR{function}` (optional PCI BDF selectors)
   - `ATTR{class}`, `ATTR{subclass}`, `ATTR{prog_if}`, `ATTR{vendor}`, `ATTR{device}` (hex for PCI matching)
   - `ATTR{unit}` (`0..255` or `"any"` for block matching)
   - `ENV{MOUNT}` (mount alias output for block-backed filesystem rules)

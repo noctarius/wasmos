@@ -14,6 +14,13 @@ that aligns with the existing microkernel model:
 Primary goal for initial rollout: a deterministic software compositor path that
 can present multiple independent app surfaces on a single scanout.
 
+Current implementation note:
+- `gfx-compositor` now uses the native `libsys` event-loop + intent helpers for
+  its primary IPC endpoint. Incoming messages are dispatched through registered
+  handlers, and compositor outbound request/reply calls on the same endpoint use
+  intent-backed waits so unrelated incoming events/requests are still serviced
+  while waiting for replies.
+
 ## 2. Component Model
 
 Runtime topology:

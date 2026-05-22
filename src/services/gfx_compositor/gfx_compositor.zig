@@ -134,6 +134,7 @@ var g_events: [GFX_MAX_EVENTS]gfx_event_t = [_]gfx_event_t{.{}} ** GFX_MAX_EVENT
 var g_glyph_cache: [GFX_MAX_GLYPH_CACHE]glyph_cache_entry_t = [_]glyph_cache_entry_t{.{}} ** GFX_MAX_GLYPH_CACHE;
 var g_event_head: usize = 0;
 var g_event_tail: usize = 0;
+var g_ipc_loop: sys.NativeEventLoop = undefined;
 
 fn api() *c.wasmos_driver_api_t {
     return g_api.?;
@@ -379,11 +380,36 @@ fn refresh_input_subscriptions_runtime() void {
 }
 
 fn ipc_call(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t) i32 {
-    return sys.ipcCall(api(), g_gfx_endpoint, destination, request_id, msg_type, arg0, arg1, arg2, arg3, out);
+    _ = request_id;
+    const cb_store = struct {
+        fn onResolve(user: ?*anyopaque, msg_raw: ?*const anyopaque) callconv(.c) void {
+            const state: *struct { done: bool, resp: c.nd_ipc_message_t } = @ptrCast(@alignCast(user.?));
+            const msg: *const c.nd_ipc_message_t = @ptrCast(@alignCast(msg_raw.?));
+            state.done = true;
+            state.resp = msg.*;
+        }
+    }.onResolve;
+    var state = struct { done: bool, resp: c.nd_ipc_message_t }{ .done = false, .resp = undefined };
+    if (sys.intentSend(&g_ipc_loop, destination, g_gfx_endpoint, msg_type, arg0, arg1, arg2, arg3, cb_store, @ptrCast(&state), null) != 0) {
+        return -1;
+    }
+    var spins: u32 = 0;
+    while (!state.done) {
+        const handled = sys.eventLoopPoll(&g_ipc_loop, 8);
+        if (handled < 0) return -1;
+        if (handled == 0) {
+            if (spins >= 1024) return -1;
+            spins +%= 1;
+            api().sched_yield.?();
+        }
+    }
+    out.* = state.resp;
+    return 0;
 }
 
 fn ipc_call_budgeted(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t, max_empty_polls: u32) i32 {
-    return sys.ipcCallBudgeted(api(), g_gfx_endpoint, g_gfx_endpoint, destination, request_id, msg_type, arg0, arg1, arg2, arg3, out, max_empty_polls);
+    _ = max_empty_polls;
+    return ipc_call(destination, request_id, msg_type, arg0, arg1, arg2, arg3, out);
 }
 
 fn font_ipc_call_budgeted(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t, max_empty_polls: u32) i32 {
@@ -1656,6 +1682,55 @@ fn handle_poll_event(msg: *const c.nd_ipc_message_t) void {
     reply_with_status(msg, c.GFX_STATUS_OK, c.GFX_EVENT_NONE, 0, 0);
 }
 
+fn handle_ipc_dispatch(msg: *const c.nd_ipc_message_t) void {
+    var opcode: u16 = @intCast(msg.type & 0xFFFF);
+    if (gfx_header_valid(msg.arg2, msg.arg3)) {
+        opcode = gfx_header_opcode(msg.arg3);
+    }
+    switch (opcode) {
+        c.KBD_IPC_KEY_NOTIFY => {
+            if (g_focused_window_id != 0) {
+                if (window_find_by_id(g_focused_window_id)) |focused_idx| {
+                    const focused = g_windows[focused_idx];
+                    const key_flags = (msg.arg1 & 1) | ((msg.arg2 & 1) << 1);
+                    event_push(focused.owner_endpoint, c.GFX_EVENT_KEY, msg.arg0, key_flags, 0);
+                }
+            }
+        },
+        c.MOUSE_IPC_MOVE_NOTIFY => handle_mouse_notify(msg),
+        c.GFX_IPC_CREATE_WINDOW => handle_create_window(msg),
+        c.GFX_IPC_DESTROY_WINDOW => handle_destroy_window(msg),
+        c.GFX_IPC_RESIZE_WINDOW => handle_resize_window(msg),
+        c.GFX_IPC_ALLOC_SHARED_BUFFER => handle_alloc_shared_buffer(msg),
+        c.GFX_IPC_RELEASE_SHARED_BUFFER => handle_release_shared_buffer(msg),
+        c.GFX_IPC_PRESENT_WINDOW => handle_present_window(msg),
+        c.GFX_IPC_POLL_EVENT => handle_poll_event(msg),
+        else => reply_unsupported(msg),
+    }
+}
+
+fn register_ipc_handlers() i32 {
+    const cb = struct {
+        fn onMessage(user: ?*anyopaque, msg_raw: ?*const anyopaque) callconv(.c) void {
+            _ = user;
+            if (msg_raw) |m| {
+                const msg: *const c.nd_ipc_message_t = @ptrCast(@alignCast(m));
+                handle_ipc_dispatch(msg);
+            }
+        }
+    }.onMessage;
+    if (sys.eventRegister(&g_ipc_loop, c.KBD_IPC_KEY_NOTIFY, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.MOUSE_IPC_MOVE_NOTIFY, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_CREATE_WINDOW, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_DESTROY_WINDOW, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_RESIZE_WINDOW, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_ALLOC_SHARED_BUFFER, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_RELEASE_SHARED_BUFFER, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_PRESENT_WINDOW, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_POLL_EVENT, cb, null) != 0) return -1;
+    return 0;
+}
+
 pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int, arg2: c_int, arg3: c_int) c_int {
     _ = arg2;
     _ = arg3;
@@ -1674,6 +1749,8 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
 
     g_gfx_endpoint = api().ipc_create_endpoint.?();
     if (g_gfx_endpoint == IPC_ENDPOINT_NONE) return -1;
+    sys.eventLoopInit(&g_ipc_loop, api(), g_gfx_endpoint, GFX_REQUEST_BASE + 0x8000);
+    if (register_ipc_handlers() != 0) return -1;
     g_font_client_endpoint = api().ipc_create_endpoint.?();
     if (g_font_client_endpoint == IPC_ENDPOINT_NONE) return -1;
 
@@ -1717,9 +1794,9 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
     init_title_glyph_cache_startup();
 
     while (true) {
-        var msg: c.nd_ipc_message_t = undefined;
-        const rc = api().ipc_recv.?(ctxId(), g_gfx_endpoint, &msg);
-        if (rc == IPC_EMPTY) {
+        const handled = sys.eventLoopPoll(&g_ipc_loop, 32);
+        if (handled < 0) return -1;
+        if (handled == 0) {
             if (GFX_TITLE_TEXT_ENABLED) {
                 ensure_font_title_ready_lazy();
                 prime_title_glyph_step();
@@ -1732,33 +1809,6 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
             }
             api().sched_yield.?();
             continue;
-        }
-        if (rc != IPC_OK) return -1;
-
-        var opcode: u16 = @intCast(msg.type & 0xFFFF);
-        if (gfx_header_valid(msg.arg2, msg.arg3)) {
-            opcode = gfx_header_opcode(msg.arg3);
-        }
-
-        switch (opcode) {
-            c.KBD_IPC_KEY_NOTIFY => {
-                if (g_focused_window_id != 0) {
-                    if (window_find_by_id(g_focused_window_id)) |focused_idx| {
-                        const focused = g_windows[focused_idx];
-                        const key_flags = (msg.arg1 & 1) | ((msg.arg2 & 1) << 1);
-                        event_push(focused.owner_endpoint, c.GFX_EVENT_KEY, msg.arg0, key_flags, 0);
-                    }
-                }
-            },
-            c.MOUSE_IPC_MOVE_NOTIFY => handle_mouse_notify(&msg),
-            c.GFX_IPC_CREATE_WINDOW => handle_create_window(&msg),
-            c.GFX_IPC_DESTROY_WINDOW => handle_destroy_window(&msg),
-            c.GFX_IPC_RESIZE_WINDOW => handle_resize_window(&msg),
-            c.GFX_IPC_ALLOC_SHARED_BUFFER => handle_alloc_shared_buffer(&msg),
-            c.GFX_IPC_RELEASE_SHARED_BUFFER => handle_release_shared_buffer(&msg),
-            c.GFX_IPC_PRESENT_WINDOW => handle_present_window(&msg),
-            c.GFX_IPC_POLL_EVENT => handle_poll_event(&msg),
-            else => reply_unsupported(&msg),
         }
         flush_repaint_if_pending();
     }

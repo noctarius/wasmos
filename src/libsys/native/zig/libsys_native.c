@@ -97,6 +97,24 @@ wasmos_sys_pack_s16_pair_native(int32_t a, int32_t b)
     return (uint32_t)a16 | ((uint32_t)b16 << 16u);
 }
 
+uint32_t
+wasmos_sys_hex_u32_native(uint32_t value, uint8_t *out, uint32_t out_len)
+{
+    static const char *hex = "0123456789abcdef";
+    uint32_t i = 0;
+    if (!out || out_len < 11u) {
+        return 0;
+    }
+    out[0] = '0';
+    out[1] = 'x';
+    for (i = 0; i < 8u; ++i) {
+        uint32_t shift = (7u - i) * 4u;
+        out[2u + i] = (uint8_t)hex[(value >> shift) & 0xFu];
+    }
+    out[10] = '\0';
+    return 10u;
+}
+
 void
 wasmos_sys_ipc_pack_name16_native(const uint8_t *name, uint32_t name_len, uint32_t out_args[4])
 {
@@ -211,6 +229,8 @@ wasmos_sys_native_event_loop_init(wasmos_sys_native_event_loop_t *loop,
     loop->api = api;
     loop->receiver_endpoint = receiver_endpoint;
     loop->next_request_id = request_id_base;
+    loop->default_on_message = 0;
+    loop->default_user = 0;
     for (i = 0; i < WASMOS_SYS_NATIVE_INTENT_MAX; ++i) {
         loop->intents[i].in_use = 0;
         loop->intents[i].request_id = 0;
@@ -223,6 +243,19 @@ wasmos_sys_native_event_loop_init(wasmos_sys_native_event_loop_t *loop,
         loop->handlers[i].on_message = 0;
         loop->handlers[i].user = 0;
     }
+}
+
+int32_t
+wasmos_sys_native_event_set_default(wasmos_sys_native_event_loop_t *loop,
+                                    void (*on_message)(void *user, const nd_ipc_message_t *msg),
+                                    void *user)
+{
+    if (!loop || !on_message) {
+        return -1;
+    }
+    loop->default_on_message = on_message;
+    loop->default_user = user;
+    return 0;
 }
 
 int32_t
@@ -302,6 +335,53 @@ wasmos_sys_native_intent_send(wasmos_sys_native_event_loop_t *loop,
 }
 
 int32_t
+wasmos_sys_native_intent_send_with_request_id(wasmos_sys_native_event_loop_t *loop,
+                                              uint32_t destination_endpoint,
+                                              uint32_t source_endpoint,
+                                              uint32_t request_id,
+                                              uint32_t msg_type,
+                                              uint32_t arg0,
+                                              uint32_t arg1,
+                                              uint32_t arg2,
+                                              uint32_t arg3,
+                                              void (*on_resolve)(void *user, const nd_ipc_message_t *msg),
+                                              void *user)
+{
+    nd_ipc_message_t req;
+    wasmos_sys_native_intent_t *slot = 0;
+    uint32_t ctx_id = 0;
+    int32_t send_rc = 0;
+    if (!loop || !loop->api || !loop->api->ipc_send || !loop->api->sched_current_pid || !on_resolve || request_id == 0) {
+        return -1;
+    }
+    if (native_intent_find(loop, request_id)) {
+        return -1;
+    }
+    slot = native_intent_alloc(loop);
+    if (!slot) {
+        return -1;
+    }
+    req.type = msg_type;
+    req.source = source_endpoint;
+    req.destination = destination_endpoint;
+    req.request_id = request_id;
+    req.arg0 = arg0;
+    req.arg1 = arg1;
+    req.arg2 = arg2;
+    req.arg3 = arg3;
+    ctx_id = loop->api->sched_current_pid();
+    send_rc = loop->api->ipc_send(ctx_id, destination_endpoint, &req);
+    if (send_rc != 0) {
+        return send_rc;
+    }
+    slot->in_use = 1;
+    slot->request_id = req.request_id;
+    slot->on_resolve = on_resolve;
+    slot->user = user;
+    return 0;
+}
+
+int32_t
 wasmos_sys_native_event_loop_poll(wasmos_sys_native_event_loop_t *loop, uint32_t budget)
 {
     uint32_t ctx_id = 0;
@@ -337,13 +417,18 @@ wasmos_sys_native_event_loop_poll(wasmos_sys_native_event_loop_t *loop, uint32_t
                 continue;
             }
         }
+        uint8_t dispatched = 0;
         for (uint32_t h = 0; h < WASMOS_SYS_NATIVE_HANDLER_MAX; ++h) {
             if (loop->handlers[h].in_use &&
                 loop->handlers[h].msg_type == msg.type &&
                 loop->handlers[h].on_message) {
                 loop->handlers[h].on_message(loop->handlers[h].user, &msg);
+                dispatched = 1;
                 break;
             }
+        }
+        if (!dispatched && loop->default_on_message) {
+            loop->default_on_message(loop->default_user, &msg);
         }
     }
     return (int32_t)handled;

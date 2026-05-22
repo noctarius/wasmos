@@ -33,6 +33,8 @@ typedef struct {
 typedef struct {
     int32_t receiver_endpoint;
     int32_t next_request_id;
+    void (*default_on_message)(void *user, const wasmos_ipc_message_t *msg);
+    void *default_user;
     wasmos_sys_intent_t intents[WASMOS_SYS_INTENT_MAX];
     wasmos_sys_handler_t handlers[WASMOS_SYS_HANDLER_MAX];
 } wasmos_sys_event_loop_t;
@@ -68,6 +70,8 @@ wasmos_sys_event_loop_init(wasmos_sys_event_loop_t *loop,
     }
     loop->receiver_endpoint = receiver_endpoint;
     loop->next_request_id = request_id_base;
+    loop->default_on_message = 0;
+    loop->default_user = 0;
     for (int32_t i = 0; i < WASMOS_SYS_INTENT_MAX; ++i) {
         loop->intents[i].in_use = 0;
         loop->intents[i].request_id = 0;
@@ -80,6 +84,19 @@ wasmos_sys_event_loop_init(wasmos_sys_event_loop_t *loop,
         loop->handlers[i].on_message = 0;
         loop->handlers[i].user = 0;
     }
+}
+
+static inline int32_t
+wasmos_sys_event_set_default(wasmos_sys_event_loop_t *loop,
+                             void (*on_message)(void *user, const wasmos_ipc_message_t *msg),
+                             void *user)
+{
+    if (!loop || !on_message) {
+        return -1;
+    }
+    loop->default_on_message = on_message;
+    loop->default_user = user;
+    return 0;
 }
 
 static inline int32_t
@@ -179,13 +196,18 @@ wasmos_sys_event_loop_poll(wasmos_sys_event_loop_t *loop, int32_t budget)
                 goto wasmos_sys_event_loop_poll_done_message;
             }
         }
+        int32_t dispatched = 0;
         for (int32_t j = 0; j < WASMOS_SYS_HANDLER_MAX; ++j) {
             if (loop->handlers[j].in_use &&
                 loop->handlers[j].msg_type == msg.type &&
                 loop->handlers[j].on_message) {
                 loop->handlers[j].on_message(loop->handlers[j].user, &msg);
+                dispatched = 1;
                 break;
             }
+        }
+        if (!dispatched && loop->default_on_message) {
+            loop->default_on_message(loop->default_user, &msg);
         }
 wasmos_sys_event_loop_poll_done_message:
         ;

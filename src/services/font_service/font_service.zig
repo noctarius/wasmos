@@ -46,6 +46,7 @@ var g_handles: [MAX_HANDLES]font_handle_t = [_]font_handle_t{.{}} ** MAX_HANDLES
 var g_raster_scratch_shmem_id: u32 = 0;
 var g_raster_scratch_ptr: ?[*]u8 = null;
 var g_raster_scratch_cap: usize = 0;
+var g_ipc_loop: sys.NativeEventLoop = undefined;
 
 fn api() *c.wasmos_driver_api_t {
     return g_api.?;
@@ -57,6 +58,27 @@ fn ctxId() u32 {
 
 fn logMsg(msg: []const u8) void {
     _ = api().console_write.?(msg.ptr, @intCast(msg.len));
+}
+
+fn logHex32(prefix: []const u8, v: u32) void {
+    var buf: [96]u8 = undefined;
+    var hx: [16]u8 = undefined;
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i < prefix.len and n < buf.len) : (i += 1) {
+        buf[n] = prefix[i];
+        n += 1;
+    }
+    const hex_len = sys.hexU32(v, hx[0..]);
+    if (hex_len == 0 or n + hex_len + 1 >= buf.len) return;
+    i = 0;
+    while (i < hex_len and n < buf.len) : (i += 1) {
+        buf[n] = hx[i];
+        n += 1;
+    }
+    buf[n] = '\n';
+    n += 1;
+    _ = api().console_write.?(buf[0..n].ptr, @intCast(n));
 }
 
 fn svc_register(name: []const u8, request_id: u32) i32 {
@@ -78,7 +100,30 @@ fn svc_lookup(name: []const u8, request_id: u32) i32 {
 }
 
 fn ipc_call(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t) i32 {
-    return sys.ipcCall(api(), g_font_endpoint, destination, request_id, msg_type, arg0, arg1, arg2, arg3, out);
+    const cb_store = struct {
+        fn onResolve(user: ?*anyopaque, msg_raw: ?*const anyopaque) callconv(.c) void {
+            const state: *struct { done: bool, resp: c.nd_ipc_message_t } = @ptrCast(@alignCast(user.?));
+            const msg: *const c.nd_ipc_message_t = @ptrCast(@alignCast(msg_raw.?));
+            state.done = true;
+            state.resp = msg.*;
+        }
+    }.onResolve;
+    var state = struct { done: bool, resp: c.nd_ipc_message_t }{ .done = false, .resp = undefined };
+    if (sys.intentSendWithRequestId(&g_ipc_loop, destination, g_font_endpoint, request_id, msg_type, arg0, arg1, arg2, arg3, cb_store, @ptrCast(&state)) != 0) {
+        return -1;
+    }
+    var empty_polls: u32 = 0;
+    while (!state.done) {
+        const handled = sys.eventLoopPoll(&g_ipc_loop, 8);
+        if (handled < 0) return -1;
+        if (handled == 0) {
+            if (empty_polls >= 1024) return -1;
+            empty_polls +%= 1;
+            api().sched_yield.?();
+        }
+    }
+    out.* = state.resp;
+    return 0;
 }
 
 fn fs_borrow_rw() ?[*]u8 {
@@ -368,6 +413,35 @@ fn handle_raster_glyph(req: *const c.nd_ipc_message_t) void {
     reply_with_status(req, c.FONT_STATUS_OK, g_raster_scratch_shmem_id, sys.packU16Pair(@intCast(w), @intCast(hgt)), sys.packS16Pair(x0, y0));
 }
 
+fn handle_font_ipc_message(msg: *const c.nd_ipc_message_t) void {
+    switch (msg.type) {
+        c.FONT_IPC_OPEN_FONT_REQ => handle_open_font(msg),
+        c.FONT_IPC_GET_METRICS_REQ => handle_get_metrics(msg),
+        c.FONT_IPC_RASTER_GLYPH_REQ => handle_raster_glyph(msg),
+        else => {
+            logHex32("[font] warning: unhandled event type ", msg.type);
+            reply_with_status(msg, c.FONT_STATUS_UNSUPPORTED, 0, 0, 0);
+        },
+    }
+}
+
+fn register_ipc_handlers() i32 {
+    const cb = struct {
+        fn onMessage(user: ?*anyopaque, msg_raw: ?*const anyopaque) callconv(.c) void {
+            _ = user;
+            if (msg_raw) |m| {
+                const msg: *const c.nd_ipc_message_t = @ptrCast(@alignCast(m));
+                handle_font_ipc_message(msg);
+            }
+        }
+    }.onMessage;
+    if (sys.eventRegister(&g_ipc_loop, c.FONT_IPC_OPEN_FONT_REQ, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.FONT_IPC_GET_METRICS_REQ, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.FONT_IPC_RASTER_GLYPH_REQ, cb, null) != 0) return -1;
+    if (sys.eventSetDefault(&g_ipc_loop, cb, null) != 0) return -1;
+    return 0;
+}
+
 fn load_builtin_fonts() void {
     const primary_paths = [_][]const u8{
         "/boot/system/fonts/roboto.ttf",
@@ -433,6 +507,8 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
 
     g_font_endpoint = api().ipc_create_endpoint.?();
     if (g_font_endpoint == IPC_ENDPOINT_NONE) return -1;
+    sys.eventLoopInit(&g_ipc_loop, api(), g_font_endpoint, REQ_BASE + 0x2000);
+    if (register_ipc_handlers() != 0) return -1;
 
     if (svc_register("font", 1) != 0) {
         logMsg("[font] register failed\n");
@@ -455,19 +531,11 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
     }
 
     while (true) {
-        var msg: c.nd_ipc_message_t = undefined;
-        const rc = api().ipc_recv.?(ctxId(), g_font_endpoint, &msg);
-        if (rc == IPC_EMPTY) {
+        const handled = sys.eventLoopPoll(&g_ipc_loop, 32);
+        if (handled < 0) return -1;
+        if (handled == 0) {
             api().sched_yield.?();
             continue;
-        }
-        if (rc != IPC_OK) return -1;
-
-        switch (msg.type) {
-            c.FONT_IPC_OPEN_FONT_REQ => handle_open_font(&msg),
-            c.FONT_IPC_GET_METRICS_REQ => handle_get_metrics(&msg),
-            c.FONT_IPC_RASTER_GLYPH_REQ => handle_raster_glyph(&msg),
-            else => reply_with_status(&msg, c.FONT_STATUS_UNSUPPORTED, 0, 0, 0),
         }
     }
 }

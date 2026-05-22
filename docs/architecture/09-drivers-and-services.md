@@ -52,6 +52,14 @@ Native payload policy:
     config
 - `cli`
   - interactive shell over `proc` and `fs`
+- `font-service` (native Zig)
+  - loads built-in TTF fonts from `fs.vfs`
+  - serves `FONT_IPC_OPEN_FONT_REQ`, `FONT_IPC_GET_METRICS_REQ`, and
+    `FONT_IPC_RASTER_GLYPH_REQ`
+  - now uses the shared native `libsys` event-loop/intent reactor pattern:
+    single endpoint polling with registered handlers plus request-id-based
+    intent completion for outbound FS IPC calls
+  - logs a warning when an unexpected/unhandled IPC message type is received
 
 ### Driver and Service Startup Chain
 Current startup chain:

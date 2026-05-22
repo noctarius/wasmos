@@ -168,6 +168,187 @@ wasmos_sys_ipc_recv_loop_native(wasmos_driver_api_t *api, uint32_t receiver_endp
     }
 }
 
+static wasmos_sys_native_intent_t *
+native_intent_find(wasmos_sys_native_event_loop_t *loop, uint32_t request_id)
+{
+    uint32_t i = 0;
+    if (!loop) {
+        return 0;
+    }
+    for (i = 0; i < WASMOS_SYS_NATIVE_INTENT_MAX; ++i) {
+        if (loop->intents[i].in_use && loop->intents[i].request_id == request_id) {
+            return &loop->intents[i];
+        }
+    }
+    return 0;
+}
+
+static wasmos_sys_native_intent_t *
+native_intent_alloc(wasmos_sys_native_event_loop_t *loop)
+{
+    uint32_t i = 0;
+    if (!loop) {
+        return 0;
+    }
+    for (i = 0; i < WASMOS_SYS_NATIVE_INTENT_MAX; ++i) {
+        if (!loop->intents[i].in_use) {
+            return &loop->intents[i];
+        }
+    }
+    return 0;
+}
+
+void
+wasmos_sys_native_event_loop_init(wasmos_sys_native_event_loop_t *loop,
+                                  wasmos_driver_api_t *api,
+                                  uint32_t receiver_endpoint,
+                                  uint32_t request_id_base)
+{
+    uint32_t i = 0;
+    if (!loop) {
+        return;
+    }
+    loop->api = api;
+    loop->receiver_endpoint = receiver_endpoint;
+    loop->next_request_id = request_id_base;
+    for (i = 0; i < WASMOS_SYS_NATIVE_INTENT_MAX; ++i) {
+        loop->intents[i].in_use = 0;
+        loop->intents[i].request_id = 0;
+        loop->intents[i].on_resolve = 0;
+        loop->intents[i].user = 0;
+    }
+    for (i = 0; i < WASMOS_SYS_NATIVE_HANDLER_MAX; ++i) {
+        loop->handlers[i].in_use = 0;
+        loop->handlers[i].msg_type = 0;
+        loop->handlers[i].on_message = 0;
+        loop->handlers[i].user = 0;
+    }
+}
+
+int32_t
+wasmos_sys_native_event_register(wasmos_sys_native_event_loop_t *loop,
+                                 uint32_t msg_type,
+                                 void (*on_message)(void *user, const nd_ipc_message_t *msg),
+                                 void *user)
+{
+    uint32_t i = 0;
+    if (!loop || !on_message) {
+        return -1;
+    }
+    for (i = 0; i < WASMOS_SYS_NATIVE_HANDLER_MAX; ++i) {
+        if (loop->handlers[i].in_use && loop->handlers[i].msg_type == msg_type) {
+            loop->handlers[i].on_message = on_message;
+            loop->handlers[i].user = user;
+            return 0;
+        }
+    }
+    for (i = 0; i < WASMOS_SYS_NATIVE_HANDLER_MAX; ++i) {
+        if (!loop->handlers[i].in_use) {
+            loop->handlers[i].in_use = 1;
+            loop->handlers[i].msg_type = msg_type;
+            loop->handlers[i].on_message = on_message;
+            loop->handlers[i].user = user;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+int32_t
+wasmos_sys_native_intent_send(wasmos_sys_native_event_loop_t *loop,
+                              uint32_t destination_endpoint,
+                              uint32_t source_endpoint,
+                              uint32_t msg_type,
+                              uint32_t arg0,
+                              uint32_t arg1,
+                              uint32_t arg2,
+                              uint32_t arg3,
+                              void (*on_resolve)(void *user, const nd_ipc_message_t *msg),
+                              void *user,
+                              uint32_t *out_request_id)
+{
+    nd_ipc_message_t req;
+    wasmos_sys_native_intent_t *slot = 0;
+    uint32_t ctx_id = 0;
+    int32_t send_rc = 0;
+    if (!loop || !loop->api || !loop->api->ipc_send || !loop->api->sched_current_pid || !on_resolve) {
+        return -1;
+    }
+    slot = native_intent_alloc(loop);
+    if (!slot) {
+        return -1;
+    }
+    req.type = msg_type;
+    req.source = source_endpoint;
+    req.destination = destination_endpoint;
+    req.request_id = loop->next_request_id++;
+    req.arg0 = arg0;
+    req.arg1 = arg1;
+    req.arg2 = arg2;
+    req.arg3 = arg3;
+    ctx_id = loop->api->sched_current_pid();
+    send_rc = loop->api->ipc_send(ctx_id, destination_endpoint, &req);
+    if (send_rc != 0) {
+        return send_rc;
+    }
+    slot->in_use = 1;
+    slot->request_id = req.request_id;
+    slot->on_resolve = on_resolve;
+    slot->user = user;
+    if (out_request_id) {
+        *out_request_id = req.request_id;
+    }
+    return 0;
+}
+
+int32_t
+wasmos_sys_native_event_loop_poll(wasmos_sys_native_event_loop_t *loop, uint32_t budget)
+{
+    uint32_t ctx_id = 0;
+    uint32_t i = 0;
+    uint32_t handled = 0;
+    if (!loop || !loop->api || !loop->api->ipc_recv || !loop->api->sched_current_pid) {
+        return -1;
+    }
+    if (budget == 0u) {
+        budget = 1u;
+    }
+    ctx_id = loop->api->sched_current_pid();
+    for (i = 0; i < budget; ++i) {
+        nd_ipc_message_t msg;
+        int32_t rc = loop->api->ipc_recv(ctx_id, loop->receiver_endpoint, &msg);
+        if (rc == 1) {
+            break;
+        }
+        if (rc != 0) {
+            return -1;
+        }
+        handled++;
+        {
+            wasmos_sys_native_intent_t *intent = native_intent_find(loop, msg.request_id);
+            if (intent) {
+                void (*cb)(void *, const nd_ipc_message_t *) = intent->on_resolve;
+                void *user = intent->user;
+                intent->in_use = 0;
+                intent->request_id = 0;
+                intent->on_resolve = 0;
+                intent->user = 0;
+                cb(user, &msg);
+                continue;
+            }
+        }
+        for (uint32_t h = 0; h < WASMOS_SYS_NATIVE_HANDLER_MAX; ++h) {
+            if (loop->handlers[h].in_use &&
+                loop->handlers[h].msg_type == msg.type &&
+                loop->handlers[h].on_message) {
+                loop->handlers[h].on_message(loop->handlers[h].user, &msg);
+                break;
+            }
+        }
+    }
+    return (int32_t)handled;
+}
+
 int32_t
 wasmos_sys_ipc_recv_matching_native(wasmos_driver_api_t *api,
                                     uint32_t receiver_endpoint,

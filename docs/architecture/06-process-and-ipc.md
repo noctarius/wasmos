@@ -77,6 +77,14 @@ The current transport is intentionally small. The architecture still needs:
 - async server helpers for multi-hop service stacks
 - richer endpoint naming / registry rules
 
+### Service-Side Handling Pattern
+- `libsys` now includes lightweight event-loop helpers for both WASM and native
+  runtimes:
+  - event handlers registered by message type for unsolicited traffic
+  - intent slots keyed by `request_id` for request/response completion
+- This keeps one receive pump per endpoint and avoids response stealing caused
+  by multiple ad-hoc `recv-until-matching` loops in the same service.
+
 ## Interrupts and Timer Integration
 - The kernel remaps the legacy PIC and installs exception plus IRQ stubs.
 - PIT IRQ0 is the active scheduler clock.
@@ -86,4 +94,3 @@ The current transport is intentionally small. The architecture still needs:
   `WASMOS_TRACE=OFF`.
 
 The current interrupt model is still PIC-based. APIC/IOAPIC support remains open.
-

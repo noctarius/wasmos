@@ -1447,11 +1447,8 @@ cli_run_script(const char *script_path)
             continue;
         }
         /* TODO: keep script v1 intentionally minimal (single command token,
-         * optional "exec " prefix, no quoting/arguments/control flow). */
+         * no quoting/arguments/control flow). */
         const char *exec_input = &line[start];
-        if (str_starts_with_ci(exec_input, "exec ") || str_starts_with_ci(exec_input, "exec\t")) {
-            exec_input = &line[start + 5];
-        }
         int32_t pid = -1;
         int32_t exit_status = 0;
         if (cli_spawn_exec_path(exec_input, &pid) != 0) {
@@ -1504,7 +1501,7 @@ cli_handle_line(void)
         return 0;
     }
     if (line_eq_ci("help")) {
-        console_write("commands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, exec <app>, script <file>, export VAR=<value>, echo ${VAR}, tty <0-3>, halt, reboot\n");
+        console_write("commands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, export VAR=<value>, echo ${VAR}, tty <0-3>, halt, reboot\n");
         return 0;
     }
     if (line_eq_ci("mount")) {
@@ -1589,29 +1586,6 @@ cli_handle_line(void)
         }
         g_pending_cd_use_path = 0;
         g_pending_kind = PENDING_CD;
-        return 1;
-    }
-    if (g_line_len > 5 && line_starts_with_ci("exec ")) {
-        char resolved[96];
-        uint32_t path_len = 0;
-        if (cli_resolve_exec_path(&g_line[5], resolved, sizeof(resolved)) != 0) {
-            console_write("exec failed\n");
-            return 0;
-        }
-        path_len = (uint32_t)wasmos_sys_strlen(resolved);
-        if (wasmos_fs_buffer_write((int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
-            console_write("exec failed\n");
-            return 0;
-        }
-        if (cli_send_proc(PROC_IPC_SPAWN_PATH,
-                          0,
-                          (int32_t)path_len,
-                          0,
-                          0) != 0) {
-            console_write("exec failed\n");
-            return 0;
-        }
-        g_pending_kind = PENDING_EXEC;
         return 1;
     }
     if (g_line_len > 7 && line_starts_with_ci("script ")) {
@@ -1765,8 +1739,51 @@ cli_handle_line(void)
         (void)fclose(f);
         return 0;
     }
-    console_write("unknown command\n");
-    return 0;
+    {
+        uint32_t name_len = 0;
+        while (g_line[name_len] != '\0' && g_line[name_len] != ' ' && g_line[name_len] != '\t') {
+            name_len++;
+        }
+        if (name_len == 0) {
+            return 0;
+        }
+        char cmd_name[96];
+        if (name_len >= sizeof(cmd_name)) {
+            name_len = (uint32_t)(sizeof(cmd_name) - 1);
+        }
+        for (uint32_t i = 0; i < name_len; ++i) {
+            cmd_name[i] = g_line[i];
+        }
+        cmd_name[name_len] = '\0';
+
+        char resolved[96];
+        uint32_t path_len = 0;
+        if (cli_resolve_exec_path(cmd_name, resolved, sizeof(resolved)) != 0) {
+            char msg[140];
+            int n = snprintf(msg, sizeof(msg), "no such command found: %s\n", cmd_name);
+            if (n > 0) {
+                console_write(msg);
+            } else {
+                console_write("no such command found\n");
+            }
+            return 0;
+        }
+        path_len = (uint32_t)wasmos_sys_strlen(resolved);
+        if (wasmos_fs_buffer_write((int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
+            console_write("exec failed\n");
+            return 0;
+        }
+        if (cli_send_proc(PROC_IPC_SPAWN_PATH,
+                          0,
+                          (int32_t)path_len,
+                          0,
+                          0) != 0) {
+            console_write("exec failed\n");
+            return 0;
+        }
+        g_pending_kind = PENDING_EXEC;
+        return 1;
+    }
 }
 
 static void
@@ -1835,7 +1852,7 @@ cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg)
         (void)cli_switch_tty(1, 1, 0);
     }
     if (g_home_tty == 1) {
-        console_write("WAMOS CLI\ncommands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, exec <app>, script <file>, export VAR=<value>, echo ${VAR}, tty <0-3>, halt, reboot\n");
+        console_write("WAMOS CLI\ncommands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, export VAR=<value>, echo ${VAR}, tty <0-3>, halt, reboot\n");
     }
     g_phase = CLI_PHASE_PROMPT;
 }

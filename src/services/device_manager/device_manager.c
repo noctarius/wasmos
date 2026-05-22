@@ -1215,13 +1215,34 @@ handle_query_message_fields(void)
 static void
 handle_query_endpoint(void)
 {
+    int32_t msg_type = 0;
     if (g_dm.query_endpoint < 0) {
         return;
     }
     if (wasmos_ipc_try_recv(g_dm.query_endpoint) <= 0) {
         return;
     }
-    handle_query_message_fields();
+    msg_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+    if (msg_type == DEVMGR_PUBLISH_BLOCK_DEVICE) {
+        int32_t arg0 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+        int32_t arg1 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+        int32_t arg2 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
+        int32_t arg3 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
+        registry_add_block_from_ipc(arg0, arg1, arg2, arg3);
+        return;
+    }
+    if (msg_type == DEVMGR_PUBLISH_DEVICE) {
+        int32_t arg0 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+        int32_t arg1 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+        int32_t arg2 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
+        int32_t arg3 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
+        registry_add_from_ipc(arg0, arg1, arg2, arg3);
+        return;
+    }
+    if (msg_type == DEVMGR_QUERY_MOUNT_REQ || msg_type == DEVMGR_QUERY_BLOCK_MOUNT_REQ) {
+        handle_query_message_fields();
+        return;
+    }
 }
 
 WASMOS_WASM_EXPORT int32_t
@@ -1509,28 +1530,6 @@ initialize(int32_t proc_endpoint,
             consume_inventory_events_nonblocking();
             if (next_spawn_target() != HW_SPAWN_NONE) {
                 g_dm.phase = HW_PHASE_SPAWN;
-                continue;
-            }
-            if (wasmos_ipc_try_recv(g_dm.query_endpoint) > 0) {
-                int32_t msg_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
-                if (msg_type == DEVMGR_PUBLISH_BLOCK_DEVICE) {
-                    int32_t arg0 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-                    int32_t arg1 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
-                    int32_t arg2 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
-                    int32_t arg3 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
-                    registry_add_block_from_ipc(arg0, arg1, arg2, arg3);
-                } else if (msg_type == DEVMGR_PUBLISH_DEVICE || msg_type == DEVMGR_PCI_SCAN_DONE) {
-                    /* Inventory events may share this endpoint once idle. */
-                    if (msg_type == DEVMGR_PUBLISH_DEVICE) {
-                        int32_t arg0 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
-                        int32_t arg1 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
-                        int32_t arg2 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
-                        int32_t arg3 = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3);
-                        registry_add_from_ipc(arg0, arg1, arg2, arg3);
-                    }
-                } else {
-                    handle_query_message_fields();
-                }
                 continue;
             }
             wasmos_sched_yield();

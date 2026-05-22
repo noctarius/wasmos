@@ -32,8 +32,6 @@ static device_manager_state_t g_dm = {
     .serial_index = -1,
     .fs_init_index = -1,
     .fs_manager_index = -1,
-    .keyboard_index = -1,
-    .framebuffer_index = -1,
     .rules_roots_logged = 0,
     .idle_logged = 0,
     .rules_init_fail_logged = 0,
@@ -46,7 +44,10 @@ static device_manager_state_t g_dm = {
     .rule_spawn_pending = 0,
     .rule_spawn_retries = 0,
     .rule_spawn_path = {0},
+    .active_rule_spawn_kind = 0,
     .active_rule_spawn_index = -1,
+    .always_spawn_rules = {0},
+    .always_spawn_rule_count = 0,
     .block_fs_rules = {0},
     .block_fs_rule_count = 0,
     .pci_fb_rules = {0},
@@ -54,6 +55,11 @@ static device_manager_state_t g_dm = {
     .boot_mount_ready = 0,
     .user_mount_ready = 0,
 };
+
+#define RULE_SPAWN_KIND_NONE 0u
+#define RULE_SPAWN_KIND_ALWAYS 1u
+#define RULE_SPAWN_KIND_BLOCK_FS 2u
+#define RULE_SPAWN_KIND_PCI_FB 3u
 
 static void
 console_write(const char *s)
@@ -89,10 +95,11 @@ log_rule_roots_once(void)
 static int proc_running(const char *name);
 static int ensure_fs_endpoint(void);
 static int query_module_meta_by_path(const char *path, uint32_t source, int32_t *out_index);
+static void queue_always_spawn_rules(void);
+static void queue_pci_fb_rule_spawns(void);
 static void queue_block_fs_rule_spawns(void);
 static void queue_block_fs_rules_for_known_devices(void);
 static int module_index_by_name(const char *name);
-static int spawn_framebuffer_target(void);
 
 static int
 read_rules_file(const char *path, char *out_text, uint32_t out_text_len)
@@ -223,12 +230,14 @@ poll_boot_rules_async(void)
     }
     text[read_len] = '\0';
     g_dm.rules_boot_active = dm_rules_count_active(text);
-    if (dm_rules_extract_spawn_path(text, g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path)) == 0) {
-        g_dm.rule_spawn_pending = 1;
-        console_write("[device-manager] boot rules queued spawn_path\n");
-    }
+    dm_rules_load_always_spawn(&g_dm, text);
     dm_rules_load_block_fs(&g_dm, text);
     dm_rules_load_pci_fb(&g_dm, text);
+    if (g_dm.always_spawn_rule_count > 0) {
+        console_write("[device-manager] boot rules loaded always_spawn\n");
+        queue_always_spawn_rules();
+        queue_block_fs_rule_spawns();
+    }
     if (g_dm.pci_fb_rule_count > 0) {
         console_write("[device-manager] boot rules loaded pci_framebuffer\n");
     }
@@ -256,12 +265,14 @@ load_rules_if_available(void)
         if (read_len >= 0) {
             g_dm.rules_init_loaded = 1;
             g_dm.rules_init_active = dm_rules_count_active(text);
-            if (dm_rules_extract_spawn_path(text, g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path)) == 0) {
-                g_dm.rule_spawn_pending = 1;
-                console_write("[device-manager] init rules queued spawn_path\n");
-            }
+            dm_rules_load_always_spawn(&g_dm, text);
             dm_rules_load_block_fs(&g_dm, text);
             dm_rules_load_pci_fb(&g_dm, text);
+            if (g_dm.always_spawn_rule_count > 0) {
+                console_write("[device-manager] init rules loaded always_spawn\n");
+                queue_always_spawn_rules();
+                queue_block_fs_rule_spawns();
+            }
             if (g_dm.pci_fb_rule_count > 0) {
                 console_write("[device-manager] init rules loaded pci_framebuffer\n");
             }
@@ -405,43 +416,6 @@ hw_spawn_driver_index_caps(int32_t index, const spawn_caps_t *caps)
 }
 
 static int
-hw_spawn_driver_name(hw_spawn_target_t target)
-{
-    const char *path = 0;
-    uint32_t path_len = 0;
-    if (target == HW_SPAWN_SERIAL) {
-        path = "/boot/system/drivers/serial.wap";
-    } else if (target == HW_SPAWN_KEYBOARD) {
-        path = "/boot/system/drivers/keyboard.wap";
-    } else if (target == HW_SPAWN_FRAMEBUFFER) {
-        path = "/boot/system/drivers/framebuf.wap";
-    }
-    if (!path) {
-        return -1;
-    }
-    while (path[path_len]) {
-        path_len++;
-    }
-    if (path_len == 0 || path_len > 95u) {
-        return -1;
-    }
-    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
-        return -1;
-    }
-    if (wasmos_ipc_send(g_dm.proc_endpoint,
-                        g_dm.reply_endpoint,
-                        PROC_IPC_SPAWN_PATH,
-                        g_dm.request_id,
-                        0,
-                        (int32_t)path_len,
-                        0,
-                        0) != 0) {
-        return -1;
-    }
-    return 0;
-}
-
-static int
 hw_spawn_driver_path(const char *path)
 {
     uint32_t path_len = 0;
@@ -507,39 +481,14 @@ hw_spawn_rule_target(const char *rule_path)
             module_index = module_index_by_name(name);
         }
         if (module_index < 0) {
-            return -1;
+            /* Rule paths may target drivers only available on /boot. */
+            return hw_spawn_driver_path(rule_path);
         }
     }
     if (module_index == g_dm.selected_storage_index && g_dm.selected_storage_caps.cap_flags != 0) {
         return hw_spawn_driver_index_caps(module_index, &g_dm.selected_storage_caps);
     }
     return hw_spawn_driver_index(module_index);
-}
-
-static int
-spawn_framebuffer_target(void)
-{
-    for (uint32_t ri = 0; ri < g_dm.pci_fb_rule_count; ++ri) {
-        pci_fb_rule_t *rule = &g_dm.pci_fb_rules[ri];
-        if (!rule->active || rule->spawn_path[0] == '\0') {
-            continue;
-        }
-        for (uint32_t di = 0; di < g_dm.registry_count; ++di) {
-            const pci_device_record_t *rec = &g_dm.registry[di];
-            if ((rule->class_code != MATCH_ANY_U8 && rec->class_code != rule->class_code) ||
-                (rule->subclass != MATCH_ANY_U8 && rec->subclass != rule->subclass) ||
-                (rule->prog_if != MATCH_ANY_U8 && rec->prog_if != rule->prog_if) ||
-                (rule->vendor_id != MATCH_ANY_U16 && rec->vendor_id != rule->vendor_id) ||
-                (rule->device_id != MATCH_ANY_U16 && rec->device_id != rule->device_id)) {
-                continue;
-            }
-            return hw_spawn_rule_target(rule->spawn_path);
-        }
-    }
-    if (g_dm.framebuffer_index >= 0) {
-        return hw_spawn_driver_index(g_dm.framebuffer_index);
-    }
-    return hw_spawn_driver_name(HW_SPAWN_FRAMEBUFFER);
 }
 
 static int
@@ -602,11 +551,70 @@ registry_add_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3)
     rec->device_id = (uint16_t)(v2 & 0xFFFFu);
     rec->mmio_hint = (uint8_t)((uint32_t)arg3 & 0xFFu);
     rec->irq_hint = (uint8_t)(((uint32_t)arg3 >> 8) & 0xFFu);
+    queue_block_fs_rule_spawns();
+}
+
+static void
+queue_always_spawn_rules(void)
+{
+    for (uint32_t i = 0; i < g_dm.always_spawn_rule_count; ++i) {
+        always_spawn_rule_t *rule = &g_dm.always_spawn_rules[i];
+        if (!rule->active || rule->spawned) {
+            continue;
+        }
+        rule->queued = 1;
+    }
+}
+
+static void
+queue_pci_fb_rule_spawns(void)
+{
+    for (uint32_t ri = 0; ri < g_dm.pci_fb_rule_count; ++ri) {
+        pci_fb_rule_t *rule = &g_dm.pci_fb_rules[ri];
+        if (!rule->active || rule->spawn_path[0] == '\0') {
+            continue;
+        }
+        for (uint32_t di = 0; di < g_dm.registry_count; ++di) {
+            const pci_device_record_t *rec = &g_dm.registry[di];
+            if ((rule->class_code != MATCH_ANY_U8 && rec->class_code != rule->class_code) ||
+                (rule->subclass != MATCH_ANY_U8 && rec->subclass != rule->subclass) ||
+                (rule->prog_if != MATCH_ANY_U8 && rec->prog_if != rule->prog_if) ||
+                (rule->vendor_id != MATCH_ANY_U16 && rec->vendor_id != rule->vendor_id) ||
+                (rule->device_id != MATCH_ANY_U16 && rec->device_id != rule->device_id)) {
+                continue;
+            }
+            wasmos_sys_strcpy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
+            g_dm.rule_spawn_pending = 1;
+            g_dm.rule_spawn_retries = 0;
+            g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_PCI_FB;
+            g_dm.active_rule_spawn_index = (int32_t)ri;
+            return;
+        }
+    }
 }
 
 static void
 queue_block_fs_rule_spawns(void)
 {
+    if (g_dm.rule_spawn_pending) {
+        return;
+    }
+    for (uint32_t i = 0; i < g_dm.always_spawn_rule_count; ++i) {
+        always_spawn_rule_t *rule = &g_dm.always_spawn_rules[i];
+        if (!rule->active || !rule->queued || rule->spawned) {
+            continue;
+        }
+        wasmos_sys_strcpy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
+        g_dm.rule_spawn_pending = 1;
+        g_dm.rule_spawn_retries = 0;
+        g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_ALWAYS;
+        g_dm.active_rule_spawn_index = (int32_t)i;
+        return;
+    }
+    if (g_dm.rule_spawn_pending) {
+        return;
+    }
+    queue_pci_fb_rule_spawns();
     if (g_dm.rule_spawn_pending) {
         return;
     }
@@ -618,6 +626,7 @@ queue_block_fs_rule_spawns(void)
         wasmos_sys_strcpy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
         g_dm.rule_spawn_pending = 1;
         g_dm.rule_spawn_retries = 0;
+        g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_BLOCK_FS;
         g_dm.active_rule_spawn_index = (int32_t)i;
         return;
     }
@@ -923,6 +932,7 @@ consume_pci_inventory(void)
         }
     }
     apply_pci_matches();
+    queue_block_fs_rule_spawns();
 }
 
 static void
@@ -949,7 +959,6 @@ consume_inventory_events_nonblocking(void)
 static hw_spawn_target_t
 next_spawn_target(void)
 {
-    uint8_t fat_ready = proc_running("fs-fat") ? 1u : 0u;
     if (g_dm.need_pci_bus) {
         return HW_SPAWN_PCI_BUS;
     }
@@ -959,17 +968,11 @@ next_spawn_target(void)
     if (g_dm.need_fat) {
         return HW_SPAWN_FAT;
     }
-    if (!fat_ready) {
+    if (!g_dm.boot_mount_ready) {
         return HW_SPAWN_NONE;
     }
     if (g_dm.need_serial) {
         return HW_SPAWN_SERIAL;
-    }
-    if (g_dm.need_keyboard) {
-        return HW_SPAWN_KEYBOARD;
-    }
-    if (g_dm.need_framebuffer) {
-        return HW_SPAWN_FRAMEBUFFER;
     }
     return HW_SPAWN_NONE;
 }
@@ -1136,10 +1139,10 @@ initialize(int32_t proc_endpoint,
         g_dm.fs_manager_index = module_index_by_name("fs-manager");
     }
     /* Boot-time hardware drivers live on /boot and are not part of initfs. */
-    (void)query_module_meta_by_path("/boot/system/drivers/serial.wap", PROC_MODULE_SOURCE_FS, &g_dm.serial_index);
-    (void)query_module_meta_by_path("/boot/system/drivers/keyboard.wap", PROC_MODULE_SOURCE_FS, &g_dm.keyboard_index);
-    (void)query_module_meta_by_path("/boot/system/drivers/framebuf.wap", PROC_MODULE_SOURCE_FS, &g_dm.framebuffer_index);
-
+    (void)query_module_meta_by_path("system/drivers/serial.wap", PROC_MODULE_SOURCE_FS, &g_dm.serial_index);
+    if (g_dm.serial_index < 0) {
+        g_dm.serial_index = module_index_by_name("serial");
+    }
     /* Bootstrap policy: always bring up pci-bus when present in initfs.
      * Runtime dedup/restart policy is handled by later lifecycle phases. */
     g_dm.need_pci_bus = (g_dm.pci_bus_index >= 0) ? 1 : 0;
@@ -1149,8 +1152,6 @@ initialize(int32_t proc_endpoint,
     /* Serial is resolved from PCI inventory matches when pci-bus is started
      * by this service; if pci-bus is already running, keep legacy fallback. */
     g_dm.need_serial = g_dm.need_pci_bus ? 0 : (!proc_running("serial") ? 1 : 0);
-    g_dm.need_keyboard = !proc_running("keyboard") ? 1 : 0;
-    g_dm.need_framebuffer = !proc_running("framebuffer") ? 1 : 0;
     g_dm.phase = HW_PHASE_SPAWN;
 
     for (;;) {
@@ -1183,19 +1184,6 @@ initialize(int32_t proc_endpoint,
                 if (hw_spawn_driver_index_caps(g_dm.serial_index, &g_dm.selected_serial_caps) != 0) {
                     g_dm.phase = HW_PHASE_FAILED;
                     console_write("[device-manager] spawn serial failed\n");
-                    wasmos_sys_ipc_recv_loop();
-                }
-            } else if (target == HW_SPAWN_KEYBOARD) {
-                if ((g_dm.keyboard_index >= 0 && hw_spawn_driver_index(g_dm.keyboard_index) != 0) ||
-                    (g_dm.keyboard_index < 0 && hw_spawn_driver_name(target) != 0)) {
-                    g_dm.phase = HW_PHASE_FAILED;
-                    console_write("[device-manager] spawn keyboard failed\n");
-                    wasmos_sys_ipc_recv_loop();
-                }
-            } else if (target == HW_SPAWN_FRAMEBUFFER) {
-                if (spawn_framebuffer_target() != 0) {
-                    g_dm.phase = HW_PHASE_FAILED;
-                    console_write("[device-manager] spawn framebuffer failed\n");
                     wasmos_sys_ipc_recv_loop();
                 }
             } else if (target == HW_SPAWN_FAT) {
@@ -1235,26 +1223,38 @@ initialize(int32_t proc_endpoint,
                 }
                 if (g_dm.pending == HW_SPAWN_RULE_PATH) {
                     g_dm.rule_spawn_pending = 0;
-                    if (g_dm.active_rule_spawn_index >= 0 &&
-                        g_dm.active_rule_spawn_index < (int32_t)g_dm.block_fs_rule_count) {
-                        block_fs_rule_t *rule = &g_dm.block_fs_rules[g_dm.active_rule_spawn_index];
-                        rule->spawned = 1;
-                        rule->queued = 0;
-                        if (rule->unit == 0) {
-                            g_dm.boot_mount_ready = 1;
-                        } else if (rule->unit == 1) {
-                            g_dm.user_mount_ready = 1;
+                    if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ALWAYS) {
+                        if (g_dm.active_rule_spawn_index >= 0 &&
+                            g_dm.active_rule_spawn_index < (int32_t)g_dm.always_spawn_rule_count) {
+                            always_spawn_rule_t *rule = &g_dm.always_spawn_rules[g_dm.active_rule_spawn_index];
+                            rule->spawned = 1;
+                            rule->queued = 0;
                         }
-                        g_dm.active_rule_spawn_index = -1;
+                    } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS) {
+                        if (g_dm.active_rule_spawn_index >= 0 &&
+                            g_dm.active_rule_spawn_index < (int32_t)g_dm.block_fs_rule_count) {
+                            block_fs_rule_t *rule = &g_dm.block_fs_rules[g_dm.active_rule_spawn_index];
+                            rule->spawned = 1;
+                            rule->queued = 0;
+                            if (rule->unit == 0) {
+                                g_dm.boot_mount_ready = 1;
+                                queue_always_spawn_rules();
+                            } else if (rule->unit == 1) {
+                                g_dm.user_mount_ready = 1;
+                            }
+                        }
+                    } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_PCI_FB) {
+                        if (g_dm.active_rule_spawn_index >= 0 &&
+                            g_dm.active_rule_spawn_index < (int32_t)g_dm.pci_fb_rule_count) {
+                            g_dm.pci_fb_rules[g_dm.active_rule_spawn_index].active = 0;
+                        }
                     }
+                    g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_NONE;
+                    g_dm.active_rule_spawn_index = -1;
                     queue_block_fs_rule_spawns();
                 }
                 if (g_dm.pending == HW_SPAWN_SERIAL) {
                     g_dm.need_serial = 0;
-                } else if (g_dm.pending == HW_SPAWN_KEYBOARD) {
-                    g_dm.need_keyboard = 0;
-                } else if (g_dm.pending == HW_SPAWN_FRAMEBUFFER) {
-                    g_dm.need_framebuffer = 0;
                 } else if (g_dm.pending == HW_SPAWN_FAT) {
                     g_dm.need_fat = 0;
                 } else if (g_dm.pending == HW_SPAWN_FS_INIT) {
@@ -1269,6 +1269,16 @@ initialize(int32_t proc_endpoint,
             if (resp_type == PROC_IPC_ERROR) {
                 int32_t resp_code = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
                 if (resp_code == -2) {
+                    if (g_dm.pending == HW_SPAWN_RULE_PATH &&
+                        g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ALWAYS &&
+                        g_dm.active_rule_spawn_index >= 0 &&
+                        g_dm.active_rule_spawn_index < (int32_t)g_dm.always_spawn_rule_count) {
+                        g_dm.always_spawn_rules[g_dm.active_rule_spawn_index].queued = 0;
+                    }
+                    g_dm.rule_spawn_pending = 0;
+                    g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_NONE;
+                    g_dm.active_rule_spawn_index = -1;
+                    queue_block_fs_rule_spawns();
                     wasmos_sched_yield();
                     g_dm.pending = HW_SPAWN_NONE;
                     g_dm.phase = HW_PHASE_SPAWN;
@@ -1278,16 +1288,6 @@ initialize(int32_t proc_endpoint,
                     g_dm.serial_retries++;
                     if (g_dm.serial_retries > 8) {
                         g_dm.need_serial = 0;
-                    }
-                } else if (g_dm.pending == HW_SPAWN_KEYBOARD) {
-                    g_dm.keyboard_retries++;
-                    if (g_dm.keyboard_retries > 8) {
-                        g_dm.need_keyboard = 0;
-                    }
-                } else if (g_dm.pending == HW_SPAWN_FRAMEBUFFER) {
-                    g_dm.framebuffer_retries++;
-                    if (g_dm.framebuffer_retries > 8) {
-                        g_dm.need_framebuffer = 0;
                     }
                 } else if (g_dm.pending == HW_SPAWN_FAT) {
                     g_dm.fat_retries++;
@@ -1307,10 +1307,18 @@ initialize(int32_t proc_endpoint,
                     g_dm.rule_spawn_retries++;
                     if (g_dm.rule_spawn_retries > 8) {
                         g_dm.rule_spawn_pending = 0;
-                        if (g_dm.active_rule_spawn_index >= 0 &&
-                            g_dm.active_rule_spawn_index < (int32_t)g_dm.block_fs_rule_count) {
-                            g_dm.block_fs_rules[g_dm.active_rule_spawn_index].queued = 0;
+                        if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ALWAYS) {
+                            if (g_dm.active_rule_spawn_index >= 0 &&
+                                g_dm.active_rule_spawn_index < (int32_t)g_dm.always_spawn_rule_count) {
+                                g_dm.always_spawn_rules[g_dm.active_rule_spawn_index].queued = 0;
+                            }
+                        } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_BLOCK_FS) {
+                            if (g_dm.active_rule_spawn_index >= 0 &&
+                                g_dm.active_rule_spawn_index < (int32_t)g_dm.block_fs_rule_count) {
+                                g_dm.block_fs_rules[g_dm.active_rule_spawn_index].queued = 0;
+                            }
                         }
+                        g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_NONE;
                         g_dm.active_rule_spawn_index = -1;
                     } else {
                         g_dm.rule_spawn_pending = 1;

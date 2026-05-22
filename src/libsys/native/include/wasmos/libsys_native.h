@@ -13,6 +13,31 @@ void wasmos_sys_ipc_pack_name16_native(const uint8_t *name, uint32_t name_len, u
 void wasmos_sys_ipc_unpack_name16_native(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, uint8_t *out, uint32_t out_len);
 void wasmos_sys_ipc_recv_loop_native(wasmos_driver_api_t *api, uint32_t receiver_endpoint);
 
+#define WASMOS_SYS_NATIVE_INTENT_MAX 16u
+#define WASMOS_SYS_NATIVE_HANDLER_MAX 16u
+
+typedef struct {
+    uint8_t in_use;
+    uint32_t request_id;
+    void (*on_resolve)(void *user, const nd_ipc_message_t *msg);
+    void *user;
+} wasmos_sys_native_intent_t;
+
+typedef struct {
+    uint8_t in_use;
+    uint32_t msg_type;
+    void (*on_message)(void *user, const nd_ipc_message_t *msg);
+    void *user;
+} wasmos_sys_native_handler_t;
+
+typedef struct {
+    wasmos_driver_api_t *api;
+    uint32_t receiver_endpoint;
+    uint32_t next_request_id;
+    wasmos_sys_native_intent_t intents[WASMOS_SYS_NATIVE_INTENT_MAX];
+    wasmos_sys_native_handler_t handlers[WASMOS_SYS_NATIVE_HANDLER_MAX];
+} wasmos_sys_native_event_loop_t;
+
 int32_t wasmos_sys_ipc_recv_matching_native(wasmos_driver_api_t *api, uint32_t receiver_endpoint, uint32_t request_id, nd_ipc_message_t *out_message);
 int32_t wasmos_sys_svc_lookup_retry_native(wasmos_driver_api_t *api, uint32_t proc_endpoint, uint32_t source_endpoint, const uint8_t *name, uint32_t name_len, uint32_t request_id_base, uint32_t attempts);
 int32_t wasmos_sys_ipc_send_retry_native(wasmos_driver_api_t *api, uint32_t destination_endpoint, uint32_t source_endpoint, uint32_t msg_type, uint32_t request_id, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, uint32_t retries);
@@ -29,6 +54,26 @@ int32_t wasmos_sys_be_u32_native(const uint8_t *data, uint32_t data_len, uint32_
 int32_t wasmos_sys_find_table_native(const uint8_t *data, uint32_t data_len, const uint8_t tag[4], uint32_t *out_offset);
 uint32_t wasmos_sys_pack_u16_pair_native(uint32_t a, uint32_t b);
 uint32_t wasmos_sys_pack_s16_pair_native(int32_t a, int32_t b);
+void wasmos_sys_native_event_loop_init(wasmos_sys_native_event_loop_t *loop,
+                                       wasmos_driver_api_t *api,
+                                       uint32_t receiver_endpoint,
+                                       uint32_t request_id_base);
+int32_t wasmos_sys_native_event_register(wasmos_sys_native_event_loop_t *loop,
+                                         uint32_t msg_type,
+                                         void (*on_message)(void *user, const nd_ipc_message_t *msg),
+                                         void *user);
+int32_t wasmos_sys_native_intent_send(wasmos_sys_native_event_loop_t *loop,
+                                      uint32_t destination_endpoint,
+                                      uint32_t source_endpoint,
+                                      uint32_t msg_type,
+                                      uint32_t arg0,
+                                      uint32_t arg1,
+                                      uint32_t arg2,
+                                      uint32_t arg3,
+                                      void (*on_resolve)(void *user, const nd_ipc_message_t *msg),
+                                      void *user,
+                                      uint32_t *out_request_id);
+int32_t wasmos_sys_native_event_loop_poll(wasmos_sys_native_event_loop_t *loop, uint32_t budget);
 
 #ifdef __cplusplus
 }

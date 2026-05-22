@@ -38,7 +38,6 @@ var g_vt_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_kbd_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_mouse_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_font_endpoint: u32 = IPC_ENDPOINT_NONE;
-var g_font_client_endpoint: u32 = IPC_ENDPOINT_NONE;
 var g_font_title_handle: u32 = 0;
 var g_font_init_failed: bool = false;
 var g_font_init_attempts: u32 = 0;
@@ -202,10 +201,6 @@ fn svc_lookup(name: []const u8, request_id: u32) i32 {
     return sys.svcLookup(api(), g_proc_endpoint, g_gfx_endpoint, name, request_id);
 }
 
-fn svc_lookup_from(source_endpoint: u32, name: []const u8, request_id: u32) i32 {
-    return sys.svcLookup(api(), g_proc_endpoint, source_endpoint, name, request_id);
-}
-
 fn lookup_fb_endpoint() i32 {
     g_fb_endpoint = sys.svcLookupEndpointRetry(api(), g_proc_endpoint, g_gfx_endpoint, "fb", GFX_REQUEST_BASE, GFX_FB_LOOKUP_RETRIES) orelse return -1;
     return 0;
@@ -250,9 +245,8 @@ fn ensure_font_title_ready_lazy() void {
     if (g_font_title_handle != 0 or g_font_init_failed) return;
     if (active_window_count() == 0) return;
     if ((g_idle_housekeeping_counter & FONT_INIT_RETRY_MASK) != 0) return;
-    if (g_font_client_endpoint == IPC_ENDPOINT_NONE) return;
     if (g_font_endpoint == IPC_ENDPOINT_NONE) {
-        const ep = svc_lookup_from(g_font_client_endpoint, "font", g_runtime_lookup_req_id);
+        const ep = svc_lookup("font", g_runtime_lookup_req_id);
         g_runtime_lookup_req_id +%= 1;
         if (ep < 0) return;
         g_font_endpoint = @bitCast(ep);
@@ -413,8 +407,7 @@ fn ipc_call_budgeted(destination: u32, request_id: u32, msg_type: u32, arg0: u32
 }
 
 fn font_ipc_call_budgeted(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: *c.nd_ipc_message_t, max_empty_polls: u32) i32 {
-    if (g_font_client_endpoint == IPC_ENDPOINT_NONE) return -1;
-    return sys.ipcCallBudgeted(api(), g_font_client_endpoint, g_font_client_endpoint, destination, request_id, msg_type, arg0, arg1, arg2, arg3, out, max_empty_polls);
+    return ipc_call_budgeted(destination, request_id, msg_type, arg0, arg1, arg2, arg3, out, max_empty_polls);
 }
 
 fn log_fb_geometry_probe() void {
@@ -1238,8 +1231,7 @@ fn prime_title_glyph_step() void {
 
 fn init_title_glyph_cache_startup() void {
     if (!GFX_TITLE_TEXT_ENABLED) return;
-    if (g_font_client_endpoint == IPC_ENDPOINT_NONE) return;
-    const ep = svc_lookup_from(g_font_client_endpoint, "font", g_runtime_lookup_req_id);
+    const ep = svc_lookup("font", g_runtime_lookup_req_id);
     g_runtime_lookup_req_id +%= 1;
     if (ep < 0) return;
     g_font_endpoint = @bitCast(ep);
@@ -1751,8 +1743,6 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
     if (g_gfx_endpoint == IPC_ENDPOINT_NONE) return -1;
     sys.eventLoopInit(&g_ipc_loop, api(), g_gfx_endpoint, GFX_REQUEST_BASE + 0x8000);
     if (register_ipc_handlers() != 0) return -1;
-    g_font_client_endpoint = api().ipc_create_endpoint.?();
-    if (g_font_client_endpoint == IPC_ENDPOINT_NONE) return -1;
 
     if (svc_register("gfx", 1) != 0) {
         logMsg("[gfx] register failed\n");

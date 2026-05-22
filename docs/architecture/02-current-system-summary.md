@@ -37,8 +37,8 @@ The current tree already boots into a usable user-space stack:
   - current implementation parses udev-style rules (`SUBSYSTEM==...`,
     `ATTR{...}==...`, `ENV{...}=...`, `RUN+=...`) from
     `/init/devmgr/rules/default.rules` and `/boot/system/devmgr/rules/default.rules`
-  - `SUBSYSTEM=="boot"` rules provide forced spawns (for example ATA in
-    bootstrap and keyboard in runtime override rules)
+  - `SUBSYSTEM=="boot"` rules provide forced spawns (for example keyboard in
+    runtime override rules)
   - `SUBSYSTEM=="pci"` rules match published PCI inventory
     (class/subclass/prog_if/vendor/device) and select driver spawn paths
   - `SUBSYSTEM=="block"` rules match normalized block-unit records and assign

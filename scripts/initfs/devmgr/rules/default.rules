@@ -1,6 +1,6 @@
 # WASMOS device-manager bootstrap rules (initfs)
 # Loaded from /init/devmgr/rules during early boot.
 # udev-style syntax only.
-SUBSYSTEM=="boot", ACTION=="add", RUN+="system/drivers/ata.wap"
+SUBSYSTEM=="pci", ATTR{class}=="0x01", ATTR{subclass}=="0x01", RUN+="system/drivers/ata.wap"
 SUBSYSTEM=="block", ATTR{unit}=="0", ENV{MOUNT}="/boot", RUN+="system/drivers/fs_fat.wap"
 SUBSYSTEM=="block", ATTR{unit}=="1", ENV{MOUNT}="/user", RUN+="system/drivers/fs_fat.wap"

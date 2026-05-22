@@ -506,6 +506,7 @@ parse_pci_fb_rule_line(const char *line, pci_fb_rule_t *out_rule)
     out_rule->prog_if = prog_if;
     out_rule->vendor_id = vendor_id;
     out_rule->device_id = device_id;
+    out_rule->spawned_device_mask = 0;
     wasmos_sys_strcpy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
     return 0;
 }
@@ -519,6 +520,7 @@ dm_rules_load_pci_fb(device_manager_state_t *state, const char *text)
     }
     for (uint32_t i = 0; i < PCI_FB_RULE_CAP; ++i) {
         state->pci_fb_rules[i].active = 0;
+        state->pci_fb_rules[i].spawned_device_mask = 0;
     }
     for (int32_t i = 0;;) {
         int32_t line_start = i;

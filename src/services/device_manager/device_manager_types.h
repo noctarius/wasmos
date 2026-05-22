@@ -101,6 +101,7 @@ typedef struct {
     uint8_t prog_if;
     uint16_t vendor_id;
     uint16_t device_id;
+    uint64_t spawned_device_mask;
     char spawn_path[96];
 } pci_fb_rule_t;
 
@@ -151,6 +152,7 @@ typedef struct {
     char rule_spawn_path[96];
     uint8_t active_rule_spawn_kind;
     int32_t active_rule_spawn_index;
+    int32_t active_rule_spawn_device_index;
     always_spawn_rule_t always_spawn_rules[ALWAYS_SPAWN_RULE_CAP];
     uint32_t always_spawn_rule_count;
     block_fs_rule_t block_fs_rules[BLOCK_FS_RULE_CAP];

@@ -46,6 +46,7 @@ static device_manager_state_t g_dm = {
     .rule_spawn_path = {0},
     .active_rule_spawn_kind = 0,
     .active_rule_spawn_index = -1,
+    .active_rule_spawn_device_index = -1,
     .always_spawn_rules = {0},
     .always_spawn_rule_count = 0,
     .block_fs_rules = {0},
@@ -576,6 +577,9 @@ queue_pci_fb_rule_spawns(void)
         }
         for (uint32_t di = 0; di < g_dm.registry_count; ++di) {
             const pci_device_record_t *rec = &g_dm.registry[di];
+            if (di < 64u && ((rule->spawned_device_mask >> di) & 1u) != 0u) {
+                continue;
+            }
             if ((rule->class_code != MATCH_ANY_U8 && rec->class_code != rule->class_code) ||
                 (rule->subclass != MATCH_ANY_U8 && rec->subclass != rule->subclass) ||
                 (rule->prog_if != MATCH_ANY_U8 && rec->prog_if != rule->prog_if) ||
@@ -588,6 +592,7 @@ queue_pci_fb_rule_spawns(void)
             g_dm.rule_spawn_retries = 0;
             g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_PCI_FB;
             g_dm.active_rule_spawn_index = (int32_t)ri;
+            g_dm.active_rule_spawn_device_index = (int32_t)di;
             return;
         }
     }
@@ -1246,11 +1251,16 @@ initialize(int32_t proc_endpoint,
                     } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_PCI_FB) {
                         if (g_dm.active_rule_spawn_index >= 0 &&
                             g_dm.active_rule_spawn_index < (int32_t)g_dm.pci_fb_rule_count) {
-                            g_dm.pci_fb_rules[g_dm.active_rule_spawn_index].active = 0;
+                            if (g_dm.active_rule_spawn_device_index >= 0 &&
+                                g_dm.active_rule_spawn_device_index < 64) {
+                                g_dm.pci_fb_rules[g_dm.active_rule_spawn_index].spawned_device_mask |=
+                                    (uint64_t)1u << (uint32_t)g_dm.active_rule_spawn_device_index;
+                            }
                         }
                     }
                     g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_NONE;
                     g_dm.active_rule_spawn_index = -1;
+                    g_dm.active_rule_spawn_device_index = -1;
                     queue_block_fs_rule_spawns();
                 }
                 if (g_dm.pending == HW_SPAWN_SERIAL) {
@@ -1278,6 +1288,7 @@ initialize(int32_t proc_endpoint,
                     g_dm.rule_spawn_pending = 0;
                     g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_NONE;
                     g_dm.active_rule_spawn_index = -1;
+                    g_dm.active_rule_spawn_device_index = -1;
                     queue_block_fs_rule_spawns();
                     wasmos_sched_yield();
                     g_dm.pending = HW_SPAWN_NONE;
@@ -1320,6 +1331,7 @@ initialize(int32_t proc_endpoint,
                         }
                         g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_NONE;
                         g_dm.active_rule_spawn_index = -1;
+                        g_dm.active_rule_spawn_device_index = -1;
                     } else {
                         g_dm.rule_spawn_pending = 1;
                     }

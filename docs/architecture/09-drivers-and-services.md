@@ -247,7 +247,7 @@ discovery and driver lifecycle service, while keeping the kernel policy-light.
   - `RUN` (driver/service module path to spawn)
 - Minimal examples:
 ```udev
-SUBSYSTEM=="boot", ACTION=="add", RUN+="system/drivers/ata.wap"
+SUBSYSTEM=="pci", ATTR{class}=="0x01", ATTR{subclass}=="0x01", RUN+="system/drivers/ata.wap"
 SUBSYSTEM=="pci", ATTR{class}=="0x03", ATTR{subclass}=="0x00", ATTR{prog_if}=="0x00", RUN+="system/drivers/fbpci.wap"
 SUBSYSTEM=="block", ATTR{unit}=="0", ENV{MOUNT}="/boot", RUN+="system/drivers/fs_fat.wap"
 ```

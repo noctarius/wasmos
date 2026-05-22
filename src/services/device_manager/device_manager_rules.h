@@ -7,6 +7,6 @@
 uint16_t dm_rules_count_active(const char *text);
 void dm_rules_load_always_spawn(device_manager_state_t *state, const char *text);
 void dm_rules_load_block_fs(device_manager_state_t *state, const char *text);
-void dm_rules_load_pci_fb(device_manager_state_t *state, const char *text);
+void dm_rules_load_pci_match(device_manager_state_t *state, const char *text);
 
 #endif

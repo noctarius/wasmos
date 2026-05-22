@@ -37,21 +37,21 @@ test_block_fs_rule(void)
 }
 
 static void
-test_pci_fb_rule(void)
+test_pci_match_rule(void)
 {
     device_manager_state_t state;
     const char *rules =
         "SUBSYSTEM==\"pci\", ATTR{bus}==\"0x00\", ATTR{slot}==\"0x02\", ATTR{function}==\"0x00\", ATTR{class}==\"0x03\", ATTR{subclass}==\"0x00\", ATTR{prog_if}==\"0x00\", RUN+=\"system/drivers/fbpci.wap\"\n";
     memset(&state, 0, sizeof(state));
-    dm_rules_load_pci_fb(&state, rules);
-    assert(state.pci_fb_rule_count == 1u);
-    assert(state.pci_fb_rules[0].bus == 0x00u);
-    assert(state.pci_fb_rules[0].slot == 0x02u);
-    assert(state.pci_fb_rules[0].function == 0x00u);
-    assert(state.pci_fb_rules[0].class_code == 0x03u);
-    assert(state.pci_fb_rules[0].subclass == 0x00u);
-    assert(state.pci_fb_rules[0].prog_if == 0x00u);
-    assert(strcmp(state.pci_fb_rules[0].spawn_path, "system/drivers/fbpci.wap") == 0);
+    dm_rules_load_pci_match(&state, rules);
+    assert(state.pci_match_rule_count == 1u);
+    assert(state.pci_match_rules[0].bus == 0x00u);
+    assert(state.pci_match_rules[0].slot == 0x02u);
+    assert(state.pci_match_rules[0].function == 0x00u);
+    assert(state.pci_match_rules[0].class_code == 0x03u);
+    assert(state.pci_match_rules[0].subclass == 0x00u);
+    assert(state.pci_match_rules[0].prog_if == 0x00u);
+    assert(strcmp(state.pci_match_rules[0].spawn_path, "system/drivers/fbpci.wap") == 0);
 }
 
 static void
@@ -60,14 +60,14 @@ test_legacy_rule_is_rejected(void)
     device_manager_state_t state;
     const char *rules =
         "always_spawn spawn_path=system/drivers/ata.wap\n"
-        "pci_framebuffer class=03 spawn_path=system/drivers/fbpci.wap\n"
+        "pci_match class=03 spawn_path=system/drivers/fbpci.wap\n"
         "block_fs unit=0 mount=/boot spawn_path=system/drivers/fs_fat.wap\n";
     memset(&state, 0, sizeof(state));
     dm_rules_load_always_spawn(&state, rules);
-    dm_rules_load_pci_fb(&state, rules);
+    dm_rules_load_pci_match(&state, rules);
     dm_rules_load_block_fs(&state, rules);
     assert(state.always_spawn_rule_count == 0u);
-    assert(state.pci_fb_rule_count == 0u);
+    assert(state.pci_match_rule_count == 0u);
     assert(state.block_fs_rule_count == 0u);
 }
 
@@ -76,7 +76,7 @@ main(void)
 {
     test_always_spawn_rule();
     test_block_fs_rule();
-    test_pci_fb_rule();
+    test_pci_match_rule();
     test_legacy_rule_is_rejected();
     printf("test_device_manager_rules: ok\n");
     return 0;

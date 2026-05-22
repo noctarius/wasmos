@@ -34,17 +34,15 @@ The current tree already boots into a usable user-space stack:
   behavior:
   - `/init/devmgr/rules` for bootstrap rules from initfs
   - `/boot/system/devmgr/rules` for runtime override rules from FAT
-  - current implementation parses `spawn_path=...` (bootstrap driver spawn),
-    `pci_framebuffer ... spawn_path=...` (runtime framebuffer driver selection
-    on PCI inventory match), and multiple `block_fs ...` rules from
-    `/init/devmgr/rules/default.rules`; ATA is spawned by `spawn_path`,
-    framebuffer backend can be selected by `pci_framebuffer` rule match, and
-    `fs-fat` instances are spawned only after matching published block-device
-    events
-  - `block_fs` currently supports `unit=...|any`, `spawn_path=...`, and
-    `mount=...`; current flow uses this for boot/user backend naming
-    (`/boot`/`/user`) and leaves richer dynamic mount-policy plumbing as
-    follow-up
+  - current implementation parses udev-style rules (`SUBSYSTEM==...`,
+    `ATTR{...}==...`, `ENV{...}=...`, `RUN+=...`) from
+    `/init/devmgr/rules/default.rules` and `/boot/system/devmgr/rules/default.rules`
+  - `SUBSYSTEM=="boot"` rules provide forced spawns (for example ATA in
+    bootstrap and keyboard in runtime override rules)
+  - `SUBSYSTEM=="pci"` rules match published PCI inventory
+    (class/subclass/prog_if/vendor/device) and select driver spawn paths
+  - `SUBSYSTEM=="block"` rules match normalized block-unit records and assign
+    mount aliases through `ENV{MOUNT}` for `fs-fat` spawn routing
   - device-manager then performs non-blocking boot-root rules-file reads via a
     dedicated reply endpoint (`/boot/system/devmgr/rules/default.rules`) and
     can update queued runtime policy from override content

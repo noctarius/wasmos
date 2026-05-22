@@ -232,61 +232,24 @@ discovery and driver lifecycle service, while keeping the kernel policy-light.
   - startup policy (`critical`, `optional`, `on-demand`)
   - mount policy (filesystem alias/path/priority)
 
-#### `devmgr_rule` v0-draft (Normative)
-- File format: TOML (`*.rules`)
-- Top-level:
-  - `rule_version = 1`
-  - one or more `[[rule]]` entries
-- `[[rule]]` required fields:
-  - `id: string` (stable unique id per root)
-  - `priority: i32` (higher value evaluates first)
-  - `enabled: bool` (default `true`)
-  - `stop_processing: bool` (default `false`)
-- Match section (`[rule.match]`):
-  - `bus_type: string | "*" ` (optional)
-  - `event: string | "*"` (optional)
-  - `state: string | "*"` (optional)
-  - zero or more `[[rule.match.attr]]` predicates:
-    - `key`
-    - `op` (`eq | prefix | glob`)
-    - `value`
-- Actions section:
-  - one or more `[[rule.action]]`
-  - `type = "bind_driver"`:
-    - `module_path`
-    - `caps_profile` (optional)
-    - `startup_policy` (`critical|optional|on_demand`)
-  - `type = "set_mount"`:
-    - `path`
-    - `fs_type`
-    - `source_selector` (for example `device_uid:<n>` or `bus_addr:<str>`)
-    - `flags` (optional string list)
-  - `type = "set_alias"`:
-    - `name`
-    - `target`
-  - `type = "deny"`:
-    - `reason`
-- Minimal example:
-```toml
-rule_version = 1
-
-[[rule]]
-id = "pci-ata-primary"
-priority = 100
-
-[rule.match]
-bus_type = "pci"
-event = "DEVMGR_DEVICE_ADD"
-
-[[rule.match.attr]]
-key = "class"
-op = "eq"
-value = "01"
-
-[[rule.action]]
-type = "bind_driver"
-module_path = "/boot/system/drivers/ata.wap"
-startup_policy = "critical"
+#### `devmgr_rule` v1 (Normative)
+- File format: line-based udev-style rules (`*.rules`)
+- One rule per line, comma-separated clauses.
+- Clause operators:
+  - match: `KEY=="value"`
+  - assign metadata: `KEY="value"`
+  - append action: `KEY+="value"`
+- Current accepted keys:
+  - `SUBSYSTEM` (`"boot" | "pci" | "block"`)
+  - `ATTR{class}`, `ATTR{subclass}`, `ATTR{prog_if}`, `ATTR{vendor}`, `ATTR{device}` (hex for PCI matching)
+  - `ATTR{unit}` (`0..255` or `"any"` for block matching)
+  - `ENV{MOUNT}` (mount alias output for block-backed filesystem rules)
+  - `RUN` (driver/service module path to spawn)
+- Minimal examples:
+```udev
+SUBSYSTEM=="boot", ACTION=="add", RUN+="system/drivers/ata.wap"
+SUBSYSTEM=="pci", ATTR{class}=="0x03", ATTR{subclass}=="0x00", ATTR{prog_if}=="0x00", RUN+="system/drivers/fbpci.wap"
+SUBSYSTEM=="block", ATTR{unit}=="0", ENV{MOUNT}="/boot", RUN+="system/drivers/fs_fat.wap"
 ```
 
 #### Rule Evaluation and Precedence (Normative)
@@ -294,16 +257,12 @@ startup_policy = "critical"
   1. `/init/devmgr/rules`
   2. `/boot/system/devmgr/rules`
 - Merge model:
-  - same `rule.id` in later roots overrides earlier definition
-  - distinct ids are appended
+  - parsed runtime-root rules replace in-memory bootstrap rule tables for the
+    same rule family in current implementation
 - Evaluation order:
-  - sort by `priority` descending, then `id` lexical ascending
-  - skip disabled rules
-  - apply first matching rule actions in-order
-  - if `stop_processing = true`, terminate evaluation
-- Conflict rule:
-  - `deny` action at a given priority blocks `bind_driver` actions at the same
-    or lower priority for the same device/event cycle
+  - rule family queues are processed deterministically (`boot` force-spawn,
+    then match-driven `pci`/`block` flows)
+  - malformed lines are ignored (do not abort manager startup)
 
 #### Dynamic Mount Policy (Planned)
 - Filesystem mounts are outcomes of rule evaluation, not fixed to `/boot`,

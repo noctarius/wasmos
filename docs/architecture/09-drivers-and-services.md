@@ -61,16 +61,17 @@ Current startup chain:
 3. kernel `init` spawns `device-manager`
 4. `device-manager` spawns `pci-bus` and waits for scan completion
 5. `device-manager` starts the storage chain via rules:
-   - `spawn_path=...` bootstrap rule spawns `ata`
-   - `pci_framebuffer ... spawn_path=...` selects runtime framebuffer driver
-     when a published PCI record matches the rule filters
-   - `block_fs ...` rules spawn `fs-fat` only after matching block-device
-     registration (for example ATA unit `0` -> `/boot`, unit `1` -> `/user`)
-6. `device-manager` starts post-FAT hardware drivers by name: `serial`,
-   `keyboard`, and `framebuffer`
-7. kernel `init` waits for a successful FAT readiness probe
-8. kernel `init` loads `sysinit` from disk via PM
-9. `sysinit` loads the configured `sysinit.spawn` services/processes from disk,
+   - `SUBSYSTEM=="boot", ... RUN+=...` rule spawns forced bootstrap drivers
+     (for example `ata`)
+   - `SUBSYSTEM=="pci", ATTR{...}, ... RUN+=...` selects drivers from published
+     PCI records when filters match
+   - `SUBSYSTEM=="block", ATTR{unit}=="N", ENV{MOUNT}="...", RUN+=...` spawns
+     `fs-fat` only after matching block-device registration
+7. `device-manager` and later `/boot` policy continue driver bring-up through
+   the same udev-style rule format
+8. kernel `init` waits for a successful FAT readiness probe
+9. kernel `init` loads `sysinit` from disk via PM
+10. `sysinit` loads the configured `sysinit.spawn` services/processes from disk,
    including `vt` and `cli`
 
 This is the current stable bootstrap baseline.

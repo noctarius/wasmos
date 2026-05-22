@@ -1,5 +1,5 @@
 #include "string.h"
-#include "wasmos/libsys.h"
+#include "wasmos/libsys_string.h"
 #include "device_manager_rules.h"
 
 static const char *
@@ -12,6 +12,137 @@ trim_left(const char *s)
         s++;
     }
     return s;
+}
+
+static void
+trim_right(char *s)
+{
+    int32_t i = 0;
+    if (!s) {
+        return;
+    }
+    while (s[i] != '\0') {
+        i++;
+    }
+    while (i > 0 && wasmos_sys_is_space(s[i - 1])) {
+        s[i - 1] = '\0';
+        i--;
+    }
+}
+
+static int
+copy_rule_line(const char *line, char *out, uint32_t out_len)
+{
+    uint32_t n = 0;
+    uint8_t in_quote = 0;
+    if (!line || !out || out_len < 2u) {
+        return -1;
+    }
+    while (line[n] && line[n] != '\n' && n + 1u < out_len) {
+        out[n] = line[n];
+        n++;
+    }
+    out[n] = '\0';
+    for (uint32_t i = 0; out[i] != '\0'; ++i) {
+        if (out[i] == '"') {
+            in_quote = (uint8_t)!in_quote;
+            continue;
+        }
+        if (!in_quote && out[i] == '#') {
+            out[i] = '\0';
+            break;
+        }
+    }
+    trim_right(out);
+    return 0;
+}
+
+static char *
+next_csv_token(char **cursor)
+{
+    char *start = 0;
+    char *p = 0;
+    uint8_t in_quote = 0;
+    if (!cursor || !*cursor) {
+        return 0;
+    }
+    p = *cursor;
+    while (*p && wasmos_sys_is_space(*p)) {
+        p++;
+    }
+    if (!*p) {
+        *cursor = p;
+        return 0;
+    }
+    start = p;
+    while (*p) {
+        if (*p == '"') {
+            in_quote = (uint8_t)!in_quote;
+            p++;
+            continue;
+        }
+        if (!in_quote && *p == ',') {
+            *p = '\0';
+            p++;
+            break;
+        }
+        p++;
+    }
+    *cursor = p;
+    trim_right(start);
+    return start;
+}
+
+static int
+extract_op_value(const char *token,
+                 const char *key,
+                 const char *op,
+                 char *out,
+                 uint32_t out_len)
+{
+    const char *p = token;
+    uint32_t key_len = 0;
+    uint32_t op_len = 0;
+    uint32_t n = 0;
+    if (!token || !key || !op || !out || out_len < 2u) {
+        return -1;
+    }
+    while (key[key_len]) {
+        key_len++;
+    }
+    while (op[op_len]) {
+        op_len++;
+    }
+    for (uint32_t i = 0; i < key_len; ++i) {
+        if (p[i] != key[i]) {
+            return -1;
+        }
+    }
+    p += key_len;
+    for (uint32_t i = 0; i < op_len; ++i) {
+        if (p[i] != op[i]) {
+            return -1;
+        }
+    }
+    p += op_len;
+    while (*p && wasmos_sys_is_space(*p)) {
+        p++;
+    }
+    if (*p != '"') {
+        return -1;
+    }
+    p++;
+    while (p[n] && p[n] != '"') {
+        n++;
+    }
+    if (p[n] != '"' || n + 1u >= out_len) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < n; ++i) {
+        out[i] = p[i];
+    }
+    out[n] = '\0';
+    return 0;
 }
 
 uint16_t
@@ -52,53 +183,119 @@ dm_rules_count_active(const char *text)
 }
 
 static int
+parse_u8_hex(const char *s, uint8_t *out)
+{
+    uint32_t i = 0;
+    uint32_t v = 0;
+    if (!s || !out || s[0] == '\0') {
+        return -1;
+    }
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        i = 2;
+    }
+    for (; s[i] != '\0'; ++i) {
+        char c = s[i];
+        uint8_t n = 0;
+        if (c >= '0' && c <= '9') {
+            n = (uint8_t)(c - '0');
+        } else if (c >= 'a' && c <= 'f') {
+            n = (uint8_t)(10 + c - 'a');
+        } else if (c >= 'A' && c <= 'F') {
+            n = (uint8_t)(10 + c - 'A');
+        } else {
+            return -1;
+        }
+        v = (v << 4) | n;
+        if (v > 0xFFu) {
+            return -1;
+        }
+    }
+    *out = (uint8_t)v;
+    return 0;
+}
+
+static int
+parse_u16_hex(const char *s, uint16_t *out)
+{
+    uint32_t i = 0;
+    uint32_t v = 0;
+    if (!s || !out || s[0] == '\0') {
+        return -1;
+    }
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        i = 2;
+    }
+    for (; s[i] != '\0'; ++i) {
+        char c = s[i];
+        uint8_t n = 0;
+        if (c >= '0' && c <= '9') {
+            n = (uint8_t)(c - '0');
+        } else if (c >= 'a' && c <= 'f') {
+            n = (uint8_t)(10 + c - 'a');
+        } else if (c >= 'A' && c <= 'F') {
+            n = (uint8_t)(10 + c - 'A');
+        } else {
+            return -1;
+        }
+        v = (v << 4) | n;
+        if (v > 0xFFFFu) {
+            return -1;
+        }
+    }
+    *out = (uint16_t)v;
+    return 0;
+}
+
+static int
+parse_u8_dec(const char *s, uint8_t *out)
+{
+    uint32_t v = 0;
+    if (!s || !out || s[0] == '\0') {
+        return -1;
+    }
+    for (uint32_t i = 0; s[i] != '\0'; ++i) {
+        if (s[i] < '0' || s[i] > '9') {
+            return -1;
+        }
+        v = v * 10u + (uint32_t)(s[i] - '0');
+        if (v > 255u) {
+            return -1;
+        }
+    }
+    *out = (uint8_t)v;
+    return 0;
+}
+
+static int
 parse_always_spawn_rule_line(const char *line, always_spawn_rule_t *out_rule)
 {
+    char line_buf[256];
     char path[96];
     char *cur = 0;
-    char line_buf[192];
-    uint32_t line_len = 0;
+    char *tok = 0;
+    char sub[32];
     if (!line || !out_rule) {
         return -1;
     }
-    while (line[line_len] && line[line_len] != '\n' && line_len + 1u < sizeof(line_buf)) {
-        line_buf[line_len] = line[line_len];
-        line_len++;
+    if (copy_rule_line(line, line_buf, sizeof(line_buf)) != 0) {
+        return -1;
     }
-    line_buf[line_len] = '\0';
-    line = trim_left(line_buf);
-    if (!(strncmp(line, "always_spawn", 12) == 0 &&
-          (line[12] == '\0' || wasmos_sys_is_space(line[12])))) {
+    if (line_buf[0] == '\0') {
         return -1;
     }
     path[0] = '\0';
-    cur = (char *)(line + 12);
-    while (*cur) {
-        char *tok = cur;
-        char *eq = 0;
-        while (*tok && wasmos_sys_is_space(*tok)) {
-            tok++;
-        }
-        if (!*tok) {
-            break;
-        }
-        cur = tok;
-        while (*cur && !wasmos_sys_is_space(*cur)) {
-            cur++;
-        }
-        if (*cur) {
-            *cur++ = '\0';
-        }
-        eq = strchr(tok, '=');
-        if (!eq) {
+    sub[0] = '\0';
+    cur = line_buf;
+    while ((tok = next_csv_token(&cur)) != 0) {
+        tok = (char *)trim_left(tok);
+        if (extract_op_value(tok, "SUBSYSTEM", "==", sub, sizeof(sub)) == 0) {
             continue;
         }
-        *eq++ = '\0';
-        if (strcmp(tok, "spawn_path") == 0) {
-            wasmos_sys_strcpy(path, sizeof(path), eq);
+        if (extract_op_value(tok, "RUN", "+=", path, sizeof(path)) == 0) {
+            continue;
         }
     }
-    if (!path[0]) {
+    if (strcmp(sub, "boot") != 0 || path[0] == '\0') {
         return -1;
     }
     out_rule->active = 1;
@@ -144,61 +341,47 @@ dm_rules_load_always_spawn(device_manager_state_t *state, const char *text)
 static int
 parse_block_fs_rule_line(const char *line, block_fs_rule_t *out_rule)
 {
+    char line_buf[256];
     char path[96];
     char mount[16];
     uint8_t unit = 0xFFu;
     char *cur = 0;
-    char line_buf[192];
-    uint32_t line_len = 0;
+    char *tok = 0;
+    char sub[32];
+    char tmp[64];
     if (!line || !out_rule) {
         return -1;
     }
-    while (line[line_len] && line[line_len] != '\n' && line_len + 1u < sizeof(line_buf)) {
-        line_buf[line_len] = line[line_len];
-        line_len++;
+    if (copy_rule_line(line, line_buf, sizeof(line_buf)) != 0) {
+        return -1;
     }
-    line_buf[line_len] = '\0';
-    line = trim_left(line_buf);
-    if (!(strncmp(line, "block_fs", 8) == 0 && (line[8] == '\0' || wasmos_sys_is_space(line[8])))) {
+    if (line_buf[0] == '\0') {
         return -1;
     }
     path[0] = '\0';
     mount[0] = '\0';
-    cur = (char *)(line + 8);
-    while (*cur) {
-        char *tok = cur;
-        char *eq = 0;
-        while (*tok && wasmos_sys_is_space(*tok)) {
-            tok++;
-        }
-        if (!*tok) {
-            break;
-        }
-        cur = tok;
-        while (*cur && !wasmos_sys_is_space(*cur)) {
-            cur++;
-        }
-        if (*cur) {
-            *cur++ = '\0';
-        }
-        eq = strchr(tok, '=');
-        if (!eq) {
+    sub[0] = '\0';
+    cur = line_buf;
+    while ((tok = next_csv_token(&cur)) != 0) {
+        tok = (char *)trim_left(tok);
+        if (extract_op_value(tok, "SUBSYSTEM", "==", sub, sizeof(sub)) == 0) {
             continue;
         }
-        *eq++ = '\0';
-        if (strcmp(tok, "spawn_path") == 0) {
-            wasmos_sys_strcpy(path, sizeof(path), eq);
-        } else if (strcmp(tok, "mount") == 0) {
-            wasmos_sys_strcpy(mount, sizeof(mount), eq);
-        } else if (strcmp(tok, "unit") == 0) {
-            if (strcmp(eq, "any") == 0) {
+        if (extract_op_value(tok, "RUN", "+=", path, sizeof(path)) == 0) {
+            continue;
+        }
+        if (extract_op_value(tok, "ENV{MOUNT}", "=", mount, sizeof(mount)) == 0) {
+            continue;
+        }
+        if (extract_op_value(tok, "ATTR{unit}", "==", tmp, sizeof(tmp)) == 0) {
+            if (strcmp(tmp, "any") == 0) {
                 unit = 0xFFu;
-            } else if (eq[0] >= '0' && eq[0] <= '9' && eq[1] == '\0') {
-                unit = (uint8_t)(eq[0] - '0');
+            } else if (parse_u8_dec(tmp, &unit) != 0) {
+                return -1;
             }
         }
     }
-    if (!path[0]) {
+    if (strcmp(sub, "block") != 0 || path[0] == '\0') {
         return -1;
     }
     if (!mount[0]) {
@@ -250,68 +433,14 @@ dm_rules_load_block_fs(device_manager_state_t *state, const char *text)
 }
 
 static int
-parse_hex_u8(const char *s, uint8_t *out)
-{
-    uint32_t v = 0;
-    if (!s || !out || s[0] == '\0') {
-        return -1;
-    }
-    for (uint32_t i = 0; s[i] != '\0'; ++i) {
-        char c = s[i];
-        uint8_t n = 0;
-        if (c >= '0' && c <= '9') {
-            n = (uint8_t)(c - '0');
-        } else if (c >= 'a' && c <= 'f') {
-            n = (uint8_t)(10 + c - 'a');
-        } else if (c >= 'A' && c <= 'F') {
-            n = (uint8_t)(10 + c - 'A');
-        } else {
-            return -1;
-        }
-        v = (v << 4) | n;
-        if (v > 0xFFu) {
-            return -1;
-        }
-    }
-    *out = (uint8_t)v;
-    return 0;
-}
-
-static int
-parse_hex_u16(const char *s, uint16_t *out)
-{
-    uint32_t v = 0;
-    if (!s || !out || s[0] == '\0') {
-        return -1;
-    }
-    for (uint32_t i = 0; s[i] != '\0'; ++i) {
-        char c = s[i];
-        uint8_t n = 0;
-        if (c >= '0' && c <= '9') {
-            n = (uint8_t)(c - '0');
-        } else if (c >= 'a' && c <= 'f') {
-            n = (uint8_t)(10 + c - 'a');
-        } else if (c >= 'A' && c <= 'F') {
-            n = (uint8_t)(10 + c - 'A');
-        } else {
-            return -1;
-        }
-        v = (v << 4) | n;
-        if (v > 0xFFFFu) {
-            return -1;
-        }
-    }
-    *out = (uint16_t)v;
-    return 0;
-}
-
-static int
 parse_pci_fb_rule_line(const char *line, pci_fb_rule_t *out_rule)
 {
+    char line_buf[320];
     char path[96];
     char *cur = 0;
-    char line_buf[224];
-    uint32_t line_len = 0;
+    char *tok = 0;
+    char sub[32];
+    char tmp[64];
     uint8_t class_code = MATCH_ANY_U8;
     uint8_t subclass = MATCH_ANY_U8;
     uint8_t prog_if = MATCH_ANY_U8;
@@ -320,54 +449,55 @@ parse_pci_fb_rule_line(const char *line, pci_fb_rule_t *out_rule)
     if (!line || !out_rule) {
         return -1;
     }
-    while (line[line_len] && line[line_len] != '\n' && line_len + 1u < sizeof(line_buf)) {
-        line_buf[line_len] = line[line_len];
-        line_len++;
+    if (copy_rule_line(line, line_buf, sizeof(line_buf)) != 0) {
+        return -1;
     }
-    line_buf[line_len] = '\0';
-    line = trim_left(line_buf);
-    if (!(strncmp(line, "pci_framebuffer", 15) == 0 &&
-          (line[15] == '\0' || wasmos_sys_is_space(line[15])))) {
+    if (line_buf[0] == '\0') {
         return -1;
     }
     path[0] = '\0';
-    cur = (char *)(line + 15);
-    while (*cur) {
-        char *tok = cur;
-        char *eq = 0;
-        while (*tok && wasmos_sys_is_space(*tok)) {
-            tok++;
-        }
-        if (!*tok) {
-            break;
-        }
-        cur = tok;
-        while (*cur && !wasmos_sys_is_space(*cur)) {
-            cur++;
-        }
-        if (*cur) {
-            *cur++ = '\0';
-        }
-        eq = strchr(tok, '=');
-        if (!eq) {
+    sub[0] = '\0';
+    cur = line_buf;
+    while ((tok = next_csv_token(&cur)) != 0) {
+        tok = (char *)trim_left(tok);
+        if (extract_op_value(tok, "SUBSYSTEM", "==", sub, sizeof(sub)) == 0) {
             continue;
         }
-        *eq++ = '\0';
-        if (strcmp(tok, "spawn_path") == 0) {
-            wasmos_sys_strcpy(path, sizeof(path), eq);
-        } else if (strcmp(tok, "class") == 0) {
-            if (parse_hex_u8(eq, &class_code) != 0) return -1;
-        } else if (strcmp(tok, "subclass") == 0) {
-            if (parse_hex_u8(eq, &subclass) != 0) return -1;
-        } else if (strcmp(tok, "prog_if") == 0) {
-            if (parse_hex_u8(eq, &prog_if) != 0) return -1;
-        } else if (strcmp(tok, "vendor") == 0) {
-            if (parse_hex_u16(eq, &vendor_id) != 0) return -1;
-        } else if (strcmp(tok, "device") == 0) {
-            if (parse_hex_u16(eq, &device_id) != 0) return -1;
+        if (extract_op_value(tok, "RUN", "+=", path, sizeof(path)) == 0) {
+            continue;
+        }
+        if (extract_op_value(tok, "ATTR{class}", "==", tmp, sizeof(tmp)) == 0) {
+            if (parse_u8_hex(tmp, &class_code) != 0) {
+                return -1;
+            }
+            continue;
+        }
+        if (extract_op_value(tok, "ATTR{subclass}", "==", tmp, sizeof(tmp)) == 0) {
+            if (parse_u8_hex(tmp, &subclass) != 0) {
+                return -1;
+            }
+            continue;
+        }
+        if (extract_op_value(tok, "ATTR{prog_if}", "==", tmp, sizeof(tmp)) == 0) {
+            if (parse_u8_hex(tmp, &prog_if) != 0) {
+                return -1;
+            }
+            continue;
+        }
+        if (extract_op_value(tok, "ATTR{vendor}", "==", tmp, sizeof(tmp)) == 0) {
+            if (parse_u16_hex(tmp, &vendor_id) != 0) {
+                return -1;
+            }
+            continue;
+        }
+        if (extract_op_value(tok, "ATTR{device}", "==", tmp, sizeof(tmp)) == 0) {
+            if (parse_u16_hex(tmp, &device_id) != 0) {
+                return -1;
+            }
+            continue;
         }
     }
-    if (!path[0]) {
+    if (strcmp(sub, "pci") != 0 || path[0] == '\0') {
         return -1;
     }
     out_rule->active = 1;

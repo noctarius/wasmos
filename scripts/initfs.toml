@@ -83,6 +83,12 @@ source = "fs_init.wap"
 [[entries]]
 kind = "wasmos_app"
 flags = ["bootstrap"]
+path = "system/drivers/fbpci.wap"
+source = "framebuffer_pci.wap"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
 path = "system/services/fs_manager.wap"
 source = "fs_manager.wap"
 

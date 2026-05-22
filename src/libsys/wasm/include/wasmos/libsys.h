@@ -171,6 +171,49 @@ wasmos_sys_intent_send(wasmos_sys_event_loop_t *loop,
 }
 
 static inline int32_t
+wasmos_sys_intent_send_with_request_id(wasmos_sys_event_loop_t *loop,
+                                       int32_t destination_endpoint,
+                                       int32_t source_endpoint,
+                                       int32_t request_id,
+                                       int32_t type,
+                                       int32_t arg0,
+                                       int32_t arg1,
+                                       int32_t arg2,
+                                       int32_t arg3,
+                                       void (*on_resolve)(void *user, const wasmos_ipc_message_t *msg),
+                                       void *user)
+{
+    if (!loop || !on_resolve || request_id <= 0) {
+        return -1;
+    }
+    for (int32_t i = 0; i < WASMOS_SYS_INTENT_MAX; ++i) {
+        if (loop->intents[i].in_use && loop->intents[i].request_id == request_id) {
+            return -1;
+        }
+    }
+    for (int32_t i = 0; i < WASMOS_SYS_INTENT_MAX; ++i) {
+        if (!loop->intents[i].in_use) {
+            if (wasmos_ipc_send(destination_endpoint,
+                                source_endpoint,
+                                type,
+                                request_id,
+                                arg0,
+                                arg1,
+                                arg2,
+                                arg3) != 0) {
+                return -1;
+            }
+            loop->intents[i].in_use = 1;
+            loop->intents[i].request_id = request_id;
+            loop->intents[i].on_resolve = on_resolve;
+            loop->intents[i].user = user;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static inline int32_t
 wasmos_sys_event_loop_poll(wasmos_sys_event_loop_t *loop, int32_t budget)
 {
     int32_t handled = 0;

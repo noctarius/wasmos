@@ -11,6 +11,7 @@
 #define DEVMGR_RULES_BOOT_ROOT "/boot/system/devmgr/rules"
 #define DEVMGR_RULE_FILE "default.rules"
 #define DEVMGR_RULE_TEXT_CAP 1024
+#define ALWAYS_SPAWN_RULE_CAP 8
 #define BLOCK_FS_RULE_CAP 8
 #define PCI_FB_RULE_CAP 8
 
@@ -81,6 +82,13 @@ typedef struct {
     uint8_t active;
     uint8_t queued;
     uint8_t spawned;
+    char spawn_path[96];
+} always_spawn_rule_t;
+
+typedef struct {
+    uint8_t active;
+    uint8_t queued;
+    uint8_t spawned;
     uint8_t unit;
     char mount[16];
     char spawn_path[96];
@@ -112,20 +120,14 @@ typedef struct {
     uint8_t need_serial;
     uint8_t need_fs_init;
     uint8_t need_fs_manager;
-    uint8_t need_keyboard;
-    uint8_t need_framebuffer;
     uint8_t fat_retries;
     uint8_t serial_retries;
     uint8_t fs_init_retries;
-    uint8_t keyboard_retries;
-    uint8_t framebuffer_retries;
     int32_t pci_bus_index;
     int32_t fat_index;
     int32_t serial_index;
     int32_t fs_init_index;
     int32_t fs_manager_index;
-    int32_t keyboard_index;
-    int32_t framebuffer_index;
     pci_device_record_t registry[DEVICE_REGISTRY_CAP];
     uint32_t registry_count;
     block_device_record_t block_registry[BLOCK_REGISTRY_CAP];
@@ -147,7 +149,10 @@ typedef struct {
     uint8_t rule_spawn_pending;
     uint8_t rule_spawn_retries;
     char rule_spawn_path[96];
+    uint8_t active_rule_spawn_kind;
     int32_t active_rule_spawn_index;
+    always_spawn_rule_t always_spawn_rules[ALWAYS_SPAWN_RULE_CAP];
+    uint32_t always_spawn_rule_count;
     block_fs_rule_t block_fs_rules[BLOCK_FS_RULE_CAP];
     uint32_t block_fs_rule_count;
     pci_fb_rule_t pci_fb_rules[PCI_FB_RULE_CAP];

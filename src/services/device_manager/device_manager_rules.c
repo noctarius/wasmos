@@ -52,48 +52,85 @@ dm_rules_count_active(const char *text)
 }
 
 static int
-extract_key_path(const char *text, const char *key, char *out_path, uint32_t out_len)
+parse_always_spawn_rule_line(const char *line, always_spawn_rule_t *out_rule)
 {
-    int32_t i = 0;
-    uint32_t key_len = 0;
-    if (!text || !out_path || out_len == 0) {
+    char path[96];
+    char *cur = 0;
+    char line_buf[192];
+    uint32_t line_len = 0;
+    if (!line || !out_rule) {
         return -1;
     }
-    if (!key || key[0] == '\0') {
+    while (line[line_len] && line[line_len] != '\n' && line_len + 1u < sizeof(line_buf)) {
+        line_buf[line_len] = line[line_len];
+        line_len++;
+    }
+    line_buf[line_len] = '\0';
+    line = trim_left(line_buf);
+    if (!(strncmp(line, "always_spawn", 12) == 0 &&
+          (line[12] == '\0' || wasmos_sys_is_space(line[12])))) {
         return -1;
     }
-    key_len = (uint32_t)strlen(key);
-    out_path[0] = '\0';
-    for (;;) {
+    path[0] = '\0';
+    cur = (char *)(line + 12);
+    while (*cur) {
+        char *tok = cur;
+        char *eq = 0;
+        while (*tok && wasmos_sys_is_space(*tok)) {
+            tok++;
+        }
+        if (!*tok) {
+            break;
+        }
+        cur = tok;
+        while (*cur && !wasmos_sys_is_space(*cur)) {
+            cur++;
+        }
+        if (*cur) {
+            *cur++ = '\0';
+        }
+        eq = strchr(tok, '=');
+        if (!eq) {
+            continue;
+        }
+        *eq++ = '\0';
+        if (strcmp(tok, "spawn_path") == 0) {
+            wasmos_sys_strcpy(path, sizeof(path), eq);
+        }
+    }
+    if (!path[0]) {
+        return -1;
+    }
+    out_rule->active = 1;
+    out_rule->queued = 1;
+    out_rule->spawned = 0;
+    wasmos_sys_strcpy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
+    return 0;
+}
+
+void
+dm_rules_load_always_spawn(device_manager_state_t *state, const char *text)
+{
+    uint32_t out_count = 0;
+    if (!state || !text) {
+        return;
+    }
+    for (uint32_t i = 0; i < ALWAYS_SPAWN_RULE_CAP; ++i) {
+        state->always_spawn_rules[i].active = 0;
+        state->always_spawn_rules[i].queued = 0;
+        state->always_spawn_rules[i].spawned = 0;
+    }
+    for (int32_t i = 0;;) {
         int32_t line_start = i;
         int32_t line_end = i;
         const char *line = 0;
-        uint32_t key_i = 0;
-        const char *value = 0;
-        uint32_t n = 0;
         while (text[line_end] && text[line_end] != '\n') {
             line_end++;
         }
         line = trim_left(&text[line_start]);
-        if (*line && *line != '#') {
-            while (key_i < key_len && line[key_i] == key[key_i]) {
-                key_i++;
-            }
-            if (key_i == key_len) {
-                value = line + key_len;
-                while (value < &text[line_end] && wasmos_sys_is_space(*value)) {
-                    value++;
-                }
-                while (&value[n] < &text[line_end] && value[n] && !wasmos_sys_is_space(value[n])) {
-                    n++;
-                }
-                if (n > 0 && n + 1u < out_len) {
-                    for (uint32_t j = 0; j < n; ++j) {
-                        out_path[j] = value[j];
-                    }
-                    out_path[n] = '\0';
-                    return 0;
-                }
+        if (line[0] && line[0] != '#' && out_count < ALWAYS_SPAWN_RULE_CAP) {
+            if (parse_always_spawn_rule_line(line, &state->always_spawn_rules[out_count]) == 0) {
+                out_count++;
             }
         }
         if (text[line_end] == '\0') {
@@ -101,13 +138,7 @@ extract_key_path(const char *text, const char *key, char *out_path, uint32_t out
         }
         i = line_end + 1;
     }
-    return -1;
-}
-
-int
-dm_rules_extract_spawn_path(const char *text, char *out_path, uint32_t out_len)
-{
-    return extract_key_path(text, "spawn_path=", out_path, out_len);
+    state->always_spawn_rule_count = out_count;
 }
 
 static int

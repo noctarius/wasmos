@@ -61,14 +61,15 @@ Current startup chain:
 3. kernel `init` spawns `device-manager`
 4. `device-manager` spawns `pci-bus` and waits for scan completion
 5. `device-manager` starts the storage chain via rules:
-   - `SUBSYSTEM=="boot", ... RUN+=...` rule spawns forced bootstrap drivers
-     (for example `ata`)
-   - `SUBSYSTEM=="pci", ATTR{...}, ... RUN+=...` selects drivers from published
+   - `SUBSYSTEM=="pci", ATTR{...}, ... RUN+=...` selects storage bootstrap
+     drivers from published
      PCI records when filters match
    - `SUBSYSTEM=="block", ATTR{unit}=="N", ENV{MOUNT}="...", RUN+=...` spawns
      `fs-fat` only after matching block-device registration
 7. `device-manager` and later `/boot` policy continue driver bring-up through
    the same udev-style rule format
+   - `/boot` override rules are post-storage policy only; entries targeting
+     bootstrap storage drivers (`ata`, `fs-fat`) are rejected
 8. kernel `init` waits for a successful FAT readiness probe
 9. kernel `init` loads `sysinit` from disk via PM
 10. `sysinit` loads the configured `sysinit.spawn` services/processes from disk,

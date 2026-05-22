@@ -145,6 +145,10 @@ pub fn intentSend(loop: *NativeEventLoop, destination_endpoint: u32, source_endp
     return c.wasmos_sys_native_intent_send(loop, destination_endpoint, source_endpoint, msg_type, arg0, arg1, arg2, arg3, @ptrCast(on_resolve), user, out_request_id);
 }
 
+pub fn intentSendWithRequestId(loop: *NativeEventLoop, destination_endpoint: u32, source_endpoint: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u32, arg2: u32, arg3: u32, on_resolve: *const fn (?*anyopaque, ?*const anyopaque) callconv(.c) void, user: ?*anyopaque) i32 {
+    return c.wasmos_sys_native_intent_send_with_request_id(loop, destination_endpoint, source_endpoint, request_id, msg_type, arg0, arg1, arg2, arg3, @ptrCast(on_resolve), user);
+}
+
 pub fn eventLoopPoll(loop: *NativeEventLoop, budget: u32) i32 {
     return c.wasmos_sys_native_event_loop_poll(loop, budget);
 }

@@ -302,6 +302,53 @@ wasmos_sys_native_intent_send(wasmos_sys_native_event_loop_t *loop,
 }
 
 int32_t
+wasmos_sys_native_intent_send_with_request_id(wasmos_sys_native_event_loop_t *loop,
+                                              uint32_t destination_endpoint,
+                                              uint32_t source_endpoint,
+                                              uint32_t request_id,
+                                              uint32_t msg_type,
+                                              uint32_t arg0,
+                                              uint32_t arg1,
+                                              uint32_t arg2,
+                                              uint32_t arg3,
+                                              void (*on_resolve)(void *user, const nd_ipc_message_t *msg),
+                                              void *user)
+{
+    nd_ipc_message_t req;
+    wasmos_sys_native_intent_t *slot = 0;
+    uint32_t ctx_id = 0;
+    int32_t send_rc = 0;
+    if (!loop || !loop->api || !loop->api->ipc_send || !loop->api->sched_current_pid || !on_resolve || request_id == 0) {
+        return -1;
+    }
+    if (native_intent_find(loop, request_id)) {
+        return -1;
+    }
+    slot = native_intent_alloc(loop);
+    if (!slot) {
+        return -1;
+    }
+    req.type = msg_type;
+    req.source = source_endpoint;
+    req.destination = destination_endpoint;
+    req.request_id = request_id;
+    req.arg0 = arg0;
+    req.arg1 = arg1;
+    req.arg2 = arg2;
+    req.arg3 = arg3;
+    ctx_id = loop->api->sched_current_pid();
+    send_rc = loop->api->ipc_send(ctx_id, destination_endpoint, &req);
+    if (send_rc != 0) {
+        return send_rc;
+    }
+    slot->in_use = 1;
+    slot->request_id = req.request_id;
+    slot->on_resolve = on_resolve;
+    slot->user = user;
+    return 0;
+}
+
+int32_t
 wasmos_sys_native_event_loop_poll(wasmos_sys_native_event_loop_t *loop, uint32_t budget)
 {
     uint32_t ctx_id = 0;

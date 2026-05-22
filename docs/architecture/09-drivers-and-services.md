@@ -38,9 +38,10 @@ Native payload policy:
   - starts `pci-bus` and consumes published PCI inventory
   - starts the early storage driver chain using inventory-based matching
   - starts post-FAT display/input drivers by name from disk
-  - now routes main reply-endpoint request/response traffic through the WASM
-    `libsys` reactor/intent helpers for spawn/module-meta and mount-query
-    operations, while keeping the existing phase/state policy flow intact
+  - now routes reply-endpoint request/response traffic through the WASM
+    `libsys` reactor/intent helpers (spawn/module-meta/mount-query), and also
+    drives inventory/query + boot-rules async reply handling through dedicated
+    reactor loops, while keeping the existing phase/state policy flow intact
   - reserves udev-like policy rule roots:
     - `/init/devmgr/rules` (bootstrap policy from initfs)
     - `/boot/system/devmgr/rules` (runtime override policy from FAT)

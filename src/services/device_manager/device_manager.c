@@ -103,85 +103,105 @@ static void queue_pci_match_rule_spawns(void);
 static void queue_block_fs_rule_spawns(void);
 static void queue_block_fs_rules_for_known_devices(void);
 static int module_index_by_name(const char *name);
-static void filter_boot_override_rules(void);
 static uint16_t count_loaded_active_rules(void);
+static int is_mount_already_active(const char *mount);
 
 static int
-str_contains(const char *s, const char *needle)
+copy_mount_name_token(const char *line, char *out, uint32_t out_len)
 {
     uint32_t i = 0;
-    uint32_t nlen = 0;
-    if (!s || !needle || needle[0] == '\0') {
+    uint32_t pos = 0;
+    if (!line || !out || out_len < 2u) {
+        return -1;
+    }
+    if (line[0] != '/') {
+        return -1;
+    }
+    for (i = 1; line[i] != '\0'; ++i) {
+        if (line[i] == ' ') {
+            break;
+        }
+        if (pos + 1u >= out_len) {
+            break;
+        }
+        out[pos++] = line[i];
+    }
+    out[pos] = '\0';
+    if (pos == 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int
+is_mount_already_active(const char *mount)
+{
+    char buf[384];
+    int32_t req_id = 0;
+    int32_t resp_type = 0;
+    int32_t n = 0;
+    uint32_t i = 0;
+    char mount_name[16];
+    if (!mount || mount[0] != '/') {
         return 0;
     }
-    while (needle[nlen] != '\0') {
-        nlen++;
+    if (ensure_fs_endpoint() != 0) {
+        return 0;
     }
-    for (i = 0; s[i] != '\0'; ++i) {
-        uint32_t j = 0;
-        while (needle[j] != '\0' && s[i + j] != '\0' && s[i + j] == needle[j]) {
-            j++;
+    if (g_dm.reply_endpoint < 0) {
+        return 0;
+    }
+    req_id = g_dm.request_id++;
+    if (wasmos_ipc_send(g_dm.fs_endpoint, g_dm.reply_endpoint, FSMGR_IPC_QUERY_MOUNTS_REQ, req_id, 0, 0, 0, 0) != 0 ||
+        wasmos_ipc_recv(g_dm.reply_endpoint) < 0 ||
+        wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req_id) {
+        return 0;
+    }
+    resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
+    if (resp_type != FSMGR_IPC_QUERY_MOUNTS_RESP) {
+        return 0;
+    }
+    n = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
+    if (n <= 0 || n >= (int32_t)sizeof(buf)) {
+        return 0;
+    }
+    if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)buf, n, 0) != 0) {
+        return 0;
+    }
+    buf[n] = '\0';
+    while (mount[0] == '/') {
+        mount++;
+    }
+    while (buf[i] != '\0') {
+        char line[64];
+        uint32_t pos = 0;
+        while (buf[i] != '\0' && buf[i] != '\n' && pos + 1u < sizeof(line)) {
+            line[pos++] = buf[i++];
         }
-        if (j == nlen) {
+        line[pos] = '\0';
+        if (buf[i] == '\n') {
+            i++;
+        }
+        if (copy_mount_name_token(line, mount_name, sizeof(mount_name)) == 0 &&
+            wasmos_sys_streq(mount_name, mount)) {
             return 1;
         }
     }
     return 0;
 }
 
-static int
-is_boot_override_forbidden_path(const char *path)
-{
-    if (!path || path[0] == '\0') {
-        return 0;
-    }
-    if (str_contains(path, "system/drivers/ata.wap")) {
-        return 1;
-    }
-    if (str_contains(path, "system/drivers/fs_fat.wap")) {
-        return 1;
-    }
-    return 0;
-}
-
 static void
-filter_boot_override_rules(void)
+log_mount_already_active(const char *mount)
 {
-    for (uint32_t i = 0; i < g_dm.always_spawn_rule_count; ++i) {
-        always_spawn_rule_t *rule = &g_dm.always_spawn_rules[i];
-        if (!rule->active) {
-            continue;
-        }
-        if (is_boot_override_forbidden_path(rule->spawn_path)) {
-            rule->active = 0;
-            rule->queued = 0;
-            rule->spawned = 0;
-            console_write("[device-manager] boot rule dropped (bootstrap-owned driver)\n");
-        }
+    char msg[96];
+    if (!mount || mount[0] == '\0') {
+        return;
     }
-    for (uint32_t i = 0; i < g_dm.block_fs_rule_count; ++i) {
-        block_fs_rule_t *rule = &g_dm.block_fs_rules[i];
-        if (!rule->active) {
-            continue;
-        }
-        if (is_boot_override_forbidden_path(rule->spawn_path)) {
-            rule->active = 0;
-            rule->queued = 0;
-            rule->spawned = 0;
-            console_write("[device-manager] boot rule dropped (bootstrap-owned driver)\n");
-        }
-    }
-    for (uint32_t i = 0; i < g_dm.pci_match_rule_count; ++i) {
-        pci_match_rule_t *rule = &g_dm.pci_match_rules[i];
-        if (!rule->active) {
-            continue;
-        }
-        if (is_boot_override_forbidden_path(rule->spawn_path)) {
-            rule->active = 0;
-            rule->spawned_device_mask = 0;
-            console_write("[device-manager] boot rule dropped (bootstrap-owned driver)\n");
-        }
-    }
+    (void)snprintf(msg,
+                   sizeof(msg),
+                   "[device-manager] mount already active; skipping rule mount=%s\n",
+                   mount);
+    console_write(msg);
 }
 
 static uint16_t
@@ -363,7 +383,6 @@ poll_boot_rules_async(void)
     dm_rules_load_always_spawn(&g_dm, text);
     dm_rules_load_block_fs(&g_dm, text);
     dm_rules_load_pci_match(&g_dm, text);
-    filter_boot_override_rules();
     g_dm.rules_boot_active = count_loaded_active_rules();
     if (g_dm.always_spawn_rule_count > 0) {
         console_write("[device-manager] boot rules loaded always_spawn\n");
@@ -769,6 +788,12 @@ queue_block_fs_rule_spawns(void)
         if (!rule->active || !rule->queued || rule->spawned) {
             continue;
         }
+        if (is_mount_already_active(rule->mount)) {
+            rule->queued = 0;
+            rule->spawned = 1;
+            log_mount_already_active(rule->mount);
+            continue;
+        }
         wasmos_sys_strcpy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
         g_dm.rule_spawn_pending = 1;
         g_dm.rule_spawn_retries = 0;
@@ -789,6 +814,11 @@ queue_block_fs_rules_for_known_devices(void)
         for (uint32_t ri = 0; ri < g_dm.block_fs_rule_count; ++ri) {
             block_fs_rule_t *rule = &g_dm.block_fs_rules[ri];
             if (!rule->active || rule->spawned || rule->queued) {
+                continue;
+            }
+            if (is_mount_already_active(rule->mount)) {
+                rule->spawned = 1;
+                log_mount_already_active(rule->mount);
                 continue;
             }
             if (rule->unit == 0xFFu || rule->unit == rec->unit) {
@@ -857,6 +887,11 @@ registry_add_block_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t ar
         for (uint32_t i = 0; i < g_dm.block_fs_rule_count; ++i) {
             block_fs_rule_t *rule = &g_dm.block_fs_rules[i];
             if (!rule->active || rule->spawned || rule->queued) {
+                continue;
+            }
+            if (is_mount_already_active(rule->mount)) {
+                rule->spawned = 1;
+                log_mount_already_active(rule->mount);
                 continue;
             }
             if (rule->unit == 0xFFu || rule->unit == rec->unit) {

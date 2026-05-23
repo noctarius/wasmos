@@ -92,6 +92,14 @@ pub fn bufferWriteTo(api: anytype, kind: u32, source_endpoint: u32, borrow_flags
     return c.wasmos_sys_buffer_write_to_native(asApi(api), kind, source_endpoint, borrow_flags, src, len, offset);
 }
 
+pub fn fsBufferCopyFromEndpoint(api: anytype, source_endpoint: u32, dst: [*]u8, len: i32, offset: i32) i32 {
+    return c.wasmos_sys_fs_buffer_copy_from_endpoint_native(asApi(api), source_endpoint, dst, len, offset);
+}
+
+pub fn fsBufferWriteToEndpoint(api: anytype, source_endpoint: u32, src: [*]const u8, len: i32, offset: i32) i32 {
+    return c.wasmos_sys_fs_buffer_write_to_endpoint_native(asApi(api), source_endpoint, src, len, offset);
+}
+
 pub fn fsReadPath(api: anytype, fs_endpoint: u32, reply_endpoint: u32, request_id: u32, path: []const u8, out_text: []u8) i32 {
     if (out_text.len == 0) return -1;
     return c.wasmos_sys_fs_read_path_native(asApi(api), fs_endpoint, reply_endpoint, request_id, path.ptr, @intCast(path.len), out_text.ptr, @intCast(out_text.len));

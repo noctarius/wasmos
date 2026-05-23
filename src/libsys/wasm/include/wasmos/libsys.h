@@ -462,6 +462,34 @@ wasmos_sys_fs_read_path(int32_t fs_endpoint,
     return read_len;
 }
 
+static inline int32_t
+wasmos_sys_fs_buffer_copy_from_endpoint(int32_t source_endpoint,
+                                        void *dst,
+                                        int32_t len,
+                                        int32_t offset)
+{
+    return wasmos_sys_buffer_copy_from(WASMOS_BUFFER_KIND_FS,
+                                       source_endpoint,
+                                       WASMOS_BUFFER_GRANT_READ,
+                                       dst,
+                                       len,
+                                       offset);
+}
+
+static inline int32_t
+wasmos_sys_fs_buffer_write_to_endpoint(int32_t source_endpoint,
+                                       const void *src,
+                                       int32_t len,
+                                       int32_t offset)
+{
+    return wasmos_sys_buffer_write_to(WASMOS_BUFFER_KIND_FS,
+                                      source_endpoint,
+                                      WASMOS_BUFFER_GRANT_WRITE,
+                                      src,
+                                      len,
+                                      offset);
+}
+
 #ifdef __cplusplus
 }
 #endif

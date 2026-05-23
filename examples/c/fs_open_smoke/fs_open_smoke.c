@@ -2,6 +2,7 @@
 #include "stdio.h"
 #include "sys/stat.h"
 #include "unistd.h"
+#include "wasmos/api.h"
 int
 main(int argc, char **argv)
 {
@@ -15,9 +16,15 @@ main(int argc, char **argv)
     (void)argc;
     (void)argv;
 
-    if (stat("/boot/large_read.txt", &st) != 0 ||
-        st.st_size != 6858u ||
-        (st.st_mode & S_IFMT) != S_IFREG) {
+    if (stat("/boot/large_read.txt", &st) != 0) {
+        puts("fs-open-smoke: stat failed");
+        return 1;
+    }
+    if (st.st_size != 6858u) {
+        puts("fs-open-smoke: stat failed");
+        return 1;
+    }
+    if ((st.st_mode & S_IFMT) != S_IFREG) {
         puts("fs-open-smoke: stat failed");
         return 1;
     }

@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-#define FS_CLIENT_CAP 16
+#define FS_CLIENT_CAP 64
 #define FS_BACKEND_CAP 8
 
 typedef enum {

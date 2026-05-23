@@ -1233,7 +1233,6 @@ m3ApiRawFunction(wasmos_fs_buffer_size)
 m3ApiRawFunction(wasmos_fs_endpoint)
 {
     m3ApiReturnType(int32_t)
-
     uint32_t endpoint = process_manager_fs_endpoint();
     if (endpoint == IPC_ENDPOINT_NONE) {
         m3ApiReturn(-1);

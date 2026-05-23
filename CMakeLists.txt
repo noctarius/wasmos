@@ -1716,6 +1716,7 @@ add_dependencies(run-qemu-ring3-check c_examples services drivers)
 add_dependencies(run-qemu-ring3-threading-check c_examples services drivers)
 add_dependencies(run-qemu-ring3-fault-storm-check c_examples services drivers)
 add_dependencies(make_initfs c_examples)
+add_dependencies(make_initfs drivers services)
 add_dependencies(run-qemu make_initfs)
 add_dependencies(run-qemu-ui make_initfs)
 add_dependencies(run-qemu-test make_initfs)
@@ -1795,6 +1796,12 @@ add_custom_target(run-kernel-unit-tests
           ${SERVICES_DIR}/device_manager/device_manager_rules.c
           -o ${BUILD_DIR}/test_device_manager_rules
   COMMAND ${BUILD_DIR}/test_device_manager_rules
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${SERVICES_DIR}/fs_manager
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_fs_manager_path.c
+          ${SERVICES_DIR}/fs_manager/fs_manager_path.c
+          -o ${BUILD_DIR}/test_fs_manager_path
+  COMMAND ${BUILD_DIR}/test_fs_manager_path
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Running host kernel unit tests"
   VERBATIM

@@ -688,6 +688,38 @@ wasmos_sys_buffer_write_to_native(wasmos_driver_api_t *api,
 }
 
 int32_t
+wasmos_sys_fs_buffer_copy_from_endpoint_native(wasmos_driver_api_t *api,
+                                               uint32_t source_endpoint,
+                                               void *dst,
+                                               int32_t len,
+                                               int32_t offset)
+{
+    return wasmos_sys_buffer_copy_from_native(api,
+                                              ND_BUFFER_KIND_FS,
+                                              source_endpoint,
+                                              ND_BUFFER_BORROW_READ,
+                                              dst,
+                                              len,
+                                              offset);
+}
+
+int32_t
+wasmos_sys_fs_buffer_write_to_endpoint_native(wasmos_driver_api_t *api,
+                                              uint32_t source_endpoint,
+                                              const void *src,
+                                              int32_t len,
+                                              int32_t offset)
+{
+    return wasmos_sys_buffer_write_to_native(api,
+                                             ND_BUFFER_KIND_FS,
+                                             source_endpoint,
+                                             ND_BUFFER_BORROW_WRITE,
+                                             src,
+                                             len,
+                                             offset);
+}
+
+int32_t
 wasmos_sys_fs_read_path_native(wasmos_driver_api_t *api,
                                uint32_t fs_endpoint,
                                uint32_t reply_endpoint,

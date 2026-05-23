@@ -42,14 +42,14 @@ class CliIntegrationTests(unittest.TestCase):
         self._cmd_expect("help", b"commands:")
 
     def test_ps_lists_processes(self):
-        self._cmd_expect("ps", b"mem(bytes) cpu(ticks) name")
+        self._cmd_expect("ps", b"vm(bytes) kstack(bytes) heap(bytes) rss_est(bytes) cpu(ticks) name")
 
     def test_ps_tree_lists_hierarchy(self):
         self._cmd_expect("ps tree", b"tree:")
         self._cmd_expect("ps tree", b"cli (pid")
 
     def test_ps_all_lists_table_and_tree(self):
-        self._cmd_expect("ps all", b"pid ppid state thr/live mem(bytes) cpu(ticks) name")
+        self._cmd_expect("ps all", b"pid ppid state wasm thr/live vm(bytes) kstack(bytes) heap(bytes) rss_est(bytes) cpu(ticks) name")
         self._cmd_expect("ps all", b"tree:")
 
     def test_ls_lists_root(self):
@@ -81,7 +81,7 @@ class CliIntegrationTests(unittest.TestCase):
         self._cmd_expect("cd /", b"/ wamos>")
         self._cmd_expect("cd init", b"/init wamos>")
         self._cmd_expect("cd devmgr", b"/init/devmgr wamos>")
-        self._cmd_expect("ls", b"rules/")
+        self._cmd_expect("ls", b"rules")
         self._cmd_expect("cd rules", b"/init/devmgr/rules wamos>")
         self._cmd_expect("ls", b"default.rules")
         self._cmd_expect("cd /", b"/ wamos>")
@@ -91,7 +91,7 @@ class CliIntegrationTests(unittest.TestCase):
         self._cmd_expect("cd init", b"/init wamos>")
         self._cmd_expect("cd devmgr", b"/init/devmgr wamos>")
         self._cmd_expect("cd rules", b"/init/devmgr/rules wamos>")
-        self._cmd_expect("cat default.rules", b"spawn_path=system/drivers/ata.wap")
+        self._cmd_expect("cat default.rules", b'RUN+="system/drivers/ata.wap"')
         self._cmd_expect("cd /", b"/ wamos>")
 
     def test_cd_dot_and_dotdot(self):
@@ -115,9 +115,9 @@ class CliIntegrationTests(unittest.TestCase):
     def test_path_lookup_for_exec(self):
         self._cmd_expect("cd /", b"/ wamos>")
         self._cmd_expect("export PATH=/boot/apps", b"wamos> ")
-        self._cmd_expect("exec init_smoke", b"spawned pid ")
+        self._cmd_expect("init_smoke", b"spawned pid ")
         self._cmd_expect("export PATH=", b"wamos> ")
-        self._cmd_expect("exec init_smoke", b"exec failed")
+        self._cmd_expect("init_smoke", b"no such command found: init_smoke")
 
 if __name__ == "__main__":
     unittest.main()

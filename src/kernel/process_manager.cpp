@@ -449,7 +449,10 @@ void process_manager_inject_spawn_owner_deny_test(void)
 int process_manager_init(const boot_info_t *boot_info) { return g_process_manager.init(boot_info); }
 
 uint32_t process_manager_endpoint(void) { return g_pm.proc_endpoint; }
-uint32_t process_manager_fs_endpoint(void) { return g_pm.fs_endpoint; }
+uint32_t process_manager_fs_endpoint(void)
+{
+    return g_pm.fs_endpoint;
+}
 uint32_t process_manager_block_endpoint(void) { return g_pm.block_endpoint; }
 uint32_t process_manager_vt_endpoint(void) { return g_pm.vt_endpoint; }
 uint32_t process_manager_framebuffer_endpoint(void) { return g_pm.fb_endpoint; }

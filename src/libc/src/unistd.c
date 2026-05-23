@@ -90,13 +90,18 @@ libc_fs_request(int32_t type,
                         arg3) != 0) {
         return -1;
     }
-    if (wasmos_ipc_recv(reply_endpoint) < 0) {
-        return -1;
-    }
-
-    wasmos_ipc_message_read_last(&reply);
-    if (reply.request_id != request_id || reply.type != FS_IPC_RESP) {
-        return -1;
+    for (;;) {
+        if (wasmos_ipc_recv(reply_endpoint) < 0) {
+            return -1;
+        }
+        wasmos_ipc_message_read_last(&reply);
+        if (reply.request_id != request_id) {
+            continue;
+        }
+        if (reply.type != FS_IPC_RESP) {
+            return -1;
+        }
+        break;
     }
     if (out_arg0) {
         *out_arg0 = reply.arg0;

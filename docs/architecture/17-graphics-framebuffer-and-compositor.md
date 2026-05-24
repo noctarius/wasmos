@@ -21,6 +21,9 @@ Current implementation note:
   service lookups and font RPCs) on the same endpoint use intent-backed waits so
   unrelated incoming events/requests are still serviced while waiting for
   replies.
+- `gfx-compositor` now performs software composition into an internal backbuffer
+  and then copies only the completed dirty region into the borrowed framebuffer
+  mapping, which reduces visible scanout flicker from in-place incremental draws.
 
 ## 2. Component Model
 

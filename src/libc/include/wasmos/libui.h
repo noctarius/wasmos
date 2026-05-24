@@ -28,7 +28,8 @@ typedef enum {
     UI_COMPONENT_PANEL = 1,
     UI_COMPONENT_LABEL = 2,
     UI_COMPONENT_BUTTON = 3,
-    UI_COMPONENT_CHECKBOX = 4
+    UI_COMPONENT_CHECKBOX = 4,
+    UI_COMPONENT_TEXT_INPUT = 5
 } ui_component_type_t;
 
 typedef struct {
@@ -83,6 +84,7 @@ typedef struct ui_context {
     int32_t dirty;
     int32_t close_requested;
     int32_t root_id;
+    int32_t focused_component_id;
     ui_component_t components[UI_MAX_COMPONENTS];
 } ui_context_t;
 
@@ -304,6 +306,7 @@ static inline int32_t ui_component_create_panel(ui_context_t *ctx) { return ui_c
 static inline int32_t ui_component_create_label(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_LABEL); }
 static inline int32_t ui_component_create_button(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_BUTTON); }
 static inline int32_t ui_component_create_checkbox(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_CHECKBOX); }
+static inline int32_t ui_component_create_text_input(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_TEXT_INPUT); }
 
 static inline void
 ui_component_set_text(ui_context_t *ctx, int32_t id, const char *text)
@@ -335,6 +338,15 @@ ui_component_set_checked(ui_context_t *ctx, int32_t id, int32_t checked)
     ui_component_t *c = ui_component_by_id(ctx, id);
     if (!c || c->type != UI_COMPONENT_CHECKBOX) return;
     c->checked = checked ? 1 : 0;
+}
+
+static inline int32_t
+ui_component_text_len(const ui_component_t *c)
+{
+    int32_t n = 0;
+    if (!c) return 0;
+    while (n < (UI_TEXT_MAX - 1) && c->text[n] != '\0') n++;
+    return n;
 }
 
 static inline void ui_mark_dirty(ui_context_t *ctx) { if (ctx) ctx->dirty = 1; }
@@ -489,6 +501,21 @@ ui_render_component(ui_context_t *ctx, int32_t id)
                      c->bounds.y + (c->bounds.h - 7) / 2,
                      c->text,
                      c->fg_color);
+    } else if (c->type == UI_COMPONENT_TEXT_INPUT) {
+        const int32_t active = (ctx->focused_component_id == c->id);
+        const uint32_t inner = active ? 0xFF1F3148u : 0xFF1C2738u;
+        const uint32_t outline = active ? 0xFF89C9FFu : c->border_color;
+        ui_fill_rect(ctx->mapped_base, ctx->width, ctx->height,
+                     c->bounds.x + 1, c->bounds.y + 1, c->bounds.w - 2, c->bounds.h - 2, inner);
+        ui_stroke_rect(ctx->mapped_base, ctx->width, ctx->height, c->bounds, 1, outline);
+        const int32_t tx = c->bounds.x + c->padding_px;
+        const int32_t ty = c->bounds.y + (c->bounds.h - 7) / 2;
+        ui_draw_text(ctx->mapped_base, ctx->width, ctx->height, tx, ty, c->text, 0xFFFFFFFFu);
+        if (active) {
+            const int32_t len = ui_component_text_len(c);
+            const int32_t caret_x = tx + (len * 6);
+            ui_fill_rect(ctx->mapped_base, ctx->width, ctx->height, caret_x, ty - 1, 1, 9, 0xFFFFFFFFu);
+        }
     }
     ui_stroke_rect(ctx->mapped_base, ctx->width, ctx->height, c->bounds, c->border_px, c->border_color);
     int32_t child_id = c->first_child_id;
@@ -498,6 +525,23 @@ ui_render_component(ui_context_t *ctx, int32_t id)
         if (!child) break;
         child_id = child->next_sibling_id;
     }
+}
+
+static inline int32_t
+ui_find_component_at(ui_context_t *ctx, int32_t id, int32_t x, int32_t y)
+{
+    ui_component_t *c = ui_component_by_id(ctx, id);
+    if (!c) return -1;
+    int32_t child_id = c->first_child_id;
+    while (child_id > 0) {
+        const int32_t hit = ui_find_component_at(ctx, child_id, x, y);
+        if (hit > 0) return hit;
+        ui_component_t *child = ui_component_by_id(ctx, child_id);
+        if (!child) break;
+        child_id = child->next_sibling_id;
+    }
+    if (ui_point_in_bounds(x, y, c->bounds)) return c->id;
+    return -1;
 }
 
 static inline int32_t
@@ -553,6 +597,13 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
         const int32_t left_now = ((buttons & 1u) != 0u);
         const int32_t left_prev = ((ctx->pointer_buttons & 1u) != 0u);
         if (left_now && !left_prev) {
+            const int32_t focus_id = ui_find_component_at(ctx, ctx->root_id, ctx->pointer_x, ctx->pointer_y);
+            ui_component_t *focus = ui_component_by_id(ctx, focus_id);
+            if (focus && focus->type == UI_COMPONENT_TEXT_INPUT) {
+                ctx->focused_component_id = focus->id;
+            } else {
+                ctx->focused_component_id = 0;
+            }
             const int32_t hit_id = ui_find_clickable_at(ctx, ctx->root_id, ctx->pointer_x, ctx->pointer_y);
             ui_component_t *hit = ui_component_by_id(ctx, hit_id);
             if (hit) {
@@ -578,7 +629,32 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
         ctx->pointer_buttons = buttons;
         return UI_MSG_CONSUMED;
     }
-    if (msg->arg1 == GFX_EVENT_KEY || msg->arg1 == GFX_EVENT_FOCUS_GAINED || msg->arg1 == GFX_EVENT_FOCUS_LOST) {
+    if (msg->arg1 == GFX_EVENT_KEY) {
+        const uint32_t key = (uint32_t)msg->arg2;
+        const uint32_t flags = (uint32_t)msg->arg3;
+        const int32_t key_down = ((flags & 1u) != 0u);
+        if (!key_down) return UI_MSG_CONSUMED;
+        if (ctx->focused_component_id > 0) {
+            ui_component_t *focus = ui_component_by_id(ctx, ctx->focused_component_id);
+            if (focus && focus->type == UI_COMPONENT_TEXT_INPUT) {
+                int32_t len = ui_component_text_len(focus);
+                if (key == 8u || key == 127u) {
+                    if (len > 0) {
+                        focus->text[len - 1] = '\0';
+                        ui_mark_dirty(ctx);
+                    }
+                } else if (key >= 32u && key <= 126u) {
+                    if (len < (UI_TEXT_MAX - 1)) {
+                        focus->text[len] = (char)key;
+                        focus->text[len + 1] = '\0';
+                        ui_mark_dirty(ctx);
+                    }
+                }
+            }
+        }
+        return UI_MSG_CONSUMED;
+    }
+    if (msg->arg1 == GFX_EVENT_FOCUS_GAINED || msg->arg1 == GFX_EVENT_FOCUS_LOST) {
         return UI_MSG_CONSUMED;
     }
     return UI_MSG_IGNORED;

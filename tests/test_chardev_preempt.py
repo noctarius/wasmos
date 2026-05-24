@@ -44,7 +44,7 @@ class ChardevPreemptTest(unittest.TestCase):
     def test_exec_chardev_preempt(self):
         self._cmd_expect("cd apps", [b"/apps wamos>"])
         self._cmd_expect(
-            "exec chardev-preempt",
+            "chardev_preempt",
             [
                 b"spawned pid",
                 b"chardev-preempt: ok",

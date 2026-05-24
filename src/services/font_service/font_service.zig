@@ -515,12 +515,9 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
         return -1;
     }
 
-    const fs_ep = svc_lookup("fs.vfs", 2);
+    const fs_ep = sys.svcLookupRetry(api(), g_proc_endpoint, g_font_endpoint, "fs.vfs", 2, 64);
     if (fs_ep >= 0) {
         g_fs_endpoint = @bitCast(fs_ep);
-    } else {
-        const fs_ep_legacy = svc_lookup("fs", 3);
-        if (fs_ep_legacy >= 0) g_fs_endpoint = @bitCast(fs_ep_legacy);
     }
 
     if (g_fs_endpoint == IPC_ENDPOINT_NONE) {

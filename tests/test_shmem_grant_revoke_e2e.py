@@ -65,9 +65,9 @@ class ShmemGrantRevokeE2ETest(unittest.TestCase):
 
     def test_shmem_grant_revoke_pair(self):
         self._cmd_expect("cd /apps", [b"/apps wamos>"])
-        self._exec_expect("exec shmtgt", timeout_s=20)
+        self._exec_expect("shmtgt", timeout_s=20)
         mark = self.session.mark()
-        self.session.send("exec shmownr")
+        self.session.send("shmownr")
         self.assertTrue(self.session.expect_from(mark, b"spawned pid", timeout_s=20))
         self.assertTrue(self.session.expect_from(mark, b"wamos> ", timeout_s=20))
         self._expect_markers_from(

@@ -39,7 +39,7 @@ class InitSmokeTests(unittest.TestCase):
             self.fail(f"Prompt not found after '{cmd}'.\n--- tail ---\n{self.session.tail()}\n")
 
     def test_init_smoke_runs(self):
-        self._cmd_expect("exec init-smoke", b"init-smoke: init done")
+        self._cmd_expect("init_smoke", b"init-smoke: init done")
 
     def test_sysinit_starts_configured_targets(self):
         self.assertIn(b"[wasmos-app] entry ok chardev-client", self.session.buf)

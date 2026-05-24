@@ -36,7 +36,8 @@ enum {
     PROC_IPC_SPAWN_CAPS_V2 = 0x208,
     /* Spawn from explicit app path:
      * caller must place path bytes at FS buffer offset 0.
-     * arg0=reserved(0) arg1=path_len arg2=reserved arg3=reserved. */
+     * optional raw command argument text is placed at offset (path_len + 1).
+     * arg0=reserved(0) arg1=path_len arg2=args_len arg3=reserved. */
     PROC_IPC_SPAWN_PATH = 0x209,
     PROC_IPC_RESP = 0x280,
     PROC_IPC_ERROR = 0x2FF

@@ -193,6 +193,24 @@ pm_app_entry(process_t *process, void *arg)
             return PROCESS_RUN_EXITED;
         }
         state->flags = desc.flags;
+        if (state->spawn_cli_args_len > 0u) {
+            int32_t fs_buf_size = process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM);
+            uint8_t *proc_fs_buf = (uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM,
+                                                                                  process->context_id);
+            if (!proc_fs_buf || fs_buf_size <= 0 ||
+                state->spawn_cli_args_len >= (uint32_t)fs_buf_size) {
+                klog_write("[pm] spawn args copy failed\n");
+                process_set_exit_status(process, -1);
+#if defined(WASMOS_ENABLE_PREEMPT_GUARD)
+                preempt_enable();
+#endif
+                return PROCESS_RUN_EXITED;
+            }
+            for (uint32_t i = 0; i < state->spawn_cli_args_len; ++i) {
+                proc_fs_buf[i] = (uint8_t)state->spawn_cli_args[i];
+            }
+            proc_fs_buf[state->spawn_cli_args_len] = '\0';
+        }
         uint32_t init_args[4] = {
             state->entry_arg0,
             state->entry_arg1,
@@ -372,7 +390,12 @@ fallback_direct:
 }
 
 static int
-pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t *blob, uint32_t blob_size, uint32_t *out_pid)
+pm_spawn_from_buffer(uint32_t parent_pid,
+                     const uint8_t *blob,
+                     uint32_t blob_size,
+                     const char *spawn_cli_args,
+                     uint32_t spawn_cli_args_len,
+                     uint32_t *out_pid)
 {
     if (!blob || blob_size == 0 || !out_pid) {
         return -1;
@@ -406,6 +429,21 @@ pm_spawn_from_buffer(uint32_t parent_pid, const uint8_t *blob, uint32_t blob_siz
     slot->blob_size = blob_size;
     slot->started = 0;
     slot->in_use = 1;
+    slot->spawn_cli_args_len = 0;
+    for (uint32_t i = 0; i < sizeof(slot->spawn_cli_args); ++i) {
+        slot->spawn_cli_args[i] = '\0';
+    }
+    if (spawn_cli_args && spawn_cli_args_len > 0u) {
+        if (spawn_cli_args_len >= sizeof(slot->spawn_cli_args)) {
+            slot->in_use = 0;
+            return -1;
+        }
+        for (uint32_t i = 0; i < spawn_cli_args_len; ++i) {
+            slot->spawn_cli_args[i] = spawn_cli_args[i];
+        }
+        slot->spawn_cli_args[spawn_cli_args_len] = '\0';
+        slot->spawn_cli_args_len = spawn_cli_args_len;
+    }
     if (pm_apply_entry_bindings(slot, &desc) != 0) {
         slot->in_use = 0;
         return -1;
@@ -603,7 +641,7 @@ pm_poll_spawn(uint32_t pm_context_id)
     uint32_t size = (uint32_t)msg.arg0;
     const uint8_t *fs_blob = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
     if (size == 0 || size > process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM) || !fs_blob ||
-        pm_spawn_from_buffer(g_pm.spawn.parent_pid, fs_blob, size, &pid) != 0) {
+        pm_spawn_from_buffer(g_pm.spawn.parent_pid, fs_blob, size, 0, 0, &pid) != 0) {
         ipc_message_t resp;
         resp.type = PROC_IPC_ERROR;
         resp.source = g_pm.proc_endpoint;
@@ -972,8 +1010,10 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
     process_t *caller = 0;
     uint32_t parent_pid = 0;
     uint32_t path_len = (uint32_t)msg->arg1;
+    uint32_t args_len = (uint32_t)msg->arg2;
     const uint8_t *caller_fs_buf = 0;
     char path[256];
+    char cli_args[256];
     const uint8_t *pm_fs_buf = 0;
     uint32_t blob_size = 0;
     uint32_t pid = 0;
@@ -997,6 +1037,19 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
         path[i] = (char)caller_fs_buf[i];
     }
     path[path_len] = '\0';
+    if (args_len > 0u) {
+        uint32_t fs_buf_size = process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM);
+        uint32_t args_off = path_len + 1u;
+        if (args_len >= sizeof(cli_args) || args_off >= fs_buf_size || args_len > (fs_buf_size - args_off)) {
+            return -1;
+        }
+        for (uint32_t i = 0; i < args_len; ++i) {
+            cli_args[i] = (char)caller_fs_buf[args_off + i];
+        }
+        cli_args[args_len] = '\0';
+    } else {
+        cli_args[0] = '\0';
+    }
 
     pm_fs_buf = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
     if (!pm_fs_buf) {
@@ -1008,7 +1061,12 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
                                   &blob_size) != 0) {
         return -1;
     }
-    if (pm_spawn_from_buffer(parent_pid, pm_fs_buf, blob_size, &pid) != 0) {
+    if (pm_spawn_from_buffer(parent_pid,
+                             pm_fs_buf,
+                             blob_size,
+                             args_len > 0u ? cli_args : 0,
+                             args_len,
+                             &pid) != 0) {
         return -1;
     }
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);

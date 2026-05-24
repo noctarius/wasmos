@@ -46,7 +46,10 @@ class FsWriteSmokeTest(unittest.TestCase):
             self.fail(f"Prompt not found after '{cmd}'.\n--- tail ---\n{self.session.tail()}\n")
 
     def test_exec_fs_write_smoke(self):
-        self._cmd_expect("exec fs-write-smoke", [b"spawned pid", re.compile(rb"fs-write-smoke: (ok|mkdir failed)")])
+        self._cmd_expect("cd /boot", [b"/boot wamos>"])
+        self._cmd_expect("ls", [b"write_smoke.txt"])
+        self._cmd_expect("cd /", [b"/ wamos>"])
+        self._cmd_expect("fs_write_smoke", [b"spawned pid", b"fs-write-smoke: ok"])
 
 
 if __name__ == "__main__":

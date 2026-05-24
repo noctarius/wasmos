@@ -1322,16 +1322,24 @@ cli_resolve_exec_path(const char *input, char *resolved, uint32_t resolved_len)
         }
     } else if (str_find_char(path, '/') < 0) {
         if (cli_resolve_path_from_pathvar(path, resolved, resolved_len) != 0) {
+            char candidate[96];
+            FILE *f = 0;
             if (g_cwd[0] == '/' && g_cwd[1] == '\0') {
-                n = snprintf(resolved, resolved_len, "/%s", path);
-                if (n < 0 || (uint32_t)n >= resolved_len) {
-                    return -1;
-                }
+                n = snprintf(candidate, sizeof(candidate), "/%s", path);
             } else {
-                n = snprintf(resolved, resolved_len, "%s/%s", g_cwd, path);
-                if (n < 0 || (uint32_t)n >= resolved_len) {
-                    return -1;
-                }
+                n = snprintf(candidate, sizeof(candidate), "%s/%s", g_cwd, path);
+            }
+            if (n < 0 || (uint32_t)n >= sizeof(candidate)) {
+                return -1;
+            }
+            f = fopen(candidate, "r");
+            if (!f) {
+                return -1;
+            }
+            (void)fclose(f);
+            n = snprintf(resolved, resolved_len, "%s", candidate);
+            if (n < 0 || (uint32_t)n >= resolved_len) {
+                return -1;
             }
         }
     } else if (g_cwd[0] == '/' && g_cwd[1] == '\0') {
@@ -1359,6 +1367,11 @@ cli_spawn_exec_path(const char *input, int32_t *out_pid)
 {
     char resolved[96];
     uint32_t path_len = 0;
+    const char *args = 0;
+    uint32_t args_len = 0;
+    uint32_t write_off = 0;
+    int32_t fs_buf_size = 0;
+    uint32_t i = 0;
     if (!input || !out_pid) {
         return -1;
     }
@@ -1366,11 +1379,35 @@ cli_spawn_exec_path(const char *input, int32_t *out_pid)
     if (cli_resolve_exec_path(input, resolved, sizeof(resolved)) != 0) {
         return -1;
     }
+    while (input[i] == ' ' || input[i] == '\t') {
+        i++;
+    }
+    while (input[i] && input[i] != ' ' && input[i] != '\t') {
+        i++;
+    }
+    if (input[i] == ' ' || input[i] == '\t') {
+        args = &input[i + 1u];
+        args_len = (uint32_t)wasmos_sys_strlen(args);
+    }
     path_len = (uint32_t)wasmos_sys_strlen(resolved);
+    fs_buf_size = wasmos_fs_buffer_size();
+    if (path_len == 0u || fs_buf_size <= 0) {
+        return -1;
+    }
+    write_off = path_len + 1u;
+    if ((int32_t)path_len >= fs_buf_size ||
+        (args_len > 0u && ((int32_t)write_off >= fs_buf_size ||
+                           (int32_t)(write_off + args_len) > fs_buf_size))) {
+        return -1;
+    }
     if (wasmos_fs_buffer_write((int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
         return -1;
     }
-    if (cli_send_proc(PROC_IPC_SPAWN_PATH, 0, path_len, 0, 0) != 0) {
+    if (args_len > 0u &&
+        wasmos_fs_buffer_write((int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
+        return -1;
+    }
+    if (cli_send_proc(PROC_IPC_SPAWN_PATH, 0, path_len, args_len, 0) != 0) {
         return -1;
     }
     if (wasmos_ipc_recv(g_reply_endpoint) < 0) {
@@ -1758,6 +1795,11 @@ cli_handle_line(void)
 
         char resolved[96];
         uint32_t path_len = 0;
+        const char *args = 0;
+        uint32_t args_len = 0;
+        uint32_t write_off = 0;
+        int32_t fs_buf_size = 0;
+        uint32_t i = 0;
         if (cli_resolve_exec_path(cmd_name, resolved, sizeof(resolved)) != 0) {
             char msg[140];
             int n = snprintf(msg, sizeof(msg), "no such command found: %s\n", cmd_name);
@@ -1768,15 +1810,39 @@ cli_handle_line(void)
             }
             return 0;
         }
+        while (g_line[i] == ' ' || g_line[i] == '\t') {
+            i++;
+        }
+        while (g_line[i] && g_line[i] != ' ' && g_line[i] != '\t') {
+            i++;
+        }
+        if (g_line[i] == ' ' || g_line[i] == '\t') {
+            args = &g_line[i + 1u];
+            args_len = (uint32_t)wasmos_sys_strlen(args);
+        }
         path_len = (uint32_t)wasmos_sys_strlen(resolved);
+        fs_buf_size = wasmos_fs_buffer_size();
+        write_off = path_len + 1u;
+        if (path_len == 0u || fs_buf_size <= 0 ||
+            (int32_t)path_len >= fs_buf_size ||
+            (args_len > 0u && ((int32_t)write_off >= fs_buf_size ||
+                               (int32_t)(write_off + args_len) > fs_buf_size))) {
+            console_write("exec failed\n");
+            return 0;
+        }
         if (wasmos_fs_buffer_write((int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
+            console_write("exec failed\n");
+            return 0;
+        }
+        if (args_len > 0u &&
+            wasmos_fs_buffer_write((int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
             console_write("exec failed\n");
             return 0;
         }
         if (cli_send_proc(PROC_IPC_SPAWN_PATH,
                           0,
                           (int32_t)path_len,
-                          0,
+                          (int32_t)args_len,
                           0) != 0) {
             console_write("exec failed\n");
             return 0;

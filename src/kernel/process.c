@@ -9,6 +9,7 @@
 #include "ipc.h"
 #include "timer.h"
 #include "thread.h"
+#include "process_manager.h"
 #include "string.h"
 #include "wasm3_shim.h"
 #include "native_driver.h"
@@ -857,6 +858,7 @@ static void process_reap(process_t *proc) {
     }
     if (proc->context_id != 0) {
         ipc_endpoints_release_owner(proc->context_id);
+        process_manager_buffer_drop_context(proc->context_id);
         (void)mm_context_destroy(proc->context_id);
     }
     if (proc->pid != 0) {

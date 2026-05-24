@@ -32,6 +32,7 @@ int process_manager_buffer_borrow_context(uint32_t kind,
 int process_manager_buffer_release_context(uint32_t kind, uint32_t borrower_context_id);
 uint32_t process_manager_buffer_borrow_flags(uint32_t kind, uint32_t context_id);
 uint32_t process_manager_buffer_borrow_source_context(uint32_t kind, uint32_t borrower_context_id);
+void process_manager_buffer_drop_context(uint32_t context_id);
 int process_manager_buffer_dma_map(uint32_t kind,
                                    uint32_t borrower_context_id,
                                    uint32_t source_context_id,

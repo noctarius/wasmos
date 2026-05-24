@@ -44,7 +44,7 @@ class HelloCTest(unittest.TestCase):
     def test_exec_hello_c(self):
         self._cmd_expect("cd apps", [b"/apps wamos>"])
         self._cmd_expect(
-            "exec hello-c",
+            "hello_c",
             [
                 b"spawned pid",
                 b"Hello from C on WASMOS!",

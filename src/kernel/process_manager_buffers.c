@@ -359,6 +359,66 @@ process_manager_buffer_borrow_source_context(uint32_t kind, uint32_t borrower_co
     return slot->borrow_source_context_id;
 }
 
+void
+process_manager_buffer_drop_context(uint32_t context_id)
+{
+    const uint64_t page_size = 4096u;
+    const uint64_t fs_pages = PM_FS_BUFFER_SIZE / page_size;
+
+    if (context_id == 0) {
+        return;
+    }
+
+    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        pm_fs_buffer_slot_t *slot = &g_pm_fs_slots[i];
+        if (!slot->in_use) {
+            continue;
+        }
+        if (slot->borrow_active && slot->borrow_source_context_id == context_id) {
+            slot->borrow_active = 0;
+            slot->borrow_source_context_id = 0;
+            slot->borrow_flags = 0;
+            slot->dma_mapped = 0;
+            slot->dma_direction_flags = 0;
+            slot->dma_offset = 0;
+            slot->dma_length = 0;
+        }
+        if (slot->context_id != context_id) {
+            continue;
+        }
+        if (slot->buffer_phys != 0) {
+            pfa_free_pages(slot->buffer_phys, fs_pages);
+        }
+        slot->in_use = 0;
+        slot->context_id = 0;
+        slot->buffer_phys = 0;
+        slot->borrow_active = 0;
+        slot->borrow_flags = 0;
+        slot->borrow_source_context_id = 0;
+        slot->dma_mapped = 0;
+        slot->dma_direction_flags = 0;
+        slot->dma_offset = 0;
+        slot->dma_length = 0;
+    }
+
+    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        pm_fs_buffer_slot_t *slot = &g_pm_fb_slots[i];
+        if (!slot->in_use || slot->context_id != context_id) {
+            continue;
+        }
+        slot->in_use = 0;
+        slot->context_id = 0;
+        slot->buffer_phys = 0;
+        slot->borrow_active = 0;
+        slot->borrow_flags = 0;
+        slot->borrow_source_context_id = 0;
+        slot->dma_mapped = 0;
+        slot->dma_direction_flags = 0;
+        slot->dma_offset = 0;
+        slot->dma_length = 0;
+    }
+}
+
 int
 process_manager_buffer_dma_map(uint32_t kind,
                                uint32_t borrower_context_id,

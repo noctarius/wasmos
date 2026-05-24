@@ -97,6 +97,10 @@ Current VT/framebuffer control-plane note:
 - Only `framebuffer_pci` currently advertises mode switching and handles
   `FBTEXT_IPC_SET_RESOLUTION_REQ`; the UEFI-backed `framebuffer` variant
   returns unsupported for mode-query/set requests.
+- `gfx-compositor` now provides `GFX_IPC_SET_DISPLAY_MODE` as the display-mode
+  control entry point for clients. On success it immediately re-reads
+  framebuffer info, re-borrows framebuffer memory for the new geometry/stride,
+  clamps pointer/window state into bounds, and schedules a full repaint.
 
 Core payloads:
 

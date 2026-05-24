@@ -29,7 +29,8 @@ typedef enum {
     UI_COMPONENT_LABEL = 2,
     UI_COMPONENT_BUTTON = 3,
     UI_COMPONENT_CHECKBOX = 4,
-    UI_COMPONENT_TEXT_INPUT = 5
+    UI_COMPONENT_TEXT_INPUT = 5,
+    UI_COMPONENT_SCROLL_VIEW = 6
 } ui_component_type_t;
 
 typedef struct {
@@ -61,6 +62,8 @@ typedef struct {
     int32_t clickable;
     int32_t pressed;
     int32_t checked;
+    int32_t scroll_y;
+    int32_t scroll_max;
     char text[UI_TEXT_MAX];
     ui_button_click_cb_t on_click;
     void *on_click_user;
@@ -85,6 +88,7 @@ typedef struct ui_context {
     int32_t close_requested;
     int32_t root_id;
     int32_t focused_component_id;
+    int32_t active_scroll_component_id;
     ui_component_t components[UI_MAX_COMPONENTS];
 } ui_context_t;
 
@@ -113,6 +117,38 @@ ui_fill_rect(uint8_t *base, int32_t bw, int32_t bh, int32_t x, int32_t y, int32_
     }
 }
 
+static inline ui_rect_t
+ui_rect_intersect(ui_rect_t a, ui_rect_t b)
+{
+    ui_rect_t r;
+    const int32_t x0 = (a.x > b.x) ? a.x : b.x;
+    const int32_t y0 = (a.y > b.y) ? a.y : b.y;
+    const int32_t x1a = a.x + a.w;
+    const int32_t y1a = a.y + a.h;
+    const int32_t x1b = b.x + b.w;
+    const int32_t y1b = b.y + b.h;
+    const int32_t x1 = (x1a < x1b) ? x1a : x1b;
+    const int32_t y1 = (y1a < y1b) ? y1a : y1b;
+    r.x = x0;
+    r.y = y0;
+    r.w = x1 - x0;
+    r.h = y1 - y0;
+    if (r.w < 0) r.w = 0;
+    if (r.h < 0) r.h = 0;
+    return r;
+}
+
+static inline void
+ui_fill_rect_clip(uint8_t *base, int32_t bw, int32_t bh,
+                  int32_t x, int32_t y, int32_t w, int32_t h,
+                  uint32_t color, ui_rect_t clip)
+{
+    ui_rect_t r = { x, y, w, h };
+    ui_rect_t i = ui_rect_intersect(r, clip);
+    if (i.w <= 0 || i.h <= 0) return;
+    ui_fill_rect(base, bw, bh, i.x, i.y, i.w, i.h, color);
+}
+
 static inline void
 ui_stroke_rect(uint8_t *base, int32_t bw, int32_t bh, ui_rect_t r, int32_t border_px, uint32_t color)
 {
@@ -121,6 +157,16 @@ ui_stroke_rect(uint8_t *base, int32_t bw, int32_t bh, ui_rect_t r, int32_t borde
     ui_fill_rect(base, bw, bh, r.x, r.y + r.h - border_px, r.w, border_px, color);
     ui_fill_rect(base, bw, bh, r.x, r.y, border_px, r.h, color);
     ui_fill_rect(base, bw, bh, r.x + r.w - border_px, r.y, border_px, r.h, color);
+}
+
+static inline void
+ui_stroke_rect_clip(uint8_t *base, int32_t bw, int32_t bh, ui_rect_t r, int32_t border_px, uint32_t color, ui_rect_t clip)
+{
+    if (border_px <= 0) return;
+    ui_fill_rect_clip(base, bw, bh, r.x, r.y, r.w, border_px, color, clip);
+    ui_fill_rect_clip(base, bw, bh, r.x, r.y + r.h - border_px, r.w, border_px, color, clip);
+    ui_fill_rect_clip(base, bw, bh, r.x, r.y, border_px, r.h, color, clip);
+    ui_fill_rect_clip(base, bw, bh, r.x + r.w - border_px, r.y, border_px, r.h, color, clip);
 }
 
 static inline uint8_t
@@ -184,6 +230,25 @@ ui_draw_text(uint8_t *base, int32_t bw, int32_t bh, int32_t x, int32_t y, const 
             for (int32_t col = 0; col < 5; ++col) {
                 if ((bits >> (4 - col)) & 1u) {
                     ui_fill_rect(base, bw, bh, cx + col, y + row, 1, 1, color);
+                }
+            }
+        }
+        cx += 6;
+    }
+}
+
+static inline void
+ui_draw_text_clip(uint8_t *base, int32_t bw, int32_t bh, int32_t x, int32_t y, const char *text, uint32_t color, ui_rect_t clip)
+{
+    if (!base || !text) return;
+    int32_t cx = x;
+    for (size_t i = 0; text[i] != '\0'; ++i) {
+        const char ch = text[i];
+        for (int32_t row = 0; row < 7; ++row) {
+            const uint8_t bits = ui_glyph5x7(ch, row);
+            for (int32_t col = 0; col < 5; ++col) {
+                if ((bits >> (4 - col)) & 1u) {
+                    ui_fill_rect_clip(base, bw, bh, cx + col, y + row, 1, 1, color, clip);
                 }
             }
         }
@@ -268,6 +333,8 @@ ui_component_alloc(ui_context_t *ctx, ui_component_type_t type)
             c->clickable = 0;
             c->pressed = 0;
             c->checked = 0;
+            c->scroll_y = 0;
+            c->scroll_max = 0;
             c->text[0] = '\0';
             c->on_click = 0;
             c->on_click_user = 0;
@@ -307,6 +374,7 @@ static inline int32_t ui_component_create_label(ui_context_t *ctx) { return ui_c
 static inline int32_t ui_component_create_button(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_BUTTON); }
 static inline int32_t ui_component_create_checkbox(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_CHECKBOX); }
 static inline int32_t ui_component_create_text_input(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_TEXT_INPUT); }
+static inline int32_t ui_component_create_scroll_view(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_SCROLL_VIEW); }
 
 static inline void
 ui_component_set_text(ui_context_t *ctx, int32_t id, const char *text)
@@ -452,6 +520,30 @@ ui_layout_vertical(ui_context_t *ctx, int32_t parent_id)
     int32_t x = p->bounds.x + p->padding_px;
     int32_t y = p->bounds.y + p->padding_px;
     const int32_t w = p->bounds.w - (p->padding_px * 2);
+    if (p->type == UI_COMPONENT_SCROLL_VIEW) {
+        int32_t y_cur = p->bounds.y + p->padding_px;
+        int32_t content_h = 0;
+        int32_t child_id_sv = p->first_child_id;
+        while (child_id_sv > 0) {
+            ui_component_t *c_sv = ui_component_by_id(ctx, child_id_sv);
+            if (!c_sv) break;
+            const int32_t h_sv = c_sv->preferred_h > 8 ? c_sv->preferred_h : 8;
+            c_sv->bounds.x = p->bounds.x + p->padding_px;
+            c_sv->bounds.y = y_cur;
+            c_sv->bounds.w = w;
+            c_sv->bounds.h = h_sv;
+            y_cur += h_sv + p->gap_px;
+            content_h += h_sv + p->gap_px;
+            if (c_sv->first_child_id > 0) ui_layout_vertical(ctx, c_sv->id);
+            child_id_sv = c_sv->next_sibling_id;
+        }
+        if (content_h > 0) content_h -= p->gap_px;
+        const int32_t viewport_h = p->bounds.h - (p->padding_px * 2);
+        p->scroll_max = (content_h > viewport_h) ? (content_h - viewport_h) : 0;
+        if (p->scroll_y < 0) p->scroll_y = 0;
+        if (p->scroll_y > p->scroll_max) p->scroll_y = p->scroll_max;
+        return;
+    }
     int32_t child_id = p->first_child_id;
     while (child_id > 0) {
         ui_component_t *c = ui_component_by_id(ctx, child_id);
@@ -468,63 +560,99 @@ ui_layout_vertical(ui_context_t *ctx, int32_t parent_id)
 }
 
 static inline void
-ui_render_component(ui_context_t *ctx, int32_t id)
+ui_render_component_clip(ui_context_t *ctx, int32_t id, ui_rect_t clip, int32_t offset_y)
 {
     ui_component_t *c = ui_component_by_id(ctx, id);
     if (!c || !ctx->mapped_base) return;
-    ui_fill_rect(ctx->mapped_base, ctx->width, ctx->height,
-                 c->bounds.x, c->bounds.y, c->bounds.w, c->bounds.h, c->bg_color);
+    const int32_t draw_y = c->bounds.y - offset_y;
+    const ui_rect_t draw_bounds = { c->bounds.x, draw_y, c->bounds.w, c->bounds.h };
+    ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height,
+                      draw_bounds.x, draw_bounds.y, draw_bounds.w, draw_bounds.h, c->bg_color, clip);
     if (c->type == UI_COMPONENT_LABEL) {
-        const int32_t tx = c->bounds.x + c->padding_px;
-        const int32_t ty = c->bounds.y + (c->bounds.h - 7) / 2;
-        ui_draw_text(ctx->mapped_base, ctx->width, ctx->height, tx, ty, c->text, c->fg_color);
+        const int32_t tx = draw_bounds.x + c->padding_px;
+        const int32_t ty = draw_bounds.y + (draw_bounds.h - 7) / 2;
+        ui_draw_text_clip(ctx->mapped_base, ctx->width, ctx->height, tx, ty, c->text, c->fg_color, clip);
     } else if (c->type == UI_COMPONENT_BUTTON) {
         const uint32_t inner = c->pressed ? 0xFF2B6AA0u : 0xFF4B91CCu;
-        ui_fill_rect(ctx->mapped_base, ctx->width, ctx->height,
-                     c->bounds.x + 2, c->bounds.y + 2, c->bounds.w - 4, c->bounds.h - 4, inner);
-        ui_draw_text(ctx->mapped_base, ctx->width, ctx->height,
-                     c->bounds.x + c->padding_px,
-                     c->bounds.y + (c->bounds.h - 7) / 2,
-                     c->text,
-                     0xFFFFFFFFu);
+        ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height,
+                          draw_bounds.x + 2, draw_bounds.y + 2, draw_bounds.w - 4, draw_bounds.h - 4, inner, clip);
+        ui_draw_text_clip(ctx->mapped_base, ctx->width, ctx->height,
+                          draw_bounds.x + c->padding_px,
+                          draw_bounds.y + (draw_bounds.h - 7) / 2,
+                          c->text,
+                          0xFFFFFFFFu,
+                          clip);
     } else if (c->type == UI_COMPONENT_CHECKBOX) {
-        const int32_t box = c->bounds.h > 16 ? 16 : c->bounds.h - 4;
-        const int32_t bx = c->bounds.x + c->padding_px;
-        const int32_t by = c->bounds.y + (c->bounds.h - box) / 2;
-        ui_fill_rect(ctx->mapped_base, ctx->width, ctx->height, bx, by, box, box, 0xFF2B3440u);
-        ui_stroke_rect(ctx->mapped_base, ctx->width, ctx->height, (ui_rect_t){bx, by, box, box}, 1, 0xFF9CB6CEu);
+        const int32_t box = draw_bounds.h > 16 ? 16 : draw_bounds.h - 4;
+        const int32_t bx = draw_bounds.x + c->padding_px;
+        const int32_t by = draw_bounds.y + (draw_bounds.h - box) / 2;
+        ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, bx, by, box, box, 0xFF2B3440u, clip);
+        ui_stroke_rect_clip(ctx->mapped_base, ctx->width, ctx->height, (ui_rect_t){bx, by, box, box}, 1, 0xFF9CB6CEu, clip);
         if (c->checked) {
-            ui_fill_rect(ctx->mapped_base, ctx->width, ctx->height, bx + 4, by + 4, box - 8, box - 8, 0xFF66CC88u);
+            ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, bx + 4, by + 4, box - 8, box - 8, 0xFF66CC88u, clip);
         }
-        ui_draw_text(ctx->mapped_base, ctx->width, ctx->height,
-                     bx + box + 8,
-                     c->bounds.y + (c->bounds.h - 7) / 2,
-                     c->text,
-                     c->fg_color);
+        ui_draw_text_clip(ctx->mapped_base, ctx->width, ctx->height,
+                          bx + box + 8,
+                          draw_bounds.y + (draw_bounds.h - 7) / 2,
+                          c->text,
+                          c->fg_color,
+                          clip);
     } else if (c->type == UI_COMPONENT_TEXT_INPUT) {
         const int32_t active = (ctx->focused_component_id == c->id);
         const uint32_t inner = active ? 0xFF1F3148u : 0xFF1C2738u;
         const uint32_t outline = active ? 0xFF89C9FFu : c->border_color;
-        ui_fill_rect(ctx->mapped_base, ctx->width, ctx->height,
-                     c->bounds.x + 1, c->bounds.y + 1, c->bounds.w - 2, c->bounds.h - 2, inner);
-        ui_stroke_rect(ctx->mapped_base, ctx->width, ctx->height, c->bounds, 1, outline);
-        const int32_t tx = c->bounds.x + c->padding_px;
-        const int32_t ty = c->bounds.y + (c->bounds.h - 7) / 2;
-        ui_draw_text(ctx->mapped_base, ctx->width, ctx->height, tx, ty, c->text, 0xFFFFFFFFu);
+        ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height,
+                          draw_bounds.x + 1, draw_bounds.y + 1, draw_bounds.w - 2, draw_bounds.h - 2, inner, clip);
+        ui_stroke_rect_clip(ctx->mapped_base, ctx->width, ctx->height, draw_bounds, 1, outline, clip);
+        const int32_t tx = draw_bounds.x + c->padding_px;
+        const int32_t ty = draw_bounds.y + (draw_bounds.h - 7) / 2;
+        ui_draw_text_clip(ctx->mapped_base, ctx->width, ctx->height, tx, ty, c->text, 0xFFFFFFFFu, clip);
         if (active) {
             const int32_t len = ui_component_text_len(c);
             const int32_t caret_x = tx + (len * 6);
-            ui_fill_rect(ctx->mapped_base, ctx->width, ctx->height, caret_x, ty - 1, 1, 9, 0xFFFFFFFFu);
+            ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, caret_x, ty - 1, 1, 9, 0xFFFFFFFFu, clip);
         }
+    } else if (c->type == UI_COMPONENT_SCROLL_VIEW) {
+        const ui_rect_t inner = {
+            draw_bounds.x + c->padding_px,
+            draw_bounds.y + c->padding_px,
+            draw_bounds.w - (c->padding_px * 2),
+            draw_bounds.h - (c->padding_px * 2)
+        };
+        ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, inner.x, inner.y, inner.w, inner.h, 0xFF1B2535u, clip);
+        ui_stroke_rect_clip(ctx->mapped_base, ctx->width, ctx->height, draw_bounds, c->border_px, c->border_color, clip);
+        const ui_rect_t child_clip = ui_rect_intersect(clip, inner);
+        int32_t child_id_sv = c->first_child_id;
+        while (child_id_sv > 0) {
+            ui_render_component_clip(ctx, child_id_sv, child_clip, offset_y + c->scroll_y);
+            ui_component_t *child_sv = ui_component_by_id(ctx, child_id_sv);
+            if (!child_sv) break;
+            child_id_sv = child_sv->next_sibling_id;
+        }
+        if (c->scroll_max > 0 && inner.h > 8) {
+            const int32_t track_h = inner.h;
+            const int32_t thumb_h = (track_h * track_h) / (track_h + c->scroll_max);
+            const int32_t th = thumb_h < 8 ? 8 : thumb_h;
+            const int32_t ty = inner.y + ((track_h - th) * c->scroll_y) / c->scroll_max;
+            ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, inner.x + inner.w - 4, ty, 3, th, 0xFF6C88A8u, clip);
+        }
+        return;
     }
-    ui_stroke_rect(ctx->mapped_base, ctx->width, ctx->height, c->bounds, c->border_px, c->border_color);
+    ui_stroke_rect_clip(ctx->mapped_base, ctx->width, ctx->height, draw_bounds, c->border_px, c->border_color, clip);
     int32_t child_id = c->first_child_id;
     while (child_id > 0) {
-        ui_render_component(ctx, child_id);
+        ui_render_component_clip(ctx, child_id, clip, offset_y);
         ui_component_t *child = ui_component_by_id(ctx, child_id);
         if (!child) break;
         child_id = child->next_sibling_id;
     }
+}
+
+static inline void
+ui_render_component(ui_context_t *ctx, int32_t id)
+{
+    ui_rect_t clip = { 0, 0, ctx->width, ctx->height };
+    ui_render_component_clip(ctx, id, clip, 0);
 }
 
 static inline int32_t
@@ -541,6 +669,23 @@ ui_find_component_at(ui_context_t *ctx, int32_t id, int32_t x, int32_t y)
         child_id = child->next_sibling_id;
     }
     if (ui_point_in_bounds(x, y, c->bounds)) return c->id;
+    return -1;
+}
+
+static inline int32_t
+ui_find_scroll_view_at(ui_context_t *ctx, int32_t id, int32_t x, int32_t y)
+{
+    ui_component_t *c = ui_component_by_id(ctx, id);
+    if (!c) return -1;
+    int32_t child_id = c->first_child_id;
+    while (child_id > 0) {
+        const int32_t hit = ui_find_scroll_view_at(ctx, child_id, x, y);
+        if (hit > 0) return hit;
+        ui_component_t *child = ui_component_by_id(ctx, child_id);
+        if (!child) break;
+        child_id = child->next_sibling_id;
+    }
+    if (c->type == UI_COMPONENT_SCROLL_VIEW && ui_point_in_bounds(x, y, c->bounds)) return c->id;
     return -1;
 }
 
@@ -610,6 +755,7 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
                 hit->pressed = 1;
                 ui_mark_dirty(ctx);
             }
+            ctx->active_scroll_component_id = ui_find_scroll_view_at(ctx, ctx->root_id, ctx->pointer_x, ctx->pointer_y);
         } else if (!left_now && left_prev) {
             const int32_t hit_id = ui_find_clickable_at(ctx, ctx->root_id, ctx->pointer_x, ctx->pointer_y);
             ui_component_t *hit = ui_component_by_id(ctx, hit_id);
@@ -624,7 +770,16 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
                     ctx->components[i].pressed = 0;
                 }
             }
+            ctx->active_scroll_component_id = 0;
             ui_mark_dirty(ctx);
+        } else if (left_now && left_prev && ctx->active_scroll_component_id > 0 && dy != 0) {
+            ui_component_t *sv = ui_component_by_id(ctx, ctx->active_scroll_component_id);
+            if (sv && sv->type == UI_COMPONENT_SCROLL_VIEW && sv->scroll_max > 0) {
+                sv->scroll_y -= dy;
+                if (sv->scroll_y < 0) sv->scroll_y = 0;
+                if (sv->scroll_y > sv->scroll_max) sv->scroll_y = sv->scroll_max;
+                ui_mark_dirty(ctx);
+            }
         }
         ctx->pointer_buttons = buttons;
         return UI_MSG_CONSUMED;

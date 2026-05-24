@@ -435,6 +435,20 @@ fn log_fb_capabilities_probe() void {
         reply.arg1 != 0)
     {
         logMsg("[gfx] fb mode-switch ipc available\n");
+        logHex32("[gfx] fb mode count=", reply.arg1);
+        var idx: u32 = 0;
+        const mode_count = if (reply.arg1 > 256) 256 else reply.arg1;
+        while (idx < mode_count) : (idx += 1) {
+            var mode_reply: c.nd_ipc_message_t = undefined;
+            const mode_req_id: u32 = (GFX_REQUEST_BASE + GFX_FB_LOOKUP_RETRIES + 0x100) + idx;
+            if (ipc_call(g_fb_endpoint, mode_req_id, c.FBTEXT_IPC_QUERY_MODES_REQ, idx, 0, 0, 0, &mode_reply) != 0 or
+                mode_reply.type != c.FBTEXT_IPC_RESP)
+            {
+                break;
+            }
+            logHex32("[gfx] fb mode width=", mode_reply.arg0);
+            logHex32("[gfx] fb mode height=", mode_reply.arg1);
+        }
     }
 }
 

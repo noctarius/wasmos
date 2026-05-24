@@ -14,6 +14,9 @@ Ring3 smoke validation note: `run-qemu-ring3-test` configures process-manager
 test injection hooks so owner-deny marker checks (`wait`/`kill`/`status`/`spawn`)
 remain deterministic in strict ring3 runs.
 
+Current baseline note: `fs-manager` no longer relies on a fixed-size client
+slot table; it grows client state in heap-backed chunks.
+
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)
 - [Current System Summary](architecture/02-current-system-summary.md)

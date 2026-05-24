@@ -11,8 +11,66 @@
 static int32_t g_proc_endpoint = -1;
 static int32_t g_fs_endpoint = -1;
 static int32_t g_reply_endpoint = -1;
-static fs_client_state_t g_clients[FS_CLIENT_CAP];
 static fs_backend_t g_backends[FS_BACKEND_CAP];
+extern uint8_t __heap_base;
+
+typedef struct fs_client_chunk {
+    struct fs_client_chunk *next;
+    uint32_t used;
+    fs_client_state_t slots[FS_CLIENT_CHUNK_CAP];
+} fs_client_chunk_t;
+
+static fs_client_chunk_t *g_client_chunks = 0;
+static uint32_t g_heap_cursor = 0;
+static uint32_t g_heap_limit = 0;
+
+static void
+fsmgr_heap_init(void)
+{
+    g_heap_cursor = (uint32_t)(uintptr_t)&__heap_base;
+    g_heap_limit = (uint32_t)__builtin_wasm_memory_size(0) * 65536u;
+    if (g_heap_cursor > g_heap_limit) {
+        g_heap_cursor = g_heap_limit;
+    }
+}
+
+static void *
+fsmgr_heap_alloc(uint32_t size, uint32_t align)
+{
+    uint32_t aligned = 0;
+    uint32_t end = 0;
+    if (align == 0 || (align & (align - 1u)) != 0u) {
+        return 0;
+    }
+    aligned = (g_heap_cursor + (align - 1u)) & ~(align - 1u);
+    if (aligned < g_heap_cursor) {
+        return 0;
+    }
+    end = aligned + size;
+    if (end < aligned) {
+        return 0;
+    }
+    while (end > g_heap_limit) {
+        if (__builtin_wasm_memory_grow(0, 1) == (size_t)-1) {
+            return 0;
+        }
+        g_heap_limit += 65536u;
+    }
+    g_heap_cursor = end;
+    return (void *)(uintptr_t)aligned;
+}
+
+static fs_client_chunk_t *
+client_chunk_alloc(void)
+{
+    fs_client_chunk_t *chunk =
+        (fs_client_chunk_t *)fsmgr_heap_alloc((uint32_t)sizeof(fs_client_chunk_t), 8u);
+    if (!chunk) {
+        return 0;
+    }
+    memset(chunk, 0, sizeof(*chunk));
+    return chunk;
+}
 
 static int32_t
 borrow_flags_for_type(int32_t type)
@@ -60,10 +118,14 @@ static void set_mount_name(fs_backend_t *slot, const char *base) {
 static fs_client_state_t *
 client_state_lookup(int32_t context_id)
 {
-    for (uint32_t i = 0; i < FS_CLIENT_CAP; ++i) {
-        if (g_clients[i].in_use && g_clients[i].context_id == context_id) {
-            return &g_clients[i];
+    fs_client_chunk_t *chunk = g_client_chunks;
+    while (chunk) {
+        for (uint32_t i = 0; i < chunk->used; ++i) {
+            if (chunk->slots[i].in_use && chunk->slots[i].context_id == context_id) {
+                return &chunk->slots[i];
+            }
         }
+        chunk = chunk->next;
     }
     return 0;
 }
@@ -72,20 +134,40 @@ static fs_client_state_t *
 client_state(int32_t context_id)
 {
     fs_client_state_t *state = client_state_lookup(context_id);
+    fs_client_chunk_t *chunk = g_client_chunks;
+    fs_client_chunk_t *last = 0;
     if (state) {
         return state;
     }
-    for (uint32_t i = 0; i < FS_CLIENT_CAP; ++i) {
-        if (!g_clients[i].in_use) {
-            g_clients[i].in_use = 1;
-            g_clients[i].context_id = context_id;
-            g_clients[i].mount = FS_MOUNT_ROOT;
-            g_clients[i].backend_endpoint = -1;
-            g_clients[i].mount_depth = 0;
-            return &g_clients[i];
+    while (chunk) {
+        if (chunk->used < FS_CLIENT_CHUNK_CAP) {
+            fs_client_state_t *slot = &chunk->slots[chunk->used++];
+            slot->in_use = 1;
+            slot->context_id = context_id;
+            slot->mount = FS_MOUNT_ROOT;
+            slot->backend_endpoint = -1;
+            slot->mount_depth = 0;
+            return slot;
         }
+        last = chunk;
+        chunk = chunk->next;
     }
-    return 0;
+    chunk = client_chunk_alloc();
+    if (!chunk) {
+        return 0;
+    }
+    if (last) {
+        last->next = chunk;
+    } else {
+        g_client_chunks = chunk;
+    }
+    chunk->used = 1;
+    chunk->slots[0].in_use = 1;
+    chunk->slots[0].context_id = context_id;
+    chunk->slots[0].mount = FS_MOUNT_ROOT;
+    chunk->slots[0].backend_endpoint = -1;
+    chunk->slots[0].mount_depth = 0;
+    return &chunk->slots[0];
 }
 
 static fs_backend_t *
@@ -697,6 +779,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
     (void)arg3;
 
     g_proc_endpoint = proc_endpoint;
+    fsmgr_heap_init();
     g_reply_endpoint = wasmos_ipc_create_endpoint();
     g_fs_endpoint = wasmos_ipc_create_endpoint();
     log_msg("[fs-manager] init start\n");

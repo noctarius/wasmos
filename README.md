@@ -146,7 +146,7 @@ Target summary:
 - `run-qemu-debug`: paused boot for GDB attach
 - `run-qemu-test`: compile + boot + halt smoke
 - `run-qemu-cli-test`: CLI integration suite
-- `run-qemu-ring3-test`: strict ring-3 smoke path
+- `run-qemu-ring3-test`: strict ring-3 smoke path (includes PM owner-deny test-hook marker checks)
 - `run-qemu-ring3-threading-test`: opt-in strict ring-3 threading smoke (ring3-threading spawn + ring3 thread `create`/`join`/`detach` syscall markers including detach-then-join deny + wait/kill wake marker)
 
 ## Startup Model

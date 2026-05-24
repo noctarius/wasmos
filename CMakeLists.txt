@@ -1663,6 +1663,7 @@ add_custom_target(run-qemu-ring3-test
           -DOVMF_VARS=${OVMF_VARS}
           -DWASMOS_TRACE=${WASMOS_TRACE}
           -DWASMOS_RING3_SMOKE=ON
+          -DWASMOS_PM_TEST_HOOKS=ON
   COMMAND ${CMAKE_COMMAND} --build ${BUILD_DIR}/ring3 --target run-qemu-ring3-check
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Configure/build shadow ring3 tree and run ring3 smoke marker test"
@@ -1680,6 +1681,7 @@ add_custom_target(run-qemu-ring3-threading-test
           -DWASMOS_TRACE=${WASMOS_TRACE}
           -DWASMOS_RING3_SMOKE=ON
           -DWASMOS_RING3_THREAD_LIFECYCLE_SMOKE=ON
+          -DWASMOS_PM_TEST_HOOKS=ON
   COMMAND ${CMAKE_COMMAND} --build ${BUILD_DIR}/ring3-threading --target run-qemu-ring3-threading-check
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Configure/build shadow threading ring3 tree and run lifecycle marker test"
@@ -1696,6 +1698,7 @@ add_custom_target(run-qemu-ring3-fault-storm-test
           -DOVMF_VARS=${OVMF_VARS}
           -DWASMOS_TRACE=${WASMOS_TRACE}
           -DWASMOS_RING3_SMOKE=ON
+          -DWASMOS_PM_TEST_HOOKS=ON
   COMMAND ${CMAKE_COMMAND} --build ${BUILD_DIR}/ring3-fault-storm --target run-qemu-ring3-fault-storm-check
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Configure/build shadow ring3 fault-storm tree and run dedicated marker test"

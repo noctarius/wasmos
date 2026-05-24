@@ -1,10 +1,12 @@
 #include "capability.h"
+#include "list.h"
 #include "memory.h"
 #include "string.h"
 
 #define CAP_ALL_MASK ((1u << 5) - 1u)
 
 typedef struct {
+    uint32_t context_id;
     uint8_t configured;
     uint8_t spawn_profile_configured;
     uint8_t io_port_range_valid;
@@ -18,7 +20,7 @@ typedef struct {
     uint32_t mask;
 } capability_context_state_t;
 
-static capability_context_state_t g_cap_ctx[MM_MAX_CONTEXTS + 1];
+static list_t g_cap_ctx;
 
 static uint32_t
 kind_to_mask(capability_kind_t kind)
@@ -39,35 +41,49 @@ kind_to_mask(capability_kind_t kind)
     }
 }
 
+static capability_context_state_t *
+capability_state_for_context(uint32_t context_id, uint8_t create_if_missing)
+{
+    list_iter_t it;
+    capability_context_state_t *ctx = (capability_context_state_t *)list_first(&g_cap_ctx, &it);
+    while (ctx) {
+        if (ctx->context_id == context_id) {
+            return ctx;
+        }
+        ctx = (capability_context_state_t *)list_next(&it);
+    }
+    if (!create_if_missing) {
+        return 0;
+    }
+    ctx = (capability_context_state_t *)list_alloc(&g_cap_ctx);
+    if (!ctx) {
+        return 0;
+    }
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->context_id = context_id;
+    return ctx;
+}
+
 void
 capability_init(void)
 {
-    for (uint32_t i = 0; i <= MM_MAX_CONTEXTS; ++i) {
-        g_cap_ctx[i].configured = 0;
-        g_cap_ctx[i].spawn_profile_configured = 0;
-        g_cap_ctx[i].io_port_range_valid = 0;
-        g_cap_ctx[i].io_port_min = 0;
-        g_cap_ctx[i].io_port_max = 0;
-        g_cap_ctx[i].irq_mask = 0;
-        g_cap_ctx[i].dma_direction_flags = 0;
-        g_cap_ctx[i].dma_max_bytes = 0;
-        g_cap_ctx[i].dma_window_count = 0;
-        for (uint32_t w = 0; w < CAPABILITY_DMA_WINDOW_LIMIT; ++w) {
-            g_cap_ctx[i].dma_windows[w].base = 0;
-            g_cap_ctx[i].dma_windows[w].length = 0;
-        }
-        g_cap_ctx[i].mask = 0;
+    if (list_init(&g_cap_ctx, (uint32_t)sizeof(capability_context_state_t), LIST_IMPL_ARRAY_CHUNK, 16) != 0) {
+        return;
     }
     /* Kernel context has all capabilities by construction. */
-    g_cap_ctx[0].configured = 1;
-    g_cap_ctx[0].mask = CAP_ALL_MASK;
+    capability_context_state_t *kernel = capability_state_for_context(0, 1);
+    if (!kernel) {
+        return;
+    }
+    kernel->configured = 1;
+    kernel->mask = CAP_ALL_MASK;
 }
 
 int
 capability_grant_name(uint32_t context_id, const uint8_t *name, uint32_t name_len, uint32_t flags)
 {
     (void)flags;
-    if (context_id > MM_MAX_CONTEXTS || !name || name_len == 0) {
+    if (!name || name_len == 0) {
         return -1;
     }
 
@@ -86,31 +102,32 @@ capability_grant_name(uint32_t context_id, const uint8_t *name, uint32_t name_le
         return -1;
     }
 
-    g_cap_ctx[context_id].configured = 1;
-    g_cap_ctx[context_id].mask |= mask;
+    capability_context_state_t *ctx = capability_state_for_context(context_id, 1);
+    if (!ctx) {
+        return -1;
+    }
+    ctx->configured = 1;
+    ctx->mask |= mask;
     return 0;
 }
 
 int
 capability_has(uint32_t context_id, capability_kind_t kind)
 {
-    if (context_id > MM_MAX_CONTEXTS) {
-        return 0;
-    }
+    capability_context_state_t *ctx = capability_state_for_context(context_id, 0);
+    if (!ctx) return 0;
     uint32_t mask = kind_to_mask(kind);
     if (mask == 0) {
         return 0;
     }
-    return (g_cap_ctx[context_id].mask & mask) != 0;
+    return (ctx->mask & mask) != 0;
 }
 
 int
 capability_context_configured(uint32_t context_id)
 {
-    if (context_id > MM_MAX_CONTEXTS) {
-        return 0;
-    }
-    return g_cap_ctx[context_id].configured != 0;
+    capability_context_state_t *ctx = capability_state_for_context(context_id, 0);
+    return ctx ? (ctx->configured != 0) : 0;
 }
 
 int
@@ -124,10 +141,10 @@ capability_set_spawn_profile(uint32_t context_id,
                              uint32_t dma_window_count,
                              const wasmos_dma_window_t *dma_windows)
 {
-    if (context_id > MM_MAX_CONTEXTS) {
+    capability_context_state_t *ctx = capability_state_for_context(context_id, 1);
+    if (!ctx) {
         return -1;
     }
-    capability_context_state_t *ctx = &g_cap_ctx[context_id];
     ctx->spawn_profile_configured = 1;
     ctx->io_port_range_valid = (cap_flags & (1u << 0)) ? 1u : 0u;
     ctx->io_port_min = io_port_min;
@@ -163,19 +180,17 @@ capability_set_spawn_profile(uint32_t context_id,
 int
 capability_spawn_profile_configured(uint32_t context_id)
 {
-    if (context_id > MM_MAX_CONTEXTS) {
-        return 0;
-    }
-    return g_cap_ctx[context_id].spawn_profile_configured != 0;
+    capability_context_state_t *ctx = capability_state_for_context(context_id, 0);
+    return ctx ? (ctx->spawn_profile_configured != 0) : 0;
 }
 
 int
 capability_io_port_allowed(uint32_t context_id, uint16_t port)
 {
-    if (context_id > MM_MAX_CONTEXTS) {
+    const capability_context_state_t *ctx = capability_state_for_context(context_id, 0);
+    if (!ctx) {
         return 0;
     }
-    const capability_context_state_t *ctx = &g_cap_ctx[context_id];
     if (!ctx->spawn_profile_configured || !ctx->io_port_range_valid) {
         return 0;
     }
@@ -185,10 +200,13 @@ capability_io_port_allowed(uint32_t context_id, uint16_t port)
 int
 capability_irq_line_allowed(uint32_t context_id, uint32_t irq_line)
 {
-    if (context_id > MM_MAX_CONTEXTS || irq_line >= 16) {
+    if (irq_line >= 16) {
         return 0;
     }
-    const capability_context_state_t *ctx = &g_cap_ctx[context_id];
+    const capability_context_state_t *ctx = capability_state_for_context(context_id, 0);
+    if (!ctx) {
+        return 0;
+    }
     if (!ctx->spawn_profile_configured) {
         return 0;
     }
@@ -198,10 +216,10 @@ capability_irq_line_allowed(uint32_t context_id, uint32_t irq_line)
 int
 capability_mmio_allowed(uint32_t context_id)
 {
-    if (context_id > MM_MAX_CONTEXTS) {
+    const capability_context_state_t *ctx = capability_state_for_context(context_id, 0);
+    if (!ctx) {
         return 0;
     }
-    const capability_context_state_t *ctx = &g_cap_ctx[context_id];
     if (!ctx->spawn_profile_configured) {
         return 0;
     }
@@ -211,10 +229,13 @@ capability_mmio_allowed(uint32_t context_id)
 int
 capability_dma_direction_allowed(uint32_t context_id, uint32_t direction_flags)
 {
-    if (context_id > MM_MAX_CONTEXTS || direction_flags == 0) {
+    if (direction_flags == 0) {
         return 0;
     }
-    const capability_context_state_t *ctx = &g_cap_ctx[context_id];
+    const capability_context_state_t *ctx = capability_state_for_context(context_id, 0);
+    if (!ctx) {
+        return 0;
+    }
     if (!ctx->spawn_profile_configured || (ctx->mask & (1u << 3)) == 0) {
         return 0;
     }
@@ -224,10 +245,13 @@ capability_dma_direction_allowed(uint32_t context_id, uint32_t direction_flags)
 int
 capability_dma_range_allowed(uint32_t context_id, uint64_t base, uint64_t length)
 {
-    if (context_id > MM_MAX_CONTEXTS || length == 0) {
+    if (length == 0) {
         return 0;
     }
-    const capability_context_state_t *ctx = &g_cap_ctx[context_id];
+    const capability_context_state_t *ctx = capability_state_for_context(context_id, 0);
+    if (!ctx) {
+        return 0;
+    }
     if (!ctx->spawn_profile_configured || (ctx->mask & (1u << 3)) == 0) {
         return 0;
     }
@@ -255,10 +279,10 @@ capability_dma_range_allowed(uint32_t context_id, uint64_t base, uint64_t length
 uint32_t
 capability_dma_max_bytes(uint32_t context_id)
 {
-    if (context_id > MM_MAX_CONTEXTS) {
+    const capability_context_state_t *ctx = capability_state_for_context(context_id, 0);
+    if (!ctx) {
         return 0;
     }
-    const capability_context_state_t *ctx = &g_cap_ctx[context_id];
     if (!ctx->spawn_profile_configured || (ctx->mask & (1u << 3)) == 0) {
         return 0;
     }

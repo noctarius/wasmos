@@ -22,6 +22,8 @@ Kernel list internals now include an early-boot static-arena allocator fallback
 so list-backed modules can initialize before general heap allocation is ready.
 MM context registration and capability state tracking are now list-backed, so
 context growth is no longer bounded by static `MM_MAX_CONTEXTS` slot arrays.
+Per-context memory-region storage is now also list-backed, removing the fixed
+`MM_MAX_REGIONS` array limit within each context.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

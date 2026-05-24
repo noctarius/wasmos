@@ -2014,7 +2014,11 @@ process_context_mem_bytes(const process_t *proc)
     }
     uint64_t bytes = 0;
     for (uint32_t i = 0; i < ctx->region_count; ++i) {
-        bytes += ctx->regions[i].size;
+        mem_region_t region = {0};
+        if (mm_context_region_at(ctx, i, &region) != 0) {
+            continue;
+        }
+        bytes += region.size;
     }
     return bytes;
 }

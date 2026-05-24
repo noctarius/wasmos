@@ -389,9 +389,11 @@ wasm_linear_region_sync_size(mm_context_t *ctx, uint64_t required_size)
     if (!ctx || required_size == 0) {
         return;
     }
-    for (uint32_t i = 0; i < ctx->region_count; ++i) {
-        mem_region_t *region = &ctx->regions[i];
+    list_iter_t it;
+    mem_region_t *region = (mem_region_t *)list_first(&ctx->regions, &it);
+    while (region) {
         if (region->type != MEM_REGION_WASM_LINEAR) {
+            region = (mem_region_t *)list_next(&it);
             continue;
         }
         if (required_size > region->size) {

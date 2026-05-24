@@ -3,9 +3,9 @@
 
 #include <stdint.h>
 #include "boot.h"
+#include "list.h"
 
 #define MM_MAX_CONTEXTS 128
-#define MM_MAX_REGIONS 8
 
 typedef enum {
     MEM_REGION_WASM_LINEAR = 0,
@@ -41,7 +41,7 @@ typedef struct {
     uint64_t root_table;
     uint64_t next_shared_base;
     uint32_t region_count;
-    mem_region_t regions[MM_MAX_REGIONS];
+    list_t regions;
 } mm_context_t;
 
 void mm_init(const boot_info_t *boot_info);
@@ -49,6 +49,7 @@ int mm_context_init(mm_context_t *ctx, uint32_t id);
 int mm_context_add_region(mm_context_t *ctx, uint64_t base, uint64_t size, uint32_t flags, mem_region_type_t type);
 int mm_context_alloc_region(mm_context_t *ctx, uint64_t pages, uint32_t flags, mem_region_type_t type);
 int mm_context_region_for_type(mm_context_t *ctx, mem_region_type_t type, mem_region_t *out_region);
+int mm_context_region_at(mm_context_t *ctx, uint32_t index, mem_region_t *out_region);
 int mm_handle_page_fault(uint32_t context_id, uint64_t addr, uint64_t error_code, uint64_t *out_mapped_base);
 mm_context_t *mm_context_get(uint32_t id);
 mm_context_t *mm_context_create(uint32_t id);

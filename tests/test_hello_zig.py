@@ -44,7 +44,7 @@ class HelloZigTest(unittest.TestCase):
     def test_exec_hello_zig(self):
         self._cmd_expect("cd apps", [b"/apps wamos>"])
         self._cmd_expect(
-            "exec hello-zig",
+            "hello_zig",
             [
                 b"spawned pid",
                 b"[wasmos-app] entry ok hello-zig",

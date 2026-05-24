@@ -123,7 +123,7 @@ Deliverables:
 - memory policy boundaries are explicit and compatible with ring-3 isolation
 
 ### Validation and Exit Criteria
-- repeated `exec gfx_smoke` runs succeed without stack allocation failures
+- repeated `gfx_smoke` runs succeed without stack allocation failures
 - process/thread churn tests (high spawn/exit counts) pass without low-zone
   artificial exhaustion
 - page-table allocations remain stable under mixed workloads

@@ -359,8 +359,8 @@ Current implementation notes:
   z-order and repaints overlap with higher-z windows; missing/invalid damage
   payloads fail closed to full-frame redraw.
 - A wasm smoke client now exists at `examples/c/gfx_smoke/gfx_smoke.c` and is
-  copied to `/boot/apps/gfx_smoke.wap` for manual CLI launch (`exec
-  /boot/apps/gfx_smoke`), avoiding automatic startup overlap with VT/CLI.
+  copied to `/boot/apps/gfx_smoke.wap` for manual CLI launch
+  (`/boot/apps/gfx_smoke`), avoiding automatic startup overlap with VT/CLI.
 
 ### Phase 1: Single-Mode Software Composition
 

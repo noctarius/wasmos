@@ -44,7 +44,7 @@ class HelloAssemblyScriptTest(unittest.TestCase):
     def test_exec_hello_as(self):
         self._cmd_expect("cd apps", [b"/apps wamos>"])
         self._cmd_expect(
-            "exec hello-as",
+            "hello_as",
             [
                 b"spawned pid",
                 b"Hello from AssemblyScript on WASMOS!",

@@ -44,7 +44,7 @@ class HelloRustTest(unittest.TestCase):
     def test_exec_hello_rust(self):
         self._cmd_expect("cd apps", [b"/apps wamos>"])
         self._cmd_expect(
-            "exec hello-rust",
+            "hello_rust",
             [
                 b"spawned pid",
                 b"[wasmos-app] entry ok hello-rust",

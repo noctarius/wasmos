@@ -25,6 +25,8 @@ typedef struct {
     uint32_t entry_arg1;
     uint32_t entry_arg2;
     uint32_t entry_arg3;
+    uint32_t spawn_cli_args_len;
+    char spawn_cli_args[256];
     wasmos_app_instance_t app;
     char name[64];
 } pm_app_state_t;

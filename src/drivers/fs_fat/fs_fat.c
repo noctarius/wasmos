@@ -680,43 +680,20 @@ fat_resolve_mount_alias(int32_t proc_endpoint, char *out_mount, uint32_t out_mou
 }
 
 static int
-vfs_starts_with(const char *s, const char *prefix)
-{
-    uint32_t i = 0;
-    if (!s || !prefix) return 0;
-    while (prefix[i]) {
-        if (s[i] != prefix[i]) return 0;
-        i++;
-    }
-    return 1;
-}
-
-static int
 vfs_translate_path(const char *in, char *out, uint32_t out_len, uint8_t *out_is_init)
 {
-    uint32_t pos = 0;
     if (!in || !out || out_len < 2 || !out_is_init) {
         return -1;
     }
     *out_is_init = 0;
     if (in[0] == '/') {
-        if (vfs_starts_with(in, "/boot")) {
-            pos = 5;
-            while (in[pos] == '/') pos++;
-            if (in[pos] == '\0') {
-                out[0] = '/';
-                out[1] = '\0';
-                return 0;
-            }
-            uint32_t j = 0;
-            out[j++] = '/';
-            while (in[pos] && j + 1 < out_len) {
-                out[j++] = in[pos++];
-            }
-            out[j] = '\0';
-            return in[pos] == '\0' ? 0 : -1;
+        uint32_t i = 0;
+        while (in[i] && i + 1 < out_len) {
+            out[i] = in[i];
+            i++;
         }
-        return -1;
+        out[i] = '\0';
+        return in[i] == '\0' ? 0 : -1;
     }
     uint32_t i = 0;
     while (in[i] && i + 1 < out_len) {

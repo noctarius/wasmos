@@ -50,6 +50,8 @@ static mm_shared_region_t g_shared[MM_MAX_SHARED];
 static uint32_t g_shared_next_id = 1;
 static int mm_region_flags_valid(uint32_t flags);
 typedef int (*mm_copy_work_fn)(void *arg);
+static mem_region_t *mm_context_add_region_slot(mm_context_t *ctx, uint64_t base, uint64_t size, uint32_t flags, mem_region_type_t type);
+static void mm_context_release_regions(mm_context_t *ctx);
 
 static int
 mm_run_on_copy_stack(mm_copy_work_fn fn, void *arg)
@@ -141,45 +143,54 @@ int mm_context_init(mm_context_t *ctx, uint32_t id) {
     if (!ctx) {
         return -1;
     }
+    memset(ctx, 0, sizeof(*ctx));
     ctx->id = id;
     ctx->root_table = 0;
     ctx->next_shared_base = MM_USER_SHARED_BASE;
     ctx->region_count = 0;
-    for (uint32_t i = 0; i < MM_MAX_REGIONS; ++i) {
-        ctx->regions[i].base = 0;
-        ctx->regions[i].phys_base = 0;
-        ctx->regions[i].size = 0;
-        ctx->regions[i].flags = 0;
-        ctx->regions[i].type = MEM_REGION_WASM_LINEAR;
+    if (list_init(&ctx->regions, (uint32_t)sizeof(mem_region_t), LIST_IMPL_ARRAY_CHUNK, 8) != 0) {
+        return -1;
     }
     return 0;
 }
 
 int mm_context_add_region(mm_context_t *ctx, uint64_t base, uint64_t size, uint32_t flags, mem_region_type_t type) {
-    if (!ctx || ctx->region_count >= MM_MAX_REGIONS) {
-        return -1;
-    }
-    if (!mm_region_flags_valid(flags)) {
-        return -1;
-    }
-    mem_region_t *region = &ctx->regions[ctx->region_count++];
-    region->base = base;
-    region->phys_base = 0;
-    region->size = size;
-    region->flags = flags;
-    region->type = type;
-    return 0;
+    return mm_context_add_region_slot(ctx, base, size, flags, type) ? 0 : -1;
 }
 
 int mm_context_region_for_type(mm_context_t *ctx, mem_region_type_t type, mem_region_t *out_region) {
     if (!ctx || !out_region) {
         return -1;
     }
-    for (uint32_t i = 0; i < ctx->region_count; ++i) {
-        if (ctx->regions[i].type == type) {
-            *out_region = ctx->regions[i];
+    list_iter_t it;
+    mem_region_t *region = (mem_region_t *)list_first(&ctx->regions, &it);
+    while (region) {
+        if (region->type == type) {
+            *out_region = *region;
             return 0;
         }
+        region = (mem_region_t *)list_next(&it);
+    }
+    return -1;
+}
+
+int
+mm_context_region_at(mm_context_t *ctx, uint32_t index, mem_region_t *out_region)
+{
+    uint32_t current = 0;
+    list_iter_t it;
+    mem_region_t *region = 0;
+    if (!ctx || !out_region) {
+        return -1;
+    }
+    region = (mem_region_t *)list_first(&ctx->regions, &it);
+    while (region) {
+        if (current == index) {
+            *out_region = *region;
+            return 0;
+        }
+        current++;
+        region = (mem_region_t *)list_next(&it);
     }
     return -1;
 }
@@ -238,12 +249,14 @@ static mem_region_t *mm_find_region_for_addr(mm_context_t *ctx, uint64_t addr) {
     if (!ctx) {
         return 0;
     }
-    for (uint32_t i = 0; i < ctx->region_count; ++i) {
-        mem_region_t *region = &ctx->regions[i];
+    list_iter_t it;
+    mem_region_t *region = (mem_region_t *)list_first(&ctx->regions, &it);
+    while (region) {
         uint64_t end = region->base + region->size;
         if (addr >= region->base && addr < end) {
             return region;
         }
+        region = (mem_region_t *)list_next(&it);
     }
     return 0;
 }
@@ -257,6 +270,47 @@ mm_region_flags_valid(uint32_t flags)
         return 0;
     }
     return 1;
+}
+
+static mem_region_t *
+mm_context_add_region_slot(mm_context_t *ctx, uint64_t base, uint64_t size, uint32_t flags, mem_region_type_t type)
+{
+    mem_region_t *region = 0;
+    if (!ctx || !mm_region_flags_valid(flags)) {
+        return 0;
+    }
+    region = (mem_region_t *)list_alloc(&ctx->regions);
+    if (!region) {
+        return 0;
+    }
+    memset(region, 0, sizeof(*region));
+    region->base = base;
+    region->phys_base = 0;
+    region->size = size;
+    region->flags = flags;
+    region->type = type;
+    ctx->region_count++;
+    return region;
+}
+
+static void
+mm_context_release_regions(mm_context_t *ctx)
+{
+    list_iter_t it;
+    mem_region_t *region = 0;
+    if (!ctx) {
+        return;
+    }
+    region = (mem_region_t *)list_first(&ctx->regions, &it);
+    while (region) {
+        if (region->phys_base != 0 && region->size != 0) {
+            uint64_t pages = (region->size + PAGE_SIZE - 1ULL) / PAGE_SIZE;
+            pfa_free_pages(region->phys_base, pages);
+        }
+        region = (mem_region_t *)list_next(&it);
+    }
+    list_destroy(&ctx->regions);
+    ctx->region_count = 0;
 }
 
 static void
@@ -548,7 +602,20 @@ int mm_shared_map(mm_context_t *ctx, uint32_t id, uint32_t flags, uint64_t *out_
         (void)mm_shared_release(ctx->id, id);
         return -1;
     }
-    ctx->regions[ctx->region_count - 1].phys_base = region->base;
+    {
+        list_iter_t it;
+        mem_region_t *last = 0;
+        mem_region_t *cur = (mem_region_t *)list_first(&ctx->regions, &it);
+        while (cur) {
+            last = cur;
+            cur = (mem_region_t *)list_next(&it);
+        }
+        if (!last) {
+            (void)mm_shared_release(ctx->id, id);
+            return -1;
+        }
+        last->phys_base = region->base;
+    }
     if (out_base) {
         *out_base = virt_base;
     }
@@ -565,17 +632,20 @@ int mm_shared_unmap(mm_context_t *ctx, uint32_t id) {
     }
 
     uint32_t found = 0;
-    for (uint32_t i = 0; i < ctx->region_count; ++i) {
-        mem_region_t *r = &ctx->regions[i];
+    list_iter_t it;
+    mem_region_t *r = (mem_region_t *)list_first(&ctx->regions, &it);
+    while (r) {
         if (r->type == MEM_REGION_SHARED && r->phys_base == region->base &&
             r->size == region->pages * PAGE_SIZE) {
-            for (uint32_t j = i; j + 1 < ctx->region_count; ++j) {
-                ctx->regions[j] = ctx->regions[j + 1];
+            if (list_remove(&ctx->regions, r) == 0) {
+                if (ctx->region_count > 0) {
+                    ctx->region_count--;
+                }
+                found = 1;
             }
-            ctx->region_count--;
-            found = 1;
             break;
         }
+        r = (mem_region_t *)list_next(&it);
     }
     if (!found) {
         return -1;
@@ -592,11 +662,12 @@ int mm_context_alloc_region(mm_context_t *ctx, uint64_t pages, uint32_t flags, m
         return -1;
     }
     uint64_t virt = mm_region_virtual_base(ctx, type, pages);
-    if (!virt || mm_context_add_region(ctx, virt, pages * PAGE_SIZE, flags, type) != 0) {
+    mem_region_t *added = mm_context_add_region_slot(ctx, virt, pages * PAGE_SIZE, flags, type);
+    if (!virt || !added) {
         pfa_free_pages(phys, pages);
         return -1;
     }
-    ctx->regions[ctx->region_count - 1].phys_base = phys;
+    added->phys_base = phys;
     return 0;
 }
 
@@ -631,23 +702,27 @@ mm_context_t *mm_context_create(uint32_t id) {
         return 0;
     }
     if (paging_create_address_space(&ctx->root_table) != 0) {
+        list_destroy(&ctx->regions);
         (void)list_remove(&g_contexts, ctx);
         return 0;
     }
     if (mm_context_alloc_region(ctx, 8, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER,
                                 MEM_REGION_WASM_LINEAR) != 0) {
+        mm_context_release_regions(ctx);
         paging_destroy_address_space(ctx->root_table);
         (void)list_remove(&g_contexts, ctx);
         return 0;
     }
     if (mm_context_alloc_region(ctx, 2, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER,
                                 MEM_REGION_STACK) != 0) {
+        mm_context_release_regions(ctx);
         paging_destroy_address_space(ctx->root_table);
         (void)list_remove(&g_contexts, ctx);
         return 0;
     }
     if (mm_context_alloc_region(ctx, 4, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER,
                                 MEM_REGION_HEAP) != 0) {
+        mm_context_release_regions(ctx);
         paging_destroy_address_space(ctx->root_table);
         (void)list_remove(&g_contexts, ctx);
         return 0;
@@ -655,6 +730,7 @@ mm_context_t *mm_context_create(uint32_t id) {
     if (paging_verify_user_root(ctx->root_table, 1) != 0) {
         klog_write("[mm] verify user root failed\n");
         paging_dump_user_root_kernel_mappings(ctx->root_table);
+        mm_context_release_regions(ctx);
         paging_destroy_address_space(ctx->root_table);
         (void)list_remove(&g_contexts, ctx);
         return 0;
@@ -670,14 +746,7 @@ int mm_context_destroy(uint32_t id) {
     if (!ctx) {
         return -1;
     }
-    for (uint32_t r = 0; r < ctx->region_count; ++r) {
-        mem_region_t *region = &ctx->regions[r];
-        if (region->phys_base == 0 || region->size == 0) {
-            continue;
-        }
-        uint64_t pages = (region->size + PAGE_SIZE - 1ULL) / PAGE_SIZE;
-        pfa_free_pages(region->phys_base, pages);
-    }
+    mm_context_release_regions(ctx);
     paging_destroy_address_space(ctx->root_table);
     (void)list_remove(&g_contexts, ctx);
     return 0;

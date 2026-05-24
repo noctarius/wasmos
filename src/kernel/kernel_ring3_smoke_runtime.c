@@ -281,13 +281,15 @@ kernel_ring3_spawn_smoke_process(uint32_t parent_pid, uint32_t *out_pid)
                          MEM_REGION_FLAG_READ | MEM_REGION_FLAG_EXEC | MEM_REGION_FLAG_USER) != 0) {
         return -1;
     }
-    for (uint32_t i = 0; i < ctx->region_count; ++i) {
-        mem_region_t *region = &ctx->regions[i];
+    list_iter_t it;
+    mem_region_t *region = (mem_region_t *)list_first(&ctx->regions, &it);
+    while (region) {
         if (region->type == MEM_REGION_WASM_LINEAR) {
             region->flags |= MEM_REGION_FLAG_EXEC;
             region->flags &= ~MEM_REGION_FLAG_WRITE;
             break;
         }
+        region = (mem_region_t *)list_next(&it);
     }
     user_rip = linear.base;
     user_rsp = stack.base + stack.size - 16u;

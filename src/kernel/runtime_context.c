@@ -4,13 +4,7 @@ static int find_region(const mm_context_t *ctx, mem_region_type_t type, mem_regi
     if (!ctx || !out) {
         return 0;
     }
-    for (uint32_t i = 0; i < ctx->region_count; ++i) {
-        if (ctx->regions[i].type == type) {
-            *out = ctx->regions[i];
-            return 1;
-        }
-    }
-    return 0;
+    return mm_context_region_for_type((mm_context_t *)ctx, type, out) == 0 ? 1 : 0;
 }
 
 int runtime_context_bind(mm_context_t *ctx, runtime_context_t *out_ctx) {

@@ -376,12 +376,13 @@ ui_demo_button_click(ui_context_t *ctx, int32_t component_id, void *user)
 }
 
 static ui_context_t g_libui_ctx;
+static int32_t g_libui_click_count = 0;
 
 static int
-run_libui_demo(int32_t proc_endpoint)
+start_libui_demo(int32_t proc_endpoint)
 {
     ui_context_t *ui = &g_libui_ctx;
-    int32_t click_count = 0;
+    g_libui_click_count = 0;
     if (ui_init(ui, proc_endpoint, wasmos_ipc_create_endpoint(), 360, 220) != 0) {
         puts("[test] libui demo init failed");
         return -1;
@@ -411,7 +412,7 @@ run_libui_demo(int32_t proc_endpoint)
     b->bg_color = 0xFF2A3550u;
     ui_component_set_text(ui, label, "libui label");
     ui_component_set_text(ui, button, "libui button");
-    ui_component_set_button_action(ui, button, ui_demo_button_click, &click_count);
+    ui_component_set_button_action(ui, button, ui_demo_button_click, &g_libui_click_count);
     (void)ui_component_append_child(ui, ui->root_id, panel);
     (void)ui_component_append_child(ui, panel, label);
     (void)ui_component_append_child(ui, panel, button);
@@ -422,21 +423,34 @@ run_libui_demo(int32_t proc_endpoint)
     }
 
     puts("[test] libui demo ready");
-    for (int32_t i = 0; i < 2200 && !ui->close_requested; ++i) {
-        wasmos_ipc_message_t ev_raw;
-        if (ui_send_gfx_raw(ui->gfx_endpoint, ui->reply_endpoint, ui->req_id++,
-                            GFX_IPC_POLL_EVENT, 0, 0, 0, 0, &ev_raw) == 0) {
-            (void)ui_loop_handle_ipc(ui, &ev_raw);
-        }
-        if (ui_loop_drain(ui) != 0) {
-            ui_destroy(ui);
-            return -1;
-        }
-        (void)wasmos_sched_yield();
-    }
-    ui_destroy(ui);
-    puts("[test] libui demo done");
     return 0;
+}
+
+static int
+pump_libui_demo(void)
+{
+    ui_context_t *ui = &g_libui_ctx;
+    if (ui->window_id <= 0) return 0;
+    wasmos_ipc_message_t ev_raw;
+    if (!ui->close_requested &&
+        ui_send_gfx_raw(ui->gfx_endpoint, ui->reply_endpoint, ui->req_id++,
+                        GFX_IPC_POLL_EVENT, 0, 0, 0, 0, &ev_raw) == 0) {
+        (void)ui_loop_handle_ipc(ui, &ev_raw);
+    }
+    if (ui_loop_drain(ui) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static void
+stop_libui_demo(void)
+{
+    ui_context_t *ui = &g_libui_ctx;
+    if (ui->window_id > 0) {
+        ui_destroy(ui);
+        puts("[test] libui demo done");
+    }
 }
 
 int
@@ -463,6 +477,7 @@ main(int argc, char **argv)
     int32_t window_id3 = 0;
     int32_t stride_bytes2 = 0;
     int32_t stride_bytes3 = 0;
+    int32_t libui_started = 0;
     int32_t stride_bytes;
     uint8_t *mapped_base;
     uint8_t *mapped_base2 = 0;
@@ -671,6 +686,11 @@ main(int argc, char **argv)
     win3.width = GFX3_W;
     win3.height = GFX3_H;
     win3.mapped_base = mapped_base3;
+    if (start_libui_demo(proc_endpoint) != 0) {
+        puts("[test] libui demo failed");
+        return 33;
+    }
+    libui_started = 1;
 
     puts("[test] gfx smoke waiting close-request x3");
     int closed1 = 0;
@@ -736,6 +756,10 @@ main(int argc, char **argv)
                 continue;
             }
         }
+        if (libui_started && pump_libui_demo() != 0) {
+            puts("[test] libui demo pump failed");
+            return 33;
+        }
         (void)wasmos_sched_yield();
     }
 
@@ -790,9 +814,6 @@ main(int argc, char **argv)
 
     puts("[test] gfx smoke app ok");
     puts("[test] gfx smoke main done");
-    if (run_libui_demo(proc_endpoint) != 0) {
-        puts("[test] libui demo failed");
-        return 33;
-    }
+    if (libui_started) stop_libui_demo();
     return 0;
 }

@@ -170,6 +170,49 @@ fn logHex32(prefix: []const u8, v: u32) void {
     _ = api().console_write.?(buf[0..n].ptr, @intCast(n));
 }
 
+fn logModeResolution(width: u32, height: u32) void {
+    var buf: [48]u8 = undefined;
+    var n: usize = 0;
+    const prefix = "[gfx] fb mode ";
+    var i: usize = 0;
+    while (i < prefix.len and n < buf.len) : (i += 1) {
+        buf[n] = prefix[i];
+        n += 1;
+    }
+
+    n += append_u32_decimal(buf[n..], width);
+    if (n < buf.len) {
+        buf[n] = 'x';
+        n += 1;
+    }
+    n += append_u32_decimal(buf[n..], height);
+    if (n < buf.len) {
+        buf[n] = '\n';
+        n += 1;
+    }
+    _ = api().console_write.?(buf[0..n].ptr, @intCast(n));
+}
+
+fn append_u32_decimal(dst: []u8, v: u32) usize {
+    if (dst.len == 0) return 0;
+    if (v == 0) {
+        dst[0] = '0';
+        return 1;
+    }
+    var tmp: [10]u8 = undefined;
+    var t: usize = 0;
+    var cur = v;
+    while (cur > 0 and t < tmp.len) : (t += 1) {
+        tmp[t] = @as(u8, @intCast('0' + (cur % 10)));
+        cur /= 10;
+    }
+    var out: usize = 0;
+    while (out < t and out < dst.len) : (out += 1) {
+        dst[out] = tmp[t - 1 - out];
+    }
+    return out;
+}
+
 fn packFbPixel(r: u32, g: u32, b: u32) u32 {
     const fmt = g_fb_info.framebuffer_gop_pixel_format & 0xF;
     // GOP PixelFormat:
@@ -446,8 +489,7 @@ fn log_fb_capabilities_probe() void {
             {
                 break;
             }
-            logHex32("[gfx] fb mode width=", mode_reply.arg0);
-            logHex32("[gfx] fb mode height=", mode_reply.arg1);
+            logModeResolution(mode_reply.arg0, mode_reply.arg1);
         }
     }
 }

@@ -13,5 +13,7 @@ typedef struct list_ops {
 
 int list_linked_impl_init(list_t *list);
 int list_array_chunk_impl_init(list_t *list);
+void *list_alloc_mem(size_t size);
+void list_free_mem(void *ptr);
 
 #endif

@@ -381,7 +381,9 @@ Current implementation notes:
 - A wasm `libui` scaffold now exists as mirrored shared headers:
   `src/libc/include/wasmos/libui.h` and
   `src/libsys/wasm/include/wasmos/libui.h`.
-  It provides a small struct-based component tree (`Panel`/`Label`/`Button`),
+  It provides a small struct-based component tree
+  (`Panel`/`Label`/`Button`/`Checkbox`) with lightweight built-in bitmap text
+  rendering for early bring-up,
   app-owned IPC handoff (`ui_loop_handle_ipc` consumes compositor event
   replies), and dirty-frame flush (`ui_loop_drain` performs layout/render +
   `PRESENT_WINDOW`).

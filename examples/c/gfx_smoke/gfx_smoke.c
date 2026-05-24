@@ -360,6 +360,7 @@ ui_demo_button_click(ui_context_t *ctx, int32_t component_id, void *user)
     ui_component_t *root = ui_component_by_id(ctx, ctx->root_id);
     ui_component_t *label = ui_component_by_id(ctx, 2);
     ui_component_t *button = ui_component_by_id(ctx, 3);
+    ui_component_t *checkbox = ui_component_by_id(ctx, 4);
     if (click_count) {
         (*click_count)++;
     }
@@ -371,6 +372,9 @@ ui_demo_button_click(ui_context_t *ctx, int32_t component_id, void *user)
     }
     if (button) {
         button->border_color = (click_count && ((*click_count) & 1)) ? 0xFF9CE2FFu : 0xFF536271u;
+    }
+    if (checkbox) {
+        ui_component_set_text(ctx, checkbox->id, checkbox->checked ? "checkbox: on" : "checkbox: off");
     }
     ui_mark_dirty(ctx);
 }
@@ -390,19 +394,21 @@ start_libui_demo(int32_t proc_endpoint)
 
     int32_t label = ui_component_create_label(ui);
     int32_t button = ui_component_create_button(ui);
+    int32_t checkbox = ui_component_create_checkbox(ui);
     int32_t panel = ui_component_create_panel(ui);
-    if (label < 0 || button < 0 || panel < 0) {
+    if (label < 0 || button < 0 || checkbox < 0 || panel < 0) {
         ui_destroy(ui);
         return -1;
     }
     ui_component_t *p = ui_component_by_id(ui, panel);
     ui_component_t *l = ui_component_by_id(ui, label);
     ui_component_t *b = ui_component_by_id(ui, button);
-    if (!p || !l || !b) {
+    ui_component_t *cb = ui_component_by_id(ui, checkbox);
+    if (!p || !l || !b || !cb) {
         ui_destroy(ui);
         return -1;
     }
-    p->preferred_h = 120;
+    p->preferred_h = 160;
     p->bg_color = 0xFF1A2230u;
     p->padding_px = 8;
     p->gap_px = 8;
@@ -410,12 +416,19 @@ start_libui_demo(int32_t proc_endpoint)
     l->bg_color = 0xFF2A3550u;
     b->preferred_h = 34;
     b->bg_color = 0xFF2A3550u;
-    ui_component_set_text(ui, label, "libui label");
-    ui_component_set_text(ui, button, "libui button");
+    cb->preferred_h = 28;
+    cb->bg_color = 0xFF243147u;
+    cb->clickable = 1;
+    ui_component_set_checked(ui, checkbox, 0);
+    ui_component_set_text(ui, label, "libui component demo");
+    ui_component_set_text(ui, button, "press me");
+    ui_component_set_text(ui, checkbox, "checkbox: off");
     ui_component_set_button_action(ui, button, ui_demo_button_click, &g_libui_click_count);
+    ui_component_set_button_action(ui, checkbox, ui_demo_button_click, &g_libui_click_count);
     (void)ui_component_append_child(ui, ui->root_id, panel);
     (void)ui_component_append_child(ui, panel, label);
     (void)ui_component_append_child(ui, panel, button);
+    (void)ui_component_append_child(ui, panel, checkbox);
     ui_mark_dirty(ui);
     if (ui_loop_drain(ui) != 0) {
         ui_destroy(ui);

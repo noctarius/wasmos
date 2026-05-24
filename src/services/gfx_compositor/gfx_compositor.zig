@@ -438,6 +438,61 @@ fn log_fb_capabilities_probe() void {
     }
 }
 
+fn clamp_runtime_state_to_framebuffer() void {
+    if (!g_fb_info_valid) return;
+    const fb_w: i32 = @intCast(g_fb_info.framebuffer_width);
+    const fb_h: i32 = @intCast(g_fb_info.framebuffer_height);
+    const hi_x = if (fb_w > 0) fb_w - 1 else 0;
+    const hi_y = if (fb_h > 0) fb_h - 1 else 0;
+    g_pointer_x = clamp(g_pointer_x, 0, hi_x);
+    g_pointer_y = clamp(g_pointer_y, 0, hi_y);
+
+    var i: usize = 0;
+    while (i < g_windows.len) : (i += 1) {
+        if (!g_windows[i].in_use) continue;
+        const win_w: i32 = @intCast(g_windows[i].width);
+        const win_h: i32 = @intCast(g_windows[i].height);
+        const max_w: i32 = if (fb_w > 1) fb_w else 1;
+        const max_h: i32 = if (fb_h > 1) fb_h else 1;
+        if (win_w > max_w) g_windows[i].width = @intCast(max_w);
+        if (win_h > max_h) g_windows[i].height = @intCast(max_h);
+        const clamped_win_w: i32 = @intCast(g_windows[i].width);
+        const clamped_win_h: i32 = @intCast(g_windows[i].height);
+        const pos_hi_x = if (fb_w > clamped_win_w) fb_w - clamped_win_w else 0;
+        const pos_hi_y = if (fb_h > clamped_win_h) fb_h - clamped_win_h else 0;
+        g_windows[i].x = clamp(g_windows[i].x, 0, pos_hi_x);
+        g_windows[i].y = clamp(g_windows[i].y, 0, pos_hi_y);
+    }
+}
+
+fn refresh_framebuffer_mapping() i32 {
+    var info: c.nd_framebuffer_info_t = undefined;
+    if (api().framebuffer_info.?(&info) != 0 or
+        info.framebuffer_width == 0 or
+        info.framebuffer_height == 0 or
+        info.framebuffer_stride == 0)
+    {
+        return c.GFX_STATUS_IO;
+    }
+    const fb_size_u64: u64 = @as(u64, info.framebuffer_stride) * @as(u64, info.framebuffer_height) * 4;
+    if (fb_size_u64 == 0 or fb_size_u64 > 0xFFFF_FFFF) {
+        return c.GFX_STATUS_IO;
+    }
+    if (g_fb_pixels != null) {
+        _ = api().buffer_release.?(c.ND_BUFFER_KIND_FRAMEBUFFER);
+        g_fb_pixels = null;
+    }
+    const fb_ptr = api().buffer_borrow.?(c.ND_BUFFER_KIND_FRAMEBUFFER, 0, c.ND_BUFFER_BORROW_READ | c.ND_BUFFER_BORROW_WRITE, @intCast(fb_size_u64));
+    if (fb_ptr == null) {
+        return c.GFX_STATUS_IO;
+    }
+    g_fb_info = info;
+    g_fb_info_valid = true;
+    g_fb_pixels = @ptrCast(@alignCast(fb_ptr.?));
+    clamp_runtime_state_to_framebuffer();
+    return c.GFX_STATUS_OK;
+}
+
 fn try_switch_to_gfx_tty() void {
     if (g_vt_endpoint == IPC_ENDPOINT_NONE) return;
     var reply: c.nd_ipc_message_t = undefined;
@@ -1690,6 +1745,56 @@ fn handle_poll_event(msg: *const c.nd_ipc_message_t) void {
     reply_with_status(msg, c.GFX_STATUS_OK, c.GFX_EVENT_NONE, 0, 0);
 }
 
+fn handle_set_display_mode(msg: *const c.nd_ipc_message_t) void {
+    if (g_fb_endpoint == IPC_ENDPOINT_NONE) {
+        reply_with_status(msg, c.GFX_STATUS_IO, 0, 0, 0);
+        return;
+    }
+    const width = msg.arg0;
+    const height = msg.arg1;
+    if (width == 0 or height == 0) {
+        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        return;
+    }
+
+    var caps_reply: c.nd_ipc_message_t = undefined;
+    const caps_req_id: u32 = GFX_REQUEST_BASE + GFX_FB_LOOKUP_RETRIES + 11;
+    if (ipc_call(g_fb_endpoint, caps_req_id, c.FBTEXT_IPC_QUERY_CAPS_REQ, 0, 0, 0, 0, &caps_reply) != 0 or
+        caps_reply.type != c.FBTEXT_IPC_RESP)
+    {
+        reply_with_status(msg, c.GFX_STATUS_IO, 0, 0, 0);
+        return;
+    }
+    if ((caps_reply.arg0 & c.FBTEXT_CAP_SET_RESOLUTION) == 0) {
+        reply_with_status(msg, c.GFX_STATUS_UNSUPPORTED, 0, 0, 0);
+        return;
+    }
+
+    var mode_reply: c.nd_ipc_message_t = undefined;
+    const mode_req_id: u32 = GFX_REQUEST_BASE + GFX_FB_LOOKUP_RETRIES + 12;
+    if (ipc_call(g_fb_endpoint, mode_req_id, c.FBTEXT_IPC_SET_RESOLUTION_REQ, width, height, 0, 0, &mode_reply) != 0) {
+        reply_with_status(msg, c.GFX_STATUS_IO, 0, 0, 0);
+        return;
+    }
+    if (mode_reply.type != c.FBTEXT_IPC_RESP) {
+        const fb_status: i32 = @bitCast(mode_reply.arg0);
+        if (fb_status == c.GFX_STATUS_UNSUPPORTED or fb_status == -3) {
+            reply_with_status(msg, c.GFX_STATUS_UNSUPPORTED, 0, 0, 0);
+            return;
+        }
+        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        return;
+    }
+
+    const refresh_rc = refresh_framebuffer_mapping();
+    if (refresh_rc != c.GFX_STATUS_OK) {
+        reply_with_status(msg, refresh_rc, 0, 0, 0);
+        return;
+    }
+    request_repaint_full();
+    reply_with_status(msg, c.GFX_STATUS_OK, g_fb_info.framebuffer_width, g_fb_info.framebuffer_height, g_fb_info.framebuffer_stride);
+}
+
 fn handle_ipc_dispatch(msg: *const c.nd_ipc_message_t) void {
     var opcode: u16 = @intCast(msg.type & 0xFFFF);
     if (gfx_header_valid(msg.arg2, msg.arg3)) {
@@ -1713,6 +1818,7 @@ fn handle_ipc_dispatch(msg: *const c.nd_ipc_message_t) void {
         c.GFX_IPC_RELEASE_SHARED_BUFFER => handle_release_shared_buffer(msg),
         c.GFX_IPC_PRESENT_WINDOW => handle_present_window(msg),
         c.GFX_IPC_POLL_EVENT => handle_poll_event(msg),
+        c.GFX_IPC_SET_DISPLAY_MODE => handle_set_display_mode(msg),
         else => reply_unsupported(msg),
     }
 }
@@ -1736,6 +1842,7 @@ fn register_ipc_handlers() i32 {
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_RELEASE_SHARED_BUFFER, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_PRESENT_WINDOW, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_POLL_EVENT, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_SET_DISPLAY_MODE, cb, null) != 0) return -1;
     return 0;
 }
 
@@ -1780,23 +1887,11 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
         logMsg("[test] gfx compositor handshake ok\n");
     }
 
-    if (api().framebuffer_info.?(&g_fb_info) == 0 and
-        g_fb_info.framebuffer_width != 0 and
-        g_fb_info.framebuffer_height != 0)
-    {
-        g_fb_info_valid = true;
+    if (refresh_framebuffer_mapping() == c.GFX_STATUS_OK) {
         g_pointer_x = @intCast(g_fb_info.framebuffer_width / 2);
         g_pointer_y = @intCast(g_fb_info.framebuffer_height / 2);
-        const fb_size_u64: u64 = @as(u64, g_fb_info.framebuffer_stride) *
-            @as(u64, g_fb_info.framebuffer_height) * 4;
-        if (fb_size_u64 > 0 and fb_size_u64 <= 0xFFFF_FFFF) {
-            const fb_ptr = api().buffer_borrow.?(c.ND_BUFFER_KIND_FRAMEBUFFER, 0, c.ND_BUFFER_BORROW_READ | c.ND_BUFFER_BORROW_WRITE, @intCast(fb_size_u64));
-            if (fb_ptr != null) {
-                g_fb_pixels = @ptrCast(@alignCast(fb_ptr.?));
-            } else {
-                logMsg("[gfx] framebuffer borrow failed\n");
-            }
-        }
+    } else {
+        logMsg("[gfx] framebuffer borrow failed\n");
     }
     init_title_glyph_cache_startup();
 

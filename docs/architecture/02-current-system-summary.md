@@ -82,6 +82,10 @@ The current tree already boots into a usable user-space stack:
   console ring (1 page). `serial_write` appends bytes into this ring, and the
   native framebuffer driver maps and drains it, removing the previous
   serial→framebuffer text IPC message path.
+- `gfx-compositor` now owns display mode-change initiation through
+  `GFX_IPC_SET_DISPLAY_MODE`: it forwards a mode-set request to framebuffer
+  control IPC, then refreshes framebuffer info/borrow mapping and clamps
+  in-memory pointer/window state before repaint.
 - Shared-memory primitives now exist for both native-driver ABI
   (`shmem_create/map/unmap`, `console_ring_id`) and WASM syscalls
   (`wasmos_shmem_create/map/unmap`) backed by the same kernel shared-memory

@@ -27,7 +27,11 @@ const CHROME_BORDER: i32 = 1;
 const CHROME_TITLE_H: i32 = 18;
 const CHROME_CLOSE_SZ: i32 = 10;
 const CHROME_CLOSE_PAD: i32 = 2;
+const CHROME_MAX_SZ: i32 = 10;
+const CHROME_MAX_PAD: i32 = 2;
+const CHROME_BTN_GAP: i32 = 2;
 const CHROME_CLOSE_HIT_W: i32 = 24;
+const CHROME_MAX_HIT_W: i32 = 24;
 const CHROME_RESIZE_HANDLE_SZ: i32 = 12;
 
 var g_api: ?*c.wasmos_driver_api_t = null;
@@ -90,6 +94,11 @@ const window_slot_t = struct {
     z: u32 = 0,
     generation: u32 = 1,
     current_buffer_id: u32 = 0,
+    is_maximized: bool = false,
+    restore_x: i32 = 0,
+    restore_y: i32 = 0,
+    restore_w: u32 = 0,
+    restore_h: u32 = 0,
 };
 
 const buffer_state_t = enum(u8) {
@@ -816,6 +825,7 @@ fn handle_mouse_resize(dx: i32, dy: i32, left_down_now: bool) void {
         request_repaint_rect(old_wr);
         request_repaint_rect(new_wr);
         if (g_windows[resize_idx].width != old_w or g_windows[resize_idx].height != old_h) {
+            g_windows[resize_idx].is_maximized = false;
             const win = g_windows[resize_idx];
             event_push(win.owner_endpoint, c.GFX_EVENT_RESIZE, win.window_id, pack_u16_pair(win.width, win.height), 0);
         }
@@ -853,6 +863,7 @@ fn handle_mouse_press_transition(left_down_now: bool, left_down_prev: bool) void
     if (!left_down_now or left_down_prev) return;
     if (window_topmost_at(g_pointer_x, g_pointer_y)) |idx| {
         const hit_close = point_in_rect(g_pointer_x, g_pointer_y, window_close_hit_rect(g_windows[idx]));
+        const hit_max = point_in_rect(g_pointer_x, g_pointer_y, window_max_hit_rect(g_windows[idx]));
         const hit_resize = point_in_rect(g_pointer_x, g_pointer_y, window_resize_rect(g_windows[idx]));
         const hit_title = point_in_rect(g_pointer_x, g_pointer_y, window_title_rect(g_windows[idx]));
         raise_window(idx);
@@ -863,6 +874,10 @@ fn handle_mouse_press_transition(left_down_now: bool, left_down_prev: bool) void
             g_resize_window_id = 0;
             event_drop_for(win.owner_endpoint);
             event_push(win.owner_endpoint, c.GFX_EVENT_CLOSE_REQUEST, win.window_id, 0, 0);
+        } else if (hit_max) {
+            g_drag_window_id = 0;
+            g_resize_window_id = 0;
+            _ = try_toggle_maximize(idx);
         } else if (hit_resize) {
             g_resize_window_id = g_windows[idx].window_id;
             g_drag_window_id = 0;
@@ -1187,6 +1202,17 @@ fn window_close_rect(win: window_slot_t) c.gfx_rect_t {
     };
 }
 
+fn window_max_rect(win: window_slot_t) c.gfx_rect_t {
+    const ww: i32 = @intCast(win.width);
+    const max_y = win.y + (CHROME_TITLE_H - CHROME_MAX_SZ) / 2;
+    return .{
+        .x = win.x + ww - CHROME_CLOSE_PAD - CHROME_CLOSE_SZ - CHROME_BTN_GAP - CHROME_MAX_PAD - CHROME_MAX_SZ,
+        .y = max_y,
+        .w = CHROME_MAX_SZ,
+        .h = CHROME_MAX_SZ,
+    };
+}
+
 fn window_close_hit_rect(win: window_slot_t) c.gfx_rect_t {
     const ww: i32 = @intCast(win.width);
     return .{
@@ -1197,12 +1223,25 @@ fn window_close_hit_rect(win: window_slot_t) c.gfx_rect_t {
     };
 }
 
+fn window_max_hit_rect(win: window_slot_t) c.gfx_rect_t {
+    const ww: i32 = @intCast(win.width);
+    const right = win.x + ww - CHROME_CLOSE_HIT_W;
+    return .{
+        .x = right - CHROME_MAX_HIT_W,
+        .y = win.y,
+        .w = CHROME_MAX_HIT_W,
+        .h = CHROME_TITLE_H,
+    };
+}
+
 fn window_title_rect(win: window_slot_t) c.gfx_rect_t {
     const ww: i32 = @intCast(win.width);
+    const controls_w = CHROME_CLOSE_HIT_W + CHROME_MAX_HIT_W + CHROME_BTN_GAP;
+    const title_w = ww - (CHROME_BORDER * 2) - controls_w;
     return .{
         .x = win.x + CHROME_BORDER,
         .y = win.y,
-        .w = ww - (CHROME_BORDER * 2),
+        .w = if (title_w > 0) title_w else 0,
         .h = CHROME_TITLE_H,
     };
 }
@@ -1230,6 +1269,8 @@ fn draw_window_chrome(win: window_slot_t, clip: c.gfx_rect_t, focused: bool) voi
     const title_color: u32 = if (focused) 0xFF173A53 else 0xFF202A33;
     const close_bg: u32 = 0xFFC43A3A;
     const close_fg: u32 = 0xFFFFFFFF;
+    const max_bg: u32 = 0xFF3E7D46;
+    const max_fg: u32 = 0xFFFFFFFF;
 
     fill_rect(win.x, win.y, @intCast(win.width), CHROME_BORDER, border_color);
     fill_rect(win.x, win.y, CHROME_BORDER, @intCast(win.height), border_color);
@@ -1239,15 +1280,75 @@ fn draw_window_chrome(win: window_slot_t, clip: c.gfx_rect_t, focused: bool) voi
     fill_rect(win.x + CHROME_BORDER, win.y + CHROME_BORDER, ww - (CHROME_BORDER * 2), CHROME_TITLE_H - CHROME_BORDER, title_color);
 
     const cr = window_close_rect(win);
+    const mr = window_max_rect(win);
     fill_rect(cr.x, cr.y, cr.w, cr.h, close_bg);
     fill_rect(cr.x + 2, cr.y + 2, cr.w - 4, 1, close_fg);
     fill_rect(cr.x + 2, cr.y + cr.h - 3, cr.w - 4, 1, close_fg);
     fill_rect(cr.x + 2, cr.y + 2, 1, cr.h - 4, close_fg);
     fill_rect(cr.x + cr.w - 3, cr.y + 2, 1, cr.h - 4, close_fg);
 
+    fill_rect(mr.x, mr.y, mr.w, mr.h, max_bg);
+    if (!win.is_maximized) {
+        fill_rect(mr.x + 2, mr.y + 2, mr.w - 4, mr.h - 4, max_fg);
+        fill_rect(mr.x + 3, mr.y + 3, mr.w - 6, mr.h - 6, max_bg);
+    } else {
+        fill_rect(mr.x + 2, mr.y + 3, mr.w - 4, mr.h - 4, max_fg);
+        fill_rect(mr.x + 3, mr.y + 2, mr.w - 4, mr.h - 4, max_fg);
+        fill_rect(mr.x + 4, mr.y + 4, mr.w - 6, mr.h - 6, max_bg);
+    }
+
     if (GFX_TITLE_TEXT_ENABLED) {
         draw_window_title_text(win, clip);
     }
+}
+
+fn resize_window_and_notify(window_idx: usize, x: i32, y: i32, width: u32, height: u32) void {
+    const old_wr = rect_from_window(g_windows[window_idx]);
+    g_windows[window_idx].generation +%= 1;
+    if (g_windows[window_idx].generation == 0) g_windows[window_idx].generation = 1;
+    g_windows[window_idx].current_buffer_id = 0;
+    g_windows[window_idx].x = x;
+    g_windows[window_idx].y = y;
+    g_windows[window_idx].width = width;
+    g_windows[window_idx].height = height;
+    const new_wr = rect_from_window(g_windows[window_idx]);
+    request_repaint_rect(old_wr);
+    request_repaint_rect(new_wr);
+    const win = g_windows[window_idx];
+    event_push(win.owner_endpoint, c.GFX_EVENT_RESIZE, win.window_id, pack_u16_pair(win.width, win.height), 0);
+}
+
+fn try_toggle_maximize(window_idx: usize) bool {
+    if (!g_fb_info_valid) return false;
+    const fb_w = g_fb_info.framebuffer_width;
+    const fb_h = g_fb_info.framebuffer_height;
+    if (fb_w == 0 or fb_h == 0) return false;
+
+    if (!g_windows[window_idx].is_maximized) {
+        g_windows[window_idx].restore_x = g_windows[window_idx].x;
+        g_windows[window_idx].restore_y = g_windows[window_idx].y;
+        g_windows[window_idx].restore_w = g_windows[window_idx].width;
+        g_windows[window_idx].restore_h = g_windows[window_idx].height;
+        g_windows[window_idx].is_maximized = true;
+        resize_window_and_notify(window_idx, 0, 0, fb_w, fb_h);
+        return true;
+    }
+
+    var restore_w = g_windows[window_idx].restore_w;
+    var restore_h = g_windows[window_idx].restore_h;
+    if (restore_w < GFX_WINDOW_MIN_DIM or restore_h < GFX_WINDOW_MIN_DIM) return false;
+    if (restore_w > GFX_WINDOW_MAX_DIM) restore_w = GFX_WINDOW_MAX_DIM;
+    if (restore_h > GFX_WINDOW_MAX_DIM) restore_h = GFX_WINDOW_MAX_DIM;
+    if (restore_w > fb_w) restore_w = fb_w;
+    if (restore_h > fb_h) restore_h = fb_h;
+
+    const max_x: i32 = if (fb_w > restore_w) @as(i32, @intCast(fb_w - restore_w)) else 0;
+    const max_y: i32 = if (fb_h > restore_h) @as(i32, @intCast(fb_h - restore_h)) else 0;
+    const restore_x = clamp(g_windows[window_idx].restore_x, 0, max_x);
+    const restore_y = clamp(g_windows[window_idx].restore_y, 0, max_y);
+    g_windows[window_idx].is_maximized = false;
+    resize_window_and_notify(window_idx, restore_x, restore_y, restore_w, restore_h);
+    return true;
 }
 
 fn blend_u8(dst: u32, src: u32, alpha: u8) u32 {
@@ -1639,12 +1740,8 @@ fn handle_resize_window(msg: *const c.nd_ipc_message_t) void {
         reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
         return;
     }
-    g_windows[slot_idx].generation +%= 1;
-    if (g_windows[slot_idx].generation == 0) g_windows[slot_idx].generation = 1;
-    g_windows[slot_idx].current_buffer_id = 0;
-    g_windows[slot_idx].width = width;
-    g_windows[slot_idx].height = height;
-    request_repaint_full();
+    g_windows[slot_idx].is_maximized = false;
+    resize_window_and_notify(slot_idx, g_windows[slot_idx].x, g_windows[slot_idx].y, width, height);
     reply_with_status(msg, c.GFX_STATUS_OK, width, height, 0);
 }
 

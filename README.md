@@ -171,6 +171,7 @@ Current FS namespace model:
 - bootstrapping now brings up `fs-manager` + `fs-init` before `device-manager`, so later startup lookups can resolve via the VFS namespace rather than only early boot-module ordering
 - kernel now exposes generic cross-context buffer borrows (`buffer_borrow`/`buffer_release`) with typed buffer classes and read/write grants; `fs-manager` uses the FS class for zero-copy backend proxying
 - process-manager FS/framebuffer per-context borrow slots are list-backed (no fixed `PROCESS_MAX_COUNT` slot arrays)
+- MM context registry and per-context capability state are list-backed (no fixed `MM_MAX_CONTEXTS` runtime slot cap)
 - native framebuffer driver mapping now uses the same generic borrow path (`PM_BUFFER_KIND_FRAMEBUFFER`) instead of a dedicated framebuffer mapper callback
 - native driver ABI now has explicit magic/version fields and fails fast on mismatch to avoid mixed-kernel/driver function-table corruption
 - PM `spawn_name` busy responses now carry a transient error code (`arg1=-2`); `sysinit` and `device-manager` retry/yield on busy so boot-time service/driver spawns no longer race each other

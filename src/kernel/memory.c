@@ -3,6 +3,7 @@
 #include "paging.h"
 #include "physmem.h"
 #include "serial.h"
+#include "list.h"
 #include "string.h"
 
 #define PAGE_SIZE 0x1000ULL
@@ -18,8 +19,7 @@ static const uint64_t pf_err_write = 1ULL << 1;
 static const uint64_t pf_err_user = 1ULL << 2;
 static const uint64_t pf_err_instr = 1ULL << 4;
 static const boot_info_t *g_boot_info;
-static mm_context_t g_contexts[MM_MAX_CONTEXTS];
-static uint32_t g_context_count;
+static list_t g_contexts;
 static mm_context_t g_root_ctx;
 static uint8_t g_mm_copy_stack[MM_COPY_STACK_BYTES] __attribute__((aligned(16)));
 
@@ -30,18 +30,6 @@ mm_kernel_alias_addr(uintptr_t addr)
         return (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
     }
     return addr;
-}
-
-static inline mm_context_t *
-mm_context_table(void)
-{
-    return (mm_context_t *)(void *)mm_kernel_alias_addr((uintptr_t)&g_contexts[0]);
-}
-
-static inline uint32_t *
-mm_context_count_ptr(void)
-{
-    return (uint32_t *)(void *)mm_kernel_alias_addr((uintptr_t)&g_context_count);
 }
 
 #define MM_MAX_SHARED 16
@@ -123,13 +111,16 @@ mm_region_virtual_base(mm_context_t *ctx, mem_region_type_t type, uint64_t pages
 
 void mm_init(const boot_info_t *boot_info) {
     g_boot_info = boot_info;
-    g_context_count = 0;
     klog_write("[mm] init\n");
     pfa_init(boot_info);
     if (paging_init() != 0) {
         klog_write("[mm] paging init failed\n");
     } else {
         klog_write("[mm] paging init\n");
+    }
+
+    if (list_init(&g_contexts, (uint32_t)sizeof(mm_context_t), LIST_IMPL_ARRAY_CHUNK, 16) != 0) {
+        klog_write("[mm] context list init failed\n");
     }
 
     if (mm_context_init(&g_root_ctx, 0) == 0) {
@@ -613,12 +604,13 @@ mm_context_t *mm_context_get(uint32_t id) {
     if (id == g_root_ctx.id) {
         return &g_root_ctx;
     }
-    mm_context_t *table = mm_context_table();
-    uint32_t count = *mm_context_count_ptr();
-    for (uint32_t i = 0; i < count; ++i) {
-        if (table[i].id == id) {
-            return &table[i];
+    list_iter_t it;
+    mm_context_t *ctx = (mm_context_t *)list_first(&g_contexts, &it);
+    while (ctx) {
+        if (ctx->id == id) {
+            return ctx;
         }
+        ctx = (mm_context_t *)list_next(&it);
     }
     return 0;
 }
@@ -627,36 +619,46 @@ mm_context_t *mm_context_create(uint32_t id) {
     if (id == g_root_ctx.id) {
         return &g_root_ctx;
     }
-    uint32_t *count_ptr = mm_context_count_ptr();
-    mm_context_t *table = mm_context_table();
-    if (*count_ptr >= MM_MAX_CONTEXTS) {
+    if (mm_context_get(id)) {
         return 0;
     }
-    mm_context_t *ctx = &table[*count_ptr];
+    mm_context_t *ctx = (mm_context_t *)list_alloc(&g_contexts);
+    if (!ctx) {
+        return 0;
+    }
     if (mm_context_init(ctx, id) != 0) {
+        (void)list_remove(&g_contexts, ctx);
         return 0;
     }
     if (paging_create_address_space(&ctx->root_table) != 0) {
+        (void)list_remove(&g_contexts, ctx);
         return 0;
     }
     if (mm_context_alloc_region(ctx, 8, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER,
                                 MEM_REGION_WASM_LINEAR) != 0) {
+        paging_destroy_address_space(ctx->root_table);
+        (void)list_remove(&g_contexts, ctx);
         return 0;
     }
     if (mm_context_alloc_region(ctx, 2, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER,
                                 MEM_REGION_STACK) != 0) {
+        paging_destroy_address_space(ctx->root_table);
+        (void)list_remove(&g_contexts, ctx);
         return 0;
     }
     if (mm_context_alloc_region(ctx, 4, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER,
                                 MEM_REGION_HEAP) != 0) {
+        paging_destroy_address_space(ctx->root_table);
+        (void)list_remove(&g_contexts, ctx);
         return 0;
     }
     if (paging_verify_user_root(ctx->root_table, 1) != 0) {
         klog_write("[mm] verify user root failed\n");
         paging_dump_user_root_kernel_mappings(ctx->root_table);
+        paging_destroy_address_space(ctx->root_table);
+        (void)list_remove(&g_contexts, ctx);
         return 0;
     }
-    (*count_ptr)++;
     return ctx;
 }
 
@@ -664,29 +666,21 @@ int mm_context_destroy(uint32_t id) {
     if (id == g_root_ctx.id || id == 0) {
         return -1;
     }
-    uint32_t *count_ptr = mm_context_count_ptr();
-    mm_context_t *table = mm_context_table();
-    for (uint32_t i = 0; i < *count_ptr; ++i) {
-        mm_context_t *ctx = &table[i];
-        if (ctx->id != id) {
+    mm_context_t *ctx = mm_context_get(id);
+    if (!ctx) {
+        return -1;
+    }
+    for (uint32_t r = 0; r < ctx->region_count; ++r) {
+        mem_region_t *region = &ctx->regions[r];
+        if (region->phys_base == 0 || region->size == 0) {
             continue;
         }
-        for (uint32_t r = 0; r < ctx->region_count; ++r) {
-            mem_region_t *region = &ctx->regions[r];
-            if (region->phys_base == 0 || region->size == 0) {
-                continue;
-            }
-            uint64_t pages = (region->size + PAGE_SIZE - 1ULL) / PAGE_SIZE;
-            pfa_free_pages(region->phys_base, pages);
-        }
-        paging_destroy_address_space(ctx->root_table);
-        if (i + 1 < *count_ptr) {
-            table[i] = table[*count_ptr - 1];
-        }
-        (*count_ptr)--;
-        return 0;
+        uint64_t pages = (region->size + PAGE_SIZE - 1ULL) / PAGE_SIZE;
+        pfa_free_pages(region->phys_base, pages);
     }
-    return -1;
+    paging_destroy_address_space(ctx->root_table);
+    (void)list_remove(&g_contexts, ctx);
+    return 0;
 }
 
 int mm_context_activate(uint32_t id) {

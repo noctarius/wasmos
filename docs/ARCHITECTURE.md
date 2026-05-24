@@ -20,6 +20,8 @@ Process-manager context buffer tracking for filesystem/framebuffer borrows is
 now list-backed instead of fixed `PROCESS_MAX_COUNT` arrays.
 Kernel list internals now include an early-boot static-arena allocator fallback
 so list-backed modules can initialize before general heap allocation is ready.
+MM context registration and capability state tracking are now list-backed, so
+context growth is no longer bounded by static `MM_MAX_CONTEXTS` slot arrays.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

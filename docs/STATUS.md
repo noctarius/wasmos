@@ -54,6 +54,10 @@
 - Graphics/compositor now emits resize notifications (`GFX_EVENT_RESIZE`) to
   window owners during pointer-driven resize and maximize/restore toggles;
   current smoke validation reallocates and re-presents buffers on that event.
+- WASM-side `libui` scaffold now exists as shared headers (`wasmos/libui.h` in
+  libc + libsys mirrors), providing a small struct-based component tree
+  (`Panel`/`Label`/`Button`), app-owned IPC pass-through
+  (`ui_loop_handle_ipc`), and dirty-frame flush (`ui_loop_drain`).
 - Graphics/compositor design phase for text now targets a dedicated
   `font-service` (glyph rasterization + metrics + shared atlas IPC) instead of
   a fixed built-in compositor font path; current bring-up scope is TTF-only.
@@ -67,7 +71,8 @@
 - Graphics validation now also includes a wasm `gfx-smoke` app available under
   `/boot/apps/gfx_smoke.wap` for manual CLI execution, keeping compositor tests
   opt-in at runtime instead of sysinit auto-spawn; the smoke scenario now
-  covers two concurrent windows and close-event teardown of each window.
+  covers two concurrent windows and close-event teardown of each window, plus
+  a `libui` component demo window.
 - Native-driver ABI now includes endpoint-owner lookup and shmem grant
   callbacks so native services (including `gfx-compositor`) can share
   compositor-owned shmem buffers with requesting wasm clients.

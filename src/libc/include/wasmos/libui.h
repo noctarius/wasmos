@@ -27,7 +27,8 @@ typedef enum {
     UI_COMPONENT_NONE = 0,
     UI_COMPONENT_PANEL = 1,
     UI_COMPONENT_LABEL = 2,
-    UI_COMPONENT_BUTTON = 3
+    UI_COMPONENT_BUTTON = 3,
+    UI_COMPONENT_CHECKBOX = 4
 } ui_component_type_t;
 
 typedef struct {
@@ -58,6 +59,7 @@ typedef struct {
     int32_t gap_px;
     int32_t clickable;
     int32_t pressed;
+    int32_t checked;
     char text[UI_TEXT_MAX];
     ui_button_click_cb_t on_click;
     void *on_click_user;
@@ -117,6 +119,74 @@ ui_stroke_rect(uint8_t *base, int32_t bw, int32_t bh, ui_rect_t r, int32_t borde
     ui_fill_rect(base, bw, bh, r.x, r.y + r.h - border_px, r.w, border_px, color);
     ui_fill_rect(base, bw, bh, r.x, r.y, border_px, r.h, color);
     ui_fill_rect(base, bw, bh, r.x + r.w - border_px, r.y, border_px, r.h, color);
+}
+
+static inline uint8_t
+ui_glyph5x7(char ch, int32_t row)
+{
+    if (row < 0 || row > 6) return 0;
+    if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
+    switch (ch) {
+        case 'a': { static const uint8_t g[7] = {0x00,0x0E,0x01,0x0F,0x11,0x0F,0x00}; return g[row]; }
+        case 'b': { static const uint8_t g[7] = {0x10,0x10,0x1E,0x11,0x11,0x1E,0x00}; return g[row]; }
+        case 'c': { static const uint8_t g[7] = {0x00,0x0E,0x11,0x10,0x11,0x0E,0x00}; return g[row]; }
+        case 'd': { static const uint8_t g[7] = {0x01,0x01,0x0F,0x11,0x11,0x0F,0x00}; return g[row]; }
+        case 'e': { static const uint8_t g[7] = {0x00,0x0E,0x11,0x1F,0x10,0x0E,0x00}; return g[row]; }
+        case 'f': { static const uint8_t g[7] = {0x06,0x08,0x1E,0x08,0x08,0x08,0x00}; return g[row]; }
+        case 'g': { static const uint8_t g[7] = {0x00,0x0F,0x11,0x11,0x0F,0x01,0x0E}; return g[row]; }
+        case 'h': { static const uint8_t g[7] = {0x10,0x10,0x1E,0x11,0x11,0x11,0x00}; return g[row]; }
+        case 'i': { static const uint8_t g[7] = {0x04,0x00,0x0C,0x04,0x04,0x0E,0x00}; return g[row]; }
+        case 'j': { static const uint8_t g[7] = {0x02,0x00,0x06,0x02,0x12,0x12,0x0C}; return g[row]; }
+        case 'k': { static const uint8_t g[7] = {0x10,0x12,0x14,0x18,0x14,0x12,0x00}; return g[row]; }
+        case 'l': { static const uint8_t g[7] = {0x0C,0x04,0x04,0x04,0x04,0x0E,0x00}; return g[row]; }
+        case 'm': { static const uint8_t g[7] = {0x00,0x1A,0x15,0x15,0x15,0x15,0x00}; return g[row]; }
+        case 'n': { static const uint8_t g[7] = {0x00,0x1E,0x11,0x11,0x11,0x11,0x00}; return g[row]; }
+        case 'o': { static const uint8_t g[7] = {0x00,0x0E,0x11,0x11,0x11,0x0E,0x00}; return g[row]; }
+        case 'p': { static const uint8_t g[7] = {0x00,0x1E,0x11,0x11,0x1E,0x10,0x10}; return g[row]; }
+        case 'q': { static const uint8_t g[7] = {0x00,0x0F,0x11,0x11,0x0F,0x01,0x01}; return g[row]; }
+        case 'r': { static const uint8_t g[7] = {0x00,0x16,0x19,0x10,0x10,0x10,0x00}; return g[row]; }
+        case 's': { static const uint8_t g[7] = {0x00,0x0F,0x10,0x0E,0x01,0x1E,0x00}; return g[row]; }
+        case 't': { static const uint8_t g[7] = {0x08,0x1E,0x08,0x08,0x09,0x06,0x00}; return g[row]; }
+        case 'u': { static const uint8_t g[7] = {0x00,0x11,0x11,0x11,0x13,0x0D,0x00}; return g[row]; }
+        case 'v': { static const uint8_t g[7] = {0x00,0x11,0x11,0x11,0x0A,0x04,0x00}; return g[row]; }
+        case 'w': { static const uint8_t g[7] = {0x00,0x11,0x15,0x15,0x15,0x0A,0x00}; return g[row]; }
+        case 'x': { static const uint8_t g[7] = {0x00,0x11,0x0A,0x04,0x0A,0x11,0x00}; return g[row]; }
+        case 'y': { static const uint8_t g[7] = {0x00,0x11,0x11,0x0F,0x01,0x11,0x0E}; return g[row]; }
+        case 'z': { static const uint8_t g[7] = {0x00,0x1F,0x02,0x04,0x08,0x1F,0x00}; return g[row]; }
+        case '0': { static const uint8_t g[7] = {0x0E,0x11,0x13,0x15,0x19,0x11,0x0E}; return g[row]; }
+        case '1': { static const uint8_t g[7] = {0x04,0x0C,0x14,0x04,0x04,0x04,0x1F}; return g[row]; }
+        case '2': { static const uint8_t g[7] = {0x0E,0x11,0x01,0x02,0x04,0x08,0x1F}; return g[row]; }
+        case '3': { static const uint8_t g[7] = {0x1E,0x01,0x01,0x06,0x01,0x01,0x1E}; return g[row]; }
+        case '4': { static const uint8_t g[7] = {0x02,0x06,0x0A,0x12,0x1F,0x02,0x02}; return g[row]; }
+        case '5': { static const uint8_t g[7] = {0x1F,0x10,0x1E,0x01,0x01,0x11,0x0E}; return g[row]; }
+        case '6': { static const uint8_t g[7] = {0x06,0x08,0x10,0x1E,0x11,0x11,0x0E}; return g[row]; }
+        case '7': { static const uint8_t g[7] = {0x1F,0x01,0x02,0x04,0x08,0x08,0x08}; return g[row]; }
+        case '8': { static const uint8_t g[7] = {0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E}; return g[row]; }
+        case '9': { static const uint8_t g[7] = {0x0E,0x11,0x11,0x0F,0x01,0x02,0x0C}; return g[row]; }
+        case '-': { static const uint8_t g[7] = {0x00,0x00,0x00,0x1F,0x00,0x00,0x00}; return g[row]; }
+        case ':': { static const uint8_t g[7] = {0x00,0x04,0x00,0x00,0x04,0x00,0x00}; return g[row]; }
+        case ' ': return 0x00;
+        default:  { static const uint8_t g[7] = {0x1F,0x11,0x15,0x11,0x15,0x11,0x1F}; return g[row]; }
+    }
+}
+
+static inline void
+ui_draw_text(uint8_t *base, int32_t bw, int32_t bh, int32_t x, int32_t y, const char *text, uint32_t color)
+{
+    if (!base || !text) return;
+    int32_t cx = x;
+    for (size_t i = 0; text[i] != '\0'; ++i) {
+        const char ch = text[i];
+        for (int32_t row = 0; row < 7; ++row) {
+            const uint8_t bits = ui_glyph5x7(ch, row);
+            for (int32_t col = 0; col < 5; ++col) {
+                if ((bits >> (4 - col)) & 1u) {
+                    ui_fill_rect(base, bw, bh, cx + col, y + row, 1, 1, color);
+                }
+            }
+        }
+        cx += 6;
+    }
 }
 
 static inline int32_t
@@ -195,6 +265,7 @@ ui_component_alloc(ui_context_t *ctx, ui_component_type_t type)
             c->gap_px = 6;
             c->clickable = 0;
             c->pressed = 0;
+            c->checked = 0;
             c->text[0] = '\0';
             c->on_click = 0;
             c->on_click_user = 0;
@@ -232,6 +303,7 @@ ui_component_append_child(ui_context_t *ctx, int32_t parent_id, int32_t child_id
 static inline int32_t ui_component_create_panel(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_PANEL); }
 static inline int32_t ui_component_create_label(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_LABEL); }
 static inline int32_t ui_component_create_button(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_BUTTON); }
+static inline int32_t ui_component_create_checkbox(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_CHECKBOX); }
 
 static inline void
 ui_component_set_text(ui_context_t *ctx, int32_t id, const char *text)
@@ -255,6 +327,14 @@ ui_component_set_button_action(ui_context_t *ctx, int32_t id, ui_button_click_cb
     c->clickable = 1;
     c->on_click = cb;
     c->on_click_user = user;
+}
+
+static inline void
+ui_component_set_checked(ui_context_t *ctx, int32_t id, int32_t checked)
+{
+    ui_component_t *c = ui_component_by_id(ctx, id);
+    if (!c || c->type != UI_COMPONENT_CHECKBOX) return;
+    c->checked = checked ? 1 : 0;
 }
 
 static inline void ui_mark_dirty(ui_context_t *ctx) { if (ctx) ctx->dirty = 1; }
@@ -383,15 +463,32 @@ ui_render_component(ui_context_t *ctx, int32_t id)
     ui_fill_rect(ctx->mapped_base, ctx->width, ctx->height,
                  c->bounds.x, c->bounds.y, c->bounds.w, c->bounds.h, c->bg_color);
     if (c->type == UI_COMPONENT_LABEL) {
-        ui_fill_rect(ctx->mapped_base, ctx->width, ctx->height,
-                     c->bounds.x + 6, c->bounds.y + c->bounds.h / 2 - 1,
-                     c->bounds.w - 12, 2, c->fg_color);
+        const int32_t tx = c->bounds.x + c->padding_px;
+        const int32_t ty = c->bounds.y + (c->bounds.h - 7) / 2;
+        ui_draw_text(ctx->mapped_base, ctx->width, ctx->height, tx, ty, c->text, c->fg_color);
     } else if (c->type == UI_COMPONENT_BUTTON) {
         const uint32_t inner = c->pressed ? 0xFF2B6AA0u : 0xFF4B91CCu;
         ui_fill_rect(ctx->mapped_base, ctx->width, ctx->height,
                      c->bounds.x + 2, c->bounds.y + 2, c->bounds.w - 4, c->bounds.h - 4, inner);
-        ui_fill_rect(ctx->mapped_base, ctx->width, ctx->height,
-                     c->bounds.x + 8, c->bounds.y + c->bounds.h / 2 - 1, c->bounds.w - 16, 2, 0xFFFFFFFFu);
+        ui_draw_text(ctx->mapped_base, ctx->width, ctx->height,
+                     c->bounds.x + c->padding_px,
+                     c->bounds.y + (c->bounds.h - 7) / 2,
+                     c->text,
+                     0xFFFFFFFFu);
+    } else if (c->type == UI_COMPONENT_CHECKBOX) {
+        const int32_t box = c->bounds.h > 16 ? 16 : c->bounds.h - 4;
+        const int32_t bx = c->bounds.x + c->padding_px;
+        const int32_t by = c->bounds.y + (c->bounds.h - box) / 2;
+        ui_fill_rect(ctx->mapped_base, ctx->width, ctx->height, bx, by, box, box, 0xFF2B3440u);
+        ui_stroke_rect(ctx->mapped_base, ctx->width, ctx->height, (ui_rect_t){bx, by, box, box}, 1, 0xFF9CB6CEu);
+        if (c->checked) {
+            ui_fill_rect(ctx->mapped_base, ctx->width, ctx->height, bx + 4, by + 4, box - 8, box - 8, 0xFF66CC88u);
+        }
+        ui_draw_text(ctx->mapped_base, ctx->width, ctx->height,
+                     bx + box + 8,
+                     c->bounds.y + (c->bounds.h - 7) / 2,
+                     c->text,
+                     c->fg_color);
     }
     ui_stroke_rect(ctx->mapped_base, ctx->width, ctx->height, c->bounds, c->border_px, c->border_color);
     int32_t child_id = c->first_child_id;
@@ -466,6 +563,9 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
             const int32_t hit_id = ui_find_clickable_at(ctx, ctx->root_id, ctx->pointer_x, ctx->pointer_y);
             ui_component_t *hit = ui_component_by_id(ctx, hit_id);
             if (hit && hit->pressed && hit->on_click) {
+                if (hit->type == UI_COMPONENT_CHECKBOX) {
+                    hit->checked = hit->checked ? 0 : 1;
+                }
                 hit->on_click(ctx, hit->id, hit->on_click_user);
             }
             for (int32_t i = 0; i < UI_MAX_COMPONENTS; ++i) {

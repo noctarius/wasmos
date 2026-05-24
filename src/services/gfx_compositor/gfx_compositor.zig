@@ -24,15 +24,16 @@ const PAGE_SIZE: u64 = 4096;
 const CURSOR_W: i32 = 9;
 const CURSOR_H: i32 = 14;
 const CHROME_BORDER: i32 = 1;
-const CHROME_TITLE_H: i32 = 18;
-const CHROME_CLOSE_SZ: i32 = 10;
-const CHROME_CLOSE_PAD: i32 = 2;
-const CHROME_MAX_SZ: i32 = 10;
-const CHROME_MAX_PAD: i32 = 2;
-const CHROME_BTN_GAP: i32 = 2;
-const CHROME_CLOSE_HIT_W: i32 = 24;
-const CHROME_MAX_HIT_W: i32 = 24;
+const CHROME_TITLE_H: i32 = 24;
+const CHROME_CLOSE_SZ: i32 = 14;
+const CHROME_CLOSE_PAD: i32 = 3;
+const CHROME_MAX_SZ: i32 = 14;
+const CHROME_MAX_PAD: i32 = 3;
+const CHROME_BTN_GAP: i32 = 4;
+const CHROME_CLOSE_HIT_W: i32 = 30;
+const CHROME_MAX_HIT_W: i32 = 30;
 const CHROME_RESIZE_HANDLE_SZ: i32 = 12;
+const CHROME_TITLE_FONT_PX: u32 = 14;
 
 var g_api: ?*c.wasmos_driver_api_t = null;
 var g_proc_endpoint: u32 = IPC_ENDPOINT_NONE;
@@ -286,7 +287,7 @@ fn open_title_font_handle() i32 {
     var reply: c.nd_ipc_message_t = undefined;
     const req_id = g_runtime_lookup_req_id;
     g_runtime_lookup_req_id +%= 1;
-    if (font_ipc_call_budgeted(g_font_endpoint, req_id, c.FONT_IPC_OPEN_FONT_REQ, c.FONT_ID_ROBOTO, 10, 0, 0, &reply, 32) != 0) {
+    if (font_ipc_call_budgeted(g_font_endpoint, req_id, c.FONT_IPC_OPEN_FONT_REQ, c.FONT_ID_ROBOTO, CHROME_TITLE_FONT_PX, 0, 0, &reply, 32) != 0) {
         return -1;
     }
     if (reply.type != c.FONT_IPC_RESP or @as(i32, @bitCast(reply.arg0)) != c.FONT_STATUS_OK) {
@@ -1501,7 +1502,7 @@ fn draw_window_title_text(win: window_slot_t, clip: c.gfx_rect_t) void {
     const cr = window_close_rect(win);
     const title_clip = window_title_rect(win);
     var pen_x: i32 = win.x + CHROME_BORDER + 4;
-    const base_y: i32 = win.y + CHROME_TITLE_H - 6;
+    const base_y: i32 = win.y + CHROME_TITLE_H - 7;
     var label: [24]u8 = undefined;
     const prefix = "win ";
     var n: usize = 0;

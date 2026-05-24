@@ -1,5 +1,4 @@
 #include "list_internal.h"
-#include "stdlib.h"
 #include "string.h"
 
 typedef struct list_linked_node {
@@ -18,10 +17,10 @@ list_linked_destroy(list_t *list)
     list_linked_node_t *node = state ? state->head : 0;
     while (node) {
         list_linked_node_t *next = node->next;
-        free(node);
+        list_free_mem(node);
         node = next;
     }
-    free(state);
+    list_free_mem(state);
 }
 
 static void *
@@ -29,7 +28,7 @@ list_linked_alloc(list_t *list)
 {
     list_linked_state_t *state = (list_linked_state_t *)list->impl_state;
     uint64_t size = sizeof(list_linked_node_t) + list->elem_size;
-    list_linked_node_t *node = (list_linked_node_t *)malloc((size_t)size);
+    list_linked_node_t *node = (list_linked_node_t *)list_alloc_mem((size_t)size);
     if (!state || !node) {
         return 0;
     }
@@ -52,7 +51,7 @@ list_linked_remove(list_t *list, void *elem)
             } else {
                 state->head = node->next;
             }
-            free(node);
+            list_free_mem(node);
             return 0;
         }
         prev = node;
@@ -99,7 +98,7 @@ list_linked_impl_init(list_t *list)
     if (!list || list->elem_size == 0) {
         return -1;
     }
-    state = (list_linked_state_t *)malloc(sizeof(list_linked_state_t));
+    state = (list_linked_state_t *)list_alloc_mem(sizeof(list_linked_state_t));
     if (!state) {
         return -1;
     }

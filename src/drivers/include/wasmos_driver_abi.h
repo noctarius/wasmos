@@ -114,8 +114,16 @@ enum {
     FBTEXT_IPC_CONSOLE_MODE_REQ = 0x604, /* arg0: 0=ring off, 1=ring on */
     FBTEXT_IPC_GEOMETRY_REQ    = 0x605,  /* resp: arg0=cols arg1=rows */
     FBTEXT_IPC_GFX_OVERLAY_REQ = 0x606,  /* arg0: 0=unlock, 1=lock */
+    FBTEXT_IPC_QUERY_CAPS_REQ  = 0x607,  /* resp: arg0=FBTEXT_CAP_* bitmask */
+    FBTEXT_IPC_QUERY_MODES_REQ = 0x608,  /* req: arg0=index, resp: arg0=w arg1=h arg2=stride */
+    FBTEXT_IPC_SET_RESOLUTION_REQ = 0x609, /* req: arg0=w arg1=h */
     FBTEXT_IPC_RESP            = 0x680,
     FBTEXT_IPC_ERROR           = 0x6FF
+};
+
+enum {
+    FBTEXT_CAP_SET_RESOLUTION = 1u << 0,
+    FBTEXT_CAP_QUERY_MODES    = 1u << 1
 };
 
 enum {

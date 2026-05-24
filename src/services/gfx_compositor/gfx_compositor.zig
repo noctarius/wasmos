@@ -421,6 +421,23 @@ fn log_fb_geometry_probe() void {
     }
 }
 
+fn log_fb_capabilities_probe() void {
+    var reply: c.nd_ipc_message_t = undefined;
+    const req_id: u32 = GFX_REQUEST_BASE + GFX_FB_LOOKUP_RETRIES + 10;
+    if (ipc_call(g_fb_endpoint, req_id, c.FBTEXT_IPC_QUERY_CAPS_REQ, 0, 0, 0, 0, &reply) != 0) {
+        return;
+    }
+    if (reply.type != c.FBTEXT_IPC_RESP) {
+        return;
+    }
+    if ((reply.arg0 & c.FBTEXT_CAP_SET_RESOLUTION) != 0 and
+        (reply.arg0 & c.FBTEXT_CAP_QUERY_MODES) != 0 and
+        reply.arg1 != 0)
+    {
+        logMsg("[gfx] fb mode-switch ipc available\n");
+    }
+}
+
 fn try_switch_to_gfx_tty() void {
     if (g_vt_endpoint == IPC_ENDPOINT_NONE) return;
     var reply: c.nd_ipc_message_t = undefined;
@@ -1759,6 +1776,7 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
             _ = subscribe_mouse();
         }
         log_fb_geometry_probe();
+        log_fb_capabilities_probe();
         logMsg("[test] gfx compositor handshake ok\n");
     }
 

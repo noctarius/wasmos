@@ -27,12 +27,39 @@
 #define ND_IPC_EMPTY 1
 
 #define EARLY_LOG_BUF 4096
+#define BGA_INDEX_PORT 0x01CEu
+#define BGA_DATA_PORT  0x01CFu
+#define BGA_REG_XRES   0x0001u
+#define BGA_REG_YRES   0x0002u
+#define BGA_REG_BPP    0x0003u
+#define BGA_REG_ENABLE 0x0004u
+#define BGA_ENABLED    0x0001u
+#define BGA_LFB_ENABLED 0x0040u
 
 static fbtext_state_t g_state;
 static uint8_t        g_early_log_buf[EARLY_LOG_BUF];
 static uint8_t        g_console_ring_enabled = 1;
 static uint8_t        g_text_plane_enabled = 1;
 static uint8_t        g_gfx_overlay_lock = 0;
+static uint32_t       g_fb_bytes_limit = 0;
+
+typedef struct {
+    uint16_t width;
+    uint16_t height;
+} fb_mode_t;
+
+static const fb_mode_t g_modes[] = {
+    {640u, 480u},
+    {800u, 600u},
+    {1024u, 768u},
+    {1152u, 864u},
+    {1280u, 720u},
+    {1280u, 800u},
+    {1280u, 1024u},
+    {1366u, 768u},
+    {1440u, 900u},
+    {1600u, 900u}
+};
 
 static int
 str_len(const char *s)
@@ -60,6 +87,124 @@ write_hex32(wasmos_driver_api_t *api, const char *label, uint32_t v)
     for (int s = 28; s >= 0; s -= 4) buf[i++] = hx[(v >> s) & 0xF];
     buf[i] = '\0';
     api->console_write(buf, i);
+}
+
+static uint32_t
+mode_map_bytes(uint32_t stride, uint32_t height)
+{
+    uint64_t bytes = (uint64_t)stride * (uint64_t)height * 4u;
+    if (bytes > 0xFFFFFFFFu) {
+        return 0;
+    }
+    return (uint32_t)bytes;
+}
+
+static int
+mode_fits_boot_map(uint32_t width, uint32_t height)
+{
+    if (width == 0 || height == 0 || g_fb_bytes_limit == 0) {
+        return 0;
+    }
+    return mode_map_bytes(width, height) <= g_fb_bytes_limit;
+}
+
+static int
+find_mode(uint32_t width, uint32_t height, uint32_t *out_index, uint32_t *out_stride)
+{
+    uint32_t i;
+    if (out_index) {
+        *out_index = 0;
+    }
+    if (out_stride) {
+        *out_stride = width;
+    }
+    for (i = 0; i < (uint32_t)(sizeof(g_modes) / sizeof(g_modes[0])); ++i) {
+        if ((uint32_t)g_modes[i].width == width &&
+            (uint32_t)g_modes[i].height == height) {
+            if (out_index) {
+                *out_index = i;
+            }
+            if (out_stride) {
+                *out_stride = (uint32_t)g_modes[i].width;
+            }
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static int
+query_mode_by_index(uint32_t index, uint32_t *out_width, uint32_t *out_height, uint32_t *out_stride)
+{
+    uint32_t total = (uint32_t)(sizeof(g_modes) / sizeof(g_modes[0]));
+    uint32_t seen = 0;
+    uint32_t i;
+    for (i = 0; i < total; ++i) {
+        uint32_t w = (uint32_t)g_modes[i].width;
+        uint32_t h = (uint32_t)g_modes[i].height;
+        if (!mode_fits_boot_map(w, h)) {
+            continue;
+        }
+        if (seen == index) {
+            if (out_width) {
+                *out_width = w;
+            }
+            if (out_height) {
+                *out_height = h;
+            }
+            if (out_stride) {
+                *out_stride = w;
+            }
+            return 0;
+        }
+        ++seen;
+    }
+    return -1;
+}
+
+static uint32_t
+count_supported_modes(void)
+{
+    uint32_t total = (uint32_t)(sizeof(g_modes) / sizeof(g_modes[0]));
+    uint32_t count = 0;
+    uint32_t i;
+    for (i = 0; i < total; ++i) {
+        if (mode_fits_boot_map((uint32_t)g_modes[i].width,
+                               (uint32_t)g_modes[i].height)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+static void
+bga_write_reg(wasmos_driver_api_t *api, uint16_t reg, uint16_t value)
+{
+    api->io_out16(BGA_INDEX_PORT, reg);
+    api->io_out16(BGA_DATA_PORT, value);
+}
+
+static int
+set_resolution(wasmos_driver_api_t *api, uint32_t width, uint32_t height)
+{
+    uint32_t stride = 0;
+    if (!api || !api->io_out16 || width > 0xFFFFu || height > 0xFFFFu) {
+        return -1;
+    }
+    if (find_mode(width, height, 0, &stride) != 0) {
+        return -1;
+    }
+    if (!mode_fits_boot_map(stride, height)) {
+        return -2;
+    }
+    bga_write_reg(api, BGA_REG_ENABLE, 0u);
+    bga_write_reg(api, BGA_REG_XRES, (uint16_t)width);
+    bga_write_reg(api, BGA_REG_YRES, (uint16_t)height);
+    bga_write_reg(api, BGA_REG_BPP, 32u);
+    bga_write_reg(api, BGA_REG_ENABLE, (uint16_t)(BGA_ENABLED | BGA_LFB_ENABLED));
+    fbtext_render_init(&g_state, g_state.fb, stride, width, height);
+    fbtext_clear(&g_state);
+    return 0;
 }
 
 static void
@@ -161,6 +306,7 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
 
     /* Compute map size from boot geometry (32bpp = 4 bytes/pixel). */
     uint32_t size = fb_stride * fb_height * 4u;
+    g_fb_bytes_limit = size;
     size = (size + 0xFFFu) & ~0xFFFu;
 
     write_str(api, "[framebuffer] mapping\n");
@@ -292,6 +438,35 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
         case FBTEXT_IPC_GFX_OVERLAY_REQ:
             g_gfx_overlay_lock = (msg.arg0 != 0) ? 1u : 0u;
             break;
+        case FBTEXT_IPC_QUERY_CAPS_REQ:
+            resp.arg0 = FBTEXT_CAP_SET_RESOLUTION | FBTEXT_CAP_QUERY_MODES;
+            resp.arg1 = count_supported_modes();
+            break;
+        case FBTEXT_IPC_QUERY_MODES_REQ: {
+            uint32_t w = 0;
+            uint32_t h = 0;
+            uint32_t stride = 0;
+            if (query_mode_by_index(msg.arg0, &w, &h, &stride) != 0) {
+                resp.type = FBTEXT_IPC_ERROR;
+                resp.arg0 = (uint32_t)-1;
+                break;
+            }
+            resp.arg0 = w;
+            resp.arg1 = h;
+            resp.arg2 = stride;
+            break;
+        }
+        case FBTEXT_IPC_SET_RESOLUTION_REQ: {
+            int set_rc = set_resolution(api, msg.arg0, msg.arg1);
+            if (set_rc != 0) {
+                resp.type = FBTEXT_IPC_ERROR;
+                resp.arg0 = (set_rc == -2) ? (uint32_t)-3 : (uint32_t)-1;
+                break;
+            }
+            resp.arg0 = msg.arg0;
+            resp.arg1 = msg.arg1;
+            break;
+        }
         default:
             resp.type = FBTEXT_IPC_ERROR;
             resp.arg0 = (uint32_t)-1;

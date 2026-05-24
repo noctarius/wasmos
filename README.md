@@ -39,6 +39,7 @@ It defines repository workflow and documentation/update conventions.
 - Kernel list internals support early-boot fallback allocation (static arena) so list-backed subsystems can initialize before general heap allocators are fully available.
 - Borrow-based DMA path is integrated across capability contract, hostcalls, spawn transport, and storage/framebuffer paths (with validated fallback behavior).
 - Graphics stack is active: framebuffer driver, native Zig `gfx-compositor`, shared-buffer present/damage model, and app-facing IPC ABI.
+- Framebuffer control IPC now supports runtime capability/mode discovery; the PCI framebuffer variant supports constrained resolution switching while the UEFI-backed variant reports it as unsupported.
 - Compositor interaction supports focus/z-order, pointer/key events, move/resize/close window controls, software cursor/chrome, and live resize notifications.
 - Native Zig `font-service` scaffold is now available (`/boot/system/services/fontsvc.wap`) with TTF loading path and basic font-open/metrics IPC.
 - Native Zig `font-service` now runs on the shared native `libsys` reactor/intent pattern (single endpoint poll + request-id intent demux), including explicit warnings for unhandled IPC event types.

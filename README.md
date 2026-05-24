@@ -43,9 +43,10 @@ It defines repository workflow and documentation/update conventions.
 - Framebuffer control IPC now supports runtime capability/mode discovery; the PCI framebuffer variant supports constrained resolution switching while the UEFI-backed variant reports it as unsupported.
 - `gfx-compositor` now exposes `GFX_IPC_SET_DISPLAY_MODE` and performs framebuffer mode switch + framebuffer remap itself, so geometry/stride/pointer state is refreshed immediately after successful mode changes.
 - Compositor interaction supports focus/z-order, pointer/key events, move/resize/close/maximize window controls, software cursor/chrome, and live resize notifications (including maximize/restore resize events for client redraw).
+- WASM `libui` scaffold is now available as a shared component-tree helper (`src/libc/include/wasmos/libui.h` mirrored in `src/libsys/wasm/include/wasmos/libui.h`) with `Panel`/`Label`/`Button` primitives plus app-owned IPC integration via `ui_loop_handle_ipc(...)` and frame flushing via `ui_loop_drain(...)`.
 - Native Zig `font-service` scaffold is now available (`/boot/system/services/fontsvc.wap`) with TTF loading path and basic font-open/metrics IPC.
 - Native Zig `font-service` now runs on the shared native `libsys` reactor/intent pattern (single endpoint poll + request-id intent demux), including explicit warnings for unhandled IPC event types.
-- Manual graphics smoke app (`/boot/apps/gfx_smoke.wap`) validates multi-window focus/raise/drag/resize/close behavior; PS/2 mouse driver is available at `/boot/system/drivers/mouse.wap`.
+- Manual graphics smoke app (`/boot/apps/gfx_smoke.wap`) validates multi-window focus/raise/drag/resize/close behavior and now includes a `libui` demo window; PS/2 mouse driver is available at `/boot/system/drivers/mouse.wap`.
 
 ## Quick Start
 

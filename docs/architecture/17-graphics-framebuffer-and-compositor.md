@@ -378,6 +378,13 @@ Current implementation notes:
 - A wasm smoke client now exists at `examples/c/gfx_smoke/gfx_smoke.c` and is
   copied to `/boot/apps/gfx_smoke.wap` for manual CLI launch
   (`/boot/apps/gfx_smoke`), avoiding automatic startup overlap with VT/CLI.
+- A wasm `libui` scaffold now exists as mirrored shared headers:
+  `src/libc/include/wasmos/libui.h` and
+  `src/libsys/wasm/include/wasmos/libui.h`.
+  It provides a small struct-based component tree (`Panel`/`Label`/`Button`),
+  app-owned IPC handoff (`ui_loop_handle_ipc` consumes compositor event
+  replies), and dirty-frame flush (`ui_loop_drain` performs layout/render +
+  `PRESENT_WINDOW`).
 
 ### Phase 1: Single-Mode Software Composition
 

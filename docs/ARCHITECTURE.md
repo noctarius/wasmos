@@ -16,6 +16,8 @@ remain deterministic in strict ring3 runs.
 
 Current baseline note: `fs-manager` no longer relies on a fixed-size client
 slot table; it grows client state in heap-backed chunks.
+Process-manager context buffer tracking for filesystem/framebuffer borrows is
+now list-backed instead of fixed `PROCESS_MAX_COUNT` arrays.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

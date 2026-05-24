@@ -375,28 +375,30 @@ ui_demo_button_click(ui_context_t *ctx, int32_t component_id, void *user)
     ui_mark_dirty(ctx);
 }
 
+static ui_context_t g_libui_ctx;
+
 static int
 run_libui_demo(int32_t proc_endpoint)
 {
-    ui_context_t ui;
+    ui_context_t *ui = &g_libui_ctx;
     int32_t click_count = 0;
-    if (ui_init(&ui, proc_endpoint, wasmos_ipc_create_endpoint(), 360, 220) != 0) {
+    if (ui_init(ui, proc_endpoint, wasmos_ipc_create_endpoint(), 360, 220) != 0) {
         puts("[test] libui demo init failed");
         return -1;
     }
 
-    int32_t label = ui_component_create_label(&ui);
-    int32_t button = ui_component_create_button(&ui);
-    int32_t panel = ui_component_create_panel(&ui);
+    int32_t label = ui_component_create_label(ui);
+    int32_t button = ui_component_create_button(ui);
+    int32_t panel = ui_component_create_panel(ui);
     if (label < 0 || button < 0 || panel < 0) {
-        ui_destroy(&ui);
+        ui_destroy(ui);
         return -1;
     }
-    ui_component_t *p = ui_component_by_id(&ui, panel);
-    ui_component_t *l = ui_component_by_id(&ui, label);
-    ui_component_t *b = ui_component_by_id(&ui, button);
+    ui_component_t *p = ui_component_by_id(ui, panel);
+    ui_component_t *l = ui_component_by_id(ui, label);
+    ui_component_t *b = ui_component_by_id(ui, button);
     if (!p || !l || !b) {
-        ui_destroy(&ui);
+        ui_destroy(ui);
         return -1;
     }
     p->preferred_h = 120;
@@ -407,32 +409,32 @@ run_libui_demo(int32_t proc_endpoint)
     l->bg_color = 0xFF2A3550u;
     b->preferred_h = 34;
     b->bg_color = 0xFF2A3550u;
-    ui_component_set_text(&ui, label, "libui label");
-    ui_component_set_text(&ui, button, "libui button");
-    ui_component_set_button_action(&ui, button, ui_demo_button_click, &click_count);
-    (void)ui_component_append_child(&ui, ui.root_id, panel);
-    (void)ui_component_append_child(&ui, panel, label);
-    (void)ui_component_append_child(&ui, panel, button);
-    ui_mark_dirty(&ui);
-    if (ui_loop_drain(&ui) != 0) {
-        ui_destroy(&ui);
+    ui_component_set_text(ui, label, "libui label");
+    ui_component_set_text(ui, button, "libui button");
+    ui_component_set_button_action(ui, button, ui_demo_button_click, &click_count);
+    (void)ui_component_append_child(ui, ui->root_id, panel);
+    (void)ui_component_append_child(ui, panel, label);
+    (void)ui_component_append_child(ui, panel, button);
+    ui_mark_dirty(ui);
+    if (ui_loop_drain(ui) != 0) {
+        ui_destroy(ui);
         return -1;
     }
 
     puts("[test] libui demo ready");
-    for (int32_t i = 0; i < 2200 && !ui.close_requested; ++i) {
+    for (int32_t i = 0; i < 2200 && !ui->close_requested; ++i) {
         wasmos_ipc_message_t ev_raw;
-        if (ui_send_gfx_raw(ui.gfx_endpoint, ui.reply_endpoint, ui.req_id++,
+        if (ui_send_gfx_raw(ui->gfx_endpoint, ui->reply_endpoint, ui->req_id++,
                             GFX_IPC_POLL_EVENT, 0, 0, 0, 0, &ev_raw) == 0) {
-            (void)ui_loop_handle_ipc(&ui, &ev_raw);
+            (void)ui_loop_handle_ipc(ui, &ev_raw);
         }
-        if (ui_loop_drain(&ui) != 0) {
-            ui_destroy(&ui);
+        if (ui_loop_drain(ui) != 0) {
+            ui_destroy(ui);
             return -1;
         }
         (void)wasmos_sched_yield();
     }
-    ui_destroy(&ui);
+    ui_destroy(ui);
     puts("[test] libui demo done");
     return 0;
 }

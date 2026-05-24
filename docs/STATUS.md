@@ -41,9 +41,10 @@
 - Graphics/compositor now also renders a software cursor overlay above window
   composition and repaints old/new cursor rectangles on movement, making
   pointer position/focus interactions directly visible during bring-up.
-- Graphics/compositor now also renders minimal window chrome (title/border and
-  a close button hit target) and emits `GFX_EVENT_CLOSE_REQUEST` for focused
-  clients when that close box is clicked.
+- Graphics/compositor now also renders minimal window chrome (title/border with
+  close + maximize/restore hit targets), emits `GFX_EVENT_CLOSE_REQUEST` when
+  close is clicked, and toggles maximized geometry with a second top-right
+  button.
 - Graphics/compositor pointer interaction now also includes title-bar
   drag-to-move behavior (close zone excluded), with window coordinates clamped
   to framebuffer extents.
@@ -51,8 +52,8 @@
   corner live-resize behavior with dimension clamping to framebuffer extents
   and window min/max policy limits.
 - Graphics/compositor now emits resize notifications (`GFX_EVENT_RESIZE`) to
-  window owners during pointer-driven resize; current smoke validation
-  reallocates and re-presents buffers on that event.
+  window owners during pointer-driven resize and maximize/restore toggles;
+  current smoke validation reallocates and re-presents buffers on that event.
 - Graphics/compositor design phase for text now targets a dedicated
   `font-service` (glyph rasterization + metrics + shared atlas IPC) instead of
   a fixed built-in compositor font path; current bring-up scope is TTF-only.

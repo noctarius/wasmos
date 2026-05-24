@@ -292,6 +292,18 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
         case FBTEXT_IPC_GFX_OVERLAY_REQ:
             g_gfx_overlay_lock = (msg.arg0 != 0) ? 1u : 0u;
             break;
+        case FBTEXT_IPC_QUERY_CAPS_REQ:
+            /* UEFI-backed path does not provide runtime mode switching. */
+            resp.arg0 = 0;
+            break;
+        case FBTEXT_IPC_QUERY_MODES_REQ:
+            resp.type = FBTEXT_IPC_ERROR;
+            resp.arg0 = (uint32_t)-3;
+            break;
+        case FBTEXT_IPC_SET_RESOLUTION_REQ:
+            resp.type = FBTEXT_IPC_ERROR;
+            resp.arg0 = (uint32_t)-3;
+            break;
         default:
             resp.type = FBTEXT_IPC_ERROR;
             resp.arg0 = (uint32_t)-1;

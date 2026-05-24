@@ -85,8 +85,18 @@ enum {
     FB_IPC_ALLOC_BUFFER,
     FB_IPC_PRESENT,
     FB_IPC_WAIT_VBLANK,
+    FB_IPC_QUERY_CAPS,
+    FB_IPC_QUERY_MODES,
 };
 ```
+
+Current VT/framebuffer control-plane note:
+- The native text framebuffer IPC now also supports capability and mode
+  discovery (`FBTEXT_IPC_QUERY_CAPS_REQ`, `FBTEXT_IPC_QUERY_MODES_REQ`) so
+  higher layers can detect runtime mode-switch support at runtime.
+- Only `framebuffer_pci` currently advertises mode switching and handles
+  `FBTEXT_IPC_SET_RESOLUTION_REQ`; the UEFI-backed `framebuffer` variant
+  returns unsupported for mode-query/set requests.
 
 Core payloads:
 

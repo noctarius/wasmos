@@ -70,9 +70,11 @@ The current tree already boots into a usable user-space stack:
   into process-manager state, so downstream VT instances receive a concrete
   framebuffer endpoint for switch clear/replay control instead of degrading to
   logical-only tty switching. The driver maps only the framebuffer byte range
-  captured by the bootloader and keeps the boot-provided geometry when Bochs
-  VBE reports a larger post-boot mode, preserving the kernel's framebuffer
-  mapping contract until explicit native-driver mode setting is introduced.
+  captured by the bootloader. The PCI framebuffer variant now exposes
+  capability/mode-query IPC plus constrained runtime mode switching across a
+  fixed Bochs-VBE mode list, limited to resolutions that fit inside that boot
+  mapping; the UEFI-backed framebuffer variant reports mode switching as
+  unsupported.
   It is launched from FAT by `device-manager` after the storage bootstrap
   completes, with the kernel early framebuffer covering pre-FAT diagnostics and
   panic rendering.

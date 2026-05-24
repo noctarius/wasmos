@@ -22,6 +22,8 @@
  */
 
 static process_t g_processes[PROCESS_MAX_COUNT];
+/* FIXME(process-list): migrate to kernel list storage after providing a
+ * boot-safe list allocator path for early scheduler init/spawn. */
 static uint32_t g_next_pid;
 static uint32_t g_last_index;
 static uint32_t g_current_pid;

@@ -2,6 +2,8 @@
 #include "process_manager_internal.h"
 #include "framebuffer.h"
 #include "physmem.h"
+#include "list.h"
+#include "string.h"
 
 typedef struct {
     uint8_t in_use;
@@ -16,62 +18,101 @@ typedef struct {
     uint32_t dma_length;
 } pm_fs_buffer_slot_t;
 
-static pm_fs_buffer_slot_t g_pm_fs_slots[PROCESS_MAX_COUNT];
-static pm_fs_buffer_slot_t g_pm_fb_slots[PROCESS_MAX_COUNT];
+static list_t g_pm_fs_slots;
+static list_t g_pm_fb_slots;
+static uint8_t g_pm_slots_initialized;
+
+static int
+pm_slots_init_once(void)
+{
+    if (g_pm_slots_initialized) {
+        return 0;
+    }
+    if (list_init(&g_pm_fs_slots, (uint32_t)sizeof(pm_fs_buffer_slot_t), LIST_IMPL_ARRAY_CHUNK, 16) != 0) {
+        return -1;
+    }
+    if (list_init(&g_pm_fb_slots, (uint32_t)sizeof(pm_fs_buffer_slot_t), LIST_IMPL_ARRAY_CHUNK, 16) != 0) {
+        return -1;
+    }
+    g_pm_slots_initialized = 1;
+    return 0;
+}
+
+static pm_fs_buffer_slot_t *
+pm_fs_slot_find_iter(uint32_t context_id, list_iter_t *out_iter)
+{
+    list_iter_t it;
+    pm_fs_buffer_slot_t *slot = 0;
+    if (pm_slots_init_once() != 0 || context_id == 0) {
+        return 0;
+    }
+    slot = (pm_fs_buffer_slot_t *)list_first(&g_pm_fs_slots, &it);
+    while (slot) {
+        if (slot->in_use && slot->context_id == context_id) {
+            if (out_iter) {
+                *out_iter = it;
+            }
+            return slot;
+        }
+        slot = (pm_fs_buffer_slot_t *)list_next(&it);
+    }
+    return 0;
+}
+
+static pm_fs_buffer_slot_t *
+pm_fb_slot_find_iter(uint32_t context_id, list_iter_t *out_iter)
+{
+    list_iter_t it;
+    pm_fs_buffer_slot_t *slot = 0;
+    if (pm_slots_init_once() != 0 || context_id == 0) {
+        return 0;
+    }
+    slot = (pm_fs_buffer_slot_t *)list_first(&g_pm_fb_slots, &it);
+    while (slot) {
+        if (slot->in_use && slot->context_id == context_id) {
+            if (out_iter) {
+                *out_iter = it;
+            }
+            return slot;
+        }
+        slot = (pm_fs_buffer_slot_t *)list_next(&it);
+    }
+    return 0;
+}
 
 static pm_fs_buffer_slot_t *
 pm_fs_slot_for_context(uint32_t context_id)
 {
-    pm_fs_buffer_slot_t *empty = 0;
+    pm_fs_buffer_slot_t *slot = 0;
     const uint64_t page_size = 4096u;
     const uint64_t pages = PM_FS_BUFFER_SIZE / page_size;
 
-    if (context_id == 0) {
+    if (pm_slots_init_once() != 0 || context_id == 0) {
         return 0;
     }
-
-    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        if (g_pm_fs_slots[i].in_use && g_pm_fs_slots[i].context_id == context_id) {
-            return &g_pm_fs_slots[i];
-        }
-        if (!empty && !g_pm_fs_slots[i].in_use) {
-            empty = &g_pm_fs_slots[i];
-        }
+    slot = pm_fs_slot_find_iter(context_id, 0);
+    if (slot) {
+        return slot;
     }
-
-    if (!empty) {
+    slot = (pm_fs_buffer_slot_t *)list_alloc(&g_pm_fs_slots);
+    if (!slot) {
         return 0;
     }
-    empty->in_use = 1;
-    empty->context_id = context_id;
-    empty->borrow_active = 0;
-    empty->borrow_flags = 0;
-    empty->borrow_source_context_id = 0;
-    empty->dma_mapped = 0;
-    empty->dma_direction_flags = 0;
-    empty->dma_offset = 0;
-    empty->dma_length = 0;
-    empty->buffer_phys = pfa_alloc_pages(pages);
-    if (empty->buffer_phys == 0) {
-        empty->in_use = 0;
-        empty->context_id = 0;
+    memset(slot, 0, sizeof(*slot));
+    slot->in_use = 1;
+    slot->context_id = context_id;
+    slot->buffer_phys = pfa_alloc_pages(pages);
+    if (slot->buffer_phys == 0) {
+        (void)list_remove(&g_pm_fs_slots, slot);
         return 0;
     }
-    return empty;
+    return slot;
 }
 
 static pm_fs_buffer_slot_t *
 pm_fs_slot_find(uint32_t context_id)
 {
-    if (context_id == 0) {
-        return 0;
-    }
-    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        if (g_pm_fs_slots[i].in_use && g_pm_fs_slots[i].context_id == context_id) {
-            return &g_pm_fs_slots[i];
-        }
-    }
-    return 0;
+    return pm_fs_slot_find_iter(context_id, 0);
 }
 
 static void *
@@ -152,49 +193,29 @@ pm_fs_buffer_borrow_flags(uint32_t context_id)
 static pm_fs_buffer_slot_t *
 pm_fb_slot_for_context(uint32_t context_id)
 {
-    pm_fs_buffer_slot_t *empty = 0;
+    pm_fs_buffer_slot_t *slot = 0;
 
-    if (context_id == 0) {
+    if (pm_slots_init_once() != 0 || context_id == 0) {
         return 0;
     }
-
-    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        if (g_pm_fb_slots[i].in_use && g_pm_fb_slots[i].context_id == context_id) {
-            return &g_pm_fb_slots[i];
-        }
-        if (!empty && !g_pm_fb_slots[i].in_use) {
-            empty = &g_pm_fb_slots[i];
-        }
+    slot = pm_fb_slot_find_iter(context_id, 0);
+    if (slot) {
+        return slot;
     }
-
-    if (!empty) {
+    slot = (pm_fs_buffer_slot_t *)list_alloc(&g_pm_fb_slots);
+    if (!slot) {
         return 0;
     }
-    empty->in_use = 1;
-    empty->context_id = context_id;
-    empty->borrow_active = 0;
-    empty->borrow_flags = 0;
-    empty->borrow_source_context_id = 0;
-    empty->dma_mapped = 0;
-    empty->dma_direction_flags = 0;
-    empty->dma_offset = 0;
-    empty->dma_length = 0;
-    empty->buffer_phys = 0;
-    return empty;
+    memset(slot, 0, sizeof(*slot));
+    slot->in_use = 1;
+    slot->context_id = context_id;
+    return slot;
 }
 
 static pm_fs_buffer_slot_t *
 pm_fb_slot_find(uint32_t context_id)
 {
-    if (context_id == 0) {
-        return 0;
-    }
-    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        if (g_pm_fb_slots[i].in_use && g_pm_fb_slots[i].context_id == context_id) {
-            return &g_pm_fb_slots[i];
-        }
-    }
-    return 0;
+    return pm_fb_slot_find_iter(context_id, 0);
 }
 
 static void *
@@ -364,16 +385,15 @@ process_manager_buffer_drop_context(uint32_t context_id)
 {
     const uint64_t page_size = 4096u;
     const uint64_t fs_pages = PM_FS_BUFFER_SIZE / page_size;
+    list_iter_t it;
+    pm_fs_buffer_slot_t *slot = 0;
 
-    if (context_id == 0) {
+    if (pm_slots_init_once() != 0 || context_id == 0) {
         return;
     }
 
-    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        pm_fs_buffer_slot_t *slot = &g_pm_fs_slots[i];
-        if (!slot->in_use) {
-            continue;
-        }
+    slot = (pm_fs_buffer_slot_t *)list_first(&g_pm_fs_slots, &it);
+    while (slot) {
         if (slot->borrow_active && slot->borrow_source_context_id == context_id) {
             slot->borrow_active = 0;
             slot->borrow_source_context_id = 0;
@@ -383,39 +403,18 @@ process_manager_buffer_drop_context(uint32_t context_id)
             slot->dma_offset = 0;
             slot->dma_length = 0;
         }
-        if (slot->context_id != context_id) {
-            continue;
-        }
+        slot = (pm_fs_buffer_slot_t *)list_next(&it);
+    }
+
+    while ((slot = pm_fs_slot_find(context_id)) != 0) {
         if (slot->buffer_phys != 0) {
             pfa_free_pages(slot->buffer_phys, fs_pages);
         }
-        slot->in_use = 0;
-        slot->context_id = 0;
-        slot->buffer_phys = 0;
-        slot->borrow_active = 0;
-        slot->borrow_flags = 0;
-        slot->borrow_source_context_id = 0;
-        slot->dma_mapped = 0;
-        slot->dma_direction_flags = 0;
-        slot->dma_offset = 0;
-        slot->dma_length = 0;
+        (void)list_remove(&g_pm_fs_slots, slot);
     }
 
-    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        pm_fs_buffer_slot_t *slot = &g_pm_fb_slots[i];
-        if (!slot->in_use || slot->context_id != context_id) {
-            continue;
-        }
-        slot->in_use = 0;
-        slot->context_id = 0;
-        slot->buffer_phys = 0;
-        slot->borrow_active = 0;
-        slot->borrow_flags = 0;
-        slot->borrow_source_context_id = 0;
-        slot->dma_mapped = 0;
-        slot->dma_direction_flags = 0;
-        slot->dma_offset = 0;
-        slot->dma_length = 0;
+    while ((slot = pm_fb_slot_find(context_id)) != 0) {
+        (void)list_remove(&g_pm_fb_slots, slot);
     }
 }
 

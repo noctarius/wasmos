@@ -56,8 +56,9 @@
   current smoke validation reallocates and re-presents buffers on that event.
 - WASM-side `libui` scaffold now exists as shared headers (`wasmos/libui.h` in
   libc + libsys mirrors), providing a small struct-based component tree
-  (`Panel`/`Label`/`Button`/`Checkbox`/`TextInput`), lightweight bitmap text
-  rendering, pointer focus + key-input editing for text inputs, and app-owned
+  (`Panel`/`Label`/`Button`/`Checkbox`/`TextInput`/`ScrollView`), lightweight
+  bitmap text rendering, pointer focus + key-input editing for text inputs,
+  clipped viewport rendering and drag scrolling for scroll views, and app-owned
   IPC pass-through
   (`ui_loop_handle_ipc`), and dirty-frame flush (`ui_loop_drain`).
 - Graphics/compositor design phase for text now targets a dedicated

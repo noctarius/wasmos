@@ -75,6 +75,9 @@ var g_fb_info: c.nd_framebuffer_info_t = .{
 };
 var g_fb_info_valid: bool = false;
 var g_fb_pixels: ?[*]volatile u32 = null;
+var g_backbuffer_pixels: ?[*]u32 = null;
+var g_backbuffer_shmem_id: u32 = 0;
+var g_backbuffer_capacity_bytes: u32 = 0;
 
 const window_slot_t = struct {
     in_use: bool = false,
@@ -546,6 +549,28 @@ fn refresh_framebuffer_mapping() i32 {
     g_fb_info_valid = true;
     g_fb_pixels = @ptrCast(@alignCast(fb_ptr.?));
     clamp_runtime_state_to_framebuffer();
+    return c.GFX_STATUS_OK;
+}
+
+fn ensure_backbuffer_capacity(required_bytes: u32) i32 {
+    if (required_bytes == 0) return c.GFX_STATUS_IO;
+    if (g_backbuffer_pixels != null and g_backbuffer_capacity_bytes >= required_bytes) return c.GFX_STATUS_OK;
+
+    const required_pages: u64 = (@as(u64, required_bytes) + (PAGE_SIZE - 1)) / PAGE_SIZE;
+    if (required_pages == 0) return c.GFX_STATUS_IO;
+
+    var shmem_id: u32 = 0;
+    var mapped_ptr: ?*anyopaque = null;
+    if (api().shmem_create.?(required_pages, 0, &shmem_id, @ptrCast(&mapped_ptr)) != 0 or shmem_id == 0 or mapped_ptr == null) {
+        logMsg("[gfx] backbuffer shmem_create failed\n");
+        return c.GFX_STATUS_IO;
+    }
+
+    // TODO(gfx-backbuffer-lifetime): native driver ABI does not expose
+    // shmem-destroy yet, so replaced backbuffers cannot be reclaimed.
+    g_backbuffer_shmem_id = shmem_id;
+    g_backbuffer_pixels = @ptrCast(@alignCast(mapped_ptr.?));
+    g_backbuffer_capacity_bytes = required_bytes;
     return c.GFX_STATUS_OK;
 }
 
@@ -1083,7 +1108,7 @@ fn window_buffer_in_use(buffer_id: u32) bool {
 }
 
 fn fill_rect(x0: i32, y0: i32, w: i32, h: i32, color: u32) void {
-    if (!g_fb_info_valid or g_fb_pixels == null or w <= 0 or h <= 0) return;
+    if (!g_fb_info_valid or g_backbuffer_pixels == null or w <= 0 or h <= 0) return;
     var sx = x0;
     var sy = y0;
     var ex = x0 + w;
@@ -1097,7 +1122,7 @@ fn fill_rect(x0: i32, y0: i32, w: i32, h: i32, color: u32) void {
     if (sx >= ex or sy >= ey) return;
 
     const stride: usize = @intCast(g_fb_info.framebuffer_stride);
-    const fb = g_fb_pixels.?;
+    const fb = g_backbuffer_pixels.?;
     var y = sy;
     while (y < ey) : (y += 1) {
         const row_base: usize = @as(usize, @intCast(y)) * stride;
@@ -1126,7 +1151,7 @@ fn cursor_rect_at(x: i32, y: i32) c.gfx_rect_t {
 }
 
 fn draw_cursor_overlay(region: c.gfx_rect_t) void {
-    if (!g_fb_info_valid or g_fb_pixels == null) return;
+    if (!g_fb_info_valid or g_backbuffer_pixels == null) return;
     const cr = cursor_rect_at(g_pointer_x, g_pointer_y);
     if (!rect_intersects(region, cr)) return;
 
@@ -1243,8 +1268,8 @@ fn blend_u8(dst: u32, src: u32, alpha: u8) u32 {
 }
 
 fn draw_glyph_mask(dst_x: i32, dst_y: i32, glyph_w: i32, glyph_h: i32, mask: [*]const u8, clip: c.gfx_rect_t, color: u32) void {
-    if (g_fb_pixels == null or !g_fb_info_valid) return;
-    const fb = g_fb_pixels.?;
+    if (g_backbuffer_pixels == null or !g_fb_info_valid) return;
+    const fb = g_backbuffer_pixels.?;
     const stride: usize = @intCast(g_fb_info.framebuffer_stride);
     var y: i32 = 0;
     while (y < glyph_h) : (y += 1) {
@@ -1416,7 +1441,7 @@ fn draw_window_title_text(win: window_slot_t, clip: c.gfx_rect_t) void {
 }
 
 fn draw_window_buffer(win: window_slot_t, buf: buffer_slot_t, clip: c.gfx_rect_t) bool {
-    if (g_fb_pixels == null) return false;
+    if (g_backbuffer_pixels == null) return false;
     const src_ptr_raw = api().shmem_map.?(buf.shmem_id);
     if (src_ptr_raw == null) {
         logMsg("[gfx] draw shmem_map failed\n");
@@ -1424,7 +1449,7 @@ fn draw_window_buffer(win: window_slot_t, buf: buffer_slot_t, clip: c.gfx_rect_t
     }
     defer _ = api().shmem_unmap.?(buf.shmem_id);
     const src_pixels: [*]const u32 = @ptrCast(@alignCast(src_ptr_raw.?));
-    const dst_pixels = g_fb_pixels.?;
+    const dst_pixels = g_backbuffer_pixels.?;
     const dst_stride: usize = @intCast(g_fb_info.framebuffer_stride);
 
     var y: i32 = 0;
@@ -1455,7 +1480,7 @@ fn draw_window_buffer(win: window_slot_t, buf: buffer_slot_t, clip: c.gfx_rect_t
 }
 
 fn compose_region(region: c.gfx_rect_t) i32 {
-    if (!g_fb_info_valid or region.w <= 0 or region.h <= 0) return c.GFX_STATUS_OK;
+    if (!g_fb_info_valid or g_fb_pixels == null or region.w <= 0 or region.h <= 0) return c.GFX_STATUS_OK;
 
     fill_rect(region.x, region.y, region.w, region.h, 0x101820);
 
@@ -1507,6 +1532,31 @@ fn compose_region(region: c.gfx_rect_t) i32 {
 
     if (g_overlay_locked) {
         draw_cursor_overlay(region);
+    }
+
+    const src = g_backbuffer_pixels orelse return c.GFX_STATUS_OK;
+    const dst = g_fb_pixels.?;
+    const stride: usize = @intCast(g_fb_info.framebuffer_stride);
+    const max_x: i32 = @intCast(g_fb_info.framebuffer_width);
+    const max_y: i32 = @intCast(g_fb_info.framebuffer_height);
+    var sx = region.x;
+    var sy = region.y;
+    var ex = region.x + region.w;
+    var ey = region.y + region.h;
+    if (sx < 0) sx = 0;
+    if (sy < 0) sy = 0;
+    if (ex > max_x) ex = max_x;
+    if (ey > max_y) ey = max_y;
+    if (sx >= ex or sy >= ey) return c.GFX_STATUS_OK;
+
+    var y: i32 = sy;
+    while (y < ey) : (y += 1) {
+        const row_base: usize = @as(usize, @intCast(y)) * stride;
+        var x: i32 = sx;
+        while (x < ex) : (x += 1) {
+            const idx: usize = row_base + @as(usize, @intCast(x));
+            dst[idx] = src[idx];
+        }
     }
 
     return c.GFX_STATUS_OK;
@@ -1847,6 +1897,13 @@ fn handle_set_display_mode(msg: *const c.nd_ipc_message_t) void {
         reply_with_status(msg, refresh_rc, 0, 0, 0);
         return;
     }
+    const fb_bytes_u64: u64 = @as(u64, g_fb_info.framebuffer_stride) * @as(u64, g_fb_info.framebuffer_height) * 4;
+    if (fb_bytes_u64 == 0 or fb_bytes_u64 > 0xFFFF_FFFF or
+        ensure_backbuffer_capacity(@intCast(fb_bytes_u64)) != c.GFX_STATUS_OK)
+    {
+        reply_with_status(msg, c.GFX_STATUS_IO, 0, 0, 0);
+        return;
+    }
     request_repaint_full();
     reply_with_status(msg, c.GFX_STATUS_OK, g_fb_info.framebuffer_width, g_fb_info.framebuffer_height, g_fb_info.framebuffer_stride);
 }
@@ -1944,6 +2001,13 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
     }
 
     if (refresh_framebuffer_mapping() == c.GFX_STATUS_OK) {
+        const fb_bytes_u64: u64 = @as(u64, g_fb_info.framebuffer_stride) * @as(u64, g_fb_info.framebuffer_height) * 4;
+        if (fb_bytes_u64 == 0 or fb_bytes_u64 > 0xFFFF_FFFF or
+            ensure_backbuffer_capacity(@intCast(fb_bytes_u64)) != c.GFX_STATUS_OK)
+        {
+            logMsg("[gfx] backbuffer init failed\n");
+            return -1;
+        }
         g_pointer_x = @intCast(g_fb_info.framebuffer_width / 2);
         g_pointer_y = @intCast(g_fb_info.framebuffer_height / 2);
     } else {

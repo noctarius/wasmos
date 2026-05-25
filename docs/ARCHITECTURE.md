@@ -28,6 +28,8 @@ WASM `libui` component-tree state is now heap-backed (dynamic component, text,
 and list-item storage) instead of fixed compile-time slot/text/item caps, and
 includes first shared form controls such as list views and dropdowns; text
 rendering is wired through `font-service` as a required dependency.
+Compositor pointer delivery to focused clients uses content-local coordinates,
+and window client buffers render in the content pane below chrome/titlebar.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

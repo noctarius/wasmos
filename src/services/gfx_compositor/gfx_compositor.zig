@@ -900,9 +900,13 @@ fn maybe_emit_pointer_event(dx: i32, dy: i32, buttons: u32, prev_buttons: u32) v
     if (g_focused_window_id == 0) return;
     if (window_find_by_id(g_focused_window_id)) |focused_idx| {
         const focused = g_windows[focused_idx];
-        if (dx != 0 or dy != 0 or buttons != prev_buttons) {
-            event_push(focused.owner_endpoint, c.GFX_EVENT_POINTER, pack_s16_pair(dx, dy), buttons, 0);
-        }
+        const cr = window_content_rect(focused);
+        if (cr.w <= 0 or cr.h <= 0) return;
+        if (!point_in_rect(g_pointer_x, g_pointer_y, cr)) return;
+        if (dx == 0 and dy == 0 and buttons == prev_buttons) return;
+        const rel_x = clamp(g_pointer_x - cr.x, 0, cr.w - 1);
+        const rel_y = clamp(g_pointer_y - cr.y, 0, cr.h - 1);
+        event_push(focused.owner_endpoint, c.GFX_EVENT_POINTER, pack_u16_pair(@intCast(rel_x), @intCast(rel_y)), buttons, 0);
     }
 }
 
@@ -1258,6 +1262,19 @@ fn window_resize_rect(win: window_slot_t) c.gfx_rect_t {
     };
 }
 
+fn window_content_rect(win: window_slot_t) c.gfx_rect_t {
+    const ww: i32 = @intCast(win.width);
+    const wh: i32 = @intCast(win.height);
+    const cw = ww - (CHROME_BORDER * 2);
+    const ch = wh - CHROME_TITLE_H - CHROME_BORDER;
+    return .{
+        .x = win.x + CHROME_BORDER,
+        .y = win.y + CHROME_TITLE_H,
+        .w = if (cw > 0) cw else 0,
+        .h = if (ch > 0) ch else 0,
+    };
+}
+
 fn point_in_rect(x: i32, y: i32, r: c.gfx_rect_t) bool {
     return x >= r.x and y >= r.y and x < r.x + r.w and y < r.y + r.h;
 }
@@ -1553,21 +1570,29 @@ fn draw_window_buffer(win: window_slot_t, buf: buffer_slot_t, clip: c.gfx_rect_t
     const src_pixels: [*]const u32 = @ptrCast(@alignCast(src_ptr_raw.?));
     const dst_pixels = g_backbuffer_pixels.?;
     const dst_stride: usize = @intCast(g_fb_info.framebuffer_stride);
+    const cr = window_content_rect(win);
+    if (cr.w <= 0 or cr.h <= 0 or !rect_intersects(clip, cr)) return true;
+    const x0 = if (clip.x > cr.x) clip.x else cr.x;
+    const y0 = if (clip.y > cr.y) clip.y else cr.y;
+    const x1 = if (clip.x + clip.w < cr.x + cr.w) clip.x + clip.w else cr.x + cr.w;
+    const y1 = if (clip.y + clip.h < cr.y + cr.h) clip.y + clip.h else cr.y + cr.h;
+    if (x0 >= x1 or y0 >= y1) return true;
+    const content_clip = c.gfx_rect_t{ .x = x0, .y = y0, .w = x1 - x0, .h = y1 - y0 };
 
     var y: i32 = 0;
-    while (y < clip.h) : (y += 1) {
+    while (y < content_clip.h) : (y += 1) {
         var x: i32 = 0;
-        while (x < clip.w) : (x += 1) {
-            const sx_i32 = (clip.x - win.x) + x;
-            const sy_i32 = (clip.y - win.y) + y;
+        while (x < content_clip.w) : (x += 1) {
+            const sx_i32 = (content_clip.x - cr.x) + x;
+            const sy_i32 = (content_clip.y - cr.y) + y;
             if (sx_i32 < 0 or sy_i32 < 0) continue;
             const sx: u32 = @intCast(sx_i32);
             const sy: u32 = @intCast(sy_i32);
             if (sx >= buf.width or sy >= buf.height) continue;
             const idx_u64 = @as(u64, sy) * @as(u64, buf.width) + @as(u64, sx);
             const src_idx: usize = @intCast(idx_u64);
-            const dx: usize = @intCast(clip.x + x);
-            const dy: usize = @intCast(clip.y + y);
+            const dx: usize = @intCast(content_clip.x + x);
+            const dy: usize = @intCast(content_clip.y + y);
             const dst_idx: usize = dy * dst_stride + dx;
             const px = src_pixels[src_idx];
             // Client buffers are treated as opaque RGB surfaces for now.

@@ -447,12 +447,20 @@ start_libui_demo(int32_t proc_endpoint)
     ui_component_set_text(ui, input, "type here");
     ui_component_set_button_action(ui, button, ui_demo_button_click, &g_libui_click_count);
     ui_component_set_button_action(ui, checkbox, ui_demo_button_click, &g_libui_click_count);
-    (void)ui_component_append_child(ui, ui->root_id, panel);
-    (void)ui_component_append_child(ui, panel, label);
-    (void)ui_component_append_child(ui, panel, button);
-    (void)ui_component_append_child(ui, panel, checkbox);
-    (void)ui_component_append_child(ui, panel, input);
-    (void)ui_component_append_child(ui, panel, list);
+    int a0 = ui_component_append_child(ui, ui->root_id, panel);
+    int a1 = ui_component_append_child(ui, panel, label);
+    int a2 = ui_component_append_child(ui, panel, button);
+    int a3 = ui_component_append_child(ui, panel, checkbox);
+    int a4 = ui_component_append_child(ui, panel, input);
+    int a5 = ui_component_append_child(ui, panel, list);
+    printf("[dbg-libui] ids root=%d panel=%d label=%d button=%d checkbox=%d input=%d list=%d\n",
+           ui->root_id, panel, label, button, checkbox, input, list);
+    printf("[dbg-libui] append rc root->panel=%d panel->label=%d button=%d checkbox=%d input=%d list=%d\n",
+           a0, a1, a2, a3, a4, a5);
+    printf("[dbg-libui] panel first_child=%d root first_child=%d panel bounds=%d,%d %dx%d\n",
+           p->first_child_id,
+           ui_component_by_id(ui, ui->root_id) ? ui_component_by_id(ui, ui->root_id)->first_child_id : -1,
+           p->bounds.x, p->bounds.y, p->bounds.w, p->bounds.h);
     ui_mark_dirty(ui);
     if (ui_loop_drain(ui) != 0) {
         ui_destroy(ui);

@@ -1,5 +1,4 @@
 #include <stdint.h>
-#include <string.h>
 #include "stdio.h"
 #include "wasmos/api.h"
 #include "wasmos/gfx_ipc.h"
@@ -447,45 +446,12 @@ start_libui_demo(int32_t proc_endpoint)
     ui_component_set_text(ui, input, "type here");
     ui_component_set_button_action(ui, button, ui_demo_button_click, &g_libui_click_count);
     ui_component_set_button_action(ui, checkbox, ui_demo_button_click, &g_libui_click_count);
-    {
-        int32_t w = 0, h = 0, x0 = 0, y0 = 0, adv = 0;
-        int32_t rc = ui_font_measure_text(ui, "libui component demo", &w, &h, &x0, &y0, &adv);
-        printf("[dbg-libui-font] measure rc=%d w=%d h=%d x0=%d y0=%d adv=%d\n", rc, w, h, x0, y0, adv);
-        if (rc == 0 && w > 0 && h > 0) {
-            const int32_t text_len = (int32_t)strlen("libui component demo");
-            int32_t rrc = ui_font_measure_and_raster_text(ui, "libui component demo", text_len, &w, &h, &x0, &y0, &adv);
-            int32_t b0 = -1, b1 = -1, b2 = -1, b3 = -1;
-            int32_t nonzero = 0, maxa = 0;
-            if (ui->font_mask_ptr && ui->font_mask_cap >= 4) {
-                b0 = ui->font_mask_ptr[0];
-                b1 = ui->font_mask_ptr[1];
-                b2 = ui->font_mask_ptr[2];
-                b3 = ui->font_mask_ptr[3];
-                const int32_t n = w * h;
-                for (int32_t i = 0; i < n && i < ui->font_mask_cap; ++i) {
-                    const int32_t a = ui->font_mask_ptr[i];
-                    if (a > 0) nonzero++;
-                    if (a > maxa) maxa = a;
-                }
-            }
-            printf("[dbg-libui-font] raster rc=%d cap=%d n=%d nz=%d max=%d b0=%d b1=%d b2=%d b3=%d\n",
-                   rrc, ui->font_mask_cap, (w * h), nonzero, maxa, b0, b1, b2, b3);
-        }
-    }
-    int a0 = ui_component_append_child(ui, ui->root_id, panel);
-    int a1 = ui_component_append_child(ui, panel, label);
-    int a2 = ui_component_append_child(ui, panel, button);
-    int a3 = ui_component_append_child(ui, panel, checkbox);
-    int a4 = ui_component_append_child(ui, panel, input);
-    int a5 = ui_component_append_child(ui, panel, list);
-    printf("[dbg-libui] ids root=%d panel=%d label=%d button=%d checkbox=%d input=%d list=%d\n",
-           ui->root_id, panel, label, button, checkbox, input, list);
-    printf("[dbg-libui] append rc root->panel=%d panel->label=%d button=%d checkbox=%d input=%d list=%d\n",
-           a0, a1, a2, a3, a4, a5);
-    printf("[dbg-libui] panel first_child=%d root first_child=%d panel bounds=%d,%d %dx%d\n",
-           p->first_child_id,
-           ui_component_by_id(ui, ui->root_id) ? ui_component_by_id(ui, ui->root_id)->first_child_id : -1,
-           p->bounds.x, p->bounds.y, p->bounds.w, p->bounds.h);
+    (void)ui_component_append_child(ui, ui->root_id, panel);
+    (void)ui_component_append_child(ui, panel, label);
+    (void)ui_component_append_child(ui, panel, button);
+    (void)ui_component_append_child(ui, panel, checkbox);
+    (void)ui_component_append_child(ui, panel, input);
+    (void)ui_component_append_child(ui, panel, list);
     ui_mark_dirty(ui);
     if (ui_loop_drain(ui) != 0) {
         ui_destroy(ui);

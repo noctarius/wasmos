@@ -35,6 +35,18 @@ const CHROME_CLOSE_HIT_W: i32 = 30;
 const CHROME_MAX_HIT_W: i32 = 30;
 const CHROME_RESIZE_HANDLE_SZ: i32 = 12;
 const CHROME_TITLE_FONT_PX: u32 = 14;
+const SCANCODE_MAP_LEN: usize = 58;
+
+const key_layout_t = enum(u8) {
+    us_qwerty = 0,
+    de_nodeadkeys = 1,
+};
+
+const keymap_t = struct {
+    plain: [SCANCODE_MAP_LEN]u8,
+    shift: [SCANCODE_MAP_LEN]u8,
+    altgr: [SCANCODE_MAP_LEN]u8,
+};
 
 var g_api: ?*c.wasmos_driver_api_t = null;
 var g_proc_endpoint: u32 = IPC_ENDPOINT_NONE;
@@ -63,8 +75,11 @@ var g_window_owner_deny_logged: bool = false;
 var g_buffer_owner_deny_logged: bool = false;
 var g_kbd_subscribed: bool = false;
 var g_mouse_subscribed: bool = false;
+var g_shift_down: bool = false;
+var g_altgr_down: bool = false;
 var g_idle_housekeeping_counter: u32 = 0;
 var g_runtime_lookup_req_id: u32 = GFX_REQUEST_BASE + 0x4000;
+var g_key_layout: key_layout_t = .de_nodeadkeys;
 var g_title_dbg_open_fail_logged: bool = false;
 var g_title_dbg_prime_fail_logged: bool = false;
 var g_dirty_pending: bool = false;
@@ -372,6 +387,67 @@ fn endpoint_alive(endpoint: u32) bool {
     if (api().ipc_endpoint_owner == null) return true;
     var owner_context_id: u32 = 0;
     return api().ipc_endpoint_owner.?(endpoint, &owner_context_id) == 0;
+}
+
+const KEYMAP_US = keymap_t{
+    .plain = [_]u8{
+        0, 0x1B, '1', '2', '3', '4', '5', '6', '7', '8',
+        '9', '0', '-', '=', 0x08, 0x09, 'q', 'w', 'e', 'r',
+        't', 'y', 'u', 'i', 'o', 'p', '[', ']', 0x0A, 0,
+        'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';',
+        '\'', '`', 0, '\\', 'z', 'x', 'c', 'v', 'b', 'n',
+        'm', ',', '.', '/', 0, '*', 0, ' ',
+    },
+    .shift = [_]u8{
+        0, 0x1B, '!', '@', '#', '$', '%', '^', '&', '*',
+        '(', ')', '_', '+', 0x08, 0x09, 'Q', 'W', 'E', 'R',
+        'T', 'Y', 'U', 'I', 'O', 'P', '{', '}', 0x0A, 0,
+        'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':',
+        '"', '~', 0, '|', 'Z', 'X', 'C', 'V', 'B', 'N',
+        'M', '<', '>', '?', 0, '*', 0, ' ',
+    },
+    .altgr = [_]u8{0} ** SCANCODE_MAP_LEN,
+};
+
+const KEYMAP_DE_NODEADKEYS = keymap_t{
+    .plain = [_]u8{
+        0, 0x1B, '1', '2', '3', '4', '5', '6', '7', '8',
+        '9', '0', '-', '^', 0x08, 0x09, 'q', 'w', 'e', 'r',
+        't', 'z', 'u', 'i', 'o', 'p', '[', ']', 0x0A, 0,
+        'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';',
+        '\'', '`', 0, '\\', 'y', 'x', 'c', 'v', 'b', 'n',
+        'm', ',', '.', '/', 0, '*', 0, ' ',
+    },
+    .shift = [_]u8{
+        0, 0x1B, '!', '"', '#', '$', '%', '&', '/', '(',
+        ')', '=', '?', '`', 0x08, 0x09, 'Q', 'W', 'E', 'R',
+        'T', 'Z', 'U', 'I', 'O', 'P', '{', '}', 0x0A, 0,
+        'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', ':',
+        '"', '~', 0, '|', 'Y', 'X', 'C', 'V', 'B', 'N',
+        'M', ';', ':', '_', 0, '*', 0, ' ',
+    },
+    .altgr = [_]u8{
+        0, 0, 0, 0, 0, 0, 0, '{', '[', ']',
+        '}', 0, '\\', 0, 0, 0, '@', 0, 0, 0,
+        0, 0, 0, 0, 0, 0, '~', 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, '|', 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0,
+    },
+};
+
+fn active_keymap() *const keymap_t {
+    return switch (g_key_layout) {
+        .us_qwerty => &KEYMAP_US,
+        .de_nodeadkeys => &KEYMAP_DE_NODEADKEYS,
+    };
+}
+
+fn scancode_to_ascii(scancode: u8, shifted: bool, altgr: bool) u8 {
+    const km = active_keymap();
+    if (scancode >= SCANCODE_MAP_LEN) return 0;
+    if (altgr and km.altgr[scancode] != 0) return km.altgr[scancode];
+    return if (shifted) km.shift[scancode] else km.plain[scancode];
 }
 
 fn prune_events_for_dead_endpoints() void {
@@ -2169,11 +2245,24 @@ fn handle_ipc_dispatch(msg: *const c.nd_ipc_message_t) void {
     }
     switch (opcode) {
         c.KBD_IPC_KEY_NOTIFY => {
+            const scancode: u8 = @intCast(msg.arg0 & 0xFF);
+            const keyup = (msg.arg1 & 1) != 0;
+            const extended = (msg.arg2 & 1) != 0;
+            if (scancode == 0x2A or scancode == 0x36) {
+                g_shift_down = !keyup;
+            }
+            if (scancode == 0x38 and extended) {
+                g_altgr_down = !keyup;
+            }
             if (g_focused_window_id != 0) {
                 if (window_find_by_id(g_focused_window_id)) |focused_idx| {
                     const focused = g_windows[focused_idx];
                     const key_flags = (msg.arg1 & 1) | ((msg.arg2 & 1) << 1);
-                    event_push(focused.owner_endpoint, c.GFX_EVENT_KEY, msg.arg0, key_flags, 0);
+                    var key_code: u32 = 0;
+                    if (!extended) {
+                        key_code = scancode_to_ascii(scancode, g_shift_down, g_altgr_down);
+                    }
+                    event_push(focused.owner_endpoint, c.GFX_EVENT_KEY, key_code, key_flags, 0);
                 }
             }
         },

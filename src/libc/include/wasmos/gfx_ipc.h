@@ -73,6 +73,8 @@ enum {
     GFX_EVENT_NONE = 0,
     GFX_EVENT_FOCUS_GAINED = 1,
     GFX_EVENT_FOCUS_LOST = 2,
+    /* arg2=translated key code (ASCII for printable/control keys), arg3=flags:
+     * bit0=keyup(1)/keydown(0), bit1=extended scancode. */
     GFX_EVENT_KEY = 3,
     /* arg2 packs content-local x/y as u16: low16=x high16=y, arg3=button mask */
     GFX_EVENT_POINTER = 4,

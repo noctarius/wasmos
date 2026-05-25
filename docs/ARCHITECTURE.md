@@ -26,7 +26,8 @@ Per-context memory-region storage is now also list-backed, removing the fixed
 `MM_MAX_REGIONS` array limit within each context.
 WASM `libui` component-tree state is now heap-backed (dynamic component, text,
 and list-item storage) instead of fixed compile-time slot/text/item caps, and
-includes first shared form controls such as list views and dropdowns.
+includes first shared form controls such as list views and dropdowns; text
+rendering is wired through `font-service` as a required dependency.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

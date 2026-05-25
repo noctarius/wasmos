@@ -38,9 +38,9 @@ copy8_backward(out + 24, in + 24);  // then 24–31
 
 A safe backward copy must write the highest bytes first. For any overlapping `memmove` where `dest > src` and `dest - src < 32` and `count >= 32`, the first `copy8_backward` clobbers source bytes that the later chunks still need to read. **Corrupts overlapping copies.**
 
-### C-3 — `src/boot/boot.c:956-962` — Brace scoping error: `boot_info->modules` set to garbage pointer when `module_count == 0`
+### C-3 — `src/boot/boot.c:956-962` — Misleading indentation on for-loop closing brace (false positive — code is correct)
 
-`boot_info->modules = mods` and the `BOOT_INFO_FLAG_MODULES_PRESENT` assignment are physically outside the `if (module_count > 0)` block due to a brace mismatch. When `module_count == 0`, `mods` is an uninitialized pointer (declared inside the `if` block that never ran) and the kernel is told modules are present with a garbage address.
+The `for`-loop closing `}` was indented at the same column as the surrounding `if (module_count > 0)`, making it appear that `boot_info->modules = mods` runs outside the `if` block. Brace counting proves otherwise: the `}` closes the `for` loop, and lines 959–961 are still inside the `if`. When `module_count == 0` the whole block is correctly skipped. **Fixed by correcting the indentation.** No behavioral change.
 
 ### C-4 — `src/kernel/ipc.c:75-87` — Endpoint slot claim has no lock (race condition)
 

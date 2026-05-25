@@ -1,9 +1,16 @@
 #ifndef WASMOS_LIBC_STDLIB_H
 #define WASMOS_LIBC_STDLIB_H
 
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+void *malloc(size_t size);
+void free(void *ptr);
+void *calloc(size_t nmemb, size_t size);
+void *realloc(void *ptr, size_t size);
 
 int abs(int value);
 long labs(long value);

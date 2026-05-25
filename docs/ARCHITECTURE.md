@@ -43,6 +43,10 @@ WASM libc now implements a process-local linear-memory allocator
 (`malloc/free/calloc/realloc`) backed by `memory.grow`.
 Native driver ABI now includes an explicit shared-memory flush hook so native
 services/drivers can publish shared-buffer writes with a stable ABI contract.
+WASM hostcalls now include both directional shared-memory sync operations:
+`shmem_flush` (WASM -> shared) and `shmem_refresh` (shared -> WASM), so
+client-owned shared buffers written by native services can be consumed in WASM
+without stale linear-memory views.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

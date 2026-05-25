@@ -665,6 +665,10 @@ fn handle_raster_text_into(req: *const c.nd_ipc_message_t) void {
     const h16: u16 = @intCast(clamp_i32(metrics.height, 0, 0xFFFF));
     const x016: i16 = @intCast(clamp_i32(metrics.x0, -32768, 32767));
     const y016: i16 = @intCast(clamp_i32(metrics.y0, -32768, 32767));
+    if (api().shmem_flush.?(dst_shmem_id, @ptrCast(dst), @intCast(out_size)) != 0) {
+        reply_with_status(req, c.FONT_STATUS_IO, 0, 0, 0);
+        return;
+    }
     reply_with_status(req, c.FONT_STATUS_OK, sys.packU16Pair(w16, h16), sys.packS16Pair(x016, y016), @bitCast(metrics.advance_x));
 }
 

@@ -41,6 +41,8 @@ Compositor pointer delivery to focused clients uses content-local coordinates,
 and window client buffers render in the content pane below chrome/titlebar.
 WASM libc now implements a process-local linear-memory allocator
 (`malloc/free/calloc/realloc`) backed by `memory.grow`.
+Native driver ABI now includes an explicit shared-memory flush hook so native
+services/drivers can publish shared-buffer writes with a stable ABI contract.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

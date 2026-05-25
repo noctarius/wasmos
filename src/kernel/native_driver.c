@@ -511,10 +511,24 @@ nd_shmem_flush(uint32_t id, const void *ptr, uint32_t size)
 {
     uint64_t phys_base = 0;
     uint64_t pages = 0;
+    uint32_t owner_context_id = 0;
+    process_t *proc = process_get(process_current_pid());
     if (!ptr || size == 0) {
         return -1;
     }
-    if (mm_shared_get_phys(0, id, &phys_base, &pages) != 0 || pages == 0 || phys_base == 0) {
+    if (!proc || proc->context_id == 0) {
+        return -1;
+    }
+    owner_context_id = proc->context_id;
+    if (mm_shared_get_phys(owner_context_id, id, &phys_base, &pages) != 0 ||
+        pages == 0 || phys_base == 0) {
+        /* Fallback for legacy kernel-owned shared IDs. */
+        if (mm_shared_get_phys(0, id, &phys_base, &pages) != 0 ||
+            pages == 0 || phys_base == 0) {
+            return -1;
+        }
+    }
+    if (pages == 0 || phys_base == 0) {
         return -1;
     }
     if ((uint64_t)size > pages * PAGE_SIZE) {

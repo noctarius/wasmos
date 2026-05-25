@@ -820,6 +820,7 @@ pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t *msg)
     }
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);
     if (pm_apply_spawn_caps(pid, &caps) != 0) {
+        (void)process_kill(pid, -1);
         return -1;
     }
     ipc_message_t resp;
@@ -937,6 +938,7 @@ pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t *msg)
     }
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);
     if (pm_apply_spawn_caps(pid, &caps) != 0) {
+        (void)process_kill(pid, -1);
         return -1;
     }
     ipc_message_t resp;

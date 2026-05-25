@@ -437,8 +437,17 @@ paging_destroy_address_space(uint64_t root_table)
                 if (!(pd[pd_idx] & PT_FLAG_PRESENT)) {
                     continue;
                 }
-                if ((pd[pd_idx] & PT_FLAG_LARGE_PAGE) == 0) {
-                    pfa_free_pages(entry_phys(pd[pd_idx]), 1);
+                if (pd[pd_idx] & PT_FLAG_LARGE_PAGE) {
+                    pfa_free_pages(entry_phys(pd[pd_idx]), PAGE_SIZE_2M / PAGE_SIZE_4K);
+                } else {
+                    uint64_t pt_phys = entry_phys(pd[pd_idx]);
+                    volatile uint64_t *pt = table_ptr(pt_phys);
+                    for (uint32_t pt_idx = 0; pt_idx < ENTRIES_PER_TABLE; ++pt_idx) {
+                        if (pt[pt_idx] & PT_FLAG_PRESENT) {
+                            pfa_free_pages(entry_phys(pt[pt_idx]), 1);
+                        }
+                    }
+                    pfa_free_pages(pt_phys, 1);
                 }
             }
             pfa_free_pages(pd_phys, 1);

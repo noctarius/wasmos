@@ -428,7 +428,7 @@ const KEYMAP_DE_NODEADKEYS = keymap_t{
     },
     .altgr = [_]u8{
         0, 0, 0, 0, 0, 0, 0, '{', '[', ']',
-        '}', 0, '\\', 0, 0, 0, 0xE4, 0, 0, 0,
+        '}', 0, '\\', 0, 0, 0, '@', 0, 0, 0,
         0, 0xFC, 0, 0, 0, 0xF6, '~', 0, 0, 0,
         0, 0xDF, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, '|', 0, 0, 0, 0, 0, 0,
@@ -446,12 +446,6 @@ fn active_keymap() *const keymap_t {
 fn scancode_to_ascii(scancode: u8, shifted: bool, altgr: bool) u8 {
     const km = active_keymap();
     if (scancode >= SCANCODE_MAP_LEN) return 0;
-    if (g_key_layout == .de_nodeadkeys) {
-        if (scancode == 0x1A) return if (shifted) 0xDC else 0xFC; // Ü/ü
-        if (scancode == 0x27) return if (shifted) 0xD6 else 0xF6; // Ö/ö
-        if (scancode == 0x28) return if (shifted) 0xC4 else 0xE4; // Ä/ä
-        if (scancode == 0x0C) return 0xDF; // ß
-    }
     if (altgr and km.altgr[scancode] != 0) return km.altgr[scancode];
     return if (shifted) km.shift[scancode] else km.plain[scancode];
 }

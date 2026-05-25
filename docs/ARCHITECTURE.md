@@ -24,6 +24,8 @@ MM context registration and capability state tracking are now list-backed, so
 context growth is no longer bounded by static `MM_MAX_CONTEXTS` slot arrays.
 Per-context memory-region storage is now also list-backed, removing the fixed
 `MM_MAX_REGIONS` array limit within each context.
+WASM `libui` component-tree state is now heap-backed (dynamic component, text,
+and list-item storage) instead of fixed compile-time slot/text/item caps.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

@@ -220,6 +220,9 @@ ensure_pt_for_pd(uint64_t *pd_entry, uint64_t table_flags)
         if (*pd_entry & PT_FLAG_WRITE) {
             flags |= PT_FLAG_WRITE;
         }
+        if (*pd_entry & PT_FLAG_NX) {
+            flags |= PT_FLAG_NX;
+        }
         flags |= table_flags;
         for (uint32_t i = 0; i < ENTRIES_PER_TABLE; ++i) {
             pt[i] = (base + ((uint64_t)i * PAGE_SIZE_4K)) | flags;

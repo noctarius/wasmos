@@ -36,6 +36,7 @@ It defines repository workflow and documentation/update conventions.
 - Ring-3 isolation/hardening enabled by default, with stress/fault/self-test coverage across IPC, faults, threading, and shared memory.
 - Thread lifecycle support is available end-to-end (`thread_create`, `thread_join`, `thread_detach`, `thread_yield`, `thread_exit`) for ring3.
 - Shared-memory and capability plumbing supports owner/grant/revoke flows, including compositor/client buffer sharing and auto-mapping helpers.
+- WASM libc now provides process-local `malloc/free/calloc/realloc` on linear memory (with `memory.grow` backing), so general heap allocation does not require shmem segments.
 - Kernel list internals support early-boot fallback allocation (static arena) so list-backed subsystems can initialize before general heap allocators are fully available.
 - Borrow-based DMA path is integrated across capability contract, hostcalls, spawn transport, and storage/framebuffer paths (with validated fallback behavior).
 - Graphics stack is active: framebuffer driver, native Zig `gfx-compositor`, shared-buffer present/damage model, and app-facing IPC ABI.

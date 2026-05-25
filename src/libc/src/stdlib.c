@@ -1,6 +1,169 @@
 #include "stdlib.h"
 
 #include <stddef.h>
+#include <stdint.h>
+#include "string.h"
+
+extern uint8_t __heap_base;
+
+typedef struct heap_block {
+    size_t size;
+    int free;
+    struct heap_block *next;
+} heap_block_t;
+
+static heap_block_t *g_heap_head = NULL;
+static uint32_t g_heap_cursor = 0;
+static uint32_t g_heap_limit = 0;
+static int g_heap_ready = 0;
+
+static size_t
+heap_align(size_t v)
+{
+    const size_t a = sizeof(void *);
+    return (v + (a - 1u)) & ~(a - 1u);
+}
+
+static void
+heap_init(void)
+{
+    if (g_heap_ready) return;
+    g_heap_cursor = (uint32_t)(uintptr_t)&__heap_base;
+    g_heap_limit = (uint32_t)__builtin_wasm_memory_size(0) * 65536u;
+    if (g_heap_cursor > g_heap_limit) g_heap_cursor = g_heap_limit;
+    g_heap_head = NULL;
+    g_heap_ready = 1;
+}
+
+static int
+heap_grow_to(uint32_t need_end)
+{
+    while (need_end > g_heap_limit) {
+        if (__builtin_wasm_memory_grow(0, 1) == (size_t)-1) return -1;
+        g_heap_limit += 65536u;
+    }
+    return 0;
+}
+
+static heap_block_t *
+heap_request_block(size_t payload_size)
+{
+    const size_t total = heap_align(sizeof(heap_block_t) + payload_size);
+    if (total > 0xFFFFFFFFu) return NULL;
+    uint32_t start = (g_heap_cursor + (uint32_t)(sizeof(void *) - 1u)) & ~(uint32_t)(sizeof(void *) - 1u);
+    uint32_t end = start + (uint32_t)total;
+    if (end < start) return NULL;
+    if (heap_grow_to(end) != 0) return NULL;
+    heap_block_t *blk = (heap_block_t *)(uintptr_t)start;
+    blk->size = payload_size;
+    blk->free = 0;
+    blk->next = NULL;
+    g_heap_cursor = end;
+    return blk;
+}
+
+static void
+heap_split_block(heap_block_t *blk, size_t want)
+{
+    if (!blk) return;
+    const size_t aligned_want = heap_align(want);
+    const size_t aligned_have = heap_align(blk->size);
+    if (aligned_have <= aligned_want + sizeof(heap_block_t) + sizeof(void *)) return;
+    uint8_t *base = (uint8_t *)(void *)blk;
+    heap_block_t *next = (heap_block_t *)(void *)(base + sizeof(heap_block_t) + aligned_want);
+    next->size = aligned_have - aligned_want - sizeof(heap_block_t);
+    next->free = 1;
+    next->next = blk->next;
+    blk->size = aligned_want;
+    blk->next = next;
+}
+
+static void
+heap_coalesce(void)
+{
+    heap_block_t *cur = g_heap_head;
+    while (cur && cur->next) {
+        uint8_t *cur_end = (uint8_t *)(void *)cur + sizeof(heap_block_t) + heap_align(cur->size);
+        if (cur->free && cur->next->free && cur_end == (uint8_t *)(void *)cur->next) {
+            cur->size = heap_align(cur->size) + sizeof(heap_block_t) + cur->next->size;
+            cur->next = cur->next->next;
+            continue;
+        }
+        cur = cur->next;
+    }
+}
+
+void *
+malloc(size_t size)
+{
+    if (size == 0) size = 1;
+    heap_init();
+    size = heap_align(size);
+
+    heap_block_t *cur = g_heap_head;
+    heap_block_t *prev = NULL;
+    while (cur) {
+        if (cur->free && cur->size >= size) {
+            cur->free = 0;
+            heap_split_block(cur, size);
+            return (void *)((uint8_t *)(void *)cur + sizeof(heap_block_t));
+        }
+        prev = cur;
+        cur = cur->next;
+    }
+
+    heap_block_t *blk = heap_request_block(size);
+    if (!blk) return NULL;
+    if (!g_heap_head) {
+        g_heap_head = blk;
+    } else {
+        prev->next = blk;
+    }
+    return (void *)((uint8_t *)(void *)blk + sizeof(heap_block_t));
+}
+
+void
+free(void *ptr)
+{
+    if (!ptr) return;
+    uint8_t *p = (uint8_t *)ptr;
+    heap_block_t *blk = (heap_block_t *)(void *)(p - sizeof(heap_block_t));
+    blk->free = 1;
+    heap_coalesce();
+}
+
+void *
+calloc(size_t nmemb, size_t size)
+{
+    if (nmemb == 0 || size == 0) return malloc(1);
+    if (nmemb > ((size_t)-1) / size) return NULL;
+    size_t total = nmemb * size;
+    void *ptr = malloc(total);
+    if (!ptr) return NULL;
+    memset(ptr, 0, total);
+    return ptr;
+}
+
+void *
+realloc(void *ptr, size_t size)
+{
+    if (!ptr) return malloc(size);
+    if (size == 0) {
+        free(ptr);
+        return NULL;
+    }
+    heap_block_t *blk = (heap_block_t *)(void *)((uint8_t *)ptr - sizeof(heap_block_t));
+    size = heap_align(size);
+    if (blk->size >= size) {
+        heap_split_block(blk, size);
+        return ptr;
+    }
+    void *n = malloc(size);
+    if (!n) return NULL;
+    memcpy(n, ptr, blk->size);
+    free(ptr);
+    return n;
+}
 
 static int
 is_space(char ch)

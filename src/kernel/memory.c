@@ -597,25 +597,16 @@ int mm_shared_map(mm_context_t *ctx, uint32_t id, uint32_t flags, uint64_t *out_
         return -1;
     }
     uint64_t virt_base = mm_region_virtual_base(ctx, MEM_REGION_SHARED, region->pages);
-    if (virt_base == 0 || mm_context_add_region(ctx, virt_base, region->pages * PAGE_SIZE,
-                                                effective_flags, MEM_REGION_SHARED) != 0) {
+    mem_region_t *added = 0;
+    if (virt_base != 0) {
+        added = mm_context_add_region_slot(ctx, virt_base, region->pages * PAGE_SIZE,
+                                           effective_flags, MEM_REGION_SHARED);
+    }
+    if (!added) {
         (void)mm_shared_release(ctx->id, id);
         return -1;
     }
-    {
-        list_iter_t it;
-        mem_region_t *last = 0;
-        mem_region_t *cur = (mem_region_t *)list_first(&ctx->regions, &it);
-        while (cur) {
-            last = cur;
-            cur = (mem_region_t *)list_next(&it);
-        }
-        if (!last) {
-            (void)mm_shared_release(ctx->id, id);
-            return -1;
-        }
-        last->phys_base = region->base;
-    }
+    added->phys_base = region->base;
     if (out_base) {
         *out_base = virt_base;
     }

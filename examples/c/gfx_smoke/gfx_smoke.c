@@ -396,16 +396,9 @@ start_libui_demo(int32_t proc_endpoint)
     int32_t button = ui_component_create_button(ui);
     int32_t checkbox = ui_component_create_checkbox(ui);
     int32_t input = ui_component_create_text_input(ui);
-    int32_t scroll = ui_component_create_scroll_view(ui);
-    int32_t item1 = ui_component_create_label(ui);
-    int32_t item2 = ui_component_create_label(ui);
-    int32_t item3 = ui_component_create_label(ui);
-    int32_t item4 = ui_component_create_label(ui);
-    int32_t item5 = ui_component_create_label(ui);
-    int32_t item6 = ui_component_create_label(ui);
+    int32_t list = ui_component_create_list_view(ui);
     int32_t panel = ui_component_create_panel(ui);
-    if (label < 0 || button < 0 || checkbox < 0 || input < 0 || scroll < 0 || item1 < 0 || item2 < 0 ||
-        item3 < 0 || item4 < 0 || item5 < 0 || item6 < 0 || panel < 0) {
+    if (label < 0 || button < 0 || checkbox < 0 || input < 0 || list < 0 || panel < 0) {
         ui_destroy(ui);
         return -1;
     }
@@ -414,14 +407,8 @@ start_libui_demo(int32_t proc_endpoint)
     ui_component_t *b = ui_component_by_id(ui, button);
     ui_component_t *cb = ui_component_by_id(ui, checkbox);
     ui_component_t *ti = ui_component_by_id(ui, input);
-    ui_component_t *sv = ui_component_by_id(ui, scroll);
-    ui_component_t *i1 = ui_component_by_id(ui, item1);
-    ui_component_t *i2 = ui_component_by_id(ui, item2);
-    ui_component_t *i3 = ui_component_by_id(ui, item3);
-    ui_component_t *i4 = ui_component_by_id(ui, item4);
-    ui_component_t *i5 = ui_component_by_id(ui, item5);
-    ui_component_t *i6 = ui_component_by_id(ui, item6);
-    if (!p || !l || !b || !cb || !ti || !sv || !i1 || !i2 || !i3 || !i4 || !i5 || !i6) {
+    ui_component_t *lv = ui_component_by_id(ui, list);
+    if (!p || !l || !b || !cb || !ti || !lv) {
         ui_destroy(ui);
         return -1;
     }
@@ -440,17 +427,19 @@ start_libui_demo(int32_t proc_endpoint)
     ti->bg_color = 0xFF1D2838u;
     ti->border_color = 0xFF4C627D;
     ti->clickable = 1;
-    sv->preferred_h = 92;
-    sv->bg_color = 0xFF1A2534u;
-    sv->border_color = 0xFF4C627D;
-    sv->padding_px = 6;
-    sv->gap_px = 4;
-    i1->preferred_h = 22; i1->bg_color = 0xFF243147u; ui_component_set_text(ui, item1, "scroll row 1");
-    i2->preferred_h = 22; i2->bg_color = 0xFF273550u; ui_component_set_text(ui, item2, "scroll row 2");
-    i3->preferred_h = 22; i3->bg_color = 0xFF243147u; ui_component_set_text(ui, item3, "scroll row 3");
-    i4->preferred_h = 22; i4->bg_color = 0xFF273550u; ui_component_set_text(ui, item4, "scroll row 4");
-    i5->preferred_h = 22; i5->bg_color = 0xFF243147u; ui_component_set_text(ui, item5, "scroll row 5");
-    i6->preferred_h = 22; i6->bg_color = 0xFF273550u; ui_component_set_text(ui, item6, "scroll row 6");
+    lv->preferred_h = 92;
+    lv->bg_color = 0xFF1A2534u;
+    lv->border_color = 0xFF4C627D;
+    lv->padding_px = 6;
+    lv->gap_px = 4;
+    (void)ui_component_list_append(ui, list, "list row 1");
+    (void)ui_component_list_append(ui, list, "list row 2");
+    (void)ui_component_list_append(ui, list, "list row 3");
+    (void)ui_component_list_append(ui, list, "list row 4");
+    (void)ui_component_list_append(ui, list, "list row 5");
+    (void)ui_component_list_append(ui, list, "list row 6");
+    (void)ui_component_list_append(ui, list, "list row 7");
+    (void)ui_component_list_append(ui, list, "list row 8");
     ui_component_set_checked(ui, checkbox, 0);
     ui_component_set_text(ui, label, "libui component demo");
     ui_component_set_text(ui, button, "press me");
@@ -463,13 +452,7 @@ start_libui_demo(int32_t proc_endpoint)
     (void)ui_component_append_child(ui, panel, button);
     (void)ui_component_append_child(ui, panel, checkbox);
     (void)ui_component_append_child(ui, panel, input);
-    (void)ui_component_append_child(ui, panel, scroll);
-    (void)ui_component_append_child(ui, scroll, item1);
-    (void)ui_component_append_child(ui, scroll, item2);
-    (void)ui_component_append_child(ui, scroll, item3);
-    (void)ui_component_append_child(ui, scroll, item4);
-    (void)ui_component_append_child(ui, scroll, item5);
-    (void)ui_component_append_child(ui, scroll, item6);
+    (void)ui_component_append_child(ui, panel, list);
     ui_mark_dirty(ui);
     if (ui_loop_drain(ui) != 0) {
         ui_destroy(ui);

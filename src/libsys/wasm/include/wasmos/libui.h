@@ -16,6 +16,7 @@ extern "C" {
 #define UI_TEXT_MAX 48
 #define UI_PAGE_SIZE 4096
 #define UI_REQ_BASE 0x7400
+#define UI_LIST_MAX_ITEMS 12
 
 enum {
     UI_MSG_ERROR = -1,
@@ -30,7 +31,8 @@ typedef enum {
     UI_COMPONENT_BUTTON = 3,
     UI_COMPONENT_CHECKBOX = 4,
     UI_COMPONENT_TEXT_INPUT = 5,
-    UI_COMPONENT_SCROLL_VIEW = 6
+    UI_COMPONENT_SCROLL_VIEW = 6,
+    UI_COMPONENT_LIST_VIEW = 7
 } ui_component_type_t;
 
 typedef struct {
@@ -64,6 +66,9 @@ typedef struct {
     int32_t checked;
     int32_t scroll_y;
     int32_t scroll_max;
+    int32_t selected_index;
+    int32_t item_count;
+    char list_items[UI_LIST_MAX_ITEMS][UI_TEXT_MAX];
     char text[UI_TEXT_MAX];
     ui_button_click_cb_t on_click;
     void *on_click_user;
@@ -335,6 +340,9 @@ ui_component_alloc(ui_context_t *ctx, ui_component_type_t type)
             c->checked = 0;
             c->scroll_y = 0;
             c->scroll_max = 0;
+            c->selected_index = 0;
+            c->item_count = 0;
+            for (int32_t li = 0; li < UI_LIST_MAX_ITEMS; ++li) c->list_items[li][0] = '\0';
             c->text[0] = '\0';
             c->on_click = 0;
             c->on_click_user = 0;
@@ -375,6 +383,7 @@ static inline int32_t ui_component_create_button(ui_context_t *ctx) { return ui_
 static inline int32_t ui_component_create_checkbox(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_CHECKBOX); }
 static inline int32_t ui_component_create_text_input(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_TEXT_INPUT); }
 static inline int32_t ui_component_create_scroll_view(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_SCROLL_VIEW); }
+static inline int32_t ui_component_create_list_view(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_LIST_VIEW); }
 
 static inline void
 ui_component_set_text(ui_context_t *ctx, int32_t id, const char *text)
@@ -406,6 +415,20 @@ ui_component_set_checked(ui_context_t *ctx, int32_t id, int32_t checked)
     ui_component_t *c = ui_component_by_id(ctx, id);
     if (!c || c->type != UI_COMPONENT_CHECKBOX) return;
     c->checked = checked ? 1 : 0;
+}
+
+static inline int32_t
+ui_component_list_append(ui_context_t *ctx, int32_t id, const char *item)
+{
+    ui_component_t *c = ui_component_by_id(ctx, id);
+    if (!c || c->type != UI_COMPONENT_LIST_VIEW || !item) return -1;
+    if (c->item_count >= UI_LIST_MAX_ITEMS) return -1;
+    int32_t idx = c->item_count;
+    size_t i = 0;
+    for (; i + 1 < UI_TEXT_MAX && item[i] != '\0'; ++i) c->list_items[idx][i] = item[i];
+    c->list_items[idx][i] = '\0';
+    c->item_count += 1;
+    return idx;
 }
 
 static inline int32_t
@@ -544,6 +567,17 @@ ui_layout_vertical(ui_context_t *ctx, int32_t parent_id)
         if (p->scroll_y > p->scroll_max) p->scroll_y = p->scroll_max;
         return;
     }
+    if (p->type == UI_COMPONENT_LIST_VIEW) {
+        const int32_t item_h = 20;
+        const int32_t viewport_h = p->bounds.h - (p->padding_px * 2);
+        const int32_t content_h = p->item_count * item_h;
+        p->scroll_max = (content_h > viewport_h) ? (content_h - viewport_h) : 0;
+        if (p->scroll_y < 0) p->scroll_y = 0;
+        if (p->scroll_y > p->scroll_max) p->scroll_y = p->scroll_max;
+        if (p->selected_index >= p->item_count) p->selected_index = (p->item_count > 0) ? (p->item_count - 1) : 0;
+        if (p->selected_index < 0) p->selected_index = 0;
+        return;
+    }
     int32_t child_id = p->first_child_id;
     while (child_id > 0) {
         ui_component_t *c = ui_component_by_id(ctx, child_id);
@@ -612,6 +646,33 @@ ui_render_component_clip(ui_context_t *ctx, int32_t id, ui_rect_t clip, int32_t 
             const int32_t caret_x = tx + (len * 6);
             ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, caret_x, ty - 1, 1, 9, 0xFFFFFFFFu, clip);
         }
+    } else if (c->type == UI_COMPONENT_LIST_VIEW) {
+        const ui_rect_t inner = {
+            draw_bounds.x + c->padding_px,
+            draw_bounds.y + c->padding_px,
+            draw_bounds.w - (c->padding_px * 2),
+            draw_bounds.h - (c->padding_px * 2)
+        };
+        const int32_t item_h = 20;
+        ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, inner.x, inner.y, inner.w, inner.h, 0xFF172233u, clip);
+        const ui_rect_t item_clip = ui_rect_intersect(clip, inner);
+        for (int32_t i = 0; i < c->item_count; ++i) {
+            const int32_t y = inner.y + (i * item_h) - c->scroll_y;
+            const uint32_t row_bg = (i == c->selected_index) ? 0xFF2F5C88u : ((i & 1) ? 0xFF1F2E43u : 0xFF1A283B);
+            ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, inner.x, y, inner.w, item_h, row_bg, item_clip);
+            ui_draw_text_clip(ctx->mapped_base, ctx->width, ctx->height,
+                              inner.x + 6, y + (item_h - 7) / 2,
+                              c->list_items[i], 0xFFFFFFFFu, item_clip);
+        }
+        ui_stroke_rect_clip(ctx->mapped_base, ctx->width, ctx->height, draw_bounds, c->border_px, c->border_color, clip);
+        if (c->scroll_max > 0 && inner.h > 8) {
+            const int32_t track_h = inner.h;
+            const int32_t thumb_h = (track_h * track_h) / (track_h + c->scroll_max);
+            const int32_t th = thumb_h < 8 ? 8 : thumb_h;
+            const int32_t ty = inner.y + ((track_h - th) * c->scroll_y) / c->scroll_max;
+            ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, inner.x + inner.w - 4, ty, 3, th, 0xFF6C88A8u, clip);
+        }
+        return;
     } else if (c->type == UI_COMPONENT_SCROLL_VIEW) {
         const ui_rect_t inner = {
             draw_bounds.x + c->padding_px,
@@ -685,7 +746,25 @@ ui_find_scroll_view_at(ui_context_t *ctx, int32_t id, int32_t x, int32_t y)
         if (!child) break;
         child_id = child->next_sibling_id;
     }
-    if (c->type == UI_COMPONENT_SCROLL_VIEW && ui_point_in_bounds(x, y, c->bounds)) return c->id;
+    if ((c->type == UI_COMPONENT_SCROLL_VIEW || c->type == UI_COMPONENT_LIST_VIEW) &&
+        ui_point_in_bounds(x, y, c->bounds)) return c->id;
+    return -1;
+}
+
+static inline int32_t
+ui_find_list_view_at(ui_context_t *ctx, int32_t id, int32_t x, int32_t y)
+{
+    ui_component_t *c = ui_component_by_id(ctx, id);
+    if (!c) return -1;
+    int32_t child_id = c->first_child_id;
+    while (child_id > 0) {
+        const int32_t hit = ui_find_list_view_at(ctx, child_id, x, y);
+        if (hit > 0) return hit;
+        ui_component_t *child = ui_component_by_id(ctx, child_id);
+        if (!child) break;
+        child_id = child->next_sibling_id;
+    }
+    if (c->type == UI_COMPONENT_LIST_VIEW && ui_point_in_bounds(x, y, c->bounds)) return c->id;
     return -1;
 }
 
@@ -756,6 +835,16 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
                 ui_mark_dirty(ctx);
             }
             ctx->active_scroll_component_id = ui_find_scroll_view_at(ctx, ctx->root_id, ctx->pointer_x, ctx->pointer_y);
+            const int32_t list_id = ui_find_list_view_at(ctx, ctx->root_id, ctx->pointer_x, ctx->pointer_y);
+            ui_component_t *lv = ui_component_by_id(ctx, list_id);
+            if (lv && lv->type == UI_COMPONENT_LIST_VIEW && lv->item_count > 0) {
+                const int32_t rel_y = (ctx->pointer_y - (lv->bounds.y + lv->padding_px)) + lv->scroll_y;
+                const int32_t idx = rel_y / 20;
+                if (idx >= 0 && idx < lv->item_count) {
+                    lv->selected_index = idx;
+                    ui_mark_dirty(ctx);
+                }
+            }
         } else if (!left_now && left_prev) {
             const int32_t hit_id = ui_find_clickable_at(ctx, ctx->root_id, ctx->pointer_x, ctx->pointer_y);
             ui_component_t *hit = ui_component_by_id(ctx, hit_id);
@@ -774,7 +863,7 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
             ui_mark_dirty(ctx);
         } else if (left_now && left_prev && ctx->active_scroll_component_id > 0 && dy != 0) {
             ui_component_t *sv = ui_component_by_id(ctx, ctx->active_scroll_component_id);
-            if (sv && sv->type == UI_COMPONENT_SCROLL_VIEW && sv->scroll_max > 0) {
+            if (sv && (sv->type == UI_COMPONENT_SCROLL_VIEW || sv->type == UI_COMPONENT_LIST_VIEW) && sv->scroll_max > 0) {
                 sv->scroll_y -= dy;
                 if (sv->scroll_y < 0) sv->scroll_y = 0;
                 if (sv->scroll_y > sv->scroll_max) sv->scroll_y = sv->scroll_max;

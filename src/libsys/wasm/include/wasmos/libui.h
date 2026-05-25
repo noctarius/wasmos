@@ -259,23 +259,38 @@ ui_font_measure_text(ui_context_t *ctx, const char *text, int32_t *out_w, int32_
     return 0;
 }
 
+static inline int32_t
+ui_font_measure_and_raster_text(ui_context_t *ctx, const char *text, int32_t text_len,
+                                int32_t *out_w, int32_t *out_h, int32_t *out_x0, int32_t *out_y0, int32_t *out_adv)
+{
+    if (!ctx || !text || text_len <= 0 || ctx->font_endpoint <= 0 || ctx->font_reply_endpoint <= 0 || ctx->font_handle <= 0) return -1;
+    if (ui_font_measure_text(ctx, text, out_w, out_h, out_x0, out_y0, out_adv) != 0) return -1;
+    if (!out_w || !out_h) return -1;
+    if (*out_w <= 0 || *out_h <= 0) return 0;
+
+    const int32_t bytes = (*out_w) * (*out_h);
+    if (bytes <= 0) return -1;
+    if (ui_font_ensure_shmem_buffer(&ctx->font_mask_shmem_id, &ctx->font_mask_ptr, &ctx->font_mask_cap, bytes) != 0) return -1;
+
+    wasmos_ipc_message_t reply;
+    if (wasmos_ipc_call(ctx->font_endpoint, ctx->font_reply_endpoint, FONT_IPC_RASTER_GLYPH_INTO_REQ,
+                        ctx->req_id++, ctx->font_handle, ctx->font_text_shmem_id, text_len, ctx->font_mask_shmem_id, &reply) != 0) {
+        return -1;
+    }
+    if (reply.type != FONT_IPC_RESP || reply.arg0 != FONT_STATUS_OK) return -1;
+    return 0;
+}
+
 static inline void
 ui_draw_text_clip(ui_context_t *ctx, int32_t x, int32_t y, const char *text, uint32_t color, ui_rect_t clip)
 {
     if (!ctx || !ctx->mapped_base || !text || ctx->font_endpoint <= 0 || ctx->font_reply_endpoint <= 0 || ctx->font_handle <= 0) return;
+    const int32_t text_len = (int32_t)strlen(text);
+    if (text_len <= 0) return;
     int32_t w = 0, h = 0, x0 = 0, y0 = 0, adv = 0;
-    if (ui_font_measure_text(ctx, text, &w, &h, &x0, &y0, &adv) != 0) return;
+    if (ui_font_measure_and_raster_text(ctx, text, text_len, &w, &h, &x0, &y0, &adv) != 0) return;
     if (w <= 0 || h <= 0) return;
-    const int32_t bytes = w * h;
-    if (bytes <= 0) return;
-    if (ui_font_ensure_shmem_buffer(&ctx->font_mask_shmem_id, &ctx->font_mask_ptr, &ctx->font_mask_cap, bytes) != 0) return;
-
-    wasmos_ipc_message_t reply;
-    if (wasmos_ipc_call(ctx->font_endpoint, ctx->font_reply_endpoint, FONT_IPC_RASTER_GLYPH_INTO_REQ,
-                        ctx->req_id++, ctx->font_handle, ctx->font_text_shmem_id, (int32_t)strlen(text), ctx->font_mask_shmem_id, &reply) != 0) {
-        return;
-    }
-    if (reply.type != FONT_IPC_RESP || reply.arg0 != FONT_STATUS_OK) return;
+    if (!ctx->font_mask_ptr) return;
 
     const uint8_t *mask = ctx->font_mask_ptr;
     for (int32_t gy = 0; gy < h; ++gy) {

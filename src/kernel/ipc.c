@@ -73,6 +73,7 @@ int ipc_endpoint_create(uint32_t owner_context_id, uint32_t *out_endpoint) {
         return IPC_ERR_INVALID;
     }
     for (uint32_t i = 0; i < IPC_MAX_ENDPOINTS; ++i) {
+        spinlock_lock(&table[i].lock);
         if (!table[i].in_use) {
             table[i].in_use = 1;
             table[i].type = IPC_ENDPOINT_TYPE_MESSAGE;
@@ -82,9 +83,11 @@ int ipc_endpoint_create(uint32_t owner_context_id, uint32_t *out_endpoint) {
             table[i].count = 0;
             table[i].notify_count = 0;
             table[i].waiter_tid = 0;
+            spinlock_unlock(&table[i].lock);
             *out_endpoint = i;
             return IPC_OK;
         }
+        spinlock_unlock(&table[i].lock);
     }
     return IPC_ERR_FULL;
 }
@@ -95,6 +98,7 @@ int ipc_notification_create(uint32_t owner_context_id, uint32_t *out_endpoint) {
         return IPC_ERR_INVALID;
     }
     for (uint32_t i = 0; i < IPC_MAX_ENDPOINTS; ++i) {
+        spinlock_lock(&table[i].lock);
         if (!table[i].in_use) {
             table[i].in_use = 1;
             table[i].type = IPC_ENDPOINT_TYPE_NOTIFICATION;
@@ -104,9 +108,11 @@ int ipc_notification_create(uint32_t owner_context_id, uint32_t *out_endpoint) {
             table[i].count = 0;
             table[i].notify_count = 0;
             table[i].waiter_tid = 0;
+            spinlock_unlock(&table[i].lock);
             *out_endpoint = i;
             return IPC_OK;
         }
+        spinlock_unlock(&table[i].lock);
     }
     return IPC_ERR_FULL;
 }
@@ -286,14 +292,16 @@ ipc_endpoints_release_owner(uint32_t owner_context_id)
             continue;
         }
         spinlock_lock(&ep->lock);
-        ep->in_use = 0;
-        ep->type = IPC_ENDPOINT_TYPE_MESSAGE;
-        ep->owner_context_id = 0;
-        ep->head = 0;
-        ep->tail = 0;
-        ep->count = 0;
-        ep->notify_count = 0;
-        ep->waiter_tid = 0;
+        if (ep->in_use && ep->owner_context_id == owner_context_id) {
+            ep->in_use = 0;
+            ep->type = IPC_ENDPOINT_TYPE_MESSAGE;
+            ep->owner_context_id = 0;
+            ep->head = 0;
+            ep->tail = 0;
+            ep->count = 0;
+            ep->notify_count = 0;
+            ep->waiter_tid = 0;
+        }
         spinlock_unlock(&ep->lock);
     }
 }

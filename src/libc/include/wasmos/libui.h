@@ -279,6 +279,7 @@ ui_font_measure_and_raster_text(ui_context_t *ctx, const char *text, int32_t tex
         return -1;
     }
     if (reply.type != FONT_IPC_RESP || reply.arg0 != FONT_STATUS_OK) return -1;
+    if (wasmos_shmem_refresh(ctx->font_mask_shmem_id, (int32_t)(uintptr_t)ctx->font_mask_ptr, bytes) != 0) return -1;
     return 0;
 }
 
@@ -580,7 +581,7 @@ ui_init_font(ui_context_t *ctx)
     }
     if (ctx->font_endpoint < 0) return -1;
     if (wasmos_ipc_call(ctx->font_endpoint, ctx->font_reply_endpoint, FONT_IPC_OPEN_FONT_REQ,
-                        ctx->req_id++, FONT_ID_ROBOTO_MONO, ctx->font_px, 0, 0, &reply) != 0) return -1;
+                        ctx->req_id++, FONT_ID_ROBOTO, ctx->font_px, 0, 0, &reply) != 0) return -1;
     if (reply.type != FONT_IPC_RESP || reply.arg0 != FONT_STATUS_OK || reply.arg1 <= 0) return -1;
     ctx->font_handle = reply.arg1;
     return 0;

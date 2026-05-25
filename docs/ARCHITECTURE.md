@@ -35,7 +35,8 @@ pass multi-character input via shared memory and receive packed `w/h`,
 shared memory.
 Compositor window-title rendering also uses the same full text-run path
 (measure + raster-into), so title rendering no longer performs per-character
-font IPC raster requests.
+font IPC raster requests; measured/rasterized title runs are cached per window
+slot so compose-time rendering does not issue font IPC on every paint pass.
 Compositor pointer delivery to focused clients uses content-local coordinates,
 and window client buffers render in the content pane below chrome/titlebar.
 WASM libc now implements a process-local linear-memory allocator

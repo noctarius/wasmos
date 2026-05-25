@@ -338,7 +338,8 @@ ui_component_set_text_owned(ui_component_t *c, const char *text)
         while (new_cap < need) new_cap *= 2;
         char *new_text = (char *)malloc((size_t)new_cap);
         if (!new_text) return -1;
-        if (c->text) free(c->text);
+        if (c->text) memcpy(new_text, c->text, (size_t)c->text_len + 1);
+        /* TODO(libui): re-enable free once libc free-path corruption is fixed. */
         c->text = new_text;
         c->text_cap = new_cap;
     }
@@ -1109,7 +1110,7 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
                         char *new_text = (char *)malloc((size_t)new_cap);
                         if (new_text) {
                             if (focus->text) memcpy(new_text, focus->text, (size_t)focus->text_len + 1);
-                            if (focus->text) free(focus->text);
+                            /* TODO(libui): re-enable free once libc free-path corruption is fixed. */
                             focus->text = new_text;
                             focus->text_cap = new_cap;
                         }

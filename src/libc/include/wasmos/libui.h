@@ -34,7 +34,8 @@ typedef enum {
     UI_COMPONENT_CHECKBOX = 4,
     UI_COMPONENT_TEXT_INPUT = 5,
     UI_COMPONENT_SCROLL_VIEW = 6,
-    UI_COMPONENT_LIST_VIEW = 7
+    UI_COMPONENT_LIST_VIEW = 7,
+    UI_COMPONENT_DROPDOWN = 8
 } ui_component_type_t;
 
 typedef struct {
@@ -68,6 +69,7 @@ typedef struct {
     int32_t scroll_y;
     int32_t scroll_max;
     int32_t selected_index;
+    int32_t dropdown_open;
 
     char *text;
     int32_t text_len;
@@ -401,6 +403,7 @@ static inline int32_t ui_component_create_checkbox(ui_context_t *ctx) { return u
 static inline int32_t ui_component_create_text_input(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_TEXT_INPUT); }
 static inline int32_t ui_component_create_scroll_view(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_SCROLL_VIEW); }
 static inline int32_t ui_component_create_list_view(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_LIST_VIEW); }
+static inline int32_t ui_component_create_dropdown(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_DROPDOWN); }
 
 static inline void
 ui_component_set_text(ui_context_t *ctx, int32_t id, const char *text)
@@ -432,7 +435,7 @@ static inline int32_t
 ui_component_list_append(ui_context_t *ctx, int32_t id, const char *item)
 {
     ui_component_t *c = ui_component_by_id(ctx, id);
-    if (!c || c->type != UI_COMPONENT_LIST_VIEW || !item) return -1;
+    if (!c || (c->type != UI_COMPONENT_LIST_VIEW && c->type != UI_COMPONENT_DROPDOWN) || !item) return -1;
     if (c->item_count >= c->item_capacity) {
         int32_t cap = c->item_capacity > 0 ? c->item_capacity : UI_LIST_INITIAL_CAP;
         while (cap <= c->item_count) cap *= 2;
@@ -570,6 +573,21 @@ ui_point_in_bounds(int32_t x, int32_t y, ui_rect_t r)
     return x >= r.x && y >= r.y && x < (r.x + r.w) && y < (r.y + r.h);
 }
 
+static inline ui_rect_t
+ui_dropdown_popup_bounds(const ui_context_t *ctx, const ui_component_t *c)
+{
+    ui_rect_t popup = { 0, 0, 0, 0 };
+    if (!ctx || !c || c->type != UI_COMPONENT_DROPDOWN || !c->dropdown_open || c->item_count <= 0) return popup;
+    const int32_t item_h = 20;
+    popup.x = c->bounds.x;
+    popup.w = c->bounds.w;
+    popup.h = (c->item_count * item_h > 120) ? 120 : (c->item_count * item_h);
+    popup.y = c->bounds.y + c->bounds.h;
+    if ((popup.y + popup.h) > ctx->height) popup.y = c->bounds.y - popup.h;
+    if (popup.y < 0) popup.y = 0;
+    return popup;
+}
+
 static inline void
 ui_layout_vertical(ui_context_t *ctx, int32_t parent_id)
 {
@@ -613,6 +631,14 @@ ui_layout_vertical(ui_context_t *ctx, int32_t parent_id)
         if (p->scroll_y > p->scroll_max) p->scroll_y = p->scroll_max;
         if (p->selected_index < 0) p->selected_index = 0;
         if (p->selected_index >= p->item_count) p->selected_index = (p->item_count > 0) ? (p->item_count - 1) : 0;
+        return;
+    }
+
+    if (p->type == UI_COMPONENT_DROPDOWN) {
+        if (p->selected_index < 0) p->selected_index = 0;
+        if (p->selected_index >= p->item_count) p->selected_index = (p->item_count > 0) ? (p->item_count - 1) : 0;
+        p->scroll_max = 0;
+        p->scroll_y = 0;
         return;
     }
 
@@ -717,6 +743,46 @@ ui_render_component_clip(ui_context_t *ctx, int32_t id, ui_rect_t clip, int32_t 
             ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, inner.x + inner.w - 4, ty, 3, th, 0xFF6C88A8u, clip);
         }
         return;
+    } else if (c->type == UI_COMPONENT_DROPDOWN) {
+        const int32_t active = (ctx->focused_component_id == c->id);
+        const uint32_t inner = active ? 0xFF1F3148u : 0xFF1C2738u;
+        const uint32_t outline = active ? 0xFF89C9FFu : c->border_color;
+        ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height,
+                          draw_bounds.x + 1, draw_bounds.y + 1, draw_bounds.w - 2, draw_bounds.h - 2, inner, clip);
+        ui_stroke_rect_clip(ctx->mapped_base, ctx->width, ctx->height, draw_bounds, 1, outline, clip);
+
+        const char *selected = "";
+        if (c->selected_index >= 0 && c->selected_index < c->item_count && c->list_items && c->list_items[c->selected_index]) {
+            selected = c->list_items[c->selected_index];
+        } else if (c->text) {
+            selected = c->text;
+        }
+        ui_draw_text_clip(ctx->mapped_base, ctx->width, ctx->height,
+                          draw_bounds.x + c->padding_px, draw_bounds.y + (draw_bounds.h - 7) / 2, selected, 0xFFFFFFFFu, clip);
+        ui_draw_text_clip(ctx->mapped_base, ctx->width, ctx->height,
+                          draw_bounds.x + draw_bounds.w - 12, draw_bounds.y + (draw_bounds.h - 7) / 2,
+                          c->dropdown_open ? "^" : "v", 0xFF9CB6CEu, clip);
+
+        if (c->dropdown_open && c->item_count > 0) {
+            const int32_t item_h = 20;
+            const int32_t popup_h = (c->item_count * item_h > 120) ? 120 : (c->item_count * item_h);
+            ui_rect_t popup = { draw_bounds.x, draw_bounds.y + draw_bounds.h, draw_bounds.w, popup_h };
+            if ((popup.y + popup.h) > ctx->height) popup.y = draw_bounds.y - popup_h;
+            if (popup.y < 0) popup.y = 0;
+            ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, popup.x, popup.y, popup.w, popup.h, 0xFF172233u, clip);
+            ui_stroke_rect_clip(ctx->mapped_base, ctx->width, ctx->height, popup, 1, c->border_color, clip);
+            const ui_rect_t popup_clip = ui_rect_intersect(clip, popup);
+            for (int32_t i = 0; i < c->item_count; ++i) {
+                const int32_t row_y = popup.y + (i * item_h);
+                if (row_y >= (popup.y + popup.h)) break;
+                const uint32_t row_bg = (i == c->selected_index) ? 0xFF2F5C88u : ((i & 1) ? 0xFF1F2E43u : 0xFF1A283B);
+                ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, popup.x, row_y, popup.w, item_h, row_bg, popup_clip);
+                ui_draw_text_clip(ctx->mapped_base, ctx->width, ctx->height,
+                                  popup.x + 6, row_y + (item_h - 7) / 2,
+                                  c->list_items[i] ? c->list_items[i] : "", 0xFFFFFFFFu, popup_clip);
+            }
+        }
+        return;
     } else if (c->type == UI_COMPONENT_SCROLL_VIEW) {
         const ui_rect_t inner = {
             draw_bounds.x + c->padding_px,
@@ -775,6 +841,10 @@ ui_find_component_at(ui_context_t *ctx, int32_t id, int32_t x, int32_t y)
         if (!child) break;
         child_id = child->next_sibling_id;
     }
+    if (c->type == UI_COMPONENT_DROPDOWN && c->dropdown_open) {
+        const ui_rect_t popup = ui_dropdown_popup_bounds(ctx, c);
+        if (popup.w > 0 && popup.h > 0 && ui_point_in_bounds(x, y, popup)) return c->id;
+    }
     if (ui_point_in_bounds(x, y, c->bounds)) return c->id;
     return -1;
 }
@@ -810,6 +880,10 @@ ui_find_list_view_at(ui_context_t *ctx, int32_t id, int32_t x, int32_t y)
         child_id = child->next_sibling_id;
     }
     if (c->type == UI_COMPONENT_LIST_VIEW && ui_point_in_bounds(x, y, c->bounds)) return c->id;
+    if (c->type == UI_COMPONENT_DROPDOWN && c->dropdown_open) {
+        const ui_rect_t popup = ui_dropdown_popup_bounds(ctx, c);
+        if (popup.w > 0 && popup.h > 0 && ui_point_in_bounds(x, y, popup)) return c->id;
+    }
     return -1;
 }
 
@@ -827,6 +901,13 @@ ui_find_clickable_at(ui_context_t *ctx, int32_t id, int32_t x, int32_t y)
         child_id = child->next_sibling_id;
     }
     if (c->clickable && ui_point_in_bounds(x, y, c->bounds)) return c->id;
+    if (c->type == UI_COMPONENT_DROPDOWN) {
+        if (ui_point_in_bounds(x, y, c->bounds)) return c->id;
+        if (c->dropdown_open) {
+            const ui_rect_t popup = ui_dropdown_popup_bounds(ctx, c);
+            if (popup.w > 0 && popup.h > 0 && ui_point_in_bounds(x, y, popup)) return c->id;
+        }
+    }
     return -1;
 }
 
@@ -874,7 +955,7 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
         if (left_now && !left_prev) {
             const int32_t focus_id = ui_find_component_at(ctx, ctx->root_id, ctx->pointer_x, ctx->pointer_y);
             ui_component_t *focus = ui_component_by_id(ctx, focus_id);
-            if (focus && focus->type == UI_COMPONENT_TEXT_INPUT) {
+            if (focus && (focus->type == UI_COMPONENT_TEXT_INPUT || focus->type == UI_COMPONENT_DROPDOWN)) {
                 ctx->focused_component_id = focus->id;
             } else {
                 ctx->focused_component_id = 0;
@@ -891,12 +972,25 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
 
             const int32_t list_id = ui_find_list_view_at(ctx, ctx->root_id, ctx->pointer_x, ctx->pointer_y);
             ui_component_t *lv = ui_component_by_id(ctx, list_id);
-            if (lv && lv->item_count > 0) {
+            if (lv && lv->type == UI_COMPONENT_LIST_VIEW && lv->item_count > 0) {
                 const int32_t rel_y = (ctx->pointer_y - (lv->bounds.y + lv->padding_px)) + lv->scroll_y;
                 const int32_t idx = rel_y / 20;
                 if (idx >= 0 && idx < lv->item_count) {
                     lv->selected_index = idx;
                     ui_mark_dirty(ctx);
+                }
+            } else if (lv && lv->type == UI_COMPONENT_DROPDOWN) {
+                if (ui_point_in_bounds(ctx->pointer_x, ctx->pointer_y, lv->bounds)) {
+                    lv->dropdown_open = lv->dropdown_open ? 0 : 1;
+                    ui_mark_dirty(ctx);
+                } else if (lv->dropdown_open) {
+                    const ui_rect_t popup = ui_dropdown_popup_bounds(ctx, lv);
+                    if (popup.w > 0 && popup.h > 0 && ui_point_in_bounds(ctx->pointer_x, ctx->pointer_y, popup)) {
+                        const int32_t idx = (ctx->pointer_y - popup.y) / 20;
+                        if (idx >= 0 && idx < lv->item_count) lv->selected_index = idx;
+                        lv->dropdown_open = 0;
+                        ui_mark_dirty(ctx);
+                    }
                 }
             }
         } else if (!left_now && left_prev) {
@@ -907,6 +1001,15 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
                     hit->checked = hit->checked ? 0 : 1;
                 }
                 hit->on_click(ctx, hit->id, hit->on_click_user);
+            }
+            if (!hit) {
+                for (int32_t i = 0; i < ctx->component_count; ++i) {
+                    ui_component_t *c = &ctx->components[i];
+                    if (c->in_use && c->type == UI_COMPONENT_DROPDOWN && c->dropdown_open) {
+                        c->dropdown_open = 0;
+                        ui_mark_dirty(ctx);
+                    }
+                }
             }
             for (int32_t i = 0; i < ctx->component_count; ++i) {
                 if (ctx->components[i].in_use && ctx->components[i].pressed) {
@@ -961,6 +1064,26 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
                         focus->text[focus->text_len] = (char)key;
                         focus->text[focus->text_len + 1] = '\0';
                         focus->text_len += 1;
+                        ui_mark_dirty(ctx);
+                    }
+                }
+            } else if (focus && focus->type == UI_COMPONENT_DROPDOWN) {
+                if (key == 27u) {
+                    if (focus->dropdown_open) {
+                        focus->dropdown_open = 0;
+                        ui_mark_dirty(ctx);
+                    }
+                } else if (key == '\r' || key == '\n' || key == ' ') {
+                    focus->dropdown_open = focus->dropdown_open ? 0 : 1;
+                    ui_mark_dirty(ctx);
+                } else if (key == 'j' || key == 'J') {
+                    if (focus->item_count > 0 && focus->selected_index < (focus->item_count - 1)) {
+                        focus->selected_index += 1;
+                        ui_mark_dirty(ctx);
+                    }
+                } else if (key == 'k' || key == 'K') {
+                    if (focus->item_count > 0 && focus->selected_index > 0) {
+                        focus->selected_index -= 1;
                         ui_mark_dirty(ctx);
                     }
                 }

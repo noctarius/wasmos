@@ -15,9 +15,6 @@
 extern "C" {
 #endif
 
-void *malloc(size_t size);
-void free(void *ptr);
-
 #define UI_PAGE_SIZE 4096
 #define UI_REQ_BASE 0x7400
 #define UI_COMPONENTS_INITIAL_CAP 16
@@ -116,7 +113,17 @@ typedef struct ui_context {
     ui_component_t *components;
     int32_t component_count;
     int32_t component_capacity;
+
+    struct ui_heap_chunk *heap_head;
+    int32_t heap_chunk_bytes;
 } ui_context_t;
+
+typedef struct ui_heap_chunk {
+    struct ui_heap_chunk *next;
+    int32_t shmem_id;
+    int32_t bytes;
+    int32_t used;
+} ui_heap_chunk_t;
 
 static inline int32_t ui_u16_lo(int32_t packed) { return (packed & 0xFFFF); }
 static inline int32_t ui_u16_hi(int32_t packed) { return ((packed >> 16) & 0xFFFF); }
@@ -124,6 +131,55 @@ static inline int32_t ui_i16_lo(int32_t packed) { return (int16_t)(packed & 0xFF
 static inline int32_t ui_i16_hi(int32_t packed) { return (int16_t)((packed >> 16) & 0xFFFF); }
 
 static inline void ui_mark_dirty(ui_context_t *ctx) { if (ctx) ctx->dirty = 1; }
+
+static inline uintptr_t
+ui_align_up(uintptr_t v, uintptr_t align)
+{
+    return (v + (align - 1u)) & ~(align - 1u);
+}
+
+static inline void *
+ui_heap_alloc(ui_context_t *ctx, size_t size, size_t align)
+{
+    if (!ctx || size == 0) return 0;
+    if (align < sizeof(void *)) align = sizeof(void *);
+    if ((align & (align - 1u)) != 0) align = sizeof(void *);
+    if (ctx->heap_chunk_bytes <= 0) ctx->heap_chunk_bytes = UI_PAGE_SIZE;
+
+    ui_heap_chunk_t *chunk = ctx->heap_head;
+    while (chunk) {
+        uintptr_t base = (uintptr_t)((uint8_t *)chunk + sizeof(ui_heap_chunk_t));
+        uintptr_t p = ui_align_up(base + (uintptr_t)chunk->used, (uintptr_t)align);
+        int32_t next_used = (int32_t)((p - base) + size);
+        if (next_used <= chunk->bytes) {
+            chunk->used = next_used;
+            return (void *)p;
+        }
+        chunk = chunk->next;
+    }
+
+    int32_t need = (int32_t)(sizeof(ui_heap_chunk_t) + size + align);
+    int32_t chunk_bytes = ctx->heap_chunk_bytes;
+    while (chunk_bytes < need) chunk_bytes *= 2;
+    const int32_t pages = (chunk_bytes + (UI_PAGE_SIZE - 1)) / UI_PAGE_SIZE;
+    const int32_t alloc_bytes = pages * UI_PAGE_SIZE;
+    const int32_t shmem_id = wasmos_shmem_create(pages, 0);
+    if (shmem_id <= 0) return 0;
+    const int32_t mapped = wasmos_shmem_map_auto(shmem_id, alloc_bytes);
+    if (mapped < 0) return 0;
+    ui_heap_chunk_t *new_chunk = (ui_heap_chunk_t *)(uintptr_t)(uint32_t)mapped;
+    new_chunk->next = ctx->heap_head;
+    new_chunk->shmem_id = shmem_id;
+    new_chunk->bytes = alloc_bytes - (int32_t)sizeof(ui_heap_chunk_t);
+    new_chunk->used = 0;
+    ctx->heap_head = new_chunk;
+    if (chunk_bytes > ctx->heap_chunk_bytes) ctx->heap_chunk_bytes = chunk_bytes;
+
+    uintptr_t base = (uintptr_t)((uint8_t *)new_chunk + sizeof(ui_heap_chunk_t));
+    uintptr_t p = ui_align_up(base, (uintptr_t)align);
+    new_chunk->used = (int32_t)((p - base) + size);
+    return (void *)p;
+}
 
 static inline void
 ui_fill_rect(uint8_t *base, int32_t bw, int32_t bh, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t color)
@@ -318,18 +374,17 @@ ui_component_by_id(ui_context_t *ctx, int32_t id)
 }
 
 static inline int32_t
-ui_component_set_text_owned(ui_component_t *c, const char *text)
+ui_component_set_text_owned(ui_context_t *ctx, ui_component_t *c, const char *text)
 {
-    if (!c) return -1;
+    if (!ctx || !c) return -1;
     if (!text) text = "";
     const int32_t need = (int32_t)strlen(text) + 1;
     if (need <= 0) return -1;
     if (c->text_cap < need) {
         int32_t new_cap = c->text_cap > 0 ? c->text_cap : UI_TEXT_INITIAL_CAP;
         while (new_cap < need) new_cap *= 2;
-        char *new_text = (char *)malloc((size_t)new_cap);
+        char *new_text = (char *)ui_heap_alloc(ctx, (size_t)new_cap, sizeof(void *));
         if (!new_text) return -1;
-        if (c->text) free(c->text);
         c->text = new_text;
         c->text_cap = new_cap;
     }
@@ -344,11 +399,10 @@ ui_components_reserve(ui_context_t *ctx, int32_t target)
     if (!ctx || target <= ctx->component_capacity) return 0;
     int32_t cap = ctx->component_capacity > 0 ? ctx->component_capacity : UI_COMPONENTS_INITIAL_CAP;
     while (cap < target) cap *= 2;
-    ui_component_t *new_arr = (ui_component_t *)malloc((size_t)cap * sizeof(ui_component_t));
+    ui_component_t *new_arr = (ui_component_t *)ui_heap_alloc(ctx, (size_t)cap * sizeof(ui_component_t), sizeof(void *));
     if (!new_arr) return -1;
     if (ctx->components && ctx->component_count > 0) {
         memcpy(new_arr, ctx->components, (size_t)ctx->component_count * sizeof(ui_component_t));
-        free(ctx->components);
     }
     ctx->components = new_arr;
     ctx->component_capacity = cap;
@@ -381,7 +435,7 @@ ui_component_alloc(ui_context_t *ctx, ui_component_type_t type)
     c->list_items = 0;
     c->item_count = 0;
     c->item_capacity = 0;
-    if (ui_component_set_text_owned(c, "") != 0) return -1;
+    if (ui_component_set_text_owned(ctx, c, "") != 0) return -1;
     return c->id;
 }
 
@@ -424,7 +478,7 @@ ui_component_set_text(ui_context_t *ctx, int32_t id, const char *text)
 {
     ui_component_t *c = ui_component_by_id(ctx, id);
     if (!c) return;
-    (void)ui_component_set_text_owned(c, text ? text : "");
+    (void)ui_component_set_text_owned(ctx, c, text ? text : "");
 }
 
 static inline void
@@ -453,18 +507,17 @@ ui_component_list_append(ui_context_t *ctx, int32_t id, const char *item)
     if (c->item_count >= c->item_capacity) {
         int32_t cap = c->item_capacity > 0 ? c->item_capacity : UI_LIST_INITIAL_CAP;
         while (cap <= c->item_count) cap *= 2;
-        char **new_items = (char **)malloc((size_t)cap * sizeof(char *));
+        char **new_items = (char **)ui_heap_alloc(ctx, (size_t)cap * sizeof(char *), sizeof(void *));
         if (!new_items) return -1;
         for (int32_t i = 0; i < cap; ++i) new_items[i] = 0;
         if (c->list_items && c->item_count > 0) {
             memcpy(new_items, c->list_items, (size_t)c->item_count * sizeof(char *));
-            free(c->list_items);
         }
         c->list_items = new_items;
         c->item_capacity = cap;
     }
     const size_t len = strlen(item) + 1;
-    char *copy = (char *)malloc(len);
+    char *copy = (char *)ui_heap_alloc(ctx, len, sizeof(void *));
     if (!copy) return -1;
     memcpy(copy, item, len);
     c->list_items[c->item_count] = copy;
@@ -543,6 +596,7 @@ ui_init(ui_context_t *ctx, int32_t proc_endpoint, int32_t reply_endpoint, int32_
     ctx->reply_endpoint = reply_endpoint;
     ctx->req_id = UI_REQ_BASE;
     ctx->font_px = 14;
+    ctx->heap_chunk_bytes = UI_PAGE_SIZE;
     ctx->next_component_id = 1;
     if (ui_components_reserve(ctx, UI_COMPONENTS_INITIAL_CAP) != 0) goto fail;
 
@@ -595,17 +649,12 @@ ui_destroy(ui_context_t *ctx)
     }
     if (ctx->shmem_id > 0) (void)wasmos_shmem_unmap(ctx->shmem_id);
 
-    for (int32_t i = 0; i < ctx->component_count; ++i) {
-        ui_component_t *c = &ctx->components[i];
-        if (c->text) free(c->text);
-        if (c->list_items) {
-            for (int32_t j = 0; j < c->item_count; ++j) {
-                if (c->list_items[j]) free(c->list_items[j]);
-            }
-            free(c->list_items);
-        }
+    ui_heap_chunk_t *chunk = ctx->heap_head;
+    while (chunk) {
+        ui_heap_chunk_t *next = chunk->next;
+        if (chunk->shmem_id > 0) (void)wasmos_shmem_unmap(chunk->shmem_id);
+        chunk = next;
     }
-    if (ctx->components) free(ctx->components);
     memset(ctx, 0, sizeof(*ctx));
 }
 
@@ -1096,10 +1145,9 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
                     if (focus->text_cap < need) {
                         int32_t new_cap = focus->text_cap > 0 ? focus->text_cap : UI_TEXT_INITIAL_CAP;
                         while (new_cap < need) new_cap *= 2;
-                        char *new_text = (char *)malloc((size_t)new_cap);
+                        char *new_text = (char *)ui_heap_alloc(ctx, (size_t)new_cap, sizeof(void *));
                         if (new_text) {
                             if (focus->text) memcpy(new_text, focus->text, (size_t)focus->text_len + 1);
-                            if (focus->text) free(focus->text);
                             focus->text = new_text;
                             focus->text_cap = new_cap;
                         }

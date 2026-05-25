@@ -63,6 +63,7 @@ static uint64_t g_gdt[GDT_ENTRY_COUNT] = {
 static idt_entry_t g_idt[IDT_ENTRY_COUNT];
 uint8_t g_irq0_ist_stack[IRQ0_IST_STACK_SIZE] __attribute__((aligned(16)));
 uint64_t g_irq0_ist_canary = 0xCAFEBABEDEADC0DEULL;
+static uint8_t g_rsp0_stack[IRQ0_IST_STACK_SIZE] __attribute__((aligned(16)));
 
 typedef struct __attribute__((packed)) {
     uint32_t reserved0;
@@ -354,7 +355,8 @@ tss_init(void)
     }
     *(uint64_t *)(uintptr_t)g_irq0_ist_stack = g_irq0_ist_canary;
     uint64_t ist1_top = (uint64_t)(uintptr_t)(g_irq0_ist_stack + IRQ0_IST_STACK_SIZE);
-    g_tss.rsp0 = ist1_top;
+    uint64_t rsp0_top = (uint64_t)(uintptr_t)(g_rsp0_stack + IRQ0_IST_STACK_SIZE);
+    g_tss.rsp0 = rsp0_top;
     g_tss.ist1 = ist1_top;
     g_tss.iopb = (uint16_t)sizeof(g_tss);
     gdt_set_tss();

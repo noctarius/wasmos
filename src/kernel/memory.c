@@ -802,7 +802,8 @@ mm_copy_from_user_impl(void *opaque)
         memcpy(bounce, (const void *)(uintptr_t)user_cur, (size_t)n);
         if (paging_switch_root(args->prev_root) != 0) {
             mm_trace_copy_fail("from", "switch_to_prev", args->context_id, args->user_addr, args->size, args->prev_root, paging_get_current_root_table(), user_cur, n);
-            return -1;
+            /* Cannot return: CPU is still under the user page table. Halt. */
+            for (;;) {}
         }
         memcpy(dst_bytes, bounce, (size_t)n);
         dst_bytes += n;
@@ -863,7 +864,8 @@ mm_copy_to_user_impl(void *opaque)
         memcpy((void *)(uintptr_t)user_cur, bounce, (size_t)n);
         if (paging_switch_root(args->prev_root) != 0) {
             mm_trace_copy_fail("to", "switch_to_prev", args->context_id, args->user_addr, args->size, args->prev_root, paging_get_current_root_table(), user_cur, n);
-            return -1;
+            /* Cannot return: CPU is still under the user page table. Halt. */
+            for (;;) {}
         }
         src_bytes += n;
         user_cur += n;

@@ -531,6 +531,14 @@ fn handle_measure_text(req: *const c.nd_ipc_message_t) void {
     const text_n: usize = @intCast(text_len);
 
     const metrics = compute_text_metrics(f, h.px_size, text_ptr, text_n);
+    if (text_n > 0 and metrics.width == 0 and metrics.height == 0 and metrics.advance_x == 0) {
+        logMsg("[dbg-font] measure-zero len/b0/b1/font/px\n");
+        logHex32("  len=", @intCast(text_n));
+        logHex32("  b0=", text_ptr[0]);
+        logHex32("  b1=", if (text_n > 1) text_ptr[1] else 0);
+        logHex32("  font_id=", h.font_id);
+        logHex32("  px=", h.px_size);
+    }
     const w16: u16 = @intCast(clamp_i32(metrics.width, 0, 0xFFFF));
     const h16: u16 = @intCast(clamp_i32(metrics.height, 0, 0xFFFF));
     const x016: i16 = @intCast(clamp_i32(metrics.x0, -32768, 32767));
@@ -603,6 +611,7 @@ fn handle_raster_text_into(req: *const c.nd_ipc_message_t) void {
     @memset(dst[0..out_size], 0);
 
     const scale = c.stbtt_ScaleForPixelHeight(&f.font_info, @floatFromInt(h.px_size));
+    c.wasmos_stbtt_alloc_reset();
     var pen_x: i32 = 0;
     var i: usize = 0;
     while (i < text_n) : (i += 1) {
@@ -659,6 +668,23 @@ fn handle_raster_text_into(req: *const c.nd_ipc_message_t) void {
             }
         }
         pen_x += advance_x;
+    }
+
+    var nz: usize = 0;
+    var max_a: u8 = 0;
+    var k: usize = 0;
+    while (k < out_size) : (k += 1) {
+        const a = dst[k];
+        if (a != 0) nz += 1;
+        if (a > max_a) max_a = a;
+    }
+    if (out_size > 0 and nz == 0) {
+        logMsg("[dbg-font] raster-zero out_size/font/px/b0/b1\n");
+        logHex32("  out_size=", @intCast(out_size));
+        logHex32("  font_id=", h.font_id);
+        logHex32("  px=", h.px_size);
+        logHex32("  b0=", text_ptr[0]);
+        logHex32("  b1=", if (text_n > 1) text_ptr[1] else 0);
     }
 
     const w16: u16 = @intCast(clamp_i32(metrics.width, 0, 0xFFFF));

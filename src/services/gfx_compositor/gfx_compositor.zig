@@ -446,6 +446,12 @@ fn active_keymap() *const keymap_t {
 fn scancode_to_ascii(scancode: u8, shifted: bool, altgr: bool) u8 {
     const km = active_keymap();
     if (scancode >= SCANCODE_MAP_LEN) return 0;
+    if (g_key_layout == .de_nodeadkeys) {
+        if (scancode == 0x1A) return if (shifted) 0xDC else 0xFC; // Ü/ü
+        if (scancode == 0x27) return if (shifted) 0xD6 else 0xF6; // Ö/ö
+        if (scancode == 0x28) return if (shifted) 0xC4 else 0xE4; // Ä/ä
+        if (scancode == 0x0C) return 0xDF; // ß
+    }
     if (altgr and km.altgr[scancode] != 0) return km.altgr[scancode];
     return if (shifted) km.shift[scancode] else km.plain[scancode];
 }
@@ -2257,7 +2263,7 @@ fn handle_ipc_dispatch(msg: *const c.nd_ipc_message_t) void {
             if (g_focused_window_id != 0) {
                 if (window_find_by_id(g_focused_window_id)) |focused_idx| {
                     const focused = g_windows[focused_idx];
-                    const key_flags = (msg.arg1 & 1) | ((msg.arg2 & 1) << 1);
+                    const key_flags: u32 = (if ((msg.arg1 & 1) == 0) @as(u32, 1) else @as(u32, 0)) | ((msg.arg2 & 1) << 1);
                     var key_code: u32 = 0;
                     if (!extended) {
                         key_code = scancode_to_ascii(scancode, g_shift_down, g_altgr_down);

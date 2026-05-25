@@ -14,6 +14,7 @@ const GFX_MAX_DAMAGE_RECTS: u32 = 256;
 const GFX_MAX_EVENTS: usize = 128;
 const GFX_MAX_GLYPH_CACHE: usize = 64;
 const GFX_MAX_GLYPH_BYTES: usize = 4096;
+const GFX_MAX_TITLE_LABEL: usize = 24;
 const FONT_INIT_MAX_ATTEMPTS: u32 = 64;
 const FONT_INIT_RETRY_MASK: u32 = 0x3F;
 const TITLE_GLYPHS: []const u8 = "win 0123456789";
@@ -144,6 +145,21 @@ var g_windows: [GFX_MAX_WINDOWS]window_slot_t = [_]window_slot_t{.{}} ** GFX_MAX
 var g_buffers: [GFX_MAX_BUFFERS]buffer_slot_t = [_]buffer_slot_t{.{}} ** GFX_MAX_BUFFERS;
 var g_events: [GFX_MAX_EVENTS]gfx_event_t = [_]gfx_event_t{.{}} ** GFX_MAX_EVENTS;
 var g_glyph_cache: [GFX_MAX_GLYPH_CACHE]glyph_cache_entry_t = [_]glyph_cache_entry_t{.{}} ** GFX_MAX_GLYPH_CACHE;
+const title_run_cache_entry_t = struct {
+    valid: bool = false,
+    window_id: u32 = 0,
+    window_generation: u32 = 0,
+    label_len: usize = 0,
+    label: [GFX_MAX_TITLE_LABEL]u8 = [_]u8{0} ** GFX_MAX_TITLE_LABEL,
+    w: i32 = 0,
+    h: i32 = 0,
+    x0: i16 = 0,
+    y0: i16 = 0,
+    advance_x: i32 = 0,
+    mask_len: usize = 0,
+    mask_data: [GFX_MAX_GLYPH_BYTES]u8 = [_]u8{0} ** GFX_MAX_GLYPH_BYTES,
+};
+var g_title_run_cache: [GFX_MAX_WINDOWS]title_run_cache_entry_t = [_]title_run_cache_entry_t{.{}} ** GFX_MAX_WINDOWS;
 var g_font_text_shmem_id: u32 = 0;
 var g_font_text_ptr: ?[*]u8 = null;
 var g_font_text_cap: usize = 0;
@@ -1017,6 +1033,7 @@ fn window_alloc(owner_endpoint: u32, width: u32, height: u32) ?usize {
         g_windows[i].z = g_next_z;
         g_windows[i].generation = 1;
         g_windows[i].current_buffer_id = 0;
+        g_title_run_cache[i] = .{};
 
         if (g_fb_info_valid) {
             const off = @as(i32, @intCast((g_windows[i].z & 0xF) * 20));
@@ -1493,6 +1510,76 @@ fn font_measure_and_raster_text(text: []const u8, out_w: *i32, out_h: *i32, out_
     return true;
 }
 
+fn build_window_title_label(window_id: u32, out: *[GFX_MAX_TITLE_LABEL]u8) usize {
+    const prefix = "win ";
+    var n: usize = 0;
+    while (n < prefix.len) : (n += 1) out[n] = prefix[n];
+    var id = window_id;
+    var tmp: [10]u8 = undefined;
+    var digits: usize = 0;
+    while (true) {
+        tmp[digits] = @intCast('0' + (id % 10));
+        digits += 1;
+        id /= 10;
+        if (id == 0 or digits == tmp.len) break;
+    }
+    var d: usize = 0;
+    while (d < digits and n < out.len) : (d += 1) {
+        out[n] = tmp[digits - 1 - d];
+        n += 1;
+    }
+    return n;
+}
+
+fn title_cache_valid_for_window(slot_idx: usize, win: window_slot_t, label: []const u8) bool {
+    const e = g_title_run_cache[slot_idx];
+    if (!e.valid) return false;
+    if (e.window_id != win.window_id or e.window_generation != win.generation) return false;
+    if (e.label_len != label.len) return false;
+    var i: usize = 0;
+    while (i < label.len) : (i += 1) {
+        if (e.label[i] != label[i]) return false;
+    }
+    return true;
+}
+
+fn refresh_title_cache(slot_idx: usize, win: window_slot_t, label: []const u8) bool {
+    var w: i32 = 0;
+    var h: i32 = 0;
+    var x0: i16 = 0;
+    var y0: i16 = 0;
+    var adv: i32 = 0;
+    if (!font_measure_and_raster_text(label, &w, &h, &x0, &y0, &adv)) return false;
+
+    var entry = title_run_cache_entry_t{
+        .valid = true,
+        .window_id = win.window_id,
+        .window_generation = win.generation,
+        .label_len = label.len,
+        .w = w,
+        .h = h,
+        .x0 = x0,
+        .y0 = y0,
+        .advance_x = adv,
+        .mask_len = 0,
+    };
+    var i: usize = 0;
+    while (i < label.len) : (i += 1) entry.label[i] = label[i];
+
+    if (w > 0 and h > 0) {
+        const pixel_count_i32 = w * h;
+        if (pixel_count_i32 <= 0) return false;
+        const pixel_count: usize = @intCast(pixel_count_i32);
+        if (pixel_count > entry.mask_data.len or g_font_mask_ptr == null) return false;
+        const src = g_font_mask_ptr.?;
+        var j: usize = 0;
+        while (j < pixel_count) : (j += 1) entry.mask_data[j] = src[j];
+        entry.mask_len = pixel_count;
+    }
+    g_title_run_cache[slot_idx] = entry;
+    return true;
+}
+
 fn glyph_cache_insert_from_font(codepoint: u32) bool {
     if (glyph_cache_lookup(codepoint) != null) return true;
     if (g_font_endpoint == IPC_ENDPOINT_NONE or g_font_title_handle == 0) return false;
@@ -1577,43 +1664,26 @@ fn init_title_glyph_cache_startup() void {
 fn draw_window_title_text(win: window_slot_t, clip: c.gfx_rect_t) void {
     _ = clip;
     if (g_font_endpoint == IPC_ENDPOINT_NONE or g_font_title_handle == 0) return;
+    const slot_idx = window_find_by_id(win.window_id) orelse return;
     const cr = window_close_rect(win);
     const title_clip = window_title_rect(win);
     const pen_x: i32 = win.x + CHROME_BORDER + 4;
     const base_y: i32 = win.y + CHROME_TITLE_H - 7;
-    var label: [24]u8 = undefined;
-    const prefix = "win ";
-    var n: usize = 0;
-    while (n < prefix.len) : (n += 1) label[n] = prefix[n];
-    var id = win.window_id;
-    var tmp: [10]u8 = undefined;
-    var digits: usize = 0;
-    while (true) {
-        tmp[digits] = @intCast('0' + (id % 10));
-        digits += 1;
-        id /= 10;
-        if (id == 0 or digits == tmp.len) break;
-    }
-    var d: usize = 0;
-    while (d < digits and n < label.len) : (d += 1) {
-        label[n] = tmp[digits - 1 - d];
-        n += 1;
-    }
-
+    var label: [GFX_MAX_TITLE_LABEL]u8 = undefined;
+    const n = build_window_title_label(win.window_id, &label);
     if (n == 0) return;
-    var w: i32 = 0;
-    var h: i32 = 0;
-    var x0: i16 = 0;
-    var y0: i16 = 0;
-    var adv: i32 = 0;
-    if (!font_measure_and_raster_text(label[0..n], &w, &h, &x0, &y0, &adv)) return;
-    if (w <= 0 or h <= 0 or g_font_mask_ptr == null) return;
+
+    if (!title_cache_valid_for_window(slot_idx, win, label[0..n])) {
+        if (!refresh_title_cache(slot_idx, win, label[0..n])) return;
+    }
+    const entry = g_title_run_cache[slot_idx];
+    if (entry.w <= 0 or entry.h <= 0 or entry.mask_len == 0) return;
     draw_glyph_mask(
-        pen_x + @as(i32, x0),
-        base_y + @as(i32, y0),
-        w,
-        h,
-        @ptrCast(g_font_mask_ptr.?),
+        pen_x + @as(i32, entry.x0),
+        base_y + @as(i32, entry.y0),
+        entry.w,
+        entry.h,
+        @ptrCast(&entry.mask_data[0]),
         title_clip,
         0xFFFFFFFF,
     );

@@ -294,11 +294,11 @@ ui_draw_text_clip(ui_context_t *ctx, int32_t x, int32_t y, const char *text, uin
 
     const uint8_t *mask = ctx->font_mask_ptr;
     for (int32_t gy = 0; gy < h; ++gy) {
-        const int32_t py = y + y0 + gy;
+        const int32_t py = y + gy;
         if (py < clip.y || py >= (clip.y + clip.h) || py < 0 || py >= ctx->height) continue;
         uint32_t *row = (uint32_t *)(void *)(ctx->mapped_base + ((size_t)py * (size_t)ctx->width * 4u));
         for (int32_t gx = 0; gx < w; ++gx) {
-            const int32_t px = x + x0 + gx;
+            const int32_t px = x + gx;
             if (px < clip.x || px >= (clip.x + clip.w) || px < 0 || px >= ctx->width) continue;
             const uint8_t a = mask[gy * w + gx];
             if (a == 0) continue;

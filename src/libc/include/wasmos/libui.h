@@ -15,6 +15,9 @@
 extern "C" {
 #endif
 
+void *malloc(size_t size);
+void free(void *ptr);
+
 #define UI_PAGE_SIZE 4096
 #define UI_REQ_BASE 0x7400
 #define UI_COMPONENTS_INITIAL_CAP 16
@@ -977,12 +980,14 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
     }
 
     if (msg->arg1 == GFX_EVENT_POINTER) {
-        const int32_t dx = ui_i16_lo(msg->arg2);
-        const int32_t dy = ui_i16_hi(msg->arg2);
+        const int32_t new_x = ui_u16_lo(msg->arg2);
+        const int32_t new_y = ui_u16_hi(msg->arg2);
+        const int32_t dx = new_x - ctx->pointer_x;
+        const int32_t dy = new_y - ctx->pointer_y;
         const uint32_t buttons = (uint32_t)msg->arg3;
 
-        ctx->pointer_x += dx;
-        ctx->pointer_y += dy;
+        ctx->pointer_x = new_x;
+        ctx->pointer_y = new_y;
         if (ctx->pointer_x < 0) ctx->pointer_x = 0;
         if (ctx->pointer_y < 0) ctx->pointer_y = 0;
         if (ctx->pointer_x >= ctx->width) ctx->pointer_x = ctx->width - 1;

@@ -387,7 +387,7 @@ start_libui_demo(int32_t proc_endpoint)
 {
     ui_context_t *ui = &g_libui_ctx;
     g_libui_click_count = 0;
-    if (ui_init(ui, proc_endpoint, wasmos_ipc_create_endpoint(), 360, 220) != 0) {
+    if (ui_init(ui, proc_endpoint, wasmos_ipc_create_endpoint(), 520, 360) != 0) {
         puts("[test] libui demo init failed");
         return -1;
     }
@@ -412,7 +412,7 @@ start_libui_demo(int32_t proc_endpoint)
         ui_destroy(ui);
         return -1;
     }
-    p->preferred_h = 258;
+    p->preferred_h = 308;
     p->bg_color = 0xFF1A2230u;
     p->padding_px = 8;
     p->gap_px = 8;

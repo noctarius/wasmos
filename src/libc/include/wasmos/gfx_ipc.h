@@ -74,7 +74,7 @@ enum {
     GFX_EVENT_FOCUS_GAINED = 1,
     GFX_EVENT_FOCUS_LOST = 2,
     GFX_EVENT_KEY = 3,
-    /* arg2 packs dx/dy as signed16: low16=dx high16=dy, arg3=button mask */
+    /* arg2 packs content-local x/y as u16: low16=x high16=y, arg3=button mask */
     GFX_EVENT_POINTER = 4,
     /* arg2=window_id, arg3 reserved */
     GFX_EVENT_CLOSE_REQUEST = 5,

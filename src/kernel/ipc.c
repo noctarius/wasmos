@@ -1,4 +1,5 @@
 #include "ipc.h"
+#include "list.h"
 #include "process.h"
 #include "thread.h"
 #include "spinlock.h"
@@ -11,6 +12,7 @@
  */
 
 typedef struct {
+    uint32_t id;
     uint32_t in_use;
     ipc_endpoint_type_t type;
     uint32_t owner_context_id;
@@ -23,98 +25,93 @@ typedef struct {
     uint32_t waiter_tid;
 } ipc_endpoint_t;
 
-static ipc_endpoint_t g_endpoints[IPC_MAX_ENDPOINTS];
+static list_t g_endpoint_table;
+static spinlock_t g_endpoint_table_lock;
+static uint32_t g_next_endpoint_id;
 
-static inline uintptr_t
-ipc_kernel_alias_addr(uintptr_t addr)
-{
-    uint64_t base = KERNEL_HIGHER_HALF_BASE;
-    if ((uint64_t)addr < base) {
-        return (uintptr_t)((uint64_t)addr + base);
-    }
-    return addr;
-}
-
-static inline ipc_endpoint_t *
-ipc_endpoint_table(void)
-{
-    return (ipc_endpoint_t *)(void *)ipc_kernel_alias_addr((uintptr_t)&g_endpoints[0]);
-}
-
-static ipc_endpoint_t *ipc_endpoint_get(uint32_t endpoint) {
-    ipc_endpoint_t *table = ipc_endpoint_table();
-    if (endpoint >= IPC_MAX_ENDPOINTS) {
+static ipc_endpoint_t *ipc_endpoint_get(uint32_t endpoint_id) {
+    list_iter_t it;
+    if (endpoint_id == 0 || endpoint_id == IPC_ENDPOINT_NONE) {
         return 0;
     }
-    if (!table[endpoint].in_use) {
-        return 0;
+    spinlock_lock(&g_endpoint_table_lock);
+    ipc_endpoint_t *ep = (ipc_endpoint_t *)list_first(&g_endpoint_table, &it);
+    while (ep) {
+        if (ep->id == endpoint_id && ep->in_use) {
+            spinlock_unlock(&g_endpoint_table_lock);
+            return ep;
+        }
+        ep = (ipc_endpoint_t *)list_next(&it);
     }
-    return &table[endpoint];
+    spinlock_unlock(&g_endpoint_table_lock);
+    return 0;
 }
 
 void ipc_init(void) {
-    ipc_endpoint_t *table = ipc_endpoint_table();
-    for (uint32_t i = 0; i < IPC_MAX_ENDPOINTS; ++i) {
-        table[i].in_use = 0;
-        table[i].type = IPC_ENDPOINT_TYPE_MESSAGE;
-        table[i].owner_context_id = 0;
-        spinlock_init(&table[i].lock);
-        table[i].head = 0;
-        table[i].tail = 0;
-        table[i].count = 0;
-        table[i].notify_count = 0;
-        table[i].waiter_tid = 0;
+    spinlock_init(&g_endpoint_table_lock);
+    g_next_endpoint_id = 1;
+    if (list_init(&g_endpoint_table, (uint32_t)sizeof(ipc_endpoint_t),
+                  LIST_IMPL_ARRAY_CHUNK, IPC_ENDPOINT_TABLE_CHUNK) != 0) {
+        for (;;) {}
     }
 }
 
 int ipc_endpoint_create(uint32_t owner_context_id, uint32_t *out_endpoint) {
-    ipc_endpoint_t *table = ipc_endpoint_table();
     if (!out_endpoint) {
         return IPC_ERR_INVALID;
     }
-    for (uint32_t i = 0; i < IPC_MAX_ENDPOINTS; ++i) {
-        spinlock_lock(&table[i].lock);
-        if (!table[i].in_use) {
-            table[i].in_use = 1;
-            table[i].type = IPC_ENDPOINT_TYPE_MESSAGE;
-            table[i].owner_context_id = owner_context_id;
-            table[i].head = 0;
-            table[i].tail = 0;
-            table[i].count = 0;
-            table[i].notify_count = 0;
-            table[i].waiter_tid = 0;
-            spinlock_unlock(&table[i].lock);
-            *out_endpoint = i;
-            return IPC_OK;
-        }
-        spinlock_unlock(&table[i].lock);
+    spinlock_lock(&g_endpoint_table_lock);
+    ipc_endpoint_t *ep = (ipc_endpoint_t *)list_alloc(&g_endpoint_table);
+    if (!ep) {
+        spinlock_unlock(&g_endpoint_table_lock);
+        return IPC_ERR_FULL;
     }
-    return IPC_ERR_FULL;
+    ep->id = g_next_endpoint_id++;
+    if (g_next_endpoint_id == IPC_ENDPOINT_NONE) {
+        g_next_endpoint_id = 1;
+    }
+    ep->in_use = 1;
+    ep->type = IPC_ENDPOINT_TYPE_MESSAGE;
+    ep->owner_context_id = owner_context_id;
+    ep->head = 0;
+    ep->tail = 0;
+    ep->count = 0;
+    ep->notify_count = 0;
+    ep->waiter_tid = 0;
+    spinlock_init(&ep->lock);
+    uint32_t id = ep->id;
+    spinlock_unlock(&g_endpoint_table_lock);
+    *out_endpoint = id;
+    return IPC_OK;
 }
 
 int ipc_notification_create(uint32_t owner_context_id, uint32_t *out_endpoint) {
-    ipc_endpoint_t *table = ipc_endpoint_table();
     if (!out_endpoint) {
         return IPC_ERR_INVALID;
     }
-    for (uint32_t i = 0; i < IPC_MAX_ENDPOINTS; ++i) {
-        spinlock_lock(&table[i].lock);
-        if (!table[i].in_use) {
-            table[i].in_use = 1;
-            table[i].type = IPC_ENDPOINT_TYPE_NOTIFICATION;
-            table[i].owner_context_id = owner_context_id;
-            table[i].head = 0;
-            table[i].tail = 0;
-            table[i].count = 0;
-            table[i].notify_count = 0;
-            table[i].waiter_tid = 0;
-            spinlock_unlock(&table[i].lock);
-            *out_endpoint = i;
-            return IPC_OK;
-        }
-        spinlock_unlock(&table[i].lock);
+    spinlock_lock(&g_endpoint_table_lock);
+    ipc_endpoint_t *ep = (ipc_endpoint_t *)list_alloc(&g_endpoint_table);
+    if (!ep) {
+        spinlock_unlock(&g_endpoint_table_lock);
+        return IPC_ERR_FULL;
     }
-    return IPC_ERR_FULL;
+    ep->id = g_next_endpoint_id++;
+    if (g_next_endpoint_id == IPC_ENDPOINT_NONE) {
+        g_next_endpoint_id = 1;
+    }
+    ep->in_use = 1;
+    ep->type = IPC_ENDPOINT_TYPE_NOTIFICATION;
+    ep->owner_context_id = owner_context_id;
+    ep->head = 0;
+    ep->tail = 0;
+    ep->count = 0;
+    ep->notify_count = 0;
+    ep->waiter_tid = 0;
+    spinlock_init(&ep->lock);
+    uint32_t id = ep->id;
+    spinlock_unlock(&g_endpoint_table_lock);
+    *out_endpoint = id;
+    return IPC_OK;
 }
 
 int ipc_endpoint_owner(uint32_t endpoint, uint32_t *out_owner_context_id) {
@@ -282,26 +279,24 @@ int ipc_wait(uint32_t endpoint) {
 void
 ipc_endpoints_release_owner(uint32_t owner_context_id)
 {
-    ipc_endpoint_t *table = ipc_endpoint_table();
     if (owner_context_id == 0) {
         return;
     }
-    for (uint32_t i = 0; i < IPC_MAX_ENDPOINTS; ++i) {
-        ipc_endpoint_t *ep = &table[i];
-        if (!ep->in_use || ep->owner_context_id != owner_context_id) {
-            continue;
-        }
-        spinlock_lock(&ep->lock);
+    spinlock_lock(&g_endpoint_table_lock);
+    list_iter_t it;
+    ipc_endpoint_t *ep = (ipc_endpoint_t *)list_first(&g_endpoint_table, &it);
+    while (ep) {
+        ipc_endpoint_t *next = (ipc_endpoint_t *)list_next(&it);
         if (ep->in_use && ep->owner_context_id == owner_context_id) {
-            ep->in_use = 0;
-            ep->type = IPC_ENDPOINT_TYPE_MESSAGE;
-            ep->owner_context_id = 0;
-            ep->head = 0;
-            ep->tail = 0;
-            ep->count = 0;
-            ep->notify_count = 0;
-            ep->waiter_tid = 0;
+            spinlock_lock(&ep->lock);
+            if (ep->in_use && ep->owner_context_id == owner_context_id) {
+                ep->in_use = 0;
+                ep->waiter_tid = 0;
+            }
+            spinlock_unlock(&ep->lock);
+            list_remove(&g_endpoint_table, ep);
         }
-        spinlock_unlock(&ep->lock);
+        ep = next;
     }
+    spinlock_unlock(&g_endpoint_table_lock);
 }

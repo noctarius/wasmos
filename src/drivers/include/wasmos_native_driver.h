@@ -99,6 +99,9 @@ typedef struct wasmos_driver_api {
     /* ABI contract for strict kernel/driver compatibility checks. */
     uint32_t abi_magic;
     uint32_t abi_version;
+
+    /* ABI extension hooks (append-only to preserve legacy layout). */
+    int      (*shmem_flush)(uint32_t id, const void *ptr, uint32_t size);
 } wasmos_driver_api_t;
 
 #define ND_BUFFER_KIND_FS          1u

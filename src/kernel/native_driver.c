@@ -507,6 +507,24 @@ nd_shmem_unmap(uint32_t id)
 }
 
 static int
+nd_shmem_flush(uint32_t id, const void *ptr, uint32_t size)
+{
+    uint64_t phys_base = 0;
+    uint64_t pages = 0;
+    if (!ptr || size == 0) {
+        return -1;
+    }
+    if (mm_shared_get_phys(0, id, &phys_base, &pages) != 0 || pages == 0 || phys_base == 0) {
+        return -1;
+    }
+    if ((uint64_t)size > pages * PAGE_SIZE) {
+        return -1;
+    }
+    memcpy((void *)(uintptr_t)phys_base, ptr, (size_t)size);
+    return 0;
+}
+
+static int
 nd_shmem_grant(uint32_t id, uint32_t target_context_id)
 {
     return mm_shared_grant(0, id, target_context_id);
@@ -771,6 +789,7 @@ native_driver_start(uint32_t context_id,
     api.buffer_release      = nd_buffer_release;
     api.abi_magic           = WASMOS_NATIVE_ABI_MAGIC;
     api.abi_version         = WASMOS_NATIVE_ABI_VERSION;
+    api.shmem_flush         = nd_shmem_flush;
 
     klog_write("[native-driver] calling initialize\n");
     int rc = entry(&api,

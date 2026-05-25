@@ -181,7 +181,7 @@ Current FS namespace model:
 - MM context registry and per-context capability state are list-backed (no fixed `MM_MAX_CONTEXTS` runtime slot cap)
 - Per-context MM regions are list-backed (no fixed `MM_MAX_REGIONS` table per context)
 - native framebuffer driver mapping now uses the same generic borrow path (`PM_BUFFER_KIND_FRAMEBUFFER`) instead of a dedicated framebuffer mapper callback
-- native driver ABI now has explicit magic/version fields and fails fast on mismatch to avoid mixed-kernel/driver function-table corruption
+- native driver ABI now has explicit magic/version fields and fails fast on mismatch to avoid mixed-kernel/driver function-table corruption; shared-memory operations include a native `shmem_flush` hook for explicit writeback to shared pages when needed.
 - PM `spawn_name` busy responses now carry a transient error code (`arg1=-2`); `sysinit` and `device-manager` retry/yield on busy so boot-time service/driver spawns no longer race each other
 - QEMU now wires a second FAT source directory from repo-root `userfs/`; `fs.vfs` reserves `/user` for that secondary FAT backend while `/boot` remains the primary FAT mount and `/init` is routed to `fs-init` (`fs.init`)
 - device-manager rule roots are now reserved at `/init/devmgr/rules` (bootstrap) and `/boot/system/devmgr/rules` (runtime override) as the starting point for udev-like dynamic device/mount policy

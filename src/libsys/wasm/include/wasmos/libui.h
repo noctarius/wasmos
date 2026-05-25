@@ -1150,7 +1150,7 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
                         focus->text_len -= 1;
                         ui_mark_dirty(ctx);
                     }
-                } else if (key >= 32u && key <= 126u) {
+                } else if (key >= 32u && key <= 255u) {
                     const int32_t need = focus->text_len + 2;
                     if (focus->text_cap < need) {
                         int32_t new_cap = focus->text_cap > 0 ? focus->text_cap : UI_TEXT_INITIAL_CAP;

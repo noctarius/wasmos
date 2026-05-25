@@ -15,8 +15,10 @@ const IPC_FIELD_TYPE: i32 = 0;
 const IPC_FIELD_REQUEST_ID: i32 = 1;
 const IPC_FIELD_ARG0: i32 = 2;
 const IPC_FIELD_ARG1: i32 = 3;
-const IPC_FIELD_ARG2: i32 = 4;
-const IPC_FIELD_ARG3: i32 = 5;
+const IPC_FIELD_SOURCE: i32 = 4;
+const IPC_FIELD_DESTINATION: i32 = 5;
+const IPC_FIELD_ARG2: i32 = 6;
+const IPC_FIELD_ARG3: i32 = 7;
 
 export const SEEK_SET: i32 = 0;
 export const SEEK_CUR: i32 = 1;

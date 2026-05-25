@@ -111,6 +111,8 @@ typedef struct ui_context {
     int32_t font_endpoint;
     int32_t font_handle;
     int32_t font_px;
+    uint8_t *glyph_scratch;
+    int32_t glyph_scratch_cap;
 
     int32_t next_component_id;
     ui_component_t *components;
@@ -222,9 +224,16 @@ ui_draw_text_clip(ui_context_t *ctx, int32_t x, int32_t y, const char *text, uin
         const int32_t y0 = ui_i16_hi(reply.arg3);
         if (shmem_id > 0 && w > 0 && h > 0) {
             const int32_t bytes = w * h;
-            const int32_t mapped = wasmos_shmem_map_auto(shmem_id, bytes);
-            if (mapped >= 0) {
-                const uint8_t *mask = (const uint8_t *)(uintptr_t)(uint32_t)mapped;
+            if (ctx->glyph_scratch_cap < bytes) {
+                uint8_t *new_buf = (uint8_t *)realloc(ctx->glyph_scratch, (size_t)bytes);
+                if (new_buf) {
+                    ctx->glyph_scratch = new_buf;
+                    ctx->glyph_scratch_cap = bytes;
+                }
+            }
+            if (ctx->glyph_scratch && ctx->glyph_scratch_cap >= bytes &&
+                wasmos_shmem_map(shmem_id, (int32_t)(uintptr_t)ctx->glyph_scratch, bytes) == 0) {
+                const uint8_t *mask = ctx->glyph_scratch;
                 for (int32_t gy = 0; gy < h; ++gy) {
                     const int32_t py = y + y0 + gy;
                     if (py < clip.y || py >= (clip.y + clip.h) || py < 0 || py >= ctx->height) continue;
@@ -492,6 +501,7 @@ ui_realloc_buffer(ui_context_t *ctx, int32_t new_w, int32_t new_h)
     const int32_t mapped_ptr = wasmos_shmem_map_auto(new_shmem_id, bytes);
     if (mapped_ptr < 0) return -1;
     if (ctx->shmem_id > 0) (void)wasmos_shmem_unmap(ctx->shmem_id);
+    if (ctx->glyph_scratch) free(ctx->glyph_scratch);
     if (ctx->buffer_id > 0) {
         (void)ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_RELEASE_SHARED_BUFFER,
                           ctx->buffer_id, 0, 0, 0, &status, 0, 0, 0);

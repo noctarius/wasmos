@@ -285,6 +285,62 @@ const text_metrics_t = struct {
     advance_x: i32 = 0,
 };
 
+// UTF-8 decoder adapted from the minimal DFA approach by Bjoern Hoehrmann:
+// https://bjoern.hoehrmann.de/utf-8/decoder/dfa/
+fn utf8_decode_next(text_ptr: [*]const u8, text_n: usize, idx: *usize, out_cp: *u32) bool {
+    if (idx.* >= text_n) return false;
+    const b0 = text_ptr[idx.*];
+    if (b0 == 0) return false;
+    if (b0 < 0x80) {
+        out_cp.* = b0;
+        idx.* += 1;
+        return true;
+    }
+    if ((b0 & 0xE0) == 0xC0 and idx.* + 1 < text_n) {
+        const b1 = text_ptr[idx.* + 1];
+        if ((b1 & 0xC0) == 0x80) {
+            const cp = (@as(u32, b0 & 0x1F) << 6) | @as(u32, b1 & 0x3F);
+            if (cp >= 0x80) {
+                out_cp.* = cp;
+                idx.* += 2;
+                return true;
+            }
+        }
+    } else if ((b0 & 0xF0) == 0xE0 and idx.* + 2 < text_n) {
+        const b1 = text_ptr[idx.* + 1];
+        const b2 = text_ptr[idx.* + 2];
+        if ((b1 & 0xC0) == 0x80 and (b2 & 0xC0) == 0x80) {
+            const cp = (@as(u32, b0 & 0x0F) << 12) |
+                (@as(u32, b1 & 0x3F) << 6) |
+                @as(u32, b2 & 0x3F);
+            if (cp >= 0x800 and (cp < 0xD800 or cp > 0xDFFF)) {
+                out_cp.* = cp;
+                idx.* += 3;
+                return true;
+            }
+        }
+    } else if ((b0 & 0xF8) == 0xF0 and idx.* + 3 < text_n) {
+        const b1 = text_ptr[idx.* + 1];
+        const b2 = text_ptr[idx.* + 2];
+        const b3 = text_ptr[idx.* + 3];
+        if ((b1 & 0xC0) == 0x80 and (b2 & 0xC0) == 0x80 and (b3 & 0xC0) == 0x80) {
+            const cp = (@as(u32, b0 & 0x07) << 18) |
+                (@as(u32, b1 & 0x3F) << 12) |
+                (@as(u32, b2 & 0x3F) << 6) |
+                @as(u32, b3 & 0x3F);
+            if (cp >= 0x10000 and cp <= 0x10FFFF) {
+                out_cp.* = cp;
+                idx.* += 4;
+                return true;
+            }
+        }
+    }
+    // Invalid sequence: consume one byte and emit replacement char.
+    idx.* += 1;
+    out_cp.* = 0xFFFD;
+    return true;
+}
+
 fn compute_text_metrics(f: *const loaded_font_t, px_size: u32, text_ptr: [*]const u8, text_n: usize) text_metrics_t {
     var out: text_metrics_t = .{};
     var pen_x: i32 = 0;
@@ -293,12 +349,13 @@ fn compute_text_metrics(f: *const loaded_font_t, px_size: u32, text_ptr: [*]cons
     var max_x: i32 = 0;
     var max_y: i32 = 0;
     var has_bounds = false;
+    const scale = c.stbtt_ScaleForPixelHeight(&f.font_info, @floatFromInt(px_size));
     var i: usize = 0;
-    while (i < text_n) : (i += 1) {
-        const cp: u32 = text_ptr[i];
-        if (cp == 0) break;
+    while (i < text_n) {
+        var cp: u32 = 0;
+        const consumed = utf8_decode_next(text_ptr, text_n, &i, &cp);
+        if (!consumed) break;
 
-        const scale = c.stbtt_ScaleForPixelHeight(&f.font_info, @floatFromInt(px_size));
         var x0: c_int = 0;
         var y0: c_int = 0;
         var x1: c_int = 0;
@@ -329,12 +386,11 @@ fn compute_text_metrics(f: *const loaded_font_t, px_size: u32, text_ptr: [*]cons
         var lsb: c_int = 0;
         c.stbtt_GetCodepointHMetrics(&f.font_info, @bitCast(cp), &adv_units, &lsb);
         var advance_x = scaled_i32(adv_units, px_size, f.units_per_em);
-        if (i + 1 < text_n) {
-            const next_cp: u32 = text_ptr[i + 1];
-            if (next_cp != 0) {
-                const kern_units = c.stbtt_GetCodepointKernAdvance(&f.font_info, @bitCast(cp), @bitCast(next_cp));
-                advance_x += scaled_i32(kern_units, px_size, f.units_per_em);
-            }
+        var j = i;
+        var next_cp: u32 = 0;
+        if (utf8_decode_next(text_ptr, text_n, &j, &next_cp)) {
+            const kern_units = c.stbtt_GetCodepointKernAdvance(&f.font_info, @bitCast(cp), @bitCast(next_cp));
+            advance_x += scaled_i32(kern_units, px_size, f.units_per_em);
         }
         pen_x += advance_x;
     }
@@ -614,9 +670,10 @@ fn handle_raster_text_into(req: *const c.nd_ipc_message_t) void {
     c.wasmos_stbtt_alloc_reset();
     var pen_x: i32 = 0;
     var i: usize = 0;
-    while (i < text_n) : (i += 1) {
-        const cp: u32 = text_ptr[i];
-        if (cp == 0) break;
+    while (i < text_n) {
+        var cp: u32 = 0;
+        const consumed = utf8_decode_next(text_ptr, text_n, &i, &cp);
+        if (!consumed) break;
 
         var x0: c_int = 0;
         var y0: c_int = 0;
@@ -660,12 +717,11 @@ fn handle_raster_text_into(req: *const c.nd_ipc_message_t) void {
         var lsb: c_int = 0;
         c.stbtt_GetCodepointHMetrics(&f.font_info, @bitCast(cp), &adv_units, &lsb);
         var advance_x = scaled_i32(adv_units, h.px_size, f.units_per_em);
-        if (i + 1 < text_n) {
-            const next_cp: u32 = text_ptr[i + 1];
-            if (next_cp != 0) {
-                const kern_units = c.stbtt_GetCodepointKernAdvance(&f.font_info, @bitCast(cp), @bitCast(next_cp));
-                advance_x += scaled_i32(kern_units, h.px_size, f.units_per_em);
-            }
+        var j = i;
+        var next_cp: u32 = 0;
+        if (utf8_decode_next(text_ptr, text_n, &j, &next_cp)) {
+            const kern_units = c.stbtt_GetCodepointKernAdvance(&f.font_info, @bitCast(cp), @bitCast(next_cp));
+            advance_x += scaled_i32(kern_units, h.px_size, f.units_per_em);
         }
         pen_x += advance_x;
     }

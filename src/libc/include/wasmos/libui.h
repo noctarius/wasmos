@@ -211,6 +211,49 @@ ui_blend_u8(uint32_t dst, uint32_t src, uint8_t alpha)
 }
 
 static inline int32_t
+ui_utf8_encode(uint32_t cp, uint8_t out[4])
+{
+    if (!out) return 0;
+    if (cp <= 0x7Fu) {
+        out[0] = (uint8_t)cp;
+        return 1;
+    }
+    if (cp <= 0x7FFu) {
+        out[0] = (uint8_t)(0xC0u | (cp >> 6));
+        out[1] = (uint8_t)(0x80u | (cp & 0x3Fu));
+        return 2;
+    }
+    if (cp >= 0xD800u && cp <= 0xDFFFu) return 0;
+    if (cp <= 0xFFFFu) {
+        out[0] = (uint8_t)(0xE0u | (cp >> 12));
+        out[1] = (uint8_t)(0x80u | ((cp >> 6) & 0x3Fu));
+        out[2] = (uint8_t)(0x80u | (cp & 0x3Fu));
+        return 3;
+    }
+    if (cp <= 0x10FFFFu) {
+        out[0] = (uint8_t)(0xF0u | (cp >> 18));
+        out[1] = (uint8_t)(0x80u | ((cp >> 12) & 0x3Fu));
+        out[2] = (uint8_t)(0x80u | ((cp >> 6) & 0x3Fu));
+        out[3] = (uint8_t)(0x80u | (cp & 0x3Fu));
+        return 4;
+    }
+    return 0;
+}
+
+static inline int32_t
+ui_utf8_prev_boundary(const char *s, int32_t len)
+{
+    if (!s || len <= 0) return 0;
+    int32_t i = len - 1;
+    while (i > 0) {
+        const uint8_t b = (uint8_t)s[i];
+        if ((b & 0xC0u) != 0x80u) break;
+        i -= 1;
+    }
+    return i;
+}
+
+static inline int32_t
 ui_font_ensure_shmem_buffer(int32_t *shmem_id, uint8_t **mapped_ptr, int32_t *cap, int32_t need_bytes)
 {
     if (!shmem_id || !mapped_ptr || !cap || need_bytes <= 0) return -1;
@@ -1146,12 +1189,15 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
             if (focus && focus->type == UI_COMPONENT_TEXT_INPUT) {
                 if (key == 8u || key == 127u) {
                     if (focus->text_len > 0) {
-                        focus->text[focus->text_len - 1] = '\0';
-                        focus->text_len -= 1;
+                        focus->text_len = ui_utf8_prev_boundary(focus->text, focus->text_len);
+                        focus->text[focus->text_len] = '\0';
                         ui_mark_dirty(ctx);
                     }
-                } else if (key >= 32u && key <= 255u) {
-                    const int32_t need = focus->text_len + 2;
+                } else if (key >= 32u && key <= 0x10FFFFu) {
+                    uint8_t enc[4];
+                    const int32_t enc_len = ui_utf8_encode(key, enc);
+                    if (enc_len <= 0) return UI_MSG_CONSUMED;
+                    const int32_t need = focus->text_len + enc_len + 1;
                     if (focus->text_cap < need) {
                         int32_t new_cap = focus->text_cap > 0 ? focus->text_cap : UI_TEXT_INITIAL_CAP;
                         while (new_cap < need) new_cap *= 2;
@@ -1164,9 +1210,9 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
                         }
                     }
                     if (focus->text_cap >= need) {
-                        focus->text[focus->text_len] = (char)key;
-                        focus->text[focus->text_len + 1] = '\0';
-                        focus->text_len += 1;
+                        memcpy(focus->text + focus->text_len, enc, (size_t)enc_len);
+                        focus->text_len += enc_len;
+                        focus->text[focus->text_len] = '\0';
                         ui_mark_dirty(ctx);
                     }
                 }

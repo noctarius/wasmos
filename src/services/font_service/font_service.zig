@@ -383,7 +383,7 @@ fn handle_raster_glyph(req: *const c.nd_ipc_message_t) void {
     if (g_raster_scratch_ptr == null or g_raster_scratch_shmem_id == 0 or g_raster_scratch_cap < pixel_count) {
         var scratch_id: u32 = 0;
         var scratch_ptr_raw: ?*anyopaque = null;
-        const pages = (RASTER_SCRATCH_BYTES + 4095) / 4096;
+        const pages = (pixel_count + 4095) / 4096;
         if (api().shmem_create.?(pages, 0, &scratch_id, @ptrCast(&scratch_ptr_raw)) != 0 or scratch_id == 0 or scratch_ptr_raw == null) {
             reply_with_status(req, c.FONT_STATUS_IO, 0, 0, 0);
             return;

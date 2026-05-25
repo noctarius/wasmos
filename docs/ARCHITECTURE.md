@@ -28,6 +28,9 @@ WASM `libui` component-tree state is now heap-backed (dynamic component, text,
 and list-item storage) instead of fixed compile-time slot/text/item caps, and
 includes first shared form controls such as list views and dropdowns; text
 rendering is wired through `font-service` as a required dependency.
+Font IPC now includes text-run measurement (`FONT_IPC_MEASURE_GLYPH_REQ`):
+clients pass multi-character input via shared memory and receive packed
+`w/h`, `x0/y0`, and `advance_x` for layout.
 Compositor pointer delivery to focused clients uses content-local coordinates,
 and window client buffers render in the content pane below chrome/titlebar.
 WASM libc now implements a process-local linear-memory allocator

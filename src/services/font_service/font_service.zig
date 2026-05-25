@@ -266,6 +266,17 @@ fn scaled_i16(v: i16, px: u32, upem: u16) i32 {
     return @intCast(@divTrunc(num, @as(i64, upem)));
 }
 
+fn scaled_i32(v: i32, px: u32, upem: u16) i32 {
+    const num: i64 = @as(i64, v) * @as(i64, @intCast(px));
+    return @intCast(@divTrunc(num, @as(i64, upem)));
+}
+
+fn clamp_i32(v: i32, lo: i32, hi: i32) i32 {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
 fn reply_with_status(req: *const c.nd_ipc_message_t, status: i32, arg1: u32, arg2: u32, arg3: u32) void {
     if (req.source == IPC_ENDPOINT_NONE or req.request_id == 0) return;
     var resp: c.nd_ipc_message_t = undefined;
@@ -413,11 +424,111 @@ fn handle_raster_glyph(req: *const c.nd_ipc_message_t) void {
     reply_with_status(req, c.FONT_STATUS_OK, g_raster_scratch_shmem_id, sys.packU16Pair(@intCast(w), @intCast(hgt)), sys.packS16Pair(x0, y0));
 }
 
+fn handle_measure_text(req: *const c.nd_ipc_message_t) void {
+    const handle_id = req.arg0;
+    const text_shmem_id = req.arg1;
+    const text_len = req.arg2;
+    const hs = handle_slot_by_id(handle_id) orelse {
+        reply_with_status(req, c.FONT_STATUS_INVALID, 0, 0, 0);
+        return;
+    };
+    const h = g_handles[hs];
+    if (h.owner_endpoint != req.source) {
+        reply_with_status(req, c.FONT_STATUS_PERMISSION, 0, 0, 0);
+        return;
+    }
+    const fs = font_slot_by_id(h.font_id) orelse {
+        reply_with_status(req, c.FONT_STATUS_INVALID, 0, 0, 0);
+        return;
+    };
+    const f = &g_fonts[fs];
+    if (!f.available or !f.font_info_ready or f.units_per_em == 0) {
+        reply_with_status(req, c.FONT_STATUS_IO, 0, 0, 0);
+        return;
+    }
+    if (text_shmem_id == 0 or text_len == 0) {
+        reply_with_status(req, c.FONT_STATUS_INVALID, 0, 0, 0);
+        return;
+    }
+
+    const text_ptr_raw = api().shmem_map.?(text_shmem_id);
+    if (text_ptr_raw == null) {
+        reply_with_status(req, c.FONT_STATUS_IO, 0, 0, 0);
+        return;
+    }
+    defer _ = api().shmem_unmap.?(text_shmem_id);
+    const text_ptr: [*]const u8 = @ptrCast(@alignCast(text_ptr_raw.?));
+    const text_n: usize = @intCast(text_len);
+
+    var pen_x: i32 = 0;
+    var min_x: i32 = 0;
+    var min_y: i32 = 0;
+    var max_x: i32 = 0;
+    var max_y: i32 = 0;
+    var has_bounds = false;
+    var i: usize = 0;
+    while (i < text_n) : (i += 1) {
+        const cp: u32 = text_ptr[i];
+        if (cp == 0) break;
+
+        const scale = c.stbtt_ScaleForPixelHeight(&f.font_info, @floatFromInt(h.px_size));
+        var x0: c_int = 0;
+        var y0: c_int = 0;
+        var x1: c_int = 0;
+        var y1: c_int = 0;
+        c.stbtt_GetCodepointBitmapBox(&f.font_info, @bitCast(cp), scale, scale, &x0, &y0, &x1, &y1);
+        const w: i32 = x1 - x0;
+        const hgt: i32 = y1 - y0;
+        if (w > 0 and hgt > 0) {
+            const gx0 = pen_x + x0;
+            const gy0 = y0;
+            const gx1 = pen_x + x1;
+            const gy1 = y1;
+            if (!has_bounds) {
+                min_x = gx0;
+                min_y = gy0;
+                max_x = gx1;
+                max_y = gy1;
+                has_bounds = true;
+            } else {
+                if (gx0 < min_x) min_x = gx0;
+                if (gy0 < min_y) min_y = gy0;
+                if (gx1 > max_x) max_x = gx1;
+                if (gy1 > max_y) max_y = gy1;
+            }
+        }
+
+        var adv_units: c_int = 0;
+        var lsb: c_int = 0;
+        c.stbtt_GetCodepointHMetrics(&f.font_info, @bitCast(cp), &adv_units, &lsb);
+        var advance_x = scaled_i32(adv_units, h.px_size, f.units_per_em);
+        if (i + 1 < text_n) {
+            const next_cp: u32 = text_ptr[i + 1];
+            if (next_cp != 0) {
+                const kern_units = c.stbtt_GetCodepointKernAdvance(&f.font_info, @bitCast(cp), @bitCast(next_cp));
+                advance_x += scaled_i32(kern_units, h.px_size, f.units_per_em);
+            }
+        }
+        pen_x += advance_x;
+    }
+
+    const out_w: i32 = if (has_bounds) (max_x - min_x) else 0;
+    const out_h: i32 = if (has_bounds) (max_y - min_y) else 0;
+    const out_x0: i32 = if (has_bounds) min_x else 0;
+    const out_y0: i32 = if (has_bounds) min_y else 0;
+    const w16: u16 = @intCast(clamp_i32(out_w, 0, 0xFFFF));
+    const h16: u16 = @intCast(clamp_i32(out_h, 0, 0xFFFF));
+    const x016: i16 = @intCast(clamp_i32(out_x0, -32768, 32767));
+    const y016: i16 = @intCast(clamp_i32(out_y0, -32768, 32767));
+    reply_with_status(req, c.FONT_STATUS_OK, sys.packU16Pair(w16, h16), sys.packS16Pair(x016, y016), @bitCast(pen_x));
+}
+
 fn handle_font_ipc_message(msg: *const c.nd_ipc_message_t) void {
     switch (msg.type) {
         c.FONT_IPC_OPEN_FONT_REQ => handle_open_font(msg),
         c.FONT_IPC_GET_METRICS_REQ => handle_get_metrics(msg),
         c.FONT_IPC_RASTER_GLYPH_REQ => handle_raster_glyph(msg),
+        c.FONT_IPC_MEASURE_GLYPH_REQ => handle_measure_text(msg),
         else => {
             logHex32("[font] warning: unhandled event type ", msg.type);
             reply_with_status(msg, c.FONT_STATUS_UNSUPPORTED, 0, 0, 0);
@@ -438,6 +549,7 @@ fn register_ipc_handlers() i32 {
     if (sys.eventRegister(&g_ipc_loop, c.FONT_IPC_OPEN_FONT_REQ, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.FONT_IPC_GET_METRICS_REQ, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.FONT_IPC_RASTER_GLYPH_REQ, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.FONT_IPC_MEASURE_GLYPH_REQ, cb, null) != 0) return -1;
     if (sys.eventSetDefault(&g_ipc_loop, cb, null) != 0) return -1;
     return 0;
 }

@@ -111,9 +111,12 @@ typedef struct ui_context {
     int32_t font_endpoint;
     int32_t font_handle;
     int32_t font_px;
-    uint8_t *glyph_scratch_raw;
-    uint8_t *glyph_scratch;
-    int32_t glyph_scratch_cap;
+    int32_t font_text_shmem_id;
+    uint8_t *font_text_ptr;
+    int32_t font_text_cap;
+    int32_t font_mask_shmem_id;
+    uint8_t *font_mask_ptr;
+    int32_t font_mask_cap;
 
     int32_t next_component_id;
     ui_component_t *components;
@@ -207,73 +210,94 @@ ui_blend_u8(uint32_t dst, uint32_t src, uint8_t alpha)
     return 0xFF000000u | (r << 16) | (g << 8) | b;
 }
 
+static inline int32_t
+ui_font_ensure_shmem_buffer(int32_t *shmem_id, uint8_t **mapped_ptr, int32_t *cap, int32_t need_bytes)
+{
+    if (!shmem_id || !mapped_ptr || !cap || need_bytes <= 0) return -1;
+    if (*shmem_id > 0 && *mapped_ptr && *cap >= need_bytes) return 0;
+    const int32_t pages = (need_bytes + (UI_PAGE_SIZE - 1)) / UI_PAGE_SIZE;
+    const int32_t bytes = pages * UI_PAGE_SIZE;
+    const int32_t new_id = wasmos_shmem_create(pages, 0);
+    if (new_id <= 0) return -1;
+    const int32_t mapped = wasmos_shmem_map_auto(new_id, bytes);
+    if (mapped < 0) return -1;
+    /* TODO(libui-font-shmem): old SHMEM IDs are not reclaimed on growth. */
+    *shmem_id = new_id;
+    *mapped_ptr = (uint8_t *)(uintptr_t)(uint32_t)mapped;
+    *cap = bytes;
+    return 0;
+}
+
+static inline int32_t
+ui_font_measure_text(ui_context_t *ctx, const char *text, int32_t *out_w, int32_t *out_h, int32_t *out_x0, int32_t *out_y0, int32_t *out_adv)
+{
+    if (!ctx || !text || ctx->font_endpoint <= 0 || ctx->font_reply_endpoint <= 0 || ctx->font_handle <= 0) return -1;
+    const int32_t text_len = (int32_t)strlen(text);
+    if (text_len <= 0) {
+        if (out_w) *out_w = 0;
+        if (out_h) *out_h = 0;
+        if (out_x0) *out_x0 = 0;
+        if (out_y0) *out_y0 = 0;
+        if (out_adv) *out_adv = 0;
+        return 0;
+    }
+    if (ui_font_ensure_shmem_buffer(&ctx->font_text_shmem_id, &ctx->font_text_ptr, &ctx->font_text_cap, text_len + 1) != 0) return -1;
+    memcpy(ctx->font_text_ptr, text, (size_t)text_len);
+    ctx->font_text_ptr[text_len] = '\0';
+
+    wasmos_ipc_message_t reply;
+    if (wasmos_ipc_call(ctx->font_endpoint, ctx->font_reply_endpoint, FONT_IPC_MEASURE_GLYPH_REQ,
+                        ctx->req_id++, ctx->font_handle, ctx->font_text_shmem_id, text_len, 0, &reply) != 0) {
+        return -1;
+    }
+    if (reply.type != FONT_IPC_RESP || reply.arg0 != FONT_STATUS_OK) return -1;
+    if (out_w) *out_w = ui_u16_lo(reply.arg1);
+    if (out_h) *out_h = ui_u16_hi(reply.arg1);
+    if (out_x0) *out_x0 = ui_i16_lo(reply.arg2);
+    if (out_y0) *out_y0 = ui_i16_hi(reply.arg2);
+    if (out_adv) *out_adv = reply.arg3;
+    return 0;
+}
+
 static inline void
 ui_draw_text_clip(ui_context_t *ctx, int32_t x, int32_t y, const char *text, uint32_t color, ui_rect_t clip)
 {
     if (!ctx || !ctx->mapped_base || !text || ctx->font_endpoint <= 0 || ctx->font_reply_endpoint <= 0 || ctx->font_handle <= 0) return;
-    int32_t pen_x = x;
-    for (size_t i = 0; text[i] != '\0'; ++i) {
-        wasmos_ipc_message_t reply;
-        const uint32_t cp = (uint8_t)text[i];
-        if (wasmos_ipc_call(ctx->font_endpoint, ctx->font_reply_endpoint, FONT_IPC_RASTER_GLYPH_REQ,
-                            ctx->req_id++, ctx->font_handle, (int32_t)cp, 0, 0, &reply) != 0) continue;
-        if (reply.type != FONT_IPC_RESP || reply.arg0 != FONT_STATUS_OK) continue;
-        const int32_t shmem_id = reply.arg1;
-        const int32_t w = ui_u16_lo(reply.arg2);
-        const int32_t h = ui_u16_hi(reply.arg2);
-        const int32_t x0 = ui_i16_lo(reply.arg3);
-        const int32_t y0 = ui_i16_hi(reply.arg3);
-        if (shmem_id > 0 && w > 0 && h > 0) {
-            const int32_t bytes = w * h;
-            const int32_t map_len = (bytes + (UI_PAGE_SIZE - 1)) & ~(UI_PAGE_SIZE - 1);
-            if (ctx->glyph_scratch_cap < map_len) {
-                const size_t alloc_len = (size_t)map_len + (size_t)UI_PAGE_SIZE;
-                uint8_t *new_raw = (uint8_t *)realloc(ctx->glyph_scratch_raw, alloc_len);
-                if (new_raw) {
-                    ctx->glyph_scratch_raw = new_raw;
-                    uintptr_t p = (uintptr_t)new_raw;
-                    p = (p + (uintptr_t)(UI_PAGE_SIZE - 1)) & ~(uintptr_t)(UI_PAGE_SIZE - 1);
-                    ctx->glyph_scratch = (uint8_t *)p;
-                    ctx->glyph_scratch_cap = map_len;
-                }
-            }
-            if (ctx->glyph_scratch && ctx->glyph_scratch_cap >= map_len &&
-                wasmos_shmem_map(shmem_id, (int32_t)(uintptr_t)ctx->glyph_scratch, map_len) == 0) {
-                const uint8_t *mask = ctx->glyph_scratch;
-                for (int32_t gy = 0; gy < h; ++gy) {
-                    const int32_t py = y + y0 + gy;
-                    if (py < clip.y || py >= (clip.y + clip.h) || py < 0 || py >= ctx->height) continue;
-                    uint32_t *row = (uint32_t *)(void *)(ctx->mapped_base + ((size_t)py * (size_t)ctx->width * 4u));
-                    for (int32_t gx = 0; gx < w; ++gx) {
-                        const int32_t px = pen_x + x0 + gx;
-                        if (px < clip.x || px >= (clip.x + clip.w) || px < 0 || px >= ctx->width) continue;
-                        const uint8_t a = mask[gy * w + gx];
-                        if (a == 0) continue;
-                        row[px] = ui_blend_u8(row[px], color, a);
-                    }
-                }
-                (void)wasmos_shmem_unmap(shmem_id);
-            }
+    int32_t w = 0, h = 0, x0 = 0, y0 = 0, adv = 0;
+    if (ui_font_measure_text(ctx, text, &w, &h, &x0, &y0, &adv) != 0) return;
+    if (w <= 0 || h <= 0) return;
+    const int32_t bytes = w * h;
+    if (bytes <= 0) return;
+    if (ui_font_ensure_shmem_buffer(&ctx->font_mask_shmem_id, &ctx->font_mask_ptr, &ctx->font_mask_cap, bytes) != 0) return;
+
+    wasmos_ipc_message_t reply;
+    if (wasmos_ipc_call(ctx->font_endpoint, ctx->font_reply_endpoint, FONT_IPC_RASTER_GLYPH_INTO_REQ,
+                        ctx->req_id++, ctx->font_handle, ctx->font_text_shmem_id, (int32_t)strlen(text), ctx->font_mask_shmem_id, &reply) != 0) {
+        return;
+    }
+    if (reply.type != FONT_IPC_RESP || reply.arg0 != FONT_STATUS_OK) return;
+
+    const uint8_t *mask = ctx->font_mask_ptr;
+    for (int32_t gy = 0; gy < h; ++gy) {
+        const int32_t py = y + y0 + gy;
+        if (py < clip.y || py >= (clip.y + clip.h) || py < 0 || py >= ctx->height) continue;
+        uint32_t *row = (uint32_t *)(void *)(ctx->mapped_base + ((size_t)py * (size_t)ctx->width * 4u));
+        for (int32_t gx = 0; gx < w; ++gx) {
+            const int32_t px = x + x0 + gx;
+            if (px < clip.x || px >= (clip.x + clip.w) || px < 0 || px >= ctx->width) continue;
+            const uint8_t a = mask[gy * w + gx];
+            if (a == 0) continue;
+            row[px] = ui_blend_u8(row[px], color, a);
         }
-        pen_x += (w > 0) ? (w + 1) : ((ctx->font_px > 0 ? ctx->font_px : 12) / 3);
     }
 }
 
 static inline int32_t
 ui_measure_text_width(ui_context_t *ctx, const char *text)
 {
-    if (!ctx || !text || ctx->font_endpoint <= 0 || ctx->font_reply_endpoint <= 0 || ctx->font_handle <= 0) return 0;
-    int32_t width = 0;
-    for (size_t i = 0; text[i] != '\0'; ++i) {
-        wasmos_ipc_message_t reply;
-        const uint32_t cp = (uint8_t)text[i];
-        if (wasmos_ipc_call(ctx->font_endpoint, ctx->font_reply_endpoint, FONT_IPC_RASTER_GLYPH_REQ,
-                            ctx->req_id++, ctx->font_handle, (int32_t)cp, 0, 0, &reply) != 0) continue;
-        if (reply.type != FONT_IPC_RESP || reply.arg0 != FONT_STATUS_OK) continue;
-        const int32_t w = ui_u16_lo(reply.arg2);
-        width += (w > 0) ? (w + 1) : ((ctx->font_px > 0 ? ctx->font_px : 12) / 3);
-    }
-    return width;
+    int32_t w = 0, h = 0, x0 = 0, y0 = 0, adv = 0;
+    if (ui_font_measure_text(ctx, text, &w, &h, &x0, &y0, &adv) != 0) return 0;
+    return adv;
 }
 
 static inline int32_t
@@ -508,10 +532,6 @@ ui_realloc_buffer(ui_context_t *ctx, int32_t new_w, int32_t new_h)
     const int32_t mapped_ptr = wasmos_shmem_map_auto(new_shmem_id, bytes);
     if (mapped_ptr < 0) return -1;
     if (ctx->shmem_id > 0) (void)wasmos_shmem_unmap(ctx->shmem_id);
-    if (ctx->glyph_scratch_raw) free(ctx->glyph_scratch_raw);
-    ctx->glyph_scratch_raw = 0;
-    ctx->glyph_scratch = 0;
-    ctx->glyph_scratch_cap = 0;
     if (ctx->buffer_id > 0) {
         (void)ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_RELEASE_SHARED_BUFFER,
                           ctx->buffer_id, 0, 0, 0, &status, 0, 0, 0);
@@ -614,6 +634,8 @@ ui_destroy(ui_context_t *ctx)
                           ctx->buffer_id, 0, 0, 0, &status, 0, 0, 0);
     }
     if (ctx->shmem_id > 0) (void)wasmos_shmem_unmap(ctx->shmem_id);
+    if (ctx->font_text_shmem_id > 0) (void)wasmos_shmem_unmap(ctx->font_text_shmem_id);
+    if (ctx->font_mask_shmem_id > 0) (void)wasmos_shmem_unmap(ctx->font_mask_shmem_id);
 
     for (int32_t i = 0; i < ctx->component_count; ++i) {
         ui_component_t *c = &ctx->components[i];

@@ -144,6 +144,12 @@ var g_windows: [GFX_MAX_WINDOWS]window_slot_t = [_]window_slot_t{.{}} ** GFX_MAX
 var g_buffers: [GFX_MAX_BUFFERS]buffer_slot_t = [_]buffer_slot_t{.{}} ** GFX_MAX_BUFFERS;
 var g_events: [GFX_MAX_EVENTS]gfx_event_t = [_]gfx_event_t{.{}} ** GFX_MAX_EVENTS;
 var g_glyph_cache: [GFX_MAX_GLYPH_CACHE]glyph_cache_entry_t = [_]glyph_cache_entry_t{.{}} ** GFX_MAX_GLYPH_CACHE;
+var g_font_text_shmem_id: u32 = 0;
+var g_font_text_ptr: ?[*]u8 = null;
+var g_font_text_cap: usize = 0;
+var g_font_mask_shmem_id: u32 = 0;
+var g_font_mask_ptr: ?[*]u8 = null;
+var g_font_mask_cap: usize = 0;
 var g_event_head: usize = 0;
 var g_event_tail: usize = 0;
 var g_ipc_loop: sys.NativeEventLoop = undefined;
@@ -1424,23 +1430,40 @@ fn glyph_cache_slot_for_new() ?usize {
     return null;
 }
 
+fn ensure_font_shmem_buffer(shmem_id: *u32, mapped_ptr: *?[*]u8, cap: *usize, need_bytes: usize) bool {
+    if (need_bytes == 0) return false;
+    if (shmem_id.* != 0 and mapped_ptr.* != null and cap.* >= need_bytes) return true;
+    var new_id: u32 = 0;
+    var raw: ?*anyopaque = null;
+    const pages: usize = (need_bytes + 4095) / 4096;
+    if (api().shmem_create.?(pages, 0, &new_id, @ptrCast(&raw)) != 0 or new_id == 0 or raw == null) return false;
+    // TODO(gfx-font-shmem): old SHMEM IDs are not reclaimed on growth.
+    shmem_id.* = new_id;
+    mapped_ptr.* = @ptrCast(@alignCast(raw.?));
+    cap.* = pages * 4096;
+    return true;
+}
+
 fn glyph_cache_insert_from_font(codepoint: u32) bool {
     if (glyph_cache_lookup(codepoint) != null) return true;
     if (g_font_endpoint == IPC_ENDPOINT_NONE or g_font_title_handle == 0) return false;
     const slot = glyph_cache_slot_for_new() orelse return false;
+    if (!ensure_font_shmem_buffer(&g_font_text_shmem_id, &g_font_text_ptr, &g_font_text_cap, 2)) return false;
+    g_font_text_ptr.?[0] = @intCast(codepoint & 0xFF);
+    g_font_text_ptr.?[1] = 0;
+
     var reply: c.nd_ipc_message_t = undefined;
     const req_id = g_runtime_lookup_req_id;
     g_runtime_lookup_req_id +%= 1;
-    if (font_ipc_call_budgeted(g_font_endpoint, req_id, c.FONT_IPC_RASTER_GLYPH_REQ, g_font_title_handle, codepoint, 0, 0, &reply, 32) != 0) {
+    if (font_ipc_call_budgeted(g_font_endpoint, req_id, c.FONT_IPC_MEASURE_GLYPH_REQ, g_font_title_handle, g_font_text_shmem_id, 1, 0, &reply, 32) != 0) {
         return false;
     }
     if (reply.type != c.FONT_IPC_RESP or @as(i32, @bitCast(reply.arg0)) != c.FONT_STATUS_OK) {
         return false;
     }
 
-    const shmem_id = reply.arg1;
-    const packed_wh = reply.arg2;
-    const packed_xy = reply.arg3;
+    const packed_wh = reply.arg1;
+    const packed_xy = reply.arg2;
     const w: i32 = @as(i32, @intCast(packed_wh & 0xFFFF));
     const h: i32 = @as(i32, @intCast((packed_wh >> 16) & 0xFFFF));
     const x0: i16 = @bitCast(@as(u16, @truncate(packed_xy & 0xFFFF)));
@@ -1448,32 +1471,36 @@ fn glyph_cache_insert_from_font(codepoint: u32) bool {
     var entry = glyph_cache_entry_t{
         .valid = true,
         .codepoint = codepoint,
-        .shmem_id = shmem_id,
+        .shmem_id = 0,
         .w = w,
         .h = h,
         .x0 = x0,
         .y0 = y0,
         .mask_len = 0,
     };
-    if (shmem_id != 0 and w > 0 and h > 0) {
-        const ptr = api().shmem_map.?(shmem_id);
-        if (ptr == null) return false;
-        const mask_src: [*]const u8 = @ptrCast(@alignCast(ptr.?));
+    if (w > 0 and h > 0) {
         const pixel_count_i32 = w * h;
         if (pixel_count_i32 < 0) {
-            _ = api().shmem_unmap.?(shmem_id);
             return false;
         }
         const pixel_count: usize = @intCast(pixel_count_i32);
         if (pixel_count > GFX_MAX_GLYPH_BYTES) {
-            _ = api().shmem_unmap.?(shmem_id);
             return false;
         }
+        if (!ensure_font_shmem_buffer(&g_font_mask_shmem_id, &g_font_mask_ptr, &g_font_mask_cap, pixel_count)) return false;
+        const req_id_into = g_runtime_lookup_req_id;
+        g_runtime_lookup_req_id +%= 1;
+        if (font_ipc_call_budgeted(g_font_endpoint, req_id_into, c.FONT_IPC_RASTER_GLYPH_INTO_REQ, g_font_title_handle, g_font_text_shmem_id, 1, g_font_mask_shmem_id, &reply, 32) != 0) {
+            return false;
+        }
+        if (reply.type != c.FONT_IPC_RESP or @as(i32, @bitCast(reply.arg0)) != c.FONT_STATUS_OK) {
+            return false;
+        }
+        const mask_src: [*]const u8 = g_font_mask_ptr.?;
         var j: usize = 0;
         while (j < pixel_count) : (j += 1) {
             entry.mask_data[j] = mask_src[j];
         }
-        _ = api().shmem_unmap.?(shmem_id);
         entry.mask_len = pixel_count;
     }
     g_glyph_cache[slot] = entry;

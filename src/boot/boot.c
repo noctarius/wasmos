@@ -954,12 +954,12 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
                     boot_info->boot_config = payload;
                     boot_info->boot_config_size = entry->size;
                 }
-        }
+            }
 
-        boot_info->modules = mods;
-        boot_info->module_count = (uint32_t)module_count;
-        boot_info->flags |= BOOT_INFO_FLAG_MODULES_PRESENT;
-    }
+            boot_info->modules = mods;
+            boot_info->module_count = (uint32_t)module_count;
+            boot_info->flags |= BOOT_INFO_FLAG_MODULES_PRESENT;
+        }
 
         status = bs->ExitBootServices(image, map_key);
         if (!EFI_ERROR(status)) {

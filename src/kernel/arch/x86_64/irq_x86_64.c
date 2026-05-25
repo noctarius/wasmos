@@ -239,11 +239,12 @@ void x86_irq_handler(uint64_t vector) {
 
     uint32_t irq_line = (uint32_t)(vector - IRQ_VECTOR_BASE);
     if (pic_is_spurious(irq_line)) {
-        if (irq_line == 7) {
-            pic_send_eoi(7);
-        } else if (irq_line == 15) {
+        if (irq_line == 15) {
+            /* Spurious IRQ 15: slave never set ISR, but master did latch the
+             * cascade line, so master needs EOI; slave must not receive one. */
             outb(PIC1_CMD, PIC_EOI);
         }
+        /* Spurious IRQ 7: PIC1 never set ISR — no EOI at all. */
         return;
     }
 

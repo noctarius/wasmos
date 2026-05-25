@@ -244,6 +244,7 @@ ui_font_measure_text(ui_context_t *ctx, const char *text, int32_t *out_w, int32_
     if (ui_font_ensure_shmem_buffer(&ctx->font_text_shmem_id, &ctx->font_text_ptr, &ctx->font_text_cap, text_len + 1) != 0) return -1;
     memcpy(ctx->font_text_ptr, text, (size_t)text_len);
     ctx->font_text_ptr[text_len] = '\0';
+    if (wasmos_shmem_flush(ctx->font_text_shmem_id, (int32_t)(uintptr_t)ctx->font_text_ptr, text_len + 1) != 0) return -1;
 
     wasmos_ipc_message_t reply;
     if (wasmos_ipc_call(ctx->font_endpoint, ctx->font_reply_endpoint, FONT_IPC_MEASURE_GLYPH_REQ,

@@ -345,7 +345,7 @@ ui_component_set_text_owned(ui_component_t *c, const char *text)
         char *new_text = (char *)malloc((size_t)new_cap);
         if (!new_text) return -1;
         if (c->text) memcpy(new_text, c->text, (size_t)c->text_len + 1);
-        /* TODO(libui): re-enable free once libc free-path corruption is fixed. */
+        if (c->text) free(c->text);
         c->text = new_text;
         c->text_cap = new_cap;
     }
@@ -509,6 +509,9 @@ ui_realloc_buffer(ui_context_t *ctx, int32_t new_w, int32_t new_h)
     if (mapped_ptr < 0) return -1;
     if (ctx->shmem_id > 0) (void)wasmos_shmem_unmap(ctx->shmem_id);
     if (ctx->glyph_scratch_raw) free(ctx->glyph_scratch_raw);
+    ctx->glyph_scratch_raw = 0;
+    ctx->glyph_scratch = 0;
+    ctx->glyph_scratch_cap = 0;
     if (ctx->buffer_id > 0) {
         (void)ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_RELEASE_SHARED_BUFFER,
                           ctx->buffer_id, 0, 0, 0, &status, 0, 0, 0);
@@ -1116,7 +1119,7 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
                         char *new_text = (char *)malloc((size_t)new_cap);
                         if (new_text) {
                             if (focus->text) memcpy(new_text, focus->text, (size_t)focus->text_len + 1);
-                            /* TODO(libui): re-enable free once libc free-path corruption is fixed. */
+                            if (focus->text) free(focus->text);
                             focus->text = new_text;
                             focus->text_cap = new_cap;
                         }

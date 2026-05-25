@@ -279,7 +279,6 @@ ui_font_measure_and_raster_text(ui_context_t *ctx, const char *text, int32_t tex
         return -1;
     }
     if (reply.type != FONT_IPC_RESP || reply.arg0 != FONT_STATUS_OK) return -1;
-    if (wasmos_shmem_flush(ctx->font_mask_shmem_id, (int32_t)(uintptr_t)ctx->font_mask_ptr, bytes) != 0) return -1;
     return 0;
 }
 

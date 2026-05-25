@@ -33,6 +33,9 @@ Font IPC now includes text-run measurement and client-buffer rasterization
 pass multi-character input via shared memory and receive packed `w/h`,
 `x0/y0`, and `advance_x`, then request mask raster output into client-owned
 shared memory.
+Compositor window-title rendering also uses the same full text-run path
+(measure + raster-into), so title rendering no longer performs per-character
+font IPC raster requests.
 Compositor pointer delivery to focused clients uses content-local coordinates,
 and window client buffers render in the content pane below chrome/titlebar.
 WASM libc now implements a process-local linear-memory allocator

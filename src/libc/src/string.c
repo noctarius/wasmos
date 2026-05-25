@@ -253,10 +253,10 @@ memmove(void *dest, const void *src, size_t count)
         while (count >= 32) {
             out -= 32;
             in -= 32;
-            copy8_backward(out, in);
-            copy8_backward(out + 8, in + 8);
-            copy8_backward(out + 16, in + 16);
             copy8_backward(out + 24, in + 24);
+            copy8_backward(out + 16, in + 16);
+            copy8_backward(out + 8, in + 8);
+            copy8_backward(out, in);
             count -= 32;
         }
         while (count >= 8) {

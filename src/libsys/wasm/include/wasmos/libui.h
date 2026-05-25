@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "wasmos/api.h"
+#include "wasmos/font_ipc.h"
 #include "wasmos/gfx_ipc.h"
 #include "wasmos/ipc.h"
 
@@ -103,6 +104,10 @@ typedef struct ui_context {
     int32_t root_id;
     int32_t focused_component_id;
     int32_t active_scroll_component_id;
+    int32_t font_reply_endpoint;
+    int32_t font_endpoint;
+    int32_t font_handle;
+    int32_t font_px;
 
     int32_t next_component_id;
     ui_component_t *components;
@@ -179,72 +184,78 @@ ui_stroke_rect_clip(uint8_t *base, int32_t bw, int32_t bh, ui_rect_t r, int32_t 
     ui_fill_rect_clip(base, bw, bh, r.x + r.w - border_px, r.y, border_px, r.h, color, clip);
 }
 
-static inline uint8_t
-ui_glyph5x7(char ch, int32_t row)
+static inline uint32_t
+ui_blend_u8(uint32_t dst, uint32_t src, uint8_t alpha)
 {
-    if (row < 0 || row > 6) return 0;
-    if (ch >= 'A' && ch <= 'Z') ch = (char)(ch - 'A' + 'a');
-    switch (ch) {
-        case 'a': { static const uint8_t g[7] = {0x00,0x0E,0x01,0x0F,0x11,0x0F,0x00}; return g[row]; }
-        case 'b': { static const uint8_t g[7] = {0x10,0x10,0x1E,0x11,0x11,0x1E,0x00}; return g[row]; }
-        case 'c': { static const uint8_t g[7] = {0x00,0x0E,0x11,0x10,0x11,0x0E,0x00}; return g[row]; }
-        case 'd': { static const uint8_t g[7] = {0x01,0x01,0x0F,0x11,0x11,0x0F,0x00}; return g[row]; }
-        case 'e': { static const uint8_t g[7] = {0x00,0x0E,0x11,0x1F,0x10,0x0E,0x00}; return g[row]; }
-        case 'f': { static const uint8_t g[7] = {0x06,0x08,0x1E,0x08,0x08,0x08,0x00}; return g[row]; }
-        case 'g': { static const uint8_t g[7] = {0x00,0x0F,0x11,0x11,0x0F,0x01,0x0E}; return g[row]; }
-        case 'h': { static const uint8_t g[7] = {0x10,0x10,0x1E,0x11,0x11,0x11,0x00}; return g[row]; }
-        case 'i': { static const uint8_t g[7] = {0x04,0x00,0x0C,0x04,0x04,0x0E,0x00}; return g[row]; }
-        case 'j': { static const uint8_t g[7] = {0x02,0x00,0x06,0x02,0x12,0x12,0x0C}; return g[row]; }
-        case 'k': { static const uint8_t g[7] = {0x10,0x12,0x14,0x18,0x14,0x12,0x00}; return g[row]; }
-        case 'l': { static const uint8_t g[7] = {0x0C,0x04,0x04,0x04,0x04,0x0E,0x00}; return g[row]; }
-        case 'm': { static const uint8_t g[7] = {0x00,0x1A,0x15,0x15,0x15,0x15,0x00}; return g[row]; }
-        case 'n': { static const uint8_t g[7] = {0x00,0x1E,0x11,0x11,0x11,0x11,0x00}; return g[row]; }
-        case 'o': { static const uint8_t g[7] = {0x00,0x0E,0x11,0x11,0x11,0x0E,0x00}; return g[row]; }
-        case 'p': { static const uint8_t g[7] = {0x00,0x1E,0x11,0x11,0x1E,0x10,0x10}; return g[row]; }
-        case 'q': { static const uint8_t g[7] = {0x00,0x0F,0x11,0x11,0x0F,0x01,0x01}; return g[row]; }
-        case 'r': { static const uint8_t g[7] = {0x00,0x16,0x19,0x10,0x10,0x10,0x00}; return g[row]; }
-        case 's': { static const uint8_t g[7] = {0x00,0x0F,0x10,0x0E,0x01,0x1E,0x00}; return g[row]; }
-        case 't': { static const uint8_t g[7] = {0x08,0x1E,0x08,0x08,0x09,0x06,0x00}; return g[row]; }
-        case 'u': { static const uint8_t g[7] = {0x00,0x11,0x11,0x11,0x13,0x0D,0x00}; return g[row]; }
-        case 'v': { static const uint8_t g[7] = {0x00,0x11,0x11,0x11,0x0A,0x04,0x00}; return g[row]; }
-        case 'w': { static const uint8_t g[7] = {0x00,0x11,0x15,0x15,0x15,0x0A,0x00}; return g[row]; }
-        case 'x': { static const uint8_t g[7] = {0x00,0x11,0x0A,0x04,0x0A,0x11,0x00}; return g[row]; }
-        case 'y': { static const uint8_t g[7] = {0x00,0x11,0x11,0x0F,0x01,0x11,0x0E}; return g[row]; }
-        case 'z': { static const uint8_t g[7] = {0x00,0x1F,0x02,0x04,0x08,0x1F,0x00}; return g[row]; }
-        case '0': { static const uint8_t g[7] = {0x0E,0x11,0x13,0x15,0x19,0x11,0x0E}; return g[row]; }
-        case '1': { static const uint8_t g[7] = {0x04,0x0C,0x14,0x04,0x04,0x04,0x1F}; return g[row]; }
-        case '2': { static const uint8_t g[7] = {0x0E,0x11,0x01,0x02,0x04,0x08,0x1F}; return g[row]; }
-        case '3': { static const uint8_t g[7] = {0x1E,0x01,0x01,0x06,0x01,0x01,0x1E}; return g[row]; }
-        case '4': { static const uint8_t g[7] = {0x02,0x06,0x0A,0x12,0x1F,0x02,0x02}; return g[row]; }
-        case '5': { static const uint8_t g[7] = {0x1F,0x10,0x1E,0x01,0x01,0x11,0x0E}; return g[row]; }
-        case '6': { static const uint8_t g[7] = {0x06,0x08,0x10,0x1E,0x11,0x11,0x0E}; return g[row]; }
-        case '7': { static const uint8_t g[7] = {0x1F,0x01,0x02,0x04,0x08,0x08,0x08}; return g[row]; }
-        case '8': { static const uint8_t g[7] = {0x0E,0x11,0x11,0x0E,0x11,0x11,0x0E}; return g[row]; }
-        case '9': { static const uint8_t g[7] = {0x0E,0x11,0x11,0x0F,0x01,0x02,0x0C}; return g[row]; }
-        case '-': { static const uint8_t g[7] = {0x00,0x00,0x00,0x1F,0x00,0x00,0x00}; return g[row]; }
-        case ':': { static const uint8_t g[7] = {0x00,0x04,0x00,0x00,0x04,0x00,0x00}; return g[row]; }
-        case ' ': return 0x00;
-        default:  { static const uint8_t g[7] = {0x1F,0x11,0x15,0x11,0x15,0x11,0x1F}; return g[row]; }
-    }
+    const uint32_t a = (uint32_t)alpha;
+    const uint32_t inv = 255u - a;
+    const uint32_t dr = (dst >> 16) & 0xFFu;
+    const uint32_t dg = (dst >> 8) & 0xFFu;
+    const uint32_t db = dst & 0xFFu;
+    const uint32_t sr = (src >> 16) & 0xFFu;
+    const uint32_t sg = (src >> 8) & 0xFFu;
+    const uint32_t sb = src & 0xFFu;
+    const uint32_t r = (sr * a + dr * inv) / 255u;
+    const uint32_t g = (sg * a + dg * inv) / 255u;
+    const uint32_t b = (sb * a + db * inv) / 255u;
+    return 0xFF000000u | (r << 16) | (g << 8) | b;
 }
 
 static inline void
-ui_draw_text_clip(uint8_t *base, int32_t bw, int32_t bh, int32_t x, int32_t y, const char *text, uint32_t color, ui_rect_t clip)
+ui_draw_text_clip(ui_context_t *ctx, int32_t x, int32_t y, const char *text, uint32_t color, ui_rect_t clip)
 {
-    if (!base || !text) return;
-    int32_t cx = x;
+    if (!ctx || !ctx->mapped_base || !text || ctx->font_endpoint <= 0 || ctx->font_reply_endpoint <= 0 || ctx->font_handle <= 0) return;
+    int32_t pen_x = x;
     for (size_t i = 0; text[i] != '\0'; ++i) {
-        const char ch = text[i];
-        for (int32_t row = 0; row < 7; ++row) {
-            const uint8_t bits = ui_glyph5x7(ch, row);
-            for (int32_t col = 0; col < 5; ++col) {
-                if ((bits >> (4 - col)) & 1u) {
-                    ui_fill_rect_clip(base, bw, bh, cx + col, y + row, 1, 1, color, clip);
+        wasmos_ipc_message_t reply;
+        const uint32_t cp = (uint8_t)text[i];
+        if (wasmos_ipc_call(ctx->font_endpoint, ctx->font_reply_endpoint, FONT_IPC_RASTER_GLYPH_REQ,
+                            ctx->req_id++, ctx->font_handle, (int32_t)cp, 0, 0, &reply) != 0) continue;
+        if (reply.type != FONT_IPC_RESP || reply.arg0 != FONT_STATUS_OK) continue;
+        const int32_t shmem_id = reply.arg1;
+        const int32_t w = ui_u16_lo(reply.arg2);
+        const int32_t h = ui_u16_hi(reply.arg2);
+        const int32_t x0 = ui_i16_lo(reply.arg3);
+        const int32_t y0 = ui_i16_hi(reply.arg3);
+        if (shmem_id > 0 && w > 0 && h > 0) {
+            const int32_t bytes = w * h;
+            const int32_t mapped = wasmos_shmem_map_auto(shmem_id, bytes);
+            if (mapped >= 0) {
+                const uint8_t *mask = (const uint8_t *)(uintptr_t)(uint32_t)mapped;
+                for (int32_t gy = 0; gy < h; ++gy) {
+                    const int32_t py = y + y0 + gy;
+                    if (py < clip.y || py >= (clip.y + clip.h) || py < 0 || py >= ctx->height) continue;
+                    uint32_t *row = (uint32_t *)(void *)(ctx->mapped_base + ((size_t)py * (size_t)ctx->width * 4u));
+                    for (int32_t gx = 0; gx < w; ++gx) {
+                        const int32_t px = pen_x + x0 + gx;
+                        if (px < clip.x || px >= (clip.x + clip.w) || px < 0 || px >= ctx->width) continue;
+                        const uint8_t a = mask[gy * w + gx];
+                        if (a == 0) continue;
+                        row[px] = ui_blend_u8(row[px], color, a);
+                    }
                 }
+                (void)wasmos_shmem_unmap(shmem_id);
             }
         }
-        cx += 6;
+        pen_x += (w > 0) ? (w + 1) : ((ctx->font_px > 0 ? ctx->font_px : 12) / 3);
     }
+}
+
+static inline int32_t
+ui_measure_text_width(ui_context_t *ctx, const char *text)
+{
+    if (!ctx || !text || ctx->font_endpoint <= 0 || ctx->font_reply_endpoint <= 0 || ctx->font_handle <= 0) return 0;
+    int32_t width = 0;
+    for (size_t i = 0; text[i] != '\0'; ++i) {
+        wasmos_ipc_message_t reply;
+        const uint32_t cp = (uint8_t)text[i];
+        if (wasmos_ipc_call(ctx->font_endpoint, ctx->font_reply_endpoint, FONT_IPC_RASTER_GLYPH_REQ,
+                            ctx->req_id++, ctx->font_handle, (int32_t)cp, 0, 0, &reply) != 0) continue;
+        if (reply.type != FONT_IPC_RESP || reply.arg0 != FONT_STATUS_OK) continue;
+        const int32_t w = ui_u16_lo(reply.arg2);
+        width += (w > 0) ? (w + 1) : ((ctx->font_px > 0 ? ctx->font_px : 12) / 3);
+    }
+    return width;
 }
 
 static inline int32_t
@@ -493,6 +504,29 @@ ui_realloc_buffer(ui_context_t *ctx, int32_t new_w, int32_t new_h)
     return 0;
 }
 
+static inline void
+ui_destroy(ui_context_t *ctx);
+
+static inline int32_t
+ui_init_font(ui_context_t *ctx)
+{
+    wasmos_ipc_message_t reply;
+    if (!ctx) return -1;
+    ctx->font_reply_endpoint = wasmos_ipc_create_endpoint();
+    if (ctx->font_reply_endpoint <= 0) return -1;
+    for (int32_t spins = 0; spins < 2048; ++spins) {
+        ctx->font_endpoint = wasmos_svc_lookup(ctx->proc_endpoint, ctx->font_reply_endpoint, "font", ctx->req_id++);
+        if (ctx->font_endpoint >= 0) break;
+        (void)wasmos_sched_yield();
+    }
+    if (ctx->font_endpoint < 0) return -1;
+    if (wasmos_ipc_call(ctx->font_endpoint, ctx->font_reply_endpoint, FONT_IPC_OPEN_FONT_REQ,
+                        ctx->req_id++, FONT_ID_ROBOTO_MONO, ctx->font_px, 0, 0, &reply) != 0) return -1;
+    if (reply.type != FONT_IPC_RESP || reply.arg0 != FONT_STATUS_OK || reply.arg1 <= 0) return -1;
+    ctx->font_handle = reply.arg1;
+    return 0;
+}
+
 static inline int32_t
 ui_init(ui_context_t *ctx, int32_t proc_endpoint, int32_t reply_endpoint, int32_t width, int32_t height)
 {
@@ -505,27 +539,29 @@ ui_init(ui_context_t *ctx, int32_t proc_endpoint, int32_t reply_endpoint, int32_
     ctx->proc_endpoint = proc_endpoint;
     ctx->reply_endpoint = reply_endpoint;
     ctx->req_id = UI_REQ_BASE;
+    ctx->font_px = 14;
     ctx->next_component_id = 1;
-    if (ui_components_reserve(ctx, UI_COMPONENTS_INITIAL_CAP) != 0) return -1;
+    if (ui_components_reserve(ctx, UI_COMPONENTS_INITIAL_CAP) != 0) goto fail;
 
     for (int32_t spins = 0; spins < 2048; ++spins) {
         ctx->gfx_endpoint = wasmos_svc_lookup(proc_endpoint, reply_endpoint, "gfx", ctx->req_id++);
         if (ctx->gfx_endpoint >= 0) break;
         (void)wasmos_sched_yield();
     }
-    if (ctx->gfx_endpoint < 0) return -1;
+    if (ctx->gfx_endpoint < 0) goto fail;
+    if (ui_init_font(ctx) != 0) goto fail;
 
     if (ui_send_gfx(ctx->gfx_endpoint, reply_endpoint, ctx->req_id++, GFX_IPC_CREATE_WINDOW,
                     width, height, (int32_t)GFX_IPC_ABI_MAGIC,
                     (int32_t)gfx_ipc_header_pack(GFX_IPC_ABI_VERSION, GFX_IPC_CREATE_WINDOW),
                     &status, &a1, &a2, &a3) != 0 || status != GFX_STATUS_OK) {
-        return -1;
+        goto fail;
     }
     ctx->window_id = a1;
-    if (ui_realloc_buffer(ctx, width, height) != 0) return -1;
+    if (ui_realloc_buffer(ctx, width, height) != 0) goto fail;
 
     ctx->root_id = ui_component_create_panel(ctx);
-    if (ctx->root_id < 0) return -1;
+    if (ctx->root_id < 0) goto fail;
     ui_component_t *root = ui_component_by_id(ctx, ctx->root_id);
     root->bounds.x = 0;
     root->bounds.y = 0;
@@ -536,6 +572,9 @@ ui_init(ui_context_t *ctx, int32_t proc_endpoint, int32_t reply_endpoint, int32_
     root->bg_color = 0xFF202833u;
     ctx->dirty = 1;
     return 0;
+fail:
+    ui_destroy(ctx);
+    return -1;
 }
 
 static inline void
@@ -669,9 +708,9 @@ ui_render_component_clip(ui_context_t *ctx, int32_t id, ui_rect_t clip, int32_t 
                       draw_bounds.x, draw_bounds.y, draw_bounds.w, draw_bounds.h, c->bg_color, clip);
 
     if (c->type == UI_COMPONENT_LABEL) {
-        ui_draw_text_clip(ctx->mapped_base, ctx->width, ctx->height,
+        ui_draw_text_clip(ctx,
                           draw_bounds.x + c->padding_px,
-                          draw_bounds.y + (draw_bounds.h - 7) / 2,
+                          draw_bounds.y + (draw_bounds.h - ctx->font_px) / 2,
                           c->text ? c->text : "",
                           c->fg_color,
                           clip);
@@ -679,9 +718,9 @@ ui_render_component_clip(ui_context_t *ctx, int32_t id, ui_rect_t clip, int32_t 
         const uint32_t inner = c->pressed ? 0xFF2B6AA0u : 0xFF4B91CCu;
         ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height,
                           draw_bounds.x + 2, draw_bounds.y + 2, draw_bounds.w - 4, draw_bounds.h - 4, inner, clip);
-        ui_draw_text_clip(ctx->mapped_base, ctx->width, ctx->height,
+        ui_draw_text_clip(ctx,
                           draw_bounds.x + c->padding_px,
-                          draw_bounds.y + (draw_bounds.h - 7) / 2,
+                          draw_bounds.y + (draw_bounds.h - ctx->font_px) / 2,
                           c->text ? c->text : "",
                           0xFFFFFFFFu,
                           clip);
@@ -694,9 +733,9 @@ ui_render_component_clip(ui_context_t *ctx, int32_t id, ui_rect_t clip, int32_t 
         if (c->checked) {
             ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, bx + 4, by + 4, box - 8, box - 8, 0xFF66CC88u, clip);
         }
-        ui_draw_text_clip(ctx->mapped_base, ctx->width, ctx->height,
+        ui_draw_text_clip(ctx,
                           bx + box + 8,
-                          draw_bounds.y + (draw_bounds.h - 7) / 2,
+                          draw_bounds.y + (draw_bounds.h - ctx->font_px) / 2,
                           c->text ? c->text : "",
                           c->fg_color,
                           clip);
@@ -708,11 +747,11 @@ ui_render_component_clip(ui_context_t *ctx, int32_t id, ui_rect_t clip, int32_t 
                           draw_bounds.x + 1, draw_bounds.y + 1, draw_bounds.w - 2, draw_bounds.h - 2, inner, clip);
         ui_stroke_rect_clip(ctx->mapped_base, ctx->width, ctx->height, draw_bounds, 1, outline, clip);
         const int32_t tx = draw_bounds.x + c->padding_px;
-        const int32_t ty = draw_bounds.y + (draw_bounds.h - 7) / 2;
-        ui_draw_text_clip(ctx->mapped_base, ctx->width, ctx->height, tx, ty, c->text ? c->text : "", 0xFFFFFFFFu, clip);
+        const int32_t ty = draw_bounds.y + (draw_bounds.h - ctx->font_px) / 2;
+        ui_draw_text_clip(ctx, tx, ty, c->text ? c->text : "", 0xFFFFFFFFu, clip);
         if (active) {
-            const int32_t caret_x = tx + (ui_component_text_len(c) * 6);
-            ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, caret_x, ty - 1, 1, 9, 0xFFFFFFFFu, clip);
+            const int32_t caret_x = tx + ui_measure_text_width(ctx, c->text ? c->text : "");
+            ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, caret_x, ty - 1, 1, ctx->font_px + 2, 0xFFFFFFFFu, clip);
         }
     } else if (c->type == UI_COMPONENT_LIST_VIEW) {
         const ui_rect_t inner = {
@@ -728,8 +767,8 @@ ui_render_component_clip(ui_context_t *ctx, int32_t id, ui_rect_t clip, int32_t 
             const int32_t row_y = inner.y + (i * item_h) - c->scroll_y;
             const uint32_t row_bg = (i == c->selected_index) ? 0xFF2F5C88u : ((i & 1) ? 0xFF1F2E43u : 0xFF1A283B);
             ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, inner.x, row_y, inner.w, item_h, row_bg, item_clip);
-            ui_draw_text_clip(ctx->mapped_base, ctx->width, ctx->height,
-                              inner.x + 6, row_y + (item_h - 7) / 2,
+            ui_draw_text_clip(ctx,
+                              inner.x + 6, row_y + (item_h - ctx->font_px) / 2,
                               c->list_items[i] ? c->list_items[i] : "",
                               0xFFFFFFFFu,
                               item_clip);
@@ -757,10 +796,10 @@ ui_render_component_clip(ui_context_t *ctx, int32_t id, ui_rect_t clip, int32_t 
         } else if (c->text) {
             selected = c->text;
         }
-        ui_draw_text_clip(ctx->mapped_base, ctx->width, ctx->height,
-                          draw_bounds.x + c->padding_px, draw_bounds.y + (draw_bounds.h - 7) / 2, selected, 0xFFFFFFFFu, clip);
-        ui_draw_text_clip(ctx->mapped_base, ctx->width, ctx->height,
-                          draw_bounds.x + draw_bounds.w - 12, draw_bounds.y + (draw_bounds.h - 7) / 2,
+        ui_draw_text_clip(ctx,
+                          draw_bounds.x + c->padding_px, draw_bounds.y + (draw_bounds.h - ctx->font_px) / 2, selected, 0xFFFFFFFFu, clip);
+        ui_draw_text_clip(ctx,
+                          draw_bounds.x + draw_bounds.w - 12, draw_bounds.y + (draw_bounds.h - ctx->font_px) / 2,
                           c->dropdown_open ? "^" : "v", 0xFF9CB6CEu, clip);
 
         if (c->dropdown_open && c->item_count > 0) {
@@ -777,8 +816,8 @@ ui_render_component_clip(ui_context_t *ctx, int32_t id, ui_rect_t clip, int32_t 
                 if (row_y >= (popup.y + popup.h)) break;
                 const uint32_t row_bg = (i == c->selected_index) ? 0xFF2F5C88u : ((i & 1) ? 0xFF1F2E43u : 0xFF1A283B);
                 ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, popup.x, row_y, popup.w, item_h, row_bg, popup_clip);
-                ui_draw_text_clip(ctx->mapped_base, ctx->width, ctx->height,
-                                  popup.x + 6, row_y + (item_h - 7) / 2,
+                ui_draw_text_clip(ctx,
+                                  popup.x + 6, row_y + (item_h - ctx->font_px) / 2,
                                   c->list_items[i] ? c->list_items[i] : "", 0xFFFFFFFFu, popup_clip);
             }
         }

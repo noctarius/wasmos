@@ -3,8 +3,8 @@
 
 #include <stdint.h>
 
-#define IPC_MAX_ENDPOINTS 128
 #define IPC_QUEUE_DEPTH 32
+#define IPC_ENDPOINT_TABLE_CHUNK 16u
 #define IPC_CONTEXT_KERNEL 0u
 #define IPC_ENDPOINT_NONE ((uint32_t)~0u)
 

@@ -293,6 +293,25 @@ wasm_shmem_map_untrack(uint32_t pid, uint32_t shmem_id)
     }
 }
 
+static uint8_t
+wasm_shmem_map_overlaps(uint32_t pid, uint32_t offset, uint32_t size)
+{
+    uint64_t a0 = (uint64_t)offset;
+    uint64_t a1 = a0 + (uint64_t)size;
+    for (uint32_t i = 0; i < (PROCESS_MAX_COUNT * 4); ++i) {
+        const wasm_shmem_linear_map_t *slot = &g_wasm_shmem_maps[i];
+        if (!slot->valid || slot->pid != pid || slot->size == 0) {
+            continue;
+        }
+        uint64_t b0 = (uint64_t)slot->offset;
+        uint64_t b1 = b0 + (uint64_t)slot->size;
+        if (a0 < b1 && b0 < a1) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static wasm_ipc_last_slot_t *
 wasm_ipc_slot_for_pid(uint32_t pid)
 {
@@ -1868,6 +1887,9 @@ m3ApiRawFunction(wasmos_shmem_map_auto)
     scan_off = (scan_off + 0xFFFULL) & ~0xFFFULL;
 
     for (off64 = scan_off; off64 + map_size <= mem_size; off64 += 0x1000ULL) {
+        if (wasm_shmem_map_overlaps(proc->pid, (uint32_t)off64, (uint32_t)map_size)) {
+            continue;
+        }
         uint64_t probe_virt = 0;
         if (wasm_user_va_from_offset(proc->context_id, (uint32_t)off64, (uint32_t)map_size, &probe_virt) != 0) {
             continue;

@@ -111,6 +111,7 @@ typedef struct ui_context {
     int32_t font_endpoint;
     int32_t font_handle;
     int32_t font_px;
+    uint8_t *glyph_scratch_raw;
     uint8_t *glyph_scratch;
     int32_t glyph_scratch_cap;
 
@@ -224,15 +225,20 @@ ui_draw_text_clip(ui_context_t *ctx, int32_t x, int32_t y, const char *text, uin
         const int32_t y0 = ui_i16_hi(reply.arg3);
         if (shmem_id > 0 && w > 0 && h > 0) {
             const int32_t bytes = w * h;
-            if (ctx->glyph_scratch_cap < bytes) {
-                uint8_t *new_buf = (uint8_t *)realloc(ctx->glyph_scratch, (size_t)bytes);
-                if (new_buf) {
-                    ctx->glyph_scratch = new_buf;
-                    ctx->glyph_scratch_cap = bytes;
+            const int32_t map_len = (bytes + (UI_PAGE_SIZE - 1)) & ~(UI_PAGE_SIZE - 1);
+            if (ctx->glyph_scratch_cap < map_len) {
+                const size_t alloc_len = (size_t)map_len + (size_t)UI_PAGE_SIZE;
+                uint8_t *new_raw = (uint8_t *)realloc(ctx->glyph_scratch_raw, alloc_len);
+                if (new_raw) {
+                    ctx->glyph_scratch_raw = new_raw;
+                    uintptr_t p = (uintptr_t)new_raw;
+                    p = (p + (uintptr_t)(UI_PAGE_SIZE - 1)) & ~(uintptr_t)(UI_PAGE_SIZE - 1);
+                    ctx->glyph_scratch = (uint8_t *)p;
+                    ctx->glyph_scratch_cap = map_len;
                 }
             }
-            if (ctx->glyph_scratch && ctx->glyph_scratch_cap >= bytes &&
-                wasmos_shmem_map(shmem_id, (int32_t)(uintptr_t)ctx->glyph_scratch, bytes) == 0) {
+            if (ctx->glyph_scratch && ctx->glyph_scratch_cap >= map_len &&
+                wasmos_shmem_map(shmem_id, (int32_t)(uintptr_t)ctx->glyph_scratch, map_len) == 0) {
                 const uint8_t *mask = ctx->glyph_scratch;
                 for (int32_t gy = 0; gy < h; ++gy) {
                     const int32_t py = y + y0 + gy;
@@ -502,7 +508,7 @@ ui_realloc_buffer(ui_context_t *ctx, int32_t new_w, int32_t new_h)
     const int32_t mapped_ptr = wasmos_shmem_map_auto(new_shmem_id, bytes);
     if (mapped_ptr < 0) return -1;
     if (ctx->shmem_id > 0) (void)wasmos_shmem_unmap(ctx->shmem_id);
-    if (ctx->glyph_scratch) free(ctx->glyph_scratch);
+    if (ctx->glyph_scratch_raw) free(ctx->glyph_scratch_raw);
     if (ctx->buffer_id > 0) {
         (void)ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_RELEASE_SHARED_BUFFER,
                           ctx->buffer_id, 0, 0, 0, &status, 0, 0, 0);

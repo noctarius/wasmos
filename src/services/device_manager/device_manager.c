@@ -774,7 +774,7 @@ query_module_meta_by_path(const char *path, uint32_t source, int32_t *out_index)
     if (dm_ipc_call(g_dm.proc_endpoint,
                     g_dm.reply_endpoint,
                     PROC_IPC_MODULE_META_PATH,
-                    g_dm.request_id,
+                    g_dm.request_id++,
                     (int32_t)(uintptr_t)path,
                     (int32_t)path_len,
                     (int32_t)source,
@@ -783,7 +783,6 @@ query_module_meta_by_path(const char *path, uint32_t source, int32_t *out_index)
                     128) != 0) {
         return -1;
     }
-    g_dm.request_id++;
     if (resp.type != PROC_IPC_RESP) {
         return -1;
     }
@@ -1040,7 +1039,7 @@ query_driver_module_meta(int32_t module_index,
     if (dm_ipc_call(g_dm.proc_endpoint,
                     g_dm.reply_endpoint,
                     PROC_IPC_MODULE_META,
-                    g_dm.request_id,
+                    g_dm.request_id++,
                     module_index,
                     (int32_t)match_index,
                     0,
@@ -1049,7 +1048,6 @@ query_driver_module_meta(int32_t module_index,
                     128) != 0) {
         return -1;
     }
-    g_dm.request_id++;
     if (resp.type != PROC_IPC_RESP) {
         return -1;
     }

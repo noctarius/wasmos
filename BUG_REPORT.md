@@ -267,7 +267,7 @@ screen_rect.y = win.y + damage.y;   // should be win.y + CHROME_HEIGHT + damage.
 
 Every damage rect is placed `CHROME_HEIGHT` pixels too high on screen. The actual dirty content area is not composited.
 
-### M-19 — `src/services/device_manager/device_manager.c:774-791` — `request_id` not incremented on `dm_ipc_call` failure
+### M-19 ✅ FIXED — `src/services/device_manager/device_manager.c:774-791,1040-1052` — `request_id` not incremented on `dm_ipc_call` failure
 
 When `dm_ipc_call` returns -1, `g_dm.request_id` is not incremented. The next call reuses the same ID. A stale late reply matches the new request and the caller accepts wrong data.
 

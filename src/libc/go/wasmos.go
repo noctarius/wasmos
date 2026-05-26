@@ -85,12 +85,107 @@ func fsBufferCopy(ptr uint32, len uint32, offset uint32) int32
 
 var fsReplyEndpoint int32 = -1
 var fsRequestID int32 = 1
+var ipcReplyEndpoint int32 = -1
+var ipcRequestID int32 = 1
 var startupArgs [4]int32
 var startup = startupAPI{}
 
 type stdAPI struct{}
 
 var std = stdAPI{}
+
+type IPCReply struct {
+	Type        int32
+	RequestID   int32
+	Source      int32
+	Destination int32
+	Arg0        int32
+	Arg1        int32
+	Arg2        int32
+	Arg3        int32
+}
+
+type ipcAPI struct{}
+
+var ipc = ipcAPI{}
+
+func ensureIPCReplyEndpoint() (int32, Error) {
+	if ipcReplyEndpoint >= 0 {
+		return ipcReplyEndpoint, ErrOK
+	}
+	ep := ipcCreateEndpoint()
+	if ep < 0 {
+		return -1, ErrNotAvailable
+	}
+	ipcReplyEndpoint = ep
+	return ep, ErrOK
+}
+
+func nextIPCRequestID() int32 {
+	id := ipcRequestID
+	ipcRequestID++
+	if ipcRequestID < 1 {
+		ipcRequestID = 1
+	}
+	return id
+}
+
+func readIPCReply() IPCReply {
+	return IPCReply{
+		Type:        ipcLastField(ipcFieldType),
+		RequestID:   ipcLastField(ipcFieldRequestID),
+		Source:      ipcLastField(ipcFieldSource),
+		Destination: ipcLastField(ipcFieldDestination),
+		Arg0:        ipcLastField(ipcFieldArg0),
+		Arg1:        ipcLastField(ipcFieldArg1),
+		Arg2:        ipcLastField(ipcFieldArg2),
+		Arg3:        ipcLastField(ipcFieldArg3),
+	}
+}
+
+// Call sends a request to server and blocks until a reply arrives.
+// The reply endpoint is per-context and managed internally.
+func (ipcAPI) Call(server int32, msgType int32, arg0 int32, arg1 int32, arg2 int32, arg3 int32) (IPCReply, Error) {
+	replyEp, err := ensureIPCReplyEndpoint()
+	if err != ErrOK {
+		return IPCReply{}, err
+	}
+	requestID := nextIPCRequestID()
+	if ipcSend(server, replyEp, msgType, requestID, arg0, arg1, arg2, arg3) != 0 {
+		return IPCReply{}, ErrHostCallFailed
+	}
+	if ipcRecv(replyEp) < 0 {
+		return IPCReply{}, ErrHostCallFailed
+	}
+	return readIPCReply(), ErrOK
+}
+
+// Recv blocks until a message arrives on endpoint (for servers).
+func (ipcAPI) Recv(endpoint int32) (IPCReply, Error) {
+	if ipcRecv(endpoint) < 0 {
+		return IPCReply{}, ErrHostCallFailed
+	}
+	return readIPCReply(), ErrOK
+}
+
+// Reply sends a reply from a server back to the caller's private reply endpoint.
+// source should be the server's own service endpoint.
+// destination should be req.Source from the incoming request.
+func (ipcAPI) Reply(destination int32, source int32, msgType int32, requestID int32, arg0 int32, arg1 int32, arg2 int32, arg3 int32) Error {
+	if ipcSend(destination, source, msgType, requestID, arg0, arg1, arg2, arg3) != 0 {
+		return ErrHostCallFailed
+	}
+	return ErrOK
+}
+
+// CreateEndpoint allocates a new message endpoint (for servers).
+func (ipcAPI) CreateEndpoint() (int32, Error) {
+	ep := ipcCreateEndpoint()
+	if ep < 0 {
+		return -1, ErrNotAvailable
+	}
+	return ep, ErrOK
+}
 
 type File struct {
 	fd int32

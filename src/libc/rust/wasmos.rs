@@ -70,6 +70,8 @@ pub enum Error {
 
 static mut G_FS_REPLY_ENDPOINT: i32 = -1;
 static mut G_FS_REQUEST_ID: i32 = 1;
+static mut G_IPC_REPLY_ENDPOINT: i32 = -1;
+static mut G_IPC_REQUEST_ID: i32 = 1;
 static mut G_STARTUP_ARGS: [i32; 4] = [0; 4];
 
 pub mod startup {
@@ -106,6 +108,31 @@ fn raw_write(bytes: &[u8]) -> Result<(), Error> {
         return Err(Error::HostCallFailed);
     }
     Ok(())
+}
+
+fn ensure_ipc_reply_endpoint() -> Result<i32, Error> {
+    unsafe {
+        if G_IPC_REPLY_ENDPOINT >= 0 {
+            return Ok(G_IPC_REPLY_ENDPOINT);
+        }
+        let ep = ipc_create_endpoint();
+        if ep < 0 {
+            return Err(Error::NotAvailable);
+        }
+        G_IPC_REPLY_ENDPOINT = ep;
+        Ok(ep)
+    }
+}
+
+fn next_ipc_request_id() -> i32 {
+    unsafe {
+        let id = G_IPC_REQUEST_ID;
+        G_IPC_REQUEST_ID += 1;
+        if G_IPC_REQUEST_ID < 1 {
+            G_IPC_REQUEST_ID = 1;
+        }
+        id
+    }
 }
 
 fn ensure_fs_reply_endpoint() -> Result<i32, Error> {
@@ -263,6 +290,84 @@ pub mod std {
         }
         buffer[pos] = 0;
         Ok(pos)
+    }
+}
+
+pub mod ipc {
+    use super::{
+        ensure_ipc_reply_endpoint, ipc_create_endpoint, ipc_last_field, ipc_recv, ipc_send,
+        next_ipc_request_id, Error,
+        IPC_FIELD_ARG0, IPC_FIELD_ARG1, IPC_FIELD_ARG2, IPC_FIELD_ARG3,
+        IPC_FIELD_DESTINATION, IPC_FIELD_REQUEST_ID, IPC_FIELD_SOURCE, IPC_FIELD_TYPE,
+    };
+
+    #[derive(Clone, Copy, Debug)]
+    pub struct Reply {
+        pub r#type: i32,
+        pub request_id: i32,
+        pub source: i32,
+        pub destination: i32,
+        pub arg0: i32,
+        pub arg1: i32,
+        pub arg2: i32,
+        pub arg3: i32,
+    }
+
+    fn read_reply() -> Reply {
+        unsafe {
+            Reply {
+                r#type:      ipc_last_field(IPC_FIELD_TYPE),
+                request_id:  ipc_last_field(IPC_FIELD_REQUEST_ID),
+                source:      ipc_last_field(IPC_FIELD_SOURCE),
+                destination: ipc_last_field(IPC_FIELD_DESTINATION),
+                arg0:        ipc_last_field(IPC_FIELD_ARG0),
+                arg1:        ipc_last_field(IPC_FIELD_ARG1),
+                arg2:        ipc_last_field(IPC_FIELD_ARG2),
+                arg3:        ipc_last_field(IPC_FIELD_ARG3),
+            }
+        }
+    }
+
+    /// Send a request to server and block until a reply arrives.
+    /// The reply endpoint is per-context and managed internally.
+    pub fn call(server: i32, msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> Result<Reply, Error> {
+        let reply_ep = ensure_ipc_reply_endpoint()?;
+        let request_id = next_ipc_request_id();
+        if unsafe { ipc_send(server, reply_ep, msg_type, request_id, arg0, arg1, arg2, arg3) } != 0 {
+            return Err(Error::HostCallFailed);
+        }
+        if unsafe { ipc_recv(reply_ep) } < 0 {
+            return Err(Error::HostCallFailed);
+        }
+        Ok(read_reply())
+    }
+
+    /// Block until a message arrives on endpoint (for servers).
+    pub fn recv(endpoint: i32) -> Result<Reply, Error> {
+        if unsafe { ipc_recv(endpoint) } < 0 {
+            return Err(Error::HostCallFailed);
+        }
+        Ok(read_reply())
+    }
+
+    /// Send a reply from a server back to the caller's private reply endpoint.
+    /// source should be the server's own service endpoint.
+    /// destination should be req.source from the incoming request.
+    pub fn reply(destination: i32, source: i32, msg_type: i32, request_id: i32,
+                 arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> Result<(), Error> {
+        if unsafe { ipc_send(destination, source, msg_type, request_id, arg0, arg1, arg2, arg3) } != 0 {
+            return Err(Error::HostCallFailed);
+        }
+        Ok(())
+    }
+
+    /// Allocate a new message endpoint (for servers).
+    pub fn create_endpoint() -> Result<i32, Error> {
+        let ep = unsafe { ipc_create_endpoint() };
+        if ep < 0 {
+            return Err(Error::NotAvailable);
+        }
+        Ok(ep)
     }
 }
 

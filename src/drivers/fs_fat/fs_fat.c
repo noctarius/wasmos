@@ -513,7 +513,7 @@ fat_parse_boot(void)
     uint32_t total_sectors = bpb->total_sectors_16 ? bpb->total_sectors_16 : bpb->total_sectors_32;
     uint32_t fat_size = bpb->fat_size_16;
     if (fat_size == 0) {
-        fat_size = ((uint16_t *)bpb->ext)[4];
+        fat_size = ((uint32_t *)bpb->ext)[0];
     }
 
     uint32_t root_dir_sectors = ((bpb->root_entry_count * 32u) + (bytes_per_sector - 1u)) / bytes_per_sector;

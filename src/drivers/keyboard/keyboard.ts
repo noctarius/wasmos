@@ -44,7 +44,8 @@ function readScancode(): i32 {
     return -1;
   }
   if ((status & KEYBOARD_AUX_FLAG) != 0) {
-    /* AUX (mouse) byte: leave for mouse driver. */
+    /* AUX (mouse) byte: consume it to unblock the PS/2 output buffer. */
+    io_in8(KEYBOARD_DATA_PORT);
     return -1;
   }
   return io_in8(KEYBOARD_DATA_PORT) & 0xFF;

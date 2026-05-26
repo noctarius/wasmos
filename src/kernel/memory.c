@@ -37,7 +37,6 @@ mm_kernel_alias_addr(uintptr_t addr)
 typedef struct {
     uint32_t id;
     uint32_t owner_context_id;
-    uint8_t in_use;
     uint32_t refcount;
     uint64_t base;
     uint64_t pages;
@@ -46,8 +45,20 @@ typedef struct {
     uint8_t grant_count;
 } mm_shared_region_t;
 
-static mm_shared_region_t g_shared[MM_MAX_SHARED];
+static list_t g_shared_list;
+static uint8_t g_shared_list_initialized = 0;
 static uint32_t g_shared_next_id = 1;
+
+static void
+mm_shared_init_once(void)
+{
+    if (g_shared_list_initialized) {
+        return;
+    }
+    list_init(&g_shared_list, (uint32_t)sizeof(mm_shared_region_t),
+              LIST_IMPL_ARRAY_CHUNK, MM_MAX_SHARED);
+    g_shared_list_initialized = 1;
+}
 static int mm_region_flags_valid(uint32_t flags);
 typedef int (*mm_copy_work_fn)(void *arg);
 static mem_region_t *mm_context_add_region_slot(mm_context_t *ctx, uint64_t base, uint64_t size, uint32_t flags, mem_region_type_t type);
@@ -199,10 +210,14 @@ static mm_shared_region_t *mm_shared_find(uint32_t id) {
     if (id == 0) {
         return 0;
     }
-    for (uint32_t i = 0; i < MM_MAX_SHARED; ++i) {
-        if (g_shared[i].in_use && g_shared[i].id == id) {
-            return &g_shared[i];
+    mm_shared_init_once();
+    list_iter_t it;
+    mm_shared_region_t *r = (mm_shared_region_t *)list_first(&g_shared_list, &it);
+    while (r) {
+        if (r->id == id) {
+            return r;
         }
+        r = (mm_shared_region_t *)list_next(&it);
     }
     return 0;
 }
@@ -237,11 +252,7 @@ static int mm_shared_free_if_unused(mm_shared_region_t *region) {
         return 0;
     }
     pfa_free_pages(region->base, region->pages);
-    region->in_use = 0;
-    region->id = 0;
-    region->base = 0;
-    region->pages = 0;
-    region->flags = 0;
+    list_remove(&g_shared_list, region);
     return 0;
 }
 
@@ -465,16 +476,7 @@ int mm_shared_create(uint32_t owner_context_id, uint64_t pages, uint32_t flags,
     if (!out_id || !out_base || pages == 0) {
         return -1;
     }
-    uint32_t slot = MM_MAX_SHARED;
-    for (uint32_t i = 0; i < MM_MAX_SHARED; ++i) {
-        if (!g_shared[i].in_use) {
-            slot = i;
-            break;
-        }
-    }
-    if (slot == MM_MAX_SHARED) {
-        return -1;
-    }
+    mm_shared_init_once();
     uint64_t base = pfa_alloc_pages(pages);
     if (!base) {
         return -1;
@@ -494,15 +496,19 @@ int mm_shared_create(uint32_t owner_context_id, uint64_t pages, uint32_t flags,
         pfa_free_pages(base, pages);
         return -1;
     }
-    g_shared[slot].id = id;
-    g_shared[slot].owner_context_id = owner_context_id;
-    g_shared[slot].in_use = 1;
-    g_shared[slot].refcount = 0;
-    g_shared[slot].base = base;
-    g_shared[slot].pages = pages;
-    g_shared[slot].flags = flags;
-    g_shared[slot].grant_count = 0;
-    memset(g_shared[slot].grant_contexts, 0, sizeof(g_shared[slot].grant_contexts));
+    mm_shared_region_t *region = (mm_shared_region_t *)list_alloc(&g_shared_list);
+    if (!region) {
+        pfa_free_pages(base, pages);
+        return -1;
+    }
+    memset(region, 0, sizeof(*region));
+    region->id = id;
+    region->owner_context_id = owner_context_id;
+    region->refcount = 0;
+    region->base = base;
+    region->pages = pages;
+    region->flags = flags;
+    region->grant_count = 0;
     *out_id = id;
     *out_base = base;
     return 0;

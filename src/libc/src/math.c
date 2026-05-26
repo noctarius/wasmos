@@ -49,13 +49,36 @@ sqrtf(float x)
     return g;
 }
 
-float
-cosf(float x)
+/* Evaluate the degree-6 Taylor polynomial for cos on [-pi/4, pi/4]. */
+static float
+cos_poly(float x)
 {
     const float x2 = x * x;
     const float x4 = x2 * x2;
     const float x6 = x4 * x2;
     return 1.0f - (x2 * 0.5f) + (x4 * (1.0f / 24.0f)) - (x6 * (1.0f / 720.0f));
+}
+
+float
+cosf(float x)
+{
+    /* Reduce to [0, 2pi). */
+    x = fmodf(x < 0.0f ? -x : x, 6.28318530f);
+
+    /* Determine quadrant and fold into [0, pi/2]. */
+    int q;
+    if (x < 1.57079632f) {        /* Q1: [0, pi/2) */
+        q = 0;
+    } else if (x < 3.14159265f) { /* Q2: [pi/2, pi) */
+        q = 1; x = 3.14159265f - x;
+    } else if (x < 4.71238898f) { /* Q3: [pi, 3pi/2) */
+        q = 2; x = x - 3.14159265f;
+    } else {                       /* Q4: [3pi/2, 2pi) */
+        q = 3; x = 6.28318530f - x;
+    }
+
+    float c = cos_poly(x);
+    return (q == 1 || q == 2) ? -c : c;
 }
 
 float

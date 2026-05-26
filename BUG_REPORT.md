@@ -255,7 +255,7 @@ The old `g_raster_scratch_shmem_id` is overwritten without calling `shmem_destro
 
 `write_off` is advanced past `path_len` to leave room for NUL, but the byte at `path_len` is never explicitly written. The kernel's exec reader splits path from args on NUL and reads uninitialized buffer content.
 
-### M-17 — `src/kernel/process_manager_buffers.c` — Physical address returned as virtual pointer from `pm_fs_buffer_for_context`
+### M-17 ✅ FIXED — `src/kernel/process_manager_buffers.c` — Physical address returned as virtual pointer from `pm_fs_buffer_for_context`
 
 `pfa_alloc_pages` returns a physical address. It is cast to `void *` and used as a virtual pointer. Once the identity (low) mapping is removed, all FS buffer accesses through this pointer fault or corrupt memory.
 

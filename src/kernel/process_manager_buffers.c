@@ -2,6 +2,7 @@
 #include "process_manager_internal.h"
 #include "framebuffer.h"
 #include "physmem.h"
+#include "paging.h"
 #include "list.h"
 #include "string.h"
 
@@ -125,10 +126,10 @@ pm_fs_buffer_for_context(uint32_t context_id)
     if (slot->borrow_active && slot->borrow_source_context_id != 0) {
         pm_fs_buffer_slot_t *source = pm_fs_slot_for_context(slot->borrow_source_context_id);
         if (source) {
-            return (void *)(uintptr_t)source->buffer_phys;
+            return (void *)(uintptr_t)(source->buffer_phys | KERNEL_HIGHER_HALF_BASE);
         }
     }
-    return (void *)(uintptr_t)slot->buffer_phys;
+    return (void *)(uintptr_t)(slot->buffer_phys | KERNEL_HIGHER_HALF_BASE);
 }
 
 static uint32_t

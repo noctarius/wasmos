@@ -478,6 +478,7 @@ nd_shmem_create(uint64_t pages, uint32_t flags, uint32_t *out_id, void **out_ptr
         return -1;
     }
     if (mm_shared_retain(0, *out_id) != 0) {
+        (void)mm_shared_release(0, *out_id);
         return -1;
     }
     if (out_ptr) {

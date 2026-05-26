@@ -223,7 +223,7 @@ Binary data with embedded NUL bytes is silently discarded.
 
 Overflow wraps silently without setting `errno`, giving wrong results for strings like `"99999999999999999999"`.
 
-### M-9 — `src/libc/src/stdio.c:31` — `vsnprintf` off-by-one drops last character
+### M-9 ❌ FALSE POSITIVE — `src/libc/src/stdio.c:31` — `vsnprintf` off-by-one drops last character
 
 `buffer->pos + 1 < buffer->size` prevents writing to `buffer[size-2]`. The NUL is written at `size-1` separately, meaning the penultimate position is never written — one character lost on a full buffer.
 

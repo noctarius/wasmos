@@ -2179,8 +2179,8 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
         }
 
         const screen_rect = c.gfx_rect_t{
-            .x = g_windows[window_idx].x + r.x,
-            .y = g_windows[window_idx].y + r.y,
+            .x = g_windows[window_idx].x + CHROME_BORDER + r.x,
+            .y = g_windows[window_idx].y + CHROME_TITLE_H + r.y,
             .w = r.w,
             .h = r.h,
         };

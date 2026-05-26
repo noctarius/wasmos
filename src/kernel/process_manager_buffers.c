@@ -308,6 +308,30 @@ process_manager_buffer_for_context(uint32_t kind, uint32_t context_id)
     return 0;
 }
 
+uint64_t
+process_manager_buffer_phys_for_context(uint32_t kind, uint32_t context_id)
+{
+    if (kind == PM_BUFFER_KIND_FILESYSTEM) {
+        pm_fs_buffer_slot_t *slot = pm_fs_slot_for_context(context_id);
+        if (!slot) {
+            return 0;
+        }
+        if (slot->borrow_active && slot->borrow_source_context_id != 0) {
+            pm_fs_buffer_slot_t *source = pm_fs_slot_for_context(slot->borrow_source_context_id);
+            return source ? source->buffer_phys : 0;
+        }
+        return slot->buffer_phys;
+    }
+    if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
+        framebuffer_info_t fb_info = {0};
+        if (framebuffer_get_info(&fb_info) != 0) {
+            return 0;
+        }
+        return fb_info.framebuffer_base;
+    }
+    return 0;
+}
+
 uint32_t
 process_manager_buffer_size(uint32_t kind)
 {
@@ -430,7 +454,6 @@ process_manager_buffer_dma_map(uint32_t kind,
 {
     pm_fs_buffer_slot_t *slot = pm_slot_find_by_kind(kind, borrower_context_id);
     uint32_t buffer_size = process_manager_buffer_size(kind);
-    void *base = 0;
     uint64_t addr = 0;
 
     if (!slot || !out_device_addr || length == 0 || direction_flags == 0) {
@@ -450,11 +473,11 @@ process_manager_buffer_dma_map(uint32_t kind,
         ((uint64_t)offset + (uint64_t)length) > (uint64_t)buffer_size) {
         return -1;
     }
-    base = process_manager_buffer_for_context(kind, borrower_context_id);
-    if (!base) {
+    addr = process_manager_buffer_phys_for_context(kind, borrower_context_id);
+    if (addr == 0) {
         return -1;
     }
-    addr = (uint64_t)(uintptr_t)base + (uint64_t)offset;
+    addr += (uint64_t)offset;
     slot->dma_mapped = 1;
     slot->dma_direction_flags = direction_flags;
     slot->dma_offset = offset;

@@ -220,9 +220,9 @@ nd_buffer_borrow(uint32_t kind, uint32_t source_context_id,
         borrowed = 1;
     }
 
-    void *buffer = process_manager_buffer_for_context(kind, proc->context_id);
+    uint64_t phys_base = process_manager_buffer_phys_for_context(kind, proc->context_id);
     uint32_t max_size = process_manager_buffer_size(kind);
-    if (!buffer || max_size == 0 || size > max_size) {
+    if (phys_base == 0 || max_size == 0 || size > max_size) {
         if (borrowed) {
             (void)process_manager_buffer_release_context(kind, proc->context_id);
         }
@@ -328,7 +328,6 @@ nd_buffer_borrow(uint32_t kind, uint32_t source_context_id,
     }
 
     uint64_t virt = ND_DEVICE_VIRT_BASE;
-    uint64_t phys = (uint64_t)(uintptr_t)buffer;
     uint64_t pages = (uint64_t)size / PAGE_SIZE;
 
     for (uint64_t i = 0; i < pages; ++i) {
@@ -337,7 +336,7 @@ nd_buffer_borrow(uint32_t kind, uint32_t source_context_id,
          * of always mapping RW for borrowed native buffers. */
         if (paging_map_4k_in_root(ctx->root_table,
                                   virt + i * PAGE_SIZE,
-                                  phys + i * PAGE_SIZE,
+                                  phys_base + i * PAGE_SIZE,
                                   MEM_REGION_FLAG_READ |
                                       MEM_REGION_FLAG_WRITE |
                                       MEM_REGION_FLAG_USER) < 0) {
@@ -482,7 +481,7 @@ nd_shmem_create(uint64_t pages, uint32_t flags, uint32_t *out_id, void **out_ptr
         return -1;
     }
     if (out_ptr) {
-        *out_ptr = (void *)(uintptr_t)phys;
+        *out_ptr = (void *)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
     }
     return 0;
 }
@@ -498,7 +497,7 @@ nd_shmem_map(uint32_t id)
     if (mm_shared_retain(0, id) != 0) {
         return 0;
     }
-    return (void *)(uintptr_t)base;
+    return (void *)(uintptr_t)(base | KERNEL_HIGHER_HALF_BASE);
 }
 
 static int
@@ -535,7 +534,7 @@ nd_shmem_flush(uint32_t id, const void *ptr, uint32_t size)
     if ((uint64_t)size > pages * PAGE_SIZE) {
         return -1;
     }
-    memcpy((void *)(uintptr_t)phys_base, ptr, (size_t)size);
+    memcpy((void *)(uintptr_t)(phys_base | KERNEL_HIGHER_HALF_BASE), ptr, (size_t)size);
     return 0;
 }
 

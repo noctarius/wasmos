@@ -24,6 +24,7 @@ uint32_t process_manager_vt_endpoint(void);
 uint32_t process_manager_framebuffer_endpoint(void);
 void process_manager_set_framebuffer_endpoint(uint32_t endpoint);
 void *process_manager_buffer_for_context(uint32_t kind, uint32_t context_id);
+uint64_t process_manager_buffer_phys_for_context(uint32_t kind, uint32_t context_id);
 uint32_t process_manager_buffer_size(uint32_t kind);
 int process_manager_buffer_borrow_context(uint32_t kind,
                                           uint32_t borrower_context_id,

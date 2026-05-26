@@ -251,7 +251,7 @@ The old `g_raster_scratch_shmem_id` is overwritten without calling `shmem_destro
 
 `ring->read_pos = rp` stores the raw non-modded counter. Eventually `read_pos` wraps past `UINT32_MAX` and the ring appears permanently non-empty, reading garbage memory beyond the `data` array.
 
-### M-16 — `src/services/cli/cli.c:1397-1410, 1833-1841` — NUL separator between path and args never written to FS buffer
+### M-16 ❌ FALSE POSITIVE — `src/services/cli/cli.c:1397-1410, 1833-1841` — NUL separator between path and args never written to FS buffer
 
 `write_off` is advanced past `path_len` to leave room for NUL, but the byte at `path_len` is never explicitly written. The kernel's exec reader splits path from args on NUL and reads uninitialized buffer content.
 

@@ -9,31 +9,28 @@ fabsf(float x)
 float
 floorf(float x)
 {
+    if (x >= 2147483648.0f || x < -2147483648.0f) { return x; }
     int i = (int)x;
-    if ((float)i > x) {
-        i -= 1;
-    }
+    if ((float)i > x) { i -= 1; }
     return (float)i;
 }
 
 float
 ceilf(float x)
 {
+    if (x >= 2147483648.0f || x < -2147483648.0f) { return x; }
     int i = (int)x;
-    if ((float)i < x) {
-        i += 1;
-    }
+    if ((float)i < x) { i += 1; }
     return (float)i;
 }
 
 float
 fmodf(float x, float y)
 {
-    if (y == 0.0f) {
-        return 0.0f;
-    }
-    int q = (int)(x / y);
-    return x - ((float)q * y);
+    if (y == 0.0f) { return 0.0f; }
+    float q = x / y;
+    float qi = (q >= 0.0f) ? floorf(q) : -floorf(-q);
+    return x - qi * y;
 }
 
 float

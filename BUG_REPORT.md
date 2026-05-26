@@ -195,7 +195,7 @@ if ((float)yi != y) { return 1.0f; }
 
 The approximation `π/2 - x - x³/6` is only a 3-term asin approximation reflected; it diverges badly away from zero.
 
-### M-4 — `src/libc/src/math.c:11-15, 33-36` — `floorf`/`ceilf`/`fmodf` UB for `|x| > INT_MAX`
+### M-4 ✅ FIXED — `src/libc/src/math.c:11-15, 33-36` — `floorf`/`ceilf`/`fmodf` UB for `|x| > INT_MAX`
 
 Casting a `float` larger than `INT_MAX` to `int` is undefined behavior (WASM trap).
 

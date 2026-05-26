@@ -11,7 +11,7 @@
 
 These bugs cause data corruption, security regressions, or guaranteed crashes.
 
-### C-1 — `src/libc/assemblyscript/wasmos.ts` and `src/libc/zig/wasmos.zig` — `IPC_FIELD_ARG2`/`IPC_FIELD_ARG3` constants have wrong field indices
+### C-1 ✅ FIXED — `src/libc/assemblyscript/wasmos.ts` and `src/libc/zig/wasmos.zig` — `IPC_FIELD_ARG2`/`IPC_FIELD_ARG3` constants have wrong field indices
 
 ```typescript
 const IPC_FIELD_ARG2: i32 = 4;  // WRONG: field 4 is SOURCE
@@ -25,7 +25,7 @@ skipping SOURCE and DESTINATION entirely. Any WASM driver/service reading ARG2 o
 actually received the sender's endpoint ID and destination endpoint instead of the payload bytes.
 The C libc `ipc.h` was correct; only the WASM libc files were wrong. **Fixed.**
 
-### C-2 — `src/libc/src/string.c:254-263` — `memmove` backward 32-byte block copies chunks in wrong order
+### C-2 ✅ FIXED — `src/libc/src/string.c:254-263` — `memmove` backward 32-byte block copies chunks in wrong order
 
 ```c
 out -= 32;
@@ -38,27 +38,27 @@ copy8_backward(out + 24, in + 24);  // then 24–31
 
 A safe backward copy must write the highest bytes first. For any overlapping `memmove` where `dest > src` and `dest - src < 32` and `count >= 32`, the first `copy8_backward` clobbers source bytes that the later chunks still need to read. **Corrupts overlapping copies.**
 
-### C-3 — `src/boot/boot.c:956-962` — Misleading indentation on for-loop closing brace (false positive — code is correct)
+### C-3 ✅ FIXED — `src/boot/boot.c:956-962` — Misleading indentation on for-loop closing brace (false positive — code is correct)
 
 The `for`-loop closing `}` was indented at the same column as the surrounding `if (module_count > 0)`, making it appear that `boot_info->modules = mods` runs outside the `if` block. Brace counting proves otherwise: the `}` closes the `for` loop, and lines 959–961 are still inside the `if`. When `module_count == 0` the whole block is correctly skipped. **Fixed by correcting the indentation.** No behavioral change.
 
-### C-4 — `src/kernel/ipc.c:75-87` — Endpoint slot claim has no lock (race condition)
+### C-4 ✅ FIXED — `src/kernel/ipc.c:75-87` — Endpoint slot claim has no lock (race condition)
 
 `ipc_endpoint_create` scans for a free slot and claims it without holding a lock during the scan-and-set. Two concurrent callers can both see the same slot free and both claim it, silently aliasing two endpoints to one slot.
 
-### C-5 — `src/kernel/paging.c` — NX bit dropped when splitting a 2 MB large page
+### C-5 ✅ FIXED — `src/kernel/paging.c` — NX bit dropped when splitting a 2 MB large page
 
 When replacing a large-page PDE with a PT, the new 4 KB PTEs are built with `PT_FLAG_PRESENT | PT_FLAG_WRITE | table_flags` but without the `PT_FLAG_NX` bit from the original large-page entry. A formerly non-executable region becomes executable after the split — a privilege escalation vector.
 
-### C-6 — `src/kernel/memory.c` — Wrong region gets `phys_base` overwritten in `mm_shared_map`
+### C-6 ✅ FIXED — `src/kernel/memory.c` — Wrong region gets `phys_base` overwritten in `mm_shared_map`
 
 After `mm_context_add_region` inserts the shared region, the code walks to the "last" list element and assigns `last->phys_base`. With the array-chunk list implementation, `list_alloc` fills any freed slot — not necessarily the last-iterated one. An unrelated region can have its `phys_base` silently overwritten.
 
-### C-7 — `src/kernel/arch/x86_64/irq_x86_64.c` — Spurious IRQ 7 sends EOI, corrupting PIC state
+### C-7 ✅ FIXED — `src/kernel/arch/x86_64/irq_x86_64.c` — Spurious IRQ 7 sends EOI, corrupting PIC state
 
 Per the Intel 8259A spec, a spurious IRQ 7 must NOT receive an EOI (the PIC never latched the interrupt, so its ISR bit is not set). Sending EOI clears an unrelated ISR bit, causing subsequent real IRQ 7 events to be lost or mishandled.
 
-### C-8 — `src/kernel/arch/x86_64/cpu_x86_64.c` — TSS RSP0 and IST1 share the same stack
+### C-8 ✅ FIXED — `src/kernel/arch/x86_64/cpu_x86_64.c` — TSS RSP0 and IST1 share the same stack
 
 Both `g_tss.rsp0` and `g_tss.ist1` point to `ist1_top`. RSP0 is used for ring-3→ring-0 transitions; IST1 is for the timer IRQ. A timer interrupt during a privilege transition corrupts the transition frame and the interrupt frame simultaneously.
 
@@ -74,43 +74,43 @@ Both `g_tss.rsp0` and `g_tss.ist1` point to `ist1_top`. RSP0 is used for ring-3�
 
 `mm_context_add_region_slot` inserts the region (increments `region_count`) before the `pfa_alloc_pages` check. When allocation fails and the function returns -1, the zero-base dead entry remains in the region list permanently.
 
-### H-3 — `src/kernel/memory.c` — CPU left with user page table on restore failure in `mm_copy_from_user`
+### H-3 ✅ FIXED — `src/kernel/memory.c` — CPU left with user page table on restore failure in `mm_copy_from_user`
 
 If `paging_switch_root(prev_root)` fails in `mm_copy_from_user_impl`, the function returns -1 while the CPU is still running under the user's page table. All subsequent kernel execution operates under user mappings.
 
-### H-4 — `src/kernel/paging.c` — User physical data pages not freed on process exit
+### H-4 ✅ FIXED — `src/kernel/paging.c` — User physical data pages not freed on process exit
 
 `paging_destroy_address_space` frees page-table pages (PT, PD, PDPT) but never frees the physical data pages the leaf PTEs point to. All physical memory backing user address spaces is permanently leaked on process exit.
 
-### H-5 — `src/kernel/process_manager_spawn.c` — Spawned process not killed on `pm_apply_spawn_caps` failure
+### H-5 ✅ FIXED — `src/kernel/process_manager_spawn.c` — Spawned process not killed on `pm_apply_spawn_caps` failure
 
 When `pm_spawn_module` succeeds but `pm_apply_spawn_caps` subsequently fails, the new process runs without its intended capability profile and no caller has the PID to kill it.
 
-### H-6 — `src/kernel/ipc.c:193-204` — `waiter_tid` set on non-blocking poll, blocking waiter never woken
+### H-6 ✅ FIXED — `src/kernel/ipc.c:193-204` — `waiter_tid` set on non-blocking poll, blocking waiter never woken
 
 Every time `ipc_recv_for` finds an empty queue it stores `ep->waiter_tid = tid`, including for non-blocking polls. A subsequent blocked waiter sets its own `waiter_tid`, then a message arrives and `ipc_send_from` wakes the earlier poller (already running). The blocked waiter is never woken.
 
-### H-7 — `src/kernel/ipc.c:283-298` — TOCTOU in `ipc_endpoints_release_owner`
+### H-7 ✅ FIXED — `src/kernel/ipc.c:283-298` — TOCTOU in `ipc_endpoints_release_owner`
 
 The release loop reads `ep->in_use` without the lock. A concurrent `ipc_endpoint_get` can pass the get-check, then the slot is zeroed, then the remote operates on cleared endpoint state — use-after-free.
 
-### H-8 — `src/kernel/memory_service.c` — Page-fault reply fails on full IPC queue, killing resolvable faulting process
+### H-8 ✅ FIXED — `src/kernel/memory_service.c` — Page-fault reply fails on full IPC queue, killing resolvable faulting process
 
 If the IPC reply queue is full, `ipc_send_from` returns `IPC_ERR_FULL`. This propagates as -1 and the kernel terminates the process, even though the fault was resolvable. No retry exists.
 
-### H-9 — `src/kernel/native_driver.c` — Prior ELF segments leaked on partial load failure
+### H-9 ✅ FIXED — `src/kernel/native_driver.c` — Prior ELF segments leaked on partial load failure
 
 When loading ELF segments, if segment N fails, segments 0..N-1 that were already mapped are not freed — permanent physical memory leak on any ELF load failure.
 
-### H-10 — `src/kernel/native_driver.c` — Shared region orphaned on `mm_shared_retain` failure
+### H-10 ✅ FIXED — `src/kernel/native_driver.c` — Shared region orphaned on `mm_shared_retain` failure
 
 `mm_shared_create` succeeds and the slot is live. If `mm_shared_retain` then fails, the slot is permanently occupied and the region is never freed (caller has no ID to release it).
 
-### H-11 — `src/kernel/native_driver.c` — ELF entry point not validated before call
+### H-11 ✅ FIXED — `src/kernel/native_driver.c` — ELF entry point not validated before call
 
 `hdr->e_entry` is cast directly to a function pointer with no check that the address falls within a loaded, executable segment. A malformed ELF redirects execution to an arbitrary address.
 
-### H-12 — `src/libc/src/stdlib.c:83-93` — Heap coalescing uses `cur->next->size` unaligned
+### H-12 ✅ FIXED — `src/libc/src/stdlib.c:83-93` — Heap coalescing uses `cur->next->size` unaligned
 
 ```c
 cur->size = heap_align(cur->size) + sizeof(heap_block_t) + cur->next->size;
@@ -118,7 +118,7 @@ cur->size = heap_align(cur->size) + sizeof(heap_block_t) + cur->next->size;
 
 `cur->next->size` should be `heap_align(cur->next->size)`. The merged block is under-sized, causing subsequent allocations from the merged block to write past its declared end.
 
-### H-13 — `src/services/fs_fat/fs_fat.c:516` — FAT32 `fat_size` reads only 16 bits of a 32-bit field
+### H-13 ✅ FIXED — `src/services/fs_fat/fs_fat.c:516` — FAT32 `fat_size` reads only 16 bits of a 32-bit field
 
 ```c
 uint16_t fat_size = ((uint16_t *)bpb->ext)[4];  // reads ext[8..9] only
@@ -126,7 +126,7 @@ uint16_t fat_size = ((uint16_t *)bpb->ext)[4];  // reads ext[8..9] only
 
 The FAT32 `BPB_FATSz32` field at `ext[8]` is 32 bits. Only the low 16 bits are read, truncating the FAT size for large volumes. All subsequent LBA calculations (`g_root_dir_lba`, cluster numbering) are wrong.
 
-### H-14 — `src/services/vt/vt_main.c:1247` — Canonical input drops UTF-8 bytes ≥ 0x80
+### H-14 ✅ FIXED — `src/services/vt/vt_main.c:1247` — Canonical input drops UTF-8 bytes ≥ 0x80
 
 ```c
 if (ch < 0x20 || ch > 0x7E) { return; }
@@ -134,7 +134,7 @@ if (ch < 0x20 || ch > 0x7E) { return; }
 
 All multi-byte UTF-8 continuation and leading bytes are silently discarded in canonical mode. German umlauts and any non-ASCII input are lost before reaching the application.
 
-### H-15 — `src/libc/wasm/include/wasmos/libsys.h` — NULL dereference in `wasmos_sys_event_loop_poll`
+### H-15 ✅ FIXED — `src/libc/wasm/include/wasmos/libsys.h` — NULL dereference in `wasmos_sys_event_loop_poll`
 
 ```c
 if (!loop || budget == 0) {
@@ -143,7 +143,7 @@ if (!loop || budget == 0) {
 // falls through — dereferences loop->receiver_endpoint even when loop == NULL
 ```
 
-### H-16 — `src/services/device_manager/device_manager.c:839` — PCI device index ≥ 64 bypasses the spawned-device bitmask
+### H-16 ✅ FIXED — `src/services/device_manager/device_manager.c:839` — PCI device index ≥ 64 bypasses the spawned-device bitmask
 
 ```c
 if (di < 64u && ((rule->spawned_device_mask >> di) & 1u) != 0u) continue;
@@ -151,7 +151,7 @@ if (di < 64u && ((rule->spawned_device_mask >> di) & 1u) != 0u) continue;
 
 When `di >= 64`, the guard is always false. The device driver is spawned on every poll cycle.
 
-### H-17 — `src/services/fs_manager/fs_manager.c:343` — `snprintf` size argument unsigned underflow
+### H-17 ✅ FIXED — `src/services/fs_manager/fs_manager.c:343` — `snprintf` size argument unsigned underflow
 
 ```c
 snprintf(mounts + pos + n, sizeof(mounts) - (pos + (uint32_t)n), ...)
@@ -159,15 +159,15 @@ snprintf(mounts + pos + n, sizeof(mounts) - (pos + (uint32_t)n), ...)
 
 When `pos + n > sizeof(mounts)`, the `uint32_t` subtraction wraps to a huge value. `snprintf` treats this as enormous capacity and writes past the end of `mounts[384]`.
 
-### H-18 — `src/services/pci_bus/pci_bus.c:91` — Incomplete error check for `svcLookupRetry`
+### H-18 ❌ FALSE POSITIVE — `src/services/pci_bus/pci_bus.c:91` — Incomplete error check for `svcLookupRetry`
 
 Only -1 is checked. Return values -2 or -3 cause `devmgr_endpoint` to be cast to `uint32_t`, making it a garbage endpoint ID. All subsequent PCI IPC calls go to the wrong endpoint.
 
-### H-19 — `src/drivers/keyboard/keyboard.ts:46-49` — AUX byte not consumed before returning -1 (infinite spin)
+### H-19 ⚠️ REVERTED — `src/drivers/keyboard/keyboard.ts:46-49` — AUX byte not consumed before returning -1 (infinite spin)
 
 When `KEYBOARD_AUX_FLAG` is set, `readScancode()` returns -1 without reading `KEYBOARD_DATA_PORT`. The byte stays in the controller output buffer, so every subsequent call sees the same AUX byte — infinite busy loop reading nothing.
 
-### H-20 — `src/services/gfx_compositor/gfx_compositor.zig:1664` — Glyph cache codepoint truncated to `u8`
+### H-20 ✅ FIXED — `src/services/gfx_compositor/gfx_compositor.zig:1664` — Glyph cache codepoint truncated to `u8`
 
 ```zig
 entry.codepoint = @intCast(codepoint & 0xFF);
@@ -199,7 +199,7 @@ The approximation `π/2 - x - x³/6` is only a 3-term asin approximation reflect
 
 Casting a `float` larger than `INT_MAX` to `int` is undefined behavior (WASM trap).
 
-### M-5 — `src/libc/src/unistd.c:176` — `open()` treats `O_RDWR` as `O_RDONLY`
+### M-5 ✅ FIXED — `src/libc/src/unistd.c:176` — `open()` treats `O_RDWR` as `O_RDONLY`
 
 ```c
 access_mode = flags & O_WRONLY;   // masks only bit 0

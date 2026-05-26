@@ -1656,18 +1656,40 @@ fn refresh_title_cache(slot_idx: usize, win: window_slot_t, label: []const u8) b
     return true;
 }
 
+fn codepoint_to_utf8(cp: u32, buf: [*]u8) usize {
+    if (cp < 0x80) {
+        buf[0] = @intCast(cp);
+        return 1;
+    } else if (cp < 0x800) {
+        buf[0] = @intCast(0xC0 | (cp >> 6));
+        buf[1] = @intCast(0x80 | (cp & 0x3F));
+        return 2;
+    } else if (cp < 0x10000) {
+        buf[0] = @intCast(0xE0 | (cp >> 12));
+        buf[1] = @intCast(0x80 | ((cp >> 6) & 0x3F));
+        buf[2] = @intCast(0x80 | (cp & 0x3F));
+        return 3;
+    } else {
+        buf[0] = @intCast(0xF0 | (cp >> 18));
+        buf[1] = @intCast(0x80 | ((cp >> 12) & 0x3F));
+        buf[2] = @intCast(0x80 | ((cp >> 6) & 0x3F));
+        buf[3] = @intCast(0x80 | (cp & 0x3F));
+        return 4;
+    }
+}
+
 fn glyph_cache_insert_from_font(codepoint: u32) bool {
     if (glyph_cache_lookup(codepoint) != null) return true;
     if (g_font_endpoint == IPC_ENDPOINT_NONE or g_font_title_handle == 0) return false;
     const slot = glyph_cache_slot_for_new() orelse return false;
-    if (!ensure_font_shmem_buffer(&g_font_text_shmem_id, &g_font_text_ptr, &g_font_text_cap, 2)) return false;
-    g_font_text_ptr.?[0] = @intCast(codepoint & 0xFF);
-    g_font_text_ptr.?[1] = 0;
+    if (!ensure_font_shmem_buffer(&g_font_text_shmem_id, &g_font_text_ptr, &g_font_text_cap, 5)) return false;
+    const utf8_len = codepoint_to_utf8(codepoint, g_font_text_ptr.?);
+    g_font_text_ptr.?[utf8_len] = 0;
 
     var reply: c.nd_ipc_message_t = undefined;
     const req_id = g_runtime_lookup_req_id;
     g_runtime_lookup_req_id +%= 1;
-    if (font_ipc_call_budgeted(g_font_endpoint, req_id, c.FONT_IPC_MEASURE_GLYPH_REQ, g_font_title_handle, g_font_text_shmem_id, 1, 0, &reply, 32) != 0) {
+    if (font_ipc_call_budgeted(g_font_endpoint, req_id, c.FONT_IPC_MEASURE_GLYPH_REQ, g_font_title_handle, g_font_text_shmem_id, @intCast(utf8_len), 0, &reply, 32) != 0) {
         return false;
     }
     if (reply.type != c.FONT_IPC_RESP or @as(i32, @bitCast(reply.arg0)) != c.FONT_STATUS_OK) {
@@ -1702,7 +1724,7 @@ fn glyph_cache_insert_from_font(codepoint: u32) bool {
         if (!ensure_font_shmem_buffer(&g_font_mask_shmem_id, &g_font_mask_ptr, &g_font_mask_cap, pixel_count)) return false;
         const req_id_into = g_runtime_lookup_req_id;
         g_runtime_lookup_req_id +%= 1;
-        if (font_ipc_call_budgeted(g_font_endpoint, req_id_into, c.FONT_IPC_RASTER_GLYPH_INTO_REQ, g_font_title_handle, g_font_text_shmem_id, 1, g_font_mask_shmem_id, &reply, 32) != 0) {
+        if (font_ipc_call_budgeted(g_font_endpoint, req_id_into, c.FONT_IPC_RASTER_GLYPH_INTO_REQ, g_font_title_handle, g_font_text_shmem_id, @intCast(utf8_len), g_font_mask_shmem_id, &reply, 32) != 0) {
             return false;
         }
         if (reply.type != c.FONT_IPC_RESP or @as(i32, @bitCast(reply.arg0)) != c.FONT_STATUS_OK) {

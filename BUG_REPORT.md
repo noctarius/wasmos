@@ -291,7 +291,7 @@ NUL is a valid control character. Any write payload containing an embedded NUL h
 
 `(uint32_t)(offset + len)` — both `int32_t`. Adding two large `int32_t` values overflows before the cast. Use `(uint32_t)offset + (uint32_t)len`.
 
-### M-24 — `src/libsys/native/zig/libsys_native.c` — `wasmos_sys_ipc_recv_loop_native` loops forever on negative error code
+### M-24 ❌ FALSE POSITIVE — `src/libsys/native/zig/libsys_native.c` — `wasmos_sys_ipc_recv_loop_native` loops forever on negative error code
 
 Only `rc == 1` (IPC_EMPTY) is handled; `rc < 0` falls through to dispatch with a garbage message, then immediately retries — infinite CPU spin on IPC errors.
 

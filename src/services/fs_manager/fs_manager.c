@@ -337,7 +337,8 @@ fsmgr_emit_mounts(int32_t source, int32_t req_id)
                      "/%s -> %s",
                      g_backends[i].mount_name,
                      kind);
-        if (n > 0 && g_backends[i].kind == FSMGR_BACKEND_BOOT && g_backends[i].has_meta) {
+        if (n > 0 && (uint32_t)n < sizeof(mounts) - pos &&
+            g_backends[i].kind == FSMGR_BACKEND_BOOT && g_backends[i].has_meta) {
             uint8_t dev = (uint8_t)((g_backends[i].device_fn >> 4) & 0x1Fu);
             uint8_t fun = (uint8_t)(g_backends[i].device_fn & 0x07u);
             int m = snprintf(mounts + pos + (uint32_t)n,

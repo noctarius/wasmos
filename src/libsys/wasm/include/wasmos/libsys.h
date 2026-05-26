@@ -217,7 +217,10 @@ static inline int32_t
 wasmos_sys_event_loop_poll(wasmos_sys_event_loop_t *loop, int32_t budget)
 {
     int32_t handled = 0;
-    if (!loop || budget == 0) {
+    if (!loop) {
+        return 0;
+    }
+    if (budget == 0) {
         budget = 1;
     }
     for (int32_t i = 0; i < budget; ++i) {

@@ -654,16 +654,26 @@ zero_into_root(uint64_t root_table, uint64_t dst_virt, uint64_t size)
     return 0;
 }
 
+typedef struct {
+    uint64_t phys;
+    uint64_t vpage;
+    uint64_t pages;
+} seg_alloc_t;
+
+#define LOAD_SEG_MAX 64
+
 static int
 load_segments(const uint8_t *elf_data, uint32_t elf_size, uint64_t root_table, uint64_t *out_bytes)
 {
     const elf64_ehdr_t *hdr = (const elf64_ehdr_t *)elf_data;
     uint64_t total_bytes = 0;
+    seg_alloc_t loaded[LOAD_SEG_MAX];
+    uint32_t n_loaded = 0;
 
     for (uint16_t i = 0; i < hdr->e_phnum; ++i) {
         uint64_t ph_off = hdr->e_phoff + (uint64_t)i * sizeof(elf64_phdr_t);
         if (ph_off + sizeof(elf64_phdr_t) > (uint64_t)elf_size) {
-            return -1;
+            goto fail;
         }
         const elf64_phdr_t *ph = (const elf64_phdr_t *)(elf_data + ph_off);
 
@@ -671,7 +681,10 @@ load_segments(const uint8_t *elf_data, uint32_t elf_size, uint64_t root_table, u
             continue;
         }
         if (ph->p_offset + ph->p_filesz > (uint64_t)elf_size) {
-            return -1;
+            goto fail;
+        }
+        if (n_loaded >= LOAD_SEG_MAX) {
+            goto fail;
         }
 
         /* Align the virtual base down to a page boundary. */
@@ -681,8 +694,14 @@ load_segments(const uint8_t *elf_data, uint32_t elf_size, uint64_t root_table, u
 
         uint64_t phys = pfa_alloc_pages(alloc_pages);
         if (phys == 0) {
-            return -1;
+            goto fail;
         }
+
+        /* Record before any fallible operations so fail path always sees it. */
+        loaded[n_loaded].phys  = phys;
+        loaded[n_loaded].vpage = vpage;
+        loaded[n_loaded].pages = alloc_pages;
+        ++n_loaded;
 
         uint32_t final_flags = MEM_REGION_FLAG_READ;
         if (ph->p_flags & PF_W) { final_flags |= MEM_REGION_FLAG_WRITE; }
@@ -698,8 +717,7 @@ load_segments(const uint8_t *elf_data, uint32_t elf_size, uint64_t root_table, u
                                       vpage + p * PAGE_SIZE,
                                       phys  + p * PAGE_SIZE,
                                       copy_flags) < 0) {
-                pfa_free_pages(phys, alloc_pages);
-                return -1;
+                goto fail;
             }
         }
 
@@ -707,16 +725,14 @@ load_segments(const uint8_t *elf_data, uint32_t elf_size, uint64_t root_table, u
 
         if (ph->p_filesz > 0) {
             if (copy_into_root(root_table, ph->p_vaddr, src, ph->p_filesz) != 0) {
-                pfa_free_pages(phys, alloc_pages);
-                return -1;
+                goto fail;
             }
         }
         if (ph->p_memsz > ph->p_filesz) {
             if (zero_into_root(root_table,
                                ph->p_vaddr + ph->p_filesz,
                                ph->p_memsz - ph->p_filesz) != 0) {
-                pfa_free_pages(phys, alloc_pages);
-                return -1;
+                goto fail;
             }
         }
 
@@ -735,6 +751,15 @@ load_segments(const uint8_t *elf_data, uint32_t elf_size, uint64_t root_table, u
         *out_bytes = total_bytes;
     }
     return 0;
+
+fail:
+    for (uint32_t j = 0; j < n_loaded; ++j) {
+        for (uint64_t p = 0; p < loaded[j].pages; ++p) {
+            (void)paging_unmap_4k_in_root(root_table, loaded[j].vpage + p * PAGE_SIZE);
+        }
+        pfa_free_pages(loaded[j].phys, loaded[j].pages);
+    }
+    return -1;
 }
 
 /* -------------------------------------------------------------------------

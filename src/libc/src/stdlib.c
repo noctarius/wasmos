@@ -85,7 +85,7 @@ heap_coalesce(void)
     while (cur && cur->next) {
         uint8_t *cur_end = (uint8_t *)(void *)cur + sizeof(heap_block_t) + heap_align(cur->size);
         if (cur->free && cur->next->free && cur_end == (uint8_t *)(void *)cur->next) {
-            cur->size = heap_align(cur->size) + sizeof(heap_block_t) + cur->next->size;
+            cur->size = heap_align(cur->size) + sizeof(heap_block_t) + heap_align(cur->next->size);
             cur->next = cur->next->next;
             continue;
         }

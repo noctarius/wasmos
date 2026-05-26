@@ -307,7 +307,7 @@ A node is allocated before checking `if (!state)`. On the NULL path the just-all
 
 `g_shared_next_id` is incremented without checking whether the new ID is already in use among the 16 live slots. A duplicate ID makes `mm_shared_get` return whichever it finds first; the other is permanently unreachable.
 
-### M-28 — `src/services/device_manager/device_manager.c:379-380` — `dm_rules_load_block_fs` unconditionally clears mount-ready flags
+### M-28 ✅ FIXED — `src/services/device_manager/device_manager_rules.c:379-380` — `dm_rules_load_block_fs` unconditionally clears mount-ready flags
 
 Calling `dm_rules_load_block_fs` on hotplug/re-poll resets `boot_mount_ready` and `user_mount_ready` even when they were already legitimately set, causing spurious re-mount attempts.
 

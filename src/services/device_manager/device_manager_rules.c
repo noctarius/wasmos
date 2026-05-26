@@ -376,8 +376,6 @@ dm_rules_load_block_fs(device_manager_state_t *state, const char *text)
         return;
     }
     state->active_rule_spawn_index = -1;
-    state->boot_mount_ready = 0;
-    state->user_mount_ready = 0;
     for (uint32_t i = 0; i < BLOCK_FS_RULE_CAP; ++i) {
         state->block_fs_rules[i].active = 0;
         state->block_fs_rules[i].queued = 0;

@@ -63,6 +63,8 @@ declare function fs_buffer_copy(ptr: i32, len: i32, offset: i32): i32;
 
 let g_fsReplyEndpoint: i32 = -1;
 let g_fsRequestId: i32 = 1;
+let g_ipcReplyEndpoint: i32 = -1;
+let g_ipcRequestId: i32 = 1;
 let g_startupArgs = new StaticArray<i32>(4);
 
 export namespace startup {
@@ -98,6 +100,23 @@ function writeBytes(bytes: Uint8Array): bool {
 function writeStringRaw(text: string): bool {
   const buffer = Uint8Array.wrap(String.UTF8.encode(text, false));
   return writeBytes(buffer);
+}
+
+function ensureIpcReplyEndpoint(): i32 {
+  if (g_ipcReplyEndpoint >= 0) {
+    return g_ipcReplyEndpoint;
+  }
+  g_ipcReplyEndpoint = ipc_create_endpoint();
+  return g_ipcReplyEndpoint;
+}
+
+function nextIpcRequestId(): i32 {
+  const id = g_ipcRequestId;
+  g_ipcRequestId += 1;
+  if (g_ipcRequestId < 1) {
+    g_ipcRequestId = 1;
+  }
+  return id;
 }
 
 function ensureFsReplyEndpoint(): i32 {
@@ -317,6 +336,89 @@ export class File {
       return -1;
     }
     return response.arg0;
+  }
+}
+
+export namespace ipc {
+  export class Reply {
+    constructor(
+      public type: i32 = 0,
+      public requestId: i32 = 0,
+      public source: i32 = 0,
+      public destination: i32 = 0,
+      public arg0: i32 = 0,
+      public arg1: i32 = 0,
+      public arg2: i32 = 0,
+      public arg3: i32 = 0
+    ) {}
+  }
+
+  // Create a new message endpoint (for servers setting up their receive endpoint).
+  export function createEndpoint(): i32 {
+    return ipc_create_endpoint();
+  }
+
+  // Send a request to server and block until a reply arrives.
+  // The reply endpoint is per-context and managed internally — callers never
+  // share it, so only this context's reply ever lands there.
+  export function call(server: i32, type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32): Reply | null {
+    const replyEndpoint = ensureIpcReplyEndpoint();
+    if (server < 0 || replyEndpoint < 0) {
+      return null;
+    }
+    const requestId = nextIpcRequestId();
+    if (ipc_send(server, replyEndpoint, type, requestId, arg0, arg1, arg2, arg3) != 0) {
+      return null;
+    }
+    if (ipc_recv(replyEndpoint) < 0) {
+      return null;
+    }
+    return new Reply(
+      ipc_last_field(IPC_FIELD_TYPE),
+      ipc_last_field(IPC_FIELD_REQUEST_ID),
+      ipc_last_field(IPC_FIELD_SOURCE),
+      ipc_last_field(IPC_FIELD_DESTINATION),
+      ipc_last_field(IPC_FIELD_ARG0),
+      ipc_last_field(IPC_FIELD_ARG1),
+      ipc_last_field(IPC_FIELD_ARG2),
+      ipc_last_field(IPC_FIELD_ARG3)
+    );
+  }
+
+  // Block until a message arrives on endpoint (for servers).
+  export function recv(endpoint: i32): Reply | null {
+    if (endpoint < 0) {
+      return null;
+    }
+    if (ipc_recv(endpoint) < 0) {
+      return null;
+    }
+    return new Reply(
+      ipc_last_field(IPC_FIELD_TYPE),
+      ipc_last_field(IPC_FIELD_REQUEST_ID),
+      ipc_last_field(IPC_FIELD_SOURCE),
+      ipc_last_field(IPC_FIELD_DESTINATION),
+      ipc_last_field(IPC_FIELD_ARG0),
+      ipc_last_field(IPC_FIELD_ARG1),
+      ipc_last_field(IPC_FIELD_ARG2),
+      ipc_last_field(IPC_FIELD_ARG3)
+    );
+  }
+
+  // Send a reply from a server back to the caller's private reply endpoint.
+  // source should be the server's own service endpoint.
+  // destination should be req.source from the incoming request.
+  export function reply(
+    destination: i32,
+    source: i32,
+    type: i32,
+    requestId: i32,
+    arg0: i32,
+    arg1: i32,
+    arg2: i32,
+    arg3: i32
+  ): bool {
+    return ipc_send(destination, source, type, requestId, arg0, arg1, arg2, arg3) == 0;
   }
 }
 

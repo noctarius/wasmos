@@ -81,16 +81,20 @@ cosf(float x)
 float
 acosf(float x)
 {
-    if (x >= 1.0f) {
-        return 0.0f;
-    }
-    if (x <= -1.0f) {
-        return 3.14159265f;
-    }
-    float y = 1.57079632f - x;
-    float x2 = x * x;
-    y -= (x2 * x) * (1.0f / 6.0f);
-    return y;
+    if (x >= 1.0f)  { return 0.0f; }
+    if (x <= -1.0f) { return 3.14159265f; }
+
+    /* acos(x) = 2*asin(sqrt((1-x)/2)); reflect for negative x. */
+    int neg = (x < 0.0f);
+    if (neg) { x = -x; }
+
+    float z  = sqrtf(0.5f * (1.0f - x));
+    float z2 = z * z;
+    /* asin(z) via series: z*(1 + z²*(1/6 + z²*(3/40 + z²*(15/336 + z²*105/3456)))) */
+    float p  = z * (1.0f + z2 * (0.16666667f + z2 * (0.07500000f
+               + z2 * (0.04464286f + z2 * 0.03038194f))));
+    float r  = 2.0f * p;
+    return neg ? 3.14159265f - r : r;
 }
 
 /* Natural log for x > 0.  Extracts IEEE 754 exponent, reduces mantissa to

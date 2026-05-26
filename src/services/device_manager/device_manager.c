@@ -836,7 +836,7 @@ queue_pci_match_rule_spawns(void)
         }
         for (uint32_t di = 0; di < g_dm.registry_count; ++di) {
             const pci_device_record_t *rec = &g_dm.registry[di];
-            if (di < 64u && ((rule->spawned_device_mask >> di) & 1u) != 0u) {
+            if (di >= 64u || ((rule->spawned_device_mask >> di) & 1u) != 0u) {
                 continue;
             }
             if ((rule->class_code != MATCH_ANY_U8 && rec->class_code != rule->class_code) ||

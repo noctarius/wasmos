@@ -18,12 +18,14 @@ const (
 )
 
 const (
-	ipcFieldType      int32 = 0
-	ipcFieldRequestID int32 = 1
-	ipcFieldArg0      int32 = 2
-	ipcFieldArg1      int32 = 3
-	ipcFieldArg2      int32 = 4
-	ipcFieldArg3      int32 = 5
+	ipcFieldType        int32 = 0
+	ipcFieldRequestID   int32 = 1
+	ipcFieldArg0        int32 = 2
+	ipcFieldArg1        int32 = 3
+	ipcFieldSource      int32 = 4
+	ipcFieldDestination int32 = 5
+	ipcFieldArg2        int32 = 6
+	ipcFieldArg3        int32 = 7
 )
 
 const (

@@ -245,6 +245,50 @@ wasmos_svc_lookup(int32_t proc_endpoint,
     return (int32_t)endpoint_raw;
 }
 
+/*
+ * Managed reply endpoint — state is a per-context static in startup.c so it
+ * is never shared across WASM contexts even when multiple contexts belong to
+ * the same OS process (each context has independent linear memory).
+ */
+int32_t wasmos_ipc_ensure_reply_endpoint(void);
+int32_t wasmos_ipc_next_request_id(void);
+
+static inline int32_t
+wasmos_ipc_call_managed(int32_t server,
+                         int32_t type,
+                         int32_t arg0,
+                         int32_t arg1,
+                         int32_t arg2,
+                         int32_t arg3,
+                         wasmos_ipc_message_t *out_reply)
+{
+    int32_t reply_ep = wasmos_ipc_ensure_reply_endpoint();
+    if (reply_ep < 0) {
+        return -1;
+    }
+    return wasmos_ipc_call_retry(server,
+                                  reply_ep,
+                                  type,
+                                  wasmos_ipc_next_request_id(),
+                                  arg0, arg1, arg2, arg3,
+                                  out_reply,
+                                  WASMOS_IPC_SEND_RETRY_LIMIT);
+}
+
+static inline int32_t
+wasmos_ipc_reply_full(int32_t destination,
+                       int32_t source,
+                       int32_t type,
+                       int32_t request_id,
+                       int32_t arg0,
+                       int32_t arg1,
+                       int32_t arg2,
+                       int32_t arg3)
+{
+    return wasmos_ipc_send(destination, source, type, request_id,
+                            arg0, arg1, arg2, arg3);
+}
+
 #ifdef __cplusplus
 }
 #endif

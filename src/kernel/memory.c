@@ -568,6 +568,9 @@ int mm_shared_retain(uint32_t owner_context_id, uint32_t id) {
     if (!region || !mm_shared_access_allowed(region, owner_context_id)) {
         return -1;
     }
+    if (region->refcount == UINT32_MAX) {
+        return -1;
+    }
     region->refcount++;
     return 0;
 }

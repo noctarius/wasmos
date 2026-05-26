@@ -295,7 +295,7 @@ NUL is a valid control character. Any write payload containing an embedded NUL h
 
 Only `rc == 1` (IPC_EMPTY) is handled; `rc < 0` falls through to dispatch with a garbage message, then immediately retries — infinite CPU spin on IPC errors.
 
-### M-25 — `src/kernel/process.c` — Stale `ctx->rsp` on user-mode preemption in `process_preempt_from_irq`
+### M-25 ❌ FALSE POSITIVE — `src/kernel/process.c` — Stale `ctx->rsp` on user-mode preemption in `process_preempt_from_irq`
 
 RSP is not updated from the IRQ frame for user-mode preemption. On next dispatch, `process_validate_context` sees the stale RSP below the higher-half boundary and kills the thread.
 

@@ -179,7 +179,7 @@ Any codepoint ≥ 256 (em-dash, smart quotes, etc.) has its high bits discarded.
 
 ## Medium Severity Bugs
 
-### M-1 — `src/libc/src/math.c:53-58` — `cosf` has no argument reduction
+### M-1 ✅ FIXED — `src/libc/src/math.c:53-58` — `cosf` has no argument reduction
 
 The 6th-order Taylor expansion around 0 has no range reduction (mod 2π). For `|x| > ~0.5`, results visibly diverge; for `|x| > π`, results leave `[-1, 1]` entirely (e.g., `cosf(M_PI)` ≈ -1.32).
 

@@ -583,6 +583,27 @@ nd_proc_exit(int code)
  * ---------------------------------------------------------------------- */
 
 static int
+elf_validate_entry(const uint8_t *data, uint32_t size)
+{
+    const elf64_ehdr_t *hdr = (const elf64_ehdr_t *)data;
+    for (uint16_t i = 0; i < hdr->e_phnum; ++i) {
+        uint64_t ph_off = hdr->e_phoff + (uint64_t)i * sizeof(elf64_phdr_t);
+        if (ph_off + sizeof(elf64_phdr_t) > (uint64_t)size) {
+            return -1;
+        }
+        const elf64_phdr_t *ph = (const elf64_phdr_t *)(data + ph_off);
+        if (ph->p_type != PT_LOAD || !(ph->p_flags & PF_X) || ph->p_memsz == 0) {
+            continue;
+        }
+        if (hdr->e_entry >= ph->p_vaddr &&
+            hdr->e_entry <  ph->p_vaddr + ph->p_memsz) {
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static int
 elf_validate(const uint8_t *data, uint32_t size)
 {
     if (size < sizeof(elf64_ehdr_t)) {
@@ -797,6 +818,10 @@ native_driver_start(uint32_t context_id,
     nd_heap_set(pid, loaded_bytes);
 
     const elf64_ehdr_t *hdr = (const elf64_ehdr_t *)elf_data;
+    if (elf_validate_entry(elf_data, elf_size) != 0) {
+        klog_write("[native-driver] ELF entry point outside executable segment\n");
+        return -1;
+    }
     native_driver_entry_fn_t entry =
         (native_driver_entry_fn_t)(uintptr_t)hdr->e_entry;
 

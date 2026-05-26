@@ -479,9 +479,20 @@ int mm_shared_create(uint32_t owner_context_id, uint64_t pages, uint32_t flags,
     if (!base) {
         return -1;
     }
-    uint32_t id = g_shared_next_id++;
+    uint32_t id = 0;
+    for (uint32_t tries = 0; tries <= MM_MAX_SHARED; ++tries) {
+        uint32_t candidate = g_shared_next_id++;
+        if (candidate == 0) {
+            candidate = g_shared_next_id++;
+        }
+        if (!mm_shared_find(candidate)) {
+            id = candidate;
+            break;
+        }
+    }
     if (id == 0) {
-        id = g_shared_next_id++;
+        pfa_free_pages(base, pages);
+        return -1;
     }
     g_shared[slot].id = id;
     g_shared[slot].owner_context_id = owner_context_id;

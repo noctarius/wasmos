@@ -303,7 +303,7 @@ RSP is not updated from the IRQ frame for user-mode preemption. On next dispatch
 
 A node is allocated before checking `if (!state)`. On the NULL path the just-allocated node is never freed.
 
-### M-27 — `src/kernel/memory.c` — `mm_shared_create` ID wrap-around can assign duplicate ID
+### M-27 ✅ FIXED — `src/kernel/memory.c` — `mm_shared_create` ID wrap-around can assign duplicate ID
 
 `g_shared_next_id` is incremented without checking whether the new ID is already in use among the 16 live slots. A duplicate ID makes `mm_shared_get` return whichever it finds first; the other is permanently unreachable.
 

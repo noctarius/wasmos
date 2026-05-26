@@ -183,7 +183,7 @@ Any codepoint ≥ 256 (em-dash, smart quotes, etc.) has its high bits discarded.
 
 The 6th-order Taylor expansion around 0 has no range reduction (mod 2π). For `|x| > ~0.5`, results visibly diverge; for `|x| > π`, results leave `[-1, 1]` entirely (e.g., `cosf(M_PI)` ≈ -1.32).
 
-### M-2 — `src/libc/src/math.c:77-92` — `powf` returns `1.0f` for all fractional exponents
+### M-2 ✅ FIXED — `src/libc/src/math.c:77-92` — `powf` returns `1.0f` for all fractional exponents
 
 ```c
 if ((float)yi != y) { return 1.0f; }

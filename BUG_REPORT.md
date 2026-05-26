@@ -311,6 +311,14 @@ A node is allocated before checking `if (!state)`. On the NULL path the just-all
 
 Calling `dm_rules_load_block_fs` on hotplug/re-poll resets `boot_mount_ready` and `user_mount_ready` even when they were already legitimately set, causing spurious re-mount attempts.
 
+### M-29 ✅ FIXED — `src/kernel/native_driver.c:485,501,538` — `nd_shmem_create`, `nd_shmem_map`, and `nd_shmem_flush` use raw physical addresses as CPU pointers
+
+Same pattern as M-17: `mm_shared_create` and `mm_shared_get_phys` return physical addresses, but `nd_shmem_create` stored that in `*out_ptr` and `nd_shmem_map` returned it directly as a `void *`. Font-service faulted at `cr2=0x0000008400000000` (the physical page base) because the virtual address was never mapped. `nd_shmem_flush` also passed the raw physical base to `memcpy`. Fixed by applying `| KERNEL_HIGHER_HALF_BASE` to all three.
+
+### M-30 ✅ FIXED — `src/kernel/native_driver.c` + `src/kernel/process_manager_buffers.c` — M-17 fix broke DMA path and `nd_buffer_borrow` page-table mapping
+
+After M-17, `pm_fs_buffer_for_context` returns `phys | KERNEL_HIGHER_HALF_BASE` (a kernel virtual address). Two callers needed the raw physical address: `process_manager_buffer_dma_map` (was handing a virtual address to the DMA engine, causing `[ata] dma read fallback rc=-3`) and `nd_buffer_borrow` (was passing a virtual address as the physical page frame to `paging_map_4k_in_root`). Fixed by adding `process_manager_buffer_phys_for_context` that always returns the physical address, and routing both callers through it.
+
 ---
 
 ## Low Severity / Minor Bugs

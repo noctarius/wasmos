@@ -656,8 +656,12 @@ int mm_context_alloc_region(mm_context_t *ctx, uint64_t pages, uint32_t flags, m
         return -1;
     }
     uint64_t virt = mm_region_virtual_base(ctx, type, pages);
+    if (!virt) {
+        pfa_free_pages(phys, pages);
+        return -1;
+    }
     mem_region_t *added = mm_context_add_region_slot(ctx, virt, pages * PAGE_SIZE, flags, type);
-    if (!virt || !added) {
+    if (!added) {
         pfa_free_pages(phys, pages);
         return -1;
     }

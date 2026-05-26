@@ -1,6 +1,8 @@
 #include "memory_service.h"
 #include "memory.h"
 
+#define MEM_SVC_SEND_RETRY_LIMIT 4096
+
 static uint32_t g_mem_service_context;
 static uint32_t g_mem_service_endpoint = IPC_ENDPOINT_NONE;
 static uint32_t g_mem_service_reply_endpoint = IPC_ENDPOINT_NONE;
@@ -61,7 +63,12 @@ memory_service_process_once(void)
 
     ipc_message_t reply;
     int status = memory_service_handle_request(&req, &reply);
-    if (ipc_send_from(g_mem_service_context, reply.destination, &reply) != IPC_OK) {
+    int send_rc;
+    int tries = 0;
+    do {
+        send_rc = ipc_send_from(g_mem_service_context, reply.destination, &reply);
+    } while (send_rc == IPC_ERR_FULL && ++tries < MEM_SVC_SEND_RETRY_LIMIT);
+    if (send_rc != IPC_OK) {
         return -1;
     }
     return status == 0 ? 0 : -1;

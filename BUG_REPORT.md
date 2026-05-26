@@ -207,7 +207,7 @@ access_mode = flags & O_WRONLY;   // masks only bit 0
 
 `O_RDWR` (value 2) `& 1 == 0`, which matches `O_RDONLY`. Files opened with `O_RDWR` are silently opened read-only.
 
-### M-6 — `src/libc/src/unistd.c:148-159` — IPC stream drops NUL bytes
+### M-6 ❌ FALSE POSITIVE — `src/libc/src/unistd.c:148-159` — IPC stream drops NUL bytes
 
 ```c
 if (c == '\0') { continue; }

@@ -191,7 +191,7 @@ if ((float)yi != y) { return 1.0f; }
 
 `powf(2.0f, 0.5f)` returns `1.0f` instead of `~1.414f`. Complete logic failure for non-integer exponents.
 
-### M-3 — `src/libc/src/math.c:62-74` — `acosf` wrong approximation (≈22% error at `x=0.9`)
+### M-3 ✅ FIXED — `src/libc/src/math.c:62-74` — `acosf` wrong approximation (≈22% error at `x=0.9`)
 
 The approximation `π/2 - x - x³/6` is only a 3-term asin approximation reflected; it diverges badly away from zero.
 

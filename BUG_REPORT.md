@@ -259,7 +259,7 @@ The old `g_raster_scratch_shmem_id` is overwritten without calling `shmem_destro
 
 `pfa_alloc_pages` returns a physical address. It is cast to `void *` and used as a virtual pointer. Once the identity (low) mapping is removed, all FS buffer accesses through this pointer fault or corrupt memory.
 
-### M-18 — `src/services/gfx_compositor/gfx_compositor.zig:2159-2165` — Damage rect coordinates missing chrome/title-bar height offset
+### M-18 ✅ FIXED — `src/services/gfx_compositor/gfx_compositor.zig:2159-2165` — Damage rect coordinates missing chrome/title-bar height offset
 
 ```zig
 screen_rect.y = win.y + damage.y;   // should be win.y + CHROME_HEIGHT + damage.y

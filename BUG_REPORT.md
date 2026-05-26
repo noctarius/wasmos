@@ -243,7 +243,7 @@ A malformed kernel ELF with `e_phoff` or `p_offset + p_filesz` beyond `kernel_si
 
 If the kernel has more than 16 `PT_LOAD` segments, the overflow is ignored. The overlap-check for subsequent segments fails to detect already-allocated regions, potentially double-allocating the same physical pages and corrupting the kernel image.
 
-### M-14 — `src/services/font_service/font_service.zig:520-530` — Scratch shmem handle leaked every time a larger glyph is requested
+### M-14 ✅ FIXED — `src/services/font_service/font_service.zig:520-530` — Scratch shmem handle leaked every time a larger glyph is requested
 
 The old `g_raster_scratch_shmem_id` is overwritten without calling `shmem_destroy`. Every upsizing call permanently leaks a shmem handle.
 

@@ -518,6 +518,11 @@ fn handle_raster_glyph(req: *const c.nd_ipc_message_t) void {
     }
 
     if (g_raster_scratch_ptr == null or g_raster_scratch_shmem_id == 0 or g_raster_scratch_cap < pixel_count) {
+        if (g_raster_scratch_shmem_id != 0) {
+            _ = api().shmem_unmap.?(g_raster_scratch_shmem_id);
+            g_raster_scratch_shmem_id = 0;
+            g_raster_scratch_ptr = null;
+        }
         var scratch_id: u32 = 0;
         var scratch_ptr_raw: ?*anyopaque = null;
         const pages = (pixel_count + 4095) / 4096;

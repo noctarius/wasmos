@@ -27,9 +27,12 @@ static void *
 list_linked_alloc(list_t *list)
 {
     list_linked_state_t *state = (list_linked_state_t *)list->impl_state;
+    if (!state) {
+        return 0;
+    }
     uint64_t size = sizeof(list_linked_node_t) + list->elem_size;
     list_linked_node_t *node = (list_linked_node_t *)list_alloc_mem((size_t)size);
-    if (!state || !node) {
+    if (!node) {
         return 0;
     }
     memset(node, 0, (size_t)size);

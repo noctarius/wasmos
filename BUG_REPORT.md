@@ -299,7 +299,7 @@ Only `rc == 1` (IPC_EMPTY) is handled; `rc < 0` falls through to dispatch with a
 
 RSP is not updated from the IRQ frame for user-mode preemption. On next dispatch, `process_validate_context` sees the stale RSP below the higher-half boundary and kills the thread.
 
-### M-26 — `src/kernel/list_linked.c:28-38` — Memory leak when `state` is NULL in `list_linked_alloc`
+### M-26 ✅ FIXED — `src/kernel/list_linked.c:28-38` — Memory leak when `state` is NULL in `list_linked_alloc`
 
 A node is allocated before checking `if (!state)`. On the NULL path the just-allocated node is never freed.
 

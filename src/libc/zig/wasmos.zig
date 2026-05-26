@@ -66,6 +66,8 @@ pub const Error = error{
 
 var g_fs_reply_endpoint: i32 = -1;
 var g_fs_request_id: i32 = 1;
+var g_ipc_reply_endpoint: i32 = -1;
+var g_ipc_request_id: i32 = 1;
 var g_startup_args = [4]i32{ 0, 0, 0, 0 };
 
 pub const startup = struct {
@@ -92,6 +94,27 @@ fn rawWrite(bytes: []const u8) Error!void {
     if (console_write(@intCast(@intFromPtr(bytes.ptr)), @intCast(bytes.len)) != 0) {
         return Error.HostCallFailed;
     }
+}
+
+fn ensureIpcReplyEndpoint() Error!i32 {
+    if (g_ipc_reply_endpoint >= 0) {
+        return g_ipc_reply_endpoint;
+    }
+    const endpoint = ipc_create_endpoint();
+    if (endpoint < 0) {
+        return Error.NotAvailable;
+    }
+    g_ipc_reply_endpoint = endpoint;
+    return endpoint;
+}
+
+fn nextIpcRequestId() i32 {
+    const id = g_ipc_request_id;
+    g_ipc_request_id += 1;
+    if (g_ipc_request_id < 1) {
+        g_ipc_request_id = 1;
+    }
+    return id;
 }
 
 fn ensureFsReplyEndpoint() Error!i32 {
@@ -236,6 +259,85 @@ pub const stdlib = struct {
         }
         buffer[pos] = 0;
         return pos;
+    }
+};
+
+pub const ipc = struct {
+    pub const Reply = struct {
+        type: i32,
+        request_id: i32,
+        source: i32,
+        destination: i32,
+        arg0: i32,
+        arg1: i32,
+        arg2: i32,
+        arg3: i32,
+    };
+
+    /// Create a new message endpoint (for servers setting up their receive endpoint).
+    pub fn createEndpoint() Error!i32 {
+        const ep = ipc_create_endpoint();
+        if (ep < 0) return Error.NotAvailable;
+        return ep;
+    }
+
+    /// Send a request to server and block until a reply arrives.
+    /// The reply endpoint is per-context and managed internally — callers never
+    /// share it, so only this context's reply ever lands there.
+    pub fn call(server: i32, msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32) Error!Reply {
+        const reply_endpoint = try ensureIpcReplyEndpoint();
+        const request_id = nextIpcRequestId();
+        if (ipc_send(server, reply_endpoint, msg_type, request_id, arg0, arg1, arg2, arg3) != 0) {
+            return Error.HostCallFailed;
+        }
+        if (ipc_recv(reply_endpoint) < 0) {
+            return Error.HostCallFailed;
+        }
+        return Reply{
+            .type = ipc_last_field(IPC_FIELD_TYPE),
+            .request_id = ipc_last_field(IPC_FIELD_REQUEST_ID),
+            .source = ipc_last_field(IPC_FIELD_SOURCE),
+            .destination = ipc_last_field(IPC_FIELD_DESTINATION),
+            .arg0 = ipc_last_field(IPC_FIELD_ARG0),
+            .arg1 = ipc_last_field(IPC_FIELD_ARG1),
+            .arg2 = ipc_last_field(IPC_FIELD_ARG2),
+            .arg3 = ipc_last_field(IPC_FIELD_ARG3),
+        };
+    }
+
+    /// Block until a message arrives on endpoint (for servers).
+    pub fn recv(endpoint: i32) Error!Reply {
+        if (ipc_recv(endpoint) < 0) {
+            return Error.HostCallFailed;
+        }
+        return Reply{
+            .type = ipc_last_field(IPC_FIELD_TYPE),
+            .request_id = ipc_last_field(IPC_FIELD_REQUEST_ID),
+            .source = ipc_last_field(IPC_FIELD_SOURCE),
+            .destination = ipc_last_field(IPC_FIELD_DESTINATION),
+            .arg0 = ipc_last_field(IPC_FIELD_ARG0),
+            .arg1 = ipc_last_field(IPC_FIELD_ARG1),
+            .arg2 = ipc_last_field(IPC_FIELD_ARG2),
+            .arg3 = ipc_last_field(IPC_FIELD_ARG3),
+        };
+    }
+
+    /// Send a reply from a server back to the caller's private reply endpoint.
+    /// source should be the server's own service endpoint.
+    /// destination should be req.source from the incoming request.
+    pub fn reply(
+        destination: i32,
+        source: i32,
+        msg_type: i32,
+        request_id: i32,
+        arg0: i32,
+        arg1: i32,
+        arg2: i32,
+        arg3: i32,
+    ) Error!void {
+        if (ipc_send(destination, source, msg_type, request_id, arg0, arg1, arg2, arg3) != 0) {
+            return Error.HostCallFailed;
+        }
     }
 };
 

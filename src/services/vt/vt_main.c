@@ -1241,7 +1241,7 @@ vt_input_handle_char(uint32_t tty_index, uint8_t ch)
             tty->input_history_nav = -1;
             return;
         }
-        if (ch < 0x20 || ch > 0x7E) {
+        if (ch < 0x20) {
             return;
         }
         if (tty->input_line_len + 1u >= (uint16_t)sizeof(tty->input_line)) {

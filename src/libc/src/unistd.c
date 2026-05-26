@@ -173,14 +173,14 @@ open(const char *path, int flags, ...)
     int32_t fd = -1;
     int access_mode;
 
-    access_mode = flags & O_WRONLY;
-    if ((flags & ~(O_WRONLY | O_CREAT | O_APPEND | O_TRUNC)) != 0) {
+    access_mode = flags & (O_WRONLY | O_RDWR);
+    if ((flags & ~(O_WRONLY | O_RDWR | O_CREAT | O_APPEND | O_TRUNC)) != 0) {
         return -1;
     }
-    if (access_mode != O_RDONLY && access_mode != O_WRONLY) {
+    if (access_mode != O_RDONLY && access_mode != O_WRONLY && access_mode != O_RDWR) {
         return -1;
     }
-    if ((flags & (O_APPEND | O_TRUNC)) && access_mode != O_WRONLY) {
+    if ((flags & (O_APPEND | O_TRUNC)) && access_mode == O_RDONLY) {
         return -1;
     }
 

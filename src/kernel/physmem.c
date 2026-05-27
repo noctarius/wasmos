@@ -1,7 +1,26 @@
 #include "physmem.h"
+#include "paging.h"
 #include "klog.h"
+#include "string.h"
 
 #define PAGE_SIZE 0x1000ULL
+
+/*
+ * Small static array covering the first 64 MB of physical RAM.
+ * Active from the moment physmem.c is loaded, before the EFI memory map
+ * is available. pfa_upgrade_refcount() replaces it with a correctly-sized
+ * dynamic allocation once the map has been scanned.
+ */
+#define PFA_STATIC_TRACKED_PAGES (64ULL * 1024 * 1024 / 4096)  /* 16384 pages, 16 KB BSS */
+static uint8_t g_refcount_static[PFA_STATIC_TRACKED_PAGES];
+
+static uint8_t *g_refcount      = g_refcount_static;
+static uint64_t g_tracked_pages = PFA_STATIC_TRACKED_PAGES;
+
+#define PFA_BUG(msg, addr) do { \
+    klog_printf("[pfa] BUG: " msg " phys=0x%016llX\n", (unsigned long long)(addr)); \
+    for (;;) { __asm__ volatile("hlt"); } \
+} while (0)
 
 #define EFI_MEMORY_TYPE_BOOT_SERVICES_CODE 3
 #define EFI_MEMORY_TYPE_BOOT_SERVICES_DATA 4
@@ -113,86 +132,7 @@ static void reserve_range(uint64_t base, uint64_t size) {
     }
 }
 
-void pfa_init(const boot_info_t *boot_info) {
-    g_range_count = 0;
-    if (!boot_info || !boot_info->memory_map || boot_info->memory_desc_size == 0) {
-        klog_write("[pfa] no memory map\n");
-        return;
-    }
-
-    klog_write("[pfa] init\n");
-
-    uint64_t desc_size = boot_info->memory_desc_size;
-    uint64_t count = boot_info->memory_map_size / desc_size;
-    if (count > 4096) {
-        klog_write("[pfa] map too large, capping descriptors\n");
-        count = 4096;
-    }
-
-    uint8_t *cursor = (uint8_t *)boot_info->memory_map;
-    for (uint64_t i = 0; i < count; ++i) {
-        efi_memory_descriptor_t *desc = (efi_memory_descriptor_t *)cursor;
-        if (is_usable(desc->Type)) {
-            add_range(desc->PhysicalStart, desc->NumberOfPages);
-        }
-        cursor += desc_size;
-    }
-
-    uint64_t kernel_base = (uint64_t)(uintptr_t)&__kernel_start;
-    uint64_t kernel_size = (uint64_t)(uintptr_t)&__kernel_end - kernel_base;
-    reserve_range(kernel_base, kernel_size);
-
-    klog_printf("[pfa] ranges=0x%016llX\n", (unsigned long long)g_range_count);
-
-    uint64_t test = pfa_alloc_pages(1);
-    klog_printf("[pfa] test alloc=0x%016llX\n", (unsigned long long)test);
-}
-
-uint64_t pfa_alloc_pages(uint64_t pages) {
-    if (pages == 0) {
-        return 0;
-    }
-    for (uint32_t i = 0; i < g_range_count; ++i) {
-        pfa_range_t *range = &g_ranges[i];
-        if (range->pages >= pages) {
-            uint64_t addr = range->base;
-            range->base += pages * PAGE_SIZE;
-            range->pages -= pages;
-            return addr;
-        }
-    }
-    return 0;
-}
-
-uint64_t pfa_alloc_pages_below(uint64_t pages, uint64_t max_addr) {
-    if (pages == 0 || max_addr == 0) {
-        return 0;
-    }
-    uint64_t limit = max_addr & ~(PAGE_SIZE - 1ULL);
-    for (uint32_t i = 0; i < g_range_count; ++i) {
-        pfa_range_t *range = &g_ranges[i];
-        if (range->pages < pages) {
-            continue;
-        }
-        uint64_t addr = range->base;
-        uint64_t end = addr + range->pages * PAGE_SIZE;
-        if (addr >= limit) {
-            continue;
-        }
-        if (end > limit) {
-            uint64_t usable_pages = (limit - addr) / PAGE_SIZE;
-            if (usable_pages < pages) {
-                continue;
-            }
-        }
-        range->base += pages * PAGE_SIZE;
-        range->pages -= pages;
-        return addr;
-    }
-    return 0;
-}
-
-void pfa_free_pages(uint64_t base, uint64_t pages) {
+static void pfa_insert_range(uint64_t base, uint64_t pages) {
     if (base == 0 || pages == 0) {
         return;
     }
@@ -233,6 +173,192 @@ void pfa_free_pages(uint64_t base, uint64_t pages) {
                 g_ranges[i] = g_ranges[i + 1];
             }
             g_range_count--;
+        }
+    }
+}
+
+/*
+ * Called once from pfa_init after the free-range list is built.
+ * Allocates a dynamic refcount array sized to actual physical RAM,
+ * migrates the static bootstrap data, then switches g_refcount over.
+ * Falls back to the static array silently if allocation fails.
+ */
+static void pfa_upgrade_refcount(void) {
+    uint64_t max_phys = 0;
+    for (uint32_t i = 0; i < g_range_count; i++) {
+        uint64_t end = g_ranges[i].base + g_ranges[i].pages * PAGE_SIZE;
+        if (end > max_phys) max_phys = end;
+    }
+    if (max_phys == 0) {
+        return;
+    }
+
+    uint64_t needed_pages = (max_phys + PAGE_SIZE - 1) / PAGE_SIZE;
+    if (needed_pages <= g_tracked_pages) {
+        return;
+    }
+
+    uint64_t rc_alloc_pages = (needed_pages + PAGE_SIZE - 1) / PAGE_SIZE;
+    uint64_t rc_phys        = pfa_alloc_pages(rc_alloc_pages);
+    if (rc_phys == 0) {
+        klog_printf("[pfa] refcount upgrade failed: needed %llu pages\n",
+                    (unsigned long long)rc_alloc_pages);
+        for (;;) { __asm__ volatile("hlt"); }
+    }
+
+    uint8_t *dyn = (uint8_t *)(uintptr_t)(rc_phys + KERNEL_HIGHER_HALF_BASE);
+    memset(dyn, 0, (size_t)needed_pages);
+    memcpy(dyn, g_refcount_static, (size_t)PFA_STATIC_TRACKED_PAGES);
+
+    /* Mark the array's own backing pages as in-use regardless of where they landed. */
+    for (uint64_t i = 0; i < rc_alloc_pages; i++) {
+        uint64_t idx = (rc_phys + i * PAGE_SIZE) >> 12;
+        if (idx < needed_pages)
+            dyn[idx] = 1;
+    }
+
+    g_refcount      = dyn;
+    g_tracked_pages = needed_pages;
+
+    klog_printf("[pfa] refcount upgraded: %llu pages tracked (%llu KB)\n",
+                (unsigned long long)needed_pages,
+                (unsigned long long)(needed_pages / 1024));
+}
+
+void pfa_init(const boot_info_t *boot_info) {
+    g_range_count = 0;
+    if (!boot_info || !boot_info->memory_map || boot_info->memory_desc_size == 0) {
+        klog_write("[pfa] no memory map\n");
+        return;
+    }
+
+    klog_write("[pfa] init\n");
+
+    uint64_t desc_size = boot_info->memory_desc_size;
+    uint64_t count = boot_info->memory_map_size / desc_size;
+    if (count > 4096) {
+        klog_write("[pfa] map too large, capping descriptors\n");
+        count = 4096;
+    }
+
+    uint8_t *cursor = (uint8_t *)boot_info->memory_map;
+    for (uint64_t i = 0; i < count; ++i) {
+        efi_memory_descriptor_t *desc = (efi_memory_descriptor_t *)cursor;
+        if (is_usable(desc->Type)) {
+            add_range(desc->PhysicalStart, desc->NumberOfPages);
+        }
+        cursor += desc_size;
+    }
+
+    uint64_t kernel_base = (uint64_t)(uintptr_t)&__kernel_start;
+    uint64_t kernel_size = (uint64_t)(uintptr_t)&__kernel_end - kernel_base;
+    reserve_range(kernel_base, kernel_size);
+
+    klog_printf("[pfa] ranges=0x%016llX\n", (unsigned long long)g_range_count);
+
+    pfa_upgrade_refcount();
+
+    uint64_t test = pfa_alloc_pages(1);
+    klog_printf("[pfa] test alloc=0x%016llX\n", (unsigned long long)test);
+}
+
+uint64_t pfa_alloc_pages(uint64_t pages) {
+    if (pages == 0) {
+        return 0;
+    }
+    for (uint32_t i = 0; i < g_range_count; ++i) {
+        pfa_range_t *range = &g_ranges[i];
+        if (range->pages >= pages) {
+            uint64_t addr = range->base;
+            range->base += pages * PAGE_SIZE;
+            range->pages -= pages;
+            for (uint64_t j = 0; j < pages; j++) {
+                uint64_t idx = (addr + j * PAGE_SIZE) >> 12;
+                if (idx < g_tracked_pages)
+                    g_refcount[idx] = 1;
+            }
+            return addr;
+        }
+    }
+    return 0;
+}
+
+uint64_t pfa_alloc_pages_below(uint64_t pages, uint64_t max_addr) {
+    if (pages == 0 || max_addr == 0) {
+        return 0;
+    }
+    uint64_t limit = max_addr & ~(PAGE_SIZE - 1ULL);
+    for (uint32_t i = 0; i < g_range_count; ++i) {
+        pfa_range_t *range = &g_ranges[i];
+        if (range->pages < pages) {
+            continue;
+        }
+        uint64_t addr = range->base;
+        uint64_t end = addr + range->pages * PAGE_SIZE;
+        if (addr >= limit) {
+            continue;
+        }
+        if (end > limit) {
+            uint64_t usable_pages = (limit - addr) / PAGE_SIZE;
+            if (usable_pages < pages) {
+                continue;
+            }
+        }
+        range->base += pages * PAGE_SIZE;
+        range->pages -= pages;
+        for (uint64_t j = 0; j < pages; j++) {
+            uint64_t idx = (addr + j * PAGE_SIZE) >> 12;
+            if (idx < g_tracked_pages)
+                g_refcount[idx] = 1;
+        }
+        return addr;
+    }
+    return 0;
+}
+
+void pfa_free_pages(uint64_t base, uint64_t pages) {
+    if (base == 0 || pages == 0) {
+        return;
+    }
+    uint64_t run_start = 0, run_len = 0;
+    for (uint64_t i = 0; i < pages; i++) {
+        uint64_t phys = base + i * PAGE_SIZE;
+        uint64_t idx  = phys >> 12;
+        if (idx < g_tracked_pages) {
+            if (g_refcount[idx] == 0)
+                PFA_BUG("double-free", phys);
+            if (--g_refcount[idx] == 0) {
+                if (run_len == 0) run_start = phys;
+                run_len++;
+            } else {
+                if (run_len) {
+                    pfa_insert_range(run_start, run_len);
+                    run_len = 0;
+                }
+            }
+        } else {
+            /* Outside tracked window — pass straight through to free pool. */
+            if (run_len == 0) run_start = phys;
+            run_len++;
+        }
+    }
+    if (run_len) {
+        pfa_insert_range(run_start, run_len);
+    }
+}
+
+void pfa_pin_pages(uint64_t base, uint64_t pages) {
+    if (base == 0 || pages == 0) {
+        return;
+    }
+    for (uint64_t i = 0; i < pages; i++) {
+        uint64_t idx = (base + i * PAGE_SIZE) >> 12;
+        if (idx < g_tracked_pages) {
+            if (g_refcount[idx] == 0)
+                PFA_BUG("pin of free page", base + i * PAGE_SIZE);
+            if (g_refcount[idx] == 255)
+                PFA_BUG("refcount overflow", base + i * PAGE_SIZE);
+            g_refcount[idx]++;
         }
     }
 }

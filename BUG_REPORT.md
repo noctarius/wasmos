@@ -78,9 +78,9 @@ Both `g_tss.rsp0` and `g_tss.ist1` point to `ist1_top`. RSP0 is used for ring-3�
 
 If `paging_switch_root(prev_root)` fails in `mm_copy_from_user_impl`, the function returns -1 while the CPU is still running under the user's page table. All subsequent kernel execution operates under user mappings.
 
-### H-4 ✅ FIXED — `src/kernel/paging.c` — User physical data pages not freed on process exit
+### H-4 ✅ FIXED — `src/kernel/paging.c` — Leaf frame double-free in `paging_destroy_address_space` corrupts page tables
 
-`paging_destroy_address_space` frees page-table pages (PT, PD, PDPT) but never frees the physical data pages the leaf PTEs point to. All physical memory backing user address spaces is permanently leaked on process exit.
+The original fix for this entry (commit b0bad301) added leaf-frame freeing to `paging_destroy_address_space`, but that is the wrong layer: `mm_context_release_regions` already frees the physical data pages as part of memory-context teardown. The double-free returned the same physical page to the allocator twice; a subsequent `alloc_table` call could allocate it as a new process's PML4, then `zero_page` would clear PML4[511], silently removing the kernel higher-half mapping. The next TLB flush on that CR3 caused a #PF → #DF → triple fault. Fixed by reverting the leaf-frame walk from `paging_destroy_address_space` so it only frees page-table structure pages (PT, PD, PDPT). Data-page lifetime is owned exclusively by `mm_context_release_regions`.
 
 ### H-5 ✅ FIXED — `src/kernel/process_manager_spawn.c` — Spawned process not killed on `pm_apply_spawn_caps` failure
 

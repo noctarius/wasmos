@@ -316,7 +316,14 @@ mm_context_release_regions(mm_context_t *ctx)
     while (region) {
         if (region->phys_base != 0 && region->size != 0) {
             uint64_t pages = (region->size + PAGE_SIZE - 1ULL) / PAGE_SIZE;
-            pfa_free_pages(region->phys_base, pages);
+            if (region->type == MEM_REGION_SHARED) {
+                /* Physical pages owned by mm_shared_region_t; decrement the pin
+                 * acquired in mm_shared_map, then release the logical reference. */
+                pfa_free_pages(region->phys_base, pages);
+                (void)mm_shared_release(ctx->id, region->shared_id);
+            } else {
+                pfa_free_pages(region->phys_base, pages);
+            }
         }
         region = (mem_region_t *)list_next(&it);
     }
@@ -627,6 +634,8 @@ int mm_shared_map(mm_context_t *ctx, uint32_t id, uint32_t flags, uint64_t *out_
         return -1;
     }
     added->phys_base = region->base;
+    added->shared_id = id;
+    pfa_pin_pages(region->base, region->pages);
     if (out_base) {
         *out_base = virt_base;
     }
@@ -661,6 +670,7 @@ int mm_shared_unmap(mm_context_t *ctx, uint32_t id) {
     if (!found) {
         return -1;
     }
+    pfa_free_pages(region->base, region->pages);
     return mm_shared_release(ctx->id, id);
 }
 

@@ -34,6 +34,7 @@ typedef struct {
     uint64_t size;
     uint32_t flags;
     mem_region_type_t type;
+    uint32_t shared_id;  /* valid only when type == MEM_REGION_SHARED */
 } mem_region_t;
 
 typedef struct {

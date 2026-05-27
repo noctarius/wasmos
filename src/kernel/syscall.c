@@ -648,7 +648,6 @@ x86_syscall_handler(syscall_frame_t *frame)
                 klog_write("[test] ring3 ipc call perm deny ok\n");
             }
             if (name_eq(proc->name, "ring3-smoke") &&
-                msg_type == 0x00006656u &&
                 !g_ring3_ipc_call_control_deny_logged) {
                 g_ring3_ipc_call_control_deny_logged = 1;
                 klog_write("[test] ring3 ipc call control deny ok\n");
@@ -659,7 +658,6 @@ x86_syscall_handler(syscall_frame_t *frame)
             g_ipc_call_control_deny_endpoint != IPC_ENDPOINT_NONE) {
             rc = IPC_ERR_PERM;
             if (name_eq(proc->name, "ring3-smoke") &&
-                msg_type == 0x00006656u &&
                 !g_ring3_ipc_call_control_deny_logged) {
                 g_ring3_ipc_call_control_deny_logged = 1;
                 klog_write("[test] ring3 ipc call control deny ok\n");

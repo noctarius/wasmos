@@ -438,15 +438,14 @@ paging_destroy_address_space(uint64_t root_table)
                     continue;
                 }
                 if (pd[pd_idx] & PT_FLAG_LARGE_PAGE) {
-                    pfa_free_pages(entry_phys(pd[pd_idx]), PAGE_SIZE_2M / PAGE_SIZE_4K);
+                    /* Do not free mapped leaf frames here. Memory-region/shared
+                     * ownership tears those down, while paging teardown owns only
+                     * the page-table structures. */
+                    continue;
                 } else {
                     uint64_t pt_phys = entry_phys(pd[pd_idx]);
                     volatile uint64_t *pt = table_ptr(pt_phys);
-                    for (uint32_t pt_idx = 0; pt_idx < ENTRIES_PER_TABLE; ++pt_idx) {
-                        if (pt[pt_idx] & PT_FLAG_PRESENT) {
-                            pfa_free_pages(entry_phys(pt[pt_idx]), 1);
-                        }
-                    }
+                    (void)pt;
                     pfa_free_pages(pt_phys, 1);
                 }
             }

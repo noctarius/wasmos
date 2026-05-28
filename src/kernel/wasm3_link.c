@@ -2055,7 +2055,7 @@ m3ApiRawFunction(wasmos_shmem_flush)
         m3ApiReturn(-1);
     }
 
-    memcpy((void *)(uintptr_t)phys_base, mem_base + off32, (size_t)len32);
+    memcpy((void *)(uintptr_t)(phys_base | KERNEL_HIGHER_HALF_BASE), mem_base + off32, (size_t)len32);
     m3ApiReturn(0);
 }
 
@@ -2100,7 +2100,7 @@ m3ApiRawFunction(wasmos_shmem_refresh)
         m3ApiReturn(-1);
     }
 
-    memcpy(mem_base + off32, (const void *)(uintptr_t)phys_base, (size_t)len32);
+    memcpy(mem_base + off32, (const void *)(uintptr_t)(phys_base | KERNEL_HIGHER_HALF_BASE), (size_t)len32);
     m3ApiReturn(0);
 }
 

@@ -301,6 +301,60 @@ poll_gfx_events_once(int32_t gfx_ep, int32_t reply_ep, int32_t *req, int32_t *ou
 }
 
 static int
+handle_resize_realloc_logo(int32_t gfx_ep, int32_t reply_ep, int32_t *req, gfx_window_rt_t *win, int32_t new_w, int32_t new_h)
+{
+    gfx_reply_t reply;
+    if (new_w <= 0 || new_h <= 0) {
+        return -1;
+    }
+    if (send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_ALLOC_SHARED_BUFFER,
+                 win->window_id, new_w, new_h, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+        puts("[test] gfx smoke resize3 alloc failed");
+        return -1;
+    }
+    int32_t new_buffer_id = reply.arg1;
+    int32_t new_shmem_id = reply.arg2;
+    int32_t new_stride = reply.arg3;
+    uint8_t *new_base = 0;
+    if (map_shared_buffer_ptr(new_shmem_id, new_stride, new_h, &new_base) != 0) {
+        return -1;
+    }
+    if (new_w >= 500 && new_h >= 500) {
+        if (fill_wasmos_logo(new_base, new_w, new_h, new_stride) != 0) {
+            return -1;
+        }
+    } else {
+        if (fill_pattern(new_base, new_w, new_h, new_stride, 77u) != 0) {
+            return -1;
+        }
+    }
+    if (flush_shared_buffer_ptr(new_shmem_id, new_base, new_stride, new_h) != 0) {
+        return -1;
+    }
+    if (send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_PRESENT_WINDOW,
+                 win->window_id, new_buffer_id, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+        puts("[test] gfx smoke resize3 present failed");
+        return -1;
+    }
+    if (send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_RELEASE_SHARED_BUFFER,
+                 win->buffer_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+        puts("[test] gfx smoke resize3 release old failed");
+        return -1;
+    }
+    if (wasmos_shmem_unmap(win->shmem_id) != 0) {
+        puts("[test] gfx smoke resize3 unmap old failed");
+        return -1;
+    }
+    win->buffer_id = new_buffer_id;
+    win->shmem_id = new_shmem_id;
+    win->stride_bytes = new_stride;
+    win->width = new_w;
+    win->height = new_h;
+    win->mapped_base = new_base;
+    return 0;
+}
+
+static int
 handle_resize_realloc(int32_t gfx_ep, int32_t reply_ep, int32_t *req, gfx_window_rt_t *win, int32_t new_w, int32_t new_h, uint32_t phase)
 {
     gfx_reply_t reply;
@@ -753,6 +807,10 @@ main(int argc, char **argv)
                 }
             } else if (ev.arg2 == win2.window_id && !closed2) {
                 if (handle_resize_realloc(gfx_ep, reply_ep, &req, &win2, rw, rh, 120u) != 0) {
+                    return GFX_SMOKE_E_RESIZE;
+                }
+            } else if (ev.arg2 == win3.window_id && !closed3) {
+                if (handle_resize_realloc_logo(gfx_ep, reply_ep, &req, &win3, rw, rh) != 0) {
                     return GFX_SMOKE_E_RESIZE;
                 }
             }

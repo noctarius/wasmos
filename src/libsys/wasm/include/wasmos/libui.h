@@ -590,7 +590,11 @@ ui_realloc_buffer(ui_context_t *ctx, int32_t new_w, int32_t new_h)
     }
     const int32_t bytes = (new_stride * new_h + (UI_PAGE_SIZE - 1)) & ~(UI_PAGE_SIZE - 1);
     const int32_t mapped_ptr = wasmos_shmem_map_auto(new_shmem_id, bytes);
-    if (mapped_ptr < 0) return -1;
+    if (mapped_ptr < 0) {
+        (void)ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_RELEASE_SHARED_BUFFER,
+                          new_buffer_id, 0, 0, 0, &status, 0, 0, 0);
+        return -1;
+    }
     if (ctx->shmem_id > 0) (void)wasmos_shmem_unmap(ctx->shmem_id);
     if (ctx->buffer_id > 0) {
         (void)ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_RELEASE_SHARED_BUFFER,

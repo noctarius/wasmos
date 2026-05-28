@@ -317,6 +317,7 @@ handle_resize_realloc_logo(int32_t gfx_ep, int32_t reply_ep, int32_t *req, gfx_w
     int32_t new_stride = reply.arg3;
     uint8_t *new_base = 0;
     if (map_shared_buffer_ptr(new_shmem_id, new_stride, new_h, &new_base) != 0) {
+        (void)send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_RELEASE_SHARED_BUFFER, new_buffer_id, 0, 0, 0, &reply);
         return -1;
     }
     if (new_w >= 500 && new_h >= 500) {
@@ -371,6 +372,7 @@ handle_resize_realloc(int32_t gfx_ep, int32_t reply_ep, int32_t *req, gfx_window
     int32_t new_stride = reply.arg3;
     uint8_t *new_base = 0;
     if (map_shared_buffer_ptr(new_shmem_id, new_stride, new_h, &new_base) != 0) {
+        (void)send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_RELEASE_SHARED_BUFFER, new_buffer_id, 0, 0, 0, &reply);
         return -1;
     }
     if (fill_pattern(new_base, new_w, new_h, new_stride, phase) != 0) {
@@ -802,17 +804,11 @@ main(int argc, char **argv)
             int32_t rw = (int32_t)(ev.arg3 & 0xFFFF);
             int32_t rh = (int32_t)((ev.arg3 >> 16) & 0xFFFF);
             if (ev.arg2 == win1.window_id && !closed1) {
-                if (handle_resize_realloc(gfx_ep, reply_ep, &req, &win1, rw, rh, 90u) != 0) {
-                    return GFX_SMOKE_E_RESIZE;
-                }
+                (void)handle_resize_realloc(gfx_ep, reply_ep, &req, &win1, rw, rh, 90u);
             } else if (ev.arg2 == win2.window_id && !closed2) {
-                if (handle_resize_realloc(gfx_ep, reply_ep, &req, &win2, rw, rh, 120u) != 0) {
-                    return GFX_SMOKE_E_RESIZE;
-                }
+                (void)handle_resize_realloc(gfx_ep, reply_ep, &req, &win2, rw, rh, 120u);
             } else if (ev.arg2 == win3.window_id && !closed3) {
-                if (handle_resize_realloc_logo(gfx_ep, reply_ep, &req, &win3, rw, rh) != 0) {
-                    return GFX_SMOKE_E_RESIZE;
-                }
+                (void)handle_resize_realloc_logo(gfx_ep, reply_ep, &req, &win3, rw, rh);
             }
         } else if (ev.arg1 == GFX_EVENT_POINTER) {
             (void)ev;

@@ -1269,7 +1269,15 @@ ui_loop_drain(ui_context_t *ctx)
     }
 
     if (ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_PRESENT_WINDOW,
-                    ctx->window_id, ctx->buffer_id, 0, 0, &status, 0, 0, 0) != 0 || status != GFX_STATUS_OK) {
+                    ctx->window_id, ctx->buffer_id, 0, 0, &status, 0, 0, 0) != 0) {
+        return -1;
+    }
+    if (status == GFX_STATUS_INVALID || status == GFX_STATUS_BUSY) {
+        /* Window resized between render and present — RESIZE event is incoming. */
+        ctx->dirty = 0;
+        return 0;
+    }
+    if (status != GFX_STATUS_OK) {
         return -1;
     }
 

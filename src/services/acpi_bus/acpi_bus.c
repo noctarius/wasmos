@@ -58,10 +58,43 @@ map_phys(uint64_t phys, uint32_t size)
     return wasmos_phys_map(lo, hi, (int32_t)aligned_size, off);
 }
 
-/* ---- AML pattern scanner for PNP0501 (16550-compatible serial) ----------- */
+/* ---- ISA/PNP device ID table -------------------------------------------- */
 
-/* EISAID("PNP0501") encodes to bytes {0x41, 0xD0, 0x05, 0x01}. */
-static const uint8_t PNP0501[4] = { 0x41, 0xD0, 0x05, 0x01 };
+/* Maps EISAID device bytes (vendor is always 0x41 0xD0 for PNP) to PCI-like
+ * class/subclass/prog_if so the device-manager rules can match them. */
+typedef struct {
+    uint8_t b2, b3;
+    uint8_t class_code;
+    uint8_t subclass;
+    uint8_t prog_if;
+} isa_id_entry_t;
+
+static const isa_id_entry_t isa_id_table[] = {
+    { 0x05, 0x01, 0x07, 0x00, 0x02 },  /* PNP0501 - 16550A serial       */
+    { 0x03, 0x03, 0x09, 0x00, 0x00 },  /* PNP0303 - AT keyboard (i8042) */
+    { 0x0F, 0x03, 0x09, 0x02, 0x00 },  /* PNP0F03 - MS serial mouse     */
+    { 0x0F, 0x13, 0x09, 0x02, 0x00 },  /* PNP0F13 - PS/2 mouse          */
+    { 0x07, 0x00, 0x01, 0x02, 0x00 },  /* PNP0700 - floppy controller   */
+    { 0x04, 0x00, 0x07, 0x01, 0x00 },  /* PNP0400 - parallel port ECP   */
+    { 0x04, 0x01, 0x07, 0x01, 0x01 },  /* PNP0401 - parallel port EPP   */
+    { 0x0B, 0x00, 0x08, 0x03, 0x00 },  /* PNP0B00 - CMOS RTC            */
+    { 0x0C, 0x04, 0x0B, 0x80, 0x00 },  /* PNP0C04 - FPU/coprocessor     */
+    { 0x0C, 0x02, 0x08, 0x80, 0x00 },  /* PNP0C02 - motherboard rsrcs   */
+};
+#define ISA_ID_TABLE_LEN (sizeof(isa_id_table) / sizeof(isa_id_table[0]))
+
+static const isa_id_entry_t *
+isa_lookup(uint8_t b2, uint8_t b3)
+{
+    for (uint32_t k = 0; k < ISA_ID_TABLE_LEN; k++) {
+        if (isa_id_table[k].b2 == b2 && isa_id_table[k].b3 == b3) {
+            return &isa_id_table[k];
+        }
+    }
+    return NULL;
+}
+
+/* ---- AML helper functions ------------------------------------------------ */
 
 static int32_t
 find_bytes(const uint8_t *buf, uint32_t len,
@@ -134,17 +167,29 @@ irq_from_mask(uint16_t mask)
     return 0xFFu;
 }
 
+/* ---- Generic AML scanner for all ISA/PNP devices ------------------------- */
+
 static void
-scan_pnp0501(const uint8_t *aml, uint32_t aml_len,
-             int32_t devmgr_ep, int32_t src_ep, int32_t *req_id)
+scan_isa_devices(const uint8_t *aml, uint32_t aml_len,
+                 int32_t devmgr_ep, int32_t src_ep, int32_t *req_id)
 {
+    /* Dedup: skip duplicate I/O base addresses (e.g. _HID + _CID on same device). */
+    uint16_t seen_io[16];
+    uint32_t n_seen = 0;
+
     for (uint32_t i = 0; i + 5u <= aml_len; i++) {
-        /* Match DWordPrefix (0x0C) + EISAID bytes for PNP0501. */
-        if (aml[i] != 0x0Cu) {
+        /* DWordPrefix (0x0C) + PNP vendor EISAID bytes (0x41 0xD0). */
+        if (aml[i] != 0x0Cu || aml[i+1] != 0x41u || aml[i+2] != 0xD0u) {
             continue;
         }
-        if (aml[i+1] != PNP0501[0] || aml[i+2] != PNP0501[1] ||
-            aml[i+3] != PNP0501[2] || aml[i+4] != PNP0501[3]) {
+
+        uint8_t b2 = aml[i+3];
+        uint8_t b3 = aml[i+4];
+
+        const isa_id_entry_t *entry = isa_lookup(b2, b3);
+        if (!entry) {
+            (void)printf("[acpi-bus] unknown PNP%02X%02X, skipping\n",
+                         (unsigned)b2, (unsigned)b3);
             continue;
         }
 
@@ -197,16 +242,17 @@ scan_pnp0501(const uint8_t *aml, uint32_t aml_len,
             uint8_t tag = aml[pos + r];
             if (tag == 0x79u) { break; }  /* EndTag */
             if (tag == 0x47u && r + 8u <= res_end) {
-                /* IO Port descriptor: 1 tag + 7 data bytes = 8 total.
-                 * r += 7 so that the for-loop's r++ lands on the next tag. */
-                io_base = (uint16_t)aml[pos+r+2] |
-                          ((uint16_t)aml[pos+r+3] << 8);
+                /* IO Port descriptor: 1 tag + 7 data bytes.
+                 * Take the first (lowest) I/O base found. */
+                if (io_base == 0) {
+                    io_base = (uint16_t)aml[pos+r+2] |
+                              ((uint16_t)aml[pos+r+3] << 8);
+                }
                 r += 7u;
                 continue;
             }
             if ((tag == 0x22u || tag == 0x23u) && r + 2u < res_end) {
-                /* Small IRQ descriptor: 0x22 = 3 bytes, 0x23 = 4 bytes.
-                 * r += N-1 so that for-loop's r++ lands on the next tag. */
+                /* Small IRQ descriptor: 0x22 = 3 bytes, 0x23 = 4 bytes. */
                 uint16_t mask = (uint16_t)aml[pos+r+1] |
                                 ((uint16_t)aml[pos+r+2] << 8);
                 irq = irq_from_mask(mask);
@@ -215,19 +261,37 @@ scan_pnp0501(const uint8_t *aml, uint32_t aml_len,
             }
         }
 
-        if (io_base == 0 || irq == 0xFFu) {
+        if (io_base == 0) {
             continue;
         }
 
-        (void)printf("[acpi-bus] PNP0501 io=0x%04X irq=%u\n",
-                     (unsigned)io_base, (unsigned)irq);
+        /* Skip duplicate I/O base (same device matched via _HID and _CID). */
+        uint32_t dup = 0;
+        for (uint32_t s = 0; s < n_seen; s++) {
+            if (seen_io[s] == io_base) { dup = 1; break; }
+        }
+        if (dup) {
+            continue;
+        }
+        if (n_seen < 16u) {
+            seen_io[n_seen++] = io_base;
+        }
 
-        /* Publish as non-PCI (bus=0xFF) device, class 0x07 (serial).
-         * device_id field carries the ISA I/O base address. */
-        uint32_t a0 = (0xFFu << 24) | 0x07u;
-        uint32_t a1 = (0x02u << 16);               /* prog_if=0x02 (16550) */
+        (void)printf("[acpi-bus] PNP%02X%02X io=0x%04X irq=%u class=0x%02X\n",
+                     (unsigned)b2, (unsigned)b3,
+                     (unsigned)io_base, (unsigned)irq,
+                     (unsigned)entry->class_code);
+
+        /* Publish as non-PCI (bus=0xFF) ISA device.
+         * arg0: (bus<<24) | class_code
+         * arg1: (subclass<<24) | (prog_if<<16) | vendor_id
+         * arg2: device_id = io_base (ISA I/O base address)
+         * arg3: irq_hint in byte 1 */
+        uint32_t a0 = (0xFFu << 24) | (uint32_t)entry->class_code;
+        uint32_t a1 = ((uint32_t)entry->subclass << 24) |
+                      ((uint32_t)entry->prog_if  << 16);
         uint32_t a2 = (uint32_t)io_base;
-        uint32_t a3 = ((uint32_t)irq << 8);
+        uint32_t a3 = (irq < 16u) ? ((uint32_t)irq << 8) : 0u;
         (void)wasmos_ipc_send(devmgr_ep, src_ep,
                               DEVMGR_PUBLISH_DEVICE, (*req_id)++,
                               (int32_t)a0, (int32_t)a1,
@@ -394,7 +458,7 @@ initialize(int32_t proc_endpoint,
     /* AML starts after the 36-byte ACPI header. */
     const uint8_t *aml = g_map_window + dsdt_off + 36u;
     uint32_t aml_len = dsdt_len - 36u;
-    scan_pnp0501(aml, aml_len, devmgr_ep, src_ep, &req_id);
+    scan_isa_devices(aml, aml_len, devmgr_ep, src_ep, &req_id);
 
 done:
     (void)wasmos_ipc_send(devmgr_ep, src_ep,

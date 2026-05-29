@@ -547,6 +547,7 @@ parse_acpi_match_rule_line(const char *line, acpi_match_rule_t *out_rule)
     char sub[32];
     char tmp[64];
     uint8_t class_code = MATCH_ANY_U8;
+    uint8_t subclass   = MATCH_ANY_U8;
     if (!line || !out_rule) {
         return -1;
     }
@@ -573,12 +574,19 @@ parse_acpi_match_rule_line(const char *line, acpi_match_rule_t *out_rule)
             }
             continue;
         }
+        if (extract_op_value(tok, "ATTR{subclass}", "==", tmp, sizeof(tmp)) == 0) {
+            if (parse_u8_hex(tmp, &subclass) != 0) {
+                return -1;
+            }
+            continue;
+        }
     }
     if (strcmp(sub, "acpi") != 0 || path[0] == '\0') {
         return -1;
     }
     out_rule->active = 1;
     out_rule->class_code = class_code;
+    out_rule->subclass   = subclass;
     out_rule->spawned_device_mask = 0;
     wasmos_sys_strcpy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
     return 0;
@@ -593,6 +601,7 @@ dm_rules_load_acpi_match(device_manager_state_t *state, const char *text)
     }
     for (uint32_t i = 0; i < ACPI_MATCH_RULE_CAP; ++i) {
         state->acpi_match_rules[i].active = 0;
+        state->acpi_match_rules[i].subclass = MATCH_ANY_U8;
         state->acpi_match_rules[i].spawned_device_mask = 0;
     }
     for (int32_t i = 0;;) {

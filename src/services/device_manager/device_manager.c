@@ -933,6 +933,9 @@ queue_acpi_match_rule_spawns(void)
             if (rule->class_code != MATCH_ANY_U8 && rec->class_code != rule->class_code) {
                 continue;
             }
+            if (rule->subclass != MATCH_ANY_U8 && rec->subclass != rule->subclass) {
+                continue;
+            }
             /* Build caps from the device record: device_id = I/O base,
              * irq_hint = IRQ line. */
             g_dm.active_rule_spawn_caps.cap_flags = DEVMGR_CAP_IO_PORT | DEVMGR_CAP_IRQ;

@@ -2,6 +2,7 @@ add_subdirectory(sysinit)
 add_subdirectory(cli)
 add_subdirectory(device_manager)
 add_subdirectory(pci_bus)
+add_subdirectory(acpi_bus)
 add_subdirectory(fs_manager)
 add_subdirectory(vt)
 add_subdirectory(gfx_compositor)
@@ -12,6 +13,7 @@ add_custom_target(services DEPENDS
   cli_app
   device_manager_app
   pci_bus_app
+  acpi_bus_app
   fs_manager_app
   vt_app
   gfx_compositor_app

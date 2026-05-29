@@ -182,6 +182,12 @@ extern int32_t wasmos_framebuffer_info(wasmos_framebuffer_info_t *info, int32_t 
     WASMOS_WASM_IMPORT("wasmos", "framebuffer_info");
 extern int32_t wasmos_framebuffer_map(int32_t ptr, int32_t size)
     WASMOS_WASM_IMPORT("wasmos", "framebuffer_map");
+/* Map a physical address range into WASM linear memory at wasm_offset.
+ * phys_lo/phys_hi form a 64-bit physical address; size and wasm_offset must
+ * be page-aligned (multiples of 4096). Requires the mmio.map capability. */
+extern int32_t wasmos_phys_map(int32_t phys_lo, int32_t phys_hi,
+                               int32_t size, int32_t wasm_offset)
+    WASMOS_WASM_IMPORT("wasmos", "phys_map");
 extern int32_t wasmos_framebuffer_pixel(int32_t x, int32_t y, int32_t color)
     WASMOS_WASM_IMPORT("wasmos", "framebuffer_pixel");
 extern int32_t wasmos_shmem_create(int32_t pages, int32_t flags)

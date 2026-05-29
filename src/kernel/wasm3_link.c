@@ -1750,6 +1750,57 @@ m3ApiRawFunction(wasmos_framebuffer_map)
     m3ApiReturn(0);
 }
 
+/* Map an arbitrary physical address range into a WASM linear-memory window.
+ * phys_lo/phys_hi form a 64-bit physical address (hi=0 for 32-bit addresses).
+ * wasm_offset must be page-aligned; size must be a multiple of 4096.
+ * Requires the mmio.map capability. */
+m3ApiRawFunction(wasmos_phys_map)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, phys_lo)
+    m3ApiGetArg(int32_t, phys_hi)
+    m3ApiGetArg(int32_t, size)
+    m3ApiGetArg(int32_t, wasm_offset)
+
+    if (size <= 0 || (size & 0xFFF) != 0) {
+        m3ApiReturn(-1);
+    }
+    if (wasm_offset < 0 || (wasm_offset & 0xFFF) != 0) {
+        m3ApiReturn(-1);
+    }
+
+    uint64_t phys = ((uint64_t)(uint32_t)phys_hi << 32) | (uint64_t)(uint32_t)phys_lo;
+    if (phys == 0) {
+        m3ApiReturn(-1);
+    }
+
+    uint32_t off32 = (uint32_t)wasm_offset;
+    uint32_t size32 = (uint32_t)size;
+
+    uint32_t mem_size = 0;
+    uint8_t *mem_base = m3_GetMemory(runtime, &mem_size, 0);
+    if (!mem_base || mem_size == 0) {
+        m3ApiReturn(-1);
+    }
+    if ((uint64_t)off32 + (uint64_t)size32 > (uint64_t)mem_size) {
+        m3ApiReturn(-1);
+    }
+
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0 ||
+        require_mmio_capability(proc->context_id) != 0) {
+        m3ApiReturn(-1);
+    }
+
+    /* Copy physical memory into wasm3 linear-memory host buffer via the
+     * kernel higher-half mapping.  wasm3 accesses linear memory exclusively
+     * through this host pointer; the user-VA page table is irrelevant here. */
+    memcpy(mem_base + off32,
+           (const void *)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE),
+           (size_t)size32);
+    m3ApiReturn(0);
+}
+
 m3ApiRawFunction(wasmos_shmem_create)
 {
     m3ApiReturnType(int32_t)
@@ -3367,6 +3418,7 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "io_wait", "i()", wasmos_io_wait);
     rc |= wasm3_link_raw(module, "wasmos", "framebuffer_info", "i(ii)", wasmos_framebuffer_info);
     rc |= wasm3_link_raw(module, "wasmos", "framebuffer_map", "i(ii)", wasmos_framebuffer_map);
+    rc |= wasm3_link_raw(module, "wasmos", "phys_map", "i(iiii)", wasmos_phys_map);
     rc |= wasm3_link_raw(module, "wasmos", "framebuffer_pixel", "i(iii)", wasmos_framebuffer_pixel);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_create", "i(ii)", wasmos_shmem_create);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_grant", "i(ii)", wasmos_shmem_grant);

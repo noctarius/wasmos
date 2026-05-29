@@ -29,7 +29,6 @@ static device_manager_state_t g_dm = {
     .selected_storage_index = -1,
     .pci_bus_index = -1,
     .fat_index = -1,
-    .serial_index = -1,
     .fs_init_index = -1,
     .fs_manager_index = -1,
     .rules_roots_logged = 0,
@@ -55,6 +54,8 @@ static device_manager_state_t g_dm = {
     .block_fs_rule_count = 0,
     .pci_match_rules = {0},
     .pci_match_rule_count = 0,
+    .acpi_match_rules = {0},
+    .acpi_match_rule_count = 0,
     .boot_mount_ready = 0,
     .user_mount_ready = 0,
 };
@@ -76,6 +77,7 @@ typedef struct {
 
 static dm_spawn_wait_t g_dm_spawn_wait = {0};
 static uint8_t g_dm_pci_scan_done = 0;
+static uint8_t g_dm_acpi_scan_done = 0;
 
 typedef struct {
     uint8_t pending;
@@ -89,6 +91,7 @@ static dm_rules_wait_t g_dm_rules_wait = {0};
 #define RULE_SPAWN_KIND_ALWAYS 1u
 #define RULE_SPAWN_KIND_BLOCK_FS 2u
 #define RULE_SPAWN_KIND_PCI_MATCH 3u
+#define RULE_SPAWN_KIND_ACPI_MATCH 4u
 
 static void
 console_write(const char *s)
@@ -126,6 +129,7 @@ static int ensure_fs_endpoint(void);
 static int query_module_meta_by_path(const char *path, uint32_t source, int32_t *out_index);
 static void queue_always_spawn_rules(void);
 static void queue_pci_match_rule_spawns(void);
+static void queue_acpi_match_rule_spawns(void);
 static void queue_block_fs_rule_spawns(void);
 static void queue_block_fs_rules_for_known_devices(void);
 static int module_index_by_name(const char *name);
@@ -333,6 +337,11 @@ count_loaded_active_rules(void)
             count++;
         }
     }
+    for (uint32_t i = 0; i < g_dm.acpi_match_rule_count; ++i) {
+        if (g_dm.acpi_match_rules[i].active) {
+            count++;
+        }
+    }
     return count;
 }
 
@@ -490,6 +499,7 @@ poll_boot_rules_async(void)
     dm_rules_load_always_spawn(&g_dm, text);
     dm_rules_load_block_fs(&g_dm, text);
     dm_rules_load_pci_match(&g_dm, text);
+    dm_rules_load_acpi_match(&g_dm, text);
     g_dm.rules_boot_active = count_loaded_active_rules();
     if (g_dm.always_spawn_rule_count > 0) {
         console_write("[device-manager] boot rules loaded always_spawn\n");
@@ -502,6 +512,10 @@ poll_boot_rules_async(void)
     if (g_dm.block_fs_rule_count > 0) {
         console_write("[device-manager] boot rules loaded block_fs\n");
         queue_block_fs_rules_for_known_devices();
+    }
+    if (g_dm.acpi_match_rule_count > 0) {
+        console_write("[device-manager] boot rules loaded acpi_match\n");
+        queue_acpi_match_rule_spawns();
     }
     g_dm.rules_boot_loaded = 1;
     snprintf(msg, sizeof(msg), "[device-manager] loaded boot rules: %d active\n", (int)g_dm.rules_boot_active);
@@ -526,6 +540,7 @@ load_rules_if_available(void)
             dm_rules_load_always_spawn(&g_dm, text);
             dm_rules_load_block_fs(&g_dm, text);
             dm_rules_load_pci_match(&g_dm, text);
+            dm_rules_load_acpi_match(&g_dm, text);
             if (g_dm.always_spawn_rule_count > 0) {
                 console_write("[device-manager] init rules loaded always_spawn\n");
                 queue_always_spawn_rules();
@@ -537,6 +552,10 @@ load_rules_if_available(void)
             if (g_dm.block_fs_rule_count > 0) {
                 console_write("[device-manager] init rules loaded block_fs\n");
                 queue_block_fs_rules_for_known_devices();
+            }
+            if (g_dm.acpi_match_rule_count > 0) {
+                console_write("[device-manager] init rules loaded acpi_match\n");
+                queue_acpi_match_rule_spawns();
             }
         } else if (!g_dm.rules_init_fail_logged) {
             g_dm.rules_init_fail_logged = 1;
@@ -703,6 +722,41 @@ hw_spawn_driver_path(const char *path)
 }
 
 static int
+hw_spawn_driver_path_caps(const char *path, const spawn_caps_t *caps)
+{
+    uint32_t path_len = 0;
+    uint32_t caps_arg0 = 0;
+    uint32_t caps_arg2 = 0;
+    if (!path || path[0] == '\0' || !caps) {
+        return -1;
+    }
+    while (path[path_len]) {
+        path_len++;
+    }
+    if (path_len == 0 || path_len > 95u) {
+        return -1;
+    }
+    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+        return -1;
+    }
+    /* Pack: arg0 = (irq_mask<<16)|(cap_flags&0xFFFF)
+     *        arg2 = (io_port_max<<16)|io_port_min */
+    caps_arg0 = ((uint32_t)caps->irq_mask << 16) | ((uint32_t)caps->cap_flags & 0xFFFFu);
+    caps_arg2 = ((uint32_t)caps->io_port_max << 16) | (uint32_t)caps->io_port_min;
+    if (wasmos_ipc_send(g_dm.proc_endpoint,
+                        g_dm.reply_endpoint,
+                        PROC_IPC_SPAWN_PATH_CAPS,
+                        g_dm.request_id,
+                        (int32_t)caps_arg0,
+                        (int32_t)path_len,
+                        (int32_t)caps_arg2,
+                        0) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int
 hw_spawn_rule_target(const char *rule_path)
 {
     int32_t module_index = -1;
@@ -852,6 +906,44 @@ queue_pci_match_rule_spawns(void)
             g_dm.rule_spawn_pending = 1;
             g_dm.rule_spawn_retries = 0;
             g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_PCI_MATCH;
+            g_dm.active_rule_spawn_index = (int32_t)ri;
+            g_dm.active_rule_spawn_device_index = (int32_t)di;
+            return;
+        }
+    }
+}
+
+static void
+queue_acpi_match_rule_spawns(void)
+{
+    for (uint32_t ri = 0; ri < g_dm.acpi_match_rule_count; ++ri) {
+        acpi_match_rule_t *rule = &g_dm.acpi_match_rules[ri];
+        if (!rule->active || rule->spawn_path[0] == '\0') {
+            continue;
+        }
+        for (uint32_t di = 0; di < g_dm.registry_count; ++di) {
+            const pci_device_record_t *rec = &g_dm.registry[di];
+            /* ACPI/ISA devices are published with bus=0xFF. */
+            if (rec->bus != 0xFFu) {
+                continue;
+            }
+            if (di >= 64u || ((rule->spawned_device_mask >> di) & 1u) != 0u) {
+                continue;
+            }
+            if (rule->class_code != MATCH_ANY_U8 && rec->class_code != rule->class_code) {
+                continue;
+            }
+            /* Build caps from the device record: device_id = I/O base,
+             * irq_hint = IRQ line. */
+            g_dm.active_rule_spawn_caps.cap_flags = DEVMGR_CAP_IO_PORT | DEVMGR_CAP_IRQ;
+            g_dm.active_rule_spawn_caps.io_port_min = rec->device_id;
+            g_dm.active_rule_spawn_caps.io_port_max = (uint16_t)(rec->device_id + 7u);
+            g_dm.active_rule_spawn_caps.irq_mask =
+                (rec->irq_hint < 16u) ? (uint16_t)(1u << rec->irq_hint) : 0u;
+            wasmos_sys_strcpy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
+            g_dm.rule_spawn_pending = 1;
+            g_dm.rule_spawn_retries = 0;
+            g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_ACPI_MATCH;
             g_dm.active_rule_spawn_index = (int32_t)ri;
             g_dm.active_rule_spawn_device_index = (int32_t)di;
             return;
@@ -1127,6 +1219,10 @@ dm_handle_inventory_message(void *user, const wasmos_ipc_message_t *msg)
         g_dm_pci_scan_done = 1;
         return;
     }
+    if (msg->type == DEVMGR_ACPI_SCAN_DONE) {
+        g_dm_acpi_scan_done = 1;
+        return;
+    }
     if (msg->type == DEVMGR_QUERY_MOUNT_REQ || msg->type == DEVMGR_QUERY_BLOCK_MOUNT_REQ) {
         handle_query_message_fields(msg);
         return;
@@ -1143,6 +1239,9 @@ dm_register_inventory_handlers(void)
         return -1;
     }
     if (wasmos_sys_event_register(&g_dm_inventory_loop, DEVMGR_PCI_SCAN_DONE, dm_handle_inventory_message, 0) != 0) {
+        return -1;
+    }
+    if (wasmos_sys_event_register(&g_dm_inventory_loop, DEVMGR_ACPI_SCAN_DONE, dm_handle_inventory_message, 0) != 0) {
         return -1;
     }
     if (wasmos_sys_event_register(&g_dm_inventory_loop, DEVMGR_QUERY_MOUNT_REQ, dm_handle_inventory_message, 0) != 0) {
@@ -1302,6 +1401,32 @@ consume_pci_inventory(void)
 }
 
 static void
+consume_acpi_inventory(void)
+{
+    if (g_dm.inventory_endpoint < 0) {
+        return;
+    }
+    g_dm_acpi_scan_done = 0;
+    console_write("[device-manager] waiting for acpi-bus inventory\n");
+    while (!g_dm_acpi_scan_done) {
+        int32_t handled = wasmos_sys_event_loop_poll(&g_dm_inventory_loop, 16);
+        if (handled < 0) {
+            console_write("[device-manager] acpi inventory recv failed\n");
+            break;
+        }
+        if (handled == 0) {
+            (void)wasmos_sched_yield();
+        }
+    }
+    if (g_dm_acpi_scan_done) {
+        console_write("[device-manager] acpi-bus scan complete\n");
+    }
+    /* ACPI device matching is handled by acpi_match_rules loaded from the
+     * boot rules file.  queue_acpi_match_rule_spawns() is called after
+     * boot_mount_ready so drivers on /boot can be found by the FS. */
+}
+
+static void
 consume_inventory_events_nonblocking(void)
 {
     if (g_dm.inventory_endpoint < 0) {
@@ -1316,6 +1441,9 @@ next_spawn_target(void)
     if (g_dm.need_pci_bus) {
         return HW_SPAWN_PCI_BUS;
     }
+    if (g_dm.need_acpi_bus) {
+        return HW_SPAWN_ACPI_BUS;
+    }
     if (g_dm.rule_spawn_pending && g_dm.rule_spawn_path[0] != '\0') {
         return HW_SPAWN_RULE_PATH;
     }
@@ -1324,9 +1452,6 @@ next_spawn_target(void)
     }
     if (!g_dm.boot_mount_ready) {
         return HW_SPAWN_NONE;
-    }
-    if (g_dm.need_serial) {
-        return HW_SPAWN_SERIAL;
     }
     return HW_SPAWN_NONE;
 }
@@ -1493,6 +1618,10 @@ initialize(int32_t proc_endpoint,
     if (g_dm.pci_bus_index < 0) {
         g_dm.pci_bus_index = module_index_by_name("pci-bus");
     }
+    (void)query_module_meta_by_path("system/services/acpi_bus.wap", PROC_MODULE_SOURCE_INITFS, &g_dm.acpi_bus_index);
+    if (g_dm.acpi_bus_index < 0) {
+        g_dm.acpi_bus_index = module_index_by_name("acpi-bus");
+    }
     (void)query_module_meta_by_path("system/drivers/fs_fat.wap", PROC_MODULE_SOURCE_INITFS, &g_dm.fat_index);
     if (g_dm.fat_index < 0) {
         g_dm.fat_index = module_index_by_name("fs-fat");
@@ -1505,20 +1634,13 @@ initialize(int32_t proc_endpoint,
     if (g_dm.fs_manager_index < 0) {
         g_dm.fs_manager_index = module_index_by_name("fs-manager");
     }
-    /* Boot-time hardware drivers live on /boot and are not part of initfs. */
-    (void)query_module_meta_by_path("system/drivers/serial.wap", PROC_MODULE_SOURCE_FS, &g_dm.serial_index);
-    if (g_dm.serial_index < 0) {
-        g_dm.serial_index = module_index_by_name("serial");
-    }
     /* Bootstrap policy: always bring up pci-bus when present in initfs.
      * Runtime dedup/restart policy is handled by later lifecycle phases. */
     g_dm.need_pci_bus = (g_dm.pci_bus_index >= 0) ? 1 : 0;
+    g_dm.need_acpi_bus = (g_dm.acpi_bus_index >= 0) ? 1 : 0;
     g_dm.need_fat = 0;
     g_dm.need_fs_init = 0;
     g_dm.need_fs_manager = 0;
-    /* Serial is resolved from PCI inventory matches when pci-bus is started
-     * by this service; if pci-bus is already running, keep legacy fallback. */
-    g_dm.need_serial = g_dm.need_pci_bus ? 0 : (!proc_running("serial") ? 1 : 0);
     g_dm.phase = HW_PHASE_SPAWN;
 
     for (;;) {
@@ -1542,16 +1664,34 @@ initialize(int32_t proc_endpoint,
                     console_write("[device-manager] spawn pci-bus failed\n");
                     wasmos_sys_ipc_recv_loop();
                 }
-            } else if (target == HW_SPAWN_RULE_PATH) {
-                if (hw_spawn_rule_target(g_dm.rule_spawn_path) != 0) {
+            } else if (target == HW_SPAWN_ACPI_BUS) {
+                spawn_caps_t acpi_caps;
+                acpi_caps.cap_flags = DEVMGR_CAP_MMIO_MAP;
+                acpi_caps.io_port_min = 0;
+                acpi_caps.io_port_max = 0;
+                acpi_caps.irq_mask = 0;
+                if (hw_spawn_driver_index_caps(g_dm.acpi_bus_index, &acpi_caps) != 0) {
                     g_dm.phase = HW_PHASE_FAILED;
-                    console_write("[device-manager] spawn rule path failed\n");
+                    console_write("[device-manager] spawn acpi-bus failed\n");
                     wasmos_sys_ipc_recv_loop();
                 }
-            } else if (target == HW_SPAWN_SERIAL) {
-                if (hw_spawn_driver_index_caps(g_dm.serial_index, &g_dm.selected_serial_caps) != 0) {
+            } else if (target == HW_SPAWN_RULE_PATH) {
+                int rc;
+                /* ACPI match rules use path+caps spawn so the driver gets
+                 * the I/O-port and IRQ grants derived from the device record. */
+                if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ACPI_MATCH &&
+                    g_dm.active_rule_spawn_caps.cap_flags != 0) {
+                    char boot_path[104];
+                    boot_path[0] = '\0';
+                    wasmos_sys_strcpy(boot_path, sizeof(boot_path), "/boot/");
+                    wasmos_sys_str_append(boot_path, sizeof(boot_path), g_dm.rule_spawn_path);
+                    rc = hw_spawn_driver_path_caps(boot_path, &g_dm.active_rule_spawn_caps);
+                } else {
+                    rc = hw_spawn_rule_target(g_dm.rule_spawn_path);
+                }
+                if (rc != 0) {
                     g_dm.phase = HW_PHASE_FAILED;
-                    console_write("[device-manager] spawn serial failed\n");
+                    console_write("[device-manager] spawn rule path failed\n");
                     wasmos_sys_ipc_recv_loop();
                 }
             } else if (target == HW_SPAWN_FAT) {
@@ -1591,6 +1731,12 @@ initialize(int32_t proc_endpoint,
                     g_dm.phase = HW_PHASE_WAIT_INVENTORY;
                     continue;
                 }
+                if (g_dm.pending == HW_SPAWN_ACPI_BUS) {
+                    g_dm.need_acpi_bus = 0;
+                    g_dm.pending = HW_SPAWN_NONE;
+                    g_dm.phase = HW_PHASE_WAIT_ACPI_INVENTORY;
+                    continue;
+                }
                 if (g_dm.pending == HW_SPAWN_RULE_PATH) {
                     g_dm.rule_spawn_pending = 0;
                     if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ALWAYS) {
@@ -1622,15 +1768,23 @@ initialize(int32_t proc_endpoint,
                                     (uint64_t)1u << (uint32_t)g_dm.active_rule_spawn_device_index;
                             }
                         }
+                    } else if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ACPI_MATCH) {
+                        if (g_dm.active_rule_spawn_index >= 0 &&
+                            g_dm.active_rule_spawn_index < (int32_t)g_dm.acpi_match_rule_count) {
+                            if (g_dm.active_rule_spawn_device_index >= 0 &&
+                                g_dm.active_rule_spawn_device_index < 64) {
+                                g_dm.acpi_match_rules[g_dm.active_rule_spawn_index].spawned_device_mask |=
+                                    (uint64_t)1u << (uint32_t)g_dm.active_rule_spawn_device_index;
+                            }
+                        }
                     }
                     g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_NONE;
                     g_dm.active_rule_spawn_index = -1;
                     g_dm.active_rule_spawn_device_index = -1;
+                    g_dm.active_rule_spawn_caps.cap_flags = 0;
                     queue_block_fs_rule_spawns();
                 }
-                if (g_dm.pending == HW_SPAWN_SERIAL) {
-                    g_dm.need_serial = 0;
-                } else if (g_dm.pending == HW_SPAWN_FAT) {
+                if (g_dm.pending == HW_SPAWN_FAT) {
                     g_dm.need_fat = 0;
                 } else if (g_dm.pending == HW_SPAWN_FS_INIT) {
                     g_dm.need_fs_init = 0;
@@ -1660,12 +1814,7 @@ initialize(int32_t proc_endpoint,
                     g_dm.phase = HW_PHASE_SPAWN;
                     continue;
                 }
-                if (g_dm.pending == HW_SPAWN_SERIAL) {
-                    g_dm.serial_retries++;
-                    if (g_dm.serial_retries > 8) {
-                        g_dm.need_serial = 0;
-                    }
-                } else if (g_dm.pending == HW_SPAWN_FAT) {
+                if (g_dm.pending == HW_SPAWN_FAT) {
                     g_dm.fat_retries++;
                     if (g_dm.fat_retries > 8) {
                         g_dm.need_fat = 0;
@@ -1679,6 +1828,8 @@ initialize(int32_t proc_endpoint,
                     g_dm.need_fs_manager = 0;
                 } else if (g_dm.pending == HW_SPAWN_PCI_BUS) {
                     g_dm.need_pci_bus = 0;
+                } else if (g_dm.pending == HW_SPAWN_ACPI_BUS) {
+                    g_dm.need_acpi_bus = 0;
                 } else if (g_dm.pending == HW_SPAWN_RULE_PATH) {
                     g_dm.rule_spawn_retries++;
                     if (g_dm.rule_spawn_retries > 8) {
@@ -1716,13 +1867,16 @@ initialize(int32_t proc_endpoint,
             g_dm.need_fat = 0;
             g_dm.need_fs_init = 0;
             g_dm.need_fs_manager = 0;
-            if (g_dm.serial_index >= 0 &&
-                !proc_running("serial") &&
-                select_pci_matched_driver(g_dm.serial_index, &g_dm.selected_serial_caps) == 0) {
-                g_dm.need_serial = 1;
-            } else {
-                g_dm.need_serial = 0;
+            /* ACPI scan follows PCI inventory to discover ISA devices. */
+            if (g_dm.acpi_bus_index >= 0) {
+                g_dm.need_acpi_bus = 1;
             }
+            g_dm.phase = HW_PHASE_SPAWN;
+            continue;
+        }
+
+        if (g_dm.phase == HW_PHASE_WAIT_ACPI_INVENTORY) {
+            consume_acpi_inventory();
             g_dm.phase = HW_PHASE_SPAWN;
             continue;
         }

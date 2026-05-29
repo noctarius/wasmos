@@ -536,3 +536,82 @@ dm_rules_load_pci_match(device_manager_state_t *state, const char *text)
     }
     state->pci_match_rule_count = out_count;
 }
+
+static int
+parse_acpi_match_rule_line(const char *line, acpi_match_rule_t *out_rule)
+{
+    char line_buf[256];
+    char path[96];
+    char *cur = 0;
+    char *tok = 0;
+    char sub[32];
+    char tmp[64];
+    uint8_t class_code = MATCH_ANY_U8;
+    if (!line || !out_rule) {
+        return -1;
+    }
+    if (copy_rule_line(line, line_buf, sizeof(line_buf)) != 0) {
+        return -1;
+    }
+    if (line_buf[0] == '\0') {
+        return -1;
+    }
+    path[0] = '\0';
+    sub[0] = '\0';
+    cur = line_buf;
+    while ((tok = next_csv_token(&cur)) != 0) {
+        tok = (char *)wasmos_sys_trim_left(tok);
+        if (extract_op_value(tok, "SUBSYSTEM", "==", sub, sizeof(sub)) == 0) {
+            continue;
+        }
+        if (extract_op_value(tok, "RUN", "+=", path, sizeof(path)) == 0) {
+            continue;
+        }
+        if (extract_op_value(tok, "ATTR{class}", "==", tmp, sizeof(tmp)) == 0) {
+            if (parse_u8_hex(tmp, &class_code) != 0) {
+                return -1;
+            }
+            continue;
+        }
+    }
+    if (strcmp(sub, "acpi") != 0 || path[0] == '\0') {
+        return -1;
+    }
+    out_rule->active = 1;
+    out_rule->class_code = class_code;
+    out_rule->spawned_device_mask = 0;
+    wasmos_sys_strcpy(out_rule->spawn_path, sizeof(out_rule->spawn_path), path);
+    return 0;
+}
+
+void
+dm_rules_load_acpi_match(device_manager_state_t *state, const char *text)
+{
+    uint32_t out_count = 0;
+    if (!state || !text) {
+        return;
+    }
+    for (uint32_t i = 0; i < ACPI_MATCH_RULE_CAP; ++i) {
+        state->acpi_match_rules[i].active = 0;
+        state->acpi_match_rules[i].spawned_device_mask = 0;
+    }
+    for (int32_t i = 0;;) {
+        int32_t line_start = i;
+        int32_t line_end = i;
+        const char *line = 0;
+        while (text[line_end] && text[line_end] != '\n') {
+            line_end++;
+        }
+        line = wasmos_sys_trim_left(&text[line_start]);
+        if (line[0] && line[0] != '#' && out_count < ACPI_MATCH_RULE_CAP) {
+            if (parse_acpi_match_rule_line(line, &state->acpi_match_rules[out_count]) == 0) {
+                out_count++;
+            }
+        }
+        if (text[line_end] == '\0') {
+            break;
+        }
+        i = line_end + 1;
+    }
+    state->acpi_match_rule_count = out_count;
+}

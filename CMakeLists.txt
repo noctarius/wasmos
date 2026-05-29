@@ -120,6 +120,9 @@ set(WASM_DEVICE_MANAGER_APP ${BUILD_DIR}/device_manager.wap)
 set(WASM_PCI_BUS_SRC ${SERVICES_DIR}/pci_bus/pci_bus.c)
 set(WASM_PCI_BUS_WASM ${BUILD_DIR}/pci_bus.wasm)
 set(WASM_PCI_BUS_APP ${BUILD_DIR}/pci_bus.wap)
+set(WASM_ACPI_BUS_SRC ${SERVICES_DIR}/acpi_bus/acpi_bus.c)
+set(WASM_ACPI_BUS_WASM ${BUILD_DIR}/acpi_bus.wasm)
+set(WASM_ACPI_BUS_APP ${BUILD_DIR}/acpi_bus.wap)
 set(WASM_FS_MANAGER_SRC ${SERVICES_DIR}/fs_manager/fs_manager.c)
 set(WASM_FS_MANAGER_WASM ${BUILD_DIR}/fs_manager.wasm)
 set(WASM_FS_MANAGER_APP ${BUILD_DIR}/fs_manager.wap)
@@ -787,6 +790,7 @@ add_custom_command(
           ${WASM_FS_MANAGER_APP}
           ${WASM_DEVICE_MANAGER_APP}
           ${WASM_PCI_BUS_APP}
+          ${WASM_ACPI_BUS_APP}
           make_wasmos_app
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Building initfs image"
@@ -985,6 +989,7 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
@@ -1036,6 +1041,7 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
@@ -1092,6 +1098,7 @@ if (OVMF_VARS)
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/system/fonts/RobotoSerif-Regular.ttf ${BUILD_DIR}/esp/system/fonts/roboto_serif.ttf
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
@@ -1148,6 +1155,7 @@ add_custom_target(run-qemu-cli-test
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/system/fonts/RobotoSerif-Regular.ttf ${BUILD_DIR}/esp/system/fonts/roboto_serif.ttf
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
@@ -1204,6 +1212,7 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
@@ -1253,6 +1262,7 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
@@ -1302,6 +1312,7 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
@@ -1354,6 +1365,7 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
@@ -1404,6 +1416,7 @@ else ()
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
     ${AS_HELLO_COPY_CMD}
     ${HELLO_C_COPY_CMD}
@@ -1465,6 +1478,7 @@ add_custom_target(run-qemu-ui-test
   COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/system/fonts/RobotoSerif-Regular.ttf ${BUILD_DIR}/esp/system/fonts/roboto_serif.ttf
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
   ${AS_HELLO_COPY_CMD}
   ${HELLO_C_COPY_CMD}
@@ -1518,6 +1532,7 @@ add_custom_target(run-qemu-ring3-check
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
   ${AS_HELLO_COPY_CMD}
   ${HELLO_C_COPY_CMD}
@@ -1569,6 +1584,7 @@ add_custom_target(run-qemu-ring3-threading-check
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
   ${AS_HELLO_COPY_CMD}
   ${HELLO_C_COPY_CMD}
@@ -1621,6 +1637,7 @@ add_custom_target(run-qemu-ring3-fault-storm-check
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
   ${AS_HELLO_COPY_CMD}
   ${HELLO_C_COPY_CMD}

@@ -5,3 +5,4 @@ SUBSYSTEM=="block", ATTR{unit}=="1", ENV{MOUNT}="/user", RUN+="system/drivers/fs
 SUBSYSTEM=="boot", ACTION=="add", RUN+="system/drivers/keyboard.wap"
 SUBSYSTEM=="pci", ATTR{class}=="0x03", ATTR{subclass}=="0x00", ATTR{prog_if}=="0x00", RUN+="system/drivers/fbpci.wap"
 SUBSYSTEM=="boot", ACTION=="add", RUN+="system/drivers/mouse.wap"
+SUBSYSTEM=="acpi", ATTR{class}=="0x07", RUN+="system/drivers/serial.wap"

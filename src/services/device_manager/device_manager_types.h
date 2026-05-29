@@ -14,6 +14,7 @@
 #define ALWAYS_SPAWN_RULE_CAP 8
 #define BLOCK_FS_RULE_CAP 8
 #define PCI_MATCH_RULE_CAP 8
+#define ACPI_MATCH_RULE_CAP 8
 
 typedef struct __attribute__((packed)) {
     char signature[8];
@@ -32,6 +33,7 @@ typedef enum {
     HW_PHASE_SPAWN,
     HW_PHASE_WAIT,
     HW_PHASE_WAIT_INVENTORY,
+    HW_PHASE_WAIT_ACPI_INVENTORY,
     HW_PHASE_IDLE,
     HW_PHASE_FAILED
 } hw_phase_t;
@@ -40,12 +42,10 @@ typedef enum {
     HW_SPAWN_NONE = 0,
     HW_SPAWN_RULE_PATH,
     HW_SPAWN_PCI_BUS,
+    HW_SPAWN_ACPI_BUS,
     HW_SPAWN_FAT,
     HW_SPAWN_FS_INIT,
     HW_SPAWN_FS_MANAGER,
-    HW_SPAWN_SERIAL,
-    HW_SPAWN_KEYBOARD,
-    HW_SPAWN_FRAMEBUFFER
 } hw_spawn_target_t;
 
 typedef struct {
@@ -109,6 +109,13 @@ typedef struct {
 } pci_match_rule_t;
 
 typedef struct {
+    uint8_t active;
+    uint8_t class_code;   /* 0xFF = match any */
+    uint64_t spawned_device_mask;
+    char spawn_path[96];
+} acpi_match_rule_t;
+
+typedef struct {
     hw_phase_t phase;
     hw_spawn_target_t pending;
     int32_t reply_endpoint;
@@ -120,16 +127,15 @@ typedef struct {
     int32_t request_id;
     int32_t module_count;
     uint8_t need_pci_bus;
+    uint8_t need_acpi_bus;
     uint8_t need_fat;
-    uint8_t need_serial;
     uint8_t need_fs_init;
     uint8_t need_fs_manager;
     uint8_t fat_retries;
-    uint8_t serial_retries;
     uint8_t fs_init_retries;
     int32_t pci_bus_index;
+    int32_t acpi_bus_index;
     int32_t fat_index;
-    int32_t serial_index;
     int32_t fs_init_index;
     int32_t fs_manager_index;
     pci_device_record_t registry[DEVICE_REGISTRY_CAP];
@@ -138,7 +144,7 @@ typedef struct {
     uint32_t block_registry_count;
     int32_t selected_storage_index;
     spawn_caps_t selected_storage_caps;
-    spawn_caps_t selected_serial_caps;
+    spawn_caps_t active_rule_spawn_caps;
     uint8_t selected_storage_has_record;
     pci_device_record_t selected_storage_record;
     uint8_t rules_roots_logged;
@@ -164,6 +170,8 @@ typedef struct {
     uint32_t block_fs_rule_count;
     pci_match_rule_t pci_match_rules[PCI_MATCH_RULE_CAP];
     uint32_t pci_match_rule_count;
+    acpi_match_rule_t acpi_match_rules[ACPI_MATCH_RULE_CAP];
+    uint32_t acpi_match_rule_count;
     uint8_t boot_mount_ready;
     uint8_t user_mount_ready;
 } device_manager_state_t;

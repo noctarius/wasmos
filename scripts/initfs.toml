@@ -7,6 +7,7 @@ bootstrap_modules = [
   "native-call-min",
   "native-call-smoke",
   "pci-bus",
+  "acpi-bus",
   "ata",
   "fs-fat",
   "fs-init",
@@ -61,6 +62,12 @@ kind = "wasmos_app"
 flags = ["bootstrap"]
 path = "system/services/pci_bus.wap"
 source = "pci_bus.wap"
+
+[[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/services/acpi_bus.wap"
+source = "acpi_bus.wap"
 
 [[entries]]
 kind = "wasmos_app"

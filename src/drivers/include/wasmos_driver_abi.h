@@ -39,6 +39,11 @@ enum {
      * optional raw command argument text is placed at offset (path_len + 1).
      * arg0=reserved(0) arg1=path_len arg2=args_len arg3=reserved. */
     PROC_IPC_SPAWN_PATH = 0x209,
+    /* Spawn from explicit app path with I/O-port + IRQ capabilities:
+     * caller must place path bytes at FS buffer offset 0.
+     * arg0=((irq_mask<<16)|(cap_flags&0xFFFF)) arg1=path_len
+     * arg2=((io_port_max<<16)|io_port_min)     arg3=reserved. */
+    PROC_IPC_SPAWN_PATH_CAPS = 0x20A,
     PROC_IPC_RESP = 0x280,
     PROC_IPC_ERROR = 0x2FF
 };
@@ -164,6 +169,9 @@ enum {
     DEVMGR_QUERY_MOUNT_REQ = 0x902,
     DEVMGR_PUBLISH_BLOCK_DEVICE = 0x903,
     DEVMGR_QUERY_BLOCK_MOUNT_REQ = 0x904,
+    /* ISA/ACPI devices: bus=0xFF in PUBLISH_DEVICE marks a non-PCI device;
+     * device_id field carries the I/O base address for serial (class 0x07). */
+    DEVMGR_ACPI_SCAN_DONE = 0x905,
     DEVMGR_MOUNT_INFO = 0x980,
     DEVMGR_BLOCK_MOUNT_INFO = 0x982,
     DEVMGR_QUERY_DONE = 0x981

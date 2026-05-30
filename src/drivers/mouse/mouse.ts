@@ -32,13 +32,24 @@ declare function ipc_try_recv(endpoint: i32): i32;
 declare function ipc_recv(endpoint: i32): i32;
 @external("wasmos", "ipc_create_endpoint")
 declare function ipc_create_endpoint(): i32;
+@external("wasmos", "ipc_create_notification")
+declare function ipc_create_notification(): i32;
+@external("wasmos", "ipc_wait")
+declare function ipc_wait(endpoint: i32): i32;
+@external("wasmos", "irq_route")
+declare function irq_route(irq: i32, endpoint: i32): i32;
+@external("wasmos", "irq_unroute")
+declare function irq_unroute(irq: i32): i32;
 @external("wasmos", "ipc_last_field")
 declare function ipc_last_field(field: i32): i32;
 @external("wasmos", "ipc_send")
 declare function ipc_send(dest: i32, src: i32, type: i32, req_id: i32,
                           arg0: i32, arg1: i32, arg2: i32, arg3: i32): i32;
 
+const MOUSE_IRQ: i32 = 12;
+
 let g_mouse_ep: i32 = -1;
+let g_irq_ep: i32 = -1;
 let g_packet_state: i32 = 0;
 let g_packet0: i32 = 0;
 let g_packet1: i32 = 0;
@@ -243,24 +254,43 @@ export function initialize(proc_endpoint: i32, _arg1: i32,
 
   if (!initMouseDevice()) {
     std.printf("[mouse] init failed\n");
+  }
+
+  g_irq_ep = ipc_create_notification();
+  if (g_irq_ep < 0 || irq_route(MOUSE_IRQ, g_irq_ep) != 0) {
+    std.printf("[mouse] IRQ route failed, falling back to polling\n");
+    g_irq_ep = -1;
   } else {
-    std.printf("[mouse] driver starting\n");
+    std.printf("[mouse] driver starting (IRQ-driven)\n");
+  }
+
+  if (g_irq_ep < 0) {
+    std.printf("[mouse] driver starting (polling)\n");
+    for (;;) {
+      drainIpc();
+      let b = readAuxByte();
+      if (b >= 0) {
+        handleAuxByte(b);
+        io_wait();
+      } else {
+        sched_yield();
+        sched_yield();
+      }
+      sched_yield();
+    }
+    return 0;
   }
 
   for (;;) {
     drainIpc();
 
+    /* Sleep until IRQ 12 fires (mouse byte in AUX output buffer). */
+    ipc_wait(g_irq_ep);
+
     let b = readAuxByte();
     if (b >= 0) {
       handleAuxByte(b);
-      io_wait();
-    } else {
-      /* No mouse data (or keyboard-owned data in output buffer): back off to
-       * avoid hot polling contention on the shared PS/2 controller ports. */
-      sched_yield();
-      sched_yield();
     }
-    sched_yield();
   }
 
   return 0;

@@ -979,6 +979,10 @@ queue_block_fs_rule_spawns(void)
     if (g_dm.rule_spawn_pending) {
         return;
     }
+    queue_acpi_match_rule_spawns();
+    if (g_dm.rule_spawn_pending) {
+        return;
+    }
     for (uint32_t i = 0; i < g_dm.block_fs_rule_count; ++i) {
         block_fs_rule_t *rule = &g_dm.block_fs_rules[i];
         if (!rule->active || !rule->queued || rule->spawned) {

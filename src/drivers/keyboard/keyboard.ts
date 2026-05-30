@@ -23,6 +23,14 @@ declare function ipc_try_recv(endpoint: i32): i32;
 declare function ipc_recv(endpoint: i32): i32;
 @external("wasmos", "ipc_create_endpoint")
 declare function ipc_create_endpoint(): i32;
+@external("wasmos", "ipc_create_notification")
+declare function ipc_create_notification(): i32;
+@external("wasmos", "ipc_wait")
+declare function ipc_wait(endpoint: i32): i32;
+@external("wasmos", "irq_route")
+declare function irq_route(irq: i32, endpoint: i32): i32;
+@external("wasmos", "irq_unroute")
+declare function irq_unroute(irq: i32): i32;
 @external("wasmos", "ipc_last_field")
 declare function ipc_last_field(field: i32): i32;
 @external("wasmos", "ipc_send")
@@ -36,7 +44,10 @@ let g_subs2: i32 = -1;
 let g_subs3: i32 = -1;
 
 let g_kbd_ep: i32 = -1;
+let g_irq_ep: i32 = -1;
 let g_extended_pending: i32 = 0;
+
+const KBD_IRQ: i32 = 1;
 
 function readScancode(): i32 {
   let status = io_in8(KEYBOARD_STATUS_PORT);
@@ -121,38 +132,59 @@ export function initialize(_proc_endpoint: i32, _arg1: i32,
   if (g_kbd_ep < 0) {
     std.printf("[keyboard] no IPC endpoint, log-only mode\n");
     for (;;) {
-      readScancode();
       io_wait();
       sched_yield();
     }
     return 0;
   }
 
-  std.printf("[keyboard] driver starting\n");
+  g_irq_ep = ipc_create_notification();
+  if (g_irq_ep < 0 || irq_route(KBD_IRQ, g_irq_ep) != 0) {
+    std.printf("[keyboard] IRQ route failed, falling back to polling\n");
+    g_irq_ep = -1;
+  } else {
+    std.printf("[keyboard] driver starting (IRQ-driven)\n");
+  }
+
+  if (g_irq_ep < 0) {
+    /* Polling fallback. */
+    std.printf("[keyboard] driver starting (polling)\n");
+    for (;;) {
+      drainIpc();
+      let code = readScancode();
+      if (code >= 0) {
+        if (code == 0xE0) { g_extended_pending = 1; io_wait(); sched_yield(); continue; }
+        let keyup: i32 = (code & 0x80) != 0 ? 1 : 0;
+        notifySubscribers(code & 0x7F, keyup, g_extended_pending);
+        g_extended_pending = 0;
+      }
+      io_wait();
+      sched_yield();
+    }
+    return 0;
+  }
 
   for (;;) {
-    /* 1. Process any pending subscribe requests. */
+    /* Process any pending subscribe requests before sleeping. */
     drainIpc();
 
-    /* 2. Check for a new PS/2 scancode. */
-    let code = readScancode();
-    if (code >= 0) {
-      if (code == 0xE0) {
-        g_extended_pending = 1;
-        io_wait();
-        sched_yield();
-        continue;
-      }
-      /* PS/2 Set 1: key-up codes have bit 7 set. */
-      let keyup: i32 = (code & 0x80) != 0 ? 1 : 0;
-      let sc: i32    = code & 0x7F;
-      let ext: i32   = g_extended_pending;
-      g_extended_pending = 0;
-      notifySubscribers(sc, keyup, ext);
-    }
+    /* Sleep until IRQ 1 fires. */
+    ipc_wait(g_irq_ep);
 
-    io_wait();
-    sched_yield();
+    let code = readScancode();
+    if (code < 0) {
+      continue;
+    }
+    if (code == 0xE0) {
+      g_extended_pending = 1;
+      continue;
+    }
+    /* PS/2 Set 1: key-up codes have bit 7 set. */
+    let keyup: i32 = (code & 0x80) != 0 ? 1 : 0;
+    let sc: i32    = code & 0x7F;
+    let ext: i32   = g_extended_pending;
+    g_extended_pending = 0;
+    notifySubscribers(sc, keyup, ext);
   }
 
   return 0;

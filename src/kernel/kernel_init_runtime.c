@@ -32,6 +32,7 @@ kernel_init_state_reset(init_state_t *state, const boot_info_t *boot_info)
     state->fs_manager_index = 0xFFFFFFFFu;
     state->fs_init_index = 0xFFFFFFFFu;
     state->device_manager_index = 0xFFFFFFFFu;
+    state->dm_pid = 0;
     state->wasm3_probe_done = 0;
 }
 
@@ -146,48 +147,7 @@ init_send_spawn_name(process_t *process, init_state_t *state, const char *name)
     return 0;
 }
 
-static int
-init_send_fs_probe(process_t *process, init_state_t *state)
-{
-    uint32_t fs_ep;
-    ipc_message_t msg;
-    int send_rc;
-    static uint8_t logged_fs_wait;
 
-    if (!process || !state) {
-        return -1;
-    }
-    fs_ep = process_manager_fs_endpoint();
-    if (fs_ep == IPC_ENDPOINT_NONE) {
-        if (!logged_fs_wait) {
-            klog_write("[init] waiting for fs service endpoint\n");
-            logged_fs_wait = 1;
-        }
-        return 1;
-    }
-    logged_fs_wait = 0;
-    msg.type = FS_IPC_READY_REQ;
-    msg.source = state->reply_endpoint;
-    msg.destination = fs_ep;
-    msg.request_id = state->request_id;
-    msg.arg0 = 0;
-    msg.arg1 = 0;
-    msg.arg2 = 0;
-    msg.arg3 = 0;
-    send_rc = ipc_send_from(process->context_id, fs_ep, &msg);
-    if (send_rc != IPC_OK) {
-        return -1;
-    }
-    state->pending_kind = 6;
-    state->phase = 3;
-    return 0;
-}
-
-static int
-init_post_fat_devices_ready(void)
-{
-    return 1;
-}
 
 process_run_result_t
 kernel_init_entry(process_t *process, void *arg)
@@ -379,7 +339,7 @@ kernel_init_entry(process_t *process, void *arg)
             } else if (state->pending_kind == 4) {
                 klog_write("[init] fs-manager spawn failed\n");
             } else if (state->pending_kind == 5) {
-                klog_write("[init] fs-init spawn failed\n");
+                klog_write("[init] sysinit spawn failed\n");
             } else {
                 klog_write("[init] device-manager spawn failed\n");
             }
@@ -404,9 +364,17 @@ kernel_init_entry(process_t *process, void *arg)
         } else {
             trace_write("[init] device-manager spawn ok\n");
             state->device_manager_index = 0xFFFFFFFFu;
+            state->dm_pid = (uint32_t)msg.arg0;
+            /* DM may have already set ready=1 implicitly (first IPC block).
+             * Reset it and require explicit notify_ready before init proceeds. */
+            process_t *dm = process_get(state->dm_pid);
+            if (dm) {
+                dm->ready = 0;
+                process_set_require_explicit_ready(dm);
+            }
             state->request_id++;
             state->pending_kind = 0;
-            state->phase = 2;
+            state->phase = 6;
             return PROCESS_RUN_YIELDED;
         }
         state->request_id++;
@@ -415,49 +383,12 @@ kernel_init_entry(process_t *process, void *arg)
         return PROCESS_RUN_YIELDED;
     }
 
-    if (state->phase == 2) {
-        int rc = init_send_fs_probe(process, state);
-        if (rc < 0) {
-            process_set_exit_status(process, -1);
-            return PROCESS_RUN_EXITED;
-        }
-        if (rc > 0) {
-            return PROCESS_RUN_YIELDED;
-        }
-        return PROCESS_RUN_YIELDED;
-    }
-
-    if (state->phase == 3) {
-        int recv_rc = ipc_recv_for(process->context_id, state->reply_endpoint, &msg);
-        if (recv_rc == IPC_EMPTY) {
-            process_block_on_ipc(process);
-            return PROCESS_RUN_BLOCKED;
-        }
-        if (recv_rc != IPC_OK) {
-            return PROCESS_RUN_YIELDED;
-        }
-        if (msg.request_id != state->request_id) {
-            process_set_exit_status(process, -1);
-            return PROCESS_RUN_EXITED;
-        }
-        if (msg.type == FS_IPC_ERROR) {
-            state->phase = 2;
-            return PROCESS_RUN_YIELDED;
-        }
-        if (msg.type != FS_IPC_RESP || msg.arg0 != 0) {
-            process_set_exit_status(process, -1);
-            return PROCESS_RUN_EXITED;
-        }
-        state->request_id++;
-        state->phase = 6;
-        return PROCESS_RUN_YIELDED;
-    }
-
     if (state->phase == 6) {
-        if (!init_post_fat_devices_ready()) {
+        process_t *dm = state->dm_pid ? process_get(state->dm_pid) : 0;
+        if (!dm || !dm->ready) {
             return PROCESS_RUN_YIELDED;
         }
-        trace_write("[init] post-FAT devices ready\n");
+        trace_write("[init] device-manager ready\n");
         if (init_send_spawn_name(process, state, "sysinit") != 0) {
             return PROCESS_RUN_YIELDED;
         }

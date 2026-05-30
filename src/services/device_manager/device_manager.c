@@ -58,10 +58,12 @@ static device_manager_state_t g_dm = {
     .acpi_match_rule_count = 0,
     .boot_mount_ready = 0,
     .user_mount_ready = 0,
+    .ready_notified = 0,
 };
 
 static wasmos_sys_event_loop_t g_dm_ipc_loop;
 static wasmos_sys_event_loop_t g_dm_inventory_loop;
+static wasmos_sys_event_loop_t g_dm_query_loop;
 static wasmos_sys_event_loop_t g_dm_rules_loop;
 
 typedef struct {
@@ -134,6 +136,7 @@ static int module_index_by_name(const char *name);
 static uint16_t count_loaded_active_rules(void);
 static int is_mount_already_active(const char *mount);
 static void handle_query_message_fields(const wasmos_ipc_message_t *msg);
+static void handle_query_endpoint(void);
 static int dm_ipc_call(int32_t destination_endpoint,
                        int32_t source_endpoint,
                        int32_t msg_type,
@@ -148,6 +151,7 @@ static void dm_handle_ipc_default(void *user, const wasmos_ipc_message_t *msg);
 static void dm_handle_rules_reply(void *user, const wasmos_ipc_message_t *msg);
 static int dm_register_ipc_handlers(void);
 static int dm_register_inventory_handlers(void);
+static int dm_register_query_handlers(void);
 static int dm_register_rules_handlers(void);
 
 static void
@@ -196,6 +200,7 @@ dm_ipc_call(int32_t destination_endpoint,
     }
     while (!wait_state.done) {
         int32_t handled = wasmos_sys_event_loop_poll(&g_dm_ipc_loop, 16);
+        handle_query_endpoint();
         if (handled < 0) {
             return -1;
         }
@@ -659,7 +664,7 @@ dm_spawn_sync_call(int32_t msg_type, int32_t arg0, int32_t arg1, int32_t arg2, i
                     &resp, DM_SPAWN_SYNC_POLL_MAX) != 0) {
         return -1;
     }
-    return (resp.type == PROC_IPC_RESP) ? 0 : -1;
+    return resp.type == PROC_IPC_RESP ? 0 : -1;
 }
 
 static int
@@ -1205,13 +1210,22 @@ dm_register_inventory_handlers(void)
     if (wasmos_sys_event_register(&g_dm_inventory_loop, DEVMGR_ACPI_SCAN_DONE, dm_handle_inventory_message, 0) != 0) {
         return -1;
     }
-    if (wasmos_sys_event_register(&g_dm_inventory_loop, DEVMGR_QUERY_MOUNT_REQ, dm_handle_inventory_message, 0) != 0) {
-        return -1;
-    }
-    if (wasmos_sys_event_register(&g_dm_inventory_loop, DEVMGR_QUERY_BLOCK_MOUNT_REQ, dm_handle_inventory_message, 0) != 0) {
-        return -1;
-    }
     if (wasmos_sys_event_set_default(&g_dm_inventory_loop, dm_handle_ipc_default, 0) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+static int
+dm_register_query_handlers(void)
+{
+    if (wasmos_sys_event_register(&g_dm_query_loop, DEVMGR_QUERY_MOUNT_REQ, dm_handle_inventory_message, 0) != 0) {
+        return -1;
+    }
+    if (wasmos_sys_event_register(&g_dm_query_loop, DEVMGR_QUERY_BLOCK_MOUNT_REQ, dm_handle_inventory_message, 0) != 0) {
+        return -1;
+    }
+    if (wasmos_sys_event_set_default(&g_dm_query_loop, dm_handle_ipc_default, 0) != 0) {
         return -1;
     }
     return 0;
@@ -1512,7 +1526,7 @@ handle_query_endpoint(void)
     if (g_dm.query_endpoint < 0) {
         return;
     }
-    (void)wasmos_sys_event_loop_poll(&g_dm_inventory_loop, 16);
+    (void)wasmos_sys_event_loop_poll(&g_dm_query_loop, 16);
 }
 
 WASMOS_WASM_EXPORT int32_t
@@ -1557,7 +1571,16 @@ initialize(int32_t proc_endpoint,
         console_write("[device-manager] inventory register failed\n");
         wasmos_sys_ipc_recv_loop();
     }
-    g_dm.query_endpoint = g_dm.inventory_endpoint;
+    g_dm.query_endpoint = wasmos_ipc_create_endpoint();
+    if (g_dm.query_endpoint < 0) {
+        console_write("[device-manager] query endpoint create failed\n");
+        wasmos_sys_ipc_recv_loop();
+    }
+    wasmos_sys_event_loop_init(&g_dm_query_loop, g_dm.query_endpoint, 0xE200);
+    if (dm_register_query_handlers() != 0) {
+        console_write("[device-manager] query handler registration failed\n");
+        wasmos_sys_ipc_recv_loop();
+    }
     if (wasmos_svc_register(g_dm.proc_endpoint, g_dm.query_endpoint, "devmgr.query", 1) != 0) {
         console_write("[device-manager] query register failed\n");
         wasmos_sys_ipc_recv_loop();
@@ -1603,7 +1626,6 @@ initialize(int32_t proc_endpoint,
     g_dm.need_fs_init = 0;
     g_dm.need_fs_manager = 0;
     g_dm.phase = HW_PHASE_SPAWN;
-    wasmos_sys_notify_ready(g_dm.proc_endpoint, g_dm.reply_endpoint);
 
     for (;;) {
         handle_query_endpoint();
@@ -1772,6 +1794,12 @@ initialize(int32_t proc_endpoint,
             if (next_spawn_target() != HW_SPAWN_NONE) {
                 g_dm.phase = HW_PHASE_SPAWN;
                 continue;
+            }
+            if (!g_dm.ready_notified &&
+                g_dm.boot_mount_ready &&
+                g_dm.rules_boot_loaded) {
+                g_dm.ready_notified = 1;
+                wasmos_sys_notify_ready(g_dm.proc_endpoint, g_dm.reply_endpoint);
             }
             wasmos_sched_yield();
             continue;

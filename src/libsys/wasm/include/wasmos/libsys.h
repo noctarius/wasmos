@@ -306,23 +306,26 @@ wasmos_sys_ipc_recv_loop(void)
     }
 }
 
-/* Send PROC_IPC_NOTIFY_READY to the process manager.  Call this once a service
- * has finished initialising and is ready to accept requests.  The PM will
- * immediately unblock any parent that is waiting in wasmos_sys_spawn_sync. */
+/* Send PROC_IPC_NOTIFY_READY to the process manager and block until PM acks.
+ * The blocking wait keeps the source_endpoint alive long enough for PM to
+ * identify the sender, which lets PM reliably unblock any sync-spawn parent
+ * and prevents the race where a short-lived process (e.g. pci-bus) destroys
+ * its endpoint before PM processes the IPC. */
 static inline void
 wasmos_sys_notify_ready(int32_t proc_endpoint, int32_t source_endpoint)
 {
-    (void)wasmos_ipc_send(proc_endpoint,
+    wasmos_ipc_message_t reply;
+    (void)wasmos_ipc_call(proc_endpoint,
                           source_endpoint,
                           PROC_IPC_NOTIFY_READY,
-                          0, 0, 0, 0, 0);
+                          0, 0, 0, 0, 0,
+                          &reply);
 }
 
-/* Spawn a module by index and block until the child calls notify_ready (or
- * first blocks on IPC as an implicit ready signal), or until timeout_ms
- * milliseconds have elapsed (0 = wait forever).
- * Returns the child PID on success, or a negative error code on failure or
- * timeout. */
+/* Spawn a module by index and block until the child first blocks on IPC
+ * (implicit ready signal) or until timeout_ms milliseconds have elapsed
+ * (0 = wait forever).  Returns the child PID on success or a negative error
+ * code on failure or timeout. */
 static inline int32_t
 wasmos_sys_spawn_sync(int32_t proc_endpoint,
                       int32_t reply_endpoint,
@@ -342,17 +345,14 @@ wasmos_sys_spawn_sync(int32_t proc_endpoint,
                         &reply) != 0) {
         return -1;
     }
-    if (reply.type != PROC_IPC_RESP) {
-        return -1;
-    }
-    return (int32_t)reply.arg0;
+    return reply.type == PROC_IPC_RESP ? (int32_t)reply.arg0 : -1;
 }
 
-/* Spawn by path and block until the child calls notify_ready (or first blocks
- * on IPC as an implicit ready signal), or until timeout_ms milliseconds have
- * elapsed (0 = wait forever).  The caller must write the path bytes to the FS
- * buffer before calling.  Returns the child PID on success or a negative error
- * code on failure or timeout. */
+/* Spawn by path and block until the child first blocks on IPC (implicit ready
+ * signal) or until timeout_ms milliseconds have elapsed (0 = wait forever).
+ * The caller must write the path bytes to the FS buffer before calling.
+ * Returns the child PID on success or a negative error code on failure or
+ * timeout. */
 static inline int32_t
 wasmos_sys_spawn_path_sync(int32_t proc_endpoint,
                            int32_t reply_endpoint,
@@ -372,10 +372,7 @@ wasmos_sys_spawn_path_sync(int32_t proc_endpoint,
                         &reply) != 0) {
         return -1;
     }
-    if (reply.type != PROC_IPC_RESP) {
-        return -1;
-    }
-    return (int32_t)reply.arg0;
+    return reply.type == PROC_IPC_RESP ? (int32_t)reply.arg0 : -1;
 }
 
 static inline int32_t

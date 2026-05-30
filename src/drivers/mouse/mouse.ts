@@ -11,8 +11,9 @@ const STATUS_OBF: i32 = 0x01;
 const STATUS_IBF: i32 = 0x02;
 const STATUS_AUX: i32 = 0x20;
 
-const SVC_IPC_REGISTER_REQ: i32 = 0x220;
+const SVC_IPC_REGISTER_REQ:  i32 = 0x220;
 const SVC_IPC_REGISTER_RESP: i32 = 0x2A0;
+const PROC_IPC_NOTIFY_READY: i32 = 0x20C;
 
 const MOUSE_IPC_SUBSCRIBE_REQ: i32 = 0x810;
 const MOUSE_IPC_SUBSCRIBE_RESP: i32 = 0x890;
@@ -296,6 +297,7 @@ export function initialize(proc_endpoint: i32, _arg1: i32,
   } else {
     std.printf("[mouse] driver starting (IRQ-driven)\n");
   }
+  ipc_send(proc_endpoint, g_mouse_ep, PROC_IPC_NOTIFY_READY, 0, 0, 0, 0, 0);
 
   if (irq_ok != 0) {
     std.printf("[mouse] driver starting (polling)\n");

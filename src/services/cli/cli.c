@@ -1920,6 +1920,7 @@ cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg)
     if (g_home_tty == 1) {
         console_write("WAMOS CLI\ncommands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, export VAR=<value>, echo ${VAR}, tty <0-3>, halt, reboot\n");
     }
+    wasmos_sys_notify_ready(g_proc_endpoint, g_reply_endpoint);
     g_phase = CLI_PHASE_PROMPT;
 }
 

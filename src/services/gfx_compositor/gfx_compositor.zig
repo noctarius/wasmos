@@ -2401,6 +2401,7 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
         logMsg("[gfx] framebuffer borrow failed\n");
     }
     init_title_glyph_cache_startup();
+    _ = api().proc_notify_ready.?();
 
     while (true) {
         const handled = sys.eventLoopPoll(&g_ipc_loop, 32);

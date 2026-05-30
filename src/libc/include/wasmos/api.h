@@ -69,6 +69,8 @@ extern int32_t wasmos_proc_count(void)
     WASMOS_WASM_IMPORT("wasmos", "proc_count");
 extern int32_t wasmos_proc_exit(int32_t status)
     WASMOS_WASM_IMPORT("wasmos", "proc_exit");
+extern int32_t wasmos_proc_notify_ready(void)
+    WASMOS_WASM_IMPORT("wasmos", "proc_notify_ready");
 extern int32_t wasmos_sched_ticks(void)
     WASMOS_WASM_IMPORT("wasmos", "sched_ticks");
 extern int32_t wasmos_sched_ready_count(void)

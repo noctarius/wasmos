@@ -2,6 +2,7 @@
 #include "stdio.h"
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
+#include "wasmos/libsys.h"
 #include "wasmos_driver_abi.h"
 
 /*
@@ -558,6 +559,7 @@ initialize(int32_t proc_endpoint,
 
     /* Drivers are long-running processes: initialize once, then block in the
      * IPC loop forever. */
+    wasmos_sys_notify_ready(proc_endpoint, g_block_endpoint);
     for (;;) {
         int32_t recv_rc = wasmos_ipc_recv(g_block_endpoint);
         if (recv_rc < 0) {

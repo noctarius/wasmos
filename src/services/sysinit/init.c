@@ -404,6 +404,7 @@ initialize(int32_t proc_endpoint,
     trace_mark(0x1103);
     trace_line("[sysinit] enter loop\n");
     trace_mark(0x1104);
+    wasmos_sys_notify_ready(g_state.proc_endpoint, g_state.reply_endpoint);
     /* The loop is intentionally linear and small: ensure the configured
      * late-start targets are running, then idle forever waiting for any future
      * extension point. */

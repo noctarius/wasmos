@@ -344,6 +344,12 @@ public:
             case PROC_IPC_SPAWN_PATH_CAPS:
                 rc = pm_handle_spawn_path_caps(process->context_id, &msg);
                 break;
+            case PROC_IPC_SPAWN_SYNC:
+                rc = pm_handle_spawn_sync(process->context_id, &msg);
+                break;
+            case PROC_IPC_NOTIFY_READY:
+                rc = pm_handle_notify_ready(process->context_id, &msg);
+                break;
             case PROC_IPC_MODULE_META:
                 rc = pm_handle_module_meta(process->context_id, &msg);
                 break;
@@ -468,3 +474,31 @@ process_manager_set_framebuffer_endpoint(uint32_t endpoint)
 }
 
 process_run_result_t process_manager_entry(process_t *process, void *arg) { return g_process_manager.entry(process, arg); }
+
+void
+process_manager_on_child_ready(uint32_t pid)
+{
+    process_t *proc = process_get(pid);
+    if (!proc) {
+        return;
+    }
+    process_notify_ready(proc);
+
+    if (!g_pm.spawn.in_use ||
+        !g_pm.spawn.is_sync ||
+        g_pm.spawn.sync_child_pid != pid) {
+        return;
+    }
+
+    ipc_message_t resp;
+    resp.type = PROC_IPC_RESP;
+    resp.source = g_pm.proc_endpoint;
+    resp.destination = g_pm.spawn.reply_endpoint;
+    resp.request_id = g_pm.spawn.request_id;
+    resp.arg0 = pid;
+    resp.arg1 = 0;
+    resp.arg2 = 0;
+    resp.arg3 = 0;
+    g_pm.spawn.in_use = 0;
+    ipc_send_from(IPC_CONTEXT_KERNEL, g_pm.spawn.reply_endpoint, &resp);
+}

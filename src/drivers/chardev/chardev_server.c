@@ -44,6 +44,7 @@ initialize(int32_t service_endpoint,
     g_last_byte = 0;
     g_has_data = 0;
     g_service_endpoint = service_endpoint;
+    wasmos_proc_notify_ready();
 
     for (;;) {
         int32_t recv_rc = wasmos_ipc_recv(g_service_endpoint);

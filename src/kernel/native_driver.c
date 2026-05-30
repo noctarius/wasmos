@@ -577,6 +577,12 @@ nd_proc_exit(int code)
     process_yield(PROCESS_RUN_EXITED);
 }
 
+static void
+nd_proc_notify_ready(void)
+{
+    process_manager_on_child_ready(process_current_pid());
+}
+
 /* -------------------------------------------------------------------------
  * ELF loader
  * ---------------------------------------------------------------------- */
@@ -840,6 +846,7 @@ native_driver_start(uint32_t context_id,
     api.sched_yield         = nd_sched_yield;
     api.sched_current_pid   = nd_sched_current_pid;
     api.proc_exit           = nd_proc_exit;
+    api.proc_notify_ready   = nd_proc_notify_ready;
     api.early_log_size      = nd_early_log_size;
     api.early_log_copy      = nd_early_log_copy;
     api.shmem_create        = nd_shmem_create;

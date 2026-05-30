@@ -13,6 +13,7 @@ const SERIAL_DRIVER_WRITE_REQ: i32 = 0x500;
 const SERIAL_DRIVER_READ_REQ: i32 = 0x501;
 const SERIAL_DRIVER_RESP: i32 = 0x580;
 const SERIAL_DRIVER_ERROR: i32 = 0x5FF;
+const PROC_IPC_NOTIFY_READY: i32 = 0x20C;
 
 const SERIAL_READ_STATUS_CHAR: i32 = 1;
 const SERIAL_READ_STATUS_EMPTY: i32 = 0;
@@ -126,6 +127,7 @@ export function initialize(_proc_endpoint: i32, _module_count: i32, _arg2: i32, 
 
   serial_init_hw();
   std.printf("[serial] driver ready\n");
+  ipc_send(_proc_endpoint, g_endpoint, PROC_IPC_NOTIFY_READY, 0, 0, 0, 0, 0);
 
   for (;;) {
     handle_message();

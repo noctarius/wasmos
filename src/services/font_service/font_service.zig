@@ -876,6 +876,7 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
         load_builtin_fonts();
         logMsg("[font] service ready\n");
     }
+    _ = api().proc_notify_ready.?();
 
     while (true) {
         const handled = sys.eventLoopPoll(&g_ipc_loop, 32);

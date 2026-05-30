@@ -19,11 +19,13 @@
 static volatile uint64_t g_timer_ticks;
 static volatile uint8_t g_timer_log_pending;
 static uint64_t g_timer_log_threshold;
+static uint32_t g_timer_hz = 250;
 
 void timer_init(uint32_t hz) {
     if (hz == 0) {
         hz = 250;
     }
+    g_timer_hz = hz;
     uint32_t divisor = PIT_BASE_HZ / hz;
     if (divisor == 0) {
         divisor = 1;
@@ -66,4 +68,8 @@ void timer_poll(void) {
 
 uint64_t timer_ticks(void) {
     return g_timer_ticks;
+}
+
+uint64_t timer_ms_to_ticks(uint32_t ms) {
+    return ((uint64_t)ms * g_timer_hz + 999u) / 1000u;
 }

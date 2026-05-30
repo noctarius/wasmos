@@ -524,6 +524,7 @@ initialize(int32_t proc_endpoint,
         wasmos_sys_ipc_recv_loop();
     }
     console_write("[fs-init] register fs-manager ok\n");
+    wasmos_sys_notify_ready(proc_endpoint, g_fs_endpoint);
 
     for (;;) {
         if (wasmos_ipc_recv(g_fs_endpoint) < 0) {

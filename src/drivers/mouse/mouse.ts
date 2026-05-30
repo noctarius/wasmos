@@ -34,6 +34,8 @@ declare function ipc_recv(endpoint: i32): i32;
 declare function ipc_create_endpoint(): i32;
 @external("wasmos", "irq_route_ipc")
 declare function irq_route_ipc(irq: i32, endpoint: i32): i32;
+@external("wasmos", "irq_ack")
+declare function irq_ack(irq: i32): i32;
 @external("wasmos", "irq_unroute")
 declare function irq_unroute(irq: i32): i32;
 @external("wasmos", "ipc_last_field")
@@ -327,6 +329,9 @@ export function initialize(proc_endpoint: i32, _arg1: i32,
       }
     } else if (type == MOUSE_IPC_IRQ_EVENT) {
       let b = readAuxByte();
+      /* Re-enable IRQ after reading OBF.  OBF must be clear before unmasking so
+       * the PIC level-trigger doesn't immediately re-fire. */
+      irq_ack(MOUSE_IRQ);
       if (b >= 0) {
         handleAuxByte(b);
       }

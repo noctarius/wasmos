@@ -59,10 +59,10 @@ static const uint8_t g_ring3_fault_churn_rounds = 6;
 static init_state_t g_init_state;
 
 static int
-wasmos_endpoint_resolve(uint32_t,
+wasmos_endpoint_resolve(uint32_t owner_context_id,
                         const uint8_t *name,
                         uint32_t name_len,
-                        uint32_t,
+                        uint32_t rights,
                         uint32_t *out_endpoint)
 {
     if (!out_endpoint) {
@@ -123,7 +123,7 @@ chardev_server_entry(process_t *process, void *arg)
 }
 
 static process_run_result_t
-idle_entry(process_t *, void *)
+idle_entry(process_t *process, void *arg)
 {
     for (;;) {
         __asm__ volatile("hlt");

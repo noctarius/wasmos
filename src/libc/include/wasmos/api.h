@@ -61,8 +61,6 @@ extern int32_t wasmos_ipc_recv(int32_t endpoint)
     WASMOS_WASM_IMPORT("wasmos", "ipc_recv");
 extern int32_t wasmos_ipc_try_recv(int32_t endpoint)
     WASMOS_WASM_IMPORT("wasmos", "ipc_try_recv");
-extern int32_t wasmos_ipc_wait(int32_t endpoint)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_wait");
 extern int32_t wasmos_ipc_notify(int32_t endpoint)
     WASMOS_WASM_IMPORT("wasmos", "ipc_notify");
 extern int32_t wasmos_ipc_last_field(int32_t field)
@@ -206,8 +204,10 @@ extern int32_t wasmos_shmem_refresh(int32_t id, int32_t ptr, int32_t size)
     WASMOS_WASM_IMPORT("wasmos", "shmem_refresh");
 extern int32_t wasmos_shmem_unmap(int32_t id)
     WASMOS_WASM_IMPORT("wasmos", "shmem_unmap");
-extern int32_t wasmos_irq_route(int32_t irq_line, int32_t endpoint)
-    WASMOS_WASM_IMPORT("wasmos", "irq_route");
+extern int32_t wasmos_irq_route_ipc(int32_t irq_line, int32_t endpoint)
+    WASMOS_WASM_IMPORT("wasmos", "irq_route_ipc");
+extern int32_t wasmos_irq_ack(int32_t irq_line)
+    WASMOS_WASM_IMPORT("wasmos", "irq_ack");
 extern int32_t wasmos_irq_unroute(int32_t irq_line)
     WASMOS_WASM_IMPORT("wasmos", "irq_unroute");
 /* vt keyboard input integration */

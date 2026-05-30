@@ -31,7 +31,6 @@ const CHROME_CLOSE_PAD: i32 = 3;
 const CHROME_MAX_SZ: i32 = 14;
 const CHROME_MAX_PAD: i32 = 3;
 const CHROME_BTN_GAP: i32 = 4;
-const CHROME_CLOSE_HIT_W: i32 = 30;
 const CHROME_MAX_HIT_W: i32 = 30;
 const CHROME_RESIZE_HANDLE_SZ: i32 = 12;
 const CHROME_TITLE_FONT_PX: u32 = 14;
@@ -760,6 +759,25 @@ fn event_drop_pointer_for(endpoint: u32) void {
     }
 }
 
+fn event_drop_resize_for_window(endpoint: u32, window_id: u32) void {
+    var i: usize = 0;
+    while (i < g_events.len) : (i += 1) {
+        if (g_events[i].endpoint == endpoint and
+            g_events[i].event_type == c.GFX_EVENT_RESIZE and
+            g_events[i].arg1 == window_id)
+        {
+            g_events[i] = .{};
+        }
+    }
+    while (g_event_head != g_event_tail and g_events[g_event_head].endpoint == IPC_ENDPOINT_NONE) {
+        g_event_head = (g_event_head + 1) % g_events.len;
+    }
+    if (g_event_head == g_event_tail) {
+        g_event_head = 0;
+        g_event_tail = 0;
+    }
+}
+
 fn event_drop_for(endpoint: u32) void {
     var i: usize = 0;
     while (i < g_events.len) : (i += 1) {
@@ -1319,19 +1337,22 @@ fn window_max_rect(win: window_slot_t) c.gfx_rect_t {
 
 fn window_close_hit_rect(win: window_slot_t) c.gfx_rect_t {
     const ww: i32 = @intCast(win.width);
+    // Starts at the left edge of the inter-button gap so the zone never
+    // overlaps the visual maximize button, regardless of padding constants.
+    const hit_x = win.x + ww - CHROME_CLOSE_PAD - CHROME_CLOSE_SZ - CHROME_BTN_GAP;
     return .{
-        .x = win.x + ww - CHROME_CLOSE_HIT_W,
+        .x = hit_x,
         .y = win.y,
-        .w = CHROME_CLOSE_HIT_W,
+        .w = (win.x + ww) - hit_x,
         .h = CHROME_TITLE_H,
     };
 }
 
 fn window_max_hit_rect(win: window_slot_t) c.gfx_rect_t {
     const ww: i32 = @intCast(win.width);
-    const right = win.x + ww - CHROME_CLOSE_HIT_W;
+    const close_x = win.x + ww - CHROME_CLOSE_PAD - CHROME_CLOSE_SZ - CHROME_BTN_GAP;
     return .{
-        .x = right - CHROME_MAX_HIT_W,
+        .x = close_x - CHROME_MAX_HIT_W,
         .y = win.y,
         .w = CHROME_MAX_HIT_W,
         .h = CHROME_TITLE_H,
@@ -1340,8 +1361,8 @@ fn window_max_hit_rect(win: window_slot_t) c.gfx_rect_t {
 
 fn window_title_rect(win: window_slot_t) c.gfx_rect_t {
     const ww: i32 = @intCast(win.width);
-    const controls_w = CHROME_CLOSE_HIT_W + CHROME_MAX_HIT_W + CHROME_BTN_GAP;
-    const title_w = ww - (CHROME_BORDER * 2) - controls_w;
+    const close_x = ww - CHROME_CLOSE_PAD - CHROME_CLOSE_SZ - CHROME_BTN_GAP;
+    const title_w = close_x - CHROME_MAX_HIT_W - CHROME_BORDER;
     return .{
         .x = win.x + CHROME_BORDER,
         .y = win.y,
@@ -1432,6 +1453,7 @@ fn resize_window_and_notify(window_idx: usize, x: i32, y: i32, width: u32, heigh
     request_repaint_rect(old_wr);
     request_repaint_rect(new_wr);
     const win = g_windows[window_idx];
+    event_drop_resize_for_window(win.owner_endpoint, win.window_id);
     event_push(win.owner_endpoint, c.GFX_EVENT_RESIZE, win.window_id, pack_u16_pair(win.width, win.height), 0);
 }
 

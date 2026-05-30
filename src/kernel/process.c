@@ -1682,8 +1682,20 @@ static int process_schedule_once_impl(void) {
     } else if (result == PROCESS_RUN_BLOCKED) {
         thread_t *next = 0;
         /* Keep the caller thread blocked with its existing block reason, then
-         * continue running another ready owner thread when available. */
-        if (thread->block_reason == THREAD_BLOCK_NONE) {
+         * continue running another ready owner thread when available.
+         *
+         * Guard: if the thread is already READY (woken by an IRQ that fired
+         * between process_yield and here), do NOT re-block it.  Without this
+         * check, process_set_ready() → thread_set_state(READY, BLOCK_NONE)
+         * makes block_reason == THREAD_BLOCK_NONE, which the old branch below
+         * would misread as "no reason set" and call process_set_blocked()
+         * again, stranding the thread in BLOCKED with its ready-queue slot
+         * silently discarded. */
+        if (thread->state == THREAD_STATE_READY) {
+            if (!thread->in_ready_queue) {
+                ready_queue_enqueue(thread);
+            }
+        } else if (thread->block_reason == THREAD_BLOCK_NONE) {
             process_set_blocked(proc, thread, PROCESS_BLOCK_IPC, THREAD_BLOCK_IPC);
         } else {
             proc->state = PROCESS_STATE_BLOCKED;

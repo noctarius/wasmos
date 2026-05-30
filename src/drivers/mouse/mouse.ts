@@ -153,13 +153,49 @@ function readAuxAck(limit: i32 = 50000): i32 {
   return -1;
 }
 
+/* Read any byte from port 0x60 regardless of AUX flag.
+ * Used for controller command responses (CCB read etc.) that are not AUX data. */
+function readDataByte(limit: i32 = 50000): i32 {
+  for (let i = 0; i < limit; ++i) {
+    if ((io_in8(CTRL_STATUS_PORT) & STATUS_OBF) != 0) {
+      return io_in8(CTRL_DATA_PORT) & 0xFF;
+    }
+    if ((i & 0xFF) == 0) {
+      sched_yield();
+    }
+    io_wait();
+  }
+  return -1;
+}
+
 function initMouseDevice(): bool {
   flushOutputBuffer();
 
-  /* Enable AUX port and request streaming in fail-open mode.
+  /* Enable AUX port (clears clock-disable bit in CCB). */
+  sendControllerCommand(0xA8);
+
+  /* Read the Controller Command Byte and set bit 1 (AUX interrupt enable).
+   * Without this, IRQ 12 never fires even though the AUX port is active. */
+  if (waitInputReady()) {
+    io_out8(CTRL_CMD_PORT, 0x20);
+    io_wait();
+    let ccb: i32 = readDataByte(4096);
+    if (ccb >= 0) {
+      let new_ccb: i32 = ccb | 0x02;  /* bit 1 = AUX interrupt enable */
+      if (waitInputReady()) {
+        io_out8(CTRL_CMD_PORT, 0x60);
+        io_wait();
+        if (waitInputReady()) {
+          io_out8(CTRL_DATA_PORT, new_ccb);
+          io_wait();
+        }
+      }
+    }
+  }
+
+  /* Request streaming in fail-open mode.
    * Some virtual/slow controllers may delay ACKs; mouse support should never
    * block system bootstrap. */
-  sendControllerCommand(0xA8);
   sendMouseCommand(0xF6);
   readAuxAck(4096);
   sendMouseCommand(0xF4);

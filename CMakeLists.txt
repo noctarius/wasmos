@@ -106,6 +106,7 @@ set(WASM_FRAMEBUFFER_PCI_APP ${BUILD_DIR}/framebuffer_pci.wap)
 set(NATIVE_FRAMEBUFFER_PCI_DRIVER_SRC ${DRIVER_WASM_DIR}/framebuffer_pci/framebuffer_pci_native.c)
 set(NATIVE_FRAMEBUFFER_PCI_DRIVER_ELF ${BUILD_DIR}/framebuffer_pci_native.elf)
 set(WASM_INIT_APP_SRC ${SERVICES_DIR}/sysinit/init.c)
+set(WASMOS_SCRIPT_ENGINE_SRC ${LIBC_DIR}/src/script.c)
 set(WASM_INIT_APP_WASM ${BUILD_DIR}/init.wasm)
 set(WASM_INIT_APP ${BUILD_DIR}/sysinit.wap)
 set(WASM_CLI_APP_SRC ${SERVICES_DIR}/cli/cli.c)
@@ -304,6 +305,7 @@ set(WASMOS_LIBC_INCLUDE_DEPS
   ${LIBC_DIR}/include/wasmos/api.h
   ${LIBC_DIR}/include/wasmos/ipc.h
   ${LIBC_DIR}/include/wasmos/imports.h
+  ${LIBC_DIR}/include/wasmos/script.h
   ${LIBSYS_WASM_DIR}/include/wasmos/libsys.h
   ${LIBSYS_WASM_DIR}/include/wasmos/libsys_string.h
   ${LIBSYS_WASM_DIR}/include/wasmos/sha256.h
@@ -942,6 +944,9 @@ set(INITFS_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_MOUSE_APP} ${BUILD_DIR}/esp/system/drivers/mouse.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FRAMEBUFFER_APP} ${BUILD_DIR}/esp/system/drivers/framebuf.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FRAMEBUFFER_PCI_APP} ${BUILD_DIR}/esp/system/drivers/framebuf_pci.wap
+  COMMAND ${CMAKE_COMMAND} -E copy
+      ${CMAKE_SOURCE_DIR}/scripts/system/sysinit.rc
+      ${BUILD_DIR}/esp/system/sysinit.rc
   COMMAND ${CMAKE_COMMAND} -E make_directory ${USERFS_DIR}
 )
 if (RUST_ENABLE)

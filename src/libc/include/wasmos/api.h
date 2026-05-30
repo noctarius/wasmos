@@ -217,6 +217,12 @@ extern int32_t wasmos_input_push(int32_t ch)
     WASMOS_WASM_IMPORT("wasmos", "input_push");
 extern int32_t wasmos_input_read(void)
     WASMOS_WASM_IMPORT("wasmos", "input_read");
+extern int32_t wasmos_env_get(const char *name, int32_t name_len, char *buf, int32_t buf_len)
+    WASMOS_WASM_IMPORT("wasmos", "env_get");
+extern int32_t wasmos_env_set(const char *name, int32_t name_len, const char *value, int32_t val_len)
+    WASMOS_WASM_IMPORT("wasmos", "env_set");
+extern int32_t wasmos_env_unset(const char *name, int32_t name_len)
+    WASMOS_WASM_IMPORT("wasmos", "env_unset");
 
 #ifdef __cplusplus
 }

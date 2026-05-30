@@ -1293,11 +1293,18 @@ void process_yield(process_run_result_t result) {
     context_switch_high(ctx, &g_sched_ctx);
 }
 
+void process_set_require_explicit_ready(process_t *process) {
+    if (!process) {
+        return;
+    }
+    process->require_explicit_ready = 1;
+}
+
 void process_block_on_ipc(process_t *process) {
     if (!process) {
         return;
     }
-    if (!process->ready) {
+    if (!process->ready && !process->require_explicit_ready) {
         process->ready = 1;
     }
     thread_t *thread = process_thread_for_transition(process);

@@ -69,8 +69,11 @@ typedef struct {
     wasmos_ipc_message_t msg;
 } dm_intent_wait_t;
 
-#define DM_SPAWN_TIMEOUT_MS 5000
-#define DM_SPAWN_POLL_MAX   65536
+#define DM_SPAWN_TIMEOUT_MS   5000
+#define DM_SPAWN_POLL_MAX     65536
+/* Sync spawns rely on PM's own DM_SPAWN_TIMEOUT_MS deadline for termination;
+ * the DM-side poll cap must not fire first. */
+#define DM_SPAWN_SYNC_POLL_MAX 0x7FFFFFFF
 static uint8_t g_dm_pci_scan_done = 0;
 static uint8_t g_dm_acpi_scan_done = 0;
 
@@ -201,6 +204,8 @@ dm_ipc_call(int32_t destination_endpoint,
                 return -1;
             }
             (void)wasmos_sched_yield();
+        } else {
+            empty_polls = 0;
         }
     }
     *out_msg = wait_state.msg;
@@ -651,7 +656,7 @@ dm_spawn_sync_call(int32_t msg_type, int32_t arg0, int32_t arg1, int32_t arg2, i
     if (dm_ipc_call(g_dm.proc_endpoint, g_dm.reply_endpoint,
                     msg_type, g_dm.request_id++,
                     arg0, arg1, arg2, arg3,
-                    &resp, DM_SPAWN_POLL_MAX) != 0) {
+                    &resp, DM_SPAWN_SYNC_POLL_MAX) != 0) {
         return -1;
     }
     return (resp.type == PROC_IPC_RESP) ? 0 : -1;

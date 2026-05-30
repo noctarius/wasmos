@@ -32,12 +32,8 @@ declare function ipc_try_recv(endpoint: i32): i32;
 declare function ipc_recv(endpoint: i32): i32;
 @external("wasmos", "ipc_create_endpoint")
 declare function ipc_create_endpoint(): i32;
-@external("wasmos", "ipc_create_notification")
-declare function ipc_create_notification(): i32;
-@external("wasmos", "ipc_wait")
-declare function ipc_wait(endpoint: i32): i32;
-@external("wasmos", "irq_route")
-declare function irq_route(irq: i32, endpoint: i32): i32;
+@external("wasmos", "irq_route_ipc")
+declare function irq_route_ipc(irq: i32, endpoint: i32): i32;
 @external("wasmos", "irq_unroute")
 declare function irq_unroute(irq: i32): i32;
 @external("wasmos", "ipc_last_field")
@@ -47,9 +43,9 @@ declare function ipc_send(dest: i32, src: i32, type: i32, req_id: i32,
                           arg0: i32, arg1: i32, arg2: i32, arg3: i32): i32;
 
 const MOUSE_IRQ: i32 = 12;
+const MOUSE_IPC_IRQ_EVENT: i32 = 0xFF00;
 
 let g_mouse_ep: i32 = -1;
-let g_irq_ep: i32 = -1;
 let g_packet_state: i32 = 0;
 let g_packet0: i32 = 0;
 let g_packet1: i32 = 0;
@@ -256,15 +252,14 @@ export function initialize(proc_endpoint: i32, _arg1: i32,
     std.printf("[mouse] init failed\n");
   }
 
-  g_irq_ep = ipc_create_notification();
-  if (g_irq_ep < 0 || irq_route(MOUSE_IRQ, g_irq_ep) != 0) {
+  let irq_ok: i32 = irq_route_ipc(MOUSE_IRQ, g_mouse_ep);
+  if (irq_ok != 0) {
     std.printf("[mouse] IRQ route failed, falling back to polling\n");
-    g_irq_ep = -1;
   } else {
     std.printf("[mouse] driver starting (IRQ-driven)\n");
   }
 
-  if (g_irq_ep < 0) {
+  if (irq_ok != 0) {
     std.printf("[mouse] driver starting (polling)\n");
     for (;;) {
       drainIpc();
@@ -282,15 +277,25 @@ export function initialize(proc_endpoint: i32, _arg1: i32,
   }
 
   for (;;) {
-    drainIpc();
-
-    /* Sleep until IRQ 12 fires (mouse byte in AUX output buffer). */
-    ipc_wait(g_irq_ep);
-
-    let b = readAuxByte();
-    if (b >= 0) {
-      handleAuxByte(b);
+    /* Block until either a client message or an IRQ event arrives. */
+    if (ipc_recv(g_mouse_ep) != 1) {
+      continue;
     }
+    let type: i32 = ipc_last_field(0);
+    if (type == MOUSE_IPC_SUBSCRIBE_REQ) {
+      let req_id: i32 = ipc_last_field(1);
+      let source: i32 = ipc_last_field(4);
+      let ok: i32 = (source >= 0) ? addSubscriber(source) : -1;
+      if (source >= 0) {
+        ipc_send(source, g_mouse_ep, MOUSE_IPC_SUBSCRIBE_RESP, req_id, ok, 0, 0, 0);
+      }
+    } else if (type == MOUSE_IPC_IRQ_EVENT) {
+      let b = readAuxByte();
+      if (b >= 0) {
+        handleAuxByte(b);
+      }
+    }
+    /* Ignore unknown message types. */
   }
 
   return 0;

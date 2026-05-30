@@ -2172,6 +2172,23 @@ m3ApiRawFunction(wasmos_irq_route)
     m3ApiReturn(irq_register(context_id, (uint32_t)irq_line, (uint32_t)endpoint));
 }
 
+m3ApiRawFunction(wasmos_irq_route_ipc)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, irq_line)
+    m3ApiGetArg(int32_t, msg_endpoint)
+
+    uint32_t context_id = 0;
+    if (irq_line < 0 || msg_endpoint < 0) {
+        m3ApiReturn(-1);
+    }
+    if (current_process_context(&context_id) != 0 ||
+        require_irq_route_capability(context_id) != 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn(irq_register_msg(context_id, (uint32_t)irq_line, (uint32_t)msg_endpoint));
+}
+
 m3ApiRawFunction(wasmos_irq_unroute)
 {
     m3ApiReturnType(int32_t)
@@ -3429,6 +3446,7 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "shmem_refresh", "i(iii)", wasmos_shmem_refresh);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_unmap", "i(i)", wasmos_shmem_unmap);
     rc |= wasm3_link_raw(module, "wasmos", "irq_route", "i(ii)", wasmos_irq_route);
+    rc |= wasm3_link_raw(module, "wasmos", "irq_route_ipc", "i(ii)", wasmos_irq_route_ipc);
     rc |= wasm3_link_raw(module, "wasmos", "irq_unroute", "i(i)", wasmos_irq_unroute);
     rc |= wasm3_link_raw(module, "wasmos", "serial_register", "i(i)", wasmos_serial_register);
     rc |= wasm3_link_raw(module, "wasmos", "input_push", "i(i)", wasmos_input_push);

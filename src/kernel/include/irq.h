@@ -9,6 +9,7 @@
 
 void irq_init(void);
 int irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint);
+int irq_register_msg(uint32_t context_id, uint32_t irq_line, uint32_t msg_endpoint);
 int irq_unregister(uint32_t context_id, uint32_t irq_line);
 int irq_mask(uint32_t irq_line);
 int irq_unmask(uint32_t irq_line);

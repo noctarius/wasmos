@@ -5,8 +5,8 @@ void irq_init(void) { x86_irq_init(); }
 int irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint) {
     return x86_irq_register(context_id, irq_line, endpoint);
 }
-int irq_register_msg(uint32_t context_id, uint32_t irq_line, uint32_t msg_endpoint) {
-    return x86_irq_register_msg(context_id, irq_line, msg_endpoint);
+int irq_ack(uint32_t context_id, uint32_t irq_line) {
+    return x86_irq_ack(context_id, irq_line);
 }
 int irq_unregister(uint32_t context_id, uint32_t irq_line) {
     return x86_irq_unregister(context_id, irq_line);

@@ -25,6 +25,8 @@ declare function ipc_recv(endpoint: i32): i32;
 declare function ipc_create_endpoint(): i32;
 @external("wasmos", "irq_route_ipc")
 declare function irq_route_ipc(irq: i32, endpoint: i32): i32;
+@external("wasmos", "irq_ack")
+declare function irq_ack(irq: i32): i32;
 @external("wasmos", "irq_unroute")
 declare function irq_unroute(irq: i32): i32;
 @external("wasmos", "ipc_last_field")
@@ -174,6 +176,10 @@ export function initialize(_proc_endpoint: i32, _arg1: i32,
       }
     } else if (type == KBD_IPC_IRQ_EVENT) {
       let code = readScancode();
+      /* Re-enable IRQ after reading the hardware register so the next keypress
+       * can fire the interrupt again.  Must come after io_in8 so OBF is clear
+       * before unmasking (prevents immediate re-fire on level-triggered IRQ). */
+      irq_ack(KBD_IRQ);
       if (code < 0) {
         continue;
       }

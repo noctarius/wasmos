@@ -347,6 +347,15 @@ public:
             case PROC_IPC_SPAWN_SYNC:
                 rc = pm_handle_spawn_sync(process->context_id, &msg);
                 break;
+            case PROC_IPC_SPAWN_CAPS_SYNC:
+                rc = pm_handle_spawn_caps_sync(process->context_id, &msg);
+                break;
+            case PROC_IPC_SPAWN_PATH_SYNC:
+                rc = pm_handle_spawn_path_sync(process->context_id, &msg);
+                break;
+            case PROC_IPC_SPAWN_PATH_CAPS_SYNC:
+                rc = pm_handle_spawn_path_caps_sync(process->context_id, &msg);
+                break;
             case PROC_IPC_NOTIFY_READY:
                 rc = pm_handle_notify_ready(process->context_id, &msg);
                 break;

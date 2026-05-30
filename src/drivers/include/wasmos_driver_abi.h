@@ -55,6 +55,21 @@ enum {
      * is ready to accept requests.  Fire-and-forget — no reply is sent back.
      * arg0..arg3 = reserved(0). */
     PROC_IPC_NOTIFY_READY = 0x20C,
+    /* Sync variants of SPAWN_CAPS / SPAWN_PATH / SPAWN_PATH_CAPS.
+     * Same cap/path encoding as their async counterparts, with one arg
+     * repurposed for timeout_ms:
+     *   SPAWN_CAPS_SYNC:      arg0=module_index arg1=cap_flags arg2=io_packed
+     *                         arg3=(irq_mask&0xFFFF)|((timeout_ms&0xFFFF)<<16)
+     *   SPAWN_PATH_SYNC:      path at FS buf[0], arg0=0 arg1=path_len
+     *                         arg2=0 arg3=timeout_ms
+     *   SPAWN_PATH_CAPS_SYNC: path at FS buf[0],
+     *                         arg0=(irq<<16)|cap_flags arg1=path_len
+     *                         arg2=io_packed           arg3=timeout_ms
+     * On success: PROC_IPC_RESP, arg0=child_pid.
+     * On timeout or child death before ready: PROC_IPC_ERROR. */
+    PROC_IPC_SPAWN_CAPS_SYNC      = 0x20D,
+    PROC_IPC_SPAWN_PATH_SYNC      = 0x20E,
+    PROC_IPC_SPAWN_PATH_CAPS_SYNC = 0x20F,
     PROC_IPC_RESP = 0x280,
     PROC_IPC_ERROR = 0x2FF
 };

@@ -1,0 +1,14 @@
+# sysinit.rc -- boot-time service startup script
+# Processed by sysinit using the wasmos script engine.
+
+spawn /boot/apps/chardevc.wap
+
+start /boot/system/services/vt.wap
+
+if -f /boot/system/services/fontsvc.wap then
+    start /boot/system/services/fontsvc.wap
+endif
+
+spawn /boot/system/services/gfxcomp.wap
+
+start /boot/system/services/cli.wap

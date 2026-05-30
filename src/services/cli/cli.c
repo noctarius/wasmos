@@ -5,6 +5,7 @@
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
 #include "wasmos/libsys.h"
+#include "wasmos/script.h"
 #include "wasmos_driver_abi.h"
 #include "cli_types.h"
 
@@ -229,12 +230,11 @@ cli_env_init_defaults(void)
 }
 
 static int
-cli_env_apply_export_line(const char *line)
+cli_parse_name_value(const char *line, char *name, int name_cap,
+                     char *value, int val_cap, int32_t *out_nlen, int32_t *out_vlen)
 {
     int32_t start = 0;
     int32_t eq = -1;
-    char name[CLI_ENV_NAME_MAX];
-    char value[CLI_ENV_VALUE_MAX];
     int32_t nlen = 0;
     int32_t vlen = 0;
     if (!line) {
@@ -251,7 +251,7 @@ cli_env_apply_export_line(const char *line)
     while (nlen > 0 && (line[start + nlen - 1] == ' ' || line[start + nlen - 1] == '\t')) {
         nlen--;
     }
-    if (nlen <= 0 || nlen >= (int32_t)sizeof(name)) {
+    if (nlen <= 0 || nlen >= name_cap) {
         return -1;
     }
     for (int32_t i = 0; i < nlen; ++i) {
@@ -263,7 +263,7 @@ cli_env_apply_export_line(const char *line)
         while (line[value_start] == ' ' || line[value_start] == '\t') {
             value_start++;
         }
-        while (line[value_start + vlen] && vlen + 1 < (int32_t)sizeof(value)) {
+        while (line[value_start + vlen] && vlen + 1 < val_cap) {
             value[vlen] = line[value_start + vlen];
             vlen++;
         }
@@ -272,6 +272,36 @@ cli_env_apply_export_line(const char *line)
             value[vlen - 1] = '\0';
             vlen--;
         }
+    }
+    if (out_nlen) {
+        *out_nlen = nlen;
+    }
+    if (out_vlen) {
+        *out_vlen = vlen;
+    }
+    return 0;
+}
+
+static int
+cli_env_apply_export_line(const char *line)
+{
+    char name[CLI_ENV_NAME_MAX];
+    char value[CLI_ENV_VALUE_MAX];
+    int32_t nlen = 0;
+    int32_t vlen = 0;
+    if (cli_parse_name_value(line, name, (int)sizeof(name), value, (int)sizeof(value), &nlen, &vlen) != 0) {
+        return -1;
+    }
+    return wasmos_env_set(name, nlen, value, vlen);
+}
+
+static int
+cli_env_set_local_line(const char *line)
+{
+    char name[CLI_ENV_NAME_MAX];
+    char value[CLI_ENV_VALUE_MAX];
+    if (cli_parse_name_value(line, name, (int)sizeof(name), value, (int)sizeof(value), 0, 0) != 0) {
+        return -1;
     }
     return cli_env_set(name, value);
 }
@@ -310,6 +340,12 @@ cli_echo_env_expr(const char *expr)
     value = cli_env_get(name);
     if (value) {
         console_write(value);
+    } else {
+        char kbuf[CLI_ENV_VALUE_MAX];
+        int32_t got = wasmos_env_get(name, nlen, kbuf, (int32_t)sizeof(kbuf));
+        if (got >= 0) {
+            console_write(kbuf);
+        }
     }
     console_write("\n");
     return 0;
@@ -1450,84 +1486,113 @@ cli_wait_for_pid_exit(int32_t pid, int32_t *out_exit_status)
 }
 
 static int
+cli_script_on_start(void *user, const char *path)
+{
+    (void)user;
+    int32_t pid = -1;
+    if (cli_spawn_exec_path(path, &pid) != 0) {
+        return 0;
+    }
+    return 0;
+}
+
+static int
+cli_script_on_spawn(void *user, const char *path)
+{
+    (void)user;
+    int32_t pid = -1;
+    (void)cli_spawn_exec_path(path, &pid);
+    return 0;
+}
+
+static int
+cli_script_on_exec(void *user, const char *path, const char *args, int32_t *out_exit_code)
+{
+    (void)user;
+    int32_t pid = -1;
+    char input[192];
+    int pos = 0;
+    while (path[pos] && pos + 1 < (int)sizeof(input)) {
+        input[pos] = path[pos];
+        pos++;
+    }
+    if (args && args[0]) {
+        if (pos + 1 < (int)sizeof(input)) {
+            input[pos++] = ' ';
+        }
+        int ai = 0;
+        while (args[ai] && pos + 1 < (int)sizeof(input)) {
+            input[pos++] = args[ai++];
+        }
+    }
+    input[pos] = '\0';
+    if (cli_spawn_exec_path(input, &pid) != 0) {
+        if (out_exit_code) {
+            *out_exit_code = -1;
+        }
+        return 0;
+    }
+    int32_t exit_status = 0;
+    (void)cli_wait_for_pid_exit(pid, &exit_status);
+    if (out_exit_code) {
+        *out_exit_code = exit_status;
+    }
+    return 0;
+}
+
+static int
+cli_script_on_wait_svc(void *user, const char *name)
+{
+    (void)user;
+    for (int i = 0; i < 256; i++) {
+        int32_t ep = wasmos_sys_svc_lookup_retry(g_proc_endpoint,
+                                                 g_reply_endpoint,
+                                                 name,
+                                                 g_request_id,
+                                                 1);
+        g_request_id++;
+        if (ep >= 0) {
+            return 0;
+        }
+        wasmos_sched_yield();
+    }
+    return 0;
+}
+
+static void
+cli_script_on_echo(void *user, const char *text)
+{
+    (void)user;
+    console_write(text);
+    console_write("\n");
+}
+
+static int
+cli_script_on_export(void *user, const char *name, const char *value)
+{
+    (void)user;
+    int32_t nlen = (int32_t)wasmos_sys_strlen(name);
+    int32_t vlen = (int32_t)wasmos_sys_strlen(value);
+    return wasmos_env_set(name, nlen, value, vlen);
+}
+
+static int
 cli_run_script(const char *script_path)
 {
-    FILE *f = 0;
-    char line[128];
-    int32_t line_no = 0;
     if (!script_path || script_path[0] == '\0') {
         return -1;
     }
-    f = fopen(script_path, "r");
-    if (!f) {
-        return -1;
-    }
-    for (;;) {
-        if (!fgets(line, (int)sizeof(line), f)) {
-            break;
-        }
-        line_no++;
-        int32_t start = 0;
-        int32_t end = 0;
-        while (line[start] == ' ' || line[start] == '\t') {
-            start++;
-        }
-        end = start;
-        while (line[end] && line[end] != '\n' && line[end] != '\r') {
-            end++;
-        }
-        while (end > start && (line[end - 1] == ' ' || line[end - 1] == '\t')) {
-            end--;
-        }
-        line[end] = '\0';
-        if (line[start] == '\0' || line[start] == '#') {
-            continue;
-        }
-        /* TODO: keep script v1 intentionally minimal (single command token,
-         * no quoting/arguments/control flow). */
-        const char *exec_input = &line[start];
-        int32_t pid = -1;
-        int32_t exit_status = 0;
-        if (cli_spawn_exec_path(exec_input, &pid) != 0) {
-            char buf[96];
-            int n = snprintf(buf, sizeof(buf), "script failed at line %d: spawn failed\n", (int)line_no);
-            if (n > 0) {
-                console_write(buf);
-            } else {
-                console_write("script failed: spawn failed\n");
-            }
-            (void)fclose(f);
-            return -1;
-        }
-        if (cli_wait_for_pid_exit(pid, &exit_status) != 0) {
-            char buf[96];
-            int n = snprintf(buf, sizeof(buf), "script failed at line %d: wait failed\n", (int)line_no);
-            if (n > 0) {
-                console_write(buf);
-            } else {
-                console_write("script failed: wait failed\n");
-            }
-            (void)fclose(f);
-            return -1;
-        }
-        if (exit_status != 0) {
-            char buf[128];
-            int n = snprintf(buf,
-                             sizeof(buf),
-                             "script failed at line %d: exit %d\n",
-                             (int)line_no,
-                             (int)exit_status);
-            if (n > 0) {
-                console_write(buf);
-            } else {
-                console_write("script failed: non-zero exit\n");
-            }
-            (void)fclose(f);
-            return -1;
-        }
-    }
-    (void)fclose(f);
-    return 0;
+    wasmos_script_state_t script_state;
+    wasmos_script_state_init(&script_state);
+    wasmos_script_ops_t ops;
+    ops.on_start    = cli_script_on_start;
+    ops.on_spawn    = cli_script_on_spawn;
+    ops.on_exec     = cli_script_on_exec;
+    ops.on_wait_svc = cli_script_on_wait_svc;
+    ops.on_echo     = cli_script_on_echo;
+    ops.on_export   = cli_script_on_export;
+    ops.user        = 0;
+    return wasmos_script_run(&script_state, &ops, script_path);
 }
 
 static int
@@ -1538,7 +1603,7 @@ cli_handle_line(void)
         return 0;
     }
     if (line_eq_ci("help")) {
-        console_write("commands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, export VAR=<value>, echo ${VAR}, tty <0-3>, halt, reboot\n");
+        console_write("commands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, export VAR=<value>, set VAR=<value>, echo ${VAR}, tty <0-3>, halt, reboot\n");
         return 0;
     }
     if (line_eq_ci("mount")) {
@@ -1643,6 +1708,12 @@ cli_handle_line(void)
     if (g_line_len > 7 && line_starts_with_ci("export ")) {
         if (cli_env_apply_export_line(&g_line[7]) != 0) {
             console_write("export usage: export VAR=<value>\n");
+        }
+        return 0;
+    }
+    if (g_line_len > 4 && line_starts_with_ci("set ")) {
+        if (cli_env_set_local_line(&g_line[4]) != 0) {
+            console_write("set usage: set VAR=<value>\n");
         }
         return 0;
     }
@@ -1918,7 +1989,7 @@ cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg)
         (void)cli_switch_tty(1, 1, 0);
     }
     if (g_home_tty == 1) {
-        console_write("WAMOS CLI\ncommands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, export VAR=<value>, echo ${VAR}, tty <0-3>, halt, reboot\n");
+        console_write("WAMOS CLI\ncommands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, export VAR=<value>, set VAR=<value>, echo ${VAR}, tty <0-3>, halt, reboot\n");
     }
     wasmos_sys_notify_ready(g_proc_endpoint, g_reply_endpoint);
     g_phase = CLI_PHASE_PROMPT;

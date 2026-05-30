@@ -57,6 +57,29 @@ static wasm_fs_peer_slot_t g_wasm_fs_peer_slots[PROCESS_MAX_COUNT];
 static wasm_shmem_linear_map_t g_wasm_shmem_maps[WASM_SHMEM_MAP_SLOTS];
 static const boot_info_t *g_wasm_boot_info;
 
+#define KENV_MAX_ENTRIES 64
+#define KENV_KEY_MAX     33
+#define KENV_VAL_MAX     129
+
+typedef struct {
+    uint8_t in_use;
+    char    key[KENV_KEY_MAX];
+    char    value[KENV_VAL_MAX];
+} kenv_entry_t;
+
+static kenv_entry_t g_kenv[KENV_MAX_ENTRIES];
+
+static int
+kenv_find(const char *key)
+{
+    for (int i = 0; i < KENV_MAX_ENTRIES; i++) {
+        if (g_kenv[i].in_use && strcmp(g_kenv[i].key, key) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
 static int
 wasm_arg_u32_nonneg(int32_t raw, uint32_t *out)
 {
@@ -1469,6 +1492,196 @@ m3ApiRawFunction(wasmos_boot_config_copy)
                                 src + start,
                                 count) != 0) {
         m3ApiReturn(-1);
+    }
+    m3ApiReturn(0);
+}
+
+m3ApiRawFunction(wasmos_env_get)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArgMem(const char *, name_ptr)
+    m3ApiGetArg(int32_t, name_len)
+    m3ApiGetArgMem(char *, buf_ptr)
+    m3ApiGetArg(int32_t, buf_len)
+
+    if (name_len <= 0 || buf_len <= 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiCheckMem(name_ptr, (uint32_t)name_len);
+    m3ApiCheckMem(buf_ptr, (uint32_t)buf_len);
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t name_user = 0;
+    uint64_t buf_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   name_ptr,
+                                   (uint32_t)name_len,
+                                   &name_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                name_user,
+                                (uint64_t)(uint32_t)name_len,
+                                MEM_REGION_FLAG_READ) != 0 ||
+        wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   buf_ptr,
+                                   (uint32_t)buf_len,
+                                   &buf_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                buf_user,
+                                (uint64_t)(uint32_t)buf_len,
+                                MEM_REGION_FLAG_WRITE) != 0) {
+        m3ApiReturn(-1);
+    }
+    char local_name[KENV_KEY_MAX];
+    uint32_t copy_len = (uint32_t)name_len;
+    if (copy_len >= KENV_KEY_MAX) {
+        copy_len = KENV_KEY_MAX - 1u;
+    }
+    if (mm_copy_from_user(proc->context_id, local_name, name_user, (uint64_t)copy_len) != 0) {
+        m3ApiReturn(-1);
+    }
+    local_name[copy_len] = '\0';
+    int idx = kenv_find(local_name);
+    if (idx < 0) {
+        m3ApiReturn(-1);
+    }
+    uint32_t val_len = 0;
+    while (g_kenv[idx].value[val_len]) {
+        val_len++;
+    }
+    uint32_t write_len = val_len;
+    if (write_len >= (uint32_t)buf_len) {
+        write_len = (uint32_t)buf_len - 1u;
+    }
+    if (wasm_copy_to_user_bytes(proc->context_id, buf_user, g_kenv[idx].value, write_len) != 0) {
+        m3ApiReturn(-1);
+    }
+    char nul = '\0';
+    if (wasm_copy_to_user_bytes(proc->context_id, buf_user + (uint64_t)write_len, &nul, 1) != 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn((int32_t)write_len);
+}
+
+m3ApiRawFunction(wasmos_env_set)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArgMem(const char *, name_ptr)
+    m3ApiGetArg(int32_t, name_len)
+    m3ApiGetArgMem(const char *, val_ptr)
+    m3ApiGetArg(int32_t, val_len)
+
+    if (name_len <= 0 || val_len < 0) {
+        m3ApiReturn(-1);
+    }
+    if (name_len >= KENV_KEY_MAX || val_len >= KENV_VAL_MAX) {
+        m3ApiReturn(-1);
+    }
+    m3ApiCheckMem(name_ptr, (uint32_t)name_len);
+    if (val_len > 0) {
+        m3ApiCheckMem(val_ptr, (uint32_t)val_len);
+    }
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    uint64_t name_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   name_ptr,
+                                   (uint32_t)name_len,
+                                   &name_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                name_user,
+                                (uint64_t)(uint32_t)name_len,
+                                MEM_REGION_FLAG_READ) != 0) {
+        m3ApiReturn(-1);
+    }
+    char local_name[KENV_KEY_MAX];
+    if (mm_copy_from_user(proc->context_id, local_name, name_user, (uint64_t)(uint32_t)name_len) != 0) {
+        m3ApiReturn(-1);
+    }
+    local_name[name_len] = '\0';
+    char local_val[KENV_VAL_MAX];
+    local_val[0] = '\0';
+    if (val_len > 0) {
+        uint64_t val_user = 0;
+        if (wasm_user_va_from_host_ptr(proc->context_id,
+                                       (const uint8_t *)_mem,
+                                       (uint64_t)m3_GetMemorySize(runtime),
+                                       val_ptr,
+                                       (uint32_t)val_len,
+                                       &val_user) != 0 ||
+            mm_user_range_permitted(proc->context_id,
+                                    val_user,
+                                    (uint64_t)(uint32_t)val_len,
+                                    MEM_REGION_FLAG_READ) != 0) {
+            m3ApiReturn(-1);
+        }
+        if (mm_copy_from_user(proc->context_id, local_val, val_user, (uint64_t)(uint32_t)val_len) != 0) {
+            m3ApiReturn(-1);
+        }
+        local_val[val_len] = '\0';
+    }
+    int idx = kenv_find(local_name);
+    if (idx < 0) {
+        for (int i = 0; i < KENV_MAX_ENTRIES; i++) {
+            if (!g_kenv[i].in_use) {
+                idx = i;
+                break;
+            }
+        }
+        if (idx < 0) {
+            m3ApiReturn(-1);
+        }
+        g_kenv[idx].in_use = 1;
+        memcpy(g_kenv[idx].key, local_name, (uint32_t)name_len + 1u);
+    }
+    memcpy(g_kenv[idx].value, local_val, (uint32_t)val_len + 1u);
+    m3ApiReturn(0);
+}
+
+m3ApiRawFunction(wasmos_env_unset)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArgMem(const char *, name_ptr)
+    m3ApiGetArg(int32_t, name_len)
+
+    if (name_len <= 0 || name_len >= KENV_KEY_MAX) {
+        m3ApiReturn(0);
+    }
+    m3ApiCheckMem(name_ptr, (uint32_t)name_len);
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(0);
+    }
+    uint64_t name_user = 0;
+    if (wasm_user_va_from_host_ptr(proc->context_id,
+                                   (const uint8_t *)_mem,
+                                   (uint64_t)m3_GetMemorySize(runtime),
+                                   name_ptr,
+                                   (uint32_t)name_len,
+                                   &name_user) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                name_user,
+                                (uint64_t)(uint32_t)name_len,
+                                MEM_REGION_FLAG_READ) != 0) {
+        m3ApiReturn(0);
+    }
+    char local_name[KENV_KEY_MAX];
+    if (mm_copy_from_user(proc->context_id, local_name, name_user, (uint64_t)(uint32_t)name_len) != 0) {
+        m3ApiReturn(0);
+    }
+    local_name[name_len] = '\0';
+    int idx = kenv_find(local_name);
+    if (idx >= 0) {
+        g_kenv[idx].in_use = 0;
     }
     m3ApiReturn(0);
 }
@@ -3386,6 +3599,9 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "early_log_copy", "i(*ii)", wasmos_early_log_copy);
     rc |= wasm3_link_raw(module, "wasmos", "boot_config_size", "i()", wasmos_boot_config_size);
     rc |= wasm3_link_raw(module, "wasmos", "boot_config_copy", "i(*ii)", wasmos_boot_config_copy);
+    rc |= wasm3_link_raw(module, "wasmos", "env_get",   "i(*i*i)", wasmos_env_get);
+    rc |= wasm3_link_raw(module, "wasmos", "env_set",   "i(*i*i)", wasmos_env_set);
+    rc |= wasm3_link_raw(module, "wasmos", "env_unset", "i(*i)",   wasmos_env_unset);
     rc |= wasm3_link_raw(module, "wasmos", "system_halt", "i()", wasmos_system_halt);
     rc |= wasm3_link_raw(module, "wasmos", "system_reboot", "i()", wasmos_system_reboot);
     rc |= wasm3_link_raw(module, "wasmos", "acpi_rsdp_info", "i(**i)", wasmos_acpi_rsdp_info);

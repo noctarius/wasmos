@@ -1,28 +1,5 @@
 version = 1
 
-[boot]
-bootstrap_modules = [
-  "chardev-client",
-  "init-smoke",
-  "native-call-min",
-  "native-call-smoke",
-  "pci-bus",
-  "acpi-bus",
-  "ata",
-  "fs-fat",
-  "fs-init",
-  "fs-manager",
-  "device-manager",
-]
-
-[sysinit]
-spawn = [
-  "chardev-client",
-  "vt",
-  "gfx-compositor",
-  "cli",
-]
-
 [[entries]]
 kind = "wasmos_app"
 flags = ["bootstrap"]
@@ -104,11 +81,6 @@ kind = "wasmos_app"
 flags = ["bootstrap"]
 path = "system/services/device_manager.wap"
 source = "device_manager.wap"
-
-[[entries]]
-kind = "config"
-path = "config/bootcfg.bin"
-generated = "boot_config"
 
 [[entries]]
 kind = "data"

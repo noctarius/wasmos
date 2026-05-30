@@ -61,25 +61,27 @@ map_phys(uint64_t phys, uint32_t size)
 /* ---- ISA/PNP device ID table -------------------------------------------- */
 
 /* Maps EISAID device bytes (vendor is always 0x41 0xD0 for PNP) to PCI-like
- * class/subclass/prog_if so the device-manager rules can match them. */
+ * class/subclass/prog_if so the device-manager rules can match them.
+ * default_io: fallback I/O base if _CRS has no I/O descriptor (0 = skip). */
 typedef struct {
-    uint8_t b2, b3;
-    uint8_t class_code;
-    uint8_t subclass;
-    uint8_t prog_if;
+    uint8_t  b2, b3;
+    uint8_t  class_code;
+    uint8_t  subclass;
+    uint8_t  prog_if;
+    uint16_t default_io;
 } isa_id_entry_t;
 
 static const isa_id_entry_t isa_id_table[] = {
-    { 0x05, 0x01, 0x07, 0x00, 0x02 },  /* PNP0501 - 16550A serial       */
-    { 0x03, 0x03, 0x09, 0x00, 0x00 },  /* PNP0303 - AT keyboard (i8042) */
-    { 0x0F, 0x03, 0x09, 0x02, 0x00 },  /* PNP0F03 - MS serial mouse     */
-    { 0x0F, 0x13, 0x09, 0x02, 0x00 },  /* PNP0F13 - PS/2 mouse          */
-    { 0x07, 0x00, 0x01, 0x02, 0x00 },  /* PNP0700 - floppy controller   */
-    { 0x04, 0x00, 0x07, 0x01, 0x00 },  /* PNP0400 - parallel port ECP   */
-    { 0x04, 0x01, 0x07, 0x01, 0x01 },  /* PNP0401 - parallel port EPP   */
-    { 0x0B, 0x00, 0x08, 0x03, 0x00 },  /* PNP0B00 - CMOS RTC            */
-    { 0x0C, 0x04, 0x0B, 0x80, 0x00 },  /* PNP0C04 - FPU/coprocessor     */
-    { 0x0C, 0x02, 0x08, 0x80, 0x00 },  /* PNP0C02 - motherboard rsrcs   */
+    { 0x05, 0x01, 0x07, 0x00, 0x02, 0x0000 },  /* PNP0501 - 16550A serial       */
+    { 0x03, 0x03, 0x09, 0x00, 0x00, 0x0000 },  /* PNP0303 - AT keyboard (i8042) */
+    { 0x0F, 0x03, 0x09, 0x02, 0x00, 0x0060 },  /* PNP0F03 - MS serial mouse     */
+    { 0x0F, 0x13, 0x09, 0x02, 0x00, 0x0060 },  /* PNP0F13 - PS/2 mouse (i8042)  */
+    { 0x07, 0x00, 0x01, 0x02, 0x00, 0x0000 },  /* PNP0700 - floppy controller   */
+    { 0x04, 0x00, 0x07, 0x01, 0x00, 0x0000 },  /* PNP0400 - parallel port ECP   */
+    { 0x04, 0x01, 0x07, 0x01, 0x01, 0x0000 },  /* PNP0401 - parallel port EPP   */
+    { 0x0B, 0x00, 0x08, 0x03, 0x00, 0x0000 },  /* PNP0B00 - CMOS RTC            */
+    { 0x0C, 0x04, 0x0B, 0x80, 0x00, 0x0000 },  /* PNP0C04 - FPU/coprocessor     */
+    { 0x0C, 0x02, 0x08, 0x80, 0x00, 0x0000 },  /* PNP0C02 - motherboard rsrcs   */
 };
 #define ISA_ID_TABLE_LEN (sizeof(isa_id_table) / sizeof(isa_id_table[0]))
 
@@ -173,8 +175,10 @@ static void
 scan_isa_devices(const uint8_t *aml, uint32_t aml_len,
                  int32_t devmgr_ep, int32_t src_ep, int32_t *req_id)
 {
-    /* Dedup: skip duplicate I/O base addresses (e.g. _HID + _CID on same device). */
-    uint16_t seen_io[16];
+    /* Dedup: skip re-publishing the same physical device (same PNP ID + I/O base).
+     * Keyed on (io_base<<16)|(b2<<8)|b3 so different devices sharing I/O ports
+     * (e.g. keyboard PNP0303 and mouse PNP0F13 both on 0x60) are kept distinct. */
+    uint32_t seen[16];
     uint32_t n_seen = 0;
 
     for (uint32_t i = 0; i + 5u <= aml_len; i++) {
@@ -261,20 +265,27 @@ scan_isa_devices(const uint8_t *aml, uint32_t aml_len,
             }
         }
 
+        /* Use the lookup table's default I/O base for devices that share ports
+         * with another controller (e.g. PS/2 mouse sharing i8042 at 0x60). */
         if (io_base == 0) {
-            continue;
+            if (entry->default_io != 0) {
+                io_base = entry->default_io;
+            } else {
+                continue;
+            }
         }
 
-        /* Skip duplicate I/O base (same device matched via _HID and _CID). */
+        /* Skip re-publishing the same physical device (_HID + _CID duplicate). */
+        uint32_t dedup_key = ((uint32_t)io_base << 16) | ((uint32_t)b2 << 8) | b3;
         uint32_t dup = 0;
         for (uint32_t s = 0; s < n_seen; s++) {
-            if (seen_io[s] == io_base) { dup = 1; break; }
+            if (seen[s] == dedup_key) { dup = 1; break; }
         }
         if (dup) {
             continue;
         }
         if (n_seen < 16u) {
-            seen_io[n_seen++] = io_base;
+            seen[n_seen++] = dedup_key;
         }
 
         (void)printf("[acpi-bus] PNP%02X%02X io=0x%04X irq=%u class=0x%02X\n",

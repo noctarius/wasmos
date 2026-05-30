@@ -5,6 +5,7 @@
 #include "memory.h"
 #include "native_driver.h"
 #include "string.h"
+#include "timer.h"
 #include "wasm_chardev.h"
 #include "wasmos_app_meta.h"
 #include "string.h"
@@ -608,10 +609,111 @@ pm_fs_read_blob_for_spawn(uint32_t pm_context_id,
     return 0;
 }
 
+int
+pm_handle_spawn_sync(uint32_t pm_context_id, const ipc_message_t *msg)
+{
+    uint32_t owner_context = 0;
+    process_t *caller = 0;
+    uint32_t parent_pid = 0;
+    uint32_t child_pid = 0;
+
+    if (g_pm.spawn.in_use) {
+        return -2;
+    }
+    if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
+        return -1;
+    }
+    caller = process_find_by_context(owner_context);
+    if (!caller) {
+        return -1;
+    }
+    parent_pid = caller->pid;
+
+    if (pm_spawn_module(parent_pid, (uint32_t)msg->arg0, &child_pid) != 0) {
+        return -1;
+    }
+    (void)pm_inherit_child_cwd(pm_context_id, owner_context, child_pid);
+
+    uint32_t timeout_ms = (uint32_t)msg->arg1;
+    g_pm.spawn.in_use = 1;
+    g_pm.spawn.is_sync = 1;
+    g_pm.spawn.reply_endpoint = msg->source;
+    g_pm.spawn.request_id = msg->request_id;
+    g_pm.spawn.parent_pid = parent_pid;
+    g_pm.spawn.parent_context_id = owner_context;
+    g_pm.spawn.sync_child_pid = child_pid;
+    g_pm.spawn.sync_timeout_ticks = (timeout_ms > 0)
+        ? (timer_ticks() + timer_ms_to_ticks(timeout_ms))
+        : 0;
+    return 0;
+}
+
+static void
+pm_poll_sync_spawn(uint32_t pm_context_id)
+{
+    ipc_message_t resp;
+
+    if (g_pm.spawn.sync_timeout_ticks > 0 &&
+        timer_ticks() >= g_pm.spawn.sync_timeout_ticks) {
+        g_pm.spawn.in_use = 0;
+        resp.type = PROC_IPC_ERROR;
+        resp.source = g_pm.proc_endpoint;
+        resp.destination = g_pm.spawn.reply_endpoint;
+        resp.request_id = g_pm.spawn.request_id;
+        resp.arg0 = PROC_IPC_SPAWN_SYNC;
+        resp.arg1 = (uint32_t)-1; /* timeout */
+        resp.arg2 = 0;
+        resp.arg3 = 0;
+        ipc_send_from(pm_context_id, g_pm.spawn.reply_endpoint, &resp);
+        return;
+    }
+
+    process_t *child = process_get(g_pm.spawn.sync_child_pid);
+    if (!child ||
+        child->state == PROCESS_STATE_ZOMBIE ||
+        child->exiting) {
+        g_pm.spawn.in_use = 0;
+        resp.type = PROC_IPC_ERROR;
+        resp.source = g_pm.proc_endpoint;
+        resp.destination = g_pm.spawn.reply_endpoint;
+        resp.request_id = g_pm.spawn.request_id;
+        resp.arg0 = PROC_IPC_SPAWN_SYNC;
+        resp.arg1 = (uint32_t)-2; /* child died before ready */
+        resp.arg2 = 0;
+        resp.arg3 = 0;
+        ipc_send_from(pm_context_id, g_pm.spawn.reply_endpoint, &resp);
+        return;
+    }
+
+    if (!child->ready) {
+        return;
+    }
+
+    g_pm.spawn.in_use = 0;
+    resp.type = PROC_IPC_RESP;
+    resp.source = g_pm.proc_endpoint;
+    resp.destination = g_pm.spawn.reply_endpoint;
+    resp.request_id = g_pm.spawn.request_id;
+    resp.arg0 = g_pm.spawn.sync_child_pid;
+    resp.arg1 = 0;
+    resp.arg2 = 0;
+    resp.arg3 = 0;
+    ipc_send_from(pm_context_id, g_pm.spawn.reply_endpoint, &resp);
+}
+
 void
 pm_poll_spawn(uint32_t pm_context_id)
 {
-    if (!g_pm.spawn.in_use || g_pm.fs_reply_endpoint == IPC_ENDPOINT_NONE) {
+    if (!g_pm.spawn.in_use) {
+        return;
+    }
+
+    if (g_pm.spawn.is_sync) {
+        pm_poll_sync_spawn(pm_context_id);
+        return;
+    }
+
+    if (g_pm.fs_reply_endpoint == IPC_ENDPOINT_NONE) {
         return;
     }
 
@@ -666,6 +768,39 @@ pm_poll_spawn(uint32_t pm_context_id)
     resp.arg2 = 0;
     resp.arg3 = 0;
     ipc_send_from(pm_context_id, g_pm.spawn.reply_endpoint, &resp);
+}
+
+int
+pm_handle_notify_ready(uint32_t pm_context_id, const ipc_message_t *msg)
+{
+    uint32_t owner_context = 0;
+    process_t *sender = 0;
+
+    if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
+        return -1;
+    }
+    sender = process_find_by_context(owner_context);
+    if (!sender) {
+        return -1;
+    }
+    process_notify_ready(sender);
+
+    if (g_pm.spawn.in_use &&
+        g_pm.spawn.is_sync &&
+        g_pm.spawn.sync_child_pid == sender->pid) {
+        ipc_message_t resp;
+        resp.type = PROC_IPC_RESP;
+        resp.source = g_pm.proc_endpoint;
+        resp.destination = g_pm.spawn.reply_endpoint;
+        resp.request_id = g_pm.spawn.request_id;
+        resp.arg0 = g_pm.spawn.sync_child_pid;
+        resp.arg1 = 0;
+        resp.arg2 = 0;
+        resp.arg3 = 0;
+        g_pm.spawn.in_use = 0;
+        ipc_send_from(pm_context_id, g_pm.spawn.reply_endpoint, &resp);
+    }
+    return 0;
 }
 
 void
@@ -991,6 +1126,7 @@ pm_handle_spawn_name(uint32_t pm_context_id, const ipc_message_t *msg)
     }
 
     g_pm.spawn.in_use = 1;
+    g_pm.spawn.is_sync = 0;
     g_pm.spawn.reply_endpoint = msg->source;
     g_pm.spawn.request_id = msg->request_id;
     g_pm.spawn.parent_pid = parent_pid;

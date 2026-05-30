@@ -2779,6 +2779,16 @@ m3ApiRawFunction(wasmos_proc_exit)
     m3ApiReturn(0);
 }
 
+m3ApiRawFunction(wasmos_proc_notify_ready)
+{
+    m3ApiReturnType(int32_t)
+    process_t *proc = process_get(process_current_pid());
+    if (proc) {
+        process_notify_ready(proc);
+    }
+    m3ApiReturn(0);
+}
+
 m3ApiRawFunction(wasmos_sched_ticks)
 {
     m3ApiReturnType(int32_t)
@@ -3351,6 +3361,7 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "sync_user_read", "i(*i)", wasmos_sync_user_read);
     rc |= wasm3_link_raw(module, "wasmos", "proc_count", "i()", wasmos_proc_count);
     rc |= wasm3_link_raw(module, "wasmos", "proc_exit", "i(i)", wasmos_proc_exit);
+    rc |= wasm3_link_raw(module, "wasmos", "proc_notify_ready", "i()", wasmos_proc_notify_ready);
     rc |= wasm3_link_raw(module, "wasmos", "sched_ticks", "i()", wasmos_sched_ticks);
     rc |= wasm3_link_raw(module, "wasmos", "sched_ready_count", "i()", wasmos_sched_ready_count);
     rc |= wasm3_link_raw(module, "wasmos", "sched_current_pid", "i()", wasmos_sched_current_pid);

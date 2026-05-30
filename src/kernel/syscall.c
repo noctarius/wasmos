@@ -546,6 +546,13 @@ x86_syscall_handler(syscall_frame_t *frame)
             process_yield(PROCESS_RUN_BLOCKED);
         }
     }
+    case WASMOS_SYSCALL_NOTIFY_READY: {
+        process_t *proc = process_get(process_current_pid());
+        if (proc) {
+            process_notify_ready(proc);
+        }
+        return 0;
+    }
     case WASMOS_SYSCALL_IPC_NOTIFY: {
         process_t *proc = process_get(process_current_pid());
         uint32_t endpoint = 0;

@@ -793,6 +793,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
         wasmos_sys_ipc_recv_loop();
     }
     log_msg("[fs-manager] services registered\n");
+    wasmos_sys_notify_ready(g_proc_endpoint, g_fs_endpoint);
 
     for (;;) {
         if (wasmos_ipc_recv(g_fs_endpoint) < 0) {

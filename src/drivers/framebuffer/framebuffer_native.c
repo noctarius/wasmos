@@ -199,6 +199,8 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
         return -1;
     }
 
+    api->proc_notify_ready();
+
     /* Main loop: prioritize control IPC so tty switch clear/replay requests
      * are applied promptly even if console ring backlog is large. */
     nd_ipc_message_t msg;

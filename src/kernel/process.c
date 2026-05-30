@@ -657,6 +657,7 @@ static void process_reset_slot(process_t *proc) {
     proc->in_hostcall = 0;
     proc->auto_reap = 0;
     proc->is_wasm = 0;
+    proc->ready = 0;
     proc->ctx = (process_context_t){0};
     proc->ctx_canary_pre = 0;
     proc->ctx_canary_post = 0;
@@ -1296,11 +1297,21 @@ void process_block_on_ipc(process_t *process) {
     if (!process) {
         return;
     }
+    if (!process->ready) {
+        process->ready = 1;
+    }
     thread_t *thread = process_thread_for_transition(process);
     process_set_blocked(process, thread, PROCESS_BLOCK_IPC, THREAD_BLOCK_IPC);
     if (thread) {
         thread->wait_target_pid = 0;
     }
+}
+
+void process_notify_ready(process_t *process) {
+    if (!process) {
+        return;
+    }
+    process->ready = 1;
 }
 
 int process_wait(process_t *process, uint32_t target_pid, int32_t *out_exit_status) {

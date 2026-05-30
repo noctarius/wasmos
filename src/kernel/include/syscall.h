@@ -16,7 +16,8 @@ typedef enum {
     WASMOS_SYSCALL_THREAD_EXIT = 9,
     WASMOS_SYSCALL_THREAD_CREATE = 10,
     WASMOS_SYSCALL_THREAD_JOIN = 11,
-    WASMOS_SYSCALL_THREAD_DETACH = 12
+    WASMOS_SYSCALL_THREAD_DETACH = 12,
+    WASMOS_SYSCALL_NOTIFY_READY = 13
 } wasmos_syscall_id_t;
 
 /* int 0x80 syscall ABI (current minimal contract):
@@ -51,6 +52,10 @@ typedef enum {
  *                   error. Calling thread blocks until target exits.
  * - THREAD_DETACH:  RDI=target_tid; RAX=0 on success, -1 on error. Detached
  *                   threads are not joinable and are reaped automatically.
+ * - NOTIFY_READY:   no args; RAX=0. Marks the calling process as ready so that
+ *                   a parent blocked in PROC_IPC_SPAWN_SYNC is unblocked.
+ *                   If no parent is waiting the flag is stored and checked on
+ *                   the next pm_poll_spawn iteration.
  */
 typedef struct {
     uint64_t r15;

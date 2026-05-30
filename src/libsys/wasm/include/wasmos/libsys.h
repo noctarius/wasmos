@@ -306,6 +306,48 @@ wasmos_sys_ipc_recv_loop(void)
     }
 }
 
+/* Send PROC_IPC_NOTIFY_READY to the process manager.  Call this once a service
+ * has finished initialising and is ready to accept requests.  The PM will
+ * immediately unblock any parent that is waiting in wasmos_sys_spawn_sync. */
+static inline void
+wasmos_sys_notify_ready(int32_t proc_endpoint, int32_t source_endpoint)
+{
+    (void)wasmos_ipc_send(proc_endpoint,
+                          source_endpoint,
+                          PROC_IPC_NOTIFY_READY,
+                          0, 0, 0, 0, 0);
+}
+
+/* Spawn a module by index and block until the child calls notify_ready (or
+ * first blocks on IPC as an implicit ready signal), or until timeout_ms
+ * milliseconds have elapsed (0 = wait forever).
+ * Returns the child PID on success, or a negative error code on failure or
+ * timeout. */
+static inline int32_t
+wasmos_sys_spawn_sync(int32_t proc_endpoint,
+                      int32_t reply_endpoint,
+                      int32_t module_index,
+                      int32_t timeout_ms,
+                      int32_t request_id)
+{
+    wasmos_ipc_message_t reply;
+    if (wasmos_ipc_call(proc_endpoint,
+                        reply_endpoint,
+                        PROC_IPC_SPAWN_SYNC,
+                        request_id,
+                        module_index,
+                        timeout_ms,
+                        0,
+                        0,
+                        &reply) != 0) {
+        return -1;
+    }
+    if (reply.type != PROC_IPC_RESP) {
+        return -1;
+    }
+    return (int32_t)reply.arg0;
+}
+
 static inline int32_t
 wasmos_sys_svc_lookup_retry(int32_t proc_endpoint,
                             int32_t reply_endpoint,

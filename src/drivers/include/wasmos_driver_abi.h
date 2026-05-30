@@ -44,6 +44,17 @@ enum {
      * arg0=((irq_mask<<16)|(cap_flags&0xFFFF)) arg1=path_len
      * arg2=((io_port_max<<16)|io_port_min)     arg3=reserved. */
     PROC_IPC_SPAWN_PATH_CAPS = 0x20A,
+    /* Spawn by module index and block until the child calls NOTIFY_READY (or
+     * first blocks on IPC as an implicit signal), or until the timeout expires.
+     * arg0=module_index  arg1=timeout_ms (0 = wait forever)
+     * arg2=reserved(0)   arg3=reserved(0).
+     * On success: PROC_IPC_RESP, arg0=child_pid.
+     * On timeout or child death before ready: PROC_IPC_ERROR, arg1=error_code. */
+    PROC_IPC_SPAWN_SYNC = 0x20B,
+    /* Service sends this to proc_endpoint when it has finished initialising and
+     * is ready to accept requests.  Fire-and-forget — no reply is sent back.
+     * arg0..arg3 = reserved(0). */
+    PROC_IPC_NOTIFY_READY = 0x20C,
     PROC_IPC_RESP = 0x280,
     PROC_IPC_ERROR = 0x2FF
 };

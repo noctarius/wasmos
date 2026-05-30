@@ -10,6 +10,7 @@ const KBD_IPC_SUBSCRIBE_RESP: i32 = 0x880;
 const KBD_IPC_KEY_NOTIFY:     i32 = 0x801;
 const SVC_IPC_REGISTER_REQ:   i32 = 0x220;
 const SVC_IPC_REGISTER_RESP:  i32 = 0x2A0;
+const PROC_IPC_NOTIFY_READY:  i32 = 0x20C;
 
 @external("wasmos", "io_in8")
 declare function io_in8(port: i32): i32;
@@ -142,6 +143,7 @@ export function initialize(_proc_endpoint: i32, _arg1: i32,
   } else {
     std.printf("[keyboard] driver starting (IRQ-driven)\n");
   }
+  ipc_send(_proc_endpoint, g_kbd_ep, PROC_IPC_NOTIFY_READY, 0, 0, 0, 0, 0);
 
   if (irq_ok != 0) {
     /* Polling fallback. */

@@ -2,6 +2,7 @@
 #include "stdio.h"
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
+#include "wasmos/libsys.h"
 #include "wasmos_driver_abi.h"
 #include "vt_types.h"
 
@@ -1447,6 +1448,7 @@ initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2, int32_t arg3)
     if (g_fb_ep != -1) {
         vt_fb_console_mode(1);
     }
+    wasmos_sys_notify_ready(proc_endpoint, g_vt_ep);
 
     for (;;) {
         int32_t rc = wasmos_ipc_recv(g_vt_ep);

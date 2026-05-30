@@ -64,6 +64,7 @@ typedef struct wasmos_driver_api {
 
     /* Process */
     void     (*proc_exit)(int code);
+    void     (*proc_notify_ready)(void);
 
     /* Early kernel log — ring buffer of all serial output before the VT is
      * ready.  early_log_size() returns bytes buffered.  early_log_copy()

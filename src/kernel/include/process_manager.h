@@ -54,6 +54,7 @@ void process_manager_inject_kill_owner_deny_test(void);
 void process_manager_inject_status_owner_deny_test(void);
 void process_manager_inject_spawn_owner_deny_test(void);
 process_run_result_t process_manager_entry(process_t *process, void *arg);
+void process_manager_on_child_ready(uint32_t pid);
 
 #ifdef __cplusplus
 }

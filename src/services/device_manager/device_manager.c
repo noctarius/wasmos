@@ -1649,6 +1649,7 @@ initialize(int32_t proc_endpoint,
     g_dm.need_fs_init = 0;
     g_dm.need_fs_manager = 0;
     g_dm.phase = HW_PHASE_SPAWN;
+    wasmos_sys_notify_ready(g_dm.proc_endpoint, g_dm.reply_endpoint);
 
     for (;;) {
         handle_query_endpoint();

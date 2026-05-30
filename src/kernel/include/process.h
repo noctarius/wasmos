@@ -120,6 +120,7 @@ typedef struct process {
     uint8_t in_hostcall;
     uint8_t auto_reap;
     uint8_t is_wasm;
+    uint8_t ready;
     uint64_t ctx_canary_pre;
     process_context_t ctx;
     uint64_t ctx_canary_post;
@@ -168,6 +169,7 @@ process_t *process_find_by_context(uint32_t context_id);
 uint32_t process_current_pid(void);
 void process_set_exit_status(process_t *process, int32_t exit_status);
 void process_block_on_ipc(process_t *process);
+void process_notify_ready(process_t *process);
 int process_wait(process_t *process, uint32_t target_pid, int32_t *out_exit_status);
 int process_thread_join(process_t *process, uint32_t target_tid, int32_t *out_exit_status);
 int process_thread_detach(process_t *process, uint32_t target_tid);

@@ -4,6 +4,7 @@
 #include "string.h"
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
+#include "wasmos/libsys.h"
 #include "wasmos_driver_abi.h"
 
 /*
@@ -4012,6 +4013,7 @@ initialize(int32_t proc_endpoint,
         fat_stall();
     }
     fat_log("fs-manager register ok\n");
+    wasmos_sys_notify_ready(proc_endpoint, g_reply_endpoint);
 
     for (;;) {
         if (g_fs_req.in_use) {

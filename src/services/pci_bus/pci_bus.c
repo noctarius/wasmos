@@ -138,5 +138,6 @@ initialize(int32_t proc_endpoint,
                           0,
                           0,
                           0);
+    wasmos_sys_notify_ready(proc_endpoint, source_endpoint);
     return 0;
 }

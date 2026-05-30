@@ -475,5 +475,6 @@ done:
     (void)wasmos_ipc_send(devmgr_ep, src_ep,
                           DEVMGR_ACPI_SCAN_DONE, req_id,
                           0, 0, 0, 0);
+    wasmos_sys_notify_ready(proc_endpoint, src_ep);
     return 0;
 }

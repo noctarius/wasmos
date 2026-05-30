@@ -1015,6 +1015,20 @@ pm_handle_notify_ready(uint32_t pm_context_id, const ipc_message_t *msg)
         g_pm.spawn.in_use = 0;
         ipc_send_from(pm_context_id, g_pm.spawn.reply_endpoint, &resp);
     }
+
+    /* Ack the sender so wasmos_sys_notify_ready() can unblock.  This must
+     * happen after the sync-spawn response above to avoid a window where the
+     * child resumes and destroys its endpoint before the parent is unblocked. */
+    ipc_message_t ack;
+    ack.type = PROC_IPC_RESP;
+    ack.source = g_pm.proc_endpoint;
+    ack.destination = msg->source;
+    ack.request_id = msg->request_id;
+    ack.arg0 = 0;
+    ack.arg1 = 0;
+    ack.arg2 = 0;
+    ack.arg3 = 0;
+    ipc_send_from(pm_context_id, msg->source, &ack);
     return 0;
 }
 

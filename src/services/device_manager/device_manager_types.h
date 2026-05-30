@@ -175,6 +175,7 @@ typedef struct {
     uint32_t acpi_match_rule_count;
     uint8_t boot_mount_ready;
     uint8_t user_mount_ready;
+    uint8_t ready_notified;
 } device_manager_state_t;
 
 #endif

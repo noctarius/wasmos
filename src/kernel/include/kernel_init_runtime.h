@@ -22,6 +22,7 @@ typedef struct {
     uint32_t fs_manager_index;
     uint32_t fs_init_index;
     uint32_t device_manager_index;
+    uint32_t dm_pid;
     uint8_t wasm3_probe_done;
 } init_state_t;
 

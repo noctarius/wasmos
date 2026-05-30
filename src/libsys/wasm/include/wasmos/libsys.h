@@ -348,6 +348,36 @@ wasmos_sys_spawn_sync(int32_t proc_endpoint,
     return (int32_t)reply.arg0;
 }
 
+/* Spawn by path and block until the child calls notify_ready (or first blocks
+ * on IPC as an implicit ready signal), or until timeout_ms milliseconds have
+ * elapsed (0 = wait forever).  The caller must write the path bytes to the FS
+ * buffer before calling.  Returns the child PID on success or a negative error
+ * code on failure or timeout. */
+static inline int32_t
+wasmos_sys_spawn_path_sync(int32_t proc_endpoint,
+                           int32_t reply_endpoint,
+                           int32_t path_len,
+                           int32_t timeout_ms,
+                           int32_t request_id)
+{
+    wasmos_ipc_message_t reply;
+    if (wasmos_ipc_call(proc_endpoint,
+                        reply_endpoint,
+                        PROC_IPC_SPAWN_PATH_SYNC,
+                        request_id,
+                        0,
+                        path_len,
+                        0,
+                        timeout_ms,
+                        &reply) != 0) {
+        return -1;
+    }
+    if (reply.type != PROC_IPC_RESP) {
+        return -1;
+    }
+    return (int32_t)reply.arg0;
+}
+
 static inline int32_t
 wasmos_sys_svc_lookup_retry(int32_t proc_endpoint,
                             int32_t reply_endpoint,

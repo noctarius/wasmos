@@ -331,15 +331,24 @@ static void
 spawn_font_dependency_or_stall(void)
 {
     char dep_path[96];
+    uint32_t path_len = 0;
     trace_line("[sysinit] spawn font-service (dep)\n");
-    if (target_spawn_path("font-service", dep_path, sizeof(dep_path)) != 0 ||
-        spawn_path(dep_path) != 0) {
+    if (target_spawn_path("font-service", dep_path, sizeof(dep_path)) != 0) {
         fatal_stall("[sysinit] spawn failed: font-service\n");
     }
-    /* Let service registration settle before compositor starts. */
-    for (uint32_t wait = 0; wait < SYSINIT_DEP_SETTLE_YIELDS; ++wait) {
-        wasmos_sched_yield();
+    while (dep_path[path_len]) {
+        path_len++;
     }
+    if (path_len == 0 || path_len > 240u ||
+        wasmos_fs_buffer_write((int32_t)(uintptr_t)dep_path, (int32_t)path_len, 0) != 0 ||
+        wasmos_sys_spawn_path_sync(g_state.proc_endpoint,
+                                   g_state.reply_endpoint,
+                                   (int32_t)path_len,
+                                   5000,
+                                   g_state.spawn_request_id) < 0) {
+        fatal_stall("[sysinit] spawn failed: font-service\n");
+    }
+    g_state.spawn_request_id++;
 }
 
 static int

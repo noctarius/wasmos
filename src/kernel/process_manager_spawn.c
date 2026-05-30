@@ -614,6 +614,7 @@ pm_handle_spawn_sync(uint32_t pm_context_id, const ipc_message_t *msg)
 {
     uint32_t owner_context = 0;
     process_t *caller = 0;
+    process_t *sync_child = 0;
     uint32_t parent_pid = 0;
     uint32_t child_pid = 0;
 
@@ -642,6 +643,10 @@ pm_handle_spawn_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     g_pm.spawn.parent_pid = parent_pid;
     g_pm.spawn.parent_context_id = owner_context;
     g_pm.spawn.sync_child_pid = child_pid;
+    sync_child = process_get(child_pid);
+    if (sync_child && !sync_child->is_wasm) {
+        process_set_require_explicit_ready(sync_child);
+    }
     g_pm.spawn.sync_timeout_ticks = (timeout_ms > 0)
         ? (timer_ticks() + timer_ms_to_ticks(timeout_ms))
         : 0;
@@ -654,6 +659,7 @@ pm_handle_spawn_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     pm_spawn_caps_t caps = {0};
     uint32_t owner_context = 0;
     process_t *caller = 0;
+    process_t *sync_child = 0;
     uint32_t parent_pid = 0;
     uint32_t child_pid = 0;
 
@@ -703,6 +709,10 @@ pm_handle_spawn_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     g_pm.spawn.parent_pid = parent_pid;
     g_pm.spawn.parent_context_id = owner_context;
     g_pm.spawn.sync_child_pid = child_pid;
+    sync_child = process_get(child_pid);
+    if (sync_child && !sync_child->is_wasm) {
+        process_set_require_explicit_ready(sync_child);
+    }
     g_pm.spawn.sync_timeout_ticks = (timeout_ms > 0)
         ? (timer_ticks() + timer_ms_to_ticks(timeout_ms)) : 0;
     return 0;
@@ -713,6 +723,7 @@ pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t *msg)
 {
     uint32_t owner_context = 0;
     process_t *caller = 0;
+    process_t *sync_child = 0;
     uint32_t parent_pid = 0;
     uint32_t path_len = (uint32_t)msg->arg1;
     uint32_t timeout_ms = (uint32_t)msg->arg3;
@@ -764,6 +775,10 @@ pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     g_pm.spawn.parent_pid = parent_pid;
     g_pm.spawn.parent_context_id = owner_context;
     g_pm.spawn.sync_child_pid = child_pid;
+    sync_child = process_get(child_pid);
+    if (sync_child && !sync_child->is_wasm) {
+        process_set_require_explicit_ready(sync_child);
+    }
     g_pm.spawn.sync_timeout_ticks = (timeout_ms > 0)
         ? (timer_ticks() + timer_ms_to_ticks(timeout_ms)) : 0;
     return 0;
@@ -779,6 +794,7 @@ pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     pm_spawn_caps_t caps = {0};
     uint32_t owner_context = 0;
     process_t *caller = 0;
+    process_t *sync_child = 0;
     uint32_t parent_pid = 0;
     const uint8_t *caller_fs_buf = 0;
     char path[256];
@@ -838,6 +854,10 @@ pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     g_pm.spawn.parent_pid = parent_pid;
     g_pm.spawn.parent_context_id = owner_context;
     g_pm.spawn.sync_child_pid = child_pid;
+    sync_child = process_get(child_pid);
+    if (sync_child && !sync_child->is_wasm) {
+        process_set_require_explicit_ready(sync_child);
+    }
     g_pm.spawn.sync_timeout_ticks = (timeout_ms > 0)
         ? (timer_ticks() + timer_ms_to_ticks(timeout_ms)) : 0;
     return 0;

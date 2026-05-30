@@ -23,10 +23,14 @@
 #define ICW4_8086 0x01
 #define PIC_EOI 0x20
 
+/* IPC message type sent to msg_endpoint when an IRQ fires. */
+#define IPC_IRQ_EVENT_TYPE 0xFF00u
+
 typedef struct {
     uint8_t in_use;
     uint32_t owner_context_id;
-    uint32_t endpoint;
+    uint32_t endpoint;     /* notification endpoint (IPC_ENDPOINT_NONE if unused) */
+    uint32_t msg_endpoint; /* message endpoint: IRQ delivered as IPC_IRQ_EVENT_TYPE msg */
 } irq_route_t;
 
 static irq_route_t g_irq_routes[IRQ_COUNT];
@@ -129,6 +133,7 @@ void x86_irq_init(void) {
         routes[i].in_use = 0;
         routes[i].owner_context_id = 0;
         routes[i].endpoint = IPC_ENDPOINT_NONE;
+        routes[i].msg_endpoint = IPC_ENDPOINT_NONE;
     }
 
     /* Preserve the pre-existing mask state across the PIC remap so only the
@@ -189,9 +194,15 @@ int x86_irq_unmask(uint32_t irq_line) {
     return 0;
 }
 
-int x86_irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint) {
+static int
+x86_irq_register_common(uint32_t context_id, uint32_t irq_line, uint32_t endpoint,
+                         uint32_t msg_endpoint)
+{
     irq_route_t *routes = irq_routes_ptr();
-    if (irq_line >= IRQ_COUNT || endpoint == IPC_ENDPOINT_NONE) {
+    if (irq_line >= IRQ_COUNT) {
+        return -1;
+    }
+    if (endpoint == IPC_ENDPOINT_NONE && msg_endpoint == IPC_ENDPOINT_NONE) {
         return -1;
     }
     if (policy_authorize(context_id, POLICY_ACTION_IRQ_ROUTE, irq_line) != 0) {
@@ -199,7 +210,8 @@ int x86_irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint) 
     }
 
     uint32_t owner_context_id = 0;
-    if (ipc_endpoint_owner(endpoint, &owner_context_id) != IPC_OK ||
+    uint32_t ep_to_check = (endpoint != IPC_ENDPOINT_NONE) ? endpoint : msg_endpoint;
+    if (ipc_endpoint_owner(ep_to_check, &owner_context_id) != IPC_OK ||
         owner_context_id != context_id) {
         return -1;
     }
@@ -207,8 +219,17 @@ int x86_irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint) 
     routes[irq_line].in_use = 1;
     routes[irq_line].owner_context_id = context_id;
     routes[irq_line].endpoint = endpoint;
+    routes[irq_line].msg_endpoint = msg_endpoint;
     x86_irq_unmask(irq_line);
     return 0;
+}
+
+int x86_irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint) {
+    return x86_irq_register_common(context_id, irq_line, endpoint, IPC_ENDPOINT_NONE);
+}
+
+int x86_irq_register_msg(uint32_t context_id, uint32_t irq_line, uint32_t msg_endpoint) {
+    return x86_irq_register_common(context_id, irq_line, IPC_ENDPOINT_NONE, msg_endpoint);
 }
 
 int x86_irq_unregister(uint32_t context_id, uint32_t irq_line) {
@@ -227,6 +248,7 @@ int x86_irq_unregister(uint32_t context_id, uint32_t irq_line) {
     route->in_use = 0;
     route->owner_context_id = 0;
     route->endpoint = IPC_ENDPOINT_NONE;
+    route->msg_endpoint = IPC_ENDPOINT_NONE;
     x86_irq_mask(irq_line);
     return 0;
 }
@@ -255,7 +277,20 @@ void x86_irq_handler(uint64_t vector) {
         timer_handle_irq();
     }
     if (route->in_use) {
-        ipc_notify_from(IPC_CONTEXT_KERNEL, route->endpoint);
+        if (route->msg_endpoint != IPC_ENDPOINT_NONE) {
+            ipc_message_t irq_msg;
+            irq_msg.type = IPC_IRQ_EVENT_TYPE;
+            irq_msg.request_id = (int32_t)irq_line;
+            irq_msg.source = IPC_ENDPOINT_NONE;
+            irq_msg.destination = route->msg_endpoint;
+            irq_msg.arg0 = (int32_t)irq_line;
+            irq_msg.arg1 = 0;
+            irq_msg.arg2 = 0;
+            irq_msg.arg3 = 0;
+            ipc_send_from(IPC_CONTEXT_KERNEL, route->msg_endpoint, &irq_msg);
+        } else {
+            ipc_notify_from(IPC_CONTEXT_KERNEL, route->endpoint);
+        }
     }
     pic_send_eoi(irq_line);
 }

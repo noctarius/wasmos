@@ -18,3 +18,7 @@ entry_arg_bindings = ["proc.endpoint"]
 [[capabilities]]
 name = "io.port"
 flags = 0
+
+[[capabilities]]
+name = "irq.route"
+flags = 0

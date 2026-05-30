@@ -648,6 +648,201 @@ pm_handle_spawn_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     return 0;
 }
 
+int
+pm_handle_spawn_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
+{
+    pm_spawn_caps_t caps = {0};
+    uint32_t owner_context = 0;
+    process_t *caller = 0;
+    uint32_t parent_pid = 0;
+    uint32_t child_pid = 0;
+
+    if (g_pm.spawn.in_use) {
+        return -2;
+    }
+    if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
+        return -1;
+    }
+    caller = process_find_by_context(owner_context);
+    if (!caller) {
+        return -1;
+    }
+    parent_pid = caller->pid;
+
+    caps.valid = 1;
+    caps.cap_flags   = (uint32_t)msg->arg1;
+    caps.io_port_min = (uint16_t)((uint32_t)msg->arg2 & 0xFFFFu);
+    caps.io_port_max = (uint16_t)(((uint32_t)msg->arg2 >> 16) & 0xFFFFu);
+    caps.irq_mask    = (uint16_t)((uint32_t)msg->arg3 & 0xFFFFu);
+    uint32_t timeout_ms = (uint32_t)msg->arg3 >> 16;
+    if ((caps.cap_flags & DEVMGR_CAP_IO_PORT) == 0) {
+        caps.io_port_min = 0;
+        caps.io_port_max = 0;
+    }
+    if ((caps.cap_flags & DEVMGR_CAP_DMA) != 0) {
+        caps.dma_direction_flags = WASMOS_DMA_DIR_BIDIR;
+        caps.dma_max_bytes = 4096u;
+        caps.dma_window_count = 1;
+        caps.dma_windows[0].base = 0;
+        caps.dma_windows[0].length = 0x80000000ull;
+    }
+
+    if (pm_spawn_module(parent_pid, (uint32_t)msg->arg0, &child_pid) != 0) {
+        return -1;
+    }
+    (void)pm_inherit_child_cwd(pm_context_id, owner_context, child_pid);
+    if (pm_apply_spawn_caps(child_pid, &caps) != 0) {
+        (void)process_kill(child_pid, -1);
+        return -1;
+    }
+
+    g_pm.spawn.in_use = 1;
+    g_pm.spawn.is_sync = 1;
+    g_pm.spawn.reply_endpoint = msg->source;
+    g_pm.spawn.request_id = msg->request_id;
+    g_pm.spawn.parent_pid = parent_pid;
+    g_pm.spawn.parent_context_id = owner_context;
+    g_pm.spawn.sync_child_pid = child_pid;
+    g_pm.spawn.sync_timeout_ticks = (timeout_ms > 0)
+        ? (timer_ticks() + timer_ms_to_ticks(timeout_ms)) : 0;
+    return 0;
+}
+
+int
+pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t *msg)
+{
+    uint32_t owner_context = 0;
+    process_t *caller = 0;
+    uint32_t parent_pid = 0;
+    uint32_t path_len = (uint32_t)msg->arg1;
+    uint32_t timeout_ms = (uint32_t)msg->arg3;
+    const uint8_t *caller_fs_buf = 0;
+    char path[256];
+    const uint8_t *pm_fs_buf = 0;
+    uint32_t blob_size = 0;
+    uint32_t child_pid = 0;
+
+    if (g_pm.spawn.in_use) {
+        return -2;
+    }
+    if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
+        return -1;
+    }
+    caller = process_find_by_context(owner_context);
+    if (!caller) {
+        return -1;
+    }
+    parent_pid = caller->pid;
+    if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE || path_len == 0 || path_len >= sizeof(path)) {
+        return -1;
+    }
+    caller_fs_buf = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, owner_context);
+    if (!caller_fs_buf || path_len >= process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM)) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < path_len; ++i) {
+        path[i] = (char)caller_fs_buf[i];
+    }
+    path[path_len] = '\0';
+
+    pm_fs_buf = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
+    if (!pm_fs_buf) {
+        return -1;
+    }
+    if (pm_fs_read_blob_for_spawn(pm_context_id, path, path_len, &blob_size) != 0) {
+        return -1;
+    }
+    if (pm_spawn_from_buffer(parent_pid, pm_fs_buf, blob_size, 0, 0, &child_pid) != 0) {
+        return -1;
+    }
+    (void)pm_inherit_child_cwd(pm_context_id, owner_context, child_pid);
+
+    g_pm.spawn.in_use = 1;
+    g_pm.spawn.is_sync = 1;
+    g_pm.spawn.reply_endpoint = msg->source;
+    g_pm.spawn.request_id = msg->request_id;
+    g_pm.spawn.parent_pid = parent_pid;
+    g_pm.spawn.parent_context_id = owner_context;
+    g_pm.spawn.sync_child_pid = child_pid;
+    g_pm.spawn.sync_timeout_ticks = (timeout_ms > 0)
+        ? (timer_ticks() + timer_ms_to_ticks(timeout_ms)) : 0;
+    return 0;
+}
+
+int
+pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
+{
+    uint32_t caps_arg0 = (uint32_t)msg->arg0;
+    uint32_t caps_arg2 = (uint32_t)msg->arg2;
+    uint32_t path_len = (uint32_t)msg->arg1;
+    uint32_t timeout_ms = (uint32_t)msg->arg3;
+    pm_spawn_caps_t caps = {0};
+    uint32_t owner_context = 0;
+    process_t *caller = 0;
+    uint32_t parent_pid = 0;
+    const uint8_t *caller_fs_buf = 0;
+    char path[256];
+    const uint8_t *pm_fs_buf = 0;
+    uint32_t blob_size = 0;
+    uint32_t child_pid = 0;
+
+    caps.valid = 1;
+    caps.cap_flags   = caps_arg0 & 0xFFFFu;
+    caps.irq_mask    = (uint16_t)(caps_arg0 >> 16);
+    caps.io_port_min = (uint16_t)(caps_arg2 & 0xFFFFu);
+    caps.io_port_max = (uint16_t)(caps_arg2 >> 16);
+
+    if (g_pm.spawn.in_use) {
+        return -2;
+    }
+    if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
+        return -1;
+    }
+    caller = process_find_by_context(owner_context);
+    if (!caller) {
+        return -1;
+    }
+    parent_pid = caller->pid;
+    if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE || path_len == 0 || path_len >= sizeof(path)) {
+        return -1;
+    }
+    caller_fs_buf = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, owner_context);
+    if (!caller_fs_buf || path_len >= process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM)) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < path_len; ++i) {
+        path[i] = (char)caller_fs_buf[i];
+    }
+    path[path_len] = '\0';
+
+    pm_fs_buf = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
+    if (!pm_fs_buf) {
+        return -1;
+    }
+    if (pm_fs_read_blob_for_spawn(pm_context_id, path, path_len, &blob_size) != 0) {
+        return -1;
+    }
+    if (pm_spawn_from_buffer(parent_pid, pm_fs_buf, blob_size, 0, 0, &child_pid) != 0) {
+        return -1;
+    }
+    (void)pm_inherit_child_cwd(pm_context_id, owner_context, child_pid);
+    if (pm_apply_spawn_caps(child_pid, &caps) != 0) {
+        (void)process_kill(child_pid, -1);
+        return -1;
+    }
+
+    g_pm.spawn.in_use = 1;
+    g_pm.spawn.is_sync = 1;
+    g_pm.spawn.reply_endpoint = msg->source;
+    g_pm.spawn.request_id = msg->request_id;
+    g_pm.spawn.parent_pid = parent_pid;
+    g_pm.spawn.parent_context_id = owner_context;
+    g_pm.spawn.sync_child_pid = child_pid;
+    g_pm.spawn.sync_timeout_ticks = (timeout_ms > 0)
+        ? (timer_ticks() + timer_ms_to_ticks(timeout_ms)) : 0;
+    return 0;
+}
+
 static void
 pm_poll_sync_spawn(uint32_t pm_context_id)
 {

@@ -250,7 +250,11 @@ cli_parse_name_value(const char *line, char *name, int name_cap,
         return -1;
     }
     nlen = eq;
-    while (nlen > 0 && (line[start + nlen - 1] == ' ' || line[start + nlen - 1] == '\t')) {
+    while (nlen > 0 &&
+           (line[start + nlen - 1] == ' ' ||
+            line[start + nlen - 1] == '\t' ||
+            line[start + nlen - 1] == '\r' ||
+            line[start + nlen - 1] == '\n')) {
         nlen--;
     }
     if (nlen <= 0 || nlen >= name_cap) {
@@ -270,7 +274,11 @@ cli_parse_name_value(const char *line, char *name, int name_cap,
             vlen++;
         }
         value[vlen] = '\0';
-        while (vlen > 0 && (value[vlen - 1] == ' ' || value[vlen - 1] == '\t')) {
+        while (vlen > 0 &&
+               (value[vlen - 1] == ' ' ||
+                value[vlen - 1] == '\t' ||
+                value[vlen - 1] == '\r' ||
+                value[vlen - 1] == '\n')) {
             value[vlen - 1] = '\0';
             vlen--;
         }
@@ -294,6 +302,9 @@ cli_env_apply_export_line(const char *line)
     if (cli_parse_name_value(line, name, (int)sizeof(name), value, (int)sizeof(value), &nlen, &vlen) != 0) {
         return -1;
     }
+    if (cli_env_set(name, value) != 0) {
+        return -1;
+    }
     return wasmos_env_set(name, nlen, value, vlen);
 }
 
@@ -311,45 +322,223 @@ cli_env_set_local_line(const char *line)
 static int
 cli_echo_env_expr(const char *expr)
 {
-    char name[CLI_ENV_NAME_MAX];
+    char out[512];
+    char expanded_expr[512];
+    uint32_t expanded_len = 0;
+    uint32_t out_len = 0;
     int32_t i = 0;
-    int32_t nlen = 0;
-    const char *value = 0;
+    int no_newline = 0;
+    int escape_mode = 0;
+    int parse_flags = 1;
+    int wrote_any = 0;
     if (!expr) {
         return -1;
     }
+    while (expr[i] && expanded_len + 1u < sizeof(expanded_expr)) {
+        if (expr[i] == '$' && expr[i + 1] == '{') {
+            char name[CLI_ENV_NAME_MAX];
+            char kbuf[CLI_ENV_VALUE_MAX];
+            const char *val = 0;
+            int32_t nlen = 0;
+            int32_t j = i + 2;
+            while (expr[j] && expr[j] != '}' && nlen + 1 < (int32_t)sizeof(name)) {
+                name[nlen++] = expr[j++];
+            }
+            if (expr[j] == '}') {
+                name[nlen] = '\0';
+                if (nlen > 0) {
+                    val = cli_env_get(name);
+                    if (!val) {
+                        int32_t got = wasmos_env_get(name, nlen, kbuf, (int32_t)sizeof(kbuf));
+                        if (got >= 0) {
+                            val = kbuf;
+                        }
+                    }
+                    if (val) {
+                        for (int32_t vi = 0; val[vi] && expanded_len + 1u < sizeof(expanded_expr); ++vi) {
+                            expanded_expr[expanded_len++] = val[vi];
+                        }
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+        }
+        expanded_expr[expanded_len++] = expr[i++];
+    }
+    expanded_expr[expanded_len] = '\0';
+    expr = expanded_expr;
+    i = 0;
+
     while (expr[i] == ' ' || expr[i] == '\t') {
         i++;
     }
-    if (expr[i] != '$' || expr[i + 1] != '{') {
-        return -1;
+
+    while (parse_flags) {
+        int32_t j = i;
+        int flag_ok = 1;
+        while (expr[j] == ' ' || expr[j] == '\t') {
+            j++;
+        }
+        if (expr[j] == '\0') {
+            i = j;
+            break;
+        }
+        if (expr[j] == '-' && expr[j + 1] == '-') {
+            int32_t k = j + 2;
+            while (expr[k] == ' ' || expr[k] == '\t') {
+                k++;
+            }
+            i = k;
+            break;
+        }
+        if (expr[j] != '-' || expr[j + 1] == '\0') {
+            i = j;
+            break;
+        }
+        for (int32_t k = j + 1; expr[k] && expr[k] != ' ' && expr[k] != '\t'; ++k) {
+            if (expr[k] == 'n') {
+                no_newline = 1;
+            } else if (expr[k] == 'e') {
+                escape_mode = 1;
+            } else if (expr[k] == 'E') {
+                escape_mode = 0;
+            } else {
+                flag_ok = 0;
+                break;
+            }
+            j = k + 1;
+        }
+        if (!flag_ok) {
+            break;
+        }
+        i = j;
     }
-    i += 2;
-    while (expr[i] && expr[i] != '}' && nlen + 1 < (int32_t)sizeof(name)) {
-        name[nlen++] = expr[i++];
-    }
-    if (expr[i] != '}' || nlen <= 0) {
-        return -1;
-    }
-    name[nlen] = '\0';
-    i++;
-    while (expr[i] == ' ' || expr[i] == '\t') {
-        i++;
-    }
-    if (expr[i] != '\0') {
-        return -1;
-    }
-    value = cli_env_get(name);
-    if (value) {
-        console_write(value);
-    } else {
-        char kbuf[CLI_ENV_VALUE_MAX];
-        int32_t got = wasmos_env_get(name, nlen, kbuf, (int32_t)sizeof(kbuf));
-        if (got >= 0) {
-            console_write(kbuf);
+
+    while (expr[i]) {
+        int in_single = 0;
+        int in_double = 0;
+        int token_started = 0;
+        int token_emitted = 0;
+        while (expr[i] == ' ' || expr[i] == '\t') {
+            i++;
+        }
+        if (expr[i] == '\0') {
+            break;
+        }
+        if (wrote_any && out_len + 1u < sizeof(out)) {
+            out[out_len++] = ' ';
+        }
+        token_emitted = 1;
+        while (expr[i]) {
+            char c = expr[i];
+            if (!in_single && !in_double && (c == ' ' || c == '\t')) {
+                break;
+            }
+            if (!in_double && c == '\'') {
+                in_single = !in_single;
+                token_started = 1;
+                i++;
+                continue;
+            }
+            if (!in_single && c == '"') {
+                in_double = !in_double;
+                token_started = 1;
+                i++;
+                continue;
+            }
+            if (c == '\\') {
+                char next = expr[i + 1];
+                token_started = 1;
+                if (next == '\0') {
+                    i++;
+                    continue;
+                }
+                if (!in_single) {
+                    char emit = next;
+                    if (escape_mode) {
+                        if (next == 'n') {
+                            emit = '\n';
+                        } else if (next == 't') {
+                            emit = '\t';
+                        } else if (next == 'r') {
+                            emit = '\r';
+                        } else if (next == '0') {
+                            emit = '\0';
+                        } else if (next == 'a') {
+                            emit = '\a';
+                        } else if (next == 'b') {
+                            emit = '\b';
+                        } else if (next == 'f') {
+                            emit = '\f';
+                        } else if (next == 'v') {
+                            emit = '\v';
+                        }
+                    }
+                    if (emit != '\0' && out_len + 1u < sizeof(out)) {
+                        out[out_len++] = emit;
+                    }
+                    i += 2;
+                    continue;
+                }
+            }
+            if (!in_single && c == '$' && expr[i + 1] == '{') {
+                char name[CLI_ENV_NAME_MAX];
+                char kbuf[CLI_ENV_VALUE_MAX];
+                int32_t nlen = 0;
+                const char *val = 0;
+                i += 2;
+                while (expr[i] && expr[i] != '}' && nlen + 1 < (int32_t)sizeof(name)) {
+                    name[nlen++] = expr[i++];
+                }
+                if (expr[i] == '}') {
+                    name[nlen] = '\0';
+                    i++;
+                    token_started = 1;
+                    if (nlen > 0) {
+                        val = cli_env_get(name);
+                        if (!val) {
+                            int32_t got = wasmos_env_get(name, nlen, kbuf, (int32_t)sizeof(kbuf));
+                            if (got >= 0) {
+                                val = kbuf;
+                            }
+                        }
+                        if (val) {
+                            for (int32_t vi = 0; val[vi] && out_len + 1u < sizeof(out); ++vi) {
+                                out[out_len++] = val[vi];
+                            }
+                        }
+                    }
+                    continue;
+                }
+                if (out_len + 2u < sizeof(out)) {
+                    out[out_len++] = '$';
+                    out[out_len++] = '{';
+                }
+                for (int32_t ni = 0; ni < nlen && out_len + 1u < sizeof(out); ++ni) {
+                    out[out_len++] = name[ni];
+                }
+                continue;
+            }
+            token_started = 1;
+            if (out_len + 1u < sizeof(out)) {
+                out[out_len++] = c;
+            }
+            i++;
+        }
+        if (in_single || in_double) {
+            return -1;
+        }
+        if (token_emitted && token_started) {
+            wrote_any = 1;
         }
     }
-    console_write("\n");
+
+    out[out_len] = '\0';
+    console_write(out);
+    if (!no_newline) {
+        console_write("\n");
+    }
     return 0;
 }
 
@@ -1569,6 +1758,16 @@ cli_script_on_echo(void *user, const char *text)
     console_write("\n");
 }
 
+static void
+cli_script_on_echo_ex(void *user, const char *text, int newline)
+{
+    (void)user;
+    console_write(text);
+    if (newline) {
+        console_write("\n");
+    }
+}
+
 static int
 cli_script_on_export(void *user, const char *name, const char *value)
 {
@@ -1592,6 +1791,7 @@ cli_run_script(const char *script_path)
     ops.on_exec     = cli_script_on_exec;
     ops.on_wait_svc = cli_script_on_wait_svc;
     ops.on_echo     = cli_script_on_echo;
+    ops.on_echo_ex  = cli_script_on_echo_ex;
     ops.on_export   = cli_script_on_export;
     ops.user        = 0;
     return wasmos_script_run(&script_state, &ops, script_path);
@@ -1605,7 +1805,7 @@ cli_handle_line(void)
         return 0;
     }
     if (line_eq_ci("help")) {
-        console_write("commands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, echo ${VAR}, tty <0-3>, halt, reboot\n");
+        console_write("commands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, echo [-n] [-e|-E] [--] [text|${VAR}...], tty <0-3>, halt, reboot\n");
         return 0;
     }
     if (line_eq_ci("mount")) {
@@ -1721,7 +1921,7 @@ cli_handle_line(void)
     }
     if (g_line_len > 5 && line_starts_with_ci("echo ")) {
         if (cli_echo_env_expr(&g_line[5]) != 0) {
-            console_write("echo usage: echo ${VAR}\n");
+            console_write("echo usage: echo [-n] [-e|-E] [--] [text|${VAR}...]\n");
         }
         return 0;
     }
@@ -2061,7 +2261,7 @@ cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg)
         (void)cli_switch_tty(1, 1, 0);
     }
     if (g_home_tty == 1) {
-        console_write("WAMOS CLI\ncommands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, echo ${VAR}, tty <0-3>, halt, reboot\n");
+        console_write("WAMOS CLI\ncommands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, echo [-n] [-e|-E] [--] [text|${VAR}...], tty <0-3>, halt, reboot\n");
     }
     wasmos_sys_notify_ready(g_proc_endpoint, g_reply_endpoint);
     g_phase = CLI_PHASE_PROMPT;

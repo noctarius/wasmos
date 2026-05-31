@@ -54,8 +54,10 @@ publish_record(int32_t devmgr_endpoint,
     uint32_t arg1 = ((uint32_t)rec->subclass << 24) |
                     ((uint32_t)rec->prog_if << 16) |
                     (uint32_t)rec->vendor_id;
-    uint32_t arg2 = (uint32_t)rec->device_id;
-    uint32_t arg3 = ((uint32_t)rec->irq_hint << 8) | (uint32_t)rec->mmio_hint;
+    uint32_t arg2 = ((uint32_t)rec->io_port_base << 16) | (uint32_t)rec->device_id;
+    uint32_t arg3 = ((uint32_t)rec->io_port_base << 16) |
+                    ((uint32_t)rec->irq_hint << 8) |
+                    (uint32_t)rec->mmio_hint;
     (void)wasmos_ipc_send(devmgr_endpoint,
                           source_endpoint,
                           DEVMGR_PUBLISH_DEVICE,
@@ -115,6 +117,7 @@ initialize(int32_t proc_endpoint,
                 rec.prog_if = (uint8_t)((class_reg >> 8) & 0xFFu);
                 uint32_t bar0 = pci_config_read32((uint8_t)bus, device, function, 0x10);
                 rec.mmio_hint = ((bar0 & 0x1u) == 0u && (bar0 & 0xFFFFFFF0u) != 0u) ? 1u : 0u;
+                rec.io_port_base = ((bar0 & 0x1u) != 0u) ? (uint16_t)(bar0 & 0xFFFCu) : 0u;
                 uint32_t irq_reg = pci_config_read32((uint8_t)bus, device, function, 0x3C);
                 rec.irq_hint = (uint8_t)(irq_reg & 0xFFu);
                 log_record(&rec);

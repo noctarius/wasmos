@@ -14,50 +14,6 @@ Ring3 smoke validation note: `run-qemu-ring3-test` configures process-manager
 test injection hooks so owner-deny marker checks (`wait`/`kill`/`status`/`spawn`)
 remain deterministic in strict ring3 runs.
 
-Current baseline note: `fs-manager` no longer relies on a fixed-size client
-slot table; it grows client state in heap-backed chunks.
-Process-manager context buffer tracking for filesystem/framebuffer borrows is
-now list-backed instead of fixed `PROCESS_MAX_COUNT` arrays.
-Kernel list internals now include an early-boot static-arena allocator fallback
-so list-backed modules can initialize before general heap allocation is ready.
-MM context registration and capability state tracking are now list-backed, so
-context growth is no longer bounded by static `MM_MAX_CONTEXTS` slot arrays.
-Per-context memory-region storage is now also list-backed, removing the fixed
-`MM_MAX_REGIONS` array limit within each context.
-WASM `libui` component-tree state is now heap-backed (dynamic component, text,
-and list-item storage) instead of fixed compile-time slot/text/item caps, and
-includes first shared form controls such as list views and dropdowns; text
-rendering is wired through `font-service` as a required dependency.
-Font IPC now includes text-run measurement and client-buffer rasterization
-(`FONT_IPC_MEASURE_GLYPH_REQ`, `FONT_IPC_RASTER_GLYPH_INTO_REQ`): clients
-pass multi-character input via shared memory and receive packed `w/h`,
-`x0/y0`, and `advance_x`, then request mask raster output into client-owned
-shared memory.
-Compositor window-title rendering also uses the same full text-run path
-(measure + raster-into), so title rendering no longer performs per-character
-font IPC raster requests; measured/rasterized title runs are cached per window
-slot so compose-time rendering does not issue font IPC on every paint pass.
-Compositor pointer delivery to focused clients uses content-local coordinates,
-and window client buffers render in the content pane below chrome/titlebar.
-WASM libc now implements a process-local linear-memory allocator
-(`malloc/free/calloc/realloc`) backed by `memory.grow`.
-Native driver ABI now includes an explicit shared-memory flush hook so native
-services/drivers can publish shared-buffer writes with a stable ABI contract.
-WASM hostcalls now include both directional shared-memory sync operations:
-`shmem_flush` (WASM -> shared) and `shmem_refresh` (shared -> WASM), so
-client-owned shared buffers written by native services can be consumed in WASM
-without stale linear-memory views.
-ACPI class/subclass rule matching in `device-manager` now includes RTC bring-up
-(`PNP0B00` class `0x08`/subclass `0x03`) alongside serial/keyboard/mouse ISA
-devices discovered by `acpi-bus`.
-RTC IPC message IDs and payload packing are explicitly defined in shared
-kernel/user headers (`rtc_ipc.h`) so service/driver clients use one contract.
-CLI builtin `echo` and script `echo` now share one parser/expander path in
-libc script helpers, including `-n`/`-e`/`-E`/`--`, quoting, and `${VAR}` expansion.
-Environment-variable architecture now targets per-context scope ownership with
-POSIX-like snapshot inheritance, including explicit `script` (child scope) vs
-`source` (current scope) behavior.
-
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)
 - [Current System Summary](architecture/02-current-system-summary.md)
@@ -82,6 +38,8 @@ POSIX-like snapshot inheritance, including explicit `script` (child scope) vs
 ## Update Rules
 - Update the relevant feature document(s) in `docs/architecture/` when behavior
   changes.
+- Record implementation/baseline snapshot updates in `docs/STATUS.md` instead of
+  this index.
 - Keep cross-document references consistent across `README.md`, `docs/TASKS.md`, and
   architecture docs.
 - Prefer appending concrete implementation notes over vague roadmap text.

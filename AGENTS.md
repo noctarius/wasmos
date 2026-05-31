@@ -9,6 +9,8 @@ This repository uses Codex CLI to assist with development. Follow these conventi
 ## Always Do
 - Read `README.md` and `docs/ARCHITECTURE.md` at the start of a new task.
 - Keep `README.md` and `docs/ARCHITECTURE.md` updated with meaningful changes and new behaviors.
+- Keep `docs/ARCHITECTURE.md` as an architecture index/entry point (stable structure, links, and guardrails), not a running implementation snapshot.
+- Record current implementation/baseline changes in `docs/STATUS.md` (snapshot-style), not in `docs/ARCHITECTURE.md`.
 - Keep `README.md` high-level and stable: do not append per-iteration or
   changelog-style feature bullets for each incremental step. `README.md`is user-facing (human).
   Updates should only be made if they are significant.

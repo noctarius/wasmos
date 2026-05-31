@@ -32,6 +32,7 @@ It defines repository workflow and documentation/update conventions.
 - Preemptive multitasking in the kernel scheduler with runtime validation coverage.
 - Service-driven system bring-up (`init` -> `fs-manager`/`fs-init` -> `device-manager` -> `sysinit`) with discovery/registration and policy-driven driver spawning.
 - Linux `udev`-like userspace device inventory and policy rules (`device-manager` + `pci-bus`/`acpi-bus`, with bootstrap/runtime rule roots) for deterministic driver bring-up.
+- Early generic `virtio-serial` driver service (`virtio.serial`) for host/guest automation plumbing and future transport consumers.
 - Directory-based mount namespace (`/init`, `/boot`, `/user`) through `fs-manager` VFS routing across initfs and FAT-backed filesystems.
 - Buffer-borrow-based DMA support integrated across capability policy, runtime transport, and driver paths.
 - End-to-end threading support (`thread_create`, `thread_join`, `thread_detach`, `thread_yield`, `thread_exit`) for ring-3 workloads.

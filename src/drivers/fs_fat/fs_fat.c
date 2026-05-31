@@ -7,6 +7,10 @@
 #include "wasmos/libsys.h"
 #include "wasmos_driver_abi.h"
 
+#ifndef WASMOS_TRACE
+#define WASMOS_TRACE 0
+#endif
+
 /*
  * fs-fat is the FAT backend service for the ESP filesystem.
  */
@@ -1066,9 +1070,11 @@ fat_handle_open(void)
     }
 
     if (fat_resolve_path(fat_path, &entry) != 0 || !entry.valid) {
+#if WASMOS_TRACE
         fat_log("open resolve miss ");
         fat_write_full(fat_path);
         fat_log("\n");
+#endif
         if ((g_fs_req.arg1 & FAT_OPEN_CREAT) == 0 || fat_create_empty_file(fat_path, &entry) != 0) {
             return -1;
         }

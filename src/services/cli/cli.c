@@ -31,6 +31,7 @@ static int32_t g_request_id = 1;
 static int32_t g_pending_req = -1;
 static char g_cwd[64] = "/";
 static int32_t g_pending_kind = 0;
+static int32_t g_pending_exec_pid = -1;
 static int32_t g_pending_cd_use_path = 0;
 static char g_pending_cd_path[32] = "/";
 static char g_history[CLI_HISTORY_MAX][sizeof(g_line)];
@@ -227,6 +228,7 @@ cli_env_init_defaults(void)
         g_env[i].value[0] = '\0';
     }
     (void)cli_env_set("PATH", "/boot/apps:/boot/system/services:/boot/system/drivers:/boot/system/utils");
+    (void)cli_env_set("?", "0");
 }
 
 static int
@@ -2139,17 +2141,28 @@ cli_phase_wait_ipc_step(void)
     } else if (resp_type != FS_IPC_RESP && resp_type != PROC_IPC_RESP) {
         cli_fail_and_stall("[cli] ipc response invalid\n");
     } else if (g_pending_kind == PENDING_EXEC && resp_type == PROC_IPC_RESP) {
+        int32_t spawned_pid = resp_status;
 #if WASMOS_TRACE
         char pbuf[32];
         int ppos = 0;
         ppos = buf_append_str(pbuf, ppos, (int)sizeof(pbuf), "spawned pid ");
-        ppos = buf_append_u32(pbuf, ppos, (int)sizeof(pbuf), (uint32_t)resp_status);
+        ppos = buf_append_u32(pbuf, ppos, (int)sizeof(pbuf), (uint32_t)spawned_pid);
         ppos = buf_append_str(pbuf, ppos, (int)sizeof(pbuf), "\n");
         pbuf[ppos] = '\0';
         console_write(pbuf);
-#else
-        (void)resp_status;
 #endif
+        if (spawned_pid > 0 && cli_send_proc(PROC_IPC_WAIT, (uint32_t)spawned_pid, 0, 0, 0) == 0) {
+            g_pending_exec_pid = spawned_pid;
+            g_pending_kind = PENDING_WAIT;
+            return;
+        }
+        cli_env_set("?", "-1");
+    } else if (g_pending_kind == PENDING_WAIT && resp_type == PROC_IPC_RESP) {
+        int32_t exit_code = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
+        char ec_buf[12];
+        snprintf(ec_buf, sizeof(ec_buf), "%d", (int)exit_code);
+        cli_env_set("?", ec_buf);
+        g_pending_exec_pid = -1;
     } else if (g_pending_kind == PENDING_CD_CHAIN) {
         const char *tail = g_pending_cd_path;
         if (tail[0] == '/') {

@@ -33,7 +33,8 @@ enum {
     PENDING_CAT,
     PENDING_CD,
     PENDING_CD_CHAIN,
-    PENDING_EXEC
+    PENDING_EXEC,
+    PENDING_WAIT
 };
 
 #endif

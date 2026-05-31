@@ -47,6 +47,9 @@ WASM hostcalls now include both directional shared-memory sync operations:
 `shmem_flush` (WASM -> shared) and `shmem_refresh` (shared -> WASM), so
 client-owned shared buffers written by native services can be consumed in WASM
 without stale linear-memory views.
+ACPI class/subclass rule matching in `device-manager` now includes RTC bring-up
+(`PNP0B00` class `0x08`/subclass `0x03`) alongside serial/keyboard/mouse ISA
+devices discovered by `acpi-bus`.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

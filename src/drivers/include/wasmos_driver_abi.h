@@ -190,6 +190,12 @@ enum {
 };
 
 enum {
+    RTC_IPC_READ_REQ  = 0x820,
+    RTC_IPC_READ_RESP = 0x8A0,
+    RTC_IPC_ERROR     = 0x8FF
+};
+
+enum {
     DEVMGR_PUBLISH_DEVICE = 0x900,
     DEVMGR_PCI_SCAN_DONE  = 0x901,
     DEVMGR_QUERY_MOUNT_REQ = 0x902,

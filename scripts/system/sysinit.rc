@@ -1,6 +1,8 @@
 # sysinit.rc -- boot-time service startup script
 # Processed by sysinit using the wasmos script engine.
 
+echo "Starting system services..."
+
 spawn /boot/apps/chardevc.wap
 
 start /boot/system/services/vt.wap

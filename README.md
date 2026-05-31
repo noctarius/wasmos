@@ -27,7 +27,7 @@ It defines repository workflow and documentation/update conventions.
 ## Current Highlights
 - 64-bit (`x86_64`) UEFI microkernel OS scaffold with deterministic boot handoff (`BOOTX64.EFI` -> `kernel.elf` + `initfs.img`).
 - WASM-first userspace (`wasm3`) that runs apps, services, and drivers, plus optional native drivers where hardware access needs it.
-- Explicit microkernel primitives: paging, scheduler, IPC, process lifecycle, capabilities, and ring-3 isolation enabled by default.
+- Explicit microkernel primitives: paging, scheduler, IPC, process lifecycle, capabilities, and full ring-3 isolation enabled by default.
 - Service-driven system bring-up (`init` -> `fs-manager`/`fs-init` -> `device-manager` -> `sysinit`) with discovery/registration and policy-driven driver spawning.
 - Early windowing/graphics stack: framebuffer driver, compositor, shared-buffer rendering, input routing, and runtime display mode control.
 - Practical interactive environment with VT/CLI, multi-TTY switching, and scriptable boot-time userspace workflows.

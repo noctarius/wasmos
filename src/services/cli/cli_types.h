@@ -13,7 +13,6 @@ typedef enum {
 
 #define CLI_MAX_PROCS 48
 #define CLI_HISTORY_MAX 8
-#define CLI_ENV_MAX 16
 #define CLI_ENV_NAME_MAX 24
 #define CLI_ENV_VALUE_MAX 96
 
@@ -21,10 +20,11 @@ typedef enum {
 #define CLI_REQ_SEND_RETRIES 8192
 #define CLI_VT_RESP_RETRIES 4096
 
-typedef struct {
-    uint8_t in_use;
+typedef struct cli_env_var {
     char name[CLI_ENV_NAME_MAX];
     char value[CLI_ENV_VALUE_MAX];
+    uint8_t is_export;
+    struct cli_env_var *next;
 } cli_env_var_t;
 
 enum {

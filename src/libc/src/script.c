@@ -12,51 +12,144 @@ wasmos_script_state_init(wasmos_script_state_t *state)
 }
 
 static const char *
-script_local_get(wasmos_script_state_t *state, const char *name)
+script_table_get(const wasmos_script_env_node_t *table, const char *name)
 {
-    for (int i = 0; i < WASMOS_SCRIPT_ENV_MAX; i++) {
-        if (state->locals[i].in_use && strcmp(state->locals[i].name, name) == 0) {
-            return state->locals[i].value;
+    const wasmos_script_env_node_t *it = table;
+    while (it) {
+        if (strcmp(it->pair.name, name) == 0) {
+            return it->pair.value;
         }
+        it = it->next;
     }
     return 0;
 }
 
 static int
-script_local_set(wasmos_script_state_t *state, const char *name, const char *value)
+script_table_set(wasmos_script_env_node_t **table, const char *name, const char *value)
 {
-    int empty = -1;
-    for (int i = 0; i < WASMOS_SCRIPT_ENV_MAX; i++) {
-        if (state->locals[i].in_use && strcmp(state->locals[i].name, name) == 0) {
-            int32_t vlen = 0;
-            while (value[vlen] && vlen + 1 < WASMOS_SCRIPT_ENV_VAL_MAX) {
-                state->locals[i].value[vlen] = value[vlen];
-                vlen++;
-            }
-            state->locals[i].value[vlen] = '\0';
-            return 0;
-        }
-        if (empty < 0 && !state->locals[i].in_use) {
-            empty = i;
-        }
-    }
-    if (empty < 0) {
+    wasmos_script_env_node_t *it = 0;
+    wasmos_script_env_node_t *prev = 0;
+    if (!name || !name[0]) {
         return -1;
     }
-    int32_t nlen = 0;
-    while (name[nlen] && nlen + 1 < WASMOS_SCRIPT_ENV_NAME_MAX) {
-        state->locals[empty].name[nlen] = name[nlen];
-        nlen++;
+    if (!table) {
+        return -1;
     }
-    state->locals[empty].name[nlen] = '\0';
-    int32_t vlen = 0;
-    while (value[vlen] && vlen + 1 < WASMOS_SCRIPT_ENV_VAL_MAX) {
-        state->locals[empty].value[vlen] = value[vlen];
-        vlen++;
+    for (it = *table; it; prev = it, it = it->next) {
+        if (strcmp(it->pair.name, name) == 0) {
+            if (!value || !value[0]) {
+                if (prev) {
+                    prev->next = it->next;
+                } else {
+                    *table = it->next;
+                }
+                free(it);
+                return 0;
+            }
+            (void)snprintf(it->pair.value, sizeof(it->pair.value), "%s", value);
+            return 0;
+        }
     }
-    state->locals[empty].value[vlen] = '\0';
-    state->locals[empty].in_use = 1;
+    if (!value || !value[0]) {
+        return 0;
+    }
+    it = (wasmos_script_env_node_t *)malloc(sizeof(*it));
+    if (!it) {
+        return -1;
+    }
+    memset(it, 0, sizeof(*it));
+    (void)snprintf(it->pair.name, sizeof(it->pair.name), "%s", name);
+    (void)snprintf(it->pair.value, sizeof(it->pair.value), "%s", value);
+    it->next = *table;
+    *table = it;
     return 0;
+}
+
+static void
+script_table_dispose(wasmos_script_env_node_t **table)
+{
+    wasmos_script_env_node_t *it = 0;
+    if (!table) {
+        return;
+    }
+    it = *table;
+    while (it) {
+        wasmos_script_env_node_t *next = it->next;
+        free(it);
+        it = next;
+    }
+    *table = 0;
+}
+
+static int
+script_table_clone(wasmos_script_env_node_t **out, const wasmos_script_env_node_t *in)
+{
+    wasmos_script_env_node_t *head = 0;
+    wasmos_script_env_node_t *tail = 0;
+    const wasmos_script_env_node_t *it = in;
+    if (!out) {
+        return -1;
+    }
+    *out = 0;
+    while (it) {
+        wasmos_script_env_node_t *node = (wasmos_script_env_node_t *)malloc(sizeof(*node));
+        if (!node) {
+            script_table_dispose(&head);
+            return -1;
+        }
+        memset(node, 0, sizeof(*node));
+        (void)snprintf(node->pair.name, sizeof(node->pair.name), "%s", it->pair.name);
+        (void)snprintf(node->pair.value, sizeof(node->pair.value), "%s", it->pair.value);
+        if (!head) {
+            head = node;
+            tail = node;
+        } else {
+            tail->next = node;
+            tail = node;
+        }
+        it = it->next;
+    }
+    *out = head;
+    return 0;
+}
+
+static const char *
+script_scope_get(wasmos_script_state_t *state, const char *name)
+{
+    const char *val = script_table_get(state->locals, name);
+    if (val) {
+        return val;
+    }
+    return script_table_get(state->exports, name);
+}
+
+void
+wasmos_script_state_init_child(wasmos_script_state_t *child,
+                               const wasmos_script_state_t *parent)
+{
+    if (!child) {
+        return;
+    }
+    memset(child, 0, sizeof(*child));
+    if (!parent) {
+        return;
+    }
+    child->last_exit_code = parent->last_exit_code;
+    if (script_table_clone(&child->exports, parent->exports) != 0) {
+        script_table_dispose(&child->exports);
+    }
+}
+
+void
+wasmos_script_state_dispose(wasmos_script_state_t *state)
+{
+    if (!state) {
+        return;
+    }
+    script_table_dispose(&state->locals);
+    script_table_dispose(&state->exports);
+    state->exec_depth = 0;
+    state->total_depth = 0;
 }
 
 static int
@@ -112,15 +205,7 @@ script_expand(wasmos_script_state_t *state, const char *in, char *out, int out_l
                     out[wi++] = tmp[i];
                 }
             } else {
-                const char *val = script_local_get(state, name);
-                if (!val) {
-                    char kbuf[WASMOS_SCRIPT_ENV_VAL_MAX];
-                    int32_t nlen32 = (int32_t)nlen;
-                    int32_t got = wasmos_env_get(name, nlen32, kbuf, (int32_t)sizeof(kbuf));
-                    if (got >= 0) {
-                        val = kbuf;
-                    }
-                }
+                const char *val = script_scope_get(state, name);
                 if (val) {
                     int vi = 0;
                     while (val[vi]) {
@@ -337,6 +422,7 @@ script_echo_resolve_var(void *user, const char *name, int32_t name_len, char *ou
 {
     wasmos_script_state_t *state = (wasmos_script_state_t *)user;
     const char *val = 0;
+    char name_buf[WASMOS_SCRIPT_ENV_NAME_MAX];
     if (!state || !name || name_len <= 0 || !out || out_len <= 0) {
         return -1;
     }
@@ -344,13 +430,15 @@ script_echo_resolve_var(void *user, const char *name, int32_t name_len, char *ou
         (void)snprintf(out, (size_t)out_len, "%d", (int)state->last_exit_code);
         return 0;
     }
-    val = script_local_get(state, name);
+    if (name_len >= (int32_t)sizeof(name_buf)) {
+        out[0] = '\0';
+        return 0;
+    }
+    memcpy(name_buf, name, (size_t)name_len);
+    name_buf[name_len] = '\0';
+    val = script_scope_get(state, name_buf);
     if (!val) {
-        int32_t got = wasmos_env_get(name, name_len, out, out_len);
-        if (got < 0) {
-            out[0] = '\0';
-            return 0;
-        }
+        out[0] = '\0';
         return 0;
     }
     (void)snprintf(out, (size_t)out_len, "%s", val);
@@ -764,8 +852,10 @@ script_exec_line(wasmos_script_state_t *state, const wasmos_script_ops_t *ops, c
         if (script_expand(state, value_raw, value, (int)sizeof(value)) != 0) {
             return 0;
         }
-        (void)script_local_set(state, name, value);
-        ops->on_export(ops->user, name, value);
+        (void)script_table_set(&state->exports, name, value);
+        if (ops->on_export) {
+            ops->on_export(ops->user, name, value);
+        }
         return 0;
     }
 
@@ -785,7 +875,63 @@ script_exec_line(wasmos_script_state_t *state, const wasmos_script_ops_t *ops, c
         if (script_expand(state, value_raw, value, (int)sizeof(value)) != 0) {
             return 0;
         }
-        (void)script_local_set(state, name, value);
+        (void)script_table_set(&state->locals, name, value);
+        return 0;
+    }
+
+    if (line[0] == 's' && line[1] == 'c' && line[2] == 'r' && line[3] == 'i' &&
+        line[4] == 'p' && line[5] == 't' && (line[6] == ' ' || line[6] == '\t')) {
+        const char *path = &line[7];
+        while (*path == ' ' || *path == '\t') {
+            path++;
+        }
+        char expanded[WASMOS_SCRIPT_LINE_MAX];
+        if (script_expand(state, path, expanded, (int)sizeof(expanded)) != 0) {
+            return -1;
+        }
+        wasmos_script_state_t child;
+        wasmos_script_state_init_child(&child, state);
+        if (wasmos_script_run(&child, ops, expanded) != 0) {
+            wasmos_script_state_dispose(&child);
+            state->last_exit_code = -1;
+            return -1;
+        }
+        state->last_exit_code = child.last_exit_code;
+        wasmos_script_state_dispose(&child);
+        return 0;
+    }
+
+    if (line[0] == 's' && line[1] == 'o' && line[2] == 'u' &&
+        line[3] == 'r' && line[4] == 'c' && line[5] == 'e' &&
+        (line[6] == ' ' || line[6] == '\t')) {
+        const char *path = &line[7];
+        while (*path == ' ' || *path == '\t') {
+            path++;
+        }
+        char expanded[WASMOS_SCRIPT_LINE_MAX];
+        if (script_expand(state, path, expanded, (int)sizeof(expanded)) != 0) {
+            return -1;
+        }
+        if (wasmos_script_run(state, ops, expanded) != 0) {
+            state->last_exit_code = -1;
+            return -1;
+        }
+        return 0;
+    }
+
+    if (line[0] == '.' && (line[1] == ' ' || line[1] == '\t')) {
+        const char *path = &line[2];
+        while (*path == ' ' || *path == '\t') {
+            path++;
+        }
+        char expanded[WASMOS_SCRIPT_LINE_MAX];
+        if (script_expand(state, path, expanded, (int)sizeof(expanded)) != 0) {
+            return -1;
+        }
+        if (wasmos_script_run(state, ops, expanded) != 0) {
+            state->last_exit_code = -1;
+            return -1;
+        }
         return 0;
     }
 

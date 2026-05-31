@@ -4,19 +4,23 @@
 #include <stdint.h>
 
 #define WASMOS_SCRIPT_IF_DEPTH     64
-#define WASMOS_SCRIPT_ENV_MAX      32
 #define WASMOS_SCRIPT_ENV_NAME_MAX 33
 #define WASMOS_SCRIPT_ENV_VAL_MAX  129
 #define WASMOS_SCRIPT_LINE_MAX     256
 
 typedef struct {
-    uint8_t in_use;
-    char    name[WASMOS_SCRIPT_ENV_NAME_MAX];
-    char    value[WASMOS_SCRIPT_ENV_VAL_MAX];
-} wasmos_script_local_var_t;
+    char name[WASMOS_SCRIPT_ENV_NAME_MAX];
+    char value[WASMOS_SCRIPT_ENV_VAL_MAX];
+} wasmos_script_env_pair_t;
+
+typedef struct wasmos_script_env_node {
+    wasmos_script_env_pair_t pair;
+    struct wasmos_script_env_node *next;
+} wasmos_script_env_node_t;
 
 typedef struct {
-    wasmos_script_local_var_t locals[WASMOS_SCRIPT_ENV_MAX];
+    wasmos_script_env_node_t *locals;
+    wasmos_script_env_node_t *exports;
     int32_t                   last_exit_code;
     int32_t                   exec_depth;
     int32_t                   total_depth;
@@ -55,6 +59,9 @@ int wasmos_script_echo_expand(const char *expr,
                               int *out_newline);
 
 void wasmos_script_state_init(wasmos_script_state_t *state);
+void wasmos_script_state_dispose(wasmos_script_state_t *state);
+void wasmos_script_state_init_child(wasmos_script_state_t *child,
+                                    const wasmos_script_state_t *parent);
 int  wasmos_script_run(wasmos_script_state_t *state,
                        const wasmos_script_ops_t *ops,
                        const char *path);

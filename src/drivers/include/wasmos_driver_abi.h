@@ -82,6 +82,9 @@ enum {
     PROC_MODULE_SOURCE_FS = 1
 };
 
+/* arg0 flags for PROC_IPC_SPAWN_PATH (request). */
+#define PROC_SPAWN_PATH_FLAG_DETACH (1u << 0) /* skip ready-wait even for service/driver */
+
 /* Flags returned in arg1 of PROC_IPC_RESP for PROC_IPC_SPAWN_PATH.
  * Mirror of WASMOS_APP_FLAG_* in the kernel's wasmos_app.h. */
 #define WASMOS_SPAWN_FLAG_DRIVER  (1u << 0)

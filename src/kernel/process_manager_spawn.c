@@ -1437,7 +1437,9 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
     if (wasmos_app_parse(pm_fs_buf, blob_size, &desc) == 0) {
         app_flags = desc.flags;
     }
-    int needs_ready = (app_flags & (WASMOS_APP_FLAG_SERVICE | WASMOS_APP_FLAG_DRIVER)) != 0;
+    uint32_t spawn_req_flags = (uint32_t)msg->arg0;
+    int needs_ready = (app_flags & (WASMOS_APP_FLAG_SERVICE | WASMOS_APP_FLAG_DRIVER)) != 0
+                      && !(spawn_req_flags & PROC_SPAWN_PATH_FLAG_DETACH);
     if (needs_ready && g_pm.spawn.in_use) {
         return -2;
     }

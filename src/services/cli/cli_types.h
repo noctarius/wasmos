@@ -34,7 +34,8 @@ enum {
     PENDING_CD,
     PENDING_CD_CHAIN,
     PENDING_EXEC,
-    PENDING_WAIT
+    PENDING_WAIT,
+    PENDING_SPAWN
 };
 
 #endif

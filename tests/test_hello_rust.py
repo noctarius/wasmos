@@ -46,8 +46,7 @@ class HelloRustTest(unittest.TestCase):
         self._cmd_expect(
             "hello_rust",
             [
-                b"spawned pid",
-                b"[wasmos-app] entry ok hello-rust",
+                b"Hello from Rust on WASMOS!",
             ],
         )
 

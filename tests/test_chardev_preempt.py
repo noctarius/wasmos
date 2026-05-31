@@ -46,7 +46,6 @@ class ChardevPreemptTest(unittest.TestCase):
         self._cmd_expect(
             "chardev_preempt",
             [
-                b"spawned pid",
                 b"chardev-preempt: ok",
             ],
         )

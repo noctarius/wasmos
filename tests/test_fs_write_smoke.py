@@ -49,7 +49,7 @@ class FsWriteSmokeTest(unittest.TestCase):
         self._cmd_expect("cd /boot", [b"/boot wamos>"])
         self._cmd_expect("ls", [b"write_smoke.txt"])
         self._cmd_expect("cd /", [b"/ wamos>"])
-        self._cmd_expect("fs_write_smoke", [b"spawned pid", b"fs-write-smoke: ok"])
+        self._cmd_expect("fs_write_smoke", [b"fs-write-smoke: ok"])
 
 
 if __name__ == "__main__":

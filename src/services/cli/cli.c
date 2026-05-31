@@ -2139,6 +2139,7 @@ cli_phase_wait_ipc_step(void)
     } else if (resp_type != FS_IPC_RESP && resp_type != PROC_IPC_RESP) {
         cli_fail_and_stall("[cli] ipc response invalid\n");
     } else if (g_pending_kind == PENDING_EXEC && resp_type == PROC_IPC_RESP) {
+#if WASMOS_TRACE
         char pbuf[32];
         int ppos = 0;
         ppos = buf_append_str(pbuf, ppos, (int)sizeof(pbuf), "spawned pid ");
@@ -2146,6 +2147,9 @@ cli_phase_wait_ipc_step(void)
         ppos = buf_append_str(pbuf, ppos, (int)sizeof(pbuf), "\n");
         pbuf[ppos] = '\0';
         console_write(pbuf);
+#else
+        (void)resp_status;
+#endif
     } else if (g_pending_kind == PENDING_CD_CHAIN) {
         const char *tail = g_pending_cd_path;
         if (tail[0] == '/') {

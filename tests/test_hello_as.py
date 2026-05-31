@@ -46,7 +46,6 @@ class HelloAssemblyScriptTest(unittest.TestCase):
         self._cmd_expect(
             "hello_as",
             [
-                b"spawned pid",
                 b"Hello from AssemblyScript on WASMOS!",
                 b"Entry: main, runtime: stub",
                 b"startup.nsh readable: true",

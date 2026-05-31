@@ -50,6 +50,8 @@ without stale linear-memory views.
 ACPI class/subclass rule matching in `device-manager` now includes RTC bring-up
 (`PNP0B00` class `0x08`/subclass `0x03`) alongside serial/keyboard/mouse ISA
 devices discovered by `acpi-bus`.
+RTC IPC message IDs and payload packing are explicitly defined in shared
+kernel/user headers (`rtc_ipc.h`) so service/driver clients use one contract.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

@@ -8,6 +8,9 @@ const PROC_IPC_NOTIFY_READY: i32 = 0x20C;
 const RTC_IPC_READ_REQ: i32 = 0x820;
 const RTC_IPC_READ_RESP: i32 = 0x8A0;
 const RTC_IPC_ERROR: i32 = 0x8FF;
+/* ABI contract:
+ * READ_REQ: arg0..arg3 reserved.
+ * READ_RESP: arg0=[sec|min|hour|day], arg1=[month|year16<<8]. */
 
 @external("wasmos", "io_in8")
 declare function io_in8(port: i32): i32;

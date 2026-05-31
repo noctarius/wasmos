@@ -12,6 +12,7 @@ These remain visible even with tracing disabled:
 - `debug_mark(tag)`
 - periodic timer progress markers (`[timer] ticks`)
 - verbose scheduling and runtime transition traces
+- FAT open-path miss probes used during PATH-style spawn lookup
 
 ### Existing Debug Hooks
 - `g_skip_wasm_boot` can isolate runtime bring-up in the kernel init path
@@ -61,4 +62,3 @@ These remain visible even with tracing disabled:
 - broader config-driven startup policy beyond the current `sysinit.spawn` list
 
 Open implementation work is tracked in `docs/TASKS.md`.
-

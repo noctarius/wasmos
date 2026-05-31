@@ -46,7 +46,6 @@ class HelloCTest(unittest.TestCase):
         self._cmd_expect(
             "hello_c",
             [
-                b"spawned pid",
                 b"Hello from C on WASMOS!",
                 b"Entry: main",
             ],

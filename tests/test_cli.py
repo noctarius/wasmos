@@ -115,7 +115,7 @@ class CliIntegrationTests(unittest.TestCase):
     def test_path_lookup_for_exec(self):
         self._cmd_expect("cd /", b"/ wamos>")
         self._cmd_expect("export PATH=/boot/apps", b"wamos> ")
-        self._cmd_expect("init_smoke", b"spawned pid ")
+        self._cmd_expect("init_smoke", b"init-smoke: init start")
         self._cmd_expect("export PATH=", b"wamos> ")
         self._cmd_expect("init_smoke", b"no such command found: init_smoke")
 

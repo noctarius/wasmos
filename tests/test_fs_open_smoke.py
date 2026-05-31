@@ -45,7 +45,7 @@ class FsOpenSmokeTest(unittest.TestCase):
         self._cmd_expect("cd /boot", [b"/boot wamos>"])
         self._cmd_expect("ls", [b"large_read.txt"])
         self._cmd_expect("cd /", [b"/ wamos>"])
-        self._cmd_expect("fs_open_smoke", [b"spawned pid", b"fs-open-smoke: ok"])
+        self._cmd_expect("fs_open_smoke", [b"fs-open-smoke: ok"])
 
 
 if __name__ == "__main__":

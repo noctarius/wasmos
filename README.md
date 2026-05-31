@@ -29,6 +29,7 @@ It defines repository workflow and documentation/update conventions.
 - WASM-first userspace (`wasm3`) that runs apps, services, and drivers from multiple languages (C, Zig, Go, Rust, AssemblyScript), plus optional native drivers where hardware access needs it.
 - Explicit microkernel primitives: paging, scheduler, IPC, process lifecycle, capabilities, and full ring-3 isolation enabled by default.
 - Service-driven system bring-up (`init` -> `fs-manager`/`fs-init` -> `device-manager` -> `sysinit`) with discovery/registration and policy-driven driver spawning.
+- Linux `udev`-like userspace device inventory and policy rules (`device-manager` + `pci-bus`/`acpi-bus`, with bootstrap/runtime rule roots) for deterministic driver bring-up.
 - Early windowing/graphics stack: framebuffer driver, compositor, shared-buffer rendering, input routing, and runtime display mode control.
 - Practical interactive environment with VT/CLI, multi-TTY switching, and scriptable boot-time userspace workflows.
 

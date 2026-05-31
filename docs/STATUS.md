@@ -146,4 +146,5 @@
 - Networking design baseline now has a dedicated architecture plan in
   `docs/architecture/20-networking-virtio-net-and-stack.md`, defining explicit
   QEMU NIC configuration, `virtio-net` driver/service boundaries, and phased
-  TCP/UDP stack rollout.
+  TCP/UDP stack rollout, including full-scope IPv6 and multi-address/
+  multi-stack instance support in later phases.

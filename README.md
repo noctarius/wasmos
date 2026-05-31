@@ -31,6 +31,7 @@ It defines repository workflow and documentation/update conventions.
 - Explicit microkernel primitives: paging, scheduler, IPC, process lifecycle, capabilities, and full ring-3 isolation enabled by default.
 - Service-driven system bring-up (`init` -> `fs-manager`/`fs-init` -> `device-manager` -> `sysinit`) with discovery/registration and policy-driven driver spawning.
 - Linux `udev`-like userspace device inventory and policy rules (`device-manager` + `pci-bus`/`acpi-bus`, with bootstrap/runtime rule roots) for deterministic driver bring-up.
+- Directory-based mount namespace (`/init`, `/boot`, `/user`) through `fs-manager` VFS routing across initfs and FAT-backed filesystems.
 - Early windowing/graphics stack: framebuffer driver, compositor, shared-buffer rendering, input routing, and runtime display mode control.
 - Practical interactive environment with VT/CLI, multi-TTY switching, and scriptable boot-time userspace workflows.
 

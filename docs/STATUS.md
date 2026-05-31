@@ -143,3 +143,7 @@
 - A generic `virtio-serial` driver baseline is available as a PCI-matched WASM
   service (`virtio.serial`) with discovery and register-access IPC as a
   foundation for higher-level transport consumers.
+- Networking design baseline now has a dedicated architecture plan in
+  `docs/architecture/20-networking-virtio-net-and-stack.md`, defining explicit
+  QEMU NIC configuration, `virtio-net` driver/service boundaries, and phased
+  TCP/UDP stack rollout.

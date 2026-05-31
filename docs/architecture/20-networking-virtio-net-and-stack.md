@@ -15,14 +15,16 @@ In scope:
 - explicit QEMU NIC/network configuration for deterministic bring-up
 - `virtio-net` PCI driver baseline (feature negotiation, queue init, RX/TX)
 - network stack service baseline (ARP, IPv4, ICMP echo, UDP, then TCP)
+- IPv6 support as part of the full design (phased delivery after IPv4 baseline)
+- multi-address interface model (multiple IPv4 and IPv6 addresses per NIC)
+- multi-stack instances (independent network stack contexts for isolation)
 - app-facing IPC contract for datagram and stream sockets
 - boot-time integration through existing `device-manager` policy rules
 
 Out of scope for initial rollout:
-- IPv6
 - TLS in kernel or first-pass stack service
 - high-throughput offload features (TSO/GSO/GRO/LRO)
-- multi-NIC routing and advanced firewall/NAT policy
+- advanced firewall/NAT policy
 
 ### Current Baseline
 - No explicit NIC model is configured in `run-qemu*`; QEMU defaults are used.
@@ -74,9 +76,11 @@ Non-responsibilities:
 #### 2. `net-stack` Service
 Responsibilities:
 - own protocol state machines and packet classification
-- maintain ARP cache, IPv4 config, ICMP, UDP, and TCP state
+- maintain ARP/NDP, IPv4/IPv6 config, ICMP/ICMPv6, UDP, and TCP state
 - expose socket-style IPC to clients
 - mediate packet flow to/from `virtio-net`
+- support multiple addresses per interface
+- support multiple isolated stack instances with explicit instance selection
 
 Non-responsibilities:
 - no direct PCI/virtqueue access
@@ -101,19 +105,44 @@ Responsibilities:
   - counters: rx/tx packets, drops, errors
 
 #### Stack <-> Client IPC
-- `NET_IPC_SOCKET_OPEN` (`UDP` or `TCP`)
+- `NET_IPC_SOCKET_OPEN` (`UDP` or `TCP`, `AF_INET` or `AF_INET6`)
 - `NET_IPC_BIND`
 - `NET_IPC_CONNECT` (TCP and connected UDP)
 - `NET_IPC_SEND`
 - `NET_IPC_RECV`
 - `NET_IPC_CLOSE`
 - `NET_IPC_POLL`
+- `NET_IPC_IFADDR_ADD` / `NET_IPC_IFADDR_DEL` / `NET_IPC_IFADDR_LIST`
+- `NET_IPC_STACK_CREATE` / `NET_IPC_STACK_DESTROY` / `NET_IPC_STACK_SELECT`
 
 Conventions:
 - request IDs must be preserved across async completion replies
 - all ops return explicit status codes (`ok`, `would_block`, `invalid`,
   `not_ready`, `denied`, `io_error`)
 - bounded payload sizes; caller retries with flow control
+
+### Addressing and Stack-Instance Model (Full Design Scope)
+
+#### Interface Address Model
+- each NIC interface may hold multiple addresses simultaneously:
+  - zero or more IPv4 addresses
+  - zero or more IPv6 addresses
+- one address can be marked preferred per family for default source selection
+- address metadata includes prefix length, origin (`static`, `dhcp`, `slaac`),
+  and state (`tentative`, `preferred`, `deprecated`)
+
+#### Stack-Instance Model
+- a stack instance is an isolated L3/L4 domain containing:
+  - interface bindings
+  - routing table
+  - neighbor/ARP/NDP state
+  - socket namespace and port allocation
+- clients either bind to default instance or explicitly select one
+- policy can map services/apps to a specific stack instance at spawn time
+
+Initial implementation policy:
+- start with one default instance in bring-up phases
+- keep ABI and internal model compatible with multiple instances from day one
 
 ### Buffer and DMA Model
 Phase A/B (initial):
@@ -186,7 +215,17 @@ Phase 3: TCP baseline
 Done gate:
 - stable TCP echo in `run-qemu` validation without boot regressions.
 
-Phase 4: hardening + performance
+Phase 4: IPv6 + multi-address + multi-instance enablement
+- Add IPv6 transport and control plane (NDP + ICMPv6 + address assignment).
+- Enable dual-stack sockets (`AF_INET` + `AF_INET6`) and family-aware bind/connect.
+- Enable multiple addresses per interface with explicit source-selection rules.
+- Enable multiple stack instances with explicit client instance selection.
+
+Done gate:
+- dual-stack UDP/TCP validation passes with at least two addresses on one NIC
+  and at least two isolated stack instances.
+
+Phase 5: hardening + performance
 - Add negative-path tests (queue full, malformed frames, link down, stack
   restart).
 - Add counters/diagnostics (`netstat`-style endpoint later).
@@ -202,6 +241,10 @@ Done gate:
   - boot + NIC detect + net-stack register + ICMP echo + UDP echo
 - TCP smoke:
   - TCP connect + echo + close
+- IPv6 + multi-address smoke:
+  - ICMPv6 echo + UDPv6/TCPv6 + multiple addresses on same NIC
+- Multi-instance isolation smoke:
+  - two stack instances with isolated socket/route state
 - Negative behavior:
   - queue saturation returns `would_block`
   - link-down path returns `not_ready`
@@ -229,4 +272,5 @@ Done gate:
 3. Land driver RX/TX baseline and driver diagnostics markers.
 4. Add `net-stack` service with ARP/IPv4/ICMP/UDP.
 5. Add TCP baseline and protocol-level regression tests.
-6. Evaluate DMA optimization path behind guarded rollout.
+6. Add IPv6 + multi-address + multi-stack instance support.
+7. Evaluate DMA optimization path behind guarded rollout.

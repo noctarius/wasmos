@@ -54,6 +54,9 @@ RTC IPC message IDs and payload packing are explicitly defined in shared
 kernel/user headers (`rtc_ipc.h`) so service/driver clients use one contract.
 CLI builtin `echo` and script `echo` now share one parser/expander path in
 libc script helpers, including `-n`/`-e`/`-E`/`--`, quoting, and `${VAR}` expansion.
+Environment-variable architecture now targets per-context scope ownership with
+POSIX-like snapshot inheritance, including explicit `script` (child scope) vs
+`source` (current scope) behavior.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)
@@ -73,6 +76,7 @@ libc script helpers, including `-n`/`-e`/`-E`/`--`, quoting, and `${VAR}` expans
 - [Threading and Lifecycle](architecture/15-threading-and-lifecycle.md)
 - [DMA Transfers](architecture/16-dma-transfers.md)
 - [Graphics, Framebuffer, and Compositor](architecture/17-graphics-framebuffer-and-compositor.md)
+- [Environment Scopes and Inheritance](architecture/18-environment-scopes-and-inheritance.md)
 
 ## Update Rules
 - Update the relevant feature document(s) in `docs/architecture/` when behavior

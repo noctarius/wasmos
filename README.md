@@ -183,6 +183,7 @@ Key policy/runtime notes:
 - `docs/architecture/17-graphics-framebuffer-and-compositor.md`: microkernel graphics stack design (framebuffer driver, shared-buffer IPC model, compositor ABI, and phased implementation plan)
 - `docs/architecture/18-environment-scopes-and-inheritance.md`: environment scope model for CLI/scripts/processes, POSIX-like inheritance semantics, and `script` vs `source` behavior
 - `docs/architecture/19-virtual-input-testing-via-virtio-serial.md`: testing-focused virtual input (mouse + keyboard) design over `virtio-serial`, including protocol, host bridge, and Python test harness integration
+- `docs/architecture/20-networking-virtio-net-and-stack.md`: staged networking design for explicit QEMU NIC config, `virtio-net` transport driver, and user-space TCP/UDP stack service boundaries
 - `docs/TASKS.md`: active and planned work
 - `AGENTS.md`: contributor/agent workflow and repository rules
 

@@ -34,6 +34,7 @@ remain deterministic in strict ring3 runs.
 - [Graphics, Framebuffer, and Compositor](architecture/17-graphics-framebuffer-and-compositor.md)
 - [Environment Scopes and Inheritance](architecture/18-environment-scopes-and-inheritance.md)
 - [Virtual Input Testing via Virtio-Serial](architecture/19-virtual-input-testing-via-virtio-serial.md)
+- [Networking via Virtio-Net and User-Space Stack](architecture/20-networking-virtio-net-and-stack.md)
 
 ## Update Rules
 - Update the relevant feature document(s) in `docs/architecture/` when behavior

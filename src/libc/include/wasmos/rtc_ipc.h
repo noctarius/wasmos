@@ -5,17 +5,32 @@
 
 enum {
     RTC_IPC_READ_REQ  = 0x820,
+    RTC_IPC_SET_REQ   = 0x821,
     RTC_IPC_READ_RESP = 0x8A0,
+    RTC_IPC_SET_RESP  = 0x8A1,
     RTC_IPC_ERROR     = 0x8FF
+};
+
+enum {
+    RTC_STATUS_OK = 0,
+    RTC_STATUS_INVALID = -1,
+    RTC_STATUS_IO = -2,
+    RTC_STATUS_TIMEOUT = -3,
+    RTC_STATUS_DENIED = -4
 };
 
 /* RTC v1 payload contract:
  * - RTC_IPC_READ_REQ:
  *   arg0..arg3 reserved (must be zero)
- * - RTC_IPC_READ_RESP:
+ * - RTC_IPC_SET_REQ:
  *   arg0: [7:0]=sec [15:8]=min [23:16]=hour(24h) [31:24]=day
  *   arg1: [7:0]=month [23:8]=year (full year, e.g. 2026)
  *   arg2/arg3 reserved
+ * - RTC_IPC_READ_RESP:
+ *   arg0/arg1 same packed format as SET_REQ
+ *   arg2/arg3 reserved
+ * - RTC_IPC_SET_RESP:
+ *   arg0=status (0 on success), arg1..arg3 reserved
  * - RTC_IPC_ERROR:
  *   arg0=status (<0), arg1..arg3 reserved
  */

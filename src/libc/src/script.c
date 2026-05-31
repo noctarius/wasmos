@@ -143,6 +143,221 @@ script_expand(wasmos_script_state_t *state, const char *in, char *out, int out_l
 }
 
 static int
+echo_append_char(char *out, int32_t out_len, int32_t *io_pos, char c)
+{
+    if (!out || !io_pos || *io_pos < 0 || *io_pos + 1 >= out_len) {
+        return -1;
+    }
+    out[*io_pos] = c;
+    (*io_pos)++;
+    return 0;
+}
+
+int
+wasmos_script_echo_expand(const char *expr,
+                          wasmos_script_echo_resolve_var_fn resolve_var,
+                          void *resolve_user,
+                          char *out,
+                          int32_t out_len,
+                          int *out_newline)
+{
+    int32_t i = 0;
+    int32_t out_pos = 0;
+    int parse_flags = 1;
+    int no_newline = 0;
+    int escape_mode = 0;
+    int wrote_any = 0;
+    if (!expr || !out || out_len <= 0 || !out_newline) {
+        return -1;
+    }
+
+    while (expr[i] == ' ' || expr[i] == '\t') {
+        i++;
+    }
+
+    while (parse_flags) {
+        int32_t j = i;
+        int flag_ok = 1;
+        while (expr[j] == ' ' || expr[j] == '\t') {
+            j++;
+        }
+        if (expr[j] == '\0') {
+            i = j;
+            break;
+        }
+        if (expr[j] == '-' && expr[j + 1] == '-') {
+            int32_t k = j + 2;
+            while (expr[k] == ' ' || expr[k] == '\t') {
+                k++;
+            }
+            i = k;
+            break;
+        }
+        if (expr[j] != '-' || expr[j + 1] == '\0') {
+            i = j;
+            break;
+        }
+        for (int32_t k = j + 1; expr[k] && expr[k] != ' ' && expr[k] != '\t'; ++k) {
+            if (expr[k] == 'n') {
+                no_newline = 1;
+            } else if (expr[k] == 'e') {
+                escape_mode = 1;
+            } else if (expr[k] == 'E') {
+                escape_mode = 0;
+            } else {
+                flag_ok = 0;
+                break;
+            }
+            j = k + 1;
+        }
+        if (!flag_ok) {
+            break;
+        }
+        i = j;
+    }
+
+    while (expr[i]) {
+        int in_single = 0;
+        int in_double = 0;
+        int token_started = 0;
+        while (expr[i] == ' ' || expr[i] == '\t') {
+            i++;
+        }
+        if (expr[i] == '\0') {
+            break;
+        }
+        if (wrote_any) {
+            if (echo_append_char(out, out_len, &out_pos, ' ') != 0) {
+                return -1;
+            }
+        }
+        while (expr[i]) {
+            char c = expr[i];
+            if (!in_single && !in_double && (c == ' ' || c == '\t')) {
+                break;
+            }
+            if (!in_double && c == '\'') {
+                in_single = !in_single;
+                token_started = 1;
+                i++;
+                continue;
+            }
+            if (!in_single && c == '"') {
+                in_double = !in_double;
+                token_started = 1;
+                i++;
+                continue;
+            }
+            if (c == '\\' && !in_single) {
+                char next = expr[i + 1];
+                char emit = next;
+                token_started = 1;
+                if (next == '\0') {
+                    i++;
+                    continue;
+                }
+                if (escape_mode) {
+                    if (next == 'n') {
+                        emit = '\n';
+                    } else if (next == 't') {
+                        emit = '\t';
+                    } else if (next == 'r') {
+                        emit = '\r';
+                    } else if (next == 'a') {
+                        emit = '\a';
+                    } else if (next == 'b') {
+                        emit = '\b';
+                    } else if (next == 'f') {
+                        emit = '\f';
+                    } else if (next == 'v') {
+                        emit = '\v';
+                    }
+                }
+                if (emit != '\0' && echo_append_char(out, out_len, &out_pos, emit) != 0) {
+                    return -1;
+                }
+                i += 2;
+                continue;
+            }
+            if (!in_single && c == '$' && expr[i + 1] == '{') {
+                char name[WASMOS_SCRIPT_ENV_NAME_MAX];
+                char vbuf[WASMOS_SCRIPT_ENV_VAL_MAX];
+                int32_t nlen = 0;
+                int32_t vi = 0;
+                i += 2;
+                while (expr[i] && expr[i] != '}' && nlen + 1 < (int32_t)sizeof(name)) {
+                    name[nlen++] = expr[i++];
+                }
+                name[nlen] = '\0';
+                if (expr[i] == '}') {
+                    i++;
+                    token_started = 1;
+                    if (nlen > 0 && resolve_var &&
+                        resolve_var(resolve_user, name, nlen, vbuf, (int32_t)sizeof(vbuf)) == 0) {
+                        while (vbuf[vi]) {
+                            if (echo_append_char(out, out_len, &out_pos, vbuf[vi++]) != 0) {
+                                return -1;
+                            }
+                        }
+                    }
+                    continue;
+                }
+                if (echo_append_char(out, out_len, &out_pos, '$') != 0 ||
+                    echo_append_char(out, out_len, &out_pos, '{') != 0) {
+                    return -1;
+                }
+                for (int32_t ni = 0; ni < nlen; ++ni) {
+                    if (echo_append_char(out, out_len, &out_pos, name[ni]) != 0) {
+                        return -1;
+                    }
+                }
+                continue;
+            }
+            token_started = 1;
+            if (echo_append_char(out, out_len, &out_pos, c) != 0) {
+                return -1;
+            }
+            i++;
+        }
+        if (in_single || in_double) {
+            return -1;
+        }
+        if (token_started) {
+            wrote_any = 1;
+        }
+    }
+
+    out[out_pos] = '\0';
+    *out_newline = no_newline ? 0 : 1;
+    return 0;
+}
+
+static int
+script_echo_resolve_var(void *user, const char *name, int32_t name_len, char *out, int32_t out_len)
+{
+    wasmos_script_state_t *state = (wasmos_script_state_t *)user;
+    const char *val = 0;
+    if (!state || !name || name_len <= 0 || !out || out_len <= 0) {
+        return -1;
+    }
+    if (name_len == 1 && name[0] == '?') {
+        (void)snprintf(out, (size_t)out_len, "%d", (int)state->last_exit_code);
+        return 0;
+    }
+    val = script_local_get(state, name);
+    if (!val) {
+        int32_t got = wasmos_env_get(name, name_len, out, out_len);
+        if (got < 0) {
+            out[0] = '\0';
+            return 0;
+        }
+        return 0;
+    }
+    (void)snprintf(out, (size_t)out_len, "%s", val);
+    return 0;
+}
+
+static int
 parse_int64(const char *s, int64_t *out)
 {
     if (!s || !s[0]) {
@@ -577,14 +792,21 @@ script_exec_line(wasmos_script_state_t *state, const wasmos_script_ops_t *ops, c
     if (line[0] == 'e' && line[1] == 'c' && line[2] == 'h' && line[3] == 'o' &&
         (line[4] == ' ' || line[4] == '\t')) {
         const char *text = &line[5];
-        while (*text == ' ' || *text == '\t') {
-            text++;
-        }
         char expanded[WASMOS_SCRIPT_LINE_MAX];
-        if (script_expand(state, text, expanded, (int)sizeof(expanded)) != 0) {
+        int newline = 1;
+        if (wasmos_script_echo_expand(text,
+                                      script_echo_resolve_var,
+                                      state,
+                                      expanded,
+                                      (int32_t)sizeof(expanded),
+                                      &newline) != 0) {
             return 0;
         }
-        ops->on_echo(ops->user, expanded);
+        if (ops->on_echo_ex) {
+            ops->on_echo_ex(ops->user, expanded, newline);
+        } else if (ops->on_echo) {
+            ops->on_echo(ops->user, expanded);
+        }
         return 0;
     }
 

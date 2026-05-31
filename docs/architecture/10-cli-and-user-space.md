@@ -11,7 +11,7 @@ Supported commands:
   - raw command arguments are forwarded unchanged: everything after the first whitespace is passed to the spawned process via `PROC_IPC_SPAWN_PATH` payload (no CLI parsing/quoting layer)
 - `script <file>` (run commands line-by-line; abort on first non-zero process exit status)
 - `export VAR=<value>` (set/update variable, delete when value is empty)
-- `echo ${VAR}` (expand and print one variable)
+- `echo [-n] [-e|-E] [--] [text|${VAR}...]` (print text with `${VAR}` expansion; supports basic quoting/escaping)
 - `halt`
 - `reboot`
 

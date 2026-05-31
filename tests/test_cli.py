@@ -105,7 +105,12 @@ class CliIntegrationTests(unittest.TestCase):
 
     def test_export_and_echo_variable(self):
         self._cmd_expect("export FOO=bar", b"wamos> ")
+        self._cmd_expect("set FOO=bar", b"wamos> ")
         self._cmd_expect("echo ${FOO}", b"bar")
+        self._cmd_expect("echo hello world", b"hello world")
+        self._cmd_expect("echo \"hi ${FOO}\"", b"hi bar")
+        self._cmd_expect("echo -- -n literal", b"-n literal")
+        self._cmd_expect("set FOO=", b"wamos> ")
         self._cmd_expect("export FOO=", b"wamos> ")
         mark = self.session.mark()
         self.session.send("echo ${FOO}")

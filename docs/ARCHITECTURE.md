@@ -52,6 +52,8 @@ ACPI class/subclass rule matching in `device-manager` now includes RTC bring-up
 devices discovered by `acpi-bus`.
 RTC IPC message IDs and payload packing are explicitly defined in shared
 kernel/user headers (`rtc_ipc.h`) so service/driver clients use one contract.
+CLI builtin `echo` and script `echo` now share one parser/expander path in
+libc script helpers, including `-n`/`-e`/`-E`/`--`, quoting, and `${VAR}` expansion.
 
 ## Architecture Document Map
 - [Goals](architecture/01-goals.md)

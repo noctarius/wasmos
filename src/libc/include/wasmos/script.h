@@ -34,10 +34,25 @@ typedef struct {
     int (*on_wait_svc)(void *user, const char *name);
     /* echo <text> — print expanded text */
     void (*on_echo)(void *user, const char *text);
+    /* echo extended: print expanded text, newline=1 appends trailing newline */
+    void (*on_echo_ex)(void *user, const char *text, int newline);
     /* export VAR=value — publish to kernel env store. Return 0 or -1 */
     int (*on_export)(void *user, const char *name, const char *value);
     void *user;
 } wasmos_script_ops_t;
+
+typedef int (*wasmos_script_echo_resolve_var_fn)(void *user,
+                                                 const char *name,
+                                                 int32_t name_len,
+                                                 char *out,
+                                                 int32_t out_len);
+
+int wasmos_script_echo_expand(const char *expr,
+                              wasmos_script_echo_resolve_var_fn resolve_var,
+                              void *resolve_user,
+                              char *out,
+                              int32_t out_len,
+                              int *out_newline);
 
 void wasmos_script_state_init(wasmos_script_state_t *state);
 int  wasmos_script_run(wasmos_script_state_t *state,

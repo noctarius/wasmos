@@ -1,0 +1,31 @@
+version = 1
+
+[package]
+name = "virtio-serial"
+entry = "initialize"
+kind = "driver"
+native = false
+
+[resources]
+stack_pages = 16
+heap_pages = 16
+
+[ipc]
+required_endpoint_name = "-"
+required_endpoint_rights = 0
+entry_arg_bindings = ["proc.endpoint"]
+
+[[capabilities]]
+name = "io.port"
+flags = 0
+
+[[matches]]
+bus = "pci"
+class = 0x07
+subclass = 0x00
+prog_if = 0x00
+vendor = 0x1AF4
+device = "any"
+io_port_min = 0x0CF8
+io_port_max = 0x0CFF
+priority = 100

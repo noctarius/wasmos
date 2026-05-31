@@ -844,6 +844,7 @@ registry_add_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3)
     rec->prog_if = (uint8_t)((v1 >> 16) & 0xFFu);
     rec->vendor_id = (uint16_t)(v1 & 0xFFFFu);
     rec->device_id = (uint16_t)(v2 & 0xFFFFu);
+    rec->io_port_base = (uint16_t)((v2 >> 16) & 0xFFFFu);
     rec->mmio_hint = (uint8_t)((uint32_t)arg3 & 0xFFu);
     rec->irq_hint = (uint8_t)(((uint32_t)arg3 >> 8) & 0xFFu);
     queue_block_fs_rule_spawns();
@@ -883,6 +884,14 @@ queue_pci_match_rule_spawns(void)
                 (rule->vendor_id != MATCH_ANY_U16 && rec->vendor_id != rule->vendor_id) ||
                 (rule->device_id != MATCH_ANY_U16 && rec->device_id != rule->device_id)) {
                 continue;
+            }
+            g_dm.active_rule_spawn_caps.cap_flags = 0u;
+            if (rec->io_port_base != 0u) {
+                g_dm.active_rule_spawn_caps.cap_flags = DEVMGR_CAP_IO_PORT | DEVMGR_CAP_IRQ;
+                g_dm.active_rule_spawn_caps.io_port_min = rec->io_port_base;
+                g_dm.active_rule_spawn_caps.io_port_max = (uint16_t)(rec->io_port_base + 0x3Fu);
+                g_dm.active_rule_spawn_caps.irq_mask =
+                    (rec->irq_hint < 16u) ? (uint16_t)(1u << rec->irq_hint) : 0u;
             }
             wasmos_sys_strcpy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
             g_dm.rule_spawn_pending = 1;
@@ -1680,9 +1689,10 @@ initialize(int32_t proc_endpoint,
 
             if (target == HW_SPAWN_RULE_PATH) {
                 int rc;
-                /* ACPI match rules use path+caps spawn so the driver gets
-                 * the I/O-port and IRQ grants derived from the device record. */
-                if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ACPI_MATCH &&
+                /* PCI/ACPI rule-based matches use path+caps spawn so the
+                 * driver gets I/O-port and IRQ grants derived from inventory. */
+                if ((g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_ACPI_MATCH ||
+                     g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_PCI_MATCH) &&
                     g_dm.active_rule_spawn_caps.cap_flags != 0) {
                     char boot_path[104];
                     boot_path[0] = '\0';

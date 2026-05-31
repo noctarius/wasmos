@@ -101,3 +101,45 @@
   integration points.
 - Process-manager test injection hooks are now behind a dedicated Kconfig/CMake
   switch (`WASMOS_PM_TEST_HOOKS`) and are no-op when disabled.
+- `fs-manager` no longer relies on a fixed-size client slot table; client
+  state now grows in heap-backed chunks.
+- Process-manager context buffer tracking for filesystem/framebuffer borrows is
+  list-backed instead of fixed `PROCESS_MAX_COUNT` arrays.
+- Kernel list internals include an early-boot static-arena allocator fallback
+  so list-backed modules can initialize before general heap allocation is ready.
+- MM context registration and capability state tracking are list-backed, so
+  context growth is no longer bounded by static `MM_MAX_CONTEXTS` slot arrays.
+- Per-context memory-region storage is also list-backed, removing fixed
+  `MM_MAX_REGIONS` limits within each context.
+- WASM `libui` component-tree state is heap-backed (dynamic component, text,
+  and list-item storage) instead of fixed compile-time caps, and includes list
+  views/dropdowns with text rendering through required `font-service` IPC.
+- Font IPC includes text-run measurement and client-buffer rasterization
+  (`FONT_IPC_MEASURE_GLYPH_REQ`, `FONT_IPC_RASTER_GLYPH_INTO_REQ`) with shared
+  memory payload/response packing.
+- Compositor window-title rendering uses the text-run path (measure +
+  raster-into) with per-window title-run caching to avoid compose-time per-char
+  font IPC requests.
+- Compositor pointer delivery to focused clients uses content-local
+  coordinates, and client buffers render in the content pane below window
+  chrome/titlebar.
+- WASM libc now implements a process-local linear-memory allocator
+  (`malloc/free/calloc/realloc`) backed by `memory.grow`.
+- Native driver ABI includes an explicit shared-memory flush hook for stable
+  shared-buffer publication contracts in native services/drivers.
+- WASM hostcalls include both shared-memory sync directions:
+  `shmem_flush` (WASM -> shared) and `shmem_refresh` (shared -> WASM).
+- ACPI class/subclass matching in `device-manager` includes RTC bring-up
+  (`PNP0B00` class `0x08` / subclass `0x03`) alongside serial/keyboard/mouse
+  ISA devices from `acpi-bus`.
+- RTC IPC message IDs and payload packing are explicitly defined in shared
+  kernel/user headers (`rtc_ipc.h`) for a single client/driver contract.
+- CLI builtin `echo` and script `echo` share one parser/expander path in libc
+  script helpers, including `-n`/`-e`/`-E`/`--`, quoting, and `${VAR}`
+  expansion.
+- Environment-variable architecture now targets per-context scope ownership
+  with POSIX-like snapshot inheritance, including explicit `script` (child
+  scope) versus `source` (current scope) behavior.
+- A generic `virtio-serial` driver baseline is available as a PCI-matched WASM
+  service (`virtio.serial`) with discovery and register-access IPC as a
+  foundation for higher-level transport consumers.

@@ -163,6 +163,7 @@ Key policy/runtime notes:
 - `src/kernel/`: kernel core
 - `src/drivers/`: drivers (WASM and native)
 - `src/services/`: services
+- `src/utils/`: OS-provided utilities/tools
 - `src/libc/`: shared user-space libc + shims
 - `examples/`: sample/smoke apps
 - `userfs/`: host-backed user filesystem directory attached as a second FAT drive in QEMU

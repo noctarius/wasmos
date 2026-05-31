@@ -191,7 +191,9 @@ enum {
 
 enum {
     RTC_IPC_READ_REQ  = 0x820,
+    RTC_IPC_SET_REQ   = 0x821,
     RTC_IPC_READ_RESP = 0x8A0,
+    RTC_IPC_SET_RESP  = 0x8A1,
     RTC_IPC_ERROR     = 0x8FF
 };
 

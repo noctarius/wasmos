@@ -154,6 +154,9 @@ set(WASM_HELLO_ZIG_APP ${BUILD_DIR}/hello_zig.wap)
 set(AS_HELLO_SRC ${EXAMPLES_AS_DIR}/hello/hello.ts)
 set(AS_HELLO_WASM ${BUILD_DIR}/hello_as.wasm)
 set(AS_HELLO_APP ${BUILD_DIR}/hello_as.wap)
+set(WASM_DATE_TOOL_SRC ${CMAKE_SOURCE_DIR}/src/utils/date/date.ts)
+set(WASM_DATE_TOOL_WASM ${BUILD_DIR}/date_tool.wasm)
+set(WASM_DATE_TOOL_APP ${BUILD_DIR}/date.wap)
 
 if (NOT DEFINED AS_ENABLE_INITIALIZED)
   set(AS_ENABLE ON CACHE BOOL "Enable AssemblyScript example builds" FORCE)
@@ -812,6 +815,7 @@ add_subdirectory(src/boot)
 add_subdirectory(src/drivers)
 add_subdirectory(examples/c)
 add_subdirectory(src/services)
+add_subdirectory(src/utils)
 add_subdirectory(examples/assemblyscript)
 add_subdirectory(examples/rust)
 add_subdirectory(examples/go)
@@ -885,6 +889,9 @@ if (AS_ENABLE)
     COMMAND ${CMAKE_COMMAND} -E copy ${AS_HELLO_APP} ${BUILD_DIR}/esp/apps/hello_as.wap
   )
 endif ()
+set(DATE_TOOL_COPY_CMD
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DATE_TOOL_APP} ${BUILD_DIR}/esp/system/utils/date.wap
+)
 set(HELLO_C_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HELLO_C_APP} ${BUILD_DIR}/esp/apps/hello_c.wap
 )
@@ -938,6 +945,7 @@ set(INITFS_COPY_CMD
           ${CMAKE_SOURCE_DIR}/scripts/system/devmgr/rules
           ${BUILD_DIR}/esp/system/devmgr/rules
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/fonts
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/utils
   COMMAND ${CMAKE_COMMAND} -E rm -f ${BUILD_DIR}/esp/system/fonts/noto_serif.ttf
   COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/system/fonts/Roboto-Regular.ttf ${BUILD_DIR}/esp/system/fonts/roboto.ttf
   COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/system/fonts/RobotoMono-Regular.ttf ${BUILD_DIR}/esp/system/fonts/roboto_mono.ttf
@@ -948,6 +956,7 @@ set(INITFS_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_RTC_APP} ${BUILD_DIR}/esp/system/drivers/rtc.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FRAMEBUFFER_APP} ${BUILD_DIR}/esp/system/drivers/framebuf.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FRAMEBUFFER_PCI_APP} ${BUILD_DIR}/esp/system/drivers/framebuf_pci.wap
+  ${DATE_TOOL_COPY_CMD}
   COMMAND ${CMAKE_COMMAND} -E copy
       ${CMAKE_SOURCE_DIR}/scripts/system/sysinit.rc
       ${BUILD_DIR}/esp/system/sysinit.rc
@@ -1754,6 +1763,19 @@ add_dependencies(run-qemu-debug make_initfs)
 add_dependencies(run-qemu-ring3-check make_initfs)
 add_dependencies(run-qemu-ring3-threading-check make_initfs)
 add_dependencies(run-qemu-ring3-fault-storm-check make_initfs)
+
+if (TARGET system_utils)
+  add_dependencies(run-qemu system_utils)
+  add_dependencies(run-qemu-test system_utils)
+  add_dependencies(run-qemu-cli-test system_utils)
+  add_dependencies(run-qemu-debug system_utils)
+  add_dependencies(run-qemu-ring3-check system_utils)
+  add_dependencies(run-qemu-ring3-threading-check system_utils)
+  add_dependencies(run-qemu-ring3-fault-storm-check system_utils)
+  if (TARGET run-qemu-ui-test)
+    add_dependencies(run-qemu-ui-test system_utils)
+  endif ()
+endif ()
 
 if (TARGET assemblyscript_examples)
   add_dependencies(run-qemu assemblyscript_examples)

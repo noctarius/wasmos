@@ -1,9 +1,9 @@
 version = 1
 
 [package]
-name = "rtc"
-entry = "initialize"
-kind = "driver"
+name = "date"
+entry = "wasmos_main"
+kind = "app"
 native = false
 
 [resources]
@@ -16,9 +16,5 @@ required_endpoint_rights = 0
 entry_arg_bindings = ["proc.endpoint"]
 
 [[capabilities]]
-name = "io.port"
-flags = 0
-
-[[capabilities]]
-name = "irq.route"
+name = "ipc.basic"
 flags = 0

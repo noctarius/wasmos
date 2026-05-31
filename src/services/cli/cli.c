@@ -226,7 +226,7 @@ cli_env_init_defaults(void)
         g_env[i].name[0] = '\0';
         g_env[i].value[0] = '\0';
     }
-    (void)cli_env_set("PATH", "/boot/apps:/boot/system/services:/boot/system/drivers");
+    (void)cli_env_set("PATH", "/boot/apps:/boot/system/services:/boot/system/drivers:/boot/system/utils");
 }
 
 static int

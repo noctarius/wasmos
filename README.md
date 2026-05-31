@@ -143,31 +143,14 @@ Boot sequence (high level):
 1. `BOOTX64.EFI` loads `kernel.elf` and `initfs.img`
 2. Kernel boots, initializes core subsystems, starts `init`
 3. `init` starts `fs-manager`, then `fs-init`, then `device-manager`
-4. `device-manager` starts `pci-bus` (via PM endpoint lookup), consumes inventory, applies udev-style match rules, then starts drivers/services through rules (`SUBSYSTEM=="boot"` + `RUN+=...` for forced spawns, `SUBSYSTEM=="pci"` + `ATTR{...}` for PCI matches, `SUBSYSTEM=="block"` + `ATTR{unit}`/`ENV{MOUNT}` for `fs-fat` bring-up)
+4. `device-manager` starts `pci-bus` and `acpi-bus`, consumes inventory, and applies policy rules to spawn drivers/services
+5. Storage drivers publish block devices; `fs-fat` mounts `/boot` (and optional `/user`), then runtime policy from `/boot/system/devmgr/rules` is loaded
+6. `init` requests `sysinit` from `/boot`, and `sysinit` starts configured services/apps
 
-Current driver match/capability policy source:
-- driver metadata is embedded in each driver’s WASMOS-APP package
-- `device-manager` queries module metadata from process-manager at runtime and matches against PCI inventory
-- process-manager now also supports initfs metadata lookup by module path (`PROC_IPC_MODULE_META_PATH`) so driver startup can resolve metadata without relying only on boot-module indices
-- kernel `.wap` metadata parsing/mapping helpers are now extracted into `wasmos_app_meta` so process-manager logic can reuse a focused metadata module
-- all in-tree apps, drivers, and services now provide `linker.metadata` metadata consumed by `make_wasmos_app`
-Current FS namespace model:
-- `fs-manager` is the canonical `fs` endpoint for PM/runtime file I/O and CLI mount namespace routing (registered as `fs.vfs`)
-- `fs-manager` client session state is now tracked in a heap-grown chunk list (no fixed 64-client table cap)
-- `mount` reporting is now served directly by `fs-manager` (`FSMGR_IPC_QUERY_MOUNTS_REQ`) so filesystem mount ownership/query no longer depends on device-manager mount indices
-- `fs-fat` and `fs-init` are backend filesystem drivers registered into `fs-manager`; `fs-init` now serves real initfs file entries through normal filesystem open/read/readdir operations (no embedded fallback payload for `default.rules`)
-- bootstrapping now brings up `fs-manager` + `fs-init` before `device-manager`, so later startup lookups can resolve via the VFS namespace rather than only early boot-module ordering
-- kernel now exposes generic cross-context buffer borrows (`buffer_borrow`/`buffer_release`) with typed buffer classes and read/write grants; `fs-manager` uses the FS class for zero-copy backend proxying
-- process-manager FS/framebuffer per-context borrow slots are list-backed (no fixed `PROCESS_MAX_COUNT` slot arrays)
-- MM context registry and per-context capability state are list-backed (no fixed `MM_MAX_CONTEXTS` runtime slot cap)
-- Per-context MM regions are list-backed (no fixed `MM_MAX_REGIONS` table per context)
-- native framebuffer driver mapping now uses the same generic borrow path (`PM_BUFFER_KIND_FRAMEBUFFER`) instead of a dedicated framebuffer mapper callback
-- native driver ABI now has explicit magic/version fields and fails fast on mismatch to avoid mixed-kernel/driver function-table corruption; shared-memory operations include a native `shmem_flush` hook for explicit writeback to shared pages when needed.
-- PM `spawn_name` busy responses now carry a transient error code (`arg1=-2`); `sysinit` and `device-manager` retry/yield on busy so boot-time service/driver spawns no longer race each other
-- QEMU now wires a second FAT source directory from repo-root `userfs/`; `fs.vfs` reserves `/user` for that secondary FAT backend while `/boot` remains the primary FAT mount and `/init` is routed to `fs-init` (`fs.init`)
-- device-manager rule roots are now reserved at `/init/devmgr/rules` (bootstrap) and `/boot/system/devmgr/rules` (runtime override) as the starting point for udev-like dynamic device/mount policy
-5. `init` requests `sysinit` load from FAT via process manager
-6. `sysinit` starts configured services/apps from boot config
+Key policy/runtime notes:
+- Driver matching is metadata-driven (`linker.metadata` in WASMOS-APP packages) and resolved through process-manager module metadata queries.
+- `fs-manager` is the canonical VFS endpoint (`fs.vfs`) and routes `/init`, `/boot`, and `/user` mounts.
+- `device-manager` rules are split between bootstrap (`/init/devmgr/rules`) and runtime override (`/boot/system/devmgr/rules`).
 
 ## Repository Layout
 - `src/boot/`: UEFI bootloader

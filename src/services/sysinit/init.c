@@ -12,6 +12,7 @@ static sysinit_state_t g_state = {
     .spawn_request_id  = 1,
     .proc_endpoint     = -1,
 };
+static wasmos_script_state_t g_script_state;
 static int32_t (*volatile g_console_write)(int32_t, int32_t);
 static int32_t (*volatile g_debug_mark)(int32_t);
 
@@ -269,8 +270,7 @@ initialize(int32_t proc_endpoint,
 
     wasmos_sys_notify_ready(g_state.proc_endpoint, g_state.reply_endpoint);
 
-    wasmos_script_state_t script_state;
-    wasmos_script_state_init(&script_state);
+    wasmos_script_state_init(&g_script_state);
 
     wasmos_script_ops_t ops;
     ops.on_start    = sysinit_on_start;
@@ -281,7 +281,7 @@ initialize(int32_t proc_endpoint,
     ops.on_export   = sysinit_on_export;
     ops.user        = &g_state;
 
-    int rc = wasmos_script_run(&script_state, &ops, SYSINIT_SCRIPT_PATH);
+    int rc = wasmos_script_run(&g_script_state, &ops, SYSINIT_SCRIPT_PATH);
     if (rc != 0) {
         fatal_stall("[sysinit] script failed or not found\n");
     }

@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include "ctype.h"
+#include "stdlib.h"
 #include "stdio.h"
 #include "string.h"
 #include "wasmos/api.h"
@@ -50,7 +51,8 @@ static uint32_t g_ps_parents[CLI_MAX_PROCS];
 static char g_ps_names[CLI_MAX_PROCS][32];
 static wasmos_proc_stats_t g_ps_stats[CLI_MAX_PROCS];
 static uint8_t g_ps_visited[CLI_MAX_PROCS];
-static cli_env_var_t g_env[CLI_ENV_MAX];
+static cli_env_var_t *g_env = 0;
+static wasmos_script_state_t g_cli_script_state;
 
 static void
 set_cwd_root(void)
@@ -152,83 +154,97 @@ str_find_char(const char *s, char ch)
     return -1;
 }
 
-static int
-cli_env_find_index(const char *name)
+static cli_env_var_t *
+cli_env_find(const char *name, int is_export)
 {
-    int i;
+    cli_env_var_t *it = g_env;
     if (!name || !name[0]) {
-        return -1;
+        return 0;
     }
-    for (i = 0; i < CLI_ENV_MAX; ++i) {
-        if (g_env[i].in_use && wasmos_sys_streq(g_env[i].name, name)) {
-            return i;
+    while (it) {
+        if (it->is_export == (uint8_t)(is_export ? 1 : 0) && wasmos_sys_streq(it->name, name)) {
+            return it;
         }
+        it = it->next;
     }
-    return -1;
+    return 0;
 }
 
 static const char *
 cli_env_get(const char *name)
 {
-    int idx = cli_env_find_index(name);
-    if (idx < 0) {
-        return 0;
+    cli_env_var_t *var = cli_env_find(name, 0);
+    if (var) {
+        return var->value;
     }
-    return g_env[idx].value;
+    var = cli_env_find(name, 1);
+    return var ? var->value : 0;
+}
+
+static void
+cli_env_clear(void)
+{
+    cli_env_var_t *it = g_env;
+    while (it) {
+        cli_env_var_t *next = it->next;
+        free(it);
+        it = next;
+    }
+    g_env = 0;
 }
 
 static int
-cli_env_set(const char *name, const char *value)
+cli_env_set(const char *name, const char *value, int is_export)
 {
-    int i = 0;
-    int idx = -1;
-    int empty = -1;
+    cli_env_var_t *it = 0;
+    cli_env_var_t *prev = 0;
     if (!name || !name[0]) {
         return -1;
     }
     if (wasmos_sys_strlen(name) >= CLI_ENV_NAME_MAX) {
         return -1;
     }
-    idx = cli_env_find_index(name);
+    for (it = g_env; it; prev = it, it = it->next) {
+        if (it->is_export == (uint8_t)(is_export ? 1 : 0) && wasmos_sys_streq(it->name, name)) {
+            break;
+        }
+    }
     if (!value || value[0] == '\0') {
-        if (idx >= 0) {
-            g_env[idx].in_use = 0;
-            g_env[idx].name[0] = '\0';
-            g_env[idx].value[0] = '\0';
+        if (it) {
+            if (prev) {
+                prev->next = it->next;
+            } else {
+                g_env = it->next;
+            }
+            free(it);
         }
         return 0;
     }
     if (wasmos_sys_strlen(value) >= CLI_ENV_VALUE_MAX) {
         return -1;
     }
-    if (idx < 0) {
-        for (i = 0; i < CLI_ENV_MAX; ++i) {
-            if (!g_env[i].in_use) {
-                empty = i;
-                break;
-            }
-        }
-        if (empty < 0) {
+    if (!it) {
+        it = (cli_env_var_t *)malloc(sizeof(*it));
+        if (!it) {
             return -1;
         }
-        idx = empty;
-        g_env[idx].in_use = 1;
+        memset(it, 0, sizeof(*it));
+        it->is_export = is_export ? 1 : 0;
+        it->next = g_env;
+        g_env = it;
     }
-    (void)snprintf(g_env[idx].name, sizeof(g_env[idx].name), "%s", name);
-    (void)snprintf(g_env[idx].value, sizeof(g_env[idx].value), "%s", value);
+    it->is_export = is_export ? 1 : 0;
+    (void)snprintf(it->name, sizeof(it->name), "%s", name);
+    (void)snprintf(it->value, sizeof(it->value), "%s", value);
     return 0;
 }
 
 static void
 cli_env_init_defaults(void)
 {
-    for (int i = 0; i < CLI_ENV_MAX; ++i) {
-        g_env[i].in_use = 0;
-        g_env[i].name[0] = '\0';
-        g_env[i].value[0] = '\0';
-    }
-    (void)cli_env_set("PATH", "/boot/apps:/boot/system/services:/boot/system/drivers:/boot/system/utils");
-    (void)cli_env_set("?", "0");
+    cli_env_clear();
+    (void)cli_env_set("PATH", "/boot/apps:/boot/system/services:/boot/system/drivers:/boot/system/utils", 1);
+    (void)cli_env_set("?", "0", 0);
 }
 
 static int
@@ -302,10 +318,9 @@ cli_env_apply_export_line(const char *line)
     if (cli_parse_name_value(line, name, (int)sizeof(name), value, (int)sizeof(value), &nlen, &vlen) != 0) {
         return -1;
     }
-    if (cli_env_set(name, value) != 0) {
-        return -1;
-    }
-    return wasmos_env_set(name, nlen, value, vlen);
+    (void)nlen;
+    (void)vlen;
+    return cli_env_set(name, value, 1);
 }
 
 static int
@@ -316,7 +331,7 @@ cli_env_set_local_line(const char *line)
     if (cli_parse_name_value(line, name, (int)sizeof(name), value, (int)sizeof(value), 0, 0) != 0) {
         return -1;
     }
-    return cli_env_set(name, value);
+    return cli_env_set(name, value, 0);
 }
 
 static int
@@ -337,7 +352,6 @@ cli_echo_env_expr(const char *expr)
     while (expr[i] && expanded_len + 1u < sizeof(expanded_expr)) {
         if (expr[i] == '$' && expr[i + 1] == '{') {
             char name[CLI_ENV_NAME_MAX];
-            char kbuf[CLI_ENV_VALUE_MAX];
             const char *val = 0;
             int32_t nlen = 0;
             int32_t j = i + 2;
@@ -348,12 +362,6 @@ cli_echo_env_expr(const char *expr)
                 name[nlen] = '\0';
                 if (nlen > 0) {
                     val = cli_env_get(name);
-                    if (!val) {
-                        int32_t got = wasmos_env_get(name, nlen, kbuf, (int32_t)sizeof(kbuf));
-                        if (got >= 0) {
-                            val = kbuf;
-                        }
-                    }
                     if (val) {
                         for (int32_t vi = 0; val[vi] && expanded_len + 1u < sizeof(expanded_expr); ++vi) {
                             expanded_expr[expanded_len++] = val[vi];
@@ -484,7 +492,6 @@ cli_echo_env_expr(const char *expr)
             }
             if (!in_single && c == '$' && expr[i + 1] == '{') {
                 char name[CLI_ENV_NAME_MAX];
-                char kbuf[CLI_ENV_VALUE_MAX];
                 int32_t nlen = 0;
                 const char *val = 0;
                 i += 2;
@@ -497,12 +504,6 @@ cli_echo_env_expr(const char *expr)
                     token_started = 1;
                     if (nlen > 0) {
                         val = cli_env_get(name);
-                        if (!val) {
-                            int32_t got = wasmos_env_get(name, nlen, kbuf, (int32_t)sizeof(kbuf));
-                            if (got >= 0) {
-                                val = kbuf;
-                            }
-                        }
                         if (val) {
                             for (int32_t vi = 0; val[vi] && out_len + 1u < sizeof(out); ++vi) {
                                 out[out_len++] = val[vi];
@@ -1772,19 +1773,75 @@ static int
 cli_script_on_export(void *user, const char *name, const char *value)
 {
     (void)user;
-    int32_t nlen = (int32_t)wasmos_sys_strlen(name);
-    int32_t vlen = (int32_t)wasmos_sys_strlen(value);
-    return wasmos_env_set(name, nlen, value, vlen);
+    (void)name;
+    (void)value;
+    return 0;
 }
 
 static int
-cli_run_script(const char *script_path)
+cli_script_scope_put(wasmos_script_env_node_t **table, const char *name, const char *value)
+{
+    wasmos_script_env_node_t *it = 0;
+    if (!table || !name || !name[0] || !value || !value[0]) {
+        return -1;
+    }
+    for (it = *table; it; it = it->next) {
+        if (wasmos_sys_streq(it->pair.name, name)) {
+            (void)snprintf(it->pair.value, sizeof(it->pair.value), "%s", value);
+            return 0;
+        }
+    }
+    it = (wasmos_script_env_node_t *)malloc(sizeof(*it));
+    if (!it) {
+        return -1;
+    }
+    memset(it, 0, sizeof(*it));
+    (void)snprintf(it->pair.name, sizeof(it->pair.name), "%s", name);
+    (void)snprintf(it->pair.value, sizeof(it->pair.value), "%s", value);
+    it->next = *table;
+    *table = it;
+    return 0;
+}
+
+static void
+cli_scope_to_script(wasmos_script_state_t *state, int include_locals)
+{
+    if (!state) {
+        return;
+    }
+    wasmos_script_state_dispose(state);
+    wasmos_script_state_init(state);
+    for (cli_env_var_t *it = g_env; it; it = it->next) {
+        if (it->is_export) {
+            (void)cli_script_scope_put(&state->exports, it->name, it->value);
+        } else if (include_locals) {
+            (void)cli_script_scope_put(&state->locals, it->name, it->value);
+        }
+    }
+}
+
+static void
+cli_scope_from_script(const wasmos_script_state_t *state)
+{
+    if (!state) {
+        return;
+    }
+    cli_env_clear();
+    for (const wasmos_script_env_node_t *it = state->exports; it; it = it->next) {
+        (void)cli_env_set(it->pair.name, it->pair.value, 1);
+    }
+    for (const wasmos_script_env_node_t *it = state->locals; it; it = it->next) {
+        (void)cli_env_set(it->pair.name, it->pair.value, 0);
+    }
+}
+
+static int
+cli_run_script(const char *script_path, int source_mode)
 {
     if (!script_path || script_path[0] == '\0') {
         return -1;
     }
-    wasmos_script_state_t script_state;
-    wasmos_script_state_init(&script_state);
+    cli_scope_to_script(&g_cli_script_state, source_mode ? 1 : 0);
     wasmos_script_ops_t ops;
     ops.on_start    = cli_script_on_start;
     ops.on_spawn    = cli_script_on_spawn;
@@ -1794,7 +1851,13 @@ cli_run_script(const char *script_path)
     ops.on_echo_ex  = cli_script_on_echo_ex;
     ops.on_export   = cli_script_on_export;
     ops.user        = 0;
-    return wasmos_script_run(&script_state, &ops, script_path);
+    if (wasmos_script_run(&g_cli_script_state, &ops, script_path) != 0) {
+        return -1;
+    }
+    if (source_mode) {
+        cli_scope_from_script(&g_cli_script_state);
+    }
+    return 0;
 }
 
 static int
@@ -1805,7 +1868,7 @@ cli_handle_line(void)
         return 0;
     }
     if (line_eq_ci("help")) {
-        console_write("commands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, echo [-n] [-e|-E] [--] [text|${VAR}...], tty <0-3>, halt, reboot\n");
+        console_write("commands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, source <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, echo [-n] [-e|-E] [--] [text|${VAR}...], tty <0-3>, halt, reboot\n");
         return 0;
     }
     if (line_eq_ci("mount")) {
@@ -1901,10 +1964,26 @@ cli_handle_line(void)
             console_write("script failed\n");
             return 0;
         }
-        if (cli_run_script(path) != 0) {
+        if (cli_run_script(path, 0) != 0) {
             return 0;
         }
         console_write("script ok\n");
+        return 0;
+    }
+    if ((g_line_len > 7 && line_starts_with_ci("source ")) ||
+        (g_line_len > 2 && g_line[0] == '.' && g_line[1] == ' ')) {
+        const char *path = line_starts_with_ci("source ") ? &g_line[7] : &g_line[2];
+        while (*path == ' ' || *path == '\t') {
+            path++;
+        }
+        if (*path == '\0') {
+            console_write("source failed\n");
+            return 0;
+        }
+        if (cli_run_script(path, 1) != 0) {
+            return 0;
+        }
+        console_write("source ok\n");
         return 0;
     }
     if (g_line_len > 7 && line_starts_with_ci("export ")) {
@@ -2261,7 +2340,7 @@ cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg)
         (void)cli_switch_tty(1, 1, 0);
     }
     if (g_home_tty == 1) {
-        console_write("WAMOS CLI\ncommands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, echo [-n] [-e|-E] [--] [text|${VAR}...], tty <0-3>, halt, reboot\n");
+        console_write("WAMOS CLI\ncommands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, source <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, echo [-n] [-e|-E] [--] [text|${VAR}...], tty <0-3>, halt, reboot\n");
     }
     wasmos_sys_notify_ready(g_proc_endpoint, g_reply_endpoint);
     g_phase = CLI_PHASE_PROMPT;
@@ -2426,20 +2505,20 @@ cli_phase_wait_ipc_step(void)
             (spawn_flags & (WASMOS_SPAWN_FLAG_SERVICE | WASMOS_SPAWN_FLAG_DRIVER))) {
             /* Service/driver: PM already waited for NOTIFY_READY before responding.
              * Process is running in background; $? = 0 signals successful startup. */
-            cli_env_set("?", "0");
+            cli_env_set("?", "0", 0);
         } else if (spawned_pid > 0 &&
                    cli_send_proc(PROC_IPC_WAIT, (uint32_t)spawned_pid, 0, 0, 0) == 0) {
             g_pending_exec_pid = spawned_pid;
             g_pending_kind = PENDING_WAIT;
             return;
         } else {
-            cli_env_set("?", "-1");
+            cli_env_set("?", "-1", 0);
         }
     } else if (g_pending_kind == PENDING_WAIT && resp_type == PROC_IPC_RESP) {
         int32_t exit_code = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
         char ec_buf[12];
         snprintf(ec_buf, sizeof(ec_buf), "%d", (int)exit_code);
-        cli_env_set("?", ec_buf);
+        cli_env_set("?", ec_buf, 0);
         g_pending_exec_pid = -1;
     } else if (g_pending_kind == PENDING_SPAWN && resp_type == PROC_IPC_RESP) {
         /* detached: process started in background, $? unchanged */

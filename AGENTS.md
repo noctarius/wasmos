@@ -10,7 +10,8 @@ This repository uses Codex CLI to assist with development. Follow these conventi
 - Read `README.md` and `docs/ARCHITECTURE.md` at the start of a new task.
 - Keep `README.md` and `docs/ARCHITECTURE.md` updated with meaningful changes and new behaviors.
 - Keep `README.md` high-level and stable: do not append per-iteration or
-  changelog-style feature bullets for each incremental step.
+  changelog-style feature bullets for each incremental step. `README.md`is user-facing (human).
+  Updates should only be made if they are significant.
 - Keep `libc` and its wrappers in sync, and keep `libsys` and its wrappers in
   sync across runtime-specific variants. Any API/behavior change in one side
   must be reflected in the corresponding wrapper/variant in the same change

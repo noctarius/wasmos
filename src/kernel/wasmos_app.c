@@ -1,4 +1,5 @@
 #include "klog.h"
+#include "serial.h"
 #include "wasmos_app.h"
 #include <string.h>
 
@@ -368,21 +369,21 @@ int
 wasmos_app_call_entry(wasmos_app_instance_t *instance)
 {
     if (!instance || !instance->active) {
-        klog_write("[wasmos-app] entry skipped (inactive)\n");
+        trace_write("[wasmos-app] entry skipped (inactive)\n");
         return -1;
     }
-    klog_printf("[wasmos-app] entry start %s export=%s\n",
-        instance->name, instance->entry);
+    trace_do(klog_printf("[wasmos-app] entry start %s export=%s\n",
+        instance->name, instance->entry));
     /* Entry dispatch is centralized here so drivers, services, and applications
      * all produce the same diagnostic framing around their actual export call. */
     int rc = wasm_driver_call_unlocked(&instance->driver,
                                        instance->entry,
                                        instance->entry_argc,
                                        instance->entry_argv);
-    klog_printf("[wasmos-app] entry rc=%016llx\n[wasmos-app] entry %s %s\n",
+    trace_do(klog_printf("[wasmos-app] entry rc=%016llx\n[wasmos-app] entry %s %s\n",
         (unsigned long long)(uint32_t)rc,
         rc == 0 ? "ok" : "failed",
-        instance->name);
+        instance->name));
     return rc;
 }
 

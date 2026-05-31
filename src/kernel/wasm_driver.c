@@ -1,6 +1,7 @@
 #include "wasm_driver.h"
 #include "klog.h"
 #include "process.h"
+#include "serial.h"
 #include "wasm3_link.h"
 #include "wasm3_shim.h"
 #include "thread.h"
@@ -349,7 +350,7 @@ wasm_driver_start(wasm_driver_t *driver,
 
     driver->active = 1;
     wasm_driver_registry_set(driver->owner_pid, driver);
-    klog_write("[wasm-driver] started\n");
+    trace_write("[wasm-driver] started\n");
     wasm_driver_leave_runtime(previous_pid);
     return 0;
 }

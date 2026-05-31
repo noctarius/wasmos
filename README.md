@@ -180,6 +180,7 @@ Key policy/runtime notes:
 - `docs/architecture/15-threading-and-lifecycle.md`: threading design and rollout
 - `docs/architecture/16-dma-transfers.md`: DMA transfer capability model, phased rollout plan, and validation gates
 - `docs/architecture/17-graphics-framebuffer-and-compositor.md`: microkernel graphics stack design (framebuffer driver, shared-buffer IPC model, compositor ABI, and phased implementation plan)
+- `docs/architecture/18-environment-scopes-and-inheritance.md`: environment scope model for CLI/scripts/processes, POSIX-like inheritance semantics, and `script` vs `source` behavior
 - `docs/TASKS.md`: active and planned work
 - `AGENTS.md`: contributor/agent workflow and repository rules
 

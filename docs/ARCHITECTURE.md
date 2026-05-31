@@ -77,6 +77,7 @@ POSIX-like snapshot inheritance, including explicit `script` (child scope) vs
 - [DMA Transfers](architecture/16-dma-transfers.md)
 - [Graphics, Framebuffer, and Compositor](architecture/17-graphics-framebuffer-and-compositor.md)
 - [Environment Scopes and Inheritance](architecture/18-environment-scopes-and-inheritance.md)
+- [Virtual Input Testing via Virtio-Serial](architecture/19-virtual-input-testing-via-virtio-serial.md)
 
 ## Update Rules
 - Update the relevant feature document(s) in `docs/architecture/` when behavior

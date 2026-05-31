@@ -643,6 +643,7 @@ pm_handle_spawn_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     g_pm.spawn.parent_pid = parent_pid;
     g_pm.spawn.parent_context_id = owner_context;
     g_pm.spawn.sync_child_pid = child_pid;
+    g_pm.spawn.app_flags = 0;
     sync_child = process_get(child_pid);
     if (sync_child && !sync_child->is_wasm) {
         process_set_require_explicit_ready(sync_child);
@@ -709,6 +710,7 @@ pm_handle_spawn_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     g_pm.spawn.parent_pid = parent_pid;
     g_pm.spawn.parent_context_id = owner_context;
     g_pm.spawn.sync_child_pid = child_pid;
+    g_pm.spawn.app_flags = 0;
     sync_child = process_get(child_pid);
     if (sync_child && !sync_child->is_wasm) {
         process_set_require_explicit_ready(sync_child);
@@ -775,6 +777,7 @@ pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     g_pm.spawn.parent_pid = parent_pid;
     g_pm.spawn.parent_context_id = owner_context;
     g_pm.spawn.sync_child_pid = child_pid;
+    g_pm.spawn.app_flags = 0;
     sync_child = process_get(child_pid);
     if (sync_child && !sync_child->is_wasm) {
         process_set_require_explicit_ready(sync_child);
@@ -854,6 +857,7 @@ pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     g_pm.spawn.parent_pid = parent_pid;
     g_pm.spawn.parent_context_id = owner_context;
     g_pm.spawn.sync_child_pid = child_pid;
+    g_pm.spawn.app_flags = 0;
     sync_child = process_get(child_pid);
     if (sync_child && !sync_child->is_wasm) {
         process_set_require_explicit_ready(sync_child);
@@ -910,7 +914,7 @@ pm_poll_sync_spawn(uint32_t pm_context_id)
     resp.destination = g_pm.spawn.reply_endpoint;
     resp.request_id = g_pm.spawn.request_id;
     resp.arg0 = g_pm.spawn.sync_child_pid;
-    resp.arg1 = 0;
+    resp.arg1 = g_pm.spawn.app_flags;
     resp.arg2 = 0;
     resp.arg3 = 0;
     ipc_send_from(pm_context_id, g_pm.spawn.reply_endpoint, &resp);
@@ -1428,6 +1432,15 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
                                   &blob_size) != 0) {
         return -1;
     }
+    wasmos_app_desc_t desc;
+    uint32_t app_flags = 0;
+    if (wasmos_app_parse(pm_fs_buf, blob_size, &desc) == 0) {
+        app_flags = desc.flags;
+    }
+    int needs_ready = (app_flags & (WASMOS_APP_FLAG_SERVICE | WASMOS_APP_FLAG_DRIVER)) != 0;
+    if (needs_ready && g_pm.spawn.in_use) {
+        return -2;
+    }
     if (pm_spawn_from_buffer(parent_pid,
                              pm_fs_buf,
                              blob_size,
@@ -1438,13 +1451,30 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
     }
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);
 
+    if (needs_ready) {
+        process_t *sync_child = process_get(pid);
+        if (sync_child && !sync_child->is_wasm) {
+            process_set_require_explicit_ready(sync_child);
+        }
+        g_pm.spawn.in_use = 1;
+        g_pm.spawn.is_sync = 1;
+        g_pm.spawn.reply_endpoint = msg->source;
+        g_pm.spawn.request_id = msg->request_id;
+        g_pm.spawn.parent_pid = parent_pid;
+        g_pm.spawn.parent_context_id = owner_context;
+        g_pm.spawn.sync_child_pid = pid;
+        g_pm.spawn.app_flags = app_flags;
+        g_pm.spawn.sync_timeout_ticks = 0;
+        return 0;
+    }
+
     ipc_message_t resp;
     resp.type = PROC_IPC_RESP;
     resp.source = g_pm.proc_endpoint;
     resp.destination = msg->source;
     resp.request_id = msg->request_id;
     resp.arg0 = pid;
-    resp.arg1 = 0;
+    resp.arg1 = app_flags;
     resp.arg2 = 0;
     resp.arg3 = 0;
     return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;

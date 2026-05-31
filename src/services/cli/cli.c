@@ -2142,6 +2142,7 @@ cli_phase_wait_ipc_step(void)
         cli_fail_and_stall("[cli] ipc response invalid\n");
     } else if (g_pending_kind == PENDING_EXEC && resp_type == PROC_IPC_RESP) {
         int32_t spawned_pid = resp_status;
+        int32_t spawn_flags = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
 #if WASMOS_TRACE
         char pbuf[32];
         int ppos = 0;
@@ -2151,12 +2152,19 @@ cli_phase_wait_ipc_step(void)
         pbuf[ppos] = '\0';
         console_write(pbuf);
 #endif
-        if (spawned_pid > 0 && cli_send_proc(PROC_IPC_WAIT, (uint32_t)spawned_pid, 0, 0, 0) == 0) {
+        if (spawned_pid > 0 &&
+            (spawn_flags & (WASMOS_SPAWN_FLAG_SERVICE | WASMOS_SPAWN_FLAG_DRIVER))) {
+            /* Service/driver: PM already waited for NOTIFY_READY before responding.
+             * Process is running in background; $? = 0 signals successful startup. */
+            cli_env_set("?", "0");
+        } else if (spawned_pid > 0 &&
+                   cli_send_proc(PROC_IPC_WAIT, (uint32_t)spawned_pid, 0, 0, 0) == 0) {
             g_pending_exec_pid = spawned_pid;
             g_pending_kind = PENDING_WAIT;
             return;
+        } else {
+            cli_env_set("?", "-1");
         }
-        cli_env_set("?", "-1");
     } else if (g_pending_kind == PENDING_WAIT && resp_type == PROC_IPC_RESP) {
         int32_t exit_code = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
         char ec_buf[12];

@@ -25,32 +25,12 @@ For contributors and coding agents: read `AGENTS.md` before making changes.
 It defines repository workflow and documentation/update conventions.
 
 ## Current Highlights
-- Deterministic UEFI boot handoff (`BOOTX64.EFI` -> `kernel.elf` + `initfs.img`) with a small x86_64 microkernel baseline (paging, scheduler, IPC, process lifecycle, exceptions).
-- WASM-first userspace runtime (wasm3) with optional native drivers/services where hardware paths benefit from native execution.
-- Shared `libsys` helper layer is split by runtime: `src/libsys/wasm` (hostcall-backed C helpers for wasm-compiled apps/services/drivers) and `src/libsys/native` (native-driver-backed helpers + Zig wrappers for native Zig services/drivers).
-- `libsys` now also provides lightweight event-loop + intent helpers (event handler registry + request/response demux by `request_id`) so services can process unsolicited IPC events and solicited replies without ad-hoc blocking receive loops.
-- Service-driven startup chain with endpoint registry and discovery (`register`/`lookup`) plus PCI-inventory-driven driver bring-up.
-- Practical VT/CLI environment with multi-TTY switching, fail-fast script execution (`script <file>`), basic environment variables (`export`, `echo ${VAR}`), PATH-based command lookup/execution with raw argument pass-through, and core inspection commands (`ps`, `kmaps`, `mount`, etc.).
-- Device-manager policy roots are `/init/devmgr/rules` (bootstrap) and `/boot/system/devmgr/rules` (runtime override), using udev-style rule syntax. Storage bring-up is rule-driven from `/init/devmgr/rules/default.rules`: `SUBSYSTEM=="pci", ATTR{class}=="0x01", ATTR{subclass}=="0x01", ...` matches ATA-class controllers, optional BDF selectors (`ATTR{bus}`, `ATTR{slot}`, `ATTR{function}`) can pin rules to specific controllers, `SUBSYSTEM=="block", ATTR{unit}=="N", ENV{MOUNT}="..."` gates `fs-fat` spawns after block-device publication, and `/boot` rules can add other PCI-match rules such as `SUBSYSTEM=="pci", ATTR{class}=="0x03", ...`. Boot override rules that target bootstrap storage drivers (`ata`, `fs-fat`) are rejected at runtime.
-- WASM `device-manager` now uses shared `libsys` reactor/intents across its reply, inventory/query, and boot-rules reply endpoints, replacing ad-hoc blocking/nonblocking receive loops while preserving existing startup policy behavior.
-- Ring-3 isolation/hardening enabled by default, with stress/fault/self-test coverage across IPC, faults, threading, and shared memory.
-- Thread lifecycle support is available end-to-end (`thread_create`, `thread_join`, `thread_detach`, `thread_yield`, `thread_exit`) for ring3.
-- Shared-memory and capability plumbing supports owner/grant/revoke flows, including compositor/client buffer sharing and auto-mapping helpers.
-- WASM libc now provides process-local `malloc/free/calloc/realloc` on linear memory (with `memory.grow` backing), so general heap allocation does not require shmem segments.
-- Kernel list internals support early-boot fallback allocation (static arena) so list-backed subsystems can initialize before general heap allocators are fully available.
-- Borrow-based DMA path is integrated across capability contract, hostcalls, spawn transport, and storage/framebuffer paths (with validated fallback behavior).
-- Graphics stack is active: framebuffer driver, native Zig `gfx-compositor`, shared-buffer present/damage model, and app-facing IPC ABI.
-- Compositor now treats window content and chrome as separate regions (client buffers render below titlebar), and pointer events delivered to focused clients are content-local coordinates.
-- `gfx-compositor` now composites into an internal backbuffer and copies completed dirty regions to scanout, reducing visible flicker during incremental repaints.
-- Framebuffer control IPC now supports runtime capability/mode discovery; the PCI framebuffer variant supports constrained resolution switching while the UEFI-backed variant reports it as unsupported.
-- `gfx-compositor` now exposes `GFX_IPC_SET_DISPLAY_MODE` and performs framebuffer mode switch + framebuffer remap itself, so geometry/stride/pointer state is refreshed immediately after successful mode changes.
-- Compositor interaction supports focus/z-order, pointer/key events, move/resize/close/maximize window controls, software cursor/chrome, and live resize notifications (including maximize/restore resize events for client redraw).
-- Compositor title text now renders as full text runs through font-service measure+raster-into IPC (instead of per-character title glyph requests), and caches per-window title run masks so draw-time composition does not depend on per-frame font IPC success.
-- WASM `libui` scaffold is now available as a shared component-tree helper (`src/libc/include/wasmos/libui.h` mirrored in `src/libsys/wasm/include/wasmos/libui.h`) with `Panel`/`Label`/`Button`/`Checkbox`/`TextInput`/`ScrollView`/`ListView`/`Dropdown` primitives, font-service-backed text rendering (no local bitmap fallback), dynamic component/text/list storage (no fixed hard caps), app-owned IPC integration via `ui_loop_handle_ipc(...)`, and frame flushing via `ui_loop_drain(...)`.
-- Native Zig `font-service` scaffold is now available (`/boot/system/services/fontsvc.wap`) with TTF loading path, basic font-open/metrics IPC, and text-run measurement/raster IPC (`FONT_IPC_MEASURE_GLYPH_REQ`, `FONT_IPC_RASTER_GLYPH_INTO_REQ`) returning packed `w/h`, `x0/y0`, and `advance_x` plus client-buffer rasterization for multi-character input provided via shared memory.
-- WASM shared-memory ABI now exposes directional sync helpers: `wasmos_shmem_flush` (WASM linear memory -> shared memory) and `wasmos_shmem_refresh` (shared memory -> WASM linear memory), enabling native-writer/WASM-reader flows such as client-side font mask blending.
-- Native Zig `font-service` now runs on the shared native `libsys` reactor/intent pattern (single endpoint poll + request-id intent demux), including explicit warnings for unhandled IPC event types.
-- Manual graphics smoke app (`/boot/apps/gfx_smoke.wap`) validates multi-window focus/raise/drag/resize/close behavior and now includes a `libui` demo window; PS/2 mouse driver is available at `/boot/system/drivers/mouse.wap`.
+- 64-bit (`x86_64`) UEFI microkernel OS scaffold with deterministic boot handoff (`BOOTX64.EFI` -> `kernel.elf` + `initfs.img`).
+- WASM-first userspace (`wasm3`) that runs apps, services, and drivers, plus optional native drivers where hardware access needs it.
+- Explicit microkernel primitives: paging, scheduler, IPC, process lifecycle, capabilities, and ring-3 isolation enabled by default.
+- Service-driven system bring-up (`init` -> `fs-manager`/`fs-init` -> `device-manager` -> `sysinit`) with discovery/registration and policy-driven driver spawning.
+- Early windowing/graphics stack: framebuffer driver, compositor, shared-buffer rendering, input routing, and runtime display mode control.
+- Practical interactive environment with VT/CLI, multi-TTY switching, and scriptable boot-time userspace workflows.
 
 ## Quick Start
 

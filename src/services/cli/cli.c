@@ -1605,7 +1605,7 @@ cli_handle_line(void)
         return 0;
     }
     if (line_eq_ci("help")) {
-        console_write("commands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, export VAR=<value>, set VAR=<value>, echo ${VAR}, tty <0-3>, halt, reboot\n");
+        console_write("commands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, echo ${VAR}, tty <0-3>, halt, reboot\n");
         return 0;
     }
     if (line_eq_ci("mount")) {
@@ -1849,6 +1849,76 @@ cli_handle_line(void)
         (void)fclose(f);
         return 0;
     }
+    if (g_line_len > 6 && line_starts_with_ci("spawn ")) {
+        const char *spawn_input = &g_line[6];
+        char resolved[96];
+        uint32_t path_len = 0;
+        const char *args = 0;
+        uint32_t args_len = 0;
+        uint32_t write_off = 0;
+        int32_t fs_buf_size = 0;
+        uint32_t i = 0;
+        char cmd_name[96];
+        uint32_t name_len = 0;
+        while (spawn_input[name_len] != '\0' && spawn_input[name_len] != ' ' && spawn_input[name_len] != '\t') {
+            name_len++;
+        }
+        if (name_len == 0) {
+            return 0;
+        }
+        if (name_len >= sizeof(cmd_name)) {
+            name_len = (uint32_t)(sizeof(cmd_name) - 1);
+        }
+        for (uint32_t j = 0; j < name_len; ++j) {
+            cmd_name[j] = spawn_input[j];
+        }
+        cmd_name[name_len] = '\0';
+        if (cli_resolve_exec_path(cmd_name, resolved, sizeof(resolved)) != 0) {
+            char msg[140];
+            int n = snprintf(msg, sizeof(msg), "no such command found: %s\n", cmd_name);
+            if (n > 0) {
+                console_write(msg);
+            } else {
+                console_write("no such command found\n");
+            }
+            return 0;
+        }
+        while (spawn_input[i] == ' ' || spawn_input[i] == '\t') { i++; }
+        while (spawn_input[i] && spawn_input[i] != ' ' && spawn_input[i] != '\t') { i++; }
+        if (spawn_input[i] == ' ' || spawn_input[i] == '\t') {
+            args = &spawn_input[i + 1u];
+            args_len = (uint32_t)wasmos_sys_strlen(args);
+        }
+        path_len = (uint32_t)wasmos_sys_strlen(resolved);
+        fs_buf_size = wasmos_fs_buffer_size();
+        write_off = path_len + 1u;
+        if (path_len == 0u || fs_buf_size <= 0 ||
+            (int32_t)path_len >= fs_buf_size ||
+            (args_len > 0u && ((int32_t)write_off >= fs_buf_size ||
+                               (int32_t)(write_off + args_len) > fs_buf_size))) {
+            console_write("spawn failed\n");
+            return 0;
+        }
+        if (wasmos_fs_buffer_write((int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
+            console_write("spawn failed\n");
+            return 0;
+        }
+        if (args_len > 0u &&
+            wasmos_fs_buffer_write((int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
+            console_write("spawn failed\n");
+            return 0;
+        }
+        if (cli_send_proc(PROC_IPC_SPAWN_PATH,
+                          PROC_SPAWN_PATH_FLAG_DETACH,
+                          (int32_t)path_len,
+                          (int32_t)args_len,
+                          0) != 0) {
+            console_write("spawn failed\n");
+            return 0;
+        }
+        g_pending_kind = PENDING_SPAWN;
+        return 1;
+    }
     {
         uint32_t name_len = 0;
         while (g_line[name_len] != '\0' && g_line[name_len] != ' ' && g_line[name_len] != '\t') {
@@ -1991,7 +2061,7 @@ cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg)
         (void)cli_switch_tty(1, 1, 0);
     }
     if (g_home_tty == 1) {
-        console_write("WAMOS CLI\ncommands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, export VAR=<value>, set VAR=<value>, echo ${VAR}, tty <0-3>, halt, reboot\n");
+        console_write("WAMOS CLI\ncommands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, echo ${VAR}, tty <0-3>, halt, reboot\n");
     }
     wasmos_sys_notify_ready(g_proc_endpoint, g_reply_endpoint);
     g_phase = CLI_PHASE_PROMPT;
@@ -2171,6 +2241,9 @@ cli_phase_wait_ipc_step(void)
         snprintf(ec_buf, sizeof(ec_buf), "%d", (int)exit_code);
         cli_env_set("?", ec_buf);
         g_pending_exec_pid = -1;
+    } else if (g_pending_kind == PENDING_SPAWN && resp_type == PROC_IPC_RESP) {
+        /* detached: process started in background, $? unchanged */
+        (void)resp_status;
     } else if (g_pending_kind == PENDING_CD_CHAIN) {
         const char *tail = g_pending_cd_path;
         if (tail[0] == '/') {

@@ -51,6 +51,7 @@ typedef struct {
     /* SPAWN_SYNC-only fields (valid when is_sync == 1) */
     uint32_t sync_child_pid;
     uint64_t sync_timeout_ticks; /* deadline tick; 0 = no timeout */
+    uint32_t app_flags;          /* desc.flags of spawned app, returned in resp.arg1 */
 } pm_spawn_state_t;
 
 typedef struct {

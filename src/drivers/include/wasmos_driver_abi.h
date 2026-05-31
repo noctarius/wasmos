@@ -37,7 +37,10 @@ enum {
     /* Spawn from explicit app path:
      * caller must place path bytes at FS buffer offset 0.
      * optional raw command argument text is placed at offset (path_len + 1).
-     * arg0=reserved(0) arg1=path_len arg2=args_len arg3=reserved. */
+     * arg0=reserved(0) arg1=path_len arg2=args_len arg3=reserved.
+     * On success (app kind): PROC_IPC_RESP, arg0=child_pid, arg1=app_flags.
+     * For service/driver kinds the PM delays the PROC_IPC_RESP until the child
+     * calls PROC_IPC_NOTIFY_READY (behaves like SPAWN_PATH_SYNC internally). */
     PROC_IPC_SPAWN_PATH = 0x209,
     /* Spawn from explicit app path with I/O-port + IRQ capabilities:
      * caller must place path bytes at FS buffer offset 0.
@@ -78,6 +81,12 @@ enum {
     PROC_MODULE_SOURCE_INITFS = 0,
     PROC_MODULE_SOURCE_FS = 1
 };
+
+/* Flags returned in arg1 of PROC_IPC_RESP for PROC_IPC_SPAWN_PATH.
+ * Mirror of WASMOS_APP_FLAG_* in the kernel's wasmos_app.h. */
+#define WASMOS_SPAWN_FLAG_DRIVER  (1u << 0)
+#define WASMOS_SPAWN_FLAG_SERVICE (1u << 1)
+#define WASMOS_SPAWN_FLAG_APP     (1u << 2)
 
 enum {
     SVC_IPC_REGISTER_REQ = 0x220,

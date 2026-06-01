@@ -1,8 +1,8 @@
 ## x86_64 CPU Architecture
 
 This document describes the low-level x86_64 CPU setup: the GDT, IDT, and TSS
-structures; the PIC-based IRQ routing model; exception handling and page fault
-classification; and the syscall gate.
+structures; the interrupt controller and IRQ routing model; exception handling
+and page fault classification; and the syscall gate.
 
 All code lives in `src/kernel/arch/x86_64/`.
 
@@ -97,28 +97,105 @@ TSS (rsp0, ist1), and reloads GDTR/IDTR/TR with the high-alias addresses.
 
 ---
 
-### PIC and IRQ Routing
+### Interrupt Controller and IRQ Routing
 
-**Source**: `arch/x86_64/irq_x86_64.c`
+**Source**: `arch/x86_64/irq_x86_64.c`, `arch/x86_64/lapic.c`,
+`arch/x86_64/ioapic.c`
+
+The interrupt controller is selected at build time via the `WASMOS_IRQ_MODE`
+compile-time define, configured through the Kconfig `choice`
+`WASMOS_IRQ_PIC / WASMOS_IRQ_LAPIC / WASMOS_IRQ_IOAPIC`:
+
+| Mode | `WASMOS_IRQ_MODE` | Controller | Timer source |
+|------|-------------------|------------|--------------|
+| `WASMOS_IRQ_PIC`   | 0 | Legacy 8259 PIC + PIT ch.0 | PIT channel 0 |
+| `WASMOS_IRQ_LAPIC` | 1 | LAPIC (no ext. IRQs) | LAPIC periodic timer |
+| `WASMOS_IRQ_IOAPIC`| 2 | LAPIC + I/O APIC | LAPIC periodic timer |
+
+All three modes share the same IDT vectors (32–47 for IRQs, 0x80 for syscall)
+and the same IPC-based IRQ routing table. The default is `WASMOS_IRQ_PIC`.
 
 ```c
 #define IRQ_VECTOR_BASE 32
 #define IRQ_COUNT       16
 
-#define PIC1_CMD  0x20
-#define PIC1_DATA 0x21
-#define PIC2_CMD  0xA0
-#define PIC2_DATA 0xA1
-#define PIC_EOI   0x20
-
 #define IPC_IRQ_EVENT_TYPE 0xFF00u
 ```
 
-`x86_irq_init()` (called from `x86_cpu_init`):
-1. Remaps PIC1 to base vector 32, PIC2 to base 40 (standard x86 remapping).
-2. Sets cascade (0x04/0x02) and 8086 mode for both PICs.
-3. Restores the saved IMR masks (`g_pic_mask1 = 0xFF`, `g_pic_mask2 = 0xFF`
-   — all IRQs masked at boot).
+#### Two-Phase Interrupt Init
+
+- **Phase 1** — `x86_irq_init()` (called from `x86_cpu_init` inside `kmain`):
+  clears the IRQ route table. In PIC mode, also remaps PIC1 to base vector 32,
+  PIC2 to base 40, and masks all IRQs.
+
+- **Phase 2** — `irq_late_init(boot_info)` (called from `kmain` after
+  `timer_init()`, which runs after `mm_init()`): dispatches to
+  `x86_irq_late_init(boot_info)`. In IOAPIC mode, this calls `ioapic_init()`,
+  which needs both `paging_map_4k()` (requires mm/paging up) and
+  `boot_info->rsdp` for MADT discovery. In PIC and LAPIC modes this is a no-op.
+
+The LAPIC timer is initialized inside `timer_init()` (phase 1.5) rather than in
+either init phase: it calls `lapic_init(hz)`, which maps the LAPIC MMIO page,
+enables the LAPIC, disables the 8259, and starts the periodic timer.
+
+#### PIC Mode (WASMOS_IRQ_MODE == 0)
+
+`x86_irq_init()` remaps the 8259:
+1. PIC1 to base vector 32, PIC2 to base 40.
+2. Sets cascade (0x04/0x02) and 8086 mode.
+3. Restores saved IMR masks — all lines masked until `irq_unmask()` is called.
+
+PIC EOI: `irq_send_eoi()` sends `PIC_EOI (0x20)` to `PIC1_CMD`, and also to
+`PIC2_CMD` for IRQs ≥ 8. EOI is sent by the kernel after dispatching the IRQ
+message to the owning endpoint, but **only after masking the line** to prevent
+level-triggered re-fire before the driver reads the device register.
+
+#### LAPIC Mode (WASMOS_IRQ_MODE == 1)
+
+`lapic_init(hz)`:
+1. Reads the LAPIC physical base from `IA32_APIC_BASE MSR (0x1B)`, bits [51:12].
+2. Maps one 4 KB MMIO page at kernel VA `0xFFFFFFFF80001000`
+   (in the unmapped 2 MB gap below the kernel image) with cache-disable flags
+   (`PT_FLAG_PCD`).
+3. Enables the LAPIC via the SVR register (bit 8) and sets the spurious vector
+   to `0xFF` (255).
+4. Masks all 8259 PIC lines (`outb(0x21, 0xFF); outb(0xA1, 0xFF)`).
+5. Calibrates LAPIC ticks-per-ms using PIT channel 2 in one-shot mode (10 ms
+   reference window), then programs the LVT_TIMER in periodic mode at the
+   requested `hz`, targeting vector 32 (IRQ_VECTOR_BASE).
+
+The spurious vector 0xFF is installed in the IDT as `isr_lapic_spurious`, which
+performs only `iretq` (per Intel SDM Vol 3A §10.9 — no EOI for spurious vectors).
+
+LAPIC EOI: `irq_send_eoi()` calls `lapic_eoi()` (writes 0 to LAPIC EOI register
+at offset `0x0B0`). This is issued from the kernel, not deferred to the driver.
+External device IRQs are not routed in LAPIC-only mode (no I/O APIC).
+
+#### IOAPIC Mode (WASMOS_IRQ_MODE == 2)
+
+Builds on LAPIC mode (LAPIC timer and EOI are identical). `ioapic_init(boot_info)`
+(called from `irq_late_init`):
+
+1. **MADT discovery**: reads `boot_info->rsdp + 24` for the XSDT physical
+   address; walks XSDT entries looking for the `"APIC"` signature; extracts:
+   - type-1 entry: I/O APIC physical base (default `0xFEC00000`)
+   - type-2 entries: ISA IRQ source overrides → GSI map (`g_gsi_map[isa_irq] = gsi`)
+
+2. **MMIO mapping**: maps the I/O APIC MMIO page at kernel VA `0xFFFFFFFF80002000`
+   (one page above the LAPIC) using `paging_map_4k()` with cache-disable flags.
+
+3. **RTE programming**: programs all 16 ISA Redirection Table Entries via
+   indirect MMIO access (IOREGSEL at offset `0x00`, IOWIN at `0x10`). Each RTE
+   is written masked (`bit 16 = 1`), edge-triggered, active-high, fixed delivery
+   to physical LAPIC 0 (BSP), at vector `IRQ_VECTOR_BASE + isa_irq` (32–47).
+
+Drivers unmask their IRQ line via the existing `irq_register()` → `irq_unmask()`
+→ `x86_irq_unmask()` → `ioapic_unmask_irq()` path, which clears bit 16 of the
+RTE's low word. Re-masking after dispatch (`x86_irq_mask()` → `ioapic_mask_irq()`)
+prevents level-triggered flooding; the driver re-enables via `irq_ack()`.
+
+ISA IRQs are edge-triggered; only a LAPIC EOI is required after each IRQ — the
+I/O APIC does not need a separate write.
 
 #### IRQ Route Table
 
@@ -132,33 +209,33 @@ typedef struct {
 static irq_route_t g_irq_routes[IRQ_COUNT];
 ```
 
-`irq_route_ipc(irq_line, endpoint, context_id)`:
+`x86_irq_register(context_id, irq_line, endpoint)`:
 - Validates policy via `policy_authorize(POLICY_ACTION_IRQ_ROUTE, irq_line)`.
+- Verifies the endpoint is owned by `context_id`.
 - Stores the endpoint and owner in `g_irq_routes[irq_line]`.
-- Unmasks the corresponding PIC bit.
+- Calls `x86_irq_unmask(irq_line)` — dispatches to PIC unmask or IOAPIC RTE
+  clear depending on `WASMOS_IRQ_MODE`.
 
 `x86_irq_ack(context_id, irq_line)`:
-- Verifies the caller owns the route (`owner_context_id` match).
-- Sends EOI to PIC1 and, if IRQ ≥ 8, to PIC2.
+- Verifies the caller owns the route.
+- Calls `x86_irq_unmask(irq_line)` to re-enable the line after the driver has
+  read the device register.
 
-`irq_unroute(irq_line, context_id)`:
-- Clears the route entry.
-- Masks the PIC bit.
+`x86_irq_unregister(context_id, irq_line)`:
+- Clears the route entry and masks the line.
 
 #### IRQ Dispatch
 
 `x86_irq_handler(vector)` runs in interrupt context from the ISR stub:
 1. Computes `irq_line = vector - IRQ_VECTOR_BASE`.
-2. If the route has an endpoint, sends `IPC_IRQ_EVENT_TYPE (0xFF00)` to that
-   endpoint using the fast IPC send path.
-3. **Does not send EOI** — that is the responsibility of the IRQ owner process
-   via `irq_ack()`. This prevents level-triggered re-fire before the device
-   register has been read.
-4. For IRQ0 (timer), calls the timer tick handler.
-5. Checks for IST1 stack overflow via the canary at the IST1 base.
-
-Spurious IRQ handling: reads the In-Service Register (ISR) from PIC1/PIC2 and
-discards the EOI if the corresponding bit is clear.
+2. In PIC mode: checks for spurious IRQ (reads ISR from PIC1/PIC2; discards if
+   the corresponding ISR bit is clear).
+3. For IRQ0 (timer), calls `timer_handle_irq()`.
+4. If the route has an endpoint and `irq_line != 0`, masks the line to prevent
+   re-fire before the driver reads the device register.
+5. Sends `IPC_IRQ_EVENT_TYPE (0xFF00)` to the routed endpoint.
+6. Calls `irq_send_eoi(irq_line)`: PIC EOI in mode 0, `lapic_eoi()` in modes 1
+   and 2.
 
 ---
 
@@ -253,14 +330,35 @@ which is used by the paging layer to mark non-executable regions.
 Called from `kmain()` after early serial and memory setup:
 
 ```
-x86_cpu_init()
+x86_cpu_init()                              ← phase 1
   ├─ x86_write_msr(IA32_EFER, NXE enabled)
   ├─ tss_init()    ← fill IST stacks, write canary, install TSS in GDT
   ├─ gdt_install() ← lgdt, far-lretq to reload CS, ltr TSS
   ├─ idt_install() ← install exception stubs 0–31, lidt
   ├─ install IRQ stubs 32–47 (IRQ0 on IST1)
   ├─ install syscall gate at vector 0x80 (DPL 3)
-  └─ irq_init()    ← x86_irq_init() → PIC remap + mask all
+  ├─ [WASMOS_IRQ_MODE >= 1] install isr_lapic_spurious at vector 255
+  └─ irq_init() → x86_irq_init()
+       ├─ clear g_irq_routes[]
+       └─ [mode 0] PIC remap + mask all lines
+
+mm_init() + further kernel init ...         ← paging/physmem ready
+
+timer_init(250)                             ← phase 1.5
+  ├─ [mode 0] PIT channel 0 → sq-wave 250 Hz, irq_unmask(0)
+  └─ [mode >= 1] lapic_init(250)
+       ├─ lapic_map()       ← paging_map_4k at 0xFFFFFFFF80001000
+       ├─ lapic_enable()    ← SVR write, MSR global enable
+       ├─ pic_disable()     ← outb(0x21/0xA1, 0xFF)
+       └─ lapic_timer_set_hz(250) ← calibrate via PIT ch.2, program LVT_TIMER
+
+irq_late_init(boot_info)                    ← phase 2
+  └─ [mode 2] ioapic_init(boot_info)
+       ├─ madt_parse()      ← RSDP → XSDT → "APIC" table, GSI overrides
+       ├─ ioapic_map()      ← paging_map_4k at 0xFFFFFFFF80002000
+       └─ ioapic_program_rtes() ← 16 RTEs, all masked, vectors 32–47
+
+cpu_enable_interrupts()                     ← sti
 ```
 
 After `x86_cpu_relocate_tables_high()`: GDTR, IDTR, and TR are reloaded with
@@ -280,10 +378,12 @@ higher-half virtual addresses.
    the interrupted stack pointer, preventing stack confusion on preemption of
    ring-3 code.
 
-3. **EOI is the IRQ owner's responsibility.** The kernel sends no EOI from the
-   interrupt handler. The owning process calls `irq_ack()` after reading the
-   device register. Sending EOI before reading the device can cause
-   level-triggered re-fire.
+3. **EOI semantics depend on mode.** In PIC mode (`WASMOS_IRQ_MODE == 0`), EOI
+   is sent by the kernel from the interrupt handler (after masking the line and
+   dispatching the IPC message). In LAPIC and IOAPIC modes, `lapic_eoi()` is
+   sent by the kernel at the end of `x86_irq_handler`; no separate driver EOI
+   is required. Non-timer IRQ lines are masked at dispatch time to prevent
+   re-fire; the driver re-enables via `irq_ack()` → `x86_irq_unmask()`.
 
 4. **IST1 canary.** `g_irq0_ist_canary` is written at the bottom of the IST1
    stack. Overflow is detected in `x86_irq_handler` before dispatching.
@@ -295,3 +395,8 @@ higher-half virtual addresses.
 6. **Higher-half relocation is done before `sti`.** Interrupts remain disabled
    until after `x86_cpu_relocate_tables_high()` and `x86_cpu_enable_interrupts()`
    are called from `kmain`.
+
+7. **IOAPIC init deferred after `mm_init()`.** `paging_map_4k()` needs the
+   physmem allocator for page-table pages. `ioapic_init()` (and `lapic_map()`)
+   are therefore called after `mm_init()`, not from the early `x86_cpu_init()`
+   path.

@@ -5,24 +5,31 @@ PIT clock, the ready queue, per-process and per-thread state, the context-switch
 assembly, the preemption path, and the guards that keep each of those phases
 safe. The authoritative sources are `src/kernel/process.c`,
 `src/kernel/arch/x86_64/context_switch.S`, `src/kernel/timer.c`,
-`src/kernel/spinlock.c`, and `src/kernel/include/process.h`.
+`src/kernel/arch/x86_64/lapic.c`, `src/kernel/spinlock.c`, and
+`src/kernel/include/process.h`.
 
 ---
 
 ### Overview
 
-The scheduler is preemptive round-robin, single-core. PIT channel 0 drives
-time-slice accounting at a fixed rate. When a running thread's quantum expires,
-the next IRQ0 fires the preemption path, which rewrites the interrupted frame to
-redirect return-from-interrupt into a scheduler trampoline. The scheduler
-context then picks the next ready thread and resumes it. Blocking operations
-(IPC wait, process wait, thread join) suspend a thread without burning quantum.
+The scheduler is preemptive round-robin, single-core. A hardware timer at
+IRQ0 drives time-slice accounting at a fixed rate: PIT channel 0 in PIC mode
+(`WASMOS_IRQ_MODE == 0`), LAPIC periodic timer in LAPIC and IOAPIC modes. When
+a running thread's quantum expires, the next IRQ0 fires the preemption path,
+which rewrites the interrupted frame to redirect return-from-interrupt into a
+scheduler trampoline. The scheduler context then picks the next ready thread
+and resumes it. Blocking operations (IPC wait, process wait, thread join)
+suspend a thread without burning quantum.
 
 ---
 
-### PIT Configuration
+### Timer Configuration
 
-`timer_init(hz)` programs PIT channel 0 in square-wave mode (command byte `0x36`).
+`timer_init(hz)` configures the scheduler clock at the requested frequency
+(default 250 Hz). The clock source depends on `WASMOS_IRQ_MODE`:
+
+**PIC mode (`WASMOS_IRQ_MODE == 0`):** programs PIT channel 0 in square-wave
+mode (command byte `0x36`).
 
 ```
 PIT_BASE_HZ = 1193182 Hz
@@ -30,8 +37,14 @@ divisor     = PIT_BASE_HZ / hz          (clamped to [1, 0xFFFF])
 default hz  = 250 → divisor = 4772 → actual interval ≈ 4 ms per tick
 ```
 
-At 250 Hz, `PROCESS_DEFAULT_SLICE_TICKS = 5` ticks gives each thread a
-20 ms quantum.
+**LAPIC/IOAPIC mode (`WASMOS_IRQ_MODE >= 1`):** calls `lapic_init(hz)`, which
+uses PIT channel 2 as a 10 ms reference to calibrate LAPIC ticks-per-ms, then
+programs the LAPIC LVT_TIMER in periodic mode (`divide-by-16`) with
+`initial_count = (ticks_per_ms * 1000) / hz`, targeting vector 32. The 8259
+PIC is fully masked before the LAPIC timer starts.
+
+In all modes, at 250 Hz, `PROCESS_DEFAULT_SLICE_TICKS = 5` ticks gives each
+thread a 20 ms quantum.
 
 `timer_handle_irq()` increments `g_timer_ticks` and calls `process_tick()` on
 every tick. Heavy scheduling work stays out of the ISR body.
@@ -447,8 +460,6 @@ for test harness assertions.
 - **Kernel preemption.** The preemption path only fires on CPL3 frames.
   Kernel-originated frames are skipped; the kernel runs to completion unless
   it cooperatively yields.
-- **APIC/IOAPIC.** The timer clock is PIT-based using the legacy PIC. APIC
-  support is a deferred item listed in the known gaps.
 - **CPU accounting and scheduling metrics.** `ticks_total` is tracked per
   thread and surfaced through `process_stats_t`, but there is no per-CPU
   utilization budget, load tracking, or latency instrumentation.

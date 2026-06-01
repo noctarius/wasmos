@@ -15,9 +15,9 @@ filesystem, and a ring3 isolation baseline.
 - The kernel performs a two-stage bootstrap: low `_start` builds a minimal
   page-table handoff and jumps to higher-half `_start_high`, which clears `.bss`
   and calls `kmain`.
-- `kmain` initializes paging, physical memory, exceptions, the PIT timer, IPC,
-  the scheduler, and the process manager, then starts the first user-space
-  process.
+- `kmain` initializes paging, physical memory, exceptions, the scheduler clock
+  (PIT or LAPIC timer depending on `WASMOS_IRQ_MODE`), the interrupt controller,
+  IPC, and the process manager, then starts the first user-space process.
 - A kernel-owned `init` process spawns `device-manager`, waits for FAT
   readiness, then loads `sysinit` from disk via the process manager.
 - `sysinit` reads a binary boot-config blob (generated from `scripts/initfs.toml`
@@ -51,10 +51,17 @@ list-backed with no fixed `MM_MAX_*` slot limits.
 See `docs/architecture/06-memory-management.md`.
 
 **Interrupts**
-Legacy PIC remap, PIT IRQ0 as the scheduler clock, exception stubs for all
-standard x86 vectors. Unrecoverable user-mode faults terminate only the faulting
-process (exit code -11); kernel-mode faults remain fatal with a framebuffer
-panic screen showing exception registers, process identity, and crash metadata.
+Three build-time interrupt controller modes selected via `WASMOS_IRQ_MODE`:
+legacy 8259 PIC + PIT (mode 0, default), LAPIC-only with LAPIC timer (mode 1),
+or LAPIC + I/O APIC with full ISA IRQ routing (mode 2). All modes use the same
+IDT layout (vectors 32–47 for IRQs, 0x80 for syscall) and the same IPC-based
+IRQ route table. In LAPIC/IOAPIC modes the LAPIC timer fires at vector 32,
+replacing the PIT; the I/O APIC is discovered via MADT and programs 16 ISA RTEs
+(all initially masked) so drivers can receive interrupts through the existing
+`irq_register()` / `irq_ack()` path. Exception stubs cover all standard x86
+vectors. Unrecoverable user-mode faults terminate only the faulting process
+(exit code -11); kernel-mode faults remain fatal with a framebuffer panic screen
+showing exception registers, process identity, and crash metadata.
 
 **IPC Transport**
 Fixed-layout 8-field messages (`type`, `source`, `destination`, `request_id`,
@@ -64,7 +71,7 @@ use buffer-borrow shared handles (`WASMOS_BUFFER_KIND_FS`, etc.) with explicit
 grant/release semantics and DMA-mapping extensions.
 
 **Scheduler**
-Cooperative with preemption via PIT IRQ0. Single-core. A ring3-safe timer
+Cooperative with preemption via IRQ0 (PIT or LAPIC timer). Single-core. A ring3-safe timer
 trampoline rewrites CPL3 frames (redirecting return RIP to the scheduler
 trampoline and rewriting CS to kernel selector) so preemption re-enters ring0
 cleanly before context switch. Separate kernel stacks per process with TSS `rsp0`
@@ -288,7 +295,6 @@ IPC contract, IPv4/IPv6, multi-address, and multi-stack-instance model — is in
 - `fs-fat` update modes (`r+`/`w+`/`a+`) and non-ASCII LFN creation.
 - Intermittent framebuffer prompt duplication artifact during rapid tty switching
   (not reproducible in recent runs; deferred until stable repro is available).
-- APIC/IOAPIC support (currently PIC-based interrupts only).
 - Full IOMMU (VT-d/AMD-Vi) for DMA isolation (capability-window enforcement is
   the current substitute).
 - Hotplug and driver supervision/reincarnation.

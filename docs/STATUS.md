@@ -1,6 +1,13 @@
 # Current Status
 
 - This status file is a snapshot, not a release changelog.
+- Interrupt controller selection is now a build-time Kconfig choice
+  (`WASMOS_IRQ_PIC` / `WASMOS_IRQ_LAPIC` / `WASMOS_IRQ_IOAPIC`, mapped to
+  `WASMOS_IRQ_MODE` 0/1/2). PIC + PIT remains the default. LAPIC mode replaces
+  the 8259 with the Local APIC timer (calibrated via PIT channel 2). IOAPIC mode
+  adds full ISA IRQ routing through the I/O APIC (MADT-discovered, all 16 RTEs
+  programmed via `irq_late_init()`).  All three modes boot to the CLI halt point.
+  See `docs/architecture/05-x86-cpu-architecture.md`.
 - Ring-3 strict isolation/hardening, threading phase rollout, DMA rollout,
   filesystem/PM service discovery, and CLI/runtime updates are tracked in the
   dedicated docs under `docs/architecture/`.

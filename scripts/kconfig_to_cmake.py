@@ -31,7 +31,13 @@ INITIALIZED_GUARDS = {"AS_ENABLE", "RUST_ENABLE", "GO_ENABLE", "ZIG_ENABLE"}
 
 def parse_config_line(raw: str) -> tuple[str, str] | None:
     line = raw.strip()
-    if not line or line.startswith("#"):
+    if not line:
+        return None
+    # "# CONFIG_X is not set" is the Kconfig representation of a disabled bool.
+    if line.startswith("# CONFIG_") and line.endswith(" is not set"):
+        key = line[len("# CONFIG_") : -len(" is not set")]
+        return key, "n"
+    if line.startswith("#"):
         return None
     if not line.startswith("CONFIG_") or "=" not in line:
         return None

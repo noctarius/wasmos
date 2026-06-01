@@ -328,7 +328,7 @@ set(WASMOS_LIBC_INCLUDE_DEPS
 )
 
 function(wasmos_add_wasm_c_app_target target_name)
-  set(options NO_BUILTIN STARTUP_SHIM)
+  set(options NO_BUILTIN STARTUP_SHIM CXX)
   set(oneValueArgs SOURCE OUTPUT_WASM OUTPUT_APP MANIFEST EXPORT STACK_SIZE INITIAL_MEMORY MAX_MEMORY BUILD_COMMENT PACK_COMMENT)
   set(multiValueArgs SOURCES)
   cmake_parse_arguments(WASMOS_APP "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
@@ -343,7 +343,12 @@ function(wasmos_add_wasm_c_app_target target_name)
     message(FATAL_ERROR "wasmos_add_wasm_c_app_target(${target_name}) requires SOURCE or SOURCES, OUTPUT_WASM, OUTPUT_APP, MANIFEST, EXPORT")
   endif ()
 
+  set(_wasmos_compiler ${CLANG})
   set(_wasmos_extra_flags)
+  if (WASMOS_APP_CXX)
+    set(_wasmos_compiler ${CMAKE_CXX_COMPILER})
+    list(PREPEND _wasmos_extra_flags ${WASMOS_WASM_CXX_FLAGS})
+  endif ()
   if (WASMOS_APP_NO_BUILTIN)
     list(APPEND _wasmos_extra_flags -fno-builtin)
   endif ()
@@ -378,7 +383,7 @@ function(wasmos_add_wasm_c_app_target target_name)
   add_custom_command(
     OUTPUT ${WASMOS_APP_OUTPUT_WASM}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-    COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding
+    COMMAND ${_wasmos_compiler} --target=wasm32 -Oz -nostdlib -ffreestanding
             ${_wasmos_extra_flags}
             ${WASMOS_TRACE_DEFINE}
             -Wl,--no-entry -Wl,--strip-all
@@ -426,89 +431,7 @@ function(wasmos_add_wasm_c_app_target target_name)
 endfunction()
 
 function(wasmos_add_wasm_cpp_app_target target_name)
-  set(options NO_BUILTIN)
-  set(oneValueArgs SOURCE OUTPUT_WASM OUTPUT_APP MANIFEST EXPORT STACK_SIZE INITIAL_MEMORY MAX_MEMORY BUILD_COMMENT PACK_COMMENT)
-  cmake_parse_arguments(WASMOS_APP "${options}" "${oneValueArgs}" "" ${ARGN})
-
-  if (NOT WASMOS_APP_SOURCE OR NOT WASMOS_APP_OUTPUT_WASM OR NOT WASMOS_APP_OUTPUT_APP OR
-      NOT WASMOS_APP_MANIFEST OR NOT WASMOS_APP_EXPORT)
-    message(FATAL_ERROR "wasmos_add_wasm_cpp_app_target(${target_name}) requires SOURCE, OUTPUT_WASM, OUTPUT_APP, MANIFEST, EXPORT")
-  endif ()
-
-  set(_wasmos_extra_flags ${WASMOS_WASM_CXX_FLAGS})
-  if (WASMOS_APP_NO_BUILTIN)
-    list(APPEND _wasmos_extra_flags -fno-builtin)
-  endif ()
-
-  set(_stack_size 4096)
-  if (WASMOS_APP_STACK_SIZE)
-    set(_stack_size ${WASMOS_APP_STACK_SIZE})
-  endif ()
-  set(_initial_memory 65536)
-  if (WASMOS_APP_INITIAL_MEMORY)
-    set(_initial_memory ${WASMOS_APP_INITIAL_MEMORY})
-  endif ()
-  set(_max_memory 65536)
-  if (WASMOS_APP_MAX_MEMORY)
-    set(_max_memory ${WASMOS_APP_MAX_MEMORY})
-  endif ()
-
-  set(_build_comment "Building wasm C++ module")
-  if (WASMOS_APP_BUILD_COMMENT)
-    set(_build_comment ${WASMOS_APP_BUILD_COMMENT})
-  endif ()
-  set(_pack_comment "Packing wasm C++ as WASMOS-APP")
-  if (WASMOS_APP_PACK_COMMENT)
-    set(_pack_comment ${WASMOS_APP_PACK_COMMENT})
-  endif ()
-
-  add_custom_command(
-    OUTPUT ${WASMOS_APP_OUTPUT_WASM}
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-    COMMAND ${CMAKE_CXX_COMPILER} --target=wasm32 -Oz -nostdlib
-            ${_wasmos_extra_flags}
-            ${WASMOS_TRACE_DEFINE}
-            -Wl,--no-entry -Wl,--strip-all
-            -Wl,-z,stack-size=${_stack_size}
-            -Wl,--initial-memory=${_initial_memory}
-            -Wl,--max-memory=${_max_memory}
-            -Wl,--allow-undefined
-            -Wl,--export=${WASMOS_APP_EXPORT}
-            -I${LIBC_DIR}/include
-            -I${DRIVER_WASM_DIR}/include
-            ${WASMOS_LIBC_C_SOURCES}
-            ${WASMOS_APP_SOURCE}
-            -o ${WASMOS_APP_OUTPUT_WASM}
-    DEPENDS ${WASMOS_APP_SOURCE} ${WASMOS_LIBC_C_SOURCES} ${WASMOS_LIBC_INCLUDE_DEPS}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT ${_build_comment}
-    VERBATIM
-  )
-
-  add_custom_command(
-    OUTPUT ${WASMOS_APP_OUTPUT_APP}
-    COMMAND ${WASMOS_APP_PACKER}
-            --manifest ${WASMOS_APP_MANIFEST}
-            --in ${WASMOS_APP_OUTPUT_WASM}
-            --out ${WASMOS_APP_OUTPUT_APP}
-    DEPENDS ${WASMOS_APP_OUTPUT_WASM} make_wasmos_app ${WASMOS_APP_MANIFEST}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT ${_pack_comment}
-    VERBATIM
-  )
-
-  add_custom_target(${target_name}
-    DEPENDS ${WASMOS_APP_OUTPUT_APP}
-    SOURCES ${WASMOS_APP_SOURCE} ${WASMOS_APP_MANIFEST}
-  )
-
-  set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASMOS_APP_OUTPUT_APP})
-  set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS ${target_name})
-
-  wasmos_add_ide_c_target(${target_name}_ide
-    SOURCES ${WASMOS_APP_SOURCE}
-    INCLUDES ${LIBC_DIR}/include ${DRIVER_WASM_DIR}/include
-  )
+  wasmos_add_wasm_c_app_target(${target_name} CXX ${ARGN})
 endfunction()
 
 function(wasmos_add_native_c_app_target target_name)
@@ -1200,54 +1123,65 @@ add_custom_target(run-qemu-ring3-fault-storm-check
   VERBATIM
 )
 
+set(_ring3_ovmf_vars_arg "")
+if (OVMF_VARS)
+  set(_ring3_ovmf_vars_arg "--ovmf-vars" "${OVMF_VARS}")
+endif ()
+
 add_custom_target(run-qemu-ring3-test
-  COMMAND ${CMAKE_COMMAND}
-          -S ${CMAKE_SOURCE_DIR}
-          -B ${BUILD_DIR}/ring3
-          -DCLANG=${CLANG}
-          -DLLD=${LLD}
-          -DOBJCOPY=${OBJCOPY}
-          -DOVMF_CODE=${OVMF_CODE}
-          -DOVMF_VARS=${OVMF_VARS}
-          -DWASMOS_TRACE=${WASMOS_TRACE}
-          -DWASMOS_RING3_SMOKE=ON
-          -DWASMOS_PM_TEST_HOOKS=ON
-  COMMAND ${CMAKE_COMMAND} --build ${BUILD_DIR}/ring3 --target run-qemu-ring3-check
+  COMMAND ${Python3_EXECUTABLE}
+          ${CMAKE_SOURCE_DIR}/scripts/run_ring3_shadow.py
+          --cmake ${CMAKE_COMMAND}
+          --source-dir ${CMAKE_SOURCE_DIR}
+          --build-dir ${BUILD_DIR}/ring3
+          --clang ${CLANG}
+          --lld ${LLD}
+          --objcopy ${OBJCOPY}
+          --ovmf-code ${OVMF_CODE}
+          ${_ring3_ovmf_vars_arg}
+          --trace ${WASMOS_TRACE}
+          --define WASMOS_RING3_SMOKE=ON
+          --define WASMOS_PM_TEST_HOOKS=ON
+          --target run-qemu-ring3-check
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Configure/build shadow ring3 tree and run ring3 smoke marker test"
   VERBATIM
 )
 add_custom_target(run-qemu-ring3-threading-test
-  COMMAND ${CMAKE_COMMAND}
-          -S ${CMAKE_SOURCE_DIR}
-          -B ${BUILD_DIR}/ring3-threading
-          -DCLANG=${CLANG}
-          -DLLD=${LLD}
-          -DOBJCOPY=${OBJCOPY}
-          -DOVMF_CODE=${OVMF_CODE}
-          -DOVMF_VARS=${OVMF_VARS}
-          -DWASMOS_TRACE=${WASMOS_TRACE}
-          -DWASMOS_RING3_SMOKE=ON
-          -DWASMOS_RING3_THREAD_LIFECYCLE_SMOKE=ON
-          -DWASMOS_PM_TEST_HOOKS=ON
-  COMMAND ${CMAKE_COMMAND} --build ${BUILD_DIR}/ring3-threading --target run-qemu-ring3-threading-check
+  COMMAND ${Python3_EXECUTABLE}
+          ${CMAKE_SOURCE_DIR}/scripts/run_ring3_shadow.py
+          --cmake ${CMAKE_COMMAND}
+          --source-dir ${CMAKE_SOURCE_DIR}
+          --build-dir ${BUILD_DIR}/ring3-threading
+          --clang ${CLANG}
+          --lld ${LLD}
+          --objcopy ${OBJCOPY}
+          --ovmf-code ${OVMF_CODE}
+          ${_ring3_ovmf_vars_arg}
+          --trace ${WASMOS_TRACE}
+          --define WASMOS_RING3_SMOKE=ON
+          --define WASMOS_RING3_THREAD_LIFECYCLE_SMOKE=ON
+          --define WASMOS_PM_TEST_HOOKS=ON
+          --target run-qemu-ring3-threading-check
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Configure/build shadow threading ring3 tree and run lifecycle marker test"
   VERBATIM
 )
 add_custom_target(run-qemu-ring3-fault-storm-test
-  COMMAND ${CMAKE_COMMAND}
-          -S ${CMAKE_SOURCE_DIR}
-          -B ${BUILD_DIR}/ring3-fault-storm
-          -DCLANG=${CLANG}
-          -DLLD=${LLD}
-          -DOBJCOPY=${OBJCOPY}
-          -DOVMF_CODE=${OVMF_CODE}
-          -DOVMF_VARS=${OVMF_VARS}
-          -DWASMOS_TRACE=${WASMOS_TRACE}
-          -DWASMOS_RING3_SMOKE=ON
-          -DWASMOS_PM_TEST_HOOKS=ON
-  COMMAND ${CMAKE_COMMAND} --build ${BUILD_DIR}/ring3-fault-storm --target run-qemu-ring3-fault-storm-check
+  COMMAND ${Python3_EXECUTABLE}
+          ${CMAKE_SOURCE_DIR}/scripts/run_ring3_shadow.py
+          --cmake ${CMAKE_COMMAND}
+          --source-dir ${CMAKE_SOURCE_DIR}
+          --build-dir ${BUILD_DIR}/ring3-fault-storm
+          --clang ${CLANG}
+          --lld ${LLD}
+          --objcopy ${OBJCOPY}
+          --ovmf-code ${OVMF_CODE}
+          ${_ring3_ovmf_vars_arg}
+          --trace ${WASMOS_TRACE}
+          --define WASMOS_RING3_SMOKE=ON
+          --define WASMOS_PM_TEST_HOOKS=ON
+          --target run-qemu-ring3-fault-storm-check
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Configure/build shadow ring3 fault-storm tree and run dedicated marker test"
   VERBATIM

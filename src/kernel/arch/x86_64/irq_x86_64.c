@@ -5,6 +5,9 @@
 #include "timer.h"
 #include "policy.h"
 #include "paging.h"
+#if WASMOS_IRQ_MODE >= 1
+#include "arch/x86_64/lapic.h"
+#endif
 
 /*
  * irq.c handles PIC setup, IRQ routing, and the minimal interrupt-side work
@@ -33,8 +36,10 @@ typedef struct {
 } irq_route_t;
 
 static irq_route_t g_irq_routes[IRQ_COUNT];
+#if WASMOS_IRQ_MODE == 0
 static uint8_t g_pic_mask1 = 0xFF;
 static uint8_t g_pic_mask2 = 0xFF;
+#endif
 
 static inline uintptr_t irq_alias_ptr(uintptr_t p)
 {
@@ -49,6 +54,7 @@ static inline irq_route_t *irq_routes_ptr(void)
     return (irq_route_t *)(void *)irq_alias_ptr((uintptr_t)&g_irq_routes[0]);
 }
 
+#if WASMOS_IRQ_MODE == 0
 static inline uint8_t *pic_mask1_slot(void)
 {
     return (uint8_t *)(void *)irq_alias_ptr((uintptr_t)&g_pic_mask1);
@@ -58,6 +64,7 @@ static inline uint8_t *pic_mask2_slot(void)
 {
     return (uint8_t *)(void *)irq_alias_ptr((uintptr_t)&g_pic_mask2);
 }
+#endif
 
 void x86_irq_iret_corrupt(const uint64_t *saved, const uint64_t *current) {
     serial_write("[irq] iret frame corrupt\n");
@@ -84,6 +91,7 @@ void x86_irq_ist_corrupt(void) {
     serial_write("[irq] ist stack canary corrupt\n");
 }
 
+#if WASMOS_IRQ_MODE == 0
 static inline void outb(uint16_t port, uint8_t value) {
     __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
 }
@@ -103,13 +111,6 @@ static void pic_write_masks(void) {
     outb(PIC2_DATA, *pic_mask2_slot());
 }
 
-static void pic_send_eoi(uint32_t irq_line) {
-    if (irq_line >= 8) {
-        outb(PIC2_CMD, PIC_EOI);
-    }
-    outb(PIC1_CMD, PIC_EOI);
-}
-
 static int pic_is_spurious(uint32_t irq_line) {
     if (irq_line == 7) {
         outb(PIC1_CMD, 0x0B);
@@ -123,16 +124,31 @@ static int pic_is_spurious(uint32_t irq_line) {
     }
     return 0;
 }
+#endif /* WASMOS_IRQ_MODE == 0 */
+
+static void irq_send_eoi(uint32_t irq_line) {
+#if WASMOS_IRQ_MODE == 0
+    if (irq_line >= 8) {
+        outb(PIC2_CMD, PIC_EOI);
+    }
+    outb(PIC1_CMD, PIC_EOI);
+#else
+    (void)irq_line;
+    lapic_eoi();
+#endif
+}
 
 void x86_irq_init(void) {
     irq_route_t *routes = irq_routes_ptr();
-    uint8_t *mask1_slot = pic_mask1_slot();
-    uint8_t *mask2_slot = pic_mask2_slot();
     for (uint32_t i = 0; i < IRQ_COUNT; ++i) {
         routes[i].in_use = 0;
         routes[i].owner_context_id = 0;
         routes[i].endpoint = IPC_ENDPOINT_NONE;
     }
+
+#if WASMOS_IRQ_MODE == 0
+    uint8_t *mask1_slot = pic_mask1_slot();
+    uint8_t *mask2_slot = pic_mask2_slot();
 
     /* Preserve the pre-existing mask state across the PIC remap so only the
      * lines we explicitly unmask later become active. */
@@ -160,29 +176,33 @@ void x86_irq_init(void) {
     *mask2_slot = mask2;
     pic_write_masks();
     serial_write("[irq] pic remapped\n");
+#endif
 }
 
 int x86_irq_mask(uint32_t irq_line) {
-    uint8_t *mask1_slot = pic_mask1_slot();
-    uint8_t *mask2_slot = pic_mask2_slot();
     if (irq_line >= IRQ_COUNT) {
         return -1;
     }
+#if WASMOS_IRQ_MODE == 0
+    uint8_t *mask1_slot = pic_mask1_slot();
+    uint8_t *mask2_slot = pic_mask2_slot();
     if (irq_line < 8) {
         *mask1_slot |= (uint8_t)(1u << irq_line);
     } else {
         *mask2_slot |= (uint8_t)(1u << (irq_line - 8));
     }
     pic_write_masks();
+#endif
     return 0;
 }
 
 int x86_irq_unmask(uint32_t irq_line) {
-    uint8_t *mask1_slot = pic_mask1_slot();
-    uint8_t *mask2_slot = pic_mask2_slot();
     if (irq_line >= IRQ_COUNT) {
         return -1;
     }
+#if WASMOS_IRQ_MODE == 0
+    uint8_t *mask1_slot = pic_mask1_slot();
+    uint8_t *mask2_slot = pic_mask2_slot();
     if (irq_line < 8) {
         *mask1_slot &= (uint8_t)~(1u << irq_line);
     } else {
@@ -194,6 +214,7 @@ int x86_irq_unmask(uint32_t irq_line) {
         *mask1_slot &= (uint8_t)~(1u << 2);
     }
     pic_write_masks();
+#endif
     return 0;
 }
 
@@ -260,6 +281,7 @@ void x86_irq_handler(uint64_t vector) {
     }
 
     uint32_t irq_line = (uint32_t)(vector - IRQ_VECTOR_BASE);
+#if WASMOS_IRQ_MODE == 0
     if (pic_is_spurious(irq_line)) {
         if (irq_line == 15) {
             /* Spurious IRQ 15: slave never set ISR, but master did latch the
@@ -269,6 +291,7 @@ void x86_irq_handler(uint64_t vector) {
         /* Spurious IRQ 7: PIC1 never set ISR — no EOI at all. */
         return;
     }
+#endif
 
     irq_route_t *route = &routes[irq_line];
     /* IRQ0 is special because it drives scheduler accounting before any routed
@@ -297,7 +320,7 @@ void x86_irq_handler(uint64_t vector) {
         irq_msg.arg3 = 0;
         ipc_send_from(IPC_CONTEXT_KERNEL, route->endpoint, &irq_msg);
     }
-    pic_send_eoi(irq_line);
+    irq_send_eoi(irq_line);
 }
 
 void x86_timer_irq_handler(irq_frame_t *frame) {

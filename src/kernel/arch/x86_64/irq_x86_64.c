@@ -8,6 +8,9 @@
 #if WASMOS_IRQ_MODE >= 1
 #include "arch/x86_64/lapic.h"
 #endif
+#if WASMOS_IRQ_MODE == 2
+#include "arch/x86_64/ioapic.h"
+#endif
 
 /*
  * irq.c handles PIC setup, IRQ routing, and the minimal interrupt-side work
@@ -192,6 +195,8 @@ int x86_irq_mask(uint32_t irq_line) {
         *mask2_slot |= (uint8_t)(1u << (irq_line - 8));
     }
     pic_write_masks();
+#elif WASMOS_IRQ_MODE == 2
+    ioapic_mask_irq(irq_line);
 #endif
     return 0;
 }
@@ -214,8 +219,18 @@ int x86_irq_unmask(uint32_t irq_line) {
         *mask1_slot &= (uint8_t)~(1u << 2);
     }
     pic_write_masks();
+#elif WASMOS_IRQ_MODE == 2
+    ioapic_unmask_irq(irq_line);
 #endif
     return 0;
+}
+
+void x86_irq_late_init(const boot_info_t *boot_info) {
+#if WASMOS_IRQ_MODE == 2
+    ioapic_init(boot_info);
+#else
+    (void)boot_info;
+#endif
 }
 
 int x86_irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint)

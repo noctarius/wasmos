@@ -102,6 +102,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/irq.o
   ${BUILD_DIR}/irq_x86_64.o
   ${BUILD_DIR}/lapic.o
+  ${BUILD_DIR}/ioapic.o
   ${BUILD_DIR}/timer.o
   ${BUILD_DIR}/process_manager.o
   ${BUILD_DIR}/process_manager_buffers.o
@@ -169,6 +170,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/irq.c
   ${KERNEL_DIR}/arch/x86_64/irq_x86_64.c
   ${KERNEL_DIR}/arch/x86_64/lapic.c
+  ${KERNEL_DIR}/arch/x86_64/ioapic.c
   ${KERNEL_DIR}/timer.c
   ${KERNEL_DIR}/process_manager.cpp
   ${KERNEL_DIR}/process_manager_buffers.c
@@ -323,6 +325,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/irq.c -o ${BUILD_DIR}/irq.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/irq_x86_64.c -o ${BUILD_DIR}/irq_x86_64.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/lapic.c -o ${BUILD_DIR}/lapic.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/ioapic.c -o ${BUILD_DIR}/ioapic.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/timer.c -o ${BUILD_DIR}/timer.o
   COMMAND ${CMAKE_CXX_COMPILER} ${CXXFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager.cpp -o ${BUILD_DIR}/process_manager.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_buffers.c -o ${BUILD_DIR}/process_manager_buffers.o
@@ -370,6 +373,7 @@ add_custom_command(
           ${KERNEL_DIR}/include/memory_service.h ${KERNEL_DIR}/include/irq.h ${KERNEL_DIR}/include/timer.h
           ${KERNEL_DIR}/include/arch/x86_64/irq_x86_64.h
           ${KERNEL_DIR}/include/arch/x86_64/lapic.h
+          ${KERNEL_DIR}/include/arch/x86_64/ioapic.h
           ${KERNEL_DIR}/include/serial.h ${KERNEL_DIR}/include/wasmos_app.h
           ${KERNEL_DIR}/include/wasmos_app_meta.h
           ${KERNEL_DIR}/include/native_driver.h ${KERNEL_DIR}/include/spinlock.h

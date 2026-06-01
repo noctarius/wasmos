@@ -267,14 +267,6 @@ add_library(kernel_ide OBJECT EXCLUDE_FROM_ALL
   ${KERNEL_DIR}/include/wasm_chardev.h
   ${KERNEL_DIR}/include/io.h
   ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  ${DRIVER_WASM_DIR}/chardev/chardev_server.c
-  ${EXAMPLES_C_DIR}/chardev_client/chardev_client.c
-  ${EXAMPLES_C_DIR}/hello/hello_c.c
-  ${DRIVER_WASM_DIR}/ata/ata.c
-  ${DRIVER_WASM_DIR}/fs_fat/fs_fat.c
-  ${SERVICES_DIR}/sysinit/init.c
-  ${SERVICES_DIR}/cli/cli.c
-  ${SERVICES_DIR}/device_manager/device_manager.c
 )
 target_include_directories(kernel_ide PRIVATE
   ${KERNEL_DIR}/include

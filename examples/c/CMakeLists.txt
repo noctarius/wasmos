@@ -1,71 +1,25 @@
-set(WASM_LIBC_C_SOURCES
-  ${LIBC_DIR}/src/ctype.c
-  ${LIBC_DIR}/src/stdlib.c
-  ${LIBC_DIR}/src/string.c
-  ${LIBC_DIR}/src/stdio.c
-  ${LIBC_DIR}/src/startup.c
-  ${LIBC_DIR}/src/unistd.c
+wasmos_add_wasm_c_app_target(hello_c
+  SOURCE      ${WASM_HELLO_C_SRC}
+  OUTPUT_WASM ${WASM_HELLO_C_WASM}
+  OUTPUT_APP  ${WASM_HELLO_C_APP}
+  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/hello/linker.metadata
+  EXPORT      wasmos_main
+  NO_BUILTIN
+  STARTUP_SHIM
+  BUILD_COMMENT "Building wasm hello-c module"
+  PACK_COMMENT  "Packing wasm hello-c as WASMOS-APP"
 )
 
-add_custom_command(
-  OUTPUT ${WASM_HELLO_C_WASM}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
-          ${WASMOS_TRACE_DEFINE}
-          -Wl,--no-entry -Wl,--strip-all
-          -Wl,-z,stack-size=4096
-          -Wl,--initial-memory=65536
-          -Wl,--max-memory=65536
-          -Wl,--allow-undefined
-          -Wl,--export=wasmos_main
-          -I${LIBC_DIR}/include
-          -I${DRIVER_WASM_DIR}/include
-          ${WASM_LIBC_C_SOURCES}
-          ${WASM_HELLO_C_SRC}
-          -o ${WASM_HELLO_C_WASM}
-  DEPENDS ${WASM_HELLO_C_SRC} ${WASM_LIBC_C_SOURCES} ${LIBC_DIR}/include/stdio.h
-          ${LIBC_DIR}/include/stdlib.h ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/wasmos/imports.h
-          ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building wasm hello-c module"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_HELLO_C_APP}
-  COMMAND ${WASMOS_APP_PACKER}
-          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/hello/linker.metadata
-          --in ${WASM_HELLO_C_WASM}
-          --out ${WASM_HELLO_C_APP}
-  DEPENDS ${WASM_HELLO_C_WASM} make_wasmos_app
-          ${CMAKE_CURRENT_SOURCE_DIR}/hello/linker.metadata
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Packing wasm hello-c as WASMOS-APP"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_CHARDEV_CLIENT_WASM}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
-          ${WASMOS_TRACE_DEFINE}
-          -Wl,--no-entry -Wl,--strip-all
-          -Wl,-z,stack-size=4096
-          -Wl,--initial-memory=65536
-          -Wl,--max-memory=65536
-          -Wl,--allow-undefined
-          -Wl,--export=wasmos_main
-          -I${LIBC_DIR}/include
-          -I${DRIVER_WASM_DIR}/include
-          ${WASM_LIBC_C_SOURCES}
-          ${WASM_CHARDEV_CLIENT_SRC}
-          -o ${WASM_CHARDEV_CLIENT_WASM}
-  DEPENDS ${WASM_CHARDEV_CLIENT_SRC} ${WASM_LIBC_C_SOURCES} ${LIBC_DIR}/include/stdio.h
-          ${LIBC_DIR}/include/stdlib.h ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/wasmos/imports.h
-          ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building wasm chardev client module"
-  VERBATIM
+wasmos_add_wasm_c_app_target(chardev_client
+  SOURCE      ${WASM_CHARDEV_CLIENT_SRC}
+  OUTPUT_WASM ${WASM_CHARDEV_CLIENT_WASM}
+  OUTPUT_APP  ${WASM_CHARDEV_CLIENT_APP}
+  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/chardev_client/linker.metadata
+  EXPORT      wasmos_main
+  NO_BUILTIN
+  STARTUP_SHIM
+  BUILD_COMMENT "Building wasm chardev client module"
+  PACK_COMMENT  "Packing wasm chardev client as WASMOS-APP"
 )
 
 add_custom_command(
@@ -78,457 +32,148 @@ add_custom_command(
   COMMENT "Embedding wasm chardev client module"
   VERBATIM
 )
-
-add_custom_command(
-  OUTPUT ${WASM_CHARDEV_CLIENT_APP}
-  COMMAND ${WASMOS_APP_PACKER}
-          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/chardev_client/linker.metadata
-          --in ${WASM_CHARDEV_CLIENT_WASM}
-          --out ${WASM_CHARDEV_CLIENT_APP}
-  DEPENDS ${WASM_CHARDEV_CLIENT_WASM} make_wasmos_app
-          ${CMAKE_CURRENT_SOURCE_DIR}/chardev_client/linker.metadata
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Packing wasm chardev client as WASMOS-APP"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_CHARDEV_PREEMPT_WASM}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
-          ${WASMOS_TRACE_DEFINE}
-          -Wl,--no-entry -Wl,--strip-all
-          -Wl,-z,stack-size=4096
-          -Wl,--initial-memory=65536
-          -Wl,--max-memory=65536
-          -Wl,--allow-undefined
-          -Wl,--export=wasmos_main
-          -I${LIBC_DIR}/include
-          -I${DRIVER_WASM_DIR}/include
-          ${WASM_LIBC_C_SOURCES}
-          ${WASM_CHARDEV_PREEMPT_SRC}
-          -o ${WASM_CHARDEV_PREEMPT_WASM}
-  DEPENDS ${WASM_CHARDEV_PREEMPT_SRC} ${WASM_LIBC_C_SOURCES} ${LIBC_DIR}/include/stdio.h
-          ${LIBC_DIR}/include/stdlib.h ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/wasmos/imports.h
-          ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building wasm chardev preempt module"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_CHARDEV_PREEMPT_APP}
-  COMMAND ${WASMOS_APP_PACKER}
-          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/chardev_preempt/linker.metadata
-          --in ${WASM_CHARDEV_PREEMPT_WASM}
-          --out ${WASM_CHARDEV_PREEMPT_APP}
-  DEPENDS ${WASM_CHARDEV_PREEMPT_WASM} make_wasmos_app
-          ${CMAKE_CURRENT_SOURCE_DIR}/chardev_preempt/linker.metadata
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Packing wasm chardev preempt as WASMOS-APP"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_INIT_SMOKE_WASM}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
-          ${WASMOS_TRACE_DEFINE}
-          -Wl,--no-entry -Wl,--strip-all
-          -Wl,-z,stack-size=4096
-          -Wl,--initial-memory=65536
-          -Wl,--max-memory=65536
-          -Wl,--allow-undefined
-          -Wl,--export=wasmos_main
-          -I${LIBC_DIR}/include
-          -I${DRIVER_WASM_DIR}/include
-          ${WASM_LIBC_C_SOURCES}
-          ${WASM_INIT_SMOKE_SRC}
-          -o ${WASM_INIT_SMOKE_WASM}
-  DEPENDS ${WASM_INIT_SMOKE_SRC} ${WASM_LIBC_C_SOURCES} ${LIBC_DIR}/include/stdio.h
-          ${LIBC_DIR}/include/stdlib.h ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/wasmos/imports.h
-          ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building wasm init smoke module"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_INIT_SMOKE_APP}
-  COMMAND ${WASMOS_APP_PACKER}
-          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/init_smoke/linker.metadata
-          --in ${WASM_INIT_SMOKE_WASM}
-          --out ${WASM_INIT_SMOKE_APP}
-  DEPENDS ${WASM_INIT_SMOKE_WASM} make_wasmos_app
-          ${CMAKE_CURRENT_SOURCE_DIR}/init_smoke/linker.metadata
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Packing wasm init smoke as WASMOS-APP"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_NATIVE_CALL_SMOKE_WASM}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
-          ${WASMOS_TRACE_DEFINE}
-          -Wl,--no-entry -Wl,--strip-all
-          -Wl,-z,stack-size=4096
-          -Wl,--initial-memory=65536
-          -Wl,--max-memory=65536
-          -Wl,--allow-undefined
-          -Wl,--export=wasmos_main
-          -I${LIBC_DIR}/include
-          -I${DRIVER_WASM_DIR}/include
-          ${WASM_LIBC_C_SOURCES}
-          ${WASM_NATIVE_CALL_SMOKE_SRC}
-          -o ${WASM_NATIVE_CALL_SMOKE_WASM}
-  DEPENDS ${WASM_NATIVE_CALL_SMOKE_SRC} ${WASM_LIBC_C_SOURCES} ${LIBC_DIR}/include/stdio.h
-          ${LIBC_DIR}/include/stdlib.h ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/wasmos/imports.h
-          ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building wasm native call smoke module"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_NATIVE_CALL_SMOKE_APP}
-  COMMAND ${WASMOS_APP_PACKER}
-          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/native_call_smoke/linker.metadata
-          --in ${WASM_NATIVE_CALL_SMOKE_WASM}
-          --out ${WASM_NATIVE_CALL_SMOKE_APP}
-  DEPENDS ${WASM_NATIVE_CALL_SMOKE_WASM} make_wasmos_app
-          ${CMAKE_CURRENT_SOURCE_DIR}/native_call_smoke/linker.metadata
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Packing wasm native call smoke as WASMOS-APP"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_GFX_SMOKE_WASM}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
-          ${WASMOS_TRACE_DEFINE}
-          -Wl,--no-entry -Wl,--strip-all
-          -Wl,-z,stack-size=4096
-          -Wl,--initial-memory=8388608
-          -Wl,--max-memory=8388608
-          -Wl,--allow-undefined
-          -Wl,--export=wasmos_main
-          -I${LIBC_DIR}/include
-          -I${DRIVER_WASM_DIR}/include
-          ${WASM_LIBC_C_SOURCES}
-          ${WASM_GFX_SMOKE_SRC}
-          -o ${WASM_GFX_SMOKE_WASM}
-  DEPENDS ${WASM_GFX_SMOKE_SRC} ${WASM_LIBC_C_SOURCES} ${LIBC_DIR}/include/stdio.h
-          ${LIBC_DIR}/include/stdlib.h ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/wasmos/imports.h
-          ${LIBC_DIR}/include/wasmos/gfx_ipc.h ${LIBC_DIR}/include/wasmos/ipc.h
-          ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building wasm gfx smoke module"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_GFX_SMOKE_APP}
-  COMMAND ${WASMOS_APP_PACKER}
-          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/gfx_smoke/linker.metadata
-          --in ${WASM_GFX_SMOKE_WASM}
-          --out ${WASM_GFX_SMOKE_APP}
-  DEPENDS ${WASM_GFX_SMOKE_WASM} make_wasmos_app
-          ${CMAKE_CURRENT_SOURCE_DIR}/gfx_smoke/linker.metadata
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Packing wasm gfx smoke as WASMOS-APP"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_FS_OPEN_SMOKE_WASM}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
-          ${WASMOS_TRACE_DEFINE}
-          -Wl,--no-entry -Wl,--strip-all
-          -Wl,-z,stack-size=4096
-          -Wl,--initial-memory=65536
-          -Wl,--max-memory=65536
-          -Wl,--allow-undefined
-          -Wl,--export=wasmos_main
-          -I${LIBC_DIR}/include
-          -I${DRIVER_WASM_DIR}/include
-          ${WASM_LIBC_C_SOURCES}
-          ${WASM_FS_OPEN_SMOKE_SRC}
-          -o ${WASM_FS_OPEN_SMOKE_WASM}
-  DEPENDS ${WASM_FS_OPEN_SMOKE_SRC} ${WASM_LIBC_C_SOURCES} ${LIBC_DIR}/include/stdio.h
-          ${LIBC_DIR}/include/stdlib.h ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/unistd.h
-          ${LIBC_DIR}/include/fcntl.h ${LIBC_DIR}/include/wasmos/imports.h
-          ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building wasm fs open smoke module"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_FS_OPEN_SMOKE_APP}
-  COMMAND ${WASMOS_APP_PACKER}
-          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/fs_open_smoke/linker.metadata
-          --in ${WASM_FS_OPEN_SMOKE_WASM}
-          --out ${WASM_FS_OPEN_SMOKE_APP}
-  DEPENDS ${WASM_FS_OPEN_SMOKE_WASM} make_wasmos_app
-          ${CMAKE_CURRENT_SOURCE_DIR}/fs_open_smoke/linker.metadata
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Packing wasm fs open smoke as WASMOS-APP"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_FS_WRITE_SMOKE_WASM}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
-          ${WASMOS_TRACE_DEFINE}
-          -Wl,--no-entry -Wl,--strip-all
-          -Wl,-z,stack-size=4096
-          -Wl,--initial-memory=65536
-          -Wl,--max-memory=65536
-          -Wl,--allow-undefined
-          -Wl,--export=wasmos_main
-          -I${LIBC_DIR}/include
-          -I${DRIVER_WASM_DIR}/include
-          ${WASM_LIBC_C_SOURCES}
-          ${WASM_FS_WRITE_SMOKE_SRC}
-          -o ${WASM_FS_WRITE_SMOKE_WASM}
-  DEPENDS ${WASM_FS_WRITE_SMOKE_SRC} ${WASM_LIBC_C_SOURCES} ${LIBC_DIR}/include/stdio.h
-          ${LIBC_DIR}/include/stdlib.h ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/unistd.h
-          ${LIBC_DIR}/include/fcntl.h ${LIBC_DIR}/include/wasmos/imports.h
-          ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building wasm fs write smoke module"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_FS_WRITE_SMOKE_APP}
-  COMMAND ${WASMOS_APP_PACKER}
-          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/fs_write_smoke/linker.metadata
-          --in ${WASM_FS_WRITE_SMOKE_WASM}
-          --out ${WASM_FS_WRITE_SMOKE_APP}
-  DEPENDS ${WASM_FS_WRITE_SMOKE_WASM} make_wasmos_app
-          ${CMAKE_CURRENT_SOURCE_DIR}/fs_write_smoke/linker.metadata
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Packing wasm fs write smoke as WASMOS-APP"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_NATIVE_CALL_MIN_WASM}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
-          ${WASMOS_TRACE_DEFINE}
-          -Wl,--no-entry -Wl,--strip-all
-          -Wl,-z,stack-size=4096
-          -Wl,--initial-memory=65536
-          -Wl,--max-memory=65536
-          -Wl,--allow-undefined
-          -Wl,--export=wasmos_main
-          -I${LIBC_DIR}/include
-          -I${DRIVER_WASM_DIR}/include
-          ${WASM_LIBC_C_SOURCES}
-          ${WASM_NATIVE_CALL_MIN_SRC}
-          -o ${WASM_NATIVE_CALL_MIN_WASM}
-  DEPENDS ${WASM_NATIVE_CALL_MIN_SRC} ${WASM_LIBC_C_SOURCES} ${LIBC_DIR}/include/stdio.h
-          ${LIBC_DIR}/include/stdlib.h ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/wasmos/imports.h
-          ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building wasm native call min module"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_NATIVE_CALL_MIN_APP}
-  COMMAND ${WASMOS_APP_PACKER}
-          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/native_call_min/linker.metadata
-          --in ${WASM_NATIVE_CALL_MIN_WASM}
-          --out ${WASM_NATIVE_CALL_MIN_APP}
-  DEPENDS ${WASM_NATIVE_CALL_MIN_WASM} make_wasmos_app
-          ${CMAKE_CURRENT_SOURCE_DIR}/native_call_min/linker.metadata
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Packing wasm native call min as WASMOS-APP"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_IRQ_ROUTE_DENY_WASM}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
-          ${WASMOS_TRACE_DEFINE}
-          -Wl,--no-entry -Wl,--strip-all
-          -Wl,-z,stack-size=4096
-          -Wl,--initial-memory=65536
-          -Wl,--max-memory=65536
-          -Wl,--allow-undefined
-          -Wl,--export=wasmos_main
-          -I${LIBC_DIR}/include
-          -I${DRIVER_WASM_DIR}/include
-          ${WASM_LIBC_C_SOURCES}
-          ${WASM_IRQ_ROUTE_DENY_SRC}
-          -o ${WASM_IRQ_ROUTE_DENY_WASM}
-  DEPENDS ${WASM_IRQ_ROUTE_DENY_SRC} ${WASM_LIBC_C_SOURCES} ${LIBC_DIR}/include/stdio.h
-          ${LIBC_DIR}/include/stdlib.h ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/wasmos/imports.h
-          ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building wasm irq-route-deny module"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_IRQ_ROUTE_DENY_APP}
-  COMMAND ${WASMOS_APP_PACKER}
-          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/irq_route_deny/linker.metadata
-          --in ${WASM_IRQ_ROUTE_DENY_WASM}
-          --out ${WASM_IRQ_ROUTE_DENY_APP}
-  DEPENDS ${WASM_IRQ_ROUTE_DENY_WASM} make_wasmos_app
-          ${CMAKE_CURRENT_SOURCE_DIR}/irq_route_deny/linker.metadata
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Packing wasm irq-route-deny as WASMOS-APP"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_IRQ_ROUTE_ALLOW_WASM}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
-          ${WASMOS_TRACE_DEFINE}
-          -Wl,--no-entry -Wl,--strip-all
-          -Wl,-z,stack-size=4096
-          -Wl,--initial-memory=65536
-          -Wl,--max-memory=65536
-          -Wl,--allow-undefined
-          -Wl,--export=wasmos_main
-          -I${LIBC_DIR}/include
-          -I${DRIVER_WASM_DIR}/include
-          ${WASM_LIBC_C_SOURCES}
-          ${WASM_IRQ_ROUTE_ALLOW_SRC}
-          -o ${WASM_IRQ_ROUTE_ALLOW_WASM}
-  DEPENDS ${WASM_IRQ_ROUTE_ALLOW_SRC} ${WASM_LIBC_C_SOURCES} ${LIBC_DIR}/include/stdio.h
-          ${LIBC_DIR}/include/stdlib.h ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/wasmos/imports.h
-          ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building wasm irq-route-allow module"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_IRQ_ROUTE_ALLOW_APP}
-  COMMAND ${WASMOS_APP_PACKER}
-          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/irq_route_allow/linker.metadata
-          --in ${WASM_IRQ_ROUTE_ALLOW_WASM}
-          --out ${WASM_IRQ_ROUTE_ALLOW_APP}
-  DEPENDS ${WASM_IRQ_ROUTE_ALLOW_WASM} make_wasmos_app
-          ${CMAKE_CURRENT_SOURCE_DIR}/irq_route_allow/linker.metadata
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Packing wasm irq-route-allow as WASMOS-APP"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_SHMEM_OWNER_WASM}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
-          ${WASMOS_TRACE_DEFINE}
-          -Wl,--no-entry -Wl,--strip-all
-          -Wl,-z,stack-size=4096
-          -Wl,--initial-memory=65536
-          -Wl,--max-memory=65536
-          -Wl,--allow-undefined
-          -Wl,--export=wasmos_main
-          -I${LIBC_DIR}/include
-          -I${DRIVER_WASM_DIR}/include
-          ${WASM_LIBC_C_SOURCES}
-          ${WASM_SHMEM_OWNER_SRC}
-          -o ${WASM_SHMEM_OWNER_WASM}
-  DEPENDS ${WASM_SHMEM_OWNER_SRC} ${WASM_LIBC_C_SOURCES} ${LIBC_DIR}/include/stdio.h
-          ${LIBC_DIR}/include/stdlib.h ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/unistd.h
-          ${LIBC_DIR}/include/fcntl.h ${LIBC_DIR}/include/wasmos/imports.h
-          ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building wasm shmem-owner module"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_SHMEM_OWNER_APP}
-  COMMAND ${WASMOS_APP_PACKER}
-          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/shmem_owner/linker.metadata
-          --in ${WASM_SHMEM_OWNER_WASM}
-          --out ${WASM_SHMEM_OWNER_APP}
-  DEPENDS ${WASM_SHMEM_OWNER_WASM} make_wasmos_app
-          ${CMAKE_CURRENT_SOURCE_DIR}/shmem_owner/linker.metadata
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Packing wasm shmownr as WASMOS-APP"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_SHMEM_TARGET_WASM}
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-  COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding -fno-builtin
-          ${WASMOS_TRACE_DEFINE}
-          -Wl,--no-entry -Wl,--strip-all
-          -Wl,-z,stack-size=4096
-          -Wl,--initial-memory=65536
-          -Wl,--max-memory=65536
-          -Wl,--allow-undefined
-          -Wl,--export=wasmos_main
-          -I${LIBC_DIR}/include
-          -I${DRIVER_WASM_DIR}/include
-          ${WASM_LIBC_C_SOURCES}
-          ${WASM_SHMEM_TARGET_SRC}
-          -o ${WASM_SHMEM_TARGET_WASM}
-  DEPENDS ${WASM_SHMEM_TARGET_SRC} ${WASM_LIBC_C_SOURCES} ${LIBC_DIR}/include/stdio.h
-          ${LIBC_DIR}/include/stdlib.h ${LIBC_DIR}/include/string.h ${LIBC_DIR}/include/unistd.h
-          ${LIBC_DIR}/include/fcntl.h ${LIBC_DIR}/include/wasmos/imports.h
-          ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Building wasm shmem-target module"
-  VERBATIM
-)
-
-add_custom_command(
-  OUTPUT ${WASM_SHMEM_TARGET_APP}
-  COMMAND ${WASMOS_APP_PACKER}
-          --manifest ${CMAKE_CURRENT_SOURCE_DIR}/shmem_target/linker.metadata
-          --in ${WASM_SHMEM_TARGET_WASM}
-          --out ${WASM_SHMEM_TARGET_APP}
-  DEPENDS ${WASM_SHMEM_TARGET_WASM} make_wasmos_app
-          ${CMAKE_CURRENT_SOURCE_DIR}/shmem_target/linker.metadata
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Packing wasm shmtgt as WASMOS-APP"
-  VERBATIM
-)
-
-add_custom_target(c_examples DEPENDS ${WASM_HELLO_C_APP} ${WASM_CHARDEV_CLIENT_APP} ${WASM_CHARDEV_PREEMPT_APP} ${WASM_INIT_SMOKE_APP} ${WASM_FS_OPEN_SMOKE_APP} ${WASM_FS_WRITE_SMOKE_APP} ${WASM_NATIVE_CALL_MIN_APP} ${WASM_NATIVE_CALL_SMOKE_APP} ${WASM_GFX_SMOKE_APP} ${WASM_IRQ_ROUTE_DENY_APP} ${WASM_IRQ_ROUTE_ALLOW_APP} ${WASM_SHMEM_OWNER_APP} ${WASM_SHMEM_TARGET_APP})
 add_custom_target(chardev_client_blob DEPENDS ${WASM_CHARDEV_CLIENT_BLOB})
 
-# IDE aggregation target for CLion indexing (not part of the build).
-wasmos_add_ide_c_target(c_examples_ide
-  SOURCES
-    ${WASM_HELLO_C_SRC}
-    ${WASM_CHARDEV_CLIENT_SRC}
-    ${WASM_CHARDEV_PREEMPT_SRC}
-    ${WASM_INIT_SMOKE_SRC}
-    ${WASM_FS_OPEN_SMOKE_SRC}
-    ${WASM_FS_WRITE_SMOKE_SRC}
-    ${WASM_NATIVE_CALL_MIN_SRC}
-    ${WASM_NATIVE_CALL_SMOKE_SRC}
-    ${WASM_GFX_SMOKE_SRC}
-    ${WASM_IRQ_ROUTE_DENY_SRC}
-    ${WASM_IRQ_ROUTE_ALLOW_SRC}
-    ${WASM_SHMEM_OWNER_SRC}
-    ${WASM_SHMEM_TARGET_SRC}
-  INCLUDES
-    ${LIBC_DIR}/include
-    ${DRIVER_WASM_DIR}/include
+wasmos_add_wasm_c_app_target(chardev_preempt
+  SOURCE      ${WASM_CHARDEV_PREEMPT_SRC}
+  OUTPUT_WASM ${WASM_CHARDEV_PREEMPT_WASM}
+  OUTPUT_APP  ${WASM_CHARDEV_PREEMPT_APP}
+  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/chardev_preempt/linker.metadata
+  EXPORT      wasmos_main
+  NO_BUILTIN
+  STARTUP_SHIM
+  BUILD_COMMENT "Building wasm chardev preempt module"
+  PACK_COMMENT  "Packing wasm chardev preempt as WASMOS-APP"
 )
 
-set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASM_HELLO_C_APP} ${WASM_CHARDEV_CLIENT_APP} ${WASM_CHARDEV_PREEMPT_APP} ${WASM_INIT_SMOKE_APP} ${WASM_FS_OPEN_SMOKE_APP} ${WASM_FS_WRITE_SMOKE_APP} ${WASM_NATIVE_CALL_MIN_APP} ${WASM_NATIVE_CALL_SMOKE_APP} ${WASM_GFX_SMOKE_APP} ${WASM_IRQ_ROUTE_DENY_APP} ${WASM_IRQ_ROUTE_ALLOW_APP} ${WASM_SHMEM_OWNER_APP} ${WASM_SHMEM_TARGET_APP})
-set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS c_examples)
+wasmos_add_wasm_c_app_target(init_smoke
+  SOURCE      ${WASM_INIT_SMOKE_SRC}
+  OUTPUT_WASM ${WASM_INIT_SMOKE_WASM}
+  OUTPUT_APP  ${WASM_INIT_SMOKE_APP}
+  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/init_smoke/linker.metadata
+  EXPORT      wasmos_main
+  NO_BUILTIN
+  STARTUP_SHIM
+  BUILD_COMMENT "Building wasm init smoke module"
+  PACK_COMMENT  "Packing wasm init smoke as WASMOS-APP"
+)
+
+wasmos_add_wasm_c_app_target(native_call_smoke
+  SOURCE      ${WASM_NATIVE_CALL_SMOKE_SRC}
+  OUTPUT_WASM ${WASM_NATIVE_CALL_SMOKE_WASM}
+  OUTPUT_APP  ${WASM_NATIVE_CALL_SMOKE_APP}
+  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/native_call_smoke/linker.metadata
+  EXPORT      wasmos_main
+  NO_BUILTIN
+  STARTUP_SHIM
+  BUILD_COMMENT "Building wasm native call smoke module"
+  PACK_COMMENT  "Packing wasm native call smoke as WASMOS-APP"
+)
+
+wasmos_add_wasm_c_app_target(gfx_smoke
+  SOURCE         ${WASM_GFX_SMOKE_SRC}
+  OUTPUT_WASM    ${WASM_GFX_SMOKE_WASM}
+  OUTPUT_APP     ${WASM_GFX_SMOKE_APP}
+  MANIFEST       ${CMAKE_CURRENT_SOURCE_DIR}/gfx_smoke/linker.metadata
+  EXPORT         wasmos_main
+  NO_BUILTIN
+  STARTUP_SHIM
+  INITIAL_MEMORY 8388608
+  MAX_MEMORY     8388608
+  BUILD_COMMENT  "Building wasm gfx smoke module"
+  PACK_COMMENT   "Packing wasm gfx smoke as WASMOS-APP"
+)
+
+wasmos_add_wasm_c_app_target(fs_open_smoke
+  SOURCE      ${WASM_FS_OPEN_SMOKE_SRC}
+  OUTPUT_WASM ${WASM_FS_OPEN_SMOKE_WASM}
+  OUTPUT_APP  ${WASM_FS_OPEN_SMOKE_APP}
+  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/fs_open_smoke/linker.metadata
+  EXPORT      wasmos_main
+  NO_BUILTIN
+  STARTUP_SHIM
+  BUILD_COMMENT "Building wasm fs open smoke module"
+  PACK_COMMENT  "Packing wasm fs open smoke as WASMOS-APP"
+)
+
+wasmos_add_wasm_c_app_target(fs_write_smoke
+  SOURCE      ${WASM_FS_WRITE_SMOKE_SRC}
+  OUTPUT_WASM ${WASM_FS_WRITE_SMOKE_WASM}
+  OUTPUT_APP  ${WASM_FS_WRITE_SMOKE_APP}
+  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/fs_write_smoke/linker.metadata
+  EXPORT      wasmos_main
+  NO_BUILTIN
+  STARTUP_SHIM
+  BUILD_COMMENT "Building wasm fs write smoke module"
+  PACK_COMMENT  "Packing wasm fs write smoke as WASMOS-APP"
+)
+
+wasmos_add_wasm_c_app_target(native_call_min
+  SOURCE      ${WASM_NATIVE_CALL_MIN_SRC}
+  OUTPUT_WASM ${WASM_NATIVE_CALL_MIN_WASM}
+  OUTPUT_APP  ${WASM_NATIVE_CALL_MIN_APP}
+  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/native_call_min/linker.metadata
+  EXPORT      wasmos_main
+  NO_BUILTIN
+  STARTUP_SHIM
+  BUILD_COMMENT "Building wasm native call min module"
+  PACK_COMMENT  "Packing wasm native call min as WASMOS-APP"
+)
+
+wasmos_add_wasm_c_app_target(irq_route_deny
+  SOURCE      ${WASM_IRQ_ROUTE_DENY_SRC}
+  OUTPUT_WASM ${WASM_IRQ_ROUTE_DENY_WASM}
+  OUTPUT_APP  ${WASM_IRQ_ROUTE_DENY_APP}
+  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/irq_route_deny/linker.metadata
+  EXPORT      wasmos_main
+  NO_BUILTIN
+  STARTUP_SHIM
+  BUILD_COMMENT "Building wasm irq-route-deny module"
+  PACK_COMMENT  "Packing wasm irq-route-deny as WASMOS-APP"
+)
+
+wasmos_add_wasm_c_app_target(irq_route_allow
+  SOURCE      ${WASM_IRQ_ROUTE_ALLOW_SRC}
+  OUTPUT_WASM ${WASM_IRQ_ROUTE_ALLOW_WASM}
+  OUTPUT_APP  ${WASM_IRQ_ROUTE_ALLOW_APP}
+  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/irq_route_allow/linker.metadata
+  EXPORT      wasmos_main
+  NO_BUILTIN
+  STARTUP_SHIM
+  BUILD_COMMENT "Building wasm irq-route-allow module"
+  PACK_COMMENT  "Packing wasm irq-route-allow as WASMOS-APP"
+)
+
+wasmos_add_wasm_c_app_target(shmem_owner
+  SOURCE      ${WASM_SHMEM_OWNER_SRC}
+  OUTPUT_WASM ${WASM_SHMEM_OWNER_WASM}
+  OUTPUT_APP  ${WASM_SHMEM_OWNER_APP}
+  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/shmem_owner/linker.metadata
+  EXPORT      wasmos_main
+  NO_BUILTIN
+  STARTUP_SHIM
+  BUILD_COMMENT "Building wasm shmem-owner module"
+  PACK_COMMENT  "Packing wasm shmownr as WASMOS-APP"
+)
+
+wasmos_add_wasm_c_app_target(shmem_target
+  SOURCE      ${WASM_SHMEM_TARGET_SRC}
+  OUTPUT_WASM ${WASM_SHMEM_TARGET_WASM}
+  OUTPUT_APP  ${WASM_SHMEM_TARGET_APP}
+  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/shmem_target/linker.metadata
+  EXPORT      wasmos_main
+  NO_BUILTIN
+  STARTUP_SHIM
+  BUILD_COMMENT "Building wasm shmem-target module"
+  PACK_COMMENT  "Packing wasm shmtgt as WASMOS-APP"
+)
+
+add_custom_target(c_examples)
+add_dependencies(c_examples
+  hello_c chardev_client chardev_preempt init_smoke
+  fs_open_smoke fs_write_smoke native_call_min native_call_smoke
+  gfx_smoke irq_route_deny irq_route_allow shmem_owner shmem_target
+)
+
 set_property(GLOBAL APPEND PROPERTY WASMOS_KERNEL_BLOBS ${WASM_CHARDEV_CLIENT_BLOB})
 set_property(GLOBAL APPEND PROPERTY WASMOS_KERNEL_BLOB_TARGETS chardev_client_blob)

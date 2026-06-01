@@ -551,7 +551,7 @@ function(wasmos_add_native_c_app_target target_name)
   )
 endfunction()
 
-set(WASMOS_DOTCONFIG ${CMAKE_BINARY_DIR}/.config CACHE FILEPATH "Path to Kconfig .config")
+set(WASMOS_DOTCONFIG ${CMAKE_SOURCE_DIR}/.config CACHE FILEPATH "Path to Kconfig .config")
 set(WASMOS_KCONFIG_IMPORT ${CMAKE_BINARY_DIR}/wasmos_kconfig.cmake)
 
 if (EXISTS ${WASMOS_DOTCONFIG})
@@ -819,7 +819,15 @@ add_custom_target(kconfig-defconfig
   COMMENT "Seeding ${WASMOS_DOTCONFIG} from configs/wasmos_defconfig"
   VERBATIM
 )
-find_program(WASMOS_MENUCONFIG_BIN NAMES menuconfig nconfig kconfig-mconf mconf)
+# Prefer kconfiglib's "menuconfig" (installed via pip install kconfiglib) for the
+# full curses TUI. USES_TERMINAL gives it a proper TTY so it works from cmake.
+# Derive the search hint from Python3_EXECUTABLE so a venv-installed menuconfig
+# is found even when the venv is not on the cmake-time PATH.
+get_filename_component(_PYTHON_BIN_DIR ${Python3_EXECUTABLE} DIRECTORY)
+find_program(WASMOS_MENUCONFIG_BIN
+  NAMES menuconfig nconfig kconfig-mconf mconf
+  HINTS ${_PYTHON_BIN_DIR}
+)
 if (WASMOS_MENUCONFIG_BIN)
   add_custom_target(menuconfig
     COMMAND ${CMAKE_COMMAND} -E env KCONFIG_CONFIG=${WASMOS_DOTCONFIG}
@@ -829,6 +837,7 @@ if (WASMOS_MENUCONFIG_BIN)
             --output ${WASMOS_KCONFIG_IMPORT}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Run menuconfig and import .config into CMake cache"
+    USES_TERMINAL
     VERBATIM
   )
 else ()
@@ -837,7 +846,11 @@ else ()
             --kconfig ${CMAKE_SOURCE_DIR}/Kconfig
             --config ${WASMOS_DOTCONFIG}
             --defconfig ${CMAKE_SOURCE_DIR}/configs/wasmos_defconfig
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/kconfig_to_cmake.py
+            --input ${WASMOS_DOTCONFIG}
+            --output ${WASMOS_KCONFIG_IMPORT}
     COMMENT "Run menuconfig and import .config into CMake cache"
+    USES_TERMINAL
     VERBATIM
   )
 endif ()
@@ -846,7 +859,11 @@ add_custom_target(kconfiglib-menuconfig
           --kconfig ${CMAKE_SOURCE_DIR}/Kconfig
           --config ${WASMOS_DOTCONFIG}
           --defconfig ${CMAKE_SOURCE_DIR}/configs/wasmos_defconfig
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/kconfig_to_cmake.py
+          --input ${WASMOS_DOTCONFIG}
+          --output ${WASMOS_KCONFIG_IMPORT}
   COMMENT "Run kconfiglib interactive config editor"
+  USES_TERMINAL
   VERBATIM
 )
 if (AS_ENABLE)

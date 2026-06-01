@@ -439,7 +439,7 @@ completion for outbound FS IPC calls.
 Owns all display policy: window layout, z-order, surface composition, input
 routing. Writes to kernel-managed shared framebuffer handles via borrow
 semantics. Pixel data never flows through IPC messages. See
-`docs/architecture/17-graphics-framebuffer-and-compositor.md`.
+`docs/architecture/20-graphics-framebuffer-and-compositor.md`.
 
 #### `vt` — Virtual Terminal Multiplexer
 
@@ -643,4 +643,4 @@ What is **not yet implemented**: driver liveness monitoring and restart,
 hotplug event pipeline, endpoint identity preservation across restarts,
 IRQ bind/unbind delegation to driver endpoints.
 
-DMA-specific design details are tracked in `docs/architecture/16-dma-transfers.md`.
+DMA-specific design details are tracked in `docs/architecture/12-dma-transfers.md`.

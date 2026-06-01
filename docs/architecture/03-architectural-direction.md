@@ -186,7 +186,7 @@ normalized block records, not transport-specific driver names. Examples:
 ### Memory Management Direction
 
 The kernel memory model evolves in three phases (details in
-`docs/architecture/07-memory-management.md`):
+`docs/architecture/06-memory-management.md`):
 
 **Phase 1 — intent-based allocation API.**
 Replace all ad-hoc `pfa_alloc_pages_below(X)` calls with typed intent: `MM_ALLOC_STACK`,
@@ -274,7 +274,7 @@ The rollout is correctness-first: copy path for packet data, no offload,
 static IP for the initial baseline. Optimization (zero-copy RX via borrow-handle
 forwarding, DMA for packet buffers, DHCP, multiple stack instances) comes after
 the baseline end-to-end path is proven. See
-`docs/architecture/20-networking-virtio-net-and-stack.md`.
+`docs/architecture/22-networking-virtio-net-and-stack.md`.
 
 ---
 

@@ -15,26 +15,46 @@ test injection hooks so owner-deny marker checks (`wait`/`kill`/`status`/`spawn`
 remain deterministic in strict ring3 runs.
 
 ## Architecture Document Map
+
+### Context and Goals
 - [Goals](architecture/01-goals.md)
 - [Current System Summary](architecture/02-current-system-summary.md)
 - [Architectural Direction](architecture/03-architectural-direction.md)
+
+### Boot and Hardware Setup
 - [Boot and Handoff](architecture/04-boot-and-handoff.md)
-- [Scheduling and Preemption](architecture/05-scheduling-and-preemption.md)
-- [Process and IPC](architecture/06-process-and-ipc.md)
-- [Memory Management](architecture/07-memory-management.md)
-- [Runtime and Packaging](architecture/08-runtime-and-packaging.md)
-- [Drivers and Services](architecture/09-drivers-and-services.md)
-- [CLI and User-Space Baseline](architecture/10-cli-and-user-space.md)
-- [Diagnostics and Status](architecture/11-diagnostics-status.md)
-- [Repository Map and Validation Baseline](architecture/12-repo-map-and-validation.md)
-- [Virtual Terminal](architecture/13-virtual-terminal.md)
-- [Ring3 Isolation and Separation](architecture/14-ring3-isolation-and-separation.md)
-- [Threading and Lifecycle](architecture/15-threading-and-lifecycle.md)
-- [DMA Transfers](architecture/16-dma-transfers.md)
-- [Graphics, Framebuffer, and Compositor](architecture/17-graphics-framebuffer-and-compositor.md)
-- [Environment Scopes and Inheritance](architecture/18-environment-scopes-and-inheritance.md)
-- [Virtual Input Testing via Virtio-Serial](architecture/19-virtual-input-testing-via-virtio-serial.md)
-- [Networking via Virtio-Net and User-Space Stack](architecture/20-networking-virtio-net-and-stack.md)
+- [x86_64 CPU Architecture](architecture/05-x86-cpu-architecture.md)
+- [Memory Management](architecture/06-memory-management.md)
+- [Scheduling and Preemption](architecture/07-scheduling-and-preemption.md)
+- [Threading and Lifecycle](architecture/08-threading-and-lifecycle.md)
+
+### Kernel Core
+- [Process and IPC](architecture/09-process-and-ipc.md)
+- [Capability and Policy](architecture/10-capability-and-policy.md)
+- [Ring3 Isolation and Separation](architecture/11-ring3-isolation-and-separation.md)
+- [DMA Transfers](architecture/12-dma-transfers.md)
+
+### WASM Runtime
+- [Runtime and Packaging](architecture/13-runtime-and-packaging.md)
+- [libsys and IPC Service Runtime](architecture/14-libsys-and-service-runtime.md)
+
+### Drivers and Services
+- [Drivers and Services](architecture/15-drivers-and-services.md)
+- [Device Manager and Bus Enumeration](architecture/16-device-manager-and-bus-enumeration.md)
+- [Console I/O and Character Device](architecture/17-console-io-and-character-device.md)
+- [Filesystem Stack](architecture/18-filesystem-stack.md)
+- [Virtual Terminal](architecture/19-virtual-terminal.md)
+- [Graphics, Framebuffer, and Compositor](architecture/20-graphics-framebuffer-and-compositor.md)
+- [Virtual Input Testing via Virtio-Serial](architecture/21-virtual-input-testing-via-virtio-serial.md)
+- [Networking via Virtio-Net and User-Space Stack](architecture/22-networking-virtio-net-and-stack.md)
+
+### User Space
+- [CLI and User-Space Baseline](architecture/23-cli-and-user-space.md)
+- [Environment Scopes and Inheritance](architecture/24-environment-scopes-and-inheritance.md)
+
+### Operations and Validation
+- [Diagnostics and Status](architecture/25-diagnostics-status.md)
+- [Repository Map and Validation Baseline](architecture/26-repo-map-and-validation.md)
 
 ## Update Rules
 - Update the relevant feature document(s) in `docs/architecture/` when behavior

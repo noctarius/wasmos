@@ -5,7 +5,7 @@ reorganization.
 
 IMPORTANT: Keep this file aligned with `README.md` and `docs/ARCHITECTURE.md`.
 Isolation execution baseline: see
-`docs/architecture/14-ring3-isolation-and-separation.md` for the current ring-3
+`docs/architecture/11-ring3-isolation-and-separation.md` for the current ring-3
 separation model and deferred hardening backlog.
 
 ## Status Sweep (from `docs/architecture/*`)
@@ -24,7 +24,7 @@ separation model and deferred hardening backlog.
 
 ### Open / Remaining
 - [ ] Continue post-closure ring-3 hardening per
-  `docs/architecture/14-ring3-isolation-and-separation.md`
+  `docs/architecture/11-ring3-isolation-and-separation.md`
   (boundary cleanup and CLI flake reduction).
   - Owner: kernel-security + kernel-memory + kernel-scheduler.
   - Includes explicit follow-ups for ring3 TODOs in `src/kernel/framebuffer.c`,

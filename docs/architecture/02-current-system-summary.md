@@ -48,7 +48,7 @@ hardcoded physical-ceiling constraints; migration to intent-based allocation
 (zone-aware, with only true DMA paths constrained to low addresses) is in
 progress. Per-context memory regions, MM contexts, and capability state are
 list-backed with no fixed `MM_MAX_*` slot limits.
-See `docs/architecture/07-memory-management.md`.
+See `docs/architecture/06-memory-management.md`.
 
 **Interrupts**
 Legacy PIC remap, PIT IRQ0 as the scheduler clock, exception stubs for all
@@ -87,7 +87,7 @@ Borrow-buffer DMA lifecycle (`dma_map_borrow`, `dma_sync_borrow`,
 limit, direction). Storage path integration is complete (ATA attempts a
 borrow-based DMA path, falls back to PIO/copy on deny). Packet-side DMA for
 networking is deferred to a later phase.
-See `docs/architecture/16-dma-transfers.md`.
+See `docs/architecture/12-dma-transfers.md`.
 
 **Slab Allocator**
 A fixed-size slab scaffold (`kalloc_small`/`kfree_small`) is available as an
@@ -156,7 +156,7 @@ initfs rules only.
 
 The planned evolution toward full MINIX-style device lifecycle (hotplug,
 supervised driver restart, capability manifests) is tracked in
-`docs/architecture/09-drivers-and-services.md`.
+`docs/architecture/15-drivers-and-services.md`.
 
 ---
 
@@ -254,7 +254,7 @@ Ring3 execution is implemented and validated end-to-end:
   IPC deny/allow, fault injection across exception types, preemption stress, PM
   owner-deny inject paths, and native ABI smoke.
 
-See `docs/architecture/14-ring3-isolation-and-separation.md` for details and
+See `docs/architecture/11-ring3-isolation-and-separation.md` for details and
 remaining hardening work.
 
 ---
@@ -269,7 +269,7 @@ In-kernel thread support is production-complete for the current single-core scop
 - Blocking IPC operations block only the calling thread.
 - SMP support is future work.
 
-See `docs/architecture/15-threading-and-lifecycle.md`.
+See `docs/architecture/08-threading-and-lifecycle.md`.
 
 ---
 
@@ -279,7 +279,7 @@ Networking is in the design phase. `virtio-serial` proves the PCI-matched WASM
 driver transport pattern. No networking driver or stack service is implemented
 yet. The full design — `virtio-net` driver, user-space lwIP stack service, socket
 IPC contract, IPv4/IPv6, multi-address, and multi-stack-instance model — is in
-`docs/architecture/20-networking-virtio-net-and-stack.md`.
+`docs/architecture/22-networking-virtio-net-and-stack.md`.
 
 ---
 

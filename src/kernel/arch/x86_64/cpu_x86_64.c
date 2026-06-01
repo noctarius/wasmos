@@ -1,5 +1,6 @@
 #include "cpu.h"
 #include "arch/x86_64/cpu_x86_64.h"
+#include "arch/x86_64/msr.h"
 #include "serial.h"
 #include "process.h"
 #include "memory_service.h"
@@ -10,6 +11,9 @@
 #include "string.h"
 #include <stdint.h>
 #include <stdarg.h>
+#if WASMOS_IRQ_MODE >= 1
+#include "arch/x86_64/lapic.h"
+#endif
 
 #define GDT_ENTRY_COUNT 7
 #define IDT_ENTRY_COUNT 256
@@ -87,23 +91,6 @@ static tss_t g_tss;
 
 #define IA32_EFER_MSR 0xC0000080u
 #define IA32_EFER_NXE (1ULL << 11)
-
-static uint64_t
-x86_read_msr(uint32_t msr)
-{
-    uint32_t lo = 0;
-    uint32_t hi = 0;
-    __asm__ volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr));
-    return ((uint64_t)hi << 32) | (uint64_t)lo;
-}
-
-static void
-x86_write_msr(uint32_t msr, uint64_t value)
-{
-    uint32_t lo = (uint32_t)(value & 0xFFFFFFFFu);
-    uint32_t hi = (uint32_t)(value >> 32);
-    __asm__ volatile("wrmsr" : : "c"(msr), "a"(lo), "d"(hi));
-}
 
 typedef enum {
     PF_REASON_UNMAPPED = 0,
@@ -631,6 +618,14 @@ x86_cpu_init(void)
             idt_set_gate((uint8_t)(IRQ_VECTOR_BASE + i), handler, IDT_TYPE_INTERRUPT_GATE);
         }
     }
+#if WASMOS_IRQ_MODE >= 1
+    /* Spurious LAPIC interrupts arrive at vector 255.  No EOI is needed; the
+     * handler just returns.  Intel SDM Vol 3A §10.9 explicitly states that
+     * the processor does not latch the spurious-interrupt vector. */
+    extern void isr_lapic_spurious(void);
+    idt_set_gate(255u, x86_kernel_handler_addr((uintptr_t)isr_lapic_spurious),
+                 IDT_TYPE_INTERRUPT_GATE);
+#endif
     /* Keep this literal wiring form present for source-level spec assertions;
      * runtime installation is corrected to higher-half alias immediately below. */
     idt_set_gate((uint8_t)X86_VECTOR_SYSCALL,

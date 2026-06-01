@@ -4,6 +4,9 @@
 #include "io.h"
 #include "serial.h"
 #include "process.h"
+#if WASMOS_IRQ_MODE >= 1
+#include "arch/x86_64/lapic.h"
+#endif
 
 /*
  * PIT channel 0 is the current scheduler clock. The timer path only accounts
@@ -26,6 +29,11 @@ void timer_init(uint32_t hz) {
         hz = 250;
     }
     g_timer_hz = hz;
+    g_timer_ticks = 0;
+    g_timer_log_pending = 0;
+    g_timer_log_threshold = 100;
+
+#if WASMOS_IRQ_MODE == 0
     uint32_t divisor = PIT_BASE_HZ / hz;
     if (divisor == 0) {
         divisor = 1;
@@ -34,16 +42,19 @@ void timer_init(uint32_t hz) {
         divisor = 0xFFFFu;
     }
 
-    g_timer_ticks = 0;
-    g_timer_log_pending = 0;
-    g_timer_log_threshold = 100;
-
     outb(PIT_CMD_PORT, PIT_CMD_SQUARE_WAVE);
     outb(PIT_CH0_PORT, (uint8_t)(divisor & 0xFFu));
     outb(PIT_CH0_PORT, (uint8_t)((divisor >> 8) & 0xFFu));
 
     irq_unmask(0);
     klog_write("[timer] pit init\n");
+#else
+    /* LAPIC/IOAPIC mode: map the LAPIC MMIO, disable the 8259 PIC, and
+     * configure the LAPIC periodic timer.  This must happen after mm_init()
+     * so that paging_map_4k() can allocate the intermediate page table. */
+    lapic_init(hz);
+    klog_write("[timer] lapic timer active\n");
+#endif
 }
 
 void timer_handle_irq(void) {

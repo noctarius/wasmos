@@ -363,6 +363,15 @@ DECL_IRQ 13 45
 DECL_IRQ 14 46
 DECL_IRQ 15 47
 
+/*
+ * LAPIC spurious interrupt handler (vector 255).
+ * The Intel SDM states that the processor does not latch a spurious
+ * interrupt so no EOI is required — simply return from interrupt.
+ */
+.global isr_lapic_spurious
+isr_lapic_spurious:
+    iretq
+
 .global isr_syscall_128
 isr_syscall_128:
     # Syscall boundary (int 0x80). The C handler receives a pointer to the

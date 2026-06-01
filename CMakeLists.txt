@@ -328,7 +328,7 @@ set(WASMOS_LIBC_INCLUDE_DEPS
 )
 
 function(wasmos_add_wasm_c_app_target target_name)
-  set(options NO_BUILTIN)
+  set(options NO_BUILTIN STARTUP_SHIM)
   set(oneValueArgs SOURCE OUTPUT_WASM OUTPUT_APP MANIFEST EXPORT STACK_SIZE INITIAL_MEMORY MAX_MEMORY BUILD_COMMENT PACK_COMMENT)
   set(multiValueArgs SOURCES)
   cmake_parse_arguments(WASMOS_APP "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
@@ -346,6 +346,11 @@ function(wasmos_add_wasm_c_app_target target_name)
   set(_wasmos_extra_flags)
   if (WASMOS_APP_NO_BUILTIN)
     list(APPEND _wasmos_extra_flags -fno-builtin)
+  endif ()
+
+  set(_wasmos_libc_sources ${WASMOS_LIBC_C_SOURCES})
+  if (WASMOS_APP_STARTUP_SHIM)
+    list(APPEND _wasmos_libc_sources ${LIBC_DIR}/src/startup.c)
   endif ()
 
   set(_stack_size 4096)
@@ -373,7 +378,7 @@ function(wasmos_add_wasm_c_app_target target_name)
   add_custom_command(
     OUTPUT ${WASMOS_APP_OUTPUT_WASM}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
-    COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib
+    COMMAND ${CLANG} --target=wasm32 -Oz -nostdlib -ffreestanding
             ${_wasmos_extra_flags}
             ${WASMOS_TRACE_DEFINE}
             -Wl,--no-entry -Wl,--strip-all
@@ -385,10 +390,10 @@ function(wasmos_add_wasm_c_app_target target_name)
             -I${LIBC_DIR}/include
             -I${LIBSYS_WASM_DIR}/include
             -I${DRIVER_WASM_DIR}/include
-            ${WASMOS_LIBC_C_SOURCES}
+            ${_wasmos_libc_sources}
             ${_wasmos_sources}
             -o ${WASMOS_APP_OUTPUT_WASM}
-    DEPENDS ${_wasmos_sources} ${WASMOS_LIBC_C_SOURCES} ${WASMOS_LIBC_INCLUDE_DEPS}
+    DEPENDS ${_wasmos_sources} ${_wasmos_libc_sources} ${WASMOS_LIBC_INCLUDE_DEPS}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT ${_build_comment}
     VERBATIM
@@ -499,6 +504,11 @@ function(wasmos_add_wasm_cpp_app_target target_name)
 
   set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APPS ${WASMOS_APP_OUTPUT_APP})
   set_property(GLOBAL APPEND PROPERTY WASMOS_WASM_APP_TARGETS ${target_name})
+
+  wasmos_add_ide_c_target(${target_name}_ide
+    SOURCES ${WASMOS_APP_SOURCE}
+    INCLUDES ${LIBC_DIR}/include ${DRIVER_WASM_DIR}/include
+  )
 endfunction()
 
 function(wasmos_add_native_c_app_target target_name)
@@ -981,6 +991,55 @@ if (ZIG_AVAILABLE)
   )
 endif ()
 
+set(QEMU_UI_OVMF_VARS_ARG "")
+if (OVMF_VARS)
+  set(QEMU_UI_OVMF_VARS_ARG "--ovmf-vars ${OVMF_VARS}")
+endif ()
+
+set(WASMOS_ESP_POPULATE_CMDS
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/devices
+  COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
+  COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
+  ${INITFS_COPY_CMD}
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfxcomp.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FONT_SERVICE_APP} ${BUILD_DIR}/esp/system/services/fontsvc.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/apps/vt.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
+  ${AS_HELLO_COPY_CMD}
+  ${HELLO_C_COPY_CMD}
+  ${CHARDEV_PREEMPT_COPY_CMD}
+  ${INIT_SMOKE_COPY_CMD}
+  ${FS_OPEN_SMOKE_COPY_CMD}
+  ${FS_WRITE_SMOKE_COPY_CMD}
+  ${NATIVE_CALL_MIN_COPY_CMD}
+  ${NATIVE_CALL_SMOKE_COPY_CMD}
+  ${GFX_SMOKE_COPY_CMD}
+  ${SHMEM_OWNER_COPY_CMD}
+  ${SHMEM_TARGET_COPY_CMD}
+  ${IRQ_ROUTE_DENY_COPY_CMD}
+  ${IRQ_ROUTE_ALLOW_COPY_CMD}
+  ${RUST_HELLO_COPY_CMD}
+  ${GO_HELLO_COPY_CMD}
+  ${ZIG_HELLO_COPY_CMD}
+  ${LARGE_READ_COPY_CMD}
+  ${WRITE_SMOKE_FILE_COPY_CMD}
+  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
+)
+
 if (OVMF_VARS AND OVMF_CODE)
   if (OVMF_VARS MATCHES "i386" AND OVMF_CODE MATCHES "x86_64")
     message(WARNING "OVMF_VARS appears to be i386 while OVMF_CODE is x86_64; ignoring OVMF_VARS to avoid boot hangs.")
@@ -989,48 +1048,7 @@ if (OVMF_VARS AND OVMF_CODE)
 endif ()
 if (OVMF_VARS)
   add_custom_target(run-qemu
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
-    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
-    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
-    ${INITFS_COPY_CMD}
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SERIAL_APP} ${BUILD_DIR}/esp/system/drivers/serial.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_KEYBOARD_APP} ${BUILD_DIR}/esp/system/drivers/keyboard.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfxcomp.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FONT_SERVICE_APP} ${BUILD_DIR}/esp/system/services/fontsvc.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/apps/vt.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
-    ${AS_HELLO_COPY_CMD}
-    ${HELLO_C_COPY_CMD}
-    ${CHARDEV_PREEMPT_COPY_CMD}
-    ${INIT_SMOKE_COPY_CMD}
-    ${FS_OPEN_SMOKE_COPY_CMD}
-    ${FS_WRITE_SMOKE_COPY_CMD}
-    ${NATIVE_CALL_MIN_COPY_CMD}
-    ${NATIVE_CALL_SMOKE_COPY_CMD}
-    ${GFX_SMOKE_COPY_CMD}
-  ${SHMEM_OWNER_COPY_CMD}
-  ${SHMEM_TARGET_COPY_CMD}
-    ${IRQ_ROUTE_DENY_COPY_CMD}
-    ${IRQ_ROUTE_ALLOW_COPY_CMD}
-    ${RUST_HELLO_COPY_CMD}
-    ${GO_HELLO_COPY_CMD}
-    ${ZIG_HELLO_COPY_CMD}
-    ${LARGE_READ_COPY_CMD}
-    ${WRITE_SMOKE_FILE_COPY_CMD}
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
+    ${WASMOS_ESP_POPULATE_CMDS}
     COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
@@ -1042,47 +1060,7 @@ if (OVMF_VARS)
     VERBATIM
   )
   add_custom_target(run-qemu-debug
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
-    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
-    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
-    ${INITFS_COPY_CMD}
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_KEYBOARD_APP} ${BUILD_DIR}/esp/system/drivers/keyboard.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfxcomp.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FONT_SERVICE_APP} ${BUILD_DIR}/esp/system/services/fontsvc.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/apps/vt.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
-    ${AS_HELLO_COPY_CMD}
-    ${HELLO_C_COPY_CMD}
-    ${CHARDEV_PREEMPT_COPY_CMD}
-    ${INIT_SMOKE_COPY_CMD}
-    ${FS_OPEN_SMOKE_COPY_CMD}
-    ${FS_WRITE_SMOKE_COPY_CMD}
-    ${NATIVE_CALL_MIN_COPY_CMD}
-    ${NATIVE_CALL_SMOKE_COPY_CMD}
-    ${GFX_SMOKE_COPY_CMD}
-  ${SHMEM_OWNER_COPY_CMD}
-  ${SHMEM_TARGET_COPY_CMD}
-    ${IRQ_ROUTE_DENY_COPY_CMD}
-    ${IRQ_ROUTE_ALLOW_COPY_CMD}
-    ${RUST_HELLO_COPY_CMD}
-    ${GO_HELLO_COPY_CMD}
-    ${ZIG_HELLO_COPY_CMD}
-    ${LARGE_READ_COPY_CMD}
-    ${WRITE_SMOKE_FILE_COPY_CMD}
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
+    ${WASMOS_ESP_POPULATE_CMDS}
     COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
             -S -gdb tcp::${QEMU_GDB_PORT}
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
@@ -1095,51 +1073,7 @@ if (OVMF_VARS)
     VERBATIM
   )
   add_custom_target(run-qemu-test
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/fonts
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/devices
-    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
-    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
-    ${INITFS_COPY_CMD}
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfxcomp.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FONT_SERVICE_APP} ${BUILD_DIR}/esp/system/services/fontsvc.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/apps/vt.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/system/fonts/Roboto-Regular.ttf ${BUILD_DIR}/esp/system/fonts/roboto.ttf
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/system/fonts/RobotoMono-Regular.ttf ${BUILD_DIR}/esp/system/fonts/roboto_mono.ttf
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/system/fonts/RobotoSerif-Regular.ttf ${BUILD_DIR}/esp/system/fonts/roboto_serif.ttf
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
-    ${AS_HELLO_COPY_CMD}
-    ${HELLO_C_COPY_CMD}
-    ${CHARDEV_PREEMPT_COPY_CMD}
-    ${INIT_SMOKE_COPY_CMD}
-    ${FS_OPEN_SMOKE_COPY_CMD}
-    ${FS_WRITE_SMOKE_COPY_CMD}
-    ${NATIVE_CALL_MIN_COPY_CMD}
-    ${NATIVE_CALL_SMOKE_COPY_CMD}
-    ${GFX_SMOKE_COPY_CMD}
-  ${SHMEM_OWNER_COPY_CMD}
-  ${SHMEM_TARGET_COPY_CMD}
-    ${IRQ_ROUTE_DENY_COPY_CMD}
-    ${IRQ_ROUTE_ALLOW_COPY_CMD}
-    ${RUST_HELLO_COPY_CMD}
-    ${GO_HELLO_COPY_CMD}
-    ${ZIG_HELLO_COPY_CMD}
-    ${LARGE_READ_COPY_CMD}
-    ${WRITE_SMOKE_FILE_COPY_CMD}
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
+    ${WASMOS_ESP_POPULATE_CMDS}
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_halt_test.py
             --ovmf-code ${OVMF_CODE}
             --ovmf-vars ${OVMF_VARS}
@@ -1149,315 +1083,8 @@ if (OVMF_VARS)
     COMMENT "Running QEMU halt test"
     VERBATIM
   )
-  if (AS_ENABLE)
-  endif ()
-add_custom_target(run-qemu-cli-test
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/fonts
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/devices
-    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
-    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
-    ${INITFS_COPY_CMD}
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfxcomp.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FONT_SERVICE_APP} ${BUILD_DIR}/esp/system/services/fontsvc.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/apps/vt.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/system/fonts/Roboto-Regular.ttf ${BUILD_DIR}/esp/system/fonts/roboto.ttf
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/system/fonts/RobotoMono-Regular.ttf ${BUILD_DIR}/esp/system/fonts/roboto_mono.ttf
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/system/fonts/RobotoSerif-Regular.ttf ${BUILD_DIR}/esp/system/fonts/roboto_serif.ttf
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
-    ${AS_HELLO_COPY_CMD}
-    ${HELLO_C_COPY_CMD}
-    ${CHARDEV_PREEMPT_COPY_CMD}
-    ${INIT_SMOKE_COPY_CMD}
-    ${FS_OPEN_SMOKE_COPY_CMD}
-    ${FS_WRITE_SMOKE_COPY_CMD}
-    ${NATIVE_CALL_MIN_COPY_CMD}
-    ${NATIVE_CALL_SMOKE_COPY_CMD}
-    ${GFX_SMOKE_COPY_CMD}
-  ${SHMEM_OWNER_COPY_CMD}
-  ${SHMEM_TARGET_COPY_CMD}
-    ${IRQ_ROUTE_DENY_COPY_CMD}
-    ${IRQ_ROUTE_ALLOW_COPY_CMD}
-    ${RUST_HELLO_COPY_CMD}
-    ${GO_HELLO_COPY_CMD}
-    ${ZIG_HELLO_COPY_CMD}
-    ${LARGE_READ_COPY_CMD}
-    ${WRITE_SMOKE_FILE_COPY_CMD}
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
-    COMMAND ${CMAKE_COMMAND} -E env
-            WASMOS_OVMF_CODE=${OVMF_CODE}
-            WASMOS_OVMF_VARS=${OVMF_VARS}
-            WASMOS_ESP=${BUILD_DIR}/esp
-            WASMOS_USERFS=${USERFS_DIR}
-            WASMOS_QEMU_ISOLATE_ESP=1
-            PYTHONDONTWRITEBYTECODE=1
-            ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/run_unittest_suite.py --start-dir tests
-    DEPENDS bootloader kernel
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT \"Running QEMU CLI integration tests\"
-    VERBATIM
-  )
-  if (AS_ENABLE)
-  endif ()
-else ()
-  add_custom_target(run-qemu
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
-    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
-    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
-    ${INITFS_COPY_CMD}
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfxcomp.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FONT_SERVICE_APP} ${BUILD_DIR}/esp/system/services/fontsvc.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/apps/vt.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
-    ${AS_HELLO_COPY_CMD}
-    ${HELLO_C_COPY_CMD}
-    ${CHARDEV_PREEMPT_COPY_CMD}
-    ${INIT_SMOKE_COPY_CMD}
-    ${FS_OPEN_SMOKE_COPY_CMD}
-    ${FS_WRITE_SMOKE_COPY_CMD}
-    ${NATIVE_CALL_MIN_COPY_CMD}
-    ${NATIVE_CALL_SMOKE_COPY_CMD}
-    ${GFX_SMOKE_COPY_CMD}
-  ${SHMEM_OWNER_COPY_CMD}
-  ${SHMEM_TARGET_COPY_CMD}
-    ${IRQ_ROUTE_DENY_COPY_CMD}
-    ${IRQ_ROUTE_ALLOW_COPY_CMD}
-    ${RUST_HELLO_COPY_CMD}
-    ${GO_HELLO_COPY_CMD}
-    ${ZIG_HELLO_COPY_CMD}
-    ${LARGE_READ_COPY_CMD}
-    ${WRITE_SMOKE_FILE_COPY_CMD}
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
-    COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
-            -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
-            -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-            -drive format=raw,file=fat:rw:${USERFS_DIR}
-    DEPENDS bootloader kernel
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Running in QEMU"
-    VERBATIM
-  )
-  add_custom_target(run-qemu-ui
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
-    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
-    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
-    ${INITFS_COPY_CMD}
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfxcomp.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FONT_SERVICE_APP} ${BUILD_DIR}/esp/system/services/fontsvc.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/apps/vt.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
-    ${AS_HELLO_COPY_CMD}
-    ${HELLO_C_COPY_CMD}
-    ${CHARDEV_PREEMPT_COPY_CMD}
-    ${INIT_SMOKE_COPY_CMD}
-    ${FS_OPEN_SMOKE_COPY_CMD}
-    ${FS_WRITE_SMOKE_COPY_CMD}
-    ${NATIVE_CALL_MIN_COPY_CMD}
-    ${NATIVE_CALL_SMOKE_COPY_CMD}
-    ${GFX_SMOKE_COPY_CMD}
-  ${SHMEM_OWNER_COPY_CMD}
-  ${SHMEM_TARGET_COPY_CMD}
-    ${IRQ_ROUTE_DENY_COPY_CMD}
-    ${IRQ_ROUTE_ALLOW_COPY_CMD}
-    ${RUST_HELLO_COPY_CMD}
-    ${GO_HELLO_COPY_CMD}
-    ${ZIG_HELLO_COPY_CMD}
-    ${LARGE_READ_COPY_CMD}
-    ${WRITE_SMOKE_FILE_COPY_CMD}
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
-    COMMAND qemu-system-x86_64 -m 512M -serial mon:stdio
-            -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
-            -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-            -drive format=raw,file=fat:rw:${USERFS_DIR}
-    DEPENDS bootloader kernel
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Running in QEMU"
-    VERBATIM
-  )
-  add_custom_target(run-qemu-debug
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
-    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
-    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
-    ${INITFS_COPY_CMD}
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfxcomp.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FONT_SERVICE_APP} ${BUILD_DIR}/esp/system/services/fontsvc.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/apps/vt.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
-    ${AS_HELLO_COPY_CMD}
-    ${HELLO_C_COPY_CMD}
-    ${CHARDEV_PREEMPT_COPY_CMD}
-    ${INIT_SMOKE_COPY_CMD}
-    ${FS_OPEN_SMOKE_COPY_CMD}
-    ${FS_WRITE_SMOKE_COPY_CMD}
-    ${NATIVE_CALL_MIN_COPY_CMD}
-    ${NATIVE_CALL_SMOKE_COPY_CMD}
-    ${GFX_SMOKE_COPY_CMD}
-  ${SHMEM_OWNER_COPY_CMD}
-  ${SHMEM_TARGET_COPY_CMD}
-    ${IRQ_ROUTE_DENY_COPY_CMD}
-    ${IRQ_ROUTE_ALLOW_COPY_CMD}
-    ${RUST_HELLO_COPY_CMD}
-    ${GO_HELLO_COPY_CMD}
-    ${ZIG_HELLO_COPY_CMD}
-    ${LARGE_READ_COPY_CMD}
-    ${WRITE_SMOKE_FILE_COPY_CMD}
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
-    COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
-            -S -gdb tcp::${QEMU_GDB_PORT}
-            -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
-            -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
-            -drive format=raw,file=fat:rw:${USERFS_DIR}
-    DEPENDS bootloader kernel
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Running in QEMU (paused for GDB on port ${QEMU_GDB_PORT})"
-    VERBATIM
-  )
-  if (AS_ENABLE)
-  endif ()
-  add_custom_target(run-qemu-test
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
-    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
-    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
-    ${INITFS_COPY_CMD}
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfxcomp.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FONT_SERVICE_APP} ${BUILD_DIR}/esp/system/services/fontsvc.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/apps/vt.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
-    ${AS_HELLO_COPY_CMD}
-    ${HELLO_C_COPY_CMD}
-    ${CHARDEV_PREEMPT_COPY_CMD}
-    ${INIT_SMOKE_COPY_CMD}
-    ${FS_OPEN_SMOKE_COPY_CMD}
-    ${FS_WRITE_SMOKE_COPY_CMD}
-    ${NATIVE_CALL_MIN_COPY_CMD}
-    ${NATIVE_CALL_SMOKE_COPY_CMD}
-    ${GFX_SMOKE_COPY_CMD}
-  ${SHMEM_OWNER_COPY_CMD}
-  ${SHMEM_TARGET_COPY_CMD}
-    ${IRQ_ROUTE_DENY_COPY_CMD}
-    ${IRQ_ROUTE_ALLOW_COPY_CMD}
-    ${RUST_HELLO_COPY_CMD}
-    ${GO_HELLO_COPY_CMD}
-    ${ZIG_HELLO_COPY_CMD}
-    ${LARGE_READ_COPY_CMD}
-    ${WRITE_SMOKE_FILE_COPY_CMD}
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
-    COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_halt_test.py
-            --ovmf-code ${OVMF_CODE}
-            --esp ${BUILD_DIR}/esp
-    DEPENDS bootloader kernel
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Running QEMU halt test"
-    VERBATIM
-  )
-  if (AS_ENABLE)
-  endif ()
   add_custom_target(run-qemu-cli-test
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
-    COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
-    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
-    COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
-    ${INITFS_COPY_CMD}
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfxcomp.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FONT_SERVICE_APP} ${BUILD_DIR}/esp/system/services/fontsvc.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/apps/vt.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
-    ${AS_HELLO_COPY_CMD}
-    ${HELLO_C_COPY_CMD}
-    ${CHARDEV_PREEMPT_COPY_CMD}
-    ${INIT_SMOKE_COPY_CMD}
-    ${FS_OPEN_SMOKE_COPY_CMD}
-    ${FS_WRITE_SMOKE_COPY_CMD}
-    ${NATIVE_CALL_MIN_COPY_CMD}
-    ${NATIVE_CALL_SMOKE_COPY_CMD}
-    ${GFX_SMOKE_COPY_CMD}
-  ${SHMEM_OWNER_COPY_CMD}
-  ${SHMEM_TARGET_COPY_CMD}
-    ${IRQ_ROUTE_DENY_COPY_CMD}
-    ${IRQ_ROUTE_ALLOW_COPY_CMD}
-    ${RUST_HELLO_COPY_CMD}
-    ${GO_HELLO_COPY_CMD}
-    ${ZIG_HELLO_COPY_CMD}
-    ${LARGE_READ_COPY_CMD}
-    ${WRITE_SMOKE_FILE_COPY_CMD}
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
+    ${WASMOS_ESP_POPULATE_CMDS}
     COMMAND ${CMAKE_COMMAND} -E env
             WASMOS_OVMF_CODE=${OVMF_CODE}
             WASMOS_OVMF_VARS=${OVMF_VARS}
@@ -1468,112 +1095,75 @@ else ()
             ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/run_unittest_suite.py --start-dir tests
     DEPENDS bootloader kernel
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT \"Running QEMU CLI integration tests\"
+    COMMENT "Running QEMU CLI integration tests"
     VERBATIM
   )
-set(QEMU_UI_OVMF_VARS_ARG "")
-if (OVMF_VARS)
-  set(QEMU_UI_OVMF_VARS_ARG "--ovmf-vars ${OVMF_VARS}")
-endif ()
-
-add_custom_target(run-qemu-ui-test
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/fonts
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/devices
-  COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
-  COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
-  ${INITFS_COPY_CMD}
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfxcomp.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FONT_SERVICE_APP} ${BUILD_DIR}/esp/system/services/fontsvc.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/system/fonts/Roboto-Regular.ttf ${BUILD_DIR}/esp/system/fonts/roboto.ttf
-  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/system/fonts/RobotoMono-Regular.ttf ${BUILD_DIR}/esp/system/fonts/roboto_mono.ttf
-  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/system/fonts/RobotoSerif-Regular.ttf ${BUILD_DIR}/esp/system/fonts/roboto_serif.ttf
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
-  ${AS_HELLO_COPY_CMD}
-  ${HELLO_C_COPY_CMD}
-  ${CHARDEV_PREEMPT_COPY_CMD}
-  ${INIT_SMOKE_COPY_CMD}
-  ${FS_OPEN_SMOKE_COPY_CMD}
-  ${FS_WRITE_SMOKE_COPY_CMD}
-  ${NATIVE_CALL_MIN_COPY_CMD}
-  ${NATIVE_CALL_SMOKE_COPY_CMD}
-    ${GFX_SMOKE_COPY_CMD}
-  ${SHMEM_OWNER_COPY_CMD}
-  ${SHMEM_TARGET_COPY_CMD}
-    ${IRQ_ROUTE_DENY_COPY_CMD}
-    ${IRQ_ROUTE_ALLOW_COPY_CMD}
-  ${RUST_HELLO_COPY_CMD}
-  ${GO_HELLO_COPY_CMD}
-  ${ZIG_HELLO_COPY_CMD}
-  ${LARGE_READ_COPY_CMD}
-  ${WRITE_SMOKE_FILE_COPY_CMD}
-  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
+  add_custom_target(run-qemu-ui-test
+    ${WASMOS_ESP_POPULATE_CMDS}
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_SOURCE_DIR}/scripts/qemu_ui_test.py
             --ovmf-code ${OVMF_CODE}
             ${QEMU_UI_OVMF_VARS_ARG}
             --esp ${BUILD_DIR}/esp
-  DEPENDS bootloader kernel
-  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Running QEMU UI test"
-  VERBATIM
-)
-
+    DEPENDS bootloader kernel
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Running QEMU UI test"
+    VERBATIM
+  )
+else ()
+  if (OVMF_CODE)
+    add_custom_target(run-qemu
+      ${WASMOS_ESP_POPULATE_CMDS}
+      COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
+              -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
+              -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
+              -drive format=raw,file=fat:rw:${USERFS_DIR}
+      DEPENDS bootloader kernel
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+      COMMENT "Running in QEMU"
+      VERBATIM
+    )
+    add_custom_target(run-qemu-debug
+      ${WASMOS_ESP_POPULATE_CMDS}
+      COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
+              -S -gdb tcp::${QEMU_GDB_PORT}
+              -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
+              -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
+              -drive format=raw,file=fat:rw:${USERFS_DIR}
+      DEPENDS bootloader kernel
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+      COMMENT "Running in QEMU (paused for GDB on port ${QEMU_GDB_PORT})"
+      VERBATIM
+    )
+    add_custom_target(run-qemu-test
+      ${WASMOS_ESP_POPULATE_CMDS}
+      COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_halt_test.py
+              --ovmf-code ${OVMF_CODE}
+              --esp ${BUILD_DIR}/esp
+      DEPENDS bootloader kernel
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+      COMMENT "Running QEMU halt test"
+      VERBATIM
+    )
+    add_custom_target(run-qemu-cli-test
+      ${WASMOS_ESP_POPULATE_CMDS}
+      COMMAND ${CMAKE_COMMAND} -E env
+              WASMOS_OVMF_CODE=${OVMF_CODE}
+              WASMOS_ESP=${BUILD_DIR}/esp
+              WASMOS_USERFS=${USERFS_DIR}
+              WASMOS_QEMU_ISOLATE_ESP=1
+              PYTHONDONTWRITEBYTECODE=1
+              ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/run_unittest_suite.py --start-dir tests
+      DEPENDS bootloader kernel
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+      COMMENT "Running QEMU CLI integration tests"
+      VERBATIM
+    )
+  endif ()
 endif ()
+
 add_custom_target(run-qemu-ring3-check
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/devices
-  COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
-  COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
-  ${INITFS_COPY_CMD}
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfxcomp.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FONT_SERVICE_APP} ${BUILD_DIR}/esp/system/services/fontsvc.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/apps/vt.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
-  ${AS_HELLO_COPY_CMD}
-  ${HELLO_C_COPY_CMD}
-  ${CHARDEV_PREEMPT_COPY_CMD}
-  ${INIT_SMOKE_COPY_CMD}
-  ${FS_OPEN_SMOKE_COPY_CMD}
-  ${FS_WRITE_SMOKE_COPY_CMD}
-  ${NATIVE_CALL_MIN_COPY_CMD}
-  ${NATIVE_CALL_SMOKE_COPY_CMD}
-    ${GFX_SMOKE_COPY_CMD}
-  ${SHMEM_OWNER_COPY_CMD}
-  ${SHMEM_TARGET_COPY_CMD}
-    ${IRQ_ROUTE_DENY_COPY_CMD}
-    ${IRQ_ROUTE_ALLOW_COPY_CMD}
-  ${RUST_HELLO_COPY_CMD}
-  ${GO_HELLO_COPY_CMD}
-  ${ZIG_HELLO_COPY_CMD}
-  ${LARGE_READ_COPY_CMD}
-  ${WRITE_SMOKE_FILE_COPY_CMD}
-  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
+  ${WASMOS_ESP_POPULATE_CMDS}
   COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_ring3_halt_test.py
           --ovmf-code ${OVMF_CODE}
           ${QEMU_UI_OVMF_VARS_ARG}
@@ -1585,47 +1175,7 @@ add_custom_target(run-qemu-ring3-check
 )
 
 add_custom_target(run-qemu-ring3-threading-check
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/devices
-  COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
-  COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
-  ${INITFS_COPY_CMD}
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfxcomp.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FONT_SERVICE_APP} ${BUILD_DIR}/esp/system/services/fontsvc.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/apps/vt.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
-  ${AS_HELLO_COPY_CMD}
-  ${HELLO_C_COPY_CMD}
-  ${CHARDEV_PREEMPT_COPY_CMD}
-  ${INIT_SMOKE_COPY_CMD}
-  ${FS_OPEN_SMOKE_COPY_CMD}
-  ${FS_WRITE_SMOKE_COPY_CMD}
-  ${NATIVE_CALL_MIN_COPY_CMD}
-  ${NATIVE_CALL_SMOKE_COPY_CMD}
-    ${GFX_SMOKE_COPY_CMD}
-  ${SHMEM_OWNER_COPY_CMD}
-  ${SHMEM_TARGET_COPY_CMD}
-    ${IRQ_ROUTE_DENY_COPY_CMD}
-    ${IRQ_ROUTE_ALLOW_COPY_CMD}
-  ${RUST_HELLO_COPY_CMD}
-  ${GO_HELLO_COPY_CMD}
-  ${ZIG_HELLO_COPY_CMD}
-  ${LARGE_READ_COPY_CMD}
-  ${WRITE_SMOKE_FILE_COPY_CMD}
-  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
+  ${WASMOS_ESP_POPULATE_CMDS}
   COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_ring3_halt_test.py
           --ovmf-code ${OVMF_CODE}
           ${QEMU_UI_OVMF_VARS_ARG}
@@ -1638,47 +1188,7 @@ add_custom_target(run-qemu-ring3-threading-check
 )
 
 add_custom_target(run-qemu-ring3-fault-storm-check
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/services
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/drivers
-  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/system/devices
-  COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/BOOTX64.EFI ${BUILD_DIR}/esp/EFI/BOOT/BOOTX64.EFI
-  COMMAND ${CMAKE_COMMAND} -E copy ${BUILD_DIR}/kernel.elf ${BUILD_DIR}/esp/kernel.elf
-  ${INITFS_COPY_CMD}
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/apps/sysinit.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ATA_APP} ${BUILD_DIR}/esp/system/drivers/ata.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FAT_APP} ${BUILD_DIR}/esp/system/drivers/fs_fat.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/apps/cli.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_INIT_APP} ${BUILD_DIR}/esp/system/services/sysinit.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CLI_APP} ${BUILD_DIR}/esp/system/services/cli.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_COMPOSITOR_APP} ${BUILD_DIR}/esp/system/services/gfxcomp.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FONT_SERVICE_APP} ${BUILD_DIR}/esp/system/services/fontsvc.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/apps/vt.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VT_APP} ${BUILD_DIR}/esp/system/services/vt.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DEVICE_MANAGER_APP} ${BUILD_DIR}/esp/system/services/device_manager.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
-    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
-  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
-  ${AS_HELLO_COPY_CMD}
-  ${HELLO_C_COPY_CMD}
-  ${CHARDEV_PREEMPT_COPY_CMD}
-  ${INIT_SMOKE_COPY_CMD}
-  ${FS_OPEN_SMOKE_COPY_CMD}
-  ${FS_WRITE_SMOKE_COPY_CMD}
-  ${NATIVE_CALL_MIN_COPY_CMD}
-  ${NATIVE_CALL_SMOKE_COPY_CMD}
-    ${GFX_SMOKE_COPY_CMD}
-  ${SHMEM_OWNER_COPY_CMD}
-  ${SHMEM_TARGET_COPY_CMD}
-    ${IRQ_ROUTE_DENY_COPY_CMD}
-    ${IRQ_ROUTE_ALLOW_COPY_CMD}
-  ${RUST_HELLO_COPY_CMD}
-  ${GO_HELLO_COPY_CMD}
-  ${ZIG_HELLO_COPY_CMD}
-  ${LARGE_READ_COPY_CMD}
-  ${WRITE_SMOKE_FILE_COPY_CMD}
-  COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh
+  ${WASMOS_ESP_POPULATE_CMDS}
   COMMAND ${Python3_EXECUTABLE}
           ${CMAKE_SOURCE_DIR}/scripts/qemu_ring3_fault_storm_test.py
           --ovmf-code ${OVMF_CODE}
@@ -1749,90 +1259,37 @@ add_custom_target(strict-ring3
   COMMENT "Run strict ring3 gate profile (run-qemu-test + run-qemu-ring3-test)"
   VERBATIM
 )
-add_dependencies(run-qemu c_examples services drivers)
-add_dependencies(run-qemu-test c_examples services drivers)
-add_dependencies(run-qemu-cli-test c_examples services drivers)
-add_dependencies(run-qemu-debug c_examples services drivers)
-add_dependencies(run-qemu-ring3-check c_examples services drivers)
-add_dependencies(run-qemu-ring3-threading-check c_examples services drivers)
-add_dependencies(run-qemu-ring3-fault-storm-check c_examples services drivers)
-add_dependencies(make_initfs c_examples)
-add_dependencies(make_initfs drivers services)
-add_dependencies(run-qemu make_initfs)
-add_dependencies(run-qemu-ui make_initfs)
-add_dependencies(run-qemu-test make_initfs)
-add_dependencies(run-qemu-cli-test make_initfs)
-add_dependencies(run-qemu-debug make_initfs)
-add_dependencies(run-qemu-ring3-check make_initfs)
-add_dependencies(run-qemu-ring3-threading-check make_initfs)
-add_dependencies(run-qemu-ring3-fault-storm-check make_initfs)
 
-if (TARGET system_utils)
-  add_dependencies(run-qemu system_utils)
-  add_dependencies(run-qemu-test system_utils)
-  add_dependencies(run-qemu-cli-test system_utils)
-  add_dependencies(run-qemu-debug system_utils)
-  add_dependencies(run-qemu-ring3-check system_utils)
-  add_dependencies(run-qemu-ring3-threading-check system_utils)
-  add_dependencies(run-qemu-ring3-fault-storm-check system_utils)
-  if (TARGET run-qemu-ui-test)
-    add_dependencies(run-qemu-ui-test system_utils)
-  endif ()
-endif ()
+add_dependencies(make_initfs c_examples drivers services)
 
-if (TARGET assemblyscript_examples)
-  add_dependencies(run-qemu assemblyscript_examples)
-  add_dependencies(run-qemu-test assemblyscript_examples)
-  add_dependencies(run-qemu-cli-test assemblyscript_examples)
-  add_dependencies(run-qemu-debug assemblyscript_examples)
-  add_dependencies(run-qemu-ring3-check assemblyscript_examples)
-  add_dependencies(run-qemu-ring3-threading-check assemblyscript_examples)
-  add_dependencies(run-qemu-ring3-fault-storm-check assemblyscript_examples)
-endif ()
-if (TARGET rust_examples)
-  add_dependencies(run-qemu rust_examples)
-  add_dependencies(run-qemu-test rust_examples)
-  add_dependencies(run-qemu-cli-test rust_examples)
-  add_dependencies(run-qemu-debug rust_examples)
-  add_dependencies(run-qemu-ring3-check rust_examples)
-  add_dependencies(run-qemu-ring3-threading-check rust_examples)
-  add_dependencies(run-qemu-ring3-fault-storm-check rust_examples)
-endif ()
-if (TARGET go_examples)
-  add_dependencies(run-qemu go_examples)
-  add_dependencies(run-qemu-test go_examples)
-  add_dependencies(run-qemu-cli-test go_examples)
-  add_dependencies(run-qemu-debug go_examples)
-  add_dependencies(run-qemu-ring3-check go_examples)
-  add_dependencies(run-qemu-ring3-threading-check go_examples)
-  add_dependencies(run-qemu-ring3-fault-storm-check go_examples)
-endif ()
-if (TARGET zig_examples)
-  add_dependencies(run-qemu zig_examples)
-  add_dependencies(run-qemu-test zig_examples)
-  add_dependencies(run-qemu-cli-test zig_examples)
-  add_dependencies(run-qemu-debug zig_examples)
-  add_dependencies(run-qemu-ring3-check zig_examples)
-  add_dependencies(run-qemu-ring3-threading-check zig_examples)
-  add_dependencies(run-qemu-ring3-fault-storm-check zig_examples)
-endif ()
-
+set(_wasmos_qemu_targets
+  run-qemu run-qemu-test run-qemu-cli-test run-qemu-debug
+  run-qemu-ring3-check run-qemu-ring3-threading-check run-qemu-ring3-fault-storm-check
+)
 if (TARGET run-qemu-ui-test)
-  add_dependencies(run-qemu-ui-test c_examples services drivers)
-  add_dependencies(run-qemu-ui-test make_initfs)
-  if (TARGET assemblyscript_examples)
-    add_dependencies(run-qemu-ui-test assemblyscript_examples)
-  endif ()
-  if (TARGET rust_examples)
-    add_dependencies(run-qemu-ui-test rust_examples)
-  endif ()
-  if (TARGET go_examples)
-    add_dependencies(run-qemu-ui-test go_examples)
-  endif ()
-  if (TARGET zig_examples)
-    add_dependencies(run-qemu-ui-test zig_examples)
-  endif ()
+  list(APPEND _wasmos_qemu_targets run-qemu-ui-test)
 endif ()
+
+foreach(_qt IN LISTS _wasmos_qemu_targets)
+  if (TARGET ${_qt})
+    add_dependencies(${_qt} c_examples services drivers make_initfs)
+    if (TARGET system_utils)
+      add_dependencies(${_qt} system_utils)
+    endif ()
+    if (TARGET assemblyscript_examples)
+      add_dependencies(${_qt} assemblyscript_examples)
+    endif ()
+    if (TARGET rust_examples)
+      add_dependencies(${_qt} rust_examples)
+    endif ()
+    if (TARGET go_examples)
+      add_dependencies(${_qt} go_examples)
+    endif ()
+    if (TARGET zig_examples)
+      add_dependencies(${_qt} zig_examples)
+    endif ()
+  endif ()
+endforeach()
 
 add_custom_target(run-kernel-unit-tests
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions

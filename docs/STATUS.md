@@ -9,13 +9,13 @@
   process-manager spawn metadata.
 - Threading is production-complete for the current single-core scope; final
   ABI/policy decisions and closure status are in
-  `docs/architecture/15-threading-and-lifecycle.md` sections 15 and 17.
+  `docs/architecture/08-threading-and-lifecycle.md` sections 15 and 17.
 - Recent threading runtime hardening (user-thread kernel-stack setup for
   `THREAD_CREATE` and syscall frame/context synchronization for yield/block
-  paths) is documented in `docs/architecture/15-threading-and-lifecycle.md`.
+  paths) is documented in `docs/architecture/08-threading-and-lifecycle.md`.
 - Graphics/compositor Phase 0 scaffold (shared ABI constants and minimal
   native Zig `gfx-compositor` endpoint handshake path) is tracked in
-  `docs/architecture/17-graphics-framebuffer-and-compositor.md`.
+  `docs/architecture/20-graphics-framebuffer-and-compositor.md`.
 - Graphics/compositor baseline now also includes typed compositor opcode
   dispatch and minimal window lifecycle handling (`CREATE_WINDOW` /
   `DESTROY_WINDOW`) with owner-checked state slots and `GFX_STATUS_*` replies.
@@ -144,7 +144,7 @@
   service (`virtio.serial`) with discovery and register-access IPC as a
   foundation for higher-level transport consumers.
 - Networking design baseline now has a dedicated architecture plan in
-  `docs/architecture/20-networking-virtio-net-and-stack.md`, defining explicit
+  `docs/architecture/22-networking-virtio-net-and-stack.md`, defining explicit
   QEMU NIC configuration, `virtio-net` driver/service boundaries, and phased
   TCP/UDP stack rollout, including full-scope IPv6 and multi-address/
   multi-stack instance support in later phases.

@@ -2,6 +2,7 @@
 #include "arch/x86_64/irq_x86_64.h"
 
 void irq_init(void) { x86_irq_init(); }
+void irq_late_init(const boot_info_t *boot_info) { x86_irq_late_init(boot_info); }
 int irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint) {
     return x86_irq_register(context_id, irq_line, endpoint);
 }

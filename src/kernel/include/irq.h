@@ -2,12 +2,14 @@
 #define WASMOS_IRQ_H
 
 #include <stdint.h>
+#include "boot.h"
 #include "process.h"
 
 #define IRQ_VECTOR_BASE 32
 #define IRQ_COUNT 16
 
 void irq_init(void);
+void irq_late_init(const boot_info_t *boot_info);
 int irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint);
 int irq_ack(uint32_t context_id, uint32_t irq_line);
 int irq_unregister(uint32_t context_id, uint32_t irq_line);

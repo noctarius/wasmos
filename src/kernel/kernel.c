@@ -7,6 +7,7 @@
 #include "process_manager.h"
 #include "serial.h"
 #include "klog.h"
+#include "irq.h"
 #include "timer.h"
 #include "wasmos_app.h"
 #include "wasm_chardev.h"
@@ -277,6 +278,7 @@ kmain(boot_info_t *boot_info)
     kernel_boot_run_low_slot_sweep_diagnostic();
 
     timer_init(250);
+    irq_late_init(boot_info);
     klog_write("[kernel] interrupts on\n");
     cpu_enable_interrupts();
 

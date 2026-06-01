@@ -22,8 +22,9 @@
 /* I/O APIC default physical base (QEMU).  Overridden from MADT type-1. */
 #define IOAPIC_PHYS_DEFAULT   0xFEC00000ULL
 
-/* Reserved kernel VA — one page above LAPIC_VIRT_BASE (0xFFFFFFFF80001000). */
-#define IOAPIC_VIRT_BASE      0xFFFFFFFF80002000ULL
+/* Reserved kernel VA at PT_A index 0xFF (255), physical 0xFF000 — BIOS ROM
+ * region, guaranteed PFA-unreachable.  See LAPIC_VIRT_BASE rationale. */
+#define IOAPIC_VIRT_BASE      0xFFFFFFFF800FF000ULL
 
 /* Indirect MMIO register access. */
 #define IOAPIC_REG_SELECT     0x00u

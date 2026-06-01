@@ -50,12 +50,14 @@
 
 /*
  * Reserved kernel virtual address for the LAPIC MMIO page.
- * Sits in the 2 MB gap between KERNEL_HIGHER_HALF_BASE (0xFFFFFFFF80000000)
- * and the first kernel image page (0xFFFFFFFF80200000) — guaranteed free in
- * the initial kernel page tables since that range is never covered by the
- * large-page kernel mapping.
+ * Index 0xFE (254) into PT_A — corresponds to physical 0xFE000, which lies
+ * in the x86 BIOS ROM region (0xC0000–0xFFFFF).  UEFI marks this region as
+ * reserved (not EfiConventionalMemory or BootServicesData), so the PFA never
+ * allocates physical 0xFE000 as a page-table frame.  Using a VA whose PT_A
+ * index is in this region prevents the higher-half alias for that physical
+ * address from being clobbered by the MMIO mapping.
  */
-#define LAPIC_VIRT_BASE        0xFFFFFFFF80001000ULL
+#define LAPIC_VIRT_BASE        0xFFFFFFFF800FE000ULL
 
 /* PIT channel 2 registers — used as a reference clock for calibration only. */
 #define PIT_CMD_PORT           0x43u

@@ -52,7 +52,7 @@ endchoice
 
 choice
     prompt "IRQ controller mode"
-    default WASMOS_IRQ_PIC
+    default WASMOS_IRQ_IOAPIC
 
 config WASMOS_IRQ_PIC
     bool "PIC (legacy 8259 + PIT)"

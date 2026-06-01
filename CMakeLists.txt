@@ -279,14 +279,7 @@ if (NOT DEFINED WASMOS_IRQ_IOAPIC_INITIALIZED)
 endif ()
 option(WASMOS_IRQ_IOAPIC "Use LAPIC + I/O APIC (full APIC)" OFF)
 
-if (WASMOS_IRQ_IOAPIC)
-  set(WASMOS_IRQ_MODE_VALUE 2)
-elseif (WASMOS_IRQ_LAPIC)
-  set(WASMOS_IRQ_MODE_VALUE 1)
-else ()
-  set(WASMOS_IRQ_MODE_VALUE 0)
-endif ()
-set(WASMOS_IRQ_MODE_DEFINE -DWASMOS_IRQ_MODE=${WASMOS_IRQ_MODE_VALUE})
+# IRQ mode determination is deferred — see below, after the Kconfig import.
 
 set(CLANG clang CACHE STRING "C compiler for freestanding/UEFI builds")
 if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
@@ -567,6 +560,18 @@ if (EXISTS ${WASMOS_DOTCONFIG})
   endif ()
   include(${WASMOS_KCONFIG_IMPORT})
 endif ()
+
+# IRQ mode determination must run AFTER the Kconfig import so that
+# WASMOS_IRQ_IOAPIC / WASMOS_IRQ_LAPIC reflect the .config values, not
+# just the pre-import cmake defaults.
+if (WASMOS_IRQ_IOAPIC)
+  set(WASMOS_IRQ_MODE_VALUE 2)
+elseif (WASMOS_IRQ_LAPIC)
+  set(WASMOS_IRQ_MODE_VALUE 1)
+else ()
+  set(WASMOS_IRQ_MODE_VALUE 0)
+endif ()
+set(WASMOS_IRQ_MODE_DEFINE -DWASMOS_IRQ_MODE=${WASMOS_IRQ_MODE_VALUE})
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)

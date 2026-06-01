@@ -4,3 +4,5 @@ cmake-build-debug/
 __pycache__/
 .zig-cache/
 .codex/local-paths.md
+.config
+.venv/

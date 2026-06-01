@@ -7,10 +7,16 @@ import argparse
 from pathlib import Path
 import sys
 
+# Set by _require_kconfiglib(); module-level so helpers can access type constants
+# (kconfiglib >= 14 moved BOOL/STRING/INT to module scope, not Kconfig instance).
+_kc = None
+
 
 def _require_kconfiglib():
+    global _kc
     try:
         import kconfiglib  # type: ignore
+        _kc = kconfiglib
     except ModuleNotFoundError:
         print(
             "kconfiglib is not installed in the active Python environment.\n"
@@ -34,15 +40,15 @@ def _editable_symbols(kconf):
         prompt = node.prompt[0] if node.prompt else None
         if not prompt:
             continue
-        if sym.visibility <= 0:
+        if sym.visibility == 0:
             continue
-        if sym.type in (kconf.BOOL, kconf.STRING, kconf.INT):
+        if sym.type in (_kc.BOOL, _kc.STRING, _kc.INT):
             symbols.append((sym, prompt))
     return symbols
 
 
 def _set_symbol_value(sym, new_value: str):
-    if sym.type == sym.kconfig.BOOL:
+    if sym.type == _kc.BOOL:
         val = new_value.strip().lower()
         if val in {"y", "yes", "1", "on", "true"}:
             sym.set_value("y")
@@ -51,7 +57,7 @@ def _set_symbol_value(sym, new_value: str):
             sym.set_value("n")
             return
         raise ValueError("bool symbols accept y/n")
-    if sym.type == sym.kconfig.INT:
+    if sym.type == _kc.INT:
         int(new_value, 10)
         sym.set_value(new_value)
         return
@@ -64,7 +70,7 @@ def _run_interactive(kconf, config_path: Path):
         print("\n=== WASMOS Kconfig (kconfiglib) ===")
         print(f"Config: {config_path}")
         for idx, (sym, prompt) in enumerate(symbols, start=1):
-            if sym.type == kconf.BOOL:
+            if sym.type == _kc.BOOL:
                 val = _bool_display(sym.str_value)
             else:
                 val = sym.str_value
@@ -102,12 +108,12 @@ def main() -> int:
     parser.add_argument("--defconfig", required=True, help="Path to defconfig seed")
     args = parser.parse_args()
 
-    kconfiglib = _require_kconfiglib()
+    _require_kconfiglib()
     config_path = Path(args.config)
     defconfig_path = Path(args.defconfig)
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
-    kconf = kconfiglib.Kconfig(args.kconfig, warn=False)
+    kconf = _kc.Kconfig(args.kconfig, warn=False)
     if config_path.exists():
         kconf.load_config(str(config_path))
     elif defconfig_path.exists():

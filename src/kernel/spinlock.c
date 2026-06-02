@@ -66,13 +66,20 @@ void spinlock_init(spinlock_t *lock) {
         return;
     }
     lock->state = 0;
+    lock->owner_cpu = 0xFFFFFFFFu;
+    lock->recursion_depth = 0;
 }
 
 int spinlock_try_lock(spinlock_t *lock) {
     if (!lock) {
         return 0;
     }
-    return __sync_lock_test_and_set(&lock->state, 1u) == 0u;
+    if (__sync_lock_test_and_set(&lock->state, 1u) == 0u) {
+        lock->owner_cpu = cpu_local()->cpu_id;
+        lock->recursion_depth = 1;
+        return 1;
+    }
+    return 0;
 }
 
 void spinlock_lock(spinlock_t *lock) {
@@ -82,6 +89,13 @@ void spinlock_lock(spinlock_t *lock) {
     for (;;) {
         spinlock_irq_save();
         preempt_disable();
+        /* TODO(smp): remove recursive same-CPU acquisition once the endpoint
+         * table reentry path is fully eliminated. This is a debugging-time
+         * liveness hardening guard, not the desired long-term lock model. */
+        if (lock->state != 0u && lock->owner_cpu == cpu_local()->cpu_id) {
+            lock->recursion_depth++;
+            return;
+        }
         if (spinlock_try_lock(lock)) {
             return;
         }
@@ -95,6 +109,16 @@ void spinlock_unlock(spinlock_t *lock) {
     if (!lock) {
         return;
     }
+    if (lock->state != 0u &&
+        lock->owner_cpu == cpu_local()->cpu_id &&
+        lock->recursion_depth > 1u) {
+        lock->recursion_depth--;
+        preempt_enable();
+        spinlock_irq_restore();
+        return;
+    }
+    lock->recursion_depth = 0;
+    lock->owner_cpu = 0xFFFFFFFFu;
     __sync_lock_release(&lock->state);
     preempt_enable();
     spinlock_irq_restore();

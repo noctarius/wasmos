@@ -1046,6 +1046,18 @@ if (OVMF_VARS)
     COMMENT "Running in QEMU (paused for GDB on port ${QEMU_GDB_PORT})"
     VERBATIM
   )
+  add_custom_target(run-qemu-ui
+    ${WASMOS_ESP_POPULATE_CMDS}
+    COMMAND qemu-system-x86_64 -m 512M -serial mon:stdio
+            -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
+            -drive if=pflash,format=raw,file=${OVMF_VARS}
+            -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
+            -drive format=raw,file=fat:rw:${USERFS_DIR}
+    DEPENDS bootloader kernel
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Running in QEMU (with display)"
+    VERBATIM
+  )
   add_custom_target(run-qemu-test
     ${WASMOS_ESP_POPULATE_CMDS}
     COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_halt_test.py
@@ -1107,6 +1119,17 @@ else ()
       DEPENDS bootloader kernel
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running in QEMU (paused for GDB on port ${QEMU_GDB_PORT})"
+      VERBATIM
+    )
+    add_custom_target(run-qemu-ui
+      ${WASMOS_ESP_POPULATE_CMDS}
+      COMMAND qemu-system-x86_64 -m 512M -serial mon:stdio
+              -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
+              -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
+              -drive format=raw,file=fat:rw:${USERFS_DIR}
+      DEPENDS bootloader kernel
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+      COMMENT "Running in QEMU (with display)"
       VERBATIM
     )
     add_custom_target(run-qemu-test
@@ -1248,7 +1271,7 @@ add_custom_target(strict-ring3
 add_dependencies(make_initfs c_examples drivers services)
 
 set(_wasmos_qemu_targets
-  run-qemu run-qemu-test run-qemu-cli-test run-qemu-debug
+  run-qemu run-qemu-ui run-qemu-test run-qemu-cli-test run-qemu-debug
   run-qemu-ring3-check run-qemu-ring3-threading-check run-qemu-ring3-fault-storm-check
 )
 if (TARGET run-qemu-ui-test)

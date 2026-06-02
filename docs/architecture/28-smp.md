@@ -34,6 +34,43 @@ SMP is disabled.
 
 ---
 
+## Steady-State AP Contract
+
+After bring-up each online AP runs the identical scheduler loop as the BSP:
+
+```c
+while (1) { process_yield(); }
+```
+
+The contract for what an AP may do in steady state:
+
+- **Kernel and ring3 scheduling.** APs share the global ready queue (protected by
+  an IRQ-safe spinlock) and may dequeue and dispatch any kernel thread (ring0) or
+  user thread (ring3). Dispatch is not restricted to kernel-only: the existing
+  context-switch path loads the correct CR3 on each dispatch, so ring3 contexts
+  execute normally on any CPU.
+- **Shared address space.** All CPUs share the same higher-half kernel PML4.
+  User-process mappings are added during spawn but are never removed while
+  SMP bring-up is active (removal requires TLB shootdown, which is out of scope
+  for this phase — see [MM/TLB Safety Contract](#mmtlb-safety-contract)). This
+  makes user address space safe to enter from any AP without additional
+  coordination.
+- **Per-CPU isolation.** `current_process`, `current_thread`, `sched_ctx`,
+  `preempt_disable_count`, and `in_scheduler` live in `cpu_local_t`. Each AP has
+  its own copy; there is no cross-CPU scheduler state sharing outside the
+  spinlock-protected ready queue.
+- **No AP-exclusive device work.** APs do not own interrupts, perform MMIO init,
+  or interact with the IOAPIC RTE table. Device IRQs remain BSP-delivered (see
+  [Interrupt Affinity and Timer Delivery](#interrupt-affinity-and-timer-delivery)).
+- **Per-CPU LAPIC timer.** Each AP runs its own periodic timer for quantum
+  accounting. Timer ticks decrement the current thread's `ticks_remaining` on the
+  CPU that is running that thread.
+
+This is a **full multi-core kernel + ring3 scheduling model**. Per-CPU run queues
+and work stealing are future optimisations.
+
+---
+
 ## Kconfig / CMake wiring
 
 `scripts/kconfig_to_cmake.py` maps `WASMOS_SMP` to a CMake bool cache variable
@@ -145,6 +182,23 @@ entry (APIC ID matching `lapic_read_id()`) is recognised and fills
 
 When `WASMOS_SMP = 0` the type-0 branch is compiled out and `g_cpu_count`
 stays 1.
+
+---
+
+## Interrupt Affinity and Timer Delivery
+
+IRQ routing in IOAPIC mode (the only mode that supports SMP) is BSP-centric for
+Phase 0–9. The table below gives the complete picture:
+
+| Source                        | Delivered to          | Notes |
+|-------------------------------|-----------------------|-------|
+| Device IRQs (IOAPIC RTE 1–15) | BSP (LAPIC 0) only    | All 16 RTEs are programmed with physical destination LAPIC 0. Reprogramming RTE destination for per-CPU affinity is not done in this phase. |
+| Scheduler timer ticks          | Every online CPU      | Each AP calls `lapic_timer_init()` in `smp_ap_c_entry()`. Every CPU receives its own periodic LAPIC timer interrupt and runs `timer_handle_irq()` / `process_tick()` independently against its own `cpu_local()`. |
+| IRQ0 / vector 32 (timer)      | BSP (LAPIC 0) only    | In IOAPIC mode the LAPIC timer replaces the PIT. The IOAPIC RTE for IRQ0 still points to physical LAPIC 0; APs receive the timer via their *own* LAPIC timer, not the IOAPIC route. Both paths fire vector 32 and reach `x86_timer_irq_handler`. |
+| INIT/SIPI IPIs                | APs (targeted)        | Used only during bring-up. No runtime IPIs (remote wakeup, TLB shootdown) are issued in this phase. |
+
+`docs/architecture/05-x86-cpu-architecture.md` describes IOAPIC RTE programming
+in detail, including how all RTEs default to fixed delivery to LAPIC 0.
 
 ---
 
@@ -261,8 +315,21 @@ For each AP `i` in `1..g_cpu_count-1`:
 5. `lapic_send_sipi(g_cpus[i].apic_id, 0x01)`.
 6. Delay ~200 µs.
 7. Second `lapic_send_sipi` (Intel spec requires two SIPIs).
-8. Spin on `g_cpus[i].started` with a ~100 ms timeout; log a warning and
-   continue on timeout.
+8. Spin on `g_cpus[i].started` with a ~100 ms timeout.
+
+**On success:** the AP is live. `g_cpus[i].started == 1` and the AP is already
+running `process_yield()` in the scheduler loop.
+
+**On timeout (degraded mode):** the BSP logs a warning and continues. The
+system is still valid:
+- `g_cpu_count` is not decremented; it reflects MADT-discovered CPUs.
+- The timed-out AP's `started` flag remains `0`; it never entered the
+  scheduler loop, so no threads are dispatched to it.
+- No retry is attempted. The AP is permanently absent for this boot.
+- All threads remain schedulable on whichever CPUs did come online.
+- If every AP times out the kernel continues single-core on the BSP only,
+  identical to an `WASMOS_SMP=0` build except that the per-CPU spinlock
+  overhead is still present.
 
 ---
 
@@ -338,13 +405,82 @@ acquire and release.
 
 ---
 
+## MM/TLB Safety Contract
+
+TLB shootdown IPIs are out of scope for this phase. This section explains why
+the current design is still safe and what operations are therefore constrained.
+
+**Why no shootdown is needed now.**
+The kernel address space is identical on all CPUs — all share the same higher-half
+PML4 subtree. User-process page tables are extended (mappings added) during spawn
+and demand paging, but no mapping is ever *removed* while SMP is active in Phase 0–9:
+process teardown (`process_reap`) does not execute concurrently on another CPU
+because the reaped process is in `ZOMBIE` state and no AP will dequeue it from the
+ready queue. No currently-running mapping is unmapped from under a live CPU.
+
+**Scope of AP address-space access.**
+APs may dispatch ring3 threads and enter user address spaces. The CR3 loaded on
+dispatch points to the process PML4, which is only extended (never shrunk) while
+the process is live. An AP that is mid-execution in a user address space will
+never see a present-page disappear from under it.
+
+**What must remain BSP-serialized.**
+Mapping changes that could race with a concurrent AP execution are serialized
+because they either (a) only happen before a process is runnable (spawn-time
+mappings) or (b) only happen after the process is zombie and unreachable from
+the ready queue. The physical page-frame allocator and the page-table walker
+are protected by spinlocks.
+
+**Future constraint.**
+Once process teardown reclaims live page-table entries under concurrent APs
+(required for multi-process shared memory revocation at ring3 scale), TLB
+shootdown IPIs must be added before that path is enabled.
+
+---
+
 ## What is out of scope for this phase
 
 - Per-CPU ready queues and work stealing.
-- TLB shootdown IPIs (needed when user-process mappings are removed; stubbed
-  until ring-3 SMP is required).
+- TLB shootdown IPIs (see [MM/TLB Safety Contract](#mmtlb-safety-contract) for
+  why the current phase is safe without them).
 - CPU hotplug / ACPI re-enumeration.
 - NUMA awareness.
+
+---
+
+## Validation
+
+### Required build configuration
+
+```
+WASMOS_SMP=1        (depends on WASMOS_IRQ_IOAPIC=1, the default IRQ mode)
+```
+
+QEMU must expose at least 2 vCPUs:
+
+```
+qemu-system-x86_64 ... -smp 2
+```
+
+### Expected boot evidence (serial log)
+
+| Log fragment | Meaning |
+|---|---|
+| BSP reaches `smp_cpus_up` | SMP bring-up path entered |
+| AP `g_cpus[1].started` transitions to 1 | AP 1 came online successfully |
+| `[test] sched progress ok` | Scheduler dispatched `SCHED_PROGRESS_MARKER_SWITCHES` threads; with 2 CPUs this proves cross-CPU dispatch |
+| `[test] preempt ok` | Timer preemption fired on at least one CPU |
+| No `[smp] AP N timeout` warning | All MADT-discovered APs came online within the 100 ms window |
+
+### Regression targets
+
+| Target | What it proves |
+|---|---|
+| `cmake --build build --target run-qemu-test` | Default `WASMOS_SMP=0` baseline is not regressed by the SMP infrastructure changes |
+| Manual SMP build with `-DWASMOS_SMP=1 -DQEMU_SMP=2` | AP comes online, scheduler dispatches on both CPUs |
+
+The default `run-qemu-test` CI gate always runs with `WASMOS_SMP=0`. An explicit
+SMP-enabled build must be run manually to exercise the AP bring-up path.
 
 ---
 

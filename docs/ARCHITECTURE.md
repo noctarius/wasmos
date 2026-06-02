@@ -52,6 +52,9 @@ remain deterministic in strict ring3 runs.
 - [CLI and User-Space Baseline](architecture/23-cli-and-user-space.md)
 - [Environment Scopes and Inheritance](architecture/24-environment-scopes-and-inheritance.md)
 
+### SMP
+- [Symmetric Multi-Processing](architecture/28-smp.md)
+
 ### Operations and Validation
 - [Diagnostics and Status](architecture/25-diagnostics-status.md)
 - [Repository Map and Validation Baseline](architecture/26-repo-map-and-validation.md)

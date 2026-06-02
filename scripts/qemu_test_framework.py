@@ -6,7 +6,9 @@ import os
 import re
 import selectors
 import socket
+import struct
 import subprocess
+import zlib
 import sys
 import tempfile
 import time
@@ -147,6 +149,50 @@ _QCODE_MAP: dict = {
     **{c: (c, False) for c in "abcdefghijklmnopqrstuvwxyz"},
     **{c: (c.lower(), True) for c in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"},
 }
+
+
+def _ppm_to_png(ppm_path: str, png_path: str) -> None:
+    """Convert a P6 PPM file to PNG.
+
+    Tries Pillow (PIL) first for better compression; falls back to a
+    pure-Python implementation using only stdlib struct + zlib.
+    """
+    try:
+        from PIL import Image as _Image
+        _Image.open(ppm_path).save(png_path)
+        return
+    except ImportError:
+        pass
+
+    with open(ppm_path, "rb") as fh:
+        # Read the three required header tokens, skipping comment lines.
+        tokens: list = []
+        while len(tokens) < 3:
+            line = fh.readline().strip()
+            if line and not line.startswith(b"#"):
+                tokens.append(line)
+        if tokens[0] != b"P6":
+            raise ValueError(f"not a P6 PPM file: {ppm_path!r}")
+        w, h = map(int, tokens[1].split())
+        maxval = int(tokens[2])
+        raw = fh.read()
+
+    if maxval != 255:
+        raise ValueError(f"unsupported PPM maxval {maxval}: only 255 is handled")
+
+    def _chunk(tag: bytes, data: bytes) -> bytes:
+        body = tag + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+    stride = w * 3
+    # Prepend filter-type byte 0 (None) to each scanline, then zlib-compress.
+    filtered = b"".join(b"\x00" + raw[y * stride:(y + 1) * stride] for y in range(h))
+
+    with open(png_path, "wb") as fh:
+        fh.write(b"\x89PNG\r\n\x1a\n")
+        fh.write(_chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)))
+        fh.write(_chunk(b"IDAT", zlib.compress(filtered, 6)))
+        fh.write(_chunk(b"IEND", b""))
 
 
 class QemuMonitor:
@@ -421,6 +467,45 @@ class QemuMonitor:
     def query_mice(self) -> list:
         """Return the list of input mouse devices known to QEMU."""
         return self.execute("query-mice").get("return", [])
+
+    # --- Screenshots ---
+
+    def screendump(self, path: Optional[str] = None, fmt: str = "png") -> str:
+        """Capture a screenshot of the QEMU graphical display.
+
+        path: destination file path. If None, a temp file is created under /tmp.
+        fmt:  'png' (default) or 'ppm'.  PNG is converted from QEMU's native
+              PPM output using _ppm_to_png(), which tries Pillow first and
+              falls back to a pure-Python stdlib implementation.
+
+        Returns the path of the saved image file.
+
+        Note: screendump captures the VGA display.  In -nographic mode the
+        display is disabled and the dump will be blank or return an HMP error.
+        """
+        if fmt not in ("png", "ppm"):
+            raise ValueError(f"unsupported fmt {fmt!r}: choose 'png' or 'ppm'")
+
+        if path is None:
+            fd, path = tempfile.mkstemp(suffix=f".{fmt}", prefix="wasmos-screen-", dir="/tmp")
+            os.close(fd)
+
+        if fmt == "ppm":
+            self.hmp(f"screendump {path}")
+            return path
+
+        # Dump native PPM to a temp file, convert to PNG, clean up the PPM.
+        fd, ppm_path = tempfile.mkstemp(suffix=".ppm", prefix="wasmos-screen-", dir="/tmp")
+        os.close(fd)
+        try:
+            self.hmp(f"screendump {ppm_path}")
+            _ppm_to_png(ppm_path, path)
+        finally:
+            try:
+                os.unlink(ppm_path)
+            except OSError:
+                pass
+        return path
 
 
 class QemuSession:

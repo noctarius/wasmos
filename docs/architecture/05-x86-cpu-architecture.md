@@ -106,14 +106,20 @@ The interrupt controller is selected at build time via the `WASMOS_IRQ_MODE`
 compile-time define, configured through the Kconfig `choice`
 `WASMOS_IRQ_PIC / WASMOS_IRQ_LAPIC / WASMOS_IRQ_IOAPIC`:
 
-| Mode | `WASMOS_IRQ_MODE` | Controller | Timer source |
-|------|-------------------|------------|--------------|
-| `WASMOS_IRQ_PIC`   | 0 | Legacy 8259 PIC + PIT ch.0 | PIT channel 0 |
-| `WASMOS_IRQ_LAPIC` | 1 | LAPIC (no ext. IRQs) | LAPIC periodic timer |
-| `WASMOS_IRQ_IOAPIC`| 2 | LAPIC + I/O APIC | LAPIC periodic timer |
+| Mode | `WASMOS_IRQ_MODE` | Controller | Timer source | Ext. device IRQs |
+|------|-------------------|------------|--------------|------------------|
+| `WASMOS_IRQ_PIC`   | 0 | Legacy 8259 PIC + PIT ch.0 | PIT channel 0 | via 8259 |
+| `WASMOS_IRQ_LAPIC` | 1 | LAPIC (no ext. IRQs) | LAPIC periodic timer | **none** |
+| `WASMOS_IRQ_IOAPIC`| 2 | LAPIC + I/O APIC | LAPIC periodic timer | via IOAPIC |
 
 All three modes share the same IDT vectors (32–47 for IRQs, 0x80 for syscall)
-and the same IPC-based IRQ routing table. The default is `WASMOS_IRQ_PIC`.
+and the same IPC-based IRQ routing table. The default is `WASMOS_IRQ_IOAPIC`.
+
+**LAPIC-only mode limitation**: the 8259 PIC is fully masked and there is no
+I/O APIC, so external device IRQs (keyboard IRQ 1, mouse IRQ 12, etc.) have
+no delivery path to the CPU. `x86_irq_register` returns `-1` for any
+`irq_line != 0` in this mode so that drivers fall back to polling rather than
+blocking forever on `ipc_recv`.
 
 ```c
 #define IRQ_VECTOR_BASE 32

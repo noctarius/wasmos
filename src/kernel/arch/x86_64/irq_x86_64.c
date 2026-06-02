@@ -239,6 +239,17 @@ int x86_irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint)
     if (irq_line >= IRQ_COUNT || endpoint == IPC_ENDPOINT_NONE) {
         return -1;
     }
+#if WASMOS_IRQ_MODE == 1
+    /*
+     * LAPIC-only mode has no I/O APIC and the 8259 PIC is fully masked.
+     * External device IRQs (lines 1–15) have no delivery path to the CPU, so
+     * registering them would leave the driver blocked forever on ipc_recv.
+     * Return an error so drivers fall back to polling.
+     */
+    if (irq_line != 0) {
+        return -1;
+    }
+#endif
     if (policy_authorize(context_id, POLICY_ACTION_IRQ_ROUTE, irq_line) != 0) {
         return -1;
     }

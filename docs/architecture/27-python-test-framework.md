@@ -209,6 +209,44 @@ resp = session.monitor.execute(
 `execute()` discards async `{"event": …}` objects and raises `RuntimeError` on
 QMP error responses.
 
+#### Screenshots
+
+```python
+# Capture display as PNG (default) — no external tools required
+path = session.monitor.screendump()           # auto-named under /tmp
+path = session.monitor.screendump("/tmp/before_click.png")
+
+# Raw PPM if PNG conversion is not wanted
+path = session.monitor.screendump(fmt="ppm")
+```
+
+`screendump(path=None, fmt="png")` calls the HMP `screendump` command to
+capture the VGA display as a PPM file, then converts it to PNG via
+`_ppm_to_png()`.  The intermediate PPM is written to a temp file and deleted
+after conversion.  `path` defaults to an auto-named file under `/tmp`.
+
+`_ppm_to_png()` tries **Pillow** (`PIL.Image`) first for better compression;
+if Pillow is not installed it falls back to a pure-Python implementation using
+only `struct` and `zlib` from the standard library, so the feature works in a
+plain Python environment with no third-party packages.
+
+The PNG file can be read directly by image-processing tools or base64-encoded
+for use with multimodal LLM APIs:
+
+```python
+import base64
+
+path = session.monitor.screendump()
+with open(path, "rb") as f:
+    b64 = base64.b64encode(f.read()).decode()
+# Pass b64 to your LLM client as an image_url or base64 image block.
+```
+
+**Constraint**: `screendump` captures the VGA framebuffer.  In `-nographic`
+mode QEMU disables the display; the dump will be blank or return an HMP error.
+A session needs `nographic=False` (plus a `display` backend or a virtual
+framebuffer) for screenshots to contain meaningful content.
+
 ---
 
 ### Writing a Test

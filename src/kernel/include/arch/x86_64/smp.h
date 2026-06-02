@@ -1,0 +1,89 @@
+#pragma once
+
+#include <stdint.h>
+#include "arch/x86_64/cpu_x86_64.h"
+#include "process.h"
+#include "thread.h"
+
+/*
+ * Per-CPU data structure and accessor.
+ *
+ * g_cpus[0] is the BSP; g_cpus[1..g_cpu_count-1] are APs (when WASMOS_SMP).
+ * cpu_local() returns a pointer to the calling CPU's slot. On a non-SMP build
+ * it always returns &g_cpus[0]; on an SMP build it reads GS:0 (the self-
+ * pointer written during per-CPU init).
+ *
+ * NOTE: g_sched_ctx and g_in_context_switch are NOT stored here — they remain
+ * standalone globals because context_switch.S references them via RIP-relative
+ * addressing. They will migrate to per-CPU in the SMP phase when the assembly
+ * is updated to use GS-relative addressing.
+ */
+
+#define WASMOS_MAX_CPUS 16
+
+typedef struct cpu_local {
+    /* Self-pointer at offset 0 — read via GS:0 for lock-free per-CPU access. */
+    struct cpu_local    *self;
+
+    /* CPU identity */
+    uint32_t             cpu_id;    /* logical index 0..N-1 */
+    uint32_t             apic_id;   /* hardware LAPIC ID from MADT */
+
+    /* Startup synchronisation: AP sets to 1 after full per-CPU init. */
+    volatile uint8_t     started;
+
+    /* Per-CPU x86 descriptor tables.
+     * Interrupt stacks (IST1 / RSP0) are separate per-CPU allocations whose
+     * base addresses are stored in cpu->tss.ist1 / cpu->tss.rsp0.  For the
+     * BSP these are static arrays in cpu_x86_64.c; for APs they are allocated
+     * at SMP bring-up time. */
+    uint64_t    gdt[GDT_ENTRY_COUNT];
+    tss_t       tss;
+
+    /* Scheduler state (previously file-static globals in process.c). */
+    process_t         *current_process;
+    thread_t          *current_thread;
+    uint32_t           preempt_disable_count;
+    volatile uint8_t   in_scheduler;
+} cpu_local_t;
+
+extern cpu_local_t g_cpus[WASMOS_MAX_CPUS];
+extern uint32_t    g_cpu_count;   /* CPUs discovered in MADT; always >= 1 */
+
+/*
+ * Return a pointer to the calling CPU's cpu_local_t.
+ *
+ * SMP build: reads GS:0 (the self-pointer written at per-CPU init time).
+ * Non-SMP build: always &g_cpus[0], no GS dependency.
+ */
+#if WASMOS_SMP
+static inline cpu_local_t *
+cpu_local(void)
+{
+    cpu_local_t *p;
+    __asm__ volatile("mov %%gs:0, %0" : "=r"(p));
+    return p;
+}
+#else
+static inline cpu_local_t *
+cpu_local(void)
+{
+    return &g_cpus[0];
+}
+#endif
+
+/*
+ * SMP init API.  Both functions are no-ops in a non-SMP build.
+ *
+ * smp_init()     — called early in kmain, after LAPIC + I/O APIC are live.
+ *                  Initialises g_cpus[0] (BSP); discovers APs via MADT.
+ * smp_cpus_up()  — called late in kmain, after the scheduler is ready.
+ *                  Sends INIT-SIPI-SIPI to each AP and waits for started flag.
+ */
+#if WASMOS_SMP
+void smp_init(void);
+void smp_cpus_up(void);
+#else
+static inline void smp_init(void)    {}
+static inline void smp_cpus_up(void) {}
+#endif

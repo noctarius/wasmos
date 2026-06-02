@@ -3,6 +3,27 @@
 
 #include <stdint.h>
 
+#define GDT_ENTRY_COUNT    7
+#define CPU_IST_STACK_SIZE 16384u
+
+typedef struct __attribute__((packed)) {
+    uint32_t reserved0;
+    uint64_t rsp0;
+    uint64_t rsp1;
+    uint64_t rsp2;
+    uint64_t reserved1;
+    uint64_t ist1;
+    uint64_t ist2;
+    uint64_t ist3;
+    uint64_t ist4;
+    uint64_t ist5;
+    uint64_t ist6;
+    uint64_t ist7;
+    uint64_t reserved2;
+    uint16_t reserved3;
+    uint16_t iopb;
+} tss_t;
+
 void x86_cpu_init(void);
 void x86_cpu_set_kernel_stack(uint64_t rsp0);
 void x86_cpu_relocate_tables_high(void);

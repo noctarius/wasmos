@@ -2,7 +2,6 @@
 .global context_switch
 .global context_switch_to
 .extern g_in_context_switch
-.extern g_in_scheduler
 .extern g_sched_ctx
 .extern g_ctxsw_last_out_ctx
 .extern g_ctxsw_last_out_rip

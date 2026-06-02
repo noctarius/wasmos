@@ -1,6 +1,7 @@
 #include "cpu.h"
 #include "arch/x86_64/cpu_x86_64.h"
 #include "arch/x86_64/msr.h"
+#include "arch/x86_64/smp.h"
 #include "serial.h"
 #include "process.h"
 #include "memory_service.h"
@@ -15,17 +16,18 @@
 #include "arch/x86_64/lapic.h"
 #endif
 
-#define GDT_ENTRY_COUNT 7
+/* GDT_ENTRY_COUNT and CPU_IST_STACK_SIZE are defined in cpu_x86_64.h. */
 #define IDT_ENTRY_COUNT 256
 #define EXCEPTION_COUNT 32
 
-#define KERNEL_CS_SELECTOR 0x08
-#define KERNEL_DS_SELECTOR 0x10
-#define USER_CS_SELECTOR   0x18
-#define USER_DS_SELECTOR   0x20
+#define KERNEL_CS_SELECTOR  0x08
+#define KERNEL_DS_SELECTOR  0x10
+#define USER_CS_SELECTOR    0x18
+#define USER_DS_SELECTOR    0x20
 #define KERNEL_TSS_SELECTOR 0x28
-#define IRQ0_IST_INDEX 1
-#define IRQ0_IST_STACK_SIZE 16384u
+#define IRQ0_IST_INDEX      1
+
+#define IA32_GS_BASE_MSR 0xC0000101u
 
 #define IDT_TYPE_INTERRUPT_GATE 0x8E
 #define IDT_TYPE_INTERRUPT_GATE_USER 0xEE
@@ -55,7 +57,12 @@ extern void isr_syscall_128(void);
 extern uint8_t __kernel_start;
 extern uint8_t __kernel_end;
 
-static uint64_t g_gdt[GDT_ENTRY_COUNT] = {
+/* IDT is shared across all CPUs (all CPUs load the same IDTR). */
+static idt_entry_t g_idt[IDT_ENTRY_COUNT];
+
+/* BSP GDT initial values — copied into g_cpus[0].gdt during x86_cpu_init().
+ * TSS slots [5..6] are filled in by gdt_set_tss_base(). */
+static const uint64_t k_gdt_template[GDT_ENTRY_COUNT] = {
     0x0000000000000000ULL,
     0x00AF9A000000FFFFULL,
     0x00AF92000000FFFFULL,
@@ -64,30 +71,17 @@ static uint64_t g_gdt[GDT_ENTRY_COUNT] = {
     0x0000000000000000ULL,
     0x0000000000000000ULL,
 };
-static idt_entry_t g_idt[IDT_ENTRY_COUNT];
-uint8_t g_irq0_ist_stack[IRQ0_IST_STACK_SIZE] __attribute__((aligned(16)));
+
+/* BSP interrupt stacks.  Kept as standalone arrays so that cpu_isr.S can
+ * reference g_irq0_ist_stack by name for the canary check without indirection.
+ * AP stacks are allocated dynamically at SMP bring-up. */
+uint8_t  g_irq0_ist_stack[CPU_IST_STACK_SIZE] __attribute__((aligned(16)));
+static uint8_t g_bsp_rsp0_stack[CPU_IST_STACK_SIZE] __attribute__((aligned(16)));
+
+/* IST-stack canary: written at the bottom of the BSP's IST stack and compared
+ * by cpu_isr.S on every timer interrupt to detect stack overflow.  Must remain
+ * a visible global symbol (accessed by name from assembly). */
 uint64_t g_irq0_ist_canary = 0xCAFEBABEDEADC0DEULL;
-static uint8_t g_rsp0_stack[IRQ0_IST_STACK_SIZE] __attribute__((aligned(16)));
-
-typedef struct __attribute__((packed)) {
-    uint32_t reserved0;
-    uint64_t rsp0;
-    uint64_t rsp1;
-    uint64_t rsp2;
-    uint64_t reserved1;
-    uint64_t ist1;
-    uint64_t ist2;
-    uint64_t ist3;
-    uint64_t ist4;
-    uint64_t ist5;
-    uint64_t ist6;
-    uint64_t ist7;
-    uint64_t reserved2;
-    uint16_t reserved3;
-    uint16_t iopb;
-} tss_t;
-
-static tss_t g_tss;
 
 #define IA32_EFER_MSR 0xC0000080u
 #define IA32_EFER_NXE (1ULL << 11)
@@ -239,11 +233,11 @@ panic_render_screen(uint64_t vector,
 }
 
 static void
-gdt_install(void)
+gdt_install(cpu_local_t *cpu)
 {
     descriptor_ptr_t gdtr;
-    gdtr.limit = (uint16_t)(sizeof(g_gdt) - 1);
-    gdtr.base = (uint64_t)(uintptr_t)&g_gdt[0];
+    gdtr.limit = (uint16_t)(sizeof(cpu->gdt) - 1);
+    gdtr.base = (uint64_t)(uintptr_t)&cpu->gdt[0];
 
     __asm__ volatile(
         "lgdt %0\n"
@@ -311,9 +305,9 @@ x86_kernel_data_addr(uint64_t addr)
 }
 
 static void
-gdt_set_tss_base(uint64_t base)
+gdt_set_tss_base(cpu_local_t *cpu, uint64_t base)
 {
-    uint32_t limit = (uint32_t)(sizeof(g_tss) - 1u);
+    uint32_t limit = (uint32_t)(sizeof(cpu->tss) - 1u);
     uint64_t low = 0;
     low |= (uint64_t)(limit & 0xFFFFu);
     low |= (uint64_t)(base & 0xFFFFFFu) << 16;
@@ -321,32 +315,32 @@ gdt_set_tss_base(uint64_t base)
     low |= (uint64_t)((limit >> 16) & 0xFu) << 48;
     low |= (uint64_t)((base >> 24) & 0xFFu) << 56;
     uint64_t high = (uint64_t)(base >> 32);
-    g_gdt[5] = low;
-    g_gdt[6] = high;
+    cpu->gdt[5] = low;
+    cpu->gdt[6] = high;
 }
 
 static void
-gdt_set_tss(void)
+gdt_set_tss(cpu_local_t *cpu)
 {
-    gdt_set_tss_base((uint64_t)(uintptr_t)&g_tss);
+    gdt_set_tss_base(cpu, (uint64_t)(uintptr_t)&cpu->tss);
 }
 
 static void
-tss_init(void)
+tss_init(cpu_local_t *cpu)
 {
-    for (uint32_t i = 0; i < sizeof(g_tss); ++i) {
-        ((uint8_t *)&g_tss)[i] = 0;
+    for (uint32_t i = 0; i < sizeof(cpu->tss); ++i) {
+        ((uint8_t *)&cpu->tss)[i] = 0;
     }
-    for (uint32_t i = 0; i < IRQ0_IST_STACK_SIZE; ++i) {
+    for (uint32_t i = 0; i < CPU_IST_STACK_SIZE; ++i) {
         g_irq0_ist_stack[i] = 0xCC;
     }
     *(uint64_t *)(uintptr_t)g_irq0_ist_stack = g_irq0_ist_canary;
-    uint64_t ist1_top = (uint64_t)(uintptr_t)(g_irq0_ist_stack + IRQ0_IST_STACK_SIZE);
-    uint64_t rsp0_top = (uint64_t)(uintptr_t)(g_rsp0_stack + IRQ0_IST_STACK_SIZE);
-    g_tss.rsp0 = rsp0_top;
-    g_tss.ist1 = ist1_top;
-    g_tss.iopb = (uint16_t)sizeof(g_tss);
-    gdt_set_tss();
+    uint64_t ist1_top = (uint64_t)(uintptr_t)(g_irq0_ist_stack + CPU_IST_STACK_SIZE);
+    uint64_t rsp0_top = (uint64_t)(uintptr_t)(g_bsp_rsp0_stack + CPU_IST_STACK_SIZE);
+    cpu->tss.rsp0 = rsp0_top;
+    cpu->tss.ist1 = ist1_top;
+    cpu->tss.iopb = (uint16_t)sizeof(cpu->tss);
+    gdt_set_tss(cpu);
 }
 
 static void
@@ -606,8 +600,20 @@ x86_cpu_init(void)
         x86_write_msr(IA32_EFER_MSR, efer | IA32_EFER_NXE);
     }
     serial_write("[cpu] init\n");
-    tss_init();
-    gdt_install();
+
+    /* Initialise BSP's per-CPU slot.  We pass &g_cpus[0] explicitly because
+     * the GS base MSR has not been loaded yet — cpu_local() must not be called
+     * until after the wrgsbase below. */
+    cpu_local_t *bsp = &g_cpus[0];
+    bsp->cpu_id  = 0;
+    bsp->apic_id = 0;   /* updated after lapic_init() reads LAPIC_REG_ID */
+    bsp->started = 1;
+    for (uint32_t i = 0; i < GDT_ENTRY_COUNT; ++i) {
+        bsp->gdt[i] = k_gdt_template[i];
+    }
+
+    tss_init(bsp);
+    gdt_install(bsp);
     idt_install();
     for (uint32_t i = 0; i < IRQ_COUNT; ++i) {
         uintptr_t handler =
@@ -634,6 +640,11 @@ x86_cpu_init(void)
     idt_set_gate((uint8_t)X86_VECTOR_SYSCALL,
                  x86_kernel_handler_addr((uintptr_t)isr_syscall_128),
                  IDT_TYPE_INTERRUPT_GATE_USER);
+    /* Set GS base to &g_cpus[0] so cpu_local() via GS:0 works from here on.
+     * The self-pointer must be written before the MSR load. */
+    bsp->self = bsp;
+    x86_write_msr(IA32_GS_BASE_MSR, (uint64_t)(uintptr_t)bsp);
+
     irq_init();
     serial_write("[cpu] gdt/idt ready\n");
     (void)KERNEL_DS_SELECTOR;
@@ -647,24 +658,31 @@ x86_cpu_set_kernel_stack(uint64_t rsp0)
     if (rsp0 == 0) {
         return;
     }
-    g_tss.rsp0 = rsp0;
+    cpu_local()->tss.rsp0 = rsp0;
 }
 
 void
 x86_cpu_relocate_tables_high(void)
 {
-    descriptor_ptr_t gdtr;
-    descriptor_ptr_t idtr;
-    uint16_t tss_selector = KERNEL_TSS_SELECTOR;
+    cpu_local_t      *cpu = cpu_local();
+    descriptor_ptr_t  gdtr;
+    descriptor_ptr_t  idtr;
+    uint16_t          tss_selector = KERNEL_TSS_SELECTOR;
 
-    g_tss.rsp0 = x86_kernel_data_addr(g_tss.rsp0);
-    g_tss.ist1 = x86_kernel_data_addr(g_tss.ist1);
-    gdt_set_tss_base(x86_kernel_data_addr((uint64_t)(uintptr_t)&g_tss));
+    cpu->tss.rsp0 = x86_kernel_data_addr(cpu->tss.rsp0);
+    cpu->tss.ist1 = x86_kernel_data_addr(cpu->tss.ist1);
+    gdt_set_tss_base(cpu, x86_kernel_data_addr((uint64_t)(uintptr_t)&cpu->tss));
 
-    gdtr.limit = (uint16_t)(sizeof(g_gdt) - 1);
-    gdtr.base = x86_kernel_data_addr((uint64_t)(uintptr_t)&g_gdt[0]);
+    gdtr.limit = (uint16_t)(sizeof(cpu->gdt) - 1);
+    gdtr.base = x86_kernel_data_addr((uint64_t)(uintptr_t)&cpu->gdt[0]);
     idtr.limit = (uint16_t)(sizeof(g_idt) - 1);
     idtr.base = x86_kernel_data_addr((uint64_t)(uintptr_t)&g_idt[0]);
+
+    /* Relocate the GS base MSR to the high-half address of g_cpus[0]. */
+    uint64_t bsp_high = x86_kernel_data_addr((uint64_t)(uintptr_t)cpu);
+    cpu_local_t *bsp_high_ptr = (cpu_local_t *)(uintptr_t)bsp_high;
+    bsp_high_ptr->self = bsp_high_ptr;
+    x86_write_msr(IA32_GS_BASE_MSR, bsp_high);
 
     __asm__ volatile("lgdt %0" : : "m"(gdtr) : "memory");
     __asm__ volatile("lidt %0" : : "m"(idtr) : "memory");

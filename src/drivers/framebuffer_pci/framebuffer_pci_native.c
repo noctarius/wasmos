@@ -355,7 +355,7 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
         if (rc == ND_IPC_EMPTY) {
             /* Drain ring output in bounded chunks and yield cooperatively so
              * other processes get CPU time during console ring backlog replay. */
-            if (g_console_ring_enabled) {
+            if (g_console_ring_enabled && !g_gfx_overlay_lock) {
                 drain_console_ring(ring, 256u);
             }
             api->sched_yield();

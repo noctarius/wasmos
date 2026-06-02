@@ -1051,8 +1051,14 @@ vt_switch_tty(uint32_t tty_index)
                   (uint16_t)(g_switch_generation & 0x0FFFu));
     g_switch_barrier = 0;
     if (tty_index == 0) {
+        /* Compositor is taking the framebuffer: lock the overlay so the fb
+         * driver stops draining the console ring onto the gfx surface. */
+        (void)vt_fb_send_switch(FBTEXT_IPC_GFX_OVERLAY_REQ, 1, 0, 0, 0);
         /* Keep tty0 visibly intentional even when no fresh ring data exists. */
         vt_draw_tty0_hint();
+    } else if (prev_active == 0) {
+        /* Returning to text mode: unlock overlay so ring drain can resume. */
+        (void)vt_fb_send_switch(FBTEXT_IPC_GFX_OVERLAY_REQ, 0, 0, 0, 0);
     }
     return 0;
 }

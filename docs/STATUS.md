@@ -165,6 +165,11 @@
 - ACPI class/subclass matching in `device-manager` includes RTC bring-up
   (`PNP0B00` class `0x08` / subclass `0x03`) alongside serial/keyboard/mouse
   ISA devices from `acpi-bus`.
+- The wasm `serial` driver now binds `proc.endpoint` like the other ACPI
+  input/ISA drivers, so its `PROC_IPC_NOTIFY_READY` message reaches
+  process-manager during sync spawn instead of looping respawns after the boot
+  ACPI rules load. The missing binding was a latent bug masked before SMP by
+  the old non-deterministic auto-ready path for service/driver children.
 - RTC IPC message IDs and payload packing are explicitly defined in shared
   kernel/user headers (`rtc_ipc.h`) for a single client/driver contract.
 - CLI builtin `echo` and script `echo` share one parser/expander path in libc

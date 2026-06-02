@@ -209,7 +209,7 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
         if (rc == ND_IPC_EMPTY) {
             /* Drain ring output in bounded chunks so control IPC gets regular
              * service windows even under sustained serial log throughput. */
-            int had_ring = g_console_ring_enabled
+            int had_ring = (g_console_ring_enabled && !g_gfx_overlay_lock)
                                ? drain_console_ring(ring, 256u)
                                : 0;
             if (!had_ring) {

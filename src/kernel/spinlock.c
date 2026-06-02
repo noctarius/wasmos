@@ -1,28 +1,30 @@
 #include "spinlock.h"
 #include "process.h"
+#include "arch/x86_64/smp.h"
 
 /*
- * Interrupt-safe spinlock implementation for single-CPU WASMOS.
+ * Interrupt-safe spinlock implementation for WASMOS.
  *
  * Problem: ipc_send_from() is called from hardware interrupt context (IRQ
  * handler, IF=0) and needs ep->lock, which ipc_recv_for() may hold while
  * running with IF=1.  The IRQ handler would spin forever waiting for the
  * interrupted thread to release the lock — a classic single-CPU IRQ deadlock.
  *
- * Fix: maintain a separate IRQ-disable depth counter alongside the existing
- * preempt-disable counter.  spinlock_lock() saves RFLAGS and clears IF on
- * first entry (depth 0→1); spinlock_unlock() restores RFLAGS on last exit
- * (depth 1→0).  This guarantees that every spinlock is held with IF=0, so no
- * hardware interrupt can observe a held spinlock.
+ * Fix: maintain a separate per-CPU IRQ-disable depth counter alongside the
+ * existing preempt-disable counter.  spinlock_lock() saves RFLAGS and clears
+ * IF on first entry (depth 0→1); spinlock_unlock() restores RFLAGS on last
+ * exit (depth 1→0).  This guarantees that every spinlock is held with IF=0,
+ * so no hardware interrupt can observe a held spinlock.
+ *
+ * The counters live in cpu_local_t (per-CPU) so that under SMP each CPU's
+ * interrupt-disable state is independent.  On a non-SMP build cpu_local()
+ * returns &g_cpus[0] so behaviour is identical to the old single-global form.
  *
  * preempt_disable()/preempt_enable() are NOT changed: wasm_driver.c wraps the
  * entire wasm3 execution in preempt_disable(), and making that also disable
  * interrupts would block IRQ delivery for the whole WASM process lifetime.
  * The two depth counters are intentionally independent.
  */
-
-static volatile uint32_t g_irq_disable_depth;
-static uint64_t g_irq_saved_flags;
 
 /*
  * Save RFLAGS (capturing IF) and disable interrupts.  On the first nesting
@@ -37,8 +39,9 @@ static inline void spinlock_irq_save(void)
 {
     uint64_t flags;
     __asm__ volatile("pushfq; pop %0; cli" : "=r"(flags) :: "memory");
-    if (g_irq_disable_depth++ == 0) {
-        g_irq_saved_flags = flags;
+    cpu_local_t *cpu = cpu_local();
+    if (cpu->irq_disable_depth++ == 0) {
+        cpu->irq_saved_flags = flags;
     }
 }
 
@@ -49,11 +52,12 @@ static inline void spinlock_irq_save(void)
  */
 static inline void spinlock_irq_restore(void)
 {
-    if (g_irq_disable_depth == 0) {
+    cpu_local_t *cpu = cpu_local();
+    if (cpu->irq_disable_depth == 0) {
         return;
     }
-    if (--g_irq_disable_depth == 0) {
-        __asm__ volatile("push %0; popfq" :: "r"(g_irq_saved_flags) : "memory");
+    if (--cpu->irq_disable_depth == 0) {
+        __asm__ volatile("push %0; popfq" :: "r"(cpu->irq_saved_flags) : "memory");
     }
 }
 

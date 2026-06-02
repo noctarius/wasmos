@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include "arch/x86_64/cpu_x86_64.h"
+#include "spinlock.h"
 #include "process.h"
 #include "thread.h"
 
@@ -45,6 +46,13 @@ typedef struct cpu_local {
     thread_t          *current_thread;
     uint32_t           preempt_disable_count;
     volatile uint8_t   in_scheduler;
+
+    /* Per-CPU IRQ-disable nesting (moved from spinlock.c globals for SMP safety). */
+    volatile uint32_t  irq_disable_depth;
+    uint64_t           irq_saved_flags;
+
+    /* Protects the ready-queue (needed under SMP for cross-CPU wake-ups). */
+    spinlock_t         ready_queue_lock;
 } cpu_local_t;
 
 extern cpu_local_t g_cpus[WASMOS_MAX_CPUS];
@@ -76,13 +84,15 @@ cpu_local(void)
  * SMP init API.  Both functions are no-ops in a non-SMP build.
  *
  * smp_init()     — called early in kmain, after LAPIC + I/O APIC are live.
- *                  Initialises g_cpus[0] (BSP); discovers APs via MADT.
+ *                  Records BSP APIC ID; APs were discovered by ioapic_init().
  * smp_cpus_up()  — called late in kmain, after the scheduler is ready.
  *                  Sends INIT-SIPI-SIPI to each AP and waits for started flag.
+ * smp_ap_c_entry — C entry point called by the AP trampoline (WASMOS_SMP only).
  */
 #if WASMOS_SMP
 void smp_init(void);
 void smp_cpus_up(void);
+void smp_ap_c_entry(uint32_t cpu_id);
 #else
 static inline void smp_init(void)    {}
 static inline void smp_cpus_up(void) {}

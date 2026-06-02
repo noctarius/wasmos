@@ -2,6 +2,10 @@
 #include "irq.h"
 #include "paging.h"
 #include "serial.h"
+#if WASMOS_SMP
+#include "arch/x86_64/smp.h"
+#include "arch/x86_64/lapic.h"
+#endif
 
 #include <stdint.h>
 
@@ -136,6 +140,15 @@ typedef struct {            /* MADT entry type 2 — IRQ source override */
     uint16_t          flags;
 } __attribute__((packed)) acpi_madt_irq_override_t;
 
+typedef struct {            /* MADT entry type 0 — Processor Local APIC */
+    acpi_madt_entry_t hdr;
+    uint8_t           processor_uid;
+    uint8_t           apic_id;
+    uint32_t          flags;           /* bit 0: LAPIC enabled; bit 1: online capable */
+} __attribute__((packed)) acpi_madt_processor_t;
+
+#define MADT_PROC_FLAG_ENABLED 0x1u
+
 /* ---------------------------------------------------------------- MADT parser */
 
 static uint64_t
@@ -169,12 +182,28 @@ madt_parse(uint64_t xsdt_phys, uint64_t *out_ioapic_phys)
 
         const uint8_t *p   = (const uint8_t *)tbl + sizeof(acpi_madt_t);
         const uint8_t *end = (const uint8_t *)tbl + tbl->length;
+
+#if WASMOS_SMP
+        uint32_t bsp_apic_id = lapic_read_id();
+#endif
+
         while (p < end) {
             const acpi_madt_entry_t *e = (const acpi_madt_entry_t *)p;
             if (e->len == 0) {
                 break;
             }
-            if (e->type == 1u) {
+            if (e->type == 0u) {
+#if WASMOS_SMP
+                const acpi_madt_processor_t *proc = (const acpi_madt_processor_t *)p;
+                if ((proc->flags & MADT_PROC_FLAG_ENABLED) &&
+                    proc->apic_id != (uint8_t)bsp_apic_id &&
+                    g_cpu_count < WASMOS_MAX_CPUS) {
+                    g_cpus[g_cpu_count].apic_id = proc->apic_id;
+                    g_cpus[g_cpu_count].cpu_id  = g_cpu_count;
+                    g_cpu_count++;
+                }
+#endif
+            } else if (e->type == 1u) {
                 const acpi_madt_ioapic_t *io = (const acpi_madt_ioapic_t *)p;
                 *out_ioapic_phys = io->ioapic_addr;
             } else if (e->type == 2u) {

@@ -2,8 +2,10 @@
 
 ## Status
 
-Planned. `WASMOS_SMP` Kconfig option not yet implemented.
-All code in this document describes the target design, not the current state.
+Implemented (Phases 0–9). `WASMOS_SMP=0` is the default; enabling it requires
+`WASMOS_IRQ_IOAPIC=1`. All SMP bring-up code is live: MADT discovery,
+LAPIC ICR helpers, AP trampoline, `smp_cpus_up`, AP C entry, per-CPU spinlock
+state, and ready-queue locking. No behavioral change at `WASMOS_SMP=0`.
 
 ---
 

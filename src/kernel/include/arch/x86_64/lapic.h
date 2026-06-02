@@ -13,3 +13,14 @@
 
 void lapic_init(uint32_t hz);
 void lapic_eoi(void);
+
+#if WASMOS_SMP
+/* Read the physical LAPIC ID of the calling CPU (bits [27:24] of the ID reg). */
+uint32_t lapic_read_id(void);
+/* Send INIT IPI to the given physical APIC ID and wait for delivery. */
+void lapic_send_init_ipi(uint32_t apic_id);
+/* Send a Startup IPI (SIPI) with the given startup vector (page number). */
+void lapic_send_sipi(uint32_t apic_id, uint8_t vector);
+/* Enable and configure the LAPIC timer on an AP (LAPIC already mapped by BSP). */
+void lapic_ap_enable(uint32_t hz);
+#endif

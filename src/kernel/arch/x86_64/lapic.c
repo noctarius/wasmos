@@ -233,3 +233,64 @@ lapic_eoi(void)
 {
     lapic_write(LAPIC_REG_EOI, 0u);
 }
+
+/* ----------------------------------------------------------------- SMP IPIs */
+
+#if WASMOS_SMP
+
+/* ICR registers and field definitions. */
+#define LAPIC_REG_ICR_LO        0x300u
+#define LAPIC_REG_ICR_HI        0x310u
+
+#define LAPIC_ICR_SEND_PENDING  (1u << 12)
+#define LAPIC_ICR_LEVEL_ASSERT  (1u << 14)
+#define LAPIC_ICR_DELIVERY_INIT (0x5u << 8)
+#define LAPIC_ICR_DELIVERY_SIPI (0x6u << 8)
+
+/* Approximate I/O-port delay (port 0x80 is the standard POST code port;
+ * one outb takes ~1 µs on x86 hardware and QEMU). */
+static void
+io_delay_us(uint32_t us)
+{
+    for (uint32_t i = 0; i < us; i++) {
+        __asm__ volatile("outb %%al, $0x80" : : "a"((uint8_t)0) : "memory");
+    }
+}
+
+uint32_t
+lapic_read_id(void)
+{
+    return lapic_read(LAPIC_REG_ID) >> 24;
+}
+
+void
+lapic_send_init_ipi(uint32_t apic_id)
+{
+    lapic_write(LAPIC_REG_ICR_HI, apic_id << 24);
+    lapic_write(LAPIC_REG_ICR_LO, LAPIC_ICR_LEVEL_ASSERT | LAPIC_ICR_DELIVERY_INIT);
+    while (lapic_read(LAPIC_REG_ICR_LO) & LAPIC_ICR_SEND_PENDING)
+        ;
+    io_delay_us(10000u);  /* 10 ms */
+}
+
+void
+lapic_send_sipi(uint32_t apic_id, uint8_t vector)
+{
+    lapic_write(LAPIC_REG_ICR_HI, apic_id << 24);
+    lapic_write(LAPIC_REG_ICR_LO, LAPIC_ICR_LEVEL_ASSERT |
+                                   LAPIC_ICR_DELIVERY_SIPI | (uint32_t)vector);
+    while (lapic_read(LAPIC_REG_ICR_LO) & LAPIC_ICR_SEND_PENDING)
+        ;
+    io_delay_us(200u);   /* 200 µs */
+}
+
+void
+lapic_ap_enable(uint32_t hz)
+{
+    lapic_enable();
+    /* BSP already masked the PIC; pic_disable() here would be a no-op. */
+    lapic_timer_set_hz(hz);
+    serial_write("[lapic] ap ok\n");
+}
+
+#endif /* WASMOS_SMP */

@@ -153,6 +153,11 @@ typedef struct {
 void process_init(void);
 int process_spawn(const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
 int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
+int process_spawn_as_ready_gated(uint32_t parent_pid,
+                                 const char *name,
+                                 process_entry_t entry,
+                                 void *arg,
+                                 uint32_t *out_pid);
 int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
 int process_thread_spawn_internal(uint32_t owner_pid, const char *name, uint32_t *out_tid);
 int process_thread_spawn_worker_internal(uint32_t owner_pid,

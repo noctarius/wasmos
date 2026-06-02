@@ -899,6 +899,19 @@ queue_pci_match_rule_spawns(void)
             g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_PCI_MATCH;
             g_dm.active_rule_spawn_index = (int32_t)ri;
             g_dm.active_rule_spawn_device_index = (int32_t)di;
+            {
+                char msg[160];
+                (void)snprintf(msg,
+                               sizeof(msg),
+                               "[dbg-dm] queue pci rule path=%s bus=%02X dev=%02X fn=%02X class=%02X sub=%02X\n",
+                               g_dm.rule_spawn_path,
+                               (unsigned)rec->bus,
+                               (unsigned)rec->device,
+                               (unsigned)rec->function,
+                               (unsigned)rec->class_code,
+                               (unsigned)rec->subclass);
+                console_write(msg);
+            }
             return;
         }
     }
@@ -1352,9 +1365,33 @@ apply_pci_matches(void)
                     rec->irq_hint < 16u) {
                     g_dm.selected_storage_caps.irq_mask = (uint16_t)(1u << rec->irq_hint);
                 }
+                {
+                    char msg[192];
+                    (void)snprintf(msg,
+                                   sizeof(msg),
+                                   "[dbg-dm] storage match module=%d bus=%02X dev=%02X fn=%02X class=%02X sub=%02X vid=%04X did=%04X\n",
+                                   (int)module_index,
+                                   (unsigned)rec->bus,
+                                   (unsigned)rec->device,
+                                   (unsigned)rec->function,
+                                   (unsigned)rec->class_code,
+                                   (unsigned)rec->subclass,
+                                   (unsigned)rec->vendor_id,
+                                   (unsigned)rec->device_id);
+                    console_write(msg);
+                }
                 return;
             }
         }
+    }
+    {
+        char msg[96];
+        (void)snprintf(msg,
+                       sizeof(msg),
+                       "[dbg-dm] no storage match registry=%u modules=%d\n",
+                       (unsigned)g_dm.registry_count,
+                       (int)g_dm.module_count);
+        console_write(msg);
     }
 }
 

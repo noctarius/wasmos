@@ -391,7 +391,6 @@ ipc_endpoints_release_owner(uint32_t owner_context_id)
     list_iter_t it;
     ipc_endpoint_t *ep = (ipc_endpoint_t *)list_first(&g_endpoint_table, &it);
     while (ep) {
-        ipc_endpoint_t *next = (ipc_endpoint_t *)list_next(&it);
         if (ep->in_use && ep->owner_context_id == owner_context_id) {
             spinlock_lock(&ep->lock);
             if (ep->in_use && ep->owner_context_id == owner_context_id) {
@@ -399,9 +398,8 @@ ipc_endpoints_release_owner(uint32_t owner_context_id)
                 ep->waiter_tid = 0;
             }
             spinlock_unlock(&ep->lock);
-            list_remove(&g_endpoint_table, ep);
         }
-        ep = next;
+        ep = (ipc_endpoint_t *)list_next(&it);
     }
     spinlock_unlock(&g_endpoint_table_lock);
 }

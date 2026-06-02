@@ -180,10 +180,18 @@ physical address `0x1000` (vector `0x01` for SIPI). It transitions through
 | `0x518`          | 10 bytes | GDT pseudo-descriptor (limit + base)    |
 
 The trampoline is either linked as a raw `.bin` section or embedded via
-`.incbin` into a C array in `smp.c` and copied to `0x1000` at runtime. The
-`0x1000` page is identity-mapped before the first SIPI and reserved from the
-general page-frame allocator so shared-memory or kernel allocations cannot land
-on the trampoline page.
+`.incbin` into a C array in `smp.c` and copied to `0x1000` at runtime. Two
+separate 4 KiB PTEs cover the two low pages with distinct permissions:
+
+- `0x1000` — trampoline code page: `MEM_REGION_FLAG_READ | WRITE | EXEC`.
+  APs fetch and execute from this page during the 16→64-bit transition.
+- `0x0000` — data slot page (holds the `0x500`–`0x518` slot block): `MEM_REGION_FLAG_READ | WRITE`, NX.
+  Keeping this page non-executable means AP bring-up does not open execute
+  permission on the zero-page.
+
+The `0x1000` page is also reserved from the general page-frame allocator during
+`pfa_init()` so shared-memory objects and kernel allocations cannot be placed on
+the trampoline page.
 
 ### Transition outline
 
@@ -280,6 +288,19 @@ global for the initial SMP phase. `ready_queue_enqueue()` and
 `ready_queue_dequeue()` are wrapped with an IRQ-safe spinlock
 (`cli`+`xchg` acquire, `xchg`+`sti` release). Per-CPU queues with work
 stealing are a later optimisation.
+
+### Ready-gated spawn for service/driver children
+
+Under SMP, an AP can pick up a newly enqueued process before process-manager
+has finished setting `require_explicit_ready = 1`. If the child blocks on IPC
+before PM arms the sync-ready wait, it auto-marks itself ready and the
+`start` call returns prematurely while the service is still initialising.
+
+The fix is `process_spawn_ready_gated()`: it sets `ready = 0` and
+`require_explicit_ready = 1` on the process *before* enqueuing it, so no AP
+can observe the process in a state where it can auto-mark itself ready. This
+helper is used for all service and driver WASMOS-APP children spawned by
+process-manager sync paths.
 
 ---
 

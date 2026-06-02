@@ -484,7 +484,7 @@ spawn /boot/system/services/gfxcomp.wap
 start /boot/system/services/cli.wap
 ```
 
-`start` spawns synchronously (waits for `PROC_IPC_NOTIFY_READY` or 5-second
+`start` spawns synchronously (waits for `PROC_IPC_NOTIFY_READY` or 30-second
 timeout). `spawn` spawns asynchronously (no wait).
 
 #### `cli` — Interactive Shell

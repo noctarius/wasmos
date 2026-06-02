@@ -18,7 +18,9 @@
   `smp_cpus_up()` performs INIT-SIPI-SIPI per AP, waits on `cpu->started`;
   the trampoline code page is identity-mapped executable while the low data
   slot page remains NX so AP startup can fetch from `0x1000` without opening
-  execute permission on the `0x0000` slot page.
+  execute permission on the `0x0000` slot page. The fixed trampoline page at
+  physical `0x1000` is also reserved from the general page-frame allocator so
+  shared-memory/kernel allocations cannot be clobbered during AP bring-up.
   `smp_ap_c_entry()` loads per-CPU GDT/TSS/IDT/GS, enables AP LAPIC timer,
   sets `started=1`. No behavioral change at `WASMOS_SMP=0`. Full design in
   `docs/architecture/28-smp.md`.

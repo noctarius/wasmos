@@ -253,6 +253,8 @@ void pfa_init(const boot_info_t *boot_info) {
     uint64_t kernel_base = (uint64_t)(uintptr_t)&__kernel_start;
     uint64_t kernel_size = (uint64_t)(uintptr_t)&__kernel_end - kernel_base;
     reserve_range(kernel_base, kernel_size);
+    /* Keep the fixed AP trampoline page out of the general allocator. */
+    reserve_range(0x1000ULL, PAGE_SIZE);
 
     klog_printf("[pfa] ranges=0x%016llX\n", (unsigned long long)g_range_count);
 

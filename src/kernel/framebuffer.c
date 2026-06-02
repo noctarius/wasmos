@@ -2,6 +2,7 @@
 #include "klog.h"
 #include "serial.h"
 #include "paging.h"
+#include "memory.h"
 #include "../drivers/framebuffer/font_8x16.h"
 
 #include <stdint.h>
@@ -11,6 +12,7 @@ static void framebuffer_draw_char(uint32_t col, uint32_t row, char ch, uint32_t 
 static void framebuffer_panic_newline(void);
 
 static framebuffer_info_t g_framebuffer_info = {0};
+static uint64_t g_framebuffer_hi_base = 0;
 static uint32_t g_panic_col = 0;
 static uint32_t g_panic_row = 0;
 static uint32_t g_panic_fg = 0x00FFFFFF;
@@ -30,6 +32,16 @@ static inline uintptr_t framebuffer_alias_ptr(uintptr_t p)
 static inline framebuffer_info_t *framebuffer_info_slot(void)
 {
     return (framebuffer_info_t *)(void *)framebuffer_alias_ptr((uintptr_t)&g_framebuffer_info);
+}
+
+static inline uint64_t *fb_hi_base_slot(void)
+{
+    return (uint64_t *)(void *)framebuffer_alias_ptr((uintptr_t)&g_framebuffer_hi_base);
+}
+
+static inline uint64_t _fb_mmio_va(void)
+{
+    return *fb_hi_base_slot();
 }
 
 static inline uint32_t *panic_col_slot(void)
@@ -93,13 +105,34 @@ int framebuffer_get_info(framebuffer_info_t *out)
     return 0;
 }
 
-int framebuffer_put_pixel(uint32_t x, uint32_t y, uint32_t color)
+int framebuffer_map_high(void)
 {
-    if (serial_high_alias_enabled()) {
+    framebuffer_info_t *fb = framebuffer_info_slot();
+    if (fb->framebuffer_base == 0 || fb->framebuffer_size == 0) {
         return -1;
     }
+    uint64_t phys_base = fb->framebuffer_base & ~0xFFFULL;
+    uint64_t phys_end = (fb->framebuffer_base + fb->framebuffer_size + 0xFFFULL) & ~0xFFFULL;
+    uint64_t num_pages = (phys_end - phys_base) >> 12;
+    for (uint64_t i = 0; i < num_pages; i++) {
+        uint64_t virt = KERNEL_MMIO_FB_VA + (i << 12);
+        uint64_t phys = phys_base + (i << 12);
+        if (paging_map_4k(virt, phys, MEM_REGION_FLAG_WRITE) != 0) {
+            return -1;
+        }
+    }
+    *fb_hi_base_slot() = KERNEL_MMIO_FB_VA + (fb->framebuffer_base & 0xFFFULL);
+    klog_printf("[framebuffer] hi base=0x%016llx pages=%llu\n",
+                (unsigned long long)*fb_hi_base_slot(),
+                (unsigned long long)num_pages);
+    return 0;
+}
+
+int framebuffer_put_pixel(uint32_t x, uint32_t y, uint32_t color)
+{
     framebuffer_info_t *fb = framebuffer_info_slot();
-    if (fb->framebuffer_base == 0 ||
+    uint64_t fb_va = _fb_mmio_va();
+    if (fb_va == 0 || fb->framebuffer_base == 0 ||
         fb->framebuffer_size == 0 ||
         fb->framebuffer_width == 0 ||
         fb->framebuffer_height == 0) {
@@ -118,19 +151,16 @@ int framebuffer_put_pixel(uint32_t x, uint32_t y, uint32_t color)
     if (offset + 4 > fb->framebuffer_size) {
         return -1;
     }
-    uint32_t *pixel = (uint32_t *)(uintptr_t)(fb->framebuffer_base + offset);
+    uint32_t *pixel = (uint32_t *)(uintptr_t)(fb_va + offset);
     *pixel = color;
     return 0;
 }
 
 int framebuffer_fill(uint32_t color)
 {
-    if (serial_high_alias_enabled()) {
-        /* TODO(ring3): map framebuffer MMIO into strict ring-3 kernel CR3. */
-        return -1;
-    }
     framebuffer_info_t *fb_info = framebuffer_info_slot();
-    if (fb_info->framebuffer_base == 0 ||
+    uint64_t fb_va = _fb_mmio_va();
+    if (fb_va == 0 || fb_info->framebuffer_base == 0 ||
         fb_info->framebuffer_size == 0 ||
         fb_info->framebuffer_width == 0 ||
         fb_info->framebuffer_height == 0 ||
@@ -138,7 +168,7 @@ int framebuffer_fill(uint32_t color)
         return -1;
     }
 
-    uint32_t *fb = (uint32_t *)(uintptr_t)fb_info->framebuffer_base;
+    uint32_t *fb = (uint32_t *)(uintptr_t)fb_va;
     uint64_t stride = fb_info->framebuffer_stride;
     uint64_t height = fb_info->framebuffer_height;
     uint64_t total = stride * height;
@@ -156,7 +186,8 @@ int framebuffer_fill(uint32_t color)
 static void framebuffer_draw_char(uint32_t col, uint32_t row, char ch, uint32_t fg, uint32_t bg)
 {
     framebuffer_info_t *fb_info = framebuffer_info_slot();
-    if (fb_info->framebuffer_base == 0 ||
+    uint64_t fb_va = _fb_mmio_va();
+    if (fb_va == 0 || fb_info->framebuffer_base == 0 ||
         fb_info->framebuffer_width == 0 ||
         fb_info->framebuffer_height == 0 ||
         fb_info->framebuffer_stride == 0) {
@@ -177,7 +208,7 @@ static void framebuffer_draw_char(uint32_t col, uint32_t row, char ch, uint32_t 
 
     uint32_t x0 = col * PANIC_FONT_W;
     uint32_t y0 = row * PANIC_FONT_H;
-    uint32_t *fb = (uint32_t *)(uintptr_t)fb_info->framebuffer_base;
+    uint32_t *fb = (uint32_t *)(uintptr_t)fb_va;
     uint32_t stride = fb_info->framebuffer_stride;
 
     for (uint32_t y = 0; y < PANIC_FONT_H; ++y) {
@@ -220,9 +251,6 @@ void framebuffer_panic_begin(void)
 
 void framebuffer_panic_write(const char *text)
 {
-    if (serial_high_alias_enabled()) {
-        return;
-    }
     framebuffer_info_t *fb_info = framebuffer_info_slot();
     uint32_t *panic_col = panic_col_slot();
     uint32_t *panic_row = panic_row_slot();

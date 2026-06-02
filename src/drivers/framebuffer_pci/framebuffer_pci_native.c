@@ -353,14 +353,12 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
     for (;;) {
         int rc = api->ipc_recv(ctx, ep, &msg);
         if (rc == ND_IPC_EMPTY) {
-            /* Drain ring output in bounded chunks so control IPC gets regular
-             * service windows even under sustained serial log throughput. */
-            int had_ring = g_console_ring_enabled
-                               ? drain_console_ring(ring, 256u)
-                               : 0;
-            if (!had_ring) {
-                api->sched_yield();
+            /* Drain ring output in bounded chunks and yield cooperatively so
+             * other processes get CPU time during console ring backlog replay. */
+            if (g_console_ring_enabled) {
+                drain_console_ring(ring, 256u);
             }
+            api->sched_yield();
             continue;
         }
         if (rc != ND_IPC_OK) {

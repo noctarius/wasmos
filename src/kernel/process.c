@@ -1844,7 +1844,19 @@ int process_preempt_from_irq(irq_frame_t *frame) {
         g_pm_preempt_safe_depth == 0) {
         return 0;
     }
-    if (!process_should_resched() || !preempt_is_enabled()) {
+    if (!process_should_resched()) {
+        return 0;
+    }
+    /* Check ring privilege before testing preempt_is_enabled.  Ring-0
+     * processes (native drivers, kernel workers) can never be preempted via
+     * IRQ regardless of the preempt nesting count.  Clear the reschedule
+     * request immediately to prevent the watchdog from reporting a false
+     * stall on cooperative-yield-only processes. */
+    if ((frame->cs & 0x3u) == 0x0u) {
+        process_clear_resched();
+        return 0;
+    }
+    if (!preempt_is_enabled()) {
         return 0;
     }
     if (!cpu_local()->current_process || cpu_local()->current_process->state != PROCESS_STATE_RUNNING) {
@@ -1883,6 +1895,10 @@ int process_preempt_from_irq(irq_frame_t *frame) {
             return 0;
         }
         if (from_kernel) {
+            /* Unreachable: ring-0 frames are caught by the early CS check
+             * above.  A from_kernel==1 result here can only arise from an
+             * invalid frame that already triggered the !valid path. */
+            process_clear_resched();
             return 0;
         }
     }

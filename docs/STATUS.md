@@ -1,6 +1,16 @@
 # Current Status
 
 - This status file is a snapshot, not a release changelog.
+- SMP infrastructure (Phase 0+1) is in place. `WASMOS_SMP` Kconfig bool
+  (depends on `WASMOS_IRQ_IOAPIC`, default off) gates all multi-core code.
+  Per-CPU data structure (`cpu_local_t`, `g_cpus[16]`) and `cpu_local()`
+  accessor are live; the BSP fully uses `g_cpus[0]` for its GDT, TSS, and
+  scheduler state. GS base MSR is set at the end of `x86_cpu_init()`.
+  `process.c` scheduler globals (`current_process`, `current_thread`,
+  `preempt_disable_count`, `in_scheduler`) now live in `cpu_local_t`.
+  No behavioral change at `WASMOS_SMP=0`. Full design in
+  `docs/architecture/28-smp.md`. Remaining phases (MADT CPU discovery,
+  LAPIC ICR helpers, AP trampoline, `smp_cpus_up`) are stubbed/planned.
 - Interrupt controller selection is now a build-time Kconfig choice
   (`WASMOS_IRQ_PIC` / `WASMOS_IRQ_LAPIC` / `WASMOS_IRQ_IOAPIC`, mapped to
   `WASMOS_IRQ_MODE` 0/1/2). PIC + PIT remains the default. LAPIC mode replaces

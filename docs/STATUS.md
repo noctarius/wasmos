@@ -15,7 +15,10 @@
   (`lapic_read_id`, `lapic_send_init_ipi`, `lapic_send_sipi`, `lapic_ap_enable`)
   added to `lapic.c`. AP trampoline in `smp_trampoline.S` (physical 0x1000)
   transitions 16-bit real → 32-bit PM → 64-bit LM and calls `smp_ap_c_entry`.
-  `smp_cpus_up()` performs INIT-SIPI-SIPI per AP, waits on `cpu->started`.
+  `smp_cpus_up()` performs INIT-SIPI-SIPI per AP, waits on `cpu->started`;
+  the trampoline code page is identity-mapped executable while the low data
+  slot page remains NX so AP startup can fetch from `0x1000` without opening
+  execute permission on the `0x0000` slot page.
   `smp_ap_c_entry()` loads per-CPU GDT/TSS/IDT/GS, enables AP LAPIC timer,
   sets `started=1`. No behavioral change at `WASMOS_SMP=0`. Full design in
   `docs/architecture/28-smp.md`.

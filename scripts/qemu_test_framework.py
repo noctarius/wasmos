@@ -30,6 +30,7 @@ class QemuConfig:
     # socket, or set monitor_socket directly to a path to use a specific one.
     enable_monitor: bool = False
     monitor_socket: str = ""
+    smp_count: int = 1
 
     def __post_init__(self) -> None:
         if self.userfs_dir:
@@ -67,6 +68,7 @@ def default_config(build_dir: str = "build") -> QemuConfig:
     isolate_esp = os.environ.get("WASMOS_QEMU_ISOLATE_ESP", "0") == "1"
     enable_monitor = os.environ.get("WASMOS_QEMU_MONITOR", "0") == "1"
     monitor_socket = os.environ.get("WASMOS_QEMU_MONITOR_SOCK", "")
+    smp_count = int(os.environ.get("WASMOS_QEMU_SMP_COUNT", "1"))
     if not ovmf_code:
         raise RuntimeError("OVMF_CODE not set (WASMOS_OVMF_CODE or CMakeCache.txt)")
     return QemuConfig(
@@ -77,6 +79,7 @@ def default_config(build_dir: str = "build") -> QemuConfig:
         isolate_esp=isolate_esp,
         enable_monitor=enable_monitor,
         monitor_socket=monitor_socket,
+        smp_count=smp_count,
     )
 
 
@@ -85,6 +88,10 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
         "qemu-system-x86_64",
         "-m",
         "512M",
+    ]
+    if cfg.smp_count > 1:
+        cmd += ["-smp", str(cfg.smp_count)]
+    cmd += [
         "-serial",
         "mon:stdio",
         "-drive",
@@ -557,6 +564,7 @@ class QemuSession:
                 isolate_esp=False,
                 enable_monitor=self.cfg.enable_monitor,
                 monitor_socket=self.cfg.monitor_socket,
+                smp_count=self.cfg.smp_count,
             )
             self._esp_runtime_dir = temp_root
             atexit.register(self._cleanup_esp_runtime_dir)
@@ -580,6 +588,7 @@ class QemuSession:
                 isolate_esp=False,
                 enable_monitor=True,
                 monitor_socket=monitor_socket,
+                smp_count=runtime_cfg.smp_count,
             )
 
         cmd = build_qemu_cmd(runtime_cfg)
@@ -758,11 +767,12 @@ def main():
     parser.add_argument("--esp", default="")
     parser.add_argument("--userfs", default="")
     parser.add_argument("--timeout", type=int, default=120)
+    parser.add_argument("--smp", type=int, default=1)
     args = parser.parse_args()
 
     if args.ovmf_code or args.esp:
         userfs = args.userfs or os.environ.get("WASMOS_USERFS", os.path.join(os.getcwd(), "userfs"))
-        cfg = QemuConfig(args.ovmf_code, args.ovmf_vars, args.esp, userfs)
+        cfg = QemuConfig(args.ovmf_code, args.ovmf_vars, args.esp, userfs, smp_count=args.smp)
     else:
         cfg = default_config()
 

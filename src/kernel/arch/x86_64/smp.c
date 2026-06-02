@@ -2,6 +2,7 @@
 #include "arch/x86_64/cpu_x86_64.h"
 #include "serial.h"
 #include "paging.h"
+#include "memory.h"
 
 #include <stdint.h>
 
@@ -28,11 +29,6 @@ uint32_t g_cpu_count = 1;
 
 /* SIPI vector: startup address = vector << 12 = 0x01 << 12 = 0x1000. */
 #define TRAMP_SIPI_VECTOR   0x01u
-
-/* Page-table flags for the identity-mapped trampoline pages. */
-#define PT_FLAG_PRESENT     (1ULL << 0)
-#define PT_FLAG_WRITE       (1ULL << 1)
-#define PT_FLAG_NX          (1ULL << 63)
 
 /* Static stacks for APs.  Kept in BSS so they are in the kernel's higher-half
  * virtual address space and are covered by the existing page table. */
@@ -77,12 +73,13 @@ write_slot_u16(uint64_t phys_addr, uint16_t value)
 static void
 smp_trampoline_setup(cpu_local_t *ap, uint64_t ap_rsp)
 {
-    uint64_t flags = PT_FLAG_PRESENT | PT_FLAG_WRITE | PT_FLAG_NX;
+    uint64_t data_flags = MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE;
+    uint64_t code_flags = MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_EXEC;
 
     /* Identity-map physical page 0x0000 (covers data slots at 0x500). */
-    paging_map_4k(0x0000ULL, 0x0000ULL, flags);
+    paging_map_4k(0x0000ULL, 0x0000ULL, data_flags);
     /* Identity-map physical page 0x1000 (the trampoline code). */
-    paging_map_4k(TRAMP_PHYS, TRAMP_PHYS, flags);
+    paging_map_4k(TRAMP_PHYS, TRAMP_PHYS, code_flags);
 
     /* Copy the trampoline binary to physical 0x1000. */
     uint32_t tramp_size = (uint32_t)(smp_trampoline_end - smp_trampoline_start);

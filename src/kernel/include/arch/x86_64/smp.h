@@ -14,10 +14,11 @@
  * it always returns &g_cpus[0]; on an SMP build it reads GS:0 (the self-
  * pointer written during per-CPU init).
  *
- * NOTE: g_sched_ctx and g_in_context_switch are NOT stored here — they remain
- * standalone globals because context_switch.S references them via RIP-relative
- * addressing. They will migrate to per-CPU in the SMP phase when the assembly
- * is updated to use GS-relative addressing.
+ * NOTE: g_in_context_switch remains a standalone global because context_switch.S
+ * writes it via RIP-relative addressing. It will migrate to per-CPU when the
+ * assembly is updated to use GS-relative addressing.
+ * sched_ctx was moved here; process_preempt_trampoline uses the C helper
+ * cpu_local_sched_ctx() to obtain its address without needing an asm offset.
  */
 
 #define WASMOS_MAX_CPUS 16
@@ -53,6 +54,20 @@ typedef struct cpu_local {
 
     /* Protects the ready-queue (needed under SMP for cross-CPU wake-ups). */
     spinlock_t         ready_queue_lock;
+
+    /* Scheduler context — saved here on every context switch so concurrent CPUs
+     * cannot clobber each other's return frame (was a shared global g_sched_ctx). */
+    process_context_t  sched_ctx;
+
+    /* Per-CPU reschedule flag and watchdog state (formerly file-static globals). */
+    volatile uint8_t   need_resched;
+    uint32_t           current_pid;
+    uint64_t           resched_pending_since_tick;
+    uint64_t           resched_stall_reports;
+
+    /* Round-robin scheduling hint and last-run classification (per-CPU). */
+    uint32_t           last_index;
+    process_run_result_t last_run_result;
 } cpu_local_t;
 
 extern cpu_local_t g_cpus[WASMOS_MAX_CPUS];

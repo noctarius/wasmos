@@ -27,9 +27,6 @@ static process_t g_processes[PROCESS_MAX_COUNT];
 /* FIXME(process-list): migrate to kernel list storage after providing a
  * boot-safe list allocator path for early scheduler init/spawn. */
 static uint32_t g_next_pid;
-static uint32_t g_last_index;
-static uint32_t g_current_pid;
-static volatile uint8_t g_need_resched;
 
 static process_t *process_find_by_pid(uint32_t pid);
 static void process_trampoline(void);
@@ -37,15 +34,13 @@ static uint32_t g_ready_queue[THREAD_MAX_COUNT];
 static uint32_t g_ready_head;
 static uint32_t g_ready_tail;
 static uint32_t g_ready_count;
-static process_run_result_t g_last_run_result;
-process_context_t g_sched_ctx;
 static process_t *g_idle_process;
 volatile uint8_t g_in_context_switch;
-/* NOTE: current_process, current_thread, preempt_disable_count, and
- * in_scheduler live in cpu_local_t (accessed via cpu_local()->field).
- * g_sched_ctx and g_in_context_switch remain here because context_switch.S
- * addresses them via RIP-relative; they will move to per-CPU in the SMP
- * phase when the assembly is updated. */
+/* NOTE: current_process, current_thread, preempt_disable_count, in_scheduler,
+ * sched_ctx, need_resched, current_pid, resched_pending_since_tick,
+ * resched_stall_reports, last_index, and last_run_result live in cpu_local_t.
+ * g_in_context_switch remains here because context_switch.S addresses it via
+ * RIP-relative; it will move to per-CPU when the assembly is updated. */
 static uint64_t g_ctx_watch_logged;
 static uint64_t g_ctx_watch_last_logged_rip;
 static uint64_t g_ctx_watch_last_logged_rsp;
@@ -54,8 +49,6 @@ static uint64_t g_ctx_watch_last_logged_reason;
 static uint8_t g_preempt_smoke_logged;
 static uint8_t g_sched_progress_logged;
 static uint64_t g_sched_switch_count;
-static uint64_t g_resched_pending_since_tick;
-static uint64_t g_resched_stall_reports;
 static uint64_t g_trap_frame_invalid_reports;
 
 static inline uintptr_t
@@ -631,20 +624,20 @@ static void process_trampoline(void) {
             preempt_enable();
         }
         if (!cpu_local()->current_process || !cpu_local()->current_process->entry) {
-            g_last_run_result = PROCESS_RUN_IDLE;
+            cpu_local()->last_run_result = PROCESS_RUN_IDLE;
         } else {
             uintptr_t entry_ptr = process_kernel_alias_addr((uintptr_t)cpu_local()->current_process->entry);
             process_entry_t entry_fn = (process_entry_t)(void *)entry_ptr;
-            g_last_run_result = entry_fn(cpu_local()->current_process, cpu_local()->current_process->arg);
+            cpu_local()->last_run_result = entry_fn(cpu_local()->current_process, cpu_local()->current_process->arg);
         }
         critical_section_enter();
         cpu_local()->in_scheduler = 1;
         process_context_t *ctx = process_sched_ctx_for_thread(cpu_local()->current_process, cpu_local()->current_thread);
         if (!ctx) {
-            g_last_run_result = PROCESS_RUN_IDLE;
+            cpu_local()->last_run_result = PROCESS_RUN_IDLE;
             continue;
         }
-        context_switch_high(ctx, &g_sched_ctx);
+        context_switch_high(ctx, &cpu_local()->sched_ctx);
         if (g_ctx_watch_hits != g_ctx_watch_logged) {
             g_ctx_watch_logged = g_ctx_watch_hits;
             process_log_ctx_watch_if_changed();
@@ -894,13 +887,13 @@ static void process_reap(process_t *proc) {
 
 void process_init(void) {
     g_next_pid = 1;
-    g_last_index = 0;
-    g_current_pid = 0;
-    g_need_resched = 0;
+    cpu_local()->last_index = 0;
+    cpu_local()->current_pid = 0;
+    cpu_local()->need_resched = 0;
     ready_queue_reset();
     cpu_local()->current_process = 0;
     cpu_local()->current_thread = 0;
-    g_last_run_result = PROCESS_RUN_IDLE;
+    cpu_local()->last_run_result = PROCESS_RUN_IDLE;
     cpu_local()->preempt_disable_count = 0;
     g_idle_process = 0;
     cpu_local()->in_scheduler = 1;
@@ -919,8 +912,8 @@ void process_init(void) {
     g_preempt_smoke_logged = 0;
     g_sched_progress_logged = 0;
     g_sched_switch_count = 0;
-    g_resched_pending_since_tick = 0;
-    g_resched_stall_reports = 0;
+    cpu_local()->resched_pending_since_tick = 0;
+    cpu_local()->resched_stall_reports = 0;
     g_trap_frame_invalid_reports = 0;
     g_ctx_restore_ctx = 0;
     g_ctx_restore_rip = 0;
@@ -932,11 +925,17 @@ void process_init(void) {
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         process_reset_slot(&g_processes[i]);
     }
-    g_sched_ctx.root_table = paging_get_root_table();
+    cpu_local()->sched_ctx.root_table = paging_get_root_table();
+}
+
+process_context_t *
+cpu_local_sched_ctx(void)
+{
+    return &cpu_local()->sched_ctx;
 }
 
 int process_spawn(const char *name, process_entry_t entry, void *arg, uint32_t *out_pid) {
-    return process_spawn_as(g_current_pid, name, entry, arg, out_pid);
+    return process_spawn_as(cpu_local()->current_pid, name, entry, arg, out_pid);
 }
 
 static int
@@ -1312,8 +1311,7 @@ process_t *process_find_by_context(uint32_t context_id) {
 }
 
 uint32_t process_current_pid(void) {
-    uint32_t *pid_ptr = (uint32_t *)(void *)process_kernel_alias_addr((uintptr_t)&g_current_pid);
-    return *pid_ptr;
+    return cpu_local()->current_pid;
 }
 
 void process_set_exit_status(process_t *process, int32_t exit_status) {
@@ -1327,12 +1325,12 @@ void process_yield(process_run_result_t result) {
     if (!cpu_local()->current_process) {
         return;
     }
-    g_last_run_result = result;
+    cpu_local()->last_run_result = result;
     process_context_t *ctx = process_sched_ctx_for_thread(cpu_local()->current_process, cpu_local()->current_thread);
     if (!ctx) {
         return;
     }
-    context_switch_high(ctx, &g_sched_ctx);
+    context_switch_high(ctx, &cpu_local()->sched_ctx);
 }
 
 void process_set_require_explicit_ready(process_t *process) {
@@ -1473,10 +1471,10 @@ int process_kill(uint32_t pid, int32_t exit_status) {
     if (!target) {
         return -1;
     }
-    if (pid == g_current_pid) {
+    if (pid == cpu_local()->current_pid) {
         return -1;
     }
-    if (g_current_pid != 0 && target->parent_pid != g_current_pid) {
+    if (cpu_local()->current_pid != 0 && target->parent_pid != cpu_local()->current_pid) {
         return -1;
     }
     if (target->state == PROCESS_STATE_ZOMBIE) {
@@ -1623,7 +1621,7 @@ static int process_schedule_once_impl(void) {
     }
     process_validate_context(proc, "schedule");
     critical_section_enter();
-    g_current_pid = proc->pid;
+    cpu_local()->current_pid = proc->pid;
     cpu_local()->current_process = proc;
     cpu_local()->current_thread = thread;
     if (cpu_local()->current_thread->owner_pid != cpu_local()->current_process->pid) {
@@ -1635,12 +1633,12 @@ static int process_schedule_once_impl(void) {
      * to the scheduled process stack so user-mode interrupts/syscalls have a
      * deterministic kernel stack landing point. */
     cpu_set_kernel_stack((uint64_t)(proc->stack_top - 16u));
-    g_sched_ctx.root_table = paging_get_root_table();
+    cpu_local()->sched_ctx.root_table = paging_get_root_table();
     if (!run_ctx) {
         klog_write("[sched] thread ctx missing\n");
         critical_section_enter();
         cpu_local()->current_process = 0;
-        g_current_pid = 0;
+        cpu_local()->current_pid = 0;
         cpu_local()->current_thread = 0;
         thread_set_current(0);
         critical_section_leave();
@@ -1651,26 +1649,26 @@ static int process_schedule_once_impl(void) {
         klog_write("[sched] target root missing\n");
         critical_section_enter();
         cpu_local()->current_process = 0;
-        g_current_pid = 0;
+        cpu_local()->current_pid = 0;
         cpu_local()->current_thread = 0;
         thread_set_current(0);
         critical_section_leave();
         return 1;
     }
     if (thread->is_kernel_worker) {
-        g_last_run_result = process_run_worker_on_stack(proc, thread);
+        cpu_local()->last_run_result = process_run_worker_on_stack(proc, thread);
     } else {
-        context_switch_high(&g_sched_ctx, run_ctx);
+        context_switch_high(&cpu_local()->sched_ctx, run_ctx);
     }
     g_sched_switch_count++;
     if (!g_sched_progress_logged && g_sched_switch_count >= SCHED_PROGRESS_MARKER_SWITCHES) {
         g_sched_progress_logged = 1;
         klog_write("[test] sched progress ok\n");
     }
-    process_run_result_t result = g_last_run_result;
+    process_run_result_t result = cpu_local()->last_run_result;
     critical_section_enter();
     cpu_local()->current_process = 0;
-    g_current_pid = 0;
+    cpu_local()->current_pid = 0;
     cpu_local()->current_thread = 0;
     thread_set_current(0);
     critical_section_leave();
@@ -1679,8 +1677,8 @@ static int process_schedule_once_impl(void) {
         /* A concurrent kill/exit can mark the owner zombie while this thread
          * is still returning from its timeslice. Never requeue it afterwards. */
         process_try_auto_reap(proc);
-        g_last_index = proc->pid;
-        g_need_resched = 0;
+        cpu_local()->last_index = proc->pid;
+        cpu_local()->need_resched = 0;
         return 1;
     }
 
@@ -1775,19 +1773,19 @@ static int process_schedule_once_impl(void) {
         ready_queue_enqueue(thread);
     }
 
-    g_last_index = proc->pid;
+    cpu_local()->last_index = proc->pid;
     process_try_auto_reap(proc);
-    g_need_resched = 0;
+    cpu_local()->need_resched = 0;
     return (result == PROCESS_RUN_YIELDED) ? 0 : 1;
 }
 
 void process_tick(void) {
     uint64_t now = timer_ticks();
-    if (g_current_pid == 0 || !cpu_local()->current_thread) {
-        g_resched_pending_since_tick = 0;
+    if (cpu_local()->current_pid == 0 || !cpu_local()->current_thread) {
+        cpu_local()->resched_pending_since_tick = 0;
         return;
     }
-    process_t *proc = process_find_by_pid(g_current_pid);
+    process_t *proc = process_find_by_pid(cpu_local()->current_pid);
     if (!proc || proc->state != PROCESS_STATE_RUNNING) {
         return;
     }
@@ -1795,39 +1793,41 @@ void process_tick(void) {
     if (cpu_local()->current_thread->ticks_remaining > 0) {
         cpu_local()->current_thread->ticks_remaining--;
         if (cpu_local()->current_thread->ticks_remaining == 0) {
-            g_need_resched = 1;
+            cpu_local()->need_resched = 1;
             if (!g_preempt_smoke_logged) {
                 g_preempt_smoke_logged = 1;
                 klog_write("[test] preempt ok\n");
             }
         }
     }
-    if (g_need_resched) {
-        if (g_resched_pending_since_tick == 0) {
-            g_resched_pending_since_tick = now;
-        } else if ((now - g_resched_pending_since_tick) >= SCHED_RESCHED_STALL_TICKS) {
-            g_resched_stall_reports++;
+    if (cpu_local()->need_resched) {
+        if (cpu_local()->resched_pending_since_tick == 0) {
+            cpu_local()->resched_pending_since_tick = now;
+        } else if ((now - cpu_local()->resched_pending_since_tick) >= SCHED_RESCHED_STALL_TICKS) {
+            cpu_local()->resched_stall_reports++;
             klog_write("[watchdog] resched stall ticks=");
-            serial_write_hex64(now - g_resched_pending_since_tick);
+            serial_write_hex64(now - cpu_local()->resched_pending_since_tick);
+            klog_write("[watchdog] cpu=");
+            serial_write_hex64(cpu_local()->cpu_id);
             klog_write("[watchdog] pid=");
-            serial_write_hex64(g_current_pid);
+            serial_write_hex64(cpu_local()->current_pid);
             klog_write("[watchdog] reports=");
-            serial_write_hex64(g_resched_stall_reports);
+            serial_write_hex64(cpu_local()->resched_stall_reports);
             klog_write("\n");
-            g_resched_pending_since_tick = now;
+            cpu_local()->resched_pending_since_tick = now;
         }
     } else {
-        g_resched_pending_since_tick = 0;
+        cpu_local()->resched_pending_since_tick = 0;
     }
 }
 
 int process_should_resched(void) {
-    return g_need_resched != 0;
+    return cpu_local()->need_resched != 0;
 }
 
 void process_clear_resched(void) {
-    g_need_resched = 0;
-    g_resched_pending_since_tick = 0;
+    cpu_local()->need_resched = 0;
+    cpu_local()->resched_pending_since_tick = 0;
 }
 
 int process_preempt_from_irq(irq_frame_t *frame) {
@@ -1849,9 +1849,6 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     }
     if (!cpu_local()->current_process || cpu_local()->current_process->state != PROCESS_STATE_RUNNING) {
         process_clear_resched();
-        return 0;
-    }
-    if (cpu_local()->current_process->in_hostcall) {
         return 0;
     }
     {
@@ -1939,7 +1936,7 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     thread_t *thread = process_thread_for_transition(cpu_local()->current_process);
     process_set_ready(cpu_local()->current_process, thread);
     ready_queue_enqueue(thread);
-    g_last_run_result = PROCESS_RUN_YIELDED;
+    cpu_local()->last_run_result = PROCESS_RUN_YIELDED;
     process_clear_resched();
     frame->cs = KERNEL_CS_SELECTOR;
     frame->rip = (uint64_t)process_kernel_alias_addr((uintptr_t)process_preempt_trampoline);
@@ -1994,7 +1991,7 @@ void pm_preempt_safe_leave(void) {
 }
 
 uint64_t process_watchdog_issue_count(void) {
-    return g_resched_stall_reports + g_trap_frame_invalid_reports;
+    return cpu_local()->resched_stall_reports + g_trap_frame_invalid_reports;
 }
 
 uint32_t process_count_active(void) {

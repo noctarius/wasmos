@@ -36,7 +36,22 @@
 
 /* RTE low-word field masks. */
 #define IOAPIC_RTE_MASK_BIT   (1u << 16)
-#define IOAPIC_RTE_EDGE       (0u << 15)
+/*
+ * ISA IRQs use level-triggered mode here even though the ISA bus default is
+ * edge-triggered.  The reason is the mask-based dispatch model: after delivery
+ * the kernel masks the RTE, dispatches an IPC to the driver, and unmasks only
+ * after the driver reads the hardware register (irq_ack).  In edge-triggered
+ * mode the IOAPIC silently discards any rising edge that arrives while the RTE
+ * is masked — a new edge is required to re-arm delivery.  For PS/2 devices
+ * (i8042 IRQ 1 / IRQ 12) the IRQ line stays asserted while OBF is set; when
+ * the driver reads OBF the i8042 immediately loads the next queued byte back
+ * into OBF, so the line never deasserts long enough for a new edge.  With
+ * level-triggered mode, unmasking the RTE while the line is still HIGH causes
+ * an immediate re-delivery, correctly draining back-to-back bytes.  The LAPIC
+ * EOI also broadcasts an EOI signal (EOIS) back to the IOAPIC for
+ * level-triggered vectors, clearing the Remote IRR automatically.
+ */
+#define IOAPIC_RTE_LEVEL      (1u << 15)
 #define IOAPIC_RTE_ACTHI      (0u << 13)
 #define IOAPIC_RTE_FIXED      (0u << 8)
 
@@ -196,7 +211,7 @@ ioapic_program_rtes(void)
     for (uint32_t irq = 0; irq < 16u; irq++) {
         uint32_t vec = IRQ_VECTOR_BASE + irq;
         /* Start masked; drivers unmask via irq_unmask() after registration. */
-        uint32_t lo = IOAPIC_RTE_MASK_BIT | IOAPIC_RTE_EDGE |
+        uint32_t lo = IOAPIC_RTE_MASK_BIT | IOAPIC_RTE_LEVEL |
                       IOAPIC_RTE_ACTHI    | IOAPIC_RTE_FIXED | vec;
         uint32_t hi = 0u; /* physical dest, LAPIC ID = 0 (BSP) */
         uint32_t gsi = g_gsi_map[irq];

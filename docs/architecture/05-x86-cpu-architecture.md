@@ -186,16 +186,31 @@ Builds on LAPIC mode (LAPIC timer and EOI are identical). `ioapic_init(boot_info
 
 3. **RTE programming**: programs all 16 ISA Redirection Table Entries via
    indirect MMIO access (IOREGSEL at offset `0x00`, IOWIN at `0x10`). Each RTE
-   is written masked (`bit 16 = 1`), edge-triggered, active-high, fixed delivery
-   to physical LAPIC 0 (BSP), at vector `IRQ_VECTOR_BASE + isa_irq` (32–47).
+   is written masked (`bit 16 = 1`), **level-triggered**, active-high, fixed
+   delivery to physical LAPIC 0 (BSP), at vector `IRQ_VECTOR_BASE + isa_irq`
+   (32–47).
+
+   ISA bus defaults are edge-triggered, but the kernel uses level-triggered for
+   all 16 RTE entries because of the mask-based dispatch model: the RTE is
+   masked immediately after delivery and unmasked only after the driver reads
+   the hardware register (`irq_ack`).  In edge-triggered mode, any rising edge
+   that arrives while the RTE is masked is silently discarded.  PS/2 devices
+   (i8042 IRQ 1 / IRQ 12) hold the IRQ line HIGH while OBF is set and
+   immediately reload OBF from their internal buffer — so the line never
+   deasserts between back-to-back bytes.  With level-triggered mode, unmasking
+   the RTE re-delivers immediately if the line is still HIGH, correctly draining
+   queued bytes.
 
 Drivers unmask their IRQ line via the existing `irq_register()` → `irq_unmask()`
 → `x86_irq_unmask()` → `ioapic_unmask_irq()` path, which clears bit 16 of the
 RTE's low word. Re-masking after dispatch (`x86_irq_mask()` → `ioapic_mask_irq()`)
-prevents level-triggered flooding; the driver re-enables via `irq_ack()`.
+prevents re-fire before the driver reads the device register; the driver
+re-enables via `irq_ack()`.
 
-ISA IRQs are edge-triggered; only a LAPIC EOI is required after each IRQ — the
-I/O APIC does not need a separate write.
+For level-triggered RTEs the LAPIC automatically broadcasts an EOIS (EOI
+signal) to all I/O APICs when EOI is written, clearing the Remote IRR bit and
+allowing re-delivery once the RTE is unmasked.  No separate IOAPIC EOI write is
+needed from software.
 
 #### IRQ Route Table
 

@@ -58,7 +58,7 @@ config WASMOS_IRQ_PIC
     bool "PIC (legacy 8259 + PIT)"
 
 config WASMOS_IRQ_LAPIC
-    bool "LAPIC only (Local APIC + LAPIC timer, no external device IRQs)"
+    bool "LAPIC only (Local APIC + LAPIC timer, 8259 via LINT0 ExtINT)"
 
 config WASMOS_IRQ_IOAPIC
     bool "LAPIC + I/O APIC (full APIC)"

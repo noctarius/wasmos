@@ -170,6 +170,11 @@
   process-manager during sync spawn instead of looping respawns after the boot
   ACPI rules load. The missing binding was a latent bug masked before SMP by
   the old non-deterministic auto-ready path for service/driver children.
+- `sysinit` now gives `start` commands a longer sync-spawn timeout so heavier
+  native services such as `font-service` can finish boot-time warmup and send
+  their explicit ready signal before `sysinit` aborts the script. Under SMP,
+  the old 5-second timeout was too short even though the child continued
+  initializing and later reported ready correctly.
 - RTC IPC message IDs and payload packing are explicitly defined in shared
   kernel/user headers (`rtc_ipc.h`) for a single client/driver contract.
 - CLI builtin `echo` and script `echo` share one parser/expander path in libc

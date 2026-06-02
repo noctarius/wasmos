@@ -133,6 +133,7 @@ lapic_enable(void)
 
 /* --------------------------------------------------------- 8259 PIC disable */
 
+#if WASMOS_IRQ_MODE == 2
 static void
 pic_disable(void)
 {
@@ -140,6 +141,7 @@ pic_disable(void)
     outb(0x21u, 0xFFu);
     outb(0xA1u, 0xFFu);
 }
+#endif
 
 /* --------------------------------- PIT channel 2 calibration (one-shot 10 ms) */
 

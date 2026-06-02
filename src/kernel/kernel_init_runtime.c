@@ -306,11 +306,7 @@ kernel_init_entry(process_t *process, void *arg)
     }
 
     if (state->phase == 1) {
-        int recv_rc = ipc_recv_for(process->context_id, state->reply_endpoint, &msg);
-        if (recv_rc == IPC_EMPTY) {
-            process_block_on_ipc(process);
-            return PROCESS_RUN_BLOCKED;
-        }
+        int recv_rc = ipc_recv_blocking_for(process->context_id, state->reply_endpoint, &msg);
         if (recv_rc != IPC_OK) {
             return PROCESS_RUN_YIELDED;
         }
@@ -396,11 +392,7 @@ kernel_init_entry(process_t *process, void *arg)
     }
 
     if (state->phase == 4) {
-        int recv_rc = ipc_recv_for(process->context_id, state->reply_endpoint, &msg);
-        if (recv_rc == IPC_EMPTY) {
-            process_block_on_ipc(process);
-            return PROCESS_RUN_BLOCKED;
-        }
+        int recv_rc = ipc_recv_blocking_for(process->context_id, state->reply_endpoint, &msg);
         if (recv_rc != IPC_OK) {
             return PROCESS_RUN_YIELDED;
         }

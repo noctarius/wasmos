@@ -84,11 +84,7 @@ ipc_wait_test_entry(process_t *process, void *arg)
         return PROCESS_RUN_EXITED;
     }
 
-    int rc = ipc_recv_for(process->context_id, state->endpoint, &msg);
-    if (rc == IPC_EMPTY) {
-        process_block_on_ipc(process);
-        return PROCESS_RUN_BLOCKED;
-    }
+    int rc = ipc_recv_blocking_for(process->context_id, state->endpoint, &msg);
     if (rc != IPC_OK) {
         klog_write("[test] ipc recv failed\n");
         process_set_exit_status(process, -1);

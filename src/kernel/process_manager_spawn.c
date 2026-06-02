@@ -511,11 +511,7 @@ pm_recv_fs_reply(uint32_t source_context_id,
 {
     ipc_message_t msg;
     for (;;) {
-        int rc = ipc_recv_for(source_context_id, source_endpoint, &msg);
-        if (rc == IPC_EMPTY) {
-            process_yield(PROCESS_RUN_BLOCKED);
-            continue;
-        }
+        int rc = ipc_recv_blocking_for(source_context_id, source_endpoint, &msg);
         if (rc != IPC_OK) {
             return -1;
         }

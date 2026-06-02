@@ -33,6 +33,19 @@
   endpoint spinlocks are SMP-safe. No behavioral change at `WASMOS_SMP=0`.
   Full design in
   `docs/architecture/28-smp.md`.
+- SMP runtime hardening now also covers the AP-join scheduler path and the
+  blocking IPC receive path: the scheduler installs `cpu_local()->current_*`
+  ownership before marking a thread running, clears ready-queue membership
+  while still under the shared queue lock, and drops CPU ownership only after
+  the returned run result is fully processed. Blocking kernel-side receive
+  loops now share `ipc_recv_blocking_for()`, which retries the receive after
+  `process_block_on_ipc()` and restores process/thread `RUNNING` state if a
+  sender wins the wake-vs-yield race window. The equivalent WASM hostcall path
+  (`wasmos_ipc_recv`) now restores the current thread state on the same race.
+  These fixes remove earlier SMP failures during AP scheduler join, init/fs
+  service startup, and PM sync spawn waits; current bring-up now progresses
+  through `device-manager` and PCI inventory before the next unresolved later
+  boot hang.
 - Interrupt controller selection is now a build-time Kconfig choice
   (`WASMOS_IRQ_PIC` / `WASMOS_IRQ_LAPIC` / `WASMOS_IRQ_IOAPIC`, mapped to
   `WASMOS_IRQ_MODE` 0/1/2). PIC + PIT remains the default. LAPIC mode replaces

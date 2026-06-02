@@ -817,11 +817,7 @@ x86_syscall_handler(syscall_frame_t *frame)
             return 0;
         }
         for (;;) {
-            rc = ipc_recv_for(proc->context_id, source_endpoint, &resp);
-            if (rc == IPC_EMPTY) {
-                process_yield(PROCESS_RUN_BLOCKED);
-                continue;
-            }
+            rc = ipc_recv_blocking_for(proc->context_id, source_endpoint, &resp);
             if (rc != IPC_OK) {
                 return (uint64_t)(int64_t)rc;
             }

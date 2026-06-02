@@ -273,6 +273,7 @@ static void process_sched_invariant_fail(const char *msg, uint64_t a, uint64_t b
 static void process_set_blocked(process_t *proc, thread_t *thread, process_block_reason_t reason, thread_block_reason_t thread_reason);
 static void process_set_ready(process_t *proc, thread_t *thread);
 static void process_set_running(process_t *proc, thread_t *thread);
+static void process_clear_current_cpu(void);
 static uint8_t process_has_waiters(uint32_t target_pid);
 static void process_try_auto_reap(process_t *proc);
 static process_run_result_t process_thread_spawn_default_worker(process_t *process, uint32_t tid, void *arg);
@@ -532,7 +533,7 @@ static int ready_queue_enqueue(thread_t *thread) {
         process_sched_invariant_fail("enqueue non-ready thread", thread->tid, thread->state);
     }
     process_t *proc = process_owner_for_thread(thread);
-    if (!proc || thread->in_ready_queue) {
+    if (!proc) {
         return 0;
     }
     /* The idle task is scheduled as a fallback only and never participates in
@@ -540,12 +541,21 @@ static int ready_queue_enqueue(thread_t *thread) {
     if (proc->is_idle) {
         return 0;
     }
-    if (g_ready_count >= THREAD_MAX_COUNT) {
-        return -1;
-    }
 #if WASMOS_SMP
     spinlock_lock(&g_ready_queue_lock);
 #endif
+    if (thread->in_ready_queue) {
+#if WASMOS_SMP
+        spinlock_unlock(&g_ready_queue_lock);
+#endif
+        return 0;
+    }
+    if (g_ready_count >= THREAD_MAX_COUNT) {
+#if WASMOS_SMP
+        spinlock_unlock(&g_ready_queue_lock);
+#endif
+        return -1;
+    }
     g_ready_queue[g_ready_tail] = thread->tid;
     g_ready_tail = (g_ready_tail + 1u) % THREAD_MAX_COUNT;
     g_ready_count++;
@@ -557,7 +567,9 @@ static int ready_queue_enqueue(thread_t *thread) {
 }
 
 static thread_t *ready_queue_dequeue(void) {
-    while (g_ready_count > 0) {
+    for (;;) {
+        thread_t *thread = 0;
+        process_t *proc = 0;
 #if WASMOS_SMP
         spinlock_lock(&g_ready_queue_lock);
 #endif
@@ -570,17 +582,19 @@ static thread_t *ready_queue_dequeue(void) {
         uint32_t tid = g_ready_queue[g_ready_head];
         g_ready_head = (g_ready_head + 1u) % THREAD_MAX_COUNT;
         g_ready_count--;
+        thread = thread_get(tid);
+        if (thread) {
+            thread->in_ready_queue = 0;
+        }
 #if WASMOS_SMP
         spinlock_unlock(&g_ready_queue_lock);
 #endif
-        thread_t *thread = thread_get(tid);
-        process_t *proc = process_owner_for_thread(thread);
+        proc = process_owner_for_thread(thread);
         if (!thread || !proc) {
             /* Owner/thread may already be reaped after kill/exit races. Treat
              * stale ready-queue entries as droppable. */
             continue;
         }
-        thread->in_ready_queue = 0;
         if (thread->state == THREAD_STATE_READY &&
             proc->state == PROCESS_STATE_READY) {
             return thread;
@@ -1610,7 +1624,6 @@ static int process_schedule_once_impl(void) {
         }
     }
 
-    process_set_running(proc, thread);
     if (thread->ticks_remaining == 0) {
         thread->ticks_remaining = thread->time_slice_ticks;
     }
@@ -1626,6 +1639,7 @@ static int process_schedule_once_impl(void) {
     cpu_local()->current_pid = proc->pid;
     cpu_local()->current_process = proc;
     cpu_local()->current_thread = thread;
+    process_set_running(proc, thread);
     if (cpu_local()->current_thread->owner_pid != cpu_local()->current_process->pid) {
         process_sched_invariant_fail("current owner mismatch", cpu_local()->current_thread->owner_pid, cpu_local()->current_process->pid);
     }
@@ -1638,23 +1652,13 @@ static int process_schedule_once_impl(void) {
     cpu_local()->sched_ctx.root_table = paging_get_root_table();
     if (!run_ctx) {
         klog_write("[sched] thread ctx missing\n");
-        critical_section_enter();
-        cpu_local()->current_process = 0;
-        cpu_local()->current_pid = 0;
-        cpu_local()->current_thread = 0;
-        thread_set_current(0);
-        critical_section_leave();
+        process_clear_current_cpu();
         return 1;
     }
     run_ctx->root_table = mm_context_root_table(proc->context_id);
     if (run_ctx->root_table == 0) {
         klog_write("[sched] target root missing\n");
-        critical_section_enter();
-        cpu_local()->current_process = 0;
-        cpu_local()->current_pid = 0;
-        cpu_local()->current_thread = 0;
-        thread_set_current(0);
-        critical_section_leave();
+        process_clear_current_cpu();
         return 1;
     }
     if (thread->is_kernel_worker) {
@@ -1668,12 +1672,6 @@ static int process_schedule_once_impl(void) {
         klog_write("[test] sched progress ok\n");
     }
     process_run_result_t result = cpu_local()->last_run_result;
-    critical_section_enter();
-    cpu_local()->current_process = 0;
-    cpu_local()->current_pid = 0;
-    cpu_local()->current_thread = 0;
-    thread_set_current(0);
-    critical_section_leave();
 
     if (proc->state == PROCESS_STATE_ZOMBIE || proc->exiting) {
         /* A concurrent kill/exit can mark the owner zombie while this thread
@@ -1681,6 +1679,7 @@ static int process_schedule_once_impl(void) {
         process_try_auto_reap(proc);
         cpu_local()->last_index = proc->pid;
         cpu_local()->need_resched = 0;
+        process_clear_current_cpu();
         return 1;
     }
 
@@ -1778,6 +1777,7 @@ static int process_schedule_once_impl(void) {
     cpu_local()->last_index = proc->pid;
     process_try_auto_reap(proc);
     cpu_local()->need_resched = 0;
+    process_clear_current_cpu();
     return (result == PROCESS_RUN_YIELDED) ? 0 : 1;
 }
 
@@ -2240,6 +2240,17 @@ process_set_running(process_t *proc, thread_t *thread)
     }
     proc->state = PROCESS_STATE_RUNNING;
     thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
+}
+
+static void
+process_clear_current_cpu(void)
+{
+    critical_section_enter();
+    cpu_local()->current_process = 0;
+    cpu_local()->current_pid = 0;
+    cpu_local()->current_thread = 0;
+    thread_set_current(0);
+    critical_section_leave();
 }
 
 static void

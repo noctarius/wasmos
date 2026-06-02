@@ -1,16 +1,24 @@
 # Current Status
 
 - This status file is a snapshot, not a release changelog.
-- SMP infrastructure (Phase 0+1) is in place. `WASMOS_SMP` Kconfig bool
+- SMP infrastructure (Phases 0–9) is complete. `WASMOS_SMP` Kconfig bool
   (depends on `WASMOS_IRQ_IOAPIC`, default off) gates all multi-core code.
   Per-CPU data structure (`cpu_local_t`, `g_cpus[16]`) and `cpu_local()`
   accessor are live; the BSP fully uses `g_cpus[0]` for its GDT, TSS, and
   scheduler state. GS base MSR is set at the end of `x86_cpu_init()`.
   `process.c` scheduler globals (`current_process`, `current_thread`,
   `preempt_disable_count`, `in_scheduler`) now live in `cpu_local_t`.
-  No behavioral change at `WASMOS_SMP=0`. Full design in
-  `docs/architecture/28-smp.md`. Remaining phases (MADT CPU discovery,
-  LAPIC ICR helpers, AP trampoline, `smp_cpus_up`) are stubbed/planned.
+  Spinlock per-CPU IRQ-disable state (`irq_disable_depth`, `irq_saved_flags`)
+  moved from file-static globals to `cpu_local_t`; ready-queue spinlock added.
+  MADT type-0 (Processor Local APIC) CPU discovery in `ioapic.c` populates
+  `g_cpus[1..N-1]` with AP APIC IDs when `WASMOS_SMP=1`. LAPIC ICR helpers
+  (`lapic_read_id`, `lapic_send_init_ipi`, `lapic_send_sipi`, `lapic_ap_enable`)
+  added to `lapic.c`. AP trampoline in `smp_trampoline.S` (physical 0x1000)
+  transitions 16-bit real → 32-bit PM → 64-bit LM and calls `smp_ap_c_entry`.
+  `smp_cpus_up()` performs INIT-SIPI-SIPI per AP, waits on `cpu->started`.
+  `smp_ap_c_entry()` loads per-CPU GDT/TSS/IDT/GS, enables AP LAPIC timer,
+  sets `started=1`. No behavioral change at `WASMOS_SMP=0`. Full design in
+  `docs/architecture/28-smp.md`.
 - Interrupt controller selection is now a build-time Kconfig choice
   (`WASMOS_IRQ_PIC` / `WASMOS_IRQ_LAPIC` / `WASMOS_IRQ_IOAPIC`, mapped to
   `WASMOS_IRQ_MODE` 0/1/2). PIC + PIT remains the default. LAPIC mode replaces

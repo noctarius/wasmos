@@ -6,6 +6,7 @@
 #include "paging.h"
 #include "cpu.h"
 #include "arch/x86_64/smp.h"
+#include "spinlock.h"
 #include "wasm3_shim.h"
 #include "ipc.h"
 #include "timer.h"
@@ -547,18 +548,36 @@ static int ready_queue_enqueue(thread_t *thread) {
     if (g_ready_count >= THREAD_MAX_COUNT) {
         return -1;
     }
+#if WASMOS_SMP
+    spinlock_lock(&cpu_local()->ready_queue_lock);
+#endif
     g_ready_queue[g_ready_tail] = thread->tid;
     g_ready_tail = (g_ready_tail + 1u) % THREAD_MAX_COUNT;
     g_ready_count++;
     thread->in_ready_queue = 1;
+#if WASMOS_SMP
+    spinlock_unlock(&cpu_local()->ready_queue_lock);
+#endif
     return 0;
 }
 
 static thread_t *ready_queue_dequeue(void) {
     while (g_ready_count > 0) {
+#if WASMOS_SMP
+        spinlock_lock(&cpu_local()->ready_queue_lock);
+#endif
+        if (g_ready_count == 0) {
+#if WASMOS_SMP
+            spinlock_unlock(&cpu_local()->ready_queue_lock);
+#endif
+            break;
+        }
         uint32_t tid = g_ready_queue[g_ready_head];
         g_ready_head = (g_ready_head + 1u) % THREAD_MAX_COUNT;
         g_ready_count--;
+#if WASMOS_SMP
+        spinlock_unlock(&cpu_local()->ready_queue_lock);
+#endif
         thread_t *thread = thread_get(tid);
         process_t *proc = process_owner_for_thread(thread);
         if (!thread || !proc) {

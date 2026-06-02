@@ -700,3 +700,43 @@ x86_cpu_disable_interrupts(void)
 {
     __asm__ volatile("cli");
 }
+
+/* ----------------------------------------------------------------- SMP init */
+
+#if WASMOS_SMP
+
+void
+x86_cpu_prepare_ap(cpu_local_t *cpu, uint64_t ist1_top, uint64_t rsp0_top)
+{
+    for (uint32_t i = 0; i < GDT_ENTRY_COUNT; ++i) {
+        cpu->gdt[i] = k_gdt_template[i];
+    }
+    for (uint32_t i = 0; i < sizeof(cpu->tss); ++i) {
+        ((uint8_t *)&cpu->tss)[i] = 0;
+    }
+    cpu->tss.rsp0 = rsp0_top;
+    cpu->tss.ist1 = ist1_top;
+    cpu->tss.iopb = (uint16_t)sizeof(cpu->tss);
+    gdt_set_tss(cpu);
+}
+
+void
+x86_ap_cpu_init(uint32_t cpu_id)
+{
+    cpu_local_t *cpu = &g_cpus[cpu_id];
+
+    /* Load the per-CPU GDT and TSS. gdt_install() performs lgdt + ltr. */
+    gdt_install(cpu);
+
+    /* Load the shared IDT (table already populated by BSP). */
+    descriptor_ptr_t idtr;
+    idtr.limit = (uint16_t)(sizeof(g_idt) - 1);
+    idtr.base  = (uint64_t)(uintptr_t)&g_idt[0];
+    __asm__ volatile("lidt %0" : : "m"(idtr) : "memory");
+
+    /* Set GS base to this CPU's per-CPU slot so cpu_local() works. */
+    cpu->self = cpu;
+    x86_write_msr(IA32_GS_BASE_MSR, (uint64_t)(uintptr_t)cpu);
+}
+
+#endif /* WASMOS_SMP */

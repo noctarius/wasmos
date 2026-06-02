@@ -9,6 +9,7 @@
 #include "klog.h"
 #include "irq.h"
 #include "timer.h"
+#include "arch/x86_64/smp.h"
 #include "wasmos_app.h"
 #include "wasm_chardev.h"
 #include "wasm3_link.h"
@@ -280,8 +281,10 @@ kmain(boot_info_t *boot_info)
 
     timer_init(250);
     irq_late_init(boot_info);
+    smp_init();
     klog_write("[kernel] interrupts on\n");
     cpu_enable_interrupts();
+    smp_cpus_up();
 
     klog_write("[kernel] scheduler loop\n");
     kernel_boot_run_scheduler_loop();

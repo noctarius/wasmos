@@ -70,6 +70,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/entry.o
   ${BUILD_DIR}/context_switch.o
   ${BUILD_DIR}/cpu_isr.o
+  ${BUILD_DIR}/smp_trampoline.o
   ${BUILD_DIR}/kernel.o
   ${BUILD_DIR}/kernel_boot_runtime.o
   ${BUILD_DIR}/kernel_init_runtime.o
@@ -139,6 +140,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/arch/x86_64/entry.S
   ${KERNEL_DIR}/arch/x86_64/context_switch.S
   ${KERNEL_DIR}/arch/x86_64/cpu_isr.S
+  ${KERNEL_DIR}/arch/x86_64/smp_trampoline.S
   ${KERNEL_DIR}/kernel.c
   ${KERNEL_DIR}/kernel_boot_runtime.c
   ${KERNEL_DIR}/kernel_init_runtime.c
@@ -295,6 +297,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/entry.S -o ${BUILD_DIR}/entry.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/context_switch.S -o ${BUILD_DIR}/context_switch.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/cpu_isr.S -o ${BUILD_DIR}/cpu_isr.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/smp_trampoline.S -o ${BUILD_DIR}/smp_trampoline.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel.c -o ${BUILD_DIR}/kernel.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel_boot_runtime.c -o ${BUILD_DIR}/kernel_boot_runtime.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel_init_runtime.c -o ${BUILD_DIR}/kernel_init_runtime.o
@@ -355,7 +358,8 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM3_DIR}/source/m3_module.c -o ${BUILD_DIR}/wasm3_module.o
   COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM3_DIR}/source/m3_parse.c -o ${BUILD_DIR}/wasm3_parse.o
   COMMAND ${LLD_PATH} ${LDFLAGS_KERNEL} -o ${BUILD_DIR}/kernel.elf ${KERNEL_OBJS} ${KERNEL_LINK_LIBS}
-  DEPENDS ${KERNEL_SOURCES} ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/include/cpu.h
+  DEPENDS ${KERNEL_SOURCES} ${KERNEL_DIR}/arch/x86_64/smp_trampoline.S
+  ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/include/cpu.h
   ${KERNEL_DIR}/include/kernel_init_runtime.h
   ${KERNEL_DIR}/include/kernel_boot_runtime.h
   ${KERNEL_DIR}/include/kernel_selftest_runtime.h

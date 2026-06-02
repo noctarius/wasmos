@@ -25,7 +25,13 @@
   ready-gated before they enter the run queue so SMP cannot let them auto-mark
   ready via an early IPC block before process-manager arms the sync wait.
   `smp_ap_c_entry()` loads per-CPU GDT/TSS/IDT/GS, enables AP LAPIC timer,
-  sets `started=1`. No behavioral change at `WASMOS_SMP=0`. Full design in
+  sets `started=1`. AP CPU init now also normalizes CR0/CR4 SIMD/FPU state
+  (including `OSFXSR` / `OSXMMEXCPT`, `fninit`, and default `MXCSR`) before
+  scheduled C code runs on that CPU. The global ready queue now uses a single
+  shared spinlock instead of per-CPU queue locks, and array-chunk list
+  elements are returned 8-byte aligned so embedded atomic fields such as IPC
+  endpoint spinlocks are SMP-safe. No behavioral change at `WASMOS_SMP=0`.
+  Full design in
   `docs/architecture/28-smp.md`.
 - Interrupt controller selection is now a build-time Kconfig choice
   (`WASMOS_IRQ_PIC` / `WASMOS_IRQ_LAPIC` / `WASMOS_IRQ_IOAPIC`, mapped to

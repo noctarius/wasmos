@@ -14,10 +14,19 @@ typedef struct {
 
 static void *list_array_chunk_next(list_iter_t *iter);
 
+#define LIST_ARRAY_SLOT_ALIGN 8u
+
+static uint32_t
+list_array_slot_header_size(void)
+{
+    return LIST_ARRAY_SLOT_ALIGN;
+}
+
 static uint32_t
 list_array_stride(const list_t *list)
 {
-    return 1u + list->elem_size;
+    uint32_t raw = list_array_slot_header_size() + list->elem_size;
+    return (raw + (LIST_ARRAY_SLOT_ALIGN - 1u)) & ~(LIST_ARRAY_SLOT_ALIGN - 1u);
 }
 
 static uint8_t *
@@ -53,8 +62,8 @@ list_array_chunk_alloc(list_t *list)
             uint8_t *slot = list_array_slot_addr(chunk, stride, i);
             if (slot[0] == 0) {
                 slot[0] = 1;
-                memset(slot + 1, 0, list->elem_size);
-                return slot + 1;
+                memset(slot + list_array_slot_header_size(), 0, list->elem_size);
+                return slot + list_array_slot_header_size();
             }
         }
         chunk = chunk->next;
@@ -71,7 +80,7 @@ list_array_chunk_alloc(list_t *list)
     chunk->next = state->head;
     state->head = chunk;
     chunk->slots[0] = 1;
-    return chunk->slots + 1;
+    return chunk->slots + list_array_slot_header_size();
 }
 
 static int
@@ -83,14 +92,14 @@ list_array_chunk_remove(list_t *list, void *elem)
     while (chunk) {
         for (uint32_t i = 0; i < chunk->capacity; ++i) {
             uint8_t *slot = list_array_slot_addr(chunk, stride, i);
-            if ((void *)(slot + 1) != elem) {
+            if ((void *)(slot + list_array_slot_header_size()) != elem) {
                 continue;
             }
             if (slot[0] == 0) {
                 return -1;
             }
             slot[0] = 0;
-            memset(slot + 1, 0, list->elem_size);
+            memset(slot + list_array_slot_header_size(), 0, list->elem_size);
             return 0;
         }
         chunk = chunk->next;
@@ -119,7 +128,7 @@ list_array_chunk_next(list_iter_t *iter)
             uint8_t *slot = list_array_slot_addr(chunk, stride, iter->index++);
             if (slot[0] != 0) {
                 iter->state0 = chunk;
-                return slot + 1;
+                return slot + list_array_slot_header_size();
             }
         }
         chunk = chunk->next;

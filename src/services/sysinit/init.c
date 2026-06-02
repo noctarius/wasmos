@@ -106,7 +106,7 @@ sysinit_on_start(void *user, const char *path)
     int32_t pid = wasmos_sys_spawn_path_sync(g_state.proc_endpoint,
                                              g_state.reply_endpoint,
                                              (int32_t)path_len,
-                                             5000,
+                                             SYSINIT_START_TIMEOUT_MS,
                                              g_state.spawn_request_id);
     if (pid < 0) {
         return -1;

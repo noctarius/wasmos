@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #define SYSINIT_MAX_SPAWN_ATTEMPTS 128u
+#define SYSINIT_START_TIMEOUT_MS 30000
 #define SYSINIT_SCRIPT_PATH "/boot/system/sysinit.rc"
 
 typedef struct {

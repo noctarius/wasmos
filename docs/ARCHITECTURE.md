@@ -55,6 +55,7 @@ remain deterministic in strict ring3 runs.
 ### Operations and Validation
 - [Diagnostics and Status](architecture/25-diagnostics-status.md)
 - [Repository Map and Validation Baseline](architecture/26-repo-map-and-validation.md)
+- [Python QEMU Test Framework](architecture/27-python-test-framework.md)
 
 ## Update Rules
 - Update the relevant feature document(s) in `docs/architecture/` when behavior

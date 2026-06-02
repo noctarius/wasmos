@@ -21,6 +21,9 @@
   execute permission on the `0x0000` slot page. The fixed trampoline page at
   physical `0x1000` is also reserved from the general page-frame allocator so
   shared-memory/kernel allocations cannot be clobbered during AP bring-up.
+  Service/driver children that require `notify_ready` are now also marked
+  ready-gated before they enter the run queue so SMP cannot let them auto-mark
+  ready via an early IPC block before process-manager arms the sync wait.
   `smp_ap_c_entry()` loads per-CPU GDT/TSS/IDT/GS, enables AP LAPIC timer,
   sets `started=1`. No behavioral change at `WASMOS_SMP=0`. Full design in
   `docs/architecture/28-smp.md`.

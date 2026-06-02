@@ -284,8 +284,12 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     }
 
     wasmos_app_desc_t desc;
+    uint8_t require_explicit_ready = 0;
     if (wasmos_app_parse((const uint8_t *)(uintptr_t)mod->base, (uint32_t)mod->size, &desc) != 0) {
         return -1;
+    }
+    if ((desc.flags & (WASMOS_APP_FLAG_SERVICE | WASMOS_APP_FLAG_DRIVER)) != 0) {
+        require_explicit_ready = 1;
     }
 
     if (str_copy_bytes(slot->name, sizeof(slot->name), desc.name, desc.name_len) != 0) {
@@ -302,7 +306,9 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     }
 
     preempt_disable();
-    if (process_spawn_as(parent_pid, slot->name, pm_app_entry, slot, out_pid) != 0) {
+    if ((require_explicit_ready
+            ? process_spawn_as_ready_gated(parent_pid, slot->name, pm_app_entry, slot, out_pid)
+            : process_spawn_as(parent_pid, slot->name, pm_app_entry, slot, out_pid)) != 0) {
         preempt_enable();
         slot->in_use = 0;
         return -1;
@@ -414,6 +420,7 @@ pm_spawn_from_buffer(uint32_t parent_pid,
     }
 
     wasmos_app_desc_t desc;
+    uint8_t require_explicit_ready = 0;
     if (wasmos_app_parse(slot->blob_storage, blob_size, &desc) != 0) {
         return -1;
     }
@@ -421,6 +428,9 @@ pm_spawn_from_buffer(uint32_t parent_pid,
                        WASMOS_APP_FLAG_SERVICE |
                        WASMOS_APP_FLAG_DRIVER)) == 0) {
         return -1;
+    }
+    if ((desc.flags & (WASMOS_APP_FLAG_SERVICE | WASMOS_APP_FLAG_DRIVER)) != 0) {
+        require_explicit_ready = 1;
     }
     if (str_copy_bytes(slot->name, sizeof(slot->name), desc.name, desc.name_len) != 0) {
         return -1;
@@ -450,7 +460,9 @@ pm_spawn_from_buffer(uint32_t parent_pid,
         return -1;
     }
 
-    if (process_spawn_as(parent_pid, slot->name, pm_app_entry, slot, out_pid) != 0) {
+    if ((require_explicit_ready
+            ? process_spawn_as_ready_gated(parent_pid, slot->name, pm_app_entry, slot, out_pid)
+            : process_spawn_as(parent_pid, slot->name, pm_app_entry, slot, out_pid)) != 0) {
         slot->in_use = 0;
         return -1;
     }

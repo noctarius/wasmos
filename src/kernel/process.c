@@ -939,7 +939,14 @@ int process_spawn(const char *name, process_entry_t entry, void *arg, uint32_t *
     return process_spawn_as(g_current_pid, name, entry, arg, out_pid);
 }
 
-int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid) {
+static int
+process_spawn_as_impl(uint32_t parent_pid,
+                      const char *name,
+                      process_entry_t entry,
+                      void *arg,
+                      uint32_t *out_pid,
+                      uint8_t require_explicit_ready)
+{
     if (!entry || !out_pid) {
         return -1;
     }
@@ -976,6 +983,8 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
     slot->ctx_canary_pre = PROCESS_CTX_CANARY_VALUE;
     slot->ctx_canary_post = PROCESS_CTX_CANARY_VALUE;
     slot->is_wasm = 0;
+    slot->ready = 0;
+    slot->require_explicit_ready = require_explicit_ready ? 1u : 0u;
     slot->entry = entry;
     slot->arg = arg;
     if (process_copy_name(slot, name ? name : "") != 0) {
@@ -1038,6 +1047,19 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
     ready_queue_enqueue(process_main_thread(slot));
     *out_pid = pid;
     return 0;
+}
+
+int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid) {
+    return process_spawn_as_impl(parent_pid, name, entry, arg, out_pid, 0u);
+}
+
+int process_spawn_as_ready_gated(uint32_t parent_pid,
+                                 const char *name,
+                                 process_entry_t entry,
+                                 void *arg,
+                                 uint32_t *out_pid)
+{
+    return process_spawn_as_impl(parent_pid, name, entry, arg, out_pid, 1u);
 }
 
 int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint32_t *out_pid) {

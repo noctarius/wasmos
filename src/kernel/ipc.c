@@ -261,6 +261,55 @@ int ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t 
     return IPC_OK;
 }
 
+int
+ipc_recv_blocking_for(uint32_t receiver_context_id,
+                      uint32_t endpoint,
+                      ipc_message_t *out_message)
+{
+    process_t *proc = 0;
+    thread_t *thread = 0;
+
+    for (;;) {
+        int rc = ipc_recv_for(receiver_context_id, endpoint, out_message);
+        if (rc != IPC_EMPTY) {
+            return rc;
+        }
+
+        proc = process_get(process_current_pid());
+        if (!proc) {
+            return IPC_ERR_INVALID;
+        }
+        process_block_on_ipc(proc);
+
+        rc = ipc_recv_for(receiver_context_id, endpoint, out_message);
+        if (rc == IPC_OK) {
+            thread = thread_get(thread_current_tid());
+            proc->state = PROCESS_STATE_RUNNING;
+            proc->block_reason = PROCESS_BLOCK_NONE;
+            if (thread) {
+                thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
+            }
+            return IPC_OK;
+        }
+        if (rc != IPC_EMPTY) {
+            thread = thread_get(thread_current_tid());
+            proc->state = PROCESS_STATE_RUNNING;
+            proc->block_reason = PROCESS_BLOCK_NONE;
+            if (thread) {
+                thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
+            }
+            return rc;
+        }
+
+        thread = thread_get(thread_current_tid());
+        if (proc->state != PROCESS_STATE_BLOCKED ||
+            (thread && thread->state != THREAD_STATE_BLOCKED)) {
+            continue;
+        }
+        process_yield(PROCESS_RUN_BLOCKED);
+    }
+}
+
 int ipc_notify_from(uint32_t sender_context_id, uint32_t endpoint) {
     ipc_endpoint_t *ep = ipc_endpoint_get(endpoint);
     if (!ep) {

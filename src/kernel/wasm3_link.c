@@ -919,6 +919,7 @@ m3ApiRawFunction(wasmos_ipc_recv)
     wasm_ipc_last_slot_t *slot;
     int rc;
     process_t *process;
+    thread_t *thread;
 
     if (endpoint < 0 || current_process_context(&context_id) != 0) {
         m3ApiReturn(-1);
@@ -933,6 +934,7 @@ m3ApiRawFunction(wasmos_ipc_recv)
     if (!process) {
         m3ApiReturn(-1);
     }
+    thread = thread_get(thread_current_tid());
     process->in_hostcall = 1;
 
     preempt_safepoint();
@@ -943,8 +945,14 @@ m3ApiRawFunction(wasmos_ipc_recv)
             process_block_on_ipc(process);
             rc = ipc_recv_for(context_id, (uint32_t)endpoint, &slot->message);
             if (rc == IPC_OK) {
-                process->state = PROCESS_STATE_RUNNING;
-                process->block_reason = PROCESS_BLOCK_NONE;
+                if (thread) {
+                    process->state = PROCESS_STATE_RUNNING;
+                    process->block_reason = PROCESS_BLOCK_NONE;
+                    thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
+                } else {
+                    process->state = PROCESS_STATE_RUNNING;
+                    process->block_reason = PROCESS_BLOCK_NONE;
+                }
                 process->in_hostcall = 0;
                 slot->valid = 1;
                 wasm_fs_peer_slot_t *peer = wasm_fs_peer_slot_for_pid(pid);
@@ -966,10 +974,24 @@ m3ApiRawFunction(wasmos_ipc_recv)
                 m3ApiReturn(1);
             }
             if (rc != IPC_EMPTY) {
-                process->state = PROCESS_STATE_RUNNING;
-                process->block_reason = PROCESS_BLOCK_NONE;
+                if (thread) {
+                    process->state = PROCESS_STATE_RUNNING;
+                    process->block_reason = PROCESS_BLOCK_NONE;
+                    thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
+                } else {
+                    process->state = PROCESS_STATE_RUNNING;
+                    process->block_reason = PROCESS_BLOCK_NONE;
+                }
                 process->in_hostcall = 0;
                 m3ApiReturn(-1);
+            }
+            /* An SMP sender can wake this thread after the second empty poll
+             * but before we yield. In that case, stay on-CPU and retry the
+             * receive instead of re-blocking behind already-queued work. */
+            if (process->state != PROCESS_STATE_BLOCKED ||
+                (thread && thread->state != THREAD_STATE_BLOCKED)) {
+                preempt_safepoint();
+                continue;
             }
             process_yield(PROCESS_RUN_BLOCKED);
             preempt_safepoint();

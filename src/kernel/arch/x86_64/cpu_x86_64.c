@@ -86,6 +86,24 @@ uint64_t g_irq0_ist_canary = 0xCAFEBABEDEADC0DEULL;
 #define IA32_EFER_MSR 0xC0000080u
 #define IA32_EFER_NXE (1ULL << 11)
 
+#define X86_CR0_PE        (1ULL << 0)
+#define X86_CR0_MP        (1ULL << 1)
+#define X86_CR0_EM        (1ULL << 2)
+#define X86_CR0_TS        (1ULL << 3)
+#define X86_CR0_ET        (1ULL << 4)
+#define X86_CR0_NE        (1ULL << 5)
+#define X86_CR0_WP        (1ULL << 16)
+#define X86_CR0_NW        (1ULL << 29)
+#define X86_CR0_CD        (1ULL << 30)
+#define X86_CR0_PG        (1ULL << 31)
+
+#define X86_CR4_PAE       (1ULL << 5)
+#define X86_CR4_PGE       (1ULL << 7)
+#define X86_CR4_OSFXSR    (1ULL << 9)
+#define X86_CR4_OSXMMEXCPT (1ULL << 10)
+
+#define X86_MXCSR_DEFAULT 0x1F80u
+
 typedef enum {
     PF_REASON_UNMAPPED = 0,
     PF_REASON_WRITE_VIOLATION,
@@ -132,6 +150,26 @@ pf_reason_name(pf_reason_t reason)
     default:
         return "protection";
     }
+}
+
+static void
+x86_cpu_enable_kernel_simd(void)
+{
+    uint64_t cr0;
+    uint64_t cr4;
+    uint32_t mxcsr = X86_MXCSR_DEFAULT;
+
+    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+    cr0 &= ~(X86_CR0_EM | X86_CR0_TS | X86_CR0_NW | X86_CR0_CD);
+    cr0 |= X86_CR0_PE | X86_CR0_MP | X86_CR0_ET | X86_CR0_NE | X86_CR0_WP | X86_CR0_PG;
+    __asm__ volatile("mov %0, %%cr0" : : "r"(cr0) : "memory");
+
+    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+    cr4 |= X86_CR4_PAE | X86_CR4_PGE | X86_CR4_OSFXSR | X86_CR4_OSXMMEXCPT;
+    __asm__ volatile("mov %0, %%cr4" : : "r"(cr4) : "memory");
+
+    __asm__ volatile("fninit");
+    __asm__ volatile("ldmxcsr %0" : : "m"(mxcsr));
 }
 
 
@@ -599,6 +637,7 @@ x86_cpu_init(void)
     if ((efer & IA32_EFER_NXE) == 0) {
         x86_write_msr(IA32_EFER_MSR, efer | IA32_EFER_NXE);
     }
+    x86_cpu_enable_kernel_simd();
     serial_write("[cpu] init\n");
 
     /* Initialise BSP's per-CPU slot.  We pass &g_cpus[0] explicitly because
@@ -724,6 +763,8 @@ void
 x86_ap_cpu_init(uint32_t cpu_id)
 {
     cpu_local_t *cpu = &g_cpus[cpu_id];
+
+    x86_cpu_enable_kernel_simd();
 
     /* Load the per-CPU GDT and TSS. gdt_install() performs lgdt + ltr. */
     gdt_install(cpu);

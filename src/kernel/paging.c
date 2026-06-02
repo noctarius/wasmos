@@ -77,8 +77,10 @@ paging_verify_user_root_impl(uint64_t root_table, int log_failures)
     uint64_t pdpt_high_phys = entry_phys(root[511]);
     volatile uint64_t *pdpt_high = table_ptr(pdpt_high_phys);
     for (uint32_t i = 0; i < ENTRIES_PER_TABLE; ++i) {
-        uint8_t allowed = (i >= HIGHER_HALF_PDPT_INDEX &&
-                           i < (HIGHER_HALF_PDPT_INDEX + HIGHER_HALF_PD_COUNT));
+        uint8_t is_kernel_slot = (i >= HIGHER_HALF_PDPT_INDEX &&
+                                  i < (HIGHER_HALF_PDPT_INDEX + HIGHER_HALF_PD_COUNT));
+        uint8_t is_mmio_slot = (i == KERNEL_MMIO_PDPT_INDEX);
+        uint8_t allowed = is_kernel_slot || is_mmio_slot;
         uint8_t present = (uint8_t)((pdpt_high[i] & PT_FLAG_PRESENT) != 0);
         if (present != allowed) {
             if (log_failures) {
@@ -89,7 +91,7 @@ paging_verify_user_root_impl(uint64_t root_table, int log_failures)
             }
             return -1;
         }
-        if (!allowed || !present) {
+        if (!allowed || !present || is_mmio_slot) {
             continue;
         }
         uint64_t pd_phys = entry_phys(pdpt_high[i]);

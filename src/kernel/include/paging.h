@@ -3,7 +3,9 @@
 
 #include <stdint.h>
 
-#define KERNEL_HIGHER_HALF_BASE 0xFFFFFFFF80000000ULL
+#define KERNEL_HIGHER_HALF_BASE  0xFFFFFFFF80000000ULL
+#define KERNEL_MMIO_PDPT_INDEX   509u
+#define KERNEL_MMIO_FB_VA        0xFFFFFFFF40000000ULL
 
 int paging_init(void);
 uint64_t paging_get_higher_half_base(void);

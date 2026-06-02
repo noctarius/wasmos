@@ -369,14 +369,16 @@ static void serial_put_internal(char c) {
 }
 
 static void serial_ring_write(const char *s) {
-    if (g_serial_high_alias_enabled) {
-        /* TODO(ring3): map console ring into strict user-visible kernel window
-         * or route framebuffer logging through a CR3-invariant path. */
-        return;
-    }
     console_ring_t *ring = *serial_console_ring_slot();
     if (!ring || !s) {
         return;
+    }
+    /* After the higher-half alias switch the ring holds a raw physical pointer.
+     * Convert it to the kernel higher-half alias so writes reach mapped memory
+     * from any CR3.  The ring is allocated well below 512 MiB so the alias
+     * always falls inside the shared higher-half window. */
+    if (g_serial_high_alias_enabled && (uint64_t)(uintptr_t)ring < KERNEL_HIGHER_HALF_BASE) {
+        ring = (console_ring_t *)(uintptr_t)((uint64_t)(uintptr_t)ring + KERNEL_HIGHER_HALF_BASE);
     }
     uint32_t cap = ring->capacity;
     uint32_t wp = ring->write_pos;

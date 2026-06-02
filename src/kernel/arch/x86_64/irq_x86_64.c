@@ -39,7 +39,8 @@ typedef struct {
 } irq_route_t;
 
 static irq_route_t g_irq_routes[IRQ_COUNT];
-#if WASMOS_IRQ_MODE == 0
+/* PIC mask state used in modes 0 (direct PIC) and 1 (PIC via LINT0 ExtINT). */
+#if WASMOS_IRQ_MODE <= 1
 static uint8_t g_pic_mask1 = 0xFF;
 static uint8_t g_pic_mask2 = 0xFF;
 #endif
@@ -57,7 +58,7 @@ static inline irq_route_t *irq_routes_ptr(void)
     return (irq_route_t *)(void *)irq_alias_ptr((uintptr_t)&g_irq_routes[0]);
 }
 
-#if WASMOS_IRQ_MODE == 0
+#if WASMOS_IRQ_MODE <= 1
 static inline uint8_t *pic_mask1_slot(void)
 {
     return (uint8_t *)(void *)irq_alias_ptr((uintptr_t)&g_pic_mask1);
@@ -94,7 +95,10 @@ void x86_irq_ist_corrupt(void) {
     serial_write("[irq] ist stack canary corrupt\n");
 }
 
-#if WASMOS_IRQ_MODE == 0
+/* PIC I/O helpers are shared by mode 0 (direct PIC) and mode 1 (PIC via
+ * LINT0 ExtINT).  Mode 2 (IOAPIC) disables the PIC entirely and never calls
+ * these. */
+#if WASMOS_IRQ_MODE <= 1
 static inline void outb(uint16_t port, uint8_t value) {
     __asm__ volatile("outb %0, %1" : : "a"(value), "Nd"(port));
 }
@@ -127,15 +131,39 @@ static int pic_is_spurious(uint32_t irq_line) {
     }
     return 0;
 }
-#endif /* WASMOS_IRQ_MODE == 0 */
+#endif /* WASMOS_IRQ_MODE <= 1 */
 
 static void irq_send_eoi(uint32_t irq_line) {
 #if WASMOS_IRQ_MODE == 0
+    /* Pure PIC mode: all IRQs go through the 8259 — always send PIC EOI. */
     if (irq_line >= 8) {
         outb(PIC2_CMD, PIC_EOI);
     }
     outb(PIC1_CMD, PIC_EOI);
+#elif WASMOS_IRQ_MODE == 1
+    /*
+     * LAPIC + PIC-via-ExtINT mode: two distinct delivery paths.
+     *
+     * IRQ 0 (timer) fires through the LAPIC LVT_TIMER entry, which sets the
+     * LAPIC ISR bit — clear it with a LAPIC EOI write.
+     *
+     * IRQ 1–15 (devices) arrive via LINT0 in ExtINT delivery mode: the LAPIC
+     * acts as a transparent pass-through and does NOT set any ISR bit (Intel
+     * SDM Vol 3A §10.8.4).  Only the 8259 PIC needs an EOI to clear its ISR.
+     * Sending a LAPIC EOI here would erroneously clear whatever ISR bit the
+     * LAPIC currently has set (e.g. a concurrently-pending timer tick).
+     */
+    if (irq_line == 0) {
+        lapic_eoi();
+    } else {
+        if (irq_line >= 8) {
+            outb(PIC2_CMD, PIC_EOI);
+        }
+        outb(PIC1_CMD, PIC_EOI);
+    }
 #else
+    /* IOAPIC mode: LAPIC EOI covers both the LAPIC ISR and (for level-triggered
+     * RTEs) broadcasts the EOIS back to the IOAPIC to clear Remote IRR. */
     (void)irq_line;
     lapic_eoi();
 #endif
@@ -149,7 +177,14 @@ void x86_irq_init(void) {
         routes[i].endpoint = IPC_ENDPOINT_NONE;
     }
 
-#if WASMOS_IRQ_MODE == 0
+/*
+ * Remap the 8259 PIC to vectors 32–47 in both mode 0 (direct PIC) and
+ * mode 1 (PIC via LINT0 ExtINT).  In mode 1 the PIC handles device IRQs
+ * 1–15 while the LAPIC timer drives IRQ 0; the remap prevents legacy
+ * vectors 8–15 from overlapping CPU exception vectors.  In mode 2 (IOAPIC)
+ * the PIC is disabled later by lapic_init() so no remap is needed.
+ */
+#if WASMOS_IRQ_MODE <= 1
     uint8_t *mask1_slot = pic_mask1_slot();
     uint8_t *mask2_slot = pic_mask2_slot();
 
@@ -186,7 +221,7 @@ int x86_irq_mask(uint32_t irq_line) {
     if (irq_line >= IRQ_COUNT) {
         return -1;
     }
-#if WASMOS_IRQ_MODE == 0
+#if WASMOS_IRQ_MODE <= 1
     uint8_t *mask1_slot = pic_mask1_slot();
     uint8_t *mask2_slot = pic_mask2_slot();
     if (irq_line < 8) {
@@ -205,7 +240,7 @@ int x86_irq_unmask(uint32_t irq_line) {
     if (irq_line >= IRQ_COUNT) {
         return -1;
     }
-#if WASMOS_IRQ_MODE == 0
+#if WASMOS_IRQ_MODE <= 1
     uint8_t *mask1_slot = pic_mask1_slot();
     uint8_t *mask2_slot = pic_mask2_slot();
     if (irq_line < 8) {
@@ -239,17 +274,6 @@ int x86_irq_register(uint32_t context_id, uint32_t irq_line, uint32_t endpoint)
     if (irq_line >= IRQ_COUNT || endpoint == IPC_ENDPOINT_NONE) {
         return -1;
     }
-#if WASMOS_IRQ_MODE == 1
-    /*
-     * LAPIC-only mode has no I/O APIC and the 8259 PIC is fully masked.
-     * External device IRQs (lines 1–15) have no delivery path to the CPU, so
-     * registering them would leave the driver blocked forever on ipc_recv.
-     * Return an error so drivers fall back to polling.
-     */
-    if (irq_line != 0) {
-        return -1;
-    }
-#endif
     if (policy_authorize(context_id, POLICY_ACTION_IRQ_ROUTE, irq_line) != 0) {
         return -1;
     }
@@ -307,7 +331,9 @@ void x86_irq_handler(uint64_t vector) {
     }
 
     uint32_t irq_line = (uint32_t)(vector - IRQ_VECTOR_BASE);
-#if WASMOS_IRQ_MODE == 0
+#if WASMOS_IRQ_MODE <= 1
+    /* Spurious IRQ check applies to both PIC-direct (mode 0) and PIC-via-
+     * LINT0-ExtINT (mode 1) because both use the 8259 for device IRQs. */
     if (pic_is_spurious(irq_line)) {
         if (irq_line == 15) {
             /* Spurious IRQ 15: slave never set ISR, but master did latch the

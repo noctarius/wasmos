@@ -27,6 +27,7 @@
 #define LAPIC_REG_ID           0x020u
 #define LAPIC_REG_EOI          0x0B0u
 #define LAPIC_REG_SVR          0x0F0u   /* Spurious Interrupt Vector Register */
+#define LAPIC_REG_LVT_LINT0    0x350u   /* LVT LINT0 — wired to 8259 INTR in virtual wire mode */
 #define LAPIC_REG_LVT_TIMER    0x320u
 #define LAPIC_REG_TIMER_ICR    0x380u   /* Initial Count */
 #define LAPIC_REG_TIMER_CCR    0x390u   /* Current Count */
@@ -205,7 +206,22 @@ lapic_init(uint32_t hz)
 {
     lapic_map();
     lapic_enable();
+
+#if WASMOS_IRQ_MODE == 1
+    /*
+     * Virtual wire mode: the 8259 PIC remains active and delivers device IRQs
+     * (lines 1–15) to the CPU via the LAPIC LINT0 pin.  Configure LINT0 as
+     * ExtINT (delivery mode 7, bits [10:8] = 111) so the LAPIC passes the
+     * 8259's interrupt vector directly to the CPU without setting any LAPIC ISR
+     * bit (Intel SDM Vol 3A §10.8.4).  IRQ 0 (timer) is driven by the LAPIC
+     * LVT_TIMER entry and therefore does NOT go through LINT0.
+     */
+    lapic_write(LAPIC_REG_LVT_LINT0, 0x700u);  /* ExtINT, unmasked */
+#else
+    /* IOAPIC mode: the 8259 is entirely bypassed; mask all its lines. */
     pic_disable();
+#endif
+
     lapic_timer_set_hz(hz);
     serial_write("[lapic] init ok\n");
 }

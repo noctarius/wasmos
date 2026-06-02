@@ -181,7 +181,9 @@ physical address `0x1000` (vector `0x01` for SIPI). It transitions through
 
 The trampoline is either linked as a raw `.bin` section or embedded via
 `.incbin` into a C array in `smp.c` and copied to `0x1000` at runtime. The
-`0x1000` page is identity-mapped before the first SIPI.
+`0x1000` page is identity-mapped before the first SIPI and reserved from the
+general page-frame allocator so shared-memory or kernel allocations cannot land
+on the trampoline page.
 
 ### Transition outline
 

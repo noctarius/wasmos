@@ -587,8 +587,12 @@ if (WASMOS_SMP AND NOT WASMOS_IRQ_IOAPIC)
 endif ()
 if (WASMOS_SMP)
   set(WASMOS_SMP_VALUE 1)
+  set(WASMOS_QEMU_SMP_COUNT 4)
+  set(WASMOS_QEMU_SMP_ARGS "-smp" "4")
 else ()
   set(WASMOS_SMP_VALUE 0)
+  set(WASMOS_QEMU_SMP_COUNT 1)
+  set(WASMOS_QEMU_SMP_ARGS "")
 endif ()
 set(WASMOS_SMP_DEFINE -DWASMOS_SMP=${WASMOS_SMP_VALUE})
 
@@ -1042,7 +1046,7 @@ endif ()
 if (OVMF_VARS)
   add_custom_target(run-qemu
     ${WASMOS_ESP_POPULATE_CMDS}
-    COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
+    COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_SMP_ARGS} -nographic -serial mon:stdio
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
@@ -1054,7 +1058,7 @@ if (OVMF_VARS)
   )
   add_custom_target(run-qemu-debug
     ${WASMOS_ESP_POPULATE_CMDS}
-    COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
+    COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_SMP_ARGS} -nographic -serial mon:stdio
             -S -gdb tcp::${QEMU_GDB_PORT}
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
@@ -1067,7 +1071,7 @@ if (OVMF_VARS)
   )
   add_custom_target(run-qemu-ui
     ${WASMOS_ESP_POPULATE_CMDS}
-    COMMAND qemu-system-x86_64 -m 512M -serial mon:stdio
+    COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_SMP_ARGS} -serial mon:stdio
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
@@ -1083,6 +1087,7 @@ if (OVMF_VARS)
             --ovmf-code ${OVMF_CODE}
             --ovmf-vars ${OVMF_VARS}
             --esp ${BUILD_DIR}/esp
+            --smp ${WASMOS_QEMU_SMP_COUNT}
     DEPENDS bootloader kernel
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running QEMU halt test"
@@ -1096,6 +1101,7 @@ if (OVMF_VARS)
             WASMOS_ESP=${BUILD_DIR}/esp
             WASMOS_USERFS=${USERFS_DIR}
             WASMOS_QEMU_ISOLATE_ESP=1
+            WASMOS_QEMU_SMP_COUNT=${WASMOS_QEMU_SMP_COUNT}
             PYTHONDONTWRITEBYTECODE=1
             ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/run_unittest_suite.py --start-dir tests
     DEPENDS bootloader kernel
@@ -1110,6 +1116,7 @@ if (OVMF_VARS)
             --ovmf-code ${OVMF_CODE}
             ${QEMU_UI_OVMF_VARS_ARG}
             --esp ${BUILD_DIR}/esp
+            --smp ${WASMOS_QEMU_SMP_COUNT}
     DEPENDS bootloader kernel
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running QEMU UI test"
@@ -1119,7 +1126,7 @@ else ()
   if (OVMF_CODE)
     add_custom_target(run-qemu
       ${WASMOS_ESP_POPULATE_CMDS}
-      COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
+      COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_SMP_ARGS} -nographic -serial mon:stdio
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
               -drive format=raw,file=fat:rw:${USERFS_DIR}
@@ -1130,7 +1137,7 @@ else ()
     )
     add_custom_target(run-qemu-debug
       ${WASMOS_ESP_POPULATE_CMDS}
-      COMMAND qemu-system-x86_64 -m 512M -nographic -serial mon:stdio
+      COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_SMP_ARGS} -nographic -serial mon:stdio
               -S -gdb tcp::${QEMU_GDB_PORT}
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
@@ -1142,7 +1149,7 @@ else ()
     )
     add_custom_target(run-qemu-ui
       ${WASMOS_ESP_POPULATE_CMDS}
-      COMMAND qemu-system-x86_64 -m 512M -serial mon:stdio
+      COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_SMP_ARGS} -serial mon:stdio
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
               -drive format=raw,file=fat:rw:${USERFS_DIR}
@@ -1156,6 +1163,7 @@ else ()
       COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_halt_test.py
               --ovmf-code ${OVMF_CODE}
               --esp ${BUILD_DIR}/esp
+              --smp ${WASMOS_QEMU_SMP_COUNT}
       DEPENDS bootloader kernel
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running QEMU halt test"
@@ -1168,6 +1176,7 @@ else ()
               WASMOS_ESP=${BUILD_DIR}/esp
               WASMOS_USERFS=${USERFS_DIR}
               WASMOS_QEMU_ISOLATE_ESP=1
+              WASMOS_QEMU_SMP_COUNT=${WASMOS_QEMU_SMP_COUNT}
               PYTHONDONTWRITEBYTECODE=1
               ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/run_unittest_suite.py --start-dir tests
       DEPENDS bootloader kernel

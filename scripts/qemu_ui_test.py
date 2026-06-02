@@ -87,6 +87,7 @@ def main():
         default="auto",
         help="QEMU display backend to use (auto chooses a supported UI).",
     )
+    parser.add_argument("--smp", type=int, default=1)
     args = parser.parse_args()
 
     display_backend = args.display
@@ -100,6 +101,7 @@ def main():
             args.ovmf_vars,
             args.esp,
             userfs,
+            smp_count=args.smp,
         )
     else:
         cfg = default_config()

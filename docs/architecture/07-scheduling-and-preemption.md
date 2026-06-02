@@ -12,14 +12,18 @@ safe. The authoritative sources are `src/kernel/process.c`,
 
 ### Overview
 
-The scheduler is preemptive round-robin, single-core. A hardware timer at
-IRQ0 drives time-slice accounting at a fixed rate: PIT channel 0 in PIC mode
-(`WASMOS_IRQ_MODE == 0`), LAPIC periodic timer in LAPIC and IOAPIC modes. When
-a running thread's quantum expires, the next IRQ0 fires the preemption path,
-which rewrites the interrupted frame to redirect return-from-interrupt into a
-scheduler trampoline. The scheduler context then picks the next ready thread
-and resumes it. Blocking operations (IPC wait, process wait, thread join)
-suspend a thread without burning quantum.
+The scheduler is preemptive round-robin. With `WASMOS_SMP=0` (the default) only
+the BSP runs the scheduler loop. With `WASMOS_SMP=1` each online AP also runs
+the same round-robin loop against the shared spinlock-protected ready queue; see
+`docs/architecture/28-smp.md` for the full multi-core contract.
+
+A hardware timer drives time-slice accounting at a fixed rate: PIT channel 0 in
+PIC mode (`WASMOS_IRQ_MODE == 0`), per-CPU LAPIC periodic timer in LAPIC and
+IOAPIC modes. When a running thread's quantum expires, the timer fires the
+preemption path, which rewrites the interrupted frame to redirect
+return-from-interrupt into a scheduler trampoline. The scheduler context then
+picks the next ready thread and resumes it. Blocking operations (IPC wait,
+process wait, thread join) suspend a thread without burning quantum.
 
 ---
 
@@ -454,9 +458,9 @@ for test harness assertions.
 ### What Is Not Implemented
 
 - **Priorities or budgets.** All threads get the same fixed quantum.
-- **Per-CPU scheduling.** The ready queue and all scheduler state are global,
-  single-core. SMP requires per-CPU run queues, scheduler locks, and IPI-based
-  remote wakeup — deferred until single-core model is fully exercised.
+- **Per-CPU ready queues and work stealing.** The shared ready queue is
+  protected by a single IRQ-safe spinlock; all online CPUs draw from it.
+  Per-CPU queues with work stealing are a future optimisation.
 - **Kernel preemption.** The preemption path only fires on CPL3 frames.
   Kernel-originated frames are skipped; the kernel runs to completion unless
   it cooperatively yields.

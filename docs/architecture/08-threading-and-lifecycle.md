@@ -16,7 +16,9 @@ mapping.
   capability envelope.
 - The ready queue stores TIDs; process ownership is derived from each dequeued
   thread's `owner_pid`.
-- Single-core only. SMP is not planned for current scope.
+- Multi-core capable when `WASMOS_SMP=1`: each online AP runs the same
+  round-robin dispatch loop against the shared spinlock-protected ready queue.
+  See `docs/architecture/28-smp.md` for the steady-state AP contract.
 
 ---
 

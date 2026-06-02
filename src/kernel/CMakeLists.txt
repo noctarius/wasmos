@@ -1,5 +1,5 @@
 set(LDFLAGS_KERNEL -nostdlib -T ${KERNEL_DIR}/arch/x86_64/linker.ld)
-set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -mcmodel=kernel ${WASMOS_TRACE_DEFINE} ${WASMOS_RING3_SMOKE_DEFINE} ${WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFINE} ${WASMOS_PM_TEST_HOOKS_DEFINE} ${WASMOS_PM_LIST_DEFINE} ${WASMOS_PM_LIST_CAP_DEFINE} ${WASMOS_IRQ_MODE_DEFINE} -I${WASM3_DIR}/source -Wno-unused-parameter)
+set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -mcmodel=kernel ${WASMOS_TRACE_DEFINE} ${WASMOS_RING3_SMOKE_DEFINE} ${WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFINE} ${WASMOS_PM_TEST_HOOKS_DEFINE} ${WASMOS_PM_LIST_DEFINE} ${WASMOS_PM_LIST_CAP_DEFINE} ${WASMOS_IRQ_MODE_DEFINE} ${WASMOS_SMP_DEFINE} -I${WASM3_DIR}/source -Wno-unused-parameter)
 set(CXXFLAGS_KERNEL ${CFLAGS_KERNEL} -fno-exceptions -fno-rtti -fno-threadsafe-statics -Wno-deprecated)
 set(CFLAGS_WASM3 ${CFLAGS_KERNEL} -I${WASM3_DIR}/source -Dd_m3HasFloat=0 -Wno-unused-parameter -Wno-unused-variable)
 
@@ -103,6 +103,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/irq_x86_64.o
   ${BUILD_DIR}/lapic.o
   ${BUILD_DIR}/ioapic.o
+  ${BUILD_DIR}/smp.o
   ${BUILD_DIR}/timer.o
   ${BUILD_DIR}/process_manager.o
   ${BUILD_DIR}/process_manager_buffers.o
@@ -171,6 +172,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/arch/x86_64/irq_x86_64.c
   ${KERNEL_DIR}/arch/x86_64/lapic.c
   ${KERNEL_DIR}/arch/x86_64/ioapic.c
+  ${KERNEL_DIR}/arch/x86_64/smp.c
   ${KERNEL_DIR}/timer.c
   ${KERNEL_DIR}/process_manager.cpp
   ${KERNEL_DIR}/process_manager_buffers.c
@@ -326,6 +328,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/irq_x86_64.c -o ${BUILD_DIR}/irq_x86_64.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/lapic.c -o ${BUILD_DIR}/lapic.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/ioapic.c -o ${BUILD_DIR}/ioapic.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/smp.c -o ${BUILD_DIR}/smp.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/timer.c -o ${BUILD_DIR}/timer.o
   COMMAND ${CMAKE_CXX_COMPILER} ${CXXFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager.cpp -o ${BUILD_DIR}/process_manager.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_buffers.c -o ${BUILD_DIR}/process_manager_buffers.o
@@ -374,6 +377,7 @@ add_custom_command(
           ${KERNEL_DIR}/include/arch/x86_64/irq_x86_64.h
           ${KERNEL_DIR}/include/arch/x86_64/lapic.h
           ${KERNEL_DIR}/include/arch/x86_64/ioapic.h
+          ${KERNEL_DIR}/include/arch/x86_64/smp.h
           ${KERNEL_DIR}/include/serial.h ${KERNEL_DIR}/include/wasmos_app.h
           ${KERNEL_DIR}/include/wasmos_app_meta.h
           ${KERNEL_DIR}/include/native_driver.h ${KERNEL_DIR}/include/spinlock.h

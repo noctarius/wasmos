@@ -208,7 +208,8 @@ function(wasmos_add_ide_c_target target_name)
   endif ()
   target_compile_definitions(${target_name} PRIVATE
     WASMOS_TRACE=${WASMOS_TRACE_VALUE}
-    WASMOS_IRQ_MODE=${WASMOS_IRQ_MODE_VALUE})
+    WASMOS_IRQ_MODE=${WASMOS_IRQ_MODE_VALUE}
+    WASMOS_SMP=${WASMOS_SMP_VALUE})
 endfunction()
 option(WASMOS_RING3_SMOKE "Enable ring3 smoke probe spawn by default" OFF)
 if (WASMOS_RING3_SMOKE)
@@ -278,6 +279,12 @@ if (NOT DEFINED WASMOS_IRQ_IOAPIC_INITIALIZED)
   set(WASMOS_IRQ_IOAPIC_INITIALIZED ON CACHE BOOL "Set when WASMOS_IRQ_IOAPIC default is initialized" FORCE)
 endif ()
 option(WASMOS_IRQ_IOAPIC "Use LAPIC + I/O APIC (full APIC)" OFF)
+
+if (NOT DEFINED WASMOS_SMP_INITIALIZED)
+  set(WASMOS_SMP OFF CACHE BOOL "Enable Symmetric Multi-Processing (SMP)" FORCE)
+  set(WASMOS_SMP_INITIALIZED ON CACHE BOOL "Set when WASMOS_SMP default is initialized" FORCE)
+endif ()
+option(WASMOS_SMP "Enable Symmetric Multi-Processing (SMP)" OFF)
 
 # IRQ mode determination is deferred — see below, after the Kconfig import.
 
@@ -572,6 +579,18 @@ else ()
   set(WASMOS_IRQ_MODE_VALUE 0)
 endif ()
 set(WASMOS_IRQ_MODE_DEFINE -DWASMOS_IRQ_MODE=${WASMOS_IRQ_MODE_VALUE})
+
+# SMP requires I/O APIC — enforce the dependency even if .config is inconsistent.
+if (WASMOS_SMP AND NOT WASMOS_IRQ_IOAPIC)
+  message(WARNING "WASMOS_SMP requires WASMOS_IRQ_IOAPIC; disabling SMP")
+  set(WASMOS_SMP OFF CACHE BOOL "Enable SMP" FORCE)
+endif ()
+if (WASMOS_SMP)
+  set(WASMOS_SMP_VALUE 1)
+else ()
+  set(WASMOS_SMP_VALUE 0)
+endif ()
+set(WASMOS_SMP_DEFINE -DWASMOS_SMP=${WASMOS_SMP_VALUE})
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)

@@ -65,6 +65,11 @@ config WASMOS_IRQ_IOAPIC
 
 endchoice
 
+config WASMOS_SMP
+    bool "Enable Symmetric Multi-Processing (SMP)"
+    depends on WASMOS_IRQ_IOAPIC
+    default n
+
 config WASMOS_PM_LIST_ARRAY_CHUNK_CAP
     int "Array-chunk list capacity per chunk"
     default 16

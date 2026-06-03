@@ -312,11 +312,11 @@ public:
         pm_poll_spawn(process->context_id);
         if (g_pm.fs_ctrl_endpoint != IPC_ENDPOINT_NONE) {
             ipc_message_t ignored;
-            while (ipc_recv_for(process->context_id, g_pm.fs_ctrl_endpoint, &ignored) == IPC_OK) {
+            while (ipc_try_recv_for(process->context_id, g_pm.fs_ctrl_endpoint, &ignored) == IPC_OK) {
             }
         }
 
-        int recv_rc = ipc_recv_for(process->context_id, g_pm.proc_endpoint, &msg);
+        int recv_rc = ipc_try_recv_for(process->context_id, g_pm.proc_endpoint, &msg);
         if (recv_rc == IPC_EMPTY) {
             return PROCESS_RUN_YIELDED;
         }

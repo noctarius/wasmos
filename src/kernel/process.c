@@ -107,7 +107,8 @@ extern uint8_t __kernel_end;
 /* Phase-2 stack hardening currently relies on the shared higher-half kernel
  * window (512 MiB by default: 256 * 2 MiB PDEs). Keep in sync with paging.c. */
 #define KERNEL_SHARED_HIGHER_HALF_WINDOW_BYTES (512u * 1024u * 1024u)
-static uint8_t g_sched_trampoline_stack[SCHED_TRAMPOLINE_STACK_BYTES] __attribute__((aligned(16)));
+static uint8_t g_sched_trampoline_stacks[WASMOS_MAX_CPUS][SCHED_TRAMPOLINE_STACK_BYTES]
+    __attribute__((aligned(16)));
 
 static int
 process_alloc_stack(process_t *slot, uint32_t stack_pages)
@@ -305,8 +306,12 @@ process_run_on_sched_stack(int (*fn)(void))
     if (!fn) {
         return -1;
     }
+    uint32_t cpu_id = cpu_local()->cpu_id;
+    if (cpu_id >= WASMOS_MAX_CPUS) {
+        cpu_id = 0;
+    }
     uintptr_t stack_top = process_kernel_alias_addr(
-        (uintptr_t)&g_sched_trampoline_stack[SCHED_TRAMPOLINE_STACK_BYTES]);
+        (uintptr_t)&g_sched_trampoline_stacks[cpu_id][SCHED_TRAMPOLINE_STACK_BYTES]);
     stack_top &= ~(uintptr_t)0xFULL;
     int rc = -1;
     __asm__ volatile(

@@ -228,7 +228,12 @@ int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_messa
     return IPC_OK;
 }
 
-int ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t *out_message) {
+static int
+ipc_recv_for_impl(uint32_t receiver_context_id,
+                  uint32_t endpoint,
+                  ipc_message_t *out_message,
+                  uint8_t arm_waiter)
+{
     ipc_endpoint_t *ep = ipc_endpoint_get(endpoint);
     if (!ep || !out_message) {
         if (ep) {
@@ -248,7 +253,9 @@ int ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t 
     }
 
     if (ep->count == 0) {
-        ep->waiter_tid = thread_current_tid();
+        if (arm_waiter) {
+            ep->waiter_tid = thread_current_tid();
+        }
         spinlock_unlock(&ep->lock);
         return IPC_EMPTY;
     }
@@ -259,6 +266,18 @@ int ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t 
     ep->waiter_tid = 0;
     spinlock_unlock(&ep->lock);
     return IPC_OK;
+}
+
+int
+ipc_try_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t *out_message)
+{
+    return ipc_recv_for_impl(receiver_context_id, endpoint, out_message, 0);
+}
+
+int
+ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t *out_message)
+{
+    return ipc_recv_for_impl(receiver_context_id, endpoint, out_message, 1);
 }
 
 int

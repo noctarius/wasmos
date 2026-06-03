@@ -53,7 +53,7 @@ memory_service_process_once(void)
     }
 
     ipc_message_t req;
-    int rc = ipc_recv_for(g_mem_service_context, g_mem_service_endpoint, &req);
+    int rc = ipc_try_recv_for(g_mem_service_context, g_mem_service_endpoint, &req);
     if (rc == IPC_EMPTY) {
         return 1;
     }
@@ -104,7 +104,7 @@ memory_service_handle_fault_ipc(uint32_t fault_context_id, uint64_t fault_addr, 
     }
 
     ipc_message_t reply;
-    int rc = ipc_recv_for(IPC_CONTEXT_KERNEL, g_mem_service_reply_endpoint, &reply);
+    int rc = ipc_try_recv_for(IPC_CONTEXT_KERNEL, g_mem_service_reply_endpoint, &reply);
     if (rc != IPC_OK) {
         return -1;
     }

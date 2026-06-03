@@ -3,6 +3,7 @@
 #include "serial.h"
 #include "paging.h"
 #include "memory.h"
+#include "kernel_boot_runtime.h"
 
 #include <stdint.h>
 
@@ -120,11 +121,8 @@ smp_ap_c_entry(uint32_t cpu_id)
     __sync_synchronize();
     g_cpus[cpu_id].started = 1;
 
-    /* Enable interrupts and idle. */
-    __asm__ volatile("sti");
-    for (;;) {
-        __asm__ volatile("hlt");
-    }
+    /* Join the scheduler loop — identical to the BSP path. */
+    kernel_boot_run_scheduler_loop();
 }
 
 /*

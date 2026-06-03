@@ -603,6 +603,14 @@ static thread_t *ready_queue_dequeue(void) {
         }
         if (thread->state == THREAD_STATE_READY &&
             proc->state == PROCESS_STATE_READY) {
+            if (thread->blocking_transition) {
+                /* Another CPU is still in the middle of transitioning this
+                 * thread from RUNNING to BLOCKED (context_switch_high has not
+                 * yet saved the kernel stack).  Put it back so we try again
+                 * after the transition completes. */
+                ready_queue_enqueue(thread);
+                continue;
+            }
             return thread;
         }
     }
@@ -1590,7 +1598,17 @@ process_wake_thread(uint32_t tid)
         return 0;
     }
     process_set_ready(proc, thread);
-    ready_queue_enqueue(thread);
+    /* If the thread is in the middle of transitioning from RUNNING to BLOCKED
+     * on another CPU (it called process_block_on_ipc but has not yet executed
+     * context_switch_high in process_yield), do not enqueue it yet.  Adding it
+     * to the ready queue now would allow a third CPU to restore its saved
+     * context while the transitioning CPU is still executing on the same kernel
+     * stack.  The transitioning CPU detects the READY state in its state check
+     * and handles the message directly (no yield needed), or the scheduler's
+     * PROCESS_RUN_BLOCKED handler re-enqueues once the context save completes. */
+    if (!thread->blocking_transition) {
+        ready_queue_enqueue(thread);
+    }
     return 1;
 }
 
@@ -1763,6 +1781,11 @@ static int process_schedule_once_impl(void) {
         }
     } else if (result == PROCESS_RUN_BLOCKED) {
         thread_t *next = 0;
+        /* context_switch_high has now saved the thread's context — it is safe
+         * for another CPU to restore and run it.  Clear the guard flag that
+         * prevented ready_queue_dequeue from handing this thread to a second
+         * CPU before the save was complete. */
+        thread->blocking_transition = 0;
         /* Keep the caller thread blocked with its existing block reason, then
          * continue running another ready owner thread when available.
          *

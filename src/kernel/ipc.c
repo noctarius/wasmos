@@ -285,53 +285,109 @@ ipc_recv_blocking_for(uint32_t receiver_context_id,
                       uint32_t endpoint,
                       ipc_message_t *out_message)
 {
-    process_t *proc = 0;
-    thread_t *thread = 0;
-
     for (;;) {
-        int rc = ipc_recv_for(receiver_context_id, endpoint, out_message);
+        /* Fast path: poll without arming or blocking. */
+        int rc = ipc_try_recv_for(receiver_context_id, endpoint, out_message);
         if (rc != IPC_EMPTY) {
             return rc;
         }
 
-        proc = process_get(process_current_pid());
+        process_t *proc = process_get(process_current_pid());
         if (!proc) {
             return IPC_ERR_INVALID;
         }
-        process_block_on_ipc(proc);
 
-        rc = ipc_recv_for(receiver_context_id, endpoint, out_message);
-        if (rc == IPC_OK) {
-            thread = thread_get(thread_current_tid());
-            if (proc->state == PROCESS_STATE_BLOCKED &&
-                (!thread || thread->state == THREAD_STATE_BLOCKED)) {
-                proc->state = PROCESS_STATE_RUNNING;
-                proc->block_reason = PROCESS_BLOCK_NONE;
-                if (thread) {
-                    thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
+        /*
+         * Arm the waiter AND mark the process BLOCKED while ep->lock is held.
+         * Lock order: g_endpoint_table_lock → ep->lock → g_thread_table_lock.
+         *
+         * The fast poll above released ep->lock before returning.  We re-lock
+         * here explicitly — acquiring ep->lock while the table lock is still
+         * held (then releasing the table lock) — so that ipc_endpoints_release_owner
+         * cannot free the entry between the lookup and our lock.
+         *
+         * Fix: call process_block_on_ipc() before releasing ep->lock.  Any
+         * sender that acquires ep->lock after this point sees both waiter_tid
+         * set and the thread already BLOCKED, so process_wake_thread() is
+         * guaranteed to succeed.  process_block_on_ipc() is safe to call
+         * here: its hot path only touches per-CPU fields then calls
+         * thread_set_state, which acquires g_thread_table_lock — a leaf lock
+         * that nothing holds before taking ep->lock, so no cycle is possible.
+         */
+        ipc_endpoint_t *ep = 0;
+        {
+            list_iter_t eit;
+            spinlock_lock(&g_endpoint_table_lock);
+            ipc_endpoint_t *cur = (ipc_endpoint_t *)list_first(&g_endpoint_table, &eit);
+            while (cur) {
+                if (cur->id == endpoint && cur->in_use) {
+                    ep = cur;
+                    break;
                 }
+                cur = (ipc_endpoint_t *)list_next(&eit);
             }
+            if (ep) {
+                spinlock_lock(&ep->lock);
+            }
+            spinlock_unlock(&g_endpoint_table_lock);
+        }
+        if (!ep) {
+            return IPC_ERR_INVALID;
+        }
+        if (ep->type != IPC_ENDPOINT_TYPE_MESSAGE) {
+            spinlock_unlock(&ep->lock);
+            return IPC_ERR_INVALID;
+        }
+        if (receiver_context_id != IPC_CONTEXT_KERNEL &&
+            ep->owner_context_id != receiver_context_id) {
+            spinlock_unlock(&ep->lock);
+            return IPC_ERR_PERM;
+        }
+        if (ep->count > 0) {
+            /* Message arrived between the poll above and now. */
+            *out_message = ep->queue[ep->head];
+            ep->head = (ep->head + 1u) % IPC_QUEUE_DEPTH;
+            ep->count--;
+            ep->waiter_tid = 0;
+            spinlock_unlock(&ep->lock);
             return IPC_OK;
         }
-        if (rc != IPC_EMPTY) {
-            thread = thread_get(thread_current_tid());
-            if (proc->state == PROCESS_STATE_BLOCKED &&
-                (!thread || thread->state == THREAD_STATE_BLOCKED)) {
-                proc->state = PROCESS_STATE_RUNNING;
-                proc->block_reason = PROCESS_BLOCK_NONE;
-                if (thread) {
-                    thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
-                }
-            }
-            return rc;
+        /* Queue empty: arm and block atomically under the lock. */
+        uint32_t my_tid = thread_current_tid();
+        thread_t *thread = thread_get(my_tid);
+        ep->waiter_tid = my_tid;
+        /*
+         * Set blocking_transition BEFORE calling process_block_on_ipc.
+         * Once process_block_on_ipc marks the thread BLOCKED, a sender on
+         * another CPU may immediately call process_wake_thread, enqueuing this
+         * thread as READY.  Without the flag, a second CPU could dequeue and
+         * start restoring the saved context before this CPU has finished
+         * context_switch_high inside process_yield — running two CPUs on the
+         * same kernel stack.  The scheduler's ready_queue_dequeue skips and
+         * re-enqueues any READY thread with blocking_transition set; the flag
+         * is cleared in the PROCESS_RUN_BLOCKED handler after the context save
+         * is complete.
+         */
+        if (thread) {
+            thread->blocking_transition = 1;
         }
+        process_block_on_ipc(proc);
+        spinlock_unlock(&ep->lock);
 
-        thread = thread_get(thread_current_tid());
+        /*
+         * If a sender fired process_wake_thread() in the window between the
+         * ep->lock release and here, our state is already READY — loop back
+         * to collect the message instead of yielding.
+         */
         if (proc->state != PROCESS_STATE_BLOCKED ||
             (thread && thread->state != THREAD_STATE_BLOCKED)) {
+            if (thread) {
+                thread->blocking_transition = 0;
+            }
             continue;
         }
         process_yield(PROCESS_RUN_BLOCKED);
+        /* blocking_transition cleared by the PROCESS_RUN_BLOCKED scheduler handler */
     }
 }
 

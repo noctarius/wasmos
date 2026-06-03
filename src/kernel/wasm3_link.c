@@ -917,7 +917,6 @@ m3ApiRawFunction(wasmos_ipc_recv)
     uint32_t context_id = 0;
     uint32_t pid = process_current_pid();
     wasm_ipc_last_slot_t *slot;
-    int rc;
     process_t *process;
     thread_t *thread;
 
@@ -936,93 +935,54 @@ m3ApiRawFunction(wasmos_ipc_recv)
     }
     thread = thread_get(thread_current_tid());
     process->in_hostcall = 1;
+    process->block_reason = PROCESS_BLOCK_IPC;
 
     preempt_safepoint();
-    for (;;) {
-        process->block_reason = PROCESS_BLOCK_IPC;
-        rc = ipc_recv_for(context_id, (uint32_t)endpoint, &slot->message);
-        if (rc == IPC_EMPTY) {
-            process_block_on_ipc(process);
-            rc = ipc_recv_for(context_id, (uint32_t)endpoint, &slot->message);
-            if (rc == IPC_OK) {
-                if (thread) {
-                    process->state = PROCESS_STATE_RUNNING;
-                    process->block_reason = PROCESS_BLOCK_NONE;
-                    thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
-                } else {
-                    process->state = PROCESS_STATE_RUNNING;
-                    process->block_reason = PROCESS_BLOCK_NONE;
-                }
-                process->in_hostcall = 0;
-                slot->valid = 1;
-                wasm_fs_peer_slot_t *peer = wasm_fs_peer_slot_for_pid(pid);
-                if (peer &&
-                    slot->message.type >= FS_IPC_OPEN_REQ &&
-                    slot->message.type <= FS_IPC_READ_APP_REQ) {
-                    uint32_t owner_context = 0;
-                    int owner_rc = ipc_endpoint_owner(slot->message.source, &owner_context);
-                    if (owner_rc == IPC_OK &&
-                        owner_context != 0) {
-                        peer->valid = 1;
-                        peer->peer_context_id = owner_context;
-                    } else {
-                        peer->valid = 0;
-                        peer->peer_context_id = 0;
-                    }
-                }
-                preempt_safepoint();
-                m3ApiReturn(1);
-            }
-            if (rc != IPC_EMPTY) {
-                if (thread) {
-                    process->state = PROCESS_STATE_RUNNING;
-                    process->block_reason = PROCESS_BLOCK_NONE;
-                    thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
-                } else {
-                    process->state = PROCESS_STATE_RUNNING;
-                    process->block_reason = PROCESS_BLOCK_NONE;
-                }
-                process->in_hostcall = 0;
-                m3ApiReturn(-1);
-            }
-            /* An SMP sender can wake this thread after the second empty poll
-             * but before we yield. In that case, stay on-CPU and retry the
-             * receive instead of re-blocking behind already-queued work. */
-            if (process->state != PROCESS_STATE_BLOCKED ||
-                (thread && thread->state != THREAD_STATE_BLOCKED)) {
-                preempt_safepoint();
-                continue;
-            }
-            process_yield(PROCESS_RUN_BLOCKED);
-            preempt_safepoint();
-            continue;
-        }
-        if (rc != IPC_OK) {
-            process->block_reason = PROCESS_BLOCK_NONE;
-            process->in_hostcall = 0;
-            m3ApiReturn(-1);
-        }
-        process->block_reason = PROCESS_BLOCK_NONE;
-        process->in_hostcall = 0;
-        slot->valid = 1;
-        wasm_fs_peer_slot_t *peer = wasm_fs_peer_slot_for_pid(pid);
-        if (peer &&
-            slot->message.type >= FS_IPC_OPEN_REQ &&
-            slot->message.type <= FS_IPC_READ_APP_REQ) {
-            uint32_t owner_context = 0;
-            int owner_rc = ipc_endpoint_owner(slot->message.source, &owner_context);
-            if (owner_rc == IPC_OK &&
-                owner_context != 0) {
-                peer->valid = 1;
-                peer->peer_context_id = owner_context;
-            } else {
-                peer->valid = 0;
-                peer->peer_context_id = 0;
-            }
-        }
-        preempt_safepoint();
-        m3ApiReturn(1);
+
+    /*
+     * ipc_recv_blocking_for arms the waiter and marks the process BLOCKED
+     * atomically under ep->lock, closing the race where a sender could fire
+     * process_wake_thread between the arm and the BLOCKED transition, allowing
+     * an AP scheduler to pick up this thread while the current CPU still holds
+     * the kernel stack.
+     */
+    int rc = ipc_recv_blocking_for(context_id, (uint32_t)endpoint, &slot->message);
+
+    /*
+     * Restore running state unconditionally: ipc_recv_blocking_for may return
+     * with the process still BLOCKED when the message was found in the in-lock
+     * fast path (before process_yield was needed).  When the scheduler resumed
+     * us after a yield it already called process_set_running, so these writes
+     * are idempotent in that case.
+     */
+    process->state = PROCESS_STATE_RUNNING;
+    process->block_reason = PROCESS_BLOCK_NONE;
+    if (thread) {
+        thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
     }
+    process->in_hostcall = 0;
+
+    if (rc != IPC_OK) {
+        m3ApiReturn(-1);
+    }
+
+    slot->valid = 1;
+    wasm_fs_peer_slot_t *peer = wasm_fs_peer_slot_for_pid(pid);
+    if (peer &&
+        slot->message.type >= FS_IPC_OPEN_REQ &&
+        slot->message.type <= FS_IPC_READ_APP_REQ) {
+        uint32_t owner_context = 0;
+        int owner_rc = ipc_endpoint_owner(slot->message.source, &owner_context);
+        if (owner_rc == IPC_OK && owner_context != 0) {
+            peer->valid = 1;
+            peer->peer_context_id = owner_context;
+        } else {
+            peer->valid = 0;
+            peer->peer_context_id = 0;
+        }
+    }
+    preempt_safepoint();
+    m3ApiReturn(1);
 }
 
 m3ApiRawFunction(wasmos_ipc_try_recv)

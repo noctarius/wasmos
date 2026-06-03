@@ -29,6 +29,11 @@ typedef struct thread {
     thread_block_reason_t block_reason;
     uint8_t in_ready_queue;
     uint8_t is_kernel_worker;
+    /* Set while this thread is transitioning from RUNNING to BLOCKED on the
+     * current CPU and has not yet completed process_yield.  The scheduler
+     * skips (and re-enqueues) READY threads with this flag set to prevent
+     * a second CPU from restoring an in-progress context save. */
+    uint8_t blocking_transition;
     uintptr_t kstack_base;
     uintptr_t kstack_top;
     uintptr_t kstack_alloc_base_phys;

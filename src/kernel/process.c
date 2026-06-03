@@ -27,6 +27,7 @@ static process_t g_processes[PROCESS_MAX_COUNT];
 /* FIXME(process-list): migrate to kernel list storage after providing a
  * boot-safe list allocator path for early scheduler init/spawn. */
 static uint32_t g_next_pid;
+static spinlock_t g_process_table_lock;
 
 static process_t *process_find_by_pid(uint32_t pid);
 static void process_trampoline(void);
@@ -40,8 +41,9 @@ volatile uint8_t g_in_context_switch;
 /* NOTE: current_process, current_thread, preempt_disable_count, in_scheduler,
  * sched_ctx, need_resched, current_pid, resched_pending_since_tick,
  * resched_stall_reports, last_index, and last_run_result live in cpu_local_t.
- * g_in_context_switch remains here because context_switch.S addresses it via
- * RIP-relative; it will move to per-CPU when the assembly is updated. */
+ * FIXME(smp): g_in_context_switch remains global because context_switch.S
+ * still addresses it via RIP-relative accesses; under SMP one CPU can suppress
+ * another CPU's timer-driven preemption while its own context switch is live. */
 static uint64_t g_ctx_watch_logged;
 static uint64_t g_ctx_watch_last_logged_rip;
 static uint64_t g_ctx_watch_last_logged_rsp;
@@ -88,7 +90,6 @@ volatile uint64_t g_ctx_restore_rip;
 volatile uint64_t g_ctx_restore_rsp;
 volatile uint64_t g_ctx_restore_rflags;
 volatile uint64_t *g_pm_stack_watch;
-static uint32_t g_pm_preempt_safe_depth;
 
 extern uint8_t __kernel_start;
 extern uint8_t __kernel_end;
@@ -903,10 +904,13 @@ static void process_reap(process_t *proc) {
         native_driver_heap_release(proc->pid);
     }
     thread_reap_owner(proc->pid);
+    spinlock_lock(&g_process_table_lock);
     process_reset_slot(proc);
+    spinlock_unlock(&g_process_table_lock);
 }
 
 void process_init(void) {
+    spinlock_init(&g_process_table_lock);
     g_next_pid = 1;
     cpu_local()->last_index = 0;
     cpu_local()->current_pid = 0;
@@ -941,7 +945,7 @@ void process_init(void) {
     g_ctx_restore_rsp = 0;
     g_ctx_restore_rflags = 0;
     g_pm_stack_watch = 0;
-    g_pm_preempt_safe_depth = 0;
+    cpu_local()->pm_preempt_safe_depth = 0;
     thread_init();
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         process_reset_slot(&g_processes[i]);
@@ -971,18 +975,22 @@ process_spawn_as_impl(uint32_t parent_pid,
         return -1;
     }
 
+    spinlock_lock(&g_process_table_lock);
     process_t *slot = process_find_slot();
     if (!slot) {
+        spinlock_unlock(&g_process_table_lock);
         return -1;
     }
 
     uint32_t pid = g_next_pid++;
     mm_context_t *ctx = mm_context_create(pid);
     if (!ctx) {
+        spinlock_unlock(&g_process_table_lock);
         return -1;
     }
     if (paging_clone_low_slot_in_root(ctx->root_table) != 0) {
         mm_context_destroy(ctx->id);
+        spinlock_unlock(&g_process_table_lock);
         return -1;
     }
 
@@ -1008,9 +1016,11 @@ process_spawn_as_impl(uint32_t parent_pid,
     slot->entry = entry;
     slot->arg = arg;
     if (process_copy_name(slot, name ? name : "") != 0) {
+        spinlock_unlock(&g_process_table_lock);
         return -1;
     }
     if (thread_spawn_main(pid, name ? name : "", &slot->main_tid) != 0) {
+        spinlock_unlock(&g_process_table_lock);
         return -1;
     }
     {
@@ -1066,6 +1076,7 @@ process_spawn_as_impl(uint32_t parent_pid,
     }
     ready_queue_enqueue(process_main_thread(slot));
     *out_pid = pid;
+    spinlock_unlock(&g_process_table_lock);
     return 0;
 }
 
@@ -1086,18 +1097,22 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
     if (!entry || !out_pid) {
         return -1;
     }
+    spinlock_lock(&g_process_table_lock);
     if (g_idle_process) {
+        spinlock_unlock(&g_process_table_lock);
         return -1;
     }
 
     process_t *slot = process_find_slot();
     if (!slot) {
+        spinlock_unlock(&g_process_table_lock);
         return -1;
     }
 
     uint32_t pid = g_next_pid++;
     mm_context_t *ctx = mm_context_create(pid);
     if (!ctx) {
+        spinlock_unlock(&g_process_table_lock);
         return -1;
     }
 
@@ -1121,9 +1136,11 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
     slot->entry = entry;
     slot->arg = arg;
     if (process_copy_name(slot, name ? name : "") != 0) {
+        spinlock_unlock(&g_process_table_lock);
         return -1;
     }
     if (thread_spawn_main(pid, name ? name : "", &slot->main_tid) != 0) {
+        spinlock_unlock(&g_process_table_lock);
         return -1;
     }
     {
@@ -1157,6 +1174,7 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
     }
     g_idle_process = slot;
     *out_pid = pid;
+    spinlock_unlock(&g_process_table_lock);
     return 0;
 }
 
@@ -1848,7 +1866,7 @@ int process_preempt_from_irq(irq_frame_t *frame) {
         return 0;
     }
     if (cpu_local()->current_process && strcmp(cpu_local()->current_process->name, "process-manager") == 0 &&
-        g_pm_preempt_safe_depth == 0) {
+        cpu_local()->pm_preempt_safe_depth == 0) {
         return 0;
     }
     if (!process_should_resched()) {
@@ -2004,12 +2022,12 @@ void preempt_safepoint(void) {
 }
 
 void pm_preempt_safe_enter(void) {
-    g_pm_preempt_safe_depth++;
+    cpu_local()->pm_preempt_safe_depth++;
 }
 
 void pm_preempt_safe_leave(void) {
-    if (g_pm_preempt_safe_depth > 0) {
-        g_pm_preempt_safe_depth--;
+    if (cpu_local()->pm_preempt_safe_depth > 0) {
+        cpu_local()->pm_preempt_safe_depth--;
     }
 }
 

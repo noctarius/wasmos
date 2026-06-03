@@ -1,8 +1,10 @@
 #include "thread.h"
 #include "arch/x86_64/smp.h"
+#include "spinlock.h"
 
 static thread_t g_threads[THREAD_MAX_COUNT];
 static uint32_t g_next_tid;
+static spinlock_t g_thread_table_lock;
 
 static void
 thread_clear_ctx(process_context_t *ctx)
@@ -95,6 +97,7 @@ thread_copy_name(thread_t *thread, const char *name)
 void
 thread_init(void)
 {
+    spinlock_init(&g_thread_table_lock);
     g_next_tid = 1;
     for (uint32_t i = 0; i < THREAD_MAX_COUNT; ++i) {
         thread_reset_slot(&g_threads[i]);
@@ -121,8 +124,10 @@ thread_spawn_in_owner(uint32_t owner_pid,
     if (owner_pid == 0 || !out_tid) {
         return -1;
     }
+    spinlock_lock(&g_thread_table_lock);
     thread_t *slot = thread_find_slot();
     if (!slot) {
+        spinlock_unlock(&g_thread_table_lock);
         return -1;
     }
     slot->tid = g_next_tid++;
@@ -147,9 +152,11 @@ thread_spawn_in_owner(uint32_t owner_pid,
     slot->exit_status = 0;
     if (thread_copy_name(slot, name ? name : "") != 0) {
         thread_reset_slot(slot);
+        spinlock_unlock(&g_thread_table_lock);
         return -1;
     }
     *out_tid = slot->tid;
+    spinlock_unlock(&g_thread_table_lock);
     return 0;
 }
 
@@ -226,6 +233,7 @@ thread_reap_owner(uint32_t owner_pid)
     if (owner_pid == 0) {
         return;
     }
+    spinlock_lock(&g_thread_table_lock);
     for (uint32_t i = 0; i < THREAD_MAX_COUNT; ++i) {
         thread_t *thread = &g_threads[i];
         if (thread->state == THREAD_STATE_UNUSED || thread->owner_pid != owner_pid) {
@@ -233,37 +241,47 @@ thread_reap_owner(uint32_t owner_pid)
         }
         thread_reset_slot(thread);
     }
+    spinlock_unlock(&g_thread_table_lock);
 }
 
 void
 thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t reason)
 {
+    spinlock_lock(&g_thread_table_lock);
     thread_t *thread = thread_get(tid);
     if (!thread) {
+        spinlock_unlock(&g_thread_table_lock);
         return;
     }
     thread->state = state;
     thread->block_reason = reason;
+    spinlock_unlock(&g_thread_table_lock);
 }
 
 void
 thread_set_exit_status(uint32_t tid, int32_t exit_status)
 {
+    spinlock_lock(&g_thread_table_lock);
     thread_t *thread = thread_get(tid);
     if (!thread) {
+        spinlock_unlock(&g_thread_table_lock);
         return;
     }
     thread->exit_status = exit_status;
+    spinlock_unlock(&g_thread_table_lock);
 }
 
 void
 thread_reap(uint32_t tid)
 {
+    spinlock_lock(&g_thread_table_lock);
     thread_t *thread = thread_get(tid);
     if (!thread) {
+        spinlock_unlock(&g_thread_table_lock);
         return;
     }
     thread_reset_slot(thread);
+    spinlock_unlock(&g_thread_table_lock);
 }
 
 void

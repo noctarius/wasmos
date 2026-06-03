@@ -56,9 +56,15 @@ The contract for what an AP may do in steady state:
   makes user address space safe to enter from any AP without additional
   coordination.
 - **Per-CPU isolation.** `current_process`, `current_thread`, `sched_ctx`,
-  `preempt_disable_count`, and `in_scheduler` live in `cpu_local_t`. Each AP has
+  `preempt_disable_count`, `pm_preempt_safe_depth`, and `in_scheduler` live in
+  `cpu_local_t`. Each AP has
   its own copy; there is no cross-CPU scheduler state sharing outside the
   spinlock-protected ready queue.
+- **Serialized global state.** The remaining intentionally global allocators
+  and registries (page-frame allocator, process/thread slot tables, MM
+  context/shared-region registries) are serialized with IRQ-safe spinlocks,
+  and the early list fallback arena uses an atomic bump offset during
+  bootstrap.
 - **No AP-exclusive device work.** APs do not own interrupts, perform MMIO init,
   or interact with the IOAPIC RTE table. Device IRQs remain BSP-delivered (see
   [Interrupt Affinity and Timer Delivery](#interrupt-affinity-and-timer-delivery)).

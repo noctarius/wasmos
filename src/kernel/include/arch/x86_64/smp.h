@@ -46,6 +46,7 @@ typedef struct cpu_local {
     process_t         *current_process;
     thread_t          *current_thread;
     uint32_t           preempt_disable_count;
+    uint32_t           pm_preempt_safe_depth;
     volatile uint8_t   in_scheduler;
 
     /* Per-CPU IRQ-disable nesting (moved from spinlock.c globals for SMP safety). */

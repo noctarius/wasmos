@@ -42,12 +42,23 @@
   does not arm `waiter_tid` on `IPC_EMPTY`, preventing senders from waking a
   still-running poller thread and re-enqueueing it in `THREAD_STATE_RUNNING`.
   Blocking kernel-side receive loops still share `ipc_recv_blocking_for()`,
-  which retries after `process_block_on_ipc()` and restores `RUNNING` state if
-  a sender wins the wake-vs-yield race window. The scheduler’s low-stack
+  which retries after `process_block_on_ipc()` and now leaves externally woken
+  `READY` state intact instead of forcing `RUNNING` back into the thread slot.
+  The scheduler’s low-stack
   trampoline path now also uses a per-CPU scheduler stack instead of a shared
   global buffer, removing cross-CPU corruption of saved scheduler frames during
   concurrent low-stack entries. The equivalent WASM hostcall path
   (`wasmos_ipc_recv`) still restores the current thread state on the same race.
+- Shared kernel allocators and registries now also serialize their mutable SMP
+  state: the physical page-frame allocator protects its free-range and
+  refcount arrays with a spinlock; process/thread slot allocation and PID/TID
+  assignment are serialized; MM context/shared-region registries are serialized;
+  and the early list fallback arena uses an atomic bump offset so bootstrap
+  allocations cannot overlap across CPUs. `ipc_recv_blocking_for()` now only
+  restores `RUNNING` state when the caller is still locally blocked, avoiding a
+  READY-to-RUNNING stomp after a remote wake-up. One known scheduler gap
+  remains: `g_in_context_switch` and the related context-switch diagnostics are
+  still global until the assembly path is converted to per-CPU storage.
 - SMP late-boot storage/runtime fixes now also include correct higher-half
   aliasing for wasm block-buffer copy/write hostcalls, so ATA/FAT service
   traffic no longer dereferences raw physical addresses once SMP bring-up

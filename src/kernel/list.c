@@ -13,14 +13,23 @@ static void *
 list_early_alloc(size_t size)
 {
     uintptr_t base = (uintptr_t)&g_list_early_arena[0];
-    uintptr_t cursor = base + (uintptr_t)g_list_early_arena_off;
-    uintptr_t aligned = (cursor + 7u) & ~(uintptr_t)0x7u;
-    uintptr_t end = aligned + (uintptr_t)size;
-    if (size == 0 || end < aligned || end > (base + (uintptr_t)LIST_EARLY_ARENA_BYTES)) {
+    if (size == 0) {
         return 0;
     }
-    g_list_early_arena_off = (uint32_t)(end - base);
-    return (void *)aligned;
+    for (;;) {
+        uint32_t observed = g_list_early_arena_off;
+        uintptr_t cursor = base + (uintptr_t)observed;
+        uintptr_t aligned = (cursor + 7u) & ~(uintptr_t)0x7u;
+        uintptr_t end = aligned + (uintptr_t)size;
+        uint32_t next = 0;
+        if (end < aligned || end > (base + (uintptr_t)LIST_EARLY_ARENA_BYTES)) {
+            return 0;
+        }
+        next = (uint32_t)(end - base);
+        if (__sync_bool_compare_and_swap(&g_list_early_arena_off, observed, next)) {
+            return (void *)aligned;
+        }
+    }
 }
 
 void *

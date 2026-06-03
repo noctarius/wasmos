@@ -303,19 +303,25 @@ ipc_recv_blocking_for(uint32_t receiver_context_id,
         rc = ipc_recv_for(receiver_context_id, endpoint, out_message);
         if (rc == IPC_OK) {
             thread = thread_get(thread_current_tid());
-            proc->state = PROCESS_STATE_RUNNING;
-            proc->block_reason = PROCESS_BLOCK_NONE;
-            if (thread) {
-                thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
+            if (proc->state == PROCESS_STATE_BLOCKED &&
+                (!thread || thread->state == THREAD_STATE_BLOCKED)) {
+                proc->state = PROCESS_STATE_RUNNING;
+                proc->block_reason = PROCESS_BLOCK_NONE;
+                if (thread) {
+                    thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
+                }
             }
             return IPC_OK;
         }
         if (rc != IPC_EMPTY) {
             thread = thread_get(thread_current_tid());
-            proc->state = PROCESS_STATE_RUNNING;
-            proc->block_reason = PROCESS_BLOCK_NONE;
-            if (thread) {
-                thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
+            if (proc->state == PROCESS_STATE_BLOCKED &&
+                (!thread || thread->state == THREAD_STATE_BLOCKED)) {
+                proc->state = PROCESS_STATE_RUNNING;
+                proc->block_reason = PROCESS_BLOCK_NONE;
+                if (thread) {
+                    thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
+                }
             }
             return rc;
         }

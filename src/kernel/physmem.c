@@ -1,6 +1,7 @@
 #include "physmem.h"
 #include "paging.h"
 #include "klog.h"
+#include "spinlock.h"
 #include "string.h"
 
 #define PAGE_SIZE 0x1000ULL
@@ -41,6 +42,7 @@ typedef struct {
 
 static pfa_range_t g_ranges[128];
 static uint32_t g_range_count;
+static spinlock_t g_pfa_lock;
 
 extern uint8_t __kernel_start;
 extern uint8_t __kernel_end;
@@ -226,9 +228,12 @@ static void pfa_upgrade_refcount(void) {
 }
 
 void pfa_init(const boot_info_t *boot_info) {
+    spinlock_init(&g_pfa_lock);
+    spinlock_lock(&g_pfa_lock);
     g_range_count = 0;
     if (!boot_info || !boot_info->memory_map || boot_info->memory_desc_size == 0) {
         klog_write("[pfa] no memory map\n");
+        spinlock_unlock(&g_pfa_lock);
         return;
     }
 
@@ -262,12 +267,14 @@ void pfa_init(const boot_info_t *boot_info) {
 
     uint64_t test = pfa_alloc_pages(1);
     klog_printf("[pfa] test alloc=0x%016llX\n", (unsigned long long)test);
+    spinlock_unlock(&g_pfa_lock);
 }
 
 uint64_t pfa_alloc_pages(uint64_t pages) {
     if (pages == 0) {
         return 0;
     }
+    spinlock_lock(&g_pfa_lock);
     for (uint32_t i = 0; i < g_range_count; ++i) {
         pfa_range_t *range = &g_ranges[i];
         if (range->pages >= pages) {
@@ -279,9 +286,11 @@ uint64_t pfa_alloc_pages(uint64_t pages) {
                 if (idx < g_tracked_pages)
                     g_refcount[idx] = 1;
             }
+            spinlock_unlock(&g_pfa_lock);
             return addr;
         }
     }
+    spinlock_unlock(&g_pfa_lock);
     return 0;
 }
 
@@ -289,6 +298,7 @@ uint64_t pfa_alloc_pages_below(uint64_t pages, uint64_t max_addr) {
     if (pages == 0 || max_addr == 0) {
         return 0;
     }
+    spinlock_lock(&g_pfa_lock);
     uint64_t limit = max_addr & ~(PAGE_SIZE - 1ULL);
     for (uint32_t i = 0; i < g_range_count; ++i) {
         pfa_range_t *range = &g_ranges[i];
@@ -313,8 +323,10 @@ uint64_t pfa_alloc_pages_below(uint64_t pages, uint64_t max_addr) {
             if (idx < g_tracked_pages)
                 g_refcount[idx] = 1;
         }
+        spinlock_unlock(&g_pfa_lock);
         return addr;
     }
+    spinlock_unlock(&g_pfa_lock);
     return 0;
 }
 
@@ -322,6 +334,7 @@ void pfa_free_pages(uint64_t base, uint64_t pages) {
     if (base == 0 || pages == 0) {
         return;
     }
+    spinlock_lock(&g_pfa_lock);
     uint64_t run_start = 0, run_len = 0;
     for (uint64_t i = 0; i < pages; i++) {
         uint64_t phys = base + i * PAGE_SIZE;
@@ -347,12 +360,14 @@ void pfa_free_pages(uint64_t base, uint64_t pages) {
     if (run_len) {
         pfa_insert_range(run_start, run_len);
     }
+    spinlock_unlock(&g_pfa_lock);
 }
 
 void pfa_pin_pages(uint64_t base, uint64_t pages) {
     if (base == 0 || pages == 0) {
         return;
     }
+    spinlock_lock(&g_pfa_lock);
     for (uint64_t i = 0; i < pages; i++) {
         uint64_t idx = (base + i * PAGE_SIZE) >> 12;
         if (idx < g_tracked_pages) {
@@ -363,4 +378,5 @@ void pfa_pin_pages(uint64_t base, uint64_t pages) {
             g_refcount[idx]++;
         }
     }
+    spinlock_unlock(&g_pfa_lock);
 }

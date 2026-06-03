@@ -1044,7 +1044,7 @@ m3ApiRawFunction(wasmos_ipc_try_recv)
     }
 
     preempt_safepoint();
-    rc = ipc_recv_for(context_id, (uint32_t)endpoint, &slot->message);
+    rc = ipc_try_recv_for(context_id, (uint32_t)endpoint, &slot->message);
     if (rc == IPC_EMPTY) {
         m3ApiReturn(0); /* no message — return without blocking */
     }
@@ -1187,7 +1187,9 @@ m3ApiRawFunction(wasmos_block_buffer_copy)
         m3ApiReturn(-1);
     }
 
-    const uint8_t *src = (const uint8_t *)(uintptr_t)((uint32_t)phys + (uint32_t)offset);
+    const uint8_t *src =
+        (const uint8_t *)(uintptr_t)(((uint64_t)(uint32_t)phys + (uint64_t)(uint32_t)offset) |
+                                     KERNEL_HIGHER_HALF_BASE);
     if (wasm_copy_to_user_sync_views(proc->context_id,
                                      ptr_user,
                                      ptr,
@@ -1230,7 +1232,9 @@ m3ApiRawFunction(wasmos_block_buffer_write)
         m3ApiReturn(-1);
     }
 
-    uint8_t *dst = (uint8_t *)(uintptr_t)((uint32_t)phys + (uint32_t)offset);
+    uint8_t *dst =
+        (uint8_t *)(uintptr_t)(((uint64_t)(uint32_t)phys + (uint64_t)(uint32_t)offset) |
+                               KERNEL_HIGHER_HALF_BASE);
     uint32_t copied = 0;
     uint8_t bounce[256];
     while (copied < (uint32_t)len) {

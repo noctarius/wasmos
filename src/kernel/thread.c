@@ -1,8 +1,8 @@
 #include "thread.h"
+#include "arch/x86_64/smp.h"
 
 static thread_t g_threads[THREAD_MAX_COUNT];
 static uint32_t g_next_tid;
-static uint32_t g_current_tid;
 
 static void
 thread_clear_ctx(process_context_t *ctx)
@@ -96,7 +96,6 @@ void
 thread_init(void)
 {
     g_next_tid = 1;
-    g_current_tid = 0;
     for (uint32_t i = 0; i < THREAD_MAX_COUNT; ++i) {
         thread_reset_slot(&g_threads[i]);
     }
@@ -218,9 +217,6 @@ thread_mark_owner_exited(uint32_t owner_pid, int32_t exit_status)
         thread->exit_status = exit_status;
         thread->state = THREAD_STATE_ZOMBIE;
         thread->block_reason = THREAD_BLOCK_NONE;
-        if (g_current_tid == thread->tid) {
-            g_current_tid = 0;
-        }
     }
 }
 
@@ -234,9 +230,6 @@ thread_reap_owner(uint32_t owner_pid)
         thread_t *thread = &g_threads[i];
         if (thread->state == THREAD_STATE_UNUSED || thread->owner_pid != owner_pid) {
             continue;
-        }
-        if (g_current_tid == thread->tid) {
-            g_current_tid = 0;
         }
         thread_reset_slot(thread);
     }
@@ -270,20 +263,22 @@ thread_reap(uint32_t tid)
     if (!thread) {
         return;
     }
-    if (g_current_tid == tid) {
-        g_current_tid = 0;
-    }
     thread_reset_slot(thread);
 }
 
 void
 thread_set_current(uint32_t tid)
 {
-    g_current_tid = tid;
+    if (tid == 0) {
+        cpu_local()->current_thread = 0;
+        return;
+    }
+    cpu_local()->current_thread = thread_get(tid);
 }
 
 uint32_t
 thread_current_tid(void)
 {
-    return g_current_tid;
+    thread_t *thread = cpu_local()->current_thread;
+    return thread ? thread->tid : 0;
 }

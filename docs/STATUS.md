@@ -33,19 +33,28 @@
   endpoint spinlocks are SMP-safe. No behavioral change at `WASMOS_SMP=0`.
   Full design in
   `docs/architecture/28-smp.md`.
-- SMP runtime hardening now also covers the AP-join scheduler path and the
-  blocking IPC receive path: the scheduler installs `cpu_local()->current_*`
-  ownership before marking a thread running, clears ready-queue membership
-  while still under the shared queue lock, and drops CPU ownership only after
-  the returned run result is fully processed. Blocking kernel-side receive
-  loops now share `ipc_recv_blocking_for()`, which retries the receive after
-  `process_block_on_ipc()` and restores process/thread `RUNNING` state if a
-  sender wins the wake-vs-yield race window. The equivalent WASM hostcall path
-  (`wasmos_ipc_recv`) now restores the current thread state on the same race.
-  These fixes remove earlier SMP failures during AP scheduler join, init/fs
-  service startup, and PM sync spawn waits; current bring-up now progresses
-  through `device-manager` and PCI inventory before the next unresolved later
-  boot hang.
+- SMP runtime hardening now also covers several real shared-state failures
+  exposed after APs joined the scheduler loop. The current-thread identity is
+  fully per-CPU (`thread_current_tid()` now reads `cpu_local()->current_thread`
+  instead of a shared global), so IPC waiter registration, wake targeting,
+  syscall self-thread queries, and WASM hostcalls no longer race across CPUs.
+  Nonblocking IPC pollers now use a separate `ipc_try_recv_for()` path that
+  does not arm `waiter_tid` on `IPC_EMPTY`, preventing senders from waking a
+  still-running poller thread and re-enqueueing it in `THREAD_STATE_RUNNING`.
+  Blocking kernel-side receive loops still share `ipc_recv_blocking_for()`,
+  which retries after `process_block_on_ipc()` and restores `RUNNING` state if
+  a sender wins the wake-vs-yield race window. The scheduler’s low-stack
+  trampoline path now also uses a per-CPU scheduler stack instead of a shared
+  global buffer, removing cross-CPU corruption of saved scheduler frames during
+  concurrent low-stack entries. The equivalent WASM hostcall path
+  (`wasmos_ipc_recv`) still restores the current thread state on the same race.
+- SMP late-boot storage/runtime fixes now also include correct higher-half
+  aliasing for wasm block-buffer copy/write hostcalls, so ATA/FAT service
+  traffic no longer dereferences raw physical addresses once SMP bring-up
+  reaches filesystem activity. With the current SMP fixes in place, the default
+  `run-qemu-test` boot now reaches framebuffer, input, font, compositor, and
+  CLI startup and lands at the interactive prompt instead of faulting during
+  `device-manager`/storage bring-up.
 - Interrupt controller selection is now a build-time Kconfig choice
   (`WASMOS_IRQ_PIC` / `WASMOS_IRQ_LAPIC` / `WASMOS_IRQ_IOAPIC`, mapped to
   `WASMOS_IRQ_MODE` 0/1/2). PIC + PIT remains the default. LAPIC mode replaces

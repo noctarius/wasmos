@@ -945,7 +945,7 @@ pm_poll_spawn(uint32_t pm_context_id)
     }
 
     ipc_message_t msg;
-    int recv_rc = ipc_recv_for(pm_context_id, g_pm.fs_reply_endpoint, &msg);
+    int recv_rc = ipc_try_recv_for(pm_context_id, g_pm.fs_reply_endpoint, &msg);
     if (recv_rc == IPC_EMPTY) {
         return;
     }

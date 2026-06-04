@@ -747,11 +747,17 @@ the sync slot is set up.
 
 ---
 
-### SMP-MED-01 — No enforced lock hierarchy → latent deadlocks
+### SMP-MED-01 ✅ DOCUMENTED — No enforced lock hierarchy → latent deadlocks
 
 As SMP-CRIT fixes land, new lock sites will be added.  Without a documented
-hierarchy, a deadlock cycle will close.  The hierarchy above (Lock Hierarchy
-section) must be audited against every call path.
+hierarchy, a deadlock cycle will close.
+
+**Resolution:** Full lock hierarchy documented in `docs/LOCK_HIERARCHY.md`.
+Covers all 13 spinlocks, required acquisition order for the scheduler/IPC
+group and physical-memory group, independent/leaf locks, cross-group rules,
+and a checklist for new lock sites.  The Lock Hierarchy section above reflects
+the ordering at the time of the original audit; `docs/LOCK_HIERARCHY.md` is
+the authoritative living reference going forward.
 
 ---
 

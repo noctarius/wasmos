@@ -803,7 +803,7 @@ unnecessary; the IRQ-path send now operates correctly without recursive detectio
 
 ---
 
-### SMP-MED-05 — `process_preempt_from_irq` races with `process_reap`
+### SMP-MED-05 ✅ FIXED — `process_preempt_from_irq` races with `process_reap`
 
 **File:** `src/kernel/process.c:1908–2034`
 

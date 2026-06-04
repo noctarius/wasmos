@@ -158,6 +158,10 @@ void
 kernel_boot_run_scheduler_loop(void)
 {
     for (;;) {
+        /* SMP-LOW-04: cli suppresses IRQ delivery on THIS CPU only so the
+         * timer handler cannot re-enter the scheduler loop recursively.
+         * It does NOT protect shared state from other CPUs — that is handled
+         * by the spinlocks inside process_schedule_once and its callees. */
         __asm__ volatile("cli");
         if (process_schedule_once() != 0) {
             __asm__ volatile("pause");

@@ -853,7 +853,7 @@ thread blocks forever.
 
 ---
 
-### SMP-LOW-01 — Shared diagnostic counters with lost updates
+### SMP-LOW-01 ✅ FIXED — Shared diagnostic counters with lost updates
 
 **File:** `src/kernel/process.c:54–55,1733–1735`
 
@@ -864,7 +864,7 @@ without synchronization.
 
 ---
 
-### SMP-LOW-02 — `g_idle_process` needs store-release
+### SMP-LOW-02 ✅ FIXED — `g_idle_process` needs store-release
 
 **File:** `src/kernel/process.c:1109`
 
@@ -874,7 +874,7 @@ Written under `g_process_table_lock` but read without lock on every CPU.
 
 ---
 
-### SMP-LOW-03 — AP `started` flag polled without acquire barrier
+### SMP-LOW-03 ✅ FIXED — AP `started` flag polled without acquire barrier
 
 **File:** `src/kernel/arch/x86_64/smp.c:190`
 
@@ -884,7 +884,7 @@ Correct on x86 TSO but not self-documenting.
 
 ---
 
-### SMP-LOW-04 — `cli` loop in scheduler is misleading under SMP
+### SMP-LOW-04 ✅ FIXED — `cli` loop in scheduler is misleading under SMP
 
 **File:** `src/kernel/kernel_boot_runtime.c:158–170`
 

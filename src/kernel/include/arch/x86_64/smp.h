@@ -14,10 +14,7 @@
  * it always returns &g_cpus[0]; on an SMP build it reads GS:0 (the self-
  * pointer written during per-CPU init).
  *
- * NOTE: g_in_context_switch remains a standalone global because context_switch.S
- * writes it via RIP-relative addressing. It will migrate to per-CPU when the
- * assembly is updated to use GS-relative addressing.
- * sched_ctx was moved here; process_preempt_trampoline uses the C helper
+ * sched_ctx is stored here; process_preempt_trampoline uses the C helper
  * cpu_local_sched_ctx() to obtain its address without needing an asm offset.
  */
 
@@ -33,6 +30,12 @@ typedef struct cpu_local {
 
     /* Startup synchronisation: AP sets to 1 after full per-CPU init. */
     volatile uint8_t     started;
+
+    /* Set to 1 while context_switch / context_switch_to are executing on this
+     * CPU.  Used by process_preempt_from_irq to suppress timer preemption
+     * while register state is mid-save/restore.  Sits in the natural padding
+     * byte after started so cpu_local_t layout is unchanged from GDT onward. */
+    volatile uint8_t     in_context_switch;
 
     /* Per-CPU x86 descriptor tables.
      * Interrupt stacks (IST1 / RSP0) are separate per-CPU allocations whose
@@ -77,6 +80,11 @@ typedef struct cpu_local {
      * another CPU's malloc to the wrong heap slot. */
     uint32_t           wasm3_heap_bound_pid;
 } cpu_local_t;
+
+/* context_switch.S encodes this offset as CPU_LOCAL_IN_CONTEXT_SWITCH_OFFSET.
+ * If the assert fires, update the .set in context_switch.S to match. */
+_Static_assert(offsetof(cpu_local_t, in_context_switch) == 17,
+               "cpu_local_t in_context_switch offset changed; update context_switch.S");
 
 extern cpu_local_t g_cpus[WASMOS_MAX_CPUS];
 extern uint32_t    g_cpu_count;   /* CPUs discovered in MADT; always >= 1 */

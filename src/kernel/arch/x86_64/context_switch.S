@@ -1,8 +1,12 @@
 .section .text
 .global context_switch
 .global context_switch_to
-.extern g_in_context_switch
 .extern cpu_local_sched_ctx
+
+/* Byte offset of cpu_local_t.in_context_switch within cpu_local_t.
+ * Must match offsetof(cpu_local_t, in_context_switch) — protected by the
+ * _Static_assert in smp.h. */
+.set CPU_LOCAL_IN_CONTEXT_SWITCH_OFFSET, 17
 .extern g_ctxsw_last_out_ctx
 .extern g_ctxsw_last_out_rip
 .extern g_ctxsw_last_out_rsp
@@ -31,8 +35,12 @@
 # contexts can resume via iretq while ring0 contexts keep the ret fast path.
 context_switch:
     # Mark the transition so debug code can distinguish genuine process state
-    # corruption from an in-flight save/restore sequence.
-    movb $1, g_in_context_switch(%rip)
+    # corruption from an in-flight save/restore sequence.  Use GS-relative
+    # addressing so each CPU sets its own per-CPU flag (not a shared global).
+    push %rdi
+    movq %gs:0, %rdi
+    movb $1, CPU_LOCAL_IN_CONTEXT_SWITCH_OFFSET(%rdi)
+    pop %rdi
     movq %rdi, g_ctxsw_last_out_ctx(%rip)
     movq %rsi, g_ctxsw_last_in_ctx(%rip)
     movq g_ctx_watch_ctx(%rip), %rax
@@ -140,10 +148,11 @@ context_switch:
     movq %rsp, g_ctx_restore_rsp(%rip)
     movq %rax, g_ctx_restore_rflags(%rip)
     popfq
+    movq %gs:0, %r9
+    movb $0, CPU_LOCAL_IN_CONTEXT_SWITCH_OFFSET(%r9)
     movq 112(%rdx), %rax
     movq 96(%rdx), %rcx
     movq 88(%rdx), %rdx
-    movb $0, g_in_context_switch(%rip)
     ret
 2:
     movq %r11, %rsi
@@ -158,20 +167,27 @@ context_switch:
     movq %rcx, g_ctx_restore_rip(%rip)
     movq %rsp, g_ctx_restore_rsp(%rip)
     movq %rax, g_ctx_restore_rflags(%rip)
+    push %r9
+    movq %gs:0, %r9
+    movb $0, CPU_LOCAL_IN_CONTEXT_SWITCH_OFFSET(%r9)
+    pop %r9
     movq 112(%rdx), %rax
     movq 96(%rdx), %rcx
     movq 88(%rdx), %rdx
-    movb $0, g_in_context_switch(%rip)
     iretq
 1:
-    movb $0, g_in_context_switch(%rip)
+    movq %gs:0, %r9
+    movb $0, CPU_LOCAL_IN_CONTEXT_SWITCH_OFFSET(%r9)
     ret
 
 context_switch_to:
     # context_switch_to is the one-way variant used when no outgoing task state
     # needs to be saved, for example when jumping from the scheduler context
     # into the very first runnable task or the preempt trampoline.
-    movb $1, g_in_context_switch(%rip)
+    push %rdi
+    movq %gs:0, %rdi
+    movb $1, CPU_LOCAL_IN_CONTEXT_SWITCH_OFFSET(%rdi)
+    pop %rdi
     movq %rdi, %rdx
     testq %rdx, %rdx
     js 6f
@@ -230,10 +246,11 @@ context_switch_to:
     movq %rsp, g_ctx_restore_rsp(%rip)
     movq %rax, g_ctx_restore_rflags(%rip)
     popfq
+    movq %gs:0, %r9
+    movb $0, CPU_LOCAL_IN_CONTEXT_SWITCH_OFFSET(%r9)
     movq 112(%rdx), %rax
     movq 96(%rdx), %rcx
     movq 88(%rdx), %rdx
-    movb $0, g_in_context_switch(%rip)
     ret
 3:
     movq %r11, %rsi
@@ -248,10 +265,13 @@ context_switch_to:
     movq %rcx, g_ctx_restore_rip(%rip)
     movq %rsp, g_ctx_restore_rsp(%rip)
     movq %rax, g_ctx_restore_rflags(%rip)
+    push %r9
+    movq %gs:0, %r9
+    movb $0, CPU_LOCAL_IN_CONTEXT_SWITCH_OFFSET(%r9)
+    pop %r9
     movq 112(%rdx), %rax
     movq 96(%rdx), %rcx
     movq 88(%rdx), %rdx
-    movb $0, g_in_context_switch(%rip)
     iretq
 
 .global process_preempt_trampoline

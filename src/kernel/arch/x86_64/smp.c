@@ -187,7 +187,7 @@ smp_cpus_up(void)
 
         /* Wait for the AP to signal that it is fully initialised. */
         uint32_t timeout = 50000000u;
-        while (!ap->started && timeout-- > 0u) {
+        while (!__atomic_load_n(&ap->started, __ATOMIC_ACQUIRE) && timeout-- > 0u) {
             __asm__ volatile("pause");
         }
 

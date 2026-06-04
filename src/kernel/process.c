@@ -1267,7 +1267,7 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
             main_thread->ctx = slot->ctx;
         }
     }
-    g_idle_process = slot;
+    __atomic_store_n(&g_idle_process, slot, __ATOMIC_RELEASE);
     *out_pid = pid;
     spinlock_unlock(&g_process_table_lock);
     return 0;
@@ -1791,8 +1791,9 @@ static int process_schedule_once_impl(void) {
     thread_t *thread = ready_queue_dequeue();
     process_t *proc = process_owner_for_thread(thread);
     if (!thread || !proc || thread->state != THREAD_STATE_READY || !proc->entry) {
-        if (g_idle_process && g_idle_process->state == PROCESS_STATE_READY) {
-            proc = g_idle_process;
+        process_t *idle = __atomic_load_n(&g_idle_process, __ATOMIC_ACQUIRE);
+        if (idle && idle->state == PROCESS_STATE_READY) {
+            proc = idle;
             thread = process_main_thread(proc);
         } else {
             return 1;
@@ -1873,10 +1874,12 @@ static int process_schedule_once_impl(void) {
     } else {
         context_switch_high(&cpu_local()->sched_ctx, run_ctx);
     }
-    g_sched_switch_count++;
-    if (!g_sched_progress_logged && g_sched_switch_count >= SCHED_PROGRESS_MARKER_SWITCHES) {
-        g_sched_progress_logged = 1;
-        klog_write("[test] sched progress ok\n");
+    __sync_fetch_and_add(&g_sched_switch_count, 1);
+    if (!g_sched_progress_logged &&
+        g_sched_switch_count >= SCHED_PROGRESS_MARKER_SWITCHES) {
+        if (__sync_bool_compare_and_swap(&g_sched_progress_logged, 0, 1)) {
+            klog_write("[test] sched progress ok\n");
+        }
     }
     process_run_result_t result = cpu_local()->last_run_result;
 
@@ -2012,8 +2015,7 @@ void process_tick(void) {
         cpu_local()->current_thread->ticks_remaining--;
         if (cpu_local()->current_thread->ticks_remaining == 0) {
             cpu_local()->need_resched = 1;
-            if (!g_preempt_smoke_logged) {
-                g_preempt_smoke_logged = 1;
+            if (__sync_bool_compare_and_swap(&g_preempt_smoke_logged, 0, 1)) {
                 klog_write("[test] preempt ok\n");
             }
         }
@@ -2097,7 +2099,7 @@ int process_preempt_from_irq(irq_frame_t *frame) {
             }
         }
         if (!valid) {
-            g_trap_frame_invalid_reports++;
+            uint64_t reports = __sync_add_and_fetch(&g_trap_frame_invalid_reports, 1);
             klog_write("[watchdog] trap frame invalid cs=");
             serial_write_hex64(frame->cs);
             klog_write("[watchdog] rip=");
@@ -2107,7 +2109,7 @@ int process_preempt_from_irq(irq_frame_t *frame) {
             klog_write("[watchdog] user_rsp=");
             serial_write_hex64(frame->user_rsp);
             klog_write("[watchdog] reports=");
-            serial_write_hex64(g_trap_frame_invalid_reports);
+            serial_write_hex64(reports);
             klog_write("\n");
             process_clear_resched();
             return 0;

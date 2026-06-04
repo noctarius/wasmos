@@ -66,6 +66,33 @@
   `run-qemu-test` boot now reaches framebuffer, input, font, compositor, and
   CLI startup and lands at the interactive prompt instead of faulting during
   `device-manager`/storage bring-up.
+- SMP native-driver and sync-spawn hardening now fixes two additional races
+  exposed on 4-CPU boots. First, `native_driver_start` now switches CR3 to the
+  driver's own page table (`ctx->root_table`) before calling the ELF entry
+  function and restores the kernel CR3 on return; previously the entry ran with
+  the kernel's PML4, executing wrong physical pages because native driver ELFs
+  are linked at `IMAGE_BASE=0x10000000` (covered by the kernel's bootstrap
+  identity mapping, not the driver's own second-level tables). Second,
+  `process_manager_on_child_ready` no longer reads or writes `g_pm.spawn`
+  fields; that function executes on the native driver's CPU (not PM's), so any
+  `g_pm.spawn` access was an unsynchronised cross-CPU read/write. The race:
+  PM writes `in_use=1` and `sync_child_pid` in sequence; if the driver CPU
+  observed `in_use=1` before `sync_child_pid` was visible, the pid-match check
+  failed, `in_use` was cleared to 0 without sending a reply, and PM's
+  `pm_poll_sync_spawn` (which checks `in_use` before entering its polling loop)
+  skipped every subsequent iteration — leaving `device-manager` hung at the
+  `proc_notify_ready` boundary (visible as a boot stall after "acpi-bus scan
+  complete"). Fix: `process_manager_on_child_ready` now only calls
+  `process_notify_ready(proc)` (sets `proc->ready=1`); `pm_poll_sync_spawn`
+  already checks `child->ready` on every PM iteration and sends the
+  `PROC_IPC_RESP` safely from PM's own single-threaded context. Additionally,
+  the WASM driver registry now uses an explicit spinlock instead of
+  `critical_section_enter/leave`, and `thread_wake_if_blocked` atomically
+  transitions `BLOCKED→READY` under the thread-table lock to prevent double
+  enqueue from concurrent CPU wakeups. The `blocking_transition` field uses
+  acquire/release atomics to guard the `RUNNING→BLOCKED` window. After these
+  fixes, 4-CPU SMP boots reliably reach the WAMOS interactive CLI across
+  repeated runs.
 - Interrupt controller selection is now a build-time Kconfig choice
   (`WASMOS_IRQ_PIC` / `WASMOS_IRQ_LAPIC` / `WASMOS_IRQ_IOAPIC`, mapped to
   `WASMOS_IRQ_MODE` 0/1/2). PIC + PIT remains the default. LAPIC mode replaces

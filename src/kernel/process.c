@@ -1642,28 +1642,35 @@ uint32_t process_wake_by_context(uint32_t context_id) {
     uint32_t woken = 0;
     process_t *table = process_table();
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        spinlock_lock(&g_process_table_lock);
         process_t *proc = &table[i];
-        if (proc->context_id != context_id) {
+        if (proc->context_id != context_id ||
+            proc->block_reason != PROCESS_BLOCK_IPC ||
+            proc->state != PROCESS_STATE_BLOCKED) {
+            spinlock_unlock(&g_process_table_lock);
             continue;
         }
-        if (proc->block_reason != PROCESS_BLOCK_IPC) {
-            continue;
-        }
-        if (proc->state != PROCESS_STATE_BLOCKED) {
-            continue;
-        }
+        /* process_thread_for_transition → thread_get acquires g_thread_table_lock.
+         * thread_wake_if_blocked acquires g_thread_table_lock.
+         * Both are valid: g_process_table_lock → g_thread_table_lock. */
         thread_t *thread = process_thread_for_transition(proc);
         if (!thread) {
+            spinlock_unlock(&g_process_table_lock);
             continue;
         }
         if (!thread_wake_if_blocked(thread->tid)) {
+            spinlock_unlock(&g_process_table_lock);
             continue;
         }
         proc->state = PROCESS_STATE_READY;
         proc->block_reason = PROCESS_BLOCK_NONE;
+        /* Use ready_queue_enqueue_with_proc to avoid re-acquiring g_process_table_lock
+         * inside ready_queue_enqueue → process_owner_for_thread → process_find_by_pid.
+         * Lock order: g_process_table_lock → g_ready_queue_lock. */
         if (!__atomic_load_n(&thread->blocking_transition, __ATOMIC_ACQUIRE)) {
-            ready_queue_enqueue(thread);
+            ready_queue_enqueue_with_proc(thread, proc);
         }
+        spinlock_unlock(&g_process_table_lock);
         woken++;
     }
     return woken;

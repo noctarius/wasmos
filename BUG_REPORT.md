@@ -468,6 +468,13 @@ In specific preemption timing, a thread can be silently dropped from the run que
 >   Internal callers that already hold the lock use `thread_get_nolock`.  See SMP-CRIT-02 below.
 >
 > **Newly fixed (2026-06-04):**
+> - SMP-CRIT-05 (remaining: unlocked table iteration in `process_wake_by_context`): the outer
+>   loop read `proc->context_id`, `proc->block_reason`, `proc->state` without holding
+>   `g_process_table_lock`.  Concurrent `process_reap → process_reset_slot` could zero a slot
+>   mid-read; writes to `proc->state`/`proc->block_reason` after `thread_wake_if_blocked`
+>   could land on a slot already being cleared.  Fix: acquire `g_process_table_lock` per slot,
+>   use `ready_queue_enqueue_with_proc` to avoid re-entrant lock on enqueue.
+>   See SMP-CRIT-05 below.
 > - SMP-CRIT-03 (process table reads without lock): `process_find_by_pid` and
 >   `process_find_by_context_internal` read `g_processes[]` without `g_process_table_lock`.
 >   Concurrent `process_reap → process_reset_slot` (under the lock) can zero a slot mid-read.
@@ -578,24 +585,34 @@ race window.
 
 ---
 
-### SMP-CRIT-05 ⚠️ PARTIALLY FIXED — `process_wake_by_context` can schedule a RUNNING thread on two CPUs
+### SMP-CRIT-05 ✅ FIXED — `process_wake_by_context` can schedule a RUNNING thread on two CPUs
 
-**File:** `src/kernel/process.c:1567–1591`
+**File:** `src/kernel/process.c`
 
-The state check and `process_set_ready`/`ready_queue_enqueue` sequence are
+The state check and `process_set_ready`/`ready_queue_enqueue` sequence were
 not atomic.  A concurrent wakeup can put a RUNNING thread into the ready
 queue, causing two CPUs to execute it simultaneously — instant stack/register
 corruption.
 
-**Partial fix applied:** `thread_wake_if_blocked` now atomically checks
+**Partial fix (prior):** `thread_wake_if_blocked` atomically checks
 `THREAD_STATE_BLOCKED` and transitions to READY under `g_thread_table_lock`,
 preventing two concurrent wakeups from both enqueueing the same thread.
 `blocking_transition` (acquire/release) guards the RUNNING→BLOCKED window.
 
-**Remaining:** The outer table iteration in `process_wake_by_context` is still
-done without `g_process_table_lock`.  A lockless read of `proc->state` could
-race with a concurrent `process_reap`.  Full fix: hold `g_process_table_lock`
-across the entire sequence and verify no CPU is running the thread.
+**Remaining fix (now applied):** The outer table iteration read
+`proc->context_id`, `proc->block_reason`, and `proc->state` without
+`g_process_table_lock`.  Concurrent `process_reap → process_reset_slot`
+(under the lock) could zero those fields mid-read, or the writes to
+`proc->state = READY` / `proc->block_reason = NONE` (after
+`thread_wake_if_blocked` succeeded) could land on a slot being
+simultaneously cleared.  Fix: acquire `g_process_table_lock` per-slot
+across the full check/mutate sequence.  `ready_queue_enqueue_with_proc`
+(which takes the already-resolved `process_t *` and acquires only
+`g_ready_queue_lock`) replaces `ready_queue_enqueue` to avoid re-acquiring
+`g_process_table_lock` on the enqueue path.  Lock order:
+`g_process_table_lock → g_thread_table_lock` (via `process_thread_for_transition`
+and `thread_wake_if_blocked`) and `g_process_table_lock → g_ready_queue_lock`
+(via `ready_queue_enqueue_with_proc`) — both valid per the hierarchy.
 
 ---
 
@@ -877,6 +894,7 @@ The table below records what was done and why.
 | `src/kernel/arch/x86_64/context_switch.S` | All 7 set/clear sites use GS-relative `.set CPU_LOCAL_IN_CONTEXT_SWITCH_OFFSET, 17` writes; `push/pop %r9` at `iretq` sites to preserve user register (SMP-CRIT-01) |
 | `src/kernel/thread.c` | `thread_get_nolock` static helper; `thread_get`, `thread_find_main_for_pid`, `thread_owner_tid_at`, `thread_mark_owner_exited` now hold `g_thread_table_lock` during scan; internal locked callers use `thread_get_nolock` (SMP-CRIT-02) |
 | `src/kernel/process.c` | `process_find_by_pid_nolock` / `process_find_by_context_internal_nolock` static helpers; public variants acquire `g_process_table_lock`; `ready_queue_enqueue_with_proc` eliminates re-entrant lock in spawn path (SMP-CRIT-03) |
+| `src/kernel/process.c` | `process_wake_by_context` acquires `g_process_table_lock` per-slot; uses `ready_queue_enqueue_with_proc` to avoid re-entrant lock (SMP-CRIT-05 remaining) |
 
 ### Previously Reverted / Removed
 

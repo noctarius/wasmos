@@ -450,6 +450,14 @@ In specific preemption timing, a thread can be silently dropped from the run que
 >   `pm_apply_spawn_caps` ran.  ATA ran without I/O-port capability, timed out, left disks as
 >   `present=0`.  All PM spawn handlers now use `_parked` variants and call `process_unpark_pid`
 >   after full setup.  See SMP-HIGH-07 below.
+>
+> **Newly fixed (2026-06-04, commit `05cf0e0b`):**
+> - SMP-CRIT-01 (`g_in_context_switch` global flag): flag was a single shared global — writing
+>   it on CPU 0 suppressed preemption on CPU 1.  Worse, no C code ever read it (dead code).
+>   Moved into `cpu_local_t.in_context_switch` (offset 17, uses padding byte after `started`).
+>   `context_switch.S` updated to use GS-relative writes at all 7 set/clear sites.
+>   `process_preempt_from_irq` wired to check `cpu_local()->in_context_switch`.
+>   See SMP-CRIT-01 below.
 
 ### Lock Hierarchy (required, not yet enforced)
 
@@ -466,17 +474,23 @@ Never acquire an outer lock while holding an inner one.
 
 ---
 
-### SMP-CRIT-01 — `g_in_context_switch` is a single global
+### SMP-CRIT-01 ✅ FIXED — `g_in_context_switch` is a single global
 
-**File:** `src/kernel/process.c:40`
+**File:** `src/kernel/process.c:40` (removed), `src/kernel/include/arch/x86_64/smp.h`,
+`src/kernel/arch/x86_64/context_switch.S`
 
-When CPU 0 sets `g_in_context_switch` during its own context switch,
-`process_preempt_from_irq` on CPU 1 checks the same flag and incorrectly
-suppresses preemption on CPU 1.
+Two bugs in one: (a) `g_in_context_switch` was a shared global — when CPU 0 set it
+during its context switch, `process_preempt_from_irq` on CPU 1 checked the same flag
+and incorrectly suppressed preemption on CPU 1; (b) the flag was dead code — no C code
+ever read it (`process_preempt_from_irq` checked CS ring bits but not the flag).
 
-**Fix:** Move into `cpu_local_t`. Update `context_switch.S` to use a
-GS-relative write. Test `cpu_local()->in_context_switch` in
-`process_preempt_from_irq`.
+**Fix:** `volatile uint8_t in_context_switch` moved into `cpu_local_t` at offset 17
+(natural padding byte after `started`; layout verified with `_Static_assert`).
+All 7 set/clear sites in `context_switch.S` updated to GS-relative writes using
+`.set CPU_LOCAL_IN_CONTEXT_SWITCH_OFFSET, 17`.  At kernel `ret` sites `%r9` is
+caller-saved (safe to clobber); at `iretq` sites `%r9` holds user state and is
+preserved with `push/pop` around the GS access.  `process_preempt_from_irq` now
+checks `cpu_local()->in_context_switch` before acting.
 
 ---
 
@@ -819,6 +833,9 @@ The table below records what was done and why.
 | `src/kernel/include/thread.h` | `blocking_transition` field declared; `thread_wake_if_blocked` prototype |
 | `src/kernel/process.c`, `src/kernel/include/process.h` | `process_spawn_as_parked`, `process_spawn_as_ready_gated_parked`, `process_unpark_pid` — park flag in `process_spawn_as_impl` to prevent SMP cap-race (SMP-HIGH-07) |
 | `src/kernel/process_manager_spawn.c` | All spawn handlers use `_parked` variants; each calls `process_unpark_pid` after caps/CWD applied; temp `[dbg-spawn]` logs removed |
+| `src/kernel/include/arch/x86_64/smp.h` | `in_context_switch` field at offset 17 with `_Static_assert`; stale NOTE removed (SMP-CRIT-01) |
+| `src/kernel/process.c` | Removed dead `g_in_context_switch` global; wired `cpu_local()->in_context_switch` guard in `process_preempt_from_irq` (SMP-CRIT-01) |
+| `src/kernel/arch/x86_64/context_switch.S` | All 7 set/clear sites use GS-relative `.set CPU_LOCAL_IN_CONTEXT_SWITCH_OFFSET, 17` writes; `push/pop %r9` at `iretq` sites to preserve user register (SMP-CRIT-01) |
 
 ### Previously Reverted / Removed
 

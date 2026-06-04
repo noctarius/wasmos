@@ -308,8 +308,8 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
 
     preempt_disable();
     if ((require_explicit_ready
-            ? process_spawn_as_ready_gated(parent_pid, slot->name, pm_app_entry, slot, out_pid)
-            : process_spawn_as(parent_pid, slot->name, pm_app_entry, slot, out_pid)) != 0) {
+            ? process_spawn_as_ready_gated_parked(parent_pid, slot->name, pm_app_entry, slot, out_pid)
+            : process_spawn_as_parked(parent_pid, slot->name, pm_app_entry, slot, out_pid)) != 0) {
         preempt_enable();
         slot->in_use = 0;
         return -1;
@@ -327,6 +327,8 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
         return -1;
     }
     preempt_enable();
+    /* Process is parked: caller must call process_unpark_pid() after all
+     * post-spawn setup (capabilities, CWD, etc.) is complete. */
     return 0;
 }
 
@@ -462,8 +464,8 @@ pm_spawn_from_buffer(uint32_t parent_pid,
     }
 
     if ((require_explicit_ready
-            ? process_spawn_as_ready_gated(parent_pid, slot->name, pm_app_entry, slot, out_pid)
-            : process_spawn_as(parent_pid, slot->name, pm_app_entry, slot, out_pid)) != 0) {
+            ? process_spawn_as_ready_gated_parked(parent_pid, slot->name, pm_app_entry, slot, out_pid)
+            : process_spawn_as_parked(parent_pid, slot->name, pm_app_entry, slot, out_pid)) != 0) {
         slot->in_use = 0;
         return -1;
     }
@@ -476,6 +478,8 @@ pm_spawn_from_buffer(uint32_t parent_pid,
         slot->in_use = 0;
         return -1;
     }
+    /* Process is parked: caller must call process_unpark_pid() after all
+     * post-spawn setup (capabilities, CWD, etc.) is complete. */
     return 0;
 }
 
@@ -645,13 +649,6 @@ pm_handle_spawn_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, child_pid);
 
     uint32_t timeout_ms = (uint32_t)msg->arg1;
-    klog_write("[pm] spawn_sync timeout_ms=");
-    serial_write_hex64((uint64_t)timeout_ms);
-    klog_write(" ticks_now=");
-    serial_write_hex64(timer_ticks());
-    klog_write(" ticks_per_1s=");
-    serial_write_hex64(timer_ms_to_ticks(1000));
-    klog_write("\n");
     g_pm.spawn.in_use = 1;
     g_pm.spawn.is_sync = 1;
     g_pm.spawn.reply_endpoint = msg->source;
@@ -667,9 +664,7 @@ pm_handle_spawn_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     g_pm.spawn.sync_timeout_ticks = (timeout_ms > 0)
         ? (timer_ticks() + timer_ms_to_ticks(timeout_ms))
         : 0;
-    klog_write("[pm] spawn_sync deadline=");
-    serial_write_hex64(g_pm.spawn.sync_timeout_ticks);
-    klog_write("\n");
+    process_unpark_pid(child_pid);
     return 0;
 }
 
@@ -736,6 +731,7 @@ pm_handle_spawn_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     }
     g_pm.spawn.sync_timeout_ticks = (timeout_ms > 0)
         ? (timer_ticks() + timer_ms_to_ticks(timeout_ms)) : 0;
+    process_unpark_pid(child_pid);
     return 0;
 }
 
@@ -803,6 +799,7 @@ pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     }
     g_pm.spawn.sync_timeout_ticks = (timeout_ms > 0)
         ? (timer_ticks() + timer_ms_to_ticks(timeout_ms)) : 0;
+    process_unpark_pid(child_pid);
     return 0;
 }
 
@@ -883,6 +880,7 @@ pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     }
     g_pm.spawn.sync_timeout_ticks = (timeout_ms > 0)
         ? (timer_ticks() + timer_ms_to_ticks(timeout_ms)) : 0;
+    process_unpark_pid(child_pid);
     return 0;
 }
 
@@ -1007,6 +1005,7 @@ pm_poll_spawn(uint32_t pm_context_id)
         return;
     }
     (void)pm_inherit_child_cwd(pm_context_id, g_pm.spawn.parent_context_id, pid);
+    process_unpark_pid(pid);
 
     ipc_message_t resp;
     resp.type = PROC_IPC_RESP;
@@ -1163,6 +1162,7 @@ pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t *msg)
         return -1;
     }
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);
+    process_unpark_pid(pid);
 
     ipc_message_t resp;
     resp.type = PROC_IPC_RESP;
@@ -1222,6 +1222,7 @@ pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t *msg)
         (void)process_kill(pid, -1);
         return -1;
     }
+    process_unpark_pid(pid);
     ipc_message_t resp;
     resp.type = PROC_IPC_RESP;
     resp.source = g_pm.proc_endpoint;
@@ -1340,6 +1341,7 @@ pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t *msg)
         (void)process_kill(pid, -1);
         return -1;
     }
+    process_unpark_pid(pid);
     ipc_message_t resp;
     resp.type = PROC_IPC_RESP;
     resp.source = g_pm.proc_endpoint;
@@ -1498,9 +1500,11 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
         g_pm.spawn.sync_child_pid = pid;
         g_pm.spawn.app_flags = app_flags;
         g_pm.spawn.sync_timeout_ticks = 0;
+        process_unpark_pid(pid);
         return 0;
     }
 
+    process_unpark_pid(pid);
     ipc_message_t resp;
     resp.type = PROC_IPC_RESP;
     resp.source = g_pm.proc_endpoint;
@@ -1573,6 +1577,7 @@ pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t *msg)
         (void)process_kill(pid, -1);
         return -1;
     }
+    process_unpark_pid(pid);
 
     ipc_message_t resp;
     resp.type = PROC_IPC_RESP;

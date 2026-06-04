@@ -843,7 +843,7 @@ thread blocks forever.
 
 ---
 
-### SMP-MED-08 — `wake_waiters` and `process_info*` iterate table without lock
+### SMP-MED-08 ✅ FIXED — `wake_waiters` and `process_info*` iterate table without lock
 
 **File:** `src/kernel/process.c:771–861, 2088–2257`
 

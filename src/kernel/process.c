@@ -801,10 +801,16 @@ static void process_wake_waiters(uint32_t target_pid) {
     if (target_pid == 0) {
         return;
     }
+    /* SMP-MED-08: protect each process slot individually, mirroring the
+     * per-entry pattern used in process_wake_by_context.  Use
+     * ready_queue_enqueue_with_proc to avoid re-acquiring g_process_table_lock
+     * inside ready_queue_enqueue → process_owner_for_thread. */
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        spinlock_lock(&g_process_table_lock);
         process_t *proc = &g_processes[i];
         uint8_t woke_any = 0;
         if (proc->state == PROCESS_STATE_UNUSED || proc->state == PROCESS_STATE_ZOMBIE) {
+            spinlock_unlock(&g_process_table_lock);
             continue;
         }
         for (uint32_t j = 0;; ++j) {
@@ -830,16 +836,17 @@ static void process_wake_waiters(uint32_t target_pid) {
                 cpu_local()->current_thread &&
                 cpu_local()->current_thread->tid != waiter->tid) {
                 thread_set_state(waiter->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
-                ready_queue_enqueue(waiter);
+                ready_queue_enqueue_with_proc(waiter, proc);
             } else {
                 process_set_ready(proc, waiter);
-                ready_queue_enqueue(waiter);
+                ready_queue_enqueue_with_proc(waiter, proc);
             }
         }
         if (woke_any && proc->state == PROCESS_STATE_BLOCKED) {
             proc->state = PROCESS_STATE_READY;
             proc->block_reason = PROCESS_BLOCK_NONE;
         }
+        spinlock_unlock(&g_process_table_lock);
     }
 }
 
@@ -863,6 +870,7 @@ process_has_waiters(uint32_t target_pid)
     if (target_pid == 0) {
         return 0;
     }
+    spinlock_lock(&g_process_table_lock);
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         process_t *proc = &g_processes[i];
         if (proc->state == PROCESS_STATE_UNUSED || proc->state == PROCESS_STATE_ZOMBIE) {
@@ -882,10 +890,12 @@ process_has_waiters(uint32_t target_pid)
                 continue;
             }
             if (waiter->wait_target_pid == target_pid) {
+                spinlock_unlock(&g_process_table_lock);
                 return 1;
             }
         }
     }
+    spinlock_unlock(&g_process_table_lock);
     return 0;
 }
 
@@ -2230,12 +2240,14 @@ uint64_t process_watchdog_issue_count(void) {
 
 uint32_t process_count_active(void) {
     uint32_t count = 0;
+    spinlock_lock(&g_process_table_lock);
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_processes[i].state != PROCESS_STATE_UNUSED &&
             g_processes[i].state != PROCESS_STATE_ZOMBIE) {
             count++;
         }
     }
+    spinlock_unlock(&g_process_table_lock);
     return count;
 }
 
@@ -2248,6 +2260,7 @@ int process_info_at(uint32_t index, uint32_t *out_pid, const char **out_name) {
         return -1;
     }
     uint32_t current = 0;
+    spinlock_lock(&g_process_table_lock);
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_processes[i].state == PROCESS_STATE_UNUSED ||
             g_processes[i].state == PROCESS_STATE_ZOMBIE) {
@@ -2256,10 +2269,12 @@ int process_info_at(uint32_t index, uint32_t *out_pid, const char **out_name) {
         if (current == index) {
             *out_pid = g_processes[i].pid;
             *out_name = g_processes[i].name ? g_processes[i].name : "";
+            spinlock_unlock(&g_process_table_lock);
             return 0;
         }
         current++;
     }
+    spinlock_unlock(&g_process_table_lock);
     return -1;
 }
 
@@ -2268,6 +2283,7 @@ int process_info_at_ex(uint32_t index, uint32_t *out_pid, uint32_t *out_parent_p
         return -1;
     }
     uint32_t current = 0;
+    spinlock_lock(&g_process_table_lock);
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_processes[i].state == PROCESS_STATE_UNUSED ||
             g_processes[i].state == PROCESS_STATE_ZOMBIE) {
@@ -2277,10 +2293,12 @@ int process_info_at_ex(uint32_t index, uint32_t *out_pid, uint32_t *out_parent_p
             *out_pid = g_processes[i].pid;
             *out_parent_pid = g_processes[i].parent_pid;
             *out_name = g_processes[i].name ? g_processes[i].name : "";
+            spinlock_unlock(&g_process_table_lock);
             return 0;
         }
         current++;
     }
+    spinlock_unlock(&g_process_table_lock);
     return -1;
 }
 
@@ -2362,6 +2380,7 @@ process_info_at_stats(uint32_t index,
         return -1;
     }
     uint32_t current = 0;
+    spinlock_lock(&g_process_table_lock);
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         process_t *proc = &g_processes[i];
         if (proc->state == PROCESS_STATE_UNUSED ||
@@ -2382,6 +2401,8 @@ process_info_at_stats(uint32_t index,
                     ? cpu_local()->current_thread->tid
                     : 0;
             out_stats->context_id = proc->context_id;
+            /* Stat helpers (thread ticks, mm, heap) only use the proc pointer
+             * and leaf locks; none re-acquire g_process_table_lock. */
             out_stats->cpu_ticks = process_sum_thread_ticks(proc);
             out_stats->vm_total_bytes = process_context_mem_bytes(proc);
             out_stats->thread_kstack_total_bytes = process_thread_kstack_total_bytes(proc);
@@ -2392,10 +2413,12 @@ process_info_at_stats(uint32_t index,
              * accounting once per-context page presence tracking is available.
              */
             out_stats->rss_est_bytes = out_stats->vm_total_bytes;
+            spinlock_unlock(&g_process_table_lock);
             return 0;
         }
         current++;
     }
+    spinlock_unlock(&g_process_table_lock);
     return -1;
 }
 

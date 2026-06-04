@@ -982,7 +982,8 @@ process_spawn_as_impl(uint32_t parent_pid,
                       process_entry_t entry,
                       void *arg,
                       uint32_t *out_pid,
-                      uint8_t require_explicit_ready)
+                      uint8_t require_explicit_ready,
+                      uint8_t park)
 {
     if (!entry || !out_pid) {
         return -1;
@@ -1087,14 +1088,20 @@ process_spawn_as_impl(uint32_t parent_pid,
         trace_write("[sched] spawn preempt-busy stack top=");
         trace_do(serial_write_hex64(slot->stack_top));
     }
-    ready_queue_enqueue(process_main_thread(slot));
+    if (!park) {
+        ready_queue_enqueue(process_main_thread(slot));
+    }
     *out_pid = pid;
     spinlock_unlock(&g_process_table_lock);
     return 0;
 }
 
 int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid) {
-    return process_spawn_as_impl(parent_pid, name, entry, arg, out_pid, 0u);
+    return process_spawn_as_impl(parent_pid, name, entry, arg, out_pid, 0u, 0u);
+}
+
+int process_spawn_as_parked(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid) {
+    return process_spawn_as_impl(parent_pid, name, entry, arg, out_pid, 0u, 1u);
 }
 
 int process_spawn_as_ready_gated(uint32_t parent_pid,
@@ -1103,7 +1110,30 @@ int process_spawn_as_ready_gated(uint32_t parent_pid,
                                  void *arg,
                                  uint32_t *out_pid)
 {
-    return process_spawn_as_impl(parent_pid, name, entry, arg, out_pid, 1u);
+    return process_spawn_as_impl(parent_pid, name, entry, arg, out_pid, 1u, 0u);
+}
+
+int process_spawn_as_ready_gated_parked(uint32_t parent_pid,
+                                        const char *name,
+                                        process_entry_t entry,
+                                        void *arg,
+                                        uint32_t *out_pid)
+{
+    return process_spawn_as_impl(parent_pid, name, entry, arg, out_pid, 1u, 1u);
+}
+
+int process_unpark_pid(uint32_t pid)
+{
+    process_t *proc = process_get(pid);
+    if (!proc) {
+        return -1;
+    }
+    thread_t *t = process_main_thread(proc);
+    if (!t) {
+        return -1;
+    }
+    ready_queue_enqueue(t);
+    return 0;
 }
 
 int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint32_t *out_pid) {

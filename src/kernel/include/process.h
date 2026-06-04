@@ -1,14 +1,25 @@
+/* process.h - Kernel process and scheduler management.
+ *
+ * A process_t represents a schedulable unit.  The kernel uses cooperative +
+ * preemptive scheduling: a process yields voluntarily via process_yield() or is
+ * preempted by the timer IRQ via process_preempt_from_irq().
+ *
+ * The process_context_t is saved/restored by context_switch.S; its layout is
+ * verified by _Static_assert to match the byte offsets used in the assembly.
+ *
+ * Canary values (ctx_canary_pre / ctx_canary_post) bracket the saved context to
+ * detect stack overflow or memory corruption across context switches. */
 #ifndef WASMOS_PROCESS_H
 #define WASMOS_PROCESS_H
 
 #include <stdint.h>
 #include <stddef.h>
 
-#define PROCESS_MAX_COUNT 48
+#define PROCESS_MAX_COUNT 48      /* total process slots (includes kernel and user processes) */
 #define PROCESS_NAME_MAX 64
-// Round-robin scheduler time slice (fixed ticks per run).
+/* Round-robin scheduler time slice (fixed ticks per run). */
 #define PROCESS_DEFAULT_SLICE_TICKS 5u
-#define PROCESS_STACK_SIZE 524288u
+#define PROCESS_STACK_SIZE 524288u  /* default kernel stack per process (512 KB) */
 #define PROCESS_CTX_CANARY_VALUE 0xC0FFEE0DD15EA5EULL
 
 typedef struct {

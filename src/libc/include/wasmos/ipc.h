@@ -1,3 +1,4 @@
+/* ipc.h - IPC message struct, send/receive helpers, and service lookup wrappers */
 #ifndef WASMOS_LIBC_WASMOS_IPC_H
 #define WASMOS_LIBC_WASMOS_IPC_H
 
@@ -17,6 +18,9 @@ extern "C" {
 #ifndef WASMOS_IPC_SEND_RETRY_LIMIT
 #define WASMOS_IPC_SEND_RETRY_LIMIT 4096
 #endif
+/* Decoded IPC message.  Note that the kernel's IPC_FIELD ordering is:
+ * field 0=type, 1=request_id, 2=arg0, 3=arg1, 4=source, 5=destination,
+ * 6=arg2, 7=arg3 — arg2/arg3 are not fields 4/5. */
 typedef struct {
     int32_t type;
     int32_t request_id;
@@ -40,6 +44,8 @@ wasmos_ipc_call_retry(int32_t destination_endpoint,
                       wasmos_ipc_message_t *out_reply,
                       int32_t send_retry_limit);
 
+/* Populate message from the last received IPC fields.
+ * Must be called immediately after wasmos_ipc_recv/try_recv returns > 0. */
 static inline void
 wasmos_ipc_message_read_last(wasmos_ipc_message_t *message)
 {
@@ -74,6 +80,8 @@ wasmos_ipc_reply(int32_t reply_endpoint,
                            0);
 }
 
+/* Send with automatic retry on IPC_ERR_FULL (-3) up to retry_limit times,
+ * yielding between each attempt.  Use 0 for the default limit. */
 static inline int32_t
 wasmos_ipc_send_retry(int32_t destination_endpoint,
                       int32_t source_endpoint,
@@ -171,6 +179,8 @@ wasmos_ipc_call_retry(int32_t destination_endpoint,
     return 0;
 }
 
+/* Pack up to 16 chars of a service name into four int32 IPC args (4 bytes each,
+ * little-endian).  Used by wasmos_svc_register/lookup. */
 static inline void
 wasmos_ipc_pack_name16(const char *name, int32_t out_args[4])
 {
@@ -191,6 +201,8 @@ wasmos_ipc_pack_name16(const char *name, int32_t out_args[4])
     }
 }
 
+/* Register service_endpoint under service_name with the process manager.
+ * Returns the assigned service handle on success, -1 on failure. */
 static inline int32_t
 wasmos_svc_register(int32_t proc_endpoint,
                     int32_t service_endpoint,
@@ -214,6 +226,8 @@ wasmos_svc_register(int32_t proc_endpoint,
     return (resp.type == SVC_IPC_REGISTER_RESP) ? resp.arg0 : -1;
 }
 
+/* Look up a service by name; returns its endpoint or -1 if not registered.
+ * Does not retry — caller must loop with yield for services not yet ready. */
 static inline int32_t
 wasmos_svc_lookup(int32_t proc_endpoint,
                   int32_t reply_endpoint,

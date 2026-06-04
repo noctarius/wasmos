@@ -1,3 +1,6 @@
+/* unistd.c - POSIX file I/O over FS IPC: open/read/write/close/stat/fopen etc.
+ * All operations funnel through libc_fs_request or libc_fs_request_stream,
+ * which communicate with the FS manager service via the kernel FS buffer. */
 #include "fcntl.h"
 #include "stdio.h"
 #include "string.h"
@@ -35,6 +38,9 @@ libc_fs_endpoint(void)
     return wasmos_fs_endpoint();
 }
 
+/* Write path (NUL-terminated) into the FS buffer and return its length.
+ * The FS buffer is a shared kernel region; the borrow/release lifecycle is
+ * managed by the FS manager, not by the caller. */
 static int
 libc_fs_stage_path(const char *path, size_t *out_len)
 {
@@ -57,6 +63,8 @@ libc_fs_stage_path(const char *path, size_t *out_len)
     return 0;
 }
 
+/* Send an FS IPC request and wait for FS_IPC_RESP; skips unmatched messages.
+ * Returns 0 on success and fills *out_arg0/*out_arg1 from the response. */
 static int
 libc_fs_request(int32_t type,
                 int32_t arg0,
@@ -112,6 +120,9 @@ libc_fs_request(int32_t type,
     return 0;
 }
 
+/* Send an FS IPC request and reassemble FS_IPC_STREAM chunks into out[].
+ * Each stream message carries 4 bytes in arg0..arg3 (0 = padding after EOF).
+ * Returns total bytes written, or -1 on error. */
 static ssize_t
 libc_fs_request_stream(int32_t type, int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3,
                        char *out, size_t out_cap)

@@ -1,3 +1,6 @@
+/* device_manager.c - user-space service coordinating hardware driver startup:
+ * consumes PCI/ACPI inventory IPC messages, applies rule files, and spawns
+ * drivers in dependency order (pci_bus -> fat -> rule-matched drivers). */
 #include <stdint.h>
 #include "stdio.h"
 #include "string.h"
@@ -156,6 +159,8 @@ static int dm_register_inventory_handlers(void);
 static int dm_register_query_handlers(void);
 static int dm_register_rules_handlers(void);
 
+/* Intent callback: copy the resolved message into dm_intent_wait_t.msg
+ * and set done=1 so dm_ipc_call's poll loop exits. */
 static void
 dm_intent_resolve_store(void *user, const wasmos_ipc_message_t *msg)
 {
@@ -167,6 +172,10 @@ dm_intent_resolve_store(void *user, const wasmos_ipc_message_t *msg)
     state->msg = *msg;
 }
 
+/* Synchronous IPC call: send a request via the dm_ipc_loop intent table and
+ * spin-poll until the matching reply arrives or max_empty_polls is reached.
+ * Also drains the query endpoint while waiting so external callers don't stall.
+ * Returns 0 on success, -1 on timeout or send failure. */
 static int
 dm_ipc_call(int32_t destination_endpoint,
             int32_t source_endpoint,
@@ -864,6 +873,9 @@ queue_always_spawn_rules(void)
     }
 }
 
+/* Walk pci_match_rules against the current registry; for the first unspawned
+ * match, populate active_rule_spawn_* and set rule_spawn_pending=1.
+ * Only one spawn is queued at a time; caller re-invokes after completion. */
 static void
 queue_pci_match_rule_spawns(void)
 {
@@ -1114,6 +1126,10 @@ reset_selected_storage(void)
     g_dm.selected_storage_caps.irq_mask = 0;
 }
 
+/* Query PROC_IPC_MODULE_META for the given module_index/match_index and
+ * decode the packed IPC response fields into individual output parameters.
+ * arg0 encodes io_port_min/max; arg1 encodes class/subclass/prog_if/flags;
+ * arg2 encodes vendor_id/device_id. Returns 0 on success, -1 otherwise. */
 static int
 query_driver_module_meta(int32_t module_index,
                          uint32_t match_index,
@@ -1553,6 +1569,14 @@ handle_query_endpoint(void)
     (void)wasmos_sys_event_loop_poll(&g_dm_query_loop, 16);
 }
 
+/* Service entry point.  module_count (arg1) is the number of initfs modules
+ * known to PM; used to decide whether pci_bus/fat modules are available.
+ * Creates four event-loop endpoints (ipc, inventory, query, rule_reply),
+ * registers services "devmgr.inv" and "devmgr.query", loads init rules,
+ * then runs the hw_phase state machine.
+ * NOTE: boot rules (DEVMGR_RULES_BOOT_ROOT) must be fully loaded before new
+ * rule-driven spawns begin — poll_boot_rules_async must not be called while
+ * a rule spawn is active or it will corrupt active_rule_spawn_* state. */
 WASMOS_WASM_EXPORT int32_t
 initialize(int32_t proc_endpoint,
            int32_t module_count,

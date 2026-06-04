@@ -1,3 +1,4 @@
+/* ctype.h - Minimal character-classification and case-conversion declarations. */
 #ifndef WASMOS_LIBC_CTYPE_H
 #define WASMOS_LIBC_CTYPE_H
 

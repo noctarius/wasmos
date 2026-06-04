@@ -1,3 +1,7 @@
+/* list_linked.c - Singly-linked list backend.
+ * Nodes are allocated with the early-boot arena or slab allocator and carry an
+ * inline variable-length payload.  O(n) traversal; O(1) prepend/remove at
+ * current iterator position. */
 #include "list_internal.h"
 #include "string.h"
 

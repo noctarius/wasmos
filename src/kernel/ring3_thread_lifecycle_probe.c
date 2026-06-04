@@ -1,3 +1,6 @@
+/* ring3_thread_lifecycle_probe.c - Ring-3 thread lifecycle test binary.
+ * Flat binary loaded by kernel_ring3_probe_runtime.c to verify that thread
+ * spawn, yield, join, and exit syscalls work correctly from user space. */
 #include <stdint.h>
 #include "wasmos/syscall_x86_64.h"
 #include "wasmos/thread_x86_64.h"

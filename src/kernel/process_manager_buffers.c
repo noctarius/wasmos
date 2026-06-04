@@ -1,3 +1,7 @@
+/* process_manager_buffers.c - PM shared DMA buffer management.
+ * Manages the borrow/release lifecycle for PM_BUFFER_KIND_FILESYSTEM and
+ * PM_BUFFER_KIND_FRAMEBUFFER shared memory.  Only one active borrow per
+ * (kind, context) at a time is enforced to prevent concurrent DMA corruption. */
 #include "process_manager.h"
 #include "process_manager_internal.h"
 #include "framebuffer.h"

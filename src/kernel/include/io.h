@@ -1,3 +1,5 @@
+/* io.h - x86 I/O port access helpers (in/out byte/word/dword).
+ * io_wait() issues a write to port 0x80 as a short delay after PIC/PIT operations. */
 #ifndef WASMOS_IO_H
 #define WASMOS_IO_H
 

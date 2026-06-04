@@ -1,3 +1,4 @@
+/* paging.h - 4-level x86_64 page table management: map, unmap, and context switch. */
 #ifndef WASMOS_PAGING_H
 #define WASMOS_PAGING_H
 

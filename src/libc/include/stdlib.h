@@ -1,3 +1,4 @@
+/* stdlib.h - Minimal stdlib declarations: malloc/free/atoi/itoa for WASM libc. */
 #ifndef WASMOS_LIBC_STDLIB_H
 #define WASMOS_LIBC_STDLIB_H
 

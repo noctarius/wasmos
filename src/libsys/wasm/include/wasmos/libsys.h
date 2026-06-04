@@ -1,3 +1,7 @@
+/* libsys.h - WASM userspace system library (libsys).
+ * High-level helpers built on top of the raw wasmos/api.h host-call imports:
+ * IPC message construction, service lookup, FS buffer access, and scheduler
+ * yield.  Drivers and services #include this instead of api.h directly. */
 #ifndef WASMOS_LIBSYS_H
 #define WASMOS_LIBSYS_H
 
@@ -17,6 +21,7 @@ extern "C" {
 #define WASMOS_SYS_INTENT_MAX 16
 #define WASMOS_SYS_HANDLER_MAX 16
 
+/* Pending request awaiting a reply matched by request_id (intent table). */
 typedef struct {
     int32_t in_use;
     int32_t request_id;
@@ -24,6 +29,7 @@ typedef struct {
     void *user;
 } wasmos_sys_intent_t;
 
+/* Registered handler for a specific IPC message type (handler table). */
 typedef struct {
     int32_t in_use;
     int32_t msg_type;
@@ -31,15 +37,19 @@ typedef struct {
     void *user;
 } wasmos_sys_handler_t;
 
+/* Event loop state: combines an intent table (request/reply matching) and a
+ * handler table (unsolicited message dispatch) for a single endpoint. */
 typedef struct {
     int32_t receiver_endpoint;
-    int32_t next_request_id;
+    int32_t next_request_id;   /* auto-incremented by wasmos_sys_intent_send */
     void (*default_on_message)(void *user, const wasmos_ipc_message_t *msg);
     void *default_user;
     wasmos_sys_intent_t intents[WASMOS_SYS_INTENT_MAX];
     wasmos_sys_handler_t handlers[WASMOS_SYS_HANDLER_MAX];
 } wasmos_sys_event_loop_t;
 
+/* Block on reply_endpoint until a message with the matching request_id arrives;
+ * discards messages with other request_ids. */
 static inline int32_t
 wasmos_sys_ipc_recv_matching(int32_t reply_endpoint,
                              int32_t request_id,
@@ -100,6 +110,7 @@ wasmos_sys_event_set_default(wasmos_sys_event_loop_t *loop,
     return 0;
 }
 
+/* Register (or replace) a handler for msg_type; returns -1 if the table is full. */
 static inline int32_t
 wasmos_sys_event_register(wasmos_sys_event_loop_t *loop,
                           int32_t msg_type,
@@ -128,6 +139,9 @@ wasmos_sys_event_register(wasmos_sys_event_loop_t *loop,
     return -1;
 }
 
+/* Send a request and register an intent (reply callback).  The loop's
+ * auto-incremented request_id is used; *out_request_id receives it.
+ * Returns -1 if the intent table is full or the send fails. */
 static inline int32_t
 wasmos_sys_intent_send(wasmos_sys_event_loop_t *loop,
                        int32_t destination_endpoint,
@@ -214,6 +228,8 @@ wasmos_sys_intent_send_with_request_id(wasmos_sys_event_loop_t *loop,
     return -1;
 }
 
+/* Drain up to budget messages from the endpoint; fires intent callbacks or
+ * type handlers for each; returns the number of messages handled (0 = empty). */
 static inline int32_t
 wasmos_sys_event_loop_poll(wasmos_sys_event_loop_t *loop, int32_t budget)
 {

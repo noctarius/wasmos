@@ -1,7 +1,11 @@
+/* device_manager_rules.c - parse device-manager rule config files into state
+ * tables; four rule kinds: always_spawn, block_fs, pci_match, acpi_match */
 #include "string.h"
 #include "wasmos/libsys_string.h"
 #include "device_manager_rules.h"
 
+/* Copy one line from text, strip inline comments (respecting quotes),
+ * trim trailing whitespace; returns -1 if buf is too small. */
 static int
 copy_rule_line(const char *line, char *out, uint32_t out_len)
 {
@@ -29,6 +33,9 @@ copy_rule_line(const char *line, char *out, uint32_t out_len)
     return 0;
 }
 
+/* Consume the next comma-separated token from *cursor (modifies the buffer
+ * in-place by NUL-terminating after the token); respects double-quoted fields.
+ * Returns pointer to the token or NULL when exhausted. */
 static char *
 next_csv_token(char **cursor)
 {
@@ -65,6 +72,9 @@ next_csv_token(char **cursor)
     return start;
 }
 
+/* Match token against "KEY OP \"value\"" and copy the quoted value into out.
+ * Returns 0 on match, -1 if the token doesn't start with key+op or the
+ * value is not properly quoted / too long. */
 static int
 extract_op_value(const char *token,
                  const char *key,

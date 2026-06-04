@@ -1,3 +1,6 @@
+/* framebuffer.c - Linear GOP framebuffer initialization and kernel panic rendering.
+ * Stores the GOP physical address from boot_info; maps it into higher-half VA
+ * after paging is active.  Provides a panic text path that bypasses IPC and VT. */
 #include "framebuffer.h"
 #include "klog.h"
 #include "serial.h"

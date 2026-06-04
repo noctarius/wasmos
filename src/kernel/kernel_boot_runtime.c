@@ -1,3 +1,7 @@
+/* kernel_boot_runtime.c - Early-boot integration test runtime.
+ * Runs a minimal boot-time self-check (memory map, paging, allocator) before
+ * the process manager starts.  Failures halt the machine via kpanic so that
+ * regressions are caught at the earliest possible point in bring-up. */
 #include "kernel_boot_runtime.h"
 
 #include "paging.h"

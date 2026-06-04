@@ -1,3 +1,6 @@
+/* math.c - Minimal floating-point math stubs for WASM libc.
+ * Only the subset needed by wasm3 and WASMOS services is implemented.
+ * Full libm is not required — add only what callers actually link against. */
 #include "math.h"
 
 float

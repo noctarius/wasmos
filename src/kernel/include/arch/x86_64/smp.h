@@ -1,3 +1,4 @@
+/* smp.h - SMP bring-up: AP trampoline setup, per-CPU state, and startup sequence. */
 #pragma once
 
 #include <stdint.h>

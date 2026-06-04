@@ -1,3 +1,7 @@
+/* policy.c - IPC message policy engine.
+ * Evaluates allow/deny rules against (source, destination, message-type) tuples.
+ * Rules are stored in a compact table and checked on every IPC send to enforce
+ * inter-process communication boundaries. */
 #include "policy.h"
 #include "capability.h"
 #include "ipc.h"

@@ -1,8 +1,16 @@
+/* user_mutex.h - Kernel-backed recursive mutex for ring-3 processes.
+ *
+ * The mutex state lives in user memory (user_mutex_state_t is written through
+ * mm_copy_to_user).  The kernel validates ownership and performs the lock/unlock
+ * atomically from the syscall path, avoiding the need for a futex-style sleep queue
+ * in the simple single-waiter case.  Recursion is allowed within the same tid. */
 #ifndef WASMOS_KERNEL_USER_MUTEX_H
 #define WASMOS_KERNEL_USER_MUTEX_H
 
 #include <stdint.h>
 
+/* Stored in ring-3 address space at the mutex object address.
+ * owner_tid == 0 means unlocked; recursion_depth counts re-entrant acquires. */
 typedef struct {
     uint32_t owner_tid;
     uint32_t recursion_depth;

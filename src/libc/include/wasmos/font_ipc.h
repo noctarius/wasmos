@@ -1,3 +1,6 @@
+/* font_ipc.h - IPC message types and structs for the font-rasterizer service.
+ * Defines FONT_IPC_MEASURE_GLYPH_REQ, FONT_IPC_RASTER_GLYPH_INTO_REQ, and
+ * the associated response fields used by libui to request glyph rendering. */
 #ifndef WASMOS_FONT_IPC_H
 #define WASMOS_FONT_IPC_H
 

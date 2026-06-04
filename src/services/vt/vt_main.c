@@ -1,3 +1,5 @@
+/* vt_main.c - virtual terminal service: manages 4 TTYs with VT100/ANSI emulation,
+ * routes keyboard events, and renders to the framebuffer compositor service */
 #include <stdint.h>
 #include "stdio.h"
 #include "wasmos/api.h"
@@ -29,6 +31,8 @@ static int32_t  g_alloc_failure = 0;
 
 extern uint8_t __heap_base;
 
+/* Emit a 32-bit debug_mark tag encoding event (8 bits) and two 12-bit values.
+ * Compiled out when WASMOS_TRACE == 0. */
 static void
 vt_trace_mark(uint8_t event, uint16_t a, uint16_t b)
 {
@@ -66,6 +70,7 @@ vt_cell_capacity(void)
     return (uint32_t)g_vt_cols * (uint32_t)g_vt_rows;
 }
 
+/* Initialise the custom bump heap at &__heap_base for cell-grid allocation. */
 static void
 vt_heap_init(void)
 {
@@ -122,6 +127,7 @@ vt_reset_tty_cells(void)
     }
 }
 
+/* Allocate one cell grid per TTY from the bump heap; sets cells pointer. */
 static int
 vt_alloc_tty_cells(void)
 {
@@ -866,6 +872,7 @@ vt_process_byte(uint32_t tty_index, vt_tty_t *tty, uint8_t c)
     }
 }
 
+/* Return the TTY index owning source_ep (as reader or writer), or -1. */
 static int32_t
 vt_tty_index_for_source(int32_t source_ep)
 {
@@ -883,6 +890,10 @@ vt_tty_index_for_source(int32_t source_ep)
     return -1;
 }
 
+/* Redraw all cells of tty_index to the framebuffer.
+ * reliable=1: uses vt_render_cell_switch and yields between rows to reduce
+ *   FB queue saturation; dropped cells are tolerated (best-effort).
+ * reliable=0: fast path for non-switch redraws. */
 static int32_t
 vt_replay_tty(uint32_t tty_index, uint8_t reliable)
 {
@@ -1413,6 +1424,11 @@ vt_handle_key_notify(int32_t scancode, int32_t keyup, int32_t extended)
     vt_input_handle_char(g_active_tty, ch);
 }
 
+/* Service entry point.  Registers "vt", looks up "fb" and "kbd", allocates
+ * cell grids (retries with default geometry if large-grid alloc fails), then
+ * subscribes to keyboard events and enters the main IPC receive loop.
+ * g_switch_generation is a monotonic counter incremented on TTY switches;
+ * write messages with a stale generation are silently dropped. */
 WASMOS_WASM_EXPORT int32_t
 initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2, int32_t arg3)
 {

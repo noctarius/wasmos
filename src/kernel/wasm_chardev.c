@@ -1,3 +1,7 @@
+/* wasm_chardev.c - WASM character-device server bootstrap.
+ * Loads the chardev_server.wasm blob (linked into the kernel image) into
+ * a wasm_driver_t and starts it as a kernel process.  The chardev server
+ * then handles read/write IPC for character devices on behalf of user apps. */
 #include "wasm_chardev.h"
 #include "klog.h"
 #include "wasm_driver.h"

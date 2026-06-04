@@ -1,3 +1,6 @@
+/* thread.c - Kernel thread table for per-process threading.
+ * Each thread_t has its own kernel stack and saved process_context_t but shares
+ * its owner process's address space.  THREAD_MAX_COUNT limits total live threads. */
 #include "thread.h"
 #include "arch/x86_64/smp.h"
 #include "spinlock.h"

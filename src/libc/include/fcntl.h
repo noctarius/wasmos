@@ -1,3 +1,4 @@
+/* fcntl.h - Minimal file-descriptor flag constants for WASM libc (O_RDONLY, etc.). */
 #ifndef WASMOS_LIBC_FCNTL_H
 #define WASMOS_LIBC_FCNTL_H
 

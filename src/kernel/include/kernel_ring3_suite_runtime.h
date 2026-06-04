@@ -1,3 +1,4 @@
+/* kernel_ring3_suite_runtime.h - Aggregated ring-3 test suite entry point. */
 #ifndef WASMOS_KERNEL_RING3_SUITE_RUNTIME_H
 #define WASMOS_KERNEL_RING3_SUITE_RUNTIME_H
 

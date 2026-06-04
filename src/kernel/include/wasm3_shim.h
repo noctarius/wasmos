@@ -1,3 +1,4 @@
+/* wasm3_shim.h - Declarations for kernel-internal wasm3 platform shims. */
 #ifndef WASMOS_WASM3_SHIM_H
 #define WASMOS_WASM3_SHIM_H
 

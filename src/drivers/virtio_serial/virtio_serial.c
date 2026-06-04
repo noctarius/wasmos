@@ -1,3 +1,7 @@
+/* virtio_serial.c - VirtIO serial port WASM driver.
+ * Detects the VirtIO serial PCI device via PCI config-space scan and maps
+ * the virtqueue rings to provide a high-throughput serial console channel
+ * for QEMU/VirtIO-backed guests.  Exposes a chardev-compatible IPC service. */
 #include <stdint.h>
 #include <stdio.h>
 #include "wasmos/api.h"

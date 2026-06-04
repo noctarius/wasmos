@@ -1,3 +1,8 @@
+/* list.c - Generic intrusive list facade.
+ * Dispatches to list_linked.c (singly-linked, unbounded) or
+ * list_array_chunk.c (chunk-array, cache-friendly for fixed-size items)
+ * depending on the list_t type field.  Both variants share the same
+ * list_iter_t cursor so callers are implementation-agnostic. */
 #include "list.h"
 #include "list_internal.h"
 #include "stdlib.h"

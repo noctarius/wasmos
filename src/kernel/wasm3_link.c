@@ -1,3 +1,7 @@
+/* wasm3_link.c - wasm3 host-function registration and WASM import resolver.
+ * Links all WASMOS host-call imports (IPC, memory, filesystem, framebuffer,
+ * scheduler, mutex, …) into each wasm3 runtime before module instantiation.
+ * Each hostcall validates capability grants before touching hardware. */
 #include "boot.h"
 #include "klog.h"
 #include "ipc.h"

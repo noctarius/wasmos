@@ -1,3 +1,6 @@
+/* wasmos_app_meta.c - Boot module metadata helpers for WASMOS-APP packages.
+ * Scans the boot_info_t module list to find .wap blobs and resolve app
+ * metadata (name, WASM section offset) without copying the binary payload. */
 #include "wasmos_app_meta.h"
 #include "string.h"
 #include "wasmos_driver_abi.h"

@@ -1,3 +1,4 @@
+/* inttypes.h - PRIx32/PRId32 format-macro shims for freestanding kernel builds. */
 #ifndef WASMOS_INTTYPES_H
 #define WASMOS_INTTYPES_H
 

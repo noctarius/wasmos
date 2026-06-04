@@ -1,3 +1,4 @@
+/* kernel_boot_runtime.h - Boot-time integration test entry point. */
 #ifndef WASMOS_KERNEL_BOOT_RUNTIME_H
 #define WASMOS_KERNEL_BOOT_RUNTIME_H
 

@@ -1,3 +1,4 @@
+/* unistd.h - POSIX-like file I/O declarations backed by FS IPC (open/read/write/close). */
 #ifndef WASMOS_LIBC_UNISTD_H
 #define WASMOS_LIBC_UNISTD_H
 

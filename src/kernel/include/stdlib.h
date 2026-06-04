@@ -1,3 +1,4 @@
+/* stdlib.h - Minimal kernel stdlib declarations: atoi, itoa, abs. */
 #ifndef WASMOS_STDLIB_H
 #define WASMOS_STDLIB_H
 

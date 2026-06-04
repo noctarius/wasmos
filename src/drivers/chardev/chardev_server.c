@@ -1,3 +1,7 @@
+/* chardev_server.c - Character device IPC server (WASM).
+ * Minimal single-byte read/write service used primarily to exercise IPC
+ * request/reply semantics and as a template for real character-device drivers.
+ * Runs inside the WASM runtime and is loaded by wasm_chardev.c in the kernel. */
 #include <stdint.h>
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"

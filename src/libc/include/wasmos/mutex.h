@@ -1,3 +1,5 @@
+/* mutex.h - dual-target recursive mutex: hostcall path for WASM,
+ * native syscall path for x86_64 native builds */
 #ifndef WASMOS_LIBC_WASMOS_MUTEX_H
 #define WASMOS_LIBC_WASMOS_MUTEX_H
 

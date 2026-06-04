@@ -1,3 +1,6 @@
+/* process_manager_services.c - PM service registration and discovery.
+ * Maintains a name → endpoint lookup table for registered services.
+ * SVC_IPC_REGISTER_REQ / SVC_IPC_LOOKUP_REQ messages are handled here. */
 #include "process_manager_internal.h"
 #include "klog.h"
 #include "process_manager.h"

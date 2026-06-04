@@ -1,3 +1,7 @@
+/* native_driver.c - Kernel-native (C) driver instance runner.
+ * Spawns a native driver as a dedicated kernel thread with its own capability
+ * profile and IPC endpoint, mirroring the WASM driver model but without the
+ * wasm3 interpreter layer. */
 #include "native_driver.h"
 #include "klog.h"
 #include "memory.h"

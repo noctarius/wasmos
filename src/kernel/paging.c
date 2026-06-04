@@ -1,3 +1,6 @@
+/* paging.c - 4-level x86_64 page table management.
+ * Provides map/unmap/walk operations for PML4/PDPT/PD/PT page tables.
+ * All mapped pages use the kernel higher-half alias; physical frames come from physmem.c. */
 #include "paging.h"
 #include "klog.h"
 #include "physmem.h"

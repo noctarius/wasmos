@@ -1,3 +1,7 @@
+/* serial.c - COM1 UART serial driver and kernel console output.
+ * Drives COM1 (0x3F8) at 115200 baud for early and runtime debug output.
+ * Also maintains the console_ring_t shared memory ring for user-space readers
+ * and a small early-log capture buffer for driver handoff. */
 #include <stdarg.h>
 #include "console_ring.h"
 #include "ipc.h"

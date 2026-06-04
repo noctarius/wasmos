@@ -1,3 +1,6 @@
+/* klog.c - Kernel log: thin printf wrapper that writes to the serial console.
+ * klog_printf supports %s, %d, %u, %x, %p and width/precision basics.
+ * Safe to call from any context including early boot (before scheduling). */
 #include "klog.h"
 
 #include "serial.h"

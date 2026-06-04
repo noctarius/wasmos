@@ -1,3 +1,6 @@
+/* mutex.h - WASM recursive mutex for libsys (WASM target).
+ * Wraps the wasmos_mutex_lock/unlock host-calls to provide a recursive mutex
+ * that WASM drivers and services can use for shared-state protection. */
 #ifndef WASMOS_LIBSYS_WASMOS_MUTEX_H
 #define WASMOS_LIBSYS_WASMOS_MUTEX_H
 

@@ -1,3 +1,7 @@
+/* fs_init.c - Initramfs (init-FS) WASM filesystem driver.
+ * Serves files from a flat WASMOS initfs image embedded in the boot modules.
+ * Used as the early-boot filesystem before the FAT driver finds the ATA disk;
+ * exposes the same FS_IPC_OPEN_REQ / FS_IPC_READ_REQ interface as fs_fat. */
 #include <stdint.h>
 #include "stdio.h"
 #include "string.h"

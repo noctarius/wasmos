@@ -1,3 +1,4 @@
+/* math.h - Minimal floating-point math declarations for kernel/wasm3 builds. */
 #ifndef WASMOS_MATH_H
 #define WASMOS_MATH_H
 

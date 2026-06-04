@@ -1,3 +1,6 @@
+/* physmem.c - Bitmap-based physical page frame allocator.
+ * Derives the free-page bitmap from the UEFI EfiConventionalMemory regions in
+ * boot_info.  pfa_pin_pages() marks ACPI tables and kernel image as reserved. */
 #include "physmem.h"
 #include "paging.h"
 #include "klog.h"

@@ -1,3 +1,7 @@
+/* kernel_ring3_fault_runtime.c - Ring-3 fault injection test runtime.
+ * Deliberately triggers controlled ring-3 faults (#GP, #PF) and verifies that
+ * the kernel handles them correctly (delivers the right signal/kills the
+ * offending process) without corrupting kernel state. */
 #include "kernel_ring3_fault_runtime.h"
 
 #include "klog.h"

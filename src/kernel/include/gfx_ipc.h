@@ -1,3 +1,4 @@
+/* gfx_ipc.h - IPC message types and pixel-format constants for the GFX compositor (kernel copy). */
 #ifndef WASMOS_KERNEL_GFX_IPC_H
 #define WASMOS_KERNEL_GFX_IPC_H
 

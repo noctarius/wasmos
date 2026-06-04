@@ -1,3 +1,7 @@
+/* memory.c - Virtual memory context management and shared region allocator.
+ * Each process has an mm_context_t with a list of mem_region_t entries and a PML4.
+ * mm_handle_page_fault() demand-maps pages on first access.
+ * mm_shared_* implements cross-process shared memory (used for DMA and framebuffer). */
 #include "memory.h"
 #include "klog.h"
 #include "paging.h"

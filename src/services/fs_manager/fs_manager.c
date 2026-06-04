@@ -1,3 +1,6 @@
+/* fs_manager.c - VFS multiplexer service: routes file operations to registered
+ * backend drivers (fs-fat, fs-init) by mount-name prefix, with per-context
+ * client state tracked in a custom bump+chunk heap. */
 #include <stdint.h>
 #include "stdio.h"
 #include "string.h"
@@ -24,6 +27,7 @@ static fs_client_chunk_t *g_client_chunks = 0;
 static uint32_t g_heap_cursor = 0;
 static uint32_t g_heap_limit = 0;
 
+/* Initialise the custom bump heap starting at &__heap_base. */
 static void
 fsmgr_heap_init(void)
 {
@@ -34,6 +38,8 @@ fsmgr_heap_init(void)
     }
 }
 
+/* Bump-allocate size bytes aligned to align (must be power-of-two);
+ * grows WASM memory pages on demand.  Memory is never freed. */
 static void *
 fsmgr_heap_alloc(uint32_t size, uint32_t align)
 {
@@ -72,6 +78,9 @@ client_chunk_alloc(void)
     return chunk;
 }
 
+/* Return the WASMOS_BUFFER_GRANT_* flags appropriate for an FS IPC request type:
+ * write requests grant READ so the backend can read the data; read requests
+ * grant WRITE so the backend can fill the buffer. */
 static int32_t
 borrow_flags_for_type(int32_t type)
 {
@@ -130,6 +139,8 @@ client_state_lookup(int32_t context_id)
     return 0;
 }
 
+/* Find or create per-context state for context_id; allocates a new chunk if
+ * the current one is full.  Returns NULL only if heap is exhausted. */
 static fs_client_state_t *
 client_state(int32_t context_id)
 {
@@ -195,6 +206,8 @@ backend_first_of_kind(uint8_t kind)
     return 0;
 }
 
+/* Register or update a backend at endpoint; assigns a slot-based mount name
+ * ("boot"/"user" for BOOT kind; "init"/"init1" for INIT; "fs"/"fs1" for others). */
 static fs_backend_t *
 backend_register(uint8_t kind, int32_t endpoint)
 {
@@ -242,6 +255,9 @@ backend_register(uint8_t kind, int32_t endpoint)
     return slot;
 }
 
+/* Query devmgr.query for DEVMGR_MOUNT_INFO and populate PCI metadata fields
+ * (bus, device_fn, class, vendor, etc.) on the given BOOT backend slot.
+ * The IPC response arg3 bit 31 must be set for the info to be valid. */
 static void
 backend_refresh_boot_meta(fs_backend_t *slot, int32_t req_seed)
 {
@@ -381,6 +397,9 @@ fsmgr_emit_mounts(int32_t source, int32_t req_id)
     return wasmos_ipc_send(source, g_fs_endpoint, FSMGR_IPC_QUERY_MOUNTS_RESP, req_id, (int32_t)pos, 0, 0, 0);
 }
 
+/* Forward an IPC request to a backend, relaying FS_IPC_STREAM chunks back to
+ * source immediately as they arrive, then returning the final reply fields.
+ * Blocks until a non-STREAM response with the matching request_id is received. */
 static int forward_request(int32_t backend_endpoint,
                            int32_t type,
                            int32_t req_id,
@@ -498,6 +517,10 @@ route_path_to_backend(const uint8_t *path_bytes,
     return 1;
 }
 
+/* Read the path from the source endpoint's FS buffer, strip the mount prefix,
+ * write the tail path back into the FS buffer, and set *out_backend.
+ * *inout_arg0 is updated to the tail path length.
+ * Returns 1 on successful routing, 0 if path is at VFS root, -1 on error. */
 static int
 route_root_path_request(fs_client_state_t *state,
                         int32_t source,

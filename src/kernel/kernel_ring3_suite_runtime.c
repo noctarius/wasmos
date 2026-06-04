@@ -1,3 +1,6 @@
+/* kernel_ring3_suite_runtime.c - Aggregated ring-3 test suite runner.
+ * Sequences the smoke, probe, and fault-injection sub-runtimes and reports a
+ * single pass/fail result so the boot-time test harness has one entry point. */
 #include "kernel_ring3_suite_runtime.h"
 
 #include "kernel_ring3_fault_runtime.h"

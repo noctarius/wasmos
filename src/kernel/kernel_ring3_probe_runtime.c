@@ -1,3 +1,6 @@
+/* kernel_ring3_probe_runtime.c - Ring-3 smoke-probe launcher.
+ * Loads ring3_native_probe.bin into a ring-3 process and verifies that basic
+ * user-space execution, syscall return, and process exit work end-to-end. */
 #include "kernel_ring3_probe_runtime.h"
 
 #include "klog.h"

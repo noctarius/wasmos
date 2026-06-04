@@ -1,3 +1,7 @@
+/* memory_service.c - Userspace memory allocation service client stub.
+ * Wraps IPC calls to the in-kernel memory service endpoint so that WASM
+ * host-call handlers can request heap pages without touching the physical
+ * allocator directly.  Retries up to MEM_SVC_SEND_RETRY_LIMIT times. */
 #include "memory_service.h"
 #include "memory.h"
 

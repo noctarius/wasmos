@@ -1,3 +1,4 @@
+/* ioapic.h - I/O APIC driver declarations: init and GSI→vector mapping. */
 #pragma once
 #include "boot.h"
 #include <stdint.h>

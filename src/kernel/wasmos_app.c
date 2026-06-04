@@ -1,3 +1,7 @@
+/* wasmos_app.c - WASMOS-APP (.wap) package parser and instance launcher.
+ * wasmos_app_parse() validates the magic/version and builds a wasmos_app_desc_t
+ * with zero-copy pointers into the blob.  wasmos_app_start() creates the WASM
+ * driver instance, resolves endpoints, grants capabilities, and prepares entry args. */
 #include "klog.h"
 #include "serial.h"
 #include "wasmos_app.h"

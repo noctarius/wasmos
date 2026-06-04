@@ -1,7 +1,9 @@
+/* string.c - minimal C string library for WASM user space */
 #include "string.h"
 #include "ctype.h"
 #include <stdint.h>
 
+/* Copy 8 bytes at once using uint64_t to hint at wider loads/stores. */
 static inline void
 copy8_forward(unsigned char *out, const unsigned char *in)
 {

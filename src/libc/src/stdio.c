@@ -1,23 +1,30 @@
+/* stdio.c - printf/snprintf/puts/putsn over wasmos_console_write;
+ * uses a stdio_emit_fn callback to share one format engine between
+ * buffer (snprintf) and console (printf) outputs */
 #include "stdio.h"
 #include "string.h"
 #include "wasmos/api.h"
 
 #include <stdint.h>
 
+/* Function pointer for character-at-a-time output; ctx is typed per sink. */
 typedef void (*stdio_emit_fn)(void *ctx, char ch);
 
+/* Output sink for snprintf: writes to a bounded buffer, always counts total. */
 typedef struct {
     char *buffer;
     size_t size;
     size_t pos;
-    size_t total;
+    size_t total;  /* always incremented, even when pos >= size (like snprintf) */
 } stdio_buffer_t;
 
+/* Output sink for printf: batches chars into a 256-byte internal buf, flushes
+ * to wasmos_console_write on full or at the end. */
 typedef struct {
     char data[256];
     size_t len;
     size_t total;
-    int error;
+    int error;  /* negative on first failed console_write */
 } stdio_console_t;
 
 static void

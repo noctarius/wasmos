@@ -1,3 +1,7 @@
+/* irq.c - Architecture-independent IRQ init/registration shim.
+ * All calls are forwarded to the x86_64 backend in arch/x86_64/irq_x86_64.c.
+ * irq_register() ties a hardware IRQ line to an IPC endpoint so the ISR
+ * delivers a notification message to the registered driver context. */
 #include "irq.h"
 #include "arch/x86_64/irq_x86_64.h"
 

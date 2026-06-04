@@ -1,3 +1,6 @@
+/* libsys_native.c - libsys_native implementation for Zig/C native drivers.
+ * Thin wrappers around the wasmos_native_driver.h hostcall ABI; compiled
+ * as C so both Zig and C native drivers can link against a single object. */
 #include "wasmos/libsys_native.h"
 
 static void
@@ -52,6 +55,8 @@ wasmos_sys_be_u32_native(const uint8_t *data, uint32_t data_len, uint32_t off, u
     return 0;
 }
 
+/* Search an OpenType/TrueType font binary for a table by 4-char tag;
+ * returns 0 and sets *out_offset to the table's file offset, -1 if not found. */
 int32_t
 wasmos_sys_find_table_native(const uint8_t *data, uint32_t data_len, const uint8_t tag[4], uint32_t *out_offset)
 {
@@ -115,6 +120,8 @@ wasmos_sys_hex_u32_native(uint32_t value, uint8_t *out, uint32_t out_len)
     return 10u;
 }
 
+/* Pack up to 16 bytes of a service name into four uint32 IPC args
+ * (4 bytes each, little-endian). */
 void
 wasmos_sys_ipc_pack_name16_native(const uint8_t *name, uint32_t name_len, uint32_t out_args[4])
 {
@@ -170,6 +177,8 @@ wasmos_sys_ipc_unpack_name16_native(uint32_t arg0,
     out[pos] = 0u;
 }
 
+/* Idle receive loop for native drivers that have entered a terminal state;
+ * yields after each message so the scheduler can run other processes. */
 void
 wasmos_sys_ipc_recv_loop_native(wasmos_driver_api_t *api, uint32_t receiver_endpoint)
 {
@@ -510,6 +519,9 @@ wasmos_sys_ipc_send_retry_native(wasmos_driver_api_t *api,
     }
 }
 
+/* Synchronous send+recv: sends the request and blocks in
+ * wasmos_sys_ipc_recv_matching_native until the matching reply arrives.
+ * Returns 0 on success, -1 on error. */
 int32_t
 wasmos_sys_ipc_call_native(wasmos_driver_api_t *api,
                            uint32_t source_endpoint,

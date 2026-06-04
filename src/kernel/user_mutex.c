@@ -1,3 +1,7 @@
+/* user_mutex.c - Kernel-backed recursive user-space mutex implementation.
+ * Provides futex-like sleep/wake without a full futex ABI.  A single global
+ * spinlock serialises all state changes; threads block on IPC notifications
+ * rather than spinning, so the CPU is released while waiting. */
 #include "user_mutex.h"
 
 #include "memory.h"

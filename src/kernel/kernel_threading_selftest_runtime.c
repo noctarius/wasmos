@@ -1,3 +1,7 @@
+/* kernel_threading_selftest_runtime.c - Kernel threading self-test.
+ * Spawns multiple kernel threads, exercises IPC notification between them, and
+ * verifies that join/detach semantics and thread lifecycle transitions work
+ * correctly under the cooperative + preemptive scheduler. */
 #include "kernel_threading_selftest_runtime.h"
 
 #include "ipc.h"

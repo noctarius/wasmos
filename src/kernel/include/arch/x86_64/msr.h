@@ -1,3 +1,4 @@
+/* msr.h - Inline rdmsr/wrmsr helpers for x86_64 Model Specific Registers. */
 #pragma once
 
 #include <stdint.h>

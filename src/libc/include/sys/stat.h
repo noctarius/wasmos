@@ -1,3 +1,4 @@
+/* stat.h - Minimal stat(2) struct and constants for WASM libc. */
 #ifndef WASMOS_LIBC_SYS_STAT_H
 #define WASMOS_LIBC_SYS_STAT_H
 

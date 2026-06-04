@@ -1,3 +1,4 @@
+/* rtc_ipc.h - IPC message types for the real-time clock service (kernel copy). */
 #ifndef WASMOS_KERNEL_RTC_IPC_H
 #define WASMOS_KERNEL_RTC_IPC_H
 

@@ -1,3 +1,7 @@
+/* boot.c - UEFI bootloader: locates and loads kernel.elf from the ESP.
+ * Opens the filesystem protocol on the ESP volume, reads kernel.elf, parses
+ * ELF64 program headers, copies PT_LOAD segments to their physical addresses,
+ * collects the UEFI memory map, exits boot services, and jumps to _start. */
 #include "uefi.h"
 #include "elf.h"
 #include "boot.h"

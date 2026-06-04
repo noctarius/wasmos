@@ -1,3 +1,4 @@
+/* script.c - .rc script interpreter: start/spawn/exec/wait-svc/echo/export/if */
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -11,6 +12,7 @@ wasmos_script_state_init(wasmos_script_state_t *state)
     memset(state, 0, sizeof(*state));
 }
 
+/* Look up a variable in a linked-list env table; returns value or NULL. */
 static const char *
 script_table_get(const wasmos_script_env_node_t *table, const char *name)
 {
@@ -24,6 +26,8 @@ script_table_get(const wasmos_script_env_node_t *table, const char *name)
     return 0;
 }
 
+/* Set or delete a variable in a linked-list env table using malloc/free.
+ * Passing NULL or empty value removes the entry. */
 static int
 script_table_set(wasmos_script_env_node_t **table, const char *name, const char *value)
 {

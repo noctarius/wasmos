@@ -1,3 +1,4 @@
+/* irq_x86_64.h - x86_64 IRQ subsystem: 8259 PIC + I/O APIC init and registration. */
 #ifndef WASMOS_ARCH_X86_64_IRQ_X86_64_H
 #define WASMOS_ARCH_X86_64_IRQ_X86_64_H
 

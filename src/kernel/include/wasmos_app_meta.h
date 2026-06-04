@@ -1,3 +1,4 @@
+/* wasmos_app_meta.h - Boot module metadata helpers for .wap package scanning. */
 #ifndef WASMOS_APP_META_H
 #define WASMOS_APP_META_H
 

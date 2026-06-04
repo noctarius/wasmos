@@ -1,18 +1,24 @@
+/* boot.h - Bootloader-to-kernel handoff contract.
+ *
+ * The UEFI bootloader fills a boot_info_t and passes its physical address in RCX
+ * to _start.  The kernel must preserve and re-map this structure before accessing
+ * any field after paging is enabled.  BOOT_INFO_VERSION guards against mismatches
+ * if the bootloader and kernel are built separately. */
 #ifndef WASMOS_BOOT_H
 #define WASMOS_BOOT_H
 
 #include <stdint.h>
 
-#define BOOT_INFO_VERSION 4u
-#define BOOT_INFO_FLAG_GOP_PRESENT (1u << 0)
+#define BOOT_INFO_VERSION 4u                  /* increment on any boot_info_t field change */
+#define BOOT_INFO_FLAG_GOP_PRESENT     (1u << 0)
 #define BOOT_INFO_FLAG_MODULES_PRESENT (1u << 1)
-#define BOOT_INFO_FLAG_INITFS_PRESENT (1u << 2)
+#define BOOT_INFO_FLAG_INITFS_PRESENT  (1u << 2)
 #define BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_SHIFT 8u
-#define BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_MASK (0xFu << BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_SHIFT)
+#define BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_MASK  (0xFu << BOOT_INFO_FLAG_GOP_PIXEL_FORMAT_SHIFT)
 
 typedef enum {
     BOOT_MODULE_TYPE_NONE = 0,
-    BOOT_MODULE_TYPE_WASMOS_APP = 1
+    BOOT_MODULE_TYPE_WASMOS_APP = 1   /* embedded .wap payload */
 } boot_module_type_t;
 
 typedef struct {

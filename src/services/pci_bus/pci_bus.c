@@ -1,3 +1,5 @@
+/* pci_bus.c - WASM service: enumerates PCI configuration space and publishes
+ * all functions to device-manager via DEVMGR_PUBLISH_DEVICE IPC messages. */
 #include <stdint.h>
 #include "stdio.h"
 #include "string.h"
@@ -7,6 +9,7 @@
 #include "wasmos_driver_abi.h"
 #include "pci_bus_types.h"
 
+/* Log one record to serial for debug visibility. */
 static void
 log_record(const pci_device_record_t *rec)
 {
@@ -26,6 +29,8 @@ log_record(const pci_device_record_t *rec)
                  (unsigned)rec->irq_hint);
 }
 
+/* Read a 32-bit register from PCI config space using mechanism 1.
+ * Bit 31 of the address register is the enable bit. */
 static uint32_t
 pci_config_read32(uint8_t bus, uint8_t device, uint8_t function, uint8_t reg)
 {
@@ -38,6 +43,12 @@ pci_config_read32(uint8_t bus, uint8_t device, uint8_t function, uint8_t reg)
     return (uint32_t)wasmos_io_in32(PCI_CFG_DATA_PORT);
 }
 
+/* Encode one PCI record into DEVMGR_PUBLISH_DEVICE IPC arguments and send.
+ * Encoding:
+ *   arg0 = (bus<<24) | (device<<16) | (function<<8) | class_code
+ *   arg1 = (subclass<<24) | (prog_if<<16) | vendor_id
+ *   arg2 = (io_port_base<<16) | device_id
+ *   arg3 = (io_port_base<<16) | (irq_hint<<8) | mmio_hint */
 static void
 publish_record(int32_t devmgr_endpoint,
                int32_t source_endpoint,
@@ -68,6 +79,10 @@ publish_record(int32_t devmgr_endpoint,
                           (int32_t)arg3);
 }
 
+/* Service entry point.  Looks up "devmgr.inv", performs a brute-force PCI
+ * scan (buses 0-255, devices 0-31, functions 0-7), publishes each present
+ * function, then sends DEVMGR_PCI_SCAN_DONE and calls wasmos_sys_notify_ready.
+ * Stops scanning functions for single-function devices (header type bit 7 = 0). */
 WASMOS_WASM_EXPORT int32_t
 initialize(int32_t proc_endpoint,
            int32_t ignored_arg1,

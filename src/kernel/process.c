@@ -1057,17 +1057,15 @@ process_spawn_as_impl(uint32_t parent_pid,
     slot->entry = entry;
     slot->arg = arg;
     if (process_copy_name(slot, name ? name : "") != 0) {
-        spinlock_unlock(&g_process_table_lock);
-        return -1;
+        goto err_ctx;
     }
     if (thread_spawn_main(pid, name ? name : "", &slot->main_tid) != 0) {
-        spinlock_unlock(&g_process_table_lock);
-        return -1;
+        goto err_ctx;
     }
     {
         thread_t *main_thread = process_main_thread(slot);
         if (!main_thread) {
-            return -1;
+            goto err_ctx_thread;
         }
         main_thread->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
         main_thread->ticks_remaining = main_thread->time_slice_ticks;
@@ -1077,7 +1075,7 @@ process_spawn_as_impl(uint32_t parent_pid,
     slot->live_thread_count = 1;
     uint32_t stack_pages = (PROCESS_STACK_SIZE + PAGE_SIZE - 1u) / PAGE_SIZE;
     if (process_alloc_stack(slot, stack_pages) != 0) {
-        return -1;
+        goto err_ctx_thread;
     }
     slot->ctx.rsp = slot->stack_top - (STACK_REDZONE_BYTES + 8u);
     slot->ctx.user_rsp = slot->ctx.rsp;
@@ -1129,6 +1127,17 @@ process_spawn_as_impl(uint32_t parent_pid,
     *out_pid = pid;
     spinlock_unlock(&g_process_table_lock);
     return 0;
+
+    /* Error paths: clean up everything allocated so far and reset the slot.
+     * g_process_table_lock is held throughout; thread_reap_owner acquires
+     * g_thread_table_lock — g_process_table_lock → g_thread_table_lock is valid. */
+err_ctx_thread:
+    thread_reap_owner(pid);
+err_ctx:
+    mm_context_destroy(ctx->id);
+    process_reset_slot(slot);
+    spinlock_unlock(&g_process_table_lock);
+    return -1;
 }
 
 int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid) {
@@ -1214,17 +1223,15 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
     slot->entry = entry;
     slot->arg = arg;
     if (process_copy_name(slot, name ? name : "") != 0) {
-        spinlock_unlock(&g_process_table_lock);
-        return -1;
+        goto idle_err_ctx;
     }
     if (thread_spawn_main(pid, name ? name : "", &slot->main_tid) != 0) {
-        spinlock_unlock(&g_process_table_lock);
-        return -1;
+        goto idle_err_ctx;
     }
     {
         thread_t *main_thread = process_main_thread(slot);
         if (!main_thread) {
-            return -1;
+            goto idle_err_ctx_thread;
         }
         main_thread->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
         main_thread->ticks_remaining = main_thread->time_slice_ticks;
@@ -1235,7 +1242,7 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
     slot->is_idle = 1;
     uint32_t stack_pages = (PROCESS_STACK_SIZE + PAGE_SIZE - 1u) / PAGE_SIZE;
     if (process_alloc_stack(slot, stack_pages) != 0) {
-        return -1;
+        goto idle_err_ctx_thread;
     }
     slot->ctx.rsp = slot->stack_top - (STACK_REDZONE_BYTES + 8u);
     slot->ctx.user_rsp = slot->ctx.rsp;
@@ -1254,6 +1261,14 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
     *out_pid = pid;
     spinlock_unlock(&g_process_table_lock);
     return 0;
+
+idle_err_ctx_thread:
+    thread_reap_owner(pid);
+idle_err_ctx:
+    mm_context_destroy(ctx->id);
+    process_reset_slot(slot);
+    spinlock_unlock(&g_process_table_lock);
+    return -1;
 }
 
 int

@@ -829,7 +829,7 @@ the wakeup path in `process_wake_thread` and `process_wake_by_context`.
 
 ---
 
-### SMP-MED-07 — Notification blocking path has spurious-miss race
+### SMP-MED-07 ✅ FIXED — Notification blocking path has spurious-miss race
 
 **File:** `src/kernel/ipc.c:423–447`
 

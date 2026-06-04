@@ -698,15 +698,28 @@ spawned), `mm_context_destroy`, `process_reset_slot`, and `spinlock_unlock`.
 
 ---
 
-### SMP-HIGH-06 — Thread counts incremented without `g_process_table_lock`
+### SMP-HIGH-06 ✅ FIXED — Thread counts incremented without `g_process_table_lock`
 
-**File:** `src/kernel/process.c:1203–1244`
+**File:** `src/kernel/process.c`
 
-`process_thread_spawn_worker_internal` reads `owner->state`/`owner->exiting`
-and increments `thread_count`/`live_thread_count` without holding the lock.
-A concurrent kill can zombie the owner between the check and the increment.
+`process_thread_spawn_worker_internal` and `process_thread_spawn_user_internal`
+both read `owner->state`/`owner->exiting` and increment `thread_count`/
+`live_thread_count` without holding `g_process_table_lock`.  A concurrent
+`process_kill` can zombie the owner between the unguarded state check and the
+unguarded count increment — leaving a live thread counted in a zombie process
+that will never be reaped.
 
-**Fix:** Take `g_process_table_lock` for the entire check-and-increment.
+**Fix:** Double-check pattern — lock is acquired twice per call, not held during
+allocation (avoids holding it across PFA operations):
+1. Initial state check under `g_process_table_lock`; release before allocation.
+2. Re-check state and atomically increment `thread_count`/`live_thread_count`
+   under `g_process_table_lock` after all allocations complete.  If the owner
+   was killed in the window, the newly spawned thread is reaped and -1 returned.
+
+For `process_thread_spawn_user_internal`, the count rollback on `process_wake_thread`
+failure is also now protected by `g_process_table_lock`.  Also fixed a pre-existing
+omission: `thread_reap(tid)` was missing on the `thread_get` NULL path in
+`process_thread_spawn_worker_internal`.
 
 ---
 

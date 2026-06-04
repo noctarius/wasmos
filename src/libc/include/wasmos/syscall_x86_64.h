@@ -22,7 +22,9 @@ typedef enum {
     WASMOS_SYSCALL_THREAD_CREATE = 10,
     WASMOS_SYSCALL_THREAD_JOIN = 11,
     WASMOS_SYSCALL_THREAD_DETACH = 12,
-    WASMOS_SYSCALL_NOTIFY_READY = 13
+    WASMOS_SYSCALL_NOTIFY_READY = 13,
+    WASMOS_SYSCALL_MUTEX_TRY_LOCK = 14,
+    WASMOS_SYSCALL_MUTEX_UNLOCK = 15
 } wasmos_syscall_id_t;
 
 typedef struct {
@@ -94,6 +96,14 @@ static inline int64_t wasmos_sys_thread_join(uint32_t tid)
 static inline int64_t wasmos_sys_thread_detach(uint32_t tid)
 {
     return wasmos_syscall1(WASMOS_SYSCALL_THREAD_DETACH, tid);
+}
+static inline int64_t wasmos_sys_mutex_try_lock(uint64_t mutex_addr)
+{
+    return wasmos_syscall1(WASMOS_SYSCALL_MUTEX_TRY_LOCK, mutex_addr);
+}
+static inline int64_t wasmos_sys_mutex_unlock(uint64_t mutex_addr)
+{
+    return wasmos_syscall1(WASMOS_SYSCALL_MUTEX_UNLOCK, mutex_addr);
 }
 static inline int64_t wasmos_sys_wait(uint32_t pid) { return wasmos_syscall1(WASMOS_SYSCALL_WAIT, pid); }
 static inline int64_t wasmos_sys_notify_ready(void) { return wasmos_syscall0(WASMOS_SYSCALL_NOTIFY_READY); }

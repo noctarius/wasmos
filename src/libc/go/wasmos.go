@@ -83,6 +83,18 @@ func fsBufferWrite(ptr uint32, len uint32, offset uint32) int32
 //go:wasmimport wasmos fs_buffer_copy
 func fsBufferCopy(ptr uint32, len uint32, offset uint32) int32
 
+//go:wasmimport wasmos thread_gettid
+func threadGetTid() int32
+
+//go:wasmimport wasmos thread_yield
+func threadYield() int32
+
+//go:wasmimport wasmos mutex_try_lock
+func mutexTryLock(ptr uint32) int32
+
+//go:wasmimport wasmos mutex_unlock
+func mutexUnlock(ptr uint32) int32
+
 var fsReplyEndpoint int32 = -1
 var fsRequestID int32 = 1
 var ipcReplyEndpoint int32 = -1
@@ -108,6 +120,50 @@ type IPCReply struct {
 type ipcAPI struct{}
 
 var ipc = ipcAPI{}
+
+type Mutex struct {
+	OwnerTID       uint32
+	RecursionDepth uint32
+}
+
+func (m *Mutex) Init() {
+	if m == nil {
+		return
+	}
+	m.OwnerTID = 0
+	m.RecursionDepth = 0
+}
+
+func CurrentTID() int32 {
+	return threadGetTid()
+}
+
+func (m *Mutex) TryLock() int32 {
+	if m == nil {
+		return -1
+	}
+	return mutexTryLock(uint32(uintptr(unsafe.Pointer(m))))
+}
+
+func (m *Mutex) Lock() int32 {
+	if m == nil {
+		return -1
+	}
+	for {
+		rc := m.TryLock()
+		if rc != 1 {
+			return rc
+		}
+		threadYield()
+	}
+}
+
+func (m *Mutex) Unlock() int32 {
+	if m == nil {
+		return -1
+	}
+	return mutexUnlock(uint32(uintptr(unsafe.Pointer(m))))
+}
 
 func ensureIPCReplyEndpoint() (int32, Error) {
 	if ipcReplyEndpoint >= 0 {

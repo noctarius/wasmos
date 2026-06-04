@@ -1,9 +1,15 @@
 #include <stdint.h>
+#include "wasmos/mutex.h"
 #include "wasmos/syscall_x86_64.h"
+
+static wasmos_mutex_t g_probe_mutex = WASMOS_MUTEX_INITIALIZER;
 
 void
 _start(void)
 {
+    wasmos_mutex_init(&g_probe_mutex);
+    (void)wasmos_mutex_try_lock(&g_probe_mutex);
+    (void)wasmos_mutex_unlock(&g_probe_mutex);
     (void)wasmos_sys_ipc_notify(0xFFFFFFFFu);
     (void)wasmos_sys_yield();
     (void)wasmos_sys_gettid();

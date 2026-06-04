@@ -6,6 +6,7 @@
 #include "thread.h"
 #include "string.h"
 #include "paging.h"
+#include "user_mutex.h"
 
 static uint8_t g_ring3_syscall_logged;
 static uint8_t g_ring3_stress_ok_logged;
@@ -523,6 +524,26 @@ x86_syscall_handler(syscall_frame_t *frame)
             }
         }
         return 0;
+    }
+    case WASMOS_SYSCALL_MUTEX_TRY_LOCK: {
+        process_t *proc = process_get(process_current_pid());
+        if (!proc) {
+            return (uint64_t)-1;
+        }
+        return (uint64_t)(int64_t)user_mutex_user_try_lock(proc->context_id,
+                                                            frame->rdi,
+                                                            thread_current_tid(),
+                                                            0);
+    }
+    case WASMOS_SYSCALL_MUTEX_UNLOCK: {
+        process_t *proc = process_get(process_current_pid());
+        if (!proc) {
+            return (uint64_t)-1;
+        }
+        return (uint64_t)(int64_t)user_mutex_user_unlock(proc->context_id,
+                                                         frame->rdi,
+                                                         thread_current_tid(),
+                                                         0);
     }
     case WASMOS_SYSCALL_WAIT: {
         process_t *proc = process_get(process_current_pid());

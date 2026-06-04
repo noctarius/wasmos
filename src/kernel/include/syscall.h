@@ -17,7 +17,9 @@ typedef enum {
     WASMOS_SYSCALL_THREAD_CREATE = 10,
     WASMOS_SYSCALL_THREAD_JOIN = 11,
     WASMOS_SYSCALL_THREAD_DETACH = 12,
-    WASMOS_SYSCALL_NOTIFY_READY = 13
+    WASMOS_SYSCALL_NOTIFY_READY = 13,
+    WASMOS_SYSCALL_MUTEX_TRY_LOCK = 14,
+    WASMOS_SYSCALL_MUTEX_UNLOCK = 15
 } wasmos_syscall_id_t;
 
 /* int 0x80 syscall ABI (current minimal contract):
@@ -56,6 +58,11 @@ typedef enum {
  *                   a parent blocked in PROC_IPC_SPAWN_SYNC is unblocked.
  *                   If no parent is waiting the flag is stored and checked on
  *                   the next pm_poll_spawn iteration.
+ * - MUTEX_TRY_LOCK: RDI=user_mutex_ptr; RAX=0 on acquire, 1 if busy, -1 on
+ *                   invalid pointer/state. The mutex object is process-local
+ *                   and reentrant for the current thread ID.
+ * - MUTEX_UNLOCK:   RDI=user_mutex_ptr; RAX=0 on success, -1 on invalid
+ *                   pointer or non-owner unlock.
  */
 typedef struct {
     uint64_t r15;

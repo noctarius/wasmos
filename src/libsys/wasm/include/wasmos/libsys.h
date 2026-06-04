@@ -6,6 +6,7 @@
 #include "string.h"
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
+#include "wasmos/mutex.h"
 #include "wasmos/sha256.h"
 #include "wasmos/libsys_string.h"
 

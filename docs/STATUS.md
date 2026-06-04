@@ -1,6 +1,13 @@
 # Current Status
 
 - This status file is a snapshot, not a release changelog.
+- User-space threading helpers now include a process-local reentrant mutex
+  surface across WASM libc/libsys, native ring3 libc, and the native
+  driver/service ABI. The mutex state lives in user memory (`owner_tid` +
+  `recursion_depth`), while the kernel serializes `try_lock` / `unlock`
+  transitions so the runtime does not depend on unsupported WASM atomic
+  instructions. Current contention handling is cooperative (`thread_yield` /
+  `sched_yield` retry) rather than a futex-style sleep queue.
 - SMP infrastructure (Phases 0–9) is complete. `WASMOS_SMP` Kconfig bool
   (depends on `WASMOS_IRQ_IOAPIC`, default off) gates all multi-core code.
   Per-CPU data structure (`cpu_local_t`, `g_cpus[16]`) and `cpu_local()`

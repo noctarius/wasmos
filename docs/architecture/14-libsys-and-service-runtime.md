@@ -17,6 +17,12 @@ provides a structured event loop on top of the raw `wasmos_ipc_send` /
 `wasmos_ipc_recv` / `wasmos_ipc_try_recv` hostcalls. All WASM services that
 handle more than one IPC opcode use it.
 
+It also exposes a small process-local reentrant mutex helper
+(`wasmos_mutex_t` / `wasmos_sys_mutex_t`) for threaded services and drivers.
+The helper uses kernel-backed ownership transitions plus cooperative
+`thread_yield` / `sched_yield` retry on contention rather than WebAssembly
+atomics.
+
 ---
 
 ### Event Loop

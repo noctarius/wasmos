@@ -5,6 +5,26 @@ pub const IPC_OK: i32 = 0;
 pub const IPC_EMPTY: i32 = 1;
 pub const IPC_ENDPOINT_NONE: u32 = 0xFFFF_FFFF;
 pub const NativeEventLoop = c.wasmos_sys_native_event_loop_t;
+pub const Mutex = extern struct {
+    owner_tid: u32,
+    recursion_depth: u32,
+
+    pub fn init(self: *Mutex) void {
+        c.wasmos_sys_mutex_init(@ptrCast(self));
+    }
+
+    pub fn tryLock(self: *Mutex, api: anytype) i32 {
+        return c.wasmos_sys_mutex_try_lock(asApi(api), @ptrCast(self));
+    }
+
+    pub fn lock(self: *Mutex, api: anytype) i32 {
+        return c.wasmos_sys_mutex_lock(asApi(api), @ptrCast(self));
+    }
+
+    pub fn unlock(self: *Mutex, api: anytype) i32 {
+        return c.wasmos_sys_mutex_unlock(asApi(api), @ptrCast(self));
+    }
+};
 
 fn asApi(api_ptr: anytype) *c.wasmos_driver_api_t {
     return @ptrCast(@alignCast(api_ptr));
@@ -21,6 +41,10 @@ pub fn packName16(name: []const u8, out: *[4]u32) void {
 pub fn unpackName16(arg0: u32, arg1: u32, arg2: u32, arg3: u32, out: []u8) void {
     if (out.len == 0) return;
     c.wasmos_sys_ipc_unpack_name16_native(arg0, arg1, arg2, arg3, out.ptr, @intCast(out.len));
+}
+
+pub fn currentTid(api: anytype) u32 {
+    return asApi(api).thread_current_tid.?();
 }
 
 pub fn ipcRecvLoop(api: anytype, receiver_endpoint: u32) void {

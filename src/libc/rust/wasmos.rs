@@ -56,6 +56,10 @@ unsafe extern "C" {
     fn fs_buffer_size() -> i32;
     fn fs_buffer_write(ptr: i32, len: i32, offset: i32) -> i32;
     fn fs_buffer_copy(ptr: i32, len: i32, offset: i32) -> i32;
+    fn thread_gettid() -> i32;
+    fn thread_yield() -> i32;
+    fn mutex_try_lock(ptr: i32) -> i32;
+    fn mutex_unlock(ptr: i32) -> i32;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -86,6 +90,51 @@ pub mod startup {
 }
 
 static EMPTY_ARGS: [&str; 0] = [];
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Mutex {
+    pub owner_tid: u32,
+    pub recursion_depth: u32,
+}
+
+impl Mutex {
+    pub const fn new() -> Self {
+        Self {
+            owner_tid: 0,
+            recursion_depth: 0,
+        }
+    }
+
+    pub fn init(&mut self) {
+        self.owner_tid = 0;
+        self.recursion_depth = 0;
+    }
+
+    pub fn current_tid() -> i32 {
+        unsafe { thread_gettid() }
+    }
+
+    pub fn try_lock(&mut self) -> i32 {
+        unsafe { mutex_try_lock(self as *mut Self as usize as i32) }
+    }
+
+    pub fn lock(&mut self) -> i32 {
+        loop {
+            let rc = self.try_lock();
+            if rc != 1 {
+                return rc;
+            }
+            unsafe {
+                let _ = thread_yield();
+            }
+        }
+    }
+
+    pub fn unlock(&mut self) -> i32 {
+        unsafe { mutex_unlock(self as *mut Self as usize as i32) }
+    }
+}
 
 #[no_mangle]
 pub extern "C" fn wasmos_main(arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> i32 {

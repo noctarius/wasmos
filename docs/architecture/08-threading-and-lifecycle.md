@@ -216,6 +216,41 @@ typedef struct thread {
 
 ---
 
+### User-Space Mutex Helpers
+
+Source: `src/kernel/user_mutex.c`, `src/libc/include/wasmos/mutex.h`,
+`src/libsys/wasm/include/wasmos/mutex.h`,
+`src/libsys/native/include/wasmos/libsys_native.h`
+
+Threaded user-space runtimes now expose a small process-local reentrant mutex
+helper backed by kernel-serialized ownership transitions. The mutex state lives
+in user memory as:
+
+```c
+typedef struct {
+    uint32_t owner_tid;
+    uint32_t recursion_depth;
+} wasmos_mutex_t;
+```
+
+Semantics:
+
+- Ownership is tracked by TID, not PID or CPU.
+- `try_lock` returns `0` on success, `1` when another thread owns the mutex,
+  and `-1` on invalid pointer/state.
+- Re-lock by the owning thread increments `recursion_depth`.
+- Final `unlock` clears both fields; intermediate unlocks only decrement
+  `recursion_depth`.
+- The current contention path is cooperative: libc/libsys loops on
+  `try_lock` and calls `thread_yield` / `sched_yield` between retries.
+
+The kernel currently serializes `try_lock` / `unlock` with a small internal
+spinlock and reads/writes the user-resident mutex state through validated
+context copies. This avoids relying on WebAssembly atomic instructions, which
+the current wasm runtime/toolchain contract does not provide.
+
+---
+
 ### Stack Layout
 
 Each process and each thread gets a kernel stack. Both use `PROCESS_STACK_SIZE`

@@ -91,6 +91,10 @@ extern int32_t wasmos_thread_join(int32_t tid)
     WASMOS_WASM_IMPORT("wasmos", "thread_join");
 extern int32_t wasmos_thread_detach(int32_t tid)
     WASMOS_WASM_IMPORT("wasmos", "thread_detach");
+extern int32_t wasmos_mutex_try_lock_host(int32_t mutex_ptr)
+    WASMOS_WASM_IMPORT("wasmos", "mutex_try_lock");
+extern int32_t wasmos_mutex_unlock_host(int32_t mutex_ptr)
+    WASMOS_WASM_IMPORT("wasmos", "mutex_unlock");
 extern int32_t wasmos_proc_info(int32_t index, int32_t ptr, int32_t len)
     WASMOS_WASM_IMPORT("wasmos", "proc_info");
 extern int32_t wasmos_proc_info_ex(int32_t index, int32_t ptr, int32_t len, int32_t parent_ptr)

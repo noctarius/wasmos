@@ -659,10 +659,11 @@ int mm_shared_map(mm_context_t *ctx, uint32_t id, uint32_t flags, uint64_t *out_
     if (flags) {
         effective_flags &= flags;
     }
-    if (mm_shared_retain(ctx->id, id) != 0) {
+    if (region->refcount == UINT32_MAX) {
         spinlock_unlock(&g_shared_lock);
         return -1;
     }
+    region->refcount++;
     uint64_t virt_base = mm_region_virtual_base(ctx, MEM_REGION_SHARED, region->pages);
     mem_region_t *added = 0;
     if (virt_base != 0) {
@@ -670,7 +671,8 @@ int mm_shared_map(mm_context_t *ctx, uint32_t id, uint32_t flags, uint64_t *out_
                                            effective_flags, MEM_REGION_SHARED);
     }
     if (!added) {
-        (void)mm_shared_release(ctx->id, id);
+        region->refcount--;
+        (void)mm_shared_free_if_unused(region);
         spinlock_unlock(&g_shared_lock);
         return -1;
     }
@@ -716,7 +718,12 @@ int mm_shared_unmap(mm_context_t *ctx, uint32_t id) {
         return -1;
     }
     pfa_free_pages(region->base, region->pages);
-    int rc = mm_shared_release(ctx->id, id);
+    if (region->refcount == 0) {
+        spinlock_unlock(&g_shared_lock);
+        return -1;
+    }
+    region->refcount--;
+    int rc = mm_shared_free_if_unused(region);
     spinlock_unlock(&g_shared_lock);
     return rc;
 }

@@ -1349,6 +1349,11 @@ add_custom_target(run-kernel-unit-tests
           ${SERVICES_DIR}/fs_manager/fs_manager_path.c
           -o ${BUILD_DIR}/test_fs_manager_path
   COMMAND ${BUILD_DIR}/test_fs_manager_path
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${KERNEL_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_user_mutex.c
+          -o ${BUILD_DIR}/test_user_mutex
+  COMMAND ${BUILD_DIR}/test_user_mutex
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Running host kernel unit tests"
   VERBATIM

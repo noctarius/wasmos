@@ -60,6 +60,14 @@ declare function fs_buffer_size(): i32;
 declare function fs_buffer_write(ptr: i32, len: i32, offset: i32): i32;
 @external("wasmos", "fs_buffer_copy")
 declare function fs_buffer_copy(ptr: i32, len: i32, offset: i32): i32;
+@external("wasmos", "thread_gettid")
+declare function thread_gettid(): i32;
+@external("wasmos", "thread_yield")
+declare function thread_yield(): i32;
+@external("wasmos", "mutex_try_lock")
+declare function mutex_try_lock(ptr: i32): i32;
+@external("wasmos", "mutex_unlock")
+declare function mutex_unlock(ptr: i32): i32;
 
 let g_fsReplyEndpoint: i32 = -1;
 let g_fsRequestId: i32 = 1;
@@ -73,6 +81,40 @@ export namespace startup {
       return 0;
     }
     return unchecked(g_startupArgs[index]);
+  }
+}
+
+@unmanaged
+export class Mutex {
+  owner_tid: u32;
+  recursion_depth: u32;
+
+  init(): void {
+    this.owner_tid = 0;
+    this.recursion_depth = 0;
+  }
+
+  static currentTid(): i32 {
+    return thread_gettid();
+  }
+
+  tryLock(): i32 {
+    return mutex_try_lock(changetype<i32>(this));
+  }
+
+  lock(): i32 {
+    while (true) {
+      const rc = this.tryLock();
+      if (rc != 1) {
+        return rc;
+      }
+      thread_yield();
+    }
+    return -1;
+  }
+
+  unlock(): i32 {
+    return mutex_unlock(changetype<i32>(this));
   }
 }
 

@@ -4,11 +4,13 @@
 #include "paging.h"
 #include "physmem.h"
 #include "process.h"
+#include "thread.h"
 #include "process_manager.h"
 #include "serial.h"
 #include "framebuffer.h"
 #include "ipc.h"
 #include "io.h"
+#include "user_mutex.h"
 #include "policy.h"
 #include "wasmos_driver_abi.h"
 #include "capability.h"
@@ -458,6 +460,38 @@ nd_sched_current_pid(void)
 }
 
 static uint32_t
+nd_thread_current_tid(void)
+{
+    return thread_current_tid();
+}
+
+static int
+nd_mutex_try_lock(uint64_t mutex_addr)
+{
+    process_t *proc = process_get(process_current_pid());
+    if (!proc) {
+        return -1;
+    }
+    return user_mutex_user_try_lock(proc->context_id,
+                                    mutex_addr,
+                                    thread_current_tid(),
+                                    0);
+}
+
+static int
+nd_mutex_unlock(uint64_t mutex_addr)
+{
+    process_t *proc = process_get(process_current_pid());
+    if (!proc) {
+        return -1;
+    }
+    return user_mutex_user_unlock(proc->context_id,
+                                  mutex_addr,
+                                  thread_current_tid(),
+                                  0);
+}
+
+static uint32_t
 nd_early_log_size(void)
 {
     return serial_early_log_size();
@@ -845,6 +879,9 @@ native_driver_start(uint32_t context_id,
     api.ipc_recv            = nd_ipc_recv;
     api.sched_yield         = nd_sched_yield;
     api.sched_current_pid   = nd_sched_current_pid;
+    api.thread_current_tid  = nd_thread_current_tid;
+    api.mutex_try_lock      = nd_mutex_try_lock;
+    api.mutex_unlock        = nd_mutex_unlock;
     api.proc_exit           = nd_proc_exit;
     api.proc_notify_ready   = nd_proc_notify_ready;
     api.early_log_size      = nd_early_log_size;

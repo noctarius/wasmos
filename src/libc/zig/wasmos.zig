@@ -53,6 +53,10 @@ extern "wasmos" fn fs_endpoint() callconv(.c) i32;
 extern "wasmos" fn fs_buffer_size() callconv(.c) i32;
 extern "wasmos" fn fs_buffer_write(ptr: i32, len: i32, offset: i32) callconv(.c) i32;
 extern "wasmos" fn fs_buffer_copy(ptr: i32, len: i32, offset: i32) callconv(.c) i32;
+extern "wasmos" fn thread_gettid() callconv(.c) i32;
+extern "wasmos" fn thread_yield() callconv(.c) i32;
+extern "wasmos" fn mutex_try_lock(ptr: i32) callconv(.c) i32;
+extern "wasmos" fn mutex_unlock(ptr: i32) callconv(.c) i32;
 
 pub const Error = error{
     BadResponse,
@@ -69,6 +73,38 @@ var g_fs_request_id: i32 = 1;
 var g_ipc_reply_endpoint: i32 = -1;
 var g_ipc_request_id: i32 = 1;
 var g_startup_args = [4]i32{ 0, 0, 0, 0 };
+
+pub const Mutex = extern struct {
+    owner_tid: u32,
+    recursion_depth: u32,
+
+    pub fn init(self: *Mutex) void {
+        self.owner_tid = 0;
+        self.recursion_depth = 0;
+    }
+
+    pub fn currentTid() i32 {
+        return thread_gettid();
+    }
+
+    pub fn tryLock(self: *Mutex) i32 {
+        return mutex_try_lock(@intCast(@intFromPtr(self)));
+    }
+
+    pub fn lock(self: *Mutex) i32 {
+        while (true) {
+            const rc = self.tryLock();
+            if (rc != 1) {
+                return rc;
+            }
+            _ = thread_yield();
+        }
+    }
+
+    pub fn unlock(self: *Mutex) i32 {
+        return mutex_unlock(@intCast(@intFromPtr(self)));
+    }
+};
 
 pub const startup = struct {
     pub fn arg(index: usize) i32 {

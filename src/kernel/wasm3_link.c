@@ -17,6 +17,7 @@
 #include "policy.h"
 #include "capability.h"
 #include "thread.h"
+#include "user_mutex.h"
 #include "wasm_driver.h"
 
 #include <stdint.h>
@@ -3019,6 +3020,56 @@ m3ApiRawFunction(wasmos_thread_gettid)
     m3ApiReturn((int32_t)thread_current_tid());
 }
 
+m3ApiRawFunction(wasmos_mutex_try_lock)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, mutex_ptr)
+    process_t *proc = process_get(process_current_pid());
+    uint64_t user_mutex = 0;
+    uint32_t mutex_off = 0;
+    user_mutex_state_t state = {0};
+    if (!proc || wasm_arg_u32_nonneg(mutex_ptr, &mutex_off) != 0) {
+        m3ApiReturn(-1);
+    }
+    if (wasm_user_va_from_offset(proc->context_id,
+                                 mutex_off,
+                                 (uint32_t)sizeof(state),
+                                 &user_mutex) != 0) {
+        m3ApiReturn(-1);
+    }
+    int rc = user_mutex_user_try_lock(proc->context_id,
+                                      user_mutex,
+                                      thread_current_tid(),
+                                      &state);
+    memcpy((uint8_t *)_mem + mutex_off, &state, sizeof(state));
+    m3ApiReturn(rc);
+}
+
+m3ApiRawFunction(wasmos_mutex_unlock)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, mutex_ptr)
+    process_t *proc = process_get(process_current_pid());
+    uint64_t user_mutex = 0;
+    uint32_t mutex_off = 0;
+    user_mutex_state_t state = {0};
+    if (!proc || wasm_arg_u32_nonneg(mutex_ptr, &mutex_off) != 0) {
+        m3ApiReturn(-1);
+    }
+    if (wasm_user_va_from_offset(proc->context_id,
+                                 mutex_off,
+                                 (uint32_t)sizeof(state),
+                                 &user_mutex) != 0) {
+        m3ApiReturn(-1);
+    }
+    int rc = user_mutex_user_unlock(proc->context_id,
+                                    user_mutex,
+                                    thread_current_tid(),
+                                    &state);
+    memcpy((uint8_t *)_mem + mutex_off, &state, sizeof(state));
+    m3ApiReturn(rc);
+}
+
 m3ApiRawFunction(wasmos_thread_create)
 {
     m3ApiReturnType(int32_t)
@@ -3566,6 +3617,8 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "sched_current_pid", "i()", wasmos_sched_current_pid);
     rc |= wasm3_link_raw(module, "wasmos", "sched_yield", "i()", wasmos_sched_yield);
     rc |= wasm3_link_raw(module, "wasmos", "thread_gettid", "i()", wasmos_thread_gettid);
+    rc |= wasm3_link_raw(module, "wasmos", "mutex_try_lock", "i(i)", wasmos_mutex_try_lock);
+    rc |= wasm3_link_raw(module, "wasmos", "mutex_unlock", "i(i)", wasmos_mutex_unlock);
     rc |= wasm3_link_raw(module, "wasmos", "thread_create", "i(iiii)", wasmos_thread_create);
     rc |= wasm3_link_raw(module, "wasmos", "thread_yield", "i()", wasmos_thread_yield);
     rc |= wasm3_link_raw(module, "wasmos", "thread_exit", "i(i)", wasmos_thread_exit);

@@ -99,6 +99,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/process.o
   ${BUILD_DIR}/thread.o
   ${BUILD_DIR}/spinlock.o
+  ${BUILD_DIR}/user_mutex.o
   ${BUILD_DIR}/memory_service.o
   ${BUILD_DIR}/irq.o
   ${BUILD_DIR}/irq_x86_64.o
@@ -169,6 +170,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/process.c
   ${KERNEL_DIR}/thread.c
   ${KERNEL_DIR}/spinlock.c
+  ${KERNEL_DIR}/user_mutex.c
   ${KERNEL_DIR}/memory_service.c
   ${KERNEL_DIR}/irq.c
   ${KERNEL_DIR}/arch/x86_64/irq_x86_64.c
@@ -235,6 +237,7 @@ target_sources(kernel_sources INTERFACE
   ${KERNEL_DIR}/include/timer.h
   ${KERNEL_DIR}/include/serial.h
   ${KERNEL_DIR}/include/spinlock.h
+  ${KERNEL_DIR}/include/user_mutex.h
   ${KERNEL_DIR}/include/wasm_chardev.h
   ${KERNEL_DIR}/include/wasm_driver.h
   ${KERNEL_DIR}/include/wasmos_app.h
@@ -271,6 +274,7 @@ add_library(kernel_ide OBJECT EXCLUDE_FROM_ALL
   ${KERNEL_DIR}/include/serial.h
   ${KERNEL_DIR}/include/wasmos_app.h
   ${KERNEL_DIR}/include/spinlock.h
+  ${KERNEL_DIR}/include/user_mutex.h
   ${KERNEL_DIR}/include/wasm_driver.h
   ${KERNEL_DIR}/include/wasm_chardev.h
   ${KERNEL_DIR}/include/io.h
@@ -326,6 +330,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process.c -o ${BUILD_DIR}/process.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/thread.c -o ${BUILD_DIR}/thread.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/spinlock.c -o ${BUILD_DIR}/spinlock.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/user_mutex.c -o ${BUILD_DIR}/user_mutex.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory_service.c -o ${BUILD_DIR}/memory_service.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/irq.c -o ${BUILD_DIR}/irq.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/irq_x86_64.c -o ${BUILD_DIR}/irq_x86_64.o
@@ -385,6 +390,7 @@ add_custom_command(
           ${KERNEL_DIR}/include/serial.h ${KERNEL_DIR}/include/wasmos_app.h
           ${KERNEL_DIR}/include/wasmos_app_meta.h
           ${KERNEL_DIR}/include/native_driver.h ${KERNEL_DIR}/include/spinlock.h
+          ${KERNEL_DIR}/include/user_mutex.h
           ${KERNEL_DIR}/include/wasm_driver.h ${KERNEL_DIR}/include/wasm_chardev.h
           ${KERNEL_DIR}/include/framebuffer.h
           ${KERNEL_DIR}/include/io.h

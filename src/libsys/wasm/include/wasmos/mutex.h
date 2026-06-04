@@ -1,0 +1,70 @@
+#ifndef WASMOS_LIBSYS_WASMOS_MUTEX_H
+#define WASMOS_LIBSYS_WASMOS_MUTEX_H
+
+#include <stdint.h>
+#include <stddef.h>
+
+#include "wasmos/api.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct {
+    volatile uint32_t owner_tid;
+    volatile uint32_t recursion_depth;
+} wasmos_mutex_t;
+
+#define WASMOS_MUTEX_INITIALIZER {0u, 0u}
+
+static inline void
+wasmos_mutex_init(wasmos_mutex_t *mutex)
+{
+    if (!mutex) {
+        return;
+    }
+    mutex->owner_tid = 0u;
+    mutex->recursion_depth = 0u;
+}
+
+static inline int32_t
+wasmos_mutex_try_lock(wasmos_mutex_t *mutex)
+{
+    if (!mutex) {
+        return -1;
+    }
+    return wasmos_mutex_try_lock_host((int32_t)(uintptr_t)mutex);
+}
+
+static inline int32_t
+wasmos_mutex_lock(wasmos_mutex_t *mutex)
+{
+    int32_t rc = -1;
+    if (!mutex) {
+        return -1;
+    }
+    /* TODO(user-mutex-futex): add a sleep/wake path so contended user mutexes
+     * stop yield-spinning once the kernel grows a futex-style primitive. */
+    for (;;) {
+        rc = wasmos_mutex_try_lock(mutex);
+        if (rc != 1) {
+            return rc;
+        }
+        (void)wasmos_thread_yield();
+    }
+}
+
+static inline int32_t
+wasmos_mutex_unlock(wasmos_mutex_t *mutex)
+{
+    if (!mutex) {
+        return -1;
+    }
+    return wasmos_mutex_unlock_host((int32_t)(uintptr_t)mutex);
+}
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

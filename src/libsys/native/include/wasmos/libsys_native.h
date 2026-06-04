@@ -40,6 +40,13 @@ typedef struct {
     wasmos_sys_native_handler_t handlers[WASMOS_SYS_NATIVE_HANDLER_MAX];
 } wasmos_sys_native_event_loop_t;
 
+typedef struct {
+    volatile uint32_t owner_tid;
+    volatile uint32_t recursion_depth;
+} wasmos_sys_mutex_t;
+
+#define WASMOS_SYS_MUTEX_INITIALIZER {0u, 0u}
+
 int32_t wasmos_sys_ipc_recv_matching_native(wasmos_driver_api_t *api, uint32_t receiver_endpoint, uint32_t request_id, nd_ipc_message_t *out_message);
 int32_t wasmos_sys_svc_lookup_retry_native(wasmos_driver_api_t *api, uint32_t proc_endpoint, uint32_t source_endpoint, const uint8_t *name, uint32_t name_len, uint32_t request_id_base, uint32_t attempts);
 int32_t wasmos_sys_ipc_send_retry_native(wasmos_driver_api_t *api, uint32_t destination_endpoint, uint32_t source_endpoint, uint32_t msg_type, uint32_t request_id, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, uint32_t retries);
@@ -93,6 +100,52 @@ int32_t wasmos_sys_native_intent_send_with_request_id(wasmos_sys_native_event_lo
                                                       void (*on_resolve)(void *user, const nd_ipc_message_t *msg),
                                                       void *user);
 int32_t wasmos_sys_native_event_loop_poll(wasmos_sys_native_event_loop_t *loop, uint32_t budget);
+
+static inline void
+wasmos_sys_mutex_init(wasmos_sys_mutex_t *mutex)
+{
+    if (!mutex) {
+        return;
+    }
+    mutex->owner_tid = 0u;
+    mutex->recursion_depth = 0u;
+}
+
+static inline int32_t
+wasmos_sys_mutex_try_lock(wasmos_driver_api_t *api, wasmos_sys_mutex_t *mutex)
+{
+    if (!api || !mutex || !api->mutex_try_lock) {
+        return -1;
+    }
+    return api->mutex_try_lock((uint64_t)(uintptr_t)mutex);
+}
+
+static inline int32_t
+wasmos_sys_mutex_lock(wasmos_driver_api_t *api, wasmos_sys_mutex_t *mutex)
+{
+    int32_t rc = -1;
+    if (!api || !mutex || !api->sched_yield) {
+        return -1;
+    }
+    /* TODO(user-mutex-futex): add a sleep/wake path so contended user mutexes
+     * stop yield-spinning once the kernel grows a futex-style primitive. */
+    for (;;) {
+        rc = wasmos_sys_mutex_try_lock(api, mutex);
+        if (rc != 1) {
+            return rc;
+        }
+        api->sched_yield();
+    }
+}
+
+static inline int32_t
+wasmos_sys_mutex_unlock(wasmos_driver_api_t *api, wasmos_sys_mutex_t *mutex)
+{
+    if (!api || !mutex || !api->mutex_unlock) {
+        return -1;
+    }
+    return api->mutex_unlock((uint64_t)(uintptr_t)mutex);
+}
 
 #ifdef __cplusplus
 }

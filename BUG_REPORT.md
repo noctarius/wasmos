@@ -771,29 +771,35 @@ so any sender after this point is guaranteed to see a BLOCKED thread with
 
 ---
 
-### SMP-MED-03 — Recursive spinlock check is non-atomic
+### SMP-MED-03 ✅ FIXED — Recursive spinlock check is non-atomic
 
-**File:** `src/kernel/spinlock.c:85–106`
+**File:** `src/kernel/spinlock.c` (resolved)
 
-`lock->state` and `lock->owner_cpu` are read as two separate non-atomic loads.
-The recursive spinlock is also a workaround for an unfixed reentry root cause
-that must be eliminated.
+Root cause: `pfa_init` called `klog_*` while holding `g_pfa_lock`, triggering
+`serial_ring_init → mm_shared_create → pfa_alloc_pages → spinlock_lock(g_pfa_lock)`
+— a recursive re-acquisition masked by the same-CPU detection. `mm_shared_map`
+and `mm_shared_unmap` similarly called `mm_shared_retain`/`mm_shared_release`
+while holding `g_shared_lock`.
 
-**Fix:** `__atomic_load_n(..., __ATOMIC_ACQUIRE)` for `owner_cpu` after
-observing `state`.  Then fix the reentry root cause and remove the recursion.
+**Resolution (commit `123266c1`):** Removed `owner_cpu`/`recursion_depth` fields
+from `spinlock_t` and all associated re-entry detection logic. Fixed `pfa_init`
+to defer all logging until after `g_pfa_lock` is released (added
+`pfa_alloc_pages_nolock` helper). Fixed `mm_shared_map` and `mm_shared_unmap`
+to inline refcount operations directly under `g_shared_lock` instead of calling
+the public retain/release helpers that re-acquire the same lock.
 
 ---
 
-### SMP-MED-04 — IRQ-path `ipc_send_from` uses recursive spinlock as workaround
+### SMP-MED-04 ✅ FIXED — IRQ-path `ipc_send_from` uses recursive spinlock as workaround
 
-**File:** `src/kernel/ipc.c:225–228`
+**File:** `src/kernel/ipc.c` (resolved)
 
-If the same CPU already holds `ep->lock` (in `ipc_recv_blocking_for`), the
-recursive check fires and `recursion_depth` is incremented.  The IRQ handler's
-"release" does not fully release the lock, leaving it permanently held.
+The recursive spinlock workaround that `ipc_send_from` depended on was the
+same mechanism removed in SMP-MED-03. Eliminating the re-entry root causes
+(logging under lock, nested public-API calls under lock) made the workaround
+unnecessary; the IRQ-path send now operates correctly without recursive detection.
 
-**Fix:** Separate the ISR-safe send path (lockless ring or per-endpoint ISR
-slot) from the blocking receive path.  Remove recursive spinlock after.
+**Resolution (commit `123266c1`):** See SMP-MED-03 above.
 
 ---
 

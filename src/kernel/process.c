@@ -2158,7 +2158,17 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     }
 
     thread_t *thread = process_thread_for_transition(cpu_local()->current_process);
+    /* SMP-MED-05: re-verify state under the process table lock so that a
+     * concurrent process_reap cannot transition the process to REAPING between
+     * the early state check above and the set_ready call below. */
+    spinlock_lock(&g_process_table_lock);
+    if (cpu_local()->current_process->state != PROCESS_STATE_RUNNING) {
+        spinlock_unlock(&g_process_table_lock);
+        process_clear_resched();
+        return 0;
+    }
     process_set_ready(cpu_local()->current_process, thread);
+    spinlock_unlock(&g_process_table_lock);
     ready_queue_enqueue(thread);
     cpu_local()->last_run_result = PROCESS_RUN_YIELDED;
     process_clear_resched();

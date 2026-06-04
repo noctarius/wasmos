@@ -63,6 +63,7 @@ thread_reset_slot(thread_t *thread)
     thread->join_waiter_tid = 0;
     thread->detached = 0;
     thread->exit_status = 0;
+    thread->wasm3_heap_bound_pid = 0;
     for (uint32_t i = 0; i < THREAD_NAME_MAX; ++i) {
         thread->name_storage[i] = '\0';
     }
@@ -257,6 +258,27 @@ thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t reaso
     thread->state = state;
     thread->block_reason = reason;
     spinlock_unlock(&g_thread_table_lock);
+}
+
+/* Atomically transition a thread from BLOCKED to READY under the table lock.
+ * Returns 1 if the state was changed, 0 if the thread was not BLOCKED or not
+ * found.  Callers must enqueue the thread separately when this returns 1. */
+int
+thread_wake_if_blocked(uint32_t tid)
+{
+    if (tid == 0) {
+        return 0;
+    }
+    spinlock_lock(&g_thread_table_lock);
+    thread_t *thread = thread_get(tid);
+    if (!thread || thread->state != THREAD_STATE_BLOCKED) {
+        spinlock_unlock(&g_thread_table_lock);
+        return 0;
+    }
+    thread->state = THREAD_STATE_READY;
+    thread->block_reason = THREAD_BLOCK_NONE;
+    spinlock_unlock(&g_thread_table_lock);
+    return 1;
 }
 
 void

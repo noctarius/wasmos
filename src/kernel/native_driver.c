@@ -863,10 +863,25 @@ native_driver_start(uint32_t context_id,
     api.shmem_flush         = nd_shmem_flush;
 
     klog_write("[native-driver] calling initialize\n");
+    /* The ELF is mapped only in the driver's address space (low VA, e.g.
+     * IMAGE_BASE 0x10000000).  The kernel's page table has a bootstrap
+     * identity mapping for 0..1 GB that points to different physical pages
+     * than the ELF segments.  Switch to the driver's CR3 so that the entry
+     * point resolves to the actual ELF code.  All kernel callback functions
+     * are at higher-half VAs shared between every address space (PML4[511])
+     * and remain reachable with the driver's CR3 active. */
+    uint64_t kernel_cr3 = paging_get_current_root_table();
+    if (paging_switch_root(ctx->root_table) != 0) {
+        klog_write("[native-driver] CR3 switch to driver failed\n");
+        return -1;
+    }
     int rc = entry(&api,
                    (int)(init_argc > 0 ? init_argv[0] : 0),
                    (int)(init_argc > 1 ? init_argv[1] : 0),
                    (int)(init_argc > 2 ? init_argv[2] : 0));
+    /* Restore kernel CR3 if entry() returned (error path or graceful exit
+     * that did not go through process_yield(PROCESS_RUN_EXITED)). */
+    (void)paging_switch_root(kernel_cr3);
     if (rc == -2) {
         klog_write("[native-driver] ABI mismatch\n");
     }

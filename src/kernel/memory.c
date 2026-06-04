@@ -6,6 +6,7 @@
 #include "list.h"
 #include "spinlock.h"
 #include "string.h"
+#include "arch/x86_64/smp.h"
 
 #define PAGE_SIZE 0x1000ULL
 #define MM_USER_LINEAR_BASE 0x0000008000000000ULL
@@ -23,7 +24,7 @@ static const boot_info_t *g_boot_info;
 static list_t g_contexts;
 static spinlock_t g_contexts_lock;
 static mm_context_t g_root_ctx;
-static uint8_t g_mm_copy_stack[MM_COPY_STACK_BYTES] __attribute__((aligned(16)));
+static uint8_t g_mm_copy_stacks[WASMOS_MAX_CPUS][MM_COPY_STACK_BYTES] __attribute__((aligned(16)));
 
 static inline uintptr_t
 mm_kernel_alias_addr(uintptr_t addr)
@@ -83,7 +84,7 @@ mm_run_on_copy_stack(mm_copy_work_fn fn, void *arg)
         return fn(arg);
     }
 
-    uintptr_t stack_top = mm_kernel_alias_addr((uintptr_t)&g_mm_copy_stack[MM_COPY_STACK_BYTES]);
+    uintptr_t stack_top = mm_kernel_alias_addr((uintptr_t)&g_mm_copy_stacks[cpu_local()->cpu_id][MM_COPY_STACK_BYTES]);
     stack_top &= ~(uintptr_t)0xFULL;
     int rc = -1;
     __asm__ volatile(
@@ -932,12 +933,18 @@ mm_copy_from_user(uint32_t context_id, void *dst, uint64_t user_src, uint64_t si
         return -1;
     }
 
+    /* Read the ACTUAL current CPU's CR3 rather than the global
+     * g_current_pml4_phys, which is last-writer-wins under SMP and can
+     * contain another CPU's page table.  Restoring the wrong root after the
+     * user-space copy would leave this CPU with a stripped identity map. */
+    uint64_t cur_cr3 = 0;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cur_cr3));
     mm_copy_from_user_args_t args = {
         .context_id = context_id,
         .user_addr = user_src,
         .size = size,
         .root_table = ctx->root_table,
-        .prev_root = paging_get_current_root_table(),
+        .prev_root = cur_cr3,
         .kernel_ptr = (uint8_t *)dst,
     };
     return mm_run_on_copy_stack(mm_copy_from_user_impl, &args);
@@ -993,12 +1000,15 @@ mm_copy_to_user(uint32_t context_id, uint64_t user_dst, const void *src, uint64_
         return -1;
     }
 
+    /* Read the ACTUAL current CPU's CR3 — see mm_copy_from_user for rationale. */
+    uint64_t cur_cr3 = 0;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cur_cr3));
     mm_copy_to_user_args_t args = {
         .context_id = context_id,
         .user_addr = user_dst,
         .size = size,
         .root_table = ctx->root_table,
-        .prev_root = paging_get_current_root_table(),
+        .prev_root = cur_cr3,
         .kernel_ptr = (const uint8_t *)src,
     };
     return mm_run_on_copy_stack(mm_copy_to_user_impl, &args);

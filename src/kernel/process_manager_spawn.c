@@ -9,6 +9,7 @@
 #include "wasm_chardev.h"
 #include "wasmos_app_meta.h"
 #include "string.h"
+#include "serial.h"
 
 static const boot_module_t *
 pm_module_at(uint32_t index)
@@ -644,6 +645,13 @@ pm_handle_spawn_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, child_pid);
 
     uint32_t timeout_ms = (uint32_t)msg->arg1;
+    klog_write("[pm] spawn_sync timeout_ms=");
+    serial_write_hex64((uint64_t)timeout_ms);
+    klog_write(" ticks_now=");
+    serial_write_hex64(timer_ticks());
+    klog_write(" ticks_per_1s=");
+    serial_write_hex64(timer_ms_to_ticks(1000));
+    klog_write("\n");
     g_pm.spawn.in_use = 1;
     g_pm.spawn.is_sync = 1;
     g_pm.spawn.reply_endpoint = msg->source;
@@ -659,6 +667,9 @@ pm_handle_spawn_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     g_pm.spawn.sync_timeout_ticks = (timeout_ms > 0)
         ? (timer_ticks() + timer_ms_to_ticks(timeout_ms))
         : 0;
+    klog_write("[pm] spawn_sync deadline=");
+    serial_write_hex64(g_pm.spawn.sync_timeout_ticks);
+    klog_write("\n");
     return 0;
 }
 
@@ -882,6 +893,13 @@ pm_poll_sync_spawn(uint32_t pm_context_id)
 
     if (g_pm.spawn.sync_timeout_ticks > 0 &&
         timer_ticks() >= g_pm.spawn.sync_timeout_ticks) {
+        klog_write("[pm] spawn timeout ticks=");
+        serial_write_hex64(timer_ticks());
+        klog_write(" deadline=");
+        serial_write_hex64(g_pm.spawn.sync_timeout_ticks);
+        klog_write(" pid=");
+        serial_write_hex64((uint64_t)g_pm.spawn.sync_child_pid);
+        klog_write("\n");
         g_pm.spawn.in_use = 0;
         resp.type = PROC_IPC_ERROR;
         resp.source = g_pm.proc_endpoint;
@@ -899,6 +917,11 @@ pm_poll_sync_spawn(uint32_t pm_context_id)
     if (!child ||
         child->state == PROCESS_STATE_ZOMBIE ||
         child->exiting) {
+        klog_write("[pm] spawn child-dead pid=");
+        serial_write_hex64((uint64_t)g_pm.spawn.sync_child_pid);
+        klog_write(" state=");
+        serial_write_hex64(child ? (uint64_t)child->state : 0xFFFFFFFFull);
+        klog_write("\n");
         g_pm.spawn.in_use = 0;
         resp.type = PROC_IPC_ERROR;
         resp.source = g_pm.proc_endpoint;

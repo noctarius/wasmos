@@ -369,7 +369,7 @@ ipc_recv_blocking_for(uint32_t receiver_context_id,
          * is complete.
          */
         if (thread) {
-            thread->blocking_transition = 1;
+            __atomic_store_n(&thread->blocking_transition, 1, __ATOMIC_RELEASE);
         }
         process_block_on_ipc(proc);
         spinlock_unlock(&ep->lock);
@@ -382,7 +382,7 @@ ipc_recv_blocking_for(uint32_t receiver_context_id,
         if (proc->state != PROCESS_STATE_BLOCKED ||
             (thread && thread->state != THREAD_STATE_BLOCKED)) {
             if (thread) {
-                thread->blocking_transition = 0;
+                __atomic_store_n(&thread->blocking_transition, 0, __ATOMIC_RELEASE);
             }
             continue;
         }

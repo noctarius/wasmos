@@ -603,7 +603,7 @@ static thread_t *ready_queue_dequeue(void) {
         }
         if (thread->state == THREAD_STATE_READY &&
             proc->state == PROCESS_STATE_READY) {
-            if (thread->blocking_transition) {
+            if (__atomic_load_n(&thread->blocking_transition, __ATOMIC_ACQUIRE)) {
                 /* Another CPU is still in the middle of transitioning this
                  * thread from RUNNING to BLOCKED (context_switch_high has not
                  * yet saved the kernel stack).  Put it back so we try again
@@ -747,7 +747,9 @@ static process_t *process_find_by_pid(uint32_t pid) {
     }
     process_t *table = process_table();
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        if (table[i].pid == pid && table[i].state != PROCESS_STATE_UNUSED) {
+        if (table[i].pid == pid &&
+            table[i].state != PROCESS_STATE_UNUSED &&
+            table[i].state != PROCESS_STATE_REAPING) {
             return &table[i];
         }
     }
@@ -876,6 +878,9 @@ static void process_reap(process_t *proc) {
     if (!proc) {
         return;
     }
+    spinlock_lock(&g_process_table_lock);
+    proc->state = PROCESS_STATE_REAPING;
+    spinlock_unlock(&g_process_table_lock);
     for (uint32_t i = 0;; ++i) {
         uint32_t tid = 0;
         if (thread_owner_tid_at(proc->pid, i, &tid) != 0) {
@@ -1377,6 +1382,14 @@ void process_yield(process_run_result_t result) {
     if (!ctx) {
         return;
     }
+    /* Save the wasm3 heap-binding PID to the thread struct so the scheduler
+     * can restore it when this thread is next dispatched.  Without this save,
+     * the per-CPU wasm3_heap_bound_pid leaks to whatever thread runs next on
+     * this CPU, causing cross-thread heap allocation into the wrong slot. */
+    thread_t *yielding_thread = cpu_local()->current_thread;
+    if (yielding_thread) {
+        yielding_thread->wasm3_heap_bound_pid = cpu_local()->wasm3_heap_bound_pid;
+    }
     context_switch_high(ctx, &cpu_local()->sched_ctx);
 }
 
@@ -1571,13 +1584,21 @@ uint32_t process_wake_by_context(uint32_t context_id) {
         if (proc->block_reason != PROCESS_BLOCK_IPC) {
             continue;
         }
-        if (proc->state != PROCESS_STATE_BLOCKED &&
-            !(proc->state == PROCESS_STATE_RUNNING && proc == cpu_local()->current_process)) {
+        if (proc->state != PROCESS_STATE_BLOCKED) {
             continue;
         }
         thread_t *thread = process_thread_for_transition(proc);
-        process_set_ready(proc, thread);
-        ready_queue_enqueue(thread);
+        if (!thread) {
+            continue;
+        }
+        if (!thread_wake_if_blocked(thread->tid)) {
+            continue;
+        }
+        proc->state = PROCESS_STATE_READY;
+        proc->block_reason = PROCESS_BLOCK_NONE;
+        if (!__atomic_load_n(&thread->blocking_transition, __ATOMIC_ACQUIRE)) {
+            ready_queue_enqueue(thread);
+        }
         woken++;
     }
     return woken;
@@ -1594,10 +1615,17 @@ process_wake_thread(uint32_t tid)
     if (!thread || !proc) {
         return 0;
     }
-    if (thread->state != THREAD_STATE_BLOCKED) {
+    /* Atomically check BLOCKED and transition to READY under the thread table
+     * lock, preventing two CPUs from both seeing BLOCKED and double-enqueuing
+     * the thread.  process_set_ready also sets proc->state = READY and clears
+     * block_reason; these plain stores are safe here because proc is only
+     * touched by the owning CPU's scheduler once it is RUNNING, and it is
+     * BLOCKED now (no concurrent scheduler access expected). */
+    if (!thread_wake_if_blocked(tid)) {
         return 0;
     }
-    process_set_ready(proc, thread);
+    proc->state = PROCESS_STATE_READY;
+    proc->block_reason = PROCESS_BLOCK_NONE;
     /* If the thread is in the middle of transitioning from RUNNING to BLOCKED
      * on another CPU (it called process_block_on_ipc but has not yet executed
      * context_switch_high in process_yield), do not enqueue it yet.  Adding it
@@ -1606,7 +1634,7 @@ process_wake_thread(uint32_t tid)
      * stack.  The transitioning CPU detects the READY state in its state check
      * and handles the message directly (no yield needed), or the scheduler's
      * PROCESS_RUN_BLOCKED handler re-enqueues once the context save completes. */
-    if (!thread->blocking_transition) {
+    if (!__atomic_load_n(&thread->blocking_transition, __ATOMIC_ACQUIRE)) {
         ready_queue_enqueue(thread);
     }
     return 1;
@@ -1702,8 +1730,23 @@ static int process_schedule_once_impl(void) {
         process_clear_current_cpu();
         return 1;
     }
+    /* Restore the wasm3 heap-binding PID that was saved when this thread last
+     * yielded.  This prevents a stale bound_pid (left by another thread that
+     * ran on this CPU in the meantime) from misdirecting malloc to the wrong
+     * heap slot. */
+    cpu_local()->wasm3_heap_bound_pid = thread->wasm3_heap_bound_pid;
     if (thread->is_kernel_worker) {
-        cpu_local()->last_run_result = process_run_worker_on_stack(proc, thread);
+        if (proc->ctx.rsp != 0) {
+            /* Worker previously blocked and saved its context.  Resume it
+             * via a symmetric context switch so the kernel stack and wasm3
+             * runtime state are preserved across the IPC wait.  The worker
+             * exits by calling process_yield(THREAD_EXITED) which switches
+             * back to sched_ctx — never by returning through the original
+             * process_run_worker_on_stack frame. */
+            context_switch_high(&cpu_local()->sched_ctx, &proc->ctx);
+        } else {
+            cpu_local()->last_run_result = process_run_worker_on_stack(proc, thread);
+        }
     } else {
         context_switch_high(&cpu_local()->sched_ctx, run_ctx);
     }
@@ -1728,6 +1771,7 @@ static int process_schedule_once_impl(void) {
         uint8_t reap_detached = 0;
         uint32_t exited_tid = thread->tid;
         if (thread->is_kernel_worker && thread->tid != proc->main_tid) {
+            proc->ctx.rsp = 0;
             thread_set_state(thread->tid, THREAD_STATE_ZOMBIE, THREAD_BLOCK_NONE);
             thread_set_exit_status(thread->tid, proc->exit_status);
             process_wake_thread_joiner(proc, thread);
@@ -1755,6 +1799,9 @@ static int process_schedule_once_impl(void) {
         thread_t *next = 0;
         uint8_t reap_detached = 0;
         uint32_t exited_tid = thread->tid;
+        if (thread->is_kernel_worker) {
+            proc->ctx.rsp = 0;
+        }
         thread_set_state(thread->tid, THREAD_STATE_ZOMBIE, THREAD_BLOCK_NONE);
         thread_set_exit_status(thread->tid, proc->exit_status);
         process_wake_thread_joiner(proc, thread);
@@ -1785,7 +1832,7 @@ static int process_schedule_once_impl(void) {
          * for another CPU to restore and run it.  Clear the guard flag that
          * prevented ready_queue_dequeue from handing this thread to a second
          * CPU before the save was complete. */
-        thread->blocking_transition = 0;
+        __atomic_store_n(&thread->blocking_transition, 0, __ATOMIC_RELEASE);
         /* Keep the caller thread blocked with its existing block reason, then
          * continue running another ready owner thread when available.
          *
@@ -1883,9 +1930,6 @@ int process_preempt_from_irq(irq_frame_t *frame) {
         return 0;
     }
     if (cpu_local()->in_scheduler) {
-        return 0;
-    }
-    if (g_in_context_switch) {
         return 0;
     }
     if (cpu_local()->current_process && strcmp(cpu_local()->current_process->name, "process-manager") == 0 &&

@@ -427,19 +427,344 @@ In specific preemption timing, a thread can be silently dropped from the run que
 
 ---
 
-## Fix Priority Order
+## SMP Concurrency Analysis (2026-06-03)
 
-1. **C-1** — `ipc.h` `arg2`/`arg3` field indices (corrupts every IPC reply)
-2. **C-2** — `string.c` `memmove` backward chunk order (data corruption)
-3. **C-3** — `boot.c` brace scoping / `boot_info->modules` (crashes on no-module boot)
-4. **C-4** — `ipc.c` endpoint slot claim race (kernel race condition)
-5. **C-5** — `paging.c` NX bit dropped on large-page split (security)
-6. **C-7** — `irq_x86_64.c` spurious IRQ 7 EOI (PIC corruption)
-7. **C-8** — `cpu_x86_64.c` RSP0/IST1 shared stack (crash on timer-during-syscall)
-8. **H-4** — `paging.c` user physical pages leaked on process exit
-9. **H-12** — `stdlib.c` heap coalesce wrong merged size
-10. **H-13** — `fs_fat.c` FAT32 fat_size 16-bit truncation
-11. **H-14** — `vt_main.c` canonical mode drops UTF-8
-12. **H-19** — `keyboard.ts` AUX byte not consumed
-13. **M-1/M-2** — `math.c` cosf/powf broken for common inputs
-14. **M-5** — `unistd.c` O_RDWR treated as O_RDONLY
+> Baseline: last known-good commit `50ef19f10a98287c595fe526d4462da298b32b80`  
+> Covers all commits and uncommitted changes since that baseline.  
+> Previous fix-commits patched symptoms; root causes are documented below.
+
+### Lock Hierarchy (required, not yet enforced)
+
+```
+g_pfa_lock  (outermost)
+  → g_endpoint_table_lock
+    → ep->lock
+      → g_process_table_lock
+        → g_thread_table_lock
+          → g_ready_queue_lock  (innermost)
+```
+
+Never acquire an outer lock while holding an inner one.
+
+---
+
+### SMP-CRIT-01 — `g_in_context_switch` is a single global
+
+**File:** `src/kernel/process.c:40`
+
+When CPU 0 sets `g_in_context_switch` during its own context switch,
+`process_preempt_from_irq` on CPU 1 checks the same flag and incorrectly
+suppresses preemption on CPU 1.
+
+**Fix:** Move into `cpu_local_t`. Update `context_switch.S` to use a
+GS-relative write. Test `cpu_local()->in_context_switch` in
+`process_preempt_from_irq`.
+
+---
+
+### SMP-CRIT-02 — Thread table read without lock
+
+**File:** `src/kernel/thread.c:166–229`
+
+`thread_get`, `thread_find_main_for_pid`, `thread_owner_tid_at`,
+`thread_mark_owner_exited` read `g_threads[]` without `g_thread_table_lock`.
+Concurrent `thread_reap_owner` (under the lock) can zero a slot mid-iteration.
+
+**Fix:** Split into `_locked` internal variant and a public wrapper.  Callers
+already holding the lock call the internal variant.  `thread_set_state` (which
+takes the lock and calls `thread_get`) must call the internal variant to avoid
+re-entrant lock.
+
+---
+
+### SMP-CRIT-03 — Process table read without lock in scheduler hot path
+
+**File:** `src/kernel/process.c:744–1855`
+
+`process_find_by_pid`, `process_find_by_context_internal`,
+`process_schedule_once_impl`, `process_kill`, `process_wait`,
+`process_wake_by_context` all read `g_processes[]` without
+`g_process_table_lock`.  Concurrent `process_reap` can reset a slot mid-read
+→ corrupted context restore or page fault.
+
+**Fix:** Hold `g_process_table_lock` for all table reads.  The scheduler must
+not hold it across a context switch — copy needed fields to locals, release
+lock, then switch.
+
+---
+
+### SMP-CRIT-04 — Use-after-free window during `process_reap`
+
+**File:** `src/kernel/process.c:875–918`
+
+`process_reap` frees stacks, IPC endpoints, and mm_context (steps 1–5)
+*before* removing the slot from `g_processes[]`.  Any CPU calling
+`process_find_by_pid` during this window gets a live pointer to freed memory.
+
+**Fix:** Set `proc->state = PROCESS_STATE_REAPING` under `g_process_table_lock`
+before beginning teardown so `process_find_by_pid` skips it.
+
+---
+
+### SMP-CRIT-05 — `process_wake_by_context` can schedule a RUNNING thread on two CPUs
+
+**File:** `src/kernel/process.c:1567–1591`
+
+The state check and `process_set_ready`/`ready_queue_enqueue` sequence are
+not atomic.  A concurrent wakeup can put a RUNNING thread into the ready
+queue, causing two CPUs to execute it simultaneously — instant stack/register
+corruption.  The guard `proc->state == RUNNING && proc == cpu_local()->current_process`
+is also wrong: the process could be RUNNING on a *different* CPU.
+
+**Fix:** Hold `g_process_table_lock` across the entire sequence.  Verify the
+thread is not RUNNING on any CPU before enqueuing.
+
+---
+
+### SMP-HIGH-01 — Slab allocator has no lock
+
+**File:** `src/kernel/slab.c:66–103`
+
+`kalloc_small`/`kfree_small` manipulate a global free-list with no lock and no
+atomic operations.  Two CPUs can both dequeue the same slab chunk — classic
+double-alloc.
+
+**Fix:** Add `spinlock_t` to each `slab_class_t`; take it in
+`kalloc_small`/`kfree_small`.
+
+---
+
+### SMP-HIGH-02 — Shared `g_mm_copy_stack` used as stack by all CPUs
+
+**File:** `src/kernel/memory.c:26,73–99`
+
+`mm_run_on_copy_stack` switches RSP to the top of a single 8 KB static buffer.
+Two CPUs executing this path simultaneously corrupt each other's frames.
+
+**Fix:** Move into `cpu_local_t`, or use the existing per-CPU
+`g_sched_trampoline_stacks`.
+
+---
+
+### SMP-HIGH-03 — `g_wasm_driver_registry` guarded by `preempt_disable` only
+
+**File:** `src/kernel/wasm_driver.c:96–186`
+
+`preempt_disable()` increments a per-CPU counter only.  Two CPUs can
+simultaneously enter `wasm_driver_registry_set` and `wasm_driver_registry_get`.
+
+**Fix:** Replace `critical_section_enter/leave` with
+`spinlock_lock/unlock(&g_wasm_driver_registry_lock)`.
+
+---
+
+### SMP-HIGH-04 — `process_wake_thread` double-enqueue race
+
+**File:** `src/kernel/process.c:1600–1619`
+
+`thread->state` is read locklessly.  Two CPUs can both see `THREAD_STATE_BLOCKED`,
+both call `process_set_ready`, both try to enqueue the same thread.
+
+**Fix:** Hold `g_thread_table_lock` across the full read-check-set-enqueue
+sequence.
+
+---
+
+### SMP-HIGH-05 — PID and mm_context leaked on spawn error paths
+
+**File:** `src/kernel/process.c:993,1120`
+
+`g_next_pid` is incremented and `mm_context_create` is called before the slot
+and name copy are validated.  Error returns after that point orphan the PID
+and context.
+
+**Fix:** Validate slot and name before incrementing PID and creating context.
+
+---
+
+### SMP-HIGH-06 — Thread counts incremented without `g_process_table_lock`
+
+**File:** `src/kernel/process.c:1203–1244`
+
+`process_thread_spawn_worker_internal` reads `owner->state`/`owner->exiting`
+and increments `thread_count`/`live_thread_count` without holding the lock.
+A concurrent kill can zombie the owner between the check and the increment.
+
+**Fix:** Take `g_process_table_lock` for the entire check-and-increment.
+
+---
+
+### SMP-MED-01 — No enforced lock hierarchy → latent deadlocks
+
+As SMP-CRIT fixes land, new lock sites will be added.  Without a documented
+hierarchy, a deadlock cycle will close.  The hierarchy above (Lock Hierarchy
+section) must be audited against every call path.
+
+---
+
+### SMP-MED-02 — `ep->lock` held across `process_block_on_ipc`
+
+**File:** `src/kernel/ipc.c:317–391`
+
+`ep->lock` is held while calling `process_block_on_ipc` → `thread_set_state`
+→ `g_thread_table_lock`.  Any future wakeup path that sends IPC under the
+thread lock will close the cycle: `ep→thread→ep`.
+
+---
+
+### SMP-MED-03 — Recursive spinlock check is non-atomic
+
+**File:** `src/kernel/spinlock.c:85–106`
+
+`lock->state` and `lock->owner_cpu` are read as two separate non-atomic loads.
+The recursive spinlock is also a workaround for an unfixed reentry root cause
+that must be eliminated.
+
+**Fix:** `__atomic_load_n(..., __ATOMIC_ACQUIRE)` for `owner_cpu` after
+observing `state`.  Then fix the reentry root cause and remove the recursion.
+
+---
+
+### SMP-MED-04 — IRQ-path `ipc_send_from` uses recursive spinlock as workaround
+
+**File:** `src/kernel/ipc.c:225–228`
+
+If the same CPU already holds `ep->lock` (in `ipc_recv_blocking_for`), the
+recursive check fires and `recursion_depth` is incremented.  The IRQ handler's
+"release" does not fully release the lock, leaving it permanently held.
+
+**Fix:** Separate the ISR-safe send path (lockless ring or per-endpoint ISR
+slot) from the blocking receive path.  Remove recursive spinlock after.
+
+---
+
+### SMP-MED-05 — `process_preempt_from_irq` races with `process_reap`
+
+**File:** `src/kernel/process.c:1908–2034`
+
+State check at line 1937 and `process_set_ready` at line 2028 are not atomic.
+Concurrent `process_reap` can zombie the process between them → zombie thread
+scheduled and executed.
+
+**Fix:** Atomically check `state == RUNNING` and transition under
+`g_process_table_lock`.
+
+---
+
+### SMP-MED-06 — `blocking_transition` cleared without memory barrier
+
+**File:** `src/kernel/ipc.c:372`, `src/kernel/process.c:1815`
+
+`thread->blocking_transition = 0` is a plain store.  A concurrent CPU reading
+it in `ready_queue_dequeue` may see a stale `1` after the flag is cleared.
+
+**Fix:** `__atomic_store_n(..., 0, __ATOMIC_RELEASE)` / `__atomic_load_n(...,
+__ATOMIC_ACQUIRE)`.
+
+---
+
+### SMP-MED-07 — Notification blocking path has spurious-miss race
+
+**File:** `src/kernel/ipc.c:423–447`
+
+`ipc_wait_for` arms the waiter and returns `IPC_EMPTY`.  A sender can fire
+between the `ep->lock` release and the caller's external `process_block_on_ipc`
+call.  The notification is delivered to a RUNNING thread, ignored, and the
+thread blocks forever.
+
+**Fix:** `ipc_wait_blocking_for` that arms + blocks + checks atomically under
+`ep->lock`, mirroring `ipc_recv_blocking_for`.
+
+---
+
+### SMP-MED-08 — `wake_waiters` and `process_info*` iterate table without lock
+
+**File:** `src/kernel/process.c:771–861, 2088–2257`
+
+`process_wake_waiters`, `process_has_waiters`, `process_count_active`,
+`process_info_at*`, `process_ready_count` all iterate `g_processes[]` without
+`g_process_table_lock`.
+
+---
+
+### SMP-LOW-01 — Shared diagnostic counters with lost updates
+
+**File:** `src/kernel/process.c:54–55,1733–1735`
+
+`g_sched_switch_count`, `g_sched_progress_logged`, etc. written from all CPUs
+without synchronization.
+
+**Fix:** `__sync_fetch_and_add` / `__sync_bool_compare_and_swap`, or per-CPU.
+
+---
+
+### SMP-LOW-02 — `g_idle_process` needs store-release
+
+**File:** `src/kernel/process.c:1109`
+
+Written under `g_process_table_lock` but read without lock on every CPU.
+
+**Fix:** `__sync_synchronize()` after the write in `process_spawn_idle`.
+
+---
+
+### SMP-LOW-03 — AP `started` flag polled without acquire barrier
+
+**File:** `src/kernel/arch/x86_64/smp.c:190`
+
+Correct on x86 TSO but not self-documenting.
+
+**Fix:** `__atomic_load_n(&ap->started, __ATOMIC_ACQUIRE)` on BSP poll side.
+
+---
+
+### SMP-LOW-04 — `cli` loop in scheduler is misleading under SMP
+
+**File:** `src/kernel/kernel_boot_runtime.c:158–170`
+
+`cli` only suppresses IRQs locally; it does not protect shared state from other
+CPUs' schedulers, but the structure implies it does.
+
+---
+
+## Uncommitted Changes Verdict (2026-06-03)
+
+### KEEP — Correct Fixes
+
+| File | Change |
+|------|--------|
+| `src/kernel/include/arch/x86_64/smp.h` | `wasm3_heap_bound_pid` moved into `cpu_local_t` — fixes SMP-HIGH-03 |
+| `src/kernel/include/thread.h` | `wasm3_heap_bound_pid` added to `thread_t` for save/restore across context switches |
+| `src/kernel/thread.c` | Reset `wasm3_heap_bound_pid` in `thread_reset_slot` |
+| `src/kernel/wasm3_shim.c` | `critical_section_enter/leave` → `spinlock_lock/unlock(&g_wasm3_heap_lock)` + per-CPU bound-pid — correct SMP fix |
+| `src/kernel/memory.c` | Read CR3 from register (`mov %%cr3, %0`) instead of `g_current_pml4_phys` — latter is last-writer-wins under SMP |
+| `src/kernel/kernel_boot_runtime.c` | Remap initfs to higher-half virtual alias — physical pointer becomes invalid after identity map strip |
+| `src/kernel/process.c` | Save `wasm3_heap_bound_pid` to thread on yield, restore from thread on schedule |
+| `src/kernel/process.c` | Resume blocked kernel workers via `context_switch_high` when `proc->ctx.rsp != 0`; clear `ctx.rsp` on exit |
+| `src/kernel/wasm_driver.c` | Exit via `process_yield(PROCESS_RUN_THREAD_EXITED)` — paired with above; returning is unsafe from a resumed context |
+| `src/services/device_manager/device_manager.c` | `queue_acpi_match_rule_spawns` early-return guard (`if rule_spawn_pending return`) — prevents double-queuing |
+| `src/services/device_manager/device_manager.c` | `next_spawn_target` guard: `if (boot_mount_ready && !rules_boot_loaded) return HW_SPAWN_NONE` — prevents `poll_boot_rules_async` from resetting rule tables mid-spawn |
+| `src/services/device_manager/device_manager.c` | Removal of previously committed `[dbg-dm]` blocks from `queue_pci_match_rule_spawns` and `apply_pci_matches` — cleanup of old debug noise |
+
+### REVERT / REMOVE — Wrong Fixes
+
+| File | Change | Why |
+|------|--------|-----|
+| `src/drivers/fs_fat/fs_fat.c` | ~~Retry loop (500 attempts) for devmgr block-mount query~~ | **Logically impossible scenario.** The rule that spawns FAT #2 is physically stored in a file on FAT #1's `/boot` filesystem. DM reads that file to get the spawn rule. The act of spawning FAT #2 *is* the rule being executed — DM cannot spawn FAT #2 without already having the rule in memory. The retry was masking an IPC delivery failure (likely BUG-20 / recursive spinlock leaving `ep->lock` permanently held). |
+| `src/services/device_manager/device_manager.c` | ~~`kick_boot_rules_read_async`/`poll_boot_rules_async` calls inside `dm_ipc_call` loop~~ | Same wrong premise. If DM is blocked in `dm_ipc_call` spawning FAT #2, boot rules are already loaded (they had to be, to have the FAT #2 spawn rule). Calling boot-rule loading inside the spawn loop was unnecessary. **Already removed from working tree.** |
+
+### SUSPICIOUS — Possible Workaround
+
+| File | Change | Concern |
+|------|--------|---------|
+| `src/services/device_manager/device_manager.c` | `DM_SPAWN_TIMEOUT_MS: 5000 → 30000` | A 6× timeout increase suggests spawns were timing out — likely because underlying IPC/SMP bugs slow message delivery. May be masking the same root cause. Should be reverted once IPC bugs are fixed and spawn latency returns to normal. |
+
+### REMOVED (debug noise, done)
+
+`[dbg-ata]` printfs in `ata.c`, `[dbg-fat]` logs in `fs_fat.c`, `[dbg-dm]` blocks in `device_manager.c` — all stripped.
+
+### NEUTRAL — No Runtime Effect
+
+| File | Change |
+|------|--------|
+| `src/drivers/fs_fat/fs_fat.c` | Split combined `send && recv` into two separate `if` checks — clearer error paths, no behavioral change |

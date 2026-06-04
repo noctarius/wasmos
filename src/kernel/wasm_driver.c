@@ -30,6 +30,13 @@ typedef struct {
 
 static wasm_driver_thread_slot_t g_wasm_driver_thread_slots[WASM_DRIVER_THREAD_SLOTS];
 static wasm_driver_registry_slot_t g_wasm_driver_registry[PROCESS_MAX_COUNT];
+static spinlock_t g_wasm_driver_registry_lock;
+
+void
+wasm_driver_init(void)
+{
+    spinlock_init(&g_wasm_driver_registry_lock);
+}
 
 static void
 log_wasm3_error(const char *prefix, const char *error, IM3Runtime runtime)
@@ -98,12 +105,12 @@ wasm_driver_registry_set(uint32_t owner_pid, wasm_driver_t *driver)
     if (owner_pid == 0 || !driver) {
         return;
     }
-    critical_section_enter();
+    spinlock_lock(&g_wasm_driver_registry_lock);
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_wasm_driver_registry[i].in_use &&
             g_wasm_driver_registry[i].owner_pid == owner_pid) {
             g_wasm_driver_registry[i].driver = driver;
-            critical_section_leave();
+            spinlock_unlock(&g_wasm_driver_registry_lock);
             return;
         }
     }
@@ -115,7 +122,7 @@ wasm_driver_registry_set(uint32_t owner_pid, wasm_driver_t *driver)
             break;
         }
     }
-    critical_section_leave();
+    spinlock_unlock(&g_wasm_driver_registry_lock);
 }
 
 static void
@@ -124,7 +131,7 @@ wasm_driver_registry_clear(uint32_t owner_pid, wasm_driver_t *driver)
     if (owner_pid == 0 || !driver) {
         return;
     }
-    critical_section_enter();
+    spinlock_lock(&g_wasm_driver_registry_lock);
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (!g_wasm_driver_registry[i].in_use ||
             g_wasm_driver_registry[i].owner_pid != owner_pid) {
@@ -137,7 +144,7 @@ wasm_driver_registry_clear(uint32_t owner_pid, wasm_driver_t *driver)
             break;
         }
     }
-    critical_section_leave();
+    spinlock_unlock(&g_wasm_driver_registry_lock);
 }
 
 static wasm_driver_t *
@@ -147,7 +154,7 @@ wasm_driver_registry_get(uint32_t owner_pid)
     if (owner_pid == 0) {
         return 0;
     }
-    critical_section_enter();
+    spinlock_lock(&g_wasm_driver_registry_lock);
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_wasm_driver_registry[i].in_use &&
             g_wasm_driver_registry[i].owner_pid == owner_pid) {
@@ -155,7 +162,7 @@ wasm_driver_registry_get(uint32_t owner_pid)
             break;
         }
     }
-    critical_section_leave();
+    spinlock_unlock(&g_wasm_driver_registry_lock);
     return driver;
 }
 
@@ -163,7 +170,7 @@ static wasm_driver_thread_slot_t *
 wasm_driver_thread_slot_alloc(void)
 {
     wasm_driver_thread_slot_t *slot = 0;
-    critical_section_enter();
+    spinlock_lock(&g_wasm_driver_registry_lock);
     for (uint32_t i = 0; i < WASM_DRIVER_THREAD_SLOTS; ++i) {
         if (!g_wasm_driver_thread_slots[i].in_use) {
             slot = &g_wasm_driver_thread_slots[i];
@@ -171,7 +178,7 @@ wasm_driver_thread_slot_alloc(void)
             break;
         }
     }
-    critical_section_leave();
+    spinlock_unlock(&g_wasm_driver_registry_lock);
     return slot;
 }
 
@@ -181,9 +188,9 @@ wasm_driver_thread_slot_free(wasm_driver_thread_slot_t *slot)
     if (!slot) {
         return;
     }
-    critical_section_enter();
+    spinlock_lock(&g_wasm_driver_registry_lock);
     *slot = (wasm_driver_thread_slot_t){0};
-    critical_section_leave();
+    spinlock_unlock(&g_wasm_driver_registry_lock);
 }
 
 static process_run_result_t
@@ -252,7 +259,14 @@ out:
     preempt_enable();
     process_set_exit_status(process, rc);
     wasm_driver_thread_slot_free(slot);
-    return PROCESS_RUN_THREAD_EXITED;
+    /* Exit via process_yield so the scheduler sees the result through
+     * cpu_local()->last_run_result regardless of whether this invocation
+     * was a fresh start (via process_run_worker_on_stack) or a resumed
+     * context (via context_switch_high).  Returning normally is unsafe
+     * in the resumed case because the return address on the kernel stack
+     * points into an earlier process_run_worker_on_stack frame. */
+    process_yield(PROCESS_RUN_THREAD_EXITED);
+    __builtin_unreachable();
 }
 
 static void

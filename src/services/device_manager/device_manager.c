@@ -127,6 +127,8 @@ log_rule_roots_once(void)
 static int proc_running(const char *name);
 static int ensure_fs_endpoint(void);
 static int query_module_meta_by_path(const char *path, uint32_t source, int32_t *out_index);
+static void kick_boot_rules_read_async(void);
+static void poll_boot_rules_async(void);
 static void queue_always_spawn_rules(void);
 static void queue_pci_match_rule_spawns(void);
 static void queue_acpi_match_rule_spawns(void);
@@ -899,19 +901,6 @@ queue_pci_match_rule_spawns(void)
             g_dm.active_rule_spawn_kind = RULE_SPAWN_KIND_PCI_MATCH;
             g_dm.active_rule_spawn_index = (int32_t)ri;
             g_dm.active_rule_spawn_device_index = (int32_t)di;
-            {
-                char msg[160];
-                (void)snprintf(msg,
-                               sizeof(msg),
-                               "[dbg-dm] queue pci rule path=%s bus=%02X dev=%02X fn=%02X class=%02X sub=%02X\n",
-                               g_dm.rule_spawn_path,
-                               (unsigned)rec->bus,
-                               (unsigned)rec->device,
-                               (unsigned)rec->function,
-                               (unsigned)rec->class_code,
-                               (unsigned)rec->subclass);
-                console_write(msg);
-            }
             return;
         }
     }
@@ -920,6 +909,9 @@ queue_pci_match_rule_spawns(void)
 static void
 queue_acpi_match_rule_spawns(void)
 {
+    if (g_dm.rule_spawn_pending) {
+        return;
+    }
     for (uint32_t ri = 0; ri < g_dm.acpi_match_rule_count; ++ri) {
         acpi_match_rule_t *rule = &g_dm.acpi_match_rules[ri];
         if (!rule->active || rule->spawn_path[0] == '\0') {
@@ -1365,33 +1357,9 @@ apply_pci_matches(void)
                     rec->irq_hint < 16u) {
                     g_dm.selected_storage_caps.irq_mask = (uint16_t)(1u << rec->irq_hint);
                 }
-                {
-                    char msg[192];
-                    (void)snprintf(msg,
-                                   sizeof(msg),
-                                   "[dbg-dm] storage match module=%d bus=%02X dev=%02X fn=%02X class=%02X sub=%02X vid=%04X did=%04X\n",
-                                   (int)module_index,
-                                   (unsigned)rec->bus,
-                                   (unsigned)rec->device,
-                                   (unsigned)rec->function,
-                                   (unsigned)rec->class_code,
-                                   (unsigned)rec->subclass,
-                                   (unsigned)rec->vendor_id,
-                                   (unsigned)rec->device_id);
-                    console_write(msg);
-                }
                 return;
             }
         }
-    }
-    {
-        char msg[96];
-        (void)snprintf(msg,
-                       sizeof(msg),
-                       "[dbg-dm] no storage match registry=%u modules=%d\n",
-                       (unsigned)g_dm.registry_count,
-                       (int)g_dm.module_count);
-        console_write(msg);
     }
 }
 
@@ -1466,6 +1434,16 @@ next_spawn_target(void)
         return HW_SPAWN_ACPI_BUS;
     }
     if (g_dm.rule_spawn_pending && g_dm.rule_spawn_path[0] != '\0') {
+        /* If /boot is mounted but boot rules haven't been fully loaded yet,
+         * don't start any new rule-derived spawn.  Boot rules loading resets
+         * all rule tables (including active_rule_spawn_index), so allowing a
+         * spawn to begin before rules_boot_loaded=1 creates a window where
+         * poll_boot_rules_async can corrupt the active spawn's tracking state.
+         * Stay in HW_PHASE_IDLE and let load_rules_if_available() complete the
+         * async rules fetch before transitioning back to HW_PHASE_SPAWN. */
+        if (g_dm.boot_mount_ready && !g_dm.rules_boot_loaded) {
+            return HW_SPAWN_NONE;
+        }
         return HW_SPAWN_RULE_PATH;
     }
     if (g_dm.need_fat) {

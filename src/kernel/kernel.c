@@ -16,6 +16,7 @@
 #include "framebuffer.h"
 #include "capability.h"
 #include "slab.h"
+#include "wasm_driver.h"
 #include "kernel_init_runtime.h"
 #include "kernel_boot_runtime.h"
 #include "kernel_selftest_runtime.h"
@@ -167,6 +168,7 @@ kmain(boot_info_t *boot_info)
     cpu_relocate_tables_high();
     capability_init();
     slab_init();
+    wasm_driver_init();
     if (kernel_boot_build_bootinfo_shadow(boot_info, &g_boot_info_shadow) != 0) {
         klog_write("[kernel] boot_info shadow copy failed\n");
         for (;;) {

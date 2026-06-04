@@ -953,6 +953,24 @@ pm_poll_sync_spawn(uint32_t pm_context_id)
     ipc_send_from(pm_context_id, g_pm.spawn.reply_endpoint, &resp);
 }
 
+/* Poll for completion of an in-flight async spawn request.
+ *
+ * Async spawn state machine (called from PM's IPC dispatch loop each tick):
+ *
+ *   Idle (in_use == 0): return immediately — nothing pending.
+ *
+ *   Sync path (is_sync == 1): delegate to pm_poll_sync_spawn, which drives
+ *     a synchronous FS-read + inline spawn without waiting for an IPC reply.
+ *
+ *   Async path: PM previously sent an FS_IPC_READ_REQ to the FS service and
+ *     is waiting for the FS_IPC_RESP reply on fs_reply_endpoint.
+ *     ipc_try_recv_for() returns IPC_EMPTY if the reply hasn't arrived yet —
+ *     the caller will re-invoke on the next dispatch loop iteration.
+ *     On success the blob is in PM_BUFFER_KIND_FILESYSTEM; pm_spawn_from_buffer
+ *     parses it and spawns the process as parked, then process_unpark_pid()
+ *     releases it.  On any error (wrong request_id, wrong type, zero size,
+ *     spawn failure) PM sends PROC_IPC_ERROR back to the original requester
+ *     and clears in_use. */
 void
 pm_poll_spawn(uint32_t pm_context_id)
 {
@@ -972,7 +990,7 @@ pm_poll_spawn(uint32_t pm_context_id)
     ipc_message_t msg;
     int recv_rc = ipc_try_recv_for(pm_context_id, g_pm.fs_reply_endpoint, &msg);
     if (recv_rc == IPC_EMPTY) {
-        return;
+        return; /* FS reply not yet available; will retry next dispatch tick */
     }
     g_pm.spawn.in_use = 0;
     if (recv_rc != IPC_OK ||

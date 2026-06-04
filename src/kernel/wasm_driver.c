@@ -197,6 +197,22 @@ wasm_driver_thread_slot_free(wasm_driver_thread_slot_t *slot)
     spinlock_unlock(&g_wasm_driver_registry_lock);
 }
 
+/* Entry point for each WASM driver VM thread.
+ *
+ * wasm3 uses a single global allocator internally, which is not thread-safe.
+ * To allow multiple WASM drivers to run concurrently on different kernel
+ * threads, each driver owns a private heap region identified by its PID.
+ * The per-PID heap binding protocol:
+ *
+ *   1. wasm3_heap_configure() registers the PID's heap region (once per VM).
+ *   2. preempt_disable() + wasm3_heap_bind_pid() atomically switch the global
+ *      wasm3 heap to this driver's region before any wasm3 API calls.
+ *      bind_prev records the previously bound PID so it can be restored.
+ *   3. All wasm3 calls (NewEnvironment, NewRuntime, m3_Call, …) execute under
+ *      the bound heap — wasm3's internal mallocs land in this driver's region.
+ *   4. On exit (goto out or normal return), wasm3_heap_restore_pid(bind_prev)
+ *      restores whatever heap was active before this thread ran, then
+ *      preempt_enable() allows the scheduler to reschedule. */
 static process_run_result_t
 wasm_driver_vm_thread_entry(process_t *process, uint32_t tid, void *arg)
 {
@@ -219,7 +235,7 @@ wasm_driver_vm_thread_entry(process_t *process, uint32_t tid, void *arg)
     call_args[3] = &slot->argv[3];
     wasm3_heap_configure(slot->owner_pid, slot->heap_size, 2ULL * 1024ULL * 1024ULL * 1024ULL);
     preempt_disable();
-    bind_prev = wasm3_heap_bind_pid(slot->owner_pid);
+    bind_prev = wasm3_heap_bind_pid(slot->owner_pid); /* switch heap to this driver's PID */
     env = m3_NewEnvironment();
     if (!env) {
         goto out;

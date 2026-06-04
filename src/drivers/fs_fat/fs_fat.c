@@ -557,6 +557,19 @@ fat_parse_boot(void)
     return 0;
 }
 
+/* Drive the FAT boot state machine until the volume is ready or fails.
+ *
+ * State transitions:
+ *   INIT  → send block read for LBA 0, advance to WAIT
+ *   WAIT  → poll for the read reply; if the sector is not a valid BPB (bad
+ *            signature or bytes_per_sector==0) attempt an MBR parse once to
+ *            find the first FAT partition LBA, then re-issue the read.
+ *            On success advance to READY; on failure set FAILED.
+ *   READY → return 0 immediately on every subsequent call (idempotent).
+ *   FAILED → return -1 immediately.
+ *
+ * Called from the IPC dispatch loop before every filesystem operation so that
+ * all ops naturally wait for the async block I/O without a dedicated thread. */
 static int
 fat_ensure_ready(void)
 {
@@ -590,6 +603,8 @@ fat_ensure_ready(void)
             uint16_t sig = (uint16_t)g_sector_buf[510] | ((uint16_t)g_sector_buf[511] << 8);
             uint16_t bytes_per_sector = (uint16_t)g_sector_buf[11] | ((uint16_t)g_sector_buf[12] << 8);
             if (sig != 0xAA55 || bytes_per_sector == 0) {
+                /* LBA 0 is an MBR, not a BPB.  Try to extract the first
+                 * FAT partition offset from the MBR partition table. */
                 uint32_t lba = 0;
                 if (!g_tried_mbr && fat_try_parse_mbr(&lba) == 0) {
                     g_tried_mbr = 1;
@@ -1535,6 +1550,24 @@ fat_write_dir_entry(uint32_t dir_lba, uint32_t entry_index, const uint8_t entry[
     return fat_sync_block_write(dir_lba + sector);
 }
 
+/* Construct one 32-byte FAT Long File Name directory entry for writing.
+ *
+ * LFN entries store 13 UTF-16LE characters at three non-contiguous byte
+ * offsets within the 32-byte slot.  positions[] maps character index 0..12
+ * to the low byte of each UTF-16LE word in the entry:
+ *   chars 0-4  → bytes [1,3,5,7,9]      (name1, 5 × 2 bytes)
+ *   chars 5-10 → bytes [14,16,18,20,22,24] (name2, 6 × 2 bytes)
+ *   chars 11-12 → bytes [28,30]          (name3, 2 × 2 bytes)
+ *
+ * Fixed fields per FAT spec:
+ *   entry[0]  = ordinal (1-based); |= 0x40 on the last (highest) entry
+ *   entry[11] = 0x0F (ATTR_LONG_NAME; marks as LFN, not a real 8.3 entry)
+ *   entry[12] = 0x00 (type, must be 0)
+ *   entry[13] = checksum of the matching 8.3 short-name entry
+ *   entry[26:27] = 0x0000 (cluster field; must be 0 for LFN entries)
+ *
+ * Characters after the name end are filled with 0x0000 (first unused slot)
+ * and 0xFFFF (all remaining padding slots). */
 static void
 fat_fill_lfn_entry(uint8_t *entry,
                    const char *name,
@@ -1543,6 +1576,7 @@ fat_fill_lfn_entry(uint8_t *entry,
                    uint32_t total,
                    uint8_t checksum)
 {
+    /* byte offsets of the low byte of each UTF-16LE character in the entry */
     static const uint8_t positions[13] = {
         1, 3, 5, 7, 9,
         14, 16, 18, 20, 22, 24,
@@ -1556,23 +1590,23 @@ fat_fill_lfn_entry(uint8_t *entry,
     }
     entry[0] = (uint8_t)ordinal;
     if (ordinal == total) {
-        entry[0] |= 0x40u;
+        entry[0] |= 0x40u; /* last/highest ordinal flag */
     }
-    entry[11] = 0x0Fu;
+    entry[11] = 0x0Fu;  /* ATTR_LONG_NAME */
     entry[12] = 0x00u;
     entry[13] = checksum;
-    entry[26] = 0x00u;
-    entry[27] = 0x00u;
+    entry[26] = 0x00u;  /* cluster low (must be 0) */
+    entry[27] = 0x00u;  /* cluster high (must be 0) */
 
     for (uint32_t i = 0; i < 13; ++i) {
-        uint16_t ch = 0xFFFFu;
+        uint16_t ch = 0xFFFFu; /* padding for unused slots beyond NUL */
         uint32_t pos = base + i;
 
         if (!ended) {
             if (pos < name_len) {
-                ch = (uint8_t)name[pos];
+                ch = (uint8_t)name[pos]; /* ASCII→UTF-16LE: high byte is 0 */
             } else {
-                ch = 0x0000u;
+                ch = 0x0000u; /* end-of-name sentinel */
                 ended = 1;
             }
         }
@@ -2388,6 +2422,10 @@ fat_lfn_reset(void)
     }
 }
 
+/* Store one UTF-16LE character from an LFN entry into the ASCII accumulation buffer.
+ * 0x0000 = end-of-name sentinel; 0xFFFF = unused padding slot.  Characters with
+ * a non-zero high byte are outside ASCII — map them to '?' since FAT LFN names
+ * in practice are ASCII-only in this implementation. */
 static void
 fat_lfn_store_char(uint32_t pos, uint16_t ch)
 {
@@ -2408,6 +2446,10 @@ fat_lfn_store_char(uint32_t pos, uint16_t ch)
     g_lfn_buf[pos] = (char)(ch & 0xFFu);
 }
 
+/* NUL-terminate the reassembled LFN name after all ordinal entries have been
+ * collected.  Each LFN entry holds 13 UTF-16LE characters; g_lfn_total tells
+ * us how many entries were present.  If fat_lfn_store_char already wrote a
+ * NUL (end-of-name sentinel), the loop exits early. */
 static void
 fat_lfn_finalize(void)
 {
@@ -2430,11 +2472,25 @@ fat_lfn_finalize(void)
     }
 }
 
+/* Accumulate one 32-byte FAT Long File Name directory entry into g_lfn_buf.
+ *
+ * FAT LFN layout: ordinal byte[0] (1-based, 0x40 flag on the last/highest
+ * entry in the sequence), attr=0x0F[11], checksum[13], cluster=0[26:27],
+ * then 13 UTF-16LE characters spread across three non-contiguous byte ranges:
+ *   [1..9]   characters 1-5  (name1, 5 chars)
+ *   [14..25] characters 6-11 (name2, 6 chars)
+ *   [28..31] characters 12-13(name3, 2 chars)
+ *
+ * Entries appear on disk in reverse ordinal order (highest first), so the
+ * first entry seen has bit 0x40 set and declares g_lfn_total.  We write
+ * each entry's characters at base = (ordinal-1)*13 so they land in forward
+ * order in g_lfn_buf regardless of disk order. */
 static void
 fat_lfn_collect(const uint8_t *ent)
 {
     uint8_t ord = ent[0];
     if (ord == 0xE5) {
+        /* 0xE5 marks a deleted entry — discard any partial LFN state. */
         fat_lfn_reset();
         return;
     }
@@ -2444,6 +2500,8 @@ fat_lfn_collect(const uint8_t *ent)
         return;
     }
     if (ent[0] & 0x40) {
+        /* 0x40 flag: this is the last (highest-ordinal) LFN entry — it's
+         * also the first one encountered on disk.  Reset and start fresh. */
         fat_lfn_reset();
         g_lfn_valid = 1;
         g_lfn_total = ord;
@@ -2457,14 +2515,17 @@ fat_lfn_collect(const uint8_t *ent)
     }
 
     uint32_t base = (uint32_t)(ord - 1u) * 13u;
+    /* name1: bytes 1-9, 5 UTF-16LE characters */
     for (uint32_t i = 0; i < 5; ++i) {
         uint16_t ch = (uint16_t)ent[1 + i * 2] | ((uint16_t)ent[2 + i * 2] << 8);
         fat_lfn_store_char(base + i, ch);
     }
+    /* name2: bytes 14-25, 6 UTF-16LE characters */
     for (uint32_t i = 0; i < 6; ++i) {
         uint16_t ch = (uint16_t)ent[14 + i * 2] | ((uint16_t)ent[15 + i * 2] << 8);
         fat_lfn_store_char(base + 5 + i, ch);
     }
+    /* name3: bytes 28-31, 2 UTF-16LE characters */
     for (uint32_t i = 0; i < 2; ++i) {
         uint16_t ch = (uint16_t)ent[28 + i * 2] | ((uint16_t)ent[29 + i * 2] << 8);
         fat_lfn_store_char(base + 11 + i, ch);

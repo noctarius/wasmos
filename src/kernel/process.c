@@ -37,13 +37,10 @@ static uint32_t g_ready_tail;
 static uint32_t g_ready_count;
 static spinlock_t g_ready_queue_lock;
 static process_t *g_idle_process;
-volatile uint8_t g_in_context_switch;
 /* NOTE: current_process, current_thread, preempt_disable_count, in_scheduler,
  * sched_ctx, need_resched, current_pid, resched_pending_since_tick,
- * resched_stall_reports, last_index, and last_run_result live in cpu_local_t.
- * FIXME(smp): g_in_context_switch remains global because context_switch.S
- * still addresses it via RIP-relative accesses; under SMP one CPU can suppress
- * another CPU's timer-driven preemption while its own context switch is live. */
+ * resched_stall_reports, last_index, last_run_result, and in_context_switch
+ * live in cpu_local_t. */
 static uint64_t g_ctx_watch_logged;
 static uint64_t g_ctx_watch_last_logged_rip;
 static uint64_t g_ctx_watch_last_logged_rsp;
@@ -1957,6 +1954,9 @@ void process_clear_resched(void) {
 
 int process_preempt_from_irq(irq_frame_t *frame) {
     if (!frame) {
+        return 0;
+    }
+    if (cpu_local()->in_context_switch) {
         return 0;
     }
     if (cpu_local()->in_scheduler) {

@@ -1,3 +1,7 @@
+/* wasm_driver.c - wasm3 WASM module loader and driver/service instance runner.
+ * Instantiates a wasm3 environment and runtime per driver, registers all
+ * hardware and IPC hostcall imports, and runs the module's entry export.
+ * The lock on wasm_driver_t serializes concurrent hostcall re-entry. */
 #include "wasm_driver.h"
 #include "klog.h"
 #include "process.h"

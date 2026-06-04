@@ -1,3 +1,6 @@
+/* sha256.h - Minimal SHA-256 implementation for WASM drivers and services.
+ * Used for integrity checking of loaded modules and signing metadata in
+ * .wap package headers.  Freestanding; no external dependencies. */
 #ifndef WASMOS_LIBSYS_SHA256_H
 #define WASMOS_LIBSYS_SHA256_H
 
@@ -59,6 +62,7 @@ wasmos_sha256_transform(wasmos_sha256_ctx_t *ctx, const uint8_t data[64])
     ctx->state[4] += e; ctx->state[5] += f; ctx->state[6] += g; ctx->state[7] += h;
 }
 
+/* Initialise ctx with the standard SHA-256 IV (H0..H7). */
 static inline void
 wasmos_sha256_init(wasmos_sha256_ctx_t *ctx)
 {
@@ -111,6 +115,8 @@ wasmos_sha256_final(wasmos_sha256_ctx_t *ctx, uint8_t hash[32])
     }
 }
 
+/* Compute SHA-256(in) and write the first 16 hex characters into out[0..15],
+ * NUL-terminated at out[16].  Used as a stable compact identifier for modules. */
 static inline void
 wasmos_sha256_hex16_prefix(const char *in, char out[17])
 {

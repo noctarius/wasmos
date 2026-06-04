@@ -1,3 +1,7 @@
+/* ring3_native_probe.c - Minimal ring-3 native binary for smoke-testing.
+ * Linked as a flat binary (ring3_native_probe.bin) and loaded directly into
+ * a ring-3 process by kernel_ring3_probe_runtime.c.  Exercises mutex acquire/
+ * release via the int 0x80 syscall gate and exits cleanly. */
 #include <stdint.h>
 #include "wasmos/mutex.h"
 #include "wasmos/syscall_x86_64.h"

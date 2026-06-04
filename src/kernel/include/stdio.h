@@ -1,3 +1,4 @@
+/* stdio.h - Minimal kernel stdio declarations: kprintf/snprintf over serial console. */
 #ifndef WASMOS_STDIO_H
 #define WASMOS_STDIO_H
 

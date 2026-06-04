@@ -1,3 +1,7 @@
+/* ioapic.c - I/O APIC driver.
+ * MMIO-maps the I/O APIC registers (IOREGSEL/IOWIN), enumerates redirection
+ * table entries, and programs GSI→vector mappings so hardware IRQs reach the
+ * correct LAPIC on each AP.  Replaces the legacy 8259 PIC after SMP init. */
 #include "arch/x86_64/ioapic.h"
 #include "irq.h"
 #include "paging.h"

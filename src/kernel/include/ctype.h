@@ -1,3 +1,4 @@
+/* ctype.h - Kernel-internal character-classification and case-conversion stubs. */
 #ifndef WASMOS_CTYPE_H
 #define WASMOS_CTYPE_H
 

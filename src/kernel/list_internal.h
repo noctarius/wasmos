@@ -1,3 +1,6 @@
+/* list_internal.h - Shared vtable and implementation helpers for list backends.
+ * Defines the list_ops_t dispatch table used by list.c to call the correct
+ * linked or array-chunk backend.  Not part of the public list.h API. */
 #ifndef WASMOS_LIST_INTERNAL_H
 #define WASMOS_LIST_INTERNAL_H
 

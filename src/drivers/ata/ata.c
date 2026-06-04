@@ -1,3 +1,8 @@
+/* ata.c - ATA/IDE block device WASM driver.
+ * Implements PIO-mode ATA read/write for the first IDE device and exposes a
+ * block-device IPC interface (BLOCK_IPC_READ_REQ / BLOCK_IPC_WRITE_REQ).
+ * Runs inside the WASM runtime; all I/O port accesses go through capability-
+ * checked host-call imports. */
 #include <stdint.h>
 #include "stdio.h"
 #include "wasmos/api.h"

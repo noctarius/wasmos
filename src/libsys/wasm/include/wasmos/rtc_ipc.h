@@ -1,3 +1,4 @@
+/* rtc_ipc.h - IPC message types and helpers for the real-time clock service. */
 #ifndef WASMOS_LIBC_WASMOS_RTC_IPC_H
 #define WASMOS_LIBC_WASMOS_RTC_IPC_H
 

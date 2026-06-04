@@ -1,3 +1,4 @@
+/* math.h - Minimal floating-point math declarations for WASM libc. */
 #ifndef WASMOS_LIBC_MATH_H
 #define WASMOS_LIBC_MATH_H
 

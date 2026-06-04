@@ -1,3 +1,4 @@
+/* stdio.h - Minimal stdio declarations: printf, snprintf, puts, FILE stub. */
 #ifndef WASMOS_LIBC_STDIO_H
 #define WASMOS_LIBC_STDIO_H
 

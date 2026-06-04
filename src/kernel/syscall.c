@@ -1,3 +1,7 @@
+/* syscall.c - Ring-3 int 0x80 syscall dispatch.
+ * x86_syscall_handler() is called from isr_syscall_128 in cpu_isr.S.
+ * Every entry validates user pointer arguments and checks capability/ownership
+ * before performing any kernel operation. */
 #include "syscall.h"
 #include "klog.h"
 #include "ipc.h"

@@ -1,3 +1,5 @@
+/* libsys_native.h - native (non-WASM) variant of libsys: function-pointer API
+ * table (wasmos_driver_api_t) instead of hostcall imports, _native suffixes */
 #ifndef WASMOS_LIBSYS_NATIVE_H
 #define WASMOS_LIBSYS_NATIVE_H
 
@@ -16,6 +18,7 @@ void wasmos_sys_ipc_recv_loop_native(wasmos_driver_api_t *api, uint32_t receiver
 #define WASMOS_SYS_NATIVE_INTENT_MAX 16u
 #define WASMOS_SYS_NATIVE_HANDLER_MAX 16u
 
+/* Pending request awaiting a reply matched by request_id. */
 typedef struct {
     uint8_t in_use;
     uint32_t request_id;
@@ -23,6 +26,7 @@ typedef struct {
     void *user;
 } wasmos_sys_native_intent_t;
 
+/* Registered handler for a specific IPC message type. */
 typedef struct {
     uint8_t in_use;
     uint32_t msg_type;
@@ -30,6 +34,8 @@ typedef struct {
     void *user;
 } wasmos_sys_native_handler_t;
 
+/* Event loop state for native drivers: intent table for request/reply matching
+ * and handler table for unsolicited message dispatch. */
 typedef struct {
     wasmos_driver_api_t *api;
     uint32_t receiver_endpoint;
@@ -40,6 +46,7 @@ typedef struct {
     wasmos_sys_native_handler_t handlers[WASMOS_SYS_NATIVE_HANDLER_MAX];
 } wasmos_sys_native_event_loop_t;
 
+/* Recursive mutex state; same binary layout as wasmos_mutex_t in libc/wasm. */
 typedef struct {
     volatile uint32_t owner_tid;
     volatile uint32_t recursion_depth;

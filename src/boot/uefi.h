@@ -1,3 +1,7 @@
+/* uefi.h - Minimal UEFI type and protocol definitions for the WASMOS bootloader.
+ * Only the subset needed to load kernel.elf and initfs.img from the ESP is declared.
+ * All function pointers use __attribute__((ms_abi)) because UEFI firmware on x86_64
+ * uses the Windows calling convention regardless of host toolchain. */
 #ifndef WASMOS_UEFI_H
 #define WASMOS_UEFI_H
 

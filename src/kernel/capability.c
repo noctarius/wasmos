@@ -1,3 +1,7 @@
+/* capability.c - Per-context hardware access capability enforcement.
+ * Stores one capability record per driver context_id.  The process manager
+ * sets the spawn profile once at driver start; hardware hostcalls then call
+ * capability_io_port_allowed / capability_irq_line_allowed / etc. before acting. */
 #include "capability.h"
 #include "list.h"
 #include "memory.h"

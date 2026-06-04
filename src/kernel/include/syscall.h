@@ -1,3 +1,9 @@
+/* syscall.h - Ring-3 to kernel syscall ABI.
+ *
+ * Syscalls use int 0x80 with the id in RAX.  The isr_syscall_128 stub saves the
+ * full register frame as a syscall_frame_t and calls x86_syscall_handler().
+ * All pointer and numeric arguments from user space are validated before use.
+ * See the detailed per-syscall contract in the block comment below. */
 #ifndef WASMOS_SYSCALL_H
 #define WASMOS_SYSCALL_H
 

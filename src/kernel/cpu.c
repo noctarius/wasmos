@@ -1,3 +1,5 @@
+/* cpu.c - x86_64 CPU early-init wrapper: delegates to arch/x86_64/cpu_x86_64.c.
+ * Also hosts the exception/page-fault dispatch called from cpu_isr.S stubs. */
 #include "cpu.h"
 #include "arch/x86_64/cpu_x86_64.h"
 

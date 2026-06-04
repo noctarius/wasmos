@@ -1,7 +1,9 @@
+/* fs_manager_path.c - case-insensitive path-to-mount routing helper */
 #include "fs_manager_path.h"
 
 #include <stddef.h>
 
+/* ASCII-only tolower; used for case-insensitive mount name comparison. */
 static int32_t
 ascii_tolower(int32_t c)
 {
@@ -11,6 +13,7 @@ ascii_tolower(int32_t c)
     return c;
 }
 
+/* Case-insensitive comparison of exactly n bytes; returns 1 if equal. */
 static int32_t
 ascii_case_equal(const char *a, const char *b, int32_t n)
 {

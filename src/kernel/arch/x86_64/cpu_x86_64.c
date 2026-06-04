@@ -1,3 +1,7 @@
+/* cpu_x86_64.c - x86_64 CPU initialization: GDT, IDT, TSS, syscall gate, SMP.
+ * Sets up the 64-bit GDT (null, kernel code/data, user code/data, TSS),
+ * installs the ISR stubs from cpu_isr.S into the IDT, configures the int 0x80
+ * syscall gate, and initialises per-AP state during SMP bring-up. */
 #include "cpu.h"
 #include "arch/x86_64/cpu_x86_64.h"
 #include "arch/x86_64/msr.h"

@@ -1,3 +1,7 @@
+/* fs_fat.c - FAT12/16/32 filesystem WASM driver.
+ * Implements directory enumeration and file read over the block-device IPC
+ * interface and exposes a VFS-layer IPC service (FS_IPC_OPEN_REQ /
+ * FS_IPC_READ_REQ / FS_IPC_READDIR_REQ).  Runs inside the WASM runtime. */
 #include <stdint.h>
 #include "ctype.h"
 #include "stdio.h"

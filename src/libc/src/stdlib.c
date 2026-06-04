@@ -1,3 +1,5 @@
+/* stdlib.c - WASM malloc/free: bump allocator with a free-list for reuse,
+ * growing WASM memory pages on demand via __builtin_wasm_memory_grow */
 #include "stdlib.h"
 
 #include <stddef.h>
@@ -35,6 +37,7 @@ heap_init(void)
     g_heap_ready = 1;
 }
 
+/* Grow WASM linear memory in 64 KB pages until the limit covers need_end. */
 static int
 heap_grow_to(uint32_t need_end)
 {
@@ -45,6 +48,7 @@ heap_grow_to(uint32_t need_end)
     return 0;
 }
 
+/* Bump-allocate a new block of at least payload_size bytes from the heap. */
 static heap_block_t *
 heap_request_block(size_t payload_size)
 {

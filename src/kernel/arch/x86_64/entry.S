@@ -1,3 +1,14 @@
+/* entry.S - Kernel entry point and bootstrap page table setup.
+ *
+ * _start runs at the physical load address (lower half) where the UEFI
+ * bootloader jumped.  It builds a minimal two-region identity map (lower 4 GB
+ * via 2 MB large pages) and a 64 MB higher-half alias at virtual 0xFFFFFF8000000000
+ * so the kernel can relocate to its linked address before calling kmain.
+ *
+ * After loading CR3 and jumping to _start_high (the linked virtual address),
+ * the lower-half identity map remains valid for the entire kernel lifetime as
+ * the boot-time physical alias.
+ */
 .section .start.low, "ax"
 .global _start
 .extern kmain
@@ -8,7 +19,7 @@
 .set PT_FLAG_PRESENT, 0x1
 .set PT_FLAG_WRITE, 0x2
 .set PT_FLAG_LARGE, 0x80
-.set HIGHER_HALF_PDPT_INDEX, 510
+.set HIGHER_HALF_PDPT_INDEX, 510  /* PML4 slot 511 maps the higher-half PDPT */
 
 _start:
     cld

@@ -1,10 +1,16 @@
+/* thread.h - Kernel thread management within a process.
+ *
+ * A process owns one or more thread_t records.  Each thread has its own kernel
+ * stack and process_context_t but shares the process address space.  The main
+ * thread (spawned by process_manager) is the one that runs the WASM entry point.
+ * Worker threads are created via the thread_create syscall from ring-3. */
 #ifndef WASMOS_THREAD_H
 #define WASMOS_THREAD_H
 
 #include <stdint.h>
 #include "process.h"
 
-#define THREAD_MAX_COUNT 128
+#define THREAD_MAX_COUNT 128  /* global limit on live kernel threads */
 #define THREAD_NAME_MAX 64
 
 typedef enum {
@@ -57,20 +63,38 @@ typedef struct thread {
     const char *name;
 } thread_t;
 
+/* Initialize the thread table; called once during kernel startup. */
 void thread_init(void);
+
+/* Spawn the main thread for a newly created process; sets initial state to BLOCKED. */
 int thread_spawn_main(uint32_t owner_pid, const char *name, uint32_t *out_tid);
+
+/* Create an additional thread in owner_pid's process with caller-specified initial state. */
 int thread_spawn_in_owner(uint32_t owner_pid,
                           const char *name,
                           thread_state_t initial_state,
                           thread_block_reason_t initial_reason,
                           uint32_t *out_tid);
+
 thread_t *thread_get(uint32_t tid);
+
+/* Find the main thread (first-spawned) belonging to owner_pid. */
 thread_t *thread_find_main_for_pid(uint32_t owner_pid);
+
+/* Return the tid of the index-th thread owned by owner_pid. */
 int thread_owner_tid_at(uint32_t owner_pid, uint32_t index, uint32_t *out_tid);
+
+/* Transition all threads owned by owner_pid to ZOMBIE with exit_status. */
 void thread_mark_owner_exited(uint32_t owner_pid, int32_t exit_status);
+
+/* Free all thread records belonging to owner_pid (called after process reap). */
 void thread_reap_owner(uint32_t owner_pid);
+
 void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t reason);
+
+/* Wake tid if it is currently blocked; returns non-zero if a wakeup was delivered. */
 int thread_wake_if_blocked(uint32_t tid);
+
 void thread_set_exit_status(uint32_t tid, int32_t exit_status);
 void thread_reap(uint32_t tid);
 void thread_set_current(uint32_t tid);

@@ -1,3 +1,6 @@
+/* gfx_ipc.h - IPC message types and pixel-format constants for the GFX compositor.
+ * Shared between the compositor service, native framebuffer driver, and any
+ * WASM app that wants to send raw draw commands to the compositor. */
 #ifndef WASMOS_LIBC_WASMOS_GFX_IPC_H
 #define WASMOS_LIBC_WASMOS_GFX_IPC_H
 

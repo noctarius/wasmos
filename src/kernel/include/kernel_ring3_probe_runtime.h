@@ -1,3 +1,4 @@
+/* kernel_ring3_probe_runtime.h - Ring-3 smoke-probe launcher declarations. */
 #ifndef WASMOS_KERNEL_RING3_PROBE_RUNTIME_H
 #define WASMOS_KERNEL_RING3_PROBE_RUNTIME_H
 

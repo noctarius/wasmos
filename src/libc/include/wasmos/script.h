@@ -1,3 +1,4 @@
+/* script.h - simple .rc script engine for service startup sequencing */
 #ifndef WASMOS_SCRIPT_H
 #define WASMOS_SCRIPT_H
 
@@ -18,12 +19,14 @@ typedef struct wasmos_script_env_node {
     struct wasmos_script_env_node *next;
 } wasmos_script_env_node_t;
 
+/* Interpreter state: local and exported variable chains, last exit code,
+ * recursion depth, and an if/else nesting tracker. */
 typedef struct {
     wasmos_script_env_node_t *locals;
     wasmos_script_env_node_t *exports;
     int32_t                   last_exit_code;
-    int32_t                   exec_depth;
-    int32_t                   total_depth;
+    int32_t                   exec_depth;   /* depth of nested exec calls */
+    int32_t                   total_depth;  /* total call depth for guard */
     uint8_t                   seen_else[WASMOS_SCRIPT_IF_DEPTH];
 } wasmos_script_state_t;
 
@@ -45,12 +48,16 @@ typedef struct {
     void *user;
 } wasmos_script_ops_t;
 
+/* Callback to resolve ${VAR} substitutions during echo expansion;
+ * returns 0 and writes to out[] on success, -1 if var is unknown. */
 typedef int (*wasmos_script_echo_resolve_var_fn)(void *user,
                                                  const char *name,
                                                  int32_t name_len,
                                                  char *out,
                                                  int32_t out_len);
 
+/* Expand ${VAR} references and -n/-e flags in expr; sets *out_newline.
+ * Returns 0 on success, -1 if out buffer is too small. */
 int wasmos_script_echo_expand(const char *expr,
                               wasmos_script_echo_resolve_var_fn resolve_var,
                               void *resolve_user,
@@ -60,8 +67,10 @@ int wasmos_script_echo_expand(const char *expr,
 
 void wasmos_script_state_init(wasmos_script_state_t *state);
 void wasmos_script_state_dispose(wasmos_script_state_t *state);
+/* Inherit exported variables from parent into a child state for nested runs. */
 void wasmos_script_state_init_child(wasmos_script_state_t *child,
                                     const wasmos_script_state_t *parent);
+/* Read and interpret the .rc file at path; returns 0 on success, -1 on error. */
 int  wasmos_script_run(wasmos_script_state_t *state,
                        const wasmos_script_ops_t *ops,
                        const char *path);

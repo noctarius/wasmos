@@ -1,3 +1,7 @@
+/* wasm3_probe.c - wasm3 interpreter integration probe.
+ * Instantiates a minimal WASM module end-to-end through the wasm3 runtime to
+ * verify that the interpreter, host-call links, and memory mapping all work
+ * before any real driver or service is loaded. */
 #include <stddef.h>
 #include "klog.h"
 #include <stdint.h>

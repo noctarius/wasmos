@@ -1,3 +1,6 @@
+/* wasm3_link.h - wasm3 hostcall registration declarations.
+ * wasm3_link_all() registers every WASMOS import into a wasm3 runtime before
+ * module instantiation; called once per wasm_driver_t startup. */
 #ifndef WASMOS_WASM3_LINK_H
 #define WASMOS_WASM3_LINK_H
 

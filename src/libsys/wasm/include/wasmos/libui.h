@@ -1,3 +1,7 @@
+/* libui.h - WASM UI toolkit: window, widget, and event abstractions.
+ * Built on top of the GFX compositor IPC protocol; provides a higher-level
+ * API so that WASM apps can create windows and respond to input events without
+ * managing raw framebuffer messages directly. */
 #ifndef WASMOS_LIBUI_H
 #define WASMOS_LIBUI_H
 

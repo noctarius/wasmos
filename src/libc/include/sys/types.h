@@ -1,3 +1,4 @@
+/* types.h - Basic POSIX type aliases (off_t, ssize_t, mode_t) for WASM libc. */
 #ifndef WASMOS_LIBC_SYS_TYPES_H
 #define WASMOS_LIBC_SYS_TYPES_H
 

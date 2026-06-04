@@ -1,3 +1,6 @@
+/* libc.c - Minimal freestanding C library functions for the kernel.
+ * Provides memcpy, memset, memmove, strlen, strcmp, snprintf and friends.
+ * These implementations are intentionally simple and not performance-optimized. */
 #include <stdarg.h>
 #include "klog.h"
 #include <stdint.h>

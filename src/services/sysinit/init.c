@@ -1,3 +1,5 @@
+/* init.c - system initialiser service: reads sysinit.rc and drives sequential
+ * service startup via the script engine callback table */
 #include <stdint.h>
 #include "stdio.h"
 #include "string.h"
@@ -39,6 +41,9 @@ fatal_stall(const char *msg)
     wasmos_sys_ipc_recv_loop();
 }
 
+/* Fire-and-forget spawn: writes path into the FS buffer and sends
+ * PROC_IPC_SPAWN_PATH.  Retries up to SYSINIT_MAX_SPAWN_ATTEMPTS on
+ * PROC_IPC_ERROR with arg1==-2 (loader busy). */
 static int
 spawn_path(const char *path)
 {
@@ -89,6 +94,8 @@ spawn_path(const char *path)
     return -1;
 }
 
+/* Script 'start' callback: synchronous spawn with SYSINIT_START_TIMEOUT_MS
+ * deadline; blocks until the spawned service sends PROC_IPC_NOTIFY_READY. */
 static int
 sysinit_on_start(void *user, const char *path)
 {
@@ -122,6 +129,9 @@ sysinit_on_spawn(void *user, const char *path)
     return spawn_path(path);
 }
 
+/* Script 'exec' callback: spawns path with args in the FS buffer (path at
+ * offset 0, args at offset path_len+1), then sends PROC_IPC_WAIT and blocks
+ * until the child exits; sets *out_exit_code to the exit status. */
 static int
 sysinit_on_exec(void *user, const char *path, const char *args, int32_t *out_exit_code)
 {
@@ -209,6 +219,8 @@ sysinit_on_exec(void *user, const char *path, const char *args, int32_t *out_exi
     return 0;
 }
 
+/* Script 'wait-svc' callback: spins on wasmos_svc_lookup until the named
+ * service registers; yields between attempts to avoid stalling the scheduler. */
 static int
 sysinit_on_wait_svc(void *user, const char *name)
 {
@@ -245,6 +257,9 @@ sysinit_on_export(void *user, const char *name, const char *value)
     return wasmos_env_set(name, name_len, value, val_len);
 }
 
+/* Service entry point.  Calls wasmos_sys_notify_ready immediately (sysinit
+ * has no readiness dependency of its own), then runs the sysinit.rc script
+ * via wasmos_script_run.  Loops on ipc_recv after the script completes. */
 WASMOS_WASM_EXPORT int32_t
 initialize(int32_t proc_endpoint,
            int32_t ignored_arg1,

@@ -1,3 +1,7 @@
+/* list_array_chunk.c - Chunk-array list backend.
+ * Items are packed into fixed-size chunks (each holding up to
+ * LIST_ARRAY_CHUNK_SLOTS elements) to reduce allocator pressure and improve
+ * cache locality over the linked-list backend for large collections. */
 #include "list_internal.h"
 #include "string.h"
 

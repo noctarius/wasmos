@@ -1,3 +1,6 @@
+/* libsys_string.h - String parsing helpers for libsys (WASM target).
+ * Provides integer parsing, token splitting, and whitespace handling used by
+ * the script engine and device-manager rule parser. */
 #ifndef WASMOS_LIBSYS_STRING_H
 #define WASMOS_LIBSYS_STRING_H
 
@@ -119,6 +122,7 @@ wasmos_sys_to_lower_ascii(char *s)
     }
 }
 
+/* Return pointer past leading whitespace; does not modify s. */
 static inline const char *
 wasmos_sys_trim_left(const char *s)
 {
@@ -131,6 +135,7 @@ wasmos_sys_trim_left(const char *s)
     return s;
 }
 
+/* NUL-terminate s at the last non-whitespace character; modifies in-place. */
 static inline void
 wasmos_sys_trim_right(char *s)
 {
@@ -147,6 +152,7 @@ wasmos_sys_trim_right(char *s)
     }
 }
 
+/* Trim leading and trailing whitespace in-place; returns s. */
 static inline char *
 wasmos_sys_trim(char *s)
 {

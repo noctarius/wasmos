@@ -1,3 +1,4 @@
+/* startup.c - WASM process entry point and per-context managed IPC state */
 #include "wasmos/startup.h"
 #include "wasmos/imports.h"
 #include "wasmos/api.h"
@@ -16,6 +17,8 @@ wasmos_startup_arg(uint32_t index)
     return g_wasmos_startup_args[index];
 }
 
+/* Return (creating if necessary) the per-context managed reply endpoint.
+ * Lazy creation avoids wasting endpoints in processes that never use IPC. */
 int32_t
 wasmos_ipc_ensure_reply_endpoint(void)
 {
@@ -38,6 +41,8 @@ wasmos_ipc_next_request_id(void)
 
 extern int main(int argc, char **argv);
 
+/* WASM export called by PM instead of _start; stores the four startup args
+ * (proc_endpoint, home_tty, reserved, reserved) then calls main(0, argv). */
 WASMOS_WASM_EXPORT int32_t
 wasmos_main(int32_t arg0,
             int32_t arg1,

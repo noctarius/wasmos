@@ -1,3 +1,6 @@
+/* timer.c - PIT/LAPIC timer driver.
+ * Programs the i8253 PIT (or LAPIC periodic timer) at a configurable hz rate
+ * and drives the scheduler tick.  timer_handle_irq() is called from the IRQ 0 handler. */
 #include "timer.h"
 #include "klog.h"
 #include "irq.h"

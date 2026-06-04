@@ -1,3 +1,5 @@
+/* cli.c - interactive shell service; dispatches IPC via a phase state machine
+ * and routes console output to the VT service or serial depending on TTY focus */
 #include <stdint.h>
 #include "ctype.h"
 #include "stdlib.h"
@@ -67,6 +69,7 @@ to_lower(char c)
     return wasmos_sys_to_lower(c);
 }
 
+/* Case-insensitive exact match of g_line against s. */
 static int
 line_eq_ci(const char *s)
 {
@@ -83,6 +86,7 @@ line_eq_ci(const char *s)
     return i == g_line_len;
 }
 
+/* Case-insensitive prefix match of g_line against s. */
 static int
 line_starts_with_ci(const char *s)
 {
@@ -154,6 +158,7 @@ str_find_char(const char *s, char ch)
     return -1;
 }
 
+/* Find a shell variable by name; is_export selects the exported vs local list. */
 static cli_env_var_t *
 cli_env_find(const char *name, int is_export)
 {
@@ -193,6 +198,7 @@ cli_env_clear(void)
     g_env = 0;
 }
 
+/* Create or update a shell variable; passing NULL/empty value removes it. */
 static int
 cli_env_set(const char *name, const char *value, int is_export)
 {
@@ -543,6 +549,8 @@ cli_echo_env_expr(const char *expr)
     return 0;
 }
 
+/* Walk PATH variable segments and probe each <dir>/<prog> via fopen;
+ * writes the first match to resolved and returns 0, or -1 if not found. */
 static int
 cli_resolve_path_from_pathvar(const char *prog, char *resolved, uint32_t resolved_len)
 {
@@ -585,6 +593,11 @@ cli_resolve_path_from_pathvar(const char *prog, char *resolved, uint32_t resolve
     return -1;
 }
 
+/* Emit a string to the console: sends to the VT service (4 bytes per IPC
+ * message, tagged with g_vt_switch_generation) when the CLI's home TTY is
+ * the active TTY; otherwise falls back to serial via putsn.
+ * g_vt_switch_generation is a monotonic counter that the VT service uses to
+ * drop writes from stale writers (e.g. a CLI registered on a previous focus). */
 static void
 console_write(const char *s)
 {
@@ -619,6 +632,8 @@ console_write(const char *s)
     putsn(s, len);
 }
 
+/* Ask the VT service for the current active TTY index and its switch generation.
+ * Updates g_vt_switch_generation from the response; returns TTY index or -1. */
 static int32_t
 cli_query_active_tty(uint32_t *out_generation)
 {
@@ -2556,6 +2571,9 @@ cli_phase_wait_ipc_step(void)
     g_phase = CLI_PHASE_PROMPT;
 }
 
+/* Service entry point.  home_tty_arg (arg1) is the TTY index assigned by PM
+ * (1-based).  Runs the phase state machine forever; only exits to the idle
+ * recv loop on CLI_PHASE_FAILED. */
 WASMOS_WASM_EXPORT int32_t
 initialize(int32_t proc_endpoint,
            int32_t home_tty_arg,

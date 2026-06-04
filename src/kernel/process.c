@@ -1,3 +1,7 @@
+/* process.c - Kernel process table, scheduler, and lifecycle management.
+ * Implements cooperative + preemptive scheduling via process_yield() and
+ * process_preempt_from_irq().  Processes block on IPC (PROCESS_BLOCK_IPC) or
+ * on a child exit (PROCESS_BLOCK_WAIT); both are woken by explicit notify calls. */
 #include "process.h"
 #include "klog.h"
 #include "memory.h"

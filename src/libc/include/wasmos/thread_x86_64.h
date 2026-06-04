@@ -1,3 +1,6 @@
+/* thread_x86_64.h - x86_64 native thread spawn/join helpers using int 0x80.
+ * Provides the stack layout and entry trampoline for user-space threads
+ * created via wasmos_thread_spawn_cont in ring-3 native binaries. */
 #ifndef WASMOS_LIBC_WASMOS_THREAD_X86_64_H
 #define WASMOS_LIBC_WASMOS_THREAD_X86_64_H
 

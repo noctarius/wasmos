@@ -1,3 +1,7 @@
+/* wasm3_shim.c - Platform shim for the wasm3 interpreter library.
+ * Provides malloc/free, printf, and other libc-like symbols that wasm3
+ * expects from its host environment, bridging between wasm3's requirements
+ * and the kernel's minimal libc and slab allocator. */
 #include <stddef.h>
 #include "klog.h"
 #include <stdint.h>

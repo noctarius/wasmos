@@ -1,3 +1,4 @@
+/* proc.h - process and module metadata IPC helpers */
 #ifndef WASMOS_LIBC_WASMOS_PROC_H
 #define WASMOS_LIBC_WASMOS_PROC_H
 
@@ -12,6 +13,7 @@
 extern "C" {
 #endif
 
+/* Pack a service/process name (up to 16 chars) into four int32 IPC args. */
 static inline void
 wasmos_proc_pack_name16(const char *name, int32_t out_args[4])
 {
@@ -32,6 +34,9 @@ wasmos_proc_pack_name16(const char *name, int32_t out_args[4])
     out_args[3] = (int32_t)packed[3];
 }
 
+/* Query PM for metadata of a module by index and match_index.
+ * NOTE: uses a file-static request_id counter — not safe to call concurrently
+ * from multiple threads without external synchronisation. */
 static inline int32_t
 wasmos_proc_module_meta(int32_t proc_endpoint,
                         int32_t reply_endpoint,
@@ -68,6 +73,9 @@ wasmos_proc_module_meta(int32_t proc_endpoint,
     return 0;
 }
 
+/* Query PM for module metadata by FS path; writes path into the FS buffer
+ * before sending.  Uses a separate static counter starting at 0x40000000
+ * to avoid clashing with wasmos_proc_module_meta's counter. */
 static inline int32_t
 wasmos_proc_module_meta_path(int32_t proc_endpoint,
                              int32_t reply_endpoint,

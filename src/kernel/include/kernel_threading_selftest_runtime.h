@@ -1,3 +1,4 @@
+/* kernel_threading_selftest_runtime.h - Kernel threading self-test declarations. */
 #ifndef WASMOS_KERNEL_THREADING_SELFTEST_RUNTIME_H
 #define WASMOS_KERNEL_THREADING_SELFTEST_RUNTIME_H
 

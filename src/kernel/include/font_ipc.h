@@ -1,3 +1,4 @@
+/* font_ipc.h - IPC message types for the kernel-side font rasterizer service. */
 #ifndef WASMOS_FONT_IPC_H
 #define WASMOS_FONT_IPC_H
 

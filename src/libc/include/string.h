@@ -1,3 +1,4 @@
+/* string.h - Minimal string function declarations for WASM libc. */
 #ifndef WASMOS_LIBC_STRING_H
 #define WASMOS_LIBC_STRING_H
 

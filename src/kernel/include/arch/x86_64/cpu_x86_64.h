@@ -1,3 +1,4 @@
+/* cpu_x86_64.h - x86_64 CPU state: GDT, IDT, TSS, and per-CPU data declarations. */
 #ifndef WASMOS_ARCH_X86_64_CPU_X86_64_H
 #define WASMOS_ARCH_X86_64_CPU_X86_64_H
 

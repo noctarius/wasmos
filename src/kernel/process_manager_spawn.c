@@ -1,3 +1,7 @@
+/* process_manager_spawn.c - PM SPAWN request handling.
+ * Reads a WASMOS-APP payload from the FS or initfs, parses it, sets up the child
+ * process address space, grants IPC endpoints and capabilities, then starts the WASM
+ * or native driver.  Responds with PROC_IPC_RESP when the child is ready. */
 #include "process_manager_internal.h"
 #include "klog.h"
 #include "process_manager.h"

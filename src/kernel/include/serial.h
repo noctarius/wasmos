@@ -1,8 +1,15 @@
+/* serial.h - Serial console driver and debug output interface.
+ *
+ * Provides two output modes: locked (safe from any context) and unlocked
+ * (for ISR/NMI paths where spinlock acquisition would deadlock).
+ * A pluggable serial_driver_t lets the virtio-serial or chardev driver
+ * replace the default COM1 UART backend at runtime. */
 #ifndef WASMOS_SERIAL_H
 #define WASMOS_SERIAL_H
 
 #include <stdint.h>
 
+/* Pluggable backend; default is the COM1 x86 UART. */
 typedef struct serial_driver {
     void (*init)(void);
     void (*put_char)(char c);
@@ -10,16 +17,25 @@ typedef struct serial_driver {
 } serial_driver_t;
 
 void serial_init(void);
+
+/* When enabled, adjust data pointers from physical to kernel higher-half VAs
+ * (needed after paging is active but before the higher-half alias is set up). */
 void serial_enable_high_alias(uint8_t enabled);
 uint8_t serial_high_alias_enabled(void);
+
+/* Thread-safe writes (acquire internal spinlock). */
 void serial_write(const char *s);
-void serial_write_unlocked(const char *s);
 void serial_write_hex64(uint64_t value);
-void serial_write_hex64_unlocked(uint64_t value);
 void serial_printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+
+/* Unlocked variants — use only in ISR / NMI / very early boot. */
+void serial_write_unlocked(const char *s);
+void serial_write_hex64_unlocked(uint64_t value);
 void serial_printf_unlocked(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+
 int serial_read_char(uint8_t *out_char);
 
+/* Replace the active serial backend; returns the previous driver. */
 const serial_driver_t *serial_set_driver(const serial_driver_t *driver);
 const serial_driver_t *serial_get_driver(void);
 

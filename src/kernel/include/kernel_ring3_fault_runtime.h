@@ -1,3 +1,4 @@
+/* kernel_ring3_fault_runtime.h - Ring-3 fault injection test declarations. */
 #ifndef WASMOS_KERNEL_RING3_FAULT_RUNTIME_H
 #define WASMOS_KERNEL_RING3_FAULT_RUNTIME_H
 

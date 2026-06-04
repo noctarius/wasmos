@@ -1,3 +1,7 @@
+/* kernel_ring3_smoke_runtime.c - Ring-3 smoke test: WASM service spawn via PM.
+ * Spawns a WASM service from the ESP through the process manager and verifies
+ * that PM correctly transitions to ring-3, delivers the entry IPC message, and
+ * the service exits cleanly without kernel state corruption. */
 #include "kernel_ring3_smoke_runtime.h"
 
 #include "ipc.h"

@@ -1,3 +1,6 @@
+/* api.h - WASM import declarations for all WASMOS host system calls.
+ * Each extern function maps to a kernel-provided import in the "wasmos" module.
+ * These are the sole entry points from WASM user space into the kernel. */
 #ifndef WASMOS_LIBC_WASMOS_API_H
 #define WASMOS_LIBC_WASMOS_API_H
 
@@ -91,6 +94,10 @@ extern int32_t wasmos_thread_join(int32_t tid)
     WASMOS_WASM_IMPORT("wasmos", "thread_join");
 extern int32_t wasmos_thread_detach(int32_t tid)
     WASMOS_WASM_IMPORT("wasmos", "thread_detach");
+/* Kernel-backed recursive mutex using the wasmos_mutex_t struct in WASM memory.
+ * mutex_ptr is the int32 WASM linear-memory address of the wasmos_mutex_t.
+ * try_lock returns 0=acquired, 1=contended (caller must retry), <0=error.
+ * unlock returns 0=released, <0=error (e.g. not the owner). */
 extern int32_t wasmos_mutex_try_lock_host(int32_t mutex_ptr)
     WASMOS_WASM_IMPORT("wasmos", "mutex_try_lock");
 extern int32_t wasmos_mutex_unlock_host(int32_t mutex_ptr)
@@ -99,6 +106,9 @@ extern int32_t wasmos_proc_info(int32_t index, int32_t ptr, int32_t len)
     WASMOS_WASM_IMPORT("wasmos", "proc_info");
 extern int32_t wasmos_proc_info_ex(int32_t index, int32_t ptr, int32_t len, int32_t parent_ptr)
     WASMOS_WASM_IMPORT("wasmos", "proc_info_ex");
+/* Per-process statistics returned by wasmos_proc_info_stats.
+ * cpu_ticks: scheduler ticks attributed to this process.
+ * rss_est_bytes: estimated resident set size (committed heap + kstack). */
 typedef struct {
     uint32_t state;
     uint32_t block_reason;
@@ -194,6 +204,10 @@ extern int32_t wasmos_phys_map(int32_t phys_lo, int32_t phys_hi,
     WASMOS_WASM_IMPORT("wasmos", "phys_map");
 extern int32_t wasmos_framebuffer_pixel(int32_t x, int32_t y, int32_t color)
     WASMOS_WASM_IMPORT("wasmos", "framebuffer_pixel");
+/* Shared memory API: shmem_create allocates pages of shared memory and
+ * returns an id; shmem_grant/revoke control which PIDs may map it;
+ * shmem_map/map_auto map the region into WASM linear memory;
+ * flush/refresh synchronise dirty regions between processes. */
 extern int32_t wasmos_shmem_create(int32_t pages, int32_t flags)
     WASMOS_WASM_IMPORT("wasmos", "shmem_create");
 extern int32_t wasmos_shmem_grant(int32_t id, int32_t target_pid)

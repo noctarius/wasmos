@@ -1,3 +1,15 @@
+/* wasmos_app.h - WASMOS-APP (.wap) package format and runtime instance management.
+ *
+ * A .wap package is a binary blob with an 8-byte magic "WASMOSAP", a version field,
+ * and a section table that carries the WASM or native ELF payload, linker.metadata
+ * (TOML driver match data), and optional resource hints.
+ *
+ * wasmos_app_parse() extracts the sections into a wasmos_app_desc_t without copying;
+ * all name/entry/wasm_bytes pointers alias back into the original blob and remain valid
+ * only as long as the blob is live.
+ *
+ * wasmos_app_start() creates a wasm_driver_t (or native_driver) from the descriptor
+ * and handles endpoint resolution and capability granting via injected callbacks. */
 #ifndef WASMOS_APP_H
 #define WASMOS_APP_H
 
@@ -8,6 +20,7 @@
 #define WASMOS_APP_MAGIC "WASMOSAP"
 #define WASMOS_APP_VERSION 3u
 
+/* Package type flags stored in the .wap header. */
 #define WASMOS_APP_FLAG_DRIVER     (1u << 0)
 #define WASMOS_APP_FLAG_SERVICE    (1u << 1)
 #define WASMOS_APP_FLAG_APP        (1u << 2)

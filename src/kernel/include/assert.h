@@ -1,3 +1,4 @@
+/* assert.h - Kernel assertion macro: calls kpanic on failure. */
 #ifndef WASMOS_ASSERT_H
 #define WASMOS_ASSERT_H
 

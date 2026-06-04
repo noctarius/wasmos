@@ -1,3 +1,5 @@
+/* acpi_bus.c - WASM service: walks ACPI tables, extracts ISA/PNP devices,
+ * publishes them to device-manager via DEVMGR_PUBLISH_DEVICE IPC messages. */
 #include <stdint.h>
 #include "stdio.h"
 #include "string.h"
@@ -85,6 +87,8 @@ static const isa_id_entry_t isa_id_table[] = {
 };
 #define ISA_ID_TABLE_LEN (sizeof(isa_id_table) / sizeof(isa_id_table[0]))
 
+/* Look up (b2, b3) EISAID bytes in the static ISA device table;
+ * returns NULL if not recognised. */
 static const isa_id_entry_t *
 isa_lookup(uint8_t b2, uint8_t b3)
 {
@@ -98,6 +102,7 @@ isa_lookup(uint8_t b2, uint8_t b3)
 
 /* ---- AML helper functions ------------------------------------------------ */
 
+/* Boyer-Moore-style byte-pattern search; returns first match offset or -1. */
 static int32_t
 find_bytes(const uint8_t *buf, uint32_t len,
            const uint8_t *pat, uint32_t pat_len)
@@ -158,6 +163,7 @@ aml_skip_int(const uint8_t *buf, uint32_t avail)
     return -1;
 }
 
+/* Return the lowest set bit index of a 16-bit IRQ bitmask, 0xFF if none. */
 static uint8_t
 irq_from_mask(uint16_t mask)
 {
@@ -171,6 +177,13 @@ irq_from_mask(uint16_t mask)
 
 /* ---- Generic AML scanner for all ISA/PNP devices ------------------------- */
 
+/* Scan raw AML bytecode for _HID EISAID / _CRS resource pairs and publish
+ * each recognised ISA device to device-manager.
+ * IPC encoding for DEVMGR_PUBLISH_DEVICE (bus=0xFF marks ISA, not PCI):
+ *   arg0 = (0xFF<<24) | class_code
+ *   arg1 = (subclass<<24) | (prog_if<<16)
+ *   arg2 = io_base (first I/O port from _CRS or default_io)
+ *   arg3 = irq << 8  (0 when IRQ unavailable) */
 static void
 scan_isa_devices(const uint8_t *aml, uint32_t aml_len,
                  int32_t devmgr_ep, int32_t src_ep, int32_t *req_id)
@@ -312,6 +325,12 @@ scan_isa_devices(const uint8_t *aml, uint32_t aml_len,
 
 /* ---- Main entry point ---------------------------------------------------- */
 
+/* Service entry point called by PM.
+ * Walks RSDP -> RSDT/XSDT -> FACP -> DSDT, maps each physical table into
+ * g_map_window via wasmos_phys_map, then calls scan_isa_devices on the AML.
+ * Sends DEVMGR_ACPI_SCAN_DONE to device-manager when finished (success or
+ * failure) so it never stalls waiting for the scan, then calls
+ * wasmos_sys_notify_ready to signal full service readiness to PM. */
 WASMOS_WASM_EXPORT int32_t
 initialize(int32_t proc_endpoint,
            int32_t ignored_arg1,

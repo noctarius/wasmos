@@ -1,3 +1,4 @@
+/* string.h - Minimal kernel string function declarations (memcpy/memset/strcmp/etc.). */
 #ifndef WASMOS_STRING_H
 #define WASMOS_STRING_H
 

@@ -667,21 +667,34 @@ CPU that wins the lock transition proceeds to enqueue the thread.
 
 ---
 
-### SMP-HIGH-05 ⚠️ PARTIALLY FIXED — PID and mm_context leaked on spawn error paths
+### SMP-HIGH-05 ✅ FIXED — PID and mm_context leaked on spawn error paths
 
-**File:** `src/kernel/process.c:993,1120`
+**File:** `src/kernel/process.c`
 
 `g_next_pid` is incremented and `mm_context_create` is called before the slot
 and name copy are validated.  Error returns after that point orphan the PID
 and context.
 
-**Partial fix applied:** The slot is now found first (line 992), so a missing
-slot returns before touching `g_next_pid` or creating a context.  `mm_context_create`
-failure at line 1000 returns without leaking a PID.
+**Partial fix (prior):** Slot found first, so a missing slot returns before
+touching `g_next_pid` or creating a context.  `mm_context_create` failure
+returns without leaking a PID.
 
-**Remaining:** The `process_copy_name` failure path (line 1032) and
-`thread_spawn_main` failure path (line 1036) return without freeing the already-
-created mm_context or reverting `g_next_pid`.  These are rare but real leaks.
+**Remaining fix (now applied):** Four error paths in `process_spawn_as_impl`
+and `process_spawn_idle` each either leaked the `mm_context` / a spawned thread
+or held `g_process_table_lock` forever (returning without `spinlock_unlock`):
+
+| Path | Leaked | Lock released? |
+|------|--------|----------------|
+| `process_copy_name` failure | `mm_context`, slot left READY | Yes |
+| `thread_spawn_main` failure | `mm_context`, slot left READY | Yes |
+| `process_main_thread` NULL | `mm_context`, thread, slot READY | **No** |
+| `process_alloc_stack` failure | `mm_context`, thread, slot READY | **No** |
+
+Fix: replaced scattered `return -1` with goto-based cleanup labels (`err_ctx` /
+`err_ctx_thread` in `process_spawn_as_impl`; `idle_err_ctx` / `idle_err_ctx_thread`
+in `process_spawn_idle`).  Each label calls `thread_reap_owner` (if a thread was
+spawned), `mm_context_destroy`, `process_reset_slot`, and `spinlock_unlock`.
+`g_next_pid` is not decremented — a PID gap on these rare error paths is benign.
 
 ---
 

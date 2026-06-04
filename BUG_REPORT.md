@@ -458,6 +458,14 @@ In specific preemption timing, a thread can be silently dropped from the run que
 >   `context_switch.S` updated to use GS-relative writes at all 7 set/clear sites.
 >   `process_preempt_from_irq` wired to check `cpu_local()->in_context_switch`.
 >   See SMP-CRIT-01 below.
+>
+> **Newly fixed (2026-06-04, commit `e43235c3`):**
+> - SMP-CRIT-02 (thread table reads without lock): `thread_get`, `thread_find_main_for_pid`,
+>   `thread_owner_tid_at`, `thread_mark_owner_exited` all read `g_threads[]` without
+>   `g_thread_table_lock`.  Concurrent `thread_reap_owner` (under the lock) could zero a slot
+>   mid-iteration, producing torn reads of tid/state/ctx.  Fix: add `thread_get_nolock` static
+>   helper; public `thread_get` and the three other functions now hold the lock during the scan.
+>   Internal callers that already hold the lock use `thread_get_nolock`.  See SMP-CRIT-02 below.
 
 ### Lock Hierarchy (required, not yet enforced)
 
@@ -466,11 +474,16 @@ g_pfa_lock  (outermost)
   → g_endpoint_table_lock
     → ep->lock
       → g_process_table_lock
-        → g_thread_table_lock
-          → g_ready_queue_lock  (innermost)
+        → g_ready_queue_lock
+          → g_thread_table_lock  (innermost)
 ```
 
 Never acquire an outer lock while holding an inner one.
+
+Note on `g_ready_queue_lock` / `g_thread_table_lock` ordering: the order above
+reflects the actual nesting in `ready_queue_dequeue` (holds `g_ready_queue_lock`
+while calling `thread_get` which acquires `g_thread_table_lock`).  No code path
+nests them in the reverse order, so this hierarchy is deadlock-free.
 
 ---
 
@@ -494,18 +507,26 @@ checks `cpu_local()->in_context_switch` before acting.
 
 ---
 
-### SMP-CRIT-02 — Thread table read without lock
+### SMP-CRIT-02 ✅ FIXED — Thread table read without lock
 
-**File:** `src/kernel/thread.c:166–229`
+**File:** `src/kernel/thread.c:165–230`
 
-`thread_get`, `thread_find_main_for_pid`, `thread_owner_tid_at`,
-`thread_mark_owner_exited` read `g_threads[]` without `g_thread_table_lock`.
-Concurrent `thread_reap_owner` (under the lock) can zero a slot mid-iteration.
+`thread_get`, `thread_find_main_for_pid`, `thread_owner_tid_at`, and
+`thread_mark_owner_exited` all read `g_threads[]` without `g_thread_table_lock`.
+Concurrent `thread_reap_owner` (which holds the lock) can zero a slot mid-iteration,
+producing torn reads of `tid`, `state`, or `ctx` fields — use-after-free if the
+slot is reallocated to a new thread before the caller finishes.
 
-**Fix:** Split into `_locked` internal variant and a public wrapper.  Callers
-already holding the lock call the internal variant.  `thread_set_state` (which
-takes the lock and calls `thread_get`) must call the internal variant to avoid
-re-entrant lock.
+**Fix:** Added `static thread_get_nolock(uint32_t tid)` (assumes lock held) and
+made `thread_get` the locked public wrapper.  Same treatment applied to the other
+three functions.  Internal callers that already hold `g_thread_table_lock`
+(`thread_set_state`, `thread_wake_if_blocked`, `thread_reap`,
+`thread_set_exit_status`) use `thread_get_nolock` to avoid re-entrant lock.
+
+Lock order note: `ready_queue_dequeue` in `process.c` calls `thread_get` while
+holding `g_ready_queue_lock`, creating a `g_ready_queue_lock → g_thread_table_lock`
+nesting.  No code path nests these in the opposite order, so no deadlock cycle
+exists.  The documented lock hierarchy has been updated to reflect the actual order.
 
 ---
 
@@ -836,6 +857,7 @@ The table below records what was done and why.
 | `src/kernel/include/arch/x86_64/smp.h` | `in_context_switch` field at offset 17 with `_Static_assert`; stale NOTE removed (SMP-CRIT-01) |
 | `src/kernel/process.c` | Removed dead `g_in_context_switch` global; wired `cpu_local()->in_context_switch` guard in `process_preempt_from_irq` (SMP-CRIT-01) |
 | `src/kernel/arch/x86_64/context_switch.S` | All 7 set/clear sites use GS-relative `.set CPU_LOCAL_IN_CONTEXT_SWITCH_OFFSET, 17` writes; `push/pop %r9` at `iretq` sites to preserve user register (SMP-CRIT-01) |
+| `src/kernel/thread.c` | `thread_get_nolock` static helper; `thread_get`, `thread_find_main_for_pid`, `thread_owner_tid_at`, `thread_mark_owner_exited` now hold `g_thread_table_lock` during scan; internal locked callers use `thread_get_nolock` (SMP-CRIT-02) |
 
 ### Previously Reverted / Removed
 

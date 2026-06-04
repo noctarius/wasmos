@@ -5,25 +5,25 @@
 /*
  * Interrupt-safe spinlock implementation for WASMOS.
  *
- * Problem: ipc_send_from() is called from hardware interrupt context (IRQ
- * handler, IF=0) and needs ep->lock, which ipc_recv_for() may hold while
- * running with IF=1.  The IRQ handler would spin forever waiting for the
- * interrupted thread to release the lock — a classic single-CPU IRQ deadlock.
+ * Every spinlock_lock() saves RFLAGS and clears IF (cli) on first entry;
+ * spinlock_unlock() restores RFLAGS on last exit.  Holding any spinlock
+ * therefore implies IF=0: no hardware interrupt can fire on the same CPU
+ * while the lock is held, eliminating the classic single-CPU IRQ deadlock
+ * where an IRQ handler tries to acquire a lock already held by the
+ * interrupted thread.
  *
- * Fix: maintain a separate per-CPU IRQ-disable depth counter alongside the
- * existing preempt-disable counter.  spinlock_lock() saves RFLAGS and clears
- * IF on first entry (depth 0→1); spinlock_unlock() restores RFLAGS on last
- * exit (depth 1→0).  This guarantees that every spinlock is held with IF=0,
- * so no hardware interrupt can observe a held spinlock.
+ * The IRQ-disable depth counter lives in cpu_local_t so each CPU tracks its
+ * own interrupt state independently under SMP.
  *
- * The counters live in cpu_local_t (per-CPU) so that under SMP each CPU's
- * interrupt-disable state is independent.  On a non-SMP build cpu_local()
- * returns &g_cpus[0] so behaviour is identical to the old single-global form.
+ * preempt_disable()/preempt_enable() are intentionally separate: wasm_driver.c
+ * wraps wasm3 execution in preempt_disable(), and coupling that to IRQ-disable
+ * would block interrupt delivery for the whole WASM process lifetime.
  *
- * preempt_disable()/preempt_enable() are NOT changed: wasm_driver.c wraps the
- * entire wasm3 execution in preempt_disable(), and making that also disable
- * interrupts would block IRQ delivery for the whole WASM process lifetime.
- * The two depth counters are intentionally independent.
+ * Same-CPU recursive acquisition is not supported and will deadlock.  Because
+ * every lock is held with IF=0, an IRQ handler cannot interrupt a lock holder
+ * on the same CPU, making accidental same-CPU reentry structurally impossible
+ * for the IRQ-driven send paths.  Any reentry that does occur is a bug and
+ * the deadlock is the correct loud failure mode.
  */
 
 /*
@@ -66,20 +66,13 @@ void spinlock_init(spinlock_t *lock) {
         return;
     }
     lock->state = 0;
-    lock->owner_cpu = 0xFFFFFFFFu;
-    lock->recursion_depth = 0;
 }
 
 int spinlock_try_lock(spinlock_t *lock) {
     if (!lock) {
         return 0;
     }
-    if (__sync_lock_test_and_set(&lock->state, 1u) == 0u) {
-        lock->owner_cpu = cpu_local()->cpu_id;
-        lock->recursion_depth = 1;
-        return 1;
-    }
-    return 0;
+    return __sync_lock_test_and_set(&lock->state, 1u) == 0u;
 }
 
 void spinlock_lock(spinlock_t *lock) {
@@ -89,13 +82,6 @@ void spinlock_lock(spinlock_t *lock) {
     for (;;) {
         spinlock_irq_save();
         preempt_disable();
-        /* TODO(smp): remove recursive same-CPU acquisition once the endpoint
-         * table reentry path is fully eliminated. This is a debugging-time
-         * liveness hardening guard, not the desired long-term lock model. */
-        if (lock->state != 0u && lock->owner_cpu == cpu_local()->cpu_id) {
-            lock->recursion_depth++;
-            return;
-        }
         if (spinlock_try_lock(lock)) {
             return;
         }
@@ -109,16 +95,6 @@ void spinlock_unlock(spinlock_t *lock) {
     if (!lock) {
         return;
     }
-    if (lock->state != 0u &&
-        lock->owner_cpu == cpu_local()->cpu_id &&
-        lock->recursion_depth > 1u) {
-        lock->recursion_depth--;
-        preempt_enable();
-        spinlock_irq_restore();
-        return;
-    }
-    lock->recursion_depth = 0;
-    lock->owner_cpu = 0xFFFFFFFFu;
     __sync_lock_release(&lock->state);
     preempt_enable();
     spinlock_irq_restore();

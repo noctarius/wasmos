@@ -5,8 +5,6 @@
 
 typedef struct {
     volatile uint32_t state;
-    uint32_t owner_cpu;
-    uint32_t recursion_depth;
 } spinlock_t;
 
 void spinlock_init(spinlock_t *lock);

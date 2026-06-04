@@ -646,12 +646,16 @@ fat_resolve_mount_alias(int32_t proc_endpoint, char *out_mount, uint32_t out_mou
     }
     out_mount[0] = '\0';
     *out_unit = 0;
-    if (wasmos_ipc_send(g_block_endpoint, g_reply_endpoint, BLOCK_IPC_IDENTIFY_REQ, req_id, 0, 0, 0, 0) != 0 ||
-        wasmos_ipc_recv(g_reply_endpoint) < 0) {
+    if (wasmos_ipc_send(g_block_endpoint, g_reply_endpoint, BLOCK_IPC_IDENTIFY_REQ, req_id, 0, 0, 0, 0) != 0) {
         return -1;
     }
-    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != BLOCK_IPC_IDENTIFY_RESP ||
-        wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req_id) {
+    if (wasmos_ipc_recv(g_reply_endpoint) < 0) {
+        return -1;
+    }
+    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != BLOCK_IPC_IDENTIFY_RESP) {
+        return -1;
+    }
+    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req_id) {
         return -1;
     }
     unit = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2);
@@ -668,12 +672,16 @@ fat_resolve_mount_alias(int32_t proc_endpoint, char *out_mount, uint32_t out_mou
                         unit,
                         0,
                         0,
-                        0) != 0 ||
-        wasmos_ipc_recv(g_reply_endpoint) < 0) {
+                        0) != 0) {
         return -1;
     }
-    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != DEVMGR_BLOCK_MOUNT_INFO ||
-        wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req_id) {
+    if (wasmos_ipc_recv(g_reply_endpoint) < 0) {
+        return -1;
+    }
+    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != DEVMGR_BLOCK_MOUNT_INFO) {
+        return -1;
+    }
+    if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req_id) {
         return -1;
     }
     packed[0] = (uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);

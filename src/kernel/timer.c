@@ -7,6 +7,9 @@
 #if WASMOS_IRQ_MODE >= 1
 #include "arch/x86_64/lapic.h"
 #endif
+#if WASMOS_SMP
+#include "arch/x86_64/smp.h"
+#endif
 
 /*
  * PIT channel 0 is the current scheduler clock. The timer path only accounts
@@ -58,13 +61,22 @@ void timer_init(uint32_t hz) {
 }
 
 void timer_handle_irq(void) {
-    g_timer_ticks++;
+#if WASMOS_SMP
+    /* On SMP each AP runs its own LAPIC timer at the same frequency as the BSP.
+     * Only the BSP (cpu_id == 0) advances g_timer_ticks so that the global
+     * monotonic tick counter increases at the configured hz rate, not N*hz.
+     * All CPUs still call process_tick() for their own scheduling quantum. */
+    if (cpu_local()->cpu_id == 0)
+#endif
+    {
+        g_timer_ticks++;
+        if (g_timer_ticks == g_timer_log_threshold) {
+            g_timer_log_pending = 1;
+            g_timer_log_threshold += 100;
+        }
+    }
     /* process_tick() owns quantum accounting and reschedule triggering. */
     process_tick();
-    if (g_timer_ticks == g_timer_log_threshold) {
-        g_timer_log_pending = 1;
-        g_timer_log_threshold += 100;
-    }
 }
 
 void timer_poll(void) {

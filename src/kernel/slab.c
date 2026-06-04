@@ -1,4 +1,5 @@
 #include "slab.h"
+#include "spinlock.h"
 #include <stdint.h>
 
 /*
@@ -36,10 +37,12 @@ static slab_class_t g_classes[SLAB_CLASS_COUNT] = {
     { 64u, 128u, g_slab_buf_64, 0 },
     { 128u, 96u, g_slab_buf_128, 0 },
 };
+static spinlock_t g_slab_lock;
 
 void
 slab_init(void)
 {
+    spinlock_init(&g_slab_lock);
     for (uint32_t c = 0; c < SLAB_CLASS_COUNT; ++c) {
         slab_class_t *klass = &g_classes[c];
         klass->free_list = 0;
@@ -71,17 +74,19 @@ kalloc_small(size_t size)
     if (c < 0) {
         return 0;
     }
+    spinlock_lock(&g_slab_lock);
     slab_class_t *klass = &g_classes[c];
     slab_node_t *node = klass->free_list;
     if (!node) {
+        spinlock_unlock(&g_slab_lock);
         return 0;
     }
     klass->free_list = node->next;
-
     slab_header_t *hdr = (slab_header_t *)(uintptr_t)node;
     hdr->magic = SLAB_MAGIC;
     hdr->class_index = (uint8_t)c;
     hdr->reserved = 0;
+    spinlock_unlock(&g_slab_lock);
     return (void *)(uintptr_t)(hdr + 1);
 }
 
@@ -95,9 +100,11 @@ kfree_small(void *ptr)
     if (hdr->magic != SLAB_MAGIC || hdr->class_index >= SLAB_CLASS_COUNT) {
         return;
     }
+    spinlock_lock(&g_slab_lock);
     slab_class_t *klass = &g_classes[hdr->class_index];
     hdr->magic = 0;
     slab_node_t *node = (slab_node_t *)(uintptr_t)hdr;
     node->next = klass->free_list;
     klass->free_list = node;
+    spinlock_unlock(&g_slab_lock);
 }

@@ -492,22 +492,14 @@ process_manager_on_child_ready(uint32_t pid)
         return;
     }
     process_notify_ready(proc);
-
-    if (!g_pm.spawn.in_use ||
-        !g_pm.spawn.is_sync ||
-        g_pm.spawn.sync_child_pid != pid) {
-        return;
-    }
-
-    ipc_message_t resp;
-    resp.type = PROC_IPC_RESP;
-    resp.source = g_pm.proc_endpoint;
-    resp.destination = g_pm.spawn.reply_endpoint;
-    resp.request_id = g_pm.spawn.request_id;
-    resp.arg0 = pid;
-    resp.arg1 = 0;
-    resp.arg2 = 0;
-    resp.arg3 = 0;
-    g_pm.spawn.in_use = 0;
-    ipc_send_from(IPC_CONTEXT_KERNEL, g_pm.spawn.reply_endpoint, &resp);
+    /* Do NOT read or write g_pm.spawn here.  This function is called from
+     * nd_proc_notify_ready() on the native driver's CPU (different from PM's
+     * CPU), so any access to g_pm.spawn would be an unsynchronised cross-CPU
+     * read/write.  Specifically, PM sets in_use=1 and sync_child_pid in
+     * sequence after pm_spawn_from_buffer(); if the driver runs between those
+     * two stores we could see in_use=1 with sync_child_pid still 0, send to
+     * endpoint 0 (silent failure), clear in_use=0, and leave PM's
+     * pm_poll_sync_spawn with nothing to poll — causing a permanent hang.
+     * pm_poll_sync_spawn already checks child->ready on every PM iteration
+     * and sends the PROC_IPC_RESP safely from PM's own context. */
 }

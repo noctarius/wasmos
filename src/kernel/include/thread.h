@@ -48,6 +48,11 @@ typedef struct thread {
     uint32_t join_waiter_tid;
     uint8_t detached;
     int32_t exit_status;
+    /* Saved per-thread copy of cpu_local()->wasm3_heap_bound_pid.  Captured in
+     * process_yield before every context switch and restored to the CPU when
+     * this thread is next scheduled, preventing cross-thread heap-PID leakage
+     * when multiple wasm_driver threads interleave on the same CPU. */
+    uint32_t wasm3_heap_bound_pid;
     char name_storage[THREAD_NAME_MAX];
     const char *name;
 } thread_t;
@@ -65,6 +70,7 @@ int thread_owner_tid_at(uint32_t owner_pid, uint32_t index, uint32_t *out_tid);
 void thread_mark_owner_exited(uint32_t owner_pid, int32_t exit_status);
 void thread_reap_owner(uint32_t owner_pid);
 void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t reason);
+int thread_wake_if_blocked(uint32_t tid);
 void thread_set_exit_status(uint32_t tid, int32_t exit_status);
 void thread_reap(uint32_t tid);
 void thread_set_current(uint32_t tid);

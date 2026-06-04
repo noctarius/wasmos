@@ -69,6 +69,13 @@ typedef struct cpu_local {
     /* Round-robin scheduling hint and last-run classification (per-CPU). */
     uint32_t           last_index;
     process_run_result_t last_run_result;
+
+    /* Per-CPU wasm3 heap PID override.  wasm3_heap_bind_pid() sets this so
+     * that wasm3 module loading (which calls malloc) targets a specific
+     * process's heap regardless of which process is currently scheduled.
+     * Making it per-CPU prevents an AP loading a driver from diverting
+     * another CPU's malloc to the wrong heap slot. */
+    uint32_t           wasm3_heap_bound_pid;
 } cpu_local_t;
 
 extern cpu_local_t g_cpus[WASMOS_MAX_CPUS];

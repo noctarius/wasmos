@@ -7,6 +7,8 @@
 #include "physmem.h"
 #include "paging.h"
 #include "wasm3_shim.h"
+#include "spinlock.h"
+#include "arch/x86_64/smp.h"
 
 #define WASM3_HEAP_DEFAULT_PAGES 1024u
 #define WASM3_HEAP_MIN_PAGES 32u
@@ -40,7 +42,9 @@ typedef struct {
 } wasm3_heap_block_t;
 
 static wasm3_heap_slot_t g_wasm3_heaps[PROCESS_MAX_COUNT];
-static uint32_t g_wasm3_heap_bound_pid;
+/* Protects g_wasm3_heaps[] globally — covers slot lookup AND allocation so
+ * two CPUs cannot race on the same slot or the same chunk->offset. */
+static spinlock_t g_wasm3_heap_lock;
 
 
 static size_t
@@ -115,22 +119,23 @@ wasm3_heap_slot_for_pid(uint32_t pid)
 static wasm3_heap_slot_t *
 wasm3_heap_slot(void)
 {
-    uint32_t pid = g_wasm3_heap_bound_pid ? g_wasm3_heap_bound_pid : process_current_pid();
+    uint32_t bound = cpu_local()->wasm3_heap_bound_pid;
+    uint32_t pid = bound ? bound : process_current_pid();
     return wasm3_heap_slot_for_pid(pid);
 }
 
 uint32_t
 wasm3_heap_bind_pid(uint32_t pid)
 {
-    uint32_t previous_pid = g_wasm3_heap_bound_pid;
-    g_wasm3_heap_bound_pid = pid;
+    uint32_t previous_pid = cpu_local()->wasm3_heap_bound_pid;
+    cpu_local()->wasm3_heap_bound_pid = pid;
     return previous_pid;
 }
 
 void
 wasm3_heap_restore_pid(uint32_t previous_pid)
 {
-    g_wasm3_heap_bound_pid = previous_pid;
+    cpu_local()->wasm3_heap_bound_pid = previous_pid;
 }
 
 void
@@ -139,7 +144,7 @@ wasm3_heap_configure(uint32_t pid, uint64_t initial_size, uint64_t max_size)
     if (pid == 0) {
         return;
     }
-    critical_section_enter();
+    spinlock_lock(&g_wasm3_heap_lock);
     wasm3_heap_slot_t *slot = wasm3_heap_slot_for_pid(pid);
     if (slot) {
         size_t preferred = (size_t)initial_size;
@@ -163,7 +168,7 @@ wasm3_heap_configure(uint32_t pid, uint64_t initial_size, uint64_t max_size)
         slot->preferred_chunk_size = preferred;
         slot->max_size = limit;
     }
-    critical_section_leave();
+    spinlock_unlock(&g_wasm3_heap_lock);
 }
 
 static int
@@ -297,11 +302,12 @@ wasm3_alloc(size_t size, int zero)
         return 0;
     }
 
+    spinlock_lock(&g_wasm3_heap_lock);
     wasm3_heap_slot_t *slot = wasm3_heap_slot();
     if (!slot) {
+        spinlock_unlock(&g_wasm3_heap_lock);
         return 0;
     }
-    critical_section_enter();
     size_t total = align_up(sizeof(wasm3_heap_block_t) + size, WASM3_HEAP_ALIGN);
     /* Keep small allocations tightly packed but ensure larger buffers (notably
      * wasm3 linear memory) are page-aligned so we can remap them to devices. */
@@ -339,22 +345,22 @@ wasm3_alloc(size_t size, int zero)
                 (unsigned long long)size,
                 (unsigned long long)slot->committed_size,
                 (unsigned long long)slot->max_size);
-            critical_section_leave();
+            spinlock_unlock(&g_wasm3_heap_lock);
             return 0;
         }
         chunk = wasm3_heap_tail_chunk(slot);
         if (!chunk) {
-            critical_section_leave();
+            spinlock_unlock(&g_wasm3_heap_lock);
             return 0;
         }
         aligned_offset = align_up(chunk->offset + header + skew, align);
         if (aligned_offset < header + skew) {
-            critical_section_leave();
+            spinlock_unlock(&g_wasm3_heap_lock);
             return 0;
         }
         aligned_offset -= (header + skew);
         if (aligned_offset + total > chunk->size) {
-            critical_section_leave();
+            spinlock_unlock(&g_wasm3_heap_lock);
             return 0;
         }
     }
@@ -365,7 +371,7 @@ wasm3_alloc(size_t size, int zero)
     block->start = aligned_offset;
     void *ptr = (uint8_t *)block + sizeof(wasm3_heap_block_t);
     chunk->offset = aligned_offset + total;
-    critical_section_leave();
+    spinlock_unlock(&g_wasm3_heap_lock);
     if (zero) {
         wasm3_memset(ptr, 0, size);
     }
@@ -394,18 +400,19 @@ void free(void *ptr)
     if (!ptr) {
         return;
     }
+    spinlock_lock(&g_wasm3_heap_lock);
     wasm3_heap_slot_t *slot = wasm3_heap_slot();
     if (!slot || slot->chunk_count == 0) {
+        spinlock_unlock(&g_wasm3_heap_lock);
         return;
     }
     uint32_t chunk_index = 0;
     wasm3_heap_chunk_t *chunk = wasm3_heap_chunk_for_ptr(slot, ptr, &chunk_index);
     if (!chunk) {
+        spinlock_unlock(&g_wasm3_heap_lock);
         return;
     }
     wasm3_heap_block_t *block = (wasm3_heap_block_t *)((uint8_t *)ptr - sizeof(wasm3_heap_block_t));
-
-    critical_section_enter();
     /* Free remains stack-like: only the most recent allocation in the tail
      * chunk shrinks the live frontier. This matches the old allocator's
      * behavior while still allowing chunked growth. */
@@ -414,7 +421,7 @@ void free(void *ptr)
         chunk->offset = block->start;
         wasm3_heap_release_empty_tail_chunks(slot);
     }
-    critical_section_leave();
+    spinlock_unlock(&g_wasm3_heap_lock);
 }
 
 void wasm3_heap_release(uint32_t pid)
@@ -422,7 +429,7 @@ void wasm3_heap_release(uint32_t pid)
     if (pid == 0) {
         return;
     }
-    critical_section_enter();
+    spinlock_lock(&g_wasm3_heap_lock);
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         wasm3_heap_slot_t *slot = &g_wasm3_heaps[i];
         if (slot->pid != pid) {
@@ -439,7 +446,7 @@ void wasm3_heap_release(uint32_t pid)
         wasm3_heap_slot_init(slot, 0);
         break;
     }
-    critical_section_leave();
+    spinlock_unlock(&g_wasm3_heap_lock);
 }
 
 uint64_t
@@ -449,7 +456,7 @@ wasm3_heap_committed_bytes(uint32_t pid)
     if (pid == 0) {
         return 0;
     }
-    critical_section_enter();
+    spinlock_lock(&g_wasm3_heap_lock);
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_wasm3_heaps[i].pid != pid) {
             continue;
@@ -457,7 +464,7 @@ wasm3_heap_committed_bytes(uint32_t pid)
         committed = (uint64_t)g_wasm3_heaps[i].committed_size;
         break;
     }
-    critical_section_leave();
+    spinlock_unlock(&g_wasm3_heap_lock);
     return committed;
 }
 
@@ -471,26 +478,26 @@ void *realloc(void *ptr, size_t size)
     }
     wasm3_heap_block_t *block = (wasm3_heap_block_t *)((uint8_t *)ptr - sizeof(wasm3_heap_block_t));
     size_t old_size = block->size;
-    wasm3_heap_slot_t *slot = wasm3_heap_slot();
     size_t new_total = align_up(sizeof(wasm3_heap_block_t) + size, WASM3_HEAP_ALIGN);
+
+    spinlock_lock(&g_wasm3_heap_lock);
+    wasm3_heap_slot_t *slot = wasm3_heap_slot();
     uint32_t chunk_index = 0;
-    wasm3_heap_chunk_t *chunk = wasm3_heap_chunk_for_ptr(slot, ptr, &chunk_index);
-    if (slot && chunk) {
-        critical_section_enter();
-        /* In-place growth is only safe for the newest allocation in the active
-         * tail chunk. All other cases fall back to allocate-copy-free. */
-        if (chunk_index + 1 == slot->chunk_count &&
-            block->start + block->total == chunk->offset) {
-            if (block->start + new_total <= chunk->size) {
-                chunk->offset = block->start + new_total;
-                block->size = size;
-                block->total = new_total;
-                critical_section_leave();
-                return ptr;
-            }
-        }
-        critical_section_leave();
+    wasm3_heap_chunk_t *chunk = slot ? wasm3_heap_chunk_for_ptr(slot, ptr, &chunk_index) : 0;
+    /* In-place growth is only safe for the newest allocation in the active
+     * tail chunk. All other cases fall back to allocate-copy-free. */
+    if (slot && chunk &&
+        chunk_index + 1 == slot->chunk_count &&
+        block->start + block->total == chunk->offset &&
+        block->start + new_total <= chunk->size) {
+        chunk->offset = block->start + new_total;
+        block->size = size;
+        block->total = new_total;
+        spinlock_unlock(&g_wasm3_heap_lock);
+        return ptr;
     }
+    spinlock_unlock(&g_wasm3_heap_lock);
+
     void *new_ptr = malloc(size);
     if (!new_ptr) {
         return 0;

@@ -29,6 +29,7 @@ typedef struct {
     uint8_t active;
 } wasm_driver_t;
 
+void wasm_driver_init(void);
 int wasm_driver_start(wasm_driver_t *driver,
                       const wasm_driver_manifest_t *manifest,
                       uint32_t owner_context_id);

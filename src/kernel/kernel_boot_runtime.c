@@ -65,6 +65,18 @@ kernel_boot_build_bootinfo_shadow(const boot_info_t *src, boot_info_t *dst)
     if (boot_shadow_copy_blob(&dst->boot_config, src->boot_config, (uint64_t)src->boot_config_size) != 0) {
         return -1;
     }
+    /* Remap initfs to its higher-half virtual alias.  UEFI allocates the initfs
+     * at a physical address; the kernel's higher-half map covers all physical
+     * RAM up to HIGHER_HALF_PDE_COUNT*2MB, so a pointer fixup is sufficient —
+     * no data copy is required.  Without this fixup every kernel caller that
+     * dereferences boot_info->initfs would need the low-identity mapping,
+     * which is stripped from process page tables by the boot-time sweep. */
+    if ((src->flags & BOOT_INFO_FLAG_INITFS_PRESENT) && src->initfs && src->initfs_size > 0) {
+        uint64_t phys = (uint64_t)(uintptr_t)dst->initfs;
+        if (phys < KERNEL_HIGHER_HALF_BASE) {
+            dst->initfs = (void *)(uintptr_t)(phys + KERNEL_HIGHER_HALF_BASE);
+        }
+    }
     if (!(src->flags & BOOT_INFO_FLAG_MODULES_PRESENT) || !src->modules || src->module_count == 0 ||
         src->module_entry_size < sizeof(boot_module_t)) {
         return 0;

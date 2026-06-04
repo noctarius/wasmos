@@ -43,10 +43,12 @@ int ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t 
 int ipc_recv_blocking_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t *out_message);
 int ipc_notify_from(uint32_t sender_context_id, uint32_t endpoint);
 int ipc_wait_for(uint32_t receiver_context_id, uint32_t endpoint);
+int ipc_wait_blocking_for(uint32_t receiver_context_id, uint32_t endpoint);
 int ipc_send(uint32_t endpoint, const ipc_message_t *message);
 int ipc_recv(uint32_t endpoint, ipc_message_t *out_message);
 int ipc_notify(uint32_t endpoint);
 int ipc_wait(uint32_t endpoint);
+int ipc_wait_blocking(uint32_t endpoint);
 void ipc_endpoints_release_owner(uint32_t owner_context_id);
 
 #endif

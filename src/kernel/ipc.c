@@ -446,6 +446,85 @@ int ipc_wait_for(uint32_t receiver_context_id, uint32_t endpoint) {
     return IPC_OK;
 }
 
+/*
+ * SMP-MED-07: ipc_wait_blocking_for — arm + block + re-check atomically.
+ *
+ * ipc_wait_for arms ep->waiter_tid then releases ep->lock and returns
+ * IPC_EMPTY, leaving the caller to block separately.  A sender that fires in
+ * the window between the lock release and the caller's process_block_on_ipc
+ * delivers its notification to a still-RUNNING thread; the wake is a no-op
+ * and the thread sleeps forever.
+ *
+ * Fix: mirror ipc_recv_blocking_for.  Arm the waiter and call
+ * process_block_on_ipc while ep->lock is still held so no sender can fire
+ * between arming and blocking.  Re-check notify_count under the lock on every
+ * iteration to consume notifications that arrived before we could yield.
+ */
+int
+ipc_wait_blocking_for(uint32_t receiver_context_id, uint32_t endpoint)
+{
+    for (;;) {
+        process_t *proc = process_get(process_current_pid());
+        if (!proc) {
+            return IPC_ERR_INVALID;
+        }
+
+        ipc_endpoint_t *ep = 0;
+        {
+            list_iter_t eit;
+            spinlock_lock(&g_endpoint_table_lock);
+            ipc_endpoint_t *cur = (ipc_endpoint_t *)list_first(&g_endpoint_table, &eit);
+            while (cur) {
+                if (cur->id == endpoint && cur->in_use) {
+                    ep = cur;
+                    break;
+                }
+                cur = (ipc_endpoint_t *)list_next(&eit);
+            }
+            if (ep) {
+                spinlock_lock(&ep->lock);
+            }
+            spinlock_unlock(&g_endpoint_table_lock);
+        }
+        if (!ep) {
+            return IPC_ERR_INVALID;
+        }
+        if (ep->type != IPC_ENDPOINT_TYPE_NOTIFICATION) {
+            spinlock_unlock(&ep->lock);
+            return IPC_ERR_INVALID;
+        }
+        if (receiver_context_id != IPC_CONTEXT_KERNEL &&
+            ep->owner_context_id != receiver_context_id) {
+            spinlock_unlock(&ep->lock);
+            return IPC_ERR_PERM;
+        }
+        if (ep->notify_count > 0) {
+            ep->notify_count--;
+            ep->waiter_tid = 0;
+            spinlock_unlock(&ep->lock);
+            return IPC_OK;
+        }
+        /* Queue empty: arm and block atomically under ep->lock. */
+        uint32_t my_tid = thread_current_tid();
+        thread_t *thread = thread_get(my_tid);
+        ep->waiter_tid = my_tid;
+        if (thread) {
+            __atomic_store_n(&thread->blocking_transition, 1, __ATOMIC_RELEASE);
+        }
+        process_block_on_ipc(proc);
+        spinlock_unlock(&ep->lock);
+
+        if (proc->state != PROCESS_STATE_BLOCKED ||
+            (thread && thread->state != THREAD_STATE_BLOCKED)) {
+            if (thread) {
+                __atomic_store_n(&thread->blocking_transition, 0, __ATOMIC_RELEASE);
+            }
+            continue;
+        }
+        process_yield(PROCESS_RUN_BLOCKED);
+    }
+}
+
 int ipc_send(uint32_t endpoint, const ipc_message_t *message) {
     return ipc_send_from(IPC_CONTEXT_KERNEL, endpoint, message);
 }
@@ -460,6 +539,10 @@ int ipc_notify(uint32_t endpoint) {
 
 int ipc_wait(uint32_t endpoint) {
     return ipc_wait_for(IPC_CONTEXT_KERNEL, endpoint);
+}
+
+int ipc_wait_blocking(uint32_t endpoint) {
+    return ipc_wait_blocking_for(IPC_CONTEXT_KERNEL, endpoint);
 }
 
 void

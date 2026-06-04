@@ -1298,9 +1298,12 @@ process_thread_spawn_worker_internal(uint32_t owner_pid,
     if (!owner || !entry || !out_tid) {
         return -1;
     }
+    spinlock_lock(&g_process_table_lock);
     if (owner->state == PROCESS_STATE_UNUSED || owner->state == PROCESS_STATE_ZOMBIE || owner->exiting) {
+        spinlock_unlock(&g_process_table_lock);
         return -1;
     }
+    spinlock_unlock(&g_process_table_lock);
     if (thread_spawn_in_owner(owner_pid,
                               name ? name : "",
                               THREAD_STATE_READY,
@@ -1310,6 +1313,7 @@ process_thread_spawn_worker_internal(uint32_t owner_pid,
     }
     thread = thread_get(tid);
     if (!thread) {
+        thread_reap(tid);
         return -1;
     }
     stack_pages = (PROCESS_STACK_SIZE + PAGE_SIZE - 1u) / PAGE_SIZE;
@@ -1323,8 +1327,17 @@ process_thread_spawn_worker_internal(uint32_t owner_pid,
     thread->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     thread->ticks_remaining = thread->time_slice_ticks;
     thread->ticks_total = 0;
+    /* Re-check state and atomically increment counts.  A concurrent kill could
+     * have zombied the owner while we were allocating the stack. */
+    spinlock_lock(&g_process_table_lock);
+    if (owner->state == PROCESS_STATE_UNUSED || owner->state == PROCESS_STATE_ZOMBIE || owner->exiting) {
+        spinlock_unlock(&g_process_table_lock);
+        thread_reap(tid);
+        return -1;
+    }
     owner->thread_count++;
     owner->live_thread_count++;
+    spinlock_unlock(&g_process_table_lock);
     ready_queue_enqueue(thread);
     *out_tid = tid;
     return 0;
@@ -1345,9 +1358,12 @@ process_thread_spawn_user_internal(uint32_t owner_pid,
     if (!owner || !out_tid || entry_rip == 0 || user_stack_top == 0) {
         return -1;
     }
+    spinlock_lock(&g_process_table_lock);
     if (owner->state == PROCESS_STATE_UNUSED || owner->state == PROCESS_STATE_ZOMBIE || owner->exiting) {
+        spinlock_unlock(&g_process_table_lock);
         return -1;
     }
+    spinlock_unlock(&g_process_table_lock);
     if ((user_stack_top & 0xFULL) != 0) {
         user_stack_top &= ~0xFULL;
     }
@@ -1383,15 +1399,25 @@ process_thread_spawn_user_internal(uint32_t owner_pid,
     thread->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
     thread->ticks_remaining = thread->time_slice_ticks;
     thread->ticks_total = 0;
+    /* Re-check state and atomically increment counts. */
+    spinlock_lock(&g_process_table_lock);
+    if (owner->state == PROCESS_STATE_UNUSED || owner->state == PROCESS_STATE_ZOMBIE || owner->exiting) {
+        spinlock_unlock(&g_process_table_lock);
+        thread_reap(tid);
+        return -1;
+    }
     owner->thread_count++;
     owner->live_thread_count++;
+    spinlock_unlock(&g_process_table_lock);
     if (process_wake_thread(tid) == 0) {
+        spinlock_lock(&g_process_table_lock);
         if (owner->thread_count > 0) {
             owner->thread_count--;
         }
         if (owner->live_thread_count > 0) {
             owner->live_thread_count--;
         }
+        spinlock_unlock(&g_process_table_lock);
         thread_reap(tid);
         return -1;
     }

@@ -894,6 +894,19 @@ typedef struct {
     const uint8_t *kernel_ptr;
 } mm_copy_to_user_args_t;
 
+/* Called on the dedicated copy-stack to safely read from a user address space.
+ *
+ * The copy must be chunked through a stack-allocated bounce buffer because
+ * `dst` is a kernel pointer that is NOT mapped in the user page table.
+ * Per iteration:
+ *   1. Switch CR3 to the user page table (user_cur becomes accessible).
+ *   2. memcpy into bounce[] — a local stack buffer that IS in both maps.
+ *   3. Switch CR3 back to the previous kernel root immediately.
+ *   4. memcpy from bounce[] into the kernel dst — now under kernel tables.
+ *
+ * Chunks are 256 bytes to keep the bounce buffer small (stack space is
+ * limited on the copy-stack) while amortising the two CR3 switches per
+ * iteration over a reasonable number of bytes. */
 static int
 mm_copy_from_user_impl(void *opaque)
 {

@@ -837,6 +837,14 @@ query_module_meta_by_path(const char *path, uint32_t source, int32_t *out_index)
     return (*out_index >= 0) ? 0 : -1;
 }
 
+/* Unpack a PCI device announcement from four IPC args into a registry record.
+ *
+ * Bit layout (agreed with pci_bus service sender):
+ *   arg0 [31:24]=bus  [23:16]=device  [15:8]=function  [7:0]=class_code
+ *   arg1 [31:24]=subclass  [23:16]=prog_if  [15:0]=vendor_id
+ *   arg2 [31:16]=io_port_base  [15:0]=device_id
+ *   arg3 [15:8]=irq_hint  [7:0]=mmio_hint
+ */
 static void
 registry_add_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3)
 {
@@ -962,6 +970,16 @@ queue_acpi_match_rule_spawns(void)
     }
 }
 
+/* Evaluate all spawn rules in priority order and arm the first pending one.
+ *
+ * Only one spawn is in-flight at a time (rule_spawn_pending gate).  Priority:
+ *   1. always_spawn  — unconditional; queued at startup by queue_always_spawn_rules
+ *   2. pci_match     — first unspawned device/rule pair
+ *   3. acpi_match    — first unspawned ACPI match
+ *   4. block_fs      — filesystem drivers for known block devices
+ *
+ * Callers re-invoke after each spawn completes so lower-priority rules are
+ * eventually processed without starving higher-priority ones. */
 static void
 queue_block_fs_rule_spawns(void)
 {
@@ -1037,6 +1055,16 @@ queue_block_fs_rules_for_known_devices(void)
     queue_block_fs_rule_spawns();
 }
 
+/* Unpack a block-device announcement from IPC args into the block registry.
+ *
+ * Bit layout (agreed with ATA/block-bus sender):
+ *   arg0 [7:0]=unit (ATA drive index: 0=primary-master, 1=primary-slave, …)
+ *   arg1        =sector_count (full 32-bit LBA28 capacity)
+ *   arg2 [1]=active_service  [0]=present
+ *   arg3        unused (reserved, caller passes 0)
+ *
+ * Upserts by unit: updates an existing record if the unit is already known,
+ * otherwise appends a new entry. */
 static void
 registry_add_block_from_ipc(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3)
 {

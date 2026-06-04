@@ -205,16 +205,30 @@ ensure_table(uint64_t *entry, uint64_t *out_phys, uint64_t table_flags)
     return 0;
 }
 
+/* Ensure that a Page Directory entry points to a valid 4 KiB Page Table.
+ *
+ * Three cases:
+ *   1. Entry is absent (not present): allocate a new PT and install it.
+ *   2. Entry already points to a PT (no PT_FLAG_LARGE_PAGE): already fine;
+ *      merge any missing table_flags into the existing entry and return.
+ *   3. Entry covers a 2 MiB large page (PT_FLAG_LARGE_PAGE set): the large
+ *      page must be "exploded" into 512 × 4 KiB PT entries so that a single
+ *      4 KiB page within the 2 MiB region can be remapped independently.
+ *      The decomposition preserves W and NX bits from the original large-page
+ *      entry so the new 4 KiB pages have the same access permissions. */
 static int
 ensure_pt_for_pd(uint64_t *pd_entry, uint64_t table_flags)
 {
     if (*pd_entry & PT_FLAG_PRESENT) {
         if ((*pd_entry & PT_FLAG_LARGE_PAGE) == 0) {
+            /* Case 2: PT already present; propagate any new flags. */
             if ((*pd_entry & table_flags) != table_flags) {
                 *pd_entry |= table_flags;
             }
             return 0;
         }
+        /* Case 3: explode 2 MiB large page into 512 × 4 KiB entries.
+         * base = physical address of the start of the 2 MiB region. */
         uint64_t base = *pd_entry & ~0x1FFFFFULL;
         uint64_t pt_phys = 0;
         if (alloc_table(&pt_phys) != 0) {
@@ -232,10 +246,11 @@ ensure_pt_for_pd(uint64_t *pd_entry, uint64_t table_flags)
         for (uint32_t i = 0; i < ENTRIES_PER_TABLE; ++i) {
             pt[i] = (base + ((uint64_t)i * PAGE_SIZE_4K)) | flags;
         }
-        *pd_entry = pt_phys | flags;
+        *pd_entry = pt_phys | flags; /* replace 2 MiB PD entry with new PT */
         return 0;
     }
 
+    /* Case 1: entry absent — allocate a fresh PT. */
     uint64_t pt_phys = 0;
     if (alloc_table(&pt_phys) != 0) {
         return -1;

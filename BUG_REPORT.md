@@ -466,6 +466,16 @@ In specific preemption timing, a thread can be silently dropped from the run que
 >   mid-iteration, producing torn reads of tid/state/ctx.  Fix: add `thread_get_nolock` static
 >   helper; public `thread_get` and the three other functions now hold the lock during the scan.
 >   Internal callers that already hold the lock use `thread_get_nolock`.  See SMP-CRIT-02 below.
+>
+> **Newly fixed (2026-06-04):**
+> - SMP-CRIT-03 (process table reads without lock): `process_find_by_pid` and
+>   `process_find_by_context_internal` read `g_processes[]` without `g_process_table_lock`.
+>   Concurrent `process_reap → process_reset_slot` (under the lock) can zero a slot mid-read.
+>   Fix: add `process_find_by_pid_nolock` / `process_find_by_context_internal_nolock` for callers
+>   already holding the lock; public variants acquire the lock.  `process_spawn_as_impl` calls
+>   `ready_queue_enqueue_with_proc` (which takes the already-resolved process pointer and acquires
+>   only `g_ready_queue_lock`) while holding `g_process_table_lock`, preserving the
+>   `g_process_table_lock → g_ready_queue_lock` order with no race window.  See SMP-CRIT-03 below.
 
 ### Lock Hierarchy (required, not yet enforced)
 
@@ -530,19 +540,27 @@ exists.  The documented lock hierarchy has been updated to reflect the actual or
 
 ---
 
-### SMP-CRIT-03 — Process table read without lock in scheduler hot path
+### SMP-CRIT-03 ✅ FIXED — Process table read without lock in scheduler hot path
 
-**File:** `src/kernel/process.c:744–1855`
+**File:** `src/kernel/process.c`
 
-`process_find_by_pid`, `process_find_by_context_internal`,
-`process_schedule_once_impl`, `process_kill`, `process_wait`,
-`process_wake_by_context` all read `g_processes[]` without
-`g_process_table_lock`.  Concurrent `process_reap` can reset a slot mid-read
-→ corrupted context restore or page fault.
+`process_find_by_pid` and `process_find_by_context_internal` read `g_processes[]`
+without `g_process_table_lock`.  Concurrent `process_reap → process_reset_slot`
+(under the lock) can zero a slot mid-read: the caller may see a stale `pid == target`
+match, then read garbage `state`/`ctx` fields from a slot being simultaneously cleared,
+leading to corrupted context restore or use-after-free.
 
-**Fix:** Hold `g_process_table_lock` for all table reads.  The scheduler must
-not hold it across a context switch — copy needed fields to locals, release
-lock, then switch.
+**Fix:** Added `process_find_by_pid_nolock` and `process_find_by_context_internal_nolock`
+(static, assume lock held) as internal helpers.  The public `process_find_by_pid` and
+`process_find_by_context_internal` now acquire `g_process_table_lock` around the scan.
+`process_spawn_as_impl` previously called `ready_queue_enqueue` while holding the lock,
+but `ready_queue_enqueue` called `process_owner_for_thread → process_find_by_pid`, which
+would re-acquire `g_process_table_lock` (deadlock).  The workaround of moving the enqueue
+after the unlock introduced a race window.  Final fix: added `ready_queue_enqueue_with_proc`
+that accepts an already-resolved `process_t *` and acquires only `g_ready_queue_lock`.
+`process_spawn_as_impl` calls this while still holding `g_process_table_lock`, preserving
+the `g_process_table_lock → g_ready_queue_lock` lock order (the original nesting) with no
+race window.
 
 ---
 
@@ -858,6 +876,7 @@ The table below records what was done and why.
 | `src/kernel/process.c` | Removed dead `g_in_context_switch` global; wired `cpu_local()->in_context_switch` guard in `process_preempt_from_irq` (SMP-CRIT-01) |
 | `src/kernel/arch/x86_64/context_switch.S` | All 7 set/clear sites use GS-relative `.set CPU_LOCAL_IN_CONTEXT_SWITCH_OFFSET, 17` writes; `push/pop %r9` at `iretq` sites to preserve user register (SMP-CRIT-01) |
 | `src/kernel/thread.c` | `thread_get_nolock` static helper; `thread_get`, `thread_find_main_for_pid`, `thread_owner_tid_at`, `thread_mark_owner_exited` now hold `g_thread_table_lock` during scan; internal locked callers use `thread_get_nolock` (SMP-CRIT-02) |
+| `src/kernel/process.c` | `process_find_by_pid_nolock` / `process_find_by_context_internal_nolock` static helpers; public variants acquire `g_process_table_lock`; `ready_queue_enqueue_with_proc` eliminates re-entrant lock in spawn path (SMP-CRIT-03) |
 
 ### Previously Reverted / Removed
 

@@ -528,19 +528,18 @@ process_sched_ctx_for_thread(process_t *proc, thread_t *thread)
     return &thread->ctx;
 }
 
-static int ready_queue_enqueue(thread_t *thread) {
-    if (!thread) {
+/* Enqueue thread into the ready queue given an already-resolved owner process.
+ * Callers that already hold g_process_table_lock use this to avoid a recursive
+ * lock acquisition: the caller performs the process lookup before acquiring
+ * g_ready_queue_lock, preserving the lock order
+ * g_process_table_lock → g_ready_queue_lock. */
+static int ready_queue_enqueue_with_proc(thread_t *thread, process_t *proc) {
+    if (!thread || !proc) {
         return 0;
     }
     if (thread->state != THREAD_STATE_READY) {
         process_sched_invariant_fail("enqueue non-ready thread", thread->tid, thread->state);
     }
-    process_t *proc = process_owner_for_thread(thread);
-    if (!proc) {
-        return 0;
-    }
-    /* The idle task is scheduled as a fallback only and never participates in
-     * the normal ready queue rotation. */
     if (proc->is_idle) {
         return 0;
     }
@@ -567,6 +566,17 @@ static int ready_queue_enqueue(thread_t *thread) {
     spinlock_unlock(&g_ready_queue_lock);
 #endif
     return 0;
+}
+
+static int ready_queue_enqueue(thread_t *thread) {
+    if (!thread) {
+        return 0;
+    }
+    process_t *proc = process_owner_for_thread(thread);
+    if (!proc) {
+        return 0;
+    }
+    return ready_queue_enqueue_with_proc(thread, proc);
 }
 
 static thread_t *ready_queue_dequeue(void) {
@@ -738,7 +748,7 @@ static process_t *process_find_slot(void) {
     return 0;
 }
 
-static process_t *process_find_by_pid(uint32_t pid) {
+static process_t *process_find_by_pid_nolock(uint32_t pid) {
     if (pid == 0) {
         return 0;
     }
@@ -753,7 +763,17 @@ static process_t *process_find_by_pid(uint32_t pid) {
     return 0;
 }
 
-static process_t *process_find_by_context_internal(uint32_t context_id) {
+static process_t *process_find_by_pid(uint32_t pid) {
+    if (pid == 0) {
+        return 0;
+    }
+    spinlock_lock(&g_process_table_lock);
+    process_t *proc = process_find_by_pid_nolock(pid);
+    spinlock_unlock(&g_process_table_lock);
+    return proc;
+}
+
+static process_t *process_find_by_context_internal_nolock(uint32_t context_id) {
     if (context_id == 0) {
         return 0;
     }
@@ -765,6 +785,16 @@ static process_t *process_find_by_context_internal(uint32_t context_id) {
         }
     }
     return 0;
+}
+
+static process_t *process_find_by_context_internal(uint32_t context_id) {
+    if (context_id == 0) {
+        return 0;
+    }
+    spinlock_lock(&g_process_table_lock);
+    process_t *proc = process_find_by_context_internal_nolock(context_id);
+    spinlock_unlock(&g_process_table_lock);
+    return proc;
 }
 
 static void process_wake_waiters(uint32_t target_pid) {
@@ -1086,7 +1116,15 @@ process_spawn_as_impl(uint32_t parent_pid,
         trace_do(serial_write_hex64(slot->stack_top));
     }
     if (!park) {
-        ready_queue_enqueue(process_main_thread(slot));
+        thread_t *main_thread = process_main_thread(slot);
+        if (main_thread && main_thread->state == THREAD_STATE_READY) {
+            /* Enqueue while still holding g_process_table_lock.  We call
+             * ready_queue_enqueue_with_proc (which acquires g_ready_queue_lock)
+             * rather than ready_queue_enqueue (which would re-acquire
+             * g_process_table_lock via process_owner_for_thread).  This is safe:
+             * g_process_table_lock → g_ready_queue_lock is the established order. */
+            ready_queue_enqueue_with_proc(main_thread, slot);
+        }
     }
     *out_pid = pid;
     spinlock_unlock(&g_process_table_lock);

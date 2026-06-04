@@ -444,6 +444,12 @@ In specific preemption timing, a thread can be silently dropped from the run que
 >   spinlock), SMP-HIGH-04 (thread_wake_if_blocked atomic), SMP-MED-02 (block before ep→lock
 >   release), SMP-MED-06 (blocking_transition acquire/release), SMP-CRIT-04 (PROCESS_STATE_REAPING).
 > - All fixes from the "KEEP — Correct Fixes" table below are now committed.
+>
+> **Newly fixed (2026-06-04, commit `d21190cd`):**
+> - SMP-HIGH-07 (spawn-time capability race): process enqueued into scheduler before
+>   `pm_apply_spawn_caps` ran.  ATA ran without I/O-port capability, timed out, left disks as
+>   `present=0`.  All PM spawn handlers now use `_parked` variants and call `process_unpark_pid`
+>   after full setup.  See SMP-HIGH-07 below.
 
 ### Lock Hierarchy (required, not yet enforced)
 
@@ -621,6 +627,30 @@ A concurrent kill can zombie the owner between the check and the increment.
 
 ---
 
+### SMP-HIGH-07 ✅ FIXED — Spawn-time capability race: process enqueued before caps applied
+
+**File:** `src/kernel/process_manager_spawn.c`, `src/kernel/process.c`
+
+`pm_spawn_module` and `pm_spawn_from_buffer` called `process_spawn_as_impl`
+which unconditionally enqueued the new process's thread into the ready queue
+before returning.  On SMP systems another CPU could schedule the child
+immediately — before the calling spawn handler had called `pm_apply_spawn_caps`.
+For drivers requiring I/O port access (e.g. ATA at 0x1F0–0x1F7),
+`policy_authorize(POLICY_ACTION_IO_PORT)` found no spawn profile and silently
+returned -1.  `ata_identify_unit` timed out with `present=0`, leaving the
+filesystem unmounted, blocking boot-rule loading and preventing `fbpci` from
+spawning.  Failure was intermittent because it depended on which CPU won the
+scheduling race.
+
+**Fix:** Added a `park` flag to `process_spawn_as_impl`; all PM spawn paths
+now call `_parked` variants, which skip `ready_queue_enqueue`.  Each handler
+calls `process_unpark_pid(pid)` explicitly after all caps and CWD setup are
+complete.  For sync handlers, unpark happens after `g_pm.spawn` state is armed
+so that `pm_poll_sync_spawn` cannot race with a notify-ready arriving before
+the sync slot is set up.
+
+---
+
 ### SMP-MED-01 — No enforced lock hierarchy → latent deadlocks
 
 As SMP-CRIT fixes land, new lock sites will be added.  Without a documented
@@ -787,6 +817,8 @@ The table below records what was done and why.
 | `src/kernel/thread.c` | `thread_wake_if_blocked` atomic BLOCKED→READY under `g_thread_table_lock` (SMP-HIGH-04) |
 | `src/kernel/ipc.c` | `blocking_transition` `__ATOMIC_RELEASE` store (SMP-MED-06) |
 | `src/kernel/include/thread.h` | `blocking_transition` field declared; `thread_wake_if_blocked` prototype |
+| `src/kernel/process.c`, `src/kernel/include/process.h` | `process_spawn_as_parked`, `process_spawn_as_ready_gated_parked`, `process_unpark_pid` — park flag in `process_spawn_as_impl` to prevent SMP cap-race (SMP-HIGH-07) |
+| `src/kernel/process_manager_spawn.c` | All spawn handlers use `_parked` variants; each calls `process_unpark_pid` after caps/CWD applied; temp `[dbg-spawn]` logs removed |
 
 ### Previously Reverted / Removed
 

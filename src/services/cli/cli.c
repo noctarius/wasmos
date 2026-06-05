@@ -615,9 +615,11 @@ console_write(const char *s)
         uint32_t pos = 0;
         while (pos < len) {
             int32_t args[4] = {0, 0, 0, 0};
-            for (int i = 0; i < 4 && pos < len; ++i, ++pos) {
+            int count = 0;
+            for (int i = 0; i < 4 && pos < len; ++i, ++pos, ++count) {
                 args[i] = (int32_t)(uint8_t)s[pos];
             }
+            args[0] |= (count << 24);
             (void)wasmos_sys_ipc_send_retry(g_vt_endpoint,
                                             g_vt_client_endpoint,
                                             VT_IPC_WRITE_REQ,

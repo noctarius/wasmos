@@ -545,10 +545,12 @@ wasm_console_write_vt_mirror(const char *ptr, int32_t len)
     for (int32_t offset = 0; offset < len; ) {
         ipc_message_t msg;
         int32_t chunk[4] = { 0, 0, 0, 0 };
+        int count = 0;
 
-        for (int i = 0; i < 4 && offset < len; ++i, ++offset) {
+        for (int i = 0; i < 4 && offset < len; ++i, ++offset, ++count) {
             chunk[i] = (int32_t)(uint8_t)ptr[offset];
         }
+        chunk[0] |= (count << 24);
 
         msg.type = VT_IPC_WRITE_REQ;
         msg.source = IPC_ENDPOINT_NONE;

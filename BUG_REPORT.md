@@ -271,7 +271,7 @@ Every damage rect is placed `CHROME_HEIGHT` pixels too high on screen. The actua
 
 When `dm_ipc_call` returns -1, `g_dm.request_id` is not incremented. The next call reuses the same ID. A stale late reply matches the new request and the caller accepts wrong data.
 
-### M-20 — `src/services/fs_init/fs_init.c:128-134` — Out-of-bounds read in `initfs_normalize_input_path`
+### M-20 ✅ FIXED — `src/services/fs_init/fs_init.c:128-134` — Out-of-bounds read in `initfs_normalize_input_path`
 
 `in[ri+1]` through `in[ri+4]` are accessed without checking that `in` has at least `ri+5` valid bytes. A short input string causes reads past the null terminator.
 

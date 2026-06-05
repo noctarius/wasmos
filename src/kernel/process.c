@@ -2058,6 +2058,17 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     if (!frame) {
         return 0;
     }
+    /* Check ring privilege first, before any scheduler/context-switch guards.
+     * Ring-0 code (kernel workers, native drivers, scheduler itself) is never
+     * preempted via IRQ.  Always clear the reschedule request here so that
+     * stale need_resched flags do not accumulate while in_scheduler=1 (e.g.
+     * when process_run_worker_on_stack runs a kernel worker thread without
+     * clearing in_scheduler, which process_trampoline set on the previous
+     * yield). */
+    if ((frame->cs & 0x3u) == 0x0u) {
+        process_clear_resched();
+        return 0;
+    }
     if (cpu_local()->in_context_switch) {
         return 0;
     }
@@ -2069,15 +2080,6 @@ int process_preempt_from_irq(irq_frame_t *frame) {
         return 0;
     }
     if (!process_should_resched()) {
-        return 0;
-    }
-    /* Check ring privilege before testing preempt_is_enabled.  Ring-0
-     * processes (native drivers, kernel workers) can never be preempted via
-     * IRQ regardless of the preempt nesting count.  Clear the reschedule
-     * request immediately to prevent the watchdog from reporting a false
-     * stall on cooperative-yield-only processes. */
-    if ((frame->cs & 0x3u) == 0x0u) {
-        process_clear_resched();
         return 0;
     }
     if (!preempt_is_enabled()) {

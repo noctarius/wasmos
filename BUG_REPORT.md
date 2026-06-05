@@ -7,9 +7,11 @@
 
 ## Critical Bugs
 
-### N-C-1 — `src/kernel/memory.c:724,729-730` — Double-free of physical pages in `mm_shared_unmap`
+### ~~N-C-1 — `src/kernel/memory.c:724,729-730` — Double-free of physical pages in `mm_shared_unmap`~~ **FIXED**
 
-`mm_shared_unmap` calls `pfa_free_pages(region->base, region->pages)` unconditionally at line 724 to "unpin" the pages. It then decrements `region->refcount` (line 729) and calls `mm_shared_free_if_unused` (line 730), which calls `pfa_free_pages` a second time when `refcount` reaches 0. Any caller that holds the last reference triggers a double-free, corrupting the physical frame allocator.
+~~`mm_shared_unmap` calls `pfa_free_pages(region->base, region->pages)` unconditionally at line 724 to "unpin" the pages. It then decrements `region->refcount` (line 729) and calls `mm_shared_free_if_unused` (line 730), which calls `pfa_free_pages` a second time when `refcount` reaches 0. Any caller that holds the last reference triggers a double-free, corrupting the physical frame allocator.~~
+
+Fixed in commit `bfc134d1`: removed the unconditional `pfa_free_pages` call; `mm_shared_free_if_unused` is the sole owner of the physical free when `refcount` reaches zero.
 
 ---
 

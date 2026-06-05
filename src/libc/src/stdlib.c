@@ -223,7 +223,6 @@ strtol(const char *s, char **endptr, int base)
 {
     const char *p = s;
     int negative = 0;
-    long value = 0;
     int consumed = 0;
 
     if (!p) {
@@ -263,13 +262,30 @@ strtol(const char *s, char **endptr, int base)
         return 0;
     }
 
+    unsigned long uvalue = 0;
+    int overflow = 0;
+    /* LONG_MAX = 0x7FFF...F, LONG_MIN magnitude = 0x8000...0 */
+    unsigned long pos_limit = (unsigned long)(-1L) >> 1;          /* LONG_MAX  */
+    unsigned long neg_limit = pos_limit + 1u;                      /* LONG_MIN magnitude */
+
     while (*p) {
         int digit = digit_value(*p);
         if (digit < 0 || digit >= base) {
             break;
         }
-        value = (value * (long)base) + (long)digit;
         consumed = 1;
+        if (!overflow) {
+            unsigned long ubase = (unsigned long)base;
+            if (uvalue > ((unsigned long)(-1L) - (unsigned long)digit) / ubase) {
+                overflow = 1;
+            } else {
+                uvalue = uvalue * ubase + (unsigned long)digit;
+                unsigned long limit = negative ? neg_limit : pos_limit;
+                if (uvalue > limit) {
+                    overflow = 1;
+                }
+            }
+        }
         p++;
     }
 
@@ -277,7 +293,10 @@ strtol(const char *s, char **endptr, int base)
         *endptr = (char *)(consumed ? p : s);
     }
 
-    return negative ? -value : value;
+    if (overflow) {
+        return negative ? (long)(~pos_limit) : (long)pos_limit;
+    }
+    return negative ? -(long)uvalue : (long)uvalue;
 }
 
 int

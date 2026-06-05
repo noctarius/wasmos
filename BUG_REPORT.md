@@ -219,7 +219,7 @@ Binary data with embedded NUL bytes is silently discarded.
 
 `sizeof(heap_block_t) + payload_size` overflows `size_t` before `heap_align` is called. The check `total > 0xFFFFFFFF` only tests the aligned result.
 
-### M-8 — `src/libc/src/stdlib.c:267` — `strtol` has no overflow detection
+### M-8 ✅ FIXED — `src/libc/src/stdlib.c:267` — `strtol` has no overflow detection
 
 Overflow wraps silently without setting `errno`, giving wrong results for strings like `"99999999999999999999"`.
 

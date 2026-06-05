@@ -1514,12 +1514,10 @@ initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2, int32_t arg3)
              * and revisit once a reliable repro sequence exists. */
             vt_tty_t *tty = &g_ttys[(uint32_t)tty_index];
             int32_t args[4] = { msg.arg0, msg.arg1, msg.arg2, msg.arg3 };
-            for (int i = 0; i < 4; ++i) {
-                uint8_t b = (uint8_t)(args[i] & 0xFF);
-                if (b == 0) {
-                    break;
-                }
-                vt_process_byte((uint32_t)tty_index, tty, b);
+            int count = (args[0] >> 24) & 0xF;
+            args[0] &= 0xFF;
+            for (int i = 0; i < count; ++i) {
+                vt_process_byte((uint32_t)tty_index, tty, (uint8_t)(args[i] & 0xFF));
             }
             break;
         }

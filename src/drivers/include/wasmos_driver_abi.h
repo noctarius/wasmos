@@ -186,7 +186,7 @@ enum {
 };
 
 enum {
-    VT_IPC_WRITE_REQ    = 0x700,
+    VT_IPC_WRITE_REQ    = 0x700, /* arg0[27:24]=byte_count(1-4), arg0[7:0]..arg3[7:0]=bytes */
     VT_IPC_READ_REQ     = 0x701,
     VT_IPC_SET_ATTR_REQ = 0x702,
     VT_IPC_SWITCH_TTY   = 0x703,

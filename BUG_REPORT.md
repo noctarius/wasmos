@@ -275,7 +275,7 @@ When `dm_ipc_call` returns -1, `g_dm.request_id` is not incremented. The next ca
 
 `in[ri+1]` through `in[ri+4]` are accessed without checking that `in` has at least `ri+5` valid bytes. A short input string causes reads past the null terminator.
 
-### M-21 — `src/services/vt/vt_main.c:1478` — VT_IPC_WRITE_REQ stops at first NUL byte
+### M-21 ✅ FIXED — `src/services/vt/vt_main.c:1478` — VT_IPC_WRITE_REQ stops at first NUL byte
 
 ```c
 if (b == 0) { break; }
@@ -362,7 +362,7 @@ Absolute paths longer than 31 characters are truncated without error.
 ### L-10 — `src/boot/boot.c:640` — `read_file_alloc`: `info->FileSize` may be uninitialized if firmware sets `info_size` to 0 after GetInfo
 
 Minor robustness issue on buggy firmware.
-
+ 
 ### L-11 — `src/libc/src/unistd.c:463, 489` — `fread`/`fwrite` multiplication overflow not checked
 
 `size * nmemb` can wrap for large values, causing under-reads/writes silently.

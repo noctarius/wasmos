@@ -247,7 +247,7 @@ If the kernel has more than 16 `PT_LOAD` segments, the overflow is ignored. The 
 
 The old `g_raster_scratch_shmem_id` is overwritten without calling `shmem_destroy`. Every upsizing call permanently leaks a shmem handle.
 
-### M-15 — `src/drivers/framebuffer/framebuffer_native.c:113` — Ring buffer `read_pos` grows unboundedly
+### M-15 ✅ FIXED — `src/drivers/framebuffer/framebuffer_native.c:113` — Ring buffer `read_pos` grows unboundedly
 
 `ring->read_pos = rp` stores the raw non-modded counter. Eventually `read_pos` wraps past `UINT32_MAX` and the ring appears permanently non-empty, reading garbage memory beyond the `data` array.
 

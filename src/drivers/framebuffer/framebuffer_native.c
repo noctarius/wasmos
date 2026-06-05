@@ -109,6 +109,10 @@ drain_console_ring(console_ring_t *ring, uint32_t budget)
     uint32_t wp = ring->write_pos;
     int drained = 0;
     uint32_t n = 0;
+    /* If producer has lapped consumer, snap forward to oldest valid data. */
+    if ((uint32_t)(wp - rp) > cap) {
+        rp = wp - cap;
+    }
     while (rp != wp && n < budget) {
         fbtext_put_char(&g_state, ring->data[rp % cap]);
         rp++;

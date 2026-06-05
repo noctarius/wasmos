@@ -120,6 +120,16 @@ copy_path_from_fs_buffer(int32_t path_len, char *out, uint32_t out_len)
 }
 
 static int
+initfs_has_init_prefix(const char *s)
+{
+    return s[0] && (s[0] == 'i' || s[0] == 'I') &&
+           s[1] && (s[1] == 'n' || s[1] == 'N') &&
+           s[2] && (s[2] == 'i' || s[2] == 'I') &&
+           s[3] && (s[3] == 't' || s[3] == 'T') &&
+           s[4] == '/';
+}
+
+static int
 initfs_normalize_input_path(const char *in, char *out, uint32_t out_len)
 {
     uint32_t ri = 0;
@@ -130,11 +140,7 @@ initfs_normalize_input_path(const char *in, char *out, uint32_t out_len)
     while (in[ri] == '/') {
         ri++;
     }
-    if ((in[ri] == 'i' || in[ri] == 'I') &&
-        (in[ri + 1] == 'n' || in[ri + 1] == 'N') &&
-        (in[ri + 2] == 'i' || in[ri + 2] == 'I') &&
-        (in[ri + 3] == 't' || in[ri + 3] == 'T') &&
-        in[ri + 4] == '/') {
+    if (initfs_has_init_prefix(in + ri)) {
         ri += 5;
     }
     while (in[ri] != '\0' && wi + 1 < out_len) {
@@ -154,11 +160,7 @@ initfs_build_absolute_path(int32_t cwd_dir, const char *input, char *out, uint32
     }
     out[0] = '\0';
     if (input[0] == '/' ||
-        ((input[0] == 'i' || input[0] == 'I') &&
-         (input[1] == 'n' || input[1] == 'N') &&
-         (input[2] == 'i' || input[2] == 'I') &&
-         (input[3] == 't' || input[3] == 'T') &&
-         input[4] == '/') ||
+        initfs_has_init_prefix(input) ||
         strcasecmp(input, "init") == 0) {
         return initfs_normalize_input_path(input, out, out_len);
     }

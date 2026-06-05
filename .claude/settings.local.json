@@ -4,7 +4,13 @@
       "Bash(ls -la /Volumes/git/wasmos/src/kernel/*.c)",
       "Bash(grep -r \"preempt_disable\\\\|preempt_enable\" /Volumes/git/wasmos/src/kernel/*.c -n)",
       "Bash(file /Volumes/git/wasmos/scripts/*.py)",
-      "Bash(grep -n \"early_log\\\\|ring_buf\\\\|log_buf\\\\|console_buf\" /Volumes/git/wasmos/src/kernel/*.c /Volumes/git/wasmos/src/kernel/include/*.h)"
+      "Bash(grep -n \"early_log\\\\|ring_buf\\\\|log_buf\\\\|console_buf\" /Volumes/git/wasmos/src/kernel/*.c /Volumes/git/wasmos/src/kernel/include/*.h)",
+      "Bash(python3 *)",
+      "Bash(git -C /Volumes/git/wasmos add src/libc/assemblyscript/wasmos.ts src/libc/zig/wasmos.zig BUG_REPORT.md)",
+      "Bash(git -C /Volumes/git/wasmos commit -m ' *)",
+      "Bash(cmake --build build --target run-qemu-test)",
+      "Bash(grep -v \"\\\\.o$\")",
+      "Bash(git *)"
     ]
   }
 }

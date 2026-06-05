@@ -227,7 +227,7 @@ Overflow wraps silently without setting `errno`, giving wrong results for string
 
 `buffer->pos + 1 < buffer->size` prevents writing to `buffer[size-2]`. The NUL is written at `size-1` separately, meaning the penultimate position is never written — one character lost on a full buffer.
 
-### M-10 — `src/libc/src/stdio.c:200-201` — `%lld` and `%zu` not handled
+### M-10 ✅ FIXED — `src/libc/src/stdio.c:200-201` — `%lld` and `%zu` not handled
 
 `%lld` is silently treated as `%ld` and `%zu` as `%d`, producing incorrect output when `long long` or `size_t` values are passed.
 

@@ -1354,6 +1354,14 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/test_user_mutex.c
           -o ${BUILD_DIR}/test_user_mutex
   COMMAND ${BUILD_DIR}/test_user_mutex
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${LIBC_DIR}/include
+          -I${LIBC_DIR}/src
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_libc_stdio.c
+          ${LIBC_DIR}/src/stdio.c
+          ${LIBC_DIR}/src/string.c
+          -o ${BUILD_DIR}/test_libc_stdio
+  COMMAND ${BUILD_DIR}/test_libc_stdio
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Running host kernel unit tests"
   VERBATIM

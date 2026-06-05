@@ -207,6 +207,13 @@ vformat(stdio_emit_fn emit, void *ctx, const char *format, va_list args)
         if (*format == 'l') {
             long_flag = 1;
             format++;
+            if (*format == 'l') {
+                long_flag = 2;
+                format++;
+            }
+        } else if (*format == 'z') {
+            long_flag = 1;
+            format++;
         }
 
         switch (*format) {
@@ -230,14 +237,18 @@ vformat(stdio_emit_fn emit, void *ctx, const char *format, va_list args)
             }
             case 'd':
             case 'i':
-                if (long_flag) {
+                if (long_flag == 2) {
+                    format_signed(emit, ctx, (long)va_arg(ap, long long), width, pad_char);
+                } else if (long_flag) {
                     format_signed(emit, ctx, va_arg(ap, long), width, pad_char);
                 } else {
                     format_signed(emit, ctx, (long)va_arg(ap, int), width, pad_char);
                 }
                 break;
             case 'u':
-                if (long_flag) {
+                if (long_flag == 2) {
+                    format_unsigned(emit, ctx, (unsigned long)va_arg(ap, unsigned long long), 10u, 0, width, pad_char);
+                } else if (long_flag) {
                     format_unsigned(emit, ctx, va_arg(ap, unsigned long), 10u, 0, width, pad_char);
                 } else {
                     format_unsigned(emit, ctx, (unsigned long)va_arg(ap, unsigned int), 10u, 0, width, pad_char);
@@ -245,7 +256,15 @@ vformat(stdio_emit_fn emit, void *ctx, const char *format, va_list args)
                 break;
             case 'x':
             case 'X':
-                if (long_flag) {
+                if (long_flag == 2) {
+                    format_unsigned(emit,
+                                    ctx,
+                                    (unsigned long)va_arg(ap, unsigned long long),
+                                    16u,
+                                    *format == 'X',
+                                    width,
+                                    pad_char);
+                } else if (long_flag) {
                     format_unsigned(emit,
                                     ctx,
                                     va_arg(ap, unsigned long),

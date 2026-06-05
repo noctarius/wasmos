@@ -1828,9 +1828,13 @@ static int process_schedule_once_impl(void) {
         process_sched_invariant_fail("zero time slice", thread->tid, 0);
     }
     process_context_t *run_ctx = process_sched_ctx_for_thread(proc, thread);
-    if (run_ctx) {
-        proc->ctx = *run_ctx;
-    }
+    /* Do NOT copy run_ctx into proc->ctx here.  For non-worker threads
+     * run_ctx == &thread->ctx.  Copying it would set proc->ctx.rsp to a
+     * non-zero value, which the kernel-worker resume check (proc->ctx.rsp != 0
+     * below) interprets as "this worker has a saved context to resume" —
+     * causing the worker to be switched into the non-worker's stack/context
+     * and corrupting both. proc->ctx is populated by workers themselves when
+     * they yield via process_yield(); root_table is set just below. */
     process_validate_context(proc, "schedule");
     critical_section_enter();
     cpu_local()->current_pid = proc->pid;

@@ -235,7 +235,7 @@ Overflow wraps silently without setting `errno`, giving wrong results for string
 
 Every early-return error path in `read_file_alloc` leaks the `info` pool allocation or the `buf` allocation, and never calls `file->Close`. EFI boot-time resource exhaustion on repeated load failures.
 
-### M-12 — `src/boot/boot.c:769,807-811` — ELF loader does not bounds-check `e_phoff` or `p_offset + p_filesz`
+### M-12 ✅ FIXED — `src/boot/boot.c:769,807-811` — ELF loader does not bounds-check `e_phoff` or `p_offset + p_filesz`
 
 A malformed kernel ELF with `e_phoff` or `p_offset + p_filesz` beyond `kernel_size` causes an out-of-bounds read from the pool buffer.
 

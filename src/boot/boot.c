@@ -766,6 +766,11 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
     }
 
     uefi_log(system, "[boot] Loading PT_LOAD segments\n");
+    UINTN phdrs_end = (UINTN)ehdr->e_phoff + (UINTN)ehdr->e_phnum * sizeof(Elf64_Phdr);
+    if (ehdr->e_phoff >= kernel_size || phdrs_end > kernel_size) {
+        uefi_log(system, "[boot] ELF phdrs out of bounds\n");
+        return 1;
+    }
     Elf64_Phdr *phdrs = (Elf64_Phdr *)((UINT8 *)kernel_buf + ehdr->e_phoff);
     UINT64 alloc_bases[16];
     UINT64 alloc_pages[16];
@@ -810,6 +815,10 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
             alloc_count++;
         }
 
+        if (ph->p_offset >= kernel_size || ph->p_filesz > kernel_size - ph->p_offset) {
+            uefi_log(system, "[boot] ELF segment out of bounds\n");
+            return 1;
+        }
         void *segment_src = (UINT8 *)kernel_buf + ph->p_offset;
         void *segment_dst = (UINT8 *)(UINTN)dest + page_offset;
         memcpy8(segment_dst, segment_src, (UINTN)ph->p_filesz);

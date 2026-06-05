@@ -615,6 +615,9 @@ static EFI_STATUS read_file_alloc(EFI_BOOT_SERVICES *bs,
 
     EFI_STATUS status;
     EFI_FILE_PROTOCOL *file = 0;
+    EFI_FILE_INFO *info = 0;
+    void *buf = 0;
+
     status = root->Open(root, &file, path, EFI_FILE_MODE_READ, 0);
     if (EFI_ERROR(status)) {
         return status;
@@ -628,34 +631,42 @@ static EFI_STATUS read_file_alloc(EFI_BOOT_SERVICES *bs,
      */
     EFI_GUID file_info_guid = EFI_FILE_INFO_GUID;
     UINTN info_size = 0;
-    EFI_FILE_INFO *info = 0;
     status = file->GetInfo(file, &file_info_guid, &info_size, info);
     if (status == EFI_BUFFER_TOO_SMALL) {
         status = bs->AllocatePool(EFI_LOADER_DATA, info_size, (void **)&info);
         if (EFI_ERROR(status)) {
-            return status;
+            goto done;
         }
         status = file->GetInfo(file, &file_info_guid, &info_size, info);
     }
     if (EFI_ERROR(status)) {
-        return status;
+        goto done;
     }
 
     UINTN size = (UINTN)info->FileSize;
-    void *buf = 0;
     status = bs->AllocatePool(EFI_LOADER_DATA, size, &buf);
     if (EFI_ERROR(status)) {
-        return status;
+        goto done;
     }
 
     status = file->Read(file, &size, buf);
     if (EFI_ERROR(status)) {
-        return status;
+        goto done;
     }
 
     *out_buf = buf;
+    buf = 0;
     *out_size = size;
-    return EFI_SUCCESS;
+
+done:
+    if (buf) {
+        bs->FreePool(buf);
+    }
+    if (info) {
+        bs->FreePool(info);
+    }
+    file->Close(file);
+    return status;
 }
 
 static int

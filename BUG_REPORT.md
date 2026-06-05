@@ -231,7 +231,7 @@ Overflow wraps silently without setting `errno`, giving wrong results for string
 
 `%lld` is silently treated as `%ld` and `%zu` as `%d`, producing incorrect output when `long long` or `size_t` values are passed.
 
-### M-11 — `src/boot/boot.c:607-648` — EFI pool and file handle leaks on all error paths in `read_file_alloc`
+### M-11 ✅ FIXED — `src/boot/boot.c:607-648` — EFI pool and file handle leaks on all error paths in `read_file_alloc`
 
 Every early-return error path in `read_file_alloc` leaks the `info` pool allocation or the `buf` allocation, and never calls `file->Close`. EFI boot-time resource exhaustion on repeated load failures.
 

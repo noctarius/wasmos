@@ -52,6 +52,7 @@ heap_grow_to(uint32_t need_end)
 static heap_block_t *
 heap_request_block(size_t payload_size)
 {
+    if (payload_size > (size_t)(-1) - sizeof(heap_block_t)) return NULL;
     const size_t total = heap_align(sizeof(heap_block_t) + payload_size);
     if (total > 0xFFFFFFFFu) return NULL;
     uint32_t start = (g_heap_cursor + (uint32_t)(sizeof(void *) - 1u)) & ~(uint32_t)(sizeof(void *) - 1u);

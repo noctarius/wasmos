@@ -81,6 +81,18 @@ test_max_exact(void)
     return 0;
 }
 
+/* M-7: malloc(SIZE_MAX) must return NULL, not a wrapped tiny block */
+static int
+test_malloc_overflow(void)
+{
+    void *p = malloc((size_t)(-1));
+    if (p != NULL) return __LINE__;
+    /* Also check one below the overflow boundary */
+    p = malloc((size_t)(-1) - sizeof(void *));
+    if (p != NULL) return __LINE__;
+    return 0;
+}
+
 int
 main(void)
 {
@@ -93,5 +105,6 @@ main(void)
     rc = test_overflow_negative();      if (rc) return rc;
     rc = test_overflow_just_above_max(); if (rc) return rc;
     rc = test_max_exact();              if (rc) return rc;
+    rc = test_malloc_overflow();        if (rc) return rc;
     return 0;
 }

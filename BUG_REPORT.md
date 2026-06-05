@@ -215,7 +215,7 @@ if (c == '\0') { continue; }
 
 Binary data with embedded NUL bytes is silently discarded.
 
-### M-7 — `src/libc/src/stdlib.c:51-53` — Overflow before bounds check in `heap_request_block`
+### M-7 ✅ FIXED — `src/libc/src/stdlib.c:51-53` — Overflow before bounds check in `heap_request_block`
 
 `sizeof(heap_block_t) + payload_size` overflows `size_t` before `heap_align` is called. The check `total > 0xFFFFFFFF` only tests the aligned result.
 

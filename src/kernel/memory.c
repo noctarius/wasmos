@@ -721,7 +721,6 @@ int mm_shared_unmap(mm_context_t *ctx, uint32_t id) {
         spinlock_unlock(&g_shared_lock);
         return -1;
     }
-    pfa_free_pages(region->base, region->pages);
     if (region->refcount == 0) {
         spinlock_unlock(&g_shared_lock);
         return -1;

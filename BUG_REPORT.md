@@ -239,7 +239,7 @@ Every early-return error path in `read_file_alloc` leaks the `info` pool allocat
 
 A malformed kernel ELF with `e_phoff` or `p_offset + p_filesz` beyond `kernel_size` causes an out-of-bounds read from the pool buffer.
 
-### M-13 — `src/boot/boot.c:800-804` — ELF `PT_LOAD` array fixed at 16 entries with silent overflow
+### M-13 ✅ FIXED — `src/boot/boot.c:800-804` — ELF `PT_LOAD` array fixed at 16 entries with silent overflow
 
 If the kernel has more than 16 `PT_LOAD` segments, the overflow is ignored. The overlap-check for subsequent segments fails to detect already-allocated regions, potentially double-allocating the same physical pages and corrupting the kernel image.
 

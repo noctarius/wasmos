@@ -801,11 +801,13 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
                 uefi_log_status(system, "[boot] AllocatePages failed: ", status);
                 return status;
             }
-            if (alloc_count < (sizeof(alloc_bases) / sizeof(alloc_bases[0]))) {
-                alloc_bases[alloc_count] = dest;
-                alloc_pages[alloc_count] = pages;
-                alloc_count++;
+            if (alloc_count >= (sizeof(alloc_bases) / sizeof(alloc_bases[0]))) {
+                uefi_log(system, "[boot] too many PT_LOAD segments\n");
+                return EFI_INVALID_PARAMETER;
             }
+            alloc_bases[alloc_count] = dest;
+            alloc_pages[alloc_count] = pages;
+            alloc_count++;
         }
 
         void *segment_src = (UINT8 *)kernel_buf + ph->p_offset;

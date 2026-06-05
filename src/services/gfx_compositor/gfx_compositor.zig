@@ -1018,7 +1018,13 @@ fn maybe_emit_pointer_event(dx: i32, dy: i32, buttons: u32, prev_buttons: u32) v
         const focused = g_windows[focused_idx];
         const cr = window_content_rect(focused);
         if (cr.w <= 0 or cr.h <= 0) return;
-        if (!point_in_rect(g_pointer_x, g_pointer_y, cr)) return;
+        const in_content = point_in_rect(g_pointer_x, g_pointer_y, cr);
+        if (!in_content) {
+            // Outside content: only deliver button-up transitions so the app can
+            // reset its pressed state; suppress pure movement and button-down events.
+            const any_button_released = (prev_buttons & ~buttons) != 0;
+            if (!any_button_released) return;
+        }
         if (dx == 0 and dy == 0 and buttons == prev_buttons) return;
         const rel_x = clamp(g_pointer_x - cr.x, 0, cr.w - 1);
         const rel_y = clamp(g_pointer_y - cr.y, 0, cr.h - 1);

@@ -283,7 +283,7 @@ if (b == 0) { break; }
 
 NUL is a valid control character. Any write payload containing an embedded NUL has subsequent bytes silently dropped.
 
-### M-22 — `src/services/vt/vt_main.c:844` — CSI accumulator `uint16_t` overflow
+### M-22 ✅ FIXED — `src/services/vt/vt_main.c:844` — CSI accumulator `uint16_t` overflow
 
 `csi_current * 10 + digit` wraps at 65535 with no diagnostic. A long numeric CSI parameter like `\e[65536m` is parsed as `\e[0m`.
 

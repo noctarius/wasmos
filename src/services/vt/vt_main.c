@@ -848,7 +848,8 @@ vt_process_byte(uint32_t tty_index, vt_tty_t *tty, uint8_t c)
             break;
         }
         if (c >= '0' && c <= '9') {
-            tty->csi_current = (uint16_t)(tty->csi_current * 10u + (uint16_t)(c - '0'));
+            uint32_t next = (uint32_t)tty->csi_current * 10u + (uint32_t)(c - '0');
+            tty->csi_current = next > 0xFFFFu ? 0xFFFFu : (uint16_t)next;
             tty->csi_have_current = 1;
             break;
         }

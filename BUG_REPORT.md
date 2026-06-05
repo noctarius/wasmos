@@ -287,7 +287,7 @@ NUL is a valid control character. Any write payload containing an embedded NUL h
 
 `csi_current * 10 + digit` wraps at 65535 with no diagnostic. A long numeric CSI parameter like `\e[65536m` is parsed as `\e[0m`.
 
-### M-23 — `src/libsys/native/zig/libsys_native.c:655,679` — Signed integer overflow before cast in buffer helpers
+### M-23 ✅ FIXED — `src/libsys/native/zig/libsys_native.c:655,679` — Signed integer overflow before cast in buffer helpers
 
 `(uint32_t)(offset + len)` — both `int32_t`. Adding two large `int32_t` values overflows before the cast. Use `(uint32_t)offset + (uint32_t)len`.
 

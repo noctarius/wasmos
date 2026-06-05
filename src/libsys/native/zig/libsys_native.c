@@ -664,7 +664,7 @@ wasmos_sys_buffer_copy_from_native(wasmos_driver_api_t *api,
     if (!api || !dst || len < 0 || offset < 0 || !api->buffer_borrow || !api->buffer_release) {
         return -1;
     }
-    borrowed = (uint8_t *)api->buffer_borrow(kind, source_endpoint, borrow_flags, (uint32_t)(offset + len));
+    borrowed = (uint8_t *)api->buffer_borrow(kind, source_endpoint, borrow_flags, (uint32_t)offset + (uint32_t)len);
     if (!borrowed) {
         return -1;
     }
@@ -688,7 +688,7 @@ wasmos_sys_buffer_write_to_native(wasmos_driver_api_t *api,
     if (!api || !src || len < 0 || offset < 0 || !api->buffer_borrow || !api->buffer_release) {
         return -1;
     }
-    borrowed = (uint8_t *)api->buffer_borrow(kind, source_endpoint, borrow_flags, (uint32_t)(offset + len));
+    borrowed = (uint8_t *)api->buffer_borrow(kind, source_endpoint, borrow_flags, (uint32_t)offset + (uint32_t)len);
     if (!borrowed) {
         return -1;
     }

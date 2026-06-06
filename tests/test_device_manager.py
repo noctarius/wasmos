@@ -39,7 +39,7 @@ class DeviceManagerIntegrationTests(unittest.TestCase):
             self.fail(f"Prompt not found after '{cmd}'.\n--- tail ---\n{self.session.tail()}\n")
 
     def test_device_manager_running(self):
-        self.assertIn(b"[wasmos-app] entry start device-manager export=initialize", self.session.buf)
+        self.assertIn(b"[device-manager] pci-bus scan complete", self.session.buf)
         self._cmd_expect("ps", b"processes:")
 
 

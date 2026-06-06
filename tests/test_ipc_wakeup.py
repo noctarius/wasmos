@@ -18,6 +18,11 @@ class IpcWakeupTests(unittest.TestCase):
         cfg = default_config()
         cls.session = QemuSession(cfg, timeout_s=120, echo=True)
         cls.session.start()
+        # Wait for CLI so the full boot output (including the early-boot
+        # IPC wakeup marker) is in the accumulated buffer.
+        if not cls.session.expect(b"wamos> "):
+            cls.session.close()
+            raise RuntimeError("CLI prompt not detected")
 
     @classmethod
     def tearDownClass(cls):
@@ -29,7 +34,7 @@ class IpcWakeupTests(unittest.TestCase):
             cls.session.close()
 
     def test_ipc_wakeup_marker(self):
-        ok = self.session.expect(b"[test] ipc wake ok", timeout_s=20)
+        ok = b"[test] ipc wake ok" in self.session.buf
         if not ok:
             self.fail(f"IPC wakeup marker not found.\n--- tail ---\n{self.session.tail()}\n")
 

@@ -61,7 +61,7 @@ kernel_ring3_spawn_native_probe(uint32_t parent_pid, uint32_t *out_pid)
     if (!out_pid || !src || code_size == 0) {
         return -1;
     }
-    if (process_spawn_as(parent_pid, "ring3-native", ring3_probe_bootstrap_entry, 0, out_pid) != 0) {
+    if (process_spawn_as_parked(parent_pid, "ring3-native", ring3_probe_bootstrap_entry, 0, out_pid) != 0) {
         return -1;
     }
     proc = process_get(*out_pid);
@@ -106,11 +106,28 @@ kernel_ring3_spawn_native_probe(uint32_t parent_pid, uint32_t *out_pid)
         }
         region = (mem_region_t *)list_next(&it);
     }
+    /* Explicitly map the top stack page as user-writable.  The default
+     * mm_context_alloc_region mapping may be lost after paging_strip_low_slot;
+     * this mirrors the pattern in spawn_ring3_fault_probe_named. */
+    {
+        uint64_t stack_top_page_virt = (stack.base + stack.size - 1u) & ~0xFFFULL;
+        uint64_t stack_top_page_phys = (stack.phys_base + stack.size - 1u) & ~0xFFFULL;
+        if (map_linear_pages(ctx->root_table,
+                             stack_top_page_virt,
+                             stack_top_page_phys,
+                             0x1000u,
+                             MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) != 0) {
+            return -1;
+        }
+    }
     user_rip = linear.base;
     user_rsp = stack.base + stack.size - 16u;
     if (process_set_user_entry(*out_pid, user_rip, user_rsp) != 0) {
         return -1;
     }
+    /* Unpark only after full ring-3 setup is complete so the process cannot
+     * run ring3_probe_bootstrap_entry and exit before we configure it. */
+    process_unpark_pid(*out_pid);
     klog_printf("[kernel] ring3 native pid=%016llx\n", (unsigned long long)*out_pid);
     return 0;
 }
@@ -131,7 +148,7 @@ kernel_ring3_spawn_thread_lifecycle_probe(uint32_t parent_pid, uint32_t *out_pid
     if (!out_pid || !src || code_size == 0) {
         return -1;
     }
-    if (process_spawn_as(parent_pid, "ring3-threading", ring3_probe_bootstrap_entry, 0, out_pid) != 0) {
+    if (process_spawn_as_parked(parent_pid, "ring3-threading", ring3_probe_bootstrap_entry, 0, out_pid) != 0) {
         return -1;
     }
     proc = process_get(*out_pid);
@@ -176,11 +193,23 @@ kernel_ring3_spawn_thread_lifecycle_probe(uint32_t parent_pid, uint32_t *out_pid
         }
         region = (mem_region_t *)list_next(&it);
     }
+    {
+        uint64_t stack_top_page_virt = (stack.base + stack.size - 1u) & ~0xFFFULL;
+        uint64_t stack_top_page_phys = (stack.phys_base + stack.size - 1u) & ~0xFFFULL;
+        if (map_linear_pages(ctx->root_table,
+                             stack_top_page_virt,
+                             stack_top_page_phys,
+                             0x1000u,
+                             MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER) != 0) {
+            return -1;
+        }
+    }
     user_rip = linear.base;
     user_rsp = stack.base + stack.size - 16u;
     if (process_set_user_entry(*out_pid, user_rip, user_rsp) != 0) {
         return -1;
     }
+    process_unpark_pid(*out_pid);
     klog_printf("[kernel] ring3 threading pid=%016llx\n", (unsigned long long)*out_pid);
     return 0;
 }
@@ -203,7 +232,7 @@ spawn_ring3_fault_probe_named(uint32_t parent_pid,
     if (!out_pid || !name || !code || code_size == 0) {
         return -1;
     }
-    if (process_spawn_as(parent_pid, name, ring3_probe_bootstrap_entry, 0, out_pid) != 0) {
+    if (process_spawn_as_parked(parent_pid, name, ring3_probe_bootstrap_entry, 0, out_pid) != 0) {
         return -1;
     }
     proc = process_get(*out_pid);
@@ -262,6 +291,7 @@ spawn_ring3_fault_probe_named(uint32_t parent_pid,
     if (process_set_user_entry(*out_pid, user_rip, user_rsp) != 0) {
         return -1;
     }
+    process_unpark_pid(*out_pid);
     klog_printf("[kernel] %s pid=%016llx\n", name, (unsigned long long)*out_pid);
     return 0;
 }

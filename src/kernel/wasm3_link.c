@@ -471,6 +471,15 @@ wasm_user_va_from_host_ptr(uint32_t context_id,
     if (off > mem_size || (uint64_t)span > (mem_size - off)) {
         return -1;
     }
+    /* Sync the cached WASM_LINEAR region size with the actual wasm3 memory
+     * size before the offset bounds check.  Languages like Zig and TinyGo
+     * grow linear memory at runtime; the region starts at 8 pages but the
+     * stack/heap can be placed far beyond that, so pointer validation must
+     * reflect the current allocation, not the initial size. */
+    mm_context_t *_lrsync_ctx = mm_context_get(context_id);
+    if (_lrsync_ctx) {
+        wasm_linear_region_sync_size(_lrsync_ctx, mem_size);
+    }
     return wasm_user_va_from_offset(context_id, (uint32_t)off, span, out_user_va);
 }
 

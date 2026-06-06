@@ -62,10 +62,14 @@ class ShmemGrantRevokeE2ETest(unittest.TestCase):
 
     def test_shmem_grant_revoke_pair(self):
         self._cmd_expect("cd /apps", [b"/apps wamos>"])
-        self._exec_expect("shmtgt", timeout_s=20)
+        # Spawn owner in the background first; it blocks waiting for the
+        # target to appear and advance each protocol stage.
         mark = self.session.mark()
-        self.session.send("shmownr")
-        self.assertTrue(self.session.expect_from(mark, b"wamos> ", timeout_s=20))
+        self.session.send("spawn /apps/shmownr")
+        self.session.expect_from(mark, b"wamos> ", timeout_s=10)
+        # Run target in the foreground; it synchronises with the background
+        # owner and exits when the full grant/revoke sequence completes.
+        self._exec_expect("shmtgt", timeout_s=60)
         self._expect_markers_from(
             mark,
             [

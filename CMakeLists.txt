@@ -988,11 +988,6 @@ if (ZIG_AVAILABLE)
   )
 endif ()
 
-set(QEMU_UI_OVMF_VARS_ARG "")
-if (OVMF_VARS)
-  set(QEMU_UI_OVMF_VARS_ARG "--ovmf-vars ${OVMF_VARS}")
-endif ()
-
 set(WASMOS_ESP_POPULATE_CMDS
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/EFI/BOOT
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}/esp/apps
@@ -1042,6 +1037,13 @@ if (OVMF_VARS AND OVMF_CODE)
     message(WARNING "OVMF_VARS appears to be i386 while OVMF_CODE is x86_64; ignoring OVMF_VARS to avoid boot hangs.")
     set(OVMF_VARS "" CACHE FILEPATH "Path to OVMF_VARS.fd (optional)" FORCE)
   endif ()
+endif ()
+# Set after the i386-mismatch check so OVMF_VARS is already validated.
+# Split into two list elements so CMake VERBATIM commands pass them as
+# separate arguments rather than a single string with an embedded space.
+set(QEMU_UI_OVMF_VARS_ARG "")
+if (OVMF_VARS)
+  set(QEMU_UI_OVMF_VARS_ARG "--ovmf-vars" "${OVMF_VARS}")
 endif ()
 if (OVMF_VARS)
   add_custom_target(run-qemu

@@ -42,8 +42,10 @@ class InitSmokeTests(unittest.TestCase):
         self._cmd_expect("init_smoke", b"init-smoke: init done")
 
     def test_sysinit_starts_configured_targets(self):
-        self.assertIn(b"[wasmos-app] entry ok chardev-client", self.session.buf)
-        self.assertIn(b"[wasmos-app] entry start cli export=initialize", self.session.buf)
+        # Verify sysinit ran its script and the CLI started (trace-only
+        # [wasmos-app] markers are not emitted in normal builds).
+        self.assertIn(b"Starting system services...", self.session.buf)
+        self.assertIn(b"WAMOS CLI", self.session.buf)
         self._cmd_expect("ps", b"processes:")
 
 

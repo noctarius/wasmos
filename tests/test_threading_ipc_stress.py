@@ -18,6 +18,11 @@ class ThreadingIpcStressTests(unittest.TestCase):
         cfg = default_config()
         cls.session = QemuSession(cfg, timeout_s=120, echo=True)
         cls.session.start()
+        # Wait for the CLI prompt so the full boot output is buffered;
+        # the threading IPC stress marker is emitted during early boot.
+        if not cls.session.expect(b"wamos> "):
+            cls.session.close()
+            raise RuntimeError("CLI prompt not detected")
 
     @classmethod
     def tearDownClass(cls):
@@ -29,7 +34,10 @@ class ThreadingIpcStressTests(unittest.TestCase):
             cls.session.close()
 
     def test_threading_ipc_stress_marker(self):
-        ok = self.session.expect(b"[test] threading ipc stress ok", timeout_s=20)
+        # The marker is emitted during early-boot kernel self-tests, so it
+        # will already be in session.buf by the time we reach this point
+        # (setUpClass waits for the CLI prompt).
+        ok = b"[test] threading ipc stress ok" in self.session.buf
         if not ok:
             self.fail(f"Threading IPC stress marker not found.\n--- tail ---\n{self.session.tail()}\n")
 

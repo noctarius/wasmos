@@ -6,14 +6,15 @@
 #include "wasmos/mutex.h"
 #include "wasmos/syscall_x86_64.h"
 
-static wasmos_mutex_t g_probe_mutex = WASMOS_MUTEX_INITIALIZER;
-
 void
 _start(void)
 {
-    wasmos_mutex_init(&g_probe_mutex);
-    (void)wasmos_mutex_try_lock(&g_probe_mutex);
-    (void)wasmos_mutex_unlock(&g_probe_mutex);
+    /* Declare mutex on the stack so writes go to the writable stack region,
+     * not the flat-binary data section which is mapped READ+EXEC. */
+    wasmos_mutex_t probe_mutex = WASMOS_MUTEX_INITIALIZER;
+    wasmos_mutex_init(&probe_mutex);
+    (void)wasmos_mutex_try_lock(&probe_mutex);
+    (void)wasmos_mutex_unlock(&probe_mutex);
     (void)wasmos_sys_ipc_notify(0xFFFFFFFFu);
     (void)wasmos_sys_yield();
     (void)wasmos_sys_gettid();

@@ -264,3 +264,21 @@
   QEMU NIC configuration, `virtio-net` driver/service boundaries, and phased
   TCP/UDP stack rollout, including full-scope IPv6 and multi-address/
   multi-stack instance support in later phases.
+
+- Two scheduler bugs affecting kernel worker threads are fixed:
+  (1) `proc->ctx.rsp` was initialized to the process stack top at spawn time,
+  causing the scheduler to treat every fresh worker as "has blocked context to
+  resume" and incorrectly invoke `context_switch_high` → `process_trampoline`
+  instead of `process_run_worker_on_stack`.  Fixed by clearing `proc->ctx.rsp`
+  to 0 after copying into `main_thread->ctx`, and teaching
+  `process_validate_context` to treat rsp==0 as a valid "no saved context"
+  sentinel.
+  (2) On SMP (4-CPU QEMU) worker threads were permanently orphaned: while the
+  main thread ran (proc->state==RUNNING), other CPUs dequeued and silently
+  dropped the workers from the ready queue (proc->state!=READY check), leaving
+  them with in_ready_queue=0 and state=READY but no re-enqueue path.  Fixed
+  by running orphaned fresh workers inline via `process_run_worker_on_stack`
+  immediately after the main thread yields and before proc->state is set back
+  to READY, exploiting the RUNNING window to guarantee exclusive access.
+  Together these allow the threading IPC stress self-test to complete 32
+  in-process IPC message exchanges and emit `[test] threading ipc stress ok`.

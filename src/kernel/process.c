@@ -425,7 +425,7 @@ static void process_validate_context(process_t *proc, const char *where) {
         (rip >= low_start && rip < low_end)) {
         if (!is_user_ctx) {
             uint64_t rsp = proc->ctx.rsp;
-            if (rsp < higher_half) {
+            if (rsp != 0 && rsp < higher_half) {
                 klog_printf(
                     "[sched] invalid rsp in %s pid=%016llx\n"
                     "[sched] name=%s\n"
@@ -1104,6 +1104,13 @@ process_spawn_as_impl(uint32_t parent_pid,
             main_thread->ctx = slot->ctx;
         }
     }
+    /* proc->ctx.rsp is non-zero from the stack initialisation above.  The
+     * kernel-worker scheduling check at process_schedule_once_impl uses
+     * proc->ctx.rsp == 0 to mean "no saved worker context — use
+     * process_run_worker_on_stack" and non-zero to mean "resume a
+     * previously blocked worker via context_switch_high".  Clear it now
+     * that main_thread->ctx has received its copy. */
+    slot->ctx.rsp = 0;
     if (strcmp(name, "process-manager") == 0) {
         g_ctx_watch_ctx = (uint64_t)(uintptr_t)&slot->ctx;
         g_ctx_watch_last_ctx = g_ctx_watch_ctx;
@@ -1271,6 +1278,7 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
             main_thread->ctx = slot->ctx;
         }
     }
+    slot->ctx.rsp = 0;
     __atomic_store_n(&g_idle_process, slot, __ATOMIC_RELEASE);
     *out_pid = pid;
     spinlock_unlock(&g_process_table_lock);
@@ -1890,6 +1898,95 @@ static int process_schedule_once_impl(void) {
         }
     }
     process_run_result_t result = cpu_local()->last_run_result;
+
+    /* Intra-process cooperative worker handoff (SMP worker anti-orphan).
+     *
+     * On SMP, ready_queue_dequeue drops any thread whose process is not in
+     * PROCESS_STATE_READY.  When the main thread is RUNNING, its kernel
+     * workers are dropped and become permanently orphaned: in_ready_queue=0,
+     * state=READY, but nobody re-enqueues them.
+     *
+     * While proc->state is still RUNNING here (before process_set_ready is
+     * called below), no other CPU's dequeue can return any thread for this
+     * process.  Use that exclusion window to run any orphaned fresh kernel
+     * workers inline on their own kstacks via process_run_worker_on_stack. */
+    if (!thread->is_kernel_worker && result == PROCESS_RUN_YIELDED) {
+        uint32_t wi = 0;
+        for (;;) {
+            uint32_t wtid = 0;
+            thread_t *wt = 0;
+            process_run_result_t wr;
+            if (proc->state == PROCESS_STATE_ZOMBIE || proc->exiting) {
+                break;
+            }
+            /* proc->ctx is shared by all kernel workers of this process.
+             * A blocked worker has saved its context there (proc->ctx.rsp
+             * non-zero); running a fresh worker inline could call
+             * process_yield and overwrite that saved context.
+             * proc->ctx.rsp is initialised to 0 at spawn (cleared after
+             * main_thread->ctx receives its copy), so this check is safe. */
+            if (proc->ctx.rsp != 0) {
+                break;
+            }
+            if (thread_owner_tid_at(proc->pid, wi++, &wtid) != 0) {
+                break;
+            }
+            if (wtid == thread->tid) {
+                continue;
+            }
+            wt = thread_get(wtid);
+            if (!wt || !wt->is_kernel_worker ||
+                wt->state != THREAD_STATE_READY ||
+                wt->in_ready_queue) {
+                continue;
+            }
+            /* Claim: mark RUNNING before executing.  proc->state == RUNNING
+             * blocks all other CPUs' dequeue attempts for this process. */
+            cpu_local()->current_thread = wt;
+            thread_set_current(wt->tid);
+            thread_set_state(wt->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
+            wr = process_run_worker_on_stack(proc, wt);
+            cpu_local()->current_thread = thread;
+            thread_set_current(thread->tid);
+            if (wr == PROCESS_RUN_EXITED) {
+                proc->ctx.rsp = 0;
+                thread_set_state(wt->tid, THREAD_STATE_ZOMBIE, THREAD_BLOCK_NONE);
+                thread_set_exit_status(wt->tid, proc->exit_status);
+                process_wake_thread_joiner(proc, wt);
+                if (wt->detached) {
+                    thread_reap(wt->tid);
+                    if (proc->thread_count > 0) {
+                        proc->thread_count--;
+                    }
+                }
+                if (proc->live_thread_count > 0) {
+                    proc->live_thread_count--;
+                }
+            } else if (wr == PROCESS_RUN_THREAD_EXITED) {
+                proc->ctx.rsp = 0;
+                thread_set_state(wt->tid, THREAD_STATE_ZOMBIE, THREAD_BLOCK_NONE);
+                thread_set_exit_status(wt->tid, proc->exit_status);
+                process_wake_thread_joiner(proc, wt);
+                if (wt->detached) {
+                    thread_reap(wt->tid);
+                    if (proc->thread_count > 0) {
+                        proc->thread_count--;
+                    }
+                }
+                if (proc->live_thread_count > 0) {
+                    proc->live_thread_count--;
+                }
+                if (proc->live_thread_count == 0) {
+                    process_mark_exited(proc, proc->exit_status);
+                    break;
+                }
+            } else {
+                /* YIELDED, IDLE, or BLOCKED (returned from entry without
+                 * calling process_yield): return to READY for the next pass. */
+                thread_set_state(wt->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
+            }
+        }
+    }
 
     if (proc->state == PROCESS_STATE_ZOMBIE || proc->exiting) {
         /* A concurrent kill/exit can mark the owner zombie while this thread

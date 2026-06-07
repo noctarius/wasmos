@@ -55,6 +55,9 @@ remain deterministic in strict ring3 runs.
 ### SMP
 - [Symmetric Multi-Processing](architecture/28-smp.md)
 
+### Scheduler Roadmap
+- [Threadable Scheduler Design](architecture/29-threadable-scheduler.md)
+
 ### Operations and Validation
 - [Diagnostics and Status](architecture/25-diagnostics-status.md)
 - [Repository Map and Validation Baseline](architecture/26-repo-map-and-validation.md)

@@ -90,4 +90,32 @@ int ipc_wait_blocking(uint32_t endpoint);
 /* Release all endpoints owned by the given context (called on process exit). */
 void ipc_endpoints_release_owner(uint32_t owner_context_id);
 
+/* --- Select sets ---
+ *
+ * A select set watches N endpoints simultaneously.  ipc_select_wait blocks
+ * until any of them has a message (or notification) ready, then returns the
+ * ready endpoint's ID.  The caller must then call ipc_try_recv_for / ipc_wait_for
+ * to actually consume the payload.
+ *
+ * A select set may watch at most IPC_SELECT_EPS_MAX endpoints.
+ * All endpoints added to a set must be owned by the same context as the set. */
+#define IPC_SELECT_EPS_MAX  8   /* max endpoints per select set */
+
+/* Create a select set; writes a positive set ID to *out_id.  Returns IPC_OK or error. */
+int ipc_select_create(uint32_t owner_context_id, uint32_t *out_id);
+
+/* Add endpoint_id to the select set.  The endpoint must be owned by the same
+ * context as the set.  Returns IPC_OK, IPC_ERR_INVALID, or IPC_ERR_FULL. */
+int ipc_select_add(uint32_t select_id, uint32_t endpoint_id);
+
+/* Block until any watched endpoint is ready.  Writes its ID to *out_ready_ep.
+ * Returns IPC_OK, or IPC_ERR_INVALID if the set ID or out pointer is bad. */
+int ipc_select_wait(uint32_t select_id, uint32_t *out_ready_ep);
+
+/* Destroy the select set.  Any blocked waiter is woken and returns IPC_ERR_INVALID. */
+void ipc_select_destroy(uint32_t select_id);
+
+/* Release all select sets owned by the given context (called on process exit). */
+void ipc_selects_release_owner(uint32_t owner_context_id);
+
 #endif

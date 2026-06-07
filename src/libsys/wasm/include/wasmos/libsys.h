@@ -323,6 +323,59 @@ wasmos_sys_ipc_recv_loop(void)
     }
 }
 
+/* --- Select set helpers ---
+ *
+ * A select set watches multiple endpoints and blocks until any one of them
+ * has a message (or notification) ready — the kernel equivalent of Go's
+ * select statement across channels.
+ *
+ * Persistent usage (thread pool / long-lived wait):
+ *
+ *   int32_t sel = wasmos_sys_select_create();
+ *   wasmos_sys_select_add(sel, ep_a);
+ *   wasmos_sys_select_add(sel, ep_b);
+ *   for (;;) {
+ *       int32_t ready = wasmos_sys_select_wait(sel);
+ *       if (ready == ep_a) { wasmos_ipc_try_recv(ep_a); ... }
+ *       else if (ready == ep_b) { wasmos_ipc_try_recv(ep_b); ... }
+ *   }
+ *   wasmos_sys_select_destroy(sel);
+ *
+ * One-shot convenience (ad-hoc multi-endpoint wait):
+ *
+ *   int32_t eps[] = { ep_a, ep_b, ep_c };
+ *   int32_t ready = wasmos_sys_wait_any(eps, 3);
+ */
+static inline int32_t wasmos_sys_select_create(void) {
+    return wasmos_ipc_select_create();
+}
+static inline int32_t wasmos_sys_select_add(int32_t sel, int32_t endpoint) {
+    return wasmos_ipc_select_add(sel, endpoint);
+}
+static inline int32_t wasmos_sys_select_wait(int32_t sel) {
+    return wasmos_ipc_select_wait(sel);
+}
+static inline void wasmos_sys_select_destroy(int32_t sel) {
+    if (sel > 0) {
+        (void)wasmos_ipc_select_destroy(sel);
+    }
+}
+
+static inline int32_t
+wasmos_sys_wait_any(const int32_t *endpoints, int32_t count)
+{
+    int32_t sel = wasmos_ipc_select_create();
+    if (sel < 0) {
+        return -1;
+    }
+    for (int32_t i = 0; i < count; i++) {
+        (void)wasmos_ipc_select_add(sel, endpoints[i]);
+    }
+    int32_t ready = wasmos_ipc_select_wait(sel);
+    (void)wasmos_ipc_select_destroy(sel);
+    return ready;
+}
+
 /* Send PROC_IPC_NOTIFY_READY to the process manager and block until PM acks.
  * The blocking wait keeps the source_endpoint alive long enough for PM to
  * identify the sender, which lets PM reliably unblock any sync-spawn parent

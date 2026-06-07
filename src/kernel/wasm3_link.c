@@ -1048,6 +1048,84 @@ m3ApiRawFunction(wasmos_ipc_notify)
     m3ApiReturn(rc);
 }
 
+m3ApiRawFunction(wasmos_ipc_select_create)
+{
+    m3ApiReturnType(int32_t)
+    uint32_t context_id = 0;
+    uint32_t select_id = 0;
+
+    preempt_safepoint();
+    if (current_process_context(&context_id) != 0) {
+        m3ApiReturn(-1);
+    }
+    if (ipc_select_create(context_id, &select_id) != IPC_OK) {
+        m3ApiReturn(-1);
+    }
+    preempt_safepoint();
+    m3ApiReturn((int32_t)select_id);
+}
+
+m3ApiRawFunction(wasmos_ipc_select_add)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, select_id)
+    m3ApiGetArg(int32_t, endpoint)
+
+    preempt_safepoint();
+    if (select_id <= 0 || endpoint < 0) {
+        m3ApiReturn(-1);
+    }
+    int rc = ipc_select_add((uint32_t)select_id, (uint32_t)endpoint);
+    preempt_safepoint();
+    m3ApiReturn(rc == IPC_OK ? 0 : -1);
+}
+
+m3ApiRawFunction(wasmos_ipc_select_wait)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, select_id)
+    uint32_t pid = process_current_pid();
+    process_t *process = process_get(pid);
+    thread_t *thread = thread_get(thread_current_tid());
+
+    if (select_id <= 0 || !process) {
+        m3ApiReturn(-1);
+    }
+
+    process->in_hostcall = 1;
+    process->block_reason = PROCESS_BLOCK_IPC;
+    preempt_safepoint();
+
+    uint32_t ready_ep = IPC_ENDPOINT_NONE;
+    int rc = ipc_select_wait((uint32_t)select_id, &ready_ep);
+
+    process->state = PROCESS_STATE_RUNNING;
+    process->block_reason = PROCESS_BLOCK_NONE;
+    if (thread) {
+        thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
+    }
+    process->in_hostcall = 0;
+
+    if (rc != IPC_OK) {
+        m3ApiReturn(-1);
+    }
+    preempt_safepoint();
+    m3ApiReturn((int32_t)ready_ep);
+}
+
+m3ApiRawFunction(wasmos_ipc_select_destroy)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, select_id)
+
+    preempt_safepoint();
+    if (select_id > 0) {
+        ipc_select_destroy((uint32_t)select_id);
+    }
+    preempt_safepoint();
+    m3ApiReturn(0);
+}
+
 m3ApiRawFunction(wasmos_ipc_last_field)
 {
     m3ApiReturnType(int32_t)
@@ -3618,6 +3696,10 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "ipc_try_recv", "i(i)", wasmos_ipc_try_recv);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_notify", "i(i)", wasmos_ipc_notify);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_last_field", "i(i)", wasmos_ipc_last_field);
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_select_create", "i()", wasmos_ipc_select_create);
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_select_add", "i(ii)", wasmos_ipc_select_add);
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_select_wait", "i(i)", wasmos_ipc_select_wait);
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_select_destroy", "i(i)", wasmos_ipc_select_destroy);
     rc |= wasm3_link_raw(module, "wasmos", "console_write", "i(*i)", wasmos_console_write);
     rc |= wasm3_link_raw(module, "wasmos", "debug_mark", "i(i)", wasmos_debug_mark);
     rc |= wasm3_link_raw(module, "wasmos", "kmap_dump", "i()", wasmos_kmap_dump);

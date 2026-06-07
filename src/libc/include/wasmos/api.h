@@ -68,6 +68,16 @@ extern int32_t wasmos_ipc_notify(int32_t endpoint)
     WASMOS_WASM_IMPORT("wasmos", "ipc_notify");
 extern int32_t wasmos_ipc_last_field(int32_t field)
     WASMOS_WASM_IMPORT("wasmos", "ipc_last_field");
+/* Select sets: block until any one of N endpoints is ready. */
+extern int32_t wasmos_ipc_select_create(void)
+    WASMOS_WASM_IMPORT("wasmos", "ipc_select_create");
+extern int32_t wasmos_ipc_select_add(int32_t select_id, int32_t endpoint)
+    WASMOS_WASM_IMPORT("wasmos", "ipc_select_add");
+/* Block until any watched endpoint is ready; returns the ready endpoint ID. */
+extern int32_t wasmos_ipc_select_wait(int32_t select_id)
+    WASMOS_WASM_IMPORT("wasmos", "ipc_select_wait");
+extern int32_t wasmos_ipc_select_destroy(int32_t select_id)
+    WASMOS_WASM_IMPORT("wasmos", "ipc_select_destroy");
 extern int32_t wasmos_proc_count(void)
     WASMOS_WASM_IMPORT("wasmos", "proc_count");
 extern int32_t wasmos_proc_exit(int32_t status)

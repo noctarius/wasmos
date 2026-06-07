@@ -25,9 +25,41 @@ typedef struct {
     uint32_t waiter_tid;
 } ipc_endpoint_t;
 
+/* --- Select set table ---
+ *
+ * No back-links are stored in ipc_endpoint_t to keep the hot-path struct
+ * small.  Instead, senders check g_active_select_count first; if non-zero,
+ * they scan the (small, fixed) select table for sets that watch the endpoint
+ * that was just written.  g_active_select_count == 0 ⟹ fast return. */
+
+#define IPC_SELECT_TABLE_SIZE 32
+
+typedef struct {
+    uint32_t   id;               /* unique ID; 0 = slot unused */
+    uint8_t    in_use;
+    uint32_t   owner_context_id;
+    spinlock_t lock;
+    uint32_t   waiter_tid;       /* thread blocked in ipc_select_wait, 0 if none */
+    uint32_t   ready_ep;         /* endpoint that triggered the wake */
+    uint8_t    ready;            /* set by ipc_select_signal before waking waiter */
+    uint32_t   ep_ids[IPC_SELECT_EPS_MAX];
+    uint32_t   ep_count;
+} ipc_select_t;
+
+/* Endpoint table lives first to preserve its BSS addresses (and therefore
+ * cache-line layout) relative to the kernel's original ipc.c object file.
+ * The select-set globals are appended after so the hot endpoint path is
+ * unaffected by the added 2 KB of select-set data. */
 static list_t g_endpoint_table;
 static spinlock_t g_endpoint_table_lock;
 static uint32_t g_next_endpoint_id;
+
+static ipc_select_t g_select_table[IPC_SELECT_TABLE_SIZE];
+static spinlock_t   g_select_table_lock;
+static uint32_t     g_next_select_id;
+/* Count of currently-alive select sets.  Senders skip the table scan when
+ * this is 0, keeping the common no-select path at a single atomic load. */
+static volatile uint32_t g_active_select_count;
 
 /*
  * Returns the endpoint with ep->lock held.  The caller must call
@@ -83,9 +115,78 @@ ipc_endpoint_owner_context(uint32_t endpoint_id)
     return 0;
 }
 
+/* --- Select set helpers (used by endpoint send/notify paths) --- */
+
+/* Find a select set by ID and return it with sel->lock held. */
+static ipc_select_t *
+ipc_select_find_locked(uint32_t select_id)
+{
+    if (select_id == 0) {
+        return 0;
+    }
+    for (uint32_t i = 0; i < IPC_SELECT_TABLE_SIZE; i++) {
+        if (g_select_table[i].id == select_id) {
+            spinlock_lock(&g_select_table[i].lock);
+            if (g_select_table[i].id == select_id && g_select_table[i].in_use) {
+                return &g_select_table[i];
+            }
+            spinlock_unlock(&g_select_table[i].lock);
+        }
+    }
+    return 0;
+}
+
+/* Scan all active select sets for those watching ep_id and wake their
+ * waiters.  Called from ipc_send_from / ipc_notify_from after releasing
+ * ep->lock.  Only called when g_active_select_count > 0. */
+static void
+ipc_select_signal_ep(uint32_t ep_id)
+{
+    for (uint32_t i = 0; i < IPC_SELECT_TABLE_SIZE; i++) {
+        /* Fast skip without lock: if in_use is 0 there is nothing to do.
+         * The lock re-check inside handles any transient race. */
+        if (!g_select_table[i].in_use) {
+            continue;
+        }
+        spinlock_lock(&g_select_table[i].lock);
+        ipc_select_t *sel = &g_select_table[i];
+        if (!sel->in_use) {
+            spinlock_unlock(&sel->lock);
+            continue;
+        }
+        /* Check if this select set is watching ep_id. */
+        uint8_t watching = 0;
+        for (uint32_t j = 0; j < sel->ep_count; j++) {
+            if (sel->ep_ids[j] == ep_id) {
+                watching = 1;
+                break;
+            }
+        }
+        if (!watching) {
+            spinlock_unlock(&sel->lock);
+            continue;
+        }
+        if (!sel->ready) {
+            sel->ready = 1;
+            sel->ready_ep = ep_id;
+        }
+        uint32_t wtid = sel->waiter_tid;
+        sel->waiter_tid = 0;
+        spinlock_unlock(&sel->lock);
+        if (wtid != 0) {
+            (void)process_wake_thread(wtid);
+        }
+    }
+}
+
 void ipc_init(void) {
     spinlock_init(&g_endpoint_table_lock);
     g_next_endpoint_id = 1;
+    spinlock_init(&g_select_table_lock);
+    g_next_select_id = 1;
+    for (uint32_t i = 0; i < IPC_SELECT_TABLE_SIZE; i++) {
+        spinlock_init(&g_select_table[i].lock);
+    }
     if (list_init(&g_endpoint_table, (uint32_t)sizeof(ipc_endpoint_t),
                   LIST_IMPL_ARRAY_CHUNK, IPC_ENDPOINT_TABLE_CHUNK) != 0) {
         for (;;) {}
@@ -219,11 +320,17 @@ int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_messa
     ep->count++;
     uint32_t waiter_tid = ep->waiter_tid;
     ep->waiter_tid = 0;
+    uint32_t ep_id_val = ep->id;
     spinlock_unlock(&ep->lock);
     /* Strict thread-targeted wake: payload remains queued if no waiter thread
      * is currently blocked on this endpoint. */
     if (waiter_tid != 0) {
         (void)process_wake_thread(waiter_tid);
+    }
+    /* Signal any select sets watching this endpoint.  The active-count guard
+     * keeps the common no-select path at a single atomic load. */
+    if (__atomic_load_n(&g_active_select_count, __ATOMIC_ACQUIRE) > 0) {
+        ipc_select_signal_ep(ep_id_val);
     }
     return IPC_OK;
 }
@@ -411,11 +518,15 @@ int ipc_notify_from(uint32_t sender_context_id, uint32_t endpoint) {
     }
     uint32_t waiter_tid = ep->waiter_tid;
     ep->waiter_tid = 0;
+    uint32_t ep_id_val = ep->id;
     spinlock_unlock(&ep->lock);
     /* Strict thread-targeted wake: notification count is retained if no waiter
      * is currently blocked on this endpoint. */
     if (waiter_tid != 0) {
         (void)process_wake_thread(waiter_tid);
+    }
+    if (__atomic_load_n(&g_active_select_count, __ATOMIC_ACQUIRE) > 0) {
+        ipc_select_signal_ep(ep_id_val);
     }
     return IPC_OK;
 }
@@ -543,6 +654,243 @@ int ipc_wait(uint32_t endpoint) {
 
 int ipc_wait_blocking(uint32_t endpoint) {
     return ipc_wait_blocking_for(IPC_CONTEXT_KERNEL, endpoint);
+}
+
+/* --- Select set implementation --- */
+
+int
+ipc_select_create(uint32_t owner_context_id, uint32_t *out_id)
+{
+    if (!out_id) {
+        return IPC_ERR_INVALID;
+    }
+    spinlock_lock(&g_select_table_lock);
+    ipc_select_t *slot = 0;
+    for (uint32_t i = 0; i < IPC_SELECT_TABLE_SIZE; i++) {
+        if (!g_select_table[i].in_use) {
+            slot = &g_select_table[i];
+            break;
+        }
+    }
+    if (!slot) {
+        spinlock_unlock(&g_select_table_lock);
+        return IPC_ERR_FULL;
+    }
+    uint32_t id = g_next_select_id++;
+    if (g_next_select_id == 0) {
+        g_next_select_id = 1;
+    }
+    slot->id = id;
+    slot->in_use = 1;
+    slot->owner_context_id = owner_context_id;
+    slot->waiter_tid = 0;
+    slot->ready_ep = 0;
+    slot->ready = 0;
+    slot->ep_count = 0;
+    for (uint32_t i = 0; i < IPC_SELECT_EPS_MAX; i++) {
+        slot->ep_ids[i] = 0;
+    }
+    spinlock_unlock(&g_select_table_lock);
+    __atomic_fetch_add(&g_active_select_count, 1, __ATOMIC_RELEASE);
+    *out_id = id;
+    return IPC_OK;
+}
+
+int
+ipc_select_add(uint32_t select_id, uint32_t endpoint_id)
+{
+    /* Validate endpoint ownership before touching the select set.
+     * ipc_endpoint_owner_context uses only g_endpoint_table_lock. */
+    uint32_t ep_owner = ipc_endpoint_owner_context(endpoint_id);
+    if (ep_owner == 0) {
+        return IPC_ERR_INVALID;
+    }
+
+    ipc_select_t *sel = ipc_select_find_locked(select_id);
+    if (!sel) {
+        return IPC_ERR_INVALID;
+    }
+    /* Endpoint must be owned by the same context as the select set. */
+    if (ep_owner != sel->owner_context_id) {
+        spinlock_unlock(&sel->lock);
+        return IPC_ERR_PERM;
+    }
+    if (sel->ep_count >= IPC_SELECT_EPS_MAX) {
+        spinlock_unlock(&sel->lock);
+        return IPC_ERR_FULL;
+    }
+    /* Guard against duplicate add. */
+    for (uint32_t i = 0; i < sel->ep_count; i++) {
+        if (sel->ep_ids[i] == endpoint_id) {
+            spinlock_unlock(&sel->lock);
+            return IPC_OK;
+        }
+    }
+    sel->ep_ids[sel->ep_count++] = endpoint_id;
+    spinlock_unlock(&sel->lock);
+    return IPC_OK;
+}
+
+int
+ipc_select_wait(uint32_t select_id, uint32_t *out_ready_ep)
+{
+    if (!out_ready_ep) {
+        return IPC_ERR_INVALID;
+    }
+    ipc_select_t *sel = ipc_select_find_locked(select_id);
+    if (!sel) {
+        return IPC_ERR_INVALID;
+    }
+    if (sel->ep_count == 0) {
+        spinlock_unlock(&sel->lock);
+        return IPC_ERR_INVALID;
+    }
+    spinlock_unlock(&sel->lock);
+
+    uint32_t my_tid = thread_current_tid();
+    process_t *proc = process_get(process_current_pid());
+    if (!proc) {
+        return IPC_ERR_INVALID;
+    }
+
+    for (;;) {
+        /* Arm: set waiter BEFORE scanning so any concurrent sender sets
+         * ready=1 and we catch it in the post-scan check. */
+        spinlock_lock(&sel->lock);
+        if (!sel->in_use) {
+            spinlock_unlock(&sel->lock);
+            return IPC_ERR_INVALID;
+        }
+        sel->waiter_tid = my_tid;
+        sel->ready = 0;
+        sel->ready_ep = 0;
+        uint32_t ep_count = sel->ep_count;
+        uint32_t ep_ids[IPC_SELECT_EPS_MAX];
+        for (uint32_t i = 0; i < ep_count; i++) {
+            ep_ids[i] = sel->ep_ids[i];
+        }
+        spinlock_unlock(&sel->lock);
+
+        /* Non-blocking scan: if any endpoint already has data, take it. */
+        for (uint32_t i = 0; i < ep_count; i++) {
+            ipc_endpoint_t *ep = ipc_endpoint_get(ep_ids[i]);
+            if (!ep) {
+                continue;
+            }
+            int has_data =
+                (ep->type == IPC_ENDPOINT_TYPE_MESSAGE      && ep->count > 0) ||
+                (ep->type == IPC_ENDPOINT_TYPE_NOTIFICATION && ep->notify_count > 0);
+            uint32_t ep_id = ep->id;
+            spinlock_unlock(&ep->lock);
+            if (has_data) {
+                spinlock_lock(&sel->lock);
+                sel->waiter_tid = 0;
+                sel->ready = 0;
+                spinlock_unlock(&sel->lock);
+                *out_ready_ep = ep_id;
+                return IPC_OK;
+            }
+        }
+
+        /* Post-scan check + block atomically under sel->lock.
+         *
+         * A sender that fired between the arm and the scan set ready=1.
+         * If ready is set, take the result without blocking.  Otherwise
+         * call process_block_on_ipc while still holding sel->lock so no
+         * sender can call process_wake_thread before the thread is BLOCKED
+         * (the same race-closing pattern as ipc_recv_blocking_for). */
+        spinlock_lock(&sel->lock);
+        if (!sel->in_use) {
+            spinlock_unlock(&sel->lock);
+            return IPC_ERR_INVALID;
+        }
+        if (sel->ready) {
+            uint32_t rep = sel->ready_ep;
+            sel->waiter_tid = 0;
+            sel->ready = 0;
+            spinlock_unlock(&sel->lock);
+            *out_ready_ep = rep;
+            return IPC_OK;
+        }
+        /* Re-arm in case a sender cleared waiter_tid but ready is still 0
+         * (can happen if sender saw no existing waiter between arm and scan). */
+        sel->waiter_tid = my_tid;
+        thread_t *thread = thread_get(my_tid);
+        if (thread) {
+            __atomic_store_n(&thread->blocking_transition, 1, __ATOMIC_RELEASE);
+        }
+        process_block_on_ipc(proc);
+        spinlock_unlock(&sel->lock);
+
+        if (proc->state != PROCESS_STATE_BLOCKED ||
+            (thread && thread->state != THREAD_STATE_BLOCKED)) {
+            if (thread) {
+                __atomic_store_n(&thread->blocking_transition, 0, __ATOMIC_RELEASE);
+            }
+            continue;
+        }
+        process_yield(PROCESS_RUN_BLOCKED);
+        /* blocking_transition is cleared by the PROCESS_RUN_BLOCKED scheduler handler */
+
+        /* Collect result written by ipc_select_signal. */
+        spinlock_lock(&sel->lock);
+        if (!sel->in_use) {
+            spinlock_unlock(&sel->lock);
+            return IPC_ERR_INVALID;
+        }
+        uint32_t rep = sel->ready_ep;
+        sel->waiter_tid = 0;
+        sel->ready = 0;
+        spinlock_unlock(&sel->lock);
+        *out_ready_ep = rep;
+        return IPC_OK;
+    }
+}
+
+void
+ipc_select_destroy(uint32_t select_id)
+{
+    ipc_select_t *sel = ipc_select_find_locked(select_id);
+    if (!sel) {
+        return;
+    }
+    uint32_t wtid = sel->waiter_tid;
+    sel->waiter_tid = 0;
+    sel->in_use = 0;
+    sel->ready = 0;
+    sel->ep_count = 0;
+    spinlock_unlock(&sel->lock);
+    __atomic_fetch_sub(&g_active_select_count, 1, __ATOMIC_RELEASE);
+    /* Wake any blocked waiter so it returns IPC_ERR_INVALID. */
+    if (wtid != 0) {
+        (void)process_wake_thread(wtid);
+    }
+}
+
+void
+ipc_selects_release_owner(uint32_t owner_context_id)
+{
+    if (owner_context_id == 0) {
+        return;
+    }
+    for (uint32_t i = 0; i < IPC_SELECT_TABLE_SIZE; i++) {
+        spinlock_lock(&g_select_table[i].lock);
+        if (g_select_table[i].in_use &&
+            g_select_table[i].owner_context_id == owner_context_id) {
+            uint32_t wtid = g_select_table[i].waiter_tid;
+            g_select_table[i].waiter_tid = 0;
+            g_select_table[i].in_use = 0;
+            g_select_table[i].ready = 0;
+            g_select_table[i].ep_count = 0;
+            spinlock_unlock(&g_select_table[i].lock);
+            __atomic_fetch_sub(&g_active_select_count, 1, __ATOMIC_RELEASE);
+            if (wtid != 0) {
+                (void)process_wake_thread(wtid);
+            }
+        } else {
+            spinlock_unlock(&g_select_table[i].lock);
+        }
+    }
 }
 
 void

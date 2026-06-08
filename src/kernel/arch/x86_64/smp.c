@@ -1,4 +1,5 @@
 #include "arch/x86_64/smp.h"
+#include "process.h"
 #include "arch/x86_64/cpu_x86_64.h"
 #include "serial.h"
 #include "paging.h"
@@ -113,6 +114,10 @@ smp_ap_c_entry(uint32_t cpu_id)
 {
     /* Perform per-CPU GDT/TSS/IDT/GS-base setup (runs on the AP). */
     x86_ap_cpu_init(cpu_id);
+
+    /* Initialize per-CPU scheduler state before enabling the LAPIC timer so
+     * that no timer interrupt can preempt against an uninitialized sched_ctx. */
+    process_ap_init();
 
     /* Enable this AP's LAPIC and start its periodic timer at 250 Hz. */
     lapic_ap_enable(250u);

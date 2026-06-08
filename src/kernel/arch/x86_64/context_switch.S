@@ -3,7 +3,7 @@
 .global context_switch_to
 .extern g_in_context_switch
 .extern g_in_scheduler
-.extern g_sched_ctx
+.extern cpu_local_sched_ctx
 .extern g_ctxsw_last_out_ctx
 .extern g_ctxsw_last_out_rip
 .extern g_ctxsw_last_out_rsp
@@ -260,5 +260,6 @@ process_preempt_trampoline:
     # Timer IRQ preemption rewrites the interrupted RIP to this symbol. Instead
     # of re-entering user code directly, control returns to the scheduler
     # context, which can then pick the next runnable process normally.
-    leaq g_sched_ctx(%rip), %rdi
+    call cpu_local_sched_ctx
+    movq %rax, %rdi
     jmp context_switch_to

@@ -1,7 +1,9 @@
 .section .text
 .global context_switch
 .global context_switch_to
-.extern g_in_context_switch
+# cpu_local_t.in_context_switch is at GS:17 (per-CPU; replaces the old
+# g_in_context_switch global so each CPU tracks its own context-switch state).
+.set CPU_LOCAL_IN_CTX_SW_OFFSET, 17
 .extern g_in_scheduler
 .extern cpu_local_sched_ctx
 .extern g_ctxsw_last_out_ctx
@@ -33,7 +35,7 @@
 context_switch:
     # Mark the transition so debug code can distinguish genuine process state
     # corruption from an in-flight save/restore sequence.
-    movb $1, g_in_context_switch(%rip)
+    movb $1, %gs:CPU_LOCAL_IN_CTX_SW_OFFSET
     movq %rdi, g_ctxsw_last_out_ctx(%rip)
     movq %rsi, g_ctxsw_last_in_ctx(%rip)
     movq g_ctx_watch_ctx(%rip), %rax
@@ -144,7 +146,7 @@ context_switch:
     movq 112(%rdx), %rax
     movq 96(%rdx), %rcx
     movq 88(%rdx), %rdx
-    movb $0, g_in_context_switch(%rip)
+    movb $0, %gs:CPU_LOCAL_IN_CTX_SW_OFFSET
     ret
 2:
     movq %r11, %rsi
@@ -162,17 +164,17 @@ context_switch:
     movq 112(%rdx), %rax
     movq 96(%rdx), %rcx
     movq 88(%rdx), %rdx
-    movb $0, g_in_context_switch(%rip)
+    movb $0, %gs:CPU_LOCAL_IN_CTX_SW_OFFSET
     iretq
 1:
-    movb $0, g_in_context_switch(%rip)
+    movb $0, %gs:CPU_LOCAL_IN_CTX_SW_OFFSET
     ret
 
 context_switch_to:
     # context_switch_to is the one-way variant used when no outgoing task state
     # needs to be saved, for example when jumping from the scheduler context
     # into the very first runnable task or the preempt trampoline.
-    movb $1, g_in_context_switch(%rip)
+    movb $1, %gs:CPU_LOCAL_IN_CTX_SW_OFFSET
     movq %rdi, %rdx
     testq %rdx, %rdx
     js 6f
@@ -234,7 +236,7 @@ context_switch_to:
     movq 112(%rdx), %rax
     movq 96(%rdx), %rcx
     movq 88(%rdx), %rdx
-    movb $0, g_in_context_switch(%rip)
+    movb $0, %gs:CPU_LOCAL_IN_CTX_SW_OFFSET
     ret
 3:
     movq %r11, %rsi
@@ -252,7 +254,7 @@ context_switch_to:
     movq 112(%rdx), %rax
     movq 96(%rdx), %rcx
     movq 88(%rdx), %rdx
-    movb $0, g_in_context_switch(%rip)
+    movb $0, %gs:CPU_LOCAL_IN_CTX_SW_OFFSET
     iretq
 
 .global process_preempt_trampoline

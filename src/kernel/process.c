@@ -33,7 +33,9 @@ static uint32_t g_next_pid;
 static spinlock_t g_process_table_lock;
 /* Scheduler state lives in cpu_local_t (per-CPU) — see smp.h. */
 static process_t *g_idle_process;
-volatile uint8_t g_in_context_switch;
+/* g_in_context_switch removed: each CPU now tracks in_context_switch in
+ * cpu_local_t (at offset 17 from GS:0) to avoid false preemption suppression
+ * across CPUs when multiple context switches run simultaneously. */
 static uint64_t g_ctx_watch_logged;
 static uint64_t g_ctx_watch_last_logged_rip;
 static uint64_t g_ctx_watch_last_logged_rsp;
@@ -1852,7 +1854,7 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     if (cpu_local()->in_scheduler) {
         return 0;
     }
-    if (g_in_context_switch) {
+    if (cpu_local()->in_context_switch) {
         return 0;
     }
     if (cpu_local()->current_process && strcmp(cpu_local()->current_process->name, "process-manager") == 0 &&

@@ -3,7 +3,7 @@ version = 1
 [package]
 name = "shmtgt"
 entry = "wasmos_main"
-kind = "app"
+kind = "service"
 native = false
 
 [resources]

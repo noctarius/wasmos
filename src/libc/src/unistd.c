@@ -99,7 +99,7 @@ libc_fs_request(int32_t type,
         return -1;
     }
     for (;;) {
-        if (wasmos_ipc_recv(reply_endpoint) < 0) {
+        if (wasmos_ipc_select_one(reply_endpoint) < 0) {
             return -1;
         }
         wasmos_ipc_message_read_last(&reply);
@@ -147,7 +147,7 @@ libc_fs_request_stream(int32_t type, int32_t arg0, int32_t arg1, int32_t arg2, i
     }
 
     for (;;) {
-        if (wasmos_ipc_recv(reply_endpoint) < 0) {
+        if (wasmos_ipc_select_one(reply_endpoint) < 0) {
             return -1;
         }
         wasmos_ipc_message_read_last(&reply);

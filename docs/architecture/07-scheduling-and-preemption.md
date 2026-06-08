@@ -1,39 +1,35 @@
 ## Scheduling and Preemption
 
-This document describes the WASMOS scheduler in full implementation detail: the
-PIT clock, the ready queue, per-process and per-thread state, the context-switch
-assembly, the preemption path, and the guards that keep each of those phases
-safe. The authoritative sources are `src/kernel/process.c`,
+This document describes the WASMOS scheduler: the PIT clock, the priority-based
+ready queues, per-thread state, the context-switch assembly, the preemption path,
+and the guards that keep each phase safe.  The authoritative sources are
+`src/kernel/process.c`, `src/kernel/sched_thread.c`,
 `src/kernel/arch/x86_64/context_switch.S`, `src/kernel/timer.c`,
-`src/kernel/arch/x86_64/lapic.c`, `src/kernel/spinlock.c`, and
-`src/kernel/include/process.h`.
+`src/kernel/spinlock.c`, `src/kernel/include/process.h`, and
+`src/kernel/include/sched.h`.
 
 ---
 
 ### Overview
 
-The scheduler is preemptive round-robin. With `WASMOS_SMP=0` (the default) only
-the BSP runs the scheduler loop. With `WASMOS_SMP=1` each online AP also runs
-the same round-robin loop against the shared spinlock-protected ready queue; see
-`docs/architecture/28-smp.md` for the full multi-core contract.
+The scheduler is a preemptive, priority-based, single-core scheduler.
+PIT channel 0 drives time-slice accounting.  When a running thread's quantum
+expires the next IRQ0 fires the preemption path, which rewrites the interrupted
+frame to redirect IRETQ into a scheduler trampoline.  The scheduler context then
+picks the highest-priority ready thread and resumes it.  Blocking operations
+(IPC wait, process wait, thread join, futex) suspend a thread without burning
+quantum.
 
-A hardware timer drives time-slice accounting at a fixed rate: PIT channel 0 in
-PIC mode (`WASMOS_IRQ_MODE == 0`), per-CPU LAPIC periodic timer in LAPIC and
-IOAPIC modes. When a running thread's quantum expires, the timer fires the
-preemption path, which rewrites the interrupted frame to redirect
-return-from-interrupt into a scheduler trampoline. The scheduler context then
-picks the next ready thread and resumes it. Blocking operations (IPC wait,
-process wait, thread join) suspend a thread without burning quantum.
+Threads are the unit of scheduling.  A process is purely a resource owner;
+multiple threads of the same process may be simultaneously ready and run in
+sequence.  The process-level READY/RUNNING/BLOCKED states of the legacy
+scheduler are removed — only per-thread state drives dispatch.
 
 ---
 
-### Timer Configuration
+### PIT Configuration
 
-`timer_init(hz)` configures the scheduler clock at the requested frequency
-(default 250 Hz). The clock source depends on `WASMOS_IRQ_MODE`:
-
-**PIC mode (`WASMOS_IRQ_MODE == 0`):** programs PIT channel 0 in square-wave
-mode (command byte `0x36`).
+`timer_init(hz)` programs PIT channel 0 in square-wave mode (command byte `0x36`).
 
 ```
 PIT_BASE_HZ = 1193182 Hz
@@ -41,23 +37,11 @@ divisor     = PIT_BASE_HZ / hz          (clamped to [1, 0xFFFF])
 default hz  = 250 → divisor = 4772 → actual interval ≈ 4 ms per tick
 ```
 
-**LAPIC/IOAPIC mode (`WASMOS_IRQ_MODE >= 1`):** calls `lapic_init(hz)`, which
-uses PIT channel 2 as a 10 ms reference to calibrate LAPIC ticks-per-ms, then
-programs the LAPIC LVT_TIMER in periodic mode (`divide-by-16`) with
-`initial_count = (ticks_per_ms * 1000) / hz`, targeting vector 32. The 8259
-PIC is fully masked before the LAPIC timer starts.
-
-In all modes, at 250 Hz, `PROCESS_DEFAULT_SLICE_TICKS = 5` ticks gives each
-thread a 20 ms quantum.
+At 250 Hz, `PROCESS_DEFAULT_SLICE_TICKS = 5` ticks gives each thread a 20 ms
+quantum.
 
 `timer_handle_irq()` increments `g_timer_ticks` and calls `process_tick()` on
-every tick. Heavy scheduling work stays out of the ISR body.
-
-`timer_ms_to_ticks(ms)` converts milliseconds to tick counts:
-
-```c
-(ms * g_timer_hz + 999) / 1000
-```
+every tick.  Heavy scheduling work stays out of the ISR body.
 
 ---
 
@@ -67,15 +51,90 @@ every tick. Heavy scheduling work stays out of the ISR body.
 |----------------------------------|----------------------|---------------------------------------------------------------|
 | `PROCESS_DEFAULT_SLICE_TICKS`    | 5                    | Fixed quantum per thread (20 ms at 250 Hz)                    |
 | `PROCESS_MAX_COUNT`              | 48                   | Fixed process table capacity                                  |
-| `THREAD_MAX_COUNT`               | 128                  | Ready-queue capacity and thread table cap                     |
+| `THREAD_MAX_COUNT`               | 128                  | Thread table capacity                                         |
 | `PROCESS_STACK_SIZE`             | 524288               | 512 KB usable kernel stack per process/thread                 |
 | `STACK_GUARD_PAGES`              | 1                    | Guard page count on each side of every stack                  |
 | `STACK_REDZONE_BYTES`            | 4096                 | Margin from stack top to initial RSP                          |
 | `STACK_CANARY_VALUE`             | `0xC0DEC0DEF00DFACE` | Written at base/mid/top of each stack                         |
-| `PROCESS_CTX_CANARY_VALUE`       | `0xC0FFEE0DD15EA5E`  | Flanks `process_context_t` in `process_t`                     |
+| `PROCESS_CTX_CANARY_VALUE`       | `0xC0FFEE0DD15EA5E`  | Flanks `process_context_t` in `thread_t`                      |
+| `SCHED_PRIO_MAX`                 | 7                    | Number of priority levels                                     |
+| `SCHED_ANTISTARVATION_STREAK`    | 4                    | Max consecutive picks at one priority before forced lower run |
 | `SCHED_PROGRESS_MARKER_SWITCHES` | 256                  | Logs `[test] sched progress ok` after this many switches      |
 | `SCHED_RESCHED_STALL_TICKS`      | 512                  | Watchdog threshold: stall logged if resched pending this long |
 | `SCHED_TRAMPOLINE_STACK_BYTES`   | 8192                 | Private scheduler-trampoline stack                            |
+
+---
+
+### Priority Model
+
+Seven priority levels are defined in `src/kernel/include/sched.h`:
+
+```c
+typedef enum {
+    SCHED_PRIO_REALTIME   = 0, /* IRQ handler workers, timer callbacks */
+    SCHED_PRIO_DRIVER     = 1, /* native drivers (fbpci, serial, ata, kbd) */
+    SCHED_PRIO_SERVICE    = 2, /* system services (device-manager, fs-manager) */
+    SCHED_PRIO_SYSTEM     = 3, /* kernel services (process-manager, chardev) */
+    SCHED_PRIO_WASM       = 4, /* default WASM processes */
+    SCHED_PRIO_BACKGROUND = 5, /* batch / background jobs */
+    SCHED_PRIO_IDLE       = 6, /* idle process only */
+} sched_prio_t;
+```
+
+Default priority assigned at thread spawn:
+
+| Process type                       | Default priority     |
+|------------------------------------|----------------------|
+| `is_idle == 1`                     | `SCHED_PRIO_IDLE`    |
+| Native kernel worker               | `SCHED_PRIO_SYSTEM`  |
+| WASM native driver (`FLAG_DRIVER`) | `SCHED_PRIO_DRIVER`  |
+| WASM service (`FLAG_SERVICE`)      | `SCHED_PRIO_SERVICE` |
+| WASM application                   | `SCHED_PRIO_WASM`    |
+
+Priority is stored in `thread_t.sched_prio` (`uint8_t`).
+
+---
+
+### Per-CPU Scheduler State
+
+Source: `src/kernel/include/sched.h`, `src/kernel/sched_thread.c`
+
+```c
+typedef struct {
+    spinlock_t   lock;
+    uint8_t      ready_bitmap;                /* bit i = 1 → ready_list[i] non-empty */
+    list_head_t  ready_list[SCHED_PRIO_MAX];  /* one FIFO per priority */
+    uint32_t     thread_count[SCHED_PRIO_MAX];
+    uint32_t     nr_threads;
+} cpu_sched_t;
+```
+
+A single `g_cpu_sched` instance covers the current single-core build.
+`cpu_sched()` returns a pointer to it; cross-core paths are wired for SMP
+extension but not currently active.
+
+**O(1) find-highest-ready** via `ffs_table[128]`:
+
+```c
+static const uint8_t ffs_table[128] = { 0xFF, 0, 1, 0, 2, 0, 1, 0, ... };
+/* ffs_table[bitmap] = index of lowest set bit (= highest-priority slot),
+ * or 0xFF when bitmap == 0. */
+```
+
+This is equivalent to Minos2's `ffs_one_table[pcpu->local_rdy_grp]`.
+
+**Enqueue** (`cpu_sched_enqueue`): sets the bitmap bit, appends to the tail of
+`ready_list[prio]`.  Guards against double-enqueue by checking
+`list_head_empty(&t->sched_node)`.
+
+**Dequeue** (`cpu_sched_pick_next`): reads the bitmap, selects the highest
+non-empty list, removes the head entry, clears the bitmap bit if the list
+empties.  Returns the idle thread when the bitmap is zero.
+
+**Anti-starvation**: `cpu_sched_pick_next` tracks a `streak` counter.  After
+`SCHED_ANTISTARVATION_STREAK` consecutive picks from priority level N, the next
+pick is forced from any non-empty level > N, preventing lower-priority threads
+from starving permanently.
 
 ---
 
@@ -83,8 +142,8 @@ every tick. Heavy scheduling work stays out of the ISR body.
 
 #### `process_context_t`
 
-Full register save frame. Layout is verified by `_Static_assert` at compile
-time; the field offsets are load-bearing in `context_switch.S`.
+Full register save frame.  Layout is verified by `_Static_assert`; the field
+offsets are load-bearing in `context_switch.S`.
 
 ```c
 typedef struct {
@@ -113,14 +172,13 @@ typedef struct {
 } process_context_t;
 ```
 
-Every `process_t` embeds this struct between two 64-bit canary words
-(`ctx_canary_pre`/`ctx_canary_post`) initialized to `PROCESS_CTX_CANARY_VALUE`.
-The canaries are checked at every context-validation callsite.
+Every `thread_t` embeds this struct between two 64-bit canary words
+(`ctx_canary_pre`/`ctx_canary_post`).  The canaries are checked at every
+context-validation callsite.
 
 #### `irq_frame_t`
 
-The hardware-pushed exception/IRQ frame captured by the timer ISR stubs. The
-timer preemption path reads this to snapshot the interrupted thread state.
+The hardware-pushed exception/IRQ frame captured by the timer ISR stubs.
 
 ```c
 typedef struct {
@@ -139,58 +197,66 @@ typedef struct {
 
 | Field                   | Type                     | Purpose                                               |
 |-------------------------|--------------------------|-------------------------------------------------------|
-| `state`                 | `process_state_t`        | UNUSED / READY / RUNNING / BLOCKED / ZOMBIE           |
-| `block_reason`          | `process_block_reason_t` | NONE / IPC / WAIT                                     |
-| `time_slice_ticks`      | `uint32_t`               | Quantum (default `PROCESS_DEFAULT_SLICE_TICKS`)       |
-| `ticks_remaining`       | `uint32_t`               | Ticks left in current quantum                         |
-| `ticks_total`           | `uint64_t`               | Cumulative ticks consumed by this process             |
-| `in_ready_queue`        | `uint8_t`                | Prevents double-enqueue                               |
-| `is_idle`               | `uint8_t`                | Idle task; never in normal ready queue                |
-| `in_hostcall`           | `uint8_t`                | Set while inside wasm3 execution; blocks preemption   |
-| `ctx`                   | `process_context_t`      | Saved register state (snapshot of running thread ctx) |
-| `ctx_canary_pre/post`   | `uint64_t`               | Corruption detection flanking ctx                     |
-| `stack_base/top`        | `uintptr_t`              | Kernel stack virtual address range                    |
-| `stack_alloc_base_phys` | `uintptr_t`              | Physical base for stack reclaim on reap               |
+| `state`                 | `process_state_t`        | UNUSED / ALIVE / REAPING / ZOMBIE                     |
+| `time_slice_ticks`      | `uint32_t`               | Unused at process level (per-thread ticks used)       |
+| `is_idle`               | `uint8_t`                | Idle task marker                                      |
+| `in_hostcall`           | `uint8_t`                | Set during wasm3 execution; blocks preemption         |
+| `wasm3_lock`            | `spinlock_t`             | Reentrancy guard; held for duration of wasm3 entry    |
+| `wasm3_owner`           | `uint32_t`               | TID currently executing in wasm3 (0 = free)           |
+| `wait_event`            | `sched_event_t`          | Process-level wait event (child exit notification)    |
+
+Process-level `ctx`, `ctx_canary_pre/post`, `in_ready_queue`, and
+`block_reason` are removed; all scheduling state is per-thread.
 
 #### `thread_t` (scheduling fields)
 
-Threads are the unit of scheduling. Each process has at least one main thread;
-additional kernel-worker and user threads can be added at runtime.
+| Field                 | Type                    | Purpose                                               |
+|-----------------------|-------------------------|-------------------------------------------------------|
+| `tid`                 | `uint32_t`              | Thread identity                                       |
+| `owner_pid`           | `uint32_t`              | Owning process                                        |
+| `state`               | `thread_state_t`        | UNUSED / READY / RUNNING / BLOCKED / ZOMBIE           |
+| `block_reason`        | `thread_block_reason_t` | NONE / IPC / WAIT_PROCESS / WAIT_THREAD / EVENT       |
+| `is_kernel_worker`    | `uint8_t`               | Worker threads run directly on kstack; no trampoline  |
+| `time_slice_ticks`    | `uint32_t`              | Per-thread quantum                                    |
+| `ticks_remaining`     | `uint32_t`              | Ticks left in current quantum                         |
+| `ticks_total`         | `uint64_t`              | Cumulative ticks consumed by this thread              |
+| `ctx_canary_pre`      | `uint64_t`              | Corruption detection (flanks ctx)                     |
+| `ctx`                 | `process_context_t`     | Per-thread register save for all thread types         |
+| `ctx_canary_post`     | `uint64_t`              | Corruption detection (flanks ctx)                     |
+| `sched_prio`          | `uint8_t`               | Priority 0–6 (lower = higher priority)                |
+| `cpu_affinity`        | `uint32_t`              | Allowed CPU bitmask (currently `~0u`)                 |
+| `last_cpu`            | `uint32_t`              | CPU where thread last ran                             |
+| `sched_node`          | `list_head_t`           | Intrusive linkage in `cpu_sched_t.ready_list[prio]`   |
+| `event_node`          | `list_head_t`           | Intrusive linkage in `sched_event_t.wait_list`        |
+| `wait_event`          | `sched_event_t *`       | Event this thread is currently blocked on             |
+| `pend_state`          | `uint32_t`              | `SCHED_PEND_OK / PEND_TIMEOUT / PEND_ABORT`           |
+| `pend_data`           | `uint64_t`              | Data from waker (futex return value, etc.)            |
+| `blocking_transition` | `uint8_t` (atomic)      | 1 while transitioning to BLOCKED; prevents early wake |
+| `join_event`          | `sched_event_t`         | Embedded event for thread-join waiters                |
+| `kstack_base/top`     | `uintptr_t`             | Thread-private kernel stack                           |
 
-| Field              | Type                    | Purpose                                              |
-|--------------------|-------------------------|------------------------------------------------------|
-| `tid`              | `uint32_t`              | Thread identity; used in ready queue                 |
-| `owner_pid`        | `uint32_t`              | Owning process                                       |
-| `state`            | `thread_state_t`        | UNUSED / READY / RUNNING / BLOCKED / ZOMBIE          |
-| `block_reason`     | `thread_block_reason_t` | NONE / IPC / WAIT_PROCESS / WAIT_THREAD              |
-| `in_ready_queue`   | `uint8_t`               | Prevents double-enqueue                              |
-| `is_kernel_worker` | `uint8_t`               | Worker threads run directly on kstack; no trampoline |
-| `time_slice_ticks` | `uint32_t`              | Per-thread quantum                                   |
-| `ticks_remaining`  | `uint32_t`              | Ticks left in current quantum                        |
-| `ticks_total`      | `uint64_t`              | Cumulative ticks consumed by this thread             |
-| `ctx`              | `process_context_t`     | Per-thread register save (non-worker threads)        |
-| `kstack_base/top`  | `uintptr_t`             | Thread-private kernel stack                          |
-| `join_waiter_tid`  | `uint32_t`              | Thread waiting on this thread's exit                 |
+All kernel-worker threads now use `thread->ctx` for context save/restore; the
+legacy `proc->ctx` shared slot is removed.
 
 ---
 
 ### Process and Thread States
 
 ```
-                  ┌──────────┐
-   spawn          │  READY   │◄────────────────────────────────┐
-  ──────────►     └──────────┘                                 │
-                      │ schedule                        wake (IPC/wait)
-                      ▼                                        │
-                  ┌─────────┐  yield/preempt            ┌──────────────┐
-                  │ RUNNING │──────────────────────────►│   BLOCKED    │
-                  └─────────┘  block_on_ipc / wait      └──────────────┘
-                      │
-                      │ exit / kill
-                      ▼
-                  ┌────────┐
-                  │ ZOMBIE │──► reap ──► UNUSED
-                  └────────┘
+              ┌──────────┐
+   spawn      │  READY   │◄──────────────────────────────┐
+  ──────────► └──────────┘                               │
+                   │ schedule                    sched_wake_thread
+                   ▼                                     │
+              ┌─────────┐  yield/preempt       ┌──────────────────┐
+              │ RUNNING │─────────────────────►│     BLOCKED      │
+              └─────────┘  sched_event_wait    └──────────────────┘
+                   │
+                   │ exit / kill
+                   ▼
+               ┌────────┐
+               │ ZOMBIE │──► join/auto-reap ──► UNUSED
+               └────────┘
 ```
 
 `process_run_result_t` values returned from the process entry function:
@@ -203,192 +269,203 @@ additional kernel-worker and user threads can be added at runtime.
 | `PROCESS_RUN_EXITED`        | Process exit; mark zombie                |
 | `PROCESS_RUN_THREAD_EXITED` | Worker thread exit; decrement live count |
 
+Process states (`process_state_t`):
+
+| State                    | Value | Meaning                              |
+|--------------------------|-------|--------------------------------------|
+| `PROCESS_STATE_UNUSED`   | 0     | Slot free                            |
+| `PROCESS_STATE_ALIVE`    | 1     | At least one live thread             |
+| `PROCESS_STATE_REAPING`  | 6     | Being reaped; slots still valid      |
+| `PROCESS_STATE_ZOMBIE`   | 4     | All threads exited; awaiting reap    |
+
+The READY/RUNNING/BLOCKED distinction is gone at the process level — only
+thread state drives scheduling.
+
 ---
 
-### Ready Queue
+### Unified Event System
 
-The ready queue is a FIFO circular ring buffer of `THREAD_MAX_COUNT` (128) slots
-holding thread IDs. State is maintained in three globals: `g_ready_queue[]`,
-`g_ready_head`, `g_ready_tail`, `g_ready_count`.
+Source: `src/kernel/include/sched_event.h`, `src/kernel/sched_event.c`
 
-**Enqueue** (`ready_queue_enqueue`): rejects threads not in `THREAD_STATE_READY`,
-rejects idle process, rejects already-queued threads. Advances tail.
+`sched_event_t` is the single blocking primitive for all wait operations:
 
-**Dequeue** (`ready_queue_dequeue`): advances head, validates that the dequeued
-thread is still READY and its owner process is still READY. Stale entries from
-killed/reaped owners are silently dropped.
+```c
+typedef struct {
+    spinlock_t          lock;
+    list_head_t         wait_list;   /* thread_t.event_node members */
+    uint32_t            cnt;
+    sched_event_type_t  type;
+} sched_event_t;
+```
 
-The idle process (`g_idle_process`) is excluded from the queue. The scheduler
-falls back to it only when `ready_queue_dequeue` returns nothing.
+| Event type                 | Used by                                       |
+|----------------------------|-----------------------------------------------|
+| `SCHED_EVENT_TYPE_IPC`     | IPC endpoint blocking (ipc_recv_blocking_for) |
+| `SCHED_EVENT_TYPE_JOIN`    | Thread join                                   |
+| `SCHED_EVENT_TYPE_PROCESS` | Process-level wait (child exit)               |
+| `SCHED_EVENT_TYPE_SELECT`  | Select-set multi-endpoint wait                |
+| `SCHED_EVENT_TYPE_FUTEX`   | Futex wait                                    |
+
+**Blocking a thread** (`sched_event_wait`):
+- Sets `thread->blocking_transition = 1` (prevents premature wake before context save)
+- Appends `thread->event_node` to `ev->wait_list`
+- Calls `process_yield(PROCESS_RUN_BLOCKED)`
+- On return from yield the `blocking_transition` handler has already cleared the flag
+
+**Waking one waiter** (`sched_event_wake_one`):
+- Removes the head entry from `ev->wait_list`
+- Writes `pend_state` and `pend_data` to the woken thread
+- Calls `sched_wake_thread(t)` which enqueues `t` back onto the priority queue
+
+**`sched_wake_thread`** spin-waits on `blocking_transition` before enqueuing,
+ensuring the sleeping CPU has finished its context save.
+
+The `single-registration invariant`: a thread's `event_node` may only be in one
+`wait_list` at a time.  Before adding to a new event, any existing membership
+is removed.
 
 ---
 
 ### Scheduler Entry: `process_schedule_once`
 
-The main scheduling loop calls `process_schedule_once` after each process
-yields. The function has two entry variants:
+The main scheduling loop calls `process_schedule_once` after each dispatch.
 
-1. **Normal path**: if the current RSP is already in the higher-half kernel
-   window, call `process_schedule_once_impl` directly.
-2. **Bootstrap safety path**: if RSP is below the higher-half base (early
-   boot or low-stack path), execute `process_schedule_once_impl` on the
-   dedicated 8 KB `g_sched_trampoline_stack` to avoid stack aliasing with
-   user-space address ranges.
-
-`process_schedule_once_impl` does:
-1. `ready_queue_dequeue()` → thread + owner process.
-2. Fall back to idle process if queue empty.
-3. Validate context canaries.
-4. `process_set_running(proc, thread)`: sets both process and thread to RUNNING.
-5. Refresh `ticks_remaining` if zero; assert non-zero slice.
-6. `cpu_set_kernel_stack(stack_top - 16)` → update TSS.rsp0 so ring3
-   interrupt/syscall entries land on the right kernel stack.
-7. `context_switch_high(&g_sched_ctx, run_ctx)` → save scheduler context,
-   restore process context and resume.
-8. On return from the switch, handle the run result:
-   - `PROCESS_RUN_YIELDED` → `process_set_ready` + re-enqueue.
-   - `PROCESS_RUN_BLOCKED` → leave thread blocked; enqueue next owner thread
-     if one is ready.
-   - `PROCESS_RUN_EXITED` → `process_mark_exited`; wake waiters; try auto-reap.
-   - `PROCESS_RUN_THREAD_EXITED` → decrement live thread count; mark zombie or
-     enqueue next owner thread.
+1. **Stack safety**: if RSP is below the higher-half base, execute on the
+   dedicated 8 KB `g_sched_trampoline_stack` to avoid aliasing.
+2. `cpu_sched_pick_next(cpu_sched())` → next `thread_t` (or idle thread).
+3. Find owner `process_t` via `thread->owner_pid`.
+4. Validate thread context canaries; halt on mismatch.
+5. `process_set_running(proc, thread)`.
+6. Refresh `ticks_remaining` if zero.
+7. `cpu_set_kernel_stack(stack_top - 16)` → update TSS.rsp0.
+8. Set `g_current_pid`, `g_current_process`, `g_current_thread`.
+9. Load `root_table` from the process MM context.
+10. **Kernel workers** (`is_kernel_worker`):
+    - Snapshot callee-saved registers + RSP into `g_sched_ctx` so the worker's
+      yield returns correctly.
+    - If `thread->ctx.rsp == 0`: call `process_run_worker_on_stack(proc, thread)` (fresh thread).
+    - If `thread->ctx.rsp != 0`: `context_switch_high(&g_sched_ctx, &thread->ctx)` (resume blocked worker).
+11. **Other threads**: `context_switch_high(&g_sched_ctx, &thread->ctx)`.
+12. On return, handle the run result:
+    - `YIELDED` → re-enqueue on priority queue; clean up any stale event
+      registrations from a non-blocking `ipc_recv_for` call.
+    - `BLOCKED` → leave thread off the queue; `blocking_transition` flag was
+      cleared by the BLOCKED handler.
+    - `EXITED` → `process_mark_exited`; wake waiters; try auto-reap.
+    - `THREAD_EXITED` → decrement live thread count; mark zombie or find next
+      ready thread.
 
 ---
 
 ### Context Switch: `context_switch.S`
 
-`context_switch(process_context_t *out, process_context_t *in)` saves all 15
-GPRs plus RSP, RIP (synthesized as `lea 1f(%rip)` so the restored context
-resumes just after the call), RFLAGS, CS, SS, user_rsp, and root_table into
-`*out`. Then it restores the same set from `*in`.
+`context_switch_high(process_context_t *out, process_context_t *in)` saves all
+15 GPRs plus RSP, RIP (synthesized as `lea 1f(%rip)`), RFLAGS, CS, SS, user_rsp,
+and root_table into `*out`.  Then restores the same set from `*in`.
 
-The final resume step has two branches depending on the target privilege level,
-detected by `testb $0x3, cs`:
+The final resume step branches on privilege level (`testb $0x3, cs`):
 
-- **Ring0 (kernel) resume**: push RFLAGS + RIP on the new kernel stack, then
-  `popfq` + `ret`. The `ret` pops the synthesized RIP and resumes.
-- **Ring3 (user) resume**: push user_ss, user_rsp, RFLAGS, CS, RIP as a
-  five-word `iretq` frame on the kernel stack, then `iretq`. This correctly
-  restores CPL3 state and loads the user RSP.
+- **Ring0**: push RFLAGS + RIP on the kernel stack, `popfq` + `ret`.
+- **Ring3**: construct a five-word `iretq` frame (user_ss, user_rsp, RFLAGS, CS,
+  RIP), then `iretq`, restoring CPL3 state and user RSP.
 
-Both paths load `root_table` into CR3 before restoring GPRs. `g_in_context_switch`
-is set to `1` at entry and cleared to `0` before the final `ret`/`iretq`; this
-flag prevents re-entrant preemption during an in-flight switch.
+Both paths load `root_table` into CR3 before restoring GPRs.
+`g_in_context_switch` is set at entry and cleared before `ret`/`iretq`.
 
-`context_switch_to(process_context_t *in)` is the one-way variant: no save,
-just restore and resume. Used by `process_preempt_trampoline` to re-enter the
-scheduler context from a preempted user process.
-
-The `process_preempt_trampoline` symbol:
-
-```asm
-process_preempt_trampoline:
-    leaq g_sched_ctx(%rip), %rdi
-    jmp context_switch_to
-```
+`context_switch_to(process_context_t *in)` is the one-way variant (no save).
+Used by `process_preempt_trampoline`.
 
 ---
 
 ### Process Trampoline
 
-All processes (except kernel-worker threads) start execution at
-`process_trampoline`. On each scheduler dispatch it:
+All non-worker threads start execution at `process_trampoline`:
 
-1. Checks stack canaries at base, mid, and top. Halts with a diagnostic if any
-   are tripped.
-2. Calls `preempt_enable()` until `preempt_disable_depth() == 0` (clears any
-   stale preempt counts from a previous slice).
-3. Calls `entry(process, arg)`.
-4. On return, calls `context_switch_high(ctx, &g_sched_ctx)` to hand back to
-   the scheduler, carrying the run result in `g_last_run_result`.
-
-This pattern means every process re-enters through the trampoline after every
-context switch; the stack unwinds cleanly on each dispatch.
+1. Check stack canaries at base, mid, and top.  Halt on corruption.
+2. `preempt_enable()` until `preempt_disable_depth() == 0`.
+3. Call `entry(process, arg)`.
+4. `context_switch_high(ctx, &g_sched_ctx)` to hand back to the scheduler.
 
 ---
 
 ### Preemption Path
 
-**Step 1 — Tick accounting.**
-`timer_handle_irq()` → `process_tick()`. This increments the running thread's
-`ticks_total`, decrements `ticks_remaining`, and sets `g_need_resched = 1` when
-`ticks_remaining` reaches zero. Logs `[test] preempt ok` on the first expiry.
+**Step 1** — `timer_handle_irq()` → `process_tick()`: increments `ticks_total`,
+decrements `ticks_remaining`, sets `g_need_resched = 1` at zero.
 
-**Step 2 — IRQ handler.**
-`x86_timer_irq_handler(irq_frame_t *frame)` receives the full register frame
-pushed by the timer ISR stub. It calls `process_preempt_from_irq(frame)`.
+**Step 2** — `x86_timer_irq_handler(irq_frame_t *frame)` calls
+`process_preempt_from_irq(frame)`.
 
-**Step 3 — Preemption gate checks.** `process_preempt_from_irq` refuses to
-preempt if any of the following is true:
+**Step 3** — Gate checks.  Preemption is refused if any of the following:
 
-| Guard | Condition |
-|---|---|
-| `g_in_scheduler` | Scheduler is running |
-| `g_in_context_switch` | Context switch in flight |
-| PM guard | `process-manager` process with `pm_preempt_safe_depth == 0` |
-| `!process_should_resched()` | Quantum not yet expired |
-| `!preempt_is_enabled()` | Preemption disabled (`g_preempt_disable_count > 0`) |
-| Not RUNNING | Current process is not in RUNNING state |
-| `in_hostcall` | Inside wasm3 execution (WASM hostcall in progress) |
-| Kernel-origin frame | `cs & 0x3 == 0x0` — kernel code cannot be preempted |
-| Invalid frame | `rip == 0`, wrong selectors, `user_rsp == 0` for CPL3 |
+| Guard                       | Condition                                     |
+|-----------------------------|-----------------------------------------------|
+| `g_in_scheduler`            | Scheduler is running                          |
+| `g_in_context_switch`       | Context switch in flight                      |
+| PM guard                    | PM outside `pm_preempt_safe_enter` scope      |
+| `!process_should_resched()` | Quantum not yet expired                       |
+| `!preempt_is_enabled()`     | Preemption disabled                           |
+| Not RUNNING                 | Current thread not RUNNING                    |
+| `in_hostcall`               | Inside wasm3 execution                        |
+| Kernel-origin frame         | `cs & 0x3 == 0x0`                             |
+| Invalid frame               | `rip == 0`, wrong selectors, missing user_rsp |
 
-If all checks pass and the frame originates from user space (CPL3):
+**Step 4** — Context capture into `g_current_thread->ctx`.
 
-**Step 4 — Context capture.** All fields from `irq_frame_t` are copied into
-`g_current_process->ctx` and the current thread's `ctx`: all 15 GPRs, cs,
-user_rsp, ss, rip, rflags.
+**Step 5** — Frame rewrite: overwrite frame `cs` → `KERNEL_CS`, `rip` →
+`process_preempt_trampoline`.  Re-enqueue thread.  Clear `g_need_resched`.
 
-**Step 5 — Frame rewrite.** The frame's `cs` is overwritten with
-`KERNEL_CS_SELECTOR` and `rip` is overwritten with the address of
-`process_preempt_trampoline`. The process is marked READY and re-enqueued.
-`g_need_resched` is cleared.
+**Step 6** — IRETQ jumps to `process_preempt_trampoline` in ring0.
 
-**Step 6 — IRETQ redirect.** When the IRQ handler returns with `iretq`, the
-modified frame causes the CPU to jump to `process_preempt_trampoline` in ring0
-on the kernel stack — not back into the user process.
-
-**Step 7 — Scheduler re-entry.** `process_preempt_trampoline` calls
-`context_switch_to(&g_sched_ctx)`, which restores the scheduler context and
-returns control to `process_schedule_once`.
+**Step 7** — `process_preempt_trampoline` calls `context_switch_to(&g_sched_ctx)`,
+returning to `process_schedule_once`.
 
 ---
 
 ### Preemption Disable and Spinlocks
 
-Two independent depth counters manage preemption and interrupt delivery:
+**`g_preempt_disable_count`** — prevents scheduler preemption.  Does not disable
+hardware interrupts.  Held for the entire wasm3 execution of a WASM process.
 
-**`g_preempt_disable_count`** — prevents the scheduler from preempting the
-current thread. Incremented by `preempt_disable()` / `critical_section_enter()`,
-decremented by `preempt_enable()` / `critical_section_leave()`. Does not
-disable hardware interrupts. The wasm3 execution wrapper holds preempt_disable
-for the entire WASM execution of a process to prevent mid-execution preemption
-while the interpreter is in an unknown state.
+**`g_irq_disable_depth` + `g_irq_saved_flags`** — managed by spinlocks.
+`spinlock_lock` saves RFLAGS, issues `cli`, increments the depth counter, calls
+`preempt_disable()`.  `spinlock_unlock` reverses on the final release.
 
-**`g_irq_disable_depth` + `g_irq_saved_flags`** — managed by spinlocks only.
-`spinlock_lock` saves RFLAGS and issues `cli`, increments the depth counter,
-and calls `preempt_disable()`. `spinlock_unlock` releases the lock, calls
-`preempt_enable()`, and restores RFLAGS on the final unlock (re-enabling
-interrupts if they were enabled before). Spinlocks are always held with IF=0,
-preventing the IRQ deadlock that would otherwise occur when `ipc_send_from`
-(called from IRQ context) tries to acquire a lock held by an interrupted
-`ipc_recv_for` caller.
+`preempt_safepoint()` — cooperative resched checkpoint: if `g_need_resched` is
+set and preemption is enabled, calls `process_yield`.
 
-`preempt_safepoint()` is a cooperative checkpoint: if `g_need_resched` is set
-and preemption is enabled, it clears the flag and calls `process_yield`. Called
-by long-running kernel paths that want to be responsive without waiting for the
-next IRQ.
+`pm_preempt_safe_enter()` / `pm_preempt_safe_leave()` — PM-scoped guard allowing
+selective preemption inside the process manager.
 
-`pm_preempt_safe_enter()` / `pm_preempt_safe_leave()` are a process-manager
-scoped guard (`g_pm_preempt_safe_depth`). The PM holds this around sections that
-can tolerate preemption; outside those sections the PM is not preemptible even
-if `g_preempt_disable_count == 0`.
+---
+
+### Lock Hierarchy
+
+Strict ordering to prevent deadlock.  Acquire from outermost to innermost:
+
+```
+cpu_sched_t.lock         (per-CPU ready queue)
+  │
+  └─► process_t.wasm3_lock   (WASM reentrancy guard, if needed)
+        │
+        └─► sched_event_t.lock   (event wait list)
+              │
+              └─► ipc_endpoint_t.lock  (message queue + poll_struct)
+                    │
+                    └─► futex_table_bucket.lock  (futex hash bucket, leaf)
+```
+
+Rules:
+- Never acquire a coarser lock while holding a finer one.
+- `cpu_sched_t.lock` acquired with IRQs saved (`spinlock_lock_irqsave`) from
+  IRQ context.
+- `sched_event_t.lock` is acquired before transitioning to BLOCKED and released
+  before `process_yield`.
+- Futex bucket lock is a leaf — nothing else acquired while it is held.
 
 ---
 
 ### Kernel Stack Layout
-
-Every process and thread gets an independent kernel stack with guard pages:
 
 ```
 Physical layout: [guard_low][usable][guard_high]
@@ -397,73 +474,39 @@ Physical layout: [guard_low][usable][guard_high]
   guard_high: STACK_GUARD_PAGES × 4 KB (unmapped → #PF on overflow)
 ```
 
-All stacks are allocated in the higher-half window
-(`pfa_alloc_pages_below(pages, 512 MiB)`) so they are reachable under kernel
-CR3 without any additional mapping. Stack overruns into guard pages produce
-deterministic `#PF` exceptions rather than silent corruption.
-
 Initial RSP on spawn: `stack_top - (STACK_REDZONE_BYTES + 8)`, 16-byte aligned.
 
-Three canary words are written at allocation time:
-- `*stack_base = STACK_CANARY_VALUE`
-- `*stack_mid = STACK_CANARY_VALUE`
-- `*(stack_top - 8) = STACK_CANARY_VALUE`
-
-These are checked in `process_trampoline` before every process entry and would
-trap before returning into the scheduler if overwritten.
-
-TSS.rsp0 is updated by `cpu_set_kernel_stack(stack_top - 16)` on every dispatch
-so CPL3→CPL0 transitions (syscalls and hardware exceptions) always land on the
-correct process kernel stack.
+Three canary words at base/mid/top; checked in `process_trampoline` on every
+dispatch.  TSS.rsp0 updated on every dispatch.
 
 ---
 
 ### Thread Types
 
-| Type          | `is_kernel_worker` | Entry                                  | Context                 | Stack              |
-|---------------|--------------------|----------------------------------------|-------------------------|--------------------|
-| Main thread   | 0                  | via `process_trampoline`               | `thread->ctx`           | `process_t` stack  |
-| Kernel worker | 1                  | `process_run_worker_on_stack` directly | `proc->ctx`             | dedicated `kstack` |
-| User thread   | 0                  | via `iretq` to user RIP                | `thread->ctx` (cs=0x1B) | dedicated `kstack` |
+| Type          | `is_kernel_worker` | Entry                                  | Context       | Stack              |
+|---------------|--------------------|----------------------------------------|---------------|--------------------|
+| Main thread   | 0                  | via `process_trampoline`               | `thread->ctx` | `process_t` stack  |
+| Kernel worker | 1                  | `process_run_worker_on_stack` directly | `thread->ctx` | dedicated `kstack` |
+| User thread   | 0                  | via `iretq` to user RIP                | `thread->ctx` | dedicated `kstack` |
 
-`process_sched_ctx_for_thread` returns `proc->ctx` for worker threads and
-`thread->ctx` for all others. The scheduler always dispatches threads, not
-processes: `ready_queue_enqueue`/`dequeue` operate on `tid`.
+All thread types use `thread->ctx`.  The legacy `proc->ctx` shared context slot
+is removed.
 
 ---
 
 ### Observability
 
-- `[test] preempt ok` — logged once on first quantum expiry (first proof that
-  preemption is working).
-- `[test] sched progress ok` — logged once after 256 context switches
-  (scheduler liveness proof).
-- `[watchdog] resched stall ticks=N` — logged every `SCHED_RESCHED_STALL_TICKS`
-  ticks when `g_need_resched` remains set without a switch. Increments
-  `g_resched_stall_reports`.
-- `[watchdog] trap frame invalid` — logged when `process_preempt_from_irq` sees
-  a malformed IRQ frame. Increments `g_trap_frame_invalid_reports`.
-- `[sched] stack canary tripped` — logged and halted (`cli; hlt`) when
-  `process_trampoline` detects a corrupted canary.
-- `[sched] ctx canary corrupt` — logged and halted when `process_validate_context`
-  detects a corrupted `ctx_canary_pre` or `ctx_canary_post`.
-- `[sched] invariant fail` — logged and halted on `process_sched_invariant_fail`
-  for structural consistency errors (null pointers, owner mismatch, zero slice).
-
-`process_watchdog_issue_count()` returns `g_resched_stall_reports + g_trap_frame_invalid_reports`
-for test harness assertions.
-
----
-
-### What Is Not Implemented
-
-- **Priorities or budgets.** All threads get the same fixed quantum.
-- **Per-CPU ready queues and work stealing.** The shared ready queue is
-  protected by a single IRQ-safe spinlock; all online CPUs draw from it.
-  Per-CPU queues with work stealing are a future optimisation.
-- **Kernel preemption.** The preemption path only fires on CPL3 frames.
-  Kernel-originated frames are skipped; the kernel runs to completion unless
-  it cooperatively yields.
-- **CPU accounting and scheduling metrics.** `ticks_total` is tracked per
-  thread and surfaced through `process_stats_t`, but there is no per-CPU
-  utilization budget, load tracking, or latency instrumentation.
+- `[test] preempt ok` — first quantum expiry proves preemption works.
+- `[test] sched progress ok` — 256 successful context switches (scheduler liveness).
+- `[test] sched bitmap-ffs ok` — priority bitmap lookup table is correct.
+- `[test] sched priority-ordering ok` — higher-priority threads preempt lower ones.
+- `[test] sched dequeue ok` — dequeue returns correct thread.
+- `[test] sched event-wake-one ok` — `sched_event_wake_one` wakes exactly one waiter.
+- `[test] sched event-wake-all ok` — `sched_event_wake_all` wakes all waiters.
+- `[test] sched default-prio ok` — `sched_default_prio` returns correct priority.
+- `[test] sched sched-list ok` — intrusive list operations are correct.
+- `[test] sched wake-during-block-transition ok` — `blocking_transition` guard prevents lost wakes.
+- `[test] sched selftest all ok` — all scheduler selftests passed.
+- `[watchdog] resched stall ticks=N` — `g_need_resched` pending without switch for too long.
+- `[sched] stack canary tripped` — halt on corrupted stack canary.
+- `[sched] ctx canary corrupt` — halt on corrupted context canary.

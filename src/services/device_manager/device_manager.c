@@ -68,11 +68,7 @@ static wasmos_sys_event_loop_t g_dm_ipc_loop;
 static wasmos_sys_event_loop_t g_dm_inventory_loop;
 static wasmos_sys_event_loop_t g_dm_query_loop;
 static wasmos_sys_event_loop_t g_dm_rules_loop;
-
-typedef struct {
-    uint8_t done;
-    wasmos_ipc_message_t msg;
-} dm_intent_wait_t;
+static int32_t g_dm_call_select_id = -1;
 
 #define DM_SPAWN_TIMEOUT_MS   5000
 #define DM_SPAWN_POLL_MAX     65536
@@ -141,7 +137,9 @@ static int module_index_by_name(const char *name);
 static uint16_t count_loaded_active_rules(void);
 static int is_mount_already_active(const char *mount);
 static void handle_query_message_fields(const wasmos_ipc_message_t *msg);
-static void handle_query_endpoint(void);
+static void handle_query_endpoint_nonblocking(void);
+static void consume_inventory_events_nonblocking(void);
+static void drain_reply_endpoint_nonblocking(int32_t budget);
 static int dm_ipc_call(int32_t destination_endpoint,
                        int32_t source_endpoint,
                        int32_t msg_type,
@@ -159,19 +157,6 @@ static int dm_register_inventory_handlers(void);
 static int dm_register_query_handlers(void);
 static int dm_register_rules_handlers(void);
 
-/* Intent callback: copy the resolved message into dm_intent_wait_t.msg
- * and set done=1 so dm_ipc_call's poll loop exits. */
-static void
-dm_intent_resolve_store(void *user, const wasmos_ipc_message_t *msg)
-{
-    dm_intent_wait_t *state = (dm_intent_wait_t *)user;
-    if (!state || !msg) {
-        return;
-    }
-    state->done = 1;
-    state->msg = *msg;
-}
-
 /* Synchronous IPC call: send a request via the dm_ipc_loop intent table and
  * spin-poll until the matching reply arrives or max_empty_polls is reached.
  * Also drains the query endpoint while waiting so external callers don't stall.
@@ -188,44 +173,61 @@ dm_ipc_call(int32_t destination_endpoint,
             wasmos_ipc_message_t *out_msg,
             int32_t max_empty_polls)
 {
-    dm_intent_wait_t wait_state = {0};
+    wasmos_ipc_message_t msg;
     int32_t empty_polls = 0;
     if (request_id <= 0 || !out_msg) {
         return -1;
     }
-    if (wasmos_sys_intent_send_with_request_id(&g_dm_ipc_loop,
-                                               destination_endpoint,
-                                               source_endpoint,
-                                               request_id,
-                                               msg_type,
-                                               arg0,
-                                               arg1,
-                                               arg2,
-                                               arg3,
-                                               dm_intent_resolve_store,
-                                               &wait_state) != 0) {
+    if (wasmos_ipc_send(destination_endpoint,
+                        source_endpoint,
+                        msg_type,
+                        request_id,
+                        arg0,
+                        arg1,
+                        arg2,
+                        arg3) != 0) {
         return -1;
     }
-    if (max_empty_polls <= 0) {
-        max_empty_polls = 256;
-    }
-    while (!wait_state.done) {
-        int32_t handled = wasmos_sys_event_loop_poll(&g_dm_ipc_loop, 16);
-        handle_query_endpoint();
-        if (handled < 0) {
+    for (;;) {
+        int32_t ready_ep = -1;
+        if (g_dm_call_select_id < 0) {
             return -1;
         }
-        if (handled == 0) {
-            if (empty_polls++ >= max_empty_polls) {
+        ready_ep = wasmos_ipc_select_wait(g_dm_call_select_id);
+        if (ready_ep < 0) {
+            return -1;
+        }
+        if (ready_ep == source_endpoint) {
+            int32_t recv_rc = wasmos_ipc_drain(source_endpoint);
+            if (recv_rc < 0) {
                 return -1;
             }
-            (void)wasmos_sched_yield();
-        } else {
+            if (recv_rc == 0) {
+                if (max_empty_polls > 0 && ++empty_polls >= max_empty_polls) {
+                    return -1;
+                }
+                continue;
+            }
+            wasmos_ipc_message_read_last(&msg);
+            if (msg.request_id != request_id) {
+                empty_polls = 0;
+                continue;
+            }
+            *out_msg = msg;
+            return 0;
+        }
+        if (ready_ep == g_dm.query_endpoint) {
+            int32_t handled = wasmos_sys_event_loop_poll(&g_dm_query_loop, 16);
+            if (handled < 0) {
+                return -1;
+            }
             empty_polls = 0;
+            continue;
+        }
+        if (max_empty_polls > 0 && ++empty_polls >= max_empty_polls) {
+            return -1;
         }
     }
-    *out_msg = wait_state.msg;
-    return 0;
 }
 
 static int
@@ -818,11 +820,14 @@ query_module_meta_by_path(const char *path, uint32_t source, int32_t *out_index)
     if (path_len == 0 || path_len > 95u) {
         return -1;
     }
+    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+        return -1;
+    }
     if (dm_ipc_call(g_dm.proc_endpoint,
                     g_dm.reply_endpoint,
                     PROC_IPC_MODULE_META_PATH,
                     g_dm.request_id++,
-                    (int32_t)(uintptr_t)path,
+                    0,
                     (int32_t)path_len,
                     (int32_t)source,
                     0,
@@ -1459,15 +1464,6 @@ consume_acpi_inventory(void)
      * boot_mount_ready so drivers on /boot can be found by the FS. */
 }
 
-static void
-consume_inventory_events_nonblocking(void)
-{
-    if (g_dm.inventory_endpoint < 0) {
-        return;
-    }
-    (void)wasmos_sys_event_loop_poll(&g_dm_inventory_loop, 16);
-}
-
 static hw_spawn_target_t
 next_spawn_target(void)
 {
@@ -1589,12 +1585,57 @@ handle_query_message_fields(const wasmos_ipc_message_t *msg)
 }
 
 static void
-handle_query_endpoint(void)
+handle_query_endpoint_nonblocking(void)
 {
-    if (g_dm.query_endpoint < 0) {
-        return;
+    for (int32_t i = 0; i < 16; ++i) {
+        wasmos_ipc_message_t msg;
+        if (g_dm.query_endpoint < 0) {
+            return;
+        }
+        if (wasmos_ipc_drain(g_dm.query_endpoint) <= 0) {
+            return;
+        }
+        wasmos_ipc_message_read_last(&msg);
+        /* This drain must stay nonblocking: the threadable libsys event-loop
+         * poll now blocks on empty select-sets, but device-manager still needs
+         * to make forward progress on pending spawn targets between queries. */
+        handle_query_message_fields(&msg);
     }
-    (void)wasmos_sys_event_loop_poll(&g_dm_query_loop, 16);
+}
+
+static void
+consume_inventory_events_nonblocking(void)
+{
+    for (int32_t i = 0; i < 16; ++i) {
+        wasmos_ipc_message_t msg;
+        if (g_dm.inventory_endpoint < 0) {
+            return;
+        }
+        if (wasmos_ipc_drain(g_dm.inventory_endpoint) <= 0) {
+            return;
+        }
+        wasmos_ipc_message_read_last(&msg);
+        dm_handle_inventory_message(0, &msg);
+    }
+}
+
+static void
+drain_reply_endpoint_nonblocking(int32_t budget)
+{
+    if (budget <= 0) {
+        budget = 1;
+    }
+    for (int32_t i = 0; i < budget; ++i) {
+        wasmos_ipc_message_t msg;
+        if (g_dm.reply_endpoint < 0) {
+            return;
+        }
+        if (wasmos_ipc_drain(g_dm.reply_endpoint) <= 0) {
+            return;
+        }
+        wasmos_ipc_message_read_last(&msg);
+        dm_handle_ipc_default(0, &msg);
+    }
 }
 
 /* Service entry point.  module_count (arg1) is the number of initfs modules
@@ -1661,6 +1702,13 @@ initialize(int32_t proc_endpoint,
         console_write("[device-manager] query register failed\n");
         wasmos_sys_ipc_recv_loop();
     }
+    g_dm_call_select_id = wasmos_ipc_select_create();
+    if (g_dm_call_select_id < 0 ||
+        wasmos_ipc_select_add(g_dm_call_select_id, g_dm.reply_endpoint) != 0 ||
+        wasmos_ipc_select_add(g_dm_call_select_id, g_dm.query_endpoint) != 0) {
+        console_write("[device-manager] combined select init failed\n");
+        wasmos_sys_ipc_recv_loop();
+    }
     g_dm.rule_reply_endpoint = wasmos_ipc_create_endpoint();
     if (g_dm.rule_reply_endpoint < 0) {
         console_write("[device-manager] rules reply endpoint create failed\n");
@@ -1704,7 +1752,7 @@ initialize(int32_t proc_endpoint,
     g_dm.phase = HW_PHASE_SPAWN;
 
     for (;;) {
-        handle_query_endpoint();
+        handle_query_endpoint_nonblocking();
         if (g_dm.phase == HW_PHASE_SPAWN) {
             hw_spawn_target_t target = next_spawn_target();
             if (target == HW_SPAWN_NONE) {
@@ -1867,7 +1915,7 @@ initialize(int32_t proc_endpoint,
         if (g_dm.phase == HW_PHASE_IDLE) {
             load_rules_if_available();
             consume_inventory_events_nonblocking();
-            (void)wasmos_sys_event_loop_poll(&g_dm_ipc_loop, 4);
+            drain_reply_endpoint_nonblocking(4);
             if (next_spawn_target() != HW_SPAWN_NONE) {
                 g_dm.phase = HW_PHASE_SPAWN;
                 continue;

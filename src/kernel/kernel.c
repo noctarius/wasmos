@@ -20,6 +20,7 @@
 #include "kernel_init_runtime.h"
 #include "kernel_boot_runtime.h"
 #include "kernel_selftest_runtime.h"
+#include "kernel_sched_selftest_runtime.h"
 #include "kernel_threading_selftest_runtime.h"
 #include "kernel_ring3_smoke_runtime.h"
 #include "kernel_ring3_suite_runtime.h"
@@ -257,6 +258,12 @@ kmain(boot_info_t *boot_info)
                                  g_ring3_smoke_enabled);
 
     wasmos_app_set_policy_hooks(wasmos_endpoint_resolve, wasmos_capability_grant);
+
+    if (kernel_sched_selftest_run() != 0) {
+        for (;;) {
+            __asm__ volatile("hlt");
+        }
+    }
 
     if (kernel_selftest_spawn_baseline(init_pid, g_preempt_test_enabled) != 0) {
         for (;;) {

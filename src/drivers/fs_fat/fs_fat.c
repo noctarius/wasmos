@@ -358,7 +358,7 @@ fat_stall(void)
     int32_t endpoint = wasmos_ipc_create_endpoint();
     for (;;) {
         if (endpoint >= 0) {
-            (void)wasmos_ipc_recv(endpoint);
+            (void)wasmos_ipc_select_one(endpoint);
         }
     }
 }
@@ -428,7 +428,7 @@ fat_poll_block_io(void)
 
     /* The FAT state machines reuse a single reply endpoint and complete one
      * block request at a time, which keeps memory use and control flow simple. */
-    int32_t recv_rc = wasmos_ipc_recv(g_reply_endpoint);
+    int32_t recv_rc = wasmos_ipc_select_one(g_reply_endpoint);
     if (recv_rc < 0) {
         g_waiting = 0;
         fat_log("block recv failed\n");
@@ -665,10 +665,8 @@ fat_resolve_mount_alias(int32_t proc_endpoint, char *out_mount, uint32_t out_mou
     }
     out_mount[0] = '\0';
     *out_unit = 0;
-    if (wasmos_ipc_send(g_block_endpoint, g_reply_endpoint, BLOCK_IPC_IDENTIFY_REQ, req_id, 0, 0, 0, 0) != 0) {
-        return -1;
-    }
-    if (wasmos_ipc_recv(g_reply_endpoint) < 0) {
+    if (wasmos_ipc_send(g_block_endpoint, g_reply_endpoint, BLOCK_IPC_IDENTIFY_REQ, req_id, 0, 0, 0, 0) != 0 ||
+        wasmos_ipc_select_one(g_reply_endpoint) < 0) {
         return -1;
     }
     if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != BLOCK_IPC_IDENTIFY_RESP) {
@@ -691,10 +689,8 @@ fat_resolve_mount_alias(int32_t proc_endpoint, char *out_mount, uint32_t out_mou
                         unit,
                         0,
                         0,
-                        0) != 0) {
-        return -1;
-    }
-    if (wasmos_ipc_recv(g_reply_endpoint) < 0) {
+                        0) != 0 ||
+        wasmos_ipc_select_one(g_reply_endpoint) < 0) {
         return -1;
     }
     if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != DEVMGR_BLOCK_MOUNT_INFO) {
@@ -4083,7 +4079,7 @@ initialize(int32_t proc_endpoint,
         fat_log("fs-manager register send failed\n");
         fat_stall();
     }
-    if (wasmos_ipc_recv(g_reply_endpoint) < 0) {
+    if (wasmos_ipc_select_one(g_reply_endpoint) < 0) {
         fat_log("fs-manager register recv failed\n");
         fat_stall();
     }
@@ -4109,7 +4105,7 @@ initialize(int32_t proc_endpoint,
             continue;
         }
 
-        int32_t recv_rc = wasmos_ipc_recv(g_fs_endpoint);
+        int32_t recv_rc = wasmos_ipc_select_one(g_fs_endpoint);
         if (recv_rc < 0) {
             continue;
         }

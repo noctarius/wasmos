@@ -219,7 +219,7 @@ lapic_init(uint32_t hz)
      * LVT_TIMER entry and therefore does NOT go through LINT0.
      */
     lapic_write(LAPIC_REG_LVT_LINT0, 0x700u);  /* ExtINT, unmasked */
-#else
+#elif WASMOS_IRQ_MODE == 2
     /* IOAPIC mode: the 8259 is entirely bypassed; mask all its lines. */
     pic_disable();
 #endif

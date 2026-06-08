@@ -49,7 +49,6 @@ thread_reset_slot(thread_t *thread)
     thread->owner_pid = 0;
     thread->state = THREAD_STATE_UNUSED;
     thread->block_reason = THREAD_BLOCK_NONE;
-    thread->in_ready_queue = 0;
     thread->is_kernel_worker = 0;
     thread->blocking_transition = 0;
     thread->kstack_base = 0;
@@ -139,7 +138,6 @@ thread_spawn_in_owner(uint32_t owner_pid,
     slot->owner_pid = owner_pid;
     slot->state = initial_state;
     slot->block_reason = initial_reason;
-    slot->in_ready_queue = 0;
     slot->is_kernel_worker = 0;
     slot->kstack_base = 0;
     slot->kstack_top = 0;

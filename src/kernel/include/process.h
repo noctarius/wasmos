@@ -1,25 +1,17 @@
-/* process.h - Kernel process and scheduler management.
- *
- * A process_t represents a schedulable unit.  The kernel uses cooperative +
- * preemptive scheduling: a process yields voluntarily via process_yield() or is
- * preempted by the timer IRQ via process_preempt_from_irq().
- *
- * The process_context_t is saved/restored by context_switch.S; its layout is
- * verified by _Static_assert to match the byte offsets used in the assembly.
- *
- * Canary values (ctx_canary_pre / ctx_canary_post) bracket the saved context to
- * detect stack overflow or memory corruption across context switches. */
 #ifndef WASMOS_PROCESS_H
 #define WASMOS_PROCESS_H
 
 #include <stdint.h>
 #include <stddef.h>
 
-#define PROCESS_MAX_COUNT 48      /* total process slots (includes kernel and user processes) */
+#include "spinlock.h"
+#include "sched_event.h"
+
+#define PROCESS_MAX_COUNT 48
 #define PROCESS_NAME_MAX 64
-/* Round-robin scheduler time slice (fixed ticks per run). */
+// Round-robin scheduler time slice (fixed ticks per run).
 #define PROCESS_DEFAULT_SLICE_TICKS 5u
-#define PROCESS_STACK_SIZE 524288u  /* default kernel stack per process (512 KB) */
+#define PROCESS_STACK_SIZE 524288u
 #define PROCESS_CTX_CANARY_VALUE 0xC0FFEE0DD15EA5EULL
 
 typedef struct {
@@ -91,7 +83,10 @@ typedef enum {
     PROCESS_STATE_RUNNING,
     PROCESS_STATE_BLOCKED,
     PROCESS_STATE_ZOMBIE,
-    PROCESS_STATE_REAPING
+    /* ALIVE covers READY/RUNNING/BLOCKED for code that only needs to
+     * distinguish live vs. dead. */
+    PROCESS_STATE_ALIVE   = PROCESS_STATE_READY,
+    PROCESS_STATE_REAPING = 6,
 } process_state_t;
 
 typedef enum {
@@ -127,7 +122,6 @@ typedef struct process {
     uint32_t time_slice_ticks;
     uint32_t ticks_remaining;
     uint64_t ticks_total;
-    uint8_t in_ready_queue;
     uint8_t is_idle;
     uint8_t in_hostcall;
     uint8_t auto_reap;
@@ -145,6 +139,12 @@ typedef struct process {
     void *arg;
     char name_storage[PROCESS_NAME_MAX];
     const char *name;
+    /* wasm3 reentrancy guard: held for the duration of wasm3 entry_fn call.
+     * Worker threads (is_kernel_worker) never acquire this. */
+    spinlock_t  wasm3_lock;
+    uint32_t    wasm3_owner;   /* TID of current wasm3 occupant; 0 = free */
+    /* Process-level wait event (replaces wait_target_pid polling). */
+    sched_event_t wait_event;
 } process_t;
 
 typedef struct {
@@ -162,20 +162,22 @@ typedef struct {
     uint64_t rss_est_bytes;
 } process_stats_t;
 
+/*
+ * sched_enqueue_thread — enqueue a READY thread on the threadable scheduler.
+ * All call sites must use this instead of touching cpu_sched_t directly so
+ * the dispatch point is a single place.
+ */
+struct thread;
+#include "sched.h"
+static inline void sched_enqueue_thread(struct thread *t) {
+    cpu_sched_enqueue(cpu_sched(), t);
+}
+
 void process_init(void);
 int process_spawn(const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
 int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
 int process_spawn_as_parked(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
-int process_spawn_as_ready_gated(uint32_t parent_pid,
-                                 const char *name,
-                                 process_entry_t entry,
-                                 void *arg,
-                                 uint32_t *out_pid);
-int process_spawn_as_ready_gated_parked(uint32_t parent_pid,
-                                        const char *name,
-                                        process_entry_t entry,
-                                        void *arg,
-                                        uint32_t *out_pid);
+int process_spawn_as_ready_gated_parked(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
 int process_unpark_pid(uint32_t pid);
 int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
 int process_thread_spawn_internal(uint32_t owner_pid, const char *name, uint32_t *out_tid);
@@ -193,7 +195,7 @@ process_t *process_get(uint32_t pid);
 process_t *process_find_by_context(uint32_t context_id);
 uint32_t process_current_pid(void);
 void process_set_exit_status(process_t *process, int32_t exit_status);
-void process_block_on_ipc(process_t *process);
+void process_block_on_ipc(process_t *process); /* TODO: remove once all callers updated */
 void process_notify_ready(process_t *process);
 void process_set_require_explicit_ready(process_t *process);
 int process_wait(process_t *process, uint32_t target_pid, int32_t *out_exit_status);
@@ -202,12 +204,12 @@ int process_thread_detach(process_t *process, uint32_t target_tid);
 int process_kill(uint32_t pid, int32_t exit_status);
 int process_get_exit_status(uint32_t pid, int32_t *out_exit_status);
 int process_set_auto_reap(uint32_t pid, uint8_t enabled);
-uint32_t process_wake_by_context(uint32_t context_id);
 int process_wake_thread(uint32_t tid);
 int process_schedule_once(void);
 void process_yield(process_run_result_t result);
 void process_tick(void);
 int process_should_resched(void);
+void process_set_need_resched(void);
 void process_clear_resched(void);
 int process_preempt_from_irq(irq_frame_t *frame);
 void preempt_disable(void);

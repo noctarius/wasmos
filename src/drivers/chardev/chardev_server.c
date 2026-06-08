@@ -51,7 +51,7 @@ initialize(int32_t service_endpoint,
     wasmos_proc_notify_ready();
 
     for (;;) {
-        int32_t recv_rc = wasmos_ipc_recv(g_service_endpoint);
+        int32_t recv_rc = wasmos_ipc_select_one(g_service_endpoint);
         if (recv_rc < 0) {
             continue;
         }

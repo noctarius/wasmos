@@ -59,7 +59,7 @@ wasmos_proc_module_meta(int32_t proc_endpoint,
                         0) != 0) {
         return -1;
     }
-    if (wasmos_ipc_recv(reply_endpoint) < 0) {
+    if (wasmos_ipc_select_one(reply_endpoint) < 0) {
         return -1;
     }
     if ((uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req ||
@@ -104,7 +104,7 @@ wasmos_proc_module_meta_path(int32_t proc_endpoint,
                         0) != 0) {
         return -1;
     }
-    if (wasmos_ipc_recv(reply_endpoint) < 0) {
+    if (wasmos_ipc_select_one(reply_endpoint) < 0) {
         return -1;
     }
     if ((uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req ||

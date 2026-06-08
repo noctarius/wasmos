@@ -4,6 +4,7 @@
  * or native driver.  Responds with PROC_IPC_RESP when the child is ready. */
 #include "process_manager_internal.h"
 #include "klog.h"
+#include "serial.h"
 #include "process_manager.h"
 #include "capability.h"
 #include "memory.h"
@@ -521,6 +522,9 @@ pm_recv_fs_reply(uint32_t source_context_id,
     ipc_message_t msg;
     for (;;) {
         int rc = ipc_recv_blocking_for(source_context_id, source_endpoint, &msg);
+        if (rc == IPC_EMPTY) {
+            continue;  /* spurious wake; retry */
+        }
         if (rc != IPC_OK) {
             return -1;
         }
@@ -964,7 +968,7 @@ pm_poll_sync_spawn(uint32_t pm_context_id)
  *
  *   Async path: PM previously sent an FS_IPC_READ_REQ to the FS service and
  *     is waiting for the FS_IPC_RESP reply on fs_reply_endpoint.
- *     ipc_try_recv_for() returns IPC_EMPTY if the reply hasn't arrived yet —
+ *     ipc_recv_for() returns IPC_EMPTY if the reply hasn't arrived yet —
  *     the caller will re-invoke on the next dispatch loop iteration.
  *     On success the blob is in PM_BUFFER_KIND_FILESYSTEM; pm_spawn_from_buffer
  *     parses it and spawns the process as parked, then process_unpark_pid()
@@ -988,7 +992,7 @@ pm_poll_spawn(uint32_t pm_context_id)
     }
 
     ipc_message_t msg;
-    int recv_rc = ipc_try_recv_for(pm_context_id, g_pm.fs_reply_endpoint, &msg);
+    int recv_rc = ipc_recv_for(pm_context_id, g_pm.fs_reply_endpoint, &msg);
     if (recv_rc == IPC_EMPTY) {
         return; /* FS reply not yet available; will retry next dispatch tick */
     }
@@ -1676,6 +1680,7 @@ pm_handle_module_meta_path(uint32_t pm_context_id, const ipc_message_t *msg)
 {
     uint32_t owner_context = 0;
     process_t *caller = 0;
+    const uint8_t *caller_fs_buf = 0;
     char path[96];
     uint32_t path_ptr = (uint32_t)msg->arg0;
     uint32_t path_len = (uint32_t)msg->arg1;
@@ -1695,11 +1700,21 @@ pm_handle_module_meta_path(uint32_t pm_context_id, const ipc_message_t *msg)
     if (path_len == 0 || path_len >= sizeof(path)) {
         return -1;
     }
-    if (mm_copy_from_user(owner_context, path, (uint64_t)path_ptr, path_len) != 0) {
-        return -1;
+    if (path_ptr == 0) {
+        caller_fs_buf = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM,
+                                                                            owner_context);
+        if (!caller_fs_buf || path_len >= process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM)) {
+            return -1;
+        }
+        for (uint32_t i = 0; i < path_len; ++i) {
+            path[i] = (char)caller_fs_buf[i];
+        }
+    } else {
+        if (mm_copy_from_user(owner_context, path, (uint64_t)path_ptr, path_len) != 0) {
+            return -1;
+        }
     }
     path[path_len] = '\0';
-
     if (source == PROC_MODULE_SOURCE_INITFS) {
         if (wasmos_app_module_desc_by_initfs_path(g_pm.boot_info, path, &module_index, &desc) != 0) {
             return -1;

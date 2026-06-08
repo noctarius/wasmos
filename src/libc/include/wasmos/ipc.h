@@ -165,7 +165,7 @@ wasmos_ipc_call_retry(int32_t destination_endpoint,
     if (rc != 0) {
         return rc;
     }
-    rc = wasmos_ipc_recv(source_endpoint);
+    rc = wasmos_ipc_select_one(source_endpoint);
     if (rc < 0) {
         return rc;
     }

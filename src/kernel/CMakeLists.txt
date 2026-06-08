@@ -1,5 +1,5 @@
 set(LDFLAGS_KERNEL -nostdlib -T ${KERNEL_DIR}/arch/x86_64/linker.ld)
-set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -mcmodel=kernel ${WASMOS_TRACE_DEFINE} ${WASMOS_RING3_SMOKE_DEFINE} ${WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFINE} ${WASMOS_PM_TEST_HOOKS_DEFINE} ${WASMOS_PM_LIST_DEFINE} ${WASMOS_PM_LIST_CAP_DEFINE} ${WASMOS_IRQ_MODE_DEFINE} ${WASMOS_SMP_DEFINE} -I${WASM3_DIR}/source -Wno-unused-parameter)
+set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -mcmodel=kernel ${WASMOS_TRACE_DEFINE} ${WASMOS_RING3_SMOKE_DEFINE} ${WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFINE} ${WASMOS_PM_TEST_HOOKS_DEFINE} ${WASMOS_PM_LIST_DEFINE} ${WASMOS_PM_LIST_CAP_DEFINE} ${WASMOS_IRQ_MODE_DEFINE} ${WASMOS_SMP_DEFINE} -DWASMOS_SCHED_THREADABLE -I${WASM3_DIR}/source -Wno-unused-parameter)
 set(CXXFLAGS_KERNEL ${CFLAGS_KERNEL} -fno-exceptions -fno-rtti -fno-threadsafe-statics -Wno-deprecated)
 set(CFLAGS_WASM3 ${CFLAGS_KERNEL} -I${WASM3_DIR}/source -Dd_m3HasFloat=0 -Wno-unused-parameter -Wno-unused-variable)
 
@@ -75,6 +75,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/kernel_boot_runtime.o
   ${BUILD_DIR}/kernel_init_runtime.o
   ${BUILD_DIR}/kernel_selftest_runtime.o
+  ${BUILD_DIR}/kernel_sched_selftest_runtime.o
   ${BUILD_DIR}/kernel_ring3_fault_runtime.o
   ${BUILD_DIR}/kernel_ring3_probe_runtime.o
   ${BUILD_DIR}/kernel_ring3_smoke_runtime.o
@@ -98,6 +99,10 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/ipc.o
   ${BUILD_DIR}/process.o
   ${BUILD_DIR}/thread.o
+  ${BUILD_DIR}/sched_thread.o
+  ${BUILD_DIR}/sched_event.o
+  ${BUILD_DIR}/poll.o
+  ${BUILD_DIR}/futex.o
   ${BUILD_DIR}/spinlock.o
   ${BUILD_DIR}/user_mutex.o
   ${BUILD_DIR}/memory_service.o
@@ -146,6 +151,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/kernel_boot_runtime.c
   ${KERNEL_DIR}/kernel_init_runtime.c
   ${KERNEL_DIR}/kernel_selftest_runtime.c
+  ${KERNEL_DIR}/kernel_sched_selftest_runtime.c
   ${KERNEL_DIR}/kernel_ring3_fault_runtime.c
   ${KERNEL_DIR}/kernel_ring3_probe_runtime.c
   ${KERNEL_DIR}/kernel_ring3_smoke_runtime.c
@@ -169,6 +175,10 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/ipc.c
   ${KERNEL_DIR}/process.c
   ${KERNEL_DIR}/thread.c
+  ${KERNEL_DIR}/sched_thread.c
+  ${KERNEL_DIR}/sched_event.c
+  ${KERNEL_DIR}/poll.c
+  ${KERNEL_DIR}/futex.c
   ${KERNEL_DIR}/spinlock.c
   ${KERNEL_DIR}/user_mutex.c
   ${KERNEL_DIR}/memory_service.c
@@ -306,6 +316,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel_boot_runtime.c -o ${BUILD_DIR}/kernel_boot_runtime.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel_init_runtime.c -o ${BUILD_DIR}/kernel_init_runtime.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel_selftest_runtime.c -o ${BUILD_DIR}/kernel_selftest_runtime.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel_sched_selftest_runtime.c -o ${BUILD_DIR}/kernel_sched_selftest_runtime.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel_ring3_fault_runtime.c -o ${BUILD_DIR}/kernel_ring3_fault_runtime.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel_ring3_probe_runtime.c -o ${BUILD_DIR}/kernel_ring3_probe_runtime.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel_ring3_smoke_runtime.c -o ${BUILD_DIR}/kernel_ring3_smoke_runtime.o
@@ -329,6 +340,10 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/ipc.c -o ${BUILD_DIR}/ipc.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process.c -o ${BUILD_DIR}/process.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/thread.c -o ${BUILD_DIR}/thread.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/sched_thread.c -o ${BUILD_DIR}/sched_thread.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/sched_event.c -o ${BUILD_DIR}/sched_event.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/poll.c -o ${BUILD_DIR}/poll.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/futex.c -o ${BUILD_DIR}/futex.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/spinlock.c -o ${BUILD_DIR}/spinlock.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/user_mutex.c -o ${BUILD_DIR}/user_mutex.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory_service.c -o ${BUILD_DIR}/memory_service.o

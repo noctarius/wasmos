@@ -1,7 +1,3 @@
-/* libsys.h - WASM userspace system library (libsys).
- * High-level helpers built on top of the raw wasmos/api.h host-call imports:
- * IPC message construction, service lookup, FS buffer access, and scheduler
- * yield.  Drivers and services #include this instead of api.h directly. */
 #ifndef WASMOS_LIBSYS_H
 #define WASMOS_LIBSYS_H
 
@@ -10,7 +6,6 @@
 #include "string.h"
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
-#include "wasmos/mutex.h"
 #include "wasmos/sha256.h"
 #include "wasmos/libsys_string.h"
 
@@ -21,7 +16,6 @@ extern "C" {
 #define WASMOS_SYS_INTENT_MAX 16
 #define WASMOS_SYS_HANDLER_MAX 16
 
-/* Pending request awaiting a reply matched by request_id (intent table). */
 typedef struct {
     int32_t in_use;
     int32_t request_id;
@@ -29,7 +23,6 @@ typedef struct {
     void *user;
 } wasmos_sys_intent_t;
 
-/* Registered handler for a specific IPC message type (handler table). */
 typedef struct {
     int32_t in_use;
     int32_t msg_type;
@@ -37,26 +30,23 @@ typedef struct {
     void *user;
 } wasmos_sys_handler_t;
 
-/* Event loop state: combines an intent table (request/reply matching) and a
- * handler table (unsolicited message dispatch) for a single endpoint. */
 typedef struct {
     int32_t receiver_endpoint;
-    int32_t next_request_id;   /* auto-incremented by wasmos_sys_intent_send */
+    int32_t select_id;  /* select-set watching receiver_endpoint; -1 if not created */
+    int32_t next_request_id;
     void (*default_on_message)(void *user, const wasmos_ipc_message_t *msg);
     void *default_user;
     wasmos_sys_intent_t intents[WASMOS_SYS_INTENT_MAX];
     wasmos_sys_handler_t handlers[WASMOS_SYS_HANDLER_MAX];
 } wasmos_sys_event_loop_t;
 
-/* Block on reply_endpoint until a message with the matching request_id arrives;
- * discards messages with other request_ids. */
 static inline int32_t
 wasmos_sys_ipc_recv_matching(int32_t reply_endpoint,
                              int32_t request_id,
                              wasmos_ipc_message_t *out_reply)
 {
     for (;;) {
-        if (wasmos_ipc_recv(reply_endpoint) < 0) {
+        if (wasmos_ipc_select_one(reply_endpoint) < 0) {
             return -1;
         }
         wasmos_ipc_message_t msg;
@@ -83,6 +73,20 @@ wasmos_sys_event_loop_init(wasmos_sys_event_loop_t *loop,
     loop->next_request_id = request_id_base;
     loop->default_on_message = 0;
     loop->default_user = 0;
+    /* Create a select-set watching this loop's endpoint so that when the
+     * poll budget is exhausted the loop can block instead of busy-spinning.
+     * Minos2 design: tasks always block on events, never busy-poll. */
+    loop->select_id = -1;
+    if (receiver_endpoint >= 0) {
+        int32_t sel = wasmos_ipc_select_create();
+        if (sel > 0) {
+            if (wasmos_ipc_select_add(sel, receiver_endpoint) == 0) {
+                loop->select_id = sel;
+            } else {
+                (void)wasmos_ipc_select_destroy(sel);
+            }
+        }
+    }
     for (int32_t i = 0; i < WASMOS_SYS_INTENT_MAX; ++i) {
         loop->intents[i].in_use = 0;
         loop->intents[i].request_id = 0;
@@ -110,7 +114,6 @@ wasmos_sys_event_set_default(wasmos_sys_event_loop_t *loop,
     return 0;
 }
 
-/* Register (or replace) a handler for msg_type; returns -1 if the table is full. */
 static inline int32_t
 wasmos_sys_event_register(wasmos_sys_event_loop_t *loop,
                           int32_t msg_type,
@@ -139,9 +142,6 @@ wasmos_sys_event_register(wasmos_sys_event_loop_t *loop,
     return -1;
 }
 
-/* Send a request and register an intent (reply callback).  The loop's
- * auto-incremented request_id is used; *out_request_id receives it.
- * Returns -1 if the intent table is full or the send fails. */
 static inline int32_t
 wasmos_sys_intent_send(wasmos_sys_event_loop_t *loop,
                        int32_t destination_endpoint,
@@ -162,6 +162,10 @@ wasmos_sys_intent_send(wasmos_sys_event_loop_t *loop,
     for (int32_t i = 0; i < WASMOS_SYS_INTENT_MAX; ++i) {
         if (!loop->intents[i].in_use) {
             request_id = loop->next_request_id++;
+            loop->intents[i].in_use = 1;
+            loop->intents[i].request_id = request_id;
+            loop->intents[i].on_resolve = on_resolve;
+            loop->intents[i].user = user;
             if (wasmos_ipc_send(destination_endpoint,
                                 source_endpoint,
                                 type,
@@ -170,12 +174,12 @@ wasmos_sys_intent_send(wasmos_sys_event_loop_t *loop,
                                 arg1,
                                 arg2,
                                 arg3) != 0) {
+                loop->intents[i].in_use = 0;
+                loop->intents[i].request_id = 0;
+                loop->intents[i].on_resolve = 0;
+                loop->intents[i].user = 0;
                 return -1;
             }
-            loop->intents[i].in_use = 1;
-            loop->intents[i].request_id = request_id;
-            loop->intents[i].on_resolve = on_resolve;
-            loop->intents[i].user = user;
             if (out_request_id) {
                 *out_request_id = request_id;
             }
@@ -208,6 +212,10 @@ wasmos_sys_intent_send_with_request_id(wasmos_sys_event_loop_t *loop,
     }
     for (int32_t i = 0; i < WASMOS_SYS_INTENT_MAX; ++i) {
         if (!loop->intents[i].in_use) {
+            loop->intents[i].in_use = 1;
+            loop->intents[i].request_id = request_id;
+            loop->intents[i].on_resolve = on_resolve;
+            loop->intents[i].user = user;
             if (wasmos_ipc_send(destination_endpoint,
                                 source_endpoint,
                                 type,
@@ -216,20 +224,18 @@ wasmos_sys_intent_send_with_request_id(wasmos_sys_event_loop_t *loop,
                                 arg1,
                                 arg2,
                                 arg3) != 0) {
+                loop->intents[i].in_use = 0;
+                loop->intents[i].request_id = 0;
+                loop->intents[i].on_resolve = 0;
+                loop->intents[i].user = 0;
                 return -1;
             }
-            loop->intents[i].in_use = 1;
-            loop->intents[i].request_id = request_id;
-            loop->intents[i].on_resolve = on_resolve;
-            loop->intents[i].user = user;
             return 0;
         }
     }
     return -1;
 }
 
-/* Drain up to budget messages from the endpoint; fires intent callbacks or
- * type handlers for each; returns the number of messages handled (0 = empty). */
 static inline int32_t
 wasmos_sys_event_loop_poll(wasmos_sys_event_loop_t *loop, int32_t budget)
 {
@@ -242,10 +248,22 @@ wasmos_sys_event_loop_poll(wasmos_sys_event_loop_t *loop, int32_t budget)
     }
     for (int32_t i = 0; i < budget; ++i) {
         wasmos_ipc_message_t msg;
-        if (wasmos_ipc_try_recv(loop->receiver_endpoint) <= 0) {
+        if (wasmos_ipc_drain(loop->receiver_endpoint) <= 0) {
+            /* No message available.  If this is the first iteration and the
+             * loop has a select-set, block until a message arrives instead of
+             * returning immediately (Minos2: never busy-poll). */
+            if (i == 0 && loop->select_id > 0) {
+                (void)wasmos_ipc_select_wait(loop->select_id);
+                if (wasmos_ipc_drain(loop->receiver_endpoint) <= 0) {
+                    break;
+                }
+                wasmos_ipc_message_read_last(&msg);
+                goto wasmos_sys_event_loop_poll_handle;
+            }
             break;
         }
         wasmos_ipc_message_read_last(&msg);
+wasmos_sys_event_loop_poll_handle:
         handled++;
         for (int32_t j = 0; j < WASMOS_SYS_INTENT_MAX; ++j) {
             if (loop->intents[j].in_use && loop->intents[j].request_id == msg.request_id) {
@@ -318,62 +336,9 @@ wasmos_sys_ipc_recv_loop(void)
     int32_t endpoint = wasmos_ipc_create_endpoint();
     for (;;) {
         if (endpoint >= 0) {
-            (void)wasmos_ipc_recv(endpoint);
+            (void)wasmos_ipc_select_one(endpoint);
         }
     }
-}
-
-/* --- Select set helpers ---
- *
- * A select set watches multiple endpoints and blocks until any one of them
- * has a message (or notification) ready — the kernel equivalent of Go's
- * select statement across channels.
- *
- * Persistent usage (thread pool / long-lived wait):
- *
- *   int32_t sel = wasmos_sys_select_create();
- *   wasmos_sys_select_add(sel, ep_a);
- *   wasmos_sys_select_add(sel, ep_b);
- *   for (;;) {
- *       int32_t ready = wasmos_sys_select_wait(sel);
- *       if (ready == ep_a) { wasmos_ipc_try_recv(ep_a); ... }
- *       else if (ready == ep_b) { wasmos_ipc_try_recv(ep_b); ... }
- *   }
- *   wasmos_sys_select_destroy(sel);
- *
- * One-shot convenience (ad-hoc multi-endpoint wait):
- *
- *   int32_t eps[] = { ep_a, ep_b, ep_c };
- *   int32_t ready = wasmos_sys_wait_any(eps, 3);
- */
-static inline int32_t wasmos_sys_select_create(void) {
-    return wasmos_ipc_select_create();
-}
-static inline int32_t wasmos_sys_select_add(int32_t sel, int32_t endpoint) {
-    return wasmos_ipc_select_add(sel, endpoint);
-}
-static inline int32_t wasmos_sys_select_wait(int32_t sel) {
-    return wasmos_ipc_select_wait(sel);
-}
-static inline void wasmos_sys_select_destroy(int32_t sel) {
-    if (sel > 0) {
-        (void)wasmos_ipc_select_destroy(sel);
-    }
-}
-
-static inline int32_t
-wasmos_sys_wait_any(const int32_t *endpoints, int32_t count)
-{
-    int32_t sel = wasmos_ipc_select_create();
-    if (sel < 0) {
-        return -1;
-    }
-    for (int32_t i = 0; i < count; i++) {
-        (void)wasmos_ipc_select_add(sel, endpoints[i]);
-    }
-    int32_t ready = wasmos_ipc_select_wait(sel);
-    (void)wasmos_ipc_select_destroy(sel);
-    return ready;
 }
 
 /* Send PROC_IPC_NOTIFY_READY to the process manager and block until PM acks.

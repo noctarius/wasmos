@@ -524,7 +524,7 @@ initialize(int32_t proc_endpoint,
         console_write("[fs-init] register fs-manager send failed\n");
         wasmos_sys_ipc_recv_loop();
     }
-    if (wasmos_ipc_recv(g_reply_endpoint) < 0 ||
+    if (wasmos_ipc_select_one(g_reply_endpoint) < 0 ||
         wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != FSMGR_IPC_REGISTER_BACKEND_RESP) {
         console_write("[fs-init] register fs-manager failed\n");
         wasmos_sys_ipc_recv_loop();
@@ -533,7 +533,7 @@ initialize(int32_t proc_endpoint,
     wasmos_sys_notify_ready(proc_endpoint, g_fs_endpoint);
 
     for (;;) {
-        if (wasmos_ipc_recv(g_fs_endpoint) < 0) {
+        if (wasmos_ipc_select_one(g_fs_endpoint) < 0) {
             continue;
         }
         int32_t type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);

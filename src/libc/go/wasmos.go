@@ -65,7 +65,7 @@ func ipcCreateEndpoint() int32
 //go:wasmimport wasmos ipc_send
 func ipcSend(destinationEndpoint int32, sourceEndpoint int32, msgType int32, requestID int32, arg0 int32, arg1 int32, arg2 int32, arg3 int32) int32
 
-//go:wasmimport wasmos ipc_recv
+//go:wasmimport wasmos ipc_select_one
 func ipcRecv(endpoint int32) int32
 
 //go:wasmimport wasmos ipc_last_field

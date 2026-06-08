@@ -1,7 +1,3 @@
-/* wasm3_link.c - wasm3 host-function registration and WASM import resolver.
- * Links all WASMOS host-call imports (IPC, memory, filesystem, framebuffer,
- * scheduler, mutex, …) into each wasm3 runtime before module instantiation.
- * Each hostcall validates capability grants before touching hardware. */
 #include "boot.h"
 #include "klog.h"
 #include "ipc.h"
@@ -21,8 +17,11 @@
 #include "policy.h"
 #include "capability.h"
 #include "thread.h"
-#include "user_mutex.h"
 #include "wasm_driver.h"
+
+#ifdef WASMOS_SCHED_THREADABLE
+#include "futex.h"
+#endif
 
 #include <stdint.h>
 #include <string.h>
@@ -471,15 +470,6 @@ wasm_user_va_from_host_ptr(uint32_t context_id,
     if (off > mem_size || (uint64_t)span > (mem_size - off)) {
         return -1;
     }
-    /* Sync the cached WASM_LINEAR region size with the actual wasm3 memory
-     * size before the offset bounds check.  Languages like Zig and TinyGo
-     * grow linear memory at runtime; the region starts at 8 pages but the
-     * stack/heap can be placed far beyond that, so pointer validation must
-     * reflect the current allocation, not the initial size. */
-    mm_context_t *_lrsync_ctx = mm_context_get(context_id);
-    if (_lrsync_ctx) {
-        wasm_linear_region_sync_size(_lrsync_ctx, mem_size);
-    }
     return wasm_user_va_from_offset(context_id, (uint32_t)off, span, out_user_va);
 }
 
@@ -554,12 +544,10 @@ wasm_console_write_vt_mirror(const char *ptr, int32_t len)
     for (int32_t offset = 0; offset < len; ) {
         ipc_message_t msg;
         int32_t chunk[4] = { 0, 0, 0, 0 };
-        int count = 0;
 
-        for (int i = 0; i < 4 && offset < len; ++i, ++offset, ++count) {
+        for (int i = 0; i < 4 && offset < len; ++i, ++offset) {
             chunk[i] = (int32_t)(uint8_t)ptr[offset];
         }
-        chunk[0] |= (count << 24);
 
         msg.type = VT_IPC_WRITE_REQ;
         msg.source = IPC_ENDPOINT_NONE;
@@ -926,15 +914,15 @@ m3ApiRawFunction(wasmos_buffer_release)
     m3ApiReturn(wasm_buffer_release_impl(kind));
 }
 
-m3ApiRawFunction(wasmos_ipc_recv)
+m3ApiRawFunction(wasmos_ipc_select_one)
 {
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, endpoint)
     uint32_t context_id = 0;
     uint32_t pid = process_current_pid();
     wasm_ipc_last_slot_t *slot;
+    int rc;
     process_t *process;
-    thread_t *thread;
 
     if (endpoint < 0 || current_process_context(&context_id) != 0) {
         m3ApiReturn(-1);
@@ -949,59 +937,53 @@ m3ApiRawFunction(wasmos_ipc_recv)
     if (!process) {
         m3ApiReturn(-1);
     }
-    thread = thread_get(thread_current_tid());
     process->in_hostcall = 1;
-    process->block_reason = PROCESS_BLOCK_IPC;
 
     preempt_safepoint();
-
-    /*
-     * ipc_recv_blocking_for arms the waiter and marks the process BLOCKED
-     * atomically under ep->lock, closing the race where a sender could fire
-     * process_wake_thread between the arm and the BLOCKED transition, allowing
-     * an AP scheduler to pick up this thread while the current CPU still holds
-     * the kernel stack.
-     */
-    int rc = ipc_recv_blocking_for(context_id, (uint32_t)endpoint, &slot->message);
-
-    /*
-     * Restore running state unconditionally: ipc_recv_blocking_for may return
-     * with the process still BLOCKED when the message was found in the in-lock
-     * fast path (before process_yield was needed).  When the scheduler resumed
-     * us after a yield it already called process_set_running, so these writes
-     * are idempotent in that case.
-     */
-    process->state = PROCESS_STATE_RUNNING;
-    process->block_reason = PROCESS_BLOCK_NONE;
-    if (thread) {
-        thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
-    }
-    process->in_hostcall = 0;
-
-    if (rc != IPC_OK) {
-        m3ApiReturn(-1);
-    }
-
-    slot->valid = 1;
-    wasm_fs_peer_slot_t *peer = wasm_fs_peer_slot_for_pid(pid);
-    if (peer &&
-        slot->message.type >= FS_IPC_OPEN_REQ &&
-        slot->message.type <= FS_IPC_READ_APP_REQ) {
-        uint32_t owner_context = 0;
-        int owner_rc = ipc_endpoint_owner(slot->message.source, &owner_context);
-        if (owner_rc == IPC_OK && owner_context != 0) {
-            peer->valid = 1;
-            peer->peer_context_id = owner_context;
-        } else {
-            peer->valid = 0;
-            peer->peer_context_id = 0;
+    for (;;) {
+        process->block_reason = PROCESS_BLOCK_IPC;
+        /* Preserve the legacy sync-spawn contract for WASM children: the
+         * first blocking IPC wait marks the process ready unless it requires
+         * an explicit PROC_IPC_NOTIFY_READY handshake. */
+        if (!process->ready && !process->require_explicit_ready) {
+            process->ready = 1;
         }
+        /* Use the blocking variant: sleeps in sched_event_wait until a message
+         * arrives, then dequeues and returns IPC_OK.  Returns IPC_EMPTY only
+         * on a spurious wake, in which case we retry immediately. */
+        rc = ipc_recv_blocking_for(context_id, (uint32_t)endpoint, &slot->message);
+        if (rc == IPC_EMPTY) {
+            continue;  /* spurious wake; retry */
+        }
+        if (rc != IPC_OK) {
+            process->block_reason = PROCESS_BLOCK_NONE;
+            process->in_hostcall = 0;
+            m3ApiReturn(-1);
+        }
+        process->block_reason = PROCESS_BLOCK_NONE;
+        process->in_hostcall = 0;
+        slot->valid = 1;
+        wasm_fs_peer_slot_t *peer = wasm_fs_peer_slot_for_pid(pid);
+        if (peer &&
+            slot->message.type >= FS_IPC_OPEN_REQ &&
+            slot->message.type <= FS_IPC_READ_APP_REQ) {
+            uint32_t owner_context = 0;
+            int owner_rc = ipc_endpoint_owner(slot->message.source, &owner_context);
+            if (owner_rc == IPC_OK &&
+                owner_context != 0) {
+                peer->valid = 1;
+                peer->peer_context_id = owner_context;
+            } else {
+                peer->valid = 0;
+                peer->peer_context_id = 0;
+            }
+        }
+        preempt_safepoint();
+        m3ApiReturn(1);
     }
-    preempt_safepoint();
-    m3ApiReturn(1);
 }
 
-m3ApiRawFunction(wasmos_ipc_try_recv)
+m3ApiRawFunction(wasmos_ipc_drain)
 {
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, endpoint)
@@ -1020,7 +1002,7 @@ m3ApiRawFunction(wasmos_ipc_try_recv)
     }
 
     preempt_safepoint();
-    rc = ipc_try_recv_for(context_id, (uint32_t)endpoint, &slot->message);
+    rc = ipc_recv_for(context_id, (uint32_t)endpoint, &slot->message);
     if (rc == IPC_EMPTY) {
         m3ApiReturn(0); /* no message — return without blocking */
     }
@@ -1032,6 +1014,67 @@ m3ApiRawFunction(wasmos_ipc_try_recv)
     m3ApiReturn(1);
 }
 
+
+m3ApiRawFunction(wasmos_sys_select_create)
+{
+    m3ApiReturnType(int32_t)
+    uint32_t context_id = 0;
+    if (current_process_context(&context_id) != 0) {
+        m3ApiReturn(-1);
+    }
+    uint32_t select_id = 0;
+    int rc = ipc_select_create(context_id, &select_id);
+    if (rc != IPC_OK) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn((int32_t)select_id);
+}
+
+m3ApiRawFunction(wasmos_sys_select_add)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, select_id)
+    m3ApiGetArg(int32_t, endpoint_id)
+    uint32_t context_id = 0;
+    if (select_id <= 0 || endpoint_id < 0 || current_process_context(&context_id) != 0) {
+        m3ApiReturn(-1);
+    }
+    int rc = ipc_select_add((uint32_t)select_id, (uint32_t)endpoint_id, context_id);
+    m3ApiReturn(rc == IPC_OK ? 0 : -1);
+}
+
+m3ApiRawFunction(wasmos_sys_select_wait)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, select_id)
+    uint32_t context_id = 0;
+    if (select_id <= 0 || current_process_context(&context_id) != 0) {
+        m3ApiReturn(-1);
+    }
+    uint32_t ready_ep = IPC_ENDPOINT_NONE;
+    for (;;) {
+        int rc = ipc_select_wait((uint32_t)select_id, context_id, &ready_ep);
+        if (rc == IPC_OK) {
+            m3ApiReturn((int32_t)ready_ep);
+        }
+        if (rc == IPC_EMPTY) {
+            continue;
+        }
+        m3ApiReturn(-1);
+    }
+}
+
+m3ApiRawFunction(wasmos_sys_select_destroy)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, select_id)
+    uint32_t context_id = 0;
+    if (select_id <= 0 || current_process_context(&context_id) != 0) {
+        m3ApiReturn(-1);
+    }
+    ipc_select_destroy((uint32_t)select_id, context_id);
+    m3ApiReturn(0);
+}
 
 m3ApiRawFunction(wasmos_ipc_notify)
 {
@@ -1046,84 +1089,6 @@ m3ApiRawFunction(wasmos_ipc_notify)
     int rc = ipc_notify_from(context_id, (uint32_t)endpoint) == IPC_OK ? 0 : -1;
     preempt_safepoint();
     m3ApiReturn(rc);
-}
-
-m3ApiRawFunction(wasmos_ipc_select_create)
-{
-    m3ApiReturnType(int32_t)
-    uint32_t context_id = 0;
-    uint32_t select_id = 0;
-
-    preempt_safepoint();
-    if (current_process_context(&context_id) != 0) {
-        m3ApiReturn(-1);
-    }
-    if (ipc_select_create(context_id, &select_id) != IPC_OK) {
-        m3ApiReturn(-1);
-    }
-    preempt_safepoint();
-    m3ApiReturn((int32_t)select_id);
-}
-
-m3ApiRawFunction(wasmos_ipc_select_add)
-{
-    m3ApiReturnType(int32_t)
-    m3ApiGetArg(int32_t, select_id)
-    m3ApiGetArg(int32_t, endpoint)
-
-    preempt_safepoint();
-    if (select_id <= 0 || endpoint < 0) {
-        m3ApiReturn(-1);
-    }
-    int rc = ipc_select_add((uint32_t)select_id, (uint32_t)endpoint);
-    preempt_safepoint();
-    m3ApiReturn(rc == IPC_OK ? 0 : -1);
-}
-
-m3ApiRawFunction(wasmos_ipc_select_wait)
-{
-    m3ApiReturnType(int32_t)
-    m3ApiGetArg(int32_t, select_id)
-    uint32_t pid = process_current_pid();
-    process_t *process = process_get(pid);
-    thread_t *thread = thread_get(thread_current_tid());
-
-    if (select_id <= 0 || !process) {
-        m3ApiReturn(-1);
-    }
-
-    process->in_hostcall = 1;
-    process->block_reason = PROCESS_BLOCK_IPC;
-    preempt_safepoint();
-
-    uint32_t ready_ep = IPC_ENDPOINT_NONE;
-    int rc = ipc_select_wait((uint32_t)select_id, &ready_ep);
-
-    process->state = PROCESS_STATE_RUNNING;
-    process->block_reason = PROCESS_BLOCK_NONE;
-    if (thread) {
-        thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);
-    }
-    process->in_hostcall = 0;
-
-    if (rc != IPC_OK) {
-        m3ApiReturn(-1);
-    }
-    preempt_safepoint();
-    m3ApiReturn((int32_t)ready_ep);
-}
-
-m3ApiRawFunction(wasmos_ipc_select_destroy)
-{
-    m3ApiReturnType(int32_t)
-    m3ApiGetArg(int32_t, select_id)
-
-    preempt_safepoint();
-    if (select_id > 0) {
-        ipc_select_destroy((uint32_t)select_id);
-    }
-    preempt_safepoint();
-    m3ApiReturn(0);
 }
 
 m3ApiRawFunction(wasmos_ipc_last_field)
@@ -1241,9 +1206,7 @@ m3ApiRawFunction(wasmos_block_buffer_copy)
         m3ApiReturn(-1);
     }
 
-    const uint8_t *src =
-        (const uint8_t *)(uintptr_t)(((uint64_t)(uint32_t)phys + (uint64_t)(uint32_t)offset) |
-                                     KERNEL_HIGHER_HALF_BASE);
+    const uint8_t *src = (const uint8_t *)(uintptr_t)((uint32_t)phys + (uint32_t)offset);
     if (wasm_copy_to_user_sync_views(proc->context_id,
                                      ptr_user,
                                      ptr,
@@ -1286,9 +1249,7 @@ m3ApiRawFunction(wasmos_block_buffer_write)
         m3ApiReturn(-1);
     }
 
-    uint8_t *dst =
-        (uint8_t *)(uintptr_t)(((uint64_t)(uint32_t)phys + (uint64_t)(uint32_t)offset) |
-                               KERNEL_HIGHER_HALF_BASE);
+    uint8_t *dst = (uint8_t *)(uintptr_t)((uint32_t)phys + (uint32_t)offset);
     uint32_t copied = 0;
     uint8_t bounce[256];
     while (copied < (uint32_t)len) {
@@ -2825,24 +2786,10 @@ m3ApiRawFunction(wasmos_console_write)
         m3ApiReturn(-1);
     }
     m3ApiCheckMem(ptr, (uint32_t)len);
-    process_t *proc = process_get(process_current_pid());
-    if (!proc || proc->context_id == 0) {
-        m3ApiReturn(-1);
-    }
-    uint64_t ptr_user = 0;
-    if (wasm_user_va_from_host_ptr(proc->context_id,
-                                   (const uint8_t *)_mem,
-                                   (uint64_t)m3_GetMemorySize(runtime),
-                                   ptr,
-                                   (uint32_t)len,
-                                   &ptr_user) != 0 ||
-        mm_user_range_permitted(proc->context_id,
-                                ptr_user,
-                                (uint64_t)(uint32_t)len,
-                                MEM_REGION_FLAG_READ) != 0) {
-        m3ApiReturn(-1);
-    }
-
+    /* ptr is validated by m3ApiGetArgMem/m3ApiCheckMem to be within wasm3
+     * linear memory bounds. Use the host pointer directly — the user-VA
+     * reconciliation path fails for apps whose heap/stack extends past the
+     * initial 8-page user VA region, silencing all console output. */
     preempt_disable();
     char buf[128];
     uint32_t copied = 0;
@@ -2851,14 +2798,7 @@ m3ApiRawFunction(wasmos_console_write)
         if (chunk > (uint32_t)(sizeof(buf) - 1U)) {
             chunk = (uint32_t)(sizeof(buf) - 1U);
         }
-        if (wasm_copy_from_user_sync_views(proc->context_id,
-                                           ptr_user + (uint64_t)copied,
-                                           ptr + copied,
-                                           buf,
-                                           chunk) != 0) {
-            preempt_enable();
-            m3ApiReturn(-1);
-        }
+        __builtin_memcpy(buf, ptr + copied, chunk);
         buf[chunk] = '\0';
         klog_write(buf);
         wasm_console_write_vt_mirror(buf, (int32_t)chunk);
@@ -3111,56 +3051,6 @@ m3ApiRawFunction(wasmos_thread_gettid)
 {
     m3ApiReturnType(int32_t)
     m3ApiReturn((int32_t)thread_current_tid());
-}
-
-m3ApiRawFunction(wasmos_mutex_try_lock)
-{
-    m3ApiReturnType(int32_t)
-    m3ApiGetArg(int32_t, mutex_ptr)
-    process_t *proc = process_get(process_current_pid());
-    uint64_t user_mutex = 0;
-    uint32_t mutex_off = 0;
-    user_mutex_state_t state = {0};
-    if (!proc || wasm_arg_u32_nonneg(mutex_ptr, &mutex_off) != 0) {
-        m3ApiReturn(-1);
-    }
-    if (wasm_user_va_from_offset(proc->context_id,
-                                 mutex_off,
-                                 (uint32_t)sizeof(state),
-                                 &user_mutex) != 0) {
-        m3ApiReturn(-1);
-    }
-    int rc = user_mutex_user_try_lock(proc->context_id,
-                                      user_mutex,
-                                      thread_current_tid(),
-                                      &state);
-    memcpy((uint8_t *)_mem + mutex_off, &state, sizeof(state));
-    m3ApiReturn(rc);
-}
-
-m3ApiRawFunction(wasmos_mutex_unlock)
-{
-    m3ApiReturnType(int32_t)
-    m3ApiGetArg(int32_t, mutex_ptr)
-    process_t *proc = process_get(process_current_pid());
-    uint64_t user_mutex = 0;
-    uint32_t mutex_off = 0;
-    user_mutex_state_t state = {0};
-    if (!proc || wasm_arg_u32_nonneg(mutex_ptr, &mutex_off) != 0) {
-        m3ApiReturn(-1);
-    }
-    if (wasm_user_va_from_offset(proc->context_id,
-                                 mutex_off,
-                                 (uint32_t)sizeof(state),
-                                 &user_mutex) != 0) {
-        m3ApiReturn(-1);
-    }
-    int rc = user_mutex_user_unlock(proc->context_id,
-                                    user_mutex,
-                                    thread_current_tid(),
-                                    &state);
-    memcpy((uint8_t *)_mem + mutex_off, &state, sizeof(state));
-    m3ApiReturn(rc);
 }
 
 m3ApiRawFunction(wasmos_thread_create)
@@ -3626,6 +3516,36 @@ m3ApiRawFunction(wasmos_strlen)
     m3ApiReturn(len);
 }
 
+#ifdef WASMOS_SCHED_THREADABLE
+m3ApiRawFunction(wasmos_futex_wait)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, addr)
+    m3ApiGetArg(int32_t, expected)
+    m3ApiGetArg(int32_t, timeout_ms)
+    uint32_t context_id = 0;
+    if (current_process_context(&context_id) != 0) {
+        m3ApiReturn(-1);
+    }
+    int result = futex_wait((uint32_t)addr, (uint32_t)expected,
+                            (uint32_t)timeout_ms, context_id);
+    m3ApiReturn((int32_t)result);
+}
+
+m3ApiRawFunction(wasmos_futex_wake)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, addr)
+    m3ApiGetArg(int32_t, count)
+    uint32_t context_id = 0;
+    if (current_process_context(&context_id) != 0) {
+        m3ApiReturn(0);
+    }
+    int woken = futex_wake((uint32_t)addr, (uint32_t)count, context_id);
+    m3ApiReturn((int32_t)woken);
+}
+#endif /* WASMOS_SCHED_THREADABLE */
+
 m3ApiRawFunction(wasmos_env_abort)
 {
     m3ApiReturnType(void)
@@ -3692,14 +3612,21 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "dma_map_borrow", "i(iiiii)", wasmos_dma_map_borrow);
     rc |= wasm3_link_raw(module, "wasmos", "dma_sync_borrow", "i(iiii)", wasmos_dma_sync_borrow);
     rc |= wasm3_link_raw(module, "wasmos", "dma_unmap_borrow", "i(ii)", wasmos_dma_unmap_borrow);
-    rc |= wasm3_link_raw(module, "wasmos", "ipc_recv", "i(i)", wasmos_ipc_recv);
-    rc |= wasm3_link_raw(module, "wasmos", "ipc_try_recv", "i(i)", wasmos_ipc_try_recv);
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_select_one", "i(i)", wasmos_ipc_select_one);
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_recv", "i(i)", wasmos_ipc_select_one); /* legacy alias */
+    /* Both naming conventions: sys_select_* (new) and ipc_select_* (legacy ESP binaries). */
+    rc |= wasm3_link_raw(module, "wasmos", "sys_select_create",  "i()",   wasmos_sys_select_create);
+    rc |= wasm3_link_raw(module, "wasmos", "sys_select_add",     "i(ii)", wasmos_sys_select_add);
+    rc |= wasm3_link_raw(module, "wasmos", "sys_select_wait",    "i(i)",  wasmos_sys_select_wait);
+    rc |= wasm3_link_raw(module, "wasmos", "sys_select_destroy", "i(i)",  wasmos_sys_select_destroy);
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_select_create",  "i()",   wasmos_sys_select_create);
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_select_add",     "i(ii)", wasmos_sys_select_add);
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_select_wait",    "i(i)",  wasmos_sys_select_wait);
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_select_destroy", "i(i)",  wasmos_sys_select_destroy);
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_drain", "i(i)", wasmos_ipc_drain);
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_try_recv", "i(i)", wasmos_ipc_drain); /* legacy alias */
     rc |= wasm3_link_raw(module, "wasmos", "ipc_notify", "i(i)", wasmos_ipc_notify);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_last_field", "i(i)", wasmos_ipc_last_field);
-    rc |= wasm3_link_raw(module, "wasmos", "ipc_select_create", "i()", wasmos_ipc_select_create);
-    rc |= wasm3_link_raw(module, "wasmos", "ipc_select_add", "i(ii)", wasmos_ipc_select_add);
-    rc |= wasm3_link_raw(module, "wasmos", "ipc_select_wait", "i(i)", wasmos_ipc_select_wait);
-    rc |= wasm3_link_raw(module, "wasmos", "ipc_select_destroy", "i(i)", wasmos_ipc_select_destroy);
     rc |= wasm3_link_raw(module, "wasmos", "console_write", "i(*i)", wasmos_console_write);
     rc |= wasm3_link_raw(module, "wasmos", "debug_mark", "i(i)", wasmos_debug_mark);
     rc |= wasm3_link_raw(module, "wasmos", "kmap_dump", "i()", wasmos_kmap_dump);
@@ -3714,8 +3641,6 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "sched_current_pid", "i()", wasmos_sched_current_pid);
     rc |= wasm3_link_raw(module, "wasmos", "sched_yield", "i()", wasmos_sched_yield);
     rc |= wasm3_link_raw(module, "wasmos", "thread_gettid", "i()", wasmos_thread_gettid);
-    rc |= wasm3_link_raw(module, "wasmos", "mutex_try_lock", "i(i)", wasmos_mutex_try_lock);
-    rc |= wasm3_link_raw(module, "wasmos", "mutex_unlock", "i(i)", wasmos_mutex_unlock);
     rc |= wasm3_link_raw(module, "wasmos", "thread_create", "i(iiii)", wasmos_thread_create);
     rc |= wasm3_link_raw(module, "wasmos", "thread_yield", "i()", wasmos_thread_yield);
     rc |= wasm3_link_raw(module, "wasmos", "thread_exit", "i(i)", wasmos_thread_exit);
@@ -3772,6 +3697,10 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "serial_register", "i(i)", wasmos_serial_register);
     rc |= wasm3_link_raw(module, "wasmos", "input_push", "i(i)", wasmos_input_push);
     rc |= wasm3_link_raw(module, "wasmos", "input_read", "i()", wasmos_input_read);
+#ifdef WASMOS_SCHED_THREADABLE
+    rc |= wasm3_link_raw(module, "wasmos", "futex_wait", "i(iii)", wasmos_futex_wait);
+    rc |= wasm3_link_raw(module, "wasmos", "futex_wake", "i(ii)",  wasmos_futex_wake);
+#endif
     if (rc != 0) {
         klog_write("[kernel] wasm3 link errors\n");
         return -1;

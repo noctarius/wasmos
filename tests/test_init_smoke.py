@@ -42,11 +42,17 @@ class InitSmokeTests(unittest.TestCase):
         self._cmd_expect("init_smoke", b"init-smoke: init done")
 
     def test_sysinit_starts_configured_targets(self):
-        # Verify sysinit ran its script and the CLI started (trace-only
-        # [wasmos-app] markers are not emitted in normal builds).
-        self.assertIn(b"Starting system services...", self.session.buf)
-        self.assertIn(b"WAMOS CLI", self.session.buf)
-        self._cmd_expect("ps", b"processes:")
+        # vt, gfx-compositor and cli are all started by sysinit.rc; their
+        # presence in ps proves the full sysinit script completed.
+        mark = self.session.mark()
+        self.session.send("ps")
+        for needle in (b"vt", b"gfx-compositor", b"cli"):
+            ok = self.session.expect_from(mark, needle, timeout_s=10)
+            if not ok:
+                self.fail(f"Expected '{needle.decode()}' in ps output.\n--- tail ---\n{self.session.tail()}\n")
+        ok = self.session.expect_from(mark, b"wamos> ", timeout_s=10)
+        if not ok:
+            self.fail(f"Prompt not found after ps.\n--- tail ---\n{self.session.tail()}\n")
 
 
 if __name__ == "__main__":

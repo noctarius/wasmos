@@ -10,7 +10,25 @@
       "Bash(git -C /Volumes/git/wasmos commit -m ' *)",
       "Bash(cmake --build build --target run-qemu-test)",
       "Bash(grep -v \"\\\\.o$\")",
-      "Bash(git *)"
+      "Bash(git *)",
+      "Bash(cmake --build /Volumes/git/wasmos/build --target run-qemu-cli-test)",
+      "Bash(cmake --build /Volumes/git/wasmos/build --target run-qemu-ring3-check)",
+      "Bash(grep -v \"^$\")",
+      "Bash(grep -v \"^\\\\s*$\")",
+      "Bash(cmake --build /Volumes/git/wasmos/build --target run-qemu-ring3-test)",
+      "Bash(objdump -M intel -d /Volumes/git/wasmos/build/ring3/ring3_native_probe.bin)",
+      "Bash(ndisasm -b 64 /Volumes/git/wasmos/build/ring3/ring3_native_probe.bin)",
+      "Bash(cmake --build /Volumes/git/wasmos/build --target run-qemu-test)",
+      "Bash(WASMOS_QEMU_SMP_COUNT=4 python3 -m unittest tests.test_threading_ipc_stress)",
+      "Bash(cmake --build build --target kernel)",
+      "Bash(WASMOS_QEMU_SMP_COUNT=4 python3 -m unittest tests.test_threading_ipc_stress -v)",
+      "Bash(cmake --build /Volumes/git/wasmos/.claude/worktrees/threadable-scheduler/build --target kernel)",
+      "Bash(cmake --build /Volumes/git/wasmos/.claude/worktrees/threadable-scheduler/build --target run-qemu-test)",
+      "Bash(cmake --build /Volumes/git/wasmos/.claude/worktrees/threadable-scheduler/build --target acpi_bus_app ata_app cli_app device_manager_app font_service_app framebuffer_app framebuffer_pci_app fs_fat_app fs_init_app fs_manager_app gfx_compositor_app keyboard_app mouse_app pci_bus_app rtc_app serial_app sysinit_app virtio_serial_app vt_app)",
+      "Bash(cmake --build /Volumes/git/wasmos/.claude/worktrees/threadable-scheduler/build --target kernel acpi_bus_app ata_app cli_app device_manager_app font_service_app framebuffer_app framebuffer_pci_app fs_fat_app fs_init_app fs_manager_app gfx_compositor_app keyboard_app mouse_app pci_bus_app rtc_app serial_app sysinit_app virtio_serial_app vt_app)",
+      "Bash(cmake --build /Volumes/git/wasmos/.claire/worktrees/threadable-scheduler/build --target kernel)",
+      "Bash(cmake --build /Volumes/git/wasmos/.claude/worktrees/threadable-scheduler/build)",
+      "Bash(rg -n \"wasmos_ipc_recv\" --include=\"*.h\" --include=\"*.c\")"
     ]
   }
 }

@@ -60,10 +60,10 @@ extern int32_t wasmos_dma_sync_borrow(int32_t borrow_kind,
     WASMOS_WASM_IMPORT("wasmos", "dma_sync_borrow");
 extern int32_t wasmos_dma_unmap_borrow(int32_t borrow_kind, int32_t source_endpoint)
     WASMOS_WASM_IMPORT("wasmos", "dma_unmap_borrow");
-extern int32_t wasmos_ipc_recv(int32_t endpoint)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_recv");
-extern int32_t wasmos_ipc_try_recv(int32_t endpoint)
-    WASMOS_WASM_IMPORT("wasmos", "ipc_try_recv");
+extern int32_t wasmos_ipc_select_one(int32_t endpoint)
+    WASMOS_WASM_IMPORT("wasmos", "ipc_select_one");
+extern int32_t wasmos_ipc_drain(int32_t endpoint)
+    WASMOS_WASM_IMPORT("wasmos", "ipc_drain");
 extern int32_t wasmos_ipc_notify(int32_t endpoint)
     WASMOS_WASM_IMPORT("wasmos", "ipc_notify");
 extern int32_t wasmos_ipc_last_field(int32_t field)
@@ -251,6 +251,15 @@ extern int32_t wasmos_env_set(const char *name, int32_t name_len, const char *va
     WASMOS_WASM_IMPORT("wasmos", "env_set");
 extern int32_t wasmos_env_unset(const char *name, int32_t name_len)
     WASMOS_WASM_IMPORT("wasmos", "env_unset");
+/* select-set API: multi-endpoint blocking wait */
+extern int32_t wasmos_ipc_select_create(void)
+    WASMOS_WASM_IMPORT("wasmos", "ipc_select_create");
+extern int32_t wasmos_ipc_select_add(int32_t select_id, int32_t endpoint_id)
+    WASMOS_WASM_IMPORT("wasmos", "ipc_select_add");
+extern int32_t wasmos_ipc_select_wait(int32_t select_id)
+    WASMOS_WASM_IMPORT("wasmos", "ipc_select_wait");
+extern int32_t wasmos_ipc_select_destroy(int32_t select_id)
+    WASMOS_WASM_IMPORT("wasmos", "ipc_select_destroy");
 
 #ifdef __cplusplus
 }

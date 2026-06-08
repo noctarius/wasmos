@@ -1,39 +1,37 @@
 ## Process Model and IPC
 
 This document covers the WASMOS process model, the IPC transport layer, the
-`int 0x80` syscall ABI, the process manager (`proc` endpoint), and the
-`libsys` event-loop helpers. The authoritative sources are
-`src/kernel/ipc.c`, `src/kernel/syscall.c`, `src/kernel/process.c`,
-`src/kernel/process_manager*.c`, and
+select-set and poll-hub mechanisms, the futex primitive, the `int 0x80` syscall
+ABI, the process manager (`proc` endpoint), and the `libsys` event-loop helpers.
+The authoritative sources are `src/kernel/ipc.c`, `src/kernel/syscall.c`,
+`src/kernel/process.c`, `src/kernel/sched_event.c`, `src/kernel/poll.c`,
+`src/kernel/futex.c`, `src/kernel/process_manager*.c`, and
 `src/drivers/include/wasmos_driver_abi.h`.
 
 ---
 
 ### Process Lifecycle
 
-Processes move through five states. Threads within a process have a
-parallel state machine (see `05-scheduling-and-preemption.md`).
+Processes move through four states.  Threads within a process have a parallel
+state machine (see `07-scheduling-and-preemption.md`).
 
 ```
-UNUSED ──spawn──► READY ──dispatch──► RUNNING
-                  ▲                      │
-                  │ wake                 ├──► BLOCKED  (IPC wait / process wait / thread join)
-                  └──────────────────────┘
-                                         │
-                                         └──► ZOMBIE ──reap──► UNUSED
+UNUSED ──spawn──► ALIVE
+                    │
+                    ├──► ZOMBIE ──reap──► UNUSED
+                    │
+                    └──► REAPING (transitional; slots still valid)
 ```
 
-| `process_state_t`       | `process_block_reason_t` when BLOCKED     |
-|-------------------------|-------------------------------------------|
-| `PROCESS_STATE_UNUSED`  | —                                         |
-| `PROCESS_STATE_READY`   | —                                         |
-| `PROCESS_STATE_RUNNING` | —                                         |
-| `PROCESS_STATE_BLOCKED` | `PROCESS_BLOCK_IPC`, `PROCESS_BLOCK_WAIT` |
-| `PROCESS_STATE_ZOMBIE`  | —                                         |
+| `process_state_t`        | Meaning                                         |
+|--------------------------|-------------------------------------------------|
+| `PROCESS_STATE_UNUSED`   | Slot free                                       |
+| `PROCESS_STATE_ALIVE`    | One or more live threads                        |
+| `PROCESS_STATE_REAPING`  | Reap in progress; table entry still valid       |
+| `PROCESS_STATE_ZOMBIE`   | All threads exited; awaiting reap               |
 
-A process becomes a zombie when its entry function returns
-`PROCESS_RUN_EXITED`, when a `WASMOS_SYSCALL_EXIT` syscall fires, or when
-`process_kill` is called from its parent. Zombie processes are either
+A process becomes zombie when its last thread exits, when `process_kill` is
+called, or when a `WASMOS_SYSCALL_EXIT` syscall fires.  Zombie processes are
 explicitly reaped by a waiting parent (`process_wait`) or auto-reaped
 (`auto_reap = 1`) when no waiter exists.
 
@@ -49,23 +47,20 @@ Every process has three identifiers:
 | `context_id` | Memory + capability + IPC ownership scope       |
 | `main_tid`   | Main thread; additional threads can be spawned  |
 
-`pid` and `context_id` are distinct: capability grants, endpoint ownership,
-and MM regions are all keyed by `context_id`, not `pid`. Multiple threads
-within one process share the same `context_id` and address space.
-
-Process parentage is recorded in `parent_pid`. Kill and wait are restricted
-to the parent process; a process cannot kill or wait on an unrelated process.
+`pid` and `context_id` are distinct: capability grants, endpoint ownership, and
+MM regions are keyed by `context_id`, not `pid`.  Multiple threads within one
+process share the same `context_id` and address space.
 
 ---
 
 ### Process Ownership and Trust
 
 The kernel-owned `init` task (spawned by `kmain`) is the root parent for the
-first generation of kernel-started processes. It spawns `device-manager` and
+first generation of kernel-started processes.  It spawns `device-manager` and
 waits for FAT readiness before loading `sysinit`.
 
 The process manager (`proc` endpoint) is the privileged mediator for all
-further process lifecycle operations. It:
+further process lifecycle operations.  It:
 
 - Validates capability profiles at spawn time from WASMOS-APP metadata
 - Assigns `io.port`, `irq.route`, `mmio.map`, `dma.buffer`, `system.control`
@@ -73,34 +68,26 @@ further process lifecycle operations. It:
 - Maintains the service registry (name → endpoint)
 - Enforces owner-context restrictions on wait, kill, and status
 
-Processes spawned by the PM are children of the PM's kernel process. User
-processes can request spawn via IPC; the PM validates and performs the actual
-kernel `process_spawn_as` call, assigning the requester as the logical parent.
-
 ---
 
 ### `int 0x80` Syscall ABI
 
-Ring3 user processes communicate with the kernel through `int 0x80` (DPL3
-gate). The dispatcher is `x86_syscall_handler(syscall_frame_t *frame)`.
+Ring3 user processes communicate with the kernel through `int 0x80` (DPL3 gate).
+The dispatcher is `x86_syscall_handler(syscall_frame_t *frame)`.
 
 **Register convention:**
 
-| Register | Role                                                                       |
-|----------|----------------------------------------------------------------------------|
-| `RAX`    | Syscall ID (see `wasmos_syscall_id_t`); primary return value on completion |
-| `RDI`    | arg0                                                                       |
-| `RSI`    | arg1                                                                       |
-| `RDX`    | arg2 / secondary return (`IPC_CALL` reply `arg0` on success)               |
-| `RCX`    | arg3                                                                       |
-| `R8`     | arg4                                                                       |
-| `R9`     | arg5                                                                       |
+| Register | Role                                                                        |
+|----------|-----------------------------------------------------------------------------|
+| `RAX`    | Syscall ID (see `wasmos_syscall_id_t`); primary return value on completion  |
+| `RDI`    | arg0                                                                        |
+| `RSI`    | arg1                                                                        |
+| `RDX`    | arg2 / secondary return (`IPC_CALL` reply `arg0` on success)                |
+| `RCX`    | arg3                                                                        |
+| `R8`     | arg4                                                                        |
+| `R9`     | arg5                                                                        |
 
-All 32-bit-field syscall arguments are validated as 32-bit-clean (high 32 bits
-must be zero). `syscall_arg_u32(raw, out)` rejects any value with high bits
-set. The frame handler copies the ring3 register state into the current
-thread's `ctx` at entry so blocking syscalls resume at the correct post-syscall
-RIP when the thread is rescheduled.
+All 32-bit-field syscall arguments are validated as 32-bit-clean.
 
 **Syscall table:**
 
@@ -121,38 +108,19 @@ RIP when the thread is rescheduled.
 | 12 | `THREAD_DETACH` | `RDI=target_tid`                                          | 0 or -1                              |
 | 13 | `NOTIFY_READY`  | —                                                         | 0                                    |
 
-`WAIT` and `THREAD_JOIN` loop internally: on `IPC_EMPTY` / pending result they
-call `process_yield(PROCESS_RUN_BLOCKED)` until the target exits. The calling
-thread is woken when `process_wake_waiters` or `process_wake_thread_joiner`
-fires.
+`WAIT` and `THREAD_JOIN` use `sched_event_wait` internally for blocking;
+they are woken by `sched_event_wake_all` when the target exits or is killed.
 
-`IPC_CALL` is a synchronous request/reply primitive. It:
-1. Allocates or reuses a per-process source endpoint (lazy, validated on reuse).
-2. Assigns a monotonically-increasing `request_id`.
-3. Sends the request to `destination` via `ipc_send_from`.
-4. Loops on `ipc_recv_for(source_endpoint)`, yielding on `IPC_EMPTY`.
-5. Checks `response.request_id == request_id` (out-of-order messages are
-   retained in a per-process pending queue of depth `SYSCALL_IPC_PENDING_DEPTH = 8`
-   for later matching).
-6. Validates reply authenticity: `response.source` must match the destination
-   endpoint's owner context (`syscall_ipc_reply_authentic`).
-7. Returns `response.arg0` in `RDX` on success; `RDX = 0` on any error path.
-
-`IPC_NOTIFY` uses `ipc_notify_from` on a notification-type endpoint. It cannot
-send to a kernel-owned endpoint unless that endpoint is explicitly allowlisted
-(`g_ipc_notify_control_deny_endpoint`).
-
-`IPC_CALL` cannot reach kernel-owned endpoints unless the destination is the
-echo test endpoint (`g_ipc_call_echo_endpoint`). All other kernel-context
-endpoints return `IPC_ERR_PERM`.
+`IPC_CALL` is a synchronous request/reply primitive.  It allocates a per-process
+source endpoint, sends to the destination, then calls
+`ipc_recv_blocking_for(source_endpoint)` with request_id matching.
 
 ---
 
 ### IPC Transport Layer
 
 The kernel IPC layer (`src/kernel/ipc.c`) provides two endpoint types and five
-operations. All transport state is kernel-owned; user processes access it only
-through hostcalls (WASM) or the syscall gate (ring3).
+operations.
 
 #### Endpoint Types
 
@@ -161,72 +129,45 @@ through hostcalls (WASM) or the syscall gate (ring3).
 | `IPC_ENDPOINT_TYPE_MESSAGE`      | Bounded FIFO message queue; used for all service IPC    |
 | `IPC_ENDPOINT_TYPE_NOTIFICATION` | Counter-based notification; used for lightweight signal |
 
-**Message endpoint** (`ipc_endpoint_create`): FIFO queue of `IPC_QUEUE_DEPTH = 32`
-messages. The message at position `head` is the oldest.
-
-**Notification endpoint** (`ipc_notification_create`): maintains a `notify_count`
-saturating counter (capped at `UINT32_MAX`). `ipc_notify_from` increments it;
-`ipc_wait_for` decrements it or returns `IPC_EMPTY` if zero.
-
-#### Endpoint Table
-
-The table is a linked list (`list_t`) growing in `IPC_ENDPOINT_TABLE_CHUNK = 16`
-chunks. Endpoint IDs are assigned sequentially from `g_next_endpoint_id = 1`;
-`IPC_ENDPOINT_NONE = 0xFFFFFFFF` is reserved as the null sentinel. IDs wrap
-around (skipping `IPC_ENDPOINT_NONE`) when they reach `0xFFFFFFFF`.
-
-`ipc_endpoints_release_owner(context_id)` walks the full table and frees all
-endpoints owned by the given context. This is called during process reap to
-prevent table exhaustion across repeated short-lived app runs.
+**Message endpoint**: FIFO queue of `IPC_QUEUE_DEPTH = 32` messages.
+**Notification endpoint**: `notify_count` saturating counter.
 
 #### `ipc_endpoint_t` Structure
 
 ```c
 typedef struct {
-    uint32_t           id;
-    uint32_t           in_use;
+    uint32_t            id;
+    uint32_t            in_use;
     ipc_endpoint_type_t type;
-    uint32_t           owner_context_id;
-    spinlock_t         lock;
-    ipc_message_t      queue[IPC_QUEUE_DEPTH];
-    uint32_t           head, tail, count;
-    uint32_t           notify_count;
-    uint32_t           waiter_tid;
+    uint32_t            owner_context_id;
+    spinlock_t          lock;
+    ipc_message_t       queue[IPC_QUEUE_DEPTH];
+    uint32_t            head, tail, count;
+    uint32_t            notify_count;
+    sched_event_t       event;        /* wait_list of blocked receivers */
+    poll_struct_t      *poll_struct;  /* push-model poll hub (lazy-allocated) */
 } ipc_endpoint_t;
 ```
 
-`waiter_tid` stores the TID of a thread currently blocked on this endpoint
-(set in `ipc_recv_for` / `ipc_wait_for` when the queue/count is empty). A
-subsequent send/notify clears `waiter_tid` and calls `process_wake_thread(tid)`.
-Only one waiter per endpoint is tracked; multiple concurrent receivers on the
-same endpoint are an anti-pattern.
+`waiter_tid` is removed.  The `event` field holds an embedded `sched_event_t`
+whose `wait_list` can hold multiple blocked receiver threads.  `poll_struct`
+is allocated lazily when the first select set targets this endpoint.
 
-#### Locking Protocol
+#### IPC Receive Variants
 
-Lock order: `g_endpoint_table_lock` → `ep->lock`.
+**`ipc_recv_for(ctx, ep, out)`** — non-blocking.  Returns `IPC_OK` if a message
+is available, otherwise registers the calling thread in `ep->event.wait_list`
+and returns `IPC_EMPTY`.  The YIELDED handler cleans up stale registrations.
 
-`ipc_send_from` performs the source permission check (ownership of
-`message->source`) under `g_endpoint_table_lock` only, without acquiring
-`ep->lock`, to avoid holding two endpoint locks simultaneously. After the
-permission check it acquires `ep->lock` for queue mutation and wake.
+**`ipc_recv_blocking_for(ctx, ep, out)`** — true blocking.  On `IPC_EMPTY`
+calls `sched_event_wait(&ep->event, 0)` to park the thread.  Returns when a
+sender wakes the thread.  Used by all WASM blocking receive host functions.
 
-#### `ipc_message_t`
+#### Send and Wake
 
-```c
-typedef struct {
-    uint32_t type;        // opcode — see wasmos_driver_abi.h range table
-    uint32_t source;      // sender's reply endpoint (or IPC_ENDPOINT_NONE)
-    uint32_t destination; // target endpoint (overwritten to ep->id on enqueue)
-    uint32_t request_id;  // correlation token for request/reply matching
-    uint32_t arg0;
-    uint32_t arg1;
-    uint32_t arg2;
-    uint32_t arg3;
-} ipc_message_t;
-```
-
-All fields are 32-bit. Bulk data never flows through messages; it moves through
-the buffer-borrow mechanism with IPC messages carrying only control metadata.
+`ipc_send_from` enqueues the message, calls `sched_event_wake_one(&ep->event, ...)`,
+then calls `poll_notify(ep->poll_struct, POLL_EV_IN, ep->id)` to push a
+readiness notification to any registered select sets.
 
 #### IPC Result Codes
 
@@ -238,25 +179,160 @@ the buffer-borrow mechanism with IPC messages carrying only control metadata.
 | `IPC_ERR_PERM`    | -2    | Caller does not own the source or destination endpoint |
 | `IPC_ERR_FULL`    | -3    | Queue at capacity (`IPC_QUEUE_DEPTH = 32`)             |
 
-#### Permission Model
+#### `ipc_message_t`
 
-- `ipc_send_from(sender_ctx, endpoint, msg)`: if `sender_ctx != IPC_CONTEXT_KERNEL`,
-  `msg->source` must be owned by `sender_ctx`. The destination endpoint can
-  belong to any context.
-- `ipc_recv_for(receiver_ctx, endpoint, out)`: if `receiver_ctx != IPC_CONTEXT_KERNEL`,
-  `ep->owner_context_id` must equal `receiver_ctx`.
-- Kernel calls `ipc_send` / `ipc_recv` (which pass `IPC_CONTEXT_KERNEL = 0`)
-  and bypass context checks entirely.
-- `ipc_notify_from`: sender must own the notification endpoint
-  (or be the kernel).
-- `ipc_wait_for`: receiver must own the notification endpoint (or be the kernel).
+```c
+typedef struct {
+    uint32_t type;        // opcode
+    uint32_t source;      // sender's reply endpoint
+    uint32_t destination; // target endpoint
+    uint32_t request_id;  // correlation token
+    uint32_t arg0;
+    uint32_t arg1;
+    uint32_t arg2;
+    uint32_t arg3;
+} ipc_message_t;
+```
+
+---
+
+### Poll-Hub: Push-Model Select
+
+Source: `src/kernel/include/poll.h`, `src/kernel/poll.c`
+
+The poll hub attaches a `poll_struct_t` to each IPC endpoint and pushes
+readiness notifications directly to registered select sets — eliminating the
+legacy O(N) scan-on-send.
+
+```c
+typedef struct poll_watcher {
+    struct ipc_select  *sel;
+    uint32_t            user_data;
+    struct poll_watcher *next;
+} poll_watcher_t;
+
+typedef struct {
+    poll_watcher_t *watchers[POLL_EV_MAX];  /* per event type: EV_IN, EV_OUT, EV_CLOSE, EV_KERNEL */
+} poll_struct_t;
+```
+
+`poll_notify(ps, ev, ep_id)` walks `ps->watchers[ev]` and calls
+`ipc_select_signal(sel, ep_id)` on each registered select set — O(watchers per
+endpoint), typically O(1).
+
+`poll_struct_t` is allocated lazily when the first `ipc_select_add` targets an
+endpoint and stored in `ep->poll_struct`.
+
+---
+
+### Select-Set API
+
+Source: `src/kernel/ipc.c`, `src/kernel/include/ipc.h`
+
+Select sets allow a thread to block on any of up to `IPC_SELECT_EPS_MAX = 8`
+endpoints simultaneously.
+
+```c
+typedef struct {
+    uint32_t      id;
+    uint32_t      in_use;
+    spinlock_t    lock;
+    sched_event_t event;         /* blocked waiter */
+    uint32_t      ready_ep;      /* endpoint that signalled first */
+    uint32_t      ep_ids[IPC_SELECT_EPS_MAX];
+    uint32_t      ep_count;
+} ipc_select_t;
+```
+
+**Kernel API:**
+
+| Function                              | Description                                              |
+|---------------------------------------|----------------------------------------------------------|
+| `ipc_select_create()`                 | Allocate a select set; returns select_id                 |
+| `ipc_select_add(sel_id, ep_id)`       | Register endpoint; lazily creates `ep->poll_struct`      |
+| `ipc_select_wait(sel_id, out_ep_id)`  | Block until any registered endpoint has a message        |
+| `ipc_select_destroy(sel_id)`          | Unregister from all endpoint `poll_struct` lists; free   |
+| `ipc_select_signal(sel, ep_id)`       | Called by `poll_notify`; wakes waiter, sets `ready_ep`   |
+
+`ipc_select_wait` calls `sched_event_wait(&sel->event, 0)`.  When a sender
+fires `poll_notify`, `ipc_select_signal` calls `sched_event_wake_one(&sel->event)`.
+
+**WASM host functions (`wasmos/api.h`):**
+
+```c
+extern int32_t wasmos_ipc_select_create(void)
+    WASMOS_WASM_IMPORT("wasmos", "ipc_select_create");
+extern int32_t wasmos_ipc_select_add(int32_t select_id, int32_t endpoint_id)
+    WASMOS_WASM_IMPORT("wasmos", "ipc_select_add");
+extern int32_t wasmos_ipc_select_wait(int32_t select_id)
+    WASMOS_WASM_IMPORT("wasmos", "ipc_select_wait");
+extern int32_t wasmos_ipc_select_destroy(int32_t select_id)
+    WASMOS_WASM_IMPORT("wasmos", "ipc_select_destroy");
+```
+
+**Single-endpoint blocking receive:**
+
+```c
+extern int32_t wasmos_ipc_select_one(int32_t endpoint)
+    WASMOS_WASM_IMPORT("wasmos", "ipc_select_one");   /* replaces ipc_recv */
+```
+
+**Non-blocking drain (returns 0 on empty):**
+
+```c
+extern int32_t wasmos_ipc_drain(int32_t endpoint)
+    WASMOS_WASM_IMPORT("wasmos", "ipc_drain");        /* replaces ipc_try_recv */
+```
+
+`wasmos_ipc_select_one` blocks the calling WASM thread via
+`ipc_recv_blocking_for`.  `wasmos_ipc_drain` calls `ipc_recv_for` and returns
+0 on `IPC_EMPTY` — never blocking.
+
+---
+
+### Futex Primitive
+
+Source: `src/kernel/futex.c`, `src/kernel/include/futex.h`
+
+A futex provides a kernel parking lot for WASM userspace synchronization
+primitives.  The kernel-side hash table has 16 buckets keyed by physical
+address:
+
+```c
+#define FUTEX_TABLE_SIZE 16
+static struct { spinlock_t lock; list_head_t head; } g_futex_table[FUTEX_TABLE_SIZE];
+```
+
+**`futex_wait(uaddr, expected, timeout_ms, context_id)`**:
+1. Translate `uaddr` → physical address via `mm_uva_to_paddr`.
+2. Find or allocate a `futex_t` in the hash bucket.
+3. If `*kaddr != expected`: return immediately (caller retries).
+4. `sched_event_wait(&ft->event, timeout_ms)` — parks the thread.
+5. On wakeup: return `0` (ok) or `-ETIMEDOUT`.
+
+**`futex_wake(uaddr, count, context_id)`**:
+- Calls `sched_event_wake_one(&ft->event, ...)` up to `count` times.
+
+**WASM host functions:**
+
+```c
+extern int32_t wasmos_futex_wait(int32_t addr, int32_t expected, int32_t timeout_ms)
+    WASMOS_WASM_IMPORT("wasmos", "futex_wait");
+extern int32_t wasmos_futex_wake(int32_t addr, int32_t count)
+    WASMOS_WASM_IMPORT("wasmos", "futex_wake");
+```
+
+`addr` is a WASM linear-memory offset; the host function translates via
+`mm_uva_to_paddr(proc->context_id, wasm_linear_base + addr)`.
+
+These two primitives allow WASM to implement any synchronization object
+(mutex, semaphore, condvar) without kernel-side abstractions for each.
 
 ---
 
 ### IPC Opcode Space
 
-Opcodes are allocated in contiguous ranges. Each range belongs to one
-subsystem; opcodes are never scattered across ranges.
+Opcodes are allocated in contiguous ranges.
 
 | Range         | Subsystem                                                       |
 |---------------|-----------------------------------------------------------------|
@@ -276,13 +352,9 @@ All opcodes are defined in `src/drivers/include/wasmos_driver_abi.h`.
 
 ### Process Manager (`proc` Endpoint)
 
-The process manager (PM) runs as a kernel-native C++ service. It owns the
-`proc` endpoint and is the exclusive entry point for process lifecycle
-operations from user space.
+The process manager (PM) runs as a kernel-native C++ service.
 
 #### Opcode Table
-
-All `proc` endpoint opcodes are in the `0x200–0x2FF` range.
 
 | Opcode                          | Value   | Direction    | Description                           |
 |---------------------------------|---------|--------------|---------------------------------------|
@@ -290,47 +362,36 @@ All `proc` endpoint opcodes are in the `0x200–0x2FF` range.
 | `PROC_IPC_WAIT`                 | `0x201` | request      | Wait for child exit                   |
 | `PROC_IPC_KILL`                 | `0x202` | request      | Kill child                            |
 | `PROC_IPC_STATUS`               | `0x203` | request      | Query child state                     |
-| `PROC_IPC_SPAWN_NAME`           | `0x204` | request      | Spawn by name (initfs)                |
-| `PROC_IPC_SPAWN_CAPS`           | `0x205` | request      | Spawn with capability profile         |
-| `PROC_IPC_MODULE_META`          | `0x206` | request      | Query module metadata by index        |
-| `PROC_IPC_MODULE_META_PATH`     | `0x207` | request      | Query module metadata by path         |
-| `PROC_IPC_SPAWN_CAPS_V2`        | `0x208` | request      | Spawn with extended caps profile      |
 | `PROC_IPC_SPAWN_PATH`           | `0x209` | request      | Spawn by filesystem path              |
-| `PROC_IPC_SPAWN_PATH_CAPS`      | `0x20A` | request      | Spawn by path with caps               |
-| `PROC_IPC_SPAWN_SYNC`           | `0x20B` | request      | Spawn; block until child NOTIFY_READY |
+| `PROC_IPC_SPAWN_PATH_SYNC`      | `0x20E` | request      | SPAWN_PATH; wait for NOTIFY_READY     |
 | `PROC_IPC_NOTIFY_READY`         | `0x20C` | notification | Child signals it is ready             |
-| `PROC_IPC_SPAWN_CAPS_SYNC`      | `0x20D` | request      | SPAWN_CAPS with sync wait             |
-| `PROC_IPC_SPAWN_PATH_SYNC`      | `0x20E` | request      | SPAWN_PATH with sync wait             |
-| `PROC_IPC_SPAWN_PATH_CAPS_SYNC` | `0x20F` | request      | SPAWN_PATH_CAPS with sync wait        |
 | `PROC_IPC_DMA_MAP_BORROW_REQ`   | `0x230` | request      | Map a borrow handle for DMA           |
 | `PROC_IPC_DMA_SYNC_BORROW_REQ`  | `0x231` | request      | Sync a mapped borrow handle           |
 | `PROC_IPC_DMA_UNMAP_BORROW_REQ` | `0x232` | request      | Unmap a borrow handle                 |
 | `SVC_IPC_REGISTER_REQ`          | `0x220` | request      | Register a named service endpoint     |
 | `SVC_IPC_LOOKUP_REQ`            | `0x221` | request      | Look up a named service endpoint      |
 | `PROC_IPC_RESP`                 | `0x280` | response     | Success response                      |
-| `SVC_IPC_REGISTER_RESP`         | `0x2A0` | response     | Register success                      |
-| `SVC_IPC_LOOKUP_RESP`           | `0x2A1` | response     | Lookup success (arg0=endpoint)        |
-| `PROC_IPC_DMA_BORROW_RESP`      | `0x2B0` | response     | DMA borrow success                    |
-| `SVC_IPC_ERROR`                 | `0x2AF` | response     | Service registry error                |
-| `PROC_IPC_DMA_BORROW_ERROR`     | `0x2BF` | response     | DMA borrow error                      |
 | `PROC_IPC_ERROR`                | `0x2FF` | response     | General PM error                      |
 
 #### Spawn Variants
 
-**Async spawn** (`PROC_IPC_SPAWN`, `PROC_IPC_SPAWN_PATH`, etc.): the PM loads,
-validates, and spawns the app, then immediately responds with `PROC_IPC_RESP,
-arg0=child_pid`. For service/driver app kinds, `PROC_IPC_SPAWN_PATH` internally
-waits for the child to call `PROC_IPC_NOTIFY_READY` (matching `SPAWN_PATH_SYNC`
-behavior).
+**Async spawn** (`PROC_IPC_SPAWN_PATH` for regular apps): the PM loads and
+spawns the app, then immediately responds with `PROC_IPC_RESP, arg0=child_pid,
+arg1=app_flags`.  The CLI sends `PROC_IPC_WAIT` for regular apps; for apps with
+`FLAG_SERVICE` or `FLAG_DRIVER`, the PM internally defers the response until
+`PROC_IPC_NOTIFY_READY` is received from the child (`pm_poll_sync_spawn` polls
+`child->ready`), then responds with the service flag set so the CLI shows the
+prompt without waiting for process exit.
 
-**Sync spawn** (`PROC_IPC_SPAWN_SYNC`, `PROC_IPC_SPAWN_PATH_SYNC`, etc.):
-the PM defers `PROC_IPC_RESP` until the child process calls
-`PROC_IPC_NOTIFY_READY` or the timeout expires. On timeout or child death
-before ready: `PROC_IPC_ERROR, arg1=error_code`.
+`wasmos_proc_notify_ready()` is a direct kernel hostcall that sets
+`proc->ready = 1` without sending an IPC.  `wasmos_sys_notify_ready()` (libsys)
+sends an IPC to PM's `proc` endpoint.
 
-`PROC_IPC_NOTIFY_READY` (opcode `0x20C`) is sent by the child to the `proc`
-endpoint when its initialization is complete. This also unblocks callers of the
-`WASMOS_SYSCALL_NOTIFY_READY` syscall pattern.
+#### Service Registry
+
+The PM maintains a flat list of named services.  Names are capped at 16
+characters.  `SVC_IPC_REGISTER_REQ` / `SVC_IPC_LOOKUP_REQ` (opcodes
+`0x220`/`0x221`) register and resolve service endpoint IDs.
 
 #### Entry Bindings
 
@@ -340,102 +401,43 @@ The PM resolves spawn argument bindings from WASMOS-APP metadata:
 |---------------------|----------------------------------|
 | `none`              | 0                                |
 | `proc.endpoint`     | PM's `proc` endpoint ID          |
-| `module.count`      | number of initfs modules         |
-| `init.module.index` | initfs module index of `fs-init` |
+| `chardev.endpoint`  | chardev endpoint                 |
 | `block.endpoint`    | ATA block endpoint               |
 | `cli.tty.alloc`     | next available VT tty slot       |
-| `chardev.endpoint`  | chardev endpoint                 |
-| `const.neg1`        | `0xFFFFFFFF`                     |
-
-These are resolved at spawn time and passed as `arg0..arg3` to the spawned
-process entry function (`wasmos_main`).
-
-#### Service Registry
-
-The PM maintains a flat list of named services (`pm_service_entry_t`). Names
-are capped at 16 characters.
-
-`SVC_IPC_REGISTER_REQ`: caller sends name (packed into arg0–arg3 as 16 bytes)
-and their reply endpoint. PM stores the name → endpoint mapping with the
-caller's `owner_context_id`. Responds `SVC_IPC_REGISTER_RESP`.
-
-`SVC_IPC_LOOKUP_REQ`: caller sends name. PM responds `SVC_IPC_LOOKUP_RESP,
-arg0=endpoint` or `SVC_IPC_ERROR` if not found.
-
-The PM updates well-known internal endpoint references (fs, block, fb, vt)
-when the corresponding services register. This allows late-binding of service
-endpoints without hardcoded values.
-
-#### Wait and Kill
-
-`PROC_IPC_WAIT`: the PM records a `pm_wait_state_t` with the caller's reply
-endpoint and `request_id`. When `process_manager_on_child_ready` fires (child
-exits and wakes waiters), the PM sends `PROC_IPC_RESP` to the saved reply
-endpoint with the child exit status.
-
-`PROC_IPC_KILL`: parent-restricted. The PM validates caller ownership before
-calling `process_kill`.
-
-`PROC_IPC_STATUS`: returns process state, block reason, and `is_wasm` flag.
-Owner-restricted.
 
 ---
 
 ### Buffer-Borrow Mechanism
 
-Bulk data between processes uses the buffer-borrow model rather than IPC
-message fields. A borrow grants one process read/write access to a
-kernel-managed shared buffer owned by another process.
+Bulk data between processes uses the buffer-borrow model.
 
-**Buffer kinds** (defined in `process_manager.h`):
+**Buffer kinds:**
 
 | Kind                         | Value | Used for                                |
 |------------------------------|-------|-----------------------------------------|
 | `PM_BUFFER_KIND_FILESYSTEM`  | 1     | FS read buffers (file content delivery) |
 | `PM_BUFFER_KIND_FRAMEBUFFER` | 2     | Framebuffer pixel data                  |
 
-**Borrow flags:**
+**DMA Buffer Borrow** — three-phase lifecycle:
 
-| Flag                     | Value |
-|--------------------------|-------|
-| `PM_BUFFER_BORROW_READ`  | `0x1` |
-| `PM_BUFFER_BORROW_WRITE` | `0x2` |
-
-A typical FS read flow:
-1. PM allocates a 2 MB FS buffer (`PM_FS_BUFFER_SIZE`) per spawn state.
-2. PM borrows the buffer to the FS driver's context (`process_manager_buffer_borrow_context`).
-3. FS driver reads file content into the borrowed buffer.
-4. PM reads back the content and forwards it to the requesting process.
-5. PM releases the borrow (`process_manager_buffer_release_context`).
-
-#### DMA Buffer Borrow
-
-For device drivers that need DMA access to a buffer, the PM provides a
-three-phase DMA lifecycle through the `proc` endpoint:
-
-| Opcode | Operation |
-|---|---|
-| `PROC_IPC_DMA_MAP_BORROW_REQ` | Map borrow for DMA; returns device address |
-| `PROC_IPC_DMA_SYNC_BORROW_REQ` | Sync CPU/device coherency for a mapped borrow |
-| `PROC_IPC_DMA_UNMAP_BORROW_REQ` | Unmap and release DMA mapping |
-
-The driver sends these as IPC requests and receives `PROC_IPC_DMA_BORROW_RESP`
-(device address in arg0) or `PROC_IPC_DMA_BORROW_ERROR` on failure. This is
-the driver-facing API; the backing implementation calls
-`process_manager_buffer_dma_map` / `_dma_sync` / `_dma_unmap` in the PM.
+| Opcode                          | Operation                                  |
+|---------------------------------|--------------------------------------------|
+| `PROC_IPC_DMA_MAP_BORROW_REQ`   | Map borrow for DMA; returns device address |
+| `PROC_IPC_DMA_SYNC_BORROW_REQ`  | Sync CPU/device coherency                  |
+| `PROC_IPC_DMA_UNMAP_BORROW_REQ` | Unmap and release DMA mapping              |
 
 ---
 
 ### `libsys` Event Loop
 
-`libsys` provides single-endpoint event loops for WASM and native services.
-The pattern prevents response stealing and avoids duplicated receive loops.
+`libsys` provides select-based event loops for WASM and native services.
 
 #### `wasmos_sys_event_loop_t`
 
 ```c
 typedef struct {
     int32_t receiver_endpoint;
+    int32_t select_id;           /* select set for blocking wait */
     int32_t next_request_id;
     void (*default_on_message)(void *user, const wasmos_ipc_message_t *msg);
     void *default_user;
@@ -444,50 +446,33 @@ typedef struct {
 } wasmos_sys_event_loop_t;
 ```
 
+`wasmos_sys_event_loop_init` creates a select set via `wasmos_ipc_select_create`
+and calls `wasmos_ipc_select_add(select_id, receiver_endpoint)`.
+
 **Intent** (`wasmos_sys_intent_t`): a pending outgoing request tracked by
-`request_id`. When a reply arrives with a matching `request_id`, the intent's
-`on_resolve` callback fires and the slot is freed. Up to 16 concurrent intents.
+`request_id`.  When a reply arrives with a matching `request_id`, the intent's
+`on_resolve` callback fires.
 
 **Handler** (`wasmos_sys_handler_t`): a registered callback for a specific
-incoming `msg_type`. Unsolicited messages that match a handler's type are
-dispatched to it. Up to 16 type-specific handlers.
+incoming `msg_type`.
 
-**Default handler**: catches all messages that don't match any intent or type
-handler.
+#### Dispatch
 
-#### Dispatch Priority
+`wasmos_sys_event_loop_poll(loop, budget)` processes up to `budget` messages:
 
-`wasmos_sys_event_loop_poll(loop, budget)` processes up to `budget` messages
-per call:
+1. `wasmos_ipc_drain(receiver_endpoint)` — non-blocking drain attempt.
+2. If empty and `budget > 0`: `wasmos_ipc_select_wait(select_id)` — blocks
+   until the endpoint has a message (no busy-polling).
+3. Check intents by `request_id` first (reply correlation).
+4. If no intent matches, check handlers by `msg_type`.
+5. If no handler matches, call the default handler.
 
-1. Try `wasmos_ipc_try_recv` on `receiver_endpoint`. Stop if empty.
-2. Check intents by `request_id` first (reply correlation).
-3. If no intent matches, check handlers by `msg_type`.
-4. If no handler matches, call the default handler.
-
-This gives replies priority over unsolicited traffic, preventing a flood of
-notifications from starving pending request replies.
-
-#### `wasmos_sys_intent_send`
-
-Sends a message and registers a completion callback atomically:
-
-```c
-wasmos_sys_intent_send(
-    loop, destination, source, type, arg0, arg1, arg2, arg3,
-    on_resolve, user, &out_request_id);
-```
-
-The loop auto-increments `next_request_id` and stores the intent. If all 16
-intent slots are occupied, the send is rejected.
-
-`wasmos_sys_intent_send_with_request_id` allows a caller to specify a fixed
-`request_id` (used for re-use of a pre-allocated ID, e.g. when restarting a
-request after a timeout).
+This gives replies priority over unsolicited traffic.  `wasmos_ipc_select_wait`
+replaces the legacy `wasmos_ipc_yield()` spin loop.
 
 #### Usage Pattern
 
-Services should use exactly one event loop per endpoint:
+Services use exactly one event loop per endpoint:
 
 ```c
 wasmos_sys_event_loop_t loop;
@@ -496,38 +481,43 @@ wasmos_sys_event_register(&loop, FS_IPC_READ_REQ, handle_read, NULL);
 wasmos_sys_event_set_default(&loop, handle_unknown, NULL);
 
 for (;;) {
-    while (wasmos_sys_event_loop_poll(&loop, 16) > 0) {}
-    wasmos_ipc_yield();
+    wasmos_sys_event_loop_poll(&loop, 16);
 }
 ```
 
-Multiple ad-hoc `recv-until-matching` loops on the same endpoint are an
-anti-pattern: they cause response stealing where one loop consumes replies
-intended for another.
+Multiple ad-hoc receive loops on the same endpoint are an anti-pattern; they
+cause response stealing.
 
 ---
 
 ### Invariants
 
 1. **One endpoint, one receiver.** A single receive pump owns each service
-   endpoint. Concurrent receivers on the same endpoint are not supported.
+   endpoint.  The select-set mechanism (`sched_event_t.wait_list`) supports
+   multiple concurrent waiters per endpoint, but the service model uses one.
 
 2. **Bulk data through borrows, not messages.** File content, pixel buffers,
-   and packet data flow through kernel-managed shared memory. IPC messages carry
-   only metadata and completion notifications.
+   and packet data flow through kernel-managed shared memory.  IPC messages
+   carry only metadata.
 
-3. **Source endpoint ownership is verified at send.** Non-kernel senders must
-   own `message->source`. This prevents a process from spoofing another
-   process's endpoint as its reply address.
+3. **Source endpoint ownership verified at send.** Non-kernel senders must own
+   `message->source`.
 
-4. **Reply authenticity is checked at `IPC_CALL`.** The syscall layer verifies
-   that the reply source endpoint is owned by the expected context, preventing
-   reply injection from a third party.
+4. **Reply authenticity checked at `IPC_CALL`.** The syscall layer verifies
+   the reply source endpoint is owned by the expected context.
 
 5. **Capability grants are declared at spawn.** No hardware capability can be
-   acquired through IPC after process spawn. `device-manager` grants capabilities
-   at spawn time; the PM validates them against the WASMOS-APP metadata.
+   acquired through IPC after process spawn.
 
 6. **Endpoints are released on process reap.** `ipc_endpoints_release_owner`
-   is called during process reap, preventing stale endpoint IDs from accumulating
-   in the table.
+   is called during process reap.
+
+7. **No busy-polling in services.** Services must use `wasmos_ipc_select_one`
+   (blocking single-endpoint) or `wasmos_ipc_select_wait` (blocking multi-endpoint)
+   rather than polling `wasmos_ipc_drain` in a spin loop.  The scheduler does
+   not yield on spin loops; only blocking waits release the CPU.
+
+8. **Poll-hub registration is exclusive.** Once `ep->poll_struct` is created
+   and a watcher is registered, the watcher persists until `ipc_select_destroy`
+   removes it.  Endpoints and select sets must be destroyed in a consistent
+   order to avoid dangling watcher pointers.

@@ -566,7 +566,7 @@ initialize(int32_t proc_endpoint,
      * IPC loop forever. */
     wasmos_sys_notify_ready(proc_endpoint, g_block_endpoint);
     for (;;) {
-        int32_t recv_rc = wasmos_ipc_recv(g_block_endpoint);
+        int32_t recv_rc = wasmos_ipc_select_one(g_block_endpoint);
         if (recv_rc < 0) {
             continue;
         }

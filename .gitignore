@@ -6,3 +6,4 @@ __pycache__/
 .codex/local-paths.md
 .config
 .venv/
+build-off/

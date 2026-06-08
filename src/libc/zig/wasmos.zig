@@ -47,7 +47,7 @@ extern "wasmos" fn ipc_send(
     arg2: i32,
     arg3: i32,
 ) callconv(.c) i32;
-extern "wasmos" fn ipc_recv(endpoint: i32) callconv(.c) i32;
+extern "wasmos" fn ipc_select_one(endpoint: i32) callconv(.c) i32;
 extern "wasmos" fn ipc_last_field(field: i32) callconv(.c) i32;
 extern "wasmos" fn fs_endpoint() callconv(.c) i32;
 extern "wasmos" fn fs_buffer_size() callconv(.c) i32;
@@ -187,7 +187,7 @@ fn fsRequest(msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32) Error!st
     if (ipc_send(endpoint, reply_endpoint, msg_type, request_id, arg0, arg1, arg2, arg3) != 0) {
         return Error.HostCallFailed;
     }
-    if (ipc_recv(reply_endpoint) < 0) {
+    if (ipc_select_one(reply_endpoint) < 0) {
         return Error.HostCallFailed;
     }
     if (ipc_last_field(IPC_FIELD_REQUEST_ID) != request_id or ipc_last_field(IPC_FIELD_TYPE) != FS_IPC_RESP) {
@@ -213,7 +213,7 @@ fn fsRequestStream(msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32, ou
 
     var out_len: usize = 0;
     while (true) {
-        if (ipc_recv(reply_endpoint) < 0) {
+        if (ipc_select_one(reply_endpoint) < 0) {
             return Error.HostCallFailed;
         }
         if (ipc_last_field(IPC_FIELD_REQUEST_ID) != request_id) {
@@ -326,7 +326,7 @@ pub const ipc = struct {
         if (ipc_send(server, reply_endpoint, msg_type, request_id, arg0, arg1, arg2, arg3) != 0) {
             return Error.HostCallFailed;
         }
-        if (ipc_recv(reply_endpoint) < 0) {
+        if (ipc_select_one(reply_endpoint) < 0) {
             return Error.HostCallFailed;
         }
         return Reply{
@@ -343,7 +343,7 @@ pub const ipc = struct {
 
     /// Block until a message arrives on endpoint (for servers).
     pub fn recv(endpoint: i32) Error!Reply {
-        if (ipc_recv(endpoint) < 0) {
+        if (ipc_select_one(endpoint) < 0) {
             return Error.HostCallFailed;
         }
         return Reply{

@@ -271,7 +271,7 @@ backend_refresh_boot_meta(fs_backend_t *slot, int32_t req_seed)
         return;
     }
     if (wasmos_ipc_send(devmgr, g_reply_endpoint, DEVMGR_QUERY_MOUNT_REQ, req_id, 0, 0, 0, 0) != 0 ||
-        wasmos_ipc_recv(g_reply_endpoint) < 0 ||
+        wasmos_ipc_select_one(g_reply_endpoint) < 0 ||
         wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req_id ||
         wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != DEVMGR_MOUNT_INFO) {
         return;
@@ -418,7 +418,7 @@ static int forward_request(int32_t backend_endpoint,
         return -1;
     }
     for (;;) {
-        if (wasmos_ipc_recv(g_reply_endpoint) < 0) {
+        if (wasmos_ipc_select_one(g_reply_endpoint) < 0) {
             return -1;
         }
         int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
@@ -819,7 +819,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
     wasmos_sys_notify_ready(g_proc_endpoint, g_fs_endpoint);
 
     for (;;) {
-        if (wasmos_ipc_recv(g_fs_endpoint) < 0) {
+        if (wasmos_ipc_select_one(g_fs_endpoint) < 0) {
             continue;
         }
 

@@ -351,7 +351,6 @@ initialize(int32_t proc_endpoint,
     if (devmgr_ep < 0) {
         return -1;
     }
-
     int32_t req_id = 1;
 
     /* --- Step 1: get RSDP ------------------------------------------------- */

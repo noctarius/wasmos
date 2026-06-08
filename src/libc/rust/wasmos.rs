@@ -50,7 +50,7 @@ unsafe extern "C" {
         arg2: i32,
         arg3: i32,
     ) -> i32;
-    fn ipc_recv(endpoint: i32) -> i32;
+    fn ipc_select_one(endpoint: i32) -> i32;
     fn ipc_last_field(field: i32) -> i32;
     fn fs_endpoint() -> i32;
     fn fs_buffer_size() -> i32;
@@ -222,7 +222,7 @@ fn fs_request(msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> Resu
     if unsafe { ipc_send(endpoint, reply_endpoint, msg_type, request_id, arg0, arg1, arg2, arg3) } != 0 {
         return Err(Error::HostCallFailed);
     }
-    if unsafe { ipc_recv(reply_endpoint) } < 0 {
+    if unsafe { ipc_select_one(reply_endpoint) } < 0 {
         return Err(Error::HostCallFailed);
     }
 
@@ -251,7 +251,7 @@ fn fs_request_stream(msg_type: i32, arg0: i32, arg1: i32, arg2: i32, arg3: i32, 
 
     let mut out_len = 0usize;
     loop {
-        if unsafe { ipc_recv(reply_endpoint) } < 0 {
+        if unsafe { ipc_select_one(reply_endpoint) } < 0 {
             return Err(Error::HostCallFailed);
         }
         let response_request_id = unsafe { ipc_last_field(IPC_FIELD_REQUEST_ID) };
@@ -344,7 +344,7 @@ pub mod std {
 
 pub mod ipc {
     use super::{
-        ensure_ipc_reply_endpoint, ipc_create_endpoint, ipc_last_field, ipc_recv, ipc_send,
+        ensure_ipc_reply_endpoint, ipc_create_endpoint, ipc_last_field, ipc_select_one, ipc_send,
         next_ipc_request_id, Error,
         IPC_FIELD_ARG0, IPC_FIELD_ARG1, IPC_FIELD_ARG2, IPC_FIELD_ARG3,
         IPC_FIELD_DESTINATION, IPC_FIELD_REQUEST_ID, IPC_FIELD_SOURCE, IPC_FIELD_TYPE,
@@ -385,7 +385,7 @@ pub mod ipc {
         if unsafe { ipc_send(server, reply_ep, msg_type, request_id, arg0, arg1, arg2, arg3) } != 0 {
             return Err(Error::HostCallFailed);
         }
-        if unsafe { ipc_recv(reply_ep) } < 0 {
+        if unsafe { ipc_select_one(reply_ep) } < 0 {
             return Err(Error::HostCallFailed);
         }
         Ok(read_reply())
@@ -393,7 +393,7 @@ pub mod ipc {
 
     /// Block until a message arrives on endpoint (for servers).
     pub fn recv(endpoint: i32) -> Result<Reply, Error> {
-        if unsafe { ipc_recv(endpoint) } < 0 {
+        if unsafe { ipc_select_one(endpoint) } < 0 {
             return Err(Error::HostCallFailed);
         }
         Ok(read_reply())

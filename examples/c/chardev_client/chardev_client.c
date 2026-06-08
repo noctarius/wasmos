@@ -26,7 +26,7 @@ main(int argc, char **argv)
         return -1;
     }
 
-    if (wasmos_ipc_recv(reply_endpoint) < 0) {
+    if (wasmos_ipc_select_one(reply_endpoint) < 0) {
         return -1;
     }
 
@@ -45,7 +45,7 @@ main(int argc, char **argv)
         return -1;
     }
 
-    if (wasmos_ipc_recv(reply_endpoint) < 0) {
+    if (wasmos_ipc_select_one(reply_endpoint) < 0) {
         return -1;
     }
 

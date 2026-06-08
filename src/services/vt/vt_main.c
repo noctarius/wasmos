@@ -309,7 +309,7 @@ vt_query_geometry(void)
         return;
     }
     for (int tries = 0; tries < VT_GEOMETRY_QUERY_RETRIES; ++tries) {
-        int32_t rc = wasmos_ipc_try_recv(g_vt_ep);
+        int32_t rc = wasmos_ipc_drain(g_vt_ep);
         if (rc < 0) {
             return;
         }
@@ -1474,7 +1474,7 @@ initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2, int32_t arg3)
     wasmos_sys_notify_ready(proc_endpoint, g_vt_ep);
 
     for (;;) {
-        int32_t rc = wasmos_ipc_recv(g_vt_ep);
+        int32_t rc = wasmos_ipc_select_one(g_vt_ep);
         if (rc < 0) {
             wasmos_sched_yield();
             continue;

@@ -1045,6 +1045,7 @@ set(QEMU_UI_OVMF_VARS_ARG "")
 if (OVMF_VARS)
   set(QEMU_UI_OVMF_VARS_ARG "--ovmf-vars" "${OVMF_VARS}")
 endif ()
+
 if (OVMF_VARS)
   add_custom_target(run-qemu
     ${WASMOS_ESP_POPULATE_CMDS}

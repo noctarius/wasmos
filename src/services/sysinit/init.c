@@ -71,7 +71,7 @@ spawn_path(const char *path)
                             0) != 0) {
             return -1;
         }
-        int32_t recv_rc = wasmos_ipc_recv(g_state.reply_endpoint);
+        int32_t recv_rc = wasmos_ipc_select_one(g_state.reply_endpoint);
         if (recv_rc < 0) {
             return -1;
         }
@@ -176,7 +176,7 @@ sysinit_on_exec(void *user, const char *path, const char *args, int32_t *out_exi
                         0) != 0) {
         return -1;
     }
-    int32_t recv_rc = wasmos_ipc_recv(g_state.reply_endpoint);
+    int32_t recv_rc = wasmos_ipc_select_one(g_state.reply_endpoint);
     if (recv_rc < 0) {
         return -1;
     }
@@ -202,7 +202,7 @@ sysinit_on_exec(void *user, const char *path, const char *args, int32_t *out_exi
                         0) != 0) {
         return -1;
     }
-    recv_rc = wasmos_ipc_recv(g_state.reply_endpoint);
+    recv_rc = wasmos_ipc_select_one(g_state.reply_endpoint);
     if (recv_rc < 0) {
         return -1;
     }
@@ -302,6 +302,6 @@ initialize(int32_t proc_endpoint,
     }
 
     for (;;) {
-        (void)wasmos_ipc_recv(g_state.reply_endpoint);
+        (void)wasmos_ipc_select_one(g_state.reply_endpoint);
     }
 }

@@ -429,6 +429,12 @@ threading_ipc_stress_entry(process_t *process, void *arg)
             return PROCESS_RUN_EXITED;
         }
         state->spawned = 1;
+#ifdef WASMOS_SCHED_THREADABLE
+        /* Under the blocking scheduler ipc_recv_for never returns IPC_EMPTY in
+         * normal operation, so the sender's recv_empty_count == 0 guard is
+         * never cleared.  Pre-set it so the sender can start right away. */
+        state->recv_empty_count = 1;
+#endif
         return PROCESS_RUN_YIELDED;
     }
 

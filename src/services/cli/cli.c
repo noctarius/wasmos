@@ -655,7 +655,7 @@ cli_query_active_tty(uint32_t *out_generation)
     }
 
     for (int tries = 0; tries < CLI_VT_RESP_RETRIES; ++tries) {
-        int32_t rc = wasmos_ipc_try_recv(g_vt_client_endpoint);
+        int32_t rc = wasmos_ipc_drain(g_vt_client_endpoint);
         if (rc < 0) {
             return -1;
         }
@@ -719,7 +719,7 @@ cli_switch_tty(int32_t tty, int wait_resp, int32_t *out_error)
     }
 
     for (int tries_resp = 0; tries_resp < CLI_VT_RESP_RETRIES; ++tries_resp) {
-        int32_t rc = wasmos_ipc_try_recv(g_vt_client_endpoint);
+        int32_t rc = wasmos_ipc_drain(g_vt_client_endpoint);
         if (rc < 0) {
             if (out_error) {
                 *out_error = rc;
@@ -797,7 +797,7 @@ cli_register_vt_writer(void)
     }
 
     for (int tries = 0; tries < CLI_VT_RESP_RETRIES; ++tries) {
-        int32_t rc = wasmos_ipc_try_recv(g_vt_client_endpoint);
+        int32_t rc = wasmos_ipc_drain(g_vt_client_endpoint);
         if (rc < 0) {
             return -1;
         }
@@ -838,7 +838,7 @@ cli_set_vt_mode(uint32_t mode)
     }
 
     for (int tries = 0; tries < CLI_VT_RESP_RETRIES; ++tries) {
-        int32_t rc = wasmos_ipc_try_recv(g_vt_client_endpoint);
+        int32_t rc = wasmos_ipc_drain(g_vt_client_endpoint);
         if (rc < 0) {
             return -1;
         }
@@ -881,7 +881,7 @@ cli_vt_read_char(char *out_ch)
     }
 
     for (int wait = 0; wait < 32; ++wait) {
-        int32_t rc = wasmos_ipc_try_recv(g_vt_client_endpoint);
+        int32_t rc = wasmos_ipc_drain(g_vt_client_endpoint);
         if (rc < 0) {
             return -1;
         }
@@ -1390,7 +1390,7 @@ cli_show_mounts(void)
     }
     req_id = g_request_id++;
     if (wasmos_ipc_send(g_fs_endpoint, g_reply_endpoint, FSMGR_IPC_QUERY_MOUNTS_REQ, req_id, 0, 0, 0, 0) != 0 ||
-        wasmos_ipc_recv(g_reply_endpoint) < 0 ||
+        wasmos_ipc_select_one(g_reply_endpoint) < 0 ||
         wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req_id) {
         console_write("mount failed\n");
         return;
@@ -1655,7 +1655,7 @@ cli_spawn_exec_path(const char *input, int32_t *out_pid)
     if (cli_send_proc(PROC_IPC_SPAWN_PATH, 0, path_len, args_len, 0) != 0) {
         return -1;
     }
-    if (wasmos_ipc_recv(g_reply_endpoint) < 0) {
+    if (wasmos_ipc_select_one(g_reply_endpoint) < 0) {
         return -1;
     }
     if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != g_pending_req) {
@@ -1678,7 +1678,7 @@ cli_wait_for_pid_exit(int32_t pid, int32_t *out_exit_status)
     if (cli_send_proc(PROC_IPC_WAIT, (uint32_t)pid, 0, 0, 0) != 0) {
         return -1;
     }
-    if (wasmos_ipc_recv(g_reply_endpoint) < 0) {
+    if (wasmos_ipc_select_one(g_reply_endpoint) < 0) {
         return -1;
     }
     if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != g_pending_req) {
@@ -2466,7 +2466,7 @@ cli_phase_read_step(void)
 static void
 cli_phase_wait_ipc_step(void)
 {
-    int32_t recv_rc = wasmos_ipc_recv(g_reply_endpoint);
+    int32_t recv_rc = wasmos_ipc_select_one(g_reply_endpoint);
     if (recv_rc < 0) {
         cli_fail_and_stall("[cli] ipc recv failed\n");
     }

@@ -207,7 +207,7 @@ initialize(int32_t proc_endpoint, int32_t ignored_arg1, int32_t ignored_arg2, in
     wasmos_sys_notify_ready(proc_endpoint, g_endpoint);
 
     for (;;) {
-        if (wasmos_ipc_recv(g_endpoint) != 1) {
+        if (wasmos_ipc_select_one(g_endpoint) != 1) {
             continue;
         }
         wasmos_ipc_message_t msg;

@@ -307,6 +307,10 @@ kernel_init_entry(process_t *process, void *arg)
 
     if (state->phase == 1) {
         int recv_rc = ipc_recv_blocking_for(process->context_id, state->reply_endpoint, &msg);
+        /* ipc_recv_blocking_for only returns IPC_EMPTY on spurious wake; caller loops */
+        if (recv_rc == IPC_EMPTY) {
+            return PROCESS_RUN_YIELDED;  /* retry on next dispatch */
+        }
         if (recv_rc != IPC_OK) {
             return PROCESS_RUN_YIELDED;
         }
@@ -393,6 +397,10 @@ kernel_init_entry(process_t *process, void *arg)
 
     if (state->phase == 4) {
         int recv_rc = ipc_recv_blocking_for(process->context_id, state->reply_endpoint, &msg);
+        /* ipc_recv_blocking_for only returns IPC_EMPTY on spurious wake; caller loops */
+        if (recv_rc == IPC_EMPTY) {
+            return PROCESS_RUN_YIELDED;  /* retry on next dispatch */
+        }
         if (recv_rc != IPC_OK) {
             return PROCESS_RUN_YIELDED;
         }

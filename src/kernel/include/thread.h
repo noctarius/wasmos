@@ -1,16 +1,13 @@
-/* thread.h - Kernel thread management within a process.
- *
- * A process owns one or more thread_t records.  Each thread has its own kernel
- * stack and process_context_t but shares the process address space.  The main
- * thread (spawned by process_manager) is the one that runs the WASM entry point.
- * Worker threads are created via the thread_create syscall from ring-3. */
 #ifndef WASMOS_THREAD_H
 #define WASMOS_THREAD_H
 
 #include <stdint.h>
 #include "process.h"
 
-#define THREAD_MAX_COUNT 128  /* global limit on live kernel threads */
+#include "sched_list.h"
+#include "sched_event.h"
+
+#define THREAD_MAX_COUNT 128
 #define THREAD_NAME_MAX 64
 
 typedef enum {
@@ -25,7 +22,8 @@ typedef enum {
     THREAD_BLOCK_NONE = 0,
     THREAD_BLOCK_IPC,
     THREAD_BLOCK_WAIT_PROCESS,
-    THREAD_BLOCK_WAIT_THREAD
+    THREAD_BLOCK_WAIT_THREAD,
+    THREAD_BLOCK_EVENT,   /* blocked on a sched_event_t (threadable scheduler) */
 } thread_block_reason_t;
 
 typedef struct thread {
@@ -33,13 +31,8 @@ typedef struct thread {
     uint32_t owner_pid;
     thread_state_t state;
     thread_block_reason_t block_reason;
-    uint8_t in_ready_queue;
     uint8_t is_kernel_worker;
-    /* Set while this thread is transitioning from RUNNING to BLOCKED on the
-     * current CPU and has not yet completed process_yield.  The scheduler
-     * skips (and re-enqueues) READY threads with this flag set to prevent
-     * a second CPU from restoring an in-progress context save. */
-    uint8_t blocking_transition;
+    uint8_t blocking_transition; /* RUNNING→BLOCKED in-progress (atomic) */
     uintptr_t kstack_base;
     uintptr_t kstack_top;
     uintptr_t kstack_alloc_base_phys;
@@ -54,47 +47,40 @@ typedef struct thread {
     uint32_t join_waiter_tid;
     uint8_t detached;
     int32_t exit_status;
-    /* Saved per-thread copy of cpu_local()->wasm3_heap_bound_pid.  Captured in
-     * process_yield before every context switch and restored to the CPU when
-     * this thread is next scheduled, preventing cross-thread heap-PID leakage
-     * when multiple wasm_driver threads interleave on the same CPU. */
     uint32_t wasm3_heap_bound_pid;
     char name_storage[THREAD_NAME_MAX];
     const char *name;
+    /* Per-thread context canaries (moved from process_t). */
+    uint64_t        ctx_canary_pre;
+    uint64_t        ctx_canary_post;
+    /* Scheduler priority and CPU placement. */
+    uint8_t         sched_prio;     /* SCHED_PRIO_* */
+    uint32_t        cpu_affinity;   /* allowed CPU bitmask; ~0u = any */
+    uint32_t        last_cpu;       /* CPU where thread last ran */
+    /* Intrusive linkage for scheduler lists. */
+    list_head_t     sched_node;     /* linkage in cpu_sched_t.ready_list */
+    list_head_t     event_node;     /* linkage in sched_event_t.wait_list */
+    /* Event blocking state. */
+    sched_event_t  *wait_event;     /* event this thread is blocked on */
+    uint32_t        pend_state;     /* SCHED_PEND_* set by waker */
+    uint64_t        pend_data;      /* value from waker (futex retcode, etc.) */
+    /* Thread-join event (replaces join_waiter_tid for new scheduler). */
+    sched_event_t   join_event;
 } thread_t;
 
-/* Initialize the thread table; called once during kernel startup. */
 void thread_init(void);
-
-/* Spawn the main thread for a newly created process; sets initial state to BLOCKED. */
 int thread_spawn_main(uint32_t owner_pid, const char *name, uint32_t *out_tid);
-
-/* Create an additional thread in owner_pid's process with caller-specified initial state. */
 int thread_spawn_in_owner(uint32_t owner_pid,
                           const char *name,
                           thread_state_t initial_state,
                           thread_block_reason_t initial_reason,
                           uint32_t *out_tid);
-
 thread_t *thread_get(uint32_t tid);
-
-/* Find the main thread (first-spawned) belonging to owner_pid. */
 thread_t *thread_find_main_for_pid(uint32_t owner_pid);
-
-/* Return the tid of the index-th thread owned by owner_pid. */
 int thread_owner_tid_at(uint32_t owner_pid, uint32_t index, uint32_t *out_tid);
-
-/* Transition all threads owned by owner_pid to ZOMBIE with exit_status. */
 void thread_mark_owner_exited(uint32_t owner_pid, int32_t exit_status);
-
-/* Free all thread records belonging to owner_pid (called after process reap). */
 void thread_reap_owner(uint32_t owner_pid);
-
 void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t reason);
-
-/* Wake tid if it is currently blocked; returns non-zero if a wakeup was delivered. */
-int thread_wake_if_blocked(uint32_t tid);
-
 void thread_set_exit_status(uint32_t tid, int32_t exit_status);
 void thread_reap(uint32_t tid);
 void thread_set_current(uint32_t tid);

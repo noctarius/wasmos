@@ -259,7 +259,7 @@ static int serial_remote_read_char(uint8_t *out_char) {
 
     if (g_serial_remote_pending_read_request != 0) {
         ipc_message_t resp;
-        int rc = ipc_try_recv_for(IPC_CONTEXT_KERNEL, g_serial_remote_reply_endpoint, &resp);
+        int rc = ipc_recv_for(IPC_CONTEXT_KERNEL, g_serial_remote_reply_endpoint, &resp);
         if (rc == IPC_OK) {
             if (resp.type != SERIAL_DRIVER_RESP ||
                 resp.request_id != g_serial_remote_pending_read_request) {

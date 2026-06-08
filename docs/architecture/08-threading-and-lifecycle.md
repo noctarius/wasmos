@@ -1,8 +1,7 @@
 ## Threading and Lifecycle
 
-This document describes the kernel threading model, data structures, scheduler
-dispatch, context switch, lifecycle transitions, and the WASM runtime thread
-mapping.
+This document describes the kernel threading model, data structures, lifecycle
+transitions, blocking primitives, and the WASM runtime thread mapping.
 
 ---
 
@@ -14,11 +13,10 @@ mapping.
   Up to `THREAD_MAX_COUNT = 128` threads across all processes.
 - Threads in one process share `context_id`, virtual memory mappings, and the
   capability envelope.
-- The ready queue stores TIDs; process ownership is derived from each dequeued
-  thread's `owner_pid`.
-- Multi-core capable when `WASMOS_SMP=1`: each online AP runs the same
-  round-robin dispatch loop against the shared spinlock-protected ready queue.
-  See `docs/architecture/28-smp.md` for the steady-state AP contract.
+- The priority queue stores thread pointers directly via intrusive list nodes;
+  process ownership is derived from each dequeued thread's `owner_pid`.
+- Current scope: single-core.  The scheduler data structures are ready for SMP
+  (per-CPU `cpu_sched_t`, `cpu_affinity` per thread) but only one CPU is active.
 
 ---
 
@@ -46,8 +44,8 @@ Source: `src/kernel/include/process.h`, `src/kernel/include/thread.h`,
 
 Source: `src/kernel/include/process.h`
 
-`process_context_t` is the register-save area used by the scheduler and shared
-between `process_t` and `thread_t`:
+`process_context_t` is the register-save area used by the scheduler.  Every
+`thread_t` embeds exactly one instance flanked by canary words.
 
 ```c
 typedef struct {
@@ -76,26 +74,10 @@ typedef struct {
 } process_context_t;
 ```
 
-Offsets are verified by `_Static_assert` at compile time. The assembly
-context-switch path (`context_switch_high`) depends on this exact layout.
+Offsets are verified by `_Static_assert` at compile time.
 
-`irq_frame_t` is the hardware-pushed frame used by ISR stubs:
-
-```c
-typedef struct {
-    uint64_t r15;        /* offset   0 */
-    /* ... r14–rbx ... */
-    uint64_t rax;        /* offset 112 */
-    uint64_t rip;        /* offset 120 */
-    uint64_t cs;
-    uint64_t rflags;
-    uint64_t user_rsp;   /* offset 144 */
-    uint64_t user_ss;
-} irq_frame_t;
-```
-
-The preemption path (`process_preempt_from_irq`) copies `irq_frame_t` fields
-into the current thread's `process_context_t`.
+`irq_frame_t` is the hardware-pushed frame used by ISR stubs.  The preemption
+path copies it into the current thread's `process_context_t`.
 
 ---
 
@@ -110,18 +92,13 @@ typedef struct process {
     uint32_t thread_count;       /* total threads ever spawned */
     uint32_t live_thread_count;  /* currently non-zombie threads */
     uint8_t  exiting;            /* group-exit in progress */
-    process_state_t state;
-    process_block_reason_t block_reason;
-    uint32_t wait_target_pid;
+    process_state_t state;       /* UNUSED / ALIVE / REAPING / ZOMBIE */
+    uint32_t wait_target_pid;    /* active process_wait target */
     int32_t  exit_status;
-    uint32_t time_slice_ticks;   /* currently unused at process level */
-    uint32_t ticks_remaining;
+    uint32_t time_slice_ticks;
     uint64_t ticks_total;
-    uint8_t  in_ready_queue, is_idle, in_hostcall;
+    uint8_t  is_idle, in_hostcall;
     uint8_t  auto_reap, is_wasm, ready, require_explicit_ready;
-    uint64_t ctx_canary_pre;     /* == PROCESS_CTX_CANARY_VALUE */
-    process_context_t ctx;       /* current register state */
-    uint64_t ctx_canary_post;    /* == PROCESS_CTX_CANARY_VALUE */
     uintptr_t stack_base, stack_top;
     uintptr_t stack_alloc_base_phys;
     uint32_t  stack_pages;
@@ -129,39 +106,34 @@ typedef struct process {
     void *arg;
     char name_storage[64];
     const char *name;
+    spinlock_t  wasm3_lock;      /* held for duration of wasm3 entry_fn call */
+    uint32_t    wasm3_owner;     /* TID currently executing in wasm3; 0 = free */
+    sched_event_t wait_event;   /* process-level wait (child exit notification) */
 } process_t;
 ```
+
+`process_t` no longer contains `ctx` or the canary pair; those are per-thread.
+`in_ready_queue` and `block_reason` are removed — scheduling state lives in
+`thread_t`.
 
 #### Process States
 
 | State                    | Value | Meaning                              |
 |--------------------------|-------|--------------------------------------|
 | `PROCESS_STATE_UNUSED`   | 0     | Slot free                            |
-| `PROCESS_STATE_READY`    | 1     | At least one thread runnable         |
-| `PROCESS_STATE_RUNNING`  | 2     | Currently dispatched                 |
-| `PROCESS_STATE_BLOCKED`  | 3     | All threads blocked                  |
+| `PROCESS_STATE_ALIVE`    | 1     | At least one live thread             |
+| `PROCESS_STATE_REAPING`  | 6     | Being reaped; slots still valid      |
 | `PROCESS_STATE_ZOMBIE`   | 4     | All threads exited; awaiting reap    |
 
-#### Process Block Reasons
+`PROCESS_STATE_ALIVE` is an alias for `PROCESS_STATE_READY` in the enum; code
+that only distinguishes live vs. dead uses `>= ALIVE`.
 
-| Reason                  | Value | Meaning                    |
-|-------------------------|-------|----------------------------|
-| `PROCESS_BLOCK_NONE`    | 0     |                            |
-| `PROCESS_BLOCK_IPC`     | 1     | Waiting on IPC recv        |
-| `PROCESS_BLOCK_WAIT`    | 2     | Waiting on child PID       |
+#### WASM Reentrancy Guard
 
-#### Process Run Results
-
-Returned by `process_entry_t` (kernel WASM/native entry functions) to inform
-the scheduler of the exit reason:
-
-| Result                      | Value | Meaning                                |
-|-----------------------------|-------|----------------------------------------|
-| `PROCESS_RUN_YIELDED`       | 0     | Voluntarily yielded                    |
-| `PROCESS_RUN_IDLE`          | 1     | Idle process (re-enqueue without tick) |
-| `PROCESS_RUN_BLOCKED`       | 2     | Blocked; do not re-enqueue             |
-| `PROCESS_RUN_EXITED`        | 3     | Process exited                         |
-| `PROCESS_RUN_THREAD_EXITED` | 4     | Thread-only exit; process continues    |
+wasm3 is not reentrant.  `wasm3_lock` (spinlock) is acquired before every call
+into wasm3 and released on return.  `wasm3_owner` records the occupying TID so
+the owning thread can re-enter without deadlocking on its own lock.  Kernel
+worker threads (`is_kernel_worker = 1`) never acquire `wasm3_lock`.
 
 ---
 
@@ -175,19 +147,29 @@ typedef struct thread {
     uint32_t owner_pid;
     thread_state_t state;
     thread_block_reason_t block_reason;
-    uint8_t  in_ready_queue;
-    uint8_t  is_kernel_worker;    /* runs on kernel stack via worker_entry */
+    uint8_t  is_kernel_worker;
     uintptr_t kstack_base, kstack_top;
     uintptr_t kstack_alloc_base_phys;
     uint32_t  kstack_pages;
-    uintptr_t worker_entry;       /* C function pointer for kernel workers */
+    uintptr_t worker_entry;
     void *worker_arg;
     uint32_t time_slice_ticks;
     uint32_t ticks_remaining;
     uint64_t ticks_total;
-    process_context_t ctx;        /* register state for context switch */
-    uint32_t wait_target_pid;
-    uint32_t join_waiter_tid;     /* TID of the thread waiting to join this one */
+    uint8_t  blocking_transition;  /* atomic: 1 while transitioning to BLOCKED */
+    uint32_t wasm3_heap_bound_pid; /* heap slot override during worker dispatch */
+    uint64_t ctx_canary_pre;       /* == PROCESS_CTX_CANARY_VALUE */
+    process_context_t ctx;         /* register state for ALL thread types */
+    uint64_t ctx_canary_post;      /* == PROCESS_CTX_CANARY_VALUE */
+    uint8_t  sched_prio;           /* priority 0 (highest) – 6 (idle) */
+    uint32_t cpu_affinity;         /* allowed CPU bitmask (~0u = any) */
+    uint32_t last_cpu;             /* CPU where thread last ran */
+    list_head_t sched_node;        /* intrusive linkage in ready_list[prio] */
+    list_head_t event_node;        /* intrusive linkage in sched_event_t.wait_list */
+    sched_event_t *wait_event;     /* event this thread is currently blocked on */
+    sched_pend_state_t pend_state; /* PEND_NONE / PEND_OK / PEND_TIMEOUT / PEND_ABORT */
+    uint64_t pend_data;            /* value from waker */
+    sched_event_t join_event;      /* embedded event for join waiters */
     uint8_t  detached;
     int32_t  exit_status;
     char     name_storage[64];
@@ -200,61 +182,27 @@ typedef struct thread {
 | State                   | Value | Meaning                                    |
 |-------------------------|-------|--------------------------------------------|
 | `THREAD_STATE_UNUSED`   | 0     | Slot free                                  |
-| `THREAD_STATE_READY`    | 1     | Runnable; in or eligible for ready queue   |
+| `THREAD_STATE_READY`    | 1     | Runnable; in priority queue                |
 | `THREAD_STATE_RUNNING`  | 2     | Currently executing                        |
-| `THREAD_STATE_BLOCKED`  | 3     | Waiting on IPC, join, or process-wait      |
+| `THREAD_STATE_BLOCKED`  | 3     | Waiting on IPC, join, futex, or event      |
 | `THREAD_STATE_ZOMBIE`   | 4     | Exited; slot held for joiner or reap       |
 
 #### Thread Block Reasons
 
-| Reason                        | Value | Meaning                            |
-|-------------------------------|-------|------------------------------------|
-| `THREAD_BLOCK_NONE`           | 0     |                                    |
-| `THREAD_BLOCK_IPC`            | 1     | Blocked in `ipc_recv_for`          |
-| `THREAD_BLOCK_WAIT_PROCESS`   | 2     | Blocked in `process_wait`          |
-| `THREAD_BLOCK_WAIT_THREAD`    | 3     | Blocked in `process_thread_join`   |
-
----
-
-### User-Space Mutex Helpers
-
-Source: `src/kernel/user_mutex.c`, `src/libc/include/wasmos/mutex.h`,
-`src/libsys/wasm/include/wasmos/mutex.h`,
-`src/libsys/native/include/wasmos/libsys_native.h`
-
-Threaded user-space runtimes now expose a small process-local reentrant mutex
-helper backed by kernel-serialized ownership transitions. The mutex state lives
-in user memory as:
-
-```c
-typedef struct {
-    uint32_t owner_tid;
-    uint32_t recursion_depth;
-} wasmos_mutex_t;
-```
-
-Semantics:
-
-- Ownership is tracked by TID, not PID or CPU.
-- `try_lock` returns `0` on success, `1` when another thread owns the mutex,
-  and `-1` on invalid pointer/state.
-- Re-lock by the owning thread increments `recursion_depth`.
-- Final `unlock` clears both fields; intermediate unlocks only decrement
-  `recursion_depth`.
-- The current contention path is cooperative: libc/libsys loops on
-  `try_lock` and calls `thread_yield` / `sched_yield` between retries.
-
-The kernel currently serializes `try_lock` / `unlock` with a small internal
-spinlock and reads/writes the user-resident mutex state through validated
-context copies. This avoids relying on WebAssembly atomic instructions, which
-the current wasm runtime/toolchain contract does not provide.
+| Reason                      | Value | Meaning                                      |
+|-----------------------------|-------|----------------------------------------------|
+| `THREAD_BLOCK_NONE`         | 0     |                                              |
+| `THREAD_BLOCK_IPC`          | 1     | Blocked in `ipc_recv_blocking_for`           |
+| `THREAD_BLOCK_WAIT_PROCESS` | 2     | Blocked in `process_wait`                    |
+| `THREAD_BLOCK_WAIT_THREAD`  | 3     | Blocked in `process_thread_join`             |
+| `THREAD_BLOCK_EVENT`        | 4     | Blocked via `sched_event_wait` (futex, etc.) |
 
 ---
 
 ### Stack Layout
 
-Each process and each thread gets a kernel stack. Both use `PROCESS_STACK_SIZE`
-(512 KiB = 128 pages). Allocation includes one guard page on each side:
+Each process and each thread gets a kernel stack.  Both use `PROCESS_STACK_SIZE`
+(512 KiB = 128 pages).  Allocation includes one guard page on each side:
 
 ```
 [guard page]  ← paged-out; #PF on underflow
@@ -262,18 +210,14 @@ Each process and each thread gets a kernel stack. Both use `PROCESS_STACK_SIZE`
 [guard page]  ← paged-out; #PF on overflow
 ```
 
-`STACK_GUARD_PAGES = 1` on each side. Physical allocation:
-`total_pages = stack_pages + 2 * STACK_GUARD_PAGES`.
-
-Guard pages are restored before the physical pages are freed
-(`process_restore_stack_guard_mappings`) so recycled pages remain reachable
-through the shared higher-half alias window.
+Guard pages are restored before physical pages are freed so recycled pages
+remain reachable through the shared higher-half alias window.
 
 ---
 
 ### Thread Spawn Paths
 
-Source: `src/kernel/include/process.h`, `src/kernel/process.c`
+Source: `src/kernel/process.h`, `src/kernel/process.c`
 
 | Function                                                                         | Use                                               |
 |----------------------------------------------------------------------------------|---------------------------------------------------|
@@ -283,6 +227,10 @@ Source: `src/kernel/include/process.h`, `src/kernel/process.c`
 | `process_thread_spawn_worker_internal(pid, name, entry, arg, *tid)`              | Spawn kernel worker (runs C function on kstack)   |
 | `process_thread_spawn_user_internal(pid, name, entry_rip, user_stack_top, *tid)` | Spawn user-mode ring3 thread                      |
 
+`sched_thread_init` is a consolidated helper called by all spawn paths.  It sets
+canary words, `sched_prio`, `cpu_affinity`, initializes `sched_node` and
+`event_node` list heads, and calls `sched_event_init(&thread->join_event)`.
+
 User threads spawned via `WASMOS_SYSCALL_THREAD_CREATE` call
 `process_thread_spawn_user_internal`, which initializes
 `thread.ctx.rip = entry_rip`, `thread.ctx.cs = USER_CS_SELECTOR`,
@@ -290,65 +238,36 @@ User threads spawned via `WASMOS_SYSCALL_THREAD_CREATE` call
 
 ---
 
-### Scheduler
-
-Source: `src/kernel/process.c`
-
-#### Ready Queue
-
-Circular ring buffer: `g_ready_queue[THREAD_MAX_COUNT]` of TIDs.
-`g_ready_head`, `g_ready_tail`, `g_ready_count` track state.
-`thread.in_ready_queue = 1` prevents double-enqueue.
-
-Invariant: only `THREAD_STATE_READY` threads may be enqueued.
-
-#### Dispatch Sequence (`process_schedule_once_impl`)
-
-1. Dequeue TID from ready queue; look up `thread_t`.
-2. Find owner `process_t` via `thread->owner_pid`.
-3. Canary check: compare `ctx_canary_pre` and `ctx_canary_post` against
-   `PROCESS_CTX_CANARY_VALUE`; halt (`hlt` loop) on mismatch.
-4. `process_set_running(proc, thread)` — state → `RUNNING`.
-5. Reset `ticks_remaining = time_slice_ticks` if zero.
-6. Copy thread ctx to `proc->ctx` (validates context).
-7. `cpu_set_kernel_stack(proc->stack_top - 16u)` — updates `TSS.rsp0`.
-8. Set `g_current_pid`, `g_current_process`, `g_current_thread`, `thread_set_current(tid)`.
-9. Load `run_ctx->root_table = mm_context_root_table(proc->context_id)`.
-10. Kernel workers: `process_run_worker_on_stack(proc, thread)`.
-    Others: `context_switch_high(&g_sched_ctx, run_ctx)`.
-11. On return: `g_current_process`, `g_current_thread` cleared; handle exit result.
-
-#### Timer Preemption
-
-`process_tick()` is called by the timer interrupt handler (PIT at ~100 Hz):
-1. Increment `g_current_thread->ticks_total`.
-2. Decrement `g_current_thread->ticks_remaining`.
-3. At 0: set `g_need_resched = 1`. Log `[test] preempt ok` on first occurrence.
-4. Stall watchdog: if `g_need_resched` is set for ≥ `SCHED_RESCHED_STALL_TICKS`
-   consecutive ticks, emit `[watchdog] resched stall ticks=...`.
-
-`process_preempt_from_irq(irq_frame_t *frame)` is called from the timer ISR when
-CPL=3 at entry (`user_ss & 0x3u == 0x3u`). It copies `irq_frame_t` registers
-into `g_current_thread->ctx`, then yields via `process_preempt_trampoline`.
-
----
-
 ### IPC Blocking and Wakeup
 
-Source: `src/kernel/ipc.c`
+Source: `src/kernel/ipc.c`, `src/kernel/sched_event.c`
 
-Each IPC endpoint holds one `waiter_tid`:
+IPC receive uses two variants:
 
-```c
-ep->waiter_tid = thread_current_tid();   /* on ipc_recv_for block */
-```
+**`ipc_recv_for(context_id, endpoint, out)`** — non-blocking.  If a message is
+available, dequeues it and returns `IPC_OK`.  If empty, registers the current
+thread in `ep->event.wait_list` (so a future sender's `poll_notify` will wake
+it) and returns `IPC_EMPTY`.  Used by the scheduler's YIELDED handler to clean
+up stale registrations.
 
-On send/notify: `process_wake_thread(waiter_tid)` — targeted single-thread
-wakeup. No context-wide wake fallback. If no thread is currently blocked, the
-message remains queued for a later receiver.
+**`ipc_recv_blocking_for(context_id, endpoint, out)`** — true blocking.  On
+`IPC_EMPTY`, calls `sched_event_wait(&ep->event, 0)` which parks the thread
+until a sender wakes it.  Used by WASM host functions (`wasmos_ipc_select_one`,
+`wasmos_ipc_select_wait`) and kernel init paths.
 
-Receiving multiple pending messages (notification endpoint) uses the same
-`waiter_tid` slot; only one thread waits per endpoint at a time.
+`ipc_send_from` calls `sched_event_wake_one(&ep->event, ...)` to wake any
+blocked receiver.  It also calls `poll_notify(ep->poll_struct, POLL_EV_IN,
+ep->id)` to signal any registered select sets.
+
+`ipc_endpoint_t` no longer contains `waiter_tid`; it contains an embedded
+`sched_event_t event` and a pointer `poll_struct_t *poll_struct`.
+
+#### Single-Registration Invariant
+
+A thread's `event_node` is in at most one `wait_list` at any time.  Before
+`ipc_recv_for` adds the thread to a new endpoint's wait_list it removes it from
+any previous one.  Similarly, `sched_event_wait` removes from a previous list
+before adding to the new one.
 
 ---
 
@@ -357,7 +276,7 @@ Receiving multiple pending messages (notification endpoint) uses the same
 ```
 UNUSED ──spawn──▶ READY ──dispatch──▶ RUNNING ──yield/block──▶ READY/BLOCKED
                                          │
-                                    exit/kill
+                                     exit/kill
                                          │
                                          ▼
                                       ZOMBIE ──join/auto-reap──▶ UNUSED
@@ -368,29 +287,30 @@ UNUSED ──spawn──▶ READY ──dispatch──▶ RUNNING ──yield/bl
 **Thread-only exit** (`PROCESS_RUN_THREAD_EXITED`):
 - Thread state → `ZOMBIE`.
 - Store exit status in `thread.exit_status`.
-- Wake `join_waiter_tid` if non-zero.
+- `sched_event_wake_all(&thread->join_event, ...)` wakes any joiners.
 - Decrement `proc->live_thread_count`.
-- If other threads remain: find next ready thread and continue process.
-- If last live thread: transition process to zombie, wake any process-level
-  waiters.
+- If other threads remain: find next ready thread in the same process.
+- If last live thread: mark process ZOMBIE, wake process-level waiters via
+  `sched_event_wake_all(&proc->wait_event, ...)`.
 
 **Process exit** (`PROCESS_RUN_EXITED`):
 - `proc->exiting = 1`.
-- All member threads marked toward exit.
-- All blocked IPC/join/wait waiters are woken.
-- Process reclaimed only after all threads reach `ZOMBIE`.
+- All member threads are marked toward exit.
+- Blocked IPC/join/wait waiters are woken.
+- Process is reclaimed only after all threads reach `ZOMBIE`.
 
 **Detached threads** (`thread.detached = 1`):
-- `join_waiter_tid` cannot be set (join attempt returns error).
-- On exit: thread slot is auto-reaped rather than held as zombie.
+- Join attempts return an error.
+- On exit: thread slot is auto-reaped instead of held as zombie.
 
 #### Join (`process_thread_join`)
 
 - Self-join: denied.
 - Already-detached target: denied.
-- Only one joiner (`join_waiter_tid`) per target thread.
+- Only one joiner per thread (the `join_event` wait_list allows more, but the
+  policy only sets one).
 - If target already zombie: returns immediately with stored `exit_status`.
-- Otherwise: caller blocks with `THREAD_BLOCK_WAIT_THREAD`.
+- Otherwise: caller calls `sched_event_wait(&target->join_event, 0)`.
 
 #### Detach (`process_thread_detach`)
 
@@ -402,25 +322,23 @@ UNUSED ──spawn──▶ READY ──dispatch──▶ RUNNING ──yield/bl
 
 - Marks `proc->exiting = 1`, sets `exit_status`.
 - Forces all live member threads toward exit.
-- Wakes blocked process-level waiters (all matching waiters, not just first).
-- `auto_reap = 1` processes are reaped once all threads are zombie and no
-  waiters remain.
+- Wakes blocked process-level waiters via `sched_event_wake_all(&proc->wait_event, ...)`.
+- `auto_reap = 1` processes are reaped once all threads are zombie.
 
 ---
 
 ### Context Switch
 
-Source: `context_switch.S` (assembly), `src/kernel/process.c`
+Source: `context_switch.S`, `src/kernel/process.c`
 
-`context_switch_high(from_ctx, to_ctx)` is the assembly trampoline:
+`context_switch_high(from_ctx, to_ctx)`:
 1. Save all GPRs + rsp/rip/rflags/cs/ss into `from_ctx`.
 2. Load GPRs + rsp/rip from `to_ctx`.
 3. Switch CR3 if `to_ctx.root_table` differs from current.
 4. Return to `to_ctx.rip`.
 
-The syscall handler (`x86_syscall_handler`) copies the full trap frame into
-`current_thread->ctx` before any blocking path, so resumed threads continue at
-the correct post-syscall RIP.
+The syscall handler copies the full trap frame into `current_thread->ctx` before
+any blocking path so resumed threads continue at the correct post-syscall RIP.
 
 ---
 
@@ -430,15 +348,15 @@ Source: `src/kernel/wasm_driver.c`, `src/kernel/wasm3_shim.c`
 
 Each WASM thread maps to a dedicated wasm3 VM instance:
 - Separate `IM3Environment`, `IM3Runtime`, `IM3Module` per thread.
-- No concurrent entry into the same VM instance.
-- Thread-local heap: `wasm3_heap_bind_pid(pid)` keyed by PID, not TID;
-  `WASM_DRIVER_THREAD_SLOTS = 64` slots for VM threads.
-- `wasm_driver_spawn_vm_thread()` allocates a slot and spawns a kernel
-  worker thread that creates a fresh wasm3 stack and calls the target WASM export.
+- No concurrent entry into the same VM instance; `wasm3_lock` in `process_t`
+  enforces serial wasm3 use per process.
+- Thread-local heap: `wasm3_heap_bind_pid(pid)` keyed by PID, not TID.
+  Up to `WASM_DRIVER_THREAD_SLOTS = 64` VM thread slots.
+- `wasm_driver_spawn_vm_thread()` allocates a slot and spawns a kernel worker
+  thread that creates a fresh wasm3 stack and calls the target WASM export.
 
-Preemption is gated around all wasm3 interpreter entry points:
-`preempt_disable()` before wasm3 state access, `preempt_enable()` after.
-This prevents a timer interrupt from re-entering wasm3 interpreter state.
+Preemption is gated around all wasm3 interpreter entry points via
+`in_hostcall = 1`; the preemption path skips threads with this flag set.
 
 ---
 
@@ -449,7 +367,7 @@ Source: `src/kernel/include/process.h` (`process_stats_t`)
 | Field                       | Meaning                                                        |
 |-----------------------------|----------------------------------------------------------------|
 | `state`                     | Current process state                                          |
-| `block_reason`              | Current block reason                                           |
+| `block_reason`              | Legacy field; always NONE in new scheduler                     |
 | `is_wasm`                   | 1 if process runs a WASM payload                               |
 | `thread_count`              | Total threads spawned for this process                         |
 | `live_thread_count`         | Non-zombie threads                                             |
@@ -459,7 +377,7 @@ Source: `src/kernel/include/process.h` (`process_stats_t`)
 | `vm_total_bytes`            | Virtual memory total                                           |
 | `thread_kstack_total_bytes` | Sum of all thread kernel stack bytes                           |
 | `heap_committed_bytes`      | Committed wasm3 heap across all process chunks                 |
-| `rss_est_bytes`             | RSS estimate (equal to vm_total until per-page tracking lands) |
+| `rss_est_bytes`             | RSS estimate                                                   |
 
 ---
 
@@ -476,15 +394,13 @@ Markers emitted to the serial log:
 | `[test] threading ipc stress ok`            | Multi-thread IPC stress (32 exchanges) completes  |
 | `[test] threading wait kill wake ok`        | Blocked waiter wakes correctly on target kill     |
 | `[test] threading join wake order ok`       | Join waiter wakes after delayed target exit       |
-| `[test] threading join after kill order ok` | Join sees kill exit status deterministically      |
-| `[test] threading join kill wake ok`        | Joiner wakes when target is killed while blocked  |
 
 ---
 
 ### Structural Invariants
 
 1. **Thread slot is never scheduled after reclamation.** `THREAD_STATE_UNUSED`
-   slots are never enqueued. Reclamation (`thread_reap`) clears `tid`, sets
+   slots are never enqueued.  Reclamation (`thread_reap`) clears `tid`, sets
    state to `UNUSED`.
 
 2. **Process slot is reclaimed only after all threads are zombie.**
@@ -492,17 +408,27 @@ Markers emitted to the serial log:
    `live_thread_count == 0`.
 
 3. **Capability checks are process-context-bound.** Thread identity does not
-   grant additional capabilities. `capability_has(context_id, kind)` uses the
+   grant additional capabilities.  `capability_has(context_id, kind)` uses the
    shared process `context_id`.
 
-4. **Endpoint ownership is by context_id, not TID.** A thread can only send
-   to endpoints its process owns. IPC wake targets a specific TID but the
-   endpoint remains owned by the process.
+4. **Endpoint ownership is by context_id, not TID.** A thread can only send to
+   endpoints its process owns.  IPC wake targets a specific thread via
+   `sched_event_wake_one` but the endpoint remains owned by the process.
 
-5. **Context canaries bracket `process_t.ctx`.** Any stack corruption that
+5. **Context canaries bracket `thread_t.ctx`.** Any stack corruption that
    overwrites the context struct will be detected before the corrupted context
-   is dispatched. Mismatch → `hlt` loop (no silent bad dispatch).
+   is dispatched.  Mismatch → `hlt` loop (no silent bad dispatch).
 
 6. **TSS.rsp0 is updated on every dispatch.** `cpu_set_kernel_stack(stack_top - 16u)`
    is called in `process_schedule_once_impl` before `context_switch_high`.
    Ring3 interrupts and syscalls always land on the current thread's kernel stack.
+
+7. **`blocking_transition` guards against lost wakes.** When a thread sets
+   `blocking_transition = 1` and begins saving its context, a concurrent
+   `sched_wake_thread` spin-waits until the flag clears before enqueuing the
+   thread.  This prevents the thread from being scheduled before its context
+   save is complete.
+
+8. **`event_node` is in at most one wait_list.** Before adding a thread to a new
+   event's wait_list, its current membership is always removed first.  This
+   prevents list corruption on successive blocking calls.

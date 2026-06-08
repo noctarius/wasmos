@@ -202,6 +202,25 @@
 - Kernel dynamic container baseline now includes a centralized `list`
   interface with selectable backends (linked vs growable array-chunk);
   process-manager list backend selection is wired through Kconfig.
+- Threadable-scheduler wakeup handling now avoids single-CPU deadlock when an
+  IPC/event sender wakes a thread during the narrow RUNNING-to-BLOCKED
+  transition after event registration but before the blocked yield path has
+  finished; scheduler selftests now cover that race.
+- WASM event-loop intent registration now arms the request-id slot before
+  sending IPC, preventing fast replies from being consumed as unhandled
+  messages during early process-manager metadata and sync-call traffic.
+- Process-manager module-metadata path lookup now accepts caller FS-buffer
+  payloads (the shared libc contract) in addition to direct user pointers, and
+  device-manager uses that buffer path for initfs module discovery during
+  early bring-up.
+- Device-manager sync IPC waits now use a dedicated select set over both the
+  PM reply endpoint and `devmgr.query`, so bring-up stays responsive to
+  filesystem metadata queries while waiting on process-manager replies.
+- Device-manager query/inventory/reply housekeeping paths now drain endpoints
+  explicitly in nonblocking mode; this avoids a threadable-scheduler bring-up
+  stall where the new select-backed WASM event-loop poll blocked on an empty
+  `devmgr.query` wait before the next pending spawn target (for example
+  `acpi-bus`) could run.
 - Higher-level components may use C++, while low-level kernel boundaries stay
   C/ASM. WASM C++ build policy is no exceptions/RTTI and explicit C ABI at
   integration points.

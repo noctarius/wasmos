@@ -174,6 +174,7 @@ static inline void sched_enqueue_thread(struct thread *t) {
 }
 
 void process_init(void);
+void process_ap_init(void); /* per-AP scheduler state init; call before enabling AP timer */
 int process_spawn(const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
 int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
 int process_spawn_as_parked(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);

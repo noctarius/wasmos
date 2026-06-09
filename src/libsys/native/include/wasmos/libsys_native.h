@@ -109,6 +109,7 @@ int32_t wasmos_sys_native_intent_send_with_request_id(wasmos_sys_native_event_lo
                                                       uint32_t arg3,
                                                       void (*on_resolve)(void *user, const nd_ipc_message_t *msg),
                                                       void *user);
+void wasmos_sys_native_intent_cancel(wasmos_sys_native_event_loop_t *loop, uint32_t request_id);
 int32_t wasmos_sys_native_event_loop_poll(wasmos_sys_native_event_loop_t *loop, uint32_t budget);
 
 static inline void

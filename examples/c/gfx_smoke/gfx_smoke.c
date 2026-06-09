@@ -533,6 +533,9 @@ pump_libui_demo(void)
                    (int)(ev_raw.arg2 & 0xFFFF),
                    (int)((ev_raw.arg2 >> 16) & 0xFFFF),
                    (int)(ev_raw.arg3 & 1));
+            if ((ev_raw.arg3 & 1) != 0) {
+                puts("[dbg-libui] pointer btn-down");
+            }
         }
         (void)ui_loop_handle_ipc(ui, &ev_raw);
     }

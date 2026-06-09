@@ -114,9 +114,15 @@ fn ipc_call(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u
     var empty_polls: u32 = 0;
     while (!state.done) {
         const handled = sys.eventLoopPoll(&g_ipc_loop, 8);
-        if (handled < 0) return -1;
+        if (handled < 0) {
+            sys.intentCancel(&g_ipc_loop, request_id);
+            return -1;
+        }
         if (handled == 0) {
-            if (empty_polls >= 1024) return -1;
+            if (empty_polls >= 1024) {
+                sys.intentCancel(&g_ipc_loop, request_id);
+                return -1;
+            }
             empty_polls +%= 1;
             api().sched_yield.?();
         }

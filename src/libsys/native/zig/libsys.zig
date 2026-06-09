@@ -190,6 +190,10 @@ pub fn intentSendWithRequestId(loop: *NativeEventLoop, destination_endpoint: u32
     return c.wasmos_sys_native_intent_send_with_request_id(loop, destination_endpoint, source_endpoint, request_id, msg_type, arg0, arg1, arg2, arg3, @ptrCast(on_resolve), user);
 }
 
+pub fn intentCancel(loop: *NativeEventLoop, request_id: u32) void {
+    c.wasmos_sys_native_intent_cancel(loop, request_id);
+}
+
 pub fn eventLoopPoll(loop: *NativeEventLoop, budget: u32) i32 {
     return c.wasmos_sys_native_event_loop_poll(loop, budget);
 }

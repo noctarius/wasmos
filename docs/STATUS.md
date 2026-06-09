@@ -1,6 +1,17 @@
 # Current Status
 
 - This status file is a snapshot, not a release changelog.
+- Native `libsys` event loops now expose explicit intent cancellation, and the
+  current stack-backed synchronous IPC helpers in both `gfx-compositor` and
+  `font-service` cancel pending intents before timeout/error exits. This
+  closes the stale-reply use-after-return path where a later reply could
+  resolve into freed stack state. `gfx-compositor` also now refreshes runtime
+  keyboard/mouse subscriptions on a periodic handled-event cadence instead of
+  only during idle housekeeping, so continuous `POLL_EVENT` traffic no longer
+  starves input re-subscription. Trace markers now also distinguish overlay
+  lock/restore transitions and whether a successful `PRESENT_WINDOW` happened
+  while the compositor still believed overlay lock was off, which makes
+  invisible-cursor regressions easier to diagnose.
 - Current SMP crash instrumentation now also watches the live main
   `thread->ctx` for `process-manager` / `native-call-min` instead of the stale
   mirrored `proc->ctx`, and AP bring-up no longer clears the global watch

@@ -417,6 +417,19 @@ wasmos_sys_native_intent_send_with_request_id(wasmos_sys_native_event_loop_t *lo
     return 0;
 }
 
+void
+wasmos_sys_native_intent_cancel(wasmos_sys_native_event_loop_t *loop, uint32_t request_id)
+{
+    wasmos_sys_native_intent_t *intent = native_intent_find(loop, request_id);
+    if (!intent) {
+        return;
+    }
+    intent->in_use = 0;
+    intent->request_id = 0;
+    intent->on_resolve = 0;
+    intent->user = 0;
+}
+
 int32_t
 wasmos_sys_native_event_loop_poll(wasmos_sys_native_event_loop_t *loop, uint32_t budget)
 {

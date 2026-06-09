@@ -40,12 +40,19 @@ def _best_display() -> str:
 
 
 _DISPLAY = _best_display()
+_CURSOR_START_X = 640
+_CURSOR_START_Y = 400
+_LIBUI_BUTTON_X = 259
+_LIBUI_BUTTON_Y = 61
+_MOUSE_STEP = 16
 
 
 class LibuiClickTest(unittest.TestCase):
     """Verify that mouse clicks are delivered to libui components end-to-end."""
 
     session: QemuSession
+    cursor_x: int = _CURSOR_START_X
+    cursor_y: int = _CURSOR_START_Y
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -65,6 +72,8 @@ class LibuiClickTest(unittest.TestCase):
         if not cls.session.expect(b"[test] libui demo ready", timeout_s=30):
             cls.session.close()
             raise RuntimeError("libui demo did not start")
+        cls.cursor_x = _CURSOR_START_X
+        cls.cursor_y = _CURSOR_START_Y
         time.sleep(0.5)
 
     @classmethod
@@ -79,18 +88,41 @@ class LibuiClickTest(unittest.TestCase):
                 "Set WASMOS_TEST_INPUT_INJECTION=1 with cocoa/gtk/sdl display."
             )
 
-    def _click_at(self, dx: int, dy: int) -> None:
-        """Move mouse by (dx,dy) from current position then left-click."""
+    def _move_mouse(self, dx: int, dy: int) -> None:
+        """Move the pointer in smaller relative HMP steps."""
         mon = self.session.monitor
         assert mon is not None
-        if dx != 0 or dy != 0:
-            mon.hmp(f"mouse_move {dx} {dy}")
-            time.sleep(0.05)
-        # button down then up
+        rem_x = dx
+        rem_y = dy
+        while rem_x != 0 or rem_y != 0:
+            step_x = max(-_MOUSE_STEP, min(_MOUSE_STEP, rem_x))
+            step_y = max(-_MOUSE_STEP, min(_MOUSE_STEP, rem_y))
+            mon.hmp(f"mouse_move {step_x} {step_y}")
+            self.__class__.cursor_x += step_x
+            self.__class__.cursor_y += step_y
+            rem_x -= step_x
+            rem_y -= step_y
+            time.sleep(0.02)
+        time.sleep(0.05)
+
+    def _move_to(self, x: int, y: int) -> None:
+        """Move from the tracked cursor position to an absolute point."""
+        dx = x - self.__class__.cursor_x
+        dy = y - self.__class__.cursor_y
+        self._move_mouse(dx, dy)
+
+    def _click_current(self) -> None:
+        """Left-click without moving first."""
+        mon = self.session.monitor
+        assert mon is not None
         mon.hmp("mouse_button 1")
         time.sleep(0.05)
         mon.hmp("mouse_button 0")
         time.sleep(0.1)
+
+    def _move_to_libui_button(self, dx: int = 0, dy: int = 0) -> None:
+        """Position the pointer over the libui button with an optional offset."""
+        self._move_to(_LIBUI_BUTTON_X + dx, _LIBUI_BUTTON_Y + dy)
 
     def test_compositor_queues_click(self) -> None:
         """Verify compositor queues a pointer button event when mouse is clicked."""
@@ -98,12 +130,9 @@ class LibuiClickTest(unittest.TestCase):
         if mon is None:
             self.skipTest("QMP monitor not connected")
 
-        # The cursor starts at screen centre (640,400 for 1280×800).
-        # The libui window (4th window, z≈4) spawns at approx (104,104).
-        # Move cursor toward the libui window's content area.
-        # dx ≈ 104 + 260 - 640 = -276, dy ≈ 104 + 85 - 400 = -211
+        self._move_to_libui_button()
         mark = self.session.mark()
-        self._click_at(-276, -211)
+        self._click_current()
 
         ok = self.session.expect_from(mark, b"[dbg-gfx] pointer btn-push queued",
                                        timeout_s=5)
@@ -121,10 +150,9 @@ class LibuiClickTest(unittest.TestCase):
             self.skipTest("QMP monitor not connected")
 
         mark = self.session.mark()
-        # Try clicking the button a few times at slightly different positions
-        # in case we missed on the first attempt.
         for dx, dy in [(0, 0), (10, 0), (-10, 5), (0, -5)]:
-            self._click_at(dx, dy)
+            self._move_to_libui_button(dx, dy)
+            self._click_current()
             if self.session.expect_from(mark, b"[dbg-libui] pointer btn-down",
                                          timeout_s=3):
                 break
@@ -144,7 +172,8 @@ class LibuiClickTest(unittest.TestCase):
 
         mark = self.session.mark()
         for dx, dy in [(0, 0), (10, 0), (-10, 5), (5, 5)]:
-            self._click_at(dx, dy)
+            self._move_to_libui_button(dx, dy)
+            self._click_current()
             if self.session.expect_from(mark, b"[dbg-libui] on_click fired",
                                          timeout_s=3):
                 return

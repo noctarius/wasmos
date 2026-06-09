@@ -20,6 +20,9 @@ const FONT_INIT_MAX_ATTEMPTS: u32 = 64;
 const FONT_INIT_RETRY_MASK: u32 = 0x3F;
 const TITLE_GLYPHS: []const u8 = "win 0123456789";
 const GFX_TITLE_TEXT_ENABLED: bool = true;
+/// Enable per-event serial traces for click/pointer/present debugging.
+/// Set to false to suppress serial noise in production.
+const GFX_TRACE: bool = true;
 const GFX_WINDOW_MIN_DIM: u32 = 1;
 const GFX_WINDOW_MAX_DIM: u32 = 8192;
 const PAGE_SIZE: u64 = 4096;
@@ -910,6 +913,9 @@ fn request_repaint_full() void {
 
 fn flush_repaint_if_pending() void {
     if (!g_dirty_pending) return;
+    if (GFX_TRACE) {
+        if (g_dirty_full) { logMsg("[gfx-t] repaint full\n"); } else { logMsg("[gfx-t] repaint rect\n"); }
+    }
     if (g_dirty_full) {
         _ = compose_full();
     } else {
@@ -1062,6 +1068,7 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
     pointer_update_position(dx, dy);
 
     if (g_overlay_locked and (old_x != g_pointer_x or old_y != g_pointer_y)) {
+        if (GFX_TRACE) { logMsg("[gfx-t] cursor move\n"); }
         request_repaint_rect(cursor_rect_at(old_x, old_y));
         request_repaint_rect(cursor_rect_at(g_pointer_x, g_pointer_y));
     }
@@ -1328,7 +1335,10 @@ fn cursor_rect_at(x: i32, y: i32) c.gfx_rect_t {
 fn draw_cursor_overlay(region: c.gfx_rect_t) void {
     if (!g_fb_info_valid or g_backbuffer_pixels == null) return;
     const cr = cursor_rect_at(g_pointer_x, g_pointer_y);
-    if (!rect_intersects(region, cr)) return;
+    if (!rect_intersects(region, cr)) {
+        if (GFX_TRACE) { logMsg("[gfx-t] cursor no-intersect\n"); }
+        return;
+    }
 
     var y: i32 = 0;
     while (y < CURSOR_H) : (y += 1) {
@@ -1851,7 +1861,10 @@ fn draw_window_title_text(win: window_slot_t, clip: c.gfx_rect_t) void {
 fn draw_window_buffer(win: window_slot_t, buf: buffer_slot_t, clip: c.gfx_rect_t) bool {
     if (g_backbuffer_pixels == null) return false;
     // Use the permanently-cached mapping set at buffer allocation.
-    const src_pixels = buf.mapped_pixels orelse return false;
+    const src_pixels = buf.mapped_pixels orelse {
+        if (GFX_TRACE) { logMsg("[gfx-t] draw_window_buffer: mapped_pixels null!\n"); }
+        return false;
+    };
     const dst_pixels = g_backbuffer_pixels.?;
     const dst_stride: usize = @intCast(g_fb_info.framebuffer_stride);
     const cr = window_content_rect(win);
@@ -2226,6 +2239,7 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
     g_buffers[buf_idx].state = .acquired;
     g_buffers[buf_idx].bound_window_id = window_id;
     g_buffers[buf_idx].bound_window_generation = g_windows[window_idx].generation;
+    if (GFX_TRACE) { logMsg("[gfx-t] present win ok\n"); }
     focus_window(window_idx);
     sync_console_mode_for_windows();
 

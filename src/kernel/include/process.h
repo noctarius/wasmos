@@ -169,8 +169,9 @@ typedef struct {
  */
 struct thread;
 #include "sched.h"
+void sched_enqueue_thread_from(struct thread *t, uintptr_t caller);
 static inline void sched_enqueue_thread(struct thread *t) {
-    cpu_sched_enqueue(cpu_sched(), t);
+    sched_enqueue_thread_from(t, (uintptr_t)__builtin_return_address(0));
 }
 
 void process_init(void);

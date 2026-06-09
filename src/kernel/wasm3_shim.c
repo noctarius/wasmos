@@ -49,9 +49,12 @@ static wasm3_heap_slot_t g_wasm3_heaps[PROCESS_MAX_COUNT];
 /* Protects g_wasm3_heaps[] globally — covers slot lookup AND allocation so
  * two CPUs cannot race on the same slot or the same chunk->offset. */
 static spinlock_t g_wasm3_heap_lock;
-/* wasm3 itself is not safe for concurrent cross-CPU entry even when each
- * process has its own IM3Runtime. Serialize all m3_* activity globally. */
-static spinlock_t g_wasm3_runtime_lock;
+/* g_wasm3_runtime_lock removed: each process owns a distinct IM3Environment +
+ * IM3Runtime, so concurrent entry from different CPUs is safe.  The old global
+ * spinlock caused a deadlock whenever a WASM process blocked on an IPC
+ * hostcall (e.g. wasmos_ipc_select_one) while still inside m3_Call — the lock
+ * remained held on the yielded thread, spinning every other CPU forever.
+ * Per-process reentrancy is handled by process_t.wasm3_lock (process.h). */
 
 
 static size_t
@@ -148,18 +151,18 @@ wasm3_heap_restore_pid(uint32_t previous_pid)
 uint32_t
 wasm3_runtime_enter(uint32_t pid)
 {
-    uint32_t previous_pid = 0;
+    /* Bind this CPU's wasm3 heap to pid for the duration of the m3_* call.
+     * No global lock: separate IM3Environments are independent.  Preemption
+     * is disabled only to keep the heap binding coherent for the brief period
+     * before the calling thread registers its own wasm3_lock (process_t). */
     preempt_disable();
-    spinlock_lock(&g_wasm3_runtime_lock);
-    previous_pid = wasm3_heap_bind_pid(pid);
-    return previous_pid;
+    return wasm3_heap_bind_pid(pid);
 }
 
 void
 wasm3_runtime_leave(uint32_t previous_pid)
 {
     wasm3_heap_restore_pid(previous_pid);
-    spinlock_unlock(&g_wasm3_runtime_lock);
     preempt_enable();
 }
 

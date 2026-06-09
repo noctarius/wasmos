@@ -1,6 +1,13 @@
 # Current Status
 
 - This status file is a snapshot, not a release changelog.
+- Current SMP crash instrumentation now also watches the live main
+  `thread->ctx` for `process-manager` / `native-call-min` instead of the stale
+  mirrored `proc->ctx`, and AP bring-up no longer clears the global watch
+  state after the BSP arms it. The shared ready queue now additionally halts
+  immediately if any caller tries to enqueue a `THREAD_STATE_RUNNING` thread,
+  tightening the current race hunt around duplicate-run versus post-save
+  context stomp failures.
 - Scheduler/context-switch hardening now validates the live `thread->ctx`
   record at dispatch and user-preempt save points instead of relying on the
   legacy `proc->ctx` mirror, so corrupt thread RIP/RSP state trips
@@ -8,7 +15,21 @@
   `context_switch.S` restore path also no longer reuses restored `%rdi`,
   `%rsi`, `%r8`, or `%r10` as scratch registers while staging `ret`/`iretq`,
   which previously clobbered resumed thread register state during both kernel
-  and ring-3 resumes.
+  and ring-3 resumes. The shared ready queue now also rejects duplicate
+  `thread_t` inserts under its lock, closing an SMP wake/block race where a
+  thread could be concurrently re-enqueued twice during blocked-yield
+  completion and remote wake-up. Late remote wakes now also refuse to
+  re-enqueue threads that have already returned to `RUNNING`, so stale event
+  delivery cannot place a live thread back on the ready list from another CPU.
+  The wake path now uses the thread-table's atomic `BLOCKED -> READY`
+  transition helper instead of raw unlocked state stores, removing another SMP
+  window where concurrent CPUs could race on the same thread state. wasm3
+  runtime entry is now also serialized globally across CPUs, so different
+  processes/drivers can no longer race through shared wasm3 internals while
+  merely relying on per-process runtime ownership. Nonblocking IPC/notify
+  polls no longer register scheduler-event waiters on `IPC_EMPTY`, which
+  removes an SMP bug where a sender could "wake" a thread that never blocked
+  and requeue a still-running thread on another CPU.
 - User-space threading helpers now include a process-local reentrant mutex
   surface across WASM libc/libsys, native ring3 libc, and the native
   driver/service ABI. The mutex state lives in user memory (`owner_tid` +

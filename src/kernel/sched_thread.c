@@ -6,6 +6,7 @@
 #include "spinlock.h"
 #include "serial.h"
 #include "string.h"
+#include "arch/x86_64/smp.h"
 
 /*
  * sched_thread.c — per-CPU O(1) priority scheduler.
@@ -68,7 +69,23 @@ cpu_sched_init(cpu_sched_t *cs)
 void
 cpu_sched_enqueue(cpu_sched_t *cs, thread_t *t)
 {
+    if (t->state == THREAD_STATE_RUNNING) {
+        serial_printf_unlocked("[sched] enqueue running tid=%u owner=%u cpu=%u\n",
+                               (unsigned)t->tid,
+                               (unsigned)t->owner_pid,
+                               (unsigned)cpu_local()->cpu_id);
+        for (;;) {
+            __asm__ volatile("cli; hlt");
+        }
+    }
     spinlock_lock(&cs->lock);
+    /* SMP wake/block races can reach enqueue from multiple CPUs for the same
+     * READY thread.  sched_node self-links when detached from any list, so
+     * use that as the single source of truth and drop duplicate inserts. */
+    if (!list_head_empty(&t->sched_node)) {
+        spinlock_unlock(&cs->lock);
+        return;
+    }
     uint8_t prio = t->sched_prio;
     list_head_add_tail(&cs->ready_list[prio], &t->sched_node);
     cs->thread_count[prio]++;
@@ -159,8 +176,12 @@ sched_wake_thread(thread_t *t)
         return;
     }
 
-    t->state = THREAD_STATE_READY;
-    t->block_reason = THREAD_BLOCK_NONE;
+    /* After the blocked-yield transition completes, only a true BLOCKED->READY
+     * transition should enqueue the thread.  A stale remote wake that arrives
+     * after the thread resumed RUNNING must be ignored. */
+    if (!thread_wake_if_blocked(t->tid)) {
+        return;
+    }
     if (list_head_empty(&t->sched_node)) {
         cpu_sched_enqueue(cpu_sched(), t);
     }

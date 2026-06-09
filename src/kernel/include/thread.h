@@ -81,6 +81,7 @@ int thread_owner_tid_at(uint32_t owner_pid, uint32_t index, uint32_t *out_tid);
 void thread_mark_owner_exited(uint32_t owner_pid, int32_t exit_status);
 void thread_reap_owner(uint32_t owner_pid);
 void thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t reason);
+int thread_wake_if_blocked(uint32_t tid);
 void thread_set_exit_status(uint32_t tid, int32_t exit_status);
 void thread_reap(uint32_t tid);
 void thread_set_current(uint32_t tid);

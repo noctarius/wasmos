@@ -143,6 +143,10 @@ context_switch:
     movq 40(%rdx), %r10
     movq 32(%rdx), %r11
     popfq
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %ss
     movq 112(%rdx), %rax
     movq 96(%rdx), %rcx
     movq 88(%rdx), %rdx
@@ -236,6 +240,10 @@ context_switch_to:
     movq 40(%rdx), %r10
     movq 32(%rdx), %r11
     popfq
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %ss
     movq 112(%rdx), %rax
     movq 96(%rdx), %rcx
     movq 88(%rdx), %rdx

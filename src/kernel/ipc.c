@@ -279,37 +279,9 @@ int ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t 
     }
 
     if (ep->count == 0) {
-        /* Non-blocking: register this thread in the event wait_list so that
-         * the sender's sched_event_wake_one can wake it, then return IPC_EMPTY.
-         * If the thread is already in ANOTHER wait_list (from a previous
-         * non-blocking ipc_recv_for call on a different endpoint), remove it
-         * first.  This ensures at most one wait_list registration per thread,
-         * preventing stale registrations and double-enqueue when the sender
-         * fires sched_event_wake_one on the old wait_list. */
-        {
-            thread_t *_t = thread_get(thread_current_tid());
-            if (_t) {
-                if (_t->wait_event) {
-                    /* Remove stale registration from previous endpoint. */
-                    sched_event_t *prev_ev = _t->wait_event;
-                    spinlock_lock(&prev_ev->lock);
-                    if (!list_head_empty(&_t->event_node)) {
-                        list_head_del(&_t->event_node);
-                    }
-                    _t->wait_event = 0;
-                    spinlock_unlock(&prev_ev->lock);
-                    __atomic_store_n(&_t->blocking_transition, 0, __ATOMIC_RELEASE);
-                }
-                if (list_head_empty(&_t->event_node)) {
-                    spinlock_lock(&ep->event.lock);
-                    _t->wait_event = &ep->event;
-                    _t->pend_state = SCHED_PEND_NONE;
-                    __atomic_store_n(&_t->blocking_transition, 1, __ATOMIC_RELEASE);
-                    list_head_add_tail(&ep->event.wait_list, &_t->event_node);
-                    spinlock_unlock(&ep->event.lock);
-                }
-            }
-        }
+        /* Non-blocking poll must not register a waiter. On SMP a sender can
+         * otherwise "wake" a thread that never actually blocked, turning a
+         * still-running thread back into READY on another CPU. */
         spinlock_unlock(&ep->lock);
         return IPC_EMPTY;
     }
@@ -398,29 +370,8 @@ int ipc_wait_for(uint32_t receiver_context_id, uint32_t endpoint) {
     }
 
     if (ep->notify_count == 0) {
-        {
-            thread_t *_t = thread_get(thread_current_tid());
-            if (_t) {
-                if (_t->wait_event) {
-                    sched_event_t *prev_ev = _t->wait_event;
-                    spinlock_lock(&prev_ev->lock);
-                    if (!list_head_empty(&_t->event_node)) {
-                        list_head_del(&_t->event_node);
-                    }
-                    _t->wait_event = 0;
-                    spinlock_unlock(&prev_ev->lock);
-                    __atomic_store_n(&_t->blocking_transition, 0, __ATOMIC_RELEASE);
-                }
-                if (list_head_empty(&_t->event_node)) {
-                    spinlock_lock(&ep->event.lock);
-                    _t->wait_event = &ep->event;
-                    _t->pend_state = SCHED_PEND_NONE;
-                    __atomic_store_n(&_t->blocking_transition, 1, __ATOMIC_RELEASE);
-                    list_head_add_tail(&ep->event.wait_list, &_t->event_node);
-                    spinlock_unlock(&ep->event.lock);
-                }
-            }
-        }
+        /* Non-blocking notify poll must not arm event wake state for a thread
+         * that is still running. */
         spinlock_unlock(&ep->lock);
         return IPC_EMPTY;
     }

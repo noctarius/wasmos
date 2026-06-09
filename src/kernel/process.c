@@ -1382,9 +1382,17 @@ void process_yield(process_run_result_t result) {
         return;
     }
     cpu_local()->last_run_result = result;
-    process_context_t *ctx = process_sched_ctx_for_thread(cpu_local()->current_process, cpu_local()->current_thread);
+    thread_t *thread = cpu_local()->current_thread;
+    process_context_t *ctx = process_sched_ctx_for_thread(cpu_local()->current_process, thread);
     if (!ctx) {
         return;
+    }
+    /* Save the per-CPU wasm3 heap binding so that when this thread resumes
+     * (possibly on a different CPU) the correct heap PID is restored.
+     * Without this, a CPU that runs a different WASM process after this
+     * thread blocks would inherit a stale wasm3_heap_bound_pid. */
+    if (thread) {
+        thread->wasm3_heap_bound_pid = cpu_local()->wasm3_heap_bound_pid;
     }
     context_switch_high(ctx, &cpu_local()->sched_ctx);
 }
@@ -1635,6 +1643,8 @@ static int process_schedule_once_impl(void) {
      * to the scheduled process stack so user-mode interrupts/syscalls have a
      * deterministic kernel stack landing point. */
     cpu_set_kernel_stack((uint64_t)(proc->stack_top - 16u));
+    /* Restore the wasm3 heap binding saved when this thread last yielded. */
+    cpu_local()->wasm3_heap_bound_pid = thread->wasm3_heap_bound_pid;
     cpu_local()->sched_ctx.root_table = paging_get_root_table();
     if (!run_ctx) {
         klog_write("[sched] thread ctx missing\n");

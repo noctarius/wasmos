@@ -48,6 +48,14 @@ static uint64_t g_trap_frame_invalid_reports;
 
 static process_t *process_find_by_pid(uint32_t pid);
 static void process_trampoline(void);
+static int process_spawn_as_internal(uint32_t parent_pid,
+                                     const char *name,
+                                     process_entry_t entry,
+                                     void *arg,
+                                     uint32_t *out_pid,
+                                     thread_state_t initial_thread_state,
+                                     thread_block_reason_t initial_thread_reason,
+                                     uint8_t enqueue_initial);
 
 static inline uintptr_t
 process_kernel_alias_addr(uintptr_t addr)
@@ -102,7 +110,8 @@ extern uint8_t __kernel_end;
 /* Phase-2 stack hardening currently relies on the shared higher-half kernel
  * window (512 MiB by default: 256 * 2 MiB PDEs). Keep in sync with paging.c. */
 #define KERNEL_SHARED_HIGHER_HALF_WINDOW_BYTES (512u * 1024u * 1024u)
-static uint8_t g_sched_trampoline_stack[SCHED_TRAMPOLINE_STACK_BYTES] __attribute__((aligned(16)));
+static uint8_t g_sched_trampoline_stacks[WASMOS_MAX_CPUS][SCHED_TRAMPOLINE_STACK_BYTES]
+    __attribute__((aligned(16)));
 
 static int
 process_alloc_stack(process_t *slot, uint32_t stack_pages)
@@ -299,8 +308,12 @@ process_run_on_sched_stack(int (*fn)(void))
     if (!fn) {
         return -1;
     }
+    uint32_t cpu_id = cpu_local()->cpu_id;
+    if (cpu_id >= WASMOS_MAX_CPUS) {
+        cpu_id = 0;
+    }
     uintptr_t stack_top = process_kernel_alias_addr(
-        (uintptr_t)&g_sched_trampoline_stack[SCHED_TRAMPOLINE_STACK_BYTES]);
+        (uintptr_t)&g_sched_trampoline_stacks[cpu_id][SCHED_TRAMPOLINE_STACK_BYTES]);
     stack_top &= ~(uintptr_t)0xFULL;
     int rc = -1;
     __asm__ volatile(
@@ -906,7 +919,16 @@ int process_spawn(const char *name, process_entry_t entry, void *arg, uint32_t *
     return process_spawn_as(cpu_local()->current_pid, name, entry, arg, out_pid);
 }
 
-int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid) {
+static int
+process_spawn_as_internal(uint32_t parent_pid,
+                          const char *name,
+                          process_entry_t entry,
+                          void *arg,
+                          uint32_t *out_pid,
+                          thread_state_t initial_thread_state,
+                          thread_block_reason_t initial_thread_reason,
+                          uint8_t enqueue_initial)
+{
     if (!entry || !out_pid) {
         return -1;
     }
@@ -953,7 +975,11 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
     if (process_copy_name(slot, name ? name : "") != 0) {
         return -1;
     }
-    if (thread_spawn_main(pid, name ? name : "", &slot->main_tid) != 0) {
+    if (thread_spawn_in_owner(pid,
+                              name ? name : "",
+                              initial_thread_state,
+                              initial_thread_reason,
+                              &slot->main_tid) != 0) {
         return -1;
     }
     {
@@ -1016,42 +1042,38 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
         trace_write("[sched] spawn preempt-busy stack top=");
         trace_do(serial_write_hex64(slot->stack_top));
     }
-    sched_enqueue_thread(process_main_thread(slot));
+    if (!enqueue_initial) {
+        slot->state = PROCESS_STATE_BLOCKED;
+        slot->block_reason = PROCESS_BLOCK_NONE;
+    } else {
+        sched_enqueue_thread(process_main_thread(slot));
+    }
     *out_pid = pid;
     return 0;
 }
 
+int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid) {
+    return process_spawn_as_internal(parent_pid,
+                                     name,
+                                     entry,
+                                     arg,
+                                     out_pid,
+                                     THREAD_STATE_READY,
+                                     THREAD_BLOCK_NONE,
+                                     1);
+}
+
 int process_spawn_as_parked(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid) {
-    /* Spawn a process but immediately block its main thread so it does not run
-     * until process_unpark_pid is called.  Used by ring3 probe tests to inject
-     * state before the first dispatch. */
-    if (process_spawn_as(parent_pid, name, entry, arg, out_pid) != 0) {
-        return -1;
-    }
-    process_t *proc = process_get(*out_pid);
-    if (!proc) {
-        return -1;
-    }
-    thread_t *main_t = process_main_thread(proc);
-    if (!main_t) {
-        return -1;
-    }
-    /* Remove from the ready list if already enqueued. */
-    cpu_sched_t *cs = cpu_sched();
-    spinlock_lock(&cs->lock);
-    if (!list_head_empty(&main_t->sched_node)) {
-        list_head_del(&main_t->sched_node);
-        if (cs->thread_count[main_t->sched_prio] > 0) {
-            cs->thread_count[main_t->sched_prio]--;
-        }
-        if (cs->thread_count[main_t->sched_prio] == 0) {
-            cs->ready_bitmap &= ~(1u << main_t->sched_prio);
-        }
-    }
-    spinlock_unlock(&cs->lock);
-    main_t->state = THREAD_STATE_BLOCKED;
-    main_t->block_reason = THREAD_BLOCK_NONE;
-    return 0;
+    /* Spawn with the main thread blocked from the start so no AP can dispatch
+     * it before PM explicitly unparks the child. */
+    return process_spawn_as_internal(parent_pid,
+                                     name,
+                                     entry,
+                                     arg,
+                                     out_pid,
+                                     THREAD_STATE_BLOCKED,
+                                     THREAD_BLOCK_NONE,
+                                     0);
 }
 
 int process_unpark_pid(uint32_t pid) {
@@ -1063,9 +1085,16 @@ int process_unpark_pid(uint32_t pid) {
     if (!t) {
         return -1;
     }
-    t->state = THREAD_STATE_READY;
-    t->block_reason = THREAD_BLOCK_NONE;
-    sched_enqueue_thread(t);
+    if (!thread_wake_if_blocked(t->tid)) {
+        return 0;
+    }
+    if (proc->state == PROCESS_STATE_BLOCKED) {
+        proc->state = PROCESS_STATE_READY;
+        proc->block_reason = PROCESS_BLOCK_NONE;
+    }
+    if (list_head_empty(&t->sched_node)) {
+        sched_enqueue_thread(t);
+    }
     return 0;
 }
 
@@ -2238,6 +2267,9 @@ process_set_ready(process_t *proc, thread_t *thread)
     if (!proc || !thread) {
         process_sched_invariant_fail("set_ready null", (uint64_t)(uintptr_t)proc, (uint64_t)(uintptr_t)thread);
     }
+    if (proc->state == PROCESS_STATE_ZOMBIE || proc->exiting) {
+        process_sched_invariant_fail("set_ready zombie", proc->pid, thread->tid);
+    }
     proc->state = PROCESS_STATE_READY;
     proc->block_reason = PROCESS_BLOCK_NONE;
     thread_set_state(thread->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
@@ -2248,6 +2280,9 @@ process_set_running(process_t *proc, thread_t *thread)
 {
     if (!proc || !thread) {
         process_sched_invariant_fail("set_running null", (uint64_t)(uintptr_t)proc, (uint64_t)(uintptr_t)thread);
+    }
+    if (proc->state == PROCESS_STATE_ZOMBIE || proc->exiting) {
+        process_sched_invariant_fail("set_running zombie", proc->pid, thread->tid);
     }
     proc->state = PROCESS_STATE_RUNNING;
     thread_set_state(thread->tid, THREAD_STATE_RUNNING, THREAD_BLOCK_NONE);

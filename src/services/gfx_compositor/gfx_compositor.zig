@@ -554,14 +554,24 @@ fn ipc_call_budgeted(destination: u32, request_id: u32, msg_type: u32, arg0: u32
         return -1;
     }
     var empty_polls: u32 = 0;
+    var total_polls: u32 = 0;
     const poll_limit = if (max_empty_polls == 0) 1 else max_empty_polls;
+    // total_limit caps the loop even when continuous non-empty events (e.g. mouse
+    // moves) keep preventing empty_polls from incrementing — without this, the
+    // loop would spin forever as long as mouse input floods the queue.
+    const total_limit: u32 = poll_limit * 64 + 256;
     while (!state.done) {
         const handled = sys.eventLoopPoll(&g_ipc_loop, 8);
         if (handled < 0) return -1;
+        total_polls +%= 1;
         if (handled == 0) {
             if (empty_polls >= poll_limit) return -1;
             empty_polls +%= 1;
             api().sched_yield.?();
+        }
+        if (total_polls >= total_limit) {
+            if (GFX_TRACE) { logMsg("[gfx-t] ipc_call_budgeted: total limit hit\n"); }
+            return -1;
         }
     }
     out.* = state.resp;

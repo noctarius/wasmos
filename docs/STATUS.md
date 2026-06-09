@@ -224,6 +224,9 @@
   documents and logs invalid non-page-aligned/zero-sized requests explicitly,
   while the higher-level native helper APIs remain byte-range wrappers that
   round their internal borrow windows up before calling the kernel hook.
+  `fs_manager` now relays `FS_IPC_READ_PATH_REQ` payloads back to callers in
+  4 KiB chunks instead of 256-byte chunks, reducing bounce-copy overhead for
+  eager native asset loads such as built-in TTF startup.
 - Input-driver baseline now also includes a wasm `mouse` driver with
   subscription IPC (`MOUSE_IPC_SUBSCRIBE_REQ` + `MOUSE_IPC_MOVE_NOTIFY`) that
   emits PS/2 packet-derived movement deltas and button masks to subscribers.

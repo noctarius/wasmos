@@ -423,9 +423,11 @@ Limits: `MAX_FONTS = 3`, `MAX_HANDLES = 16`, `RASTER_SCRATCH_BYTES = 4096`.
 2. `svc_register("font", 1)`.
 3. `svcLookupRetry("fs.vfs", ...)` up to 64 retries → `g_fs_endpoint`.
 4. If fs found: `load_builtin_fonts()` — reads each TTF from
-   `/boot/system/fonts/{roboto,roboto_mono,roboto_serif}.ttf` into shmem,
-   calls `stbtt_InitFont` + `parse_ttf_metrics`. Emits `[font] loaded ok`
-   per font or `[font] load failed` / `[font] stb init failed`.
+   `/boot/system/fonts/{roboto,roboto_mono,roboto_serif}.ttf` into right-sized
+   shmem after an `FS_IPC_STAT_REQ` size probe, then loads the file through
+   the shared native `fsReadPath()` helper (`FS_IPC_READ_PATH_REQ` via
+   `fs.vfs`) before calling `stbtt_InitFont` + `parse_ttf_metrics`. Emits
+   `[font] loaded ok` per font or `[font] load failed` / `[font] stb init failed`.
 5. Emit `[font] service ready`.
 6. `proc_notify_ready()`, enter event loop.
 

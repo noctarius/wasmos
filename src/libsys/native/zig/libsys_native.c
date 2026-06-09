@@ -3,6 +3,8 @@
  * as C so both Zig and C native drivers can link against a single object. */
 #include "wasmos/libsys_native.h"
 
+#define WASMOS_NATIVE_BUFFER_BORROW_ALIGN 4096u
+
 static void
 byte_copy(uint8_t *dst, const uint8_t *src, uint32_t len)
 {
@@ -13,6 +15,31 @@ byte_copy(uint8_t *dst, const uint8_t *src, uint32_t len)
     for (i = 0; i < len; ++i) {
         dst[i] = src[i];
     }
+}
+
+static int32_t
+buffer_borrow_size(int32_t len, int32_t offset, uint32_t *out_size)
+{
+    uint64_t need = 0;
+    uint64_t aligned = 0;
+    if (!out_size || len < 0 || offset < 0) {
+        return -1;
+    }
+    if (len == 0) {
+        *out_size = 0u;
+        return 0;
+    }
+    need = (uint64_t)(uint32_t)offset + (uint64_t)(uint32_t)len;
+    if (need == 0) {
+        return -1;
+    }
+    aligned = (need + (uint64_t)WASMOS_NATIVE_BUFFER_BORROW_ALIGN - 1u) &
+              ~((uint64_t)WASMOS_NATIVE_BUFFER_BORROW_ALIGN - 1u);
+    if (aligned == 0 || aligned > 0xFFFFFFFFu) {
+        return -1;
+    }
+    *out_size = (uint32_t)aligned;
+    return 0;
 }
 
 void
@@ -661,10 +688,17 @@ wasmos_sys_buffer_copy_from_native(wasmos_driver_api_t *api,
                                    int32_t offset)
 {
     uint8_t *borrowed = 0;
+    uint32_t size = 0;
     if (!api || !dst || len < 0 || offset < 0 || !api->buffer_borrow || !api->buffer_release) {
         return -1;
     }
-    borrowed = (uint8_t *)api->buffer_borrow(kind, source_endpoint, borrow_flags, (uint32_t)offset + (uint32_t)len);
+    if (len == 0) {
+        return 0;
+    }
+    if (buffer_borrow_size(len, offset, &size) != 0) {
+        return -1;
+    }
+    borrowed = (uint8_t *)api->buffer_borrow(kind, source_endpoint, borrow_flags, size);
     if (!borrowed) {
         return -1;
     }
@@ -685,10 +719,17 @@ wasmos_sys_buffer_write_to_native(wasmos_driver_api_t *api,
                                   int32_t offset)
 {
     uint8_t *borrowed = 0;
+    uint32_t size = 0;
     if (!api || !src || len < 0 || offset < 0 || !api->buffer_borrow || !api->buffer_release) {
         return -1;
     }
-    borrowed = (uint8_t *)api->buffer_borrow(kind, source_endpoint, borrow_flags, (uint32_t)offset + (uint32_t)len);
+    if (len == 0) {
+        return 0;
+    }
+    if (buffer_borrow_size(len, offset, &size) != 0) {
+        return -1;
+    }
+    borrowed = (uint8_t *)api->buffer_borrow(kind, source_endpoint, borrow_flags, size);
     if (!borrowed) {
         return -1;
     }

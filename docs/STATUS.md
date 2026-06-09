@@ -214,7 +214,13 @@
 - Native Zig `font-service` baseline now builds and is packaged as
   `/boot/system/services/fontsvc.wap`, with `font` endpoint registration,
   TTF file load from `/boot/system/fonts/*.ttf`, and owner-checked
-  `OPEN_FONT` + `GET_METRICS` IPC; glyph raster IPC is still TODO.
+  `OPEN_FONT` + `GET_METRICS` IPC; glyph raster IPC is still TODO. Native
+  `libsys` buffer copy/write helpers now round their borrow windows up to
+  page size before calling the kernel ABI, which fixes sub-page native FS
+  staging/copy operations such as `fsReadPath`. `font-service` now uses
+  `FS_IPC_STAT_REQ` to size its SHMEM to the real TTF length and loads each
+  built-in font through the shared `fs.vfs` read-path helper instead of
+  manual open/read loops.
 - Input-driver baseline now also includes a wasm `mouse` driver with
   subscription IPC (`MOUSE_IPC_SUBSCRIBE_REQ` + `MOUSE_IPC_MOVE_NOTIFY`) that
   emits PS/2 packet-derived movement deltas and button masks to subscribers.

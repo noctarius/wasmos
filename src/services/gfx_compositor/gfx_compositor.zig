@@ -3,20 +3,6 @@ const c = @cImport({
 });
 const sys = @import("libsys");
 
-/// Freestanding memcpy required by @memcpy / LLVM lowering when -nostdlib.
-/// Uses u64 word copies for throughput on the pixel-blit hot path.
-export fn memcpy(dst_ptr: [*]u8, src_ptr: [*]const u8, n: usize) [*]u8 {
-    var i: usize = 0;
-    while (i + 8 <= n) : (i += 8) {
-        const s: *const u64 = @ptrCast(@alignCast(src_ptr + i));
-        const d: *u64 = @ptrCast(@alignCast(dst_ptr + i));
-        d.* = s.*;
-    }
-    while (i < n) : (i += 1) {
-        dst_ptr[i] = src_ptr[i];
-    }
-    return dst_ptr;
-}
 
 const IPC_OK: i32 = 0;
 const IPC_EMPTY: i32 = 1;

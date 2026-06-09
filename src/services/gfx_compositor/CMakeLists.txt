@@ -13,6 +13,8 @@ endif ()
 
 set(GFX_COMPOSITOR_ZIG_OBJ ${BUILD_DIR}/gfx_compositor_zig.o)
 set(GFX_COMPOSITOR_LIBSYS_EXPORTS_OBJ ${BUILD_DIR}/gfx_compositor_libsys_exports.o)
+set(GFX_COMPOSITOR_LIBC_STRING_OBJ ${BUILD_DIR}/gfx_compositor_libc_string.o)
+set(GFX_COMPOSITOR_LIBC_CTYPE_OBJ ${BUILD_DIR}/gfx_compositor_libc_ctype.o)
 set(GFX_COMPOSITOR_ELF ${WASM_GFX_COMPOSITOR_WASM})
 
 add_custom_command(
@@ -72,15 +74,61 @@ add_custom_command(
 )
 
 add_custom_command(
+  OUTPUT ${GFX_COMPOSITOR_LIBC_CTYPE_OBJ}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG}
+          -target ${KERNEL_TARGET_TRIPLE}
+          -ffreestanding
+          -fno-stack-protector
+          -fno-pic
+          -fno-pie
+          -fno-builtin
+          -nostdlib
+          -O2
+          -I ${LIBC_DIR}/include
+          -c ${LIBC_DIR}/src/ctype.c
+          -o ${GFX_COMPOSITOR_LIBC_CTYPE_OBJ}
+  DEPENDS ${LIBC_DIR}/src/ctype.c ${LIBC_DIR}/include/ctype.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Building gfx-compositor libc ctype object"
+  VERBATIM
+)
+
+add_custom_command(
+  OUTPUT ${GFX_COMPOSITOR_LIBC_STRING_OBJ}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
+  COMMAND ${CLANG}
+          -target ${KERNEL_TARGET_TRIPLE}
+          -ffreestanding
+          -fno-stack-protector
+          -fno-pic
+          -fno-pie
+          -fno-builtin
+          -nostdlib
+          -O2
+          -I ${LIBC_DIR}/include
+          -c ${LIBC_DIR}/src/string.c
+          -o ${GFX_COMPOSITOR_LIBC_STRING_OBJ}
+  DEPENDS ${LIBC_DIR}/src/string.c ${LIBC_DIR}/include/string.h
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  COMMENT "Building gfx-compositor libc string object"
+  VERBATIM
+)
+
+add_custom_command(
   OUTPUT ${GFX_COMPOSITOR_ELF}
   COMMAND ${LLD_PATH}
           -e initialize
           -static
           ${GFX_COMPOSITOR_ZIG_OBJ}
           ${GFX_COMPOSITOR_LIBSYS_EXPORTS_OBJ}
+          ${GFX_COMPOSITOR_LIBC_CTYPE_OBJ}
+          ${GFX_COMPOSITOR_LIBC_STRING_OBJ}
           -o ${GFX_COMPOSITOR_ELF}
   DEPENDS ${GFX_COMPOSITOR_ZIG_OBJ}
           ${GFX_COMPOSITOR_LIBSYS_EXPORTS_OBJ}
+          ${GFX_COMPOSITOR_LIBC_CTYPE_OBJ}
+          ${GFX_COMPOSITOR_LIBC_STRING_OBJ}
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Linking native Zig gfx-compositor service"
   VERBATIM

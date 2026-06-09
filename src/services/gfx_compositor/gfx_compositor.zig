@@ -2257,6 +2257,7 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
 
     if (damage_count == 0 or damage_shmem_id == 0 or damage_count > GFX_MAX_DAMAGE_RECTS) {
         request_repaint_full();
+        if (GFX_TRACE) { logMsg("[gfx-t] present-reply OK\n"); }
         reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
         return;
     }
@@ -2307,6 +2308,7 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
 }
 
 fn handle_poll_event(msg: *const c.nd_ipc_message_t) void {
+    if (GFX_TRACE) { logMsg("[gfx-t] poll-event\n"); }
     var ev: gfx_event_t = .{};
     if (event_pop_for(msg.source, &ev)) {
         reply_with_status(msg, c.GFX_STATUS_OK, ev.event_type, ev.arg1, ev.arg2);

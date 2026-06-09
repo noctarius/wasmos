@@ -11,10 +11,14 @@
 #include "fs_manager_types.h"
 #include "fs_manager_path.h"
 
+#define FSMGR_PATH_SCRATCH_SIZE 256
+#define FSMGR_READ_PATH_RELAY_CHUNK 4096
+
 static int32_t g_proc_endpoint = -1;
 static int32_t g_fs_endpoint = -1;
 static int32_t g_reply_endpoint = -1;
 static fs_backend_t g_backends[FS_BACKEND_CAP];
+static uint8_t g_read_path_relay_scratch[FSMGR_READ_PATH_RELAY_CHUNK];
 extern uint8_t __heap_base;
 
 typedef struct fs_client_chunk {
@@ -637,12 +641,12 @@ handle_read_path_req(fs_client_state_t *state, int32_t source, int32_t request_i
     int32_t close_t = FS_IPC_ERROR, close0 = -1, close1 = 0, close2 = 0, close3 = 0;
     int32_t fd = -1;
     int32_t fs_buf_size = wasmos_fs_buffer_size();
-    uint8_t scratch[256];
+    uint8_t path_scratch[FSMGR_PATH_SCRATCH_SIZE];
     int32_t open_path_len = 0;
 
     if (path_len <= 0 ||
         path_len >= fs_buf_size ||
-        path_len >= (int32_t)sizeof(scratch) - 1) {
+        path_len >= (int32_t)sizeof(path_scratch) - 1) {
         send_fs_error(source, request_id);
         return 1;
     }
@@ -652,23 +656,23 @@ handle_read_path_req(fs_client_state_t *state, int32_t source, int32_t request_i
         send_fs_error(source, request_id);
         return 1;
     }
-    if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)scratch, path_len, 0) != 0) {
+    if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)path_scratch, path_len, 0) != 0) {
         (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_FS);
         send_fs_error(source, request_id);
         return 1;
     }
-    scratch[path_len] = '\0';
-    if (scratch[0] != '/') {
+    path_scratch[path_len] = '\0';
+    if (path_scratch[0] != '/') {
         (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_FS);
         send_fs_error(source, request_id);
         return 1;
     }
     open_path_len = path_len;
-    (void)route_path_to_backend(scratch,
+    (void)route_path_to_backend(path_scratch,
                                 path_len,
                                 0,
-                                (char *)scratch,
-                                (int32_t)sizeof(scratch),
+                                (char *)path_scratch,
+                                (int32_t)sizeof(path_scratch),
                                 &open_path_len,
                                 &backend);
     if (backend < 0) {
@@ -682,7 +686,7 @@ handle_read_path_req(fs_client_state_t *state, int32_t source, int32_t request_i
     }
     (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_FS);
     if (open_path_len <= 0 ||
-        wasmos_fs_buffer_write((int32_t)(uintptr_t)scratch, open_path_len, 0) != 0) {
+        wasmos_fs_buffer_write((int32_t)(uintptr_t)path_scratch, open_path_len, 0) != 0) {
         send_fs_error(source, request_id);
         return 1;
     }
@@ -709,17 +713,17 @@ handle_read_path_req(fs_client_state_t *state, int32_t source, int32_t request_i
         int32_t copied = 0;
         while (copied < read0) {
             int32_t chunk = read0 - copied;
-            if (chunk > (int32_t)sizeof(scratch)) {
-                chunk = (int32_t)sizeof(scratch);
+            if (chunk > (int32_t)sizeof(g_read_path_relay_scratch)) {
+                chunk = (int32_t)sizeof(g_read_path_relay_scratch);
             }
-            if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)scratch, chunk, copied) != 0) {
+            if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)g_read_path_relay_scratch, chunk, copied) != 0) {
                 send_fs_error(source, request_id);
                 return 1;
             }
             if (wasmos_sys_buffer_write_to(WASMOS_BUFFER_KIND_FS,
                                            source,
                                            WASMOS_BUFFER_GRANT_WRITE,
-                                           scratch,
+                                           g_read_path_relay_scratch,
                                            chunk,
                                            copied) != 0) {
                 send_fs_error(source, request_id);

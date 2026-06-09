@@ -220,7 +220,10 @@
   staging/copy operations such as `fsReadPath`. `font-service` now uses
   `FS_IPC_STAT_REQ` to size its SHMEM to the real TTF length and loads each
   built-in font through the shared `fs.vfs` read-path helper instead of
-  manual open/read loops.
+  manual open/read loops. The low-level native `buffer_borrow` ABI now also
+  documents and logs invalid non-page-aligned/zero-sized requests explicitly,
+  while the higher-level native helper APIs remain byte-range wrappers that
+  round their internal borrow windows up before calling the kernel hook.
 - Input-driver baseline now also includes a wasm `mouse` driver with
   subscription IPC (`MOUSE_IPC_SUBSCRIBE_REQ` + `MOUSE_IPC_MOVE_NOTIFY`) that
   emits PS/2 packet-derived movement deltas and button masks to subscribers.

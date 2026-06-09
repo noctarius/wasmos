@@ -194,9 +194,25 @@ nd_framebuffer_info(nd_framebuffer_info_t *out)
     return framebuffer_get_info((framebuffer_info_t *)out);
 }
 
+static void
+nd_log_invalid_buffer_borrow(uint32_t kind,
+                             uint32_t source_context_id,
+                             uint32_t flags,
+                             uint32_t size)
+{
+    klog_printf("[native-driver] buffer_borrow invalid kind=%016llx src=%016llx flags=%016llx size=%016llx (size must be non-zero and page-aligned)\n",
+                (unsigned long long)kind,
+                (unsigned long long)source_context_id,
+                (unsigned long long)flags,
+                (unsigned long long)size);
+}
+
 /*
  * Borrow a process-manager buffer kind and map it into the driver's address
- * space at ND_DEVICE_VIRT_BASE.
+ * space at ND_DEVICE_VIRT_BASE. Low-level ABI contract: size must be non-zero
+ * and page-aligned because the kernel maps whole-page windows for native
+ * drivers. Higher-level helpers may round byte-sized requests up before
+ * calling this hook.
  */
 static void *
 nd_buffer_borrow(uint32_t kind, uint32_t source_context_id,
@@ -204,6 +220,7 @@ nd_buffer_borrow(uint32_t kind, uint32_t source_context_id,
 {
     uint8_t borrowed = 0;
     if (size == 0 || (size & (uint32_t)(PAGE_SIZE - 1)) != 0) {
+        nd_log_invalid_buffer_borrow(kind, source_context_id, flags, size);
         return (void *)0;
     }
     if (flags == 0) {

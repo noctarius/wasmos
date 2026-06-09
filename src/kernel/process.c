@@ -1865,6 +1865,11 @@ void process_tick(void) {
         }
     }
     if (cpu_local()->need_resched) {
+        /* Idle process cannot be preempted (ring-0 hlt loop) — stalls are expected. */
+        if (proc && proc->is_idle) {
+            cpu_local()->resched_pending_since_tick = 0;
+            return;
+        }
         if (cpu_local()->resched_pending_since_tick == 0) {
             cpu_local()->resched_pending_since_tick = now;
         } else if ((now - cpu_local()->resched_pending_since_tick) >= SCHED_RESCHED_STALL_TICKS) {

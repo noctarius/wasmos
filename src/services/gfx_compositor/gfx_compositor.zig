@@ -3,6 +3,21 @@ const c = @cImport({
 });
 const sys = @import("libsys");
 
+/// Freestanding memcpy required by @memcpy / LLVM lowering when -nostdlib.
+/// Uses u64 word copies for throughput on the pixel-blit hot path.
+export fn memcpy(dst_ptr: [*]u8, src_ptr: [*]const u8, n: usize) [*]u8 {
+    var i: usize = 0;
+    while (i + 8 <= n) : (i += 8) {
+        const s: *const u64 = @ptrCast(@alignCast(src_ptr + i));
+        const d: *u64 = @ptrCast(@alignCast(dst_ptr + i));
+        d.* = s.*;
+    }
+    while (i < n) : (i += 1) {
+        dst_ptr[i] = src_ptr[i];
+    }
+    return dst_ptr;
+}
+
 const IPC_OK: i32 = 0;
 const IPC_EMPTY: i32 = 1;
 const IPC_ENDPOINT_NONE: u32 = 0xFFFF_FFFF;
@@ -692,6 +707,17 @@ fn try_switch_to_gfx_tty() void {
     }
 }
 
+fn try_restore_cli_tty() void {
+    if (g_vt_endpoint == IPC_ENDPOINT_NONE) return;
+    var reply: c.nd_ipc_message_t = undefined;
+    const req_id: u32 = GFX_REQUEST_BASE + GFX_FB_LOOKUP_RETRIES + 3;
+    if (ipc_call(g_vt_endpoint, req_id, c.VT_IPC_SWITCH_TTY, 1, 0, 0, 0, &reply) == 0 and
+        reply.type == c.VT_IPC_RESP)
+    {
+        logMsg("[gfx] restored tty1 for CLI\n");
+    }
+}
+
 fn active_window_count() usize {
     var count: usize = 0;
     var i: usize = 0;
@@ -1083,6 +1109,7 @@ fn sync_console_mode_for_windows() void {
     if (!has_presented_windows and g_overlay_locked) {
         fb_set_overlay_lock(false);
         g_overlay_locked = false;
+        try_restore_cli_tty();
     }
 }
 
@@ -1933,13 +1960,21 @@ fn compose_region(region: c.gfx_rect_t) i32 {
     if (ey > max_y) ey = max_y;
     if (sx >= ex or sy >= ey) return c.GFX_STATUS_OK;
 
-    var y: i32 = sy;
-    while (y < ey) : (y += 1) {
-        const row_base: usize = @as(usize, @intCast(y)) * stride;
-        var x: i32 = sx;
-        while (x < ex) : (x += 1) {
-            const idx: usize = row_base + @as(usize, @intCast(x));
-            dst[idx] = src[idx];
+    const width_pixels: usize = @intCast(ex - sx);
+    const col_off: usize = @intCast(sx);
+
+    if (col_off == 0 and width_pixels == stride) {
+        // Full-width region: entire rows are contiguous — single bulk copy.
+        const off: usize = @as(usize, @intCast(sy)) * stride;
+        const len: usize = @as(usize, @intCast(ey - sy)) * stride;
+        @memcpy(dst[off .. off + len], src[off .. off + len]);
+    } else {
+        // Partial-width region: one @memcpy per row (still a bulk copy vs per-pixel).
+        var y: i32 = sy;
+        while (y < ey) : (y += 1) {
+            const row_base: usize = @as(usize, @intCast(y)) * stride;
+            const off = row_base + col_off;
+            @memcpy(dst[off .. off + width_pixels], src[off .. off + width_pixels]);
         }
     }
 

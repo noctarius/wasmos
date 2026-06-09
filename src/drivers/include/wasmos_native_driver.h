@@ -95,7 +95,11 @@ typedef struct wasmos_driver_api {
     /* Publish framebuffer control endpoint for VT/control-plane clients. */
     int      (*console_register_fb)(uint32_t context_id, uint32_t endpoint);
 
-    /* Generic borrowed-buffer path. */
+    /* Generic borrowed-buffer path.
+     * Low-level contract: size must be non-zero and page-aligned because the
+     * kernel maps whole borrowed windows into the native driver's address
+     * space. Higher-level helper APIs may accept byte ranges and round their
+     * internal borrow size up before calling this hook. */
     void    *(*buffer_borrow)(uint32_t kind, uint32_t source_context_id,
                               uint32_t flags, uint32_t size);
     int      (*buffer_release)(uint32_t kind);

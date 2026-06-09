@@ -60,6 +60,9 @@ int32_t wasmos_sys_ipc_send_retry_native(wasmos_driver_api_t *api, uint32_t dest
 int32_t wasmos_sys_ipc_call_native(wasmos_driver_api_t *api, uint32_t source_endpoint, uint32_t destination, uint32_t request_id, uint32_t msg_type, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, nd_ipc_message_t *out_message);
 int32_t wasmos_sys_svc_register_native(wasmos_driver_api_t *api, uint32_t proc_endpoint, uint32_t source_endpoint, const uint8_t *name, uint32_t name_len, uint32_t request_id);
 int32_t wasmos_sys_svc_lookup_native(wasmos_driver_api_t *api, uint32_t proc_endpoint, uint32_t source_endpoint, const uint8_t *name, uint32_t name_len, uint32_t request_id);
+/* Byte-range helpers for native services/drivers. These accept arbitrary
+ * len/offset pairs and round the underlying buffer_borrow window up to page
+ * size before calling the low-level ABI hook. */
 int32_t wasmos_sys_buffer_copy_from_native(wasmos_driver_api_t *api, uint32_t kind, uint32_t source_endpoint, uint32_t borrow_flags, void *dst, int32_t len, int32_t offset);
 int32_t wasmos_sys_buffer_write_to_native(wasmos_driver_api_t *api, uint32_t kind, uint32_t source_endpoint, uint32_t borrow_flags, const void *src, int32_t len, int32_t offset);
 int32_t wasmos_sys_fs_buffer_copy_from_endpoint_native(wasmos_driver_api_t *api, uint32_t source_endpoint, void *dst, int32_t len, int32_t offset);

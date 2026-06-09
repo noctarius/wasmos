@@ -704,12 +704,16 @@ fn try_switch_to_gfx_tty() void {
 
 fn try_restore_cli_tty() void {
     if (g_vt_endpoint == IPC_ENDPOINT_NONE) return;
+    if (GFX_TRACE) { logMsg("[gfx-t] try_restore_cli_tty ENTER\n"); }
     var reply: c.nd_ipc_message_t = undefined;
     const req_id: u32 = GFX_REQUEST_BASE + GFX_FB_LOOKUP_RETRIES + 3;
     if (ipc_call(g_vt_endpoint, req_id, c.VT_IPC_SWITCH_TTY, 1, 0, 0, 0, &reply) == 0 and
         reply.type == c.VT_IPC_RESP)
     {
+        if (GFX_TRACE) { logMsg("[gfx-t] try_restore_cli_tty OK\n"); }
         logMsg("[gfx] restored tty1 for CLI\n");
+    } else {
+        if (GFX_TRACE) { logMsg("[gfx-t] try_restore_cli_tty FAILED\n"); }
     }
 }
 
@@ -1097,7 +1101,8 @@ fn fb_set_overlay_lock(lock: bool) void {
 }
 
 fn sync_console_mode_for_windows() void {
-    const has_presented_windows = active_presented_window_count() > 0;
+    const cnt = active_presented_window_count();
+    const has_presented_windows = cnt > 0;
     if (has_presented_windows and !g_overlay_locked) {
         try_switch_to_gfx_tty();
         fb_set_overlay_lock(true);
@@ -1106,6 +1111,7 @@ fn sync_console_mode_for_windows() void {
         return;
     }
     if (!has_presented_windows and g_overlay_locked) {
+        if (GFX_TRACE) { logMsg("[gfx-t] sync: restore (all windows unpresented)\n"); }
         fb_set_overlay_lock(false);
         g_overlay_locked = false;
         try_restore_cli_tty();

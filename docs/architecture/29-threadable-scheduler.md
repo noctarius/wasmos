@@ -218,16 +218,18 @@ return &thread->ctx;   /* always — workers use their own ctx */
 ```
 
 `proc->ctx` (the shared `process_context_t` embedded in `process_t`) is
-**removed**.  The `ctx_canary_pre` and `ctx_canary_post` fields move to bracket
-`thread->ctx` per thread.
+**removed**. The `ctx_canary_pre` and `ctx_canary_post` fields move onto
+`thread_t` so dispatch can validate the active thread slot before restoring
+`thread->ctx`.
 
 Each `thread_t` therefore has:
 
 ```c
 typedef struct thread {
     /* ... existing fields ... */
+    process_context_t   ctx;              /* save/restore for this thread */
+    /* ... thread fields omitted ... */
     uint64_t            ctx_canary_pre;   /* NEW: moved from process_t */
-    process_context_t   ctx;             /* save/restore for this thread */
     uint64_t            ctx_canary_post;  /* NEW: moved from process_t */
     uint8_t             sched_prio;       /* NEW: scheduler priority */
     uint32_t            cpu_affinity;     /* NEW: allowed CPU mask */

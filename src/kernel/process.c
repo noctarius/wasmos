@@ -374,29 +374,33 @@ static void process_log_ctx_watch_if_changed(void) {
     process_log_ctx_watch("ctxsw");
 }
 
-static void process_validate_context(process_t *proc, const char *where) {
-    if (!proc) {
+static void process_validate_thread_context(process_t *proc,
+                                            thread_t *thread,
+                                            process_context_t *ctx,
+                                            const char *where) {
+    if (!proc || !thread || !ctx) {
         return;
     }
-    if (proc->ctx_canary_pre != PROCESS_CTX_CANARY_VALUE ||
-        proc->ctx_canary_post != PROCESS_CTX_CANARY_VALUE) {
+    if (thread->ctx_canary_pre != PROCESS_CTX_CANARY_VALUE ||
+        thread->ctx_canary_post != PROCESS_CTX_CANARY_VALUE) {
         klog_printf(
-            "[sched] ctx canary corrupt pid=%016llx\n"
+            "[sched] thread ctx canary corrupt pid=%016llx tid=%016llx\n"
             "[sched] name=%s\n"
             "[sched] ctx canary pre=%016llx\n"
             "[sched] ctx canary post=%016llx\n",
             (unsigned long long)proc->pid,
+            (unsigned long long)thread->tid,
             proc->name ? proc->name : "(null)",
-            (unsigned long long)proc->ctx_canary_pre,
-            (unsigned long long)proc->ctx_canary_post);
+            (unsigned long long)thread->ctx_canary_pre,
+            (unsigned long long)thread->ctx_canary_post);
         process_log_ctxsw_state();
         process_log_ctx_watch("canary");
         for (;;) {
             __asm__ volatile("hlt");
         }
     }
-    uint64_t rip = proc->ctx.rip;
-    uint8_t is_user_ctx = (uint8_t)((proc->ctx.cs & 0x3u) == 0x3u);
+    uint64_t rip = ctx->rip;
+    uint8_t is_user_ctx = (uint8_t)((ctx->cs & 0x3u) == 0x3u);
     uint64_t start = (uint64_t)(uintptr_t)&__kernel_start;
     uint64_t end = (uint64_t)(uintptr_t)&__kernel_end;
     uint64_t low_start = start;
@@ -411,15 +415,16 @@ static void process_validate_context(process_t *proc, const char *where) {
     if (is_user_ctx || (rip >= start && rip < end) ||
         (rip >= low_start && rip < low_end)) {
         if (!is_user_ctx) {
-            uint64_t rsp = proc->ctx.rsp;
+            uint64_t rsp = ctx->rsp;
             if (rsp < higher_half) {
                 klog_printf(
-                    "[sched] invalid rsp in %s pid=%016llx\n"
+                    "[sched] invalid thread rsp in %s pid=%016llx tid=%016llx\n"
                     "[sched] name=%s\n"
                     "[sched] rip=%016llx\n"
                     "[sched] rsp=%016llx\n",
                     where ? where : "?",
                     (unsigned long long)proc->pid,
+                    (unsigned long long)thread->tid,
                     proc->name ? proc->name : "(null)",
                     (unsigned long long)rip,
                     (unsigned long long)rsp);
@@ -433,15 +438,16 @@ static void process_validate_context(process_t *proc, const char *where) {
         return;
     }
     klog_printf(
-        "[sched] invalid rip in %s pid=%016llx\n"
+        "[sched] invalid thread rip in %s pid=%016llx tid=%016llx\n"
         "[sched] name=%s\n"
         "[sched] rip=%016llx\n"
         "[sched] rsp=%016llx\n",
         where ? where : "?",
         (unsigned long long)proc->pid,
+        (unsigned long long)thread->tid,
         proc->name ? proc->name : "(null)",
         (unsigned long long)rip,
-        (unsigned long long)proc->ctx.rsp);
+        (unsigned long long)ctx->rsp);
     process_log_ctxsw_state();
     process_log_ctx_watch("invalid-rip");
     for (;;) {
@@ -1573,23 +1579,6 @@ static int process_schedule_once_impl(void) {
         return 1;
     }
 
-    if (thread->ctx_canary_pre != PROCESS_CTX_CANARY_VALUE ||
-        thread->ctx_canary_post != PROCESS_CTX_CANARY_VALUE) {
-        klog_write("[sched] ctx canary corrupt before restore tid=");
-        serial_write_hex64(thread->tid);
-        klog_write("[sched] pid=");
-        serial_write_hex64(proc->pid);
-        klog_write("[sched] name=");
-        klog_write(proc->name ? proc->name : "(null)");
-        klog_write("\n[sched] ctx canary pre=");
-        serial_write_hex64(thread->ctx_canary_pre);
-        klog_write("[sched] ctx canary post=");
-        serial_write_hex64(thread->ctx_canary_post);
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
-    }
-
     process_set_running(proc, thread);
     if (thread->ticks_remaining == 0) {
         thread->ticks_remaining = thread->time_slice_ticks;
@@ -1623,6 +1612,17 @@ static int process_schedule_once_impl(void) {
         return 1;
     }
     run_ctx->root_table = mm_context_root_table(proc->context_id);
+    if (!thread->is_kernel_worker) {
+        process_validate_thread_context(proc, thread, run_ctx, "dispatch");
+    }
+    /* Defensive: physical page table addresses must fit in 32 bits on this HW. */
+    if (run_ctx->root_table >= 0x100000000ULL) {
+        serial_printf_unlocked("[sched] CORRUPT root_table pid=%u name=%s root=%016llx rip=%016llx\n",
+            (unsigned)proc->pid, proc->name ? proc->name : "?",
+            (unsigned long long)run_ctx->root_table,
+            (unsigned long long)run_ctx->rip);
+        run_ctx->root_table = paging_get_root_table();
+    }
     if (run_ctx->root_table == 0) {
         klog_write("[sched] target root missing\n");
         critical_section_enter();
@@ -1907,7 +1907,6 @@ int process_preempt_from_irq(irq_frame_t *frame) {
         }
     }
 
-    process_validate_context(cpu_local()->current_process, "preempt");
     process_context_t *ctx = process_sched_ctx_for_thread(cpu_local()->current_process, cpu_local()->current_thread);
     if (!ctx) {
         process_clear_resched();
@@ -1933,6 +1932,10 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     ctx->ss = frame->user_ss;
     ctx->rip = frame->rip;
     ctx->rflags = frame->rflags;
+    process_validate_thread_context(cpu_local()->current_process,
+                                    cpu_local()->current_thread,
+                                    ctx,
+                                    "preempt");
     cpu_local()->current_process->ctx = *ctx;
     if (g_ctx_watch_ctx == (uint64_t)(uintptr_t)ctx) {
         g_ctx_watch_last_ctx = g_ctx_watch_ctx;

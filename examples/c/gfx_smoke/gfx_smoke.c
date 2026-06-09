@@ -528,6 +528,12 @@ pump_libui_demo(void)
     if (!ui->close_requested &&
         ui_send_gfx_raw(ui->gfx_endpoint, ui->reply_endpoint, ui->req_id++,
                         GFX_IPC_POLL_EVENT, 0, 0, 0, 0, &ev_raw) == 0) {
+        if (ev_raw.arg1 == GFX_EVENT_POINTER) {
+            printf("[gfx-t] libui ptr x=%d y=%d btn=%d\n",
+                   (int)(ev_raw.arg2 & 0xFFFF),
+                   (int)((ev_raw.arg2 >> 16) & 0xFFFF),
+                   (int)(ev_raw.arg3 & 1));
+        }
         (void)ui_loop_handle_ipc(ui, &ev_raw);
     }
     if (ui_loop_drain(ui) != 0) {

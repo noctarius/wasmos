@@ -319,12 +319,14 @@ const glyph_cache_entry_t = struct {
 ```
 while true:
     handled = eventLoopPoll(&ipc_loop, 32)
+    if handled > 0:
+        every 256 delivered events:
+            refresh_input_subscriptions_runtime()
     if handled == 0:
         ensure_font_title_ready_lazy()   // lazy font open for chrome titles
         prime_title_glyph_step()         // pre-rasterize one title character
         flush_repaint_if_pending()       // flush dirty rect or full repaint
         every 64 idles:
-            refresh_input_subscriptions_runtime()
             cleanup_orphaned_state()     // reap windows/buffers with dead endpoints
         sched_yield()
     else:
@@ -556,7 +558,13 @@ before resize is rejected after the resize increments `generation`.
    `owner_endpoint`; `GET_METRICS`, `RASTER_GLYPH`, and related calls
    reject requests from non-owner endpoints with `FONT_STATUS_PERMISSION`.
 
-6. **Orphan cleanup on idle.** Every 64 idle ticks, `cleanup_orphaned_state()`
-   checks whether window and buffer owner endpoints are still alive
-   (`endpoint_alive`) and reclaims slots for dead owners. This handles
-   app crashes without explicit `DESTROY_WINDOW`/`RELEASE_SHARED_BUFFER`.
+6. **Runtime input recovery survives event floods.** Every 256 delivered IPC
+   events, `refresh_input_subscriptions_runtime()` re-checks keyboard/mouse
+   subscriptions so continuous client polling cannot starve late-service
+   input recovery.
+
+7. **Orphan cleanup remains idle-triggered.** Every 64 idle ticks,
+   `cleanup_orphaned_state()` checks whether window and buffer owner endpoints
+   are still alive (`endpoint_alive`) and reclaims slots for dead owners.
+   This handles app crashes without explicit
+   `DESTROY_WINDOW`/`RELEASE_SHARED_BUFFER`.

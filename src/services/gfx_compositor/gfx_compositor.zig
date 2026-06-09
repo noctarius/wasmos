@@ -81,6 +81,7 @@ var g_mouse_subscribed: bool = false;
 var g_shift_down: bool = false;
 var g_altgr_down: bool = false;
 var g_idle_housekeeping_counter: u32 = 0;
+var g_total_handled_counter: u32 = 0;
 var g_runtime_lookup_req_id: u32 = GFX_REQUEST_BASE + 0x4000;
 var g_key_layout: key_layout_t = .de_nodeadkeys;
 var g_title_dbg_open_fail_logged: bool = false;
@@ -562,15 +563,22 @@ fn ipc_call_budgeted(destination: u32, request_id: u32, msg_type: u32, arg0: u32
     const total_limit: u32 = poll_limit * 64 + 256;
     while (!state.done) {
         const handled = sys.eventLoopPoll(&g_ipc_loop, 8);
-        if (handled < 0) return -1;
+        if (handled < 0) {
+            sys.intentCancel(&g_ipc_loop, request_id);
+            return -1;
+        }
         total_polls +%= 1;
         if (handled == 0) {
-            if (empty_polls >= poll_limit) return -1;
+            if (empty_polls >= poll_limit) {
+                sys.intentCancel(&g_ipc_loop, request_id);
+                return -1;
+            }
             empty_polls +%= 1;
             api().sched_yield.?();
         }
         if (total_polls >= total_limit) {
             if (GFX_TRACE) { logMsg("[gfx-t] ipc_call_budgeted: total limit hit\n"); }
+            sys.intentCancel(&g_ipc_loop, request_id);
             return -1;
         }
     }
@@ -1066,6 +1074,9 @@ fn maybe_emit_pointer_event(dx: i32, dy: i32, buttons: u32, prev_buttons: u32) v
         if (dx == 0 and dy == 0 and buttons == prev_buttons) return;
         const rel_x = clamp(g_pointer_x - cr.x, 0, cr.w - 1);
         const rel_y = clamp(g_pointer_y - cr.y, 0, cr.h - 1);
+        if ((buttons & 0x1) != 0 and (prev_buttons & 0x1) == 0) {
+            logMsg("[dbg-gfx] pointer btn-push queued\n");
+        }
         event_push(focused.owner_endpoint, c.GFX_EVENT_POINTER, pack_u16_pair(@intCast(rel_x), @intCast(rel_y)), buttons, 0);
     }
 }
@@ -1114,6 +1125,7 @@ fn sync_console_mode_for_windows() void {
     const cnt = active_presented_window_count();
     const has_presented_windows = cnt > 0;
     if (has_presented_windows and !g_overlay_locked) {
+        if (GFX_TRACE) { logMsg("[gfx-t] sync: lock\n"); }
         try_switch_to_gfx_tty();
         fb_set_overlay_lock(true);
         g_overlay_locked = true;
@@ -1121,7 +1133,7 @@ fn sync_console_mode_for_windows() void {
         return;
     }
     if (!has_presented_windows and g_overlay_locked) {
-        if (GFX_TRACE) { logMsg("[gfx-t] sync: restore (all windows unpresented)\n"); }
+        if (GFX_TRACE) { logMsg("[gfx-t] sync: restore cnt=0 locked=true\n"); }
         fb_set_overlay_lock(false);
         g_overlay_locked = false;
         try_restore_cli_tty();
@@ -2261,7 +2273,9 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
     g_buffers[buf_idx].state = .acquired;
     g_buffers[buf_idx].bound_window_id = window_id;
     g_buffers[buf_idx].bound_window_generation = g_windows[window_idx].generation;
-    if (GFX_TRACE) { logMsg("[gfx-t] present win ok\n"); }
+    if (GFX_TRACE) {
+        if (g_overlay_locked) logMsg("[gfx-t] present win ok locked\n") else logMsg("[gfx-t] present win ok UNLOCKED\n");
+    }
     focus_window(window_idx);
     sync_console_mode_for_windows();
 
@@ -2508,6 +2522,12 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
     while (true) {
         const handled = sys.eventLoopPoll(&g_ipc_loop, 32);
         if (handled < 0) return -1;
+        if (handled > 0) {
+            g_total_handled_counter +%= @intCast(handled);
+            if ((g_total_handled_counter & 0xFF) == 0) {
+                refresh_input_subscriptions_runtime();
+            }
+        }
         if (handled == 0) {
             if (GFX_TITLE_TEXT_ENABLED) {
                 ensure_font_title_ready_lazy();
@@ -2516,7 +2536,6 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
             flush_repaint_if_pending();
             g_idle_housekeeping_counter +%= 1;
             if ((g_idle_housekeeping_counter & 0x3F) == 0) {
-                refresh_input_subscriptions_runtime();
                 cleanup_orphaned_state();
             }
             api().sched_yield.?();

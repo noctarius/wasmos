@@ -1129,12 +1129,18 @@ fn reply_with_status(msg: *const c.nd_ipc_message_t, status: i32, arg1: u32, arg
     resp.arg1 = arg1;
     resp.arg2 = arg2;
     resp.arg3 = arg3;
-    // Retry on IPC_ERR_FULL: a lost reply leaves the client blocked forever.
+    // Retry until delivered: a dropped reply leaves the client blocked forever.
+    // The client is blocked in wasmos_ipc_select_one so its endpoint is empty
+    // and the send should succeed quickly; the loop is a safety net for any
+    // transient IPC_ERR_FULL burst.
     var tries: u32 = 0;
     while (api().ipc_send.?(ctxId(), msg.source, &resp) != 0) {
         tries +%= 1;
-        if (tries >= 64) break;
+        if (GFX_TRACE and tries == 64) {
+            logMsg("[gfx-t] reply_with_status: 64 retries — may hang\n");
+        }
         api().sched_yield.?();
+        if (tries > 4096) break; // last-resort guard against truly broken endpoints
     }
 }
 

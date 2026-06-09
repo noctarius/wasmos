@@ -8,6 +8,18 @@
   immediately if any caller tries to enqueue a `THREAD_STATE_RUNNING` thread,
   tightening the current race hunt around duplicate-run versus post-save
   context stomp failures.
+- SMP scheduler hardening now also removes two concrete cross-CPU bootstrap
+  races uncovered by `native-call-min` crash trapping. The scheduler fallback
+  trampoline stack is now per-CPU instead of one shared global buffer, so
+  concurrent AP low-stack scheduler ingress can no longer scribble over the
+  same temporary stack frames. The generic paging helpers also stop using the
+  shared `g_current_pml4_phys` as their implicit current-root source and now
+  read the actual local CPU `cr3` when mapping/unmapping in the current
+  address space. Parked PM children are now born blocked instead of being
+  spawned READY and "parked" afterward, closing the SMP race where another CPU
+  could dispatch the main thread before `process_spawn_as_parked()` retracted
+  it from the queue and later `process_unpark_pid()` would requeue the still-
+  running thread on a second CPU.
 - Scheduler/context-switch hardening now validates the live `thread->ctx`
   record at dispatch and user-preempt save points instead of relying on the
   legacy `proc->ctx` mirror, so corrupt thread RIP/RSP state trips

@@ -69,13 +69,18 @@ cpu_sched_init(cpu_sched_t *cs)
 void
 cpu_sched_enqueue(cpu_sched_t *cs, thread_t *t)
 {
-    if (t->state == THREAD_STATE_RUNNING) {
-        serial_printf_unlocked("[sched] enqueue running tid=%u owner=%u cpu=%u\n",
-                               (unsigned)t->tid,
-                               (unsigned)t->owner_pid,
-                               (unsigned)cpu_local()->cpu_id);
-        for (;;) {
-            __asm__ volatile("cli; hlt");
+    for (uint32_t i = 0; i < WASMOS_MAX_CPUS; ++i) {
+        if (g_cpus[i].current_thread == t) {
+            serial_printf_unlocked("[sched] enqueue current tid=%u owner=%u caller_cpu=%u holder_cpu=%u state=%u caller=%016llx\n",
+                                   (unsigned)t->tid,
+                                   (unsigned)t->owner_pid,
+                                   (unsigned)cpu_local()->cpu_id,
+                                   (unsigned)i,
+                                   (unsigned)t->state,
+                                   0ull);
+            for (;;) {
+                __asm__ volatile("cli; hlt");
+            }
         }
     }
     spinlock_lock(&cs->lock);
@@ -91,6 +96,26 @@ cpu_sched_enqueue(cpu_sched_t *cs, thread_t *t)
     cs->thread_count[prio]++;
     cs->ready_bitmap |= (uint8_t)(1u << prio);
     spinlock_unlock(&cs->lock);
+}
+
+void
+sched_enqueue_thread_from(thread_t *t, uintptr_t caller)
+{
+    for (uint32_t i = 0; i < WASMOS_MAX_CPUS; ++i) {
+        if (g_cpus[i].current_thread == t) {
+            serial_printf_unlocked("[sched] enqueue current tid=%u owner=%u caller_cpu=%u holder_cpu=%u state=%u caller=%016llx\n",
+                                   (unsigned)t->tid,
+                                   (unsigned)t->owner_pid,
+                                   (unsigned)cpu_local()->cpu_id,
+                                   (unsigned)i,
+                                   (unsigned)t->state,
+                                   (unsigned long long)caller);
+            for (;;) {
+                __asm__ volatile("cli; hlt");
+            }
+        }
+    }
+    cpu_sched_enqueue(cpu_sched(), t);
 }
 
 void

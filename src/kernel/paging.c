@@ -376,7 +376,9 @@ paging_get_root_table(void)
 uint64_t
 paging_get_current_root_table(void)
 {
-    return g_current_pml4_phys;
+    uint64_t cr3 = 0;
+    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
+    return cr3;
 }
 
 __attribute__((naked)) int
@@ -687,13 +689,13 @@ paging_unmap_4k_in_root(uint64_t root_table, uint64_t virt)
 int
 paging_map_4k(uint64_t virt, uint64_t phys, uint64_t flags)
 {
-    return paging_map_4k_in_root(g_current_pml4_phys, virt, phys, flags);
+    return paging_map_4k_in_root(paging_get_current_root_table(), virt, phys, flags);
 }
 
 int
 paging_unmap_4k(uint64_t virt)
 {
-    return paging_unmap_4k_in_root(g_current_pml4_phys, virt);
+    return paging_unmap_4k_in_root(paging_get_current_root_table(), virt);
 }
 
 int

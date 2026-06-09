@@ -255,6 +255,7 @@ function handleAuxByte(byte: i32): void {
   let dx: i32 = (p1 << 24) >> 24;
   let dy: i32 = -((p2 << 24) >> 24);
   let buttons: i32 = p0 & 0x07;
+  std.printf("[mouse] move dx=" + dx.toString() + " dy=" + dy.toString() + " btn=" + buttons.toString() + "\n");
   notifySubscribers(dx, dy, buttons);
 }
 
@@ -330,6 +331,7 @@ export function initialize(proc_endpoint: i32, _arg1: i32,
         ipc_send(source, g_mouse_ep, MOUSE_IPC_SUBSCRIBE_RESP, req_id, ok, 0, 0, 0);
       }
     } else if (type == MOUSE_IPC_IRQ_EVENT) {
+      std.printf("[mouse] irq-event\n");
       let b = readAuxByte();
       /* Re-enable IRQ after reading OBF.  OBF must be clear before unmasking so
        * the PIC level-trigger doesn't immediately re-fire. */

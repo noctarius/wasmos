@@ -154,7 +154,9 @@ export function initialize(_proc_endpoint: i32, _arg1: i32,
       if (code >= 0) {
         if (code == 0xE0) { g_extended_pending = 1; io_wait(); sched_yield(); continue; }
         let keyup: i32 = (code & 0x80) != 0 ? 1 : 0;
-        notifySubscribers(code & 0x7F, keyup, g_extended_pending);
+        let sc: i32 = code & 0x7F;
+        std.printf("[keyboard] key sc=" + sc.toString() + " keyup=" + keyup.toString() + "\n");
+        notifySubscribers(sc, keyup, g_extended_pending);
         g_extended_pending = 0;
       }
       io_wait();
@@ -177,6 +179,7 @@ export function initialize(_proc_endpoint: i32, _arg1: i32,
         ipc_send(source, g_kbd_ep, KBD_IPC_SUBSCRIBE_RESP, req_id, ok, 0, 0, 0);
       }
     } else if (type == KBD_IPC_IRQ_EVENT) {
+      std.printf("[keyboard] irq-event\n");
       let code = readScancode();
       /* Re-enable IRQ after reading the hardware register so the next keypress
        * can fire the interrupt again.  Must come after io_in8 so OBF is clear
@@ -194,6 +197,7 @@ export function initialize(_proc_endpoint: i32, _arg1: i32,
       let sc: i32    = code & 0x7F;
       let ext: i32   = g_extended_pending;
       g_extended_pending = 0;
+      std.printf("[keyboard] key sc=" + sc.toString() + " keyup=" + keyup.toString() + "\n");
       notifySubscribers(sc, keyup, ext);
     }
     /* Ignore unknown message types. */

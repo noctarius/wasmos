@@ -102,7 +102,6 @@ context_switch:
     movq 8(%rdx), %r14
     movq 16(%rdx), %r13
     movq 24(%rdx), %r12
-    movq 32(%rdx), %r11
     movq 40(%rdx), %r10
     movq 48(%rdx), %r9
     movq 56(%rdx), %r8
@@ -113,9 +112,7 @@ context_switch:
     movq 120(%rdx), %r10
     movq 136(%rdx), %rax
     movq 128(%rdx), %rcx
-    movq 144(%rdx), %rsi
-    movq 160(%rdx), %rdi
-    movq 152(%rdx), %r11
+    movq 144(%rdx), %r11
     testq %rdx, %rdx
     js 8f
     movabs $KERNEL_HIGHER_HALF_BASE, %r15
@@ -126,7 +123,7 @@ context_switch:
     movq %r8, %cr3
     movq 0(%rdx), %r15
     movq %r10, %rsp
-    testb $0x3, %sil
+    testb $0x3, %r11b
     jne 2f
     testq %rcx, %rcx
     js 10f
@@ -142,6 +139,9 @@ context_switch:
     movq %rcx, g_ctx_restore_rip(%rip)
     movq %rsp, g_ctx_restore_rsp(%rip)
     movq %rax, g_ctx_restore_rflags(%rip)
+    movq 56(%rdx), %r8
+    movq 40(%rdx), %r10
+    movq 32(%rdx), %r11
     popfq
     movq 112(%rdx), %rax
     movq 96(%rdx), %rcx
@@ -149,18 +149,21 @@ context_switch:
     movb $0, %gs:CPU_LOCAL_IN_CTX_SW_OFFSET
     ret
 2:
-    movq %r11, %rsi
     subq $40, %rsp
     movq %rcx, 0(%rsp)
-    movq 144(%rdx), %r11
     movq %r11, 8(%rsp)
     movq %rax, 16(%rsp)
-    movq %rdi, 24(%rsp)
-    movq %rsi, 32(%rsp)
+    movq 160(%rdx), %r11
+    movq %r11, 24(%rsp)
+    movq 152(%rdx), %r11
+    movq %r11, 32(%rsp)
     movq %rdx, g_ctx_restore_ctx(%rip)
     movq %rcx, g_ctx_restore_rip(%rip)
     movq %rsp, g_ctx_restore_rsp(%rip)
     movq %rax, g_ctx_restore_rflags(%rip)
+    movq 56(%rdx), %r8
+    movq 40(%rdx), %r10
+    movq 32(%rdx), %r11
     movq 112(%rdx), %rax
     movq 96(%rdx), %rcx
     movq 88(%rdx), %rdx
@@ -192,7 +195,6 @@ context_switch_to:
     movq 8(%rdx), %r14
     movq 16(%rdx), %r13
     movq 24(%rdx), %r12
-    movq 32(%rdx), %r11
     movq 40(%rdx), %r10
     movq 48(%rdx), %r9
     movq 56(%rdx), %r8
@@ -203,9 +205,7 @@ context_switch_to:
     movq 120(%rdx), %r10
     movq 136(%rdx), %rax
     movq 128(%rdx), %rcx
-    movq 144(%rdx), %rsi
-    movq 160(%rdx), %rdi
-    movq 152(%rdx), %r11
+    movq 144(%rdx), %r11
     testq %rdx, %rdx
     js 9f
     movabs $KERNEL_HIGHER_HALF_BASE, %r15
@@ -216,7 +216,7 @@ context_switch_to:
     movq %r8, %cr3
     movq 0(%rdx), %r15
     movq %r10, %rsp
-    testb $0x3, %sil
+    testb $0x3, %r11b
     jne 3f
     testq %rcx, %rcx
     js 11f
@@ -232,6 +232,9 @@ context_switch_to:
     movq %rcx, g_ctx_restore_rip(%rip)
     movq %rsp, g_ctx_restore_rsp(%rip)
     movq %rax, g_ctx_restore_rflags(%rip)
+    movq 56(%rdx), %r8
+    movq 40(%rdx), %r10
+    movq 32(%rdx), %r11
     popfq
     movq 112(%rdx), %rax
     movq 96(%rdx), %rcx
@@ -239,18 +242,21 @@ context_switch_to:
     movb $0, %gs:CPU_LOCAL_IN_CTX_SW_OFFSET
     ret
 3:
-    movq %r11, %rsi
     subq $40, %rsp
     movq %rcx, 0(%rsp)
-    movq 144(%rdx), %r11
     movq %r11, 8(%rsp)
     movq %rax, 16(%rsp)
-    movq %rdi, 24(%rsp)
-    movq %rsi, 32(%rsp)
+    movq 160(%rdx), %r11
+    movq %r11, 24(%rsp)
+    movq 152(%rdx), %r11
+    movq %r11, 32(%rsp)
     movq %rdx, g_ctx_restore_ctx(%rip)
     movq %rcx, g_ctx_restore_rip(%rip)
     movq %rsp, g_ctx_restore_rsp(%rip)
     movq %rax, g_ctx_restore_rflags(%rip)
+    movq 56(%rdx), %r8
+    movq 40(%rdx), %r10
+    movq 32(%rdx), %r11
     movq 112(%rdx), %rax
     movq 96(%rdx), %rcx
     movq 88(%rdx), %rdx

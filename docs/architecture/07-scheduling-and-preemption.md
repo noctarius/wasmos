@@ -172,9 +172,10 @@ typedef struct {
 } process_context_t;
 ```
 
-Every `thread_t` embeds this struct between two 64-bit canary words
-(`ctx_canary_pre`/`ctx_canary_post`).  The canaries are checked at every
-context-validation callsite.
+Every `thread_t` embeds this struct as a regular member. The per-thread
+`ctx_canary_pre`/`ctx_canary_post` guard words live elsewhere in `thread_t`,
+so they detect broader thread-slot corruption but do not physically flank the
+`rip`/`rflags` words inside `ctx`.
 
 #### `irq_frame_t`
 
@@ -220,9 +221,9 @@ Process-level `ctx`, `ctx_canary_pre/post`, `in_ready_queue`, and
 | `time_slice_ticks`    | `uint32_t`              | Per-thread quantum                                    |
 | `ticks_remaining`     | `uint32_t`              | Ticks left in current quantum                         |
 | `ticks_total`         | `uint64_t`              | Cumulative ticks consumed by this thread              |
-| `ctx_canary_pre`      | `uint64_t`              | Corruption detection (flanks ctx)                     |
+| `ctx_canary_pre`      | `uint64_t`              | Per-thread corruption guard for the thread slot       |
 | `ctx`                 | `process_context_t`     | Per-thread register save for all thread types         |
-| `ctx_canary_post`     | `uint64_t`              | Corruption detection (flanks ctx)                     |
+| `ctx_canary_post`     | `uint64_t`              | Per-thread corruption guard for the thread slot       |
 | `sched_prio`          | `uint8_t`               | Priority 0–6 (lower = higher priority)                |
 | `cpu_affinity`        | `uint32_t`              | Allowed CPU bitmask (currently `~0u`)                 |
 | `last_cpu`            | `uint32_t`              | CPU where thread last ran                             |
@@ -368,6 +369,11 @@ The final resume step branches on privilege level (`testb $0x3, cs`):
 - **Ring0**: push RFLAGS + RIP on the kernel stack, `popfq` + `ret`.
 - **Ring3**: construct a five-word `iretq` frame (user_ss, user_rsp, RFLAGS, CS,
   RIP), then `iretq`, restoring CPL3 state and user RSP.
+
+The restore path must keep the incoming GPR set intact while it stages the
+final frame. Scratch assembly must not reuse live restored registers such as
+`%rdi`, `%rsi`, `%r8`, or `%r10` to hold `CS`, `SS`, `user_rsp`, `CR3`, or the
+temporary resume stack pointer.
 
 Both paths load `root_table` into CR3 before restoring GPRs.
 `g_in_context_switch` is set at entry and cleared before `ret`/`iretq`.

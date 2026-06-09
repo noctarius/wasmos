@@ -1,6 +1,14 @@
 # Current Status
 
 - This status file is a snapshot, not a release changelog.
+- Scheduler/context-switch hardening now validates the live `thread->ctx`
+  record at dispatch and user-preempt save points instead of relying on the
+  legacy `proc->ctx` mirror, so corrupt thread RIP/RSP state trips
+  immediately with the owning PID/TID in the panic path. The x86_64
+  `context_switch.S` restore path also no longer reuses restored `%rdi`,
+  `%rsi`, `%r8`, or `%r10` as scratch registers while staging `ret`/`iretq`,
+  which previously clobbered resumed thread register state during both kernel
+  and ring-3 resumes.
 - User-space threading helpers now include a process-local reentrant mutex
   surface across WASM libc/libsys, native ring3 libc, and the native
   driver/service ABI. The mutex state lives in user memory (`owner_tid` +

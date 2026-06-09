@@ -574,11 +574,15 @@ static void process_trampoline(void) {
              * Kernel workers (is_kernel_worker) skip this path entirely. */
             if (cpu_local()->current_process->is_wasm && cpu_local()->current_thread &&
                 !cpu_local()->current_thread->is_kernel_worker) {
-                spinlock_lock(&cpu_local()->current_process->wasm3_lock);
+                /* Use no-IRQ variant: wasm3_lock is held for the entire WASM timeslice.
+                 * spinlock_lock would cli for that whole duration, suppressing keyboard
+                 * and mouse IRQ delivery.  No interrupt handler acquires wasm3_lock, so
+                 * the full irq-disable contract is not needed here. */
+                spinlock_lock_noirq(&cpu_local()->current_process->wasm3_lock);
                 cpu_local()->current_process->wasm3_owner = cpu_local()->current_thread->tid;
                 cpu_local()->last_run_result = entry_fn(cpu_local()->current_process, cpu_local()->current_process->arg);
                 cpu_local()->current_process->wasm3_owner = 0;
-                spinlock_unlock(&cpu_local()->current_process->wasm3_lock);
+                spinlock_unlock_noirq(&cpu_local()->current_process->wasm3_lock);
             } else {
                 cpu_local()->last_run_result = entry_fn(cpu_local()->current_process, cpu_local()->current_process->arg);
             }

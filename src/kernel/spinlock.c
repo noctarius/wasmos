@@ -99,3 +99,27 @@ void spinlock_unlock(spinlock_t *lock) {
     preempt_enable();
     spinlock_irq_restore();
 }
+
+/* No-IRQ variants: acquire/release WITHOUT touching the irq_disable_depth counter
+ * or calling cli/sti.  Safe only when no interrupt handler on this CPU will ever
+ * try to acquire the same lock (which is the case for wasm3_lock, held across an
+ * entire WASM process timeslice — using the regular spinlock_lock would keep cli
+ * active for the whole timeslice and permanently suppress keyboard/mouse IRQs). */
+void spinlock_lock_noirq(spinlock_t *lock) {
+    if (!lock) {
+        return;
+    }
+    for (;;) {
+        if (spinlock_try_lock(lock)) {
+            return;
+        }
+        __asm__ volatile("pause");
+    }
+}
+
+void spinlock_unlock_noirq(spinlock_t *lock) {
+    if (!lock) {
+        return;
+    }
+    __sync_lock_release(&lock->state);
+}

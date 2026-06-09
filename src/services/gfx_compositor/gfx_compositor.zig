@@ -1110,7 +1110,13 @@ fn reply_with_status(msg: *const c.nd_ipc_message_t, status: i32, arg1: u32, arg
     resp.arg1 = arg1;
     resp.arg2 = arg2;
     resp.arg3 = arg3;
-    _ = api().ipc_send.?(ctxId(), msg.source, &resp);
+    // Retry on IPC_ERR_FULL: a lost reply leaves the client blocked forever.
+    var tries: u32 = 0;
+    while (api().ipc_send.?(ctxId(), msg.source, &resp) != 0) {
+        tries +%= 1;
+        if (tries >= 64) break;
+        api().sched_yield.?();
+    }
 }
 
 fn reply_unsupported(msg: *const c.nd_ipc_message_t) void {

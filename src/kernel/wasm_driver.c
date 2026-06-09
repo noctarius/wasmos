@@ -79,28 +79,13 @@ wasm_driver_reset(wasm_driver_t *driver)
 }
 
 static uint32_t
-wasm_driver_bind_owner_pid(const wasm_driver_t *driver)
-{
-    uint32_t current_pid = process_current_pid();
-    if (!driver || driver->owner_pid == 0 || driver->owner_pid == current_pid) {
-        return 0xFFFFFFFFu;
-    }
-    return wasm3_heap_bind_pid(driver->owner_pid);
-}
-
-static void
-wasm_driver_restore_owner_pid(uint32_t previous_pid)
-{
-    if (previous_pid != 0xFFFFFFFFu) {
-        wasm3_heap_restore_pid(previous_pid);
-    }
-}
-
-static uint32_t
 wasm_driver_enter_runtime(const wasm_driver_t *driver)
 {
-    preempt_disable();
-    return wasm_driver_bind_owner_pid(driver);
+    uint32_t pid = process_current_pid();
+    if (driver && driver->owner_pid != 0) {
+        pid = driver->owner_pid;
+    }
+    return wasm3_runtime_enter(pid);
 }
 
 static void
@@ -205,14 +190,15 @@ wasm_driver_thread_slot_free(wasm_driver_thread_slot_t *slot)
  * The per-PID heap binding protocol:
  *
  *   1. wasm3_heap_configure() registers the PID's heap region (once per VM).
- *   2. preempt_disable() + wasm3_heap_bind_pid() atomically switch the global
- *      wasm3 heap to this driver's region before any wasm3 API calls.
+ *   2. wasm3_runtime_enter() serializes global wasm3 entry across CPUs and
+ *      switches the active wasm3 heap to this driver's region before any
+ *      wasm3 API calls.
  *      bind_prev records the previously bound PID so it can be restored.
  *   3. All wasm3 calls (NewEnvironment, NewRuntime, m3_Call, …) execute under
  *      the bound heap — wasm3's internal mallocs land in this driver's region.
- *   4. On exit (goto out or normal return), wasm3_heap_restore_pid(bind_prev)
- *      restores whatever heap was active before this thread ran, then
- *      preempt_enable() allows the scheduler to reschedule. */
+ *   4. On exit (goto out or normal return), wasm3_runtime_leave(bind_prev)
+ *      restores whatever heap was active before this thread ran and releases
+ *      the global wasm3 gate. */
 static process_run_result_t
 wasm_driver_vm_thread_entry(process_t *process, uint32_t tid, void *arg)
 {
@@ -234,8 +220,7 @@ wasm_driver_vm_thread_entry(process_t *process, uint32_t tid, void *arg)
     call_args[2] = &slot->argv[2];
     call_args[3] = &slot->argv[3];
     wasm3_heap_configure(slot->owner_pid, slot->heap_size, 2ULL * 1024ULL * 1024ULL * 1024ULL);
-    preempt_disable();
-    bind_prev = wasm3_heap_bind_pid(slot->owner_pid); /* switch heap to this driver's PID */
+    bind_prev = wasm3_runtime_enter(slot->owner_pid);
     env = m3_NewEnvironment();
     if (!env) {
         goto out;
@@ -273,10 +258,7 @@ out:
     if (env) {
         m3_FreeEnvironment(env);
     }
-    if (bind_prev != 0xFFFFFFFFu) {
-        wasm3_heap_restore_pid(bind_prev);
-    }
-    preempt_enable();
+    wasm3_runtime_leave(bind_prev);
     process_set_exit_status(process, rc);
     wasm_driver_thread_slot_free(slot);
     /* Exit via process_yield so the scheduler sees the result through
@@ -292,8 +274,7 @@ out:
 static void
 wasm_driver_leave_runtime(uint32_t previous_pid)
 {
-    wasm_driver_restore_owner_pid(previous_pid);
-    preempt_enable();
+    wasm3_runtime_leave(previous_pid);
 }
 
 int

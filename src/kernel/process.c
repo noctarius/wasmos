@@ -894,7 +894,9 @@ void process_ap_init(void) {
     cpu_local()->resched_stall_reports = 0;
     cpu_local()->in_scheduler         = 1; /* block premature preemption */
     cpu_local()->sched_ctx.root_table = paging_get_root_table();
-    /* Do NOT call cpu_sched_init here: the global g_cpu_sched was already
+    /* Do NOT clear global ctx watch state here; the BSP may already have armed
+     * it for a target thread before AP bring-up completes.
+     * Do NOT call cpu_sched_init here: the global g_cpu_sched was already
      * initialized by the BSP via process_init(), and threads from
      * kernel_selftest_spawn_baseline are already enqueued.  Reinitializing
      * the scheduler would wipe those thread lists. */
@@ -987,13 +989,17 @@ int process_spawn_as(uint32_t parent_pid, const char *name, process_entry_t entr
     spinlock_init(&slot->wasm3_lock);
     slot->wasm3_owner = 0;
     sched_event_init(&slot->wait_event, SCHED_EVENT_TYPE_PROCESS);
-    if (strcmp(name, "process-manager") == 0) {
-        g_ctx_watch_ctx = (uint64_t)(uintptr_t)&slot->ctx;
-        g_ctx_watch_last_ctx = g_ctx_watch_ctx;
-        g_ctx_watch_hits = 0;
-        g_ctx_watch_reason = 0;
-        trace_write("[sched] ctxwatch armed ctx=");
-        trace_do(serial_write_hex64(g_ctx_watch_ctx));
+    if (strcmp(name, "process-manager") == 0 ||
+        strcmp(name, "native-call-min") == 0) {
+        thread_t *watch_thread = process_main_thread(slot);
+        if (watch_thread) {
+            g_ctx_watch_ctx = (uint64_t)(uintptr_t)&watch_thread->ctx;
+            g_ctx_watch_last_ctx = g_ctx_watch_ctx;
+            g_ctx_watch_hits = 0;
+            g_ctx_watch_reason = 0;
+            trace_write("[sched] ctxwatch armed ctx=");
+            trace_do(serial_write_hex64(g_ctx_watch_ctx));
+        }
         if (slot->stack_top >= sizeof(uint64_t)) {
             g_pm_stack_watch = (uint64_t *)(uintptr_t)(slot->stack_top - sizeof(uint64_t));
             trace_write("[sched] pm stack watch addr=");

@@ -32,13 +32,11 @@ int
 wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
 {
     char entry_name[64];
-    uint32_t previous_pid = wasm3_heap_bind_pid(process_current_pid());
-    preempt_disable();
+    uint32_t previous_pid = wasm3_runtime_enter(process_current_pid());
     wasm3_heap_configure(process_current_pid(), 0, 2ULL * 1024ULL * 1024ULL * 1024ULL);
     if (wasm3_heap_probe_growth(6u * 1024u * 1024u) != 0) {
         klog_write("[wasm3] heap growth probe failed\n");
-        preempt_enable();
-        wasm3_heap_restore_pid(previous_pid);
+        wasm3_runtime_leave(previous_pid);
         return -1;
     }
     klog_write("[test] wasm heap grow ok\n");
@@ -46,8 +44,7 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
     if (!mod || mod->type != BOOT_MODULE_TYPE_WASMOS_APP || mod->base == 0 ||
         mod->size == 0 || mod->size > 0xFFFFFFFFULL) {
         klog_write("[wasm3] invalid module\n");
-        preempt_enable();
-        wasm3_heap_restore_pid(previous_pid);
+        wasm3_runtime_leave(previous_pid);
         return -1;
     }
 
@@ -56,14 +53,12 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
                          (uint32_t)mod->size,
                          &desc) != 0) {
         klog_write("[wasm3] parse failed\n");
-        preempt_enable();
-        wasm3_heap_restore_pid(previous_pid);
+        wasm3_runtime_leave(previous_pid);
         return -1;
     }
     if (desc.entry_len == 0 || desc.entry_len >= sizeof(entry_name)) {
         klog_write("[wasm3] invalid entry name\n");
-        preempt_enable();
-        wasm3_heap_restore_pid(previous_pid);
+        wasm3_runtime_leave(previous_pid);
         return -1;
     }
     for (uint32_t i = 0; i < desc.entry_len; ++i) {
@@ -74,8 +69,7 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
     IM3Environment env = m3_NewEnvironment();
     if (!env) {
         klog_write("[wasm3] env alloc failed\n");
-        preempt_enable();
-        wasm3_heap_restore_pid(previous_pid);
+        wasm3_runtime_leave(previous_pid);
         return -1;
     }
 
@@ -83,8 +77,7 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
     if (!runtime) {
         klog_write("[wasm3] runtime alloc failed\n");
         m3_FreeEnvironment(env);
-        preempt_enable();
-        wasm3_heap_restore_pid(previous_pid);
+        wasm3_runtime_leave(previous_pid);
         return -1;
     }
 
@@ -96,8 +89,7 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
         klog_write("\n");
         m3_FreeRuntime(runtime);
         m3_FreeEnvironment(env);
-        preempt_enable();
-        wasm3_heap_restore_pid(previous_pid);
+        wasm3_runtime_leave(previous_pid);
         return -1;
     }
 
@@ -108,8 +100,7 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
         klog_write("\n");
         m3_FreeRuntime(runtime);
         m3_FreeEnvironment(env);
-        preempt_enable();
-        wasm3_heap_restore_pid(previous_pid);
+        wasm3_runtime_leave(previous_pid);
         return -1;
     }
 
@@ -128,8 +119,7 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
         klog_write("\n");
         m3_FreeRuntime(runtime);
         m3_FreeEnvironment(env);
-        preempt_enable();
-        wasm3_heap_restore_pid(previous_pid);
+        wasm3_runtime_leave(previous_pid);
         return -1;
     }
 
@@ -156,7 +146,6 @@ wasm3_probe_run(const boot_info_t *info, uint32_t module_index)
 
     m3_FreeRuntime(runtime);
     m3_FreeEnvironment(env);
-    preempt_enable();
-    wasm3_heap_restore_pid(previous_pid);
+    wasm3_runtime_leave(previous_pid);
     return res ? -1 : 0;
 }

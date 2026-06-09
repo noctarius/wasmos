@@ -60,6 +60,18 @@ extern void *x86_irq_stub_table[];
 extern void isr_syscall_128(void);
 extern uint8_t __kernel_start;
 extern uint8_t __kernel_end;
+extern volatile uint64_t g_ctxsw_last_out_ctx;
+extern volatile uint64_t g_ctxsw_last_out_rip;
+extern volatile uint64_t g_ctxsw_last_out_rsp;
+extern volatile uint64_t g_ctxsw_last_out_rflags;
+extern volatile uint64_t g_ctxsw_last_in_ctx;
+extern volatile uint64_t g_ctxsw_last_in_rip;
+extern volatile uint64_t g_ctxsw_last_in_rsp;
+extern volatile uint64_t g_ctxsw_last_in_rflags;
+extern volatile uint64_t g_ctx_restore_ctx;
+extern volatile uint64_t g_ctx_restore_rip;
+extern volatile uint64_t g_ctx_restore_rsp;
+extern volatile uint64_t g_ctx_restore_rflags;
 
 /* IDT is shared across all CPUs (all CPUs load the same IDTR). */
 static idt_entry_t g_idt[IDT_ENTRY_COUNT];
@@ -507,6 +519,22 @@ x86_exception_panic_frame(uint64_t vector, const uint64_t *frame)
         name ? name : "(null)",
         (unsigned long long)stack_base,
         (unsigned long long)stack_top);
+    serial_printf_unlocked(
+        "[cpu] ctxsw out ctx=%016llx rip=%016llx rsp=%016llx rflags=%016llx\n"
+        "[cpu] ctxsw in ctx=%016llx rip=%016llx rsp=%016llx rflags=%016llx\n"
+        "[cpu] ctxsw restore ctx=%016llx rip=%016llx rsp=%016llx rflags=%016llx\n",
+        (unsigned long long)g_ctxsw_last_out_ctx,
+        (unsigned long long)g_ctxsw_last_out_rip,
+        (unsigned long long)g_ctxsw_last_out_rsp,
+        (unsigned long long)g_ctxsw_last_out_rflags,
+        (unsigned long long)g_ctxsw_last_in_ctx,
+        (unsigned long long)g_ctxsw_last_in_rip,
+        (unsigned long long)g_ctxsw_last_in_rsp,
+        (unsigned long long)g_ctxsw_last_in_rflags,
+        (unsigned long long)g_ctx_restore_ctx,
+        (unsigned long long)g_ctx_restore_rip,
+        (unsigned long long)g_ctx_restore_rsp,
+        (unsigned long long)g_ctx_restore_rflags);
     if (rip >= kernel_start && (rip + 16) <= kernel_end) {
         serial_dump_bytes_unlocked("[cpu] rip bytes", (const uint8_t *)rip, 16);
     }

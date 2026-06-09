@@ -375,6 +375,10 @@ final frame. Scratch assembly must not reuse live restored registers such as
 `%rdi`, `%rsi`, `%r8`, or `%r10` to hold `CS`, `SS`, `user_rsp`, `CR3`, or the
 temporary resume stack pointer.
 
+For the ring0 `ret` fast path, the kernel also re-establishes the kernel
+data/stack selectors before returning to resumed C code. This avoids carrying
+stale segment state across mixed user/kernel activity on the same CPU.
+
 Both paths load `root_table` into CR3 before restoring GPRs.
 `g_in_context_switch` is set at entry and cleared before `ret`/`iretq`.
 

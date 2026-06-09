@@ -953,7 +953,10 @@ m3ApiRawFunction(wasmos_ipc_select_one)
          * on a spurious wake, in which case we retry immediately. */
         rc = ipc_recv_blocking_for(context_id, (uint32_t)endpoint, &slot->message);
         if (rc == IPC_EMPTY) {
-            continue;  /* spurious wake; retry */
+            /* Spurious wake — re-block immediately, but honour a pending
+             * reschedule first so the timer tick doesn't go unserviced. */
+            preempt_safepoint();
+            continue;
         }
         if (rc != IPC_OK) {
             process->block_reason = PROCESS_BLOCK_NONE;
@@ -1058,6 +1061,8 @@ m3ApiRawFunction(wasmos_sys_select_wait)
             m3ApiReturn((int32_t)ready_ep);
         }
         if (rc == IPC_EMPTY) {
+            /* Spurious wake — re-block, but honour pending reschedule first. */
+            preempt_safepoint();
             continue;
         }
         m3ApiReturn(-1);

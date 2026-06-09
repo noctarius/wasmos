@@ -411,6 +411,7 @@ static void
 ui_demo_button_click(ui_context_t *ctx, int32_t component_id, void *user)
 {
     (void)component_id;
+    puts("[dbg-libui] on_click fired");
     int32_t *click_count = (int32_t *)user;
     ui_component_t *root = ui_component_by_id(ctx, ctx->root_id);
     ui_component_t *label = ui_component_by_id(ctx, 2);

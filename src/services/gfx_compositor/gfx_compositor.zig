@@ -134,6 +134,9 @@ const buffer_slot_t = struct {
     state: buffer_state_t = .allocated,
     bound_window_id: u32 = 0,
     bound_window_generation: u32 = 0,
+    // Cached shmem mapping — set at allocation, valid until the slot is freed.
+    // Avoids kernel shmem_map/shmem_unmap on every composite call.
+    mapped_pixels: ?[*]const u32 = null,
 };
 
 const gfx_event_t = struct {
@@ -484,6 +487,9 @@ fn cleanup_orphaned_state() void {
     while (i < g_buffers.len) : (i += 1) {
         if (!g_buffers[i].in_use) continue;
         if (endpoint_alive(g_buffers[i].owner_endpoint)) continue;
+        if (g_buffers[i].shmem_id != 0) {
+            _ = api().shmem_unmap.?(g_buffers[i].shmem_id);
+        }
         g_buffers[i] = .{};
         changed = true;
     }
@@ -1257,6 +1263,7 @@ fn buffer_alloc(owner_endpoint: u32, width: u32, height: u32) ?usize {
     g_buffers[idx].stride_bytes = @intCast(stride_u64);
     g_buffers[idx].state = .allocated;
     g_buffers[idx].bound_window_id = 0;
+    g_buffers[idx].mapped_pixels = @ptrCast(@alignCast(mapped_ptr.?));
     g_buffers[idx].bound_window_generation = 0;
     return idx;
 }
@@ -1285,13 +1292,19 @@ fn fill_rect(x0: i32, y0: i32, w: i32, h: i32, color: u32) void {
 
     const stride: usize = @intCast(g_fb_info.framebuffer_stride);
     const fb = g_backbuffer_pixels.?;
+    const row_w: usize = @intCast(ex - sx);
     var y = sy;
     while (y < ey) : (y += 1) {
-        const row_base: usize = @as(usize, @intCast(y)) * stride;
-        var x = sx;
-        while (x < ex) : (x += 1) {
-            const idx: usize = row_base + @as(usize, @intCast(x));
-            fb[idx] = color;
+        const row_base: usize = @as(usize, @intCast(y)) * stride + @as(usize, @intCast(sx));
+        var col: usize = 0;
+        while (col + 4 <= row_w) : (col += 4) {
+            fb[row_base + col]     = color;
+            fb[row_base + col + 1] = color;
+            fb[row_base + col + 2] = color;
+            fb[row_base + col + 3] = color;
+        }
+        while (col < row_w) : (col += 1) {
+            fb[row_base + col] = color;
         }
     }
 }
@@ -1837,13 +1850,8 @@ fn draw_window_title_text(win: window_slot_t, clip: c.gfx_rect_t) void {
 
 fn draw_window_buffer(win: window_slot_t, buf: buffer_slot_t, clip: c.gfx_rect_t) bool {
     if (g_backbuffer_pixels == null) return false;
-    const src_ptr_raw = api().shmem_map.?(buf.shmem_id);
-    if (src_ptr_raw == null) {
-        logMsg("[gfx] draw shmem_map failed\n");
-        return false;
-    }
-    defer _ = api().shmem_unmap.?(buf.shmem_id);
-    const src_pixels: [*]const u32 = @ptrCast(@alignCast(src_ptr_raw.?));
+    // Use the permanently-cached mapping set at buffer allocation.
+    const src_pixels = buf.mapped_pixels orelse return false;
     const dst_pixels = g_backbuffer_pixels.?;
     const dst_stride: usize = @intCast(g_fb_info.framebuffer_stride);
     const cr = window_content_rect(win);
@@ -1853,30 +1861,53 @@ fn draw_window_buffer(win: window_slot_t, buf: buffer_slot_t, clip: c.gfx_rect_t
     const x1 = if (clip.x + clip.w < cr.x + cr.w) clip.x + clip.w else cr.x + cr.w;
     const y1 = if (clip.y + clip.h < cr.y + cr.h) clip.y + clip.h else cr.y + cr.h;
     if (x0 >= x1 or y0 >= y1) return true;
-    const content_clip = c.gfx_rect_t{ .x = x0, .y = y0, .w = x1 - x0, .h = y1 - y0 };
 
-    var y: i32 = 0;
-    while (y < content_clip.h) : (y += 1) {
-        var x: i32 = 0;
-        while (x < content_clip.w) : (x += 1) {
-            const sx_i32 = (content_clip.x - cr.x) + x;
-            const sy_i32 = (content_clip.y - cr.y) + y;
-            if (sx_i32 < 0 or sy_i32 < 0) continue;
-            const sx: u32 = @intCast(sx_i32);
-            const sy: u32 = @intCast(sy_i32);
-            if (sx >= buf.width or sy >= buf.height) continue;
-            const idx_u64 = @as(u64, sy) * @as(u64, buf.width) + @as(u64, sx);
-            const src_idx: usize = @intCast(idx_u64);
-            const dx: usize = @intCast(content_clip.x + x);
-            const dy: usize = @intCast(content_clip.y + y);
-            const dst_idx: usize = dy * dst_stride + dx;
-            const px = src_pixels[src_idx];
-            // Client buffers are treated as opaque RGB surfaces for now.
-            // Decode bytes explicitly to avoid alpha-channel convention mismatch.
-            const b: u32 = px & 0xFF;
-            const g: u32 = (px >> 8) & 0xFF;
-            const r: u32 = (px >> 16) & 0xFF;
-            dst_pixels[dst_idx] = packFbPixel(r, g, b);
+    const sx0: usize = @intCast(x0 - cr.x);
+    const sy0: usize = @intCast(y0 - cr.y);
+    const w: usize = @intCast(x1 - x0);
+    const h: usize = @intCast(y1 - y0);
+    const buf_w: usize = @intCast(buf.width);
+    const fmt = g_fb_info.framebuffer_gop_pixel_format & 0xF;
+
+    if (fmt == 1) {
+        // Framebuffer is BGRX (format 1).  Client pixels are stored as
+        // 0xAARRGGBB — same byte layout as the framebuffer expects (BGRA).
+        // Direct row-by-row bulk copy; alpha channel is forced to 0xFF by
+        // ORing the top byte (client alpha is ignored, all surfaces opaque).
+        var row: usize = 0;
+        while (row < h) : (row += 1) {
+            const sy = sy0 + row;
+            if (sy >= @as(usize, @intCast(buf.height))) break;
+            const src_row = src_pixels + sy * buf_w + sx0;
+            const dst_row = dst_pixels + (@as(usize, @intCast(y0)) + row) * dst_stride + @as(usize, @intCast(x0));
+            // Force alpha=0xFF and copy RGB in one pass.
+            var col: usize = 0;
+            while (col + 4 <= w) : (col += 4) {
+                dst_row[col]     = src_row[col]     | 0xFF000000;
+                dst_row[col + 1] = src_row[col + 1] | 0xFF000000;
+                dst_row[col + 2] = src_row[col + 2] | 0xFF000000;
+                dst_row[col + 3] = src_row[col + 3] | 0xFF000000;
+            }
+            while (col < w) : (col += 1) {
+                dst_row[col] = src_row[col] | 0xFF000000;
+            }
+        }
+    } else {
+        // Format 0 (RGBX) or unknown: need R↔B swap.
+        var row: usize = 0;
+        while (row < h) : (row += 1) {
+            const sy = sy0 + row;
+            if (sy >= @as(usize, @intCast(buf.height))) break;
+            const src_row = src_pixels + sy * buf_w + sx0;
+            const dst_row = dst_pixels + (@as(usize, @intCast(y0)) + row) * dst_stride + @as(usize, @intCast(x0));
+            var col: usize = 0;
+            while (col < w) : (col += 1) {
+                const px = src_row[col];
+                const b: u32 = px & 0xFF;
+                const g_ch: u32 = (px >> 8) & 0xFF;
+                const r: u32 = (px >> 16) & 0xFF;
+                dst_row[col] = 0xFF000000 | (b << 16) | (g_ch << 8) | r;
+            }
         }
     }
     return true;
@@ -2124,9 +2155,9 @@ fn handle_release_shared_buffer(msg: *const c.nd_ipc_message_t) void {
     }
 
     const changed = detach_buffer_from_windows(buffer_id);
-    // TODO(gfx-buffer-release): native driver ABI currently has map/unmap but
-    // no shmem-destroy primitive; this releases compositor references and
-    // invalidates handle usage, but backing pages are not reclaimed yet.
+    if (g_buffers[buf_idx].shmem_id != 0) {
+        _ = api().shmem_unmap.?(g_buffers[buf_idx].shmem_id);
+    }
     g_buffers[buf_idx] = .{};
     if (changed) {
         request_repaint_full();

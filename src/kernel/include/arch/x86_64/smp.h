@@ -80,6 +80,12 @@ typedef struct cpu_local {
      * Making it per-CPU prevents an AP loading a driver from diverting
      * another CPU's malloc to the wrong heap slot. */
     uint32_t           wasm3_heap_bound_pid;
+
+    /* Per-CPU idle thread: dispatched only when the ready queue is empty.
+     * Set by process_spawn_idle (BSP) and process_spawn_idle_ap (APs).
+     * Never placed in the global ready queue; always dispatched via the
+     * cpu_sched_pick_next fallback path. */
+    thread_t          *idle_thread;
 } cpu_local_t;
 
 /* context_switch.S encodes this offset as CPU_LOCAL_IN_CONTEXT_SWITCH_OFFSET.

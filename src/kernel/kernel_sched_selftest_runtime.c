@@ -19,6 +19,7 @@
 #include "process.h"
 #include "string.h"
 #include "stdlib.h"
+#include "arch/x86_64/smp.h"
 
 /* -------------------------------------------------------------------------
  * Helpers
@@ -105,7 +106,8 @@ test_priority_ordering(void)
     CHECK(p1 == &hi1, "prio-order-first");
     CHECK(p2 == &hi2, "prio-order-second");
     CHECK(p3 == &lo1, "prio-order-third");
-    CHECK(p4 == cs.idle, "prio-order-idle");
+    /* Fallback now returns cpu_local()->idle_thread (per-CPU), not cs.idle. */
+    CHECK(p4 == cpu_local()->idle_thread, "prio-order-idle");
     CHECK(cs.ready_bitmap == 0, "prio-order-bitmap-empty");
 
     TEST_PASS("priority-ordering");

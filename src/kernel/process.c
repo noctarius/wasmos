@@ -730,9 +730,14 @@ static void process_wake_waiters(uint32_t target_pid) {
                 cpu_local()->current_thread &&
                 cpu_local()->current_thread->tid != waiter->tid) {
                 thread_set_state(waiter->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
-                sched_enqueue_thread(waiter);
             } else {
                 process_set_ready(proc, waiter);
+            }
+            /* Only enqueue if the thread is not mid-transition to blocked on
+             * another CPU.  If blocking_transition is set, the owning CPU's
+             * PROCESS_RUN_BLOCKED handler will re-enqueue once the yield
+             * completes and sees state == READY. */
+            if (!__atomic_load_n(&waiter->blocking_transition, __ATOMIC_ACQUIRE)) {
                 sched_enqueue_thread(waiter);
             }
         }
@@ -1623,6 +1628,14 @@ static int process_schedule_once_impl(void) {
     }
     /* Thread state alone determines runnability. */
     if (thread->state != THREAD_STATE_READY) {
+        /* Invariant violation: a non-READY thread was in the ready queue and
+         * has been silently dequeued.  Log it; do not re-enqueue (BLOCKED
+         * threads must remain waiting for their event). */
+        serial_printf_unlocked("[sched] dequeued non-ready tid=%u pid=%u state=%u block=%u\n",
+                               (unsigned)thread->tid,
+                               (unsigned)(proc ? proc->pid : 0u),
+                               (unsigned)thread->state,
+                               (unsigned)thread->block_reason);
         return 1;
     }
 
@@ -2331,5 +2344,7 @@ process_wake_thread_joiner(process_t *owner, thread_t *exited)
         return;
     }
     process_set_ready(owner, waiter);
-    sched_enqueue_thread(waiter);
+    if (!__atomic_load_n(&waiter->blocking_transition, __ATOMIC_ACQUIRE)) {
+        sched_enqueue_thread(waiter);
+    }
 }

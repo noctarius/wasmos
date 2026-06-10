@@ -71,16 +71,19 @@ cpu_sched_enqueue(cpu_sched_t *cs, thread_t *t)
 {
     for (uint32_t i = 0; i < WASMOS_MAX_CPUS; ++i) {
         if (g_cpus[i].current_thread == t) {
-            serial_printf_unlocked("[sched] enqueue current tid=%u owner=%u caller_cpu=%u holder_cpu=%u state=%u caller=%016llx\n",
+            serial_printf_unlocked("[sched] enqueue current tid=%u owner=%u caller_cpu=%u holder_cpu=%u state=%u\n",
                                    (unsigned)t->tid,
                                    (unsigned)t->owner_pid,
                                    (unsigned)cpu_local()->cpu_id,
                                    (unsigned)i,
-                                   (unsigned)t->state,
-                                   0ull);
-            for (;;) {
-                __asm__ volatile("cli; hlt");
-            }
+                                   (unsigned)t->state);
+            /* Thread is still running on another CPU.  Mark it ready so the
+             * owning CPU re-enqueues when its timeslice or blocking-yield
+             * completes (see PROCESS_RUN_BLOCKED handler).  Never halt here
+             * under production SMP IPC load. */
+            t->state = THREAD_STATE_READY;
+            t->block_reason = THREAD_BLOCK_NONE;
+            return;
         }
     }
     spinlock_lock(&cs->lock);
@@ -110,9 +113,9 @@ sched_enqueue_thread_from(thread_t *t, uintptr_t caller)
                                    (unsigned)i,
                                    (unsigned)t->state,
                                    (unsigned long long)caller);
-            for (;;) {
-                __asm__ volatile("cli; hlt");
-            }
+            t->state = THREAD_STATE_READY;
+            t->block_reason = THREAD_BLOCK_NONE;
+            return;
         }
     }
     cpu_sched_enqueue(cpu_sched(), t);

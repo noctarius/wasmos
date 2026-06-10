@@ -36,8 +36,14 @@ typedef struct ipc_select {
     uint32_t id;
     uint8_t  in_use;
     uint32_t owner_context_id;
-    spinlock_t lock;
     sched_event_t event;
+    /* ready_ep is protected by event.lock, not a separate lock.  Keeping
+     * event.lock as the single authority for both the wait_list and ready_ep
+     * prevents the SMP lost-wakeup: ipc_select_signal() sets ready_ep and
+     * calls sched_event_wake_one() under the same event.lock that
+     * ipc_select_wait() holds across the "check ready_ep → add to wait_list"
+     * critical section, so a signal can never slip between the check and the
+     * enqueue. */
     uint32_t ready_ep;         /* endpoint that triggered the wake */
     uint32_t ep_ids[IPC_SELECT_EPS_MAX];
     uint32_t ep_count;
@@ -115,7 +121,6 @@ void ipc_init(void) {
     spinlock_init(&g_select_table_lock);
     memset(g_select_table, 0, sizeof(g_select_table));
     for (uint32_t i = 0; i < IPC_SELECT_TABLE_SIZE; i++) {
-        spinlock_init(&g_select_table[i].lock);
         sched_event_init(&g_select_table[i].event, SCHED_EVENT_TYPE_SELECT);
     }
 }
@@ -527,20 +532,38 @@ ipc_select_wait(uint32_t select_id, uint32_t owner_context_id,
         return IPC_OK;
     }
 
+    /* Acquire event.lock BEFORE releasing g_select_table_lock.
+     * ipc_select_signal() also holds event.lock when it writes ready_ep and
+     * calls sched_event_wake_one(), so acquiring it here closes the SMP
+     * lost-wakeup window: any signal that fires after this point is forced to
+     * wait until we are already in the wait_list (inside sched_event_wait).
+     * Without this ordering, signal() could set ready_ep and find an empty
+     * wait_list in the gap between the ready_ep check above and the
+     * sched_event_wait() call below. */
     spinlock_lock(&sel->event.lock);
     spinlock_unlock(&g_select_table_lock);
+
+    /* Re-check under event.lock: if signal() fired between the ready_ep check
+     * above and our acquisition of event.lock, ready_ep is already set. */
+    if (sel->ready_ep != IPC_ENDPOINT_NONE) {
+        *out_ready_ep = sel->ready_ep;
+        sel->ready_ep = IPC_ENDPOINT_NONE;
+        spinlock_unlock(&sel->event.lock);
+        return IPC_OK;
+    }
 
     /* sched_event_wait releases sel->event.lock before yielding. */
     sched_event_wait(&sel->event, 0);
 
-    spinlock_lock(&g_select_table_lock);
+    /* After wake: re-check under event.lock (same lock as ipc_select_signal). */
+    spinlock_lock(&sel->event.lock);
     if (sel->ready_ep == IPC_ENDPOINT_NONE) {
-        spinlock_unlock(&g_select_table_lock);
+        spinlock_unlock(&sel->event.lock);
         return IPC_EMPTY;  /* spurious wake; caller must retry */
     }
     *out_ready_ep = sel->ready_ep;
     sel->ready_ep = IPC_ENDPOINT_NONE;
-    spinlock_unlock(&g_select_table_lock);
+    spinlock_unlock(&sel->event.lock);
     return IPC_OK;
 }
 
@@ -578,10 +601,11 @@ ipc_select_signal(struct ipc_select *sel, uint32_t ep_id)
     if (!sel) {
         return;
     }
-    spinlock_lock(&sel->lock);
-    sel->ready_ep = ep_id;
+    /* event.lock protects both ready_ep and the wait_list, matching
+     * ipc_select_wait()'s critical section.  The old sel->lock is removed:
+     * it was a separate spinlock that created the SMP lost-wakeup race. */
     spinlock_lock(&sel->event.lock);
+    sel->ready_ep = ep_id;
     sched_event_wake_one(&sel->event, ep_id, SCHED_PEND_OK);
     spinlock_unlock(&sel->event.lock);
-    spinlock_unlock(&sel->lock);
 }

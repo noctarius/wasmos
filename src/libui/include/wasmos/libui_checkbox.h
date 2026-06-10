@@ -3,11 +3,6 @@
 
 /* libui_checkbox.h - Checkbox component specific rendering. */
 
-typedef struct {
-    ui_text_data_t text;
-    int32_t checked;
-} ui_checkbox_data_t;
-
 static inline void
 ui_render_checkbox(ui_context_t *ctx, const ui_component_t *c, ui_rect_t draw_bounds, ui_rect_t clip, int32_t offset_y)
 {

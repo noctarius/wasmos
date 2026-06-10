@@ -5,8 +5,6 @@
  * Included by libui.h after core generic facilities are defined.
  */
 
-typedef ui_text_data_t ui_button_data_t;
-
 static inline void
 ui_render_button(ui_context_t *ctx, const ui_component_t *c, ui_rect_t draw_bounds, ui_rect_t clip, int32_t offset_y)
 {

@@ -6,8 +6,6 @@
  * Component-specific code lives here so the core stays small as we add widgets.
  */
 
-typedef ui_text_data_t ui_label_data_t;  /* label only needs text for display */
-
 static inline void
 ui_render_label(ui_context_t *ctx, const ui_component_t *c, ui_rect_t draw_bounds, ui_rect_t clip, int32_t offset_y)
 {

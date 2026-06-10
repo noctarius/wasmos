@@ -3,12 +3,6 @@
 
 /* libui_dropdown.h - Dropdown component specific rendering (including popup). */
 
-typedef struct {
-    ui_text_data_t text;     /* for explicit text or fallback */
-    ui_list_data_t list;
-    int32_t dropdown_open;
-} ui_dropdown_data_t;
-
 static inline void
 ui_render_dropdown(ui_context_t *ctx, const ui_component_t *c, ui_rect_t draw_bounds, ui_rect_t clip, int32_t offset_y)
 {

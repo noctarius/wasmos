@@ -3,12 +3,6 @@
 
 /* libui_menu_item.h - Menu item component specific rendering (including popup). */
 
-typedef struct {
-    ui_text_data_t text;
-    ui_list_data_t list;
-    int32_t dropdown_open;
-} ui_menu_item_data_t;
-
 /* Prototype for helper used by render (defined later in this header). */
 static inline ui_rect_t ui_menu_item_popup_bounds(const ui_context_t *ctx, const ui_component_t *c);
 

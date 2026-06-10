@@ -1088,10 +1088,7 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
                     ui_component_t *mc = &ctx->components[ci2];
                     if (!mc->in_use || mc->type != UI_COMPONENT_MENU_ITEM) continue;
                     if (ui_point_in_bounds(ctx->pointer_x, ctx->pointer_y, mc->bounds)) { mi_id2 = mc->id; break; }
-                    if (mc->dropdown_open) {
-                        const ui_rect_t mp = ui_menu_item_popup_bounds(ctx, mc);
-                        if (mp.w > 0 && mp.h > 0 && ui_point_in_bounds(ctx->pointer_x, ctx->pointer_y, mp)) { mi_id2 = mc->id; break; }
-                    }
+                    if (ui_menu_item_popup_contains(ctx, mc, ctx->pointer_x, ctx->pointer_y)) { mi_id2 = mc->id; break; }
                 }
                 if (mi_id2 > 0) {
                     ui_component_t *mi2 = ui_component_by_id(ctx, mi_id2);
@@ -1105,15 +1102,12 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
                             if (will_open && mi2->item_count > 0) mi2->dropdown_open = 1;
                             ui_mark_dirty(ctx);
                         } else if (mi2->dropdown_open) {
-                            const ui_rect_t mp2 = ui_menu_item_popup_bounds(ctx, mi2);
-                            if (mp2.w > 0 && mp2.h > 0 && ui_point_in_bounds(ctx->pointer_x, ctx->pointer_y, mp2)) {
-                                const int32_t idx2 = (ctx->pointer_y - mp2.y) / 22;
-                                if (idx2 >= 0 && idx2 < mi2->item_count) {
-                                    mi2->selected_index = idx2;
-                                    mi2->dropdown_open = 0;
-                                    if (mi2->on_click) mi2->on_click(ctx, mi2->id, mi2->on_click_user);
-                                    ui_mark_dirty(ctx);
-                                }
+                            const int32_t idx2 = ui_menu_item_get_selection_from_point(ctx, mi2, ctx->pointer_x, ctx->pointer_y);
+                            if (idx2 >= 0) {
+                                mi2->selected_index = idx2;
+                                mi2->dropdown_open = 0;
+                                if (mi2->on_click) mi2->on_click(ctx, mi2->id, mi2->on_click_user);
+                                ui_mark_dirty(ctx);
                             }
                         }
                     }

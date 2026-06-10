@@ -63,4 +63,17 @@ ui_menu_item_popup_contains(const ui_context_t *ctx, const ui_component_t *c, in
     return popup.w > 0 && popup.h > 0 && ui_point_in_bounds(x, y, popup);
 }
 
+/* Component-owned helper to map a point in the popup to a selected item index, or -1 if not in popup.
+ * Allows core event code to ask the component for its selection logic without duplicating popup math. */
+static inline int32_t
+ui_menu_item_get_selection_from_point(const ui_context_t *ctx, const ui_component_t *c, int32_t x, int32_t y)
+{
+    if (!ui_menu_item_popup_contains(ctx, c, x, y)) return -1;
+    const ui_rect_t popup = ui_menu_item_popup_bounds(ctx, c);
+    const int32_t item_h = 22;
+    const int32_t idx = (y - popup.y) / item_h;
+    if (idx >= 0 && idx < c->item_count) return idx;
+    return -1;
+}
+
 #endif /* WASMOS_LIBUI_MENU_ITEM_H */

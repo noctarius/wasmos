@@ -65,4 +65,16 @@ ui_list_view_handle_pointer_press(ui_context_t *ctx, ui_component_t *lv, int32_t
     }
 }
 
+/* Component-owned scroll drag handler (for active scroll during pointer drag). */
+static inline void
+ui_list_view_handle_scroll_drag(ui_context_t *ctx, ui_component_t *c, int32_t dy)
+{
+    if (c->scroll_max > 0) {
+        c->scroll_y -= dy;
+        if (c->scroll_y < 0) c->scroll_y = 0;
+        if (c->scroll_y > c->scroll_max) c->scroll_y = c->scroll_max;
+        ui_mark_dirty(ctx);
+    }
+}
+
 #endif /* WASMOS_LIBUI_LIST_VIEW_H */

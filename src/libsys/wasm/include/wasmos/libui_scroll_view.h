@@ -57,4 +57,16 @@ ui_layout_scroll_view(ui_context_t *ctx, ui_component_t *p)
     if (p->scroll_y > p->scroll_max) p->scroll_y = p->scroll_max;
 }
 
+/* Component-owned scroll drag handler (for active scroll during pointer drag). */
+static inline void
+ui_scroll_view_handle_scroll_drag(ui_context_t *ctx, ui_component_t *c, int32_t dy)
+{
+    if (c->scroll_max > 0) {
+        c->scroll_y -= dy;
+        if (c->scroll_y < 0) c->scroll_y = 0;
+        if (c->scroll_y > c->scroll_max) c->scroll_y = c->scroll_max;
+        ui_mark_dirty(ctx);
+    }
+}
+
 #endif /* WASMOS_LIBUI_SCROLL_VIEW_H */

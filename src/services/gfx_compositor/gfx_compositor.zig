@@ -22,7 +22,7 @@ const TITLE_GLYPHS: []const u8 = "win 0123456789";
 const GFX_TITLE_TEXT_ENABLED: bool = true;
 /// Enable per-event serial traces for click/pointer/present debugging.
 /// Set to false to suppress serial noise in production.
-const GFX_TRACE: bool = true;
+const GFX_TRACE: bool = false;
 const GFX_WINDOW_MIN_DIM: u32 = 1;
 const GFX_WINDOW_MAX_DIM: u32 = 8192;
 const PAGE_SIZE: u64 = 4096;

@@ -3,12 +3,6 @@
 
 /* libui_list_view.h - List view component specific rendering (including scrolling and selection). */
 
-typedef struct {
-    ui_list_data_t list;
-    int32_t scroll_y;
-    int32_t scroll_max;
-} ui_list_view_data_t;
-
 static inline void
 ui_render_list_view(ui_context_t *ctx, const ui_component_t *c, ui_rect_t draw_bounds, ui_rect_t clip, int32_t offset_y)
 {

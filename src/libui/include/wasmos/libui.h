@@ -125,6 +125,36 @@ typedef struct {
     int32_t selected;
 } ui_list_data_t;
 
+/* Per-type component data structs. ui_component_alloc() allocates the correct
+ * struct eagerly so all code can cast component_data without size mismatches. */
+typedef struct {
+    ui_text_data_t text;
+    int32_t checked;
+} ui_checkbox_data_t;
+
+typedef struct {
+    int32_t scroll_y;
+    int32_t scroll_max;
+} ui_scroll_view_data_t;
+
+typedef struct {
+    ui_list_data_t list;
+    int32_t scroll_y;
+    int32_t scroll_max;
+} ui_list_view_data_t;
+
+typedef struct {
+    ui_text_data_t text;
+    ui_list_data_t list;
+    int32_t dropdown_open;
+} ui_dropdown_data_t;
+
+typedef struct {
+    ui_text_data_t text;
+    ui_list_data_t list;
+    int32_t dropdown_open;
+} ui_menu_item_data_t;
+
 typedef struct ui_context {
     int32_t proc_endpoint;
     int32_t reply_endpoint;
@@ -462,14 +492,10 @@ ui_component_set_text_owned(ui_component_t *c, const char *text)
     const int32_t need = (int32_t)strlen(text) + 1;
     if (need <= 0) return -1;
 
+    /* component_data is always pre-allocated by ui_component_alloc; text is the first
+     * field for all text-bearing types so the cast is always valid at offset 0. */
     ui_text_data_t *td = (ui_text_data_t *)c->component_data;
-    if (!td) {
-        /* allocate a text data block for this component (used by label/button/checkbox/text_input/menu etc.) */
-        td = (ui_text_data_t *)malloc(sizeof(ui_text_data_t));
-        if (!td) return -1;
-        memset(td, 0, sizeof(*td));
-        c->component_data = td;
-    }
+    if (!td) return -1;
 
     if (td->text_cap < need) {
         int32_t new_cap = td->text_cap > 0 ? td->text_cap : UI_TEXT_INITIAL_CAP;
@@ -508,7 +534,7 @@ ui_component_alloc(ui_context_t *ctx, ui_component_type_t type)
 {
     if (!ctx) return -1;
     if (ui_components_reserve(ctx, ctx->component_count + 1) != 0) return -1;
-    ui_component_t *c = &ctx->components[ctx->component_count++];
+    ui_component_t *c = &ctx->components[ctx->component_count];
     memset(c, 0, sizeof(*c));
     c->in_use = 1;
     c->id = ctx->next_component_id++;
@@ -520,8 +546,28 @@ ui_component_alloc(ui_context_t *ctx, ui_component_type_t type)
     c->border_px = 1;
     c->padding_px = 6;
     c->gap_px = 6;
-    /* component-specific fields (text, list, checked, scroll, dropdown_open, selected)
-     * now live in c->component_data and are set up by the component or on first use. */
+
+#define UI_ALLOC_DATA(T) do { \
+    T *_d = (T *)malloc(sizeof(T)); \
+    if (!_d) return -1; \
+    memset(_d, 0, sizeof(T)); \
+    c->component_data = _d; \
+} while (0)
+
+    switch (type) {
+    case UI_COMPONENT_LABEL:
+    case UI_COMPONENT_BUTTON:
+    case UI_COMPONENT_TEXT_INPUT: UI_ALLOC_DATA(ui_text_data_t);     break;
+    case UI_COMPONENT_CHECKBOX:   UI_ALLOC_DATA(ui_checkbox_data_t); break;
+    case UI_COMPONENT_SCROLL_VIEW: UI_ALLOC_DATA(ui_scroll_view_data_t); break;
+    case UI_COMPONENT_LIST_VIEW:  UI_ALLOC_DATA(ui_list_view_data_t);  break;
+    case UI_COMPONENT_DROPDOWN:   UI_ALLOC_DATA(ui_dropdown_data_t);   break;
+    case UI_COMPONENT_MENU_ITEM:  UI_ALLOC_DATA(ui_menu_item_data_t);  break;
+    default: break; /* PANEL, MENU_BAR need no per-instance data */
+    }
+#undef UI_ALLOC_DATA
+
+    ctx->component_count++;
     return c->id;
 }
 
@@ -583,37 +629,32 @@ static inline void
 ui_component_set_checked(ui_context_t *ctx, int32_t id, int32_t checked)
 {
     ui_component_t *c = ui_component_by_id(ctx, id);
-    if (!c || c->type != UI_COMPONENT_CHECKBOX) return;
-    /* For checkbox we use a tiny data block (just the checked flag for now). */
-    int32_t *pchecked = (int32_t *)c->component_data;
-    if (!pchecked) {
-        pchecked = (int32_t *)malloc(sizeof(int32_t));
-        if (!pchecked) return;
-        *pchecked = 0;
-        c->component_data = pchecked;
-    }
-    *pchecked = checked ? 1 : 0;
+    if (!c || c->type != UI_COMPONENT_CHECKBOX || !c->component_data) return;
+    ((ui_checkbox_data_t *)c->component_data)->checked = checked ? 1 : 0;
 }
 
 static inline int32_t
 ui_component_get_checked(const ui_component_t *c)
 {
     if (!c || c->type != UI_COMPONENT_CHECKBOX || !c->component_data) return 0;
-    return *(int32_t *)c->component_data;
+    return ((ui_checkbox_data_t *)c->component_data)->checked;
 }
 
 static inline int32_t
 ui_component_list_append(ui_context_t *ctx, int32_t id, const char *item)
 {
     ui_component_t *c = ui_component_by_id(ctx, id);
-    if (!c || (c->type != UI_COMPONENT_LIST_VIEW && c->type != UI_COMPONENT_DROPDOWN) || !item) return -1;
+    if (!c || !item || !c->component_data) return -1;
 
-    ui_list_data_t *ld = (ui_list_data_t *)c->component_data;
-    if (!ld) {
-        ld = (ui_list_data_t *)malloc(sizeof(ui_list_data_t));
-        if (!ld) return -1;
-        memset(ld, 0, sizeof(*ld));
-        c->component_data = ld;
+    ui_list_data_t *ld;
+    if (c->type == UI_COMPONENT_LIST_VIEW) {
+        ld = &((ui_list_view_data_t *)c->component_data)->list;
+    } else if (c->type == UI_COMPONENT_DROPDOWN) {
+        ld = &((ui_dropdown_data_t *)c->component_data)->list;
+    } else if (c->type == UI_COMPONENT_MENU_ITEM) {
+        ld = &((ui_menu_item_data_t *)c->component_data)->list;
+    } else {
+        return -1;
     }
 
     if (ld->count >= ld->capacity) {

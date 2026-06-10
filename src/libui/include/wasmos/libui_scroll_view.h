@@ -3,11 +3,6 @@
 
 /* libui_scroll_view.h - Scroll view component specific rendering (viewport, children with offset, scrollbar). */
 
-typedef struct {
-    int32_t scroll_y;
-    int32_t scroll_max;
-} ui_scroll_view_data_t;
-
 static inline void
 ui_render_scroll_view(ui_context_t *ctx, const ui_component_t *c, ui_rect_t draw_bounds, ui_rect_t clip, int32_t offset_y)
 {
@@ -42,13 +37,7 @@ static inline void
 ui_layout_scroll_view(ui_context_t *ctx, ui_component_t *p)
 {
     ui_scroll_view_data_t *d = (ui_scroll_view_data_t *)p->component_data;
-    if (!d) {
-        d = (ui_scroll_view_data_t *)malloc(sizeof(ui_scroll_view_data_t));
-        if (d) {
-            memset(d, 0, sizeof(*d));
-            p->component_data = d;
-        } else return;
-    }
+    if (!d) return;
 
     int32_t y_cur = p->bounds.y + p->padding_px;
     int32_t content_h = 0;

@@ -3,8 +3,6 @@
 
 /* libui_text_input.h - Text input component specific rendering. */
 
-typedef ui_text_data_t ui_text_input_data_t;
-
 static inline void
 ui_render_text_input(ui_context_t *ctx, const ui_component_t *c, ui_rect_t draw_bounds, ui_rect_t clip, int32_t offset_y)
 {

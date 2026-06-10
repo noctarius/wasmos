@@ -10,12 +10,39 @@
 #define MENU_REFRESH_TICKS 200
 #define CLOCK_REFRESH_TICKS 50
 #define MAX_APP_WINDOWS 32
+#define BAR_H 28
+#define POPUP_ITEM_H 22
 
 static ui_context_t g_ctx;
 static int32_t g_apps_mi_id = -1;
 static int32_t g_win_ids[MAX_APP_WINDOWS];
 static int32_t g_win_count = 0;
 static int32_t g_rtc_endpoint = -1;
+static int32_t g_window_h = BAR_H;
+
+static int32_t needed_window_h(void)
+{
+    for (int32_t i = 0; i < g_ctx.component_count; ++i) {
+        const ui_component_t *c = &g_ctx.components[i];
+        if (!c->in_use || c->type != UI_COMPONENT_MENU_ITEM) continue;
+        const ui_menu_item_data_t *d = (const ui_menu_item_data_t *)c->component_data;
+        if (d && d->dropdown_open && d->list.count > 0)
+            return BAR_H + d->list.count * POPUP_ITEM_H;
+    }
+    return BAR_H;
+}
+
+static void resize_to(int32_t new_h)
+{
+    if (new_h == g_window_h) return;
+    int32_t status = 0;
+    if (ui_send_gfx(g_ctx.gfx_endpoint, g_ctx.reply_endpoint, g_ctx.req_id++,
+                    GFX_IPC_RESIZE_WINDOW, g_ctx.window_id, g_ctx.width, new_h, 0,
+                    &status, 0, 0, 0) != 0 || status != GFX_STATUS_OK) return;
+    if (ui_realloc_buffer(&g_ctx, g_ctx.width, new_h) != 0) return;
+    g_window_h = new_h;
+    ui_mark_dirty(&g_ctx);
+}
 
 static void pad2(char *out, int32_t v)
 {
@@ -196,6 +223,19 @@ int main(int argc, char **argv)
                             0, 0, 0, 0, &msg) == 0) {
             ui_loop_handle_ipc(&g_ctx, &msg);
         }
+
+        /* GFX_EVENT_RESIZE (from our own resize_to call) would set root->bounds.h
+         * to the expanded height. Keep the bar layout always at BAR_H so menu items
+         * stay 28 px tall; the popup overflow area is rendered below by ui_render_menu_item. */
+        {
+            ui_component_t *root = ui_component_by_id(&g_ctx, g_ctx.root_id);
+            if (root && root->bounds.h != BAR_H) {
+                root->bounds.h = BAR_H;
+                ui_mark_dirty(&g_ctx);
+            }
+        }
+
+        resize_to(needed_window_h());
 
         ui_loop_drain(&g_ctx);
 

@@ -698,6 +698,10 @@ ui_realloc_buffer(ui_context_t *ctx, int32_t new_w, int32_t new_h)
 {
     int32_t status = 0, new_buffer_id = 0, new_shmem_id = 0, new_stride = 0;
     if (!ctx || new_w <= 0 || new_h <= 0) return -1;
+    if (ctx->width == new_w && ctx->height == new_h && ctx->mapped_base) return 0;
+    const int32_t prev_ptr_x = ctx->pointer_x;
+    const int32_t prev_ptr_y = ctx->pointer_y;
+    const int32_t first_alloc = (ctx->mapped_base == NULL);
     if (ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_ALLOC_SHARED_BUFFER,
                     ctx->window_id, new_w, new_h, 0,
                     &status, &new_buffer_id, &new_shmem_id, &new_stride) != 0 || status != GFX_STATUS_OK) {
@@ -721,8 +725,8 @@ ui_realloc_buffer(ui_context_t *ctx, int32_t new_w, int32_t new_h)
     ctx->width = new_w;
     ctx->height = new_h;
     ctx->mapped_base = (uint8_t *)(uintptr_t)(uint32_t)mapped_ptr;
-    ctx->pointer_x = ctx->width / 2;
-    ctx->pointer_y = ctx->height / 2;
+    ctx->pointer_x = first_alloc ? ctx->width / 2 : prev_ptr_x;
+    ctx->pointer_y = first_alloc ? ctx->height / 2 : prev_ptr_y;
     return 0;
 }
 

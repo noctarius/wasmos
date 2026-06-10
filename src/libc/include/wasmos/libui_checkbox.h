@@ -31,5 +31,12 @@ ui_checkbox_toggle(ui_context_t *ctx, ui_component_t *c)
     ui_mark_dirty(ctx);
 }
 
+static inline void
+ui_checkbox_handle_pointer_release(ui_context_t *ctx, ui_component_t *c)
+{
+    ui_checkbox_toggle(ctx, c);
+    if (c->on_click) c->on_click(ctx, c->id, c->on_click_user);
+}
+
 #endif /* WASMOS_LIBUI_CHECKBOX_H */
 

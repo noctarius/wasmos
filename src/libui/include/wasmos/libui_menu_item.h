@@ -108,4 +108,43 @@ ui_menu_item_pick_and_invoke(ui_context_t *ctx, ui_component_t *mi, int32_t idx)
     }
 }
 
+/* Component-owned handling for pointer release anywhere in the menu system.
+ * Core calls this on every pointer button release so that menu items own:
+ * - detecting a click on a menu bar item (toggle its dropdown)
+ * - detecting a click inside an open popup (pick the item)
+ * - closing sibling menus before opening another
+ * Core still owns the generic "clear pressed flags / active scroll" after any release,
+ * and the separate dropdown outside-click close.
+ */
+static inline void
+ui_menu_item_handle_pointer_release(ui_context_t *ctx, int32_t x, int32_t y)
+{
+    int32_t mi_id2 = -1;
+    for (int32_t ci2 = 0; ci2 < ctx->component_count; ++ci2) {
+        ui_component_t *mc = &ctx->components[ci2];
+        if (!mc->in_use || mc->type != UI_COMPONENT_MENU_ITEM) continue;
+        if (ui_point_in_bounds(x, y, mc->bounds)) { mi_id2 = mc->id; break; }
+        if (ui_menu_item_popup_contains(ctx, mc, x, y)) { mi_id2 = mc->id; break; }
+    }
+    if (mi_id2 > 0) {
+        ui_component_t *mi2 = ui_component_by_id(ctx, mi_id2);
+        if (mi2) {
+            if (ui_point_in_bounds(x, y, mi2->bounds)) {
+                const int32_t will_open = !mi2->dropdown_open;
+                for (int32_t ci3 = 0; ci3 < ctx->component_count; ++ci3) {
+                    if (ctx->components[ci3].in_use && ctx->components[ci3].type == UI_COMPONENT_MENU_ITEM)
+                        ui_menu_item_close_dropdown(ctx, &ctx->components[ci3]);
+                }
+                if (will_open) ui_menu_item_open_dropdown(ctx, mi2);
+                ui_mark_dirty(ctx);
+            } else if (mi2->dropdown_open) {
+                const int32_t idx2 = ui_menu_item_get_selection_from_point(ctx, mi2, x, y);
+                if (idx2 >= 0) {
+                    ui_menu_item_pick_and_invoke(ctx, mi2, idx2);
+                }
+            }
+        }
+    }
+}
+
 #endif /* WASMOS_LIBUI_MENU_ITEM_H */

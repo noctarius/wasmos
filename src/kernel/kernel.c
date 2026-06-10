@@ -131,6 +131,9 @@ idle_entry(process_t *process, void *arg)
 {
     for (;;) {
         __asm__ volatile("hlt");
+        /* Yield after each hlt so the scheduler can run on this CPU again
+         * and pick up any threads that became ready during the halt. */
+        process_yield(PROCESS_RUN_YIELDED);
     }
 }
 
@@ -294,6 +297,17 @@ kmain(boot_info_t *boot_info)
     klog_write("[kernel] interrupts on\n");
     cpu_enable_interrupts();
     smp_cpus_up();
+
+#if WASMOS_SMP
+    for (uint32_t _i = 1u; _i < g_cpu_count; _i++) {
+        if (!g_cpus[_i].started) {
+            continue;
+        }
+        if (process_spawn_idle_ap(_i) != 0) {
+            serial_printf("[kernel] idle-ap %u spawn failed\n", _i);
+        }
+    }
+#endif
 
     klog_write("[kernel] scheduler loop\n");
     kernel_boot_run_scheduler_loop();

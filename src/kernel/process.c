@@ -1188,7 +1188,9 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
         if (main_thread) {
             main_thread->ctx = slot->ctx;
             sched_thread_init(main_thread, SCHED_PRIO_IDLE);
+            main_thread->cpu_affinity = 1u << cpu_local()->cpu_id;
             cpu_sched()->idle = main_thread;
+            cpu_local()->idle_thread = main_thread;
         }
     }
     spinlock_init(&slot->wasm3_lock);
@@ -1196,6 +1198,44 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
     sched_event_init(&slot->wait_event, SCHED_EVENT_TYPE_PROCESS);
     g_idle_process = slot;
     *out_pid = pid;
+    return 0;
+}
+
+int
+process_spawn_idle_ap(uint32_t cpu_id)
+{
+    if (!g_idle_process || cpu_id == 0 || cpu_id >= WASMOS_MAX_CPUS) {
+        return -1;
+    }
+    uint32_t tid = 0;
+    if (thread_spawn_in_owner(g_idle_process->pid, "idle-ap",
+                              THREAD_STATE_READY, THREAD_BLOCK_NONE,
+                              &tid) != 0) {
+        return -1;
+    }
+    thread_t *thread = thread_get(tid);
+    if (!thread) {
+        return -1;
+    }
+    uint32_t stack_pages = (PROCESS_STACK_SIZE + PAGE_SIZE - 1u) / PAGE_SIZE;
+    if (process_alloc_thread_stack(thread, stack_pages) != 0) {
+        thread_reap(tid);
+        return -1;
+    }
+    thread->ctx.rsp        = thread->kstack_top - (STACK_REDZONE_BYTES + 8u);
+    thread->ctx.user_rsp   = thread->ctx.rsp;
+    thread->ctx.rip        = (uint64_t)process_kernel_alias_addr((uintptr_t)process_trampoline);
+    thread->ctx.rflags     = 0x200u;
+    thread->ctx.cs         = KERNEL_CS_SELECTOR;
+    thread->ctx.ss         = KERNEL_DS_SELECTOR;
+    thread->ctx.root_table = paging_get_root_table();
+    sched_thread_init(thread, SCHED_PRIO_IDLE);
+    thread->cpu_affinity = 1u << cpu_id;
+    g_idle_process->thread_count++;
+    g_idle_process->live_thread_count++;
+    /* AP idle threads are never enqueued; dispatched only via the per-CPU
+     * fallback path in cpu_sched_pick_next. */
+    g_cpus[cpu_id].idle_thread = thread;
     return 0;
 }
 
@@ -1844,7 +1884,9 @@ static int process_schedule_once_impl(void) {
             __atomic_store_n(&thread->blocking_transition, 0, __ATOMIC_RELEASE);
         }
         thread_set_state(thread->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
-        if (thread->sched_node.next == &thread->sched_node) {
+        /* Idle threads live only in the per-CPU fallback path; never enqueue
+         * them into the global ready queue so they cannot migrate to a wrong CPU. */
+        if (!proc->is_idle && thread->sched_node.next == &thread->sched_node) {
             sched_enqueue_thread(thread);
         }
     }

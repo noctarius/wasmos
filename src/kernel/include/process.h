@@ -182,6 +182,7 @@ int process_spawn_as_parked(uint32_t parent_pid, const char *name, process_entry
 int process_spawn_as_ready_gated_parked(uint32_t parent_pid, const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
 int process_unpark_pid(uint32_t pid);
 int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint32_t *out_pid);
+int process_spawn_idle_ap(uint32_t cpu_id);
 int process_thread_spawn_internal(uint32_t owner_pid, const char *name, uint32_t *out_tid);
 int process_thread_spawn_worker_internal(uint32_t owner_pid,
                                          const char *name,

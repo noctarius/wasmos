@@ -993,10 +993,13 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
             const int32_t hit_id = ui_find_clickable_at(ctx, ctx->root_id, ctx->pointer_x, ctx->pointer_y);
             ui_component_t *hit = ui_component_by_id(ctx, hit_id);
             if (hit && hit->pressed && hit->on_click) {
-                if (hit->type == UI_COMPONENT_CHECKBOX) {
-                    ui_checkbox_toggle(ctx, hit);
+                if (hit->type == UI_COMPONENT_BUTTON) {
+                    ui_button_handle_pointer_release(ctx, hit);
+                } else if (hit->type == UI_COMPONENT_CHECKBOX) {
+                    ui_checkbox_handle_pointer_release(ctx, hit);
+                } else {
+                    hit->on_click(ctx, hit->id, hit->on_click_user);
                 }
-                hit->on_click(ctx, hit->id, hit->on_click_user);
             }
             if (!hit) {
                 for (int32_t i = 0; i < ctx->component_count; ++i) {

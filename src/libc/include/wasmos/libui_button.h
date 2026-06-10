@@ -20,4 +20,10 @@ ui_render_button(ui_context_t *ctx, const ui_component_t *c, ui_rect_t draw_boun
                       clip);
 }
 
+static inline void
+ui_button_handle_pointer_release(ui_context_t *ctx, ui_component_t *c)
+{
+    if (c->on_click) c->on_click(ctx, c->id, c->on_click_user);
+}
+
 #endif /* WASMOS_LIBUI_BUTTON_H */

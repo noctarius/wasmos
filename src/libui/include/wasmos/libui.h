@@ -155,6 +155,10 @@ typedef struct {
     int32_t dropdown_open;
 } ui_menu_item_data_t;
 
+typedef struct {
+    char clock_text[24]; /* "YYYY-MM-DD HH:MM:SS\0" or empty */
+} ui_menu_bar_data_t;
+
 typedef struct ui_context {
     int32_t proc_endpoint;
     int32_t reply_endpoint;
@@ -563,7 +567,8 @@ ui_component_alloc(ui_context_t *ctx, ui_component_type_t type)
     case UI_COMPONENT_LIST_VIEW:  UI_ALLOC_DATA(ui_list_view_data_t);  break;
     case UI_COMPONENT_DROPDOWN:   UI_ALLOC_DATA(ui_dropdown_data_t);   break;
     case UI_COMPONENT_MENU_ITEM:  UI_ALLOC_DATA(ui_menu_item_data_t);  break;
-    default: break; /* PANEL, MENU_BAR need no per-instance data */
+    case UI_COMPONENT_MENU_BAR:   UI_ALLOC_DATA(ui_menu_bar_data_t);   break;
+    default: break; /* PANEL needs no per-instance data */
     }
 #undef UI_ALLOC_DATA
 

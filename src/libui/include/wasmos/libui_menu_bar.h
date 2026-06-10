@@ -3,12 +3,6 @@
 
 /* libui_menu_bar.h - Menu bar component specific rendering. */
 
-typedef struct {
-    /* menu bar itself is mostly a horizontal container for menu_items;
-     * no extra per-instance data needed beyond the common tree for now. */
-    int32_t dummy;
-} ui_menu_bar_data_t;
-
 static inline void
 ui_render_menu_bar(ui_context_t *ctx, const ui_component_t *c, ui_rect_t draw_bounds, ui_rect_t clip, int32_t offset_y)
 {
@@ -21,6 +15,28 @@ ui_render_menu_bar(ui_context_t *ctx, const ui_component_t *c, ui_rect_t draw_bo
         if (!mi_child) break;
         mi_child_id = mi_child->next_sibling_id;
     }
+
+    const ui_menu_bar_data_t *d = (const ui_menu_bar_data_t *)c->component_data;
+    if (d && d->clock_text[0]) {
+        const int32_t tw = ui_measure_text_width(ctx, d->clock_text);
+        const int32_t tx = draw_bounds.x + draw_bounds.w - tw - 10;
+        const int32_t ty = draw_bounds.y + (draw_bounds.h - ctx->font_px) / 2;
+        if (tx > 0) {
+            ui_draw_text_clip(ctx, tx, ty, d->clock_text, 0xFF99B8D0u, clip);
+        }
+    }
+}
+
+static inline void
+ui_menu_bar_set_clock(ui_context_t *ctx, int32_t id, const char *text)
+{
+    ui_component_t *c = ui_component_by_id(ctx, id);
+    if (!c || c->type != UI_COMPONENT_MENU_BAR || !c->component_data) return;
+    ui_menu_bar_data_t *d = (ui_menu_bar_data_t *)c->component_data;
+    int32_t i = 0;
+    while (i < 23 && text && text[i]) { d->clock_text[i] = text[i]; i++; }
+    d->clock_text[i] = '\0';
+    ui_mark_dirty(ctx);
 }
 
 static inline void

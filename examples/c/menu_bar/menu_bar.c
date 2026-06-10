@@ -8,12 +8,53 @@
 #include "wasmos/startup.h"
 
 #define MENU_REFRESH_TICKS 200
+#define CLOCK_REFRESH_TICKS 50
 #define MAX_APP_WINDOWS 32
 
 static ui_context_t g_ctx;
 static int32_t g_apps_mi_id = -1;
 static int32_t g_win_ids[MAX_APP_WINDOWS];
 static int32_t g_win_count = 0;
+static int32_t g_rtc_endpoint = -1;
+
+static void pad2(char *out, int32_t v)
+{
+    out[0] = (char)('0' + (v / 10) % 10);
+    out[1] = (char)('0' + v % 10);
+}
+
+static void format_clock(int32_t year, int32_t month, int32_t day,
+                          int32_t hour, int32_t min, int32_t sec, char *buf)
+{
+    /* "YYYY-MM-DD HH:MM:SS" = 19 chars */
+    buf[0] = (char)('0' + (year / 1000) % 10);
+    buf[1] = (char)('0' + (year / 100) % 10);
+    buf[2] = (char)('0' + (year / 10) % 10);
+    buf[3] = (char)('0' + year % 10);
+    buf[4] = '-'; pad2(buf + 5, month);
+    buf[7] = '-'; pad2(buf + 8, day);
+    buf[10] = ' '; pad2(buf + 11, hour);
+    buf[13] = ':'; pad2(buf + 14, min);
+    buf[16] = ':'; pad2(buf + 17, sec);
+    buf[19] = '\0';
+}
+
+static void update_clock(void)
+{
+    if (g_rtc_endpoint < 0) return;
+    wasmos_ipc_message_t reply;
+    if (wasmos_ipc_call(g_rtc_endpoint, g_ctx.reply_endpoint,
+                        RTC_IPC_READ_REQ, g_ctx.req_id++,
+                        0, 0, 0, 0, &reply) != 0) return;
+    if (reply.type != RTC_IPC_READ_RESP) return;
+    /* arg0: [7:0]=sec [15:8]=min [23:16]=hour [31:24]=day
+       arg1: [7:0]=month [23:8]=year */
+    const int32_t a0 = reply.arg0, a1 = reply.arg1;
+    char buf[24];
+    format_clock((a1 >> 8) & 0xFFFF, a1 & 0xFF, (a0 >> 24) & 0xFF,
+                 (a0 >> 16) & 0xFF, (a0 >> 8) & 0xFF, a0 & 0xFF, buf);
+    ui_menu_bar_set_clock(&g_ctx, g_ctx.root_id, buf);
+}
 
 static void int_to_str(int32_t v, char *buf, int32_t cap)
 {
@@ -88,6 +129,12 @@ int main(int argc, char **argv)
 
     if (ui_menu_bar_init(&g_ctx, proc_ep, reply_ep) != 0) return 1;
 
+    for (int32_t spins = 0; spins < 512; ++spins) {
+        g_rtc_endpoint = wasmos_svc_lookup(proc_ep, reply_ep, "rtc", g_ctx.req_id++);
+        if (g_rtc_endpoint >= 0) break;
+        (void)wasmos_sched_yield();
+    }
+
     /* "WasmOS" branding — left-anchored, no dropdown */
     const int32_t brand_id = ui_component_create_menu_item(&g_ctx);
     {
@@ -119,9 +166,11 @@ int main(int argc, char **argv)
     }
 
     refresh_app_list();
+    update_clock();
 
     wasmos_ipc_message_t msg;
     int32_t refresh_ctr = 0;
+    int32_t clock_ctr = 0;
 
     while (!g_ctx.close_requested) {
         if (wasmos_ipc_call(g_ctx.gfx_endpoint, g_ctx.reply_endpoint,
@@ -131,6 +180,11 @@ int main(int argc, char **argv)
         }
 
         ui_loop_drain(&g_ctx);
+
+        if (++clock_ctr >= CLOCK_REFRESH_TICKS) {
+            clock_ctr = 0;
+            update_clock();
+        }
 
         if (++refresh_ctr >= MENU_REFRESH_TICKS) {
             refresh_ctr = 0;

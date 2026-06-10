@@ -25,6 +25,8 @@ const GFX_TITLE_TEXT_ENABLED: bool = true;
 const GFX_TRACE: bool = false;
 const GFX_WINDOW_MIN_DIM: u32 = 1;
 const GFX_WINDOW_MAX_DIM: u32 = 8192;
+const GFX_WINDOW_FLAG_SYSTEM: u32 = 1 << 0;
+const GFX_WINDOW_Z_SYSTEM: u32 = 0xFFFF_FFFE;
 const PAGE_SIZE: u64 = 4096;
 const CURSOR_W: i32 = 9;
 const CURSOR_H: i32 = 14;
@@ -120,6 +122,7 @@ const window_slot_t = struct {
     restore_y: i32 = 0,
     restore_w: u32 = 0,
     restore_h: u32 = 0,
+    flags: u32 = 0,
 };
 
 const buffer_state_t = enum(u8) {
@@ -1025,28 +1028,33 @@ fn handle_mouse_drag(dx: i32, dy: i32, left_down_now: bool) void {
 fn handle_mouse_press_transition(left_down_now: bool, left_down_prev: bool) void {
     if (!left_down_now or left_down_prev) return;
     if (window_topmost_at(g_pointer_x, g_pointer_y)) |idx| {
-        const hit_close = point_in_rect(g_pointer_x, g_pointer_y, window_close_hit_rect(g_windows[idx]));
-        const hit_max = point_in_rect(g_pointer_x, g_pointer_y, window_max_hit_rect(g_windows[idx]));
-        const hit_resize = point_in_rect(g_pointer_x, g_pointer_y, window_resize_rect(g_windows[idx]));
-        const hit_title = point_in_rect(g_pointer_x, g_pointer_y, window_title_rect(g_windows[idx]));
         raise_window(idx);
         focus_window(idx);
-        if (hit_close) {
-            const win = g_windows[idx];
+        if ((g_windows[idx].flags & GFX_WINDOW_FLAG_SYSTEM) != 0) {
             g_drag_window_id = 0;
             g_resize_window_id = 0;
-            event_drop_for(win.owner_endpoint);
-            event_push(win.owner_endpoint, c.GFX_EVENT_CLOSE_REQUEST, win.window_id, 0, 0);
-        } else if (hit_max) {
-            g_drag_window_id = 0;
-            g_resize_window_id = 0;
-            _ = try_toggle_maximize(idx);
-        } else if (hit_resize) {
-            g_resize_window_id = g_windows[idx].window_id;
-            g_drag_window_id = 0;
-        } else if (hit_title) {
-            g_drag_window_id = g_windows[idx].window_id;
-            g_resize_window_id = 0;
+        } else {
+            const hit_close = point_in_rect(g_pointer_x, g_pointer_y, window_close_hit_rect(g_windows[idx]));
+            const hit_max = point_in_rect(g_pointer_x, g_pointer_y, window_max_hit_rect(g_windows[idx]));
+            const hit_resize = point_in_rect(g_pointer_x, g_pointer_y, window_resize_rect(g_windows[idx]));
+            const hit_title = point_in_rect(g_pointer_x, g_pointer_y, window_title_rect(g_windows[idx]));
+            if (hit_close) {
+                const win = g_windows[idx];
+                g_drag_window_id = 0;
+                g_resize_window_id = 0;
+                event_drop_for(win.owner_endpoint);
+                event_push(win.owner_endpoint, c.GFX_EVENT_CLOSE_REQUEST, win.window_id, 0, 0);
+            } else if (hit_max) {
+                g_drag_window_id = 0;
+                g_resize_window_id = 0;
+                _ = try_toggle_maximize(idx);
+            } else if (hit_resize) {
+                g_resize_window_id = g_windows[idx].window_id;
+                g_drag_window_id = 0;
+            } else if (hit_title) {
+                g_drag_window_id = g_windows[idx].window_id;
+                g_resize_window_id = 0;
+            }
         }
         request_repaint_full();
     } else {
@@ -1465,6 +1473,9 @@ fn window_resize_rect(win: window_slot_t) c.gfx_rect_t {
 }
 
 fn window_content_rect(win: window_slot_t) c.gfx_rect_t {
+    if ((win.flags & GFX_WINDOW_FLAG_SYSTEM) != 0) {
+        return .{ .x = win.x, .y = win.y, .w = @intCast(win.width), .h = @intCast(win.height) };
+    }
     const ww: i32 = @intCast(win.width);
     const wh: i32 = @intCast(win.height);
     const cw = ww - (CHROME_BORDER * 2);
@@ -2008,7 +2019,9 @@ fn compose_region(region: c.gfx_rect_t) i32 {
         if (!rendered) {
             draw_window_placeholder(win, clip);
         }
-        draw_window_chrome(win, clip, g_focused_window_id == win.window_id);
+        if ((win.flags & GFX_WINDOW_FLAG_SYSTEM) == 0) {
+            draw_window_chrome(win, clip, g_focused_window_id == win.window_id);
+        }
     }
 
     if (g_overlay_locked) {
@@ -2398,6 +2411,73 @@ fn handle_set_display_mode(msg: *const c.nd_ipc_message_t) void {
     reply_with_status(msg, c.GFX_STATUS_OK, g_fb_info.framebuffer_width, g_fb_info.framebuffer_height, g_fb_info.framebuffer_stride);
 }
 
+fn handle_list_windows(msg: *const c.nd_ipc_message_t) void {
+    const idx_req: usize = @intCast(if (msg.arg0 >= 0) @as(u32, @intCast(msg.arg0)) else 0);
+    var count: usize = 0;
+    var k: usize = 0;
+    while (k < g_windows.len) : (k += 1) {
+        if (!g_windows[k].in_use) continue;
+        if (count == idx_req) {
+            var total: usize = count + 1;
+            var m: usize = k + 1;
+            while (m < g_windows.len) : (m += 1) {
+                if (g_windows[m].in_use) total += 1;
+            }
+            reply_with_status(msg, c.GFX_STATUS_OK,
+                @intCast(g_windows[k].window_id),
+                @intCast(g_windows[k].owner_endpoint),
+                @intCast(total));
+            return;
+        }
+        count += 1;
+    }
+    reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, @intCast(count));
+}
+
+fn handle_focus_window(msg: *const c.nd_ipc_message_t) void {
+    const window_id: u32 = @intCast(if (msg.arg0 > 0) @as(u32, @intCast(msg.arg0)) else 0);
+    const slot_idx = window_find_by_id(window_id) orelse {
+        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        return;
+    };
+    raise_window(slot_idx);
+    focus_window(slot_idx);
+    request_repaint_full();
+    reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
+}
+
+fn handle_set_window_flags(msg: *const c.nd_ipc_message_t) void {
+    const window_id: u32 = @intCast(if (msg.arg0 > 0) @as(u32, @intCast(msg.arg0)) else 0);
+    const flags: u32 = @bitCast(msg.arg1);
+    const slot_idx = window_find_by_id(window_id) orelse {
+        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        return;
+    };
+    if (g_windows[slot_idx].owner_endpoint != msg.source) {
+        reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
+        return;
+    }
+    g_windows[slot_idx].flags = flags;
+    if ((flags & GFX_WINDOW_FLAG_SYSTEM) != 0) {
+        g_windows[slot_idx].z = GFX_WINDOW_Z_SYSTEM;
+        g_windows[slot_idx].x = 0;
+        g_windows[slot_idx].y = 0;
+    }
+    request_repaint_full();
+    reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
+}
+
+fn handle_get_display_info(msg: *const c.nd_ipc_message_t) void {
+    if (!g_fb_info_valid) {
+        reply_with_status(msg, c.GFX_STATUS_IO, 0, 0, 0);
+        return;
+    }
+    reply_with_status(msg, c.GFX_STATUS_OK,
+        @intCast(g_fb_info.framebuffer_width),
+        @intCast(g_fb_info.framebuffer_height),
+        0);
+}
+
 fn handle_ipc_dispatch(msg: *const c.nd_ipc_message_t) void {
     var opcode: u16 = @intCast(msg.type & 0xFFFF);
     if (gfx_header_valid(msg.arg2, msg.arg3)) {
@@ -2435,6 +2515,10 @@ fn handle_ipc_dispatch(msg: *const c.nd_ipc_message_t) void {
         c.GFX_IPC_PRESENT_WINDOW => handle_present_window(msg),
         c.GFX_IPC_POLL_EVENT => handle_poll_event(msg),
         c.GFX_IPC_SET_DISPLAY_MODE => handle_set_display_mode(msg),
+        c.GFX_IPC_LIST_WINDOWS => handle_list_windows(msg),
+        c.GFX_IPC_FOCUS_WINDOW => handle_focus_window(msg),
+        c.GFX_IPC_SET_WINDOW_FLAGS => handle_set_window_flags(msg),
+        c.GFX_IPC_GET_DISPLAY_INFO => handle_get_display_info(msg),
         else => reply_unsupported(msg),
     }
 }
@@ -2459,6 +2543,10 @@ fn register_ipc_handlers() i32 {
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_PRESENT_WINDOW, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_POLL_EVENT, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_SET_DISPLAY_MODE, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_LIST_WINDOWS, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_FOCUS_WINDOW, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_SET_WINDOW_FLAGS, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_GET_DISPLAY_INFO, cb, null) != 0) return -1;
     return 0;
 }
 

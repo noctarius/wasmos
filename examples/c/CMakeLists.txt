@@ -168,11 +168,26 @@ wasmos_add_wasm_c_app_target(shmem_target
   PACK_COMMENT  "Packing wasm shmtgt as WASMOS-APP"
 )
 
+wasmos_add_wasm_c_app_target(menu_bar
+  SOURCE         ${WASM_MENU_BAR_SRC}
+  OUTPUT_WASM    ${WASM_MENU_BAR_WASM}
+  OUTPUT_APP     ${WASM_MENU_BAR_APP}
+  MANIFEST       ${CMAKE_CURRENT_SOURCE_DIR}/menu_bar/linker.metadata
+  EXPORT         wasmos_main
+  NO_BUILTIN
+  STARTUP_SHIM
+  INITIAL_MEMORY 4194304
+  MAX_MEMORY     4194304
+  BUILD_COMMENT  "Building wasm menu-bar module"
+  PACK_COMMENT   "Packing wasm menu-bar as WASMOS-APP"
+)
+
 add_custom_target(c_examples)
 add_dependencies(c_examples
   hello_c chardev_client chardev_preempt init_smoke
   fs_open_smoke fs_write_smoke native_call_min native_call_smoke
   gfx_smoke irq_route_deny irq_route_allow shmem_owner shmem_target
+  menu_bar
 )
 
 set_property(GLOBAL APPEND PROPERTY WASMOS_KERNEL_BLOBS ${WASM_CHARDEV_CLIENT_BLOB})

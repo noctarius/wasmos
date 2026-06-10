@@ -39,7 +39,9 @@ typedef enum {
     UI_COMPONENT_TEXT_INPUT = 5,
     UI_COMPONENT_SCROLL_VIEW = 6,
     UI_COMPONENT_LIST_VIEW = 7,
-    UI_COMPONENT_DROPDOWN = 8
+    UI_COMPONENT_DROPDOWN = 8,
+    UI_COMPONENT_MENU_BAR = 9,
+    UI_COMPONENT_MENU_ITEM = 10
 } ui_component_type_t;
 
 typedef struct {
@@ -518,6 +520,8 @@ static inline int32_t ui_component_create_text_input(ui_context_t *ctx) { return
 static inline int32_t ui_component_create_scroll_view(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_SCROLL_VIEW); }
 static inline int32_t ui_component_create_list_view(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_LIST_VIEW); }
 static inline int32_t ui_component_create_dropdown(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_DROPDOWN); }
+static inline int32_t ui_component_create_menu_bar(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_MENU_BAR); }
+static inline int32_t ui_component_create_menu_item(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_MENU_ITEM); }
 
 static inline void
 ui_component_set_text(ui_context_t *ctx, int32_t id, const char *text)
@@ -684,6 +688,65 @@ fail:
     return -1;
 }
 
+static inline int32_t
+ui_menu_bar_init(ui_context_t *ctx, int32_t proc_endpoint, int32_t reply_endpoint)
+{
+    int32_t status = 0, a1 = 0, a2 = 0, a3 = 0;
+    if (!ctx || proc_endpoint <= 0 || reply_endpoint < 0) return -1;
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->proc_endpoint = proc_endpoint;
+    ctx->reply_endpoint = reply_endpoint;
+    ctx->req_id = UI_REQ_BASE;
+    ctx->font_px = 13;
+    ctx->next_component_id = 1;
+    if (ui_components_reserve(ctx, UI_COMPONENTS_INITIAL_CAP) != 0) goto mb_fail;
+
+    for (int32_t spins = 0; spins < 2048; ++spins) {
+        ctx->gfx_endpoint = wasmos_svc_lookup(proc_endpoint, reply_endpoint, "gfx", ctx->req_id++);
+        if (ctx->gfx_endpoint >= 0) break;
+        (void)wasmos_sched_yield();
+    }
+    if (ctx->gfx_endpoint < 0) goto mb_fail;
+    if (ui_init_font(ctx) != 0) goto mb_fail;
+
+    if (ui_send_gfx(ctx->gfx_endpoint, reply_endpoint, ctx->req_id++, GFX_IPC_GET_DISPLAY_INFO,
+                    0, 0, 0, 0, &status, &a1, &a2, &a3) != 0 || status != GFX_STATUS_OK || a1 <= 0) goto mb_fail;
+    {
+        const int32_t screen_w = a1;
+        const int32_t bar_h = 28;
+
+        if (ui_send_gfx(ctx->gfx_endpoint, reply_endpoint, ctx->req_id++, GFX_IPC_CREATE_WINDOW,
+                        screen_w, bar_h, (int32_t)GFX_IPC_ABI_MAGIC,
+                        (int32_t)gfx_ipc_header_pack(GFX_IPC_ABI_VERSION, GFX_IPC_CREATE_WINDOW),
+                        &status, &a1, &a2, &a3) != 0 || status != GFX_STATUS_OK) goto mb_fail;
+        ctx->window_id = a1;
+
+        if (ui_send_gfx(ctx->gfx_endpoint, reply_endpoint, ctx->req_id++, GFX_IPC_SET_WINDOW_FLAGS,
+                        ctx->window_id, (int32_t)GFX_WINDOW_FLAG_SYSTEM, 0, 0,
+                        &status, 0, 0, 0) != 0 || status != GFX_STATUS_OK) goto mb_fail;
+
+        if (ui_realloc_buffer(ctx, screen_w, bar_h) != 0) goto mb_fail;
+
+        ctx->root_id = ui_component_create_menu_bar(ctx);
+        if (ctx->root_id < 0) goto mb_fail;
+        {
+            ui_component_t *mbroot = ui_component_by_id(ctx, ctx->root_id);
+            mbroot->bounds.x = 0;
+            mbroot->bounds.y = 0;
+            mbroot->bounds.w = screen_w;
+            mbroot->bounds.h = bar_h;
+            mbroot->padding_px = 2;
+            mbroot->gap_px = 0;
+            mbroot->bg_color = 0xFF1A2233u;
+        }
+        ctx->dirty = 1;
+        return 0;
+    }
+mb_fail:
+    ui_destroy(ctx);
+    return -1;
+}
+
 static inline void
 ui_destroy(ui_context_t *ctx)
 {
@@ -733,6 +796,20 @@ ui_dropdown_popup_bounds(const ui_context_t *ctx, const ui_component_t *c)
     popup.y = c->bounds.y + c->bounds.h;
     if ((popup.y + popup.h) > ctx->height) popup.y = c->bounds.y - popup.h;
     if (popup.y < 0) popup.y = 0;
+    return popup;
+}
+
+static inline ui_rect_t
+ui_menu_item_popup_bounds(const ui_context_t *ctx, const ui_component_t *c)
+{
+    ui_rect_t popup = { 0, 0, 0, 0 };
+    if (!ctx || !c || c->type != UI_COMPONENT_MENU_ITEM || !c->dropdown_open || c->item_count <= 0) return popup;
+    const int32_t item_h = 22;
+    const int32_t pw = c->bounds.w > 160 ? c->bounds.w : 160;
+    popup.x = c->bounds.x;
+    popup.y = c->bounds.y + c->bounds.h;
+    popup.w = pw;
+    popup.h = c->item_count * item_h;
     return popup;
 }
 
@@ -787,6 +864,24 @@ ui_layout_vertical(ui_context_t *ctx, int32_t parent_id)
         if (p->selected_index >= p->item_count) p->selected_index = (p->item_count > 0) ? (p->item_count - 1) : 0;
         p->scroll_max = 0;
         p->scroll_y = 0;
+        return;
+    }
+
+    if (p->type == UI_COMPONENT_MENU_BAR) {
+        int32_t x_cur = p->bounds.x + p->padding_px;
+        int32_t child_id2 = p->first_child_id;
+        while (child_id2 > 0) {
+            ui_component_t *mc = ui_component_by_id(ctx, child_id2);
+            if (!mc) break;
+            /* preferred_h repurposed as preferred width for menu items */
+            const int32_t iw = mc->preferred_h > 4 ? mc->preferred_h : 80;
+            mc->bounds.x = x_cur;
+            mc->bounds.y = p->bounds.y;
+            mc->bounds.w = iw;
+            mc->bounds.h = p->bounds.h;
+            x_cur += iw + p->gap_px;
+            child_id2 = mc->next_sibling_id;
+        }
         return;
     }
 
@@ -958,6 +1053,53 @@ ui_render_component_clip(ui_context_t *ctx, int32_t id, ui_rect_t clip, int32_t 
         return;
     }
 
+    if (c->type == UI_COMPONENT_MENU_BAR) {
+        ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height,
+                          draw_bounds.x, draw_bounds.y + draw_bounds.h - 1, draw_bounds.w, 1, 0xFF304050u, clip);
+        int32_t mi_child_id = c->first_child_id;
+        while (mi_child_id > 0) {
+            ui_render_component_clip(ctx, mi_child_id, clip, offset_y);
+            ui_component_t *mi_child = ui_component_by_id(ctx, mi_child_id);
+            if (!mi_child) break;
+            mi_child_id = mi_child->next_sibling_id;
+        }
+        return;
+    }
+
+    if (c->type == UI_COMPONENT_MENU_ITEM) {
+        if (c->dropdown_open || c->pressed) {
+            ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height,
+                              draw_bounds.x + 1, draw_bounds.y + 1,
+                              draw_bounds.w - 2, draw_bounds.h - 2, 0xFF2A4060u, clip);
+        }
+        ui_draw_text_clip(ctx,
+                          draw_bounds.x + (c->padding_px > 0 ? c->padding_px : 8),
+                          draw_bounds.y + (draw_bounds.h - ctx->font_px) / 2,
+                          c->text ? c->text : "",
+                          c->fg_color ? c->fg_color : 0xFFDDE8F0u,
+                          clip);
+        if (c->dropdown_open && c->item_count > 0) {
+            const int32_t item_h = 22;
+            const ui_rect_t popup = ui_menu_item_popup_bounds(ctx, c);
+            if (popup.w > 0 && popup.h > 0) {
+                const ui_rect_t popup_clip = ui_rect_intersect(clip, popup);
+                ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height,
+                                  popup.x, popup.y, popup.w, popup.h, 0xFF1A2840u, clip);
+                ui_stroke_rect_clip(ctx->mapped_base, ctx->width, ctx->height, popup, 1, 0xFF4A6080u, clip);
+                for (int32_t i = 0; i < c->item_count; ++i) {
+                    const int32_t row_y = popup.y + (i * item_h);
+                    const uint32_t row_bg = (i == c->selected_index) ? 0xFF2F5C88u : 0xFF1A2840u;
+                    ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height,
+                                      popup.x + 1, row_y, popup.w - 2, item_h, row_bg, popup_clip);
+                    ui_draw_text_clip(ctx,
+                                      popup.x + 8, row_y + (item_h - ctx->font_px) / 2,
+                                      c->list_items[i] ? c->list_items[i] : "", 0xFFFFFFFFu, popup_clip);
+                }
+            }
+        }
+        return;
+    }
+
     ui_stroke_rect_clip(ctx->mapped_base, ctx->width, ctx->height, draw_bounds, c->border_px, c->border_color, clip);
 
     int32_t child_id = c->first_child_id;
@@ -991,6 +1133,10 @@ ui_find_component_at(ui_context_t *ctx, int32_t id, int32_t x, int32_t y)
     }
     if (c->type == UI_COMPONENT_DROPDOWN && c->dropdown_open) {
         const ui_rect_t popup = ui_dropdown_popup_bounds(ctx, c);
+        if (popup.w > 0 && popup.h > 0 && ui_point_in_bounds(x, y, popup)) return c->id;
+    }
+    if (c->type == UI_COMPONENT_MENU_ITEM && c->dropdown_open) {
+        const ui_rect_t popup = ui_menu_item_popup_bounds(ctx, c);
         if (popup.w > 0 && popup.h > 0 && ui_point_in_bounds(x, y, popup)) return c->id;
     }
     if (ui_point_in_bounds(x, y, c->bounds)) return c->id;
@@ -1053,6 +1199,13 @@ ui_find_clickable_at(ui_context_t *ctx, int32_t id, int32_t x, int32_t y)
         if (ui_point_in_bounds(x, y, c->bounds)) return c->id;
         if (c->dropdown_open) {
             const ui_rect_t popup = ui_dropdown_popup_bounds(ctx, c);
+            if (popup.w > 0 && popup.h > 0 && ui_point_in_bounds(x, y, popup)) return c->id;
+        }
+    }
+    if (c->type == UI_COMPONENT_MENU_ITEM) {
+        if (ui_point_in_bounds(x, y, c->bounds)) return c->id;
+        if (c->dropdown_open) {
+            const ui_rect_t popup = ui_menu_item_popup_bounds(ctx, c);
             if (popup.w > 0 && popup.h > 0 && ui_point_in_bounds(x, y, popup)) return c->id;
         }
     }
@@ -1146,11 +1299,49 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
         } else if (!left_now && left_prev) {
             const int32_t hit_id = ui_find_clickable_at(ctx, ctx->root_id, ctx->pointer_x, ctx->pointer_y);
             ui_component_t *hit = ui_component_by_id(ctx, hit_id);
-            if (hit && hit->pressed && hit->on_click) {
+            if (hit && hit->pressed && hit->on_click && hit->type != UI_COMPONENT_MENU_ITEM) {
                 if (hit->type == UI_COMPONENT_CHECKBOX) {
                     hit->checked = hit->checked ? 0 : 1;
                 }
                 hit->on_click(ctx, hit->id, hit->on_click_user);
+            }
+            /* Menu item: toggle dropdown on release; select popup item */
+            {
+                int32_t mi_id2 = -1;
+                for (int32_t ci2 = 0; ci2 < ctx->component_count; ++ci2) {
+                    ui_component_t *mc = &ctx->components[ci2];
+                    if (!mc->in_use || mc->type != UI_COMPONENT_MENU_ITEM) continue;
+                    if (ui_point_in_bounds(ctx->pointer_x, ctx->pointer_y, mc->bounds)) { mi_id2 = mc->id; break; }
+                    if (mc->dropdown_open) {
+                        const ui_rect_t mp = ui_menu_item_popup_bounds(ctx, mc);
+                        if (mp.w > 0 && mp.h > 0 && ui_point_in_bounds(ctx->pointer_x, ctx->pointer_y, mp)) { mi_id2 = mc->id; break; }
+                    }
+                }
+                if (mi_id2 > 0) {
+                    ui_component_t *mi2 = ui_component_by_id(ctx, mi_id2);
+                    if (mi2) {
+                        if (ui_point_in_bounds(ctx->pointer_x, ctx->pointer_y, mi2->bounds)) {
+                            const int32_t will_open = !mi2->dropdown_open;
+                            for (int32_t ci3 = 0; ci3 < ctx->component_count; ++ci3) {
+                                if (ctx->components[ci3].in_use && ctx->components[ci3].type == UI_COMPONENT_MENU_ITEM)
+                                    ctx->components[ci3].dropdown_open = 0;
+                            }
+                            if (will_open && mi2->item_count > 0) mi2->dropdown_open = 1;
+                            ui_mark_dirty(ctx);
+                        } else if (mi2->dropdown_open) {
+                            const ui_rect_t mp2 = ui_menu_item_popup_bounds(ctx, mi2);
+                            if (mp2.w > 0 && mp2.h > 0 && ui_point_in_bounds(ctx->pointer_x, ctx->pointer_y, mp2)) {
+                                const int32_t idx2 = (ctx->pointer_y - mp2.y) / 22;
+                                if (idx2 >= 0 && idx2 < mi2->item_count) {
+                                    mi2->selected_index = idx2;
+                                    mi2->dropdown_open = 0;
+                                    if (mi2->on_click) mi2->on_click(ctx, mi2->id, mi2->on_click_user);
+                                    ui_mark_dirty(ctx);
+                                }
+                            }
+                        }
+                    }
+                }
             }
             if (!hit) {
                 for (int32_t i = 0; i < ctx->component_count; ++i) {

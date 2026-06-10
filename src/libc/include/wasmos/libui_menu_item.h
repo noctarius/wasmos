@@ -76,4 +76,33 @@ ui_menu_item_get_selection_from_point(const ui_context_t *ctx, const ui_componen
     return -1;
 }
 
+/* Component-owned helpers for header activation and popup pick.
+ * Core does the sibling close orchestration and identification, component owns its open/close/pick reaction. */
+static inline void
+ui_menu_item_open_dropdown(ui_context_t *ctx, ui_component_t *mi)
+{
+    if (mi->item_count > 0) {
+        mi->dropdown_open = 1;
+        ui_mark_dirty(ctx);
+    }
+}
+
+static inline void
+ui_menu_item_close_dropdown(ui_context_t *ctx, ui_component_t *mi)
+{
+    mi->dropdown_open = 0;
+    ui_mark_dirty(ctx);
+}
+
+static inline void
+ui_menu_item_pick_and_invoke(ui_context_t *ctx, ui_component_t *mi, int32_t idx)
+{
+    if (idx >= 0 && idx < mi->item_count) {
+        mi->selected_index = idx;
+        mi->dropdown_open = 0;
+        if (mi->on_click) mi->on_click(ctx, mi->id, mi->on_click_user);
+        ui_mark_dirty(ctx);
+    }
+}
+
 #endif /* WASMOS_LIBUI_MENU_ITEM_H */

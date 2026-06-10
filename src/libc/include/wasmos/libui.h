@@ -1097,17 +1097,14 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
                             const int32_t will_open = !mi2->dropdown_open;
                             for (int32_t ci3 = 0; ci3 < ctx->component_count; ++ci3) {
                                 if (ctx->components[ci3].in_use && ctx->components[ci3].type == UI_COMPONENT_MENU_ITEM)
-                                    ctx->components[ci3].dropdown_open = 0;
+                                    ui_menu_item_close_dropdown(ctx, &ctx->components[ci3]);
                             }
-                            if (will_open && mi2->item_count > 0) mi2->dropdown_open = 1;
+                            if (will_open) ui_menu_item_open_dropdown(ctx, mi2);
                             ui_mark_dirty(ctx);
                         } else if (mi2->dropdown_open) {
                             const int32_t idx2 = ui_menu_item_get_selection_from_point(ctx, mi2, ctx->pointer_x, ctx->pointer_y);
                             if (idx2 >= 0) {
-                                mi2->selected_index = idx2;
-                                mi2->dropdown_open = 0;
-                                if (mi2->on_click) mi2->on_click(ctx, mi2->id, mi2->on_click_user);
-                                ui_mark_dirty(ctx);
+                                ui_menu_item_pick_and_invoke(ctx, mi2, idx2);
                             }
                         }
                     }

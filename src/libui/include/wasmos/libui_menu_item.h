@@ -32,7 +32,7 @@ ui_render_menu_item(ui_context_t *ctx, const ui_component_t *c, ui_rect_t draw_b
             ui_stroke_rect_clip(ctx->mapped_base, ctx->width, ctx->height, popup, 1, 0xFF4A6080u, clip);
             for (int32_t i = 0; i < d->list.count; ++i) {
                 const int32_t row_y = popup.y + (i * item_h);
-                const uint32_t row_bg = (i == d->list.selected) ? 0xFF2F5C88u : 0xFF1A2840u;
+                const uint32_t row_bg = (d->list.selected >= 0 && i == d->list.selected) ? 0xFF2F5C88u : 0xFF1A2840u;
                 ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height,
                                   popup.x + 1, row_y, popup.w - 2, item_h, row_bg, popup_clip);
                 ui_draw_text_clip(ctx,

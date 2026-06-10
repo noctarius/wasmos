@@ -42,8 +42,13 @@ def _best_display() -> str:
 _DISPLAY = _best_display()
 _CURSOR_START_X = 640
 _CURSOR_START_Y = 400
-_LIBUI_BUTTON_X = 259
-_LIBUI_BUTTON_Y = 61
+# Screen coordinates of the "press me" button centre in the libui demo window.
+# The compositor places the libui window at (104, 104): g_next_z starts at 1,
+# the three animation windows take z=1..3, so libui gets z=4, off=80,
+# pos=24+80=104. Content area = win + (CHROME_BORDER=1, CHROME_TITLE_H=24).
+# Content-local button centre = (259, 61) → screen (105+259, 128+61) = (364, 189).
+_LIBUI_BUTTON_X = 364
+_LIBUI_BUTTON_Y = 189
 _MOUSE_STEP = 16
 
 

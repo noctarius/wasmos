@@ -105,6 +105,20 @@ static void refresh_app_list(void)
     ui_mark_dirty(&g_ctx);
 }
 
+static void on_wasmos_click(ui_context_t *ctx, int32_t component_id, void *user)
+{
+    (void)user;
+    ui_component_t *mi = ui_component_by_id(ctx, component_id);
+    if (!mi) return;
+    ui_menu_item_data_t *md = (ui_menu_item_data_t *)mi->component_data;
+    const int32_t sel = md ? md->list.selected : -1;
+    if (sel == 0) {
+        (void)wasmos_system_reboot();
+    } else if (sel == 1) {
+        (void)wasmos_system_halt();
+    }
+}
+
 static void on_apps_click(ui_context_t *ctx, int32_t component_id, void *user)
 {
     (void)user;
@@ -135,17 +149,21 @@ int main(int argc, char **argv)
         (void)wasmos_sched_yield();
     }
 
-    /* "WasmOS" branding — left-anchored, no dropdown */
+    /* "WasmOS" system menu — Reboot / Shutdown */
     const int32_t brand_id = ui_component_create_menu_item(&g_ctx);
     {
         ui_component_t *brand = ui_component_by_id(&g_ctx, brand_id);
         if (brand) {
-            brand->bg_color  = 0xFF1A2233u;
-            brand->fg_color  = 0xFF88C4EEu;
+            brand->bg_color   = 0xFF1A2233u;
+            brand->fg_color   = 0xFF88C4EEu;
             brand->padding_px = 10;
             brand->preferred_h = 90;
+            brand->clickable  = 1;
+            brand->on_click   = on_wasmos_click;
         }
         ui_component_set_text(&g_ctx, brand_id, "WasmOS");
+        ui_component_list_append(&g_ctx, brand_id, "Reboot");
+        ui_component_list_append(&g_ctx, brand_id, "Shutdown");
         ui_component_append_child(&g_ctx, g_ctx.root_id, brand_id);
     }
 

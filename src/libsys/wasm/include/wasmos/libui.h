@@ -1002,8 +1002,7 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
                 for (int32_t i = 0; i < ctx->component_count; ++i) {
                     ui_component_t *c = &ctx->components[i];
                     if (c->in_use && c->type == UI_COMPONENT_DROPDOWN && c->dropdown_open) {
-                        c->dropdown_open = 0;
-                        ui_mark_dirty(ctx);
+                        ui_dropdown_close(ctx, c);
                     }
                 }
             }

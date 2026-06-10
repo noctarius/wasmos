@@ -2,6 +2,7 @@
 
 - This status file is a snapshot, not a release changelog.
 - libui split pilot: `libui.h` is now the parent/generic aggregator. Component-specific rendering (starting with label and button) lives in their own headers (`libui_label.h`, `libui_button.h`) included by the main header in both the libc and libsys/wasm trees. The core render path now delegates to the component-owned functions (mechanical extraction + header split). Public APIs and direct `ui_component_t` usage unchanged. `run-qemu-test` (including gfx_smoke + menu_bar) passes. More components (the already-factored render helpers for checkbox/list/etc.) and layout/event ownership can follow the same pattern.
+- Extended: layout special cases + popup bounds + popup hit-test helpers moved to component headers (ui_layout_*, ui_*_popup_bounds, ui_*_popup_contains). Core layout and find_*_at now use small dispatch + component helpers. Event pilot started: dropdown and list_view specific pointer-press and key reactions extracted to ui_dropdown_handle_pointer_press / ui_list_view_handle_pointer_press / ui_dropdown_handle_key in their headers; core ui_loop_handle_ipc now calls them after routing (keeps focus/pressed/scroll-capture/close-outside in core per design). Both copies in sync. Tests pass.
 - Native `libsys` event loops now expose explicit intent cancellation, and the
   current stack-backed synchronous IPC helpers in both `gfx-compositor` and
   `font-service` cancel pending intents before timeout/error exits. This

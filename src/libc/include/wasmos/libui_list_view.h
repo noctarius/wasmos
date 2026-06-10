@@ -50,4 +50,19 @@ ui_layout_list_view(ui_context_t *ctx, ui_component_t *p)
     if (p->selected_index >= p->item_count) p->selected_index = (p->item_count > 0) ? (p->item_count - 1) : 0;
 }
 
+/* Component-owned reaction handler for pointer press (selection on list items).
+ * Core (after ui_find_list_view_at) calls this so list owns its specific selection logic. */
+static inline void
+ui_list_view_handle_pointer_press(ui_context_t *ctx, ui_component_t *lv, int32_t pointer_x, int32_t pointer_y)
+{
+    if (lv->item_count > 0) {
+        const int32_t rel_y = (pointer_y - (lv->bounds.y + lv->padding_px)) + lv->scroll_y;
+        const int32_t idx = rel_y / 20;
+        if (idx >= 0 && idx < lv->item_count) {
+            lv->selected_index = idx;
+            ui_mark_dirty(ctx);
+        }
+    }
+}
+
 #endif /* WASMOS_LIBUI_LIST_VIEW_H */

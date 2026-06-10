@@ -1067,26 +1067,10 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
 
             const int32_t list_id = ui_find_list_view_at(ctx, ctx->root_id, ctx->pointer_x, ctx->pointer_y);
             ui_component_t *lv = ui_component_by_id(ctx, list_id);
-            if (lv && lv->type == UI_COMPONENT_LIST_VIEW && lv->item_count > 0) {
-                const int32_t rel_y = (ctx->pointer_y - (lv->bounds.y + lv->padding_px)) + lv->scroll_y;
-                const int32_t idx = rel_y / 20;
-                if (idx >= 0 && idx < lv->item_count) {
-                    lv->selected_index = idx;
-                    ui_mark_dirty(ctx);
-                }
+            if (lv && lv->type == UI_COMPONENT_LIST_VIEW) {
+                ui_list_view_handle_pointer_press(ctx, lv, ctx->pointer_x, ctx->pointer_y);
             } else if (lv && lv->type == UI_COMPONENT_DROPDOWN) {
-                if (ui_point_in_bounds(ctx->pointer_x, ctx->pointer_y, lv->bounds)) {
-                    lv->dropdown_open = lv->dropdown_open ? 0 : 1;
-                    ui_mark_dirty(ctx);
-                } else if (lv->dropdown_open) {
-                    const ui_rect_t popup = ui_dropdown_popup_bounds(ctx, lv);
-                    if (popup.w > 0 && popup.h > 0 && ui_point_in_bounds(ctx->pointer_x, ctx->pointer_y, popup)) {
-                        const int32_t idx = (ctx->pointer_y - popup.y) / 20;
-                        if (idx >= 0 && idx < lv->item_count) lv->selected_index = idx;
-                        lv->dropdown_open = 0;
-                        ui_mark_dirty(ctx);
-                    }
-                }
+                ui_dropdown_handle_pointer_press(ctx, lv, ctx->pointer_x, ctx->pointer_y);
             }
         } else if (!left_now && left_prev) {
             const int32_t hit_id = ui_find_clickable_at(ctx, ctx->root_id, ctx->pointer_x, ctx->pointer_y);
@@ -1204,25 +1188,7 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
                     }
                 }
             } else if (focus && focus->type == UI_COMPONENT_DROPDOWN) {
-                if (key == 27u) {
-                    if (focus->dropdown_open) {
-                        focus->dropdown_open = 0;
-                        ui_mark_dirty(ctx);
-                    }
-                } else if (key == '\r' || key == '\n' || key == ' ') {
-                    focus->dropdown_open = focus->dropdown_open ? 0 : 1;
-                    ui_mark_dirty(ctx);
-                } else if (key == 'j' || key == 'J') {
-                    if (focus->item_count > 0 && focus->selected_index < (focus->item_count - 1)) {
-                        focus->selected_index += 1;
-                        ui_mark_dirty(ctx);
-                    }
-                } else if (key == 'k' || key == 'K') {
-                    if (focus->item_count > 0 && focus->selected_index > 0) {
-                        focus->selected_index -= 1;
-                        ui_mark_dirty(ctx);
-                    }
-                }
+                ui_dropdown_handle_key(ctx, focus, key);
             }
         }
         return UI_MSG_CONSUMED;

@@ -22,4 +22,40 @@ ui_render_text_input(ui_context_t *ctx, const ui_component_t *c, ui_rect_t draw_
     }
 }
 
+/* Component-owned key handler for focused text input.
+ * Core dispatches here for the specific editing behavior (backspace, append printable). */
+static inline void
+ui_text_input_handle_key(ui_context_t *ctx, ui_component_t *c, uint32_t key)
+{
+    if (key == 8u || key == 127u) {
+        if (c->text_len > 0) {
+            c->text_len = ui_utf8_prev_boundary(c->text, c->text_len);
+            c->text[c->text_len] = '\0';
+            ui_mark_dirty(ctx);
+        }
+    } else if (key >= 32u && key <= 0x10FFFFu) {
+        uint8_t enc[4];
+        const int32_t enc_len = ui_utf8_encode(key, enc);
+        if (enc_len <= 0) return;
+        const int32_t need = c->text_len + enc_len + 1;
+        if (c->text_cap < need) {
+            int32_t new_cap = c->text_cap > 0 ? c->text_cap : UI_TEXT_INITIAL_CAP;
+            while (new_cap < need) new_cap *= 2;
+            char *new_text = (char *)malloc((size_t)new_cap);
+            if (new_text) {
+                if (c->text) memcpy(new_text, c->text, (size_t)c->text_len + 1);
+                if (c->text) free(c->text);
+                c->text = new_text;
+                c->text_cap = new_cap;
+            }
+        }
+        if (c->text_cap >= need) {
+            memcpy(c->text + c->text_len, enc, (size_t)enc_len);
+            c->text_len += enc_len;
+            c->text[c->text_len] = '\0';
+            ui_mark_dirty(ctx);
+        }
+    }
+}
+
 #endif /* WASMOS_LIBUI_TEXT_INPUT_H */

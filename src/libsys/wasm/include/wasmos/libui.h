@@ -1037,35 +1037,7 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
         if (ctx->focused_component_id > 0) {
             ui_component_t *focus = ui_component_by_id(ctx, ctx->focused_component_id);
             if (focus && focus->type == UI_COMPONENT_TEXT_INPUT) {
-                if (key == 8u || key == 127u) {
-                    if (focus->text_len > 0) {
-                        focus->text_len = ui_utf8_prev_boundary(focus->text, focus->text_len);
-                        focus->text[focus->text_len] = '\0';
-                        ui_mark_dirty(ctx);
-                    }
-                } else if (key >= 32u && key <= 0x10FFFFu) {
-                    uint8_t enc[4];
-                    const int32_t enc_len = ui_utf8_encode(key, enc);
-                    if (enc_len <= 0) return UI_MSG_CONSUMED;
-                    const int32_t need = focus->text_len + enc_len + 1;
-                    if (focus->text_cap < need) {
-                        int32_t new_cap = focus->text_cap > 0 ? focus->text_cap : UI_TEXT_INITIAL_CAP;
-                        while (new_cap < need) new_cap *= 2;
-                        char *new_text = (char *)malloc((size_t)new_cap);
-                        if (new_text) {
-                            if (focus->text) memcpy(new_text, focus->text, (size_t)focus->text_len + 1);
-                            if (focus->text) free(focus->text);
-                            focus->text = new_text;
-                            focus->text_cap = new_cap;
-                        }
-                    }
-                    if (focus->text_cap >= need) {
-                        memcpy(focus->text + focus->text_len, enc, (size_t)enc_len);
-                        focus->text_len += enc_len;
-                        focus->text[focus->text_len] = '\0';
-                        ui_mark_dirty(ctx);
-                    }
-                }
+                ui_text_input_handle_key(ctx, focus, key);
             } else if (focus && focus->type == UI_COMPONENT_DROPDOWN) {
                 ui_dropdown_handle_key(ctx, focus, key);
             }

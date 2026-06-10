@@ -32,10 +32,13 @@ static void refresh_app_list(void)
     ui_component_t *mi = ui_component_by_id(&g_ctx, g_apps_mi_id);
     if (!mi) return;
 
-    for (int32_t i = 0; i < mi->item_count; ++i) {
-        if (mi->list_items && mi->list_items[i]) { free(mi->list_items[i]); mi->list_items[i] = 0; }
+    ui_menu_item_data_t *md = (ui_menu_item_data_t *)mi->component_data;
+    if (md) {
+        for (int32_t i = 0; i < md->list.count; ++i) {
+            if (md->list.items && md->list.items[i]) { free(md->list.items[i]); md->list.items[i] = 0; }
+        }
+        md->list.count = 0;
     }
-    mi->item_count = 0;
     g_win_count = 0;
 
     for (int32_t idx = 0; idx < MAX_APP_WINDOWS; ++idx) {
@@ -66,7 +69,8 @@ static void on_apps_click(ui_context_t *ctx, int32_t component_id, void *user)
     (void)user;
     ui_component_t *mi = ui_component_by_id(ctx, component_id);
     if (!mi) return;
-    const int32_t sel = mi->selected_index;
+    ui_menu_item_data_t *md = (ui_menu_item_data_t *)mi->component_data;
+    const int32_t sel = md ? md->list.selected : -1;
     if (sel < 0 || sel >= g_win_count) return;
     const int32_t wid = g_win_ids[sel];
     int32_t status = 0;

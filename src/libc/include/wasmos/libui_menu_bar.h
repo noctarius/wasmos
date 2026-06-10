@@ -17,4 +17,23 @@ ui_render_menu_bar(ui_context_t *ctx, const ui_component_t *c, ui_rect_t draw_bo
     }
 }
 
+static inline void
+ui_layout_menu_bar(ui_context_t *ctx, ui_component_t *p)
+{
+    int32_t x_cur = p->bounds.x + p->padding_px;
+    int32_t child_id2 = p->first_child_id;
+    while (child_id2 > 0) {
+        ui_component_t *mc = ui_component_by_id(ctx, child_id2);
+        if (!mc) break;
+        /* preferred_h repurposed as preferred width for menu items */
+        const int32_t iw = mc->preferred_h > 4 ? mc->preferred_h : 80;
+        mc->bounds.x = x_cur;
+        mc->bounds.y = p->bounds.y;
+        mc->bounds.w = iw;
+        mc->bounds.h = p->bounds.h;
+        x_cur += iw + p->gap_px;
+        child_id2 = mc->next_sibling_id;
+    }
+}
+
 #endif /* WASMOS_LIBUI_MENU_BAR_H */

@@ -47,4 +47,29 @@ ui_render_dropdown(ui_context_t *ctx, const ui_component_t *c, ui_rect_t draw_bo
     }
 }
 
+static inline void
+ui_layout_dropdown(ui_context_t *ctx, ui_component_t *p)
+{
+    (void)ctx;
+    if (p->selected_index < 0) p->selected_index = 0;
+    if (p->selected_index >= p->item_count) p->selected_index = (p->item_count > 0) ? (p->item_count - 1) : 0;
+    p->scroll_max = 0;
+    p->scroll_y = 0;
+}
+
+static inline ui_rect_t
+ui_dropdown_popup_bounds(const ui_context_t *ctx, const ui_component_t *c)
+{
+    ui_rect_t popup = { 0, 0, 0, 0 };
+    if (!ctx || !c || c->type != UI_COMPONENT_DROPDOWN || !c->dropdown_open || c->item_count <= 0) return popup;
+    const int32_t item_h = 20;
+    popup.x = c->bounds.x;
+    popup.w = c->bounds.w;
+    popup.h = (c->item_count * item_h > 120) ? 120 : (c->item_count * item_h);
+    popup.y = c->bounds.y + c->bounds.h;
+    if ((popup.y + popup.h) > ctx->height) popup.y = c->bounds.y - popup.h;
+    if (popup.y < 0) popup.y = 0;
+    return popup;
+}
+
 #endif /* WASMOS_LIBUI_DROPDOWN_H */

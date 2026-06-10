@@ -36,4 +36,18 @@ ui_render_list_view(ui_context_t *ctx, const ui_component_t *c, ui_rect_t draw_b
     }
 }
 
+static inline void
+ui_layout_list_view(ui_context_t *ctx, ui_component_t *p)
+{
+    (void)ctx;
+    const int32_t item_h = 20;
+    const int32_t viewport_h = p->bounds.h - (p->padding_px * 2);
+    const int32_t content_h = p->item_count * item_h;
+    p->scroll_max = (content_h > viewport_h) ? (content_h - viewport_h) : 0;
+    if (p->scroll_y < 0) p->scroll_y = 0;
+    if (p->scroll_y > p->scroll_max) p->scroll_y = p->scroll_max;
+    if (p->selected_index < 0) p->selected_index = 0;
+    if (p->selected_index >= p->item_count) p->selected_index = (p->item_count > 0) ? (p->item_count - 1) : 0;
+}
+
 #endif /* WASMOS_LIBUI_LIST_VIEW_H */

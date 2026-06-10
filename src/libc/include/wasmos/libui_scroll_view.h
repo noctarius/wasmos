@@ -31,4 +31,30 @@ ui_render_scroll_view(ui_context_t *ctx, const ui_component_t *c, ui_rect_t draw
     }
 }
 
+static inline void
+ui_layout_scroll_view(ui_context_t *ctx, ui_component_t *p)
+{
+    int32_t y_cur = p->bounds.y + p->padding_px;
+    int32_t content_h = 0;
+    int32_t child_id = p->first_child_id;
+    while (child_id > 0) {
+        ui_component_t *c = ui_component_by_id(ctx, child_id);
+        if (!c) break;
+        const int32_t h = c->preferred_h > 8 ? c->preferred_h : 8;
+        c->bounds.x = p->bounds.x + p->padding_px;
+        c->bounds.y = y_cur;
+        c->bounds.w = p->bounds.w - (p->padding_px * 2);
+        c->bounds.h = h;
+        y_cur += h + p->gap_px;
+        content_h += h + p->gap_px;
+        if (c->first_child_id > 0) ui_layout_vertical(ctx, c->id);
+        child_id = c->next_sibling_id;
+    }
+    if (content_h > 0) content_h -= p->gap_px;
+    const int32_t viewport_h = p->bounds.h - (p->padding_px * 2);
+    p->scroll_max = (content_h > viewport_h) ? (content_h - viewport_h) : 0;
+    if (p->scroll_y < 0) p->scroll_y = 0;
+    if (p->scroll_y > p->scroll_max) p->scroll_y = p->scroll_max;
+}
+
 #endif /* WASMOS_LIBUI_SCROLL_VIEW_H */

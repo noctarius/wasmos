@@ -430,7 +430,7 @@ ui_demo_button_click(ui_context_t *ctx, int32_t component_id, void *user)
         button->border_color = (click_count && ((*click_count) & 1)) ? 0xFF9CE2FFu : 0xFF536271u;
     }
     if (checkbox) {
-        ui_component_set_text(ctx, checkbox->id, checkbox->checked ? "checkbox: on" : "checkbox: off");
+        ui_component_set_text(ctx, checkbox->id, ui_component_get_checked(checkbox) ? "checkbox: on" : "checkbox: off");
     }
     ui_mark_dirty(ctx);
 }

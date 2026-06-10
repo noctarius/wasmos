@@ -3,6 +3,12 @@
 
 /* libui_menu_bar.h - Menu bar component specific rendering. */
 
+typedef struct {
+    /* menu bar itself is mostly a horizontal container for menu_items;
+     * no extra per-instance data needed beyond the common tree for now. */
+    int32_t dummy;
+} ui_menu_bar_data_t;
+
 static inline void
 ui_render_menu_bar(ui_context_t *ctx, const ui_component_t *c, ui_rect_t draw_bounds, ui_rect_t clip, int32_t offset_y)
 {

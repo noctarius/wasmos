@@ -55,6 +55,8 @@ typedef struct {
 struct ui_context;
 typedef void (*ui_button_click_cb_t)(struct ui_context *ctx, int32_t component_id, void *user);
 
+/* Pure base component. All type-specific state lives in component_data.
+ * This keeps the core struct small and stable as we add more widget kinds. */
 typedef struct {
     int32_t in_use;
     int32_t id;
@@ -72,23 +74,56 @@ typedef struct {
     int32_t gap_px;
     int32_t clickable;
     int32_t pressed;
-    int32_t checked;
-    int32_t scroll_y;
-    int32_t scroll_max;
-    int32_t selected_index;
-    int32_t dropdown_open;
-
-    char *text;
-    int32_t text_len;
-    int32_t text_cap;
-
-    char **list_items;
-    int32_t item_count;
-    int32_t item_capacity;
 
     ui_button_click_cb_t on_click;
     void *on_click_user;
+
+    void *component_data;   /* owned per-type data (see libui_*.h for the concrete structs) */
 } ui_component_t;
+
+/* Vtable for component behavior. Components register their implementations
+ * so the core can dispatch without giant type switches.
+ * Use struct tags to avoid typedef ordering issues (declared before full ui_context_t). */
+typedef struct {
+    void (*render)(struct ui_context *ctx, const ui_component_t *c,
+                   ui_rect_t draw_bounds, ui_rect_t clip, int32_t offset_y);
+    void (*layout)(struct ui_context *ctx, ui_component_t *c);
+
+    void (*handle_pointer_press)(struct ui_context *ctx, ui_component_t *c,
+                                 int32_t x, int32_t y);
+    void (*handle_pointer_release)(struct ui_context *ctx, ui_component_t *c);
+    void (*handle_key)(struct ui_context *ctx, ui_component_t *c, uint32_t key);
+    void (*handle_scroll_drag)(struct ui_context *ctx, ui_component_t *c, int32_t dy);
+
+    /* Optional: for hit-testing popups/overlays owned by the component. */
+    bool (*popup_contains)(const struct ui_context *ctx, const ui_component_t *c,
+                           int32_t x, int32_t y);
+
+    /* Free the component_data (and anything it owns). */
+    void (*destroy_data)(ui_component_t *c);
+} ui_component_ops_t;
+
+/* Populated after all component headers are included. */
+static ui_component_ops_t ui_component_ops[UI_COMPONENT_MENU_ITEM + 1];
+
+/* Prototype so it can be called from ui_init / ui_menu_bar_init (defined after the component includes). */
+static inline void ui_init_component_ops(void);
+
+/* Small reusable data blocks for common component aspects.
+ * Individual component headers may use these directly as their component_data
+ * or define richer per-type structs that contain them. */
+typedef struct {
+    char *text;
+    int32_t text_len;
+    int32_t text_cap;
+} ui_text_data_t;
+
+typedef struct {
+    char **items;
+    int32_t count;
+    int32_t capacity;
+    int32_t selected;
+} ui_list_data_t;
 
 typedef struct ui_context {
     int32_t proc_endpoint;
@@ -426,18 +461,28 @@ ui_component_set_text_owned(ui_component_t *c, const char *text)
     if (!text) text = "";
     const int32_t need = (int32_t)strlen(text) + 1;
     if (need <= 0) return -1;
-    if (c->text_cap < need) {
-        int32_t new_cap = c->text_cap > 0 ? c->text_cap : UI_TEXT_INITIAL_CAP;
+
+    ui_text_data_t *td = (ui_text_data_t *)c->component_data;
+    if (!td) {
+        /* allocate a text data block for this component (used by label/button/checkbox/text_input/menu etc.) */
+        td = (ui_text_data_t *)malloc(sizeof(ui_text_data_t));
+        if (!td) return -1;
+        memset(td, 0, sizeof(*td));
+        c->component_data = td;
+    }
+
+    if (td->text_cap < need) {
+        int32_t new_cap = td->text_cap > 0 ? td->text_cap : UI_TEXT_INITIAL_CAP;
         while (new_cap < need) new_cap *= 2;
         char *new_text = (char *)malloc((size_t)new_cap);
         if (!new_text) return -1;
-        if (c->text) memcpy(new_text, c->text, (size_t)c->text_len + 1);
-        if (c->text) free(c->text);
-        c->text = new_text;
-        c->text_cap = new_cap;
+        if (td->text) memcpy(new_text, td->text, (size_t)td->text_len + 1);
+        if (td->text) free(td->text);
+        td->text = new_text;
+        td->text_cap = new_cap;
     }
-    memcpy(c->text, text, (size_t)need);
-    c->text_len = need - 1;
+    memcpy(td->text, text, (size_t)need);
+    td->text_len = need - 1;
     return 0;
 }
 
@@ -475,16 +520,8 @@ ui_component_alloc(ui_context_t *ctx, ui_component_type_t type)
     c->border_px = 1;
     c->padding_px = 6;
     c->gap_px = 6;
-    c->selected_index = 0;
-    c->scroll_y = 0;
-    c->scroll_max = 0;
-    c->text = 0;
-    c->text_len = 0;
-    c->text_cap = 0;
-    c->list_items = 0;
-    c->item_count = 0;
-    c->item_capacity = 0;
-    if (ui_component_set_text_owned(c, "") != 0) return -1;
+    /* component-specific fields (text, list, checked, scroll, dropdown_open, selected)
+     * now live in c->component_data and are set up by the component or on first use. */
     return c->id;
 }
 
@@ -547,7 +584,22 @@ ui_component_set_checked(ui_context_t *ctx, int32_t id, int32_t checked)
 {
     ui_component_t *c = ui_component_by_id(ctx, id);
     if (!c || c->type != UI_COMPONENT_CHECKBOX) return;
-    c->checked = checked ? 1 : 0;
+    /* For checkbox we use a tiny data block (just the checked flag for now). */
+    int32_t *pchecked = (int32_t *)c->component_data;
+    if (!pchecked) {
+        pchecked = (int32_t *)malloc(sizeof(int32_t));
+        if (!pchecked) return;
+        *pchecked = 0;
+        c->component_data = pchecked;
+    }
+    *pchecked = checked ? 1 : 0;
+}
+
+static inline int32_t
+ui_component_get_checked(const ui_component_t *c)
+{
+    if (!c || c->type != UI_COMPONENT_CHECKBOX || !c->component_data) return 0;
+    return *(int32_t *)c->component_data;
 }
 
 static inline int32_t
@@ -555,32 +607,44 @@ ui_component_list_append(ui_context_t *ctx, int32_t id, const char *item)
 {
     ui_component_t *c = ui_component_by_id(ctx, id);
     if (!c || (c->type != UI_COMPONENT_LIST_VIEW && c->type != UI_COMPONENT_DROPDOWN) || !item) return -1;
-    if (c->item_count >= c->item_capacity) {
-        int32_t cap = c->item_capacity > 0 ? c->item_capacity : UI_LIST_INITIAL_CAP;
-        while (cap <= c->item_count) cap *= 2;
+
+    ui_list_data_t *ld = (ui_list_data_t *)c->component_data;
+    if (!ld) {
+        ld = (ui_list_data_t *)malloc(sizeof(ui_list_data_t));
+        if (!ld) return -1;
+        memset(ld, 0, sizeof(*ld));
+        c->component_data = ld;
+    }
+
+    if (ld->count >= ld->capacity) {
+        int32_t cap = ld->capacity > 0 ? ld->capacity : UI_LIST_INITIAL_CAP;
+        while (cap <= ld->count) cap *= 2;
         char **new_items = (char **)malloc((size_t)cap * sizeof(char *));
         if (!new_items) return -1;
         for (int32_t i = 0; i < cap; ++i) new_items[i] = 0;
-        if (c->list_items && c->item_count > 0) {
-            memcpy(new_items, c->list_items, (size_t)c->item_count * sizeof(char *));
-            free(c->list_items);
+        if (ld->items && ld->count > 0) {
+            memcpy(new_items, ld->items, (size_t)ld->count * sizeof(char *));
+            free(ld->items);
         }
-        c->list_items = new_items;
-        c->item_capacity = cap;
+        ld->items = new_items;
+        ld->capacity = cap;
     }
     const size_t len = strlen(item) + 1;
     char *copy = (char *)malloc(len);
     if (!copy) return -1;
     memcpy(copy, item, len);
-    c->list_items[c->item_count] = copy;
-    c->item_count += 1;
-    return c->item_count - 1;
+    ld->items[ld->count] = copy;
+    ld->count += 1;
+    return ld->count - 1;
 }
 
 static inline int32_t
 ui_component_text_len(const ui_component_t *c)
 {
-    return c ? c->text_len : 0;
+    if (!c || !c->component_data) return 0;
+    /* For components that use ui_text_data_t as (or starting as) their data. */
+    ui_text_data_t *td = (ui_text_data_t *)c->component_data;
+    return td->text_len;
 }
 
 static inline int32_t
@@ -672,6 +736,8 @@ ui_init(ui_context_t *ctx, int32_t proc_endpoint, int32_t reply_endpoint, int32_
     ctx->window_id = a1;
     if (ui_realloc_buffer(ctx, width, height) != 0) goto fail;
 
+    ui_init_component_ops();
+
     ctx->root_id = ui_component_create_panel(ctx);
     if (ctx->root_id < 0) goto fail;
     ui_component_t *root = ui_component_by_id(ctx, ctx->root_id);
@@ -728,6 +794,7 @@ ui_menu_bar_init(ui_context_t *ctx, int32_t proc_endpoint, int32_t reply_endpoin
 
         if (ui_realloc_buffer(ctx, screen_w, bar_h) != 0) goto mb_fail;
 
+        ui_init_component_ops();
         ctx->root_id = ui_component_create_menu_bar(ctx);
         if (ctx->root_id < 0) goto mb_fail;
         {
@@ -767,12 +834,12 @@ ui_destroy(ui_context_t *ctx)
 
     for (int32_t i = 0; i < ctx->component_count; ++i) {
         ui_component_t *c = &ctx->components[i];
-        if (c->text) free(c->text);
-        if (c->list_items) {
-            for (int32_t j = 0; j < c->item_count; ++j) {
-                if (c->list_items[j]) free(c->list_items[j]);
-            }
-            free(c->list_items);
+        const ui_component_ops_t *ops = &ui_component_ops[c->type];
+        if (ops->destroy_data) {
+            ops->destroy_data(c);
+        } else if (c->component_data) {
+            free(c->component_data);
+            c->component_data = NULL;
         }
     }
     if (ctx->components) free(ctx->components);
@@ -807,26 +874,66 @@ static inline void ui_render_component(ui_context_t *ctx, int32_t id);
 #include "wasmos/libui_menu_bar.h"
 #include "wasmos/libui_menu_item.h"
 
+/* Register vtable implementations owned by the component headers.
+ * This replaces the previous giant type switches with vtable dispatch. */
+static inline void ui_init_component_ops(void)
+{
+    /* zero the table */
+    memset(ui_component_ops, 0, sizeof(ui_component_ops));
+
+    /* label */
+    ui_component_ops[UI_COMPONENT_LABEL].render = ui_render_label;
+
+    /* button */
+    ui_component_ops[UI_COMPONENT_BUTTON].render = ui_render_button;
+    ui_component_ops[UI_COMPONENT_BUTTON].handle_pointer_release = ui_button_handle_pointer_release;
+
+    /* checkbox */
+    ui_component_ops[UI_COMPONENT_CHECKBOX].render = ui_render_checkbox;
+    ui_component_ops[UI_COMPONENT_CHECKBOX].handle_pointer_release = ui_checkbox_handle_pointer_release;
+
+    /* text input */
+    ui_component_ops[UI_COMPONENT_TEXT_INPUT].render = ui_render_text_input;
+    ui_component_ops[UI_COMPONENT_TEXT_INPUT].handle_key = ui_text_input_handle_key;
+
+    /* list view */
+    ui_component_ops[UI_COMPONENT_LIST_VIEW].render = ui_render_list_view;
+    ui_component_ops[UI_COMPONENT_LIST_VIEW].layout = ui_layout_list_view;
+    ui_component_ops[UI_COMPONENT_LIST_VIEW].handle_pointer_press = ui_list_view_handle_pointer_press;
+    ui_component_ops[UI_COMPONENT_LIST_VIEW].handle_scroll_drag = ui_list_view_handle_scroll_drag;
+
+    /* dropdown */
+    ui_component_ops[UI_COMPONENT_DROPDOWN].render = ui_render_dropdown;
+    ui_component_ops[UI_COMPONENT_DROPDOWN].layout = ui_layout_dropdown;
+    ui_component_ops[UI_COMPONENT_DROPDOWN].handle_pointer_press = ui_dropdown_handle_pointer_press;
+    ui_component_ops[UI_COMPONENT_DROPDOWN].handle_key = ui_dropdown_handle_key;
+    ui_component_ops[UI_COMPONENT_DROPDOWN].popup_contains = ui_dropdown_popup_contains;
+    ui_component_ops[UI_COMPONENT_DROPDOWN].destroy_data = NULL; /* data freed via generic or explicit close */
+
+    /* scroll view */
+    ui_component_ops[UI_COMPONENT_SCROLL_VIEW].render = ui_render_scroll_view;
+    ui_component_ops[UI_COMPONENT_SCROLL_VIEW].layout = ui_layout_scroll_view;
+    ui_component_ops[UI_COMPONENT_SCROLL_VIEW].handle_scroll_drag = ui_scroll_view_handle_scroll_drag;
+
+    /* menu bar */
+    ui_component_ops[UI_COMPONENT_MENU_BAR].render = ui_render_menu_bar;
+    ui_component_ops[UI_COMPONENT_MENU_BAR].layout = ui_layout_menu_bar;
+
+    /* menu item */
+    ui_component_ops[UI_COMPONENT_MENU_ITEM].render = ui_render_menu_item;
+    ui_component_ops[UI_COMPONENT_MENU_ITEM].handle_pointer_release = NULL; /* handled via the global ui_menu_item_handle_pointer_release */
+    ui_component_ops[UI_COMPONENT_MENU_ITEM].popup_contains = ui_menu_item_popup_contains;
+}
+
 static inline void
 ui_layout_vertical(ui_context_t *ctx, int32_t parent_id)
 {
     ui_component_t *p = ui_component_by_id(ctx, parent_id);
     if (!p) return;
 
-    if (p->type == UI_COMPONENT_SCROLL_VIEW) {
-        ui_layout_scroll_view(ctx, p);
-        return;
-    }
-    if (p->type == UI_COMPONENT_LIST_VIEW) {
-        ui_layout_list_view(ctx, p);
-        return;
-    }
-    if (p->type == UI_COMPONENT_DROPDOWN) {
-        ui_layout_dropdown(ctx, p);
-        return;
-    }
-    if (p->type == UI_COMPONENT_MENU_BAR) {
-        ui_layout_menu_bar(ctx, p);
+    const ui_component_ops_t *ops = &ui_component_ops[p->type];
+    if (ops->layout) {
+        ops->layout(ctx, p);
         return;
     }
 
@@ -861,36 +968,20 @@ ui_render_component_clip(ui_context_t *ctx, int32_t id, ui_rect_t clip, int32_t 
     ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height,
                       draw_bounds.x, draw_bounds.y, draw_bounds.w, draw_bounds.h, c->bg_color, clip);
 
-    switch (c->type) {
-    case UI_COMPONENT_LABEL:
-        ui_render_label(ctx, c, draw_bounds, clip, offset_y);
-        break;
-    case UI_COMPONENT_BUTTON:
-        ui_render_button(ctx, c, draw_bounds, clip, offset_y);
-        break;
-    case UI_COMPONENT_CHECKBOX:
-        ui_render_checkbox(ctx, c, draw_bounds, clip, offset_y);
-        break;
-    case UI_COMPONENT_TEXT_INPUT:
-        ui_render_text_input(ctx, c, draw_bounds, clip, offset_y);
-        break;
-    case UI_COMPONENT_LIST_VIEW:
-        ui_render_list_view(ctx, c, draw_bounds, clip, offset_y);
+    const ui_component_ops_t *ops = &ui_component_ops[c->type];
+    if (ops->render) {
+        ops->render(ctx, c, draw_bounds, clip, offset_y);
+    }
+
+    /* Some components (containers with popups/children) return early from their render
+     * after painting children themselves. For others we draw a border and recurse. */
+    if (c->type == UI_COMPONENT_LIST_VIEW ||
+        c->type == UI_COMPONENT_DROPDOWN ||
+        c->type == UI_COMPONENT_SCROLL_VIEW ||
+        c->type == UI_COMPONENT_MENU_BAR ||
+        c->type == UI_COMPONENT_MENU_ITEM) {
+        /* they handled their own children / no generic border */
         return;
-    case UI_COMPONENT_DROPDOWN:
-        ui_render_dropdown(ctx, c, draw_bounds, clip, offset_y);
-        return;
-    case UI_COMPONENT_SCROLL_VIEW:
-        ui_render_scroll_view(ctx, c, draw_bounds, clip, offset_y);
-        return;
-    case UI_COMPONENT_MENU_BAR:
-        ui_render_menu_bar(ctx, c, draw_bounds, clip, offset_y);
-        return;
-    case UI_COMPONENT_MENU_ITEM:
-        ui_render_menu_item(ctx, c, draw_bounds, clip, offset_y);
-        return;
-    default:
-        break;
     }
 
     ui_stroke_rect_clip(ctx->mapped_base, ctx->width, ctx->height, draw_bounds, c->border_px, c->border_color, clip);
@@ -924,8 +1015,8 @@ ui_find_component_at(ui_context_t *ctx, int32_t id, int32_t x, int32_t y)
         if (!child) break;
         child_id = child->next_sibling_id;
     }
-    if (c->type == UI_COMPONENT_DROPDOWN && ui_dropdown_popup_contains(ctx, c, x, y)) return c->id;
-    if (c->type == UI_COMPONENT_MENU_ITEM && ui_menu_item_popup_contains(ctx, c, x, y)) return c->id;
+    const ui_component_ops_t *ops = &ui_component_ops[c->type];
+    if (ops->popup_contains && ops->popup_contains(ctx, c, x, y)) return c->id;
     if (ui_point_in_bounds(x, y, c->bounds)) return c->id;
     return -1;
 }
@@ -960,8 +1051,9 @@ ui_find_list_view_at(ui_context_t *ctx, int32_t id, int32_t x, int32_t y)
         if (!child) break;
         child_id = child->next_sibling_id;
     }
+    const ui_component_ops_t *ops = &ui_component_ops[c->type];
     if (c->type == UI_COMPONENT_LIST_VIEW && ui_point_in_bounds(x, y, c->bounds)) return c->id;
-    if (c->type == UI_COMPONENT_DROPDOWN && ui_dropdown_popup_contains(ctx, c, x, y)) return c->id;
+    if (ops->popup_contains && ops->popup_contains(ctx, c, x, y)) return c->id;
     return -1;
 }
 
@@ -979,14 +1071,13 @@ ui_find_clickable_at(ui_context_t *ctx, int32_t id, int32_t x, int32_t y)
         child_id = child->next_sibling_id;
     }
     if (c->clickable && ui_point_in_bounds(x, y, c->bounds)) return c->id;
-    if (c->type == UI_COMPONENT_DROPDOWN) {
-        if (ui_point_in_bounds(x, y, c->bounds)) return c->id;
-        if (ui_dropdown_popup_contains(ctx, c, x, y)) return c->id;
-    }
-    if (c->type == UI_COMPONENT_MENU_ITEM) {
-        if (ui_point_in_bounds(x, y, c->bounds)) return c->id;
-        if (ui_menu_item_popup_contains(ctx, c, x, y)) return c->id;
-    }
+
+    const ui_component_ops_t *ops = &ui_component_ops[c->type];
+    if (ops->popup_contains && ops->popup_contains(ctx, c, x, y)) return c->id;
+    /* also allow clicking the bar item itself for dropdown/menu even without explicit clickable flag in some cases */
+    if ((c->type == UI_COMPONENT_DROPDOWN || c->type == UI_COMPONENT_MENU_ITEM) &&
+        ui_point_in_bounds(x, y, c->bounds)) return c->id;
+
     return -1;
 }
 
@@ -1053,25 +1144,26 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
 
             const int32_t list_id = ui_find_list_view_at(ctx, ctx->root_id, ctx->pointer_x, ctx->pointer_y);
             ui_component_t *lv = ui_component_by_id(ctx, list_id);
-            if (lv && lv->type == UI_COMPONENT_LIST_VIEW) {
-                ui_list_view_handle_pointer_press(ctx, lv, ctx->pointer_x, ctx->pointer_y);
-            } else if (lv && lv->type == UI_COMPONENT_DROPDOWN) {
-                ui_dropdown_handle_pointer_press(ctx, lv, ctx->pointer_x, ctx->pointer_y);
+            if (lv) {
+                const ui_component_ops_t *ops = &ui_component_ops[lv->type];
+                if (ops->handle_pointer_press) {
+                    ops->handle_pointer_press(ctx, lv, ctx->pointer_x, ctx->pointer_y);
+                }
             }
         } else if (!left_now && left_prev) {
             const int32_t hit_id = ui_find_clickable_at(ctx, ctx->root_id, ctx->pointer_x, ctx->pointer_y);
             ui_component_t *hit = ui_component_by_id(ctx, hit_id);
-            if (hit && hit->pressed && hit->on_click && hit->type != UI_COMPONENT_MENU_ITEM) {
-                if (hit->type == UI_COMPONENT_BUTTON) {
-                    ui_button_handle_pointer_release(ctx, hit);
-                } else if (hit->type == UI_COMPONENT_CHECKBOX) {
-                    ui_checkbox_handle_pointer_release(ctx, hit);
-                } else {
+            if (hit && hit->pressed) {
+                const ui_component_ops_t *ops = &ui_component_ops[hit->type];
+                if (ops->handle_pointer_release) {
+                    ops->handle_pointer_release(ctx, hit);
+                } else if (hit->on_click) {
+                    /* fallback for components that only registered an on_click */
                     hit->on_click(ctx, hit->id, hit->on_click_user);
                 }
             }
 
-            /* Menu system release reaction is owned by the menu_item component. */
+            /* Menu system release reaction is owned by the menu_item component (via its global handler). */
             ui_menu_item_handle_pointer_release(ctx, ctx->pointer_x, ctx->pointer_y);
 
             /* Dropdown outside-click close is owned by the dropdown component. */
@@ -1088,10 +1180,9 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
         } else if (left_now && left_prev && ctx->active_scroll_component_id > 0 && dy != 0) {
             ui_component_t *sv = ui_component_by_id(ctx, ctx->active_scroll_component_id);
             if (sv) {
-                if (sv->type == UI_COMPONENT_SCROLL_VIEW) {
-                    ui_scroll_view_handle_scroll_drag(ctx, sv, dy);
-                } else if (sv->type == UI_COMPONENT_LIST_VIEW) {
-                    ui_list_view_handle_scroll_drag(ctx, sv, dy);
+                const ui_component_ops_t *ops = &ui_component_ops[sv->type];
+                if (ops->handle_scroll_drag) {
+                    ops->handle_scroll_drag(ctx, sv, dy);
                 }
             }
         }
@@ -1108,10 +1199,11 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
 
         if (ctx->focused_component_id > 0) {
             ui_component_t *focus = ui_component_by_id(ctx, ctx->focused_component_id);
-            if (focus && focus->type == UI_COMPONENT_TEXT_INPUT) {
-                ui_text_input_handle_key(ctx, focus, key);
-            } else if (focus && focus->type == UI_COMPONENT_DROPDOWN) {
-                ui_dropdown_handle_key(ctx, focus, key);
+            if (focus) {
+                const ui_component_ops_t *ops = &ui_component_ops[focus->type];
+                if (ops->handle_key) {
+                    ops->handle_key(ctx, focus, key);
+                }
             }
         }
         return UI_MSG_CONSUMED;

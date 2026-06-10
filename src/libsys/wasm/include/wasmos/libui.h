@@ -809,6 +809,22 @@ ui_layout_vertical(ui_context_t *ctx, int32_t parent_id)
     }
 }
 
+#include "wasmos/libui_label.h"
+#include "wasmos/libui_button.h"
+/* Prototypes for main renderer so component headers can call back. */
+static inline void ui_render_component_clip(ui_context_t *ctx, int32_t id, ui_rect_t clip, int32_t offset_y);
+static inline void ui_render_component(ui_context_t *ctx, int32_t id);
+
+/* Component headers (common set; menus are libc-only) */
+#include "wasmos/libui_label.h"
+#include "wasmos/libui_button.h"
+#include "wasmos/libui_checkbox.h"
+#include "wasmos/libui_text_input.h"
+#include "wasmos/libui_list_view.h"
+#include "wasmos/libui_dropdown.h"
+#include "wasmos/libui_scroll_view.h"
+
+
 static inline void
 ui_render_component_clip(ui_context_t *ctx, int32_t id, ui_rect_t clip, int32_t offset_y)
 {
@@ -820,146 +836,30 @@ ui_render_component_clip(ui_context_t *ctx, int32_t id, ui_rect_t clip, int32_t 
     ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height,
                       draw_bounds.x, draw_bounds.y, draw_bounds.w, draw_bounds.h, c->bg_color, clip);
 
-    if (c->type == UI_COMPONENT_LABEL) {
-        ui_draw_text_clip(ctx,
-                          draw_bounds.x + c->padding_px,
-                          draw_bounds.y + (draw_bounds.h - ctx->font_px) / 2,
-                          c->text ? c->text : "",
-                          c->fg_color,
-                          clip);
-    } else if (c->type == UI_COMPONENT_BUTTON) {
-        const uint32_t inner = c->pressed ? 0xFF2B6AA0u : 0xFF4B91CCu;
-        ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height,
-                          draw_bounds.x + 2, draw_bounds.y + 2, draw_bounds.w - 4, draw_bounds.h - 4, inner, clip);
-        ui_draw_text_clip(ctx,
-                          draw_bounds.x + c->padding_px,
-                          draw_bounds.y + (draw_bounds.h - ctx->font_px) / 2,
-                          c->text ? c->text : "",
-                          0xFFFFFFFFu,
-                          clip);
-    } else if (c->type == UI_COMPONENT_CHECKBOX) {
-        const int32_t box = draw_bounds.h > 16 ? 16 : draw_bounds.h - 4;
-        const int32_t bx = draw_bounds.x + c->padding_px;
-        const int32_t by = draw_bounds.y + (draw_bounds.h - box) / 2;
-        ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, bx, by, box, box, 0xFF2B3440u, clip);
-        ui_stroke_rect_clip(ctx->mapped_base, ctx->width, ctx->height, (ui_rect_t){bx, by, box, box}, 1, 0xFF9CB6CEu, clip);
-        if (c->checked) {
-            ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, bx + 4, by + 4, box - 8, box - 8, 0xFF66CC88u, clip);
-        }
-        ui_draw_text_clip(ctx,
-                          bx + box + 8,
-                          draw_bounds.y + (draw_bounds.h - ctx->font_px) / 2,
-                          c->text ? c->text : "",
-                          c->fg_color,
-                          clip);
-    } else if (c->type == UI_COMPONENT_TEXT_INPUT) {
-        const int32_t active = (ctx->focused_component_id == c->id);
-        const uint32_t inner = active ? 0xFF1F3148u : 0xFF1C2738u;
-        const uint32_t outline = active ? 0xFF89C9FFu : c->border_color;
-        ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height,
-                          draw_bounds.x + 1, draw_bounds.y + 1, draw_bounds.w - 2, draw_bounds.h - 2, inner, clip);
-        ui_stroke_rect_clip(ctx->mapped_base, ctx->width, ctx->height, draw_bounds, 1, outline, clip);
-        const int32_t tx = draw_bounds.x + c->padding_px;
-        const int32_t ty = draw_bounds.y + (draw_bounds.h - ctx->font_px) / 2;
-        ui_draw_text_clip(ctx, tx, ty, c->text ? c->text : "", 0xFFFFFFFFu, clip);
-        if (active) {
-            const int32_t caret_x = tx + ui_measure_text_width(ctx, c->text ? c->text : "");
-            ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, caret_x, ty - 1, 1, ctx->font_px + 2, 0xFFFFFFFFu, clip);
-        }
-    } else if (c->type == UI_COMPONENT_LIST_VIEW) {
-        const ui_rect_t inner = {
-            draw_bounds.x + c->padding_px,
-            draw_bounds.y + c->padding_px,
-            draw_bounds.w - (c->padding_px * 2),
-            draw_bounds.h - (c->padding_px * 2)
-        };
-        const int32_t item_h = 20;
-        ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, inner.x, inner.y, inner.w, inner.h, 0xFF172233u, clip);
-        const ui_rect_t item_clip = ui_rect_intersect(clip, inner);
-        for (int32_t i = 0; i < c->item_count; ++i) {
-            const int32_t row_y = inner.y + (i * item_h) - c->scroll_y;
-            const uint32_t row_bg = (i == c->selected_index) ? 0xFF2F5C88u : ((i & 1) ? 0xFF1F2E43u : 0xFF1A283B);
-            ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, inner.x, row_y, inner.w, item_h, row_bg, item_clip);
-            ui_draw_text_clip(ctx,
-                              inner.x + 6, row_y + (item_h - ctx->font_px) / 2,
-                              c->list_items[i] ? c->list_items[i] : "",
-                              0xFFFFFFFFu,
-                              item_clip);
-        }
-        ui_stroke_rect_clip(ctx->mapped_base, ctx->width, ctx->height, draw_bounds, c->border_px, c->border_color, clip);
-        if (c->scroll_max > 0 && inner.h > 8) {
-            const int32_t track_h = inner.h;
-            const int32_t thumb_h = (track_h * track_h) / (track_h + c->scroll_max);
-            const int32_t th = thumb_h < 8 ? 8 : thumb_h;
-            const int32_t ty = inner.y + ((track_h - th) * c->scroll_y) / c->scroll_max;
-            ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, inner.x + inner.w - 4, ty, 3, th, 0xFF6C88A8u, clip);
-        }
+    switch (c->type) {
+    case UI_COMPONENT_LABEL:
+        ui_render_label(ctx, c, draw_bounds, clip, offset_y);
+        break;
+    case UI_COMPONENT_BUTTON:
+        ui_render_button(ctx, c, draw_bounds, clip, offset_y);
+        break;
+    case UI_COMPONENT_CHECKBOX:
+        ui_render_checkbox(ctx, c, draw_bounds, clip, offset_y);
+        break;
+    case UI_COMPONENT_TEXT_INPUT:
+        ui_render_text_input(ctx, c, draw_bounds, clip, offset_y);
+        break;
+    case UI_COMPONENT_LIST_VIEW:
+        ui_render_list_view(ctx, c, draw_bounds, clip, offset_y);
         return;
-    } else if (c->type == UI_COMPONENT_DROPDOWN) {
-        const int32_t active = (ctx->focused_component_id == c->id);
-        const uint32_t inner = active ? 0xFF1F3148u : 0xFF1C2738u;
-        const uint32_t outline = active ? 0xFF89C9FFu : c->border_color;
-        ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height,
-                          draw_bounds.x + 1, draw_bounds.y + 1, draw_bounds.w - 2, draw_bounds.h - 2, inner, clip);
-        ui_stroke_rect_clip(ctx->mapped_base, ctx->width, ctx->height, draw_bounds, 1, outline, clip);
-
-        const char *selected = "";
-        if (c->selected_index >= 0 && c->selected_index < c->item_count && c->list_items && c->list_items[c->selected_index]) {
-            selected = c->list_items[c->selected_index];
-        } else if (c->text) {
-            selected = c->text;
-        }
-        ui_draw_text_clip(ctx,
-                          draw_bounds.x + c->padding_px, draw_bounds.y + (draw_bounds.h - ctx->font_px) / 2, selected, 0xFFFFFFFFu, clip);
-        ui_draw_text_clip(ctx,
-                          draw_bounds.x + draw_bounds.w - 12, draw_bounds.y + (draw_bounds.h - ctx->font_px) / 2,
-                          c->dropdown_open ? "^" : "v", 0xFF9CB6CEu, clip);
-
-        if (c->dropdown_open && c->item_count > 0) {
-            const int32_t item_h = 20;
-            const int32_t popup_h = (c->item_count * item_h > 120) ? 120 : (c->item_count * item_h);
-            ui_rect_t popup = { draw_bounds.x, draw_bounds.y + draw_bounds.h, draw_bounds.w, popup_h };
-            if ((popup.y + popup.h) > ctx->height) popup.y = draw_bounds.y - popup_h;
-            if (popup.y < 0) popup.y = 0;
-            ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, popup.x, popup.y, popup.w, popup.h, 0xFF172233u, clip);
-            ui_stroke_rect_clip(ctx->mapped_base, ctx->width, ctx->height, popup, 1, c->border_color, clip);
-            const ui_rect_t popup_clip = ui_rect_intersect(clip, popup);
-            for (int32_t i = 0; i < c->item_count; ++i) {
-                const int32_t row_y = popup.y + (i * item_h);
-                if (row_y >= (popup.y + popup.h)) break;
-                const uint32_t row_bg = (i == c->selected_index) ? 0xFF2F5C88u : ((i & 1) ? 0xFF1F2E43u : 0xFF1A283B);
-                ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, popup.x, row_y, popup.w, item_h, row_bg, popup_clip);
-                ui_draw_text_clip(ctx,
-                                  popup.x + 6, row_y + (item_h - ctx->font_px) / 2,
-                                  c->list_items[i] ? c->list_items[i] : "", 0xFFFFFFFFu, popup_clip);
-            }
-        }
+    case UI_COMPONENT_DROPDOWN:
+        ui_render_dropdown(ctx, c, draw_bounds, clip, offset_y);
         return;
-    } else if (c->type == UI_COMPONENT_SCROLL_VIEW) {
-        const ui_rect_t inner = {
-            draw_bounds.x + c->padding_px,
-            draw_bounds.y + c->padding_px,
-            draw_bounds.w - (c->padding_px * 2),
-            draw_bounds.h - (c->padding_px * 2)
-        };
-        ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, inner.x, inner.y, inner.w, inner.h, 0xFF1B2535u, clip);
-        ui_stroke_rect_clip(ctx->mapped_base, ctx->width, ctx->height, draw_bounds, c->border_px, c->border_color, clip);
-        const ui_rect_t child_clip = ui_rect_intersect(clip, inner);
-        int32_t child_id = c->first_child_id;
-        while (child_id > 0) {
-            ui_render_component_clip(ctx, child_id, child_clip, offset_y + c->scroll_y);
-            ui_component_t *child = ui_component_by_id(ctx, child_id);
-            if (!child) break;
-            child_id = child->next_sibling_id;
-        }
-        if (c->scroll_max > 0 && inner.h > 8) {
-            const int32_t track_h = inner.h;
-            const int32_t thumb_h = (track_h * track_h) / (track_h + c->scroll_max);
-            const int32_t th = thumb_h < 8 ? 8 : thumb_h;
-            const int32_t ty = inner.y + ((track_h - th) * c->scroll_y) / c->scroll_max;
-            ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, inner.x + inner.w - 4, ty, 3, th, 0xFF6C88A8u, clip);
-        }
+    case UI_COMPONENT_SCROLL_VIEW:
+        ui_render_scroll_view(ctx, c, draw_bounds, clip, offset_y);
         return;
+    default:
+        break;
     }
 
     ui_stroke_rect_clip(ctx->mapped_base, ctx->width, ctx->height, draw_bounds, c->border_px, c->border_color, clip);
@@ -973,8 +873,6 @@ ui_render_component_clip(ui_context_t *ctx, int32_t id, ui_rect_t clip, int32_t 
     }
 }
 
-static inline void
-ui_render_component(ui_context_t *ctx, int32_t id)
 {
     ui_rect_t clip = { 0, 0, ctx->width, ctx->height };
     ui_render_component_clip(ctx, id, clip, 0);

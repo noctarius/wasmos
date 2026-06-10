@@ -784,106 +784,50 @@ ui_point_in_bounds(int32_t x, int32_t y, ui_rect_t r)
     return x >= r.x && y >= r.y && x < (r.x + r.w) && y < (r.y + r.h);
 }
 
-static inline ui_rect_t
-ui_dropdown_popup_bounds(const ui_context_t *ctx, const ui_component_t *c)
-{
-    ui_rect_t popup = { 0, 0, 0, 0 };
-    if (!ctx || !c || c->type != UI_COMPONENT_DROPDOWN || !c->dropdown_open || c->item_count <= 0) return popup;
-    const int32_t item_h = 20;
-    popup.x = c->bounds.x;
-    popup.w = c->bounds.w;
-    popup.h = (c->item_count * item_h > 120) ? 120 : (c->item_count * item_h);
-    popup.y = c->bounds.y + c->bounds.h;
-    if ((popup.y + popup.h) > ctx->height) popup.y = c->bounds.y - popup.h;
-    if (popup.y < 0) popup.y = 0;
-    return popup;
-}
+/* Popup bounds moved to component headers (dropdown + menu_item). */
 
-static inline ui_rect_t
-ui_menu_item_popup_bounds(const ui_context_t *ctx, const ui_component_t *c)
-{
-    ui_rect_t popup = { 0, 0, 0, 0 };
-    if (!ctx || !c || c->type != UI_COMPONENT_MENU_ITEM || !c->dropdown_open || c->item_count <= 0) return popup;
-    const int32_t item_h = 22;
-    const int32_t pw = c->bounds.w > 160 ? c->bounds.w : 160;
-    popup.x = c->bounds.x;
-    popup.y = c->bounds.y + c->bounds.h;
-    popup.w = pw;
-    popup.h = c->item_count * item_h;
-    return popup;
-}
+/* Layout prototype so component headers (inserted below) can call back for child recursion in containers. */
+static inline void ui_layout_vertical(ui_context_t *ctx, int32_t parent_id);
+
+/* Component headers (render + now layout too) are included here so their per-type functions
+ * are visible to the layout and render dispatchers below. */
+#include "wasmos/libui_label.h"
+#include "wasmos/libui_button.h"
+#include "wasmos/libui_checkbox.h"
+#include "wasmos/libui_text_input.h"
+#include "wasmos/libui_list_view.h"
+#include "wasmos/libui_dropdown.h"
+#include "wasmos/libui_scroll_view.h"
+#include "wasmos/libui_menu_bar.h"
+#include "wasmos/libui_menu_item.h"
 
 static inline void
 ui_layout_vertical(ui_context_t *ctx, int32_t parent_id)
 {
     ui_component_t *p = ui_component_by_id(ctx, parent_id);
     if (!p) return;
+
+    if (p->type == UI_COMPONENT_SCROLL_VIEW) {
+        ui_layout_scroll_view(ctx, p);
+        return;
+    }
+    if (p->type == UI_COMPONENT_LIST_VIEW) {
+        ui_layout_list_view(ctx, p);
+        return;
+    }
+    if (p->type == UI_COMPONENT_DROPDOWN) {
+        ui_layout_dropdown(ctx, p);
+        return;
+    }
+    if (p->type == UI_COMPONENT_MENU_BAR) {
+        ui_layout_menu_bar(ctx, p);
+        return;
+    }
+
+    /* Generic vertical layout for panels, labels, buttons, etc. */
     int32_t x = p->bounds.x + p->padding_px;
     int32_t y = p->bounds.y + p->padding_px;
     const int32_t w = p->bounds.w - (p->padding_px * 2);
-
-    if (p->type == UI_COMPONENT_SCROLL_VIEW) {
-        int32_t y_cur = p->bounds.y + p->padding_px;
-        int32_t content_h = 0;
-        int32_t child_id = p->first_child_id;
-        while (child_id > 0) {
-            ui_component_t *c = ui_component_by_id(ctx, child_id);
-            if (!c) break;
-            const int32_t h = c->preferred_h > 8 ? c->preferred_h : 8;
-            c->bounds.x = p->bounds.x + p->padding_px;
-            c->bounds.y = y_cur;
-            c->bounds.w = w;
-            c->bounds.h = h;
-            y_cur += h + p->gap_px;
-            content_h += h + p->gap_px;
-            if (c->first_child_id > 0) ui_layout_vertical(ctx, c->id);
-            child_id = c->next_sibling_id;
-        }
-        if (content_h > 0) content_h -= p->gap_px;
-        const int32_t viewport_h = p->bounds.h - (p->padding_px * 2);
-        p->scroll_max = (content_h > viewport_h) ? (content_h - viewport_h) : 0;
-        if (p->scroll_y < 0) p->scroll_y = 0;
-        if (p->scroll_y > p->scroll_max) p->scroll_y = p->scroll_max;
-        return;
-    }
-
-    if (p->type == UI_COMPONENT_LIST_VIEW) {
-        const int32_t item_h = 20;
-        const int32_t viewport_h = p->bounds.h - (p->padding_px * 2);
-        const int32_t content_h = p->item_count * item_h;
-        p->scroll_max = (content_h > viewport_h) ? (content_h - viewport_h) : 0;
-        if (p->scroll_y < 0) p->scroll_y = 0;
-        if (p->scroll_y > p->scroll_max) p->scroll_y = p->scroll_max;
-        if (p->selected_index < 0) p->selected_index = 0;
-        if (p->selected_index >= p->item_count) p->selected_index = (p->item_count > 0) ? (p->item_count - 1) : 0;
-        return;
-    }
-
-    if (p->type == UI_COMPONENT_DROPDOWN) {
-        if (p->selected_index < 0) p->selected_index = 0;
-        if (p->selected_index >= p->item_count) p->selected_index = (p->item_count > 0) ? (p->item_count - 1) : 0;
-        p->scroll_max = 0;
-        p->scroll_y = 0;
-        return;
-    }
-
-    if (p->type == UI_COMPONENT_MENU_BAR) {
-        int32_t x_cur = p->bounds.x + p->padding_px;
-        int32_t child_id2 = p->first_child_id;
-        while (child_id2 > 0) {
-            ui_component_t *mc = ui_component_by_id(ctx, child_id2);
-            if (!mc) break;
-            /* preferred_h repurposed as preferred width for menu items */
-            const int32_t iw = mc->preferred_h > 4 ? mc->preferred_h : 80;
-            mc->bounds.x = x_cur;
-            mc->bounds.y = p->bounds.y;
-            mc->bounds.w = iw;
-            mc->bounds.h = p->bounds.h;
-            x_cur += iw + p->gap_px;
-            child_id2 = mc->next_sibling_id;
-        }
-        return;
-    }
 
     int32_t child_id = p->first_child_id;
     while (child_id > 0) {
@@ -900,21 +844,7 @@ ui_layout_vertical(ui_context_t *ctx, int32_t parent_id)
     }
 }
 
-#include "wasmos/libui_label.h"
-#include "wasmos/libui_button.h"
-
-/* Prototypes for main renderer so component headers can call back (e.g. scroll_view children).
- * Component headers follow for full split of render (and future layout/event) ownership. */
-static inline void ui_render_component_clip(ui_context_t *ctx, int32_t id, ui_rect_t clip, int32_t offset_y);
-static inline void ui_render_component(ui_context_t *ctx, int32_t id);
-
-#include "wasmos/libui_checkbox.h"
-#include "wasmos/libui_text_input.h"
-#include "wasmos/libui_list_view.h"
-#include "wasmos/libui_dropdown.h"
-#include "wasmos/libui_scroll_view.h"
-#include "wasmos/libui_menu_bar.h"
-#include "wasmos/libui_menu_item.h"
+/* (all component includes are hoisted earlier, before layout/render dispatchers) */
 
 
 

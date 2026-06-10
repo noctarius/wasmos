@@ -39,4 +39,18 @@ ui_render_menu_item(ui_context_t *ctx, const ui_component_t *c, ui_rect_t draw_b
     }
 }
 
+static inline ui_rect_t
+ui_menu_item_popup_bounds(const ui_context_t *ctx, const ui_component_t *c)
+{
+    ui_rect_t popup = { 0, 0, 0, 0 };
+    if (!ctx || !c || c->type != UI_COMPONENT_MENU_ITEM || !c->dropdown_open || c->item_count <= 0) return popup;
+    const int32_t item_h = 22;
+    const int32_t pw = c->bounds.w > 160 ? c->bounds.w : 160;
+    popup.x = c->bounds.x;
+    popup.y = c->bounds.y + c->bounds.h;
+    popup.w = pw;
+    popup.h = c->item_count * item_h;
+    return popup;
+}
+
 #endif /* WASMOS_LIBUI_MENU_ITEM_H */

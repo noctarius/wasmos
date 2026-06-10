@@ -1626,11 +1626,10 @@ static int process_schedule_once_impl(void) {
     if (!thread || !proc || !proc->entry) {
         return 1;
     }
-    /* Thread state alone determines runnability. */
+    /* Thread state alone determines runnability.
+     * Note: the idle thread (RUNNING on another CPU) no longer reaches here —
+     * cpu_sched_pick_next returns NULL for idle when state==RUNNING. */
     if (thread->state != THREAD_STATE_READY) {
-        /* Invariant violation: a non-READY thread was in the ready queue and
-         * has been silently dequeued.  Log it; do not re-enqueue (BLOCKED
-         * threads must remain waiting for their event). */
         serial_printf_unlocked("[sched] dequeued non-ready tid=%u pid=%u state=%u block=%u\n",
                                (unsigned)thread->tid,
                                (unsigned)(proc ? proc->pid : 0u),

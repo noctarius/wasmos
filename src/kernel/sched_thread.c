@@ -140,7 +140,15 @@ cpu_sched_pick_next(cpu_sched_t *cs)
     if (prio == 0xFF) {
         g_high_prio_streak     = 0;
         g_last_dispatched_prio = SCHED_PRIO_IDLE;
-        return cs->idle;
+        /* Under SMP, multiple CPUs can hit this fallback simultaneously.
+         * If the idle thread is already in RUNNING state another CPU has
+         * already dispatched it; return NULL so the caller loops silently
+         * rather than producing a non-ready dequeue invariant log. */
+        thread_t *idle = cs->idle;
+        if (idle && idle->state == THREAD_STATE_RUNNING) {
+            return 0;
+        }
+        return idle;
     }
 
     /* Anti-starvation: if we have dispatched SCHED_ANTISTARVATION_STREAK

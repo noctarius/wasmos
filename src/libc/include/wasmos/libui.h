@@ -938,14 +938,8 @@ ui_find_component_at(ui_context_t *ctx, int32_t id, int32_t x, int32_t y)
         if (!child) break;
         child_id = child->next_sibling_id;
     }
-    if (c->type == UI_COMPONENT_DROPDOWN && c->dropdown_open) {
-        const ui_rect_t popup = ui_dropdown_popup_bounds(ctx, c);
-        if (popup.w > 0 && popup.h > 0 && ui_point_in_bounds(x, y, popup)) return c->id;
-    }
-    if (c->type == UI_COMPONENT_MENU_ITEM && c->dropdown_open) {
-        const ui_rect_t popup = ui_menu_item_popup_bounds(ctx, c);
-        if (popup.w > 0 && popup.h > 0 && ui_point_in_bounds(x, y, popup)) return c->id;
-    }
+    if (c->type == UI_COMPONENT_DROPDOWN && ui_dropdown_popup_contains(ctx, c, x, y)) return c->id;
+    if (c->type == UI_COMPONENT_MENU_ITEM && ui_menu_item_popup_contains(ctx, c, x, y)) return c->id;
     if (ui_point_in_bounds(x, y, c->bounds)) return c->id;
     return -1;
 }
@@ -981,10 +975,7 @@ ui_find_list_view_at(ui_context_t *ctx, int32_t id, int32_t x, int32_t y)
         child_id = child->next_sibling_id;
     }
     if (c->type == UI_COMPONENT_LIST_VIEW && ui_point_in_bounds(x, y, c->bounds)) return c->id;
-    if (c->type == UI_COMPONENT_DROPDOWN && c->dropdown_open) {
-        const ui_rect_t popup = ui_dropdown_popup_bounds(ctx, c);
-        if (popup.w > 0 && popup.h > 0 && ui_point_in_bounds(x, y, popup)) return c->id;
-    }
+    if (c->type == UI_COMPONENT_DROPDOWN && ui_dropdown_popup_contains(ctx, c, x, y)) return c->id;
     return -1;
 }
 
@@ -1004,17 +995,11 @@ ui_find_clickable_at(ui_context_t *ctx, int32_t id, int32_t x, int32_t y)
     if (c->clickable && ui_point_in_bounds(x, y, c->bounds)) return c->id;
     if (c->type == UI_COMPONENT_DROPDOWN) {
         if (ui_point_in_bounds(x, y, c->bounds)) return c->id;
-        if (c->dropdown_open) {
-            const ui_rect_t popup = ui_dropdown_popup_bounds(ctx, c);
-            if (popup.w > 0 && popup.h > 0 && ui_point_in_bounds(x, y, popup)) return c->id;
-        }
+        if (ui_dropdown_popup_contains(ctx, c, x, y)) return c->id;
     }
     if (c->type == UI_COMPONENT_MENU_ITEM) {
         if (ui_point_in_bounds(x, y, c->bounds)) return c->id;
-        if (c->dropdown_open) {
-            const ui_rect_t popup = ui_menu_item_popup_bounds(ctx, c);
-            if (popup.w > 0 && popup.h > 0 && ui_point_in_bounds(x, y, popup)) return c->id;
-        }
+        if (ui_menu_item_popup_contains(ctx, c, x, y)) return c->id;
     }
     return -1;
 }

@@ -72,4 +72,14 @@ ui_dropdown_popup_bounds(const ui_context_t *ctx, const ui_component_t *c)
     return popup;
 }
 
+/* Component-owned popup hit test helper.
+ * Core find_*_at and event code can call this for dropdown-specific popup bounds checking. */
+static inline bool
+ui_dropdown_popup_contains(const ui_context_t *ctx, const ui_component_t *c, int32_t x, int32_t y)
+{
+    if (!c->dropdown_open) return false;
+    const ui_rect_t popup = ui_dropdown_popup_bounds(ctx, c);
+    return popup.w > 0 && popup.h > 0 && ui_point_in_bounds(x, y, popup);
+}
+
 #endif /* WASMOS_LIBUI_DROPDOWN_H */

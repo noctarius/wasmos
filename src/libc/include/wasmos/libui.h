@@ -1130,11 +1130,12 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
             ui_mark_dirty(ctx);
         } else if (left_now && left_prev && ctx->active_scroll_component_id > 0 && dy != 0) {
             ui_component_t *sv = ui_component_by_id(ctx, ctx->active_scroll_component_id);
-            if (sv && sv->scroll_max > 0) {
-                sv->scroll_y -= dy;
-                if (sv->scroll_y < 0) sv->scroll_y = 0;
-                if (sv->scroll_y > sv->scroll_max) sv->scroll_y = sv->scroll_max;
-                ui_mark_dirty(ctx);
+            if (sv) {
+                if (sv->type == UI_COMPONENT_SCROLL_VIEW) {
+                    ui_scroll_view_handle_scroll_drag(ctx, sv, dy);
+                } else if (sv->type == UI_COMPONENT_LIST_VIEW) {
+                    ui_list_view_handle_scroll_drag(ctx, sv, dy);
+                }
             }
         }
 

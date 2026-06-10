@@ -1913,6 +1913,10 @@ fn draw_window_buffer(win: window_slot_t, buf: buffer_slot_t, clip: c.gfx_rect_t
     };
     const dst_pixels = g_backbuffer_pixels.?;
     const dst_stride: usize = @intCast(g_fb_info.framebuffer_stride);
+    // System windows (e.g. menu bar popup expansion) may have zero pixels in
+    // areas outside their rendered content.  Treat zero as passthrough so the
+    // underlying desktop shows through instead of compositing opaque black.
+    const passthrough_zero = (win.flags & GFX_WINDOW_FLAG_SYSTEM) != 0;
     const cr = window_content_rect(win);
     if (cr.w <= 0 or cr.h <= 0 or !rect_intersects(clip, cr)) return true;
     const x0 = if (clip.x > cr.x) clip.x else cr.x;
@@ -1931,24 +1935,17 @@ fn draw_window_buffer(win: window_slot_t, buf: buffer_slot_t, clip: c.gfx_rect_t
     if (fmt == 1) {
         // Framebuffer is BGRX (format 1).  Client pixels are stored as
         // 0xAARRGGBB — same byte layout as the framebuffer expects (BGRA).
-        // Direct row-by-row bulk copy; alpha channel is forced to 0xFF by
-        // ORing the top byte (client alpha is ignored, all surfaces opaque).
         var row: usize = 0;
         while (row < h) : (row += 1) {
             const sy = sy0 + row;
             if (sy >= @as(usize, @intCast(buf.height))) break;
             const src_row = src_pixels + sy * buf_w + sx0;
             const dst_row = dst_pixels + (@as(usize, @intCast(y0)) + row) * dst_stride + @as(usize, @intCast(x0));
-            // Force alpha=0xFF and copy RGB in one pass.
             var col: usize = 0;
-            while (col + 4 <= w) : (col += 4) {
-                dst_row[col]     = src_row[col]     | 0xFF000000;
-                dst_row[col + 1] = src_row[col + 1] | 0xFF000000;
-                dst_row[col + 2] = src_row[col + 2] | 0xFF000000;
-                dst_row[col + 3] = src_row[col + 3] | 0xFF000000;
-            }
             while (col < w) : (col += 1) {
-                dst_row[col] = src_row[col] | 0xFF000000;
+                const px = src_row[col];
+                if (passthrough_zero and px == 0) continue;
+                dst_row[col] = px | 0xFF000000;
             }
         }
     } else {
@@ -1962,6 +1959,7 @@ fn draw_window_buffer(win: window_slot_t, buf: buffer_slot_t, clip: c.gfx_rect_t
             var col: usize = 0;
             while (col < w) : (col += 1) {
                 const px = src_row[col];
+                if (passthrough_zero and px == 0) continue;
                 const b: u32 = px & 0xFF;
                 const g_ch: u32 = (px >> 8) & 0xFF;
                 const r: u32 = (px >> 16) & 0xFF;

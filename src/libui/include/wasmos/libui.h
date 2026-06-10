@@ -564,9 +564,18 @@ ui_component_alloc(ui_context_t *ctx, ui_component_type_t type)
     case UI_COMPONENT_TEXT_INPUT: UI_ALLOC_DATA(ui_text_data_t);     break;
     case UI_COMPONENT_CHECKBOX:   UI_ALLOC_DATA(ui_checkbox_data_t); break;
     case UI_COMPONENT_SCROLL_VIEW: UI_ALLOC_DATA(ui_scroll_view_data_t); break;
-    case UI_COMPONENT_LIST_VIEW:  UI_ALLOC_DATA(ui_list_view_data_t);  break;
-    case UI_COMPONENT_DROPDOWN:   UI_ALLOC_DATA(ui_dropdown_data_t);   break;
-    case UI_COMPONENT_MENU_ITEM:  UI_ALLOC_DATA(ui_menu_item_data_t);  break;
+    case UI_COMPONENT_LIST_VIEW:
+        UI_ALLOC_DATA(ui_list_view_data_t);
+        ((ui_list_view_data_t *)c->component_data)->list.selected = -1;
+        break;
+    case UI_COMPONENT_DROPDOWN:
+        UI_ALLOC_DATA(ui_dropdown_data_t);
+        ((ui_dropdown_data_t *)c->component_data)->list.selected = -1;
+        break;
+    case UI_COMPONENT_MENU_ITEM:
+        UI_ALLOC_DATA(ui_menu_item_data_t);
+        ((ui_menu_item_data_t *)c->component_data)->list.selected = -1;
+        break;
     case UI_COMPONENT_MENU_BAR:   UI_ALLOC_DATA(ui_menu_bar_data_t);   break;
     default: break; /* PANEL needs no per-instance data */
     }
@@ -1207,8 +1216,11 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
                 const ui_component_ops_t *ops = &ui_component_ops[hit->type];
                 if (ops->handle_pointer_release) {
                     ops->handle_pointer_release(ctx, hit);
-                } else if (hit->on_click) {
-                    /* fallback for components that only registered an on_click */
+                } else if (hit->on_click && hit->type != UI_COMPONENT_MENU_ITEM) {
+                    /* fallback for components that only registered an on_click.
+                     * MENU_ITEM is excluded: its on_click fires via pick_and_invoke
+                     * inside ui_menu_item_handle_pointer_release (below) after the
+                     * correct selected index has been set. */
                     hit->on_click(ctx, hit->id, hit->on_click_user);
                 }
             }
@@ -1234,6 +1246,19 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
                 if (ops->handle_scroll_drag) {
                     ops->handle_scroll_drag(ctx, sv, dy);
                 }
+            }
+        }
+
+        /* Hover: update selected index of any open menu item popup to follow cursor. */
+        for (int32_t i = 0; i < ctx->component_count; ++i) {
+            ui_component_t *mc = &ctx->components[i];
+            if (!mc->in_use || mc->type != UI_COMPONENT_MENU_ITEM) continue;
+            ui_menu_item_data_t *md = (ui_menu_item_data_t *)mc->component_data;
+            if (!md || !md->dropdown_open) continue;
+            const int32_t idx = ui_menu_item_get_selection_from_point(ctx, mc, ctx->pointer_x, ctx->pointer_y);
+            if (idx != md->list.selected) {
+                md->list.selected = idx;
+                ui_mark_dirty(ctx);
             }
         }
 

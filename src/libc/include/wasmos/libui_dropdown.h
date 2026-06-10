@@ -82,4 +82,48 @@ ui_dropdown_popup_contains(const ui_context_t *ctx, const ui_component_t *c, int
     return popup.w > 0 && popup.h > 0 && ui_point_in_bounds(x, y, popup);
 }
 
+/* Component-owned reaction handlers.
+ * Core calls these after routing (find target, focus, pressed, etc.) so dropdown owns
+ * its specific behavior for pointer (toggle/pick) and keys (open/close/nav). */
+static inline void
+ui_dropdown_handle_pointer_press(ui_context_t *ctx, ui_component_t *c, int32_t pointer_x, int32_t pointer_y)
+{
+    if (ui_point_in_bounds(pointer_x, pointer_y, c->bounds)) {
+        c->dropdown_open = c->dropdown_open ? 0 : 1;
+        ui_mark_dirty(ctx);
+    } else if (c->dropdown_open) {
+        const ui_rect_t popup = ui_dropdown_popup_bounds(ctx, c);
+        if (popup.w > 0 && popup.h > 0 && ui_point_in_bounds(pointer_x, pointer_y, popup)) {
+            const int32_t idx = (pointer_y - popup.y) / 20;
+            if (idx >= 0 && idx < c->item_count) c->selected_index = idx;
+            c->dropdown_open = 0;
+            ui_mark_dirty(ctx);
+        }
+    }
+}
+
+static inline void
+ui_dropdown_handle_key(ui_context_t *ctx, ui_component_t *c, uint32_t key)
+{
+    if (key == 27u) {
+        if (c->dropdown_open) {
+            c->dropdown_open = 0;
+            ui_mark_dirty(ctx);
+        }
+    } else if (key == '\r' || key == '\n' || key == ' ') {
+        c->dropdown_open = c->dropdown_open ? 0 : 1;
+        ui_mark_dirty(ctx);
+    } else if (key == 'j' || key == 'J') {
+        if (c->item_count > 0 && c->selected_index < (c->item_count - 1)) {
+            c->selected_index += 1;
+            ui_mark_dirty(ctx);
+        }
+    } else if (key == 'k' || key == 'K') {
+        if (c->item_count > 0 && c->selected_index > 0) {
+            c->selected_index -= 1;
+            ui_mark_dirty(ctx);
+        }
+    }
+}
+
 #endif /* WASMOS_LIBUI_DROPDOWN_H */

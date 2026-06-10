@@ -126,4 +126,14 @@ ui_dropdown_handle_key(ui_context_t *ctx, ui_component_t *c, uint32_t key)
     }
 }
 
+/* Simple close helper for orchestration in core (e.g. click outside). */
+static inline void
+ui_dropdown_close(ui_context_t *ctx, ui_component_t *c)
+{
+    if (c->dropdown_open) {
+        c->dropdown_open = 0;
+        ui_mark_dirty(ctx);
+    }
+}
+
 #endif /* WASMOS_LIBUI_DROPDOWN_H */

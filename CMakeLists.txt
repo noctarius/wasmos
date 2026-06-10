@@ -78,6 +78,9 @@ set(WASM_SHMEM_OWNER_APP ${BUILD_DIR}/shmownr.wap)
 set(WASM_SHMEM_TARGET_SRC ${EXAMPLES_C_DIR}/shmem_target/shmem_target.c)
 set(WASM_SHMEM_TARGET_WASM ${BUILD_DIR}/shmtgt.wasm)
 set(WASM_SHMEM_TARGET_APP ${BUILD_DIR}/shmtgt.wap)
+set(WASM_MENU_BAR_SRC ${EXAMPLES_C_DIR}/menu_bar/menu_bar.c)
+set(WASM_MENU_BAR_WASM ${BUILD_DIR}/menu_bar.wasm)
+set(WASM_MENU_BAR_APP ${BUILD_DIR}/menu_bar.wap)
 set(WASM_ATA_DRIVER_SRC ${DRIVER_WASM_DIR}/ata/ata.c)
 set(WASM_ATA_DRIVER_WASM ${BUILD_DIR}/ata.wasm)
 set(WASM_ATA_APP ${BUILD_DIR}/ata.wap)
@@ -939,6 +942,9 @@ set(SHMEM_OWNER_COPY_CMD
 set(SHMEM_TARGET_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SHMEM_TARGET_APP} ${BUILD_DIR}/esp/apps/shmtgt.wap
 )
+set(MENU_BAR_COPY_CMD
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_MENU_BAR_APP} ${BUILD_DIR}/esp/apps/menu_bar.wap
+)
 set(LARGE_READ_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/large_read.txt ${BUILD_DIR}/esp/large_read.txt
 )
@@ -1022,6 +1028,7 @@ set(WASMOS_ESP_POPULATE_CMDS
   ${GFX_SMOKE_COPY_CMD}
   ${SHMEM_OWNER_COPY_CMD}
   ${SHMEM_TARGET_COPY_CMD}
+  ${MENU_BAR_COPY_CMD}
   ${IRQ_ROUTE_DENY_COPY_CMD}
   ${IRQ_ROUTE_ALLOW_COPY_CMD}
   ${RUST_HELLO_COPY_CMD}

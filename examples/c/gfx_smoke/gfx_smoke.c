@@ -7,6 +7,12 @@
 #include "wasmos/startup.h"
 #include "wasmo_mascot_rgba.h"
 
+/* Mirrors the WASMOS_TRACE cmake flag (-DWASMOS_TRACE=ON); can also be forced
+ * locally by defining GFX_SMOKE_TRACE=1 on the compiler command line. */
+#ifndef GFX_SMOKE_TRACE
+#define GFX_SMOKE_TRACE WASMOS_TRACE
+#endif
+
 #define GFX_REQ_BASE 0x6A00
 #define FBPP 4
 #define PAGE_SIZE 4096
@@ -275,9 +281,13 @@ poll_gfx_events_once(int32_t gfx_ep, int32_t reply_ep, int32_t *req, int32_t *ou
             (void)putsn(msg, (size_t)n);
         }
     } else if (ev.arg1 == GFX_EVENT_FOCUS_GAINED) {
+#if GFX_SMOKE_TRACE
         puts("[test] gfx smoke event focus-gained");
+#endif
     } else if (ev.arg1 == GFX_EVENT_FOCUS_LOST) {
+#if GFX_SMOKE_TRACE
         puts("[test] gfx smoke event focus-lost");
+#endif
     } else if (ev.arg1 == GFX_EVENT_POINTER) {
         /* keep pointer events silent to reduce log noise during compositor debug */
     } else if (ev.arg1 == GFX_EVENT_CLOSE_REQUEST) {
@@ -411,7 +421,9 @@ static void
 ui_demo_button_click(ui_context_t *ctx, int32_t component_id, void *user)
 {
     (void)component_id;
+#if GFX_SMOKE_TRACE
     puts("[dbg-libui] on_click fired");
+#endif
     int32_t *click_count = (int32_t *)user;
     ui_component_t *root = ui_component_by_id(ctx, ctx->root_id);
     ui_component_t *label = ui_component_by_id(ctx, 2);
@@ -528,6 +540,7 @@ pump_libui_demo(void)
     if (!ui->close_requested &&
         ui_send_gfx_raw(ui->gfx_endpoint, ui->reply_endpoint, ui->req_id++,
                         GFX_IPC_POLL_EVENT, 0, 0, 0, 0, &ev_raw) == 0) {
+#if GFX_SMOKE_TRACE
         if (ev_raw.arg1 == GFX_EVENT_POINTER) {
             printf("[gfx-t] libui ptr x=%d y=%d btn=%d\n",
                    (int)(ev_raw.arg2 & 0xFFFF),
@@ -537,6 +550,7 @@ pump_libui_demo(void)
                 puts("[dbg-libui] pointer btn-down");
             }
         }
+#endif
         (void)ui_loop_handle_ipc(ui, &ev_raw);
     }
     if (ui_loop_drain(ui) != 0) {
@@ -823,9 +837,13 @@ main(int argc, char **argv)
         } else if (ev.arg1 == GFX_EVENT_POINTER) {
             (void)ev;
         } else if (ev.arg1 == GFX_EVENT_FOCUS_GAINED) {
+#if GFX_SMOKE_TRACE
             puts("[test] gfx smoke event focus-gained");
+#endif
         } else if (ev.arg1 == GFX_EVENT_FOCUS_LOST) {
+#if GFX_SMOKE_TRACE
             puts("[test] gfx smoke event focus-lost");
+#endif
         }
         if (rc == 1) {
             if (!closed1 && close_id == window_id) {

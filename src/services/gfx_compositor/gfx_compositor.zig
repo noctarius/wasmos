@@ -1082,7 +1082,7 @@ fn maybe_emit_pointer_event(dx: i32, dy: i32, buttons: u32, prev_buttons: u32) v
         if (dx == 0 and dy == 0 and buttons == prev_buttons) return;
         const rel_x = clamp(g_pointer_x - cr.x, 0, cr.w - 1);
         const rel_y = clamp(g_pointer_y - cr.y, 0, cr.h - 1);
-        if ((buttons & 0x1) != 0 and (prev_buttons & 0x1) == 0) {
+        if (GFX_TRACE and (buttons & 0x1) != 0 and (prev_buttons & 0x1) == 0) {
             logMsg("[dbg-gfx] pointer btn-push queued\n");
         }
         event_push(focused.owner_endpoint, c.GFX_EVENT_POINTER, pack_u16_pair(@intCast(rel_x), @intCast(rel_y)), buttons, 0);

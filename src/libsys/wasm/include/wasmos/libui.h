@@ -994,7 +994,7 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
             ui_component_t *hit = ui_component_by_id(ctx, hit_id);
             if (hit && hit->pressed && hit->on_click) {
                 if (hit->type == UI_COMPONENT_CHECKBOX) {
-                    hit->checked = hit->checked ? 0 : 1;
+                    ui_checkbox_toggle(ctx, hit);
                 }
                 hit->on_click(ctx, hit->id, hit->on_click_user);
             }

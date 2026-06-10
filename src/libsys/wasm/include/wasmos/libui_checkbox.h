@@ -23,4 +23,12 @@ ui_render_checkbox(ui_context_t *ctx, const ui_component_t *c, ui_rect_t draw_bo
                       clip);
 }
 
+/* Component-owned toggle for checkbox (before its on_click). */
+static inline void
+ui_checkbox_toggle(ui_context_t *ctx, ui_component_t *c)
+{
+    c->checked = !c->checked;
+    ui_mark_dirty(ctx);
+}
+
 #endif /* WASMOS_LIBUI_CHECKBOX_H */

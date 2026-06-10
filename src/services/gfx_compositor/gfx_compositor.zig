@@ -20,9 +20,10 @@ const FONT_INIT_MAX_ATTEMPTS: u32 = 64;
 const FONT_INIT_RETRY_MASK: u32 = 0x3F;
 const TITLE_GLYPHS: []const u8 = "win 0123456789";
 const GFX_TITLE_TEXT_ENABLED: bool = true;
+const build_options = @import("build_options");
 /// Enable per-event serial traces for click/pointer/present debugging.
-/// Set to false to suppress serial noise in production.
-const GFX_TRACE: bool = false;
+/// Controlled by cmake -DWASMOS_TRACE=ON (mirrors the C-side WASMOS_TRACE flag).
+const GFX_TRACE: bool = build_options.gfx_trace;
 const GFX_WINDOW_MIN_DIM: u32 = 1;
 const GFX_WINDOW_MAX_DIM: u32 = 8192;
 const GFX_WINDOW_FLAG_SYSTEM: u32 = 1 << 0;

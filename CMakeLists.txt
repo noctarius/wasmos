@@ -357,6 +357,16 @@ set(WASMOS_LIBC_INCLUDE_DEPS
   ${SERVICES_DIR}/vt/vt_types.h
   ${SERVICES_DIR}/cli/cli_types.h
   ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
+  ${CMAKE_SOURCE_DIR}/src/libui/include/wasmos/libui.h
+  ${CMAKE_SOURCE_DIR}/src/libui/include/wasmos/libui_label.h
+  ${CMAKE_SOURCE_DIR}/src/libui/include/wasmos/libui_button.h
+  ${CMAKE_SOURCE_DIR}/src/libui/include/wasmos/libui_checkbox.h
+  ${CMAKE_SOURCE_DIR}/src/libui/include/wasmos/libui_text_input.h
+  ${CMAKE_SOURCE_DIR}/src/libui/include/wasmos/libui_list_view.h
+  ${CMAKE_SOURCE_DIR}/src/libui/include/wasmos/libui_dropdown.h
+  ${CMAKE_SOURCE_DIR}/src/libui/include/wasmos/libui_scroll_view.h
+  ${CMAKE_SOURCE_DIR}/src/libui/include/wasmos/libui_menu_bar.h
+  ${CMAKE_SOURCE_DIR}/src/libui/include/wasmos/libui_menu_item.h
 )
 
 function(wasmos_add_wasm_c_app_target target_name)
@@ -424,6 +434,7 @@ function(wasmos_add_wasm_c_app_target target_name)
             -Wl,--max-memory=${_max_memory}
             -Wl,--allow-undefined
             -Wl,--export=${WASMOS_APP_EXPORT}
+            -I${CMAKE_SOURCE_DIR}/src/libui/include
             -I${LIBC_DIR}/include
             -I${LIBSYS_WASM_DIR}/include
             -I${DRIVER_WASM_DIR}/include
@@ -458,7 +469,7 @@ function(wasmos_add_wasm_c_app_target target_name)
 
   wasmos_add_ide_c_target(${target_name}_ide
     SOURCES ${_wasmos_sources}
-    INCLUDES ${LIBC_DIR}/include ${LIBSYS_WASM_DIR}/include ${DRIVER_WASM_DIR}/include
+    INCLUDES ${CMAKE_SOURCE_DIR}/src/libui/include ${LIBC_DIR}/include ${LIBSYS_WASM_DIR}/include ${DRIVER_WASM_DIR}/include
   )
 endfunction()
 

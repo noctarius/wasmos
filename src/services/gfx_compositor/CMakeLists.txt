@@ -17,6 +17,18 @@ set(GFX_COMPOSITOR_LIBC_STRING_OBJ ${BUILD_DIR}/gfx_compositor_libc_string.o)
 set(GFX_COMPOSITOR_LIBC_CTYPE_OBJ ${BUILD_DIR}/gfx_compositor_libc_ctype.o)
 set(GFX_COMPOSITOR_ELF ${WASM_GFX_COMPOSITOR_WASM})
 
+# Generate a tiny Zig module that exposes WASMOS_TRACE as a comptime bool.
+# This lets gfx_compositor.zig read GFX_TRACE from the build system rather
+# than having it hardcoded, matching how C apps use -DWASMOS_TRACE.
+if (WASMOS_TRACE)
+  set(GFX_TRACE_ZIG_BOOL true)
+else ()
+  set(GFX_TRACE_ZIG_BOOL false)
+endif ()
+set(GFX_COMPOSITOR_BUILD_OPTIONS_ZIG ${BUILD_DIR}/gfx_compositor_build_options.zig)
+file(WRITE "${GFX_COMPOSITOR_BUILD_OPTIONS_ZIG}"
+     "pub const gfx_trace: bool = ${GFX_TRACE_ZIG_BOOL};\n")
+
 add_custom_command(
   OUTPUT ${GFX_COMPOSITOR_ZIG_OBJ}
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
@@ -26,6 +38,7 @@ add_custom_command(
           -O ReleaseSmall
           -fstrip
           --dep libsys
+          --dep build_options
           -I ${CMAKE_SOURCE_DIR}
           -I ${CMAKE_CURRENT_SOURCE_DIR}
           -I ${DRIVER_WASM_DIR}/include
@@ -35,8 +48,10 @@ add_custom_command(
           -I ${DRIVER_WASM_DIR}/include
           -I ${LIBSYS_NATIVE_DIR}/include
           -Mlibsys=${LIBSYS_NATIVE_DIR}/zig/libsys.zig
+          -Mbuild_options=${GFX_COMPOSITOR_BUILD_OPTIONS_ZIG}
           -femit-bin=${GFX_COMPOSITOR_ZIG_OBJ}
   DEPENDS ${WASM_GFX_COMPOSITOR_SRC}
+          ${GFX_COMPOSITOR_BUILD_OPTIONS_ZIG}
           ${LIBSYS_NATIVE_DIR}/zig/libsys.zig
           ${LIBSYS_NATIVE_DIR}/zig/c_abi.zig
           ${CMAKE_CURRENT_SOURCE_DIR}/gfx_compositor_imports.h

@@ -75,8 +75,9 @@ static void on_apps_click(ui_context_t *ctx, int32_t component_id, void *user)
                       &status, 0, 0, 0);
 }
 
-int wasmos_main(void)
+int main(int argc, char **argv)
 {
+    (void)argc; (void)argv;
     const int32_t proc_ep = (int32_t)(uint32_t)wasmos_startup_arg(0);
     const int32_t reply_ep = wasmos_ipc_create_endpoint();
     if (reply_ep < 0) return 1;

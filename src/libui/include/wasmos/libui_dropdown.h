@@ -136,4 +136,19 @@ ui_dropdown_close(ui_context_t *ctx, ui_component_t *c)
     }
 }
 
+/* Component-owned helper: close every open dropdown.
+ * Core calls this on pointer release when the click was a miss (no clickable hit),
+ * so that dropdown "owns" knowing which of its instances are open and how to close them.
+ */
+static inline void
+ui_dropdown_close_all_open(ui_context_t *ctx)
+{
+    for (int32_t i = 0; i < ctx->component_count; ++i) {
+        ui_component_t *c = &ctx->components[i];
+        if (c->in_use && c->type == UI_COMPONENT_DROPDOWN && c->dropdown_open) {
+            ui_dropdown_close(ctx, c);
+        }
+    }
+}
+
 #endif /* WASMOS_LIBUI_DROPDOWN_H */

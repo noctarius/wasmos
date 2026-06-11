@@ -464,12 +464,11 @@ ui_menu_item_handle_popup_event(ui_context_t *ctx, ui_component_t *mi,
                     }
                 }
             }
-        } else if (hovered < 0) {
-            /* Release outside popup — dismiss */
-            d->dropdown_open = 0;
-            ui_menu_item_popup_close(ctx, mi);
-            ui_mark_dirty(ctx);
         }
+        /* Release outside popup bounds: don't dismiss here.  The popup will
+         * close via FOCUS_LOST when the user clicks outside the menu hierarchy.
+         * Dismissing on out-of-bounds release caused premature close when the
+         * mouse moved a few pixels beyond the popup edge. */
     }
 }
 

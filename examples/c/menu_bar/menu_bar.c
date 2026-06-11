@@ -131,6 +131,13 @@ static int32_t context_to_name(int32_t context_id, char *out, int32_t cap)
             (int32_t)(uintptr_t)&parent_pid,
             (int32_t)(uintptr_t)&stats);
         if (rc < 0) continue;
+        /* Kernel writes into WASM linear memory via mm_copy_to_user; sync
+         * is required for the data to be visible on the WASM side. */
+        if (wasmos_sync_user_read((int32_t)(uintptr_t)namebuf, (int32_t)sizeof(namebuf)) != 0 ||
+            wasmos_sync_user_read((int32_t)(uintptr_t)&parent_pid, (int32_t)sizeof(parent_pid)) != 0 ||
+            wasmos_sync_user_read((int32_t)(uintptr_t)&stats, (int32_t)sizeof(stats)) != 0) {
+            continue;
+        }
         if ((int32_t)stats.context_id == context_id) {
             int32_t n = 0;
             while (namebuf[n] && n < cap - 1) { out[n] = namebuf[n]; n++; }

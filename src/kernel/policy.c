@@ -7,6 +7,7 @@
 #include "ipc.h"
 #include "irq.h"
 #include "process.h"
+#include "serial.h"
 #include "string.h"
 
 typedef struct {
@@ -44,6 +45,39 @@ policy_irq_route_allows(uint32_t context_id, uint32_t irq_line)
         return (g_irq_route_policy[i].irq_mask & (uint16_t)(1u << irq_line)) != 0;
     }
     return 0;
+}
+
+static const char *
+policy_action_name(policy_action_t action)
+{
+    switch (action) {
+    case POLICY_ACTION_IO_PORT:       return "io.port";
+    case POLICY_ACTION_MMIO_MAP:      return "io.mmio";
+    case POLICY_ACTION_DMA_BUFFER:    return "dma.buffer";
+    case POLICY_ACTION_IRQ_CONTROL:   return "irq.control";
+    case POLICY_ACTION_IRQ_ROUTE:     return "irq.route";
+    case POLICY_ACTION_SYSTEM_CONTROL: return "system.control";
+    default:                          return "unknown";
+    }
+}
+
+int
+policy_require(uint32_t context_id, policy_action_t action, uint32_t arg0)
+{
+    if (policy_authorize(context_id, action, arg0) == 0) {
+        return 0;
+    }
+    process_t *proc = process_find_by_context(context_id);
+    serial_write("[permission] denied: ");
+    serial_write(policy_action_name(action));
+    serial_write(" from ");
+    serial_write(proc && proc->name ? proc->name : "?");
+    serial_write(" — killing process\n");
+    if (proc) {
+        process_set_exit_status(proc, -1);
+        process_yield(PROCESS_RUN_EXITED);
+    }
+    return -1; /* only reached if process could not be killed */
 }
 
 int

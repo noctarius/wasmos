@@ -20,4 +20,10 @@ typedef enum {
 /* Return 0 if context_id is authorized to perform action with arg0, or -1 to deny. */
 int policy_authorize(uint32_t context_id, policy_action_t action, uint32_t arg0);
 
+/* Like policy_authorize but terminates the calling process on denial.
+ * Use at all capability-gated syscall entry points (both WASM and native).
+ * Only returns to the caller if the process could not be killed for some reason,
+ * in which case it returns -1 so the caller can still fail safely. */
+int policy_require(uint32_t context_id, policy_action_t action, uint32_t arg0);
+
 #endif

@@ -473,6 +473,10 @@ wasm_user_va_from_host_ptr(uint32_t context_id,
     return wasm_user_va_from_offset(context_id, (uint32_t)off, span, out_user_va);
 }
 
+/* io.port, io.mmio and irq use allowlist-based policy: a process may have the
+ * general capability but be denied a specific port/line.  Denial is an expected
+ * normal outcome (probe-and-skip), not a security violation, so policy_authorize
+ * is used (returns -1, caller decides how to handle). */
 static int
 require_io_capability(uint32_t context_id, uint16_t port)
 {
@@ -497,10 +501,12 @@ require_irq_route_capability(uint32_t context_id)
     return policy_authorize(context_id, POLICY_ACTION_IRQ_CONTROL, 0);
 }
 
+/* system.control is binary: any denial means the process must not be calling
+ * this.  policy_require kills the process instead of returning a silent -1. */
 static int
 require_system_control_capability(uint32_t context_id)
 {
-    return policy_authorize(context_id, POLICY_ACTION_SYSTEM_CONTROL, 0);
+    return policy_require(context_id, POLICY_ACTION_SYSTEM_CONTROL, 0);
 }
 
 static int

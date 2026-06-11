@@ -28,16 +28,24 @@ It defines repository workflow and documentation/update conventions.
 - 64-bit (`x86_64`) UEFI microkernel OS scaffold with deterministic boot handoff (`BOOTX64.EFI` -> `kernel.elf` + `initfs.img`).
 - WASM-first userspace (`wasm3`) that runs apps, services, and drivers from multiple languages (C, Zig, Go, Rust, AssemblyScript), plus optional native drivers where hardware access needs it.
 - Custom WASMOS-APP package format (`.wap`) for both WebAssembly and native app/service/driver payloads with shared metadata-driven loading.
-- Explicit microkernel primitives: paging, scheduler, IPC, process lifecycle, capabilities, and full ring-3 isolation enabled by default.
+- Explicit microkernel primitives: paging, scheduler, IPC, process lifecycle, capabilities with binary policy enforcement (kill on violation), and full ring-3 isolation enabled by default.
 - Preemptive multitasking in the kernel scheduler with runtime validation coverage.
+- Symmetric Multi-Processing (SMP) with AP trampoline bring-up, per-CPU state (`cpu_local_t`), Kconfig-selectable interrupt controller (PIC/LAPIC/IOAPIC), and a spinlock-protected shared ready queue; gated by `WASMOS_SMP` Kconfig (requires IOAPIC mode, default off).
 - Service-driven system bring-up (`init` -> `fs-manager`/`fs-init` -> `device-manager` -> `sysinit`) with discovery/registration and policy-driven driver spawning.
 - Linux `udev`-like userspace device inventory and policy rules (`device-manager` + `pci-bus`/`acpi-bus`, with bootstrap/runtime rule roots) for deterministic driver bring-up.
 - Early generic `virtio-serial` driver service (`virtio.serial`) for host/guest automation plumbing and future transport consumers.
 - Directory-based mount namespace (`/init`, `/boot`, `/user`) through `fs-manager` VFS routing across initfs and FAT-backed filesystems.
 - Buffer-borrow-based DMA support integrated across capability policy, runtime transport, and driver paths.
-- End-to-end threading support (`thread_create`, `thread_join`, `thread_detach`, `thread_yield`, `thread_exit`) for ring-3 workloads.
-- Early windowing/graphics stack: framebuffer driver, compositor, shared-buffer rendering, input routing, and runtime display mode control.
+- End-to-end threading support (`thread_create`, `thread_join`, `thread_detach`, `thread_yield`, `thread_exit`) for ring-3 workloads, with user-space reentrant mutex across WASM and native runtimes.
+- Full windowing and graphics stack: framebuffer driver, software compositor, shared-buffer rendering, input routing, window chrome (title bar, close/maximize/restore, drag-to-move, live resize), software cursor, popup menus, and a system menu bar with date/time display and per-app window lists; backed by a native Zig TTF `font-service` for text rendering.
+- `libui` component toolkit — vtable-dispatched widget tree (panels, labels, buttons, checkboxes, text inputs, scroll views, list views, dropdowns, and menus) shared across WASM and native ring-3 apps.
 - Practical interactive environment with VT/CLI, multi-TTY switching, and scriptable boot-time userspace workflows.
+
+<p align="center">
+  <picture>
+    <img src="wasmos-ui.png" alt="Wasmo the WASMOS mascot" width="600">
+  </picture>
+</p>
 
 ## Quick Start
 

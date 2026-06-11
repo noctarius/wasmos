@@ -166,9 +166,8 @@ ui_menu_item_popup_render(ui_context_t *ctx, ui_component_t *mi, int32_t hovered
     ui_menu_item_data_t *d = (ui_menu_item_data_t *)mi->component_data;
     if (!d || !d->popup_base) return;
 
-    const int32_t item_h   = 22;
-    const int32_t header_h = mi->bounds.h;
-    const ui_rect_t full   = {0, 0, d->popup_w, d->popup_h};
+    const int32_t item_h = 22;
+    const ui_rect_t full = {0, 0, d->popup_w, d->popup_h};
 
     ui_fill_rect(d->popup_base, d->popup_w, d->popup_h, 0, 0, d->popup_w, d->popup_h, 0xFF1A2840u);
     ui_stroke_rect_clip(d->popup_base, d->popup_w, d->popup_h, full, 1, 0xFF4A6080u, full);
@@ -180,26 +179,13 @@ ui_menu_item_popup_render(ui_context_t *ctx, ui_component_t *mi, int32_t hovered
     ctx->width       = d->popup_w;
     ctx->height      = d->popup_h;
 
-    /* Header: menu item label with highlight background */
-    if (header_h > 0) {
-        ui_fill_rect(d->popup_base, d->popup_w, d->popup_h, 1, 1,
-                     d->popup_w - 2, header_h - 1, 0xFF2A4060u);
-        ui_draw_text_clip(ctx,
-                          mi->padding_px > 0 ? mi->padding_px : 8,
-                          (header_h - ctx->font_px) / 2,
-                          (d->text.text ? d->text.text : ""),
-                          mi->fg_color ? mi->fg_color : 0xFFDDE8F0u, full);
-        ui_fill_rect(d->popup_base, d->popup_w, d->popup_h,
-                     0, header_h - 1, d->popup_w, 1, 0xFF304050u);
-    }
-
     for (int32_t i = 0; i < d->list.count; ++i) {
         if (i == hovered) {
             ui_fill_rect(d->popup_base, d->popup_w, d->popup_h,
-                         1, header_h + i * item_h, d->popup_w - 2, item_h, 0xFF2F5C88u);
+                         1, i * item_h, d->popup_w - 2, item_h, 0xFF2F5C88u);
         }
         ui_draw_text_clip(ctx, 8,
-                          header_h + i * item_h + (item_h - ctx->font_px) / 2,
+                          i * item_h + (item_h - ctx->font_px) / 2,
                           (d->list.items[i] ? d->list.items[i] : ""),
                           0xFFFFFFFFu, full);
     }
@@ -258,9 +244,9 @@ ui_menu_item_popup_open(ui_context_t *ctx, ui_component_t *mi)
     const int32_t item_h  = 22;
     const int32_t min_w   = 160;
     const int32_t popup_x = mi->bounds.x;
-    const int32_t popup_y = mi->bounds.y;
+    const int32_t popup_y = mi->bounds.y + mi->bounds.h; /* below the bar item, no overlap */
     const int32_t popup_w = mi->bounds.w > min_w ? mi->bounds.w : min_w;
-    const int32_t popup_h = mi->bounds.h + d->list.count * item_h;
+    const int32_t popup_h = d->list.count * item_h;      /* list rows only, no header */
     int32_t status = 0, a1 = 0, a2 = 0, a3 = 0;
 
     if (ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
@@ -336,7 +322,7 @@ ui_menu_item_sync_popup(ui_context_t *ctx, ui_component_t *mi)
         if (d->popup_win_id > 0) ui_menu_item_popup_close(ctx, mi);
         return;
     }
-    const int32_t expected_h = mi->bounds.h + d->list.count * 22;
+    const int32_t expected_h = d->list.count * 22;
     if (d->popup_win_id == 0) {
         ui_menu_item_popup_open(ctx, mi);
     } else if (d->popup_h != expected_h) {
@@ -361,10 +347,8 @@ ui_menu_item_handle_popup_event(ui_context_t *ctx, ui_component_t *mi,
     d->popup_prev_buttons    = buttons;
     (void)px;
 
-    const int32_t header_h = mi->bounds.h;
-    const int32_t item_h   = 22;
-    const int32_t hovered  = (py >= header_h && py < d->popup_h)
-                              ? ((py - header_h) / item_h) : -1;
+    const int32_t item_h  = 22;
+    const int32_t hovered = (py >= 0 && py < d->popup_h) ? (py / item_h) : -1;
 
     if (hovered != d->popup_hovered) {
         d->popup_hovered = hovered;
@@ -373,13 +357,6 @@ ui_menu_item_handle_popup_event(ui_context_t *ctx, ui_component_t *mi,
     }
 
     if (!left_now && left_prev) {
-        if (py >= 0 && py < header_h) {
-            /* Clicked header — close without selecting */
-            d->dropdown_open = 0;
-            ui_menu_item_popup_close(ctx, mi);
-            ui_mark_dirty(ctx);
-            return;
-        }
         if (hovered >= 0 && hovered < d->list.count) {
             d->list.selected = hovered;
             d->dropdown_open = 0;
@@ -388,6 +365,11 @@ ui_menu_item_handle_popup_event(ui_context_t *ctx, ui_component_t *mi,
             void *user_data        = mi->on_click_user;
             ui_menu_item_popup_close(ctx, mi);
             if (cb) cb(ctx, mi_id, user_data);
+            ui_mark_dirty(ctx);
+        } else if (hovered < 0) {
+            /* Release outside popup items — dismiss */
+            d->dropdown_open = 0;
+            ui_menu_item_popup_close(ctx, mi);
             ui_mark_dirty(ctx);
         }
     }

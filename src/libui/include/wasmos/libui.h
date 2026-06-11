@@ -1249,19 +1249,6 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
             }
         }
 
-        /* Hover: update selected index of any open menu item popup to follow cursor. */
-        for (int32_t i = 0; i < ctx->component_count; ++i) {
-            ui_component_t *mc = &ctx->components[i];
-            if (!mc->in_use || mc->type != UI_COMPONENT_MENU_ITEM) continue;
-            ui_menu_item_data_t *md = (ui_menu_item_data_t *)mc->component_data;
-            if (!md || !md->dropdown_open) continue;
-            const int32_t idx = ui_menu_item_get_selection_from_point(ctx, mc, ctx->pointer_x, ctx->pointer_y);
-            if (idx != md->list.selected) {
-                md->list.selected = idx;
-                ui_mark_dirty(ctx);
-            }
-        }
-
         ctx->pointer_buttons = buttons;
         return UI_MSG_CONSUMED;
     }

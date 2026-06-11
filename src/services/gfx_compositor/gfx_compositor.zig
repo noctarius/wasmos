@@ -2459,8 +2459,7 @@ fn handle_set_window_flags(msg: *const c.nd_ipc_message_t) void {
     g_windows[slot_idx].flags = flags;
     if ((flags & GFX_WINDOW_FLAG_SYSTEM) != 0) {
         g_windows[slot_idx].z = GFX_WINDOW_Z_SYSTEM;
-        g_windows[slot_idx].x = 0;
-        g_windows[slot_idx].y = 0;
+        // Position is NOT forced — caller controls placement via GFX_IPC_MOVE_WINDOW.
     }
     request_repaint_full();
     reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
@@ -2475,6 +2474,22 @@ fn handle_get_display_info(msg: *const c.nd_ipc_message_t) void {
         @intCast(g_fb_info.framebuffer_width),
         @intCast(g_fb_info.framebuffer_height),
         0);
+}
+
+fn handle_move_window(msg: *const c.nd_ipc_message_t) void {
+    const window_id: u32 = @bitCast(msg.arg0);
+    const x: i32 = @intCast(msg.arg1);
+    const y: i32 = @intCast(msg.arg2);
+    const slot_idx = window_find_by_id(window_id) orelse {
+        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        return;
+    };
+    if (g_windows[slot_idx].owner_endpoint != msg.source) {
+        reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
+        return;
+    }
+    resize_window_and_notify(slot_idx, x, y, g_windows[slot_idx].width, g_windows[slot_idx].height);
+    reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
 }
 
 fn handle_ipc_dispatch(msg: *const c.nd_ipc_message_t) void {
@@ -2518,6 +2533,7 @@ fn handle_ipc_dispatch(msg: *const c.nd_ipc_message_t) void {
         c.GFX_IPC_FOCUS_WINDOW => handle_focus_window(msg),
         c.GFX_IPC_SET_WINDOW_FLAGS => handle_set_window_flags(msg),
         c.GFX_IPC_GET_DISPLAY_INFO => handle_get_display_info(msg),
+        c.GFX_IPC_MOVE_WINDOW => handle_move_window(msg),
         else => reply_unsupported(msg),
     }
 }
@@ -2546,6 +2562,7 @@ fn register_ipc_handlers() i32 {
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_FOCUS_WINDOW, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_SET_WINDOW_FLAGS, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_GET_DISPLAY_INFO, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_MOVE_WINDOW, cb, null) != 0) return -1;
     return 0;
 }
 

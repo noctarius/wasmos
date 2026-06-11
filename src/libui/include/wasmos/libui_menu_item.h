@@ -272,14 +272,11 @@ ui_menu_item_popup_open(ui_context_t *ctx, ui_component_t *mi)
                     &status, &a1, &a2, &a3) != 0 || status != GFX_STATUS_OK) return;
     const int32_t win_id = a1;
 
-    /* INVISIBLE during setup prevents the placeholder flash before the first
-     * present.  NO_ACTIVATE prevents handle_present_window from auto-focusing
-     * the popup (which would send FOCUS_LOST to the parent popup and dismiss it). */
+    /* INVISIBLE during setup prevents the placeholder flash before the first present. */
     if (ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
                     GFX_IPC_SET_WINDOW_FLAGS, win_id,
                     (int32_t)(GFX_WINDOW_FLAG_TOPMOST | GFX_WINDOW_FLAG_NO_CHROME |
-                               GFX_WINDOW_FLAG_NO_TASK_LIST | GFX_WINDOW_FLAG_NO_ACTIVATE |
-                               GFX_WINDOW_FLAG_INVISIBLE), 0, 0,
+                               GFX_WINDOW_FLAG_NO_TASK_LIST | GFX_WINDOW_FLAG_INVISIBLE), 0, 0,
                     &status, 0, 0, 0) != 0 || status != GFX_STATUS_OK) goto fail;
 
     if (ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
@@ -311,13 +308,15 @@ ui_menu_item_popup_open(ui_context_t *ctx, ui_component_t *mi)
 
     ui_menu_item_popup_render(ctx, mi, -1);
     ui_menu_item_popup_present(ctx, d);
-    /* Reveal: clear INVISIBLE now that the buffer has content.
-     * Keep NO_ACTIVATE so focus cannot be stolen by mouse clicks or present. */
+    /* Reveal: clear INVISIBLE now that the buffer has content. */
     ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
                 GFX_IPC_SET_WINDOW_FLAGS, win_id,
                 (int32_t)(GFX_WINDOW_FLAG_TOPMOST | GFX_WINDOW_FLAG_NO_CHROME |
-                           GFX_WINDOW_FLAG_NO_TASK_LIST | GFX_WINDOW_FLAG_NO_ACTIVATE), 0, 0,
+                           GFX_WINDOW_FLAG_NO_TASK_LIST), 0, 0,
                 &status, 0, 0, 0);
+    /* Give the popup focus so it receives pointer events with correct coordinates. */
+    ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
+                GFX_IPC_FOCUS_WINDOW, win_id, 0, 0, 0, &status, 0, 0, 0);
     return;
 fail:
     ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
@@ -401,7 +400,7 @@ ui_menu_item_handle_popup_event(ui_context_t *ctx, ui_component_t *mi,
         const int32_t old_row = d->popup_hovered;
         d->popup_hovered = hovered;
 
-        /* Close sub-popup of previously-hovered child (if it has one) */
+        /* Close sub-popup of previously-hovered child (if it has one). */
         if (old_row >= 0) {
             ui_component_t *old_child = ui_menu_item_child_at_row(ctx, mi, old_row);
             if (old_child && old_child->first_child_id > 0) {
@@ -414,7 +413,12 @@ ui_menu_item_handle_popup_event(ui_context_t *ctx, ui_component_t *mi,
             }
         }
 
-        /* Open sub-popup preview of newly-hovered child (if it has children) */
+        /* Render first: this updates each child->bounds to its screen-space row rect,
+         * which popup_position uses to place the sub-popup to the right. */
+        ui_menu_item_popup_render(ctx, mi, hovered);
+        ui_menu_item_popup_present(ctx, d);
+
+        /* Open sub-popup for newly-hovered non-leaf child (bounds now correct). */
         if (hovered >= 0) {
             ui_component_t *new_child = ui_menu_item_child_at_row(ctx, mi, hovered);
             if (new_child && new_child->first_child_id > 0) {
@@ -425,9 +429,6 @@ ui_menu_item_handle_popup_event(ui_context_t *ctx, ui_component_t *mi,
                 }
             }
         }
-
-        ui_menu_item_popup_render(ctx, mi, hovered);
-        ui_menu_item_popup_present(ctx, d);
     }
 
     if (!left_now && left_prev) {

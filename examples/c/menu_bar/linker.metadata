@@ -22,3 +22,7 @@ flags = 0
 [[capabilities]]
 name = "dma.buffer"
 flags = 0
+
+[[capabilities]]
+name = "system.control"
+flags = 0

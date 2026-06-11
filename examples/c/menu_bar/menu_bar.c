@@ -88,6 +88,7 @@ static int32_t  g_sub_h           = 0;
 static int32_t  g_sub_hovered     = -1;
 static uint32_t g_sub_prev_btns   = 0;
 static int32_t  g_sub_flushing    = 0;
+static int32_t  g_last_apps_hov   = -1; /* last md->popup_hovered seen */
 
 static void sub_render(int32_t hovered)
 {
@@ -202,8 +203,8 @@ static void sub_open(int32_t app_idx)
 
     sub_render(-1);
     sub_present();
-    ui_send_gfx(g_ctx.gfx_endpoint, g_ctx.reply_endpoint, g_ctx.req_id++,
-                GFX_IPC_FOCUS_WINDOW, win_id, 0, 0, 0, &status, 0, 0, 0);
+    /* No GFX_IPC_FOCUS_WINDOW here: sub-popup starts in preview mode (no focus).
+     * on_apps_click will give it focus when the user commits to this app group. */
     return;
 fail:
     ui_send_gfx(g_ctx.gfx_endpoint, g_ctx.reply_endpoint, g_ctx.req_id++,
@@ -241,6 +242,29 @@ static void sub_handle_pointer(const wasmos_ipc_message_t *msg)
         }
         sub_close();
         ui_mark_dirty(&g_ctx);
+    }
+}
+
+/* Open sub-popup on hover; only runs while the Apps popup itself is open. */
+static void sync_sub_popup_from_hover(void)
+{
+    ui_component_t *mi = ui_component_by_id(&g_ctx, g_apps_mi_id);
+    if (!mi) return;
+    ui_menu_item_data_t *md = (ui_menu_item_data_t *)mi->component_data;
+    /* Do nothing if the Apps popup is not currently shown */
+    if (!md || !md->dropdown_open || !md->popup_win_id) {
+        g_last_apps_hov = -1;
+        return;
+    }
+    const int32_t hov = md->popup_hovered;
+    if (hov == g_last_apps_hov) return;
+    g_last_apps_hov = hov;
+
+    if (hov >= 0 && hov < g_ngroups && g_groups[hov].count > 1) {
+        if (g_sub_app_idx != hov)
+            sub_open(hov);
+    } else {
+        if (g_sub_win_id) sub_close();
     }
 }
 
@@ -393,8 +417,15 @@ static void on_apps_click(ui_context_t *ctx, int32_t component_id, void *user)
                     GFX_IPC_FOCUS_WINDOW, ag->win_ids[0], 0, 0, 0,
                     &status, 0, 0, 0);
     } else {
-        /* Multiple windows: open sub-popup */
-        sub_open(sel);
+        /* Multi-window: hover already opened sub-popup in preview mode.
+         * Give it focus now so the user can click window titles. */
+        if (g_sub_app_idx != sel) sub_open(sel); /* shouldn't be needed, but guard */
+        if (g_sub_win_id > 0) {
+            int32_t status = 0;
+            ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
+                        GFX_IPC_FOCUS_WINDOW, g_sub_win_id, 0, 0, 0,
+                        &status, 0, 0, 0);
+        }
     }
 }
 
@@ -485,6 +516,7 @@ int main(int argc, char **argv)
             }
         }
 
+        sync_sub_popup_from_hover();
         ui_loop_drain(&g_ctx);
 
         if (++clock_ctr >= CLOCK_REFRESH_TICKS) {

@@ -851,6 +851,10 @@ ui_menu_bar_init(ui_context_t *ctx, int32_t proc_endpoint, int32_t reply_endpoin
                         ctx->window_id, (int32_t)(GFX_WINDOW_FLAG_TOPMOST | GFX_WINDOW_FLAG_NO_CHROME), 0, 0,
                         &status, 0, 0, 0) != 0 || status != GFX_STATUS_OK) goto mb_fail;
 
+        if (ui_send_gfx(ctx->gfx_endpoint, reply_endpoint, ctx->req_id++, GFX_IPC_MOVE_WINDOW,
+                        ctx->window_id, 0, 0, 0,
+                        &status, 0, 0, 0) != 0 || status != GFX_STATUS_OK) goto mb_fail;
+
         if (ui_realloc_buffer(ctx, screen_w, bar_h) != 0) goto mb_fail;
 
         ui_init_component_ops();

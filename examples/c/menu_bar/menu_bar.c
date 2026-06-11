@@ -32,6 +32,12 @@ static uint32_t g_popup_prev_buttons = 0;
 
 /* ---- popup helpers ---- */
 
+static int32_t popup_header_height(void)
+{
+    ui_component_t *mi = ui_component_by_id(&g_ctx, g_popup_mi_id);
+    return (mi && mi->bounds.h > 0) ? mi->bounds.h : 0;
+}
+
 static void popup_present(void)
 {
     if (!g_popup_base || g_popup_win_id == 0 || g_popup_buf_id == 0) return;
@@ -49,6 +55,8 @@ static void popup_render(int32_t hovered)
     ui_component_t *mi = ui_component_by_id(&g_ctx, g_popup_mi_id);
     ui_menu_item_data_t *md = mi ? (ui_menu_item_data_t *)mi->component_data : NULL;
     if (!md) return;
+    const int32_t header_h = popup_header_height();
+    const int32_t item_y0 = header_h;
 
     /* Background + border */
     ui_fill_rect(g_popup_base, g_popup_w, g_popup_h, 0, 0, g_popup_w, g_popup_h, 0xFF1A2840u);
@@ -63,13 +71,23 @@ static void popup_render(int32_t hovered)
     g_ctx.width       = g_popup_w;
     g_ctx.height      = g_popup_h;
 
+    if (header_h > 0) {
+        ui_fill_rect(g_popup_base, g_popup_w, g_popup_h, 1, 1, g_popup_w - 2, header_h - 1, 0xFF2A4060u);
+        ui_draw_text_clip(&g_ctx, mi->padding_px > 0 ? mi->padding_px : 8,
+                          (header_h - g_ctx.font_px) / 2,
+                          (md->text.text ? md->text.text : ""),
+                          mi->fg_color ? mi->fg_color : 0xFFDDE8F0u, full);
+        ui_fill_rect(g_popup_base, g_popup_w, g_popup_h,
+                     0, header_h - 1, g_popup_w, 1, 0xFF304050u);
+    }
+
     for (int32_t i = 0; i < md->list.count; ++i) {
         if (i == hovered) {
             ui_fill_rect(g_popup_base, g_popup_w, g_popup_h,
-                         1, i * POPUP_ITEM_H, g_popup_w - 2, POPUP_ITEM_H, 0xFF2F5C88u);
+                         1, item_y0 + i * POPUP_ITEM_H, g_popup_w - 2, POPUP_ITEM_H, 0xFF2F5C88u);
         }
         ui_draw_text_clip(&g_ctx, 8,
-                          i * POPUP_ITEM_H + (POPUP_ITEM_H - g_ctx.font_px) / 2,
+                          item_y0 + i * POPUP_ITEM_H + (POPUP_ITEM_H - g_ctx.font_px) / 2,
                           (md->list.items[i] ? md->list.items[i] : ""),
                           0xFFFFFFFFu, full);
     }
@@ -114,9 +132,9 @@ static void popup_open(int32_t mi_id)
     if (!md || !md->dropdown_open || md->list.count <= 0) return;
 
     const int32_t popup_x = mi->bounds.x;
-    const int32_t popup_y = g_ctx.height; /* bar bottom = BAR_H */
+    const int32_t popup_y = mi->bounds.y;
     const int32_t popup_w = mi->bounds.w > POPUP_MIN_W ? mi->bounds.w : POPUP_MIN_W;
-    const int32_t popup_h = md->list.count * POPUP_ITEM_H;
+    const int32_t popup_h = mi->bounds.h + (md->list.count * POPUP_ITEM_H);
     int32_t status = 0, a1 = 0, a2 = 0, a3 = 0;
 
     /* Create popup window */
@@ -127,9 +145,11 @@ static void popup_open(int32_t mi_id)
                     &status, &a1, &a2, &a3) != 0 || status != GFX_STATUS_OK) return;
     const int32_t win_id = a1;
 
-    /* SYSTEM flag for topmost z-order */
+    /* Popup floats above normal windows without compositor chrome. */
     if (ui_send_gfx(g_ctx.gfx_endpoint, g_ctx.reply_endpoint, g_ctx.req_id++,
-                    GFX_IPC_SET_WINDOW_FLAGS, win_id, (int32_t)GFX_WINDOW_FLAG_SYSTEM, 0, 0,
+                    GFX_IPC_SET_WINDOW_FLAGS, win_id,
+                    (int32_t)(GFX_WINDOW_FLAG_TOPMOST | GFX_WINDOW_FLAG_NO_CHROME),
+                    0, 0,
                     &status, 0, 0, 0) != 0 || status != GFX_STATUS_OK) {
         ui_send_gfx(g_ctx.gfx_endpoint, g_ctx.reply_endpoint, g_ctx.req_id++,
                     GFX_IPC_DESTROY_WINDOW, win_id, 0, 0, 0, &status, 0, 0, 0);
@@ -236,27 +256,35 @@ static void popup_handle_pointer(const wasmos_ipc_message_t *msg)
     const int32_t left_prev = (g_popup_prev_buttons & 1u) != 0;
     g_popup_prev_buttons = buttons;
 
-    const int32_t hovered = (py >= 0 && py < g_popup_h) ? (py / POPUP_ITEM_H) : -1;
+    const int32_t header_h = popup_header_height();
+    const int32_t hovered = (py >= header_h && py < g_popup_h) ? ((py - header_h) / POPUP_ITEM_H) : -1;
 
-    if (left_now && !left_prev) {
-        /* Click: select and invoke */
-        if (hovered >= 0) {
-            ui_component_t *mi = ui_component_by_id(&g_ctx, g_popup_mi_id);
-            ui_menu_item_data_t *md = mi ? (ui_menu_item_data_t *)mi->component_data : NULL;
-            if (md && hovered < md->list.count) {
-                md->list.selected = hovered;
-                md->dropdown_open = 0;
-                const int32_t cb_id = g_popup_mi_id;
-                popup_close();
-                if (mi->on_click) mi->on_click(&g_ctx, cb_id, mi->on_click_user);
-                ui_mark_dirty(&g_ctx);
-            }
-        }
-    } else if (!left_now && hovered != g_popup_hovered) {
-        /* Hover: re-render with new highlight */
+    if (hovered != g_popup_hovered) {
         g_popup_hovered = hovered;
         popup_render(hovered);
         popup_present();
+    }
+
+    if (!left_now && left_prev) {
+        ui_component_t *mi = ui_component_by_id(&g_ctx, g_popup_mi_id);
+        ui_menu_item_data_t *md = mi ? (ui_menu_item_data_t *)mi->component_data : NULL;
+        if (!mi || !md) return;
+
+        if (py >= 0 && py < header_h) {
+            md->dropdown_open = 0;
+            popup_close();
+            ui_mark_dirty(&g_ctx);
+            return;
+        }
+
+        if (hovered >= 0 && hovered < md->list.count) {
+            md->list.selected = hovered;
+            md->dropdown_open = 0;
+            const int32_t cb_id = g_popup_mi_id;
+            popup_close();
+            if (mi->on_click) mi->on_click(&g_ctx, cb_id, mi->on_click_user);
+            ui_mark_dirty(&g_ctx);
+        }
     }
 }
 

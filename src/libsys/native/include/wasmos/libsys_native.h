@@ -16,7 +16,7 @@ void wasmos_sys_ipc_unpack_name16_native(uint32_t arg0, uint32_t arg1, uint32_t 
 void wasmos_sys_ipc_recv_loop_native(wasmos_driver_api_t *api, uint32_t receiver_endpoint);
 
 #define WASMOS_SYS_NATIVE_INTENT_MAX 16u
-#define WASMOS_SYS_NATIVE_HANDLER_MAX 16u
+#define WASMOS_SYS_NATIVE_HANDLER_MAX 24u
 
 /* Pending request awaiting a reply matched by request_id. */
 typedef struct {

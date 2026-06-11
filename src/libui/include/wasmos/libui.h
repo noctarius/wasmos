@@ -825,6 +825,30 @@ fail:
 }
 
 static inline int32_t
+ui_window_set_title(ui_context_t *ctx, const char *title)
+{
+    if (!ctx || !title || ctx->gfx_endpoint <= 0 || ctx->window_id <= 0) return -1;
+    const int32_t len = (int32_t)strlen(title);
+    if (len <= 0 || len > 47) return -1;
+    const int32_t shmem_id = wasmos_shmem_create(1, 0);
+    if (shmem_id <= 0) return -1;
+    const int32_t mapped = wasmos_shmem_map_auto(shmem_id, UI_PAGE_SIZE);
+    if (mapped < 0) { (void)wasmos_shmem_unmap(shmem_id); return -1; }
+    uint8_t *ptr = (uint8_t *)(uintptr_t)(uint32_t)mapped;
+    memcpy(ptr, title, (size_t)len);
+    ptr[len] = '\0';
+    if (wasmos_shmem_flush(shmem_id, (int32_t)(uintptr_t)ptr, len + 1) != 0) {
+        (void)wasmos_shmem_unmap(shmem_id); return -1;
+    }
+    int32_t status = 0;
+    ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
+                GFX_IPC_SET_WINDOW_TITLE, ctx->window_id, shmem_id, len, 0,
+                &status, 0, 0, 0);
+    (void)wasmos_shmem_unmap(shmem_id);
+    return (status == GFX_STATUS_OK) ? 0 : -1;
+}
+
+static inline int32_t
 ui_menu_bar_init(ui_context_t *ctx, int32_t proc_endpoint, int32_t reply_endpoint)
 {
     int32_t status = 0, a1 = 0, a2 = 0, a3 = 0;

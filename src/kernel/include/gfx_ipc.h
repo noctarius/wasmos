@@ -36,6 +36,8 @@ enum {
     GFX_IPC_SET_WINDOW_FLAGS = 0x020B,
     GFX_IPC_GET_DISPLAY_INFO = 0x020C,
     GFX_IPC_MOVE_WINDOW = 0x020D,
+    GFX_IPC_SET_WINDOW_TITLE = 0x020E, /* arg0=window_id arg1=shmem_id arg2=title_len arg3=0 */
+    GFX_IPC_GET_WINDOW_TITLE = 0x020F, /* arg0=window_id arg1=shmem_id arg2=max_len arg3=0; reply arg1=actual_len */
     GFX_IPC_RESP = 0x0280,
     GFX_IPC_ERROR = 0x02FF
 };
@@ -64,6 +66,12 @@ enum {
  * - GFX_IPC_SET_DISPLAY_MODE:
  *                           arg0=width arg1=height arg2/arg3 reserved
  *                           reply: arg1=width arg2=height
+ * - GFX_IPC_SET_WINDOW_TITLE: arg0=window_id arg1=shmem_id arg2=title_len(1..47) arg3=0
+ *                           Caller writes title bytes to shmem before sending.
+ *                           Only the window owner may set its title.
+ * - GFX_IPC_GET_WINDOW_TITLE: arg0=window_id arg1=shmem_id(0=query-only) arg2=max_len arg3=0
+ *                           reply arg1=actual_len (0 if no title set).
+ *                           If shmem_id==0 only the length is returned.
  */
 
 typedef struct {

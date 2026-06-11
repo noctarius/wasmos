@@ -26,7 +26,10 @@ const build_options = @import("build_options");
 const GFX_TRACE: bool = build_options.gfx_trace;
 const GFX_WINDOW_MIN_DIM: u32 = 1;
 const GFX_WINDOW_MAX_DIM: u32 = 8192;
-const GFX_WINDOW_FLAG_SYSTEM: u32 = 1 << 0;
+const GFX_WINDOW_FLAG_TOPMOST: u32 = 1 << 0;
+const GFX_WINDOW_FLAG_NO_CHROME: u32 = 1 << 1;
+const GFX_WINDOW_FLAG_INVISIBLE: u32 = 1 << 2;
+const GFX_WINDOW_FLAG_PASSTHROUGH_ZERO: u32 = 1 << 3;
 const GFX_WINDOW_Z_SYSTEM: u32 = 0xFFFF_FFFE;
 const PAGE_SIZE: u64 = 4096;
 const CURSOR_W: i32 = 9;
@@ -874,6 +877,7 @@ fn window_topmost_at(x: i32, y: i32) ?usize {
     while (i < g_windows.len) : (i += 1) {
         if (!g_windows[i].in_use) continue;
         const win = g_windows[i];
+        if (window_is_invisible(win)) continue;
         const wx2 = win.x + @as(i32, @intCast(win.width));
         const wy2 = win.y + @as(i32, @intCast(win.height));
         if (x < win.x or y < win.y or x >= wx2 or y >= wy2) continue;
@@ -907,6 +911,22 @@ fn clamp(v: i32, lo: i32, hi: i32) i32 {
     if (v < lo) return lo;
     if (v > hi) return hi;
     return v;
+}
+
+fn window_is_topmost(win: window_slot_t) bool {
+    return (win.flags & GFX_WINDOW_FLAG_TOPMOST) != 0;
+}
+
+fn window_has_no_chrome(win: window_slot_t) bool {
+    return (win.flags & GFX_WINDOW_FLAG_NO_CHROME) != 0;
+}
+
+fn window_is_invisible(win: window_slot_t) bool {
+    return (win.flags & GFX_WINDOW_FLAG_INVISIBLE) != 0;
+}
+
+fn window_uses_zero_passthrough(win: window_slot_t) bool {
+    return (win.flags & GFX_WINDOW_FLAG_PASSTHROUGH_ZERO) != 0;
 }
 
 fn rect_union(a: c.gfx_rect_t, b: c.gfx_rect_t) c.gfx_rect_t {
@@ -1029,9 +1049,11 @@ fn handle_mouse_drag(dx: i32, dy: i32, left_down_now: bool) void {
 fn handle_mouse_press_transition(left_down_now: bool, left_down_prev: bool) void {
     if (!left_down_now or left_down_prev) return;
     if (window_topmost_at(g_pointer_x, g_pointer_y)) |idx| {
-        raise_window(idx);
+        if (!window_is_topmost(g_windows[idx])) {
+            raise_window(idx);
+        }
         focus_window(idx);
-        if ((g_windows[idx].flags & GFX_WINDOW_FLAG_SYSTEM) != 0) {
+        if (window_has_no_chrome(g_windows[idx])) {
             g_drag_window_id = 0;
             g_resize_window_id = 0;
         } else {
@@ -1474,7 +1496,7 @@ fn window_resize_rect(win: window_slot_t) c.gfx_rect_t {
 }
 
 fn window_content_rect(win: window_slot_t) c.gfx_rect_t {
-    if ((win.flags & GFX_WINDOW_FLAG_SYSTEM) != 0) {
+    if (window_has_no_chrome(win)) {
         return .{ .x = win.x, .y = win.y, .w = @intCast(win.width), .h = @intCast(win.height) };
     }
     const ww: i32 = @intCast(win.width);
@@ -1913,10 +1935,10 @@ fn draw_window_buffer(win: window_slot_t, buf: buffer_slot_t, clip: c.gfx_rect_t
     };
     const dst_pixels = g_backbuffer_pixels.?;
     const dst_stride: usize = @intCast(g_fb_info.framebuffer_stride);
-    // System windows (e.g. menu bar popup expansion) may have zero pixels in
-    // areas outside their rendered content.  Treat zero as passthrough so the
-    // underlying desktop shows through instead of compositing opaque black.
-    const passthrough_zero = (win.flags & GFX_WINDOW_FLAG_SYSTEM) != 0;
+    // Some no-chrome overlay windows may intentionally leave pixels at zero.
+    // When the caller opts in, treat those pixels as transparent passthrough
+    // instead of compositing opaque black.
+    const passthrough_zero = window_uses_zero_passthrough(win);
     const cr = window_content_rect(win);
     if (cr.w <= 0 or cr.h <= 0 or !rect_intersects(clip, cr)) return true;
     const x0 = if (clip.x > cr.x) clip.x else cr.x;
@@ -1998,6 +2020,7 @@ fn compose_region(region: c.gfx_rect_t) i32 {
     var k: usize = 0;
     while (k < count) : (k += 1) {
         const win = g_windows[order[k]];
+        if (window_is_invisible(win)) continue;
         var clip = region;
         const wr = rect_from_window(win);
         if (!rect_intersects(clip, wr)) continue;
@@ -2018,7 +2041,7 @@ fn compose_region(region: c.gfx_rect_t) i32 {
         if (!rendered) {
             draw_window_placeholder(win, clip);
         }
-        if ((win.flags & GFX_WINDOW_FLAG_SYSTEM) == 0) {
+        if (!window_has_no_chrome(win)) {
             draw_window_chrome(win, clip, g_focused_window_id == win.window_id);
         }
     }
@@ -2288,7 +2311,9 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
     if (GFX_TRACE) {
         if (g_overlay_locked) logMsg("[gfx-t] present win ok locked\n") else logMsg("[gfx-t] present win ok UNLOCKED\n");
     }
-    focus_window(window_idx);
+    if (!window_is_invisible(g_windows[window_idx])) {
+        focus_window(window_idx);
+    }
     sync_console_mode_for_windows();
 
     if (damage_count == 0 or damage_shmem_id == 0 or damage_count > GFX_MAX_DAMAGE_RECTS) {
@@ -2327,9 +2352,10 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
             return;
         }
 
+        const cr = window_content_rect(g_windows[window_idx]);
         const screen_rect = c.gfx_rect_t{
-            .x = g_windows[window_idx].x + CHROME_BORDER + r.x,
-            .y = g_windows[window_idx].y + CHROME_TITLE_H + r.y,
+            .x = cr.x + r.x,
+            .y = cr.y + r.y,
             .w = r.w,
             .h = r.h,
         };
@@ -2439,7 +2465,9 @@ fn handle_focus_window(msg: *const c.nd_ipc_message_t) void {
         reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
         return;
     };
-    raise_window(slot_idx);
+    if (!window_is_topmost(g_windows[slot_idx])) {
+        raise_window(slot_idx);
+    }
     focus_window(slot_idx);
     request_repaint_full();
     reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
@@ -2457,9 +2485,13 @@ fn handle_set_window_flags(msg: *const c.nd_ipc_message_t) void {
         return;
     }
     g_windows[slot_idx].flags = flags;
-    if ((flags & GFX_WINDOW_FLAG_SYSTEM) != 0) {
+    if (window_is_topmost(g_windows[slot_idx])) {
         g_windows[slot_idx].z = GFX_WINDOW_Z_SYSTEM;
-        // Position is NOT forced — caller controls placement via GFX_IPC_MOVE_WINDOW.
+    } else if (g_windows[slot_idx].z == GFX_WINDOW_Z_SYSTEM) {
+        raise_window(slot_idx);
+    }
+    if ((flags & GFX_WINDOW_FLAG_INVISIBLE) != 0 and g_focused_window_id == window_id) {
+        _ = blur_focused_window();
     }
     request_repaint_full();
     reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);

@@ -64,14 +64,16 @@ enum {
  *                                  arg3=total_active_windows
  * - GFX_IPC_FOCUS_WINDOW:   arg0=window_id
  * - GFX_IPC_SET_WINDOW_FLAGS: arg0=window_id arg1=flags (GFX_WINDOW_FLAG_*)
- *                           system flag pins window to (0,0) topmost with no chrome
  * - GFX_IPC_GET_DISPLAY_INFO: arg0..arg3 reserved
  *                           reply: arg1=width arg2=height
  * - GFX_IPC_MOVE_WINDOW:    arg0=window_id arg1=x arg2=y arg3 reserved
  */
 
-/* Window flags for GFX_IPC_SET_WINDOW_FLAGS. */
-#define GFX_WINDOW_FLAG_SYSTEM  (1u << 0) /* topmost, no chrome, no drag/resize */
+/* Window flags for GFX_IPC_SET_WINDOW_FLAGS. These bits compose. */
+#define GFX_WINDOW_FLAG_TOPMOST          (1u << 0)
+#define GFX_WINDOW_FLAG_NO_CHROME        (1u << 1)
+#define GFX_WINDOW_FLAG_INVISIBLE        (1u << 2)
+#define GFX_WINDOW_FLAG_PASSTHROUGH_ZERO (1u << 3)
 
 typedef struct {
     int32_t x;

@@ -40,6 +40,12 @@ enum {
     GFX_IPC_ERROR = 0x02FF
 };
 
+/* Window flags for GFX_IPC_SET_WINDOW_FLAGS. These bits compose. */
+#define GFX_WINDOW_FLAG_TOPMOST          (1u << 0)
+#define GFX_WINDOW_FLAG_NO_CHROME        (1u << 1)
+#define GFX_WINDOW_FLAG_INVISIBLE        (1u << 2)
+#define GFX_WINDOW_FLAG_PASSTHROUGH_ZERO (1u << 3)
+
 /* Provisional v1 message argument contracts:
  * - GFX_IPC_CREATE_WINDOW:  arg0=width arg1=height arg2=GFX_IPC_ABI_MAGIC
  *                           arg3=(version<<16)|opcode

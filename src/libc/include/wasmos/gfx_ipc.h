@@ -74,6 +74,8 @@ enum {
 #define GFX_WINDOW_FLAG_NO_CHROME        (1u << 1)
 #define GFX_WINDOW_FLAG_INVISIBLE        (1u << 2)
 #define GFX_WINDOW_FLAG_PASSTHROUGH_ZERO (1u << 3)
+#define GFX_WINDOW_FLAG_NO_ACTIVATE      (1u << 4)
+#define GFX_WINDOW_FLAG_NO_CONTENT       (1u << 5)
 
 typedef struct {
     int32_t x;

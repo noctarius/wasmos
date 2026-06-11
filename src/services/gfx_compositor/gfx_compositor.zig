@@ -30,6 +30,8 @@ const GFX_WINDOW_FLAG_TOPMOST: u32 = 1 << 0;
 const GFX_WINDOW_FLAG_NO_CHROME: u32 = 1 << 1;
 const GFX_WINDOW_FLAG_INVISIBLE: u32 = 1 << 2;
 const GFX_WINDOW_FLAG_PASSTHROUGH_ZERO: u32 = 1 << 3;
+const GFX_WINDOW_FLAG_NO_ACTIVATE: u32 = 1 << 4;
+const GFX_WINDOW_FLAG_NO_CONTENT: u32 = 1 << 5;
 const GFX_WINDOW_Z_SYSTEM: u32 = 0xFFFF_FFFE;
 const PAGE_SIZE: u64 = 4096;
 const CURSOR_W: i32 = 9;
@@ -929,6 +931,14 @@ fn window_uses_zero_passthrough(win: window_slot_t) bool {
     return (win.flags & GFX_WINDOW_FLAG_PASSTHROUGH_ZERO) != 0;
 }
 
+fn window_does_not_activate(win: window_slot_t) bool {
+    return (win.flags & GFX_WINDOW_FLAG_NO_ACTIVATE) != 0;
+}
+
+fn window_has_no_content(win: window_slot_t) bool {
+    return (win.flags & GFX_WINDOW_FLAG_NO_CONTENT) != 0;
+}
+
 fn rect_union(a: c.gfx_rect_t, b: c.gfx_rect_t) c.gfx_rect_t {
     const x0 = if (a.x < b.x) a.x else b.x;
     const y0 = if (a.y < b.y) a.y else b.y;
@@ -1052,7 +1062,9 @@ fn handle_mouse_press_transition(left_down_now: bool, left_down_prev: bool) void
         if (!window_is_topmost(g_windows[idx])) {
             raise_window(idx);
         }
-        focus_window(idx);
+        if (!window_does_not_activate(g_windows[idx])) {
+            focus_window(idx);
+        }
         if (window_has_no_chrome(g_windows[idx])) {
             g_drag_window_id = 0;
             g_resize_window_id = 0;
@@ -1496,6 +1508,14 @@ fn window_resize_rect(win: window_slot_t) c.gfx_rect_t {
 }
 
 fn window_content_rect(win: window_slot_t) c.gfx_rect_t {
+    if (window_has_no_content(win)) {
+        return .{
+            .x = win.x + (if (window_has_no_chrome(win)) 0 else CHROME_BORDER),
+            .y = win.y + (if (window_has_no_chrome(win)) 0 else CHROME_TITLE_H),
+            .w = 0,
+            .h = 0,
+        };
+    }
     if (window_has_no_chrome(win)) {
         return .{ .x = win.x, .y = win.y, .w = @intCast(win.width), .h = @intCast(win.height) };
     }
@@ -2032,13 +2052,13 @@ fn compose_region(region: c.gfx_rect_t) i32 {
         clip = .{ .x = x0, .y = y0, .w = x1 - x0, .h = y1 - y0 };
 
         var rendered = false;
-        if (win.current_buffer_id != 0) {
+        if (!window_has_no_content(win) and win.current_buffer_id != 0) {
             if (buffer_find_by_id(win.current_buffer_id)) |buf_idx| {
                 const buf = g_buffers[buf_idx];
                 rendered = draw_window_buffer(win, buf, clip);
             }
         }
-        if (!rendered) {
+        if (!window_has_no_content(win) and !rendered) {
             draw_window_placeholder(win, clip);
         }
         if (!window_has_no_chrome(win)) {
@@ -2190,6 +2210,10 @@ fn handle_alloc_shared_buffer(msg: *const c.nd_ipc_message_t) void {
             reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
             return;
         }
+        if (window_has_no_content(g_windows[window_idx])) {
+            reply_with_status(msg, c.GFX_STATUS_UNSUPPORTED, 0, 0, 0);
+            return;
+        }
         if (g_windows[window_idx].width != width or g_windows[window_idx].height != height) {
             reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
             return;
@@ -2304,6 +2328,11 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
         return;
     }
 
+    if (window_has_no_content(g_windows[window_idx])) {
+        reply_with_status(msg, c.GFX_STATUS_UNSUPPORTED, 0, 0, 0);
+        return;
+    }
+
     g_windows[window_idx].current_buffer_id = buffer_id;
     g_buffers[buf_idx].state = .acquired;
     g_buffers[buf_idx].bound_window_id = window_id;
@@ -2311,7 +2340,7 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
     if (GFX_TRACE) {
         if (g_overlay_locked) logMsg("[gfx-t] present win ok locked\n") else logMsg("[gfx-t] present win ok UNLOCKED\n");
     }
-    if (!window_is_invisible(g_windows[window_idx])) {
+    if (!window_is_invisible(g_windows[window_idx]) and !window_does_not_activate(g_windows[window_idx])) {
         focus_window(window_idx);
     }
     sync_console_mode_for_windows();
@@ -2484,6 +2513,7 @@ fn handle_set_window_flags(msg: *const c.nd_ipc_message_t) void {
         reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
         return;
     }
+    const old_no_content = window_has_no_content(g_windows[slot_idx]);
     g_windows[slot_idx].flags = flags;
     if (window_is_topmost(g_windows[slot_idx])) {
         g_windows[slot_idx].z = GFX_WINDOW_Z_SYSTEM;
@@ -2492,6 +2522,13 @@ fn handle_set_window_flags(msg: *const c.nd_ipc_message_t) void {
     }
     if ((flags & GFX_WINDOW_FLAG_INVISIBLE) != 0 and g_focused_window_id == window_id) {
         _ = blur_focused_window();
+    }
+    if ((flags & GFX_WINDOW_FLAG_NO_ACTIVATE) != 0 and g_focused_window_id == window_id) {
+        _ = blur_focused_window();
+    }
+    if (!old_no_content and window_has_no_content(g_windows[slot_idx]) and g_windows[slot_idx].current_buffer_id != 0) {
+        g_windows[slot_idx].current_buffer_id = 0;
+        sync_console_mode_for_windows();
     }
     request_repaint_full();
     reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);

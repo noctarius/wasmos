@@ -152,7 +152,16 @@ typedef struct {
 typedef struct {
     ui_text_data_t text;
     ui_list_data_t list;
-    int32_t dropdown_open;
+    int32_t  dropdown_open;
+    /* popup window — managed by ui_menu_item_sync_popup (libui_menu_item.h) */
+    int32_t  popup_win_id;
+    int32_t  popup_buf_id;
+    int32_t  popup_shmem_id;
+    uint8_t *popup_base;
+    int32_t  popup_w;
+    int32_t  popup_h;
+    int32_t  popup_hovered;
+    uint32_t popup_prev_buttons;
 } ui_menu_item_data_t;
 
 typedef struct {
@@ -986,6 +995,7 @@ static inline void ui_init_component_ops(void)
     ui_component_ops[UI_COMPONENT_MENU_ITEM].render = ui_render_menu_item;
     ui_component_ops[UI_COMPONENT_MENU_ITEM].handle_pointer_release = NULL; /* handled via the global ui_menu_item_handle_pointer_release */
     ui_component_ops[UI_COMPONENT_MENU_ITEM].popup_contains = ui_menu_item_popup_contains;
+    ui_component_ops[UI_COMPONENT_MENU_ITEM].destroy_data = ui_menu_item_destroy_data;
 }
 
 static inline void
@@ -1170,6 +1180,25 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
         return UI_MSG_CONSUMED;
     }
 
+    /* Route events to any open popup window before the normal bar handlers. */
+    if (msg->arg1 == GFX_EVENT_POINTER || msg->arg1 == GFX_EVENT_FOCUS_LOST) {
+        for (int32_t i = 0; i < ctx->component_count; ++i) {
+            ui_component_t *mc = &ctx->components[i];
+            if (!mc->in_use || mc->type != UI_COMPONENT_MENU_ITEM) continue;
+            ui_menu_item_data_t *mpd = (ui_menu_item_data_t *)mc->component_data;
+            if (!mpd || mpd->popup_win_id == 0) continue;
+            if (msg->arg1 == GFX_EVENT_POINTER) {
+                ctx->pointer_buttons = (uint32_t)msg->arg3;
+                ui_menu_item_handle_popup_event(ctx, mc, msg);
+                return UI_MSG_CONSUMED;
+            }
+            if (msg->arg1 == GFX_EVENT_FOCUS_LOST && (int32_t)msg->arg2 == mpd->popup_win_id) {
+                ui_menu_item_dismiss_popup(ctx, mc);
+                return UI_MSG_CONSUMED;
+            }
+        }
+    }
+
     if (msg->arg1 == GFX_EVENT_POINTER) {
         const int32_t new_x = ui_u16_lo(msg->arg2);
         const int32_t new_y = ui_u16_hi(msg->arg2);
@@ -1290,6 +1319,13 @@ ui_loop_drain(ui_context_t *ctx)
     if (!ctx->dirty) return 0;
     ui_component_t *root = ui_component_by_id(ctx, ctx->root_id);
     if (!root) return -1;
+
+    /* Sync popup windows for all menu items (open/close/resize on state change). */
+    for (int32_t i = 0; i < ctx->component_count; ++i) {
+        ui_component_t *mc = &ctx->components[i];
+        if (mc->in_use && mc->type == UI_COMPONENT_MENU_ITEM)
+            ui_menu_item_sync_popup(ctx, mc);
+    }
 
     ui_layout_vertical(ctx, root->id);
     ui_render_component(ctx, root->id);

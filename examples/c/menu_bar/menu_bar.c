@@ -89,7 +89,6 @@ static void refresh_app_list(void)
                         GFX_IPC_LIST_WINDOWS, idx, 0, 0, 0,
                         &status, &wid, 0, 0) != 0) break;
         if (status != GFX_STATUS_OK || wid == 0) break;
-        if (wid == g_ctx.window_id) continue;
 
         char label[32];
         const char *prefix = "win ";

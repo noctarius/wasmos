@@ -9,13 +9,23 @@
 
 #define MENU_REFRESH_TICKS 200
 #define CLOCK_REFRESH_TICKS 50
-#define MAX_APP_WINDOWS 32
+#define MAX_APP_ITEMS 12
+#define MAX_WINS_PER_APP 8
+#define TITLE_MAX 48
 
 static ui_context_t g_ctx;
-static int32_t g_apps_mi_id = -1;
-static int32_t g_win_ids[MAX_APP_WINDOWS];
-static int32_t g_win_count = 0;
 static int32_t g_rtc_endpoint = -1;
+
+/* Per-app group data */
+static int32_t g_app_mi_ids[MAX_APP_ITEMS];   /* component IDs of per-app menu items */
+static int32_t g_app_owner_eps[MAX_APP_ITEMS];
+static int32_t g_app_win_ids[MAX_APP_ITEMS][MAX_WINS_PER_APP];
+static int32_t g_app_win_counts[MAX_APP_ITEMS];
+static int32_t g_app_count = 0;
+
+/* Reusable shmem for fetching window titles */
+static int32_t g_title_shmem_id = -1;
+static uint8_t *g_title_ptr = NULL;
 
 /* ---- clock ---- */
 
@@ -55,7 +65,7 @@ static void update_clock(void)
     ui_menu_bar_set_clock(&g_ctx, g_ctx.root_id, buf);
 }
 
-/* ---- app list ---- */
+/* ---- helpers ---- */
 
 static void int_to_str(int32_t v, char *buf, int32_t cap)
 {
@@ -67,42 +77,6 @@ static void int_to_str(int32_t v, char *buf, int32_t cap)
     int32_t out = 0;
     for (int32_t i = n - 1; i >= 0 && out < cap - 1; --i) buf[out++] = tmp[i];
     buf[out] = '\0';
-}
-
-static void refresh_app_list(void)
-{
-    ui_component_t *mi = ui_component_by_id(&g_ctx, g_apps_mi_id);
-    if (!mi) return;
-
-    ui_menu_item_data_t *md = (ui_menu_item_data_t *)mi->component_data;
-    if (md) {
-        for (int32_t i = 0; i < md->list.count; ++i) {
-            if (md->list.items && md->list.items[i]) { free(md->list.items[i]); md->list.items[i] = 0; }
-        }
-        md->list.count = 0;
-    }
-    g_win_count = 0;
-
-    for (int32_t idx = 0; idx < MAX_APP_WINDOWS; ++idx) {
-        int32_t status = 0, wid = 0;
-        if (ui_send_gfx(g_ctx.gfx_endpoint, g_ctx.reply_endpoint, g_ctx.req_id++,
-                        GFX_IPC_LIST_WINDOWS, idx, 0, 0, 0,
-                        &status, &wid, 0, 0) != 0) break;
-        if (status != GFX_STATUS_OK || wid == 0) break;
-
-        char label[32];
-        const char *prefix = "win ";
-        int32_t n = 0;
-        while (prefix[n] && n < 20) { label[n] = prefix[n]; n++; }
-        char num[8];
-        int_to_str(wid, num, 8);
-        for (int32_t j = 0; num[j] && n < 31; ++j) label[n++] = num[j];
-        label[n] = '\0';
-
-        ui_component_list_append(&g_ctx, g_apps_mi_id, label);
-        if (g_win_count < MAX_APP_WINDOWS) g_win_ids[g_win_count++] = wid;
-    }
-    ui_mark_dirty(&g_ctx);
 }
 
 /* ---- callbacks ---- */
@@ -121,19 +95,136 @@ static void on_wasmos_click(ui_context_t *ctx, int32_t component_id, void *user)
     }
 }
 
-static void on_apps_click(ui_context_t *ctx, int32_t component_id, void *user)
+static void on_app_item_click(ui_context_t *ctx, int32_t component_id, void *user)
 {
     (void)user;
-    ui_component_t *mi = ui_component_by_id(ctx, component_id);
-    if (!mi) return;
-    ui_menu_item_data_t *md = (ui_menu_item_data_t *)mi->component_data;
-    const int32_t sel = md ? md->list.selected : -1;
-    if (sel < 0 || sel >= g_win_count) return;
-    const int32_t wid = g_win_ids[sel];
+    /* Find which app slot this is */
+    int32_t app_idx = -1;
+    for (int32_t i = 0; i < MAX_APP_ITEMS; ++i) {
+        if (g_app_mi_ids[i] == component_id) { app_idx = i; break; }
+    }
+    if (app_idx < 0 || app_idx >= g_app_count) return;
+
+    int32_t win_idx = 0;
+    if (g_app_win_counts[app_idx] > 1) {
+        ui_component_t *mi = ui_component_by_id(ctx, component_id);
+        ui_menu_item_data_t *md = mi ? (ui_menu_item_data_t *)mi->component_data : NULL;
+        if (md && md->list.selected >= 0 && md->list.selected < g_app_win_counts[app_idx])
+            win_idx = md->list.selected;
+    }
+    int32_t wid = g_app_win_ids[app_idx][win_idx];
     int32_t status = 0;
     (void)ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
                       GFX_IPC_FOCUS_WINDOW, wid, 0, 0, 0,
                       &status, 0, 0, 0);
+}
+
+/* ---- app list ---- */
+
+static void refresh_app_list(void)
+{
+    /* Collect all non-menu-bar windows, group by owner_endpoint */
+    typedef struct { int32_t ep; int32_t wids[MAX_WINS_PER_APP]; int32_t count; } AppGroup;
+    AppGroup groups[MAX_APP_ITEMS];
+    int32_t ngroups = 0;
+
+    for (int32_t idx = 0; idx < 32 /* GFX_MAX_WINDOWS */; ++idx) {
+        int32_t status = 0, wid = 0, owner_ep = 0;
+        if (ui_send_gfx(g_ctx.gfx_endpoint, g_ctx.reply_endpoint, g_ctx.req_id++,
+                        GFX_IPC_LIST_WINDOWS, idx, 0, 0, 0,
+                        &status, &wid, &owner_ep, 0) != 0) break;
+        if (status != GFX_STATUS_OK || wid == 0) break;
+        /* Find existing group or create new one */
+        int32_t gi = -1;
+        for (int32_t g = 0; g < ngroups; ++g)
+            if (groups[g].ep == owner_ep) { gi = g; break; }
+        if (gi < 0) {
+            if (ngroups >= MAX_APP_ITEMS) continue;
+            gi = ngroups++;
+            groups[gi].ep = owner_ep;
+            groups[gi].count = 0;
+        }
+        if (groups[gi].count < MAX_WINS_PER_APP)
+            groups[gi].wids[groups[gi].count++] = wid;
+    }
+
+    /* Update per-app menu items */
+    g_app_count = ngroups;
+    for (int32_t i = 0; i < MAX_APP_ITEMS; ++i) {
+        ui_component_t *mi = ui_component_by_id(&g_ctx, g_app_mi_ids[i]);
+        if (!mi) continue;
+        ui_menu_item_data_t *md = (ui_menu_item_data_t *)mi->component_data;
+        if (!md) continue;
+
+        if (i >= ngroups) {
+            /* Deactivate: hide */
+            mi->preferred_h = 0;
+            continue;
+        }
+
+        AppGroup *ag = &groups[i];
+        g_app_owner_eps[i] = ag->ep;
+        g_app_win_counts[i] = ag->count;
+        for (int32_t w = 0; w < ag->count; ++w)
+            g_app_win_ids[i][w] = ag->wids[w];
+
+        /* Clear old list items */
+        if (md->list.items) {
+            for (int32_t j = 0; j < md->list.count; ++j) {
+                if (md->list.items[j]) { free(md->list.items[j]); md->list.items[j] = 0; }
+            }
+        }
+        md->list.count = 0;
+        md->list.selected = -1;
+
+        /* Fetch title for first window -> app name */
+        char app_name[TITLE_MAX] = {0};
+        if (g_title_ptr && g_title_shmem_id > 0) {
+            int32_t status = 0, tlen = 0;
+            ui_send_gfx(g_ctx.gfx_endpoint, g_ctx.reply_endpoint, g_ctx.req_id++,
+                        GFX_IPC_GET_WINDOW_TITLE, ag->wids[0], g_title_shmem_id, TITLE_MAX - 1, 0,
+                        &status, &tlen, 0, 0);
+            if (status == GFX_STATUS_OK && tlen > 0) {
+                wasmos_shmem_refresh(g_title_shmem_id, (int32_t)(uintptr_t)g_title_ptr, tlen + 1);
+                for (int32_t k = 0; k < tlen && k < TITLE_MAX - 1; ++k)
+                    app_name[k] = (char)g_title_ptr[k];
+                app_name[tlen] = '\0';
+            }
+        }
+        if (app_name[0] == '\0') {
+            /* Fallback: "App N" */
+            app_name[0] = 'A'; app_name[1] = 'p'; app_name[2] = 'p'; app_name[3] = ' ';
+            int_to_str(ag->wids[0], app_name + 4, TITLE_MAX - 4);
+        }
+        ui_component_set_text(&g_ctx, g_app_mi_ids[i], app_name);
+        mi->preferred_h = 80; /* visible with default width */
+
+        /* For multi-window apps, populate window title list */
+        if (ag->count > 1) {
+            for (int32_t w = 0; w < ag->count; ++w) {
+                char win_title[TITLE_MAX] = {0};
+                if (g_title_ptr && g_title_shmem_id > 0) {
+                    int32_t status = 0, tlen = 0;
+                    ui_send_gfx(g_ctx.gfx_endpoint, g_ctx.reply_endpoint, g_ctx.req_id++,
+                                GFX_IPC_GET_WINDOW_TITLE, ag->wids[w], g_title_shmem_id, TITLE_MAX - 1, 0,
+                                &status, &tlen, 0, 0);
+                    if (status == GFX_STATUS_OK && tlen > 0) {
+                        wasmos_shmem_refresh(g_title_shmem_id, (int32_t)(uintptr_t)g_title_ptr, tlen + 1);
+                        for (int32_t k = 0; k < tlen && k < TITLE_MAX - 1; ++k)
+                            win_title[k] = (char)g_title_ptr[k];
+                        win_title[tlen] = '\0';
+                    }
+                }
+                if (win_title[0] == '\0') {
+                    win_title[0] = 'w'; win_title[1] = 'i'; win_title[2] = 'n'; win_title[3] = ' ';
+                    int_to_str(ag->wids[w], win_title + 4, TITLE_MAX - 4);
+                }
+                ui_component_list_append(&g_ctx, g_app_mi_ids[i], win_title);
+            }
+        }
+    }
+
+    ui_mark_dirty(&g_ctx);
 }
 
 /* ---- main ---- */
@@ -153,7 +244,7 @@ int main(int argc, char **argv)
         (void)wasmos_sched_yield();
     }
 
-    /* "WasmOS" system menu — Reboot / Shutdown */
+    /* "WasmOS" system menu - Reboot / Shutdown */
     const int32_t brand_id = ui_component_create_menu_item(&g_ctx);
     {
         ui_component_t *brand = ui_component_by_id(&g_ctx, brand_id);
@@ -171,20 +262,26 @@ int main(int argc, char **argv)
         ui_component_append_child(&g_ctx, g_ctx.root_id, brand_id);
     }
 
-    /* "Apps" menu item */
-    g_apps_mi_id = ui_component_create_menu_item(&g_ctx);
-    {
-        ui_component_t *apps_mi = ui_component_by_id(&g_ctx, g_apps_mi_id);
-        if (apps_mi) {
-            apps_mi->bg_color    = 0xFF1A2233u;
-            apps_mi->fg_color    = 0xFFDDE8F0u;
-            apps_mi->padding_px  = 10;
-            apps_mi->preferred_h = 70;
-            apps_mi->clickable   = 1;
-            apps_mi->on_click    = on_apps_click;
+    /* Pre-allocate MAX_APP_ITEMS hidden menu item slots */
+    for (int32_t i = 0; i < MAX_APP_ITEMS; ++i) {
+        g_app_mi_ids[i] = ui_component_create_menu_item(&g_ctx);
+        ui_component_t *mi = ui_component_by_id(&g_ctx, g_app_mi_ids[i]);
+        if (mi) {
+            mi->bg_color    = 0xFF1A2233u;
+            mi->fg_color    = 0xFFDDE8F0u;
+            mi->padding_px  = 8;
+            mi->preferred_h = 0;  /* hidden until activated */
+            mi->clickable   = 1;
+            mi->on_click    = on_app_item_click;
         }
-        ui_component_set_text(&g_ctx, g_apps_mi_id, "Apps");
-        ui_component_append_child(&g_ctx, g_ctx.root_id, g_apps_mi_id);
+        ui_component_append_child(&g_ctx, g_ctx.root_id, g_app_mi_ids[i]);
+    }
+
+    /* Title shmem for GET_WINDOW_TITLE */
+    g_title_shmem_id = wasmos_shmem_create(1, 0);
+    if (g_title_shmem_id > 0) {
+        int32_t mapped = wasmos_shmem_map_auto(g_title_shmem_id, 4096);
+        if (mapped >= 0) g_title_ptr = (uint8_t *)(uintptr_t)(uint32_t)mapped;
     }
 
     refresh_app_list();

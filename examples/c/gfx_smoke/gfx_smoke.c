@@ -459,6 +459,7 @@ start_libui_demo(int32_t proc_endpoint)
         puts("[test] libui demo init failed");
         return -1;
     }
+    (void)ui_window_set_title(ui, "libui demo");
 
     int32_t label = ui_component_create_label(ui);
     int32_t button = ui_component_create_button(ui);

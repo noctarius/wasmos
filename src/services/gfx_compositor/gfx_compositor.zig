@@ -18,7 +18,7 @@ const GFX_MAX_GLYPH_BYTES: usize = 4096;
 const GFX_MAX_TITLE_LABEL: usize = 24;
 const FONT_INIT_MAX_ATTEMPTS: u32 = 64;
 const FONT_INIT_RETRY_MASK: u32 = 0x3F;
-const TITLE_GLYPHS: []const u8 = "win 0123456789";
+const TITLE_GLYPHS: []const u8 = "win 0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ -_.";
 const GFX_TITLE_TEXT_ENABLED: bool = true;
 const build_options = @import("build_options");
 /// Enable per-event serial traces for click/pointer/present debugging.
@@ -113,6 +113,8 @@ var g_backbuffer_pixels: ?[*]u32 = null;
 var g_backbuffer_shmem_id: u32 = 0;
 var g_backbuffer_capacity_bytes: u32 = 0;
 
+const GFX_WINDOW_TITLE_MAX: usize = 47;
+
 const window_slot_t = struct {
     in_use: bool = false,
     owner_endpoint: u32 = IPC_ENDPOINT_NONE,
@@ -130,6 +132,8 @@ const window_slot_t = struct {
     restore_w: u32 = 0,
     restore_h: u32 = 0,
     flags: u32 = 0,
+    title: [48]u8 = [_]u8{0} ** 48,
+    title_len: u8 = 0,
 };
 
 const buffer_state_t = enum(u8) {
@@ -1745,11 +1749,18 @@ fn font_measure_and_raster_text(text: []const u8, out_w: *i32, out_h: *i32, out_
     return true;
 }
 
-fn build_window_title_label(window_id: u32, out: *[GFX_MAX_TITLE_LABEL]u8) usize {
+fn build_window_title_label(slot_idx: usize, out: *[GFX_MAX_TITLE_LABEL]u8) usize {
+    const win = g_windows[slot_idx];
+    if (win.title_len > 0) {
+        const n = @min(@as(usize, win.title_len), out.len);
+        @memcpy(out[0..n], win.title[0..n]);
+        return n;
+    }
+    // fall back to "win N"
     const prefix = "win ";
     var n: usize = 0;
     while (n < prefix.len) : (n += 1) out[n] = prefix[n];
-    var id = window_id;
+    var id = win.window_id;
     var tmp: [10]u8 = undefined;
     var digits: usize = 0;
     while (true) {
@@ -1927,7 +1938,7 @@ fn draw_window_title_text(win: window_slot_t, clip: c.gfx_rect_t) void {
     const pen_x: i32 = win.x + CHROME_BORDER + 4;
     const base_y: i32 = win.y + CHROME_TITLE_H - 7;
     var label: [GFX_MAX_TITLE_LABEL]u8 = undefined;
-    const n = build_window_title_label(win.window_id, &label);
+    const n = build_window_title_label(slot_idx, &label);
     if (n == 0) return;
 
     if (!title_cache_valid_for_window(slot_idx, win, label[0..n])) {
@@ -2569,6 +2580,61 @@ fn handle_move_window(msg: *const c.nd_ipc_message_t) void {
     reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
 }
 
+fn handle_set_window_title(msg: *const c.nd_ipc_message_t) void {
+    const window_id: u32 = @bitCast(msg.arg0);
+    const shmem_id: u32 = @bitCast(msg.arg1);
+    const title_len: u32 = @bitCast(msg.arg2);
+    if (title_len == 0 or title_len > GFX_WINDOW_TITLE_MAX) {
+        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        return;
+    }
+    const slot_idx = window_find_by_id(window_id) orelse {
+        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        return;
+    };
+    if (g_windows[slot_idx].owner_endpoint != msg.source) {
+        reply_with_status(msg, c.GFX_STATUS_PERMISSION, 0, 0, 0);
+        return;
+    }
+    const ptr_raw = api().shmem_map.?(shmem_id) orelse {
+        reply_with_status(msg, c.GFX_STATUS_IO, 0, 0, 0);
+        return;
+    };
+    defer _ = api().shmem_unmap.?(shmem_id);
+    const src: [*]const u8 = @ptrCast(@alignCast(ptr_raw));
+    const n = @min(@as(usize, title_len), GFX_WINDOW_TITLE_MAX);
+    @memcpy(g_windows[slot_idx].title[0..n], src[0..n]);
+    g_windows[slot_idx].title[n] = 0;
+    g_windows[slot_idx].title_len = @intCast(n);
+    g_title_run_cache[slot_idx].valid = false;
+    reply_with_status(msg, c.GFX_STATUS_OK, 0, 0, 0);
+}
+
+fn handle_get_window_title(msg: *const c.nd_ipc_message_t) void {
+    const window_id: u32 = @bitCast(msg.arg0);
+    const shmem_id: u32 = @bitCast(msg.arg1);
+    const slot_idx = window_find_by_id(window_id) orelse {
+        reply_with_status(msg, c.GFX_STATUS_INVALID, 0, 0, 0);
+        return;
+    };
+    const tlen = g_windows[slot_idx].title_len;
+    if (shmem_id == 0 or tlen == 0) {
+        reply_with_status(msg, c.GFX_STATUS_OK, @as(u32, tlen), 0, 0);
+        return;
+    }
+    const ptr_raw = api().shmem_map.?(shmem_id) orelse {
+        reply_with_status(msg, c.GFX_STATUS_IO, 0, 0, 0);
+        return;
+    };
+    defer _ = api().shmem_unmap.?(shmem_id);
+    const dst: [*]u8 = @ptrCast(@alignCast(ptr_raw));
+    const n = @min(@as(usize, tlen), GFX_WINDOW_TITLE_MAX);
+    @memcpy(dst[0..n], g_windows[slot_idx].title[0..n]);
+    dst[n] = 0;
+    _ = api().shmem_flush.?(shmem_id, ptr_raw, @intCast(n + 1));
+    reply_with_status(msg, c.GFX_STATUS_OK, @as(u32, @intCast(n)), 0, 0);
+}
+
 fn handle_ipc_dispatch(msg: *const c.nd_ipc_message_t) void {
     var opcode: u16 = @intCast(msg.type & 0xFFFF);
     if (gfx_header_valid(msg.arg2, msg.arg3)) {
@@ -2611,6 +2677,8 @@ fn handle_ipc_dispatch(msg: *const c.nd_ipc_message_t) void {
         c.GFX_IPC_SET_WINDOW_FLAGS => handle_set_window_flags(msg),
         c.GFX_IPC_GET_DISPLAY_INFO => handle_get_display_info(msg),
         c.GFX_IPC_MOVE_WINDOW => handle_move_window(msg),
+        c.GFX_IPC_SET_WINDOW_TITLE => handle_set_window_title(msg),
+        c.GFX_IPC_GET_WINDOW_TITLE => handle_get_window_title(msg),
         else => reply_unsupported(msg),
     }
 }
@@ -2640,6 +2708,8 @@ fn register_ipc_handlers() i32 {
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_SET_WINDOW_FLAGS, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_GET_DISPLAY_INFO, cb, null) != 0) return -1;
     if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_MOVE_WINDOW, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_SET_WINDOW_TITLE, cb, null) != 0) return -1;
+    if (sys.eventRegister(&g_ipc_loop, c.GFX_IPC_GET_WINDOW_TITLE, cb, null) != 0) return -1;
     return 0;
 }
 

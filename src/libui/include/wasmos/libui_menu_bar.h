@@ -47,6 +47,7 @@ ui_layout_menu_bar(ui_context_t *ctx, ui_component_t *p)
     while (child_id2 > 0) {
         ui_component_t *mc = ui_component_by_id(ctx, child_id2);
         if (!mc) break;
+        if (mc->preferred_h == 0) { child_id2 = mc->next_sibling_id; continue; } /* hidden item */
         /* preferred_h repurposed as preferred width for menu items */
         const int32_t iw = mc->preferred_h > 4 ? mc->preferred_h : 80;
         mc->bounds.x = x_cur;

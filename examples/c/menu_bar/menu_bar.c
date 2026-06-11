@@ -165,23 +165,25 @@ static void remove_all_children(ui_context_t *ctx, int32_t parent_id)
 
 /* ---- app list refresh ---- */
 
+/* Large scratch buffers for refresh_app_list — kept static to avoid stack overflow
+ * (default WASM stack is 4 KB; these arrays total ~6 KB). */
+typedef struct {
+    int32_t pid;
+    char    name[32];
+    int32_t win_ids[MAX_WINS_PER_APP];
+    char    win_titles[MAX_WINS_PER_APP][TITLE_MAX];
+    int32_t count;
+} AppGroup;
+
+static AppGroup g_groups[MAX_APP_GROUPS];
+static int32_t  g_group_pids[MAX_APP_GROUPS];
+static int32_t  g_group_wids[MAX_APP_GROUPS][MAX_WINS_PER_APP];
+static int32_t  g_group_counts[MAX_APP_GROUPS];
+
 static void refresh_app_list(void)
 {
-    /* Collect windows grouped by PID */
-    typedef struct {
-        int32_t pid;
-        char    name[32];
-        int32_t win_ids[MAX_WINS_PER_APP];
-        char    win_titles[MAX_WINS_PER_APP][TITLE_MAX];
-        int32_t count;
-    } AppGroup;
-
-    AppGroup groups[MAX_APP_GROUPS];
-    int32_t  ngroups = 0;
-
-    int32_t group_pids[MAX_APP_GROUPS]  = {0};
-    int32_t group_wids[MAX_APP_GROUPS][MAX_WINS_PER_APP];
-    int32_t group_counts[MAX_APP_GROUPS] = {0};
+    int32_t ngroups = 0;
+    for (int32_t i = 0; i < MAX_APP_GROUPS; ++i) g_group_pids[i] = g_group_counts[i] = 0;
 
     for (int32_t idx = 0; idx < 32; ++idx) {
         int32_t status = 0, wid = 0, owner_ep = 0;
@@ -194,24 +196,24 @@ static void refresh_app_list(void)
 
         int32_t gi = -1;
         for (int32_t g = 0; g < ngroups; ++g)
-            if (group_pids[g] == pid) { gi = g; break; }
+            if (g_group_pids[g] == pid) { gi = g; break; }
         if (gi < 0) {
             if (ngroups >= MAX_APP_GROUPS) continue;
             gi = ngroups++;
-            group_pids[gi] = pid;
-            group_counts[gi] = 0;
+            g_group_pids[gi] = pid;
+            g_group_counts[gi] = 0;
         }
-        if (group_counts[gi] < MAX_WINS_PER_APP)
-            group_wids[gi][group_counts[gi]++] = wid;
+        if (g_group_counts[gi] < MAX_WINS_PER_APP)
+            g_group_wids[gi][g_group_counts[gi]++] = wid;
     }
 
     /* Build groups with names and titles */
     for (int32_t i = 0; i < ngroups; ++i) {
-        AppGroup *ag = &groups[i];
-        ag->pid   = group_pids[i];
-        ag->count = group_counts[i];
+        AppGroup *ag = &g_groups[i];
+        ag->pid   = g_group_pids[i];
+        ag->count = g_group_counts[i];
         for (int32_t w = 0; w < ag->count; ++w) {
-            ag->win_ids[w] = group_wids[i][w];
+            ag->win_ids[w] = g_group_wids[i][w];
             ag->win_titles[w][0] = '\0';
             fetch_title(ag->win_ids[w], ag->win_titles[w], TITLE_MAX);
         }
@@ -231,7 +233,7 @@ static void refresh_app_list(void)
     remove_all_children(&g_ctx, g_apps_mi_id);
 
     for (int32_t i = 0; i < ngroups; ++i) {
-        AppGroup *ag = &groups[i];
+        AppGroup *ag = &g_groups[i];
         if (ag->count <= 0) continue;
 
         if (ag->count == 1) {

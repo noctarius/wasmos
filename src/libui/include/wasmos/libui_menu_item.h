@@ -272,9 +272,14 @@ ui_menu_item_popup_open(ui_context_t *ctx, ui_component_t *mi)
                     &status, &a1, &a2, &a3) != 0 || status != GFX_STATUS_OK) return;
     const int32_t win_id = a1;
 
+    /* INVISIBLE during setup prevents the placeholder flash before the first
+     * present.  NO_ACTIVATE prevents handle_present_window from auto-focusing
+     * the popup (which would send FOCUS_LOST to the parent popup and dismiss it). */
     if (ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
                     GFX_IPC_SET_WINDOW_FLAGS, win_id,
-                    (int32_t)(GFX_WINDOW_FLAG_TOPMOST | GFX_WINDOW_FLAG_NO_CHROME | GFX_WINDOW_FLAG_NO_TASK_LIST), 0, 0,
+                    (int32_t)(GFX_WINDOW_FLAG_TOPMOST | GFX_WINDOW_FLAG_NO_CHROME |
+                               GFX_WINDOW_FLAG_NO_TASK_LIST | GFX_WINDOW_FLAG_NO_ACTIVATE |
+                               GFX_WINDOW_FLAG_INVISIBLE), 0, 0,
                     &status, 0, 0, 0) != 0 || status != GFX_STATUS_OK) goto fail;
 
     if (ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
@@ -306,8 +311,13 @@ ui_menu_item_popup_open(ui_context_t *ctx, ui_component_t *mi)
 
     ui_menu_item_popup_render(ctx, mi, -1);
     ui_menu_item_popup_present(ctx, d);
-    /* Focus is given only on explicit click, not on hover-preview open.
-     * ui_menu_item_handle_popup_event issues GFX_IPC_FOCUS_WINDOW when needed. */
+    /* Reveal: clear INVISIBLE now that the buffer has content.
+     * Keep NO_ACTIVATE so focus cannot be stolen by mouse clicks or present. */
+    ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
+                GFX_IPC_SET_WINDOW_FLAGS, win_id,
+                (int32_t)(GFX_WINDOW_FLAG_TOPMOST | GFX_WINDOW_FLAG_NO_CHROME |
+                           GFX_WINDOW_FLAG_NO_TASK_LIST | GFX_WINDOW_FLAG_NO_ACTIVATE), 0, 0,
+                &status, 0, 0, 0);
     return;
 fail:
     ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,

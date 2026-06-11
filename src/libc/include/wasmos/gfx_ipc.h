@@ -37,6 +37,7 @@ enum {
     GFX_IPC_FOCUS_WINDOW = 0x020A,
     GFX_IPC_SET_WINDOW_FLAGS = 0x020B,
     GFX_IPC_GET_DISPLAY_INFO = 0x020C,
+    GFX_IPC_MOVE_WINDOW = 0x020D,
     GFX_IPC_RESP = 0x0280,
     GFX_IPC_ERROR = 0x02FF
 };
@@ -66,6 +67,7 @@ enum {
  *                           system flag pins window to (0,0) topmost with no chrome
  * - GFX_IPC_GET_DISPLAY_INFO: arg0..arg3 reserved
  *                           reply: arg1=width arg2=height
+ * - GFX_IPC_MOVE_WINDOW:    arg0=window_id arg1=x arg2=y arg3 reserved
  */
 
 /* Window flags for GFX_IPC_SET_WINDOW_FLAGS. */

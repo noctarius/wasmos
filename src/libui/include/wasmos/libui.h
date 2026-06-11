@@ -1243,7 +1243,24 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
                 return UI_MSG_CONSUMED;
             }
             if (msg->arg1 == GFX_EVENT_FOCUS_LOST && (int32_t)msg->arg2 == mpd->popup_win_id) {
-                ui_menu_item_dismiss_popup(ctx, mc);
+                /* Suppress dismiss if focus moved to a child's own popup window
+                 * (e.g. a sub-menu opened from hover).  Only dismiss when focus
+                 * leaves the whole menu hierarchy. */
+                int32_t child_popup_open = 0;
+                {
+                    int32_t cid = mc->first_child_id;
+                    while (cid > 0) {
+                        const ui_component_t *ch = ui_component_by_id(ctx, cid);
+                        if (!ch) break;
+                        const ui_menu_item_data_t *cd = (const ui_menu_item_data_t *)ch->component_data;
+                        if (cd && cd->popup_win_id > 0) { child_popup_open = 1; break; }
+                        cid = ch->next_sibling_id;
+                    }
+                }
+                if (!child_popup_open) {
+                    ui_menu_item_dismiss_popup(ctx, mc);
+                    return UI_MSG_CONSUMED;
+                }
                 return UI_MSG_CONSUMED;
             }
         }

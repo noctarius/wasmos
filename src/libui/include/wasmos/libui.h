@@ -151,7 +151,10 @@ typedef struct {
 
 typedef struct {
     ui_text_data_t text;
-    ui_list_data_t list;
+    /* Children are tracked via the component tree (first_child_id / next_sibling_id).
+     * The flat ui_list_data_t list has been removed; leaves carry on_click callbacks
+     * and non-leaves open their own sub-popup on hover / give it focus on click. */
+    int32_t  hovered_child_id;  /* component id of the child currently highlighted, or 0 */
     int32_t  dropdown_open;
     /* popup window — managed by ui_menu_item_sync_popup (libui_menu_item.h) */
     int32_t  popup_win_id;
@@ -584,7 +587,7 @@ ui_component_alloc(ui_context_t *ctx, ui_component_type_t type)
         break;
     case UI_COMPONENT_MENU_ITEM:
         UI_ALLOC_DATA(ui_menu_item_data_t);
-        ((ui_menu_item_data_t *)c->component_data)->list.selected = -1;
+        ((ui_menu_item_data_t *)c->component_data)->hovered_child_id = 0;
         break;
     case UI_COMPONENT_MENU_BAR:   UI_ALLOC_DATA(ui_menu_bar_data_t);   break;
     default: break; /* PANEL needs no per-instance data */
@@ -639,6 +642,19 @@ ui_component_set_text(ui_context_t *ctx, int32_t id, const char *text)
     (void)ui_component_set_text_owned(c, text ? text : "");
 }
 
+/* Create a child MENU_ITEM under parent_id with the given text.
+ * Returns the new child's component id, or -1 on failure.
+ * Equivalent to create_menu_item + set_text + append_child. */
+static inline int32_t
+ui_menu_item_add_item(ui_context_t *ctx, int32_t parent_id, const char *text)
+{
+    const int32_t child_id = ui_component_create_menu_item(ctx);
+    if (child_id < 0) return -1;
+    ui_component_set_text(ctx, child_id, text ? text : "");
+    ui_component_append_child(ctx, parent_id, child_id);
+    return child_id;
+}
+
 static inline void
 ui_component_set_button_action(ui_context_t *ctx, int32_t id, ui_button_click_cb_t cb, void *user)
 {
@@ -670,13 +686,22 @@ ui_component_list_append(ui_context_t *ctx, int32_t id, const char *item)
     ui_component_t *c = ui_component_by_id(ctx, id);
     if (!c || !item || !c->component_data) return -1;
 
+    /* For MENU_ITEM: create a child MENU_ITEM component and append it to the tree.
+     * Returns the child's component id (cast to int32_t) instead of a flat list index.
+     * Callers that need a callback can set child->on_click after this call. */
+    if (c->type == UI_COMPONENT_MENU_ITEM) {
+        const int32_t child_id = ui_component_alloc(ctx, UI_COMPONENT_MENU_ITEM);
+        if (child_id < 0) return -1;
+        ui_component_set_text(ctx, child_id, item);
+        ui_component_append_child(ctx, id, child_id);
+        return child_id;
+    }
+
     ui_list_data_t *ld;
     if (c->type == UI_COMPONENT_LIST_VIEW) {
         ld = &((ui_list_view_data_t *)c->component_data)->list;
     } else if (c->type == UI_COMPONENT_DROPDOWN) {
         ld = &((ui_dropdown_data_t *)c->component_data)->list;
-    } else if (c->type == UI_COMPONENT_MENU_ITEM) {
-        ld = &((ui_menu_item_data_t *)c->component_data)->list;
     } else {
         return -1;
     }

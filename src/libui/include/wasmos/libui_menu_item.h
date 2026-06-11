@@ -258,7 +258,7 @@ ui_menu_item_popup_open(ui_context_t *ctx, ui_component_t *mi)
 
     if (ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
                     GFX_IPC_SET_WINDOW_FLAGS, win_id,
-                    (int32_t)(GFX_WINDOW_FLAG_TOPMOST | GFX_WINDOW_FLAG_NO_CHROME), 0, 0,
+                    (int32_t)(GFX_WINDOW_FLAG_TOPMOST | GFX_WINDOW_FLAG_NO_CHROME | GFX_WINDOW_FLAG_NO_TASK_LIST), 0, 0,
                     &status, 0, 0, 0) != 0 || status != GFX_STATUS_OK) goto fail;
 
     if (ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,

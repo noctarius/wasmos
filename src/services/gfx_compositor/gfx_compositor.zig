@@ -32,6 +32,7 @@ const GFX_WINDOW_FLAG_INVISIBLE: u32 = 1 << 2;
 const GFX_WINDOW_FLAG_PASSTHROUGH_ZERO: u32 = 1 << 3;
 const GFX_WINDOW_FLAG_NO_ACTIVATE: u32 = 1 << 4;
 const GFX_WINDOW_FLAG_NO_CONTENT: u32 = 1 << 5;
+const GFX_WINDOW_FLAG_NO_TASK_LIST: u32 = 1 << 6;
 const GFX_WINDOW_Z_SYSTEM: u32 = 0xFFFF_FFFE;
 const PAGE_SIZE: u64 = 4096;
 const CURSOR_W: i32 = 9;
@@ -2476,11 +2477,13 @@ fn handle_list_windows(msg: *const c.nd_ipc_message_t) void {
     var k: usize = 0;
     while (k < g_windows.len) : (k += 1) {
         if (!g_windows[k].in_use) continue;
+        if ((g_windows[k].flags & GFX_WINDOW_FLAG_NO_TASK_LIST) != 0) continue;
         if (count == idx_req) {
             var total: usize = count + 1;
             var m: usize = k + 1;
             while (m < g_windows.len) : (m += 1) {
-                if (g_windows[m].in_use) total += 1;
+                if (g_windows[m].in_use and
+                    (g_windows[m].flags & GFX_WINDOW_FLAG_NO_TASK_LIST) == 0) total += 1;
             }
             reply_with_status(msg, c.GFX_STATUS_OK,
                 @intCast(g_windows[k].window_id),

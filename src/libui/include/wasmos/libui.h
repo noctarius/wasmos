@@ -162,6 +162,7 @@ typedef struct {
     int32_t  popup_h;
     int32_t  popup_hovered;
     uint32_t popup_prev_buttons;
+    int32_t  popup_flushing;  /* 1 while discarding pre-open stale button-down events */
 } ui_menu_item_data_t;
 
 typedef struct {

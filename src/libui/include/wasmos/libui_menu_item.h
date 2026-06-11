@@ -286,6 +286,7 @@ ui_menu_item_popup_open(ui_context_t *ctx, ui_component_t *mi)
     d->popup_h            = popup_h;
     d->popup_hovered      = -1;
     d->popup_prev_buttons = 0;
+    d->popup_flushing     = 1; /* discard stale button-down events from before popup opened */
 
     ui_menu_item_popup_render(ctx, mi, -1);
     ui_menu_item_popup_present(ctx, d);
@@ -342,10 +343,20 @@ ui_menu_item_handle_popup_event(ui_context_t *ctx, ui_component_t *mi,
     const int32_t  px        = ui_u16_lo(msg->arg2);
     const int32_t  py        = ui_u16_hi(msg->arg2);
     const uint32_t buttons   = (uint32_t)msg->arg3;
+    (void)px;
+
+    /* Flush stale button-down events that were queued for the bar window
+     * before the popup opened (user holding the mouse while bar was focused).
+     * Discard until we see buttons=0, then arm normal press/release tracking. */
+    if (d->popup_flushing) {
+        if (buttons & 1u) { return; } /* stale press — discard */
+        d->popup_flushing     = 0;
+        d->popup_prev_buttons = 0;  /* clean slate for real interactions */
+    }
+
     const int32_t  left_now  = (buttons & 1u) != 0;
     const int32_t  left_prev = (d->popup_prev_buttons & 1u) != 0;
     d->popup_prev_buttons    = buttons;
-    (void)px;
 
     const int32_t item_h  = 22;
     const int32_t hovered = (py >= 0 && py < d->popup_h) ? (py / item_h) : -1;

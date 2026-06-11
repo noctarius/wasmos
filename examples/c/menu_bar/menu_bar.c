@@ -114,13 +114,24 @@ static int32_t fetch_title(int32_t window_id, char *out, int32_t cap)
     return tlen;
 }
 
-static int32_t pid_to_name(int32_t pid, char *out, int32_t cap)
+/* wasmos_ipc_endpoint_owner() returns a context_id, NOT a PID.
+ * wasmos_proc_info_stats() returns a stats struct that contains context_id,
+ * so we can match correctly. */
+static int32_t context_to_name(int32_t context_id, char *out, int32_t cap)
 {
     const int32_t total = wasmos_proc_count();
     for (int32_t i = 0; i < total; ++i) {
         char namebuf[64] = {0};
-        int32_t got_pid = wasmos_proc_info(i, (int32_t)(uintptr_t)namebuf, (int32_t)sizeof(namebuf));
-        if (got_pid == pid) {
+        uint32_t parent_pid = 0;
+        wasmos_proc_stats_t stats;
+        memset(&stats, 0, sizeof(stats));
+        const int32_t rc = wasmos_proc_info_stats(
+            i,
+            (int32_t)(uintptr_t)namebuf, (int32_t)sizeof(namebuf),
+            (int32_t)(uintptr_t)&parent_pid,
+            (int32_t)(uintptr_t)&stats);
+        if (rc < 0) continue;
+        if ((int32_t)stats.context_id == context_id) {
             int32_t n = 0;
             while (namebuf[n] && n < cap - 1) { out[n] = namebuf[n]; n++; }
             out[n] = '\0';
@@ -168,7 +179,7 @@ static void remove_all_children(ui_context_t *ctx, int32_t parent_id)
 /* Large scratch buffers for refresh_app_list — kept static to avoid stack overflow
  * (default WASM stack is 4 KB; these arrays total ~6 KB). */
 typedef struct {
-    int32_t pid;
+    int32_t ctx_id;
     char    name[32];
     int32_t win_ids[MAX_WINS_PER_APP];
     char    win_titles[MAX_WINS_PER_APP][TITLE_MAX];
@@ -176,14 +187,14 @@ typedef struct {
 } AppGroup;
 
 static AppGroup g_groups[MAX_APP_GROUPS];
-static int32_t  g_group_pids[MAX_APP_GROUPS];
+static int32_t  g_group_ctx_ids[MAX_APP_GROUPS];
 static int32_t  g_group_wids[MAX_APP_GROUPS][MAX_WINS_PER_APP];
 static int32_t  g_group_counts[MAX_APP_GROUPS];
 
 static void refresh_app_list(void)
 {
     int32_t ngroups = 0;
-    for (int32_t i = 0; i < MAX_APP_GROUPS; ++i) g_group_pids[i] = g_group_counts[i] = 0;
+    for (int32_t i = 0; i < MAX_APP_GROUPS; ++i) g_group_ctx_ids[i] = g_group_counts[i] = 0;
 
     for (int32_t idx = 0; idx < 32; ++idx) {
         int32_t status = 0, wid = 0, owner_ep = 0;
@@ -192,15 +203,15 @@ static void refresh_app_list(void)
                         &status, &wid, &owner_ep, 0) != 0) break;
         if (status != GFX_STATUS_OK || wid == 0) break;
 
-        const int32_t pid = wasmos_ipc_endpoint_owner(owner_ep);
+        const int32_t ctx_id = wasmos_ipc_endpoint_owner(owner_ep);
 
         int32_t gi = -1;
         for (int32_t g = 0; g < ngroups; ++g)
-            if (g_group_pids[g] == pid) { gi = g; break; }
+            if (g_group_ctx_ids[g] == ctx_id) { gi = g; break; }
         if (gi < 0) {
             if (ngroups >= MAX_APP_GROUPS) continue;
             gi = ngroups++;
-            g_group_pids[gi] = pid;
+            g_group_ctx_ids[gi] = ctx_id;
             g_group_counts[gi] = 0;
         }
         if (g_group_counts[gi] < MAX_WINS_PER_APP)
@@ -210,7 +221,7 @@ static void refresh_app_list(void)
     /* Build groups with names and titles */
     for (int32_t i = 0; i < ngroups; ++i) {
         AppGroup *ag = &g_groups[i];
-        ag->pid   = g_group_pids[i];
+        ag->ctx_id   = g_group_ctx_ids[i];
         ag->count = g_group_counts[i];
         for (int32_t w = 0; w < ag->count; ++w) {
             ag->win_ids[w] = g_group_wids[i][w];
@@ -218,13 +229,13 @@ static void refresh_app_list(void)
             fetch_title(ag->win_ids[w], ag->win_titles[w], TITLE_MAX);
         }
         ag->name[0] = '\0';
-        if (!pid_to_name(ag->pid, ag->name, 32)) {
+        if (!context_to_name(ag->ctx_id, ag->name, 32)) {
             if (ag->win_titles[0][0]) {
                 for (int32_t k = 0; k < 31 && ag->win_titles[0][k]; ++k)
                     ag->name[k] = ag->win_titles[0][k];
             } else {
                 ag->name[0]='A'; ag->name[1]='p'; ag->name[2]='p'; ag->name[3]=' ';
-                int_to_str(ag->pid, ag->name + 4, 27);
+                int_to_str(ag->ctx_id, ag->name + 4, 27);
             }
         }
     }

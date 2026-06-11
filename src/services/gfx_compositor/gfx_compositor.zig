@@ -2333,6 +2333,7 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
         return;
     }
 
+    const was_no_buffer = g_windows[window_idx].current_buffer_id == 0;
     g_windows[window_idx].current_buffer_id = buffer_id;
     g_buffers[buf_idx].state = .acquired;
     g_buffers[buf_idx].bound_window_id = window_id;
@@ -2340,7 +2341,11 @@ fn handle_present_window(msg: *const c.nd_ipc_message_t) void {
     if (GFX_TRACE) {
         if (g_overlay_locked) logMsg("[gfx-t] present win ok locked\n") else logMsg("[gfx-t] present win ok UNLOCKED\n");
     }
-    if (!window_is_invisible(g_windows[window_idx]) and !window_does_not_activate(g_windows[window_idx])) {
+    // Only auto-focus on first present (no prior buffer).  Subsequent presents
+    // from dirty render cycles must not steal focus from an open popup window.
+    if (was_no_buffer and !window_is_invisible(g_windows[window_idx]) and
+        !window_does_not_activate(g_windows[window_idx]))
+    {
         focus_window(window_idx);
     }
     sync_console_mode_for_windows();

@@ -33,16 +33,6 @@ typedef struct {
     int32_t arg3;
 } gfx_reply_t;
 
-typedef struct {
-    int32_t window_id;
-    int32_t buffer_id;
-    int32_t shmem_id;
-    int32_t stride_bytes;
-    int32_t width;
-    int32_t height;
-    uint8_t *mapped_base;
-} gfx_window_rt_t;
-
 enum {
     GFX_SMOKE_E_SETUP = 11,
     GFX_SMOKE_E_NO_GFX = 12,
@@ -67,6 +57,10 @@ enum {
     GFX_SMOKE_E_EVENT_FOCUS = 31,
     GFX_SMOKE_E_EVENT_CLOSE = 32
 };
+
+static ui_context_t g_ctx1;
+static ui_context_t g_ctx2;
+static ui_context_t g_ctx3;
 
 static int32_t
 create_damage_rect_shmem(int32_t gfx_ep, int32_t width, int32_t height)
@@ -311,109 +305,59 @@ poll_gfx_events_once(int32_t gfx_ep, int32_t reply_ep, int32_t *req, int32_t *ou
 }
 
 static int
-handle_resize_realloc_logo(int32_t gfx_ep, int32_t reply_ep, int32_t *req, gfx_window_rt_t *win, int32_t new_w, int32_t new_h)
+handle_resize_realloc_logo(int32_t gfx_ep, int32_t reply_ep, int32_t *req, ui_context_t *ctx, int32_t new_w, int32_t new_h)
 {
     gfx_reply_t reply;
     if (new_w <= 0 || new_h <= 0) {
         return -1;
     }
-    if (send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_ALLOC_SHARED_BUFFER,
-                 win->window_id, new_w, new_h, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+    if (ui_realloc_buffer(ctx, new_w, new_h) != 0) {
         puts("[test] gfx smoke resize3 alloc failed");
         return -1;
     }
-    int32_t new_buffer_id = reply.arg1;
-    int32_t new_shmem_id = reply.arg2;
-    int32_t new_stride = reply.arg3;
-    uint8_t *new_base = 0;
-    if (map_shared_buffer_ptr(new_shmem_id, new_stride, new_h, &new_base) != 0) {
-        (void)send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_RELEASE_SHARED_BUFFER, new_buffer_id, 0, 0, 0, &reply);
-        return -1;
-    }
     if (new_w >= 500 && new_h >= 500) {
-        if (fill_wasmos_logo(new_base, new_w, new_h, new_stride) != 0) {
+        if (fill_wasmos_logo(ctx->mapped_base, new_w, new_h, ctx->stride_bytes) != 0) {
             return -1;
         }
     } else {
-        if (fill_pattern(new_base, new_w, new_h, new_stride, 77u) != 0) {
+        if (fill_pattern(ctx->mapped_base, new_w, new_h, ctx->stride_bytes, 77u) != 0) {
             return -1;
         }
     }
-    if (flush_shared_buffer_ptr(new_shmem_id, new_base, new_stride, new_h) != 0) {
+    if (flush_shared_buffer_ptr(ctx->shmem_id, ctx->mapped_base, ctx->stride_bytes, new_h) != 0) {
         return -1;
     }
     if (send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_PRESENT_WINDOW,
-                 win->window_id, new_buffer_id, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+                 ctx->window_id, ctx->buffer_id, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
         puts("[test] gfx smoke resize3 present failed");
         return -1;
     }
-    if (send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_RELEASE_SHARED_BUFFER,
-                 win->buffer_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
-        puts("[test] gfx smoke resize3 release old failed");
-        return -1;
-    }
-    if (wasmos_shmem_unmap(win->shmem_id) != 0) {
-        puts("[test] gfx smoke resize3 unmap old failed");
-        return -1;
-    }
-    win->buffer_id = new_buffer_id;
-    win->shmem_id = new_shmem_id;
-    win->stride_bytes = new_stride;
-    win->width = new_w;
-    win->height = new_h;
-    win->mapped_base = new_base;
     return 0;
 }
 
 static int
-handle_resize_realloc(int32_t gfx_ep, int32_t reply_ep, int32_t *req, gfx_window_rt_t *win, int32_t new_w, int32_t new_h, uint32_t phase)
+handle_resize_realloc(int32_t gfx_ep, int32_t reply_ep, int32_t *req, ui_context_t *ctx, int32_t new_w, int32_t new_h, uint32_t phase)
 {
     gfx_reply_t reply;
     if (new_w <= 0 || new_h <= 0) {
         return -1;
     }
-    if (send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_ALLOC_SHARED_BUFFER,
-                 win->window_id, new_w, new_h, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+    if (ui_realloc_buffer(ctx, new_w, new_h) != 0) {
         puts("[test] gfx smoke resize alloc failed");
         return -1;
     }
-    int32_t new_buffer_id = reply.arg1;
-    int32_t new_shmem_id = reply.arg2;
-    int32_t new_stride = reply.arg3;
-    uint8_t *new_base = 0;
-    if (map_shared_buffer_ptr(new_shmem_id, new_stride, new_h, &new_base) != 0) {
-        (void)send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_RELEASE_SHARED_BUFFER, new_buffer_id, 0, 0, 0, &reply);
-        return -1;
-    }
-    if (fill_pattern(new_base, new_w, new_h, new_stride, phase) != 0) {
+    if (fill_pattern(ctx->mapped_base, new_w, new_h, ctx->stride_bytes, phase) != 0) {
         puts("[test] gfx smoke resize paint failed");
         return -1;
     }
-    if (flush_shared_buffer_ptr(new_shmem_id, new_base, new_stride, new_h) != 0) {
+    if (flush_shared_buffer_ptr(ctx->shmem_id, ctx->mapped_base, ctx->stride_bytes, new_h) != 0) {
         return -1;
     }
     if (send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_PRESENT_WINDOW,
-                 win->window_id, new_buffer_id, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+                 ctx->window_id, ctx->buffer_id, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
         puts("[test] gfx smoke resize present failed");
         return -1;
     }
-
-    if (send_gfx(gfx_ep, reply_ep, (*req)++, GFX_IPC_RELEASE_SHARED_BUFFER,
-                 win->buffer_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
-        puts("[test] gfx smoke resize release old failed");
-        return -1;
-    }
-    if (wasmos_shmem_unmap(win->shmem_id) != 0) {
-        puts("[test] gfx smoke resize unmap old failed");
-        return -1;
-    }
-
-    win->buffer_id = new_buffer_id;
-    win->shmem_id = new_shmem_id;
-    win->stride_bytes = new_stride;
-    win->width = new_w;
-    win->height = new_h;
-    win->mapped_base = new_base;
     return 0;
 }
 
@@ -582,26 +526,8 @@ main(int argc, char **argv)
     int32_t gfx_ep = -1;
     int32_t req = GFX_REQ_BASE;
     gfx_reply_t reply;
-    int32_t window_id;
-    int32_t buffer_id;
-    int32_t buffer_id2 = 0;
-    int32_t buffer_id3 = 0;
-    int32_t shmem_id;
-    int32_t shmem_id2 = 0;
-    int32_t shmem_id3 = 0;
     int32_t damage_shmem_id;
-    int32_t window_id2 = 0;
-    int32_t window_id3 = 0;
-    int32_t stride_bytes2 = 0;
-    int32_t stride_bytes3 = 0;
     int32_t libui_started = 0;
-    int32_t stride_bytes;
-    uint8_t *mapped_base;
-    uint8_t *mapped_base2 = 0;
-    uint8_t *mapped_base3 = 0;
-    gfx_window_rt_t win1 = {0};
-    gfx_window_rt_t win2 = {0};
-    gfx_window_rt_t win3 = {0};
 
     if (proc_endpoint <= 0 || reply_ep < 0) {
         puts("[test] gfx smoke setup failed");
@@ -620,81 +546,63 @@ main(int argc, char **argv)
         return GFX_SMOKE_E_NO_GFX;
     }
 
-    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_CREATE_WINDOW,
-                 GFX_W, GFX_H,
-                 (int32_t)GFX_IPC_ABI_MAGIC,
-                 (int32_t)gfx_ipc_header_pack(GFX_IPC_ABI_VERSION, GFX_IPC_CREATE_WINDOW),
-                 &reply) != 0 || reply.status != GFX_STATUS_OK) {
+    /* --- win1: ui_init for initial setup, then raw resize test sequence --- */
+    if (ui_init(&g_ctx1, proc_endpoint, reply_ep, GFX_W, GFX_H) != 0) {
         puts("[test] gfx smoke create failed");
         return GFX_SMOKE_E_CREATE;
     }
-    window_id = reply.arg1;
+    (void)ui_window_set_title(&g_ctx1, "gfx smoke 1");
 
-    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_ALLOC_SHARED_BUFFER,
-                 window_id, GFX_W, GFX_H, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
-        char buf[96];
-        int n = snprintf(buf, sizeof(buf),
-                         "[test] gfx smoke alloc failed status=%d a1=%d a2=%d a3=%d\n",
-                         reply.status, reply.arg1, reply.arg2, reply.arg3);
-        if (n > 0) {
-            (void)putsn(buf, (size_t)n);
-        }
-        return GFX_SMOKE_E_ALLOC0;
-    }
-    buffer_id = reply.arg1;
-    shmem_id = reply.arg2;
-    stride_bytes = reply.arg3;
-
-    if (map_shared_buffer_ptr(shmem_id, stride_bytes, GFX_H, &mapped_base) != 0) {
-        return GFX_SMOKE_E_MAP0;
-    }
-    if (fill_pattern(mapped_base, GFX_W, GFX_H, stride_bytes, 1) != 0) {
+    if (fill_pattern(g_ctx1.mapped_base, GFX_W, GFX_H, g_ctx1.stride_bytes, 1) != 0) {
         puts("[test] gfx smoke paint1 failed");
         return GFX_SMOKE_E_PAINT0;
     }
-    if (flush_shared_buffer_ptr(shmem_id, mapped_base, stride_bytes, GFX_H) != 0) {
+    if (flush_shared_buffer_ptr(g_ctx1.shmem_id, g_ctx1.mapped_base, g_ctx1.stride_bytes, GFX_H) != 0) {
         return GFX_SMOKE_E_PAINT0;
     }
 
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW,
-                 window_id, buffer_id, 0, 0, &reply) != 0 ||
+                 g_ctx1.window_id, g_ctx1.buffer_id, 0, 0, &reply) != 0 ||
         reply.status != GFX_STATUS_OK) {
         puts("[test] gfx smoke present1 failed");
         return GFX_SMOKE_E_PRESENT0;
     }
-    if (poll_gfx_focus_event(gfx_ep, reply_ep, &req, window_id) != 0) {
+    if (poll_gfx_focus_event(gfx_ep, reply_ep, &req, g_ctx1.window_id) != 0) {
         puts("[test] gfx smoke event focus missing");
         return GFX_SMOKE_E_EVENT_FOCUS;
     }
 
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RESIZE_WINDOW,
-                 window_id, GFX_RESIZE_W, GFX_RESIZE_H, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+                 g_ctx1.window_id, GFX_RESIZE_W, GFX_RESIZE_H, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
         puts("[test] gfx smoke resize failed");
         return GFX_SMOKE_E_RESIZE;
     }
-    if (wasmos_shmem_unmap(shmem_id) != 0) {
+    if (wasmos_shmem_unmap(g_ctx1.shmem_id) != 0) {
         puts("[test] gfx smoke shmem unmap failed");
         return GFX_SMOKE_E_UNMAP0;
     }
 
-    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_ALLOC_SHARED_BUFFER,
-                 window_id, GFX_RESIZE_W, GFX_RESIZE_H, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
-        puts("[test] gfx smoke resize-alloc failed");
-        return GFX_SMOKE_E_ALLOC1;
+    {
+        int32_t new_buffer_id = 0, new_shmem_id = 0, new_stride = 0;
+        uint8_t *new_base = 0;
+        if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_ALLOC_SHARED_BUFFER,
+                     g_ctx1.window_id, GFX_RESIZE_W, GFX_RESIZE_H, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+            puts("[test] gfx smoke resize-alloc failed");
+            return GFX_SMOKE_E_ALLOC1;
+        }
+        new_buffer_id = reply.arg1;
+        new_shmem_id = reply.arg2;
+        new_stride = reply.arg3;
+        if (map_shared_buffer_ptr(new_shmem_id, new_stride, GFX_RESIZE_H, &new_base) != 0) {
+            return GFX_SMOKE_E_MAP1;
+        }
+        g_ctx1.buffer_id = new_buffer_id;
+        g_ctx1.shmem_id = new_shmem_id;
+        g_ctx1.stride_bytes = new_stride;
+        g_ctx1.width = GFX_RESIZE_W;
+        g_ctx1.height = GFX_RESIZE_H;
+        g_ctx1.mapped_base = new_base;
     }
-    buffer_id = reply.arg1;
-    shmem_id = reply.arg2;
-    stride_bytes = reply.arg3;
-    if (map_shared_buffer_ptr(shmem_id, stride_bytes, GFX_RESIZE_H, &mapped_base) != 0) {
-        return GFX_SMOKE_E_MAP1;
-    }
-    win1.window_id = window_id;
-    win1.buffer_id = buffer_id;
-    win1.shmem_id = shmem_id;
-    win1.stride_bytes = stride_bytes;
-    win1.width = GFX_RESIZE_W;
-    win1.height = GFX_RESIZE_H;
-    win1.mapped_base = mapped_base;
     damage_shmem_id = create_damage_rect_shmem(gfx_ep, GFX_RESIZE_W, GFX_RESIZE_H);
     if (damage_shmem_id < 0) {
         return GFX_SMOKE_E_DAMAGE;
@@ -702,15 +610,15 @@ main(int argc, char **argv)
 
     puts("[test] gfx smoke visible start");
     for (uint32_t frame = 0; frame < GFX_FRAME_COUNT; ++frame) {
-        if (fill_pattern(mapped_base, GFX_RESIZE_W, GFX_RESIZE_H, stride_bytes, frame + 2u) != 0) {
+        if (fill_pattern(g_ctx1.mapped_base, GFX_RESIZE_W, GFX_RESIZE_H, g_ctx1.stride_bytes, frame + 2u) != 0) {
             puts("[test] gfx smoke paint-loop failed");
             return GFX_SMOKE_E_PAINT_LOOP;
         }
-        if (flush_shared_buffer_ptr(shmem_id, mapped_base, stride_bytes, GFX_RESIZE_H) != 0) {
+        if (flush_shared_buffer_ptr(g_ctx1.shmem_id, g_ctx1.mapped_base, g_ctx1.stride_bytes, GFX_RESIZE_H) != 0) {
             return GFX_SMOKE_E_PRESENT_LOOP;
         }
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW,
-                 window_id, buffer_id, 1, damage_shmem_id, &reply) != 0 ||
+                 g_ctx1.window_id, g_ctx1.buffer_id, 1, damage_shmem_id, &reply) != 0 ||
             reply.status != GFX_STATUS_OK) {
             puts("[test] gfx smoke present-loop failed");
             return GFX_SMOKE_E_PRESENT_LOOP;
@@ -720,89 +628,48 @@ main(int argc, char **argv)
     }
     puts("[test] gfx smoke visible done");
 
-    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_CREATE_WINDOW,
-                 GFX2_W, GFX2_H,
-                 (int32_t)GFX_IPC_ABI_MAGIC,
-                 (int32_t)gfx_ipc_header_pack(GFX_IPC_ABI_VERSION, GFX_IPC_CREATE_WINDOW),
-                 &reply) != 0 || reply.status != GFX_STATUS_OK) {
+    /* --- win2: ui_init + paint + present --- */
+    if (ui_init(&g_ctx2, proc_endpoint, reply_ep, GFX2_W, GFX2_H) != 0) {
         puts("[test] gfx smoke create2 failed");
         return GFX_SMOKE_E_CREATE;
     }
-    window_id2 = reply.arg1;
+    (void)ui_window_set_title(&g_ctx2, "gfx smoke 2");
 
-    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_ALLOC_SHARED_BUFFER,
-                 window_id2, GFX2_W, GFX2_H, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
-        puts("[test] gfx smoke alloc2 failed");
-        return GFX_SMOKE_E_ALLOC1;
-    }
-    buffer_id2 = reply.arg1;
-    shmem_id2 = reply.arg2;
-    stride_bytes2 = reply.arg3;
-    if (map_shared_buffer_ptr(shmem_id2, stride_bytes2, GFX2_H, &mapped_base2) != 0) {
-        return GFX_SMOKE_E_MAP1;
-    }
-    if (fill_pattern(mapped_base2, GFX2_W, GFX2_H, stride_bytes2, 42u) != 0) {
+    if (fill_pattern(g_ctx2.mapped_base, GFX2_W, GFX2_H, g_ctx2.stride_bytes, 42u) != 0) {
         puts("[test] gfx smoke paint2 failed");
         return GFX_SMOKE_E_PAINT_LOOP;
     }
-    if (flush_shared_buffer_ptr(shmem_id2, mapped_base2, stride_bytes2, GFX2_H) != 0) {
+    if (flush_shared_buffer_ptr(g_ctx2.shmem_id, g_ctx2.mapped_base, g_ctx2.stride_bytes, GFX2_H) != 0) {
         return GFX_SMOKE_E_PRESENT_LOOP;
     }
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW,
-                 window_id2, buffer_id2, 0, 0, &reply) != 0 ||
+                 g_ctx2.window_id, g_ctx2.buffer_id, 0, 0, &reply) != 0 ||
         reply.status != GFX_STATUS_OK) {
         puts("[test] gfx smoke present2 failed");
         return GFX_SMOKE_E_PRESENT_LOOP;
     }
-    win2.window_id = window_id2;
-    win2.buffer_id = buffer_id2;
-    win2.shmem_id = shmem_id2;
-    win2.stride_bytes = stride_bytes2;
-    win2.width = GFX2_W;
-    win2.height = GFX2_H;
-    win2.mapped_base = mapped_base2;
 
-    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_CREATE_WINDOW,
-                 GFX3_W, GFX3_H,
-                 (int32_t)GFX_IPC_ABI_MAGIC,
-                 (int32_t)gfx_ipc_header_pack(GFX_IPC_ABI_VERSION, GFX_IPC_CREATE_WINDOW),
-                 &reply) != 0 || reply.status != GFX_STATUS_OK) {
+    /* --- win3: ui_init + paint + present --- */
+    if (ui_init(&g_ctx3, proc_endpoint, reply_ep, GFX3_W, GFX3_H) != 0) {
         puts("[test] gfx smoke create3 failed");
         return GFX_SMOKE_E_CREATE;
     }
-    window_id3 = reply.arg1;
+    (void)ui_window_set_title(&g_ctx3, "gfx smoke 3");
 
-    if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_ALLOC_SHARED_BUFFER,
-                 window_id3, GFX3_W, GFX3_H, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
-        puts("[test] gfx smoke alloc3 failed");
-        return GFX_SMOKE_E_ALLOC1;
-    }
-    buffer_id3 = reply.arg1;
-    shmem_id3 = reply.arg2;
-    stride_bytes3 = reply.arg3;
-    if (map_shared_buffer_ptr(shmem_id3, stride_bytes3, GFX3_H, &mapped_base3) != 0) {
-        return GFX_SMOKE_E_MAP1;
-    }
-    if (fill_wasmos_logo(mapped_base3, GFX3_W, GFX3_H, stride_bytes3) != 0) {
+    if (fill_wasmos_logo(g_ctx3.mapped_base, GFX3_W, GFX3_H, g_ctx3.stride_bytes) != 0) {
         puts("[test] gfx smoke paint3 failed");
         return GFX_SMOKE_E_PAINT_LOOP;
     }
-    if (flush_shared_buffer_ptr(shmem_id3, mapped_base3, stride_bytes3, GFX3_H) != 0) {
+    if (flush_shared_buffer_ptr(g_ctx3.shmem_id, g_ctx3.mapped_base, g_ctx3.stride_bytes, GFX3_H) != 0) {
         return GFX_SMOKE_E_PRESENT_LOOP;
     }
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW,
-                 window_id3, buffer_id3, 0, 0, &reply) != 0 ||
+                 g_ctx3.window_id, g_ctx3.buffer_id, 0, 0, &reply) != 0 ||
         reply.status != GFX_STATUS_OK) {
         puts("[test] gfx smoke present3 failed");
         return GFX_SMOKE_E_PRESENT_LOOP;
     }
-    win3.window_id = window_id3;
-    win3.buffer_id = buffer_id3;
-    win3.shmem_id = shmem_id3;
-    win3.stride_bytes = stride_bytes3;
-    win3.width = GFX3_W;
-    win3.height = GFX3_H;
-    win3.mapped_base = mapped_base3;
+
     if (start_libui_demo(proc_endpoint) != 0) {
         puts("[test] libui demo failed");
         return 33;
@@ -828,12 +695,12 @@ main(int argc, char **argv)
         } else if (ev.arg1 == GFX_EVENT_RESIZE) {
             int32_t rw = (int32_t)(ev.arg3 & 0xFFFF);
             int32_t rh = (int32_t)((ev.arg3 >> 16) & 0xFFFF);
-            if (ev.arg2 == win1.window_id && !closed1) {
-                (void)handle_resize_realloc(gfx_ep, reply_ep, &req, &win1, rw, rh, 90u);
-            } else if (ev.arg2 == win2.window_id && !closed2) {
-                (void)handle_resize_realloc(gfx_ep, reply_ep, &req, &win2, rw, rh, 120u);
-            } else if (ev.arg2 == win3.window_id && !closed3) {
-                (void)handle_resize_realloc_logo(gfx_ep, reply_ep, &req, &win3, rw, rh);
+            if (ev.arg2 == g_ctx1.window_id && !closed1) {
+                (void)handle_resize_realloc(gfx_ep, reply_ep, &req, &g_ctx1, rw, rh, 90u);
+            } else if (ev.arg2 == g_ctx2.window_id && !closed2) {
+                (void)handle_resize_realloc(gfx_ep, reply_ep, &req, &g_ctx2, rw, rh, 120u);
+            } else if (ev.arg2 == g_ctx3.window_id && !closed3) {
+                (void)handle_resize_realloc_logo(gfx_ep, reply_ep, &req, &g_ctx3, rw, rh);
             }
         } else if (ev.arg1 == GFX_EVENT_POINTER) {
             (void)ev;
@@ -847,27 +714,27 @@ main(int argc, char **argv)
 #endif
         }
         if (rc == 1) {
-            if (!closed1 && close_id == window_id) {
+            if (!closed1 && close_id == g_ctx1.window_id) {
                 if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_DESTROY_WINDOW,
-                             window_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+                             g_ctx1.window_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
                     puts("[test] gfx smoke destroy1 failed");
                     return GFX_SMOKE_E_DESTROY;
                 }
                 closed1 = 1;
                 continue;
             }
-            if (!closed2 && close_id == window_id2) {
+            if (!closed2 && close_id == g_ctx2.window_id) {
                 if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_DESTROY_WINDOW,
-                             window_id2, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+                             g_ctx2.window_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
                     puts("[test] gfx smoke destroy2 failed");
                     return GFX_SMOKE_E_DESTROY;
                 }
                 closed2 = 1;
                 continue;
             }
-            if (!closed3 && close_id == window_id3) {
+            if (!closed3 && close_id == g_ctx3.window_id) {
                 if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_DESTROY_WINDOW,
-                             window_id3, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+                             g_ctx3.window_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
                     puts("[test] gfx smoke destroy3 failed");
                     return GFX_SMOKE_E_DESTROY;
                 }
@@ -883,50 +750,50 @@ main(int argc, char **argv)
     }
 
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_PRESENT_WINDOW,
-                 window_id, win1.buffer_id + 1, 0, 0, &reply) != 0 ||
+                 g_ctx1.window_id, g_ctx1.buffer_id + 1, 0, 0, &reply) != 0 ||
         reply.status != GFX_STATUS_INVALID) {
         puts("[test] gfx smoke invalid-buffer deny failed");
         return GFX_SMOKE_E_INVALID_DENY;
     }
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RESIZE_WINDOW,
-                 window_id, 200, 120, 0, &reply) != 0 || reply.status != GFX_STATUS_INVALID) {
+                 g_ctx1.window_id, 200, 120, 0, &reply) != 0 || reply.status != GFX_STATUS_INVALID) {
         puts("[test] gfx smoke post-destroy deny failed");
         return GFX_SMOKE_E_POST_DESTROY;
     }
 
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER,
-                 win1.buffer_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+                 g_ctx1.buffer_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
         puts("[test] gfx smoke release1 failed");
         return GFX_SMOKE_E_RELEASE1;
     }
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER,
-                 win2.buffer_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+                 g_ctx2.buffer_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
         puts("[test] gfx smoke release2a failed");
         return GFX_SMOKE_E_RELEASE1;
     }
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER,
-                 win3.buffer_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
+                 g_ctx3.buffer_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_OK) {
         puts("[test] gfx smoke release3a failed");
         return GFX_SMOKE_E_RELEASE1;
     }
-    if (wasmos_shmem_unmap(win1.shmem_id) != 0 ||
-        wasmos_shmem_unmap(win2.shmem_id) != 0 ||
-        wasmos_shmem_unmap(win3.shmem_id) != 0) {
+    if (wasmos_shmem_unmap(g_ctx1.shmem_id) != 0 ||
+        wasmos_shmem_unmap(g_ctx2.shmem_id) != 0 ||
+        wasmos_shmem_unmap(g_ctx3.shmem_id) != 0) {
         puts("[test] gfx smoke shmem unmap failed");
         return GFX_SMOKE_E_UNMAP1;
     }
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER,
-                 win1.buffer_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_INVALID) {
+                 g_ctx1.buffer_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_INVALID) {
         puts("[test] gfx smoke release2 deny failed");
         return GFX_SMOKE_E_RELEASE2;
     }
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER,
-                 win2.buffer_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_INVALID) {
+                 g_ctx2.buffer_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_INVALID) {
         puts("[test] gfx smoke release2b deny failed");
         return GFX_SMOKE_E_RELEASE2;
     }
     if (send_gfx(gfx_ep, reply_ep, req++, GFX_IPC_RELEASE_SHARED_BUFFER,
-                 win3.buffer_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_INVALID) {
+                 g_ctx3.buffer_id, 0, 0, 0, &reply) != 0 || reply.status != GFX_STATUS_INVALID) {
         puts("[test] gfx smoke release3b deny failed");
         return GFX_SMOKE_E_RELEASE2;
     }

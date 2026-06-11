@@ -193,6 +193,16 @@ static int32_t  g_group_counts[MAX_APP_GROUPS];
 
 static void refresh_app_list(void)
 {
+    /* Don't tear down the component tree while the Apps popup is open —
+     * remove_all_children destroys sub-popups and clears focus. */
+    {
+        const ui_component_t *mi = ui_component_by_id(&g_ctx, g_apps_mi_id);
+        if (mi) {
+            const ui_menu_item_data_t *md = (const ui_menu_item_data_t *)mi->component_data;
+            if (md && md->dropdown_open) return;
+        }
+    }
+
     int32_t ngroups = 0;
     for (int32_t i = 0; i < MAX_APP_GROUPS; ++i) g_group_ctx_ids[i] = g_group_counts[i] = 0;
 

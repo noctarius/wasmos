@@ -66,5 +66,12 @@ sched_prio_t sched_default_prio(int is_idle,
  */
 void sched_thread_init(struct thread *t, sched_prio_t prio);
 
+/*
+ * Try to steal a ready thread from another CPU's queue.  Uses trylock to
+ * avoid deadlock; returns NULL if no work is available or all remote queues
+ * are busy.  my_cpu_id is the calling CPU's index into g_cpus[].
+ */
+struct thread *cpu_sched_try_steal(uint32_t my_cpu_id);
+
 #endif /* WASMOS_SCHED_THREADABLE */
 #endif /* WASMOS_SCHED_H */

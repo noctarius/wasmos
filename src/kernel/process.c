@@ -1662,6 +1662,12 @@ static int process_schedule_once_impl(void) {
     spinlock_lock(&cs->lock);
     thread_t *thread = cpu_sched_pick_next(cs);
     spinlock_unlock(&cs->lock);
+    if (thread == cs->idle) {
+        thread_t *stolen = cpu_sched_try_steal(cpu_local()->cpu_id);
+        if (stolen) {
+            thread = stolen;
+        }
+    }
     process_t *proc = thread ? process_owner_for_thread(thread) : 0;
     if (!thread || !proc || !proc->entry) {
         return 1;

@@ -163,6 +163,9 @@ set(AS_HELLO_APP ${BUILD_DIR}/hello_as.wap)
 set(WASM_DATE_TOOL_SRC ${CMAKE_SOURCE_DIR}/src/utils/date/date.ts)
 set(WASM_DATE_TOOL_WASM ${BUILD_DIR}/date_tool.wasm)
 set(WASM_DATE_TOOL_APP ${BUILD_DIR}/date.wap)
+set(WASM_SCHED_INFO_SRC ${CMAKE_SOURCE_DIR}/src/utils/sched_info/sched_info.ts)
+set(WASM_SCHED_INFO_WASM ${BUILD_DIR}/sched_info.wasm)
+set(WASM_SCHED_INFO_APP ${BUILD_DIR}/sched_info.wap)
 
 if (NOT DEFINED AS_ENABLE_INITIALIZED)
   set(AS_ENABLE ON CACHE BOOL "Enable AssemblyScript example builds" FORCE)
@@ -916,6 +919,9 @@ endif ()
 set(DATE_TOOL_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DATE_TOOL_APP} ${BUILD_DIR}/esp/system/utils/date.wap
 )
+set(SCHED_INFO_COPY_CMD
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SCHED_INFO_APP} ${BUILD_DIR}/esp/system/utils/sched_info.wap
+)
 set(HELLO_C_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HELLO_C_APP} ${BUILD_DIR}/esp/apps/hello_c.wap
 )
@@ -984,6 +990,7 @@ set(INITFS_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FRAMEBUFFER_APP} ${BUILD_DIR}/esp/system/drivers/framebuf.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_FRAMEBUFFER_PCI_APP} ${BUILD_DIR}/esp/system/drivers/framebuf_pci.wap
   ${DATE_TOOL_COPY_CMD}
+  ${SCHED_INFO_COPY_CMD}
   COMMAND ${CMAKE_COMMAND} -E copy
       ${CMAKE_SOURCE_DIR}/scripts/system/sysinit.rc
       ${BUILD_DIR}/esp/system/sysinit.rc

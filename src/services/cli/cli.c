@@ -1889,7 +1889,7 @@ cli_handle_line(void)
         return 0;
     }
     if (line_eq_ci("help")) {
-        console_write("commands: help, ps [tree|all], sched_info, kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, source <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, echo [-n] [-e|-E] [--] [text|${VAR}...], tty <0-3>, halt, reboot\n");
+        console_write("commands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, source <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, echo [-n] [-e|-E] [--] [text|${VAR}...], tty <0-3>, halt, reboot\n");
         return 0;
     }
     if (line_eq_ci("mount")) {
@@ -2031,28 +2031,6 @@ cli_handle_line(void)
     }
     if (line_eq_ci("reboot")) {
         wasmos_system_reboot();
-        return 0;
-    }
-    if (line_eq_ci("sched_info")) {
-        int32_t ncpus = wasmos_sched_cpu_count();
-        if (ncpus <= 0) ncpus = 1;
-        console_write(" cpu  ready  running(pid)\n");
-        for (int32_t c = 0; c < ncpus; ++c) {
-            wasmos_sched_cpu_stats_t cs = {0};
-            wasmos_sched_cpu_stats(c, (int32_t)(uintptr_t)&cs);
-            wasmos_sync_user_read((int32_t)(uintptr_t)&cs, (int32_t)sizeof(cs));
-            char row[64];
-            int pos = 0;
-            pos = buf_append_spaces(row, pos, (int)sizeof(row), 1);
-            pos = buf_append_u32_width(row, pos, (int)sizeof(row), (uint32_t)c, 3);
-            pos = buf_append_spaces(row, pos, (int)sizeof(row), 2);
-            pos = buf_append_u32_width(row, pos, (int)sizeof(row), cs.ready_count, 5);
-            pos = buf_append_spaces(row, pos, (int)sizeof(row), 2);
-            pos = buf_append_u32_width(row, pos, (int)sizeof(row), cs.running_pid, 11);
-            pos = buf_append_str(row, pos, (int)sizeof(row), "\n");
-            row[pos] = '\0';
-            console_write(row);
-        }
         return 0;
     }
     if (line_eq_ci("ps") || line_eq_ci("ps tree") || line_eq_ci("ps all")) {
@@ -2383,7 +2361,7 @@ cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg)
         (void)cli_switch_tty(1, 1, 0);
     }
     if (g_home_tty == 1) {
-        console_write("WAMOS CLI\ncommands: help, ps [tree|all], sched_info, kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, source <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, echo [-n] [-e|-E] [--] [text|${VAR}...], tty <0-3>, halt, reboot\n");
+        console_write("WAMOS CLI\ncommands: help, ps [tree|all], kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, source <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, echo [-n] [-e|-E] [--] [text|${VAR}...], tty <0-3>, halt, reboot\n");
     }
     wasmos_sys_notify_ready(g_proc_endpoint, g_reply_endpoint);
     g_phase = CLI_PHASE_PROMPT;

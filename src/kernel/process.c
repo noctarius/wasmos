@@ -1778,6 +1778,7 @@ static int process_schedule_once_impl(void) {
         context_switch_high(&cpu_local()->sched_ctx, run_ctx);
     }
     g_sched_switch_count++;
+    cpu_local()->dispatch_count++;
     if (!g_sched_progress_logged && g_sched_switch_count >= SCHED_PROGRESS_MARKER_SWITCHES) {
         g_sched_progress_logged = 1;
         klog_write("[test] sched progress ok\n");

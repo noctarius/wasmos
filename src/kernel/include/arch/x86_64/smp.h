@@ -63,10 +63,12 @@ typedef struct cpu_local {
      * their receivers cache-local scheduling without cross-CPU queue traffic. */
     cpu_sched_t        sched;
 
-    /* Cumulative count of threads successfully stolen from other CPUs.
-     * Monotonically increasing; never reset.  Used to verify work-stealing
-     * is active on each AP. */
+    /* Cumulative count of threads successfully stolen from other CPUs. */
     uint32_t           steal_count;
+
+    /* Cumulative count of threads dispatched by this CPU (context switches
+     * out of the scheduler).  Monotonically increasing; never reset. */
+    uint32_t           dispatch_count;
 
     /* Scheduler context — saved here on every context switch so concurrent CPUs
      * cannot clobber each other's return frame (was a shared global g_sched_ctx). */

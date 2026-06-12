@@ -213,8 +213,10 @@ sched_wake_thread(thread_t *t)
     if (list_head_empty(&t->sched_node)) {
 #if WASMOS_SCHED_CALLER_CPU_BIAS
         t->last_cpu = cpu_local()->cpu_id;
-#endif
         cpu_sched_enqueue(cpu_sched(), t);
+#else
+        cpu_sched_enqueue(&g_cpus[t->last_cpu].sched, t);
+#endif
     }
 }
 

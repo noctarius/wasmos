@@ -1,4 +1,5 @@
 #include "boot.h"
+#include "arch/x86_64/smp.h"
 #include "klog.h"
 #include "ipc.h"
 #include "io.h"
@@ -3045,6 +3046,33 @@ m3ApiRawFunction(wasmos_sched_ready_count)
     m3ApiReturn((int32_t)process_ready_count());
 }
 
+m3ApiRawFunction(wasmos_sched_cpu_count)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiReturn((int32_t)g_cpu_count);
+}
+
+m3ApiRawFunction(wasmos_sched_cpu_stats)
+{
+    typedef struct { uint32_t ready_count; uint32_t running_pid; } cpu_stats_t;
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, cpu_id)
+    m3ApiGetArgMem(cpu_stats_t *, out)
+    m3ApiCheckMem(out, sizeof(cpu_stats_t));
+    if (cpu_id < 0 || (uint32_t)cpu_id >= g_cpu_count) {
+        m3ApiReturn(-1);
+    }
+    cpu_sched_t *cs = &g_cpus[(uint32_t)cpu_id].sched;
+    uint32_t ready = 0;
+    for (int p = 0; p < SCHED_PRIO_MAX; p++) {
+        ready += cs->thread_count[p];
+    }
+    out->ready_count  = ready;
+    out->running_pid  = g_cpus[(uint32_t)cpu_id].current_process
+                      ? g_cpus[(uint32_t)cpu_id].current_process->pid : 0;
+    m3ApiReturn(0);
+}
+
 m3ApiRawFunction(wasmos_sched_current_pid)
 {
     m3ApiReturnType(int32_t)
@@ -3353,6 +3381,7 @@ m3ApiRawFunction(wasmos_proc_info_stats)
         uint64_t thread_kstack_total_bytes;
         uint64_t heap_committed_bytes;
         uint64_t rss_est_bytes;
+        uint32_t last_cpu;
     } wasm_proc_stats_t;
 
     m3ApiReturnType(int32_t)
@@ -3427,7 +3456,8 @@ m3ApiRawFunction(wasmos_proc_info_stats)
         .vm_total_bytes = stats.vm_total_bytes,
         .thread_kstack_total_bytes = stats.thread_kstack_total_bytes,
         .heap_committed_bytes = stats.heap_committed_bytes,
-        .rss_est_bytes = stats.rss_est_bytes
+        .rss_est_bytes = stats.rss_est_bytes,
+        .last_cpu = stats.last_cpu
     };
     if (mm_copy_to_user(proc->context_id,
                         parent_user,
@@ -3650,6 +3680,8 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "sched_ticks", "i()", wasmos_sched_ticks);
     rc |= wasm3_link_raw(module, "wasmos", "sched_ready_count", "i()", wasmos_sched_ready_count);
     rc |= wasm3_link_raw(module, "wasmos", "sched_current_pid", "i()", wasmos_sched_current_pid);
+    rc |= wasm3_link_raw(module, "wasmos", "sched_cpu_count",   "i()", wasmos_sched_cpu_count);
+    rc |= wasm3_link_raw(module, "wasmos", "sched_cpu_stats",   "i(i*)", wasmos_sched_cpu_stats);
     rc |= wasm3_link_raw(module, "wasmos", "sched_yield", "i()", wasmos_sched_yield);
     rc |= wasm3_link_raw(module, "wasmos", "thread_gettid", "i()", wasmos_thread_gettid);
     rc |= wasm3_link_raw(module, "wasmos", "thread_create", "i(iiii)", wasmos_thread_create);

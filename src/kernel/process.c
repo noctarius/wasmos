@@ -2289,6 +2289,10 @@ process_info_at_stats(uint32_t index,
              * accounting once per-context page presence tracking is available.
              */
             out_stats->rss_est_bytes = out_stats->vm_total_bytes;
+            {
+                thread_t *mt = thread_get(proc->main_tid);
+                out_stats->last_cpu = mt ? mt->last_cpu : 0;
+            }
             return 0;
         }
         current++;

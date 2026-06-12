@@ -90,6 +90,10 @@ extern int32_t wasmos_sched_ready_count(void)
     WASMOS_WASM_IMPORT("wasmos", "sched_ready_count");
 extern int32_t wasmos_sched_current_pid(void)
     WASMOS_WASM_IMPORT("wasmos", "sched_current_pid");
+extern int32_t wasmos_sched_cpu_count(void)
+    WASMOS_WASM_IMPORT("wasmos", "sched_cpu_count");
+extern int32_t wasmos_sched_cpu_stats(int32_t cpu_id, int32_t out_ptr)
+    WASMOS_WASM_IMPORT("wasmos", "sched_cpu_stats");
 extern int32_t wasmos_sched_yield(void)
     WASMOS_WASM_IMPORT("wasmos", "sched_yield");
 extern int32_t wasmos_thread_gettid(void)
@@ -132,7 +136,13 @@ typedef struct {
     uint64_t thread_kstack_total_bytes;
     uint64_t heap_committed_bytes;
     uint64_t rss_est_bytes;
+    uint32_t last_cpu;
 } wasmos_proc_stats_t;
+
+typedef struct {
+    uint32_t ready_count;
+    uint32_t running_pid;
+} wasmos_sched_cpu_stats_t;
 extern int32_t wasmos_proc_info_stats(int32_t index,
                                       int32_t ptr,
                                       int32_t len,

@@ -160,6 +160,7 @@ typedef struct {
     uint64_t thread_kstack_total_bytes;
     uint64_t heap_committed_bytes;
     uint64_t rss_est_bytes;
+    uint32_t last_cpu;
 } process_stats_t;
 
 /*

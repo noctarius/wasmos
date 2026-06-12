@@ -70,6 +70,10 @@ typedef struct cpu_local {
      * out of the scheduler).  Monotonically increasing; never reset. */
     uint32_t           dispatch_count;
 
+    /* PID of the last process dispatched by this CPU.  Set on dispatch and
+     * never cleared, so it remains visible when the CPU is between threads. */
+    uint32_t           last_dispatched_pid;
+
     /* Scheduler context — saved here on every context switch so concurrent CPUs
      * cannot clobber each other's return frame (was a shared global g_sched_ctx). */
     process_context_t  sched_ctx;

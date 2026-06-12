@@ -257,6 +257,38 @@ sched_default_prio(int is_idle,
     return SCHED_PRIO_WASM;
 }
 
+uint32_t
+cpu_sched_pick_target_cpu(void)
+{
+    uint32_t best      = 0;
+    uint32_t best_load = UINT32_MAX;
+    for (uint32_t i = 0; i < g_cpu_count; i++) {
+        cpu_sched_t *cs = &g_cpus[i].sched;
+        uint32_t load = 0;
+        for (int p = 0; p < SCHED_PRIO_MAX; p++) {
+            load += cs->thread_count[p];
+        }
+        /* Count the currently running non-idle thread as part of this
+         * CPU's load so we spread across truly idle CPUs first. */
+        if (g_cpus[i].current_thread && g_cpus[i].current_thread != cs->idle) {
+            load++;
+        }
+        if (load < best_load) {
+            best_load = load;
+            best      = i;
+        }
+    }
+    return best;
+}
+
+void
+sched_spawn_thread(struct thread *t)
+{
+    uint32_t target = cpu_sched_pick_target_cpu();
+    t->last_cpu = target;
+    cpu_sched_enqueue(&g_cpus[target].sched, t);
+}
+
 struct thread *
 cpu_sched_try_steal(uint32_t my_cpu_id)
 {

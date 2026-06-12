@@ -1055,7 +1055,7 @@ process_spawn_as_internal(uint32_t parent_pid,
         slot->state = PROCESS_STATE_BLOCKED;
         slot->block_reason = PROCESS_BLOCK_NONE;
     } else {
-        sched_enqueue_thread(process_main_thread(slot));
+        sched_spawn_thread(process_main_thread(slot));
     }
     *out_pid = pid;
     return 0;
@@ -1294,7 +1294,7 @@ process_thread_spawn_worker_internal(uint32_t owner_pid,
     sched_thread_init(thread, SCHED_PRIO_SYSTEM);
     owner->thread_count++;
     owner->live_thread_count++;
-    sched_enqueue_thread(thread);
+    sched_spawn_thread(thread);
     *out_tid = tid;
     return 0;
 }

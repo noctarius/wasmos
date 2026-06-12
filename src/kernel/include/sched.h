@@ -73,5 +73,18 @@ void sched_thread_init(struct thread *t, sched_prio_t prio);
  */
 struct thread *cpu_sched_try_steal(uint32_t my_cpu_id);
 
+/*
+ * Return the index of the CPU with the lightest ready-queue load.
+ * Used at spawn time to distribute new processes across CPUs.
+ */
+uint32_t cpu_sched_pick_target_cpu(void);
+
+/*
+ * Enqueue a freshly spawned thread on the least-loaded CPU and set
+ * last_cpu accordingly.  Use only for the initial spawn enqueue; all
+ * subsequent re-queues go through sched_enqueue_thread / sched_wake_thread.
+ */
+void sched_spawn_thread(struct thread *t);
+
 #endif /* WASMOS_SCHED_THREADABLE */
 #endif /* WASMOS_SCHED_H */

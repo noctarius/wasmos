@@ -212,11 +212,13 @@ sched_wake_thread(thread_t *t)
     }
     if (list_head_empty(&t->sched_node)) {
 #if WASMOS_SCHED_CALLER_CPU_BIAS
+        /* Pull the receiver onto the waker's CPU queue. */
         t->last_cpu = cpu_local()->cpu_id;
-        cpu_sched_enqueue(cpu_sched(), t);
-#else
-        cpu_sched_enqueue(&g_cpus[t->last_cpu].sched, t);
 #endif
+        /* Always enqueue locally — no remote spinlock in the hot IPC path.
+         * With bias OFF, last_cpu is left as-is so threads stay on whatever
+         * CPU they last ran on; work-stealing handles redistribution. */
+        cpu_sched_enqueue(cpu_sched(), t);
     }
 }
 
@@ -300,7 +302,10 @@ sched_spawn_thread(struct thread *t)
 struct thread *
 cpu_sched_try_steal(uint32_t my_cpu_id)
 {
-    for (uint32_t i = 0; i < g_cpu_count; i++) {
+    /* Start scan from the next CPU so each AP preferentially targets a
+     * different victim, preventing all APs from racing over CPU 0's queue. */
+    for (uint32_t n = 1; n < g_cpu_count; n++) {
+        uint32_t i = (my_cpu_id + n) % g_cpu_count;
         if (i == my_cpu_id) {
             continue;
         }

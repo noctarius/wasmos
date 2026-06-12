@@ -6,6 +6,7 @@
 #include "spinlock.h"
 #include "process.h"
 #include "thread.h"
+#include "sched.h"
 
 /*
  * Per-CPU data structure and accessor.
@@ -57,8 +58,10 @@ typedef struct cpu_local {
     volatile uint32_t  irq_disable_depth;
     uint64_t           irq_saved_flags;
 
-    /* Protects the ready-queue (needed under SMP for cross-CPU wake-ups). */
-    spinlock_t         ready_queue_lock;
+    /* Per-CPU ready queues (one FIFO per priority level).
+     * Threads are enqueued on the waking CPU's sched, giving IPC callers and
+     * their receivers cache-local scheduling without cross-CPU queue traffic. */
+    cpu_sched_t        sched;
 
     /* Scheduler context — saved here on every context switch so concurrent CPUs
      * cannot clobber each other's return frame (was a shared global g_sched_ctx). */
@@ -117,6 +120,9 @@ cpu_local(void)
     return &g_cpus[0];
 }
 #endif
+
+/* Return the calling CPU's scheduler state. */
+static inline cpu_sched_t *cpu_sched(void) { return &cpu_local()->sched; }
 
 /*
  * SMP init API.  Both functions are no-ops in a non-SMP build.

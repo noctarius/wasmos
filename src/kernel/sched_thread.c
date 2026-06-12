@@ -17,8 +17,6 @@
  * O(1) highest-ready lookup via a small lookup table (ffs_table).
  */
 
-cpu_sched_t g_cpu_sched;
-
 /*
  * Anti-starvation: after this many consecutive dispatches from a given
  * priority band (or higher), the scheduler yields one slot to the next

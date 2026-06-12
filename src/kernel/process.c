@@ -918,10 +918,10 @@ void process_ap_init(void) {
     cpu_local()->sched_ctx.root_table = paging_get_root_table();
     /* Do NOT clear global ctx watch state here; the BSP may already have armed
      * it for a target thread before AP bring-up completes.
-     * Do NOT call cpu_sched_init here: the global g_cpu_sched was already
-     * initialized by the BSP via process_init(), and threads from
-     * kernel_selftest_spawn_baseline are already enqueued.  Reinitializing
-     * the scheduler would wipe those thread lists. */
+     * Each AP initialises its own cpu_sched_t (cpu_local()->sched); this is
+     * independent of the BSP's queue and does not affect already-enqueued
+     * threads. */
+    cpu_sched_init(cpu_sched());
 }
 
 int process_spawn(const char *name, process_entry_t entry, void *arg, uint32_t *out_pid) {

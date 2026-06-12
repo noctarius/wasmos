@@ -47,11 +47,6 @@ void cpu_sched_dequeue(cpu_sched_t *cs, struct thread *t);
  * Caller must hold cs->lock. */
 struct thread *cpu_sched_pick_next(cpu_sched_t *cs);
 
-/* Global single-CPU scheduler state (SMP extension point). */
-extern cpu_sched_t g_cpu_sched;
-
-static inline cpu_sched_t *cpu_sched(void) { return &g_cpu_sched; }
-
 /* Mark the current CPU as needing a reschedule. */
 void sched_set_need_resched(void);
 

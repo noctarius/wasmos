@@ -274,7 +274,9 @@ cpu_sched_try_steal(uint32_t my_cpu_id)
                 t = NULL;
             }
         }
-        spinlock_unlock(&remote->lock);
+        /* spinlock_try_lock does not call preempt_disable/spinlock_irq_save,
+         * so we must release with the matching no-IRQ variant. */
+        spinlock_unlock_noirq(&remote->lock);
         if (t) {
             t->last_cpu = my_cpu_id;
             return t;

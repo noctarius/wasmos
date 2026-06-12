@@ -260,9 +260,16 @@ sched_default_prio(int is_idle,
 uint32_t
 cpu_sched_pick_target_cpu(void)
 {
-    uint32_t best      = 0;
+    /* Round-robin counter: on ties (all CPUs equally loaded) we rotate the
+     * starting search index so spawns spread evenly instead of always
+     * accumulating on CPU 0. */
+    static uint32_t g_spawn_rr = 0;
+    uint32_t start     = g_spawn_rr % g_cpu_count;
+    uint32_t best      = start;
     uint32_t best_load = UINT32_MAX;
-    for (uint32_t i = 0; i < g_cpu_count; i++) {
+
+    for (uint32_t n = 0; n < g_cpu_count; n++) {
+        uint32_t i = (start + n) % g_cpu_count;
         cpu_sched_t *cs = &g_cpus[i].sched;
         uint32_t load = 0;
         for (int p = 0; p < SCHED_PRIO_MAX; p++) {
@@ -278,6 +285,7 @@ cpu_sched_pick_target_cpu(void)
             best      = i;
         }
     }
+    g_spawn_rr++;
     return best;
 }
 

@@ -704,7 +704,8 @@ static void process_wake_waiters(uint32_t target_pid) {
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         process_t *proc = &g_processes[i];
         uint8_t woke_any = 0;
-        if (proc->state == PROCESS_STATE_UNUSED || proc->state == PROCESS_STATE_ZOMBIE) {
+        if (proc->state == PROCESS_STATE_UNUSED || proc->state == PROCESS_STATE_ZOMBIE ||
+            proc->state == PROCESS_STATE_REAPING) {
             continue;
         }
         for (uint32_t j = 0;; ++j) {
@@ -770,7 +771,8 @@ process_has_waiters(uint32_t target_pid)
     }
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         process_t *proc = &g_processes[i];
-        if (proc->state == PROCESS_STATE_UNUSED || proc->state == PROCESS_STATE_ZOMBIE) {
+        if (proc->state == PROCESS_STATE_UNUSED || proc->state == PROCESS_STATE_ZOMBIE ||
+            proc->state == PROCESS_STATE_REAPING) {
             continue;
         }
         for (uint32_t j = 0;; ++j) {
@@ -797,10 +799,23 @@ process_has_waiters(uint32_t target_pid)
 static void
 process_try_auto_reap(process_t *proc)
 {
-    if (!proc || proc->state != PROCESS_STATE_ZOMBIE || !proc->auto_reap) {
+    if (!proc || !proc->auto_reap) {
         return;
     }
     if (process_has_waiters(proc->pid)) {
+        return;
+    }
+    /* Atomically claim the reap: only the CPU that transitions ZOMBIE →
+     * REAPING proceeds.  This prevents two CPUs from simultaneously freeing
+     * the same process's stacks and memory when work-stealing causes
+     * concurrent exits to arrive on different CPUs. */
+    uint32_t expected = (uint32_t)PROCESS_STATE_ZOMBIE;
+    if (!__atomic_compare_exchange_n((uint32_t *)&proc->state,
+                                     &expected,
+                                     (uint32_t)PROCESS_STATE_REAPING,
+                                     0,
+                                     __ATOMIC_ACQ_REL,
+                                     __ATOMIC_RELAXED)) {
         return;
     }
     process_reap(proc);
@@ -1266,7 +1281,8 @@ process_thread_spawn_worker_internal(uint32_t owner_pid,
     if (!owner || !entry || !out_tid) {
         return -1;
     }
-    if (owner->state == PROCESS_STATE_UNUSED || owner->state == PROCESS_STATE_ZOMBIE || owner->exiting) {
+    if (owner->state == PROCESS_STATE_UNUSED || owner->state == PROCESS_STATE_ZOMBIE ||
+        owner->state == PROCESS_STATE_REAPING || owner->exiting) {
         return -1;
     }
     if (thread_spawn_in_owner(owner_pid,
@@ -1314,7 +1330,8 @@ process_thread_spawn_user_internal(uint32_t owner_pid,
     if (!owner || !out_tid || entry_rip == 0 || user_stack_top == 0) {
         return -1;
     }
-    if (owner->state == PROCESS_STATE_UNUSED || owner->state == PROCESS_STATE_ZOMBIE || owner->exiting) {
+    if (owner->state == PROCESS_STATE_UNUSED || owner->state == PROCESS_STATE_ZOMBIE ||
+        owner->state == PROCESS_STATE_REAPING || owner->exiting) {
         return -1;
     }
     if ((user_stack_top & 0xFULL) != 0) {
@@ -2137,7 +2154,8 @@ uint32_t process_count_active(void) {
     uint32_t count = 0;
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_processes[i].state != PROCESS_STATE_UNUSED &&
-            g_processes[i].state != PROCESS_STATE_ZOMBIE) {
+            g_processes[i].state != PROCESS_STATE_ZOMBIE &&
+            g_processes[i].state != PROCESS_STATE_REAPING) {
             count++;
         }
     }
@@ -2155,7 +2173,8 @@ int process_info_at(uint32_t index, uint32_t *out_pid, const char **out_name) {
     uint32_t current = 0;
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_processes[i].state == PROCESS_STATE_UNUSED ||
-            g_processes[i].state == PROCESS_STATE_ZOMBIE) {
+            g_processes[i].state == PROCESS_STATE_ZOMBIE ||
+            g_processes[i].state == PROCESS_STATE_REAPING) {
             continue;
         }
         if (current == index) {
@@ -2175,7 +2194,8 @@ int process_info_at_ex(uint32_t index, uint32_t *out_pid, uint32_t *out_parent_p
     uint32_t current = 0;
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_processes[i].state == PROCESS_STATE_UNUSED ||
-            g_processes[i].state == PROCESS_STATE_ZOMBIE) {
+            g_processes[i].state == PROCESS_STATE_ZOMBIE ||
+            g_processes[i].state == PROCESS_STATE_REAPING) {
             continue;
         }
         if (current == index) {

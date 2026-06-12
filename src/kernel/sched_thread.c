@@ -279,6 +279,7 @@ cpu_sched_try_steal(uint32_t my_cpu_id)
         spinlock_unlock_noirq(&remote->lock);
         if (t) {
             t->last_cpu = my_cpu_id;
+            cpu_local()->steal_count++;
             return t;
         }
     }

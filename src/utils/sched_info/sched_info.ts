@@ -18,9 +18,9 @@ export function main(_args: Array<string>): i32 {
     return 1;
   }
 
-  std.println(" cpu  ready  running(pid)");
+  std.println(" cpu  ready  running(pid)  steals");
 
-  const buf = new Uint32Array(2);
+  const buf = new Uint32Array(3);
 
   for (let c: i32 = 0; c < ncpus; ++c) {
     if (sched_cpu_stats(c, buf.dataStart as i32) != 0) {
@@ -28,9 +28,11 @@ export function main(_args: Array<string>): i32 {
     }
     const ready   = buf[0] as i32;
     const running = buf[1] as i32;
+    const steals  = buf[2] as i32;
     const row = padLeft(c.toString(), 4) + "  " +
                 padLeft(ready.toString(), 5) + "  " +
-                padLeft(running.toString(), 11);
+                padLeft(running.toString(), 11) + "  " +
+                padLeft(steals.toString(), 6);
     std.println(row);
   }
 

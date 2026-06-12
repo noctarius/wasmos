@@ -142,6 +142,7 @@ typedef struct {
 typedef struct {
     uint32_t ready_count;
     uint32_t running_pid;
+    uint32_t steal_count;
 } wasmos_sched_cpu_stats_t;
 extern int32_t wasmos_proc_info_stats(int32_t index,
                                       int32_t ptr,

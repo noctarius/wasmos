@@ -27,6 +27,7 @@ class WorkStealingTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cfg = default_config()
+        cfg.smp_count = max(cfg.smp_count, 4)
         cls.session = QemuSession(cfg, timeout_s=120, echo=True)
         cls.session.start()
         if not cls.session.expect(b"wamos> "):

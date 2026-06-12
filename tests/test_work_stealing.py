@@ -61,7 +61,7 @@ class WorkStealingTest(unittest.TestCase):
         # Each data row looks like "   1      0            0       0"
         cpu_rows = {}
         for line in lines:
-            m = re.match(r"\s+(\d+)\s+(\d+)\s+(\d+)\s+(\d+)", line.strip())
+            m = re.match(r"(\d+)\s+(\d+)\s+(\d+)\s+(\d+)", line.strip())
             if m:
                 cpu_id    = int(m.group(1))
                 steal_cnt = int(m.group(4))

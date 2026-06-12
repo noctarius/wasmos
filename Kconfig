@@ -70,6 +70,16 @@ config WASMOS_SMP
     depends on WASMOS_IRQ_IOAPIC
     default n
 
+config WASMOS_SCHED_CALLER_CPU_BIAS
+    bool "Enqueue woken threads on the waking CPU's ready queue"
+    default y
+    help
+      When enabled, sched_wake_thread records the calling CPU as the
+      receiver's last_cpu before enqueuing, so woken threads land on
+      the same CPU as their waker.  This keeps IPC call chains
+      cache-local and reduces cross-CPU queue traffic.  Disable to
+      revert to scheduler-default placement.
+
 config WASMOS_PM_LIST_ARRAY_CHUNK_CAP
     int "Array-chunk list capacity per chunk"
     default 16

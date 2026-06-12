@@ -3054,7 +3054,7 @@ m3ApiRawFunction(wasmos_sched_cpu_count)
 
 m3ApiRawFunction(wasmos_sched_cpu_stats)
 {
-    typedef struct { uint32_t ready_count; uint32_t running_pid; uint32_t steal_count; uint32_t dispatch_count; } cpu_stats_t;
+    typedef struct { uint32_t ready_count; uint32_t running_pid; uint32_t steal_count; uint32_t dispatch_count; uint32_t last_pid; } cpu_stats_t;
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, cpu_id)
     m3ApiGetArgMem(cpu_stats_t *, out)
@@ -3072,6 +3072,7 @@ m3ApiRawFunction(wasmos_sched_cpu_stats)
                       ? g_cpus[(uint32_t)cpu_id].current_process->pid : 0;
     out->steal_count    = g_cpus[(uint32_t)cpu_id].steal_count;
     out->dispatch_count = g_cpus[(uint32_t)cpu_id].dispatch_count;
+    out->last_pid       = g_cpus[(uint32_t)cpu_id].last_dispatched_pid;
     m3ApiReturn(0);
 }
 

@@ -1693,7 +1693,8 @@ static int process_schedule_once_impl(void) {
     }
     process_context_t *run_ctx = process_sched_ctx_for_thread(proc, thread);
     critical_section_enter();
-    cpu_local()->current_pid = proc->pid;
+    cpu_local()->current_pid          = proc->pid;
+    cpu_local()->last_dispatched_pid  = proc->pid;
     cpu_local()->current_process = proc;
     cpu_local()->current_thread = thread;
     if (cpu_local()->current_thread->owner_pid != cpu_local()->current_process->pid) {

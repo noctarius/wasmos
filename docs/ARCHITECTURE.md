@@ -57,6 +57,7 @@ remain deterministic in strict ring3 runs.
 
 ### Scheduler Roadmap
 - [Threadable Scheduler Design](architecture/29-threadable-scheduler.md)
+- [IPC Direct Switch](architecture/30-ipc-direct-switch.md)
 
 ### Operations and Validation
 - [Diagnostics and Status](architecture/25-diagnostics-status.md)

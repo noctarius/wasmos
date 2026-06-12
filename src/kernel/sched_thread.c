@@ -213,6 +213,7 @@ sched_wake_thread(thread_t *t)
         return;
     }
     if (list_head_empty(&t->sched_node)) {
+        t->last_cpu = cpu_local()->cpu_id;
         cpu_sched_enqueue(cpu_sched(), t);
     }
 }

@@ -1661,7 +1661,7 @@ cli_handle_line(void)
         return 0;
     }
     if (line_eq_ci("help")) {
-        console_write("commands: help, kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, source <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, echo [-n] [-e|-E] [--] [text|${VAR}...], tty <0-3>, halt, reboot\n");
+        console_write("commands: help, kmaps [all], ls, cd <path>, mount, script <file>, source <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, echo [-n] [-e|-E] [--] [text|${VAR}...], tty <0-3>, halt, reboot\n");
         return 0;
     }
     if (line_eq_ci("mount")) {
@@ -1812,25 +1812,6 @@ cli_handle_line(void)
         }
         g_pending_kind = PENDING_LIST;
         return 1;
-    }
-    if (g_line_len > 4 && line_starts_with_ci("cat ")) {
-        char *path = &g_line[4];
-        FILE *f = fopen(path, "r");
-        if (!f) {
-            console_write("fs failed\n");
-            return 0;
-        }
-        for (;;) {
-            char chunk[65];
-            size_t n = fread(chunk, 1, 64, f);
-            if (n == 0) {
-                break;
-            }
-            chunk[n] = '\0';
-            console_write(chunk);
-        }
-        (void)fclose(f);
-        return 0;
     }
     if (g_line_len > 6 && line_starts_with_ci("spawn ")) {
         const char *spawn_input = &g_line[6];
@@ -2044,7 +2025,7 @@ cli_phase_init_step(int32_t proc_endpoint, int32_t home_tty_arg)
         (void)cli_switch_tty(1, 1, 0);
     }
     if (g_home_tty == 1) {
-        console_write("WAMOS CLI\ncommands: help, kmaps [all], ls, cat <name>, cd <path>, mount, script <file>, source <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, echo [-n] [-e|-E] [--] [text|${VAR}...], tty <0-3>, halt, reboot\n");
+        console_write("WAMOS CLI\ncommands: help, kmaps [all], ls, cd <path>, mount, script <file>, source <file>, spawn <cmd>, export VAR=<value>, set VAR=<value>, echo [-n] [-e|-E] [--] [text|${VAR}...], tty <0-3>, halt, reboot\n");
     }
     wasmos_sys_notify_ready(g_proc_endpoint, g_reply_endpoint);
     g_phase = CLI_PHASE_PROMPT;

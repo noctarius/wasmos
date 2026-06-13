@@ -169,6 +169,9 @@ set(WASM_SCHED_INFO_APP ${BUILD_DIR}/sched_info.wap)
 set(WASM_PS_SRC ${CMAKE_SOURCE_DIR}/src/utils/ps/ps.zig)
 set(WASM_PS_WASM ${BUILD_DIR}/ps.wasm)
 set(WASM_PS_APP ${BUILD_DIR}/ps.wap)
+set(WASM_CAT_SRC ${CMAKE_SOURCE_DIR}/src/utils/cat/cat.zig)
+set(WASM_CAT_WASM ${BUILD_DIR}/cat.wasm)
+set(WASM_CAT_APP ${BUILD_DIR}/cat.wap)
 
 if (NOT DEFINED AS_ENABLE_INITIALIZED)
   set(AS_ENABLE ON CACHE BOOL "Enable AssemblyScript example builds" FORCE)
@@ -942,6 +945,11 @@ if (TARGET ps_util)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PS_APP} ${BUILD_DIR}/esp/system/utils/ps.wap
   )
 endif ()
+if (TARGET cat_util)
+  set(CAT_UTIL_COPY_CMD
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CAT_APP} ${BUILD_DIR}/esp/system/utils/cat.wap
+  )
+endif ()
 set(HELLO_C_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HELLO_C_APP} ${BUILD_DIR}/esp/apps/hello_c.wap
 )
@@ -1012,6 +1020,7 @@ set(INITFS_COPY_CMD
   ${DATE_TOOL_COPY_CMD}
   ${SCHED_INFO_COPY_CMD}
   ${PS_UTIL_COPY_CMD}
+  ${CAT_UTIL_COPY_CMD}
   COMMAND ${CMAKE_COMMAND} -E copy
       ${CMAKE_SOURCE_DIR}/scripts/system/sysinit.rc
       ${BUILD_DIR}/esp/system/sysinit.rc
@@ -1375,6 +1384,9 @@ foreach(_qt IN LISTS _wasmos_qemu_targets)
     endif ()
     if (TARGET ps_util)
       add_dependencies(${_qt} ps_util)
+    endif ()
+    if (TARGET cat_util)
+      add_dependencies(${_qt} cat_util)
     endif ()
   endif ()
 endforeach()

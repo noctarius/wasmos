@@ -74,6 +74,45 @@ var g_ipc_reply_endpoint: i32 = -1;
 var g_ipc_request_id: i32 = 1;
 var g_startup_args = [4]i32{ 0, 0, 0, 0 };
 
+const CLI_ARGS_BUF_LEN = 128;
+const CLI_ARGS_MAX = 16;
+var g_cli_args_raw: [CLI_ARGS_BUF_LEN]u8 = [_]u8{0} ** CLI_ARGS_BUF_LEN;
+var g_cli_arg_slices: [CLI_ARGS_MAX][]const u8 = undefined;
+var g_cli_argc: usize = 0;
+
+fn parseCliArgs() void {
+    g_cli_argc = 0;
+    if (fs_buffer_copy(
+        @intCast(@intFromPtr(&g_cli_args_raw[0])),
+        CLI_ARGS_BUF_LEN - 1,
+        0,
+    ) != 0) return;
+    g_cli_args_raw[CLI_ARGS_BUF_LEN - 1] = 0;
+
+    var pos: usize = 0;
+    while (pos < CLI_ARGS_BUF_LEN - 1 and g_cli_args_raw[pos] != 0 and g_cli_argc < CLI_ARGS_MAX) {
+        while (pos < CLI_ARGS_BUF_LEN - 1 and
+            (g_cli_args_raw[pos] == ' ' or g_cli_args_raw[pos] == '\t')) : (pos += 1)
+        {}
+        if (pos >= CLI_ARGS_BUF_LEN - 1 or g_cli_args_raw[pos] == 0) break;
+        const start = pos;
+        while (pos < CLI_ARGS_BUF_LEN - 1 and
+            g_cli_args_raw[pos] != 0 and
+            g_cli_args_raw[pos] != ' ' and
+            g_cli_args_raw[pos] != '\t') : (pos += 1)
+        {}
+        if (pos > start) {
+            g_cli_arg_slices[g_cli_argc] = g_cli_args_raw[start..pos];
+            g_cli_argc += 1;
+        }
+    }
+}
+
+/// Returns the CLI argument strings passed to this process at spawn time.
+pub fn cliArgs() []const []const u8 {
+    return g_cli_arg_slices[0..g_cli_argc];
+}
+
 pub const Mutex = extern struct {
     owner_tid: u32,
     recursion_depth: u32,
@@ -120,6 +159,7 @@ pub export fn wasmos_main(arg0: i32, arg1: i32, arg2: i32, arg3: i32) callconv(.
     g_startup_args[1] = arg1;
     g_startup_args[2] = arg2;
     g_startup_args[3] = arg3;
+    parseCliArgs();
     return @intCast(root.main());
 }
 

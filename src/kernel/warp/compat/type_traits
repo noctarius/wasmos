@@ -1,4 +1,6 @@
 #pragma once
+#include <stddef.h>
+#include <stdint.h>
 /* compat/type_traits — freestanding shadow of <type_traits>
  *
  * Provides the subset used by WARP's template metaprogramming:
@@ -82,6 +84,11 @@ template <typename T> struct remove_reference<T&&> { using type = T; };
 
 template <typename T>
 using remove_reference_t = typename remove_reference<T>::type;
+
+// remove_cvref (C++20-ish, but WARP uses it in internal headers)
+template <typename T>
+struct remove_cvref { using type = typename remove_cv<typename remove_reference<T>::type>::type; };
+template <typename T> using remove_cvref_t = typename remove_cvref<T>::type;
 
 // ---------------------------------------------------------------------------
 // is_reference
@@ -175,6 +182,28 @@ struct decay {
 template <typename T> using decay_t = typename decay<T>::type;
 
 // ---------------------------------------------------------------------------
+// index_sequence / make_index_sequence (needed by RegPosArr.hpp)
+// ---------------------------------------------------------------------------
+
+template <size_t... Ints>
+struct index_sequence {
+    using type = index_sequence;
+    static constexpr size_t size() noexcept { return sizeof...(Ints); }
+};
+
+template <size_t N, size_t... Ints>
+struct make_index_sequence_impl : make_index_sequence_impl<N-1, N-1, Ints...> {};
+
+template <size_t... Ints>
+struct make_index_sequence_impl<0, Ints...> { using type = index_sequence<Ints...>; };
+
+template <size_t N>
+using make_index_sequence = typename make_index_sequence_impl<N>::type;
+
+template <typename... Ts>
+using index_sequence_for = make_index_sequence<sizeof...(Ts)>;
+
+// ---------------------------------------------------------------------------
 // add_const / add_volatile / add_cv
 // ---------------------------------------------------------------------------
 
@@ -197,6 +226,9 @@ template <typename T, typename U, typename... V>
 struct common_type<T, U, V...> {
     using type = typename common_type<typename common_type<T,U>::type, V...>::type;
 };
+
+template <typename... T>
+using common_type_t = typename common_type<T...>::type;
 
 // ---------------------------------------------------------------------------
 // underlying_type — for enum underlying types (compiler built-in)
@@ -278,13 +310,23 @@ template <typename R, typename... A>       struct is_function<R(A...) const vola
 template <typename R, typename... A>       struct is_function<R(A..., ...)>       : true_type {};
 
 // ---------------------------------------------------------------------------
-// is_convertible — conservative stub (returns false unless types are same)
-// WARP uses it only in enable_if guards for FunctionRef; false is safe there.
+// is_base_of — compiler built-in
 // ---------------------------------------------------------------------------
 
+template <typename Base, typename Derived>
+struct is_base_of : integral_constant<bool, __is_base_of(Base, Derived)> {};
+
+// ---------------------------------------------------------------------------
+// is_constructible / is_convertible — compiler built-ins
+// ---------------------------------------------------------------------------
+
+template <typename T, typename... Args>
+struct is_constructible : integral_constant<bool, __is_constructible(T, Args...)> {};
+
+// is_convertible<From,To>: true if To can be constructed from From (covers
+// lambdas → std::function<R(Args...)> since our std::function takes any F).
 template <typename From, typename To>
-struct is_convertible : is_same<typename remove_cv<From>::type,
-                                typename remove_cv<To>::type> {};
+struct is_convertible : integral_constant<bool, __is_constructible(To, From)> {};
 
 // ---------------------------------------------------------------------------
 // add_lvalue_reference / add_rvalue_reference (used by forward)

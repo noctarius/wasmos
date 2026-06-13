@@ -1,4 +1,16 @@
 #pragma once
+/* Internal forward helpers — defined here to break the circular dependency
+ * with <utility> (which includes <tuple>). */
+namespace std { namespace tup_ {
+template<class T> struct rmref      { using type = T; };
+template<class T> struct rmref<T&>  { using type = T; };
+template<class T> struct rmref<T&&> { using type = T; };
+template<class T>
+constexpr T &&fwd(typename rmref<T>::type  &v) noexcept { return static_cast<T&&>(v); }
+template<class T>
+constexpr T &&fwd(typename rmref<T>::type &&v) noexcept { return static_cast<T&&>(v); }
+} } // namespace std::tup_
+
 /* compat/tuple — freestanding shadow of <tuple>
  *
  * Provides: std::tuple<Ts...>, std::tuple_size<T>, std::tuple_element<N,T>,
@@ -81,7 +93,7 @@ struct TupleLeaf {
     constexpr TupleLeaf() : value() {}
     constexpr explicit TupleLeaf(const T &v) : value(v) {}
     template <typename U>
-    constexpr explicit TupleLeaf(U &&v) : value(forward<U>(v)) {}
+    constexpr explicit TupleLeaf(U &&v) : value(tup_::fwd<U>(v)) {}
 };
 
 /* TupleImpl recursively inherits from TupleLeaf for each element. */
@@ -98,8 +110,8 @@ struct TupleImpl<I, Head, Tail...>
 
     template <typename H, typename... T>
     constexpr TupleImpl(H &&h, T &&...t)
-        : TupleLeaf<I, Head>(forward<H>(h))
-        , TupleImpl<I+1, Tail...>(forward<T>(t)...) {}
+        : TupleLeaf<I, Head>(tup_::fwd<H>(h))
+        , TupleImpl<I+1, Tail...>(tup_::fwd<T>(t)...) {}
 };
 
 /* Accessor: get the leaf at index N from a TupleImpl. */
@@ -148,8 +160,8 @@ public:
     constexpr tuple() = default;
 
     template <typename... Args>
-    constexpr explicit tuple(Args &&...args)
-        : Base(forward<Args>(args)...) {}
+    constexpr tuple(Args &&...args)
+        : Base(tup_::fwd<Args>(args)...) {}
 
     tuple(const tuple &) = default;
     tuple(tuple &&)      = default;
@@ -187,7 +199,94 @@ get(const tuple<Ts...> &t) noexcept {
 template <typename... Ts>
 constexpr tuple<typename decay<Ts>::type...>
 make_tuple(Ts &&...args) {
-    return tuple<typename decay<Ts>::type...>(forward<Ts>(args)...);
+    return tuple<typename decay<Ts>::type...>(tup_::fwd<Ts>(args)...);
+}
+
+// Convenience aliases
+template <size_t N, typename T>
+using tuple_element_t = typename tuple_element<N, T>::type;
+
+// ---------------------------------------------------------------------------
+// tuple_size and tuple_element specializations for std::array (needed by
+// RegPosArr.hpp's to_array which uses tuple protocol on arrays)
+// ---------------------------------------------------------------------------
+
+// Forward-declare array here to avoid circular include; the full definition
+// is in compat/array which includes compat/tuple.
+template <typename T, size_t N> struct array;
+
+template <typename T, size_t N>
+struct tuple_size<array<T,N>> : integral_constant<size_t, N> {};
+
+template <typename T, size_t N>
+struct tuple_size<const array<T,N>> : integral_constant<size_t, N> {};
+
+template <size_t I, typename T, size_t N>
+struct tuple_element<I, array<T,N>> { using type = T; };
+
+template <size_t I, typename T, size_t N>
+struct tuple_element<I, const array<T,N>> { using type = const T; };
+
+template <size_t I, typename T, size_t N>
+constexpr T &get(array<T,N> &a) noexcept { return a[I]; }
+
+template <size_t I, typename T, size_t N>
+constexpr const T &get(const array<T,N> &a) noexcept { return a[I]; }
+
+template <size_t I, typename T, size_t N>
+constexpr T &&get(array<T,N> &&a) noexcept { return static_cast<T&&>(a[I]); }
+
+// ---------------------------------------------------------------------------
+// tuple_cat — concatenate two tuples (variadic extension follows same pattern)
+// ---------------------------------------------------------------------------
+
+namespace detail {
+
+template <typename T1, typename T2, size_t... I1, size_t... I2>
+constexpr auto tuple_cat_impl(T1 &&t1, T2 &&t2,
+                              index_sequence<I1...>, index_sequence<I2...>)
+    -> tuple<typename tuple_element<I1, typename decay<T1>::type>::type...,
+             typename tuple_element<I2, typename decay<T2>::type>::type...>
+{
+    using R = tuple<typename tuple_element<I1, typename decay<T1>::type>::type...,
+                    typename tuple_element<I2, typename decay<T2>::type>::type...>;
+    return R(get<I1>(tup_::fwd<T1>(t1))..., get<I2>(tup_::fwd<T2>(t2))...);
+}
+
+} // namespace detail
+
+template <typename T1, typename T2>
+constexpr auto tuple_cat(T1 &&t1, T2 &&t2)
+    -> decltype(detail::tuple_cat_impl(
+        tup_::fwd<T1>(t1), tup_::fwd<T2>(t2),
+        make_index_sequence<tuple_size<typename decay<T1>::type>::value>{},
+        make_index_sequence<tuple_size<typename decay<T2>::type>::value>{}))
+{
+    return detail::tuple_cat_impl(
+        tup_::fwd<T1>(t1), tup_::fwd<T2>(t2),
+        make_index_sequence<tuple_size<typename decay<T1>::type>::value>{},
+        make_index_sequence<tuple_size<typename decay<T2>::type>::value>{});
+}
+
+// ---------------------------------------------------------------------------
+// tuple_cat overload for std::array + std::array → std::array (N+M)
+// ---------------------------------------------------------------------------
+
+namespace detail {
+template<class T, size_t N, size_t M, size_t... I1, size_t... I2>
+constexpr array<T, N+M> array_cat_impl(
+    array<T,N> const &a1, array<T,M> const &a2,
+    index_sequence<I1...>, index_sequence<I2...>) noexcept
+{
+    return {a1[I1]..., a2[I2]...};
+}
+} // namespace detail
+
+template<class T, size_t N, size_t M>
+constexpr array<T, N+M> tuple_cat(array<T,N> const &a1, array<T,M> const &a2) noexcept
+{
+    return detail::array_cat_impl(a1, a2,
+        make_index_sequence<N>{}, make_index_sequence<M>{});
 }
 
 } // namespace std

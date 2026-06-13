@@ -1,0 +1,86 @@
+#pragma once
+/* compat/utility — freestanding shadow of <utility>
+ * Provides: std::move, std::forward, std::swap, std::pair. */
+
+#include "type_traits"
+#include "tuple"
+
+namespace std {
+
+// ---------------------------------------------------------------------------
+// move / forward
+// ---------------------------------------------------------------------------
+
+template <typename T>
+constexpr typename remove_reference<T>::type &&move(T &&t) noexcept {
+    return static_cast<typename remove_reference<T>::type &&>(t);
+}
+
+template <typename T>
+constexpr T &&forward(typename remove_reference<T>::type &t) noexcept {
+    return static_cast<T &&>(t);
+}
+
+template <typename T>
+constexpr T &&forward(typename remove_reference<T>::type &&t) noexcept {
+    static_assert(!is_reference<T>::value,
+                  "std::forward: cannot forward an rvalue as an lvalue");
+    return static_cast<T &&>(t);
+}
+
+// ---------------------------------------------------------------------------
+// swap
+// ---------------------------------------------------------------------------
+
+template <typename T>
+void swap(T &a, T &b) noexcept {
+    T tmp = move(a);
+    a = move(b);
+    b = move(tmp);
+}
+
+// ---------------------------------------------------------------------------
+// pair
+// ---------------------------------------------------------------------------
+
+template <typename T1, typename T2>
+struct pair {
+    using first_type  = T1;
+    using second_type = T2;
+
+    T1 first;
+    T2 second;
+
+    constexpr pair() : first(), second() {}
+
+    constexpr pair(const T1 &a, const T2 &b) : first(a), second(b) {}
+
+    template <typename U1, typename U2>
+    constexpr pair(U1 &&a, U2 &&b)
+        : first(forward<U1>(a)), second(forward<U2>(b)) {}
+
+    pair(const pair &) = default;
+    pair(pair &&)      = default;
+
+    pair &operator=(const pair &) = default;
+    pair &operator=(pair &&)      = default;
+};
+
+template <typename T1, typename T2>
+constexpr pair<typename decay<T1>::type, typename decay<T2>::type>
+make_pair(T1 &&a, T2 &&b) {
+    return pair<typename decay<T1>::type, typename decay<T2>::type>(
+        forward<T1>(a), forward<T2>(b));
+}
+
+template <typename T1, typename T2>
+constexpr bool operator==(const pair<T1,T2> &a, const pair<T1,T2> &b) {
+    return a.first == b.first && a.second == b.second;
+}
+
+template <typename T1, typename T2>
+constexpr bool operator!=(const pair<T1,T2> &a, const pair<T1,T2> &b) {
+    return !(a == b);
+}
+
+} // namespace std

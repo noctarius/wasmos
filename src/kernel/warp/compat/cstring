@@ -1,0 +1,24 @@
+#pragma once
+/* Declare string builtins directly — <string.h> is not available when
+ * cross-compiling to bare-metal x86_64-elf. */
+
+extern "C" {
+void *memcpy(void *, const void *, __SIZE_TYPE__) noexcept;
+void *memset(void *, int, __SIZE_TYPE__) noexcept;
+void *memmove(void *, const void *, __SIZE_TYPE__) noexcept;
+int   memcmp(const void *, const void *, __SIZE_TYPE__) noexcept;
+__SIZE_TYPE__ strlen(const char *) noexcept;
+char *strcpy(char *, const char *) noexcept;
+char *strncpy(char *, const char *, __SIZE_TYPE__) noexcept;
+int   strcmp(const char *, const char *) noexcept;
+int   strncmp(const char *, const char *, __SIZE_TYPE__) noexcept;
+char *strchr(const char *, int) noexcept;
+char *strrchr(const char *, int) noexcept;
+void *memchr(const void *, int, __SIZE_TYPE__) noexcept;
+}
+
+namespace std {
+using ::memcpy; using ::memset; using ::memmove; using ::memcmp;
+using ::strlen; using ::strcpy; using ::strncpy;
+using ::strcmp; using ::strncmp; using ::strchr; using ::strrchr; using ::memchr;
+} // namespace std

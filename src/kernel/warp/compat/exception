@@ -1,0 +1,29 @@
+#pragma once
+/* compat/exception — freestanding stub of <exception>
+ *
+ * Provides std::exception as a minimal base class.  With -fno-exceptions the
+ * throw/catch machinery is disabled; this header exists only so WARP code
+ * that derives from std::exception compiles.
+ *
+ * std::terminate() is mapped to an infinite halt loop. */
+
+namespace std {
+
+class exception {
+public:
+    exception() noexcept {}
+    exception(const exception &) noexcept = default;
+    exception &operator=(const exception &) noexcept = default;
+    virtual ~exception() noexcept {}
+    virtual const char *what() const noexcept { return "exception"; }
+};
+
+/* std::terminate — called by the ABI when exception handling fails.
+ * In the kernel this must never return. */
+[[noreturn]] inline void terminate() noexcept {
+    for (;;) {
+        __asm__ volatile("hlt");
+    }
+}
+
+} // namespace std

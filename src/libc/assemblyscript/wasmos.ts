@@ -118,6 +118,30 @@ export class Mutex {
   }
 }
 
+function readSpawnArgs(): Array<string> {
+  const buf = new Uint8Array(128);
+  if (fs_buffer_copy(buf.dataStart as i32, buf.length - 1, 0) != 0) {
+    return new Array<string>();
+  }
+  let n: i32 = 0;
+  while (n < buf.length && buf[n] != 0) {
+    n++;
+  }
+  if (n == 0) {
+    return new Array<string>();
+  }
+  const raw = String.UTF8.decodeUnsafe(buf.dataStart, n, false);
+  const parts = raw.split(" ");
+  const result = new Array<string>();
+  for (let i = 0; i < parts.length; i++) {
+    const token = unchecked(parts[i]);
+    if (token.length > 0) {
+      result.push(token);
+    }
+  }
+  return result;
+}
+
 export function runMain(
   entry: (args: Array<string>) => i32,
   arg0: i32,
@@ -129,7 +153,7 @@ export function runMain(
   unchecked(g_startupArgs[1] = arg1);
   unchecked(g_startupArgs[2] = arg2);
   unchecked(g_startupArgs[3] = arg3);
-  return entry(new Array<string>());
+  return entry(readSpawnArgs());
 }
 
 function writeBytes(bytes: Uint8Array): bool {

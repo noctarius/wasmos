@@ -1,0 +1,20 @@
+#pragma once
+/* compat/cassert — freestanding shadow of <cassert>
+ * In a bare-metal kernel there is no stderr or process abort.  Any assertion
+ * failure spins forever so the watchdog (or developer on a debugger) can catch
+ * it.  The message is intentionally dropped to avoid pulling in printf. */
+
+#undef assert
+
+#ifdef NDEBUG
+#  define assert(expr) ((void)(expr))
+#else
+#  define assert(expr) \
+    do { \
+        if (!(expr)) { \
+            for (;;) { \
+                __asm__ volatile("hlt"); \
+            } \
+        } \
+    } while (0)
+#endif

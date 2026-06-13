@@ -1,0 +1,11 @@
+#pragma once
+
+namespace std {
+
+template<class T>
+constexpr const T &min(const T &a, const T &b) noexcept { return b < a ? b : a; }
+
+template<class T>
+constexpr const T &max(const T &a, const T &b) noexcept { return a < b ? b : a; }
+
+} // namespace std

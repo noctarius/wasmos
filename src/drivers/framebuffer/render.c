@@ -1,8 +1,14 @@
 #include "fbtext_internal.h"
 #include "font_8x16.h"
+#include <stdint.h>
 
-/* Freestanding native driver: no libc to link against.  Provide the two
- * string primitives we need inline rather than pulling in a full string.h. */
+static inline void copy8(void *d, const void *s)
+{
+    uint64_t v;
+    __builtin_memcpy(&v, s, sizeof(v));
+    __builtin_memcpy(d, &v, sizeof(v));
+}
+
 static void *
 nd_memset(void *dst, int c, unsigned long n)
 {
@@ -12,16 +18,30 @@ nd_memset(void *dst, int c, unsigned long n)
 }
 
 static void *
+nd_memcpy(void *dst, const void *src, unsigned long n)
+{
+    uint8_t       *d = (uint8_t *)dst;
+    const uint8_t *s = (const uint8_t *)src;
+    while (n >= 32) {
+        copy8(d,      s);
+        copy8(d +  8, s +  8);
+        copy8(d + 16, s + 16);
+        copy8(d + 24, s + 24);
+        d += 32; s += 32; n -= 32;
+    }
+    while (n >= 8) { copy8(d, s); d += 8; s += 8; n -= 8; }
+    while (n--)    { *d++ = *s++; }
+    return dst;
+}
+
+static void *
 nd_memmove(void *dst, const void *src, unsigned long n)
 {
-    unsigned char       *d = (unsigned char *)dst;
-    const unsigned char *s = (const unsigned char *)src;
-    if (d < s) {
-        while (n--) { *d++ = *s++; }
-    } else if (d > s) {
-        d += n; s += n;
-        while (n--) { *--d = *--s; }
-    }
+    uint8_t       *d = (uint8_t *)dst;
+    const uint8_t *s = (const uint8_t *)src;
+    if (d <= s) { return nd_memcpy(dst, src, n); }
+    d += n; s += n;
+    while (n--) { *--d = *--s; }
     return dst;
 }
 
@@ -157,9 +177,9 @@ fbtext_scroll_up(fbtext_state_t *s, uint16_t n)
     /* Pixel-level: shift framebuffer rows up by n*CELL_H scan lines. */
     unsigned long move_lines  = (unsigned long)(s->rows - n) * CELL_H;
     unsigned long clear_lines = (unsigned long)n * CELL_H;
-    nd_memmove(s->fb,
-               s->fb + (unsigned long)n * CELL_H * s->fb_stride,
-               move_lines * s->fb_stride * sizeof(uint32_t));
+    nd_memcpy(s->fb,
+              s->fb + (unsigned long)n * CELL_H * s->fb_stride,
+              move_lines * s->fb_stride * sizeof(uint32_t));
     /* Re-render only the vacated bottom n rows. */
     for (uint16_t r = (uint16_t)(s->rows - n); r < s->rows; r++) {
         for (uint16_t c = 0; c < s->cols; c++) {

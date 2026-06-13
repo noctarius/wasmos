@@ -94,17 +94,14 @@ fbtext_render_cell(fbtext_state_t *s, uint16_t col, uint16_t row)
     uint32_t x0 = (uint32_t)col * CELL_W;
     uint32_t y0 = (uint32_t)row * CELL_H;
 
+    uint32_t pixels[FONT_W];
     for (int y = 0; y < FONT_H; y++) {
         uint8_t bits = glyph[y];
-        for (int sy = 0; sy < FONT_SCALE; sy++) {
-            uint32_t *line = s->fb + (y0 + (uint32_t)(y * FONT_SCALE + sy)) * s->fb_stride + x0;
-            for (int x = 0; x < FONT_W; x++) {
-                uint32_t pixel = (bits & (0x80u >> x)) ? fg : bg;
-                for (int sx = 0; sx < FONT_SCALE; sx++) {
-                    line[x * FONT_SCALE + sx] = pixel;
-                }
-            }
+        for (int x = 0; x < FONT_W; x++) {
+            pixels[x] = (bits & (0x80u >> x)) ? fg : bg;
         }
+        uint32_t *line = s->fb + (y0 + (uint32_t)y) * s->fb_stride + x0;
+        __builtin_memcpy(line, pixels, FONT_W * sizeof(uint32_t));
     }
 }
 

@@ -435,7 +435,13 @@ static int forward_request(int32_t backend_endpoint,
             continue;
         }
         if (resp_type == FS_IPC_STREAM) {
-            if (wasmos_ipc_send(source, g_fs_endpoint, resp_type, req_id, rr0, rr1, rr2, rr3) != 0) {
+            /* Retry with yield: the client may be in a slow output loop (e.g.
+             * VT-write retries) and temporarily unable to drain its endpoint.
+             * A bare non-retrying send would fill the 32-slot queue, abort the
+             * relay, drop the error notification (send_fs_error also fails on a
+             * full queue), and leave the client blocked in select_one forever. */
+            if (wasmos_sys_ipc_send_retry(source, g_fs_endpoint, resp_type, req_id,
+                                          rr0, rr1, rr2, rr3, 8192) != 0) {
                 return -1;
             }
             continue;
@@ -452,7 +458,11 @@ static int forward_request(int32_t backend_endpoint,
 static void
 send_fs_error(int32_t source, int32_t request_id)
 {
-    (void)wasmos_ipc_send(source, g_fs_endpoint, FS_IPC_ERROR, request_id, -1, 0, 0, 0);
+    /* Retry with yield for the same reason as forward_request's STREAM relay:
+     * if the client's endpoint is temporarily full we must not drop the error
+     * notification, otherwise the client hangs forever in select_one. */
+    (void)wasmos_sys_ipc_send_retry(source, g_fs_endpoint, FS_IPC_ERROR,
+                                    request_id, -1, 0, 0, 0, 4096);
 }
 
 static int32_t

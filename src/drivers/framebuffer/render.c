@@ -77,6 +77,7 @@ fbtext_render_init(fbtext_state_t *s,
 void
 fbtext_render_cell(fbtext_state_t *s, uint16_t col, uint16_t row)
 {
+    if (s->suppress_render) { return; }
     if (col >= s->cols || row >= s->rows) {
         return;
     }

@@ -93,9 +93,12 @@ replay_early_log(wasmos_driver_api_t *api)
         }
     }
 
+    g_state.suppress_render = 1;
     for (uint32_t i = start; i < total; i++) {
         fbtext_put_char(&g_state, (uint32_t)g_early_log_buf[i]);
     }
+    g_state.suppress_render = 0;
+    fbtext_render_all(&g_state);
 }
 
 static int

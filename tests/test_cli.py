@@ -43,14 +43,20 @@ class CliIntegrationTests(unittest.TestCase):
 
     def test_ps_lists_processes(self):
         self._cmd_expect("ps", b"vm(bytes) kstack(bytes) heap(bytes) rss_est(bytes) cpu(ticks) name")
+        self._cmd_expect("ps", b"cli")
+        self._cmd_expect("ps", b"fs-manager")
 
     def test_ps_tree_lists_hierarchy(self):
         self._cmd_expect("ps tree", b"tree:")
         self._cmd_expect("ps tree", b"cli (pid")
+        self._cmd_expect("ps tree", b"fs-manager (pid")
 
     def test_ps_all_lists_table_and_tree(self):
-        self._cmd_expect("ps all", b"pid ppid state wasm thr/live vm(bytes) kstack(bytes) heap(bytes) rss_est(bytes) cpu(ticks) name")
+        self._cmd_expect("ps all", b"vm(bytes) kstack(bytes) heap(bytes) rss_est(bytes) cpu(ticks) name")
+        self._cmd_expect("ps all", b"cli")
+        self._cmd_expect("ps all", b"fs-manager")
         self._cmd_expect("ps all", b"tree:")
+        self._cmd_expect("ps all", b"cli (pid")
 
     def test_ls_lists_root(self):
         self._cmd_expect("ls", b"boot")
@@ -123,6 +129,10 @@ class CliIntegrationTests(unittest.TestCase):
         self._cmd_expect("init_smoke", b"init-smoke: init start")
         self._cmd_expect("export PATH=", b"wamos> ")
         self._cmd_expect("init_smoke", b"no such command found: init_smoke")
+        self._cmd_expect(
+            "export PATH=/boot/apps:/boot/system/services:/boot/system/drivers:/boot/system/utils",
+            b"wamos> ",
+        )
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,7 +10,7 @@
 #include "process.h"
 #include "physmem.h"
 #include "paging.h"
-#include "wasm3_shim.h"
+#include "shim.h"
 #include "spinlock.h"
 #include "arch/x86_64/smp.h"
 

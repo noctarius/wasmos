@@ -43,6 +43,8 @@ typedef struct {
     fbtext_cursor_t cursor;
     uint8_t         cur_fg;     /* current foreground palette index */
     uint8_t         cur_bg;     /* current background palette index */
+    uint8_t         suppress_render; /* skip fbtext_render_cell; caller must fbtext_render_all when done */
+    uint8_t         _pad;
     uint32_t        palette[16];
     fbtext_cell_t   cells[FBTEXT_MAX_ROWS * FBTEXT_MAX_COLS];
 } fbtext_state_t;

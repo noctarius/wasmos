@@ -9,9 +9,6 @@ const RTC_IPC_READ_RESP: i32 = 0x8A0;
 const RTC_IPC_SET_RESP: i32 = 0x8A1;
 const RTC_IPC_ERROR: i32 = 0x8FF;
 
-@external("wasmos", "fs_buffer_copy")
-declare function fs_buffer_copy(ptr: i32, len: i32, offset: i32): i32;
-
 class RtcTime {
   constructor(
     public year: i32 = 1970,
@@ -114,12 +111,11 @@ function parse4(s: string, pos: i32): i32 {
   return v;
 }
 
-function parseSetArg(args: string): RtcTime | null {
-  const trimmed = args.trim();
-  if (!trimmed.startsWith("set ")) {
+function parseSetArg(args: Array<string>): RtcTime | null {
+  if (args.length < 3 || args[0] != "set") {
     return null;
   }
-  const s = trimmed.substring(4);
+  const s = args[1] + " " + args[2];
   if (s.length < 19 || s.charCodeAt(4) != 45 || s.charCodeAt(7) != 45 ||
       s.charCodeAt(10) != 32 || s.charCodeAt(13) != 58 || s.charCodeAt(16) != 58) {
     return null;
@@ -142,22 +138,7 @@ function parseSetArg(args: string): RtcTime | null {
   return t;
 }
 
-function readSpawnArgs(): string {
-  const buf = new Uint8Array(128);
-  if (fs_buffer_copy(buf.dataStart as i32, buf.length - 1, 0) != 0) {
-    return "";
-  }
-  let n = 0;
-  while (n < buf.length && buf[n] != 0) {
-    n++;
-  }
-  if (n == 0) {
-    return "";
-  }
-  return String.UTF8.decodeUnsafe(buf.dataStart, n, false);
-}
-
-export function main(_args: Array<string>): i32 {
+export function main(args: Array<string>): i32 {
   const procEndpoint = startup.arg(0);
   if (procEndpoint <= 0) {
     std.println("date: missing proc endpoint");
@@ -170,9 +151,8 @@ export function main(_args: Array<string>): i32 {
     return 1;
   }
 
-  const spawnArgs = readSpawnArgs();
-  if (spawnArgs.length > 0) {
-    const t = parseSetArg(spawnArgs);
+  if (args.length > 0) {
+    const t = parseSetArg(args);
     if (t == null) {
       std.println("usage: date set YYYY-MM-DD HH:MM:SS");
       return 1;

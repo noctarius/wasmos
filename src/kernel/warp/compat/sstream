@@ -1,0 +1,8 @@
+#pragma once
+#include "ostream"
+namespace std {
+struct stringstream : ostream {
+    template<class T> stringstream &operator<<(T const &) noexcept { return *this; }
+    const char *str() const noexcept { return ""; }
+};
+} // namespace std

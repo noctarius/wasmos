@@ -22,6 +22,8 @@ extern "C" {
 #include "boot.h"
 #include "ipc.h"
 #include "process.h"
+#include "thread.h"
+#include "futex.h"
 #include "klog.h"
 #include "futex.h"
 }
@@ -88,6 +90,20 @@ warp_ipc_slot_for_pid(uint32_t pid)
 }
 
 // ---------------------------------------------------------------------------
+// Internal helper — mirrors wasm3/link.c's static warp_current_context_id()
+// ---------------------------------------------------------------------------
+
+static int
+warp_current_context_id(uint32_t *out)
+{
+    uint32_t pid = process_current_pid();
+    process_t *proc = process_get(pid);
+    if (!proc || !out) return -1;
+    *out = proc->context_id;
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
 // Host call wrappers — IPC
 // ---------------------------------------------------------------------------
 
@@ -96,7 +112,7 @@ warp_ipc_create_endpoint(void *ctx_)
 {
     auto *ctx = static_cast<WarpCallContext *>(ctx_);
     uint32_t context_id = 0, endpoint = IPC_ENDPOINT_NONE;
-    if (current_process_context(&context_id) != 0) return (uint32_t)-1;
+    if (warp_current_context_id(&context_id) != 0) return (uint32_t)-1;
     if (ipc_endpoint_create(context_id, &endpoint) != IPC_OK) return (uint32_t)-1;
     return endpoint;
 }
@@ -117,7 +133,7 @@ warp_ipc_send(uint32_t dest, uint32_t src, uint32_t type,
 {
     (void)ctx_;
     uint32_t context_id = 0;
-    if (current_process_context(&context_id) != 0) return (uint32_t)-1;
+    if (warp_current_context_id(&context_id) != 0) return (uint32_t)-1;
     ipc_message_t msg;
     msg.type       = type;
     msg.request_id = req_id;
@@ -131,34 +147,32 @@ warp_ipc_send(uint32_t dest, uint32_t src, uint32_t type,
 static uint32_t
 warp_ipc_select_one(uint32_t endpoint, void *ctx_)
 {
-    auto *ctx = static_cast<WarpCallContext *>(ctx_);
+    (void)ctx_;
     uint32_t context_id = 0;
-    if (current_process_context(&context_id) != 0) return (uint32_t)-1;
+    if (warp_current_context_id(&context_id) != 0) return (uint32_t)-1;
     WarpIpcLastSlot *slot = warp_ipc_slot_for_pid(context_id);
     if (!slot) return (uint32_t)-1;
-    ipc_message_t msg;
-    uint32_t ready_ep = 0;
-    if (ipc_select_one_recv(endpoint, context_id, &ready_ep, &msg) != IPC_OK) return (uint32_t)-1;
-    slot->message = msg;
-    slot->pid     = context_id;
-    slot->valid   = 1;
-    return ready_ep;
+    int rc = ipc_recv_blocking_for(context_id, endpoint, &slot->message);
+    if (rc != IPC_OK) return (uint32_t)-1;
+    slot->pid   = context_id;
+    slot->valid = 1;
+    return endpoint; /* wasm3 returns the ready endpoint; we return the one we waited on */
 }
 
 static uint32_t
 warp_ipc_drain(uint32_t endpoint, void *ctx_)
 {
-    auto *ctx = static_cast<WarpCallContext *>(ctx_);
+    (void)ctx_;
     uint32_t context_id = 0;
-    if (current_process_context(&context_id) != 0) return (uint32_t)-1;
+    if (warp_current_context_id(&context_id) != 0) return (uint32_t)-1;
     WarpIpcLastSlot *slot = warp_ipc_slot_for_pid(context_id);
     if (!slot) return (uint32_t)-1;
-    ipc_message_t msg;
-    if (ipc_try_recv(endpoint, &msg) != IPC_OK) return (uint32_t)-1;
-    slot->message = msg;
-    slot->pid     = context_id;
-    slot->valid   = 1;
-    return 0;
+    int rc = ipc_recv_for(context_id, endpoint, &slot->message);
+    if (rc == IPC_EMPTY) return 0;
+    if (rc != IPC_OK)   return (uint32_t)-1;
+    slot->pid   = context_id;
+    slot->valid = 1;
+    return 1;
 }
 
 static uint32_t
@@ -166,7 +180,7 @@ warp_ipc_notify(uint32_t endpoint, void *ctx_)
 {
     (void)ctx_;
     uint32_t context_id = 0;
-    if (current_process_context(&context_id) != 0) return (uint32_t)-1;
+    if (warp_current_context_id(&context_id) != 0) return (uint32_t)-1;
     return (uint32_t)ipc_notify_from(context_id, endpoint);
 }
 
@@ -175,7 +189,7 @@ warp_ipc_last_field(uint32_t field, void *ctx_)
 {
     (void)ctx_;
     uint32_t context_id = 0;
-    if (current_process_context(&context_id) != 0) return 0;
+    if (warp_current_context_id(&context_id) != 0) return 0;
     WarpIpcLastSlot *slot = warp_ipc_slot_for_pid(context_id);
     if (!slot || !slot->valid) return 0;
     switch (field) {
@@ -223,7 +237,11 @@ static uint32_t
 warp_proc_exit(uint32_t code, void *ctx_)
 {
     (void)ctx_;
-    wasmos_proc_exit_warp(code);  /* TODO: define/call correct exit helper */
+    process_t *proc = process_get(process_current_pid());
+    if (proc) {
+        process_set_exit_status(proc, static_cast<int32_t>(code));
+        process_yield(PROCESS_RUN_EXITED);
+    }
     return 0;
 }
 
@@ -231,14 +249,16 @@ static uint32_t
 warp_proc_notify_ready(void *ctx_)
 {
     (void)ctx_;
-    return (uint32_t)process_notify_ready();
+    process_t *proc = process_get(process_current_pid());
+    if (proc) process_notify_ready(proc);
+    return 0;
 }
 
 static uint32_t
 warp_sched_yield(void *ctx_)
 {
     (void)ctx_;
-    process_yield();
+    process_yield(PROCESS_RUN_YIELDED);
     return 0;
 }
 
@@ -253,7 +273,7 @@ static uint32_t
 warp_thread_gettid(void *ctx_)
 {
     (void)ctx_;
-    return (uint32_t)thread_gettid();
+    return (uint32_t)thread_current_tid();
 }
 
 // ---------------------------------------------------------------------------
@@ -263,19 +283,22 @@ warp_thread_gettid(void *ctx_)
 static uint32_t
 warp_futex_wait(uint32_t addr_off, uint32_t val, uint32_t timeout_ms, void *ctx_)
 {
+    /* futex_wait takes the raw WASM linear-memory offset, not a host pointer. */
     auto *ctx = static_cast<WarpCallContext *>(ctx_);
-    auto *addr = reinterpret_cast<uint32_t *>(warp_mem(ctx, addr_off, sizeof(uint32_t)));
-    if (!addr) return (uint32_t)-1;
-    return (uint32_t)futex_wait(addr, val, timeout_ms);
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0) return (uint32_t)-1;
+    (void)ctx;
+    return (uint32_t)futex_wait(addr_off, val, timeout_ms, context_id);
 }
 
 static uint32_t
 warp_futex_wake(uint32_t addr_off, uint32_t count, void *ctx_)
 {
     auto *ctx = static_cast<WarpCallContext *>(ctx_);
-    auto *addr = reinterpret_cast<uint32_t *>(warp_mem(ctx, addr_off, sizeof(uint32_t)));
-    if (!addr) return (uint32_t)-1;
-    return (uint32_t)futex_wake(addr, count);
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0) return (uint32_t)-1;
+    (void)ctx;
+    return (uint32_t)futex_wake(addr_off, count, context_id);
 }
 
 // ---------------------------------------------------------------------------

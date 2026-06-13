@@ -197,9 +197,9 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/native_driver.c
   ${KERNEL_DIR}/wasm_driver.c
   ${KERNEL_DIR}/wasm_chardev.c
-  ${KERNEL_DIR}/wasm3_probe.c
-  ${KERNEL_DIR}/wasm3_link.c
-  ${KERNEL_DIR}/wasm3_shim.c
+  ${KERNEL_DIR}/wasm3/probe.c
+  ${KERNEL_DIR}/wasm3/link.c
+  ${KERNEL_DIR}/wasm3/shim.c
   ${KERNEL_DIR}/serial.c
   ${KERNEL_DIR}/framebuffer.c
   ${WASM3_DIR}/source/m3_code.c
@@ -252,12 +252,13 @@ target_sources(kernel_sources INTERFACE
   ${KERNEL_DIR}/include/wasm_driver.h
   ${KERNEL_DIR}/include/wasmos_app.h
   ${KERNEL_DIR}/include/wasmos_app_meta.h
-  ${KERNEL_DIR}/include/wasm3_link.h
-  ${KERNEL_DIR}/wasm3_probe.h
+  ${KERNEL_DIR}/wasm3/link.h
+  ${KERNEL_DIR}/wasm3/probe.h
+  ${KERNEL_DIR}/wasm3/shim.h
   ${KERNEL_DIR}/include/io.h
   ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
 )
-target_include_directories(kernel_sources INTERFACE ${KERNEL_DIR}/include ${WASM3_DIR} ${DRIVER_WASM_DIR}/include)
+target_include_directories(kernel_sources INTERFACE ${KERNEL_DIR} ${KERNEL_DIR}/include ${WASM3_DIR} ${DRIVER_WASM_DIR}/include)
 
 # IDE aggregation target for CLion indexing (not part of the build).
 add_library(kernel_ide OBJECT EXCLUDE_FROM_ALL
@@ -291,6 +292,7 @@ add_library(kernel_ide OBJECT EXCLUDE_FROM_ALL
   ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
 )
 target_include_directories(kernel_ide PRIVATE
+  ${KERNEL_DIR}
   ${KERNEL_DIR}/include
   ${LIBC_DIR}/include
   ${DRIVER_WASM_DIR}/include
@@ -362,9 +364,9 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/native_driver.c -o ${BUILD_DIR}/native_driver.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_driver.c -o ${BUILD_DIR}/wasm_driver.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_chardev.c -o ${BUILD_DIR}/wasm_chardev.o
-  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${KERNEL_DIR}/wasm3_probe.c -o ${BUILD_DIR}/wasm3_probe.o
-  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${KERNEL_DIR}/wasm3_link.c -o ${BUILD_DIR}/wasm3_link.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm3_shim.c -o ${BUILD_DIR}/wasm3_shim.o
+  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${KERNEL_DIR}/wasm3/probe.c -o ${BUILD_DIR}/wasm3_probe.o
+  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${KERNEL_DIR}/wasm3/link.c -o ${BUILD_DIR}/wasm3_link.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm3/shim.c -o ${BUILD_DIR}/wasm3_shim.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/serial.c -o ${BUILD_DIR}/serial.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/framebuffer.c -o ${BUILD_DIR}/framebuffer.o
   COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM3_DIR}/source/m3_code.c -o ${BUILD_DIR}/wasm3_code.o

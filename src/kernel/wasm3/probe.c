@@ -8,9 +8,9 @@
 #include "boot.h"
 #include "wasmos_app.h"
 #include "wasm3.h"
-#include "wasm3_link.h"
+#include "link.h"
 #include "process.h"
-#include "wasm3_shim.h"
+#include "shim.h"
 
 static const boot_module_t *
 probe_module_at(const boot_info_t *info, uint32_t index)

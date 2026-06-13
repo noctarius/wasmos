@@ -12,7 +12,7 @@
 #include "arch/x86_64/smp.h"
 #include "wasmos_app.h"
 #include "wasm_chardev.h"
-#include "wasm3_link.h"
+#include "wasm3/link.h"
 #include "framebuffer.h"
 #include "capability.h"
 #include "slab.h"

@@ -10,7 +10,7 @@
 #include "paging.h"
 #include "serial.h"
 #include "timer.h"
-#include "wasm3_link.h"
+#include "link.h"
 #include "wasmos_app.h"
 #include "wasmos_driver_abi.h"
 #include "framebuffer.h"

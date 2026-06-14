@@ -59,6 +59,10 @@ struct array {
 /* Zero-size specialisation — rarely needed but avoids UB from T[0]. */
 template <typename T>
 struct array<T, 0> {
+    /* One padding byte so that {{}} aggregate-brace initialisation works:
+     * without any member the nested {} is "excess elements". */
+    unsigned char _pad[1] = {};
+
     using value_type      = T;
     using size_type       = size_t;
     using reference       = T &;

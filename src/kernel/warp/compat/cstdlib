@@ -1,0 +1,27 @@
+#pragma once
+/* compat/cstdlib — freestanding shadow of <cstdlib>
+ * In a bare-metal kernel there is no process exit or general heap.
+ * Only the symbols that WARP actually calls are provided; operator new/delete
+ * are supplied by warp/shim.cpp so malloc/free should not be needed, but
+ * declaration stubs are included for link completeness. */
+
+#include <stddef.h>
+
+extern "C" {
+    /* These are declared but NOT defined here; warp/shim.cpp routes them
+     * through the kernel allocator via operator new/delete instead.
+     * If WARP calls malloc/free directly, provide thin wrappers in shim.cpp. */
+    void *malloc(size_t size);
+    void *realloc(void *ptr, size_t size);
+    void  free(void *ptr);
+
+    /* abort() maps to an infinite halt so the kernel never returns. */
+    [[noreturn]] void abort(void);
+} // extern "C"
+
+namespace std {
+    using ::malloc;
+    using ::realloc;
+    using ::free;
+    using ::abort;
+} // namespace std

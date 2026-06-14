@@ -1,0 +1,14 @@
+#pragma once
+/* Minimal <string> stub — WARP's MemUtils includes it only on Linux (memfd path)
+ * and in OSAPIChecker which we replace.  Provide just enough to compile. */
+#include "cstring"
+namespace std {
+struct string {
+    const char *ptr_ = "";
+    string() noexcept = default;
+    string(const char *s) noexcept : ptr_(s ? s : "") {}
+    const char *c_str() const noexcept { return ptr_; }
+    __SIZE_TYPE__ size()   const noexcept { return strlen(ptr_); }
+    bool empty() const noexcept { return !ptr_ || !ptr_[0]; }
+};
+} // namespace std

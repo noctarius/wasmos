@@ -1,0 +1,6 @@
+#pragma once
+#include "ostream"
+namespace std {
+extern ostream cout;
+extern ostream cerr;
+} // namespace std

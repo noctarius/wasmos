@@ -6,8 +6,8 @@
 #include "klog.h"
 #include "process.h"
 #include "serial.h"
-#include "wasm3_link.h"
-#include "wasm3_shim.h"
+#include "wasm3/link.h"
+#include "wasm3/shim.h"
 #include "thread.h"
 #include "string.h"
 

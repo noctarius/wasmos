@@ -1,0 +1,22 @@
+#pragma once
+/* Minimal <functional> stub for WARP.
+ * FunctionRef.hpp uses std::function only in a std::is_convertible trait check;
+ * providing a forward declaration is enough to satisfy it without pulling in
+ * the full hosted std::function (which requires RTTI and exceptions). */
+#include "type_traits"
+
+namespace std {
+
+template<class>
+class function;
+
+template<class R, class... Args>
+class function<R(Args...)> {
+public:
+    function() noexcept = default;
+    template<class F>
+    function(F) noexcept {}
+    R operator()(Args...) const { for(;;){} } // unreachable in kernel
+};
+
+} // namespace std

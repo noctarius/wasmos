@@ -1,0 +1,10 @@
+#pragma once
+/* compat/cerrno — freestanding shadow of <cerrno>
+ * Pulls in the compat errno.h and re-exports the errno macro and constants
+ * into namespace std where needed. */
+
+#include "errno.h"
+
+/* The errno macro and integer constants are intentionally left in the global
+ * namespace (matching the POSIX / C standard convention).  Nothing in WARP
+ * uses std::errno, so no namespace std re-export is needed. */

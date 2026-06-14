@@ -1,0 +1,94 @@
+#pragma once
+/* compat/mutex — freestanding no-op stub of <mutex>
+ *
+ * WARP uses std::mutex around its JIT compilation critical sections.  In the
+ * kernel, WARP module compilation is already serialised by the
+ * warp_runtime_enter/leave spinlock in shim.cpp, so these mutexes can be
+ * safely no-ops. */
+
+namespace std {
+
+// ---------------------------------------------------------------------------
+// mutex — no-op
+// ---------------------------------------------------------------------------
+
+class mutex {
+public:
+    constexpr mutex() noexcept = default;
+
+    /* Not copyable or movable (mirrors std::mutex). */
+    mutex(const mutex &) = delete;
+    mutex &operator=(const mutex &) = delete;
+
+    void lock()     noexcept {}
+    void unlock()   noexcept {}
+    bool try_lock() noexcept { return true; }
+};
+
+// ---------------------------------------------------------------------------
+// unique_lock<M> — no-op RAII wrapper
+// ---------------------------------------------------------------------------
+
+template <typename Mutex>
+class unique_lock {
+public:
+    using mutex_type = Mutex;
+
+    unique_lock() noexcept : _mutex(nullptr), _owns(false) {}
+
+    explicit unique_lock(Mutex &m) noexcept : _mutex(&m), _owns(true) {
+        m.lock();
+    }
+
+    unique_lock(unique_lock &&o) noexcept : _mutex(o._mutex), _owns(o._owns) {
+        o._mutex = nullptr;
+        o._owns  = false;
+    }
+
+    unique_lock &operator=(unique_lock &&o) noexcept {
+        if (_owns && _mutex) _mutex->unlock();
+        _mutex  = o._mutex;
+        _owns   = o._owns;
+        o._mutex = nullptr;
+        o._owns  = false;
+        return *this;
+    }
+
+    ~unique_lock() noexcept {
+        if (_owns && _mutex) _mutex->unlock();
+    }
+
+    void lock()   noexcept { if (_mutex) { _mutex->lock();   _owns = true;  } }
+    void unlock() noexcept { if (_mutex && _owns) { _mutex->unlock(); _owns = false; } }
+
+    bool owns_lock() const noexcept { return _owns; }
+    explicit operator bool() const noexcept { return _owns; }
+
+    Mutex *mutex() const noexcept { return _mutex; }
+
+private:
+    Mutex *_mutex;
+    bool   _owns;
+};
+
+// ---------------------------------------------------------------------------
+// lock_guard<M> — scoped RAII wrapper
+// ---------------------------------------------------------------------------
+
+template <typename Mutex>
+class lock_guard {
+public:
+    using mutex_type = Mutex;
+
+    explicit lock_guard(Mutex &m) noexcept : _mutex(m) { m.lock(); }
+
+    ~lock_guard() noexcept { _mutex.unlock(); }
+
+    lock_guard(const lock_guard &) = delete;
+    lock_guard &operator=(const lock_guard &) = delete;
+
+private:
+    Mutex &_mutex;
+};
+
+} // namespace std

@@ -1,16 +1,18 @@
-/* wasm_driver.h - wasm3-backed driver instance management.
+/* wasm_driver.h - WASM module loader and driver/service instance runner.
  *
- * Each WASM driver or service gets a wasm_driver_t that owns a wasm3 runtime,
- * module, and an IPC endpoint.  The PM creates one per spawned WASM payload
- * and calls wasm_driver_call_entry() to run the WASM entry export.
- * The lock serializes re-entrant hostcall calls from multiple kernel threads. */
+ * Supports two runtime backends selected at compile time via WASMOS_WASM_RUNTIME:
+ *   0 = wasm3 interpreter (default)
+ *   1 = WARP single-pass JIT compiler
+ *
+ * The public API is identical for both backends.  Internal fields of
+ * wasm_driver_t differ but are opaque to callers outside wasm_driver.c /
+ * warp_driver.cpp. */
 #ifndef WASMOS_WASM_DRIVER_H
 #define WASMOS_WASM_DRIVER_H
 
 #include <stdint.h>
 #include "ipc.h"
 #include "spinlock.h"
-#include "wasm3.h"
 
 /* Parameters needed to instantiate and run a WASM module. */
 typedef struct {
@@ -24,7 +26,26 @@ typedef struct {
     const uint32_t *entry_argv;
 } wasm_driver_manifest_t;
 
-/* Live WASM driver instance.  One per spawned WASM driver or service. */
+#if WASMOS_WASM_RUNTIME == 1  /* WARP JIT backend */
+
+/* Live WASM driver instance backed by vb::WasmModule (C++ object).
+ * wasm_module is a heap-allocated vb::WasmModule * cast to void *. */
+typedef struct {
+    wasm_driver_manifest_t manifest;
+    void      *wasm_module;     /* vb::WasmModule * */
+    uint32_t   owner_pid;
+    uint32_t   owner_context_id;
+    uint32_t   endpoint;        /* IPC endpoint for service requests */
+    spinlock_t lock;            /* guards WARP module re-entrancy */
+    uint8_t    active;
+    uint8_t    started;
+} wasm_driver_t;
+
+#else  /* wasm3 interpreter backend (default) */
+
+#include "wasm3.h"
+
+/* Live WASM driver instance backed by the wasm3 interpreter. */
 typedef struct {
     wasm_driver_manifest_t manifest;
     IM3Environment env;
@@ -36,6 +57,8 @@ typedef struct {
     spinlock_t lock;     /* guards wasm3 runtime re-entrancy */
     uint8_t active;
 } wasm_driver_t;
+
+#endif /* WASMOS_WASM_RUNTIME */
 
 /* Initialize the WASM driver subsystem; called once during kernel startup. */
 void wasm_driver_init(void);

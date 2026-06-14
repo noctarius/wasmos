@@ -20,7 +20,9 @@ typedef struct {
     uint32_t flags;
     const uint8_t *blob;
     uint32_t blob_size;
-    uint8_t blob_storage[PM_FS_BUFFER_SIZE];
+    uint8_t *owned_blob_storage;
+    uint64_t owned_blob_storage_phys;
+    uint32_t owned_blob_storage_pages;
     uint8_t started;
     uint32_t entry_argc;
     uint32_t entry_arg0;
@@ -100,6 +102,18 @@ extern uint8_t g_pm_wait_owner_deny_logged;
 extern uint8_t g_pm_kill_owner_deny_logged;
 extern uint8_t g_pm_status_owner_deny_logged;
 extern uint8_t g_pm_spawn_owner_deny_logged;
+
+static inline uint32_t
+pm_atomic_load_u32(const uint32_t *ptr)
+{
+    return __atomic_load_n(ptr, __ATOMIC_ACQUIRE);
+}
+
+static inline void
+pm_atomic_store_u32(uint32_t *ptr, uint32_t value)
+{
+    __atomic_store_n(ptr, value, __ATOMIC_RELEASE);
+}
 
 void pm_unpack_name_args(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char *out, uint32_t out_len);
 void pm_pack_name_args(const char *name, uint32_t out[4]);

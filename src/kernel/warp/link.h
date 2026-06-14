@@ -23,6 +23,7 @@ vb::Span<vb::NativeSymbol const> warp_wasmos_symbols(void);
 /* Binds the compiled WasmModule to the per-PID call context so that V1 host
  * functions can resolve linear-memory offsets via getLinearMemoryRegion. */
 void warp_bind_module(vb::WasmModule *module, uint32_t pid);
+void *warp_context_for_pid(uint32_t pid);
 
 extern "C" {
 #endif

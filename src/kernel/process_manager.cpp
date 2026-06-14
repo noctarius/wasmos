@@ -89,7 +89,8 @@ public:
         uint32_t source_endpoint = IPC_ENDPOINT_NONE;
         ipc_message_t msg;
 
-        if (g_pm.proc_endpoint == IPC_ENDPOINT_NONE) {
+        uint32_t proc_endpoint = pm_atomic_load_u32(&g_pm.proc_endpoint);
+        if (proc_endpoint == IPC_ENDPOINT_NONE) {
             return;
         }
         if (ipc_endpoint_create(IPC_CONTEXT_KERNEL, &source_endpoint) != IPC_OK ||
@@ -99,13 +100,13 @@ public:
 
         msg.type = request->type;
         msg.source = source_endpoint;
-        msg.destination = g_pm.proc_endpoint;
+        msg.destination = proc_endpoint;
         msg.request_id = request->request_id;
         msg.arg0 = request->arg0;
         msg.arg1 = request->arg1;
         msg.arg2 = request->arg2;
         msg.arg3 = request->arg3;
-        (void)ipc_send_from(IPC_CONTEXT_KERNEL, g_pm.proc_endpoint, &msg);
+        (void)ipc_send_from(IPC_CONTEXT_KERNEL, proc_endpoint, &msg);
 #else
         (void)request;
 #endif
@@ -116,13 +117,13 @@ public:
         g_pm.init_module_index = 0xFFFFFFFFu;
         g_pm.module_count = 0;
         g_pm.boot_info = boot_info;
-        g_pm.proc_endpoint = IPC_ENDPOINT_NONE;
-        g_pm.fs_endpoint = IPC_ENDPOINT_NONE;
-        g_pm.block_endpoint = IPC_ENDPOINT_NONE;
-        g_pm.fb_endpoint = IPC_ENDPOINT_NONE;
-        g_pm.vt_endpoint = IPC_ENDPOINT_NONE;
-        g_pm.fs_reply_endpoint = IPC_ENDPOINT_NONE;
-        g_pm.fs_ctrl_endpoint = IPC_ENDPOINT_NONE;
+        pm_atomic_store_u32(&g_pm.proc_endpoint, IPC_ENDPOINT_NONE);
+        pm_atomic_store_u32(&g_pm.fs_endpoint, IPC_ENDPOINT_NONE);
+        pm_atomic_store_u32(&g_pm.block_endpoint, IPC_ENDPOINT_NONE);
+        pm_atomic_store_u32(&g_pm.fb_endpoint, IPC_ENDPOINT_NONE);
+        pm_atomic_store_u32(&g_pm.vt_endpoint, IPC_ENDPOINT_NONE);
+        pm_atomic_store_u32(&g_pm.fs_reply_endpoint, IPC_ENDPOINT_NONE);
+        pm_atomic_store_u32(&g_pm.fs_ctrl_endpoint, IPC_ENDPOINT_NONE);
         g_pm.fs_request_id = 1;
         g_pm.next_cli_tty = 1;
         g_pm.started = 0;
@@ -289,34 +290,42 @@ public:
         }
 
         if (!g_pm.started) {
-            if (ipc_endpoint_create(process->context_id, &g_pm.proc_endpoint) != IPC_OK) {
+            uint32_t proc_endpoint = IPC_ENDPOINT_NONE;
+            if (ipc_endpoint_create(process->context_id, &proc_endpoint) != IPC_OK) {
                 klog_write("[pm] endpoint create failed\n");
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
-            if (ipc_endpoint_create(process->context_id, &g_pm.fs_reply_endpoint) != IPC_OK) {
+            pm_atomic_store_u32(&g_pm.proc_endpoint, proc_endpoint);
+            uint32_t fs_reply_endpoint = IPC_ENDPOINT_NONE;
+            if (ipc_endpoint_create(process->context_id, &fs_reply_endpoint) != IPC_OK) {
                 klog_write("[pm] fs reply endpoint create failed\n");
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
-            if (ipc_endpoint_create(process->context_id, &g_pm.fs_ctrl_endpoint) != IPC_OK) {
+            pm_atomic_store_u32(&g_pm.fs_reply_endpoint, fs_reply_endpoint);
+            uint32_t fs_ctrl_endpoint = IPC_ENDPOINT_NONE;
+            if (ipc_endpoint_create(process->context_id, &fs_ctrl_endpoint) != IPC_OK) {
                 klog_write("[pm] fs ctrl endpoint create failed\n");
                 process_set_exit_status(process, -1);
                 return PROCESS_RUN_EXITED;
             }
+            pm_atomic_store_u32(&g_pm.fs_ctrl_endpoint, fs_ctrl_endpoint);
             g_pm.started = 1;
         }
 
         pm_check_waits(process->context_id);
         pm_reap_apps(process);
         pm_poll_spawn(process->context_id);
-        if (g_pm.fs_ctrl_endpoint != IPC_ENDPOINT_NONE) {
+        uint32_t fs_ctrl_endpoint = pm_atomic_load_u32(&g_pm.fs_ctrl_endpoint);
+        if (fs_ctrl_endpoint != IPC_ENDPOINT_NONE) {
             ipc_message_t ignored;
-            while (ipc_recv_for(process->context_id, g_pm.fs_ctrl_endpoint, &ignored) == IPC_OK) {
+            while (ipc_recv_for(process->context_id, fs_ctrl_endpoint, &ignored) == IPC_OK) {
             }
         }
 
-        int recv_rc = ipc_recv_for(process->context_id, g_pm.proc_endpoint, &msg);
+        uint32_t proc_endpoint = pm_atomic_load_u32(&g_pm.proc_endpoint);
+        int recv_rc = ipc_recv_for(process->context_id, proc_endpoint, &msg);
         if (recv_rc == IPC_EMPTY) {
             return PROCESS_RUN_YIELDED;
         }
@@ -392,7 +401,7 @@ public:
             } else {
                 resp.type = PROC_IPC_ERROR;
             }
-            resp.source = g_pm.proc_endpoint;
+            resp.source = proc_endpoint;
             resp.destination = msg.source;
             resp.request_id = msg.request_id;
             resp.arg0 = msg.type;
@@ -466,19 +475,19 @@ void process_manager_inject_spawn_owner_deny_test(void)
 
 int process_manager_init(const boot_info_t *boot_info) { return g_process_manager.init(boot_info); }
 
-uint32_t process_manager_endpoint(void) { return g_pm.proc_endpoint; }
+uint32_t process_manager_endpoint(void) { return pm_atomic_load_u32(&g_pm.proc_endpoint); }
 uint32_t process_manager_fs_endpoint(void)
 {
-    return g_pm.fs_endpoint;
+    return pm_atomic_load_u32(&g_pm.fs_endpoint);
 }
-uint32_t process_manager_block_endpoint(void) { return g_pm.block_endpoint; }
-uint32_t process_manager_vt_endpoint(void) { return g_pm.vt_endpoint; }
-uint32_t process_manager_framebuffer_endpoint(void) { return g_pm.fb_endpoint; }
+uint32_t process_manager_block_endpoint(void) { return pm_atomic_load_u32(&g_pm.block_endpoint); }
+uint32_t process_manager_vt_endpoint(void) { return pm_atomic_load_u32(&g_pm.vt_endpoint); }
+uint32_t process_manager_framebuffer_endpoint(void) { return pm_atomic_load_u32(&g_pm.fb_endpoint); }
 
 void
 process_manager_set_framebuffer_endpoint(uint32_t endpoint)
 {
-    g_pm.fb_endpoint = endpoint;
+    pm_atomic_store_u32(&g_pm.fb_endpoint, endpoint);
     (void)pm_service_set("fb", endpoint, IPC_CONTEXT_KERNEL);
 }
 

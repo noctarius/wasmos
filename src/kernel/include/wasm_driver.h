@@ -38,6 +38,7 @@ typedef struct {
     uint32_t   endpoint;        /* IPC endpoint for service requests */
     spinlock_t lock;            /* guards WARP module re-entrancy */
     uint8_t    active;
+    uint8_t    started;
 } wasm_driver_t;
 
 #else  /* wasm3 interpreter backend (default) */

@@ -8,6 +8,8 @@
 #include "process_manager.h"
 #include "capability.h"
 #include "memory.h"
+#include "paging.h"
+#include "physmem.h"
 #include "native_driver.h"
 #include "string.h"
 #include "timer.h"
@@ -15,6 +17,79 @@
 #include "wasmos_app_meta.h"
 #include "string.h"
 #include "serial.h"
+
+static void
+pm_slot_release_owned_blob(pm_app_state_t *slot)
+{
+    uint8_t *owned = 0;
+
+    if (!slot) {
+        return;
+    }
+    owned = slot->owned_blob_storage;
+    if (slot->owned_blob_storage_phys != 0 && slot->owned_blob_storage_pages != 0) {
+        pfa_free_pages(slot->owned_blob_storage_phys, (uint64_t)slot->owned_blob_storage_pages);
+    }
+    if (slot->blob == owned) {
+        slot->blob = 0;
+    }
+    slot->owned_blob_storage = 0;
+    slot->owned_blob_storage_phys = 0;
+    slot->owned_blob_storage_pages = 0;
+}
+
+static void
+pm_slot_reset(pm_app_state_t *slot)
+{
+    if (!slot) {
+        return;
+    }
+    pm_slot_release_owned_blob(slot);
+    slot->in_use = 0;
+    slot->pid = 0;
+    slot->flags = 0;
+    slot->blob = 0;
+    slot->blob_size = 0;
+    slot->started = 0;
+    slot->entry_argc = 0;
+    slot->entry_arg0 = 0;
+    slot->entry_arg1 = 0;
+    slot->entry_arg2 = 0;
+    slot->entry_arg3 = 0;
+    slot->spawn_cli_args_len = 0;
+    memset(slot->spawn_cli_args, 0, sizeof(slot->spawn_cli_args));
+    memset(slot->name, 0, sizeof(slot->name));
+}
+
+static int
+pm_slot_alloc_owned_blob(pm_app_state_t *slot, const uint8_t *blob, uint32_t blob_size)
+{
+    const uint64_t page_size = 4096u;
+    uint64_t pages = 0;
+    uint64_t phys = 0;
+    uint8_t *dst = 0;
+
+    if (!slot || !blob || blob_size == 0) {
+        return -1;
+    }
+
+    pages = ((uint64_t)blob_size + (page_size - 1u)) / page_size;
+    phys = pfa_alloc_pages(pages);
+    if (phys == 0) {
+        return -1;
+    }
+    dst = (uint8_t *)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
+    for (uint32_t i = 0; i < blob_size; ++i) {
+        dst[i] = blob[i];
+    }
+
+    slot->owned_blob_storage = dst;
+    slot->owned_blob_storage_phys = phys;
+    slot->owned_blob_storage_pages = (uint32_t)pages;
+    slot->blob = dst;
+    slot->blob_size = blob_size;
+    return 0;
+}
 
 static const boot_module_t *
 pm_module_at(uint32_t index)
@@ -194,6 +269,7 @@ pm_app_entry(process_t *process, void *arg)
         if (wasmos_app_parse(state->blob, state->blob_size, &desc) != 0) {
             klog_write("[pm] app parse failed\n");
             process_set_exit_status(process, -1);
+            pm_slot_reset(state);
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD)
             preempt_enable();
 #endif
@@ -208,6 +284,7 @@ pm_app_entry(process_t *process, void *arg)
                 state->spawn_cli_args_len >= (uint32_t)fs_buf_size) {
                 klog_write("[pm] spawn args copy failed\n");
                 process_set_exit_status(process, -1);
+                pm_slot_reset(state);
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD)
                 preempt_enable();
 #endif
@@ -234,7 +311,7 @@ pm_app_entry(process_t *process, void *arg)
                                                 state->entry_argc);
             process_set_exit_status(process, native_rc == 0 ? 0 : -1);
             wasmos_app_stop(&state->app);
-            state->in_use = 0;
+            pm_slot_reset(state);
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD)
             preempt_enable();
 #endif
@@ -248,6 +325,7 @@ pm_app_entry(process_t *process, void *arg)
                              state->entry_argc) != 0) {
             klog_write("[pm] app start failed\n");
             process_set_exit_status(process, -1);
+            pm_slot_reset(state);
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD)
             preempt_enable();
 #endif
@@ -267,8 +345,7 @@ pm_app_entry(process_t *process, void *arg)
     }
 
     wasmos_app_stop(&state->app);
-    state->in_use = 0;
-    state->pid = 0;
+    pm_slot_reset(state);
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD)
     preempt_enable();
 #endif
@@ -281,17 +358,21 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     const boot_module_t *mod = pm_module_at(module_index);
     if (!mod || mod->type != BOOT_MODULE_TYPE_WASMOS_APP || mod->base == 0 ||
         mod->size == 0 || mod->size > 0xFFFFFFFFULL) {
+        klog_write("[pm] spawn_module invalid module\n");
         return -1;
     }
 
     pm_app_state_t *slot = pm_find_app_slot();
     if (!slot) {
+        klog_write("[pm] spawn_module no slot\n");
         return -1;
     }
+    pm_slot_reset(slot);
 
     wasmos_app_desc_t desc;
     uint8_t require_explicit_ready = 0;
     if (wasmos_app_parse((const uint8_t *)(uintptr_t)mod->base, (uint32_t)mod->size, &desc) != 0) {
+        klog_write("[pm] spawn_module parse failed\n");
         return -1;
     }
     if ((desc.flags & (WASMOS_APP_FLAG_SERVICE | WASMOS_APP_FLAG_DRIVER)) != 0) {
@@ -299,6 +380,7 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     }
 
     if (str_copy_bytes(slot->name, sizeof(slot->name), desc.name, desc.name_len) != 0) {
+        klog_write("[pm] spawn_module name copy failed\n");
         return -1;
     }
 
@@ -307,7 +389,10 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     slot->started = 0;
     slot->in_use = 1;
     if (pm_apply_entry_bindings(slot, &desc) != 0) {
-        slot->in_use = 0;
+        klog_write("[pm] spawn_module bindings failed: ");
+        klog_write(slot->name);
+        klog_write("\n");
+        pm_slot_reset(slot);
         return -1;
     }
 
@@ -315,20 +400,29 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     if ((require_explicit_ready
             ? process_spawn_as_ready_gated_parked(parent_pid, slot->name, pm_app_entry, slot, out_pid)
             : process_spawn_as_parked(parent_pid, slot->name, pm_app_entry, slot, out_pid)) != 0) {
+        klog_write("[pm] spawn_module process spawn failed: ");
+        klog_write(slot->name);
+        klog_write("\n");
         preempt_enable();
-        slot->in_use = 0;
+        pm_slot_reset(slot);
         return -1;
     }
 
     slot->pid = *out_pid;
     if (process_set_runtime_is_wasm(*out_pid, (desc.flags & WASMOS_APP_FLAG_NATIVE) == 0 ? 1u : 0u) != 0) {
+        klog_write("[pm] spawn_module runtime flag failed: ");
+        klog_write(slot->name);
+        klog_write("\n");
         preempt_enable();
-        slot->in_use = 0;
+        pm_slot_reset(slot);
         return -1;
     }
     if (pm_apply_post_spawn_bindings(slot, *out_pid) != 0) {
+        klog_write("[pm] spawn_module post bindings failed: ");
+        klog_write(slot->name);
+        klog_write("\n");
         preempt_enable();
-        slot->in_use = 0;
+        pm_slot_reset(slot);
         return -1;
     }
     preempt_enable();
@@ -419,17 +513,11 @@ pm_spawn_from_buffer(uint32_t parent_pid,
     if (!slot) {
         return -1;
     }
-    if (blob_size > sizeof(slot->blob_storage)) {
-        return -1;
-    }
-
-    for (uint32_t i = 0; i < blob_size; ++i) {
-        slot->blob_storage[i] = blob[i];
-    }
+    pm_slot_reset(slot);
 
     wasmos_app_desc_t desc;
     uint8_t require_explicit_ready = 0;
-    if (wasmos_app_parse(slot->blob_storage, blob_size, &desc) != 0) {
+    if (wasmos_app_parse(blob, blob_size, &desc) != 0) {
         return -1;
     }
     if ((desc.flags & (WASMOS_APP_FLAG_APP |
@@ -443,18 +531,16 @@ pm_spawn_from_buffer(uint32_t parent_pid,
     if (str_copy_bytes(slot->name, sizeof(slot->name), desc.name, desc.name_len) != 0) {
         return -1;
     }
+    if (pm_slot_alloc_owned_blob(slot, blob, blob_size) != 0) {
+        return -1;
+    }
 
-    slot->blob = slot->blob_storage;
-    slot->blob_size = blob_size;
     slot->started = 0;
     slot->in_use = 1;
     slot->spawn_cli_args_len = 0;
-    for (uint32_t i = 0; i < sizeof(slot->spawn_cli_args); ++i) {
-        slot->spawn_cli_args[i] = '\0';
-    }
     if (spawn_cli_args && spawn_cli_args_len > 0u) {
         if (spawn_cli_args_len >= sizeof(slot->spawn_cli_args)) {
-            slot->in_use = 0;
+            pm_slot_reset(slot);
             return -1;
         }
         for (uint32_t i = 0; i < spawn_cli_args_len; ++i) {
@@ -464,23 +550,23 @@ pm_spawn_from_buffer(uint32_t parent_pid,
         slot->spawn_cli_args_len = spawn_cli_args_len;
     }
     if (pm_apply_entry_bindings(slot, &desc) != 0) {
-        slot->in_use = 0;
+        pm_slot_reset(slot);
         return -1;
     }
 
     if ((require_explicit_ready
             ? process_spawn_as_ready_gated_parked(parent_pid, slot->name, pm_app_entry, slot, out_pid)
             : process_spawn_as_parked(parent_pid, slot->name, pm_app_entry, slot, out_pid)) != 0) {
-        slot->in_use = 0;
+        pm_slot_reset(slot);
         return -1;
     }
     slot->pid = *out_pid;
     if (process_set_runtime_is_wasm(*out_pid, (desc.flags & WASMOS_APP_FLAG_NATIVE) == 0 ? 1u : 0u) != 0) {
-        slot->in_use = 0;
+        pm_slot_reset(slot);
         return -1;
     }
     if (pm_apply_post_spawn_bindings(slot, *out_pid) != 0) {
-        slot->in_use = 0;
+        pm_slot_reset(slot);
         return -1;
     }
     /* Process is parked: caller must call process_unpark_pid() after all
@@ -1158,8 +1244,7 @@ pm_reap_apps(process_t *owner)
             continue;
         }
         wasmos_app_stop(&app->app);
-        app->in_use = 0;
-        app->pid = 0;
+        pm_slot_reset(app);
         app = (pm_app_state_t *)list_next(&it);
     }
 }

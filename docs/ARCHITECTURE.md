@@ -35,7 +35,7 @@ remain deterministic in strict ring3 runs.
 - [DMA Transfers](architecture/12-dma-transfers.md)
 
 ### WASM Runtime
-- [Runtime and Packaging](architecture/13-runtime-and-packaging.md)
+- [Runtime and Packaging](architecture/13-runtime-and-packaging.md) (wasm3 + WARP JIT)
 - [libsys and IPC Service Runtime](architecture/14-libsys-and-service-runtime.md)
 
 ### Drivers and Services

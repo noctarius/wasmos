@@ -18,6 +18,7 @@
 extern "C" {
 #include "klog.h"
 #include "slab.h"
+#include "physmem.h"
 #include "process.h"
 #include "arch/x86_64/smp.h"
 }
@@ -31,52 +32,118 @@ extern "C" {
 //    __cxa_* ABI stubs live in warp/cxx_abi.cpp to avoid duplicate symbols.
 // ---------------------------------------------------------------------------
 
-void *operator new(size_t size)            { return kalloc_small(size); }
-void *operator new[](size_t size)          { return kalloc_small(size); }
-void  operator delete(void *p) noexcept   { kfree_small(p); }
-void  operator delete[](void *p) noexcept { kfree_small(p); }
-void  operator delete(void *p, size_t) noexcept   { kfree_small(p); }
-void  operator delete[](void *p, size_t) noexcept { kfree_small(p); }
+/* Forward declarations — defined after the two-tier allocator below. */
+static void *warp_kmalloc(size_t);
+static void  warp_kfree(void *);
+
+/* operator new/delete use the two-tier allocator so that C++ objects of
+ * any size (e.g., vb::WasmModule itself) are allocated correctly. */
+void *operator new(size_t size)   { return warp_kmalloc(size); }
+void *operator new[](size_t size) { return warp_kmalloc(size); }
+void  operator delete(void *p) noexcept   { warp_kfree(p); }
+void  operator delete[](void *p) noexcept { warp_kfree(p); }
+void  operator delete(void *p, size_t) noexcept   { warp_kfree(p); }
+void  operator delete[](void *p, size_t) noexcept { warp_kfree(p); }
 
 // ---------------------------------------------------------------------------
-// 2. Kernel allocator — block header tracks size for realloc
+// 2. Kernel allocator — two-tier: slab for small, page allocator for large.
+//    AllocHeader.is_pages == 0: slab-backed, size = byte count.
+//    AllocHeader.is_pages == 1: page-backed, size = page count.
+//    This allows WARP to allocate the large blocks it needs for compiler
+//    scratch, JIT output code, and WASM linear memory.
 // ---------------------------------------------------------------------------
 
 namespace {
 
 struct AllocHeader {
-    size_t size;
+    size_t   size;     /* byte count (is_pages=0) or page count (is_pages=1) */
+    uint32_t is_pages; /* 0 = slab, 1 = page-allocator */
 };
 
-static inline AllocHeader *header_of(void *p) {
+static constexpr size_t   kLargeThreshold = 112;           /* slab max usable */
+static constexpr uint64_t kHalfBase       = 0xFFFFFFFF80000000ULL;
+static constexpr uint64_t kPhysLimit      = 512ULL * 1024ULL * 1024ULL;
+static constexpr size_t   kPageSize       = 4096UL;
+
+static inline AllocHeader *header_of(void *p)
+{
     return reinterpret_cast<AllocHeader *>(static_cast<uint8_t *>(p) - sizeof(AllocHeader));
+}
+
+static inline uint64_t phys_of_pages_ptr(void *p)
+{
+    return reinterpret_cast<uint64_t>(p) - kHalfBase;
 }
 
 } // namespace
 
-static void *warp_kmalloc(size_t const size) {
+static void *warp_kmalloc(size_t const size)
+{
     size_t total = sizeof(AllocHeader) + size;
-    void *raw = kalloc_small(total);
-    if (!raw) return nullptr;
-    auto *hdr = static_cast<AllocHeader *>(raw);
-    hdr->size = size;
-    return hdr + 1;
+
+    if (total <= kLargeThreshold) {
+        /* Small path: slab allocator */
+        void *raw = kalloc_small(total);
+        if (!raw) return nullptr;
+        auto *hdr = static_cast<AllocHeader *>(raw);
+        hdr->size     = size;
+        hdr->is_pages = 0;
+        return hdr + 1;
+    } else {
+        /* Large path: physical page allocator */
+        uint64_t pages = (static_cast<uint64_t>(total) + kPageSize - 1) / kPageSize;
+        uint64_t phys  = pfa_alloc_pages_below(pages, kPhysLimit);
+        if (!phys) return nullptr;
+        auto *hdr = reinterpret_cast<AllocHeader *>(phys | kHalfBase);
+        hdr->size     = pages;   /* store PAGE count */
+        hdr->is_pages = 1;
+        return hdr + 1;
+    }
 }
 
-static void *warp_krealloc(void *const ptr, size_t const size) {
+static void *warp_krealloc(void *const ptr, size_t const size)
+{
     if (!ptr) return warp_kmalloc(size);
-    if (!size) { kfree_small(header_of(ptr)); return nullptr; }
-    size_t old_size = header_of(ptr)->size;
+    AllocHeader *old_hdr = header_of(ptr);
+    size_t old_bytes;
+    if (old_hdr->is_pages) {
+        old_bytes = old_hdr->size * kPageSize - sizeof(AllocHeader);
+    } else {
+        old_bytes = old_hdr->size;
+    }
+
+    if (!size) {
+        /* Free only */
+        if (old_hdr->is_pages) {
+            pfa_free_pages(phys_of_pages_ptr(old_hdr), old_hdr->size);
+        } else {
+            kfree_small(old_hdr);
+        }
+        return nullptr;
+    }
+
     void *n = warp_kmalloc(size);
     if (!n) return nullptr;
-    size_t copy = old_size < size ? old_size : size;
+    size_t copy = old_bytes < size ? old_bytes : size;
     __builtin_memcpy(n, ptr, copy);
-    kfree_small(header_of(ptr));
+
+    if (old_hdr->is_pages) {
+        pfa_free_pages(phys_of_pages_ptr(old_hdr), old_hdr->size);
+    } else {
+        kfree_small(old_hdr);
+    }
     return n;
 }
 
-static void warp_kfree(void *const ptr) {
-    if (ptr) kfree_small(header_of(ptr));
+static void warp_kfree(void *const ptr)
+{
+    if (!ptr) return;
+    AllocHeader *hdr = header_of(ptr);
+    if (hdr->is_pages) {
+        pfa_free_pages(phys_of_pages_ptr(hdr), hdr->size);
+    } else {
+        kfree_small(hdr);
+    }
 }
 
 // ---------------------------------------------------------------------------

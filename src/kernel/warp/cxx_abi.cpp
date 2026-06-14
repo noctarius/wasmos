@@ -20,6 +20,7 @@
 extern "C" {
 #include "klog.h"
 #include "slab.h"
+#include "serial.h"
 #include "arch/x86_64/smp.h"
 }
 
@@ -57,8 +58,9 @@ extern "C" void __cxa_free_exception(void *e) noexcept {
 // ---------------------------------------------------------------------------
 
 extern "C" __attribute__((noreturn))
-void __cxa_throw(void * /*obj*/, void * /*type_info*/, void (* /*dtor*/)(void *))
+void __cxa_throw(void *obj, void *type_info, void (* /*dtor*/)(void *))
 {
+    (void)obj; (void)type_info;
     WarpExceptionCheckpoint *ckpt = warp_exception_get_checkpoint();
     if (ckpt->active) {
         ckpt->active = 0;

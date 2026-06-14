@@ -23,6 +23,7 @@ extern "C" {
 #include "paging.h"
 #include "slab.h"
 #include "klog.h"
+#include "memory.h"
 }
 
 #include "src/utils/MemUtils.hpp"
@@ -91,6 +92,17 @@ MmapMemory allocPagedMemory(size_t size)
     if (!slot) { pfa_free_pages(phys, pages); return m; }
 
     uint8_t *virt = reinterpret_cast<uint8_t *>(phys | kHalfBase);
+    for (uint64_t i = 0; i < pages; ++i) {
+        uint64_t page_phys = phys + (i * kPageSize);
+        uint64_t page_virt = reinterpret_cast<uint64_t>(virt) + (i * kPageSize);
+        if (paging_map_4k(page_virt,
+                          page_phys,
+                          MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_EXEC) != 0) {
+            pfa_free_pages(phys, pages);
+            *slot = MmapEntry{};
+            return m;
+        }
+    }
     slot->virt  = virt;
     slot->phys  = phys;
     slot->pages = pages;

@@ -553,6 +553,7 @@ initialize(int32_t proc_endpoint,
         if (type == FS_IPC_OPEN_REQ) {
             char path[INITFS_PATH_MAX];
             if (arg1 == 0 && arg2 == 0 && arg3 == 0 && copy_path_from_fs_buffer(arg0, path, sizeof(path)) == 0) {
+                /* path copied from FS buffer */
             } else {
                 unpack_name((uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3, path, sizeof(path));
             }

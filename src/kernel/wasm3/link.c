@@ -3052,6 +3052,23 @@ m3ApiRawFunction(wasmos_sched_cpu_count)
     m3ApiReturn((int32_t)g_cpu_count);
 }
 
+m3ApiRawFunction(wasmos_physmem_stats)
+{
+    typedef struct { uint64_t total_bytes; uint64_t free_bytes; } physmem_stats_t;
+    m3ApiReturnType(int32_t)
+    m3ApiGetArgMem(physmem_stats_t *, out)
+    m3ApiCheckMem(out, sizeof(physmem_stats_t));
+    out->total_bytes = pfa_total_bytes();
+    out->free_bytes  = pfa_free_bytes();
+    m3ApiReturn(0);
+}
+
+m3ApiRawFunction(wasmos_kernel_runtime)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiReturn(0); /* wasm3 */
+}
+
 m3ApiRawFunction(wasmos_sched_cpu_stats)
 {
     typedef struct { uint32_t ready_count; uint32_t running_pid; uint32_t steal_count; uint32_t dispatch_count; uint32_t last_pid; } cpu_stats_t;
@@ -3685,6 +3702,8 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "sched_current_pid", "i()", wasmos_sched_current_pid);
     rc |= wasm3_link_raw(module, "wasmos", "sched_cpu_count",   "i()", wasmos_sched_cpu_count);
     rc |= wasm3_link_raw(module, "wasmos", "sched_cpu_stats",   "i(i*)", wasmos_sched_cpu_stats);
+    rc |= wasm3_link_raw(module, "wasmos", "physmem_stats",     "i(*)", wasmos_physmem_stats);
+    rc |= wasm3_link_raw(module, "wasmos", "kernel_runtime",    "i()", wasmos_kernel_runtime);
     rc |= wasm3_link_raw(module, "wasmos", "sched_yield", "i()", wasmos_sched_yield);
     rc |= wasm3_link_raw(module, "wasmos", "thread_gettid", "i()", wasmos_thread_gettid);
     rc |= wasm3_link_raw(module, "wasmos", "thread_create", "i(iiii)", wasmos_thread_create);

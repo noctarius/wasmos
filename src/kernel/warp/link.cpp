@@ -884,6 +884,22 @@ static uint32_t warp_sched_ready_count(void *ctx_)
     { (void)ctx_; return 0; }
 static uint32_t warp_sched_cpu_count(void *ctx_)
     { (void)ctx_; return (uint32_t)g_cpu_count; }
+static uint32_t warp_kernel_runtime(void *ctx_)
+    { (void)ctx_; return 1u; /* WARP */ }
+
+static uint32_t
+warp_physmem_stats(uint32_t out_off, void *ctx_)
+{
+    auto *ctx = warp_call_ctx(ctx_);
+    typedef struct { uint64_t total_bytes; uint64_t free_bytes; } physmem_stats_t;
+    uint8_t *raw = warp_mem(ctx, out_off, sizeof(physmem_stats_t));
+    if (!raw) return (uint32_t)-1;
+    physmem_stats_t tmp;
+    tmp.total_bytes = pfa_total_bytes();
+    tmp.free_bytes  = pfa_free_bytes();
+    __builtin_memcpy(raw, &tmp, sizeof(tmp));
+    return 0;
+}
 
 // ---------------------------------------------------------------------------
 // Symbol accessor.
@@ -954,6 +970,8 @@ warp_wasmos_symbols(void)
         STATIC_LINK("wasmos", "proc_count",           warp_proc_count),
         STATIC_LINK("wasmos", "sched_ready_count",    warp_sched_ready_count),
         STATIC_LINK("wasmos", "sched_cpu_count",      warp_sched_cpu_count),
+        STATIC_LINK("wasmos", "physmem_stats",        warp_physmem_stats),
+        STATIC_LINK("wasmos", "kernel_runtime",       warp_kernel_runtime),
         STATIC_LINK("wasmos", "debug_mark",           warp_debug_mark),
         STATIC_LINK("wasmos", "kmap_dump",            warp_kmap_dump),
         STATIC_LINK("wasmos", "kmap_dump_all",        warp_kmap_dump_all),

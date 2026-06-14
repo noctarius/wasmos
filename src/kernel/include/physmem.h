@@ -25,4 +25,10 @@ void pfa_free_pages(uint64_t base, uint64_t pages);
  * Used to pin the kernel image, ACPI tables, and trampoline pages. */
 void pfa_pin_pages(uint64_t base, uint64_t pages);
 
+/* Total usable physical bytes reported by the UEFI memory map at boot. */
+uint64_t pfa_total_bytes(void);
+
+/* Current free physical bytes (sum of all free ranges under lock). */
+uint64_t pfa_free_bytes(void);
+
 #endif

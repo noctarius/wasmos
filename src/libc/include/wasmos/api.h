@@ -94,6 +94,16 @@ extern int32_t wasmos_sched_cpu_count(void)
     WASMOS_WASM_IMPORT("wasmos", "sched_cpu_count");
 extern int32_t wasmos_sched_cpu_stats(int32_t cpu_id, int32_t out_ptr)
     WASMOS_WASM_IMPORT("wasmos", "sched_cpu_stats");
+/* Physical memory snapshot: total/free bytes as seen by the kernel PFA. */
+typedef struct {
+    uint64_t total_bytes;
+    uint64_t free_bytes;
+} wasmos_physmem_stats_t;
+extern int32_t wasmos_physmem_stats(wasmos_physmem_stats_t *out)
+    WASMOS_WASM_IMPORT("wasmos", "physmem_stats");
+/* Returns 0=wasm3, 1=WARP. Compile-time constant baked into the kernel. */
+extern int32_t wasmos_kernel_runtime(void)
+    WASMOS_WASM_IMPORT("wasmos", "kernel_runtime");
 extern int32_t wasmos_sched_yield(void)
     WASMOS_WASM_IMPORT("wasmos", "sched_yield");
 extern int32_t wasmos_thread_gettid(void)

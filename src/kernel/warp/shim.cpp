@@ -27,7 +27,8 @@ extern "C" {
 #include "shim.h"
 
 // ---------------------------------------------------------------------------
-// 1. Freestanding C++ ABI
+// 1. operator new/delete — backed by the kernel slab allocator.
+//    __cxa_* ABI stubs live in warp/cxx_abi.cpp to avoid duplicate symbols.
 // ---------------------------------------------------------------------------
 
 void *operator new(size_t size)            { return kalloc_small(size); }
@@ -36,25 +37,6 @@ void  operator delete(void *p) noexcept   { kfree_small(p); }
 void  operator delete[](void *p) noexcept { kfree_small(p); }
 void  operator delete(void *p, size_t) noexcept   { kfree_small(p); }
 void  operator delete[](void *p, size_t) noexcept { kfree_small(p); }
-
-extern "C" {
-
-void __cxa_pure_virtual(void) { for (;;) {} }
-
-int  __cxa_atexit(void (*)(void *), void *, void *) { return 0; }
-void *__dso_handle = nullptr;
-
-// Static-local init guards — single-threaded stubs; WARP module init is
-// always serialized by warp_runtime_enter so no concurrent guard races.
-int  __cxa_guard_acquire(uint64_t *g) {
-    if (*g & 1ULL) return 0;
-    *g = 0x100ULL;
-    return 1;
-}
-void __cxa_guard_release(uint64_t *g) { *g = 1ULL; }
-void __cxa_guard_abort(uint64_t *g)   { *g = 0ULL; }
-
-} // extern "C"
 
 // ---------------------------------------------------------------------------
 // 2. Kernel allocator — block header tracks size for realloc

@@ -41,7 +41,7 @@ extern "C" {
 
 /* No-op implementation — declared here, defined in warp/compat/csignal.cpp
  * (or in a kernel stub object linked alongside WARP). */
-int sigaction(int signum, struct sigaction *act, struct sigaction *oldact);
+int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);
 
 #ifdef __cplusplus
 } /* extern "C" */

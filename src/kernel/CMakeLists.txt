@@ -1,7 +1,26 @@
 set(LDFLAGS_KERNEL -nostdlib -T ${KERNEL_DIR}/arch/x86_64/linker.ld)
-set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -mcmodel=kernel ${WASMOS_TRACE_DEFINE} ${WASMOS_RING3_SMOKE_DEFINE} ${WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFINE} ${WASMOS_PM_TEST_HOOKS_DEFINE} ${WASMOS_PM_LIST_DEFINE} ${WASMOS_PM_LIST_CAP_DEFINE} ${WASMOS_IRQ_MODE_DEFINE} ${WASMOS_SMP_DEFINE} ${WASMOS_SCHED_CALLER_CPU_BIAS_DEFINE} -DWASMOS_SCHED_THREADABLE -I${WASM3_DIR}/source -Wno-unused-parameter)
+if (WASMOS_WASM_RUNTIME_WARP)
+  set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -mcmodel=kernel ${WASMOS_TRACE_DEFINE} ${WASMOS_RING3_SMOKE_DEFINE} ${WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFINE} ${WASMOS_PM_TEST_HOOKS_DEFINE} ${WASMOS_PM_LIST_DEFINE} ${WASMOS_PM_LIST_CAP_DEFINE} ${WASMOS_IRQ_MODE_DEFINE} ${WASMOS_SMP_DEFINE} ${WASMOS_SCHED_CALLER_CPU_BIAS_DEFINE} -DWASMOS_SCHED_THREADABLE -Wno-unused-parameter)
+else ()
+  set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -mcmodel=kernel ${WASMOS_TRACE_DEFINE} ${WASMOS_RING3_SMOKE_DEFINE} ${WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFINE} ${WASMOS_PM_TEST_HOOKS_DEFINE} ${WASMOS_PM_LIST_DEFINE} ${WASMOS_PM_LIST_CAP_DEFINE} ${WASMOS_IRQ_MODE_DEFINE} ${WASMOS_SMP_DEFINE} ${WASMOS_SCHED_CALLER_CPU_BIAS_DEFINE} -DWASMOS_SCHED_THREADABLE -I${WASM3_DIR}/source -Wno-unused-parameter)
+endif ()
 set(CXXFLAGS_KERNEL ${CFLAGS_KERNEL} -fno-exceptions -fno-rtti -fno-threadsafe-statics -Wno-deprecated)
 set(CFLAGS_WASM3 ${CFLAGS_KERNEL} -I${WASM3_DIR}/source -Dd_m3HasFloat=0 -Wno-unused-parameter -Wno-unused-variable)
+
+# WARP C flags (for posix_kernel.c and other WARP C glue — no C++ dialect, just compat includes).
+set(CFLAGS_WARP_C ${CFLAGS_KERNEL} -I${KERNEL_DIR}/warp/compat)
+# WARP C++14 flags: exceptions ON (WARP uses them internally), no RTTI, compat headers first.
+execute_process(
+  COMMAND ${CMAKE_CXX_COMPILER} -print-resource-dir
+  OUTPUT_VARIABLE _WARP_CLANG_RSRC
+  OUTPUT_STRIP_TRAILING_WHITESPACE)
+set(CFLAGS_WARP_CXX ${CFLAGS_KERNEL}
+    -std=c++14 -frtti -fexceptions -Wno-deprecated -Wno-unused-variable
+    -DACTIVE_STACK_OVERFLOW_CHECK=1 -DLINEAR_MEMORY_BOUNDS_CHECKS=1
+    -DVB_POSIX -DVB_WIN32_OR_POSIX -DNVALGRIND
+    -I${KERNEL_DIR}/warp/compat
+    -isystem ${_WARP_CLANG_RSRC}/include
+    -Wno-macro-redefined -Wno-c++20-extensions -Wno-deprecated-copy)
 
 set(RING3_NATIVE_PROBE_SRC ${KERNEL_DIR}/ring3_native_probe.c)
 set(RING3_NATIVE_PROBE_OBJ ${BUILD_DIR}/ring3_native_probe.o)
@@ -119,24 +138,65 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/wasmos_app.o
   ${BUILD_DIR}/wasmos_app_meta.o
   ${BUILD_DIR}/native_driver.o
-  ${BUILD_DIR}/wasm_driver.o
   ${BUILD_DIR}/wasm_chardev.o
-  ${BUILD_DIR}/wasm3_probe.o
-  ${BUILD_DIR}/wasm3_link.o
-  ${BUILD_DIR}/wasm3_shim.o
   ${BUILD_DIR}/serial.o
   ${BUILD_DIR}/framebuffer.o
-  ${BUILD_DIR}/wasm3_code.o
-  ${BUILD_DIR}/wasm3_bind.o
-  ${BUILD_DIR}/wasm3_compile.o
-  ${BUILD_DIR}/wasm3_core.o
-  ${BUILD_DIR}/wasm3_env.o
-  ${BUILD_DIR}/wasm3_exec.o
-  ${BUILD_DIR}/wasm3_function.o
-  ${BUILD_DIR}/wasm3_info.o
-  ${BUILD_DIR}/wasm3_module.o
-  ${BUILD_DIR}/wasm3_parse.o
 )
+if (WASMOS_WASM_RUNTIME_WARP)
+  list(APPEND KERNEL_OBJS
+    ${BUILD_DIR}/warp_driver.o
+    ${BUILD_DIR}/warp_shim.o
+    ${BUILD_DIR}/warp_link.o
+    ${BUILD_DIR}/warp_cxx_abi.o
+    ${BUILD_DIR}/warp_posix.o
+    ${BUILD_DIR}/warp_mem_utils.o
+    ${BUILD_DIR}/warp_os_api_checker.o
+    ${BUILD_DIR}/warp_iostream_stubs.o
+    ${BUILD_DIR}/warp_linker_stubs.o
+    ${BUILD_DIR}/warp_sjlj_unwind.o
+    ${BUILD_DIR}/warp_WasmModule.o
+    ${BUILD_DIR}/warp_Runtime.o
+    ${BUILD_DIR}/warp_ActiveMemoryManager.o
+    ${BUILD_DIR}/warp_MemoryHelper.o
+    ${BUILD_DIR}/warp_BinaryModule.o
+    ${BUILD_DIR}/warp_VbExceptions.o
+    ${BUILD_DIR}/warp_ExtendableMemory.o
+    ${BUILD_DIR}/warp_VirtualMemoryAllocator.o
+    ${BUILD_DIR}/warp_Compiler.o
+    ${BUILD_DIR}/warp_BackendBase.o
+    ${BUILD_DIR}/warp_x86_64_assembler.o
+    ${BUILD_DIR}/warp_x86_64_backend.o
+    ${BUILD_DIR}/warp_x86_64_call_dispatch.o
+    ${BUILD_DIR}/warp_x86_64_cc.o
+    ${BUILD_DIR}/warp_x86_64_instruction.o
+    ${BUILD_DIR}/warp_x86_64_relpatchobj.o
+    ${BUILD_DIR}/warp_Common.o
+    ${BUILD_DIR}/warp_CommonRegsPos.o
+    ${BUILD_DIR}/warp_MemWriter.o
+    ${BUILD_DIR}/warp_ModuleInfo.o
+    ${BUILD_DIR}/warp_Stack.o
+    ${BUILD_DIR}/warp_BytecodeReader.o
+    ${BUILD_DIR}/warp_Frontend.o
+    ${BUILD_DIR}/warp_ValidationStack.o
+  )
+else ()
+  list(APPEND KERNEL_OBJS
+    ${BUILD_DIR}/wasm_driver.o
+    ${BUILD_DIR}/wasm3_probe.o
+    ${BUILD_DIR}/wasm3_link.o
+    ${BUILD_DIR}/wasm3_shim.o
+    ${BUILD_DIR}/wasm3_code.o
+    ${BUILD_DIR}/wasm3_bind.o
+    ${BUILD_DIR}/wasm3_compile.o
+    ${BUILD_DIR}/wasm3_core.o
+    ${BUILD_DIR}/wasm3_env.o
+    ${BUILD_DIR}/wasm3_exec.o
+    ${BUILD_DIR}/wasm3_function.o
+    ${BUILD_DIR}/wasm3_info.o
+    ${BUILD_DIR}/wasm3_module.o
+    ${BUILD_DIR}/wasm3_parse.o
+  )
+endif ()
 
 if (NOT DEFINED KERNEL_LINK_LIBS)
   set(KERNEL_LINK_LIBS "")
@@ -195,24 +255,63 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/wasmos_app.c
   ${KERNEL_DIR}/wasmos_app_meta.c
   ${KERNEL_DIR}/native_driver.c
-  ${KERNEL_DIR}/wasm_driver.c
   ${KERNEL_DIR}/wasm_chardev.c
-  ${KERNEL_DIR}/wasm3/probe.c
-  ${KERNEL_DIR}/wasm3/link.c
-  ${KERNEL_DIR}/wasm3/shim.c
   ${KERNEL_DIR}/serial.c
   ${KERNEL_DIR}/framebuffer.c
-  ${WASM3_DIR}/source/m3_code.c
-  ${WASM3_DIR}/source/m3_bind.c
-  ${WASM3_DIR}/source/m3_compile.c
-  ${WASM3_DIR}/source/m3_core.c
-  ${WASM3_DIR}/source/m3_env.c
-  ${WASM3_DIR}/source/m3_exec.c
-  ${WASM3_DIR}/source/m3_function.c
-  ${WASM3_DIR}/source/m3_info.c
-  ${WASM3_DIR}/source/m3_module.c
-  ${WASM3_DIR}/source/m3_parse.c
 )
+if (WASMOS_WASM_RUNTIME_WARP)
+  list(APPEND KERNEL_SOURCES
+    ${KERNEL_DIR}/warp_driver.cpp
+    ${KERNEL_DIR}/warp/shim.cpp
+    ${KERNEL_DIR}/warp/link.cpp
+    ${KERNEL_DIR}/warp/cxx_abi.cpp
+    ${KERNEL_DIR}/warp/posix_kernel.c
+    ${KERNEL_DIR}/warp/mem_utils_kernel.cpp
+    ${KERNEL_DIR}/warp/os_api_checker_kernel.cpp
+    ${KERNEL_DIR}/warp/iostream_stubs.cpp
+    ${WARP_DIR}/src/WasmModule/WasmModule.cpp
+    ${WARP_DIR}/src/core/runtime/Runtime.cpp
+    ${WARP_DIR}/src/core/runtime/ActiveMemoryManager.cpp
+    ${WARP_DIR}/src/core/runtime/MemoryHelper.cpp
+    ${WARP_DIR}/src/core/common/BinaryModule.cpp
+    ${WARP_DIR}/src/core/common/VbExceptions.cpp
+    ${WARP_DIR}/src/core/common/ExtendableMemory.cpp
+    ${WARP_DIR}/src/utils/VirtualMemoryAllocator.cpp
+    ${WARP_DIR}/src/core/compiler/Compiler.cpp
+    ${WARP_DIR}/src/core/compiler/backend/BackendBase.cpp
+    ${WARP_DIR}/src/core/compiler/backend/x86_64/x86_64_assembler.cpp
+    ${WARP_DIR}/src/core/compiler/backend/x86_64/x86_64_backend.cpp
+    ${WARP_DIR}/src/core/compiler/backend/x86_64/x86_64_call_dispatch.cpp
+    ${WARP_DIR}/src/core/compiler/backend/x86_64/x86_64_cc.cpp
+    ${WARP_DIR}/src/core/compiler/backend/x86_64/x86_64_instruction.cpp
+    ${WARP_DIR}/src/core/compiler/backend/x86_64/x86_64_relpatchobj.cpp
+    ${WARP_DIR}/src/core/compiler/common/Common.cpp
+    ${WARP_DIR}/src/core/compiler/common/CommonRegsPos.cpp
+    ${WARP_DIR}/src/core/compiler/common/MemWriter.cpp
+    ${WARP_DIR}/src/core/compiler/common/ModuleInfo.cpp
+    ${WARP_DIR}/src/core/compiler/common/Stack.cpp
+    ${WARP_DIR}/src/core/compiler/frontend/BytecodeReader.cpp
+    ${WARP_DIR}/src/core/compiler/frontend/Frontend.cpp
+    ${WARP_DIR}/src/core/compiler/frontend/ValidationStack.cpp
+  )
+else ()
+  list(APPEND KERNEL_SOURCES
+    ${KERNEL_DIR}/wasm_driver.c
+    ${KERNEL_DIR}/wasm3/probe.c
+    ${KERNEL_DIR}/wasm3/link.c
+    ${KERNEL_DIR}/wasm3/shim.c
+    ${WASM3_DIR}/source/m3_code.c
+    ${WASM3_DIR}/source/m3_bind.c
+    ${WASM3_DIR}/source/m3_compile.c
+    ${WASM3_DIR}/source/m3_core.c
+    ${WASM3_DIR}/source/m3_env.c
+    ${WASM3_DIR}/source/m3_exec.c
+    ${WASM3_DIR}/source/m3_function.c
+    ${WASM3_DIR}/source/m3_info.c
+    ${WASM3_DIR}/source/m3_module.c
+    ${WASM3_DIR}/source/m3_parse.c
+  )
+endif ()
 
 add_library(kernel_sources INTERFACE)
 target_sources(kernel_sources INTERFACE
@@ -308,6 +407,65 @@ if (WASMOS_KERNEL_BLOBS)
   list(APPEND KERNEL_OBJS ${WASMOS_KERNEL_BLOBS})
 endif ()
 
+# Build the runtime-specific compile command list that is spliced into the
+# kernel.elf custom command below.  CMake expands lists within COMMAND args
+# so COMMAND keywords inside the list become separate COMMAND clauses.
+if (WASMOS_WASM_RUNTIME_WARP)
+  set(WASM_RUNTIME_COMPILE_CMDS
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${KERNEL_DIR}/warp_driver.cpp              -o ${BUILD_DIR}/warp_driver.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${KERNEL_DIR}/warp/shim.cpp                -o ${BUILD_DIR}/warp_shim.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${KERNEL_DIR}/warp/link.cpp                -o ${BUILD_DIR}/warp_link.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${KERNEL_DIR}/warp/cxx_abi.cpp             -o ${BUILD_DIR}/warp_cxx_abi.o
+    COMMAND ${CLANG}              ${CFLAGS_WARP_C}    -c ${KERNEL_DIR}/warp/posix_kernel.c          -o ${BUILD_DIR}/warp_posix.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${KERNEL_DIR}/warp/mem_utils_kernel.cpp    -o ${BUILD_DIR}/warp_mem_utils.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${KERNEL_DIR}/warp/os_api_checker_kernel.cpp -o ${BUILD_DIR}/warp_os_api_checker.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${KERNEL_DIR}/warp/iostream_stubs.cpp      -o ${BUILD_DIR}/warp_iostream_stubs.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -frtti -c ${KERNEL_DIR}/warp/linker_stubs.cpp  -o ${BUILD_DIR}/warp_linker_stubs.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${KERNEL_DIR}/warp/sjlj_unwind.cpp           -o ${BUILD_DIR}/warp_sjlj_unwind.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/WasmModule/WasmModule.cpp  -o ${BUILD_DIR}/warp_WasmModule.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/runtime/Runtime.cpp   -o ${BUILD_DIR}/warp_Runtime.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/runtime/ActiveMemoryManager.cpp -o ${BUILD_DIR}/warp_ActiveMemoryManager.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/runtime/MemoryHelper.cpp -o ${BUILD_DIR}/warp_MemoryHelper.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/common/BinaryModule.cpp  -o ${BUILD_DIR}/warp_BinaryModule.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/common/VbExceptions.cpp  -o ${BUILD_DIR}/warp_VbExceptions.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/common/ExtendableMemory.cpp -o ${BUILD_DIR}/warp_ExtendableMemory.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/utils/VirtualMemoryAllocator.cpp -o ${BUILD_DIR}/warp_VirtualMemoryAllocator.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/compiler/Compiler.cpp            -o ${BUILD_DIR}/warp_Compiler.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/compiler/backend/BackendBase.cpp -o ${BUILD_DIR}/warp_BackendBase.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/compiler/backend/x86_64/x86_64_assembler.cpp    -o ${BUILD_DIR}/warp_x86_64_assembler.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/compiler/backend/x86_64/x86_64_backend.cpp      -o ${BUILD_DIR}/warp_x86_64_backend.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/compiler/backend/x86_64/x86_64_call_dispatch.cpp -o ${BUILD_DIR}/warp_x86_64_call_dispatch.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/compiler/backend/x86_64/x86_64_cc.cpp            -o ${BUILD_DIR}/warp_x86_64_cc.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/compiler/backend/x86_64/x86_64_instruction.cpp   -o ${BUILD_DIR}/warp_x86_64_instruction.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/compiler/backend/x86_64/x86_64_relpatchobj.cpp   -o ${BUILD_DIR}/warp_x86_64_relpatchobj.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/compiler/common/Common.cpp       -o ${BUILD_DIR}/warp_Common.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/compiler/common/CommonRegsPos.cpp -o ${BUILD_DIR}/warp_CommonRegsPos.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/compiler/common/MemWriter.cpp    -o ${BUILD_DIR}/warp_MemWriter.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/compiler/common/ModuleInfo.cpp   -o ${BUILD_DIR}/warp_ModuleInfo.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/compiler/common/Stack.cpp        -o ${BUILD_DIR}/warp_Stack.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/compiler/frontend/BytecodeReader.cpp  -o ${BUILD_DIR}/warp_BytecodeReader.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/compiler/frontend/Frontend.cpp        -o ${BUILD_DIR}/warp_Frontend.o
+    COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/compiler/frontend/ValidationStack.cpp -o ${BUILD_DIR}/warp_ValidationStack.o
+  )
+else ()
+  set(WASM_RUNTIME_COMPILE_CMDS
+    COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_driver.c    -o ${BUILD_DIR}/wasm_driver.o
+    COMMAND ${CLANG} ${CFLAGS_WASM3}  -c ${KERNEL_DIR}/wasm3/probe.c    -o ${BUILD_DIR}/wasm3_probe.o
+    COMMAND ${CLANG} ${CFLAGS_WASM3}  -c ${KERNEL_DIR}/wasm3/link.c     -o ${BUILD_DIR}/wasm3_link.o
+    COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm3/shim.c     -o ${BUILD_DIR}/wasm3_shim.o
+    COMMAND ${CLANG} ${CFLAGS_WASM3}  -c ${WASM3_DIR}/source/m3_code.c    -o ${BUILD_DIR}/wasm3_code.o
+    COMMAND ${CLANG} ${CFLAGS_WASM3}  -c ${WASM3_DIR}/source/m3_bind.c    -o ${BUILD_DIR}/wasm3_bind.o
+    COMMAND ${CLANG} ${CFLAGS_WASM3}  -c ${WASM3_DIR}/source/m3_compile.c -o ${BUILD_DIR}/wasm3_compile.o
+    COMMAND ${CLANG} ${CFLAGS_WASM3}  -c ${WASM3_DIR}/source/m3_core.c    -o ${BUILD_DIR}/wasm3_core.o
+    COMMAND ${CLANG} ${CFLAGS_WASM3}  -c ${WASM3_DIR}/source/m3_env.c     -o ${BUILD_DIR}/wasm3_env.o
+    COMMAND ${CLANG} ${CFLAGS_WASM3}  -c ${WASM3_DIR}/source/m3_exec.c    -o ${BUILD_DIR}/wasm3_exec.o
+    COMMAND ${CLANG} ${CFLAGS_WASM3}  -c ${WASM3_DIR}/source/m3_function.c -o ${BUILD_DIR}/wasm3_function.o
+    COMMAND ${CLANG} ${CFLAGS_WASM3}  -c ${WASM3_DIR}/source/m3_info.c    -o ${BUILD_DIR}/wasm3_info.o
+    COMMAND ${CLANG} ${CFLAGS_WASM3}  -c ${WASM3_DIR}/source/m3_module.c  -o ${BUILD_DIR}/wasm3_module.o
+    COMMAND ${CLANG} ${CFLAGS_WASM3}  -c ${WASM3_DIR}/source/m3_parse.c   -o ${BUILD_DIR}/wasm3_parse.o
+  )
+endif ()
+
 add_custom_command(
   OUTPUT ${BUILD_DIR}/kernel.elf
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/entry.S -o ${BUILD_DIR}/entry.o
@@ -362,23 +520,10 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_app.c -o ${BUILD_DIR}/wasmos_app.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_app_meta.c -o ${BUILD_DIR}/wasmos_app_meta.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/native_driver.c -o ${BUILD_DIR}/native_driver.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_driver.c -o ${BUILD_DIR}/wasm_driver.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_chardev.c -o ${BUILD_DIR}/wasm_chardev.o
-  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${KERNEL_DIR}/wasm3/probe.c -o ${BUILD_DIR}/wasm3_probe.o
-  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${KERNEL_DIR}/wasm3/link.c -o ${BUILD_DIR}/wasm3_link.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm3/shim.c -o ${BUILD_DIR}/wasm3_shim.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/serial.c -o ${BUILD_DIR}/serial.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/framebuffer.c -o ${BUILD_DIR}/framebuffer.o
-  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM3_DIR}/source/m3_code.c -o ${BUILD_DIR}/wasm3_code.o
-  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM3_DIR}/source/m3_bind.c -o ${BUILD_DIR}/wasm3_bind.o
-  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM3_DIR}/source/m3_compile.c -o ${BUILD_DIR}/wasm3_compile.o
-  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM3_DIR}/source/m3_core.c -o ${BUILD_DIR}/wasm3_core.o
-  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM3_DIR}/source/m3_env.c -o ${BUILD_DIR}/wasm3_env.o
-  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM3_DIR}/source/m3_exec.c -o ${BUILD_DIR}/wasm3_exec.o
-  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM3_DIR}/source/m3_function.c -o ${BUILD_DIR}/wasm3_function.o
-  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM3_DIR}/source/m3_info.c -o ${BUILD_DIR}/wasm3_info.o
-  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM3_DIR}/source/m3_module.c -o ${BUILD_DIR}/wasm3_module.o
-  COMMAND ${CLANG} ${CFLAGS_WASM3} -c ${WASM3_DIR}/source/m3_parse.c -o ${BUILD_DIR}/wasm3_parse.o
+  ${WASM_RUNTIME_COMPILE_CMDS}
   COMMAND ${LLD_PATH} ${LDFLAGS_KERNEL} -o ${BUILD_DIR}/kernel.elf ${KERNEL_OBJS} ${KERNEL_LINK_LIBS}
   DEPENDS ${KERNEL_SOURCES} ${KERNEL_DIR}/arch/x86_64/smp_trampoline.S
   ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/include/cpu.h

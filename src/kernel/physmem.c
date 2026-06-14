@@ -46,6 +46,7 @@ typedef struct {
 static pfa_range_t g_ranges[128];
 static uint32_t g_range_count;
 static spinlock_t g_pfa_lock;
+static uint64_t g_initial_total_pages;
 
 extern uint8_t __kernel_start;
 extern uint8_t __kernel_end;
@@ -67,6 +68,7 @@ static void add_range(uint64_t base, uint64_t pages) {
         base += PAGE_SIZE;
         pages -= 1;
     }
+    g_initial_total_pages += pages;
     if (g_range_count > 0) {
         pfa_range_t *prev = &g_ranges[g_range_count - 1];
         uint64_t prev_end = prev->base + prev->pages * PAGE_SIZE;
@@ -400,4 +402,18 @@ void pfa_pin_pages(uint64_t base, uint64_t pages) {
         }
     }
     spinlock_unlock(&g_pfa_lock);
+}
+
+uint64_t pfa_total_bytes(void) {
+    return g_initial_total_pages * PAGE_SIZE;
+}
+
+uint64_t pfa_free_bytes(void) {
+    spinlock_lock(&g_pfa_lock);
+    uint64_t free_pages = 0;
+    for (uint32_t i = 0; i < g_range_count; ++i) {
+        free_pages += g_ranges[i].pages;
+    }
+    spinlock_unlock(&g_pfa_lock);
+    return free_pages * PAGE_SIZE;
 }

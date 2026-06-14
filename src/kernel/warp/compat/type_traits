@@ -1,0 +1,348 @@
+#pragma once
+#include <stddef.h>
+#include <stdint.h>
+/* compat/type_traits — freestanding shadow of <type_traits>
+ *
+ * Provides the subset used by WARP's template metaprogramming:
+ *   ValidateSignatureType  → is_same, is_integral, is_enum
+ *   ImportFunctionV2       → remove_cv, remove_reference, is_reference
+ *   General glue           → enable_if, false_type, true_type, conditional,
+ *                             integral_constant
+ *
+ * All implemented without compiler intrinsics where possible; uses
+ * __is_enum / __is_integral built-ins (available in clang) for the ones
+ * that cannot be expressed in pure C++14. */
+
+namespace std {
+
+// ---------------------------------------------------------------------------
+// integral_constant, true_type, false_type
+// ---------------------------------------------------------------------------
+
+template <typename T, T V>
+struct integral_constant {
+    static constexpr T value = V;
+    using value_type = T;
+    using type       = integral_constant;
+    constexpr operator value_type() const noexcept { return value; }
+    constexpr value_type operator()() const noexcept { return value; }
+};
+
+using true_type  = integral_constant<bool, true>;
+using false_type = integral_constant<bool, false>;
+
+// ---------------------------------------------------------------------------
+// enable_if
+// ---------------------------------------------------------------------------
+
+template <bool Cond, typename T = void> struct enable_if {};
+template <typename T>                   struct enable_if<true, T> { using type = T; };
+
+template <bool Cond, typename T = void>
+using enable_if_t = typename enable_if<Cond, T>::type;
+
+// ---------------------------------------------------------------------------
+// conditional
+// ---------------------------------------------------------------------------
+
+template <bool Cond, typename T, typename F> struct conditional           { using type = T; };
+template <typename T, typename F>            struct conditional<false,T,F> { using type = F; };
+
+template <bool Cond, typename T, typename F>
+using conditional_t = typename conditional<Cond,T,F>::type;
+
+// ---------------------------------------------------------------------------
+// is_same
+// ---------------------------------------------------------------------------
+
+template <typename T, typename U> struct is_same       : false_type {};
+template <typename T>             struct is_same<T, T> : true_type  {};
+
+// ---------------------------------------------------------------------------
+// remove_const / remove_volatile / remove_cv
+// ---------------------------------------------------------------------------
+
+template <typename T> struct remove_const          { using type = T; };
+template <typename T> struct remove_const<const T> { using type = T; };
+
+template <typename T> struct remove_volatile             { using type = T; };
+template <typename T> struct remove_volatile<volatile T> { using type = T; };
+
+template <typename T> struct remove_cv {
+    using type = typename remove_volatile<typename remove_const<T>::type>::type;
+};
+
+template <typename T> using remove_cv_t = typename remove_cv<T>::type;
+
+// ---------------------------------------------------------------------------
+// remove_reference
+// ---------------------------------------------------------------------------
+
+template <typename T> struct remove_reference      { using type = T; };
+template <typename T> struct remove_reference<T &> { using type = T; };
+template <typename T> struct remove_reference<T&&> { using type = T; };
+
+template <typename T>
+using remove_reference_t = typename remove_reference<T>::type;
+
+// remove_cvref (C++20-ish, but WARP uses it in internal headers)
+template <typename T>
+struct remove_cvref { using type = typename remove_cv<typename remove_reference<T>::type>::type; };
+template <typename T> using remove_cvref_t = typename remove_cvref<T>::type;
+
+// ---------------------------------------------------------------------------
+// is_reference
+// ---------------------------------------------------------------------------
+
+template <typename T> struct is_reference      : false_type {};
+template <typename T> struct is_reference<T &> : true_type  {};
+template <typename T> struct is_reference<T&&> : true_type  {};
+
+// ---------------------------------------------------------------------------
+// is_integral  — uses compiler built-in for correctness across all types
+// ---------------------------------------------------------------------------
+
+template <typename T>
+struct is_integral : integral_constant<bool, __is_integral(T)> {};
+
+// ---------------------------------------------------------------------------
+// is_enum  — uses compiler built-in
+// ---------------------------------------------------------------------------
+
+template <typename T>
+struct is_enum : integral_constant<bool, __is_enum(T)> {};
+
+// ---------------------------------------------------------------------------
+// is_pointer
+// ---------------------------------------------------------------------------
+
+template <typename T> struct is_pointer     : false_type {};
+template <typename T> struct is_pointer<T*> : true_type  {};
+template <typename T> struct is_pointer<T* const>    : true_type {};
+template <typename T> struct is_pointer<T* volatile> : true_type {};
+template <typename T> struct is_pointer<T* const volatile> : true_type {};
+
+// ---------------------------------------------------------------------------
+// is_floating_point
+// ---------------------------------------------------------------------------
+
+namespace detail {
+template <typename T> struct is_floating_point_base : false_type {};
+template <> struct is_floating_point_base<float>       : true_type {};
+template <> struct is_floating_point_base<double>      : true_type {};
+template <> struct is_floating_point_base<long double>  : true_type {};
+} // namespace detail
+
+template <typename T>
+struct is_floating_point
+    : detail::is_floating_point_base<typename remove_cv<T>::type> {};
+
+// ---------------------------------------------------------------------------
+// is_arithmetic
+// ---------------------------------------------------------------------------
+
+template <typename T>
+struct is_arithmetic
+    : integral_constant<bool, is_integral<T>::value || is_floating_point<T>::value> {};
+
+// ---------------------------------------------------------------------------
+// is_void
+// ---------------------------------------------------------------------------
+
+namespace detail {
+template <typename T> struct is_void_base : false_type {};
+template <>           struct is_void_base<void> : true_type {};
+} // namespace detail
+
+template <typename T>
+struct is_void : detail::is_void_base<typename remove_cv<T>::type> {};
+
+// ---------------------------------------------------------------------------
+// remove_extent (needed for array decay)
+// ---------------------------------------------------------------------------
+
+template <typename T>          struct remove_extent       { using type = T; };
+template <typename T>          struct remove_extent<T[]>  { using type = T; };
+template <typename T, int N>   struct remove_extent<T[N]> { using type = T; };
+
+// ---------------------------------------------------------------------------
+// decay — strips refs, top-level cv, and decays arrays to pointers
+// ---------------------------------------------------------------------------
+
+template <typename T>
+struct decay {
+    using U = typename remove_reference<T>::type;
+    using type = typename conditional<
+        __is_array(U),
+        typename remove_extent<U>::type *,
+        typename remove_cv<U>::type
+    >::type;
+};
+
+template <typename T> using decay_t = typename decay<T>::type;
+
+// ---------------------------------------------------------------------------
+// index_sequence / make_index_sequence (needed by RegPosArr.hpp)
+// ---------------------------------------------------------------------------
+
+template <size_t... Ints>
+struct index_sequence {
+    using type = index_sequence;
+    static constexpr size_t size() noexcept { return sizeof...(Ints); }
+};
+
+template <size_t N, size_t... Ints>
+struct make_index_sequence_impl : make_index_sequence_impl<N-1, N-1, Ints...> {};
+
+template <size_t... Ints>
+struct make_index_sequence_impl<0, Ints...> { using type = index_sequence<Ints...>; };
+
+template <size_t N>
+using make_index_sequence = typename make_index_sequence_impl<N>::type;
+
+template <typename... Ts>
+using index_sequence_for = make_index_sequence<sizeof...(Ts)>;
+
+// ---------------------------------------------------------------------------
+// add_const / add_volatile / add_cv
+// ---------------------------------------------------------------------------
+
+template <typename T> struct add_const    { using type = const T; };
+template <typename T> struct add_volatile { using type = volatile T; };
+template <typename T> struct add_cv       { using type = const volatile T; };
+
+template <typename T> using add_const_t    = typename add_const<T>::type;
+
+// ---------------------------------------------------------------------------
+// common_type (single-type and two-type; used by make_array)
+// ---------------------------------------------------------------------------
+
+// Simplified: WARP's make_array always passes homogeneous types so
+// common_type<T,T,...> = T is always correct in practice.
+template <typename... T> struct common_type;
+template <typename T>    struct common_type<T>       { using type = decay_t<T>; };
+template <typename T, typename U> struct common_type<T,U> { using type = decay_t<T>; };
+template <typename T, typename U, typename... V>
+struct common_type<T, U, V...> {
+    using type = typename common_type<typename common_type<T,U>::type, V...>::type;
+};
+
+template <typename... T>
+using common_type_t = typename common_type<T...>::type;
+
+// ---------------------------------------------------------------------------
+// underlying_type — for enum underlying types (compiler built-in)
+// ---------------------------------------------------------------------------
+
+template <typename T>
+struct underlying_type { using type = __underlying_type(T); };
+
+template <typename T>
+using underlying_type_t = typename underlying_type<T>::type;
+
+// ---------------------------------------------------------------------------
+// is_signed / is_unsigned
+// ---------------------------------------------------------------------------
+
+template <typename T> struct is_signed   : integral_constant<bool,
+    is_integral<T>::value && (static_cast<T>(-1) < static_cast<T>(0))> {};
+template <typename T> struct is_unsigned : integral_constant<bool,
+    is_integral<T>::value && !is_signed<T>::value> {};
+
+// ---------------------------------------------------------------------------
+// make_unsigned / make_signed
+// ---------------------------------------------------------------------------
+
+template <typename T> struct make_unsigned { using type = T; };
+template <> struct make_unsigned<char>           { using type = unsigned char; };
+template <> struct make_unsigned<signed char>    { using type = unsigned char; };
+template <> struct make_unsigned<unsigned char>  { using type = unsigned char; };
+template <> struct make_unsigned<short>          { using type = unsigned short; };
+template <> struct make_unsigned<unsigned short> { using type = unsigned short; };
+template <> struct make_unsigned<int>            { using type = unsigned int; };
+template <> struct make_unsigned<unsigned int>   { using type = unsigned int; };
+template <> struct make_unsigned<long>           { using type = unsigned long; };
+template <> struct make_unsigned<unsigned long>  { using type = unsigned long; };
+template <> struct make_unsigned<long long>      { using type = unsigned long long; };
+template <> struct make_unsigned<unsigned long long> { using type = unsigned long long; };
+
+template <typename T> using make_unsigned_t = typename make_unsigned<T>::type;
+
+template <typename T> struct make_signed { using type = T; };
+template <> struct make_signed<unsigned char>  { using type = signed char; };
+template <> struct make_signed<unsigned short> { using type = short; };
+template <> struct make_signed<unsigned int>   { using type = int; };
+template <> struct make_signed<unsigned long>  { using type = long; };
+template <> struct make_signed<unsigned long long> { using type = long long; };
+
+template <typename T> using make_signed_t = typename make_signed<T>::type;
+
+// ---------------------------------------------------------------------------
+// is_trivially_copyable — compiler built-in
+// ---------------------------------------------------------------------------
+
+template <typename T>
+struct is_trivially_copyable : integral_constant<bool, __is_trivially_copyable(T)> {};
+
+// ---------------------------------------------------------------------------
+// remove_pointer
+// ---------------------------------------------------------------------------
+
+template <typename T> struct remove_pointer                    { using type = T; };
+template <typename T> struct remove_pointer<T *>               { using type = T; };
+template <typename T> struct remove_pointer<T * const>         { using type = T; };
+template <typename T> struct remove_pointer<T * volatile>      { using type = T; };
+template <typename T> struct remove_pointer<T * const volatile>{ using type = T; };
+
+template <typename T> using remove_pointer_t = typename remove_pointer<T>::type;
+
+// ---------------------------------------------------------------------------
+// is_function — compiler built-in (__is_function not always available;
+// use the standard partial-specialisation trick instead)
+// ---------------------------------------------------------------------------
+
+template <typename T> struct is_function        : false_type {};
+// Specialise for all function types (non-cv, cv, ref-qualified, vararg).
+template <typename R, typename... A>       struct is_function<R(A...)>            : true_type {};
+template <typename R, typename... A>       struct is_function<R(A...) const>      : true_type {};
+template <typename R, typename... A>       struct is_function<R(A...) volatile>   : true_type {};
+template <typename R, typename... A>       struct is_function<R(A...) const volatile> : true_type {};
+template <typename R, typename... A>       struct is_function<R(A..., ...)>       : true_type {};
+
+// ---------------------------------------------------------------------------
+// is_base_of — compiler built-in
+// ---------------------------------------------------------------------------
+
+template <typename Base, typename Derived>
+struct is_base_of : integral_constant<bool, __is_base_of(Base, Derived)> {};
+
+// ---------------------------------------------------------------------------
+// is_constructible / is_convertible — compiler built-ins
+// ---------------------------------------------------------------------------
+
+template <typename T, typename... Args>
+struct is_constructible : integral_constant<bool, __is_constructible(T, Args...)> {};
+
+// is_convertible<From,To>: true if To can be constructed from From (covers
+// lambdas → std::function<R(Args...)> since our std::function takes any F).
+template <typename From, typename To>
+struct is_convertible : integral_constant<bool, __is_constructible(To, From)> {};
+
+// ---------------------------------------------------------------------------
+// add_lvalue_reference / add_rvalue_reference (used by forward)
+// ---------------------------------------------------------------------------
+
+template <typename T> struct add_lvalue_reference      { using type = T &; };
+template <>           struct add_lvalue_reference<void> { using type = void; };
+
+template <typename T> struct add_rvalue_reference      { using type = T&&; };
+template <>           struct add_rvalue_reference<void> { using type = void; };
+
+// ---------------------------------------------------------------------------
+// declval (declaration only — must not be called at runtime)
+// ---------------------------------------------------------------------------
+
+template <typename T>
+typename add_rvalue_reference<T>::type declval() noexcept;
+
+} // namespace std

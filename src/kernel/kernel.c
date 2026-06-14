@@ -12,7 +12,11 @@
 #include "arch/x86_64/smp.h"
 #include "wasmos_app.h"
 #include "wasm_chardev.h"
-#include "wasm3_link.h"
+#if WASMOS_WASM_RUNTIME == 1
+#include "warp/link.h"
+#else
+#include "wasm3/link.h"
+#endif
 #include "framebuffer.h"
 #include "capability.h"
 #include "slab.h"
@@ -183,9 +187,13 @@ kmain(boot_info_t *boot_info)
     g_boot_info = boot_info;
     ipc_init();
     process_init();
+#if WASMOS_WASM_RUNTIME == 1
+    warp_link_init(boot_info);
+    klog_write("[kernel] warp runtime init\n");
+#else
     wasm3_link_init(boot_info);
-
     klog_write("[kernel] wasm3 init on-demand\n");
+#endif
     klog_write("[kernel] boot_info shadow active\n");
 
     if (process_spawn_idle("idle", idle_entry, 0, &idle_pid) != 0) {

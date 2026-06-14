@@ -5,13 +5,13 @@
 #include "serial.h"
 #include "paging.h"
 #include "cpu.h"
-#include "wasm3_shim.h"
+#include "wasm3/shim.h"
 #include "ipc.h"
 #include "timer.h"
 #include "thread.h"
 #include "process_manager.h"
 #include "string.h"
-#include "wasm3_shim.h"
+#include "wasm3/shim.h"
 #include "native_driver.h"
 
 #include "sched.h"
@@ -1244,6 +1244,9 @@ process_spawn_idle_ap(uint32_t cpu_id)
     thread->ctx.cs         = KERNEL_CS_SELECTOR;
     thread->ctx.ss         = KERNEL_DS_SELECTOR;
     thread->ctx.root_table = paging_get_root_table();
+    thread->time_slice_ticks = PROCESS_DEFAULT_SLICE_TICKS;
+    thread->ticks_remaining = thread->time_slice_ticks;
+    thread->ticks_total = 0;
     sched_thread_init(thread, SCHED_PRIO_IDLE);
     thread->cpu_affinity = 1u << cpu_id;
     g_idle_process->thread_count++;

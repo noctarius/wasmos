@@ -5,7 +5,7 @@
 #include "process_manager.h"
 #include "serial.h"
 #include "wasmos_app.h"
-#include "wasm3_probe.h"
+#include "wasm3/probe.h"
 #include "string.h"
 
 static const uint8_t g_skip_wasm_boot = 0;

@@ -1,0 +1,60 @@
+#pragma once
+/* compat/stdexcept — freestanding stub of <stdexcept>
+ *
+ * Provides std::runtime_error (and its ancestors in the hierarchy).
+ * With -fno-exceptions these classes are never thrown; they must exist so
+ * WARP code that constructs or catches them compiles without error.
+ *
+ * The message string is stored as a plain const char * (no heap copy) to
+ * avoid pulling in allocator machinery. */
+
+#include "exception"
+
+namespace std {
+
+// ---------------------------------------------------------------------------
+// logic_error / runtime_error hierarchy (minimal)
+// ---------------------------------------------------------------------------
+
+class logic_error : public exception {
+public:
+    explicit logic_error(const char *msg) noexcept : _msg(msg) {}
+    const char *what() const noexcept override { return _msg ? _msg : "logic_error"; }
+private:
+    const char *_msg;
+};
+
+class runtime_error : public exception {
+public:
+    explicit runtime_error(const char *msg) noexcept : _msg(msg) {}
+    const char *what() const noexcept override { return _msg ? _msg : "runtime_error"; }
+private:
+    const char *_msg;
+};
+
+class invalid_argument : public logic_error {
+public:
+    explicit invalid_argument(const char *msg) noexcept : logic_error(msg) {}
+};
+
+class out_of_range : public logic_error {
+public:
+    explicit out_of_range(const char *msg) noexcept : logic_error(msg) {}
+};
+
+class overflow_error : public runtime_error {
+public:
+    explicit overflow_error(const char *msg) noexcept : runtime_error(msg) {}
+};
+
+class underflow_error : public runtime_error {
+public:
+    explicit underflow_error(const char *msg) noexcept : runtime_error(msg) {}
+};
+
+class range_error : public runtime_error {
+public:
+    explicit range_error(const char *msg) noexcept : runtime_error(msg) {}
+};
+
+} // namespace std

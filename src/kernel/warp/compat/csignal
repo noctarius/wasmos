@@ -1,0 +1,13 @@
+#pragma once
+/* compat/csignal — freestanding shadow of <csignal>
+ * Pulls in the compat sys/signal.h and re-exports identifiers into
+ * namespace std where WARP or its dependencies reference them that way. */
+
+#include "sys/signal.h"
+
+namespace std {
+    using ::sig_atomic_t;
+    using ::sigset_t;
+    using ::siginfo_t;
+    using ::sigaction;
+} // namespace std

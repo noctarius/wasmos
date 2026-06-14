@@ -1,0 +1,49 @@
+#pragma once
+/* Use compiler type macros (__UINT8_TYPE__ etc.) to avoid duplicate
+ * specializations when uint8_t == unsigned char or size_t == uint64_t. */
+
+namespace std {
+
+template<class T> struct numeric_limits {
+    static constexpr T max() noexcept { return T(); }
+    static constexpr T min() noexcept { return T(); }
+    static constexpr bool is_integer = false;
+};
+
+#define WASMOS_NLIM_UINT(T, MAX) \
+template<> struct numeric_limits<T> { \
+    static constexpr T max() noexcept { return (T)(MAX); } \
+    static constexpr T min() noexcept { return (T)0; } \
+    static constexpr bool is_integer = true; \
+};
+#define WASMOS_NLIM_SINT(T, MAX) \
+template<> struct numeric_limits<T> { \
+    static constexpr T max() noexcept { return (T)(MAX); } \
+    static constexpr T min() noexcept { return (T)(-(MAX)-1); } \
+    static constexpr bool is_integer = true; \
+};
+
+WASMOS_NLIM_UINT(__UINT8_TYPE__,  0xFFu)
+WASMOS_NLIM_UINT(__UINT16_TYPE__, 0xFFFFu)
+WASMOS_NLIM_UINT(__UINT32_TYPE__, 0xFFFFFFFFu)
+WASMOS_NLIM_UINT(__UINT64_TYPE__, 0xFFFFFFFFFFFFFFFFull)
+WASMOS_NLIM_SINT(__INT8_TYPE__,   0x7F)
+WASMOS_NLIM_SINT(__INT16_TYPE__,  0x7FFF)
+WASMOS_NLIM_SINT(__INT32_TYPE__,  0x7FFFFFFF)
+WASMOS_NLIM_SINT(__INT64_TYPE__,  0x7FFFFFFFFFFFFFFFll)
+
+#undef WASMOS_NLIM_UINT
+#undef WASMOS_NLIM_SINT
+
+template<> struct numeric_limits<float> {
+    static constexpr float max() noexcept { return __FLT_MAX__; }
+    static constexpr float min() noexcept { return __FLT_MIN__; }
+    static constexpr bool is_integer = false;
+};
+template<> struct numeric_limits<double> {
+    static constexpr double max() noexcept { return __DBL_MAX__; }
+    static constexpr double min() noexcept { return __DBL_MIN__; }
+    static constexpr bool is_integer = false;
+};
+
+} // namespace std

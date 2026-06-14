@@ -85,6 +85,23 @@ config WASMOS_PM_LIST_ARRAY_CHUNK_CAP
     default 16
     depends on WASMOS_PM_LIST_ARRAY_CHUNK
 
+choice
+    prompt "WASM runtime backend"
+    default WASMOS_WASM_RUNTIME_WASM3
+
+config WASMOS_WASM_RUNTIME_WASM3
+    bool "wasm3 (interpreter)"
+    help
+      Use the wasm3 tree-walking interpreter. Pure C, minimal footprint.
+
+config WASMOS_WASM_RUNTIME_WARP
+    bool "WARP (JIT compiler)"
+    help
+      Use the WARP single-pass JIT compiler. C++14, near-native execution speed.
+      Requires the freestanding C++ ABI shim in the kernel (warp_shim.cpp).
+
+endchoice
+
 config KERNEL_TARGET_TRIPLE
     string "Kernel target triple"
     default "x86_64-elf"

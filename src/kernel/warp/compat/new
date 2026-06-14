@@ -1,0 +1,38 @@
+#pragma once
+/* compat/new — freestanding shadow of <new>
+ * Provides placement new and a stub std::bad_alloc.  The kernel overrides
+ * global operator new/delete in warp/shim.cpp; placement new must still be
+ * declared here so WARP's in-place constructors compile correctly. */
+
+#include <stddef.h>
+
+/* Placement new — must live in the global namespace, not inside a header
+ * guard that redefines it.  Guard with a macro so double-inclusion is safe. */
+#ifndef WASMOS_COMPAT_NEW_PLACEMENT
+#define WASMOS_COMPAT_NEW_PLACEMENT
+inline void *operator new  (size_t, void *p) noexcept { return p; }
+inline void *operator new[](size_t, void *p) noexcept { return p; }
+inline void  operator delete  (void *, void *) noexcept {}
+inline void  operator delete[](void *, void *) noexcept {}
+#endif /* WASMOS_COMPAT_NEW_PLACEMENT */
+
+namespace std {
+
+/* Minimal bad_alloc — no RTTI, no exception unwinding; what() returns a
+ * static string and the class is only present so WARP code that catches
+ * std::bad_alloc will compile.  In practice the kernel halt loop in
+ * operator new makes it unreachable. */
+class bad_alloc {
+public:
+    bad_alloc() noexcept {}
+    bad_alloc(const bad_alloc &) noexcept {}
+    bad_alloc &operator=(const bad_alloc &) noexcept { return *this; }
+    virtual ~bad_alloc() noexcept {}
+    virtual const char *what() const noexcept { return "bad_alloc"; }
+};
+
+/* nothrow_t / nothrow — used by placement-new overloads in hosted headers. */
+struct nothrow_t { explicit nothrow_t() = default; };
+extern const nothrow_t nothrow;
+
+} // namespace std

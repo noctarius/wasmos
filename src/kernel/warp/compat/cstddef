@@ -1,0 +1,13 @@
+#pragma once
+/* compat/cstddef — freestanding shadow of <cstddef>
+ * Pulls in the freestanding C header and re-exports into namespace std. */
+
+#include <stddef.h>
+
+namespace std {
+    using ::size_t;
+    using ::ptrdiff_t;
+
+    /* nullptr_t is a compiler built-in in C++11 and later; expose it in std. */
+    using nullptr_t = decltype(nullptr);
+} // namespace std

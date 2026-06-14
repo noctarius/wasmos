@@ -11,7 +11,7 @@
  * IPC slot state mirrors wasm3/link.c; both maintain independent copies until
  * a follow-on refactor extracts the shared state into a common module.
  *
- * TODO: implement the remaining ~80 imports listed at the bottom of this file.
+ * All wasm3/link.c imports are now implemented here.
  */
 
 #include <cstdint>
@@ -29,11 +29,14 @@ extern "C" {
 #include "futex.h"
 #include "klog.h"
 #include "io.h"
+#include "irq.h"
 #include "serial.h"
 #include "capability.h"
 #include "timer.h"
 #include "policy.h"
 #include "paging.h"
+#include "framebuffer.h"
+#include "wasm_driver.h"
 #include "wasmos_driver_abi.h"
 #include "arch/x86_64/smp.h"
 }
@@ -982,6 +985,624 @@ warp_env_unset(uint32_t name_off, uint32_t name_len, void *ctx_)
     return 0;
 }
 
+// ---------------------------------------------------------------------------
+// Capability helpers
+// ---------------------------------------------------------------------------
+
+static int warp_require_dma_capability(uint32_t context_id)
+    { return policy_authorize(context_id, POLICY_ACTION_DMA_BUFFER, 0); }
+static int warp_require_mmio_capability(uint32_t context_id)
+    { return policy_authorize(context_id, POLICY_ACTION_MMIO_MAP, 0); }
+static int warp_require_irq_capability(uint32_t context_id)
+    { return policy_authorize(context_id, POLICY_ACTION_IRQ_CONTROL, 0); }
+
+// ---------------------------------------------------------------------------
+// Shmem map tracking — mirrors g_wasm_shmem_maps in wasm3/link.c
+// ---------------------------------------------------------------------------
+
+#define WARP_SHMEM_MAP_SLOTS (PROCESS_MAX_COUNT * 32)
+
+struct WarpShmemLinearMap {
+    uint32_t pid;
+    uint32_t shmem_id;
+    uint32_t offset;
+    uint32_t size;
+    uint8_t  valid;
+};
+
+static WarpShmemLinearMap g_warp_shmem_maps[WARP_SHMEM_MAP_SLOTS];
+
+static void warp_shmem_map_track(uint32_t pid, uint32_t id, uint32_t offset, uint32_t size)
+{
+    WarpShmemLinearMap *empty = nullptr;
+    for (uint32_t i = 0; i < WARP_SHMEM_MAP_SLOTS; ++i) {
+        WarpShmemLinearMap *s = &g_warp_shmem_maps[i];
+        if (s->valid && s->pid == pid && s->shmem_id == id && s->offset == offset) {
+            s->size = size; return;
+        }
+        if (!empty && !s->valid) empty = s;
+    }
+    if (empty) { empty->pid = pid; empty->shmem_id = id;
+                 empty->offset = offset; empty->size = size; empty->valid = 1; }
+}
+
+static void warp_shmem_map_untrack(uint32_t pid, uint32_t id)
+{
+    for (uint32_t i = 0; i < WARP_SHMEM_MAP_SLOTS; ++i)
+        if (g_warp_shmem_maps[i].valid && g_warp_shmem_maps[i].pid == pid
+            && g_warp_shmem_maps[i].shmem_id == id)
+            g_warp_shmem_maps[i].valid = 0;
+}
+
+static uint8_t warp_shmem_map_overlaps(uint32_t pid, uint32_t offset, uint32_t size)
+{
+    uint64_t a0 = offset, a1 = (uint64_t)offset + size;
+    for (uint32_t i = 0; i < WARP_SHMEM_MAP_SLOTS; ++i) {
+        const WarpShmemLinearMap *s = &g_warp_shmem_maps[i];
+        if (!s->valid || s->pid != pid || s->size == 0) continue;
+        uint64_t b0 = s->offset, b1 = b0 + s->size;
+        if (a0 < b1 && b0 < a1) return 1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// fs_buffer_borrow / fs_buffer_release
+// ---------------------------------------------------------------------------
+
+static uint32_t
+warp_fs_buffer_borrow(uint32_t source_endpoint, uint32_t flags, void *ctx_)
+{
+    (void)ctx_;
+    uint32_t context_id = 0, source_owner = 0;
+    uint32_t pid = process_current_pid();
+    process_t *proc = process_get(pid);
+    if (flags == 0 || (flags & ~0x3u) != 0) return (uint32_t)IPC_ERR_INVALID;
+    if (warp_current_context_id(&context_id) != 0) return (uint32_t)IPC_ERR_PERM;
+    if (!proc || (!warp_process_name_eq(proc->name, "fs-manager")
+                  && !capability_has(context_id, CAP_DMA_BUFFER)))
+        return (uint32_t)IPC_ERR_PERM;
+    if (ipc_endpoint_owner((uint32_t)source_endpoint, &source_owner) != IPC_OK
+        || source_owner == 0 || source_owner == context_id)
+        return (uint32_t)IPC_ERR_PERM;
+    return (uint32_t)process_manager_buffer_borrow_context(
+        (uint32_t)PM_BUFFER_KIND_FILESYSTEM, context_id, source_owner, flags);
+}
+
+static uint32_t
+warp_fs_buffer_release(void *ctx_)
+{
+    (void)ctx_;
+    uint32_t context_id = 0;
+    uint32_t pid = process_current_pid();
+    process_t *proc = process_get(pid);
+    if (warp_current_context_id(&context_id) != 0) return (uint32_t)IPC_ERR_PERM;
+    if (!proc || (!warp_process_name_eq(proc->name, "fs-manager")
+                  && !capability_has(context_id, CAP_DMA_BUFFER)))
+        return (uint32_t)IPC_ERR_PERM;
+    return (uint32_t)process_manager_buffer_release_context(
+        (uint32_t)PM_BUFFER_KIND_FILESYSTEM, context_id);
+}
+
+// ---------------------------------------------------------------------------
+// sched_cpu_stats
+// ---------------------------------------------------------------------------
+
+static uint32_t
+warp_sched_cpu_stats(uint32_t cpu_id, uint32_t out_off, void *ctx_)
+{
+    auto *ctx = warp_call_ctx(ctx_);
+    typedef struct { uint32_t ready_count; uint32_t running_pid;
+                     uint32_t steal_count; uint32_t dispatch_count;
+                     uint32_t last_pid; } cpu_stats_t;
+    if (cpu_id >= g_cpu_count) return (uint32_t)-1;
+    uint8_t *raw = warp_mem(ctx, out_off, sizeof(cpu_stats_t));
+    if (!raw) return (uint32_t)-1;
+    cpu_sched_t *cs = &g_cpus[cpu_id].sched;
+    uint32_t ready = 0;
+    for (int p = 0; p < SCHED_PRIO_MAX; p++) ready += cs->thread_count[p];
+    cpu_stats_t st;
+    st.ready_count    = ready;
+    st.running_pid    = g_cpus[cpu_id].current_process
+                        ? g_cpus[cpu_id].current_process->pid : 0;
+    st.steal_count    = g_cpus[cpu_id].steal_count;
+    st.dispatch_count = g_cpus[cpu_id].dispatch_count;
+    st.last_pid       = g_cpus[cpu_id].last_dispatched_pid;
+    __builtin_memcpy(raw, &st, sizeof(st));
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// proc_info / proc_info_ex / proc_info_stats
+// ---------------------------------------------------------------------------
+
+static uint32_t
+warp_proc_info(uint32_t index, uint32_t buf_off, uint32_t buf_len, void *ctx_)
+{
+    auto *ctx = warp_call_ctx(ctx_);
+    if ((int32_t)buf_len <= 0) return (uint32_t)-1;
+    uint8_t *buf = warp_mem(ctx, buf_off, buf_len);
+    if (!buf) return (uint32_t)-1;
+    uint32_t pid = 0; const char *name = nullptr;
+    if (process_info_at(index, &pid, &name) != 0) return (uint32_t)-1;
+    uint32_t nlen = 0;
+    if (name) while (name[nlen] && nlen + 1u < buf_len) nlen++;
+    __builtin_memcpy(buf, name ? name : "", nlen);
+    buf[nlen] = '\0';
+    return pid;
+}
+
+static uint32_t
+warp_proc_info_ex(uint32_t index, uint32_t buf_off, uint32_t buf_len,
+                  uint32_t parent_off, void *ctx_)
+{
+    auto *ctx = warp_call_ctx(ctx_);
+    if ((int32_t)buf_len <= 0) return (uint32_t)-1;
+    uint8_t *buf = warp_mem(ctx, buf_off, buf_len);
+    uint8_t *par = warp_mem(ctx, parent_off, sizeof(uint32_t));
+    if (!buf || !par) return (uint32_t)-1;
+    uint32_t pid = 0, parent_pid = 0; const char *name = nullptr;
+    if (process_info_at_ex(index, &pid, &parent_pid, &name) != 0) return (uint32_t)-1;
+    __builtin_memcpy(par, &parent_pid, sizeof(parent_pid));
+    uint32_t nlen = 0;
+    if (name) while (name[nlen] && nlen + 1u < buf_len) nlen++;
+    __builtin_memcpy(buf, name ? name : "", nlen);
+    buf[nlen] = '\0';
+    return pid;
+}
+
+static uint32_t
+warp_proc_info_stats(uint32_t index, uint32_t buf_off, uint32_t buf_len,
+                     uint32_t parent_off, uint32_t stats_off, void *ctx_)
+{
+    typedef struct {
+        uint32_t state; uint32_t block_reason; uint32_t is_wasm;
+        uint32_t thread_count; uint32_t live_thread_count;
+        uint32_t current_tid; uint32_t context_id;
+        uint64_t cpu_ticks; uint64_t vm_total_bytes;
+        uint64_t thread_kstack_total_bytes; uint64_t heap_committed_bytes;
+        uint64_t rss_est_bytes; uint32_t last_cpu;
+    } wasm_proc_stats_t;
+    auto *ctx = warp_call_ctx(ctx_);
+    if ((int32_t)buf_len <= 0) return (uint32_t)-1;
+    uint8_t *buf  = warp_mem(ctx, buf_off,    buf_len);
+    uint8_t *par  = warp_mem(ctx, parent_off, sizeof(uint32_t));
+    uint8_t *stp  = warp_mem(ctx, stats_off,  sizeof(wasm_proc_stats_t));
+    if (!buf || !par || !stp) return (uint32_t)-1;
+    uint32_t pid = 0, parent_pid = 0; const char *name = nullptr;
+    process_stats_t stats = {};
+    __builtin_memset(&stats, 0, sizeof(stats));
+    if (process_info_at_stats(index, &pid, &parent_pid, &name, &stats) != 0)
+        return (uint32_t)-1;
+    __builtin_memcpy(par, &parent_pid, sizeof(parent_pid));
+    wasm_proc_stats_t out = {};
+    out.state                    = stats.state;
+    out.block_reason             = stats.block_reason;
+    out.is_wasm                  = stats.is_wasm;
+    out.thread_count             = stats.thread_count;
+    out.live_thread_count        = stats.live_thread_count;
+    out.current_tid              = stats.current_tid;
+    out.context_id               = stats.context_id;
+    out.cpu_ticks                = stats.cpu_ticks;
+    out.vm_total_bytes           = stats.vm_total_bytes;
+    out.thread_kstack_total_bytes= stats.thread_kstack_total_bytes;
+    out.heap_committed_bytes     = stats.heap_committed_bytes;
+    out.rss_est_bytes            = stats.rss_est_bytes;
+    out.last_cpu                 = stats.last_cpu;
+    __builtin_memcpy(stp, &out, sizeof(out));
+    uint32_t nlen = 0;
+    if (name) while (name[nlen] && nlen + 1u < buf_len) nlen++;
+    __builtin_memcpy(buf, name ? name : "", nlen);
+    buf[nlen] = '\0';
+    return pid;
+}
+
+// ---------------------------------------------------------------------------
+// Thread operations
+// ---------------------------------------------------------------------------
+
+static uint32_t
+warp_thread_create(uint32_t entry_off, uint32_t arg0, uint32_t arg1,
+                   uint32_t flags, void *ctx_)
+{
+    auto *ctx = warp_call_ctx(ctx_);
+    if ((int32_t)entry_off <= 0) return (uint32_t)-1;
+    const uint8_t *name_raw = warp_mem(ctx, entry_off, 1);
+    if (!name_raw) return (uint32_t)-1;
+    /* Scan for NUL within 64 bytes */
+    uint32_t mem_size = ctx->module->getLinearMemorySizeInPages() << 16;
+    if (entry_off >= mem_size) return (uint32_t)-1;
+    uint32_t avail = mem_size - entry_off;
+    if (avail > 64u) avail = 64u;
+    uint8_t *nm = warp_mem(ctx, entry_off, avail);
+    if (!nm) return (uint32_t)-1;
+    uint8_t ok = 0;
+    for (uint32_t i = 0; i < avail; ++i) if (nm[i] == '\0') { ok = 1; break; }
+    if (!ok) return (uint32_t)-1;
+    const char *entry_name = reinterpret_cast<const char *>(nm);
+    uint32_t argc = (flags & 0x1u) ? 2u : 0u;
+    uint32_t argv[2] = { arg0, arg1 };
+    uint32_t tid = 0;
+    if (wasm_driver_spawn_vm_thread(ctx->pid, entry_name, argc, argv, &tid) != 0)
+        return (uint32_t)-1;
+    return tid;
+}
+
+static uint32_t warp_thread_yield(void *ctx_)
+    { (void)ctx_; process_yield(PROCESS_RUN_YIELDED); return 0; }
+
+static uint32_t
+warp_thread_exit(uint32_t status, void *ctx_)
+{
+    (void)ctx_;
+    process_t *proc = process_get(process_current_pid());
+    if (!proc) return (uint32_t)-1;
+    process_set_exit_status(proc, (int32_t)status);
+    process_yield(PROCESS_RUN_THREAD_EXITED);
+    return 0;
+}
+
+static uint32_t
+warp_thread_join(uint32_t tid, void *ctx_)
+{
+    (void)ctx_;
+    process_t *proc = process_get(process_current_pid());
+    if (!proc) return (uint32_t)-1;
+    int32_t exit_status = 0;
+    int rc = process_thread_join(proc, tid, &exit_status);
+    if (rc > 0) { process_yield(PROCESS_RUN_BLOCKED); return 0; }
+    if (rc < 0) return (uint32_t)-1;
+    return (uint32_t)exit_status;
+}
+
+static uint32_t
+warp_thread_detach(uint32_t tid, void *ctx_)
+{
+    (void)ctx_;
+    process_t *proc = process_get(process_current_pid());
+    if (!proc) return (uint32_t)-1;
+    return (uint32_t)process_thread_detach(proc, tid);
+}
+
+// ---------------------------------------------------------------------------
+// Shared memory
+// ---------------------------------------------------------------------------
+
+static uint32_t
+warp_shmem_create(uint32_t pages, uint32_t flags, void *ctx_)
+{
+    (void)ctx_;
+    if ((int32_t)pages <= 0) return (uint32_t)-1;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0
+        || warp_require_dma_capability(context_id) != 0) return (uint32_t)-1;
+    uint32_t id = 0; uint64_t phys = 0;
+    uint32_t cflags = flags ? flags : (MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE);
+    if (mm_shared_create(context_id, (uint64_t)pages, cflags, &id, &phys) != 0)
+        return (uint32_t)-1;
+    (void)phys;
+    return id;
+}
+
+static uint32_t
+warp_shmem_grant(uint32_t id, uint32_t target_pid, void *ctx_)
+{
+    (void)ctx_;
+    if ((int32_t)id <= 0 || (int32_t)target_pid <= 0) return (uint32_t)-1;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0
+        || warp_require_dma_capability(context_id) != 0) return (uint32_t)-1;
+    process_t *tgt = process_get(target_pid);
+    if (!tgt || tgt->context_id == 0) return (uint32_t)-1;
+    return (uint32_t)mm_shared_grant(context_id, id, tgt->context_id);
+}
+
+static uint32_t
+warp_shmem_revoke(uint32_t id, uint32_t target_pid, void *ctx_)
+{
+    (void)ctx_;
+    if ((int32_t)id <= 0 || (int32_t)target_pid <= 0) return (uint32_t)-1;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0
+        || warp_require_dma_capability(context_id) != 0) return (uint32_t)-1;
+    process_t *tgt = process_get(target_pid);
+    if (!tgt || tgt->context_id == 0) return (uint32_t)-1;
+    return (uint32_t)mm_shared_revoke(context_id, id, tgt->context_id);
+}
+
+static uint32_t
+warp_shmem_map(uint32_t id, uint32_t wasm_off, uint32_t size, void *ctx_)
+{
+    auto *ctx = warp_call_ctx(ctx_);
+    if ((int32_t)id <= 0 || (int32_t)size <= 0 || (size & 0xFFF)) return (uint32_t)-1;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0
+        || warp_require_dma_capability(context_id) != 0) return (uint32_t)-1;
+    uint64_t phys_base = 0; uint64_t shared_pages = 0;
+    if (mm_shared_get_phys(context_id, id, &phys_base, &shared_pages) != 0
+        || shared_pages == 0) return (uint32_t)-1;
+    if ((uint64_t)size < shared_pages * 0x1000ULL) return (uint32_t)-1;
+    uint8_t *lmem = warp_mem(ctx, wasm_off, size);
+    if (!lmem || ((uint64_t)lmem & 0xFFF)) return (uint32_t)-1;
+    uint64_t virt = (uint64_t)(uintptr_t)lmem;
+    if (mm_context_map_physical(context_id, virt, phys_base,
+                                shared_pages * 0x1000ULL,
+                                MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
+                                MEM_REGION_FLAG_USER) != 0) return (uint32_t)-1;
+    if (mm_shared_retain(context_id, id) != 0) return (uint32_t)-1;
+    warp_shmem_map_track(ctx->pid, id, wasm_off, size);
+    return 0;
+}
+
+static uint32_t
+warp_shmem_map_auto(uint32_t id, uint32_t size, void *ctx_)
+{
+    auto *ctx = warp_call_ctx(ctx_);
+    if ((int32_t)id <= 0 || (int32_t)size <= 0 || (size & 0xFFF)) return (uint32_t)-1;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0
+        || warp_require_dma_capability(context_id) != 0) return (uint32_t)-1;
+    uint64_t phys_base = 0; uint64_t shared_pages = 0;
+    if (mm_shared_get_phys(context_id, id, &phys_base, &shared_pages) != 0
+        || shared_pages == 0) return (uint32_t)-1;
+    if ((uint64_t)size < shared_pages * 0x1000ULL) return (uint32_t)-1;
+    /* Scan linear memory for a free, page-aligned, non-overlapping window */
+    uint32_t mem_pages = ctx->module->getLinearMemorySizeInPages();
+    uint64_t mem_size  = (uint64_t)mem_pages << 16;
+    const uint64_t scan_min = 0x200000ULL;
+    uint32_t found_off = 0; uint8_t found = 0;
+    for (uint64_t off = (scan_min + 0xFFFULL) & ~0xFFFULL;
+         off + size <= mem_size; off += 0x1000ULL) {
+        uint32_t off32 = (uint32_t)off;
+        if (warp_shmem_map_overlaps(ctx->pid, off32, size)) continue;
+        uint8_t *p = warp_mem(ctx, off32, size);
+        if (!p || ((uint64_t)(uintptr_t)p & 0xFFF)) continue;
+        found_off = off32; found = 1; break;
+    }
+    if (!found) return (uint32_t)-1;
+    uint8_t *lmem = warp_mem(ctx, found_off, size);
+    if (!lmem) return (uint32_t)-1;
+    uint64_t virt = (uint64_t)(uintptr_t)lmem;
+    if (mm_context_map_physical(context_id, virt, phys_base,
+                                shared_pages * 0x1000ULL,
+                                MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
+                                MEM_REGION_FLAG_USER) != 0) return (uint32_t)-1;
+    if (mm_shared_retain(context_id, id) != 0) return (uint32_t)-1;
+    warp_shmem_map_track(ctx->pid, id, found_off, size);
+    return found_off;
+}
+
+static uint32_t
+warp_shmem_unmap(uint32_t id, void *ctx_)
+{
+    (void)ctx_;
+    if ((int32_t)id <= 0) return (uint32_t)-1;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0) return (uint32_t)-1;
+    warp_shmem_map_untrack(process_current_pid(), id);
+    return (uint32_t)mm_shared_release(context_id, id);
+}
+
+static uint32_t
+warp_shmem_flush(uint32_t id, uint32_t wasm_off, uint32_t size, void *ctx_)
+{
+    auto *ctx = warp_call_ctx(ctx_);
+    if ((int32_t)id <= 0 || (int32_t)size <= 0) return (uint32_t)-1;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0
+        || warp_require_dma_capability(context_id) != 0) return (uint32_t)-1;
+    uint64_t phys_base = 0; uint64_t shared_pages = 0;
+    if (mm_shared_get_phys(context_id, id, &phys_base, &shared_pages) != 0
+        || shared_pages == 0 || phys_base == 0) return (uint32_t)-1;
+    if ((uint64_t)size > shared_pages * 0x1000ULL) return (uint32_t)-1;
+    const uint8_t *src = warp_mem(ctx, wasm_off, size);
+    if (!src) return (uint32_t)-1;
+    __builtin_memcpy((void *)(uintptr_t)(phys_base | KERNEL_HIGHER_HALF_BASE), src, size);
+    return 0;
+}
+
+static uint32_t
+warp_shmem_refresh(uint32_t id, uint32_t wasm_off, uint32_t size, void *ctx_)
+{
+    auto *ctx = warp_call_ctx(ctx_);
+    if ((int32_t)id <= 0 || (int32_t)size <= 0) return (uint32_t)-1;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0
+        || warp_require_dma_capability(context_id) != 0) return (uint32_t)-1;
+    uint64_t phys_base = 0; uint64_t shared_pages = 0;
+    if (mm_shared_get_phys(context_id, id, &phys_base, &shared_pages) != 0
+        || shared_pages == 0 || phys_base == 0) return (uint32_t)-1;
+    if ((uint64_t)size > shared_pages * 0x1000ULL) return (uint32_t)-1;
+    uint8_t *dst = warp_mem(ctx, wasm_off, size);
+    if (!dst) return (uint32_t)-1;
+    __builtin_memcpy(dst, (const void *)(uintptr_t)(phys_base | KERNEL_HIGHER_HALF_BASE), size);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// IRQ routing
+// ---------------------------------------------------------------------------
+
+static uint32_t
+warp_irq_route_ipc(uint32_t irq_line, uint32_t endpoint, void *ctx_)
+{
+    (void)ctx_;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0
+        || warp_require_irq_capability(context_id) != 0) return (uint32_t)-1;
+    return (uint32_t)irq_register(context_id, irq_line, endpoint);
+}
+
+static uint32_t
+warp_irq_ack(uint32_t irq_line, void *ctx_)
+{
+    (void)ctx_;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0) return (uint32_t)-1;
+    return (uint32_t)irq_ack(context_id, irq_line);
+}
+
+static uint32_t
+warp_irq_unroute(uint32_t irq_line, void *ctx_)
+{
+    (void)ctx_;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0
+        || warp_require_irq_capability(context_id) != 0) return (uint32_t)-1;
+    return (uint32_t)irq_unregister(context_id, irq_line);
+}
+
+// ---------------------------------------------------------------------------
+// Serial / input
+// ---------------------------------------------------------------------------
+
+static uint32_t warp_serial_register(uint32_t endpoint, void *ctx_)
+    { (void)ctx_; return (uint32_t)serial_register_remote_driver(endpoint); }
+
+static uint32_t warp_input_push(uint32_t ch, void *ctx_)
+    { (void)ctx_; serial_input_push((uint8_t)(ch & 0xFF)); return 0; }
+
+static uint32_t
+warp_input_read(void *ctx_)
+{
+    (void)ctx_;
+    uint8_t ch = 0;
+    return serial_input_read(&ch) ? (uint32_t)ch : (uint32_t)-1;
+}
+
+// ---------------------------------------------------------------------------
+// Framebuffer
+// ---------------------------------------------------------------------------
+
+static uint32_t warp_framebuffer_pixel(uint32_t x, uint32_t y, uint32_t color, void *ctx_)
+    { (void)ctx_; return (uint32_t)framebuffer_put_pixel(x, y, color); }
+
+static uint32_t
+warp_framebuffer_info(uint32_t out_off, uint32_t len, void *ctx_)
+{
+    auto *ctx = warp_call_ctx(ctx_);
+    if ((int32_t)len < (int32_t)sizeof(framebuffer_info_t)) return (uint32_t)-1;
+    framebuffer_info_t info = {};
+    if (framebuffer_get_info(&info) != 0) return (uint32_t)-1;
+    uint8_t *out = warp_mem(ctx, out_off, sizeof(framebuffer_info_t));
+    if (!out) return (uint32_t)-1;
+    __builtin_memcpy(out, &info, sizeof(info));
+    return 0;
+}
+
+static uint32_t
+warp_framebuffer_map(uint32_t wasm_off, uint32_t size, void *ctx_)
+{
+    auto *ctx = warp_call_ctx(ctx_);
+    if ((int32_t)size <= 0 || (size & 0xFFF)) return (uint32_t)-1;
+    framebuffer_info_t info = {};
+    if (framebuffer_get_info(&info) != 0) return (uint32_t)-1;
+    if (size < info.framebuffer_size) return (uint32_t)-1;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0
+        || warp_require_mmio_capability(context_id) != 0) return (uint32_t)-1;
+    uint8_t *lmem = warp_mem(ctx, wasm_off, size);
+    if (!lmem || ((uint64_t)(uintptr_t)lmem & 0xFFF)) return (uint32_t)-1;
+    uint64_t virt = (uint64_t)(uintptr_t)lmem;
+    uint64_t phys = info.framebuffer_base;
+    uint64_t pages = (uint64_t)size / 0x1000ULL;
+    for (uint64_t i = 0; i < pages; ++i) {
+        paging_unmap_4k_in_root(mm_context_get(context_id)->root_table,
+                                virt + i * 0x1000ULL);
+        if (paging_map_4k_in_root(mm_context_get(context_id)->root_table,
+                                  virt + i * 0x1000ULL,
+                                  phys + i * 0x1000ULL,
+                                  MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
+                                  MEM_REGION_FLAG_USER) < 0) return (uint32_t)-1;
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Boot config
+// ---------------------------------------------------------------------------
+
+static uint32_t
+warp_boot_config_size(void *ctx_)
+{
+    (void)ctx_;
+    if (!g_warp_boot_info || !g_warp_boot_info->boot_config
+        || g_warp_boot_info->boot_config_size == 0) return (uint32_t)-1;
+    return (uint32_t)g_warp_boot_info->boot_config_size;
+}
+
+static uint32_t
+warp_boot_config_copy(uint32_t buf_off, uint32_t len, uint32_t offset, void *ctx_)
+{
+    auto *ctx = warp_call_ctx(ctx_);
+    if (!g_warp_boot_info || !g_warp_boot_info->boot_config) return (uint32_t)-1;
+    uint32_t total = (uint32_t)g_warp_boot_info->boot_config_size;
+    if (offset > total || len > total - offset) return (uint32_t)-1;
+    if (len == 0) return 0;
+    uint8_t *dst = warp_mem(ctx, buf_off, len);
+    if (!dst) return (uint32_t)-1;
+    const uint8_t *src = static_cast<const uint8_t *>(g_warp_boot_info->boot_config);
+    __builtin_memcpy(dst, src + offset, len);
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// initfs_find_path
+// ---------------------------------------------------------------------------
+
+static uint32_t
+warp_initfs_find_path(uint32_t path_off, uint32_t path_len, void *ctx_)
+{
+    auto *ctx = warp_call_ctx(ctx_);
+    if ((int32_t)path_len <= 0 || path_len >= 112u) return (uint32_t)-1;
+    const uint8_t *raw = warp_mem(ctx, path_off, path_len);
+    if (!raw) return (uint32_t)-1;
+    char local_path[112];
+    __builtin_memcpy(local_path, raw, path_len);
+    local_path[path_len] = '\0';
+    uint32_t ri = 0;
+    while (local_path[ri] == '/') ri++;
+    if ((local_path[ri]=='i'||local_path[ri]=='I') &&
+        (local_path[ri+1]=='n'||local_path[ri+1]=='N') &&
+        (local_path[ri+2]=='i'||local_path[ri+2]=='I') &&
+        (local_path[ri+3]=='t'||local_path[ri+3]=='T') &&
+        local_path[ri+4]=='/')
+        ri += 5;
+    if (local_path[ri] == '\0') return (uint32_t)-1;
+    const wasmos_initfs_header_t *hdr = nullptr; const uint8_t *base = nullptr;
+    if (warp_initfs_header_get(&hdr, &base) != 0) return (uint32_t)-1;
+    for (uint32_t i = 0; i < hdr->entry_count; ++i) {
+        wasmos_initfs_entry_t e;
+        if (warp_initfs_entry_at(i, &e) != 0) continue;
+        if (__builtin_strcmp(e.path, &local_path[ri]) == 0) return i;
+        const char *bn = e.path;
+        for (uint32_t j = 0; e.path[j]; ++j)
+            if (e.path[j] == '/') bn = &e.path[j+1];
+        if (__builtin_strcmp(bn, &local_path[ri]) == 0) return i;
+    }
+    return (uint32_t)-1;
+}
+
+// ---------------------------------------------------------------------------
+// Early log
+// ---------------------------------------------------------------------------
+
+static uint32_t warp_early_log_size(void *ctx_)
+    { (void)ctx_; return (uint32_t)serial_early_log_size(); }
+
+static uint32_t
+warp_early_log_copy(uint32_t buf_off, uint32_t len, uint32_t offset, void *ctx_)
+{
+    auto *ctx = warp_call_ctx(ctx_);
+    uint32_t total = (uint32_t)serial_early_log_size();
+    if (offset > total || len > total - offset) return (uint32_t)-1;
+    if (len == 0) return 0;
+    uint8_t *dst = warp_mem(ctx, buf_off, len);
+    if (!dst) return (uint32_t)-1;
+    serial_early_log_copy(dst, offset, len);
+    return 0;
+}
+
 static uint32_t warp_debug_mark(uint32_t /*tag*/, void *ctx_)
     { (void)ctx_; return 0; }
 static uint32_t warp_kmap_dump(void *ctx_)
@@ -1095,25 +1716,54 @@ warp_wasmos_symbols(void)
         STATIC_LINK("wasmos", "dma_unmap_borrow",     warp_dma_unmap_borrow),
         // Physical memory mapping
         STATIC_LINK("wasmos", "phys_map",             warp_phys_map),
-        // TODO: proc_{info,info_ex,info_stats}
-        // TODO: fs_buffer_{borrow,release,size,copy,write}, fs_endpoint
-        // TODO: buffer_{borrow,release}, dma_{map,sync,unmap}_borrow
-        // TODO: proc_{count,info,info_ex,info_stats}
-        // TODO: sched_{ticks,ready_count,cpu_count,cpu_stats}
-        // TODO: thread_{create,yield,exit,join,detach}
-        // TODO: shmem_{create,grant,revoke,map,map_auto,flush,refresh,unmap}
-        // TODO: irq_{route_ipc,ack,unroute}, serial_register
-        // TODO: input_{push,read}, framebuffer_{info,map,pixel}, phys_map
-        // TODO: block_buffer_{phys,copy,write}
-        // TODO: boot_{module_name,config_size,config_copy}
-        // TODO: initfs_{entry_count,entry_name,entry_size,entry_copy,find_path}
+        // Process info
+        STATIC_LINK("wasmos", "proc_info",            warp_proc_info),
+        STATIC_LINK("wasmos", "proc_info_ex",         warp_proc_info_ex),
+        STATIC_LINK("wasmos", "proc_info_stats",      warp_proc_info_stats),
+        // FS buffer
+        STATIC_LINK("wasmos", "fs_buffer_borrow",     warp_fs_buffer_borrow),
+        STATIC_LINK("wasmos", "fs_buffer_release",    warp_fs_buffer_release),
+        // Scheduler
+        STATIC_LINK("wasmos", "sched_cpu_stats",      warp_sched_cpu_stats),
+        // Threads
+        STATIC_LINK("wasmos", "thread_create",        warp_thread_create),
+        STATIC_LINK("wasmos", "thread_yield",         warp_thread_yield),
+        STATIC_LINK("wasmos", "thread_exit",          warp_thread_exit),
+        STATIC_LINK("wasmos", "thread_join",          warp_thread_join),
+        STATIC_LINK("wasmos", "thread_detach",        warp_thread_detach),
+        // Shared memory
+        STATIC_LINK("wasmos", "shmem_create",         warp_shmem_create),
+        STATIC_LINK("wasmos", "shmem_grant",          warp_shmem_grant),
+        STATIC_LINK("wasmos", "shmem_revoke",         warp_shmem_revoke),
+        STATIC_LINK("wasmos", "shmem_map",            warp_shmem_map),
+        STATIC_LINK("wasmos", "shmem_map_auto",       warp_shmem_map_auto),
+        STATIC_LINK("wasmos", "shmem_flush",          warp_shmem_flush),
+        STATIC_LINK("wasmos", "shmem_refresh",        warp_shmem_refresh),
+        STATIC_LINK("wasmos", "shmem_unmap",          warp_shmem_unmap),
+        // IRQ
+        STATIC_LINK("wasmos", "irq_route_ipc",        warp_irq_route_ipc),
+        STATIC_LINK("wasmos", "irq_ack",              warp_irq_ack),
+        STATIC_LINK("wasmos", "irq_unroute",          warp_irq_unroute),
+        // Serial / input
+        STATIC_LINK("wasmos", "serial_register",      warp_serial_register),
+        STATIC_LINK("wasmos", "input_push",           warp_input_push),
+        STATIC_LINK("wasmos", "input_read",           warp_input_read),
+        // Framebuffer
+        STATIC_LINK("wasmos", "framebuffer_info",     warp_framebuffer_info),
+        STATIC_LINK("wasmos", "framebuffer_map",      warp_framebuffer_map),
+        STATIC_LINK("wasmos", "framebuffer_pixel",    warp_framebuffer_pixel),
+        // Boot config
+        STATIC_LINK("wasmos", "boot_config_size",     warp_boot_config_size),
+        STATIC_LINK("wasmos", "boot_config_copy",     warp_boot_config_copy),
+        // initfs
+        STATIC_LINK("wasmos", "initfs_find_path",     warp_initfs_find_path),
+        // Early log
+        STATIC_LINK("wasmos", "early_log_size",       warp_early_log_size),
+        STATIC_LINK("wasmos", "early_log_copy",       warp_early_log_copy),
+        // Environment
         STATIC_LINK("wasmos", "env_get",              warp_env_get),
         STATIC_LINK("wasmos", "env_set",              warp_env_set),
         STATIC_LINK("wasmos", "env_unset",            warp_env_unset),
-        // TODO: early_log_{size,copy}
-        // TODO: io_{in8,in16,in32,out8,out16,out32,wait}
-        // TODO: system_{halt,reboot}, acpi_rsdp_info
-        // TODO: kmap_dump, kmap_dump_all, debug_mark, sync_user_read, console_read
     };
     return vb::Span<vb::NativeSymbol const>(syms, sizeof(syms) / sizeof(syms[0]));
 }

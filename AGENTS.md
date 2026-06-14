@@ -4,7 +4,10 @@ This repository uses Codex CLI to assist with development. Follow these conventi
 
 ## Scope
 - You are operating inside `/Volumes/git/wasmos`.
-- The project is a minimal x86_64 UEFI boot + kernel scaffold intended to host a WASM runtime (wasm3).
+- The project is a minimal x86_64 UEFI boot + kernel scaffold intended to host a WASM runtime.
+  Two backends are available: **wasm3** (default interpreter, `libs/wasm3`), **WARP**
+  (single-pass JIT compiler, `libs/warp`, enabled with `-DWASMOS_WASM_RUNTIME_WARP=ON`), and
+  **stb** (`libs/stb`).
 
 ## Always Do
 - Read `README.md` and `docs/ARCHITECTURE.md` at the start of a new task.
@@ -30,7 +33,7 @@ This repository uses Codex CLI to assist with development. Follow these conventi
 - Do not introduce large frameworks or heavy dependencies.
 - Do not add extra documentation files unless explicitly asked.
 - Do not break the boot flow or kernel entry contract.
-- NEVER modify code in `libs/wasm3` or in any other dependency imported via git subtree.
+- NEVER modify code in `libs/wasm3` or `libs/warp` or in any other dependency imported via git subtree.
 
 ## Code Style
 - Keep C/ASM code minimal and explicit.

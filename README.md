@@ -16,8 +16,14 @@
 <p align="center"><strong>Small boot path. Small kernel. Large mascot and agent energy.</strong></p>
 
 WASMOS is a minimal x86_64 UEFI OS playground with a small microkernel core
-and a WASM-first user-space stack (`wasm3`), plus optional native drivers for
-hardware paths that benefit from native execution.
+and a WASM-first user-space stack, plus optional native drivers for hardware
+paths that benefit from native execution.
+
+Two WASM runtime backends are available (select at build time):
+- **wasm3** (default) — tree-walking interpreter, pure C, minimal footprint.
+- **WARP** — single-pass JIT compiler (BMW AG, Apache-2.0), near-native
+  execution speed on x86_64, selected with
+  `-DWASMOS_WASM_RUNTIME_WARP=ON`.
 
 It is designed for experimentation, not production use.
 
@@ -196,10 +202,27 @@ Key policy/runtime notes:
 - `docs/TASKS.md`: active and planned work
 - `AGENTS.md`: contributor/agent workflow and repository rules
 
+## WASM Runtime Backends
+
+Two backends are available, selected at CMake configure time:
+
+| Backend         | Flag                            | Character                                           |
+|-----------------|---------------------------------|-----------------------------------------------------|
+| wasm3 (default) | *(none)*                        | Tree-walking interpreter, pure C, minimal footprint |
+| WARP            | `-DWASMOS_WASM_RUNTIME_WARP=ON` | Single-pass x86_64 JIT, near-native speed           |
+
+The default is wasm3.
+
+To build and run with WARP:
+```sh
+cmake -S . -B build -DWASMOS_WASM_RUNTIME_WARP=ON
+cmake --build build --target run-qemu-test
+```
+
 ## Runtime Model (Brief)
-- Runtime host: `wasm3`
 - Process manager loads WASMOS-APP payloads
 - Payloads can be WASM apps/services or native driver payloads
+- Each process gets its own isolated runtime instance (interpreter or JIT module)
 
 For the complete ABI/runtime contract and subsystem details, use the
 architecture docs under `docs/architecture/`.

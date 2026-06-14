@@ -1,15 +1,25 @@
 ## Runtime Hosting and WASMOS-APP Format
 
 This document describes how WASMOS loads, instantiates, and runs code: the
-wasm3 runtime integration, the WASMOS-APP binary container format, the
-`make_wasmos_app` packaging tool, and the language-shim ABI that lets C, Rust,
-Go, Zig, and AssemblyScript programs share a single kernel-facing entry point.
+WASM runtime integration (wasm3 or WARP), the WASMOS-APP binary container
+format, the `make_wasmos_app` packaging tool, and the language-shim ABI that
+lets C, Rust, Go, Zig, and AssemblyScript programs share a single
+kernel-facing entry point.
+
+Two WASM runtime backends are available, selected at CMake configure time:
+
+| Backend             | CMake flag                      | Character                                           |
+|---------------------|---------------------------------|-----------------------------------------------------|
+| **wasm3** (default) | *(none)*                        | Tree-walking interpreter; pure C; minimal footprint |
+| **WARP**            | `-DWASMOS_WASM_RUNTIME_WARP=ON` | Single-pass x86_64 JIT compiler; near-native speed  |
+
+Both backends implement the same `wasm_driver_t` API and pass `run-qemu-test`.
 
 ---
 
 ### wasm3 Runtime Integration
 
-The only supported in-tree runtime is wasm3. The kernel hosts it directly in
+The default runtime is wasm3. The kernel hosts it directly in
 `src/kernel/wasm_driver.c` and `src/kernel/wasm3_shim.c`. There is no shared
 runtime state between processes; every process that runs WASM gets its own
 `IM3Environment`, `IM3Runtime`, and `IM3Module`.
@@ -385,10 +395,72 @@ overridden by runtime FAT rules.
    not recognize.
 
 3. **No shared runtime state.** Runtime instances are process-local. There is
-   no global wasm3 environment, no cross-process module sharing.
+   no global environment or cross-process module sharing regardless of backend.
 
-4. **Preemption guarded around all wasm3 calls.** Timer IRQs cannot interrupt
-   wasm3 interpreter state transitions.
+4. **Preemption guarded around runtime calls.** Timer IRQs cannot interrupt
+   wasm3 interpreter or WARP JIT state transitions.
 
 5. **Native payloads require privilege.** `FLAG_NATIVE` without `FLAG_DRIVER`
    or `FLAG_SERVICE` is a parse error; the container is rejected before spawn.
+
+---
+
+### WARP JIT Runtime Integration
+
+WARP (WebAssembly Resource-Efficient Processor, Apache-2.0 / BMW AG) is a
+single-pass x86_64 JIT compiler that compiles WASM bytecode to native machine
+code before first execution.  It is enabled with `-DWASMOS_WASM_RUNTIME_WARP=ON`
+and lives in `libs/warp/` (git subtree).
+
+#### Kernel porting layer
+
+WARP is a C++14 hosted library.  The kernel provides a freestanding porting
+layer in `src/kernel/warp/`:
+
+| File                   | Purpose                                                                                                          |
+|------------------------|------------------------------------------------------------------------------------------------------------------|
+| `compat/`              | 30+ freestanding C++14 standard-library headers (type_traits, tuple, array, mutex, atomic, exception, …)         |
+| `cxx_abi.cpp`          | Exception ABI: `__cxa_throw` longjmps to a per-CPU `__builtin_setjmp` checkpoint — no Dwarf/SJLJ unwinder needed |
+| `link.cpp`             | ~50 `wasmos.*` V1 host-call wrappers (IPC, FS buffers, block DMA, initfs, I/O ports, ACPI, scheduler, …)         |
+| `shim.cpp`             | Two-tier kernel allocator (slab ≤ 112 bytes, page allocator for larger blocks), `operator new/delete`            |
+| `mem_utils_kernel.cpp` | `vb::MemUtils` + `ExecutableMemory` backed by `pfa_alloc_pages` — no `<iostream>` or pthreads                    |
+| `posix_kernel.c`       | `mmap`/`mprotect`/`munmap` → `pfa_alloc_pages` + higher-half mapping                                             |
+| `linker_stubs.cpp`     | `malloc`, `memchr`, wasm3 symbol stubs, RTTI vtables                                                             |
+
+`src/kernel/warp_driver.cpp` implements the full `wasm_driver_t` API using
+`vb::WasmModule` as the backing runtime.
+
+#### Exception boundary
+
+WARP throws C++ exceptions internally.  These are contained within the
+`warp_driver` layer via a per-CPU `__builtin_setjmp` checkpoint:
+
+```c
+WarpExceptionCheckpoint *ckpt = warp_exception_get_checkpoint();
+ckpt->active = 1;
+if (__builtin_setjmp(ckpt->jbuf)) {
+    /* WARP threw — log and return error */
+}
+/* WARP API call */
+ckpt->active = 0;
+```
+
+`__cxa_throw` checks `ckpt->active` and calls `__builtin_longjmp` if set.  No
+exception ever propagates into C kernel code.
+
+#### Memory model
+
+WARP's global allocator is backed by the two-tier slab + page-allocator.  JIT
+output pages are allocated below 512 MB (the kernel's higher-half identity
+mapping window) so they are accessible at `phys | 0xFFFFFFFF80000000` and are
+already mapped RWX by the initial page tables.
+
+#### Host-call convention
+
+Host functions follow WARP's V1 import convention — `ReturnType fn(Args..., void *ctx)` — where `ctx` is the `WarpCallContext*` that carries the `vb::WasmModule` pointer and calling PID.  Memory pointer arguments are raw i32 WASM offsets translated via `ctx->module->getLinearMemoryRegion(offset, size)`.
+
+#### Known gaps
+
+- `wasmos.console_read` is not implemented; the CLI traps on stdin reads (boot still succeeds).
+- ~30 `wasmos.*` host-call TODOs remain in `src/kernel/warp/link.cpp` (shmem, IRQ routing, additional thread/sched ops).
+- Multi-threaded WASM (`wasm_driver_spawn_vm_thread`) is not yet functional under WARP.

@@ -889,6 +889,99 @@ warp_phys_map(uint32_t phys_lo, uint32_t phys_hi, uint32_t size, uint32_t wasm_o
 // Misc stubs: debug_mark, kmap_dump, scheduler extras
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Environment variables (kenv) — mirrors the static table in wasm3/link.c
+// ---------------------------------------------------------------------------
+
+#define WARP_KENV_MAX_ENTRIES 64
+#define WARP_KENV_KEY_MAX     33
+#define WARP_KENV_VAL_MAX     129
+
+struct WarpKenvEntry {
+    uint8_t in_use;
+    char    key[WARP_KENV_KEY_MAX];
+    char    value[WARP_KENV_VAL_MAX];
+};
+
+static WarpKenvEntry g_warp_kenv[WARP_KENV_MAX_ENTRIES];
+
+static int warp_kenv_find(const char *key) {
+    for (int i = 0; i < WARP_KENV_MAX_ENTRIES; i++) {
+        if (g_warp_kenv[i].in_use && __builtin_strcmp(g_warp_kenv[i].key, key) == 0)
+            return i;
+    }
+    return -1;
+}
+
+static uint32_t
+warp_env_get(uint32_t name_off, uint32_t name_len, uint32_t buf_off, uint32_t buf_len, void *ctx_)
+{
+    auto *ctx = warp_call_ctx(ctx_);
+    if ((int32_t)name_len <= 0 || (int32_t)buf_len <= 0) return (uint32_t)-1;
+    if (name_len >= WARP_KENV_KEY_MAX) return (uint32_t)-1;
+    const uint8_t *name = warp_mem(ctx, name_off, name_len);
+    uint8_t *buf = warp_mem(ctx, buf_off, buf_len);
+    if (!name || !buf) return (uint32_t)-1;
+    char local_name[WARP_KENV_KEY_MAX];
+    __builtin_memcpy(local_name, name, name_len);
+    local_name[name_len] = '\0';
+    int idx = warp_kenv_find(local_name);
+    if (idx < 0) return (uint32_t)-1;
+    uint32_t val_len = 0;
+    while (g_warp_kenv[idx].value[val_len]) val_len++;
+    uint32_t write_len = val_len < buf_len - 1u ? val_len : buf_len - 1u;
+    __builtin_memcpy(buf, g_warp_kenv[idx].value, write_len);
+    buf[write_len] = '\0';
+    return write_len;
+}
+
+static uint32_t
+warp_env_set(uint32_t name_off, uint32_t name_len, uint32_t val_off, uint32_t val_len, void *ctx_)
+{
+    auto *ctx = warp_call_ctx(ctx_);
+    if ((int32_t)name_len <= 0 || name_len >= WARP_KENV_KEY_MAX) return (uint32_t)-1;
+    if ((int32_t)val_len < 0 || val_len >= WARP_KENV_VAL_MAX) return (uint32_t)-1;
+    const uint8_t *name = warp_mem(ctx, name_off, name_len);
+    if (!name) return (uint32_t)-1;
+    char local_name[WARP_KENV_KEY_MAX];
+    __builtin_memcpy(local_name, name, name_len);
+    local_name[name_len] = '\0';
+    char local_val[WARP_KENV_VAL_MAX];
+    local_val[0] = '\0';
+    if (val_len > 0) {
+        const uint8_t *val = warp_mem(ctx, val_off, val_len);
+        if (!val) return (uint32_t)-1;
+        __builtin_memcpy(local_val, val, val_len);
+        local_val[val_len] = '\0';
+    }
+    int idx = warp_kenv_find(local_name);
+    if (idx < 0) {
+        for (int i = 0; i < WARP_KENV_MAX_ENTRIES; i++) {
+            if (!g_warp_kenv[i].in_use) { idx = i; break; }
+        }
+        if (idx < 0) return (uint32_t)-1;
+        g_warp_kenv[idx].in_use = 1;
+        __builtin_memcpy(g_warp_kenv[idx].key, local_name, name_len + 1u);
+    }
+    __builtin_memcpy(g_warp_kenv[idx].value, local_val, val_len + 1u);
+    return 0;
+}
+
+static uint32_t
+warp_env_unset(uint32_t name_off, uint32_t name_len, void *ctx_)
+{
+    auto *ctx = warp_call_ctx(ctx_);
+    if ((int32_t)name_len <= 0 || name_len >= WARP_KENV_KEY_MAX) return 0;
+    const uint8_t *name = warp_mem(ctx, name_off, name_len);
+    if (!name) return 0;
+    char local_name[WARP_KENV_KEY_MAX];
+    __builtin_memcpy(local_name, name, name_len);
+    local_name[name_len] = '\0';
+    int idx = warp_kenv_find(local_name);
+    if (idx >= 0) g_warp_kenv[idx].in_use = 0;
+    return 0;
+}
+
 static uint32_t warp_debug_mark(uint32_t /*tag*/, void *ctx_)
     { (void)ctx_; return 0; }
 static uint32_t warp_kmap_dump(void *ctx_)
@@ -1014,7 +1107,10 @@ warp_wasmos_symbols(void)
         // TODO: block_buffer_{phys,copy,write}
         // TODO: boot_{module_name,config_size,config_copy}
         // TODO: initfs_{entry_count,entry_name,entry_size,entry_copy,find_path}
-        // TODO: early_log_{size,copy}, env_{get,set,unset}
+        STATIC_LINK("wasmos", "env_get",              warp_env_get),
+        STATIC_LINK("wasmos", "env_set",              warp_env_set),
+        STATIC_LINK("wasmos", "env_unset",            warp_env_unset),
+        // TODO: early_log_{size,copy}
         // TODO: io_{in8,in16,in32,out8,out16,out32,wait}
         // TODO: system_{halt,reboot}, acpi_rsdp_info
         // TODO: kmap_dump, kmap_dump_all, debug_mark, sync_user_read, console_read

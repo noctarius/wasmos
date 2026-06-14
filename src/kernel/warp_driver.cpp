@@ -17,6 +17,7 @@ extern "C" {
 #include "wasm_driver.h"
 #include "wasm_chardev.h"
 #include "klog.h"
+#include "serial.h"
 #include "process.h"
 #include "thread.h"
 #include "spinlock.h"
@@ -63,6 +64,12 @@ extern "C" WarpExceptionCheckpoint *warp_exception_get_checkpoint(void);
 // Helpers
 // ---------------------------------------------------------------------------
 
+/* Stack fence for WARP's ACTIVE_STACK_OVERFLOW_CHECK signed jle.
+ * Kernel RSP is ~0xFFFFFFFF8... (signed ~-2GB).
+ * 0xFFFFFFFF00000000 (signed ~-4GB) is always < kernel RSP, so jle never fires. */
+static const uint8_t *const k_stack_fence =
+    reinterpret_cast<const uint8_t *>(0xFFFFFFFF00000000ULL);
+
 static inline vb::WasmModule *
 module_of(wasm_driver_t *d) noexcept
 {
@@ -78,10 +85,19 @@ public:
         return *this;
     }
     KernelLogger &operator<<(const vb::Span<char const> &msg) override {
-        if (msg.data() && msg.size() > 0) klog_write(msg.data());
+        if (msg.data() && msg.size() > 0) {
+            /* Span may not be null-terminated; copy to a stack buffer. */
+            char buf[128];
+            size_t n = msg.size() < 127 ? msg.size() : 127;
+            __builtin_memcpy(buf, msg.data(), n);
+            buf[n] = '\0';
+            klog_write(buf);
+        }
         return *this;
     }
-    KernelLogger &operator<<(uint32_t const) override { return *this; }
+    KernelLogger &operator<<(uint32_t const v) override {
+        serial_write_hex64(v); return *this;
+    }
 };
 static KernelLogger g_logger;
 } // namespace
@@ -131,6 +147,37 @@ thread_slot_free(warp_driver_thread_slot_t *slot)
     spinlock_unlock(&g_thread_slots_lock);
 }
 
+static int
+warp_driver_start_module(vb::WasmModule *mod)
+{
+    WarpExceptionCheckpoint *ckpt = warp_exception_get_checkpoint();
+    ckpt->active = 1;
+    if (__builtin_setjmp(ckpt->jbuf) != 0) {
+        klog_write("[warp-driver] exception during start\n");
+        ckpt->active = 0;
+        return -1;
+    }
+    mod->start(k_stack_fence);
+    ckpt->active = 0;
+    return 0;
+}
+
+static int
+warp_driver_ensure_started(wasm_driver_t *driver)
+{
+    if (!driver || !driver->active || !driver->wasm_module) {
+        return -1;
+    }
+    if (driver->started) {
+        return 0;
+    }
+    if (warp_driver_start_module(module_of(driver)) != 0) {
+        return -1;
+    }
+    driver->started = 1;
+    return 0;
+}
+
 // ---------------------------------------------------------------------------
 // Call helper — invokes an exported function with 0-4 i32 args
 // ---------------------------------------------------------------------------
@@ -147,11 +194,11 @@ call_export_mod(vb::WasmModule *mod, const char *name,
         return -1;
     }
     switch (argc) {
-    case 0: mod->callExportedFunctionWithName<1>(nullptr, name); break;
-    case 1: mod->callExportedFunctionWithName<1>(nullptr, name, argv[0]); break;
-    case 2: mod->callExportedFunctionWithName<1>(nullptr, name, argv[0], argv[1]); break;
-    case 3: mod->callExportedFunctionWithName<1>(nullptr, name, argv[0], argv[1], argv[2]); break;
-    default:mod->callExportedFunctionWithName<1>(nullptr, name, argv[0], argv[1], argv[2], argv[3]); break;
+    case 0: mod->callExportedFunctionWithName<1>(k_stack_fence, name); break;
+    case 1: mod->callExportedFunctionWithName<1>(k_stack_fence, name, argv[0]); break;
+    case 2: mod->callExportedFunctionWithName<1>(k_stack_fence, name, argv[0], argv[1]); break;
+    case 3: mod->callExportedFunctionWithName<1>(k_stack_fence, name, argv[0], argv[1], argv[2]); break;
+    default:mod->callExportedFunctionWithName<1>(k_stack_fence, name, argv[0], argv[1], argv[2], argv[3]); break;
     }
     ckpt->active = 0;
     return 0;
@@ -191,10 +238,13 @@ wasm_driver_start(wasm_driver_t *driver,
     driver->wasm_module      = nullptr;
     driver->owner_context_id = owner_context_id;
     driver->active           = 0;
+    driver->started          = 0;
     spinlock_init(&driver->lock);
 
     process_t *owner = process_find_by_context(owner_context_id);
     driver->owner_pid = owner ? owner->pid : process_current_pid();
+
+    klog_write("[warp-driver] start: "); klog_write(manifest->name ? manifest->name : "?"); klog_write("\n");
 
     warp_heap_configure(driver->owner_pid, manifest->heap_size,
                         2ULL * 1024ULL * 1024ULL * 1024ULL);
@@ -203,6 +253,11 @@ wasm_driver_start(wasm_driver_t *driver,
 
     /* Allocate and compile the WASM module; catch any WARP exceptions. */
     vb::WasmModule *mod = nullptr;
+    void *warp_ctx = warp_context_for_pid(driver->owner_pid);
+    if (!warp_ctx) {
+        warp_runtime_leave(prev);
+        return -1;
+    }
     {
         WarpExceptionCheckpoint *ckpt = warp_exception_get_checkpoint();
         ckpt->active = 1;
@@ -213,9 +268,11 @@ wasm_driver_start(wasm_driver_t *driver,
             warp_runtime_leave(prev);
             return -1;
         }
-        mod = new vb::WasmModule(g_logger);
+        klog_write("[warp-driver] compiling...\n");
+        mod = new vb::WasmModule(UINT64_MAX, g_logger, false, warp_ctx, 10U);
         vb::Span<uint8_t const> bc(manifest->module_bytes, manifest->module_size);
         mod->initFromBytecode(bc, warp_wasmos_symbols(), true);
+        klog_write("[warp-driver] compiled ok\n");
         ckpt->active = 0;
     }
 
@@ -244,6 +301,7 @@ wasm_driver_stop(wasm_driver_t *driver)
     warp_heap_release(driver->owner_pid);
     warp_runtime_leave(prev);
     driver->active = 0;
+    driver->started = 0;
 }
 
 int
@@ -260,13 +318,10 @@ wasm_driver_call_entry(wasm_driver_t *driver)
     if (!driver || !driver->active || !driver->wasm_module) return -1;
     spinlock_lock(&driver->lock);
     uint32_t prev = warp_runtime_enter(driver->owner_pid);
-    /* start() runs the WASM start section; exceptions are caught. */
-    {
-        WarpExceptionCheckpoint *ckpt = warp_exception_get_checkpoint();
-        ckpt->active = 1;
-        if (__builtin_setjmp(ckpt->jbuf) == 0)
-            module_of(driver)->start(nullptr);
-        ckpt->active = 0;
+    if (warp_driver_ensure_started(driver) != 0) {
+        warp_runtime_leave(prev);
+        spinlock_unlock(&driver->lock);
+        return -1;
     }
     int rc = call_export_mod(module_of(driver),
                          driver->manifest.entry_export,
@@ -284,6 +339,11 @@ wasm_driver_call(wasm_driver_t *driver, const char *name,
     if (!driver || !driver->active || !driver->wasm_module) return -1;
     spinlock_lock(&driver->lock);
     uint32_t prev = warp_runtime_enter(driver->owner_pid);
+    if (warp_driver_ensure_started(driver) != 0) {
+        warp_runtime_leave(prev);
+        spinlock_unlock(&driver->lock);
+        return -1;
+    }
     int rc = call_export_mod(module_of(driver), name, argc, argv);
     warp_runtime_leave(prev);
     spinlock_unlock(&driver->lock);
@@ -296,6 +356,10 @@ wasm_driver_call_unlocked(wasm_driver_t *driver, const char *name,
 {
     if (!driver || !driver->active || !driver->wasm_module) return -1;
     uint32_t prev = warp_runtime_enter(driver->owner_pid);
+    if (warp_driver_ensure_started(driver) != 0) {
+        warp_runtime_leave(prev);
+        return -1;
+    }
     int rc = call_export_mod(module_of(driver), name, argc, argv);
     warp_runtime_leave(prev);
     return rc;
@@ -314,16 +378,28 @@ warp_vm_thread_entry(process_t *process, uint32_t tid, void *arg)
 
     vb::WasmModule *mod = nullptr;
     int rc = -1;
+    void *warp_ctx = warp_context_for_pid(slot->owner_pid);
+    if (!warp_ctx) {
+        warp_runtime_leave(prev);
+        process_set_exit_status(process, -1);
+        thread_slot_free(slot);
+        process_yield(PROCESS_RUN_THREAD_EXITED);
+        __builtin_unreachable();
+    }
 
     WarpExceptionCheckpoint *ckpt = warp_exception_get_checkpoint();
     ckpt->active = 1;
     if (__builtin_setjmp(ckpt->jbuf) == 0) {
-        mod = new vb::WasmModule(g_logger);
+        mod = new vb::WasmModule(UINT64_MAX, g_logger, false, warp_ctx, 10U);
         vb::Span<uint8_t const> bc(slot->module_bytes, slot->module_size);
         mod->initFromBytecode(bc, warp_wasmos_symbols(), true);
         warp_bind_module(mod, slot->owner_pid);
         ckpt->active = 0;
-        rc = call_export_mod(mod, slot->export_name, slot->argc, slot->argv);
+        if (warp_driver_start_module(mod) != 0) {
+            rc = -1;
+        } else {
+            rc = call_export_mod(mod, slot->export_name, slot->argc, slot->argv);
+        }
     } else {
         klog_write("[warp-driver] vm thread: module init failed\n");
     }

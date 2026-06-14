@@ -29,6 +29,7 @@ extern "C" {
 #include "futex.h"
 #include "klog.h"
 #include "io.h"
+#include "serial.h"
 #include "capability.h"
 #include "timer.h"
 #include "policy.h"
@@ -333,6 +334,20 @@ warp_ipc_last_field(uint32_t field, void *ctx_)
 // ---------------------------------------------------------------------------
 // Host call wrappers — console
 // ---------------------------------------------------------------------------
+
+static uint32_t
+warp_console_read(uint32_t buf_offset, uint32_t len, void *ctx_)
+{
+    auto *ctx = warp_call_ctx(ctx_);
+    if ((int32_t)len <= 0) return (uint32_t)-1;
+    uint8_t *buf = warp_mem(ctx, buf_offset, 1);
+    if (!buf) return (uint32_t)-1;
+    uint8_t ch = 0;
+    int rc = serial_read_char(&ch);
+    if (rc <= 0) return (uint32_t)rc;
+    *buf = ch;
+    return 1;
+}
 
 static uint32_t
 warp_console_write(uint32_t buf_offset, uint32_t len, void *ctx_)
@@ -921,6 +936,7 @@ warp_wasmos_symbols(void)
         STATIC_LINK("wasmos", "ipc_try_recv",         warp_ipc_drain),       // legacy alias
         STATIC_LINK("wasmos", "ipc_notify",           warp_ipc_notify),
         STATIC_LINK("wasmos", "ipc_last_field",       warp_ipc_last_field),
+        STATIC_LINK("wasmos", "console_read",         warp_console_read),
         STATIC_LINK("wasmos", "console_write",        warp_console_write),
         STATIC_LINK("wasmos", "proc_exit",            warp_proc_exit),
         STATIC_LINK("wasmos", "proc_notify_ready",    warp_proc_notify_ready),

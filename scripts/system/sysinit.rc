@@ -12,5 +12,14 @@ if -f /boot/system/services/fontsvc.wap then
 endif
 
 spawn /boot/system/services/gfxcomp.wap
+wait-svc gfx
+
+if -f /boot/apps/menu_bar.wap then
+    spawn /boot/apps/menu_bar.wap
+endif
+
+if -f /boot/apps/gfx_smoke.wap then
+    spawn /boot/apps/gfx_smoke.wap
+endif
 
 start /boot/system/services/cli.wap

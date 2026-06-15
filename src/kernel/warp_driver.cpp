@@ -268,11 +268,9 @@ wasm_driver_start(wasm_driver_t *driver,
             warp_runtime_leave(prev);
             return -1;
         }
-        klog_write("[warp-driver] compiling...\n");
         mod = new vb::WasmModule(UINT64_MAX, g_logger, false, warp_ctx, 10U);
         vb::Span<uint8_t const> bc(manifest->module_bytes, manifest->module_size);
         mod->initFromBytecode(bc, warp_wasmos_symbols(), true);
-        klog_write("[warp-driver] compiled ok\n");
         ckpt->active = 0;
     }
 

@@ -42,6 +42,7 @@ extern "C" {
 }
 
 #include "src/WasmModule/WasmModule.hpp"
+#include "src/core/common/basedataoffsets.hpp"
 #include "src/core/common/NativeSymbol.hpp"
 #include "src/core/common/Span.hpp"
 #include "src/core/common/function_traits.hpp"
@@ -61,11 +62,42 @@ struct WarpCallContext {
 // wasm driver is written; this is sufficient for initial single-module runs.
 static WarpCallContext g_ctx_table[PROCESS_MAX_COUNT];
 
+/* Page-aligned scratch page used by warp_phys_map for ACPI/physical memory
+ * reads.  ACPI physical pages are not necessarily in the kernel direct map
+ * (they are EfiACPIReclaimMemory regions), so we cannot use phys|HIGHER_HALF
+ * directly.  Instead we remap this kernel BSS page (which IS in the page
+ * tables) to the target physical page, copy the data, then restore. */
+static uint8_t g_phys_scratch[4096] __attribute__((aligned(4096)));
+
 static inline uint8_t *
 warp_mem(WarpCallContext *ctx, uint32_t offset, uint32_t size)
 {
+    /* Use the full getLinearMemoryRegion(offset, size) path with non-zero size.
+     * With LINEAR_MEMORY_BOUNDS_CHECKS=1, this triggers probe() →
+     * ensureLinearSize() which zero-initialises newly-committed WASM pages.
+     * When warp_mem is used to obtain a WRITE destination, the zeroing
+     * happens BEFORE our write — so our data overwrites the zeros safely.
+     * Future probe() calls for those offsets then short-circuit (already
+     * committed) without zeroing our data. */
     if (!ctx || !ctx->module) return nullptr;
     return ctx->module->getLinearMemoryRegion(offset, size);
+}
+
+static inline uint8_t *
+warp_linear_mem_window(WarpCallContext *ctx, uint32_t offset, uint32_t size)
+{
+    if (!ctx || !ctx->module) {
+        return nullptr;
+    }
+    uint64_t mem_size = (uint64_t)ctx->module->getLinearMemorySizeInPages() << 16;
+    if ((uint64_t)offset + (uint64_t)size > mem_size) {
+        return nullptr;
+    }
+    uint8_t *base = ctx->module->getLinearMemoryRegion(0, 0);
+    if (!base) {
+        return nullptr;
+    }
+    return base + offset;
 }
 
 static inline WarpCallContext *
@@ -682,6 +714,8 @@ warp_acpi_rsdp_info(uint32_t out_off, uint32_t out_len_off, uint32_t max_len, vo
     if (!g_warp_boot_info || !g_warp_boot_info->rsdp || !g_warp_boot_info->rsdp_length) return (uint32_t)-1;
     uint32_t len = g_warp_boot_info->rsdp_length;
     if (len > max_len) return (uint32_t)-1;
+    /* warp_mem uses getLinearMemoryRegion(offset, size) which triggers probe()
+     * → ensureLinearSize() BEFORE we write — so zeroing happens first. */
     uint8_t *out = warp_mem(ctx, out_off, len);
     uint32_t *out_len = reinterpret_cast<uint32_t *>(warp_mem(ctx, out_len_off, sizeof(uint32_t)));
     if (!out || !out_len) return (uint32_t)-1;
@@ -713,8 +747,8 @@ warp_sync_user_read(uint32_t ptr_off, uint32_t len, void *ctx_)
     if (!len) return 0;
     uint8_t *p = warp_mem(ctx, ptr_off, len);
     if (!p) return (uint32_t)-1;
-    /* In kernel context with active bounds checks WASM linear memory IS kernel
-     * memory; a simple volatile read ensures the data is actually fetched. */
+    /* In kernel context WASM linear memory IS kernel memory; a volatile read
+     * ensures the compiler does not elide the access. */
     volatile uint8_t dummy = 0;
     for (uint32_t i = 0; i < len; ++i) dummy = p[i];
     (void)dummy;
@@ -874,16 +908,48 @@ warp_phys_map(uint32_t phys_lo, uint32_t phys_hi, uint32_t size, uint32_t wasm_o
     if (!size || (size & 0xFFF) || (wasm_offset & 0xFFF)) return (uint32_t)-1;
     uint64_t phys = ((uint64_t)phys_hi << 32) | (uint64_t)phys_lo;
     if (!phys) return (uint32_t)-1;
-    /* Map physical MMIO pages into WASM linear memory.
-     * With ACTIVE bounds checking, linear memory is a contiguous kernel region.
-     * We remap pages at wasm_offset within it to point to the physical device. */
-    uint8_t *lmem = warp_mem(ctx, wasm_offset, size);
+    /* Map physical pages into WASM linear memory.
+     * With the page-aligned allocator fix in shim.cpp, the linear memory base
+     * is 4 KB-aligned, so base + wasm_offset is page-aligned when wasm_offset
+     * is a multiple of 4096. */
+    uint8_t *lmem = warp_linear_mem_window(ctx, wasm_offset, size);
     if (!lmem) return (uint32_t)-1;
-    uint64_t lmem_phys_base = (uint64_t)lmem - 0xFFFFFFFF80000000ULL;
-    /* Remap the physical pages at the linear memory virtual address. */
-    /* PT_FLAG_PRESENT=1, PT_FLAG_WRITE=2 (defined in paging.c, not exported) */
+    /* WARP's linear memory base has a fixed sub-page offset equal to
+     * basedataLength (WARP internal metadata), so base + wasm_offset is never
+     * page-aligned even if wasm_offset is 4 KB-aligned.  Page-remapping via
+     * paging_map_4k requires aligned VAs; misaligned remaps produce reads from
+     * the wrong physical offset.  For the only current user (acpi_bus reading
+     * ACPI tables from regular RAM), copy directly from the kernel direct map.
+     * This is always correct and avoids corrupting WARP's basedata metadata. */
+    /* ACPI physical pages are in EfiACPIReclaimMemory regions which may not be
+     * in the kernel direct map.  Map each physical page to the page-aligned
+     * kernel scratch buffer, copy 4 KB of data, then restore the scratch page
+     * to its original physical backing.  This is single-threaded (WARP runs
+     * in the kernel scheduler context) so no locking is needed. */
+    /* ActiveMemoryManager::ensureLinearSize() is called by probe() when the JIT
+     * first accesses an uncommitted WASM linear memory region. It zero-initialises
+     * the newly committed range before marking it usable.  If we write ACPI data
+     * to lmem BEFORE the range is committed, the JIT's first probe() for any byte
+     * in [lmem, lmem+size) will zero-initialize that range, wiping our write.
+     *
+     * Fix: trigger probe() NOW (before our write) by calling getLinearMemoryRegion
+     * with non-zero size.  This causes ensureLinearSize to zero the region first
+     * and mark it as usable.  Future probe() calls then short-circuit immediately
+     * (offset < usableLinMemBytes_) without any zeroing.  We then write ACPI data
+     * on top of the zeros, safe from future zeroing. */
+    ctx->module->getLinearMemoryRegion(wasm_offset + size - 1, 1);
+    /* Re-fetch lmem after the probe (ensureCapacityForLinearSize inside
+     * ensureLinearSize may have called syncBasedataStart, changing the base). */
+    lmem = ctx->module->getLinearMemoryRegion(0, 0);
+    if (!lmem) return (uint32_t)-1;
+    lmem += wasm_offset;
+
+    uint64_t scratch_va  = (uint64_t)(uintptr_t)g_phys_scratch;
+    uint64_t scratch_phys = scratch_va - KERNEL_HIGHER_HALF_BASE;
     for (uint32_t off = 0; off < size; off += 4096) {
-        paging_map_4k((uint64_t)lmem + off, phys + off, 3ULL /* PRESENT|WRITE */);
+        paging_map_4k(scratch_va, phys + off, 3ULL);
+        __builtin_memcpy(lmem + off, g_phys_scratch, 4096);
+        paging_map_4k(scratch_va, scratch_phys, 3ULL);
     }
     return 0;
 }
@@ -1044,6 +1110,16 @@ static uint8_t warp_shmem_map_overlaps(uint32_t pid, uint32_t offset, uint32_t s
         if (a0 < b1 && b0 < a1) return 1;
     }
     return 0;
+}
+
+static uint32_t
+warp_linear_memory_active_size(WarpCallContext *ctx)
+{
+    uint8_t *base = warp_mem(ctx, 0, 0);
+    if (!base) {
+        return 0;
+    }
+    return *(uint32_t *)(void *)(base - Basedata::FromEnd::actualLinMemByteSize);
 }
 
 // ---------------------------------------------------------------------------
@@ -1322,13 +1398,17 @@ warp_shmem_map(uint32_t id, uint32_t wasm_off, uint32_t size, void *ctx_)
     if (mm_shared_get_phys(context_id, id, &phys_base, &shared_pages) != 0
         || shared_pages == 0) return (uint32_t)-1;
     if ((uint64_t)size < shared_pages * 0x1000ULL) return (uint32_t)-1;
-    uint8_t *lmem = warp_mem(ctx, wasm_off, size);
-    if (!lmem || ((uint64_t)lmem & 0xFFF)) return (uint32_t)-1;
+    /* Commit the range via probe() BEFORE paging_map_4k (see warp_shmem_map_auto
+     * for the rationale — ensureLinearSize would zero the shmem pages otherwise). */
+    ctx->module->getLinearMemoryRegion(wasm_off + size - 1, 1);
+    uint8_t *lmem = ctx->module->getLinearMemoryRegion(0, 0);
+    if (!lmem) return (uint32_t)-1;
+    lmem += wasm_off;
+    if ((uint64_t)(uintptr_t)lmem & 0xFFF) return (uint32_t)-1;
     uint64_t virt = (uint64_t)(uintptr_t)lmem;
-    if (mm_context_map_physical(context_id, virt, phys_base,
-                                shared_pages * 0x1000ULL,
-                                MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
-                                MEM_REGION_FLAG_USER) != 0) return (uint32_t)-1;
+    for (uint64_t i = 0; i < shared_pages; ++i) {
+        paging_map_4k(virt + i * 0x1000ULL, phys_base + i * 0x1000ULL, 3ULL);
+    }
     if (mm_shared_retain(context_id, id) != 0) return (uint32_t)-1;
     warp_shmem_map_track(ctx->pid, id, wasm_off, size);
     return 0;
@@ -1338,36 +1418,80 @@ static uint32_t
 warp_shmem_map_auto(uint32_t id, uint32_t size, void *ctx_)
 {
     auto *ctx = warp_call_ctx(ctx_);
-    if ((int32_t)id <= 0 || (int32_t)size <= 0 || (size & 0xFFF)) return (uint32_t)-1;
+    if ((int32_t)id <= 0 || (int32_t)size <= 0 || (size & 0xFFF)) {
+        klog_printf("[warp-shmem] map_auto invalid id=%u size=%u\n", id, size);
+        return (uint32_t)-1;
+    }
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0
-        || warp_require_dma_capability(context_id) != 0) return (uint32_t)-1;
+        || warp_require_dma_capability(context_id) != 0) {
+        klog_printf("[warp-shmem] map_auto ctx/cap deny id=%u\n", id);
+        return (uint32_t)-1;
+    }
     uint64_t phys_base = 0; uint64_t shared_pages = 0;
     if (mm_shared_get_phys(context_id, id, &phys_base, &shared_pages) != 0
-        || shared_pages == 0) return (uint32_t)-1;
-    if ((uint64_t)size < shared_pages * 0x1000ULL) return (uint32_t)-1;
-    /* Scan linear memory for a free, page-aligned, non-overlapping window */
+        || shared_pages == 0) {
+        klog_printf("[warp-shmem] map_auto get_phys fail ctx=%u id=%u\n", context_id, id);
+        return (uint32_t)-1;
+    }
+    if ((uint64_t)size < shared_pages * 0x1000ULL) {
+        klog_printf("[warp-shmem] map_auto size short id=%u size=%u pages=%llu\n",
+                    id, size, (unsigned long long)shared_pages);
+        return (uint32_t)-1;
+    }
+    /* Scan linear memory for a free, page-aligned, non-overlapping window.
+     * Start from the current active/committed linear-memory size instead of a
+     * fixed 2 MiB floor so the first shmem map stays inside memory WARP has
+     * already extended. That avoids the Could_not_extend_linear_memory fault
+     * seen when gfx_smoke/menu_bar perform their first libui buffer map.
+     * TODO(warp-shmem-map-auto): reserve windows against actual heap growth
+     * instead of relying on a fixed post-active guard band. */
     uint32_t mem_pages = ctx->module->getLinearMemorySizeInPages();
     uint64_t mem_size  = (uint64_t)mem_pages << 16;
-    const uint64_t scan_min = 0x200000ULL;
+    uint64_t scan_min = (uint64_t)warp_linear_memory_active_size(ctx) + 0x10000ULL;
+    uint8_t *base = ctx->module->getLinearMemoryRegion(0, 0);
+    uint64_t base_mod = base ? ((uint64_t)(uintptr_t)base & 0xFFFULL) : 0;
+    if (scan_min < 0x4000ULL) {
+        scan_min = 0x4000ULL;
+    }
     uint32_t found_off = 0; uint8_t found = 0;
-    for (uint64_t off = (scan_min + 0xFFFULL) & ~0xFFFULL;
+    /* WARP's host linear-memory base is not guaranteed to be page-aligned.
+     * Choose guest offsets that make the resulting host virtual address
+     * page-aligned, because paging_map_4k remaps host pages, not guest
+     * offsets. */
+    for (uint64_t off = ((scan_min + base_mod + 0xFFFULL) & ~0xFFFULL) - base_mod;
          off + size <= mem_size; off += 0x1000ULL) {
         uint32_t off32 = (uint32_t)off;
         if (warp_shmem_map_overlaps(ctx->pid, off32, size)) continue;
-        uint8_t *p = warp_mem(ctx, off32, size);
+        uint8_t *p = warp_linear_mem_window(ctx, off32, size);
         if (!p || ((uint64_t)(uintptr_t)p & 0xFFF)) continue;
         found_off = off32; found = 1; break;
     }
-    if (!found) return (uint32_t)-1;
-    uint8_t *lmem = warp_mem(ctx, found_off, size);
+    if (!found) {
+        klog_printf("[warp-shmem] map_auto no-window id=%u size=%u active=%u mem=%llu\n",
+                    id, size, warp_linear_memory_active_size(ctx),
+                    (unsigned long long)mem_size);
+        return (uint32_t)-1;
+    }
+    /* Commit the target range via probe() BEFORE paging_map_4k.
+     * ensureLinearSize() zero-initialises newly committed WASM pages.  If the
+     * probe fires AFTER paging_map_4k, the memset writes zeros to the remapped
+     * shmem physical pages — corrupting the shared buffer. */
+    ctx->module->getLinearMemoryRegion(found_off + size - 1, 1);
+    /* Re-fetch lmem after potential syncBasedataStart from ensureLinearSize. */
+    uint8_t *lmem = ctx->module->getLinearMemoryRegion(0, 0);
     if (!lmem) return (uint32_t)-1;
+    lmem += found_off;
+    if ((uint64_t)(uintptr_t)lmem & 0xFFF) return (uint32_t)-1;  /* alignment */
+
     uint64_t virt = (uint64_t)(uintptr_t)lmem;
-    if (mm_context_map_physical(context_id, virt, phys_base,
-                                shared_pages * 0x1000ULL,
-                                MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
-                                MEM_REGION_FLAG_USER) != 0) return (uint32_t)-1;
-    if (mm_shared_retain(context_id, id) != 0) return (uint32_t)-1;
+    for (uint64_t i = 0; i < shared_pages; ++i) {
+        paging_map_4k(virt + i * 0x1000ULL, phys_base + i * 0x1000ULL, 3ULL);
+    }
+    if (mm_shared_retain(context_id, id) != 0) {
+        klog_printf("[warp-shmem] map_auto retain fail ctx=%u id=%u\n", context_id, id);
+        return (uint32_t)-1;
+    }
     warp_shmem_map_track(ctx->pid, id, found_off, size);
     return found_off;
 }
@@ -1395,7 +1519,7 @@ warp_shmem_flush(uint32_t id, uint32_t wasm_off, uint32_t size, void *ctx_)
     if (mm_shared_get_phys(context_id, id, &phys_base, &shared_pages) != 0
         || shared_pages == 0 || phys_base == 0) return (uint32_t)-1;
     if ((uint64_t)size > shared_pages * 0x1000ULL) return (uint32_t)-1;
-    const uint8_t *src = warp_mem(ctx, wasm_off, size);
+    const uint8_t *src = warp_linear_mem_window(ctx, wasm_off, size);
     if (!src) return (uint32_t)-1;
     __builtin_memcpy((void *)(uintptr_t)(phys_base | KERNEL_HIGHER_HALF_BASE), src, size);
     return 0;
@@ -1413,8 +1537,11 @@ warp_shmem_refresh(uint32_t id, uint32_t wasm_off, uint32_t size, void *ctx_)
     if (mm_shared_get_phys(context_id, id, &phys_base, &shared_pages) != 0
         || shared_pages == 0 || phys_base == 0) return (uint32_t)-1;
     if ((uint64_t)size > shared_pages * 0x1000ULL) return (uint32_t)-1;
-    uint8_t *dst = warp_mem(ctx, wasm_off, size);
+    /* Probe the destination before writing so ensureLinearSize does not zero it. */
+    ctx->module->getLinearMemoryRegion(wasm_off + size - 1, 1);
+    uint8_t *dst = ctx->module->getLinearMemoryRegion(0, 0);
     if (!dst) return (uint32_t)-1;
+    dst += wasm_off;
     __builtin_memcpy(dst, (const void *)(uintptr_t)(phys_base | KERNEL_HIGHER_HALF_BASE), size);
     return 0;
 }
@@ -1501,19 +1628,15 @@ warp_framebuffer_map(uint32_t wasm_off, uint32_t size, void *ctx_)
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0
         || warp_require_mmio_capability(context_id) != 0) return (uint32_t)-1;
-    uint8_t *lmem = warp_mem(ctx, wasm_off, size);
+    uint8_t *lmem = warp_linear_mem_window(ctx, wasm_off, size);
     if (!lmem || ((uint64_t)(uintptr_t)lmem & 0xFFF)) return (uint32_t)-1;
     uint64_t virt = (uint64_t)(uintptr_t)lmem;
     uint64_t phys = info.framebuffer_base;
     uint64_t pages = (uint64_t)size / 0x1000ULL;
     for (uint64_t i = 0; i < pages; ++i) {
-        paging_unmap_4k_in_root(mm_context_get(context_id)->root_table,
-                                virt + i * 0x1000ULL);
-        if (paging_map_4k_in_root(mm_context_get(context_id)->root_table,
-                                  virt + i * 0x1000ULL,
-                                  phys + i * 0x1000ULL,
-                                  MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
-                                  MEM_REGION_FLAG_USER) < 0) return (uint32_t)-1;
+        paging_unmap_4k(virt + i * 0x1000ULL);
+        if (paging_map_4k(virt + i * 0x1000ULL, phys + i * 0x1000ULL, 3ULL) < 0)
+            return (uint32_t)-1;
     }
     return 0;
 }
@@ -1634,6 +1757,20 @@ warp_physmem_stats(uint32_t out_off, void *ctx_)
 // Symbol accessor.
 //
 // The NativeSymbol table is built as a function-local static so that
+/* AssemblyScript runtime abort(msg, file, line, column) → exit process.
+ * Called by AS-compiled modules on assertion failure or trap.
+ * WASM signature: void(i32,i32,i32,i32). */
+static void
+warp_env_abort(uint32_t msg, uint32_t file, uint32_t line, uint32_t column, void *ctx_)
+{
+    (void)msg; (void)file; (void)line; (void)column; (void)ctx_;
+    process_t *proc = process_get(process_current_pid());
+    if (proc) {
+        process_set_exit_status(proc, -1);
+        process_yield(PROCESS_RUN_EXITED);
+    }
+}
+
 // STATIC_LINK's getSignature() calls run on first use, not at program
 // startup.  Global statics with non-trivial constructors would require
 // .init_array to be walked by the kernel's _start, which it never does.
@@ -1764,6 +1901,8 @@ warp_wasmos_symbols(void)
         STATIC_LINK("wasmos", "env_get",              warp_env_get),
         STATIC_LINK("wasmos", "env_set",              warp_env_set),
         STATIC_LINK("wasmos", "env_unset",            warp_env_unset),
+        // AssemblyScript runtime imports (env module)
+        STATIC_LINK("env",    "abort",                warp_env_abort),
     };
     return vb::Span<vb::NativeSymbol const>(syms, sizeof(syms) / sizeof(syms[0]));
 }

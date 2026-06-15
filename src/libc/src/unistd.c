@@ -64,7 +64,7 @@ libc_fs_stage_path(const char *path, size_t *out_len)
 }
 
 /* Send an FS IPC request and wait for FS_IPC_RESP; skips unmatched messages.
- * Returns 0 on success and fills *out_arg0/*out_arg1 from the response. */
+ * Returns 0 on success and fills out_arg0/out_arg1 from the response. */
 static int
 libc_fs_request(int32_t type,
                 int32_t arg0,

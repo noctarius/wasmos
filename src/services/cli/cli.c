@@ -2178,13 +2178,7 @@ cli_phase_wait_ipc_step(void)
         int32_t spawned_pid = resp_status;
         int32_t spawn_flags = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1);
 #if WASMOS_TRACE
-        char pbuf[32];
-        int ppos = 0;
-        ppos = buf_append_str(pbuf, ppos, (int)sizeof(pbuf), "spawned pid ");
-        ppos = buf_append_u32(pbuf, ppos, (int)sizeof(pbuf), (uint32_t)spawned_pid);
-        ppos = buf_append_str(pbuf, ppos, (int)sizeof(pbuf), "\n");
-        pbuf[ppos] = '\0';
-        console_write(pbuf);
+        (void)printf("spawned pid %u\n", (unsigned)spawned_pid);
 #endif
         if (spawned_pid > 0 &&
             (spawn_flags & (WASMOS_SPAWN_FLAG_SERVICE | WASMOS_SPAWN_FLAG_DRIVER))) {

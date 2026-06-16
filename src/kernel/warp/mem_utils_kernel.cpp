@@ -108,7 +108,10 @@ MmapMemory allocPagedMemory(size_t size)
     uint64_t aligned = round_up_page(static_cast<uint64_t>(size));
     uint64_t pages   = aligned / kPageSize;
 
-    uint64_t phys = pfa_alloc_pages_below(pages, kPhysLimit);
+    /* Allocate from the WARP physical zone (>= WASMOS_SHMEM_PHYS_LIMIT) so
+     * canonical VAs (phys | kHalfBase) never overlap with shmem canonical VAs,
+     * preventing WARP's ensureLinearSize zero-fill from corrupting active shmem. */
+    uint64_t phys = pfa_alloc_pages_above(pages, WASMOS_SHMEM_PHYS_LIMIT);
     if (!phys) return m;
 
     auto *slot = alloc_entry();

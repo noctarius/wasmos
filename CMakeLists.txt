@@ -898,14 +898,33 @@ if (WASMOS_WASM_RUNTIME_WARP)
     -I${WARP_DIR} -I${WARP_DIR}/src
     -Wno-deprecated -Wno-unused-variable -Wno-macro-redefined
     -Wno-c++20-extensions -Wno-deprecated-copy -Wno-unused-parameter
-    -Wno-unsequenced
+    -Wno-unsequenced "-Wno-#pragma-messages"
   )
+  # Compile each WARP source file to its own object file so the compiler cache
+  # (ccache) can skip unchanged translation units on incremental builds.
+  set(WARP_AOT_OBJ_DIR ${BUILD_DIR}/warp_aot_objs)
+  set(WARP_AOT_OBJS "")
+  foreach(_src ${WARP_AOT_SRCS})
+    file(RELATIVE_PATH _rel ${CMAKE_SOURCE_DIR} ${_src})
+    string(REPLACE "/" "_" _obj_name "${_rel}")
+    string(REPLACE ".cpp" ".o" _obj_name "${_obj_name}")
+    set(_obj "${WARP_AOT_OBJ_DIR}/${_obj_name}")
+    add_custom_command(
+      OUTPUT "${_obj}"
+      COMMAND ${CMAKE_COMMAND} -E make_directory "${WARP_AOT_OBJ_DIR}"
+      COMMAND ${CLANGXX_PATH} ${WARP_AOT_FLAGS} -c "${_src}" -o "${_obj}"
+      DEPENDS "${_src}"
+      COMMENT "Compiling warp_aot: ${_rel}"
+      VERBATIM
+    )
+    list(APPEND WARP_AOT_OBJS "${_obj}")
+  endforeach()
   set(WARP_AOT_BIN ${BUILD_DIR}/warp_aot)
   add_custom_command(
     OUTPUT ${WARP_AOT_BIN}
-    COMMAND ${CLANGXX_PATH} ${WARP_AOT_FLAGS} ${WARP_AOT_SRCS} -o ${WARP_AOT_BIN}
-    DEPENDS ${WARP_AOT_SRCS}
-    COMMENT "Building warp_aot host tool"
+    COMMAND ${CLANGXX_PATH} ${WARP_AOT_OBJS} -o ${WARP_AOT_BIN}
+    DEPENDS ${WARP_AOT_OBJS}
+    COMMENT "Linking warp_aot host tool"
     VERBATIM
   )
   add_custom_target(warp_aot DEPENDS ${WARP_AOT_BIN})

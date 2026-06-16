@@ -28,17 +28,10 @@ if (AS_ENABLE)
     VERBATIM
   )
 
-  add_custom_command(
-    OUTPUT ${WASM_DATE_TOOL_APP}
-    COMMAND ${WASMOS_APP_PACKER}
-            --manifest ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
-            --in ${WASM_DATE_TOOL_WASM}
-            --out ${WASM_DATE_TOOL_APP}
-    DEPENDS ${WASM_DATE_TOOL_WASM} make_wasmos_app
-            ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Packing AssemblyScript date tool as WASMOS-APP"
-    VERBATIM
+  wasmos_maybe_aot_pack(
+    "${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata"
+    "${WASM_DATE_TOOL_WASM}"
+    "${WASM_DATE_TOOL_APP}"
   )
 
   add_custom_target(system_utils DEPENDS ${WASM_DATE_TOOL_APP})

@@ -28,17 +28,10 @@ if (AS_ENABLE)
     VERBATIM
   )
 
-  add_custom_command(
-    OUTPUT ${WASM_SCHED_INFO_APP}
-    COMMAND ${WASMOS_APP_PACKER}
-            --manifest ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
-            --in ${WASM_SCHED_INFO_WASM}
-            --out ${WASM_SCHED_INFO_APP}
-    DEPENDS ${WASM_SCHED_INFO_WASM} make_wasmos_app
-            ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Packing sched_info as WASMOS-APP"
-    VERBATIM
+  wasmos_maybe_aot_pack(
+    "${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata"
+    "${WASM_SCHED_INFO_WASM}"
+    "${WASM_SCHED_INFO_APP}"
   )
 
   add_custom_target(sched_info_util DEPENDS ${WASM_SCHED_INFO_APP})

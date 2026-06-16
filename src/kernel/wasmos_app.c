@@ -60,6 +60,33 @@ typedef struct __attribute__((packed)) {
     uint32_t reserved;
 } wasmos_app_header_v3_t;
 
+/* Version 4: identical to v3 except reserved is repurposed as compiled_size.
+ * When compiled_size > 0, a pre-compiled WARP AOT binary follows immediately
+ * after the WASM bytes in the blob. */
+typedef struct __attribute__((packed)) {
+    char magic[8];
+    uint16_t version;
+    uint16_t header_size;
+    uint32_t flags;
+    uint32_t name_len;
+    uint32_t entry_len;
+    uint32_t wasm_size;
+    uint32_t req_ep_count;
+    uint32_t cap_count;
+    uint32_t entry_arg_binding_count;
+    uint32_t mem_hint_count;
+    uint8_t driver_match_class;
+    uint8_t driver_match_subclass;
+    uint8_t driver_match_prog_if;
+    uint8_t driver_match_reserved0;
+    uint16_t driver_match_vendor_id;
+    uint16_t driver_match_device_id;
+    uint16_t driver_io_port_min;
+    uint16_t driver_io_port_max;
+    uint32_t driver_match_count;
+    uint32_t compiled_size;   /* size of WARP AOT binary appended after WASM bytes; 0 if absent */
+} wasmos_app_header_v4_t;
+
 typedef struct __attribute__((packed)) {
     char magic[8];
     uint16_t version;
@@ -155,6 +182,7 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
     uint32_t entry_arg_binding_count = 0;
     uint32_t mem_hint_count = 0;
     uint32_t reserved = 0;
+    uint32_t compiled_size = 0;
     wasmos_app_driver_match_t driver_matches[WASMOS_APP_MAX_DRIVER_MATCHES];
     for (uint32_t i = 0; i < WASMOS_APP_MAX_DRIVER_MATCHES; ++i) {
         driver_matches[i].class_code = WASMOS_DRIVER_MATCH_ANY_U8;
@@ -212,7 +240,7 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
             driver_matches[0].io_port_max = hdr_v2->driver_io_port_max;
             driver_matches[0].priority = 0;
         }
-    } else if (version == WASMOS_APP_VERSION) {
+    } else if (version == 3u) {
         if (blob_size < sizeof(wasmos_app_header_v3_t)) {
             return -1;
         }
@@ -231,12 +259,34 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
             return -1;
         }
         reserved = hdr_v3->reserved;
+    } else if (version == WASMOS_APP_VERSION) {
+        /* Version 4: like v3 but compiled_size replaces reserved. */
+        if (blob_size < sizeof(wasmos_app_header_v4_t)) {
+            return -1;
+        }
+        const wasmos_app_header_v4_t *hdr_v4 = (const wasmos_app_header_v4_t *)blob;
+        header_size = hdr_v4->header_size;
+        flags = hdr_v4->flags;
+        name_len = hdr_v4->name_len;
+        entry_len = hdr_v4->entry_len;
+        wasm_size = hdr_v4->wasm_size;
+        req_ep_count = hdr_v4->req_ep_count;
+        cap_count = hdr_v4->cap_count;
+        entry_arg_binding_count = hdr_v4->entry_arg_binding_count;
+        mem_hint_count = hdr_v4->mem_hint_count;
+        driver_match_count = hdr_v4->driver_match_count;
+        if (driver_match_count > WASMOS_APP_MAX_DRIVER_MATCHES) {
+            return -1;
+        }
+        compiled_size = hdr_v4->compiled_size;
+        reserved = 0; /* v4 has no reserved field */
     } else {
         return -1;
     }
     if ((version == 1u && header_size != sizeof(wasmos_app_header_v1_t)) ||
         (version == 2u && header_size != sizeof(wasmos_app_header_v2_t)) ||
-        (version == WASMOS_APP_VERSION && header_size != sizeof(wasmos_app_header_v3_t)) ||
+        (version == 3u && header_size != sizeof(wasmos_app_header_v3_t)) ||
+        (version == WASMOS_APP_VERSION && header_size != sizeof(wasmos_app_header_v4_t)) ||
         reserved != 0) {
         return -1;
     }
@@ -351,6 +401,19 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
         return -1;
     }
 
+    const uint8_t *wasm_bytes = &blob[off];
+    off += wasm_size;
+
+    /* Version 4: optional pre-compiled WARP AOT binary follows WASM bytes. */
+    const uint8_t *compiled_bytes = 0;
+    if (compiled_size > 0) {
+        if (check_bounds(off, compiled_size, blob_size) != 0) {
+            return -1;
+        }
+        compiled_bytes = &blob[off];
+        off += compiled_size;
+    }
+
     out_desc->blob = blob;
     out_desc->blob_size = blob_size;
     out_desc->flags = flags;
@@ -358,8 +421,10 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
     out_desc->name_len = name_len;
     out_desc->entry = entry;
     out_desc->entry_len = entry_len;
-    out_desc->wasm_bytes = &blob[off];
+    out_desc->wasm_bytes = wasm_bytes;
     out_desc->wasm_size = wasm_size;
+    out_desc->compiled_bytes = compiled_bytes;
+    out_desc->compiled_size = compiled_size;
     out_desc->stack_pages_hint = stack_pages_hint;
     out_desc->heap_pages_hint = heap_pages_hint;
     out_desc->driver_match_count = driver_match_count;
@@ -444,6 +509,8 @@ wasmos_app_start(wasmos_app_instance_t *instance,
     manifest.name = instance->name;
     manifest.module_bytes = desc->wasm_bytes;
     manifest.module_size = desc->wasm_size;
+    manifest.compiled_bytes = desc->compiled_bytes;
+    manifest.compiled_size = desc->compiled_size;
     manifest.entry_export = 0;
     manifest.entry_argc = 0;
     manifest.entry_argv = 0;

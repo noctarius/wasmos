@@ -25,6 +25,7 @@ int
 wasm_chardev_init(uint32_t owner_context_id)
 {
     wasm_driver_manifest_t manifest;
+    __builtin_memset(&manifest, 0, sizeof(manifest));
 
     manifest.name = "chardev-server";
     manifest.module_bytes = _binary_chardev_server_wasm_start;

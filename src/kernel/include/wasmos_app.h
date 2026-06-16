@@ -18,7 +18,7 @@
 #include "wasm_driver.h"
 
 #define WASMOS_APP_MAGIC "WASMOSAP"
-#define WASMOS_APP_VERSION 3u
+#define WASMOS_APP_VERSION 4u
 
 /* Package type flags stored in the .wap header. */
 #define WASMOS_APP_FLAG_DRIVER     (1u << 0)
@@ -78,6 +78,8 @@ typedef struct {
     uint32_t flags;
     const uint8_t *wasm_bytes;
     uint32_t wasm_size;
+    const uint8_t *compiled_bytes;   /* pre-compiled WARP AOT binary; NULL if absent */
+    uint32_t compiled_size;
     const uint8_t *name;
     uint32_t name_len;
     const uint8_t *entry;

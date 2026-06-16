@@ -353,6 +353,63 @@ uint64_t pfa_alloc_pages_below(uint64_t pages, uint64_t max_addr) {
     return 0;
 }
 
+uint64_t pfa_alloc_pages_above(uint64_t pages, uint64_t min_addr) {
+    if (pages == 0) {
+        return 0;
+    }
+    spinlock_lock(&g_pfa_lock);
+    uint64_t floor = (min_addr + PAGE_SIZE - 1ULL) & ~(PAGE_SIZE - 1ULL);
+    for (uint32_t i = 0; i < g_range_count; ++i) {
+        pfa_range_t *range = &g_ranges[i];
+        uint64_t rbase = range->base;
+        uint64_t rend  = rbase + range->pages * PAGE_SIZE;
+        uint64_t start = rbase < floor ? floor : rbase;
+        if (start + pages * PAGE_SIZE > rend) {
+            continue;
+        }
+        uint64_t alloc_end = start + pages * PAGE_SIZE;
+        if (start == rbase) {
+            /* Allocate from the front of the range. */
+            range->base  = alloc_end;
+            range->pages = (rend - alloc_end) / PAGE_SIZE;
+            if (range->pages == 0) {
+                for (uint32_t j = i; j + 1 < g_range_count; ++j)
+                    g_ranges[j] = g_ranges[j + 1];
+                g_range_count--;
+            }
+        } else if (alloc_end == rend) {
+            /* Allocate from the back of the range. */
+            range->pages = (start - rbase) / PAGE_SIZE;
+        } else {
+            /* Allocate from the middle — split into lower + upper remnants.
+             * Reuse the current slot for the lower part; insert upper after it. */
+            if (g_range_count >= (sizeof(g_ranges) / sizeof(g_ranges[0]))) {
+                /* Range table full: fall back to front-allocating (trims lower). */
+                range->base  = alloc_end;
+                range->pages = (rend - alloc_end) / PAGE_SIZE;
+            } else {
+                uint64_t upper_pages = (rend - alloc_end) / PAGE_SIZE;
+                /* Shift entries after i to make room for the upper remnant. */
+                for (uint32_t j = g_range_count; j > i + 1; --j)
+                    g_ranges[j] = g_ranges[j - 1];
+                g_ranges[i + 1].base  = alloc_end;
+                g_ranges[i + 1].pages = upper_pages;
+                g_range_count++;
+                range->pages = (start - rbase) / PAGE_SIZE;
+            }
+        }
+        for (uint64_t j = 0; j < pages; j++) {
+            uint64_t idx = (start + j * PAGE_SIZE) >> 12;
+            if (idx < g_tracked_pages)
+                g_refcount[idx] = 1;
+        }
+        spinlock_unlock(&g_pfa_lock);
+        return start;
+    }
+    spinlock_unlock(&g_pfa_lock);
+    return 0;
+}
+
 void pfa_free_pages(uint64_t base, uint64_t pages) {
     if (base == 0 || pages == 0) {
         return;

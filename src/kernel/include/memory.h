@@ -15,6 +15,13 @@
 
 #define MM_MAX_CONTEXTS 128  /* hard cap on simultaneous process memory contexts */
 
+/* Physical address boundary between the shmem zone and the WARP linear-memory zone.
+ * Shmem pages are allocated below this limit (pfa_alloc_pages_below).
+ * WARP linear memory pages are allocated at or above this limit (pfa_alloc_pages_above).
+ * This prevents WARP's ensureLinearSize zero-fill from aliasing active shmem pages
+ * via the kernel direct map (phys | KERNEL_HIGHER_HALF_BASE). */
+#define WASMOS_SHMEM_PHYS_LIMIT (64ULL * 1024ULL * 1024ULL)  /* 64 MiB */
+
 /* Semantic purpose of a mapped virtual region; controls page-table flags at fault time. */
 typedef enum {
     MEM_REGION_WASM_LINEAR = 0, /* wasm3 linear memory heap */

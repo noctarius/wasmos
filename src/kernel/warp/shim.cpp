@@ -113,7 +113,7 @@ static void *warp_kmalloc(size_t const size)
     } else {
         /* Large path: physical page allocator */
         uint64_t pages = (static_cast<uint64_t>(total) + kPageSize - 1) / kPageSize;
-        uint64_t phys  = pfa_alloc_pages_below(pages, kPhysLimit);
+        uint64_t phys  = pfa_alloc_pages_above(pages, WASMOS_SHMEM_PHYS_LIMIT);
         if (!phys) return nullptr;
         if (warp_map_page_alias(phys, pages) != 0) {
             pfa_free_pages(phys, pages);

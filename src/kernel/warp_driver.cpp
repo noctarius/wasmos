@@ -251,7 +251,7 @@ wasm_driver_start(wasm_driver_t *driver,
 
     uint32_t prev = warp_runtime_enter(driver->owner_pid);
 
-    /* Allocate and compile the WASM module; catch any WARP exceptions. */
+    /* Allocate and compile/load the WASM module; catch any WARP exceptions. */
     vb::WasmModule *mod = nullptr;
     void *warp_ctx = warp_context_for_pid(driver->owner_pid);
     if (!warp_ctx) {
@@ -262,15 +262,23 @@ wasm_driver_start(wasm_driver_t *driver,
         WarpExceptionCheckpoint *ckpt = warp_exception_get_checkpoint();
         ckpt->active = 1;
         if (__builtin_setjmp(ckpt->jbuf)) {
-            klog_write("[warp-driver] module compilation failed\n");
+            klog_write("[warp-driver] module load failed\n");
             ckpt->active = 0;
             delete mod;
             warp_runtime_leave(prev);
             return -1;
         }
         mod = new vb::WasmModule(UINT64_MAX, g_logger, false, warp_ctx, 10U);
-        vb::Span<uint8_t const> bc(manifest->module_bytes, manifest->module_size);
-        mod->initFromBytecode(bc, warp_wasmos_symbols(), true);
+        if (manifest->compiled_bytes != nullptr && manifest->compiled_size > 0) {
+            klog_write("[warp-driver] using AOT binary\n");
+            vb::Span<uint8_t const> compiled(manifest->compiled_bytes, manifest->compiled_size);
+            vb::Span<uint8_t const> empty_debug(nullptr, 0);
+            mod->initFromCompiledBinary(compiled, warp_wasmos_symbols(), empty_debug);
+        } else {
+            klog_write("[warp-driver] JIT compiling\n");
+            vb::Span<uint8_t const> bc(manifest->module_bytes, manifest->module_size);
+            mod->initFromBytecode(bc, warp_wasmos_symbols(), true);
+        }
         ckpt->active = 0;
     }
 

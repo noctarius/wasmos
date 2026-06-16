@@ -5,7 +5,7 @@
 #include <ctype.h>
 
 #define MAGIC "WASMOSAP"
-#define VERSION 3u
+#define VERSION 4u
 #define FLAG_DRIVER (1u << 0)
 #define FLAG_SERVICE (1u << 1)
 #define FLAG_APP (1u << 2)
@@ -37,7 +37,7 @@ typedef struct __attribute__((packed)) {
     uint16_t driver_io_port_min;
     uint16_t driver_io_port_max;
     uint32_t driver_match_count;
-    uint32_t reserved;
+    uint32_t compiled_size;   /* v4: size of WARP AOT binary appended after WASM; 0 if absent */
 } wasmos_app_header_t;
 
 typedef struct __attribute__((packed)) {
@@ -359,18 +359,21 @@ int main(int argc, char **argv) {
         const char *manifest_path = argv[2];
         const char *in_path = NULL;
         const char *out_path = NULL;
+        const char *compiled_path = NULL;
         for (int i = 3; i + 1 < argc; i += 2) {
             if (strcmp(argv[i], "--in") == 0) {
                 in_path = argv[i + 1];
             } else if (strcmp(argv[i], "--out") == 0) {
                 out_path = argv[i + 1];
+            } else if (strcmp(argv[i], "--compiled") == 0) {
+                compiled_path = argv[i + 1];
             } else {
                 fprintf(stderr, "unknown flag '%s'\n", argv[i]);
                 return 1;
             }
         }
         if (!in_path || !out_path) {
-            fprintf(stderr, "usage: %s --manifest <path> --in <in.wasm|elf> --out <out.wap>\n", argv[0]);
+            fprintf(stderr, "usage: %s --manifest <path> --in <in.wasm|elf> --out <out.wap> [--compiled <in.warpbin>]\n", argv[0]);
             return 1;
         }
         linker_manifest_t lm;
@@ -446,9 +449,51 @@ int main(int argc, char **argv) {
         }
         fclose(in);
 
+        /* Optional: load pre-compiled WARP AOT binary. */
+        uint8_t *compiled_data = NULL;
+        size_t compiled_data_size = 0;
+        if (compiled_path) {
+            FILE *cf = fopen(compiled_path, "rb");
+            if (!cf) {
+                perror("open compiled");
+                free(wasm);
+                return 1;
+            }
+            if (fseek(cf, 0, SEEK_END) != 0) {
+                perror("seek compiled");
+                fclose(cf);
+                free(wasm);
+                return 1;
+            }
+            long csz = ftell(cf);
+            if (csz <= 0) {
+                fprintf(stderr, "compiled file is empty\n");
+                fclose(cf);
+                free(wasm);
+                return 1;
+            }
+            fseek(cf, 0, SEEK_SET);
+            compiled_data = (uint8_t *)malloc((size_t)csz);
+            if (!compiled_data) {
+                fclose(cf);
+                free(wasm);
+                return 1;
+            }
+            if (fread(compiled_data, 1, (size_t)csz, cf) != (size_t)csz) {
+                perror("read compiled");
+                fclose(cf);
+                free(compiled_data);
+                free(wasm);
+                return 1;
+            }
+            fclose(cf);
+            compiled_data_size = (size_t)csz;
+        }
+
         FILE *outf = fopen(out_path, "wb");
         if (!outf) {
             perror("open output");
+            free(compiled_data);
             free(wasm);
             return 1;
         }
@@ -474,7 +519,7 @@ int main(int argc, char **argv) {
         hdr.driver_io_port_min = (driver_match_count > 0) ? driver_matches[0].io_port_min : 0;
         hdr.driver_io_port_max = (driver_match_count > 0) ? driver_matches[0].io_port_max : 0;
         hdr.driver_match_count = driver_match_count;
-        hdr.reserved = 0;
+        hdr.compiled_size = (uint32_t)compiled_data_size;
 
         wasmos_mem_hint_t stack_hint = { MEM_HINT_STACK, lm.stack_pages, 0 };
         wasmos_mem_hint_t heap_hint = { MEM_HINT_HEAP, lm.heap_pages, 0 };
@@ -505,7 +550,11 @@ int main(int argc, char **argv) {
         ok &= fwrite(&stack_hint, sizeof(stack_hint), 1, outf) == 1;
         ok &= fwrite(&heap_hint, sizeof(heap_hint), 1, outf) == 1;
         ok &= fwrite(wasm, 1, (size_t)in_size, outf) == (size_t)in_size;
+        if (compiled_data_size > 0) {
+            ok &= fwrite(compiled_data, 1, compiled_data_size, outf) == compiled_data_size;
+        }
 
+        free(compiled_data);
         free(wasm);
         fclose(outf);
         return ok ? 0 : 1;
@@ -730,7 +779,7 @@ int main(int argc, char **argv) {
     hdr.driver_io_port_min = driver_io_port_min;
     hdr.driver_io_port_max = driver_io_port_max;
     hdr.driver_match_count = driver_match_count;
-    hdr.reserved = 0;
+    hdr.compiled_size = 0;  /* legacy path: no AOT binary; use --manifest --compiled for AOT */
 
     wasmos_mem_hint_t stack_hint = { MEM_HINT_STACK, stack_pages, 0 };
     wasmos_mem_hint_t heap_hint = { MEM_HINT_HEAP, heap_pages, 0 };

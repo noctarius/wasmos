@@ -826,6 +826,96 @@ target_compile_options(make_wasmos_app PRIVATE -O2)
 set_target_properties(make_wasmos_app PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY ${BUILD_DIR}
 )
+
+# ---------------------------------------------------------------------------
+# Host-native WARP AOT pre-compiler tool (warp_aot)
+# Built as a custom command because the main project uses a freestanding
+# cross-compiler toolchain; warp_aot must use the host compiler with full
+# libc and libstdc++ support.
+#
+# Common.cpp and Frontend.cpp unconditionally include all three backends
+# (x86-64, aarch64, tricore) via template instantiations, so all three must
+# be compiled and linked even though only x86-64 code is generated at runtime.
+# The -DJIT_TARGET_X86_64 flag tells WARP's PlatformAdapter to use the x86-64
+# backend as TBackend; the other backends are compiled but never selected.
+# ---------------------------------------------------------------------------
+if (WASMOS_WASM_RUNTIME_WARP)
+  set(WARP_AOT_TOOL_DIR ${CMAKE_SOURCE_DIR}/src/tools/warp_aot)
+  set(WARP_AOT_SRCS
+    ${WARP_DIR}/src/WasmModule/WasmModule.cpp
+    ${WARP_DIR}/src/core/runtime/Runtime.cpp
+    ${WARP_DIR}/src/core/runtime/ActiveMemoryManager.cpp
+    ${WARP_DIR}/src/core/runtime/MemoryHelper.cpp
+    ${WARP_DIR}/src/core/common/BinaryModule.cpp
+    ${WARP_DIR}/src/core/common/VbExceptions.cpp
+    ${WARP_DIR}/src/core/common/ExtendableMemory.cpp
+    ${WARP_DIR}/src/utils/VirtualMemoryAllocator.cpp
+    ${WARP_DIR}/src/utils/LinearMemoryAllocator.cpp
+    ${WARP_DIR}/src/utils/OSAPIChecker.cpp
+    ${WARP_DIR}/src/utils/SignalFunctionWrapper.cpp
+    ${WARP_DIR}/src/utils/SignalFunctionWrapper_unix.cpp
+    # RAIISignalHandler.cpp is excluded: it has a compile error when both
+    # ACTIVE_STACK_OVERFLOW_CHECK=1 and LINEAR_MEMORY_BOUNDS_CHECKS=1 are set
+    # (a struct sigaction 'sa' is declared inside a disabled #if block but then
+    # referenced in !ACTIVE_DIV_CHECK, which is active). The kernel works around
+    # this by providing os_api_checker_kernel.cpp; the host tool provides a stub
+    # for RAIISignalHandler::restoreSignalHandler() in host_shim.cpp.
+    ${WARP_DIR}/src/core/compiler/Compiler.cpp
+    ${WARP_DIR}/src/core/compiler/backend/BackendBase.cpp
+    ${WARP_DIR}/src/core/compiler/backend/x86_64/x86_64_assembler.cpp
+    ${WARP_DIR}/src/core/compiler/backend/x86_64/x86_64_backend.cpp
+    ${WARP_DIR}/src/core/compiler/backend/x86_64/x86_64_call_dispatch.cpp
+    ${WARP_DIR}/src/core/compiler/backend/x86_64/x86_64_cc.cpp
+    ${WARP_DIR}/src/core/compiler/backend/x86_64/x86_64_instruction.cpp
+    ${WARP_DIR}/src/core/compiler/backend/x86_64/x86_64_relpatchobj.cpp
+    ${WARP_DIR}/src/core/compiler/backend/aarch64/aarch64_assembler.cpp
+    ${WARP_DIR}/src/core/compiler/backend/aarch64/aarch64_aux.cpp
+    ${WARP_DIR}/src/core/compiler/backend/aarch64/aarch64_backend.cpp
+    ${WARP_DIR}/src/core/compiler/backend/aarch64/aarch64_call_dispatch.cpp
+    ${WARP_DIR}/src/core/compiler/backend/aarch64/aarch64_cc.cpp
+    ${WARP_DIR}/src/core/compiler/backend/aarch64/aarch64_instruction.cpp
+    ${WARP_DIR}/src/core/compiler/backend/aarch64/aarch64_relpatchobj.cpp
+    ${WARP_DIR}/src/core/compiler/backend/tricore/tricore_assembler.cpp
+    ${WARP_DIR}/src/core/compiler/backend/tricore/tricore_aux.cpp
+    ${WARP_DIR}/src/core/compiler/backend/tricore/tricore_backend.cpp
+    ${WARP_DIR}/src/core/compiler/backend/tricore/tricore_call_dispatch.cpp
+    ${WARP_DIR}/src/core/compiler/backend/tricore/tricore_cc.cpp
+    ${WARP_DIR}/src/core/compiler/backend/tricore/tricore_instruction.cpp
+    ${WARP_DIR}/src/core/compiler/backend/tricore/tricore_relpatchobj.cpp
+    ${WARP_DIR}/src/core/compiler/common/Common.cpp
+    ${WARP_DIR}/src/core/compiler/common/CommonRegsPos.cpp
+    ${WARP_DIR}/src/core/compiler/common/MemWriter.cpp
+    ${WARP_DIR}/src/core/compiler/common/ModuleInfo.cpp
+    ${WARP_DIR}/src/core/compiler/common/Stack.cpp
+    ${WARP_DIR}/src/core/compiler/frontend/BytecodeReader.cpp
+    ${WARP_DIR}/src/core/compiler/frontend/Frontend.cpp
+    ${WARP_DIR}/src/core/compiler/frontend/ValidationStack.cpp
+    ${WARP_AOT_TOOL_DIR}/host_mem_utils.cpp
+    ${WARP_AOT_TOOL_DIR}/host_shim.cpp
+    ${WARP_AOT_TOOL_DIR}/warp_aot.cpp
+  )
+  # -DJIT_TARGET_X86_64 selects the x86-64 backend as TBackend while still
+  # compiling the aarch64/tricore backends needed by Common.cpp/Frontend.cpp.
+  set(WARP_AOT_FLAGS
+    -std=c++14 -O2
+    -DJIT_TARGET_X86_64
+    -DACTIVE_STACK_OVERFLOW_CHECK=1 -DLINEAR_MEMORY_BOUNDS_CHECKS=1
+    -DVB_POSIX -DVB_WIN32_OR_POSIX -DNVALGRIND
+    -I${WARP_DIR} -I${WARP_DIR}/src
+    -Wno-deprecated -Wno-unused-variable -Wno-macro-redefined
+    -Wno-c++20-extensions -Wno-deprecated-copy -Wno-unused-parameter
+    -Wno-unsequenced
+  )
+  set(WARP_AOT_BIN ${BUILD_DIR}/warp_aot)
+  add_custom_command(
+    OUTPUT ${WARP_AOT_BIN}
+    COMMAND ${CLANGXX_PATH} ${WARP_AOT_FLAGS} ${WARP_AOT_SRCS} -o ${WARP_AOT_BIN}
+    DEPENDS ${WARP_AOT_SRCS}
+    COMMENT "Building warp_aot host tool"
+    VERBATIM
+  )
+  add_custom_target(warp_aot DEPENDS ${WARP_AOT_BIN})
+endif ()
 set(WASMOS_APP_PACKER $<TARGET_FILE:make_wasmos_app>)
 add_custom_command(
   OUTPUT ${INITFS_IMG} ${INITFS_CONFIG_BIN}

@@ -42,6 +42,29 @@ constexpr uint64_t kPhysLimit  = 512ULL * 1024ULL * 1024ULL;
 
 inline uint64_t round_up_page(uint64_t n)  { return (n + kPageSize - 1) & ~(kPageSize - 1); }
 
+static int remap_direct_alias_pages(uint8_t *ptr, uint64_t pages)
+{
+    if (!ptr || pages == 0) {
+        return -1;
+    }
+    uint64_t virt = reinterpret_cast<uint64_t>(ptr);
+    if (virt < kHalfBase) {
+        return -1;
+    }
+    for (uint64_t i = 0; i < pages; ++i) {
+        uint64_t page_virt = virt + (i * kPageSize);
+        uint64_t page_phys = page_virt - kHalfBase;
+        if (paging_map_4k(page_virt,
+                          page_phys,
+                          MEM_REGION_FLAG_READ |
+                              MEM_REGION_FLAG_WRITE |
+                              MEM_REGION_FLAG_EXEC) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
 /* Simple tracking table for mmap → phys mapping so munmap can free pages. */
 struct MmapEntry { uint8_t *virt; uint64_t phys; uint64_t pages; };
 static MmapEntry g_mmap_table[64];
@@ -92,16 +115,10 @@ MmapMemory allocPagedMemory(size_t size)
     if (!slot) { pfa_free_pages(phys, pages); return m; }
 
     uint8_t *virt = reinterpret_cast<uint8_t *>(phys | kHalfBase);
-    for (uint64_t i = 0; i < pages; ++i) {
-        uint64_t page_phys = phys + (i * kPageSize);
-        uint64_t page_virt = reinterpret_cast<uint64_t>(virt) + (i * kPageSize);
-        if (paging_map_4k(page_virt,
-                          page_phys,
-                          MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_EXEC) != 0) {
-            pfa_free_pages(phys, pages);
-            *slot = MmapEntry{};
-            return m;
-        }
+    if (remap_direct_alias_pages(virt, pages) != 0) {
+        pfa_free_pages(phys, pages);
+        *slot = MmapEntry{};
+        return m;
     }
     slot->virt  = virt;
     slot->phys  = phys;
@@ -177,8 +194,11 @@ void freeVirtualMemory(void *ptr, size_t size) noexcept
 
 void commitVirtualMemory(void *ptr, size_t size)
 {
-    /* Pages are always committed in our model (no demand paging). */
-    (void)ptr; (void)size;
+    if (!ptr || size == 0) {
+        return;
+    }
+    uint64_t pages = round_up_page(static_cast<uint64_t>(size)) / kPageSize;
+    (void)remap_direct_alias_pages(static_cast<uint8_t *>(ptr), pages);
 }
 
 void uncommitVirtualMemory(void *ptr, size_t size)

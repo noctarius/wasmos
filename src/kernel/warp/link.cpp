@@ -1105,6 +1105,17 @@ static void warp_shmem_map_untrack(uint32_t pid, uint32_t id)
             g_warp_shmem_maps[i].valid = 0;
 }
 
+static WarpShmemLinearMap *warp_shmem_map_find(uint32_t pid, uint32_t id)
+{
+    for (uint32_t i = 0; i < WARP_SHMEM_MAP_SLOTS; ++i) {
+        WarpShmemLinearMap *slot = &g_warp_shmem_maps[i];
+        if (slot->valid && slot->pid == pid && slot->shmem_id == id) {
+            return slot;
+        }
+    }
+    return nullptr;
+}
+
 static uint8_t warp_shmem_map_overlaps(uint32_t pid, uint32_t offset, uint32_t size)
 {
     uint64_t a0 = offset, a1 = (uint64_t)offset + size;
@@ -1125,6 +1136,35 @@ warp_linear_memory_active_size(WarpCallContext *ctx)
         return 0;
     }
     return *(uint32_t *)(void *)(base - Basedata::FromEnd::actualLinMemByteSize);
+}
+
+static int
+warp_restore_linear_window(WarpCallContext *ctx, uint32_t offset, uint32_t size)
+{
+    if (!ctx || !ctx->module || size == 0) {
+        return -1;
+    }
+    uint8_t *base = warp_linear_mem_window(ctx, offset, size);
+    if (!base) {
+        return -1;
+    }
+    uint64_t virt = (uint64_t)(uintptr_t)base;
+    if (virt < KERNEL_HIGHER_HALF_BASE || (virt & 0xFFFULL) != 0) {
+        return -1;
+    }
+    uint64_t pages = ((uint64_t)size + 0xFFFULL) / 0x1000ULL;
+    for (uint64_t i = 0; i < pages; ++i) {
+        uint64_t page_virt = virt + i * 0x1000ULL;
+        uint64_t page_phys = page_virt - KERNEL_HIGHER_HALF_BASE;
+        if (paging_map_4k(page_virt,
+                          page_phys,
+                          MEM_REGION_FLAG_READ |
+                              MEM_REGION_FLAG_WRITE |
+                              MEM_REGION_FLAG_EXEC) != 0) {
+            return -1;
+        }
+    }
+    return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -1504,10 +1544,14 @@ warp_shmem_map_auto(uint32_t id, uint32_t size, void *ctx_)
 static uint32_t
 warp_shmem_unmap(uint32_t id, void *ctx_)
 {
-    (void)ctx_;
+    auto *ctx = warp_call_ctx(ctx_);
     if ((int32_t)id <= 0) return (uint32_t)-1;
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0) return (uint32_t)-1;
+    WarpShmemLinearMap *slot = warp_shmem_map_find(process_current_pid(), id);
+    if (slot && warp_restore_linear_window(ctx, slot->offset, slot->size) != 0) {
+        return (uint32_t)-1;
+    }
     warp_shmem_map_untrack(process_current_pid(), id);
     return (uint32_t)mm_shared_release(context_id, id);
 }

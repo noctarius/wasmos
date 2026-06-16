@@ -19,6 +19,8 @@ extern "C" {
 #include "klog.h"
 #include "slab.h"
 #include "physmem.h"
+#include "paging.h"
+#include "memory.h"
 #include "process.h"
 #include "arch/x86_64/smp.h"
 }
@@ -75,6 +77,25 @@ static inline uint64_t phys_of_pages_ptr(void *p)
     return reinterpret_cast<uint64_t>(p) - kHalfBase;
 }
 
+static int warp_map_page_alias(uint64_t phys, uint64_t pages)
+{
+    if (!phys || pages == 0) {
+        return -1;
+    }
+    for (uint64_t i = 0; i < pages; ++i) {
+        uint64_t page_phys = phys + (i * kPageSize);
+        uint64_t page_virt = page_phys + kHalfBase;
+        if (paging_map_4k(page_virt,
+                          page_phys,
+                          MEM_REGION_FLAG_READ |
+                              MEM_REGION_FLAG_WRITE |
+                              MEM_REGION_FLAG_EXEC) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
 } // namespace
 
 static void *warp_kmalloc(size_t const size)
@@ -94,6 +115,10 @@ static void *warp_kmalloc(size_t const size)
         uint64_t pages = (static_cast<uint64_t>(total) + kPageSize - 1) / kPageSize;
         uint64_t phys  = pfa_alloc_pages_below(pages, kPhysLimit);
         if (!phys) return nullptr;
+        if (warp_map_page_alias(phys, pages) != 0) {
+            pfa_free_pages(phys, pages);
+            return nullptr;
+        }
         auto *hdr = reinterpret_cast<AllocHeader *>(phys | kHalfBase);
         hdr->size     = pages;   /* store PAGE count */
         hdr->is_pages = 1;

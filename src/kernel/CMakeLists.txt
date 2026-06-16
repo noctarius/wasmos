@@ -20,7 +20,8 @@ set(CFLAGS_WARP_CXX ${CFLAGS_KERNEL}
     -DVB_POSIX -DVB_WIN32_OR_POSIX -DNVALGRIND
     -I${KERNEL_DIR}/warp/compat
     -isystem ${_WARP_CLANG_RSRC}/include
-    -Wno-macro-redefined -Wno-c++20-extensions -Wno-deprecated-copy)
+    -Wno-macro-redefined -Wno-c++20-extensions -Wno-deprecated-copy
+    "-Wno-#pragma-messages")
 
 set(RING3_NATIVE_PROBE_SRC ${KERNEL_DIR}/ring3_native_probe.c)
 set(RING3_NATIVE_PROBE_OBJ ${BUILD_DIR}/ring3_native_probe.o)

@@ -258,27 +258,45 @@ wasm_driver_start(wasm_driver_t *driver,
         warp_runtime_leave(prev);
         return -1;
     }
-    {
-        WarpExceptionCheckpoint *ckpt = warp_exception_get_checkpoint();
+    WarpExceptionCheckpoint *ckpt = warp_exception_get_checkpoint();
+
+    /* AOT path: try loading a pre-compiled binary if one was embedded in the
+     * .wap.  If it fails (WARP exception or mismatched symbol table) we fall
+     * back to JIT below — the module object is deleted and rebuilt fresh. */
+    int use_jit = 1;
+    if (manifest->compiled_bytes != nullptr && manifest->compiled_size > 0) {
         ckpt->active = 1;
         if (__builtin_setjmp(ckpt->jbuf)) {
-            klog_write("[warp-driver] module load failed\n");
+            /* AOT load failed — discard the half-initialised module and let
+             * the JIT path below handle it. */
+            ckpt->active = 0;
+            klog_write("[warp-driver] AOT load failed, falling back to JIT\n");
+            delete mod;
+            mod = nullptr;
+        } else {
+            klog_write("[warp-driver] using AOT binary\n");
+            mod = new vb::WasmModule(UINT64_MAX, g_logger, false, warp_ctx, 10U);
+            vb::Span<uint8_t const> compiled(manifest->compiled_bytes, manifest->compiled_size);
+            vb::Span<uint8_t const> empty_debug(nullptr, 0);
+            mod->initFromCompiledBinary(compiled, warp_wasmos_symbols(), empty_debug);
+            ckpt->active = 0;
+            use_jit = 0;
+        }
+    }
+
+    /* JIT path: used when no AOT binary was present or AOT loading failed. */
+    if (use_jit) {
+        ckpt->active = 1;
+        if (__builtin_setjmp(ckpt->jbuf)) {
+            klog_write("[warp-driver] module compilation failed\n");
             ckpt->active = 0;
             delete mod;
             warp_runtime_leave(prev);
             return -1;
         }
         mod = new vb::WasmModule(UINT64_MAX, g_logger, false, warp_ctx, 10U);
-        if (manifest->compiled_bytes != nullptr && manifest->compiled_size > 0) {
-            klog_write("[warp-driver] using AOT binary\n");
-            vb::Span<uint8_t const> compiled(manifest->compiled_bytes, manifest->compiled_size);
-            vb::Span<uint8_t const> empty_debug(nullptr, 0);
-            mod->initFromCompiledBinary(compiled, warp_wasmos_symbols(), empty_debug);
-        } else {
-            klog_write("[warp-driver] JIT compiling\n");
-            vb::Span<uint8_t const> bc(manifest->module_bytes, manifest->module_size);
-            mod->initFromBytecode(bc, warp_wasmos_symbols(), true);
-        }
+        vb::Span<uint8_t const> bc(manifest->module_bytes, manifest->module_size);
+        mod->initFromBytecode(bc, warp_wasmos_symbols(), true);
         ckpt->active = 0;
     }
 

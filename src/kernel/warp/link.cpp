@@ -14,6 +14,11 @@
  * All wasm3/link.c imports are now implemented here.
  */
 
+/* The WASMOS_SYMBOLS macro references static host functions by taking their
+ * address.  Clang may not track this as an ODR-use and spuriously reports
+ * them as unused when the reference is inside a nested macro expansion. */
+#pragma clang diagnostic ignored "-Wunused-function"
+
 #include <cstdint>
 #include <cstring>
 #include <array>
@@ -1771,141 +1776,132 @@ warp_env_abort(uint32_t msg, uint32_t file, uint32_t line, uint32_t column, void
     }
 }
 
-// DYNAMIC_LINK is used for all symbols so that initFromCompiledBinary() can
-// load pre-compiled AOT binaries.  initFromCompiledBinary() throws
-// RuntimeError::Wrong_type if any symbol has STATIC linkage.  Function
-// pointers are resolved at load time in both JIT and AOT paths, so the
-// runtime behaviour is identical to STATIC_LINK for in-kernel modules.
+/* WASMOS_SYMBOLS(LINK) expands to the full hostcall symbol list using LINK as
+ * the linkage macro (STATIC_LINK or DYNAMIC_LINK).  Having a single source of
+ * truth avoids the two tables getting out of sync.
+ *
+ * - STATIC_LINK: bakes function pointers into the JIT-compiled code at
+ *   compile time.  Used for initFromBytecode (JIT path) — leaner basedata.
+ * - DYNAMIC_LINK: uses an indirection table resolved at load time.  Required
+ *   by initFromCompiledBinary (AOT path) which throws Wrong_type for STATIC. */
+#define WASMOS_SYMBOLS(LINK) \
+    LINK("wasmos", "ipc_create_endpoint", warp_ipc_create_endpoint), \
+    LINK("wasmos", "ipc_endpoint_owner",  warp_ipc_endpoint_owner), \
+    LINK("wasmos", "ipc_send",             warp_ipc_send), \
+    LINK("wasmos", "ipc_select_one",       warp_ipc_select_one), \
+    LINK("wasmos", "ipc_recv",             warp_ipc_select_one), \
+    LINK("wasmos", "ipc_drain",            warp_ipc_drain), \
+    LINK("wasmos", "ipc_try_recv",         warp_ipc_drain), \
+    LINK("wasmos", "ipc_notify",           warp_ipc_notify), \
+    LINK("wasmos", "ipc_last_field",       warp_ipc_last_field), \
+    LINK("wasmos", "console_read",         warp_console_read), \
+    LINK("wasmos", "console_write",        warp_console_write), \
+    LINK("wasmos", "proc_exit",            warp_proc_exit), \
+    LINK("wasmos", "proc_notify_ready",    warp_proc_notify_ready), \
+    LINK("wasmos", "sched_yield",          warp_sched_yield), \
+    LINK("wasmos", "sched_current_pid",    warp_sched_current_pid), \
+    LINK("wasmos", "thread_gettid",        warp_thread_gettid), \
+    LINK("wasmos", "futex_wait",           warp_futex_wait), \
+    LINK("wasmos", "futex_wake",           warp_futex_wake), \
+    LINK("wasmos", "ipc_select_create",    warp_ipc_select_create), \
+    LINK("wasmos", "ipc_select_add",       warp_ipc_select_add), \
+    LINK("wasmos", "ipc_select_wait",      warp_ipc_select_wait), \
+    LINK("wasmos", "ipc_select_destroy",   warp_ipc_select_destroy), \
+    LINK("wasmos", "sys_select_create",    warp_ipc_select_create), \
+    LINK("wasmos", "sys_select_add",       warp_ipc_select_add), \
+    LINK("wasmos", "sys_select_wait",      warp_ipc_select_wait), \
+    LINK("wasmos", "sys_select_destroy",   warp_ipc_select_destroy), \
+    LINK("wasmos", "fs_buffer_size",       warp_fs_buffer_size), \
+    LINK("wasmos", "fs_endpoint",          warp_fs_endpoint), \
+    LINK("wasmos", "fs_buffer_copy",       warp_fs_buffer_copy), \
+    LINK("wasmos", "fs_buffer_write",      warp_fs_buffer_write), \
+    LINK("wasmos", "buffer_borrow",        warp_buffer_borrow), \
+    LINK("wasmos", "buffer_release",       warp_buffer_release), \
+    LINK("wasmos", "block_buffer_phys",    warp_block_buffer_phys), \
+    LINK("wasmos", "block_buffer_copy",    warp_block_buffer_copy), \
+    LINK("wasmos", "block_buffer_write",   warp_block_buffer_write), \
+    LINK("wasmos", "io_in8",               warp_io_in8), \
+    LINK("wasmos", "io_in16",              warp_io_in16), \
+    LINK("wasmos", "io_in32",              warp_io_in32), \
+    LINK("wasmos", "io_out8",              warp_io_out8), \
+    LINK("wasmos", "io_out16",             warp_io_out16), \
+    LINK("wasmos", "io_out32",             warp_io_out32), \
+    LINK("wasmos", "io_wait",              warp_io_wait), \
+    LINK("wasmos", "acpi_rsdp_info",       warp_acpi_rsdp_info), \
+    LINK("wasmos", "boot_module_name",     warp_boot_module_name), \
+    LINK("wasmos", "sync_user_read",       warp_sync_user_read), \
+    LINK("wasmos", "system_halt",          warp_system_halt), \
+    LINK("wasmos", "system_reboot",        warp_system_reboot), \
+    LINK("wasmos", "sched_ticks",          warp_sched_ticks), \
+    LINK("wasmos", "proc_count",           warp_proc_count), \
+    LINK("wasmos", "sched_ready_count",    warp_sched_ready_count), \
+    LINK("wasmos", "sched_cpu_count",      warp_sched_cpu_count), \
+    LINK("wasmos", "physmem_stats",        warp_physmem_stats), \
+    LINK("wasmos", "kernel_runtime",       warp_kernel_runtime), \
+    LINK("wasmos", "debug_mark",           warp_debug_mark), \
+    LINK("wasmos", "kmap_dump",            warp_kmap_dump), \
+    LINK("wasmos", "kmap_dump_all",        warp_kmap_dump_all), \
+    LINK("wasmos", "initfs_entry_count",   warp_initfs_entry_count), \
+    LINK("wasmos", "initfs_entry_name",    warp_initfs_entry_name), \
+    LINK("wasmos", "initfs_entry_size",    warp_initfs_entry_size), \
+    LINK("wasmos", "initfs_entry_copy",    warp_initfs_entry_copy), \
+    LINK("wasmos", "dma_map_borrow",       warp_dma_map_borrow), \
+    LINK("wasmos", "dma_sync_borrow",      warp_dma_sync_borrow), \
+    LINK("wasmos", "dma_unmap_borrow",     warp_dma_unmap_borrow), \
+    LINK("wasmos", "phys_map",             warp_phys_map), \
+    LINK("wasmos", "proc_info",            warp_proc_info), \
+    LINK("wasmos", "proc_info_ex",         warp_proc_info_ex), \
+    LINK("wasmos", "proc_info_stats",      warp_proc_info_stats), \
+    LINK("wasmos", "fs_buffer_borrow",     warp_fs_buffer_borrow), \
+    LINK("wasmos", "fs_buffer_release",    warp_fs_buffer_release), \
+    LINK("wasmos", "sched_cpu_stats",      warp_sched_cpu_stats), \
+    LINK("wasmos", "thread_create",        warp_thread_create), \
+    LINK("wasmos", "thread_yield",         warp_thread_yield), \
+    LINK("wasmos", "thread_exit",          warp_thread_exit), \
+    LINK("wasmos", "thread_join",          warp_thread_join), \
+    LINK("wasmos", "thread_detach",        warp_thread_detach), \
+    LINK("wasmos", "shmem_create",         warp_shmem_create), \
+    LINK("wasmos", "shmem_grant",          warp_shmem_grant), \
+    LINK("wasmos", "shmem_revoke",         warp_shmem_revoke), \
+    LINK("wasmos", "shmem_map",            warp_shmem_map), \
+    LINK("wasmos", "shmem_map_auto",       warp_shmem_map_auto), \
+    LINK("wasmos", "shmem_flush",          warp_shmem_flush), \
+    LINK("wasmos", "shmem_refresh",        warp_shmem_refresh), \
+    LINK("wasmos", "shmem_unmap",          warp_shmem_unmap), \
+    LINK("wasmos", "irq_route_ipc",        warp_irq_route_ipc), \
+    LINK("wasmos", "irq_ack",              warp_irq_ack), \
+    LINK("wasmos", "irq_unroute",          warp_irq_unroute), \
+    LINK("wasmos", "serial_register",      warp_serial_register), \
+    LINK("wasmos", "input_push",           warp_input_push), \
+    LINK("wasmos", "input_read",           warp_input_read), \
+    LINK("wasmos", "framebuffer_info",     warp_framebuffer_info), \
+    LINK("wasmos", "framebuffer_map",      warp_framebuffer_map), \
+    LINK("wasmos", "framebuffer_pixel",    warp_framebuffer_pixel), \
+    LINK("wasmos", "boot_config_size",     warp_boot_config_size), \
+    LINK("wasmos", "boot_config_copy",     warp_boot_config_copy), \
+    LINK("wasmos", "initfs_find_path",     warp_initfs_find_path), \
+    LINK("wasmos", "early_log_size",       warp_early_log_size), \
+    LINK("wasmos", "early_log_copy",       warp_early_log_copy), \
+    LINK("wasmos", "env_get",              warp_env_get), \
+    LINK("wasmos", "env_set",              warp_env_set), \
+    LINK("wasmos", "env_unset",            warp_env_unset), \
+    LINK("env",    "abort",                warp_env_abort)
+
 vb::Span<vb::NativeSymbol const>
 warp_wasmos_symbols(void)
 {
-    static vb::NativeSymbol syms[] = {
-        DYNAMIC_LINK("wasmos", "ipc_create_endpoint", warp_ipc_create_endpoint),
-        DYNAMIC_LINK("wasmos", "ipc_endpoint_owner",  warp_ipc_endpoint_owner),
-        DYNAMIC_LINK("wasmos", "ipc_send",             warp_ipc_send),
-        DYNAMIC_LINK("wasmos", "ipc_select_one",       warp_ipc_select_one),
-        DYNAMIC_LINK("wasmos", "ipc_recv",             warp_ipc_select_one),  // legacy alias
-        DYNAMIC_LINK("wasmos", "ipc_drain",            warp_ipc_drain),
-        DYNAMIC_LINK("wasmos", "ipc_try_recv",         warp_ipc_drain),       // legacy alias
-        DYNAMIC_LINK("wasmos", "ipc_notify",           warp_ipc_notify),
-        DYNAMIC_LINK("wasmos", "ipc_last_field",       warp_ipc_last_field),
-        DYNAMIC_LINK("wasmos", "console_read",         warp_console_read),
-        DYNAMIC_LINK("wasmos", "console_write",        warp_console_write),
-        DYNAMIC_LINK("wasmos", "proc_exit",            warp_proc_exit),
-        DYNAMIC_LINK("wasmos", "proc_notify_ready",    warp_proc_notify_ready),
-        DYNAMIC_LINK("wasmos", "sched_yield",          warp_sched_yield),
-        DYNAMIC_LINK("wasmos", "sched_current_pid",    warp_sched_current_pid),
-        DYNAMIC_LINK("wasmos", "thread_gettid",        warp_thread_gettid),
-        DYNAMIC_LINK("wasmos", "futex_wait",           warp_futex_wait),
-        DYNAMIC_LINK("wasmos", "futex_wake",           warp_futex_wake),
-        // IPC select sets
-        DYNAMIC_LINK("wasmos", "ipc_select_create",    warp_ipc_select_create),
-        DYNAMIC_LINK("wasmos", "ipc_select_add",       warp_ipc_select_add),
-        DYNAMIC_LINK("wasmos", "ipc_select_wait",      warp_ipc_select_wait),
-        DYNAMIC_LINK("wasmos", "ipc_select_destroy",   warp_ipc_select_destroy),
-        DYNAMIC_LINK("wasmos", "sys_select_create",    warp_ipc_select_create),
-        DYNAMIC_LINK("wasmos", "sys_select_add",       warp_ipc_select_add),
-        DYNAMIC_LINK("wasmos", "sys_select_wait",      warp_ipc_select_wait),
-        DYNAMIC_LINK("wasmos", "sys_select_destroy",   warp_ipc_select_destroy),
-        // FS shared buffer
-        DYNAMIC_LINK("wasmos", "fs_buffer_size",       warp_fs_buffer_size),
-        DYNAMIC_LINK("wasmos", "fs_endpoint",          warp_fs_endpoint),
-        DYNAMIC_LINK("wasmos", "fs_buffer_copy",       warp_fs_buffer_copy),
-        DYNAMIC_LINK("wasmos", "fs_buffer_write",      warp_fs_buffer_write),
-        // Generic buffer borrow/release
-        DYNAMIC_LINK("wasmos", "buffer_borrow",        warp_buffer_borrow),
-        DYNAMIC_LINK("wasmos", "buffer_release",       warp_buffer_release),
-        // Block DMA buffer
-        DYNAMIC_LINK("wasmos", "block_buffer_phys",    warp_block_buffer_phys),
-        DYNAMIC_LINK("wasmos", "block_buffer_copy",    warp_block_buffer_copy),
-        DYNAMIC_LINK("wasmos", "block_buffer_write",   warp_block_buffer_write),
-        // I/O ports
-        DYNAMIC_LINK("wasmos", "io_in8",               warp_io_in8),
-        DYNAMIC_LINK("wasmos", "io_in16",              warp_io_in16),
-        DYNAMIC_LINK("wasmos", "io_in32",              warp_io_in32),
-        DYNAMIC_LINK("wasmos", "io_out8",              warp_io_out8),
-        DYNAMIC_LINK("wasmos", "io_out16",             warp_io_out16),
-        DYNAMIC_LINK("wasmos", "io_out32",             warp_io_out32),
-        DYNAMIC_LINK("wasmos", "io_wait",              warp_io_wait),
-        // ACPI / boot info
-        DYNAMIC_LINK("wasmos", "acpi_rsdp_info",       warp_acpi_rsdp_info),
-        DYNAMIC_LINK("wasmos", "boot_module_name",     warp_boot_module_name),
-        DYNAMIC_LINK("wasmos", "sync_user_read",       warp_sync_user_read),
-        // System
-        DYNAMIC_LINK("wasmos", "system_halt",          warp_system_halt),
-        DYNAMIC_LINK("wasmos", "system_reboot",        warp_system_reboot),
-        // Scheduler extras
-        DYNAMIC_LINK("wasmos", "sched_ticks",          warp_sched_ticks),
-        DYNAMIC_LINK("wasmos", "proc_count",           warp_proc_count),
-        DYNAMIC_LINK("wasmos", "sched_ready_count",    warp_sched_ready_count),
-        DYNAMIC_LINK("wasmos", "sched_cpu_count",      warp_sched_cpu_count),
-        DYNAMIC_LINK("wasmos", "physmem_stats",        warp_physmem_stats),
-        DYNAMIC_LINK("wasmos", "kernel_runtime",       warp_kernel_runtime),
-        DYNAMIC_LINK("wasmos", "debug_mark",           warp_debug_mark),
-        DYNAMIC_LINK("wasmos", "kmap_dump",            warp_kmap_dump),
-        DYNAMIC_LINK("wasmos", "kmap_dump_all",        warp_kmap_dump_all),
-        // initfs
-        DYNAMIC_LINK("wasmos", "initfs_entry_count",   warp_initfs_entry_count),
-        DYNAMIC_LINK("wasmos", "initfs_entry_name",    warp_initfs_entry_name),
-        DYNAMIC_LINK("wasmos", "initfs_entry_size",    warp_initfs_entry_size),
-        DYNAMIC_LINK("wasmos", "initfs_entry_copy",    warp_initfs_entry_copy),
-        // DMA
-        DYNAMIC_LINK("wasmos", "dma_map_borrow",       warp_dma_map_borrow),
-        DYNAMIC_LINK("wasmos", "dma_sync_borrow",      warp_dma_sync_borrow),
-        DYNAMIC_LINK("wasmos", "dma_unmap_borrow",     warp_dma_unmap_borrow),
-        // Physical memory mapping
-        DYNAMIC_LINK("wasmos", "phys_map",             warp_phys_map),
-        // Process info
-        DYNAMIC_LINK("wasmos", "proc_info",            warp_proc_info),
-        DYNAMIC_LINK("wasmos", "proc_info_ex",         warp_proc_info_ex),
-        DYNAMIC_LINK("wasmos", "proc_info_stats",      warp_proc_info_stats),
-        // FS buffer
-        DYNAMIC_LINK("wasmos", "fs_buffer_borrow",     warp_fs_buffer_borrow),
-        DYNAMIC_LINK("wasmos", "fs_buffer_release",    warp_fs_buffer_release),
-        // Scheduler
-        DYNAMIC_LINK("wasmos", "sched_cpu_stats",      warp_sched_cpu_stats),
-        // Threads
-        DYNAMIC_LINK("wasmos", "thread_create",        warp_thread_create),
-        DYNAMIC_LINK("wasmos", "thread_yield",         warp_thread_yield),
-        DYNAMIC_LINK("wasmos", "thread_exit",          warp_thread_exit),
-        DYNAMIC_LINK("wasmos", "thread_join",          warp_thread_join),
-        DYNAMIC_LINK("wasmos", "thread_detach",        warp_thread_detach),
-        // Shared memory
-        DYNAMIC_LINK("wasmos", "shmem_create",         warp_shmem_create),
-        DYNAMIC_LINK("wasmos", "shmem_grant",          warp_shmem_grant),
-        DYNAMIC_LINK("wasmos", "shmem_revoke",         warp_shmem_revoke),
-        DYNAMIC_LINK("wasmos", "shmem_map",            warp_shmem_map),
-        DYNAMIC_LINK("wasmos", "shmem_map_auto",       warp_shmem_map_auto),
-        DYNAMIC_LINK("wasmos", "shmem_flush",          warp_shmem_flush),
-        DYNAMIC_LINK("wasmos", "shmem_refresh",        warp_shmem_refresh),
-        DYNAMIC_LINK("wasmos", "shmem_unmap",          warp_shmem_unmap),
-        // IRQ
-        DYNAMIC_LINK("wasmos", "irq_route_ipc",        warp_irq_route_ipc),
-        DYNAMIC_LINK("wasmos", "irq_ack",              warp_irq_ack),
-        DYNAMIC_LINK("wasmos", "irq_unroute",          warp_irq_unroute),
-        // Serial / input
-        DYNAMIC_LINK("wasmos", "serial_register",      warp_serial_register),
-        DYNAMIC_LINK("wasmos", "input_push",           warp_input_push),
-        DYNAMIC_LINK("wasmos", "input_read",           warp_input_read),
-        // Framebuffer
-        DYNAMIC_LINK("wasmos", "framebuffer_info",     warp_framebuffer_info),
-        DYNAMIC_LINK("wasmos", "framebuffer_map",      warp_framebuffer_map),
-        DYNAMIC_LINK("wasmos", "framebuffer_pixel",    warp_framebuffer_pixel),
-        // Boot config
-        DYNAMIC_LINK("wasmos", "boot_config_size",     warp_boot_config_size),
-        DYNAMIC_LINK("wasmos", "boot_config_copy",     warp_boot_config_copy),
-        // initfs
-        DYNAMIC_LINK("wasmos", "initfs_find_path",     warp_initfs_find_path),
-        // Early log
-        DYNAMIC_LINK("wasmos", "early_log_size",       warp_early_log_size),
-        DYNAMIC_LINK("wasmos", "early_log_copy",       warp_early_log_copy),
-        // Environment
-        DYNAMIC_LINK("wasmos", "env_get",              warp_env_get),
-        DYNAMIC_LINK("wasmos", "env_set",              warp_env_set),
-        DYNAMIC_LINK("wasmos", "env_unset",            warp_env_unset),
-        // AssemblyScript runtime imports (env module)
-        DYNAMIC_LINK("env",    "abort",                warp_env_abort),
-    };
+    // STATIC_LINK: bakes function pointers into call stubs at JIT compile time.
+    // Smaller basedata → no reallocation pressure during JIT execution.
+    static vb::NativeSymbol syms[] = { WASMOS_SYMBOLS(STATIC_LINK) };
+    return vb::Span<vb::NativeSymbol const>(syms, sizeof(syms) / sizeof(syms[0]));
+}
+
+// Used by initFromCompiledBinary (AOT load path).  DYNAMIC_LINK is required
+// because initFromCompiledBinary throws Wrong_type on any STATIC symbol.
+vb::Span<vb::NativeSymbol const>
+warp_wasmos_symbols_for_aot_load(void)
+{
+    static vb::NativeSymbol syms[] = { WASMOS_SYMBOLS(DYNAMIC_LINK) };
     return vb::Span<vb::NativeSymbol const>(syms, sizeof(syms) / sizeof(syms[0]));
 }
 

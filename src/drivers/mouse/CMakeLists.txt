@@ -25,17 +25,10 @@ if (AS_ENABLE)
     VERBATIM
   )
 
-  add_custom_command(
-    OUTPUT ${WASM_MOUSE_APP}
-    COMMAND ${WASMOS_APP_PACKER}
-            --manifest ${DRIVER_WASM_DIR}/mouse/linker.metadata
-            --in ${WASM_MOUSE_DRIVER_WASM}
-            --out ${WASM_MOUSE_APP}
-    DEPENDS ${WASM_MOUSE_DRIVER_WASM} make_wasmos_app
-            ${DRIVER_WASM_DIR}/mouse/linker.metadata
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Packing mouse driver as WASMOS-APP"
-    VERBATIM
+  wasmos_maybe_aot_pack(
+    "${DRIVER_WASM_DIR}/mouse/linker.metadata"
+    "${WASM_MOUSE_DRIVER_WASM}"
+    "${WASM_MOUSE_APP}"
   )
 
   add_custom_target(mouse_app

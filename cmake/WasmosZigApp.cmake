@@ -103,16 +103,10 @@ function(wasmos_add_zig_wasm_app)
     VERBATIM
   )
 
-  add_custom_command(
-    OUTPUT ${ARG_OUTPUT_APP}
-    COMMAND ${WASMOS_APP_PACKER}
-            --manifest ${ARG_MANIFEST}
-            --in  ${ARG_OUTPUT_WASM}
-            --out ${ARG_OUTPUT_APP}
-    DEPENDS ${ARG_OUTPUT_WASM} make_wasmos_app ${ARG_MANIFEST}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Packing Zig WASM app: ${ARG_NAME}"
-    VERBATIM
+  wasmos_maybe_aot_pack(
+    "${ARG_MANIFEST}"
+    "${ARG_OUTPUT_WASM}"
+    "${ARG_OUTPUT_APP}"
   )
 
   add_custom_target(${ARG_TARGET} DEPENDS ${ARG_OUTPUT_APP})

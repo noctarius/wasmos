@@ -16,9 +16,13 @@
 #include "src/core/common/NativeSymbol.hpp"
 #include "src/core/common/Span.hpp"
 
-/* Returns the NativeSymbol table for the wasmos import module.
- * Pass this span to module.initFromBytecode(bytecode, warp_wasmos_symbols(), true). */
+/* STATIC_LINK symbol table — pass to initFromBytecode (JIT path).
+ * Bakes function pointers into call stubs at compile time; no basedata overhead. */
 vb::Span<vb::NativeSymbol const> warp_wasmos_symbols(void);
+
+/* DYNAMIC_LINK symbol table — pass to initFromCompiledBinary (AOT load path).
+ * initFromCompiledBinary() throws Wrong_type for any STATIC symbol. */
+vb::Span<vb::NativeSymbol const> warp_wasmos_symbols_for_aot_load(void);
 
 /* Binds the compiled WasmModule to the per-PID call context so that V1 host
  * functions can resolve linear-memory offsets via getLinearMemoryRegion. */

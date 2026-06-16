@@ -278,7 +278,8 @@ wasm_driver_start(wasm_driver_t *driver,
             mod = new vb::WasmModule(UINT64_MAX, g_logger, false, warp_ctx, 10U);
             vb::Span<uint8_t const> compiled(manifest->compiled_bytes, manifest->compiled_size);
             vb::Span<uint8_t const> empty_debug(nullptr, 0);
-            mod->initFromCompiledBinary(compiled, warp_wasmos_symbols(), empty_debug);
+            /* initFromCompiledBinary requires DYNAMIC_LINK symbols. */
+            mod->initFromCompiledBinary(compiled, warp_wasmos_symbols_for_aot_load(), empty_debug);
             ckpt->active = 0;
             use_jit = 0;
         }

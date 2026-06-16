@@ -25,17 +25,10 @@ if (AS_ENABLE)
     VERBATIM
   )
 
-  add_custom_command(
-    OUTPUT ${WASM_KEYBOARD_APP}
-    COMMAND ${WASMOS_APP_PACKER}
-            --manifest ${DRIVER_WASM_DIR}/keyboard/linker.metadata
-            --in ${WASM_KEYBOARD_DRIVER_WASM}
-            --out ${WASM_KEYBOARD_APP}
-    DEPENDS ${WASM_KEYBOARD_DRIVER_WASM} make_wasmos_app
-            ${DRIVER_WASM_DIR}/keyboard/linker.metadata
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT "Packing keyboard driver as WASMOS-APP"
-    VERBATIM
+  wasmos_maybe_aot_pack(
+    "${DRIVER_WASM_DIR}/keyboard/linker.metadata"
+    "${WASM_KEYBOARD_DRIVER_WASM}"
+    "${WASM_KEYBOARD_APP}"
   )
 
   add_custom_target(keyboard_app

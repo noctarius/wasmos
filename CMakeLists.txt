@@ -953,10 +953,20 @@ function(wasmos_maybe_aot_pack MANIFEST WASM APP)
 
   if (_do_aot)
     set(_warpbin "${BUILD_DIR}/${_name}.warpbin")
+    set(_aot_cache_dir "${CMAKE_SOURCE_DIR}/.cache/warp_aot")
     add_custom_command(
       OUTPUT "${_warpbin}"
-      COMMAND "${WARP_AOT_BIN}" "${WASM}" "${_warpbin}"
-      DEPENDS "${WASM}" "${WARP_AOT_BIN}" warp_aot ${_extra_deps}
+      # Use the caching cmake script so unchanged WASM files are not recompiled
+      # across clean builds.  Depend only on the warp_aot BINARY file (not the
+      # phony warp_aot target) — a target dependency on a phony causes Ninja to
+      # mark the output as always-stale even when nothing has changed.
+      COMMAND ${CMAKE_COMMAND}
+              "-DWARP_AOT=${WARP_AOT_BIN}"
+              "-DWASM=${WASM}"
+              "-DWARPBIN=${_warpbin}"
+              "-DCACHE_DIR=${_aot_cache_dir}"
+              -P "${CMAKE_SOURCE_DIR}/cmake/warp_aot_cached.cmake"
+      DEPENDS "${WASM}" "${WARP_AOT_BIN}" ${_extra_deps}
       WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
       COMMENT "AOT compiling ${_name}"
       VERBATIM

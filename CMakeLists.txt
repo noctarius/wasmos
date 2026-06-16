@@ -482,16 +482,10 @@ function(wasmos_add_wasm_c_app_target target_name)
     VERBATIM
   )
 
-  add_custom_command(
-    OUTPUT ${WASMOS_APP_OUTPUT_APP}
-    COMMAND ${WASMOS_APP_PACKER}
-            --manifest ${WASMOS_APP_MANIFEST}
-            --in ${WASMOS_APP_OUTPUT_WASM}
-            --out ${WASMOS_APP_OUTPUT_APP}
-    DEPENDS ${WASMOS_APP_OUTPUT_WASM} make_wasmos_app ${WASMOS_APP_MANIFEST}
-    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    COMMENT ${_pack_comment}
-    VERBATIM
+  wasmos_maybe_aot_pack(
+    "${WASMOS_APP_MANIFEST}"
+    "${WASMOS_APP_OUTPUT_WASM}"
+    "${WASMOS_APP_OUTPUT_APP}"
   )
 
   add_custom_target(${target_name}
@@ -916,6 +910,65 @@ if (WASMOS_WASM_RUNTIME_WARP)
   )
   add_custom_target(warp_aot DEPENDS ${WARP_AOT_BIN})
 endif ()
+
+# wasmos_maybe_aot_pack(MANIFEST WASM APP)
+#
+# If WARP is enabled and MANIFEST contains "aot = true", compile WASM to a
+# WARP native binary with the warp_aot host tool and embed it in APP using
+# make_wasmos_app --compiled.  Otherwise pack APP from WASM without AOT.
+#
+# Only call this after set(WASMOS_APP_PACKER ...) — it references that var.
+# Extra make-time dependencies (e.g. a .wam target) may be appended after APP.
+function(wasmos_maybe_aot_pack MANIFEST WASM APP)
+  set(_extra_deps ${ARGN})
+  set(_do_aot OFF)
+  if (WASMOS_WASM_RUNTIME_WARP AND DEFINED WARP_AOT_BIN AND EXISTS "${MANIFEST}")
+    file(READ "${MANIFEST}" _meta)
+    string(FIND "${_meta}" "aot = true" _pos)
+    if (NOT _pos EQUAL -1)
+      set(_do_aot ON)
+    endif()
+  endif()
+
+  get_filename_component(_name "${APP}" NAME_WE)
+
+  if (_do_aot)
+    set(_warpbin "${BUILD_DIR}/${_name}.warpbin")
+    add_custom_command(
+      OUTPUT "${_warpbin}"
+      COMMAND "${WARP_AOT_BIN}" "${WASM}" "${_warpbin}"
+      DEPENDS "${WASM}" "${WARP_AOT_BIN}" warp_aot ${_extra_deps}
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      COMMENT "AOT compiling ${_name}"
+      VERBATIM
+    )
+    add_custom_command(
+      OUTPUT "${APP}"
+      COMMAND "${WASMOS_APP_PACKER}"
+              --manifest "${MANIFEST}"
+              --in "${WASM}"
+              --compiled "${_warpbin}"
+              --out "${APP}"
+      DEPENDS "${WASM}" "${_warpbin}" make_wasmos_app "${MANIFEST}" ${_extra_deps}
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      COMMENT "Packing ${_name} (with AOT binary)"
+      VERBATIM
+    )
+  else()
+    add_custom_command(
+      OUTPUT "${APP}"
+      COMMAND "${WASMOS_APP_PACKER}"
+              --manifest "${MANIFEST}"
+              --in "${WASM}"
+              --out "${APP}"
+      DEPENDS "${WASM}" make_wasmos_app "${MANIFEST}" ${_extra_deps}
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      COMMENT "Packing ${_name}"
+      VERBATIM
+    )
+  endif()
+endfunction()
+
 set(WASMOS_APP_PACKER $<TARGET_FILE:make_wasmos_app>)
 add_custom_command(
   OUTPUT ${INITFS_IMG} ${INITFS_CONFIG_BIN}

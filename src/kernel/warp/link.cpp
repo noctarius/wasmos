@@ -1542,11 +1542,13 @@ warp_shmem_refresh(uint32_t id, uint32_t wasm_off, uint32_t size, void *ctx_)
     if (mm_shared_get_phys(context_id, id, &phys_base, &shared_pages) != 0
         || shared_pages == 0 || phys_base == 0) return (uint32_t)-1;
     if ((uint64_t)size > shared_pages * 0x1000ULL) return (uint32_t)-1;
-    /* Probe the destination before writing so ensureLinearSize does not zero it. */
-    ctx->module->getLinearMemoryRegion(wasm_off + size - 1, 1);
-    uint8_t *dst = ctx->module->getLinearMemoryRegion(0, 0);
+    /* shmem_refresh writes into a region already committed by shmem_map_auto.
+     * Use warp_linear_mem_window (size=0 probe, no ensureLinearSize) instead of
+     * getLinearMemoryRegion with a non-zero size, which would trigger
+     * ensureLinearSize and potentially extend the linear memory past its current
+     * limit causing a page fault at the new boundary. */
+    uint8_t *dst = warp_linear_mem_window(ctx, wasm_off, size);
     if (!dst) return (uint32_t)-1;
-    dst += wasm_off;
     __builtin_memcpy(dst, (const void *)(uintptr_t)(phys_base | KERNEL_HIGHER_HALF_BASE), size);
     return 0;
 }

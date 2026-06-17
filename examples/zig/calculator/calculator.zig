@@ -288,15 +288,20 @@ pub fn main() u8 {
     // 5 button rows using MENU_BAR horizontal layout.
     // In MENU_BAR layout, children's preferred_h is reinterpreted as their WIDTH.
     // Row preferred_h (in the parent panel) is the button HEIGHT.
+    // Use index-based iteration to avoid Zig copying the [4]ButtonDef row slice
+    // by value (which generates a memory.copy WASM instruction that WARP rejects).
     const BTN_W = 64; // button width (as preferred_h in the row)
     const BTN_H = 52; // button height (as preferred_h in the parent panel)
 
-    for (layout, 0..) |row_def, row_idx| {
+    var row_idx: usize = 0;
+    while (row_idx < 5) : (row_idx += 1) {
         const row = ui.createRow() catch return 1;
         ui.style(row, .{ .bg = COL_BG, .preferred_h = BTN_H, .pad = 2, .gap = 2 });
         ui.appendChild(root, row);
 
-        for (row_def, 0..) |btn_def, col_idx| {
+        var col_idx: usize = 0;
+        while (col_idx < 4) : (col_idx += 1) {
+            const btn_def = &layout[row_idx][col_idx];
             const btn = ui.createButton() catch return 1;
             const flat_idx = row_idx * 4 + col_idx;
             g_btn_ids[flat_idx] = btn;

@@ -604,18 +604,20 @@ pub const fs = struct {
 // arithmetic — no WASM extensions, no allocator.
 // ---------------------------------------------------------------------------
 pub const strconv = struct {
-    /// Write a non-negative integer into buf (no null terminator).
-    /// Returns the slice of buf that was written.
-    pub fn u64Buf(v: u64, buf: []u8) []const u8 {
-        if (v == 0) {
+    /// Write the digits of a non-negative finite f64 integer value into buf.
+    /// Uses only f64 arithmetic so that no i64/u64 WASM types are generated.
+    /// WARP's JIT does not handle function types that contain i64 parameters.
+    fn fmtIntF64(val: f64, buf: []u8) []const u8 {
+        if (val == 0.0) {
             if (buf.len > 0) { buf[0] = '0'; return buf[0..1]; }
             return buf[0..0];
         }
         var tmp: [20]u8 = undefined;
         var len: usize = 0;
-        var rem = v;
-        while (rem > 0) : (rem /= 10) {
-            tmp[len] = '0' + @as(u8, @intCast(rem % 10));
+        var rem = val;
+        while (rem >= 1.0 and len < 20) : (rem = @trunc(rem / 10.0)) {
+            const digit: u8 = @intFromFloat(@mod(rem, 10.0));
+            tmp[len] = '0' + digit;
             len += 1;
         }
         var out: usize = 0;
@@ -627,17 +629,9 @@ pub const strconv = struct {
         return buf[0..out];
     }
 
-    /// Write a signed integer into buf.
-    pub fn i64Buf(v: i64, buf: []u8) []const u8 {
-        if (buf.len == 0) return buf[0..0];
-        if (v >= 0) return u64Buf(@intCast(v), buf);
-        buf[0] = '-';
-        const s = u64Buf(@intCast(-v), buf[1..]);
-        return buf[0 .. 1 + s.len];
-    }
-
     /// Format a finite f64 into buf with up to 8 fractional digits,
     /// trailing zeros stripped.  Returns "Error" for NaN / Inf.
+    /// Uses only f64 / i32 WASM types — no u64/i64 which WARP cannot JIT.
     pub fn f64Buf(v: f64, buf: []u8) []const u8 {
         if (v != v or v > 1e308 or v < -1e308) return litBuf(buf, "Error");
         if (buf.len == 0) return buf[0..0];
@@ -645,11 +639,11 @@ pub const strconv = struct {
         var val = v;
         if (val < 0.0) { buf[pos] = '-'; pos += 1; val = -val; }
         if (@trunc(val) == val and val < 1e15) {
-            const s = u64Buf(@intFromFloat(val), buf[pos..]);
+            const s = fmtIntF64(val, buf[pos..]);
             return buf[0 .. pos + s.len];
         }
         const int_f = @trunc(val);
-        const si = u64Buf(@intFromFloat(int_f), buf[pos..]);
+        const si = fmtIntF64(int_f, buf[pos..]);
         pos += si.len;
         if (pos < buf.len) { buf[pos] = '.'; pos += 1; }
         var frac = val - int_f;

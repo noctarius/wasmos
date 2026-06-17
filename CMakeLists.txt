@@ -158,6 +158,9 @@ set(WASM_HELLO_GO_APP ${BUILD_DIR}/hello_go.wap)
 set(WASM_HELLO_ZIG_SRC ${EXAMPLES_ZIG_DIR}/hello/hello_zig.zig)
 set(WASM_HELLO_ZIG_WASM ${BUILD_DIR}/hello_zig.wasm)
 set(WASM_HELLO_ZIG_APP ${BUILD_DIR}/hello_zig.wap)
+set(WASM_CALCULATOR_SRC ${EXAMPLES_ZIG_DIR}/calculator/calculator.zig)
+set(WASM_CALCULATOR_WASM ${BUILD_DIR}/calculator.wasm)
+set(WASM_CALCULATOR_APP ${BUILD_DIR}/calculator.wap)
 set(AS_HELLO_SRC ${EXAMPLES_AS_DIR}/hello/hello.ts)
 set(AS_HELLO_WASM ${BUILD_DIR}/hello_as.wasm)
 set(AS_HELLO_APP ${BUILD_DIR}/hello_as.wap)
@@ -1263,6 +1266,9 @@ if (ZIG_AVAILABLE)
   set(ZIG_HELLO_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HELLO_ZIG_APP} ${BUILD_DIR}/esp/apps/hello_zig.wap
   )
+  set(ZIG_CALCULATOR_COPY_CMD
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CALCULATOR_APP} ${BUILD_DIR}/esp/apps/calculator.wap
+  )
 endif ()
 
 set(WASMOS_ESP_POPULATE_CMDS
@@ -1305,6 +1311,7 @@ set(WASMOS_ESP_POPULATE_CMDS
   ${RUST_HELLO_COPY_CMD}
   ${GO_HELLO_COPY_CMD}
   ${ZIG_HELLO_COPY_CMD}
+  ${ZIG_CALCULATOR_COPY_CMD}
   ${LARGE_READ_COPY_CMD}
   ${WRITE_SMOKE_FILE_COPY_CMD}
   COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/startup.nsh ${BUILD_DIR}/esp/startup.nsh

@@ -54,17 +54,19 @@ const Calc = struct {
         return false;
     }
 
-    fn currentValue(self: *const Calc) f64 {
+    // inline: prevents WASM function types with f64 from appearing in the type
+    // section — WARP's JIT cannot compile modules that have f64 in function types.
+    inline fn currentValue(self: *const Calc) f64 {
         return strconv.parseF64(self.display[0..self.display_len]);
     }
 
-    fn setDisplay(self: *Calc, v: f64) void {
+    inline fn setDisplay(self: *Calc, v: f64) void {
         const s = strconv.f64Buf(v, &self.display);
         self.display_len = @intCast(s.len);
         self.display[self.display_len] = 0;
     }
 
-    fn compute(a: f64, op: u8, b: f64, err: *bool) f64 {
+    inline fn compute(a: f64, op: u8, b: f64, err: *bool) f64 {
         return switch (op) {
             '+' => a + b,
             '-' => a - b,
@@ -154,7 +156,7 @@ const Calc = struct {
         }
     }
 
-    fn applyOp(self: *Calc, new_op: u8) void {
+    inline fn applyOp(self: *Calc, new_op: u8) void {
         const cur = self.currentValue();
         if (self.op != 0 and !self.fresh) {
             const result = compute(self.lhs, self.op, cur, &self.err);

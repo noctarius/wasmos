@@ -290,8 +290,16 @@ wasm_driver_start(wasm_driver_t *driver,
         ckpt->active = 1;
         if (__builtin_setjmp(ckpt->jbuf)) {
             klog_write("[warp-driver] module compilation failed\n");
+            /* Re-arm the checkpoint before calling the WasmModule destructor.
+             * If the destructor throws (e.g. while freeing partially-compiled
+             * JIT code), the exception is caught here rather than reaching the
+             * top-level handler and causing a kernel panic. */
+            ckpt->active = 1;
+            if (__builtin_setjmp(ckpt->jbuf) == 0) {
+                delete mod;
+            }
             ckpt->active = 0;
-            delete mod;
+            mod = nullptr;
             warp_runtime_leave(prev);
             return -1;
         }

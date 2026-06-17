@@ -1511,62 +1511,70 @@ if (OVMF_VARS)
   set(_ring3_ovmf_vars_arg "--ovmf-vars" "${OVMF_VARS}")
 endif ()
 
+# WASMOS_RING3_BUILD_DIR — optional path to an already-configured cmake build
+# directory to use for ring3 tests instead of the auto-configured shadow tree.
+# When set the ring3 test targets skip configure and build the ring3 check
+# target directly in that directory.  The directory must already be configured
+# by the caller (e.g. cmake -S . -B my-wasm3-build -DWASMOS_RING3_SMOKE=ON).
+set(WASMOS_RING3_BUILD_DIR "" CACHE PATH
+    "Pre-configured build directory for ring3 tests (skips auto-configure)")
+
+# Helper: build the common arg list for run_ring3_shadow.py, honouring
+# WASMOS_RING3_BUILD_DIR when provided.
+macro(_ring3_shadow_cmd _build_subdir _extra_defines _target _out_args)
+  if (WASMOS_RING3_BUILD_DIR)
+    set(${_out_args}
+        ${Python3_EXECUTABLE}
+        ${CMAKE_SOURCE_DIR}/scripts/run_ring3_shadow.py
+        --cmake ${CMAKE_COMMAND}
+        --build-dir ${WASMOS_RING3_BUILD_DIR}
+        --skip-configure
+        --target ${_target})
+  else ()
+    set(${_out_args}
+        ${Python3_EXECUTABLE}
+        ${CMAKE_SOURCE_DIR}/scripts/run_ring3_shadow.py
+        --cmake ${CMAKE_COMMAND}
+        --source-dir ${CMAKE_SOURCE_DIR}
+        --build-dir ${BUILD_DIR}/${_build_subdir}
+        --clang ${CLANG}
+        --lld ${LLD}
+        --objcopy ${OBJCOPY}
+        --ovmf-code ${OVMF_CODE}
+        ${_ring3_ovmf_vars_arg}
+        --trace ${WASMOS_TRACE}
+        ${_extra_defines}
+        --target ${_target})
+  endif ()
+endmacro()
+
+_ring3_shadow_cmd(ring3
+  "--define;WASMOS_RING3_SMOKE=ON;--define;WASMOS_PM_TEST_HOOKS=ON"
+  run-qemu-ring3-check _ring3_cmd)
 add_custom_target(run-qemu-ring3-test
-  COMMAND ${Python3_EXECUTABLE}
-          ${CMAKE_SOURCE_DIR}/scripts/run_ring3_shadow.py
-          --cmake ${CMAKE_COMMAND}
-          --source-dir ${CMAKE_SOURCE_DIR}
-          --build-dir ${BUILD_DIR}/ring3
-          --clang ${CLANG}
-          --lld ${LLD}
-          --objcopy ${OBJCOPY}
-          --ovmf-code ${OVMF_CODE}
-          ${_ring3_ovmf_vars_arg}
-          --trace ${WASMOS_TRACE}
-          --define WASMOS_RING3_SMOKE=ON
-          --define WASMOS_PM_TEST_HOOKS=ON
-          --target run-qemu-ring3-check
+  COMMAND ${_ring3_cmd}
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Configure/build shadow ring3 tree and run ring3 smoke marker test"
+  COMMENT "Build ring3 tree and run ring3 smoke marker test"
   VERBATIM
 )
+
+_ring3_shadow_cmd(ring3-threading
+  "--define;WASMOS_RING3_SMOKE=ON;--define;WASMOS_RING3_THREAD_LIFECYCLE_SMOKE=ON;--define;WASMOS_PM_TEST_HOOKS=ON"
+  run-qemu-ring3-threading-check _ring3_threading_cmd)
 add_custom_target(run-qemu-ring3-threading-test
-  COMMAND ${Python3_EXECUTABLE}
-          ${CMAKE_SOURCE_DIR}/scripts/run_ring3_shadow.py
-          --cmake ${CMAKE_COMMAND}
-          --source-dir ${CMAKE_SOURCE_DIR}
-          --build-dir ${BUILD_DIR}/ring3-threading
-          --clang ${CLANG}
-          --lld ${LLD}
-          --objcopy ${OBJCOPY}
-          --ovmf-code ${OVMF_CODE}
-          ${_ring3_ovmf_vars_arg}
-          --trace ${WASMOS_TRACE}
-          --define WASMOS_RING3_SMOKE=ON
-          --define WASMOS_RING3_THREAD_LIFECYCLE_SMOKE=ON
-          --define WASMOS_PM_TEST_HOOKS=ON
-          --target run-qemu-ring3-threading-check
+  COMMAND ${_ring3_threading_cmd}
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Configure/build shadow threading ring3 tree and run lifecycle marker test"
+  COMMENT "Build ring3 tree and run lifecycle marker test"
   VERBATIM
 )
+
+_ring3_shadow_cmd(ring3-fault-storm
+  "--define;WASMOS_RING3_SMOKE=ON;--define;WASMOS_PM_TEST_HOOKS=ON"
+  run-qemu-ring3-fault-storm-check _ring3_fault_storm_cmd)
 add_custom_target(run-qemu-ring3-fault-storm-test
-  COMMAND ${Python3_EXECUTABLE}
-          ${CMAKE_SOURCE_DIR}/scripts/run_ring3_shadow.py
-          --cmake ${CMAKE_COMMAND}
-          --source-dir ${CMAKE_SOURCE_DIR}
-          --build-dir ${BUILD_DIR}/ring3-fault-storm
-          --clang ${CLANG}
-          --lld ${LLD}
-          --objcopy ${OBJCOPY}
-          --ovmf-code ${OVMF_CODE}
-          ${_ring3_ovmf_vars_arg}
-          --trace ${WASMOS_TRACE}
-          --define WASMOS_RING3_SMOKE=ON
-          --define WASMOS_PM_TEST_HOOKS=ON
-          --target run-qemu-ring3-fault-storm-check
+  COMMAND ${_ring3_fault_storm_cmd}
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-  COMMENT "Configure/build shadow ring3 fault-storm tree and run dedicated marker test"
+  COMMENT "Build ring3 tree and run fault-storm marker test"
   VERBATIM
 )
 add_custom_target(strict-ring3

@@ -286,19 +286,13 @@ endif ()
 option(WASMOS_WASM_RUNTIME_WASM3 "Use wasm3 interpreter as WASM runtime" ON)
 option(WASMOS_WASM_RUNTIME_WARP  "Use WARP JIT compiler as WASM runtime" OFF)
 
-if (WASMOS_WASM_RUNTIME_WARP)
-  set(WASM_RUNTIME_INCLUDE_DIR ${WARP_DIR})
-  set(WASM_RUNTIME_DEFINE -DWASMOS_WASM_RUNTIME=1)
-  # WARP is a C++14 library; pull it in as a subdirectory with a bare-metal
-  # x86_64 backend and static linking.  Dev features, tests, and binding are
-  # all off since we only need the core compiler+runtime libraries.
-  set(BACKEND "x86_64" CACHE STRING "" FORCE)
-  set(STATIC_LIB ON CACHE BOOL "" FORCE)
-  add_subdirectory(${WARP_DIR} ${CMAKE_BINARY_DIR}/warp EXCLUDE_FROM_ALL)
-else ()
-  set(WASM_RUNTIME_INCLUDE_DIR ${WASM3_DIR})
-  set(WASM_RUNTIME_DEFINE -DWASMOS_WASM_RUNTIME=0)
-endif ()
+# WASM_RUNTIME_INCLUDE_DIR and WASM_RUNTIME_DEFINE are computed after the
+# Kconfig import (below) so that on a fresh cmake cache the kconfig-selected
+# runtime overrides the initialization-block default before CFLAGS_KERNEL
+# is assembled.  Placeholder values keep the variables defined for any code
+# between here and the kconfig import that might inspect them (none currently).
+set(WASM_RUNTIME_INCLUDE_DIR ${WASM3_DIR})
+set(WASM_RUNTIME_DEFINE -DWASMOS_WASM_RUNTIME=0)
 
 if (NOT DEFINED WASMOS_IRQ_PIC_INITIALIZED)
   set(WASMOS_IRQ_PIC ON CACHE BOOL "Use legacy 8259 PIC as IRQ controller" FORCE)
@@ -609,6 +603,22 @@ if (EXISTS ${WASMOS_DOTCONFIG})
     message(FATAL_ERROR "Failed to import ${WASMOS_DOTCONFIG} into CMake cache.")
   endif ()
   include(${WASMOS_KCONFIG_IMPORT})
+endif ()
+
+# WASM runtime selection must run AFTER the Kconfig import so that on a fresh
+# cmake cache (e.g. the ring3 shadow build) the kconfig-selected runtime wins
+# before CFLAGS_KERNEL is assembled.  On a warm cache the initialization block
+# above has already run kconfig via the prior configure so the ordering only
+# matters on the very first configure of a new build directory.
+if (WASMOS_WASM_RUNTIME_WARP)
+  set(WASM_RUNTIME_INCLUDE_DIR ${WARP_DIR})
+  set(WASM_RUNTIME_DEFINE -DWASMOS_WASM_RUNTIME=1)
+  set(BACKEND "x86_64" CACHE STRING "" FORCE)
+  set(STATIC_LIB ON CACHE BOOL "" FORCE)
+  add_subdirectory(${WARP_DIR} ${CMAKE_BINARY_DIR}/warp EXCLUDE_FROM_ALL)
+else ()
+  set(WASM_RUNTIME_INCLUDE_DIR ${WASM3_DIR})
+  set(WASM_RUNTIME_DEFINE -DWASMOS_WASM_RUNTIME=0)
 endif ()
 
 # IRQ mode determination must run AFTER the Kconfig import so that
@@ -941,7 +951,8 @@ endif ()
 function(wasmos_maybe_aot_pack MANIFEST WASM APP)
   set(_extra_deps ${ARGN})
   set(_do_aot OFF)
-  if (WASMOS_WASM_RUNTIME_WARP AND DEFINED WARP_AOT_BIN AND EXISTS "${MANIFEST}")
+  if (WASMOS_WASM_RUNTIME_WARP AND NOT WASMOS_WARP_AOT_DISABLED
+      AND DEFINED WARP_AOT_BIN AND EXISTS "${MANIFEST}")
     file(READ "${MANIFEST}" _meta)
     string(FIND "${_meta}" "aot = true" _pos)
     if (NOT _pos EQUAL -1)

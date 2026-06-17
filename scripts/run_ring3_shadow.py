@@ -51,6 +51,11 @@ def main() -> int:
         f"-DOVMF_CODE={args.ovmf_code}",
         f"-DOVMF_VARS={args.ovmf_vars}",
         f"-DWASMOS_TRACE={args.trace}",
+        # AOT pre-compilation depends on a warp_aot cmake phony target that
+        # doesn't cross make sub-Makefile boundaries in a shadow build.  Disable
+        # it: ring3 smoke tests don't need optimised AOT binaries and the kernel
+        # falls back to JIT cleanly when the .wap has no compiled section.
+        "-DWASMOS_WARP_AOT_DISABLED=ON",
     ] + [f"-D{kv}" for kv in args.define]
 
     build_cmd = [

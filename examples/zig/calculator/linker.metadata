@@ -1,7 +1,7 @@
 version = 1
 
 [package]
-name = "calculator"
+name = "Calculator"
 entry = "wasmos_main"
 kind = "app"
 native = false

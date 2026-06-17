@@ -32,6 +32,7 @@ remain deterministic in strict ring3 runs.
 - [Process and IPC](architecture/09-process-and-ipc.md)
 - [Capability and Policy](architecture/10-capability-and-policy.md)
 - [Ring3 Isolation and Separation](architecture/11-ring3-isolation-and-separation.md)
+- [WARP Ring3 Implementation Plan](architecture/31-warp-ring3-implementation.md)
 - [DMA Transfers](architecture/12-dma-transfers.md)
 
 ### WASM Runtime

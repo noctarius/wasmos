@@ -268,6 +268,7 @@ extern fn libui_zig_mark_dirty(ctx: *anyopaque) callconv(.c) void;
 
 pub fn main() u8 {
     const proc_ep = wasmos.startup.arg(0);
+    _ = wasmos.stdlib.println("[calculator] start", .{}) catch {};
 
     g_calc.init();
 

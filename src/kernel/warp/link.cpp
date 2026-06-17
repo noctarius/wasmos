@@ -25,6 +25,7 @@
 
 extern "C" {
 #include "boot.h"
+#include "warp/shim.h"
 #include "ipc.h"
 #include "process.h"
 #include "process_manager.h"
@@ -1491,7 +1492,16 @@ warp_shmem_map_auto(uint32_t id, uint32_t size, void *ctx_)
      * seen when gfx_smoke/menu_bar perform their first libui buffer map.
      * TODO(warp-shmem-map-auto): reserve windows against actual heap growth
      * instead of relying on a fixed post-active guard band. */
+    /* Use the WARP-configured heap limit rather than the WASM binary's
+     * declared page count.  Zig freestanding binaries declare only the
+     * minimum memory they need statically (often 1 page = 64 KB) regardless
+     * of heap_pages in linker.metadata, so getLinearMemorySizeInPages() gives
+     * too small an upper bound for the shmem scan.  Fall back to the
+     * configured heap ceiling when it is larger. */
     uint32_t mem_pages = ctx->module->getLinearMemorySizeInPages();
+    uint64_t cfg_bytes = warp_heap_committed_bytes(ctx->pid);
+    if (cfg_bytes > (uint64_t)mem_pages << 16)
+        mem_pages = (uint32_t)((cfg_bytes + 0xFFFFULL) >> 16);
     uint64_t mem_size  = (uint64_t)mem_pages << 16;
     uint64_t scan_min = (uint64_t)warp_linear_memory_active_size(ctx) + 0x10000ULL;
     uint8_t *base = ctx->module->getLinearMemoryRegion(0, 0);
@@ -1508,8 +1518,13 @@ warp_shmem_map_auto(uint32_t id, uint32_t size, void *ctx_)
          off + size <= mem_size; off += 0x1000ULL) {
         uint32_t off32 = (uint32_t)off;
         if (warp_shmem_map_overlaps(ctx->pid, off32, size)) continue;
-        uint8_t *p = warp_linear_mem_window(ctx, off32, size);
-        if (!p || ((uint64_t)(uintptr_t)p & 0xFFF)) continue;
+        /* warp_linear_mem_window uses getLinearMemorySizeInPages() which may
+         * reflect only the WASM binary's declared minimum (e.g. 1 page for
+         * Zig freestanding apps), not the configured heap.  Compute alignment
+         * directly and validate against our extended mem_size instead. */
+        if (!base) continue;
+        uint8_t *p = base + off32;
+        if ((uint64_t)(uintptr_t)p & 0xFFF) continue;
         found_off = off32; found = 1; break;
     }
     if (!found) {

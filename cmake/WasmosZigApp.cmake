@@ -96,6 +96,15 @@ function(wasmos_add_zig_wasm_app)
     endif()
   endforeach()
 
+  # When C sources are present, pass -mno-bulk-memory via -cflags ... -- so
+  # Zig's embedded Clang disables bulk-memory for those translation units.
+  # -mcpu=generic-bulk_memory covers the Zig frontend; for C, the explicit
+  # flag is required, otherwise memcpy/memset loops become memory.copy/fill.
+  set(_c_compile_flags "")
+  if (_extra_c)
+    set(_c_compile_flags -cflags -mno-bulk-memory --)
+  endif ()
+
   add_custom_command(
     OUTPUT ${ARG_OUTPUT_WASM}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
@@ -123,6 +132,7 @@ function(wasmos_add_zig_wasm_app)
             -femit-bin=${ARG_OUTPUT_WASM}
             ${_include_flags}
             ${_stage}/${ARG_NAME}.zig
+            ${_c_compile_flags}
             ${_extra_c}
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_SOURCE_DIR}/scripts/wasm_stack_check.py

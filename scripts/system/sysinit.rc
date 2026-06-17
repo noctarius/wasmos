@@ -22,4 +22,8 @@ if -f /boot/apps/gfx_smoke.wap then
     spawn /boot/apps/gfx_smoke.wap
 endif
 
+if -f /boot/apps/calculator.wap then
+    spawn /boot/apps/calculator.wap
+endif
+
 start /boot/system/services/cli.wap

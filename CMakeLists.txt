@@ -605,6 +605,14 @@ if (EXISTS ${WASMOS_DOTCONFIG})
   include(${WASMOS_KCONFIG_IMPORT})
 endif ()
 
+# Ring3 shadow builds always use the wasm3 interpreter regardless of the
+# kconfig runtime selection in .config (which selects WARP for the main build).
+# Override here, after kconfig, so FORCE from kconfig is overridden in turn.
+if (WASMOS_RING3_SHADOW)
+  set(WASMOS_WASM_RUNTIME_WARP OFF CACHE BOOL "Use WARP JIT compiler" FORCE)
+  set(WASMOS_WASM_RUNTIME_WASM3 ON  CACHE BOOL "Use wasm3 interpreter" FORCE)
+endif ()
+
 # WASM runtime selection must run AFTER the Kconfig import so that on a fresh
 # cmake cache (e.g. the ring3 shadow build) the kconfig-selected runtime wins
 # before CFLAGS_KERNEL is assembled.  On a warm cache the initialization block

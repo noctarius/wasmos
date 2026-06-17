@@ -51,10 +51,11 @@ def main() -> int:
         f"-DOVMF_CODE={args.ovmf_code}",
         f"-DOVMF_VARS={args.ovmf_vars}",
         f"-DWASMOS_TRACE={args.trace}",
+        # Mark this as a ring3 shadow build so CMakeLists.txt can override
+        # kconfig's runtime selection to keep the ring3 tree on wasm3.
+        "-DWASMOS_RING3_SHADOW=ON",
         # AOT pre-compilation depends on a warp_aot cmake phony target that
-        # doesn't cross make sub-Makefile boundaries in a shadow build.  Disable
-        # it: ring3 smoke tests don't need optimised AOT binaries and the kernel
-        # falls back to JIT cleanly when the .wap has no compiled section.
+        # doesn't cross make sub-Makefile boundaries in a shadow build.
         "-DWASMOS_WARP_AOT_DISABLED=ON",
     ] + [f"-D{kv}" for kv in args.define]
 

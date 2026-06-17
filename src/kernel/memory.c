@@ -497,11 +497,18 @@ int mm_shared_create(uint32_t owner_context_id, uint64_t pages, uint32_t flags,
     }
     spinlock_lock(&g_shared_lock);
     mm_shared_init_once_locked();
-    /* Allocate shmem physical pages from the dedicated shmem zone (below
-     * WASMOS_SHMEM_PHYS_LIMIT) so their canonical kernel VAs never fall inside
-     * a WARP linear-memory range.  WARP linear memory is allocated above
-     * WASMOS_SHMEM_PHYS_LIMIT, keeping the two zones non-overlapping. */
+#if WASMOS_WASM_RUNTIME == 1  /* WARP JIT backend */
+    /* Allocate shmem from the dedicated shmem zone (below WASMOS_SHMEM_PHYS_LIMIT)
+     * so canonical kernel VAs (phys | kHalfBase) never fall inside a WARP
+     * linear-memory range.  WARP linear memory is allocated above the limit,
+     * keeping the two zones non-overlapping and preventing WARP's
+     * ensureLinearSize zero-fill from aliasing active shmem pages. */
     uint64_t base = pfa_alloc_pages_below(pages, WASMOS_SHMEM_PHYS_LIMIT);
+#else
+    /* wasm3: no WARP linear-memory aliasing risk — shmem can use any
+     * physical page without competing with a separate WARP zone. */
+    uint64_t base = pfa_alloc_pages(pages);
+#endif
     if (!base) {
         spinlock_unlock(&g_shared_lock);
         return -1;

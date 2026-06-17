@@ -26,3 +26,21 @@ wasmos_add_zig_wasm_app(
   OUTPUT_APP  ${WASM_HELLO_ZIG_APP}
   MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/linker.metadata
 )
+
+wasmos_add_zig_wasm_app(
+  NAME        calculator
+  TARGET      zig_calculator
+  SRC         ${CMAKE_CURRENT_SOURCE_DIR}/calculator/calculator.zig
+  LIBC_SRC    ${LIBC_DIR}/zig/wasmos.zig
+  OUTPUT_WASM ${BUILD_DIR}/calculator.wasm
+  OUTPUT_APP  ${BUILD_DIR}/calculator.wap
+  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/calculator/linker.metadata
+  EXTRA_SRCS
+    ${CMAKE_SOURCE_DIR}/src/libui/zig/libui.zig
+    ${CMAKE_SOURCE_DIR}/src/libui/zig/libui_shim.c
+  INCLUDE_DIRS
+    ${CMAKE_SOURCE_DIR}/src/libc/zig/compat
+    ${CMAKE_SOURCE_DIR}/src/libui/include
+    ${CMAKE_SOURCE_DIR}/src/libc/include
+    ${CMAKE_SOURCE_DIR}/src/drivers/include
+)

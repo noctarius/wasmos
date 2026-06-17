@@ -67,7 +67,7 @@ static int remap_direct_alias_pages(uint8_t *ptr, uint64_t pages)
 
 /* Simple tracking table for mmap → phys mapping so munmap can free pages. */
 struct MmapEntry { uint8_t *virt; uint64_t phys; uint64_t pages; };
-static MmapEntry g_mmap_table[64];
+static MmapEntry g_mmap_table[256];
 
 static MmapEntry *alloc_entry()
 {
@@ -119,6 +119,7 @@ MmapMemory allocPagedMemory(size_t size)
 
     uint8_t *virt = reinterpret_cast<uint8_t *>(phys | kHalfBase);
     if (remap_direct_alias_pages(virt, pages) != 0) {
+        klog_write("[warp-mem] remap_direct_alias_pages failed\n");
         pfa_free_pages(phys, pages);
         *slot = MmapEntry{};
         return m;

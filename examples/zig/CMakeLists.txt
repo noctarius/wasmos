@@ -28,13 +28,17 @@ wasmos_add_zig_wasm_app(
 )
 
 wasmos_add_zig_wasm_app(
-  NAME        calculator
-  TARGET      zig_calculator
-  SRC         ${WASM_CALCULATOR_SRC}
-  LIBC_SRC    ${LIBC_DIR}/zig/wasmos.zig
-  OUTPUT_WASM ${WASM_CALCULATOR_WASM}
-  OUTPUT_APP  ${WASM_CALCULATOR_APP}
-  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/calculator/linker.metadata
+  NAME           calculator
+  TARGET         zig_calculator
+  SRC            ${WASM_CALCULATOR_SRC}
+  LIBC_SRC       ${LIBC_DIR}/zig/wasmos.zig
+  OUTPUT_WASM    ${WASM_CALCULATOR_WASM}
+  OUTPUT_APP     ${WASM_CALCULATOR_APP}
+  MANIFEST       ${CMAKE_CURRENT_SOURCE_DIR}/calculator/linker.metadata
+  # WARP's ActiveMemoryManager sets allowedLinMemPages_ from the WASM binary's
+  # declared minimum.  The calculator needs >512 KB of WASM linear memory for
+  # the framebuffer shmem mapping; 8 WASM pages (512 KB) is the minimum.
+  INITIAL_MEMORY 2097152
   EXTRA_SRCS
     ${CMAKE_SOURCE_DIR}/src/libui/zig/libui.zig
     ${CMAKE_SOURCE_DIR}/src/libui/zig/libui_shim.c

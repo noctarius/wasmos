@@ -605,9 +605,9 @@ pub const fs = struct {
 // ---------------------------------------------------------------------------
 pub const strconv = struct {
     /// Write the digits of a non-negative finite f64 integer value into buf.
-    /// Uses only f64 arithmetic so that no i64/u64 WASM types are generated.
-    /// WARP's JIT does not handle function types that contain i64 parameters.
-    fn fmtIntF64(val: f64, buf: []u8) []const u8 {
+    /// inline: prevents a separate WASM function type with f64 parameter from
+    /// being emitted — WARP's JIT rejects function types that contain f64.
+    inline fn fmtIntF64(val: f64, buf: []u8) []const u8 {
         if (val == 0.0) {
             if (buf.len > 0) { buf[0] = '0'; return buf[0..1]; }
             return buf[0..0];
@@ -615,10 +615,15 @@ pub const strconv = struct {
         var tmp: [20]u8 = undefined;
         var len: usize = 0;
         var rem = val;
-        while (rem >= 1.0 and len < 20) : (rem = @trunc(rem / 10.0)) {
-            const digit: u8 = @intFromFloat(@mod(rem, 10.0));
+        // Use manual modulo (rem - trunc(rem/10)*10) instead of @mod which
+        // generates a call to a software fmod() runtime helper that produces
+        // WASM function types containing f64 — rejected by WARP's JIT.
+        while (rem >= 1.0 and len < 20) {
+            const q = @trunc(rem / 10.0);
+            const digit: u8 = @intFromFloat(rem - q * 10.0);
             tmp[len] = '0' + digit;
             len += 1;
+            rem = q;
         }
         var out: usize = 0;
         var j = len;
@@ -631,8 +636,8 @@ pub const strconv = struct {
 
     /// Format a finite f64 into buf with up to 8 fractional digits,
     /// trailing zeros stripped.  Returns "Error" for NaN / Inf.
-    /// Uses only f64 / i32 WASM types — no u64/i64 which WARP cannot JIT.
-    pub fn f64Buf(v: f64, buf: []u8) []const u8 {
+    /// inline: see fmtIntF64 — prevents f64 from appearing in WASM type section.
+    pub inline fn f64Buf(v: f64, buf: []u8) []const u8 {
         if (v != v or v > 1e308 or v < -1e308) return litBuf(buf, "Error");
         if (buf.len == 0) return buf[0..0];
         var pos: usize = 0;
@@ -651,17 +656,19 @@ pub const strconv = struct {
         var d: usize = 0;
         while (d < 8 and pos < buf.len) : (d += 1) {
             frac *= 10.0;
-            const digit: u8 = @intFromFloat(@trunc(frac));
+            const t = @trunc(frac);
+            const digit: u8 = @intFromFloat(t);
             buf[pos] = '0' + digit;
             pos += 1;
-            frac -= @trunc(frac);
+            frac = frac - t;  // manual subtraction avoids @mod / fmod
             if (digit != 0) last_nz = pos;
         }
         return buf[0..last_nz];
     }
 
     /// Parse a decimal string (with optional leading '-' and one '.') to f64.
-    pub fn parseF64(s: []const u8) f64 {
+    /// inline: prevents a WASM function type with (result f64) from being emitted.
+    pub inline fn parseF64(s: []const u8) f64 {
         var neg = false;
         var i: usize = 0;
         if (i < s.len and s[i] == '-') { neg = true; i += 1; }

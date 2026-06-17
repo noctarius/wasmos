@@ -108,6 +108,11 @@ function(wasmos_add_zig_wasm_app)
     COMMAND ${ZIG_EXECUTABLE}
             build-exe
             -target wasm32-freestanding
+            # Disable WASM bulk-memory extension (memory.fill / memory.copy).
+            # WARP's single-pass JIT only targets WASM MVP and rejects these
+            # opcodes with "module compilation failed".  The Zig default enables
+            # bulk-memory so we must opt out explicitly for all WASMOS Zig apps.
+            -mcpu=generic-bulk_memory
             -O ReleaseSmall
             -fno-entry
             -fstrip

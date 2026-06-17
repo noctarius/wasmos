@@ -590,3 +590,108 @@ pub const fs = struct {
         return fsRequestStream(FS_IPC_READDIR_REQ, 0, 0, 0, 0, buffer);
     }
 };
+
+// ---------------------------------------------------------------------------
+// fmt — numeric formatting helpers that avoid std.fmt.
+//
+// std.fmt.bufPrint internally uses memory.fill / memory.copy (WASM bulk-memory
+// extension) even when -mcpu=generic-bulk_memory is passed, because the Zig
+// standard library does not honour that flag for its own internals.  WARP's
+// single-pass JIT only supports WASM MVP and rejects those opcodes.
+//
+// These helpers produce the same output for the values a typical WASMOS app
+// would display (integers, finite floats, error sentinel) using only basic
+// arithmetic — no WASM extensions, no allocator.
+// ---------------------------------------------------------------------------
+pub const strconv = struct {
+    /// Write a non-negative integer into buf (no null terminator).
+    /// Returns the slice of buf that was written.
+    pub fn u64Buf(v: u64, buf: []u8) []const u8 {
+        if (v == 0) {
+            if (buf.len > 0) { buf[0] = '0'; return buf[0..1]; }
+            return buf[0..0];
+        }
+        var tmp: [20]u8 = undefined;
+        var len: usize = 0;
+        var rem = v;
+        while (rem > 0) : (rem /= 10) {
+            tmp[len] = '0' + @as(u8, @intCast(rem % 10));
+            len += 1;
+        }
+        var out: usize = 0;
+        var j = len;
+        while (j > 0 and out < buf.len) : (out += 1) {
+            j -= 1;
+            buf[out] = tmp[j];
+        }
+        return buf[0..out];
+    }
+
+    /// Write a signed integer into buf.
+    pub fn i64Buf(v: i64, buf: []u8) []const u8 {
+        if (buf.len == 0) return buf[0..0];
+        if (v >= 0) return u64Buf(@intCast(v), buf);
+        buf[0] = '-';
+        const s = u64Buf(@intCast(-v), buf[1..]);
+        return buf[0 .. 1 + s.len];
+    }
+
+    /// Format a finite f64 into buf with up to 8 fractional digits,
+    /// trailing zeros stripped.  Returns "Error" for NaN / Inf.
+    pub fn f64Buf(v: f64, buf: []u8) []const u8 {
+        if (v != v or v > 1e308 or v < -1e308) return litBuf(buf, "Error");
+        if (buf.len == 0) return buf[0..0];
+        var pos: usize = 0;
+        var val = v;
+        if (val < 0.0) { buf[pos] = '-'; pos += 1; val = -val; }
+        if (@trunc(val) == val and val < 1e15) {
+            const s = u64Buf(@intFromFloat(val), buf[pos..]);
+            return buf[0 .. pos + s.len];
+        }
+        const int_f = @trunc(val);
+        const si = u64Buf(@intFromFloat(int_f), buf[pos..]);
+        pos += si.len;
+        if (pos < buf.len) { buf[pos] = '.'; pos += 1; }
+        var frac = val - int_f;
+        var last_nz = pos;
+        var d: usize = 0;
+        while (d < 8 and pos < buf.len) : (d += 1) {
+            frac *= 10.0;
+            const digit: u8 = @intFromFloat(@trunc(frac));
+            buf[pos] = '0' + digit;
+            pos += 1;
+            frac -= @trunc(frac);
+            if (digit != 0) last_nz = pos;
+        }
+        return buf[0..last_nz];
+    }
+
+    /// Parse a decimal string (with optional leading '-' and one '.') to f64.
+    pub fn parseF64(s: []const u8) f64 {
+        var neg = false;
+        var i: usize = 0;
+        if (i < s.len and s[i] == '-') { neg = true; i += 1; }
+        var int_part: f64 = 0;
+        while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1)
+            int_part = int_part * 10 + @as(f64, @floatFromInt(s[i] - '0'));
+        var frac: f64 = 0;
+        if (i < s.len and s[i] == '.') {
+            i += 1;
+            var place: f64 = 0.1;
+            while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) {
+                frac += @as(f64, @floatFromInt(s[i] - '0')) * place;
+                place *= 0.1;
+            }
+        }
+        const result = int_part + frac;
+        return if (neg) -result else result;
+    }
+
+    /// Copy a string literal into buf without using std.fmt.
+    pub fn litBuf(buf: []u8, lit: []const u8) []const u8 {
+        const n = if (lit.len < buf.len) lit.len else buf.len;
+        var i: usize = 0;
+        while (i < n) : (i += 1) buf[i] = lit[i];
+        return buf[0..n];
+    }
+};

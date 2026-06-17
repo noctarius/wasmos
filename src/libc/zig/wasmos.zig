@@ -604,6 +604,23 @@ pub const fs = struct {
 // arithmetic — no WASM extensions, no allocator.
 // ---------------------------------------------------------------------------
 pub const strconv = struct {
+    /// Convert a f64 value in [0.0, 9.0] to a u8 digit using only f64
+    /// comparisons.  @intFromFloat generates i32.trunc_sat_f64_u which is
+    /// NOT implemented in WARP's JIT (FeatureNotSupportedException).  The
+    /// comparison chain uses only f64.lt (WASM MVP) and no trunc_sat.
+    inline fn f64Digit(v: f64) u8 {
+        if (v < 1.0) return 0;
+        if (v < 2.0) return 1;
+        if (v < 3.0) return 2;
+        if (v < 4.0) return 3;
+        if (v < 5.0) return 4;
+        if (v < 6.0) return 5;
+        if (v < 7.0) return 6;
+        if (v < 8.0) return 7;
+        if (v < 9.0) return 8;
+        return 9;
+    }
+
     /// Write the digits of a non-negative finite f64 integer value into buf.
     /// inline: prevents a separate WASM function type with f64 parameter from
     /// being emitted — WARP's JIT rejects function types that contain f64.
@@ -620,8 +637,7 @@ pub const strconv = struct {
         // WASM function types containing f64 — rejected by WARP's JIT.
         while (rem >= 1.0 and len < 20) {
             const q = @trunc(rem / 10.0);
-            const digit: u8 = @intFromFloat(rem - q * 10.0);
-            tmp[len] = '0' + digit;
+            tmp[len] = '0' + f64Digit(rem - q * 10.0);
             len += 1;
             rem = q;
         }
@@ -657,11 +673,11 @@ pub const strconv = struct {
         while (d < 8 and pos < buf.len) : (d += 1) {
             frac *= 10.0;
             const t = @trunc(frac);
-            const digit: u8 = @intFromFloat(t);
-            buf[pos] = '0' + digit;
+            const dv = f64Digit(t);  // f64Digit avoids trunc_sat
+            buf[pos] = '0' + dv;
             pos += 1;
             frac = frac - t;  // manual subtraction avoids @mod / fmod
-            if (digit != 0) last_nz = pos;
+            if (dv != 0) last_nz = pos;
         }
         return buf[0..last_nz];
     }

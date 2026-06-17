@@ -44,7 +44,8 @@ set(WASMOS_ZIG_STACK_SIZE 8192 CACHE INTERNAL
 # WASMOS_WASM_APP_TARGETS so QEMU targets pick up the dependency.
 # Does nothing when ZIG_ENABLE is OFF or zig is not found.
 function(wasmos_add_zig_wasm_app)
-  cmake_parse_arguments(ARG "" "NAME;TARGET;SRC;LIBC_SRC;OUTPUT_WASM;OUTPUT_APP;MANIFEST" "" ${ARGN})
+  cmake_parse_arguments(ARG "" "NAME;TARGET;SRC;LIBC_SRC;OUTPUT_WASM;OUTPUT_APP;MANIFEST"
+                        "EXTRA_SRCS;INCLUDE_DIRS" ${ARGN})
 
   if (NOT ARG_NAME OR NOT ARG_TARGET OR NOT ARG_SRC OR NOT ARG_LIBC_SRC OR
       NOT ARG_OUTPUT_WASM OR NOT ARG_OUTPUT_APP OR NOT ARG_MANIFEST)
@@ -72,6 +73,29 @@ function(wasmos_add_zig_wasm_app)
   set(_cache  "${BUILD_DIR}/zig_cache")
   set(_gcache "${BUILD_DIR}/zig_global_cache")
 
+  # Build -I flag list from INCLUDE_DIRS
+  set(_include_flags "")
+  foreach(_dir ${ARG_INCLUDE_DIRS})
+    list(APPEND _include_flags "-I${_dir}")
+  endforeach()
+
+  # Collect stage commands and staged paths for EXTRA_SRCS.
+  # .zig extras are staged to _stage/ so @import("name.zig") resolves them.
+  # .c extras are passed by their original absolute path (no staging needed).
+  set(_stage_cmds "")
+  set(_extra_staged "")    # .zig files staged into _stage
+  set(_extra_c "")         # .c files passed directly
+  foreach(_src ${ARG_EXTRA_SRCS})
+    get_filename_component(_bname "${_src}" NAME)
+    if("${_bname}" MATCHES "\\.zig$")
+      list(APPEND _stage_cmds
+           COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_src}" "${_stage}/${_bname}")
+      list(APPEND _extra_staged "${_stage}/${_bname}")
+    else()
+      list(APPEND _extra_c "${_src}")
+    endif()
+  endforeach()
+
   add_custom_command(
     OUTPUT ${ARG_OUTPUT_WASM}
     COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
@@ -80,6 +104,7 @@ function(wasmos_add_zig_wasm_app)
     COMMAND ${CMAKE_COMMAND} -E make_directory ${_gcache}
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ARG_SRC}      ${_stage}/${ARG_NAME}.zig
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ARG_LIBC_SRC} ${_stage}/wasmos.zig
+    ${_stage_cmds}
     COMMAND ${ZIG_EXECUTABLE}
             build-exe
             -target wasm32-freestanding
@@ -91,13 +116,15 @@ function(wasmos_add_zig_wasm_app)
             --cache-dir        ${_cache}
             --global-cache-dir ${_gcache}
             -femit-bin=${ARG_OUTPUT_WASM}
+            ${_include_flags}
             ${_stage}/${ARG_NAME}.zig
+            ${_extra_c}
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_SOURCE_DIR}/scripts/wasm_stack_check.py
             ${ARG_OUTPUT_WASM}
             --stack-size ${WASMOS_ZIG_STACK_SIZE}
             --max-addr   ${WASMOS_ZIG_USER_VA_LIMIT}
-    DEPENDS ${ARG_SRC} ${ARG_LIBC_SRC}
+    DEPENDS ${ARG_SRC} ${ARG_LIBC_SRC} ${ARG_EXTRA_SRCS}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Building and validating Zig WASM app: ${ARG_NAME}"
     VERBATIM

@@ -10,15 +10,24 @@ ui_render_button(ui_context_t *ctx, const ui_component_t *c, ui_rect_t draw_boun
 {
     (void)offset_y;
     ui_text_data_t *td = (ui_text_data_t *)c->component_data;
-    const uint32_t inner = c->pressed ? 0xFF2B6AA0u : 0xFF4B91CCu;
-    ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height,
-                      draw_bounds.x + 2, draw_bounds.y + 2, draw_bounds.w - 4, draw_bounds.h - 4, inner, clip);
-    ui_draw_text_clip(ctx,
-                      draw_bounds.x + c->padding_px,
-                      draw_bounds.y + (draw_bounds.h - ctx->font_px) / 2,
-                      (td && td->text) ? td->text : "",
-                      0xFFFFFFFFu,
-                      clip);
+    /* Use bg_color as the button fill; darken 25 % when pressed.
+     * The outer ui_fill_rect_clip (in ui_render_component_clip) already filled
+     * with bg_color, so we only need a separate fill when pressed. */
+    if (c->pressed) {
+        uint32_t col = c->bg_color;
+        const uint32_t r = ((col >> 16) & 0xFFu) * 3u / 4u;
+        const uint32_t g = ((col >>  8) & 0xFFu) * 3u / 4u;
+        const uint32_t b = ( col        & 0xFFu) * 3u / 4u;
+        col = (col & 0xFF000000u) | (r << 16) | (g << 8) | b;
+        ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height,
+                          draw_bounds.x, draw_bounds.y, draw_bounds.w, draw_bounds.h, col, clip);
+    }
+    /* Centre text horizontally and vertically. */
+    const char *text = (td && td->text) ? td->text : "";
+    const int32_t tw = ui_measure_text_width(ctx, text);
+    const int32_t tx = draw_bounds.x + (draw_bounds.w - tw) / 2;
+    const int32_t ty = draw_bounds.y + (draw_bounds.h - ctx->font_px) / 2;
+    ui_draw_text_clip(ctx, tx, ty, text, c->fg_color, clip);
 }
 
 static inline void

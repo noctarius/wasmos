@@ -5,9 +5,9 @@
 /// horizontal button grid.  Button colours are driven by bg_color so the
 /// updated button renderer respects per-button theming.
 
-const std = @import("std");
 const wasmos = @import("wasmos.zig");
 const libui = @import("libui.zig");
+const strconv = wasmos.strconv;
 
 // ---------------------------------------------------------------------------
 // Calculator logic
@@ -55,11 +55,11 @@ const Calc = struct {
     }
 
     fn currentValue(self: *const Calc) f64 {
-        return parseF64(self.display[0..self.display_len]);
+        return strconv.parseF64(self.display[0..self.display_len]);
     }
 
     fn setDisplay(self: *Calc, v: f64) void {
-        const s = fmtF64(v, &self.display);
+        const s = strconv.f64Buf(v, &self.display);
         self.display_len = @intCast(s.len);
         self.display[self.display_len] = 0;
     }
@@ -168,55 +168,7 @@ const Calc = struct {
     }
 };
 
-// ---------------------------------------------------------------------------
-// Simple float ↔ string helpers (no libc printf/sscanf needed)
-// ---------------------------------------------------------------------------
-
-fn parseF64(s: []const u8) f64 {
-    var neg = false;
-    var i: usize = 0;
-    if (i < s.len and s[i] == '-') { neg = true; i += 1; }
-    var int_part: f64 = 0;
-    while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1)
-        int_part = int_part * 10 + @as(f64, @floatFromInt(s[i] - '0'));
-    var frac: f64 = 0;
-    if (i < s.len and s[i] == '.') {
-        i += 1;
-        var place: f64 = 0.1;
-        while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) {
-            frac += @as(f64, @floatFromInt(s[i] - '0')) * place;
-            place *= 0.1;
-        }
-    }
-    const v = int_part + frac;
-    return if (neg) -v else v;
-}
-
-fn fmtF64(v: f64, buf: []u8) []const u8 {
-    if (std.math.isNan(v) or std.math.isInf(v))
-        return copyLit(buf, "Error");
-    const abs_v = @abs(v);
-    // Integer path: no decimal places needed
-    if (@trunc(abs_v) == abs_v and abs_v < 1e12) {
-        const iv: i64 = @intFromFloat(v);
-        return std.fmt.bufPrint(buf, "{d}", .{iv}) catch copyLit(buf, "Error");
-    }
-    // Float path: 8 significant digits, trim trailing zeros
-    const s = std.fmt.bufPrint(buf, "{d:.8}", .{v}) catch return copyLit(buf, "Error");
-    if (std.mem.indexOfScalar(u8, s, '.')) |_| {
-        var end = s.len;
-        while (end > 0 and s[end - 1] == '0') end -= 1;
-        if (end > 0 and s[end - 1] == '.') end -= 1;
-        return s[0..end];
-    }
-    return s;
-}
-
-fn copyLit(buf: []u8, lit: []const u8) []const u8 {
-    const n = @min(lit.len, buf.len);
-    @memcpy(buf[0..n], lit[0..n]);
-    return buf[0..n];
-}
+// Float ↔ string: delegate to wasmos.fmt (no std.fmt — avoids memory.fill).
 
 // ---------------------------------------------------------------------------
 // UI constants — dark theme inspired by Windows Calculator

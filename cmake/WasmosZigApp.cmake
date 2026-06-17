@@ -44,7 +44,7 @@ set(WASMOS_ZIG_STACK_SIZE 8192 CACHE INTERNAL
 # WASMOS_WASM_APP_TARGETS so QEMU targets pick up the dependency.
 # Does nothing when ZIG_ENABLE is OFF or zig is not found.
 function(wasmos_add_zig_wasm_app)
-  cmake_parse_arguments(ARG "" "NAME;TARGET;SRC;LIBC_SRC;OUTPUT_WASM;OUTPUT_APP;MANIFEST"
+  cmake_parse_arguments(ARG "" "NAME;TARGET;SRC;LIBC_SRC;OUTPUT_WASM;OUTPUT_APP;MANIFEST;INITIAL_MEMORY"
                         "EXTRA_SRCS;INCLUDE_DIRS" ${ARGN})
 
   if (NOT ARG_NAME OR NOT ARG_TARGET OR NOT ARG_SRC OR NOT ARG_LIBC_SRC OR
@@ -100,6 +100,15 @@ function(wasmos_add_zig_wasm_app)
   # Zig's embedded Clang disables bulk-memory for those translation units.
   # -mcpu=generic-bulk_memory covers the Zig frontend; for C, the explicit
   # flag is required, otherwise memcpy/memset loops become memory.copy/fill.
+  # Optional -Xlinker --initial-memory=N: sets the WASM binary's declared
+  # initial memory pages.  WARP's ActiveMemoryManager uses this to set
+  # allowedLinMemPages_; without it, Zig freestanding binaries declare only
+  # 1 page (64 KB) and shmem probes beyond that throw OutOfBounds at runtime.
+  set(_initial_mem_flags "")
+  if (ARG_INITIAL_MEMORY)
+    set(_initial_mem_flags --initial-memory=${ARG_INITIAL_MEMORY})
+  endif ()
+
   set(_c_compile_flags "")
   if (_extra_c)
     set(_c_compile_flags -cflags -mno-bulk-memory --)
@@ -130,6 +139,7 @@ function(wasmos_add_zig_wasm_app)
             --cache-dir        ${_cache}
             --global-cache-dir ${_gcache}
             -femit-bin=${ARG_OUTPUT_WASM}
+            ${_initial_mem_flags}
             ${_include_flags}
             ${_stage}/${ARG_NAME}.zig
             ${_c_compile_flags}

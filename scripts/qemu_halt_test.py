@@ -24,9 +24,11 @@ def main():
 
     with QemuSession(cfg, timeout_s=args.timeout) as session:
         # Calculator is spawned by sysinit.rc before the CLI starts.
-        # Its startup log appears in the serial stream before "wamos>".
-        if not session.expect(b"[calculator] start"):
-            sys.stderr.write("FAIL: calculator did not start (WARP JIT failure?)\n")
+        # Wait for full initialisation (window created, first render done),
+        # not just the early start log — catching that alone would miss
+        # crashes that happen during ui_init or the first drain().
+        if not session.expect(b"[calculator] ready"):
+            sys.stderr.write("FAIL: calculator did not fully initialise\n")
             return 1
         # Wait for CLI
         if not session.expect(b"wamos> "):

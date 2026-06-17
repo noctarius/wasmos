@@ -318,6 +318,7 @@ pub fn main() u8 {
 
     ui.markDirty();
     ui.drain();
+    _ = wasmos.stdlib.println("[calculator] ready", .{}) catch {};
 
     // Main event loop
     while (!ui.closeRequested()) {

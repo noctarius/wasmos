@@ -92,6 +92,18 @@ static MmapEntry *find_entry(uint8_t *v)
     return nullptr;
 }
 
+static void clear_entry(MmapEntry *e)
+{
+    if (!e) {
+        return;
+    }
+    e->virt = nullptr;
+    e->phys = 0;
+    e->pages = 0;
+    e->type = MMAP_OTHER;
+    e->data_offset = 0;
+}
+
 /* Find the entry that contains the given physical address. */
 #ifdef WASMOS_WARP_RING3
 static MmapEntry *find_entry_by_phys(uint64_t phys)
@@ -144,7 +156,7 @@ warp_mem_kmalloc_unregister(uint64_t phys)
 {
     for (auto &e : g_mmap_table) {
         if (e.virt && e.phys == phys) {
-            e = MmapEntry{};
+            clear_entry(&e);
             return;
         }
     }
@@ -193,12 +205,18 @@ warp_mem_ring3_map_linmem(uint64_t user_root, uint8_t const *linmem_kernel_ptr)
 
     /* actual_basedataLength = bytes from memoryBase to linmem (excludes AllocHeader). */
     uint64_t basedataLength = linmem_phys - e->phys - e->data_offset;
+    /* Preserve the backing allocation's low page offset in the user linMem VA.
+     * WARP's basedata fields are addressed relative to linMem, so a fixed
+     * page-aligned user VA would shift those slots for allocations whose
+     * memoryBase is not page-aligned. */
+    uint64_t user_linmem_base = WARP_R3_LINMEM_BASE + (linmem_phys & (kPageSize - 1ULL));
     /* Map from phys (page-aligned) so that:
-     *   phys + data_offset + basedataLength → WARP_R3_LINMEM_BASE (user space). */
-    uint64_t user_va_base   = WARP_R3_LINMEM_BASE - e->data_offset - basedataLength;
+     *   phys + data_offset + basedataLength → user_linmem_base (user space). */
+    uint64_t user_va_base   = user_linmem_base - e->data_offset - basedataLength;
     uint64_t flags = MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER;
 
     for (uint64_t i = 0; i < e->pages; ++i) {
+        (void)paging_unmap_4k_in_root(user_root, user_va_base + i * kPageSize);
         if (paging_map_4k_in_root(user_root,
                                    user_va_base + i * kPageSize,
                                    e->phys + i * kPageSize,
@@ -258,7 +276,7 @@ MmapMemory allocPagedMemory(size_t size)
     if (remap_direct_alias_pages(virt, pages) != 0) {
         klog_write("[warp-mem] remap_direct_alias_pages failed\n");
         pfa_free_pages(phys, pages);
-        *slot = MmapEntry{};
+        clear_entry(slot);
         return m;
     }
     slot->virt  = virt;
@@ -277,7 +295,7 @@ void freePagedMemory(uint8_t *ptr, size_t) noexcept
     auto *e = find_entry(ptr);
     if (!e) return;
     pfa_free_pages(e->phys, e->pages);
-    *e = MmapEntry{};
+    clear_entry(e);
 }
 
 int32_t setPermissionRWX(uint8_t *, size_t) noexcept { return 0; }

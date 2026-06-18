@@ -113,10 +113,18 @@ warp_linear_mem_window(WarpCallContext *ctx, uint32_t offset, uint32_t size)
 static inline WarpCallContext *
 warp_call_ctx(void *ctx_)
 {
-    auto *module = static_cast<vb::WasmModule *>(ctx_);
-    if (!module) {
+    uint32_t pid = process_current_pid();
+    if (pid < PROCESS_MAX_COUNT && g_ctx_table[pid].module) {
+        return &g_ctx_table[pid];
+    }
+    auto *ctx = static_cast<WarpCallContext *>(ctx_);
+    if (!ctx) {
         return nullptr;
     }
+    if (ctx->pid < PROCESS_MAX_COUNT && ctx == &g_ctx_table[ctx->pid]) {
+        return ctx;
+    }
+    auto *module = static_cast<vb::WasmModule *>(ctx_);
     return static_cast<WarpCallContext *>(module->getContext());
 }
 
@@ -218,6 +226,13 @@ warp_process_name_eq(const char *a, const char *b)
     return *a == '\0' && *b == '\0';
 }
 
+static uint8_t
+warp_dbg_ipc_trace_process(process_t *proc)
+{
+    (void)proc;
+    return 0;
+}
+
 static void *
 warp_fs_buffer_for_pid(uint32_t pid, uint32_t context_id)
 {
@@ -291,28 +306,79 @@ warp_ipc_select_one(uint32_t endpoint, void *ctx_)
     (void)ctx_;
     uint32_t context_id = 0;
     uint32_t pid = process_current_pid();
-    if (warp_current_context_id(&context_id) != 0) return (uint32_t)-1;
-    WarpIpcLastSlot *slot = warp_ipc_slot_for_pid(context_id);
-    if (!slot) return (uint32_t)-1;
-    int rc = ipc_recv_blocking_for(context_id, endpoint, &slot->message);
-    if (rc != IPC_OK) return (uint32_t)-1;
-    slot->pid   = context_id;
-    slot->valid = 1;
-    WarpFsPeerSlot *peer = warp_fs_peer_slot_for_pid(pid);
-    if (peer &&
-        slot->message.type >= FS_IPC_OPEN_REQ &&
-        slot->message.type <= FS_IPC_READ_APP_REQ) {
-        uint32_t owner_context = 0;
-        if (ipc_endpoint_owner(slot->message.source, &owner_context) == IPC_OK &&
-            owner_context != 0) {
-            peer->valid = 1;
-            peer->peer_context_id = owner_context;
-        } else {
-            peer->valid = 0;
-            peer->peer_context_id = 0;
-        }
+    process_t *process = nullptr;
+
+    if ((int32_t)endpoint < 0 || warp_current_context_id(&context_id) != 0) {
+        return (uint32_t)-1;
     }
-    return 1;
+    WarpIpcLastSlot *slot = warp_ipc_slot_for_pid(pid);
+    if (!slot) {
+        return (uint32_t)-1;
+    }
+    process = process_get(pid);
+    if (!process) {
+        return (uint32_t)-1;
+    }
+    process->in_hostcall = 1;
+
+    for (;;) {
+        process->block_reason = PROCESS_BLOCK_IPC;
+        if (!process->ready && !process->require_explicit_ready) {
+            process->ready = 1;
+        }
+
+        int rc = ipc_recv_blocking_for(context_id, endpoint, &slot->message);
+        if (rc == IPC_EMPTY) {
+            continue;
+        }
+        if (rc != IPC_OK) {
+            process->block_reason = PROCESS_BLOCK_NONE;
+            process->in_hostcall = 0;
+            return (uint32_t)-1;
+        }
+
+        process->block_reason = PROCESS_BLOCK_NONE;
+        process->in_hostcall = 0;
+        slot->valid = 1;
+        WarpFsPeerSlot *peer = warp_fs_peer_slot_for_pid(pid);
+        if (peer &&
+            slot->message.type >= FS_IPC_OPEN_REQ &&
+            slot->message.type <= FS_IPC_READ_APP_REQ) {
+            uint32_t owner_context = 0;
+            if (ipc_endpoint_owner(slot->message.source, &owner_context) == IPC_OK &&
+                owner_context != 0) {
+                peer->valid = 1;
+                peer->peer_context_id = owner_context;
+            } else {
+                peer->valid = 0;
+                peer->peer_context_id = 0;
+            }
+        }
+        if (warp_dbg_ipc_trace_process(process)) {
+            klog_write("[dbg-r3-ipc] recv pid=");
+            serial_write_hex64(pid);
+            klog_write(" ep=");
+            serial_write_hex64(endpoint);
+            klog_write(" type=");
+            serial_write_hex64(slot->message.type);
+            klog_write(" req=");
+            serial_write_hex64(slot->message.request_id);
+            klog_write(" src=");
+            serial_write_hex64(slot->message.source);
+            klog_write(" dst=");
+            serial_write_hex64(slot->message.destination);
+            klog_write(" a0=");
+            serial_write_hex64(slot->message.arg0);
+            klog_write(" a1=");
+            serial_write_hex64(slot->message.arg1);
+            klog_write(" a2=");
+            serial_write_hex64(slot->message.arg2);
+            klog_write(" a3=");
+            serial_write_hex64(slot->message.arg3);
+            klog_write("\n");
+        }
+        return 1;
+    }
 }
 
 static uint32_t
@@ -321,13 +387,14 @@ warp_ipc_drain(uint32_t endpoint, void *ctx_)
     (void)ctx_;
     uint32_t context_id = 0;
     uint32_t pid = process_current_pid();
-    if (warp_current_context_id(&context_id) != 0) return (uint32_t)-1;
-    WarpIpcLastSlot *slot = warp_ipc_slot_for_pid(context_id);
+    if ((int32_t)endpoint < 0 || warp_current_context_id(&context_id) != 0) {
+        return (uint32_t)-1;
+    }
+    WarpIpcLastSlot *slot = warp_ipc_slot_for_pid(pid);
     if (!slot) return (uint32_t)-1;
     int rc = ipc_recv_for(context_id, endpoint, &slot->message);
     if (rc == IPC_EMPTY) return 0;
     if (rc != IPC_OK)   return (uint32_t)-1;
-    slot->pid   = context_id;
     slot->valid = 1;
     WarpFsPeerSlot *peer = warp_fs_peer_slot_for_pid(pid);
     if (peer &&
@@ -359,21 +426,32 @@ static uint32_t
 warp_ipc_last_field(uint32_t field, void *ctx_)
 {
     (void)ctx_;
-    uint32_t context_id = 0;
-    if (warp_current_context_id(&context_id) != 0) return (uint32_t)-1;
-    WarpIpcLastSlot *slot = warp_ipc_slot_for_pid(context_id);
+    uint32_t pid = process_current_pid();
+    WarpIpcLastSlot *slot = warp_ipc_slot_for_pid(pid);
+    process_t *proc = process_get(pid);
+    uint32_t value = 0;
     if (!slot || !slot->valid) return (uint32_t)-1;
     switch (field) {
-        case 0: return slot->message.type;
-        case 1: return slot->message.request_id;
-        case 2: return slot->message.arg0;
-        case 3: return slot->message.arg1;
-        case 4: return slot->message.source;
-        case 5: return slot->message.destination;
-        case 6: return slot->message.arg2;
-        case 7: return slot->message.arg3;
-        default: return 0;
+        case 0: value = slot->message.type; break;
+        case 1: value = slot->message.request_id; break;
+        case 2: value = slot->message.arg0; break;
+        case 3: value = slot->message.arg1; break;
+        case 4: value = slot->message.source; break;
+        case 5: value = slot->message.destination; break;
+        case 6: value = slot->message.arg2; break;
+        case 7: value = slot->message.arg3; break;
+        default: return (uint32_t)-1;
     }
+    if (warp_dbg_ipc_trace_process(proc)) {
+        klog_write("[dbg-r3-ipc] last pid=");
+        serial_write_hex64(pid);
+        klog_write(" field=");
+        serial_write_hex64(field);
+        klog_write(" value=");
+        serial_write_hex64(value);
+        klog_write("\n");
+    }
+    return value;
 }
 
 // ---------------------------------------------------------------------------
@@ -1296,26 +1374,24 @@ warp_proc_info_stats(uint32_t index, uint32_t buf_off, uint32_t buf_len,
     uint8_t *stp  = warp_mem(ctx, stats_off,  sizeof(wasm_proc_stats_t));
     if (!buf || !par || !stp) return (uint32_t)-1;
     uint32_t pid = 0, parent_pid = 0; const char *name = nullptr;
-    process_stats_t stats = {};
-    __builtin_memset(&stats, 0, sizeof(stats));
+    process_stats_t stats;
     if (process_info_at_stats(index, &pid, &parent_pid, &name, &stats) != 0)
         return (uint32_t)-1;
     __builtin_memcpy(par, &parent_pid, sizeof(parent_pid));
-    wasm_proc_stats_t out = {};
-    out.state                    = stats.state;
-    out.block_reason             = stats.block_reason;
-    out.is_wasm                  = stats.is_wasm;
-    out.thread_count             = stats.thread_count;
-    out.live_thread_count        = stats.live_thread_count;
-    out.current_tid              = stats.current_tid;
-    out.context_id               = stats.context_id;
-    out.cpu_ticks                = stats.cpu_ticks;
-    out.vm_total_bytes           = stats.vm_total_bytes;
-    out.thread_kstack_total_bytes= stats.thread_kstack_total_bytes;
-    out.heap_committed_bytes     = stats.heap_committed_bytes;
-    out.rss_est_bytes            = stats.rss_est_bytes;
-    out.last_cpu                 = stats.last_cpu;
-    __builtin_memcpy(stp, &out, sizeof(out));
+    auto *out = reinterpret_cast<wasm_proc_stats_t *>(stp);
+    out->state                     = stats.state;
+    out->block_reason              = stats.block_reason;
+    out->is_wasm                   = stats.is_wasm;
+    out->thread_count              = stats.thread_count;
+    out->live_thread_count         = stats.live_thread_count;
+    out->current_tid               = stats.current_tid;
+    out->context_id                = stats.context_id;
+    out->cpu_ticks                 = stats.cpu_ticks;
+    out->vm_total_bytes            = stats.vm_total_bytes;
+    out->thread_kstack_total_bytes = stats.thread_kstack_total_bytes;
+    out->heap_committed_bytes      = stats.heap_committed_bytes;
+    out->rss_est_bytes             = stats.rss_est_bytes;
+    out->last_cpu                  = stats.last_cpu;
     uint32_t nlen = 0;
     if (name) while (name[nlen] && nlen + 1u < buf_len) nlen++;
     __builtin_memcpy(buf, name ? name : "", nlen);
@@ -1679,7 +1755,8 @@ warp_framebuffer_info(uint32_t out_off, uint32_t len, void *ctx_)
 {
     auto *ctx = warp_call_ctx(ctx_);
     if ((int32_t)len < (int32_t)sizeof(framebuffer_info_t)) return (uint32_t)-1;
-    framebuffer_info_t info = {};
+    framebuffer_info_t info;
+    __builtin_memset(&info, 0, sizeof(info));
     if (framebuffer_get_info(&info) != 0) return (uint32_t)-1;
     uint8_t *out = warp_mem(ctx, out_off, sizeof(framebuffer_info_t));
     if (!out) return (uint32_t)-1;
@@ -1692,7 +1769,8 @@ warp_framebuffer_map(uint32_t wasm_off, uint32_t size, void *ctx_)
 {
     auto *ctx = warp_call_ctx(ctx_);
     if ((int32_t)size <= 0 || (size & 0xFFF)) return (uint32_t)-1;
-    framebuffer_info_t info = {};
+    framebuffer_info_t info;
+    __builtin_memset(&info, 0, sizeof(info));
     if (framebuffer_get_info(&info) != 0) return (uint32_t)-1;
     if (size < info.framebuffer_size) return (uint32_t)-1;
     uint32_t context_id = 0;
@@ -2061,12 +2139,14 @@ warp_ring3_dispatch(uint32_t hc_id, void *frame_ptr)
         return *reinterpret_cast<uint64_t *>(user_rsp + 8 + (uint64_t)n * 8);
     };
 
-    /* ctx_ is the last argument in each hostcall. */
-    void *ctx1  = reinterpret_cast<void *>(a1);  /* 1-arg fn: (ctx_) */
-    void *ctx2  = reinterpret_cast<void *>(a2);  /* 2-arg fn: (a0,ctx_) */
-    void *ctx3  = reinterpret_cast<void *>(a3);  /* 3-arg fn */
-    void *ctx4  = reinterpret_cast<void *>(a4);  /* 4-arg fn */
-    void *ctx5  = reinterpret_cast<void *>(a5);  /* 5-arg fn */
+    /* ctx_ is the last argument in each hostcall. With the SysV ABI used by
+     * the ring-3 HC trampolines, the first five argument positions arrive in
+     * RDI, RSI, RDX, RCX, and R8 respectively. */
+    void *ctx1  = reinterpret_cast<void *>(a0);  /* 1-arg fn: (ctx_) */
+    void *ctx2  = reinterpret_cast<void *>(a1);  /* 2-arg fn: (a0,ctx_) */
+    void *ctx3  = reinterpret_cast<void *>(a2);  /* 3-arg fn: (a0,a1,ctx_) */
+    void *ctx4  = reinterpret_cast<void *>(a3);  /* 4-arg fn */
+    void *ctx5  = reinterpret_cast<void *>(a4);  /* 5-arg fn */
     (void)ctx1; (void)ctx2; (void)ctx3; (void)ctx4; (void)ctx5;
 
     switch (hc_id) {

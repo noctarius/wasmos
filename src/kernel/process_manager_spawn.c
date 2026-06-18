@@ -338,6 +338,9 @@ pm_app_entry(process_t *process, void *arg)
         int entry_rc = wasmos_app_call_entry(&state->app);
         if (entry_rc != 0) {
             klog_write("[pm] app entry failed\n");
+            klog_write("[pm] app entry rc=");
+            serial_write_hex64((uint64_t)(int64_t)entry_rc);
+            klog_write("\n");
             process_set_exit_status(process, -1);
         } else {
             process_set_exit_status(process, 0);

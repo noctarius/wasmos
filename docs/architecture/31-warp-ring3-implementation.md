@@ -5,6 +5,23 @@ from ring 0 to ring 3.  It is a companion to
 `11-ring3-isolation-and-separation.md` (ring 3 kernel model) and should be
 read alongside it.
 
+## Current Implementation Status
+
+The core ring-3 execution path described here is now active for in-tree WARP
+services, drivers, and utilities:
+
+- WARP exports execute from per-module user mappings with dedicated user CR3,
+  ring-3 stack pages, and user-visible JIT/linear-memory aliases.
+- Hostcalls and export returns use ring-3 trampoline pages plus `int 0x80`
+  dispatch back into the kernel.
+- Linear-memory growth is handled in the kernel wrapper layer by a ring-3
+  memory-helper trampoline that remaps the module's user linear-memory window
+  after WARP extends the backing allocation.
+
+Current validation baseline is tracked in `docs/STATUS.md`. This document
+remains the stable design/spec reference for the ring-3 model and its
+constraints.
+
 ---
 
 ## 1  Root-Cause Analysis — Why Ring 3 Is the Right Fix
@@ -20,7 +37,8 @@ three aliasing classes that have all produced real bugs:
 | WARP linear mem of process A vs WARP linear mem of process B | multiple potential cross-process corruptions |
 | WARP JIT code vs WARP linear mem of the **same** process | `commitVirtualMemory` memset zero-filled the calculator's JIT code → #UD panic |
 
-The third class is the **current unfixed crash**.  It occurs because:
+The third class was the last major bring-up crash before the ring-3 execution
+path became viable. It occurred because:
 
 1. The calculator's JIT code is at, say, `phys_jit = 0x41dfcb0` (69 MB,
    canonical VA `0xffffffff841dfcb0`).

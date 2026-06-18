@@ -21,6 +21,20 @@
  *       cd 80                 int 0x80              [2 bytes]
  *       0f 0b                 ud2                   [2 bytes]
  *
+ *     The same RX page also carries a tiny memory-helper stub at
+ *     WARP_R3_MEMHELPER_TRAMPOLINE:
+ *       b8 11 00 00 00        mov eax, 17           [5 bytes]
+ *       cd 80                 int 0x80              [2 bytes]
+ *       c3                    ret                   [1 byte]
+ *
+ *     A debug entry stub also lives in this page at
+ *     WARP_R3_ENTRY_TRAMPOLINE:
+ *       movabs rcx, WARP_R3_STACK_BASE + 64
+ *       mov [rcx], rsp
+ *       movabs rax, WARP_R3_STACK_BASE + 56
+ *       mov rax, [rax]
+ *       jmp rax
+ *
  * warp_r3_setup() also allocates the ring-3 user stack and creates the
  * per-module user address space (user CR3) via paging_create_address_space.
  */
@@ -129,6 +143,42 @@ warp_r3_setup(uint64_t *out_user_root)
     rp[8] = 0x80;
     rp[9] = 0x0f;
     rp[10] = 0x0b;
+
+    /* Memory helper trampoline:
+     *   mov eax, WASMOS_SYSCALL_WARP_MEMORY_HELPER
+     *   int 0x80
+     *   ret
+     */
+    uint8_t *mh = rp + 0x10;
+    mh[0] = 0xb8;
+    mh[1] = (uint8_t)(WASMOS_SYSCALL_WARP_MEMORY_HELPER & 0xFF);
+    mh[2] = (uint8_t)((WASMOS_SYSCALL_WARP_MEMORY_HELPER >> 8) & 0xFF);
+    mh[3] = 0x00;
+    mh[4] = 0x00;
+    mh[5] = 0xcd;
+    mh[6] = 0x80;
+    mh[7] = 0xc3;
+
+    /* Entry debug trampoline:
+     *   movabs rcx, WARP_R3_STACK_BASE + 64   ; capture RSP here
+     *   mov [rcx], rsp
+     *   movabs rax, WARP_R3_STACK_BASE + 56   ; load real target RIP
+     *   mov rax, [rax]
+     *   jmp rax
+     */
+    {
+        uint8_t *et = rp + 0x20;
+        uint64_t capture_va = WARP_R3_STACK_BASE + 64ULL;
+        uint64_t target_va  = WARP_R3_STACK_BASE + 56ULL;
+
+        et[0] = 0x48; et[1] = 0xb9;
+        *(uint64_t *)(void *)&et[2] = capture_va;
+        et[10] = 0x48; et[11] = 0x89; et[12] = 0x21;
+        et[13] = 0x48; et[14] = 0xb8;
+        *(uint64_t *)(void *)&et[15] = target_va;
+        et[23] = 0x48; et[24] = 0x8b; et[25] = 0x00;
+        et[26] = 0xff; et[27] = 0xe0;
+    }
 
     if (map_user_page(root, WARP_R3_RET_TRAMPOLINE, ret_phys, rx_flags) != 0) {
         klog_write("[warp-r3] failed to map return trampoline\n");

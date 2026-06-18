@@ -26,10 +26,14 @@ extern "C" {
 #include "paging.h"
 #ifdef WASMOS_WARP_RING3
 #include "warp_ring3.h"
+#include "arch/x86_64/smp.h"
 #endif
 }
 
+#define private public
 #include "src/WasmModule/WasmModule.hpp"
+#undef private
+#include "src/core/runtime/MemoryHelper.hpp"
 #include "src/core/common/Span.hpp"
 #include "src/core/common/ILogger.hpp"
 #include "warp/shim.h"
@@ -50,9 +54,14 @@ uint64_t warp_mem_linmem_basedata_length(uint8_t const *linmem_ptr);
 namespace BD = Basedata;
 
 /* Forward declarations for static ring-3 helpers defined later in this file. */
-static void warp_r3_patch_basedata(uint8_t *linmem_kernel_ptr, uint64_t basedataLength);
+static void warp_r3_patch_basedata(uint8_t *linmem_kernel_ptr, uint64_t basedataLength,
+                                   uint64_t stack_phys, uint64_t r3_linmem_base,
+                                   uint64_t jit_kernel_base, uint64_t jit_size,
+                                   uint64_t custom_ctx, uint64_t runtime_ptr);
 static int  warp_r3_call_export(vb::WasmModule *mod, const char *name,
-                                uint32_t argc, const uint32_t *argv);
+                                uint32_t argc, const uint32_t *argv,
+                                uint64_t user_root, uint64_t stack_phys,
+                                uint64_t r3_linmem_base);
 #endif
 
 // ---------------------------------------------------------------------------
@@ -172,7 +181,7 @@ thread_slot_free(warp_driver_thread_slot_t *slot)
 }
 
 static int
-warp_driver_start_module(vb::WasmModule *mod)
+warp_driver_start_module(vb::WasmModule *mod, uint64_t user_root)
 {
     WarpExceptionCheckpoint *ckpt = warp_exception_get_checkpoint();
     ckpt->active = 1;
@@ -185,10 +194,12 @@ warp_driver_start_module(vb::WasmModule *mod)
     /* Switch to the WARP user CR3 so ring-0 JIT code can reach trampoline VAs
      * (DYNAMIC_LINK) when start() calls any imported functions. */
     uint64_t old_cr3 = 0;
-    if (g_warp_r3_state.user_root) {
+    if (user_root) {
         old_cr3 = paging_get_current_root_table();
-        paging_switch_root(g_warp_r3_state.user_root);
+        paging_switch_root(user_root);
     }
+#else
+    (void)user_root;
 #endif
     mod->start(k_stack_fence);
 #ifdef WASMOS_WARP_RING3
@@ -199,7 +210,7 @@ warp_driver_start_module(vb::WasmModule *mod)
 }
 
 static int
-warp_driver_ensure_started(wasm_driver_t *driver)
+warp_driver_ensure_started(wasm_driver_t *driver, uint64_t user_root, uint64_t stack_phys)
 {
     if (!driver || !driver->active || !driver->wasm_module) {
         return -1;
@@ -207,17 +218,32 @@ warp_driver_ensure_started(wasm_driver_t *driver)
     if (driver->started) {
         return 0;
     }
-    if (warp_driver_start_module(module_of(driver)) != 0) {
+    if (warp_driver_start_module(module_of(driver), user_root) != 0) {
         return -1;
     }
     driver->started = 1;
 #ifdef WASMOS_WARP_RING3
-    if (g_warp_r3_state.user_root) {
+    if (user_root) {
         vb::WasmModule *mod = module_of(driver);
+        vb::Span<uint8_t const> compiled = mod->getCompiledBinary();
+        /* Prime the first WASM page so ring-3 wrappers do not immediately trap
+         * on the initial 0x1000/0x1004 stacktrace bookkeeping probes. */
+        (void)mod->getLinearMemoryRegion(0xFFFFu, 1u);
         uint8_t *linmem = mod->getLinearMemoryRegion(0, 0);
+        driver->r3_linmem_base =
+            WARP_R3_LINMEM_BASE + (reinterpret_cast<uint64_t>(linmem) & 0xFFFULL);
+        if (warp_mem_ring3_map_linmem(user_root, linmem) != 0) {
+            return -1;
+        }
         uint64_t bd_len = warp_mem_linmem_basedata_length(linmem);
-        warp_r3_patch_basedata(linmem, bd_len);
+        warp_r3_patch_basedata(linmem, bd_len, stack_phys, driver->r3_linmem_base,
+                               reinterpret_cast<uint64_t>(compiled.data()),
+                               static_cast<uint64_t>(compiled.size()),
+                               reinterpret_cast<uint64_t>(mod->getContext()),
+                               reinterpret_cast<uint64_t>(&mod->runtime_));
     }
+#else
+    (void)stack_phys;
 #endif
     return 0;
 }
@@ -228,11 +254,16 @@ warp_driver_ensure_started(wasm_driver_t *driver)
 
 static int
 call_export_mod(vb::WasmModule *mod, const char *name,
-                uint32_t argc, const uint32_t *argv)
+                uint32_t argc, const uint32_t *argv,
+                uint64_t user_root = 0, uint64_t stack_phys = 0)
 {
 #ifdef WASMOS_WARP_RING3
-    if (g_warp_r3_state.user_root)
-        return warp_r3_call_export(mod, name, argc, argv);
+    if (user_root)
+        return warp_r3_call_export(mod, name, argc, argv, user_root, stack_phys,
+                                   WARP_R3_LINMEM_BASE + (reinterpret_cast<uint64_t>(
+                                       mod->getLinearMemoryRegion(0, 0)) & 0xFFFULL));
+#else
+    (void)user_root; (void)stack_phys;
 #endif
     WarpExceptionCheckpoint *ckpt = warp_exception_get_checkpoint();
     ckpt->active = 1;
@@ -257,7 +288,12 @@ static int
 call_export(wasm_driver_t *driver, const char *name,
             uint32_t argc, const uint32_t *argv)
 {
+#ifdef WASMOS_WARP_RING3
+    return call_export_mod(module_of(driver), name, argc, argv,
+                           driver->r3_user_root, driver->r3_stack_phys);
+#else
     return call_export_mod(module_of(driver), name, argc, argv);
+#endif
 }
 
 #ifdef WASMOS_WARP_RING3
@@ -290,19 +326,65 @@ static inline uint32_t r3_rup2(uint32_t v, uint32_t n) {
  *   add r, basedataLength                             → gets WARP_R3_LINMEM_BASE
  */
 static void
-warp_r3_patch_basedata(uint8_t *linmem_kernel_ptr, uint64_t basedataLength)
+warp_r3_patch_basedata(uint8_t *linmem_kernel_ptr, uint64_t basedataLength,
+                       uint64_t stack_phys, uint64_t r3_linmem_base,
+                       uint64_t jit_kernel_base, uint64_t jit_size,
+                       uint64_t custom_ctx, uint64_t runtime_ptr)
 {
     if (!linmem_kernel_ptr || basedataLength == 0) return;
 
+    auto patch_jit_va = [jit_kernel_base, jit_size](uint64_t *slot) {
+        if (!slot || !*slot) return;
+        uint64_t v = *slot;
+        if (v < jit_kernel_base || v >= jit_kernel_base + jit_size) return;
+        *slot = WARP_R3_JIT_BASE + (v - jit_kernel_base);
+    };
+
     /* Write alloc-start user VA into the proxy slot (ring-3 stack bottom). */
     uint64_t *proxy_kernel =
-        reinterpret_cast<uint64_t *>(g_warp_r3_state.ring3_stack_phys | kHalfBase);
-    *proxy_kernel = WARP_R3_LINMEM_BASE - basedataLength;
+        reinterpret_cast<uint64_t *>(stack_phys | kHalfBase);
+    *proxy_kernel = r3_linmem_base - basedataLength;
 
     /* Patch the basedata jobMemoryDataPtrPtr field to point to the proxy. */
     uint64_t *bd_field = reinterpret_cast<uint64_t *>(
         linmem_kernel_ptr - static_cast<ptrdiff_t>(BD::FromEnd::jobMemoryDataPtrPtr));
     *bd_field = static_cast<uint64_t>(WARP_R3_STACK_BASE);
+
+    /* Patch the memory helper pointer to a ring-3 syscall trampoline.
+     * The kernel currently handles only in-bounds requests here; growth that
+     * would require remapping remains a deferred ring-3 gap. */
+    uint64_t *mh_field = reinterpret_cast<uint64_t *>(
+        linmem_kernel_ptr - static_cast<ptrdiff_t>(BD::FromEnd::memoryHelperPtr));
+    *mh_field = static_cast<uint64_t>(WARP_R3_MEMHELPER_TRAMPOLINE);
+
+    /* ACTIVE_STACK_OVERFLOW_CHECK compares RSP against basedata.stackFence and
+     * traps when RSP falls below it. The kernel start() path seeds this with a
+     * higher-half fence, which is invalid once exports execute on the user
+     * ring-3 stack. */
+    uint64_t *sf_field = reinterpret_cast<uint64_t *>(
+        linmem_kernel_ptr - static_cast<ptrdiff_t>(BD::FromEnd::stackFence));
+    *sf_field = static_cast<uint64_t>(WARP_R3_STACK_BASE + 64ULL);
+
+    uint64_t *nsf_field = reinterpret_cast<uint64_t *>(
+        linmem_kernel_ptr - static_cast<ptrdiff_t>(BD::FromEnd::nativeStackFence));
+    *nsf_field = static_cast<uint64_t>(WARP_R3_STACK_BASE + 64ULL + 4096ULL);
+
+    uint64_t *ctx_field = reinterpret_cast<uint64_t *>(
+        linmem_kernel_ptr - static_cast<ptrdiff_t>(BD::FromEnd::customCtxOffset));
+    *ctx_field = custom_ctx;
+
+    uint64_t *runtime_field = reinterpret_cast<uint64_t *>(
+        linmem_kernel_ptr - static_cast<ptrdiff_t>(BD::FromEnd::runtimePtrOffset));
+    *runtime_field = runtime_ptr;
+
+    /* AOT and some JIT paths consult compiled-binary metadata through basedata.
+     * Translate any embedded kernel compiled-binary aliases to the user JIT VA. */
+    patch_jit_va(reinterpret_cast<uint64_t *>(
+        linmem_kernel_ptr - static_cast<ptrdiff_t>(BD::FromEnd::tableAddressOffset)));
+    patch_jit_va(reinterpret_cast<uint64_t *>(
+        linmem_kernel_ptr - static_cast<ptrdiff_t>(BD::FromEnd::binaryModuleStartAddressOffset)));
+    patch_jit_va(reinterpret_cast<uint64_t *>(
+        linmem_kernel_ptr - static_cast<ptrdiff_t>(BD::FromEnd::linkStatusAddressOffset)));
 }
 
 /* IRET to ring-3: loads rdi/rsi/rdx/rcx from memory then builds and executes
@@ -384,7 +466,9 @@ warp_r3_resolve_export(vb::WasmModule *mod, const char *name)
  * the WARP_RETURN syscall fires.  Returns 0 on success, -1 on error. */
 static int
 warp_r3_call_export(vb::WasmModule *mod, const char *name,
-                    uint32_t argc, const uint32_t *argv)
+                    uint32_t argc, const uint32_t *argv,
+                    uint64_t user_root, uint64_t stack_phys,
+                    uint64_t r3_linmem_base)
 {
     uint64_t r3_fn_va = warp_r3_resolve_export(mod, name);
     if (r3_fn_va == 0) {
@@ -399,9 +483,10 @@ warp_r3_call_export(vb::WasmModule *mod, const char *name,
      *   [+8]  serArgs[0..3]: up to 4 × uint64_t serialized WASM args
      *   [+40] trapCode: uint64_t, 0 = no trap
      *   [+48] results: uint64_t (space for one i32 return value)
+     *   [+56] entryTarget: uint64_t, loaded by the debug entry trampoline
+     *   [+64] entryRsp: uint64_t, captures user RSP right after IRET
      * Return address (WARP_R3_RET_TRAMPOLINE) at [STACK_TOP - 8]; RSP = that. */
-    uint8_t *kstack = reinterpret_cast<uint8_t *>(
-        g_warp_r3_state.ring3_stack_phys | kHalfBase);
+    uint8_t *kstack = reinterpret_cast<uint8_t *>(stack_phys | kHalfBase);
 
     /* proxy_ptr is already set by warp_r3_patch_basedata. */
 
@@ -410,11 +495,13 @@ warp_r3_call_export(vb::WasmModule *mod, const char *name,
     for (uint32_t i = 0; i < 4; ++i)
         ser_args[i] = (i < argc) ? static_cast<uint64_t>(argv[i]) : 0ULL;
 
-    /* trapCode and results */
+    /* trapCode, results, and entry trampoline scratch */
     uint64_t *trap_code_k = reinterpret_cast<uint64_t *>(kstack + 40);
     uint64_t *results_k   = reinterpret_cast<uint64_t *>(kstack + 48);
+    uint64_t *entry_target_k = reinterpret_cast<uint64_t *>(kstack + 56);
     *trap_code_k = 0;
     *results_k   = 0;
+    *entry_target_k = r3_fn_va;
 
     /* Return address for the JIT wrapper */
     *reinterpret_cast<uint64_t *>(kstack + WARP_R3_STACK_SIZE - 8) =
@@ -422,12 +509,12 @@ warp_r3_call_export(vb::WasmModule *mod, const char *name,
 
     /* Ring-3 register values:
      *   RDI = serArgs user VA
-     *   RSI = WARP_R3_LINMEM_BASE  (linMem register for JIT prologues)
+     *   RSI = per-module linMem user VA (preserves low-page offset)
      *   RDX = trapCode user VA
      *   RCX = results user VA
      *   RSP = return address slot (STACK_TOP - 8) */
     uint64_t rdi_v  = WARP_R3_STACK_BASE + 8u;
-    uint64_t rsi_v  = WARP_R3_LINMEM_BASE;
+    uint64_t rsi_v  = r3_linmem_base;
     uint64_t rdx_v  = WARP_R3_STACK_BASE + 40u;
     uint64_t rcx_v  = WARP_R3_STACK_BASE + 48u;
     uint64_t r3_rsp = WARP_R3_STACK_TOP - 8u;
@@ -436,23 +523,65 @@ warp_r3_call_export(vb::WasmModule *mod, const char *name,
     uint64_t rflags = 0x202ULL;
 
     /* Switch to WARP user CR3; kernel higher-half is still accessible
-     * because paging_create_address_space shares PML4[511]. */
-    g_warp_r3_state.old_kernel_cr3 = paging_get_current_root_table();
-    paging_switch_root(g_warp_r3_state.user_root);
+     * because paging_create_address_space shares PML4[511].
+     * Store old_cr3 / active / jbuf in cpu-local; these are set here with no
+     * blocking possible before the IRET, so they are safe on this CPU.
+     * WARP_RETURN fires via INT 0x80 on the same CPU that executes the IRET. */
+    cpu_local_t *cpu = cpu_local();
+    cpu->warp_r3_old_cr3 = paging_get_current_root_table();
+    paging_switch_root(user_root);
 
     /* Checkpoint: longjmp from WARP_RETURN syscall handler lands here. */
-    g_warp_r3_state.active = 1;
-    g_warp_r3_state.done   = 0;
-    if (__builtin_setjmp(g_warp_r3_state.jbuf) != 0) {
+    cpu->warp_r3_active = 1;
+    if (__builtin_setjmp(cpu->warp_r3_jbuf) != 0) {
         /* WARP_RETURN fired — restore kernel CR3 and return. */
-        paging_switch_root(g_warp_r3_state.old_kernel_cr3);
+        paging_switch_root(cpu->warp_r3_old_cr3);
         uint64_t tc = *reinterpret_cast<uint64_t *>(kstack + 40);
         return (tc == 0) ? 0 : -1;
     }
 
-    /* IRET to ring-3 JIT wrapper.  Never returns here; resumes above. */
-    r3_do_iretq(r3_fn_va, r3_rsp, rflags, rdi_v, rsi_v, rdx_v, rcx_v);
+    /* IRET to the debug entry trampoline, which captures user RSP and jumps to
+     * the real JIT wrapper stored in entryTarget. Never returns here; resumes above. */
+    r3_do_iretq(WARP_R3_ENTRY_TRAMPOLINE, r3_rsp, rflags, rdi_v, rsi_v, rdx_v, rcx_v);
     __builtin_unreachable();
+}
+
+extern "C" uint64_t
+warp_r3_memory_helper(uint64_t min_linmem_len,
+                      uint32_t basedata_len,
+                      uint64_t original_linmem_user_va)
+{
+    if (basedata_len == 0 || original_linmem_user_va < USER_VA_MIN) {
+        return 0;
+    }
+
+    uint8_t *linmem_user = reinterpret_cast<uint8_t *>(original_linmem_user_va);
+    uint32_t actual_linmem = *reinterpret_cast<uint32_t *>(
+        linmem_user - static_cast<ptrdiff_t>(BD::FromEnd::actualLinMemByteSize));
+    if (min_linmem_len <= actual_linmem) {
+        return original_linmem_user_va - static_cast<uint64_t>(basedata_len);
+    }
+
+    uint8_t *new_memory_base =
+        vb::MemoryHelper::extensionRequest(min_linmem_len, basedata_len, linmem_user);
+    if (!new_memory_base) {
+        return 0;
+    }
+    if (reinterpret_cast<uintptr_t>(new_memory_base) == ~static_cast<uintptr_t>(0)) {
+        return ~0ULL;
+    }
+
+    uint8_t *new_linmem_kernel = new_memory_base + basedata_len;
+    uint64_t user_root = paging_get_current_root_table();
+    if (warp_mem_ring3_map_linmem(user_root, new_linmem_kernel) != 0) {
+        return 0;
+    }
+
+    uint64_t new_linmem_user_va =
+        WARP_R3_LINMEM_BASE + (reinterpret_cast<uint64_t>(new_linmem_kernel) & 0xFFFULL);
+    uint64_t new_memory_base_user_va = new_linmem_user_va - static_cast<uint64_t>(basedata_len);
+    *reinterpret_cast<uint64_t *>(WARP_R3_STACK_BASE) = new_memory_base_user_va;
+    return new_memory_base_user_va;
 }
 #endif /* WASMOS_WARP_RING3 */
 
@@ -484,6 +613,11 @@ wasm_driver_start(wasm_driver_t *driver,
     driver->active           = 0;
     driver->started          = 0;
     spinlock_init(&driver->lock);
+#ifdef WASMOS_WARP_RING3
+    driver->r3_user_root  = 0;
+    driver->r3_stack_phys = 0;
+    driver->r3_linmem_base = 0;
+#endif
 
     process_t *owner = process_find_by_context(owner_context_id);
     driver->owner_pid = owner ? owner->pid : process_current_pid();
@@ -523,7 +657,11 @@ wasm_driver_start(wasm_driver_t *driver,
             vb::Span<uint8_t const> compiled(manifest->compiled_bytes, manifest->compiled_size);
             vb::Span<uint8_t const> empty_debug(nullptr, 0);
             /* initFromCompiledBinary requires DYNAMIC_LINK symbols. */
+#ifdef WASMOS_WARP_RING3
+            mod->initFromCompiledBinary(compiled, warp_wasmos_symbols_ring3(), empty_debug);
+#else
             mod->initFromCompiledBinary(compiled, warp_wasmos_symbols_for_aot_load(), empty_debug);
+#endif
             ckpt->active = 0;
             use_jit = 0;
         }
@@ -580,6 +718,10 @@ wasm_driver_start(wasm_driver_t *driver,
             warp_runtime_leave(prev);
             return -1;
         }
+        driver->r3_user_root  = user_root;
+        driver->r3_stack_phys = g_warp_r3_state.ring3_stack_phys;
+        driver->r3_linmem_base =
+            WARP_R3_LINMEM_BASE + (reinterpret_cast<uint64_t>(linmem) & 0xFFFULL);
     }
 #endif
 
@@ -608,7 +750,14 @@ wasm_driver_stop(wasm_driver_t *driver)
     driver->active = 0;
     driver->started = 0;
 #ifdef WASMOS_WARP_RING3
-    if (g_warp_r3_state.user_root) warp_r3_teardown();
+    if (driver->r3_user_root) {
+        g_warp_r3_state.user_root        = driver->r3_user_root;
+        g_warp_r3_state.ring3_stack_phys = driver->r3_stack_phys;
+        warp_r3_teardown();
+        driver->r3_user_root  = 0;
+        driver->r3_stack_phys = 0;
+        driver->r3_linmem_base = 0;
+    }
 #endif
 }
 
@@ -626,7 +775,14 @@ wasm_driver_call_entry(wasm_driver_t *driver)
     if (!driver || !driver->active || !driver->wasm_module) return -1;
     spinlock_lock(&driver->lock);
     uint32_t prev = warp_runtime_enter(driver->owner_pid);
-    if (warp_driver_ensure_started(driver) != 0) {
+#ifdef WASMOS_WARP_RING3
+    uint64_t r3_root  = driver->r3_user_root;
+    uint64_t r3_stack = driver->r3_stack_phys;
+#else
+    uint64_t r3_root  = 0;
+    uint64_t r3_stack = 0;
+#endif
+    if (warp_driver_ensure_started(driver, r3_root, r3_stack) != 0) {
         warp_runtime_leave(prev);
         spinlock_unlock(&driver->lock);
         return -1;
@@ -634,7 +790,8 @@ wasm_driver_call_entry(wasm_driver_t *driver)
     int rc = call_export_mod(module_of(driver),
                          driver->manifest.entry_export,
                          driver->manifest.entry_argc,
-                         driver->manifest.entry_argv);
+                         driver->manifest.entry_argv,
+                         r3_root, r3_stack);
     warp_runtime_leave(prev);
     spinlock_unlock(&driver->lock);
     return rc;
@@ -647,12 +804,19 @@ wasm_driver_call(wasm_driver_t *driver, const char *name,
     if (!driver || !driver->active || !driver->wasm_module) return -1;
     spinlock_lock(&driver->lock);
     uint32_t prev = warp_runtime_enter(driver->owner_pid);
-    if (warp_driver_ensure_started(driver) != 0) {
+#ifdef WASMOS_WARP_RING3
+    uint64_t r3_root  = driver->r3_user_root;
+    uint64_t r3_stack = driver->r3_stack_phys;
+#else
+    uint64_t r3_root  = 0;
+    uint64_t r3_stack = 0;
+#endif
+    if (warp_driver_ensure_started(driver, r3_root, r3_stack) != 0) {
         warp_runtime_leave(prev);
         spinlock_unlock(&driver->lock);
         return -1;
     }
-    int rc = call_export_mod(module_of(driver), name, argc, argv);
+    int rc = call_export_mod(module_of(driver), name, argc, argv, r3_root, r3_stack);
     warp_runtime_leave(prev);
     spinlock_unlock(&driver->lock);
     return rc;
@@ -664,11 +828,18 @@ wasm_driver_call_unlocked(wasm_driver_t *driver, const char *name,
 {
     if (!driver || !driver->active || !driver->wasm_module) return -1;
     uint32_t prev = warp_runtime_enter(driver->owner_pid);
-    if (warp_driver_ensure_started(driver) != 0) {
+#ifdef WASMOS_WARP_RING3
+    uint64_t r3_root  = driver->r3_user_root;
+    uint64_t r3_stack = driver->r3_stack_phys;
+#else
+    uint64_t r3_root  = 0;
+    uint64_t r3_stack = 0;
+#endif
+    if (warp_driver_ensure_started(driver, r3_root, r3_stack) != 0) {
         warp_runtime_leave(prev);
         return -1;
     }
-    int rc = call_export_mod(module_of(driver), name, argc, argv);
+    int rc = call_export_mod(module_of(driver), name, argc, argv, r3_root, r3_stack);
     warp_runtime_leave(prev);
     return rc;
 }
@@ -703,10 +874,11 @@ warp_vm_thread_entry(process_t *process, uint32_t tid, void *arg)
         mod->initFromBytecode(bc, warp_wasmos_symbols(), true);
         warp_bind_module(mod, slot->owner_pid);
         ckpt->active = 0;
-        if (warp_driver_start_module(mod) != 0) {
+        if (warp_driver_start_module(mod, 0) != 0) {
             rc = -1;
         } else {
-            rc = call_export_mod(mod, slot->export_name, slot->argc, slot->argv);
+            /* Thread slots have no per-slot ring-3 setup; pass 0 to run kernel-mode. */
+            rc = call_export_mod(mod, slot->export_name, slot->argc, slot->argv, 0, 0);
         }
     } else {
         klog_write("[warp-driver] vm thread: module init failed\n");

@@ -1739,7 +1739,9 @@ static int process_schedule_once_impl(void) {
         critical_section_leave();
         return 1;
     }
-    run_ctx->root_table = mm_context_root_table(proc->context_id);
+    if (run_ctx->root_table == 0) {
+        run_ctx->root_table = mm_context_root_table(proc->context_id);
+    }
     if (!thread->is_kernel_worker) {
         process_validate_thread_context(proc, thread, run_ctx, "dispatch");
     }
@@ -2068,6 +2070,7 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     ctx->ss = frame->user_ss;
     ctx->rip = frame->rip;
     ctx->rflags = frame->rflags;
+    ctx->root_table = paging_get_current_root_table();
     process_validate_thread_context(cpu_local()->current_process,
                                     cpu_local()->current_thread,
                                     ctx,
@@ -2093,12 +2096,24 @@ int process_preempt_from_irq(irq_frame_t *frame) {
     }
 
     thread_t *thread = process_thread_for_transition(cpu_local()->current_process);
-    process_set_ready(cpu_local()->current_process, thread);
-    sched_enqueue_thread(thread);
+    if (!thread) {
+        process_clear_resched();
+        return 0;
+    }
     cpu_local()->last_run_result = PROCESS_RUN_YIELDED;
     process_clear_resched();
+    /* Mirror process_yield(PROCESS_RUN_YIELDED): do not mark/enqueue the
+     * current thread until control has actually switched back into the
+     * scheduler context. Doing it here races against the "current_thread"
+     * ownership checks and can strand or duplicate the running thread. */
+    /* IRQ0 entered from ring 3 with a 5-slot IRET frame (RIP, CS, RFLAGS,
+     * RSP, SS). When we redirect return into a ring-0 scheduler trampoline we
+     * must rewrite the full privilege-return frame, not just RIP/CS, otherwise
+     * iretq still tries to restore the stale user SS:RSP pair and faults. */
     frame->cs = KERNEL_CS_SELECTOR;
     frame->rip = (uint64_t)process_kernel_alias_addr((uintptr_t)process_preempt_trampoline);
+    frame->user_ss = KERNEL_DS_SELECTOR;
+    frame->user_rsp = (uint64_t)(cpu_local()->current_process->stack_top - 16u);
     return 1;
 }
 

@@ -10,9 +10,14 @@
 #include "thread.h"
 #include "string.h"
 #include "paging.h"
+#include "serial.h"
 #include "user_mutex.h"
 #ifdef WASMOS_WARP_RING3
 #include "warp_ring3.h"
+#include "arch/x86_64/smp.h"
+extern uint64_t warp_r3_memory_helper(uint64_t min_linmem_len,
+                                      uint32_t basedata_len,
+                                      uint64_t original_linmem_user_va);
 #endif
 
 static uint8_t g_ring3_syscall_logged;
@@ -340,6 +345,7 @@ x86_syscall_handler(syscall_frame_t *frame)
         current_thread->ctx.cs = frame->cs;
         current_thread->ctx.rip = frame->rip;
         current_thread->ctx.rflags = frame->rflags;
+        current_thread->ctx.root_table = paging_get_current_root_table();
     }
     syscall_trace_ring3_stress(frame);
     syscall_trace_ring3_once(frame);
@@ -349,20 +355,29 @@ x86_syscall_handler(syscall_frame_t *frame)
      * wrapper executes its final `ret`. RDI contains the raw RAX that the
      * JIT wrapper had on exit (trap code or return value). */
     if ((uint32_t)frame->rax == WASMOS_SYSCALL_WARP_RETURN) {
-        if (g_warp_r3_state.active) {
-            g_warp_r3_state.done   = 1;
-            g_warp_r3_state.active = 0;
-            __builtin_longjmp(g_warp_r3_state.jbuf, 1);
+        cpu_local_t *r3cpu = cpu_local();
+        if (r3cpu->warp_r3_active) {
+            r3cpu->warp_r3_active = 0;
+            __builtin_longjmp(r3cpu->warp_r3_jbuf, 1);
         }
         frame->rax = (uint64_t)-1;
         return 0;
+    }
+    if ((uint32_t)frame->rax == WASMOS_SYSCALL_WARP_MEMORY_HELPER) {
+        uint32_t basedata_len = 0;
+        if (syscall_arg_u32(frame->rsi, &basedata_len) != 0) {
+            frame->rax = 0;
+            return 0;
+        }
+        frame->rax = warp_r3_memory_helper(frame->rdi, basedata_len, frame->rdx);
+        return frame->rax;
     }
     /* WARP ring-3 hostcall: stubs fire int 0x80 with RAX = 0x100 + hc_id. */
     if (frame->rax >= WARP_HC_SYSCALL_BASE &&
         frame->rax < WARP_HC_SYSCALL_BASE + WARP_HC_MAX) {
         uint32_t hc_id = (uint32_t)(frame->rax - WARP_HC_SYSCALL_BASE);
         frame->rax = (uint64_t)warp_ring3_dispatch(hc_id, (void *)frame);
-        return 0;
+        return frame->rax;
     }
 #endif
 

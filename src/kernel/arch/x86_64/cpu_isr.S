@@ -57,6 +57,15 @@
     popq %rax
 .endm
 
+.macro CALL_C_ALIGNED target
+    movq %rsp, %rax
+    andq $-16, %rsp
+    subq $16, %rsp
+    movq %rax, 8(%rsp)
+    call \target
+    movq 8(%rsp), %rsp
+.endm
+
 .macro DECL_EXC num
 .global isr_exception_\num
 isr_exception_\num:
@@ -292,9 +301,7 @@ isr_irq_0:
     movq 184(%rsp), %rax
     movq %rax, 32(%rsp)
     leaq 48(%rsp), %rdi
-    subq $8, %rsp
-    call x86_timer_irq_handler
-    addq $8, %rsp
+    CALL_C_ALIGNED x86_timer_irq_handler
     movabs $0xC0FFEE0DD15EA5E, %rax
     cmpq %rax, (%rsp)
     jne 1f
@@ -340,9 +347,7 @@ isr_irq_0:
 isr_irq_\num:
     PUSH_REGS
     mov $\vec, %rdi
-    subq $8, %rsp
-    call x86_irq_handler
-    addq $8, %rsp
+    CALL_C_ALIGNED x86_irq_handler
     POP_REGS
     iretq
 .endm
@@ -378,9 +383,7 @@ isr_syscall_128:
     # saved register frame and returns the syscall result in RAX.
     PUSH_REGS
     mov %rsp, %rdi
-    subq $8, %rsp
-    call x86_syscall_handler
-    addq $8, %rsp
+    CALL_C_ALIGNED x86_syscall_handler
     movq %rax, 112(%rsp)
     POP_REGS
     iretq

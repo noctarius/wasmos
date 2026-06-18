@@ -274,10 +274,22 @@ backend_refresh_boot_meta(fs_backend_t *slot, int32_t req_seed)
     if (devmgr < 0) {
         return;
     }
-    if (wasmos_ipc_send(devmgr, g_reply_endpoint, DEVMGR_QUERY_MOUNT_REQ, req_id, 0, 0, 0, 0) != 0 ||
-        wasmos_ipc_select_one(g_reply_endpoint) < 0 ||
-        wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req_id ||
-        wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != DEVMGR_MOUNT_INFO) {
+    int32_t send_rc = wasmos_ipc_send(devmgr, g_reply_endpoint, DEVMGR_QUERY_MOUNT_REQ, req_id, 0, 0, 0, 0);
+    int32_t sel_rc = (send_rc == 0) ? wasmos_ipc_select_one(g_reply_endpoint) : -1;
+    int32_t last_req = (sel_rc >= 0) ? wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) : -1;
+    int32_t last_type = (sel_rc >= 0) ? wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) : -1;
+    if (send_rc != 0 ||
+        sel_rc < 0 ||
+        last_req != req_id ||
+        last_type != DEVMGR_MOUNT_INFO) {
+        printf("[fs-manager] boot-meta fail devmgr=%d send=%d sel=%d req=%d type=%d src=%d dst=%d a0=%d a1=%d a2=%d a3=%d\n",
+               devmgr, send_rc, sel_rc, last_req, last_type,
+               wasmos_ipc_last_field(WASMOS_IPC_FIELD_SOURCE),
+               wasmos_ipc_last_field(WASMOS_IPC_FIELD_DESTINATION),
+               wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0),
+               wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1),
+               wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG2),
+               wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG3));
         return;
     }
     {

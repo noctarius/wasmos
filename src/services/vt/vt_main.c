@@ -940,53 +940,22 @@ vt_init_ttys(void)
         return;
     }
     for (uint32_t i = 0; i < VT_MAX_TTYS; ++i) {
-        g_ttys[i].cursor_row = 0;
-        g_ttys[i].cursor_col = 0;
-        g_ttys[i].cursor_saved_row = 0;
-        g_ttys[i].cursor_saved_col = 0;
+        vt_cell_t *cells = g_ttys[i].cells;
+        memset(&g_ttys[i], 0, sizeof(g_ttys[i]));
+        g_ttys[i].cells = cells;
         g_ttys[i].fg = 15;
-        g_ttys[i].bg = 0;
-        g_ttys[i].attr = 0;
         g_ttys[i].cursor_visible = 1;
-        g_ttys[i].cursor_saved_valid = 0;
-        /* Input is delivered raw to the tty client; CLI owns line editing
-         * and user-visible echo so serial and framebuffer behave the same. */
-        g_ttys[i].input_echo = 0;
-        g_ttys[i].input_canonical = 0;
-        g_ttys[i].esc = ESC_NORMAL;
-        g_ttys[i].input_q_head = 0;
-        g_ttys[i].input_q_tail = 0;
-        g_ttys[i].input_line_len = 0;
-        g_ttys[i].input_line_cursor = 0;
-        g_ttys[i].input_history_count = 0;
-        g_ttys[i].input_history_head = 0;
         g_ttys[i].input_history_nav = -1;
-        g_ttys[i].csi_count = 0;
-        g_ttys[i].csi_current = 0;
-        g_ttys[i].csi_have_current = 0;
-        g_ttys[i].csi_private = 0;
-        for (uint32_t k = 0; k < sizeof(g_ttys[i].input_q); ++k) {
-            g_ttys[i].input_q[k] = 0;
-        }
-        for (uint32_t k = 0; k < sizeof(g_ttys[i].input_line); ++k) {
-            g_ttys[i].input_line[k] = 0;
-        }
-        for (uint32_t h = 0; h < 8u; ++h) {
-            g_ttys[i].input_history_len[h] = 0;
-            for (uint32_t k = 0; k < sizeof(g_ttys[i].input_history[h]); ++k) {
-                g_ttys[i].input_history[h][k] = 0;
-            }
-        }
-        if (!g_ttys[i].cells) {
+        if (!cells) {
             continue;
         }
+        memset(cells, 0, cell_count * (uint32_t)sizeof(vt_cell_t));
         for (uint32_t j = 0; j < cell_count; ++j) {
-            g_ttys[i].cells[j].ch = 0;
-            g_ttys[i].cells[j].fg = 15;
-            g_ttys[i].cells[j].bg = 0;
-            g_ttys[i].cells[j].attr = 0;
-            g_ttys[i].cells[j]._pad = 0;
+            cells[j].fg = 15;
         }
+        /* Yield between TTY-grid clears so WARP ring-3 init does not hold a
+         * full startup timeslice in one uninterrupted memory-touch burst. */
+        (void)wasmos_sched_yield();
     }
     g_active_tty = 0;
     g_switch_generation = 1;

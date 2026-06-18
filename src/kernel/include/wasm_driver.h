@@ -41,6 +41,11 @@ typedef struct {
     spinlock_t lock;            /* guards WARP module re-entrancy */
     uint8_t    active;
     uint8_t    started;
+#ifdef WASMOS_WARP_RING3
+    uint64_t   r3_user_root;   /* per-module user CR3 for ring-3 execution */
+    uint64_t   r3_stack_phys;  /* per-module ring-3 stack physical base */
+    uint64_t   r3_linmem_base; /* per-module user VA for WARP linMem register */
+#endif
 } wasm_driver_t;
 
 #else  /* wasm3 interpreter backend (default) */

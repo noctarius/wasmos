@@ -24,6 +24,9 @@ Two WASM runtime backends are available (select at build time):
 - **WARP** — single-pass JIT compiler (BMW AG, Apache-2.0), near-native
   execution speed on x86_64, selected with
   `-DWASMOS_WASM_RUNTIME_WARP=ON`.
+  Internal WARP-loaded services, drivers, and utilities now execute through
+  the ring-3 isolation path as well, with kernel-managed hostcall and
+  linear-memory trampolines.
 
 It is designed for experimentation, not production use.
 

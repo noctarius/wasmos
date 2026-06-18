@@ -773,36 +773,54 @@ int
 wasm_driver_call_entry(wasm_driver_t *driver)
 {
     if (!driver || !driver->active || !driver->wasm_module) return -1;
-    spinlock_lock(&driver->lock);
-    uint32_t prev = warp_runtime_enter(driver->owner_pid);
 #ifdef WASMOS_WARP_RING3
+    /* Use the noirq variant (no preempt_disable) so that:
+     *  - the timer can still fire and advance process_tick during the
+     *    ring-0 ensure_started / mod->start() phase, and
+     *  - preempt_disable_count stays 0, which lets the watchdog
+     *    recognise the ring-0 startup as a transient non-stall condition.
+     * Matches the wasm3_lock precedent (see spinlock.c). */
+    spinlock_lock_noirq(&driver->lock);
     uint64_t r3_root  = driver->r3_user_root;
     uint64_t r3_stack = driver->r3_stack_phys;
 #else
+    spinlock_lock(&driver->lock);
     uint64_t r3_root  = 0;
     uint64_t r3_stack = 0;
 #endif
+    uint32_t prev = warp_runtime_enter(driver->owner_pid);
     if (warp_driver_ensure_started(driver, r3_root, r3_stack) != 0) {
         warp_runtime_leave(prev);
+#ifdef WASMOS_WARP_RING3
+        spinlock_unlock_noirq(&driver->lock);
+#else
         spinlock_unlock(&driver->lock);
+#endif
         return -1;
     }
 #ifdef WASMOS_WARP_RING3
     if (r3_root) {
-        /* Drop the spinlock before IRET to ring-3 so preempt_disable_count
-         * returns to 0, allowing the timer to preempt ring-3 execution. The
-         * module is fully initialised (started=1); the lock is not needed
-         * during execution. WARP heap is not accessed in ring-3 execution, so
-         * warp_runtime_leave is also safe here. */
+        /* Release lock and runtime binding before IRET to ring-3.  Clear any
+         * need_resched that accumulated during ring-0 ensure_started so the
+         * ring-3 process starts with a fresh scheduling window. */
         warp_runtime_leave(prev);
-        spinlock_unlock(&driver->lock);
+        spinlock_unlock_noirq(&driver->lock);
+        process_clear_resched();
         return call_export_mod(module_of(driver),
                            driver->manifest.entry_export,
                            driver->manifest.entry_argc,
                            driver->manifest.entry_argv,
                            r3_root, r3_stack);
     }
-#endif
+    int rc = call_export_mod(module_of(driver),
+                         driver->manifest.entry_export,
+                         driver->manifest.entry_argc,
+                         driver->manifest.entry_argv,
+                         r3_root, r3_stack);
+    warp_runtime_leave(prev);
+    spinlock_unlock_noirq(&driver->lock);
+    return rc;
+#else
     int rc = call_export_mod(module_of(driver),
                          driver->manifest.entry_export,
                          driver->manifest.entry_argc,
@@ -811,6 +829,7 @@ wasm_driver_call_entry(wasm_driver_t *driver)
     warp_runtime_leave(prev);
     spinlock_unlock(&driver->lock);
     return rc;
+#endif
 }
 
 int
@@ -818,31 +837,42 @@ wasm_driver_call(wasm_driver_t *driver, const char *name,
                  uint32_t argc, uint32_t *argv)
 {
     if (!driver || !driver->active || !driver->wasm_module) return -1;
-    spinlock_lock(&driver->lock);
-    uint32_t prev = warp_runtime_enter(driver->owner_pid);
 #ifdef WASMOS_WARP_RING3
+    spinlock_lock_noirq(&driver->lock);
     uint64_t r3_root  = driver->r3_user_root;
     uint64_t r3_stack = driver->r3_stack_phys;
 #else
+    spinlock_lock(&driver->lock);
     uint64_t r3_root  = 0;
     uint64_t r3_stack = 0;
 #endif
+    uint32_t prev = warp_runtime_enter(driver->owner_pid);
     if (warp_driver_ensure_started(driver, r3_root, r3_stack) != 0) {
         warp_runtime_leave(prev);
+#ifdef WASMOS_WARP_RING3
+        spinlock_unlock_noirq(&driver->lock);
+#else
         spinlock_unlock(&driver->lock);
+#endif
         return -1;
     }
 #ifdef WASMOS_WARP_RING3
     if (r3_root) {
         warp_runtime_leave(prev);
-        spinlock_unlock(&driver->lock);
+        spinlock_unlock_noirq(&driver->lock);
+        process_clear_resched();
         return call_export_mod(module_of(driver), name, argc, argv, r3_root, r3_stack);
     }
-#endif
+    int rc = call_export_mod(module_of(driver), name, argc, argv, r3_root, r3_stack);
+    warp_runtime_leave(prev);
+    spinlock_unlock_noirq(&driver->lock);
+    return rc;
+#else
     int rc = call_export_mod(module_of(driver), name, argc, argv, r3_root, r3_stack);
     warp_runtime_leave(prev);
     spinlock_unlock(&driver->lock);
     return rc;
+#endif
 }
 
 int
@@ -854,6 +884,17 @@ wasm_driver_call_unlocked(wasm_driver_t *driver, const char *name,
 #ifdef WASMOS_WARP_RING3
     uint64_t r3_root  = driver->r3_user_root;
     uint64_t r3_stack = driver->r3_stack_phys;
+    if (r3_root) {
+        /* pm_app_entry holds preempt_disable() (PREEMPT_GUARD) for ring-0
+         * re-entrancy protection, but ring-3 WARP execution must be
+         * timer-preemptible.  Drain the guard so:
+         *  - ensure_started / mod->start() do not trigger watchdog stalls,
+         *  - the ring-3 IRET runs with preempt_disable_count=0, and
+         *  - the timer can preempt ring-3 code normally.
+         * pm_app_entry's paired preempt_enable() is a safe no-op at zero. */
+        while (preempt_disable_depth() > 0) preempt_enable();
+        process_clear_resched();
+    }
 #else
     uint64_t r3_root  = 0;
     uint64_t r3_stack = 0;

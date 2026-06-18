@@ -318,6 +318,15 @@ pm_app_entry(process_t *process, void *arg)
             return PROCESS_RUN_EXITED;
         }
 
+#if defined(WASMOS_ENABLE_PREEMPT_GUARD)
+        /* Drain pdc to 0 before WARP JIT compilation.  JIT can take seconds on
+         * a slow host; holding pdc=1 through it accumulates watchdog stall ticks
+         * until the 512-tick threshold fires.  The paired preempt_enable() at
+         * every exit path becomes a safe no-op when pdc is already 0. */
+        while (preempt_disable_depth() > 0) preempt_enable();
+        process_clear_resched();
+#endif
+
         if (wasmos_app_start(&state->app,
                              &desc,
                              process->context_id,

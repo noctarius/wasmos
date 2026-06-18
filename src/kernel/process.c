@@ -1954,18 +1954,31 @@ void process_tick(void) {
             cpu_local()->resched_pending_since_tick = 0;
             return;
         }
-        if (cpu_local()->resched_pending_since_tick == 0) {
+        /* Only advance the stall counter when a preemption-disabling lock is
+         * actually held.  If no lock is held (preempt_is_enabled()), the
+         * process is in ring-0 doing legitimate kernel work (e.g. initialising
+         * a WARP module) and will return to ring-3 naturally.  Resetting on
+         * every such tick ensures the 512-tick window starts fresh from the
+         * last spinlock-free tick, so brief spinlock holds inside ring-0 kernel
+         * work (IPC endpoint lock, PFA lock) do not accumulate into a spurious
+         * watchdog fire. */
+        if (preempt_is_enabled()) {
+            cpu_local()->resched_pending_since_tick = 0;
+        } else if (cpu_local()->resched_pending_since_tick == 0) {
             cpu_local()->resched_pending_since_tick = now;
-        } else if ((now - cpu_local()->resched_pending_since_tick) >= SCHED_RESCHED_STALL_TICKS) {
-            cpu_local()->resched_stall_reports++;
-            klog_write("[watchdog] resched stall ticks=");
-            serial_write_hex64(now - cpu_local()->resched_pending_since_tick);
-            klog_write("[watchdog] pid=");
-            serial_write_hex64(cpu_local()->current_pid);
-            klog_write("[watchdog] reports=");
-            serial_write_hex64(cpu_local()->resched_stall_reports);
-            klog_write("\n");
-            cpu_local()->resched_pending_since_tick = now;
+        } else {
+            uint64_t stall_ticks = now - cpu_local()->resched_pending_since_tick;
+            if (stall_ticks >= SCHED_RESCHED_STALL_TICKS) {
+                cpu_local()->resched_stall_reports++;
+                klog_write("[watchdog] resched stall ticks=");
+                serial_write_hex64(stall_ticks);
+                klog_write("[watchdog] pid=");
+                serial_write_hex64(cpu_local()->current_pid);
+                klog_write("[watchdog] reports=");
+                serial_write_hex64(cpu_local()->resched_stall_reports);
+                klog_write("\n");
+                cpu_local()->resched_pending_since_tick = now;
+            }
         }
     } else {
         cpu_local()->resched_pending_since_tick = 0;

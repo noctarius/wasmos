@@ -25,7 +25,9 @@ typedef enum {
     WASMOS_SYSCALL_THREAD_DETACH = 12,
     WASMOS_SYSCALL_NOTIFY_READY = 13,
     WASMOS_SYSCALL_MUTEX_TRY_LOCK = 14,
-    WASMOS_SYSCALL_MUTEX_UNLOCK = 15
+    WASMOS_SYSCALL_MUTEX_UNLOCK = 15,
+    /* Ring-3 WARP execution returns here via the return trampoline. */
+    WASMOS_SYSCALL_WARP_RETURN = 16
 } wasmos_syscall_id_t;
 
 /* int 0x80 syscall ABI (current minimal contract):

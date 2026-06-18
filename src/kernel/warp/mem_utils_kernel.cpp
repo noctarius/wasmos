@@ -24,6 +24,9 @@ extern "C" {
 #include "slab.h"
 #include "klog.h"
 #include "memory.h"
+#ifdef WASMOS_WARP_RING3
+#include "warp_ring3.h"
+#endif
 }
 
 #include "src/utils/MemUtils.hpp"
@@ -65,9 +68,14 @@ static int remap_direct_alias_pages(uint8_t *ptr, uint64_t pages)
     return 0;
 }
 
-/* Simple tracking table for mmap → phys mapping so munmap can free pages. */
-struct MmapEntry { uint8_t *virt; uint64_t phys; uint64_t pages; };
+/* Tracking table for mmap → phys mapping so munmap can free pages.
+ * The type field distinguishes linmem from JIT allocations for ring-3 mapping. */
+enum MmapType : uint8_t { MMAP_OTHER = 0, MMAP_JIT = 1, MMAP_LINMEM = 2 };
+struct MmapEntry { uint8_t *virt; uint64_t phys; uint64_t pages; MmapType type; };
 static MmapEntry g_mmap_table[256];
+
+/* Next-allocation type hint: set before calling allocPagedMemory. */
+static MmapType g_next_alloc_type = MMAP_OTHER;
 
 static MmapEntry *alloc_entry()
 {
@@ -81,7 +89,88 @@ static MmapEntry *find_entry(uint8_t *v)
     return nullptr;
 }
 
+/* Find the entry that contains the given physical address. */
+#ifdef WASMOS_WARP_RING3
+static MmapEntry *find_entry_by_phys(uint64_t phys)
+{
+    for (auto &e : g_mmap_table)
+        if (e.virt && e.phys <= phys && phys < e.phys + e.pages * kPageSize)
+            return &e;
+    return nullptr;
+}
+#endif /* WASMOS_WARP_RING3 */
+
 } // namespace
+
+#ifdef WASMOS_WARP_RING3
+/* Return basedataLength = byte offset from alloc start to linmem start.
+ * Used by warp_driver.cpp to patch the basedata for ring-3 execution. */
+extern "C" uint64_t
+warp_mem_linmem_basedata_length(uint8_t const *linmem_kernel_ptr)
+{
+    if (!linmem_kernel_ptr) return 0;
+    uint64_t linmem_virt = reinterpret_cast<uint64_t>(linmem_kernel_ptr);
+    if (linmem_virt < kHalfBase) return 0;
+    uint64_t linmem_phys = linmem_virt - kHalfBase;
+    MmapEntry *e = find_entry_by_phys(linmem_phys);
+    return e ? (linmem_phys - e->phys) : 0ULL;
+}
+
+/* Map JIT binary pages into the ring-3 user CR3 at WARP_R3_JIT_BASE.
+ * jit_kernel_ptr = getCompiledBinary().data() (kernel alias of JIT code). */
+extern "C" int
+warp_mem_ring3_map_jit(uint64_t user_root,
+                       uint8_t const *jit_kernel_ptr, size_t jit_size)
+{
+    if (!jit_kernel_ptr || jit_size == 0) return -1;
+    uint64_t jit_virt = reinterpret_cast<uint64_t>(jit_kernel_ptr);
+    if (jit_virt < kHalfBase) return -1;
+    uint64_t phys  = jit_virt - kHalfBase;
+    uint64_t pages = (static_cast<uint64_t>(jit_size) + kPageSize - 1) / kPageSize;
+    uint64_t flags = MEM_REGION_FLAG_READ | MEM_REGION_FLAG_EXEC | MEM_REGION_FLAG_USER;
+    for (uint64_t i = 0; i < pages; ++i) {
+        if (paging_map_4k_in_root(user_root,
+                                   WARP_R3_JIT_BASE + i * kPageSize,
+                                   phys + i * kPageSize,
+                                   flags) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* Map the full basedata+linmem allocation into the ring-3 user CR3.
+ * linmem_kernel_ptr = getLinearMemoryRegion(0, 0) (= linmem base kernel alias).
+ * Finds the containing MmapEntry (type=LINMEM) to get the alloc start and
+ * page count, then maps from WARP_R3_LINMEM_BASE - basedataLength upwards. */
+extern "C" int
+warp_mem_ring3_map_linmem(uint64_t user_root, uint8_t const *linmem_kernel_ptr)
+{
+    if (!linmem_kernel_ptr) return -1;
+    uint64_t linmem_virt = reinterpret_cast<uint64_t>(linmem_kernel_ptr);
+    if (linmem_virt < kHalfBase) return -1;
+    uint64_t linmem_phys = linmem_virt - kHalfBase;
+
+    /* The MmapEntry that starts at the alloc base (basedata start) contains
+     * linmem_phys within [e->phys, e->phys + e->pages * PAGE_SIZE). */
+    MmapEntry *e = find_entry_by_phys(linmem_phys);
+    if (!e) return -1;
+
+    uint64_t basedataLength = linmem_phys - e->phys;
+    uint64_t user_va_base   = WARP_R3_LINMEM_BASE - basedataLength;
+    uint64_t flags = MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER;
+
+    for (uint64_t i = 0; i < e->pages; ++i) {
+        if (paging_map_4k_in_root(user_root,
+                                   user_va_base + i * kPageSize,
+                                   e->phys + i * kPageSize,
+                                   flags) != 0) {
+            return -1;
+        }
+    }
+    return 0;
+}
+#endif /* WASMOS_WARP_RING3 */
 
 /* -----------------------------------------------------------------------
  * vb::MemUtils implementation
@@ -108,10 +197,19 @@ MmapMemory allocPagedMemory(size_t size)
     uint64_t aligned = round_up_page(static_cast<uint64_t>(size));
     uint64_t pages   = aligned / kPageSize;
 
-    /* Allocate from the WARP physical zone (>= WASMOS_SHMEM_PHYS_LIMIT) so
-     * canonical VAs (phys | kHalfBase) never overlap with shmem canonical VAs,
-     * preventing WARP's ensureLinearSize zero-fill from corrupting active shmem. */
-    uint64_t phys = pfa_alloc_pages_above(pages, WASMOS_SHMEM_PHYS_LIMIT);
+    /* JIT allocations use a higher physical zone so that linmem (which starts
+     * from WASMOS_SHMEM_PHYS_LIMIT) cannot overlap with JIT pages.  This
+     * prevents commitVirtualMemory's zero-fill from clobbering JIT code. */
+    MmapType typ = g_next_alloc_type;
+#ifdef WASMOS_WARP_RING3
+    uint64_t phys_min = (typ == MMAP_JIT)
+                        ? WARP_JIT_PHYS_MIN
+                        : WASMOS_SHMEM_PHYS_LIMIT;
+#else
+    uint64_t phys_min = WASMOS_SHMEM_PHYS_LIMIT;
+    (void)typ;
+#endif
+    uint64_t phys = pfa_alloc_pages_above(pages, phys_min);
     if (!phys) return m;
 
     auto *slot = alloc_entry();
@@ -127,6 +225,7 @@ MmapMemory allocPagedMemory(size_t size)
     slot->virt  = virt;
     slot->phys  = phys;
     slot->pages = pages;
+    slot->type  = typ;
 
     m.ptr = virt;
     m.fd  = -1;
@@ -188,7 +287,12 @@ void freeAlignedMemory(void *ptr) noexcept
 
 void *allocVirtualMemory(size_t size)
 {
-    return allocAlignedMemory(size, kPageSize);
+    /* Linear memory + basedata: allocate from the linmem zone (WASMOS_SHMEM_PHYS_LIMIT+)
+     * which is separate from the JIT zone (WARP_JIT_PHYS_MIN+). */
+    g_next_alloc_type = MMAP_LINMEM;
+    void *p = allocAlignedMemory(size, kPageSize);
+    g_next_alloc_type = MMAP_OTHER;
+    return p;
 }
 
 void freeVirtualMemory(void *ptr, size_t size) noexcept
@@ -211,7 +315,14 @@ void uncommitVirtualMemory(void *ptr, size_t size)
     (void)ptr; (void)size;
 }
 
-uint8_t *mapRXMemory(size_t size, int32_t) { return allocAlignedMemory(size, kPageSize); }
+uint8_t *mapRXMemory(size_t size, int32_t)
+{
+    /* JIT working memory: allocate from the JIT zone (>= WARP_JIT_PHYS_MIN). */
+    g_next_alloc_type = MMAP_JIT;
+    uint8_t *p = allocAlignedMemory(size, kPageSize);
+    g_next_alloc_type = MMAP_OTHER;
+    return p;
+}
 
 StackInfo getStackInfo()
 {
@@ -230,7 +341,10 @@ ExecutableMemory::ExecutableMemory(uint8_t const *data, size_t size)
     : ExecutableMemory(nullptr, size, -1)
 {
     if (size == 0) return;
+    /* The compiled binary is JIT code; allocate from the JIT physical zone. */
+    g_next_alloc_type = MMAP_JIT;
     MemUtils::MmapMemory m = MemUtils::allocPagedMemory(size);
+    g_next_alloc_type = MMAP_OTHER;
     if (!m.ptr) throw std::bad_alloc();
     data_ = m.ptr;
     size_ = size;
@@ -256,7 +370,9 @@ ExecutableMemory::~ExecutableMemory() noexcept
 void ExecutableMemory::init(uint8_t const *data)
 {
     if (size_ == 0) return;
+    g_next_alloc_type = MMAP_JIT;
     MemUtils::MmapMemory m = MemUtils::allocPagedMemory(size_);
+    g_next_alloc_type = MMAP_OTHER;
     if (!m.ptr) throw std::bad_alloc();
     fd_   = m.fd;
     data_ = m.ptr;

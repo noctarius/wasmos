@@ -11,6 +11,9 @@
 #include "string.h"
 #include "paging.h"
 #include "user_mutex.h"
+#ifdef WASMOS_WARP_RING3
+#include "warp_ring3.h"
+#endif
 
 static uint8_t g_ring3_syscall_logged;
 static uint8_t g_ring3_stress_ok_logged;
@@ -340,6 +343,28 @@ x86_syscall_handler(syscall_frame_t *frame)
     }
     syscall_trace_ring3_stress(frame);
     syscall_trace_ring3_once(frame);
+
+#ifdef WASMOS_WARP_RING3
+    /* WARP ring-3 return: the return trampoline fires this after the JIT
+     * wrapper executes its final `ret`. RDI contains the raw RAX that the
+     * JIT wrapper had on exit (trap code or return value). */
+    if ((uint32_t)frame->rax == WASMOS_SYSCALL_WARP_RETURN) {
+        if (g_warp_r3_state.active) {
+            g_warp_r3_state.done   = 1;
+            g_warp_r3_state.active = 0;
+            __builtin_longjmp(g_warp_r3_state.jbuf, 1);
+        }
+        frame->rax = (uint64_t)-1;
+        return 0;
+    }
+    /* WARP ring-3 hostcall: stubs fire int 0x80 with RAX = 0x100 + hc_id. */
+    if (frame->rax >= WARP_HC_SYSCALL_BASE &&
+        frame->rax < WARP_HC_SYSCALL_BASE + WARP_HC_MAX) {
+        uint32_t hc_id = (uint32_t)(frame->rax - WARP_HC_SYSCALL_BASE);
+        frame->rax = (uint64_t)warp_ring3_dispatch(hc_id, (void *)frame);
+        return 0;
+    }
+#endif
 
     switch ((uint32_t)frame->rax) {
     case WASMOS_SYSCALL_NOP:

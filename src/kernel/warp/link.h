@@ -24,6 +24,13 @@ vb::Span<vb::NativeSymbol const> warp_wasmos_symbols(void);
  * initFromCompiledBinary() throws Wrong_type for any STATIC symbol. */
 vb::Span<vb::NativeSymbol const> warp_wasmos_symbols_for_aot_load(void);
 
+#ifdef WASMOS_WARP_RING3
+/* DYNAMIC_LINK symbol table for ring-3 execution; ptr fields are user-space
+ * HC trampoline VAs (WARP_R3_HC_TRAMPOLINE + hc_id × 8) instead of kernel
+ * function pointers.  Pass to initFromBytecode on the ring-3 compile path. */
+vb::Span<vb::NativeSymbol const> warp_wasmos_symbols_ring3(void);
+#endif
+
 /* Binds the compiled WasmModule to the per-PID call context so that V1 host
  * functions can resolve linear-memory offsets via getLinearMemoryRegion. */
 void warp_bind_module(vb::WasmModule *module, uint32_t pid);

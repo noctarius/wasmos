@@ -288,6 +288,7 @@ if (NOT DEFINED WASMOS_WASM_RUNTIME_WASM3_INITIALIZED)
 endif ()
 option(WASMOS_WASM_RUNTIME_WASM3 "Use wasm3 interpreter as WASM runtime" ON)
 option(WASMOS_WASM_RUNTIME_WARP  "Use WARP JIT compiler as WASM runtime" OFF)
+option(WASMOS_WARP_RING3 "Execute WARP JIT code in ring-3 user mode (requires WASMOS_WASM_RUNTIME_WARP)" OFF)
 
 # WASM_RUNTIME_INCLUDE_DIR and WASM_RUNTIME_DEFINE are computed after the
 # Kconfig import (below) so that on a fresh cmake cache the kconfig-selected

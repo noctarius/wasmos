@@ -53,6 +53,10 @@ extern "C" {
 #include "src/core/common/Span.hpp"
 #include "src/core/common/function_traits.hpp"
 #include "link.h"
+#ifdef WASMOS_WARP_RING3
+#include "warp_ring3.h"
+#include "syscall.h"
+#endif
 
 // ---------------------------------------------------------------------------
 // Call context
@@ -1986,6 +1990,303 @@ warp_context_for_pid(uint32_t pid)
     }
     return &g_ctx_table[pid];
 }
+
+#ifdef WASMOS_WARP_RING3
+// ---------------------------------------------------------------------------
+// Ring-3 DYNAMIC_LINK symbol table — trampoline VAs as function pointers.
+//
+// Each R3_LINK entry uses the HC trampoline stub for that HC ID as the `ptr`.
+// When WARP's JIT code in ring-3 calls a DYNAMIC_LINK function, it loads the
+// ptr from the basedata indirection table (at user VA linMem - offset) and
+// calls it.  The ptr is the user-space HC stub address.  The stub fires
+// `int 0x80` with RAX = WARP_HC_SYSCALL_BASE + hc_id; the kernel dispatches
+// to warp_ring3_dispatch(hc_id, frame).
+//
+// R3_LINK uses __COUNTER__ to assign sequential HC IDs matching the
+// WASMOS_SYMBOLS expansion order. g_r3_sym_counter_base must be declared
+// immediately before the expansion so the counter offset is 0-indexed.
+// ---------------------------------------------------------------------------
+
+vb::Span<vb::NativeSymbol const>
+warp_wasmos_symbols_ring3(void)
+{
+    static constexpr int g_r3_sym_counter_base = __COUNTER__;
+#define R3_LINK(module, name, fnc) \
+    vb::NativeSymbol { \
+        vb::NativeLinkage::Dynamic, \
+        module, \
+        name, \
+        vb::function_traits<vb::remove_noexcept_t<decltype(fnc)>>::getSignature(), \
+        reinterpret_cast<void const *>(WARP_R3_HC_TRAMPOLINE + \
+            (uint64_t)(__COUNTER__ - g_r3_sym_counter_base - 1) * 8ULL), \
+        0u \
+    }
+    static vb::NativeSymbol syms[] = { WASMOS_SYMBOLS(R3_LINK) };
+#undef R3_LINK
+    return vb::Span<vb::NativeSymbol const>(syms, sizeof(syms) / sizeof(syms[0]));
+}
+
+// ---------------------------------------------------------------------------
+// Ring-3 hostcall dispatch
+//
+// Called from x86_syscall_handler when a ring-3 int 0x80 fires with
+// RAX in [WARP_HC_SYSCALL_BASE, WARP_HC_SYSCALL_BASE + WARP_HC_MAX).
+// hc_id = RAX - WARP_HC_SYSCALL_BASE (== HC index in WASMOS_SYMBOLS order).
+//
+// Arguments from ring-3 registers (SysV: RDI, RSI, RDX, RCX, R8, R9) are
+// in the saved syscall_frame_t.  For HC_IPC_SEND (9 args), extra args come
+// from the user stack at frame+sizeof(syscall_frame_t).
+// ctx_ is always the last argument, passed by the JIT from the DYNAMIC_LINK
+// basedata slot (which holds the kernel WarpCallContext* set by warp_bind_module).
+// ---------------------------------------------------------------------------
+
+extern "C" uint32_t
+warp_ring3_dispatch(uint32_t hc_id, void *frame_ptr)
+{
+    syscall_frame_t *frame = static_cast<syscall_frame_t *>(frame_ptr);
+
+    /* Convenience: user_rsp is just past the end of syscall_frame_t
+     * (pushed by CPU for ring-3 → ring-0 INT transition). */
+    uint64_t user_rsp = *reinterpret_cast<uint64_t *>(
+        reinterpret_cast<uint8_t *>(frame) + sizeof(syscall_frame_t));
+
+    /* Extract common register args. */
+    uint64_t a0 = frame->rdi;
+    uint64_t a1 = frame->rsi;
+    uint64_t a2 = frame->rdx;
+    uint64_t a3 = frame->rcx;
+    uint64_t a4 = frame->r8;
+    uint64_t a5 = frame->r9;
+    /* Stack args (past return address at [user_rsp+0]). */
+    auto stack_u64 = [user_rsp](uint32_t n) -> uint64_t {
+        return *reinterpret_cast<uint64_t *>(user_rsp + 8 + (uint64_t)n * 8);
+    };
+
+    /* ctx_ is the last argument in each hostcall. */
+    void *ctx1  = reinterpret_cast<void *>(a1);  /* 1-arg fn: (ctx_) */
+    void *ctx2  = reinterpret_cast<void *>(a2);  /* 2-arg fn: (a0,ctx_) */
+    void *ctx3  = reinterpret_cast<void *>(a3);  /* 3-arg fn */
+    void *ctx4  = reinterpret_cast<void *>(a4);  /* 4-arg fn */
+    void *ctx5  = reinterpret_cast<void *>(a5);  /* 5-arg fn */
+    (void)ctx1; (void)ctx2; (void)ctx3; (void)ctx4; (void)ctx5;
+
+    switch (hc_id) {
+    /* 0 */ case HC_IPC_CREATE_ENDPOINT:
+        return warp_ipc_create_endpoint(reinterpret_cast<void *>(a0));
+    /* 1 */ case HC_IPC_ENDPOINT_OWNER:
+        return warp_ipc_endpoint_owner((uint32_t)a0, ctx2);
+    /* 2 */ case HC_IPC_SEND: {
+        /* 9 args: RDI RSI RDX RCX R8 R9 [rsp+8] [rsp+16] [rsp+24] */
+        uint32_t s_a2  = (uint32_t)stack_u64(0);
+        uint32_t s_a3  = (uint32_t)stack_u64(1);
+        void    *s_ctx = reinterpret_cast<void *>(stack_u64(2));
+        return warp_ipc_send((uint32_t)a0, (uint32_t)a1, (uint32_t)a2,
+                             (uint32_t)a3, (uint32_t)a4, (uint32_t)a5,
+                             s_a2, s_a3, s_ctx);
+    }
+    /* 3 */ case HC_IPC_SELECT_ONE: /* fall-through: same fn */
+    /* 4 */ case HC_IPC_RECV:
+        return warp_ipc_select_one((uint32_t)a0, ctx2);
+    /* 5 */ case HC_IPC_DRAIN:    /* fall-through */
+    /* 6 */ case HC_IPC_TRY_RECV:
+        return warp_ipc_drain((uint32_t)a0, ctx2);
+    /* 7 */ case HC_IPC_NOTIFY:
+        return warp_ipc_notify((uint32_t)a0, ctx2);
+    /* 8 */ case HC_IPC_LAST_FIELD:
+        return warp_ipc_last_field((uint32_t)a0, ctx2);
+    /* 9 */ case HC_CONSOLE_READ:
+        return warp_console_read((uint32_t)a0, (uint32_t)a1, ctx3);
+    /* 10 */ case HC_CONSOLE_WRITE:
+        return warp_console_write((uint32_t)a0, (uint32_t)a1, ctx3);
+    /* 11 */ case HC_PROC_EXIT:
+        return warp_proc_exit((uint32_t)a0, ctx2);
+    /* 12 */ case HC_PROC_NOTIFY_READY:
+        return warp_proc_notify_ready(reinterpret_cast<void *>(a0));
+    /* 13 */ case HC_SCHED_YIELD:
+        return warp_sched_yield(reinterpret_cast<void *>(a0));
+    /* 14 */ case HC_SCHED_CURRENT_PID:
+        return warp_sched_current_pid(reinterpret_cast<void *>(a0));
+    /* 15 */ case HC_THREAD_GETTID:
+        return warp_thread_gettid(reinterpret_cast<void *>(a0));
+    /* 16 */ case HC_FUTEX_WAIT:
+        return warp_futex_wait((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, ctx4);
+    /* 17 */ case HC_FUTEX_WAKE:
+        return warp_futex_wake((uint32_t)a0, (uint32_t)a1, ctx3);
+    /* 18 */ case HC_IPC_SELECT_CREATE: /* fall-through */
+    /* 22 */ case HC_SYS_SELECT_CREATE:
+        return warp_ipc_select_create(reinterpret_cast<void *>(a0));
+    /* 19 */ case HC_IPC_SELECT_ADD: /* fall-through */
+    /* 23 */ case HC_SYS_SELECT_ADD:
+        return warp_ipc_select_add((uint32_t)a0, (uint32_t)a1, ctx3);
+    /* 20 */ case HC_IPC_SELECT_WAIT: /* fall-through */
+    /* 24 */ case HC_SYS_SELECT_WAIT:
+        return warp_ipc_select_wait((uint32_t)a0, ctx2);
+    /* 21 */ case HC_IPC_SELECT_DESTROY: /* fall-through */
+    /* 25 */ case HC_SYS_SELECT_DESTROY:
+        return warp_ipc_select_destroy((uint32_t)a0, ctx2);
+    /* 26 */ case HC_FS_BUFFER_SIZE:
+        return warp_fs_buffer_size(reinterpret_cast<void *>(a0));
+    /* 27 */ case HC_FS_ENDPOINT:
+        return warp_fs_endpoint(reinterpret_cast<void *>(a0));
+    /* 28 */ case HC_FS_BUFFER_COPY:
+        return warp_fs_buffer_copy((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, ctx4);
+    /* 29 */ case HC_FS_BUFFER_WRITE:
+        return warp_fs_buffer_write((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, ctx4);
+    /* 30 */ case HC_BUFFER_BORROW:
+        return warp_buffer_borrow((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, ctx4);
+    /* 31 */ case HC_BUFFER_RELEASE:
+        return warp_buffer_release((uint32_t)a0, ctx2);
+    /* 32 */ case HC_BLOCK_BUFFER_PHYS:
+        return warp_block_buffer_phys(reinterpret_cast<void *>(a0));
+    /* 33 */ case HC_BLOCK_BUFFER_COPY:
+        return warp_block_buffer_copy((uint32_t)a0, (uint32_t)a1, (uint32_t)a2,
+                                      (uint32_t)a3, ctx5);
+    /* 34 */ case HC_BLOCK_BUFFER_WRITE:
+        return warp_block_buffer_write((uint32_t)a0, (uint32_t)a1, (uint32_t)a2,
+                                       (uint32_t)a3, ctx5);
+    /* 35 */ case HC_IO_IN8:
+        return warp_io_in8((uint32_t)a0, ctx2);
+    /* 36 */ case HC_IO_IN16:
+        return warp_io_in16((uint32_t)a0, ctx2);
+    /* 37 */ case HC_IO_IN32:
+        return warp_io_in32((uint32_t)a0, ctx2);
+    /* 38 */ case HC_IO_OUT8:
+        return warp_io_out8((uint32_t)a0, (uint32_t)a1, ctx3);
+    /* 39 */ case HC_IO_OUT16:
+        return warp_io_out16((uint32_t)a0, (uint32_t)a1, ctx3);
+    /* 40 */ case HC_IO_OUT32:
+        return warp_io_out32((uint32_t)a0, (uint32_t)a1, ctx3);
+    /* 41 */ case HC_IO_WAIT:
+        return warp_io_wait(reinterpret_cast<void *>(a0));
+    /* 42 */ case HC_ACPI_RSDP_INFO:
+        return warp_acpi_rsdp_info((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, ctx4);
+    /* 43 */ case HC_BOOT_MODULE_NAME:
+        return warp_boot_module_name((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, ctx4);
+    /* 44 */ case HC_SYNC_USER_READ:
+        return warp_sync_user_read((uint32_t)a0, (uint32_t)a1, ctx3);
+    /* 45 */ case HC_SYSTEM_HALT:
+        return warp_system_halt(reinterpret_cast<void *>(a0));
+    /* 46 */ case HC_SYSTEM_REBOOT:
+        return warp_system_reboot(reinterpret_cast<void *>(a0));
+    /* 47 */ case HC_SCHED_TICKS:
+        return warp_sched_ticks(reinterpret_cast<void *>(a0));
+    /* 48 */ case HC_PROC_COUNT:
+        return warp_proc_count(reinterpret_cast<void *>(a0));
+    /* 49 */ case HC_SCHED_READY_COUNT:
+        return warp_sched_ready_count(reinterpret_cast<void *>(a0));
+    /* 50 */ case HC_SCHED_CPU_COUNT:
+        return warp_sched_cpu_count(reinterpret_cast<void *>(a0));
+    /* 51 */ case HC_PHYSMEM_STATS:
+        return warp_physmem_stats((uint32_t)a0, ctx2);
+    /* 52 */ case HC_KERNEL_RUNTIME:
+        return warp_kernel_runtime(reinterpret_cast<void *>(a0));
+    /* 53 */ case HC_DEBUG_MARK:
+        return warp_debug_mark((uint32_t)a0, ctx2);
+    /* 54 */ case HC_KMAP_DUMP:
+        return warp_kmap_dump(reinterpret_cast<void *>(a0));
+    /* 55 */ case HC_KMAP_DUMP_ALL:
+        return warp_kmap_dump_all(reinterpret_cast<void *>(a0));
+    /* 56 */ case HC_INITFS_ENTRY_COUNT:
+        return warp_initfs_entry_count(reinterpret_cast<void *>(a0));
+    /* 57 */ case HC_INITFS_ENTRY_NAME:
+        return warp_initfs_entry_name((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, ctx4);
+    /* 58 */ case HC_INITFS_ENTRY_SIZE:
+        return warp_initfs_entry_size((uint32_t)a0, ctx2);
+    /* 59 */ case HC_INITFS_ENTRY_COPY:
+        return warp_initfs_entry_copy((uint32_t)a0, (uint32_t)a1, (uint32_t)a2,
+                                      (uint32_t)a3, ctx5);
+    /* 60 */ case HC_DMA_MAP_BORROW:
+        return warp_dma_map_borrow((uint32_t)a0, (uint32_t)a1, (uint32_t)a2,
+                                   (uint32_t)a3, (uint32_t)a4, ctx5);
+    /* 61 */ case HC_DMA_SYNC_BORROW:
+        return warp_dma_sync_borrow((uint32_t)a0, (uint32_t)a1, (uint32_t)a2,
+                                    (uint32_t)a3, ctx5);
+    /* 62 */ case HC_DMA_UNMAP_BORROW:
+        return warp_dma_unmap_borrow((uint32_t)a0, (uint32_t)a1, ctx3);
+    /* 63 */ case HC_PHYS_MAP:
+        return warp_phys_map((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, (uint32_t)a3, ctx5);
+    /* 64 */ case HC_PROC_INFO:
+        return warp_proc_info((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, ctx4);
+    /* 65 */ case HC_PROC_INFO_EX:
+        return warp_proc_info_ex((uint32_t)a0, (uint32_t)a1, (uint32_t)a2,
+                                 (uint32_t)a3, ctx5);
+    /* 66 */ case HC_PROC_INFO_STATS:
+        return warp_proc_info_stats((uint32_t)a0, (uint32_t)a1, (uint32_t)a2,
+                                    (uint32_t)a3, (uint32_t)a4, ctx5);
+    /* 67 */ case HC_FS_BUFFER_BORROW:
+        return warp_fs_buffer_borrow((uint32_t)a0, (uint32_t)a1, ctx3);
+    /* 68 */ case HC_FS_BUFFER_RELEASE:
+        return warp_fs_buffer_release(reinterpret_cast<void *>(a0));
+    /* 69 */ case HC_SCHED_CPU_STATS:
+        return warp_sched_cpu_stats((uint32_t)a0, (uint32_t)a1, ctx3);
+    /* 70 */ case HC_THREAD_CREATE:
+        return warp_thread_create((uint32_t)a0, (uint32_t)a1, (uint32_t)a2,
+                                  (uint32_t)a3, ctx5);
+    /* 71 */ case HC_THREAD_YIELD:
+        return warp_thread_yield(reinterpret_cast<void *>(a0));
+    /* 72 */ case HC_THREAD_EXIT:
+        return warp_thread_exit((uint32_t)a0, ctx2);
+    /* 73 */ case HC_THREAD_JOIN:
+        return warp_thread_join((uint32_t)a0, ctx2);
+    /* 74 */ case HC_THREAD_DETACH:
+        return warp_thread_detach((uint32_t)a0, ctx2);
+    /* 75 */ case HC_SHMEM_CREATE:
+        return warp_shmem_create((uint32_t)a0, (uint32_t)a1, ctx3);
+    /* 76 */ case HC_SHMEM_GRANT:
+        return warp_shmem_grant((uint32_t)a0, (uint32_t)a1, ctx3);
+    /* 77 */ case HC_SHMEM_REVOKE:
+        return warp_shmem_revoke((uint32_t)a0, (uint32_t)a1, ctx3);
+    /* 78 */ case HC_SHMEM_MAP:
+        return warp_shmem_map((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, ctx4);
+    /* 79 */ case HC_SHMEM_MAP_AUTO:
+        return warp_shmem_map_auto((uint32_t)a0, (uint32_t)a1, ctx3);
+    /* 80 */ case HC_SHMEM_FLUSH:
+        return warp_shmem_flush((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, ctx4);
+    /* 81 */ case HC_SHMEM_REFRESH:
+        return warp_shmem_refresh((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, ctx4);
+    /* 82 */ case HC_SHMEM_UNMAP:
+        return warp_shmem_unmap((uint32_t)a0, ctx2);
+    /* 83 */ case HC_IRQ_ROUTE_IPC:
+        return warp_irq_route_ipc((uint32_t)a0, (uint32_t)a1, ctx3);
+    /* 84 */ case HC_IRQ_ACK:
+        return warp_irq_ack((uint32_t)a0, ctx2);
+    /* 85 */ case HC_IRQ_UNROUTE:
+        return warp_irq_unroute((uint32_t)a0, ctx2);
+    /* 86 */ case HC_SERIAL_REGISTER:
+        return warp_serial_register((uint32_t)a0, ctx2);
+    /* 87 */ case HC_INPUT_PUSH:
+        return warp_input_push((uint32_t)a0, ctx2);
+    /* 88 */ case HC_INPUT_READ:
+        return warp_input_read(reinterpret_cast<void *>(a0));
+    /* 89 */ case HC_FRAMEBUFFER_INFO:
+        return warp_framebuffer_info((uint32_t)a0, (uint32_t)a1, ctx3);
+    /* 90 */ case HC_FRAMEBUFFER_MAP:
+        return warp_framebuffer_map((uint32_t)a0, (uint32_t)a1, ctx3);
+    /* 91 */ case HC_FRAMEBUFFER_PIXEL:
+        return warp_framebuffer_pixel((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, ctx4);
+    /* 92 */ case HC_BOOT_CONFIG_SIZE:
+        return warp_boot_config_size(reinterpret_cast<void *>(a0));
+    /* 93 */ case HC_BOOT_CONFIG_COPY:
+        return warp_boot_config_copy((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, ctx4);
+    /* 94 */ case HC_INITFS_FIND_PATH:
+        return warp_initfs_find_path((uint32_t)a0, (uint32_t)a1, ctx3);
+    /* 95 */ case HC_EARLY_LOG_SIZE:
+        return warp_early_log_size(reinterpret_cast<void *>(a0));
+    /* 96 */ case HC_EARLY_LOG_COPY:
+        return warp_early_log_copy((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, ctx4);
+    /* 97 */ case HC_ENV_GET:
+        return warp_env_get((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, (uint32_t)a3, ctx5);
+    /* 98 */ case HC_ENV_SET:
+        return warp_env_set((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, (uint32_t)a3, ctx5);
+    /* 99 */ case HC_ENV_UNSET:
+        return warp_env_unset((uint32_t)a0, (uint32_t)a1, ctx3);
+    /* 100 */ case HC_ENV_ABORT:
+        return warp_env_abort((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, (uint32_t)a3, ctx5);
+    default:
+        return (uint32_t)-1;
+    }
+}
+#endif /* WASMOS_WARP_RING3 */
 
 // ---------------------------------------------------------------------------
 // Public C API

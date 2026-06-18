@@ -22,6 +22,15 @@ set(CFLAGS_WARP_CXX ${CFLAGS_KERNEL}
     -isystem ${_WARP_CLANG_RSRC}/include
     -Wno-macro-redefined -Wno-c++20-extensions -Wno-deprecated-copy
     "-Wno-#pragma-messages")
+if (WASMOS_WARP_RING3)
+  # ENABLE_ADVANCED_APIS=1 exposes getFunctionSignatureByName (needed to
+  # locate JIT wrapper entry for IRET).  WASMOS_WARP_RING3 gates ring-3
+  # execution code in the kernel wrapper layer.
+  list(APPEND CFLAGS_WARP_CXX -DENABLE_ADVANCED_APIS=1 -DWASMOS_WARP_RING3)
+  list(APPEND CFLAGS_WARP_C   -DWASMOS_WARP_RING3)
+  # Propagate define to CFLAGS_KERNEL so syscall.c and other C files see it.
+  set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -DWASMOS_WARP_RING3)
+endif ()
 
 set(RING3_NATIVE_PROBE_SRC ${KERNEL_DIR}/ring3_native_probe.c)
 set(RING3_NATIVE_PROBE_OBJ ${BUILD_DIR}/ring3_native_probe.o)
@@ -153,6 +162,11 @@ if (WASMOS_WASM_RUNTIME_WARP)
     ${BUILD_DIR}/warp_mem_utils.o
     ${BUILD_DIR}/warp_os_api_checker.o
     ${BUILD_DIR}/warp_iostream_stubs.o
+  )
+  if (WASMOS_WARP_RING3)
+    list(APPEND KERNEL_OBJS ${BUILD_DIR}/warp_ring3_trampolines.o)
+  endif ()
+  list(APPEND KERNEL_OBJS
     ${BUILD_DIR}/warp_linker_stubs.o
     ${BUILD_DIR}/warp_sjlj_unwind.o
     ${BUILD_DIR}/warp_WasmModule.o
@@ -268,6 +282,13 @@ if (WASMOS_WASM_RUNTIME_WARP)
     ${KERNEL_DIR}/warp/cxx_abi.cpp
     ${KERNEL_DIR}/warp/posix_kernel.c
     ${KERNEL_DIR}/warp/mem_utils_kernel.cpp
+  )
+  if (WASMOS_WARP_RING3)
+    list(APPEND KERNEL_SOURCES
+      ${KERNEL_DIR}/warp/ring3_trampolines.c
+    )
+  endif ()
+  list(APPEND KERNEL_SOURCES
     ${KERNEL_DIR}/warp/os_api_checker_kernel.cpp
     ${KERNEL_DIR}/warp/iostream_stubs.cpp
     ${WARP_DIR}/src/WasmModule/WasmModule.cpp
@@ -448,6 +469,11 @@ if (WASMOS_WASM_RUNTIME_WARP)
     COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/compiler/frontend/Frontend.cpp        -o ${BUILD_DIR}/warp_Frontend.o
     COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/compiler/frontend/ValidationStack.cpp -o ${BUILD_DIR}/warp_ValidationStack.o
   )
+  if (WASMOS_WARP_RING3)
+    list(APPEND WASM_RUNTIME_COMPILE_CMDS
+      COMMAND ${CLANG} ${CFLAGS_WARP_C} -c ${KERNEL_DIR}/warp/ring3_trampolines.c -o ${BUILD_DIR}/warp_ring3_trampolines.o
+    )
+  endif ()
 else ()
   set(WASM_RUNTIME_COMPILE_CMDS
     COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_driver.c    -o ${BUILD_DIR}/wasm_driver.o

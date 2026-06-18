@@ -787,6 +787,22 @@ wasm_driver_call_entry(wasm_driver_t *driver)
         spinlock_unlock(&driver->lock);
         return -1;
     }
+#ifdef WASMOS_WARP_RING3
+    if (r3_root) {
+        /* Drop the spinlock before IRET to ring-3 so preempt_disable_count
+         * returns to 0, allowing the timer to preempt ring-3 execution. The
+         * module is fully initialised (started=1); the lock is not needed
+         * during execution. WARP heap is not accessed in ring-3 execution, so
+         * warp_runtime_leave is also safe here. */
+        warp_runtime_leave(prev);
+        spinlock_unlock(&driver->lock);
+        return call_export_mod(module_of(driver),
+                           driver->manifest.entry_export,
+                           driver->manifest.entry_argc,
+                           driver->manifest.entry_argv,
+                           r3_root, r3_stack);
+    }
+#endif
     int rc = call_export_mod(module_of(driver),
                          driver->manifest.entry_export,
                          driver->manifest.entry_argc,
@@ -816,6 +832,13 @@ wasm_driver_call(wasm_driver_t *driver, const char *name,
         spinlock_unlock(&driver->lock);
         return -1;
     }
+#ifdef WASMOS_WARP_RING3
+    if (r3_root) {
+        warp_runtime_leave(prev);
+        spinlock_unlock(&driver->lock);
+        return call_export_mod(module_of(driver), name, argc, argv, r3_root, r3_stack);
+    }
+#endif
     int rc = call_export_mod(module_of(driver), name, argc, argv, r3_root, r3_stack);
     warp_runtime_leave(prev);
     spinlock_unlock(&driver->lock);

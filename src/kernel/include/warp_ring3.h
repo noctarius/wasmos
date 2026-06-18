@@ -18,6 +18,7 @@
 #define WASMOS_WARP_RING3_H
 
 #include <stdint.h>
+#include "syscall.h"
 
 /* User-mode base address (matches USER_VA_MIN in cpu_x86_64.c). */
 #define USER_VA_MIN              0x0000008000000000ULL
@@ -35,8 +36,7 @@
 /* User VA of HC stub N (8 bytes per stub). */
 #define WARP_R3_HC_VA(n)         (WARP_R3_HC_TRAMPOLINE + (uint64_t)(n) * 8ULL)
 
-/* Syscall IDs. */
-#define WASMOS_SYSCALL_WARP_RETURN  16
+/* Syscall IDs. WASMOS_SYSCALL_WARP_RETURN is defined in syscall.h enum. */
 #define WARP_HC_SYSCALL_BASE        0x100U
 #define WARP_HC_MAX                 128U
 

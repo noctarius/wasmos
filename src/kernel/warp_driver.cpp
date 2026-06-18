@@ -48,6 +48,11 @@ uint64_t warp_mem_linmem_basedata_length(uint8_t const *linmem_ptr);
  * without modifying any WARP source. */
 #include "src/core/common/basedataoffsets.hpp"
 namespace BD = Basedata;
+
+/* Forward declarations for static ring-3 helpers defined later in this file. */
+static void warp_r3_patch_basedata(uint8_t *linmem_kernel_ptr, uint64_t basedataLength);
+static int  warp_r3_call_export(vb::WasmModule *mod, const char *name,
+                                uint32_t argc, const uint32_t *argv);
 #endif
 
 // ---------------------------------------------------------------------------
@@ -566,15 +571,15 @@ wasm_driver_start(wasm_driver_t *driver,
         }
         vb::Span<uint8_t const> jit = mod->getCompiledBinary();
         uint8_t *linmem = mod->getLinearMemoryRegion(0, 0);
-        if (warp_mem_ring3_map_jit(user_root, jit.data(), jit.size()) != 0 ||
-            warp_mem_ring3_map_linmem(user_root, linmem) != 0) {
+        int jit_rc = warp_mem_ring3_map_jit(user_root, jit.data(), jit.size());
+        int lm_rc  = warp_mem_ring3_map_linmem(user_root, linmem);
+        if (jit_rc != 0 || lm_rc != 0) {
             klog_write("[warp-r3] dual-map failed\n");
             warp_r3_teardown();
             delete mod;
             warp_runtime_leave(prev);
             return -1;
         }
-        klog_write("[warp-r3] ring-3 address space ready\n");
     }
 #endif
 

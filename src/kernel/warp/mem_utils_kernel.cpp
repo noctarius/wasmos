@@ -24,6 +24,7 @@ extern "C" {
 #include "slab.h"
 #include "klog.h"
 #include "memory.h"
+#include "serial.h"
 #ifdef WASMOS_WARP_RING3
 #include "warp_ring3.h"
 #endif
@@ -69,9 +70,11 @@ static int remap_direct_alias_pages(uint8_t *ptr, uint64_t pages)
 }
 
 /* Tracking table for mmap → phys mapping so munmap can free pages.
- * The type field distinguishes linmem from JIT allocations for ring-3 mapping. */
+ * The type field distinguishes linmem from JIT allocations for ring-3 mapping.
+ * data_offset: bytes from phys to the first usable data byte (0 for mmap entries,
+ * sizeof(AllocHeader) for warp_kmalloc large entries). */
 enum MmapType : uint8_t { MMAP_OTHER = 0, MMAP_JIT = 1, MMAP_LINMEM = 2 };
-struct MmapEntry { uint8_t *virt; uint64_t phys; uint64_t pages; MmapType type; };
+struct MmapEntry { uint8_t *virt; uint64_t phys; uint64_t pages; MmapType type; uint64_t data_offset; };
 static MmapEntry g_mmap_table[256];
 
 /* Next-allocation type hint: set before calling allocPagedMemory. */
@@ -103,8 +106,9 @@ static MmapEntry *find_entry_by_phys(uint64_t phys)
 } // namespace
 
 #ifdef WASMOS_WARP_RING3
-/* Return basedataLength = byte offset from alloc start to linmem start.
- * Used by warp_driver.cpp to patch the basedata for ring-3 execution. */
+/* Return basedataLength = byte offset from memoryBase (warp_kmalloc result or
+ * allocPagedMemory result) to the first linmem byte.
+ * data_offset accounts for the AllocHeader prepended by warp_kmalloc. */
 extern "C" uint64_t
 warp_mem_linmem_basedata_length(uint8_t const *linmem_kernel_ptr)
 {
@@ -113,7 +117,37 @@ warp_mem_linmem_basedata_length(uint8_t const *linmem_kernel_ptr)
     if (linmem_virt < kHalfBase) return 0;
     uint64_t linmem_phys = linmem_virt - kHalfBase;
     MmapEntry *e = find_entry_by_phys(linmem_phys);
-    return e ? (linmem_phys - e->phys) : 0ULL;
+    return e ? (linmem_phys - e->phys - e->data_offset) : 0ULL;
+}
+
+/* Register a large warp_kmalloc allocation so ring-3 mapping can find its phys range.
+ * phys: page-aligned physical base of the allocation (AllocHeader sits here).
+ * data_offset: sizeof(AllocHeader) — bytes from phys to first usable byte. */
+extern "C" void
+warp_mem_kmalloc_register(uint64_t phys, uint64_t pages, uint64_t data_offset)
+{
+    auto *slot = alloc_entry();
+    if (!slot) {
+        klog_write("[warp-mem] g_mmap_table full, kmalloc not tracked\n");
+        return;
+    }
+    slot->virt        = reinterpret_cast<uint8_t *>(phys | kHalfBase);
+    slot->phys        = phys;
+    slot->pages       = pages;
+    slot->type        = MMAP_OTHER;
+    slot->data_offset = data_offset;
+}
+
+/* Remove the tracking entry for a warp_kmalloc large allocation. */
+extern "C" void
+warp_mem_kmalloc_unregister(uint64_t phys)
+{
+    for (auto &e : g_mmap_table) {
+        if (e.virt && e.phys == phys) {
+            e = MmapEntry{};
+            return;
+        }
+    }
 }
 
 /* Map JIT binary pages into the ring-3 user CR3 at WARP_R3_JIT_BASE.
@@ -151,13 +185,17 @@ warp_mem_ring3_map_linmem(uint64_t user_root, uint8_t const *linmem_kernel_ptr)
     if (linmem_virt < kHalfBase) return -1;
     uint64_t linmem_phys = linmem_virt - kHalfBase;
 
-    /* The MmapEntry that starts at the alloc base (basedata start) contains
-     * linmem_phys within [e->phys, e->phys + e->pages * PAGE_SIZE). */
+    /* The MmapEntry whose phys range contains linmem_phys is the backing
+     * allocation (warp_kmalloc or allocPagedMemory).  data_offset accounts
+     * for the AllocHeader prepended by warp_kmalloc (0 for mmap entries). */
     MmapEntry *e = find_entry_by_phys(linmem_phys);
     if (!e) return -1;
 
-    uint64_t basedataLength = linmem_phys - e->phys;
-    uint64_t user_va_base   = WARP_R3_LINMEM_BASE - basedataLength;
+    /* actual_basedataLength = bytes from memoryBase to linmem (excludes AllocHeader). */
+    uint64_t basedataLength = linmem_phys - e->phys - e->data_offset;
+    /* Map from phys (page-aligned) so that:
+     *   phys + data_offset + basedataLength → WARP_R3_LINMEM_BASE (user space). */
+    uint64_t user_va_base   = WARP_R3_LINMEM_BASE - e->data_offset - basedataLength;
     uint64_t flags = MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER;
 
     for (uint64_t i = 0; i < e->pages; ++i) {
@@ -165,6 +203,7 @@ warp_mem_ring3_map_linmem(uint64_t user_root, uint8_t const *linmem_kernel_ptr)
                                    user_va_base + i * kPageSize,
                                    e->phys + i * kPageSize,
                                    flags) != 0) {
+            klog_write("[lm-map] paging_map_4k_in_root failed page="); serial_write_hex64(i); klog_write("\n");
             return -1;
         }
     }

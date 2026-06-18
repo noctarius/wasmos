@@ -2013,13 +2013,12 @@ warp_wasmos_symbols_ring3(void)
     static constexpr int g_r3_sym_counter_base = __COUNTER__;
 #define R3_LINK(module, name, fnc) \
     vb::NativeSymbol { \
-        vb::NativeLinkage::Dynamic, \
+        vb::NativeSymbol::Linkage::DYNAMIC, \
         module, \
         name, \
         vb::function_traits<vb::remove_noexcept_t<decltype(fnc)>>::getSignature(), \
         reinterpret_cast<void const *>(WARP_R3_HC_TRAMPOLINE + \
-            (uint64_t)(__COUNTER__ - g_r3_sym_counter_base - 1) * 8ULL), \
-        0u \
+            (uint64_t)(__COUNTER__ - g_r3_sym_counter_base - 1) * 8ULL) \
     }
     static vb::NativeSymbol syms[] = { WASMOS_SYMBOLS(R3_LINK) };
 #undef R3_LINK
@@ -2281,7 +2280,8 @@ warp_ring3_dispatch(uint32_t hc_id, void *frame_ptr)
     /* 99 */ case HC_ENV_UNSET:
         return warp_env_unset((uint32_t)a0, (uint32_t)a1, ctx3);
     /* 100 */ case HC_ENV_ABORT:
-        return warp_env_abort((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, (uint32_t)a3, ctx5);
+        warp_env_abort((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, (uint32_t)a3, ctx5);
+        return 0;
     default:
         return (uint32_t)-1;
     }

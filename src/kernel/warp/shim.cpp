@@ -25,6 +25,13 @@ extern "C" {
 #include "arch/x86_64/smp.h"
 }
 
+#ifdef WASMOS_WARP_RING3
+/* Forward declarations: implemented in mem_utils_kernel.cpp.
+ * Track large warp_kmalloc allocations so ring-3 phys-range queries work. */
+extern "C" void warp_mem_kmalloc_register(uint64_t phys, uint64_t pages, uint64_t data_offset);
+extern "C" void warp_mem_kmalloc_unregister(uint64_t phys);
+#endif
+
 #include "src/WasmModule/WasmModule.hpp"
 #include "src/core/common/Span.hpp"
 #include "shim.h"
@@ -119,6 +126,9 @@ static void *warp_kmalloc(size_t const size)
             pfa_free_pages(phys, pages);
             return nullptr;
         }
+#ifdef WASMOS_WARP_RING3
+        warp_mem_kmalloc_register(phys, pages, sizeof(AllocHeader));
+#endif
         auto *hdr = reinterpret_cast<AllocHeader *>(phys | kHalfBase);
         hdr->size     = pages;   /* store PAGE count */
         hdr->is_pages = 1;
@@ -140,6 +150,9 @@ static void *warp_krealloc(void *const ptr, size_t const size)
     if (!size) {
         /* Free only */
         if (old_hdr->is_pages) {
+#ifdef WASMOS_WARP_RING3
+            warp_mem_kmalloc_unregister(phys_of_pages_ptr(old_hdr));
+#endif
             pfa_free_pages(phys_of_pages_ptr(old_hdr), old_hdr->size);
         } else {
             kfree_small(old_hdr);
@@ -153,6 +166,9 @@ static void *warp_krealloc(void *const ptr, size_t const size)
     __builtin_memcpy(n, ptr, copy);
 
     if (old_hdr->is_pages) {
+#ifdef WASMOS_WARP_RING3
+        warp_mem_kmalloc_unregister(phys_of_pages_ptr(old_hdr));
+#endif
         pfa_free_pages(phys_of_pages_ptr(old_hdr), old_hdr->size);
     } else {
         kfree_small(old_hdr);
@@ -165,6 +181,9 @@ static void warp_kfree(void *const ptr)
     if (!ptr) return;
     AllocHeader *hdr = header_of(ptr);
     if (hdr->is_pages) {
+#ifdef WASMOS_WARP_RING3
+        warp_mem_kmalloc_unregister(phys_of_pages_ptr(hdr));
+#endif
         pfa_free_pages(phys_of_pages_ptr(hdr), hdr->size);
     } else {
         kfree_small(hdr);

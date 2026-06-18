@@ -329,6 +329,11 @@ warp_ipc_select_one(uint32_t endpoint, void *ctx_)
 
         int rc = ipc_recv_blocking_for(context_id, endpoint, &slot->message);
         if (rc == IPC_EMPTY) {
+            /* Spurious wake — another waiter claimed the message first.  Yield
+             * so the scheduler can clear need_resched; without this the
+             * in_hostcall guard in process_preempt_from_irq prevents timer
+             * preemption and triggers the watchdog stall detector. */
+            process_yield(PROCESS_RUN_YIELDED);
             continue;
         }
         if (rc != IPC_OK) {

@@ -28,8 +28,10 @@ if (WASMOS_WARP_RING3)
   # execution code in the kernel wrapper layer.
   list(APPEND CFLAGS_WARP_CXX -DENABLE_ADVANCED_APIS=1 -DWASMOS_WARP_RING3)
   list(APPEND CFLAGS_WARP_C   -DWASMOS_WARP_RING3)
-  # Propagate define to CFLAGS_KERNEL so syscall.c and other C files see it.
-  set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -DWASMOS_WARP_RING3)
+  # CFLAGS_KERNEL propagation is deferred to inside if(WASMOS_WASM_RUNTIME_WARP)
+  # below so the wasm3-only build (WASMOS_WASM_RUNTIME_WARP=OFF) does not pick
+  # up -DWASMOS_WARP_RING3 and reference WARP ring-3 symbols that are only
+  # compiled as part of warp_driver.o / warp_link.o.
 endif ()
 
 set(RING3_NATIVE_PROBE_SRC ${KERNEL_DIR}/ring3_native_probe.c)
@@ -165,6 +167,11 @@ if (WASMOS_WASM_RUNTIME_WARP)
   )
   if (WASMOS_WARP_RING3)
     list(APPEND KERNEL_OBJS ${BUILD_DIR}/warp_ring3_trampolines.o)
+    # Propagate ring-3 define to kernel C files (syscall.c, smp.h, wasm_driver.h).
+    # Placed here so it only takes effect when WARP is actually the runtime:
+    # the ring-3 dispatch symbols (warp_r3_memory_helper, warp_ring3_dispatch)
+    # live in warp_driver.o and warp_link.o which are only compiled above.
+    set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -DWASMOS_WARP_RING3)
   endif ()
   list(APPEND KERNEL_OBJS
     ${BUILD_DIR}/warp_linker_stubs.o

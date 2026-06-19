@@ -5,7 +5,7 @@ else ()
   set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -mcmodel=kernel ${WASMOS_TRACE_DEFINE} ${WASMOS_RING3_SMOKE_DEFINE} ${WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFINE} ${WASMOS_PM_TEST_HOOKS_DEFINE} ${WASMOS_PM_LIST_DEFINE} ${WASMOS_PM_LIST_CAP_DEFINE} ${WASMOS_IRQ_MODE_DEFINE} ${WASMOS_SMP_DEFINE} ${WASMOS_SCHED_CALLER_CPU_BIAS_DEFINE} -DWASMOS_SCHED_THREADABLE -I${WASM3_DIR}/source -Wno-unused-parameter)
 endif ()
 set(CXXFLAGS_KERNEL ${CFLAGS_KERNEL} -fno-exceptions -fno-rtti -fno-threadsafe-statics -Wno-deprecated)
-set(CFLAGS_WASM3 ${CFLAGS_KERNEL} -I${WASM3_DIR}/source -Dd_m3HasFloat=0 -Wno-unused-parameter -Wno-unused-variable)
+set(CFLAGS_WASM3 ${CFLAGS_KERNEL} -I${WASM3_DIR}/source -Wno-unused-parameter -Wno-unused-variable)
 
 # WARP C flags (for posix_kernel.c and other WARP C glue — no C++ dialect, just compat includes).
 set(CFLAGS_WARP_C ${CFLAGS_KERNEL} -I${KERNEL_DIR}/warp/compat)

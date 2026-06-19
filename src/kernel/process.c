@@ -587,8 +587,8 @@ static void process_trampoline(void) {
                 cpu_local()->last_run_result = entry_fn(cpu_local()->current_process, cpu_local()->current_process->arg);
             }
         }
-        critical_section_enter();
         cpu_local()->in_scheduler = 1;
+        critical_section_enter();
         process_context_t *ctx = process_sched_ctx_for_thread(cpu_local()->current_process, cpu_local()->current_thread);
         if (!ctx) {
             cpu_local()->last_run_result = PROCESS_RUN_IDLE;
@@ -1731,6 +1731,7 @@ static int process_schedule_once_impl(void) {
     cpu_local()->sched_ctx.root_table = paging_get_root_table();
     if (!run_ctx) {
         klog_write("[sched] thread ctx missing\n");
+        cpu_local()->in_scheduler = 1;
         critical_section_enter();
         cpu_local()->current_process = 0;
         cpu_local()->current_pid = 0;
@@ -1755,6 +1756,7 @@ static int process_schedule_once_impl(void) {
     }
     if (run_ctx->root_table == 0) {
         klog_write("[sched] target root missing\n");
+        cpu_local()->in_scheduler = 1;
         critical_section_enter();
         cpu_local()->current_process = 0;
         cpu_local()->current_pid = 0;
@@ -1807,6 +1809,7 @@ static int process_schedule_once_impl(void) {
         klog_write("[test] sched progress ok\n");
     }
     process_run_result_t result = cpu_local()->last_run_result;
+    cpu_local()->in_scheduler = 1;
     critical_section_enter();
     cpu_local()->current_process = 0;
     cpu_local()->current_pid = 0;
@@ -1929,7 +1932,8 @@ static int process_schedule_once_impl(void) {
 
 void process_tick(void) {
     uint64_t now = timer_ticks();
-    if (cpu_local()->current_pid == 0 || !cpu_local()->current_thread) {
+    if (cpu_local()->current_pid == 0 || !cpu_local()->current_thread ||
+            cpu_local()->in_scheduler) {
         cpu_local()->resched_pending_since_tick = 0;
         return;
     }

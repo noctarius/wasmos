@@ -27,6 +27,32 @@ typedef struct {
     int error;  /* negative on first failed console_write */
 } stdio_console_t;
 
+#define STDIO_TEXT_SCAN_MAX 1024u
+
+/* FIXME: Root-cause the unterminated text span surfacing on the WARP ring-3
+ * path. Until then, keep puts-style writes from scanning into adjacent binary
+ * buffers and dumping them to serial. */
+static size_t
+text_prefix_len(const char *s, size_t max_len)
+{
+    size_t len = 0;
+
+    if (!s) {
+        return 0;
+    }
+    while (len < max_len) {
+        unsigned char ch = (unsigned char)s[len];
+        if (ch == '\0') {
+            break;
+        }
+        if ((ch < 0x20u || ch > 0x7Eu) && ch != '\n' && ch != '\r' && ch != '\t') {
+            break;
+        }
+        len++;
+    }
+    return len;
+}
+
 static void
 buffer_emit(void *ctx, char ch)
 {
@@ -311,6 +337,10 @@ putsn(const char *s, size_t len)
     if (!s || len == 0 || len > 0x7FFFFFFFul) {
         return 0;
     }
+    len = text_prefix_len(s, len);
+    if (len == 0) {
+        return 0;
+    }
     return wasmos_console_write((int32_t)(uintptr_t)s, (int32_t)len);
 }
 
@@ -318,7 +348,7 @@ int
 puts(const char *s)
 {
     static const char newline = '\n';
-    int rc = putsn(s, strlen(s));
+    int rc = putsn(s, text_prefix_len(s, STDIO_TEXT_SCAN_MAX));
 
     if (rc < 0) {
         return rc;

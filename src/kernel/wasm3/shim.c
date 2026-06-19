@@ -733,3 +733,30 @@ unsigned long long strtoull(const char *nptr, char **endptr, int base)
 {
     return (unsigned long long)parse_ul(nptr, endptr, base);
 }
+
+double strtod(const char *nptr, char **endptr)
+{
+    /* Minimal implementation: parse optional sign, integer part, optional
+     * fractional part.  Exponent notation and special values (inf/nan) are
+     * not needed because this path is only reached when wasm3's m3_Call is
+     * driven by string arguments, which does not happen in the WASMOS kernel. */
+    if (!nptr) { if (endptr) *endptr = (char *)nptr; return 0.0; }
+    const char *s = nptr;
+    while (*s == ' ' || *s == '\t') s++;
+    int neg = 0;
+    if (*s == '-') { neg = 1; s++; }
+    else if (*s == '+') { s++; }
+    double val = 0.0;
+    while (*s >= '0' && *s <= '9') { val = val * 10.0 + (double)(*s - '0'); s++; }
+    if (*s == '.') {
+        s++;
+        double frac = 0.1;
+        while (*s >= '0' && *s <= '9') {
+            val += (double)(*s - '0') * frac;
+            frac *= 0.1;
+            s++;
+        }
+    }
+    if (endptr) *endptr = (char *)s;
+    return neg ? -val : val;
+}

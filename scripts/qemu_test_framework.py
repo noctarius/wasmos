@@ -759,6 +759,16 @@ class QemuSession:
         data = self.buf[-max_bytes:]
         return data.decode("utf-8", errors="replace")
 
+    def wait_for_exit(self, timeout_s: float = 5.0) -> bool:
+        if not self.proc:
+            return True
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            if self.proc.poll() is not None:
+                return True
+            self._pump(0.2)
+        return self.proc.poll() is not None
+
 
 def main():
     parser = argparse.ArgumentParser(description="QEMU test framework smoke run.")
@@ -780,6 +790,9 @@ def main():
         if not session.expect(b"wamos> "):
             return 1
         session.send("halt")
+        if not session.wait_for_exit(5):
+            sys.stderr.write("FAIL: halt did not power off QEMU\n")
+            return 1
         return 0
 
 

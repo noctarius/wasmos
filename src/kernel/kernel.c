@@ -8,6 +8,7 @@
 #include "serial.h"
 #include "klog.h"
 #include "irq.h"
+#include "io.h"
 #include "timer.h"
 #include "arch/x86_64/smp.h"
 #include "wasmos_app.h"
@@ -20,6 +21,7 @@
 #include "framebuffer.h"
 #include "capability.h"
 #include "slab.h"
+#include "system_control.h"
 #include "wasm_driver.h"
 #include "kernel_init_runtime.h"
 #include "kernel_boot_runtime.h"
@@ -139,6 +141,45 @@ idle_entry(process_t *process, void *arg)
          * and pick up any threads that became ready during the halt. */
         process_yield(PROCESS_RUN_YIELDED);
     }
+}
+
+static void __attribute__((noreturn))
+kernel_halt_forever(void)
+{
+    __asm__ volatile("cli");
+    for (;;) {
+        __asm__ volatile("hlt");
+    }
+}
+
+void
+kernel_system_poweroff(void)
+{
+    __asm__ volatile("cli");
+
+    outw(0x604u, 0x2000u);
+    io_wait();
+    outw(0xB004u, 0x2000u);
+    io_wait();
+    outw(0x4004u, 0x3400u);
+    io_wait();
+
+    kernel_halt_forever();
+}
+
+void
+kernel_system_reboot(void)
+{
+    __asm__ volatile("cli");
+
+    outb(0x64u, 0xFEu);
+    io_wait();
+    outb(0xCF9u, 0x06u);
+    io_wait();
+    outb(0xCF9u, 0x0Eu);
+    io_wait();
+
+    kernel_halt_forever();
 }
 
 void

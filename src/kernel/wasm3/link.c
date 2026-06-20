@@ -17,6 +17,7 @@
 #include "irq.h"
 #include "policy.h"
 #include "capability.h"
+#include "system_control.h"
 #include "thread.h"
 #include "wasm_driver.h"
 
@@ -2439,12 +2440,7 @@ m3ApiRawFunction(wasmos_system_halt)
         require_system_control_capability(context_id) != 0) {
         m3ApiReturn(-1);
     }
-    outw(0x604, 0x2000);
-    outw(0xB004, 0x2000);
-    outw(0x4004, 0x3400);
-    for (;;) {
-        __asm__ volatile("hlt");
-    }
+    kernel_system_poweroff();
     m3ApiReturn(0);
 }
 
@@ -2456,12 +2452,7 @@ m3ApiRawFunction(wasmos_system_reboot)
         require_system_control_capability(context_id) != 0) {
         m3ApiReturn(-1);
     }
-    outb(0x64, 0xFE);
-    outb(0xCF9, 0x06);
-    outb(0xCF9, 0x0E);
-    for (;;) {
-        __asm__ volatile("hlt");
-    }
+    kernel_system_reboot();
     m3ApiReturn(0);
 }
 

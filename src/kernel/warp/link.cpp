@@ -42,6 +42,7 @@ extern "C" {
 #include "policy.h"
 #include "paging.h"
 #include "framebuffer.h"
+#include "system_control.h"
 #include "wasm_driver.h"
 #include "wasmos_driver_abi.h"
 #include "arch/x86_64/smp.h"
@@ -69,6 +70,8 @@ struct WarpCallContext {
     uint32_t          pid;
     const boot_info_t *boot_info;
 };
+
+static int warp_require_system_control_capability(uint32_t context_id);
 
 // Per-PID singleton contexts.  A per-driver table comes later once the WARP
 // wasm driver is written; this is sufficient for initial single-module runs.
@@ -855,9 +858,25 @@ warp_sync_user_read(uint32_t ptr_off, uint32_t len, void *ctx_)
 // ---------------------------------------------------------------------------
 
 static uint32_t warp_system_halt(void *ctx_)
-    { (void)ctx_; for (;;) { __asm__ volatile("hlt"); } }
+{
+    (void)ctx_;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0 ||
+        warp_require_system_control_capability(context_id) != 0) {
+        return (uint32_t)-1;
+    }
+    kernel_system_poweroff();
+}
 static uint32_t warp_system_reboot(void *ctx_)
-    { (void)ctx_; outb(0x64, 0xFE); for (;;) { __asm__ volatile("hlt"); } }
+{
+    (void)ctx_;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0 ||
+        warp_require_system_control_capability(context_id) != 0) {
+        return (uint32_t)-1;
+    }
+    kernel_system_reboot();
+}
 
 // ---------------------------------------------------------------------------
 // Scheduler extras
@@ -1156,6 +1175,8 @@ static int warp_require_mmio_capability(uint32_t context_id)
     { return policy_authorize(context_id, POLICY_ACTION_MMIO_MAP, 0); }
 static int warp_require_irq_capability(uint32_t context_id)
     { return policy_authorize(context_id, POLICY_ACTION_IRQ_CONTROL, 0); }
+static int warp_require_system_control_capability(uint32_t context_id)
+    { return policy_require(context_id, POLICY_ACTION_SYSTEM_CONTROL, 0); }
 
 // ---------------------------------------------------------------------------
 // Shmem map tracking — mirrors g_wasm_shmem_maps in wasm3/link.c

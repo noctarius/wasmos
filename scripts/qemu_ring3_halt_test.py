@@ -97,7 +97,12 @@ def main():
         for needle in required:
             if not session.expect(needle):
                 return 1
+        if not session.expect(b"wamos> "):
+            return 1
         session.send("halt")
+        if not session.wait_for_exit(5):
+            print("FAIL: halt did not power off QEMU", flush=True)
+            return 1
         return 0
 
 

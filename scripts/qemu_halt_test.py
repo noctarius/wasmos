@@ -34,6 +34,9 @@ def main():
         if not session.expect(b"wamos> "):
             return 1
         session.send("halt")
+        if not session.wait_for_exit(5):
+            sys.stderr.write("FAIL: halt did not power off QEMU\n")
+            return 1
         return 0
 
 

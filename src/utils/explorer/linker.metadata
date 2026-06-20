@@ -1,0 +1,24 @@
+version = 1
+
+[package]
+name = "explorer"
+entry = "wasmos_main"
+kind = "app"
+native = false
+
+[resources]
+stack_pages = 16
+heap_pages = 256
+
+[ipc]
+required_endpoint_name = "proc"
+required_endpoint_rights = 0
+entry_arg_bindings = ["proc.endpoint"]
+
+[[capabilities]]
+name = "ipc.basic"
+flags = 0
+
+[[capabilities]]
+name = "dma.buffer"
+flags = 0

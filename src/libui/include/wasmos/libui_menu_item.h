@@ -259,6 +259,9 @@ ui_menu_item_popup_open(ui_context_t *ctx, ui_component_t *mi)
     const int32_t child_count = ui_menu_item_child_count(ctx, mi);
     if (child_count <= 0) return;
 
+    const ui_component_t *parent = ui_component_by_id(ctx, mi->parent_id);
+    const int32_t take_focus = (parent && parent->type == UI_COMPONENT_MENU_BAR);
+
     ui_menu_item_popup_close(ctx, mi);
 
     int32_t popup_x = 0, popup_y = 0, popup_w = 0, popup_h = 0;
@@ -314,9 +317,14 @@ ui_menu_item_popup_open(ui_context_t *ctx, ui_component_t *mi)
                 (int32_t)(GFX_WINDOW_FLAG_TOPMOST | GFX_WINDOW_FLAG_NO_CHROME |
                            GFX_WINDOW_FLAG_NO_TASK_LIST), 0, 0,
                 &status, 0, 0, 0);
-    /* Give the popup focus so it receives pointer events with correct coordinates. */
-    ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
-                GFX_IPC_FOCUS_WINDOW, win_id, 0, 0, 0, &status, 0, 0, 0);
+    /* Top-level bar popups need focus so they receive pointer events.
+     * Hover-opened child submenus must stay preview-only until clicked;
+     * otherwise they trap pointer focus and the parent popup stops updating
+     * hover state for sibling rows. */
+    if (take_focus) {
+        ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,
+                    GFX_IPC_FOCUS_WINDOW, win_id, 0, 0, 0, &status, 0, 0, 0);
+    }
     return;
 fail:
     ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++,

@@ -113,6 +113,31 @@ static MmapEntry *find_entry_by_phys(uint64_t phys)
             return &e;
     return nullptr;
 }
+
+struct Ring3LinmemMapState {
+    uint64_t user_root;
+    uint64_t user_va_base;
+    uint64_t phys_base;
+    uint64_t pages;
+    uint64_t basedata_length;
+    uint64_t data_offset;
+};
+
+static Ring3LinmemMapState g_ring3_linmem_maps[32];
+
+static Ring3LinmemMapState *find_ring3_linmem_map(uint64_t user_root)
+{
+    Ring3LinmemMapState *free_slot = nullptr;
+    for (auto &slot : g_ring3_linmem_maps) {
+        if (slot.user_root == user_root) {
+            return &slot;
+        }
+        if (slot.user_root == 0 && free_slot == nullptr) {
+            free_slot = &slot;
+        }
+    }
+    return free_slot != nullptr ? free_slot : &g_ring3_linmem_maps[0];
+}
 #endif /* WASMOS_WARP_RING3 */
 
 } // namespace
@@ -214,9 +239,29 @@ warp_mem_ring3_map_linmem(uint64_t user_root, uint8_t const *linmem_kernel_ptr)
      *   phys + data_offset + basedataLength → user_linmem_base (user space). */
     uint64_t user_va_base   = user_linmem_base - e->data_offset - basedataLength;
     uint64_t flags = MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER;
+    Ring3LinmemMapState *state = find_ring3_linmem_map(user_root);
+    uint64_t start_page = 0;
+    uint8_t incremental =
+        state != nullptr &&
+        state->user_root == user_root &&
+        state->user_va_base == user_va_base &&
+        state->phys_base == e->phys &&
+        state->basedata_length == basedataLength &&
+        state->data_offset == e->data_offset &&
+        state->pages <= e->pages;
 
-    for (uint64_t i = 0; i < e->pages; ++i) {
-        (void)paging_unmap_4k_in_root(user_root, user_va_base + i * kPageSize);
+    if (!incremental && state != nullptr && state->user_root == user_root) {
+        for (uint64_t i = 0; i < state->pages; ++i) {
+            (void)paging_unmap_4k_in_root(user_root, state->user_va_base + i * kPageSize);
+        }
+    } else if (incremental) {
+        start_page = state->pages;
+    }
+
+    for (uint64_t i = start_page; i < e->pages; ++i) {
+        if (!incremental) {
+            (void)paging_unmap_4k_in_root(user_root, user_va_base + i * kPageSize);
+        }
         if (paging_map_4k_in_root(user_root,
                                    user_va_base + i * kPageSize,
                                    e->phys + i * kPageSize,
@@ -224,6 +269,14 @@ warp_mem_ring3_map_linmem(uint64_t user_root, uint8_t const *linmem_kernel_ptr)
             klog_write("[lm-map] paging_map_4k_in_root failed page="); serial_write_hex64(i); klog_write("\n");
             return -1;
         }
+    }
+    if (state != nullptr) {
+        state->user_root = user_root;
+        state->user_va_base = user_va_base;
+        state->phys_base = e->phys;
+        state->pages = e->pages;
+        state->basedata_length = basedataLength;
+        state->data_offset = e->data_offset;
     }
     return 0;
 }

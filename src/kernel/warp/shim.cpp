@@ -65,7 +65,9 @@ void  operator delete[](void *p, size_t) noexcept { warp_kfree(p); }
 namespace {
 
 struct AllocHeader {
-    size_t   size;     /* byte count (is_pages=0) or page count (is_pages=1) */
+    size_t   size;     /* requested byte count */
+    size_t   capacity; /* usable byte capacity */
+    size_t   pages;    /* page count for page-backed allocations */
     uint32_t is_pages; /* 0 = slab, 1 = page-allocator */
 };
 
@@ -115,6 +117,8 @@ static void *warp_kmalloc(size_t const size)
         if (!raw) return nullptr;
         auto *hdr = static_cast<AllocHeader *>(raw);
         hdr->size     = size;
+        hdr->capacity = size;
+        hdr->pages    = 0;
         hdr->is_pages = 0;
         return hdr + 1;
     } else {
@@ -130,7 +134,9 @@ static void *warp_kmalloc(size_t const size)
         warp_mem_kmalloc_register(phys, pages, sizeof(AllocHeader));
 #endif
         auto *hdr = reinterpret_cast<AllocHeader *>(phys | kHalfBase);
-        hdr->size     = pages;   /* store PAGE count */
+        hdr->size     = size;
+        hdr->capacity = pages * kPageSize - sizeof(AllocHeader);
+        hdr->pages    = pages;
         hdr->is_pages = 1;
         return hdr + 1;
     }
@@ -140,12 +146,7 @@ static void *warp_krealloc(void *const ptr, size_t const size)
 {
     if (!ptr) return warp_kmalloc(size);
     AllocHeader *old_hdr = header_of(ptr);
-    size_t old_bytes;
-    if (old_hdr->is_pages) {
-        old_bytes = old_hdr->size * kPageSize - sizeof(AllocHeader);
-    } else {
-        old_bytes = old_hdr->size;
-    }
+    size_t old_bytes = old_hdr->size;
 
     if (!size) {
         /* Free only */
@@ -153,23 +154,37 @@ static void *warp_krealloc(void *const ptr, size_t const size)
 #ifdef WASMOS_WARP_RING3
             warp_mem_kmalloc_unregister(phys_of_pages_ptr(old_hdr));
 #endif
-            pfa_free_pages(phys_of_pages_ptr(old_hdr), old_hdr->size);
+            pfa_free_pages(phys_of_pages_ptr(old_hdr), old_hdr->pages);
         } else {
             kfree_small(old_hdr);
         }
         return nullptr;
     }
 
-    void *n = warp_kmalloc(size);
+    if (size <= old_hdr->capacity) {
+        old_hdr->size = size;
+        return ptr;
+    }
+
+    size_t target = size;
+    if (old_hdr->is_pages && old_hdr->capacity < (SIZE_MAX / 2)) {
+        size_t grown = old_hdr->capacity * 2;
+        if (grown > target) {
+            target = grown;
+        }
+    }
+
+    void *n = warp_kmalloc(target);
     if (!n) return nullptr;
+    header_of(n)->size = size;
     size_t copy = old_bytes < size ? old_bytes : size;
     __builtin_memcpy(n, ptr, copy);
 
     if (old_hdr->is_pages) {
 #ifdef WASMOS_WARP_RING3
-        warp_mem_kmalloc_unregister(phys_of_pages_ptr(old_hdr));
+            warp_mem_kmalloc_unregister(phys_of_pages_ptr(old_hdr));
 #endif
-        pfa_free_pages(phys_of_pages_ptr(old_hdr), old_hdr->size);
+        pfa_free_pages(phys_of_pages_ptr(old_hdr), old_hdr->pages);
     } else {
         kfree_small(old_hdr);
     }
@@ -184,7 +199,7 @@ static void warp_kfree(void *const ptr)
 #ifdef WASMOS_WARP_RING3
         warp_mem_kmalloc_unregister(phys_of_pages_ptr(hdr));
 #endif
-        pfa_free_pages(phys_of_pages_ptr(hdr), hdr->size);
+        pfa_free_pages(phys_of_pages_ptr(hdr), hdr->pages);
     } else {
         kfree_small(hdr);
     }
@@ -203,9 +218,13 @@ public:
         return *this;
     }
     KernelLogger &operator<<(const vb::Span<char const> &msg) override {
-        // Span may not be null-terminated; write as many chars as we can.
-        // TODO: use a bounded write when klog grows one.
-        if (msg.data() && msg.size() > 0) klog_write(msg.data());
+        if (msg.data() && msg.size() > 0) {
+            char buf[128];
+            size_t n = msg.size() < 127 ? msg.size() : 127;
+            __builtin_memcpy(buf, msg.data(), n);
+            buf[n] = '\0';
+            klog_write(buf);
+        }
         return *this;
     }
     KernelLogger &operator<<(uint32_t const) override { return *this; }

@@ -164,6 +164,9 @@ set(WASM_CALCULATOR_APP ${BUILD_DIR}/calculator.wap)
 set(AS_HELLO_SRC ${EXAMPLES_AS_DIR}/hello/hello.ts)
 set(AS_HELLO_WASM ${BUILD_DIR}/hello_as.wasm)
 set(AS_HELLO_APP ${BUILD_DIR}/hello_as.wap)
+set(AS_MINESWEEPER_SRC ${EXAMPLES_AS_DIR}/minesweeper/app.ts)
+set(AS_MINESWEEPER_WASM ${BUILD_DIR}/minesweeper.wasm)
+set(AS_MINESWEEPER_APP ${BUILD_DIR}/minesweeper.wap)
 set(WASM_DATE_TOOL_SRC ${CMAKE_SOURCE_DIR}/src/utils/date/date.ts)
 set(WASM_DATE_TOOL_WASM ${BUILD_DIR}/date_tool.wasm)
 set(WASM_DATE_TOOL_APP ${BUILD_DIR}/date.wap)
@@ -1154,6 +1157,9 @@ if (AS_ENABLE)
   set(AS_HELLO_COPY_CMD
     COMMAND ${CMAKE_COMMAND} -E copy ${AS_HELLO_APP} ${BUILD_DIR}/esp/apps/hello_as.wap
   )
+  set(AS_MINESWEEPER_COPY_CMD
+    COMMAND ${CMAKE_COMMAND} -E copy ${AS_MINESWEEPER_APP} ${BUILD_DIR}/esp/apps/minesweeper.wap
+  )
 endif ()
 set(DATE_TOOL_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_DATE_TOOL_APP} ${BUILD_DIR}/esp/system/utils/date.wap
@@ -1296,6 +1302,7 @@ set(WASMOS_ESP_POPULATE_CMDS
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
   ${AS_HELLO_COPY_CMD}
+  ${AS_MINESWEEPER_COPY_CMD}
   ${HELLO_C_COPY_CMD}
   ${CHARDEV_PREEMPT_COPY_CMD}
   ${INIT_SMOKE_COPY_CMD}

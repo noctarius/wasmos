@@ -116,9 +116,9 @@ App-facing compositor interface. Defined in
 
 | Opcode                          | Value  | Request args                                                                   | Reply args                                      |
 |---------------------------------|--------|--------------------------------------------------------------------------------|-------------------------------------------------|
-| `GFX_IPC_CREATE_WINDOW`         | 0x0200 | arg0=width arg1=height arg2=GFX_IPC_ABI_MAGIC arg3=header_pack(version,opcode) | arg1=window_id arg2=width arg3=height           |
+| `GFX_IPC_CREATE_WINDOW`         | 0x0200 | arg0=content_width arg1=content_height arg2=GFX_IPC_ABI_MAGIC arg3=header_pack(version,opcode) | arg1=window_id arg2=content_width arg3=content_height |
 | `GFX_IPC_DESTROY_WINDOW`        | 0x0201 | arg0=window_id                                                                 | —                                               |
-| `GFX_IPC_RESIZE_WINDOW`         | 0x0202 | arg0=window_id arg1=width arg2=height                                          | arg1=width arg2=height                          |
+| `GFX_IPC_RESIZE_WINDOW`         | 0x0202 | arg0=window_id arg1=content_width arg2=content_height                          | arg1=content_width arg2=content_height          |
 | `GFX_IPC_ALLOC_SHARED_BUFFER`   | 0x0203 | arg0=window_id (0=unbound) arg1=width arg2=height                              | arg1=buffer_id arg2=shmem_id arg3=stride        |
 | `GFX_IPC_SUBMIT_COMMANDS`       | 0x0204 | (not yet dispatched)                                                           | —                                               |
 | `GFX_IPC_PRESENT_WINDOW`        | 0x0205 | arg0=window_id arg1=buffer_id arg2=damage_count arg3=damage_shmem_id           | —                                               |
@@ -150,6 +150,10 @@ GFX_EVENT_POINTER       = 4   // arg2=x/y packed as u16 low16=x high16=y, arg3=b
 GFX_EVENT_CLOSE_REQUEST = 5   // arg2=window_id
 GFX_EVENT_RESIZE        = 6   // arg2=window_id, arg3=width/height packed u16 low16=w high16=h
 ```
+
+Window geometry note:
+- `CREATE_WINDOW` and `RESIZE_WINDOW` widths/heights are content dimensions.
+- Compositor chrome is outside the client rect, so title-bar or border-size changes do not require app-side size adjustments.
 
 ---
 

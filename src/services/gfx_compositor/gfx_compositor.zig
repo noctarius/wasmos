@@ -658,18 +658,7 @@ fn clamp_runtime_state_to_framebuffer() void {
     var i: usize = 0;
     while (i < g_windows.len) : (i += 1) {
         if (!g_windows[i].in_use) continue;
-        const win_w: i32 = @intCast(g_windows[i].width);
-        const win_h: i32 = @intCast(g_windows[i].height);
-        const max_w: i32 = if (fb_w > 1) fb_w else 1;
-        const max_h: i32 = if (fb_h > 1) fb_h else 1;
-        if (win_w > max_w) g_windows[i].width = @intCast(max_w);
-        if (win_h > max_h) g_windows[i].height = @intCast(max_h);
-        const clamped_win_w: i32 = @intCast(g_windows[i].width);
-        const clamped_win_h: i32 = @intCast(g_windows[i].height);
-        const pos_hi_x = if (fb_w > clamped_win_w) fb_w - clamped_win_w else 0;
-        const pos_hi_y = if (fb_h > clamped_win_h) fb_h - clamped_win_h else 0;
-        g_windows[i].x = clamp(g_windows[i].x, 0, pos_hi_x);
-        g_windows[i].y = clamp(g_windows[i].y, 0, pos_hi_y);
+        clamp_window_to_framebuffer(i);
     }
 }
 
@@ -885,8 +874,8 @@ fn window_topmost_at(x: i32, y: i32) ?usize {
         if (!g_windows[i].in_use) continue;
         const win = g_windows[i];
         if (window_is_invisible(win)) continue;
-        const wx2 = win.x + @as(i32, @intCast(win.width));
-        const wy2 = win.y + @as(i32, @intCast(win.height));
+        const wx2 = win.x + window_outer_width(win);
+        const wy2 = win.y + window_outer_height(win);
         if (x < win.x or y < win.y or x >= wx2 or y >= wy2) continue;
         if (best == null or win.z >= best_z) {
             best = i;
@@ -942,6 +931,53 @@ fn window_does_not_activate(win: window_slot_t) bool {
 
 fn window_has_no_content(win: window_slot_t) bool {
     return (win.flags & GFX_WINDOW_FLAG_NO_CONTENT) != 0;
+}
+
+fn window_outer_width_for(content_width: u32, no_chrome: bool) i32 {
+    const width: i32 = @intCast(content_width);
+    return if (no_chrome) width else width + (CHROME_BORDER * 2);
+}
+
+fn window_outer_height_for(content_height: u32, no_chrome: bool) i32 {
+    const height: i32 = @intCast(content_height);
+    return if (no_chrome) height else height + CHROME_TITLE_H + CHROME_BORDER;
+}
+
+fn window_outer_width(win: window_slot_t) i32 {
+    return window_outer_width_for(win.width, window_has_no_chrome(win));
+}
+
+fn window_outer_height(win: window_slot_t) i32 {
+    return window_outer_height_for(win.height, window_has_no_chrome(win));
+}
+
+fn content_width_for_outer_limit(outer_width: i32, no_chrome: bool) i32 {
+    const content_width = if (no_chrome) outer_width else outer_width - (CHROME_BORDER * 2);
+    return if (content_width > 0) content_width else 1;
+}
+
+fn content_height_for_outer_limit(outer_height: i32, no_chrome: bool) i32 {
+    const content_height = if (no_chrome) outer_height else outer_height - CHROME_TITLE_H - CHROME_BORDER;
+    return if (content_height > 0) content_height else 1;
+}
+
+fn clamp_window_to_framebuffer(window_idx: usize) void {
+    if (!g_fb_info_valid) return;
+    const fb_w: i32 = @intCast(g_fb_info.framebuffer_width);
+    const fb_h: i32 = @intCast(g_fb_info.framebuffer_height);
+    const no_chrome = window_has_no_chrome(g_windows[window_idx]);
+    const max_w = content_width_for_outer_limit(if (fb_w > 1) fb_w else 1, no_chrome);
+    const max_h = content_height_for_outer_limit(if (fb_h > 1) fb_h else 1, no_chrome);
+    const cur_w: i32 = @intCast(g_windows[window_idx].width);
+    const cur_h: i32 = @intCast(g_windows[window_idx].height);
+    g_windows[window_idx].width = @intCast(clamp(cur_w, @intCast(GFX_WINDOW_MIN_DIM), max_w));
+    g_windows[window_idx].height = @intCast(clamp(cur_h, @intCast(GFX_WINDOW_MIN_DIM), max_h));
+    const outer_w = window_outer_width(g_windows[window_idx]);
+    const outer_h = window_outer_height(g_windows[window_idx]);
+    const pos_hi_x = if (fb_w > outer_w) fb_w - outer_w else 0;
+    const pos_hi_y = if (fb_h > outer_h) fb_h - outer_h else 0;
+    g_windows[window_idx].x = clamp(g_windows[window_idx].x, 0, pos_hi_x);
+    g_windows[window_idx].y = clamp(g_windows[window_idx].y, 0, pos_hi_y);
 }
 
 fn rect_union(a: c.gfx_rect_t, b: c.gfx_rect_t) c.gfx_rect_t {
@@ -1014,6 +1050,8 @@ fn handle_mouse_resize(dx: i32, dy: i32, left_down_now: bool) void {
             const bound_h = fb_h - g_windows[resize_idx].y;
             if (bound_w < max_w) max_w = bound_w;
             if (bound_h < max_h) max_h = bound_h;
+            max_w = content_width_for_outer_limit(max_w, window_has_no_chrome(g_windows[resize_idx]));
+            max_h = content_height_for_outer_limit(max_h, window_has_no_chrome(g_windows[resize_idx]));
         }
         if (max_w < min_w) max_w = min_w;
         if (max_h < min_h) max_h = min_h;
@@ -1043,8 +1081,8 @@ fn handle_mouse_drag(dx: i32, dy: i32, left_down_now: bool) void {
         if (g_fb_info_valid) {
             const max_x: i32 = @intCast(g_fb_info.framebuffer_width);
             const max_y: i32 = @intCast(g_fb_info.framebuffer_height);
-            const ww: i32 = @intCast(g_windows[drag_idx].width);
-            const wh: i32 = @intCast(g_windows[drag_idx].height);
+            const ww = window_outer_width(g_windows[drag_idx]);
+            const wh = window_outer_height(g_windows[drag_idx]);
             const hi_x = if (max_x > ww) max_x - ww else 0;
             const hi_y = if (max_y > wh) max_y - wh else 0;
             g_windows[drag_idx].x = clamp(g_windows[drag_idx].x + dx, 0, hi_x);
@@ -1407,7 +1445,7 @@ fn rect_intersects(a: c.gfx_rect_t, b: c.gfx_rect_t) bool {
 }
 
 fn rect_from_window(slot: window_slot_t) c.gfx_rect_t {
-    return .{ .x = slot.x, .y = slot.y, .w = @intCast(slot.width), .h = @intCast(slot.height) };
+    return .{ .x = slot.x, .y = slot.y, .w = window_outer_width(slot), .h = window_outer_height(slot) };
 }
 
 fn cursor_rect_at(x: i32, y: i32) c.gfx_rect_t {
@@ -1444,7 +1482,7 @@ fn draw_window_placeholder(win: window_slot_t, clip: c.gfx_rect_t) void {
 }
 
 fn window_close_rect(win: window_slot_t) c.gfx_rect_t {
-    const ww: i32 = @intCast(win.width);
+    const ww = window_outer_width(win);
     const close_y = win.y + (CHROME_TITLE_H - CHROME_CLOSE_SZ) / 2;
     return .{
         .x = win.x + ww - CHROME_CLOSE_PAD - CHROME_CLOSE_SZ,
@@ -1455,7 +1493,7 @@ fn window_close_rect(win: window_slot_t) c.gfx_rect_t {
 }
 
 fn window_max_rect(win: window_slot_t) c.gfx_rect_t {
-    const ww: i32 = @intCast(win.width);
+    const ww = window_outer_width(win);
     const max_y = win.y + (CHROME_TITLE_H - CHROME_MAX_SZ) / 2;
     return .{
         .x = win.x + ww - CHROME_CLOSE_PAD - CHROME_CLOSE_SZ - CHROME_BTN_GAP - CHROME_MAX_PAD - CHROME_MAX_SZ,
@@ -1466,7 +1504,7 @@ fn window_max_rect(win: window_slot_t) c.gfx_rect_t {
 }
 
 fn window_close_hit_rect(win: window_slot_t) c.gfx_rect_t {
-    const ww: i32 = @intCast(win.width);
+    const ww = window_outer_width(win);
     // Starts at the left edge of the inter-button gap so the zone never
     // overlaps the visual maximize button, regardless of padding constants.
     const hit_x = win.x + ww - CHROME_CLOSE_PAD - CHROME_CLOSE_SZ - CHROME_BTN_GAP;
@@ -1479,7 +1517,7 @@ fn window_close_hit_rect(win: window_slot_t) c.gfx_rect_t {
 }
 
 fn window_max_hit_rect(win: window_slot_t) c.gfx_rect_t {
-    const ww: i32 = @intCast(win.width);
+    const ww = window_outer_width(win);
     const close_x = win.x + ww - CHROME_CLOSE_PAD - CHROME_CLOSE_SZ - CHROME_BTN_GAP;
     return .{
         .x = close_x - CHROME_MAX_HIT_W,
@@ -1490,7 +1528,7 @@ fn window_max_hit_rect(win: window_slot_t) c.gfx_rect_t {
 }
 
 fn window_title_rect(win: window_slot_t) c.gfx_rect_t {
-    const ww: i32 = @intCast(win.width);
+    const ww = window_outer_width(win);
     const close_x = ww - CHROME_CLOSE_PAD - CHROME_CLOSE_SZ - CHROME_BTN_GAP;
     const title_w = close_x - CHROME_MAX_HIT_W - CHROME_BORDER;
     return .{
@@ -1502,8 +1540,8 @@ fn window_title_rect(win: window_slot_t) c.gfx_rect_t {
 }
 
 fn window_resize_rect(win: window_slot_t) c.gfx_rect_t {
-    const ww: i32 = @intCast(win.width);
-    const wh: i32 = @intCast(win.height);
+    const ww = window_outer_width(win);
+    const wh = window_outer_height(win);
     return .{
         .x = win.x + ww - CHROME_RESIZE_HANDLE_SZ,
         .y = win.y + wh - CHROME_RESIZE_HANDLE_SZ,
@@ -1524,15 +1562,11 @@ fn window_content_rect(win: window_slot_t) c.gfx_rect_t {
     if (window_has_no_chrome(win)) {
         return .{ .x = win.x, .y = win.y, .w = @intCast(win.width), .h = @intCast(win.height) };
     }
-    const ww: i32 = @intCast(win.width);
-    const wh: i32 = @intCast(win.height);
-    const cw = ww - (CHROME_BORDER * 2);
-    const ch = wh - CHROME_TITLE_H - CHROME_BORDER;
     return .{
         .x = win.x + CHROME_BORDER,
         .y = win.y + CHROME_TITLE_H,
-        .w = if (cw > 0) cw else 0,
-        .h = if (ch > 0) ch else 0,
+        .w = @intCast(win.width),
+        .h = @intCast(win.height),
     };
 }
 
@@ -1551,11 +1585,12 @@ fn draw_window_chrome(win: window_slot_t, clip: c.gfx_rect_t, focused: bool) voi
     const max_bg: u32 = 0xFF3E7D46;
     const max_fg: u32 = 0xFFFFFFFF;
 
-    fill_rect(win.x, win.y, @intCast(win.width), CHROME_BORDER, border_color);
-    fill_rect(win.x, win.y, CHROME_BORDER, @intCast(win.height), border_color);
-    fill_rect(win.x + @as(i32, @intCast(win.width)) - CHROME_BORDER, win.y, CHROME_BORDER, @intCast(win.height), border_color);
-    fill_rect(win.x, win.y + @as(i32, @intCast(win.height)) - CHROME_BORDER, @intCast(win.width), CHROME_BORDER, border_color);
-    const ww: i32 = @intCast(win.width);
+    const ww = window_outer_width(win);
+    const wh = window_outer_height(win);
+    fill_rect(win.x, win.y, ww, CHROME_BORDER, border_color);
+    fill_rect(win.x, win.y, CHROME_BORDER, wh, border_color);
+    fill_rect(win.x + ww - CHROME_BORDER, win.y, CHROME_BORDER, wh, border_color);
+    fill_rect(win.x, win.y + wh - CHROME_BORDER, ww, CHROME_BORDER, border_color);
     fill_rect(win.x + CHROME_BORDER, win.y + CHROME_BORDER, ww - (CHROME_BORDER * 2), CHROME_TITLE_H - CHROME_BORDER, title_color);
 
     const cr = window_close_rect(win);
@@ -1610,7 +1645,9 @@ fn try_toggle_maximize(window_idx: usize) bool {
         g_windows[window_idx].restore_w = g_windows[window_idx].width;
         g_windows[window_idx].restore_h = g_windows[window_idx].height;
         g_windows[window_idx].is_maximized = true;
-        resize_window_and_notify(window_idx, 0, 0, fb_w, fb_h);
+        resize_window_and_notify(window_idx, 0, 0,
+            @intCast(content_width_for_outer_limit(@intCast(fb_w), window_has_no_chrome(g_windows[window_idx]))),
+            @intCast(content_height_for_outer_limit(@intCast(fb_h), window_has_no_chrome(g_windows[window_idx]))));
         return true;
     }
 
@@ -1619,11 +1656,16 @@ fn try_toggle_maximize(window_idx: usize) bool {
     if (restore_w < GFX_WINDOW_MIN_DIM or restore_h < GFX_WINDOW_MIN_DIM) return false;
     if (restore_w > GFX_WINDOW_MAX_DIM) restore_w = GFX_WINDOW_MAX_DIM;
     if (restore_h > GFX_WINDOW_MAX_DIM) restore_h = GFX_WINDOW_MAX_DIM;
-    if (restore_w > fb_w) restore_w = fb_w;
-    if (restore_h > fb_h) restore_h = fb_h;
+    const no_chrome = window_has_no_chrome(g_windows[window_idx]);
+    const restore_max_w: u32 = @intCast(content_width_for_outer_limit(@intCast(fb_w), no_chrome));
+    const restore_max_h: u32 = @intCast(content_height_for_outer_limit(@intCast(fb_h), no_chrome));
+    if (restore_w > restore_max_w) restore_w = restore_max_w;
+    if (restore_h > restore_max_h) restore_h = restore_max_h;
 
-    const max_x: i32 = if (fb_w > restore_w) @as(i32, @intCast(fb_w - restore_w)) else 0;
-    const max_y: i32 = if (fb_h > restore_h) @as(i32, @intCast(fb_h - restore_h)) else 0;
+    const restore_outer_w = window_outer_width_for(restore_w, no_chrome);
+    const restore_outer_h = window_outer_height_for(restore_h, no_chrome);
+    const max_x: i32 = if (@as(i32, @intCast(fb_w)) > restore_outer_w) @as(i32, @intCast(fb_w)) - restore_outer_w else 0;
+    const max_y: i32 = if (@as(i32, @intCast(fb_h)) > restore_outer_h) @as(i32, @intCast(fb_h)) - restore_outer_h else 0;
     const restore_x = clamp(g_windows[window_idx].restore_x, 0, max_x);
     const restore_y = clamp(g_windows[window_idx].restore_y, 0, max_y);
     g_windows[window_idx].is_maximized = false;
@@ -2534,6 +2576,14 @@ fn handle_set_window_flags(msg: *const c.nd_ipc_message_t) void {
     }
     const old_no_content = window_has_no_content(g_windows[slot_idx]);
     g_windows[slot_idx].flags = flags;
+    if (g_windows[slot_idx].is_maximized and g_fb_info_valid) {
+        g_windows[slot_idx].x = 0;
+        g_windows[slot_idx].y = 0;
+        g_windows[slot_idx].width = @intCast(content_width_for_outer_limit(@intCast(g_fb_info.framebuffer_width), window_has_no_chrome(g_windows[slot_idx])));
+        g_windows[slot_idx].height = @intCast(content_height_for_outer_limit(@intCast(g_fb_info.framebuffer_height), window_has_no_chrome(g_windows[slot_idx])));
+    } else {
+        clamp_window_to_framebuffer(slot_idx);
+    }
     if (window_is_topmost(g_windows[slot_idx])) {
         g_windows[slot_idx].z = GFX_WINDOW_Z_SYSTEM;
     } else if (g_windows[slot_idx].z == GFX_WINDOW_Z_SYSTEM) {

@@ -7,8 +7,6 @@
 
 const wasmos = @import("wasmos.zig");
 const libui = @import("libui.zig");
-const strconv = wasmos.strconv;
-
 // ---------------------------------------------------------------------------
 // Calculator logic
 // ---------------------------------------------------------------------------
@@ -23,11 +21,14 @@ const Action = enum {
 };
 
 const Calc = struct {
+    const scale: i64 = 1_000_000;
+    const frac_digits: usize = 6;
+
     // Current display string (null-terminated)
     display: [24]u8 = undefined,
     display_len: u8 = 0,
     // Accumulated left-hand value and pending operator
-    lhs: f64 = 0,
+    lhs: i64 = 0,
     op: u8 = 0,   // '+', '-', '*', '/', 0
     // True when the next digit should start a fresh input rather than appending
     fresh: bool = true,
@@ -54,24 +55,106 @@ const Calc = struct {
         return false;
     }
 
-    // inline: prevents WASM function types with f64 from appearing in the type
-    // section — WARP's JIT cannot compile modules that have f64 in function types.
-    inline fn currentValue(self: *const Calc) f64 {
-        return strconv.parseF64(self.display[0..self.display_len]);
+    inline fn absI64(v: i64) i64 {
+        return if (v < 0) -v else v;
     }
 
-    inline fn setDisplay(self: *Calc, v: f64) void {
-        const s = strconv.f64Buf(v, &self.display);
-        self.display_len = @intCast(s.len);
+    inline fn currentValue(self: *const Calc) i64 {
+        var neg = false;
+        var i: usize = 0;
+        if (i < self.display_len and self.display[i] == '-') {
+            neg = true;
+            i += 1;
+        }
+
+        var int_part: i64 = 0;
+        while (i < self.display_len and self.display[i] >= '0' and self.display[i] <= '9') : (i += 1) {
+            int_part = int_part * 10 + @as(i64, self.display[i] - '0');
+        }
+
+        var frac_part: i64 = 0;
+        if (i < self.display_len and self.display[i] == '.') {
+            i += 1;
+            var place = scale / 10;
+            while (i < self.display_len and self.display[i] >= '0' and self.display[i] <= '9' and place > 0) : (i += 1) {
+                frac_part += @as(i64, self.display[i] - '0') * place;
+                place = @divTrunc(place, 10);
+            }
+        }
+
+        const result = int_part * scale + frac_part;
+        return if (neg) -result else result;
+    }
+
+    inline fn writeUInt(buf: []u8, value: i64) usize {
+        if (value == 0) {
+            if (buf.len > 0) buf[0] = '0';
+            return 1;
+        }
+        var tmp: [24]u8 = undefined;
+        var n: usize = 0;
+        var cur = value;
+        while (cur > 0 and n < tmp.len) {
+            tmp[n] = '0' + @as(u8, @intCast(@rem(cur, 10)));
+            n += 1;
+            cur = @divTrunc(cur, 10);
+        }
+        var out: usize = 0;
+        while (out < n and out < buf.len) : (out += 1) {
+            buf[out] = tmp[n - 1 - out];
+        }
+        return out;
+    }
+
+    inline fn setDisplay(self: *Calc, v: i64) void {
+        var pos: usize = 0;
+        var mag = v;
+        if (v < 0) {
+            self.display[pos] = '-';
+            pos += 1;
+            mag = -v;
+        }
+
+        pos += writeUInt(self.display[pos..], @divTrunc(mag, scale));
+        const frac = @rem(mag, scale);
+
+        if (frac != 0 and pos < self.display.len) {
+            self.display[pos] = '.';
+            pos += 1;
+
+            var digits: [frac_digits]u8 = undefined;
+            var rem = frac;
+            var place = scale / 10;
+            var idx: usize = 0;
+            while (idx < frac_digits) : (idx += 1) {
+                const digit = if (place > 0) @divTrunc(rem, place) else 0;
+                digits[idx] = '0' + @as(u8, @intCast(digit));
+                if (place > 0) {
+                    rem = @rem(rem, place);
+                    place = @divTrunc(place, 10);
+                }
+            }
+
+            var last = frac_digits;
+            while (last > 0 and digits[last - 1] == '0') {
+                last -= 1;
+            }
+            for (digits[0..last]) |digit| {
+                self.display[pos] = digit;
+                pos += 1;
+            }
+        }
+
+        self.display_len = @intCast(pos);
         self.display[self.display_len] = 0;
     }
 
-    inline fn compute(a: f64, op: u8, b: f64, err: *bool) f64 {
+    inline fn compute(a: i64, op: u8, b: i64, err: *bool) i64 {
         return switch (op) {
             '+' => a + b,
             '-' => a - b,
-            '*' => a * b,
-            '/' => if (b == 0.0) blk: { err.* = true; break :blk 0.0; } else a / b,
+            '*' => @divTrunc(a * b, scale),
+            '/' => if (b == 0) blk: { err.* = true; break :blk 0; } else @divTrunc(a * scale, b),
             else => b,
         };
     }
@@ -237,6 +320,16 @@ var g_calc: Calc = undefined;
 var g_display_id: i32 = -1;
 var g_btn_ids: [20]i32 = [_]i32{-1} ** 20;
 
+fn startupSelfTest() bool {
+    var probe: Calc = undefined;
+    probe.init();
+    probe.handle(.digit_8);
+    probe.handle(.op_mul);
+    probe.handle(.digit_2);
+    probe.handle(.equals);
+    return probe.display_len == 2 and probe.display[0] == '1' and probe.display[1] == '6';
+}
+
 // ---------------------------------------------------------------------------
 // Button callback (C calling convention, called by libui event dispatch)
 // ---------------------------------------------------------------------------
@@ -269,6 +362,11 @@ extern fn libui_zig_mark_dirty(ctx: *anyopaque) callconv(.c) void;
 pub fn main() u8 {
     const proc_ep = wasmos.startup.arg(0);
     _ = wasmos.stdlib.println("[calculator] start", .{}) catch {};
+
+    if (!startupSelfTest()) {
+        _ = wasmos.stdlib.println("[calculator] selftest failed", .{}) catch {};
+        return 1;
+    }
 
     g_calc.init();
 

@@ -146,7 +146,7 @@ GFX_EVENT_NONE          = 0
 GFX_EVENT_FOCUS_GAINED  = 1
 GFX_EVENT_FOCUS_LOST    = 2
 GFX_EVENT_KEY           = 3   // arg2=translated key (ASCII/ctrl), arg3: bit0=keyup, bit1=extended
-GFX_EVENT_POINTER       = 4   // arg2=x/y packed as u16 low16=x high16=y, arg3=button mask
+GFX_EVENT_POINTER       = 4   // arg2=window_id, arg3=packed local x/y/buttons
 GFX_EVENT_CLOSE_REQUEST = 5   // arg2=window_id
 GFX_EVENT_RESIZE        = 6   // arg2=window_id, arg3=width/height packed u16 low16=w high16=h
 ```

@@ -111,7 +111,9 @@ enum {
     /* arg2=translated key code (ASCII for printable/control keys), arg3=flags:
      * bit0=keyup(1)/keydown(0), bit1=extended scancode. */
     GFX_EVENT_KEY = 3,
-    /* arg2 packs content-local x/y as u16: low16=x high16=y, arg3=button mask */
+    /* arg2=window_id, arg3=gfx_pointer_event_pack(x, y, buttons)
+     * where x/y are content-local coordinates and buttons is the low 8-bit
+     * button mask. */
     GFX_EVENT_POINTER = 4,
     /* arg2=window_id, arg3 reserved */
     GFX_EVENT_CLOSE_REQUEST = 5,
@@ -139,5 +141,15 @@ gfx_ipc_header_valid(uint32_t magic, uint32_t ver_opcode)
     uint16_t version = (uint16_t)(ver_opcode >> 16);
     return magic == GFX_IPC_ABI_MAGIC && version == GFX_IPC_ABI_VERSION;
 }
+
+static inline uint32_t
+gfx_pointer_event_pack(uint32_t x, uint32_t y, uint32_t buttons)
+{
+    return (x & 0xFFFu) | ((y & 0xFFFu) << 12) | ((buttons & 0xFFu) << 24);
+}
+
+static inline uint32_t gfx_pointer_event_x(uint32_t packed) { return packed & 0xFFFu; }
+static inline uint32_t gfx_pointer_event_y(uint32_t packed) { return (packed >> 12) & 0xFFFu; }
+static inline uint32_t gfx_pointer_event_buttons(uint32_t packed) { return (packed >> 24) & 0xFFu; }
 
 #endif

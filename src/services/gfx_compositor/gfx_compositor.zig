@@ -903,6 +903,10 @@ fn pack_u16_pair(a: u32, b: u32) u32 {
     return @as(u32, a16) | (@as(u32, b16) << 16);
 }
 
+fn pack_pointer_event(x: u32, y: u32, buttons: u32) u32 {
+    return (x & 0xFFF) | ((y & 0xFFF) << 12) | ((buttons & 0xFF) << 24);
+}
+
 fn clamp(v: i32, lo: i32, hi: i32) i32 {
     if (v < lo) return lo;
     if (v > hi) return hi;
@@ -1145,25 +1149,39 @@ fn handle_mouse_press_transition(left_down_now: bool, left_down_prev: bool) void
 }
 
 fn maybe_emit_pointer_event(dx: i32, dy: i32, buttons: u32, prev_buttons: u32) void {
-    if (g_focused_window_id == 0) return;
-    if (window_find_by_id(g_focused_window_id)) |focused_idx| {
-        const focused = g_windows[focused_idx];
-        const cr = window_content_rect(focused);
-        if (cr.w <= 0 or cr.h <= 0) return;
-        const in_content = point_in_rect(g_pointer_x, g_pointer_y, cr);
-        if (!in_content) {
-            // Outside content: only deliver button-up transitions so the app can
-            // reset its pressed state; suppress pure movement and button-down events.
-            const any_button_released = (prev_buttons & ~buttons) != 0;
-            if (!any_button_released) return;
+    var target_idx_opt: ?usize = null;
+    if (window_topmost_at(g_pointer_x, g_pointer_y)) |idx| {
+        const win = g_windows[idx];
+        const cr = window_content_rect(win);
+        if (cr.w > 0 and cr.h > 0 and point_in_rect(g_pointer_x, g_pointer_y, cr)) {
+            target_idx_opt = idx;
         }
+    }
+
+    if (target_idx_opt == null) {
+        // Outside content: only deliver button-up transitions so the app can
+        // reset pressed state; suppress pure movement and button-down events.
+        const any_button_released = (prev_buttons & ~buttons) != 0;
+        if (!any_button_released) return;
+        if (g_focused_window_id != 0) {
+            target_idx_opt = window_find_by_id(g_focused_window_id);
+        }
+    }
+
+    if (target_idx_opt) |target_idx| {
+        const target = g_windows[target_idx];
+        const cr = window_content_rect(target);
+        if (cr.w <= 0 or cr.h <= 0) return;
         if (dx == 0 and dy == 0 and buttons == prev_buttons) return;
         const rel_x = clamp(g_pointer_x - cr.x, 0, cr.w - 1);
         const rel_y = clamp(g_pointer_y - cr.y, 0, cr.h - 1);
         if (GFX_TRACE and (buttons & 0x1) != 0 and (prev_buttons & 0x1) == 0) {
             logMsg("[dbg-gfx] pointer btn-push queued\n");
         }
-        event_push(focused.owner_endpoint, c.GFX_EVENT_POINTER, pack_u16_pair(@intCast(rel_x), @intCast(rel_y)), buttons, 0);
+        event_push(target.owner_endpoint, c.GFX_EVENT_POINTER,
+                   target.window_id,
+                   pack_pointer_event(@intCast(rel_x), @intCast(rel_y), buttons),
+                   0);
     }
 }
 

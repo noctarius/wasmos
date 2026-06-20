@@ -225,6 +225,9 @@ static inline int32_t ui_u16_lo(int32_t packed) { return (packed & 0xFFFF); }
 static inline int32_t ui_u16_hi(int32_t packed) { return ((packed >> 16) & 0xFFFF); }
 static inline int32_t ui_i16_lo(int32_t packed) { return (int16_t)(packed & 0xFFFF); }
 static inline int32_t ui_i16_hi(int32_t packed) { return (int16_t)((packed >> 16) & 0xFFFF); }
+static inline int32_t ui_ptr_evt_x(int32_t packed) { return (packed & 0xFFF); }
+static inline int32_t ui_ptr_evt_y(int32_t packed) { return ((packed >> 12) & 0xFFF); }
+static inline uint32_t ui_ptr_evt_buttons(int32_t packed) { return (uint32_t)((packed >> 24) & 0xFF); }
 
 static inline void ui_mark_dirty(ui_context_t *ctx) { if (ctx) ctx->dirty = 1; }
 
@@ -1293,7 +1296,8 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
             ui_component_t *route_target = popup_focused ? popup_focused : popup_target;
             ui_menu_item_data_t *mpd = (ui_menu_item_data_t *)route_target->component_data;
             if (msg->arg1 == GFX_EVENT_POINTER) {
-                ctx->pointer_buttons = (uint32_t)msg->arg3;
+                if ((int32_t)msg->arg2 != mpd->popup_win_id) return UI_MSG_CONSUMED;
+                ctx->pointer_buttons = ui_ptr_evt_buttons(msg->arg3);
                 ui_menu_item_handle_popup_event(ctx, route_target, msg);
                 return UI_MSG_CONSUMED;
             }
@@ -1322,11 +1326,12 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
     }
 
     if (msg->arg1 == GFX_EVENT_POINTER) {
-        const int32_t new_x = ui_u16_lo(msg->arg2);
-        const int32_t new_y = ui_u16_hi(msg->arg2);
+        if ((int32_t)msg->arg2 != ctx->window_id) return UI_MSG_CONSUMED;
+        const int32_t new_x = ui_ptr_evt_x(msg->arg3);
+        const int32_t new_y = ui_ptr_evt_y(msg->arg3);
         const int32_t dx = new_x - ctx->pointer_x;
         const int32_t dy = new_y - ctx->pointer_y;
-        const uint32_t buttons = (uint32_t)msg->arg3;
+        const uint32_t buttons = ui_ptr_evt_buttons(msg->arg3);
 
         ctx->pointer_x = new_x;
         ctx->pointer_y = new_y;

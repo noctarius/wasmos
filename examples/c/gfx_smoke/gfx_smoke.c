@@ -487,11 +487,12 @@ pump_libui_demo(void)
                         GFX_IPC_POLL_EVENT, 0, 0, 0, 0, &ev_raw) == 0) {
 #if GFX_SMOKE_TRACE
         if (ev_raw.arg1 == GFX_EVENT_POINTER) {
-            printf("[gfx-t] libui ptr x=%d y=%d btn=%d\n",
-                   (int)(ev_raw.arg2 & 0xFFFF),
-                   (int)((ev_raw.arg2 >> 16) & 0xFFFF),
-                   (int)(ev_raw.arg3 & 1));
-            if ((ev_raw.arg3 & 1) != 0) {
+            printf("[gfx-t] libui ptr win=%d x=%d y=%d btn=%d\n",
+                   ev_raw.arg2,
+                   (int)(ev_raw.arg3 & 0xFFF),
+                   (int)((ev_raw.arg3 >> 12) & 0xFFF),
+                   (int)((ev_raw.arg3 >> 24) & 1));
+            if (((ev_raw.arg3 >> 24) & 1) != 0) {
                 puts("[dbg-libui] pointer btn-down");
             }
         }

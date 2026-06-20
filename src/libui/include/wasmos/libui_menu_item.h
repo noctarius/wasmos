@@ -386,9 +386,9 @@ ui_menu_item_handle_popup_event(ui_context_t *ctx, ui_component_t *mi,
     ui_menu_item_data_t *d = (ui_menu_item_data_t *)mi->component_data;
     if (!d || d->popup_win_id == 0) return;
 
-    const int32_t  px        = ui_u16_lo(msg->arg2);
-    const int32_t  py        = ui_u16_hi(msg->arg2);
-    const uint32_t buttons   = (uint32_t)msg->arg3;
+    const int32_t  px        = ui_ptr_evt_x(msg->arg3);
+    const int32_t  py        = ui_ptr_evt_y(msg->arg3);
+    const uint32_t buttons   = ui_ptr_evt_buttons(msg->arg3);
     (void)px;
 
     /* Flush stale button-down events queued before popup opened. */

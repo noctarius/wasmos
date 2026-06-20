@@ -252,9 +252,11 @@ export class Context {
       }
       handled++;
       if (eventType == GFX_EVENT_POINTER) {
-        this.pointerXValue = reply.arg2 & 0xFFFF;
-        this.pointerYValue = (reply.arg2 >>> 16) & 0xFFFF;
-        this.pointerButtonsValue = reply.arg3 as u32;
+        if (reply.arg2 == this.windowId) {
+          this.pointerXValue = reply.arg3 & 0xFFF;
+          this.pointerYValue = (reply.arg3 >>> 12) & 0xFFF;
+          this.pointerButtonsValue = ((reply.arg3 >>> 24) & 0xFF) as u32;
+        }
       } else if (eventType == GFX_EVENT_CLOSE_REQUEST && reply.arg2 == this.windowId) {
         this.closeRequestedFlag = true;
       } else if (eventType == GFX_EVENT_RESIZE && reply.arg2 == this.windowId) {

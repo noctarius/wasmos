@@ -13,6 +13,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
@@ -747,35 +748,19 @@ ui_component_text_len(const ui_component_t *c)
     return td->text_len;
 }
 
-static inline int32_t
-ui_realloc_buffer(ui_context_t *ctx, int32_t new_w, int32_t new_h)
+__attribute__((noinline)) static void
+ui_apply_realloc_state(ui_context_t *ctx,
+                       int32_t new_buffer_id,
+                       int32_t new_shmem_id,
+                       int32_t new_stride,
+                       int32_t new_w,
+                       int32_t new_h,
+                       int32_t mapped_ptr,
+                       int32_t first_alloc,
+                       int32_t prev_ptr_x,
+                       int32_t prev_ptr_y)
 {
-    int32_t status = 0, new_buffer_id = 0, new_shmem_id = 0, new_stride = 0;
-    if (!ctx || new_w <= 0 || new_h <= 0) return -1;
-    if (ctx->width == new_w && ctx->height == new_h && ctx->mapped_base) return 0;
-    UI_DBG("[dbg-ui] realloc begin\n");
-    const int32_t prev_ptr_x = ctx->pointer_x;
-    const int32_t prev_ptr_y = ctx->pointer_y;
-    const int32_t first_alloc = (ctx->mapped_base == NULL);
-    if (ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_ALLOC_SHARED_BUFFER,
-                    ctx->window_id, new_w, new_h, 0,
-                    &status, &new_buffer_id, &new_shmem_id, &new_stride) != 0 || status != GFX_STATUS_OK) {
-        return -1;
-    }
-    UI_DBG("[dbg-ui] realloc alloc ok\n");
-    const int32_t bytes = (new_stride * new_h + (UI_PAGE_SIZE - 1)) & ~(UI_PAGE_SIZE - 1);
-    const int32_t mapped_ptr = wasmos_shmem_map_auto(new_shmem_id, bytes);
-    if (mapped_ptr < 0) {
-        (void)ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_RELEASE_SHARED_BUFFER,
-                          new_buffer_id, 0, 0, 0, &status, 0, 0, 0);
-        return -1;
-    }
-    UI_DBG("[dbg-ui] realloc map ok\n");
-    if (ctx->shmem_id > 0) (void)wasmos_shmem_unmap(ctx->shmem_id);
-    if (ctx->buffer_id > 0) {
-        (void)ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_RELEASE_SHARED_BUFFER,
-                          ctx->buffer_id, 0, 0, 0, &status, 0, 0, 0);
-    }
+    if (!ctx) return;
     ctx->buffer_id = new_buffer_id;
     ctx->shmem_id = new_shmem_id;
     ctx->stride_bytes = new_stride;
@@ -784,7 +769,37 @@ ui_realloc_buffer(ui_context_t *ctx, int32_t new_w, int32_t new_h)
     ctx->mapped_base = (uint8_t *)(uintptr_t)(uint32_t)mapped_ptr;
     ctx->pointer_x = first_alloc ? ctx->width / 2 : prev_ptr_x;
     ctx->pointer_y = first_alloc ? ctx->height / 2 : prev_ptr_y;
-    UI_DBG("[dbg-ui] realloc done\n");
+}
+
+static inline int32_t
+ui_realloc_buffer(ui_context_t *ctx, int32_t new_w, int32_t new_h)
+{
+    int32_t status = 0, new_buffer_id = 0, new_shmem_id = 0, new_stride = 0;
+    if (!ctx || new_w <= 0 || new_h <= 0) return -1;
+    if (ctx->width == new_w && ctx->height == new_h && ctx->mapped_base) return 0;
+    const int32_t prev_ptr_x = ctx->pointer_x;
+    const int32_t prev_ptr_y = ctx->pointer_y;
+    const int32_t first_alloc = (ctx->mapped_base == NULL);
+    if (ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_ALLOC_SHARED_BUFFER,
+                    ctx->window_id, new_w, new_h, 0,
+                    &status, &new_buffer_id, &new_shmem_id, &new_stride) != 0 || status != GFX_STATUS_OK) {
+        return -1;
+    }
+    const int32_t bytes = (new_stride * new_h + (UI_PAGE_SIZE - 1)) & ~(UI_PAGE_SIZE - 1);
+    const int32_t mapped_ptr = wasmos_shmem_map_auto(new_shmem_id, bytes);
+    if (mapped_ptr < 0) {
+        (void)ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_RELEASE_SHARED_BUFFER,
+                          new_buffer_id, 0, 0, 0, &status, 0, 0, 0);
+        return -1;
+    }
+    if (ctx->shmem_id > 0) (void)wasmos_shmem_unmap(ctx->shmem_id);
+    if (ctx->buffer_id > 0) {
+        (void)ui_send_gfx(ctx->gfx_endpoint, ctx->reply_endpoint, ctx->req_id++, GFX_IPC_RELEASE_SHARED_BUFFER,
+                          ctx->buffer_id, 0, 0, 0, &status, 0, 0, 0);
+    }
+    ui_apply_realloc_state(ctx, new_buffer_id, new_shmem_id, new_stride,
+                           new_w, new_h, mapped_ptr,
+                           first_alloc, prev_ptr_x, prev_ptr_y);
     return 0;
 }
 
@@ -833,9 +848,7 @@ ui_init(ui_context_t *ctx, int32_t proc_endpoint, int32_t reply_endpoint, int32_
         (void)wasmos_sched_yield();
     }
     if (ctx->gfx_endpoint < 0) goto fail;
-    UI_DBG("[dbg-ui] ui_init gfx ok\n");
     if (ui_init_font(ctx) != 0) goto fail;
-    UI_DBG("[dbg-ui] ui_init font ok\n");
 
     if (ui_send_gfx(ctx->gfx_endpoint, reply_endpoint, ctx->req_id++, GFX_IPC_CREATE_WINDOW,
                     width, height, (int32_t)GFX_IPC_ABI_MAGIC,
@@ -844,15 +857,12 @@ ui_init(ui_context_t *ctx, int32_t proc_endpoint, int32_t reply_endpoint, int32_
         goto fail;
     }
     ctx->window_id = a1;
-    UI_DBG("[dbg-ui] ui_init window ok\n");
     if (ui_realloc_buffer(ctx, width, height) != 0) goto fail;
-    UI_DBG("[dbg-ui] ui_init buffer ok\n");
-
     ui_init_component_ops();
-
     ctx->root_id = ui_component_create_panel(ctx);
     if (ctx->root_id < 0) goto fail;
     ui_component_t *root = ui_component_by_id(ctx, ctx->root_id);
+    if (!root) goto fail;
     root->bounds.x = 0;
     root->bounds.y = 0;
     root->bounds.w = width;
@@ -910,9 +920,7 @@ ui_menu_bar_init(ui_context_t *ctx, int32_t proc_endpoint, int32_t reply_endpoin
         (void)wasmos_sched_yield();
     }
     if (ctx->gfx_endpoint < 0) goto mb_fail;
-    UI_DBG("[dbg-ui] menu gfx ok\n");
     if (ui_init_font(ctx) != 0) goto mb_fail;
-    UI_DBG("[dbg-ui] menu font ok\n");
 
     if (ui_send_gfx(ctx->gfx_endpoint, reply_endpoint, ctx->req_id++, GFX_IPC_GET_DISPLAY_INFO,
                     0, 0, 0, 0, &status, &a1, &a2, &a3) != 0 || status != GFX_STATUS_OK || a1 <= 0) goto mb_fail;
@@ -925,7 +933,6 @@ ui_menu_bar_init(ui_context_t *ctx, int32_t proc_endpoint, int32_t reply_endpoin
                         (int32_t)gfx_ipc_header_pack(GFX_IPC_ABI_VERSION, GFX_IPC_CREATE_WINDOW),
                         &status, &a1, &a2, &a3) != 0 || status != GFX_STATUS_OK) goto mb_fail;
         ctx->window_id = a1;
-        UI_DBG("[dbg-ui] menu window ok\n");
 
         if (ui_send_gfx(ctx->gfx_endpoint, reply_endpoint, ctx->req_id++, GFX_IPC_SET_WINDOW_FLAGS,
                         ctx->window_id, (int32_t)(GFX_WINDOW_FLAG_TOPMOST | GFX_WINDOW_FLAG_NO_CHROME | GFX_WINDOW_FLAG_NO_TASK_LIST), 0, 0,
@@ -936,7 +943,6 @@ ui_menu_bar_init(ui_context_t *ctx, int32_t proc_endpoint, int32_t reply_endpoin
                         &status, 0, 0, 0) != 0 || status != GFX_STATUS_OK) goto mb_fail;
 
         if (ui_realloc_buffer(ctx, screen_w, bar_h) != 0) goto mb_fail;
-        UI_DBG("[dbg-ui] menu buffer ok\n");
 
         ui_init_component_ops();
         ctx->root_id = ui_component_create_menu_bar(ctx);

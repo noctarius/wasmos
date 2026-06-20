@@ -182,6 +182,9 @@ set(WASM_CAT_APP ${BUILD_DIR}/cat.wap)
 set(WASM_SYSINFO_SRC ${CMAKE_SOURCE_DIR}/src/utils/sysinfo/sysinfo.zig)
 set(WASM_SYSINFO_WASM ${BUILD_DIR}/sysinfo.wasm)
 set(WASM_SYSINFO_APP ${BUILD_DIR}/sysinfo.wap)
+set(WASM_EXPLORER_SRC ${CMAKE_SOURCE_DIR}/src/utils/explorer/explorer.c)
+set(WASM_EXPLORER_WASM ${BUILD_DIR}/explorer.wasm)
+set(WASM_EXPLORER_APP ${BUILD_DIR}/explorer.wap)
 
 if (NOT DEFINED AS_ENABLE_INITIALIZED)
   set(AS_ENABLE ON CACHE BOOL "Enable AssemblyScript example builds" FORCE)
@@ -1182,6 +1185,11 @@ if (TARGET sysinfo_util)
     COMMAND ${CMAKE_COMMAND} -E copy ${WASM_SYSINFO_APP} ${BUILD_DIR}/esp/system/utils/sysinfo.wap
   )
 endif ()
+if (TARGET explorer_util)
+  set(EXPLORER_UTIL_COPY_CMD
+    COMMAND ${CMAKE_COMMAND} -E copy ${WASM_EXPLORER_APP} ${BUILD_DIR}/esp/system/utils/explorer.wap
+  )
+endif ()
 set(HELLO_C_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_HELLO_C_APP} ${BUILD_DIR}/esp/apps/hello_c.wap
 )
@@ -1254,6 +1262,7 @@ set(INITFS_COPY_CMD
   ${PS_UTIL_COPY_CMD}
   ${CAT_UTIL_COPY_CMD}
   ${SYSINFO_UTIL_COPY_CMD}
+  ${EXPLORER_UTIL_COPY_CMD}
   COMMAND ${CMAKE_COMMAND} -E copy
       ${CMAKE_SOURCE_DIR}/scripts/system/sysinit.rc
       ${BUILD_DIR}/esp/system/sysinit.rc

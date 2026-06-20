@@ -177,6 +177,7 @@ typedef struct {
     int32_t  popup_hovered;
     uint32_t popup_prev_buttons;
     int32_t  popup_flushing;  /* 1 while discarding pre-open stale button-down events */
+    int32_t  popup_has_focus; /* 1 when compositor focus is currently on this popup window */
 } ui_menu_item_data_t;
 
 typedef struct {
@@ -1258,33 +1259,42 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
         return UI_MSG_CONSUMED;
     }
 
-    /* Route events to any open popup window before the normal bar handlers.
-     * For POINTER events we must route to the DEEPEST open popup in the
-     * hierarchy — events arrive with coordinates relative to whichever popup
-     * currently has focus, which is always the most-recently-opened one. */
-    if (msg->arg1 == GFX_EVENT_POINTER || msg->arg1 == GFX_EVENT_FOCUS_LOST) {
-        /* Find the deepest open popup by preferring descendants over ancestors. */
+    /* Route events to the popup window that currently owns focus.
+     * Pointer coordinates are relative to the focused popup, not necessarily
+     * the deepest open submenu. Hover-preview submenus can be open without
+     * taking focus, so routing by hierarchy depth misinterprets coordinates. */
+    if (msg->arg1 == GFX_EVENT_POINTER || msg->arg1 == GFX_EVENT_FOCUS_GAINED || msg->arg1 == GFX_EVENT_FOCUS_LOST) {
         ui_component_t *popup_target = NULL;
+        ui_component_t *popup_focused = NULL;
         for (int32_t i = 0; i < ctx->component_count; ++i) {
             ui_component_t *mc = &ctx->components[i];
             if (!mc->in_use || mc->type != UI_COMPONENT_MENU_ITEM) continue;
             ui_menu_item_data_t *mpd = (ui_menu_item_data_t *)mc->component_data;
             if (!mpd || mpd->popup_win_id == 0) continue;
-            if (!popup_target) { popup_target = mc; continue; }
-            /* If mc is a descendant of popup_target it is deeper — prefer it. */
-            int32_t anc = mc->parent_id;
-            while (anc > 0) {
-                if (anc == popup_target->id) { popup_target = mc; break; }
-                const ui_component_t *a = ui_component_by_id(ctx, anc);
-                if (!a) break;
-                anc = a->parent_id;
+            if (!popup_target) popup_target = mc;
+            if (mpd->popup_has_focus) popup_focused = mc;
+        }
+        if (msg->arg1 == GFX_EVENT_FOCUS_GAINED || msg->arg1 == GFX_EVENT_FOCUS_LOST) {
+            const int32_t win_id = (int32_t)msg->arg2;
+            for (int32_t i = 0; i < ctx->component_count; ++i) {
+                ui_component_t *mc = &ctx->components[i];
+                if (!mc->in_use || mc->type != UI_COMPONENT_MENU_ITEM) continue;
+                ui_menu_item_data_t *mpd = (ui_menu_item_data_t *)mc->component_data;
+                if (!mpd || mpd->popup_win_id == 0) continue;
+                if (mpd->popup_win_id == win_id) {
+                    mpd->popup_has_focus = (msg->arg1 == GFX_EVENT_FOCUS_GAINED) ? 1 : 0;
+                } else if (msg->arg1 == GFX_EVENT_FOCUS_GAINED) {
+                    mpd->popup_has_focus = 0;
+                }
             }
+            if (msg->arg1 == GFX_EVENT_FOCUS_GAINED) return UI_MSG_CONSUMED;
         }
         if (popup_target) {
-            ui_menu_item_data_t *mpd = (ui_menu_item_data_t *)popup_target->component_data;
+            ui_component_t *route_target = popup_focused ? popup_focused : popup_target;
+            ui_menu_item_data_t *mpd = (ui_menu_item_data_t *)route_target->component_data;
             if (msg->arg1 == GFX_EVENT_POINTER) {
                 ctx->pointer_buttons = (uint32_t)msg->arg3;
-                ui_menu_item_handle_popup_event(ctx, popup_target, msg);
+                ui_menu_item_handle_popup_event(ctx, route_target, msg);
                 return UI_MSG_CONSUMED;
             }
             if (msg->arg1 == GFX_EVENT_FOCUS_LOST && (int32_t)msg->arg2 == mpd->popup_win_id) {
@@ -1293,7 +1303,7 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
                  * truly leaves the whole menu hierarchy. */
                 int32_t child_popup_open = 0;
                 {
-                    int32_t cid = popup_target->first_child_id;
+                    int32_t cid = route_target->first_child_id;
                     while (cid > 0) {
                         const ui_component_t *ch = ui_component_by_id(ctx, cid);
                         if (!ch) break;
@@ -1303,7 +1313,7 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
                     }
                 }
                 if (!child_popup_open) {
-                    ui_menu_item_dismiss_popup(ctx, popup_target);
+                    ui_menu_item_dismiss_popup(ctx, route_target);
                     return UI_MSG_CONSUMED;
                 }
                 return UI_MSG_CONSUMED;

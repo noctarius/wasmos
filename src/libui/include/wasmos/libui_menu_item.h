@@ -232,6 +232,7 @@ ui_menu_item_popup_close(ui_context_t *ctx, ui_component_t *mi)
     d->popup_h            = 0;
     d->popup_hovered      = -1;
     d->popup_prev_buttons = 0;
+    d->popup_has_focus    = 0;
 
     /* Recursively close any open child sub-popups */
     int32_t cid = mi->first_child_id;
@@ -308,6 +309,7 @@ ui_menu_item_popup_open(ui_context_t *ctx, ui_component_t *mi)
     d->popup_hovered      = -1;
     d->popup_prev_buttons = 0;
     d->popup_flushing     = 1; /* discard stale button-down events from before popup opened */
+    d->popup_has_focus    = take_focus ? 1 : 0;
 
     ui_menu_item_popup_render(ctx, mi, -1);
     ui_menu_item_popup_present(ctx, d);

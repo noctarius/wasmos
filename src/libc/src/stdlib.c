@@ -30,8 +30,8 @@ static void
 heap_init(void)
 {
     if (g_heap_ready) return;
-    g_heap_cursor = (uint32_t)(uintptr_t)&__heap_base;
     g_heap_limit = (uint32_t)__builtin_wasm_memory_size(0) * 65536u;
+    g_heap_cursor = (uint32_t)(uintptr_t)&__heap_base;
     if (g_heap_cursor > g_heap_limit) g_heap_cursor = g_heap_limit;
     g_heap_head = NULL;
     g_heap_ready = 1;

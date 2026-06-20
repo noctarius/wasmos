@@ -953,9 +953,6 @@ vt_init_ttys(void)
         for (uint32_t j = 0; j < cell_count; ++j) {
             cells[j].fg = 15;
         }
-        /* Yield between TTY-grid clears so WARP ring-3 init does not hold a
-         * full startup timeslice in one uninterrupted memory-touch burst. */
-        (void)wasmos_sched_yield();
     }
     g_active_tty = 0;
     g_switch_generation = 1;

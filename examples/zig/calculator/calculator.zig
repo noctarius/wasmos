@@ -270,8 +270,6 @@ const COL_BTN_MISC = 0xFF242438; // ±, backspace
 const COL_FG       = 0xFFFFFFFF; // button text
 const WINDOW_CONTENT_W = 280;
 const WINDOW_CONTENT_H = 350;
-const WINDOW_CHROME_TITLE_H = 24;
-const WINDOW_CHROME_BOTTOM_BORDER = 1;
 
 // ---------------------------------------------------------------------------
 // Button layout (5 rows × 4 columns)
@@ -374,12 +372,9 @@ pub fn main() u8 {
 
     g_calc.init();
 
-    // Compositor CREATE_WINDOW sizes are outer bounds, not content bounds.
-    // Account for the title bar and bottom border so the full 350 px libui
-    // layout remains visible inside the window content rect.
     var ui = libui.Context.init(proc_ep, wasmos.ipc.createEndpoint() catch return 1,
                                  WINDOW_CONTENT_W,
-                                 WINDOW_CONTENT_H + WINDOW_CHROME_TITLE_H + WINDOW_CHROME_BOTTOM_BORDER) catch return 1;
+                                 WINDOW_CONTENT_H) catch return 1;
     ui.setTitle("Calculator");
 
     const root = ui.rootId();

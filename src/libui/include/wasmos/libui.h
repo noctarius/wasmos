@@ -1269,6 +1269,7 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
     if (msg->arg1 == GFX_EVENT_POINTER || msg->arg1 == GFX_EVENT_FOCUS_GAINED || msg->arg1 == GFX_EVENT_FOCUS_LOST) {
         ui_component_t *popup_target = NULL;
         ui_component_t *popup_focused = NULL;
+        ui_component_t *popup_for_window = NULL;
         for (int32_t i = 0; i < ctx->component_count; ++i) {
             ui_component_t *mc = &ctx->components[i];
             if (!mc->in_use || mc->type != UI_COMPONENT_MENU_ITEM) continue;
@@ -1276,6 +1277,9 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
             if (!mpd || mpd->popup_win_id == 0) continue;
             if (!popup_target) popup_target = mc;
             if (mpd->popup_has_focus) popup_focused = mc;
+            if (msg->arg1 == GFX_EVENT_POINTER && mpd->popup_win_id == (int32_t)msg->arg2) {
+                popup_for_window = mc;
+            }
         }
         if (msg->arg1 == GFX_EVENT_FOCUS_GAINED || msg->arg1 == GFX_EVENT_FOCUS_LOST) {
             const int32_t win_id = (int32_t)msg->arg2;
@@ -1293,10 +1297,11 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
             if (msg->arg1 == GFX_EVENT_FOCUS_GAINED) return UI_MSG_CONSUMED;
         }
         if (popup_target) {
-            ui_component_t *route_target = popup_focused ? popup_focused : popup_target;
+            ui_component_t *route_target =
+                (msg->arg1 == GFX_EVENT_POINTER && popup_for_window) ? popup_for_window :
+                (popup_focused ? popup_focused : popup_target);
             ui_menu_item_data_t *mpd = (ui_menu_item_data_t *)route_target->component_data;
             if (msg->arg1 == GFX_EVENT_POINTER) {
-                if ((int32_t)msg->arg2 != mpd->popup_win_id) return UI_MSG_CONSUMED;
                 ctx->pointer_buttons = ui_ptr_evt_buttons(msg->arg3);
                 ui_menu_item_handle_popup_event(ctx, route_target, msg);
                 return UI_MSG_CONSUMED;

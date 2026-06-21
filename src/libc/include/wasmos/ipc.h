@@ -165,13 +165,19 @@ wasmos_ipc_call_retry(int32_t destination_endpoint,
     if (rc != 0) {
         return rc;
     }
-    rc = wasmos_ipc_select_one(source_endpoint);
-    if (rc < 0) {
-        return rc;
-    }
-    wasmos_ipc_message_read_last(&reply);
-    if (reply.request_id != request_id) {
-        return -1;
+    for (;;) {
+        rc = wasmos_ipc_select_one(source_endpoint);
+        if (rc < 0) {
+            return rc;
+        }
+        wasmos_ipc_message_read_last(&reply);
+        if (reply.request_id != request_id) {
+            continue;
+        }
+        if (reply.source != destination_endpoint) {
+            continue;
+        }
+        break;
     }
     if (out_reply) {
         *out_reply = reply;

@@ -16,11 +16,32 @@
 #define EXPLORER_MAX_ENTRIES 96
 #define EXPLORER_NAME_MAX 64
 #define EXPLORER_PATH_MAX 256
+#define EXPLORER_ROOT_PADDING 10
+#define EXPLORER_ROOT_GAP 8
+#define EXPLORER_PATH_H 30
+#define EXPLORER_STATUS_H 26
+#define EXPLORER_OPEN_H 32
+#define EXPLORER_TOOL_H 28
 
 typedef struct {
     char name[EXPLORER_NAME_MAX];
     int32_t is_dir;
 } explorer_entry_t;
+
+static int32_t
+explorer_list_height(void)
+{
+    const int32_t fixed_h =
+        (EXPLORER_ROOT_PADDING * 2) +
+        EXPLORER_PATH_H +
+        EXPLORER_STATUS_H +
+        EXPLORER_OPEN_H +
+        EXPLORER_TOOL_H +
+        EXPLORER_TOOL_H +
+        (EXPLORER_ROOT_GAP * 5);
+    const int32_t remaining = EXPLORER_H - fixed_h;
+    return remaining > 80 ? remaining : 80;
+}
 
 static ui_context_t g_ctx;
 static int32_t g_path_label_id = -1;
@@ -471,32 +492,32 @@ explorer_init_ui(int32_t proc_endpoint, int32_t reply_endpoint)
         return -1;
     }
 
-    path_label->preferred_h = 30;
+    path_label->preferred_h = EXPLORER_PATH_H;
     path_label->bg_color = 0xFF233146u;
     path_label->padding_px = 6;
     path_label->fg_color = 0xFFFFFFFFu;
 
-    status_label->preferred_h = 26;
+    status_label->preferred_h = EXPLORER_STATUS_H;
     status_label->bg_color = 0xFF1F2B3Eu;
     status_label->padding_px = 6;
     status_label->fg_color = 0xFFBFD2E6u;
 
-    open_button->preferred_h = 32;
+    open_button->preferred_h = EXPLORER_OPEN_H;
     open_button->bg_color = 0xFF2B5E72u;
     open_button->fg_color = 0xFFFFFFFFu;
     open_button->clickable = 1;
 
-    up_button->preferred_h = 28;
+    up_button->preferred_h = EXPLORER_TOOL_H;
     up_button->bg_color = 0xFF31475Fu;
     up_button->fg_color = 0xFFFFFFFFu;
     up_button->clickable = 1;
 
-    refresh_button->preferred_h = 28;
+    refresh_button->preferred_h = EXPLORER_TOOL_H;
     refresh_button->bg_color = 0xFF31475Fu;
     refresh_button->fg_color = 0xFFFFFFFFu;
     refresh_button->clickable = 1;
 
-    list->preferred_h = 240;
+    list->preferred_h = explorer_list_height();
     list->bg_color = 0xFF1B2535u;
     list->border_color = 0xFF58708Du;
     list->border_px = 1;

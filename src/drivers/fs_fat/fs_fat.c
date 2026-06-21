@@ -3595,10 +3595,11 @@ fat_handle_list(void)
             continue;
         }
         const char *entry_name = 0;
-    if (g_lfn_valid && g_lfn_seen == g_lfn_total && g_lfn_buf[0]) {
-        fat_lfn_finalize();
-        entry_name = g_lfn_buf;
-    }
+        const int is_dir = (ent[11] & 0x10) != 0;
+        if (g_lfn_valid && g_lfn_seen == g_lfn_total && g_lfn_buf[0]) {
+            fat_lfn_finalize();
+            entry_name = g_lfn_buf;
+        }
         if (ent[11] & 0x08) {
             fat_lfn_reset();
             continue;
@@ -3631,6 +3632,9 @@ fat_handle_list(void)
                 console_write(".");
                 fat_write_name(ext, ext_len);
             }
+        }
+        if (is_dir) {
+            console_write("/");
         }
         console_write("\n");
         fat_lfn_reset();

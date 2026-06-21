@@ -70,7 +70,7 @@ ui_scroll_view_handle_scroll_drag(ui_context_t *ctx, ui_component_t *c, int32_t 
 {
     ui_scroll_view_data_t *d = (ui_scroll_view_data_t *)c->component_data;
     if (d && d->scroll_max > 0) {
-        d->scroll_y -= dy;
+        d->scroll_y += dy;
         if (d->scroll_y < 0) d->scroll_y = 0;
         if (d->scroll_y > d->scroll_max) d->scroll_y = d->scroll_max;
         ui_mark_dirty(ctx);

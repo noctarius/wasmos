@@ -1160,8 +1160,15 @@ ui_layout_vertical(ui_context_t *ctx, int32_t parent_id)
         c->bounds.y = y;
         c->bounds.w = w;
         c->bounds.h = h;
+        {
+            const ui_component_ops_t *child_ops = &ui_component_ops[c->type];
+            if (child_ops->layout) {
+                child_ops->layout(ctx, c);
+            } else if (c->first_child_id > 0) {
+                ui_layout_vertical(ctx, c->id);
+            }
+        }
         y += h + p->gap_px;
-        if (c->first_child_id > 0) ui_layout_vertical(ctx, c->id);
         child_id = c->next_sibling_id;
     }
 }

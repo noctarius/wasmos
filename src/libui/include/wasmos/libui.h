@@ -305,6 +305,30 @@ ui_stroke_rect_clip(uint8_t *base, int32_t bw, int32_t bh, ui_rect_t r, int32_t 
     ui_fill_rect_clip(base, bw, bh, r.x + r.w - border_px, r.y, border_px, r.h, color, clip);
 }
 
+static inline void
+ui_draw_v_scrollbar(uint8_t *base, int32_t bw, int32_t bh,
+                    int32_t x, int32_t y, int32_t w, int32_t h,
+                    int32_t scroll_y, int32_t scroll_max,
+                    uint32_t track_color, uint32_t thumb_color,
+                    uint32_t thumb_border_color, ui_rect_t clip)
+{
+    if (!base || w <= 2 || h <= 8 || scroll_max <= 0) return;
+    ui_fill_rect_clip(base, bw, bh, x, y, w, h, track_color, clip);
+
+    int32_t thumb_h = (h * h) / (h + scroll_max);
+    if (thumb_h < 12) thumb_h = 12;
+    if (thumb_h > h - 12) thumb_h = h - 12;
+    if (thumb_h < 8) thumb_h = 8;
+    if (thumb_h > h) thumb_h = h;
+
+    const int32_t travel = h - thumb_h;
+    const int32_t thumb_y = y + ((travel > 0) ? ((travel * scroll_y) / scroll_max) : 0);
+    ui_fill_rect_clip(base, bw, bh, x + 1, thumb_y, w - 2, thumb_h, thumb_color, clip);
+    ui_stroke_rect_clip(base, bw, bh,
+                        (ui_rect_t){ x + 1, thumb_y, w - 2, thumb_h },
+                        1, thumb_border_color, clip);
+}
+
 static inline uint32_t
 ui_blend_u8(uint32_t dst, uint32_t src, uint8_t alpha)
 {

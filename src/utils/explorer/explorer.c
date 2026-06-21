@@ -208,6 +208,8 @@ explorer_update_path_label(void)
 
 static int explorer_chdir_root(void);
 static int explorer_chdir_name(const char *name);
+static int explorer_fs_chdir_root(void);
+static int explorer_fs_chdir_abs(const char *path);
 
 static int
 explorer_path_is_prefix(const char *prefix, const char *path)
@@ -222,7 +224,13 @@ explorer_path_is_prefix(const char *prefix, const char *path)
 }
 
 static int
-explorer_chdir_abs(const char *path)
+explorer_fs_chdir_root(void)
+{
+    return explorer_fs_request(FS_IPC_CHDIR_REQ, 0, 0, 0, 0, NULL);
+}
+
+static int
+explorer_fs_chdir_abs(const char *path)
 {
     const char *seg = NULL;
     const char *cur = NULL;
@@ -230,7 +238,7 @@ explorer_chdir_abs(const char *path)
     size_t len = 0;
 
     if (!path || path[0] != '/') return -1;
-    if (explorer_chdir_root() != 0) return -1;
+    if (explorer_fs_chdir_root() != 0) return -1;
     if (strcmp(path, "/") == 0) return 0;
 
     cur = path + 1;
@@ -270,12 +278,12 @@ explorer_collect_entries_for_path(const char *path,
     strncpy(saved_path, g_current_path, sizeof(saved_path) - 1);
     saved_path[sizeof(saved_path) - 1] = '\0';
 
-    if (explorer_chdir_abs(path) != 0) {
-        (void)explorer_chdir_abs(saved_path);
+    if (explorer_fs_chdir_abs(path) != 0) {
+        (void)explorer_fs_chdir_abs(saved_path);
         return -1;
     }
     nread = explorer_fs_request_stream(FS_IPC_READDIR_REQ, 0, 0, 0, 0, g_listbuf, sizeof(g_listbuf));
-    (void)explorer_chdir_abs(saved_path);
+    (void)explorer_fs_chdir_abs(saved_path);
     if (nread < 0) return -1;
 
     for (int32_t i = 0; i <= (int32_t)nread && count < max_entries; ++i) {
@@ -444,7 +452,7 @@ explorer_rebuild_tree(void)
 static int
 explorer_chdir_root(void)
 {
-    if (explorer_fs_request(FS_IPC_CHDIR_REQ, 0, 0, 0, 0, NULL) != 0) {
+    if (explorer_fs_chdir_root() != 0) {
         return -1;
     }
     g_current_path[0] = '/';
@@ -650,7 +658,7 @@ explorer_open_tree_selected(void)
 {
     const int32_t index = explorer_tree_selected_index();
     if (index < 0 || index >= g_tree_count) return;
-    if (explorer_chdir_abs(g_tree_nodes[index].path) != 0) {
+    if (explorer_fs_chdir_abs(g_tree_nodes[index].path) != 0) {
         explorer_set_status("Open tree folder failed");
         ui_mark_dirty(&g_ctx);
         return;

@@ -339,12 +339,15 @@ test_target_cpu_selection(void)
     uint32_t saved_cpu_count = g_cpu_count;
     cpu_sched_t saved_sched[3];
     thread_t *saved_current[3];
+    uint8_t saved_started[3];
 
     for (int i = 0; i < 3; ++i) {
         saved_sched[i] = g_cpus[i].sched;
         saved_current[i] = g_cpus[i].current_thread;
+        saved_started[i] = g_cpus[i].started;
         cpu_sched_init(&g_cpus[i].sched);
         g_cpus[i].current_thread = 0;
+        g_cpus[i].started = (i == 0) ? 1 : 0;
     }
     g_cpu_count = 3;
     g_cpus[0].sched.thread_count[SCHED_PRIO_WASM] = 2;
@@ -355,6 +358,10 @@ test_target_cpu_selection(void)
     make_thread(&t, 60, SCHED_PRIO_WASM);
     t.cpu_affinity = ~0u;
     t.last_cpu = 2;
+    CHECK(cpu_sched_pick_target_cpu_for_thread(&t, 1) == 0, "target-cpu-offline-skip");
+
+    g_cpus[1].started = 1;
+    g_cpus[2].started = 1;
     CHECK(cpu_sched_pick_target_cpu_for_thread(&t, 1) == 2, "target-cpu-preserve-last");
 
     t.last_cpu = 7;
@@ -367,6 +374,7 @@ test_target_cpu_selection(void)
     for (int i = 0; i < 3; ++i) {
         g_cpus[i].sched = saved_sched[i];
         g_cpus[i].current_thread = saved_current[i];
+        g_cpus[i].started = saved_started[i];
     }
     g_cpu_count = saved_cpu_count;
 

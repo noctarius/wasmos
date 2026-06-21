@@ -53,10 +53,17 @@ cpu_sched_highest_prio(const cpu_sched_t *cs)
 static inline uint32_t
 cpu_sched_online_mask(void)
 {
-    if (g_cpu_count >= 32u) {
-        return 0xFFFFFFFFu;
+    uint32_t mask = 1u; /* BSP scheduler is initialized during process_init(). */
+    uint32_t limit = g_cpu_count;
+    if (limit > WASMOS_MAX_CPUS) {
+        limit = WASMOS_MAX_CPUS;
     }
-    return (1u << g_cpu_count) - 1u;
+    for (uint32_t i = 1; i < limit && i < 32u; ++i) {
+        if (g_cpus[i].started) {
+            mask |= (1u << i);
+        }
+    }
+    return mask;
 }
 
 static uint32_t

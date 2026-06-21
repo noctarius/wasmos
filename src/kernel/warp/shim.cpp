@@ -290,6 +290,17 @@ warp_heap_restore_pid(uint32_t previous_pid)
 uint32_t
 warp_runtime_enter(uint32_t pid)
 {
+    /* FIXME(smp-warp): WARP assumes "only one CPU inside WARP at any time"
+     * (see warp/sjlj_unwind.cpp), but this enter/leave pair only rebinds the
+     * per-CPU heap PID — it takes NO lock. As long as all WARP modules run on
+     * CPU 0 this is fine, but once apps/services execute on APs (via work
+     * stealing or cross-CPU placement) the serialization invariant is violated
+     * and WARP's shared state (sjlj context stack, codegen/runtime globals)
+     * corrupts, producing flaky cross-CPU IPC lost-wakeups/livelocks at boot.
+     * A correct fix must serialize only the JIT/native execution region while
+     * RELEASING across blocking IPC waits (a naive lock around the whole
+     * enter/leave span brackets the blocking waits and deadlocks). This gates
+     * the smp-distribution work in process_spawn_idle_ap(). */
     return warp_heap_bind_pid(pid);
 }
 

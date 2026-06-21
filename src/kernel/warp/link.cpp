@@ -491,6 +491,7 @@ warp_console_write(uint32_t buf_offset, uint32_t len, void *ctx_)
     if (!buf) return (uint32_t)-1;
     /* write in 127-byte chunks so klog_write always gets a null-terminated
      * string (we temporarily null-terminate at chunk boundaries). */
+    preempt_disable();
     uint32_t written = 0;
     char tmp[128];
     while (written < len) {
@@ -501,6 +502,7 @@ warp_console_write(uint32_t buf_offset, uint32_t len, void *ctx_)
         klog_write(tmp);
         written += chunk;
     }
+    preempt_enable();
     return 0;
 }
 

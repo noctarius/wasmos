@@ -45,6 +45,38 @@ var g_parents: [MAX_PROCS]u32 = [_]u32{0} ** MAX_PROCS;
 var g_names: [MAX_PROCS][32]u8 = undefined;
 var g_stats: [MAX_PROCS]ProcStats = undefined;
 var g_visited: [MAX_PROCS]bool = [_]bool{false} ** MAX_PROCS;
+var g_out_buf: [8192]u8 = undefined;
+
+const OutBuf = struct {
+    buf: []u8,
+    len: usize = 0,
+    truncated: bool = false,
+
+    fn append(self: *OutBuf, bytes: []const u8) void {
+        if (self.truncated or bytes.len == 0) return;
+        const remaining = self.buf.len - self.len;
+        if (bytes.len > remaining) {
+            self.truncated = true;
+            return;
+        }
+        @memcpy(self.buf[self.len .. self.len + bytes.len], bytes);
+        self.len += bytes.len;
+    }
+
+    fn print(self: *OutBuf, comptime fmt: []const u8, args: anytype) void {
+        if (self.truncated) return;
+        const written = std.fmt.bufPrint(self.buf[self.len..], fmt, args) catch {
+            self.truncated = true;
+            return;
+        };
+        self.len += written.len;
+    }
+
+    fn flush(self: *OutBuf) void {
+        if (self.len == 0) return;
+        wasmos.stdlib.write(self.buf[0..self.len]) catch {};
+    }
+};
 
 fn stateName(state: u32) []const u8 {
     return switch (state) {
@@ -56,17 +88,13 @@ fn stateName(state: u32) []const u8 {
     };
 }
 
-fn printTable(count: usize) void {
-    wasmos.stdlib.write(
-        " pid ppid state wasm thr/live  cpu vm(bytes) kstack(bytes) heap(bytes) rss_est(bytes) cpu(ticks) name\n",
-    ) catch return;
+fn printTable(out: *OutBuf, count: usize) void {
+    out.append(" pid ppid state wasm thr/live  cpu vm(bytes) kstack(bytes) heap(bytes) rss_est(bytes) cpu(ticks) name\n");
     for (0..count) |i| {
         if (g_pids[i] == 0) continue;
         const s = &g_stats[i];
         const wasm_str: []const u8 = if (s.is_wasm != 0) "true" else "false";
-        var row: [256]u8 = undefined;
-        const line = std.fmt.bufPrint(
-            &row,
+        out.print(
             "{d:>4} {d:>4} {s:<5} {s:<5} {d}/{d:>1}  {d:>4} {d:>10} {d:>13} {d:>11} {d:>14} {d:>10} {s}\n",
             .{
                 g_pids[i],
@@ -83,8 +111,8 @@ fn printTable(count: usize) void {
                 s.cpu_ticks,
                 std.mem.sliceTo(&g_names[i], 0),
             },
-        ) catch return;
-        wasmos.stdlib.write(line) catch {};
+        );
+        if (out.truncated) return;
     }
 }
 
@@ -95,34 +123,30 @@ fn findIndexByPid(count: usize, pid: u32) ?usize {
     return null;
 }
 
-fn printTreeNode(index: usize, count: usize, depth: u32) void {
+fn printTreeNode(out: *OutBuf, index: usize, count: usize, depth: u32) void {
     if (index >= count or depth > 16 or g_visited[index]) return;
     g_visited[index] = true;
 
-    var buf: [128]u8 = undefined;
-    var pos: usize = 0;
     var d: u32 = 0;
-    while (d < depth and pos + 2 <= buf.len) : (d += 1) {
-        buf[pos] = ' ';
-        pos += 1;
-        buf[pos] = ' ';
-        pos += 1;
+    while (d < depth) : (d += 1) {
+        out.append("  ");
+        if (out.truncated) return;
     }
 
     const wasm_str: []const u8 = if (g_stats[index].is_wasm != 0) "true" else "false";
-    const rest = std.fmt.bufPrint(buf[pos..], "{s} (pid {d}, wasm={s}, cpu={d})\n", .{
+    out.print("{s} (pid {d}, wasm={s}, cpu={d})\n", .{
         std.mem.sliceTo(&g_names[index], 0),
         g_pids[index],
         wasm_str,
         g_stats[index].last_cpu,
-    }) catch return;
-    pos += rest.len;
-    wasmos.stdlib.write(buf[0..pos]) catch {};
+    });
+    if (out.truncated) return;
 
     const pid = g_pids[index];
     for (0..count) |i| {
         if (g_parents[i] == pid and i != index) {
-            printTreeNode(i, count, depth + 1);
+            printTreeNode(out, i, count, depth + 1);
+            if (out.truncated) return;
         }
     }
 }
@@ -132,6 +156,7 @@ pub fn main() u8 {
     const show_tree = args.len > 0 and
         (std.mem.eql(u8, args[0], "tree") or std.mem.eql(u8, args[0], "all"));
     const show_table = args.len == 0 or std.mem.eql(u8, args[0], "all");
+    var out = OutBuf{ .buf = g_out_buf[0..] };
 
     const count_raw = proc_count();
     if (count_raw <= 0) {
@@ -140,20 +165,13 @@ pub fn main() u8 {
     }
     const count: usize = @intCast(@min(count_raw, MAX_PROCS));
 
-    {
-        var sbuf: [80]u8 = undefined;
-        const line = std.fmt.bufPrint(&sbuf, "processes: {d}\n", .{count}) catch return 1;
-        wasmos.stdlib.write(line) catch {};
-    }
-    {
-        var sbuf: [80]u8 = undefined;
-        const line = std.fmt.bufPrint(&sbuf, "sched: ticks {d} ready {d} running {d}\n", .{
-            sched_ticks(),
-            sched_ready_count(),
-            sched_current_pid(),
-        }) catch return 1;
-        wasmos.stdlib.write(line) catch {};
-    }
+    out.print("processes: {d}\n", .{count});
+    out.print("sched: ticks {d} ready {d} running {d}\n", .{
+        sched_ticks(),
+        sched_ready_count(),
+        sched_current_pid(),
+    });
+    if (out.truncated) return 1;
 
     for (0..count) |i| {
         // g_parents[i] is a global array entry (low linear address, within user VA range).
@@ -184,24 +202,26 @@ pub fn main() u8 {
     }
 
     if (show_table) {
-        printTable(count);
+        printTable(&out, count);
     }
 
     if (show_tree) {
-        wasmos.stdlib.write("tree:\n") catch {};
+        out.append("tree:\n");
         for (0..count) |i| {
             if (g_pids[i] == 0) continue;
             const par_idx = findIndexByPid(count, g_parents[i]);
             if (g_parents[i] == 0 or par_idx == null or g_parents[i] == g_pids[i]) {
-                printTreeNode(i, count, 0);
+                printTreeNode(&out, i, count, 0);
             }
         }
         for (0..count) |i| {
             if (g_pids[i] != 0 and !g_visited[i]) {
-                printTreeNode(i, count, 0);
+                printTreeNode(&out, i, count, 0);
             }
         }
     }
+
+    out.flush();
 
     return 0;
 }

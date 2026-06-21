@@ -25,11 +25,13 @@ ui_render_scroll_view(ui_context_t *ctx, const ui_component_t *c, ui_rect_t draw
         child_id = child->next_sibling_id;
     }
     if (d && d->scroll_max > 0 && inner.h > 8) {
-        const int32_t track_h = inner.h;
-        const int32_t thumb_h = (track_h * track_h) / (track_h + d->scroll_max);
-        const int32_t th = thumb_h < 8 ? 8 : thumb_h;
-        const int32_t ty = inner.y + ((track_h - th) * d->scroll_y) / d->scroll_max;
-        ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, inner.x + inner.w - 4, ty, 3, th, 0xFF6C88A8u, clip);
+        const int32_t scrollbar_w = 10;
+        const int32_t track_x = inner.x + inner.w - scrollbar_w;
+        ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, track_x - 1, inner.y, 1, inner.h, 0xFF31475Fu, clip);
+        ui_draw_v_scrollbar(ctx->mapped_base, ctx->width, ctx->height,
+                            track_x, inner.y, scrollbar_w, inner.h,
+                            d->scroll_y, d->scroll_max,
+                            0xFF0E1622u, 0xFF8CB6D8u, 0xFFD7ECFFu, clip);
     }
 }
 

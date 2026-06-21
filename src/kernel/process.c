@@ -1117,7 +1117,19 @@ int process_unpark_pid(uint32_t pid) {
         proc->block_reason = PROCESS_BLOCK_NONE;
     }
     if (list_head_empty(&t->sched_node)) {
-        sched_enqueue_thread(t);
+        if (proc->require_explicit_ready) {
+            /* Keep ready-gated service/driver startup on the local unpark CPU.
+             * Those boot-critical chains still rely on the conservative
+             * process-manager release path. */
+            sched_enqueue_thread(t);
+        } else {
+            /* Preserve the CPU selected at parked-spawn time instead of
+             * requeueing regular parked children on the caller's CPU
+             * (typically process-manager on CPU 0). */
+            uint32_t target = cpu_sched_pick_target_cpu_for_thread(t, 1);
+            t->last_cpu = target;
+            cpu_sched_enqueue(&g_cpus[target].sched, t);
+        }
     }
     return 0;
 }

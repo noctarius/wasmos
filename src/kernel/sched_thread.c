@@ -50,6 +50,31 @@ cpu_sched_highest_prio(const cpu_sched_t *cs)
     return (int)ffs_table[bm];
 }
 
+static inline uint32_t
+cpu_sched_online_mask(void)
+{
+    if (g_cpu_count >= 32u) {
+        return 0xFFFFFFFFu;
+    }
+    return (1u << g_cpu_count) - 1u;
+}
+
+static uint32_t
+cpu_sched_load_on(uint32_t cpu_id)
+{
+    cpu_sched_t *cs = &g_cpus[cpu_id].sched;
+    uint32_t load = 0;
+    for (int p = 0; p < SCHED_PRIO_MAX; p++) {
+        load += cs->thread_count[p];
+    }
+    /* Count the currently running non-idle thread as part of this CPU's
+     * load so placement prefers truly idle CPUs first. */
+    if (g_cpus[cpu_id].current_thread && g_cpus[cpu_id].current_thread != cs->idle) {
+        load++;
+    }
+    return load;
+}
+
 void
 cpu_sched_init(cpu_sched_t *cs)
 {
@@ -272,16 +297,7 @@ cpu_sched_pick_target_cpu(void)
 
     for (uint32_t n = 0; n < g_cpu_count; n++) {
         uint32_t i = (start + n) % g_cpu_count;
-        cpu_sched_t *cs = &g_cpus[i].sched;
-        uint32_t load = 0;
-        for (int p = 0; p < SCHED_PRIO_MAX; p++) {
-            load += cs->thread_count[p];
-        }
-        /* Count the currently running non-idle thread as part of this
-         * CPU's load so we spread across truly idle CPUs first. */
-        if (g_cpus[i].current_thread && g_cpus[i].current_thread != cs->idle) {
-            load++;
-        }
+        uint32_t load = cpu_sched_load_on(i);
         if (load < best_load) {
             best_load = load;
             best      = i;
@@ -291,10 +307,47 @@ cpu_sched_pick_target_cpu(void)
     return best;
 }
 
+uint32_t
+cpu_sched_pick_target_cpu_for_thread(const thread_t *t, uint8_t prefer_last_cpu)
+{
+    uint32_t online_mask = cpu_sched_online_mask();
+    uint32_t allowed_mask = online_mask;
+    static uint32_t g_affine_rr = 0;
+
+    if (t) {
+        allowed_mask &= t->cpu_affinity;
+        if (allowed_mask == 0u) {
+            allowed_mask = online_mask;
+        }
+        if (prefer_last_cpu &&
+            t->last_cpu < g_cpu_count &&
+            (allowed_mask & (1u << t->last_cpu)) != 0u) {
+            return t->last_cpu;
+        }
+    }
+
+    uint32_t start = (g_cpu_count > 0u) ? (g_affine_rr % g_cpu_count) : 0u;
+    uint32_t best = 0u;
+    uint32_t best_load = UINT32_MAX;
+    for (uint32_t n = 0; n < g_cpu_count; ++n) {
+        uint32_t cpu_id = (start + n) % g_cpu_count;
+        if ((allowed_mask & (1u << cpu_id)) == 0u) {
+            continue;
+        }
+        uint32_t load = cpu_sched_load_on(cpu_id);
+        if (load < best_load) {
+            best_load = load;
+            best = cpu_id;
+        }
+    }
+    g_affine_rr++;
+    return best;
+}
+
 void
 sched_spawn_thread(struct thread *t)
 {
-    uint32_t target = cpu_sched_pick_target_cpu();
+    uint32_t target = cpu_sched_pick_target_cpu_for_thread(t, 0);
     t->last_cpu = target;
     cpu_sched_enqueue(&g_cpus[target].sched, t);
 }

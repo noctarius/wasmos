@@ -314,22 +314,8 @@ static void
 explorer_list_view_clear(int32_t list_id)
 {
     ui_component_t *list = ui_component_by_id(&g_ctx, list_id);
-    ui_list_view_data_t *data;
-
-    if (!list || list->type != UI_COMPONENT_LIST_VIEW || !list->component_data) {
-        return;
-    }
-    data = (ui_list_view_data_t *)list->component_data;
-    for (int32_t i = 0; i < data->list.count; ++i) {
-        if (data->list.items && data->list.items[i]) {
-            free(data->list.items[i]);
-            data->list.items[i] = NULL;
-        }
-    }
-    data->list.count = 0;
-    data->list.selected = -1;
-    data->scroll_y = 0;
-    data->scroll_max = 0;
+    if (!list) return;
+    ui_component_collection_clear(&g_ctx, list_id);
 }
 
 static int32_t
@@ -371,12 +357,12 @@ static int32_t
 explorer_tree_selected_index(void)
 {
     ui_component_t *list = ui_component_by_id(&g_ctx, g_tree_id);
-    ui_list_view_data_t *data;
+    ui_tree_view_data_t *data;
 
-    if (!list || list->type != UI_COMPONENT_LIST_VIEW || !list->component_data) {
+    if (!list || list->type != UI_COMPONENT_TREE_VIEW || !list->component_data) {
         return -1;
     }
-    data = (ui_list_view_data_t *)list->component_data;
+    data = (ui_tree_view_data_t *)list->component_data;
     if (!data) return -1;
     if (data->list.selected < 0 || data->list.selected >= g_tree_count) return -1;
     return data->list.selected;
@@ -386,7 +372,7 @@ static void
 explorer_tree_append_node(const char *path, const char *name, int32_t depth)
 {
     explorer_tree_node_t *node;
-    int32_t label_pos = 0;
+    size_t name_len = 0;
 
     if (!path || !name || g_tree_count >= EXPLORER_TREE_MAX) return;
     node = &g_tree_nodes[g_tree_count];
@@ -394,22 +380,18 @@ explorer_tree_append_node(const char *path, const char *name, int32_t depth)
     node->path[sizeof(node->path) - 1] = '\0';
     node->depth = depth;
 
-    for (int32_t i = 0; i < depth && label_pos + 2 < (int32_t)sizeof(node->label); ++i) {
-        node->label[label_pos++] = ' ';
-        node->label[label_pos++] = ' ';
-    }
     if (strcmp(path, "/") == 0) {
-        node->label[label_pos++] = '/';
+        node->label[0] = '/';
+        node->label[1] = '\0';
     } else {
-        size_t name_len = strlen(name);
-        if (label_pos + (int32_t)name_len + 1 >= (int32_t)sizeof(node->label)) {
-            name_len = (size_t)((int32_t)sizeof(node->label) - label_pos - 2);
+        name_len = strlen(name);
+        if (name_len + 2 > sizeof(node->label)) {
+            name_len = sizeof(node->label) - 2;
         }
-        memcpy(node->label + label_pos, name, name_len);
-        label_pos += (int32_t)name_len;
-        node->label[label_pos++] = '/';
+        memcpy(node->label, name, name_len);
+        node->label[name_len] = '/';
+        node->label[name_len + 1] = '\0';
     }
-    node->label[label_pos] = '\0';
     g_tree_count++;
 }
 
@@ -438,17 +420,17 @@ static void
 explorer_rebuild_tree(void)
 {
     ui_component_t *list = ui_component_by_id(&g_ctx, g_tree_id);
-    ui_list_view_data_t *data;
+    ui_tree_view_data_t *data;
 
     g_tree_count = 0;
     explorer_list_view_clear(g_tree_id);
     explorer_tree_append_node("/", "/", 0);
     explorer_tree_walk("/", 1);
     for (int32_t i = 0; i < g_tree_count; ++i) {
-        (void)ui_component_list_append(&g_ctx, g_tree_id, g_tree_nodes[i].label);
+        (void)ui_component_tree_append(&g_ctx, g_tree_id, g_tree_nodes[i].label, g_tree_nodes[i].depth);
     }
-    if (!list || list->type != UI_COMPONENT_LIST_VIEW || !list->component_data) return;
-    data = (ui_list_view_data_t *)list->component_data;
+    if (!list || list->type != UI_COMPONENT_TREE_VIEW || !list->component_data) return;
+    data = (ui_tree_view_data_t *)list->component_data;
     if (!data) return;
     data->list.selected = 0;
     for (int32_t i = 0; i < g_tree_count; ++i) {
@@ -688,8 +670,8 @@ explorer_activate_tree(ui_context_t *ctx, int32_t component_id, int32_t item_ind
     (void)user;
     if (item_index < 0 || item_index >= g_tree_count) return;
     list = ui_component_by_id(&g_ctx, g_tree_id);
-    if (list && list->type == UI_COMPONENT_LIST_VIEW && list->component_data) {
-        ((ui_list_view_data_t *)list->component_data)->list.selected = item_index;
+    if (list && list->type == UI_COMPONENT_TREE_VIEW && list->component_data) {
+        ((ui_tree_view_data_t *)list->component_data)->list.selected = item_index;
     }
     explorer_open_tree_selected();
 }
@@ -769,7 +751,7 @@ explorer_init_ui(int32_t proc_endpoint, int32_t reply_endpoint)
     g_up_button_id = ui_component_create_button(&g_ctx);
     g_refresh_button_id = ui_component_create_button(&g_ctx);
     g_body_row_id = ui_component_create_row(&g_ctx);
-    g_tree_id = ui_component_create_list_view(&g_ctx);
+    g_tree_id = ui_component_create_tree_view(&g_ctx);
     g_content_panel_id = ui_component_create_panel(&g_ctx);
     g_list_id = ui_component_create_list_view(&g_ctx);
     g_status_label_id = ui_component_create_label(&g_ctx);

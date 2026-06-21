@@ -52,9 +52,10 @@ typedef enum {
     UI_COMPONENT_TEXT_INPUT = 6,
     UI_COMPONENT_SCROLL_VIEW = 7,
     UI_COMPONENT_LIST_VIEW = 8,
-    UI_COMPONENT_DROPDOWN = 9,
-    UI_COMPONENT_MENU_BAR = 10,
-    UI_COMPONENT_MENU_ITEM = 11
+    UI_COMPONENT_TREE_VIEW = 9,
+    UI_COMPONENT_DROPDOWN = 10,
+    UI_COMPONENT_MENU_BAR = 11,
+    UI_COMPONENT_MENU_ITEM = 12
 } ui_component_type_t;
 
 typedef struct {
@@ -159,6 +160,18 @@ typedef struct {
     ui_list_view_item_cb_t on_secondary_click;
     void *on_secondary_click_user;
 } ui_list_view_data_t;
+
+typedef struct {
+    ui_list_data_t list;
+    int32_t *depths;
+    int32_t depth_capacity;
+    int32_t scroll_y;
+    int32_t scroll_max;
+    ui_list_view_item_cb_t on_activate;
+    void *on_activate_user;
+    ui_list_view_item_cb_t on_secondary_click;
+    void *on_secondary_click_user;
+} ui_tree_view_data_t;
 
 typedef struct {
     ui_text_data_t text;
@@ -649,6 +662,10 @@ ui_component_alloc(ui_context_t *ctx, ui_component_type_t type)
         UI_ALLOC_DATA(ui_list_view_data_t);
         ((ui_list_view_data_t *)c->component_data)->list.selected = -1;
         break;
+    case UI_COMPONENT_TREE_VIEW:
+        UI_ALLOC_DATA(ui_tree_view_data_t);
+        ((ui_tree_view_data_t *)c->component_data)->list.selected = -1;
+        break;
     case UI_COMPONENT_DROPDOWN:
         UI_ALLOC_DATA(ui_dropdown_data_t);
         ((ui_dropdown_data_t *)c->component_data)->list.selected = -1;
@@ -699,6 +716,7 @@ static inline int32_t ui_component_create_checkbox(ui_context_t *ctx) { return u
 static inline int32_t ui_component_create_text_input(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_TEXT_INPUT); }
 static inline int32_t ui_component_create_scroll_view(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_SCROLL_VIEW); }
 static inline int32_t ui_component_create_list_view(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_LIST_VIEW); }
+static inline int32_t ui_component_create_tree_view(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_TREE_VIEW); }
 static inline int32_t ui_component_create_dropdown(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_DROPDOWN); }
 static inline int32_t ui_component_create_menu_bar(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_MENU_BAR); }
 static inline int32_t ui_component_create_menu_item(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_MENU_ITEM); }
@@ -738,18 +756,28 @@ static inline void
 ui_component_set_list_view_activate_action(ui_context_t *ctx, int32_t id, ui_list_view_item_cb_t cb, void *user)
 {
     ui_component_t *c = ui_component_by_id(ctx, id);
-    if (!c || c->type != UI_COMPONENT_LIST_VIEW || !c->component_data) return;
-    ((ui_list_view_data_t *)c->component_data)->on_activate = cb;
-    ((ui_list_view_data_t *)c->component_data)->on_activate_user = user;
+    if (!c || !c->component_data) return;
+    if (c->type == UI_COMPONENT_LIST_VIEW) {
+        ((ui_list_view_data_t *)c->component_data)->on_activate = cb;
+        ((ui_list_view_data_t *)c->component_data)->on_activate_user = user;
+    } else if (c->type == UI_COMPONENT_TREE_VIEW) {
+        ((ui_tree_view_data_t *)c->component_data)->on_activate = cb;
+        ((ui_tree_view_data_t *)c->component_data)->on_activate_user = user;
+    }
 }
 
 static inline void
 ui_component_set_list_view_secondary_click_action(ui_context_t *ctx, int32_t id, ui_list_view_item_cb_t cb, void *user)
 {
     ui_component_t *c = ui_component_by_id(ctx, id);
-    if (!c || c->type != UI_COMPONENT_LIST_VIEW || !c->component_data) return;
-    ((ui_list_view_data_t *)c->component_data)->on_secondary_click = cb;
-    ((ui_list_view_data_t *)c->component_data)->on_secondary_click_user = user;
+    if (!c || !c->component_data) return;
+    if (c->type == UI_COMPONENT_LIST_VIEW) {
+        ((ui_list_view_data_t *)c->component_data)->on_secondary_click = cb;
+        ((ui_list_view_data_t *)c->component_data)->on_secondary_click_user = user;
+    } else if (c->type == UI_COMPONENT_TREE_VIEW) {
+        ((ui_tree_view_data_t *)c->component_data)->on_secondary_click = cb;
+        ((ui_tree_view_data_t *)c->component_data)->on_secondary_click_user = user;
+    }
 }
 
 static inline void
@@ -787,6 +815,8 @@ ui_component_list_append(ui_context_t *ctx, int32_t id, const char *item)
     ui_list_data_t *ld;
     if (c->type == UI_COMPONENT_LIST_VIEW) {
         ld = &((ui_list_view_data_t *)c->component_data)->list;
+    } else if (c->type == UI_COMPONENT_TREE_VIEW) {
+        ld = &((ui_tree_view_data_t *)c->component_data)->list;
     } else if (c->type == UI_COMPONENT_DROPDOWN) {
         ld = &((ui_dropdown_data_t *)c->component_data)->list;
     } else {
@@ -813,6 +843,74 @@ ui_component_list_append(ui_context_t *ctx, int32_t id, const char *item)
     ld->items[ld->count] = copy;
     ld->count += 1;
     return ld->count - 1;
+}
+
+static inline int32_t
+ui_component_tree_append(ui_context_t *ctx, int32_t id, const char *item, int32_t depth)
+{
+    ui_component_t *c = ui_component_by_id(ctx, id);
+    ui_tree_view_data_t *td;
+    int32_t idx;
+    int32_t cap;
+    int32_t *new_depths;
+
+    if (!c || c->type != UI_COMPONENT_TREE_VIEW || !c->component_data) return -1;
+    td = (ui_tree_view_data_t *)c->component_data;
+    idx = ui_component_list_append(ctx, id, item);
+    if (idx < 0) return -1;
+
+    if (td->list.capacity <= 0) return -1;
+    if (!td->depths || td->depth_capacity < td->list.capacity) {
+        cap = td->list.capacity;
+        new_depths = (int32_t *)malloc((size_t)cap * sizeof(int32_t));
+        if (!new_depths) return -1;
+        for (int32_t i = 0; i < cap; ++i) new_depths[i] = 0;
+        if (td->depths && td->depth_capacity > 0) {
+            memcpy(new_depths, td->depths, (size_t)td->depth_capacity * sizeof(int32_t));
+            free(td->depths);
+        }
+        td->depths = new_depths;
+        td->depth_capacity = cap;
+    }
+    td->depths[idx] = depth > 0 ? depth : 0;
+    return idx;
+}
+
+static inline void
+ui_component_collection_clear(ui_context_t *ctx, int32_t id)
+{
+    ui_component_t *c = ui_component_by_id(ctx, id);
+    ui_list_data_t *ld = NULL;
+    int32_t *scroll_y = NULL;
+    int32_t *scroll_max = NULL;
+
+    if (!c || !c->component_data) return;
+    if (c->type == UI_COMPONENT_LIST_VIEW) {
+        ui_list_view_data_t *d = (ui_list_view_data_t *)c->component_data;
+        ld = &d->list;
+        scroll_y = &d->scroll_y;
+        scroll_max = &d->scroll_max;
+    } else if (c->type == UI_COMPONENT_TREE_VIEW) {
+        ui_tree_view_data_t *d = (ui_tree_view_data_t *)c->component_data;
+        ld = &d->list;
+        scroll_y = &d->scroll_y;
+        scroll_max = &d->scroll_max;
+    } else if (c->type == UI_COMPONENT_DROPDOWN) {
+        ld = &((ui_dropdown_data_t *)c->component_data)->list;
+    } else {
+        return;
+    }
+
+    for (int32_t i = 0; i < ld->count; ++i) {
+        if (ld->items && ld->items[i]) {
+            free(ld->items[i]);
+            ld->items[i] = NULL;
+        }
+    }
+    ld->count = 0;
+    ld->selected = -1;
+    if (scroll_y) *scroll_y = 0;
+    if (scroll_max) *scroll_max = 0;
 }
 
 static inline int32_t
@@ -1096,6 +1194,7 @@ static inline void ui_render_component(ui_context_t *ctx, int32_t id);
 #include "wasmos/libui_checkbox.h"
 #include "wasmos/libui_text_input.h"
 #include "wasmos/libui_list_view.h"
+#include "wasmos/libui_tree_view.h"
 #include "wasmos/libui_dropdown.h"
 #include "wasmos/libui_scroll_view.h"
 #include "wasmos/libui_menu_bar.h"
@@ -1131,6 +1230,12 @@ static inline void ui_init_component_ops(void)
     ui_component_ops[UI_COMPONENT_LIST_VIEW].layout = ui_layout_list_view;
     ui_component_ops[UI_COMPONENT_LIST_VIEW].handle_pointer_press = ui_list_view_handle_pointer_press;
     ui_component_ops[UI_COMPONENT_LIST_VIEW].handle_scroll_drag = ui_list_view_handle_scroll_drag;
+
+    ui_component_ops[UI_COMPONENT_TREE_VIEW].render = ui_render_tree_view;
+    ui_component_ops[UI_COMPONENT_TREE_VIEW].layout = ui_layout_tree_view;
+    ui_component_ops[UI_COMPONENT_TREE_VIEW].handle_pointer_press = ui_tree_view_handle_pointer_press;
+    ui_component_ops[UI_COMPONENT_TREE_VIEW].handle_scroll_drag = ui_tree_view_handle_scroll_drag;
+    ui_component_ops[UI_COMPONENT_TREE_VIEW].destroy_data = ui_tree_view_destroy_data;
 
     /* dropdown */
     ui_component_ops[UI_COMPONENT_DROPDOWN].render = ui_render_dropdown;
@@ -1214,6 +1319,7 @@ ui_render_component_clip(ui_context_t *ctx, int32_t id, ui_rect_t clip, int32_t 
     /* Some components (containers with popups/children) return early from their render
      * after painting children themselves. For others we draw a border and recurse. */
     if (c->type == UI_COMPONENT_LIST_VIEW ||
+        c->type == UI_COMPONENT_TREE_VIEW ||
         c->type == UI_COMPONENT_DROPDOWN ||
         c->type == UI_COMPONENT_SCROLL_VIEW ||
         c->type == UI_COMPONENT_MENU_BAR ||
@@ -1272,7 +1378,10 @@ ui_find_scrollable_at(ui_context_t *ctx, int32_t id, int32_t x, int32_t y)
         if (!child) break;
         child_id = child->next_sibling_id;
     }
-    if ((c->type == UI_COMPONENT_SCROLL_VIEW || c->type == UI_COMPONENT_LIST_VIEW) && ui_point_in_bounds(x, y, c->bounds)) return c->id;
+    if ((c->type == UI_COMPONENT_SCROLL_VIEW ||
+         c->type == UI_COMPONENT_LIST_VIEW ||
+         c->type == UI_COMPONENT_TREE_VIEW) &&
+        ui_point_in_bounds(x, y, c->bounds)) return c->id;
     return -1;
 }
 
@@ -1290,7 +1399,8 @@ ui_find_list_view_at(ui_context_t *ctx, int32_t id, int32_t x, int32_t y)
         child_id = child->next_sibling_id;
     }
     const ui_component_ops_t *ops = &ui_component_ops[c->type];
-    if (c->type == UI_COMPONENT_LIST_VIEW && ui_point_in_bounds(x, y, c->bounds)) return c->id;
+    if ((c->type == UI_COMPONENT_LIST_VIEW || c->type == UI_COMPONENT_TREE_VIEW) &&
+        ui_point_in_bounds(x, y, c->bounds)) return c->id;
     if (ops->popup_contains && ops->popup_contains(ctx, c, x, y)) return c->id;
     return -1;
 }
@@ -1507,7 +1617,11 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
             const int32_t list_id = ui_find_list_view_at(ctx, ctx->root_id, x, y);
             ui_component_t *lv = ui_component_by_id(ctx, list_id);
             if (lv) {
-                ui_list_view_handle_activate(ctx, lv, x, y);
+                if (lv->type == UI_COMPONENT_TREE_VIEW) {
+                    ui_tree_view_handle_activate(ctx, lv, x, y);
+                } else {
+                    ui_list_view_handle_activate(ctx, lv, x, y);
+                }
             }
             return UI_MSG_CONSUMED;
         }
@@ -1516,7 +1630,11 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
             const int32_t list_id = ui_find_list_view_at(ctx, ctx->root_id, x, y);
             ui_component_t *lv = ui_component_by_id(ctx, list_id);
             if (lv) {
-                ui_list_view_handle_secondary_click(ctx, lv, x, y);
+                if (lv->type == UI_COMPONENT_TREE_VIEW) {
+                    ui_tree_view_handle_secondary_click(ctx, lv, x, y);
+                } else {
+                    ui_list_view_handle_secondary_click(ctx, lv, x, y);
+                }
             }
             return UI_MSG_CONSUMED;
         }

@@ -81,4 +81,45 @@ typedef struct {
     int32_t h;
 } gfx_rect_t;
 
+enum {
+    GFX_EVENT_NONE = 0,
+    GFX_EVENT_FOCUS_GAINED = 1,
+    GFX_EVENT_FOCUS_LOST = 2,
+    GFX_EVENT_KEY = 3,
+    GFX_EVENT_POINTER = 4,
+    GFX_EVENT_CLOSE_REQUEST = 5,
+    GFX_EVENT_RESIZE = 6,
+    GFX_EVENT_POINTER_GESTURE = 7
+};
+
+enum {
+    GFX_POINTER_BUTTON_LEFT = 1,
+    GFX_POINTER_BUTTON_RIGHT = 2,
+    GFX_POINTER_BUTTON_MIDDLE = 3
+};
+
+enum {
+    GFX_POINTER_GESTURE_DOWN = 1,
+    GFX_POINTER_GESTURE_UP = 2,
+    GFX_POINTER_GESTURE_CLICK = 3,
+    GFX_POINTER_GESTURE_DOUBLE_CLICK = 4,
+    GFX_POINTER_GESTURE_DRAG_START = 5,
+    GFX_POINTER_GESTURE_DRAG_MOVE = 6,
+    GFX_POINTER_GESTURE_DRAG_END = 7
+};
+
+static inline uint32_t
+gfx_pointer_gesture_pack(uint32_t x, uint32_t y, uint32_t button, uint32_t gesture)
+{
+    return (x & 0xFFFu) |
+           ((y & 0xFFFu) << 12) |
+           ((button & 0xFu) << 24) |
+           ((gesture & 0xFu) << 28);
+}
+
+static inline uint32_t gfx_pointer_gesture_x(uint32_t packed) { return packed & 0xFFFu; }
+static inline uint32_t gfx_pointer_gesture_y(uint32_t packed) { return (packed >> 12) & 0xFFFu; }
+static inline uint32_t gfx_pointer_gesture_button(uint32_t packed) { return (packed >> 24) & 0xFu; }
+static inline uint32_t gfx_pointer_gesture_kind(uint32_t packed) { return (packed >> 28) & 0xFu; }
+
 #endif

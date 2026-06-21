@@ -3,6 +3,22 @@
 
 /* libui_list_view.h - List view component specific rendering (including scrolling and selection). */
 
+static inline int32_t
+ui_list_view_index_at(const ui_component_t *lv, const ui_list_view_data_t *d, int32_t pointer_x, int32_t pointer_y)
+{
+    if (!lv || !d) return -1;
+    if (pointer_x < lv->bounds.x || pointer_y < lv->bounds.y ||
+        pointer_x >= (lv->bounds.x + lv->bounds.w) ||
+        pointer_y >= (lv->bounds.y + lv->bounds.h)) {
+        return -1;
+    }
+    const int32_t rel_y = (pointer_y - (lv->bounds.y + lv->padding_px)) + d->scroll_y;
+    if (rel_y < 0) return -1;
+    const int32_t idx = rel_y / 20;
+    if (idx < 0 || idx >= d->list.count) return -1;
+    return idx;
+}
+
 static inline void
 ui_render_list_view(ui_context_t *ctx, const ui_component_t *c, ui_rect_t draw_bounds, ui_rect_t clip, int32_t offset_y)
 {
@@ -66,13 +82,36 @@ ui_list_view_handle_pointer_press(ui_context_t *ctx, ui_component_t *lv, int32_t
 {
     ui_list_view_data_t *d = (ui_list_view_data_t *)lv->component_data;
     if (d && d->list.count > 0) {
-        const int32_t rel_y = (pointer_y - (lv->bounds.y + lv->padding_px)) + d->scroll_y;
-        const int32_t idx = rel_y / 20;
+        const int32_t idx = ui_list_view_index_at(lv, d, pointer_x, pointer_y);
         if (idx >= 0 && idx < d->list.count) {
             d->list.selected = idx;
             ui_mark_dirty(ctx);
         }
     }
+}
+
+static inline void
+ui_list_view_handle_activate(ui_context_t *ctx, ui_component_t *lv, int32_t pointer_x, int32_t pointer_y)
+{
+    ui_list_view_data_t *d = (ui_list_view_data_t *)lv->component_data;
+    if (!d || d->list.count <= 0 || !d->on_activate) return;
+    const int32_t idx = ui_list_view_index_at(lv, d, pointer_x, pointer_y);
+    if (idx < 0 || idx >= d->list.count) return;
+    d->list.selected = idx;
+    d->on_activate(ctx, lv->id, idx, d->on_activate_user);
+    ui_mark_dirty(ctx);
+}
+
+static inline void
+ui_list_view_handle_secondary_click(ui_context_t *ctx, ui_component_t *lv, int32_t pointer_x, int32_t pointer_y)
+{
+    ui_list_view_data_t *d = (ui_list_view_data_t *)lv->component_data;
+    if (!d || d->list.count <= 0 || !d->on_secondary_click) return;
+    const int32_t idx = ui_list_view_index_at(lv, d, pointer_x, pointer_y);
+    if (idx < 0 || idx >= d->list.count) return;
+    d->list.selected = idx;
+    d->on_secondary_click(ctx, lv->id, idx, d->on_secondary_click_user);
+    ui_mark_dirty(ctx);
 }
 
 /* Component-owned scroll drag handler (for active scroll during pointer drag). */

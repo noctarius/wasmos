@@ -18,6 +18,7 @@
 #include "policy.h"
 #include "wasmos_driver_abi.h"
 #include "capability.h"
+#include "timer.h"
 #include <string.h>
 #include <stddef.h>
 
@@ -192,6 +193,12 @@ nd_framebuffer_info(nd_framebuffer_info_t *out)
     /* framebuffer_info_t and nd_framebuffer_info_t are layout-identical
      * (verified by the _Static_assert above); cast is safe. */
     return framebuffer_get_info((framebuffer_info_t *)out);
+}
+
+static uint32_t
+nd_sched_ticks(void)
+{
+    return (uint32_t)timer_ticks();
 }
 
 static void
@@ -899,6 +906,7 @@ native_driver_start(uint32_t context_id,
     api.ipc_send            = nd_ipc_send;
     api.ipc_recv            = nd_ipc_recv;
     api.sched_yield         = nd_sched_yield;
+    api.sched_ticks         = nd_sched_ticks;
     api.sched_current_pid   = nd_sched_current_pid;
     api.thread_current_tid  = nd_thread_current_tid;
     api.mutex_try_lock      = nd_mutex_try_lock;

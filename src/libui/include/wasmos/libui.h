@@ -65,6 +65,7 @@ typedef struct {
 
 struct ui_context;
 typedef void (*ui_button_click_cb_t)(struct ui_context *ctx, int32_t component_id, void *user);
+typedef void (*ui_list_view_item_cb_t)(struct ui_context *ctx, int32_t component_id, int32_t item_index, void *user);
 
 /* Pure base component. All type-specific state lives in component_data.
  * This keeps the core struct small and stable as we add more widget kinds. */
@@ -152,6 +153,10 @@ typedef struct {
     ui_list_data_t list;
     int32_t scroll_y;
     int32_t scroll_max;
+    ui_list_view_item_cb_t on_activate;
+    void *on_activate_user;
+    ui_list_view_item_cb_t on_secondary_click;
+    void *on_secondary_click_user;
 } ui_list_view_data_t;
 
 typedef struct {
@@ -199,6 +204,9 @@ typedef struct ui_context {
     int32_t pointer_x;
     int32_t pointer_y;
     uint32_t pointer_buttons;
+    uint32_t pointer_drag_button;
+    int32_t pointer_drag_x;
+    int32_t pointer_drag_y;
     int32_t dirty;
     int32_t close_requested;
     int32_t root_id;
@@ -228,6 +236,10 @@ static inline int32_t ui_i16_hi(int32_t packed) { return (int16_t)((packed >> 16
 static inline int32_t ui_ptr_evt_x(int32_t packed) { return (packed & 0xFFF); }
 static inline int32_t ui_ptr_evt_y(int32_t packed) { return ((packed >> 12) & 0xFFF); }
 static inline uint32_t ui_ptr_evt_buttons(int32_t packed) { return (uint32_t)((packed >> 24) & 0xFF); }
+static inline int32_t ui_ptr_gesture_x(int32_t packed) { return (packed & 0xFFF); }
+static inline int32_t ui_ptr_gesture_y(int32_t packed) { return ((packed >> 12) & 0xFFF); }
+static inline uint32_t ui_ptr_gesture_button(int32_t packed) { return (uint32_t)((packed >> 24) & 0xF); }
+static inline uint32_t ui_ptr_gesture_kind(int32_t packed) { return (uint32_t)((packed >> 28) & 0xF); }
 
 static inline void ui_mark_dirty(ui_context_t *ctx) { if (ctx) ctx->dirty = 1; }
 
@@ -678,6 +690,24 @@ ui_component_set_button_action(ui_context_t *ctx, int32_t id, ui_button_click_cb
     c->clickable = 1;
     c->on_click = cb;
     c->on_click_user = user;
+}
+
+static inline void
+ui_component_set_list_view_activate_action(ui_context_t *ctx, int32_t id, ui_list_view_item_cb_t cb, void *user)
+{
+    ui_component_t *c = ui_component_by_id(ctx, id);
+    if (!c || c->type != UI_COMPONENT_LIST_VIEW || !c->component_data) return;
+    ((ui_list_view_data_t *)c->component_data)->on_activate = cb;
+    ((ui_list_view_data_t *)c->component_data)->on_activate_user = user;
+}
+
+static inline void
+ui_component_set_list_view_secondary_click_action(ui_context_t *ctx, int32_t id, ui_list_view_item_cb_t cb, void *user)
+{
+    ui_component_t *c = ui_component_by_id(ctx, id);
+    if (!c || c->type != UI_COMPONENT_LIST_VIEW || !c->component_data) return;
+    ((ui_list_view_data_t *)c->component_data)->on_secondary_click = cb;
+    ((ui_list_view_data_t *)c->component_data)->on_secondary_click_user = user;
 }
 
 static inline void
@@ -1404,17 +1434,71 @@ ui_loop_handle_ipc(ui_context_t *ctx, const wasmos_ipc_message_t *msg)
             }
             ctx->active_scroll_component_id = 0;
             ui_mark_dirty(ctx);
-        } else if (left_now && left_prev && ctx->active_scroll_component_id > 0 && dy != 0) {
-            ui_component_t *sv = ui_component_by_id(ctx, ctx->active_scroll_component_id);
-            if (sv) {
-                const ui_component_ops_t *ops = &ui_component_ops[sv->type];
-                if (ops->handle_scroll_drag) {
-                    ops->handle_scroll_drag(ctx, sv, dy);
-                }
-            }
         }
 
         ctx->pointer_buttons = buttons;
+        return UI_MSG_CONSUMED;
+    }
+
+    if (msg->arg1 == GFX_EVENT_POINTER_GESTURE) {
+        if ((int32_t)msg->arg2 != ctx->window_id) return UI_MSG_CONSUMED;
+        const int32_t x = ui_ptr_gesture_x(msg->arg3);
+        const int32_t y = ui_ptr_gesture_y(msg->arg3);
+        const uint32_t button = ui_ptr_gesture_button(msg->arg3);
+        const uint32_t kind = ui_ptr_gesture_kind(msg->arg3);
+
+        ctx->pointer_x = x;
+        ctx->pointer_y = y;
+
+        if (kind == GFX_POINTER_GESTURE_DOUBLE_CLICK && button == GFX_POINTER_BUTTON_LEFT) {
+            const int32_t list_id = ui_find_list_view_at(ctx, ctx->root_id, x, y);
+            ui_component_t *lv = ui_component_by_id(ctx, list_id);
+            if (lv) {
+                ui_list_view_handle_activate(ctx, lv, x, y);
+            }
+            return UI_MSG_CONSUMED;
+        }
+
+        if (kind == GFX_POINTER_GESTURE_CLICK && button == GFX_POINTER_BUTTON_RIGHT) {
+            const int32_t list_id = ui_find_list_view_at(ctx, ctx->root_id, x, y);
+            ui_component_t *lv = ui_component_by_id(ctx, list_id);
+            if (lv) {
+                ui_list_view_handle_secondary_click(ctx, lv, x, y);
+            }
+            return UI_MSG_CONSUMED;
+        }
+
+        if (button == GFX_POINTER_BUTTON_LEFT && kind == GFX_POINTER_GESTURE_DRAG_START) {
+            ctx->pointer_drag_button = button;
+            ctx->pointer_drag_x = x;
+            ctx->pointer_drag_y = y;
+            return UI_MSG_CONSUMED;
+        }
+
+        if (button == GFX_POINTER_BUTTON_LEFT && kind == GFX_POINTER_GESTURE_DRAG_MOVE) {
+            const int32_t dy = y - ctx->pointer_drag_y;
+            ctx->pointer_drag_button = button;
+            ctx->pointer_drag_x = x;
+            ctx->pointer_drag_y = y;
+            if (ctx->active_scroll_component_id > 0 && dy != 0) {
+                ui_component_t *sv = ui_component_by_id(ctx, ctx->active_scroll_component_id);
+                if (sv) {
+                    const ui_component_ops_t *ops = &ui_component_ops[sv->type];
+                    if (ops->handle_scroll_drag) {
+                        ops->handle_scroll_drag(ctx, sv, dy);
+                    }
+                }
+            }
+            return UI_MSG_CONSUMED;
+        }
+
+        if (kind == GFX_POINTER_GESTURE_DRAG_END || kind == GFX_POINTER_GESTURE_UP) {
+            if (ctx->pointer_drag_button == button) {
+                ctx->pointer_drag_button = 0;
+            }
+            return UI_MSG_CONSUMED;
+        }
+
         return UI_MSG_CONSUMED;
     }
 

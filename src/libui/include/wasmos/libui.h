@@ -45,15 +45,16 @@ enum {
 typedef enum {
     UI_COMPONENT_NONE = 0,
     UI_COMPONENT_PANEL = 1,
-    UI_COMPONENT_LABEL = 2,
-    UI_COMPONENT_BUTTON = 3,
-    UI_COMPONENT_CHECKBOX = 4,
-    UI_COMPONENT_TEXT_INPUT = 5,
-    UI_COMPONENT_SCROLL_VIEW = 6,
-    UI_COMPONENT_LIST_VIEW = 7,
-    UI_COMPONENT_DROPDOWN = 8,
-    UI_COMPONENT_MENU_BAR = 9,
-    UI_COMPONENT_MENU_ITEM = 10
+    UI_COMPONENT_ROW = 2,
+    UI_COMPONENT_LABEL = 3,
+    UI_COMPONENT_BUTTON = 4,
+    UI_COMPONENT_CHECKBOX = 5,
+    UI_COMPONENT_TEXT_INPUT = 6,
+    UI_COMPONENT_SCROLL_VIEW = 7,
+    UI_COMPONENT_LIST_VIEW = 8,
+    UI_COMPONENT_DROPDOWN = 9,
+    UI_COMPONENT_MENU_BAR = 10,
+    UI_COMPONENT_MENU_ITEM = 11
 } ui_component_type_t;
 
 typedef struct {
@@ -691,6 +692,7 @@ ui_component_append_child(ui_context_t *ctx, int32_t parent_id, int32_t child_id
 }
 
 static inline int32_t ui_component_create_panel(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_PANEL); }
+static inline int32_t ui_component_create_row(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_ROW); }
 static inline int32_t ui_component_create_label(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_LABEL); }
 static inline int32_t ui_component_create_button(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_BUTTON); }
 static inline int32_t ui_component_create_checkbox(ui_context_t *ctx) { return ui_component_alloc(ctx, UI_COMPONENT_CHECKBOX); }
@@ -1089,6 +1091,7 @@ static inline void ui_render_component(ui_context_t *ctx, int32_t id);
 /* Component headers (render + now layout too) are included here so their per-type functions
  * are visible to the layout and render dispatchers below. */
 #include "wasmos/libui_label.h"
+#include "wasmos/libui_row.h"
 #include "wasmos/libui_button.h"
 #include "wasmos/libui_checkbox.h"
 #include "wasmos/libui_text_input.h"
@@ -1107,6 +1110,9 @@ static inline void ui_init_component_ops(void)
 
     /* label */
     ui_component_ops[UI_COMPONENT_LABEL].render = ui_render_label;
+
+    /* generic horizontal row */
+    ui_component_ops[UI_COMPONENT_ROW].layout = ui_layout_row;
 
     /* button */
     ui_component_ops[UI_COMPONENT_BUTTON].render = ui_render_button;

@@ -60,6 +60,7 @@ typedef struct wasmos_driver_api {
 
     /* Scheduler */
     void     (*sched_yield)(void);
+    uint32_t (*sched_ticks)(void);
     uint32_t (*sched_current_pid)(void);
     uint32_t (*thread_current_tid)(void);
     int      (*mutex_try_lock)(uint64_t mutex_addr);
@@ -118,7 +119,7 @@ typedef struct wasmos_driver_api {
 #define ND_BUFFER_BORROW_WRITE     0x2u
 
 #define WASMOS_NATIVE_ABI_MAGIC   0x574E4150u /* 'WNAP' */
-#define WASMOS_NATIVE_ABI_VERSION 4u
+#define WASMOS_NATIVE_ABI_VERSION 5u
 
 /* Entry point that every native driver must provide via ELF e_entry. */
 typedef int (*native_driver_entry_fn_t)(wasmos_driver_api_t *api,

@@ -37,6 +37,9 @@ const GFX_WINDOW_Z_SYSTEM: u32 = 0xFFFF_FFFE;
 const PAGE_SIZE: u64 = 4096;
 const CURSOR_W: i32 = 9;
 const CURSOR_H: i32 = 14;
+const POINTER_GESTURE_CLICK_TICKS: u32 = 100;
+const POINTER_GESTURE_DOUBLE_TICKS: u32 = 100;
+const POINTER_GESTURE_SLOP: i32 = 4;
 const CHROME_BORDER: i32 = 1;
 const CHROME_TITLE_H: i32 = 24;
 const CHROME_CLOSE_SZ: i32 = 14;
@@ -98,6 +101,25 @@ var g_title_dbg_prime_fail_logged: bool = false;
 var g_dirty_pending: bool = false;
 var g_dirty_full: bool = false;
 var g_dirty_rect: c.gfx_rect_t = .{ .x = 0, .y = 0, .w = 0, .h = 0 };
+
+const pointer_button_state_t = struct {
+    active: bool = false,
+    dragging: bool = false,
+    window_id: u32 = 0,
+    down_x: i32 = 0,
+    down_y: i32 = 0,
+    last_x: i32 = 0,
+    last_y: i32 = 0,
+    down_tick: u32 = 0,
+};
+
+const pointer_click_state_t = struct {
+    valid: bool = false,
+    window_id: u32 = 0,
+    x: i32 = 0,
+    y: i32 = 0,
+    tick: u32 = 0,
+};
 
 var g_fb_info: c.nd_framebuffer_info_t = .{
     .framebuffer_base = 0,
@@ -196,6 +218,9 @@ const title_run_cache_entry_t = struct {
     mask_data: [GFX_MAX_GLYPH_BYTES]u8 = [_]u8{0} ** GFX_MAX_GLYPH_BYTES,
 };
 var g_title_run_cache: [GFX_MAX_WINDOWS]title_run_cache_entry_t = [_]title_run_cache_entry_t{.{}} ** GFX_MAX_WINDOWS;
+var g_pointer_left_state: pointer_button_state_t = .{};
+var g_pointer_right_state: pointer_button_state_t = .{};
+var g_last_left_click: pointer_click_state_t = .{};
 var g_font_text_shmem_id: u32 = 0;
 var g_font_text_ptr: ?[*]u8 = null;
 var g_font_text_cap: usize = 0;
@@ -907,6 +932,56 @@ fn pack_pointer_event(x: u32, y: u32, buttons: u32) u32 {
     return (x & 0xFFF) | ((y & 0xFFF) << 12) | ((buttons & 0xFF) << 24);
 }
 
+fn pack_pointer_gesture(x: u32, y: u32, button: u32, gesture: u32) u32 {
+    return (x & 0xFFF) | ((y & 0xFFF) << 12) | ((button & 0xF) << 24) | ((gesture & 0xF) << 28);
+}
+
+fn intAbs(v: i32) i32 {
+    return if (v < 0) -v else v;
+}
+
+fn pointer_button_state_for(button_id: u32) ?*pointer_button_state_t {
+    return switch (button_id) {
+        c.GFX_POINTER_BUTTON_LEFT => &g_pointer_left_state,
+        c.GFX_POINTER_BUTTON_RIGHT => &g_pointer_right_state,
+        else => null,
+    };
+}
+
+fn pointer_button_mask(button_id: u32) u32 {
+    return switch (button_id) {
+        c.GFX_POINTER_BUTTON_LEFT => 0x1,
+        c.GFX_POINTER_BUTTON_RIGHT => 0x2,
+        c.GFX_POINTER_BUTTON_MIDDLE => 0x4,
+        else => 0,
+    };
+}
+
+fn pointer_content_target_idx_at(x: i32, y: i32) ?usize {
+    if (window_topmost_at(x, y)) |idx| {
+        const win = g_windows[idx];
+        const cr = window_content_rect(win);
+        if (cr.w > 0 and cr.h > 0 and point_in_rect(x, y, cr)) {
+            return idx;
+        }
+    }
+    return null;
+}
+
+fn pointer_local_coords_for_window(win: window_slot_t, screen_x: i32, screen_y: i32) ?struct { x: i32, y: i32 } {
+    const cr = window_content_rect(win);
+    if (cr.w <= 0 or cr.h <= 0) return null;
+    return .{
+        .x = clamp(screen_x - cr.x, 0, cr.w - 1),
+        .y = clamp(screen_y - cr.y, 0, cr.h - 1),
+    };
+}
+
+fn emit_pointer_gesture_for_window(win: window_slot_t, screen_x: i32, screen_y: i32, button_id: u32, gesture: u32) void {
+    const rel = pointer_local_coords_for_window(win, screen_x, screen_y) orelse return;
+    event_push(win.owner_endpoint, c.GFX_EVENT_POINTER_GESTURE, win.window_id, pack_pointer_gesture(@intCast(rel.x), @intCast(rel.y), button_id, gesture), 0);
+}
+
 fn clamp(v: i32, lo: i32, hi: i32) i32 {
     if (v < lo) return lo;
     if (v > hi) return hi;
@@ -1185,6 +1260,118 @@ fn maybe_emit_pointer_event(dx: i32, dy: i32, buttons: u32, prev_buttons: u32) v
     }
 }
 
+fn maybe_emit_click_gesture(win: window_slot_t, screen_x: i32, screen_y: i32, now_tick: u32) void {
+    emit_pointer_gesture_for_window(win, screen_x, screen_y, c.GFX_POINTER_BUTTON_LEFT, c.GFX_POINTER_GESTURE_CLICK);
+    if (g_last_left_click.valid and
+        g_last_left_click.window_id == win.window_id and
+        (now_tick - g_last_left_click.tick) <= POINTER_GESTURE_DOUBLE_TICKS and
+        intAbs(screen_x - g_last_left_click.x) <= POINTER_GESTURE_SLOP and
+        intAbs(screen_y - g_last_left_click.y) <= POINTER_GESTURE_SLOP)
+    {
+        emit_pointer_gesture_for_window(win, screen_x, screen_y, c.GFX_POINTER_BUTTON_LEFT, c.GFX_POINTER_GESTURE_DOUBLE_CLICK);
+        g_last_left_click.valid = false;
+        return;
+    }
+    g_last_left_click = .{
+        .valid = true,
+        .window_id = win.window_id,
+        .x = screen_x,
+        .y = screen_y,
+        .tick = now_tick,
+    };
+}
+
+fn handle_pointer_button_down(button_id: u32, now_tick: u32) void {
+    const state = pointer_button_state_for(button_id) orelse return;
+    state.* = .{};
+    const target_idx = pointer_content_target_idx_at(g_pointer_x, g_pointer_y) orelse return;
+    const win = g_windows[target_idx];
+    state.* = .{
+        .active = true,
+        .dragging = false,
+        .window_id = win.window_id,
+        .down_x = g_pointer_x,
+        .down_y = g_pointer_y,
+        .last_x = g_pointer_x,
+        .last_y = g_pointer_y,
+        .down_tick = now_tick,
+    };
+    emit_pointer_gesture_for_window(win, g_pointer_x, g_pointer_y, button_id, c.GFX_POINTER_GESTURE_DOWN);
+}
+
+fn handle_pointer_button_up(button_id: u32, now_tick: u32) void {
+    const state = pointer_button_state_for(button_id) orelse return;
+    if (!state.active) return;
+    const win_idx = window_find_by_id(state.window_id);
+    if (win_idx) |idx| {
+        const win = g_windows[idx];
+        if (state.dragging) {
+            emit_pointer_gesture_for_window(win, g_pointer_x, g_pointer_y, button_id, c.GFX_POINTER_GESTURE_DRAG_END);
+        }
+        emit_pointer_gesture_for_window(win, g_pointer_x, g_pointer_y, button_id, c.GFX_POINTER_GESTURE_UP);
+
+        const release_target = pointer_content_target_idx_at(g_pointer_x, g_pointer_y);
+        const release_on_same_window = release_target != null and g_windows[release_target.?].window_id == state.window_id;
+        const within_slop = intAbs(g_pointer_x - state.down_x) <= POINTER_GESTURE_SLOP and
+            intAbs(g_pointer_y - state.down_y) <= POINTER_GESTURE_SLOP and
+            (now_tick - state.down_tick) <= POINTER_GESTURE_CLICK_TICKS;
+        if (!state.dragging and release_on_same_window and within_slop) {
+            if (button_id == c.GFX_POINTER_BUTTON_LEFT) {
+                maybe_emit_click_gesture(win, g_pointer_x, g_pointer_y, now_tick);
+            } else {
+                emit_pointer_gesture_for_window(win, g_pointer_x, g_pointer_y, button_id, c.GFX_POINTER_GESTURE_CLICK);
+            }
+        }
+    }
+    state.* = .{};
+}
+
+fn maybe_emit_pointer_drag_gestures(button_id: u32, buttons: u32) void {
+    const state = pointer_button_state_for(button_id) orelse return;
+    if (!state.active) return;
+    if ((buttons & pointer_button_mask(button_id)) == 0) return;
+    const win_idx = window_find_by_id(state.window_id) orelse {
+        state.* = .{};
+        return;
+    };
+    const win = g_windows[win_idx];
+    const drag_dx = g_pointer_x - state.down_x;
+    const drag_dy = g_pointer_y - state.down_y;
+    if (!state.dragging) {
+        if (intAbs(drag_dx) <= POINTER_GESTURE_SLOP and intAbs(drag_dy) <= POINTER_GESTURE_SLOP) {
+            return;
+        }
+        state.dragging = true;
+        state.last_x = g_pointer_x;
+        state.last_y = g_pointer_y;
+        emit_pointer_gesture_for_window(win, g_pointer_x, g_pointer_y, button_id, c.GFX_POINTER_GESTURE_DRAG_START);
+        return;
+    }
+    if (state.last_x == g_pointer_x and state.last_y == g_pointer_y) return;
+    state.last_x = g_pointer_x;
+    state.last_y = g_pointer_y;
+    emit_pointer_gesture_for_window(win, g_pointer_x, g_pointer_y, button_id, c.GFX_POINTER_GESTURE_DRAG_MOVE);
+}
+
+fn maybe_emit_pointer_gestures(dx: i32, dy: i32, buttons: u32, prev_buttons: u32) void {
+    const now_tick: u32 = if (api().sched_ticks) |sched_ticks| sched_ticks() else 0;
+    const left_now = (buttons & pointer_button_mask(c.GFX_POINTER_BUTTON_LEFT)) != 0;
+    const left_prev = (prev_buttons & pointer_button_mask(c.GFX_POINTER_BUTTON_LEFT)) != 0;
+    const right_now = (buttons & pointer_button_mask(c.GFX_POINTER_BUTTON_RIGHT)) != 0;
+    const right_prev = (prev_buttons & pointer_button_mask(c.GFX_POINTER_BUTTON_RIGHT)) != 0;
+
+    if (left_now and !left_prev) handle_pointer_button_down(c.GFX_POINTER_BUTTON_LEFT, now_tick);
+    if (right_now and !right_prev) handle_pointer_button_down(c.GFX_POINTER_BUTTON_RIGHT, now_tick);
+
+    if (dx != 0 or dy != 0) {
+        maybe_emit_pointer_drag_gestures(c.GFX_POINTER_BUTTON_LEFT, buttons);
+        maybe_emit_pointer_drag_gestures(c.GFX_POINTER_BUTTON_RIGHT, buttons);
+    }
+
+    if (!left_now and left_prev) handle_pointer_button_up(c.GFX_POINTER_BUTTON_LEFT, now_tick);
+    if (!right_now and right_prev) handle_pointer_button_up(c.GFX_POINTER_BUTTON_RIGHT, now_tick);
+}
+
 fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
     const old_x = g_pointer_x;
     const old_y = g_pointer_y;
@@ -1216,6 +1403,7 @@ fn handle_mouse_notify(msg: *const c.nd_ipc_message_t) void {
     handle_mouse_press_transition(left_down_now, left_down_prev);
     g_pointer_buttons = buttons;
     maybe_emit_pointer_event(dx, dy, buttons, prev_buttons);
+    maybe_emit_pointer_gestures(dx, dy, buttons, prev_buttons);
 }
 
 fn fb_set_overlay_lock(lock: bool) void {

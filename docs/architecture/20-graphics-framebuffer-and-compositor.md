@@ -149,11 +149,17 @@ GFX_EVENT_KEY           = 3   // arg2=translated key (ASCII/ctrl), arg3: bit0=ke
 GFX_EVENT_POINTER       = 4   // arg2=window_id, arg3=packed local x/y/buttons
 GFX_EVENT_CLOSE_REQUEST = 5   // arg2=window_id
 GFX_EVENT_RESIZE        = 6   // arg2=window_id, arg3=width/height packed u16 low16=w high16=h
+GFX_EVENT_POINTER_GESTURE = 7 // arg2=window_id, arg3=packed local x/y/button/gesture
 ```
 
 Window geometry note:
 - `CREATE_WINDOW` and `RESIZE_WINDOW` widths/heights are content dimensions.
 - Compositor chrome is outside the client rect, so title-bar or border-size changes do not require app-side size adjustments.
+
+Pointer input note:
+- `GFX_EVENT_POINTER` remains the continuous hover/state stream (`x`, `y`, full button mask) used for cursor tracking and compatibility with existing widgets.
+- `GFX_EVENT_POINTER_GESTURE` is the higher-level contract for shared interactions that should not be rebuilt in every app: button `DOWN`, `UP`, `CLICK`, `DOUBLE_CLICK`, and drag `START`/`MOVE`/`END`.
+- Gesture payloads encode a semantic button id (`LEFT`, `RIGHT`, `MIDDLE`) and a gesture kind, while still using content-local coordinates.
 
 ---
 
@@ -220,12 +226,14 @@ ND_BUFFER_BORROW_WRITE     = 0x2u
 
 // ABI versioning
 WASMOS_NATIVE_ABI_MAGIC   = 0x574E4150u  /* 'WNAP' */
-WASMOS_NATIVE_ABI_VERSION = 3u
+WASMOS_NATIVE_ABI_VERSION = 5u
 ```
 
 The compositor calls `api().buffer_borrow(ND_BUFFER_KIND_FRAMEBUFFER, 0,
 ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE, fb_size)` to get a direct
 pointer to the linear scanout surface.
+It also uses `api().sched_ticks()` to time shared pointer gestures such as
+double-click detection.
 
 ---
 

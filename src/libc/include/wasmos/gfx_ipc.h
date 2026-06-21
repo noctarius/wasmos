@@ -118,7 +118,29 @@ enum {
     /* arg2=window_id, arg3 reserved */
     GFX_EVENT_CLOSE_REQUEST = 5,
     /* arg2=window_id, arg3 packs width/height as u16: low16=width high16=height */
-    GFX_EVENT_RESIZE = 6
+    GFX_EVENT_RESIZE = 6,
+    /* arg2=window_id, arg3=gfx_pointer_gesture_pack(x, y, button, gesture)
+     * where x/y are content-local coordinates, button is one of
+     * GFX_POINTER_BUTTON_*, and gesture is one of GFX_POINTER_GESTURE_*.
+     * This is the higher-level app-facing pointer contract for click/down/up
+     * and drag lifecycle events. */
+    GFX_EVENT_POINTER_GESTURE = 7
+};
+
+enum {
+    GFX_POINTER_BUTTON_LEFT = 1,
+    GFX_POINTER_BUTTON_RIGHT = 2,
+    GFX_POINTER_BUTTON_MIDDLE = 3
+};
+
+enum {
+    GFX_POINTER_GESTURE_DOWN = 1,
+    GFX_POINTER_GESTURE_UP = 2,
+    GFX_POINTER_GESTURE_CLICK = 3,
+    GFX_POINTER_GESTURE_DOUBLE_CLICK = 4,
+    GFX_POINTER_GESTURE_DRAG_START = 5,
+    GFX_POINTER_GESTURE_DRAG_MOVE = 6,
+    GFX_POINTER_GESTURE_DRAG_END = 7
 };
 
 typedef struct {
@@ -151,5 +173,19 @@ gfx_pointer_event_pack(uint32_t x, uint32_t y, uint32_t buttons)
 static inline uint32_t gfx_pointer_event_x(uint32_t packed) { return packed & 0xFFFu; }
 static inline uint32_t gfx_pointer_event_y(uint32_t packed) { return (packed >> 12) & 0xFFFu; }
 static inline uint32_t gfx_pointer_event_buttons(uint32_t packed) { return (packed >> 24) & 0xFFu; }
+
+static inline uint32_t
+gfx_pointer_gesture_pack(uint32_t x, uint32_t y, uint32_t button, uint32_t gesture)
+{
+    return (x & 0xFFFu) |
+           ((y & 0xFFFu) << 12) |
+           ((button & 0xFu) << 24) |
+           ((gesture & 0xFu) << 28);
+}
+
+static inline uint32_t gfx_pointer_gesture_x(uint32_t packed) { return packed & 0xFFFu; }
+static inline uint32_t gfx_pointer_gesture_y(uint32_t packed) { return (packed >> 12) & 0xFFFu; }
+static inline uint32_t gfx_pointer_gesture_button(uint32_t packed) { return (packed >> 24) & 0xFu; }
+static inline uint32_t gfx_pointer_gesture_kind(uint32_t packed) { return (packed >> 28) & 0xFu; }
 
 #endif

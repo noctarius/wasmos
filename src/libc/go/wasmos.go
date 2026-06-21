@@ -59,6 +59,9 @@ func consoleWrite(ptr uint32, len uint32) int32
 //go:wasmimport wasmos console_read
 func consoleRead(ptr uint32, len uint32) int32
 
+//go:wasmimport wasmos proc_exit
+func procExit(status int32) int32
+
 //go:wasmimport wasmos ipc_create_endpoint
 func ipcCreateEndpoint() int32
 
@@ -323,7 +326,9 @@ func wasmos_main(arg0, arg1, arg2, arg3 int32) int32 {
 	startupArgs[1] = arg1
 	startupArgs[2] = arg2
 	startupArgs[3] = arg3
-	return Main(emptyArgs)
+	rc := Main(emptyArgs)
+	procExit(rc)
+	return rc
 }
 
 func ensureFSReplyEndpoint() (int32, Error) {

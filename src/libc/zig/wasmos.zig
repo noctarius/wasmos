@@ -36,6 +36,7 @@ pub const O_TRUNC: i32 = 0x0200;
 
 extern "wasmos" fn console_write(ptr: i32, len: i32) callconv(.c) i32;
 extern "wasmos" fn console_read(ptr: i32, len: i32) callconv(.c) i32;
+extern "wasmos" fn proc_exit(status: i32) callconv(.c) i32;
 extern "wasmos" fn ipc_create_endpoint() callconv(.c) i32;
 extern "wasmos" fn ipc_send(
     destination_endpoint: i32,
@@ -160,7 +161,9 @@ pub export fn wasmos_main(arg0: i32, arg1: i32, arg2: i32, arg3: i32) callconv(.
     g_startup_args[2] = arg2;
     g_startup_args[3] = arg3;
     parseCliArgs();
-    return @intCast(root.main());
+    const rc: i32 = @intCast(root.main());
+    _ = proc_exit(rc);
+    return rc;
 }
 
 fn rawWrite(bytes: []const u8) Error!void {

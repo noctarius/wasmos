@@ -35,6 +35,8 @@ export const O_TRUNC: i32 = 0x0200;
 declare function console_write(ptr: i32, len: i32): i32;
 @external("wasmos", "console_read")
 declare function console_read(ptr: i32, len: i32): i32;
+@external("wasmos", "proc_exit")
+declare function proc_exit(status: i32): i32;
 @external("wasmos", "ipc_create_endpoint")
 declare function ipc_create_endpoint(): i32;
 @external("wasmos", "ipc_send")
@@ -153,7 +155,9 @@ export function runMain(
   unchecked(g_startupArgs[1] = arg1);
   unchecked(g_startupArgs[2] = arg2);
   unchecked(g_startupArgs[3] = arg3);
-  return entry(readSpawnArgs());
+  const rc = entry(readSpawnArgs());
+  proc_exit(rc);
+  return rc;
 }
 
 function writeBytes(bytes: Uint8Array): bool {

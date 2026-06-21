@@ -179,18 +179,6 @@ export class Context {
   }
 
   destroy(): void {
-    if (this.shmemId > 0) {
-      if (this.mappedPtr != 0) {
-        let _ = shmem_unmap(this.shmemId);
-      }
-      if (this.bufferId > 0 && this.gfxEndpoint > 0) {
-        let _ = ipc.call(this.gfxEndpoint, GFX_IPC_RELEASE_SHARED_BUFFER, this.bufferId, 0, 0, 0);
-      }
-    }
-    this.mappedPtr = 0;
-    this.mappedLen = 0;
-    this.bufferId = -1;
-    this.shmemId = -1;
     if (this.titleShmemId > 0 && this.titlePtr != 0) {
       let _ = shmem_unmap(this.titleShmemId);
     }
@@ -199,6 +187,18 @@ export class Context {
     if (this.windowId > 0 && this.gfxEndpoint > 0) {
       let _ = ipc.call(this.gfxEndpoint, GFX_IPC_DESTROY_WINDOW, this.windowId, 0, 0, 0);
     }
+    if (this.bufferId > 0 && this.gfxEndpoint > 0) {
+      // Release after destroying the window so the compositor no longer
+      // considers the buffer busy and can reclaim the slot.
+      let _ = ipc.call(this.gfxEndpoint, GFX_IPC_RELEASE_SHARED_BUFFER, this.bufferId, 0, 0, 0);
+    }
+    if (this.shmemId > 0 && this.mappedPtr != 0) {
+      let _ = shmem_unmap(this.shmemId);
+    }
+    this.mappedPtr = 0;
+    this.mappedLen = 0;
+    this.bufferId = -1;
+    this.shmemId = -1;
     this.windowId = -1;
   }
 

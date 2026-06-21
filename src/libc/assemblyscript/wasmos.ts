@@ -436,19 +436,24 @@ export namespace ipc {
     if (ipc_send(server, replyEndpoint, type, requestId, arg0, arg1, arg2, arg3) != 0) {
       return null;
     }
-    if (ipc_recv(replyEndpoint) < 0) {
-      return null;
+    while (true) {
+      if (ipc_recv(replyEndpoint) < 0) {
+        return null;
+      }
+      if (ipc_last_field(IPC_FIELD_REQUEST_ID) != requestId) {
+        continue;
+      }
+      return new Reply(
+        ipc_last_field(IPC_FIELD_TYPE),
+        ipc_last_field(IPC_FIELD_REQUEST_ID),
+        ipc_last_field(IPC_FIELD_SOURCE),
+        ipc_last_field(IPC_FIELD_DESTINATION),
+        ipc_last_field(IPC_FIELD_ARG0),
+        ipc_last_field(IPC_FIELD_ARG1),
+        ipc_last_field(IPC_FIELD_ARG2),
+        ipc_last_field(IPC_FIELD_ARG3)
+      );
     }
-    return new Reply(
-      ipc_last_field(IPC_FIELD_TYPE),
-      ipc_last_field(IPC_FIELD_REQUEST_ID),
-      ipc_last_field(IPC_FIELD_SOURCE),
-      ipc_last_field(IPC_FIELD_DESTINATION),
-      ipc_last_field(IPC_FIELD_ARG0),
-      ipc_last_field(IPC_FIELD_ARG1),
-      ipc_last_field(IPC_FIELD_ARG2),
-      ipc_last_field(IPC_FIELD_ARG3)
-    );
   }
 
   // Block until a message arrives on endpoint (for servers).

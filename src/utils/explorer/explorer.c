@@ -23,7 +23,6 @@
 #define EXPLORER_STATUS_H 26
 #define EXPLORER_OPEN_H 32
 #define EXPLORER_TOOL_H 28
-#define EXPLORER_LAUNCH_DEBOUNCE_TICKS 250
 
 typedef struct {
     char name[EXPLORER_NAME_MAX];
@@ -54,14 +53,13 @@ static int32_t g_refresh_button_id = -1;
 static int32_t g_list_id = -1;
 static int32_t g_fs_reply_endpoint = -1;
 static int32_t g_proc_endpoint = -1;
+static int32_t g_proc_reply_endpoint = -1;
 
 static char g_current_path[EXPLORER_PATH_MAX] = "/";
 static char g_listbuf[EXPLORER_LIST_BUF];
 static char g_status_buf[128];
-static char g_last_launch_path[EXPLORER_PATH_MAX + EXPLORER_NAME_MAX + 2];
 static explorer_entry_t g_entries[EXPLORER_MAX_ENTRIES];
 static int32_t g_entry_count = 0;
-static uint32_t g_last_launch_tick = 0;
 
 static int
 explorer_fs_request(int32_t type,
@@ -410,30 +408,18 @@ explorer_open_selected(ui_context_t *ctx, int32_t id, void *user)
 
         explorer_build_selected_path(full_path, sizeof(full_path), entry);
         if (explorer_str_ends_with(entry->name, ".wap")) {
-            const uint32_t now_tick = (uint32_t)wasmos_sched_ticks();
             const size_t path_len = strlen(full_path);
-            if (g_last_launch_path[0] != '\0' &&
-                strcmp(g_last_launch_path, full_path) == 0 &&
-                (now_tick - g_last_launch_tick) <= EXPLORER_LAUNCH_DEBOUNCE_TICKS) {
-                snprintf(status, sizeof(status), "Launch already requested for %s", entry->name);
-                explorer_set_status(status);
-                ui_mark_dirty(&g_ctx);
-                return;
-            }
             const int32_t pid = (path_len > 0 && path_len <= 240 &&
                                  wasmos_fs_buffer_write((int32_t)(uintptr_t)full_path, (int32_t)path_len, 0) == 0)
                                     ? wasmos_sys_spawn_path_sync(g_proc_endpoint,
-                                                                 g_ctx.reply_endpoint,
+                                                                 g_proc_reply_endpoint,
                                                                  (int32_t)path_len,
                                                                  2000,
                                                                  g_ctx.req_id++)
                                     : -1;
             if (pid > 0) {
-                memcpy(g_last_launch_path, full_path, path_len + 1);
-                g_last_launch_tick = now_tick;
                 snprintf(status, sizeof(status), "Spawned %s (pid %d)", entry->name, (int)pid);
             } else {
-                g_last_launch_path[0] = '\0';
                 snprintf(status, sizeof(status), "Spawn failed for %s", entry->name);
             }
             explorer_set_status(status);
@@ -611,12 +597,13 @@ main(int argc, char **argv)
     const int32_t reply_endpoint = wasmos_ipc_create_endpoint();
     int32_t have_root_cwd = 0;
     g_fs_reply_endpoint = wasmos_ipc_create_endpoint();
+    g_proc_reply_endpoint = wasmos_ipc_create_endpoint();
 
     (void)argc;
     (void)argv;
     g_proc_endpoint = proc_endpoint;
 
-    if (proc_endpoint <= 0 || reply_endpoint < 0 || g_fs_reply_endpoint < 0) {
+    if (proc_endpoint <= 0 || reply_endpoint < 0 || g_fs_reply_endpoint < 0 || g_proc_reply_endpoint < 0) {
         return 1;
     }
     if (explorer_init_ui(proc_endpoint, reply_endpoint) != 0) {

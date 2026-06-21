@@ -16,6 +16,7 @@
 #define EXPLORER_MAX_ENTRIES 96
 #define EXPLORER_NAME_MAX 64
 #define EXPLORER_PATH_MAX 256
+#define EXPLORER_DOUBLE_CLICK_TICKS 100
 
 typedef struct {
     char name[EXPLORER_NAME_MAX];
@@ -36,6 +37,9 @@ static char g_listbuf[EXPLORER_LIST_BUF];
 static char g_status_buf[128];
 static explorer_entry_t g_entries[EXPLORER_MAX_ENTRIES];
 static int32_t g_entry_count = 0;
+static uint32_t g_prev_pointer_buttons = 0;
+static uint32_t g_last_click_tick = 0;
+static int32_t g_last_click_index = -1;
 
 static int
 explorer_fs_request(int32_t type,
@@ -162,20 +166,54 @@ explorer_list_clear(void)
     data->scroll_max = 0;
 }
 
+static ui_list_view_data_t *
+explorer_list_data(void)
+{
+    ui_component_t *list = ui_component_by_id(&g_ctx, g_list_id);
+    if (!list || list->type != UI_COMPONENT_LIST_VIEW || !list->component_data) {
+        return NULL;
+    }
+    return (ui_list_view_data_t *)list->component_data;
+}
+
 static int32_t
 explorer_selected_index(void)
 {
-    ui_component_t *list = ui_component_by_id(&g_ctx, g_list_id);
-    ui_list_view_data_t *data;
-
-    if (!list || list->type != UI_COMPONENT_LIST_VIEW || !list->component_data) {
+    ui_list_view_data_t *data = explorer_list_data();
+    if (!data) {
         return -1;
     }
-    data = (ui_list_view_data_t *)list->component_data;
     if (data->list.selected < 0 || data->list.selected >= g_entry_count) {
         return -1;
     }
     return data->list.selected;
+}
+
+static int32_t
+explorer_list_index_at(int32_t x, int32_t y)
+{
+    ui_component_t *list = ui_component_by_id(&g_ctx, g_list_id);
+    ui_list_view_data_t *data = explorer_list_data();
+    int32_t rel_y;
+    int32_t idx;
+
+    if (!list || !data) {
+        return -1;
+    }
+    if (x < list->bounds.x || y < list->bounds.y ||
+        x >= (list->bounds.x + list->bounds.w) ||
+        y >= (list->bounds.y + list->bounds.h)) {
+        return -1;
+    }
+    rel_y = (y - (list->bounds.y + list->padding_px)) + data->scroll_y;
+    if (rel_y < 0) {
+        return -1;
+    }
+    idx = rel_y / 20;
+    if (idx < 0 || idx >= g_entry_count) {
+        return -1;
+    }
+    return idx;
 }
 
 static void
@@ -531,6 +569,34 @@ main(int argc, char **argv)
                             0,
                             &msg) == 0) {
             (void)ui_loop_handle_ipc(&g_ctx, &msg);
+            if (msg.type == GFX_IPC_RESP &&
+                msg.arg0 == GFX_STATUS_OK &&
+                msg.arg1 == GFX_EVENT_POINTER &&
+                msg.arg2 == g_ctx.window_id) {
+                const uint32_t buttons = ui_ptr_evt_buttons(msg.arg3);
+                const int32_t left_now = ((buttons & 1u) != 0u);
+                const int32_t left_prev = ((g_prev_pointer_buttons & 1u) != 0u);
+                if (!left_now && left_prev) {
+                    const int32_t clicked_index = explorer_list_index_at(ui_ptr_evt_x(msg.arg3),
+                                                                         ui_ptr_evt_y(msg.arg3));
+                    if (clicked_index >= 0) {
+                        const uint32_t now_tick = (uint32_t)wasmos_sched_ticks();
+                        if (g_last_click_index == clicked_index &&
+                            (now_tick - g_last_click_tick) <= EXPLORER_DOUBLE_CLICK_TICKS) {
+                            explorer_open_selected(&g_ctx, g_open_button_id, NULL);
+                            g_last_click_index = -1;
+                            g_last_click_tick = 0;
+                        } else {
+                            g_last_click_index = clicked_index;
+                            g_last_click_tick = now_tick;
+                        }
+                    } else {
+                        g_last_click_index = -1;
+                        g_last_click_tick = 0;
+                    }
+                }
+                g_prev_pointer_buttons = buttons;
+            }
         }
         if (ui_loop_drain(&g_ctx) != 0) {
             break;

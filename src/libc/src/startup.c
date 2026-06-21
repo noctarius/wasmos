@@ -54,5 +54,7 @@ wasmos_main(int32_t arg0,
     g_wasmos_startup_args[2] = arg2;
     g_wasmos_startup_args[3] = arg3;
     g_wasmos_argv[0] = 0;
-    return main(0, g_wasmos_argv);
+    int32_t rc = main(0, g_wasmos_argv);
+    (void)wasmos_proc_exit(rc);
+    return rc;
 }

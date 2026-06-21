@@ -39,6 +39,7 @@ pub const O_TRUNC: i32 = 0x0200;
 unsafe extern "C" {
     fn console_write(ptr: i32, len: i32) -> i32;
     fn console_read(ptr: i32, len: i32) -> i32;
+    fn proc_exit(status: i32) -> i32;
     fn ipc_create_endpoint() -> i32;
     fn ipc_send(
         destination_endpoint: i32,
@@ -144,7 +145,11 @@ pub extern "C" fn wasmos_main(arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> i32
         G_STARTUP_ARGS[2] = arg2;
         G_STARTUP_ARGS[3] = arg3;
     }
-    crate::main(&EMPTY_ARGS)
+    let rc = crate::main(&EMPTY_ARGS);
+    unsafe {
+        let _ = proc_exit(rc);
+    }
+    rc
 }
 
 fn raw_write(bytes: &[u8]) -> Result<(), Error> {

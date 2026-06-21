@@ -330,6 +330,51 @@ test_wake_during_block_transition(void)
 }
 
 /* -------------------------------------------------------------------------
+ * Test 8: target CPU selection honors last_cpu for parked children but falls
+ *         back to the lightest allowed CPU when last_cpu is invalid.
+ * ------------------------------------------------------------------------- */
+static int
+test_target_cpu_selection(void)
+{
+    uint32_t saved_cpu_count = g_cpu_count;
+    cpu_sched_t saved_sched[3];
+    thread_t *saved_current[3];
+
+    for (int i = 0; i < 3; ++i) {
+        saved_sched[i] = g_cpus[i].sched;
+        saved_current[i] = g_cpus[i].current_thread;
+        cpu_sched_init(&g_cpus[i].sched);
+        g_cpus[i].current_thread = 0;
+    }
+    g_cpu_count = 3;
+    g_cpus[0].sched.thread_count[SCHED_PRIO_WASM] = 2;
+    g_cpus[1].sched.thread_count[SCHED_PRIO_WASM] = 0;
+    g_cpus[2].sched.thread_count[SCHED_PRIO_WASM] = 1;
+
+    thread_t t;
+    make_thread(&t, 60, SCHED_PRIO_WASM);
+    t.cpu_affinity = ~0u;
+    t.last_cpu = 2;
+    CHECK(cpu_sched_pick_target_cpu_for_thread(&t, 1) == 2, "target-cpu-preserve-last");
+
+    t.last_cpu = 7;
+    CHECK(cpu_sched_pick_target_cpu_for_thread(&t, 1) == 1, "target-cpu-lightest-fallback");
+
+    t.cpu_affinity = (1u << 2);
+    t.last_cpu = 0;
+    CHECK(cpu_sched_pick_target_cpu_for_thread(&t, 1) == 2, "target-cpu-affinity-override");
+
+    for (int i = 0; i < 3; ++i) {
+        g_cpus[i].sched = saved_sched[i];
+        g_cpus[i].current_thread = saved_current[i];
+    }
+    g_cpu_count = saved_cpu_count;
+
+    TEST_PASS("target-cpu-selection");
+    return 0;
+}
+
+/* -------------------------------------------------------------------------
  * Entry point
  * ------------------------------------------------------------------------- */
 int
@@ -344,6 +389,7 @@ kernel_sched_selftest_run(void)
     failures += (test_default_prio()      != 0) ? 1 : 0;
     failures += (test_sched_list()        != 0) ? 1 : 0;
     failures += (test_wake_during_block_transition() != 0) ? 1 : 0;
+    failures += (test_target_cpu_selection() != 0) ? 1 : 0;
 
     if (failures == 0) {
         klog_write("[test] sched selftest all ok\n");

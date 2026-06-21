@@ -12,11 +12,12 @@ and the guards that keep each phase safe.  The authoritative sources are
 
 ### Overview
 
-The scheduler is a preemptive, priority-based, single-core scheduler.
-PIT channel 0 drives time-slice accounting.  When a running thread's quantum
-expires the next IRQ0 fires the preemption path, which rewrites the interrupted
-frame to redirect IRETQ into a scheduler trampoline.  The scheduler context then
-picks the highest-priority ready thread and resumes it.  Blocking operations
+The scheduler is a preemptive, priority-based scheduler with per-CPU ready
+queues and work stealing when SMP is enabled. PIT/LAPIC timer interrupts drive
+time-slice accounting. When a running thread's quantum expires the next timer
+IRQ fires the preemption path, which rewrites the interrupted frame to redirect
+IRETQ into a scheduler trampoline. The scheduler context then picks the
+highest-priority ready thread for that CPU and resumes it. Blocking operations
 (IPC wait, process wait, thread join, futex) suspend a thread without burning
 quantum.
 
@@ -109,9 +110,9 @@ typedef struct {
 } cpu_sched_t;
 ```
 
-A single `g_cpu_sched` instance covers the current single-core build.
-`cpu_sched()` returns a pointer to it; cross-core paths are wired for SMP
-extension but not currently active.
+One `cpu_sched_t` lives in each `cpu_local_t`. `cpu_sched()` returns the
+calling CPU's queue state; idle CPUs can steal runnable work from other CPUs'
+queues when their local queue is empty.
 
 **O(1) find-highest-ready** via `ffs_table[128]`:
 

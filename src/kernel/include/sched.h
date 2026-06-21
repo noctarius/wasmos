@@ -80,6 +80,15 @@ struct thread *cpu_sched_try_steal(uint32_t my_cpu_id);
 uint32_t cpu_sched_pick_target_cpu(void);
 
 /*
+ * Choose a target CPU for a specific thread.
+ * When prefer_last_cpu is non-zero and last_cpu is valid for the thread's
+ * affinity mask, preserve that placement. Otherwise choose the lightest
+ * allowed CPU.
+ */
+uint32_t cpu_sched_pick_target_cpu_for_thread(const struct thread *t,
+                                              uint8_t prefer_last_cpu);
+
+/*
  * Enqueue a freshly spawned thread on the least-loaded CPU and set
  * last_cpu accordingly.  Use only for the initial spawn enqueue; all
  * subsequent re-queues go through sched_enqueue_thread / sched_wake_thread.

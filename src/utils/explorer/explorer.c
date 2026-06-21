@@ -238,15 +238,15 @@ explorer_selected_index(void)
 static void
 explorer_rebuild_rows(void)
 {
-    char line[EXPLORER_NAME_MAX + 12];
+    char line[EXPLORER_NAME_MAX + 2];
 
     explorer_list_clear();
     for (int32_t i = 0; i < g_entry_count; ++i) {
         snprintf(line,
                  sizeof(line),
-                 "%s %s",
-                 g_entries[i].is_dir ? "[DIR]" : "[FILE]",
-                 g_entries[i].name);
+                 "%s%s",
+                 g_entries[i].name,
+                 g_entries[i].is_dir ? "/" : "");
         (void)ui_component_list_append(&g_ctx, g_list_id, line);
     }
 }

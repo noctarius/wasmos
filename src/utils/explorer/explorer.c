@@ -7,6 +7,7 @@
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
 #include "wasmos/libui.h"
+#include "wasmos/libsys.h"
 #include "wasmos/startup.h"
 #include "wasmos_driver_abi.h"
 
@@ -51,6 +52,7 @@ static int32_t g_up_button_id = -1;
 static int32_t g_refresh_button_id = -1;
 static int32_t g_list_id = -1;
 static int32_t g_fs_reply_endpoint = -1;
+static int32_t g_proc_endpoint = -1;
 
 static char g_current_path[EXPLORER_PATH_MAX] = "/";
 static char g_listbuf[EXPLORER_LIST_BUF];
@@ -150,6 +152,36 @@ static void
 explorer_set_status(const char *text)
 {
     ui_component_set_text(&g_ctx, g_status_label_id, text ? text : "");
+}
+
+static int
+explorer_str_ends_with(const char *s, const char *suffix)
+{
+    size_t s_len;
+    size_t suffix_len;
+
+    if (!s || !suffix) {
+        return 0;
+    }
+    s_len = strlen(s);
+    suffix_len = strlen(suffix);
+    if (suffix_len > s_len) {
+        return 0;
+    }
+    return memcmp(s + (s_len - suffix_len), suffix, suffix_len) == 0;
+}
+
+static void
+explorer_build_selected_path(char *out, size_t out_cap, const explorer_entry_t *entry)
+{
+    if (!out || out_cap == 0 || !entry) {
+        return;
+    }
+    if (strcmp(g_current_path, "/") == 0) {
+        snprintf(out, out_cap, "/%s", entry->name);
+    } else {
+        snprintf(out, out_cap, "%s/%s", g_current_path, entry->name);
+    }
 }
 
 static void
@@ -373,10 +405,25 @@ explorer_open_selected(ui_context_t *ctx, int32_t id, void *user)
         char status[128];
         struct stat st;
 
-        if (strcmp(g_current_path, "/") == 0) {
-            snprintf(full_path, sizeof(full_path), "/%s", entry->name);
-        } else {
-            snprintf(full_path, sizeof(full_path), "%s/%s", g_current_path, entry->name);
+        explorer_build_selected_path(full_path, sizeof(full_path), entry);
+        if (explorer_str_ends_with(entry->name, ".wap")) {
+            const size_t path_len = strlen(full_path);
+            const int32_t pid = (path_len > 0 && path_len <= 240 &&
+                                 wasmos_fs_buffer_write((int32_t)(uintptr_t)full_path, (int32_t)path_len, 0) == 0)
+                                    ? wasmos_sys_spawn_path_sync(g_proc_endpoint,
+                                                                 g_ctx.reply_endpoint,
+                                                                 (int32_t)path_len,
+                                                                 2000,
+                                                                 g_ctx.req_id++)
+                                    : -1;
+            if (pid > 0) {
+                snprintf(status, sizeof(status), "Spawned %s (pid %d)", entry->name, (int)pid);
+            } else {
+                snprintf(status, sizeof(status), "Spawn failed for %s", entry->name);
+            }
+            explorer_set_status(status);
+            ui_mark_dirty(&g_ctx);
+            return;
         }
         if (stat(full_path, &st) == 0) {
             snprintf(status, sizeof(status), "File: %s (%u bytes)", entry->name, (unsigned)st.st_size);
@@ -552,6 +599,7 @@ main(int argc, char **argv)
 
     (void)argc;
     (void)argv;
+    g_proc_endpoint = proc_endpoint;
 
     if (proc_endpoint <= 0 || reply_endpoint < 0 || g_fs_reply_endpoint < 0) {
         return 1;

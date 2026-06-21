@@ -32,9 +32,15 @@ ui_render_list_view(ui_context_t *ctx, const ui_component_t *c, ui_rect_t draw_b
         draw_bounds.h - (c->padding_px * 2)
     };
     const int32_t content_w = inner.w - scrollbar_w;
+    const ui_rect_t content_clip = {
+        inner.x,
+        inner.y,
+        content_w,
+        inner.h
+    };
     const int32_t item_h = 20;
     ui_fill_rect_clip(ctx->mapped_base, ctx->width, ctx->height, inner.x, inner.y, inner.w, inner.h, 0xFF172233u, clip);
-    const ui_rect_t item_clip = ui_rect_intersect(clip, inner);
+    const ui_rect_t item_clip = ui_rect_intersect(clip, content_clip);
     if (d) {
         for (int32_t i = 0; i < d->list.count; ++i) {
             const int32_t row_y = inner.y + (i * item_h) - d->scroll_y;
@@ -119,7 +125,7 @@ ui_list_view_handle_scroll_drag(ui_context_t *ctx, ui_component_t *c, int32_t dy
 {
     ui_list_view_data_t *d = (ui_list_view_data_t *)c->component_data;
     if (d && d->scroll_max > 0) {
-        d->scroll_y += dy;
+        d->scroll_y += (dy * 2);
         if (d->scroll_y < 0) d->scroll_y = 0;
         if (d->scroll_y > d->scroll_max) d->scroll_y = d->scroll_max;
         ui_mark_dirty(ctx);

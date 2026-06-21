@@ -1117,19 +1117,12 @@ int process_unpark_pid(uint32_t pid) {
         proc->block_reason = PROCESS_BLOCK_NONE;
     }
     if (list_head_empty(&t->sched_node)) {
-        if (proc->require_explicit_ready) {
-            /* Keep ready-gated service/driver startup on the local unpark CPU.
-             * Those boot-critical chains still rely on the conservative
-             * process-manager release path. */
-            sched_enqueue_thread(t);
-        } else {
-            /* Preserve the CPU selected at parked-spawn time instead of
-             * requeueing regular parked children on the caller's CPU
-             * (typically process-manager on CPU 0). */
-            uint32_t target = cpu_sched_pick_target_cpu_for_thread(t, 1);
-            t->last_cpu = target;
-            cpu_sched_enqueue(&g_cpus[target].sched, t);
-        }
+        /* Enqueue the unparked child on the local (caller) CPU.  Cross-CPU
+         * "push" placement at unpark time races with the IPC wake path and
+         * destabilises WARP-backed app startup; instead rely on per-CPU
+         * work-stealing (cpu_sched_try_steal) to pull this thread onto an idle
+         * AP once it is runnable. */
+        sched_enqueue_thread(t);
     }
     return 0;
 }
@@ -1266,6 +1259,20 @@ process_spawn_idle_ap(uint32_t cpu_id)
     /* AP idle threads are never enqueued; dispatched only via the per-CPU
      * fallback path in cpu_sched_pick_next. */
     g_cpus[cpu_id].idle_thread = thread;
+    /* FIXME(smp-distribution): AP work-stealing is currently dead. The BSP
+     * records its idle thread in BOTH idle_thread and sched.idle (see the idle
+     * bootstrap in process_init), but here we only set idle_thread. The steal
+     * trigger in process_schedule_once_impl gates on `thread == cs->idle`,
+     * while cpu_sched_pick_next() returns cpu_local()->idle_thread; on an AP
+     * cs->idle stays NULL, so the trigger never fires and runnable work piles
+     * up on CPU 0 while APs idle. The one-line fix is:
+     *     g_cpus[cpu_id].sched.idle = thread;
+     * It is intentionally NOT applied yet: enabling steals (or any cross-CPU
+     * "push" placement) makes WARP-backed apps/services execute on APs, which
+     * exposes a separate cross-CPU IPC lost-wakeup/livelock in WARP execution
+     * (suspected serialized-execution requirement; see warp_driver.cpp /
+     * warp/shim.cpp). Apply this fix only after WARP execution is made
+     * SMP-safe, otherwise boot hangs flakily. */
     return 0;
 }
 
@@ -1729,6 +1736,7 @@ static int process_schedule_once_impl(void) {
     cpu_local()->last_dispatched_pid  = proc->pid;
     cpu_local()->current_process = proc;
     cpu_local()->current_thread = thread;
+    thread->last_cpu = cpu_local()->cpu_id;
     if (cpu_local()->current_thread->owner_pid != cpu_local()->current_process->pid) {
         process_sched_invariant_fail("current owner mismatch", cpu_local()->current_thread->owner_pid, cpu_local()->current_process->pid);
     }

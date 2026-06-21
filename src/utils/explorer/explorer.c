@@ -22,7 +22,6 @@
 #define EXPLORER_PATH_H 30
 #define EXPLORER_STATUS_H 26
 #define EXPLORER_TOOLBAR_H 34
-#define EXPLORER_BODY_H 286
 #define EXPLORER_SIDEBAR_W 220
 #define EXPLORER_TREE_MAX 128
 
@@ -38,15 +37,14 @@ typedef struct {
 } explorer_tree_node_t;
 
 static int32_t
-explorer_list_height(void)
+explorer_body_height(void)
 {
     const int32_t fixed_h =
         (EXPLORER_ROOT_PADDING * 2) +
         EXPLORER_PATH_H +
         EXPLORER_STATUS_H +
         EXPLORER_TOOLBAR_H +
-        EXPLORER_BODY_H +
-        (EXPLORER_ROOT_GAP * 4);
+        (EXPLORER_ROOT_GAP * 3);
     const int32_t remaining = EXPLORER_H - fixed_h;
     return remaining > 80 ? remaining : 80;
 }
@@ -70,6 +68,7 @@ static char g_current_path[EXPLORER_PATH_MAX] = "/";
 static char g_listbuf[EXPLORER_LIST_BUF];
 static char g_status_buf[128];
 static explorer_entry_t g_entries[EXPLORER_MAX_ENTRIES];
+static explorer_entry_t g_tree_dirs[EXPLORER_MAX_ENTRIES];
 static explorer_tree_node_t g_tree_nodes[EXPLORER_TREE_MAX];
 static int32_t g_entry_count = 0;
 static int32_t g_tree_count = 0;
@@ -417,15 +416,18 @@ explorer_tree_append_node(const char *path, const char *name, int32_t depth)
 static void
 explorer_tree_walk(const char *path, int32_t depth)
 {
-    explorer_entry_t dirs[EXPLORER_MAX_ENTRIES];
     int32_t dir_count = 0;
 
-    if (explorer_collect_entries_for_path(path, dirs, EXPLORER_MAX_ENTRIES, 1, &dir_count) != 0) return;
+    if (explorer_collect_entries_for_path(path,
+                                          g_tree_dirs,
+                                          EXPLORER_MAX_ENTRIES,
+                                          1,
+                                          &dir_count) != 0) return;
     for (int32_t i = 0; i < dir_count && g_tree_count < EXPLORER_TREE_MAX; ++i) {
         char child_path[EXPLORER_PATH_MAX];
-        if (strcmp(path, "/") == 0) snprintf(child_path, sizeof(child_path), "/%s", dirs[i].name);
-        else snprintf(child_path, sizeof(child_path), "%s/%s", path, dirs[i].name);
-        explorer_tree_append_node(child_path, dirs[i].name, depth);
+        if (strcmp(path, "/") == 0) snprintf(child_path, sizeof(child_path), "/%s", g_tree_dirs[i].name);
+        else snprintf(child_path, sizeof(child_path), "%s/%s", path, g_tree_dirs[i].name);
+        explorer_tree_append_node(child_path, g_tree_dirs[i].name, depth);
         if (explorer_path_is_prefix(child_path, g_current_path)) {
             explorer_tree_walk(child_path, depth + 1);
         }
@@ -818,7 +820,7 @@ explorer_init_ui(int32_t proc_endpoint, int32_t reply_endpoint)
     refresh_button->fg_color = 0xFFFFFFFFu;
     refresh_button->clickable = 1;
 
-    body_row->preferred_h = explorer_list_height();
+    body_row->preferred_h = explorer_body_height();
     body_row->bg_color = 0x00000000u;
     body_row->border_px = 0;
     body_row->padding_px = 0;
@@ -836,7 +838,7 @@ explorer_init_ui(int32_t proc_endpoint, int32_t reply_endpoint)
     content_panel->padding_px = 0;
     content_panel->gap_px = 0;
 
-    list->preferred_h = explorer_list_height() - 8;
+    list->preferred_h = explorer_body_height();
     list->bg_color = 0xFF1B2535u;
     list->border_color = 0xFF58708Du;
     list->border_px = 1;

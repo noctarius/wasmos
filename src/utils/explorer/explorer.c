@@ -11,11 +11,11 @@
 #include "wasmos/startup.h"
 #include "wasmos_driver_abi.h"
 
-#define EXPLORER_W 560
+#define EXPLORER_W 680
 #define EXPLORER_H 420
 #define EXPLORER_LIST_BUF 4096
 #define EXPLORER_MAX_ENTRIES 96
-#define EXPLORER_NAME_MAX 64
+#define EXPLORER_NAME_MAX 96
 #define EXPLORER_PATH_MAX 256
 #define EXPLORER_ROOT_PADDING 10
 #define EXPLORER_ROOT_GAP 8
@@ -569,7 +569,7 @@ explorer_init_ui(int32_t proc_endpoint, int32_t reply_endpoint)
     list->bg_color = 0xFF1B2535u;
     list->border_color = 0xFF58708Du;
     list->border_px = 1;
-    list->padding_px = 6;
+    list->padding_px = 4;
 
     ui_component_set_text(&g_ctx, g_open_button_id, "Open Selected");
     ui_component_set_text(&g_ctx, g_up_button_id, "Up");

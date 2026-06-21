@@ -243,6 +243,22 @@ static inline uint32_t ui_ptr_gesture_kind(int32_t packed) { return (uint32_t)((
 
 static inline void ui_mark_dirty(ui_context_t *ctx) { if (ctx) ctx->dirty = 1; }
 
+static inline int32_t
+ui_scroll_drag_delta(int32_t dy, int32_t viewport_h, int32_t scroll_max)
+{
+    if (dy == 0 || viewport_h <= 8 || scroll_max <= 0) return 0;
+    int32_t thumb_h = (viewport_h * viewport_h) / (viewport_h + scroll_max);
+    if (thumb_h < 12) thumb_h = 12;
+    if (thumb_h > viewport_h - 12) thumb_h = viewport_h - 12;
+    if (thumb_h < 8) thumb_h = 8;
+    if (thumb_h > viewport_h) thumb_h = viewport_h;
+    const int32_t travel = viewport_h - thumb_h;
+    if (travel <= 0) return dy;
+    int32_t delta = (dy * scroll_max) / travel;
+    if (delta == 0) delta = (dy > 0) ? 1 : -1;
+    return delta;
+}
+
 static inline void
 ui_fill_rect(uint8_t *base, int32_t bw, int32_t bh, int32_t x, int32_t y, int32_t w, int32_t h, uint32_t color)
 {

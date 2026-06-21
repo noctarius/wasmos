@@ -124,7 +124,7 @@ export class Context {
   private width: i32 = 0;
   private height: i32 = 0;
   private strideBytes: i32 = 0;
-  private bufferId: i32 = -1;
+  private bufferId: i32 = 0;
   private shmemId: i32 = -1;
   private mappedPtr: i32 = 0;
   private mappedLen: i32 = 0;
@@ -187,7 +187,7 @@ export class Context {
     if (this.windowId > 0 && this.gfxEndpoint > 0) {
       let _ = ipc.call(this.gfxEndpoint, GFX_IPC_DESTROY_WINDOW, this.windowId, 0, 0, 0);
     }
-    if (this.bufferId > 0 && this.gfxEndpoint > 0) {
+    if (this.bufferId != 0 && this.gfxEndpoint > 0) {
       // Release after destroying the window so the compositor no longer
       // considers the buffer busy and can reclaim the slot.
       let _ = ipc.call(this.gfxEndpoint, GFX_IPC_RELEASE_SHARED_BUFFER, this.bufferId, 0, 0, 0);
@@ -197,7 +197,7 @@ export class Context {
     }
     this.mappedPtr = 0;
     this.mappedLen = 0;
-    this.bufferId = -1;
+    this.bufferId = 0;
     this.shmemId = -1;
     this.windowId = -1;
   }
@@ -227,7 +227,7 @@ export class Context {
   }
 
   endFrame(): bool {
-    if (this.shmemId <= 0 || this.mappedPtr == 0 || this.gfxEndpoint <= 0 || this.windowId <= 0 || this.bufferId <= 0) {
+    if (this.shmemId <= 0 || this.mappedPtr == 0 || this.gfxEndpoint <= 0 || this.windowId <= 0 || this.bufferId == 0) {
       return false;
     }
     const byteLen = this.strideBytes * this.height;
@@ -439,10 +439,10 @@ export class Context {
       if (this.mappedPtr != 0) {
         let _ = shmem_unmap(this.shmemId);
       }
-      if (this.bufferId > 0) {
+      if (this.bufferId != 0) {
         let _ = ipc.call(this.gfxEndpoint, GFX_IPC_RELEASE_SHARED_BUFFER, this.bufferId, 0, 0, 0);
       }
-      this.bufferId = -1;
+      this.bufferId = 0;
       this.shmemId = -1;
       this.mappedPtr = 0;
       this.mappedLen = 0;

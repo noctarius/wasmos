@@ -5,7 +5,6 @@
 #include "process_manager.h"
 #include "serial.h"
 #include "wasmos_app.h"
-#include "wasm3/probe.h"
 #include "string.h"
 
 static const uint8_t g_skip_wasm_boot = 0;
@@ -33,7 +32,6 @@ kernel_init_state_reset(init_state_t *state, const boot_info_t *boot_info)
     state->fs_init_index = 0xFFFFFFFFu;
     state->device_manager_index = 0xFFFFFFFFu;
     state->dm_pid = 0;
-    state->wasm3_probe_done = 0;
 }
 
 static uint32_t
@@ -167,7 +165,6 @@ kernel_init_entry(process_t *process, void *arg)
         state->fs_manager_index = boot_module_index_by_app_name(state->boot_info, "fs-manager");
         state->fs_init_index = boot_module_index_by_app_name(state->boot_info, "fs-init");
         state->device_manager_index = boot_module_index_by_app_name(state->boot_info, "device-manager");
-        state->wasm3_probe_done = 0;
         state->reply_endpoint = IPC_ENDPOINT_NONE;
         state->request_id = 1;
         state->pending_kind = 0;
@@ -212,19 +209,17 @@ kernel_init_entry(process_t *process, void *arg)
     if (g_skip_wasm_boot) {
         /* Synchronous wasm3 probe removed; see the note in the phase==0 path
          * below (the probed app's proc_exit would terminate init). */
-        state->wasm3_probe_done = 1;
         process_block_on_ipc(process);
         return PROCESS_RUN_BLOCKED;
     }
 
     if (state->phase == 0) {
-        /* The synchronous in-kernel wasm3 probe was removed: WASM apps now exit
-         * via the proc_exit hostcall instead of returning, so running an app
-         * entry synchronously in init's context (wasm3_probe_run) terminates
-         * init itself and stops system bringup. native-call-min is still run
-         * (and thus wasm3 still validated) by spawning it as a normal process
+        /* The old synchronous in-kernel wasm3 probe was removed: WASM apps now
+         * exit via the proc_exit hostcall instead of returning, so running an
+         * app entry synchronously in init's context terminated init itself and
+         * stopped system bringup. native-call-min is still run (and thus wasm3
+         * still validated) by spawning it as a normal process
          * below, where proc_exit correctly terminates only that process. */
-        state->wasm3_probe_done = 1;
         uint32_t proc_ep = process_manager_endpoint();
         if (proc_ep == IPC_ENDPOINT_NONE) {
             return PROCESS_RUN_YIELDED;

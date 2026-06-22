@@ -1259,20 +1259,13 @@ process_spawn_idle_ap(uint32_t cpu_id)
     /* AP idle threads are never enqueued; dispatched only via the per-CPU
      * fallback path in cpu_sched_pick_next. */
     g_cpus[cpu_id].idle_thread = thread;
-    /* FIXME(smp-distribution): AP work-stealing is currently dead. The BSP
-     * records its idle thread in BOTH idle_thread and sched.idle (see the idle
-     * bootstrap in process_init), but here we only set idle_thread. The steal
-     * trigger in process_schedule_once_impl gates on `thread == cs->idle`,
-     * while cpu_sched_pick_next() returns cpu_local()->idle_thread; on an AP
-     * cs->idle stays NULL, so the trigger never fires and runnable work piles
-     * up on CPU 0 while APs idle. The one-line fix is:
-     *     g_cpus[cpu_id].sched.idle = thread;
-     * It is intentionally NOT applied yet: enabling steals (or any cross-CPU
-     * "push" placement) makes WARP-backed apps/services execute on APs, which
-     * exposes a separate cross-CPU IPC lost-wakeup/livelock in WARP execution
-     * (suspected serialized-execution requirement; see warp_driver.cpp /
-     * warp/shim.cpp). Apply this fix only after WARP execution is made
-     * SMP-safe, otherwise boot hangs flakily. */
+    /* Mirror the BSP idle bootstrap: record this thread as the per-CPU
+     * scheduler idle thread.  Without it sched.idle stays NULL on APs, so the
+     * work-steal trigger (`thread == cs->idle`) in process_schedule_once_impl
+     * never fires and all runnable work piles up on CPU 0.  Stealing is now
+     * poll-aware (cpu_sched_steal_pick skips sched_sticky threads), so enabling
+     * it no longer causes idle CPUs to thrash on poll/yield loops. */
+    g_cpus[cpu_id].sched.idle = thread;
     return 0;
 }
 
@@ -1737,6 +1730,9 @@ static int process_schedule_once_impl(void) {
     cpu_local()->current_process = proc;
     cpu_local()->current_thread = thread;
     thread->last_cpu = cpu_local()->cpu_id;
+    /* Dispatching clears the sticky (just-yielded) hint; it is re-set only if
+     * this run ends in another voluntary yield. */
+    thread->sched_sticky = 0;
     if (cpu_local()->current_thread->owner_pid != cpu_local()->current_process->pid) {
         process_sched_invariant_fail("current owner mismatch", cpu_local()->current_thread->owner_pid, cpu_local()->current_process->pid);
     }
@@ -1937,6 +1933,12 @@ static int process_schedule_once_impl(void) {
             __atomic_store_n(&thread->blocking_transition, 0, __ATOMIC_RELEASE);
         }
         thread_set_state(thread->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
+        /* This thread voluntarily yielded (PROCESS_RUN_YIELDED) — mark it sticky
+         * so work-stealing leaves it on this CPU instead of having idle CPUs
+         * thrash re-running a poll/yield loop. */
+        if (result == PROCESS_RUN_YIELDED) {
+            thread->sched_sticky = 1;
+        }
         /* Idle threads live only in the per-CPU fallback path; never enqueue
          * them into the global ready queue so they cannot migrate to a wrong CPU. */
         if (!proc->is_idle && thread->sched_node.next == &thread->sched_node) {

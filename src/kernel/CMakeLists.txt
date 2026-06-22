@@ -205,7 +205,6 @@ if (WASMOS_WASM_RUNTIME_WARP)
 else ()
   list(APPEND KERNEL_OBJS
     ${BUILD_DIR}/wasm_driver.o
-    ${BUILD_DIR}/wasm3_probe.o
     ${BUILD_DIR}/wasm3_link.o
     ${BUILD_DIR}/wasm3_shim.o
     ${BUILD_DIR}/wasm3_code.o
@@ -328,7 +327,6 @@ if (WASMOS_WASM_RUNTIME_WARP)
 else ()
   list(APPEND KERNEL_SOURCES
     ${KERNEL_DIR}/wasm_driver.c
-    ${KERNEL_DIR}/wasm3/probe.c
     ${KERNEL_DIR}/wasm3/link.c
     ${KERNEL_DIR}/wasm3/shim.c
     ${WASM3_DIR}/source/m3_code.c
@@ -383,7 +381,6 @@ target_sources(kernel_sources INTERFACE
   ${KERNEL_DIR}/include/wasmos_app.h
   ${KERNEL_DIR}/include/wasmos_app_meta.h
   ${KERNEL_DIR}/wasm3/link.h
-  ${KERNEL_DIR}/wasm3/probe.h
   ${KERNEL_DIR}/wasm3/shim.h
   ${KERNEL_DIR}/include/io.h
   ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
@@ -486,7 +483,6 @@ if (WASMOS_WASM_RUNTIME_WARP)
 else ()
   set(WASM_RUNTIME_COMPILE_CMDS
     COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_driver.c    -o ${BUILD_DIR}/wasm_driver.o
-    COMMAND ${CLANG} ${CFLAGS_WASM3}  -c ${KERNEL_DIR}/wasm3/probe.c    -o ${BUILD_DIR}/wasm3_probe.o
     COMMAND ${CLANG} ${CFLAGS_WASM3}  -c ${KERNEL_DIR}/wasm3/link.c     -o ${BUILD_DIR}/wasm3_link.o
     COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm3/shim.c     -o ${BUILD_DIR}/wasm3_shim.o
     COMMAND ${CLANG} ${CFLAGS_WASM3}  -c ${WASM3_DIR}/source/m3_code.c    -o ${BUILD_DIR}/wasm3_code.o

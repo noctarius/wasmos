@@ -41,7 +41,6 @@ void *memchr(const void *s, int c, size_t n)
 // ---------------------------------------------------------------------------
 
 struct boot_info;
-int  wasm3_probe_run(const struct boot_info *, unsigned int) { return 0; }
 void wasm3_heap_release(unsigned int) {}
 unsigned long long wasm3_heap_committed_bytes(unsigned int) { return 0; }
 

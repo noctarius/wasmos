@@ -28,6 +28,7 @@
 #include "kernel_selftest_runtime.h"
 #include "kernel_sched_selftest_runtime.h"
 #include "kernel_threading_selftest_runtime.h"
+#include "kernel_sched_smp_stress_runtime.h"
 #include "kernel_ring3_smoke_runtime.h"
 #include "kernel_ring3_suite_runtime.h"
 
@@ -355,6 +356,15 @@ kmain(boot_info_t *boot_info)
         if (process_spawn_idle_ap(_i) != 0) {
             serial_printf("[kernel] idle-ap %u spawn failed\n", _i);
         }
+    }
+#endif
+
+#ifdef WASMOS_SCHED_SMP_STRESS
+    /* Standalone SMP scheduler stress test, compiled in only for the dedicated
+     * stress build. Runs once the scheduler loop below brings the APs into full
+     * cross-CPU scheduling. */
+    if (kernel_sched_smp_stress_spawn(init_pid) != 0) {
+        klog_write("[kernel] smp stress spawn failed\n");
     }
 #endif
 

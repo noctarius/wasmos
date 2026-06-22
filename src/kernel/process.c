@@ -1913,6 +1913,21 @@ static int process_schedule_once_impl(void) {
          * stranded. */
         if (thread->state == THREAD_STATE_READY) {
             sched_enqueue_thread(thread);
+        } else if (thread->state == THREAD_STATE_RUNNING) {
+            /* Legacy callers (native services via the no-op process_block_on_ipc
+             * stub) return PROCESS_RUN_BLOCKED without ever blocking through
+             * sched_event_wait, so the thread is still RUNNING and on no
+             * wait_list. Treat it as a voluntary yield: mark it READY and
+             * re-enqueue. Without this it is orphaned — RUNNING, not current on
+             * any CPU, not in any ready queue — and never runs again (observed
+             * as a boot hang under SMP when such a service is scheduled off
+             * CPU 0). Mark it sticky like other pollers so work-stealing leaves
+             * it on its home CPU. */
+            thread_set_state(thread->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);
+            thread->sched_sticky = 1;
+            if (thread->sched_node.next == &thread->sched_node) {
+                sched_enqueue_thread(thread);
+            }
         }
     } else {
         /* If the thread registered itself in an event wait_list via the

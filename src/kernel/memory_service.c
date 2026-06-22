@@ -81,44 +81,18 @@ memory_service_process_once(void)
 int
 memory_service_handle_fault_ipc(uint32_t fault_context_id, uint64_t fault_addr, uint64_t error_code)
 {
-    if (g_mem_service_endpoint == IPC_ENDPOINT_NONE ||
-        g_mem_service_reply_endpoint == IPC_ENDPOINT_NONE) {
-        return -1;
-    }
-
-    ipc_message_t req;
-    req.type = IPC_MEM_FAULT;
-    req.source = g_mem_service_reply_endpoint;
-    req.destination = g_mem_service_endpoint;
-    req.request_id = g_mem_service_request_id++;
-    if (g_mem_service_request_id == 0) {
-        g_mem_service_request_id = 1;
-    }
-    req.arg0 = (uint32_t)fault_addr;
-    req.arg1 = (uint32_t)(fault_addr >> 32);
-    req.arg2 = (uint32_t)error_code;
-    req.arg3 = fault_context_id;
-
-    if (ipc_send_from(IPC_CONTEXT_KERNEL, g_mem_service_endpoint, &req) != IPC_OK) {
-        return -1;
-    }
-
-    if (memory_service_process_once() != 0) {
-        return -1;
-    }
-
-    ipc_message_t reply;
-    int rc = ipc_recv_for(IPC_CONTEXT_KERNEL, g_mem_service_reply_endpoint, &reply);
-    if (rc != IPC_OK) {
-        return -1;
-    }
-    if (reply.type != IPC_MEM_FAULT_REPLY || reply.request_id != req.request_id) {
-        return -1;
-    }
-    if ((int32_t)reply.arg0 != 0) {
-        return -1;
-    }
-    return 0;
+    /* Resolve the fault directly rather than round-tripping through the
+     * mem-service IPC endpoint.  memory_service_handle_request() only ever
+     * calls mm_handle_page_fault() for IPC_MEM_FAULT, and that endpoint is also
+     * drained by the mem-service worker thread.  Under SMP the worker (on
+     * another CPU) can consume the just-sent IPC_MEM_FAULT before this inline
+     * recv does, so the inline path sees IPC_EMPTY and reports the fault as
+     * unhandled — turning a recoverable demand-fault into a kernel panic
+     * (observed in the pagefault selftest on wasm3+SMP).  Calling
+     * mm_handle_page_fault() directly removes both the indirection and the
+     * dual-consumer race; it is an in-kernel routine, so no IPC is needed. */
+    uint64_t mapped_base = 0;
+    return mm_handle_page_fault(fault_context_id, fault_addr, error_code, &mapped_base);
 }
 
 process_run_result_t

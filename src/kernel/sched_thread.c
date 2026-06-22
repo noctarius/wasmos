@@ -359,6 +359,34 @@ sched_spawn_thread(struct thread *t)
     cpu_sched_enqueue(&g_cpus[target].sched, t);
 }
 
+/* Steal-specific picker: find the highest-priority thread in this queue that is
+ * stealable, i.e. not the idle thread and not sched_sticky (a thread whose last
+ * run was a voluntary yield — likely a poll/yield loop that should stay on its
+ * home CPU rather than be re-run by every idle CPU).  Caller holds cs->lock.
+ * Unlike cpu_sched_pick_next this does not touch the anti-starvation globals. */
+static thread_t *
+cpu_sched_steal_pick(cpu_sched_t *cs)
+{
+    for (int prio = 0; prio < SCHED_PRIO_MAX; prio++) {
+        if (!(cs->ready_bitmap & (1u << prio))) {
+            continue;
+        }
+        list_head_t *pos, *tmp;
+        list_for_each_safe(pos, tmp, &cs->ready_list[prio]) {
+            thread_t *t = list_entry(pos, thread_t, sched_node);
+            if (t == cs->idle || t->sched_sticky) {
+                continue;
+            }
+            list_head_del(&t->sched_node);
+            if (--cs->thread_count[prio] == 0) {
+                cs->ready_bitmap &= (uint8_t)(~(1u << prio));
+            }
+            return t;
+        }
+    }
+    return NULL;
+}
+
 struct thread *
 cpu_sched_try_steal(uint32_t my_cpu_id)
 {
@@ -378,10 +406,7 @@ cpu_sched_try_steal(uint32_t my_cpu_id)
         }
         struct thread *t = NULL;
         if (remote->ready_bitmap) {
-            t = cpu_sched_pick_next(remote);
-            if (t == remote->idle) {
-                t = NULL;
-            }
+            t = cpu_sched_steal_pick(remote);
         }
         /* spinlock_try_lock does not call preempt_disable/spinlock_irq_save,
          * so we must release with the matching no-IRQ variant. */

@@ -65,6 +65,9 @@ typedef struct thread {
     uint64_t        ctx_canary_post;
     /* Scheduler priority and CPU placement. */
     uint8_t         sched_prio;     /* SCHED_PRIO_* */
+    uint8_t         sched_sticky;   /* 1 if last run was a voluntary yield (poller);
+                                     * work-stealing skips it so idle CPUs do not
+                                     * thrash re-running it. Cleared on dispatch. */
     uint32_t        cpu_affinity;   /* allowed CPU bitmask; ~0u = any */
     uint32_t        last_cpu;       /* CPU where thread last ran */
     /* Intrusive linkage for scheduler lists. */

@@ -210,27 +210,21 @@ kernel_init_entry(process_t *process, void *arg)
     }
 
     if (g_skip_wasm_boot) {
-        if (!state->wasm3_probe_done && state->native_min_index != 0xFFFFFFFFu) {
-            trace_write("[init] wasm3 probe native-call-min\n");
-            int wasm3_rc = wasm3_probe_run(state->boot_info, state->native_min_index);
-            (void)wasm3_rc;
-            trace_write("[init] wasm3 probe rc=");
-            trace_do(serial_write_hex64((uint64_t)(uint32_t)wasm3_rc));
-            state->wasm3_probe_done = 1;
-        }
+        /* Synchronous wasm3 probe removed; see the note in the phase==0 path
+         * below (the probed app's proc_exit would terminate init). */
+        state->wasm3_probe_done = 1;
         process_block_on_ipc(process);
         return PROCESS_RUN_BLOCKED;
     }
 
     if (state->phase == 0) {
-        if (!state->wasm3_probe_done && state->native_min_index != 0xFFFFFFFFu) {
-            trace_write("[init] wasm3 probe native-call-min\n");
-            int wasm3_rc = wasm3_probe_run(state->boot_info, state->native_min_index);
-            (void)wasm3_rc;
-            trace_write("[init] wasm3 probe rc=");
-            trace_do(serial_write_hex64((uint64_t)(uint32_t)wasm3_rc));
-            state->wasm3_probe_done = 1;
-        }
+        /* The synchronous in-kernel wasm3 probe was removed: WASM apps now exit
+         * via the proc_exit hostcall instead of returning, so running an app
+         * entry synchronously in init's context (wasm3_probe_run) terminates
+         * init itself and stops system bringup. native-call-min is still run
+         * (and thus wasm3 still validated) by spawning it as a normal process
+         * below, where proc_exit correctly terminates only that process. */
+        state->wasm3_probe_done = 1;
         uint32_t proc_ep = process_manager_endpoint();
         if (proc_ep == IPC_ENDPOINT_NONE) {
             return PROCESS_RUN_YIELDED;

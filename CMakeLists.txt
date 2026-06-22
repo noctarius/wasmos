@@ -243,6 +243,16 @@ else ()
   set(WASMOS_RING3_SMOKE_VALUE 0)
 endif ()
 set(WASMOS_RING3_SMOKE_DEFINE -DWASMOS_RING3_SMOKE_DEFAULT=${WASMOS_RING3_SMOKE_VALUE})
+
+# Standalone SMP scheduler stress test (separate from the always-on selftests).
+# When ON, the kernel spawns a cross-CPU token-ring stress + invariant test
+# before entering the scheduler loop; see kernel_sched_smp_stress_runtime.c.
+option(WASMOS_SCHED_SMP_STRESS "Run the standalone SMP scheduler stress test" OFF)
+if (WASMOS_SCHED_SMP_STRESS)
+  set(WASMOS_SCHED_SMP_STRESS_DEFINE -DWASMOS_SCHED_SMP_STRESS=1)
+else ()
+  set(WASMOS_SCHED_SMP_STRESS_DEFINE)
+endif ()
 option(WASMOS_RING3_THREAD_LIFECYCLE_SMOKE
        "Enable dedicated ring3 thread lifecycle helper probe spawn by default"
        OFF)
@@ -1398,6 +1408,22 @@ if (OVMF_VARS)
     COMMENT "Running QEMU halt test"
     VERBATIM
   )
+  # Standalone SMP scheduler stress gate. Only meaningful when the kernel was
+  # configured with -DWASMOS_SCHED_SMP_STRESS=ON (otherwise the marker is never
+  # emitted and this target times out). Runtime-independent: works on any SMP
+  # build and does not require a bootable userspace.
+  add_custom_target(run-qemu-sched-stress-test
+    ${WASMOS_ESP_POPULATE_CMDS}
+    COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_sched_stress_test.py
+            --ovmf-code ${OVMF_CODE}
+            --ovmf-vars ${OVMF_VARS}
+            --esp ${BUILD_DIR}/esp
+            --smp ${WASMOS_QEMU_SMP_COUNT}
+    DEPENDS bootloader kernel
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    COMMENT "Running SMP scheduler stress test"
+    VERBATIM
+  )
   add_custom_target(run-qemu-cli-test
     ${WASMOS_ESP_POPULATE_CMDS}
     COMMAND ${CMAKE_COMMAND} -E env
@@ -1472,6 +1498,17 @@ else ()
       DEPENDS bootloader kernel
       WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
       COMMENT "Running QEMU halt test"
+      VERBATIM
+    )
+    add_custom_target(run-qemu-sched-stress-test
+      ${WASMOS_ESP_POPULATE_CMDS}
+      COMMAND ${CMAKE_SOURCE_DIR}/scripts/qemu_sched_stress_test.py
+              --ovmf-code ${OVMF_CODE}
+              --esp ${BUILD_DIR}/esp
+              --smp ${WASMOS_QEMU_SMP_COUNT}
+      DEPENDS bootloader kernel
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+      COMMENT "Running SMP scheduler stress test"
       VERBATIM
     )
     add_custom_target(run-qemu-cli-test

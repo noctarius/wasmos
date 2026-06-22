@@ -1,8 +1,8 @@
 set(LDFLAGS_KERNEL -nostdlib -T ${KERNEL_DIR}/arch/x86_64/linker.ld)
 if (WASMOS_WASM_RUNTIME_WARP)
-  set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -mcmodel=kernel ${WASMOS_TRACE_DEFINE} ${WASMOS_RING3_SMOKE_DEFINE} ${WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFINE} ${WASMOS_PM_TEST_HOOKS_DEFINE} ${WASMOS_PM_LIST_DEFINE} ${WASMOS_PM_LIST_CAP_DEFINE} ${WASMOS_IRQ_MODE_DEFINE} ${WASMOS_SMP_DEFINE} ${WASMOS_SCHED_CALLER_CPU_BIAS_DEFINE} -DWASMOS_SCHED_THREADABLE -Wno-unused-parameter)
+  set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -mcmodel=kernel ${WASMOS_TRACE_DEFINE} ${WASMOS_RING3_SMOKE_DEFINE} ${WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFINE} ${WASMOS_PM_TEST_HOOKS_DEFINE} ${WASMOS_PM_LIST_DEFINE} ${WASMOS_PM_LIST_CAP_DEFINE} ${WASMOS_IRQ_MODE_DEFINE} ${WASMOS_SMP_DEFINE} ${WASMOS_SCHED_CALLER_CPU_BIAS_DEFINE} ${WASMOS_SCHED_SMP_STRESS_DEFINE} -DWASMOS_SCHED_THREADABLE -Wno-unused-parameter)
 else ()
-  set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -mcmodel=kernel ${WASMOS_TRACE_DEFINE} ${WASMOS_RING3_SMOKE_DEFINE} ${WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFINE} ${WASMOS_PM_TEST_HOOKS_DEFINE} ${WASMOS_PM_LIST_DEFINE} ${WASMOS_PM_LIST_CAP_DEFINE} ${WASMOS_IRQ_MODE_DEFINE} ${WASMOS_SMP_DEFINE} ${WASMOS_SCHED_CALLER_CPU_BIAS_DEFINE} -DWASMOS_SCHED_THREADABLE -I${WASM3_DIR}/source -Wno-unused-parameter)
+  set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -mcmodel=kernel ${WASMOS_TRACE_DEFINE} ${WASMOS_RING3_SMOKE_DEFINE} ${WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFINE} ${WASMOS_PM_TEST_HOOKS_DEFINE} ${WASMOS_PM_LIST_DEFINE} ${WASMOS_PM_LIST_CAP_DEFINE} ${WASMOS_IRQ_MODE_DEFINE} ${WASMOS_SMP_DEFINE} ${WASMOS_SCHED_CALLER_CPU_BIAS_DEFINE} ${WASMOS_SCHED_SMP_STRESS_DEFINE} -DWASMOS_SCHED_THREADABLE -I${WASM3_DIR}/source -Wno-unused-parameter)
 endif ()
 set(CXXFLAGS_KERNEL ${CFLAGS_KERNEL} -fno-exceptions -fno-rtti -fno-threadsafe-statics -Wno-deprecated)
 set(CFLAGS_WASM3 ${CFLAGS_KERNEL} -I${WASM3_DIR}/source -Wno-unused-parameter -Wno-unused-variable)
@@ -112,6 +112,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/kernel_ring3_smoke_runtime.o
   ${BUILD_DIR}/kernel_ring3_suite_runtime.o
   ${BUILD_DIR}/kernel_threading_selftest_runtime.o
+  ${BUILD_DIR}/kernel_sched_smp_stress_runtime.o
   ${BUILD_DIR}/cpu.o
   ${BUILD_DIR}/cpu_x86_64.o
   ${BUILD_DIR}/memory.o
@@ -239,6 +240,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/kernel_ring3_smoke_runtime.c
   ${KERNEL_DIR}/kernel_ring3_suite_runtime.c
   ${KERNEL_DIR}/kernel_threading_selftest_runtime.c
+  ${KERNEL_DIR}/kernel_sched_smp_stress_runtime.c
   ${KERNEL_DIR}/cpu.c
   ${KERNEL_DIR}/arch/x86_64/cpu_x86_64.c
   ${KERNEL_DIR}/libc.c
@@ -516,6 +518,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel_ring3_smoke_runtime.c -o ${BUILD_DIR}/kernel_ring3_smoke_runtime.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel_ring3_suite_runtime.c -o ${BUILD_DIR}/kernel_ring3_suite_runtime.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel_threading_selftest_runtime.c -o ${BUILD_DIR}/kernel_threading_selftest_runtime.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel_sched_smp_stress_runtime.c -o ${BUILD_DIR}/kernel_sched_smp_stress_runtime.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/cpu.c -o ${BUILD_DIR}/cpu.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/cpu_x86_64.c -o ${BUILD_DIR}/cpu_x86_64.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/capability.c -o ${BUILD_DIR}/capability.o

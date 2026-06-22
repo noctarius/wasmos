@@ -633,6 +633,15 @@ if (WASMOS_RING3_SHADOW)
   set(WASMOS_WASM_RUNTIME_WASM3 ON  CACHE BOOL "Use wasm3 interpreter" FORCE)
 endif ()
 
+# The generic Kconfig WASMOS_RING3 toggle (WARP-only) drives the WARP ring-3
+# code gate WASMOS_WARP_RING3.  Derived here, after the Kconfig import and the
+# ring3-shadow override, so the selected config is the single source of truth.
+if (WASMOS_WASM_RUNTIME_WARP AND WASMOS_RING3)
+  set(WASMOS_WARP_RING3 ON  CACHE BOOL "Execute WARP JIT code in ring-3 user mode" FORCE)
+else ()
+  set(WASMOS_WARP_RING3 OFF CACHE BOOL "Execute WARP JIT code in ring-3 user mode" FORCE)
+endif ()
+
 # WASM runtime selection must run AFTER the Kconfig import so that on a fresh
 # cmake cache (e.g. the ring3 shadow build) the kconfig-selected runtime wins
 # before CFLAGS_KERNEL is assembled.  On a warm cache the initialization block
@@ -996,16 +1005,22 @@ function(wasmos_maybe_aot_pack MANIFEST WASM APP)
     add_custom_command(
       OUTPUT "${_warpbin}"
       # Use the caching cmake script so unchanged WASM files are not recompiled
-      # across clean builds.  Depend only on the warp_aot BINARY file (not the
-      # phony warp_aot target) — a target dependency on a phony causes Ninja to
-      # mark the output as always-stale even when nothing has changed.
+      # across clean builds.  Depend on the warp_aot BINARY file (for cache
+      # invalidation when the tool changes) AND on the warp_aot TARGET.  The
+      # target dependency is what makes a fresh build order the host tool ahead
+      # of the apps that consume it: this custom command is created in an app
+      # subdirectory, and a cross-directory dependency on a custom-command
+      # OUTPUT file alone gives the Make generator no rule to build the tool
+      # ("No rule to make target 'warp_aot'").  Depending on the custom_target
+      # creates a target-level ordering dependency (not a file-level re-run
+      # trigger), so it does not mark this output always-stale.
       COMMAND ${CMAKE_COMMAND}
               "-DWARP_AOT=${WARP_AOT_BIN}"
               "-DWASM=${WASM}"
               "-DWARPBIN=${_warpbin}"
               "-DCACHE_DIR=${_aot_cache_dir}"
               -P "${CMAKE_SOURCE_DIR}/cmake/warp_aot_cached.cmake"
-      DEPENDS "${WASM}" "${WARP_AOT_BIN}" ${_extra_deps}
+      DEPENDS "${WASM}" "${WARP_AOT_BIN}" warp_aot ${_extra_deps}
       WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
       COMMENT "AOT compiling ${_name}"
       VERBATIM

@@ -102,6 +102,15 @@ config WASMOS_WASM_RUNTIME_WARP
 
 endchoice
 
+config WASMOS_RING3
+    bool "Execute WASM in ring 3 (user mode)"
+    depends on WASMOS_WASM_RUNTIME_WARP
+    default n
+    help
+      Run WARP JIT code in ring 3 with per-process page tables instead of in
+      ring 0 (it drives WASMOS_WARP_RING3 in the build). Only applies to the
+      WARP runtime; the wasm3 interpreter always executes in ring 3.
+
 config KERNEL_TARGET_TRIPLE
     string "Kernel target triple"
     default "x86_64-elf"

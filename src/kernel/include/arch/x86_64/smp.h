@@ -100,16 +100,6 @@ typedef struct cpu_local {
      * Never placed in the global ready queue; always dispatched via the
      * cpu_sched_pick_next fallback path. */
     thread_t          *idle_thread;
-
-#ifdef WASMOS_WARP_RING3
-    /* Per-CPU WARP ring-3 call state.
-     * These three fields are set atomically just before IRET (no blocking
-     * possible between set and use in the WARP_RETURN syscall handler, which
-     * always fires on the same CPU that executed the IRET). */
-    uint64_t           warp_r3_old_cr3;     /* kernel CR3 saved before IRET */
-    uint8_t            warp_r3_active;      /* 1 while ring-3 call in progress */
-    void              *warp_r3_jbuf[5];     /* setjmp buffer for WARP_RETURN */
-#endif
 } cpu_local_t;
 
 /* context_switch.S encodes this offset as CPU_LOCAL_IN_CONTEXT_SWITCH_OFFSET.

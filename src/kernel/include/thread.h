@@ -48,6 +48,16 @@ typedef struct thread {
     uint8_t detached;
     int32_t exit_status;
     uint32_t wasm3_heap_bound_pid;
+#ifdef WASMOS_WARP_RING3
+    /* Per-thread WARP ring-3 call state.  A ring-3 export call can block in a
+     * hostcall (e.g. blocking IPC), yield, and later resume/migrate to a
+     * different CPU, so this state must travel with the thread rather than live
+     * in cpu_local.  Set just before the ring-3 IRET and consumed by the
+     * WARP_RETURN syscall handler via __builtin_longjmp. */
+    uint64_t warp_r3_old_cr3;   /* CR3 to restore when the ring-3 call returns */
+    uint8_t  warp_r3_active;    /* 1 while a ring-3 call is in progress */
+    void    *warp_r3_jbuf[5];   /* setjmp checkpoint for WARP_RETURN */
+#endif
     char name_storage[THREAD_NAME_MAX];
     const char *name;
     /* Per-thread context canaries (moved from process_t). */

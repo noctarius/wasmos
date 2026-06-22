@@ -524,18 +524,21 @@ warp_r3_call_export(vb::WasmModule *mod, const char *name,
 
     /* Switch to WARP user CR3; kernel higher-half is still accessible
      * because paging_create_address_space shares PML4[511].
-     * Store old_cr3 / active / jbuf in cpu-local; these are set here with no
-     * blocking possible before the IRET, so they are safe on this CPU.
-     * WARP_RETURN fires via INT 0x80 on the same CPU that executes the IRET. */
-    cpu_local_t *cpu = cpu_local();
-    cpu->warp_r3_old_cr3 = paging_get_current_root_table();
+     * The call state (old_cr3 / active / jbuf) lives in the calling thread, not
+     * cpu-local: a ring-3 call can block in a hostcall and resume on another
+     * CPU, so WARP_RETURN must longjmp to this thread's checkpoint regardless of
+     * which CPU it fires on. */
+    thread_t *t = cpu_local()->current_thread;
+    /* Capture the calling process's root table (each ring-3 WARP process has its
+     * own; it is not the global kernel root) so WARP_RETURN can restore it. */
+    t->warp_r3_old_cr3 = paging_get_current_root_table();
     paging_switch_root(user_root);
 
     /* Checkpoint: longjmp from WARP_RETURN syscall handler lands here. */
-    cpu->warp_r3_active = 1;
-    if (__builtin_setjmp(cpu->warp_r3_jbuf) != 0) {
+    t->warp_r3_active = 1;
+    if (__builtin_setjmp(t->warp_r3_jbuf) != 0) {
         /* WARP_RETURN fired — restore kernel CR3 and return. */
-        paging_switch_root(cpu->warp_r3_old_cr3);
+        paging_switch_root(t->warp_r3_old_cr3);
         uint64_t tc = *reinterpret_cast<uint64_t *>(kstack + 40);
         return (tc == 0) ? 0 : -1;
     }

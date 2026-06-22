@@ -355,10 +355,10 @@ x86_syscall_handler(syscall_frame_t *frame)
      * wrapper executes its final `ret`. RDI contains the raw RAX that the
      * JIT wrapper had on exit (trap code or return value). */
     if ((uint32_t)frame->rax == WASMOS_SYSCALL_WARP_RETURN) {
-        cpu_local_t *r3cpu = cpu_local();
-        if (r3cpu->warp_r3_active) {
-            r3cpu->warp_r3_active = 0;
-            __builtin_longjmp(r3cpu->warp_r3_jbuf, 1);
+        thread_t *r3t = cpu_local()->current_thread;
+        if (r3t && r3t->warp_r3_active) {
+            r3t->warp_r3_active = 0;
+            __builtin_longjmp(r3t->warp_r3_jbuf, 1);
         }
         frame->rax = (uint64_t)-1;
         return 0;

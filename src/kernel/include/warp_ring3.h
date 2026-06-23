@@ -75,10 +75,10 @@ typedef enum {
     HC_SYS_SELECT_ADD      = 23,  /* alias: sys_select_add → warp_ipc_select_add */
     HC_SYS_SELECT_WAIT     = 24,  /* alias: sys_select_wait → warp_ipc_select_wait */
     HC_SYS_SELECT_DESTROY  = 25,  /* alias: sys_select_destroy → warp_ipc_select_destroy */
-    HC_FS_BUFFER_SIZE      = 26,
+    HC_XFER_BUFFER_SIZE      = 26,
     HC_FS_ENDPOINT         = 27,
-    HC_FS_BUFFER_COPY      = 28,
-    HC_FS_BUFFER_WRITE     = 29,
+    HC_XFER_BUFFER_READ      = 28,
+    HC_XFER_BUFFER_WRITE     = 29,
     HC_BUFFER_BORROW       = 30,
     HC_BUFFER_RELEASE      = 31,
     HC_BLOCK_BUFFER_PHYS   = 32,
@@ -116,8 +116,8 @@ typedef enum {
     HC_PROC_INFO           = 64,
     HC_PROC_INFO_EX        = 65,
     HC_PROC_INFO_STATS     = 66,
-    HC_FS_BUFFER_BORROW    = 67,
-    HC_FS_BUFFER_RELEASE   = 68,
+    HC_XFER_BUFFER_BORROW    = 67,
+    HC_XFER_BUFFER_RELEASE   = 68,
     HC_SCHED_CPU_STATS     = 69,
     HC_THREAD_CREATE       = 70,
     HC_THREAD_YIELD        = 71,

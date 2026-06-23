@@ -104,12 +104,12 @@ unpack_name(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char *ou
 }
 
 static int
-copy_path_from_fs_buffer(int32_t path_len, char *out, uint32_t out_len)
+copy_path_from_xfer_buffer(int32_t path_len, char *out, uint32_t out_len)
 {
     if (!out || out_len == 0 || path_len <= 0 || path_len >= (int32_t)out_len) {
         return -1;
     }
-    if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)out, path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_read((int32_t)(uintptr_t)out, path_len, 0) != 0) {
         return -1;
     }
     if (wasmos_sync_user_read((int32_t)(uintptr_t)out, path_len) != 0) {
@@ -552,7 +552,7 @@ initialize(int32_t proc_endpoint,
 
         if (type == FS_IPC_OPEN_REQ) {
             char path[INITFS_PATH_MAX];
-            if (arg1 == 0 && arg2 == 0 && arg3 == 0 && copy_path_from_fs_buffer(arg0, path, sizeof(path)) == 0) {
+            if (arg1 == 0 && arg2 == 0 && arg3 == 0 && copy_path_from_xfer_buffer(arg0, path, sizeof(path)) == 0) {
                 /* path copied from FS buffer */
             } else {
                 unpack_name((uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3, path, sizeof(path));
@@ -566,7 +566,7 @@ initialize(int32_t proc_endpoint,
             int32_t req_len = arg1;
             if (fd && req_len >= 0) {
                 initfs_file_t *file = &g_files[fd->entry_index];
-                int32_t fs_buf_size = wasmos_fs_buffer_size();
+                int32_t fs_buf_size = wasmos_xfer_buffer_size();
                 uint8_t tmp[512];
                 if (fd->offset >= file->size) {
                     status = 0;
@@ -586,7 +586,7 @@ initialize(int32_t proc_endpoint,
                                                               req_len,
                                                               fd->offset);
                     if (copied >= 0) {
-                        if (copied == 0 || wasmos_fs_buffer_write((int32_t)(uintptr_t)tmp, copied, 0) == 0) {
+                        if (copied == 0 || wasmos_xfer_buffer_write((int32_t)(uintptr_t)tmp, copied, 0) == 0) {
                             fd->offset += copied;
                             status = copied;
                         }

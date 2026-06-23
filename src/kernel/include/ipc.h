@@ -66,15 +66,19 @@ void ipc_endpoints_release_owner(uint32_t owner_context_id);
 int ipc_select_create(uint32_t owner_context_id, uint32_t *out_select_id);
 int ipc_select_add(uint32_t select_id, uint32_t endpoint_id,
                    uint32_t owner_context_id);
+/* Block until a watched endpoint is ready, or timeout_ms elapses (0 = forever).
+ * On timeout returns IPC_EMPTY. */
 int ipc_select_wait(uint32_t select_id, uint32_t owner_context_id,
-                    uint32_t *out_ready_ep);
+                    uint32_t *out_ready_ep, uint32_t timeout_ms);
 /* Create a select set watching endpoints[0..count). */
 int ipc_select_listen(uint32_t owner_context_id, const uint32_t *endpoints,
                       uint32_t count, uint32_t *out_select_id);
-/* Block until a watched endpoint has a message, then dequeue it. Returns
- * IPC_OK / IPC_EMPTY (spurious or lost race; loop) / error. */
+/* Block until a watched endpoint has a message (or timeout_ms elapses; 0 =
+ * forever), then dequeue it. Returns IPC_OK / IPC_EMPTY (spurious, timeout, or
+ * lost race; loop) / error. */
 int ipc_select_recv(uint32_t select_id, uint32_t owner_context_id,
-                    uint32_t *out_endpoint, ipc_message_t *out_message);
+                    uint32_t *out_endpoint, ipc_message_t *out_message,
+                    uint32_t timeout_ms);
 void ipc_select_destroy(uint32_t select_id, uint32_t owner_context_id);
 
 #ifdef WASMOS_SCHED_THREADABLE

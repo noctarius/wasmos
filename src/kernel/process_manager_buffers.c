@@ -21,7 +21,7 @@ typedef struct {
     uint32_t dma_direction_flags;
     uint32_t dma_offset;
     uint32_t dma_length;
-} pm_fs_buffer_slot_t;
+} pm_xfer_buffer_slot_t;
 
 static list_t g_pm_fs_slots;
 static list_t g_pm_fb_slots;
@@ -33,25 +33,25 @@ pm_slots_init_once(void)
     if (g_pm_slots_initialized) {
         return 0;
     }
-    if (list_init(&g_pm_fs_slots, (uint32_t)sizeof(pm_fs_buffer_slot_t), LIST_IMPL_ARRAY_CHUNK, 16) != 0) {
+    if (list_init(&g_pm_fs_slots, (uint32_t)sizeof(pm_xfer_buffer_slot_t), LIST_IMPL_ARRAY_CHUNK, 16) != 0) {
         return -1;
     }
-    if (list_init(&g_pm_fb_slots, (uint32_t)sizeof(pm_fs_buffer_slot_t), LIST_IMPL_ARRAY_CHUNK, 16) != 0) {
+    if (list_init(&g_pm_fb_slots, (uint32_t)sizeof(pm_xfer_buffer_slot_t), LIST_IMPL_ARRAY_CHUNK, 16) != 0) {
         return -1;
     }
     g_pm_slots_initialized = 1;
     return 0;
 }
 
-static pm_fs_buffer_slot_t *
+static pm_xfer_buffer_slot_t *
 pm_fs_slot_find_iter(uint32_t context_id, list_iter_t *out_iter)
 {
     list_iter_t it;
-    pm_fs_buffer_slot_t *slot = 0;
+    pm_xfer_buffer_slot_t *slot = 0;
     if (pm_slots_init_once() != 0 || context_id == 0) {
         return 0;
     }
-    slot = (pm_fs_buffer_slot_t *)list_first(&g_pm_fs_slots, &it);
+    slot = (pm_xfer_buffer_slot_t *)list_first(&g_pm_fs_slots, &it);
     while (slot) {
         if (slot->in_use && slot->context_id == context_id) {
             if (out_iter) {
@@ -59,20 +59,20 @@ pm_fs_slot_find_iter(uint32_t context_id, list_iter_t *out_iter)
             }
             return slot;
         }
-        slot = (pm_fs_buffer_slot_t *)list_next(&it);
+        slot = (pm_xfer_buffer_slot_t *)list_next(&it);
     }
     return 0;
 }
 
-static pm_fs_buffer_slot_t *
+static pm_xfer_buffer_slot_t *
 pm_fb_slot_find_iter(uint32_t context_id, list_iter_t *out_iter)
 {
     list_iter_t it;
-    pm_fs_buffer_slot_t *slot = 0;
+    pm_xfer_buffer_slot_t *slot = 0;
     if (pm_slots_init_once() != 0 || context_id == 0) {
         return 0;
     }
-    slot = (pm_fs_buffer_slot_t *)list_first(&g_pm_fb_slots, &it);
+    slot = (pm_xfer_buffer_slot_t *)list_first(&g_pm_fb_slots, &it);
     while (slot) {
         if (slot->in_use && slot->context_id == context_id) {
             if (out_iter) {
@@ -80,17 +80,17 @@ pm_fb_slot_find_iter(uint32_t context_id, list_iter_t *out_iter)
             }
             return slot;
         }
-        slot = (pm_fs_buffer_slot_t *)list_next(&it);
+        slot = (pm_xfer_buffer_slot_t *)list_next(&it);
     }
     return 0;
 }
 
-static pm_fs_buffer_slot_t *
+static pm_xfer_buffer_slot_t *
 pm_fs_slot_for_context(uint32_t context_id)
 {
-    pm_fs_buffer_slot_t *slot = 0;
+    pm_xfer_buffer_slot_t *slot = 0;
     const uint64_t page_size = 4096u;
-    const uint64_t pages = PM_FS_BUFFER_SIZE / page_size;
+    const uint64_t pages = PM_XFER_BUFFER_SIZE / page_size;
 
     if (pm_slots_init_once() != 0 || context_id == 0) {
         return 0;
@@ -99,7 +99,7 @@ pm_fs_slot_for_context(uint32_t context_id)
     if (slot) {
         return slot;
     }
-    slot = (pm_fs_buffer_slot_t *)list_alloc(&g_pm_fs_slots);
+    slot = (pm_xfer_buffer_slot_t *)list_alloc(&g_pm_fs_slots);
     if (!slot) {
         return 0;
     }
@@ -114,21 +114,21 @@ pm_fs_slot_for_context(uint32_t context_id)
     return slot;
 }
 
-static pm_fs_buffer_slot_t *
+static pm_xfer_buffer_slot_t *
 pm_fs_slot_find(uint32_t context_id)
 {
     return pm_fs_slot_find_iter(context_id, 0);
 }
 
 static void *
-pm_fs_buffer_for_context(uint32_t context_id)
+pm_xfer_buffer_for_context(uint32_t context_id)
 {
-    pm_fs_buffer_slot_t *slot = pm_fs_slot_for_context(context_id);
+    pm_xfer_buffer_slot_t *slot = pm_fs_slot_for_context(context_id);
     if (!slot) {
         return 0;
     }
     if (slot->borrow_active && slot->borrow_source_context_id != 0) {
-        pm_fs_buffer_slot_t *source = pm_fs_slot_for_context(slot->borrow_source_context_id);
+        pm_xfer_buffer_slot_t *source = pm_fs_slot_for_context(slot->borrow_source_context_id);
         if (source) {
             return (void *)(uintptr_t)(source->buffer_phys | KERNEL_HIGHER_HALF_BASE);
         }
@@ -137,18 +137,18 @@ pm_fs_buffer_for_context(uint32_t context_id)
 }
 
 static uint32_t
-pm_fs_buffer_size(void)
+pm_xfer_buffer_size(void)
 {
-    return PM_FS_BUFFER_SIZE;
+    return PM_XFER_BUFFER_SIZE;
 }
 
 static int
-pm_fs_buffer_borrow_context(uint32_t borrower_context_id,
+pm_xfer_buffer_borrow_context(uint32_t borrower_context_id,
                             uint32_t source_context_id,
                             uint32_t flags)
 {
-    pm_fs_buffer_slot_t *borrower = 0;
-    pm_fs_buffer_slot_t *source = 0;
+    pm_xfer_buffer_slot_t *borrower = 0;
+    pm_xfer_buffer_slot_t *source = 0;
 
     if (borrower_context_id == 0 || source_context_id == 0 ||
         borrower_context_id == source_context_id || (flags & 0x3u) == 0) {
@@ -166,9 +166,9 @@ pm_fs_buffer_borrow_context(uint32_t borrower_context_id,
 }
 
 static int
-pm_fs_buffer_release_context(uint32_t borrower_context_id)
+pm_xfer_buffer_release_context(uint32_t borrower_context_id)
 {
-    pm_fs_buffer_slot_t *borrower = pm_fs_slot_find(borrower_context_id);
+    pm_xfer_buffer_slot_t *borrower = pm_fs_slot_find(borrower_context_id);
     if (!borrower) {
         return -1;
     }
@@ -186,19 +186,19 @@ pm_fs_buffer_release_context(uint32_t borrower_context_id)
 }
 
 static uint32_t
-pm_fs_buffer_borrow_flags(uint32_t context_id)
+pm_xfer_buffer_borrow_flags(uint32_t context_id)
 {
-    pm_fs_buffer_slot_t *slot = pm_fs_slot_find(context_id);
+    pm_xfer_buffer_slot_t *slot = pm_fs_slot_find(context_id);
     if (!slot || !slot->borrow_active) {
         return 0;
     }
     return (uint32_t)(slot->borrow_flags & 0x3u);
 }
 
-static pm_fs_buffer_slot_t *
+static pm_xfer_buffer_slot_t *
 pm_fb_slot_for_context(uint32_t context_id)
 {
-    pm_fs_buffer_slot_t *slot = 0;
+    pm_xfer_buffer_slot_t *slot = 0;
 
     if (pm_slots_init_once() != 0 || context_id == 0) {
         return 0;
@@ -207,7 +207,7 @@ pm_fb_slot_for_context(uint32_t context_id)
     if (slot) {
         return slot;
     }
-    slot = (pm_fs_buffer_slot_t *)list_alloc(&g_pm_fb_slots);
+    slot = (pm_xfer_buffer_slot_t *)list_alloc(&g_pm_fb_slots);
     if (!slot) {
         return 0;
     }
@@ -217,7 +217,7 @@ pm_fb_slot_for_context(uint32_t context_id)
     return slot;
 }
 
-static pm_fs_buffer_slot_t *
+static pm_xfer_buffer_slot_t *
 pm_fb_slot_find(uint32_t context_id)
 {
     return pm_fb_slot_find_iter(context_id, 0);
@@ -226,7 +226,7 @@ pm_fb_slot_find(uint32_t context_id)
 static void *
 pm_fb_buffer_for_context(uint32_t context_id)
 {
-    pm_fs_buffer_slot_t *slot = pm_fb_slot_find(context_id);
+    pm_xfer_buffer_slot_t *slot = pm_fb_slot_find(context_id);
     framebuffer_info_t fb_info = {0};
     if (!slot || !slot->borrow_active || slot->borrow_source_context_id != 0) {
         return 0;
@@ -255,7 +255,7 @@ pm_fb_buffer_borrow_context(uint32_t borrower_context_id,
                             uint32_t source_context_id,
                             uint32_t flags)
 {
-    pm_fs_buffer_slot_t *borrower = 0;
+    pm_xfer_buffer_slot_t *borrower = 0;
     if (borrower_context_id == 0 || source_context_id != 0 ||
         (flags & (PM_BUFFER_BORROW_READ | PM_BUFFER_BORROW_WRITE)) == 0) {
         return -1;
@@ -273,7 +273,7 @@ pm_fb_buffer_borrow_context(uint32_t borrower_context_id,
 static int
 pm_fb_buffer_release_context(uint32_t borrower_context_id)
 {
-    pm_fs_buffer_slot_t *borrower = pm_fb_slot_find(borrower_context_id);
+    pm_xfer_buffer_slot_t *borrower = pm_fb_slot_find(borrower_context_id);
     if (!borrower) {
         return -1;
     }
@@ -293,7 +293,7 @@ pm_fb_buffer_release_context(uint32_t borrower_context_id)
 static uint32_t
 pm_fb_buffer_borrow_flags(uint32_t context_id)
 {
-    pm_fs_buffer_slot_t *slot = pm_fb_slot_find(context_id);
+    pm_xfer_buffer_slot_t *slot = pm_fb_slot_find(context_id);
     if (!slot || !slot->borrow_active) {
         return 0;
     }
@@ -304,7 +304,7 @@ void *
 process_manager_buffer_for_context(uint32_t kind, uint32_t context_id)
 {
     if (kind == PM_BUFFER_KIND_FILESYSTEM) {
-        return pm_fs_buffer_for_context(context_id);
+        return pm_xfer_buffer_for_context(context_id);
     }
     if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
         return pm_fb_buffer_for_context(context_id);
@@ -316,12 +316,12 @@ uint64_t
 process_manager_buffer_phys_for_context(uint32_t kind, uint32_t context_id)
 {
     if (kind == PM_BUFFER_KIND_FILESYSTEM) {
-        pm_fs_buffer_slot_t *slot = pm_fs_slot_for_context(context_id);
+        pm_xfer_buffer_slot_t *slot = pm_fs_slot_for_context(context_id);
         if (!slot) {
             return 0;
         }
         if (slot->borrow_active && slot->borrow_source_context_id != 0) {
-            pm_fs_buffer_slot_t *source = pm_fs_slot_for_context(slot->borrow_source_context_id);
+            pm_xfer_buffer_slot_t *source = pm_fs_slot_for_context(slot->borrow_source_context_id);
             return source ? source->buffer_phys : 0;
         }
         return slot->buffer_phys;
@@ -340,7 +340,7 @@ uint32_t
 process_manager_buffer_size(uint32_t kind)
 {
     if (kind == PM_BUFFER_KIND_FILESYSTEM) {
-        return pm_fs_buffer_size();
+        return pm_xfer_buffer_size();
     }
     if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
         return pm_fb_buffer_size();
@@ -355,7 +355,7 @@ process_manager_buffer_borrow_context(uint32_t kind,
                                       uint32_t flags)
 {
     if (kind == PM_BUFFER_KIND_FILESYSTEM) {
-        return pm_fs_buffer_borrow_context(borrower_context_id, source_context_id, flags);
+        return pm_xfer_buffer_borrow_context(borrower_context_id, source_context_id, flags);
     }
     if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
         return pm_fb_buffer_borrow_context(borrower_context_id, source_context_id, flags);
@@ -367,7 +367,7 @@ int
 process_manager_buffer_release_context(uint32_t kind, uint32_t borrower_context_id)
 {
     if (kind == PM_BUFFER_KIND_FILESYSTEM) {
-        return pm_fs_buffer_release_context(borrower_context_id);
+        return pm_xfer_buffer_release_context(borrower_context_id);
     }
     if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
         return pm_fb_buffer_release_context(borrower_context_id);
@@ -379,7 +379,7 @@ uint32_t
 process_manager_buffer_borrow_flags(uint32_t kind, uint32_t context_id)
 {
     if (kind == PM_BUFFER_KIND_FILESYSTEM) {
-        return pm_fs_buffer_borrow_flags(context_id);
+        return pm_xfer_buffer_borrow_flags(context_id);
     }
     if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
         return pm_fb_buffer_borrow_flags(context_id);
@@ -387,7 +387,7 @@ process_manager_buffer_borrow_flags(uint32_t kind, uint32_t context_id)
     return 0;
 }
 
-static pm_fs_buffer_slot_t *
+static pm_xfer_buffer_slot_t *
 pm_slot_find_by_kind(uint32_t kind, uint32_t context_id)
 {
     if (kind == PM_BUFFER_KIND_FILESYSTEM) {
@@ -402,7 +402,7 @@ pm_slot_find_by_kind(uint32_t kind, uint32_t context_id)
 uint32_t
 process_manager_buffer_borrow_source_context(uint32_t kind, uint32_t borrower_context_id)
 {
-    pm_fs_buffer_slot_t *slot = pm_slot_find_by_kind(kind, borrower_context_id);
+    pm_xfer_buffer_slot_t *slot = pm_slot_find_by_kind(kind, borrower_context_id);
     if (!slot || !slot->borrow_active) {
         return 0;
     }
@@ -413,15 +413,15 @@ void
 process_manager_buffer_drop_context(uint32_t context_id)
 {
     const uint64_t page_size = 4096u;
-    const uint64_t fs_pages = PM_FS_BUFFER_SIZE / page_size;
+    const uint64_t fs_pages = PM_XFER_BUFFER_SIZE / page_size;
     list_iter_t it;
-    pm_fs_buffer_slot_t *slot = 0;
+    pm_xfer_buffer_slot_t *slot = 0;
 
     if (pm_slots_init_once() != 0 || context_id == 0) {
         return;
     }
 
-    slot = (pm_fs_buffer_slot_t *)list_first(&g_pm_fs_slots, &it);
+    slot = (pm_xfer_buffer_slot_t *)list_first(&g_pm_fs_slots, &it);
     while (slot) {
         if (slot->borrow_active && slot->borrow_source_context_id == context_id) {
             slot->borrow_active = 0;
@@ -432,7 +432,7 @@ process_manager_buffer_drop_context(uint32_t context_id)
             slot->dma_offset = 0;
             slot->dma_length = 0;
         }
-        slot = (pm_fs_buffer_slot_t *)list_next(&it);
+        slot = (pm_xfer_buffer_slot_t *)list_next(&it);
     }
 
     while ((slot = pm_fs_slot_find(context_id)) != 0) {
@@ -456,7 +456,7 @@ process_manager_buffer_dma_map(uint32_t kind,
                                uint32_t direction_flags,
                                uint64_t *out_device_addr)
 {
-    pm_fs_buffer_slot_t *slot = pm_slot_find_by_kind(kind, borrower_context_id);
+    pm_xfer_buffer_slot_t *slot = pm_slot_find_by_kind(kind, borrower_context_id);
     uint32_t buffer_size = process_manager_buffer_size(kind);
     uint64_t addr = 0;
 
@@ -497,7 +497,7 @@ process_manager_buffer_dma_sync(uint32_t kind,
                                 uint32_t length,
                                 uint32_t sync_op)
 {
-    pm_fs_buffer_slot_t *slot = pm_slot_find_by_kind(kind, borrower_context_id);
+    pm_xfer_buffer_slot_t *slot = pm_slot_find_by_kind(kind, borrower_context_id);
     (void)sync_op;
     if (!slot || !slot->dma_mapped || length == 0) {
         return -1;
@@ -517,7 +517,7 @@ process_manager_buffer_dma_unmap(uint32_t kind,
                                  uint32_t borrower_context_id,
                                  uint32_t source_context_id)
 {
-    pm_fs_buffer_slot_t *slot = pm_slot_find_by_kind(kind, borrower_context_id);
+    pm_xfer_buffer_slot_t *slot = pm_slot_find_by_kind(kind, borrower_context_id);
     if (!slot || !slot->dma_mapped || !slot->borrow_active) {
         return -1;
     }

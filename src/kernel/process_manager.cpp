@@ -17,6 +17,13 @@ extern "C" {
 #define WASMOS_PM_TEST_HOOKS 0
 #endif
 
+/* Idle poll interval: when no request is queued the entry blocks on its select
+ * set for at most this long, bounding the latency of the exit-driven periodic
+ * work (pm_check_waits / pm_reap_apps) that no IPC wakes us for. */
+#ifndef WASMOS_PM_POLL_INTERVAL_MS
+#define WASMOS_PM_POLL_INTERVAL_MS 50u
+#endif
+
 pm_state_t g_pm;
 uint8_t g_pm_wait_owner_deny_logged;
 uint8_t g_pm_kill_owner_deny_logged;
@@ -311,6 +318,17 @@ public:
                 return PROCESS_RUN_EXITED;
             }
             pm_atomic_store_u32(&g_pm.fs_ctrl_endpoint, fs_ctrl_endpoint);
+
+            /* Watch all three endpoints with one select set so the entry can
+             * block (instead of busy-polling) until any of them has traffic. */
+            uint32_t pm_eps[3] = { proc_endpoint, fs_ctrl_endpoint, fs_reply_endpoint };
+            uint32_t pm_select = 0;
+            if (ipc_select_listen(process->context_id, pm_eps, 3, &pm_select) != IPC_OK) {
+                klog_write("[pm] select setup failed\n");
+                process_set_exit_status(process, -1);
+                return PROCESS_RUN_EXITED;
+            }
+            pm_atomic_store_u32(&g_pm.select_id, pm_select);
             g_pm.started = 1;
         }
 
@@ -326,10 +344,18 @@ public:
 
         uint32_t proc_endpoint = pm_atomic_load_u32(&g_pm.proc_endpoint);
         int recv_rc = ipc_recv_for(process->context_id, proc_endpoint, &msg);
-        if (recv_rc == IPC_EMPTY) {
-            return PROCESS_RUN_YIELDED;
-        }
         if (recv_rc != IPC_OK) {
+            /* No request queued.  Block on the select set (proc / fs_ctrl /
+             * fs_reply) until any endpoint has traffic, or the poll interval
+             * elapses so the exit-driven periodic work above still runs.  This
+             * replaces the old busy-poll that returned YIELDED immediately and
+             * spun the scheduler.  A pending request is drained one-per-dispatch
+             * (productive work, not a spin); we only sleep once the queue is
+             * empty. */
+            uint32_t ready_ep = IPC_ENDPOINT_NONE;
+            (void)ipc_select_wait(pm_atomic_load_u32(&g_pm.select_id),
+                                  process->context_id, &ready_ep,
+                                  WASMOS_PM_POLL_INTERVAL_MS);
             return PROCESS_RUN_YIELDED;
         }
 
@@ -386,6 +412,9 @@ public:
             case SVC_IPC_REGISTER_REQ:
                 rc = pm_handle_service_register(process->context_id, &msg);
                 break;
+            case SVC_IPC_REGISTER_DESC_REQ:
+                rc = pm_handle_service_register_desc(process->context_id, &msg);
+                break;
             case SVC_IPC_LOOKUP_REQ:
                 rc = pm_handle_service_lookup(process->context_id, &msg);
                 break;
@@ -396,7 +425,9 @@ public:
 
         if (rc != 0) {
             ipc_message_t resp;
-            if (msg.type == SVC_IPC_REGISTER_REQ || msg.type == SVC_IPC_LOOKUP_REQ) {
+            if (msg.type == SVC_IPC_REGISTER_REQ ||
+                msg.type == SVC_IPC_REGISTER_DESC_REQ ||
+                msg.type == SVC_IPC_LOOKUP_REQ) {
                 resp.type = SVC_IPC_ERROR;
             } else {
                 resp.type = PROC_IPC_ERROR;

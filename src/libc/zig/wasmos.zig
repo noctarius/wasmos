@@ -51,9 +51,9 @@ extern "wasmos" fn ipc_send(
 extern "wasmos" fn ipc_select_one(endpoint: i32) callconv(.c) i32;
 extern "wasmos" fn ipc_last_field(field: i32) callconv(.c) i32;
 extern "wasmos" fn fs_endpoint() callconv(.c) i32;
-extern "wasmos" fn fs_buffer_size() callconv(.c) i32;
-extern "wasmos" fn fs_buffer_write(ptr: i32, len: i32, offset: i32) callconv(.c) i32;
-extern "wasmos" fn fs_buffer_copy(ptr: i32, len: i32, offset: i32) callconv(.c) i32;
+extern "wasmos" fn xfer_buffer_size() callconv(.c) i32;
+extern "wasmos" fn xfer_buffer_write(ptr: i32, len: i32, offset: i32) callconv(.c) i32;
+extern "wasmos" fn xfer_buffer_read(ptr: i32, len: i32, offset: i32) callconv(.c) i32;
 extern "wasmos" fn thread_gettid() callconv(.c) i32;
 extern "wasmos" fn thread_yield() callconv(.c) i32;
 extern "wasmos" fn mutex_try_lock(ptr: i32) callconv(.c) i32;
@@ -83,7 +83,7 @@ var g_cli_argc: usize = 0;
 
 fn parseCliArgs() void {
     g_cli_argc = 0;
-    if (fs_buffer_copy(
+    if (xfer_buffer_read(
         @intCast(@intFromPtr(&g_cli_args_raw[0])),
         CLI_ARGS_BUF_LEN - 1,
         0,
@@ -433,7 +433,7 @@ pub const fs = struct {
             if (buffer.len == 0) {
                 return 0;
             }
-            const max_buffer = fs_buffer_size();
+            const max_buffer = xfer_buffer_size();
             if (max_buffer <= 0) {
                 return Error.NotAvailable;
             }
@@ -456,7 +456,7 @@ pub const fs = struct {
                 if (chunk_read > max_buffer or @as(usize, @intCast(chunk_read)) > chunk_len) {
                     return Error.BadResponse;
                 }
-                if (fs_buffer_copy(@intCast(@intFromPtr(buffer.ptr + done)), chunk_read, 0) != 0) {
+                if (xfer_buffer_read(@intCast(@intFromPtr(buffer.ptr + done)), chunk_read, 0) != 0) {
                     return Error.HostCallFailed;
                 }
                 done += @intCast(chunk_read);
@@ -475,7 +475,7 @@ pub const fs = struct {
             if (buffer.len == 0) {
                 return 0;
             }
-            const max_buffer = fs_buffer_size();
+            const max_buffer = xfer_buffer_size();
             if (max_buffer <= 0) {
                 return Error.NotAvailable;
             }
@@ -487,7 +487,7 @@ pub const fs = struct {
                     @intCast(max_buffer)
                 else
                     remaining;
-                if (fs_buffer_write(@intCast(@intFromPtr(buffer.ptr + done)), @intCast(chunk_len), 0) != 0) {
+                if (xfer_buffer_write(@intCast(@intFromPtr(buffer.ptr + done)), @intCast(chunk_len), 0) != 0) {
                     return Error.HostCallFailed;
                 }
                 const response = try fsRequest(FS_IPC_WRITE_REQ, self.fd, @intCast(chunk_len), 0, 0);
@@ -513,7 +513,7 @@ pub const fs = struct {
 
     fn stagePath(path: []const u8) Error!usize {
         var path_buf: [256]u8 = undefined;
-        const max_buffer = fs_buffer_size();
+        const max_buffer = xfer_buffer_size();
 
         if (path.len == 0) {
             return Error.InvalidArgument;
@@ -531,7 +531,7 @@ pub const fs = struct {
         @memcpy(path_buf[0..path.len], path);
         path_buf[path.len] = 0;
 
-        if (fs_buffer_write(@intCast(@intFromPtr(&path_buf[0])), @intCast(path.len + 1), 0) != 0) {
+        if (xfer_buffer_write(@intCast(@intFromPtr(&path_buf[0])), @intCast(path.len + 1), 0) != 0) {
             return Error.HostCallFailed;
         }
         return path.len;

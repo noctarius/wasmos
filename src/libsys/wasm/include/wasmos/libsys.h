@@ -483,7 +483,7 @@ wasmos_sys_buffer_copy_from(int32_t kind,
     if (wasmos_buffer_borrow(kind, source_endpoint, borrow_flags) != 0) {
         return -1;
     }
-    if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)dst, len, offset) != 0) {
+    if (wasmos_xfer_buffer_read((int32_t)(uintptr_t)dst, len, offset) != 0) {
         (void)wasmos_buffer_release(kind);
         return -1;
     }
@@ -507,7 +507,7 @@ wasmos_sys_buffer_write_to(int32_t kind,
     if (wasmos_buffer_borrow(kind, source_endpoint, borrow_flags) != 0) {
         return -1;
     }
-    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)src, len, offset) != 0) {
+    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)src, len, offset) != 0) {
         (void)wasmos_buffer_release(kind);
         return -1;
     }
@@ -532,10 +532,10 @@ wasmos_sys_fs_read_path(int32_t fs_endpoint,
         return -1;
     }
     path_len = (int32_t)strlen(path);
-    if (path_len <= 0 || path_len >= wasmos_fs_buffer_size()) {
+    if (path_len <= 0 || path_len >= wasmos_xfer_buffer_size()) {
         return -1;
     }
-    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)path, path_len, 0) != 0) {
         return -1;
     }
     if (wasmos_ipc_send(fs_endpoint,
@@ -562,7 +562,7 @@ wasmos_sys_fs_read_path(int32_t fs_endpoint,
         read_len = out_text_len - 1;
     }
     if (read_len > 0 &&
-        wasmos_fs_buffer_copy((int32_t)(uintptr_t)out_text, read_len, 0) != 0) {
+        wasmos_xfer_buffer_read((int32_t)(uintptr_t)out_text, read_len, 0) != 0) {
         return -1;
     }
     out_text[read_len] = '\0';
@@ -570,7 +570,7 @@ wasmos_sys_fs_read_path(int32_t fs_endpoint,
 }
 
 static inline int32_t
-wasmos_sys_fs_buffer_copy_from_endpoint(int32_t source_endpoint,
+wasmos_sys_xfer_buffer_copy_from_endpoint(int32_t source_endpoint,
                                         void *dst,
                                         int32_t len,
                                         int32_t offset)
@@ -584,7 +584,7 @@ wasmos_sys_fs_buffer_copy_from_endpoint(int32_t source_endpoint,
 }
 
 static inline int32_t
-wasmos_sys_fs_buffer_write_to_endpoint(int32_t source_endpoint,
+wasmos_sys_xfer_buffer_write_to_endpoint(int32_t source_endpoint,
                                        const void *src,
                                        int32_t len,
                                        int32_t offset)

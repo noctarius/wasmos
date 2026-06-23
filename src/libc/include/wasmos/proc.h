@@ -88,10 +88,10 @@ wasmos_proc_module_meta_path(int32_t proc_endpoint,
     static uint32_t request_id = 0x40000000u;
     uint32_t req = request_id++;
     size_t path_len = path ? strlen(path) : 0u;
-    if (path_len == 0 || path_len >= (size_t)wasmos_fs_buffer_size()) {
+    if (path_len == 0 || path_len >= (size_t)wasmos_xfer_buffer_size()) {
         return -1;
     }
-    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
         return -1;
     }
     if (wasmos_ipc_send(proc_endpoint,

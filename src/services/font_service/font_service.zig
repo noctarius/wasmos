@@ -7,7 +7,7 @@ const IPC_OK: i32 = 0;
 const IPC_EMPTY: i32 = 1;
 const IPC_ENDPOINT_NONE: u32 = 0xFFFF_FFFF;
 const REQ_BASE: u32 = 0xA000;
-const PM_FS_BUFFER_SIZE: usize = 256 * 1024;
+const PM_XFER_BUFFER_SIZE: usize = 256 * 1024;
 const MAX_FONTS: usize = 3;
 const MAX_HANDLES: usize = 16;
 const RASTER_SCRATCH_BYTES: usize = 4096;
@@ -136,7 +136,7 @@ fn fs_borrow_rw() ?[*]u8 {
         c.ND_BUFFER_KIND_FS,
         ctxId(),
         c.ND_BUFFER_BORROW_READ | c.ND_BUFFER_BORROW_WRITE,
-        PM_FS_BUFFER_SIZE,
+        PM_XFER_BUFFER_SIZE,
     );
     if (p == null) return null;
     return @ptrCast(@alignCast(p.?));
@@ -172,13 +172,13 @@ fn log_path_issue(prefix: []const u8, path: []const u8) void {
     logMsg("\n");
 }
 
-fn stage_path_in_fs_buffer(path: []const u8) bool {
+fn stage_path_in_xfer_buffer(path: []const u8) bool {
     const fs_buf_path = fs_borrow_rw() orelse {
         logMsg("[font] fs buffer borrow failed\n");
         return false;
     };
     defer fs_release();
-    if (path.len == 0 or path.len + 1 >= PM_FS_BUFFER_SIZE) {
+    if (path.len == 0 or path.len + 1 >= PM_XFER_BUFFER_SIZE) {
         return false;
     }
     sys.byteCopy(fs_buf_path, path.ptr, path.len);
@@ -188,7 +188,7 @@ fn stage_path_in_fs_buffer(path: []const u8) bool {
 
 fn stat_path_size(path: []const u8, out_size: *usize) bool {
     var reply: c.nd_ipc_message_t = undefined;
-    if (!stage_path_in_fs_buffer(path)) {
+    if (!stage_path_in_xfer_buffer(path)) {
         return false;
     }
     const req_stat = g_req_id;
@@ -216,7 +216,7 @@ fn read_file_into_shmem(path: []const u8, out_shmem_id: *u32, out_ptr: *[*]u8, o
     if (!stat_path_size(path, &file_size)) {
         return -1;
     }
-    if (file_size > PM_FS_BUFFER_SIZE) {
+    if (file_size > PM_XFER_BUFFER_SIZE) {
         log_path_issue("[font] file too large: ", path);
         return -1;
     }

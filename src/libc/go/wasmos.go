@@ -77,13 +77,13 @@ func ipcLastField(field int32) int32
 //go:wasmimport wasmos fs_endpoint
 func fsEndpoint() int32
 
-//go:wasmimport wasmos fs_buffer_size
+//go:wasmimport wasmos xfer_buffer_size
 func fsBufferSize() int32
 
-//go:wasmimport wasmos fs_buffer_write
+//go:wasmimport wasmos xfer_buffer_write
 func fsBufferWrite(ptr uint32, len uint32, offset uint32) int32
 
-//go:wasmimport wasmos fs_buffer_copy
+//go:wasmimport wasmos xfer_buffer_read
 func fsBufferCopy(ptr uint32, len uint32, offset uint32) int32
 
 //go:wasmimport wasmos thread_gettid

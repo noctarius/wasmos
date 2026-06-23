@@ -70,6 +70,7 @@ typedef struct thread {
                                      * thrash re-running it. Cleared on dispatch. */
     uint32_t        cpu_affinity;   /* allowed CPU bitmask; ~0u = any */
     uint32_t        last_cpu;       /* CPU where thread last ran */
+    uint64_t        sched_timeout_tick; /* deadline tick for a timed wait; 0 = none */
     /* Intrusive linkage for scheduler lists. */
     list_head_t     sched_node;     /* linkage in cpu_sched_t.ready_list */
     list_head_t     event_node;     /* linkage in sched_event_t.wait_list */
@@ -89,6 +90,9 @@ int thread_spawn_in_owner(uint32_t owner_pid,
                           thread_block_reason_t initial_reason,
                           uint32_t *out_tid);
 thread_t *thread_get(uint32_t tid);
+/* Return the thread table slot at `index` (0..THREAD_MAX_COUNT-1), or NULL.
+ * For table-wide scans (e.g. the scheduler timeout sweep). */
+thread_t *thread_table_at(uint32_t index);
 thread_t *thread_find_main_for_pid(uint32_t owner_pid);
 int thread_owner_tid_at(uint32_t owner_pid, uint32_t index, uint32_t *out_tid);
 void thread_mark_owner_exited(uint32_t owner_pid, int32_t exit_status);

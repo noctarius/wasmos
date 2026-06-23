@@ -754,7 +754,7 @@ wasmos_sys_buffer_write_to_native(wasmos_driver_api_t *api,
 }
 
 int32_t
-wasmos_sys_fs_buffer_copy_from_endpoint_native(wasmos_driver_api_t *api,
+wasmos_sys_xfer_buffer_copy_from_endpoint_native(wasmos_driver_api_t *api,
                                                uint32_t source_endpoint,
                                                void *dst,
                                                int32_t len,
@@ -770,7 +770,7 @@ wasmos_sys_fs_buffer_copy_from_endpoint_native(wasmos_driver_api_t *api,
 }
 
 int32_t
-wasmos_sys_fs_buffer_write_to_endpoint_native(wasmos_driver_api_t *api,
+wasmos_sys_xfer_buffer_write_to_endpoint_native(wasmos_driver_api_t *api,
                                               uint32_t source_endpoint,
                                               const void *src,
                                               int32_t len,

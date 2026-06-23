@@ -65,8 +65,8 @@ int32_t wasmos_sys_svc_lookup_native(wasmos_driver_api_t *api, uint32_t proc_end
  * size before calling the low-level ABI hook. */
 int32_t wasmos_sys_buffer_copy_from_native(wasmos_driver_api_t *api, uint32_t kind, uint32_t source_endpoint, uint32_t borrow_flags, void *dst, int32_t len, int32_t offset);
 int32_t wasmos_sys_buffer_write_to_native(wasmos_driver_api_t *api, uint32_t kind, uint32_t source_endpoint, uint32_t borrow_flags, const void *src, int32_t len, int32_t offset);
-int32_t wasmos_sys_fs_buffer_copy_from_endpoint_native(wasmos_driver_api_t *api, uint32_t source_endpoint, void *dst, int32_t len, int32_t offset);
-int32_t wasmos_sys_fs_buffer_write_to_endpoint_native(wasmos_driver_api_t *api, uint32_t source_endpoint, const void *src, int32_t len, int32_t offset);
+int32_t wasmos_sys_xfer_buffer_copy_from_endpoint_native(wasmos_driver_api_t *api, uint32_t source_endpoint, void *dst, int32_t len, int32_t offset);
+int32_t wasmos_sys_xfer_buffer_write_to_endpoint_native(wasmos_driver_api_t *api, uint32_t source_endpoint, const void *src, int32_t len, int32_t offset);
 int32_t wasmos_sys_fs_read_path_native(wasmos_driver_api_t *api, uint32_t fs_endpoint, uint32_t reply_endpoint, uint32_t request_id, const uint8_t *path, uint32_t path_len, uint8_t *out_text, int32_t out_text_len);
 void wasmos_sys_byte_copy_native(uint8_t *dst, const uint8_t *src, uint32_t len);
 int32_t wasmos_sys_be_u16_native(const uint8_t *data, uint32_t data_len, uint32_t off, uint16_t *out);

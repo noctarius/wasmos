@@ -57,7 +57,7 @@ spawn_path(const char *path)
     if (path_len == 0 || path_len > 240u) {
         return -1;
     }
-    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
         return -1;
     }
     for (uint32_t attempt = 0; attempt < SYSINIT_MAX_SPAWN_ATTEMPTS; ++attempt) {
@@ -107,7 +107,7 @@ sysinit_on_start(void *user, const char *path)
     if (path_len == 0 || path_len > 240u) {
         return -1;
     }
-    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
         return -1;
     }
     int32_t pid = wasmos_sys_spawn_path_sync(g_state.proc_endpoint,
@@ -150,11 +150,11 @@ sysinit_on_exec(void *user, const char *path, const char *args, int32_t *out_exi
         }
     }
     uint32_t write_off = path_len + 1u;
-    int32_t fs_buf_size = wasmos_fs_buffer_size();
+    int32_t fs_buf_size = wasmos_xfer_buffer_size();
     if (fs_buf_size <= 0 || (int32_t)path_len >= fs_buf_size) {
         return -1;
     }
-    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
         return -1;
     }
     if (args_len > 0u) {
@@ -162,7 +162,7 @@ sysinit_on_exec(void *user, const char *path, const char *args, int32_t *out_exi
             (int32_t)(write_off + args_len) > fs_buf_size) {
             return -1;
         }
-        if (wasmos_fs_buffer_write((int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
+        if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
             return -1;
         }
     }

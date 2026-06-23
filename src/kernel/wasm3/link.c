@@ -599,7 +599,7 @@ wasm_fs_peer_slot_for_pid(uint32_t pid)
 }
 
 static void *
-wasm_fs_buffer_for_pid(uint32_t pid, uint32_t context_id)
+wasm_xfer_buffer_for_pid(uint32_t pid, uint32_t context_id)
 {
     uint32_t target_context = context_id;
     wasm_fs_peer_slot_t *peer = wasm_fs_peer_slot_for_pid(pid);
@@ -892,7 +892,7 @@ m3ApiRawFunction(wasmos_dma_unmap_borrow)
     m3ApiReturn(WASMOS_DMA_STATUS_OK);
 }
 
-m3ApiRawFunction(wasmos_fs_buffer_borrow)
+m3ApiRawFunction(wasmos_xfer_buffer_borrow)
 {
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, source_endpoint)
@@ -900,7 +900,7 @@ m3ApiRawFunction(wasmos_fs_buffer_borrow)
     m3ApiReturn(wasm_buffer_borrow_impl((int32_t)PM_BUFFER_KIND_FILESYSTEM, source_endpoint, flags));
 }
 
-m3ApiRawFunction(wasmos_fs_buffer_release)
+m3ApiRawFunction(wasmos_xfer_buffer_release)
 {
     m3ApiReturnType(int32_t)
     m3ApiReturn(wasm_buffer_release_impl((int32_t)PM_BUFFER_KIND_FILESYSTEM));
@@ -1064,7 +1064,7 @@ m3ApiRawFunction(wasmos_sys_select_wait)
     }
     uint32_t ready_ep = IPC_ENDPOINT_NONE;
     for (;;) {
-        int rc = ipc_select_wait((uint32_t)select_id, context_id, &ready_ep);
+        int rc = ipc_select_wait((uint32_t)select_id, context_id, &ready_ep, 0);
         if (rc == IPC_OK) {
             m3ApiReturn((int32_t)ready_ep);
         }
@@ -1285,7 +1285,7 @@ m3ApiRawFunction(wasmos_block_buffer_write)
     m3ApiReturn(0);
 }
 
-m3ApiRawFunction(wasmos_fs_buffer_size)
+m3ApiRawFunction(wasmos_xfer_buffer_size)
 {
     m3ApiReturnType(int32_t)
     m3ApiReturn((int32_t)process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM));
@@ -1301,7 +1301,7 @@ m3ApiRawFunction(wasmos_fs_endpoint)
     m3ApiReturn((int32_t)endpoint);
 }
 
-m3ApiRawFunction(wasmos_fs_buffer_copy)
+m3ApiRawFunction(wasmos_xfer_buffer_read)
 {
     m3ApiReturnType(int32_t)
     m3ApiGetArgMem(uint8_t *, ptr)
@@ -1344,7 +1344,7 @@ m3ApiRawFunction(wasmos_fs_buffer_copy)
     if (borrow_flags != 0 && (borrow_flags & 0x1u) == 0) {
         m3ApiReturn(-1);
     }
-    const uint8_t *src = (const uint8_t *)wasm_fs_buffer_for_pid(pid, context_id);
+    const uint8_t *src = (const uint8_t *)wasm_xfer_buffer_for_pid(pid, context_id);
     if (!src) {
         m3ApiReturn(-1);
     }
@@ -1358,7 +1358,7 @@ m3ApiRawFunction(wasmos_fs_buffer_copy)
     m3ApiReturn(0);
 }
 
-m3ApiRawFunction(wasmos_fs_buffer_write)
+m3ApiRawFunction(wasmos_xfer_buffer_write)
 {
     m3ApiReturnType(int32_t)
     m3ApiGetArgMem(const uint8_t *, ptr)
@@ -1401,7 +1401,7 @@ m3ApiRawFunction(wasmos_fs_buffer_write)
     if (borrow_flags != 0 && (borrow_flags & 0x2u) == 0) {
         m3ApiReturn(-1);
     }
-    uint8_t *dst = (uint8_t *)wasm_fs_buffer_for_pid(pid, context_id);
+    uint8_t *dst = (uint8_t *)wasm_xfer_buffer_for_pid(pid, context_id);
     if (!dst) {
         m3ApiReturn(-1);
     }
@@ -3657,8 +3657,8 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "ipc_create_endpoint", "i()", wasmos_ipc_create_endpoint);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_endpoint_owner", "i(i)", wasmos_ipc_endpoint_owner);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_send", "i(iiiiiiii)", wasmos_ipc_send);
-    rc |= wasm3_link_raw(module, "wasmos", "fs_buffer_borrow", "i(ii)", wasmos_fs_buffer_borrow);
-    rc |= wasm3_link_raw(module, "wasmos", "fs_buffer_release", "i()", wasmos_fs_buffer_release);
+    rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_borrow", "i(ii)", wasmos_xfer_buffer_borrow);
+    rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_release", "i()", wasmos_xfer_buffer_release);
     rc |= wasm3_link_raw(module, "wasmos", "buffer_borrow", "i(iii)", wasmos_buffer_borrow);
     rc |= wasm3_link_raw(module, "wasmos", "buffer_release", "i(i)", wasmos_buffer_release);
     rc |= wasm3_link_raw(module, "wasmos", "dma_map_borrow", "i(iiiii)", wasmos_dma_map_borrow);
@@ -3708,10 +3708,10 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "block_buffer_phys", "i()", wasmos_block_buffer_phys);
     rc |= wasm3_link_raw(module, "wasmos", "block_buffer_copy", "i(i*ii)", wasmos_block_buffer_copy);
     rc |= wasm3_link_raw(module, "wasmos", "block_buffer_write", "i(i*ii)", wasmos_block_buffer_write);
-    rc |= wasm3_link_raw(module, "wasmos", "fs_buffer_size", "i()", wasmos_fs_buffer_size);
+    rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_size", "i()", wasmos_xfer_buffer_size);
     rc |= wasm3_link_raw(module, "wasmos", "fs_endpoint", "i()", wasmos_fs_endpoint);
-    rc |= wasm3_link_raw(module, "wasmos", "fs_buffer_copy", "i(*ii)", wasmos_fs_buffer_copy);
-    rc |= wasm3_link_raw(module, "wasmos", "fs_buffer_write", "i(*ii)", wasmos_fs_buffer_write);
+    rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_read", "i(*ii)", wasmos_xfer_buffer_read);
+    rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_write", "i(*ii)", wasmos_xfer_buffer_write);
     rc |= wasm3_link_raw(module, "wasmos", "early_log_size", "i()", wasmos_early_log_size);
     rc |= wasm3_link_raw(module, "wasmos", "early_log_copy", "i(*ii)", wasmos_early_log_copy);
     rc |= wasm3_link_raw(module, "wasmos", "boot_config_size", "i()", wasmos_boot_config_size);

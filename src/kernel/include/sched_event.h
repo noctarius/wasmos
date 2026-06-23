@@ -64,5 +64,11 @@ int sched_event_wake_all(sched_event_t *ev,
  */
 void sched_event_abort_all(sched_event_t *ev);
 
+/*
+ * Wake any thread whose timed-wait deadline (sched_event_wait timeout_ms) has
+ * passed.  Called from the scheduler each dispatch; cheap when nothing is armed.
+ */
+void sched_timeout_check(void);
+
 #endif /* WASMOS_SCHED_THREADABLE */
 #endif /* WASMOS_SCHED_EVENT_H */

@@ -1077,10 +1077,10 @@ fat_handle_open(void)
         ((g_fs_req.arg1 & (FAT_OPEN_APPEND | FAT_OPEN_TRUNC)) != 0 && access_mode != 1)) {
         return -1;
     }
-    if (path_len + 1u > (uint32_t)wasmos_fs_buffer_size()) {
+    if (path_len + 1u > (uint32_t)wasmos_xfer_buffer_size()) {
         return -1;
     }
-    if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_read((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
         fat_log("open copy path failed\n");
         return -1;
     }
@@ -2053,7 +2053,7 @@ static int
 fat_handle_read_open_file(void)
 {
     fat_open_file_t *file = fat_open_file_for_fd(g_fs_req.source, g_fs_req.arg0);
-    uint32_t max_buffer = (uint32_t)wasmos_fs_buffer_size();
+    uint32_t max_buffer = (uint32_t)wasmos_xfer_buffer_size();
     uint32_t remaining;
     uint32_t requested;
     uint32_t done = 0;
@@ -2085,7 +2085,7 @@ fat_handle_read_open_file(void)
         if (fat_sync_block_read(file->file_lba + file->current_sector) != 0) {
             return -1;
         }
-        if (wasmos_fs_buffer_write((int32_t)(uintptr_t)(g_sector_buf + sector_offset),
+        if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)(g_sector_buf + sector_offset),
                                    (int32_t)chunk,
                                    (int32_t)done) != 0) {
             return -1;
@@ -2118,7 +2118,7 @@ static int
 fat_handle_write_open_file(void)
 {
     fat_open_file_t *file = fat_open_file_for_fd(g_fs_req.source, g_fs_req.arg0);
-    uint32_t max_buffer = (uint32_t)wasmos_fs_buffer_size();
+    uint32_t max_buffer = (uint32_t)wasmos_xfer_buffer_size();
     uint32_t requested;
     uint32_t done = 0;
     uint32_t target_end;
@@ -2181,7 +2181,7 @@ fat_handle_write_open_file(void)
         /* Stage through a separate buffer before merging into the sector so
          * partial writes do not depend on host-call copies into a shifted
          * destination pointer inside linear memory. */
-        if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)g_fs_stage_buf,
+        if (wasmos_xfer_buffer_read((int32_t)(uintptr_t)g_fs_stage_buf,
                                   (int32_t)chunk,
                                   (int32_t)done) != 0) {
             return -1;
@@ -2228,10 +2228,10 @@ fat_handle_stat(void)
     if (g_fs_req.arg1 != 0 || path_len == 0 || path_len >= sizeof(path)) {
         return -1;
     }
-    if (path_len + 1u > (uint32_t)wasmos_fs_buffer_size()) {
+    if (path_len + 1u > (uint32_t)wasmos_xfer_buffer_size()) {
         return -1;
     }
-    if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_read((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
         return -1;
     }
     path[path_len] = '\0';
@@ -2260,10 +2260,10 @@ fat_handle_unlink(void)
     if (g_fs_req.arg1 != 0 || path_len == 0 || path_len >= sizeof(path)) {
         return -1;
     }
-    if (path_len + 1u > (uint32_t)wasmos_fs_buffer_size()) {
+    if (path_len + 1u > (uint32_t)wasmos_xfer_buffer_size()) {
         return -1;
     }
-    if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_read((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
         return -1;
     }
     path[path_len] = '\0';
@@ -2291,10 +2291,10 @@ fat_handle_mkdir(void)
     if (g_fs_req.arg1 != 0 || path_len == 0 || path_len >= sizeof(path)) {
         return -1;
     }
-    if (path_len + 1u > (uint32_t)wasmos_fs_buffer_size()) {
+    if (path_len + 1u > (uint32_t)wasmos_xfer_buffer_size()) {
         return -1;
     }
-    if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_read((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
         return -1;
     }
     path[path_len] = '\0';
@@ -2322,10 +2322,10 @@ fat_handle_rmdir(void)
     if (g_fs_req.arg1 != 0 || path_len == 0 || path_len >= sizeof(path)) {
         return -1;
     }
-    if (path_len + 1u > (uint32_t)wasmos_fs_buffer_size()) {
+    if (path_len + 1u > (uint32_t)wasmos_xfer_buffer_size()) {
         return -1;
     }
-    if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_read((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
         return -1;
     }
     path[path_len] = '\0';
@@ -3087,7 +3087,7 @@ fat_handle_read_app(void)
         g_read_entries_left = g_root_entry_count;
         g_read_offset = 0;
         g_read_size = 0;
-        g_read_max = (uint32_t)wasmos_fs_buffer_size();
+        g_read_max = (uint32_t)wasmos_xfer_buffer_size();
         if (g_read_max == 0) {
             g_op = FAT_OP_NONE;
             return -1;
@@ -3338,7 +3338,7 @@ fat_handle_read_app(void)
             g_op = FAT_OP_NONE;
             return -1;
         }
-        if (wasmos_fs_buffer_write((int32_t)(uintptr_t)g_sector_buf,
+        if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)g_sector_buf,
                                    (int32_t)bytes,
                                    (int32_t)g_read_offset) != 0) {
             g_op = FAT_OP_NONE;
@@ -4067,8 +4067,8 @@ initialize(int32_t proc_endpoint,
         fat_stall();
     }
     mount_alias_len = (int32_t)strlen(mount_alias);
-    if (mount_alias_len <= 0 || mount_alias_len >= wasmos_fs_buffer_size() ||
-        wasmos_fs_buffer_write((int32_t)(uintptr_t)mount_alias, mount_alias_len, 0) != 0) {
+    if (mount_alias_len <= 0 || mount_alias_len >= wasmos_xfer_buffer_size() ||
+        wasmos_xfer_buffer_write((int32_t)(uintptr_t)mount_alias, mount_alias_len, 0) != 0) {
         fat_log("mount alias buffer write failed\n");
         fat_stall();
     }

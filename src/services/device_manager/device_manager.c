@@ -297,7 +297,7 @@ is_mount_already_active(const char *mount)
     if (n <= 0 || n >= (int32_t)sizeof(buf)) {
         return 0;
     }
-    if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)buf, n, 0) != 0) {
+    if (wasmos_xfer_buffer_read((int32_t)(uintptr_t)buf, n, 0) != 0) {
         return 0;
     }
     buf[n] = '\0';
@@ -421,13 +421,13 @@ kick_boot_rules_read_async(void)
     wasmos_sys_str_append(path, sizeof(path), "/");
     wasmos_sys_str_append(path, sizeof(path), DEVMGR_RULE_FILE);
     path_len = wasmos_sys_strlen(path);
-    if (path_len <= 0 || path_len > 95 || path_len >= wasmos_fs_buffer_size()) {
+    if (path_len <= 0 || path_len > 95 || path_len >= wasmos_xfer_buffer_size()) {
         g_dm.rules_boot_loaded = 1;
         g_dm.rules_boot_active = 0;
         console_write("[device-manager] boot rules invalid path; skipping\n");
         return;
     }
-    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)path, path_len, 0) != 0) {
         g_dm.rules_boot_loaded = 1;
         g_dm.rules_boot_active = 0;
         console_write("[device-manager] boot rules buffer write failed; skipping\n");
@@ -499,7 +499,7 @@ poll_boot_rules_async(void)
     if (read_len >= (int32_t)sizeof(text)) {
         read_len = (int32_t)sizeof(text) - 1;
     }
-    if (read_len > 0 && wasmos_fs_buffer_copy((int32_t)(uintptr_t)text, read_len, 0) != 0) {
+    if (read_len > 0 && wasmos_xfer_buffer_read((int32_t)(uintptr_t)text, read_len, 0) != 0) {
         if (g_dm.rules_boot_failures < 255u) {
             g_dm.rules_boot_failures++;
         }
@@ -719,7 +719,7 @@ hw_spawn_driver_path(const char *path)
     if (path_len == 0 || path_len > 95u) {
         return -1;
     }
-    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
         return -1;
     }
     return dm_spawn_sync_call(PROC_IPC_SPAWN_PATH_SYNC,
@@ -741,7 +741,7 @@ hw_spawn_driver_path_caps(const char *path, const spawn_caps_t *caps)
     if (path_len == 0 || path_len > 95u) {
         return -1;
     }
-    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
         return -1;
     }
     caps_arg0 = ((uint32_t)caps->irq_mask << 16) | ((uint32_t)caps->cap_flags & 0xFFFFu);
@@ -820,7 +820,7 @@ query_module_meta_by_path(const char *path, uint32_t source, int32_t *out_index)
     if (path_len == 0 || path_len > 95u) {
         return -1;
     }
-    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
         return -1;
     }
     if (dm_ipc_call(g_dm.proc_endpoint,

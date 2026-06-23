@@ -567,6 +567,57 @@ ipc_select_wait(uint32_t select_id, uint32_t owner_context_id,
     return IPC_OK;
 }
 
+/* Convenience: create a select set watching `endpoints[0..count)`. Avoids each
+ * in-kernel service repeating the create + add-loop boilerplate. On failure the
+ * partially-built set is destroyed. */
+int
+ipc_select_listen(uint32_t owner_context_id, const uint32_t *endpoints,
+                  uint32_t count, uint32_t *out_select_id)
+{
+    uint32_t sel = 0;
+    int rc;
+    if (!endpoints || !out_select_id || count == 0) {
+        return IPC_ERR_INVALID;
+    }
+    rc = ipc_select_create(owner_context_id, &sel);
+    if (rc != IPC_OK) {
+        return rc;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+        rc = ipc_select_add(sel, endpoints[i], owner_context_id);
+        if (rc != IPC_OK) {
+            ipc_select_destroy(sel, owner_context_id);
+            return rc;
+        }
+    }
+    *out_select_id = sel;
+    return IPC_OK;
+}
+
+/* Convenience: block until any endpoint in the set has a message, then dequeue
+ * it.  Returns IPC_OK with *out_endpoint / *out_message set, IPC_EMPTY on a
+ * spurious wake or a lost race for the message (caller should loop), or an
+ * error code.  This is the standard select-style receive loop body for
+ * in-kernel services (memory-service, process-manager, ...). */
+int
+ipc_select_recv(uint32_t select_id, uint32_t owner_context_id,
+                uint32_t *out_endpoint, ipc_message_t *out_message)
+{
+    uint32_t ready = IPC_ENDPOINT_NONE;
+    int rc;
+    if (!out_message) {
+        return IPC_ERR_INVALID;
+    }
+    rc = ipc_select_wait(select_id, owner_context_id, &ready);
+    if (rc != IPC_OK) {
+        return rc;   /* IPC_EMPTY (spurious) or error */
+    }
+    if (out_endpoint) {
+        *out_endpoint = ready;
+    }
+    return ipc_recv_for(owner_context_id, ready, out_message);
+}
+
 void
 ipc_select_destroy(uint32_t select_id, uint32_t owner_context_id)
 {

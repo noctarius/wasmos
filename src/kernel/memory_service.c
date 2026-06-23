@@ -11,6 +11,28 @@ static uint32_t g_mem_service_context;
 static uint32_t g_mem_service_endpoint = IPC_ENDPOINT_NONE;
 static uint32_t g_mem_service_reply_endpoint = IPC_ENDPOINT_NONE;
 static uint32_t g_mem_service_request_id = 1;
+static uint32_t g_mem_service_select_id = 0;
+static uint8_t  g_mem_service_select_ready = 0;
+
+/* Lazily create the select set watching the request endpoint. Select-style
+ * (rather than a bare single-endpoint blocking recv) keeps this service on the
+ * same wait pattern as process-manager and other multi-endpoint consumers. */
+static int
+memory_service_select_setup(void)
+{
+    if (g_mem_service_select_ready) {
+        return 0;
+    }
+    if (g_mem_service_endpoint == IPC_ENDPOINT_NONE || g_mem_service_context == 0) {
+        return -1;
+    }
+    uint32_t eps[1] = { g_mem_service_endpoint };
+    if (ipc_select_listen(g_mem_service_context, eps, 1, &g_mem_service_select_id) != IPC_OK) {
+        return -1;
+    }
+    g_mem_service_select_ready = 1;
+    return 0;
+}
 
 void
 memory_service_register(uint32_t context_id, uint32_t endpoint, uint32_t reply_endpoint)
@@ -49,17 +71,19 @@ memory_service_handle_request(const ipc_message_t *req, ipc_message_t *reply)
 }
 
 int
-memory_service_process_once(void)
+memory_service_serve_one(void)
 {
-    if (g_mem_service_endpoint == IPC_ENDPOINT_NONE ||
-        g_mem_service_context == 0) {
+    if (memory_service_select_setup() != 0) {
         return -1;
     }
 
     ipc_message_t req;
-    int rc = ipc_recv_for(g_mem_service_context, g_mem_service_endpoint, &req);
+    uint32_t ready_ep = IPC_ENDPOINT_NONE;
+    /* Block on the select set until the request endpoint has a message. */
+    int rc = ipc_select_recv(g_mem_service_select_id, g_mem_service_context,
+                             &ready_ep, &req);
     if (rc == IPC_EMPTY) {
-        return 1;
+        return 1;   /* spurious wake / lost race — caller loops and re-blocks */
     }
     if (rc != IPC_OK) {
         return -1;
@@ -103,13 +127,10 @@ memory_service_entry(process_t *process, void *arg)
         return PROCESS_RUN_IDLE;
     }
 
-    int rc = memory_service_process_once();
-    if (rc == 0) {
-        return PROCESS_RUN_YIELDED;
-    }
-    if (rc == 1) {
-        process_block_on_ipc(process);
-        return PROCESS_RUN_BLOCKED;
-    }
-    return PROCESS_RUN_IDLE;
+    /* memory_service_serve_one() blocks on the select set between requests (it
+     * no longer busy-polls and returns PROCESS_RUN_BLOCKED via the no-op
+     * process_block_on_ipc), so the service sleeps on its endpoint event and is
+     * only re-dispatched when a request actually arrives. */
+    (void)memory_service_serve_one();
+    return PROCESS_RUN_YIELDED;
 }

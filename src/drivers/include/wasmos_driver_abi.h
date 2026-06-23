@@ -108,12 +108,36 @@ enum {
 #define WASMOS_SPAWN_FLAG_APP     (1u << 2)
 
 enum {
+    /* Legacy arg-packed register (reply lands on the service endpoint).
+     * TODO: migrate the remaining senders (AssemblyScript rtc/mouse/keyboard,
+     * native zig libsys) to SVC_IPC_REGISTER_DESC_REQ and remove this path. */
     SVC_IPC_REGISTER_REQ = 0x220,
     SVC_IPC_LOOKUP_REQ = 0x221,
+    /* Descriptor-based register: the request payload is a svc_register_desc_t
+     * placed by the caller at FS-buffer offset 0; arg0=offset(0), arg1=byte len.
+     * msg->source is a DEDICATED reply endpoint (not the service endpoint), so
+     * the SVC_IPC_REGISTER_RESP cannot collide with serve traffic on the service
+     * endpoint.  This replaces the arg-packed SVC_IPC_REGISTER_REQ, whose 16-byte
+     * name consumed all four args and forced the reply onto the serve endpoint
+     * (a latent races that deadlocked boot once PM stopped busy-polling). */
+    SVC_IPC_REGISTER_DESC_REQ = 0x222,
     SVC_IPC_REGISTER_RESP = 0x2A0,
     SVC_IPC_LOOKUP_RESP = 0x2A1,
     SVC_IPC_ERROR = 0x2AF
 };
+
+#define WASMOS_SVC_REGISTER_DESC_VERSION 1u
+#define WASMOS_SVC_NAME_MAX 36u
+
+/* Register descriptor written to the FS buffer for SVC_IPC_REGISTER_DESC_REQ.
+ * Extensible: bump WASMOS_SVC_REGISTER_DESC_VERSION and append fields.  Mirror
+ * this layout in any non-C binding that registers services. */
+typedef struct {
+    uint32_t version;          /* = WASMOS_SVC_REGISTER_DESC_VERSION */
+    uint32_t service_endpoint; /* endpoint clients send requests to */
+    uint32_t flags;            /* reserved, 0 */
+    char     name[WASMOS_SVC_NAME_MAX]; /* NUL-terminated service name */
+} svc_register_desc_t;
 
 enum {
     PROC_STATUS_UNKNOWN = 0,

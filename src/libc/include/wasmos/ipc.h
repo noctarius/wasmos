@@ -152,7 +152,6 @@ wasmos_ipc_call_retry(int32_t destination_endpoint,
                       wasmos_ipc_message_t *out_reply,
                       int32_t send_retry_limit)
 {
-    wasmos_ipc_message_t reply;
     int32_t rc = wasmos_ipc_send_retry(destination_endpoint,
                                        source_endpoint,
                                        type,
@@ -166,21 +165,28 @@ wasmos_ipc_call_retry(int32_t destination_endpoint,
         return rc;
     }
     for (;;) {
+        int32_t response_request_id;
+        int32_t response_source;
         rc = wasmos_ipc_select_one(source_endpoint);
         if (rc < 0) {
             return rc;
         }
-        wasmos_ipc_message_read_last(&reply);
-        if (reply.request_id != request_id) {
+        /* Match replies directly from the last-field hostcalls first.  This
+         * mirrors the Zig/Rust/AssemblyScript bindings and avoids depending on
+         * a temporary struct layout while deciding whether to consume or retry
+         * a message on the dedicated reply endpoint. */
+        response_request_id = wasmos_ipc_last_field(1);
+        if (response_request_id != request_id) {
             continue;
         }
-        if (reply.source != destination_endpoint) {
+        response_source = wasmos_ipc_last_field(4);
+        if (response_source != destination_endpoint) {
             continue;
         }
         break;
     }
     if (out_reply) {
-        *out_reply = reply;
+        wasmos_ipc_message_read_last(out_reply);
     }
     return 0;
 }
@@ -208,24 +214,51 @@ wasmos_ipc_pack_name16(const char *name, int32_t out_args[4])
 }
 
 /* Register service_endpoint under service_name with the process manager.
- * Returns the assigned service handle on success, -1 on failure. */
+ * Returns the assigned service handle on success, -1 on failure.
+ *
+ * The request payload is a svc_register_desc_t placed in the per-context xfer
+ * buffer; the reply is awaited on a dedicated reply endpoint distinct from
+ * service_endpoint.  This keeps the SVC_IPC_REGISTER_RESP off the (live) service
+ * endpoint, where peer traffic would otherwise race with — and be discarded by —
+ * wasmos_ipc_call's reply matcher.  The reply endpoint is created once per
+ * translation unit and reused across registrations (no per-call leak); it is
+ * created here rather than via the startup.c managed endpoint so the helper
+ * works in drivers that do not link the full libc startup unit. */
 static inline int32_t
 wasmos_svc_register(int32_t proc_endpoint,
                     int32_t service_endpoint,
                     const char *service_name,
                     int32_t request_id)
 {
-    int32_t args[4];
+    static int32_t s_reg_reply_ep = -1;
+    svc_register_desc_t desc;
     wasmos_ipc_message_t resp;
-    wasmos_ipc_pack_name16(service_name, args);
+    uint32_t i;
+    if (s_reg_reply_ep < 0) {
+        s_reg_reply_ep = wasmos_ipc_create_endpoint();
+    }
+    int32_t reply_ep = s_reg_reply_ep;
+    if (reply_ep < 0) {
+        return -1;
+    }
+    desc.version = WASMOS_SVC_REGISTER_DESC_VERSION;
+    desc.service_endpoint = (uint32_t)service_endpoint;
+    desc.flags = 0;
+    for (i = 0; i + 1u < WASMOS_SVC_NAME_MAX && service_name[i] != '\0'; ++i) {
+        desc.name[i] = service_name[i];
+    }
+    desc.name[i] = '\0';
+    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)&desc, (int32_t)sizeof(desc), 0) != 0) {
+        return -1;
+    }
     if (wasmos_ipc_call(proc_endpoint,
-                        service_endpoint,
-                        SVC_IPC_REGISTER_REQ,
+                        reply_ep,
+                        SVC_IPC_REGISTER_DESC_REQ,
                         request_id,
-                        args[0],
-                        args[1],
-                        args[2],
-                        args[3],
+                        0,
+                        (int32_t)sizeof(desc),
+                        0,
+                        0,
                         &resp) != 0) {
         return -1;
     }

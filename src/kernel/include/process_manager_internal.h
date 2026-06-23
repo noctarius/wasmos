@@ -11,7 +11,7 @@
 #include "wasmos_app.h"
 #include "wasmos_driver_abi.h"
 
-#define PM_FS_BUFFER_SIZE (2u * 1024u * 1024u)
+#define PM_XFER_BUFFER_SIZE (2u * 1024u * 1024u)
 #define PM_DMA_WINDOW_LIMIT 16u
 
 typedef struct {
@@ -86,6 +86,7 @@ typedef struct {
     uint32_t vt_endpoint;
     uint32_t fs_reply_endpoint;
     uint32_t fs_ctrl_endpoint;
+    uint32_t select_id;        /* select set over the endpoints above */
     uint32_t fs_request_id;
     uint32_t next_cli_tty;
     uint8_t started;
@@ -123,6 +124,7 @@ int pm_service_set(const char *name, uint32_t endpoint, uint32_t owner_context_i
 uint32_t pm_service_lookup(const char *name);
 void pm_update_well_known_service_endpoint(const char *name, uint32_t endpoint);
 int pm_handle_service_register(uint32_t pm_context_id, const ipc_message_t *msg);
+int pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t *msg);
 int pm_handle_service_lookup(uint32_t pm_context_id, const ipc_message_t *msg);
 
 int pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t *msg);

@@ -1181,7 +1181,7 @@ cli_show_mounts(void)
         console_write("mount failed\n");
         return;
     }
-    if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)buf, n, 0) != 0) {
+    if (wasmos_xfer_buffer_read((int32_t)(uintptr_t)buf, n, 0) != 0) {
         console_write("mount failed\n");
         return;
     }
@@ -1411,7 +1411,7 @@ cli_spawn_exec_path(const char *input, int32_t *out_pid)
         args_len = (uint32_t)wasmos_sys_strlen(args);
     }
     path_len = (uint32_t)wasmos_sys_strlen(resolved);
-    fs_buf_size = wasmos_fs_buffer_size();
+    fs_buf_size = wasmos_xfer_buffer_size();
     if (path_len == 0u || fs_buf_size <= 0) {
         return -1;
     }
@@ -1421,11 +1421,11 @@ cli_spawn_exec_path(const char *input, int32_t *out_pid)
                            (int32_t)(write_off + args_len) > fs_buf_size))) {
         return -1;
     }
-    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
+    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
         return -1;
     }
     if (args_len > 0u &&
-        wasmos_fs_buffer_write((int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
+        wasmos_xfer_buffer_write((int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
         return -1;
     }
     if (cli_send_proc(PROC_IPC_SPAWN_PATH, 0, path_len, args_len, 0) != 0) {
@@ -1854,7 +1854,7 @@ cli_handle_line(void)
             args_len = (uint32_t)wasmos_sys_strlen(args);
         }
         path_len = (uint32_t)wasmos_sys_strlen(resolved);
-        fs_buf_size = wasmos_fs_buffer_size();
+        fs_buf_size = wasmos_xfer_buffer_size();
         write_off = path_len + 1u;
         if (path_len == 0u || fs_buf_size <= 0 ||
             (int32_t)path_len >= fs_buf_size ||
@@ -1863,12 +1863,12 @@ cli_handle_line(void)
             console_write("spawn failed\n");
             return 0;
         }
-        if (wasmos_fs_buffer_write((int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
+        if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
             console_write("spawn failed\n");
             return 0;
         }
         if (args_len > 0u &&
-            wasmos_fs_buffer_write((int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
+            wasmos_xfer_buffer_write((int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
             console_write("spawn failed\n");
             return 0;
         }
@@ -1928,7 +1928,7 @@ cli_handle_line(void)
             args_len = (uint32_t)wasmos_sys_strlen(args);
         }
         path_len = (uint32_t)wasmos_sys_strlen(resolved);
-        fs_buf_size = wasmos_fs_buffer_size();
+        fs_buf_size = wasmos_xfer_buffer_size();
         write_off = path_len + 1u;
         if (path_len == 0u || fs_buf_size <= 0 ||
             (int32_t)path_len >= fs_buf_size ||
@@ -1937,12 +1937,12 @@ cli_handle_line(void)
             console_write("exec failed\n");
             return 0;
         }
-        if (wasmos_fs_buffer_write((int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
+        if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
             console_write("exec failed\n");
             return 0;
         }
         if (args_len > 0u &&
-            wasmos_fs_buffer_write((int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
+            wasmos_xfer_buffer_write((int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
             console_write("exec failed\n");
             return 0;
         }

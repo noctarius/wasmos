@@ -54,9 +54,9 @@ unsafe extern "C" {
     fn ipc_select_one(endpoint: i32) -> i32;
     fn ipc_last_field(field: i32) -> i32;
     fn fs_endpoint() -> i32;
-    fn fs_buffer_size() -> i32;
-    fn fs_buffer_write(ptr: i32, len: i32, offset: i32) -> i32;
-    fn fs_buffer_copy(ptr: i32, len: i32, offset: i32) -> i32;
+    fn xfer_buffer_size() -> i32;
+    fn xfer_buffer_write(ptr: i32, len: i32, offset: i32) -> i32;
+    fn xfer_buffer_read(ptr: i32, len: i32, offset: i32) -> i32;
     fn thread_gettid() -> i32;
     fn thread_yield() -> i32;
     fn mutex_try_lock(ptr: i32) -> i32;
@@ -427,7 +427,7 @@ pub mod ipc {
 
 pub mod fs {
     use super::{
-        fs_buffer_copy, fs_buffer_size, fs_buffer_write, fs_request, Error, FS_IPC_CLOSE_REQ,
+        xfer_buffer_read, xfer_buffer_size, xfer_buffer_write, fs_request, Error, FS_IPC_CLOSE_REQ,
         FS_IPC_MKDIR_REQ, FS_IPC_OPEN_REQ, FS_IPC_READ_REQ, FS_IPC_RMDIR_REQ, FS_IPC_SEEK_REQ,
         FS_IPC_STAT_REQ, FS_IPC_UNLINK_REQ, FS_IPC_WRITE_REQ, FS_IPC_READDIR_REQ, fs_request_stream,
         O_APPEND, O_CREAT, O_RDONLY, O_TRUNC, O_WRONLY, S_IFDIR, S_IFREG,
@@ -449,7 +449,7 @@ pub mod fs {
                 return Ok(0);
             }
 
-            let max_buffer = unsafe { fs_buffer_size() };
+            let max_buffer = unsafe { xfer_buffer_size() };
             if max_buffer <= 0 {
                 return Err(Error::NotAvailable);
             }
@@ -469,7 +469,7 @@ pub mod fs {
                     return Err(Error::BadResponse);
                 }
                 let dst_ptr = unsafe { buffer.as_mut_ptr().add(done) } as i32;
-                if unsafe { fs_buffer_copy(dst_ptr, chunk_read, 0) } != 0 {
+                if unsafe { xfer_buffer_read(dst_ptr, chunk_read, 0) } != 0 {
                     return Err(Error::HostCallFailed);
                 }
                 done += chunk_read as usize;
@@ -491,7 +491,7 @@ pub mod fs {
                 return Ok(0);
             }
 
-            let max_buffer = unsafe { fs_buffer_size() };
+            let max_buffer = unsafe { xfer_buffer_size() };
             if max_buffer <= 0 {
                 return Err(Error::NotAvailable);
             }
@@ -500,7 +500,7 @@ pub mod fs {
             while done < buffer.len() {
                 let remaining = buffer.len() - done;
                 let chunk_len = remaining.min(max_buffer as usize);
-                if unsafe { fs_buffer_write(buffer.as_ptr().add(done) as i32, chunk_len as i32, 0) } != 0 {
+                if unsafe { xfer_buffer_write(buffer.as_ptr().add(done) as i32, chunk_len as i32, 0) } != 0 {
                     return Err(Error::HostCallFailed);
                 }
                 let (chunk_written, _) = fs_request(FS_IPC_WRITE_REQ, self.fd, chunk_len as i32, 0, 0)?;
@@ -530,7 +530,7 @@ pub mod fs {
 
     fn stage_path(path: &str) -> Result<usize, Error> {
         let path_bytes = path.as_bytes();
-        let max_buffer = unsafe { fs_buffer_size() };
+        let max_buffer = unsafe { xfer_buffer_size() };
         let mut path_buf = [0u8; 256];
 
         if path_bytes.is_empty() {
@@ -549,7 +549,7 @@ pub mod fs {
         path_buf[..path_bytes.len()].copy_from_slice(path_bytes);
         path_buf[path_bytes.len()] = 0;
 
-        if unsafe { fs_buffer_write(path_buf.as_ptr() as i32, (path_bytes.len() + 1) as i32, 0) } != 0 {
+        if unsafe { xfer_buffer_write(path_buf.as_ptr() as i32, (path_bytes.len() + 1) as i32, 0) } != 0 {
             return Err(Error::HostCallFailed);
         }
 

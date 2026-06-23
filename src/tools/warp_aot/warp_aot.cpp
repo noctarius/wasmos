@@ -88,12 +88,12 @@ static vb::Span<vb::NativeSymbol const> aot_symbols()
         DYNAMIC_LINK("wasmos", "futex_wait",          stub_i3),
         DYNAMIC_LINK("wasmos", "futex_wake",          stub_i2),
         /* FS shared buffer */
-        DYNAMIC_LINK("wasmos", "fs_buffer_size",      stub_i0),
+        DYNAMIC_LINK("wasmos", "xfer_buffer_size",      stub_i0),
         DYNAMIC_LINK("wasmos", "fs_endpoint",         stub_i0),
-        DYNAMIC_LINK("wasmos", "fs_buffer_copy",      stub_i3),
-        DYNAMIC_LINK("wasmos", "fs_buffer_write",     stub_i3),
-        DYNAMIC_LINK("wasmos", "fs_buffer_borrow",    stub_i2),
-        DYNAMIC_LINK("wasmos", "fs_buffer_release",   stub_i0),
+        DYNAMIC_LINK("wasmos", "xfer_buffer_read",      stub_i3),
+        DYNAMIC_LINK("wasmos", "xfer_buffer_write",     stub_i3),
+        DYNAMIC_LINK("wasmos", "xfer_buffer_borrow",    stub_i2),
+        DYNAMIC_LINK("wasmos", "xfer_buffer_release",   stub_i0),
         /* Generic buffer borrow/release */
         DYNAMIC_LINK("wasmos", "buffer_borrow",       stub_i3),
         DYNAMIC_LINK("wasmos", "buffer_release",      stub_i1),

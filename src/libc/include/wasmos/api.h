@@ -39,10 +39,10 @@ extern int32_t wasmos_ipc_send(int32_t destination_endpoint,
                                int32_t arg2,
                                int32_t arg3)
     WASMOS_WASM_IMPORT("wasmos", "ipc_send");
-extern int32_t wasmos_fs_buffer_borrow(int32_t source_endpoint, int32_t flags)
-    WASMOS_WASM_IMPORT("wasmos", "fs_buffer_borrow");
-extern int32_t wasmos_fs_buffer_release(void)
-    WASMOS_WASM_IMPORT("wasmos", "fs_buffer_release");
+extern int32_t wasmos_xfer_buffer_borrow(int32_t source_endpoint, int32_t flags)
+    WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_borrow");
+extern int32_t wasmos_xfer_buffer_release(void)
+    WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_release");
 extern int32_t wasmos_buffer_borrow(int32_t kind, int32_t source_endpoint, int32_t flags)
     WASMOS_WASM_IMPORT("wasmos", "buffer_borrow");
 extern int32_t wasmos_buffer_release(int32_t kind)
@@ -186,14 +186,14 @@ extern int32_t wasmos_block_buffer_copy(int32_t phys, int32_t ptr, int32_t len, 
     WASMOS_WASM_IMPORT("wasmos", "block_buffer_copy");
 extern int32_t wasmos_block_buffer_write(int32_t phys, int32_t ptr, int32_t len, int32_t offset)
     WASMOS_WASM_IMPORT("wasmos", "block_buffer_write");
-extern int32_t wasmos_fs_buffer_size(void)
-    WASMOS_WASM_IMPORT("wasmos", "fs_buffer_size");
+extern int32_t wasmos_xfer_buffer_size(void)
+    WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_size");
 extern int32_t wasmos_fs_endpoint(void)
     WASMOS_WASM_IMPORT("wasmos", "fs_endpoint");
-extern int32_t wasmos_fs_buffer_copy(int32_t ptr, int32_t len, int32_t offset)
-    WASMOS_WASM_IMPORT("wasmos", "fs_buffer_copy");
-extern int32_t wasmos_fs_buffer_write(int32_t ptr, int32_t len, int32_t offset)
-    WASMOS_WASM_IMPORT("wasmos", "fs_buffer_write");
+extern int32_t wasmos_xfer_buffer_read(int32_t ptr, int32_t len, int32_t offset)
+    WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_read");
+extern int32_t wasmos_xfer_buffer_write(int32_t ptr, int32_t len, int32_t offset)
+    WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_write");
 extern int32_t wasmos_early_log_size(void)
     WASMOS_WASM_IMPORT("wasmos", "early_log_size");
 extern int32_t wasmos_early_log_copy(int32_t ptr, int32_t len, int32_t offset)

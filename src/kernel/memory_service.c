@@ -79,9 +79,10 @@ memory_service_serve_one(void)
 
     ipc_message_t req;
     uint32_t ready_ep = IPC_ENDPOINT_NONE;
-    /* Block on the select set until the request endpoint has a message. */
+    /* Block on the select set until the request endpoint has a message (no
+     * timeout — mem-service has no periodic work, so it sleeps until woken). */
     int rc = ipc_select_recv(g_mem_service_select_id, g_mem_service_context,
-                             &ready_ep, &req);
+                             &ready_ep, &req, 0);
     if (rc == IPC_EMPTY) {
         return 1;   /* spurious wake / lost race — caller loops and re-blocks */
     }

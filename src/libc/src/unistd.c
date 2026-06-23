@@ -51,10 +51,10 @@ libc_fs_stage_path(const char *path, size_t *out_len)
     }
 
     path_len = strlen(path);
-    if (path_len == 0 || path_len >= (size_t)wasmos_fs_buffer_size()) {
+    if (path_len == 0 || path_len >= (size_t)wasmos_xfer_buffer_size()) {
         return -1;
     }
-    if (wasmos_fs_buffer_write((int32_t)(uintptr_t)path, (int32_t)(path_len + 1u), 0) != 0) {
+    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)path, (int32_t)(path_len + 1u), 0) != 0) {
         return -1;
     }
     if (out_len) {
@@ -228,7 +228,7 @@ read(int fd, void *buf, size_t count)
         return -1;
     }
 
-    chunk_max = (size_t)wasmos_fs_buffer_size();
+    chunk_max = (size_t)wasmos_xfer_buffer_size();
     if (chunk_max == 0) {
         return -1;
     }
@@ -248,7 +248,7 @@ read(int fd, void *buf, size_t count)
         if (got == 0) {
             break;
         }
-        if (wasmos_fs_buffer_copy((int32_t)(uintptr_t)(dst + done), got, 0) != 0) {
+        if (wasmos_xfer_buffer_read((int32_t)(uintptr_t)(dst + done), got, 0) != 0) {
             return done > 0 ? (ssize_t)done : -1;
         }
         done += (size_t)got;
@@ -284,7 +284,7 @@ write(int fd, const void *buf, size_t count)
         return -1;
     }
 
-    chunk_max = (size_t)wasmos_fs_buffer_size();
+    chunk_max = (size_t)wasmos_xfer_buffer_size();
     if (chunk_max == 0) {
         return -1;
     }
@@ -295,7 +295,7 @@ write(int fd, const void *buf, size_t count)
         if (chunk > chunk_max) {
             chunk = chunk_max;
         }
-        if (wasmos_fs_buffer_write((int32_t)(uintptr_t)(src + done), (int32_t)chunk, 0) != 0) {
+        if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)(src + done), (int32_t)chunk, 0) != 0) {
             return done > 0 ? (ssize_t)done : -1;
         }
         if (libc_fs_request(FS_IPC_WRITE_REQ, fd, (int32_t)chunk, 0, 0, &wrote, NULL) != 0) {

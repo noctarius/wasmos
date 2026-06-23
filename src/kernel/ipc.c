@@ -512,7 +512,7 @@ ipc_select_add(uint32_t select_id, uint32_t endpoint_id,
 
 int
 ipc_select_wait(uint32_t select_id, uint32_t owner_context_id,
-                uint32_t *out_ready_ep)
+                uint32_t *out_ready_ep, uint32_t timeout_ms)
 {
     if (!out_ready_ep) {
         return IPC_ERR_INVALID;
@@ -552,8 +552,9 @@ ipc_select_wait(uint32_t select_id, uint32_t owner_context_id,
         return IPC_OK;
     }
 
-    /* sched_event_wait releases sel->event.lock before yielding. */
-    sched_event_wait(&sel->event, 0);
+    /* sched_event_wait releases sel->event.lock before yielding. A non-zero
+     * timeout_ms wakes us after the deadline (returning IPC_EMPTY). */
+    sched_event_wait(&sel->event, timeout_ms);
 
     /* After wake: re-check under event.lock (same lock as ipc_select_signal). */
     spinlock_lock(&sel->event.lock);
@@ -601,14 +602,15 @@ ipc_select_listen(uint32_t owner_context_id, const uint32_t *endpoints,
  * in-kernel services (memory-service, process-manager, ...). */
 int
 ipc_select_recv(uint32_t select_id, uint32_t owner_context_id,
-                uint32_t *out_endpoint, ipc_message_t *out_message)
+                uint32_t *out_endpoint, ipc_message_t *out_message,
+                uint32_t timeout_ms)
 {
     uint32_t ready = IPC_ENDPOINT_NONE;
     int rc;
     if (!out_message) {
         return IPC_ERR_INVALID;
     }
-    rc = ipc_select_wait(select_id, owner_context_id, &ready);
+    rc = ipc_select_wait(select_id, owner_context_id, &ready, timeout_ms);
     if (rc != IPC_OK) {
         return rc;   /* IPC_EMPTY (spurious) or error */
     }

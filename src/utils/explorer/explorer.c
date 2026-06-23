@@ -609,7 +609,7 @@ explorer_open_selected(ui_context_t *ctx, int32_t id, void *user)
         if (explorer_str_ends_with(entry->name, ".wap")) {
             const size_t path_len = strlen(full_path);
             const int32_t pid = (path_len > 0 && path_len <= 240 &&
-                                 wasmos_fs_buffer_write((int32_t)(uintptr_t)full_path, (int32_t)path_len, 0) == 0)
+                                 wasmos_xfer_buffer_write((int32_t)(uintptr_t)full_path, (int32_t)path_len, 0) == 0)
                                     ? wasmos_sys_spawn_path_sync(g_proc_endpoint,
                                                                  g_proc_reply_endpoint,
                                                                  (int32_t)path_len,

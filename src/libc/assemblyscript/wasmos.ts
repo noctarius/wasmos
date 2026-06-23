@@ -56,12 +56,12 @@ declare function ipc_recv(endpoint: i32): i32;
 declare function ipc_last_field(field: i32): i32;
 @external("wasmos", "fs_endpoint")
 declare function fs_endpoint(): i32;
-@external("wasmos", "fs_buffer_size")
-declare function fs_buffer_size(): i32;
-@external("wasmos", "fs_buffer_write")
-declare function fs_buffer_write(ptr: i32, len: i32, offset: i32): i32;
-@external("wasmos", "fs_buffer_copy")
-declare function fs_buffer_copy(ptr: i32, len: i32, offset: i32): i32;
+@external("wasmos", "xfer_buffer_size")
+declare function xfer_buffer_size(): i32;
+@external("wasmos", "xfer_buffer_write")
+declare function xfer_buffer_write(ptr: i32, len: i32, offset: i32): i32;
+@external("wasmos", "xfer_buffer_read")
+declare function xfer_buffer_read(ptr: i32, len: i32, offset: i32): i32;
 @external("wasmos", "thread_gettid")
 declare function thread_gettid(): i32;
 @external("wasmos", "thread_yield")
@@ -122,7 +122,7 @@ export class Mutex {
 
 function readSpawnArgs(): Array<string> {
   const buf = new Uint8Array(128);
-  if (fs_buffer_copy(buf.dataStart as i32, buf.length - 1, 0) != 0) {
+  if (xfer_buffer_read(buf.dataStart as i32, buf.length - 1, 0) != 0) {
     return new Array<string>();
   }
   let n: i32 = 0;
@@ -339,7 +339,7 @@ export class File {
   constructor(private fd: i32) {}
 
   read(maxLen: i32 = 0): Uint8Array | null {
-    const bufferLimit = fs_buffer_size();
+    const bufferLimit = xfer_buffer_size();
     if (bufferLimit <= 0) {
       return null;
     }
@@ -362,7 +362,7 @@ export class File {
     }
 
     const buffer = new Uint8Array(readLen);
-    if (fs_buffer_copy(buffer.dataStart as i32, readLen, 0) != 0) {
+    if (xfer_buffer_read(buffer.dataStart as i32, readLen, 0) != 0) {
       return null;
     }
     return buffer;
@@ -374,7 +374,7 @@ export class File {
   }
 
   write(buffer: Uint8Array): i32 {
-    const bufferLimit = fs_buffer_size();
+    const bufferLimit = xfer_buffer_size();
     if (bufferLimit <= 0) {
       return -1;
     }
@@ -385,7 +385,7 @@ export class File {
       if (chunkLen > bufferLimit) {
         chunkLen = bufferLimit;
       }
-      if (fs_buffer_write(buffer.dataStart as i32 + done, chunkLen, 0) != 0) {
+      if (xfer_buffer_write(buffer.dataStart as i32 + done, chunkLen, 0) != 0) {
         return -1;
       }
       const response = fsRequest(FS_IPC_WRITE_REQ, this.fd, chunkLen, 0, 0);
@@ -500,11 +500,11 @@ export namespace ipc {
 export namespace fs {
   function stagePath(path: string): Uint8Array | null {
     const pathBytes = Uint8Array.wrap(String.UTF8.encode(path, true));
-    const bufferLimit = fs_buffer_size();
+    const bufferLimit = xfer_buffer_size();
     if (bufferLimit <= 0 || pathBytes.length > bufferLimit) {
       return null;
     }
-    if (fs_buffer_write(pathBytes.dataStart as i32, pathBytes.length, 0) != 0) {
+    if (xfer_buffer_write(pathBytes.dataStart as i32, pathBytes.length, 0) != 0) {
       return null;
     }
     return pathBytes;
@@ -613,7 +613,7 @@ export namespace fs {
       }
       chunks.push(chunk);
       total += chunk.length;
-      if (chunk.length < fs_buffer_size()) {
+      if (chunk.length < xfer_buffer_size()) {
         break;
       }
     }

@@ -179,6 +179,72 @@ pm_handle_service_register(uint32_t pm_context_id, const ipc_message_t *msg)
     return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
 }
 
+/* Descriptor-based service registration (SVC_IPC_REGISTER_DESC_REQ).
+ *
+ * Unlike pm_handle_service_register(), the request carries a svc_register_desc_t
+ * in the caller's xfer buffer (arg0=offset 0, arg1=byte length) and msg->source
+ * is a DEDICATED reply endpoint, separate from the service endpoint being
+ * registered (desc->service_endpoint).  This keeps the reply off the live
+ * service endpoint, eliminating the reply/serve-traffic race that deadlocked
+ * boot once the process manager stopped busy-polling. */
+int
+pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t *msg)
+{
+    char name[WASMOS_SVC_NAME_MAX];
+    uint32_t reply_owner = 0;
+    uint32_t service_owner = 0;
+    uint32_t service_ep = IPC_ENDPOINT_NONE;
+    uint32_t len = (uint32_t)msg->arg1;
+    int track_fs = 0;
+    ipc_message_t resp;
+    const svc_register_desc_t *desc;
+    uint32_t i;
+
+    if (ipc_endpoint_owner(msg->source, &reply_owner) != IPC_OK) {
+        return -1;
+    }
+    if (len < sizeof(svc_register_desc_t) ||
+        len > process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM)) {
+        return -1;
+    }
+    desc = (const svc_register_desc_t *)process_manager_buffer_for_context(
+        PM_BUFFER_KIND_FILESYSTEM, reply_owner);
+    if (!desc || desc->version != WASMOS_SVC_REGISTER_DESC_VERSION) {
+        return -1;
+    }
+    /* Copy the name out of the shared buffer and force NUL termination. */
+    for (i = 0; i + 1u < sizeof(name) && desc->name[i] != '\0'; ++i) {
+        name[i] = desc->name[i];
+    }
+    name[i] = '\0';
+    if (name[0] == '\0') {
+        return -1;
+    }
+    service_ep = desc->service_endpoint;
+    track_fs = (strcmp(name, "fs") == 0) || (strcmp(name, "fs.vfs") == 0);
+    /* The endpoint being registered must belong to the same context as the
+     * reply endpoint — a caller may only register its own endpoints. */
+    if (ipc_endpoint_owner(service_ep, &service_owner) != IPC_OK ||
+        service_owner != reply_owner) {
+        if (track_fs) klog_write("[pm] fs register endpoint owner mismatch\n");
+        return -1;
+    }
+    if (pm_service_set(name, service_ep, reply_owner) != 0) {
+        if (track_fs) klog_write("[pm] fs register service set failed\n");
+        return -1;
+    }
+    pm_update_well_known_service_endpoint(name, service_ep);
+    resp.type = SVC_IPC_REGISTER_RESP;
+    resp.source = g_pm.proc_endpoint;
+    resp.destination = msg->source;
+    resp.request_id = msg->request_id;
+    resp.arg0 = 0;
+    resp.arg1 = 0;
+    resp.arg2 = 0;
+    resp.arg3 = 0;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
+}
+
 int
 pm_handle_service_lookup(uint32_t pm_context_id, const ipc_message_t *msg)
 {

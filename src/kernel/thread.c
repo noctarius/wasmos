@@ -66,6 +66,7 @@ thread_reset_slot(thread_t *thread)
     thread->detached = 0;
     thread->exit_status = 0;
     thread->wasm3_heap_bound_pid = 0;
+    thread->sched_timeout_tick = 0;
     for (uint32_t i = 0; i < THREAD_NAME_MAX; ++i) {
         thread->name_storage[i] = '\0';
     }
@@ -187,6 +188,15 @@ thread_get(uint32_t tid)
     thread_t *thread = thread_get_nolock(tid);
     spinlock_unlock(&g_thread_table_lock);
     return thread;
+}
+
+thread_t *
+thread_table_at(uint32_t index)
+{
+    if (index >= THREAD_MAX_COUNT) {
+        return 0;
+    }
+    return &g_threads[index];
 }
 
 thread_t *

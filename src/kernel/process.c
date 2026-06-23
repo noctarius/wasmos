@@ -1690,6 +1690,11 @@ static int process_schedule_once_impl(void) {
         return 1;
     }
 
+    /* Fire any timed waits whose deadline has passed before picking the next
+     * thread. Cheap when nothing is armed; runs in scheduler context (no
+     * run-queue lock held) so it can safely wake/enqueue. */
+    sched_timeout_check();
+
     cpu_sched_t *cs = cpu_sched();
     spinlock_lock(&cs->lock);
     thread_t *thread = cpu_sched_pick_next(cs);

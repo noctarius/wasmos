@@ -168,14 +168,20 @@ warp_ipc_slots_init(void)
 static WarpIpcLastSlot *
 warp_ipc_slot_for_pid(uint32_t pid)
 {
+    WarpIpcLastSlot *empty = nullptr;
+
     if (!pid) return nullptr;
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        if (g_ipc_last[i].valid && g_ipc_last[i].pid == pid) return &g_ipc_last[i];
+        if (g_ipc_last[i].pid == pid) return &g_ipc_last[i];
+        if (!empty && g_ipc_last[i].pid == 0) {
+            empty = &g_ipc_last[i];
+        }
     }
-    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        if (!g_ipc_last[i].valid) { g_ipc_last[i].pid = pid; return &g_ipc_last[i]; }
+    if (empty) {
+        empty->pid = pid;
+        empty->valid = 0;
     }
-    return nullptr;
+    return empty;
 }
 
 static WarpFsPeerSlot *
@@ -239,7 +245,7 @@ warp_dbg_ipc_trace_process(process_t *proc)
 }
 
 static void *
-warp_fs_buffer_for_pid(uint32_t pid, uint32_t context_id)
+warp_xfer_buffer_for_pid(uint32_t pid, uint32_t context_id)
 {
     uint32_t target_context = context_id;
     WarpFsPeerSlot *peer = warp_fs_peer_slot_for_pid(pid);
@@ -609,7 +615,7 @@ warp_ipc_select_wait(uint32_t sel_id, void *ctx_)
     if (warp_current_context_id(&context_id) != 0) return (uint32_t)-1;
     uint32_t ready = IPC_ENDPOINT_NONE;
     for (;;) {
-        int rc = ipc_select_wait(sel_id, context_id, &ready);
+        int rc = ipc_select_wait(sel_id, context_id, &ready, 0);
         if (rc == IPC_OK) return ready;
         if (rc != IPC_EMPTY) return (uint32_t)-1;
     }
@@ -630,7 +636,7 @@ warp_ipc_select_destroy(uint32_t sel_id, void *ctx_)
 // ---------------------------------------------------------------------------
 
 static uint32_t
-warp_fs_buffer_size(void *ctx_)
+warp_xfer_buffer_size(void *ctx_)
 {
     (void)ctx_;
     return (uint32_t)process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM);
@@ -645,7 +651,7 @@ warp_fs_endpoint(void *ctx_)
 }
 
 static uint32_t
-warp_fs_buffer_copy(uint32_t ptr_off, uint32_t len, uint32_t offset, void *ctx_)
+warp_xfer_buffer_read(uint32_t ptr_off, uint32_t len, uint32_t offset, void *ctx_)
 {
     auto *ctx = warp_call_ctx(ctx_);
     if (!len) return 0;
@@ -659,14 +665,14 @@ warp_fs_buffer_copy(uint32_t ptr_off, uint32_t len, uint32_t offset, void *ctx_)
     uint32_t borrow_flags =
         process_manager_buffer_borrow_flags(PM_BUFFER_KIND_FILESYSTEM, context_id);
     if (borrow_flags != 0 && (borrow_flags & 0x1u) == 0) return (uint32_t)-1;
-    void *buf = warp_fs_buffer_for_pid(pid, context_id);
+    void *buf = warp_xfer_buffer_for_pid(pid, context_id);
     if (!buf) return (uint32_t)-1;
     __builtin_memcpy(wasm_ptr, static_cast<uint8_t *>(buf) + offset, len);
     return 0;
 }
 
 static uint32_t
-warp_fs_buffer_write(uint32_t ptr_off, uint32_t len, uint32_t offset, void *ctx_)
+warp_xfer_buffer_write(uint32_t ptr_off, uint32_t len, uint32_t offset, void *ctx_)
 {
     auto *ctx = warp_call_ctx(ctx_);
     if (!len) return 0;
@@ -680,7 +686,7 @@ warp_fs_buffer_write(uint32_t ptr_off, uint32_t len, uint32_t offset, void *ctx_
     uint32_t borrow_flags =
         process_manager_buffer_borrow_flags(PM_BUFFER_KIND_FILESYSTEM, context_id);
     if (borrow_flags != 0 && (borrow_flags & 0x2u) == 0) return (uint32_t)-1;
-    void *buf = warp_fs_buffer_for_pid(pid, context_id);
+    void *buf = warp_xfer_buffer_for_pid(pid, context_id);
     if (!buf) return (uint32_t)-1;
     __builtin_memcpy(static_cast<uint8_t *>(buf) + offset, wasm_ptr, len);
     return 0;
@@ -1324,11 +1330,11 @@ warp_ring3_map_user_window(uint8_t *linmem_base,
 #endif
 
 // ---------------------------------------------------------------------------
-// fs_buffer_borrow / fs_buffer_release
+// xfer_buffer_borrow / xfer_buffer_release
 // ---------------------------------------------------------------------------
 
 static uint32_t
-warp_fs_buffer_borrow(uint32_t source_endpoint, uint32_t flags, void *ctx_)
+warp_xfer_buffer_borrow(uint32_t source_endpoint, uint32_t flags, void *ctx_)
 {
     (void)ctx_;
     uint32_t context_id = 0, source_owner = 0;
@@ -1347,7 +1353,7 @@ warp_fs_buffer_borrow(uint32_t source_endpoint, uint32_t flags, void *ctx_)
 }
 
 static uint32_t
-warp_fs_buffer_release(void *ctx_)
+warp_xfer_buffer_release(void *ctx_)
 {
     (void)ctx_;
     uint32_t context_id = 0;
@@ -2065,10 +2071,10 @@ warp_env_abort(uint32_t msg, uint32_t file, uint32_t line, uint32_t column, void
     LINK("wasmos", "sys_select_add",       warp_ipc_select_add), \
     LINK("wasmos", "sys_select_wait",      warp_ipc_select_wait), \
     LINK("wasmos", "sys_select_destroy",   warp_ipc_select_destroy), \
-    LINK("wasmos", "fs_buffer_size",       warp_fs_buffer_size), \
+    LINK("wasmos", "xfer_buffer_size",       warp_xfer_buffer_size), \
     LINK("wasmos", "fs_endpoint",          warp_fs_endpoint), \
-    LINK("wasmos", "fs_buffer_copy",       warp_fs_buffer_copy), \
-    LINK("wasmos", "fs_buffer_write",      warp_fs_buffer_write), \
+    LINK("wasmos", "xfer_buffer_read",       warp_xfer_buffer_read), \
+    LINK("wasmos", "xfer_buffer_write",      warp_xfer_buffer_write), \
     LINK("wasmos", "buffer_borrow",        warp_buffer_borrow), \
     LINK("wasmos", "buffer_release",       warp_buffer_release), \
     LINK("wasmos", "block_buffer_phys",    warp_block_buffer_phys), \
@@ -2106,8 +2112,8 @@ warp_env_abort(uint32_t msg, uint32_t file, uint32_t line, uint32_t column, void
     LINK("wasmos", "proc_info",            warp_proc_info), \
     LINK("wasmos", "proc_info_ex",         warp_proc_info_ex), \
     LINK("wasmos", "proc_info_stats",      warp_proc_info_stats), \
-    LINK("wasmos", "fs_buffer_borrow",     warp_fs_buffer_borrow), \
-    LINK("wasmos", "fs_buffer_release",    warp_fs_buffer_release), \
+    LINK("wasmos", "xfer_buffer_borrow",     warp_xfer_buffer_borrow), \
+    LINK("wasmos", "xfer_buffer_release",    warp_xfer_buffer_release), \
     LINK("wasmos", "sched_cpu_stats",      warp_sched_cpu_stats), \
     LINK("wasmos", "thread_create",        warp_thread_create), \
     LINK("wasmos", "thread_yield",         warp_thread_yield), \
@@ -2314,14 +2320,14 @@ warp_ring3_dispatch(uint32_t hc_id, void *frame_ptr)
     /* 21 */ case HC_IPC_SELECT_DESTROY: /* fall-through */
     /* 25 */ case HC_SYS_SELECT_DESTROY:
         return warp_ipc_select_destroy((uint32_t)a0, ctx2);
-    /* 26 */ case HC_FS_BUFFER_SIZE:
-        return warp_fs_buffer_size(reinterpret_cast<void *>(a0));
+    /* 26 */ case HC_XFER_BUFFER_SIZE:
+        return warp_xfer_buffer_size(reinterpret_cast<void *>(a0));
     /* 27 */ case HC_FS_ENDPOINT:
         return warp_fs_endpoint(reinterpret_cast<void *>(a0));
-    /* 28 */ case HC_FS_BUFFER_COPY:
-        return warp_fs_buffer_copy((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, ctx4);
-    /* 29 */ case HC_FS_BUFFER_WRITE:
-        return warp_fs_buffer_write((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, ctx4);
+    /* 28 */ case HC_XFER_BUFFER_READ:
+        return warp_xfer_buffer_read((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, ctx4);
+    /* 29 */ case HC_XFER_BUFFER_WRITE:
+        return warp_xfer_buffer_write((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, ctx4);
     /* 30 */ case HC_BUFFER_BORROW:
         return warp_buffer_borrow((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, ctx4);
     /* 31 */ case HC_BUFFER_RELEASE:
@@ -2403,10 +2409,10 @@ warp_ring3_dispatch(uint32_t hc_id, void *frame_ptr)
     /* 66 */ case HC_PROC_INFO_STATS:
         return warp_proc_info_stats((uint32_t)a0, (uint32_t)a1, (uint32_t)a2,
                                     (uint32_t)a3, (uint32_t)a4, ctx5);
-    /* 67 */ case HC_FS_BUFFER_BORROW:
-        return warp_fs_buffer_borrow((uint32_t)a0, (uint32_t)a1, ctx3);
-    /* 68 */ case HC_FS_BUFFER_RELEASE:
-        return warp_fs_buffer_release(reinterpret_cast<void *>(a0));
+    /* 67 */ case HC_XFER_BUFFER_BORROW:
+        return warp_xfer_buffer_borrow((uint32_t)a0, (uint32_t)a1, ctx3);
+    /* 68 */ case HC_XFER_BUFFER_RELEASE:
+        return warp_xfer_buffer_release(reinterpret_cast<void *>(a0));
     /* 69 */ case HC_SCHED_CPU_STATS:
         return warp_sched_cpu_stats((uint32_t)a0, (uint32_t)a1, ctx3);
     /* 70 */ case HC_THREAD_CREATE:

@@ -11,8 +11,10 @@
 /* Register context_id's endpoint pair with the memory service. */
 void memory_service_register(uint32_t context_id, uint32_t endpoint, uint32_t reply_endpoint);
 
-/* Drain one pending memory service IPC message; returns 0 if nothing was processed. */
-int memory_service_process_once(void);
+/* Block on the memory-service select set until a request arrives, handle it,
+ * and reply. Returns 0 on success, 1 on a spurious wake (caller loops), -1 on
+ * error. */
+int memory_service_serve_one(void);
 
 /* Handle an IPC_MEM_FAULT from a page fault for fault_context_id at fault_addr. */
 int memory_service_handle_fault_ipc(uint32_t fault_context_id, uint64_t fault_addr, uint64_t error_code);

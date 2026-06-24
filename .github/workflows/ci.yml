@@ -25,6 +25,14 @@ jobs:
             clang lld llvm cmake ninja-build python3-pip
           python3 -m pip install --user kconfiglib
 
+      - name: Install AssemblyScript
+        # asc is required at CONFIGURE time (find_program(ASC_EXECUTABLE asc) in
+        # the AssemblyScript serial driver); rustc is preinstalled on the runner.
+        # Zig/TinyGo are absent here but skip gracefully at configure.
+        run: |
+          npm install
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+
       - name: Configure
         run: cmake -S . -B build
 
@@ -64,10 +72,11 @@ jobs:
           python3 -m pip install --user kconfiglib
 
       - name: Install Zig
+        # Zig 0.14.1+ uses the zig-<arch>-<os>-<version> tarball naming.
         run: |
-          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" \
             | tar -xJ
-          echo "$PWD/zig-linux-x86_64-${ZIG_VERSION}" >> "$GITHUB_PATH"
+          echo "$PWD/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
 
       - name: Install Rust wasm target
         run: rustup target add wasm32-unknown-unknown

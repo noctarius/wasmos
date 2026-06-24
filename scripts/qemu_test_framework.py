@@ -89,6 +89,14 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
         "-m",
         "512M",
     ]
+    # Acceleration: prefer KVM when the host exposes a usable /dev/kvm (e.g. Linux
+    # CI runners) so TCG emulation does not dominate boot time; otherwise fall back
+    # to plain TCG. Override explicitly with WASMOS_QEMU_ACCEL (e.g. "hvf", "tcg").
+    accel = os.environ.get("WASMOS_QEMU_ACCEL", "").strip()
+    if not accel:
+        accel = "kvm" if os.access("/dev/kvm", os.R_OK | os.W_OK) else "tcg"
+    if accel and accel != "tcg":
+        cmd += ["-accel", accel]
     if cfg.smp_count > 1:
         cmd += ["-smp", str(cfg.smp_count)]
     cmd += [

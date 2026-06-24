@@ -6,10 +6,16 @@ on:
   pull_request:
   workflow_dispatch:
 
-# Cancel superseded runs on the same ref.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  # Zig is needed even by the unit-tests configure (native gfx-compositor /
+  # font-service services require it). The version only matters where Zig code is
+  # actually compiled (the defconfig builds), not for the unit-tests configure.
+  ZIG_VERSION: "0.14.1"
+  TINYGO_VERSION: "0.34.0"
 
 jobs:
   unit-tests:
@@ -22,13 +28,18 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang lld llvm cmake ninja-build python3-pip
+            clang lld llvm cmake ninja-build python3-pip curl xz-utils
           python3 -m pip install --user kconfiglib
 
+      - name: Install Zig
+        run: |
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" \
+            | tar -xJ
+          echo "$PWD/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
+
       - name: Install AssemblyScript
-        # asc is required at CONFIGURE time (find_program(ASC_EXECUTABLE asc) in
-        # the AssemblyScript serial driver); rustc is preinstalled on the runner.
-        # Zig/TinyGo are absent here but skip gracefully at configure.
+        # asc is required at configure time (AssemblyScript serial driver);
+        # rustc is preinstalled on the runner; TinyGo skips gracefully.
         run: |
           npm install
           echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
@@ -50,8 +61,6 @@ jobs:
       # Generous timeout: the harness auto-uses KVM when /dev/kvm is available
       # (fast); the value mainly guards a TCG fallback.
       WASMOS_QEMU_TEST_TIMEOUT: "600"
-      ZIG_VERSION: "0.14.1"
-      TINYGO_VERSION: "0.34.0"
     steps:
       - uses: actions/checkout@v4
 
@@ -88,10 +97,21 @@ jobs:
 
       - name: Install AssemblyScript
         run: |
-          # Installs the pinned assemblyscript from package.json into ./node_modules.
           npm install
-          # asc must be on PATH at CONFIGURE time (find_program(ASC_EXECUTABLE asc)).
           echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+
+      - name: Stage OVMF (writable vars copy)
+        # Ubuntu's ovmf package ships OVMF_CODE_4M.fd / OVMF_VARS_4M.fd, which the
+        # CMake autodiscovery list does not know about, and the vars file must be
+        # writable for QEMU. Copy a matched pair to a writable location.
+        run: |
+          mkdir -p "$RUNNER_TEMP/ovmf"
+          code=$(ls /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd 2>/dev/null | head -1)
+          vars=$(ls /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/OVMF/OVMF_VARS.fd 2>/dev/null | head -1)
+          echo "OVMF code=$code vars=$vars"
+          cp "$code" "$RUNNER_TEMP/ovmf/OVMF_CODE.fd"
+          cp "$vars" "$RUNNER_TEMP/ovmf/OVMF_VARS.fd"
+          chmod u+w "$RUNNER_TEMP/ovmf/OVMF_VARS.fd"
 
       - name: Tool versions
         run: |
@@ -104,7 +124,9 @@ jobs:
         run: |
           cmake -S . -B "build-${{ matrix.config }}" \
             -DWASMOS_DOTCONFIG="configs/${{ matrix.config }}_defconfig" \
-            -DWASMOS_QEMU_TEST_TIMEOUT="${WASMOS_QEMU_TEST_TIMEOUT}"
+            -DWASMOS_QEMU_TEST_TIMEOUT="${WASMOS_QEMU_TEST_TIMEOUT}" \
+            -DOVMF_CODE="$RUNNER_TEMP/ovmf/OVMF_CODE.fd" \
+            -DOVMF_VARS="$RUNNER_TEMP/ovmf/OVMF_VARS.fd"
 
       - name: Build + boot test (${{ matrix.config }})
         run: cmake --build "build-${{ matrix.config }}" --target run-qemu-test

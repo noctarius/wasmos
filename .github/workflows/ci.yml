@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    name: Kernel unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang lld llvm cmake ninja-build python3-pip
+          python3 -m pip install --user kconfiglib
+
+      - name: Configure
+        run: cmake -S . -B build
+
+      - name: Run kernel unit tests
+        run: cmake --build build --target run-kernel-unit-tests
+
+  defconfig:
+    name: ${{ matrix.config }} (build + boot)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [warp_single, warp_smp, wasm3_single, wasm3_smp]
+    env:
+      # Generous timeout: the harness auto-uses KVM when /dev/kvm is available
+      # (fast); the value mainly guards a TCG fallback.
+      WASMOS_QEMU_TEST_TIMEOUT: "600"
+      ZIG_VERSION: "0.14.1"
+      TINYGO_VERSION: "0.34.0"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm || echo "no /dev/kvm (will fall back to TCG)"
+
+      - name: Install build + emulation toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang lld llvm cmake ninja-build python3-pip \
+            qemu-system-x86 ovmf curl xz-utils
+          python3 -m pip install --user kconfiglib
+
+      - name: Install Zig
+        run: |
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
+            | tar -xJ
+          echo "$PWD/zig-linux-x86_64-${ZIG_VERSION}" >> "$GITHUB_PATH"
+
+      - name: Install Rust wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install TinyGo
+        run: |
+          curl -fsSLO "https://github.com/tinygo-org/tinygo/releases/download/v${TINYGO_VERSION}/tinygo_${TINYGO_VERSION}_amd64.deb"
+          sudo dpkg -i "tinygo_${TINYGO_VERSION}_amd64.deb"
+
+      - name: Install AssemblyScript
+        run: |
+          # Installs the pinned assemblyscript from package.json into ./node_modules.
+          npm install
+          # asc must be on PATH at CONFIGURE time (find_program(ASC_EXECUTABLE asc)).
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+
+      - name: Tool versions
+        run: |
+          clang --version | head -1; ld.lld --version | head -1
+          qemu-system-x86_64 --version | head -1
+          zig version; rustc --version; tinygo version || true
+          asc --version || true
+
+      - name: Configure (${{ matrix.config }})
+        run: |
+          cmake -S . -B "build-${{ matrix.config }}" \
+            -DWASMOS_DOTCONFIG="configs/${{ matrix.config }}_defconfig" \
+            -DWASMOS_QEMU_TEST_TIMEOUT="${WASMOS_QEMU_TEST_TIMEOUT}"
+
+      - name: Build + boot test (${{ matrix.config }})
+        run: cmake --build "build-${{ matrix.config }}" --target run-qemu-test

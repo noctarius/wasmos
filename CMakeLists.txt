@@ -686,6 +686,11 @@ else ()
 endif ()
 set(WASMOS_SMP_DEFINE -DWASMOS_SMP=${WASMOS_SMP_VALUE})
 
+# Wall-clock timeout (seconds) for the QEMU halt/boot smoke test. Defaults to
+# 120 for fast local (KVM/HVF) runs; bump it for slow TCG environments such as
+# CI runners without hardware acceleration: -DWASMOS_QEMU_TEST_TIMEOUT=600.
+set(WASMOS_QEMU_TEST_TIMEOUT 120 CACHE STRING "QEMU halt-test timeout in seconds")
+
 if (NOT DEFINED WASMOS_SCHED_CALLER_CPU_BIAS_INITIALIZED)
   set(WASMOS_SCHED_CALLER_CPU_BIAS ON CACHE BOOL "Enqueue woken threads on the waking CPU's ready queue" FORCE)
   set(WASMOS_SCHED_CALLER_CPU_BIAS_INITIALIZED ON CACHE BOOL "" FORCE)
@@ -1418,6 +1423,7 @@ if (OVMF_VARS)
             --ovmf-vars ${OVMF_VARS}
             --esp ${BUILD_DIR}/esp
             --smp ${WASMOS_QEMU_SMP_COUNT}
+            --timeout ${WASMOS_QEMU_TEST_TIMEOUT}
     DEPENDS bootloader kernel
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     COMMENT "Running QEMU halt test"

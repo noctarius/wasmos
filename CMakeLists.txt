@@ -813,7 +813,10 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     set(LDFLAGS_EFI -fuse-ld=lld -Wl,-flavor,link -Wl,/subsystem:efi_application -Wl,/entry:efi_main)
   endif ()
 else ()
-  set(LDFLAGS_EFI -fuse-ld=lld -Wl,--subsystem,10 -Wl,--entry,efi_main)
+  # The x86_64-unknown-uefi target links via lld-link (COFF), so it needs
+  # MS-style options; GNU/ELF-style -Wl,--subsystem,10 -Wl,--entry,efi_main are
+  # rejected by lld-link ("could not open '10'"). Match the macOS lld-link path.
+  set(LDFLAGS_EFI -fuse-ld=lld-link -Wl,/subsystem:efi_application -Wl,/entry:efi_main)
 endif ()
 
 if (NOT OVMF_CODE)

@@ -812,7 +812,13 @@ mm_context_t *mm_context_create(uint32_t id) {
         spinlock_unlock(&g_contexts_lock);
         return 0;
     }
-    if (mm_context_alloc_region(ctx, 8, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER,
+    /* wasm3 instantiates modules with a 1-page (64 KiB) initial linear memory.
+     * The user-VA mirror region must cover that whole range, otherwise host
+     * calls that reconcile the user view (wasm_copy_*_user_sync_views) reject
+     * pointers whose offset lands above the region — e.g. a service whose stack
+     * sits high in linear memory failing svc_register.  16 pages == 64 KiB
+     * matches the wasm3 initial memory (and the root context). */
+    if (mm_context_alloc_region(ctx, 16, MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER,
                                 MEM_REGION_WASM_LINEAR) != 0) {
         mm_context_release_regions(ctx);
         paging_destroy_address_space(ctx->root_table);

@@ -987,6 +987,8 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *system) {
             boot_info->flags |= BOOT_INFO_FLAG_MODULES_PRESENT;
         }
 
+        uefi_log_hex_prefixed(system, "[dbg-boot] boot_info ptr=", (uint64_t)(UINTN)boot_info);
+        uefi_log_hex_prefixed(system, "[dbg-boot] total_pages=", (uint64_t)total_pages);
         status = bs->ExitBootServices(image, map_key);
         if (!EFI_ERROR(status)) {
             exited = 1;

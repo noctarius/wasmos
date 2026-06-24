@@ -15,7 +15,8 @@ env:
   # font-service services require it). The version only matters where Zig code is
   # actually compiled (the defconfig builds), not for the unit-tests configure.
   ZIG_VERSION: "0.14.1"
-  TINYGO_VERSION: "0.34.0"
+  # TinyGo >= 0.36 supports Go 1.24 (the runner's preinstalled Go); 0.34 rejected it.
+  TINYGO_VERSION: "0.41.1"
 
 jobs:
   unit-tests:

@@ -23,7 +23,13 @@
 
 _start:
     cld
-    mov %rcx, bootstrap_boot_info(%rip)
+    /* Carry the boot_info pointer (UEFI MS-ABI arg0 = rcx) in a callee-saved
+     * register across paging setup AND the BSS clear in _start_high. Storing it
+     * to a .data variable is fragile: depending on linker layout that variable
+     * can fall inside the __bss_start..__bss_end range that _start_high zeroes,
+     * which nulled boot_info under ld.lld (observed in CI). r15 is untouched by
+     * the paging helpers and the BSS clear. */
+    mov %rcx, %r15
 
     lea bootstrap_pml4(%rip), %rdi
     xor %rax, %rax
@@ -115,8 +121,7 @@ _start_high:
     sub %rdi, %rcx
     xor %rax, %rax
     rep stosb
-    movabs $bootstrap_boot_info, %rax
-    mov (%rax), %rdi
+    mov %r15, %rdi
     call kmain
 3:
     hlt

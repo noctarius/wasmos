@@ -198,11 +198,6 @@ kmain(boot_info_t *boot_info)
 
     serial_init();
     klog_write("[kernel] kmain\n");
-    klog_printf("[dbg-bi] ptr=%016llx ver=%016llx size=%016llx ksize=%016llx\n",
-        (unsigned long long)(uintptr_t)boot_info,
-        (unsigned long long)(boot_info ? boot_info->version : 0),
-        (unsigned long long)(boot_info ? boot_info->size : 0),
-        (unsigned long long)sizeof(boot_info_t));
     if (!boot_info || boot_info->version != BOOT_INFO_VERSION ||
         boot_info->size < sizeof(boot_info_t)) {
         klog_write("[kernel] invalid boot_info\n");

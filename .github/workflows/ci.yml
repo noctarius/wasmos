@@ -77,9 +77,20 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            clang lld llvm cmake ninja-build python3-pip \
+            cmake ninja-build python3-pip \
             qemu-system-x86 ovmf curl xz-utils
           python3 -m pip install --user kconfiglib
+
+      - name: Install LLVM 20
+        # Ubuntu's default clang 18 mis-handles the x86_64-unknown-uefi target
+        # (bootloader codegen: "backend data layout 'e-m:w-...' does not match
+        # expected target description 'e-m:e-...'"). A newer LLVM fixes it.
+        run: |
+          curl -fsSL https://apt.llvm.org/llvm.sh -o /tmp/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 20 all
+          # /usr/lib/llvm-20/bin has unversioned clang/ld.lld/lld-link/llvm-objcopy.
+          echo "/usr/lib/llvm-20/bin" >> "$GITHUB_PATH"
 
       - name: Install Zig
         # Zig 0.14.1+ uses the zig-<arch>-<os>-<version> tarball naming.

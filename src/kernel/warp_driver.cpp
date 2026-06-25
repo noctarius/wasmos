@@ -704,7 +704,8 @@ wasm_driver_start(wasm_driver_t *driver,
     /* Set up per-module ring-3 user address space and dual-map JIT+linmem. */
     {
         uint64_t user_root = 0;
-        if (warp_r3_setup(&user_root) != 0) {
+        uint64_t stack_phys = 0;
+        if (warp_r3_setup(&user_root, &stack_phys) != 0) {
             klog_write("[warp-r3] setup failed\n");
             delete mod;
             warp_runtime_leave(prev);
@@ -716,13 +717,13 @@ wasm_driver_start(wasm_driver_t *driver,
         int lm_rc  = warp_mem_ring3_map_linmem(user_root, linmem);
         if (jit_rc != 0 || lm_rc != 0) {
             klog_write("[warp-r3] dual-map failed\n");
-            warp_r3_teardown();
+            warp_r3_teardown(user_root, stack_phys);
             delete mod;
             warp_runtime_leave(prev);
             return -1;
         }
         driver->r3_user_root  = user_root;
-        driver->r3_stack_phys = g_warp_r3_state.ring3_stack_phys;
+        driver->r3_stack_phys = stack_phys;
         driver->r3_linmem_base =
             WARP_R3_LINMEM_BASE + (reinterpret_cast<uint64_t>(linmem) & 0xFFFULL);
     }
@@ -754,9 +755,7 @@ wasm_driver_stop(wasm_driver_t *driver)
     driver->started = 0;
 #ifdef WASMOS_WARP_RING3
     if (driver->r3_user_root) {
-        g_warp_r3_state.user_root        = driver->r3_user_root;
-        g_warp_r3_state.ring3_stack_phys = driver->r3_stack_phys;
-        warp_r3_teardown();
+        warp_r3_teardown(driver->r3_user_root, driver->r3_stack_phys);
         driver->r3_user_root  = 0;
         driver->r3_stack_phys = 0;
         driver->r3_linmem_base = 0;

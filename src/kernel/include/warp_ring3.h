@@ -153,23 +153,15 @@ typedef enum {
     HC_COUNT               = 101,
 } warp_hostcall_id_t;
 
-/* Per-module ring-3 execution state (singleton — one WASM module at a time). */
-typedef struct {
-    uint64_t user_root;           /* user CR3 (physical address of PML4) */
-    uint64_t old_kernel_cr3;      /* kernel CR3 to restore after ring-3 call */
-    uint64_t ring3_stack_phys;    /* physical base of ring-3 stack pages */
-    uint64_t ring3_stack_top;     /* user VA of ring-3 stack top */
-    int32_t  return_value;        /* filled by WARP_RETURN handler */
-    uint8_t  done;                /* 1 after WARP_RETURN fires */
-    uint8_t  active;              /* 1 while ring-3 execution is in flight */
-    void    *jbuf[5];             /* setjmp buffer (matches WarpExceptionCheckpoint) */
-} warp_ring3_state_t;
-
-extern warp_ring3_state_t g_warp_r3_state;
-
-/* ring3_trampolines.c */
-int  warp_r3_setup(uint64_t *out_user_root);
-void warp_r3_teardown(void);
+/* ring3_trampolines.c
+ *
+ * Ring-3 execution state is per-process (stored on the wasm_driver: r3_user_root,
+ * r3_stack_phys) and per-thread (warp_r3_old_cr3 / _active / _jbuf on thread_t).
+ * setup/teardown therefore take the root and stack as parameters rather than a
+ * global singleton — a global was racy under SMP, where a concurrent
+ * spawn/teardown could destroy a different, live process's address space. */
+int  warp_r3_setup(uint64_t *out_user_root, uint64_t *out_stack_phys);
+void warp_r3_teardown(uint64_t user_root, uint64_t stack_phys);
 
 /* link.cpp (exposed as C for syscall.c).
  * frame is syscall_frame_t* but declared void* to avoid circular include. */

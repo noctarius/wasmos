@@ -48,9 +48,6 @@
 #include "klog.h"
 #include "warp_ring3.h"
 
-/* Exported global state. */
-warp_ring3_state_t g_warp_r3_state;
-
 #define PAGE_SIZE 4096ULL
 #define KBASE     0xFFFFFFFF80000000ULL
 
@@ -67,7 +64,7 @@ static int map_user_page(uint64_t root, uint64_t user_va, uint64_t phys, uint64_
 }
 
 int
-warp_r3_setup(uint64_t *out_user_root)
+warp_r3_setup(uint64_t *out_user_root, uint64_t *out_stack_phys)
 {
     uint64_t root = 0;
 
@@ -212,27 +209,21 @@ warp_r3_setup(uint64_t *out_user_root)
         }
     }
 
-    /* Fill state. */
-    g_warp_r3_state.user_root        = root;
-    g_warp_r3_state.ring3_stack_phys = stack_phys;
-    g_warp_r3_state.ring3_stack_top  = WARP_R3_STACK_TOP;
-    g_warp_r3_state.active           = 0;
-    g_warp_r3_state.done             = 0;
-    g_warp_r3_state.return_value     = 0;
-
-    *out_user_root = root;
+    /* Return the freshly-created root and stack to the caller, which stores them
+     * per-process on the wasm_driver.  No global state is touched, so concurrent
+     * setup/teardown on other CPUs cannot clobber this call. */
+    *out_user_root  = root;
+    *out_stack_phys = stack_phys;
     return 0;
 }
 
 void
-warp_r3_teardown(void)
+warp_r3_teardown(uint64_t user_root, uint64_t stack_phys)
 {
-    if (g_warp_r3_state.user_root) {
-        paging_destroy_address_space(g_warp_r3_state.user_root);
-        g_warp_r3_state.user_root = 0;
+    if (user_root) {
+        paging_destroy_address_space(user_root);
     }
-    if (g_warp_r3_state.ring3_stack_phys) {
-        pfa_free_pages(g_warp_r3_state.ring3_stack_phys, WARP_R3_STACK_PAGES);
-        g_warp_r3_state.ring3_stack_phys = 0;
+    if (stack_phys) {
+        pfa_free_pages(stack_phys, WARP_R3_STACK_PAGES);
     }
 }

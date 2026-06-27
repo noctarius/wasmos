@@ -155,7 +155,12 @@ pub fn main() u8 {
     const args = wasmos.cliArgs();
     const show_tree = args.len > 0 and
         (std.mem.eql(u8, args[0], "tree") or std.mem.eql(u8, args[0], "all"));
-    const show_table = args.len == 0 or std.mem.eql(u8, args[0], "all");
+    // Show the table for anything that isn't the explicit "tree" subcommand.
+    // This keeps ps robust to stale/garbage CLI args (the per-context xfer
+    // buffer is not zeroed on alloc, so a no-arg spawn can parse recycled
+    // bytes as args). Fixing this kernel-side by zeroing the buffer triggers
+    // the unresolved WARP ring3-entry fault, so we tolerate it in the consumer.
+    const show_table = args.len == 0 or !std.mem.eql(u8, args[0], "tree");
     var out = OutBuf{ .buf = g_out_buf[0..] };
 
     const count_raw = proc_count();

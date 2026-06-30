@@ -161,7 +161,10 @@ struct WarpIpcLastSlot {
     ipc_message_t message;
 };
 
-static WarpIpcLastSlot g_ipc_last[PROCESS_MAX_COUNT];
+/* Per-pid IPC last-message slots, keyed by pid in a growable hashmap (no fixed
+ * process-count bound).  Created on first use for a pid and removed on exit via
+ * warp_release_pid.  Value addresses are stable for a key's lifetime. */
+static hashmap_t g_ipc_last_map;
 
 struct WarpFsPeerSlot {
     uint32_t pid;
@@ -169,60 +172,36 @@ struct WarpFsPeerSlot {
     uint32_t peer_context_id;
 };
 
-static WarpFsPeerSlot g_fs_peer_slots[PROCESS_MAX_COUNT];
+static hashmap_t g_fs_peer_map;
+
+static void warp_block_slots_init(void);
 
 static void
 warp_ipc_slots_init(void)
 {
-    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        g_ipc_last[i].pid   = 0;
-        g_ipc_last[i].valid = 0;
-        g_fs_peer_slots[i].pid = 0;
-        g_fs_peer_slots[i].valid = 0;
-        g_fs_peer_slots[i].peer_context_id = 0;
-    }
+    hashmap_init(&g_ipc_last_map, sizeof(WarpIpcLastSlot), 64);
+    hashmap_init(&g_fs_peer_map, sizeof(WarpFsPeerSlot), 64);
+    warp_block_slots_init();
 }
 
 static WarpIpcLastSlot *
 warp_ipc_slot_for_pid(uint32_t pid)
 {
-    WarpIpcLastSlot *empty = nullptr;
-
     if (!pid) return nullptr;
-    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        if (g_ipc_last[i].pid == pid) return &g_ipc_last[i];
-        if (!empty && g_ipc_last[i].pid == 0) {
-            empty = &g_ipc_last[i];
-        }
-    }
-    if (empty) {
-        empty->pid = pid;
-        empty->valid = 0;
-    }
-    return empty;
+    auto *slot = static_cast<WarpIpcLastSlot *>(hashmap_put(&g_ipc_last_map, pid));
+    if (slot) slot->pid = pid;
+    return slot;
 }
 
 static WarpFsPeerSlot *
 warp_fs_peer_slot_for_pid(uint32_t pid)
 {
-    WarpFsPeerSlot *empty = nullptr;
     if (!pid) {
         return nullptr;
     }
-    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        if (g_fs_peer_slots[i].pid == pid) {
-            return &g_fs_peer_slots[i];
-        }
-        if (!empty && g_fs_peer_slots[i].pid == 0) {
-            empty = &g_fs_peer_slots[i];
-        }
-    }
-    if (empty) {
-        empty->pid = pid;
-        empty->valid = 0;
-        empty->peer_context_id = 0;
-    }
-    return empty;
+    auto *slot = static_cast<WarpFsPeerSlot *>(hashmap_put(&g_fs_peer_map, pid));
+    if (slot) slot->pid = pid;
+    return slot;
 }
 
 // ---------------------------------------------------------------------------
@@ -744,19 +723,36 @@ warp_buffer_release(uint32_t kind, void *ctx_)
 #define WARP_BLOCK_BUF_PAGES 2u  /* 8 KB block buffer per process */
 
 struct WarpBlockSlot { uint32_t pid; uint64_t phys; };
-static WarpBlockSlot g_block_slots[PROCESS_MAX_COUNT];
+
+/* Per-pid block DMA slots, keyed by pid in a growable hashmap (no fixed
+ * process-count bound).  Created on first use and removed on exit via
+ * warp_release_pid. */
+static hashmap_t g_block_map;
+
+static void warp_block_slots_init(void)
+{
+    hashmap_init(&g_block_map, sizeof(WarpBlockSlot), 64);
+}
 
 /* Find or allocate a block slot for this PID (used by block_buffer_phys). */
 static WarpBlockSlot *warp_block_slot(uint32_t pid)
 {
-    for (auto &s : g_block_slots) if (s.pid == pid || !s.pid) { s.pid = pid; return &s; }
-    return nullptr;
+    if (!pid) return nullptr;
+    auto *s = static_cast<WarpBlockSlot *>(hashmap_put(&g_block_map, pid));
+    if (s) s->pid = pid;
+    return s;
 }
 /* Find a block slot by physical address (used by block_buffer_write/copy,
  * which may be called by a different process than the one that called phys). */
 static WarpBlockSlot *warp_block_slot_by_phys(uint64_t phys)
 {
-    for (auto &s : g_block_slots) if (s.phys == phys) return &s;
+    hashmap_iter_t it;
+    uint32_t key = 0;
+    for (auto *s = static_cast<WarpBlockSlot *>(hashmap_first(&g_block_map, &it, &key));
+         s;
+         s = static_cast<WarpBlockSlot *>(hashmap_next(&it, &key))) {
+        if (s->phys == phys) return s;
+    }
     return nullptr;
 }
 
@@ -2239,21 +2235,9 @@ warp_release_pid(uint32_t pid)
         return;
     }
     (void)hashmap_remove(&g_ctx_map, pid);
-    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        if (g_ipc_last[i].pid == pid) {
-            g_ipc_last[i].pid = 0;
-            g_ipc_last[i].valid = 0;
-        }
-        if (g_fs_peer_slots[i].pid == pid) {
-            g_fs_peer_slots[i].pid = 0;
-            g_fs_peer_slots[i].valid = 0;
-            g_fs_peer_slots[i].peer_context_id = 0;
-        }
-        if (g_block_slots[i].pid == pid) {
-            g_block_slots[i].pid = 0;
-            g_block_slots[i].phys = 0;
-        }
-    }
+    (void)hashmap_remove(&g_ipc_last_map, pid);
+    (void)hashmap_remove(&g_fs_peer_map, pid);
+    (void)hashmap_remove(&g_block_map, pid);
     /* Per-pid WARP heap config (warp/shim.cpp). */
     warp_heap_release(pid);
 }

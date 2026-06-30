@@ -22,6 +22,7 @@ extern "C" {
 #include "paging.h"
 #include "memory.h"
 #include "process.h"
+#include "hashmap.h"
 #include "arch/x86_64/smp.h"
 }
 
@@ -249,8 +250,19 @@ struct WarpPidConfig {
     uint8_t  configured;
 };
 
-static WarpPidConfig g_pid_config[PROCESS_MAX_COUNT];
-static uint8_t       g_env_initialized = 0;
+/* Per-pid heap configuration, keyed by pid in a growable hashmap (no fixed
+ * process-count bound).  Created on configure and removed on exit via
+ * warp_heap_release (driven from warp_release_pid in warp/link.cpp).  Lazily
+ * initialized on first configure since shim.cpp has no init entry point. */
+static hashmap_t g_pid_config_map;
+static uint8_t   g_env_initialized = 0;
+
+static WarpPidConfig *
+pid_config_get(uint32_t pid)
+{
+    if (g_pid_config_map.bucket_count == 0) return nullptr;
+    return static_cast<WarpPidConfig *>(hashmap_get(&g_pid_config_map, pid));
+}
 
 } // namespace
 
@@ -263,14 +275,19 @@ extern "C" {
 void
 warp_heap_configure(uint32_t pid, uint64_t initial_size, uint64_t max_size)
 {
-    if (pid >= PROCESS_MAX_COUNT) return;
+    if (pid == 0) return;
     if (!g_env_initialized) {
         vb::WasmModule::initEnvironment(warp_kmalloc, warp_krealloc, warp_kfree);
         g_env_initialized = 1;
     }
-    g_pid_config[pid].heap_size  = initial_size;
-    g_pid_config[pid].heap_max   = max_size;
-    g_pid_config[pid].configured = 1;
+    if (g_pid_config_map.bucket_count == 0) {
+        hashmap_init(&g_pid_config_map, sizeof(WarpPidConfig), 64);
+    }
+    WarpPidConfig *cfg = static_cast<WarpPidConfig *>(hashmap_put(&g_pid_config_map, pid));
+    if (!cfg) return;
+    cfg->heap_size  = initial_size;
+    cfg->heap_max   = max_size;
+    cfg->configured = 1;
 }
 
 uint32_t
@@ -313,15 +330,16 @@ warp_runtime_leave(uint32_t previous_pid)
 void
 warp_heap_release(uint32_t pid)
 {
-    if (pid >= PROCESS_MAX_COUNT) return;
-    g_pid_config[pid] = WarpPidConfig{};
+    if (pid == 0) return;
+    (void)hashmap_remove(&g_pid_config_map, pid);
 }
 
 uint64_t
 warp_heap_committed_bytes(uint32_t pid)
 {
-    if (pid >= PROCESS_MAX_COUNT || !g_pid_config[pid].configured) return 0;
-    return g_pid_config[pid].heap_size;
+    WarpPidConfig *cfg = pid_config_get(pid);
+    if (!cfg || !cfg->configured) return 0;
+    return cfg->heap_size;
 }
 
 int

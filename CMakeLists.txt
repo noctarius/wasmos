@@ -1717,8 +1717,16 @@ add_custom_target(run-kernel-unit-tests
           ${KERNEL_DIR}/list.c
           ${KERNEL_DIR}/list_linked.c
           ${KERNEL_DIR}/list_array_chunk.c
+          ${KERNEL_DIR}/kmem.c
           -o ${BUILD_DIR}/test_list
   COMMAND ${BUILD_DIR}/test_list
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${KERNEL_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_hashmap.c
+          ${KERNEL_DIR}/hashmap.c
+          ${KERNEL_DIR}/kmem.c
+          -o ${BUILD_DIR}/test_hashmap
+  COMMAND ${BUILD_DIR}/test_hashmap
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${SERVICES_DIR}/device_manager
           -I${LIBSYS_WASM_DIR}/include

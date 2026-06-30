@@ -122,9 +122,11 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/syscall.o
   ${BUILD_DIR}/libc.o
   ${BUILD_DIR}/klog.o
+  ${BUILD_DIR}/kmem.o
   ${BUILD_DIR}/list.o
   ${BUILD_DIR}/list_linked.o
   ${BUILD_DIR}/list_array_chunk.o
+  ${BUILD_DIR}/hashmap.o
   ${BUILD_DIR}/paging.o
   ${BUILD_DIR}/physmem.o
   ${BUILD_DIR}/runtime_context.o
@@ -250,9 +252,11 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/syscall.c
   ${KERNEL_DIR}/paging.c
   ${KERNEL_DIR}/klog.c
+  ${KERNEL_DIR}/kmem.c
   ${KERNEL_DIR}/list.c
   ${KERNEL_DIR}/list_linked.c
   ${KERNEL_DIR}/list_array_chunk.c
+  ${KERNEL_DIR}/hashmap.c
   ${KERNEL_DIR}/physmem.c
   ${KERNEL_DIR}/runtime_context.c
   ${KERNEL_DIR}/ipc.c
@@ -523,9 +527,11 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/syscall.c -o ${BUILD_DIR}/syscall.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/libc.c -o ${BUILD_DIR}/libc.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/klog.c -o ${BUILD_DIR}/klog.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kmem.c -o ${BUILD_DIR}/kmem.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/list.c -o ${BUILD_DIR}/list.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/list_linked.c -o ${BUILD_DIR}/list_linked.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/list_array_chunk.c -o ${BUILD_DIR}/list_array_chunk.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/hashmap.c -o ${BUILD_DIR}/hashmap.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory.c -o ${BUILD_DIR}/memory.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/paging.c -o ${BUILD_DIR}/paging.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/physmem.c -o ${BUILD_DIR}/physmem.o

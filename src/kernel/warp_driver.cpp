@@ -750,6 +750,7 @@ wasm_driver_stop(wasm_driver_t *driver)
     delete module_of(driver);
     driver->wasm_module = nullptr;
     warp_heap_release(driver->owner_pid);
+    warp_ctx_release_pid(driver->owner_pid);
     warp_runtime_leave(prev);
     driver->active = 0;
     driver->started = 0;

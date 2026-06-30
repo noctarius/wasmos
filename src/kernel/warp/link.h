@@ -35,6 +35,8 @@ vb::Span<vb::NativeSymbol const> warp_wasmos_symbols_ring3(void);
  * functions can resolve linear-memory offsets via getLinearMemoryRegion. */
 void warp_bind_module(vb::WasmModule *module, uint32_t pid);
 void *warp_context_for_pid(uint32_t pid);
+/* Release the per-process WARP call context for `pid` on process exit. */
+void warp_ctx_release_pid(uint32_t pid);
 
 extern "C" {
 #endif

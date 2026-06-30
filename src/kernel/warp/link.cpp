@@ -29,6 +29,8 @@ extern "C" {
 #include "ipc.h"
 #include "process.h"
 #include "process_manager.h"
+#include "list.h"
+#include "hashmap.h"
 #include "memory.h"
 #include "physmem.h"
 #include "thread.h"
@@ -73,9 +75,25 @@ struct WarpCallContext {
 
 static int warp_require_system_control_capability(uint32_t context_id);
 
-// Per-PID singleton contexts.  A per-driver table comes later once the WARP
-// wasm driver is written; this is sufficient for initial single-module runs.
-static WarpCallContext g_ctx_table[PROCESS_MAX_COUNT];
+// Per-process WARP call contexts, keyed by pid.  Backed by a growable hashmap
+// (no fixed process-count bound): an entry is created when a process's module
+// is bound and removed when the process exits (warp_ctx_release_pid), so the
+// set tracks live processes 1:1.  Hashmap value addresses are stable for a
+// key's lifetime (chaining + rehash relinks, never moves nodes), so the
+// pointer handed to WasmModule::setContext() stays valid.  Pre-sized so the
+// spawn hot path (which runs under the preempt-guard drain) does not rehash.
+// TODO(smp-warp): lookups/alloc here are unsynchronised; safe under the WARP
+// single-CPU invariant (see warp/shim.cpp), revisit for SMP.
+static hashmap_t g_ctx_map;
+
+static WarpCallContext *
+ctx_find(uint32_t pid)
+{
+    if (pid == 0) {
+        return nullptr;
+    }
+    return static_cast<WarpCallContext *>(hashmap_get(&g_ctx_map, pid));
+}
 
 /* Page-aligned scratch page used by warp_phys_map for ACPI/physical memory
  * reads.  ACPI physical pages are not necessarily in the kernel direct map
@@ -118,15 +136,15 @@ warp_linear_mem_window(WarpCallContext *ctx, uint32_t offset, uint32_t size)
 static inline WarpCallContext *
 warp_call_ctx(void *ctx_)
 {
-    uint32_t pid = process_current_pid();
-    if (pid < PROCESS_MAX_COUNT && g_ctx_table[pid].module) {
-        return &g_ctx_table[pid];
+    WarpCallContext *cur = ctx_find(process_current_pid());
+    if (cur && cur->module) {
+        return cur;
     }
     auto *ctx = static_cast<WarpCallContext *>(ctx_);
     if (!ctx) {
         return nullptr;
     }
-    if (ctx->pid < PROCESS_MAX_COUNT && ctx == &g_ctx_table[ctx->pid]) {
+    if (ctx == ctx_find(ctx->pid)) {
         return ctx;
     }
     auto *module = static_cast<vb::WasmModule *>(ctx_);
@@ -2168,22 +2186,76 @@ warp_wasmos_symbols_for_aot_load(void)
 // Context accessor — called from warp_driver.cpp after WasmModule construction
 // to wire up the per-module call context so host functions can access linear
 // memory and the calling pid.
+static WarpCallContext *
+ctx_acquire(uint32_t pid)
+{
+    if (pid == 0) {
+        return nullptr;
+    }
+    WarpCallContext *c = static_cast<WarpCallContext *>(hashmap_put(&g_ctx_map, pid));
+    if (!c) {
+        return nullptr;  // out of memory — genuine, not a fixed cap
+    }
+    /* hashmap_put zeroes new entries and returns existing ones unchanged. */
+    c->pid       = pid;
+    c->boot_info = g_warp_boot_info;
+    return c;
+}
+
 void
 warp_bind_module(vb::WasmModule *module, uint32_t pid)
 {
-    if (pid >= PROCESS_MAX_COUNT) return;
-    g_ctx_table[pid].module    = module;
-    g_ctx_table[pid].pid       = pid;
-    module->setContext(&g_ctx_table[pid]);
+    WarpCallContext *c = ctx_acquire(pid);
+    if (!c) {
+        return;
+    }
+    c->module = module;
+    c->pid    = pid;
+    module->setContext(c);
 }
 
 void *
 warp_context_for_pid(uint32_t pid)
 {
-    if (pid >= PROCESS_MAX_COUNT) {
-        return nullptr;
+    return ctx_acquire(pid);
+}
+
+void
+warp_ctx_release_pid(uint32_t pid)
+{
+    (void)hashmap_remove(&g_ctx_map, pid);
+}
+
+/* Release ALL per-pid WARP state for an exiting process.  Called once from
+ * process_reap() (the single funnel, alongside wasm3_heap_release /
+ * native_driver_heap_release).  Without this, the per-pid slot pools below
+ * accumulate one dead entry per spawn and eventually wedge new spawns.  This
+ * only clears bookkeeping (hashmap entry + slot tags); the heavyweight ring-3
+ * teardown stays in wasm_driver_stop(), so this path touches no page tables. */
+extern "C" void
+warp_release_pid(uint32_t pid)
+{
+    if (pid == 0) {
+        return;
     }
-    return &g_ctx_table[pid];
+    (void)hashmap_remove(&g_ctx_map, pid);
+    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        if (g_ipc_last[i].pid == pid) {
+            g_ipc_last[i].pid = 0;
+            g_ipc_last[i].valid = 0;
+        }
+        if (g_fs_peer_slots[i].pid == pid) {
+            g_fs_peer_slots[i].pid = 0;
+            g_fs_peer_slots[i].valid = 0;
+            g_fs_peer_slots[i].peer_context_id = 0;
+        }
+        if (g_block_slots[i].pid == pid) {
+            g_block_slots[i].pid = 0;
+            g_block_slots[i].phys = 0;
+        }
+    }
+    /* Per-pid WARP heap config (warp/shim.cpp). */
+    warp_heap_release(pid);
 }
 
 #ifdef WASMOS_WARP_RING3
@@ -2496,9 +2568,10 @@ warp_link_init(const boot_info_t *boot_info)
 {
     g_warp_boot_info = boot_info;
     warp_ipc_slots_init();
-    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
-        g_ctx_table[i] = WarpCallContext{nullptr, i, boot_info};
-    }
+    /* Pre-sized to comfortably exceed the typical live-process count so the
+     * spawn hot path does not trigger a rehash (which would malloc under the
+     * preempt-guard drain). It still grows automatically if exceeded. */
+    hashmap_init(&g_ctx_map, sizeof(WarpCallContext), 64);
 }
 
 } // extern "C"

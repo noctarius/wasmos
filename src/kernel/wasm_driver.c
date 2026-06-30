@@ -42,6 +42,16 @@ wasm_driver_init(void)
     spinlock_init(&g_wasm_driver_registry_lock);
 }
 
+/* Per-pid runtime teardown hook (see process.h).  The wasm3 build has no
+ * separate per-pid WARP state to release; wasm3's own per-pid tables are freed
+ * via wasm3_heap_release().  No-op stub so process_reap() can call this
+ * unconditionally.  The real implementation is in warp/link.cpp. */
+void
+warp_release_pid(uint32_t pid)
+{
+    (void)pid;
+}
+
 static void
 log_wasm3_error(const char *prefix, const char *error, IM3Runtime runtime)
 {

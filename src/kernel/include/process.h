@@ -14,6 +14,13 @@
 #define PROCESS_STACK_SIZE 524288u
 #define PROCESS_CTX_CANARY_VALUE 0xC0FFEE0DD15EA5EULL
 
+/* Release all per-pid state owned by the active WASM runtime for an exiting
+ * process.  Called once from process_reap(), alongside wasm3_heap_release /
+ * native_driver_heap_release.  Real impl lives in the runtime TU (WARP:
+ * warp/link.cpp); the other runtime build provides a no-op so common code can
+ * call it unconditionally. */
+void warp_release_pid(uint32_t pid);
+
 typedef struct {
     uint64_t r15;
     uint64_t r14;

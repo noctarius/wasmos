@@ -3,6 +3,7 @@
  * inline variable-length payload.  O(n) traversal; O(1) prepend/remove at
  * current iterator position. */
 #include "list_internal.h"
+#include "kmem.h"
 #include "string.h"
 
 typedef struct list_linked_node {
@@ -21,10 +22,10 @@ list_linked_destroy(list_t *list)
     list_linked_node_t *node = state ? state->head : 0;
     while (node) {
         list_linked_node_t *next = node->next;
-        list_free_mem(node);
+        kmem_free(node);
         node = next;
     }
-    list_free_mem(state);
+    kmem_free(state);
 }
 
 static void *
@@ -35,7 +36,7 @@ list_linked_alloc(list_t *list)
         return 0;
     }
     uint64_t size = sizeof(list_linked_node_t) + list->elem_size;
-    list_linked_node_t *node = (list_linked_node_t *)list_alloc_mem((size_t)size);
+    list_linked_node_t *node = (list_linked_node_t *)kmem_alloc((size_t)size);
     if (!node) {
         return 0;
     }
@@ -58,7 +59,7 @@ list_linked_remove(list_t *list, void *elem)
             } else {
                 state->head = node->next;
             }
-            list_free_mem(node);
+            kmem_free(node);
             return 0;
         }
         prev = node;
@@ -105,7 +106,7 @@ list_linked_impl_init(list_t *list)
     if (!list || list->elem_size == 0) {
         return -1;
     }
-    state = (list_linked_state_t *)list_alloc_mem(sizeof(list_linked_state_t));
+    state = (list_linked_state_t *)kmem_alloc(sizeof(list_linked_state_t));
     if (!state) {
         return -1;
     }

@@ -3,6 +3,7 @@
  * LIST_ARRAY_CHUNK_SLOTS elements) to reduce allocator pressure and improve
  * cache locality over the linked-list backend for large collections. */
 #include "list_internal.h"
+#include "kmem.h"
 #include "string.h"
 
 typedef struct list_array_chunk {
@@ -46,10 +47,10 @@ list_array_chunk_destroy(list_t *list)
     list_array_chunk_t *chunk = state ? state->head : 0;
     while (chunk) {
         list_array_chunk_t *next = chunk->next;
-        list_free_mem(chunk);
+        kmem_free(chunk);
         chunk = next;
     }
-    list_free_mem(state);
+    kmem_free(state);
 }
 
 static void *
@@ -75,7 +76,7 @@ list_array_chunk_alloc(list_t *list)
 
     uint64_t alloc_size = sizeof(list_array_chunk_t) +
                           (uint64_t)state->chunk_capacity * (uint64_t)stride;
-    chunk = (list_array_chunk_t *)list_alloc_mem((size_t)alloc_size);
+    chunk = (list_array_chunk_t *)kmem_alloc((size_t)alloc_size);
     if (!chunk) {
         return 0;
     }
@@ -157,7 +158,7 @@ list_array_chunk_impl_init(list_t *list)
     if (!list || list->elem_size == 0 || list->config_value == 0) {
         return -1;
     }
-    state = (list_array_chunk_state_t *)list_alloc_mem(sizeof(list_array_chunk_state_t));
+    state = (list_array_chunk_state_t *)kmem_alloc(sizeof(list_array_chunk_state_t));
     if (!state) {
         return -1;
     }

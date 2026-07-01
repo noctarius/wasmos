@@ -195,6 +195,9 @@ kernel_selftest_spawn_baseline(uint32_t init_pid, uint8_t preempt_test_enabled)
     }
 
     klog_printf("[kernel] page fault test pid=%016llx\n", (unsigned long long)pf_test_pid);
+    /* One-shot self-test: auto-reap on exit so it does not linger as a zombie
+     * holding a g_processes[] slot (mirrors the threading self-tests). */
+    (void)process_set_auto_reap(pf_test_pid, 1);
 
     g_ipc_test_state.endpoint = IPC_ENDPOINT_NONE;
     g_ipc_test_state.sender_endpoint = IPC_ENDPOINT_NONE;
@@ -212,6 +215,9 @@ kernel_selftest_spawn_baseline(uint32_t init_pid, uint8_t preempt_test_enabled)
         klog_write("[kernel] ipc test lookup failed\n");
         return -1;
     }
+    /* One-shot self-tests: auto-reap on exit (see above). */
+    (void)process_set_auto_reap(ipc_wait_pid, 1);
+    (void)process_set_auto_reap(ipc_send_pid, 1);
 
     if (ipc_endpoint_create(ipc_wait_proc->context_id, &g_ipc_test_state.endpoint) != IPC_OK ||
         ipc_endpoint_create(ipc_send_proc->context_id, &g_ipc_test_state.sender_endpoint) != IPC_OK) {
@@ -229,6 +235,8 @@ kernel_selftest_spawn_baseline(uint32_t init_pid, uint8_t preempt_test_enabled)
             klog_write("[kernel] preempt test spawn failed\n");
             return -1;
         }
+        (void)process_set_auto_reap(preempt_busy_pid, 1);
+        (void)process_set_auto_reap(preempt_observer_pid, 1);
     }
 
     return 0;

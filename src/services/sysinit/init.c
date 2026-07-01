@@ -65,7 +65,7 @@ spawn_path(const char *path)
                             g_state.reply_endpoint,
                             PROC_IPC_SPAWN_PATH,
                             g_state.spawn_request_id,
-                            0,
+                            PROC_SPAWN_PATH_FLAG_AUTOREAP, /* fire-and-forget: reap the child on exit */
                             (int32_t)path_len,
                             0,
                             0) != 0) {

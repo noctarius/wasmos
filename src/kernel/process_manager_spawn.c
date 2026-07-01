@@ -1612,6 +1612,16 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
     }
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);
 
+    /* Auto-reap fire-and-forget one-shots on exit so their g_processes[] slot is
+     * freed (PROC_SPAWN_PATH_FLAG_AUTOREAP); DETACH implies the same (no waiter).
+     * Reaping only fires post-exit, so this is orthogonal to the ready-gating
+     * below and applies to both the ready-gated and immediate-reply paths.  NOT
+     * for apps the caller will PROC_IPC_WAIT on — process_try_auto_reap cannot
+     * see PM IPC waiters and would race the status reply. */
+    if ((spawn_req_flags & (PROC_SPAWN_PATH_FLAG_DETACH | PROC_SPAWN_PATH_FLAG_AUTOREAP)) != 0) {
+        (void)process_set_auto_reap(pid, 1);
+    }
+
     if (needs_ready) {
         process_t *sync_child = process_get(pid);
         if (sync_child && !sync_child->is_wasm) {
@@ -1631,15 +1641,6 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
     }
 
     process_unpark_pid(pid);
-    /* Detached children have no waiter (the caller sends no PROC_IPC_WAIT), so
-     * nothing would ever reap them via the WAIT path and their slot would leak.
-     * Auto-reap frees the slot when they exit.  Waited apps (e.g. interactive
-     * ps) are reaped by the WAIT path instead and must NOT be auto-reaped:
-     * process_try_auto_reap does not see PM IPC waiters, so it would race the
-     * status reply. */
-    if ((spawn_req_flags & PROC_SPAWN_PATH_FLAG_DETACH) != 0) {
-        (void)process_set_auto_reap(pid, 1);
-    }
     ipc_message_t resp;
     resp.type = PROC_IPC_RESP;
     resp.source = g_pm.proc_endpoint;

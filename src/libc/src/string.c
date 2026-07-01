@@ -280,13 +280,38 @@ memmove(void *dest, const void *src, size_t count)
 void *
 memset(void *dest, int value, size_t count)
 {
-    unsigned char *out = (unsigned char *)dest;
-
+    /* Word-optimized: fill 8 bytes at a time (with an unrolled 32-byte stride)
+     * after aligning to 8.  This compiles to wasm32 (no x86 asm / hostcall) and
+     * is ~8x fewer stores than a byte loop.  (The kernel's native memset uses
+     * rep stosb; wasm can't, so this is the portable equivalent.) */
     if (!dest) {
         return dest;
     }
-    for (size_t i = 0; i < count; ++i) {
-        out[i] = (unsigned char)value;
+    uint8_t *d = (uint8_t *)dest;
+    uint8_t v8 = (uint8_t)value;
+
+    uint64_t v64 = v8;
+    v64 |= v64 << 8;
+    v64 |= v64 << 16;
+    v64 |= v64 << 32;
+
+    while (count && ((uintptr_t)d & 7u)) {   /* align to 8 */
+        *d++ = v8;
+        count--;
+    }
+    uint64_t *q = (uint64_t *)d;
+    while (count >= 32) {
+        q[0] = v64; q[1] = v64; q[2] = v64; q[3] = v64;
+        q += 4;
+        count -= 32;
+    }
+    while (count >= 8) {
+        *q++ = v64;
+        count -= 8;
+    }
+    d = (uint8_t *)q;
+    while (count--) {
+        *d++ = v8;
     }
     return dest;
 }

@@ -85,9 +85,18 @@ long int strtol(const char *s, char **end, int base)
 
 void *memset(void *s, int c, size_t n)
 {
-    uint8_t *p = (uint8_t *)s;
-    const uint8_t cv = (uint8_t)c;
-    for (size_t i = 0; i < n; i++) p[i] = cv;
+    /* Word-optimized (8 bytes/store, 32-byte unrolled stride); no libc calls or
+     * __builtin_memset, so no recursion risk and no bulk-memory dependency. */
+    uint8_t *d = (uint8_t *)s;
+    const uint8_t v8 = (uint8_t)c;
+    uint64_t v64 = v8;
+    v64 |= v64 << 8; v64 |= v64 << 16; v64 |= v64 << 32;
+    while (n && ((uintptr_t)d & 7u)) { *d++ = v8; n--; }
+    uint64_t *q = (uint64_t *)d;
+    while (n >= 32) { q[0] = v64; q[1] = v64; q[2] = v64; q[3] = v64; q += 4; n -= 32; }
+    while (n >= 8) { *q++ = v64; n -= 8; }
+    d = (uint8_t *)q;
+    while (n--) { *d++ = v8; }
     return s;
 }
 

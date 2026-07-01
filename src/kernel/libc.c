@@ -71,12 +71,18 @@ void *memcpy(void *dst, const void *src, size_t n) {
 }
 
 void *memset(void *dst, int c, size_t n) {
-    uint8_t *d = (uint8_t *)dst;
-    uint8_t v = (uint8_t)c;
-    for (size_t i = 0; i < n; ++i) {
-        d[i] = v;
-    }
-    return dst;
+    /* rep stosb: correct on every x86 CPU and microcode-accelerated (ERMS) on
+     * anything since ~2012, so no CPUID gate is needed.  `cld` forces forward
+     * direction independent of the caller's DF, since kernel memset runs in
+     * arbitrary contexts (boot, ISRs). */
+    void *ret = dst;
+    __asm__ __volatile__(
+        "cld\n\t"
+        "rep stosb"
+        : "+D"(dst), "+c"(n)
+        : "a"((uint8_t)c)
+        : "memory");
+    return ret;
 }
 
 void *memmove(void *dst, const void *src, size_t n) {

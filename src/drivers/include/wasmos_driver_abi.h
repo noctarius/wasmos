@@ -10,6 +10,8 @@
  *   0x700–0x7FF  virtual terminal
  *   0x800–0x8FF  keyboard, mouse, RTC, virtio-serial
  *   0x900–0x9FF  device manager
+ *   0xA00–0xAFF  generic network-adapter drivers
+ *   0xB00–0xBFF  network stack services
  *
  * All request/response pairs follow the pattern: REQ = base, RESP = base+0x80,
  * ERROR = base+0xFF.  Fields (type, request_id, source, destination, arg0..arg3)
@@ -307,6 +309,57 @@ enum {
     DEVMGR_CAP_IRQ      = 1 << 2,
     DEVMGR_CAP_DMA      = 1 << 3
 };
+
+enum {
+    NETDRV_IPC_LINK_GET        = 0xA00,
+    NETDRV_IPC_TX_FRAME        = 0xA01,
+    NETDRV_IPC_RX_POLL         = 0xA02,
+    NETDRV_IPC_STATS_GET       = 0xA03,
+    NETDRV_IPC_RX_FRAME_NOTIFY = 0xA04,
+    NETDRV_IPC_RESP            = 0xA80,
+    NETDRV_IPC_ERROR           = 0xAFF
+};
+
+enum {
+    NET_IPC_SOCKET_OPEN   = 0xB00,
+    NET_IPC_BIND          = 0xB01,
+    NET_IPC_CONNECT       = 0xB02,
+    NET_IPC_SEND          = 0xB03,
+    NET_IPC_RECV          = 0xB04,
+    NET_IPC_CLOSE         = 0xB05,
+    NET_IPC_POLL          = 0xB06,
+    NET_IPC_IFADDR_ADD    = 0xB07,
+    NET_IPC_IFADDR_DEL    = 0xB08,
+    NET_IPC_IFADDR_LIST   = 0xB09,
+    NET_IPC_STACK_CREATE  = 0xB0A,
+    NET_IPC_STACK_DESTROY = 0xB0B,
+    NET_IPC_STACK_SELECT  = 0xB0C,
+    NET_IPC_DATA_NOTIFY   = 0xB0D,
+    NET_IPC_RESP          = 0xB80,
+    NET_IPC_ERROR         = 0xBFF
+};
+
+enum {
+    NET_STATUS_OK          = 0,
+    NET_STATUS_WOULD_BLOCK = -1,
+    NET_STATUS_INVALID     = -2,
+    NET_STATUS_NOT_READY   = -3,
+    NET_STATUS_DENIED      = -4,
+    NET_STATUS_IO_ERROR    = -5,
+    NET_STATUS_QUEUE_FULL  = -6,
+    NET_STATUS_NO_MEM      = -7,
+    NET_STATUS_ADDR_IN_USE = -8,
+    NET_STATUS_TIMEOUT     = -9
+};
+
+typedef struct {
+    uint32_t rx_packets;
+    uint32_t tx_packets;
+    uint32_t rx_drops;
+    uint32_t tx_drops;
+    uint32_t rx_errors;
+    uint32_t tx_errors;
+} netdrv_stats_t;
 
 enum {
     WASMOS_DMA_DIR_TO_DEVICE   = 1 << 0,

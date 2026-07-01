@@ -31,6 +31,9 @@ class QemuConfig:
     enable_monitor: bool = False
     monitor_socket: str = ""
     smp_count: int = 1
+    # NIC model attached via user-mode networking so the virtio-net driver has a
+    # device to probe.  Set to "none" (or WASMOS_QEMU_NIC_MODEL=none) to omit.
+    nic_model: str = "virtio-net-pci"
 
     def __post_init__(self) -> None:
         if self.userfs_dir:
@@ -69,6 +72,8 @@ def default_config(build_dir: str = "build") -> QemuConfig:
     enable_monitor = os.environ.get("WASMOS_QEMU_MONITOR", "0") == "1"
     monitor_socket = os.environ.get("WASMOS_QEMU_MONITOR_SOCK", "")
     smp_count = int(os.environ.get("WASMOS_QEMU_SMP_COUNT", "1"))
+    nic_model = os.environ.get("WASMOS_QEMU_NIC_MODEL",
+                               cache.get("WASMOS_QEMU_NIC_MODEL", "virtio-net-pci"))
     if not ovmf_code:
         raise RuntimeError("OVMF_CODE not set (WASMOS_OVMF_CODE or CMakeCache.txt)")
     return QemuConfig(
@@ -80,6 +85,7 @@ def default_config(build_dir: str = "build") -> QemuConfig:
         enable_monitor=enable_monitor,
         monitor_socket=monitor_socket,
         smp_count=smp_count,
+        nic_model=nic_model,
     )
 
 
@@ -115,6 +121,9 @@ def build_qemu_cmd(cfg: QemuConfig) -> list:
     cmd += ["-drive", f"format=raw,file=fat:rw:{cfg.esp_dir}"]
     if cfg.userfs_dir:
         cmd += ["-drive", f"format=raw,file=fat:rw:{cfg.userfs_dir}"]
+    if cfg.nic_model and cfg.nic_model != "none":
+        cmd += ["-netdev", "user,id=net0",
+                "-device", f"{cfg.nic_model},netdev=net0"]
     if cfg.monitor_socket:
         cmd += ["-qmp", f"unix:{cfg.monitor_socket},server,wait=off"]
     return cmd

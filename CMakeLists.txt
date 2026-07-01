@@ -103,6 +103,9 @@ set(WASM_MOUSE_APP ${BUILD_DIR}/mouse.wap)
 set(WASM_RTC_DRIVER_SRC ${DRIVER_WASM_DIR}/rtc/rtc.ts)
 set(WASM_RTC_DRIVER_WASM ${BUILD_DIR}/rtc.wasm)
 set(WASM_RTC_APP ${BUILD_DIR}/rtc.wap)
+set(WASM_VIRTIO_NET_DRIVER_SRC ${DRIVER_WASM_DIR}/virtio_net/virtio_net.c)
+set(WASM_VIRTIO_NET_DRIVER_WASM ${BUILD_DIR}/virtio_net.wasm)
+set(WASM_VIRTIO_NET_APP ${BUILD_DIR}/virtio_net.wap)
 set(WASM_VIRTIO_SERIAL_DRIVER_SRC ${DRIVER_WASM_DIR}/virtio_serial/virtio_serial.c)
 set(WASM_VIRTIO_SERIAL_DRIVER_WASM ${BUILD_DIR}/virtio_serial.wasm)
 set(WASM_VIRTIO_SERIAL_APP ${BUILD_DIR}/virtio_serial.wap)
@@ -1132,6 +1135,12 @@ add_dependencies(kernel wasm_driver_blobs)
 
 # QEMU helper
 set(QEMU_GDB_PORT 1234 CACHE STRING "QEMU gdb port for run-qemu-debug")
+set(WASMOS_QEMU_NIC_MODEL "virtio-net-pci" CACHE STRING
+    "QEMU NIC model for developer/test runs (for example virtio-net-pci or e1000)")
+set(WASMOS_QEMU_NETDEV_ARGS
+  -netdev user,id=net0
+  -device ${WASMOS_QEMU_NIC_MODEL},netdev=net0
+)
 add_custom_target(kconfig-defconfig
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           ${CMAKE_SOURCE_DIR}/configs/wasmos_defconfig
@@ -1343,6 +1352,7 @@ set(WASMOS_ESP_POPULATE_CMDS
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_PCI_BUS_APP} ${BUILD_DIR}/esp/system/services/pci_bus.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_ACPI_BUS_APP} ${BUILD_DIR}/esp/system/services/acpi_bus.wap
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_CHARDEV_CLIENT_APP} ${BUILD_DIR}/esp/apps/chardevc.wap
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_VIRTIO_NET_APP} ${BUILD_DIR}/esp/system/drivers/virtio_net.wap
   ${AS_HELLO_COPY_CMD}
   ${AS_MINESWEEPER_COPY_CMD}
   ${HELLO_C_COPY_CMD}
@@ -1385,6 +1395,7 @@ if (OVMF_VARS)
   add_custom_target(run-qemu
     ${WASMOS_ESP_POPULATE_CMDS}
     COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_SMP_ARGS} -nographic -serial mon:stdio
+            ${WASMOS_QEMU_NETDEV_ARGS}
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
@@ -1398,6 +1409,7 @@ if (OVMF_VARS)
     ${WASMOS_ESP_POPULATE_CMDS}
     COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_SMP_ARGS} -nographic -serial mon:stdio
             -S -gdb tcp::${QEMU_GDB_PORT}
+            ${WASMOS_QEMU_NETDEV_ARGS}
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
@@ -1410,6 +1422,7 @@ if (OVMF_VARS)
   add_custom_target(run-qemu-ui
     ${WASMOS_ESP_POPULATE_CMDS}
     COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_SMP_ARGS} -serial mon:stdio
+            ${WASMOS_QEMU_NETDEV_ARGS}
             -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
             -drive if=pflash,format=raw,file=${OVMF_VARS}
             -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
@@ -1482,6 +1495,7 @@ else ()
     add_custom_target(run-qemu
       ${WASMOS_ESP_POPULATE_CMDS}
       COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_SMP_ARGS} -nographic -serial mon:stdio
+              ${WASMOS_QEMU_NETDEV_ARGS}
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
               -drive format=raw,file=fat:rw:${USERFS_DIR}
@@ -1494,6 +1508,7 @@ else ()
       ${WASMOS_ESP_POPULATE_CMDS}
       COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_SMP_ARGS} -nographic -serial mon:stdio
               -S -gdb tcp::${QEMU_GDB_PORT}
+              ${WASMOS_QEMU_NETDEV_ARGS}
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
               -drive format=raw,file=fat:rw:${USERFS_DIR}
@@ -1505,6 +1520,7 @@ else ()
     add_custom_target(run-qemu-ui
       ${WASMOS_ESP_POPULATE_CMDS}
       COMMAND qemu-system-x86_64 -m 512M ${WASMOS_QEMU_SMP_ARGS} -serial mon:stdio
+              ${WASMOS_QEMU_NETDEV_ARGS}
               -drive if=pflash,format=raw,readonly=on,file=${OVMF_CODE}
               -drive format=raw,file=fat:rw:${BUILD_DIR}/esp
               -drive format=raw,file=fat:rw:${USERFS_DIR}

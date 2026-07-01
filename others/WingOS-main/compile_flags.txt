@@ -1,0 +1,11 @@
+-Isrc/
+-std=c++2b
+-D__ck_kernel__
+-D__LSP
+-D_MATH_H
+-D_GLIBCXX_CMATH
+-D_GLIBCXX_MATH_H
+-Wall
+-Wextra
+-Werror
+-D__ck_clangd_NEW__

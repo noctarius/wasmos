@@ -1,0 +1,15 @@
+{
+    "$schema": "https://schemas.cute.engineering/stable/cutekit.manifest.component.v1",
+    "type": "lib",
+    "id": "iol-wingos",
+    "description": "system abstraction layer for Wingos userspace",
+    "provides": [
+        "iol"
+    ],
+    "requires": [
+        "userspace-arch"
+    ],
+    "enableIf": {
+        "sys": ["wingos"]
+    }
+}

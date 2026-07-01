@@ -1,0 +1,110 @@
+{
+  "$schema": "https://schemas.cute.engineering/stable/cutekit.manifest.target.v1",
+  "id": "kernel-x86_64",
+  "type": "target",
+  "props": {
+    "toolchain": "clang",
+    "arch": "x86_64",
+    "bits": "64",
+    "sys": "kernel",
+    "abi": "sysv",
+    "loader": "limine",
+    "encoding": "utf8",
+    "freestanding": true,
+    "host": false,
+    "kernel": true
+  },
+  "tools": {
+    "cc": {
+      "cmd": "meta/build/cross/bin/x86_64-pc-wingos-gcc",
+
+      "args": [
+        "-Isrc/libc",
+        "-g",
+        "-ffreestanding",
+        "-fno-stack-protector",
+        "-mno-80387",
+        "-mno-mmx",
+        "-mno-3dnow",
+        "-mno-sse",
+        "-mno-sse2",
+        "-D__STRICT_ANSI__",
+        "-mno-red-zone",
+        "-mcmodel=kernel",
+        "-Wno-missing-field-initializers",
+        "-std=gnu23",
+        "-Wnull-dereference",
+        "-Wstack-protector",
+        "-Wno-strict-overflow",
+        "--param=min-pagesize=0",
+        "-Walloca",
+        "-Wvla",
+        "-Wshadow",
+        "-Wswitch-default",
+        "-Wfloat-equal",
+        "-fsanitize-address-use-after-scope",
+        "-Og",
+        "-fno-omit-frame-pointer"
+      ]
+    },
+    "cxx": {
+      "cmd": "meta/build/cross/bin/x86_64-pc-wingos-g++",
+
+      "args": [
+        "-Isrc/libc",
+        "-g",
+        "-ffreestanding",
+        "-fno-exceptions",
+        "-fno-rtti",
+        "-D__STRICT_ANSI__",
+        "-fno-stack-protector",
+        "-fno-builtin",
+        "-fno-threadsafe-statics",
+        "-mno-80387",
+        "-mno-mmx",
+        "-mno-3dnow",
+        "-mno-sse",
+        "-mno-sse2",
+        "-mno-red-zone",
+        "-mcmodel=kernel",
+        "-Wno-missing-field-initializers",
+        "-std=c++2c",
+        "-Wnull-dereference",
+        "-Wstack-protector",
+        "-Wno-strict-overflow",
+        "--param=min-pagesize=0",
+        "-Walloca",
+        "-Wno-template-body",
+        "-Wvla",
+        "-Warray-bounds",
+        "-Wshadow",
+        "-Wswitch-default",
+        "-Wfloat-equal",
+        "-Wdangling-reference",
+        "-fsanitize=undefined",
+        "-Og",
+        "-fno-omit-frame-pointer"
+      ]
+    },
+    "ld": {
+      "cmd": "{shell.latest('ld.lld')}",
+      "args": [
+        "-m",
+        "elf_x86_64",
+        "-T",
+        "{utils.relpath('kernel-x86_64.ld')}",
+        "-z",
+        "max-page-size=0x1000"
+      ],
+      "files": ["{utils.relpath('kernel-x86_64.ld')}"]
+    },
+    "ar": {
+      "cmd": "{shell.latest('llvm-ar')}",
+      "args": ["rcs"]
+    },
+    "as": {
+      "cmd": "nasm",
+      "args": ["-f", "elf64"]
+    }
+  }
+}

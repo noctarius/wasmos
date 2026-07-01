@@ -1,0 +1,15 @@
+
+#include <SDL3/SDL.h>
+#include <gfx/platform/app.hpp>
+
+#include <SDL3/SDL_surface.h>
+
+core::Result<void> wgfx::initialize_platform()
+{
+    if (SDL_Init(SDL_INIT_VIDEO) == 0)
+    {
+        fmt::err$("SDL_Init Error: {}", SDL_GetError());
+        return "failed to initialize SDL";
+    }
+    return {};
+}

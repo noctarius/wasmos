@@ -1,0 +1,207 @@
+#include <kernel/generic/task.hpp>
+#include <libcore/fmt/log.hpp>
+
+#include "arch/x86_64/context.hpp"
+#include "arch/x86_64/gdt.hpp"
+#include "arch/x86_64/msr.hpp"
+#include "kernel/x86_64/context.hpp"
+#include "kernel/x86_64/cpu.hpp"
+
+#include "kernel/generic/context.hpp"
+#include "kernel/generic/kernel.hpp"
+#include "kernel/generic/mem.hpp"
+#include "kernel/generic/paging.hpp"
+#include "libcore/alloc/alloc.hpp"
+#include "libcore/atomic.hpp"
+#include "libcore/lock/lock.hpp"
+#include "math/align.hpp"
+
+namespace kernel
+{
+core::Result<CpuContext *> CpuContext::create_empty()
+{
+
+    arch::amd64::CpuContextAmd64 *data = new arch::amd64::CpuContextAmd64{};
+
+    data->lock = {};
+    data->await_load = false;
+
+    data->await_save = false;
+    data->stackframe(arch::amd64::StackFrame{});
+
+    return (CpuContext *)data;
+}
+
+void CpuContext::load_to(void *state)
+{
+    arch::amd64::CpuContextAmd64 const *data = this->as<arch::amd64::CpuContextAmd64>();
+
+    arch::amd64::StackFrame *frame = (arch::amd64::StackFrame *)state;
+
+    Cpu::current()->syscall_stack = (uintptr_t)data->syscall_stack_top;
+    Cpu::current()->debug_saved_syscall_stackframe = data->saved_syscall_stack;
+
+    // Validate frame before loading
+    if (!frame || !data)
+    {
+        fmt::err$("Invalid frame or data in load_to");
+        return;
+    }
+
+    auto stored_frame = data->stackframe();
+
+    // Validate segment selectors
+    if (stored_frame.cs == 0 || stored_frame.ss == 0)
+    {
+        //   fmt::log$("schedule in ring 0: CS={}, SS={}", stored_frame.cs, stored_frame.ss);
+    }
+
+    if (stored_frame.rsp > kernel_virtual_base())
+    {
+        fmt::log$("Warning: Loading a context with RSP in kernel space: RSP={}", ((uintptr_t)stored_frame.rsp) | fmt::FMT_HEX);
+    }
+
+    if (stored_frame.rsp == 0 || stored_frame.rip == 0)
+    {
+        fmt::err$("FATAL: Invalid context in load_to - RSP={}, RIP={}",
+                  (uintptr_t)stored_frame.rsp | fmt::FMT_HEX,
+                  (uintptr_t)stored_frame.rip | fmt::FMT_HEX);
+        fmt::err$("FATAL: Cannot switch to task with uninitialized context!");
+        while (true)
+        {
+            asm volatile("cli; hlt");
+        }
+    }
+
+    *frame = stored_frame;
+
+    // Cpu::current()->syscall_stack = data->syscall_stack_top;
+    // Cpu::current()->saved_stack = data->saved_syscall_stack;
+
+    // arch::amd64::Msr::Write(arch::amd64::MsrReg::GS_BASE, reinterpret_cast<uintptr_t>(this));
+    // arch::amd64::Msr::Write(arch::amd64::MsrReg::KERNEL_GS_BASE, reinterpret_cast<uintptr_t>(this));
+
+    this->_vmm_space->use();
+
+    data->simd_context.load();
+
+    core::atomic_cache_flush();
+    {
+
+        lock_scope$(this->lock);
+
+        this->await_load = false;
+    }
+}
+
+void CpuContext::dump()
+{
+    arch::amd64::CpuContextAmd64 const *data = this->as<arch::amd64::CpuContextAmd64>();
+
+    fmt::log$("Dumping CPU context:");
+    fmt::log$("  Stack Pointer: {}", (uintptr_t)data->stack_ptr | fmt::FMT_HEX);
+    fmt::log$("  Kernel Stack Pointer: {}", (uintptr_t)data->kernel_stack_ptr | fmt::FMT_HEX);
+    fmt::log$("  Stack Frame: {}", data->stackframe());
+}
+
+void CpuContext::save_in(void *state)
+{
+
+    arch::amd64::CpuContextAmd64 *data = this->as<arch::amd64::CpuContextAmd64>();
+
+    arch::amd64::StackFrame *frame = (arch::amd64::StackFrame *)state;
+
+    data->stackframe(*frame);
+
+    // Cpu::current()->syscall_stack = (uintptr_t)data->syscall_stack_top;
+    data->syscall_stack_top = (void *)Cpu::current()->syscall_stack;
+    data->saved_syscall_stack = Cpu::current()->debug_saved_syscall_stackframe;
+    // Cpu::current()->debug_saved_syscall_stackframe = data->saved_syscall_stack;
+
+    // this->syscall_stack_top = Cpu::current()->syscall_stack;
+    // this->saved_syscall_stack = Cpu::current()->saved_stack;
+    data->simd_context.save();
+
+    core::atomic_cache_sync();
+    this->await_save = false;
+}
+
+void CpuContext::release()
+{
+    arch::amd64::CpuContextAmd64 *data = this->as<arch::amd64::CpuContextAmd64>();
+
+    if (data->stack_ptr != nullptr)
+    {
+        core::mem_free(data->stack_ptr);
+    }
+    if (data->kernel_stack_ptr != nullptr)
+    {
+        core::mem_free(data->kernel_stack_ptr);
+    }
+    data->simd_context.release();
+
+    data->kernel_stack_ptr = nullptr;
+    data->stack_ptr = nullptr;
+}
+
+void CpuContext::use_stack_addr(uintptr_t addr)
+{
+    auto data = this->as<arch::amd64::CpuContextAmd64>();
+    data->_user_stack_addr(addr);
+}
+
+core::Result<void> CpuContext::prepare(CpuContextLaunch launch)
+{
+
+    auto data = this->as<arch::amd64::CpuContextAmd64>();
+
+    data->stack_ptr = try$(core::mem_alloc(kernel::userspace_stack_size));
+
+    data->kernel_stack_ptr = try$(core::mem_alloc(kernel::kernel_stack_size));
+
+    data->syscall_stack_ptr = try$(core::mem_alloc(kernel::kernel_stack_size)); // allocate a stack for syscall handling
+
+    data->stack_top = (void *)((uintptr_t)data->stack_ptr + kernel::userspace_stack_size);
+    data->kernel_stack_top = (void *)((uintptr_t)data->kernel_stack_ptr + kernel::kernel_stack_size);
+    data->syscall_stack_top = (void *)((uintptr_t)data->syscall_stack_ptr + kernel::kernel_stack_size - 16);
+
+    data->saved_syscall_stack = 0;
+
+    arch::amd64::StackFrame frame = {};
+
+    frame.rsp = (uint64_t)data->stack_top;
+    frame.rbp = (uint64_t)0;
+    frame.rip = (uint64_t)launch.entry;
+    frame.rdi = launch.args[0];
+    frame.rsi = launch.args[1];
+    frame.rdx = launch.args[2];
+    frame.rcx = launch.args[3];
+    frame.r8 = launch.args[4];
+
+    if (launch.user)
+    {
+        frame.cs = (arch::amd64::Gdt::user_code_segment_id * 8) | 3;
+        frame.ss = (arch::amd64::Gdt::user_data_segment_id * 8) | 3;
+    }
+    else
+    {
+        frame.cs = arch::amd64::Gdt::kernel_code_segment_id * 8;
+        frame.ss = arch::amd64::Gdt::kernel_data_segment_id * 8;
+    }
+
+    frame.rflags = arch::amd64::RFLAGS_INTERRUPT_ENABLE | arch::amd64::RFLAGS_ONE;
+
+    data->simd_context = try$(arch::x86_64::SimdContext::create());
+    data->stackframe(frame);
+
+    return {};
+}
+
+core::Result<CpuContext *> CpuContext::create(CpuContextLaunch launch)
+{
+    auto ctx = try$(create_empty());
+    try$(ctx->prepare(launch));
+    return {ctx};
+}
+
+} // namespace kernel

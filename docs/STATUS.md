@@ -392,6 +392,18 @@
   QEMU NIC configuration, `virtio-net` driver/service boundaries, and phased
   TCP/UDP stack rollout, including full-scope IPv6 and multi-address/
   multi-stack instance support in later phases.
+- `virtio-net` driver Phase 0 is implemented and exercised end-to-end: a
+  PCI-matched WASM service (`system/drivers/virtio_net.wap`) that probes the
+  device (vendor `0x1AF4`, class `0x02`), performs the virtio status handshake
+  (ACK|DRIVER → feature negotiation → DRIVER_OK), reads the MAC via the
+  `VIRTIO_NET_F_MAC` feature, and reports link status.  RX/TX are intentionally
+  deferred (`TODO(virtio-net-transport)`) because persistent virtqueue DMA
+  conflicts with the current PM FS-buffer borrow lifecycle.  The IPC contract is
+  adapter-neutral (`NETDRV_IPC_*`, `0xA00`-range in `wasmos_driver_abi.h`) so it
+  is reusable across other NICs.  The QEMU test harness now attaches a NIC by
+  default (`WASMOS_QEMU_NIC_MODEL`, default `virtio-net-pci`, set to `none` to
+  omit); boot log shows `[virtio-net] driver ok link=up mtu=1500` with no
+  regression across `test_cli`, `test_device_manager`, and `test_timer_tick`.
 
 - Two scheduler bugs affecting kernel worker threads are fixed:
   (1) `proc->ctx.rsp` was initialized to the process stack top at spawn time,

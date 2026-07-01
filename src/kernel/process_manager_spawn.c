@@ -1230,6 +1230,8 @@ pm_check_waits(uint32_t pm_context_id)
         resp.arg3 = 0;
         ipc_send_from(pm_context_id, waiter->reply_endpoint, &resp);
         waiter->in_use = 0;
+        /* Status delivered — reap the zombie so its process slot is freed. */
+        process_reap_zombie_pid(waiter->pid);
         waiter = (pm_wait_state_t *)list_next(&it);
     }
 }

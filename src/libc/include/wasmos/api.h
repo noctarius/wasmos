@@ -247,6 +247,10 @@ extern int32_t wasmos_shmem_grant(int32_t id, int32_t target_pid)
     WASMOS_WASM_IMPORT("wasmos", "shmem_grant");
 extern int32_t wasmos_shmem_revoke(int32_t id, int32_t target_pid)
     WASMOS_WASM_IMPORT("wasmos", "shmem_revoke");
+/* On success wasmos_shmem_map/_auto return the mapped guest offset (>= 0).  On
+ * failure they return a negative SHMEM_ERR_* reason code (see
+ * drivers/include/wasmos_driver_abi.h) rather than a blanket -1, so callers can
+ * report why a map failed. */
 extern int32_t wasmos_shmem_map(int32_t id, int32_t ptr, int32_t size)
     WASMOS_WASM_IMPORT("wasmos", "shmem_map");
 extern int32_t wasmos_shmem_map_auto(int32_t id, int32_t size)

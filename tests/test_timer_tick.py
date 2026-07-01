@@ -29,7 +29,10 @@ class TimerTickTests(unittest.TestCase):
             cls.session.close()
 
     def test_timer_ticks_do_not_block_boot(self):
-        ok = self.session.expect(b"wamos> ", timeout_s=20)
+        # Boot-to-prompt is ~20s; a 20s cap is right at the edge and flakes on a
+        # loaded CI runner.  This test only asserts the prompt is EVER reached
+        # (i.e. the PIT doesn't wedge boot), so use a generous margin.
+        ok = self.session.expect(b"wamos> ", timeout_s=40)
         if not ok:
             self.fail(f"CLI prompt not found while PIT was running.\n--- tail ---\n{self.session.tail()}\n")
 

@@ -1648,20 +1648,20 @@ warp_shmem_map_auto(uint32_t id, uint32_t size, void *ctx_)
 {
     auto *ctx = warp_call_ctx(ctx_);
     if ((int32_t)id <= 0 || (int32_t)size <= 0 || (size & 0xFFF)) {
-        return (uint32_t)-1;
+        return (uint32_t)SHMEM_ERR_BAD_ARGS;
     }
     uint32_t context_id = 0;
     if (warp_current_context_id(&context_id) != 0
         || warp_require_dma_capability(context_id) != 0) {
-        return (uint32_t)-1;
+        return (uint32_t)SHMEM_ERR_NO_CAP;
     }
     uint64_t phys_base = 0; uint64_t shared_pages = 0;
     if (mm_shared_get_phys(context_id, id, &phys_base, &shared_pages) != 0
         || shared_pages == 0) {
-        return (uint32_t)-1;
+        return (uint32_t)SHMEM_ERR_BAD_ID;
     }
     if ((uint64_t)size < shared_pages * 0x1000ULL) {
-        return (uint32_t)-1;
+        return (uint32_t)SHMEM_ERR_BAD_SIZE;
     }
     /* Scan linear memory for a free, page-aligned, non-overlapping window.
      * Start from the current active/committed linear-memory size instead of a
@@ -1695,7 +1695,7 @@ warp_shmem_map_auto(uint32_t id, uint32_t size, void *ctx_)
      * frontier and the top-of-memory tail, where WARP keeps private runtime
      * state outside the app's explicit globals. */
     if (mem_size < (uint64_t)size) {
-        return (uint32_t)-1;
+        return (uint32_t)SHMEM_ERR_NO_WINDOW;
     }
     const uint64_t low_guard = 0x200000ULL;
     const uint64_t high_guard = 0x20000ULL;
@@ -1707,7 +1707,7 @@ warp_shmem_map_auto(uint32_t id, uint32_t size, void *ctx_)
         scan_limit -= high_guard;
     }
     if (scan_limit < (uint64_t)size || scan_min + (uint64_t)size > scan_limit) {
-        return (uint32_t)-1;
+        return (uint32_t)SHMEM_ERR_NO_WINDOW;
     }
     uint64_t start_off = ((scan_min + base_mod + 0xFFFULL) & ~0xFFFULL) - base_mod;
     if (start_off < scan_min) {
@@ -1725,7 +1725,7 @@ warp_shmem_map_auto(uint32_t id, uint32_t size, void *ctx_)
         }
     }
     if (!found) {
-        return (uint32_t)-1;
+        return (uint32_t)SHMEM_ERR_NO_WINDOW;
     }
     /* Commit the target range via probe() BEFORE paging_map_4k.
      * ensureLinearSize() zero-initialises newly committed WASM pages.  If the

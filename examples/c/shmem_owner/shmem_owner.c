@@ -100,8 +100,12 @@ main(int argc, char **argv)
         puts("[test] shmem e2e setup create-failed");
         return 1;
     }
-    if (wasmos_shmem_map(shmem_id, SHMEM_MAP_OFF, SHMEM_MAP_SIZE) != 0) {
-        puts("[test] shmem e2e owner map failed");
+    /* WARP's host linear-memory base is not page-aligned, so a fixed guest
+     * offset cannot yield a page-aligned host address; use map_auto, which
+     * scans for a valid page-aligned window (see warp_shmem_map_auto). */
+    int32_t map_rc = wasmos_shmem_map_auto(shmem_id, SHMEM_MAP_SIZE);
+    if (map_rc < 0) {
+        printf("[test] shmem e2e owner map failed rc=%d\n", (int)map_rc);
         return 1;
     }
 

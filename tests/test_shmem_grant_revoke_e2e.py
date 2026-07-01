@@ -62,14 +62,17 @@ class ShmemGrantRevokeE2ETest(unittest.TestCase):
 
     def test_shmem_grant_revoke_pair(self):
         self._cmd_expect("cd /apps", [b"/apps wamos>"])
-        # Spawn owner in the background first; it blocks waiting for the
-        # target to appear and advance each protocol stage.
+        # Start the target first: it publishes its PID+endpoint to the sync
+        # file and calls notify_ready (so the prompt returns immediately) before
+        # blocking for the owner's stage signals.  The owner reads target_ep
+        # from that file and only briefly retries, so the target MUST run first
+        # or the owner reports "setup no-target".
         mark = self.session.mark()
+        self._exec_expect("shmtgt", timeout_s=60)
+        # Now the target's endpoint is published; spawn the owner to drive the
+        # grant/revoke protocol against it.
         self.session.send("spawn /apps/shmownr")
         self.session.expect_from(mark, b"wamos> ", timeout_s=10)
-        # Run target in the foreground; it synchronises with the background
-        # owner and exits when the full grant/revoke sequence completes.
-        self._exec_expect("shmtgt", timeout_s=60)
         self._expect_markers_from(
             mark,
             [

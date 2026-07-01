@@ -119,6 +119,18 @@ enum {
 #define PROC_SPAWN_ERR_FS_READ      (-16) /* reading the app blob from FS failed */
 #define PROC_SPAWN_ERR_SPAWN_FAILED (-17) /* process create/start failed (e.g. no free slot) */
 
+/* Distinct shmem map/map_auto failure reasons, returned (as a negative int) by
+ * wasmos_shmem_map / wasmos_shmem_map_auto instead of a blanket -1, so a failed
+ * map reports WHY.  Mirrored in both runtimes (warp/link.cpp, wasm3/link.c).
+ * Distinct -30 range so they don't collide with PROC_SPAWN_ERR_* (-10..-17). */
+#define SHMEM_ERR_BAD_ARGS    (-30) /* id/size invalid or size not page-aligned */
+#define SHMEM_ERR_NO_CAP      (-31) /* caller lacks the DMA capability / no context */
+#define SHMEM_ERR_BAD_ID      (-32) /* shmem id unknown / no backing pages */
+#define SHMEM_ERR_BAD_SIZE    (-33) /* requested size smaller than the shared region */
+#define SHMEM_ERR_UNALIGNED   (-34) /* fixed offset cannot yield a page-aligned host addr */
+#define SHMEM_ERR_NO_WINDOW   (-35) /* no free page-aligned window fits in linear memory */
+#define SHMEM_ERR_MAP         (-36) /* paging/linear-memory mapping step failed */
+
 /* Flags returned in arg1 of PROC_IPC_RESP for PROC_IPC_SPAWN_PATH.
  * Mirror of WASMOS_APP_FLAG_* in the kernel's wasmos_app.h. */
 #define WASMOS_SPAWN_FLAG_DRIVER  (1u << 0)

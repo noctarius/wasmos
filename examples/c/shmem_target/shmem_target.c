@@ -89,8 +89,12 @@ main(int argc, char **argv)
     }
     int32_t owner_ep = sync.owner_ep;
 
-    /* Pre-grant policy checks. */
-    if (wasmos_shmem_map(sync.shmem_id + 0x1234, SHMEM_MAP_OFF, SHMEM_MAP_SIZE) == 0) {
+    /* Pre-grant policy checks.  Use map_auto for the id/grant policy checks so
+     * a deny is always a real policy rejection, never an artefact of WARP's
+     * non-page-aligned linear-memory base (a fixed guest offset can't yield a
+     * page-aligned host address).  The unaligned-offset check below must stay on
+     * the fixed-offset map — an unaligned request is exactly what it verifies. */
+    if (wasmos_shmem_map_auto(sync.shmem_id + 0x1234, SHMEM_MAP_SIZE) >= 0) {
         puts("[test] shmem e2e forged id deny mismatch"); return 1;
     }
     puts("[test] shmem e2e forged id deny ok");
@@ -100,7 +104,7 @@ main(int argc, char **argv)
     }
     puts("[test] shmem e2e map policy deny ok");
 
-    if (wasmos_shmem_map(sync.shmem_id, SHMEM_MAP_OFF, SHMEM_MAP_SIZE) == 0) {
+    if (wasmos_shmem_map_auto(sync.shmem_id, SHMEM_MAP_SIZE) >= 0) {
         puts("[test] shmem e2e pregrant deny mismatch"); return 1;
     }
     puts("[test] shmem e2e pregrant deny ok");
@@ -117,7 +121,7 @@ main(int argc, char **argv)
         puts("[test] shmem e2e target no-stage2"); return 1;
     }
 
-    if (wasmos_shmem_map(sync.shmem_id, SHMEM_MAP_OFF, SHMEM_MAP_SIZE) != 0) {
+    if (wasmos_shmem_map_auto(sync.shmem_id, SHMEM_MAP_SIZE) < 0) {
         puts("[test] shmem e2e grant map failed"); return 1;
     }
     if (wasmos_shmem_unmap(sync.shmem_id) != 0) {
@@ -136,7 +140,7 @@ main(int argc, char **argv)
         puts("[test] shmem e2e target no-stage4"); return 1;
     }
 
-    if (wasmos_shmem_map(sync.shmem_id, SHMEM_MAP_OFF, SHMEM_MAP_SIZE) == 0) {
+    if (wasmos_shmem_map_auto(sync.shmem_id, SHMEM_MAP_SIZE) >= 0) {
         puts("[test] shmem e2e revoke deny mismatch"); return 1;
     }
     puts("[test] shmem e2e revoke deny ok");
@@ -152,7 +156,7 @@ main(int argc, char **argv)
         puts("[test] shmem e2e target no-stage90"); return 1;
     }
 
-    if (wasmos_shmem_map(sync.shmem_id, SHMEM_MAP_OFF, SHMEM_MAP_SIZE) == 0) {
+    if (wasmos_shmem_map_auto(sync.shmem_id, SHMEM_MAP_SIZE) >= 0) {
         puts("[test] shmem e2e stale deny mismatch"); return 1;
     }
     puts("[test] shmem e2e stale revoke deny ok");

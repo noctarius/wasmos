@@ -823,6 +823,11 @@ pm_handle_spawn_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
         (void)process_kill(child_pid, -1);
         return -1;
     }
+    /* Index caps-sync spawns come from the device manager (ready-gated, never
+     * exit-waited); auto-reap on exit so one-shot enumerators (pci-bus/acpi-bus,
+     * spawned by rule-index+caps) don't linger as zombies.  Harmless for
+     * persistent drivers.  Same fixed-policy rationale as the path caps-sync. */
+    (void)process_set_auto_reap(child_pid, 1);
 
     g_pm.spawn.in_use = 1;
     g_pm.spawn.is_sync = 1;
@@ -891,6 +896,13 @@ pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t *msg)
         return -1;
     }
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, child_pid);
+    /* Sync spawns complete on the child's READY, not its exit; a one-shot child
+     * (e.g. pci-bus/acpi-bus enumerators) exits afterwards.  If the caller asked
+     * to auto-reap (PROC_SPAWN_PATH_FLAG_AUTOREAP in arg0), free its slot on that
+     * exit — reaping fires post-exit so it cannot race the ready reply. */
+    if (((uint32_t)msg->arg0 & PROC_SPAWN_PATH_FLAG_AUTOREAP) != 0) {
+        (void)process_set_auto_reap(child_pid, 1);
+    }
 
     g_pm.spawn.in_use = 1;
     g_pm.spawn.is_sync = 1;
@@ -972,6 +984,13 @@ pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
         (void)process_kill(child_pid, -1);
         return -1;
     }
+    /* This caps-sync path is used only by the device manager, which sync-spawns
+     * drivers waiting for READY (never for exit).  Auto-reap on exit so one-shot
+     * enumerators (pci-bus/acpi-bus) don't linger as zombies; harmless for
+     * persistent drivers (fires only once they become zombies).  All four IPC
+     * args carry caps/path/timeout here, so there is no room for an explicit
+     * per-spawn flag — the policy is fixed to this caller's model. */
+    (void)process_set_auto_reap(child_pid, 1);
 
     g_pm.spawn.in_use = 1;
     g_pm.spawn.is_sync = 1;
@@ -1289,6 +1308,13 @@ pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t *msg)
     }
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);
     process_unpark_pid(pid);
+
+    /* Fire-and-forget one-shots carry PROC_SPAWN_PATH_FLAG_AUTOREAP in arg1 for
+     * this index-based spawn; auto-reap them on exit so they don't linger as
+     * zombies.  Only fires post-exit, and this path has no PROC_IPC_WAIT waiter. */
+    if (((uint32_t)msg->arg1 & PROC_SPAWN_PATH_FLAG_AUTOREAP) != 0) {
+        (void)process_set_auto_reap(pid, 1);
+    }
 
     ipc_message_t resp;
     resp.type = PROC_IPC_RESP;

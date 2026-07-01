@@ -99,7 +99,13 @@ enum {
 };
 
 /* arg0 flags for PROC_IPC_SPAWN_PATH (request). */
-#define PROC_SPAWN_PATH_FLAG_DETACH (1u << 0) /* skip ready-wait even for service/driver */
+#define PROC_SPAWN_PATH_FLAG_DETACH   (1u << 0) /* skip ready-wait even for service/driver */
+/* Reap the child's process slot automatically when it exits, instead of leaving
+ * it as a zombie until a waiter consumes its status.  Orthogonal to DETACH
+ * (which is about ready-gating at spawn): set this for fire-and-forget one-shot
+ * children that nobody PROC_IPC_WAITs on (bus enumerators, boot self-tests, …).
+ * Must NOT be set when the spawner will PROC_IPC_WAIT for the exit status. */
+#define PROC_SPAWN_PATH_FLAG_AUTOREAP (1u << 1)
 
 /* Distinct spawn failure reasons, returned as the rc in PROC_IPC_ERROR.arg1 so
  * a failed spawn reports WHY instead of a blanket "exec failed".  Kept as small

@@ -100,7 +100,10 @@ init_send_spawn_index(process_t *process, init_state_t *state, uint32_t module_i
     msg.destination = proc_ep;
     msg.request_id = state->request_id;
     msg.arg0 = module_index;
-    msg.arg1 = 0;
+    /* Reap these children on exit so one-shot boot tests (native-call-min/smoke,
+     * init-smoke) don't linger as zombies.  Harmless for long-lived services:
+     * auto-reap only fires once a process becomes a zombie. */
+    msg.arg1 = PROC_SPAWN_PATH_FLAG_AUTOREAP;
     msg.arg2 = 0;
     msg.arg3 = 0;
     send_rc = ipc_send_from(process->context_id, proc_ep, &msg);

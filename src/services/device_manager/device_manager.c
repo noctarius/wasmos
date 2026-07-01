@@ -723,7 +723,8 @@ hw_spawn_driver_path(const char *path)
         return -1;
     }
     return dm_spawn_sync_call(PROC_IPC_SPAWN_PATH_SYNC,
-                              0, (int32_t)path_len, 0, DM_SPAWN_TIMEOUT_MS);
+                              PROC_SPAWN_PATH_FLAG_AUTOREAP, /* reap one-shot enumerators (pci/acpi) on exit */
+                              (int32_t)path_len, 0, DM_SPAWN_TIMEOUT_MS);
 }
 
 static int

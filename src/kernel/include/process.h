@@ -215,6 +215,10 @@ int process_thread_detach(process_t *process, uint32_t target_tid);
 int process_kill(uint32_t pid, int32_t exit_status);
 int process_get_exit_status(uint32_t pid, int32_t *out_exit_status);
 int process_set_auto_reap(uint32_t pid, uint8_t enabled);
+/* Reap a specific zombie by pid (CAS-guarded); used by the PM WAIT path to free
+ * a child's slot after its exit status has been delivered.  No-op if not a
+ * still-unreaped zombie. */
+void process_reap_zombie_pid(uint32_t pid);
 int process_wake_thread(uint32_t tid);
 int process_schedule_once(void);
 void process_yield(process_run_result_t result);

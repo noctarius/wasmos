@@ -273,7 +273,11 @@ public:
             resp.arg1 = (uint32_t)exit_status;
             resp.arg2 = 0;
             resp.arg3 = 0;
-            return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
+            int rc = ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
+            /* Status delivered — reap the zombie now so its process slot is
+             * freed (interactive CLI children are never otherwise reaped). */
+            process_reap_zombie_pid(msg->arg0);
+            return rc;
         }
 
         pm_wait_state_t *waiter = wait_slot_acquire();

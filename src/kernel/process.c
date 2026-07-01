@@ -796,19 +796,17 @@ process_has_waiters(uint32_t target_pid)
     return 0;
 }
 
+/* Atomically claim the reap: only the CPU that transitions ZOMBIE → REAPING
+ * proceeds and actually reaps.  This prevents two CPUs from simultaneously
+ * freeing the same process's stacks/memory when work-stealing causes concurrent
+ * exits/waits to arrive on different CPUs.  All reap paths (auto-reap, wait,
+ * PM wait-reply) funnel through here so the CAS is the single gate. */
 static void
-process_try_auto_reap(process_t *proc)
+process_reap_claim(process_t *proc)
 {
-    if (!proc || !proc->auto_reap) {
+    if (!proc) {
         return;
     }
-    if (process_has_waiters(proc->pid)) {
-        return;
-    }
-    /* Atomically claim the reap: only the CPU that transitions ZOMBIE →
-     * REAPING proceeds.  This prevents two CPUs from simultaneously freeing
-     * the same process's stacks and memory when work-stealing causes
-     * concurrent exits to arrive on different CPUs. */
     uint32_t expected = (uint32_t)PROCESS_STATE_ZOMBIE;
     if (!__atomic_compare_exchange_n((uint32_t *)&proc->state,
                                      &expected,
@@ -819,6 +817,35 @@ process_try_auto_reap(process_t *proc)
         return;
     }
     process_reap(proc);
+}
+
+static void
+process_try_auto_reap(process_t *proc)
+{
+    if (!proc || !proc->auto_reap) {
+        return;
+    }
+    if (process_has_waiters(proc->pid)) {
+        return;
+    }
+    process_reap_claim(proc);
+}
+
+/* Reap a specific zombie by pid, CAS-guarded.  Used by the process-manager
+ * WAIT path to free a child's slot AFTER its exit status has been delivered to
+ * the waiter — interactive CLI children are parented to the CLI, not the PM, so
+ * the PM cannot use process_wait() (which enforces the parent check).  No-op if
+ * the pid is not a (still-unreaped) zombie. */
+void
+process_reap_zombie_pid(uint32_t pid)
+{
+    if (pid == 0) {
+        return;
+    }
+    process_t *proc = process_find_by_pid(pid);
+    if (proc) {
+        process_reap_claim(proc);
+    }
 }
 
 static void process_reap(process_t *proc) {
@@ -1518,7 +1545,8 @@ int process_wait(process_t *process, uint32_t target_pid, int32_t *out_exit_stat
         if (out_exit_status) {
             *out_exit_status = target->exit_status;
         }
-        process_reap(target);
+        /* CAS-guarded: safe if another CPU (auto-reap) races the same zombie. */
+        process_reap_claim(target);
         process->block_reason = PROCESS_BLOCK_NONE;
         return 0;
     }
@@ -2229,10 +2257,12 @@ uint64_t process_watchdog_issue_count(void) {
 }
 
 uint32_t process_count_active(void) {
+    /* Counts everything process_info_at_stats() enumerates, so `ps` iterates a
+     * matching range.  Includes ZOMBIE (shown as "zmb") to surface not-yet-
+     * reaped children; skips only free and transient in-reap slots. */
     uint32_t count = 0;
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_processes[i].state != PROCESS_STATE_UNUSED &&
-            g_processes[i].state != PROCESS_STATE_ZOMBIE &&
             g_processes[i].state != PROCESS_STATE_REAPING) {
             count++;
         }
@@ -2367,8 +2397,11 @@ process_info_at_stats(uint32_t index,
     uint32_t current = 0;
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         process_t *proc = &g_processes[i];
+        /* Include ZOMBIE so `ps` shows not-yet-reaped children (state "zmb"),
+         * like Linux's Z/defunct — makes leaked/unreaped slots visible.  Skip
+         * only truly-free slots and the transient in-reap state. */
         if (proc->state == PROCESS_STATE_UNUSED ||
-            proc->state == PROCESS_STATE_ZOMBIE) {
+            proc->state == PROCESS_STATE_REAPING) {
             continue;
         }
         if (current == index) {

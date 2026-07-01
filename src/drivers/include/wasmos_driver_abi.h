@@ -101,6 +101,18 @@ enum {
 /* arg0 flags for PROC_IPC_SPAWN_PATH (request). */
 #define PROC_SPAWN_PATH_FLAG_DETACH (1u << 0) /* skip ready-wait even for service/driver */
 
+/* Distinct spawn failure reasons, returned as the rc in PROC_IPC_ERROR.arg1 so
+ * a failed spawn reports WHY instead of a blanket "exec failed".  Kept as small
+ * negative ints so they don't collide with success (0). */
+#define PROC_SPAWN_ERR_BAD_ENDPOINT (-10) /* request endpoint owner lookup failed */
+#define PROC_SPAWN_ERR_NO_CALLER    (-11) /* caller process/context not found */
+#define PROC_SPAWN_ERR_BAD_PATH     (-12) /* fs endpoint missing or bad path length */
+#define PROC_SPAWN_ERR_CALLER_FSBUF (-13) /* caller xfer buffer missing / path too big */
+#define PROC_SPAWN_ERR_ARGS_TOOBIG  (-14) /* args exceed the xfer buffer */
+#define PROC_SPAWN_ERR_NO_PM_FSBUF  (-15) /* PM xfer buffer missing */
+#define PROC_SPAWN_ERR_FS_READ      (-16) /* reading the app blob from FS failed */
+#define PROC_SPAWN_ERR_SPAWN_FAILED (-17) /* process create/start failed (e.g. no free slot) */
+
 /* Flags returned in arg1 of PROC_IPC_RESP for PROC_IPC_SPAWN_PATH.
  * Mirror of WASMOS_APP_FLAG_* in the kernel's wasmos_app.h. */
 #define WASMOS_SPAWN_FLAG_DRIVER  (1u << 0)

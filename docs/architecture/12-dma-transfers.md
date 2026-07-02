@@ -10,8 +10,14 @@ the ATA storage integration that exercises the full lifecycle.
 
 - **Deny by default.** No DMA operation succeeds without explicit
   `CAP_DMA_BUFFER` capability and a matching window profile.
-- **Reuse borrow objects.** DMA state is attached to existing PM buffer-borrow
-  slots. No separate DMA region allocator is introduced.
+- **Reuse borrow objects for transient, peer-owned buffers.** For a device that
+  DMAs into a *client's* buffer for the duration of a single request (the ATA
+  read/write path), DMA state is attached to existing PM buffer-borrow slots;
+  no allocation is needed. This model is intentionally transient
+  (map → sync → unmap per operation) and, by design, refuses to map the
+  caller's *own* memory (`source_owner == context_id` is denied). It therefore
+  does **not** cover memory a device reads continuously for the driver's whole
+  lifetime — see *Driver-Owned DMA Regions (planned)* below.
 - **Least privilege.** Each grant is bounded by direction flags, maximum byte
   count, and an approved physical-address window list.
 - **Deterministic teardown.** On driver crash or kill, all mapped DMA borrows
@@ -330,6 +336,65 @@ Constraints:
   before releasing the borrow records.
 - A new spawn receives new context/slot state with no residual mappings
   from a previous driver instance.
+
+---
+
+### Driver-Owned DMA Regions (planned)
+
+The borrow-based model above maps a *peer's transient* buffer. Some devices
+need the opposite: memory the driver **owns and pins for its whole lifetime**,
+which the device DMAs to/from continuously. The canonical case is **virtqueue
+rings** (see [Networking](22-networking-virtio-net-and-stack.md)), but the same
+primitive generalizes to block-DMA staging and framebuffer/scanout regions.
+
+Such memory cannot come from the driver's WASM linear memory: linmem pages are
+not guaranteed physically contiguous, the WARP linmem base is not page-aligned,
+and it can relocate on growth. It must instead be a **kernel-reserved physical
+region**. The building blocks already exist and only need composing into one
+hostcall:
+
+- `pfa_alloc_pages_below(pages, limit)` (`src/kernel/physmem.c`) — returns a
+  **contiguous, page-aligned** physical run below a ceiling (use the low-2GB
+  limit so the legacy virtqueue PFN register and the signed-32-bit
+  `device_addr` contract hold).
+- `pfa_pin_pages(base, pages)` (`src/kernel/memory.c`) — pins the run so it is
+  never reused or relocated.
+- `wasmos_phys_map(phys, size, wasm_offset)` (`src/kernel/wasm3/link.c`,
+  `src/kernel/warp/link.cpp`) — maps the region into the driver's linear memory
+  so it can read/write descriptors.
+
+The proposed surface is a thin allocator that composes these under the
+`CAP_DMA_BUFFER` gate, returning both a linmem pointer and a stable physical
+address:
+
+```c
+/* planned */
+region_alloc(pages, cache_policy, flags) -> { phys_addr, wasm_ptr }
+```
+
+Design notes:
+
+- **Region object, not just a buffer.** The handle should carry
+  `{ backing: alloc | mmio, phys, pages, pinned, cache_policy, dma_capable,
+  shareable }` so the same abstraction covers allocated DMA regions,
+  fixed-MMIO ranges (framebuffer, mapped via `phys_map` on a firmware-given
+  address rather than `pfa_alloc`), and shared regions.
+- **Cache policy is a first-class attribute.** DMA rings on x86 are cached and
+  hardware-coherent (write-back, only compiler/memory barriers needed);
+  framebuffers want write-combining. A single allocator must set the correct
+  PAT/PTE attributes per region.
+- **`block_buffer_phys` is the existing precedent** for handing a driver a
+  fixed low-physical DMA buffer (`src/kernel/wasm3/link.c`); the region
+  allocator generalizes it rather than replacing the borrow path.
+- **Keep the guards.** `capability_dma_range_allowed` and the low-2GB clamp
+  must apply to allocated regions exactly as they do to borrow mappings — a
+  general "give me physical memory" primitive without capability gating is a
+  DMA-anywhere hole.
+- **Scope.** A one-shot pinned reservation (no free/reuse) is sufficient for a
+  fixed set of devices; a real region lifecycle (free, refcount, revoke) is a
+  follow-on.
+  TODO: implement `region_alloc` and migrate the virtqueue ring and packet
+  pool onto it (see Networking Phase 1).
 
 ---
 

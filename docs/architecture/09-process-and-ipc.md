@@ -196,6 +196,57 @@ typedef struct {
 
 ---
 
+### Vring Bulk Transport (planned)
+
+The FIFO message queue above copies a fixed-size `ipc_message_t` and is the
+right tool for small **control** messages. It is a poor fit for **bulk or
+streaming** payloads (network packets, disk blocks, audio frames, compositor
+damage) where copying bytes through a bounded 32-deep queue is the bottleneck.
+
+For those, the planned transport is a **virtqueue-style ring (vring)**: a shared
+ring of descriptors that reference buffers in a shared pool, so producer and
+consumer pass *ownership of buffers* rather than copying data. This is a
+**complement** to message IPC, not a replacement — control stays on message
+endpoints; bulk data moves over a vring.
+
+The same ring mechanics serve both device transport and permanent
+service↔service channels, so the design factors into a transport-neutral core
+plus two backends:
+
+- **vring core** — descriptor table + avail/used index management, batching,
+  and memory barriers. Pure logic over `(region, notify_fn)`, with no device or
+  transport knowledge. Lives in a `libsys` library that both drivers and
+  services link (keeps the kernel out of the data path — the point of
+  zero-copy).
+- **PCI/MMIO backend** — real virtio devices; ring memory is a pinned physical
+  region (see [DMA Transfers → Driver-Owned DMA Regions](12-dma-transfers.md)),
+  the doorbell is the device notify register, and completion arrives by IRQ.
+- **shmem/IPC backend** — service↔service; the ring and buffer pool are a shmem
+  region mapped into both peers, the doorbell is a `NOTIFICATION` endpoint (the
+  existing block/wake + select path), and there is no device, IRQ, or physical
+  address. Being CPU-coherent, this is strictly simpler than the device case.
+
+Two properties differ from stock virtio, which assumes a *trusted* driver
+talking to a device, and must be treated as first-class here:
+
+- **Mutual distrust → consumer-side validation.** A buggy or malicious producer
+  can write any offset/length into the ring, so the consumer must bounds-check
+  every descriptor against the region size on each consume. The isolation trick:
+  the kernel maps *exactly* the shared region and nothing else, so a bad
+  descriptor can at worst fault within that region and only harms the two
+  participants — it cannot reach either peer's private memory. For device
+  vrings the same bounds are enforced by `capability_dma_range_allowed` plus the
+  low-2GB clamp.
+- **Teardown / revocation.** If a peer dies mid-stream the region must be
+  reclaimed and the other side notified; this rides on the shmem grant/revoke
+  lifecycle, which must be solid before bulk service channels are built on it.
+
+TODO: implement the vring core + PCI backend first (unblocks virtio-net
+RX/TX), then add the shmem backend for service channels once grant/revoke is
+proven. See [Networking Phase 1](22-networking-virtio-net-and-stack.md).
+
+---
+
 ### Poll-Hub: Push-Model Select
 
 Source: `src/kernel/include/poll.h`, `src/kernel/poll.c`

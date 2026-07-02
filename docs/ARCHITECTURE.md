@@ -29,11 +29,11 @@ remain deterministic in strict ring3 runs.
 - [Threading and Lifecycle](architecture/08-threading-and-lifecycle.md)
 
 ### Kernel Core
-- [Process and IPC](architecture/09-process-and-ipc.md)
+- [Process and IPC](architecture/09-process-and-ipc.md) - message-queue transport plus the planned vring bulk/zero-copy transport for device and service↔service channels
 - [Capability and Policy](architecture/10-capability-and-policy.md)
 - [Ring3 Isolation and Separation](architecture/11-ring3-isolation-and-separation.md)
 - [WARP Ring3 Implementation Plan](architecture/31-warp-ring3-implementation.md) - ring-3 execution model, kernel trampolines, and remaining implementation guardrails
-- [DMA Transfers](architecture/12-dma-transfers.md)
+- [DMA Transfers](architecture/12-dma-transfers.md) - transient borrow-based DMA plus the planned driver-owned pinned DMA region primitive for virtqueue rings and other persistent device memory
 
 ### WASM Runtime
 - [Runtime and Packaging](architecture/13-runtime-and-packaging.md) (wasm3 + WARP JIT)

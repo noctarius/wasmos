@@ -29,9 +29,17 @@ Out of scope for initial rollout:
 ### Current Baseline
 - No explicit NIC model is configured in `run-qemu*`; QEMU defaults are used.
 - `virtio-serial` already exists as a PCI-matched WASM service and proves the
-  transport pattern for early virtio device bring-up.
-- DMA capability plumbing and borrow-buffer DMA lifecycle exist and can be
-  reused by `virtio-net` for virtqueue and packet buffer physical addressing.
+  probe/register-access pattern for early virtio device bring-up. Note it does
+  **not** yet set up virtqueues (no ring allocation or queue-PFN programming),
+  so it is a discovery baseline, not a virtqueue-DMA precedent.
+- The DMA capability (`CAP_DMA_BUFFER`) and the borrow-buffer DMA lifecycle
+  exist and are proven by the ATA path, but they map a **peer's transient**
+  buffer per operation — they do **not** provide the driver-owned, pinned,
+  contiguous physical memory a virtqueue ring needs. Ring memory requires the
+  planned driver-owned DMA region primitive
+  ([DMA Transfers](12-dma-transfers.md)); the borrow path is still reused for
+  the per-packet buffer case. The `virtio-net` transport is built on a
+  transport-neutral vring core ([Process and IPC](09-process-and-ipc.md)).
 - IPC opcode space 0x000–0x9FF is allocated; networking opcodes begin at 0xA00.
 
 ---
@@ -195,13 +203,19 @@ For N = 256:
 - Used ring:        2054 bytes (offset 8192)
 - Total allocation: 10246 bytes → allocate 12288 (3 pages) per queue
 
-Allocate with the DMA borrow path:
+Allocate ring memory from a **driver-owned pinned DMA region**, not the borrow
+path. The borrow path (`wasmos_buffer_borrow` + `dma_map_borrow`) maps a peer's
+transient buffer and refuses the caller's own memory, so it cannot back a
+persistent ring; and there is no `WASMOS_BUFFER_KIND_NET_QUEUE_*` buffer kind
+(only `WASMOS_BUFFER_KIND_FS` exists today). Instead use the planned region
+allocator (see [DMA Transfers → Driver-Owned DMA Regions](12-dma-transfers.md)):
 ```c
-int32_t borrow_id = wasmos_buffer_borrow(WASMOS_BUFFER_KIND_NET_QUEUE_RX, drv_ep, WASMOS_BUFFER_GRANT_BIDIR);
-uint64_t phys_addr;
-int rc = dma_map_borrow(borrow_id, device_id, 0, VQ_ALLOC_SIZE, WASMOS_DMA_DIR_BIDIR, &phys_addr);
+/* planned: contiguous, page-aligned, pinned, low-2GB, mapped into linmem */
+struct dma_region r = region_alloc(VQ_ALLOC_PAGES, CACHE_WB, DMA_CAPABLE);
+uint64_t phys_addr = r.phys_addr;   /* stable for the driver's lifetime */
 ```
 Then write `phys_addr >> 12` to QUEUE_ADDRESS after selecting the queue index.
+Per-packet buffers handed off from a client may still use the borrow path.
 
 Initialization for queue `q`:
 ```c
@@ -908,10 +922,16 @@ Done gate:
 - `run-qemu-test` remains green with explicit NIC config.
 
 Phase 1: `virtio-net` transport baseline
-- Add `virtio-net` driver skeleton package and devmgr match rule.
-- Implement PCI probe, feature negotiation (MAC + STATUS only), queue init,
-  DMA buffer pool allocation, RX/TX loop.
-- Register `virtio.net` endpoint via svc registry.
+- Phase 1a (probe baseline, DONE): `virtio-net` driver package + devmgr match
+  rule; PCI probe, feature negotiation (MAC + STATUS only), MAC/link markers,
+  `virtio.net` svc registration. NIC wired into the QEMU harness. RX/TX not yet
+  implemented.
+- Phase 1b (transport): the prerequisite is **not** reusing the existing borrow
+  DMA plumbing — it is building (1) the driver-owned pinned DMA region primitive
+  ([DMA Transfers](12-dma-transfers.md)) for ring/pool memory, and (2) the
+  transport-neutral vring core + PCI backend
+  ([Process and IPC](09-process-and-ipc.md)). Then: queue init (program
+  QUEUE_ADDRESS from the region's physical base), RX/TX descriptor loops.
 
 Done gate:
 - driver emits MAC/link markers and can TX/RX raw Ethernet frames in smoke path.

@@ -1787,6 +1787,11 @@ add_custom_target(run-kernel-unit-tests
           ${LIBC_DIR}/src/string.c
           -o ${BUILD_DIR}/test_libc_stdlib
   COMMAND ${BUILD_DIR}/test_libc_stdlib
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${LIBSYS_WASM_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_vring.c
+          -o ${BUILD_DIR}/test_vring
+  COMMAND ${BUILD_DIR}/test_vring
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Running host kernel unit tests"
   VERBATIM

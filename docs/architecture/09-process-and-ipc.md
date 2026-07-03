@@ -241,9 +241,18 @@ talking to a device, and must be treated as first-class here:
   reclaimed and the other side notified; this rides on the shmem grant/revoke
   lifecycle, which must be solid before bulk service channels are built on it.
 
-TODO: implement the vring core + PCI backend first (unblocks virtio-net
-RX/TX), then add the shmem backend for service channels once grant/revoke is
-proven. See [Networking Phase 1](22-networking-virtio-net-and-stack.md).
+The transport-neutral vring core is implemented as a header-only libsys library,
+`src/libsys/wasm/include/wasmos/vring.h`: the legacy split-virtqueue layout
+(descriptor table + avail/used rings), descriptor alloc/free, publish/kick, and
+used-ring consumption with consumer-side bounds validation, all as pure logic
+over a caller-provided region and a `notify` callback — no device/PCI/IPC
+knowledge. It is covered by `tests/unit/test_vring.c` (host unit test). The PCI
+backend (real device programming) and the shmem/service backend are the
+remaining pieces.
+
+TODO: add the PCI backend (unblocks virtio-net RX/TX) on top of the vring core,
+then the shmem backend for service channels once grant/revoke is proven. See
+[Networking Phase 1](22-networking-virtio-net-and-stack.md).
 
 ---
 

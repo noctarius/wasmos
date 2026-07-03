@@ -454,8 +454,19 @@
   (`wasmos_sys_buffer_write_to`), bumps `rx_packets`, recycles the descriptor,
   and re-kicks; replies RESP with arg0 = frame length (0 = none pending). Actual
   frame reception needs traffic (Phase 1b/E). Verified: run-qemu-test green +
-  host unit tests green. Next: the TX path (NETDRV_IPC_TX_FRAME, still
-  NET_STATUS_NOT_READY), then IRQ integration and an e2e TX/RX smoke.
+  host unit tests green.
+- Phase 1b TX path done: `tx_arm()` region_allocs a 64-buffer TX pool and a
+  free-buffer stack; `NETDRV_IPC_TX_FRAME` (arg0 = frame length) -> `tx_send()`
+  reaps prior completions (`tx_reap()`), takes a free buffer, prepends a zeroed
+  10-byte virtio-net header, copies the frame from the caller's borrowed buffer
+  (`wasmos_sys_buffer_copy_from`), posts a device-readable descriptor, kicks, and
+  bumps tx_packets; replies RESP(OK) or a NET_STATUS_* error (QUEUE_FULL/INVALID
+  /IO_ERROR). `g_tx_desc_buf[]` maps desc id -> buffer for reap; setup_queue now
+  guards qsize <= 256. Boot shows `[virtio-net] tx armed bufs=64`. Actual TX/RX
+  wire exchange is the next step (e2e smoke over QEMU user-net). Verified:
+  run-qemu-test green (one device-manager rules-read boot flake on the first run,
+  passed clean on re-run — unrelated to virtio_net, which starts later) + host
+  unit tests green. Next: IRQ integration, then the e2e TX/RX test.
 
 - Two scheduler bugs affecting kernel worker threads are fixed:
   (1) `proc->ctx.rsp` was initialized to the process stack top at spawn time,

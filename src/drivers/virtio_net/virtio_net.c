@@ -37,6 +37,10 @@
 #define VIRTIO_NET_HDR_LEN         10u
 #define VIRTIO_NET_RX_BUF_SIZE     2048u  /* hdr + up to 1514-byte Ethernet frame */
 #define VIRTIO_NET_RX_BUF_COUNT    64u    /* pre-posted receive buffers */
+#define VIRTIO_NET_TX_BUF_SIZE     2048u
+#define VIRTIO_NET_TX_BUF_COUNT    64u    /* in-flight transmit buffers */
+#define VIRTIO_NET_MAX_QUEUE       256u   /* max supported queue size (desc map) */
+#define VIRTIO_NET_MAX_FRAME       1514u  /* Ethernet frame w/o FCS */
 
 #define VIRTIO_STATUS_ACK       1u
 #define VIRTIO_STATUS_DRIVER    2u
@@ -87,6 +91,15 @@ static virtio_net_queue_t g_txq;  /* queue 1: driver -> device */
  * address programmed into descriptors. */
 static uint8_t *g_rx_pool;
 static uint64_t g_rx_pool_phys;
+
+/* TX packet pool. Buffers are handed out from a free stack; g_tx_desc_buf maps
+ * an in-flight descriptor id back to its buffer index so completed transmits
+ * can be reaped and their buffers returned. */
+static uint8_t *g_tx_pool;
+static uint64_t g_tx_pool_phys;
+static uint16_t g_tx_buf_free[VIRTIO_NET_TX_BUF_COUNT];
+static uint32_t g_tx_buf_top;
+static uint16_t g_tx_desc_buf[VIRTIO_NET_MAX_QUEUE];
 
 static uint32_t
 pci_config_read32(uint8_t bus, uint8_t slot, uint8_t function, uint8_t reg)
@@ -207,8 +220,8 @@ setup_queue(virtio_net_queue_t *q, uint16_t idx)
 {
     io_write16(g_dev.io_base + VIRTIO_PCI_QUEUE_SELECT, idx);
     uint16_t qsize = io_read16(g_dev.io_base + VIRTIO_PCI_QUEUE_SIZE);
-    if (qsize == 0u) {
-        return -1;  /* queue not provided by the device */
+    if (qsize == 0u || qsize > VIRTIO_NET_MAX_QUEUE) {
+        return -1;  /* queue absent or larger than we support (desc-map bound) */
     }
 
     uint64_t ring_bytes = vring_size(qsize, VIRTIO_PCI_VRING_ALIGN);
@@ -301,6 +314,81 @@ rx_poll_one(int32_t dest)
     return frame_len;
 }
 
+/* Allocate the TX packet pool and initialise the free-buffer stack. */
+static int
+tx_arm(void)
+{
+    int32_t pages = (int32_t)(((uint64_t)VIRTIO_NET_TX_BUF_COUNT * VIRTIO_NET_TX_BUF_SIZE
+                               + 0xFFFu) / 0x1000u);
+    uint64_t phys = 0;
+    int32_t off = wasmos_region_alloc(pages, WASMOS_REGION_CACHE_WB, &phys);
+    if (off < 0) {
+        return -1;
+    }
+    g_tx_pool = (uint8_t *)(uintptr_t)(uint32_t)off;
+    g_tx_pool_phys = phys;
+    for (uint32_t i = 0; i < VIRTIO_NET_TX_BUF_COUNT; ++i) {
+        g_tx_buf_free[i] = (uint16_t)i;
+    }
+    g_tx_buf_top = VIRTIO_NET_TX_BUF_COUNT;
+    return 0;
+}
+
+/* Reclaim completed transmits: free each used descriptor and return its buffer
+ * to the free stack. */
+static void
+tx_reap(void)
+{
+    uint32_t used_len = 0;
+    int32_t id;
+    while ((id = vring_get_used(&g_txq.vq, &used_len)) >= 0) {
+        uint16_t b = g_tx_desc_buf[id];
+        if (b < VIRTIO_NET_TX_BUF_COUNT && g_tx_buf_top < VIRTIO_NET_TX_BUF_COUNT) {
+            g_tx_buf_free[g_tx_buf_top++] = b;
+        }
+        vring_free_desc(&g_txq.vq, (uint16_t)id);
+    }
+}
+
+/* Transmit one Ethernet frame from `source`'s borrowed buffer: reap prior
+ * completions, take a free TX buffer, prepend a zeroed virtio-net header, copy
+ * the frame in, post it as a device-readable descriptor, and kick. Returns a
+ * NET_STATUS_* code. */
+static int
+tx_send(int32_t source, int32_t frame_len)
+{
+    if (frame_len <= 0 || frame_len > (int32_t)VIRTIO_NET_MAX_FRAME) {
+        return NET_STATUS_INVALID;
+    }
+    tx_reap();
+    if (g_tx_buf_top == 0u) {
+        return NET_STATUS_QUEUE_FULL;
+    }
+    uint16_t b = g_tx_buf_free[g_tx_buf_top - 1u];
+    uint8_t *buf = g_tx_pool + (uint64_t)b * VIRTIO_NET_TX_BUF_SIZE;
+    for (uint32_t i = 0; i < VIRTIO_NET_HDR_LEN; ++i) {
+        buf[i] = 0;
+    }
+    if (wasmos_sys_buffer_copy_from(WASMOS_BUFFER_KIND_FS, source,
+                                    WASMOS_BUFFER_GRANT_READ,
+                                    buf + VIRTIO_NET_HDR_LEN, frame_len, 0) != 0) {
+        return NET_STATUS_IO_ERROR;
+    }
+    int32_t d = vring_alloc_desc(&g_txq.vq,
+                                 g_tx_pool_phys + (uint64_t)b * VIRTIO_NET_TX_BUF_SIZE,
+                                 (uint32_t)(VIRTIO_NET_HDR_LEN + (uint32_t)frame_len),
+                                 0 /* device-readable */);
+    if (d < 0) {
+        return NET_STATUS_QUEUE_FULL;
+    }
+    g_tx_buf_top--;                 /* commit the buffer now the desc is taken */
+    g_tx_desc_buf[d] = b;
+    vring_publish(&g_txq.vq, (uint16_t)d);
+    vring_kick(&g_txq.vq);
+    g_stats.tx_packets++;
+    return NET_STATUS_OK;
+}
+
 static int
 initialize_device(void)
 {
@@ -359,6 +447,14 @@ initialize_device(void)
     }
     (void)printf("[virtio-net] rx armed bufs=%d rx_pool=0x%08X\n",
                  rx_bufs, (unsigned)(g_rx_pool_phys & 0xFFFFFFFFu));
+
+    if (tx_arm() != 0) {
+        (void)printf("[virtio-net] tx arm failed\n");
+        return -1;
+    }
+    (void)printf("[virtio-net] tx armed bufs=%u tx_pool=0x%08X\n",
+                 (unsigned)VIRTIO_NET_TX_BUF_COUNT,
+                 (unsigned)(g_tx_pool_phys & 0xFFFFFFFFu));
     return 0;
 }
 
@@ -434,6 +530,24 @@ handle_rx_poll(int32_t source, int32_t request_id)
                           frame_len, 0, 0, 0);
 }
 
+/* NETDRV_IPC_TX_FRAME: transmit the frame in the caller's borrowed buffer.
+ * arg0 carries the frame length. Replies RESP(NET_STATUS_OK) once queued. */
+static void
+handle_tx_frame(int32_t source, int32_t request_id, int32_t frame_len)
+{
+    if (!g_dev.present || !g_dev.ready) {
+        send_error(source, request_id, NET_STATUS_NOT_READY);
+        return;
+    }
+    int rc = tx_send(source, frame_len);
+    if (rc != NET_STATUS_OK) {
+        send_error(source, request_id, rc);
+        return;
+    }
+    (void)wasmos_ipc_send(source, g_endpoint, NETDRV_IPC_RESP, request_id,
+                          NET_STATUS_OK, 0, 0, 0);
+}
+
 WASMOS_WASM_EXPORT int32_t
 initialize(int32_t proc_endpoint, int32_t ignored_arg1, int32_t ignored_arg2, int32_t ignored_arg3)
 {
@@ -505,7 +619,7 @@ initialize(int32_t proc_endpoint, int32_t ignored_arg1, int32_t ignored_arg2, in
         } else if (msg.type == NETDRV_IPC_RX_POLL) {
             handle_rx_poll(msg.source, msg.request_id);
         } else if (msg.type == NETDRV_IPC_TX_FRAME) {
-            send_error(msg.source, msg.request_id, NET_STATUS_NOT_READY);
+            handle_tx_frame(msg.source, msg.request_id, msg.arg0);
         } else {
             send_error(msg.source, msg.request_id, NET_STATUS_INVALID);
         }

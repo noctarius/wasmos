@@ -1663,6 +1663,15 @@ warp_shmem_map_auto(uint32_t id, uint32_t size, void *ctx_)
     if ((uint64_t)size < shared_pages * 0x1000ULL) {
         return (uint32_t)SHMEM_ERR_BAD_SIZE;
     }
+#if WASMOS_TRACE
+    klog_printf("[trace-shmem] map_auto pid=%u size=%llx shpg=%llx reserved=%llx "
+                "linmem_pages=%u committed=%llx\n",
+                (unsigned)ctx->pid, (unsigned long long)size,
+                (unsigned long long)shared_pages,
+                (unsigned long long)warp_linmem_reserved_bytes(ctx->pid),
+                (unsigned)ctx->module->getLinearMemorySizeInPages(),
+                (unsigned long long)warp_heap_committed_bytes(ctx->pid));
+#endif
     /* Scan linear memory for a free, page-aligned, non-overlapping window.
      * Start from the current active/committed linear-memory size instead of a
      * fixed 2 MiB floor so the first shmem map stays inside memory WARP has
@@ -1680,6 +1689,13 @@ warp_shmem_map_auto(uint32_t id, uint32_t size, void *ctx_)
     uint64_t cfg_bytes = warp_heap_committed_bytes(ctx->pid);
     if (cfg_bytes > (uint64_t)mem_pages << 16)
         mem_pages = (uint32_t)((cfg_bytes + 0xFFFFULL) >> 16);
+    /* Bound the scan by the RESERVED linmem capacity when the block has moved
+     * into its dedicated VA slot: the slot commits pages on demand, so windows
+     * placed within it are backed as the commit-probe grows the block (no
+     * relocation, base pinned).  0 before the move → committed-size bound. */
+    uint64_t reserved = warp_linmem_reserved_bytes(ctx->pid);
+    if (reserved > (uint64_t)mem_pages << 16)
+        mem_pages = (uint32_t)((reserved + 0xFFFFULL) >> 16);
     uint64_t mem_size  = (uint64_t)mem_pages << 16;
     uint64_t scan_min = (uint64_t)warp_linear_memory_active_size(ctx) + 0x10000ULL;
     uint8_t *base = ctx->module->getLinearMemoryRegion(0, 0);

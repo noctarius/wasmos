@@ -152,6 +152,11 @@ wasmos_add_wasm_c_app_target(shmem_owner
   EXPORT      wasmos_main
   NO_BUILTIN
   STARTUP_SHIM
+  # Small initial commit, large max: the WARP linmem VA slot commits pages on
+  # demand, and shmem_map_auto needs headroom above the app's live data to place
+  # its window (which grows the slot on demand, base pinned).
+  INITIAL_MEMORY 65536
+  MAX_MEMORY     4194304
   BUILD_COMMENT "Building wasm shmem-owner module"
   PACK_COMMENT  "Packing wasm shmownr as WASMOS-APP"
 )
@@ -164,6 +169,9 @@ wasmos_add_wasm_c_app_target(shmem_target
   EXPORT      wasmos_main
   NO_BUILTIN
   STARTUP_SHIM
+  # See shmem_owner: small initial, large max for map_auto window headroom.
+  INITIAL_MEMORY 65536
+  MAX_MEMORY     4194304
   BUILD_COMMENT "Building wasm shmem-target module"
   PACK_COMMENT  "Packing wasm shmtgt as WASMOS-APP"
 )

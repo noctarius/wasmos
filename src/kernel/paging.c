@@ -80,6 +80,16 @@ paging_verify_user_root_impl(uint64_t root_table, int log_failures)
     uint64_t pdpt_high_phys = entry_phys(root[511]);
     volatile uint64_t *pdpt_high = table_ptr(pdpt_high_phys);
     for (uint32_t i = 0; i < ENTRIES_PER_TABLE; ++i) {
+        /* Dedicated WARP linmem window: populated on demand in this shared
+         * higher-half PDPT, so its slots may be present OR absent - skip the
+         * strict present==allowed check and the PD descent.  No validation is
+         * needed: paging_map_4k_in_root forbids the USER bit on higher-half
+         * VAs, so this supervisor-only alias is unreachable from ring-3, and a
+         * PD descent would spuriously fail as pages commit incrementally. */
+        if (i >= WARP_LINMEM_PDPT_INDEX &&
+            i < WARP_LINMEM_PDPT_INDEX + WARP_LINMEM_PDPT_COUNT) {
+            continue;
+        }
         uint8_t is_kernel_slot = (i >= HIGHER_HALF_PDPT_INDEX &&
                                   i < (HIGHER_HALF_PDPT_INDEX + HIGHER_HALF_PD_COUNT));
         uint8_t is_mmio_slot = (i == KERNEL_MMIO_PDPT_INDEX);
@@ -618,6 +628,62 @@ paging_map_4k_in_root(uint64_t root_table, uint64_t virt, uint64_t phys, uint64_
     pt[pt_idx] = (phys & ~0xFFFULL) | map_flags;
     invlpg(virt);
     return 0;
+}
+
+/* Resolve the physical address backing `virt` in `root_table` (0 = current
+ * root) via a read-only page-table walk.  Returns the full physical address
+ * including the in-page offset, or 0 if any level is not present.  Handles
+ * 1 GiB / 2 MiB large pages.  Masks the phys field explicitly (bits 12..51) so
+ * a set NX/high bit on a data PTE cannot leak into the result.  Used by the
+ * WARP linmem chokepoint to recover scattered physical pages from a dedicated-
+ * VA pointer without maintaining a per-page phys list. */
+uint64_t
+paging_virt_to_phys_in_root(uint64_t root_table, uint64_t virt)
+{
+    if (root_table == 0) {
+        root_table = g_current_pml4_phys;
+    }
+    if (root_table == 0) {
+        return 0;
+    }
+    const uint64_t PHYS_MASK = 0x000FFFFFFFFFF000ULL; /* bits 12..51 */
+    uint64_t pml4_idx = (virt >> 39) & 0x1FF;
+    uint64_t pdpt_idx = (virt >> 30) & 0x1FF;
+    uint64_t pd_idx   = (virt >> 21) & 0x1FF;
+    uint64_t pt_idx   = (virt >> 12) & 0x1FF;
+
+    volatile uint64_t *pml4 = table_ptr(root_table);
+    if (!(pml4[pml4_idx] & PT_FLAG_PRESENT)) {
+        return 0;
+    }
+    volatile uint64_t *pdpt = table_ptr(pml4[pml4_idx] & PHYS_MASK);
+    uint64_t pdpte = pdpt[pdpt_idx];
+    if (!(pdpte & PT_FLAG_PRESENT)) {
+        return 0;
+    }
+    if (pdpte & PT_FLAG_LARGE_PAGE) { /* 1 GiB page */
+        return (pdpte & 0x000FFFFFC0000000ULL) | (virt & 0x3FFFFFFFULL);
+    }
+    volatile uint64_t *pd = table_ptr(pdpte & PHYS_MASK);
+    uint64_t pde = pd[pd_idx];
+    if (!(pde & PT_FLAG_PRESENT)) {
+        return 0;
+    }
+    if (pde & PT_FLAG_LARGE_PAGE) { /* 2 MiB page */
+        return (pde & 0x000FFFFFFFE00000ULL) | (virt & 0x1FFFFFULL);
+    }
+    volatile uint64_t *pt = table_ptr(pde & PHYS_MASK);
+    uint64_t pte = pt[pt_idx];
+    if (!(pte & PT_FLAG_PRESENT)) {
+        return 0;
+    }
+    return (pte & PHYS_MASK) | (virt & 0xFFFULL);
+}
+
+uint64_t
+paging_virt_to_phys(uint64_t virt)
+{
+    return paging_virt_to_phys_in_root(0, virt);
 }
 
 int

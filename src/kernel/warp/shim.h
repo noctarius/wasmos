@@ -25,6 +25,11 @@ void warp_heap_release(uint32_t pid);
 uint64_t warp_heap_committed_bytes(uint32_t pid);
 int warp_heap_probe_growth(size_t size);
 
+/* Dedicated-VA linmem slot: arm the one-shot pid hint before the module's first
+ * linmem-allocating probe; read the reserved capacity back to bound map_auto. */
+void warp_linmem_reserve_hint(uint32_t pid, uint64_t reserve_bytes);
+uint64_t warp_linmem_reserved_bytes(uint32_t pid);
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif

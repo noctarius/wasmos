@@ -142,6 +142,35 @@ static Ring3LinmemMapState *find_ring3_linmem_map(uint64_t user_root)
 
 } // namespace
 
+/* Physical address backing a warp allocation's kernel-alias pointer.  All
+ * phys-from-virt derivations for linmem/JIT blocks route through here so the
+ * dedicated-VA linmem block (scattered physical pages) resolves without a
+ * per-page list.  For a VA in the dedicated linmem window we walk the page
+ * tables; a miss there means a tracking gap / uncommitted linmem VA, so we
+ * return 0 (loud failure at the caller) rather than silently corrupting with a
+ * virt-kHalfBase phys.  Direct-mapped pointers (JIT, ad-hoc) fall back to
+ * `virt - kHalfBase` (identical to a tracked contiguous entry). */
+extern "C" uint64_t
+warp_mem_alias_phys(uint64_t virt)
+{
+    if (virt >= WARP_LINMEM_VA_BASE &&
+        virt < WARP_LINMEM_VA_BASE +
+                   (uint64_t)(WARP_LINMEM_PDPT_COUNT / 2u) * WARP_LINMEM_VA_STRIDE) {
+        uint64_t phys = paging_virt_to_phys(virt);
+        if (!phys) {
+            klog_write("[warp-mem] linmem VA unmapped in alias_phys (tracking gap)\n");
+        }
+        return phys;
+    }
+    for (auto &e : g_mmap_table) {
+        uint64_t base = reinterpret_cast<uint64_t>(e.virt);
+        if (e.virt && virt >= base && virt < base + e.pages * kPageSize) {
+            return e.phys + (virt - base);
+        }
+    }
+    return virt - kHalfBase;
+}
+
 #ifdef WASMOS_WARP_RING3
 /* Return basedataLength = byte offset from memoryBase (warp_kmalloc result or
  * allocPagedMemory result) to the first linmem byte.
@@ -152,7 +181,7 @@ warp_mem_linmem_basedata_length(uint8_t const *linmem_kernel_ptr)
     if (!linmem_kernel_ptr) return 0;
     uint64_t linmem_virt = reinterpret_cast<uint64_t>(linmem_kernel_ptr);
     if (linmem_virt < kHalfBase) return 0;
-    uint64_t linmem_phys = linmem_virt - kHalfBase;
+    uint64_t linmem_phys = warp_mem_alias_phys(linmem_virt);
     MmapEntry *e = find_entry_by_phys(linmem_phys);
     return e ? (linmem_phys - e->phys - e->data_offset) : 0ULL;
 }
@@ -196,7 +225,7 @@ warp_mem_ring3_map_jit(uint64_t user_root,
     if (!jit_kernel_ptr || jit_size == 0) return -1;
     uint64_t jit_virt = reinterpret_cast<uint64_t>(jit_kernel_ptr);
     if (jit_virt < kHalfBase) return -1;
-    uint64_t phys  = jit_virt - kHalfBase;
+    uint64_t phys  = warp_mem_alias_phys(jit_virt);
     uint64_t pages = (static_cast<uint64_t>(jit_size) + kPageSize - 1) / kPageSize;
     uint64_t flags = MEM_REGION_FLAG_READ | MEM_REGION_FLAG_EXEC | MEM_REGION_FLAG_USER;
     for (uint64_t i = 0; i < pages; ++i) {
@@ -220,7 +249,7 @@ warp_mem_ring3_map_linmem(uint64_t user_root, uint8_t const *linmem_kernel_ptr)
     if (!linmem_kernel_ptr) return -1;
     uint64_t linmem_virt = reinterpret_cast<uint64_t>(linmem_kernel_ptr);
     if (linmem_virt < kHalfBase) return -1;
-    uint64_t linmem_phys = linmem_virt - kHalfBase;
+    uint64_t linmem_phys = warp_mem_alias_phys(linmem_virt);
 
     /* The MmapEntry whose phys range contains linmem_phys is the backing
      * allocation (warp_kmalloc or allocPagedMemory).  data_offset accounts

@@ -588,6 +588,24 @@ warp_r3_memory_helper(uint64_t min_linmem_len,
 }
 #endif /* WASMOS_WARP_RING3 */
 
+/* Arm the one-shot linmem over-reservation for a module about to initialize.
+ * The hint is consumed by the first warp_krealloc growth of the job-memory
+ * block (the only page-backed block that grows), which fires early (initial
+ * commit) before any shmem/DMA window is mapped — moving the block into its
+ * dedicated per-app VA slot with a pinned base.  Applies to both ring-0 and
+ * ring-3 WARP.  (reserve_bytes carries the pid signal; the slot itself is the
+ * fixed WARP_LINMEM_VA_STRIDE window, committed on demand.) */
+static void
+warp_linmem_reserve_hint_for(uint32_t pid, uint64_t initial_linmem)
+{
+    /* Any nonzero value arms the hint; use the declared initial size so a
+     * zero-heap module (unusual) does not falsely arm it. */
+    if (initial_linmem == 0) {
+        initial_linmem = 0x10000; /* 64 KiB floor: still just a "linmem pending" flag */
+    }
+    warp_linmem_reserve_hint(pid, initial_linmem);
+}
+
 // ---------------------------------------------------------------------------
 // Public C API
 // ---------------------------------------------------------------------------
@@ -657,6 +675,10 @@ wasm_driver_start(wasm_driver_t *driver,
         } else {
             klog_write("[warp-driver] using AOT binary\n");
             mod = new vb::WasmModule(UINT64_MAX, g_logger, false, warp_ctx, 10U);
+            /* Arm the linmem-block identification: the first warp_krealloc grow
+             * (inside initFromCompiledBinary) moves the block into a dedicated
+             * per-app VA slot (reserve VA, commit on demand, base pinned). */
+            warp_linmem_reserve_hint_for(driver->owner_pid, manifest->heap_size);
             vb::Span<uint8_t const> compiled(manifest->compiled_bytes, manifest->compiled_size);
             vb::Span<uint8_t const> empty_debug(nullptr, 0);
             /* initFromCompiledBinary requires DYNAMIC_LINK symbols. */
@@ -689,6 +711,7 @@ wasm_driver_start(wasm_driver_t *driver,
             return -1;
         }
         mod = new vb::WasmModule(UINT64_MAX, g_logger, false, warp_ctx, 10U);
+        warp_linmem_reserve_hint_for(driver->owner_pid, manifest->heap_size);
         vb::Span<uint8_t const> bc(manifest->module_bytes, manifest->module_size);
 #ifdef WASMOS_WARP_RING3
         mod->initFromBytecode(bc, warp_wasmos_symbols_ring3(), true);
@@ -937,6 +960,10 @@ warp_vm_thread_entry(process_t *process, uint32_t tid, void *arg)
     ckpt->active = 1;
     if (__builtin_setjmp(ckpt->jbuf) == 0) {
         mod = new vb::WasmModule(UINT64_MAX, g_logger, false, warp_ctx, 10U);
+        /* App/process WARP path: arm linmem-block identification here too (the
+         * driver paths are separate).  Only the linmem block grows via
+         * warp_krealloc, so arming before compile is safe. */
+        warp_linmem_reserve_hint_for(slot->owner_pid, slot->heap_size);
         vb::Span<uint8_t const> bc(slot->module_bytes, slot->module_size);
         mod->initFromBytecode(bc, warp_wasmos_symbols(), true);
         warp_bind_module(mod, slot->owner_pid);

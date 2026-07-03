@@ -100,6 +100,7 @@ static uint64_t g_tx_pool_phys;
 static uint16_t g_tx_buf_free[VIRTIO_NET_TX_BUF_COUNT];
 static uint32_t g_tx_buf_top;
 static uint16_t g_tx_desc_buf[VIRTIO_NET_MAX_QUEUE];
+static uint32_t g_tx_completed;   /* completed transmits reaped from the used ring */
 
 static uint32_t
 pci_config_read32(uint8_t bus, uint8_t slot, uint8_t function, uint8_t reg)
@@ -334,8 +335,8 @@ tx_arm(void)
     return 0;
 }
 
-/* Reclaim completed transmits: free each used descriptor and return its buffer
- * to the free stack. */
+/* Reclaim completed transmits: free each used descriptor, return its buffer to
+ * the free stack, and count the completion. */
 static void
 tx_reap(void)
 {
@@ -347,24 +348,52 @@ tx_reap(void)
             g_tx_buf_free[g_tx_buf_top++] = b;
         }
         vring_free_desc(&g_txq.vq, (uint16_t)id);
+        g_tx_completed++;
     }
 }
 
-/* Transmit one Ethernet frame from `source`'s borrowed buffer: reap prior
- * completions, take a free TX buffer, prepend a zeroed virtio-net header, copy
- * the frame in, post it as a device-readable descriptor, and kick. Returns a
- * NET_STATUS_* code. */
+/* Take a free TX buffer; returns its index or -1 if the pool is exhausted. */
+static int32_t
+tx_take_buf(void)
+{
+    tx_reap();
+    if (g_tx_buf_top == 0u) {
+        return -1;
+    }
+    return (int32_t)g_tx_buf_free[--g_tx_buf_top];
+}
+
+/* Post TX buffer b (already holding hdr+payload of total_len) as a device-
+ * readable descriptor and kick. On ring-full, returns the buffer to the free
+ * stack and returns -1. */
+static int
+tx_post(uint16_t b, uint32_t total_len)
+{
+    int32_t d = vring_alloc_desc(&g_txq.vq,
+                                 g_tx_pool_phys + (uint64_t)b * VIRTIO_NET_TX_BUF_SIZE,
+                                 total_len, 0 /* device-readable */);
+    if (d < 0) {
+        g_tx_buf_free[g_tx_buf_top++] = b;
+        return -1;
+    }
+    g_tx_desc_buf[d] = (uint16_t)b;
+    vring_publish(&g_txq.vq, (uint16_t)d);
+    vring_kick(&g_txq.vq);
+    g_stats.tx_packets++;
+    return 0;
+}
+
+/* Transmit one Ethernet frame from `source`'s borrowed buffer. NET_STATUS_*. */
 static int
 tx_send(int32_t source, int32_t frame_len)
 {
     if (frame_len <= 0 || frame_len > (int32_t)VIRTIO_NET_MAX_FRAME) {
         return NET_STATUS_INVALID;
     }
-    tx_reap();
-    if (g_tx_buf_top == 0u) {
+    int32_t b = tx_take_buf();
+    if (b < 0) {
         return NET_STATUS_QUEUE_FULL;
     }
-    uint16_t b = g_tx_buf_free[g_tx_buf_top - 1u];
     uint8_t *buf = g_tx_pool + (uint64_t)b * VIRTIO_NET_TX_BUF_SIZE;
     for (uint32_t i = 0; i < VIRTIO_NET_HDR_LEN; ++i) {
         buf[i] = 0;
@@ -372,21 +401,120 @@ tx_send(int32_t source, int32_t frame_len)
     if (wasmos_sys_buffer_copy_from(WASMOS_BUFFER_KIND_FS, source,
                                     WASMOS_BUFFER_GRANT_READ,
                                     buf + VIRTIO_NET_HDR_LEN, frame_len, 0) != 0) {
+        g_tx_buf_free[g_tx_buf_top++] = (uint16_t)b;  /* return the buffer */
         return NET_STATUS_IO_ERROR;
     }
-    int32_t d = vring_alloc_desc(&g_txq.vq,
-                                 g_tx_pool_phys + (uint64_t)b * VIRTIO_NET_TX_BUF_SIZE,
-                                 (uint32_t)(VIRTIO_NET_HDR_LEN + (uint32_t)frame_len),
-                                 0 /* device-readable */);
-    if (d < 0) {
+    if (tx_post((uint16_t)b, VIRTIO_NET_HDR_LEN + (uint32_t)frame_len) != 0) {
         return NET_STATUS_QUEUE_FULL;
     }
-    g_tx_buf_top--;                 /* commit the buffer now the desc is taken */
-    g_tx_desc_buf[d] = b;
-    vring_publish(&g_txq.vq, (uint16_t)d);
-    vring_kick(&g_txq.vq);
-    g_stats.tx_packets++;
     return NET_STATUS_OK;
+}
+
+/* Transmit a driver-local frame (used by the ARP self-probe). Returns 0 or -1. */
+static int
+tx_post_local(const uint8_t *frame, uint32_t frame_len)
+{
+    int32_t b = tx_take_buf();
+    if (b < 0) {
+        return -1;
+    }
+    uint8_t *buf = g_tx_pool + (uint64_t)b * VIRTIO_NET_TX_BUF_SIZE;
+    for (uint32_t i = 0; i < VIRTIO_NET_HDR_LEN; ++i) {
+        buf[i] = 0;
+    }
+    __builtin_memcpy(buf + VIRTIO_NET_HDR_LEN, frame, frame_len);
+    return tx_post((uint16_t)b, VIRTIO_NET_HDR_LEN + frame_len);
+}
+
+/* Drain one completed RX frame into a local buffer (self-probe path). Returns
+ * the frame length (> 0) or 0 if none pending; recycles the descriptor. */
+static int
+rx_poll_local(uint8_t *out, uint32_t max)
+{
+    uint32_t used_len = 0;
+    int32_t id = vring_get_used(&g_rxq.vq, &used_len);
+    if (id < 0) {
+        return 0;
+    }
+    int frame_len = 0;
+    uint64_t addr = g_rxq.vq.desc[id].addr;
+    uint32_t bidx = (uint32_t)((addr - g_rx_pool_phys) / VIRTIO_NET_RX_BUF_SIZE);
+    if (bidx < VIRTIO_NET_RX_BUF_COUNT
+        && used_len > VIRTIO_NET_HDR_LEN
+        && used_len <= VIRTIO_NET_RX_BUF_SIZE) {
+        uint32_t flen = used_len - VIRTIO_NET_HDR_LEN;
+        if (flen > max) {
+            flen = max;
+        }
+        uint8_t *buf = g_rx_pool + (uint64_t)bidx * VIRTIO_NET_RX_BUF_SIZE;
+        __builtin_memcpy(out, buf + VIRTIO_NET_HDR_LEN, flen);
+        g_stats.rx_packets++;
+        frame_len = (int)flen;
+    }
+    vring_publish(&g_rxq.vq, (uint16_t)id);
+    vring_kick(&g_rxq.vq);
+    return frame_len;
+}
+
+/* End-to-end connectivity self-probe: broadcast an ARP request for the SLIRP
+ * gateway (10.0.2.2) from our MAC and poll the RX ring for the reply. This
+ * exercises the whole path — region_alloc'd rings, vring publish/kick, the
+ * device doorbell, TX DMA read, and RX DMA write + used-ring completion.
+ * Diagnostic only: it logs the outcome and never fails device init. */
+static void
+net_selftest(void)
+{
+    static const uint8_t sender_ip[4] = {10, 0, 2, 15};  /* SLIRP default guest IP */
+    static const uint8_t target_ip[4] = {10, 0, 2, 2};   /* SLIRP gateway */
+    uint8_t frame[42];
+    uint32_t p = 0;
+    int i;
+
+    /* Ethernet header: dst broadcast, src our MAC, ethertype ARP. */
+    for (i = 0; i < 6; ++i) frame[p++] = 0xFFu;
+    for (i = 0; i < 6; ++i) frame[p++] = g_dev.mac[i];
+    frame[p++] = 0x08u; frame[p++] = 0x06u;
+    /* ARP request: Ethernet/IPv4, oper=1. */
+    frame[p++] = 0x00u; frame[p++] = 0x01u;   /* htype */
+    frame[p++] = 0x08u; frame[p++] = 0x00u;   /* ptype */
+    frame[p++] = 0x06u; frame[p++] = 0x04u;   /* hlen, plen */
+    frame[p++] = 0x00u; frame[p++] = 0x01u;   /* oper=request */
+    for (i = 0; i < 6; ++i) frame[p++] = g_dev.mac[i];   /* sender MAC */
+    for (i = 0; i < 4; ++i) frame[p++] = sender_ip[i];   /* sender IP */
+    for (i = 0; i < 6; ++i) frame[p++] = 0x00u;          /* target MAC (unknown) */
+    for (i = 0; i < 4; ++i) frame[p++] = target_ip[i];   /* target IP */
+
+    if (tx_post_local(frame, p) != 0) {
+        (void)printf("[virtio-net] selftest tx failed\n");
+        return;
+    }
+    (void)printf("[virtio-net] selftest arp request sent len=%u\n", (unsigned)p);
+
+    uint8_t reply[128];
+    int tx_done = 0;
+    int got = 0;
+    for (int spin = 0; spin < 2048 && (!tx_done || !got); ++spin) {
+        tx_reap();
+        if (!tx_done && g_tx_completed > 0u) {
+            tx_done = 1;
+            (void)printf("[virtio-net] selftest tx complete\n");
+        }
+        if (!got) {
+            int n = rx_poll_local(reply, sizeof reply);
+            if (n > 0) {
+                got = 1;
+                unsigned et = ((unsigned)reply[12] << 8) | (unsigned)reply[13];
+                (void)printf("[virtio-net] selftest rx=%d ethertype=0x%04X "
+                             "gw_mac=%02X:%02X:%02X:%02X:%02X:%02X\n",
+                             n, et, reply[6], reply[7], reply[8],
+                             reply[9], reply[10], reply[11]);
+            }
+        }
+        (void)wasmos_sched_yield();
+    }
+    if (!got) {
+        (void)printf("[virtio-net] selftest no reply (tx_complete=%d)\n", tx_done);
+    }
 }
 
 static int
@@ -455,6 +583,9 @@ initialize_device(void)
     (void)printf("[virtio-net] tx armed bufs=%u tx_pool=0x%08X\n",
                  (unsigned)VIRTIO_NET_TX_BUF_COUNT,
                  (unsigned)(g_tx_pool_phys & 0xFFFFFFFFu));
+
+    /* End-to-end connectivity probe over the freshly-armed queues. */
+    net_selftest();
     return 0;
 }
 

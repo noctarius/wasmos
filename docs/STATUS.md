@@ -466,7 +466,19 @@
   wire exchange is the next step (e2e smoke over QEMU user-net). Verified:
   run-qemu-test green (one device-manager rules-read boot flake on the first run,
   passed clean on re-run — unrelated to virtio_net, which starts later) + host
-  unit tests green. Next: IRQ integration, then the e2e TX/RX test.
+  unit tests green.
+- Phase 1b DONE (TX/RX proven on the wire): the virtio-net driver runs a
+  boot-time ARP self-probe (`net_selftest()`) — it broadcasts an ARP request for
+  the SLIRP gateway (10.0.2.2) over the region_alloc'd TX ring and polls the RX
+  ring for the reply. Boot shows `[virtio-net] selftest tx complete` then
+  `[virtio-net] selftest rx=64 ethertype=0x0806 gw_mac=52:55:0A:00:02:02`,
+  exercising the whole path: region_alloc'd rings, vring publish/kick, the device
+  doorbell, TX DMA read, SLIRP, RX DMA write, and used-ring completion. Guarded
+  by `tests/test_virtio_net_e2e.py` (asserts the ARP round-trip). This meets the
+  Phase 1b done-gate (raw Ethernet TX/RX in a smoke path). Verified: the e2e test
+  green, run-qemu-test green, host unit tests green. Follow-ons: IRQ-driven RX
+  (currently poll via RX_POLL), chained descriptors, then Phase 2 (net-stack
+  service: ARP/IPv4/ICMP/UDP over the NET_IPC_* socket layer).
 
 - Two scheduler bugs affecting kernel worker threads are fixed:
   (1) `proc->ctx.rsp` was initialized to the process stack top at spawn time,

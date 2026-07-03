@@ -411,6 +411,29 @@
   docs: a driver-owned pinned DMA region allocator (`region_alloc`, composing
   `pfa_alloc_pages_below` + `pfa_pin_pages` + `phys_map`) and a
   transport-neutral vring core (PCI backend first, shmem/service backend later).
+- Phase 1b, primitive 1 implemented: the driver-owned pinned DMA region
+  allocator `wasmos_region_alloc(pages, cache_policy, out_phys)` (WARP:
+  `warp_region_alloc`, `src/kernel/warp/link.cpp`; wasm3 carries the symbol as an
+  `UNAVAILABLE` stub for ABI parity). It allocates a contiguous run below 2 GiB,
+  enforces `CAP_DMA_BUFFER` + `capability_dma_range_allowed`, remaps it into the
+  driver's linmem via `warp_linmem_place_phys` (the scan+commit+remap core
+  factored out of `shmem_map_auto`, so both share one pinned-base code path),
+  and pins it. Only write-back cache policy is implemented (WB is correct for
+  coherent x86 virtqueue rings); write-combining and region free/revoke are
+  follow-ons. Verified: `run-qemu-test` green and `shmem-e2e` still green after
+  the refactor. Next: the vring core (libsys) + virtio-net queue init/RX/TX.
+- Phase 1b, primitive 2 implemented: the transport-neutral vring core, a
+  header-only libsys library `src/libsys/wasm/include/wasmos/vring.h`. Legacy
+  split-virtqueue layout (descriptor table + avail/used rings), descriptor
+  alloc/free, publish/kick, and used-ring consumption with consumer-side bounds
+  validation — pure logic over a caller-provided region + a `notify` callback,
+  no device/PCI/IPC knowledge (keeps the kernel out of the zero-copy data path).
+  Covered by `tests/unit/test_vring.c` (full producer→device→consumer lifecycle
+  + free-list exhaustion + malicious used-id rejection), wired into
+  `run-kernel-unit-tests`; all host unit tests green. Chained descriptors and
+  EVENT_IDX suppression are follow-ons. Next: the PCI backend (device probe /
+  queue programming / doorbell / IRQ) that drives this core, then virtio-net
+  RX/TX and the shmem/service backend.
 
 - Two scheduler bugs affecting kernel worker threads are fixed:
   (1) `proc->ctx.rsp` was initialized to the process stack top at spawn time,

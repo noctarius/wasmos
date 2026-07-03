@@ -339,13 +339,19 @@ Constraints:
 
 ---
 
-### Driver-Owned DMA Regions (planned)
+### Driver-Owned DMA Regions
 
 The borrow-based model above maps a *peer's transient* buffer. Some devices
 need the opposite: memory the driver **owns and pins for its whole lifetime**,
 which the device DMAs to/from continuously. The canonical case is **virtqueue
 rings** (see [Networking](22-networking-virtio-net-and-stack.md)), but the same
 primitive generalizes to block-DMA staging and framebuffer/scanout regions.
+
+This is implemented as the `region_alloc` hostcall in the WARP runtime
+(`warp_region_alloc`, `src/kernel/warp/link.cpp`); the wasm3 interpreter carries
+the symbol for ABI parity but returns `UNAVAILABLE` (WARP is the supported
+runtime for driver-owned DMA regions). The remaining design context below is
+retained as rationale.
 
 Such memory cannot come from the driver's WASM linear memory: linmem pages are
 not guaranteed physically contiguous, the WARP linmem base is not page-aligned,
@@ -363,14 +369,22 @@ hostcall:
   `src/kernel/warp/link.cpp`) — maps the region into the driver's linear memory
   so it can read/write descriptors.
 
-The proposed surface is a thin allocator that composes these under the
-`CAP_DMA_BUFFER` gate, returning both a linmem pointer and a stable physical
-address:
+The surface is a thin allocator that composes these under the `CAP_DMA_BUFFER`
+gate plus the driver's approved DMA window, returning both a linmem pointer and
+a stable physical address:
 
 ```c
-/* planned */
-region_alloc(pages, cache_policy, flags) -> { phys_addr, wasm_ptr }
+/* returns the wasm linmem offset of the mapped region (>= 0), or a negative
+ * WASMOS_DMA_STATUS_* ; writes the u64 physical base to *out_phys. */
+int32_t wasmos_region_alloc(int32_t pages, int32_t cache_policy, uint64_t *out_phys);
 ```
+
+The mapping is a real page remap (via the same pinned-base linmem window
+machinery as `shmem_map_auto`, factored into `warp_linmem_place_phys`), so the
+driver's writes land in the exact physical pages the device DMAs from — not a
+copy. The backing run is `pfa_alloc_pages_below(pages, 2 GiB)` + `pfa_pin_pages`,
+and `capability_dma_range_allowed` is enforced on the allocation just like on
+borrow mappings.
 
 Design notes:
 
@@ -390,11 +404,11 @@ Design notes:
   must apply to allocated regions exactly as they do to borrow mappings — a
   general "give me physical memory" primitive without capability gating is a
   DMA-anywhere hole.
-- **Scope.** A one-shot pinned reservation (no free/reuse) is sufficient for a
-  fixed set of devices; a real region lifecycle (free, refcount, revoke) is a
-  follow-on.
-  TODO: implement `region_alloc` and migrate the virtqueue ring and packet
-  pool onto it (see Networking Phase 1).
+- **Scope.** The current `region_alloc` is a one-shot pinned reservation (no
+  free/reuse), sufficient for a fixed set of devices; a real region lifecycle
+  (free, refcount, revoke) and write-combining cache policy are follow-ons.
+  TODO: migrate the virtqueue ring and packet pool onto `region_alloc` (see
+  Networking Phase 1); add region free/revoke and write-combining PAT support.
 
 ---
 

@@ -381,6 +381,12 @@ enum {
     WASMOS_DMA_SYNC_BIDIR = 3
 };
 
+/* Cache policy for wasmos_region_alloc (driver-owned pinned DMA regions). */
+enum {
+    WASMOS_REGION_CACHE_WB = 0,  /* write-back: coherent, virtqueue rings on x86 */
+    WASMOS_REGION_CACHE_WC = 1   /* write-combining: framebuffer/scanout (TODO) */
+};
+
 typedef struct __attribute__((packed)) {
     uint64_t base;
     uint64_t length;

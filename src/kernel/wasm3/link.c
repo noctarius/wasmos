@@ -1982,6 +1982,23 @@ m3ApiRawFunction(wasmos_framebuffer_map)
  * phys_lo/phys_hi form a 64-bit physical address (hi=0 for 32-bit addresses).
  * wasm_offset must be page-aligned; size must be a multiple of 4096.
  * Requires the mmio.map capability. */
+/* Driver-owned pinned DMA region allocation (see wasmos_region_alloc in
+ * src/kernel/warp/link.cpp and docs/architecture/12-dma-transfers.md).
+ * The real remap-into-linmem implementation lives in the WARP runtime, which is
+ * the supported runtime for driver-owned DMA regions (virtqueue rings). Under
+ * the wasm3 interpreter the symbol exists for ABI parity but is not implemented.
+ * TODO(region-alloc-wasm3): implement contiguous phys alloc + pin + linmem remap
+ * for wasm3 if a wasm3-hosted driver ever needs driver-owned DMA regions. */
+m3ApiRawFunction(wasmos_region_alloc)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, pages)
+    m3ApiGetArg(int32_t, cache_policy)
+    m3ApiGetArg(int32_t, out_phys_off)
+    (void)pages; (void)cache_policy; (void)out_phys_off;
+    m3ApiReturn(WASMOS_DMA_STATUS_UNAVAILABLE);
+}
+
 m3ApiRawFunction(wasmos_phys_map)
 {
     m3ApiReturnType(int32_t)
@@ -3738,6 +3755,7 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "framebuffer_info", "i(ii)", wasmos_framebuffer_info);
     rc |= wasm3_link_raw(module, "wasmos", "framebuffer_map", "i(ii)", wasmos_framebuffer_map);
     rc |= wasm3_link_raw(module, "wasmos", "phys_map", "i(iiii)", wasmos_phys_map);
+    rc |= wasm3_link_raw(module, "wasmos", "region_alloc", "i(iii)", wasmos_region_alloc);
     rc |= wasm3_link_raw(module, "wasmos", "framebuffer_pixel", "i(iii)", wasmos_framebuffer_pixel);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_create", "i(ii)", wasmos_shmem_create);
     rc |= wasm3_link_raw(module, "wasmos", "shmem_grant", "i(ii)", wasmos_shmem_grant);

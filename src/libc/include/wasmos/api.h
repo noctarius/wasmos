@@ -235,6 +235,16 @@ extern int32_t wasmos_framebuffer_map(int32_t ptr, int32_t size)
 extern int32_t wasmos_phys_map(int32_t phys_lo, int32_t phys_hi,
                                int32_t size, int32_t wasm_offset)
     WASMOS_WASM_IMPORT("wasmos", "phys_map");
+/* Allocate a driver-owned, pinned, contiguous DMA region below 2 GiB and map it
+ * into the caller's WASM linear memory (a real page remap, so writes reach the
+ * exact physical pages the device DMAs).  cache_policy is WASMOS_REGION_CACHE_*.
+ * Returns the wasm linmem offset of the mapped region (>= 0) and writes the u64
+ * physical base to *out_phys, or a negative WASMOS_DMA_STATUS_* on failure.
+ * Requires CAP_DMA_BUFFER and an approved DMA window covering the allocation.
+ * out_phys must point into the caller's linear memory. */
+extern int32_t wasmos_region_alloc(int32_t pages, int32_t cache_policy,
+                                   uint64_t *out_phys)
+    WASMOS_WASM_IMPORT("wasmos", "region_alloc");
 extern int32_t wasmos_framebuffer_pixel(int32_t x, int32_t y, int32_t color)
     WASMOS_WASM_IMPORT("wasmos", "framebuffer_pixel");
 /* Shared memory API: shmem_create allocates pages of shared memory and

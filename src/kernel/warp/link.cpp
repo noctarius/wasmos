@@ -1643,6 +1643,117 @@ warp_shmem_map(uint32_t id, uint32_t wasm_off, uint32_t size, void *ctx_)
     return 0;
 }
 
+/* Place a page-aligned window of `window_size` bytes somewhere in the calling
+ * app's linear memory, grow/commit linmem to cover it, and remap the window's
+ * host pages onto [phys_base, phys_base + map_pages*4KiB).  This is the delicate
+ * scan + commit-probe + paging_map_4k core shared by warp_shmem_map_auto
+ * (peer-granted shared phys) and warp_region_alloc (driver-owned pinned phys) —
+ * one code path so the pinned-linmem-base invariants only live in one place.
+ * Caller owns tracking/retain and the physical backing.  Returns the wasm
+ * offset (>= 0) on success, or a negative SHMEM_ERR_* / -1 on failure. */
+static int64_t
+warp_linmem_place_phys(WarpCallContext *ctx, uint64_t phys_base,
+                       uint64_t map_pages, uint32_t window_size)
+{
+    /* Scan linear memory for a free, page-aligned, non-overlapping window.
+     * Start from the current active/committed linear-memory size instead of a
+     * fixed 2 MiB floor so the first map stays inside memory WARP has already
+     * extended. That avoids the Could_not_extend_linear_memory fault seen when
+     * gfx_smoke/menu_bar perform their first libui buffer map.
+     * TODO(warp-shmem-map-auto): reserve windows against actual heap growth
+     * instead of relying on a fixed post-active guard band. */
+    /* Use the WARP-configured heap limit rather than the WASM binary's
+     * declared page count.  Zig freestanding binaries declare only the
+     * minimum memory they need statically (often 1 page = 64 KB) regardless
+     * of heap_pages in linker.metadata, so getLinearMemorySizeInPages() gives
+     * too small an upper bound for the scan.  Fall back to the configured heap
+     * ceiling when it is larger. */
+    uint32_t mem_pages = ctx->module->getLinearMemorySizeInPages();
+    uint64_t cfg_bytes = warp_heap_committed_bytes(ctx->pid);
+    if (cfg_bytes > (uint64_t)mem_pages << 16)
+        mem_pages = (uint32_t)((cfg_bytes + 0xFFFFULL) >> 16);
+    /* Bound the scan by the RESERVED linmem capacity when the block has moved
+     * into its dedicated VA slot: the slot commits pages on demand, so windows
+     * placed within it are backed as the commit-probe grows the block (no
+     * relocation, base pinned).  0 before the move → committed-size bound. */
+    uint64_t reserved = warp_linmem_reserved_bytes(ctx->pid);
+    if (reserved > (uint64_t)mem_pages << 16)
+        mem_pages = (uint32_t)((reserved + 0xFFFFULL) >> 16);
+    uint64_t mem_size  = (uint64_t)mem_pages << 16;
+    uint64_t scan_min = (uint64_t)warp_linear_memory_active_size(ctx) + 0x10000ULL;
+    uint8_t *base = ctx->module->getLinearMemoryRegion(0, 0);
+    uint64_t base_mod = base ? ((uint64_t)(uintptr_t)base & 0xFFFULL) : 0;
+    if (scan_min < 0x4000ULL) {
+        scan_min = 0x4000ULL;
+    }
+    uint32_t found_off = 0; uint8_t found = 0;
+    /* WARP's host linear-memory base is not guaranteed to be page-aligned.
+     * Choose guest offsets that make the resulting host virtual address
+     * page-aligned, because paging_map_4k remaps host pages, not guest
+     * offsets. Keep windows away from both the low live data/stack frontier
+     * and the top-of-memory tail, where WARP keeps private runtime state
+     * outside the app's explicit globals. */
+    if (mem_size < (uint64_t)window_size) {
+        return (int64_t)SHMEM_ERR_NO_WINDOW;
+    }
+    const uint64_t low_guard = 0x200000ULL;
+    const uint64_t high_guard = 0x20000ULL;
+    if (scan_min < low_guard && mem_size > low_guard + (uint64_t)window_size + high_guard) {
+        scan_min = low_guard;
+    }
+    uint64_t scan_limit = mem_size;
+    if (scan_limit > high_guard) {
+        scan_limit -= high_guard;
+    }
+    if (scan_limit < (uint64_t)window_size || scan_min + (uint64_t)window_size > scan_limit) {
+        return (int64_t)SHMEM_ERR_NO_WINDOW;
+    }
+    uint64_t start_off = ((scan_min + base_mod + 0xFFFULL) & ~0xFFFULL) - base_mod;
+    if (start_off < scan_min) {
+        start_off += 0x1000ULL;
+    }
+    for (uint64_t off = start_off; off + window_size <= scan_limit; off += 0x1000ULL) {
+        uint32_t off32 = (uint32_t)off;
+        if (!warp_shmem_map_overlaps(ctx->pid, off32, window_size) && base) {
+            uint8_t *p = base + off32;
+            if (((uint64_t)(uintptr_t)p & 0xFFFULL) == 0) {
+                found_off = off32;
+                found = 1;
+                break;
+            }
+        }
+    }
+    if (!found) {
+        return (int64_t)SHMEM_ERR_NO_WINDOW;
+    }
+    /* Commit the target range via probe() BEFORE paging_map_4k.
+     * ensureLinearSize() zero-initialises newly committed WASM pages.  If the
+     * probe fires AFTER paging_map_4k, the memset writes zeros to the remapped
+     * physical pages — corrupting the shared/region buffer. */
+    ctx->module->getLinearMemoryRegion(found_off + window_size - 1, 1);
+    /* Re-fetch lmem after potential syncBasedataStart from ensureLinearSize. */
+    uint8_t *linmem_base = ctx->module->getLinearMemoryRegion(0, 0);
+    if (!linmem_base) return -1;
+#ifdef WASMOS_WARP_RING3
+    if (warp_ring3_sync_linmem_user_window(linmem_base) != 0) {
+        return -1;
+    }
+#endif
+    uint8_t *lmem = linmem_base + found_off;
+    if ((uint64_t)(uintptr_t)lmem & 0xFFF) return -1;  /* alignment */
+
+    uint64_t virt = (uint64_t)(uintptr_t)lmem;
+    for (uint64_t i = 0; i < map_pages; ++i) {
+        paging_map_4k(virt + i * 0x1000ULL, phys_base + i * 0x1000ULL, 3ULL);
+    }
+#ifdef WASMOS_WARP_RING3
+    if (warp_ring3_map_user_window(linmem_base, found_off, phys_base, map_pages) != 0) {
+        return -1;
+    }
+#endif
+    return (int64_t)found_off;
+}
+
 static uint32_t
 warp_shmem_map_auto(uint32_t id, uint32_t size, void *ctx_)
 {
@@ -1672,106 +1783,84 @@ warp_shmem_map_auto(uint32_t id, uint32_t size, void *ctx_)
                 (unsigned)ctx->module->getLinearMemorySizeInPages(),
                 (unsigned long long)warp_heap_committed_bytes(ctx->pid));
 #endif
-    /* Scan linear memory for a free, page-aligned, non-overlapping window.
-     * Start from the current active/committed linear-memory size instead of a
-     * fixed 2 MiB floor so the first shmem map stays inside memory WARP has
-     * already extended. That avoids the Could_not_extend_linear_memory fault
-     * seen when gfx_smoke/menu_bar perform their first libui buffer map.
-     * TODO(warp-shmem-map-auto): reserve windows against actual heap growth
-     * instead of relying on a fixed post-active guard band. */
-    /* Use the WARP-configured heap limit rather than the WASM binary's
-     * declared page count.  Zig freestanding binaries declare only the
-     * minimum memory they need statically (often 1 page = 64 KB) regardless
-     * of heap_pages in linker.metadata, so getLinearMemorySizeInPages() gives
-     * too small an upper bound for the shmem scan.  Fall back to the
-     * configured heap ceiling when it is larger. */
-    uint32_t mem_pages = ctx->module->getLinearMemorySizeInPages();
-    uint64_t cfg_bytes = warp_heap_committed_bytes(ctx->pid);
-    if (cfg_bytes > (uint64_t)mem_pages << 16)
-        mem_pages = (uint32_t)((cfg_bytes + 0xFFFFULL) >> 16);
-    /* Bound the scan by the RESERVED linmem capacity when the block has moved
-     * into its dedicated VA slot: the slot commits pages on demand, so windows
-     * placed within it are backed as the commit-probe grows the block (no
-     * relocation, base pinned).  0 before the move → committed-size bound. */
-    uint64_t reserved = warp_linmem_reserved_bytes(ctx->pid);
-    if (reserved > (uint64_t)mem_pages << 16)
-        mem_pages = (uint32_t)((reserved + 0xFFFFULL) >> 16);
-    uint64_t mem_size  = (uint64_t)mem_pages << 16;
-    uint64_t scan_min = (uint64_t)warp_linear_memory_active_size(ctx) + 0x10000ULL;
-    uint8_t *base = ctx->module->getLinearMemoryRegion(0, 0);
-    uint64_t base_mod = base ? ((uint64_t)(uintptr_t)base & 0xFFFULL) : 0;
-    if (scan_min < 0x4000ULL) {
-        scan_min = 0x4000ULL;
+    int64_t placed = warp_linmem_place_phys(ctx, phys_base, shared_pages, size);
+    if (placed < 0) {
+        return (uint32_t)placed;
     }
-    uint32_t found_off = 0; uint8_t found = 0;
-    /* WARP's host linear-memory base is not guaranteed to be page-aligned.
-     * Choose guest offsets that make the resulting host virtual address
-     * page-aligned, because paging_map_4k remaps host pages, not guest
-     * offsets. Keep shmem windows away from both the low live data/stack
-     * frontier and the top-of-memory tail, where WARP keeps private runtime
-     * state outside the app's explicit globals. */
-    if (mem_size < (uint64_t)size) {
-        return (uint32_t)SHMEM_ERR_NO_WINDOW;
-    }
-    const uint64_t low_guard = 0x200000ULL;
-    const uint64_t high_guard = 0x20000ULL;
-    if (scan_min < low_guard && mem_size > low_guard + (uint64_t)size + high_guard) {
-        scan_min = low_guard;
-    }
-    uint64_t scan_limit = mem_size;
-    if (scan_limit > high_guard) {
-        scan_limit -= high_guard;
-    }
-    if (scan_limit < (uint64_t)size || scan_min + (uint64_t)size > scan_limit) {
-        return (uint32_t)SHMEM_ERR_NO_WINDOW;
-    }
-    uint64_t start_off = ((scan_min + base_mod + 0xFFFULL) & ~0xFFFULL) - base_mod;
-    if (start_off < scan_min) {
-        start_off += 0x1000ULL;
-    }
-    for (uint64_t off = start_off; off + size <= scan_limit; off += 0x1000ULL) {
-        uint32_t off32 = (uint32_t)off;
-        if (!warp_shmem_map_overlaps(ctx->pid, off32, size) && base) {
-            uint8_t *p = base + off32;
-            if (((uint64_t)(uintptr_t)p & 0xFFFULL) == 0) {
-                found_off = off32;
-                found = 1;
-                break;
-            }
-        }
-    }
-    if (!found) {
-        return (uint32_t)SHMEM_ERR_NO_WINDOW;
-    }
-    /* Commit the target range via probe() BEFORE paging_map_4k.
-     * ensureLinearSize() zero-initialises newly committed WASM pages.  If the
-     * probe fires AFTER paging_map_4k, the memset writes zeros to the remapped
-     * shmem physical pages — corrupting the shared buffer. */
-    ctx->module->getLinearMemoryRegion(found_off + size - 1, 1);
-    /* Re-fetch lmem after potential syncBasedataStart from ensureLinearSize. */
-    uint8_t *linmem_base = ctx->module->getLinearMemoryRegion(0, 0);
-    if (!linmem_base) return (uint32_t)-1;
-#ifdef WASMOS_WARP_RING3
-    if (warp_ring3_sync_linmem_user_window(linmem_base) != 0) {
-        return (uint32_t)-1;
-    }
-#endif
-    uint8_t *lmem = linmem_base + found_off;
-    if ((uint64_t)(uintptr_t)lmem & 0xFFF) return (uint32_t)-1;  /* alignment */
-
-    uint64_t virt = (uint64_t)(uintptr_t)lmem;
-    for (uint64_t i = 0; i < shared_pages; ++i) {
-        paging_map_4k(virt + i * 0x1000ULL, phys_base + i * 0x1000ULL, 3ULL);
-    }
-#ifdef WASMOS_WARP_RING3
-    if (warp_ring3_map_user_window(linmem_base, found_off, phys_base, shared_pages) != 0) {
-        return (uint32_t)-1;
-    }
-#endif
+    uint32_t found_off = (uint32_t)placed;
     if (mm_shared_retain(context_id, id) != 0) {
         return (uint32_t)-1;
     }
     warp_shmem_map_track(ctx->pid, id, found_off, size);
+    return found_off;
+}
+
+/* Sanity cap on a single region reservation (4 MiB). The real fit is enforced
+ * by warp_linmem_place_phys returning NO_WINDOW when the driver's linmem window
+ * is too small. */
+#define WARP_REGION_MAX_PAGES 1024u
+/* Synthetic tracking id for region windows: high bit set keeps it out of the
+ * (small, positive) shmem id space so region windows participate in overlap
+ * checks without colliding with real shmem maps. */
+#define WARP_REGION_TRACK_ID(off) ((uint32_t)(off) | 0x80000000u)
+
+/* Driver-owned pinned DMA region: allocate a contiguous, page-aligned physical
+ * run below 2 GiB, remap it into the calling driver's WASM linear memory (a real
+ * page remap, so writes land in the exact physical pages the device DMAs), and
+ * pin it for the driver's lifetime.  Gated by CAP_DMA_BUFFER and the driver's
+ * approved DMA window.  Returns the wasm linmem offset of the mapped region and
+ * writes the u64 physical base to *out_phys_off (a wasm linmem address).  See
+ * docs/architecture/12-dma-transfers.md "Driver-Owned DMA Regions".
+ * Scope: one-shot pinned reservation, no free/reuse (matches doc 12). */
+static uint32_t
+warp_region_alloc(uint32_t pages, uint32_t cache_policy, uint32_t out_phys_off, void *ctx_)
+{
+    auto *ctx = warp_call_ctx(ctx_);
+    if (pages == 0 || pages > WARP_REGION_MAX_PAGES) {
+        return (uint32_t)WASMOS_DMA_STATUS_INVALID;
+    }
+    /* TODO(region-alloc): write-combining PAT attributes for framebuffer/scanout
+     * regions; only write-back (coherent DMA rings) is implemented today. */
+    if (cache_policy != WASMOS_REGION_CACHE_WB) {
+        return (uint32_t)WASMOS_DMA_STATUS_INVALID;
+    }
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0
+        || warp_require_dma_capability(context_id) != 0) {
+        return (uint32_t)WASMOS_DMA_STATUS_DENY;
+    }
+    uint64_t region_bytes = (uint64_t)pages * 0x1000ULL;
+    /* Out pointer must hold a u64 and sit inside the caller's linmem. */
+    uint8_t *out_ptr = warp_mem(ctx, out_phys_off, sizeof(uint64_t));
+    if (!out_ptr) {
+        return (uint32_t)WASMOS_DMA_STATUS_INVALID;
+    }
+    /* Below 2 GiB so the legacy virtqueue PFN register and the signed-32-bit
+     * device_addr contract hold (same clamp as the borrow DMA path). */
+    uint64_t phys_base = pfa_alloc_pages_below(pages, 0x80000000ULL);
+    if (!phys_base) {
+        return (uint32_t)WASMOS_DMA_STATUS_UNAVAILABLE;
+    }
+    /* Enforce the driver's approved DMA window on allocated regions exactly as on
+     * borrow mappings — a general "give me physical memory" primitive without
+     * this check would be a DMA-anywhere hole. */
+    if (capability_dma_range_allowed(context_id, phys_base, region_bytes) != 0) {
+        pfa_free_pages(phys_base, pages);
+        return (uint32_t)WASMOS_DMA_STATUS_RANGE;
+    }
+    int64_t placed = warp_linmem_place_phys(ctx, phys_base, pages, (uint32_t)region_bytes);
+    if (placed < 0) {
+        pfa_free_pages(phys_base, pages);
+        return (uint32_t)WASMOS_DMA_STATUS_UNAVAILABLE;
+    }
+    uint32_t found_off = (uint32_t)placed;
+    /* Pin AFTER the remap so the run is never reused/relocated for the driver's
+     * lifetime.  Single-threaded WARP kernel context: nothing allocates between
+     * alloc and pin. */
+    pfa_pin_pages(phys_base, pages);
+    warp_shmem_map_track(ctx->pid, WARP_REGION_TRACK_ID(found_off), found_off,
+                         (uint32_t)region_bytes);
+    __builtin_memcpy(out_ptr, &phys_base, sizeof(uint64_t));
     return found_off;
 }
 
@@ -2175,7 +2264,8 @@ warp_env_abort(uint32_t msg, uint32_t file, uint32_t line, uint32_t column, void
     LINK("wasmos", "env_get",              warp_env_get), \
     LINK("wasmos", "env_set",              warp_env_set), \
     LINK("wasmos", "env_unset",            warp_env_unset), \
-    LINK("env",    "abort",                warp_env_abort)
+    LINK("env",    "abort",                warp_env_abort), \
+    LINK("wasmos", "region_alloc",         warp_region_alloc)
 
 vb::Span<vb::NativeSymbol const>
 warp_wasmos_symbols(void)
@@ -2551,6 +2641,8 @@ warp_ring3_dispatch(uint32_t hc_id, void *frame_ptr)
     /* 100 */ case HC_ENV_ABORT:
         warp_env_abort((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, (uint32_t)a3, ctx5);
         return 0;
+    /* 101 */ case HC_REGION_ALLOC:
+        return warp_region_alloc((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, ctx4);
     default:
         return (uint32_t)-1;
     }

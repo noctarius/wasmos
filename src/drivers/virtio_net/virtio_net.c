@@ -6,6 +6,7 @@
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
 #include "wasmos/libsys.h"
+#include "wasmos/vring.h"
 #include "wasmos_driver_abi.h"
 
 #define PCI_CFG_ADDR_PORT 0xCF8
@@ -17,10 +18,19 @@
 
 #define VIRTIO_PCI_DEVICE_FEATURES 0x00u
 #define VIRTIO_PCI_DRIVER_FEATURES 0x04u
+/* Legacy virtqueue registers (no MSI-X: device config starts at 0x14). */
+#define VIRTIO_PCI_QUEUE_PFN       0x08u  /* u32: ring PFN (phys >> 12) */
+#define VIRTIO_PCI_QUEUE_SIZE      0x0Cu  /* u16: selected queue size (0 = absent) */
+#define VIRTIO_PCI_QUEUE_SELECT    0x0Eu  /* u16: select the queue to configure */
+#define VIRTIO_PCI_QUEUE_NOTIFY    0x10u  /* u16: doorbell — write the queue index */
 #define VIRTIO_PCI_DEVICE_STATUS   0x12u
 #define VIRTIO_PCI_ISR_STATUS      0x13u
 #define VIRTIO_NET_CFG_MAC         0x14u
 #define VIRTIO_NET_CFG_STATUS      0x1Au
+
+#define VIRTIO_PCI_VRING_ALIGN     4096u
+#define VIRTIO_NET_RX_QUEUE        0u
+#define VIRTIO_NET_TX_QUEUE        1u
 
 #define VIRTIO_STATUS_ACK       1u
 #define VIRTIO_STATUS_DRIVER    2u
@@ -54,6 +64,17 @@ static int32_t g_endpoint = -1;
 static virtio_net_device_t g_dev;
 static netdrv_stats_t g_stats;
 
+/* One configured virtqueue: the vring core state plus the device queue index
+ * (needed by the doorbell notify callback). */
+typedef struct {
+    vring_t vq;
+    uint16_t queue_idx;
+    uint8_t ready;
+} virtio_net_queue_t;
+
+static virtio_net_queue_t g_rxq;  /* queue 0: device -> driver */
+static virtio_net_queue_t g_txq;  /* queue 1: driver -> device */
+
 static uint32_t
 pci_config_read32(uint8_t bus, uint8_t slot, uint8_t function, uint8_t reg)
 {
@@ -82,6 +103,12 @@ static void
 io_write8(uint16_t port, uint8_t value)
 {
     (void)wasmos_io_out8((int32_t)port, (int32_t)value);
+}
+
+static void
+io_write16(uint16_t port, uint16_t value)
+{
+    (void)wasmos_io_out16((int32_t)port, (int32_t)value);
 }
 
 static void
@@ -150,6 +177,50 @@ read_mac(void)
     }
 }
 
+/* vring doorbell: tell the device which queue has new available buffers. */
+static void
+virtio_net_notify(void *user)
+{
+    virtio_net_queue_t *q = (virtio_net_queue_t *)user;
+    io_write16(g_dev.io_base + VIRTIO_PCI_QUEUE_NOTIFY, q->queue_idx);
+}
+
+/* Configure one virtqueue: select it, read its size, allocate a pinned,
+ * contiguous DMA region for the ring, lay the vring out over it, and program
+ * the device's QUEUE_PFN with the ring's physical page-frame number. Returns
+ * the queue size on success, or -1 if the queue is absent or setup fails. */
+static int
+setup_queue(virtio_net_queue_t *q, uint16_t idx)
+{
+    io_write16(g_dev.io_base + VIRTIO_PCI_QUEUE_SELECT, idx);
+    uint16_t qsize = io_read16(g_dev.io_base + VIRTIO_PCI_QUEUE_SIZE);
+    if (qsize == 0u) {
+        return -1;  /* queue not provided by the device */
+    }
+
+    uint64_t ring_bytes = vring_size(qsize, VIRTIO_PCI_VRING_ALIGN);
+    int32_t pages = (int32_t)((ring_bytes + 0xFFFu) / 0x1000u);
+
+    uint64_t ring_phys = 0;
+    int32_t off = wasmos_region_alloc(pages, WASMOS_REGION_CACHE_WB, &ring_phys);
+    if (off < 0) {
+        return -1;  /* region_alloc failed (cap/window/no-linmem-window) */
+    }
+    /* In wasm32 a pointer is the linear-memory byte offset region_alloc returned. */
+    uint8_t *ring = (uint8_t *)(uintptr_t)(uint32_t)off;
+    if (vring_layout(&q->vq, ring, ring_phys, (uint64_t)pages * 0x1000u,
+                     qsize, VIRTIO_PCI_VRING_ALIGN) != 0) {
+        return -1;
+    }
+    q->queue_idx = idx;
+    vring_set_notify(&q->vq, virtio_net_notify, q);
+
+    /* Legacy transport: hand the device the ring's physical PFN. */
+    io_write32(g_dev.io_base + VIRTIO_PCI_QUEUE_PFN, (uint32_t)(ring_phys >> 12));
+    q->ready = 1u;
+    return (int)qsize;
+}
+
 static int
 initialize_device(void)
 {
@@ -179,11 +250,25 @@ initialize_device(void)
     } else {
         g_dev.status_word = 0u;
     }
-    /* TODO(virtio-net-transport): add persistent virtqueue/DMA ownership
-     * support before enabling TX/RX data-path operations for this adapter. */
+    /* Set up the RX and TX virtqueues over driver-owned pinned DMA regions
+     * before signalling DRIVER_OK, so the device sees valid rings once live.
+     * RX/TX descriptor population is the next step; this establishes the rings
+     * and programs their physical addresses into the device. */
+    int rx_size = setup_queue(&g_rxq, (uint16_t)VIRTIO_NET_RX_QUEUE);
+    int tx_size = setup_queue(&g_txq, (uint16_t)VIRTIO_NET_TX_QUEUE);
+    if (rx_size < 0 || tx_size < 0) {
+        io_write8(g_dev.io_base + VIRTIO_PCI_DEVICE_STATUS,
+                  (uint8_t)(status | VIRTIO_STATUS_FAILED));
+        return -1;
+    }
+
     status |= VIRTIO_STATUS_DRIVER_OK;
     io_write8(g_dev.io_base + VIRTIO_PCI_DEVICE_STATUS, status);
     g_dev.ready = 1u;
+    (void)printf("[virtio-net] vq ready rx=%d tx=%d rx_phys=0x%08X tx_phys=0x%08X\n",
+                 rx_size, tx_size,
+                 (unsigned)(g_rxq.vq.region_phys & 0xFFFFFFFFu),
+                 (unsigned)(g_txq.vq.region_phys & 0xFFFFFFFFu));
     return 0;
 }
 

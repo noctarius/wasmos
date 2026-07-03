@@ -9,7 +9,10 @@ native = false
 
 [resources]
 stack_pages = 16
-heap_pages = 16
+# region_alloc maps the virtqueue rings into a window above live data; needs
+# 512 pages (2 MiB) reserve to clear map_auto's 2 MiB low guard, like the other
+# DMA-capable apps. Paired with INITIAL/MAX_MEMORY 4 MiB in CMakeLists.
+heap_pages = 512
 
 [ipc]
 required_endpoint_name = "-"
@@ -22,6 +25,13 @@ flags = 0
 
 [[capabilities]]
 name = "irq.route"
+flags = 0
+
+# Grants DEVMGR_CAP_DMA -> the kernel gives this driver a BIDIR DMA window over
+# low memory [0, 2 GiB), which region_alloc's capability_dma_range_allowed
+# check requires for the virtqueue ring/pool allocations.
+[[capabilities]]
+name = "dma.buffer"
 flags = 0
 
 [[matches]]

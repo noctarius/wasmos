@@ -139,6 +139,7 @@ static vb::Span<vb::NativeSymbol const> aot_symbols()
         DYNAMIC_LINK("wasmos", "dma_unmap_borrow",    stub_i2),
         /* Physical memory */
         DYNAMIC_LINK("wasmos", "phys_map",            stub_i4),
+        DYNAMIC_LINK("wasmos", "region_alloc",        stub_i3),
         /* Process info */
         DYNAMIC_LINK("wasmos", "proc_info",           stub_i3),
         DYNAMIC_LINK("wasmos", "proc_info_ex",        stub_i4),

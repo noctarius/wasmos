@@ -434,6 +434,18 @@
   EVENT_IDX suppression are follow-ons. Next: the PCI backend (device probe /
   queue programming / doorbell / IRQ) that drives this core, then virtio-net
   RX/TX and the shmem/service backend.
+- Phase 1b queue bring-up done: the virtio-net driver now sets up its RX(0) and
+  TX(1) virtqueues before DRIVER_OK — `setup_queue()` selects the queue, reads
+  QUEUE_SIZE, `wasmos_region_alloc`s a pinned ring region sized by
+  `vring_size(qsize, 4096)`, lays it out with the vring core, and programs
+  QUEUE_PFN = ring_phys>>12; the vring doorbell writes QUEUE_NOTIFY. Boot shows
+  `[virtio-net] vq ready rx=256 tx=256 rx_phys=… tx_phys=…` then `driver ok
+  link=up`. Enablers: virtio_net manifest gains the `dma.buffer` cap (kernel
+  grants the BIDIR [0,2 GiB) DMA window region_alloc needs) and heap_pages 512 /
+  INITIAL+MAX_MEMORY 4 MiB (so the ring window fits above live data); the AOT
+  precompiler symbol mirror gains `region_alloc`. Verified: run-qemu-test green
+  (WARP ring-0) + host unit tests green. Next: RX descriptor pre-population and
+  the TX path (NETDRV_IPC_TX_FRAME / RX_POLL, currently NET_STATUS_NOT_READY).
 
 - Two scheduler bugs affecting kernel worker threads are fixed:
   (1) `proc->ctx.rsp` was initialized to the process stack top at spawn time,

@@ -932,6 +932,10 @@ Phase 1: `virtio-net` transport baseline
   transport-neutral vring core + PCI backend
   ([Process and IPC](09-process-and-ipc.md)). Then: queue init (program
   QUEUE_ADDRESS from the region's physical base), RX/TX descriptor loops.
+  Status: both primitives landed (`region_alloc`, vring core), and queue init is
+  done — the driver `region_alloc`s the RX(0)/TX(1) rings, lays them out with the
+  vring core, and programs `QUEUE_PFN`; boot shows `[virtio-net] vq ready rx=256
+  tx=256 …` before DRIVER_OK. RX/TX descriptor population is the remaining work.
 
 Done gate:
 - driver emits MAC/link markers and can TX/RX raw Ethernet frames in smoke path.

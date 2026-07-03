@@ -8,7 +8,9 @@ native = false
 
 [resources]
 stack_pages = 16
-heap_pages = 16
+# See shmem_owner: shmem_map_auto's low guard is 2 MiB, so the linmem reserve
+# (heap_pages * 4 KiB) must clear it. 512 pages = 2 MiB.
+heap_pages = 512
 
 [ipc]
 required_endpoint_name = "-"

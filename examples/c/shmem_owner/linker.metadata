@@ -8,7 +8,10 @@ native = false
 
 [resources]
 stack_pages = 16
-heap_pages = 16
+# shmem_map_auto scans for a window above the app's live data; its low guard is
+# 2 MiB, so the linmem reserve (heap_pages * 4 KiB) must clear that. 512 pages =
+# 2 MiB, matching the other shmem/DMA-capable apps (menu_bar, calculator).
+heap_pages = 512
 
 [ipc]
 required_endpoint_name = "-"

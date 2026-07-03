@@ -444,8 +444,18 @@
   grants the BIDIR [0,2 GiB) DMA window region_alloc needs) and heap_pages 512 /
   INITIAL+MAX_MEMORY 4 MiB (so the ring window fits above live data); the AOT
   precompiler symbol mirror gains `region_alloc`. Verified: run-qemu-test green
-  (WARP ring-0) + host unit tests green. Next: RX descriptor pre-population and
-  the TX path (NETDRV_IPC_TX_FRAME / RX_POLL, currently NET_STATUS_NOT_READY).
+  (WARP ring-0) + host unit tests green.
+- Phase 1b RX path done: the driver `region_alloc`s a 64-buffer RX packet pool
+  (2 KiB each) and posts every buffer to the RX queue as a device-writable
+  descriptor (`rx_arm()`), kicks, and boots to `[virtio-net] rx armed bufs=64`.
+  `NETDRV_IPC_RX_POLL` now drains the used ring via `rx_poll_one()`: it locates
+  the buffer from the completed descriptor's device address, strips the 10-byte
+  legacy virtio-net header, writes the frame into the caller's borrowed buffer
+  (`wasmos_sys_buffer_write_to`), bumps `rx_packets`, recycles the descriptor,
+  and re-kicks; replies RESP with arg0 = frame length (0 = none pending). Actual
+  frame reception needs traffic (Phase 1b/E). Verified: run-qemu-test green +
+  host unit tests green. Next: the TX path (NETDRV_IPC_TX_FRAME, still
+  NET_STATUS_NOT_READY), then IRQ integration and an e2e TX/RX smoke.
 
 - Two scheduler bugs affecting kernel worker threads are fixed:
   (1) `proc->ctx.rsp` was initialized to the process stack top at spawn time,

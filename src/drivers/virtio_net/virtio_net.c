@@ -32,6 +32,12 @@
 #define VIRTIO_NET_RX_QUEUE        0u
 #define VIRTIO_NET_TX_QUEUE        1u
 
+/* Legacy virtio-net header (no VIRTIO_NET_F_MRG_RXBUF) prepended to every
+ * RX/TX buffer. The device writes it on RX and reads it on TX. */
+#define VIRTIO_NET_HDR_LEN         10u
+#define VIRTIO_NET_RX_BUF_SIZE     2048u  /* hdr + up to 1514-byte Ethernet frame */
+#define VIRTIO_NET_RX_BUF_COUNT    64u    /* pre-posted receive buffers */
+
 #define VIRTIO_STATUS_ACK       1u
 #define VIRTIO_STATUS_DRIVER    2u
 #define VIRTIO_STATUS_DRIVER_OK 4u
@@ -74,6 +80,13 @@ typedef struct {
 
 static virtio_net_queue_t g_rxq;  /* queue 0: device -> driver */
 static virtio_net_queue_t g_txq;  /* queue 1: driver -> device */
+
+/* RX packet pool: a pinned DMA region carved into VIRTIO_NET_RX_BUF_COUNT
+ * fixed-size buffers, each posted to the RX queue as a device-writable
+ * descriptor. g_rx_pool is the driver's linmem view; g_rx_pool_phys the device
+ * address programmed into descriptors. */
+static uint8_t *g_rx_pool;
+static uint64_t g_rx_pool_phys;
 
 static uint32_t
 pci_config_read32(uint8_t bus, uint8_t slot, uint8_t function, uint8_t reg)
@@ -221,6 +234,73 @@ setup_queue(virtio_net_queue_t *q, uint16_t idx)
     return (int)qsize;
 }
 
+/* Allocate the RX packet pool and post every buffer to the RX queue as a
+ * device-writable descriptor, then kick so the device can start filling them.
+ * Returns the number of buffers posted, or -1 on failure. */
+static int
+rx_arm(void)
+{
+    int32_t pages = (int32_t)(((uint64_t)VIRTIO_NET_RX_BUF_COUNT * VIRTIO_NET_RX_BUF_SIZE
+                               + 0xFFFu) / 0x1000u);
+    uint64_t phys = 0;
+    int32_t off = wasmos_region_alloc(pages, WASMOS_REGION_CACHE_WB, &phys);
+    if (off < 0) {
+        return -1;
+    }
+    g_rx_pool = (uint8_t *)(uintptr_t)(uint32_t)off;
+    g_rx_pool_phys = phys;
+
+    for (uint32_t i = 0; i < VIRTIO_NET_RX_BUF_COUNT; ++i) {
+        int32_t d = vring_alloc_desc(&g_rxq.vq,
+                                     phys + (uint64_t)i * VIRTIO_NET_RX_BUF_SIZE,
+                                     VIRTIO_NET_RX_BUF_SIZE, VRING_DESC_F_WRITE);
+        if (d < 0) {
+            return -1;
+        }
+        vring_publish(&g_rxq.vq, (uint16_t)d);
+    }
+    vring_kick(&g_rxq.vq);
+    return (int)VIRTIO_NET_RX_BUF_COUNT;
+}
+
+/* Consume one completed RX buffer: strip the virtio-net header, write the
+ * Ethernet frame into `dest`'s borrowed buffer, recycle the descriptor, and
+ * re-kick. Returns the frame length (>= 0), 0 if nothing is pending, -1 on a
+ * delivery error. */
+static int
+rx_poll_one(int32_t dest)
+{
+    uint32_t used_len = 0;
+    int32_t id = vring_get_used(&g_rxq.vq, &used_len);
+    if (id < 0) {
+        return 0;  /* nothing completed (or a rejected corrupt used element) */
+    }
+
+    int32_t frame_len = 0;
+    /* Locate the buffer from the descriptor's device address; ignore a frame
+     * that doesn't fit our fixed buffers or a bogus length from the device. */
+    uint64_t addr = g_rxq.vq.desc[id].addr;
+    uint32_t bidx = (uint32_t)((addr - g_rx_pool_phys) / VIRTIO_NET_RX_BUF_SIZE);
+    if (bidx < VIRTIO_NET_RX_BUF_COUNT
+        && used_len > VIRTIO_NET_HDR_LEN
+        && used_len <= VIRTIO_NET_RX_BUF_SIZE) {
+        uint8_t *buf = g_rx_pool + (uint64_t)bidx * VIRTIO_NET_RX_BUF_SIZE;
+        frame_len = (int32_t)(used_len - VIRTIO_NET_HDR_LEN);
+        if (wasmos_sys_buffer_write_to(WASMOS_BUFFER_KIND_FS, dest,
+                                       WASMOS_BUFFER_GRANT_WRITE,
+                                       buf + VIRTIO_NET_HDR_LEN,
+                                       frame_len, 0) != 0) {
+            frame_len = -1;
+        } else {
+            g_stats.rx_packets++;
+        }
+    }
+    /* Recycle the descriptor (addr/len/flags survive device use) and re-post. */
+    vring_publish(&g_rxq.vq, (uint16_t)id);
+    vring_kick(&g_rxq.vq);
+    return frame_len;
+}
+
 static int
 initialize_device(void)
 {
@@ -269,6 +349,16 @@ initialize_device(void)
                  rx_size, tx_size,
                  (unsigned)(g_rxq.vq.region_phys & 0xFFFFFFFFu),
                  (unsigned)(g_txq.vq.region_phys & 0xFFFFFFFFu));
+
+    /* Post the receive buffers now that the device is live (RX buffers may be
+     * added after DRIVER_OK). */
+    int rx_bufs = rx_arm();
+    if (rx_bufs < 0) {
+        (void)printf("[virtio-net] rx arm failed\n");
+        return -1;
+    }
+    (void)printf("[virtio-net] rx armed bufs=%d rx_pool=0x%08X\n",
+                 rx_bufs, (unsigned)(g_rx_pool_phys & 0xFFFFFFFFu));
     return 0;
 }
 
@@ -323,6 +413,25 @@ handle_stats_get(int32_t source, int32_t request_id)
         return;
     }
     (void)wasmos_ipc_send(source, g_endpoint, NETDRV_IPC_RESP, request_id, NET_STATUS_OK, 0, 0, 0);
+}
+
+/* NETDRV_IPC_RX_POLL: deliver the next received frame (if any) into the caller's
+ * borrowed buffer. Replies RESP with arg0 = frame length; 0 means no frame is
+ * currently pending. */
+static void
+handle_rx_poll(int32_t source, int32_t request_id)
+{
+    if (!g_dev.present || !g_dev.ready) {
+        send_error(source, request_id, NET_STATUS_NOT_READY);
+        return;
+    }
+    int frame_len = rx_poll_one(source);
+    if (frame_len < 0) {
+        send_error(source, request_id, NET_STATUS_IO_ERROR);
+        return;
+    }
+    (void)wasmos_ipc_send(source, g_endpoint, NETDRV_IPC_RESP, request_id,
+                          frame_len, 0, 0, 0);
 }
 
 WASMOS_WASM_EXPORT int32_t
@@ -393,7 +502,9 @@ initialize(int32_t proc_endpoint, int32_t ignored_arg1, int32_t ignored_arg2, in
             handle_link_get(msg.source, msg.request_id);
         } else if (msg.type == NETDRV_IPC_STATS_GET) {
             handle_stats_get(msg.source, msg.request_id);
-        } else if (msg.type == NETDRV_IPC_TX_FRAME || msg.type == NETDRV_IPC_RX_POLL) {
+        } else if (msg.type == NETDRV_IPC_RX_POLL) {
+            handle_rx_poll(msg.source, msg.request_id);
+        } else if (msg.type == NETDRV_IPC_TX_FRAME) {
             send_error(msg.source, msg.request_id, NET_STATUS_NOT_READY);
         } else {
             send_error(msg.source, msg.request_id, NET_STATUS_INVALID);

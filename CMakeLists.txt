@@ -82,6 +82,9 @@ set(WASM_SHMEM_TARGET_APP ${BUILD_DIR}/shmtgt.wap)
 set(WASM_MENU_BAR_SRC ${EXAMPLES_C_DIR}/menu_bar/menu_bar.c)
 set(WASM_MENU_BAR_WASM ${BUILD_DIR}/menu_bar.wasm)
 set(WASM_MENU_BAR_APP ${BUILD_DIR}/menu_bar.wap)
+set(WASM_NET_SMOKE_SRC ${EXAMPLES_C_DIR}/net_smoke/net_smoke.c)
+set(WASM_NET_SMOKE_WASM ${BUILD_DIR}/net_smoke.wasm)
+set(WASM_NET_SMOKE_APP ${BUILD_DIR}/net_smoke.wap)
 set(WASM_ATA_DRIVER_SRC ${DRIVER_WASM_DIR}/ata/ata.c)
 set(WASM_ATA_DRIVER_WASM ${BUILD_DIR}/ata.wasm)
 set(WASM_ATA_APP ${BUILD_DIR}/ata.wap)
@@ -1083,6 +1086,7 @@ add_custom_command(
           ${WASM_NATIVE_CALL_SMOKE_APP}
           ${WASM_SHMEM_OWNER_APP}
           ${WASM_SHMEM_TARGET_APP}
+          ${WASM_NET_SMOKE_APP}
           ${WASM_ATA_APP}
           ${WASM_FAT_APP}
           ${WASM_FS_INIT_APP}
@@ -1272,6 +1276,9 @@ set(SHMEM_TARGET_COPY_CMD
 set(MENU_BAR_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_MENU_BAR_APP} ${BUILD_DIR}/esp/apps/menu_bar.wap
 )
+set(NET_SMOKE_COPY_CMD
+  COMMAND ${CMAKE_COMMAND} -E copy ${WASM_NET_SMOKE_APP} ${BUILD_DIR}/esp/apps/net_smoke.wap
+)
 set(LARGE_READ_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/scripts/large_read.txt ${BUILD_DIR}/esp/large_read.txt
 )
@@ -1366,6 +1373,7 @@ set(WASMOS_ESP_POPULATE_CMDS
   ${SHMEM_OWNER_COPY_CMD}
   ${SHMEM_TARGET_COPY_CMD}
   ${MENU_BAR_COPY_CMD}
+  ${NET_SMOKE_COPY_CMD}
   ${IRQ_ROUTE_DENY_COPY_CMD}
   ${IRQ_ROUTE_ALLOW_COPY_CMD}
   ${RUST_HELLO_COPY_CMD}

@@ -36,6 +36,11 @@ source = "shmownr.wap"
 
 [[entries]]
 kind = "wasmos_app"
+path = "apps/net_smoke.wap"
+source = "net_smoke.wap"
+
+[[entries]]
+kind = "wasmos_app"
 flags = ["bootstrap"]
 path = "system/services/pci_bus.wap"
 source = "pci_bus.wap"

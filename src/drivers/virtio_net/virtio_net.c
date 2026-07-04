@@ -107,6 +107,21 @@ static uint32_t g_tx_buf_top;
 static uint16_t g_tx_desc_buf[VIRTIO_NET_MAX_QUEUE];
 static uint32_t g_tx_completed;   /* completed transmits reaped from the used ring */
 
+/* Received-frame delivery. When a consumer has subscribed (via RX_POLL), the IRQ
+ * handler drains RX frames into this ring and posts a single RX_FRAME_NOTIFY;
+ * the consumer then drains them with RX_POLL. Before any subscriber exists (e.g.
+ * the boot ARP self-probe reply) frames are logged once and dropped. */
+#define VIRTIO_NET_RXQ_DEPTH 16u
+typedef struct {
+    uint16_t len;
+    uint8_t  data[VIRTIO_NET_MAX_FRAME];
+} net_rx_slot_t;
+static net_rx_slot_t g_rx_queue[VIRTIO_NET_RXQ_DEPTH];
+static uint32_t g_rx_q_head;
+static uint32_t g_rx_q_tail;
+static uint32_t g_rx_q_count;
+static int32_t  g_rx_sub_endpoint = -1;   /* subscriber for RX_FRAME_NOTIFY, -1 = none */
+
 static uint32_t
 pci_config_read32(uint8_t bus, uint8_t slot, uint8_t function, uint8_t reg)
 {
@@ -282,42 +297,41 @@ rx_arm(void)
     return (int)VIRTIO_NET_RX_BUF_COUNT;
 }
 
-/* Consume one completed RX buffer: strip the virtio-net header, write the
- * Ethernet frame into `dest`'s borrowed buffer, recycle the descriptor, and
- * re-kick. Returns the frame length (>= 0), 0 if nothing is pending, -1 on a
- * delivery error. */
-static int
-rx_poll_one(int32_t dest)
+/* Push a received frame into the delivery ring (drops + counts if full). */
+static void
+rx_queue_push(const uint8_t *frame, uint16_t len)
 {
-    uint32_t used_len = 0;
-    int32_t id = vring_get_used(&g_rxq.vq, &used_len);
-    if (id < 0) {
-        return 0;  /* nothing completed (or a rejected corrupt used element) */
+    if (g_rx_q_count >= VIRTIO_NET_RXQ_DEPTH) {
+        g_stats.rx_drops++;
+        return;
     }
+    if (len > VIRTIO_NET_MAX_FRAME) {
+        len = VIRTIO_NET_MAX_FRAME;
+    }
+    net_rx_slot_t *slot = &g_rx_queue[g_rx_q_tail];
+    slot->len = len;
+    __builtin_memcpy(slot->data, frame, len);
+    g_rx_q_tail = (g_rx_q_tail + 1u) % VIRTIO_NET_RXQ_DEPTH;
+    g_rx_q_count++;
+}
 
-    int32_t frame_len = 0;
-    /* Locate the buffer from the descriptor's device address; ignore a frame
-     * that doesn't fit our fixed buffers or a bogus length from the device. */
-    uint64_t addr = g_rxq.vq.desc[id].addr;
-    uint32_t bidx = (uint32_t)((addr - g_rx_pool_phys) / VIRTIO_NET_RX_BUF_SIZE);
-    if (bidx < VIRTIO_NET_RX_BUF_COUNT
-        && used_len > VIRTIO_NET_HDR_LEN
-        && used_len <= VIRTIO_NET_RX_BUF_SIZE) {
-        uint8_t *buf = g_rx_pool + (uint64_t)bidx * VIRTIO_NET_RX_BUF_SIZE;
-        frame_len = (int32_t)(used_len - VIRTIO_NET_HDR_LEN);
-        if (wasmos_sys_buffer_write_to(WASMOS_BUFFER_KIND_FS, dest,
-                                       WASMOS_BUFFER_GRANT_WRITE,
-                                       buf + VIRTIO_NET_HDR_LEN,
-                                       frame_len, 0) != 0) {
-            frame_len = -1;
-        } else {
-            g_stats.rx_packets++;
-        }
+/* Pop the oldest queued frame into out (up to max bytes). Returns its length, or
+ * 0 if the queue is empty. */
+static uint16_t
+rx_queue_pop(uint8_t *out, uint32_t max)
+{
+    if (g_rx_q_count == 0u) {
+        return 0;
     }
-    /* Recycle the descriptor (addr/len/flags survive device use) and re-post. */
-    vring_publish(&g_rxq.vq, (uint16_t)id);
-    vring_kick(&g_rxq.vq);
-    return frame_len;
+    net_rx_slot_t *slot = &g_rx_queue[g_rx_q_head];
+    uint16_t len = slot->len;
+    if (len > max) {
+        len = (uint16_t)max;
+    }
+    __builtin_memcpy(out, slot->data, len);
+    g_rx_q_head = (g_rx_q_head + 1u) % VIRTIO_NET_RXQ_DEPTH;
+    g_rx_q_count--;
+    return len;
 }
 
 /* Allocate the TX packet pool and initialise the free-buffer stack. */
@@ -495,13 +509,38 @@ net_probe_send(void)
     (void)printf("[virtio-net] arp request sent len=%u\n", (unsigned)p);
 }
 
-static uint8_t g_irq_rx_logged;  /* one-shot: log the first IRQ-delivered frame */
+static uint8_t g_irq_rx_logged;  /* one-shot: log the first pre-subscriber frame */
+
+/* Drain completed RX frames out of the vring: enqueue for a subscriber, or (pre-
+ * subscription) log the first one and drop. Returns the number enqueued. Shared
+ * by the IRQ handler (push) and RX_POLL (pull). */
+static int
+net_drain_rx(void)
+{
+    uint8_t frame[VIRTIO_NET_MAX_FRAME];
+    int enqueued = 0;
+    int n;
+    while ((n = rx_poll_local(frame, sizeof frame)) > 0) {
+        if (g_rx_sub_endpoint >= 0) {
+            rx_queue_push(frame, (uint16_t)n);
+            enqueued++;
+        } else if (!g_irq_rx_logged) {
+            g_irq_rx_logged = 1u;
+            unsigned et = ((unsigned)frame[12] << 8) | (unsigned)frame[13];
+            (void)printf("[virtio-net] irq rx=%d ethertype=0x%04X "
+                         "gw_mac=%02X:%02X:%02X:%02X:%02X:%02X\n",
+                         n, et, frame[6], frame[7], frame[8],
+                         frame[9], frame[10], frame[11]);
+        }
+    }
+    return enqueued;
+}
 
 /* Device interrupt handler (IPC_IRQ_EVENT_TYPE for our line). Reading the ISR
  * status register de-asserts the (level-triggered) device interrupt; we then
- * reap completed transmits and drain the RX ring, and finally irq_ack to unmask
- * the line. RX frames are counted and recycled here — a future consumer will
- * receive them via NETDRV_IPC_RX_FRAME_NOTIFY (Phase 2). */
+ * reap completed transmits and drain the RX ring. Frames are enqueued for a
+ * subscribed consumer (posting one RX_FRAME_NOTIFY per batch), or — before any
+ * subscriber exists — logged once and dropped. Finally irq_ack unmasks. */
 static void
 net_handle_irq(void)
 {
@@ -510,17 +549,13 @@ net_handle_irq(void)
 
     tx_reap();
 
-    uint8_t frame[128];
-    int n;
-    while ((n = rx_poll_local(frame, sizeof frame)) > 0) {
-        if (!g_irq_rx_logged) {
-            g_irq_rx_logged = 1u;
-            unsigned et = ((unsigned)frame[12] << 8) | (unsigned)frame[13];
-            (void)printf("[virtio-net] irq rx=%d ethertype=0x%04X "
-                         "gw_mac=%02X:%02X:%02X:%02X:%02X:%02X\n",
-                         n, et, frame[6], frame[7], frame[8],
-                         frame[9], frame[10], frame[11]);
-        }
+    int enqueued = net_drain_rx();
+
+    /* One notify per interrupt batch; the consumer drains all via RX_POLL. */
+    if (enqueued && g_rx_sub_endpoint >= 0) {
+        (void)wasmos_ipc_send(g_rx_sub_endpoint, g_endpoint,
+                              NETDRV_IPC_RX_FRAME_NOTIFY, 0,
+                              (int32_t)g_rx_q_count, 0, 0, 0);
     }
 
     /* Unmask the line now the device register has been read. */
@@ -649,9 +684,9 @@ handle_stats_get(int32_t source, int32_t request_id)
     (void)wasmos_ipc_send(source, g_endpoint, NETDRV_IPC_RESP, request_id, NET_STATUS_OK, 0, 0, 0);
 }
 
-/* NETDRV_IPC_RX_POLL: deliver the next received frame (if any) into the caller's
- * borrowed buffer. Replies RESP with arg0 = frame length; 0 means no frame is
- * currently pending. */
+/* NETDRV_IPC_RX_POLL: register the caller as the RX_FRAME_NOTIFY subscriber and
+ * deliver the next queued frame (if any) into its borrowed buffer. Replies RESP
+ * with arg0 = frame length (0 = queue empty) and arg1 = frames still queued. */
 static void
 handle_rx_poll(int32_t source, int32_t request_id)
 {
@@ -659,13 +694,21 @@ handle_rx_poll(int32_t source, int32_t request_id)
         send_error(source, request_id, NET_STATUS_NOT_READY);
         return;
     }
-    int frame_len = rx_poll_one(source);
-    if (frame_len < 0) {
-        send_error(source, request_id, NET_STATUS_IO_ERROR);
-        return;
+    g_rx_sub_endpoint = source;  /* subscribe / refresh */
+    (void)net_drain_rx();        /* pull path: also collect anything in the vring */
+
+    uint8_t frame[VIRTIO_NET_MAX_FRAME];
+    uint16_t len = rx_queue_pop(frame, sizeof frame);
+    if (len > 0u) {
+        if (wasmos_sys_buffer_write_to(WASMOS_BUFFER_KIND_FS, source,
+                                       WASMOS_BUFFER_GRANT_WRITE,
+                                       frame, (int32_t)len, 0) != 0) {
+            send_error(source, request_id, NET_STATUS_IO_ERROR);
+            return;
+        }
     }
     (void)wasmos_ipc_send(source, g_endpoint, NETDRV_IPC_RESP, request_id,
-                          frame_len, 0, 0, 0);
+                          (int32_t)len, (int32_t)g_rx_q_count, 0, 0);
 }
 
 /* NETDRV_IPC_TX_FRAME: transmit the frame in the caller's borrowed buffer.

@@ -490,6 +490,20 @@
   green, host unit tests green. Follow-ons: RX_FRAME_NOTIFY delivery to a
   consumer, chained descriptors, then Phase 2 (net-stack: ARP/IPv4/ICMP/UDP over
   NET_IPC_* sockets).
+- RX frame delivery to a consumer landed: the driver has an RX ready-queue +
+  subscriber (`g_rx_sub_endpoint`, set by RX_POLL); `net_drain_rx()` is shared by
+  the IRQ handler and RX_POLL, so RX_POLL drains the vring (reliable pull) and the
+  IRQ handler enqueues + posts `NETDRV_IPC_RX_FRAME_NOTIFY` (wakeup hint). New
+  consumer `examples/c/net_smoke` looks up virtio.net, LINK_GETs the MAC,
+  subscribes, TXes an ARP, and receives the reply;
+  `tests/test_virtio_net_notify_e2e.py` CLI-spawns it and asserts the round-trip
+  (`[net-smoke] rx=64 ethertype=0x0806`). KNOWN LIMITATION: PCI INTx re-delivery
+  fires only once — the IOAPIC RTEs are all programmed active-high (`ioapic.c`)
+  but PCI INTx is active-low — so NOTIFY is a one-shot hint today and the consumer
+  polls RX_POLL defensively. The fix (pci-bus configures each INTx line
+  level/active-low via a privileged irq.configure, drivers stop touching electrical
+  config) makes push reliable and is the next change; that design + class-based
+  service discovery are recorded in docs 09/22.
 
 - Two scheduler bugs affecting kernel worker threads are fixed:
   (1) `proc->ctx.rsp` was initialized to the process stack top at spawn time,

@@ -434,6 +434,39 @@ TX completions are reclaimed lazily (before the next TX) by scanning
 
 ---
 
+### Net-Stack as Interface Broker (planned)
+
+The net-stack service is the networking analog of the filesystem manager: the
+single broker between NIC drivers below and applications above. Drivers stay
+dumb frame movers; the net-stack owns everything policy.
+
+Layering — who talks to whom:
+
+```
+apps ──NET_IPC_* sockets──▶ net-stack ──netdrv IPC──▶ virtio-net driver ──▶ device
+        (open/send/recv)     (eth0, IPs, routes,        (dumb frame mover,
+                              multiplexes N NICs)         one net.ifc instance)
+```
+
+- **Apps never look up drivers.** They open sockets against the net-stack, so no
+  application is coupled to `virtio.net` (or any concrete driver). Direct
+  driver lookup remains only in low-level driver *conformance tests*
+  (`net_smoke`), which is the correct layer for those.
+- **The net-stack discovers interfaces by class, not by name.** It calls
+  `svc_lookup_class("net.ifc")` and `svc_subscribe_class("net.ifc")` (see
+  [Process and IPC → Class-Based Discovery](09-process-and-ipc.md)); each NIC
+  driver registers `class="net.ifc"` with an instance index. A second NIC or a
+  different driver (e.g. `e1000`) appears as another instance with no net-stack
+  change.
+- **Two event streams, two sources.** *Existence* events (a `net.ifc` provider
+  registered / unregistered / died) come from the kernel registry's class
+  subscription. *Domain* events (link up/down, media change) come from each
+  bound driver over its own protocol (`NETDRV_IPC_LINK_NOTIFY`, planned,
+  alongside `NETDRV_IPC_LINK_GET`) — the registry stays networking-ignorant.
+- **The net-stack owns all policy:** human-facing interface naming (`eth0`),
+  address assignment (`NET_IPC_IFADDR_*`), routing, and which interface a flow
+  egresses. Drivers expose only a frame in/out path plus link state.
+
 ### IPC Opcode Allocation
 
 All networking opcodes occupy the 0xA00–0xBFF range in `wasmos_driver_abi.h`.
@@ -446,6 +479,7 @@ enum {
     NETDRV_IPC_RX_POLL           = 0xA02, /* req: –; resp: arg0=frame_len (0=empty); frame in FS buf */
     NETDRV_IPC_STATS_GET         = 0xA03, /* req: –; resp: stats struct in FS buf */
     NETDRV_IPC_RX_FRAME_NOTIFY   = 0xA04, /* push driver→stack: arg0=frame_len; frame in FS buf */
+    NETDRV_IPC_LINK_NOTIFY       = 0xA05, /* planned; push driver→stack: arg0=link up/down */
     NETDRV_IPC_RESP              = 0xA80,
     NETDRV_IPC_ERROR             = 0xAFF,
 

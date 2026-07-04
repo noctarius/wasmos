@@ -453,6 +453,50 @@ The PM maintains a flat list of named services.  Names are capped at 16
 characters.  `SVC_IPC_REGISTER_REQ` / `SVC_IPC_LOOKUP_REQ` (opcodes
 `0x220`/`0x221`) register and resolve service endpoint IDs.
 
+##### Class-Based Discovery (planned)
+
+Direct lookup by a concrete provider name (e.g. `virtio.net`) couples clients to
+a specific driver and cannot express *"any interface of this kind"* or *"which
+of several"*.  The registry is therefore generalized so a provider registers
+under an optional **virtual class** plus an **instance** index, alongside its
+concrete name:
+
+```
+svc_register(name, class, instance, flags)          // class/instance optional
+svc_lookup(name)              -> endpoint            // unchanged
+svc_lookup_class(class)       -> [ {instance, endpoint, pid} ]   // enumerate all
+svc_subscribe_class(class, endpoint)                 // notify on add/remove/die
+```
+
+Multiple providers may share one class — `virtio-net` registers `class="net.ifc"
+instance=0`; a second NIC (or an `e1000` driver) is just `instance=1`, with no
+client change.  Consumers resolve the class, not the driver.
+
+This lives in the PM/kernel — a `(class, instance) → endpoint + metadata` table
+beside the existing name table — for three reasons that rule out a standalone
+lookup *service*:
+
+- **Bootstrap.** A separate registry would itself need a well-known endpoint to
+  be found; the kernel-resident PM endpoint is already that root.
+- **Death reaping.** Registry entries must vanish when a provider dies, or
+  lookups hand out dead endpoints.  The PM already owns process lifecycle and
+  the exit hook, so it purges entries (and fires remove-notifications) for free.
+- **Anti-spoof.** "Who may register under class `net.ifc`?" must be
+  capability-gated, or any app could impersonate an interface — and the kernel
+  already enforces capabilities on IPC.
+
+The registry emits only **existence** events (a provider registered / unregistered
+/ died under a class) to class subscribers.  **Domain** events — link up/down,
+media change — are provider-specific and travel over the provider's own protocol
+(e.g. a `NETDRV_IPC_LINK_NOTIFY` from the NIC driver), not the registry.
+
+Guardrail: the kernel piece stays limited to register / lookup / enumerate /
+existence-notify / death-reap.  All *policy* — human-facing naming (`eth0`),
+address assignment, routing, provider selection — lives in the consuming service
+(for networking, the net-stack; see
+[Networking](22-networking-virtio-net-and-stack.md)).  This keeps the registry a
+small primitive rather than a framework in the kernel.
+
 #### Entry Bindings
 
 The PM resolves spawn argument bindings from WASMOS-APP metadata:

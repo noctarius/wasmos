@@ -42,6 +42,11 @@
 #define VIRTIO_NET_MAX_QUEUE       256u   /* max supported queue size (desc map) */
 #define VIRTIO_NET_MAX_FRAME       1514u  /* Ethernet frame w/o FCS */
 
+/* Kernel delivers a routed hardware IRQ as an IPC message of this type, with
+ * arg0/request_id = irq line and source = IPC_ENDPOINT_NONE (see
+ * src/kernel/arch/x86_64/irq_x86_64.c). The line stays masked until irq_ack. */
+#define IPC_IRQ_EVENT_TYPE         0xFF00
+
 #define VIRTIO_STATUS_ACK       1u
 #define VIRTIO_STATUS_DRIVER    2u
 #define VIRTIO_STATUS_DRIVER_OK 4u
@@ -456,13 +461,12 @@ rx_poll_local(uint8_t *out, uint32_t max)
     return frame_len;
 }
 
-/* End-to-end connectivity self-probe: broadcast an ARP request for the SLIRP
- * gateway (10.0.2.2) from our MAC and poll the RX ring for the reply. This
- * exercises the whole path — region_alloc'd rings, vring publish/kick, the
- * device doorbell, TX DMA read, and RX DMA write + used-ring completion.
- * Diagnostic only: it logs the outcome and never fails device init. */
+/* Connectivity probe: broadcast an ARP request for the SLIRP gateway (10.0.2.2)
+ * from our MAC. The reply is delivered asynchronously via the device IRQ (see
+ * net_handle_irq). Exercises the whole path — region_alloc'd rings, vring
+ * publish/kick, the device doorbell, and TX DMA read. */
 static void
-net_selftest(void)
+net_probe_send(void)
 {
     static const uint8_t sender_ip[4] = {10, 0, 2, 15};  /* SLIRP default guest IP */
     static const uint8_t target_ip[4] = {10, 0, 2, 2};   /* SLIRP gateway */
@@ -485,36 +489,42 @@ net_selftest(void)
     for (i = 0; i < 4; ++i) frame[p++] = target_ip[i];   /* target IP */
 
     if (tx_post_local(frame, p) != 0) {
-        (void)printf("[virtio-net] selftest tx failed\n");
+        (void)printf("[virtio-net] arp probe tx failed\n");
         return;
     }
-    (void)printf("[virtio-net] selftest arp request sent len=%u\n", (unsigned)p);
+    (void)printf("[virtio-net] arp request sent len=%u\n", (unsigned)p);
+}
 
-    uint8_t reply[128];
-    int tx_done = 0;
-    int got = 0;
-    for (int spin = 0; spin < 2048 && (!tx_done || !got); ++spin) {
-        tx_reap();
-        if (!tx_done && g_tx_completed > 0u) {
-            tx_done = 1;
-            (void)printf("[virtio-net] selftest tx complete\n");
+static uint8_t g_irq_rx_logged;  /* one-shot: log the first IRQ-delivered frame */
+
+/* Device interrupt handler (IPC_IRQ_EVENT_TYPE for our line). Reading the ISR
+ * status register de-asserts the (level-triggered) device interrupt; we then
+ * reap completed transmits and drain the RX ring, and finally irq_ack to unmask
+ * the line. RX frames are counted and recycled here — a future consumer will
+ * receive them via NETDRV_IPC_RX_FRAME_NOTIFY (Phase 2). */
+static void
+net_handle_irq(void)
+{
+    /* Ack the device: reading ISR clears its interrupt-asserted bit. */
+    (void)wasmos_io_in8((int32_t)(g_dev.io_base + VIRTIO_PCI_ISR_STATUS));
+
+    tx_reap();
+
+    uint8_t frame[128];
+    int n;
+    while ((n = rx_poll_local(frame, sizeof frame)) > 0) {
+        if (!g_irq_rx_logged) {
+            g_irq_rx_logged = 1u;
+            unsigned et = ((unsigned)frame[12] << 8) | (unsigned)frame[13];
+            (void)printf("[virtio-net] irq rx=%d ethertype=0x%04X "
+                         "gw_mac=%02X:%02X:%02X:%02X:%02X:%02X\n",
+                         n, et, frame[6], frame[7], frame[8],
+                         frame[9], frame[10], frame[11]);
         }
-        if (!got) {
-            int n = rx_poll_local(reply, sizeof reply);
-            if (n > 0) {
-                got = 1;
-                unsigned et = ((unsigned)reply[12] << 8) | (unsigned)reply[13];
-                (void)printf("[virtio-net] selftest rx=%d ethertype=0x%04X "
-                             "gw_mac=%02X:%02X:%02X:%02X:%02X:%02X\n",
-                             n, et, reply[6], reply[7], reply[8],
-                             reply[9], reply[10], reply[11]);
-            }
-        }
-        (void)wasmos_sched_yield();
     }
-    if (!got) {
-        (void)printf("[virtio-net] selftest no reply (tx_complete=%d)\n", tx_done);
-    }
+
+    /* Unmask the line now the device register has been read. */
+    (void)wasmos_irq_ack((int32_t)g_dev.irq);
 }
 
 static int
@@ -583,9 +593,6 @@ initialize_device(void)
     (void)printf("[virtio-net] tx armed bufs=%u tx_pool=0x%08X\n",
                  (unsigned)VIRTIO_NET_TX_BUF_COUNT,
                  (unsigned)(g_tx_pool_phys & 0xFFFFFFFFu));
-
-    /* End-to-end connectivity probe over the freshly-armed queues. */
-    net_selftest();
     return 0;
 }
 
@@ -734,12 +741,29 @@ initialize(int32_t proc_endpoint, int32_t ignored_arg1, int32_t ignored_arg2, in
     }
     wasmos_sys_notify_ready(proc_endpoint, g_endpoint);
 
+    /* Route the device IRQ to our endpoint so RX/TX completions wake us, then
+     * fire the ARP probe; its reply arrives via net_handle_irq. */
+    if (g_dev.present && g_dev.ready) {
+        if (wasmos_irq_route_ipc((int32_t)g_dev.irq, g_endpoint) == 0) {
+            (void)printf("[virtio-net] irq routed line=%u\n", (unsigned)g_dev.irq);
+        } else {
+            (void)printf("[virtio-net] irq route failed line=%u\n", (unsigned)g_dev.irq);
+        }
+        net_probe_send();
+    }
+
     for (;;) {
         wasmos_ipc_message_t msg;
         if (wasmos_ipc_select_one(g_endpoint) != 1) {
             continue;
         }
         wasmos_ipc_message_read_last(&msg);
+        /* Hardware IRQ arrives as IPC_IRQ_EVENT_TYPE with source=NONE (< 0), so
+         * handle it before the source check that guards request/reply traffic. */
+        if (msg.type == IPC_IRQ_EVENT_TYPE) {
+            net_handle_irq();
+            continue;
+        }
         if (msg.source < 0) {
             continue;
         }

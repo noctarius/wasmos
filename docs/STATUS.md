@@ -476,9 +476,20 @@
   doorbell, TX DMA read, SLIRP, RX DMA write, and used-ring completion. Guarded
   by `tests/test_virtio_net_e2e.py` (asserts the ARP round-trip). This meets the
   Phase 1b done-gate (raw Ethernet TX/RX in a smoke path). Verified: the e2e test
-  green, run-qemu-test green, host unit tests green. Follow-ons: IRQ-driven RX
-  (currently poll via RX_POLL), chained descriptors, then Phase 2 (net-stack
-  service: ARP/IPv4/ICMP/UDP over the NET_IPC_* socket layer).
+  green, run-qemu-test green, host unit tests green.
+- Phase 1b RX is now IRQ-driven: the driver routes its device IRQ (line 11, from
+  the spawn profile's irq_mask = 1<<irq_hint) to its endpoint via
+  `wasmos_irq_route_ipc`, and the ARP probe's reply is delivered through the
+  interrupt rather than a poll loop. The kernel delivers a routed IRQ as an
+  IPC_IRQ_EVENT_TYPE (0xFF00) message (source = NONE, handled before the
+  source<0 guard); `net_handle_irq()` reads ISR to de-assert the level-triggered
+  line, reaps TX, drains RX, and `irq_ack`s to unmask. Boot shows
+  `[virtio-net] irq routed line=11` / `arp request sent` /
+  `[virtio-net] irq rx=64 ethertype=0x0806 gw_mac=52:55:0A:00:02:02`; the e2e
+  test asserts the IRQ-driven round-trip. Verified: e2e test green, run-qemu-test
+  green, host unit tests green. Follow-ons: RX_FRAME_NOTIFY delivery to a
+  consumer, chained descriptors, then Phase 2 (net-stack: ARP/IPv4/ICMP/UDP over
+  NET_IPC_* sockets).
 
 - Two scheduler bugs affecting kernel worker threads are fixed:
   (1) `proc->ctx.rsp` was initialized to the process stack top at spawn time,

@@ -935,12 +935,15 @@ Phase 1: `virtio-net` transport baseline
   Status: DONE. Both primitives landed (`region_alloc`, vring core); the driver
   `region_alloc`s the RX(0)/TX(1) rings and RX/TX packet pools, lays the rings
   out with the vring core, programs `QUEUE_PFN`, pre-posts RX buffers, and
-  handles `NETDRV_IPC_RX_POLL`/`TX_FRAME`. A boot-time ARP self-probe of the
-  SLIRP gateway proves the full path end-to-end:
-  `[virtio-net] selftest tx complete` then
-  `[virtio-net] selftest rx=64 ethertype=0x0806 gw_mac=52:55:0A:00:02:02`
-  (guarded by `tests/test_virtio_net_e2e.py`). IRQ-driven RX (vs the current
-  poll) is a follow-on optimization.
+  handles `NETDRV_IPC_RX_POLL`/`TX_FRAME`. It routes its device IRQ (line 11) to
+  its endpoint, and a boot-time ARP probe of the SLIRP gateway proves the full
+  path end-to-end with the reply delivered via the interrupt:
+  `[virtio-net] irq routed line=11` / `arp request sent` /
+  `[virtio-net] irq rx=64 ethertype=0x0806 gw_mac=52:55:0A:00:02:02`
+  (guarded by `tests/test_virtio_net_e2e.py`). The IRQ handler reads ISR to
+  de-assert the level-triggered line, reaps TX, drains RX, then `irq_ack`s;
+  frames are counted and recycled for now, with delivery to a consumer via
+  `NETDRV_IPC_RX_FRAME_NOTIFY` coming with the Phase 2 net-stack.
 
 Done gate:
 - driver emits MAC/link markers and can TX/RX raw Ethernet frames in smoke path.

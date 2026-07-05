@@ -1077,6 +1077,30 @@ m3ApiRawFunction(wasmos_sys_select_wait)
     }
 }
 
+/* Timed select wait: block until a watched endpoint is ready OR timeout_ms
+ * elapses. Returns the ready endpoint id (>= 0), -1 on timeout/spurious wake
+ * (caller polls and retries), or -2 on error. Does NOT loop on IPC_EMPTY. */
+m3ApiRawFunction(wasmos_sys_select_wait_timeout)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, select_id)
+    m3ApiGetArg(int32_t, timeout_ms)
+    uint32_t context_id = 0;
+    if (select_id <= 0 || current_process_context(&context_id) != 0) {
+        m3ApiReturn(-2);
+    }
+    uint32_t ready_ep = IPC_ENDPOINT_NONE;
+    int rc = ipc_select_wait((uint32_t)select_id, context_id, &ready_ep,
+                             (uint32_t)(timeout_ms < 0 ? 0 : timeout_ms));
+    if (rc == IPC_OK) {
+        m3ApiReturn((int32_t)ready_ep);
+    }
+    if (rc == IPC_EMPTY) {
+        m3ApiReturn(-1);  /* timeout or spurious wake */
+    }
+    m3ApiReturn(-2);
+}
+
 m3ApiRawFunction(wasmos_sys_select_destroy)
 {
     m3ApiReturnType(int32_t)
@@ -2433,6 +2457,23 @@ m3ApiRawFunction(wasmos_irq_ack)
     m3ApiReturn(irq_ack(context_id, (uint32_t)irq_line));
 }
 
+m3ApiRawFunction(wasmos_irq_configure)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, irq_line)
+    m3ApiGetArg(int32_t, flags)
+
+    uint32_t context_id = 0;
+    if (irq_line < 0) {
+        m3ApiReturn(-1);
+    }
+    if (current_process_context(&context_id) != 0 ||
+        require_irq_route_capability(context_id) != 0) {
+        m3ApiReturn(-1);
+    }
+    m3ApiReturn(irq_configure((uint32_t)irq_line, (uint32_t)flags));
+}
+
 m3ApiRawFunction(wasmos_irq_unroute)
 {
     m3ApiReturnType(int32_t)
@@ -3691,6 +3732,7 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "ipc_select_create",  "i()",   wasmos_sys_select_create);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_select_add",     "i(ii)", wasmos_sys_select_add);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_select_wait",    "i(i)",  wasmos_sys_select_wait);
+    rc |= wasm3_link_raw(module, "wasmos", "ipc_select_wait_timeout", "i(ii)", wasmos_sys_select_wait_timeout);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_select_destroy", "i(i)",  wasmos_sys_select_destroy);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_drain", "i(i)", wasmos_ipc_drain);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_try_recv", "i(i)", wasmos_ipc_drain); /* legacy alias */
@@ -3767,6 +3809,7 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "shmem_unmap", "i(i)", wasmos_shmem_unmap);
     rc |= wasm3_link_raw(module, "wasmos", "irq_route_ipc", "i(ii)", wasmos_irq_route_ipc);
     rc |= wasm3_link_raw(module, "wasmos", "irq_ack", "i(i)", wasmos_irq_ack);
+    rc |= wasm3_link_raw(module, "wasmos", "irq_configure", "i(ii)", wasmos_irq_configure);
     rc |= wasm3_link_raw(module, "wasmos", "irq_unroute", "i(i)", wasmos_irq_unroute);
     rc |= wasm3_link_raw(module, "wasmos", "serial_register", "i(i)", wasmos_serial_register);
     rc |= wasm3_link_raw(module, "wasmos", "input_push", "i(i)", wasmos_input_push);

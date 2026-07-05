@@ -416,6 +416,15 @@ idt_install(void)
         idt_set_gate((uint8_t)vec, handler, IDT_TYPE_INTERRUPT_GATE);
     }
 
+    /* Vector 2 is the NMI: kpanic() uses it to stop every other CPU (NMI is
+     * delivered even when interrupts are masked). Override the generic
+     * exception stub with the dedicated capture-and-halt handler. */
+    {
+        extern void isr_nmi(void);
+        idt_set_gate(2u, x86_kernel_handler_addr((uintptr_t)isr_nmi),
+                     IDT_TYPE_INTERRUPT_GATE);
+    }
+
     descriptor_ptr_t idtr;
     idtr.limit = (uint16_t)(sizeof(g_idt) - 1);
     idtr.base = (uint64_t)(uintptr_t)&g_idt[0];

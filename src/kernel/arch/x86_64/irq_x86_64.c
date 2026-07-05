@@ -260,6 +260,21 @@ int x86_irq_unmask(uint32_t irq_line) {
     return 0;
 }
 
+/* Set trigger/polarity for a line. flags: bit0 = level-triggered,
+ * bit1 = active-low. Only meaningful in IOAPIC mode; the 8259 PIC has no
+ * per-line polarity control, so this is a no-op there. */
+int x86_irq_configure(uint32_t irq_line, uint32_t flags) {
+    if (irq_line >= IRQ_COUNT) {
+        return -1;
+    }
+#if WASMOS_IRQ_MODE == 2
+    ioapic_configure_irq(irq_line, (flags & 1u) != 0, (flags & 2u) != 0);
+#else
+    (void)flags;
+#endif
+    return 0;
+}
+
 void x86_irq_late_init(const boot_info_t *boot_info) {
 #if WASMOS_IRQ_MODE == 2
     ioapic_init(boot_info);

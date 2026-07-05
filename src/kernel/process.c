@@ -1714,9 +1714,24 @@ int process_schedule_once(void) {
     return process_schedule_once_impl();
 }
 
+/* Distinct result codes for process_schedule_once so the caller can tell a
+ * normal re-schedule (a thread ran and blocked/exited/yielded) from a genuine
+ * "could not dispatch even the idle thread" fallthrough (a panic-worthy bug).
+ * 0 = dispatched a thread that voluntarily yielded (still runnable). */
+enum {
+    SCHED_OK          = 0,  /* dispatched; thread YIELDED (still ready)        */
+    SCHED_R_MAXCOUNT  = 1,  /* PROCESS_MAX_COUNT == 0 (never in practice)      */
+    SCHED_R_PICK      = 2,  /* pick returned null / no proc / no entry         */
+    SCHED_R_NOTREADY  = 3,  /* picked thread not in READY state                */
+    SCHED_R_CTX       = 4,  /* run context missing                            */
+    SCHED_R_ROOT      = 5,  /* target root page table missing                 */
+    SCHED_R_ZOMBIE    = 6,  /* owning process is zombie/exiting                */
+    SCHED_R_RANDONE   = 7,  /* dispatched; thread BLOCKED/EXITED (normal loop) */
+};
+
 static int process_schedule_once_impl(void) {
     if (PROCESS_MAX_COUNT == 0) {
-        return 1;
+        return SCHED_R_MAXCOUNT;
     }
 
     /* Fire any timed waits whose deadline has passed before picking the next
@@ -1736,7 +1751,7 @@ static int process_schedule_once_impl(void) {
     }
     process_t *proc = thread ? process_owner_for_thread(thread) : 0;
     if (!thread || !proc || !proc->entry) {
-        return 1;
+        return SCHED_R_PICK;
     }
     /* Thread state alone determines runnability.
      * Note: the idle thread (RUNNING on another CPU) no longer reaches here —
@@ -1747,7 +1762,7 @@ static int process_schedule_once_impl(void) {
                                (unsigned)(proc ? proc->pid : 0u),
                                (unsigned)thread->state,
                                (unsigned)thread->block_reason);
-        return 1;
+        return SCHED_R_NOTREADY;
     }
 
     process_set_running(proc, thread);
@@ -1788,7 +1803,7 @@ static int process_schedule_once_impl(void) {
         cpu_local()->current_thread = 0;
         thread_set_current(0);
         critical_section_leave();
-        return 1;
+        return SCHED_R_CTX;
     }
     if (run_ctx->root_table == 0) {
         run_ctx->root_table = mm_context_root_table(proc->context_id);
@@ -1813,7 +1828,7 @@ static int process_schedule_once_impl(void) {
         cpu_local()->current_thread = 0;
         thread_set_current(0);
         critical_section_leave();
-        return 1;
+        return SCHED_R_ROOT;
     }
     if (thread->is_kernel_worker) {
         /* Snapshot all callee-saved registers into g_sched_ctx so that when
@@ -1873,7 +1888,7 @@ static int process_schedule_once_impl(void) {
         process_try_auto_reap(proc);
         cpu_local()->last_index = proc->pid;
         cpu_local()->need_resched = 0;
-        return 1;
+        return SCHED_R_ZOMBIE;
     }
 
     if (result == PROCESS_RUN_EXITED) {
@@ -1998,7 +2013,7 @@ static int process_schedule_once_impl(void) {
     cpu_local()->last_index = proc->pid;
     process_try_auto_reap(proc);
     cpu_local()->need_resched = 0;
-    return (result == PROCESS_RUN_YIELDED) ? 0 : 1;
+    return (result == PROCESS_RUN_YIELDED) ? SCHED_OK : SCHED_R_RANDONE;
 }
 
 void process_tick(void) {

@@ -29,6 +29,10 @@ int irq_unregister(uint32_t context_id, uint32_t irq_line);
 int irq_mask(uint32_t irq_line);
 int irq_unmask(uint32_t irq_line);
 
+/* Set trigger/polarity for a line (flags: bit0=level, bit1=active-low). Used by
+ * pci-bus to mark PCI INTx lines level/active-low. */
+int irq_configure(uint32_t irq_line, uint32_t flags);
+
 /* Called from cpu_isr.S stubs for non-timer hardware IRQs. */
 void x86_irq_handler(uint64_t vector);
 

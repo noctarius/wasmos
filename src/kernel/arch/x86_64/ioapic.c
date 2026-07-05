@@ -61,6 +61,7 @@
  */
 #define IOAPIC_RTE_LEVEL      (1u << 15)
 #define IOAPIC_RTE_ACTHI      (0u << 13)
+#define IOAPIC_RTE_ACTLO      (1u << 13)
 #define IOAPIC_RTE_FIXED      (0u << 8)
 
 /* Page table flags for MMIO mapping (mirrors lapic.c). */
@@ -288,4 +289,25 @@ ioapic_unmask_irq(uint32_t irq_line)
     uint32_t gsi = g_gsi_map[irq_line];
     uint32_t lo  = ioapic_read_reg(IOAPIC_RTE_LO(gsi));
     ioapic_write_reg(IOAPIC_RTE_LO(gsi), lo & ~IOAPIC_RTE_MASK_BIT);
+}
+
+/* Reprogram an IRQ line's trigger mode and polarity, preserving its
+ * vector/destination/mask.  PCI INTx lines are level-triggered active-low and
+ * must be reconfigured from the ISA boot default (active-high) by pci-bus. */
+void
+ioapic_configure_irq(uint32_t irq_line, int level, int active_low)
+{
+    if (irq_line >= 16u || !g_ioapic_base) {
+        return;
+    }
+    uint32_t gsi = g_gsi_map[irq_line];
+    uint32_t lo  = ioapic_read_reg(IOAPIC_RTE_LO(gsi));
+    lo &= ~(IOAPIC_RTE_LEVEL | IOAPIC_RTE_ACTLO);
+    if (level) {
+        lo |= IOAPIC_RTE_LEVEL;
+    }
+    if (active_low) {
+        lo |= IOAPIC_RTE_ACTLO;
+    }
+    ioapic_write_reg(IOAPIC_RTE_LO(gsi), lo);
 }

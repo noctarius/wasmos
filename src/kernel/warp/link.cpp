@@ -618,6 +618,23 @@ warp_ipc_select_wait(uint32_t sel_id, void *ctx_)
     }
 }
 
+/* Timed select wait: block until a watched endpoint is ready OR timeout_ms
+ * elapses. Returns the ready endpoint id (>= 0), -1 on timeout/spurious wake
+ * (caller should poll and retry), or -2 on error. Unlike warp_ipc_select_wait
+ * this does NOT loop on IPC_EMPTY, so a deadline reliably returns control. */
+static uint32_t
+warp_ipc_select_wait_timeout(uint32_t sel_id, uint32_t timeout_ms, void *ctx_)
+{
+    (void)ctx_;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0) return (uint32_t)-2;
+    uint32_t ready = IPC_ENDPOINT_NONE;
+    int rc = ipc_select_wait(sel_id, context_id, &ready, timeout_ms);
+    if (rc == IPC_OK) return ready;
+    if (rc == IPC_EMPTY) return (uint32_t)-1;  /* timeout or spurious wake */
+    return (uint32_t)-2;
+}
+
 static uint32_t
 warp_ipc_select_destroy(uint32_t sel_id, void *ctx_)
 {
@@ -1951,6 +1968,20 @@ warp_irq_ack(uint32_t irq_line, void *ctx_)
     return (uint32_t)irq_ack(context_id, irq_line);
 }
 
+/* Configure an IRQ line's trigger/polarity (flags: bit0=level, bit1=active-low).
+ * Gated by the IRQ capability; pci-bus uses it to mark PCI INTx lines
+ * level/active-low. (TODO: split a dedicated irq.configure capability from
+ * irq.route for tighter privilege separation — see docs/architecture/09.) */
+static uint32_t
+warp_irq_configure(uint32_t irq_line, uint32_t flags, void *ctx_)
+{
+    (void)ctx_;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0
+        || warp_require_irq_capability(context_id) != 0) return (uint32_t)-1;
+    return (uint32_t)irq_configure(irq_line, flags);
+}
+
 static uint32_t
 warp_irq_unroute(uint32_t irq_line, void *ctx_)
 {
@@ -2185,6 +2216,7 @@ warp_env_abort(uint32_t msg, uint32_t file, uint32_t line, uint32_t column, void
     LINK("wasmos", "ipc_select_create",    warp_ipc_select_create), \
     LINK("wasmos", "ipc_select_add",       warp_ipc_select_add), \
     LINK("wasmos", "ipc_select_wait",      warp_ipc_select_wait), \
+    LINK("wasmos", "ipc_select_wait_timeout", warp_ipc_select_wait_timeout), \
     LINK("wasmos", "ipc_select_destroy",   warp_ipc_select_destroy), \
     LINK("wasmos", "sys_select_create",    warp_ipc_select_create), \
     LINK("wasmos", "sys_select_add",       warp_ipc_select_add), \
@@ -2265,7 +2297,8 @@ warp_env_abort(uint32_t msg, uint32_t file, uint32_t line, uint32_t column, void
     LINK("wasmos", "env_set",              warp_env_set), \
     LINK("wasmos", "env_unset",            warp_env_unset), \
     LINK("env",    "abort",                warp_env_abort), \
-    LINK("wasmos", "region_alloc",         warp_region_alloc)
+    LINK("wasmos", "region_alloc",         warp_region_alloc), \
+    LINK("wasmos", "irq_configure",        warp_irq_configure)
 
 vb::Span<vb::NativeSymbol const>
 warp_wasmos_symbols(void)
@@ -2482,6 +2515,8 @@ warp_ring3_dispatch(uint32_t hc_id, void *frame_ptr)
     /* 21 */ case HC_IPC_SELECT_DESTROY: /* fall-through */
     /* 25 */ case HC_SYS_SELECT_DESTROY:
         return warp_ipc_select_destroy((uint32_t)a0, ctx2);
+    /* 103 */ case HC_IPC_SELECT_WAIT_TIMEOUT:
+        return warp_ipc_select_wait_timeout((uint32_t)a0, (uint32_t)a1, ctx3);
     /* 26 */ case HC_XFER_BUFFER_SIZE:
         return warp_xfer_buffer_size(reinterpret_cast<void *>(a0));
     /* 27 */ case HC_FS_ENDPOINT:
@@ -2643,6 +2678,8 @@ warp_ring3_dispatch(uint32_t hc_id, void *frame_ptr)
         return 0;
     /* 101 */ case HC_REGION_ALLOC:
         return warp_region_alloc((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, ctx4);
+    /* 102 */ case HC_IRQ_CONFIGURE:
+        return warp_irq_configure((uint32_t)a0, (uint32_t)a1, ctx3);
     default:
         return (uint32_t)-1;
     }

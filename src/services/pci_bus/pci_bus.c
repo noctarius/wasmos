@@ -135,6 +135,16 @@ initialize(int32_t proc_endpoint,
                 rec.io_port_base = ((bar0 & 0x1u) != 0u) ? (uint16_t)(bar0 & 0xFFFCu) : 0u;
                 uint32_t irq_reg = pci_config_read32((uint8_t)bus, device, function, 0x3C);
                 rec.irq_hint = (uint8_t)(irq_reg & 0xFFu);
+                /* PCI INTx is level-triggered, active-low (PCI spec). If this
+                 * device drives an interrupt pin (0x3D != 0), mark its line in
+                 * the IOAPIC accordingly — the boot default is active-high,
+                 * which makes PCI INTx re-deliver only once. */
+                uint8_t irq_pin = (uint8_t)((irq_reg >> 8) & 0xFFu);
+                if (irq_pin != 0u && rec.irq_hint != 0u && rec.irq_hint < 16u) {
+                    (void)wasmos_irq_configure((int32_t)rec.irq_hint,
+                                               WASMOS_IRQ_TRIGGER_LEVEL |
+                                               WASMOS_IRQ_POLARITY_LOW);
+                }
                 log_record(&rec);
                 publish_record(devmgr_endpoint,
                                source_endpoint,

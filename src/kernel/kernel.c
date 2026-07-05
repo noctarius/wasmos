@@ -31,6 +31,7 @@
 #include "kernel_sched_smp_stress_runtime.h"
 #include "kernel_ring3_smoke_runtime.h"
 #include "kernel_ring3_suite_runtime.h"
+#include "kpanic.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -137,7 +138,16 @@ static process_run_result_t
 idle_entry(process_t *process, void *arg)
 {
     for (;;) {
-        __asm__ volatile("hlt");
+        /* Enable interrupts and halt ATOMICALLY: `sti` has a one-instruction
+         * shadow so an interrupt cannot be taken between `sti` and `hlt`.
+         * A bare `hlt` here is a liveness bug — if this thread is ever entered
+         * with IF=0 (e.g. RFLAGS restored by the context switch, or entry from
+         * an IRQ path), the CPU halts forever: maskable interrupts, including
+         * the periodic LAPIC timer that drives the scheduler and all timed
+         * waits, never wake it, so the whole (single-CPU) system wedges once it
+         * goes fully idle. `sti;hlt` guarantees IF=1 at the halt and closes the
+         * classic set-idle/became-runnable lost-wakeup race. */
+        __asm__ volatile("sti; hlt" ::: "memory");
         /* Yield after each hlt so the scheduler can run on this CPU again
          * and pick up any threads that became ready during the halt. */
         process_yield(PROCESS_RUN_YIELDED);

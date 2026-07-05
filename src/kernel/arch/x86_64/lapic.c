@@ -284,6 +284,23 @@ lapic_send_sipi(uint32_t apic_id, uint8_t vector)
     io_delay_us(200u);   /* 200 µs */
 }
 
+#define LAPIC_ICR_DELIVERY_NMI   (0x4u << 8)
+#define LAPIC_ICR_DEST_ALL_BUT_SELF (0x3u << 18)  /* destination shorthand */
+
+/* Send an NMI to every CPU except this one. Used by kpanic() to stop the world;
+ * NMI is chosen because it is delivered even to CPUs running with interrupts
+ * disabled (cli). No-op in practice on a single-CPU machine. */
+void
+lapic_send_nmi_allbutself(void)
+{
+    lapic_write(LAPIC_REG_ICR_HI, 0u);
+    lapic_write(LAPIC_REG_ICR_LO, LAPIC_ICR_DEST_ALL_BUT_SELF |
+                                   LAPIC_ICR_LEVEL_ASSERT |
+                                   LAPIC_ICR_DELIVERY_NMI);
+    while (lapic_read(LAPIC_REG_ICR_LO) & LAPIC_ICR_SEND_PENDING)
+        ;
+}
+
 void
 lapic_ap_enable(uint32_t hz)
 {

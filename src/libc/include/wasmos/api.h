@@ -76,6 +76,11 @@ extern int32_t wasmos_ipc_select_add(int32_t select_id, int32_t endpoint)
 /* Block until any watched endpoint is ready; returns the ready endpoint ID. */
 extern int32_t wasmos_ipc_select_wait(int32_t select_id)
     WASMOS_WASM_IMPORT("wasmos", "ipc_select_wait");
+/* Like ipc_select_wait but bounded by timeout_ms (0 = wait forever). Returns the
+ * ready endpoint ID (>= 0), -1 on timeout/spurious wake (poll and retry), or -2
+ * on error. Lets a driver poll (e.g. RX rings) on a timer without busy-yielding. */
+extern int32_t wasmos_ipc_select_wait_timeout(int32_t select_id, int32_t timeout_ms)
+    WASMOS_WASM_IMPORT("wasmos", "ipc_select_wait_timeout");
 extern int32_t wasmos_ipc_select_destroy(int32_t select_id)
     WASMOS_WASM_IMPORT("wasmos", "ipc_select_destroy");
 extern int32_t wasmos_proc_count(void)
@@ -277,6 +282,11 @@ extern int32_t wasmos_irq_ack(int32_t irq_line)
     WASMOS_WASM_IMPORT("wasmos", "irq_ack");
 extern int32_t wasmos_irq_unroute(int32_t irq_line)
     WASMOS_WASM_IMPORT("wasmos", "irq_unroute");
+/* Configure an IRQ line's trigger/polarity (flags: WASMOS_IRQ_TRIGGER_LEVEL /
+ * WASMOS_IRQ_POLARITY_LOW). Used by pci-bus to mark PCI INTx lines level/low.
+ * Requires the IRQ capability. */
+extern int32_t wasmos_irq_configure(int32_t irq_line, int32_t flags)
+    WASMOS_WASM_IMPORT("wasmos", "irq_configure");
 /* vt keyboard input integration */
 extern int32_t wasmos_input_push(int32_t ch)
     WASMOS_WASM_IMPORT("wasmos", "input_push");
@@ -295,6 +305,8 @@ extern int32_t wasmos_ipc_select_add(int32_t select_id, int32_t endpoint_id)
     WASMOS_WASM_IMPORT("wasmos", "ipc_select_add");
 extern int32_t wasmos_ipc_select_wait(int32_t select_id)
     WASMOS_WASM_IMPORT("wasmos", "ipc_select_wait");
+extern int32_t wasmos_ipc_select_wait_timeout(int32_t select_id, int32_t timeout_ms)
+    WASMOS_WASM_IMPORT("wasmos", "ipc_select_wait_timeout");
 extern int32_t wasmos_ipc_select_destroy(int32_t select_id)
     WASMOS_WASM_IMPORT("wasmos", "ipc_select_destroy");
 

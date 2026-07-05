@@ -387,6 +387,13 @@ enum {
     WASMOS_REGION_CACHE_WC = 1   /* write-combining: framebuffer/scanout (TODO) */
 };
 
+/* Trigger/polarity flags for wasmos_irq_configure. Default (no flags) is
+ * edge-triggered active-high (ISA). PCI INTx lines are level + active-low. */
+enum {
+    WASMOS_IRQ_TRIGGER_LEVEL = 1 << 0,
+    WASMOS_IRQ_POLARITY_LOW  = 1 << 1
+};
+
 typedef struct __attribute__((packed)) {
     uint64_t base;
     uint64_t length;

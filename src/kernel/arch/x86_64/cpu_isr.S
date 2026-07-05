@@ -66,6 +66,19 @@
     movq 8(%rsp), %rsp
 .endm
 
+# NMI handler (vector 2), used by kpanic() to stop this CPU and snapshot its
+# context. Saves all GPRs so x86_nmi_handler can read rbp (for a backtrace) and
+# the iret frame (rip/cs/rflags/rsp). In the panic case x86_nmi_handler never
+# returns (it halts this CPU); for an unexpected NMI it returns and we iretq.
+.extern x86_nmi_handler
+.global isr_nmi
+isr_nmi:
+    PUSH_REGS
+    movq %rsp, %rdi          # arg0 = pointer to saved register frame
+    CALL_C_ALIGNED x86_nmi_handler
+    POP_REGS
+    iretq
+
 .macro DECL_EXC num
 .global isr_exception_\num
 isr_exception_\num:

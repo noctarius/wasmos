@@ -18,3 +18,6 @@ int irq_unregister(uint32_t context_id, uint32_t irq_line) {
 }
 int irq_mask(uint32_t irq_line) { return x86_irq_mask(irq_line); }
 int irq_unmask(uint32_t irq_line) { return x86_irq_unmask(irq_line); }
+int irq_configure(uint32_t irq_line, uint32_t flags) {
+    return x86_irq_configure(irq_line, flags);
+}

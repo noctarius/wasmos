@@ -51,11 +51,12 @@ class VirtioNetNotifyE2ETest(unittest.TestCase):
             self.session.expect(b"[net-smoke] arp sent", timeout_s=30),
             "net_smoke did not subscribe + transmit the ARP request",
         )
-        # The reply is delivered to the consumer through the driver's RX
-        # ready-queue via RX_POLL (an ARP reply, ethertype 0x0806).
+        # The reply must be pushed to the consumer via RX_FRAME_NOTIFY — this is
+        # interrupt #2 (the driver's boot ARP was #1), so it proves PCI INTx
+        # re-delivery works (level/active-low + directed IOAPIC EOI). ARP=0x0806.
         self.assertTrue(
-            self.session.expect(b"[net-smoke] rx=", timeout_s=30),
-            "no frame was delivered to the consumer",
+            self.session.expect(b"[net-smoke] notify rx=", timeout_s=30),
+            "no frame pushed via RX_FRAME_NOTIFY (IRQ re-delivery still broken)",
         )
         self.assertIn(
             b"ethertype=0x0806", self.session.buf,

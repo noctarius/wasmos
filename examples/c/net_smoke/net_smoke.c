@@ -103,20 +103,24 @@ main(int argc, char **argv)
     }
     puts("[net-smoke] arp sent");
 
-    /* Collect the reply. RX_POLL is the reliable delivery path: it drains the
-     * driver's vring and ready-queue and returns a frame. RX_FRAME_NOTIFY is a
-     * wakeup hint the driver pushes on each device interrupt; a consumer can
-     * block on it instead of spinning once PCI INTx re-delivery is fixed (the
-     * IOAPIC polarity follow-on). Here we poll defensively so the test does not
-     * depend on that fix. */
-    for (int rounds = 0; rounds < 4000; ++rounds) {
+    /* Block for the driver's RX_FRAME_NOTIFY push, then pull the frame with
+     * RX_POLL. This is a pure push path — no polling — and depends on the device
+     * interrupt re-firing (PCI INTx level/active-low + directed IOAPIC EOI).
+     * The driver's own boot ARP is interrupt #1; this reply is interrupt #2, so
+     * receiving the notify proves re-delivery works. */
+    for (int rounds = 0; rounds < 8; ++rounds) {
+        if (recv_on(reply_ep, &m) != 0) {
+            break;  /* no notify arrived — re-delivery broken */
+        }
+        if (m.type != NETDRV_IPC_RX_FRAME_NOTIFY) {
+            continue;
+        }
         if (wasmos_ipc_send(net_ep, reply_ep, NETDRV_IPC_RX_POLL, req++, 0, 0, 0, 0) != 0
             || recv_on(reply_ep, &m) != 0 || m.type != NETDRV_IPC_RESP) {
             break;
         }
         int32_t len = m.arg0;
         if (len <= 0) {
-            (void)wasmos_sched_yield();
             continue;
         }
         uint8_t frame[128];
@@ -125,13 +129,13 @@ main(int argc, char **argv)
             break;
         }
         unsigned et = ((unsigned)frame[12] << 8) | (unsigned)frame[13];
-        (void)printf("[net-smoke] rx=%d ethertype=0x%04X "
+        (void)printf("[net-smoke] notify rx=%d ethertype=0x%04X "
                      "from=%02X:%02X:%02X:%02X:%02X:%02X\n",
                      (int)len, et, frame[6], frame[7], frame[8],
                      frame[9], frame[10], frame[11]);
         return 0;
     }
 
-    puts("[net-smoke] no reply");
+    puts("[net-smoke] no notify");
     return 1;
 }

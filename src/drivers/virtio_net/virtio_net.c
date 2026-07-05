@@ -41,6 +41,7 @@
 #define VIRTIO_NET_TX_BUF_COUNT    64u    /* in-flight transmit buffers */
 #define VIRTIO_NET_MAX_QUEUE       256u   /* max supported queue size (desc map) */
 #define VIRTIO_NET_MAX_FRAME       1514u  /* Ethernet frame w/o FCS */
+#define NET_RX_POLL_INTERVAL_MS    10     /* timer-driven RX drain cadence (INTx workaround) */
 
 /* Kernel delivers a routed hardware IRQ as an IPC message of this type, with
  * arg0/request_id = irq line and source = IPC_ENDPOINT_NONE (see
@@ -542,22 +543,46 @@ net_drain_rx(void)
  * subscribed consumer (posting one RX_FRAME_NOTIFY per batch), or — before any
  * subscriber exists — logged once and dropped. Finally irq_ack unmasks. */
 static void
-net_handle_irq(void)
+net_notify_subscriber(void)
 {
-    /* Ack the device: reading ISR clears its interrupt-asserted bit. */
-    (void)wasmos_io_in8((int32_t)(g_dev.io_base + VIRTIO_PCI_ISR_STATUS));
-
-    tx_reap();
-
-    int enqueued = net_drain_rx();
-
-    /* One notify per interrupt batch; the consumer drains all via RX_POLL. */
-    if (enqueued && g_rx_sub_endpoint >= 0) {
+    if (g_rx_sub_endpoint >= 0) {
         (void)wasmos_ipc_send(g_rx_sub_endpoint, g_endpoint,
                               NETDRV_IPC_RX_FRAME_NOTIFY, 0,
                               (int32_t)g_rx_q_count, 0, 0, 0);
     }
+}
 
+/* Reap completed TX, drain the RX used-ring, and notify a subscriber if any
+ * frames were queued. Shared by the device IRQ handler and the timer-driven RX
+ * poll (see the main loop). */
+static void
+net_service_rx(void)
+{
+    tx_reap();
+    if (net_drain_rx()) {
+        net_notify_subscriber();
+    }
+}
+
+/* Device interrupt handler (IPC_IRQ_EVENT_TYPE for our line). Reading the ISR
+ * status register de-asserts the (level-triggered) device interrupt; we then
+ * service the queues and irq_ack (unmask).
+ *
+ * NOTE: on QEMU's legacy PCI-INTx path this IRQ reliably fires only for the
+ * FIRST assertion — QEMU's emulated I/O APIC does not re-deliver a reasserted
+ * level line on a steadily-unmasked RTE (confirmed via -d int: vector is
+ * injected once, never again). Continuous RX therefore relies on the
+ * timer-driven poll in the main loop; this handler covers the first frame and
+ * any that happen to coincide with the mask->unmask window.
+ * TODO(msi-x): switch virtio-net to MSI-X (message-signalled, per-vq vectors),
+ * which bypasses the I/O APIC pin / Remote-IRR / level re-sample entirely and
+ * makes this whole INTx re-delivery workaround unnecessary. */
+static void
+net_handle_irq(void)
+{
+    /* Ack the device: reading ISR clears its interrupt-asserted bit. */
+    (void)wasmos_io_in8((int32_t)(g_dev.io_base + VIRTIO_PCI_ISR_STATUS));
+    net_service_rx();
     /* Unmask the line now the device register has been read. */
     (void)wasmos_irq_ack((int32_t)g_dev.irq);
 }
@@ -795,10 +820,30 @@ initialize(int32_t proc_endpoint, int32_t ignored_arg1, int32_t ignored_arg2, in
         net_probe_send();
     }
 
+    /* Timer-driven RX poll. The virtio INTx re-fires reliably only for the
+     * first assertion on QEMU's legacy PCI-INTx path (see net_handle_irq), so
+     * continuous RX can't depend on the interrupt. Instead of busy-yielding, we
+     * block on our endpoint with a bounded timeout and drain the RX ring each
+     * time the wait times out — a timer, not a spin.
+     * TODO(msi-x): once virtio-net uses MSI-X the interrupt re-delivers per
+     * notification and this timed poll can drop back to a plain blocking wait. */
+    int32_t sel = wasmos_ipc_select_create();
+    if (sel < 0 || wasmos_ipc_select_add(sel, g_endpoint) != 0) {
+        (void)printf("[virtio-net] select setup failed\n");
+        return -1;
+    }
+
     for (;;) {
         wasmos_ipc_message_t msg;
-        if (wasmos_ipc_select_one(g_endpoint) != 1) {
+        int32_t ready = wasmos_ipc_select_wait_timeout(sel, NET_RX_POLL_INTERVAL_MS);
+        if (ready < 0) {
+            /* Timeout (or the rare error): poll the RX ring + reap TX. */
+            net_service_rx();
             continue;
+        }
+        /* An endpoint is ready — fetch the pending message (non-blocking). */
+        if (wasmos_ipc_drain(g_endpoint) <= 0) {
+            continue;  /* claimed elsewhere / spurious */
         }
         wasmos_ipc_message_read_last(&msg);
         /* Hardware IRQ arrives as IPC_IRQ_EVENT_TYPE with source=NONE (< 0), so

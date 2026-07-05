@@ -19,3 +19,10 @@ entry_arg_bindings = ["proc.endpoint"]
 [[capabilities]]
 name = "io.port"
 flags = 0
+
+# pci-bus configures each PCI INTx line's trigger/polarity (level/active-low) in
+# the IOAPIC via wasmos_irq_configure, gated by the IRQ capability.
+# TODO: split a dedicated irq.configure capability from irq.route (docs 09).
+[[capabilities]]
+name = "irq.route"
+flags = 0

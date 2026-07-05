@@ -70,6 +70,7 @@ static vb::Span<vb::NativeSymbol const> aot_symbols()
         DYNAMIC_LINK("wasmos", "ipc_select_create",   stub_i0),
         DYNAMIC_LINK("wasmos", "ipc_select_add",      stub_i2),
         DYNAMIC_LINK("wasmos", "ipc_select_wait",     stub_i1),
+        DYNAMIC_LINK("wasmos", "ipc_select_wait_timeout", stub_i2),
         DYNAMIC_LINK("wasmos", "ipc_select_destroy",  stub_i1),
         DYNAMIC_LINK("wasmos", "sys_select_create",   stub_i0),
         DYNAMIC_LINK("wasmos", "sys_select_add",      stub_i2),
@@ -140,6 +141,7 @@ static vb::Span<vb::NativeSymbol const> aot_symbols()
         /* Physical memory */
         DYNAMIC_LINK("wasmos", "phys_map",            stub_i4),
         DYNAMIC_LINK("wasmos", "region_alloc",        stub_i3),
+        DYNAMIC_LINK("wasmos", "irq_configure",       stub_i2),
         /* Process info */
         DYNAMIC_LINK("wasmos", "proc_info",           stub_i3),
         DYNAMIC_LINK("wasmos", "proc_info_ex",        stub_i4),

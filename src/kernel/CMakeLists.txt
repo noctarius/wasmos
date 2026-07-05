@@ -103,6 +103,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/cpu_isr.o
   ${BUILD_DIR}/smp_trampoline.o
   ${BUILD_DIR}/kernel.o
+  ${BUILD_DIR}/kpanic.o
   ${BUILD_DIR}/kernel_boot_runtime.o
   ${BUILD_DIR}/kernel_init_runtime.o
   ${BUILD_DIR}/kernel_selftest_runtime.o
@@ -232,6 +233,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/arch/x86_64/cpu_isr.S
   ${KERNEL_DIR}/arch/x86_64/smp_trampoline.S
   ${KERNEL_DIR}/kernel.c
+  ${KERNEL_DIR}/kpanic.c
   ${KERNEL_DIR}/kernel_boot_runtime.c
   ${KERNEL_DIR}/kernel_init_runtime.c
   ${KERNEL_DIR}/kernel_selftest_runtime.c
@@ -509,6 +511,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/cpu_isr.S -o ${BUILD_DIR}/cpu_isr.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/smp_trampoline.S -o ${BUILD_DIR}/smp_trampoline.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel.c -o ${BUILD_DIR}/kernel.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kpanic.c -o ${BUILD_DIR}/kpanic.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel_boot_runtime.c -o ${BUILD_DIR}/kernel_boot_runtime.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel_init_runtime.c -o ${BUILD_DIR}/kernel_init_runtime.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel_selftest_runtime.c -o ${BUILD_DIR}/kernel_selftest_runtime.o

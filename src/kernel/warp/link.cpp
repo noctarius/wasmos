@@ -2216,7 +2216,6 @@ warp_env_abort(uint32_t msg, uint32_t file, uint32_t line, uint32_t column, void
     LINK("wasmos", "ipc_select_create",    warp_ipc_select_create), \
     LINK("wasmos", "ipc_select_add",       warp_ipc_select_add), \
     LINK("wasmos", "ipc_select_wait",      warp_ipc_select_wait), \
-    LINK("wasmos", "ipc_select_wait_timeout", warp_ipc_select_wait_timeout), \
     LINK("wasmos", "ipc_select_destroy",   warp_ipc_select_destroy), \
     LINK("wasmos", "sys_select_create",    warp_ipc_select_create), \
     LINK("wasmos", "sys_select_add",       warp_ipc_select_add), \
@@ -2298,7 +2297,9 @@ warp_env_abort(uint32_t msg, uint32_t file, uint32_t line, uint32_t column, void
     LINK("wasmos", "env_unset",            warp_env_unset), \
     LINK("env",    "abort",                warp_env_abort), \
     LINK("wasmos", "region_alloc",         warp_region_alloc), \
-    LINK("wasmos", "irq_configure",        warp_irq_configure)
+    LINK("wasmos", "irq_configure",        warp_irq_configure), \
+    LINK("wasmos", "ipc_select_wait_timeout", warp_ipc_select_wait_timeout)
+
 
 vb::Span<vb::NativeSymbol const>
 warp_wasmos_symbols(void)

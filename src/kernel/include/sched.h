@@ -1,6 +1,21 @@
 #ifndef WASMOS_SCHED_H
 #define WASMOS_SCHED_H
 
+/* Distinct result codes for process_schedule_once so the caller can tell a
+ * normal re-schedule (a thread ran and blocked/exited/yielded) from a genuine
+ * "could not dispatch even the idle thread" fallthrough (a panic-worthy bug).
+ * 0 = dispatched a thread that voluntarily yielded (still runnable). */
+enum {
+    SCHED_OK          = 0,  /* dispatched; thread YIELDED (still ready)        */
+    SCHED_R_MAXCOUNT  = 1,  /* PROCESS_MAX_COUNT == 0 (never in practice)      */
+    SCHED_R_PICK      = 2,  /* pick returned null / no proc / no entry         */
+    SCHED_R_NOTREADY  = 3,  /* picked thread not in READY state                */
+    SCHED_R_CTX       = 4,  /* run context missing                            */
+    SCHED_R_ROOT      = 5,  /* target root page table missing                 */
+    SCHED_R_ZOMBIE    = 6,  /* owning process is zombie/exiting                */
+    SCHED_R_RANDONE   = 7,  /* dispatched; thread BLOCKED/EXITED (normal loop) */
+};
+
 #ifdef WASMOS_SCHED_THREADABLE
 
 #include <stdint.h>

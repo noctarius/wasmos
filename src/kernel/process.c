@@ -565,6 +565,11 @@ static void process_trampoline(void) {
         while (preempt_disable_depth() > 0) {
             preempt_enable();
         }
+        /* The top-level scheduler loop enters with IF clear. Kernel processes
+         * run through this trampoline and may voluntarily yield/re-enter it;
+         * restore normal interrupt delivery before calling their entry point so
+         * timer ticks keep advancing while ring-0 process code runs. */
+        __asm__ volatile("sti" ::: "memory");
         if (!cpu_local()->current_process || !cpu_local()->current_process->entry) {
             cpu_local()->last_run_result = PROCESS_RUN_IDLE;
         } else {

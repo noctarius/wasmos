@@ -9,8 +9,10 @@
 #include "process.h"
 #include "memory.h"
 #include "klog.h"
+#include "kpanic.h"
 #include "string.h"
 #include "timer.h"
+#include "sched.h"
 
 static void *
 boot_shadow_alloc_low(uint64_t size_bytes, uint64_t *out_phys)
@@ -162,17 +164,13 @@ void
 kernel_boot_run_scheduler_loop(void)
 {
     for (;;) {
-        /* SMP-LOW-04: cli suppresses IRQ delivery on THIS CPU only so the
-         * timer handler cannot re-enter the scheduler loop recursively.
-         * It does NOT protect shared state from other CPUs — that is handled
-         * by the spinlocks inside process_schedule_once and its callees. */
         __asm__ volatile("cli");
-        if (process_schedule_once() != 0) {
-            __asm__ volatile("pause");
-        }
-        if (process_should_resched()) {
-            process_clear_resched();
-        }
+        int rc = process_schedule_once();
+        /* normal (SCHED_OK) or a thread that just blocked/exited/zombied/raced:
+         * re-loop immediately — the idle thread does the actual (sti;hlt) idling. */
+        if (rc == SCHED_R_PICK || rc == SCHED_R_CTX || rc == SCHED_R_ROOT || rc == SCHED_R_MAXCOUNT)
+            kpanic("scheduler: no runnable thread (idle not dispatchable)", (uint64_t)rc, 0);
+        if (process_should_resched()) process_clear_resched();
         timer_poll();
     }
 }

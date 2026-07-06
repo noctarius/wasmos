@@ -4,6 +4,7 @@
 #include "physmem.h"
 #include "paging.h"
 #include "klog.h"
+#include "kpanic.h"
 #include "spinlock.h"
 #include "string.h"
 
@@ -23,7 +24,7 @@ static uint64_t g_tracked_pages = PFA_STATIC_TRACKED_PAGES;
 
 #define PFA_BUG(msg, addr) do { \
     klog_printf("[pfa] BUG: " msg " phys=0x%016llX\n", (unsigned long long)(addr)); \
-    for (;;) { __asm__ volatile("hlt"); } \
+    kpanic(msg, (uintptr_t)addr, 0ULL); \
 } while (0)
 
 #define EFI_MEMORY_TYPE_BOOT_SERVICES_CODE 3
@@ -279,7 +280,7 @@ void pfa_init(const boot_info_t *boot_info) {
     if (rc_status < 0) {
         klog_printf("[pfa] refcount upgrade failed: needed %llu pages\n",
                     (unsigned long long)rc_alloc_pages);
-        for (;;) { __asm__ volatile("hlt"); }
+        kpanic("refcount_upgrade_failed", rc_pages,rc_alloc_pages);
     }
     if (rc_status > 0) {
         klog_printf("[pfa] refcount upgraded: %llu pages tracked (%llu KB)\n",

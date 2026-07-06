@@ -1,8 +1,14 @@
 #pragma once
 /* compat/cassert — freestanding shadow of <cassert>
- * In a bare-metal kernel there is no stderr or process abort.  Any assertion
- * failure spins forever so the watchdog (or developer on a debugger) can catch
- * it.  The message is intentionally dropped to avoid pulling in printf. */
+ * In a bare-metal kernel there is no stderr or process abort.  A failed
+ * assertion is a fatal invariant violation, so it routes to kpanic() — which
+ * stops every CPU, dumps their contexts, and halts — instead of silently
+ * spinning one CPU forever. The failing expression is the panic reason and the
+ * source line is passed as the first context value. */
+
+extern "C" {
+#include "kpanic.h"
+}
 
 #undef assert
 
@@ -12,9 +18,7 @@
 #  define assert(expr) \
     do { \
         if (!(expr)) { \
-            for (;;) { \
-                __asm__ volatile("hlt"); \
-            } \
+            kpanic("assert failed: " #expr, (unsigned long long)__LINE__, 0ULL); \
         } \
     } while (0)
 #endif

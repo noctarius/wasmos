@@ -2,6 +2,7 @@
 #include "arch/x86_64/irq_x86_64.h"
 #include "ipc.h"
 #include "serial.h"
+#include "kpanic.h"
 #include "timer.h"
 #include "policy.h"
 #include "paging.h"
@@ -73,8 +74,7 @@ static inline uint8_t *pic_mask2_slot(void)
 void x86_irq_iret_corrupt(const uint64_t *saved, const uint64_t *current) {
     serial_write("[irq] iret frame corrupt\n");
     if (!saved || !current) {
-        serial_write("[irq] iret frame ptr invalid\n");
-        return;
+        kpanic("irq iret frame corrupt (invalid ptr)", 0ULL, 0ULL);
     }
     serial_printf(
         "[irq] saved rip=%016llx\n"
@@ -89,10 +89,12 @@ void x86_irq_iret_corrupt(const uint64_t *saved, const uint64_t *current) {
         (unsigned long long)current[0],
         (unsigned long long)current[1],
         (unsigned long long)current[2]);
+    /* Corrupt return frame — unrecoverable. a=saved rip, b=current rip. */
+    kpanic("irq_iret_frame_corrupt", saved[0], current[0]);
 }
 
 void x86_irq_ist_corrupt(void) {
-    serial_write("[irq] ist stack canary corrupt\n");
+    kpanic("irq_ist_stack_canary_corrupt", 0ULL, 0ULL);
 }
 
 /* PIC I/O helpers are shared by mode 0 (direct PIC) and mode 1 (PIC via

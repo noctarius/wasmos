@@ -212,9 +212,7 @@ kmain(boot_info_t *boot_info)
     if (!boot_info || boot_info->version != BOOT_INFO_VERSION ||
         boot_info->size < sizeof(boot_info_t)) {
         klog_write("[kernel] invalid boot_info\n");
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
+        kpanic("invalid_boot_info", 0ULL, 0ULL);
     }
     klog_printf("[kernel] boot_info version=%016llx\n[kernel] boot_info size=%016llx\n",
         (unsigned long long)boot_info->version,
@@ -232,9 +230,7 @@ kmain(boot_info_t *boot_info)
     wasm_driver_init();
     if (kernel_boot_build_bootinfo_shadow(boot_info, &g_boot_info_shadow) != 0) {
         klog_write("[kernel] boot_info shadow copy failed\n");
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
+        kpanic("boot_info_shadow_copy_failed", 0ULL, 0ULL);
     }
     boot_info = &g_boot_info_shadow;
     g_boot_info = boot_info;
@@ -251,42 +247,32 @@ kmain(boot_info_t *boot_info)
 
     if (process_spawn_idle("idle", idle_entry, 0, &idle_pid) != 0) {
         klog_write("[kernel] idle spawn failed\n");
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
+        kpanic("idle_process_spawn_failed", 0ULL, 0ULL);
     }
 
     kernel_init_state_reset(&g_init_state, boot_info);
     if (process_spawn("init", kernel_init_entry, &g_init_state, &init_pid) != 0) {
         klog_write("[kernel] init spawn failed\n");
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
+        kpanic("init_process_spawn_failed", 0ULL, 0ULL);
     }
 
     klog_printf("[kernel] init pid=%016llx\n", (unsigned long long)init_pid);
 
     if (process_spawn_as(init_pid, "mem-service", memory_service_entry, 0, &mem_service_pid) != 0) {
         klog_write("[kernel] mem service spawn failed\n");
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
+        kpanic("mem_service_spawn_failed", 0ULL, 0ULL);
     }
 
     mem_service_proc = process_get(mem_service_pid);
     if (!mem_service_proc) {
         klog_write("[kernel] mem service lookup failed\n");
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
+        kpanic("mem_service_lookup_failed", 0ULL, 0ULL);
     }
 
     if (ipc_endpoint_create(mem_service_proc->context_id, &mem_service_endpoint) != IPC_OK ||
         ipc_endpoint_create(IPC_CONTEXT_KERNEL, &mem_reply_endpoint) != IPC_OK) {
         klog_write("[kernel] mem service endpoint create failed\n");
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
+        kpanic("mem_service_endpoint_create_failed", 0ULL, 0ULL);
     }
 
     memory_service_register(mem_service_proc->context_id, mem_service_endpoint, mem_reply_endpoint);
@@ -294,9 +280,7 @@ kmain(boot_info_t *boot_info)
 
     if (process_spawn_as(init_pid, "chardev-server", chardev_server_entry, 0, &chardev_pid) != 0) {
         klog_write("[kernel] chardev process spawn failed\n");
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
+        kpanic("chardev_process_spawn_failed", 0ULL, 0ULL);
     }
 
     klog_printf("[kernel] chardev pid=%016llx\n", (unsigned long long)chardev_pid);
@@ -304,16 +288,12 @@ kmain(boot_info_t *boot_info)
     chardev_proc = process_get(chardev_pid);
     if (!chardev_proc || wasm_chardev_init(chardev_proc->context_id) != 0) {
         klog_write("[kernel] chardev service init failed\n");
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
+        kpanic("chardev_service_init_failed", 0ULL, 0ULL);
     }
 
     if (wasm_chardev_endpoint(&chardev_endpoint) != 0) {
         klog_write("[kernel] chardev endpoint lookup failed\n");
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
+        kpanic("chardev_endpoint_lookup_failed", 0ULL, 0ULL);
     }
     g_chardev_service_endpoint = chardev_endpoint;
     kernel_shmem_owner_isolation_test(mem_service_proc->context_id, chardev_proc->context_id);
@@ -324,30 +304,22 @@ kmain(boot_info_t *boot_info)
     wasmos_app_set_policy_hooks(wasmos_endpoint_resolve, wasmos_capability_grant);
 
     if (kernel_sched_selftest_run() != 0) {
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
+        kpanic("kernel_sched_selftest_run_failed", 0ULL, 0ULL);
     }
 
     if (kernel_selftest_spawn_baseline(init_pid, g_preempt_test_enabled) != 0) {
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
+        kpanic("kernel_selftest_spawn_baseline_failed", 0ULL, 0ULL);
     }
 
     if (kernel_threading_selftest_spawn(init_pid, g_ring3_thread_lifecycle_smoke_enabled) != 0) {
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
+        kpanic("kernel_threading_selftest_spawn_failed", 0ULL, 0ULL);
     }
 
     if (g_ring3_smoke_enabled) {
         if (kernel_ring3_spawn_suite(init_pid,
                                      g_ring3_thread_lifecycle_smoke_enabled,
                                      g_ring3_fault_churn_rounds) != 0) {
-            for (;;) {
-                __asm__ volatile("hlt");
-            }
+            kpanic("ring3_spawn_suite_failed", 0ULL, 0ULL);
         }
     }
     kernel_boot_run_low_slot_sweep_diagnostic();

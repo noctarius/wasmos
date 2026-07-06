@@ -17,6 +17,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "../include/kpanic.h"
+
 extern "C" {
 #include "klog.h"
 #include "slab.h"
@@ -66,7 +68,7 @@ void __cxa_throw(void *obj, void *type_info, void (* /*dtor*/)(void *))
         __builtin_longjmp(ckpt->jbuf, 1);
     }
     klog_write("[warp] uncaught C++ exception — kernel panic\n");
-    for (;;) { __asm__ volatile("hlt"); }
+    kpanic("uncaught_cpp_exception", 0ULL, 0ULL);
 }
 
 // ---------------------------------------------------------------------------
@@ -78,7 +80,7 @@ extern "C" void  __cxa_end_catch(void)       noexcept {}
 
 extern "C" __attribute__((noreturn)) void __cxa_rethrow(void) {
     klog_write("[warp] __cxa_rethrow — kernel panic\n");
-    for (;;) { __asm__ volatile("hlt"); }
+    kpanic("cxa_rethrow_panic", 0ULL, 0ULL);
 }
 
 extern "C" void *__cxa_current_exception_type(void) noexcept { return nullptr; }
@@ -93,7 +95,7 @@ typedef void *_Unwind_Exception;
 extern "C" {
 _Unwind_Reason_Code __gxx_personality_v0(...)  { return 3; }
 __attribute__((noreturn)) void _Unwind_Resume(_Unwind_Exception) {
-    for (;;) { __asm__ volatile("hlt"); }
+    kpanic("uncaught_unwind_resume", 0ULL, 0ULL);
 }
 }
 
@@ -116,11 +118,11 @@ extern "C" void __cxa_guard_abort  (unsigned long long *g) noexcept { *g = 0ULL;
 namespace std {
     __attribute__((noreturn)) void terminate() noexcept {
         klog_write("[warp] std::terminate\n");
-        for (;;) { __asm__ volatile("hlt"); }
+        kpanic("std_terminate_panic", 0ULL, 0ULL);
     }
 }
 
 extern "C" __attribute__((noreturn)) void __cxa_pure_virtual(void) {
     klog_write("[warp] pure virtual call\n");
-    for (;;) { __asm__ volatile("hlt"); }
+    kpanic("pure_virtual_call_panic", 0ULL, 0ULL);
 }

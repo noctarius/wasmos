@@ -6,6 +6,7 @@
 #include "arch/x86_64/cpu_x86_64.h"
 #include "arch/x86_64/msr.h"
 #include "arch/x86_64/smp.h"
+#include "kpanic.h"
 #include "serial.h"
 #include "process.h"
 #include "memory_service.h"
@@ -431,15 +432,15 @@ idt_install(void)
     __asm__ volatile("lidt %0" : : "m"(idtr) : "memory");
 }
 
-__attribute__((noreturn)) void
-x86_exception_panic(uint64_t vector)
+/* Shared CPU-exception panic path. Both x86_exception_panic (no frame — reads
+ * live registers) and x86_exception_panic_frame (from an ISR-pushed frame)
+ * funnel here. It renders the rich, exception-specific dump + on-screen panic
+ * for THIS CPU, then calls kpanic() to stop every other CPU via NMI, dump their
+ * contexts, and halt the machine. */
+static __attribute__((noreturn)) void
+x86_exception_panic_common(uint64_t vector, const uint64_t *frame)
 {
-    uint64_t err = 0;
-    uint64_t rip = 0;
-    uint64_t cs = 0;
-    uint64_t rflags = 0;
-    uint64_t cr2 = 0;
-    uint64_t cr3 = 0;
+    uint64_t err = 0, rip = 0, cs = 0, rflags = 0, cr2 = 0, cr3 = 0;
     uint64_t kernel_start = (uint64_t)(uintptr_t)&__kernel_start;
     uint64_t kernel_end = (uint64_t)(uintptr_t)&__kernel_end;
     uint32_t pid = process_current_pid();
@@ -447,60 +448,21 @@ x86_exception_panic(uint64_t vector)
     const char *name = proc && proc->name ? proc->name : 0;
     uint64_t stack_base = proc ? (uint64_t)proc->stack_base : 0;
     uint64_t stack_top = proc ? (uint64_t)proc->stack_top : 0;
-    int has_cr2 = vector == 14;
+    int has_cr2 = (vector == 14);
 
     __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
     if (has_cr2) {
         __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
     }
-    __asm__ volatile("lea (%%rip), %0" : "=r"(rip));
-    __asm__ volatile("mov %%cs, %0" : "=r"(cs));
-    __asm__ volatile("pushfq; pop %0" : "=r"(rflags));
-
-    serial_printf("[cpu] exception vector=%016llx\n", (unsigned long long)vector);
-
-    if (has_cr2) {
-        serial_printf("[cpu] page fault cr2=%016llx\n", (unsigned long long)cr2);
-    }
-    serial_printf("[cpu] cr3=%016llx\n", (unsigned long long)cr3);
-    serial_printf("[cpu] pid=%u name=%s\n", pid, name ? name : "(null)");
-
-    panic_render_screen(vector, err, rip, cs, rflags, cr2, has_cr2, 0,
-                        pid, name, stack_base, stack_top, kernel_start, kernel_end, cr3);
-
-    __asm__ volatile("cli");
-    for (;;) {
-        __asm__ volatile("hlt");
-    }
-}
-
-__attribute__((noreturn)) void
-x86_exception_panic_frame(uint64_t vector, const uint64_t *frame)
-{
-    uint64_t err = 0;
-    uint64_t rip = 0;
-    uint64_t cs = 0;
-    uint64_t rflags = 0;
-    uint32_t pid = process_current_pid();
-    process_t *proc = process_get(pid);
-    const char *name = proc && proc->name ? proc->name : 0;
-    uint64_t stack_base = proc ? (uint64_t)proc->stack_base : 0;
-    uint64_t stack_top = proc ? (uint64_t)proc->stack_top : 0;
-    uint64_t kernel_start = (uint64_t)(uintptr_t)&__kernel_start;
-    uint64_t kernel_end = (uint64_t)(uintptr_t)&__kernel_end;
-    uint64_t cr3 = 0;
-
-    uint64_t cr2 = 0;
-    if (vector == 14) {
-        __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
-    }
-    __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
-
     if (frame) {
-        err = frame[0];
-        rip = frame[1];
-        cs = frame[2];
+        err    = frame[0];
+        rip    = frame[1];
+        cs     = frame[2];
         rflags = frame[3];
+    } else {
+        __asm__ volatile("lea (%%rip), %0" : "=r"(rip));
+        __asm__ volatile("mov %%cs, %0" : "=r"(cs));
+        __asm__ volatile("pushfq; pop %0" : "=r"(rflags));
     }
 
     serial_printf_unlocked(
@@ -514,7 +476,7 @@ x86_exception_panic_frame(uint64_t vector, const uint64_t *frame)
         (unsigned long long)rip,
         (unsigned long long)cs,
         (unsigned long long)rflags);
-    if (vector == 14) {
+    if (has_cr2) {
         serial_printf_unlocked("[cpu] cr2=%016llx\n", (unsigned long long)cr2);
     }
     serial_printf_unlocked(
@@ -549,13 +511,24 @@ x86_exception_panic_frame(uint64_t vector, const uint64_t *frame)
     }
     serial_printf_unlocked("[cpu] cr3=%016llx\n", (unsigned long long)cr3);
 
-    panic_render_screen(vector, err, rip, cs, rflags, cr2, vector == 14, frame,
+    panic_render_screen(vector, err, rip, cs, rflags, cr2, has_cr2, frame,
                         pid, name, stack_base, stack_top, kernel_start, kernel_end, cr3);
 
-    __asm__ volatile("cli");
-    for (;;) {
-        __asm__ volatile("hlt");
-    }
+    /* Stop the world, dump every CPU, and halt. a=vector; b=cr2 for a page
+     * fault, else the faulting rip. */
+    kpanic("cpu_exception", vector, has_cr2 ? cr2 : rip);
+}
+
+__attribute__((noreturn)) void
+x86_exception_panic(uint64_t vector)
+{
+    x86_exception_panic_common(vector, 0);
+}
+
+__attribute__((noreturn)) void
+x86_exception_panic_frame(uint64_t vector, const uint64_t *frame)
+{
+    x86_exception_panic_common(vector, frame);
 }
 
 

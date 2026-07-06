@@ -17,8 +17,16 @@
 
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 __attribute__((noreturn)) void kpanic(const char *reason, uint64_t a, uint64_t b);
 
 /* Called from isr_nmi with a pointer to the pushed register frame (PUSH_REGS
  * order followed by the CPU-pushed iret frame). */
 void x86_nmi_handler(uint64_t *regs);
+
+#ifdef __cplusplus
+}
+#endif

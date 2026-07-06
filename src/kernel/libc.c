@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include "string.h"
 #include "ctype.h"
+#include "kpanic.h"
 #include "stdio.h"
 #include "stdlib.h"
 #include "serial.h"
@@ -493,9 +494,7 @@ int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap) {
 
 void abort(void) {
     klog_write("[kernel] abort\n");
-    for (;;) {
-        __asm__ volatile("hlt");
-    }
+    kpanic("abort", 0ULL, 0ULL);
 }
 
 int tolower(int ch) {

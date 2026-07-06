@@ -19,8 +19,11 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "../include/kpanic.h"
+
 extern "C" {
 #include "klog.h"
+#include "kpanic.h"
 #include "arch/x86_64/smp.h"
 }
 
@@ -110,7 +113,7 @@ _Unwind_Reason_Code _Unwind_SjLj_RaiseException(_Unwind_Exception *exc)
     }
 
     klog_write("[warp] uncaught exception in sjlj handler\n");
-    for (;;) { __asm__ volatile("hlt"); }
+    kpanic("uncaught_sjlj_exception_panic", 0ULL, 0ULL);
 }
 
 _Unwind_Reason_Code _Unwind_SjLj_Resume(_Unwind_Exception *exc)

@@ -142,22 +142,23 @@ wasmos_sys_ipc_call_result(uint32_t endpoint,
     return out;
 }
 
-/* Does not return when syscall path succeeds. */
+/* Does not return when the syscall path succeeds. This is userland (ring3): it
+ * cannot kpanic (a kernel symbol) or hlt (privileged -> #GP). If the exit
+ * syscall ever fails to take effect, just keep re-issuing it so the thread/
+ * process never falls through into caller code. */
 static inline void
 wasmos_sys_exit(int32_t status)
 {
-    (void)wasmos_syscall1(WASMOS_SYSCALL_EXIT, (uint32_t)status);
     for (;;) {
-        __asm__ volatile("hlt");
+        (void)wasmos_syscall1(WASMOS_SYSCALL_EXIT, (uint32_t)status);
     }
 }
 
 static inline void
 wasmos_sys_thread_exit(int32_t status)
 {
-    (void)wasmos_syscall1(WASMOS_SYSCALL_THREAD_EXIT, (uint32_t)status);
     for (;;) {
-        __asm__ volatile("hlt");
+        (void)wasmos_syscall1(WASMOS_SYSCALL_THREAD_EXIT, (uint32_t)status);
     }
 }
 

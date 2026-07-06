@@ -1,6 +1,7 @@
 #include "process.h"
 #include "klog.h"
 #include "memory.h"
+#include "kpanic.h"
 #include "physmem.h"
 #include "serial.h"
 #include "paging.h"
@@ -408,9 +409,7 @@ static void process_validate_thread_context(process_t *proc,
             (unsigned long long)thread->ctx_canary_post);
         process_log_ctxsw_state();
         process_log_ctx_watch("canary");
-        for (;;) {
-            __asm__ volatile("hlt");
-        }
+        kpanic("ctx_canary_tripped", (uintptr_t)thread->ctx_canary_pre, (uintptr_t)thread->ctx_canary_post);
     }
     uint64_t rip = ctx->rip;
     uint8_t is_user_ctx = (uint8_t)((ctx->cs & 0x3u) == 0x3u);
@@ -443,9 +442,7 @@ static void process_validate_thread_context(process_t *proc,
                     (unsigned long long)rsp);
                 process_log_ctxsw_state();
                 process_log_ctx_watch("invalid-rsp");
-                for (;;) {
-                    __asm__ volatile("hlt");
-                }
+                kpanic("invalid_rsp", (uintptr_t)rip, (uintptr_t)rsp);
             }
         }
         return;
@@ -463,9 +460,7 @@ static void process_validate_thread_context(process_t *proc,
         (unsigned long long)ctx->rsp);
     process_log_ctxsw_state();
     process_log_ctx_watch("invalid-rip");
-    for (;;) {
-        __asm__ volatile("hlt");
-    }
+    kpanic("invalid_rip", (uintptr_t)rip, (uintptr_t)ctx->rsp);
 }
 
 static thread_t *
@@ -556,9 +551,7 @@ static void process_trampoline(void) {
                         (unsigned long long)*base,
                         (unsigned long long)*mid,
                         (unsigned long long)*top);
-                    for (;;) {
-                        __asm__ volatile("cli; hlt");
-                    }
+                    kpanic("stack_canary_tripped", (uintptr_t)base, (uintptr_t)top);
                 }
             }
         }
@@ -1719,21 +1712,6 @@ int process_schedule_once(void) {
     return process_schedule_once_impl();
 }
 
-/* Distinct result codes for process_schedule_once so the caller can tell a
- * normal re-schedule (a thread ran and blocked/exited/yielded) from a genuine
- * "could not dispatch even the idle thread" fallthrough (a panic-worthy bug).
- * 0 = dispatched a thread that voluntarily yielded (still runnable). */
-enum {
-    SCHED_OK          = 0,  /* dispatched; thread YIELDED (still ready)        */
-    SCHED_R_MAXCOUNT  = 1,  /* PROCESS_MAX_COUNT == 0 (never in practice)      */
-    SCHED_R_PICK      = 2,  /* pick returned null / no proc / no entry         */
-    SCHED_R_NOTREADY  = 3,  /* picked thread not in READY state                */
-    SCHED_R_CTX       = 4,  /* run context missing                            */
-    SCHED_R_ROOT      = 5,  /* target root page table missing                 */
-    SCHED_R_ZOMBIE    = 6,  /* owning process is zombie/exiting                */
-    SCHED_R_RANDONE   = 7,  /* dispatched; thread BLOCKED/EXITED (normal loop) */
-};
-
 static int process_schedule_once_impl(void) {
     if (PROCESS_MAX_COUNT == 0) {
         return SCHED_R_MAXCOUNT;
@@ -2478,9 +2456,7 @@ process_sched_invariant_fail(const char *msg, uint64_t a, uint64_t b)
     serial_write_hex64(a);
     klog_write("[sched] b=");
     serial_write_hex64(b);
-    for (;;) {
-        __asm__ volatile("cli; hlt");
-    }
+    kpanic(msg, a, b);
 }
 
 static void

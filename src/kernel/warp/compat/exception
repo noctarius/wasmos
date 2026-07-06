@@ -7,6 +7,10 @@
  *
  * std::terminate() is mapped to an infinite halt loop. */
 
+extern "C" {
+#include "kpanic.h"
+}
+
 namespace std {
 
 class exception {
@@ -21,9 +25,7 @@ public:
 /* std::terminate — called by the ABI when exception handling fails.
  * In the kernel this must never return. */
 [[noreturn]] inline void terminate() noexcept {
-    for (;;) {
-        __asm__ volatile("hlt");
-    }
+    kpanic("cpp_exception_terminate", 0, 0ULL);
 }
 
 } // namespace std

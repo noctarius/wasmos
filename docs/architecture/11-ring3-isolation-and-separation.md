@@ -374,9 +374,45 @@ Forbidden: `[watchdog] trap frame invalid cs=`
 
 ---
 
+### Native Ring-3 Service Model (planned)
+
+Today isolation is coupled to the WASM runtime: a service is either sandboxed
+*because* it runs as a WASM module (ring-3 WARP, or ring-0 WARP in the default
+build), or it is "native" C linked into the kernel and therefore runs in ring-0
+with no boundary at all. There is no *native + isolated* option — a plain C
+service cannot run in ring-3.
+
+This forces C-heavy or performance-sensitive services (e.g. an embedded lwIP
+`net-stack`, see [Networking](22-networking-virtio-net-and-stack.md)) to choose
+between the WASM sandbox and full kernel privilege. For untrusted-input services
+that is a poor trade: the correct home is ring-3, natively.
+
+The `INT 0x80` syscall path (see [Syscall Interface](#syscall-interface)) already
+carries native ring-3 process/thread/IPC primitives and backs the ring-3
+threading smoke tests, so the isolation plumbing exists. What is missing to make
+native ring-3 *services* real:
+
+- **Service-runtime syscalls.** Extend the `INT 0x80` table (or add a native
+  `libsys` shim over it) to expose the service primitives that are currently
+  WARP/wasm3 hostcalls only: `svc_register`/`svc_lookup`, FS-buffer transfer,
+  `region_alloc`, and the driver/IRQ IPC contract. These must reuse the existing
+  capability checks — no privilege is granted that a WASM service would not get.
+- **Native ELF service loader.** Load a plain ELF into a ring-3 process with its
+  own address space and heap, in parallel to the WASM-module + WARP load path
+  (the ring-3 process/paging model already supports this shape).
+- **Native crt0 + `libsys`/libc shim** targeting the syscall ABI, so a native
+  service `malloc`s against its *own* ring-3 heap rather than the kernel's.
+
+Payoff extends well beyond networking: any service could run native + isolated
+instead of being pushed into the WASM sandbox or into ring-0. Tracked in
+`docs/TASKS.md` (Memory and Isolation).
+
 ### Deferred Hardening
 
 The following are intentionally left out of current scope:
+
+- Native ring-3 service model (native + isolated services) — see
+  "Native Ring-3 Service Model (planned)" above and `docs/TASKS.md`
 
 - Full hostcall split-view/coherence-bridge cleanup (tracked with
   `TODO` comments in `wasm3_link.c`)

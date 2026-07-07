@@ -295,7 +295,7 @@ ata_dma_prepare(int32_t source_endpoint,
                               source_endpoint,
                               (direction_flags & WASMOS_DMA_DIR_FROM_DEVICE) ? WASMOS_BUFFER_GRANT_WRITE : WASMOS_BUFFER_GRANT_READ);
     if (rc != 0) {
-        return rc;
+        return 100 + rc;
     }
     rc = wasmos_dma_map_borrow(WASMOS_BUFFER_KIND_FS,
                                source_endpoint,
@@ -304,7 +304,7 @@ ata_dma_prepare(int32_t source_endpoint,
                                (int32_t)direction_flags);
     if (rc < 0) {
         (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_FS);
-        return rc;
+        return 200 + rc;
     }
     *out_device_addr = rc;
     if ((direction_flags & WASMOS_DMA_DIR_TO_DEVICE) != 0) {
@@ -315,7 +315,7 @@ ata_dma_prepare(int32_t source_endpoint,
         if (rc != WASMOS_DMA_STATUS_OK) {
             (void)wasmos_dma_unmap_borrow(WASMOS_BUFFER_KIND_FS, source_endpoint);
             (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_FS);
-            return rc;
+            return 300 + rc;
         }
     }
     return WASMOS_DMA_STATUS_OK;

@@ -109,6 +109,47 @@ typedef struct {
     uint8_t is_wasm;
 } wasmos_app_subsystem_info_t;
 
+typedef struct {
+    const char *name;
+    const uint8_t *module_bytes;
+    uint32_t module_size;
+    const uint8_t *compiled_bytes;
+    uint32_t compiled_size;
+    const char *entry_export;
+    uint32_t stack_size;
+    uint32_t heap_size;
+    uint32_t entry_argc;
+    const uint32_t *entry_argv;
+} wasmos_app_start_params_t;
+
+typedef struct {
+    uint8_t started;
+    int32_t entry_rc;
+} wasmos_native_instance_t;
+
+typedef union {
+    wasm_driver_t wasm;
+    wasmos_native_instance_t native;
+} wasmos_app_runtime_state_t;
+
+struct wasmos_subsystem_ops;
+typedef struct wasmos_subsystem_ops wasmos_subsystem_ops_t;
+
+struct wasmos_subsystem_ops {
+    const char *tag;
+    uint8_t is_wasm;
+    uint8_t gates_ready_for_services;
+    int (*start)(wasmos_app_runtime_state_t *state,
+                 const wasmos_app_start_params_t *params,
+                 uint32_t owner_context_id,
+                 uint32_t flags);
+    int (*call_entry)(wasmos_app_runtime_state_t *state,
+                      const char *entry_export,
+                      uint32_t entry_argc,
+                      uint32_t *entry_argv);
+    void (*stop)(wasmos_app_runtime_state_t *state);
+};
+
 typedef int (*wasmos_app_endpoint_resolver_t)(uint32_t owner_context_id,
                                               const uint8_t *name,
                                               uint32_t name_len,
@@ -120,7 +161,8 @@ typedef int (*wasmos_app_capability_granter_t)(uint32_t owner_context_id,
                                                uint32_t flags);
 
 typedef struct {
-    wasm_driver_t driver;
+    const wasmos_subsystem_ops_t *ops;
+    wasmos_app_runtime_state_t runtime;
     uint8_t active;
     uint32_t flags;
     uint32_t owner_context_id;
@@ -135,6 +177,7 @@ typedef struct {
 int wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out_desc);
 int wasmos_app_resolve_subsystem(const wasmos_app_desc_t *desc,
                                  wasmos_app_subsystem_info_t *out_info);
+int wasmos_app_requires_explicit_ready(const wasmos_app_desc_t *desc);
 int wasmos_app_start(wasmos_app_instance_t *instance,
                      const wasmos_app_desc_t *desc,
                      uint32_t owner_context_id,

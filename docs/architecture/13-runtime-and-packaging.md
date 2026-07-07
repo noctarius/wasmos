@@ -367,16 +367,27 @@ When the process manager receives a spawn request for a WASMOS-APP blob, the
 sequence is:
 
 1. `wasmos_app_parse(blob, blob_size, &desc)` — validate and parse the container.
-2. Policy hooks set by `wasmos_app_set_policy_hooks()` resolve required endpoints
+2. `wasmos_app_resolve_subsystem(&desc, &info)` maps the package tag onto one of
+   the kernel's built-in subsystem handlers (`WASM3`, `WARP`, or `NATIVE`
+   today). Legacy packages without a tag are routed through compatibility
+   aliases first.
+3. Policy hooks set by `wasmos_app_set_policy_hooks()` resolve required endpoints
    and grant declared capabilities (callbacks into the process manager).
-3. `wasmos_app_start(&instance, &desc, owner_context_id, init_argv, init_argc)`:
+4. `wasmos_app_start(&instance, &desc, owner_context_id, init_argv, init_argc)`:
+   - Resolves the subsystem's `wasmos_subsystem_ops_t` entry from the runtime tag.
    - Calls `g_endpoint_resolver` for each entry in `desc.req_eps`.
    - Calls `g_capability_granter` for each capability in `desc.caps`.
    - Translates memory hints to byte sizes (`pages * 4096`, 64 KB floor).
-   - Calls `wasm_driver_start()` which runs the startup sequence above.
-4. `wasmos_app_call_entry(&instance)` — dispatches to `instance.entry` export
-   (typically `initialize` or the resolved binding target).
-5. The entry export runs the driver/service event loop via WASM host imports.
+   - Dispatches through the subsystem's `start` handler.
+5. `wasmos_app_call_entry(&instance)` — dispatches through the subsystem's
+   `call_entry` handler using the common instance-owned entry metadata.
+6. `wasmos_app_stop(&instance)` dispatches through the subsystem's `stop`
+   handler.
+
+For WASM-backed subsystems, the `start` handler calls `wasm_driver_start()` and
+the entry handler calls `wasm_driver_call_unlocked()`. For the native
+subsystem, `start` calls `native_driver_start()` and caches the result so the
+common entry path can still run through the same `call_entry` contract.
 
 Parse errors, failed endpoint resolution, and failed capability grants all
 abort before any runtime state is created.

@@ -266,18 +266,8 @@ pm_app_entry(process_t *process, void *arg)
 
     if (!state->started) {
         wasmos_app_desc_t desc;
-        wasmos_app_subsystem_info_t subsystem;
         if (wasmos_app_parse(state->blob, state->blob_size, &desc) != 0) {
             klog_write("[pm] app parse failed\n");
-            process_set_exit_status(process, -1);
-            pm_slot_reset(state);
-#if defined(WASMOS_ENABLE_PREEMPT_GUARD)
-            preempt_enable();
-#endif
-            return PROCESS_RUN_EXITED;
-        }
-        if (wasmos_app_resolve_subsystem(&desc, &subsystem) != 0) {
-            klog_write("[pm] app subsystem resolve failed\n");
             process_set_exit_status(process, -1);
             pm_slot_reset(state);
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD)
@@ -321,22 +311,6 @@ pm_app_entry(process_t *process, void *arg)
         while (preempt_disable_depth() > 0) preempt_enable();
         process_clear_resched();
 #endif
-
-        if (!subsystem.is_wasm) {
-            int native_rc = native_driver_start(process->context_id,
-                                                desc.wasm_bytes,
-                                                desc.wasm_size,
-                                                state->name,
-                                                init_args,
-                                                state->entry_argc);
-            process_set_exit_status(process, native_rc == 0 ? 0 : -1);
-            wasmos_app_stop(&state->app);
-            pm_slot_reset(state);
-#if defined(WASMOS_ENABLE_PREEMPT_GUARD)
-            preempt_enable();
-#endif
-            return PROCESS_RUN_EXITED;
-        }
 
         if (wasmos_app_start(&state->app,
                              &desc,
@@ -403,8 +377,13 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
         klog_write("[pm] spawn_module subsystem resolve failed\n");
         return -1;
     }
-    if ((desc.flags & (WASMOS_APP_FLAG_SERVICE | WASMOS_APP_FLAG_DRIVER)) != 0) {
-        require_explicit_ready = 1;
+    {
+        int ready_rc = wasmos_app_requires_explicit_ready(&desc);
+        if (ready_rc < 0) {
+            klog_write("[pm] spawn_module ready policy failed\n");
+            return -1;
+        }
+        require_explicit_ready = ready_rc ? 1u : 0u;
     }
 
     if (str_copy_bytes(slot->name, sizeof(slot->name), desc.name, desc.name_len) != 0) {
@@ -558,8 +537,12 @@ pm_spawn_from_buffer(uint32_t parent_pid,
                        WASMOS_APP_FLAG_DRIVER)) == 0) {
         return -1;
     }
-    if ((desc.flags & (WASMOS_APP_FLAG_SERVICE | WASMOS_APP_FLAG_DRIVER)) != 0) {
-        require_explicit_ready = 1;
+    {
+        int ready_rc = wasmos_app_requires_explicit_ready(&desc);
+        if (ready_rc < 0) {
+            return -1;
+        }
+        require_explicit_ready = ready_rc ? 1u : 0u;
     }
     if (str_copy_bytes(slot->name, sizeof(slot->name), desc.name, desc.name_len) != 0) {
         return -1;

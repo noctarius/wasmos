@@ -3,6 +3,7 @@
  * with zero-copy pointers into the blob.  wasmos_app_start() creates the WASM
  * driver instance, resolves endpoints, grants capabilities, and prepares entry args. */
 #include "klog.h"
+#include "native_driver.h"
 #include "serial.h"
 #include "wasmos_app.h"
 #include <string.h>
@@ -153,6 +154,7 @@ typedef struct {
     const char *request_tag;
     const char *runtime_tag;
     uint8_t is_wasm;
+    uint8_t gates_ready_for_services;
 } wasmos_app_subsystem_entry_t;
 
 #if WASMOS_WASM_RUNTIME == 1
@@ -162,12 +164,122 @@ typedef struct {
 #endif
 
 static const wasmos_app_subsystem_entry_t g_subsystems[] = {
-    { WASMOS_SUBSYSTEM_TAG_NATIVE, WASMOS_SUBSYSTEM_TAG_NATIVE, 0u },
-    { WASMOS_SUBSYSTEM_TAG_WASM,   WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, 1u },
-    { WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, 1u },
+    { WASMOS_SUBSYSTEM_TAG_NATIVE, WASMOS_SUBSYSTEM_TAG_NATIVE, 0u, 1u },
+    { WASMOS_SUBSYSTEM_TAG_WASM,   WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, 1u, 1u },
+    { WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, 1u, 1u },
 #if WASMOS_WASM_RUNTIME == 1
-    { "WARP+JIT", WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, 1u },
+    { "WARP+JIT", WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, 1u, 1u },
 #endif
+};
+
+static int
+wasmos_wasm_subsystem_start(wasmos_app_runtime_state_t *state,
+                            const wasmos_app_start_params_t *params,
+                            uint32_t owner_context_id,
+                            uint32_t flags)
+{
+    wasm_driver_manifest_t manifest;
+    (void)flags;
+    if (!state || !params) {
+        return -1;
+    }
+    manifest.name = params->name;
+    manifest.module_bytes = params->module_bytes;
+    manifest.module_size = params->module_size;
+    manifest.compiled_bytes = params->compiled_bytes;
+    manifest.compiled_size = params->compiled_size;
+    manifest.entry_export = 0;
+    manifest.entry_argc = 0;
+    manifest.entry_argv = 0;
+    manifest.stack_size = params->stack_size;
+    manifest.heap_size = params->heap_size;
+    return wasm_driver_start(&state->wasm, &manifest, owner_context_id);
+}
+
+static int
+wasmos_wasm_subsystem_call_entry(wasmos_app_runtime_state_t *state,
+                                 const char *entry_export,
+                                 uint32_t entry_argc,
+                                 uint32_t *entry_argv)
+{
+    if (!state) {
+        return -1;
+    }
+    return wasm_driver_call_unlocked(&state->wasm, entry_export, entry_argc, entry_argv);
+}
+
+static void
+wasmos_wasm_subsystem_stop(wasmos_app_runtime_state_t *state)
+{
+    if (!state) {
+        return;
+    }
+    wasm_driver_stop(&state->wasm);
+}
+
+static int
+wasmos_native_subsystem_start(wasmos_app_runtime_state_t *state,
+                              const wasmos_app_start_params_t *params,
+                              uint32_t owner_context_id,
+                              uint32_t flags)
+{
+    int rc = -1;
+    (void)flags;
+    if (!state || !params) {
+        return -1;
+    }
+    rc = native_driver_start(owner_context_id,
+                             params->module_bytes,
+                             params->module_size,
+                             params->name,
+                             params->entry_argv,
+                             params->entry_argc);
+    state->native.started = 1;
+    state->native.entry_rc = rc;
+    return rc == 0 ? 0 : -1;
+}
+
+static int
+wasmos_native_subsystem_call_entry(wasmos_app_runtime_state_t *state,
+                                   const char *entry_export,
+                                   uint32_t entry_argc,
+                                   uint32_t *entry_argv)
+{
+    (void)entry_export;
+    (void)entry_argc;
+    (void)entry_argv;
+    if (!state || !state->native.started) {
+        return -1;
+    }
+    return state->native.entry_rc;
+}
+
+static void
+wasmos_native_subsystem_stop(wasmos_app_runtime_state_t *state)
+{
+    if (!state) {
+        return;
+    }
+    state->native.started = 0;
+    state->native.entry_rc = 0;
+}
+
+static const wasmos_subsystem_ops_t g_wasmos_wasm_subsystem_ops = {
+    .tag = WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG,
+    .is_wasm = 1u,
+    .gates_ready_for_services = 1u,
+    .start = wasmos_wasm_subsystem_start,
+    .call_entry = wasmos_wasm_subsystem_call_entry,
+    .stop = wasmos_wasm_subsystem_stop,
+};
+
+static const wasmos_subsystem_ops_t g_wasmos_native_subsystem_ops = {
+    .tag = WASMOS_SUBSYSTEM_TAG_NATIVE,
+    .is_wasm = 0u,
+    .gates_ready_for_services = 1u,
+    .start = wasmos_native_subsystem_start,
+    .call_entry = wasmos_native_subsystem_call_entry,
+    .stop = wasmos_native_subsystem_stop,
 };
 
 static void
@@ -260,6 +372,21 @@ copy_ascii_field(char *dst, uint32_t dst_size, const uint8_t *src, uint32_t src_
         dst[i] = (char)src[i];
     }
     dst[src_len] = '\0';
+    return 0;
+}
+
+static const wasmos_subsystem_ops_t *
+wasmos_app_ops_for_runtime_tag(const char *runtime_tag)
+{
+    if (!runtime_tag) {
+        return 0;
+    }
+    if (strcmp(runtime_tag, WASMOS_SUBSYSTEM_TAG_NATIVE) == 0) {
+        return &g_wasmos_native_subsystem_ops;
+    }
+    if (strcmp(runtime_tag, WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG) == 0) {
+        return &g_wasmos_wasm_subsystem_ops;
+    }
     return 0;
 }
 
@@ -588,9 +715,30 @@ wasmos_app_resolve_subsystem(const wasmos_app_desc_t *desc,
 }
 
 int
+wasmos_app_requires_explicit_ready(const wasmos_app_desc_t *desc)
+{
+    wasmos_app_subsystem_info_t info;
+    const wasmos_subsystem_ops_t *ops = 0;
+    if (!desc) {
+        return -1;
+    }
+    if (wasmos_app_resolve_subsystem(desc, &info) != 0) {
+        return -1;
+    }
+    ops = wasmos_app_ops_for_runtime_tag(info.runtime_tag);
+    if (!ops) {
+        return -1;
+    }
+    if ((desc->flags & (WASMOS_APP_FLAG_SERVICE | WASMOS_APP_FLAG_DRIVER)) == 0) {
+        return 0;
+    }
+    return ops->gates_ready_for_services ? 1 : 0;
+}
+
+int
 wasmos_app_call_entry(wasmos_app_instance_t *instance)
 {
-    if (!instance || !instance->active) {
+    if (!instance || !instance->active || !instance->ops || !instance->ops->call_entry) {
         trace_write("[wasmos-app] entry skipped (inactive)\n");
         return -1;
     }
@@ -598,7 +746,7 @@ wasmos_app_call_entry(wasmos_app_instance_t *instance)
         instance->name, instance->entry));
     /* Entry dispatch is centralized here so drivers, services, and applications
      * all produce the same diagnostic framing around their actual export call. */
-    int rc = wasm_driver_call_unlocked(&instance->driver,
+    int rc = instance->ops->call_entry(&instance->runtime,
                                        instance->entry,
                                        instance->entry_argc,
                                        instance->entry_argv);
@@ -658,17 +806,28 @@ wasmos_app_start(wasmos_app_instance_t *instance,
         }
     }
 
-    wasm_driver_manifest_t manifest;
-    manifest.name = instance->name;
-    manifest.module_bytes = desc->wasm_bytes;
-    manifest.module_size = desc->wasm_size;
-    manifest.compiled_bytes = desc->compiled_bytes;
-    manifest.compiled_size = desc->compiled_size;
-    manifest.entry_export = 0;
-    manifest.entry_argc = 0;
-    manifest.entry_argv = 0;
-    manifest.stack_size = desc->stack_pages_hint ? desc->stack_pages_hint * 4096u : 64u * 1024u;
-    manifest.heap_size = desc->heap_pages_hint ? desc->heap_pages_hint * 4096u : 64u * 1024u;
+    wasmos_app_subsystem_info_t subsystem_info;
+    wasmos_app_start_params_t params;
+    if (wasmos_app_resolve_subsystem(desc, &subsystem_info) != 0) {
+        klog_write("[wasmos-app] subsystem resolve failed\n");
+        return -1;
+    }
+    instance->ops = wasmos_app_ops_for_runtime_tag(subsystem_info.runtime_tag);
+    if (!instance->ops || !instance->ops->start) {
+        klog_write("[wasmos-app] subsystem ops missing\n");
+        return -1;
+    }
+
+    params.name = instance->name;
+    params.module_bytes = desc->wasm_bytes;
+    params.module_size = desc->wasm_size;
+    params.compiled_bytes = desc->compiled_bytes;
+    params.compiled_size = desc->compiled_size;
+    params.entry_export = 0;
+    params.entry_argc = 0;
+    params.entry_argv = 0;
+    params.stack_size = desc->stack_pages_hint ? desc->stack_pages_hint * 4096u : 64u * 1024u;
+    params.heap_size = desc->heap_pages_hint ? desc->heap_pages_hint * 4096u : 64u * 1024u;
 
     if (init_argc > 4) {
         init_argc = 4;
@@ -677,9 +836,13 @@ wasmos_app_start(wasmos_app_instance_t *instance,
     for (uint32_t i = 0; i < 4; ++i) {
         instance->entry_argv[i] = init_argv ? init_argv[i] : 0;
     }
+    params.entry_export = instance->entry;
+    params.entry_argc = instance->entry_argc;
+    params.entry_argv = instance->entry_argv;
 
-    if (wasm_driver_start(&instance->driver, &manifest, owner_context_id) != 0) {
+    if (instance->ops->start(&instance->runtime, &params, owner_context_id, desc->flags) != 0) {
         klog_write("[wasmos-app] start failed\n");
+        instance->ops = 0;
         return -1;
     }
 
@@ -695,7 +858,10 @@ wasmos_app_stop(wasmos_app_instance_t *instance)
     if (!instance || !instance->active) {
         return;
     }
-    wasm_driver_stop(&instance->driver);
+    if (instance->ops && instance->ops->stop) {
+        instance->ops->stop(&instance->runtime);
+    }
+    instance->ops = 0;
     instance->active = 0;
     instance->flags = 0;
     instance->owner_context_id = 0;

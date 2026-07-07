@@ -1,6 +1,15 @@
 # Current Status
 
 - This status file is a snapshot, not a release changelog.
+- **wasm3 hostcall side-table slot allocation is now serialized under SMP.**
+  Rare wasm3+ring3+SMP boot failures showed FS transfer-buffer hostcalls
+  returning impossible errors and a later wasm3 opcode RIP with a corrupted high
+  half. A coarse global `wasm3_runtime_enter/leave` gate reproduced the expected
+  cross-WASM deadlock because it stayed held across blocking IPC. The narrower
+  fix protects the shared process-indexed wasm3 hostcall side tables
+  (`g_wasm_last_slots`, `g_wasm_block_slots`, and `g_wasm_fs_peer_slots`) during
+  slot lookup/allocation instead, avoiding duplicate slot assignment without
+  serializing full `m3_Call` execution.
 - **Process-manager shared buffer slots are now serialized under SMP.** The
   framebuffer/filesystem transfer-buffer slot tables are global array-chunk
   lists, and wasm3+ring3+SMP graphical app traffic can touch them from

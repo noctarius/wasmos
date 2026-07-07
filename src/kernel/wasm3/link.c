@@ -20,6 +20,7 @@
 #include "system_control.h"
 #include "thread.h"
 #include "wasm_driver.h"
+#include "spinlock.h"
 
 #ifdef WASMOS_SCHED_THREADABLE
 #include "futex.h"
@@ -58,6 +59,7 @@ typedef struct {
 static wasm_ipc_last_slot_t g_wasm_last_slots[PROCESS_MAX_COUNT];
 static wasm_block_slot_t g_wasm_block_slots[PROCESS_MAX_COUNT];
 static wasm_fs_peer_slot_t g_wasm_fs_peer_slots[PROCESS_MAX_COUNT];
+static spinlock_t g_wasm_side_table_lock;
 /* Allow several SHMEM mappings per process (UI + multiple window buffers + aux buffers). */
 #define WASM_SHMEM_MAP_SLOTS (PROCESS_MAX_COUNT * 32)
 static wasm_shmem_linear_map_t g_wasm_shmem_maps[WASM_SHMEM_MAP_SLOTS];
@@ -347,50 +349,60 @@ static wasm_ipc_last_slot_t *
 wasm_ipc_slot_for_pid(uint32_t pid)
 {
     wasm_ipc_last_slot_t *empty = 0;
+    wasm_ipc_last_slot_t *slot = 0;
 
     if (pid == 0) {
         return 0;
     }
 
+    spinlock_lock(&g_wasm_side_table_lock);
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_wasm_last_slots[i].pid == pid) {
-            return &g_wasm_last_slots[i];
+            slot = &g_wasm_last_slots[i];
+            break;
         }
         if (!empty && g_wasm_last_slots[i].pid == 0) {
             empty = &g_wasm_last_slots[i];
         }
     }
 
-    if (empty) {
+    if (!slot && empty) {
         empty->pid = pid;
         empty->valid = 0;
+        slot = empty;
     }
-    return empty;
+    spinlock_unlock(&g_wasm_side_table_lock);
+    return slot;
 }
 
 static wasm_block_slot_t *
 wasm_block_slot_for_pid(uint32_t pid)
 {
     wasm_block_slot_t *empty = 0;
+    wasm_block_slot_t *slot = 0;
 
     if (pid == 0) {
         return 0;
     }
 
+    spinlock_lock(&g_wasm_side_table_lock);
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_wasm_block_slots[i].pid == pid) {
-            return &g_wasm_block_slots[i];
+            slot = &g_wasm_block_slots[i];
+            break;
         }
         if (!empty && g_wasm_block_slots[i].pid == 0) {
             empty = &g_wasm_block_slots[i];
         }
     }
 
-    if (empty) {
+    if (!slot && empty) {
         empty->pid = pid;
         empty->buffer_phys = 0;
+        slot = empty;
     }
-    return empty;
+    spinlock_unlock(&g_wasm_side_table_lock);
+    return slot;
 }
 
 static int
@@ -576,26 +588,31 @@ static wasm_fs_peer_slot_t *
 wasm_fs_peer_slot_for_pid(uint32_t pid)
 {
     wasm_fs_peer_slot_t *empty = 0;
+    wasm_fs_peer_slot_t *slot = 0;
 
     if (pid == 0) {
         return 0;
     }
 
+    spinlock_lock(&g_wasm_side_table_lock);
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_wasm_fs_peer_slots[i].pid == pid) {
-            return &g_wasm_fs_peer_slots[i];
+            slot = &g_wasm_fs_peer_slots[i];
+            break;
         }
         if (!empty && g_wasm_fs_peer_slots[i].pid == 0) {
             empty = &g_wasm_fs_peer_slots[i];
         }
     }
 
-    if (empty) {
+    if (!slot && empty) {
         empty->pid = pid;
         empty->valid = 0;
         empty->peer_context_id = 0;
+        slot = empty;
     }
-    return empty;
+    spinlock_unlock(&g_wasm_side_table_lock);
+    return slot;
 }
 
 static void *

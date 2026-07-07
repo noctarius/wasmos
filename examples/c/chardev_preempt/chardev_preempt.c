@@ -8,12 +8,27 @@
 int
 main(int argc, char **argv)
 {
-    int32_t chardev_endpoint = wasmos_startup_arg(0);
+    int32_t proc_endpoint = wasmos_startup_arg(0);
     (void)argc;
     (void)argv;
 
     int32_t reply_endpoint = wasmos_ipc_create_endpoint();
     if (reply_endpoint < 0) {
+        return -1;
+    }
+    if (proc_endpoint <= 0) {
+        return -1;
+    }
+
+    int32_t chardev_endpoint = -1;
+    for (int32_t spins = 0; spins < 2048; ++spins) {
+        chardev_endpoint = wasmos_svc_lookup(proc_endpoint, reply_endpoint, "chardev", 100 + spins);
+        if (chardev_endpoint >= 0) {
+            break;
+        }
+        (void)wasmos_sched_yield();
+    }
+    if (chardev_endpoint < 0) {
         return -1;
     }
 

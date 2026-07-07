@@ -1,6 +1,12 @@
 # Current Status
 
 - This status file is a snapshot, not a release changelog.
+- **`chardev-client` and `chardev-preempt` now resolve the chardev service via
+  `proc.endpoint` + `wasmos_svc_lookup(...)` instead of consuming an injected
+  `chardev.endpoint` entry arg.** These examples are smoke clients, not
+  manifest-binding tests. Resolving the service at runtime matches the existing
+  `gfx`, `virtio.net`, and other user-space lookup patterns and removes one
+  startup-coupled variable from the early WARP ring-3 bring-up path.
 - **WARP ring-3 dual-map now resolves dedicated linmem pages against the live
   CPU-local CR3.** WARP+SMP+ring3 AOT service startup was failing
   consistently at `[warp-r3] dual-map failed` once `fs-manager` entered the

@@ -1,6 +1,24 @@
 # Current Status
 
 - This status file is a snapshot, not a release changelog.
+- **WARP ring-3 dual-map now resolves dedicated linmem pages against the live
+  CPU-local CR3.** WARP+SMP+ring3 AOT service startup was failing
+  consistently at `[warp-r3] dual-map failed` once `fs-manager` entered the
+  ring-3 setup path. The linmem alias-phys resolver reaches the dedicated
+  higher-half WARP linmem window through `paging_virt_to_phys(...)`, and that
+  walker still defaulted to the shared `g_current_pml4_phys` mirror when no
+  root was passed. Under SMP that mirror is last-writer-wins, so ring-3 setup
+  could walk another CPU's CR3 and fail to recover the backing linmem pages.
+  `paging_virt_to_phys_in_root(..., 0, ...)` now falls back to the live
+  `paging_get_current_root_table()` CR3 instead. The same startup path also
+  incorrectly treated dedicated WARP linmem-window VAs
+  (`WARP_LINMEM_VA_BASE...`) as invalid because they are below the classic
+  direct-map `kHalfBase`; ring-3 linmem mapping and basedata-length recovery
+  now accept both the direct alias and the dedicated higher-half WARP linmem
+  window. Once linmem moves into that per-app VA slot it is backed by
+  scattered physical pages, not one contiguous `g_mmap_table` range, so the
+  ring-3 linmem dual-map path now queries slot metadata and maps each
+  committed kernel-VA page into the user CR3 individually.
 - **wasm3 hostcall side-table slot allocation is now serialized under SMP.**
   Rare wasm3+ring3+SMP boot failures showed FS transfer-buffer hostcalls
   returning impossible errors and a later wasm3 opcode RIP with a corrupted high

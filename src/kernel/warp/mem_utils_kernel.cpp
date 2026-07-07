@@ -46,6 +46,20 @@ constexpr uint64_t kPhysLimit  = 512ULL * 1024ULL * 1024ULL;
 
 inline uint64_t round_up_page(uint64_t n)  { return (n + kPageSize - 1) & ~(kPageSize - 1); }
 
+#ifdef WASMOS_WARP_RING3
+extern "C" int warp_linmem_kernel_window_query(const uint8_t *linmem_kernel_ptr,
+                                               uint64_t *out_slot_va_base,
+                                               uint64_t *out_basedata_length,
+                                               uint64_t *out_committed_pages);
+
+static inline bool is_ring3_linmem_kernel_window(uint64_t virt)
+{
+    return virt >= WARP_LINMEM_VA_BASE &&
+           virt < WARP_LINMEM_VA_BASE +
+                      (uint64_t)(WARP_LINMEM_PDPT_COUNT / 2u) * WARP_LINMEM_VA_STRIDE;
+}
+#endif
+
 static int remap_direct_alias_pages(uint8_t *ptr, uint64_t pages)
 {
     if (!ptr || pages == 0) {
@@ -180,7 +194,21 @@ warp_mem_linmem_basedata_length(uint8_t const *linmem_kernel_ptr)
 {
     if (!linmem_kernel_ptr) return 0;
     uint64_t linmem_virt = reinterpret_cast<uint64_t>(linmem_kernel_ptr);
-    if (linmem_virt < kHalfBase) return 0;
+    if (is_ring3_linmem_kernel_window(linmem_virt)) {
+        uint64_t slot_va_base = 0;
+        uint64_t basedata_length = 0;
+        uint64_t committed_pages = 0;
+        if (warp_linmem_kernel_window_query(linmem_kernel_ptr,
+                                            &slot_va_base,
+                                            &basedata_length,
+                                            &committed_pages) != 0) {
+            return 0;
+        }
+        return basedata_length;
+    }
+    if (linmem_virt < kHalfBase && !is_ring3_linmem_kernel_window(linmem_virt)) {
+        return 0;
+    }
     uint64_t linmem_phys = warp_mem_alias_phys(linmem_virt);
     MmapEntry *e = find_entry_by_phys(linmem_phys);
     return e ? (linmem_phys - e->phys - e->data_offset) : 0ULL;
@@ -248,36 +276,62 @@ warp_mem_ring3_map_linmem(uint64_t user_root, uint8_t const *linmem_kernel_ptr)
 {
     if (!linmem_kernel_ptr) return -1;
     uint64_t linmem_virt = reinterpret_cast<uint64_t>(linmem_kernel_ptr);
-    if (linmem_virt < kHalfBase) return -1;
-    uint64_t linmem_phys = warp_mem_alias_phys(linmem_virt);
-
-    /* The MmapEntry whose phys range contains linmem_phys is the backing
-     * allocation (warp_kmalloc or allocPagedMemory).  data_offset accounts
-     * for the AllocHeader prepended by warp_kmalloc (0 for mmap entries). */
-    MmapEntry *e = find_entry_by_phys(linmem_phys);
-    if (!e) return -1;
-
-    /* actual_basedataLength = bytes from memoryBase to linmem (excludes AllocHeader). */
-    uint64_t basedataLength = linmem_phys - e->phys - e->data_offset;
-    /* Preserve the backing allocation's low page offset in the user linMem VA.
-     * WARP's basedata fields are addressed relative to linMem, so a fixed
-     * page-aligned user VA would shift those slots for allocations whose
-     * memoryBase is not page-aligned. */
-    uint64_t user_linmem_base = WARP_R3_LINMEM_BASE + (linmem_phys & (kPageSize - 1ULL));
-    /* Map from phys (page-aligned) so that:
-     *   phys + data_offset + basedataLength → user_linmem_base (user space). */
-    uint64_t user_va_base   = user_linmem_base - e->data_offset - basedataLength;
+    uint64_t basedataLength = 0;
+    uint64_t user_va_base = 0;
+    uint64_t phys_identity = 0;
+    uint64_t total_pages = 0;
+    uint8_t dedicated_slot = 0;
     uint64_t flags = MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE | MEM_REGION_FLAG_USER;
+    uint64_t data_offset = 0;
+
+    if (is_ring3_linmem_kernel_window(linmem_virt)) {
+        uint64_t slot_va_base = 0;
+        if (warp_linmem_kernel_window_query(linmem_kernel_ptr,
+                                            &slot_va_base,
+                                            &basedataLength,
+                                            &total_pages) != 0) {
+            return -1;
+        }
+        data_offset = linmem_virt - basedataLength - slot_va_base;
+        uint64_t user_linmem_base = WARP_R3_LINMEM_BASE + (linmem_virt & (kPageSize - 1ULL));
+        user_va_base = user_linmem_base - data_offset - basedataLength;
+        phys_identity = slot_va_base;
+        dedicated_slot = 1;
+    } else {
+        if (linmem_virt < kHalfBase) {
+            return -1;
+        }
+        uint64_t linmem_phys = warp_mem_alias_phys(linmem_virt);
+        if (!linmem_phys) {
+            return -1;
+        }
+
+        /* The MmapEntry whose phys range contains linmem_phys is the backing
+         * allocation (warp_kmalloc or allocPagedMemory).  data_offset accounts
+         * for the AllocHeader prepended by warp_kmalloc (0 for mmap entries). */
+        MmapEntry *e = find_entry_by_phys(linmem_phys);
+        if (!e) {
+            return -1;
+        }
+
+        basedataLength = linmem_phys - e->phys - e->data_offset;
+        uint64_t user_linmem_base = WARP_R3_LINMEM_BASE + (linmem_phys & (kPageSize - 1ULL));
+        user_va_base = user_linmem_base - e->data_offset - basedataLength;
+        phys_identity = e->phys;
+        total_pages = e->pages;
+        data_offset = e->data_offset;
+    }
+
     Ring3LinmemMapState *state = find_ring3_linmem_map(user_root);
     uint64_t start_page = 0;
     uint8_t incremental =
         state != nullptr &&
         state->user_root == user_root &&
         state->user_va_base == user_va_base &&
-        state->phys_base == e->phys &&
+        state->phys_base == phys_identity &&
         state->basedata_length == basedataLength &&
-        state->data_offset == e->data_offset &&
-        state->pages <= e->pages;
+        state->data_offset == data_offset &&
+        state->pages <= total_pages;
 
     if (!incremental && state != nullptr && state->user_root == user_root) {
         for (uint64_t i = 0; i < state->pages; ++i) {
@@ -287,25 +341,33 @@ warp_mem_ring3_map_linmem(uint64_t user_root, uint8_t const *linmem_kernel_ptr)
         start_page = state->pages;
     }
 
-    for (uint64_t i = start_page; i < e->pages; ++i) {
+    for (uint64_t i = start_page; i < total_pages; ++i) {
+        uint64_t phys_page = 0;
         if (!incremental) {
             (void)paging_unmap_4k_in_root(user_root, user_va_base + i * kPageSize);
         }
+        if (dedicated_slot) {
+            phys_page = paging_virt_to_phys(phys_identity + i * kPageSize) & ~(kPageSize - 1ULL);
+        } else {
+            phys_page = phys_identity + i * kPageSize;
+        }
+        if (!phys_page) {
+            return -1;
+        }
         if (paging_map_4k_in_root(user_root,
                                    user_va_base + i * kPageSize,
-                                   e->phys + i * kPageSize,
+                                   phys_page,
                                    flags) != 0) {
-            klog_write("[lm-map] paging_map_4k_in_root failed page="); serial_write_hex64(i); klog_write("\n");
             return -1;
         }
     }
     if (state != nullptr) {
         state->user_root = user_root;
         state->user_va_base = user_va_base;
-        state->phys_base = e->phys;
-        state->pages = e->pages;
+        state->phys_base = phys_identity;
+        state->pages = total_pages;
         state->basedata_length = basedataLength;
-        state->data_offset = e->data_offset;
+        state->data_offset = data_offset;
     }
     return 0;
 }

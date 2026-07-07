@@ -588,6 +588,38 @@ warp_linmem_reserve_hint(uint32_t pid, uint64_t reserve_bytes)
 }
 
 int
+warp_linmem_kernel_window_query(const uint8_t *linmem_kernel_ptr,
+                                uint64_t *out_slot_va_base,
+                                uint64_t *out_basedata_length,
+                                uint64_t *out_committed_pages)
+{
+    if (!linmem_kernel_ptr || !out_slot_va_base || !out_basedata_length || !out_committed_pages) {
+        return -1;
+    }
+    uint64_t linmem_virt = reinterpret_cast<uint64_t>(linmem_kernel_ptr);
+    if (linmem_virt < WARP_LINMEM_VA_BASE) {
+        return -1;
+    }
+    uint64_t slot = (linmem_virt - WARP_LINMEM_VA_BASE) / WARP_LINMEM_VA_STRIDE;
+    if (slot >= WARP_LINMEM_SLOTS) {
+        return -1;
+    }
+    uint64_t slot_va_base = WARP_LINMEM_VA_BASE + slot * WARP_LINMEM_VA_STRIDE;
+    AllocHeader *hdr = reinterpret_cast<AllocHeader *>(static_cast<uintptr_t>(slot_va_base));
+    if (hdr->is_pages != 2) {
+        return -1;
+    }
+    uint64_t memory_base = slot_va_base + sizeof(AllocHeader);
+    if (linmem_virt < memory_base) {
+        return -1;
+    }
+    *out_slot_va_base = slot_va_base;
+    *out_basedata_length = linmem_virt - memory_base;
+    *out_committed_pages = hdr->pages;
+    return 0;
+}
+
+int
 warp_heap_probe_growth(size_t size)
 {
     void *p = warp_kmalloc(size);

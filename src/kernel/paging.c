@@ -641,7 +641,12 @@ uint64_t
 paging_virt_to_phys_in_root(uint64_t root_table, uint64_t virt)
 {
     if (root_table == 0) {
-        root_table = g_current_pml4_phys;
+        /* Under SMP the current root must come from this CPU's live CR3, not
+         * the last writer to the shared g_current_pml4_phys mirror.  WARP's
+         * dedicated linmem VA window resolves backing phys pages through this
+         * helper during ring-3 setup, so using the mirror can walk another
+         * CPU's address space and make ring-3 dual-map setup fail. */
+        root_table = paging_get_current_root_table();
     }
     if (root_table == 0) {
         return 0;

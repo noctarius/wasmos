@@ -3457,7 +3457,7 @@ m3ApiRawFunction(wasmos_proc_info_stats)
     typedef struct {
         uint32_t state;
         uint32_t block_reason;
-        uint32_t is_wasm;
+        char runtime_tag[8];
         uint32_t thread_count;
         uint32_t live_thread_count;
         uint32_t current_tid;
@@ -3533,7 +3533,6 @@ m3ApiRawFunction(wasmos_proc_info_stats)
     wasm_proc_stats_t out_stats = {
         .state = stats.state,
         .block_reason = stats.block_reason,
-        .is_wasm = stats.is_wasm,
         .thread_count = stats.thread_count,
         .live_thread_count = stats.live_thread_count,
         .current_tid = stats.current_tid,
@@ -3545,6 +3544,9 @@ m3ApiRawFunction(wasmos_proc_info_stats)
         .rss_est_bytes = stats.rss_est_bytes,
         .last_cpu = stats.last_cpu
     };
+    for (uint32_t i = 0; i < sizeof(out_stats.runtime_tag); ++i) {
+        out_stats.runtime_tag[i] = stats.runtime_tag[i];
+    }
     if (mm_copy_to_user(proc->context_id,
                         parent_user,
                         &parent_pid,

@@ -5,11 +5,12 @@
 #include <ctype.h>
 
 #define MAGIC "WASMOSAP"
-#define VERSION 4u
+#define VERSION 5u
 #define FLAG_DRIVER (1u << 0)
 #define FLAG_SERVICE (1u << 1)
 #define FLAG_APP (1u << 2)
 #define FLAG_NEEDS_PRIV (1u << 3)
+#define SUBSYSTEM_TAG_LEN 8u
 
 #define MEM_HINT_STACK 1u
 #define MEM_HINT_HEAP 2u
@@ -38,6 +39,7 @@ typedef struct __attribute__((packed)) {
     uint16_t driver_io_port_max;
     uint32_t driver_match_count;
     uint32_t compiled_size;   /* v4: size of WARP AOT binary appended after WASM; 0 if absent */
+    char subsystem_tag[SUBSYSTEM_TAG_LEN];
 } wasmos_app_header_t;
 
 typedef struct __attribute__((packed)) {
@@ -136,6 +138,35 @@ static int capability_name_supported(const char *name) {
            strcmp(name, "system.control") == 0;
 }
 
+static int subsystem_tag_has_valid_char(char c) {
+    return ((c >= 'A') && (c <= 'Z')) ||
+           ((c >= '0') && (c <= '9')) ||
+           c == '+' || c == '_' || c == '-';
+}
+
+static int subsystem_tag_valid(const char *tag) {
+    size_t len = 0;
+    if (!tag || !tag[0]) {
+        return 0;
+    }
+    for (; tag[len] != '\0'; ++len) {
+        if (len >= SUBSYSTEM_TAG_LEN || !subsystem_tag_has_valid_char(tag[len])) {
+            return 0;
+        }
+    }
+    return len > 0 && len <= SUBSYSTEM_TAG_LEN;
+}
+
+static void subsystem_tag_copy(char dst[SUBSYSTEM_TAG_LEN], const char *src) {
+    memset(dst, 0, SUBSYSTEM_TAG_LEN);
+    if (!src) {
+        return;
+    }
+    for (size_t i = 0; i < SUBSYSTEM_TAG_LEN && src[i] != '\0'; ++i) {
+        dst[i] = src[i];
+    }
+}
+
 typedef struct {
     char name[64];
     uint32_t flags;
@@ -156,6 +187,7 @@ typedef struct {
     char name[64];
     char entry[64];
     char kind[16];
+    char subsystem[SUBSYSTEM_TAG_LEN + 1];
     uint8_t native;
     uint8_t storage_bootstrap;
     uint32_t stack_pages;
@@ -270,6 +302,8 @@ parse_linker_manifest(const char *path, linker_manifest_t *out)
                 snprintf(out->entry, sizeof(out->entry), "%s", val);
             } else if (strcmp(key, "kind") == 0) {
                 snprintf(out->kind, sizeof(out->kind), "%s", val);
+            } else if (strcmp(key, "subsystem") == 0) {
+                snprintf(out->subsystem, sizeof(out->subsystem), "%s", val);
             } else if (strcmp(key, "native") == 0) {
                 if (manifest_parse_bool(val, &out->native) != 0) { fclose(f); return -1; }
             } else if (strcmp(key, "storage_bootstrap") == 0) {
@@ -349,6 +383,13 @@ parse_linker_manifest(const char *path, linker_manifest_t *out)
     }
     fclose(f);
     if (out->name[0] == '\0' || out->entry[0] == '\0') {
+        return -1;
+    }
+    if (out->subsystem[0] == '\0') {
+        snprintf(out->subsystem, sizeof(out->subsystem), "%s",
+                 out->native ? "NATIVE" : "WASM");
+    }
+    if (!subsystem_tag_valid(out->subsystem)) {
         return -1;
     }
     return 0;
@@ -520,6 +561,7 @@ int main(int argc, char **argv) {
         hdr.driver_io_port_max = (driver_match_count > 0) ? driver_matches[0].io_port_max : 0;
         hdr.driver_match_count = driver_match_count;
         hdr.compiled_size = (uint32_t)compiled_data_size;
+        subsystem_tag_copy(hdr.subsystem_tag, lm.subsystem);
 
         wasmos_mem_hint_t stack_hint = { MEM_HINT_STACK, lm.stack_pages, 0 };
         wasmos_mem_hint_t heap_hint = { MEM_HINT_HEAP, lm.heap_pages, 0 };
@@ -780,6 +822,7 @@ int main(int argc, char **argv) {
     hdr.driver_io_port_max = driver_io_port_max;
     hdr.driver_match_count = driver_match_count;
     hdr.compiled_size = 0;  /* legacy path: no AOT binary; use --manifest --compiled for AOT */
+    subsystem_tag_copy(hdr.subsystem_tag, (flags & (1u << 4)) != 0 ? "NATIVE" : "WASM");
 
     wasmos_mem_hint_t stack_hint = { MEM_HINT_STACK, stack_pages, 0 };
     wasmos_mem_hint_t heap_hint = { MEM_HINT_HEAP, heap_pages, 0 };

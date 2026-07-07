@@ -1,6 +1,7 @@
 # Current Status
 
 - This status file is a snapshot, not a release changelog.
+- **WASMOS-APP packages now carry an explicit subsystem tag, and `ps` reports resolved runtime names.** The `.wap` header is now version 5 with an 8-byte ASCII subsystem tag. New packages default to `WASM` or `NATIVE`, may request explicit tags such as `WASM3` or `WARP`, and older v1-v4 packages are mapped compatibly through the same resolver. The kernel keeps using the existing internal `is_wasm` flag for scheduler/runtime semantics, but process reporting now stores and exports a resolved runtime tag (`WASM3`, `WARP`, `NATIVE`, or `KERNEL`) instead of the old `is_wasm` boolean in `proc_info_stats`, and the `ps` utility now shows a `Runtime` column and tree labels keyed off that tag. Validation: `cmake --build build --target make_wasmos_app`, `cmake --build build --target kernel`, `python3 -m unittest tests.test_make_wasmos_app_capabilities`, `cmake --build build --target run-kernel-unit-tests`, and `cmake --build build --target run-qemu-test`.
 - **`chardev-client` and `chardev-preempt` now resolve the chardev service via
   `proc.endpoint` + `wasmos_svc_lookup(...)` instead of consuming an injected
   `chardev.endpoint` entry arg.** These examples are smoke clients, not

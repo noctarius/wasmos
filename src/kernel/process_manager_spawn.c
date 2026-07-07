@@ -266,8 +266,18 @@ pm_app_entry(process_t *process, void *arg)
 
     if (!state->started) {
         wasmos_app_desc_t desc;
+        wasmos_app_subsystem_info_t subsystem;
         if (wasmos_app_parse(state->blob, state->blob_size, &desc) != 0) {
             klog_write("[pm] app parse failed\n");
+            process_set_exit_status(process, -1);
+            pm_slot_reset(state);
+#if defined(WASMOS_ENABLE_PREEMPT_GUARD)
+            preempt_enable();
+#endif
+            return PROCESS_RUN_EXITED;
+        }
+        if (wasmos_app_resolve_subsystem(&desc, &subsystem) != 0) {
+            klog_write("[pm] app subsystem resolve failed\n");
             process_set_exit_status(process, -1);
             pm_slot_reset(state);
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD)
@@ -312,7 +322,7 @@ pm_app_entry(process_t *process, void *arg)
         process_clear_resched();
 #endif
 
-        if (desc.flags & WASMOS_APP_FLAG_NATIVE) {
+        if (!subsystem.is_wasm) {
             int native_rc = native_driver_start(process->context_id,
                                                 desc.wasm_bytes,
                                                 desc.wasm_size,
@@ -383,9 +393,14 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     pm_slot_reset(slot);
 
     wasmos_app_desc_t desc;
+    wasmos_app_subsystem_info_t subsystem;
     uint8_t require_explicit_ready = 0;
     if (wasmos_app_parse((const uint8_t *)(uintptr_t)mod->base, (uint32_t)mod->size, &desc) != 0) {
         klog_write("[pm] spawn_module parse failed\n");
+        return -1;
+    }
+    if (wasmos_app_resolve_subsystem(&desc, &subsystem) != 0) {
+        klog_write("[pm] spawn_module subsystem resolve failed\n");
         return -1;
     }
     if ((desc.flags & (WASMOS_APP_FLAG_SERVICE | WASMOS_APP_FLAG_DRIVER)) != 0) {
@@ -422,7 +437,8 @@ pm_spawn_module(uint32_t parent_pid, uint32_t module_index, uint32_t *out_pid)
     }
 
     slot->pid = *out_pid;
-    if (process_set_runtime_is_wasm(*out_pid, (desc.flags & WASMOS_APP_FLAG_NATIVE) == 0 ? 1u : 0u) != 0) {
+    if (process_set_runtime_is_wasm(*out_pid, subsystem.is_wasm) != 0 ||
+        process_set_runtime_tag(*out_pid, subsystem.runtime_tag) != 0) {
         klog_write("[pm] spawn_module runtime flag failed: ");
         klog_write(slot->name);
         klog_write("\n");
@@ -529,8 +545,12 @@ pm_spawn_from_buffer(uint32_t parent_pid,
     pm_slot_reset(slot);
 
     wasmos_app_desc_t desc;
+    wasmos_app_subsystem_info_t subsystem;
     uint8_t require_explicit_ready = 0;
     if (wasmos_app_parse(blob, blob_size, &desc) != 0) {
+        return -1;
+    }
+    if (wasmos_app_resolve_subsystem(&desc, &subsystem) != 0) {
         return -1;
     }
     if ((desc.flags & (WASMOS_APP_FLAG_APP |
@@ -574,7 +594,8 @@ pm_spawn_from_buffer(uint32_t parent_pid,
         return -1;
     }
     slot->pid = *out_pid;
-    if (process_set_runtime_is_wasm(*out_pid, (desc.flags & WASMOS_APP_FLAG_NATIVE) == 0 ? 1u : 0u) != 0) {
+    if (process_set_runtime_is_wasm(*out_pid, subsystem.is_wasm) != 0 ||
+        process_set_runtime_tag(*out_pid, subsystem.runtime_tag) != 0) {
         pm_slot_reset(slot);
         return -1;
     }

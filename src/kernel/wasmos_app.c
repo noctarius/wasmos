@@ -97,6 +97,31 @@ typedef struct __attribute__((packed)) {
     uint32_t wasm_size;
     uint32_t req_ep_count;
     uint32_t cap_count;
+    uint32_t entry_arg_binding_count;
+    uint32_t mem_hint_count;
+    uint8_t driver_match_class;
+    uint8_t driver_match_subclass;
+    uint8_t driver_match_prog_if;
+    uint8_t driver_match_reserved0;
+    uint16_t driver_match_vendor_id;
+    uint16_t driver_match_device_id;
+    uint16_t driver_io_port_min;
+    uint16_t driver_io_port_max;
+    uint32_t driver_match_count;
+    uint32_t compiled_size;
+    char subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN];
+} wasmos_app_header_v5_t;
+
+typedef struct __attribute__((packed)) {
+    char magic[8];
+    uint16_t version;
+    uint16_t header_size;
+    uint32_t flags;
+    uint32_t name_len;
+    uint32_t entry_len;
+    uint32_t wasm_size;
+    uint32_t req_ep_count;
+    uint32_t cap_count;
     uint32_t mem_hint_count;
     uint32_t reserved;
 } wasmos_app_header_v1_t;
@@ -123,6 +148,81 @@ typedef struct __attribute__((packed)) {
 
 static wasmos_app_endpoint_resolver_t g_endpoint_resolver;
 static wasmos_app_capability_granter_t g_capability_granter;
+
+typedef struct {
+    const char *request_tag;
+    const char *runtime_tag;
+    uint8_t is_wasm;
+} wasmos_app_subsystem_entry_t;
+
+#if WASMOS_WASM_RUNTIME == 1
+#define WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG WASMOS_SUBSYSTEM_TAG_WARP
+#else
+#define WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG WASMOS_SUBSYSTEM_TAG_WASM3
+#endif
+
+static const wasmos_app_subsystem_entry_t g_subsystems[] = {
+    { WASMOS_SUBSYSTEM_TAG_NATIVE, WASMOS_SUBSYSTEM_TAG_NATIVE, 0u },
+    { WASMOS_SUBSYSTEM_TAG_WASM,   WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, 1u },
+    { WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, 1u },
+#if WASMOS_WASM_RUNTIME == 1
+    { "WARP+JIT", WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, 1u },
+#endif
+};
+
+static void
+copy_subsystem_tag(char *dst, const char *src)
+{
+    if (!dst) {
+        return;
+    }
+    for (uint32_t i = 0; i <= WASMOS_APP_SUBSYSTEM_TAG_LEN; ++i) {
+        dst[i] = '\0';
+    }
+    if (!src) {
+        return;
+    }
+    for (uint32_t i = 0; i < WASMOS_APP_SUBSYSTEM_TAG_LEN && src[i] != '\0'; ++i) {
+        dst[i] = src[i];
+    }
+}
+
+static int
+subsystem_tag_has_valid_char(char c)
+{
+    return ((c >= 'A') && (c <= 'Z')) ||
+           ((c >= '0') && (c <= '9')) ||
+           c == '+' || c == '_' || c == '-';
+}
+
+static int
+subsystem_tag_validate_bytes(const char *tag, uint32_t len)
+{
+    int saw_nul = 0;
+    if (!tag || len == 0) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < len; ++i) {
+        char c = tag[i];
+        if (c == '\0') {
+            saw_nul = 1;
+            continue;
+        }
+        if (saw_nul || !subsystem_tag_has_valid_char(c)) {
+            return -1;
+        }
+    }
+    return tag[0] == '\0' ? -1 : 0;
+}
+
+static void
+subsystem_tag_default_for_flags(uint32_t flags, char out_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1])
+{
+    copy_subsystem_tag(out_tag,
+                       (flags & WASMOS_APP_FLAG_NATIVE) != 0
+                           ? WASMOS_SUBSYSTEM_TAG_NATIVE
+                           : WASMOS_SUBSYSTEM_TAG_WASM);
+}
 
 static int
 check_u32_add(uint32_t a, uint32_t b, uint32_t *out)
@@ -183,7 +283,9 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
     uint32_t mem_hint_count = 0;
     uint32_t reserved = 0;
     uint32_t compiled_size = 0;
+    char subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1];
     wasmos_app_driver_match_t driver_matches[WASMOS_APP_MAX_DRIVER_MATCHES];
+    subsystem_tag_default_for_flags(0, subsystem_tag);
     for (uint32_t i = 0; i < WASMOS_APP_MAX_DRIVER_MATCHES; ++i) {
         driver_matches[i].class_code = WASMOS_DRIVER_MATCH_ANY_U8;
         driver_matches[i].subclass = WASMOS_DRIVER_MATCH_ANY_U8;
@@ -259,8 +361,7 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
             return -1;
         }
         reserved = hdr_v3->reserved;
-    } else if (version == WASMOS_APP_VERSION) {
-        /* Version 4: like v3 but compiled_size replaces reserved. */
+    } else if (version == 4u) {
         if (blob_size < sizeof(wasmos_app_header_v4_t)) {
             return -1;
         }
@@ -280,13 +381,39 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
         }
         compiled_size = hdr_v4->compiled_size;
         reserved = 0; /* v4 has no reserved field */
+        subsystem_tag_default_for_flags(flags, subsystem_tag);
+    } else if (version == WASMOS_APP_VERSION) {
+        if (blob_size < sizeof(wasmos_app_header_v5_t)) {
+            return -1;
+        }
+        const wasmos_app_header_v5_t *hdr_v5 = (const wasmos_app_header_v5_t *)blob;
+        header_size = hdr_v5->header_size;
+        flags = hdr_v5->flags;
+        name_len = hdr_v5->name_len;
+        entry_len = hdr_v5->entry_len;
+        wasm_size = hdr_v5->wasm_size;
+        req_ep_count = hdr_v5->req_ep_count;
+        cap_count = hdr_v5->cap_count;
+        entry_arg_binding_count = hdr_v5->entry_arg_binding_count;
+        mem_hint_count = hdr_v5->mem_hint_count;
+        driver_match_count = hdr_v5->driver_match_count;
+        if (driver_match_count > WASMOS_APP_MAX_DRIVER_MATCHES) {
+            return -1;
+        }
+        compiled_size = hdr_v5->compiled_size;
+        reserved = 0;
+        for (uint32_t i = 0; i < WASMOS_APP_SUBSYSTEM_TAG_LEN; ++i) {
+            subsystem_tag[i] = hdr_v5->subsystem_tag[i];
+        }
+        subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN] = '\0';
     } else {
         return -1;
     }
     if ((version == 1u && header_size != sizeof(wasmos_app_header_v1_t)) ||
         (version == 2u && header_size != sizeof(wasmos_app_header_v2_t)) ||
         (version == 3u && header_size != sizeof(wasmos_app_header_v3_t)) ||
-        (version == WASMOS_APP_VERSION && header_size != sizeof(wasmos_app_header_v4_t)) ||
+        (version == 4u && header_size != sizeof(wasmos_app_header_v4_t)) ||
+        (version == WASMOS_APP_VERSION && header_size != sizeof(wasmos_app_header_v5_t)) ||
         reserved != 0) {
         return -1;
     }
@@ -303,6 +430,9 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
     /* Native payloads are privileged and valid for driver/service kinds. */
     if ((flags & WASMOS_APP_FLAG_NATIVE) &&
         !(flags & (WASMOS_APP_FLAG_DRIVER | WASMOS_APP_FLAG_SERVICE))) {
+        return -1;
+    }
+    if (subsystem_tag_validate_bytes(subsystem_tag, WASMOS_APP_SUBSYSTEM_TAG_LEN) != 0) {
         return -1;
     }
 
@@ -404,7 +534,7 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
     const uint8_t *wasm_bytes = &blob[off];
     off += wasm_size;
 
-    /* Version 4: optional pre-compiled WARP AOT binary follows WASM bytes. */
+    /* Version 4+ may append a pre-compiled WARP AOT binary after the WASM bytes. */
     const uint8_t *compiled_bytes = 0;
     if (compiled_size > 0) {
         if (check_bounds(off, compiled_size, blob_size) != 0) {
@@ -417,6 +547,7 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
     out_desc->blob = blob;
     out_desc->blob_size = blob_size;
     out_desc->flags = flags;
+    copy_subsystem_tag(out_desc->subsystem_tag, subsystem_tag);
     out_desc->name = name;
     out_desc->name_len = name_len;
     out_desc->entry = entry;
@@ -432,6 +563,28 @@ wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out
         out_desc->driver_matches[i] = driver_matches[i];
     }
     return 0;
+}
+
+int
+wasmos_app_resolve_subsystem(const wasmos_app_desc_t *desc,
+                             wasmos_app_subsystem_info_t *out_info)
+{
+    if (!desc || !out_info) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < sizeof(g_subsystems) / sizeof(g_subsystems[0]); ++i) {
+        if (strcmp(desc->subsystem_tag, g_subsystems[i].request_tag) != 0) {
+            continue;
+        }
+        if (((desc->flags & WASMOS_APP_FLAG_NATIVE) != 0) != (g_subsystems[i].is_wasm == 0u)) {
+            return -1;
+        }
+        copy_subsystem_tag(out_info->requested_tag, g_subsystems[i].request_tag);
+        copy_subsystem_tag(out_info->runtime_tag, g_subsystems[i].runtime_tag);
+        out_info->is_wasm = g_subsystems[i].is_wasm;
+        return 0;
+    }
+    return -1;
 }
 
 int

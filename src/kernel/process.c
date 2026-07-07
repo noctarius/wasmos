@@ -38,6 +38,9 @@ static process_t *g_idle_process;
  * cpu_local_t (at offset 17 from GS:0) to avoid false preemption suppression
  * across CPUs when multiple context switches run simultaneously. */
 static uint64_t g_ctx_watch_logged;
+
+static void process_clear_runtime_tag(process_t *proc);
+static int process_copy_runtime_tag(process_t *proc, const char *tag);
 static uint64_t g_ctx_watch_last_logged_rip;
 static uint64_t g_ctx_watch_last_logged_rsp;
 static uint64_t g_ctx_watch_last_logged_rflags;
@@ -625,6 +628,7 @@ static void process_reset_slot(process_t *proc) {
     proc->auto_reap = 0;
     proc->is_wasm = 0;
     proc->ready = 0;
+    process_clear_runtime_tag(proc);
     proc->ctx = (process_context_t){0};
     proc->ctx_canary_pre = 0;
     proc->ctx_canary_post = 0;
@@ -653,6 +657,33 @@ process_copy_name(process_t *proc, const char *name)
     proc->name_storage[i] = '\0';
     proc->name = proc->name_storage;
     return name[i] == '\0' ? 0 : -1;
+}
+
+static void
+process_clear_runtime_tag(process_t *proc)
+{
+    if (!proc) {
+        return;
+    }
+    for (uint32_t i = 0; i < sizeof(proc->runtime_tag); ++i) {
+        proc->runtime_tag[i] = '\0';
+    }
+}
+
+static int
+process_copy_runtime_tag(process_t *proc, const char *tag)
+{
+    if (!proc || !tag) {
+        return -1;
+    }
+    process_clear_runtime_tag(proc);
+    for (uint32_t i = 0; i < WASMOS_APP_SUBSYSTEM_TAG_LEN; ++i) {
+        if (tag[i] == '\0') {
+            return 0;
+        }
+        proc->runtime_tag[i] = tag[i];
+    }
+    return tag[WASMOS_APP_SUBSYSTEM_TAG_LEN] == '\0' ? 0 : -1;
 }
 
 static process_t *process_find_slot(void) {
@@ -1020,6 +1051,8 @@ process_spawn_as_internal(uint32_t parent_pid,
     slot->ctx_canary_pre = PROCESS_CTX_CANARY_VALUE;
     slot->ctx_canary_post = PROCESS_CTX_CANARY_VALUE;
     slot->is_wasm = 0;
+    process_clear_runtime_tag(slot);
+    (void)process_copy_runtime_tag(slot, "KERNEL");
     slot->entry = entry;
     slot->arg = arg;
     if (process_copy_name(slot, name ? name : "") != 0) {
@@ -1198,6 +1231,8 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
     slot->ctx_canary_pre = PROCESS_CTX_CANARY_VALUE;
     slot->ctx_canary_post = PROCESS_CTX_CANARY_VALUE;
     slot->is_wasm = 0;
+    process_clear_runtime_tag(slot);
+    (void)process_copy_runtime_tag(slot, "KERNEL");
     slot->entry = entry;
     slot->arg = arg;
     if (process_copy_name(slot, name ? name : "") != 0) {
@@ -2408,7 +2443,9 @@ process_info_at_stats(uint32_t index,
             *out_name = proc->name ? proc->name : "";
             out_stats->state = (uint32_t)proc->state;
             out_stats->block_reason = (uint32_t)proc->block_reason;
-            out_stats->is_wasm = (uint32_t)proc->is_wasm;
+            for (uint32_t j = 0; j < WASMOS_APP_SUBSYSTEM_TAG_LEN; ++j) {
+                out_stats->runtime_tag[j] = proc->runtime_tag[j];
+            }
             out_stats->thread_count = proc->thread_count;
             out_stats->live_thread_count = proc->live_thread_count;
             out_stats->current_tid =
@@ -2446,6 +2483,16 @@ process_set_runtime_is_wasm(uint32_t pid, uint8_t is_wasm)
     }
     proc->is_wasm = is_wasm ? 1u : 0u;
     return 0;
+}
+
+int
+process_set_runtime_tag(uint32_t pid, const char *tag)
+{
+    process_t *proc = process_get(pid);
+    if (!proc) {
+        return -1;
+    }
+    return process_copy_runtime_tag(proc, tag);
 }
 static void
 process_sched_invariant_fail(const char *msg, uint64_t a, uint64_t b)

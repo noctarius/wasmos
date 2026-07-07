@@ -1470,7 +1470,7 @@ warp_proc_info_stats(uint32_t index, uint32_t buf_off, uint32_t buf_len,
                      uint32_t parent_off, uint32_t stats_off, void *ctx_)
 {
     typedef struct {
-        uint32_t state; uint32_t block_reason; uint32_t is_wasm;
+        uint32_t state; uint32_t block_reason; char runtime_tag[8];
         uint32_t thread_count; uint32_t live_thread_count;
         uint32_t current_tid; uint32_t context_id;
         uint64_t cpu_ticks; uint64_t vm_total_bytes;
@@ -1491,7 +1491,7 @@ warp_proc_info_stats(uint32_t index, uint32_t buf_off, uint32_t buf_len,
     auto *out = reinterpret_cast<wasm_proc_stats_t *>(stp);
     out->state                     = stats.state;
     out->block_reason              = stats.block_reason;
-    out->is_wasm                   = stats.is_wasm;
+    __builtin_memcpy(out->runtime_tag, stats.runtime_tag, sizeof(out->runtime_tag));
     out->thread_count              = stats.thread_count;
     out->live_thread_count         = stats.live_thread_count;
     out->current_tid               = stats.current_tid;

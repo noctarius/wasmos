@@ -168,7 +168,7 @@ order; the first match wins.
 ```
 processes: <count>
 sched: ticks <n> ready <n> running <pid>
- pid ppid state wasm thr/live vm(bytes) kstack(bytes) heap(bytes) rss_est(bytes) cpu(ticks) name
+ pid ppid state runtime thr/live vm(bytes) kstack(bytes) heap(bytes) rss_est(bytes) cpu(ticks) name
 ...
 ```
 
@@ -183,7 +183,7 @@ name_size, parent_ptr, stats_ptr)` which fills `wasmos_proc_stats_t`:
 ```c
 typedef struct {
     uint32_t state;
-    uint32_t is_wasm;
+    char runtime_tag[8];
     uint32_t thread_count;
     uint32_t live_thread_count;
     uint64_t vm_total_bytes;
@@ -193,6 +193,10 @@ typedef struct {
     uint64_t cpu_ticks;
 } wasmos_proc_stats_t;
 ```
+
+`runtime_tag` is an 8-byte, NUL-padded runtime label. Package-backed processes
+report the resolved subsystem runtime (`WASM3`, `WARP`, or `NATIVE` today),
+while internal kernel-managed processes use `KERNEL`.
 
 #### Directory Navigation
 

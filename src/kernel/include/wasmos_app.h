@@ -18,7 +18,13 @@
 #include "wasm_driver.h"
 
 #define WASMOS_APP_MAGIC "WASMOSAP"
-#define WASMOS_APP_VERSION 4u
+#define WASMOS_APP_VERSION 5u
+#define WASMOS_APP_SUBSYSTEM_TAG_LEN 8u
+
+#define WASMOS_SUBSYSTEM_TAG_WASM   "WASM"
+#define WASMOS_SUBSYSTEM_TAG_WASM3  "WASM3"
+#define WASMOS_SUBSYSTEM_TAG_WARP   "WARP"
+#define WASMOS_SUBSYSTEM_TAG_NATIVE "NATIVE"
 
 /* Package type flags stored in the .wap header. */
 #define WASMOS_APP_FLAG_DRIVER     (1u << 0)
@@ -76,6 +82,7 @@ typedef struct {
     const uint8_t *blob;
     uint32_t blob_size;
     uint32_t flags;
+    char subsystem_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1];
     const uint8_t *wasm_bytes;
     uint32_t wasm_size;
     const uint8_t *compiled_bytes;   /* pre-compiled WARP AOT binary; NULL if absent */
@@ -95,6 +102,12 @@ typedef struct {
     uint32_t entry_arg_binding_count;
     wasmos_app_entry_arg_binding_t entry_arg_bindings[WASMOS_APP_MAX_ENTRY_ARG_BINDINGS];
 } wasmos_app_desc_t;
+
+typedef struct {
+    char requested_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1];
+    char runtime_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1];
+    uint8_t is_wasm;
+} wasmos_app_subsystem_info_t;
 
 typedef int (*wasmos_app_endpoint_resolver_t)(uint32_t owner_context_id,
                                               const uint8_t *name,
@@ -120,6 +133,8 @@ typedef struct {
 } wasmos_app_instance_t;
 
 int wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out_desc);
+int wasmos_app_resolve_subsystem(const wasmos_app_desc_t *desc,
+                                 wasmos_app_subsystem_info_t *out_info);
 int wasmos_app_start(wasmos_app_instance_t *instance,
                      const wasmos_app_desc_t *desc,
                      uint32_t owner_context_id,

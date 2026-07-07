@@ -111,25 +111,26 @@ application is packed into this format by `make_wasmos_app`.
 
 #### Format Versions
 
-The parser in `wasmos_app.c` supports three header versions:
+The parser in `wasmos_app.c` supports five header versions:
 
-| Version     | Notes                                                         |
-|-------------|---------------------------------------------------------------|
-| 1           | No entry-arg bindings, no driver matches table                |
-| 2           | Adds entry-arg bindings; single inline driver-match in header |
-| 3 (current) | Adds `driver_match_count` and a separate per-match table      |
+| Version     | Notes                                                                    |
+|-------------|--------------------------------------------------------------------------|
+| 1           | No entry-arg bindings, no driver matches table                           |
+| 2           | Adds entry-arg bindings; single inline driver-match in header            |
+| 3           | Adds `driver_match_count` and a separate per-match table                 |
+| 4           | Replaces `reserved` with `compiled_size` for appended WARP AOT binaries  |
+| 5 (current) | Adds an 8-byte subsystem tag for runtime dispatch and process reporting  |
 
 Version is checked before any pointer arithmetic. Unknown versions are parse
-errors. The `reserved` field must be zero; a non-zero value is also a parse
-error.
+errors.
 
-#### v3 Header Layout
+#### v5 Header Layout
 
 ```c
 typedef struct __attribute__((packed)) {
     char     magic[8];                  /* "WASMOSAP" */
-    uint16_t version;                   /* 3 */
-    uint16_t header_size;               /* sizeof(wasmos_app_header_v3_t) */
+    uint16_t version;                   /* 5 */
+    uint16_t header_size;               /* sizeof(wasmos_app_header_v5_t) */
     uint32_t flags;                     /* WASMOS_APP_FLAG_* bitmask */
     uint32_t name_len;
     uint32_t entry_len;
@@ -147,9 +148,15 @@ typedef struct __attribute__((packed)) {
     uint16_t driver_io_port_min;
     uint16_t driver_io_port_max;
     uint32_t driver_match_count;        /* entries in the variable match table */
-    uint32_t reserved;                  /* must be zero */
-} wasmos_app_header_v3_t;
+    uint32_t compiled_size;             /* appended WARP AOT size; 0 if absent */
+    char     subsystem_tag[8];          /* ASCII, NUL-padded runtime tag */
+} wasmos_app_header_v5_t;
 ```
+
+For compatibility, v1-v4 packages that do not carry a subsystem tag are mapped
+to `NATIVE` when `WASMOS_APP_FLAG_NATIVE` is set and to the generic `WASM`
+alias otherwise. The kernel resolves `WASM` to whichever built-in WASM backend
+that kernel was compiled with.
 
 #### Payload Layout (after header)
 
@@ -165,6 +172,7 @@ The parser walks the blob in this fixed order, same as the packer writes it:
 [driver_match_count × wasmos_app_driver_match_t]
 [mem_hint_count × wasmos_mem_hint_t]
 [raw WASM or ELF bytes]
+[compiled WARP AOT bytes if compiled_size > 0]
 ```
 
 Variable-length sections are bounds-checked with 32-bit overflow-safe
@@ -259,6 +267,7 @@ version = 1
 name     = "ata"
 entry    = "initialize"
 kind     = "driver"        # "driver" | "service" | "app"
+subsystem = "WASM"         # optional; defaults to WASM or NATIVE
 native   = false           # true for ELF native payloads
 storage_bootstrap = true   # sets FLAG_STORAGE_BOOTSTRAP
 
@@ -286,6 +295,15 @@ io_port_min = 0x01F0
 io_port_max = 0x03F7
 priority   = 100
 ```
+
+Subsystem tags are uppercase ASCII, at most 8 bytes, and are part of the
+package ABI. Current in-tree tags:
+
+- `WASM` — generic alias resolved to the kernel's built-in WASM backend
+- `WASM3` — require the wasm3 backend
+- `WARP` — require the WARP backend
+- `WARP+JIT` — accepted as an alias for `WARP`
+- `NATIVE` — native ELF payload
 
 **Legacy positional mode:** still accepted for backward compatibility but not
 used by the build system.

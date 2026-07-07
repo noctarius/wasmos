@@ -22,7 +22,7 @@ extern "wasmos" fn sched_current_pid() callconv(.c) i32;
 const ProcStats = extern struct {
     state: u32,
     block_reason: u32,
-    is_wasm: u32,
+    runtime_tag: [8]u8,
     thread_count: u32,
     live_thread_count: u32,
     current_tid: u32,
@@ -89,18 +89,18 @@ fn stateName(state: u32) []const u8 {
 }
 
 fn printTable(out: *OutBuf, count: usize) void {
-    out.append(" pid ppid state wasm thr/live  cpu vm(bytes) kstack(bytes) heap(bytes) rss_est(bytes) cpu(ticks) name\n");
+    out.append(" pid ppid state runtime  thr/live  cpu vm(bytes) kstack(bytes) heap(bytes) rss_est(bytes) cpu(ticks) name\n");
     for (0..count) |i| {
         if (g_pids[i] == 0) continue;
         const s = &g_stats[i];
-        const wasm_str: []const u8 = if (s.is_wasm != 0) "true" else "false";
+        const runtime_str = std.mem.sliceTo(&s.runtime_tag, 0);
         out.print(
-            "{d:>4} {d:>4} {s:<5} {s:<5} {d}/{d:>1}  {d:>4} {d:>10} {d:>13} {d:>11} {d:>14} {d:>10} {s}\n",
+            "{d:>4} {d:>4} {s:<5} {s:<8} {d}/{d:>1}  {d:>4} {d:>10} {d:>13} {d:>11} {d:>14} {d:>10} {s}\n",
             .{
                 g_pids[i],
                 g_parents[i],
                 stateName(s.state),
-                wasm_str,
+                runtime_str,
                 s.thread_count,
                 s.live_thread_count,
                 s.last_cpu,
@@ -133,11 +133,11 @@ fn printTreeNode(out: *OutBuf, index: usize, count: usize, depth: u32) void {
         if (out.truncated) return;
     }
 
-    const wasm_str: []const u8 = if (g_stats[index].is_wasm != 0) "true" else "false";
-    out.print("{s} (pid {d}, wasm={s}, cpu={d})\n", .{
+    const runtime_str = std.mem.sliceTo(&g_stats[index].runtime_tag, 0);
+    out.print("{s} (pid {d}, runtime={s}, cpu={d})\n", .{
         std.mem.sliceTo(&g_names[index], 0),
         g_pids[index],
-        wasm_str,
+        runtime_str,
         g_stats[index].last_cpu,
     });
     if (out.truncated) return;

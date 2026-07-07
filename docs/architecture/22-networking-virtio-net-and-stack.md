@@ -821,14 +821,15 @@ Non-responsibilities:
 - no direct PCI/virtqueue access
 - no privileged hardware config outside driver IPC contract
 
-Isolation note: the `net-stack` ships as a WASM-sandboxed service, because it
-parses untrusted network input and lwIP is a large unaudited (subtree)
-dependency — the WASM boundary contains an lwIP bug to a service crash rather
-than a kernel compromise. A native C service would be simpler to build (no WASM
-shims, `MEM_LIBC_MALLOC` available) but is currently ring-0 with no boundary.
-The proper long-term home is *native + isolated* in ring-3; that capability does
-not yet exist — see
-[Native Ring-3 Service Model](11-ring3-isolation-and-separation.md#native-ring-3-service-model-planned).
+Isolation note: the `net-stack` ships as a **native `.wap` service** — a C
+binary embedding lwIP, linked against `libsys_native` and packed with
+`native = true`, loaded like `gfx_compositor`. This avoids compiling lwIP to
+WASM and reuses the native-service toolchain. Like all native services today it
+runs **ring-0 (interim)**, which is a weak posture given it parses untrusted
+network input from an unaudited (subtree) lwIP. That is not net-stack-specific:
+the fix is the shared *native service isolation* work (run native services in
+ring-3), see
+[Native Service Isolation](11-ring3-isolation-and-separation.md#native-service-isolation-planned).
 
 #### 3. Client Apps/Services
 Responsibilities:

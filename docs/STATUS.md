@@ -506,6 +506,23 @@
   config) makes push reliable and is the next change; that design + class-based
   service discovery are recorded in docs 09/22.
 
+- Networking Phase 2 groundwork: **lwIP 2.2.1 is vendored** as a git subtree at
+  `libs/lwip`, and the `net-stack` is scaffolded as a **native `.wap` service**
+  (`src/services/net_stack/`, modeled on `gfx_compositor`): a C binary embedding
+  lwIP, linked against `libsys_native` + kernel libc into a static ELF with entry
+  `initialize`, packed with `native = true`. `lwipopts.h` is a `NO_SYS=1`,
+  `MEM_LIBC_MALLOC=0` raw-API config (ARP/IPv4/ICMP/UDP/TCP on, IPv6 off). This
+  is compile-only: `initialize()` calls `lwip_init()` then idles; there is no
+  netif glue, driver IPC wiring, or socket API yet, and the service is built but
+  NOT embedded in initfs / not spawned (boot behavior unchanged — verified by a
+  clean `warp_smp` `run-qemu-test`). `sys_now()` returns raw ticks with a
+  `TODO(net_stack)` for a real ms clock (lands with netif/timeouts). Decision
+  record: net-stack runs as a native service (not WASM, not kernel-image),
+  ring-0 for now like all native services; isolation follows the shared
+  native-service-to-ring-3 work (see docs 11/22). Next: netif glue →
+  ARP/ICMP round-trip over SLIRP, then `NET_IPC_*` sockets; multi-driver
+  discovery via `svc_lookup_class("net.ifc")`.
+
 - Two scheduler bugs affecting kernel worker threads are fixed:
   (1) `proc->ctx.rsp` was initialized to the process stack top at spawn time,
   causing the scheduler to treat every fresh worker as "has blocked context to

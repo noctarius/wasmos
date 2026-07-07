@@ -374,45 +374,48 @@ Forbidden: `[watchdog] trap frame invalid cs=`
 
 ---
 
-### Native Ring-3 Service Model (planned)
+### Native Service Isolation (planned)
 
-Today isolation is coupled to the WASM runtime: a service is either sandboxed
-*because* it runs as a WASM module (ring-3 WARP, or ring-0 WARP in the default
-build), or it is "native" C linked into the kernel and therefore runs in ring-0
-with no boundary at all. There is no *native + isolated* option — a plain C
-service cannot run in ring-3.
+Native services already exist as a first-class model: a native ELF (C or Zig),
+linked against `libsys_native` (`src/libsys/native/` — the native service
+runtime: IPC send/recv/loop, request/reply matching, endpoint-name resolution)
+plus the kernel libc, packed into a `.wap` with `native = true` in its
+`linker.metadata`, and loaded by the process-manager alongside WASM services.
+`gfx_compositor` and `font_service` ship this way today. So the service runtime,
+the packer path, and the loader are all present — a native service is NOT
+compiled into the kernel image and does NOT need a new syscall surface.
 
-This forces C-heavy or performance-sensitive services (e.g. an embedded lwIP
-`net-stack`, see [Networking](22-networking-virtio-net-and-stack.md)) to choose
-between the WASM sandbox and full kernel privilege. For untrusted-input services
-that is a poor trade: the correct home is ring-3, natively.
+The gap is *isolation*: native `.wap` services currently execute in **ring-0**.
+They are separate processes with their own entry and heap, but they are not
+memory-separated from the kernel, so a bug in a native service is a kernel
+compromise. There is therefore no *native + isolated* option yet — which is a
+poor trade for untrusted-input services such as the embedded lwIP `net-stack`
+(see [Networking](22-networking-virtio-net-and-stack.md)), whose correct home is
+ring-3.
 
-The `INT 0x80` syscall path (see [Syscall Interface](#syscall-interface)) already
-carries native ring-3 process/thread/IPC primitives and backs the ring-3
-threading smoke tests, so the isolation plumbing exists. What is missing to make
-native ring-3 *services* real:
+Closing it means running the existing native-service model through the ring-3
+execution path rather than adding a new one:
 
-- **Service-runtime syscalls.** Extend the `INT 0x80` table (or add a native
-  `libsys` shim over it) to expose the service primitives that are currently
-  WARP/wasm3 hostcalls only: `svc_register`/`svc_lookup`, FS-buffer transfer,
-  `region_alloc`, and the driver/IRQ IPC contract. These must reuse the existing
-  capability checks — no privilege is granted that a WASM service would not get.
-- **Native ELF service loader.** Load a plain ELF into a ring-3 process with its
-  own address space and heap, in parallel to the WASM-module + WARP load path
-  (the ring-3 process/paging model already supports this shape).
-- **Native crt0 + `libsys`/libc shim** targeting the syscall ABI, so a native
-  service `malloc`s against its *own* ring-3 heap rather than the kernel's.
+- **Ring-3 native execution.** Load the native-service ELF into a ring-3 process
+  (own address space + heap) instead of ring-0. The `INT 0x80` syscall path (see
+  [Syscall Interface](#syscall-interface)) already carries native ring-3
+  process/thread/IPC primitives and backs the ring-3 native threading smoke
+  tests, so the CPU-side plumbing exists.
+- **Route `libsys_native` through the syscall ABI.** The service primitives
+  `libsys_native` exposes must be reachable from ring-3 over `INT 0x80` (or a
+  thin syscall shim) rather than by direct kernel calls, reusing the existing
+  capability checks — no privilege a WASM service would not also get.
 
-Payoff extends well beyond networking: any service could run native + isolated
-instead of being pushed into the WASM sandbox or into ring-0. Tracked in
+This is shared across every native service (`gfx_compositor`, `font_service`,
+and the planned `net-stack`), not net-stack-specific. Tracked in
 `docs/TASKS.md` (Memory and Isolation).
 
 ### Deferred Hardening
 
 The following are intentionally left out of current scope:
 
-- Native ring-3 service model (native + isolated services) — see
-  "Native Ring-3 Service Model (planned)" above and `docs/TASKS.md`
+- Native service isolation (run native `.wap` services in ring-3 instead of
+  ring-0) — see "Native Service Isolation (planned)" above and `docs/TASKS.md`
 
 - Full hostcall split-view/coherence-bridge cleanup (tracked with
   `TODO` comments in `wasm3_link.c`)

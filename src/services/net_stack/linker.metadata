@@ -1,0 +1,29 @@
+version = 1
+
+[package]
+name = "net-stack"
+entry = "initialize"
+kind = "service"
+native = true
+
+[resources]
+# stack_pages: mirror gfx_compositor (16 pages = 64 KiB) — the entry does no
+# deep recursion in this milestone.
+stack_pages = 16
+# heap_pages: sized to comfortably cover lwIP's static memory footprint from
+# lwipopts.h. MEM_SIZE is 64 KiB; the PBUF_POOL (PBUF_POOL_SIZE = 128 buffers,
+# each ~1.5 KiB incl. headers) is on the order of ~200 KiB; plus the UDP/TCP PCB
+# and TCP_SEG pools. That is already > 256 KiB, so we round up generously to
+# 512 pages (2 MiB) to leave headroom for the netif/ICMP step without a reflow.
+heap_pages = 512
+
+[ipc]
+# Minimum a service needs to be admitted by the loader: a bound "proc" endpoint,
+# mirroring gfx_compositor. net-stack does not use it yet in this milestone.
+required_endpoint_name = "proc"
+required_endpoint_rights = 1
+entry_arg_bindings = ["proc.endpoint"]
+
+[[capabilities]]
+name = "ipc.basic"
+flags = 0

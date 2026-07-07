@@ -79,15 +79,16 @@ separation model and deferred hardening backlog.
 - [ ] Continue kernel/user boundary hardening under strict ring-3 defaults.
 - [ ] Extend capability-granted MMIO/PIO/DMA/IRQ resource assignment breadth
   and policy coverage.
-- [ ] Native ring-3 service model: allow plain C services to run *native +
-  isolated* in ring-3 instead of being forced into the WASM sandbox or into
-  ring-0. Requires (a) service-runtime syscalls over `INT 0x80` — `svc_register`/
-  `svc_lookup`, FS-buffer transfer, `region_alloc`, driver/IRQ IPC — reusing the
-  existing capability checks; (b) a native ELF service loader parallel to the
-  WASM-module + WARP path; (c) a native crt0 + `libsys`/libc shim so services
-  heap against their own ring-3 address space. Motivating case: embedded lwIP
+- [ ] Native service isolation: native `.wap` services (`native = true`, e.g.
+  `gfx_compositor`, `font_service`) already load as separate processes with the
+  `libsys_native` runtime, but they execute in **ring-0** — not memory-isolated
+  from the kernel. Move them to the ring-3 execution path: (a) load the
+  native-service ELF into a ring-3 process (own address space + heap) rather than
+  ring-0; (b) route the `libsys_native` service primitives through the `INT 0x80`
+  syscall ABI instead of direct kernel calls, reusing existing capability checks.
+  Shared across all native services; motivating case is the embedded lwIP
   `net-stack`. See `docs/architecture/11-ring3-isolation-and-separation.md`
-  ("Native Ring-3 Service Model").
+  ("Native Service Isolation").
 - [x] DMA Phase 0: define shared capability/ABI contract scaffolding.
   - Added `DEVMGR_CAP_DMA`, DMA direction/status constants, and
     `PROC_IPC_SPAWN_CAPS_V2` contract ids in shared ABI headers.

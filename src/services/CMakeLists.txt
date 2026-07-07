@@ -7,6 +7,7 @@ add_subdirectory(fs_manager)
 add_subdirectory(vt)
 add_subdirectory(gfx_compositor)
 add_subdirectory(font_service)
+add_subdirectory(net_stack)
 
 add_custom_target(services DEPENDS
   sysinit_app
@@ -18,4 +19,5 @@ add_custom_target(services DEPENDS
   vt_app
   gfx_compositor_app
   font_service_app
+  net_stack_app
 )

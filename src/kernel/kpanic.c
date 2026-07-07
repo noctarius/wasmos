@@ -125,9 +125,11 @@ kpanic(const char *reason, uint64_t a, uint64_t b)
         __atomic_store_n(&c->captured, 1u, __ATOMIC_RELEASE);
     }
 
+#if WASMOS_SMP
     /* Stop every other CPU. NMI ignores IF, so a CPU spinning under cli is still
      * caught. */
     lapic_send_nmi_allbutself();
+#endif
 
     /* Wait (bounded) for the others to snapshot themselves. */
     for (volatile uint64_t spin = 0; spin < 200000000ULL; ++spin) {

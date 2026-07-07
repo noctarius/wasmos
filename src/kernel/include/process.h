@@ -133,7 +133,7 @@ typedef struct process {
     uint8_t is_idle;
     uint8_t in_hostcall;
     uint8_t auto_reap;
-    uint8_t is_wasm;
+    uint8_t needs_runtime_lock;
     uint8_t ready;
     uint8_t require_explicit_ready;
     char runtime_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1];
@@ -148,10 +148,11 @@ typedef struct process {
     void *arg;
     char name_storage[PROCESS_NAME_MAX];
     const char *name;
-    /* wasm3 reentrancy guard: held for the duration of wasm3 entry_fn call.
-     * Worker threads (is_kernel_worker) never acquire this. */
+    /* Runtime reentrancy guard for subsystems that require single-threaded
+     * process entry (currently the built-in WASM runtimes). Worker threads
+     * (is_kernel_worker) never acquire this. */
     spinlock_t  wasm3_lock;
-    uint32_t    wasm3_owner;   /* TID of current wasm3 occupant; 0 = free */
+    uint32_t    wasm3_owner;   /* TID of current runtime-lock occupant; 0 = free */
     /* Process-level wait event (replaces wait_target_pid polling). */
     sched_event_t wait_event;
 } process_t;
@@ -248,7 +249,7 @@ int process_info_at_stats(uint32_t index,
                           uint32_t *out_parent_pid,
                           const char **out_name,
                           process_stats_t *out_stats);
-int process_set_runtime_is_wasm(uint32_t pid, uint8_t is_wasm);
+int process_set_runtime_lock_required(uint32_t pid, uint8_t required);
 int process_set_runtime_tag(uint32_t pid, const char *tag);
 int process_set_user_entry(uint32_t pid, uint64_t rip, uint64_t user_rsp);
 

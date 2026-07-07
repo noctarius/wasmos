@@ -98,7 +98,7 @@ typedef struct process {
     uint32_t time_slice_ticks;
     uint64_t ticks_total;
     uint8_t  is_idle, in_hostcall;
-    uint8_t  auto_reap, is_wasm, ready, require_explicit_ready;
+    uint8_t  auto_reap, needs_runtime_lock, ready, require_explicit_ready;
     uintptr_t stack_base, stack_top;
     uintptr_t stack_alloc_base_phys;
     uint32_t  stack_pages;
@@ -368,7 +368,7 @@ Source: `src/kernel/include/process.h` (`process_stats_t`)
 |-----------------------------|----------------------------------------------------------------|
 | `state`                     | Current process state                                          |
 | `block_reason`              | Legacy field; always NONE in new scheduler                     |
-| `is_wasm`                   | 1 if process runs a WASM payload                               |
+| `needs_runtime_lock`        | 1 if process entry must hold the per-process runtime lock      |
 | `thread_count`              | Total threads spawned for this process                         |
 | `live_thread_count`         | Non-zombie threads                                             |
 | `current_tid`               | TID of last dispatched thread                                  |

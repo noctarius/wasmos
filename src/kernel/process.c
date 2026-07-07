@@ -571,11 +571,12 @@ static void process_trampoline(void) {
         } else {
             uintptr_t entry_ptr = process_kernel_alias_addr((uintptr_t)cpu_local()->current_process->entry);
             process_entry_t entry_fn = (process_entry_t)(void *)entry_ptr;
-            /* Guard wasm3 reentrancy: held for the duration of entry_fn.
-             * Kernel workers (is_kernel_worker) skip this path entirely. */
-            if (cpu_local()->current_process->is_wasm && cpu_local()->current_thread &&
+            /* Guard runtime reentrancy for subsystems that require a
+             * single-threaded process entry path. Kernel workers
+             * (is_kernel_worker) skip this path entirely. */
+            if (cpu_local()->current_process->needs_runtime_lock && cpu_local()->current_thread &&
                 !cpu_local()->current_thread->is_kernel_worker) {
-                /* Use no-IRQ variant: wasm3_lock is held for the entire WASM timeslice.
+                /* Use no-IRQ variant: wasm3_lock is held for the entire runtime-locked timeslice.
                  * spinlock_lock would cli for that whole duration, suppressing keyboard
                  * and mouse IRQ delivery.  No interrupt handler acquires wasm3_lock, so
                  * the full irq-disable contract is not needed here. */
@@ -626,7 +627,7 @@ static void process_reset_slot(process_t *proc) {
     proc->is_idle = 0;
     proc->in_hostcall = 0;
     proc->auto_reap = 0;
-    proc->is_wasm = 0;
+    proc->needs_runtime_lock = 0;
     proc->ready = 0;
     process_clear_runtime_tag(proc);
     proc->ctx = (process_context_t){0};
@@ -1050,7 +1051,7 @@ process_spawn_as_internal(uint32_t parent_pid,
     slot->ticks_total = 0;
     slot->ctx_canary_pre = PROCESS_CTX_CANARY_VALUE;
     slot->ctx_canary_post = PROCESS_CTX_CANARY_VALUE;
-    slot->is_wasm = 0;
+    slot->needs_runtime_lock = 0;
     process_clear_runtime_tag(slot);
     (void)process_copy_runtime_tag(slot, "KERNEL");
     slot->entry = entry;
@@ -1230,7 +1231,7 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
     slot->ticks_total = 0;
     slot->ctx_canary_pre = PROCESS_CTX_CANARY_VALUE;
     slot->ctx_canary_post = PROCESS_CTX_CANARY_VALUE;
-    slot->is_wasm = 0;
+    slot->needs_runtime_lock = 0;
     process_clear_runtime_tag(slot);
     (void)process_copy_runtime_tag(slot, "KERNEL");
     slot->entry = entry;
@@ -2475,13 +2476,13 @@ process_info_at_stats(uint32_t index,
 }
 
 int
-process_set_runtime_is_wasm(uint32_t pid, uint8_t is_wasm)
+process_set_runtime_lock_required(uint32_t pid, uint8_t required)
 {
     process_t *proc = process_get(pid);
     if (!proc) {
         return -1;
     }
-    proc->is_wasm = is_wasm ? 1u : 0u;
+    proc->needs_runtime_lock = required ? 1u : 0u;
     return 0;
 }
 

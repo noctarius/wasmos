@@ -106,7 +106,8 @@ typedef struct {
 typedef struct {
     char requested_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1];
     char runtime_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1];
-    uint8_t is_wasm;
+    uint8_t uses_wasm_payload;
+    uint8_t needs_runtime_lock;
 } wasmos_app_subsystem_info_t;
 
 typedef struct {
@@ -137,7 +138,8 @@ typedef struct wasmos_subsystem_ops wasmos_subsystem_ops_t;
 
 struct wasmos_subsystem_ops {
     const char *tag;
-    uint8_t is_wasm;
+    uint8_t uses_wasm_payload;
+    uint8_t needs_runtime_lock;
     uint8_t gates_ready_for_services;
     int (*start)(wasmos_app_runtime_state_t *state,
                  const wasmos_app_start_params_t *params,

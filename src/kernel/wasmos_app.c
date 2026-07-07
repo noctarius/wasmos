@@ -153,7 +153,8 @@ static wasmos_app_capability_granter_t g_capability_granter;
 typedef struct {
     const char *request_tag;
     const char *runtime_tag;
-    uint8_t is_wasm;
+    uint8_t uses_wasm_payload;
+    uint8_t needs_runtime_lock;
     uint8_t gates_ready_for_services;
 } wasmos_app_subsystem_entry_t;
 
@@ -164,11 +165,11 @@ typedef struct {
 #endif
 
 static const wasmos_app_subsystem_entry_t g_subsystems[] = {
-    { WASMOS_SUBSYSTEM_TAG_NATIVE, WASMOS_SUBSYSTEM_TAG_NATIVE, 0u, 1u },
-    { WASMOS_SUBSYSTEM_TAG_WASM,   WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, 1u, 1u },
-    { WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, 1u, 1u },
+    { WASMOS_SUBSYSTEM_TAG_NATIVE, WASMOS_SUBSYSTEM_TAG_NATIVE, 0u, 0u, 1u },
+    { WASMOS_SUBSYSTEM_TAG_WASM,   WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, 1u, 1u, 1u },
+    { WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, 1u, 1u, 1u },
 #if WASMOS_WASM_RUNTIME == 1
-    { "WARP+JIT", WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, 1u, 1u },
+    { "WARP+JIT", WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, 1u, 1u, 1u },
 #endif
 };
 
@@ -266,7 +267,8 @@ wasmos_native_subsystem_stop(wasmos_app_runtime_state_t *state)
 
 static const wasmos_subsystem_ops_t g_wasmos_wasm_subsystem_ops = {
     .tag = WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG,
-    .is_wasm = 1u,
+    .uses_wasm_payload = 1u,
+    .needs_runtime_lock = 1u,
     .gates_ready_for_services = 1u,
     .start = wasmos_wasm_subsystem_start,
     .call_entry = wasmos_wasm_subsystem_call_entry,
@@ -275,7 +277,8 @@ static const wasmos_subsystem_ops_t g_wasmos_wasm_subsystem_ops = {
 
 static const wasmos_subsystem_ops_t g_wasmos_native_subsystem_ops = {
     .tag = WASMOS_SUBSYSTEM_TAG_NATIVE,
-    .is_wasm = 0u,
+    .uses_wasm_payload = 0u,
+    .needs_runtime_lock = 0u,
     .gates_ready_for_services = 1u,
     .start = wasmos_native_subsystem_start,
     .call_entry = wasmos_native_subsystem_call_entry,
@@ -703,12 +706,13 @@ wasmos_app_resolve_subsystem(const wasmos_app_desc_t *desc,
         if (strcmp(desc->subsystem_tag, g_subsystems[i].request_tag) != 0) {
             continue;
         }
-        if (((desc->flags & WASMOS_APP_FLAG_NATIVE) != 0) != (g_subsystems[i].is_wasm == 0u)) {
+        if (((desc->flags & WASMOS_APP_FLAG_NATIVE) != 0) != (g_subsystems[i].uses_wasm_payload == 0u)) {
             return -1;
         }
         copy_subsystem_tag(out_info->requested_tag, g_subsystems[i].request_tag);
         copy_subsystem_tag(out_info->runtime_tag, g_subsystems[i].runtime_tag);
-        out_info->is_wasm = g_subsystems[i].is_wasm;
+        out_info->uses_wasm_payload = g_subsystems[i].uses_wasm_payload;
+        out_info->needs_runtime_lock = g_subsystems[i].needs_runtime_lock;
         return 0;
     }
     return -1;

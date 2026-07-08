@@ -15,6 +15,7 @@
 
 #include <stdint.h>
 #include "ipc.h"
+#include "subsystem_registry.h"
 #include "wasm_driver.h"
 
 #define WASMOS_APP_MAGIC "WASMOSAP"
@@ -126,17 +127,19 @@ typedef union {
     wasmos_native_instance_t native;
 } wasmos_app_runtime_state_t;
 
-typedef struct wasmos_subsystem_ops wasmos_subsystem_ops_t;
-struct wasmos_subsystem_ops;
-
 typedef struct {
     char requested_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1];
     char runtime_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1];
+    char service_name[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1];
+    wasmos_subsystem_handler_kind_t kind;
     uint8_t uses_wasm_payload;
     uint8_t needs_runtime_lock;
+    uint8_t gates_ready_for_services;
+    uint32_t service_endpoint;
     const wasmos_subsystem_ops_t *ops;
 } wasmos_app_subsystem_info_t;
 
+typedef struct wasmos_subsystem_ops wasmos_subsystem_ops_t;
 struct wasmos_subsystem_ops {
     const char *tag;
     uint8_t uses_wasm_payload;
@@ -182,6 +185,13 @@ int wasmos_app_init_subsystems(void);
 int wasmos_subsystem_register(const char *request_tag,
                               const char *runtime_tag,
                               const wasmos_subsystem_ops_t *ops);
+int wasmos_subsystem_register_service(const char *request_tag,
+                                      const char *runtime_tag,
+                                      const char *service_name,
+                                      uint32_t service_endpoint,
+                                      uint8_t uses_wasm_payload,
+                                      uint8_t needs_runtime_lock,
+                                      uint8_t gates_ready_for_services);
 int wasmos_app_resolve_subsystem(const wasmos_app_desc_t *desc,
                                  wasmos_app_subsystem_info_t *out_info);
 int wasmos_app_requires_explicit_ready(const wasmos_app_desc_t *desc);

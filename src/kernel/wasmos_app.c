@@ -380,7 +380,15 @@ wasmos_subsystem_register_locked(const char *request_tag,
                                  const char *runtime_tag,
                                  const wasmos_subsystem_ops_t *ops)
 {
-    return wasmos_subsystem_registry_register(request_tag, runtime_tag, ops);
+    if (!ops) {
+        return -1;
+    }
+    return wasmos_subsystem_registry_register_builtin(request_tag,
+                                                      runtime_tag,
+                                                      ops->uses_wasm_payload,
+                                                      ops->needs_runtime_lock,
+                                                      ops->gates_ready_for_services,
+                                                      ops);
 }
 
 int
@@ -392,6 +400,29 @@ wasmos_subsystem_register(const char *request_tag,
     wasmos_subsystem_lock_init_once();
     spinlock_lock(&g_subsystem_lock);
     rc = wasmos_subsystem_register_locked(request_tag, runtime_tag, ops);
+    spinlock_unlock(&g_subsystem_lock);
+    return rc;
+}
+
+int
+wasmos_subsystem_register_service(const char *request_tag,
+                                  const char *runtime_tag,
+                                  const char *service_name,
+                                  uint32_t service_endpoint,
+                                  uint8_t uses_wasm_payload,
+                                  uint8_t needs_runtime_lock,
+                                  uint8_t gates_ready_for_services)
+{
+    int rc = -1;
+    wasmos_subsystem_lock_init_once();
+    spinlock_lock(&g_subsystem_lock);
+    rc = wasmos_subsystem_registry_register_service(request_tag,
+                                                    runtime_tag,
+                                                    service_name,
+                                                    service_endpoint,
+                                                    uses_wasm_payload,
+                                                    needs_runtime_lock,
+                                                    gates_ready_for_services);
     spinlock_unlock(&g_subsystem_lock);
     return rc;
 }
@@ -763,16 +794,20 @@ wasmos_app_resolve_subsystem(const wasmos_app_desc_t *desc,
         return -1;
     }
     const wasmos_subsystem_registry_entry_t *handler = wasmos_app_find_subsystem_handler(desc->subsystem_tag);
-    if (!handler || !handler->ops) {
+    if (!handler) {
         return -1;
     }
-    if (((desc->flags & WASMOS_APP_FLAG_NATIVE) != 0) != (handler->ops->uses_wasm_payload == 0u)) {
+    if (((desc->flags & WASMOS_APP_FLAG_NATIVE) != 0) != (handler->uses_wasm_payload == 0u)) {
         return -1;
     }
     copy_subsystem_tag(out_info->requested_tag, handler->request_tag);
     copy_subsystem_tag(out_info->runtime_tag, handler->runtime_tag);
-    out_info->uses_wasm_payload = handler->ops->uses_wasm_payload;
-    out_info->needs_runtime_lock = handler->ops->needs_runtime_lock;
+    copy_subsystem_tag(out_info->service_name, handler->service_name);
+    out_info->kind = handler->kind;
+    out_info->uses_wasm_payload = handler->uses_wasm_payload;
+    out_info->needs_runtime_lock = handler->needs_runtime_lock;
+    out_info->gates_ready_for_services = handler->gates_ready_for_services;
+    out_info->service_endpoint = handler->service_endpoint;
     out_info->ops = handler->ops;
     return 0;
 }
@@ -787,13 +822,13 @@ wasmos_app_requires_explicit_ready(const wasmos_app_desc_t *desc)
     if (wasmos_app_resolve_subsystem(desc, &info) != 0) {
         return -1;
     }
-    if (!info.ops) {
+    if (info.kind != WASMOS_SUBSYSTEM_HANDLER_BUILTIN || !info.ops) {
         return -1;
     }
     if ((desc->flags & (WASMOS_APP_FLAG_SERVICE | WASMOS_APP_FLAG_DRIVER)) == 0) {
         return 0;
     }
-    return info.ops->gates_ready_for_services ? 1 : 0;
+    return info.gates_ready_for_services ? 1 : 0;
 }
 
 int
@@ -874,6 +909,12 @@ wasmos_app_start(wasmos_app_instance_t *instance,
         return -1;
     }
     instance->ops = subsystem_info.ops;
+    if (subsystem_info.kind != WASMOS_SUBSYSTEM_HANDLER_BUILTIN) {
+        /* TODO: Route service-backed subsystems through IPC once the first
+         * userland subsystem server lands. */
+        klog_write("[wasmos-app] service-backed subsystem start not implemented\n");
+        return -1;
+    }
     if (!instance->ops || !instance->ops->start) {
         klog_write("[wasmos-app] subsystem ops missing\n");
         return -1;

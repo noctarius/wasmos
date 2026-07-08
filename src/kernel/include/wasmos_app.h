@@ -104,13 +104,6 @@ typedef struct {
 } wasmos_app_desc_t;
 
 typedef struct {
-    char requested_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1];
-    char runtime_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1];
-    uint8_t uses_wasm_payload;
-    uint8_t needs_runtime_lock;
-} wasmos_app_subsystem_info_t;
-
-typedef struct {
     const char *name;
     const uint8_t *module_bytes;
     uint32_t module_size;
@@ -133,8 +126,16 @@ typedef union {
     wasmos_native_instance_t native;
 } wasmos_app_runtime_state_t;
 
-struct wasmos_subsystem_ops;
 typedef struct wasmos_subsystem_ops wasmos_subsystem_ops_t;
+struct wasmos_subsystem_ops;
+
+typedef struct {
+    char requested_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1];
+    char runtime_tag[WASMOS_APP_SUBSYSTEM_TAG_LEN + 1];
+    uint8_t uses_wasm_payload;
+    uint8_t needs_runtime_lock;
+    const wasmos_subsystem_ops_t *ops;
+} wasmos_app_subsystem_info_t;
 
 struct wasmos_subsystem_ops {
     const char *tag;

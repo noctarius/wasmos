@@ -153,25 +153,14 @@ static wasmos_app_capability_granter_t g_capability_granter;
 typedef struct {
     const char *request_tag;
     const char *runtime_tag;
-    uint8_t uses_wasm_payload;
-    uint8_t needs_runtime_lock;
-    uint8_t gates_ready_for_services;
-} wasmos_app_subsystem_entry_t;
+    const wasmos_subsystem_ops_t *ops;
+} wasmos_app_subsystem_handler_t;
 
 #if WASMOS_WASM_RUNTIME == 1
 #define WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG WASMOS_SUBSYSTEM_TAG_WARP
 #else
 #define WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG WASMOS_SUBSYSTEM_TAG_WASM3
 #endif
-
-static const wasmos_app_subsystem_entry_t g_subsystems[] = {
-    { WASMOS_SUBSYSTEM_TAG_NATIVE, WASMOS_SUBSYSTEM_TAG_NATIVE, 0u, 0u, 1u },
-    { WASMOS_SUBSYSTEM_TAG_WASM,   WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, 1u, 1u, 1u },
-    { WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, 1u, 1u, 1u },
-#if WASMOS_WASM_RUNTIME == 1
-    { "WARP+JIT", WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, 1u, 1u, 1u },
-#endif
-};
 
 static int
 wasmos_wasm_subsystem_start(wasmos_app_runtime_state_t *state,
@@ -378,17 +367,25 @@ copy_ascii_field(char *dst, uint32_t dst_size, const uint8_t *src, uint32_t src_
     return 0;
 }
 
-static const wasmos_subsystem_ops_t *
-wasmos_app_ops_for_runtime_tag(const char *runtime_tag)
+static const wasmos_app_subsystem_handler_t g_subsystems[] = {
+    { WASMOS_SUBSYSTEM_TAG_NATIVE, WASMOS_SUBSYSTEM_TAG_NATIVE, &g_wasmos_native_subsystem_ops },
+    { WASMOS_SUBSYSTEM_TAG_WASM, WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, &g_wasmos_wasm_subsystem_ops },
+    { WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, &g_wasmos_wasm_subsystem_ops },
+#if WASMOS_WASM_RUNTIME == 1
+    { "WARP+JIT", WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, &g_wasmos_wasm_subsystem_ops },
+#endif
+};
+
+static const wasmos_app_subsystem_handler_t *
+wasmos_app_find_subsystem_handler(const char *request_tag)
 {
-    if (!runtime_tag) {
+    if (!request_tag) {
         return 0;
     }
-    if (strcmp(runtime_tag, WASMOS_SUBSYSTEM_TAG_NATIVE) == 0) {
-        return &g_wasmos_native_subsystem_ops;
-    }
-    if (strcmp(runtime_tag, WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG) == 0) {
-        return &g_wasmos_wasm_subsystem_ops;
+    for (uint32_t i = 0; i < sizeof(g_subsystems) / sizeof(g_subsystems[0]); ++i) {
+        if (strcmp(request_tag, g_subsystems[i].request_tag) == 0) {
+            return &g_subsystems[i];
+        }
     }
     return 0;
 }
@@ -702,41 +699,38 @@ wasmos_app_resolve_subsystem(const wasmos_app_desc_t *desc,
     if (!desc || !out_info) {
         return -1;
     }
-    for (uint32_t i = 0; i < sizeof(g_subsystems) / sizeof(g_subsystems[0]); ++i) {
-        if (strcmp(desc->subsystem_tag, g_subsystems[i].request_tag) != 0) {
-            continue;
-        }
-        if (((desc->flags & WASMOS_APP_FLAG_NATIVE) != 0) != (g_subsystems[i].uses_wasm_payload == 0u)) {
-            return -1;
-        }
-        copy_subsystem_tag(out_info->requested_tag, g_subsystems[i].request_tag);
-        copy_subsystem_tag(out_info->runtime_tag, g_subsystems[i].runtime_tag);
-        out_info->uses_wasm_payload = g_subsystems[i].uses_wasm_payload;
-        out_info->needs_runtime_lock = g_subsystems[i].needs_runtime_lock;
-        return 0;
+    const wasmos_app_subsystem_handler_t *handler = wasmos_app_find_subsystem_handler(desc->subsystem_tag);
+    if (!handler || !handler->ops) {
+        return -1;
     }
-    return -1;
+    if (((desc->flags & WASMOS_APP_FLAG_NATIVE) != 0) != (handler->ops->uses_wasm_payload == 0u)) {
+        return -1;
+    }
+    copy_subsystem_tag(out_info->requested_tag, handler->request_tag);
+    copy_subsystem_tag(out_info->runtime_tag, handler->runtime_tag);
+    out_info->uses_wasm_payload = handler->ops->uses_wasm_payload;
+    out_info->needs_runtime_lock = handler->ops->needs_runtime_lock;
+    out_info->ops = handler->ops;
+    return 0;
 }
 
 int
 wasmos_app_requires_explicit_ready(const wasmos_app_desc_t *desc)
 {
     wasmos_app_subsystem_info_t info;
-    const wasmos_subsystem_ops_t *ops = 0;
     if (!desc) {
         return -1;
     }
     if (wasmos_app_resolve_subsystem(desc, &info) != 0) {
         return -1;
     }
-    ops = wasmos_app_ops_for_runtime_tag(info.runtime_tag);
-    if (!ops) {
+    if (!info.ops) {
         return -1;
     }
     if ((desc->flags & (WASMOS_APP_FLAG_SERVICE | WASMOS_APP_FLAG_DRIVER)) == 0) {
         return 0;
     }
-    return ops->gates_ready_for_services ? 1 : 0;
+    return info.ops->gates_ready_for_services ? 1 : 0;
 }
 
 int
@@ -816,7 +810,7 @@ wasmos_app_start(wasmos_app_instance_t *instance,
         klog_write("[wasmos-app] subsystem resolve failed\n");
         return -1;
     }
-    instance->ops = wasmos_app_ops_for_runtime_tag(subsystem_info.runtime_tag);
+    instance->ops = subsystem_info.ops;
     if (!instance->ops || !instance->ops->start) {
         klog_write("[wasmos-app] subsystem ops missing\n");
         return -1;

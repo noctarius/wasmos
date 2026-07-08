@@ -88,6 +88,12 @@ path = "system/services/device_manager.wap"
 source = "device_manager.wap"
 
 [[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/services/net_stack.wap"
+source = "net_stack.wap"
+
+[[entries]]
 kind = "data"
 path = "devmgr/rules/default.rules"
 source = "devmgr_rules_init_default.rules"

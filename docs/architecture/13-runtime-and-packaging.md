@@ -372,9 +372,10 @@ sequence is:
    today). The lookup is keyed directly by the 8-byte subsystem tag and returns
    the resolved handler metadata plus ops table in one step. Legacy packages
    without a tag are routed through compatibility aliases first. The current
-   kernel populates that registry procedurally through
-   `wasmos_subsystem_register(...)`, using the shared uint32-keyed hashmap as a
-   hash index and re-checking full tags inside each collision bucket.
+   kernel populates that registry explicitly during early boot through
+   `wasmos_app_init_subsystems()` + `wasmos_subsystem_register(...)`, using the
+   shared uint32-keyed hashmap as a hash index and re-checking full tags inside
+   each collision bucket.
 3. Policy hooks set by `wasmos_app_set_policy_hooks()` resolve required endpoints
    and grant declared capabilities (callbacks into the process manager).
 4. `wasmos_app_start(&instance, &desc, owner_context_id, init_argv, init_argc)`:
@@ -394,6 +395,8 @@ subsystem, `start` calls `native_driver_start()` and caches the result so the
 common entry path can still run through the same `call_entry` contract. In the
 current kernel this registry is still built-in and in-kernel; the registration
 boundary is explicit, but the handlers are not external services yet.
+Lookup no longer self-populates built-ins on first use; subsystem resolution is
+read-only after boot-time registration succeeds.
 
 Parse errors, failed endpoint resolution, and failed capability grants all
 abort before any runtime state is created.

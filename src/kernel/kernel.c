@@ -228,6 +228,10 @@ kmain(boot_info_t *boot_info)
     capability_init();
     slab_init();
     wasm_driver_init();
+    if (wasmos_app_init_subsystems() != 0) {
+        klog_write("[kernel] subsystem registry init failed\n");
+        kpanic("subsystem_registry_init_failed", 0ULL, 0ULL);
+    }
     if (kernel_boot_build_bootinfo_shadow(boot_info, &g_boot_info_shadow) != 0) {
         klog_write("[kernel] boot_info shadow copy failed\n");
         kpanic("boot_info_shadow_copy_failed", 0ULL, 0ULL);

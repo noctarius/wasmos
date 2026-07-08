@@ -153,6 +153,7 @@ static wasmos_app_endpoint_resolver_t g_endpoint_resolver;
 static wasmos_app_capability_granter_t g_capability_granter;
 static uint8_t g_subsystems_initialized;
 static spinlock_t g_subsystem_lock;
+static uint8_t g_subsystem_lock_initialized;
 
 #if WASMOS_WASM_RUNTIME == 1
 #define WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG WASMOS_SUBSYSTEM_TAG_WARP
@@ -365,6 +366,15 @@ copy_ascii_field(char *dst, uint32_t dst_size, const uint8_t *src, uint32_t src_
     return 0;
 }
 
+static void
+wasmos_subsystem_lock_init_once(void)
+{
+    if (!g_subsystem_lock_initialized) {
+        spinlock_init(&g_subsystem_lock);
+        g_subsystem_lock_initialized = 1u;
+    }
+}
+
 static int
 wasmos_subsystem_register_locked(const char *request_tag,
                                  const char *runtime_tag,
@@ -379,6 +389,7 @@ wasmos_subsystem_register(const char *request_tag,
                           const wasmos_subsystem_ops_t *ops)
 {
     int rc = -1;
+    wasmos_subsystem_lock_init_once();
     spinlock_lock(&g_subsystem_lock);
     rc = wasmos_subsystem_register_locked(request_tag, runtime_tag, ops);
     spinlock_unlock(&g_subsystem_lock);
@@ -410,20 +421,25 @@ wasmos_register_builtin_subsystems(void)
 }
 
 static int
-wasmos_ensure_subsystems_initialized(void)
+wasmos_register_builtin_subsystems_once_locked(void)
 {
-    int rc = 0;
-    spinlock_lock(&g_subsystem_lock);
     if (g_subsystems_initialized) {
-        rc = 0;
-        goto out;
+        return 0;
     }
     if (wasmos_register_builtin_subsystems() != 0) {
-        rc = -1;
-        goto out;
+        return -1;
     }
     g_subsystems_initialized = 1u;
-out:
+    return 0;
+}
+
+int
+wasmos_app_init_subsystems(void)
+{
+    int rc = -1;
+    wasmos_subsystem_lock_init_once();
+    spinlock_lock(&g_subsystem_lock);
+    rc = wasmos_register_builtin_subsystems_once_locked();
     spinlock_unlock(&g_subsystem_lock);
     return rc;
 }
@@ -432,9 +448,6 @@ static const wasmos_subsystem_registry_entry_t *
 wasmos_app_find_subsystem_handler(const char *request_tag)
 {
     if (!request_tag) {
-        return 0;
-    }
-    if (wasmos_ensure_subsystems_initialized() != 0) {
         return 0;
     }
     return wasmos_subsystem_registry_find(request_tag);

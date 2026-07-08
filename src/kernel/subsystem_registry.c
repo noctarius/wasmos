@@ -1,5 +1,6 @@
 #include "subsystem_registry.h"
 #include "hashmap.h"
+#include "klog.h"
 #include "kmem.h"
 #include "spinlock.h"
 #include <string.h>
@@ -90,30 +91,36 @@ wasmos_subsystem_registry_register(const char *request_tag,
     wasmos_subsystem_bucket_t *bucket = 0;
     wasmos_subsystem_registry_entry_t *entry = 0;
     if (!request_tag || !runtime_tag || !ops) {
+        klog_write("[subsystem] register invalid args\n");
         return -1;
     }
     if (subsystem_tag_validate_string(request_tag) != 0 ||
         subsystem_tag_validate_string(runtime_tag) != 0) {
+        klog_write("[subsystem] register invalid tag\n");
         return -1;
     }
     spinlock_lock(&g_subsystem_lock);
     if (subsystem_registry_init_locked() != 0) {
+        klog_write("[subsystem] register map init failed\n");
         spinlock_unlock(&g_subsystem_lock);
         return -1;
     }
     bucket = (wasmos_subsystem_bucket_t *)hashmap_put(&g_subsystem_map, subsystem_tag_hash(request_tag));
     if (!bucket) {
+        klog_write("[subsystem] register bucket alloc failed\n");
         spinlock_unlock(&g_subsystem_lock);
         return -1;
     }
     for (entry = bucket->head; entry; entry = entry->next) {
         if (strcmp(request_tag, entry->request_tag) == 0) {
+            klog_printf("[subsystem] duplicate request=%s runtime=%s\n", request_tag, runtime_tag);
             spinlock_unlock(&g_subsystem_lock);
             return -1;
         }
     }
     entry = (wasmos_subsystem_registry_entry_t *)kmem_alloc(sizeof(*entry));
     if (!entry) {
+        klog_write("[subsystem] register entry alloc failed\n");
         spinlock_unlock(&g_subsystem_lock);
         return -1;
     }
@@ -123,6 +130,7 @@ wasmos_subsystem_registry_register(const char *request_tag,
     entry->ops = ops;
     entry->next = bucket->head;
     bucket->head = entry;
+    klog_printf("[subsystem] register request=%s runtime=%s\n", entry->request_tag, entry->runtime_tag);
     spinlock_unlock(&g_subsystem_lock);
     return 0;
 }

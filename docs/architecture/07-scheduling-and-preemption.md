@@ -203,8 +203,8 @@ typedef struct {
 | `time_slice_ticks`      | `uint32_t`               | Unused at process level (per-thread ticks used)       |
 | `is_idle`               | `uint8_t`                | Idle task marker                                      |
 | `in_hostcall`           | `uint8_t`                | Set during wasm3 execution; blocks preemption         |
-| `wasm3_lock`            | `spinlock_t`             | Reentrancy guard; held for duration of wasm3 entry    |
-| `wasm3_owner`           | `uint32_t`               | TID currently executing in wasm3 (0 = free)           |
+| `runtime_lock`          | `spinlock_t`             | Reentrancy guard; held for runtime-locked entry       |
+| `runtime_lock_owner`    | `uint32_t`               | TID currently executing under the runtime lock        |
 | `wait_event`            | `sched_event_t`          | Process-level wait event (child exit notification)    |
 
 Process-level `ctx`, `ctx_canary_pre/post`, `in_ready_queue`, and
@@ -457,7 +457,7 @@ Strict ordering to prevent deadlock.  Acquire from outermost to innermost:
 ```
 cpu_sched_t.lock         (per-CPU ready queue)
   │
-  └─► process_t.wasm3_lock   (WASM reentrancy guard, if needed)
+  └─► process_t.runtime_lock   (runtime reentrancy guard, if needed)
         │
         └─► sched_event_t.lock   (event wait list)
               │

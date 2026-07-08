@@ -106,8 +106,8 @@ typedef struct process {
     void *arg;
     char name_storage[64];
     const char *name;
-    spinlock_t  wasm3_lock;      /* held for duration of wasm3 entry_fn call */
-    uint32_t    wasm3_owner;     /* TID currently executing in wasm3; 0 = free */
+    spinlock_t  runtime_lock;    /* held for duration of runtime-locked entry_fn call */
+    uint32_t    runtime_lock_owner; /* TID currently executing under runtime lock; 0 = free */
     sched_event_t wait_event;   /* process-level wait (child exit notification) */
 } process_t;
 ```
@@ -130,10 +130,11 @@ that only distinguishes live vs. dead uses `>= ALIVE`.
 
 #### WASM Reentrancy Guard
 
-wasm3 is not reentrant.  `wasm3_lock` (spinlock) is acquired before every call
-into wasm3 and released on return.  `wasm3_owner` records the occupying TID so
-the owning thread can re-enter without deadlocking on its own lock.  Kernel
-worker threads (`is_kernel_worker = 1`) never acquire `wasm3_lock`.
+Built-in WASM runtimes are not reentrant. `runtime_lock` (spinlock) is acquired
+before every runtime-locked process entry and released on return.
+`runtime_lock_owner` records the occupying TID so the owning thread can
+re-enter without deadlocking on its own lock. Kernel worker threads
+(`is_kernel_worker = 1`) never acquire `runtime_lock`.
 
 ---
 
@@ -348,8 +349,8 @@ Source: `src/kernel/wasm_driver.c`, `src/kernel/wasm3_shim.c`
 
 Each WASM thread maps to a dedicated wasm3 VM instance:
 - Separate `IM3Environment`, `IM3Runtime`, `IM3Module` per thread.
-- No concurrent entry into the same VM instance; `wasm3_lock` in `process_t`
-  enforces serial wasm3 use per process.
+- No concurrent entry into the same VM instance; `runtime_lock` in `process_t`
+  enforces serial runtime entry per process when required.
 - Thread-local heap: `wasm3_heap_bind_pid(pid)` keyed by PID, not TID.
   Up to `WASM_DRIVER_THREAD_SLOTS = 64` VM thread slots.
 - `wasm_driver_spawn_vm_thread()` allocates a slot and spawns a kernel worker

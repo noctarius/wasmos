@@ -805,7 +805,7 @@ wasm_driver_call_entry(wasm_driver_t *driver)
      *    ring-0 ensure_started / mod->start() phase, and
      *  - preempt_disable_count stays 0, which lets the watchdog
      *    recognise the ring-0 startup as a transient non-stall condition.
-     * Matches the wasm3_lock precedent (see spinlock.c). */
+     * Matches the runtime_lock precedent (see spinlock.c). */
     spinlock_lock_noirq(&driver->lock);
     uint64_t r3_root  = driver->r3_user_root;
     uint64_t r3_stack = driver->r3_stack_phys;

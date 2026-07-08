@@ -576,15 +576,15 @@ static void process_trampoline(void) {
              * (is_kernel_worker) skip this path entirely. */
             if (cpu_local()->current_process->needs_runtime_lock && cpu_local()->current_thread &&
                 !cpu_local()->current_thread->is_kernel_worker) {
-                /* Use no-IRQ variant: wasm3_lock is held for the entire runtime-locked timeslice.
+                /* Use no-IRQ variant: runtime_lock is held for the entire runtime-locked timeslice.
                  * spinlock_lock would cli for that whole duration, suppressing keyboard
-                 * and mouse IRQ delivery.  No interrupt handler acquires wasm3_lock, so
+                 * and mouse IRQ delivery.  No interrupt handler acquires runtime_lock, so
                  * the full irq-disable contract is not needed here. */
-                spinlock_lock_noirq(&cpu_local()->current_process->wasm3_lock);
-                cpu_local()->current_process->wasm3_owner = cpu_local()->current_thread->tid;
+                spinlock_lock_noirq(&cpu_local()->current_process->runtime_lock);
+                cpu_local()->current_process->runtime_lock_owner = cpu_local()->current_thread->tid;
                 cpu_local()->last_run_result = entry_fn(cpu_local()->current_process, cpu_local()->current_process->arg);
-                cpu_local()->current_process->wasm3_owner = 0;
-                spinlock_unlock_noirq(&cpu_local()->current_process->wasm3_lock);
+                cpu_local()->current_process->runtime_lock_owner = 0;
+                spinlock_unlock_noirq(&cpu_local()->current_process->runtime_lock);
             } else {
                 cpu_local()->last_run_result = entry_fn(cpu_local()->current_process, cpu_local()->current_process->arg);
             }
@@ -1096,8 +1096,8 @@ process_spawn_as_internal(uint32_t parent_pid,
                 sched_default_prio(slot->is_idle, 0, 0, 0));
         }
     }
-    spinlock_init(&slot->wasm3_lock);
-    slot->wasm3_owner = 0;
+    spinlock_init(&slot->runtime_lock);
+    slot->runtime_lock_owner = 0;
     sched_event_init(&slot->wait_event, SCHED_EVENT_TYPE_PROCESS);
     if (strcmp(name, "process-manager") == 0 ||
         strcmp(name, "native-call-min") == 0) {
@@ -1275,8 +1275,8 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
             cpu_local()->idle_thread = main_thread;
         }
     }
-    spinlock_init(&slot->wasm3_lock);
-    slot->wasm3_owner = 0;
+    spinlock_init(&slot->runtime_lock);
+    slot->runtime_lock_owner = 0;
     sched_event_init(&slot->wait_event, SCHED_EVENT_TYPE_PROCESS);
     g_idle_process = slot;
     *out_pid = pid;

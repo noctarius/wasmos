@@ -176,7 +176,7 @@ Normal WASM services run in **ring 0** via wasm3 in `process_trampoline`. `proce
 | Factor | Notes |
 |--------|-------|
 | Global `g_high_prio_streak` / `g_last_dispatched_prio` in `sched_thread.c` | Shared across CPUs without locking — unfair scheduling, not usually total hang |
-| `wasm3_lock` held across blocking `ipc_recv` | Per-process; blocks re-entry on same process, not cross-process |
+| `runtime_lock` held across blocking `ipc_recv` | Per-process; blocks re-entry on same process, not cross-process |
 | Global ready-queue spinlock contention | Under extreme IPC, latency spikes can look like hangs |
 | `g_in_context_switch` per-CPU | Fixed in current tree; unlikely primary cause |
 

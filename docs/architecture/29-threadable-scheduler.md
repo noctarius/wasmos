@@ -612,35 +612,35 @@ void ipc_select_destroy(uint32_t select_id) {
 
 ### WASM Reentrancy Guard
 
-wasm3 is not reentrant.  With multiple threads per process now possible, a
-per-process guard prevents concurrent wasm3 execution:
+Built-in WASM runtimes are not reentrant. With multiple threads per process now
+possible, a per-process guard prevents concurrent runtime entry:
 
 ```c
 /* process_t gains: */
-spinlock_t wasm3_lock;    /* held for the duration of wasm3 entry_fn call */
-uint32_t   wasm3_owner;   /* TID that currently holds the lock; 0 = free */
+spinlock_t runtime_lock;         /* held for the duration of runtime-locked entry_fn call */
+uint32_t   runtime_lock_owner;   /* TID that currently holds the lock; 0 = free */
 ```
 
 In `process_trampoline`:
 
 ```c
 /* Before calling entry_fn: */
-spinlock_lock(&proc->wasm3_lock);
-proc->wasm3_owner = thread_current_tid();
+spinlock_lock(&proc->runtime_lock);
+proc->runtime_lock_owner = thread_current_tid();
 
 cpu_local()->last_run_result = entry_fn(proc, proc->arg);
 
-proc->wasm3_owner = 0;
-spinlock_unlock(&proc->wasm3_lock);
+proc->runtime_lock_owner = 0;
+spinlock_unlock(&proc->runtime_lock);
 ```
 
-If a second WASM thread is dispatched and `wasm3_lock` is held, it will spin
-briefly.  The spinlock must not be held across a `process_yield` — the entry
-function must complete its current step (PROCESS_RUN_YIELDED) before wasm3 state
-is safe for the next thread.
+If a second runtime-locked thread is dispatched and `runtime_lock` is held, it
+will spin briefly. The spinlock must not be held across a `process_yield` —
+the entry function must complete its current step (`PROCESS_RUN_YIELDED`)
+before runtime state is safe for the next thread.
 
 Kernel worker threads (native C, `is_kernel_worker = 1`) do not go through
-`process_trampoline` and never acquire `wasm3_lock`.
+`process_trampoline` and never acquire `runtime_lock`.
 
 ---
 
@@ -651,7 +651,7 @@ Strict global ordering to prevent deadlock.  From outermost to innermost:
 ```
 cpu_sched_t.lock         (per-CPU ready queue)
   │
-  └─► process_t.wasm3_lock   (WASM reentrancy guard, if needed)
+  └─► process_t.runtime_lock   (runtime reentrancy guard, if needed)
         │
         └─► sched_event_t.lock   (event wait list)
               │
@@ -706,8 +706,8 @@ transition.
 | `state` | Simplified to UNUSED/ALIVE/REAPING/ZOMBIE |
 | `block_reason` | Removed (now per-thread `wait_event`) |
 | `in_ready_queue` | Removed (process no longer queued directly) |
-| `wasm3_lock` | **New**: per-process wasm3 reentrancy spinlock |
-| `wasm3_owner` | **New**: TID of current wasm3 occupant |
+| `runtime_lock` | **New**: per-process runtime reentrancy spinlock |
+| `runtime_lock_owner` | **New**: TID of current runtime-lock occupant |
 
 #### `ipc_endpoint_t` changes
 
@@ -740,7 +740,7 @@ transition.
 
 - `context_switch.S` assembly — the register save/restore format (`process_context_t`)
   is unchanged; the new scheduler uses the same switch routine.
-- `process_trampoline` — same trampoline; gains wasm3_lock acquire/release.
+- `process_trampoline` — same trampoline; gains runtime_lock acquire/release.
 - Preemption path (`process_preempt_from_irq`) — still fires on CPL3 frames;
   rewrites frame to jump to `process_preempt_trampoline`.
 - IPC message format (`ipc_message_t`) and endpoint creation API.

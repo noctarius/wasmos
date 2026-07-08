@@ -151,8 +151,8 @@ typedef struct process {
     /* Runtime reentrancy guard for subsystems that require single-threaded
      * process entry (currently the built-in WASM runtimes). Worker threads
      * (is_kernel_worker) never acquire this. */
-    spinlock_t  wasm3_lock;
-    uint32_t    wasm3_owner;   /* TID of current runtime-lock occupant; 0 = free */
+    spinlock_t  runtime_lock;
+    uint32_t    runtime_lock_owner;   /* TID of current runtime-lock occupant; 0 = free */
     /* Process-level wait event (replaces wait_target_pid polling). */
     sched_event_t wait_event;
 } process_t;

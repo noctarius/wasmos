@@ -18,7 +18,7 @@ int spinlock_try_lock(spinlock_t *lock);
 void spinlock_lock(spinlock_t *lock);
 void spinlock_unlock(spinlock_t *lock);
 /* Variants that do NOT disable hardware interrupts.  Use only for long-lived locks
- * (e.g. wasm3_lock held for an entire WASM process timeslice) where cli would
+ * (e.g. runtime_lock held for an entire WASM process timeslice) where cli would
  * permanently suppress device IRQ delivery on the holding CPU. */
 void spinlock_lock_noirq(spinlock_t *lock);
 void spinlock_unlock_noirq(spinlock_t *lock);

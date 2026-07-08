@@ -371,7 +371,10 @@ sequence is:
    the kernel's built-in subsystem handlers (`WASM3`, `WARP`, or `NATIVE`
    today). The lookup is keyed directly by the 8-byte subsystem tag and returns
    the resolved handler metadata plus ops table in one step. Legacy packages
-   without a tag are routed through compatibility aliases first.
+   without a tag are routed through compatibility aliases first. The current
+   kernel populates that registry procedurally through
+   `wasmos_subsystem_register(...)`, using the shared uint32-keyed hashmap as a
+   hash index and re-checking full tags inside each collision bucket.
 3. Policy hooks set by `wasmos_app_set_policy_hooks()` resolve required endpoints
    and grant declared capabilities (callbacks into the process manager).
 4. `wasmos_app_start(&instance, &desc, owner_context_id, init_argv, init_argc)`:
@@ -389,7 +392,7 @@ For WASM-backed subsystems, the `start` handler calls `wasm_driver_start()` and
 the entry handler calls `wasm_driver_call_unlocked()`. For the native
 subsystem, `start` calls `native_driver_start()` and caches the result so the
 common entry path can still run through the same `call_entry` contract. In the
-current kernel this registry is still static and built-in; the registration
+current kernel this registry is still built-in and in-kernel; the registration
 boundary is explicit, but the handlers are not external services yet.
 
 Parse errors, failed endpoint resolution, and failed capability grants all

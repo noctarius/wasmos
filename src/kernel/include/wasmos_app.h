@@ -178,6 +178,9 @@ typedef struct {
 } wasmos_app_instance_t;
 
 int wasmos_app_parse(const uint8_t *blob, uint32_t blob_size, wasmos_app_desc_t *out_desc);
+int wasmos_subsystem_register(const char *request_tag,
+                              const char *runtime_tag,
+                              const wasmos_subsystem_ops_t *ops);
 int wasmos_app_resolve_subsystem(const wasmos_app_desc_t *desc,
                                  wasmos_app_subsystem_info_t *out_info);
 int wasmos_app_requires_explicit_ready(const wasmos_app_desc_t *desc);

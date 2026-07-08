@@ -5,6 +5,8 @@
 #include "klog.h"
 #include "native_driver.h"
 #include "serial.h"
+#include "spinlock.h"
+#include "subsystem_registry.h"
 #include "wasmos_app.h"
 #include <string.h>
 
@@ -149,12 +151,8 @@ typedef struct __attribute__((packed)) {
 
 static wasmos_app_endpoint_resolver_t g_endpoint_resolver;
 static wasmos_app_capability_granter_t g_capability_granter;
-
-typedef struct {
-    const char *request_tag;
-    const char *runtime_tag;
-    const wasmos_subsystem_ops_t *ops;
-} wasmos_app_subsystem_handler_t;
+static uint8_t g_subsystems_initialized;
+static spinlock_t g_subsystem_lock;
 
 #if WASMOS_WASM_RUNTIME == 1
 #define WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG WASMOS_SUBSYSTEM_TAG_WARP
@@ -367,27 +365,79 @@ copy_ascii_field(char *dst, uint32_t dst_size, const uint8_t *src, uint32_t src_
     return 0;
 }
 
-static const wasmos_app_subsystem_handler_t g_subsystems[] = {
-    { WASMOS_SUBSYSTEM_TAG_NATIVE, WASMOS_SUBSYSTEM_TAG_NATIVE, &g_wasmos_native_subsystem_ops },
-    { WASMOS_SUBSYSTEM_TAG_WASM, WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, &g_wasmos_wasm_subsystem_ops },
-    { WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, &g_wasmos_wasm_subsystem_ops },
-#if WASMOS_WASM_RUNTIME == 1
-    { "WARP+JIT", WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG, &g_wasmos_wasm_subsystem_ops },
-#endif
-};
+static int
+wasmos_subsystem_register_locked(const char *request_tag,
+                                 const char *runtime_tag,
+                                 const wasmos_subsystem_ops_t *ops)
+{
+    return wasmos_subsystem_registry_register(request_tag, runtime_tag, ops);
+}
 
-static const wasmos_app_subsystem_handler_t *
+int
+wasmos_subsystem_register(const char *request_tag,
+                          const char *runtime_tag,
+                          const wasmos_subsystem_ops_t *ops)
+{
+    int rc = -1;
+    spinlock_lock(&g_subsystem_lock);
+    rc = wasmos_subsystem_register_locked(request_tag, runtime_tag, ops);
+    spinlock_unlock(&g_subsystem_lock);
+    return rc;
+}
+
+static int
+wasmos_register_builtin_subsystems(void)
+{
+    if (wasmos_subsystem_register_locked(WASMOS_SUBSYSTEM_TAG_NATIVE,
+                                         WASMOS_SUBSYSTEM_TAG_NATIVE,
+                                         &g_wasmos_native_subsystem_ops) != 0 ||
+        wasmos_subsystem_register_locked(WASMOS_SUBSYSTEM_TAG_WASM,
+                                         WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG,
+                                         &g_wasmos_wasm_subsystem_ops) != 0 ||
+        wasmos_subsystem_register_locked(WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG,
+                                         WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG,
+                                         &g_wasmos_wasm_subsystem_ops) != 0) {
+        return -1;
+    }
+#if WASMOS_WASM_RUNTIME == 1
+    if (wasmos_subsystem_register_locked("WARP+JIT",
+                                         WASMOS_ACTIVE_WASM_SUBSYSTEM_TAG,
+                                         &g_wasmos_wasm_subsystem_ops) != 0) {
+        return -1;
+    }
+#endif
+    return 0;
+}
+
+static int
+wasmos_ensure_subsystems_initialized(void)
+{
+    int rc = 0;
+    spinlock_lock(&g_subsystem_lock);
+    if (g_subsystems_initialized) {
+        rc = 0;
+        goto out;
+    }
+    if (wasmos_register_builtin_subsystems() != 0) {
+        rc = -1;
+        goto out;
+    }
+    g_subsystems_initialized = 1u;
+out:
+    spinlock_unlock(&g_subsystem_lock);
+    return rc;
+}
+
+static const wasmos_subsystem_registry_entry_t *
 wasmos_app_find_subsystem_handler(const char *request_tag)
 {
     if (!request_tag) {
         return 0;
     }
-    for (uint32_t i = 0; i < sizeof(g_subsystems) / sizeof(g_subsystems[0]); ++i) {
-        if (strcmp(request_tag, g_subsystems[i].request_tag) == 0) {
-            return &g_subsystems[i];
-        }
+    if (wasmos_ensure_subsystems_initialized() != 0) {
+        return 0;
     }
-    return 0;
+    return wasmos_subsystem_registry_find(request_tag);
 }
 
 
@@ -699,7 +749,7 @@ wasmos_app_resolve_subsystem(const wasmos_app_desc_t *desc,
     if (!desc || !out_info) {
         return -1;
     }
-    const wasmos_app_subsystem_handler_t *handler = wasmos_app_find_subsystem_handler(desc->subsystem_tag);
+    const wasmos_subsystem_registry_entry_t *handler = wasmos_app_find_subsystem_handler(desc->subsystem_tag);
     if (!handler || !handler->ops) {
         return -1;
     }

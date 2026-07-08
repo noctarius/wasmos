@@ -404,6 +404,42 @@ read-only after boot-time registration succeeds.
 Parse errors, failed endpoint resolution, and failed capability grants all
 abort before any runtime state is created.
 
+#### Target Subsystem Delegation Model
+
+The long-term direction is to make `NATIVE` the only kernel-built-in
+user-space execution path. All other runtimes (`WASM3`, `WARP`, `JVM`, `LUA`,
+`BEAM`, and similar environments) move out of the kernel and become native
+ring-3 subsystem components.
+
+That split is intentionally two-layered:
+
+- **Subsystem broker**: parses a package format, validates it, applies
+  subsystem-specific policy, and decides how the workload should be realised.
+- **Execution engine**: the actual runtime host that executes the workload
+  once PM has created the process.
+
+For some formats the broker and engine may be the same native binary. For more
+complex environments they are conceptually distinct even if the first
+implementation combines them.
+
+The preferred execution model is **one native host process per guest
+workload**, not a multi-tenant runtime daemon. That keeps ring-3 isolation,
+ownership, `wait`/`kill`, exit status, ready signaling, and accounting aligned
+with the existing per-process model.
+
+Even when a guest workload is realised through a native host binary, that host
+is treated as the implementation detail of the child process rather than as a
+second user-visible process. The logical process identity remains the guest
+package:
+
+- `ps` should show the guest app/service/driver name and resolved runtime tag
+- parent/child relationships remain attached to the guest workload
+- lifecycle operations (`wait`, `kill`, ready, exit status) target the guest
+  identity, not the host binary filename
+
+This means future PM delegation should be read as **"realise this child through
+engine X"**, not as "spawn a separate helper next to the child".
+
 ---
 
 ### Filesystem Namespace

@@ -292,6 +292,32 @@ solid first.
 
 ---
 
+### Runtime Delegation Direction
+
+The runtime direction is to stop treating WebAssembly as architecturally
+special. `NATIVE` is the only execution environment that should remain built
+into the kernel's direct user-space launch path; all other runtimes move toward
+native ring-3 subsystem components.
+
+The intended layering is:
+
+- **PM owns process identity and privileged creation.** The kernel still owns
+  policy enforcement, ownership, accounting, `wait`/`kill`, and ready-state
+  semantics.
+- **Subsystem brokers own format-specific interpretation.** A broker
+  understands a subsystem tag, validates packages, and decides what execution
+  environment should realise the workload.
+- **Execution engines own guest runtime state.** `wasm3-host`, `warp-host`,
+  JVM hosts, Lua hosts, and similar binaries are normal native ring-3
+  processes, not kernel runtime personalities.
+
+The preferred realization model is one host process per guest workload. This
+preserves isolation and keeps process semantics simple. Even when a guest is
+realised through a host binary, that host is not a second logical process from
+the user's perspective; it is how PM realises the child that already exists.
+
+---
+
 ### Structural Invariants
 
 These properties are architectural anchors. Changes may break any interface

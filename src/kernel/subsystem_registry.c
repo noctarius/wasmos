@@ -152,13 +152,13 @@ wasmos_subsystem_registry_register_builtin(const char *request_tag,
 }
 
 int
-wasmos_subsystem_registry_register_service(const char *request_tag,
-                                           const char *runtime_tag,
-                                           const char *service_name,
-                                           uint32_t service_endpoint,
-                                           uint8_t uses_wasm_payload,
-                                           uint8_t needs_runtime_lock,
-                                           uint8_t gates_ready_for_services)
+wasmos_subsystem_registry_register_broker(const char *request_tag,
+                                          const char *runtime_tag,
+                                          const char *broker_name,
+                                          uint32_t broker_endpoint,
+                                          uint8_t uses_wasm_payload,
+                                          uint8_t needs_runtime_lock,
+                                          uint8_t gates_ready_for_services)
 {
     wasmos_subsystem_bucket_t *bucket = 0;
     wasmos_subsystem_registry_entry_t *entry = 0;
@@ -168,7 +168,7 @@ wasmos_subsystem_registry_register_service(const char *request_tag,
     }
     if (subsystem_tag_validate_string(request_tag) != 0 ||
         subsystem_tag_validate_string(runtime_tag) != 0 ||
-        subsystem_tag_validate_optional_string(service_name) != 0) {
+        subsystem_tag_validate_optional_string(broker_name) != 0) {
         klog_write("[subsystem] register invalid tag\n");
         return -1;
     }
@@ -200,19 +200,19 @@ wasmos_subsystem_registry_register_service(const char *request_tag,
     memset(entry, 0, sizeof(*entry));
     copy_subsystem_tag(entry->request_tag, request_tag);
     copy_subsystem_tag(entry->runtime_tag, runtime_tag);
-    copy_subsystem_tag(entry->service_name, service_name);
-    entry->kind = WASMOS_SUBSYSTEM_HANDLER_SERVICE;
+    copy_subsystem_tag(entry->broker_name, broker_name);
+    entry->kind = WASMOS_SUBSYSTEM_HANDLER_BROKER;
     entry->uses_wasm_payload = uses_wasm_payload ? 1u : 0u;
     entry->needs_runtime_lock = needs_runtime_lock ? 1u : 0u;
     entry->gates_ready_for_services = gates_ready_for_services ? 1u : 0u;
-    entry->service_endpoint = service_endpoint;
+    entry->broker_endpoint = broker_endpoint;
     entry->next = bucket->head;
     bucket->head = entry;
-    klog_printf("[subsystem] register request=%s runtime=%s service=%s endpoint=%u\n",
+    klog_printf("[subsystem] register request=%s runtime=%s broker=%s endpoint=%u\n",
                 entry->request_tag,
                 entry->runtime_tag,
-                entry->service_name[0] != '\0' ? entry->service_name : "-",
-                entry->service_endpoint);
+                entry->broker_name[0] != '\0' ? entry->broker_name : "-",
+                entry->broker_endpoint);
     spinlock_unlock(&g_subsystem_lock);
     return 0;
 }

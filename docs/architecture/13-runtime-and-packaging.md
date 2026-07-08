@@ -370,8 +370,8 @@ sequence is:
 2. `wasmos_app_resolve_subsystem(&desc, &info)` maps the package tag onto a
    registered subsystem handler. The lookup is keyed directly by the 8-byte
    subsystem tag and returns a uniform result shape: handler kind
-   (`BUILTIN`/future `SERVICE`), resolved runtime tag, startup gating flags,
-   and either an in-kernel ops table or the future external service identity.
+   (`BUILTIN`/future `BROKER`), resolved runtime tag, startup gating flags,
+   and either an in-kernel ops table or the future external broker identity.
    Legacy packages without a tag are routed through compatibility aliases
    first. The current kernel populates that registry explicitly during early
    boot through `wasmos_app_init_subsystems()` +
@@ -395,9 +395,9 @@ For WASM-backed built-in subsystems, the `start` handler calls
 For the native built-in subsystem, `start` calls `native_driver_start()` and
 caches the result so the common entry path can still run through the same
 `call_entry` contract. In the current kernel this registry is still built-in
-and in-kernel; service-backed registrations can now be represented in the
+and in-kernel; broker-backed registrations can now be represented in the
 registry/result model, but `wasmos_app_start()` still rejects them until the
-first IPC-routed subsystem server lands.
+first IPC-routed subsystem broker lands.
 Lookup no longer self-populates built-ins on first use; subsystem resolution is
 read-only after boot-time registration succeeds.
 

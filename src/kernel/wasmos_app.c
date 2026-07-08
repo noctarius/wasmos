@@ -405,24 +405,24 @@ wasmos_subsystem_register(const char *request_tag,
 }
 
 int
-wasmos_subsystem_register_service(const char *request_tag,
-                                  const char *runtime_tag,
-                                  const char *service_name,
-                                  uint32_t service_endpoint,
-                                  uint8_t uses_wasm_payload,
-                                  uint8_t needs_runtime_lock,
-                                  uint8_t gates_ready_for_services)
+wasmos_subsystem_register_broker(const char *request_tag,
+                                 const char *runtime_tag,
+                                 const char *broker_name,
+                                 uint32_t broker_endpoint,
+                                 uint8_t uses_wasm_payload,
+                                 uint8_t needs_runtime_lock,
+                                 uint8_t gates_ready_for_services)
 {
     int rc = -1;
     wasmos_subsystem_lock_init_once();
     spinlock_lock(&g_subsystem_lock);
-    rc = wasmos_subsystem_registry_register_service(request_tag,
-                                                    runtime_tag,
-                                                    service_name,
-                                                    service_endpoint,
-                                                    uses_wasm_payload,
-                                                    needs_runtime_lock,
-                                                    gates_ready_for_services);
+    rc = wasmos_subsystem_registry_register_broker(request_tag,
+                                                   runtime_tag,
+                                                   broker_name,
+                                                   broker_endpoint,
+                                                   uses_wasm_payload,
+                                                   needs_runtime_lock,
+                                                   gates_ready_for_services);
     spinlock_unlock(&g_subsystem_lock);
     return rc;
 }
@@ -802,12 +802,12 @@ wasmos_app_resolve_subsystem(const wasmos_app_desc_t *desc,
     }
     copy_subsystem_tag(out_info->requested_tag, handler->request_tag);
     copy_subsystem_tag(out_info->runtime_tag, handler->runtime_tag);
-    copy_subsystem_tag(out_info->service_name, handler->service_name);
+    copy_subsystem_tag(out_info->broker_name, handler->broker_name);
     out_info->kind = handler->kind;
     out_info->uses_wasm_payload = handler->uses_wasm_payload;
     out_info->needs_runtime_lock = handler->needs_runtime_lock;
     out_info->gates_ready_for_services = handler->gates_ready_for_services;
-    out_info->service_endpoint = handler->service_endpoint;
+    out_info->broker_endpoint = handler->broker_endpoint;
     out_info->ops = handler->ops;
     return 0;
 }
@@ -910,9 +910,9 @@ wasmos_app_start(wasmos_app_instance_t *instance,
     }
     instance->ops = subsystem_info.ops;
     if (subsystem_info.kind != WASMOS_SUBSYSTEM_HANDLER_BUILTIN) {
-        /* TODO: Route service-backed subsystems through IPC once the first
-         * userland subsystem server lands. */
-        klog_write("[wasmos-app] service-backed subsystem start not implemented\n");
+        /* TODO: Route broker-backed subsystems through IPC once the first
+         * userland subsystem broker lands. */
+        klog_write("[wasmos-app] broker-backed subsystem start not implemented\n");
         return -1;
     }
     if (!instance->ops || !instance->ops->start) {

@@ -462,10 +462,23 @@ PM-facing classification now exists as a separate helper:
 - the helper exposes a single probe-byte budget that covers both `.wap`
   recognition and broker matchers
 
-This is still a non-delegating step. PM now classifies executable inputs before
-parsing, but it still only executes the built-in `.wap` path. Broker-owned
-formats are recognized and rejected locally until the later spawn-plan IPC
-handoff exists.
+PM now has the first broker handoff contract as well:
+
+- PM writes a `wasmos_broker_spawn_plan_request_t` into the tail of its loaded
+  FS buffer view
+- the guest blob stays at offset 0 in that same borrowed view
+- PM lends that buffer to the broker read-only and sends
+  `PROC_BROKER_IPC_SPAWN_PLAN_REQ`
+- the broker replies with `PROC_BROKER_IPC_SPAWN_PLAN_RESP` pointing at a
+  `wasmos_broker_spawn_plan_response_t` inside the broker's own FS buffer
+- PM borrows the broker buffer read-only, validates the returned plan against
+  the matched handler identity, and only accepts a built-in `.wap` host-path
+  plan kind for the current contract shape
+
+This is still an intentionally partial delegation step. PM now classifies
+executable inputs and can validate a broker-owned spawn plan, but it still only
+executes the built-in `.wap` path directly. A validated broker plan currently
+stops at the PM boundary until the later launch handoff lands.
 
 #### Target Subsystem Delegation Model
 
@@ -508,7 +521,7 @@ not a kernel runtime enum:
 
 - `.wap` remains the built-in package/container path
 - extra executable formats are broker-registered handlers
-- PM should do only cheap matching plus spawn-plan execution
+- PM should do only cheap matching plus spawn-plan validation/execution
 - the owning broker must revalidate the full guest format before execution
 
 ---

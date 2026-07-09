@@ -643,6 +643,235 @@ pm_recv_fs_reply(uint32_t source_context_id,
 }
 
 static int
+pm_recv_reply_matching(uint32_t source_context_id,
+                       uint32_t source_endpoint,
+                       uint32_t request_id,
+                       uint32_t expected_source,
+                       ipc_message_t *out_msg)
+{
+    ipc_message_t msg;
+
+    for (;;) {
+        int rc = ipc_recv_blocking_for(source_context_id, source_endpoint, &msg);
+        if (rc == IPC_EMPTY) {
+            continue;
+        }
+        if (rc != IPC_OK) {
+            return -1;
+        }
+        if (msg.request_id != request_id || msg.source != expected_source) {
+            continue;
+        }
+        if (out_msg) {
+            *out_msg = msg;
+        }
+        return 0;
+    }
+}
+
+static int
+pm_exec_tail_write(uint8_t *buffer,
+                   uint32_t buffer_size,
+                   uint32_t *io_offset,
+                   const void *src,
+                   uint32_t len,
+                   uint32_t *out_offset,
+                   int append_nul)
+{
+    uint32_t offset = 0u;
+    const uint8_t *src_bytes = (const uint8_t *)src;
+
+    if (!buffer || !io_offset || (!src && len != 0u)) {
+        return -1;
+    }
+    offset = *io_offset;
+    if (len > 0u) {
+        if (offset >= buffer_size || len > (buffer_size - offset)) {
+            return -1;
+        }
+        for (uint32_t i = 0; i < len; ++i) {
+            buffer[offset + i] = src_bytes[i];
+        }
+        if (out_offset) {
+            *out_offset = offset;
+        }
+        offset += len;
+    } else if (out_offset) {
+        *out_offset = 0u;
+    }
+    if (append_nul) {
+        if (offset >= buffer_size) {
+            return -1;
+        }
+        buffer[offset++] = '\0';
+    }
+    *io_offset = offset;
+    return 0;
+}
+
+static int
+pm_request_broker_spawn_plan(uint32_t pm_context_id,
+                             const wasmos_exec_handler_registry_entry_t *handler,
+                             const char *path,
+                             uint32_t path_len,
+                             const char *cli_args,
+                             uint32_t args_len,
+                             uint32_t spawn_flags,
+                             uint32_t blob_size,
+                             wasmos_exec_broker_plan_t *out_plan)
+{
+    uint32_t broker_context_id = 0u;
+    uint8_t *pm_fs_buf = 0;
+    uint32_t pm_fs_buf_size = 0u;
+    uint32_t request_offset = 0u;
+    uint32_t request_size = sizeof(wasmos_broker_spawn_plan_request_t);
+    uint32_t tail_offset = 0u;
+    uint32_t handler_name_offset = 0u;
+    uint32_t path_offset = 0u;
+    uint32_t args_offset = 0u;
+    uint32_t request_id = 0u;
+    int send_ok = 0;
+    int pm_borrowed_broker = 0;
+    int broker_borrowed_pm = 0;
+    ipc_message_t req;
+    ipc_message_t reply;
+    wasmos_broker_spawn_plan_request_t request;
+    const uint8_t *broker_fs_buf = 0;
+
+    if (!handler || !path || path_len == 0u || !out_plan) {
+        return PROC_SPAWN_ERR_BROKER_PLAN;
+    }
+    if (g_pm.broker_reply_endpoint == IPC_ENDPOINT_NONE ||
+        handler->broker_endpoint == IPC_ENDPOINT_NONE ||
+        ipc_endpoint_owner(handler->broker_endpoint, &broker_context_id) != IPC_OK ||
+        broker_context_id == 0u) {
+        return PROC_SPAWN_ERR_BROKER_IPC;
+    }
+    pm_fs_buf = (uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
+    pm_fs_buf_size = process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM);
+    if (!pm_fs_buf || blob_size > pm_fs_buf_size || request_size > (pm_fs_buf_size - blob_size)) {
+        return PROC_SPAWN_ERR_BROKER_PLAN;
+    }
+
+    request_offset = blob_size;
+    tail_offset = request_offset + request_size;
+    if (pm_exec_tail_write(pm_fs_buf,
+                           pm_fs_buf_size,
+                           &tail_offset,
+                           handler->handler_name,
+                           (uint32_t)strlen(handler->handler_name),
+                           &handler_name_offset,
+                           1) != 0 ||
+        pm_exec_tail_write(pm_fs_buf,
+                           pm_fs_buf_size,
+                           &tail_offset,
+                           path,
+                           path_len,
+                           &path_offset,
+                           1) != 0 ||
+        pm_exec_tail_write(pm_fs_buf,
+                           pm_fs_buf_size,
+                           &tail_offset,
+                           cli_args,
+                           args_len,
+                           &args_offset,
+                           args_len > 0u ? 1 : 0) != 0) {
+        return PROC_SPAWN_ERR_BROKER_PLAN;
+    }
+
+    memset(&request, 0, sizeof(request));
+    request.version = WASMOS_BROKER_SPAWN_PLAN_VERSION;
+    request.spawn_flags = spawn_flags;
+    request.blob_offset = 0u;
+    request.blob_size = blob_size;
+    request.path_offset = path_offset;
+    request.path_len = path_len;
+    request.args_offset = args_offset;
+    request.args_len = args_len;
+    request.handler_name_offset = handler_name_offset;
+    request.handler_name_len = (uint32_t)strlen(handler->handler_name);
+    memcpy(request.request_tag, handler->request_tag, sizeof(request.request_tag));
+    memcpy(request.runtime_tag, handler->runtime_tag, sizeof(request.runtime_tag));
+    memcpy(request.broker_name, handler->broker_name, sizeof(request.broker_name));
+    memcpy(pm_fs_buf + request_offset, &request, sizeof(request));
+
+    if (process_manager_buffer_borrow_context(PM_BUFFER_KIND_FILESYSTEM,
+                                              broker_context_id,
+                                              pm_context_id,
+                                              PM_BUFFER_BORROW_READ) != 0) {
+        return PROC_SPAWN_ERR_BROKER_IPC;
+    }
+    broker_borrowed_pm = 1;
+
+    request_id = g_pm.fs_request_id++;
+    req.type = PROC_BROKER_IPC_SPAWN_PLAN_REQ;
+    req.source = g_pm.broker_reply_endpoint;
+    req.destination = handler->broker_endpoint;
+    req.request_id = request_id;
+    req.arg0 = request_offset;
+    req.arg1 = tail_offset - request_offset;
+    req.arg2 = 0u;
+    req.arg3 = 0u;
+    if (ipc_send_from(pm_context_id, handler->broker_endpoint, &req) != IPC_OK) {
+        goto broker_ipc_fail;
+    }
+    send_ok = 1;
+    if (pm_recv_reply_matching(pm_context_id,
+                               g_pm.broker_reply_endpoint,
+                               request_id,
+                               handler->broker_endpoint,
+                               &reply) != 0) {
+        goto broker_ipc_fail;
+    }
+    if (reply.type != PROC_BROKER_IPC_SPAWN_PLAN_RESP ||
+        reply.arg1 == 0u ||
+        reply.arg0 >= pm_fs_buf_size ||
+        reply.arg1 > (pm_fs_buf_size - reply.arg0)) {
+        goto broker_plan_fail;
+    }
+    if (process_manager_buffer_borrow_context(PM_BUFFER_KIND_FILESYSTEM,
+                                              pm_context_id,
+                                              broker_context_id,
+                                              PM_BUFFER_BORROW_READ) != 0) {
+        goto broker_ipc_fail;
+    }
+    pm_borrowed_broker = 1;
+    broker_fs_buf = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
+    if (!broker_fs_buf ||
+        wasmos_exec_broker_plan_validate(broker_fs_buf + reply.arg0,
+                                         reply.arg1,
+                                         handler,
+                                         out_plan) != 0) {
+        goto broker_plan_fail;
+    }
+
+    (void)process_manager_buffer_release_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
+    (void)process_manager_buffer_release_context(PM_BUFFER_KIND_FILESYSTEM, broker_context_id);
+    return 0;
+
+broker_ipc_fail:
+    if (pm_borrowed_broker) {
+        (void)process_manager_buffer_release_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
+    }
+    if (broker_borrowed_pm) {
+        (void)process_manager_buffer_release_context(PM_BUFFER_KIND_FILESYSTEM, broker_context_id);
+    }
+    if (!send_ok) {
+        return PROC_SPAWN_ERR_BROKER_IPC;
+    }
+    return PROC_SPAWN_ERR_BROKER_IPC;
+
+broker_plan_fail:
+    if (pm_borrowed_broker) {
+        (void)process_manager_buffer_release_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
+    }
+    if (broker_borrowed_pm) {
+        (void)process_manager_buffer_release_context(PM_BUFFER_KIND_FILESYSTEM, broker_context_id);
+    }
+    return PROC_SPAWN_ERR_BROKER_PLAN;
+}
+
+static int
 pm_inherit_child_cwd(uint32_t pm_context_id, uint32_t parent_context_id, uint32_t child_pid)
 {
     process_t *child = 0;
@@ -1558,6 +1787,7 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
     const uint8_t *pm_fs_buf = 0;
     uint32_t blob_size = 0;
     uint32_t pid = 0;
+    uint32_t spawn_req_flags = (uint32_t)msg->arg0;
 
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
         return PROC_SPAWN_ERR_BAD_ENDPOINT;
@@ -1605,19 +1835,32 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
     wasmos_app_desc_t desc;
     uint32_t app_flags = 0;
     wasmos_exec_format_match_t format_match;
+    wasmos_exec_broker_plan_t broker_plan;
     if (wasmos_exec_format_classify(path, pm_fs_buf, blob_size, &format_match) != 0) {
         return PROC_SPAWN_ERR_SPAWN_FAILED;
     }
     if (format_match.kind == WASMOS_EXEC_FORMAT_BROKER) {
-        /* TODO: Route broker-owned executable formats through subsystem
-         * spawn-plan IPC once PM learns the broker handoff contract. */
-        return PROC_SPAWN_ERR_SPAWN_FAILED;
+        int broker_rc = pm_request_broker_spawn_plan(pm_context_id,
+                                                     format_match.handler,
+                                                     path,
+                                                     path_len,
+                                                     args_len > 0u ? cli_args : 0,
+                                                     args_len,
+                                                     spawn_req_flags,
+                                                     blob_size,
+                                                     &broker_plan);
+        if (broker_rc != 0) {
+            return broker_rc;
+        }
+        /* TODO: Launch validated broker-owned plans through the built-in
+         * `.wap` path once the first broker handoff execution step lands. */
+        (void)broker_plan;
+        return PROC_SPAWN_ERR_BROKER_DEFERRED;
     }
     int parse_rc = wasmos_app_parse(pm_fs_buf, blob_size, &desc);
     if (parse_rc == 0) {
         app_flags = desc.flags;
     }
-    uint32_t spawn_req_flags = (uint32_t)msg->arg0;
     int ready_policy = 0;
     if (parse_rc == 0) {
         ready_policy = wasmos_app_requires_explicit_ready(&desc);

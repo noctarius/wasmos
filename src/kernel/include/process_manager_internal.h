@@ -86,6 +86,7 @@ typedef struct {
     uint32_t vt_endpoint;
     uint32_t fs_reply_endpoint;
     uint32_t fs_ctrl_endpoint;
+    uint32_t broker_reply_endpoint;
     uint32_t select_id;        /* select set over the endpoints above */
     uint32_t fs_request_id;
     uint32_t next_cli_tty;

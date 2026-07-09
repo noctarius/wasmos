@@ -176,6 +176,58 @@ test_probe_budget(void)
     return 0;
 }
 
+static int
+test_validate_broker_plan(void)
+{
+    uint8_t plan_blob[256];
+    uint32_t off = sizeof(wasmos_broker_spawn_plan_response_t);
+    uint32_t host_path_offset = 0u;
+    uint32_t host_args_offset = 0u;
+    const wasmos_exec_handler_registry_entry_t *handler = 0;
+    wasmos_broker_spawn_plan_response_t *plan = 0;
+    wasmos_exec_broker_plan_t parsed;
+
+    memset(plan_blob, 0, sizeof(plan_blob));
+    handler = wasmos_subsystem_registry_find_exec_handler(&(wasmos_exec_probe_t){
+        .path = "/user/bin/tool.jar",
+        .initial_bytes = (const uint8_t *)"PK\x03\x04more",
+        .initial_size = 8u,
+    });
+    if (!handler) return __LINE__;
+
+    host_path_offset = off;
+    memcpy(plan_blob + off, "/boot/system/brokers/java-host.wap", sizeof("/boot/system/brokers/java-host.wap"));
+    off += (uint32_t)sizeof("/boot/system/brokers/java-host.wap");
+    host_args_offset = off;
+    memcpy(plan_blob + off, "--guest=/user/bin/tool.jar", sizeof("--guest=/user/bin/tool.jar"));
+    off += (uint32_t)sizeof("--guest=/user/bin/tool.jar");
+
+    plan = (wasmos_broker_spawn_plan_response_t *)plan_blob;
+    plan->version = WASMOS_BROKER_SPAWN_PLAN_VERSION;
+    plan->plan_kind = WASMOS_BROKER_PLAN_KIND_WAP_PATH;
+    plan->host_path_offset = host_path_offset;
+    plan->host_path_len = (uint32_t)sizeof("/boot/system/brokers/java-host.wap") - 1u;
+    plan->host_args_offset = host_args_offset;
+    plan->host_args_len = (uint32_t)sizeof("--guest=/user/bin/tool.jar") - 1u;
+    memcpy(plan->request_tag, handler->request_tag, sizeof(plan->request_tag));
+    memcpy(plan->runtime_tag, handler->runtime_tag, sizeof(plan->runtime_tag));
+
+    if (wasmos_exec_broker_plan_validate(plan_blob, off, handler, &parsed) != 0) {
+        return __LINE__;
+    }
+    if (!parsed.host_path || strcmp(parsed.host_path, "/boot/system/brokers/java-host.wap") != 0) return __LINE__;
+    if (!parsed.host_args || strcmp(parsed.host_args, "--guest=/user/bin/tool.jar") != 0) return __LINE__;
+
+    plan->host_path_len = 3u;
+    if (wasmos_exec_broker_plan_validate(plan_blob, off, handler, &parsed) == 0) return __LINE__;
+    plan->host_path_len = (uint32_t)sizeof("/boot/system/brokers/java-host.wap") - 1u;
+
+    memcpy(plan->runtime_tag, "WASM3", sizeof("WASM3"));
+    if (wasmos_exec_broker_plan_validate(plan_blob, off, handler, &parsed) == 0) return __LINE__;
+
+    return 0;
+}
+
 int
 main(void)
 {
@@ -189,6 +241,8 @@ main(void)
     rc = test_classify_broker_formats();
     if (rc != 0) return rc;
     rc = test_probe_budget();
+    if (rc != 0) return rc;
+    rc = test_validate_broker_plan();
     if (rc != 0) return rc;
 
     wasmos_subsystem_registry_reset();

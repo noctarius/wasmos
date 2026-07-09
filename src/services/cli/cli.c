@@ -2181,6 +2181,9 @@ cli_phase_wait_ipc_step(void)
             case PROC_SPAWN_ERR_ARGS_TOOBIG:  reason = "args too long"; break;
             case PROC_SPAWN_ERR_NO_PM_FSBUF:  reason = "transfer buffer unavailable"; break;
             case PROC_SPAWN_ERR_FS_READ:      reason = "cannot read executable"; break;
+            case PROC_SPAWN_ERR_BROKER_IPC:   reason = "broker plan IPC failed"; break;
+            case PROC_SPAWN_ERR_BROKER_PLAN:  reason = "broker returned an invalid spawn plan"; break;
+            case PROC_SPAWN_ERR_BROKER_DEFERRED: reason = "broker plan validated but launch is not implemented yet"; break;
             case PROC_SPAWN_ERR_SPAWN_FAILED: reason = "cannot start process (no free slot?)"; break;
             default: break;
         }

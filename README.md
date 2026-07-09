@@ -50,7 +50,7 @@ It defines repository workflow and documentation/update conventions.
 - `libui` component toolkit — vtable-dispatched widget tree (panels, labels, buttons, checkboxes, text inputs, scroll views, list views, dropdowns, and menus) shared across WASM and native ring-3 apps.
 - Practical interactive environment with VT/CLI, multi-TTY switching, and scriptable boot-time userspace workflows.
 - Broker-oriented runtime direction: `.wap` remains the built-in executable container while future subsystems can claim extra executable formats through bounded matcher trees (for example extension, magic-prefix, or shebang-style probes).
-- Path-based executable lookup now has a dedicated classifier that recognizes valid `.wap` blobs first and only then consults broker-registered external format handlers.
+- Path-based executable lookup now classifies valid `.wap` blobs first, then can synchronously ask a broker-owned external format handler for a spawn plan; PM still stops before launching that validated broker plan.
 
 <p align="center">
   <picture>

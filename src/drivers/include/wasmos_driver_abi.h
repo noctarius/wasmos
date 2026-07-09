@@ -96,6 +96,19 @@ enum {
 };
 
 enum {
+    /* Broker spawn-plan handoff:
+     * PM lends its FS buffer to the broker read-only, writes a
+     * wasmos_broker_spawn_plan_request_t into that borrowed view, then sends
+     * this request with arg0=request_offset and arg1=request_size.
+     *
+     * The broker replies on msg->source with the same request_id. On success
+     * arg0=plan_offset and arg1=plan_size in the broker's own FS buffer. */
+    PROC_BROKER_IPC_SPAWN_PLAN_REQ  = 0x223,
+    PROC_BROKER_IPC_SPAWN_PLAN_RESP = 0x2A3,
+    PROC_BROKER_IPC_SPAWN_PLAN_ERROR = 0x2E3
+};
+
+enum {
     PROC_MODULE_SOURCE_INITFS = 0,
     PROC_MODULE_SOURCE_FS = 1
 };
@@ -120,11 +133,14 @@ enum {
 #define PROC_SPAWN_ERR_NO_PM_FSBUF  (-15) /* PM xfer buffer missing */
 #define PROC_SPAWN_ERR_FS_READ      (-16) /* reading the app blob from FS failed */
 #define PROC_SPAWN_ERR_SPAWN_FAILED (-17) /* process create/start failed (e.g. no free slot) */
+#define PROC_SPAWN_ERR_BROKER_IPC   (-18) /* broker plan IPC transport/reply failed */
+#define PROC_SPAWN_ERR_BROKER_PLAN  (-19) /* broker replied with malformed/unsupported plan */
+#define PROC_SPAWN_ERR_BROKER_DEFERRED (-20) /* valid broker plan returned; PM launch step still deferred */
 
 /* Distinct shmem map/map_auto failure reasons, returned (as a negative int) by
  * wasmos_shmem_map / wasmos_shmem_map_auto instead of a blanket -1, so a failed
  * map reports WHY.  Mirrored in both runtimes (warp/link.cpp, wasm3/link.c).
- * Distinct -30 range so they don't collide with PROC_SPAWN_ERR_* (-10..-17). */
+ * Distinct -30 range so they don't collide with PROC_SPAWN_ERR_* (-10..-20). */
 #define SHMEM_ERR_BAD_ARGS    (-30) /* id/size invalid or size not page-aligned */
 #define SHMEM_ERR_NO_CAP      (-31) /* caller lacks the DMA capability / no context */
 #define SHMEM_ERR_BAD_ID      (-32) /* shmem id unknown / no backing pages */
@@ -138,6 +154,43 @@ enum {
 #define WASMOS_SPAWN_FLAG_DRIVER  (1u << 0)
 #define WASMOS_SPAWN_FLAG_SERVICE (1u << 1)
 #define WASMOS_SPAWN_FLAG_APP     (1u << 2)
+
+#define WASMOS_BROKER_SPAWN_PLAN_VERSION 1u
+
+enum {
+    WASMOS_BROKER_PLAN_KIND_NONE = 0,
+    /* Broker resolved the guest workload to a built-in `.wap` path that PM
+     * can later launch through the ordinary path-based spawn flow. */
+    WASMOS_BROKER_PLAN_KIND_WAP_PATH = 1
+};
+
+typedef struct __attribute__((packed)) {
+    uint32_t version;
+    uint32_t spawn_flags;
+    uint32_t blob_offset;
+    uint32_t blob_size;
+    uint32_t path_offset;
+    uint32_t path_len;
+    uint32_t args_offset;
+    uint32_t args_len;
+    uint32_t handler_name_offset;
+    uint32_t handler_name_len;
+    char request_tag[9];
+    char runtime_tag[9];
+    char broker_name[9];
+} wasmos_broker_spawn_plan_request_t;
+
+typedef struct __attribute__((packed)) {
+    uint32_t version;
+    uint32_t plan_kind;
+    uint32_t plan_flags;
+    uint32_t host_path_offset;
+    uint32_t host_path_len;
+    uint32_t host_args_offset;
+    uint32_t host_args_len;
+    char request_tag[9];
+    char runtime_tag[9];
+} wasmos_broker_spawn_plan_response_t;
 
 enum {
     /* Legacy arg-packed register (reply lands on the service endpoint).

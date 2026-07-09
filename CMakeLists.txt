@@ -1762,6 +1762,7 @@ add_custom_target(run-kernel-unit-tests
   COMMAND ${BUILD_DIR}/test_subsystem_registry
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${CMAKE_SOURCE_DIR}/src/drivers/include
           -I${KERNEL_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_wasmos_exec_format.c
           ${KERNEL_DIR}/wasmos_exec_format.c

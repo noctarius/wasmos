@@ -91,3 +91,88 @@ wasmos_exec_format_classify(const char *path,
     }
     return 0;
 }
+
+static int
+exec_plan_string_region(const uint8_t *plan_bytes,
+                        uint32_t plan_size,
+                        uint32_t offset,
+                        uint32_t len,
+                        const char **out_text)
+{
+    const char *text = 0;
+
+    if (!plan_bytes || !out_text) {
+        return -1;
+    }
+    *out_text = 0;
+    if (len == 0u) {
+        return 0;
+    }
+    if (offset >= plan_size || len > (plan_size - offset)) {
+        return -1;
+    }
+    text = (const char *)(plan_bytes + offset);
+    for (uint32_t i = 0; i < len; ++i) {
+        if (text[i] == '\0') {
+            return -1;
+        }
+    }
+    if (offset + len >= plan_size || text[len] != '\0') {
+        return -1;
+    }
+    *out_text = text;
+    return 0;
+}
+
+int
+wasmos_exec_broker_plan_validate(const uint8_t *plan_bytes,
+                                 uint32_t plan_size,
+                                 const wasmos_exec_handler_registry_entry_t *handler,
+                                 wasmos_exec_broker_plan_t *out_plan)
+{
+    const wasmos_broker_spawn_plan_response_t *plan = 0;
+    const char *host_path = 0;
+    const char *host_args = 0;
+
+    if (!plan_bytes || !handler || !out_plan) {
+        return -1;
+    }
+    memset(out_plan, 0, sizeof(*out_plan));
+    if (plan_size < sizeof(wasmos_broker_spawn_plan_response_t)) {
+        return -1;
+    }
+    plan = (const wasmos_broker_spawn_plan_response_t *)plan_bytes;
+    if (plan->version != WASMOS_BROKER_SPAWN_PLAN_VERSION ||
+        plan->plan_kind != WASMOS_BROKER_PLAN_KIND_WAP_PATH) {
+        return -1;
+    }
+    if (strcmp(plan->request_tag, handler->request_tag) != 0 ||
+        strcmp(plan->runtime_tag, handler->runtime_tag) != 0) {
+        return -1;
+    }
+    if (exec_plan_string_region(plan_bytes,
+                                plan_size,
+                                plan->host_path_offset,
+                                plan->host_path_len,
+                                &host_path) != 0 ||
+        !host_path) {
+        return -1;
+    }
+    if (plan->host_path_len < 4u ||
+        memcmp(host_path + plan->host_path_len - 4u, ".wap", 4u) != 0) {
+        return -1;
+    }
+    if (exec_plan_string_region(plan_bytes,
+                                plan_size,
+                                plan->host_args_offset,
+                                plan->host_args_len,
+                                &host_args) != 0) {
+        return -1;
+    }
+    out_plan->host_path = host_path;
+    out_plan->host_path_len = plan->host_path_len;
+    out_plan->host_args = host_args;
+    out_plan->host_args_len = plan->host_args_len;
+    out_plan->plan_flags = plan->plan_flags;
+    return 0;
+}

@@ -322,6 +322,13 @@ public:
                 return PROCESS_RUN_EXITED;
             }
             pm_atomic_store_u32(&g_pm.fs_ctrl_endpoint, fs_ctrl_endpoint);
+            uint32_t broker_reply_endpoint = IPC_ENDPOINT_NONE;
+            if (ipc_endpoint_create(process->context_id, &broker_reply_endpoint) != IPC_OK) {
+                klog_write("[pm] broker reply endpoint create failed\n");
+                process_set_exit_status(process, -1);
+                return PROCESS_RUN_EXITED;
+            }
+            pm_atomic_store_u32(&g_pm.broker_reply_endpoint, broker_reply_endpoint);
 
             /* Watch all three endpoints with one select set so the entry can
              * block (instead of busy-polling) until any of them has traffic. */

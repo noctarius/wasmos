@@ -872,6 +872,117 @@ broker_plan_fail:
 }
 
 static int
+pm_fs_read_blob_for_spawn(uint32_t pm_context_id,
+                          const char *path,
+                          uint32_t path_len,
+                          uint32_t *out_blob_size);
+
+typedef struct {
+    char path[256];
+    char args[256];
+    uint32_t path_len;
+    uint32_t args_len;
+    uint32_t blob_size;
+} pm_resolved_spawn_path_t;
+
+static int
+pm_resolve_spawn_path(uint32_t pm_context_id,
+                      const char *path,
+                      uint32_t path_len,
+                      const char *cli_args,
+                      uint32_t args_len,
+                      uint32_t spawn_flags,
+                      pm_resolved_spawn_path_t *out_resolved)
+{
+    const uint8_t *pm_fs_buf = 0;
+    wasmos_exec_format_match_t format_match;
+    wasmos_exec_broker_plan_t broker_plan;
+    int broker_rc = 0;
+
+    if (!path || !out_resolved || path_len == 0u || path_len >= sizeof(out_resolved->path)) {
+        return PROC_SPAWN_ERR_BAD_PATH;
+    }
+    memset(out_resolved, 0, sizeof(*out_resolved));
+    memcpy(out_resolved->path, path, path_len);
+    out_resolved->path[path_len] = '\0';
+    out_resolved->path_len = path_len;
+    if (args_len > 0u) {
+        if (!cli_args || args_len >= sizeof(out_resolved->args)) {
+            return PROC_SPAWN_ERR_ARGS_TOOBIG;
+        }
+        memcpy(out_resolved->args, cli_args, args_len);
+        out_resolved->args[args_len] = '\0';
+        out_resolved->args_len = args_len;
+    }
+
+    pm_fs_buf = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
+    if (!pm_fs_buf) {
+        return PROC_SPAWN_ERR_NO_PM_FSBUF;
+    }
+    if (pm_fs_read_blob_for_spawn(pm_context_id,
+                                  out_resolved->path,
+                                  out_resolved->path_len,
+                                  &out_resolved->blob_size) != 0) {
+        return PROC_SPAWN_ERR_FS_READ;
+    }
+    if (wasmos_exec_format_classify(out_resolved->path,
+                                    pm_fs_buf,
+                                    out_resolved->blob_size,
+                                    &format_match) != 0) {
+        return PROC_SPAWN_ERR_SPAWN_FAILED;
+    }
+    if (format_match.kind != WASMOS_EXEC_FORMAT_BROKER) {
+        return 0;
+    }
+    broker_rc = pm_request_broker_spawn_plan(pm_context_id,
+                                             format_match.handler,
+                                             out_resolved->path,
+                                             out_resolved->path_len,
+                                             out_resolved->args_len > 0u ? out_resolved->args : 0,
+                                             out_resolved->args_len,
+                                             spawn_flags,
+                                             out_resolved->blob_size,
+                                             &broker_plan);
+    if (broker_rc != 0) {
+        return broker_rc;
+    }
+    if (!broker_plan.host_path ||
+        broker_plan.host_path_len == 0u ||
+        broker_plan.host_path_len >= sizeof(out_resolved->path) ||
+        broker_plan.host_args_len >= sizeof(out_resolved->args)) {
+        return PROC_SPAWN_ERR_BROKER_PLAN;
+    }
+    memset(out_resolved->path, 0, sizeof(out_resolved->path));
+    memcpy(out_resolved->path, broker_plan.host_path, broker_plan.host_path_len);
+    out_resolved->path[broker_plan.host_path_len] = '\0';
+    out_resolved->path_len = broker_plan.host_path_len;
+    memset(out_resolved->args, 0, sizeof(out_resolved->args));
+    /* Broker plans describe the final host invocation; once delegation
+     * happens, broker-supplied host args replace the original guest argv
+     * string rather than being concatenated implicitly in PM. */
+    if (broker_plan.host_args_len > 0u) {
+        memcpy(out_resolved->args, broker_plan.host_args, broker_plan.host_args_len);
+        out_resolved->args[broker_plan.host_args_len] = '\0';
+    }
+    out_resolved->args_len = broker_plan.host_args_len;
+
+    if (pm_fs_read_blob_for_spawn(pm_context_id,
+                                  out_resolved->path,
+                                  out_resolved->path_len,
+                                  &out_resolved->blob_size) != 0) {
+        return PROC_SPAWN_ERR_BROKER_PLAN;
+    }
+    if (wasmos_exec_format_classify(out_resolved->path,
+                                    pm_fs_buf,
+                                    out_resolved->blob_size,
+                                    &format_match) != 0 ||
+        format_match.kind != WASMOS_EXEC_FORMAT_WAP) {
+        return PROC_SPAWN_ERR_BROKER_PLAN;
+    }
+    return 0;
+}
+
+static int
 pm_inherit_child_cwd(uint32_t pm_context_id, uint32_t parent_context_id, uint32_t child_pid)
 {
     process_t *child = 0;
@@ -1077,12 +1188,12 @@ pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     uint32_t owner_context = 0;
     process_t *caller = 0;
     uint32_t parent_pid = 0;
+    uint32_t spawn_req_flags = (uint32_t)msg->arg0;
     uint32_t path_len = (uint32_t)msg->arg1;
     uint32_t timeout_ms = (uint32_t)msg->arg3;
     const uint8_t *caller_fs_buf = 0;
     char path[256];
-    const uint8_t *pm_fs_buf = 0;
-    uint32_t blob_size = 0;
+    pm_resolved_spawn_path_t resolved;
     uint32_t child_pid = 0;
 
     if (g_pm.spawn.in_use) {
@@ -1107,15 +1218,21 @@ pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t *msg)
         path[i] = (char)caller_fs_buf[i];
     }
     path[path_len] = '\0';
-
-    pm_fs_buf = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
-    if (!pm_fs_buf) {
+    if (pm_resolve_spawn_path(pm_context_id,
+                              path,
+                              path_len,
+                              0,
+                              0,
+                              spawn_req_flags,
+                              &resolved) != 0) {
         return -1;
     }
-    if (pm_fs_read_blob_for_spawn(pm_context_id, path, path_len, &blob_size) != 0) {
-        return -1;
-    }
-    if (pm_spawn_from_buffer(parent_pid, pm_fs_buf, blob_size, 0, 0, &child_pid) != 0) {
+    if (pm_spawn_from_buffer(parent_pid,
+                             (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id),
+                             resolved.blob_size,
+                             resolved.args_len > 0u ? resolved.args : 0,
+                             resolved.args_len,
+                             &child_pid) != 0) {
         return -1;
     }
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, child_pid);
@@ -1123,7 +1240,7 @@ pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t *msg)
      * (e.g. pci-bus/acpi-bus enumerators) exits afterwards.  If the caller asked
      * to auto-reap (PROC_SPAWN_PATH_FLAG_AUTOREAP in arg0), free its slot on that
      * exit — reaping fires post-exit so it cannot race the ready reply. */
-    if (((uint32_t)msg->arg0 & PROC_SPAWN_PATH_FLAG_AUTOREAP) != 0) {
+    if ((spawn_req_flags & PROC_SPAWN_PATH_FLAG_AUTOREAP) != 0) {
         (void)process_set_auto_reap(child_pid, 1);
     }
 
@@ -1154,8 +1271,7 @@ pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     uint32_t parent_pid = 0;
     const uint8_t *caller_fs_buf = 0;
     char path[256];
-    const uint8_t *pm_fs_buf = 0;
-    uint32_t blob_size = 0;
+    pm_resolved_spawn_path_t resolved;
     uint32_t child_pid = 0;
 
     caps.valid = 1;
@@ -1186,15 +1302,21 @@ pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
         path[i] = (char)caller_fs_buf[i];
     }
     path[path_len] = '\0';
-
-    pm_fs_buf = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
-    if (!pm_fs_buf) {
+    if (pm_resolve_spawn_path(pm_context_id,
+                              path,
+                              path_len,
+                              0,
+                              0,
+                              0,
+                              &resolved) != 0) {
         return -1;
     }
-    if (pm_fs_read_blob_for_spawn(pm_context_id, path, path_len, &blob_size) != 0) {
-        return -1;
-    }
-    if (pm_spawn_from_buffer(parent_pid, pm_fs_buf, blob_size, 0, 0, &child_pid) != 0) {
+    if (pm_spawn_from_buffer(parent_pid,
+                             (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id),
+                             resolved.blob_size,
+                             resolved.args_len > 0u ? resolved.args : 0,
+                             resolved.args_len,
+                             &child_pid) != 0) {
         return -1;
     }
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, child_pid);
@@ -1784,8 +1906,7 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
     const uint8_t *caller_fs_buf = 0;
     char path[256];
     char cli_args[256];
-    const uint8_t *pm_fs_buf = 0;
-    uint32_t blob_size = 0;
+    pm_resolved_spawn_path_t resolved;
     uint32_t pid = 0;
     uint32_t spawn_req_flags = (uint32_t)msg->arg0;
 
@@ -1821,43 +1942,23 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
     } else {
         cli_args[0] = '\0';
     }
-
-    pm_fs_buf = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
-    if (!pm_fs_buf) {
-        return PROC_SPAWN_ERR_NO_PM_FSBUF;
-    }
-    if (pm_fs_read_blob_for_spawn(pm_context_id,
-                                  path,
-                                  path_len,
-                                  &blob_size) != 0) {
-        return PROC_SPAWN_ERR_FS_READ;
+    {
+        int resolve_rc = pm_resolve_spawn_path(pm_context_id,
+                                               path,
+                                               path_len,
+                                               args_len > 0u ? cli_args : 0,
+                                               args_len,
+                                               spawn_req_flags,
+                                               &resolved);
+        if (resolve_rc != 0) {
+            return resolve_rc;
+        }
     }
     wasmos_app_desc_t desc;
     uint32_t app_flags = 0;
-    wasmos_exec_format_match_t format_match;
-    wasmos_exec_broker_plan_t broker_plan;
-    if (wasmos_exec_format_classify(path, pm_fs_buf, blob_size, &format_match) != 0) {
-        return PROC_SPAWN_ERR_SPAWN_FAILED;
-    }
-    if (format_match.kind == WASMOS_EXEC_FORMAT_BROKER) {
-        int broker_rc = pm_request_broker_spawn_plan(pm_context_id,
-                                                     format_match.handler,
-                                                     path,
-                                                     path_len,
-                                                     args_len > 0u ? cli_args : 0,
-                                                     args_len,
-                                                     spawn_req_flags,
-                                                     blob_size,
-                                                     &broker_plan);
-        if (broker_rc != 0) {
-            return broker_rc;
-        }
-        /* TODO: Launch validated broker-owned plans through the built-in
-         * `.wap` path once the first broker handoff execution step lands. */
-        (void)broker_plan;
-        return PROC_SPAWN_ERR_BROKER_DEFERRED;
-    }
-    int parse_rc = wasmos_app_parse(pm_fs_buf, blob_size, &desc);
+    int parse_rc = wasmos_app_parse((const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id),
+                                    resolved.blob_size,
+                                    &desc);
     if (parse_rc == 0) {
         app_flags = desc.flags;
     }
@@ -1873,10 +1974,10 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
         return -2;
     }
     if (pm_spawn_from_buffer(parent_pid,
-                             pm_fs_buf,
-                             blob_size,
-                             args_len > 0u ? cli_args : 0,
-                             args_len,
+                             (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id),
+                             resolved.blob_size,
+                             resolved.args_len > 0u ? resolved.args : 0,
+                             resolved.args_len,
                              &pid) != 0) {
         return PROC_SPAWN_ERR_SPAWN_FAILED;
     }
@@ -1930,8 +2031,7 @@ pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t *msg)
     char path[256];
     uint32_t pid = 0;
     pm_spawn_caps_t caps = {0};
-    const uint8_t *pm_fs_buf = 0;
-    uint32_t blob_size = 0;
+    pm_resolved_spawn_path_t resolved;
 
     /* Unpack caps from IPC args:
      * arg0 = (irq_mask<<16) | (cap_flags & 0xFFFF)
@@ -1963,15 +2063,21 @@ pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t *msg)
         path[i] = (char)caller_fs_buf[i];
     }
     path[path_len] = '\0';
-
-    pm_fs_buf = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
-    if (!pm_fs_buf) {
+    if (pm_resolve_spawn_path(pm_context_id,
+                              path,
+                              path_len,
+                              0,
+                              0,
+                              0,
+                              &resolved) != 0) {
         return -1;
     }
-    if (pm_fs_read_blob_for_spawn(pm_context_id, path, path_len, &blob_size) != 0) {
-        return -1;
-    }
-    if (pm_spawn_from_buffer(parent_pid, pm_fs_buf, blob_size, 0, 0, &pid) != 0) {
+    if (pm_spawn_from_buffer(parent_pid,
+                             (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id),
+                             resolved.blob_size,
+                             resolved.args_len > 0u ? resolved.args : 0,
+                             resolved.args_len,
+                             &pid) != 0) {
         return -1;
     }
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);

@@ -474,11 +474,14 @@ PM now has the first broker handoff contract as well:
 - PM borrows the broker buffer read-only, validates the returned plan against
   the matched handler identity, and only accepts a built-in `.wap` host-path
   plan kind for the current contract shape
+- for that accepted plan kind, PM then reloads the returned host path through
+  the ordinary path-spawn `.wap` flow and uses the broker-supplied host arg
+  string as the final argv payload for the host workload
 
-This is still an intentionally partial delegation step. PM now classifies
-executable inputs and can validate a broker-owned spawn plan, but it still only
-executes the built-in `.wap` path directly. A validated broker plan currently
-stops at the PM boundary until the later launch handoff lands.
+This is still a bounded delegation step. PM now classifies executable inputs,
+validates a broker-owned spawn plan, and can execute the returned `.wap`
+host-path plan through the existing built-in spawn machinery. More complex plan
+kinds still remain future work.
 
 #### Target Subsystem Delegation Model
 

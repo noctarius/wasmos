@@ -26,6 +26,18 @@ source = "native_call_smoke.wap"
 
 [[entries]]
 kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "apps/broker_host_smoke.wap"
+source = "broker_host_smoke.wap"
+
+[[entries]]
+kind = "data"
+flags = ["bootstrap"]
+path = "apps/broker_smoke.bro"
+source = "broker_smoke.bro"
+
+[[entries]]
+kind = "wasmos_app"
 path = "apps/shmtgt.wap"
 source = "shmtgt.wap"
 

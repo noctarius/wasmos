@@ -64,6 +64,11 @@ set(WASM_NATIVE_CALL_MIN_APP ${BUILD_DIR}/native_call_min.wap)
 set(WASM_NATIVE_CALL_SMOKE_SRC ${EXAMPLES_C_DIR}/native_call_smoke/native_call_smoke.c)
 set(WASM_NATIVE_CALL_SMOKE_WASM ${BUILD_DIR}/native_call_smoke.wasm)
 set(WASM_NATIVE_CALL_SMOKE_APP ${BUILD_DIR}/native_call_smoke.wap)
+set(WASM_BROKER_HOST_SMOKE_SRC ${EXAMPLES_C_DIR}/broker_host_smoke/broker_host_smoke.c)
+set(WASM_BROKER_HOST_SMOKE_WASM ${BUILD_DIR}/broker_host_smoke.wasm)
+set(WASM_BROKER_HOST_SMOKE_APP ${BUILD_DIR}/broker_host_smoke.wap)
+set(BROKER_SMOKE_DATA_SRC ${EXAMPLES_C_DIR}/broker_host_smoke/broker_smoke.bro)
+set(BROKER_SMOKE_DATA_BIN ${BUILD_DIR}/broker_smoke.bro)
 set(WASM_GFX_SMOKE_SRC ${EXAMPLES_C_DIR}/gfx_smoke/gfx_smoke.c)
 set(WASM_GFX_SMOKE_WASM ${BUILD_DIR}/gfx_smoke.wasm)
 set(WASM_GFX_SMOKE_APP ${BUILD_DIR}/gfx_smoke.wap)
@@ -1257,6 +1262,14 @@ set(NATIVE_CALL_MIN_COPY_CMD
 set(NATIVE_CALL_SMOKE_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_NATIVE_CALL_SMOKE_APP} ${BUILD_DIR}/esp/apps/native_call_smoke.wap
 )
+add_custom_command(
+  OUTPUT ${BROKER_SMOKE_DATA_BIN}
+  COMMAND ${CMAKE_COMMAND} -E copy ${BROKER_SMOKE_DATA_SRC} ${BROKER_SMOKE_DATA_BIN}
+  DEPENDS ${BROKER_SMOKE_DATA_SRC}
+  COMMENT "Copying broker smoke initfs data"
+  VERBATIM
+)
+add_custom_target(broker_smoke_initfs_data DEPENDS ${BROKER_SMOKE_DATA_BIN})
 set(GFX_SMOKE_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_SMOKE_APP} ${BUILD_DIR}/esp/apps/gfx_smoke.wap
 )
@@ -1694,7 +1707,7 @@ add_custom_target(strict-ring3
   VERBATIM
 )
 
-add_dependencies(make_initfs c_examples drivers services)
+add_dependencies(make_initfs c_examples drivers services broker_smoke_initfs_data)
 
 set(_wasmos_qemu_targets
   run-qemu run-qemu-ui run-qemu-test run-qemu-cli-test run-qemu-debug

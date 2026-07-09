@@ -572,24 +572,38 @@ initialize(int32_t proc_endpoint,
                     status = 0;
                 } else {
                     int32_t remaining = file->size - fd->offset;
+                    int32_t total = 0;
                     if (req_len > fs_buf_size) {
                         req_len = fs_buf_size;
-                    }
-                    if (req_len > (int32_t)sizeof(tmp)) {
-                        req_len = (int32_t)sizeof(tmp);
                     }
                     if (req_len > remaining) {
                         req_len = remaining;
                     }
-                    int32_t copied = wasmos_initfs_entry_copy(file->entry_index,
-                                                              (int32_t)(uintptr_t)tmp,
-                                                              req_len,
-                                                              fd->offset);
-                    if (copied >= 0) {
-                        if (copied == 0 || wasmos_xfer_buffer_write((int32_t)(uintptr_t)tmp, copied, 0) == 0) {
-                            fd->offset += copied;
-                            status = copied;
+                    while (total < req_len) {
+                        int32_t chunk = req_len - total;
+                        if (chunk > (int32_t)sizeof(tmp)) {
+                            chunk = (int32_t)sizeof(tmp);
                         }
+                        int32_t copied = wasmos_initfs_entry_copy(file->entry_index,
+                                                                  (int32_t)(uintptr_t)tmp,
+                                                                  chunk,
+                                                                  fd->offset + total);
+                        if (copied < 0) {
+                            total = -1;
+                            break;
+                        }
+                        if (copied == 0) {
+                            break;
+                        }
+                        if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)tmp, copied, total) != 0) {
+                            total = -1;
+                            break;
+                        }
+                        total += copied;
+                    }
+                    if (total >= 0) {
+                        fd->offset += total;
+                        status = total;
                     }
                 }
             }

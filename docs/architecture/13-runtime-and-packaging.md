@@ -483,6 +483,11 @@ validates a broker-owned spawn plan, and can execute the returned `.wap`
 host-path plan through the existing built-in spawn machinery. More complex plan
 kinds still remain future work.
 
+Current validation coverage uses a kernel-owned stub broker plus a real
+non-`.wap` initfs file to exercise the full handoff in boot smoke runs. That
+fixture is intentionally transitional; the long-term goal remains a
+self-registering user-space broker.
+
 #### Target Subsystem Delegation Model
 
 The long-term direction is to make `NATIVE` the only kernel-built-in

@@ -12,6 +12,8 @@ typedef struct {
 static hashmap_t g_subsystem_map;
 static uint8_t g_subsystem_map_initialized;
 static spinlock_t g_subsystem_lock;
+static wasmos_exec_handler_registry_entry_t *g_exec_handlers;
+static uint32_t g_exec_max_probe_bytes;
 
 static uint32_t
 subsystem_tag_hash(const char *tag)
@@ -80,6 +82,29 @@ copy_subsystem_tag(char *dst, const char *src)
 }
 
 static int
+copy_exec_text(char *dst, uint32_t dst_len, const char *src)
+{
+    uint32_t i = 0;
+
+    if (!dst || dst_len == 0u) {
+        return -1;
+    }
+    for (i = 0; i < dst_len; ++i) {
+        dst[i] = '\0';
+    }
+    if (!src || src[0] == '\0') {
+        return -1;
+    }
+    for (i = 0; i + 1u < dst_len && src[i] != '\0'; ++i) {
+        dst[i] = src[i];
+    }
+    if (src[i] != '\0') {
+        return -1;
+    }
+    return 0;
+}
+
+static int
 subsystem_registry_init_locked(void)
 {
     if (g_subsystem_map_initialized) {
@@ -90,6 +115,239 @@ subsystem_registry_init_locked(void)
     }
     g_subsystem_map_initialized = 1u;
     return 0;
+}
+
+static wasmos_subsystem_registry_entry_t *
+subsystem_registry_find_locked(const char *request_tag)
+{
+    wasmos_subsystem_bucket_t *bucket = 0;
+    wasmos_subsystem_registry_entry_t *entry = 0;
+
+    if (!request_tag || !g_subsystem_map_initialized) {
+        return 0;
+    }
+    bucket = (wasmos_subsystem_bucket_t *)hashmap_get(&g_subsystem_map, subsystem_tag_hash(request_tag));
+    if (!bucket) {
+        return 0;
+    }
+    for (entry = bucket->head; entry; entry = entry->next) {
+        if (strcmp(request_tag, entry->request_tag) == 0) {
+            return entry;
+        }
+    }
+    return 0;
+}
+
+static const char *
+exec_probe_filename(const wasmos_exec_probe_t *probe)
+{
+    const char *name = 0;
+    const char *p = 0;
+
+    if (!probe) {
+        return 0;
+    }
+    if (probe->filename && probe->filename[0] != '\0') {
+        return probe->filename;
+    }
+    name = probe->path;
+    if (!name) {
+        return 0;
+    }
+    for (p = name; *p != '\0'; ++p) {
+        if (*p == '/') {
+            name = p + 1;
+        }
+    }
+    return name;
+}
+
+static int
+exec_match_text_equals(const char *lhs, const char *rhs, uint8_t rhs_len)
+{
+    uint8_t i = 0;
+
+    if (!lhs || !rhs || rhs_len == 0u) {
+        return 0;
+    }
+    for (i = 0; i < rhs_len; ++i) {
+        if (lhs[i] == '\0' || lhs[i] != rhs[i]) {
+            return 0;
+        }
+    }
+    return lhs[rhs_len] == '\0';
+}
+
+static int
+exec_match_text_suffix(const char *text, const char *suffix, uint8_t suffix_len)
+{
+    size_t text_len = 0u;
+    size_t i = 0u;
+
+    if (!text || !suffix || suffix_len == 0u) {
+        return 0;
+    }
+    text_len = strlen(text);
+    if (text_len < (size_t)suffix_len) {
+        return 0;
+    }
+    for (i = 0u; i < (size_t)suffix_len; ++i) {
+        if (text[text_len - (size_t)suffix_len + i] != suffix[i]) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static int
+exec_match_node_eval(const wasmos_exec_match_node_t *nodes,
+                     uint32_t node_count,
+                     uint32_t node_index,
+                     const wasmos_exec_probe_t *probe,
+                     uint32_t depth)
+{
+    const wasmos_exec_match_node_t *node = 0;
+    const char *filename = 0;
+
+    if (!nodes || !probe || node_index >= node_count || depth > node_count) {
+        return 0;
+    }
+    node = &nodes[node_index];
+    switch (node->kind) {
+        case WASMOS_EXEC_MATCH_PREFIX:
+            if (!probe->initial_bytes || probe->initial_size < (uint32_t)node->value_len) {
+                return 0;
+            }
+            return memcmp(probe->initial_bytes, node->value.prefix, node->value_len) == 0 ? 1 : 0;
+        case WASMOS_EXEC_MATCH_EXTENSION:
+            filename = exec_probe_filename(probe);
+            return exec_match_text_suffix(filename, node->value.text, node->value_len);
+        case WASMOS_EXEC_MATCH_FILENAME:
+            filename = exec_probe_filename(probe);
+            return exec_match_text_equals(filename, node->value.text, node->value_len);
+        case WASMOS_EXEC_MATCH_AND:
+            return exec_match_node_eval(nodes, node_count, node->left_index, probe, depth + 1u) &&
+                   exec_match_node_eval(nodes, node_count, node->right_index, probe, depth + 1u);
+        case WASMOS_EXEC_MATCH_OR:
+            return exec_match_node_eval(nodes, node_count, node->left_index, probe, depth + 1u) ||
+                   exec_match_node_eval(nodes, node_count, node->right_index, probe, depth + 1u);
+        case WASMOS_EXEC_MATCH_NOT:
+            return !exec_match_node_eval(nodes, node_count, node->left_index, probe, depth + 1u);
+        default:
+            return 0;
+    }
+}
+
+static int
+exec_match_validate_node(const wasmos_exec_match_node_t *nodes,
+                         uint32_t node_count,
+                         uint32_t node_index,
+                         uint8_t *visiting,
+                         uint8_t *visited,
+                         uint32_t *out_max_prefix)
+{
+    const wasmos_exec_match_node_t *node = 0;
+
+    if (!nodes || !visiting || !visited || !out_max_prefix || node_index >= node_count) {
+        return -1;
+    }
+    if (visiting[node_index]) {
+        return -1;
+    }
+    if (visited[node_index]) {
+        return 0;
+    }
+
+    node = &nodes[node_index];
+    visiting[node_index] = 1u;
+
+    switch (node->kind) {
+        case WASMOS_EXEC_MATCH_PREFIX:
+            if (node->value_len == 0u || node->value_len > WASMOS_EXEC_MATCH_MAX_BYTES) {
+                return -1;
+            }
+            if (*out_max_prefix < (uint32_t)node->value_len) {
+                *out_max_prefix = (uint32_t)node->value_len;
+            }
+            break;
+        case WASMOS_EXEC_MATCH_EXTENSION:
+            if (node->value_len == 0u ||
+                node->value_len > WASMOS_EXEC_MATCH_TEXT_LEN ||
+                node->value.text[0] != '.') {
+                return -1;
+            }
+            break;
+        case WASMOS_EXEC_MATCH_FILENAME:
+            if (node->value_len == 0u || node->value_len > WASMOS_EXEC_MATCH_TEXT_LEN) {
+                return -1;
+            }
+            break;
+        case WASMOS_EXEC_MATCH_AND:
+        case WASMOS_EXEC_MATCH_OR:
+            if (node->left_index >= node_count || node->right_index >= node_count) {
+                return -1;
+            }
+            if (exec_match_validate_node(nodes,
+                                         node_count,
+                                         node->left_index,
+                                         visiting,
+                                         visited,
+                                         out_max_prefix) != 0 ||
+                exec_match_validate_node(nodes,
+                                         node_count,
+                                         node->right_index,
+                                         visiting,
+                                         visited,
+                                         out_max_prefix) != 0) {
+                return -1;
+            }
+            break;
+        case WASMOS_EXEC_MATCH_NOT:
+            if (node->left_index >= node_count) {
+                return -1;
+            }
+            if (exec_match_validate_node(nodes,
+                                         node_count,
+                                         node->left_index,
+                                         visiting,
+                                         visited,
+                                         out_max_prefix) != 0) {
+                return -1;
+            }
+            break;
+        default:
+            return -1;
+    }
+
+    visiting[node_index] = 0u;
+    visited[node_index] = 1u;
+    return 0;
+}
+
+static int
+exec_match_validate_tree(const wasmos_exec_match_node_t *nodes,
+                         uint32_t node_count,
+                         uint32_t root_index,
+                         uint32_t max_probe_bytes)
+{
+    uint8_t visiting[WASMOS_EXEC_MATCH_MAX_NODES];
+    uint8_t visited[WASMOS_EXEC_MATCH_MAX_NODES];
+    uint32_t max_prefix = 0u;
+
+    if (!nodes || node_count == 0u || node_count > WASMOS_EXEC_MATCH_MAX_NODES || root_index >= node_count) {
+        return -1;
+    }
+    memset(visiting, 0, sizeof(visiting));
+    memset(visited, 0, sizeof(visited));
+    if (exec_match_validate_node(nodes,
+                                 node_count,
+                                 root_index,
+                                 visiting,
+                                 visited,
+                                 &max_prefix) != 0) {
+        return -1;
+    }
+    return max_prefix <= max_probe_bytes ? 0 : -1;
 }
 
 int
@@ -217,26 +475,112 @@ wasmos_subsystem_registry_register_broker(const char *request_tag,
     return 0;
 }
 
+int
+wasmos_subsystem_registry_register_exec_handler(const char *handler_name,
+                                                const char *request_tag,
+                                                uint32_t priority,
+                                                uint32_t max_probe_bytes,
+                                                const wasmos_exec_match_node_t *nodes,
+                                                uint32_t node_count,
+                                                uint32_t root_index)
+{
+    wasmos_subsystem_registry_entry_t *owner = 0;
+    wasmos_exec_handler_registry_entry_t *entry = 0;
+    char validated_handler_name[WASMOS_EXEC_HANDLER_NAME_LEN + 1];
+
+    if (!handler_name || !request_tag || !nodes) {
+        klog_write("[subsystem] exec handler invalid args\n");
+        return -1;
+    }
+    if (subsystem_tag_validate_string(request_tag) != 0 ||
+        exec_match_validate_tree(nodes, node_count, root_index, max_probe_bytes) != 0) {
+        klog_write("[subsystem] exec handler invalid matcher\n");
+        return -1;
+    }
+    if (copy_exec_text(validated_handler_name,
+                       sizeof(validated_handler_name),
+                       handler_name) != 0) {
+        klog_write("[subsystem] exec handler invalid name\n");
+        return -1;
+    }
+
+    spinlock_lock(&g_subsystem_lock);
+    if (subsystem_registry_init_locked() != 0) {
+        klog_write("[subsystem] exec handler map init failed\n");
+        spinlock_unlock(&g_subsystem_lock);
+        return -1;
+    }
+    owner = subsystem_registry_find_locked(request_tag);
+    if (!owner || owner->kind != WASMOS_SUBSYSTEM_HANDLER_BROKER) {
+        klog_write("[subsystem] exec handler owner missing\n");
+        spinlock_unlock(&g_subsystem_lock);
+        return -1;
+    }
+    for (entry = g_exec_handlers; entry; entry = entry->next) {
+        if (strcmp(entry->handler_name, validated_handler_name) == 0 &&
+            strcmp(entry->request_tag, request_tag) == 0) {
+            klog_write("[subsystem] exec handler duplicate\n");
+            spinlock_unlock(&g_subsystem_lock);
+            return -1;
+        }
+    }
+
+    entry = (wasmos_exec_handler_registry_entry_t *)kmem_alloc(sizeof(*entry));
+    if (!entry) {
+        klog_write("[subsystem] exec handler alloc failed\n");
+        spinlock_unlock(&g_subsystem_lock);
+        return -1;
+    }
+    memset(entry, 0, sizeof(*entry));
+    entry->nodes = (wasmos_exec_match_node_t *)kmem_alloc(sizeof(*nodes) * node_count);
+    if (!entry->nodes) {
+        kmem_free(entry);
+        klog_write("[subsystem] exec handler nodes alloc failed\n");
+        spinlock_unlock(&g_subsystem_lock);
+        return -1;
+    }
+    memset(entry->nodes, 0, sizeof(*nodes) * node_count);
+    memcpy(entry->nodes, nodes, sizeof(*nodes) * node_count);
+    if (copy_exec_text(entry->handler_name,
+                       sizeof(entry->handler_name),
+                       validated_handler_name) != 0) {
+        kmem_free(entry->nodes);
+        kmem_free(entry);
+        spinlock_unlock(&g_subsystem_lock);
+        return -1;
+    }
+    copy_subsystem_tag(entry->request_tag, owner->request_tag);
+    copy_subsystem_tag(entry->runtime_tag, owner->runtime_tag);
+    copy_subsystem_tag(entry->broker_name, owner->broker_name);
+    entry->broker_endpoint = owner->broker_endpoint;
+    entry->priority = priority;
+    entry->max_probe_bytes = max_probe_bytes;
+    entry->node_count = node_count;
+    entry->root_index = root_index;
+    entry->next = g_exec_handlers;
+    g_exec_handlers = entry;
+    if (g_exec_max_probe_bytes < max_probe_bytes) {
+        g_exec_max_probe_bytes = max_probe_bytes;
+    }
+    klog_printf("[subsystem] exec handler register name=%s subsystem=%s priority=%u probe=%u\n",
+                entry->handler_name,
+                entry->request_tag,
+                entry->priority,
+                entry->max_probe_bytes);
+    spinlock_unlock(&g_subsystem_lock);
+    return 0;
+}
+
 const wasmos_subsystem_registry_entry_t *
 wasmos_subsystem_registry_find(const char *request_tag)
 {
-    wasmos_subsystem_bucket_t *bucket = 0;
-    wasmos_subsystem_registry_entry_t *entry = 0;
     if (!request_tag) {
         return 0;
     }
     spinlock_lock(&g_subsystem_lock);
-    if (!g_subsystem_map_initialized) {
-        spinlock_unlock(&g_subsystem_lock);
-        return 0;
-    }
-    bucket = (wasmos_subsystem_bucket_t *)hashmap_get(&g_subsystem_map, subsystem_tag_hash(request_tag));
-    if (!bucket) {
-        spinlock_unlock(&g_subsystem_lock);
-        return 0;
-    }
-    for (entry = bucket->head; entry; entry = entry->next) {
-        if (strcmp(request_tag, entry->request_tag) == 0) {
+    {
+        wasmos_subsystem_registry_entry_t *entry = subsystem_registry_find_locked(request_tag);
+        if (entry) {
             spinlock_unlock(&g_subsystem_lock);
             return entry;
         }
@@ -245,10 +589,49 @@ wasmos_subsystem_registry_find(const char *request_tag)
     return 0;
 }
 
+const wasmos_exec_handler_registry_entry_t *
+wasmos_subsystem_registry_find_exec_handler(const wasmos_exec_probe_t *probe)
+{
+    wasmos_exec_handler_registry_entry_t *entry = 0;
+    wasmos_exec_handler_registry_entry_t *best = 0;
+
+    if (!probe) {
+        return 0;
+    }
+    spinlock_lock(&g_subsystem_lock);
+    for (entry = g_exec_handlers; entry; entry = entry->next) {
+        if (!exec_match_node_eval(entry->nodes, entry->node_count, entry->root_index, probe, 0u)) {
+            continue;
+        }
+        if (!best ||
+            entry->priority > best->priority ||
+            (entry->priority == best->priority &&
+             strcmp(entry->handler_name, best->handler_name) < 0) ||
+            (entry->priority == best->priority &&
+             strcmp(entry->handler_name, best->handler_name) == 0 &&
+             strcmp(entry->request_tag, best->request_tag) < 0)) {
+            best = entry;
+        }
+    }
+    spinlock_unlock(&g_subsystem_lock);
+    return best;
+}
+
+uint32_t
+wasmos_subsystem_registry_exec_max_probe_bytes(void)
+{
+    uint32_t max_probe_bytes = 0u;
+
+    spinlock_lock(&g_subsystem_lock);
+    max_probe_bytes = g_exec_max_probe_bytes;
+    spinlock_unlock(&g_subsystem_lock);
+    return max_probe_bytes;
+}
+
 void
 wasmos_subsystem_registry_reset(void)
 {
-    if (!g_subsystem_map_initialized) {
+    if (!g_subsystem_map_initialized && !g_exec_handlers) {
         return;
     }
     spinlock_lock(&g_subsystem_lock);
@@ -271,5 +654,14 @@ wasmos_subsystem_registry_reset(void)
         memset(&g_subsystem_map, 0, sizeof(g_subsystem_map));
         g_subsystem_map_initialized = 0u;
     }
+    while (g_exec_handlers) {
+        wasmos_exec_handler_registry_entry_t *next = g_exec_handlers->next;
+        if (g_exec_handlers->nodes) {
+            kmem_free(g_exec_handlers->nodes);
+        }
+        kmem_free(g_exec_handlers);
+        g_exec_handlers = next;
+    }
+    g_exec_max_probe_bytes = 0u;
     spinlock_unlock(&g_subsystem_lock);
 }

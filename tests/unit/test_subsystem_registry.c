@@ -6,6 +6,39 @@
 static const int g_ops_a = 1;
 static const int g_ops_b = 2;
 
+static int
+register_test_brokers(void)
+{
+    if (wasmos_subsystem_registry_register_broker("LUA",
+                                                  "NATIVE",
+                                                  "LUA",
+                                                  101u,
+                                                  0u,
+                                                  0u,
+                                                  1u) != 0) {
+        return __LINE__;
+    }
+    if (wasmos_subsystem_registry_register_broker("JAVA",
+                                                  "NATIVE",
+                                                  "JAVA",
+                                                  102u,
+                                                  0u,
+                                                  0u,
+                                                  1u) != 0) {
+        return __LINE__;
+    }
+    if (wasmos_subsystem_registry_register_broker("SCRIPT",
+                                                  "NATIVE",
+                                                  "SCRIPT",
+                                                  103u,
+                                                  0u,
+                                                  0u,
+                                                  1u) != 0) {
+        return __LINE__;
+    }
+    return 0;
+}
+
 static uint32_t
 test_subsystem_tag_hash(const char *tag)
 {
@@ -95,6 +128,266 @@ test_broker_registration_lookup(void)
     return 0;
 }
 
+static int
+test_exec_handler_registration_lookup(void)
+{
+    static const wasmos_exec_match_node_t lua_nodes[] = {
+        {
+            .kind = WASMOS_EXEC_MATCH_OR,
+            .left_index = 1u,
+            .right_index = 2u,
+        },
+        {
+            .kind = WASMOS_EXEC_MATCH_EXTENSION,
+            .value_len = 4u,
+            .value.text = ".lua",
+        },
+        {
+            .kind = WASMOS_EXEC_MATCH_PREFIX,
+            .value_len = 2u,
+            .value.prefix = { '#', '!' },
+        },
+    };
+    static const wasmos_exec_match_node_t java_nodes[] = {
+        {
+            .kind = WASMOS_EXEC_MATCH_AND,
+            .left_index = 1u,
+            .right_index = 2u,
+        },
+        {
+            .kind = WASMOS_EXEC_MATCH_EXTENSION,
+            .value_len = 4u,
+            .value.text = ".jar",
+        },
+        {
+            .kind = WASMOS_EXEC_MATCH_PREFIX,
+            .value_len = 4u,
+            .value.prefix = { 'P', 'K', 0x03, 0x04 },
+        },
+    };
+    static const uint8_t shebang_bytes[] = { '#', '!', '/', 'b', 'i', 'n', '/', 'l', 'u', 'a', '\n' };
+    static const uint8_t jar_bytes[] = { 'P', 'K', 0x03, 0x04, 0x14, 0x00 };
+    wasmos_exec_probe_t probe;
+    const wasmos_exec_handler_registry_entry_t *handler = 0;
+
+    wasmos_subsystem_registry_reset();
+    if (register_test_brokers() != 0) return __LINE__;
+    if (wasmos_subsystem_registry_register_exec_handler("lua-file",
+                                                        "LUA",
+                                                        40u,
+                                                        2u,
+                                                        lua_nodes,
+                                                        3u,
+                                                        0u) != 0) {
+        return __LINE__;
+    }
+    if (wasmos_subsystem_registry_register_exec_handler("jar-file",
+                                                        "JAVA",
+                                                        50u,
+                                                        4u,
+                                                        java_nodes,
+                                                        3u,
+                                                        0u) != 0) {
+        return __LINE__;
+    }
+    if (wasmos_subsystem_registry_exec_max_probe_bytes() != 4u) return __LINE__;
+
+    memset(&probe, 0, sizeof(probe));
+    probe.path = "/boot/apps/demo.lua";
+    handler = wasmos_subsystem_registry_find_exec_handler(&probe);
+    if (!handler) return __LINE__;
+    if (strcmp(handler->handler_name, "lua-file") != 0) return __LINE__;
+    if (strcmp(handler->request_tag, "LUA") != 0) return __LINE__;
+    if (handler->broker_endpoint != 101u) return __LINE__;
+
+    memset(&probe, 0, sizeof(probe));
+    probe.path = "/user/bin/startup";
+    probe.initial_bytes = shebang_bytes;
+    probe.initial_size = sizeof(shebang_bytes);
+    handler = wasmos_subsystem_registry_find_exec_handler(&probe);
+    if (!handler) return __LINE__;
+    if (strcmp(handler->handler_name, "lua-file") != 0) return __LINE__;
+
+    memset(&probe, 0, sizeof(probe));
+    probe.path = "/boot/apps/tool.jar";
+    probe.initial_bytes = jar_bytes;
+    probe.initial_size = sizeof(jar_bytes);
+    handler = wasmos_subsystem_registry_find_exec_handler(&probe);
+    if (!handler) return __LINE__;
+    if (strcmp(handler->handler_name, "jar-file") != 0) return __LINE__;
+    if (strcmp(handler->request_tag, "JAVA") != 0) return __LINE__;
+
+    memset(&probe, 0, sizeof(probe));
+    probe.path = "/boot/apps/bad.jar";
+    probe.initial_bytes = (const uint8_t *)"NOPE";
+    probe.initial_size = 4u;
+    handler = wasmos_subsystem_registry_find_exec_handler(&probe);
+    if (handler) return __LINE__;
+
+    if (wasmos_subsystem_registry_register_exec_handler("lua-file",
+                                                        "LUA",
+                                                        40u,
+                                                        2u,
+                                                        lua_nodes,
+                                                        3u,
+                                                        0u) == 0) {
+        return __LINE__;
+    }
+
+    wasmos_subsystem_registry_reset();
+    return 0;
+}
+
+static int
+test_exec_handler_not_and_priority(void)
+{
+    static const wasmos_exec_match_node_t generic_script_nodes[] = {
+        {
+            .kind = WASMOS_EXEC_MATCH_AND,
+            .left_index = 1u,
+            .right_index = 2u,
+        },
+        {
+            .kind = WASMOS_EXEC_MATCH_PREFIX,
+            .value_len = 2u,
+            .value.prefix = { '#', '!' },
+        },
+        {
+            .kind = WASMOS_EXEC_MATCH_NOT,
+            .left_index = 3u,
+        },
+        {
+            .kind = WASMOS_EXEC_MATCH_EXTENSION,
+            .value_len = 4u,
+            .value.text = ".lua",
+        },
+    };
+    static const wasmos_exec_match_node_t exact_script_nodes[] = {
+        {
+            .kind = WASMOS_EXEC_MATCH_FILENAME,
+            .value_len = 6u,
+            .value.text = "script",
+        },
+    };
+    static const uint8_t shebang_bytes[] = { '#', '!', '/', 'b', 'i', 'n', '/', 's', 'h', '\n' };
+    wasmos_exec_probe_t probe;
+    const wasmos_exec_handler_registry_entry_t *handler = 0;
+
+    wasmos_subsystem_registry_reset();
+    if (register_test_brokers() != 0) return __LINE__;
+    if (wasmos_subsystem_registry_register_exec_handler("generic-script",
+                                                        "SCRIPT",
+                                                        10u,
+                                                        2u,
+                                                        generic_script_nodes,
+                                                        4u,
+                                                        0u) != 0) {
+        return __LINE__;
+    }
+    if (wasmos_subsystem_registry_register_exec_handler("aaa-script",
+                                                        "SCRIPT",
+                                                        10u,
+                                                        0u,
+                                                        exact_script_nodes,
+                                                        1u,
+                                                        0u) != 0) {
+        return __LINE__;
+    }
+
+    memset(&probe, 0, sizeof(probe));
+    probe.path = "/user/bin/script";
+    probe.initial_bytes = shebang_bytes;
+    probe.initial_size = sizeof(shebang_bytes);
+    handler = wasmos_subsystem_registry_find_exec_handler(&probe);
+    if (!handler) return __LINE__;
+    if (strcmp(handler->handler_name, "aaa-script") != 0) return __LINE__;
+
+    memset(&probe, 0, sizeof(probe));
+    probe.path = "/user/bin/module.lua";
+    probe.initial_bytes = shebang_bytes;
+    probe.initial_size = sizeof(shebang_bytes);
+    handler = wasmos_subsystem_registry_find_exec_handler(&probe);
+    if (handler) return __LINE__;
+
+    memset(&probe, 0, sizeof(probe));
+    probe.path = "/user/bin/runme";
+    probe.initial_bytes = shebang_bytes;
+    probe.initial_size = sizeof(shebang_bytes);
+    handler = wasmos_subsystem_registry_find_exec_handler(&probe);
+    if (!handler) return __LINE__;
+    if (strcmp(handler->handler_name, "generic-script") != 0) return __LINE__;
+
+    wasmos_subsystem_registry_reset();
+    return 0;
+}
+
+static int
+test_exec_handler_validation(void)
+{
+    static const wasmos_exec_match_node_t bad_probe_nodes[] = {
+        {
+            .kind = WASMOS_EXEC_MATCH_PREFIX,
+            .value_len = 4u,
+            .value.prefix = { 'P', 'K', 0x03, 0x04 },
+        },
+    };
+    static const wasmos_exec_match_node_t cycle_nodes[] = {
+        {
+            .kind = WASMOS_EXEC_MATCH_NOT,
+            .left_index = 0u,
+        },
+    };
+    static const wasmos_exec_match_node_t bad_ext_nodes[] = {
+        {
+            .kind = WASMOS_EXEC_MATCH_EXTENSION,
+            .value_len = 3u,
+            .value.text = "lua",
+        },
+    };
+
+    wasmos_subsystem_registry_reset();
+    if (register_test_brokers() != 0) return __LINE__;
+    if (wasmos_subsystem_registry_register_exec_handler("missing-owner",
+                                                        "WARP",
+                                                        1u,
+                                                        4u,
+                                                        bad_probe_nodes,
+                                                        1u,
+                                                        0u) == 0) {
+        return __LINE__;
+    }
+    if (wasmos_subsystem_registry_register_exec_handler("short-probe",
+                                                        "LUA",
+                                                        1u,
+                                                        2u,
+                                                        bad_probe_nodes,
+                                                        1u,
+                                                        0u) == 0) {
+        return __LINE__;
+    }
+    if (wasmos_subsystem_registry_register_exec_handler("cycle",
+                                                        "LUA",
+                                                        1u,
+                                                        0u,
+                                                        cycle_nodes,
+                                                        1u,
+                                                        0u) == 0) {
+        return __LINE__;
+    }
+    if (wasmos_subsystem_registry_register_exec_handler("bad-ext",
+                                                        "LUA",
+                                                        1u,
+                                                        0u,
+                                                        bad_ext_nodes,
+                                                        1u,
+                                                        0u) == 0) {
+        return __LINE__;
+    }
+
+    wasmos_subsystem_registry_reset();
+    return 0;
+}
+
 int
 main(void)
 {
@@ -103,6 +396,18 @@ main(void)
         return rc;
     }
     rc = test_broker_registration_lookup();
+    if (rc != 0) {
+        return rc;
+    }
+    rc = test_exec_handler_registration_lookup();
+    if (rc != 0) {
+        return rc;
+    }
+    rc = test_exec_handler_not_and_priority();
+    if (rc != 0) {
+        return rc;
+    }
+    rc = test_exec_handler_validation();
     if (rc != 0) {
         return rc;
     }

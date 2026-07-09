@@ -305,8 +305,9 @@ The intended layering is:
   policy enforcement, ownership, accounting, `wait`/`kill`, and ready-state
   semantics.
 - **Subsystem brokers own format-specific interpretation.** A broker
-  understands a subsystem tag, validates packages, and decides what execution
-  environment should realise the workload.
+  understands a subsystem tag plus any broker-registered executable formats
+  (for example `.jar`, `.lua`, or shebang scripts), validates packages/files,
+  and decides what execution environment should realise the workload.
 - **Execution engines own guest runtime state.** `wasm3-host`, `warp-host`,
   JVM hosts, Lua hosts, and similar binaries are normal native ring-3
   processes, not kernel runtime personalities.

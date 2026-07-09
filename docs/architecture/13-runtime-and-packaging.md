@@ -404,6 +404,61 @@ read-only after boot-time registration succeeds.
 Parse errors, failed endpoint resolution, and failed capability grants all
 abort before any runtime state is created.
 
+#### Executable Format Handlers
+
+The subsystem registry now has a second registration surface alongside the
+8-byte `.wap` subsystem-tag lookup: **broker-owned executable format
+handlers**.
+
+This is the intended path for additional executable formats that should remain
+outside the kernel's built-in `.wap` container logic:
+
+- `.jar` files owned by a JVM subsystem
+- `.lua` files owned by a Lua subsystem
+- shebang (`#!`) text files owned by a generic scripting subsystem
+
+The current kernel keeps `.wap` as the only built-in executable package format.
+Additional formats are represented as registry entries that attach a matcher
+tree to a broker-backed subsystem registration.
+
+Each handler currently records:
+
+- handler name
+- owning subsystem tag
+- copied broker identity (`broker_name`, `broker_endpoint`)
+- explicit priority
+- `max_probe_bytes` budget for initial-byte probing
+- a small matcher-node tree
+
+The matcher tree is intentionally cheap and PM-friendly:
+
+- `PREFIX(bytes...)`
+- `EXTENSION(".lua")`
+- `FILENAME("script")`
+- `AND(left, right)`
+- `OR(left, right)`
+- `NOT(child)`
+
+The registry validates matcher trees up front:
+
+- bounded node count (`WASMOS_EXEC_MATCH_MAX_NODES`)
+- acyclic structure
+- valid child indexes
+- non-empty leaf values
+- prefix lengths that fit inside the handler's declared `max_probe_bytes`
+
+Lookup evaluates all registered handlers against a lightweight probe
+(`path`/`filename` + initial bytes) and returns the best match
+deterministically:
+
+1. higher `priority` wins
+2. if priorities tie, lexicographically smaller handler name wins
+3. if still tied, lexicographically smaller subsystem tag wins
+
+This step is plumbing only. PM does not consume this registry yet; the current
+spawn path still directly parses `.wap` blobs. The purpose of the registry is
+to lock down the matching contract before the later spawn-plan IPC handoff.
+
 #### Target Subsystem Delegation Model
 
 The long-term direction is to make `NATIVE` the only kernel-built-in
@@ -439,6 +494,14 @@ package:
 
 This means future PM delegation should be read as **"realise this child through
 engine X"**, not as "spawn a separate helper next to the child".
+
+Executable-format ownership should therefore be understood as a broker concern,
+not a kernel runtime enum:
+
+- `.wap` remains the built-in package/container path
+- extra executable formats are broker-registered handlers
+- PM should do only cheap matching plus spawn-plan execution
+- the owning broker must revalidate the full guest format before execution
 
 ---
 

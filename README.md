@@ -36,7 +36,7 @@ It defines repository workflow and documentation/update conventions.
 ## Current Highlights
 - 64-bit (`x86_64`) UEFI microkernel OS scaffold with deterministic boot handoff (`BOOTX64.EFI` -> `kernel.elf` + `initfs.img`).
 - WASM-first userspace (`wasm3`) that runs apps, services, and drivers from multiple languages (C, Zig, Go, Rust, AssemblyScript), plus optional native drivers where hardware access needs it.
-- Custom WASMOS-APP package format (`.wap`) for both WebAssembly and native app/service/driver payloads, including an 8-byte subsystem tag used for runtime dispatch and process reporting.
+- Custom WASMOS-APP package format (`.wap`) for both WebAssembly and native app/service/driver payloads, including an 8-byte subsystem tag for runtime dispatch plus broker-registered executable handler plumbing for future non-`.wap` executable formats.
 - Explicit microkernel primitives: paging, scheduler, IPC, process lifecycle, capabilities with binary policy enforcement (kill on violation), and full ring-3 isolation enabled by default.
 - Preemptive multitasking in the kernel scheduler with runtime validation coverage.
 - Symmetric Multi-Processing (SMP) with AP trampoline bring-up, per-CPU state (`cpu_local_t`), Kconfig-selectable interrupt controller (PIC/LAPIC/IOAPIC), and per-CPU ready queues with work stealing; gated by `WASMOS_SMP` Kconfig (requires IOAPIC mode, default off).
@@ -49,6 +49,7 @@ It defines repository workflow and documentation/update conventions.
 - Full windowing and graphics stack: framebuffer driver, software compositor, shared-buffer rendering, input routing, window chrome (title bar, close/maximize/restore, drag-to-move, live resize), software cursor, popup menus, and a system menu bar with date/time display and per-app window lists; backed by a native Zig TTF `font-service` for text rendering.
 - `libui` component toolkit — vtable-dispatched widget tree (panels, labels, buttons, checkboxes, text inputs, scroll views, list views, dropdowns, and menus) shared across WASM and native ring-3 apps.
 - Practical interactive environment with VT/CLI, multi-TTY switching, and scriptable boot-time userspace workflows.
+- Broker-oriented runtime direction: `.wap` remains the built-in executable container while future subsystems can claim extra executable formats through bounded matcher trees (for example extension, magic-prefix, or shebang-style probes).
 
 <p align="center">
   <picture>

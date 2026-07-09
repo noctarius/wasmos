@@ -455,9 +455,17 @@ deterministically:
 2. if priorities tie, lexicographically smaller handler name wins
 3. if still tied, lexicographically smaller subsystem tag wins
 
-This step is plumbing only. PM does not consume this registry yet; the current
-spawn path still directly parses `.wap` blobs. The purpose of the registry is
-to lock down the matching contract before the later spawn-plan IPC handoff.
+PM-facing classification now exists as a separate helper:
+
+- valid `.wap` headers are recognized first as the built-in executable format
+- only non-`.wap` inputs fall through to broker-owned handler matching
+- the helper exposes a single probe-byte budget that covers both `.wap`
+  recognition and broker matchers
+
+This is still a non-delegating step. PM now classifies executable inputs before
+parsing, but it still only executes the built-in `.wap` path. Broker-owned
+formats are recognized and rejected locally until the later spawn-plan IPC
+handoff exists.
 
 #### Target Subsystem Delegation Model
 

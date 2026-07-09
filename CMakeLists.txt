@@ -1761,6 +1761,16 @@ add_custom_target(run-kernel-unit-tests
           -o ${BUILD_DIR}/test_subsystem_registry
   COMMAND ${BUILD_DIR}/test_subsystem_registry
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${KERNEL_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_wasmos_exec_format.c
+          ${KERNEL_DIR}/wasmos_exec_format.c
+          ${KERNEL_DIR}/subsystem_registry.c
+          ${KERNEL_DIR}/hashmap.c
+          ${KERNEL_DIR}/kmem.c
+          -o ${BUILD_DIR}/test_wasmos_exec_format
+  COMMAND ${BUILD_DIR}/test_wasmos_exec_format
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${SERVICES_DIR}/device_manager
           -I${LIBSYS_WASM_DIR}/include
           # Route quote-includes ("string.h"/"ctype.h") to our libc headers,

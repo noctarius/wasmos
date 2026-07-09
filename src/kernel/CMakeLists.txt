@@ -129,6 +129,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/list_array_chunk.o
   ${BUILD_DIR}/hashmap.o
   ${BUILD_DIR}/subsystem_registry.o
+  ${BUILD_DIR}/wasmos_exec_format.o
   ${BUILD_DIR}/paging.o
   ${BUILD_DIR}/physmem.o
   ${BUILD_DIR}/runtime_context.o
@@ -261,6 +262,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/list_array_chunk.c
   ${KERNEL_DIR}/hashmap.c
   ${KERNEL_DIR}/subsystem_registry.c
+  ${KERNEL_DIR}/wasmos_exec_format.c
   ${KERNEL_DIR}/physmem.c
   ${KERNEL_DIR}/runtime_context.c
   ${KERNEL_DIR}/ipc.c
@@ -538,6 +540,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/list_array_chunk.c -o ${BUILD_DIR}/list_array_chunk.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/hashmap.c -o ${BUILD_DIR}/hashmap.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/subsystem_registry.c -o ${BUILD_DIR}/subsystem_registry.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_exec_format.c -o ${BUILD_DIR}/wasmos_exec_format.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory.c -o ${BUILD_DIR}/memory.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/paging.c -o ${BUILD_DIR}/paging.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/physmem.c -o ${BUILD_DIR}/physmem.o

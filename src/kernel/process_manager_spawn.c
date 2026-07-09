@@ -15,6 +15,7 @@
 #include "timer.h"
 #include "wasm_chardev.h"
 #include "wasmos_app_meta.h"
+#include "wasmos_exec_format.h"
 #include "string.h"
 #include "serial.h"
 
@@ -1603,6 +1604,15 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
     }
     wasmos_app_desc_t desc;
     uint32_t app_flags = 0;
+    wasmos_exec_format_match_t format_match;
+    if (wasmos_exec_format_classify(path, pm_fs_buf, blob_size, &format_match) != 0) {
+        return PROC_SPAWN_ERR_SPAWN_FAILED;
+    }
+    if (format_match.kind == WASMOS_EXEC_FORMAT_BROKER) {
+        /* TODO: Route broker-owned executable formats through subsystem
+         * spawn-plan IPC once PM learns the broker handoff contract. */
+        return PROC_SPAWN_ERR_SPAWN_FAILED;
+    }
     int parse_rc = wasmos_app_parse(pm_fs_buf, blob_size, &desc);
     if (parse_rc == 0) {
         app_flags = desc.flags;

@@ -60,6 +60,28 @@ int32_t wasmos_sys_ipc_send_retry_native(wasmos_driver_api_t *api, uint32_t dest
 int32_t wasmos_sys_ipc_call_native(wasmos_driver_api_t *api, uint32_t source_endpoint, uint32_t destination, uint32_t request_id, uint32_t msg_type, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, nd_ipc_message_t *out_message);
 int32_t wasmos_sys_svc_register_native(wasmos_driver_api_t *api, uint32_t proc_endpoint, uint32_t source_endpoint, const uint8_t *name, uint32_t name_len, uint32_t request_id);
 int32_t wasmos_sys_svc_lookup_native(wasmos_driver_api_t *api, uint32_t proc_endpoint, uint32_t source_endpoint, const uint8_t *name, uint32_t name_len, uint32_t request_id);
+int32_t wasmos_sys_subsystem_register_broker_native(wasmos_driver_api_t *api,
+                                                    uint32_t proc_endpoint,
+                                                    uint32_t source_endpoint,
+                                                    uint32_t broker_endpoint,
+                                                    const char *request_tag,
+                                                    const char *runtime_tag,
+                                                    const char *broker_name,
+                                                    uint8_t uses_wasm_payload,
+                                                    uint8_t needs_runtime_lock,
+                                                    uint8_t gates_ready_for_services,
+                                                    uint32_t request_id);
+int32_t wasmos_sys_exec_handler_register_native(wasmos_driver_api_t *api,
+                                                uint32_t proc_endpoint,
+                                                uint32_t source_endpoint,
+                                                const char *request_tag,
+                                                const char *handler_name,
+                                                uint32_t priority,
+                                                uint32_t max_probe_bytes,
+                                                const wasmos_exec_match_node_t *nodes,
+                                                uint32_t node_count,
+                                                uint32_t root_index,
+                                                uint32_t request_id);
 /* Byte-range helpers for native services/drivers. These accept arbitrary
  * len/offset pairs and round the underlying buffer_borrow window up to page
  * size before calling the low-level ABI hook. */

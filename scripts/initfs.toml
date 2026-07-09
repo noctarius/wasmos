@@ -31,6 +31,12 @@ path = "apps/broker_host_smoke.wap"
 source = "broker_host_smoke.wap"
 
 [[entries]]
+kind = "wasmos_app"
+flags = ["bootstrap"]
+path = "system/services/broker_smoke.wap"
+source = "broker_smoke_service.wap"
+
+[[entries]]
 kind = "data"
 flags = ["bootstrap"]
 path = "apps/broker_smoke.bro"

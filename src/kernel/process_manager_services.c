@@ -5,6 +5,7 @@
 #include "klog.h"
 #include "process_manager.h"
 #include "string.h"
+#include "subsystem_registry.h"
 
 void
 pm_unpack_name_args(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char *out, uint32_t out_len)
@@ -270,4 +271,111 @@ pm_handle_service_lookup(uint32_t pm_context_id, const ipc_message_t *msg)
     resp.arg2 = 0;
     resp.arg3 = 0;
     return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
+}
+
+int
+pm_handle_subsystem_register_broker(uint32_t pm_context_id, const ipc_message_t *msg)
+{
+    uint32_t owner_context = 0;
+    uint32_t endpoint_owner = 0;
+    uint32_t len = (uint32_t)msg->arg1;
+    const wasmos_subsystem_broker_register_desc_t *desc = 0;
+    ipc_message_t resp;
+
+    if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
+        return PROC_PM_ERR_BAD_ENDPOINT;
+    }
+    if (len != sizeof(*desc) ||
+        len > process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM)) {
+        return PROC_PM_ERR_BAD_BROKER;
+    }
+    desc = (const wasmos_subsystem_broker_register_desc_t *)process_manager_buffer_for_context(
+        PM_BUFFER_KIND_FILESYSTEM, owner_context);
+    if (!desc ||
+        desc->version != WASMOS_SUBSYSTEM_REGISTER_BROKER_DESC_VERSION ||
+        desc->broker_endpoint == IPC_ENDPOINT_NONE) {
+        return PROC_PM_ERR_BAD_BROKER;
+    }
+    if (ipc_endpoint_owner(desc->broker_endpoint, &endpoint_owner) != IPC_OK ||
+        endpoint_owner != owner_context) {
+        return PROC_PM_ERR_BAD_BROKER;
+    }
+    if (wasmos_subsystem_registry_register_broker(desc->request_tag,
+                                                  desc->runtime_tag,
+                                                  desc->broker_name,
+                                                  desc->broker_endpoint,
+                                                  desc->uses_wasm_payload,
+                                                  desc->needs_runtime_lock,
+                                                  desc->gates_ready_for_services) != 0) {
+        return PROC_PM_ERR_SUBSYSTEM_REG;
+    }
+    resp.type = PROC_IPC_RESP;
+    resp.source = g_pm.proc_endpoint;
+    resp.destination = msg->source;
+    resp.request_id = msg->request_id;
+    resp.arg0 = 0;
+    resp.arg1 = 0;
+    resp.arg2 = 0;
+    resp.arg3 = 0;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : PROC_PM_ERR_REPLY_SEND;
+}
+
+int
+pm_handle_exec_handler_register(uint32_t pm_context_id, const ipc_message_t *msg)
+{
+    uint32_t owner_context = 0;
+    uint32_t broker_owner = 0;
+    uint32_t len = (uint32_t)msg->arg1;
+    uint32_t node_bytes = 0;
+    const wasmos_exec_handler_register_desc_t *desc = 0;
+    const wasmos_subsystem_registry_entry_t *owner = 0;
+    const wasmos_exec_match_node_t *nodes = 0;
+    ipc_message_t resp;
+
+    if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
+        return PROC_PM_ERR_BAD_ENDPOINT;
+    }
+    if (len < sizeof(*desc) ||
+        len > process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM)) {
+        return PROC_PM_ERR_BAD_HANDLER;
+    }
+    desc = (const wasmos_exec_handler_register_desc_t *)process_manager_buffer_for_context(
+        PM_BUFFER_KIND_FILESYSTEM, owner_context);
+    if (!desc ||
+        desc->version != WASMOS_EXEC_HANDLER_REGISTER_DESC_VERSION ||
+        desc->node_count == 0u ||
+        desc->node_count > WASMOS_EXEC_MATCH_MAX_NODES) {
+        return PROC_PM_ERR_BAD_HANDLER;
+    }
+    node_bytes = desc->node_count * (uint32_t)sizeof(wasmos_exec_match_node_t);
+    if (len != sizeof(*desc) + node_bytes) {
+        return PROC_PM_ERR_BAD_HANDLER;
+    }
+    owner = wasmos_subsystem_registry_find(desc->request_tag);
+    if (!owner || owner->kind != WASMOS_SUBSYSTEM_HANDLER_BROKER) {
+        return PROC_PM_ERR_BAD_HANDLER;
+    }
+    if (ipc_endpoint_owner(owner->broker_endpoint, &broker_owner) != IPC_OK ||
+        broker_owner != owner_context) {
+        return PROC_PM_ERR_BAD_HANDLER;
+    }
+    nodes = (const wasmos_exec_match_node_t *)((const uint8_t *)desc + sizeof(*desc));
+    if (wasmos_subsystem_registry_register_exec_handler(desc->handler_name,
+                                                        desc->request_tag,
+                                                        desc->priority,
+                                                        desc->max_probe_bytes,
+                                                        nodes,
+                                                        desc->node_count,
+                                                        desc->root_index) != 0) {
+        return PROC_PM_ERR_HANDLER_REG;
+    }
+    resp.type = PROC_IPC_RESP;
+    resp.source = g_pm.proc_endpoint;
+    resp.destination = msg->source;
+    resp.request_id = msg->request_id;
+    resp.arg0 = 0;
+    resp.arg1 = 0;
+    resp.arg2 = 0;
+    resp.arg3 = 0;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : PROC_PM_ERR_REPLY_SEND;
 }

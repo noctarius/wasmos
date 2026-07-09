@@ -67,6 +67,9 @@ set(WASM_NATIVE_CALL_SMOKE_APP ${BUILD_DIR}/native_call_smoke.wap)
 set(WASM_BROKER_HOST_SMOKE_SRC ${EXAMPLES_C_DIR}/broker_host_smoke/broker_host_smoke.c)
 set(WASM_BROKER_HOST_SMOKE_WASM ${BUILD_DIR}/broker_host_smoke.wasm)
 set(WASM_BROKER_HOST_SMOKE_APP ${BUILD_DIR}/broker_host_smoke.wap)
+set(WASM_BROKER_SMOKE_SERVICE_SRC ${EXAMPLES_C_DIR}/broker_smoke_service/broker_smoke.c)
+set(WASM_BROKER_SMOKE_SERVICE_WASM ${BUILD_DIR}/broker_smoke_service.wasm)
+set(WASM_BROKER_SMOKE_SERVICE_APP ${BUILD_DIR}/broker_smoke_service.wap)
 set(BROKER_SMOKE_DATA_SRC ${EXAMPLES_C_DIR}/broker_host_smoke/broker_smoke.bro)
 set(BROKER_SMOKE_DATA_BIN ${BUILD_DIR}/broker_smoke.bro)
 set(WASM_GFX_SMOKE_SRC ${EXAMPLES_C_DIR}/gfx_smoke/gfx_smoke.c)
@@ -391,6 +394,7 @@ include(CMakeParseArguments)
 
 set(WASMOS_LIBC_C_SOURCES
   ${LIBC_DIR}/src/ctype.c
+  ${LIBC_DIR}/src/ipc_managed.c
   ${LIBC_DIR}/src/math.c
   ${LIBC_DIR}/src/stdlib.c
   ${LIBC_DIR}/src/string.c

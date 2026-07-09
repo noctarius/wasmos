@@ -17,6 +17,18 @@ byte_copy(uint8_t *dst, const uint8_t *src, uint32_t len)
     }
 }
 
+static void
+byte_zero(uint8_t *dst, uint32_t len)
+{
+    uint32_t i = 0;
+    if (!dst) {
+        return;
+    }
+    for (i = 0; i < len; ++i) {
+        dst[i] = 0u;
+    }
+}
+
 static int32_t
 buffer_borrow_size(int32_t len, int32_t offset, uint32_t *out_size)
 {
@@ -689,6 +701,140 @@ wasmos_sys_svc_lookup_retry_native(wasmos_driver_api_t *api,
         }
     }
     return -1;
+}
+
+int32_t
+wasmos_sys_subsystem_register_broker_native(wasmos_driver_api_t *api,
+                                            uint32_t proc_endpoint,
+                                            uint32_t source_endpoint,
+                                            uint32_t broker_endpoint,
+                                            const char *request_tag,
+                                            const char *runtime_tag,
+                                            const char *broker_name,
+                                            uint8_t uses_wasm_payload,
+                                            uint8_t needs_runtime_lock,
+                                            uint8_t gates_ready_for_services,
+                                            uint32_t request_id)
+{
+    wasmos_subsystem_broker_register_desc_t desc;
+    nd_ipc_message_t msg;
+    uint32_t i = 0u;
+
+    if (!api) {
+        return -1;
+    }
+    byte_zero((uint8_t *)&desc, (uint32_t)sizeof(desc));
+    desc.version = WASMOS_SUBSYSTEM_REGISTER_BROKER_DESC_VERSION;
+    desc.broker_endpoint = broker_endpoint;
+    desc.uses_wasm_payload = uses_wasm_payload ? 1u : 0u;
+    desc.needs_runtime_lock = needs_runtime_lock ? 1u : 0u;
+    desc.gates_ready_for_services = gates_ready_for_services ? 1u : 0u;
+    if (request_tag) {
+        for (i = 0; i < WASMOS_SUBSYSTEM_TAG_LEN && request_tag[i] != '\0'; ++i) {
+            desc.request_tag[i] = request_tag[i];
+        }
+    }
+    if (runtime_tag) {
+        for (i = 0; i < WASMOS_SUBSYSTEM_TAG_LEN && runtime_tag[i] != '\0'; ++i) {
+            desc.runtime_tag[i] = runtime_tag[i];
+        }
+    }
+    if (broker_name) {
+        for (i = 0; i < WASMOS_SUBSYSTEM_TAG_LEN && broker_name[i] != '\0'; ++i) {
+            desc.broker_name[i] = broker_name[i];
+        }
+    }
+    if (wasmos_sys_buffer_write_to_native(api,
+                                          ND_BUFFER_KIND_FS,
+                                          source_endpoint,
+                                          ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE,
+                                          &desc,
+                                          (int32_t)sizeof(desc),
+                                          0) != 0) {
+        return -1;
+    }
+    if (wasmos_sys_ipc_call_native(api,
+                                   source_endpoint,
+                                   proc_endpoint,
+                                   request_id,
+                                   PROC_IPC_SUBSYSTEM_REGISTER_BROKER,
+                                   0,
+                                   (uint32_t)sizeof(desc),
+                                   0,
+                                   0,
+                                   &msg) != 0) {
+        return -1;
+    }
+    return (msg.type == PROC_IPC_RESP) ? 0 : (int32_t)msg.arg1;
+}
+
+int32_t
+wasmos_sys_exec_handler_register_native(wasmos_driver_api_t *api,
+                                        uint32_t proc_endpoint,
+                                        uint32_t source_endpoint,
+                                        const char *request_tag,
+                                        const char *handler_name,
+                                        uint32_t priority,
+                                        uint32_t max_probe_bytes,
+                                        const wasmos_exec_match_node_t *nodes,
+                                        uint32_t node_count,
+                                        uint32_t root_index,
+                                        uint32_t request_id)
+{
+    wasmos_exec_handler_register_desc_t desc;
+    nd_ipc_message_t msg;
+    uint32_t i = 0u;
+    uint32_t node_bytes = 0u;
+
+    if (!api || !nodes || node_count == 0u) {
+        return -1;
+    }
+    byte_zero((uint8_t *)&desc, (uint32_t)sizeof(desc));
+    desc.version = WASMOS_EXEC_HANDLER_REGISTER_DESC_VERSION;
+    desc.priority = priority;
+    desc.max_probe_bytes = max_probe_bytes;
+    desc.node_count = node_count;
+    desc.root_index = root_index;
+    if (request_tag) {
+        for (i = 0; i < WASMOS_SUBSYSTEM_TAG_LEN && request_tag[i] != '\0'; ++i) {
+            desc.request_tag[i] = request_tag[i];
+        }
+    }
+    if (handler_name) {
+        for (i = 0; i < WASMOS_EXEC_HANDLER_NAME_LEN && handler_name[i] != '\0'; ++i) {
+            desc.handler_name[i] = handler_name[i];
+        }
+    }
+    node_bytes = node_count * (uint32_t)sizeof(wasmos_exec_match_node_t);
+    if (wasmos_sys_buffer_write_to_native(api,
+                                          ND_BUFFER_KIND_FS,
+                                          source_endpoint,
+                                          ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE,
+                                          &desc,
+                                          (int32_t)sizeof(desc),
+                                          0) != 0 ||
+        wasmos_sys_buffer_write_to_native(api,
+                                          ND_BUFFER_KIND_FS,
+                                          source_endpoint,
+                                          ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE,
+                                          nodes,
+                                          (int32_t)node_bytes,
+                                          (int32_t)sizeof(desc)) != 0) {
+        return -1;
+    }
+    if (wasmos_sys_ipc_call_native(api,
+                                   source_endpoint,
+                                   proc_endpoint,
+                                   request_id,
+                                   PROC_IPC_EXEC_HANDLER_REGISTER,
+                                   0,
+                                   sizeof(desc) + node_bytes,
+                                   0,
+                                   0,
+                                   &msg) != 0) {
+        return -1;
+    }
+    return (msg.type == PROC_IPC_RESP) ? 0 : (int32_t)msg.arg1;
 }
 
 int32_t

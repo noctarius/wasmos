@@ -3,12 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
-
-#define WASMOS_SUBSYSTEM_TAG_LEN 8u
-#define WASMOS_EXEC_HANDLER_NAME_LEN 32u
-#define WASMOS_EXEC_MATCH_TEXT_LEN 32u
-#define WASMOS_EXEC_MATCH_MAX_BYTES 16u
-#define WASMOS_EXEC_MATCH_MAX_NODES 16u
+#include "../../drivers/include/wasmos_driver_abi.h"
 
 struct wasmos_subsystem_ops;
 typedef struct wasmos_subsystem_ops wasmos_subsystem_ops_t;
@@ -17,26 +12,6 @@ typedef enum {
     WASMOS_SUBSYSTEM_HANDLER_BUILTIN = 0,
     WASMOS_SUBSYSTEM_HANDLER_BROKER = 1,
 } wasmos_subsystem_handler_kind_t;
-
-typedef enum {
-    WASMOS_EXEC_MATCH_PREFIX = 0,
-    WASMOS_EXEC_MATCH_EXTENSION = 1,
-    WASMOS_EXEC_MATCH_FILENAME = 2,
-    WASMOS_EXEC_MATCH_AND = 3,
-    WASMOS_EXEC_MATCH_OR = 4,
-    WASMOS_EXEC_MATCH_NOT = 5,
-} wasmos_exec_match_kind_t;
-
-typedef struct {
-    wasmos_exec_match_kind_t kind;
-    uint16_t left_index;
-    uint16_t right_index;
-    uint8_t value_len;
-    union {
-        uint8_t prefix[WASMOS_EXEC_MATCH_MAX_BYTES];
-        char text[WASMOS_EXEC_MATCH_TEXT_LEN + 1];
-    } value;
-} wasmos_exec_match_node_t;
 
 typedef struct {
     const char *path;

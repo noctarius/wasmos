@@ -21,6 +21,8 @@
 
 #include <stdint.h>
 
+#ifndef WASMOS_CONSOLE_RING_SHARED_H
+#define WASMOS_CONSOLE_RING_SHARED_H
 #define CONSOLE_RING_DATA_SIZE 4080u
 
 typedef struct {
@@ -30,6 +32,7 @@ typedef struct {
     uint32_t _pad;
     uint8_t data[CONSOLE_RING_DATA_SIZE];
 } console_ring_t;
+#endif
 
 enum {
     WASM_CHARDEV_IPC_READ_REQ = 0x100,
@@ -91,6 +94,14 @@ enum {
     PROC_IPC_SPAWN_CAPS_SYNC      = 0x20D,
     PROC_IPC_SPAWN_PATH_SYNC      = 0x20E,
     PROC_IPC_SPAWN_PATH_CAPS_SYNC = 0x20F,
+    /* Descriptor-based broker subsystem registration.
+     * arg0=offset(0) arg1=byte_len(sizeof(wasmos_subsystem_broker_register_desc_t))
+     * arg2=reserved(0) arg3=reserved(0). */
+    PROC_IPC_SUBSYSTEM_REGISTER_BROKER = 0x210,
+    /* Descriptor-based exec handler registration.
+     * arg0=offset(0) arg1=byte_len(sizeof(desc)+node_bytes)
+     * arg2=reserved(0) arg3=reserved(0). */
+    PROC_IPC_EXEC_HANDLER_REGISTER = 0x211,
     PROC_IPC_RESP = 0x280,
     PROC_IPC_ERROR = 0x2FF
 };
@@ -163,7 +174,11 @@ enum {
     PROC_PM_ERR_META_BAD_SOURCE = -57, /* unsupported module metadata source selector */
     PROC_PM_ERR_CALLER_FSBUF = -58,    /* caller filesystem transfer buffer was missing/invalid */
     PROC_PM_ERR_REPLY_SEND = -59,      /* PM failed to send the final IPC response */
-    PROC_PM_ERR_FS_REPLY = -60         /* PM received an unexpected filesystem reply */
+    PROC_PM_ERR_FS_REPLY = -60,        /* PM received an unexpected filesystem reply */
+    PROC_PM_ERR_BAD_BROKER = -61,      /* broker registration payload or endpoint was invalid */
+    PROC_PM_ERR_BAD_HANDLER = -62,     /* exec-handler registration payload was invalid */
+    PROC_PM_ERR_SUBSYSTEM_REG = -63,   /* subsystem broker registration failed */
+    PROC_PM_ERR_HANDLER_REG = -64      /* exec-handler registration failed */
 };
 
 /* Distinct shmem map/map_auto failure reasons, returned (as a negative int) by
@@ -185,6 +200,32 @@ enum {
 #define WASMOS_SPAWN_FLAG_APP     (1u << 2)
 
 #define WASMOS_BROKER_SPAWN_PLAN_VERSION 1u
+
+#define WASMOS_SUBSYSTEM_TAG_LEN 8u
+#define WASMOS_EXEC_HANDLER_NAME_LEN 32u
+#define WASMOS_EXEC_MATCH_TEXT_LEN 32u
+#define WASMOS_EXEC_MATCH_MAX_BYTES 16u
+#define WASMOS_EXEC_MATCH_MAX_NODES 16u
+
+typedef enum {
+    WASMOS_EXEC_MATCH_PREFIX = 0,
+    WASMOS_EXEC_MATCH_EXTENSION = 1,
+    WASMOS_EXEC_MATCH_FILENAME = 2,
+    WASMOS_EXEC_MATCH_AND = 3,
+    WASMOS_EXEC_MATCH_OR = 4,
+    WASMOS_EXEC_MATCH_NOT = 5,
+} wasmos_exec_match_kind_t;
+
+typedef struct {
+    wasmos_exec_match_kind_t kind;
+    uint16_t left_index;
+    uint16_t right_index;
+    uint8_t value_len;
+    union {
+        uint8_t prefix[WASMOS_EXEC_MATCH_MAX_BYTES];
+        char text[WASMOS_EXEC_MATCH_TEXT_LEN + 1];
+    } value;
+} wasmos_exec_match_node_t;
 
 enum {
     WASMOS_BROKER_PLAN_KIND_NONE = 0,
@@ -220,6 +261,33 @@ typedef struct __attribute__((packed)) {
     char request_tag[9];
     char runtime_tag[9];
 } wasmos_broker_spawn_plan_response_t;
+
+#define WASMOS_SUBSYSTEM_REGISTER_BROKER_DESC_VERSION 1u
+
+typedef struct __attribute__((packed)) {
+    uint32_t version;
+    uint32_t broker_endpoint;
+    uint32_t flags;
+    uint8_t uses_wasm_payload;
+    uint8_t needs_runtime_lock;
+    uint8_t gates_ready_for_services;
+    uint8_t reserved0;
+    char request_tag[WASMOS_SUBSYSTEM_TAG_LEN + 1];
+    char runtime_tag[WASMOS_SUBSYSTEM_TAG_LEN + 1];
+    char broker_name[WASMOS_SUBSYSTEM_TAG_LEN + 1];
+} wasmos_subsystem_broker_register_desc_t;
+
+#define WASMOS_EXEC_HANDLER_REGISTER_DESC_VERSION 1u
+
+typedef struct __attribute__((packed)) {
+    uint32_t version;
+    uint32_t priority;
+    uint32_t max_probe_bytes;
+    uint32_t node_count;
+    uint32_t root_index;
+    char request_tag[WASMOS_SUBSYSTEM_TAG_LEN + 1];
+    char handler_name[WASMOS_EXEC_HANDLER_NAME_LEN + 1];
+} wasmos_exec_handler_register_desc_t;
 
 enum {
     /* Legacy arg-packed register (reply lands on the service endpoint).

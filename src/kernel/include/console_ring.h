@@ -6,6 +6,8 @@
 
 #include <stdint.h>
 
+#ifndef WASMOS_CONSOLE_RING_SHARED_H
+#define WASMOS_CONSOLE_RING_SHARED_H
 #define CONSOLE_RING_DATA_SIZE 4080u  /* data bytes; total struct is 4096 bytes */
 
 typedef struct {
@@ -15,5 +17,6 @@ typedef struct {
     uint32_t _pad;
     uint8_t data[CONSOLE_RING_DATA_SIZE];
 } console_ring_t;
+#endif
 
 #endif

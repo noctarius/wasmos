@@ -5,8 +5,6 @@
 
 static int32_t g_wasmos_startup_args[4];
 static char *g_wasmos_argv[1];
-static int32_t g_wasmos_ipc_reply_endpoint = -1;
-static int32_t g_wasmos_ipc_request_id = 1;
 
 int32_t
 wasmos_startup_arg(uint32_t index)
@@ -15,28 +13,6 @@ wasmos_startup_arg(uint32_t index)
         return 0;
     }
     return g_wasmos_startup_args[index];
-}
-
-/* Return (creating if necessary) the per-context managed reply endpoint.
- * Lazy creation avoids wasting endpoints in processes that never use IPC. */
-int32_t
-wasmos_ipc_ensure_reply_endpoint(void)
-{
-    if (g_wasmos_ipc_reply_endpoint >= 0) {
-        return g_wasmos_ipc_reply_endpoint;
-    }
-    g_wasmos_ipc_reply_endpoint = wasmos_ipc_create_endpoint();
-    return g_wasmos_ipc_reply_endpoint;
-}
-
-int32_t
-wasmos_ipc_next_request_id(void)
-{
-    int32_t id = g_wasmos_ipc_request_id++;
-    if (g_wasmos_ipc_request_id < 1) {
-        g_wasmos_ipc_request_id = 1;
-    }
-    return id;
 }
 
 extern int main(int argc, char **argv);

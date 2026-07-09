@@ -483,10 +483,11 @@ validates a broker-owned spawn plan, and can execute the returned `.wap`
 host-path plan through the existing built-in spawn machinery. More complex plan
 kinds still remain future work.
 
-Current validation coverage uses a kernel-owned stub broker plus a real
-non-`.wap` initfs file to exercise the full handoff in boot smoke runs. That
-fixture is intentionally transitional; the long-term goal remains a
-self-registering user-space broker.
+Current validation coverage uses a small user-space broker smoke service plus a
+real non-`.wap` initfs file to exercise the full handoff in boot smoke runs.
+The broker self-registers through PM IPC before it starts serving
+`PROC_BROKER_IPC_SPAWN_PLAN_REQ`, so the runtime path now matches the intended
+ownership model much more closely than the earlier kernel-owned stub fixture.
 
 #### Target Subsystem Delegation Model
 

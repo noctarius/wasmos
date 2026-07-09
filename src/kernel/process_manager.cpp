@@ -411,6 +411,12 @@ public:
             case PROC_IPC_MODULE_META_PATH:
                 rc = pm_handle_module_meta_path(process->context_id, &msg);
                 break;
+            case PROC_IPC_SUBSYSTEM_REGISTER_BROKER:
+                rc = pm_handle_subsystem_register_broker(process->context_id, &msg);
+                break;
+            case PROC_IPC_EXEC_HANDLER_REGISTER:
+                rc = pm_handle_exec_handler_register(process->context_id, &msg);
+                break;
             case PROC_IPC_KILL:
                 rc = handle_kill(process->context_id, &msg);
                 break;

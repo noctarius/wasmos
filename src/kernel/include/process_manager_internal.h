@@ -127,6 +127,8 @@ void pm_update_well_known_service_endpoint(const char *name, uint32_t endpoint);
 int pm_handle_service_register(uint32_t pm_context_id, const ipc_message_t *msg);
 int pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t *msg);
 int pm_handle_service_lookup(uint32_t pm_context_id, const ipc_message_t *msg);
+int pm_handle_subsystem_register_broker(uint32_t pm_context_id, const ipc_message_t *msg);
+int pm_handle_exec_handler_register(uint32_t pm_context_id, const ipc_message_t *msg);
 
 int pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t *msg);
 int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t *msg);

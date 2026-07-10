@@ -1,15 +1,16 @@
 # Build configurations
 
 Kconfig defconfigs for the supported (WASM runtime × CPU topology) build
-combinations. Each selects the WASM runtime, CPU topology, and (for WARP) the
-ring-3 execution path via the generic `WASMOS_RING3` Kconfig option.
+combinations. Each selects the WASM runtime and CPU topology. WARP builds now
+always execute through the ring-3 path; that mode is no longer separately
+configurable.
 
 | defconfig                | runtime | CPUs   | ring 3            |
 |--------------------------|---------|--------|-------------------|
 | `wasm3_single_defconfig` | wasm3   | single | always (wasm3)    |
 | `wasm3_smp_defconfig`    | wasm3   | SMP    | always (wasm3)    |
-| `warp_single_defconfig`  | WARP    | single | yes (`WASMOS_RING3`) |
-| `warp_smp_defconfig`     | WARP    | SMP    | yes (`WASMOS_RING3`) |
+| `warp_single_defconfig`  | WARP    | single | always (WARP)        |
+| `warp_smp_defconfig`     | WARP    | SMP    | always (WARP)        |
 
 `wasmos_defconfig` is the shared base (language toolchains, IRQ mode, etc.).
 

@@ -13,6 +13,8 @@ Status snapshot has been moved to [STATUS.md](STATUS.md).
 Ring3 smoke validation note: `run-qemu-ring3-test` configures process-manager
 test injection hooks so owner-deny marker checks (`wait`/`kill`/`status`/`spawn`)
 remain deterministic in strict ring3 runs.
+WARP runtime note: selecting the WARP backend now implies the ring-3 execution
+model; non-ring3 WARP is no longer a supported configuration mode.
 
 ## Architecture Document Map
 

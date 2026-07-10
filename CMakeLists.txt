@@ -318,7 +318,6 @@ if (NOT DEFINED WASMOS_WASM_RUNTIME_WASM3_INITIALIZED)
 endif ()
 option(WASMOS_WASM_RUNTIME_WASM3 "Use wasm3 interpreter as WASM runtime" ON)
 option(WASMOS_WASM_RUNTIME_WARP  "Use WARP JIT compiler as WASM runtime" OFF)
-option(WASMOS_WARP_RING3 "Execute WARP JIT code in ring-3 user mode (requires WASMOS_WASM_RUNTIME_WARP)" OFF)
 
 # WASM_RUNTIME_INCLUDE_DIR and WASM_RUNTIME_DEFINE are computed after the
 # Kconfig import (below) so that on a fresh cmake cache the kconfig-selected
@@ -648,13 +647,14 @@ if (WASMOS_RING3_SHADOW)
   set(WASMOS_WASM_RUNTIME_WASM3 ON  CACHE BOOL "Use wasm3 interpreter" FORCE)
 endif ()
 
-# The generic Kconfig WASMOS_RING3 toggle (WARP-only) drives the WARP ring-3
-# code gate WASMOS_WARP_RING3.  Derived here, after the Kconfig import and the
-# ring3-shadow override, so the selected config is the single source of truth.
-if (WASMOS_WASM_RUNTIME_WARP AND WASMOS_RING3)
-  set(WASMOS_WARP_RING3 ON  CACHE BOOL "Execute WARP JIT code in ring-3 user mode" FORCE)
+# WARP now always executes through the ring-3 path. Keep a derived internal
+# gate so the kernel sources can still use WASMOS_WARP_RING3 for build-time
+# inclusion, but remove the user-facing runtime-mode toggle.
+unset(WASMOS_RING3 CACHE)
+if (WASMOS_WASM_RUNTIME_WARP)
+  set(WASMOS_WARP_RING3 ON CACHE INTERNAL "WARP ring-3 execution is mandatory")
 else ()
-  set(WASMOS_WARP_RING3 OFF CACHE BOOL "Execute WARP JIT code in ring-3 user mode" FORCE)
+  set(WASMOS_WARP_RING3 OFF CACHE INTERNAL "WARP ring-3 execution is mandatory")
 endif ()
 
 # WASM runtime selection must run AFTER the Kconfig import so that on a fresh

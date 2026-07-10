@@ -83,6 +83,10 @@ time. The booleans `GO_AVAILABLE` and `ZIG_AVAILABLE` reflect this.
 | `WASMOS_RING3_THREAD_LIFECYCLE_SMOKE` | `OFF`   | Spawn the thread lifecycle helper probe by default                   |
 | `WASMOS_PM_TEST_HOOKS`                | `OFF`   | Enable process-manager test injection hooks                          |
 
+When `WASMOS_WASM_RUNTIME_WARP=ON` is selected, the build now always enables
+the WARP ring-3 execution path internally. There is no separate user-facing
+toggle for WARP ring-3 versus ring-0 execution anymore.
+
 ### Process-Manager List Backend
 
 | Option                           | Default | Description                                   |

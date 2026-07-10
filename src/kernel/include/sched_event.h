@@ -14,6 +14,8 @@ typedef enum {
     SCHED_EVENT_TYPE_SELECT  = 3,
     SCHED_EVENT_TYPE_FUTEX   = 4,
     SCHED_EVENT_TYPE_TIMER   = 5,
+    SCHED_EVENT_TYPE_MUTEX   = 6,
+    SCHED_EVENT_TYPE_SEMAPHORE = 7,
 } sched_event_type_t;
 
 typedef enum {

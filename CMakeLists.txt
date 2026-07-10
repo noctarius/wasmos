@@ -1826,6 +1826,17 @@ add_custom_target(run-kernel-unit-tests
           -o ${BUILD_DIR}/test_process_manager_buffer_state
   COMMAND ${BUILD_DIR}/test_process_manager_buffer_state
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -DWASMOS_SCHED_THREADABLE
+          -DWASMOS_TEST_USE_REAL_SPINLOCK_DECLS
+          -pthread
+          -I${CMAKE_SOURCE_DIR}/tests/unit/include
+          -I${KERNEL_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_kernel_sync_primitives.c
+          ${KERNEL_DIR}/sync_mutex.c
+          ${KERNEL_DIR}/sync_semaphore.c
+          -o ${BUILD_DIR}/test_kernel_sync_primitives
+  COMMAND ${BUILD_DIR}/test_kernel_sync_primitives
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_user_mutex.c
           -o ${BUILD_DIR}/test_user_mutex

@@ -141,6 +141,8 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/poll.o
   ${BUILD_DIR}/futex.o
   ${BUILD_DIR}/spinlock.o
+  ${BUILD_DIR}/sync_mutex.o
+  ${BUILD_DIR}/sync_semaphore.o
   ${BUILD_DIR}/user_mutex.o
   ${BUILD_DIR}/memory_service.o
   ${BUILD_DIR}/irq.o
@@ -276,6 +278,8 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/poll.c
   ${KERNEL_DIR}/futex.c
   ${KERNEL_DIR}/spinlock.c
+  ${KERNEL_DIR}/sync_mutex.c
+  ${KERNEL_DIR}/sync_semaphore.c
   ${KERNEL_DIR}/user_mutex.c
   ${KERNEL_DIR}/memory_service.c
   ${KERNEL_DIR}/irq.c
@@ -559,6 +563,8 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/poll.c -o ${BUILD_DIR}/poll.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/futex.c -o ${BUILD_DIR}/futex.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/spinlock.c -o ${BUILD_DIR}/spinlock.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/sync_mutex.c -o ${BUILD_DIR}/sync_mutex.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/sync_semaphore.c -o ${BUILD_DIR}/sync_semaphore.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/user_mutex.c -o ${BUILD_DIR}/user_mutex.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory_service.c -o ${BUILD_DIR}/memory_service.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/irq.c -o ${BUILD_DIR}/irq.o

@@ -1,6 +1,10 @@
 #ifndef WASMOS_TEST_SPINLOCK_H
 #define WASMOS_TEST_SPINLOCK_H
 
+#ifdef WASMOS_TEST_USE_REAL_SPINLOCK_DECLS
+#include_next "spinlock.h"
+#else
+
 #include <stdint.h>
 
 typedef struct {
@@ -9,27 +13,29 @@ typedef struct {
 
 static inline void spinlock_init(spinlock_t *lock) {
     if (lock) {
-        lock->state = 0;
+        lock->state = 0u;
     }
 }
 
 static inline int spinlock_try_lock(spinlock_t *lock) {
-    if (!lock || lock->state != 0) {
+    if (!lock) {
         return 0;
     }
-    lock->state = 1;
-    return 1;
+    return __sync_lock_test_and_set(&lock->state, 1u) == 0u;
 }
 
 static inline void spinlock_lock(spinlock_t *lock) {
-    if (lock) {
-        lock->state = 1;
+    if (!lock) {
+        return;
+    }
+    while (!spinlock_try_lock(lock)) {
+        __sync_synchronize();
     }
 }
 
 static inline void spinlock_unlock(spinlock_t *lock) {
     if (lock) {
-        lock->state = 0;
+        __sync_lock_release(&lock->state);
     }
 }
 
@@ -40,5 +46,7 @@ static inline void spinlock_lock_noirq(spinlock_t *lock) {
 static inline void spinlock_unlock_noirq(spinlock_t *lock) {
     spinlock_unlock(lock);
 }
+
+#endif
 
 #endif

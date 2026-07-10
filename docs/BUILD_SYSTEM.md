@@ -534,6 +534,7 @@ compiler. Current suites:
 - `test_process_manager_buffer_routing` — FS buffer owner/relay routing invariants
 - `test_process_manager_buffer_policy` — PM kind-specific borrow request rules
 - `test_process_manager_buffer_state` — PM borrow/release/DMA state-transition invariants
+- `test_kernel_sync_primitives` — kernel mutex/semaphore primitive behavior with host scheduler/thread stubs
 
 These tests run on the host (no QEMU) and do not depend on `bootloader` or
 `kernel`.

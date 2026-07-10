@@ -12,6 +12,7 @@
 
 #include <stdint.h>
 #include "ipc.h"
+#include "sync/mutex.h"
 #include "sync/spinlock.h"
 
 /* Parameters needed to instantiate and run a WASM module. */
@@ -61,7 +62,7 @@ typedef struct {
     uint32_t owner_pid;
     uint32_t owner_context_id;
     uint32_t endpoint;   /* IPC endpoint for service requests */
-    ksync_spinlock_t lock;     /* guards wasm3 runtime re-entrancy */
+    ksync_mutex_t lock;        /* serializes wasm3 runtime entry for this driver */
     uint8_t active;
 } wasm_driver_t;
 
@@ -81,16 +82,17 @@ void wasm_driver_stop(wasm_driver_t *driver);
 /* Return the IPC endpoint number for driver in *out_endpoint. */
 int wasm_driver_endpoint(const wasm_driver_t *driver, uint32_t *out_endpoint);
 
-/* Call the entry export specified in driver->manifest (acquires lock). */
+/* Call the entry export specified in driver->manifest (serializes per-driver execution). */
 int wasm_driver_call_entry(wasm_driver_t *driver);
 
-/* Call an arbitrary export by name with argc/argv i32 arguments (acquires lock). */
+/* Call an arbitrary export by name with argc/argv i32 arguments (serializes per-driver execution). */
 int wasm_driver_call(wasm_driver_t *driver,
                      const char *export_name,
                      uint32_t argc,
                      uint32_t *argv);
 
-/* Same as wasm_driver_call but assumes the caller already holds driver->lock. */
+/* Same as wasm_driver_call but bypasses the per-driver execution lock.
+ * Callers must provide equivalent higher-level serialization if needed. */
 int wasm_driver_call_unlocked(wasm_driver_t *driver,
                               const char *export_name,
                               uint32_t argc,

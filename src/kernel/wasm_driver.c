@@ -1,7 +1,7 @@
 /* wasm_driver.c - wasm3 WASM module loader and driver/service instance runner.
  * Instantiates a wasm3 environment and runtime per driver, registers all
  * hardware and IPC hostcall imports, and runs the module's entry export.
- * The lock on wasm_driver_t serializes concurrent hostcall re-entry. */
+ * The per-driver execution lock serializes concurrent wasm3 entry/call paths. */
 #include "wasm_driver.h"
 #include "klog.h"
 #include "process.h"
@@ -301,7 +301,7 @@ wasm_driver_start(wasm_driver_t *driver,
     wasm_driver_reset(driver);
     driver->manifest = *manifest;
     driver->owner_context_id = owner_context_id;
-    ksync_spinlock_init(&driver->lock);
+    ksync_mutex_init(&driver->lock);
     process_t *owner = process_find_by_context(owner_context_id);
     driver->owner_pid = owner ? owner->pid : process_current_pid();
     wasm3_heap_configure(driver->owner_pid,
@@ -430,11 +430,15 @@ wasm_driver_call_entry(wasm_driver_t *driver)
     }
 
     IM3Function func = NULL;
+    if (ksync_mutex_lock(&driver->lock) != KSYNC_MUTEX_OK) {
+        return -1;
+    }
     uint32_t previous_pid = wasm_driver_enter_runtime(driver);
     M3Result res = m3_FindFunction(&func, driver->runtime, driver->manifest.entry_export);
     if (res) {
         log_wasm3_error("[wasm-driver] entry lookup failed: ", res, driver->runtime);
         wasm_driver_leave_runtime(previous_pid);
+        (void)ksync_mutex_unlock(&driver->lock);
         return -1;
     }
     const void *args[4] = { &argv[0], &argv[1], &argv[2], &argv[3] };
@@ -442,9 +446,11 @@ wasm_driver_call_entry(wasm_driver_t *driver)
     if (res) {
         log_wasm3_error("[wasm-driver] entry failed: ", res, driver->runtime);
         wasm_driver_leave_runtime(previous_pid);
+        (void)ksync_mutex_unlock(&driver->lock);
         return -1;
     }
     wasm_driver_leave_runtime(previous_pid);
+    (void)ksync_mutex_unlock(&driver->lock);
     return 0;
 }
 
@@ -458,7 +464,9 @@ wasm_driver_call(wasm_driver_t *driver,
         return -1;
     }
 
-    ksync_spinlock_lock(&driver->lock);
+    if (ksync_mutex_lock(&driver->lock) != KSYNC_MUTEX_OK) {
+        return -1;
+    }
     uint32_t previous_pid = wasm_driver_enter_runtime(driver);
     IM3Function func = NULL;
     M3Result res = m3_FindFunction(&func, driver->runtime, export_name);
@@ -474,7 +482,7 @@ wasm_driver_call(wasm_driver_t *driver,
         }
     }
     wasm_driver_leave_runtime(previous_pid);
-    ksync_spinlock_unlock(&driver->lock);
+    (void)ksync_mutex_unlock(&driver->lock);
     return ok == 0 ? 0 : -1;
 }
 

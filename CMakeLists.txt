@@ -1815,6 +1815,12 @@ add_custom_target(run-kernel-unit-tests
   COMMAND ${BUILD_DIR}/test_process_manager_buffer_routing
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_process_manager_buffer_policy.c
+          ${KERNEL_DIR}/process_manager_buffer_policy.c
+          -o ${BUILD_DIR}/test_process_manager_buffer_policy
+  COMMAND ${BUILD_DIR}/test_process_manager_buffer_policy
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${KERNEL_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_process_manager_buffer_state.c
           ${KERNEL_DIR}/process_manager_buffer_state.c
           -o ${BUILD_DIR}/test_process_manager_buffer_state

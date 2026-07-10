@@ -14,17 +14,12 @@
 #include <stdint.h>
 #include "boot.h"
 #include "process.h"
+#include "process_manager_buffer.h"
 #include "wasmos_driver_abi.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#define PM_BUFFER_KIND_FILESYSTEM  1u  /* shared FS DMA transfer buffer */
-#define PM_BUFFER_KIND_FRAMEBUFFER 2u  /* shared framebuffer display buffer */
-
-#define PM_BUFFER_BORROW_READ  0x1u
-#define PM_BUFFER_BORROW_WRITE 0x2u
 
 /* Initialize the process manager and start the PM kernel process. */
 int process_manager_init(const boot_info_t *boot_info);

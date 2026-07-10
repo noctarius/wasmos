@@ -150,6 +150,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/smp.o
   ${BUILD_DIR}/timer.o
   ${BUILD_DIR}/process_manager.o
+  ${BUILD_DIR}/process_manager_buffer_policy.o
   ${BUILD_DIR}/process_manager_buffer_state.o
   ${BUILD_DIR}/process_manager_buffer_routing.o
   ${BUILD_DIR}/process_manager_buffers.o
@@ -284,6 +285,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/arch/x86_64/smp.c
   ${KERNEL_DIR}/timer.c
   ${KERNEL_DIR}/process_manager.cpp
+  ${KERNEL_DIR}/process_manager_buffer_policy.c
   ${KERNEL_DIR}/process_manager_buffer_state.c
   ${KERNEL_DIR}/process_manager_buffer_routing.c
   ${KERNEL_DIR}/process_manager_buffers.c
@@ -566,6 +568,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/smp.c -o ${BUILD_DIR}/smp.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/timer.c -o ${BUILD_DIR}/timer.o
   COMMAND ${CMAKE_CXX_COMPILER} ${CXXFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager.cpp -o ${BUILD_DIR}/process_manager.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_buffer_policy.c -o ${BUILD_DIR}/process_manager_buffer_policy.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_buffer_state.c -o ${BUILD_DIR}/process_manager_buffer_state.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_buffer_routing.c -o ${BUILD_DIR}/process_manager_buffer_routing.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_buffers.c -o ${BUILD_DIR}/process_manager_buffers.o

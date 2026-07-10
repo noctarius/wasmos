@@ -8,6 +8,7 @@
 #include "physmem.h"
 #include "paging.h"
 #include "list.h"
+#include "process_manager_buffer_policy.h"
 #include "process_manager_buffer_state.h"
 #include "spinlock.h"
 #include "string.h"
@@ -147,8 +148,10 @@ pm_xfer_buffer_borrow_context(uint32_t borrower_context_id,
     pm_xfer_buffer_slot_t *borrower = 0;
     pm_xfer_buffer_slot_t *source = 0;
 
-    if (borrower_context_id == 0 || source_context_id == 0 ||
-        borrower_context_id == source_context_id || (flags & 0x3u) == 0) {
+    if (process_manager_buffer_policy_validate_borrow(PM_BUFFER_KIND_FILESYSTEM,
+                                                      borrower_context_id,
+                                                      source_context_id,
+                                                      flags) != 0) {
         return -1;
     }
     borrower = pm_fs_slot_for_context(borrower_context_id);
@@ -159,7 +162,8 @@ pm_xfer_buffer_borrow_context(uint32_t borrower_context_id,
     return process_manager_buffer_state_borrow_from_source(&borrower->state,
                                                            source_context_id,
                                                            flags,
-                                                           0x3u);
+                                                           process_manager_buffer_policy_allowed_flags(
+                                                               PM_BUFFER_KIND_FILESYSTEM));
 }
 
 static int
@@ -279,8 +283,10 @@ pm_fb_buffer_borrow_context(uint32_t borrower_context_id,
                             uint32_t flags)
 {
     pm_xfer_buffer_slot_t *borrower = 0;
-    if (borrower_context_id == 0 || source_context_id != 0 ||
-        (flags & (PM_BUFFER_BORROW_READ | PM_BUFFER_BORROW_WRITE)) == 0) {
+    if (process_manager_buffer_policy_validate_borrow(PM_BUFFER_KIND_FRAMEBUFFER,
+                                                      borrower_context_id,
+                                                      source_context_id,
+                                                      flags) != 0) {
         return -1;
     }
     borrower = pm_fb_slot_for_context(borrower_context_id);
@@ -289,7 +295,8 @@ pm_fb_buffer_borrow_context(uint32_t borrower_context_id,
     }
     return process_manager_buffer_state_borrow_local(&borrower->state,
                                                      flags,
-                                                     PM_BUFFER_BORROW_READ | PM_BUFFER_BORROW_WRITE);
+                                                     process_manager_buffer_policy_allowed_flags(
+                                                         PM_BUFFER_KIND_FRAMEBUFFER));
 }
 
 static int

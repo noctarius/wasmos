@@ -1,9 +1,9 @@
 ## Threadable Scheduler
 
-This document specifies the design for WASMOS's scheduler, codenamed
-"Threadable Scheduler".  It is a thread-centric priority scheduler — replacing
-the earlier process-centric FIFO scheduler — that draws concrete inspiration
-from Minos2's kernel (`others/minos2-main/`).
+This document specifies the design for WASMOS's current scheduler, historically
+codenamed "Threadable Scheduler". It is a thread-centric priority scheduler
+that replaced the earlier process-centric FIFO scheduler and draws concrete
+inspiration from Minos2's kernel (`others/minos2-main/`).
 
 The threadable scheduler is now the only scheduler; it is always compiled in
 and the former `WASMOS_SCHED_THREADABLE` transition flag has been removed.  The
@@ -14,7 +14,7 @@ call sites described below.
 
 ### Motivation
 
-The current scheduler has four structural defects:
+The earlier process-centric scheduler had four structural defects:
 
 | Defect | Consequence |
 |--------|-------------|
@@ -23,7 +23,7 @@ The current scheduler has four structural defects:
 | No priority model | Native IRQ-dispatch workers contend with idle WASM processes for the same queue |
 | Ad-hoc per-endpoint `waiter_tid` | No general multi-object wait; poll-hub required a new scan-on-send mechanism |
 
-The Threadable Scheduler eliminates all four.
+The current scheduler eliminates all four.
 
 ---
 
@@ -717,10 +717,10 @@ transition.
 
 ---
 
-### Migration Strategy (historical)
+### Historical Migration Notes
 
-The migration is complete: the threadable scheduler is always compiled in and
-the `WASMOS_SCHED_THREADABLE` flag has been removed.  The steps below are kept
+The migration is complete: the current scheduler is always compiled in and the
+`WASMOS_SCHED_THREADABLE` flag has been removed. The notes below are kept only
 as a record of how the transition was carried out.
 
 1. **New files:**

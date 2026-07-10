@@ -15,6 +15,10 @@ test injection hooks so owner-deny marker checks (`wait`/`kill`/`status`/`spawn`
 remain deterministic in strict ring3 runs.
 WARP runtime note: selecting the WARP backend now implies the ring-3 execution
 model; non-ring3 WARP is no longer a supported configuration mode.
+Scheduler note: the thread-centric scheduler described in
+`architecture/29-threadable-scheduler.md` is now the only scheduler model.
+The filename is retained for continuity, but it documents the current
+in-kernel scheduler rather than an optional mode.
 
 ## Architecture Document Map
 
@@ -58,7 +62,7 @@ model; non-ring3 WARP is no longer a supported configuration mode.
 ### SMP
 - [Symmetric Multi-Processing](architecture/28-smp.md)
 
-### Scheduler Roadmap
+### Scheduler
 - [Threadable Scheduler Design](architecture/29-threadable-scheduler.md)
 - [IPC Direct Switch](architecture/30-ipc-direct-switch.md)
 

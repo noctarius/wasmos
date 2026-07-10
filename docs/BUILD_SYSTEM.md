@@ -532,6 +532,7 @@ compiler. Current suites:
 - `test_device_manager_rules` — device manager rule matching
 - `test_fs_manager_path` — VFS path resolution
 - `test_process_manager_buffer_routing` — FS buffer owner/relay routing invariants
+- `test_process_manager_buffer_state` — PM borrow/release/DMA state-transition invariants
 
 These tests run on the host (no QEMU) and do not depend on `bootloader` or
 `kernel`.

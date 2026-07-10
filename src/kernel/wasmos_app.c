@@ -404,29 +404,6 @@ wasmos_subsystem_register(const char *request_tag,
     return rc;
 }
 
-int
-wasmos_subsystem_register_broker(const char *request_tag,
-                                 const char *runtime_tag,
-                                 const char *broker_name,
-                                 uint32_t broker_endpoint,
-                                 uint8_t uses_wasm_payload,
-                                 uint8_t needs_runtime_lock,
-                                 uint8_t gates_ready_for_services)
-{
-    int rc = -1;
-    wasmos_subsystem_lock_init_once();
-    spinlock_lock(&g_subsystem_lock);
-    rc = wasmos_subsystem_registry_register_broker(request_tag,
-                                                   runtime_tag,
-                                                   broker_name,
-                                                   broker_endpoint,
-                                                   uses_wasm_payload,
-                                                   needs_runtime_lock,
-                                                   gates_ready_for_services);
-    spinlock_unlock(&g_subsystem_lock);
-    return rc;
-}
-
 static int
 wasmos_register_builtin_subsystems(void)
 {

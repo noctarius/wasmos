@@ -57,10 +57,10 @@ register_test_handlers(void)
         { .kind = WASMOS_EXEC_MATCH_PREFIX, .value_len = 4u, .value.prefix = { 'P', 'K', 0x03, 0x04 } },
     };
 
-    if (wasmos_subsystem_registry_register_broker("LUA", "NATIVE", "LUA", 101u, 0u, 0u, 1u) != 0) return -1;
-    if (wasmos_subsystem_registry_register_broker("JAVA", "NATIVE", "JAVA", 102u, 0u, 0u, 1u) != 0) return -1;
-    if (wasmos_subsystem_registry_register_exec_handler("lua-file", "LUA", 40u, 2u, lua_nodes, 3u, 0u) != 0) return -1;
-    if (wasmos_subsystem_registry_register_exec_handler("jar-file", "JAVA", 50u, 4u, java_nodes, 3u, 0u) != 0) return -1;
+    if (wasmos_subsystem_registry_register_broker("LUA", "NATIVE", "LUA", 101u, 0u, 0u, 0u, 1u) != 0) return -1;
+    if (wasmos_subsystem_registry_register_broker("JAVA", "NATIVE", "JAVA", 102u, 0u, 0u, 0u, 1u) != 0) return -1;
+    if (wasmos_subsystem_registry_register_exec_handler("lua-file", "LUA", 0u, 40u, 2u, lua_nodes, 3u, 0u) != 0) return -1;
+    if (wasmos_subsystem_registry_register_exec_handler("jar-file", "JAVA", 0u, 50u, 4u, java_nodes, 3u, 0u) != 0) return -1;
     return 0;
 }
 

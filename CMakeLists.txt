@@ -64,14 +64,14 @@ set(WASM_NATIVE_CALL_MIN_APP ${BUILD_DIR}/native_call_min.wap)
 set(WASM_NATIVE_CALL_SMOKE_SRC ${EXAMPLES_C_DIR}/native_call_smoke/native_call_smoke.c)
 set(WASM_NATIVE_CALL_SMOKE_WASM ${BUILD_DIR}/native_call_smoke.wasm)
 set(WASM_NATIVE_CALL_SMOKE_APP ${BUILD_DIR}/native_call_smoke.wap)
-set(WASM_BROKER_HOST_SMOKE_SRC ${EXAMPLES_C_DIR}/broker_host_smoke/broker_host_smoke.c)
-set(WASM_BROKER_HOST_SMOKE_WASM ${BUILD_DIR}/broker_host_smoke.wasm)
-set(WASM_BROKER_HOST_SMOKE_APP ${BUILD_DIR}/broker_host_smoke.wap)
-set(WASM_BROKER_SMOKE_SERVICE_SRC ${EXAMPLES_C_DIR}/broker_smoke_service/broker_smoke.c)
-set(WASM_BROKER_SMOKE_SERVICE_WASM ${BUILD_DIR}/broker_smoke_service.wasm)
-set(WASM_BROKER_SMOKE_SERVICE_APP ${BUILD_DIR}/broker_smoke_service.wap)
-set(BROKER_SMOKE_DATA_SRC ${EXAMPLES_C_DIR}/broker_host_smoke/broker_smoke.bro)
-set(BROKER_SMOKE_DATA_BIN ${BUILD_DIR}/broker_smoke.bro)
+set(WASM_WAMOS_SCRIPT_SRC ${SERVICES_DIR}/wasmos_script/wamos_script.c)
+set(WASM_WAMOS_SCRIPT_WASM ${BUILD_DIR}/wamos_script.wasm)
+set(WASM_WAMOS_SCRIPT_APP ${BUILD_DIR}/wamos_script.wap)
+set(WASM_WAMOS_SCRIPT_BROKER_SRC ${SERVICES_DIR}/wasmos_script_broker/wamos_script_broker.c)
+set(WASM_WAMOS_SCRIPT_BROKER_WASM ${BUILD_DIR}/wamos_script_broker.wasm)
+set(WASM_WAMOS_SCRIPT_BROKER_APP ${BUILD_DIR}/wamos_script_broker.wap)
+set(WAMOS_SCRIPT_DATA_SRC ${SERVICES_DIR}/wasmos_script/hello.rc)
+set(WAMOS_SCRIPT_DATA_BIN ${BUILD_DIR}/hello.rc)
 set(WASM_GFX_SMOKE_SRC ${EXAMPLES_C_DIR}/gfx_smoke/gfx_smoke.c)
 set(WASM_GFX_SMOKE_WASM ${BUILD_DIR}/gfx_smoke.wasm)
 set(WASM_GFX_SMOKE_APP ${BUILD_DIR}/gfx_smoke.wap)
@@ -1267,13 +1267,13 @@ set(NATIVE_CALL_SMOKE_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_NATIVE_CALL_SMOKE_APP} ${BUILD_DIR}/esp/apps/native_call_smoke.wap
 )
 add_custom_command(
-  OUTPUT ${BROKER_SMOKE_DATA_BIN}
-  COMMAND ${CMAKE_COMMAND} -E copy ${BROKER_SMOKE_DATA_SRC} ${BROKER_SMOKE_DATA_BIN}
-  DEPENDS ${BROKER_SMOKE_DATA_SRC}
-  COMMENT "Copying broker smoke initfs data"
+  OUTPUT ${WAMOS_SCRIPT_DATA_BIN}
+  COMMAND ${CMAKE_COMMAND} -E copy ${WAMOS_SCRIPT_DATA_SRC} ${WAMOS_SCRIPT_DATA_BIN}
+  DEPENDS ${WAMOS_SCRIPT_DATA_SRC}
+  COMMENT "Copying wamos-script sample initfs data"
   VERBATIM
 )
-add_custom_target(broker_smoke_initfs_data DEPENDS ${BROKER_SMOKE_DATA_BIN})
+add_custom_target(wamos_script_initfs_data DEPENDS ${WAMOS_SCRIPT_DATA_BIN})
 set(GFX_SMOKE_COPY_CMD
   COMMAND ${CMAKE_COMMAND} -E copy ${WASM_GFX_SMOKE_APP} ${BUILD_DIR}/esp/apps/gfx_smoke.wap
 )
@@ -1711,7 +1711,7 @@ add_custom_target(strict-ring3
   VERBATIM
 )
 
-add_dependencies(make_initfs c_examples drivers services broker_smoke_initfs_data)
+add_dependencies(make_initfs c_examples drivers services wamos_script_initfs_data)
 
 set(_wasmos_qemu_targets
   run-qemu run-qemu-ui run-qemu-test run-qemu-cli-test run-qemu-debug

@@ -1,15 +1,14 @@
 version = 1
-aot = true
 
 [package]
-name = "broker-smoke"
-entry = "initialize"
-kind = "service"
+name = "wamos-script"
+entry = "wasmos_main"
+kind = "app"
 native = false
 
 [resources]
-stack_pages = 8
-heap_pages = 8
+stack_pages = 16
+heap_pages = 16
 
 [ipc]
 required_endpoint_name = "proc"
@@ -17,5 +16,5 @@ required_endpoint_rights = 1
 entry_arg_bindings = ["proc.endpoint"]
 
 [[capabilities]]
-name = "system.control"
+name = "ipc.basic"
 flags = 0

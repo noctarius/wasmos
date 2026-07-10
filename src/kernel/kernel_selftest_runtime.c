@@ -40,8 +40,12 @@ typedef struct {
 
 static broker_spawn_request_state_t g_broker_spawn_request_state;
 
-#define BROKER_TEST_SERVICE_PATH "/init/system/services/broker_smoke.wap"
-#define BROKER_TEST_PATH "/init/apps/broker_smoke.bro"
+/* The wamos-script broker realises a delegated `#!` guest script through the
+ * standalone wamos-script executor; the requester spawns the broker service,
+ * waits for it to register + become ready, then spawns a real `.rc` guest whose
+ * shebang line routes it to that broker. */
+#define BROKER_TEST_SERVICE_PATH "/init/system/services/wamos_script_broker.wap"
+#define BROKER_TEST_PATH "/init/apps/hello.rc"
 #define BROKER_TEST_MAX_ATTEMPTS 64u
 
 static int

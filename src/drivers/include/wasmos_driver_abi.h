@@ -178,7 +178,8 @@ enum {
     PROC_PM_ERR_BAD_BROKER = -61,      /* broker registration payload or endpoint was invalid */
     PROC_PM_ERR_BAD_HANDLER = -62,     /* exec-handler registration payload was invalid */
     PROC_PM_ERR_SUBSYSTEM_REG = -63,   /* subsystem broker registration failed */
-    PROC_PM_ERR_HANDLER_REG = -64      /* exec-handler registration failed */
+    PROC_PM_ERR_HANDLER_REG = -64,     /* exec-handler registration failed */
+    PROC_PM_ERR_NOT_AUTHORIZED = -65   /* caller lacks the subsystem.register capability */
 };
 
 /* Distinct shmem map/map_auto failure reasons, returned (as a negative int) by

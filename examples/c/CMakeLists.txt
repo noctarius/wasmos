@@ -70,28 +70,6 @@ wasmos_add_wasm_c_app_target(native_call_smoke
   PACK_COMMENT  "Packing wasm native call smoke as WASMOS-APP"
 )
 
-wasmos_add_wasm_c_app_target(broker_host_smoke
-  SOURCE      ${WASM_BROKER_HOST_SMOKE_SRC}
-  OUTPUT_WASM ${WASM_BROKER_HOST_SMOKE_WASM}
-  OUTPUT_APP  ${WASM_BROKER_HOST_SMOKE_APP}
-  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/broker_host_smoke/linker.metadata
-  EXPORT      wasmos_main
-  NO_BUILTIN
-  STARTUP_SHIM
-  BUILD_COMMENT "Building wasm broker host smoke module"
-  PACK_COMMENT  "Packing wasm broker host smoke as WASMOS-APP"
-)
-
-wasmos_add_wasm_c_app_target(broker_smoke_service
-  SOURCE      ${WASM_BROKER_SMOKE_SERVICE_SRC}
-  OUTPUT_WASM ${WASM_BROKER_SMOKE_SERVICE_WASM}
-  OUTPUT_APP  ${WASM_BROKER_SMOKE_SERVICE_APP}
-  MANIFEST    ${CMAKE_CURRENT_SOURCE_DIR}/broker_smoke_service/linker.metadata
-  EXPORT      initialize
-  BUILD_COMMENT "Building wasm broker smoke service"
-  PACK_COMMENT  "Packing wasm broker smoke service as WASMOS-APP"
-)
-
 wasmos_add_wasm_c_app_target(gfx_smoke
   SOURCE         ${WASM_GFX_SMOKE_SRC}
   OUTPUT_WASM    ${WASM_GFX_SMOKE_WASM}
@@ -229,7 +207,7 @@ wasmos_add_wasm_c_app_target(menu_bar
 add_custom_target(c_examples)
 add_dependencies(c_examples
   hello_c chardev_client chardev_preempt init_smoke
-  fs_open_smoke fs_write_smoke native_call_min native_call_smoke broker_host_smoke broker_smoke_service
+  fs_open_smoke fs_write_smoke native_call_min native_call_smoke
   gfx_smoke irq_route_deny irq_route_allow shmem_owner shmem_target
   menu_bar net_smoke
 )

@@ -7,7 +7,7 @@
 #include "memory.h"
 #include "string.h"
 
-#define CAP_ALL_MASK ((1u << 5) - 1u)
+#define CAP_ALL_MASK ((1u << 6) - 1u)
 
 typedef struct {
     uint32_t context_id;
@@ -40,6 +40,8 @@ kind_to_mask(capability_kind_t kind)
         return 1u << 3;
     case CAP_SYSTEM_CONTROL:
         return 1u << 4;
+    case CAP_SUBSYSTEM_REGISTER:
+        return 1u << 5;
     default:
         return 0;
     }
@@ -102,6 +104,8 @@ capability_grant_name(uint32_t context_id, const uint8_t *name, uint32_t name_le
         mask = kind_to_mask(CAP_DMA_BUFFER);
     } else if (str_eq_bytes(name, name_len, "system.control")) {
         mask = kind_to_mask(CAP_SYSTEM_CONTROL);
+    } else if (str_eq_bytes(name, name_len, "subsystem.register")) {
+        mask = kind_to_mask(CAP_SUBSYSTEM_REGISTER);
     } else {
         return -1;
     }

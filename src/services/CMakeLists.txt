@@ -8,6 +8,8 @@ add_subdirectory(vt)
 add_subdirectory(gfx_compositor)
 add_subdirectory(font_service)
 add_subdirectory(net_stack)
+add_subdirectory(wasmos_script)
+add_subdirectory(wasmos_script_broker)
 
 add_custom_target(services DEPENDS
   sysinit_app
@@ -20,4 +22,6 @@ add_custom_target(services DEPENDS
   gfx_compositor_app
   font_service_app
   net_stack_app
+  wamos_script_app
+  wamos_script_broker_app
 )

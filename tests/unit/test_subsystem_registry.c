@@ -15,6 +15,7 @@ register_test_brokers(void)
                                                   101u,
                                                   0u,
                                                   0u,
+                                                  0u,
                                                   1u) != 0) {
         return __LINE__;
     }
@@ -24,6 +25,7 @@ register_test_brokers(void)
                                                   102u,
                                                   0u,
                                                   0u,
+                                                  0u,
                                                   1u) != 0) {
         return __LINE__;
     }
@@ -31,6 +33,7 @@ register_test_brokers(void)
                                                   "NATIVE",
                                                   "SCRIPT",
                                                   103u,
+                                                  0u,
                                                   0u,
                                                   0u,
                                                   1u) != 0) {
@@ -99,6 +102,7 @@ test_broker_registration_lookup(void)
                                                   endpoint,
                                                   0u,
                                                   0u,
+                                                  0u,
                                                   1u) != 0) {
         return __LINE__;
     }
@@ -118,6 +122,7 @@ test_broker_registration_lookup(void)
                                                   runtime_tag,
                                                   broker_name,
                                                   endpoint,
+                                                  0u,
                                                   0u,
                                                   0u,
                                                   1u) == 0) {
@@ -174,6 +179,7 @@ test_exec_handler_registration_lookup(void)
     if (register_test_brokers() != 0) return __LINE__;
     if (wasmos_subsystem_registry_register_exec_handler("lua-file",
                                                         "LUA",
+                                                        0u,
                                                         40u,
                                                         2u,
                                                         lua_nodes,
@@ -183,6 +189,7 @@ test_exec_handler_registration_lookup(void)
     }
     if (wasmos_subsystem_registry_register_exec_handler("jar-file",
                                                         "JAVA",
+                                                        0u,
                                                         50u,
                                                         4u,
                                                         java_nodes,
@@ -226,6 +233,7 @@ test_exec_handler_registration_lookup(void)
 
     if (wasmos_subsystem_registry_register_exec_handler("lua-file",
                                                         "LUA",
+                                                        0u,
                                                         40u,
                                                         2u,
                                                         lua_nodes,
@@ -277,6 +285,7 @@ test_exec_handler_not_and_priority(void)
     if (register_test_brokers() != 0) return __LINE__;
     if (wasmos_subsystem_registry_register_exec_handler("generic-script",
                                                         "SCRIPT",
+                                                        0u,
                                                         10u,
                                                         2u,
                                                         generic_script_nodes,
@@ -286,6 +295,7 @@ test_exec_handler_not_and_priority(void)
     }
     if (wasmos_subsystem_registry_register_exec_handler("aaa-script",
                                                         "SCRIPT",
+                                                        0u,
                                                         10u,
                                                         0u,
                                                         exact_script_nodes,
@@ -349,6 +359,7 @@ test_exec_handler_validation(void)
     if (register_test_brokers() != 0) return __LINE__;
     if (wasmos_subsystem_registry_register_exec_handler("missing-owner",
                                                         "WARP",
+                                                        0u,
                                                         1u,
                                                         4u,
                                                         bad_probe_nodes,
@@ -358,6 +369,7 @@ test_exec_handler_validation(void)
     }
     if (wasmos_subsystem_registry_register_exec_handler("short-probe",
                                                         "LUA",
+                                                        0u,
                                                         1u,
                                                         2u,
                                                         bad_probe_nodes,
@@ -367,6 +379,7 @@ test_exec_handler_validation(void)
     }
     if (wasmos_subsystem_registry_register_exec_handler("cycle",
                                                         "LUA",
+                                                        0u,
                                                         1u,
                                                         0u,
                                                         cycle_nodes,
@@ -376,11 +389,117 @@ test_exec_handler_validation(void)
     }
     if (wasmos_subsystem_registry_register_exec_handler("bad-ext",
                                                         "LUA",
+                                                        0u,
                                                         1u,
                                                         0u,
                                                         bad_ext_nodes,
                                                         1u,
                                                         0u) == 0) {
+        return __LINE__;
+    }
+
+    wasmos_subsystem_registry_reset();
+    return 0;
+}
+
+/* A broker context that registers a subsystem + an exec handler must have both
+ * torn down when that owning context exits (wasmos_subsystem_registry_drop_owner),
+ * so a dead broker leaves no stale endpoint or matcher behind. */
+static int
+test_owner_drop(void)
+{
+    static const wasmos_exec_match_node_t ext_nodes[] = {
+        {
+            .kind = WASMOS_EXEC_MATCH_EXTENSION,
+            .value_len = 3u,
+            .value.text = ".rc",
+        },
+    };
+    const uint32_t owner = 500u;
+    const uint32_t other_owner = 501u;
+    wasmos_exec_probe_t probe;
+
+    wasmos_subsystem_registry_reset();
+    /* Owner 500 registers a broker subsystem + a handler; owner 501 registers a
+     * builtin-independent broker that must survive the drop of owner 500. */
+    if (wasmos_subsystem_registry_register_broker("SCRIPT", "NATIVE", "SCRIPT",
+                                                  200u, owner, 0u, 0u, 1u) != 0) {
+        return __LINE__;
+    }
+    if (wasmos_subsystem_registry_register_broker("LUA", "NATIVE", "LUA",
+                                                  201u, other_owner, 0u, 0u, 1u) != 0) {
+        return __LINE__;
+    }
+    if (wasmos_subsystem_registry_register_exec_handler("rc-file", "SCRIPT", owner,
+                                                        10u, 4u, ext_nodes, 1u, 0u) != 0) {
+        return __LINE__;
+    }
+    if (!wasmos_subsystem_registry_find("SCRIPT")) return __LINE__;
+    memset(&probe, 0, sizeof(probe));
+    probe.path = "/init/apps/hello.rc";
+    if (!wasmos_subsystem_registry_find_exec_handler(&probe)) return __LINE__;
+    if (wasmos_subsystem_registry_exec_max_probe_bytes() != 4u) return __LINE__;
+
+    wasmos_subsystem_registry_drop_owner(owner);
+
+    /* Owner 500's broker + handler are gone; owner 501's broker survives. */
+    if (wasmos_subsystem_registry_find("SCRIPT")) return __LINE__;
+    if (wasmos_subsystem_registry_find_exec_handler(&probe)) return __LINE__;
+    if (wasmos_subsystem_registry_exec_max_probe_bytes() != 0u) return __LINE__;
+    if (!wasmos_subsystem_registry_find("LUA")) return __LINE__;
+
+    /* After the drop, the freed tag can be registered again. */
+    if (wasmos_subsystem_registry_register_broker("SCRIPT", "NATIVE", "SCRIPT",
+                                                  202u, owner, 0u, 0u, 1u) != 0) {
+        return __LINE__;
+    }
+
+    wasmos_subsystem_registry_reset();
+    return 0;
+}
+
+/* Registration is bounded per owner so one broker context cannot monopolize the
+ * tables.  A single owner may register up to WASMOS_SUBSYSTEM_MAX_BROKERS_PER_OWNER
+ * brokers and WASMOS_EXEC_HANDLER_MAX_PER_OWNER handlers; the next is rejected. */
+static int
+test_per_owner_caps(void)
+{
+    static const wasmos_exec_match_node_t ext_nodes[] = {
+        {
+            .kind = WASMOS_EXEC_MATCH_EXTENSION,
+            .value_len = 3u,
+            .value.text = ".rc",
+        },
+    };
+    const uint32_t owner = 600u;
+    char tag[WASMOS_SUBSYSTEM_TAG_LEN + 1];
+    char name[WASMOS_EXEC_HANDLER_NAME_LEN + 1];
+    uint32_t i;
+
+    wasmos_subsystem_registry_reset();
+    for (i = 0; i < WASMOS_SUBSYSTEM_MAX_BROKERS_PER_OWNER; ++i) {
+        snprintf(tag, sizeof(tag), "BRK%u", i);
+        if (wasmos_subsystem_registry_register_broker(tag, "NATIVE", "BRK",
+                                                      700u + i, owner, 0u, 0u, 1u) != 0) {
+            return __LINE__;
+        }
+    }
+    /* The next broker for the same owner is rejected by the per-owner cap. */
+    if (wasmos_subsystem_registry_register_broker("BRKX", "NATIVE", "BRK",
+                                                  799u, owner, 0u, 0u, 1u) == 0) {
+        return __LINE__;
+    }
+
+    /* Fill the per-owner handler cap against the owner's first broker tag. */
+    for (i = 0; i < WASMOS_EXEC_HANDLER_MAX_PER_OWNER; ++i) {
+        snprintf(name, sizeof(name), "h%u", i);
+        if (wasmos_subsystem_registry_register_exec_handler(name, "BRK0", owner,
+                                                            10u, 4u, ext_nodes, 1u, 0u) != 0) {
+            return __LINE__;
+        }
+    }
+    if (wasmos_subsystem_registry_register_exec_handler("hX", "BRK0", owner,
+                                                        10u, 4u, ext_nodes, 1u, 0u) == 0) {
         return __LINE__;
     }
 
@@ -408,6 +527,14 @@ main(void)
         return rc;
     }
     rc = test_exec_handler_validation();
+    if (rc != 0) {
+        return rc;
+    }
+    rc = test_owner_drop();
+    if (rc != 0) {
+        return rc;
+    }
+    rc = test_per_owner_caps();
     if (rc != 0) {
         return rc;
     }

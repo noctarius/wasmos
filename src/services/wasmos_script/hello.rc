@@ -1,0 +1,5 @@
+#!wamos-script
+echo [script] hello from a delegated shebang script
+export WHO=script-broker
+echo [script] launched via the ${WHO}
+echo [script] wamos-script executor done

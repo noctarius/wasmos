@@ -185,13 +185,6 @@ int wasmos_app_init_subsystems(void);
 int wasmos_subsystem_register(const char *request_tag,
                               const char *runtime_tag,
                               const wasmos_subsystem_ops_t *ops);
-int wasmos_subsystem_register_broker(const char *request_tag,
-                                     const char *runtime_tag,
-                                     const char *broker_name,
-                                     uint32_t broker_endpoint,
-                                     uint8_t uses_wasm_payload,
-                                     uint8_t needs_runtime_lock,
-                                     uint8_t gates_ready_for_services);
 int wasmos_app_resolve_subsystem(const wasmos_app_desc_t *desc,
                                  wasmos_app_subsystem_info_t *out_info);
 int wasmos_app_requires_explicit_ready(const wasmos_app_desc_t *desc);

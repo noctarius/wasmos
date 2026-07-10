@@ -409,17 +409,53 @@ wasmos_subsystem_registry_register_builtin(const char *request_tag,
     return 0;
 }
 
+/* Count broker-kind subsystem entries across every hashmap bucket.  Requires
+ * g_subsystem_lock held and g_subsystem_map initialized. */
+static void
+subsystem_count_brokers_locked(uint32_t owner_context_id,
+                               uint32_t *out_total,
+                               uint32_t *out_owner)
+{
+    hashmap_iter_t it;
+    uint32_t key = 0;
+    uint32_t total = 0u;
+    uint32_t owned = 0u;
+    for (wasmos_subsystem_bucket_t *bucket =
+             (wasmos_subsystem_bucket_t *)hashmap_first(&g_subsystem_map, &it, &key);
+         bucket;
+         bucket = (wasmos_subsystem_bucket_t *)hashmap_next(&it, &key)) {
+        for (wasmos_subsystem_registry_entry_t *entry = bucket->head; entry; entry = entry->next) {
+            if (entry->kind != WASMOS_SUBSYSTEM_HANDLER_BROKER) {
+                continue;
+            }
+            total++;
+            if (entry->owner_context_id == owner_context_id) {
+                owned++;
+            }
+        }
+    }
+    if (out_total) {
+        *out_total = total;
+    }
+    if (out_owner) {
+        *out_owner = owned;
+    }
+}
+
 int
 wasmos_subsystem_registry_register_broker(const char *request_tag,
                                           const char *runtime_tag,
                                           const char *broker_name,
                                           uint32_t broker_endpoint,
+                                          uint32_t owner_context_id,
                                           uint8_t uses_wasm_payload,
                                           uint8_t needs_runtime_lock,
                                           uint8_t gates_ready_for_services)
 {
     wasmos_subsystem_bucket_t *bucket = 0;
     wasmos_subsystem_registry_entry_t *entry = 0;
+    uint32_t broker_total = 0u;
+    uint32_t broker_owned = 0u;
     if (!request_tag || !runtime_tag) {
         klog_write("[subsystem] register invalid args\n");
         return -1;
@@ -449,6 +485,13 @@ wasmos_subsystem_registry_register_broker(const char *request_tag,
             return -1;
         }
     }
+    subsystem_count_brokers_locked(owner_context_id, &broker_total, &broker_owned);
+    if (broker_total >= WASMOS_SUBSYSTEM_MAX_BROKERS ||
+        (owner_context_id != 0u && broker_owned >= WASMOS_SUBSYSTEM_MAX_BROKERS_PER_OWNER)) {
+        klog_printf("[subsystem] broker cap reached total=%u owner=%u\n", broker_total, broker_owned);
+        spinlock_unlock(&g_subsystem_lock);
+        return -1;
+    }
     entry = (wasmos_subsystem_registry_entry_t *)kmem_alloc(sizeof(*entry));
     if (!entry) {
         klog_write("[subsystem] register entry alloc failed\n");
@@ -460,6 +503,7 @@ wasmos_subsystem_registry_register_broker(const char *request_tag,
     copy_subsystem_tag(entry->runtime_tag, runtime_tag);
     copy_subsystem_tag(entry->broker_name, broker_name);
     entry->kind = WASMOS_SUBSYSTEM_HANDLER_BROKER;
+    entry->owner_context_id = owner_context_id;
     entry->uses_wasm_payload = uses_wasm_payload ? 1u : 0u;
     entry->needs_runtime_lock = needs_runtime_lock ? 1u : 0u;
     entry->gates_ready_for_services = gates_ready_for_services ? 1u : 0u;
@@ -478,6 +522,7 @@ wasmos_subsystem_registry_register_broker(const char *request_tag,
 int
 wasmos_subsystem_registry_register_exec_handler(const char *handler_name,
                                                 const char *request_tag,
+                                                uint32_t owner_context_id,
                                                 uint32_t priority,
                                                 uint32_t max_probe_bytes,
                                                 const wasmos_exec_match_node_t *nodes,
@@ -487,6 +532,8 @@ wasmos_subsystem_registry_register_exec_handler(const char *handler_name,
     wasmos_subsystem_registry_entry_t *owner = 0;
     wasmos_exec_handler_registry_entry_t *entry = 0;
     char validated_handler_name[WASMOS_EXEC_HANDLER_NAME_LEN + 1];
+    uint32_t handler_total = 0u;
+    uint32_t handler_owned = 0u;
 
     if (!handler_name || !request_tag || !nodes) {
         klog_write("[subsystem] exec handler invalid args\n");
@@ -517,12 +564,23 @@ wasmos_subsystem_registry_register_exec_handler(const char *handler_name,
         return -1;
     }
     for (entry = g_exec_handlers; entry; entry = entry->next) {
+        handler_total++;
+        if (entry->owner_context_id == owner_context_id) {
+            handler_owned++;
+        }
         if (strcmp(entry->handler_name, validated_handler_name) == 0 &&
             strcmp(entry->request_tag, request_tag) == 0) {
             klog_write("[subsystem] exec handler duplicate\n");
             spinlock_unlock(&g_subsystem_lock);
             return -1;
         }
+    }
+    if (handler_total >= WASMOS_EXEC_HANDLER_MAX ||
+        (owner_context_id != 0u && handler_owned >= WASMOS_EXEC_HANDLER_MAX_PER_OWNER)) {
+        klog_printf("[subsystem] exec handler cap reached total=%u owner=%u\n",
+                    handler_total, handler_owned);
+        spinlock_unlock(&g_subsystem_lock);
+        return -1;
     }
 
     entry = (wasmos_exec_handler_registry_entry_t *)kmem_alloc(sizeof(*entry));
@@ -557,6 +615,7 @@ wasmos_subsystem_registry_register_exec_handler(const char *handler_name,
     entry->max_probe_bytes = max_probe_bytes;
     entry->node_count = node_count;
     entry->root_index = root_index;
+    entry->owner_context_id = owner_context_id;
     entry->next = g_exec_handlers;
     g_exec_handlers = entry;
     if (g_exec_max_probe_bytes < max_probe_bytes) {
@@ -663,5 +722,57 @@ wasmos_subsystem_registry_reset(void)
         g_exec_handlers = next;
     }
     g_exec_max_probe_bytes = 0u;
+    spinlock_unlock(&g_subsystem_lock);
+}
+
+void
+wasmos_subsystem_registry_drop_owner(uint32_t owner_context_id)
+{
+    wasmos_exec_handler_registry_entry_t **link = 0;
+    wasmos_exec_handler_registry_entry_t *entry = 0;
+    uint32_t recomputed_probe = 0u;
+
+    /* Context 0 is the kernel built-in owner and is never torn down here. */
+    if (owner_context_id == 0u) {
+        return;
+    }
+    spinlock_lock(&g_subsystem_lock);
+    if (g_subsystem_map_initialized) {
+        hashmap_iter_t it;
+        uint32_t key = 0;
+        for (wasmos_subsystem_bucket_t *bucket =
+                 (wasmos_subsystem_bucket_t *)hashmap_first(&g_subsystem_map, &it, &key);
+             bucket;
+             bucket = (wasmos_subsystem_bucket_t *)hashmap_next(&it, &key)) {
+            wasmos_subsystem_registry_entry_t **bhead = &bucket->head;
+            while (*bhead) {
+                wasmos_subsystem_registry_entry_t *cur = *bhead;
+                if (cur->kind == WASMOS_SUBSYSTEM_HANDLER_BROKER &&
+                    cur->owner_context_id == owner_context_id) {
+                    *bhead = cur->next;
+                    kmem_free(cur);
+                    continue;
+                }
+                bhead = &cur->next;
+            }
+        }
+    }
+    link = &g_exec_handlers;
+    while (*link) {
+        entry = *link;
+        if (entry->owner_context_id == owner_context_id) {
+            *link = entry->next;
+            if (entry->nodes) {
+                kmem_free(entry->nodes);
+            }
+            kmem_free(entry);
+            continue;
+        }
+        if (entry->max_probe_bytes > recomputed_probe) {
+            recomputed_probe = entry->max_probe_bytes;
+        }
+        link = &entry->next;
+    }
+    g_exec_max_probe_bytes = recomputed_probe;
     spinlock_unlock(&g_subsystem_lock);
 }

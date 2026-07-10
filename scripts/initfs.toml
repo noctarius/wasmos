@@ -27,20 +27,20 @@ source = "native_call_smoke.wap"
 [[entries]]
 kind = "wasmos_app"
 flags = ["bootstrap"]
-path = "apps/broker_host_smoke.wap"
-source = "broker_host_smoke.wap"
+path = "apps/wamos_script.wap"
+source = "wamos_script.wap"
 
 [[entries]]
 kind = "wasmos_app"
 flags = ["bootstrap"]
-path = "system/services/broker_smoke.wap"
-source = "broker_smoke_service.wap"
+path = "system/services/wamos_script_broker.wap"
+source = "wamos_script_broker.wap"
 
 [[entries]]
 kind = "data"
 flags = ["bootstrap"]
-path = "apps/broker_smoke.bro"
-source = "broker_smoke.bro"
+path = "apps/hello.rc"
+source = "hello.rc"
 
 [[entries]]
 kind = "wasmos_app"

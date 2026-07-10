@@ -14,6 +14,7 @@
 #include "string.h"
 #include "wasm3/shim.h"
 #include "native_driver.h"
+#include "subsystem_registry.h"
 
 #include "sched.h"
 #include "sched_event.h"
@@ -909,6 +910,7 @@ static void process_reap(process_t *proc) {
         pfa_free_pages((uint64_t)proc->stack_alloc_base_phys, total_pages);
     }
     if (proc->context_id != 0) {
+        wasmos_subsystem_registry_drop_owner(proc->context_id);
         ipc_endpoints_release_owner(proc->context_id);
         process_manager_buffer_drop_context(proc->context_id);
         (void)mm_context_destroy(proc->context_id);

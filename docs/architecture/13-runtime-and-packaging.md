@@ -483,11 +483,29 @@ validates a broker-owned spawn plan, and can execute the returned `.wap`
 host-path plan through the existing built-in spawn machinery. More complex plan
 kinds still remain future work.
 
-Current validation coverage uses a small user-space broker smoke service plus a
-real non-`.wap` initfs file to exercise the full handoff in boot smoke runs.
-The broker self-registers through PM IPC before it starts serving
-`PROC_BROKER_IPC_SPAWN_PLAN_REQ`, so the runtime path now matches the intended
-ownership model much more closely than the earlier kernel-owned stub fixture.
+The first real broker is `src/services/wasmos_script_broker`: it registers the
+`WSCRIPT` subsystem plus a `PREFIX("#!")` executable handler and derives its
+spawn plan from the guest file's `#!<interpreter>` line (data-driven, not a
+hardcoded path). For the `wamos-script` interpreter it returns a `WAP_PATH` plan
+that launches `src/services/wasmos_script` — a standalone executor that drives
+the shared `wasmos_script` `.rc` engine (`src/libc/src/script.c`, the same one
+the CLI embeds) over IPC — with the guest script path as argv. This replaces the
+earlier hardcoded broker smoke fixture.
+
+Broker/handler registration is now capability-gated and owner-scoped:
+
+- `PROC_IPC_SUBSYSTEM_REGISTER_BROKER` and `PROC_IPC_EXEC_HANDLER_REGISTER`
+  require the registering context to hold `CAP_SUBSYSTEM_REGISTER`
+  (`subsystem.register` in the manifest); otherwise PM returns
+  `PROC_PM_ERR_NOT_AUTHORIZED`.
+- The registry records each entry's owner context and enforces per-owner and
+  global caps on brokers and handlers.
+- `wasmos_subsystem_registry_drop_owner()` runs from `process_reap`, so a broker
+  that exits leaves no stale endpoint or matcher behind.
+
+Runtime status: on wasm3 the delegated script runs end to end; on WARP ring-3 the
+executor's first FS-buffer read of the delegated argv is not yet coherent with
+the module's user-VA view (see `docs/STATUS.md`).
 
 #### Target Subsystem Delegation Model
 

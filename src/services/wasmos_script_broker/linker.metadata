@@ -1,0 +1,21 @@
+version = 1
+aot = true
+
+[package]
+name = "script-broker"
+entry = "initialize"
+kind = "service"
+native = false
+
+[resources]
+stack_pages = 8
+heap_pages = 8
+
+[ipc]
+required_endpoint_name = "proc"
+required_endpoint_rights = 1
+entry_arg_bindings = ["proc.endpoint"]
+
+[[capabilities]]
+name = "subsystem.register"
+flags = 0

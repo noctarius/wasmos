@@ -2,6 +2,7 @@
  * Maintains a name → endpoint lookup table for registered services.
  * SVC_IPC_REGISTER_REQ / SVC_IPC_LOOKUP_REQ messages are handled here. */
 #include "process_manager_internal.h"
+#include "capability.h"
 #include "klog.h"
 #include "process_manager.h"
 #include "string.h"
@@ -285,6 +286,9 @@ pm_handle_subsystem_register_broker(uint32_t pm_context_id, const ipc_message_t 
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
         return PROC_PM_ERR_BAD_ENDPOINT;
     }
+    if (!capability_has(owner_context, CAP_SUBSYSTEM_REGISTER)) {
+        return PROC_PM_ERR_NOT_AUTHORIZED;
+    }
     if (len != sizeof(*desc) ||
         len > process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM)) {
         return PROC_PM_ERR_BAD_BROKER;
@@ -304,6 +308,7 @@ pm_handle_subsystem_register_broker(uint32_t pm_context_id, const ipc_message_t 
                                                   desc->runtime_tag,
                                                   desc->broker_name,
                                                   desc->broker_endpoint,
+                                                  owner_context,
                                                   desc->uses_wasm_payload,
                                                   desc->needs_runtime_lock,
                                                   desc->gates_ready_for_services) != 0) {
@@ -335,6 +340,9 @@ pm_handle_exec_handler_register(uint32_t pm_context_id, const ipc_message_t *msg
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
         return PROC_PM_ERR_BAD_ENDPOINT;
     }
+    if (!capability_has(owner_context, CAP_SUBSYSTEM_REGISTER)) {
+        return PROC_PM_ERR_NOT_AUTHORIZED;
+    }
     if (len < sizeof(*desc) ||
         len > process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM)) {
         return PROC_PM_ERR_BAD_HANDLER;
@@ -362,6 +370,7 @@ pm_handle_exec_handler_register(uint32_t pm_context_id, const ipc_message_t *msg
     nodes = (const wasmos_exec_match_node_t *)((const uint8_t *)desc + sizeof(*desc));
     if (wasmos_subsystem_registry_register_exec_handler(desc->handler_name,
                                                         desc->request_tag,
+                                                        owner_context,
                                                         desc->priority,
                                                         desc->max_probe_bytes,
                                                         nodes,

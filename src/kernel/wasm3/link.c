@@ -22,9 +22,7 @@
 #include "wasm_driver.h"
 #include "sync/spinlock.h"
 
-#ifdef WASMOS_SCHED_THREADABLE
 #include "futex.h"
-#endif
 
 #include <stdint.h>
 #include <string.h>
@@ -3645,7 +3643,6 @@ m3ApiRawFunction(wasmos_strlen)
     m3ApiReturn(len);
 }
 
-#ifdef WASMOS_SCHED_THREADABLE
 m3ApiRawFunction(wasmos_futex_wait)
 {
     m3ApiReturnType(int32_t)
@@ -3673,7 +3670,6 @@ m3ApiRawFunction(wasmos_futex_wake)
     int woken = futex_wake((uint32_t)addr, (uint32_t)count, context_id);
     m3ApiReturn((int32_t)woken);
 }
-#endif /* WASMOS_SCHED_THREADABLE */
 
 m3ApiRawFunction(wasmos_env_abort)
 {
@@ -3833,10 +3829,8 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "serial_register", "i(i)", wasmos_serial_register);
     rc |= wasm3_link_raw(module, "wasmos", "input_push", "i(i)", wasmos_input_push);
     rc |= wasm3_link_raw(module, "wasmos", "input_read", "i()", wasmos_input_read);
-#ifdef WASMOS_SCHED_THREADABLE
     rc |= wasm3_link_raw(module, "wasmos", "futex_wait", "i(iii)", wasmos_futex_wait);
     rc |= wasm3_link_raw(module, "wasmos", "futex_wake", "i(ii)",  wasmos_futex_wake);
-#endif
     if (rc != 0) {
         klog_write("[kernel] wasm3 link errors\n");
         return -1;

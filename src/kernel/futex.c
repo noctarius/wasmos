@@ -1,5 +1,3 @@
-#ifdef WASMOS_SCHED_THREADABLE
-
 #include "futex.h"
 #include "sched_event.h"
 #include "sched.h"
@@ -171,5 +169,3 @@ futex_wake(uint32_t uaddr, uint32_t count, uint32_t context_id)
     ksync_spinlock_unlock(&ft->event.lock);
     return woken;
 }
-
-#endif /* WASMOS_SCHED_THREADABLE */

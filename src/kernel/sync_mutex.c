@@ -66,12 +66,7 @@ ksync_mutex_lock(ksync_mutex_t *mutex)
             ksync_spinlock_unlock(&mutex->event.lock);
             return -1;
         }
-#ifdef WASMOS_SCHED_THREADABLE
         sched_event_wait(&mutex->event, 0);
-#else
-        ksync_spinlock_unlock(&mutex->event.lock);
-        __asm__ volatile("pause");
-#endif
     }
 }
 
@@ -92,9 +87,7 @@ ksync_mutex_unlock(ksync_mutex_t *mutex)
     }
     mutex->locked = 0u;
     mutex->owner_tid = 0u;
-#ifdef WASMOS_SCHED_THREADABLE
     (void)sched_event_wake_one(&mutex->event, 0, SCHED_PEND_OK);
-#endif
     ksync_spinlock_unlock(&mutex->event.lock);
     return KSYNC_MUTEX_OK;
 }

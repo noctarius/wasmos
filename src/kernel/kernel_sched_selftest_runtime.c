@@ -3,15 +3,11 @@
  *
  * Each test function returns 0 on pass, non-zero on fail.
  * Tests are pure in-kernel C: no process spawn, no QEMU-boot required.
- *
- * Compile-guarded: only compiled when WASMOS_SCHED_THREADABLE is defined.
  */
 
 #include "kernel_sched_selftest_runtime.h"
 #include "klog.h"
 #include "serial.h"
-
-#ifdef WASMOS_SCHED_THREADABLE
 
 #include "sched.h"
 #include "sched_event.h"
@@ -408,14 +404,3 @@ kernel_sched_selftest_run(void)
     }
     return failures;
 }
-
-#else /* !WASMOS_SCHED_THREADABLE */
-
-int
-kernel_sched_selftest_run(void)
-{
-    /* Nothing to test when the new scheduler is not compiled in. */
-    return 0;
-}
-
-#endif /* WASMOS_SCHED_THREADABLE */

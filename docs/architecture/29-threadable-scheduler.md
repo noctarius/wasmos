@@ -1,15 +1,14 @@
 ## Threadable Scheduler
 
-This document specifies the design for WASMOS's next-generation scheduler,
-codenamed "Threadable Scheduler" (`WASMOS_SCHED_THREADABLE`).  It replaces the
-current process-centric FIFO scheduler with a thread-centric priority scheduler
-that draws concrete inspiration from Minos2's kernel (`others/minos2-main/`).
+This document specifies the design for WASMOS's scheduler, codenamed
+"Threadable Scheduler".  It is a thread-centric priority scheduler — replacing
+the earlier process-centric FIFO scheduler — that draws concrete inspiration
+from Minos2's kernel (`others/minos2-main/`).
 
-The design is intended to be implemented behind a compile-time flag so both
-schedulers coexist during the transition.  The authoritative source for the
-current scheduler is `src/kernel/process.c`; the new implementation will live
-alongside it in `src/kernel/sched_thread.c` plus modifications to shared
-headers.
+The threadable scheduler is now the only scheduler; it is always compiled in
+and the former `WASMOS_SCHED_THREADABLE` transition flag has been removed.  The
+implementation lives in `src/kernel/sched_thread.c` plus the shared headers and
+call sites described below.
 
 ---
 
@@ -718,10 +717,13 @@ transition.
 
 ---
 
-### Migration Strategy
+### Migration Strategy (historical)
 
-1. **Flag:** `cmake -DWASMOS_SCHED_THREADABLE=ON`
-2. **New files:**
+The migration is complete: the threadable scheduler is always compiled in and
+the `WASMOS_SCHED_THREADABLE` flag has been removed.  The steps below are kept
+as a record of how the transition was carried out.
+
+1. **New files:**
    - `src/kernel/sched_thread.c` — `cpu_sched_t` operations, enqueue/dequeue, priority logic
    - `src/kernel/sched_event.c` — `sched_event_t` wait/wake
    - `src/kernel/futex.c` — futex hash table, wait/wake

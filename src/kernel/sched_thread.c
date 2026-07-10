@@ -1,5 +1,3 @@
-#ifdef WASMOS_SCHED_THREADABLE
-
 #include "sched.h"
 #include "thread.h"
 #include "process.h"
@@ -419,5 +417,3 @@ cpu_sched_try_steal(uint32_t my_cpu_id)
     }
     return NULL;
 }
-
-#endif /* WASMOS_SCHED_THREADABLE */

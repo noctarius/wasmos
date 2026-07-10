@@ -16,8 +16,6 @@ enum {
     SCHED_R_RANDONE   = 7,  /* dispatched; thread BLOCKED/EXITED (normal loop) */
 };
 
-#ifdef WASMOS_SCHED_THREADABLE
-
 #include <stdint.h>
 #include "sync/spinlock.h"
 #include "sched_list.h"
@@ -110,5 +108,4 @@ uint32_t cpu_sched_pick_target_cpu_for_thread(const struct thread *t,
  */
 void sched_spawn_thread(struct thread *t);
 
-#endif /* WASMOS_SCHED_THREADABLE */
 #endif /* WASMOS_SCHED_H */

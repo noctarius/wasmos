@@ -43,12 +43,7 @@ ksync_semaphore_acquire(ksync_semaphore_t *sem)
             ksync_spinlock_unlock(&sem->event.lock);
             return KSYNC_SEMAPHORE_OK;
         }
-#ifdef WASMOS_SCHED_THREADABLE
         sched_event_wait(&sem->event, 0);
-#else
-        ksync_spinlock_unlock(&sem->event.lock);
-        __asm__ volatile("pause");
-#endif
     }
 }
 
@@ -65,9 +60,7 @@ ksync_semaphore_release(ksync_semaphore_t *sem)
         return -1;
     }
     sem->event.cnt++;
-#ifdef WASMOS_SCHED_THREADABLE
     (void)sched_event_wake_one(&sem->event, 0, SCHED_PEND_OK);
-#endif
     ksync_spinlock_unlock(&sem->event.lock);
     return KSYNC_SEMAPHORE_OK;
 }

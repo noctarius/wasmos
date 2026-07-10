@@ -41,9 +41,9 @@ int ipc_endpoint_count(uint32_t endpoint, uint32_t *out_count);
 int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_message_t *message);
 int ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t *out_message);
 /*
- * ipc_recv_blocking_for — like ipc_recv_for but blocks via sched_event_wait
- * under WASMOS_SCHED_THREADABLE.  Use for callers that want to sleep until
- * a message arrives (e.g. WASM host ipc_recv, kernel_init_runtime).
+ * ipc_recv_blocking_for — like ipc_recv_for but blocks via sched_event_wait.
+ * Use for callers that want to sleep until a message arrives (e.g. WASM host
+ * ipc_recv, kernel_init_runtime).
  * On spurious wake returns IPC_EMPTY; caller should retry.
  */
 int ipc_recv_blocking_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t *out_message);
@@ -81,10 +81,8 @@ int ipc_select_recv(uint32_t select_id, uint32_t owner_context_id,
                     uint32_t timeout_ms);
 void ipc_select_destroy(uint32_t select_id, uint32_t owner_context_id);
 
-#ifdef WASMOS_SCHED_THREADABLE
 struct ipc_select;
 /* Called by poll_notify to signal a select set from the sender side. */
 void ipc_select_signal(struct ipc_select *sel, uint32_t ep_id);
-#endif
 
 #endif

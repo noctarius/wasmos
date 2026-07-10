@@ -1,8 +1,6 @@
 #ifndef WASMOS_FUTEX_H
 #define WASMOS_FUTEX_H
 
-#ifdef WASMOS_SCHED_THREADABLE
-
 #include <stdint.h>
 
 void futex_init(void);
@@ -22,5 +20,4 @@ int futex_wait(uint32_t uaddr, uint32_t expected,
  */
 int futex_wake(uint32_t uaddr, uint32_t count, uint32_t context_id);
 
-#endif /* WASMOS_SCHED_THREADABLE */
 #endif /* WASMOS_FUTEX_H */

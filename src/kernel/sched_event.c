@@ -1,5 +1,3 @@
-#ifdef WASMOS_SCHED_THREADABLE
-
 #include "sched_event.h"
 #include "sched.h"
 #include "thread.h"
@@ -220,5 +218,3 @@ sched_event_abort_all(sched_event_t *ev)
     /* Caller holds ev->lock. */
     sched_event_wake_all(ev, 0, SCHED_PEND_ABORT);
 }
-
-#endif /* WASMOS_SCHED_THREADABLE */

@@ -1,5 +1,3 @@
-#ifdef WASMOS_SCHED_THREADABLE
-
 #include "poll.h"
 #include "sched_event.h"
 #include "ipc.h"
@@ -92,5 +90,3 @@ poll_struct_free(poll_struct_t *ps)
     }
     free(ps);
 }
-
-#endif /* WASMOS_SCHED_THREADABLE */

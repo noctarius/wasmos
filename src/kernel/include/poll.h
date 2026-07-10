@@ -1,8 +1,6 @@
 #ifndef WASMOS_POLL_H
 #define WASMOS_POLL_H
 
-#ifdef WASMOS_SCHED_THREADABLE
-
 #include <stdint.h>
 
 #define POLL_EV_MAX 4
@@ -45,5 +43,4 @@ void poll_notify(poll_struct_t *ps, poll_ev_t ev, uint32_t ep_id);
 /* Free ps and all embedded watcher nodes. */
 void poll_struct_free(poll_struct_t *ps);
 
-#endif /* WASMOS_SCHED_THREADABLE */
 #endif /* WASMOS_POLL_H */

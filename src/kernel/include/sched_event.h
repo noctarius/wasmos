@@ -1,8 +1,6 @@
 #ifndef WASMOS_SCHED_EVENT_H
 #define WASMOS_SCHED_EVENT_H
 
-#ifdef WASMOS_SCHED_THREADABLE
-
 #include <stdint.h>
 #include "sync/spinlock.h"
 #include "sched_list.h"
@@ -72,5 +70,4 @@ void sched_event_abort_all(sched_event_t *ev);
  */
 void sched_timeout_check(void);
 
-#endif /* WASMOS_SCHED_THREADABLE */
 #endif /* WASMOS_SCHED_EVENT_H */

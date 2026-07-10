@@ -24,6 +24,7 @@ extern "C" {
 #include "ipc.h"
 #include "string.h"
 #include "paging.h"
+#include "warp_driver_ring3_call_policy.h"
 #ifdef WASMOS_WARP_RING3
 #include "warp_ring3.h"
 #include "arch/x86_64/smp.h"
@@ -825,13 +826,17 @@ wasm_driver_call_entry(wasm_driver_t *driver)
         return -1;
     }
 #ifdef WASMOS_WARP_RING3
-    if (r3_root) {
+    warp_driver_ring3_call_policy_t policy =
+        warp_driver_ring3_call_policy_resolve(r3_root);
+    if (policy.release_before_call) {
         /* Release lock and runtime binding before IRET to ring-3.  Clear any
          * need_resched that accumulated during ring-0 ensure_started so the
          * ring-3 process starts with a fresh scheduling window. */
         warp_runtime_leave(prev);
         ksync_spinlock_unlock_noirq(&driver->lock);
-        process_clear_resched();
+        if (policy.clear_resched_before_call) {
+            process_clear_resched();
+        }
         return call_export_mod(module_of(driver),
                            driver->manifest.entry_export,
                            driver->manifest.entry_argc,
@@ -883,10 +888,14 @@ wasm_driver_call(wasm_driver_t *driver, const char *name,
         return -1;
     }
 #ifdef WASMOS_WARP_RING3
-    if (r3_root) {
+    warp_driver_ring3_call_policy_t policy =
+        warp_driver_ring3_call_policy_resolve(r3_root);
+    if (policy.release_before_call) {
         warp_runtime_leave(prev);
         ksync_spinlock_unlock_noirq(&driver->lock);
-        process_clear_resched();
+        if (policy.clear_resched_before_call) {
+            process_clear_resched();
+        }
         return call_export_mod(module_of(driver), name, argc, argv, r3_root, r3_stack);
     }
     int rc = call_export_mod(module_of(driver), name, argc, argv, r3_root, r3_stack);

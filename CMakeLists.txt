@@ -1828,6 +1828,12 @@ add_custom_target(run-kernel-unit-tests
           -o ${BUILD_DIR}/test_process_manager_buffer_state
   COMMAND ${BUILD_DIR}/test_process_manager_buffer_state
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${KERNEL_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_warp_driver_ring3_call_policy.c
+          ${KERNEL_DIR}/warp_driver_ring3_call_policy.c
+          -o ${BUILD_DIR}/test_warp_driver_ring3_call_policy
+  COMMAND ${BUILD_DIR}/test_warp_driver_ring3_call_policy
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -DWASMOS_SCHED_THREADABLE
           -DWASMOS_TEST_USE_REAL_SPINLOCK_DECLS
           -pthread

@@ -155,6 +155,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/process_manager_buffer_policy.o
   ${BUILD_DIR}/process_manager_buffer_state.o
   ${BUILD_DIR}/process_manager_buffer_routing.o
+  ${BUILD_DIR}/warp_driver_ring3_call_policy.o
   ${BUILD_DIR}/process_manager_buffers.o
   ${BUILD_DIR}/process_manager_services.o
   ${BUILD_DIR}/process_manager_spawn.o
@@ -292,6 +293,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/process_manager_buffer_policy.c
   ${KERNEL_DIR}/process_manager_buffer_state.c
   ${KERNEL_DIR}/process_manager_buffer_routing.c
+  ${KERNEL_DIR}/warp_driver_ring3_call_policy.c
   ${KERNEL_DIR}/process_manager_buffers.c
   ${KERNEL_DIR}/process_manager_services.c
   ${KERNEL_DIR}/process_manager_spawn.c
@@ -577,6 +579,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_buffer_policy.c -o ${BUILD_DIR}/process_manager_buffer_policy.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_buffer_state.c -o ${BUILD_DIR}/process_manager_buffer_state.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_buffer_routing.c -o ${BUILD_DIR}/process_manager_buffer_routing.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/warp_driver_ring3_call_policy.c -o ${BUILD_DIR}/warp_driver_ring3_call_policy.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_buffers.c -o ${BUILD_DIR}/process_manager_buffers.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_services.c -o ${BUILD_DIR}/process_manager_services.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_spawn.c -o ${BUILD_DIR}/process_manager_spawn.o

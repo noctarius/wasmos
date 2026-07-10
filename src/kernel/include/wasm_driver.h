@@ -12,7 +12,7 @@
 
 #include <stdint.h>
 #include "ipc.h"
-#include "spinlock.h"
+#include "sync/spinlock.h"
 
 /* Parameters needed to instantiate and run a WASM module. */
 typedef struct {
@@ -38,7 +38,7 @@ typedef struct {
     uint32_t   owner_pid;
     uint32_t   owner_context_id;
     uint32_t   endpoint;        /* IPC endpoint for service requests */
-    spinlock_t lock;            /* guards WARP module re-entrancy */
+    ksync_spinlock_t lock;            /* guards WARP module re-entrancy */
     uint8_t    active;
     uint8_t    started;
 #ifdef WASMOS_WARP_RING3
@@ -61,7 +61,7 @@ typedef struct {
     uint32_t owner_pid;
     uint32_t owner_context_id;
     uint32_t endpoint;   /* IPC endpoint for service requests */
-    spinlock_t lock;     /* guards wasm3 runtime re-entrancy */
+    ksync_spinlock_t lock;     /* guards wasm3 runtime re-entrancy */
     uint8_t active;
 } wasm_driver_t;
 

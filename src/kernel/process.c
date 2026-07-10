@@ -32,7 +32,7 @@ static process_t g_processes[PROCESS_MAX_COUNT];
 /* FIXME(process-list): migrate to kernel list storage after providing a
  * boot-safe list allocator path for early scheduler init/spawn. */
 static uint32_t g_next_pid;
-static spinlock_t g_process_table_lock;
+static ksync_spinlock_t g_process_table_lock;
 /* Scheduler state lives in cpu_local_t (per-CPU) — see smp.h. */
 static process_t *g_idle_process;
 /* g_in_context_switch removed: each CPU now tracks in_context_switch in
@@ -578,14 +578,14 @@ static void process_trampoline(void) {
             if (cpu_local()->current_process->needs_runtime_lock && cpu_local()->current_thread &&
                 !cpu_local()->current_thread->is_kernel_worker) {
                 /* Use no-IRQ variant: runtime_lock is held for the entire runtime-locked timeslice.
-                 * spinlock_lock would cli for that whole duration, suppressing keyboard
+                 * ksync_spinlock_lock would cli for that whole duration, suppressing keyboard
                  * and mouse IRQ delivery.  No interrupt handler acquires runtime_lock, so
                  * the full irq-disable contract is not needed here. */
-                spinlock_lock_noirq(&cpu_local()->current_process->runtime_lock);
+                ksync_spinlock_lock_noirq(&cpu_local()->current_process->runtime_lock);
                 cpu_local()->current_process->runtime_lock_owner = cpu_local()->current_thread->tid;
                 cpu_local()->last_run_result = entry_fn(cpu_local()->current_process, cpu_local()->current_process->arg);
                 cpu_local()->current_process->runtime_lock_owner = 0;
-                spinlock_unlock_noirq(&cpu_local()->current_process->runtime_lock);
+                ksync_spinlock_unlock_noirq(&cpu_local()->current_process->runtime_lock);
             } else {
                 cpu_local()->last_run_result = entry_fn(cpu_local()->current_process, cpu_local()->current_process->arg);
             }
@@ -932,7 +932,7 @@ cpu_local_sched_ctx(void)
 
 void process_init(void) {
     g_next_pid = 1;
-    spinlock_init(&g_process_table_lock);
+    ksync_spinlock_init(&g_process_table_lock);
     cpu_local()->last_index = 0;
     cpu_local()->current_pid = 0;
     cpu_local()->need_resched = 0;
@@ -1017,17 +1017,17 @@ process_spawn_as_internal(uint32_t parent_pid,
         return -1;
     }
 
-    spinlock_lock(&g_process_table_lock);
+    ksync_spinlock_lock(&g_process_table_lock);
     process_t *slot = process_find_slot();
     if (!slot) {
-        spinlock_unlock(&g_process_table_lock);
+        ksync_spinlock_unlock(&g_process_table_lock);
         return -1;
     }
     /* Reserve the slot immediately so no other CPU grabs it. */
     slot->state = PROCESS_STATE_ALIVE;
 
     uint32_t pid = g_next_pid++;
-    spinlock_unlock(&g_process_table_lock);
+    ksync_spinlock_unlock(&g_process_table_lock);
     mm_context_t *ctx = mm_context_create(pid);
     if (!ctx) {
         return -1;
@@ -1098,7 +1098,7 @@ process_spawn_as_internal(uint32_t parent_pid,
                 sched_default_prio(slot->is_idle, 0, 0, 0));
         }
     }
-    spinlock_init(&slot->runtime_lock);
+    ksync_spinlock_init(&slot->runtime_lock);
     slot->runtime_lock_owner = 0;
     sched_event_init(&slot->wait_event, SCHED_EVENT_TYPE_PROCESS);
     if (strcmp(name, "process-manager") == 0 ||
@@ -1277,7 +1277,7 @@ int process_spawn_idle(const char *name, process_entry_t entry, void *arg, uint3
             cpu_local()->idle_thread = main_thread;
         }
     }
-    spinlock_init(&slot->runtime_lock);
+    ksync_spinlock_init(&slot->runtime_lock);
     slot->runtime_lock_owner = 0;
     sched_event_init(&slot->wait_event, SCHED_EVENT_TYPE_PROCESS);
     g_idle_process = slot;
@@ -1761,9 +1761,9 @@ static int process_schedule_once_impl(void) {
     sched_timeout_check();
 
     cpu_sched_t *cs = cpu_sched();
-    spinlock_lock(&cs->lock);
+    ksync_spinlock_lock(&cs->lock);
     thread_t *thread = cpu_sched_pick_next(cs);
-    spinlock_unlock(&cs->lock);
+    ksync_spinlock_unlock(&cs->lock);
     if (thread == cs->idle) {
         thread_t *stolen = cpu_sched_try_steal(cpu_local()->cpu_id);
         if (stolen) {
@@ -2009,12 +2009,12 @@ static int process_schedule_once_impl(void) {
          * woke the thread via sched_event_wake_one. */
         if (thread->wait_event) {
             sched_event_t *_ev = thread->wait_event;
-            spinlock_lock(&_ev->lock);
+            ksync_spinlock_lock(&_ev->lock);
             if (!list_head_empty(&thread->event_node)) {
                 list_head_del(&thread->event_node);
             }
             thread->wait_event = 0;
-            spinlock_unlock(&_ev->lock);
+            ksync_spinlock_unlock(&_ev->lock);
             __atomic_store_n(&thread->blocking_transition, 0, __ATOMIC_RELEASE);
         }
         thread_set_state(thread->tid, THREAD_STATE_READY, THREAD_BLOCK_NONE);

@@ -4,7 +4,7 @@
 #ifdef WASMOS_SCHED_THREADABLE
 
 #include <stdint.h>
-#include "spinlock.h"
+#include "sync/spinlock.h"
 #include "sched_list.h"
 
 typedef enum {
@@ -26,7 +26,7 @@ typedef enum {
 } sched_pend_state_t;
 
 typedef struct {
-    spinlock_t          lock;
+    ksync_spinlock_t          lock;
     list_head_t         wait_list; /* thread_t.event_node members */
     uint32_t            cnt;       /* semaphore count (IPC / SELECT) */
     sched_event_type_t  type;

@@ -7,7 +7,7 @@
 #include "ipc.h"
 #include "memory.h"
 #include "paging.h"
-#include "spinlock.h"
+#include "sync/spinlock.h"
 #include "stdlib.h"
 #include "string.h"
 
@@ -31,7 +31,7 @@ typedef struct {
 } futex_t;
 
 static struct {
-    spinlock_t lock;
+    ksync_spinlock_t lock;
     futex_t   *head;
 } g_futex_table[FUTEX_TABLE_SIZE];
 
@@ -45,7 +45,7 @@ void
 futex_init(void)
 {
     for (uint32_t i = 0; i < FUTEX_TABLE_SIZE; i++) {
-        spinlock_init(&g_futex_table[i].lock);
+        ksync_spinlock_init(&g_futex_table[i].lock);
         g_futex_table[i].head = 0;
     }
 }
@@ -106,26 +106,26 @@ futex_wait(uint32_t uaddr, uint32_t expected,
     }
 
     uint32_t bucket = futex_bucket(paddr);
-    spinlock_lock(&g_futex_table[bucket].lock);
+    ksync_spinlock_lock(&g_futex_table[bucket].lock);
 
     futex_t *ft = futex_find(paddr, bucket);
     if (!ft) {
         ft = futex_alloc(paddr, bucket);
         if (!ft) {
-            spinlock_unlock(&g_futex_table[bucket].lock);
+            ksync_spinlock_unlock(&g_futex_table[bucket].lock);
             return IPC_ERR_FULL;
         }
     }
 
     /* Lock the event before releasing the bucket lock so no wake is missed. */
-    spinlock_lock(&ft->event.lock);
-    spinlock_unlock(&g_futex_table[bucket].lock);
+    ksync_spinlock_lock(&ft->event.lock);
+    ksync_spinlock_unlock(&g_futex_table[bucket].lock);
 
     /* Re-read the futex word under the event lock to prevent the lost-wakeup
      * race: if the word already changed, return immediately. */
     uint32_t *kaddr = (uint32_t *)(uintptr_t)(paddr + KERNEL_HIGHER_HALF_BASE);
     if (*kaddr != expected) {
-        spinlock_unlock(&ft->event.lock);
+        ksync_spinlock_unlock(&ft->event.lock);
         return 0;
     }
 
@@ -148,16 +148,16 @@ futex_wake(uint32_t uaddr, uint32_t count, uint32_t context_id)
     }
 
     uint32_t bucket = futex_bucket(paddr);
-    spinlock_lock(&g_futex_table[bucket].lock);
+    ksync_spinlock_lock(&g_futex_table[bucket].lock);
 
     futex_t *ft = futex_find(paddr, bucket);
     if (!ft) {
-        spinlock_unlock(&g_futex_table[bucket].lock);
+        ksync_spinlock_unlock(&g_futex_table[bucket].lock);
         return 0;
     }
 
-    spinlock_lock(&ft->event.lock);
-    spinlock_unlock(&g_futex_table[bucket].lock);
+    ksync_spinlock_lock(&ft->event.lock);
+    ksync_spinlock_unlock(&g_futex_table[bucket].lock);
 
     int woken = 0;
     for (uint32_t i = 0; i < count; i++) {
@@ -168,7 +168,7 @@ futex_wake(uint32_t uaddr, uint32_t count, uint32_t context_id)
         woken++;
     }
 
-    spinlock_unlock(&ft->event.lock);
+    ksync_spinlock_unlock(&ft->event.lock);
     return woken;
 }
 

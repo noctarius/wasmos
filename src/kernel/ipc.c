@@ -2,7 +2,7 @@
 #include "list.h"
 #include "process.h"
 #include "thread.h"
-#include "spinlock.h"
+#include "sync/spinlock.h"
 #include "paging.h"
 #include "stdlib.h"
 #include "string.h"
@@ -21,7 +21,7 @@ typedef struct {
     uint32_t in_use;
     ipc_endpoint_type_t type;
     uint32_t owner_context_id;
-    spinlock_t lock;
+    ksync_spinlock_t lock;
     ipc_message_t queue[IPC_QUEUE_DEPTH];
     uint32_t head;
     uint32_t tail;
@@ -51,15 +51,15 @@ typedef struct ipc_select {
 
 #define IPC_SELECT_TABLE_SIZE 32u
 static ipc_select_t g_select_table[IPC_SELECT_TABLE_SIZE];
-static spinlock_t   g_select_table_lock;
+static ksync_spinlock_t   g_select_table_lock;
 
 static list_t g_endpoint_table;
-static spinlock_t g_endpoint_table_lock;
+static ksync_spinlock_t g_endpoint_table_lock;
 static uint32_t g_next_endpoint_id;
 
 /*
  * Returns the endpoint with ep->lock held.  The caller must call
- * spinlock_unlock(&ep->lock) when done.  Lock order: g_endpoint_table_lock ->
+ * ksync_spinlock_unlock(&ep->lock) when done.  Lock order: g_endpoint_table_lock ->
  * ep->lock.  ep->lock is acquired under g_endpoint_table_lock so that
  * ipc_endpoints_release_owner cannot remove the endpoint between the lookup
  * and the caller's first use.
@@ -71,17 +71,17 @@ ipc_endpoint_get(uint32_t endpoint_id)
     if (endpoint_id == 0 || endpoint_id == IPC_ENDPOINT_NONE) {
         return 0;
     }
-    spinlock_lock(&g_endpoint_table_lock);
+    ksync_spinlock_lock(&g_endpoint_table_lock);
     ipc_endpoint_t *ep = (ipc_endpoint_t *)list_first(&g_endpoint_table, &it);
     while (ep) {
         if (ep->id == endpoint_id && ep->in_use) {
-            spinlock_lock(&ep->lock);
-            spinlock_unlock(&g_endpoint_table_lock);
+            ksync_spinlock_lock(&ep->lock);
+            ksync_spinlock_unlock(&g_endpoint_table_lock);
             return ep; /* returned with ep->lock held */
         }
         ep = (ipc_endpoint_t *)list_next(&it);
     }
-    spinlock_unlock(&g_endpoint_table_lock);
+    ksync_spinlock_unlock(&g_endpoint_table_lock);
     return 0;
 }
 
@@ -97,28 +97,28 @@ ipc_endpoint_owner_context(uint32_t endpoint_id)
     if (endpoint_id == 0 || endpoint_id == IPC_ENDPOINT_NONE) {
         return 0;
     }
-    spinlock_lock(&g_endpoint_table_lock);
+    ksync_spinlock_lock(&g_endpoint_table_lock);
     ipc_endpoint_t *ep = (ipc_endpoint_t *)list_first(&g_endpoint_table, &it);
     while (ep) {
         if (ep->id == endpoint_id && ep->in_use) {
             uint32_t ctx = ep->owner_context_id;
-            spinlock_unlock(&g_endpoint_table_lock);
+            ksync_spinlock_unlock(&g_endpoint_table_lock);
             return ctx;
         }
         ep = (ipc_endpoint_t *)list_next(&it);
     }
-    spinlock_unlock(&g_endpoint_table_lock);
+    ksync_spinlock_unlock(&g_endpoint_table_lock);
     return 0;
 }
 
 void ipc_init(void) {
-    spinlock_init(&g_endpoint_table_lock);
+    ksync_spinlock_init(&g_endpoint_table_lock);
     g_next_endpoint_id = 1;
     if (list_init(&g_endpoint_table, (uint32_t)sizeof(ipc_endpoint_t),
                   LIST_IMPL_ARRAY_CHUNK, IPC_ENDPOINT_TABLE_CHUNK) != 0) {
         for (;;) {}
     }
-    spinlock_init(&g_select_table_lock);
+    ksync_spinlock_init(&g_select_table_lock);
     memset(g_select_table, 0, sizeof(g_select_table));
     for (uint32_t i = 0; i < IPC_SELECT_TABLE_SIZE; i++) {
         sched_event_init(&g_select_table[i].event, SCHED_EVENT_TYPE_SELECT);
@@ -129,10 +129,10 @@ int ipc_endpoint_create(uint32_t owner_context_id, uint32_t *out_endpoint) {
     if (!out_endpoint) {
         return IPC_ERR_INVALID;
     }
-    spinlock_lock(&g_endpoint_table_lock);
+    ksync_spinlock_lock(&g_endpoint_table_lock);
     ipc_endpoint_t *ep = (ipc_endpoint_t *)list_alloc(&g_endpoint_table);
     if (!ep) {
-        spinlock_unlock(&g_endpoint_table_lock);
+        ksync_spinlock_unlock(&g_endpoint_table_lock);
         return IPC_ERR_FULL;
     }
     ep->id = g_next_endpoint_id++;
@@ -146,11 +146,11 @@ int ipc_endpoint_create(uint32_t owner_context_id, uint32_t *out_endpoint) {
     ep->tail = 0;
     ep->count = 0;
     ep->notify_count = 0;
-    spinlock_init(&ep->lock);
+    ksync_spinlock_init(&ep->lock);
     sched_event_init(&ep->event, SCHED_EVENT_TYPE_IPC);
     ep->poll_struct = 0;
     uint32_t id = ep->id;
-    spinlock_unlock(&g_endpoint_table_lock);
+    ksync_spinlock_unlock(&g_endpoint_table_lock);
     *out_endpoint = id;
     return IPC_OK;
 }
@@ -159,10 +159,10 @@ int ipc_notification_create(uint32_t owner_context_id, uint32_t *out_endpoint) {
     if (!out_endpoint) {
         return IPC_ERR_INVALID;
     }
-    spinlock_lock(&g_endpoint_table_lock);
+    ksync_spinlock_lock(&g_endpoint_table_lock);
     ipc_endpoint_t *ep = (ipc_endpoint_t *)list_alloc(&g_endpoint_table);
     if (!ep) {
-        spinlock_unlock(&g_endpoint_table_lock);
+        ksync_spinlock_unlock(&g_endpoint_table_lock);
         return IPC_ERR_FULL;
     }
     ep->id = g_next_endpoint_id++;
@@ -176,11 +176,11 @@ int ipc_notification_create(uint32_t owner_context_id, uint32_t *out_endpoint) {
     ep->tail = 0;
     ep->count = 0;
     ep->notify_count = 0;
-    spinlock_init(&ep->lock);
+    ksync_spinlock_init(&ep->lock);
     sched_event_init(&ep->event, SCHED_EVENT_TYPE_IPC);
     ep->poll_struct = 0;
     uint32_t id = ep->id;
-    spinlock_unlock(&g_endpoint_table_lock);
+    ksync_spinlock_unlock(&g_endpoint_table_lock);
     *out_endpoint = id;
     return IPC_OK;
 }
@@ -191,11 +191,11 @@ int ipc_endpoint_owner(uint32_t endpoint, uint32_t *out_owner_context_id) {
         return IPC_ERR_INVALID;
     }
     if (!out_owner_context_id) {
-        spinlock_unlock(&ep->lock);
+        ksync_spinlock_unlock(&ep->lock);
         return IPC_ERR_INVALID;
     }
     *out_owner_context_id = ep->owner_context_id;
-    spinlock_unlock(&ep->lock);
+    ksync_spinlock_unlock(&ep->lock);
     return IPC_OK;
 }
 
@@ -205,11 +205,11 @@ int ipc_endpoint_count(uint32_t endpoint, uint32_t *out_count) {
         return IPC_ERR_INVALID;
     }
     if (!out_count) {
-        spinlock_unlock(&ep->lock);
+        ksync_spinlock_unlock(&ep->lock);
         return IPC_ERR_INVALID;
     }
     *out_count = ep->count;
-    spinlock_unlock(&ep->lock);
+    ksync_spinlock_unlock(&ep->lock);
     return IPC_OK;
 }
 
@@ -238,12 +238,12 @@ int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_messa
         return IPC_ERR_INVALID;
     }
     if (ep->type != IPC_ENDPOINT_TYPE_MESSAGE) {
-        spinlock_unlock(&ep->lock);
+        ksync_spinlock_unlock(&ep->lock);
         return IPC_ERR_INVALID;
     }
 
     if (ep->count >= IPC_QUEUE_DEPTH) {
-        spinlock_unlock(&ep->lock);
+        ksync_spinlock_unlock(&ep->lock);
         return IPC_ERR_FULL;
     }
 
@@ -252,12 +252,12 @@ int ipc_send_from(uint32_t sender_context_id, uint32_t endpoint, const ipc_messa
     ep->queue[ep->tail] = msg;
     ep->tail = (ep->tail + 1u) % IPC_QUEUE_DEPTH;
     ep->count++;
-    spinlock_lock(&ep->event.lock);
+    ksync_spinlock_lock(&ep->event.lock);
     sched_event_wake_one(&ep->event, 0, SCHED_PEND_OK);
-    spinlock_unlock(&ep->event.lock);
+    ksync_spinlock_unlock(&ep->event.lock);
     poll_struct_t *ps = ep->poll_struct;
     uint32_t ep_id = ep->id;
-    spinlock_unlock(&ep->lock);
+    ksync_spinlock_unlock(&ep->lock);
     if (ps) {
         poll_notify(ps, POLL_EV_IN, ep_id);
     }
@@ -268,18 +268,18 @@ int ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t 
     ipc_endpoint_t *ep = ipc_endpoint_get(endpoint);
     if (!ep || !out_message) {
         if (ep) {
-            spinlock_unlock(&ep->lock);
+            ksync_spinlock_unlock(&ep->lock);
         }
         return IPC_ERR_INVALID;
     }
     if (ep->type != IPC_ENDPOINT_TYPE_MESSAGE) {
-        spinlock_unlock(&ep->lock);
+        ksync_spinlock_unlock(&ep->lock);
         return IPC_ERR_INVALID;
     }
 
     if (receiver_context_id != IPC_CONTEXT_KERNEL &&
         ep->owner_context_id != receiver_context_id) {
-        spinlock_unlock(&ep->lock);
+        ksync_spinlock_unlock(&ep->lock);
         return IPC_ERR_PERM;
     }
 
@@ -287,14 +287,14 @@ int ipc_recv_for(uint32_t receiver_context_id, uint32_t endpoint, ipc_message_t 
         /* Non-blocking poll must not register a waiter. On SMP a sender can
          * otherwise "wake" a thread that never actually blocked, turning a
          * still-running thread back into READY on another CPU. */
-        spinlock_unlock(&ep->lock);
+        ksync_spinlock_unlock(&ep->lock);
         return IPC_EMPTY;
     }
 
     *out_message = ep->queue[ep->head];
     ep->head = (ep->head + 1u) % IPC_QUEUE_DEPTH;
     ep->count--;
-    spinlock_unlock(&ep->lock);
+    ksync_spinlock_unlock(&ep->lock);
     return IPC_OK;
 }
 
@@ -303,34 +303,34 @@ int ipc_recv_blocking_for(uint32_t receiver_context_id, uint32_t endpoint,
 {
     ipc_endpoint_t *ep = ipc_endpoint_get(endpoint);
     if (!ep || !out_message) {
-        if (ep) spinlock_unlock(&ep->lock);
+        if (ep) ksync_spinlock_unlock(&ep->lock);
         return IPC_ERR_INVALID;
     }
     if (ep->type != IPC_ENDPOINT_TYPE_MESSAGE) {
-        spinlock_unlock(&ep->lock);
+        ksync_spinlock_unlock(&ep->lock);
         return IPC_ERR_INVALID;
     }
     if (receiver_context_id != IPC_CONTEXT_KERNEL &&
         ep->owner_context_id != receiver_context_id) {
-        spinlock_unlock(&ep->lock);
+        ksync_spinlock_unlock(&ep->lock);
         return IPC_ERR_PERM;
     }
     if (ep->count == 0) {
         /* Block until a sender enqueues a message and wakes us. */
-        spinlock_lock(&ep->event.lock);
-        spinlock_unlock(&ep->lock);
+        ksync_spinlock_lock(&ep->event.lock);
+        ksync_spinlock_unlock(&ep->lock);
         sched_event_wait(&ep->event, 0);
         ep = ipc_endpoint_get(endpoint);
         if (!ep) return IPC_ERR_INVALID;
         if (ep->count == 0) {
-            spinlock_unlock(&ep->lock);
+            ksync_spinlock_unlock(&ep->lock);
             return IPC_EMPTY;  /* spurious wake; caller should retry */
         }
     }
     *out_message = ep->queue[ep->head];
     ep->head = (ep->head + 1u) % IPC_QUEUE_DEPTH;
     ep->count--;
-    spinlock_unlock(&ep->lock);
+    ksync_spinlock_unlock(&ep->lock);
     return IPC_OK;
 }
 
@@ -340,22 +340,22 @@ int ipc_notify_from(uint32_t sender_context_id, uint32_t endpoint) {
         return IPC_ERR_INVALID;
     }
     if (ep->type != IPC_ENDPOINT_TYPE_NOTIFICATION) {
-        spinlock_unlock(&ep->lock);
+        ksync_spinlock_unlock(&ep->lock);
         return IPC_ERR_INVALID;
     }
     if (sender_context_id != IPC_CONTEXT_KERNEL &&
         sender_context_id != ep->owner_context_id) {
-        spinlock_unlock(&ep->lock);
+        ksync_spinlock_unlock(&ep->lock);
         return IPC_ERR_PERM;
     }
 
     if (ep->notify_count != UINT32_MAX) {
         ep->notify_count++;
     }
-    spinlock_lock(&ep->event.lock);
+    ksync_spinlock_lock(&ep->event.lock);
     sched_event_wake_one(&ep->event, 0, SCHED_PEND_OK);
-    spinlock_unlock(&ep->event.lock);
-    spinlock_unlock(&ep->lock);
+    ksync_spinlock_unlock(&ep->event.lock);
+    ksync_spinlock_unlock(&ep->lock);
     return IPC_OK;
 }
 
@@ -365,23 +365,23 @@ int ipc_wait_for(uint32_t receiver_context_id, uint32_t endpoint) {
         return IPC_ERR_INVALID;
     }
     if (ep->type != IPC_ENDPOINT_TYPE_NOTIFICATION) {
-        spinlock_unlock(&ep->lock);
+        ksync_spinlock_unlock(&ep->lock);
         return IPC_ERR_INVALID;
     }
     if (receiver_context_id != IPC_CONTEXT_KERNEL &&
         ep->owner_context_id != receiver_context_id) {
-        spinlock_unlock(&ep->lock);
+        ksync_spinlock_unlock(&ep->lock);
         return IPC_ERR_PERM;
     }
 
     if (ep->notify_count == 0) {
         /* Non-blocking notify poll must not arm event wake state for a thread
          * that is still running. */
-        spinlock_unlock(&ep->lock);
+        ksync_spinlock_unlock(&ep->lock);
         return IPC_EMPTY;
     }
     ep->notify_count--;
-    spinlock_unlock(&ep->lock);
+    ksync_spinlock_unlock(&ep->lock);
     return IPC_OK;
 }
 
@@ -407,29 +407,29 @@ ipc_endpoints_release_owner(uint32_t owner_context_id)
     if (owner_context_id == 0) {
         return;
     }
-    spinlock_lock(&g_endpoint_table_lock);
+    ksync_spinlock_lock(&g_endpoint_table_lock);
     list_iter_t it;
     ipc_endpoint_t *ep = (ipc_endpoint_t *)list_first(&g_endpoint_table, &it);
     while (ep) {
         ipc_endpoint_t *next = (ipc_endpoint_t *)list_next(&it);
         if (ep->in_use && ep->owner_context_id == owner_context_id) {
-            spinlock_lock(&ep->lock);
+            ksync_spinlock_lock(&ep->lock);
             if (ep->in_use && ep->owner_context_id == owner_context_id) {
                 ep->in_use = 0;
-                spinlock_lock(&ep->event.lock);
+                ksync_spinlock_lock(&ep->event.lock);
                 sched_event_abort_all(&ep->event);
-                spinlock_unlock(&ep->event.lock);
+                ksync_spinlock_unlock(&ep->event.lock);
                 if (ep->poll_struct) {
                     poll_struct_free(ep->poll_struct);
                     ep->poll_struct = 0;
                 }
             }
-            spinlock_unlock(&ep->lock);
+            ksync_spinlock_unlock(&ep->lock);
             list_remove(&g_endpoint_table, ep);
         }
         ep = next;
     }
-    spinlock_unlock(&g_endpoint_table_lock);
+    ksync_spinlock_unlock(&g_endpoint_table_lock);
 }
 
 /* -------------------------------------------------------------------------
@@ -460,7 +460,7 @@ ipc_select_create(uint32_t owner_context_id, uint32_t *out_select_id)
     if (!out_select_id) {
         return IPC_ERR_INVALID;
     }
-    spinlock_lock(&g_select_table_lock);
+    ksync_spinlock_lock(&g_select_table_lock);
     for (uint32_t i = 0; i < IPC_SELECT_TABLE_SIZE; i++) {
         ipc_select_t *sel = &g_select_table[i];
         if (!sel->in_use) {
@@ -470,11 +470,11 @@ ipc_select_create(uint32_t owner_context_id, uint32_t *out_select_id)
             sel->ep_count         = 0;
             sched_event_init(&sel->event, SCHED_EVENT_TYPE_SELECT);
             *out_select_id = i + 1u;
-            spinlock_unlock(&g_select_table_lock);
+            ksync_spinlock_unlock(&g_select_table_lock);
             return IPC_OK;
         }
     }
-    spinlock_unlock(&g_select_table_lock);
+    ksync_spinlock_unlock(&g_select_table_lock);
     return IPC_ERR_FULL;
 }
 
@@ -482,14 +482,14 @@ int
 ipc_select_add(uint32_t select_id, uint32_t endpoint_id,
                uint32_t owner_context_id)
 {
-    spinlock_lock(&g_select_table_lock);
+    ksync_spinlock_lock(&g_select_table_lock);
     ipc_select_t *sel = ipc_select_find(select_id, owner_context_id);
     if (!sel) {
-        spinlock_unlock(&g_select_table_lock);
+        ksync_spinlock_unlock(&g_select_table_lock);
         return IPC_ERR_INVALID;
     }
     if (sel->ep_count >= IPC_SELECT_EPS_MAX) {
-        spinlock_unlock(&g_select_table_lock);
+        ksync_spinlock_unlock(&g_select_table_lock);
         return IPC_ERR_FULL;
     }
     sel->ep_ids[sel->ep_count++] = endpoint_id;
@@ -503,10 +503,10 @@ ipc_select_add(uint32_t select_id, uint32_t endpoint_id,
         if (ep->poll_struct) {
             poll_struct_add(ep->poll_struct, POLL_EV_IN, sel, 0);
         }
-        spinlock_unlock(&ep->lock);
+        ksync_spinlock_unlock(&ep->lock);
     }
 
-    spinlock_unlock(&g_select_table_lock);
+    ksync_spinlock_unlock(&g_select_table_lock);
     return IPC_OK;
 }
 
@@ -518,17 +518,17 @@ ipc_select_wait(uint32_t select_id, uint32_t owner_context_id,
         return IPC_ERR_INVALID;
     }
 
-    spinlock_lock(&g_select_table_lock);
+    ksync_spinlock_lock(&g_select_table_lock);
     ipc_select_t *sel = ipc_select_find(select_id, owner_context_id);
     if (!sel) {
-        spinlock_unlock(&g_select_table_lock);
+        ksync_spinlock_unlock(&g_select_table_lock);
         return IPC_ERR_INVALID;
     }
 
     if (sel->ready_ep != IPC_ENDPOINT_NONE) {
         *out_ready_ep = sel->ready_ep;
         sel->ready_ep = IPC_ENDPOINT_NONE;
-        spinlock_unlock(&g_select_table_lock);
+        ksync_spinlock_unlock(&g_select_table_lock);
         return IPC_OK;
     }
 
@@ -540,15 +540,15 @@ ipc_select_wait(uint32_t select_id, uint32_t owner_context_id,
      * Without this ordering, signal() could set ready_ep and find an empty
      * wait_list in the gap between the ready_ep check above and the
      * sched_event_wait() call below. */
-    spinlock_lock(&sel->event.lock);
-    spinlock_unlock(&g_select_table_lock);
+    ksync_spinlock_lock(&sel->event.lock);
+    ksync_spinlock_unlock(&g_select_table_lock);
 
     /* Re-check under event.lock: if signal() fired between the ready_ep check
      * above and our acquisition of event.lock, ready_ep is already set. */
     if (sel->ready_ep != IPC_ENDPOINT_NONE) {
         *out_ready_ep = sel->ready_ep;
         sel->ready_ep = IPC_ENDPOINT_NONE;
-        spinlock_unlock(&sel->event.lock);
+        ksync_spinlock_unlock(&sel->event.lock);
         return IPC_OK;
     }
 
@@ -557,14 +557,14 @@ ipc_select_wait(uint32_t select_id, uint32_t owner_context_id,
     sched_event_wait(&sel->event, timeout_ms);
 
     /* After wake: re-check under event.lock (same lock as ipc_select_signal). */
-    spinlock_lock(&sel->event.lock);
+    ksync_spinlock_lock(&sel->event.lock);
     if (sel->ready_ep == IPC_ENDPOINT_NONE) {
-        spinlock_unlock(&sel->event.lock);
+        ksync_spinlock_unlock(&sel->event.lock);
         return IPC_EMPTY;  /* spurious wake; caller must retry */
     }
     *out_ready_ep = sel->ready_ep;
     sel->ready_ep = IPC_ENDPOINT_NONE;
-    spinlock_unlock(&sel->event.lock);
+    ksync_spinlock_unlock(&sel->event.lock);
     return IPC_OK;
 }
 
@@ -623,10 +623,10 @@ ipc_select_recv(uint32_t select_id, uint32_t owner_context_id,
 void
 ipc_select_destroy(uint32_t select_id, uint32_t owner_context_id)
 {
-    spinlock_lock(&g_select_table_lock);
+    ksync_spinlock_lock(&g_select_table_lock);
     ipc_select_t *sel = ipc_select_find(select_id, owner_context_id);
     if (!sel) {
-        spinlock_unlock(&g_select_table_lock);
+        ksync_spinlock_unlock(&g_select_table_lock);
         return;
     }
     /* Remove push watchers from all watched endpoints. */
@@ -636,16 +636,16 @@ ipc_select_destroy(uint32_t select_id, uint32_t owner_context_id)
             if (ep->poll_struct) {
                 poll_struct_remove(ep->poll_struct, sel);
             }
-            spinlock_unlock(&ep->lock);
+            ksync_spinlock_unlock(&ep->lock);
         }
     }
     /* Wake any blocked waiter with ABORT. */
-    spinlock_lock(&sel->event.lock);
+    ksync_spinlock_lock(&sel->event.lock);
     sched_event_abort_all(&sel->event);
-    spinlock_unlock(&sel->event.lock);
+    ksync_spinlock_unlock(&sel->event.lock);
     sel->in_use   = 0;
     sel->ep_count = 0;
-    spinlock_unlock(&g_select_table_lock);
+    ksync_spinlock_unlock(&g_select_table_lock);
 }
 
 void
@@ -657,8 +657,8 @@ ipc_select_signal(struct ipc_select *sel, uint32_t ep_id)
     /* event.lock protects both ready_ep and the wait_list, matching
      * ipc_select_wait()'s critical section.  The old sel->lock is removed:
      * it was a separate spinlock that created the SMP lost-wakeup race. */
-    spinlock_lock(&sel->event.lock);
+    ksync_spinlock_lock(&sel->event.lock);
     sel->ready_ep = ep_id;
     sched_event_wake_one(&sel->event, ep_id, SCHED_PEND_OK);
-    spinlock_unlock(&sel->event.lock);
+    ksync_spinlock_unlock(&sel->event.lock);
 }

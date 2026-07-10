@@ -3,7 +3,7 @@
 #include "sched.h"
 #include "thread.h"
 #include "process.h"
-#include "spinlock.h"
+#include "sync/spinlock.h"
 #include "serial.h"
 #include "string.h"
 #include "arch/x86_64/smp.h"
@@ -85,7 +85,7 @@ cpu_sched_load_on(uint32_t cpu_id)
 void
 cpu_sched_init(cpu_sched_t *cs)
 {
-    spinlock_init(&cs->lock);
+    ksync_spinlock_init(&cs->lock);
     cs->ready_bitmap = 0;
     for (int i = 0; i < SCHED_PRIO_MAX; i++) {
         list_head_init(&cs->ready_list[i]);
@@ -116,19 +116,19 @@ cpu_sched_enqueue(cpu_sched_t *cs, thread_t *t)
             return;
         }
     }
-    spinlock_lock(&cs->lock);
+    ksync_spinlock_lock(&cs->lock);
     /* SMP wake/block races can reach enqueue from multiple CPUs for the same
      * READY thread.  sched_node self-links when detached from any list, so
      * use that as the single source of truth and drop duplicate inserts. */
     if (!list_head_empty(&t->sched_node)) {
-        spinlock_unlock(&cs->lock);
+        ksync_spinlock_unlock(&cs->lock);
         return;
     }
     uint8_t prio = t->sched_prio;
     list_head_add_tail(&cs->ready_list[prio], &t->sched_node);
     cs->thread_count[prio]++;
     cs->ready_bitmap |= (uint8_t)(1u << prio);
-    spinlock_unlock(&cs->lock);
+    ksync_spinlock_unlock(&cs->lock);
 }
 
 void
@@ -401,16 +401,16 @@ cpu_sched_try_steal(uint32_t my_cpu_id)
         if (!remote->ready_bitmap) {
             continue;
         }
-        if (!spinlock_try_lock(&remote->lock)) {
+        if (!ksync_spinlock_try_lock(&remote->lock)) {
             continue;
         }
         struct thread *t = NULL;
         if (remote->ready_bitmap) {
             t = cpu_sched_steal_pick(remote);
         }
-        /* spinlock_try_lock does not call preempt_disable/spinlock_irq_save,
+        /* ksync_spinlock_try_lock does not call preempt_disable/spinlock_irq_save,
          * so we must release with the matching no-IRQ variant. */
-        spinlock_unlock_noirq(&remote->lock);
+        ksync_spinlock_unlock_noirq(&remote->lock);
         if (t) {
             t->last_cpu = my_cpu_id;
             cpu_local()->steal_count++;

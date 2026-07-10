@@ -17,7 +17,7 @@
 void
 sched_event_init(sched_event_t *ev, sched_event_type_t type)
 {
-    spinlock_init(&ev->lock);
+    ksync_spinlock_init(&ev->lock);
     list_head_init(&ev->wait_list);
     ev->cnt  = 0;
     ev->type = type;
@@ -76,16 +76,16 @@ sched_timeout_fire(thread_t *t)
     if (!ev) {
         return;   /* already woken by a normal waker */
     }
-    spinlock_lock(&ev->lock);
+    ksync_spinlock_lock(&ev->lock);
     if (t->wait_event == ev && !list_head_empty(&t->event_node)) {
         list_head_del(&t->event_node);
         t->wait_event = 0;
         t->pend_state = SCHED_PEND_TIMEOUT;
-        spinlock_unlock(&ev->lock);
+        ksync_spinlock_unlock(&ev->lock);
         sched_wake_thread(t);
     } else {
         /* A normal wake beat us to it (or the thread re-blocked elsewhere). */
-        spinlock_unlock(&ev->lock);
+        ksync_spinlock_unlock(&ev->lock);
     }
 }
 
@@ -129,7 +129,7 @@ sched_event_wait(sched_event_t *ev, uint32_t timeout_ms)
 {
     thread_t *t = thread_get(thread_current_tid());
     if (!t) {
-        spinlock_unlock(&ev->lock);
+        ksync_spinlock_unlock(&ev->lock);
         return;
     }
 
@@ -160,7 +160,7 @@ sched_event_wait(sched_event_t *ev, uint32_t timeout_ms)
     list_head_add_tail(&ev->wait_list, &t->event_node);
     thread_set_state(t->tid, THREAD_STATE_BLOCKED, THREAD_BLOCK_EVENT);
 
-    spinlock_unlock(&ev->lock);
+    ksync_spinlock_unlock(&ev->lock);
 
     /* Yield back to scheduler; blocking_transition is cleared by the
      * PROCESS_RUN_BLOCKED handling in process_schedule_once_impl. */

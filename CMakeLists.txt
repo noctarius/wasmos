@@ -1772,6 +1772,7 @@ add_custom_target(run-kernel-unit-tests
           -I${CMAKE_SOURCE_DIR}/tests/unit/include
           -I${KERNEL_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_subsystem_registry.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
           ${KERNEL_DIR}/subsystem_registry.c
           ${KERNEL_DIR}/hashmap.c
           ${KERNEL_DIR}/kmem.c
@@ -1782,6 +1783,7 @@ add_custom_target(run-kernel-unit-tests
           -I${CMAKE_SOURCE_DIR}/src/drivers/include
           -I${KERNEL_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_wasmos_exec_format.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
           ${KERNEL_DIR}/wasmos_exec_format.c
           ${KERNEL_DIR}/subsystem_registry.c
           ${KERNEL_DIR}/hashmap.c

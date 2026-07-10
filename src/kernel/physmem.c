@@ -5,7 +5,7 @@
 #include "paging.h"
 #include "klog.h"
 #include "kpanic.h"
-#include "spinlock.h"
+#include "sync/spinlock.h"
 #include "string.h"
 
 #define PAGE_SIZE 0x1000ULL
@@ -46,7 +46,7 @@ typedef struct {
 
 static pfa_range_t g_ranges[128];
 static uint32_t g_range_count;
-static spinlock_t g_pfa_lock;
+static ksync_spinlock_t g_pfa_lock;
 static uint64_t g_initial_total_pages;
 
 extern uint8_t __kernel_start;
@@ -235,7 +235,7 @@ static int pfa_upgrade_refcount(uint64_t *out_pages, uint64_t *out_alloc_pages) 
 }
 
 void pfa_init(const boot_info_t *boot_info) {
-    spinlock_init(&g_pfa_lock);
+    ksync_spinlock_init(&g_pfa_lock);
     g_range_count = 0;
     if (!boot_info || !boot_info->memory_map || boot_info->memory_desc_size == 0) {
         klog_write("[pfa] no memory map\n");
@@ -272,10 +272,10 @@ void pfa_init(const boot_info_t *boot_info) {
      * outside the lock to avoid klog_* → mm_shared_create → pfa_alloc_pages
      * re-entry on g_pfa_lock. */
     uint64_t rc_pages = 0, rc_alloc_pages = 0;
-    spinlock_lock(&g_pfa_lock);
+    ksync_spinlock_lock(&g_pfa_lock);
     int rc_status = pfa_upgrade_refcount(&rc_pages, &rc_alloc_pages);
     uint64_t test = pfa_alloc_pages_nolock(1);
-    spinlock_unlock(&g_pfa_lock);
+    ksync_spinlock_unlock(&g_pfa_lock);
 
     if (rc_status < 0) {
         klog_printf("[pfa] refcount upgrade failed: needed %llu pages\n",
@@ -312,9 +312,9 @@ uint64_t pfa_alloc_pages(uint64_t pages) {
     if (pages == 0) {
         return 0;
     }
-    spinlock_lock(&g_pfa_lock);
+    ksync_spinlock_lock(&g_pfa_lock);
     uint64_t addr = pfa_alloc_pages_nolock(pages);
-    spinlock_unlock(&g_pfa_lock);
+    ksync_spinlock_unlock(&g_pfa_lock);
     return addr;
 }
 
@@ -322,7 +322,7 @@ uint64_t pfa_alloc_pages_below(uint64_t pages, uint64_t max_addr) {
     if (pages == 0 || max_addr == 0) {
         return 0;
     }
-    spinlock_lock(&g_pfa_lock);
+    ksync_spinlock_lock(&g_pfa_lock);
     uint64_t limit = max_addr & ~(PAGE_SIZE - 1ULL);
     for (uint32_t i = 0; i < g_range_count; ++i) {
         pfa_range_t *range = &g_ranges[i];
@@ -347,10 +347,10 @@ uint64_t pfa_alloc_pages_below(uint64_t pages, uint64_t max_addr) {
             if (idx < g_tracked_pages)
                 g_refcount[idx] = 1;
         }
-        spinlock_unlock(&g_pfa_lock);
+        ksync_spinlock_unlock(&g_pfa_lock);
         return addr;
     }
-    spinlock_unlock(&g_pfa_lock);
+    ksync_spinlock_unlock(&g_pfa_lock);
     return 0;
 }
 
@@ -358,7 +358,7 @@ uint64_t pfa_alloc_pages_above(uint64_t pages, uint64_t min_addr) {
     if (pages == 0) {
         return 0;
     }
-    spinlock_lock(&g_pfa_lock);
+    ksync_spinlock_lock(&g_pfa_lock);
     uint64_t floor = (min_addr + PAGE_SIZE - 1ULL) & ~(PAGE_SIZE - 1ULL);
     for (uint32_t i = 0; i < g_range_count; ++i) {
         pfa_range_t *range = &g_ranges[i];
@@ -404,10 +404,10 @@ uint64_t pfa_alloc_pages_above(uint64_t pages, uint64_t min_addr) {
             if (idx < g_tracked_pages)
                 g_refcount[idx] = 1;
         }
-        spinlock_unlock(&g_pfa_lock);
+        ksync_spinlock_unlock(&g_pfa_lock);
         return start;
     }
-    spinlock_unlock(&g_pfa_lock);
+    ksync_spinlock_unlock(&g_pfa_lock);
     return 0;
 }
 
@@ -415,7 +415,7 @@ void pfa_free_pages(uint64_t base, uint64_t pages) {
     if (base == 0 || pages == 0) {
         return;
     }
-    spinlock_lock(&g_pfa_lock);
+    ksync_spinlock_lock(&g_pfa_lock);
     uint64_t run_start = 0, run_len = 0;
     for (uint64_t i = 0; i < pages; i++) {
         uint64_t phys = base + i * PAGE_SIZE;
@@ -441,14 +441,14 @@ void pfa_free_pages(uint64_t base, uint64_t pages) {
     if (run_len) {
         pfa_insert_range(run_start, run_len);
     }
-    spinlock_unlock(&g_pfa_lock);
+    ksync_spinlock_unlock(&g_pfa_lock);
 }
 
 void pfa_pin_pages(uint64_t base, uint64_t pages) {
     if (base == 0 || pages == 0) {
         return;
     }
-    spinlock_lock(&g_pfa_lock);
+    ksync_spinlock_lock(&g_pfa_lock);
     for (uint64_t i = 0; i < pages; i++) {
         uint64_t idx = (base + i * PAGE_SIZE) >> 12;
         if (idx < g_tracked_pages) {
@@ -459,7 +459,7 @@ void pfa_pin_pages(uint64_t base, uint64_t pages) {
             g_refcount[idx]++;
         }
     }
-    spinlock_unlock(&g_pfa_lock);
+    ksync_spinlock_unlock(&g_pfa_lock);
 }
 
 uint64_t pfa_total_bytes(void) {
@@ -467,11 +467,11 @@ uint64_t pfa_total_bytes(void) {
 }
 
 uint64_t pfa_free_bytes(void) {
-    spinlock_lock(&g_pfa_lock);
+    ksync_spinlock_lock(&g_pfa_lock);
     uint64_t free_pages = 0;
     for (uint32_t i = 0; i < g_range_count; ++i) {
         free_pages += g_ranges[i].pages;
     }
-    spinlock_unlock(&g_pfa_lock);
+    ksync_spinlock_unlock(&g_pfa_lock);
     return free_pages * PAGE_SIZE;
 }

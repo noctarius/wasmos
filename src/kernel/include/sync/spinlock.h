@@ -1,7 +1,7 @@
 #ifndef WASMOS_SYNC_SPINLOCK_H
 #define WASMOS_SYNC_SPINLOCK_H
 
-#include "spinlock.h"
+#include "arch/x86_64/spinlock.h"
 
 typedef spinlock_t ksync_spinlock_t;
 

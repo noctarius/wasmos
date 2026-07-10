@@ -34,12 +34,12 @@ typedef struct {
 
 static wasm_driver_thread_slot_t g_wasm_driver_thread_slots[WASM_DRIVER_THREAD_SLOTS];
 static wasm_driver_registry_slot_t g_wasm_driver_registry[PROCESS_MAX_COUNT];
-static spinlock_t g_wasm_driver_registry_lock;
+static ksync_spinlock_t g_wasm_driver_registry_lock;
 
 void
 wasm_driver_init(void)
 {
-    spinlock_init(&g_wasm_driver_registry_lock);
+    ksync_spinlock_init(&g_wasm_driver_registry_lock);
 }
 
 /* Per-pid runtime teardown hook (see process.h).  The wasm3 build has no
@@ -104,12 +104,12 @@ wasm_driver_registry_set(uint32_t owner_pid, wasm_driver_t *driver)
     if (owner_pid == 0 || !driver) {
         return;
     }
-    spinlock_lock(&g_wasm_driver_registry_lock);
+    ksync_spinlock_lock(&g_wasm_driver_registry_lock);
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_wasm_driver_registry[i].in_use &&
             g_wasm_driver_registry[i].owner_pid == owner_pid) {
             g_wasm_driver_registry[i].driver = driver;
-            spinlock_unlock(&g_wasm_driver_registry_lock);
+            ksync_spinlock_unlock(&g_wasm_driver_registry_lock);
             return;
         }
     }
@@ -121,7 +121,7 @@ wasm_driver_registry_set(uint32_t owner_pid, wasm_driver_t *driver)
             break;
         }
     }
-    spinlock_unlock(&g_wasm_driver_registry_lock);
+    ksync_spinlock_unlock(&g_wasm_driver_registry_lock);
 }
 
 static void
@@ -130,7 +130,7 @@ wasm_driver_registry_clear(uint32_t owner_pid, wasm_driver_t *driver)
     if (owner_pid == 0 || !driver) {
         return;
     }
-    spinlock_lock(&g_wasm_driver_registry_lock);
+    ksync_spinlock_lock(&g_wasm_driver_registry_lock);
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (!g_wasm_driver_registry[i].in_use ||
             g_wasm_driver_registry[i].owner_pid != owner_pid) {
@@ -143,7 +143,7 @@ wasm_driver_registry_clear(uint32_t owner_pid, wasm_driver_t *driver)
             break;
         }
     }
-    spinlock_unlock(&g_wasm_driver_registry_lock);
+    ksync_spinlock_unlock(&g_wasm_driver_registry_lock);
 }
 
 static wasm_driver_t *
@@ -153,7 +153,7 @@ wasm_driver_registry_get(uint32_t owner_pid)
     if (owner_pid == 0) {
         return 0;
     }
-    spinlock_lock(&g_wasm_driver_registry_lock);
+    ksync_spinlock_lock(&g_wasm_driver_registry_lock);
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_wasm_driver_registry[i].in_use &&
             g_wasm_driver_registry[i].owner_pid == owner_pid) {
@@ -161,7 +161,7 @@ wasm_driver_registry_get(uint32_t owner_pid)
             break;
         }
     }
-    spinlock_unlock(&g_wasm_driver_registry_lock);
+    ksync_spinlock_unlock(&g_wasm_driver_registry_lock);
     return driver;
 }
 
@@ -169,7 +169,7 @@ static wasm_driver_thread_slot_t *
 wasm_driver_thread_slot_alloc(void)
 {
     wasm_driver_thread_slot_t *slot = 0;
-    spinlock_lock(&g_wasm_driver_registry_lock);
+    ksync_spinlock_lock(&g_wasm_driver_registry_lock);
     for (uint32_t i = 0; i < WASM_DRIVER_THREAD_SLOTS; ++i) {
         if (!g_wasm_driver_thread_slots[i].in_use) {
             slot = &g_wasm_driver_thread_slots[i];
@@ -177,7 +177,7 @@ wasm_driver_thread_slot_alloc(void)
             break;
         }
     }
-    spinlock_unlock(&g_wasm_driver_registry_lock);
+    ksync_spinlock_unlock(&g_wasm_driver_registry_lock);
     return slot;
 }
 
@@ -187,9 +187,9 @@ wasm_driver_thread_slot_free(wasm_driver_thread_slot_t *slot)
     if (!slot) {
         return;
     }
-    spinlock_lock(&g_wasm_driver_registry_lock);
+    ksync_spinlock_lock(&g_wasm_driver_registry_lock);
     *slot = (wasm_driver_thread_slot_t){0};
-    spinlock_unlock(&g_wasm_driver_registry_lock);
+    ksync_spinlock_unlock(&g_wasm_driver_registry_lock);
 }
 
 /* Entry point for each WASM driver VM thread.
@@ -301,7 +301,7 @@ wasm_driver_start(wasm_driver_t *driver,
     wasm_driver_reset(driver);
     driver->manifest = *manifest;
     driver->owner_context_id = owner_context_id;
-    spinlock_init(&driver->lock);
+    ksync_spinlock_init(&driver->lock);
     process_t *owner = process_find_by_context(owner_context_id);
     driver->owner_pid = owner ? owner->pid : process_current_pid();
     wasm3_heap_configure(driver->owner_pid,
@@ -458,7 +458,7 @@ wasm_driver_call(wasm_driver_t *driver,
         return -1;
     }
 
-    spinlock_lock(&driver->lock);
+    ksync_spinlock_lock(&driver->lock);
     uint32_t previous_pid = wasm_driver_enter_runtime(driver);
     IM3Function func = NULL;
     M3Result res = m3_FindFunction(&func, driver->runtime, export_name);
@@ -474,7 +474,7 @@ wasm_driver_call(wasm_driver_t *driver,
         }
     }
     wasm_driver_leave_runtime(previous_pid);
-    spinlock_unlock(&driver->lock);
+    ksync_spinlock_unlock(&driver->lock);
     return ok == 0 ? 0 : -1;
 }
 

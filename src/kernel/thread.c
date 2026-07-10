@@ -3,11 +3,11 @@
  * its owner process's address space.  THREAD_MAX_COUNT limits total live threads. */
 #include "thread.h"
 #include "arch/x86_64/smp.h"
-#include "spinlock.h"
+#include "sync/spinlock.h"
 
 static thread_t g_threads[THREAD_MAX_COUNT];
 static uint32_t g_next_tid;
-static spinlock_t g_thread_table_lock;
+static ksync_spinlock_t g_thread_table_lock;
 
 static void
 thread_clear_ctx(process_context_t *ctx)
@@ -102,7 +102,7 @@ thread_copy_name(thread_t *thread, const char *name)
 void
 thread_init(void)
 {
-    spinlock_init(&g_thread_table_lock);
+    ksync_spinlock_init(&g_thread_table_lock);
     g_next_tid = 1;
     for (uint32_t i = 0; i < THREAD_MAX_COUNT; ++i) {
         thread_reset_slot(&g_threads[i]);
@@ -129,10 +129,10 @@ thread_spawn_in_owner(uint32_t owner_pid,
     if (owner_pid == 0 || !out_tid) {
         return -1;
     }
-    spinlock_lock(&g_thread_table_lock);
+    ksync_spinlock_lock(&g_thread_table_lock);
     thread_t *slot = thread_find_slot();
     if (!slot) {
-        spinlock_unlock(&g_thread_table_lock);
+        ksync_spinlock_unlock(&g_thread_table_lock);
         return -1;
     }
     slot->tid = g_next_tid++;
@@ -156,11 +156,11 @@ thread_spawn_in_owner(uint32_t owner_pid,
     slot->exit_status = 0;
     if (thread_copy_name(slot, name ? name : "") != 0) {
         thread_reset_slot(slot);
-        spinlock_unlock(&g_thread_table_lock);
+        ksync_spinlock_unlock(&g_thread_table_lock);
         return -1;
     }
     *out_tid = slot->tid;
-    spinlock_unlock(&g_thread_table_lock);
+    ksync_spinlock_unlock(&g_thread_table_lock);
     return 0;
 }
 
@@ -184,9 +184,9 @@ thread_get(uint32_t tid)
     if (tid == 0) {
         return 0;
     }
-    spinlock_lock(&g_thread_table_lock);
+    ksync_spinlock_lock(&g_thread_table_lock);
     thread_t *thread = thread_get_nolock(tid);
-    spinlock_unlock(&g_thread_table_lock);
+    ksync_spinlock_unlock(&g_thread_table_lock);
     return thread;
 }
 
@@ -205,16 +205,16 @@ thread_find_main_for_pid(uint32_t owner_pid)
     if (owner_pid == 0) {
         return 0;
     }
-    spinlock_lock(&g_thread_table_lock);
+    ksync_spinlock_lock(&g_thread_table_lock);
     for (uint32_t i = 0; i < THREAD_MAX_COUNT; ++i) {
         if (g_threads[i].owner_pid == owner_pid &&
             g_threads[i].state != THREAD_STATE_UNUSED) {
             thread_t *thread = &g_threads[i];
-            spinlock_unlock(&g_thread_table_lock);
+            ksync_spinlock_unlock(&g_thread_table_lock);
             return thread;
         }
     }
-    spinlock_unlock(&g_thread_table_lock);
+    ksync_spinlock_unlock(&g_thread_table_lock);
     return 0;
 }
 
@@ -224,7 +224,7 @@ thread_owner_tid_at(uint32_t owner_pid, uint32_t index, uint32_t *out_tid)
     if (owner_pid == 0 || !out_tid) {
         return -1;
     }
-    spinlock_lock(&g_thread_table_lock);
+    ksync_spinlock_lock(&g_thread_table_lock);
     uint32_t current = 0;
     for (uint32_t i = 0; i < THREAD_MAX_COUNT; ++i) {
         thread_t *thread = &g_threads[i];
@@ -233,12 +233,12 @@ thread_owner_tid_at(uint32_t owner_pid, uint32_t index, uint32_t *out_tid)
         }
         if (current == index) {
             *out_tid = thread->tid;
-            spinlock_unlock(&g_thread_table_lock);
+            ksync_spinlock_unlock(&g_thread_table_lock);
             return 0;
         }
         current++;
     }
-    spinlock_unlock(&g_thread_table_lock);
+    ksync_spinlock_unlock(&g_thread_table_lock);
     return -1;
 }
 
@@ -248,7 +248,7 @@ thread_mark_owner_exited(uint32_t owner_pid, int32_t exit_status)
     if (owner_pid == 0) {
         return;
     }
-    spinlock_lock(&g_thread_table_lock);
+    ksync_spinlock_lock(&g_thread_table_lock);
     for (uint32_t i = 0; i < THREAD_MAX_COUNT; ++i) {
         thread_t *thread = &g_threads[i];
         if (thread->state == THREAD_STATE_UNUSED || thread->owner_pid != owner_pid) {
@@ -258,7 +258,7 @@ thread_mark_owner_exited(uint32_t owner_pid, int32_t exit_status)
         thread->state = THREAD_STATE_ZOMBIE;
         thread->block_reason = THREAD_BLOCK_NONE;
     }
-    spinlock_unlock(&g_thread_table_lock);
+    ksync_spinlock_unlock(&g_thread_table_lock);
 }
 
 void
@@ -267,7 +267,7 @@ thread_reap_owner(uint32_t owner_pid)
     if (owner_pid == 0) {
         return;
     }
-    spinlock_lock(&g_thread_table_lock);
+    ksync_spinlock_lock(&g_thread_table_lock);
     for (uint32_t i = 0; i < THREAD_MAX_COUNT; ++i) {
         thread_t *thread = &g_threads[i];
         if (thread->state == THREAD_STATE_UNUSED || thread->owner_pid != owner_pid) {
@@ -275,21 +275,21 @@ thread_reap_owner(uint32_t owner_pid)
         }
         thread_reset_slot(thread);
     }
-    spinlock_unlock(&g_thread_table_lock);
+    ksync_spinlock_unlock(&g_thread_table_lock);
 }
 
 void
 thread_set_state(uint32_t tid, thread_state_t state, thread_block_reason_t reason)
 {
-    spinlock_lock(&g_thread_table_lock);
+    ksync_spinlock_lock(&g_thread_table_lock);
     thread_t *thread = thread_get_nolock(tid);
     if (!thread) {
-        spinlock_unlock(&g_thread_table_lock);
+        ksync_spinlock_unlock(&g_thread_table_lock);
         return;
     }
     thread->state = state;
     thread->block_reason = reason;
-    spinlock_unlock(&g_thread_table_lock);
+    ksync_spinlock_unlock(&g_thread_table_lock);
 }
 
 /* Atomically transition a thread from BLOCKED to READY under the table lock.
@@ -301,42 +301,42 @@ thread_wake_if_blocked(uint32_t tid)
     if (tid == 0) {
         return 0;
     }
-    spinlock_lock(&g_thread_table_lock);
+    ksync_spinlock_lock(&g_thread_table_lock);
     thread_t *thread = thread_get_nolock(tid);
     if (!thread || thread->state != THREAD_STATE_BLOCKED) {
-        spinlock_unlock(&g_thread_table_lock);
+        ksync_spinlock_unlock(&g_thread_table_lock);
         return 0;
     }
     thread->state = THREAD_STATE_READY;
     thread->block_reason = THREAD_BLOCK_NONE;
-    spinlock_unlock(&g_thread_table_lock);
+    ksync_spinlock_unlock(&g_thread_table_lock);
     return 1;
 }
 
 void
 thread_set_exit_status(uint32_t tid, int32_t exit_status)
 {
-    spinlock_lock(&g_thread_table_lock);
+    ksync_spinlock_lock(&g_thread_table_lock);
     thread_t *thread = thread_get_nolock(tid);
     if (!thread) {
-        spinlock_unlock(&g_thread_table_lock);
+        ksync_spinlock_unlock(&g_thread_table_lock);
         return;
     }
     thread->exit_status = exit_status;
-    spinlock_unlock(&g_thread_table_lock);
+    ksync_spinlock_unlock(&g_thread_table_lock);
 }
 
 void
 thread_reap(uint32_t tid)
 {
-    spinlock_lock(&g_thread_table_lock);
+    ksync_spinlock_lock(&g_thread_table_lock);
     thread_t *thread = thread_get_nolock(tid);
     if (!thread) {
-        spinlock_unlock(&g_thread_table_lock);
+        ksync_spinlock_unlock(&g_thread_table_lock);
         return;
     }
     thread_reset_slot(thread);
-    spinlock_unlock(&g_thread_table_lock);
+    ksync_spinlock_unlock(&g_thread_table_lock);
 }
 
 void

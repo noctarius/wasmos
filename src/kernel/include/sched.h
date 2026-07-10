@@ -19,7 +19,7 @@ enum {
 #ifdef WASMOS_SCHED_THREADABLE
 
 #include <stdint.h>
-#include "spinlock.h"
+#include "sync/spinlock.h"
 #include "sched_list.h"
 
 #define SCHED_PRIO_MAX  7   /* number of priority levels */
@@ -38,7 +38,7 @@ typedef enum {
 struct thread;
 
 typedef struct {
-    spinlock_t   lock;
+    ksync_spinlock_t   lock;
     uint8_t      ready_bitmap;               /* bit i set ↔ ready_list[i] non-empty */
     list_head_t  ready_list[SCHED_PRIO_MAX]; /* one FIFO per priority */
     uint32_t     thread_count[SCHED_PRIO_MAX];

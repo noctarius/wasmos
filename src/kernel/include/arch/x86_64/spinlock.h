@@ -1,8 +1,8 @@
 /* spinlock.h - Busy-wait mutual exclusion for SMP-safe kernel critical sections.
  * Callers must disable preemption (preempt_disable/cli) before acquiring a spinlock
  * to prevent priority inversion and deadlock on the same CPU. */
-#ifndef WASMOS_SPINLOCK_H
-#define WASMOS_SPINLOCK_H
+#ifndef WASMOS_ARCH_X86_64_SPINLOCK_H
+#define WASMOS_ARCH_X86_64_SPINLOCK_H
 
 #include <stdint.h>
 

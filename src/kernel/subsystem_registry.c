@@ -2,7 +2,7 @@
 #include "hashmap.h"
 #include "klog.h"
 #include "kmem.h"
-#include "spinlock.h"
+#include "sync/spinlock.h"
 #include <string.h>
 
 typedef struct {
@@ -11,7 +11,7 @@ typedef struct {
 
 static hashmap_t g_subsystem_map;
 static uint8_t g_subsystem_map_initialized;
-static spinlock_t g_subsystem_lock;
+static ksync_spinlock_t g_subsystem_lock;
 static wasmos_exec_handler_registry_entry_t *g_exec_handlers;
 static uint32_t g_exec_max_probe_bytes;
 
@@ -369,29 +369,29 @@ wasmos_subsystem_registry_register_builtin(const char *request_tag,
         klog_write("[subsystem] register invalid tag\n");
         return -1;
     }
-    spinlock_lock(&g_subsystem_lock);
+    ksync_spinlock_lock(&g_subsystem_lock);
     if (subsystem_registry_init_locked() != 0) {
         klog_write("[subsystem] register map init failed\n");
-        spinlock_unlock(&g_subsystem_lock);
+        ksync_spinlock_unlock(&g_subsystem_lock);
         return -1;
     }
     bucket = (wasmos_subsystem_bucket_t *)hashmap_put(&g_subsystem_map, subsystem_tag_hash(request_tag));
     if (!bucket) {
         klog_write("[subsystem] register bucket alloc failed\n");
-        spinlock_unlock(&g_subsystem_lock);
+        ksync_spinlock_unlock(&g_subsystem_lock);
         return -1;
     }
     for (entry = bucket->head; entry; entry = entry->next) {
         if (strcmp(request_tag, entry->request_tag) == 0) {
             klog_printf("[subsystem] duplicate request=%s runtime=%s\n", request_tag, runtime_tag);
-            spinlock_unlock(&g_subsystem_lock);
+            ksync_spinlock_unlock(&g_subsystem_lock);
             return -1;
         }
     }
     entry = (wasmos_subsystem_registry_entry_t *)kmem_alloc(sizeof(*entry));
     if (!entry) {
         klog_write("[subsystem] register entry alloc failed\n");
-        spinlock_unlock(&g_subsystem_lock);
+        ksync_spinlock_unlock(&g_subsystem_lock);
         return -1;
     }
     memset(entry, 0, sizeof(*entry));
@@ -405,7 +405,7 @@ wasmos_subsystem_registry_register_builtin(const char *request_tag,
     entry->next = bucket->head;
     bucket->head = entry;
     klog_printf("[subsystem] register request=%s runtime=%s\n", entry->request_tag, entry->runtime_tag);
-    spinlock_unlock(&g_subsystem_lock);
+    ksync_spinlock_unlock(&g_subsystem_lock);
     return 0;
 }
 
@@ -466,22 +466,22 @@ wasmos_subsystem_registry_register_broker(const char *request_tag,
         klog_write("[subsystem] register invalid tag\n");
         return -1;
     }
-    spinlock_lock(&g_subsystem_lock);
+    ksync_spinlock_lock(&g_subsystem_lock);
     if (subsystem_registry_init_locked() != 0) {
         klog_write("[subsystem] register map init failed\n");
-        spinlock_unlock(&g_subsystem_lock);
+        ksync_spinlock_unlock(&g_subsystem_lock);
         return -1;
     }
     bucket = (wasmos_subsystem_bucket_t *)hashmap_put(&g_subsystem_map, subsystem_tag_hash(request_tag));
     if (!bucket) {
         klog_write("[subsystem] register bucket alloc failed\n");
-        spinlock_unlock(&g_subsystem_lock);
+        ksync_spinlock_unlock(&g_subsystem_lock);
         return -1;
     }
     for (entry = bucket->head; entry; entry = entry->next) {
         if (strcmp(request_tag, entry->request_tag) == 0) {
             klog_printf("[subsystem] duplicate request=%s runtime=%s\n", request_tag, runtime_tag);
-            spinlock_unlock(&g_subsystem_lock);
+            ksync_spinlock_unlock(&g_subsystem_lock);
             return -1;
         }
     }
@@ -489,13 +489,13 @@ wasmos_subsystem_registry_register_broker(const char *request_tag,
     if (broker_total >= WASMOS_SUBSYSTEM_MAX_BROKERS ||
         (owner_context_id != 0u && broker_owned >= WASMOS_SUBSYSTEM_MAX_BROKERS_PER_OWNER)) {
         klog_printf("[subsystem] broker cap reached total=%u owner=%u\n", broker_total, broker_owned);
-        spinlock_unlock(&g_subsystem_lock);
+        ksync_spinlock_unlock(&g_subsystem_lock);
         return -1;
     }
     entry = (wasmos_subsystem_registry_entry_t *)kmem_alloc(sizeof(*entry));
     if (!entry) {
         klog_write("[subsystem] register entry alloc failed\n");
-        spinlock_unlock(&g_subsystem_lock);
+        ksync_spinlock_unlock(&g_subsystem_lock);
         return -1;
     }
     memset(entry, 0, sizeof(*entry));
@@ -515,7 +515,7 @@ wasmos_subsystem_registry_register_broker(const char *request_tag,
                 entry->runtime_tag,
                 entry->broker_name[0] != '\0' ? entry->broker_name : "-",
                 entry->broker_endpoint);
-    spinlock_unlock(&g_subsystem_lock);
+    ksync_spinlock_unlock(&g_subsystem_lock);
     return 0;
 }
 
@@ -551,16 +551,16 @@ wasmos_subsystem_registry_register_exec_handler(const char *handler_name,
         return -1;
     }
 
-    spinlock_lock(&g_subsystem_lock);
+    ksync_spinlock_lock(&g_subsystem_lock);
     if (subsystem_registry_init_locked() != 0) {
         klog_write("[subsystem] exec handler map init failed\n");
-        spinlock_unlock(&g_subsystem_lock);
+        ksync_spinlock_unlock(&g_subsystem_lock);
         return -1;
     }
     owner = subsystem_registry_find_locked(request_tag);
     if (!owner || owner->kind != WASMOS_SUBSYSTEM_HANDLER_BROKER) {
         klog_write("[subsystem] exec handler owner missing\n");
-        spinlock_unlock(&g_subsystem_lock);
+        ksync_spinlock_unlock(&g_subsystem_lock);
         return -1;
     }
     for (entry = g_exec_handlers; entry; entry = entry->next) {
@@ -571,7 +571,7 @@ wasmos_subsystem_registry_register_exec_handler(const char *handler_name,
         if (strcmp(entry->handler_name, validated_handler_name) == 0 &&
             strcmp(entry->request_tag, request_tag) == 0) {
             klog_write("[subsystem] exec handler duplicate\n");
-            spinlock_unlock(&g_subsystem_lock);
+            ksync_spinlock_unlock(&g_subsystem_lock);
             return -1;
         }
     }
@@ -579,14 +579,14 @@ wasmos_subsystem_registry_register_exec_handler(const char *handler_name,
         (owner_context_id != 0u && handler_owned >= WASMOS_EXEC_HANDLER_MAX_PER_OWNER)) {
         klog_printf("[subsystem] exec handler cap reached total=%u owner=%u\n",
                     handler_total, handler_owned);
-        spinlock_unlock(&g_subsystem_lock);
+        ksync_spinlock_unlock(&g_subsystem_lock);
         return -1;
     }
 
     entry = (wasmos_exec_handler_registry_entry_t *)kmem_alloc(sizeof(*entry));
     if (!entry) {
         klog_write("[subsystem] exec handler alloc failed\n");
-        spinlock_unlock(&g_subsystem_lock);
+        ksync_spinlock_unlock(&g_subsystem_lock);
         return -1;
     }
     memset(entry, 0, sizeof(*entry));
@@ -594,7 +594,7 @@ wasmos_subsystem_registry_register_exec_handler(const char *handler_name,
     if (!entry->nodes) {
         kmem_free(entry);
         klog_write("[subsystem] exec handler nodes alloc failed\n");
-        spinlock_unlock(&g_subsystem_lock);
+        ksync_spinlock_unlock(&g_subsystem_lock);
         return -1;
     }
     memset(entry->nodes, 0, sizeof(*nodes) * node_count);
@@ -604,7 +604,7 @@ wasmos_subsystem_registry_register_exec_handler(const char *handler_name,
                        validated_handler_name) != 0) {
         kmem_free(entry->nodes);
         kmem_free(entry);
-        spinlock_unlock(&g_subsystem_lock);
+        ksync_spinlock_unlock(&g_subsystem_lock);
         return -1;
     }
     copy_subsystem_tag(entry->request_tag, owner->request_tag);
@@ -626,7 +626,7 @@ wasmos_subsystem_registry_register_exec_handler(const char *handler_name,
                 entry->request_tag,
                 entry->priority,
                 entry->max_probe_bytes);
-    spinlock_unlock(&g_subsystem_lock);
+    ksync_spinlock_unlock(&g_subsystem_lock);
     return 0;
 }
 
@@ -636,15 +636,15 @@ wasmos_subsystem_registry_find(const char *request_tag)
     if (!request_tag) {
         return 0;
     }
-    spinlock_lock(&g_subsystem_lock);
+    ksync_spinlock_lock(&g_subsystem_lock);
     {
         wasmos_subsystem_registry_entry_t *entry = subsystem_registry_find_locked(request_tag);
         if (entry) {
-            spinlock_unlock(&g_subsystem_lock);
+            ksync_spinlock_unlock(&g_subsystem_lock);
             return entry;
         }
     }
-    spinlock_unlock(&g_subsystem_lock);
+    ksync_spinlock_unlock(&g_subsystem_lock);
     return 0;
 }
 
@@ -657,7 +657,7 @@ wasmos_subsystem_registry_find_exec_handler(const wasmos_exec_probe_t *probe)
     if (!probe) {
         return 0;
     }
-    spinlock_lock(&g_subsystem_lock);
+    ksync_spinlock_lock(&g_subsystem_lock);
     for (entry = g_exec_handlers; entry; entry = entry->next) {
         if (!exec_match_node_eval(entry->nodes, entry->node_count, entry->root_index, probe, 0u)) {
             continue;
@@ -672,7 +672,7 @@ wasmos_subsystem_registry_find_exec_handler(const wasmos_exec_probe_t *probe)
             best = entry;
         }
     }
-    spinlock_unlock(&g_subsystem_lock);
+    ksync_spinlock_unlock(&g_subsystem_lock);
     return best;
 }
 
@@ -681,9 +681,9 @@ wasmos_subsystem_registry_exec_max_probe_bytes(void)
 {
     uint32_t max_probe_bytes = 0u;
 
-    spinlock_lock(&g_subsystem_lock);
+    ksync_spinlock_lock(&g_subsystem_lock);
     max_probe_bytes = g_exec_max_probe_bytes;
-    spinlock_unlock(&g_subsystem_lock);
+    ksync_spinlock_unlock(&g_subsystem_lock);
     return max_probe_bytes;
 }
 
@@ -693,7 +693,7 @@ wasmos_subsystem_registry_reset(void)
     if (!g_subsystem_map_initialized && !g_exec_handlers) {
         return;
     }
-    spinlock_lock(&g_subsystem_lock);
+    ksync_spinlock_lock(&g_subsystem_lock);
     if (g_subsystem_map_initialized) {
         hashmap_iter_t it;
         uint32_t key = 0;
@@ -722,7 +722,7 @@ wasmos_subsystem_registry_reset(void)
         g_exec_handlers = next;
     }
     g_exec_max_probe_bytes = 0u;
-    spinlock_unlock(&g_subsystem_lock);
+    ksync_spinlock_unlock(&g_subsystem_lock);
 }
 
 void
@@ -736,7 +736,7 @@ wasmos_subsystem_registry_drop_owner(uint32_t owner_context_id)
     if (owner_context_id == 0u) {
         return;
     }
-    spinlock_lock(&g_subsystem_lock);
+    ksync_spinlock_lock(&g_subsystem_lock);
     if (g_subsystem_map_initialized) {
         hashmap_iter_t it;
         uint32_t key = 0;
@@ -774,5 +774,5 @@ wasmos_subsystem_registry_drop_owner(uint32_t owner_context_id)
         link = &entry->next;
     }
     g_exec_max_probe_bytes = recomputed_probe;
-    spinlock_unlock(&g_subsystem_lock);
+    ksync_spinlock_unlock(&g_subsystem_lock);
 }

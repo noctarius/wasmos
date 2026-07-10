@@ -5,7 +5,7 @@
 #include "klog.h"
 #include "native_driver.h"
 #include "serial.h"
-#include "spinlock.h"
+#include "sync/spinlock.h"
 #include "subsystem_registry.h"
 #include "wasmos_app.h"
 #include <string.h>
@@ -152,7 +152,7 @@ typedef struct __attribute__((packed)) {
 static wasmos_app_endpoint_resolver_t g_endpoint_resolver;
 static wasmos_app_capability_granter_t g_capability_granter;
 static uint8_t g_subsystems_initialized;
-static spinlock_t g_subsystem_lock;
+static ksync_spinlock_t g_subsystem_lock;
 static uint8_t g_subsystem_lock_initialized;
 
 #if WASMOS_WASM_RUNTIME == 1
@@ -370,7 +370,7 @@ static void
 wasmos_subsystem_lock_init_once(void)
 {
     if (!g_subsystem_lock_initialized) {
-        spinlock_init(&g_subsystem_lock);
+        ksync_spinlock_init(&g_subsystem_lock);
         g_subsystem_lock_initialized = 1u;
     }
 }
@@ -398,9 +398,9 @@ wasmos_subsystem_register(const char *request_tag,
 {
     int rc = -1;
     wasmos_subsystem_lock_init_once();
-    spinlock_lock(&g_subsystem_lock);
+    ksync_spinlock_lock(&g_subsystem_lock);
     rc = wasmos_subsystem_register_locked(request_tag, runtime_tag, ops);
-    spinlock_unlock(&g_subsystem_lock);
+    ksync_spinlock_unlock(&g_subsystem_lock);
     return rc;
 }
 
@@ -446,9 +446,9 @@ wasmos_app_init_subsystems(void)
 {
     int rc = -1;
     wasmos_subsystem_lock_init_once();
-    spinlock_lock(&g_subsystem_lock);
+    ksync_spinlock_lock(&g_subsystem_lock);
     rc = wasmos_register_builtin_subsystems_once_locked();
-    spinlock_unlock(&g_subsystem_lock);
+    ksync_spinlock_unlock(&g_subsystem_lock);
     return rc;
 }
 

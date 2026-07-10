@@ -71,7 +71,7 @@ void
 sched_event_init(sched_event_t *ev, sched_event_type_t type)
 {
     assert(ev);
-    spinlock_init(&ev->lock);
+    ksync_spinlock_init(&ev->lock);
     ev->cnt = 0u;
     ev->type = type;
     assert(pthread_mutex_init(&ev->host_mutex, 0) == 0);
@@ -85,7 +85,7 @@ sched_event_wait(sched_event_t *ev, uint32_t timeout_ms)
 {
     (void)timeout_ms;
     assert(ev);
-    spinlock_unlock(&ev->lock);
+    ksync_spinlock_unlock(&ev->lock);
     __atomic_fetch_add(&g_wait_call_count, 1u, __ATOMIC_RELAXED);
     assert(pthread_mutex_lock(&ev->host_mutex) == 0);
     ev->host_waiters++;

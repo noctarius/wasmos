@@ -1,4 +1,4 @@
-#include "spinlock.h"
+#include "arch/x86_64/spinlock.h"
 #include "process.h"
 #include "arch/x86_64/smp.h"
 

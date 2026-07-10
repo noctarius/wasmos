@@ -10,7 +10,7 @@
 #include "stdio.h"
 
 #include "process.h"
-#include "spinlock.h"
+#include "sync/spinlock.h"
 #include "paging.h"
 
 #define COM1_PORT 0x3F8
@@ -58,19 +58,19 @@ static uint8_t  g_early_log[EARLY_LOG_SIZE];
 static uint32_t g_early_log_head  = 0;  /* next write index (wraps) */
 static uint32_t g_early_log_count = 0;  /* bytes written, capped at EARLY_LOG_SIZE */
 
-static spinlock_t g_serial_lock = {0};
+static ksync_spinlock_t g_serial_lock = {0};
 static uint8_t g_serial_high_alias_enabled = 0;
 static uint32_t g_console_ring_shmem_id = 0;
 static console_ring_t *g_console_ring = 0;
 
-static inline spinlock_t *
+static inline ksync_spinlock_t *
 serial_lock_ptr(void)
 {
     uintptr_t addr = (uintptr_t)&g_serial_lock;
     if (g_serial_high_alias_enabled && (uint64_t)addr < KERNEL_HIGHER_HALF_BASE) {
         addr = (uintptr_t)((uint64_t)addr + KERNEL_HIGHER_HALF_BASE);
     }
-    return (spinlock_t *)(void *)addr;
+    return (ksync_spinlock_t *)(void *)addr;
 }
 
 void serial_enable_high_alias(uint8_t enabled) {
@@ -293,25 +293,25 @@ static int serial_remote_read_char(uint8_t *out_char) {
 }
 
 void serial_input_push(uint8_t ch) {
-    spinlock_lock(serial_lock_ptr());
+    ksync_spinlock_lock(serial_lock_ptr());
     if (g_input_count < INPUT_RING_SIZE) {
         uint32_t idx = (g_input_head + g_input_count) % INPUT_RING_SIZE;
         g_input_ring[idx] = ch;
         g_input_count++;
     }
-    spinlock_unlock(serial_lock_ptr());
+    ksync_spinlock_unlock(serial_lock_ptr());
 }
 
 int serial_input_read(uint8_t *out) {
-    spinlock_lock(serial_lock_ptr());
+    ksync_spinlock_lock(serial_lock_ptr());
     if (g_input_count == 0) {
-        spinlock_unlock(serial_lock_ptr());
+        ksync_spinlock_unlock(serial_lock_ptr());
         return 0;
     }
     *out = g_input_ring[g_input_head];
     g_input_head = (g_input_head + 1) % INPUT_RING_SIZE;
     g_input_count--;
-    spinlock_unlock(serial_lock_ptr());
+    ksync_spinlock_unlock(serial_lock_ptr());
     return 1;
 }
 
@@ -418,9 +418,9 @@ void serial_write(const char *s) {
     if (!s) {
         return;
     }
-    spinlock_lock(serial_lock_ptr());
+    ksync_spinlock_lock(serial_lock_ptr());
     serial_write_unlocked(s);
-    spinlock_unlock(serial_lock_ptr());
+    ksync_spinlock_unlock(serial_lock_ptr());
 }
 
 void serial_printf(const char *fmt, ...)

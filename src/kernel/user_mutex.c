@@ -5,9 +5,9 @@
 #include "user_mutex.h"
 
 #include "memory.h"
-#include "spinlock.h"
+#include "sync/spinlock.h"
 
-static spinlock_t g_user_mutex_lock;
+static ksync_spinlock_t g_user_mutex_lock;
 
 static int
 user_mutex_access(uint32_t context_id,
@@ -26,7 +26,7 @@ user_mutex_access(uint32_t context_id,
         return -1;
     }
 
-    spinlock_lock(&g_user_mutex_lock);
+    ksync_spinlock_lock(&g_user_mutex_lock);
     if (mm_copy_from_user(context_id, &state, user_addr, (uint64_t)sizeof(state)) == 0) {
         rc = op(&state, tid);
         if (rc >= 0 &&
@@ -34,7 +34,7 @@ user_mutex_access(uint32_t context_id,
             rc = -1;
         }
     }
-    spinlock_unlock(&g_user_mutex_lock);
+    ksync_spinlock_unlock(&g_user_mutex_lock);
 
     if (out_state) {
         *out_state = state;

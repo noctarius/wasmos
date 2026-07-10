@@ -1,4 +1,5 @@
 #include "sync/semaphore.h"
+#include "sync/spinlock.h"
 
 void
 ksync_semaphore_init(ksync_semaphore_t *sem, uint32_t initial_count)
@@ -19,12 +20,12 @@ ksync_semaphore_try_acquire(ksync_semaphore_t *sem)
         return -1;
     }
 
-    spinlock_lock(&sem->event.lock);
+    ksync_spinlock_lock(&sem->event.lock);
     if (sem->event.cnt != 0u) {
         sem->event.cnt--;
         rc = KSYNC_SEMAPHORE_OK;
     }
-    spinlock_unlock(&sem->event.lock);
+    ksync_spinlock_unlock(&sem->event.lock);
     return rc;
 }
 
@@ -36,16 +37,16 @@ ksync_semaphore_acquire(ksync_semaphore_t *sem)
     }
 
     for (;;) {
-        spinlock_lock(&sem->event.lock);
+        ksync_spinlock_lock(&sem->event.lock);
         if (sem->event.cnt != 0u) {
             sem->event.cnt--;
-            spinlock_unlock(&sem->event.lock);
+            ksync_spinlock_unlock(&sem->event.lock);
             return KSYNC_SEMAPHORE_OK;
         }
 #ifdef WASMOS_SCHED_THREADABLE
         sched_event_wait(&sem->event, 0);
 #else
-        spinlock_unlock(&sem->event.lock);
+        ksync_spinlock_unlock(&sem->event.lock);
         __asm__ volatile("pause");
 #endif
     }
@@ -58,16 +59,16 @@ ksync_semaphore_release(ksync_semaphore_t *sem)
         return -1;
     }
 
-    spinlock_lock(&sem->event.lock);
+    ksync_spinlock_lock(&sem->event.lock);
     if (sem->event.cnt == 0xFFFFFFFFu) {
-        spinlock_unlock(&sem->event.lock);
+        ksync_spinlock_unlock(&sem->event.lock);
         return -1;
     }
     sem->event.cnt++;
 #ifdef WASMOS_SCHED_THREADABLE
     (void)sched_event_wake_one(&sem->event, 0, SCHED_PEND_OK);
 #endif
-    spinlock_unlock(&sem->event.lock);
+    ksync_spinlock_unlock(&sem->event.lock);
     return KSYNC_SEMAPHORE_OK;
 }
 
@@ -80,8 +81,8 @@ ksync_semaphore_count(ksync_semaphore_t *sem)
         return 0;
     }
 
-    spinlock_lock(&sem->event.lock);
+    ksync_spinlock_lock(&sem->event.lock);
     count = sem->event.cnt;
-    spinlock_unlock(&sem->event.lock);
+    ksync_spinlock_unlock(&sem->event.lock);
     return count;
 }

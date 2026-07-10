@@ -4,7 +4,7 @@
 #include <pthread.h>
 #include <stdint.h>
 
-#include "spinlock.h"
+#include "sync/spinlock.h"
 
 typedef enum {
     SCHED_EVENT_TYPE_IPC = 0,
@@ -25,7 +25,7 @@ typedef enum {
 } sched_pend_state_t;
 
 typedef struct {
-    spinlock_t lock;
+    ksync_spinlock_t lock;
     uint32_t cnt;
     sched_event_type_t type;
     pthread_mutex_t host_mutex;

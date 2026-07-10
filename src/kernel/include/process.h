@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#include "spinlock.h"
+#include "sync/spinlock.h"
 #include "sched_event.h"
 #include "wasmos_app.h"
 
@@ -151,7 +151,7 @@ typedef struct process {
     /* Runtime reentrancy guard for subsystems that require single-threaded
      * process entry (currently the built-in WASM runtimes). Worker threads
      * (is_kernel_worker) never acquire this. */
-    spinlock_t  runtime_lock;
+    ksync_spinlock_t  runtime_lock;
     uint32_t    runtime_lock_owner;   /* TID of current runtime-lock occupant; 0 = free */
     /* Process-level wait event (replaces wait_target_pid polling). */
     sched_event_t wait_event;

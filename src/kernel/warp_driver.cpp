@@ -20,7 +20,7 @@ extern "C" {
 #include "serial.h"
 #include "process.h"
 #include "thread.h"
-#include "spinlock.h"
+#include "sync/spinlock.h"
 #include "ipc.h"
 #include "string.h"
 #include "paging.h"
@@ -154,20 +154,20 @@ typedef struct {
 } warp_driver_thread_slot_t;
 
 static warp_driver_thread_slot_t g_thread_slots[WASM_DRIVER_THREAD_SLOTS];
-static spinlock_t g_thread_slots_lock;
+static ksync_spinlock_t g_thread_slots_lock;
 
 static warp_driver_thread_slot_t *
 thread_slot_alloc(void)
 {
-    spinlock_lock(&g_thread_slots_lock);
+    ksync_spinlock_lock(&g_thread_slots_lock);
     for (uint32_t i = 0; i < WASM_DRIVER_THREAD_SLOTS; ++i) {
         if (!g_thread_slots[i].in_use) {
             g_thread_slots[i].in_use = 1;
-            spinlock_unlock(&g_thread_slots_lock);
+            ksync_spinlock_unlock(&g_thread_slots_lock);
             return &g_thread_slots[i];
         }
     }
-    spinlock_unlock(&g_thread_slots_lock);
+    ksync_spinlock_unlock(&g_thread_slots_lock);
     return nullptr;
 }
 
@@ -175,9 +175,9 @@ static void
 thread_slot_free(warp_driver_thread_slot_t *slot)
 {
     if (!slot) return;
-    spinlock_lock(&g_thread_slots_lock);
+    ksync_spinlock_lock(&g_thread_slots_lock);
     slot->in_use = 0;
-    spinlock_unlock(&g_thread_slots_lock);
+    ksync_spinlock_unlock(&g_thread_slots_lock);
 }
 
 static int
@@ -615,7 +615,7 @@ extern "C" {
 void
 wasm_driver_init(void)
 {
-    spinlock_init(&g_thread_slots_lock);
+    ksync_spinlock_init(&g_thread_slots_lock);
 }
 
 int
@@ -633,7 +633,7 @@ wasm_driver_start(wasm_driver_t *driver,
     driver->owner_context_id = owner_context_id;
     driver->active           = 0;
     driver->started          = 0;
-    spinlock_init(&driver->lock);
+    ksync_spinlock_init(&driver->lock);
 #ifdef WASMOS_WARP_RING3
     driver->r3_user_root  = 0;
     driver->r3_stack_phys = 0;
@@ -806,11 +806,11 @@ wasm_driver_call_entry(wasm_driver_t *driver)
      *  - preempt_disable_count stays 0, which lets the watchdog
      *    recognise the ring-0 startup as a transient non-stall condition.
      * Matches the runtime_lock precedent (see spinlock.c). */
-    spinlock_lock_noirq(&driver->lock);
+    ksync_spinlock_lock_noirq(&driver->lock);
     uint64_t r3_root  = driver->r3_user_root;
     uint64_t r3_stack = driver->r3_stack_phys;
 #else
-    spinlock_lock(&driver->lock);
+    ksync_spinlock_lock(&driver->lock);
     uint64_t r3_root  = 0;
     uint64_t r3_stack = 0;
 #endif
@@ -818,9 +818,9 @@ wasm_driver_call_entry(wasm_driver_t *driver)
     if (warp_driver_ensure_started(driver, r3_root, r3_stack) != 0) {
         warp_runtime_leave(prev);
 #ifdef WASMOS_WARP_RING3
-        spinlock_unlock_noirq(&driver->lock);
+        ksync_spinlock_unlock_noirq(&driver->lock);
 #else
-        spinlock_unlock(&driver->lock);
+        ksync_spinlock_unlock(&driver->lock);
 #endif
         return -1;
     }
@@ -830,7 +830,7 @@ wasm_driver_call_entry(wasm_driver_t *driver)
          * need_resched that accumulated during ring-0 ensure_started so the
          * ring-3 process starts with a fresh scheduling window. */
         warp_runtime_leave(prev);
-        spinlock_unlock_noirq(&driver->lock);
+        ksync_spinlock_unlock_noirq(&driver->lock);
         process_clear_resched();
         return call_export_mod(module_of(driver),
                            driver->manifest.entry_export,
@@ -844,7 +844,7 @@ wasm_driver_call_entry(wasm_driver_t *driver)
                          driver->manifest.entry_argv,
                          r3_root, r3_stack);
     warp_runtime_leave(prev);
-    spinlock_unlock_noirq(&driver->lock);
+    ksync_spinlock_unlock_noirq(&driver->lock);
     return rc;
 #else
     int rc = call_export_mod(module_of(driver),
@@ -853,7 +853,7 @@ wasm_driver_call_entry(wasm_driver_t *driver)
                          driver->manifest.entry_argv,
                          r3_root, r3_stack);
     warp_runtime_leave(prev);
-    spinlock_unlock(&driver->lock);
+    ksync_spinlock_unlock(&driver->lock);
     return rc;
 #endif
 }
@@ -864,11 +864,11 @@ wasm_driver_call(wasm_driver_t *driver, const char *name,
 {
     if (!driver || !driver->active || !driver->wasm_module) return -1;
 #ifdef WASMOS_WARP_RING3
-    spinlock_lock_noirq(&driver->lock);
+    ksync_spinlock_lock_noirq(&driver->lock);
     uint64_t r3_root  = driver->r3_user_root;
     uint64_t r3_stack = driver->r3_stack_phys;
 #else
-    spinlock_lock(&driver->lock);
+    ksync_spinlock_lock(&driver->lock);
     uint64_t r3_root  = 0;
     uint64_t r3_stack = 0;
 #endif
@@ -876,27 +876,27 @@ wasm_driver_call(wasm_driver_t *driver, const char *name,
     if (warp_driver_ensure_started(driver, r3_root, r3_stack) != 0) {
         warp_runtime_leave(prev);
 #ifdef WASMOS_WARP_RING3
-        spinlock_unlock_noirq(&driver->lock);
+        ksync_spinlock_unlock_noirq(&driver->lock);
 #else
-        spinlock_unlock(&driver->lock);
+        ksync_spinlock_unlock(&driver->lock);
 #endif
         return -1;
     }
 #ifdef WASMOS_WARP_RING3
     if (r3_root) {
         warp_runtime_leave(prev);
-        spinlock_unlock_noirq(&driver->lock);
+        ksync_spinlock_unlock_noirq(&driver->lock);
         process_clear_resched();
         return call_export_mod(module_of(driver), name, argc, argv, r3_root, r3_stack);
     }
     int rc = call_export_mod(module_of(driver), name, argc, argv, r3_root, r3_stack);
     warp_runtime_leave(prev);
-    spinlock_unlock_noirq(&driver->lock);
+    ksync_spinlock_unlock_noirq(&driver->lock);
     return rc;
 #else
     int rc = call_export_mod(module_of(driver), name, argc, argv, r3_root, r3_stack);
     warp_runtime_leave(prev);
-    spinlock_unlock(&driver->lock);
+    ksync_spinlock_unlock(&driver->lock);
     return rc;
 #endif
 }

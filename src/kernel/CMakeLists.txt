@@ -394,7 +394,7 @@ target_sources(kernel_sources INTERFACE
   ${KERNEL_DIR}/include/irq.h
   ${KERNEL_DIR}/include/timer.h
   ${KERNEL_DIR}/include/serial.h
-  ${KERNEL_DIR}/include/spinlock.h
+  ${KERNEL_DIR}/include/arch/x86_64/spinlock.h
   ${KERNEL_DIR}/include/user_mutex.h
   ${KERNEL_DIR}/include/wasm_chardev.h
   ${KERNEL_DIR}/include/wasm_driver.h
@@ -431,7 +431,7 @@ add_library(kernel_ide OBJECT EXCLUDE_FROM_ALL
   ${KERNEL_DIR}/include/timer.h
   ${KERNEL_DIR}/include/serial.h
   ${KERNEL_DIR}/include/wasmos_app.h
-  ${KERNEL_DIR}/include/spinlock.h
+  ${KERNEL_DIR}/include/arch/x86_64/spinlock.h
   ${KERNEL_DIR}/include/user_mutex.h
   ${KERNEL_DIR}/include/wasm_driver.h
   ${KERNEL_DIR}/include/wasm_chardev.h
@@ -614,7 +614,7 @@ add_custom_command(
           ${KERNEL_DIR}/include/arch/x86_64/smp.h
           ${KERNEL_DIR}/include/serial.h ${KERNEL_DIR}/include/wasmos_app.h
           ${KERNEL_DIR}/include/wasmos_app_meta.h
-          ${KERNEL_DIR}/include/native_driver.h ${KERNEL_DIR}/include/spinlock.h
+          ${KERNEL_DIR}/include/native_driver.h ${KERNEL_DIR}/include/arch/x86_64/spinlock.h
           ${KERNEL_DIR}/include/user_mutex.h
           ${KERNEL_DIR}/include/wasm_driver.h ${KERNEL_DIR}/include/wasm_chardev.h
           ${KERNEL_DIR}/include/framebuffer.h

@@ -20,7 +20,7 @@
 #include "system_control.h"
 #include "thread.h"
 #include "wasm_driver.h"
-#include "spinlock.h"
+#include "sync/spinlock.h"
 
 #ifdef WASMOS_SCHED_THREADABLE
 #include "futex.h"
@@ -59,7 +59,7 @@ typedef struct {
 static wasm_ipc_last_slot_t g_wasm_last_slots[PROCESS_MAX_COUNT];
 static wasm_block_slot_t g_wasm_block_slots[PROCESS_MAX_COUNT];
 static wasm_fs_peer_slot_t g_wasm_fs_peer_slots[PROCESS_MAX_COUNT];
-static spinlock_t g_wasm_side_table_lock;
+static ksync_spinlock_t g_wasm_side_table_lock;
 /* Allow several SHMEM mappings per process (UI + multiple window buffers + aux buffers). */
 #define WASM_SHMEM_MAP_SLOTS (PROCESS_MAX_COUNT * 32)
 static wasm_shmem_linear_map_t g_wasm_shmem_maps[WASM_SHMEM_MAP_SLOTS];
@@ -355,7 +355,7 @@ wasm_ipc_slot_for_pid(uint32_t pid)
         return 0;
     }
 
-    spinlock_lock(&g_wasm_side_table_lock);
+    ksync_spinlock_lock(&g_wasm_side_table_lock);
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_wasm_last_slots[i].pid == pid) {
             slot = &g_wasm_last_slots[i];
@@ -371,7 +371,7 @@ wasm_ipc_slot_for_pid(uint32_t pid)
         empty->valid = 0;
         slot = empty;
     }
-    spinlock_unlock(&g_wasm_side_table_lock);
+    ksync_spinlock_unlock(&g_wasm_side_table_lock);
     return slot;
 }
 
@@ -385,7 +385,7 @@ wasm_block_slot_for_pid(uint32_t pid)
         return 0;
     }
 
-    spinlock_lock(&g_wasm_side_table_lock);
+    ksync_spinlock_lock(&g_wasm_side_table_lock);
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_wasm_block_slots[i].pid == pid) {
             slot = &g_wasm_block_slots[i];
@@ -401,7 +401,7 @@ wasm_block_slot_for_pid(uint32_t pid)
         empty->buffer_phys = 0;
         slot = empty;
     }
-    spinlock_unlock(&g_wasm_side_table_lock);
+    ksync_spinlock_unlock(&g_wasm_side_table_lock);
     return slot;
 }
 
@@ -594,7 +594,7 @@ wasm_fs_peer_slot_for_pid(uint32_t pid)
         return 0;
     }
 
-    spinlock_lock(&g_wasm_side_table_lock);
+    ksync_spinlock_lock(&g_wasm_side_table_lock);
     for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
         if (g_wasm_fs_peer_slots[i].pid == pid) {
             slot = &g_wasm_fs_peer_slots[i];
@@ -611,7 +611,7 @@ wasm_fs_peer_slot_for_pid(uint32_t pid)
         empty->peer_context_id = 0;
         slot = empty;
     }
-    spinlock_unlock(&g_wasm_side_table_lock);
+    ksync_spinlock_unlock(&g_wasm_side_table_lock);
     return slot;
 }
 

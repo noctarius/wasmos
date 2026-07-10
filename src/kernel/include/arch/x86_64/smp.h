@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 #include "arch/x86_64/cpu_x86_64.h"
-#include "spinlock.h"
+#include "sync/spinlock.h"
 #include "process.h"
 #include "thread.h"
 #include "sched.h"

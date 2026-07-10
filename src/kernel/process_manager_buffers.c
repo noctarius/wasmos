@@ -10,7 +10,7 @@
 #include "list.h"
 #include "process_manager_buffer_policy.h"
 #include "process_manager_buffer_state.h"
-#include "spinlock.h"
+#include "sync/spinlock.h"
 #include "string.h"
 
 typedef struct {
@@ -23,7 +23,7 @@ typedef struct {
 static list_t g_pm_fs_slots;
 static list_t g_pm_fb_slots;
 static uint8_t g_pm_slots_initialized;
-static spinlock_t g_pm_slots_lock;
+static ksync_spinlock_t g_pm_slots_lock;
 
 static int
 pm_slots_init_once_locked(void)
@@ -323,13 +323,13 @@ void *
 process_manager_buffer_for_context(uint32_t kind, uint32_t context_id)
 {
     void *buffer = 0;
-    spinlock_lock(&g_pm_slots_lock);
+    ksync_spinlock_lock(&g_pm_slots_lock);
     if (kind == PM_BUFFER_KIND_FILESYSTEM) {
         buffer = pm_xfer_buffer_for_context(context_id);
     } else if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
         buffer = pm_fb_buffer_for_context(context_id);
     }
-    spinlock_unlock(&g_pm_slots_lock);
+    ksync_spinlock_unlock(&g_pm_slots_lock);
     return buffer;
 }
 
@@ -337,9 +337,9 @@ uint64_t
 process_manager_buffer_phys_for_context(uint32_t kind, uint32_t context_id)
 {
     uint64_t phys = 0;
-    spinlock_lock(&g_pm_slots_lock);
+    ksync_spinlock_lock(&g_pm_slots_lock);
     phys = pm_buffer_phys_for_context_locked(kind, context_id);
-    spinlock_unlock(&g_pm_slots_lock);
+    ksync_spinlock_unlock(&g_pm_slots_lock);
     return phys;
 }
 
@@ -362,13 +362,13 @@ process_manager_buffer_borrow_context(uint32_t kind,
                                       uint32_t flags)
 {
     int rc = -1;
-    spinlock_lock(&g_pm_slots_lock);
+    ksync_spinlock_lock(&g_pm_slots_lock);
     if (kind == PM_BUFFER_KIND_FILESYSTEM) {
         rc = pm_xfer_buffer_borrow_context(borrower_context_id, source_context_id, flags);
     } else if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
         rc = pm_fb_buffer_borrow_context(borrower_context_id, source_context_id, flags);
     }
-    spinlock_unlock(&g_pm_slots_lock);
+    ksync_spinlock_unlock(&g_pm_slots_lock);
     return rc;
 }
 
@@ -376,13 +376,13 @@ int
 process_manager_buffer_release_context(uint32_t kind, uint32_t borrower_context_id)
 {
     int rc = -1;
-    spinlock_lock(&g_pm_slots_lock);
+    ksync_spinlock_lock(&g_pm_slots_lock);
     if (kind == PM_BUFFER_KIND_FILESYSTEM) {
         rc = pm_xfer_buffer_release_context(borrower_context_id);
     } else if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
         rc = pm_fb_buffer_release_context(borrower_context_id);
     }
-    spinlock_unlock(&g_pm_slots_lock);
+    ksync_spinlock_unlock(&g_pm_slots_lock);
     return rc;
 }
 
@@ -390,13 +390,13 @@ uint32_t
 process_manager_buffer_borrow_flags(uint32_t kind, uint32_t context_id)
 {
     uint32_t flags = 0;
-    spinlock_lock(&g_pm_slots_lock);
+    ksync_spinlock_lock(&g_pm_slots_lock);
     if (kind == PM_BUFFER_KIND_FILESYSTEM) {
         flags = pm_xfer_buffer_borrow_flags(context_id);
     } else if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
         flags = pm_fb_buffer_borrow_flags(context_id);
     }
-    spinlock_unlock(&g_pm_slots_lock);
+    ksync_spinlock_unlock(&g_pm_slots_lock);
     return flags;
 }
 
@@ -416,12 +416,12 @@ uint32_t
 process_manager_buffer_borrow_source_context(uint32_t kind, uint32_t borrower_context_id)
 {
     uint32_t source_context_id = 0;
-    spinlock_lock(&g_pm_slots_lock);
+    ksync_spinlock_lock(&g_pm_slots_lock);
     pm_xfer_buffer_slot_t *slot = pm_slot_find_by_kind(kind, borrower_context_id);
     if (slot && slot->state.borrow_active) {
         source_context_id = slot->state.borrow_source_context_id;
     }
-    spinlock_unlock(&g_pm_slots_lock);
+    ksync_spinlock_unlock(&g_pm_slots_lock);
     return source_context_id;
 }
 
@@ -437,9 +437,9 @@ process_manager_buffer_drop_context(uint32_t context_id)
         return;
     }
 
-    spinlock_lock(&g_pm_slots_lock);
+    ksync_spinlock_lock(&g_pm_slots_lock);
     if (pm_slots_init_once_locked() != 0) {
-        spinlock_unlock(&g_pm_slots_lock);
+        ksync_spinlock_unlock(&g_pm_slots_lock);
         return;
     }
 
@@ -459,7 +459,7 @@ process_manager_buffer_drop_context(uint32_t context_id)
     while ((slot = pm_fb_slot_find(context_id)) != 0) {
         (void)list_remove(&g_pm_fb_slots, slot);
     }
-    spinlock_unlock(&g_pm_slots_lock);
+    ksync_spinlock_unlock(&g_pm_slots_lock);
 }
 
 int
@@ -475,11 +475,11 @@ process_manager_buffer_dma_map(uint32_t kind,
     uint32_t buffer_size = 0;
     uint64_t addr = 0;
 
-    spinlock_lock(&g_pm_slots_lock);
+    ksync_spinlock_lock(&g_pm_slots_lock);
     slot = pm_slot_find_by_kind(kind, borrower_context_id);
     buffer_size = pm_buffer_size_locked(kind);
     if (!slot || !out_device_addr) {
-        spinlock_unlock(&g_pm_slots_lock);
+        ksync_spinlock_unlock(&g_pm_slots_lock);
         return -1;
     }
     if (process_manager_buffer_state_dma_map(&slot->state,
@@ -488,17 +488,17 @@ process_manager_buffer_dma_map(uint32_t kind,
                                              offset,
                                              length,
                                              direction_flags) != 0) {
-        spinlock_unlock(&g_pm_slots_lock);
+        ksync_spinlock_unlock(&g_pm_slots_lock);
         return -1;
     }
     addr = pm_buffer_phys_for_context_locked(kind, borrower_context_id);
     if (addr == 0) {
-        spinlock_unlock(&g_pm_slots_lock);
+        ksync_spinlock_unlock(&g_pm_slots_lock);
         return -1;
     }
     addr += (uint64_t)offset;
     *out_device_addr = addr;
-    spinlock_unlock(&g_pm_slots_lock);
+    ksync_spinlock_unlock(&g_pm_slots_lock);
     return 0;
 }
 
@@ -511,17 +511,17 @@ process_manager_buffer_dma_sync(uint32_t kind,
 {
     pm_xfer_buffer_slot_t *slot = 0;
     (void)sync_op;
-    spinlock_lock(&g_pm_slots_lock);
+    ksync_spinlock_lock(&g_pm_slots_lock);
     slot = pm_slot_find_by_kind(kind, borrower_context_id);
     if (process_manager_buffer_state_dma_sync(slot ? &slot->state : 0,
                                               offset,
                                               length) != 0) {
-        spinlock_unlock(&g_pm_slots_lock);
+        ksync_spinlock_unlock(&g_pm_slots_lock);
         return -1;
     }
     /* Cache maintenance is currently a no-op on the baseline x86 target.
      * This call still enforces map-state/range semantics for correctness. */
-    spinlock_unlock(&g_pm_slots_lock);
+    ksync_spinlock_unlock(&g_pm_slots_lock);
     return 0;
 }
 
@@ -531,13 +531,13 @@ process_manager_buffer_dma_unmap(uint32_t kind,
                                  uint32_t source_context_id)
 {
     pm_xfer_buffer_slot_t *slot = 0;
-    spinlock_lock(&g_pm_slots_lock);
+    ksync_spinlock_lock(&g_pm_slots_lock);
     slot = pm_slot_find_by_kind(kind, borrower_context_id);
     if (process_manager_buffer_state_dma_unmap(slot ? &slot->state : 0,
                                                source_context_id) != 0) {
-        spinlock_unlock(&g_pm_slots_lock);
+        ksync_spinlock_unlock(&g_pm_slots_lock);
         return -1;
     }
-    spinlock_unlock(&g_pm_slots_lock);
+    ksync_spinlock_unlock(&g_pm_slots_lock);
     return 0;
 }

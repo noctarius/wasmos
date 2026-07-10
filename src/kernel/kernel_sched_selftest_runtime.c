@@ -66,9 +66,9 @@ test_bitmap_ffs(void)
     CHECK(cs.ready_bitmap == ((1u<<2)|(1u<<4)|(1u<<6)), "bitmap-ffs-bitmap");
 
     /* pick_next must return the highest priority (lowest index = 2) */
-    spinlock_lock(&cs.lock);
+    ksync_spinlock_lock(&cs.lock);
     thread_t *next = cpu_sched_pick_next(&cs);
-    spinlock_unlock(&cs.lock);
+    ksync_spinlock_unlock(&cs.lock);
     CHECK(next == &t2, "bitmap-ffs-pick");
     CHECK(cs.ready_bitmap == ((1u<<4)|(1u<<6)), "bitmap-ffs-clear");
 
@@ -96,12 +96,12 @@ test_priority_ordering(void)
     cpu_sched_enqueue(&cs, &hi1);
     cpu_sched_enqueue(&cs, &hi2);
 
-    spinlock_lock(&cs.lock);
+    ksync_spinlock_lock(&cs.lock);
     thread_t *p1 = cpu_sched_pick_next(&cs);
     thread_t *p2 = cpu_sched_pick_next(&cs);
     thread_t *p3 = cpu_sched_pick_next(&cs);
     thread_t *p4 = cpu_sched_pick_next(&cs); /* should be idle */
-    spinlock_unlock(&cs.lock);
+    ksync_spinlock_unlock(&cs.lock);
 
     CHECK(p1 == &hi1, "prio-order-first");
     CHECK(p2 == &hi2, "prio-order-second");
@@ -131,16 +131,16 @@ test_dequeue(void)
     cpu_sched_enqueue(&cs, &tb);
     CHECK(cs.thread_count[SCHED_PRIO_SYSTEM] == 2, "dequeue-count-before");
 
-    spinlock_lock(&cs.lock);
+    ksync_spinlock_lock(&cs.lock);
     cpu_sched_dequeue(&cs, &ta);
-    spinlock_unlock(&cs.lock);
+    ksync_spinlock_unlock(&cs.lock);
 
     CHECK(cs.thread_count[SCHED_PRIO_SYSTEM] == 1, "dequeue-count-after");
     CHECK((cs.ready_bitmap & (1u << SCHED_PRIO_SYSTEM)) != 0, "dequeue-bitmap-nonzero");
 
-    spinlock_lock(&cs.lock);
+    ksync_spinlock_lock(&cs.lock);
     cpu_sched_dequeue(&cs, &tb);
-    spinlock_unlock(&cs.lock);
+    ksync_spinlock_unlock(&cs.lock);
 
     CHECK(cs.thread_count[SCHED_PRIO_SYSTEM] == 0, "dequeue-count-zero");
     CHECK((cs.ready_bitmap & (1u << SCHED_PRIO_SYSTEM)) == 0, "dequeue-bitmap-cleared");
@@ -166,12 +166,12 @@ test_dequeue(void)
 static void
 fake_wait(sched_event_t *ev, thread_t *t)
 {
-    spinlock_lock(&ev->lock);
+    ksync_spinlock_lock(&ev->lock);
     t->wait_event = ev;
     t->pend_state = SCHED_PEND_NONE;
     t->pend_data  = 0;
     list_head_add_tail(&ev->wait_list, &t->event_node);
-    spinlock_unlock(&ev->lock);
+    ksync_spinlock_unlock(&ev->lock);
 }
 
 static int
@@ -193,7 +193,7 @@ test_event_wake_one(void)
      * We call wake_one under the lock to match the production call convention,
      * but sched_wake_thread will call thread_set_state which needs a valid tid
      * — skip that by comparing pend_state directly after list removal. */
-    spinlock_lock(&ev.lock);
+    ksync_spinlock_lock(&ev.lock);
     /* Manually dequeue first waiter the same way wake_one does, without the
      * sched_wake_thread call, so we can test pure list/pend logic. */
     CHECK(!list_head_empty(&ev.wait_list), "event-wake-one-before");
@@ -202,7 +202,7 @@ test_event_wake_one(void)
     first->wait_event = 0;
     first->pend_state = SCHED_PEND_OK;
     first->pend_data  = 42;
-    spinlock_unlock(&ev.lock);
+    ksync_spinlock_unlock(&ev.lock);
 
     CHECK(first == &ta, "event-wake-one-order");
     CHECK(first->pend_state == SCHED_PEND_OK, "event-wake-one-pend");
@@ -229,7 +229,7 @@ test_event_wake_all(void)
     fake_wait(&ev, &tc);
 
     /* Manually drain all waiters, mirroring sched_event_wake_all logic. */
-    spinlock_lock(&ev.lock);
+    ksync_spinlock_lock(&ev.lock);
     int woken = 0;
     list_head_t *pos, *tmp;
     list_for_each_safe(pos, tmp, &ev.wait_list) {
@@ -240,7 +240,7 @@ test_event_wake_all(void)
         t->pend_data  = 0;
         woken++;
     }
-    spinlock_unlock(&ev.lock);
+    ksync_spinlock_unlock(&ev.lock);
 
     CHECK(woken == 3, "event-wake-all-count");
     CHECK(list_head_empty(&ev.wait_list), "event-wake-all-empty");

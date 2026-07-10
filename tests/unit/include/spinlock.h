@@ -2,7 +2,7 @@
 #define WASMOS_TEST_SPINLOCK_H
 
 #ifdef WASMOS_TEST_USE_REAL_SPINLOCK_DECLS
-#include_next "spinlock.h"
+#include "arch/x86_64/spinlock.h"
 #else
 
 #include <stdint.h>

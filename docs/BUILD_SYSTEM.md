@@ -531,6 +531,7 @@ compiler. Current suites:
 - `test_list` — kernel list data-structure correctness
 - `test_device_manager_rules` — device manager rule matching
 - `test_fs_manager_path` — VFS path resolution
+- `test_process_manager_buffer_routing` — FS buffer owner/relay routing invariants
 
 These tests run on the host (no QEMU) and do not depend on `bootloader` or
 `kernel`.

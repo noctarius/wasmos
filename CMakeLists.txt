@@ -1809,6 +1809,12 @@ add_custom_target(run-kernel-unit-tests
   COMMAND ${BUILD_DIR}/test_fs_manager_path
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_process_manager_buffer_routing.c
+          ${KERNEL_DIR}/process_manager_buffer_routing.c
+          -o ${BUILD_DIR}/test_process_manager_buffer_routing
+  COMMAND ${BUILD_DIR}/test_process_manager_buffer_routing
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${KERNEL_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_user_mutex.c
           -o ${BUILD_DIR}/test_user_mutex
   COMMAND ${BUILD_DIR}/test_user_mutex

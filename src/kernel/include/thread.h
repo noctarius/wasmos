@@ -23,7 +23,7 @@ typedef enum {
     THREAD_BLOCK_IPC,
     THREAD_BLOCK_WAIT_PROCESS,
     THREAD_BLOCK_WAIT_THREAD,
-    THREAD_BLOCK_EVENT,   /* blocked on a sched_event_t (threadable scheduler) */
+    THREAD_BLOCK_EVENT,   /* blocked on a sched_event_t wait */
 } thread_block_reason_t;
 
 typedef struct thread {

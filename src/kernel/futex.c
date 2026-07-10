@@ -10,7 +10,7 @@
 #include "string.h"
 
 /*
- * futex.c — kernel futex implementation for the threadable scheduler.
+ * futex.c — kernel futex implementation on top of sched_event_t.
  *
  * Futex words live in WASM linear memory.  The kernel key is the physical
  * address of the word, so different processes sharing the same page (via

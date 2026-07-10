@@ -74,7 +74,7 @@ sched_prio_t sched_default_prio(int is_idle,
                                 int is_native_service);
 
 /*
- * Initialise the threadable-scheduler fields of a freshly-spawned thread.
+ * Initialise the scheduler fields of a freshly spawned thread.
  * Must be called for every thread before its first enqueue.
  */
 void sched_thread_init(struct thread *t, sched_prio_t prio);

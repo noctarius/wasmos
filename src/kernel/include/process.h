@@ -174,7 +174,7 @@ typedef struct {
 } process_stats_t;
 
 /*
- * sched_enqueue_thread — enqueue a READY thread on the threadable scheduler.
+ * sched_enqueue_thread — enqueue a READY thread on the scheduler.
  * All call sites must use this instead of touching cpu_sched_t directly so
  * the dispatch point is a single place.
  */

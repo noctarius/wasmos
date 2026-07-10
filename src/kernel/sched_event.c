@@ -5,7 +5,7 @@
 #include "timer.h"
 
 /*
- * sched_event.c — unified blocking primitive for the threadable scheduler.
+ * sched_event.c — unified blocking primitive for the kernel scheduler.
  *
  * A sched_event_t is a semaphore-style wait list.  Any number of threads
  * may block on an event; wakers pick them off one at a time or all at once.

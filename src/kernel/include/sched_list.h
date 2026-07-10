@@ -6,7 +6,7 @@
 /*
  * Minimal intrusive doubly-linked list for the scheduler.  The head is a
  * sentinel node: an empty list has head.next == head.prev == &head.  Only
- * the operations used by the threadable scheduler are provided.
+ * the operations used by the in-kernel scheduler are provided.
  */
 
 typedef struct list_head {

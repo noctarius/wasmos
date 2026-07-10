@@ -1,8 +1,8 @@
 /*
- * kernel_sched_selftest_runtime.c — unit tests for the threadable scheduler.
+ * kernel_sched_selftest_runtime.c — unit tests for the kernel scheduler.
  *
  * Each test function returns 0 on pass, non-zero on fail.
- * Tests are pure in-kernel C: no process spawn, no QEMU-boot required.
+ * Tests are pure in-kernel C: no process spawn, no QEMU boot required.
  */
 
 #include "kernel_sched_selftest_runtime.h"

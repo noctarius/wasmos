@@ -1549,10 +1549,10 @@ void process_set_require_explicit_ready(process_t *process) {
     process->require_explicit_ready = 1;
 }
 
-/* process_block_on_ipc: legacy call-site compatibility stub.  Under the
- * threadable scheduler, thread blocking state is managed by sched_event_wait;
- * callers that return PROCESS_RUN_BLOCKED no longer need to touch process
- * state here.  TODO: remove once all callers are updated. */
+/* process_block_on_ipc: legacy call-site compatibility stub.  Thread blocking
+ * state is managed by sched_event_wait; callers that return
+ * PROCESS_RUN_BLOCKED no longer need to touch process state here.
+ * TODO: remove once all callers are updated. */
 void process_block_on_ipc(process_t *process) {
     (void)process;
 }

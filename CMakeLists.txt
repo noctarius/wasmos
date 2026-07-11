@@ -647,15 +647,9 @@ if (WASMOS_RING3_SHADOW)
   set(WASMOS_WASM_RUNTIME_WASM3 ON  CACHE BOOL "Use wasm3 interpreter" FORCE)
 endif ()
 
-# WARP now always executes through the ring-3 path. Keep a derived internal
-# gate so the kernel sources can still use WASMOS_WARP_RING3 for build-time
-# inclusion, but remove the user-facing runtime-mode toggle.
+# WARP now always executes through the ring-3 path; remove the old user-facing
+# runtime-mode toggle and gate the code directly on the WARP runtime choice.
 unset(WASMOS_RING3 CACHE)
-if (WASMOS_WASM_RUNTIME_WARP)
-  set(WASMOS_WARP_RING3 ON CACHE INTERNAL "WARP ring-3 execution is mandatory")
-else ()
-  set(WASMOS_WARP_RING3 OFF CACHE INTERNAL "WARP ring-3 execution is mandatory")
-endif ()
 
 # WASM runtime selection must run AFTER the Kconfig import so that on a fresh
 # cmake cache (e.g. the ring3 shadow build) the kconfig-selected runtime wins
@@ -1811,22 +1805,30 @@ add_custom_target(run-kernel-unit-tests
   COMMAND ${BUILD_DIR}/test_fs_manager_path
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
-          ${CMAKE_SOURCE_DIR}/tests/unit/test_process_manager_buffer_routing.c
-          ${KERNEL_DIR}/process_manager_buffer_routing.c
-          -o ${BUILD_DIR}/test_process_manager_buffer_routing
-  COMMAND ${BUILD_DIR}/test_process_manager_buffer_routing
+          -I${KERNEL_DIR}
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_xfer_buffer/policy.c
+          ${KERNEL_DIR}/xfer_buffer/policy.c
+          -o ${BUILD_DIR}/test_xfer_buffer_policy
+  COMMAND ${BUILD_DIR}/test_xfer_buffer_policy
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
-          ${CMAKE_SOURCE_DIR}/tests/unit/test_process_manager_buffer_policy.c
-          ${KERNEL_DIR}/process_manager_buffer_policy.c
-          -o ${BUILD_DIR}/test_process_manager_buffer_policy
-  COMMAND ${BUILD_DIR}/test_process_manager_buffer_policy
+          -I${KERNEL_DIR}
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_xfer_buffer/state.c
+          ${KERNEL_DIR}/xfer_buffer/state.c
+          -o ${BUILD_DIR}/test_xfer_buffer_state
+  COMMAND ${BUILD_DIR}/test_xfer_buffer_state
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
-          ${CMAKE_SOURCE_DIR}/tests/unit/test_process_manager_buffer_state.c
-          ${KERNEL_DIR}/process_manager_buffer_state.c
-          -o ${BUILD_DIR}/test_process_manager_buffer_state
-  COMMAND ${BUILD_DIR}/test_process_manager_buffer_state
+          -I${DRIVER_WASM_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_xfer_buffer/xfer_buffer.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_xfer_buffer_platform.c
+          ${KERNEL_DIR}/xfer_buffer/xfer_buffer.c
+          ${KERNEL_DIR}/list.c
+          ${KERNEL_DIR}/list_linked.c
+          ${KERNEL_DIR}/list_array_chunk.c
+          ${KERNEL_DIR}/kmem.c
+          -o ${BUILD_DIR}/test_xfer_buffer_object
+  COMMAND ${BUILD_DIR}/test_xfer_buffer_object
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_warp_driver_ring3_call_policy.c

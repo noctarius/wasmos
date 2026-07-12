@@ -379,27 +379,102 @@ test_reborrow_rules(test_stats_t *stats)
           "owner can release object after reborrow chain ends");
 }
 
+/* Owner-push: release is a transient teardown — the owner may release while
+ * borrows are still active, and doing so cascade-revokes them (and any
+ * downstream reborrows). The owner holds the lifecycle, so it need not wait for
+ * borrowers to unborrow first. */
 static void
-test_release_owned_with_active_borrow_rejected(test_stats_t *stats)
+test_release_owned_cascade_revokes_borrows(test_stats_t *stats)
 {
     xfer_buffer_owner_t owner = {0};
     xfer_buffer_borrow_t borrow = {0};
+    xfer_buffer_borrow_t reborrow = {0};
 
     check(stats,
           xfer_buffer_acquire(BUFFER_KIND_TRANSFER, 70u, 128u, &owner) == 0,
-          "setup owner object for active-borrow release rejection");
+          "setup owner object for cascade-on-release");
     check(stats,
           xfer_buffer_borrow(&owner, 71u, BUFFER_BORROW_READ, &borrow) == 0,
-          "setup active borrow for release rejection");
+          "setup active borrow before release");
     check(stats,
-          xfer_buffer_release_owned(&owner) != 0,
-          "owner cannot release object while borrow is active");
-    check(stats,
-          xfer_buffer_unborrow(&borrow) == 0,
-          "active borrow can be removed before release");
+          xfer_buffer_reborrow(&borrow, 72u, BUFFER_BORROW_READ, &reborrow) == 0,
+          "setup active downstream reborrow before release");
     check(stats,
           xfer_buffer_release_owned(&owner) == 0,
-          "owner can release object after borrow removal");
+          "owner releases object while borrows are active (transient teardown)");
+    check(stats,
+          !xfer_buffer_can_access(&owner.buffer, 71u, BUFFER_BORROW_READ),
+          "borrower loses access after release cascade");
+    check(stats,
+          !xfer_buffer_can_access(&owner.buffer, 72u, BUFFER_BORROW_READ),
+          "downstream reborrower loses access after release cascade");
+    check(stats,
+          xfer_buffer_unborrow(&borrow) != 0,
+          "borrow handle is stale after release cascade");
+    check(stats,
+          xfer_buffer_unborrow(&reborrow) != 0,
+          "reborrow handle is stale after release cascade");
+}
+
+/* Owner-push authority: only the grantor (lender) of a (re)borrow may unborrow
+ * it, resolved via xfer_buffer_get_lent. The grantee (borrower) cannot; a
+ * reborrow's grantor is the upstream borrower, not the object owner. */
+static void
+test_unborrow_lender_authority(test_stats_t *stats)
+{
+    xfer_buffer_owner_t owner = {0};
+    xfer_buffer_borrow_t borrow = {0};
+    xfer_buffer_borrow_t reborrow = {0};
+    xfer_buffer_borrow_t resolved = {0};
+
+    check(stats,
+          xfer_buffer_acquire(BUFFER_KIND_TRANSFER, 80u, 128u, &owner) == 0,
+          "setup owner object for lender authority");
+    check(stats,
+          xfer_buffer_borrow(&owner, 81u, BUFFER_BORROW_READ, &borrow) == 0,
+          "owner (80) grants borrow to context 81");
+    /* The grantee (81) is NOT the lender of its own borrow — it may not unborrow it. */
+    check(stats,
+          xfer_buffer_get_lent(borrow.borrow_id, 81u, &resolved) == XFER_BUFFER_ERR_NO_ACCESS,
+          "grantee cannot resolve-as-lender its own borrow");
+    /* An unrelated context is likewise denied. */
+    check(stats,
+          xfer_buffer_get_lent(borrow.borrow_id, 99u, &resolved) == XFER_BUFFER_ERR_NO_ACCESS,
+          "unrelated context cannot resolve-as-lender someone else's borrow");
+    /* A denied resolve must be a no-op: the borrow is still fully active. */
+    check(stats,
+          xfer_buffer_can_access(&owner.buffer, 81u, BUFFER_BORROW_READ),
+          "borrow survives denied non-lender unborrow attempts");
+    /* The owner (80) is the lender of the top-level borrow — it may. */
+    check(stats,
+          xfer_buffer_get_lent(borrow.borrow_id, 80u, &resolved) == XFER_BUFFER_OK,
+          "owner resolves-as-lender the top-level borrow it granted");
+    /* 81 reborrows to 82; 81 is now the lender of the reborrow, the owner is not. */
+    check(stats,
+          xfer_buffer_reborrow(&borrow, 82u, BUFFER_BORROW_READ, &reborrow) == 0,
+          "context 81 reborrows to 82");
+    check(stats,
+          xfer_buffer_get_lent(reborrow.borrow_id, 80u, &resolved) == XFER_BUFFER_ERR_NO_ACCESS,
+          "object owner is not the lender of a downstream reborrow");
+    check(stats,
+          xfer_buffer_get_lent(reborrow.borrow_id, 82u, &resolved) == XFER_BUFFER_ERR_NO_ACCESS,
+          "reborrow grantee (82) is not its own lender");
+    check(stats,
+          xfer_buffer_get_lent(reborrow.borrow_id, 81u, &resolved) == XFER_BUFFER_OK,
+          "reborrow lender (81, the reborrowing context) may resolve it");
+    /* Lender-authorized unborrow of the reborrow, downstream-only cascade. */
+    check(stats,
+          xfer_buffer_unborrow(&resolved) == 0,
+          "reborrow lender unborrows the reborrow");
+    check(stats,
+          !xfer_buffer_can_access(&owner.buffer, 82u, BUFFER_BORROW_READ),
+          "reborrow grantee loses access after lender unborrow");
+    check(stats,
+          xfer_buffer_can_access(&owner.buffer, 81u, BUFFER_BORROW_READ),
+          "upstream borrow survives downstream reborrow unborrow (no up-stack cascade)");
+    check(stats,
+          xfer_buffer_release_owned(&owner) == 0,
+          "owner releases (cascades remaining borrow)");
 }
 
 static void
@@ -1939,7 +2014,8 @@ main(void)
     test_framebuffer_borrow_extended(&stats);
     test_reborrow_rules(&stats);
     test_reborrow_extended(&stats);
-    test_release_owned_with_active_borrow_rejected(&stats);
+    test_release_owned_cascade_revokes_borrows(&stats);
+    test_unborrow_lender_authority(&stats);
     test_owner_side_dma_contract(&stats);
     test_owner_dma_extended(&stats);
     test_borrow_dma_contract(&stats);

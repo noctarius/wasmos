@@ -806,7 +806,6 @@ pm_request_broker_spawn_plan(uint32_t pm_context_id,
     uint32_t path_offset = 0u;
     uint32_t args_offset = 0u;
     uint32_t request_id = 0u;
-    int send_ok = 0;
     int broker_has_borrow = 0;
     xfer_buffer_borrow_t broker_borrow = {0};
     ipc_message_t req;
@@ -897,7 +896,6 @@ pm_request_broker_spawn_plan(uint32_t pm_context_id,
         klog_write("[dbg-pm-broker] send failed\n");
         goto broker_ipc_fail;
     }
-    send_ok = 1;
     if (pm_recv_reply_matching(pm_context_id,
                                g_pm.broker_reply_endpoint,
                                request_id,
@@ -1133,8 +1131,20 @@ pm_fs_read_blob_for_spawn(uint32_t pm_context_id,
     }
 
     /* READ_PATH request: arg0 = path length (path bytes are already at offset 0
-     * of PM's buffer), arg1 = PM's buffer_id so fs-manager can borrow it (R to
-     * read the path, W to write the blob back). PM owns and releases it. */
+     * of PM's buffer), arg1 = client buffer capacity (0 = full transfer size),
+     * arg2 = PM's buffer_id, arg3 = the grant handle. PM owns the buffer and,
+     * owner-push, grants fs-manager R|W over it (fs-manager reborrows to the
+     * backend, which writes the blob back, then unborrows so PM can release).
+     * PM's buffer is full transfer size, so arg1 = 0 lets the backend fill it. */
+    uint32_t fsmgr_ctx = 0;
+    xfer_buffer_borrow_t fs_grant;
+    if (ipc_endpoint_owner(g_pm.fs_endpoint, &fsmgr_ctx) != IPC_OK || fsmgr_ctx == 0) {
+        return PM_SPAWN_INTERNAL_ERR_SEND;
+    }
+    if (xfer_buffer_borrow(pmbuf, fsmgr_ctx,
+                           BUFFER_BORROW_READ | BUFFER_BORROW_WRITE, &fs_grant) != XFER_BUFFER_OK) {
+        return PM_SPAWN_INTERNAL_ERR_SEND;
+    }
     req_id = g_pm.fs_request_id++;
     ipc_message_t req = {
         .type = FS_IPC_READ_PATH_REQ,
@@ -1142,26 +1152,36 @@ pm_fs_read_blob_for_spawn(uint32_t pm_context_id,
         .destination = g_pm.fs_endpoint,
         .request_id = req_id,
         .arg0 = (int32_t)path_len,
-        .arg1 = (int32_t)pmbuf->buffer.buffer_id,
-        .arg2 = 0,
-        .arg3 = 0
+        .arg1 = 0,
+        .arg2 = (int32_t)pmbuf->buffer.buffer_id,
+        .arg3 = (int32_t)fs_grant.borrow_id
     };
     if (ipc_send_from(pm_context_id, g_pm.fs_endpoint, &req) != IPC_OK) {
+        (void)xfer_buffer_unborrow(&fs_grant);
         return PM_SPAWN_INTERNAL_ERR_SEND;
     }
-    if (pm_recv_fs_reply(pm_context_id, g_pm.fs_reply_endpoint, req_id, &reply) != 0 ||
-        reply.type != FS_IPC_RESP ||
-        reply.arg0 <= 0 ||
-        (uint32_t)reply.arg0 > max) {
-        klog_write("[pm] spawn_path fs read failed: ");
-        for (uint32_t i = 0; i < path_len; ++i) {
-            char c[2];
-            c[0] = path[i];
-            c[1] = '\0';
-            klog_write(c);
+    {
+        int recv_rc = pm_recv_fs_reply(pm_context_id, g_pm.fs_reply_endpoint, req_id, &reply);
+        /* Drop PM's grant now (not at buffer release): pmbuf is reused across
+         * multiple reads in one spawn (e.g. broker: guest blob then host
+         * executor), and fs-manager is the grant's borrower so it never drops
+         * it. Leaving it active would make the next read's re-grant fail
+         * ALREADY_BORROWED. PM created the grant, so it holds the handle. */
+        (void)xfer_buffer_unborrow(&fs_grant);
+        if (recv_rc != 0 ||
+            reply.type != FS_IPC_RESP ||
+            reply.arg0 <= 0 ||
+            (uint32_t)reply.arg0 > max) {
+            klog_write("[pm] spawn_path fs read failed: ");
+            for (uint32_t i = 0; i < path_len; ++i) {
+                char c[2];
+                c[0] = path[i];
+                c[1] = '\0';
+                klog_write(c);
+            }
+            klog_write("\n");
+            return PM_SPAWN_INTERNAL_ERR_BAD_REPLY;
         }
-        klog_write("\n");
-        return PM_SPAWN_INTERNAL_ERR_BAD_REPLY;
     }
     *out_blob_size = (uint32_t)reply.arg0;
     return 0;

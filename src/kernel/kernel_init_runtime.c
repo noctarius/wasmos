@@ -388,10 +388,11 @@ kernel_init_entry(process_t *process, void *arg)
             return PROCESS_RUN_YIELDED;
         }
         trace_write("[init] device-manager ready\n");
-        /* TODO(xfer-stage2): verify sysinit's resolvable FS path at boot; the
-         * initfs is mounted at /init and sysinit.wap ships to both apps/ and
-         * system/services/. */
-        if (init_send_spawn_path(process, state, "/init/system/services/sysinit.wap") != 0) {
+        /* sysinit is not a boot-volume prerequisite, so it is NOT in the initfs
+         * (which holds only what's needed to mount the boot volume). It ships on
+         * the ESP and is spawned by path from the "boot" FAT mount once device
+         * enumeration has brought fs-fat up; the spawn retries until then. */
+        if (init_send_spawn_path(process, state, "/boot/system/services/sysinit.wap") != 0) {
             return PROCESS_RUN_YIELDED;
         }
         return PROCESS_RUN_YIELDED;

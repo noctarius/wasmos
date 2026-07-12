@@ -43,6 +43,7 @@ static device_manager_state_t g_dm = {
     .rules_boot_retry_delay = 0,
     .rules_boot_failures = 0,
     .rules_boot_request_id = -1,
+    .rules_boot_bid = -1,
     .rules_init_active = 0,
     .rules_boot_active = 0,
     .rule_spawn_pending = 0,
@@ -277,29 +278,45 @@ is_mount_already_active(const char *mount)
     }
     req_id = g_dm.request_id++;
     wasmos_ipc_message_t resp;
+    /* Owner-push: acquire a buffer and GRANT fs-manager WRITE so it can write the
+     * mounts listing back into it; ship bid (arg2) + b1 (arg3). */
+    int32_t bid = wasmos_xfer_buffer_acquire((int32_t)sizeof(buf));
+    if (bid < 0) {
+        return 0;
+    }
+    int32_t b1 = wasmos_xfer_buffer_borrow(g_dm.fs_endpoint, bid, WASMOS_BUFFER_GRANT_WRITE);
+    if (b1 < 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return 0;
+    }
     if (dm_ipc_call(g_dm.fs_endpoint,
                     g_dm.reply_endpoint,
                     FSMGR_IPC_QUERY_MOUNTS_REQ,
                     req_id,
                     0,
                     0,
-                    0,
-                    0,
+                    bid,
+                    b1,
                     &resp,
                     128) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return 0;
     }
     resp_type = resp.type;
     if (resp_type != FSMGR_IPC_QUERY_MOUNTS_RESP) {
+        (void)wasmos_xfer_buffer_release(bid);
         return 0;
     }
     n = resp.arg0;
     if (n <= 0 || n >= (int32_t)sizeof(buf)) {
+        (void)wasmos_xfer_buffer_release(bid);
         return 0;
     }
-    if (wasmos_xfer_buffer_read((int32_t)(uintptr_t)buf, n, 0) != 0) {
+    if (wasmos_xfer_buffer_read(bid, (int32_t)(uintptr_t)buf, n, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return 0;
     }
+    (void)wasmos_xfer_buffer_release(bid);
     buf[n] = '\0';
     while (mount[0] == '/') {
         mount++;
@@ -427,10 +444,34 @@ kick_boot_rules_read_async(void)
         console_write("[device-manager] boot rules invalid path; skipping\n");
         return;
     }
-    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)path, path_len, 0) != 0) {
+    /* Owner-push READ_PATH: one object holds the path (in) then the blob (out);
+     * GRANT fs-manager R|W and ship buffer_id (arg2) + borrow_id (arg3). The
+     * buffer_id is threaded to poll_boot_rules_async via g_dm.rules_boot_bid. */
+    int32_t buf_size = (int32_t)DEVMGR_RULE_TEXT_CAP;
+    if (buf_size < path_len) {
+        buf_size = path_len;
+    }
+    int32_t bid = wasmos_xfer_buffer_acquire(buf_size);
+    if (bid < 0) {
+        g_dm.rules_boot_loaded = 1;
+        g_dm.rules_boot_active = 0;
+        console_write("[device-manager] boot rules buffer acquire failed; skipping\n");
+        return;
+    }
+    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)path, path_len, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         g_dm.rules_boot_loaded = 1;
         g_dm.rules_boot_active = 0;
         console_write("[device-manager] boot rules buffer write failed; skipping\n");
+        return;
+    }
+    int32_t b1 = wasmos_xfer_buffer_borrow(g_dm.fs_endpoint, bid,
+                                           WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
+    if (b1 < 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        g_dm.rules_boot_loaded = 1;
+        g_dm.rules_boot_active = 0;
+        console_write("[device-manager] boot rules buffer grant failed; skipping\n");
         return;
     }
     g_dm.rules_boot_request_id = g_dm.request_id++;
@@ -439,14 +480,16 @@ kick_boot_rules_read_async(void)
                         FS_IPC_READ_PATH_REQ,
                         g_dm.rules_boot_request_id,
                         path_len,
-                        0,
-                        0,
-                        0) != 0) {
+                        buf_size,
+                        bid,
+                        b1) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         g_dm.rules_boot_loaded = 1;
         g_dm.rules_boot_active = 0;
         console_write("[device-manager] boot rules request send failed; skipping\n");
         return;
     }
+    g_dm.rules_boot_bid = bid;
     g_dm.rules_boot_request_pending = 1;
     g_dm_rules_wait.pending = 1;
     g_dm_rules_wait.done = 0;
@@ -469,7 +512,14 @@ poll_boot_rules_async(void)
     }
     g_dm_rules_wait.pending = 0;
     g_dm.rules_boot_request_pending = 0;
+    /* Owner-push: this function owns the buffer acquired in kick_boot_rules_read_async;
+     * fs-manager has already unborrowed its grant, so release() succeeds here. */
+    int32_t bid = g_dm.rules_boot_bid;
+    g_dm.rules_boot_bid = -1;
     if (g_dm_rules_wait.msg.type != FS_IPC_RESP) {
+        if (bid >= 0) {
+            (void)wasmos_xfer_buffer_release(bid);
+        }
         if (g_dm.rules_boot_failures < 255u) {
             g_dm.rules_boot_failures++;
         }
@@ -484,6 +534,9 @@ poll_boot_rules_async(void)
     }
     read_len = g_dm_rules_wait.msg.arg0;
     if (read_len < 0) {
+        if (bid >= 0) {
+            (void)wasmos_xfer_buffer_release(bid);
+        }
         if (g_dm.rules_boot_failures < 255u) {
             g_dm.rules_boot_failures++;
         }
@@ -499,7 +552,10 @@ poll_boot_rules_async(void)
     if (read_len >= (int32_t)sizeof(text)) {
         read_len = (int32_t)sizeof(text) - 1;
     }
-    if (read_len > 0 && wasmos_xfer_buffer_read((int32_t)(uintptr_t)text, read_len, 0) != 0) {
+    if (read_len > 0 && wasmos_xfer_buffer_read(bid, (int32_t)(uintptr_t)text, read_len, 0) != 0) {
+        if (bid >= 0) {
+            (void)wasmos_xfer_buffer_release(bid);
+        }
         if (g_dm.rules_boot_failures < 255u) {
             g_dm.rules_boot_failures++;
         }
@@ -511,6 +567,9 @@ poll_boot_rules_async(void)
         }
         g_dm.rules_boot_retry_delay = 64;
         return;
+    }
+    if (bid >= 0) {
+        (void)wasmos_xfer_buffer_release(bid);
     }
     g_dm.rules_boot_failures = 0;
     text[read_len] = '\0';
@@ -719,12 +778,21 @@ hw_spawn_driver_path(const char *path)
     if (path_len == 0 || path_len > 95u) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    /* Owner-push spawn: PM reads the caller's buffer via ownership. */
+    int32_t bid = wasmos_xfer_buffer_acquire((int32_t)path_len);
+    if (bid < 0) {
         return -1;
     }
-    return dm_spawn_sync_call(PROC_IPC_SPAWN_PATH_SYNC,
-                              PROC_SPAWN_PATH_FLAG_AUTOREAP, /* reap one-shot enumerators (pci/acpi) on exit */
-                              (int32_t)path_len, 0, DM_SPAWN_TIMEOUT_MS);
+    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    int rc = dm_spawn_sync_call(PROC_IPC_SPAWN_PATH_SYNC,
+                                PROC_SPAWN_PATH_FLAG_AUTOREAP, /* reap one-shot enumerators (pci/acpi) on exit */
+                                (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
+                                0, DM_SPAWN_TIMEOUT_MS);
+    (void)wasmos_xfer_buffer_release(bid);
+    return rc;
 }
 
 static int
@@ -742,14 +810,24 @@ hw_spawn_driver_path_caps(const char *path, const spawn_caps_t *caps)
     if (path_len == 0 || path_len > 95u) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    /* Owner-push spawn: PM reads the caller's buffer via ownership. */
+    int32_t bid = wasmos_xfer_buffer_acquire((int32_t)path_len);
+    if (bid < 0) {
+        return -1;
+    }
+    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
     caps_arg0 = ((uint32_t)caps->irq_mask << 16) | ((uint32_t)caps->cap_flags & 0xFFFFu);
     caps_arg2 = ((uint32_t)caps->io_port_max << 16) | (uint32_t)caps->io_port_min;
-    return dm_spawn_sync_call(PROC_IPC_SPAWN_PATH_CAPS_SYNC,
-                              (int32_t)caps_arg0, (int32_t)path_len, (int32_t)caps_arg2,
-                              DM_SPAWN_TIMEOUT_MS);
+    int rc = dm_spawn_sync_call(PROC_IPC_SPAWN_PATH_CAPS_SYNC,
+                                (int32_t)caps_arg0,
+                                (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
+                                (int32_t)caps_arg2,
+                                DM_SPAWN_TIMEOUT_MS);
+    (void)wasmos_xfer_buffer_release(bid);
+    return rc;
 }
 
 static int
@@ -821,7 +899,13 @@ query_module_meta_by_path(const char *path, uint32_t source, int32_t *out_index)
     if (path_len == 0 || path_len > 95u) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    /* Owner-push: PM reads the caller's buffer via ownership; pack bid+path_len. */
+    int32_t bid = wasmos_xfer_buffer_acquire((int32_t)path_len);
+    if (bid < 0) {
+        return -1;
+    }
+    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
     if (dm_ipc_call(g_dm.proc_endpoint,
@@ -829,13 +913,15 @@ query_module_meta_by_path(const char *path, uint32_t source, int32_t *out_index)
                     PROC_IPC_MODULE_META_PATH,
                     g_dm.request_id++,
                     0,
-                    (int32_t)path_len,
+                    (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
                     (int32_t)source,
                     0,
                     &resp,
                     128) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
+    (void)wasmos_xfer_buffer_release(bid);
     if (resp.type != PROC_IPC_RESP) {
         return -1;
     }

@@ -56,15 +56,28 @@ main(int argc, char **argv)
     }
     puts("[net-smoke] found virtio.net");
 
+    /* Owner-push: own one buffer and grant the driver R|W over it. The buffer_id
+     * travels in the arg the driver reads (arg0 for link/rx, arg1 for tx).
+     * FIXME(owner-push): the net wire protocol carrying buffer_id/grant is a
+     * documented follow-up; this matches virtio_net's current placeholder args.
+     * The grant is left to process-exit teardown for this short-lived example. */
+    int32_t bid = wasmos_xfer_buffer_acquire(2048);
+    if (bid < 0 ||
+        wasmos_xfer_buffer_borrow(net_ep, bid,
+                                  WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE) < 0) {
+        puts("[net-smoke] buffer setup failed");
+        return 1;
+    }
+
     wasmos_ipc_message_t m;
 
     /* Fetch the NIC MAC (driver writes 6 bytes into our xfer buffer). SLIRP
      * unicasts its ARP reply to the sender MAC, so it must be the real NIC MAC
      * or the device would filter the reply out. */
     uint8_t mac[6];
-    if (wasmos_ipc_send(net_ep, reply_ep, NETDRV_IPC_LINK_GET, req++, 0, 0, 0, 0) != 0
+    if (wasmos_ipc_send(net_ep, reply_ep, NETDRV_IPC_LINK_GET, req++, bid, 0, 0, 0) != 0
         || recv_on(reply_ep, &m) != 0 || m.type != NETDRV_IPC_RESP
-        || wasmos_xfer_buffer_read((int32_t)(uintptr_t)mac, 6, 0) != 0) {
+        || wasmos_xfer_buffer_read(bid, (int32_t)(uintptr_t)mac, 6, 0) != 0) {
         puts("[net-smoke] link_get failed");
         return 1;
     }
@@ -94,9 +107,9 @@ main(int argc, char **argv)
     for (i = 0; i < 6; ++i) arp[p++] = 0x00u;            /* target MAC */
     for (i = 0; i < 4; ++i) arp[p++] = target_ip[i];     /* target IP */
 
-    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)arp, (int32_t)p, 0) != 0
+    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)arp, (int32_t)p, 0) != 0
         || wasmos_ipc_send(net_ep, reply_ep, NETDRV_IPC_TX_FRAME, req++,
-                           (int32_t)p, 0, 0, 0) != 0
+                           (int32_t)p, bid, 0, 0) != 0
         || recv_on(reply_ep, &m) != 0 || m.type != NETDRV_IPC_RESP) {
         puts("[net-smoke] tx failed");
         return 1;
@@ -115,7 +128,7 @@ main(int argc, char **argv)
         if (m.type != NETDRV_IPC_RX_FRAME_NOTIFY) {
             continue;
         }
-        if (wasmos_ipc_send(net_ep, reply_ep, NETDRV_IPC_RX_POLL, req++, 0, 0, 0, 0) != 0
+        if (wasmos_ipc_send(net_ep, reply_ep, NETDRV_IPC_RX_POLL, req++, bid, 0, 0, 0) != 0
             || recv_on(reply_ep, &m) != 0 || m.type != NETDRV_IPC_RESP) {
             break;
         }
@@ -125,7 +138,7 @@ main(int argc, char **argv)
         }
         uint8_t frame[128];
         int32_t rd = len < (int32_t)sizeof frame ? len : (int32_t)sizeof frame;
-        if (wasmos_xfer_buffer_read((int32_t)(uintptr_t)frame, rd, 0) != 0) {
+        if (wasmos_xfer_buffer_read(bid, (int32_t)(uintptr_t)frame, rd, 0) != 0) {
             break;
         }
         unsigned et = ((unsigned)frame[12] << 8) | (unsigned)frame[13];

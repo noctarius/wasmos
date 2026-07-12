@@ -704,15 +704,15 @@ warp_xfer_buffer_write(uint32_t buffer_id, uint32_t ptr_off, uint32_t len, uint3
 // mirroring wasm3 link.c)
 // ---------------------------------------------------------------------------
 
-/* Whether the calling context may own/lend transfer buffers. Historical
- * role/capability proxy; mirrors wasm3's wasm_buffer_role_allowed.
- * FIXME: Replace with an explicit buffer-ownership capability. */
+/* Whether the calling context may own/lend transfer buffers. Owning a transfer
+ * buffer is like opening a file descriptor: any real process may acquire, borrow
+ * and release one. DMA is gated separately at dma_map_borrow
+ * (warp_require_dma_capability); mirrors wasm3's wasm_buffer_role_allowed. */
 static int
 warp_buffer_role_allowed(uint32_t context_id, process_t *proc)
 {
-    return proc &&
-           (warp_process_name_eq(proc->name, "fs-manager") ||
-            capability_has(context_id, CAP_DMA_BUFFER));
+    (void)context_id;
+    return proc != nullptr;
 }
 
 static uint32_t
@@ -731,26 +731,51 @@ warp_buffer_acquire(uint32_t kind, uint32_t minimum_size, void *ctx_)
     return owner.buffer.buffer_id;
 }
 
+/* Owner-driven grant: the caller must own buffer_id and names the grantee by an
+ * endpoint it owns. Assigns the grantee `flags` rights and returns the borrow_id
+ * (the grantee's handle). Mirrors wasm3's wasm_buffer_borrow_impl. */
 static uint32_t
-warp_buffer_borrow(uint32_t kind, uint32_t src_ep, uint32_t buffer_id, uint32_t flags, void *ctx_)
+warp_buffer_borrow(uint32_t kind, uint32_t grantee_ep, uint32_t buffer_id, uint32_t flags, void *ctx_)
 {
     (void)ctx_;
-    uint32_t context_id = 0, source_owner = 0;
+    uint32_t context_id = 0, grantee_context = 0;
     process_t *proc = process_get(process_current_pid());
     if (kind != (uint32_t)BUFFER_KIND_TRANSFER) return (uint32_t)XFER_BUFFER_ERR_INVALID_KIND;
     if ((int32_t)buffer_id <= 0) return (uint32_t)XFER_BUFFER_ERR_NOT_FOUND;
     if (flags == 0 || (flags & ~0x3u) != 0) return (uint32_t)XFER_BUFFER_ERR_INVALID_FLAGS;
     if (warp_current_context_id(&context_id) != 0) return (uint32_t)XFER_BUFFER_ERR_INVALID_CONTEXT;
     if (!warp_buffer_role_allowed(context_id, proc)) return (uint32_t)XFER_BUFFER_ERR_NO_ACCESS;
-    if (ipc_endpoint_owner(src_ep, &source_owner) != IPC_OK ||
-        source_owner == 0 || source_owner == context_id)
-        return (uint32_t)XFER_BUFFER_ERR_NOT_OWNER;
+    if (ipc_endpoint_owner(grantee_ep, &grantee_context) != IPC_OK || grantee_context == 0)
+        return (uint32_t)XFER_BUFFER_ERR_INVALID_CONTEXT;
     xfer_buffer_t key = { kind, buffer_id, 0u };
     xfer_buffer_owner_t owner;
-    int rc = xfer_buffer_get_owned(&key, source_owner, &owner);
+    int rc = xfer_buffer_get_owned(&key, context_id, &owner);   /* caller must be owner */
     if (rc != XFER_BUFFER_OK) return (uint32_t)rc;
     xfer_buffer_borrow_t out;
-    rc = xfer_buffer_borrow(&owner, context_id, flags, &out);
+    rc = xfer_buffer_borrow(&owner, grantee_context, flags, &out);
+    if (rc != XFER_BUFFER_OK) return (uint32_t)rc;
+    return out.borrow_id;
+}
+
+/* reborrow: a current borrower extends a rights-narrowed sub-grant of its own
+ * borrow (borrow_id) to the context that owns grantee_ep. Mirrors wasm3's
+ * wasm_buffer_reborrow_impl. */
+static uint32_t
+warp_buffer_reborrow(uint32_t kind, uint32_t grantee_ep, uint32_t borrow_id, uint32_t flags, void *ctx_)
+{
+    (void)ctx_;
+    uint32_t context_id = 0, grantee_context = 0;
+    if (kind != (uint32_t)BUFFER_KIND_TRANSFER) return (uint32_t)XFER_BUFFER_ERR_INVALID_KIND;
+    if ((int32_t)borrow_id <= 0) return (uint32_t)XFER_BUFFER_ERR_INACTIVE_BORROW;
+    if (flags == 0 || (flags & ~0x3u) != 0) return (uint32_t)XFER_BUFFER_ERR_INVALID_FLAGS;
+    if (warp_current_context_id(&context_id) != 0) return (uint32_t)XFER_BUFFER_ERR_INVALID_CONTEXT;
+    if (ipc_endpoint_owner(grantee_ep, &grantee_context) != IPC_OK || grantee_context == 0)
+        return (uint32_t)XFER_BUFFER_ERR_INVALID_CONTEXT;
+    xfer_buffer_borrow_t upstream;
+    int rc = xfer_buffer_get_borrowed(borrow_id, context_id, &upstream, 0);  /* caller must be borrower */
+    if (rc != XFER_BUFFER_OK) return (uint32_t)rc;
+    xfer_buffer_borrow_t out;
+    rc = xfer_buffer_reborrow(&upstream, grantee_context, flags, &out);
     if (rc != XFER_BUFFER_OK) return (uint32_t)rc;
     return out.borrow_id;
 }
@@ -772,6 +797,8 @@ warp_buffer_release(uint32_t kind, uint32_t buffer_id, void *ctx_)
     return (uint32_t)xfer_buffer_release_owned(&owner);
 }
 
+/* unborrow: the GRANTOR (lender) of a (re)borrow drops it (owner-push) — resolved
+ * via get_lent, not get_borrowed. Mirrors wasm3's wasm_buffer_unborrow_impl. */
 static uint32_t
 warp_buffer_unborrow(uint32_t borrow_id, void *ctx_)
 {
@@ -780,7 +807,7 @@ warp_buffer_unborrow(uint32_t borrow_id, void *ctx_)
     if ((int32_t)borrow_id <= 0) return (uint32_t)XFER_BUFFER_ERR_INACTIVE_BORROW;
     if (warp_current_context_id(&context_id) != 0) return (uint32_t)XFER_BUFFER_ERR_INVALID_CONTEXT;
     xfer_buffer_borrow_t borrow;
-    int rc = xfer_buffer_get_borrowed(borrow_id, context_id, &borrow, nullptr);
+    int rc = xfer_buffer_get_lent(borrow_id, context_id, &borrow);
     if (rc != XFER_BUFFER_OK) return (uint32_t)rc;
     return (uint32_t)xfer_buffer_unborrow(&borrow);
 }
@@ -1486,9 +1513,15 @@ warp_xfer_buffer_acquire(uint32_t minimum_size, void *ctx_)
 }
 
 static uint32_t
-warp_xfer_buffer_borrow(uint32_t source_endpoint, uint32_t buffer_id, uint32_t flags, void *ctx_)
+warp_xfer_buffer_borrow(uint32_t grantee_endpoint, uint32_t buffer_id, uint32_t flags, void *ctx_)
 {
-    return warp_buffer_borrow((uint32_t)BUFFER_KIND_TRANSFER, source_endpoint, buffer_id, flags, ctx_);
+    return warp_buffer_borrow((uint32_t)BUFFER_KIND_TRANSFER, grantee_endpoint, buffer_id, flags, ctx_);
+}
+
+static uint32_t
+warp_xfer_buffer_reborrow(uint32_t grantee_endpoint, uint32_t borrow_id, uint32_t flags, void *ctx_)
+{
+    return warp_buffer_reborrow((uint32_t)BUFFER_KIND_TRANSFER, grantee_endpoint, borrow_id, flags, ctx_);
 }
 
 static uint32_t
@@ -2407,11 +2440,14 @@ warp_env_abort(uint32_t msg, uint32_t file, uint32_t line, uint32_t column, void
     /* Appended at the tail to preserve positional hc_id ↔ HC_* enum mapping
      * (WASMOS_SYMBOLS order defines the ring-3 hostcall index). Keep in exact
      * enum order: HC_XFER_BUFFER_ACQUIRE(104), _UNBORROW(105),
-     * HC_BUFFER_ACQUIRE(106), _UNBORROW(107). */ \
+     * HC_BUFFER_ACQUIRE(106), _UNBORROW(107),
+     * HC_XFER_BUFFER_REBORROW(108), HC_BUFFER_REBORROW(109). */ \
     LINK("wasmos", "xfer_buffer_acquire",  warp_xfer_buffer_acquire), \
     LINK("wasmos", "xfer_buffer_unborrow", warp_xfer_buffer_unborrow), \
     LINK("wasmos", "buffer_acquire",       warp_buffer_acquire), \
-    LINK("wasmos", "buffer_unborrow",      warp_buffer_unborrow)
+    LINK("wasmos", "buffer_unborrow",      warp_buffer_unborrow), \
+    LINK("wasmos", "xfer_buffer_reborrow", warp_xfer_buffer_reborrow), \
+    LINK("wasmos", "buffer_reborrow",      warp_buffer_reborrow)
 
 
 vb::Span<vb::NativeSymbol const>
@@ -2666,6 +2702,8 @@ warp_ring3_dispatch(uint32_t hc_id, void *frame_ptr)
         return warp_buffer_acquire((uint32_t)a0, (uint32_t)a1, ctx3);
     /* 107 */ case HC_BUFFER_UNBORROW:
         return warp_buffer_unborrow((uint32_t)a0, ctx2);
+    /* 109 */ case HC_BUFFER_REBORROW:
+        return warp_buffer_reborrow((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, (uint32_t)a3, ctx5);
     /* 32 */ case HC_BLOCK_BUFFER_PHYS:
         return warp_block_buffer_phys(reinterpret_cast<void *>(a0));
     /* 33 */ case HC_BLOCK_BUFFER_COPY:
@@ -2751,6 +2789,8 @@ warp_ring3_dispatch(uint32_t hc_id, void *frame_ptr)
         return warp_xfer_buffer_acquire((uint32_t)a0, ctx2);
     /* 105 */ case HC_XFER_BUFFER_UNBORROW:
         return warp_xfer_buffer_unborrow((uint32_t)a0, ctx2);
+    /* 108 */ case HC_XFER_BUFFER_REBORROW:
+        return warp_xfer_buffer_reborrow((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, ctx4);
     /* 69 */ case HC_SCHED_CPU_STATS:
         return warp_sched_cpu_stats((uint32_t)a0, (uint32_t)a1, ctx3);
     /* 70 */ case HC_THREAD_CREATE:

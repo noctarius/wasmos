@@ -88,6 +88,7 @@ spawn_path(const char *path)
 {
     wasmos_ipc_message_t reply;
     uint32_t path_len = 0;
+    int32_t bid;
     if (!path || path[0] == '\0') {
         return -1;
     }
@@ -97,7 +98,14 @@ spawn_path(const char *path)
     if (path_len == 0 || path_len > 240u) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    /* Own a per-spawn buffer with the path at offset 0; PM reads it via
+     * ownership (arg1 = (buffer_id << 12) | path_len). Released after the reply. */
+    bid = wasmos_xfer_buffer_acquire((int32_t)path_len);
+    if (bid < 0) {
+        return -1;
+    }
+    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
     for (uint32_t attempt = 0; attempt < SYSINIT_MAX_SPAWN_ATTEMPTS; ++attempt) {
@@ -106,14 +114,16 @@ spawn_path(const char *path)
                             PROC_IPC_SPAWN_PATH,
                             g_state.spawn_request_id,
                             PROC_SPAWN_PATH_FLAG_AUTOREAP, /* fire-and-forget: reap the child on exit */
-                            (int32_t)path_len,
+                            (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
                             0,
                             0,
                             &reply) != 0) {
+            (void)wasmos_xfer_buffer_release(bid);
             return -1;
         }
         if (reply.type == PROC_IPC_RESP) {
             g_state.spawn_request_id++;
+            (void)wasmos_xfer_buffer_release(bid);
             return 0;
         }
         if (reply.type == PROC_IPC_ERROR &&
@@ -124,9 +134,11 @@ spawn_path(const char *path)
         if (reply.type == PROC_IPC_ERROR) {
             sysinit_log_spawn_failure("spawn", path, (int32_t)reply.arg1);
         }
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
     sysinit_log_spawn_failure("spawn", path, PROC_PM_ERR_BUSY);
+    (void)wasmos_xfer_buffer_release(bid);
     return -1;
 }
 
@@ -138,13 +150,19 @@ sysinit_on_start(void *user, const char *path)
     wasmos_ipc_message_t reply;
     (void)user;
     uint32_t path_len = 0;
+    int32_t bid;
     while (path[path_len]) {
         path_len++;
     }
     if (path_len == 0 || path_len > 240u) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    bid = wasmos_xfer_buffer_acquire((int32_t)path_len);
+    if (bid < 0) {
+        return -1;
+    }
+    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
     if (wasmos_ipc_call(g_state.proc_endpoint,
@@ -152,13 +170,15 @@ sysinit_on_start(void *user, const char *path)
                         PROC_IPC_SPAWN_PATH_SYNC,
                         g_state.spawn_request_id,
                         0,
-                        (int32_t)path_len,
+                        (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
                         0,
                         SYSINIT_START_TIMEOUT_MS,
                         &reply) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         sysinit_log_spawn_failure("start", path, -1);
         return -1;
     }
+    (void)wasmos_xfer_buffer_release(bid);
     if (reply.type != PROC_IPC_RESP || (int32_t)reply.arg0 < 0) {
         if (reply.type == PROC_IPC_ERROR) {
             sysinit_log_spawn_failure("start", path, (int32_t)reply.arg1);
@@ -200,18 +220,28 @@ sysinit_on_exec(void *user, const char *path, const char *args, int32_t *out_exi
     }
     uint32_t write_off = path_len + 1u;
     int32_t fs_buf_size = wasmos_xfer_buffer_size();
+    int32_t bid;
     if (fs_buf_size <= 0 || (int32_t)path_len >= fs_buf_size) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    /* Own a buffer holding path@0 and args@path_len+1; PM reads via ownership
+     * (arg1 = (buffer_id << 12) | path_len, arg2 = args_len). */
+    bid = wasmos_xfer_buffer_acquire((int32_t)(write_off + args_len + 1u));
+    if (bid < 0) {
+        return -1;
+    }
+    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
     if (args_len > 0u) {
         if ((int32_t)write_off >= fs_buf_size ||
             (int32_t)(write_off + args_len) > fs_buf_size) {
+            (void)wasmos_xfer_buffer_release(bid);
             return -1;
         }
-        if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
+        if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
+            (void)wasmos_xfer_buffer_release(bid);
             return -1;
         }
     }
@@ -220,12 +250,14 @@ sysinit_on_exec(void *user, const char *path, const char *args, int32_t *out_exi
                         PROC_IPC_SPAWN_PATH,
                         g_state.spawn_request_id,
                         0,
-                        (int32_t)path_len,
+                        (int32_t)(((uint32_t)bid << 12) | (path_len & 0xFFFu)),
                         (int32_t)args_len,
                         0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
     int32_t recv_rc = wasmos_ipc_select_one(g_state.reply_endpoint);
+    (void)wasmos_xfer_buffer_release(bid);
     if (recv_rc < 0) {
         return -1;
     }

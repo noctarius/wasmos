@@ -701,10 +701,13 @@ fn refresh_framebuffer_mapping() i32 {
         return c.GFX_STATUS_IO;
     }
     if (g_fb_pixels != null) {
-        _ = api().buffer_release.?(c.ND_BUFFER_KIND_FRAMEBUFFER);
+        _ = api().buffer_release.?(c.ND_BUFFER_KIND_FRAMEBUFFER, 0);
         g_fb_pixels = null;
     }
-    const fb_ptr = api().buffer_borrow.?(c.ND_BUFFER_KIND_FRAMEBUFFER, 0, c.ND_BUFFER_BORROW_READ | c.ND_BUFFER_BORROW_WRITE, @intCast(fb_size_u64));
+    // Native ABI v6: buffer_borrow(kind, source_context_id, buffer_id, flags, size).
+    // The framebuffer is owner-local (self-borrowed), so source_context_id and
+    // buffer_id are 0.
+    const fb_ptr = api().buffer_borrow.?(c.ND_BUFFER_KIND_FRAMEBUFFER, 0, 0, c.ND_BUFFER_BORROW_READ | c.ND_BUFFER_BORROW_WRITE, @intCast(fb_size_u64));
     if (fb_ptr == null) {
         return c.GFX_STATUS_IO;
     }

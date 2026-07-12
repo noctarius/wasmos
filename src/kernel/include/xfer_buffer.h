@@ -352,6 +352,26 @@ int xfer_buffer_reborrow(const xfer_buffer_borrow_t *upstream,
 int xfer_buffer_unborrow(const xfer_buffer_borrow_t *borrow);
 
 /**
+ * Resolve a borrow binding for its grantor (owner-push). Authorizes the context
+ * that created the borrow — its lender (the owner for a top-level borrow, or the
+ * upstream borrower for a reborrow). Sibling of {@code xfer_buffer_get_borrowed}
+ * (which authorizes the borrower, e.g. for DMA); feed the result to
+ * {@code xfer_buffer_unborrow} so only the grantor may drop it.
+ *
+ * @return {@code XFER_BUFFER_OK} on success. On failure, one of:
+ * <ul>
+ * <li>{@code XFER_BUFFER_ERR_NULL_ARG} - {@code out_borrow} is NULL.</li>
+ * <li>{@code XFER_BUFFER_ERR_INVALID_CONTEXT} - {@code lender_context_id} is zero.</li>
+ * <li>{@code XFER_BUFFER_ERR_INACTIVE_BORROW} - no active borrow has that id.</li>
+ * <li>{@code XFER_BUFFER_ERR_NO_ACCESS} - the caller is not the borrow's lender.</li>
+ * <li>{@code XFER_BUFFER_ERR_NOT_FOUND} - the underlying object no longer exists.</li>
+ * </ul>
+ */
+int xfer_buffer_get_lent(uint32_t borrow_id,
+                         uint32_t lender_context_id,
+                         xfer_buffer_borrow_t *out_borrow);
+
+/**
  * Whether a context currently holds at least the requested access rights to a
  * specific buffer object. The owner satisfies any valid request; borrowers
  * satisfy only their granted rights.

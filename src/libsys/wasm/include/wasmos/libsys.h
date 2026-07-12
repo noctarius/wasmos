@@ -469,54 +469,35 @@ wasmos_sys_ipc_send_retry(int32_t destination_endpoint,
     }
 }
 
+/* Grantee-side read of a transfer buffer object named by `buffer_id`. The owner
+ * must already have granted this context READ (via borrow/reborrow) before
+ * sending buffer_id; the kernel enforces access. No borrow is taken here. */
 static inline int32_t
-wasmos_sys_buffer_copy_from(int32_t kind,
-                            int32_t source_endpoint,
-                            int32_t borrow_flags,
-                            void *dst,
-                            int32_t len,
-                            int32_t offset)
+wasmos_sys_buffer_read(int32_t buffer_id, void *dst, int32_t len, int32_t offset)
 {
-    if (!dst || len < 0 || offset < 0) {
+    if (!dst || buffer_id <= 0 || len < 0 || offset < 0) {
         return -1;
     }
-    if (wasmos_buffer_borrow(kind, source_endpoint, borrow_flags) != 0) {
-        return -1;
-    }
-    if (wasmos_xfer_buffer_read((int32_t)(uintptr_t)dst, len, offset) != 0) {
-        (void)wasmos_buffer_release(kind);
-        return -1;
-    }
-    if (wasmos_buffer_release(kind) != 0) {
-        return -1;
-    }
-    return 0;
+    return wasmos_xfer_buffer_read(buffer_id, (int32_t)(uintptr_t)dst, len, offset) == 0 ? 0 : -1;
 }
 
+/* Grantee-side write of a transfer buffer object named by `buffer_id`. The owner
+ * must already have granted this context WRITE before sending buffer_id. */
 static inline int32_t
-wasmos_sys_buffer_write_to(int32_t kind,
-                           int32_t source_endpoint,
-                           int32_t borrow_flags,
-                           const void *src,
-                           int32_t len,
-                           int32_t offset)
+wasmos_sys_buffer_write(int32_t buffer_id, const void *src, int32_t len, int32_t offset)
 {
-    if (!src || len < 0 || offset < 0) {
+    if (!src || buffer_id <= 0 || len < 0 || offset < 0) {
         return -1;
     }
-    if (wasmos_buffer_borrow(kind, source_endpoint, borrow_flags) != 0) {
-        return -1;
-    }
-    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)src, len, offset) != 0) {
-        (void)wasmos_buffer_release(kind);
-        return -1;
-    }
-    if (wasmos_buffer_release(kind) != 0) {
-        return -1;
-    }
-    return 0;
+    return wasmos_xfer_buffer_write(buffer_id, (int32_t)(uintptr_t)src, len, offset) == 0 ? 0 : -1;
 }
 
+/* Read the file at `path` via FS_IPC_READ_PATH_REQ into `out_text`.
+ * Owner-push: acquires a per-call buffer, writes the path in, GRANTS the FS
+ * endpoint R|W over it (borrow -> b1), and ships buffer_id (arg2) + b1 (arg3).
+ * fs-manager reborrows to the backend, which writes the blob straight back into
+ * this buffer, then fs-manager unborrows b1 before replying so release()
+ * succeeds. Returns bytes read or -1. */
 static inline int32_t
 wasmos_sys_fs_read_path(int32_t fs_endpoint,
                         int32_t reply_endpoint,
@@ -528,6 +509,9 @@ wasmos_sys_fs_read_path(int32_t fs_endpoint,
     wasmos_ipc_message_t resp;
     int32_t path_len = 0;
     int32_t read_len = 0;
+    int32_t buf_size = 0;
+    int32_t bid = -1;
+    int32_t b1 = -1;
     if (!path || !out_text || out_text_len < 2) {
         return -1;
     }
@@ -535,7 +519,20 @@ wasmos_sys_fs_read_path(int32_t fs_endpoint,
     if (path_len <= 0 || path_len >= wasmos_xfer_buffer_size()) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)path, path_len, 0) != 0) {
+    /* The one object holds the path (in) then the blob (out): size for both. */
+    buf_size = out_text_len > path_len ? out_text_len : path_len;
+    bid = wasmos_xfer_buffer_acquire(buf_size);
+    if (bid < 0) {
+        return -1;
+    }
+    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)path, path_len, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    b1 = wasmos_xfer_buffer_borrow(fs_endpoint, bid,
+                                   WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
+    if (b1 < 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
     if (wasmos_ipc_send(fs_endpoint,
@@ -543,58 +540,33 @@ wasmos_sys_fs_read_path(int32_t fs_endpoint,
                         FS_IPC_READ_PATH_REQ,
                         request_id,
                         path_len,
-                        0,
-                        0,
-                        0) != 0) {
+                        buf_size,
+                        bid,
+                        b1) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    if (wasmos_sys_ipc_recv_matching(reply_endpoint, request_id, &resp) != 0) {
-        return -1;
-    }
-    if (resp.type != FS_IPC_RESP) {
+    if (wasmos_sys_ipc_recv_matching(reply_endpoint, request_id, &resp) != 0 ||
+        resp.type != FS_IPC_RESP) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
     read_len = resp.arg0;
     if (read_len < 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
     if (read_len >= out_text_len) {
         read_len = out_text_len - 1;
     }
     if (read_len > 0 &&
-        wasmos_xfer_buffer_read((int32_t)(uintptr_t)out_text, read_len, 0) != 0) {
+        wasmos_xfer_buffer_read(bid, (int32_t)(uintptr_t)out_text, read_len, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
+    (void)wasmos_xfer_buffer_release(bid);
     out_text[read_len] = '\0';
     return read_len;
-}
-
-static inline int32_t
-wasmos_sys_xfer_buffer_copy_from_endpoint(int32_t source_endpoint,
-                                        void *dst,
-                                        int32_t len,
-                                        int32_t offset)
-{
-    return wasmos_sys_buffer_copy_from(WASMOS_BUFFER_KIND_XFER,
-                                       source_endpoint,
-                                       WASMOS_BUFFER_GRANT_READ,
-                                       dst,
-                                       len,
-                                       offset);
-}
-
-static inline int32_t
-wasmos_sys_xfer_buffer_write_to_endpoint(int32_t source_endpoint,
-                                       const void *src,
-                                       int32_t len,
-                                       int32_t offset)
-{
-    return wasmos_sys_buffer_write_to(WASMOS_BUFFER_KIND_XFER,
-                                      source_endpoint,
-                                      WASMOS_BUFFER_GRANT_WRITE,
-                                      src,
-                                      len,
-                                      offset);
 }
 
 #ifdef __cplusplus

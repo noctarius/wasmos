@@ -280,6 +280,14 @@ ata_log_dma_fallback(uint8_t is_write, int32_t rc)
     }
 }
 
+/* TODO(xfer-buffer owner-push): the xfer-buffer DMA fast-path is temporarily
+ * disabled during the migration to the owner-push capability ABI. The old path
+ * used borrower-pull borrow + the pre-migration dma_map_borrow(kind, endpoint,
+ * ...) signature. Under the new model the block client must own the buffer and
+ * grant ata a borrow (borrow_id), which the block IPC protocol must carry; then
+ * ata would dma_map_borrow(borrow_id, ...)/dma_sync_borrow/dma_unmap_borrow.
+ * Until the block protocol carries the grant, force the PIO fallback (which uses
+ * the dedicated block_buffer and is unaffected by this migration). */
 static int
 ata_dma_prepare(int32_t source_endpoint,
                 uint32_t offset,
@@ -287,38 +295,12 @@ ata_dma_prepare(int32_t source_endpoint,
                 uint32_t direction_flags,
                 int32_t *out_device_addr)
 {
-    int32_t rc = 0;
-    if (!out_device_addr || source_endpoint < 0 || length == 0) {
-        return WASMOS_DMA_STATUS_INVALID;
-    }
-    rc = wasmos_buffer_borrow(WASMOS_BUFFER_KIND_XFER,
-                              source_endpoint,
-                              (direction_flags & WASMOS_DMA_DIR_FROM_DEVICE) ? WASMOS_BUFFER_GRANT_WRITE : WASMOS_BUFFER_GRANT_READ);
-    if (rc != 0) {
-        return 100 + rc;
-    }
-    rc = wasmos_dma_map_borrow(WASMOS_BUFFER_KIND_XFER,
-                               source_endpoint,
-                               (int32_t)offset,
-                               (int32_t)length,
-                               (int32_t)direction_flags);
-    if (rc < 0) {
-        (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_XFER);
-        return 200 + rc;
-    }
-    *out_device_addr = rc;
-    if ((direction_flags & WASMOS_DMA_DIR_TO_DEVICE) != 0) {
-        rc = wasmos_dma_sync_borrow(WASMOS_BUFFER_KIND_XFER,
-                                    (int32_t)offset,
-                                    (int32_t)length,
-                                    WASMOS_DMA_SYNC_TO_DEVICE);
-        if (rc != WASMOS_DMA_STATUS_OK) {
-            (void)wasmos_dma_unmap_borrow(WASMOS_BUFFER_KIND_XFER, source_endpoint);
-            (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_XFER);
-            return 300 + rc;
-        }
-    }
-    return WASMOS_DMA_STATUS_OK;
+    (void)source_endpoint;
+    (void)offset;
+    (void)length;
+    (void)direction_flags;
+    (void)out_device_addr;
+    return WASMOS_DMA_STATUS_DENY; /* force PIO fallback */
 }
 
 static int
@@ -327,25 +309,11 @@ ata_dma_finish(int32_t source_endpoint,
                uint32_t length,
                uint32_t direction_flags)
 {
-    int rc = WASMOS_DMA_STATUS_OK;
-    if ((direction_flags & WASMOS_DMA_DIR_FROM_DEVICE) != 0) {
-        rc = wasmos_dma_sync_borrow(WASMOS_BUFFER_KIND_XFER,
-                                    (int32_t)offset,
-                                    (int32_t)length,
-                                    WASMOS_DMA_SYNC_FROM_DEVICE);
-        if (rc != WASMOS_DMA_STATUS_OK) {
-            (void)wasmos_dma_unmap_borrow(WASMOS_BUFFER_KIND_XFER, source_endpoint);
-            (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_XFER);
-            return -1;
-        }
-    }
-    if (wasmos_dma_unmap_borrow(WASMOS_BUFFER_KIND_XFER, source_endpoint) != WASMOS_DMA_STATUS_OK) {
-        (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_XFER);
-        return -1;
-    }
-    if (wasmos_buffer_release(WASMOS_BUFFER_KIND_XFER) != 0) {
-        return -1;
-    }
+    /* Unreachable while ata_dma_prepare always denies (callers guard on OK). */
+    (void)source_endpoint;
+    (void)offset;
+    (void)length;
+    (void)direction_flags;
     return 0;
 }
 

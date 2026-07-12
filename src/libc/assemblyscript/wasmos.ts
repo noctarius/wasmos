@@ -58,10 +58,21 @@ declare function ipc_last_field(field: i32): i32;
 declare function fs_endpoint(): i32;
 @external("wasmos", "xfer_buffer_size")
 declare function xfer_buffer_size(): i32;
+// Object/owner/borrow xfer ABI (owner-push): read/write name the object by
+// buffer_id (arg 1). acquire creates an owned buffer; borrow grants a named
+// endpoint's context rights over it; release destroys it. See src/libc/src/unistd.c.
 @external("wasmos", "xfer_buffer_write")
-declare function xfer_buffer_write(ptr: i32, len: i32, offset: i32): i32;
+declare function xfer_buffer_write(bufferId: i32, ptr: i32, len: i32, offset: i32): i32;
 @external("wasmos", "xfer_buffer_read")
-declare function xfer_buffer_read(ptr: i32, len: i32, offset: i32): i32;
+declare function xfer_buffer_read(bufferId: i32, ptr: i32, len: i32, offset: i32): i32;
+@external("wasmos", "xfer_buffer_acquire")
+declare function xfer_buffer_acquire(minimumSize: i32): i32;
+@external("wasmos", "xfer_buffer_borrow")
+declare function xfer_buffer_borrow(granteeEndpoint: i32, bufferId: i32, flags: i32): i32;
+@external("wasmos", "xfer_buffer_release")
+declare function xfer_buffer_release(bufferId: i32): i32;
+// GRANT flags mirror WASMOS_BUFFER_GRANT_READ|WRITE.
+const XFER_GRANT_RW: i32 = 0x3;
 @external("wasmos", "thread_gettid")
 declare function thread_gettid(): i32;
 @external("wasmos", "thread_yield")
@@ -122,7 +133,10 @@ export class Mutex {
 
 function readSpawnArgs(): Array<string> {
   const buf = new Uint8Array(128);
-  if (xfer_buffer_read(buf.dataStart as i32, buf.length - 1, 0) != 0) {
+  // FIXME(owner-push): child argv buffer_id handoff is unfinished (stage 4); PM
+  // must pass the child's argv buffer_id via a syscall or entry arg. Placeholder
+  // buffer_id 1 keeps this compiling; argv-on-spawn is not yet functional.
+  if (xfer_buffer_read(1, buf.dataStart as i32, buf.length - 1, 0) != 0) {
     return new Array<string>();
   }
   let n: i32 = 0;
@@ -349,20 +363,35 @@ export class File {
       requested = bufferLimit;
     }
 
-    const response = fsRequest(FS_IPC_READ_REQ, this.fd, requested, 0, 0);
+    // Own a buffer and grant the FS manager WRITE so the backend can fill it.
+    const bid = xfer_buffer_acquire(requested);
+    if (bid < 0) {
+      return null;
+    }
+    const b1 = xfer_buffer_borrow(fs_endpoint(), bid, XFER_GRANT_RW);
+    if (b1 < 0) {
+      xfer_buffer_release(bid);
+      return null;
+    }
+    const response = fsRequest(FS_IPC_READ_REQ, this.fd, requested, bid, b1);
     if (response == null) {
+      xfer_buffer_release(bid);
       return null;
     }
     const readLen = response.arg0;
     if (readLen < 0 || readLen > requested) {
+      xfer_buffer_release(bid);
       return null;
     }
     if (readLen == 0) {
+      xfer_buffer_release(bid);
       return new Uint8Array(0);
     }
 
     const buffer = new Uint8Array(readLen);
-    if (xfer_buffer_read(buffer.dataStart as i32, readLen, 0) != 0) {
+    const rc = xfer_buffer_read(bid, buffer.dataStart as i32, readLen, 0);
+    xfer_buffer_release(bid);
+    if (rc != 0) {
       return null;
     }
     return buffer;
@@ -379,23 +408,42 @@ export class File {
       return -1;
     }
 
+    // Own one buffer and grant the FS manager once; reuse both across the whole
+    // chunk loop (a per-chunk re-grant would fail ALREADY_BORROWED). release()
+    // cascade-revokes the grant.
+    const bid = xfer_buffer_acquire(bufferLimit);
+    if (bid < 0) {
+      return -1;
+    }
+    const b1 = xfer_buffer_borrow(fs_endpoint(), bid, XFER_GRANT_RW);
+    if (b1 < 0) {
+      xfer_buffer_release(bid);
+      return -1;
+    }
     let done = 0;
+    let failed = false;
     while (done < buffer.length) {
       let chunkLen = buffer.length - done;
       if (chunkLen > bufferLimit) {
         chunkLen = bufferLimit;
       }
-      if (xfer_buffer_write(buffer.dataStart as i32 + done, chunkLen, 0) != 0) {
-        return -1;
+      if (xfer_buffer_write(bid, buffer.dataStart as i32 + done, chunkLen, 0) != 0) {
+        failed = true;
+        break;
       }
-      const response = fsRequest(FS_IPC_WRITE_REQ, this.fd, chunkLen, 0, 0);
+      const response = fsRequest(FS_IPC_WRITE_REQ, this.fd, chunkLen, bid, b1);
       if (response == null || response.arg0 < 0 || response.arg0 > chunkLen) {
-        return -1;
+        failed = true;
+        break;
       }
       done += response.arg0;
       if (response.arg0 == 0 || response.arg0 != chunkLen) {
         break;
       }
+    }
+    xfer_buffer_release(bid);
+    if (failed && done == 0) {
+      return -1;
     }
     return done;
   }
@@ -498,25 +546,43 @@ export namespace ipc {
 }
 
 export namespace fs {
-  function stagePath(path: string): Uint8Array | null {
+  // Owner-push staging: own a buffer holding the NUL-terminated path, grant the
+  // FS manager R|W over it, and return the handles + path length (excluding NUL).
+  // The caller passes pathLen (arg0), bid (arg2) and b1 (arg3) to fsRequest, and
+  // releases bid afterward; fs-manager unborrows b1 before replying.
+  class StagedPath {
+    constructor(public bid: i32, public b1: i32, public pathLen: i32) {}
+  }
+
+  function stagePath(path: string): StagedPath | null {
     const pathBytes = Uint8Array.wrap(String.UTF8.encode(path, true));
     const bufferLimit = xfer_buffer_size();
     if (bufferLimit <= 0 || pathBytes.length > bufferLimit) {
       return null;
     }
-    if (xfer_buffer_write(pathBytes.dataStart as i32, pathBytes.length, 0) != 0) {
+    const bid = xfer_buffer_acquire(pathBytes.length);
+    if (bid < 0) {
       return null;
     }
-    return pathBytes;
+    if (xfer_buffer_write(bid, pathBytes.dataStart as i32, pathBytes.length, 0) != 0) {
+      xfer_buffer_release(bid);
+      return null;
+    }
+    const b1 = xfer_buffer_borrow(fs_endpoint(), bid, XFER_GRANT_RW);
+    if (b1 < 0) {
+      xfer_buffer_release(bid);
+      return null;
+    }
+    return new StagedPath(bid, b1, pathBytes.length - 1);
   }
 
   function openWithFlags(path: string, flags: i32): File | null {
-    const pathBytes = stagePath(path);
-    if (pathBytes == null) {
+    const s = stagePath(path);
+    if (s == null) {
       return null;
     }
-
-    const response = fsRequest(FS_IPC_OPEN_REQ, pathBytes.length - 1, flags, 0, 0);
+    const response = fsRequest(FS_IPC_OPEN_REQ, s.pathLen, flags, s.bid, s.b1);
+    xfer_buffer_release(s.bid);
     if (response == null || response.arg0 < 0) {
       return null;
     }
@@ -540,12 +606,12 @@ export namespace fs {
   }
 
   export function stat(path: string): FileStat | null {
-    const pathBytes = stagePath(path);
-    if (pathBytes == null) {
+    const s = stagePath(path);
+    if (s == null) {
       return null;
     }
-
-    const response = fsRequest(FS_IPC_STAT_REQ, pathBytes.length - 1, 0, 0, 0);
+    const response = fsRequest(FS_IPC_STAT_REQ, s.pathLen, 0, s.bid, s.b1);
+    xfer_buffer_release(s.bid);
     if (response == null || response.arg0 < 0) {
       return null;
     }
@@ -553,32 +619,32 @@ export namespace fs {
   }
 
   export function unlink(path: string): bool {
-    const pathBytes = stagePath(path);
-    if (pathBytes == null) {
+    const s = stagePath(path);
+    if (s == null) {
       return false;
     }
-
-    const response = fsRequest(FS_IPC_UNLINK_REQ, pathBytes.length - 1, 0, 0, 0);
+    const response = fsRequest(FS_IPC_UNLINK_REQ, s.pathLen, 0, s.bid, s.b1);
+    xfer_buffer_release(s.bid);
     return response != null && response.arg0 == 0;
   }
 
   export function mkdir(path: string): bool {
-    const pathBytes = stagePath(path);
-    if (pathBytes == null) {
+    const s = stagePath(path);
+    if (s == null) {
       return false;
     }
-
-    const response = fsRequest(FS_IPC_MKDIR_REQ, pathBytes.length - 1, 0, 0, 0);
+    const response = fsRequest(FS_IPC_MKDIR_REQ, s.pathLen, 0, s.bid, s.b1);
+    xfer_buffer_release(s.bid);
     return response != null && response.arg0 == 0;
   }
 
   export function rmdir(path: string): bool {
-    const pathBytes = stagePath(path);
-    if (pathBytes == null) {
+    const s = stagePath(path);
+    if (s == null) {
       return false;
     }
-
-    const response = fsRequest(FS_IPC_RMDIR_REQ, pathBytes.length - 1, 0, 0, 0);
+    const response = fsRequest(FS_IPC_RMDIR_REQ, s.pathLen, 0, s.bid, s.b1);
+    xfer_buffer_release(s.bid);
     return response != null && response.arg0 == 0;
   }
 

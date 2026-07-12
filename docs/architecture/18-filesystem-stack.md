@@ -109,36 +109,44 @@ All filesystem operations use opcodes in the range `0x400–0x4FF`.
 
 ---
 
-### Transfer-Buffer Borrow Semantics
+### Transfer-Buffer Borrow Semantics (owner-push)
 
-Large data transfers (file reads, application blob loads) use the kernel's
-transfer-buffer borrow mechanism rather than packing data into IPC message
-arguments.
+Large data transfers (file reads/writes, spawn blob loads) move through the
+transfer-buffer **object/owner/borrow** model — the full contract (roles,
+grantor/borrower/mapper, lifecycle, ABI) is in
+[Transfer Buffers & DMA](12-dma-transfers.md); this section is just how the FS
+stack uses it.
 
-The important abstraction is a **borrowed transfer buffer**, not a
-"filesystem-only buffer." The filesystem stack happens to use the generic
-xfer-buffer channel, but the abstraction is not specific to filesystems.
+The **client owns** the buffer (it holds the lifecycle — it reads the result out
+after the call returns). fs-manager is only a **transient borrower** that
+reborrows to the backend; the backend writes/reads the client's buffer directly.
 
-For a normal file read:
+For a file read/write (`open`/`read`/`write`/`stat`/`unlink`/…), the client:
 
-1. The client allocates or designates a shared buffer region.
-2. The client sends a request with a buffer descriptor (address, length) in
-   the IPC args.
-3. The backend writes directly into the client's buffer via the borrow handle.
-4. The response message carries the number of bytes written; no copy through
-   `fs_manager` is needed.
+1. `acquire`s a per-operation buffer (`buffer_id`); for writes it fills it.
+2. `borrow`s the fs.vfs endpoint R|W → `b1` (grants fs-manager); one grant is
+   reused across a chunk loop (re-granting per chunk would hit `ALREADY_BORROWED`).
+3. Sends the request with **`arg2 = buffer_id`, `arg3 = b1`** (the FS op's other
+   args are unchanged, e.g. `fd`/`len`/`path_len`).
+4. fs-manager `reborrow`s `b1` to the routed backend → `b2`, forwards
+   `arg2 = buffer_id`, `arg3 = b2`; the backend reads/writes the client buffer by
+   `buffer_id`. fs-manager `unborrow`s `b2` (its own reborrow) after the reply.
+5. The client reads any result out of its own buffer and `release`s it — the
+   release cascade-revokes `b1` (fs-manager never unborrows the client's grant).
 
-The buffer object remains caller-owned for the duration of the operation; the
-backend is writing into the caller's borrowed buffer, not into a separate
-backend-local staging area.
+No copy through `fs_manager` occurs — the backend writes straight into the
+client's buffer. `FS_IPC_READ_PATH` (spawn/one-shot read) works the same way,
+with the kernel PM as the owning client; PM grants fs-manager via the kernel core
+API and its `release` cascades the grant. For requests with no payload (seek,
+close, chdir) `arg2`/`arg3` carry their normal op args and no borrow is taken.
 
-`FS_IPC_STREAM (0x481)` is used for transfers that exceed a single message:
-the backend sends multiple stream messages followed by a final `FS_IPC_RESP`
-to indicate end-of-data.
+Path-only requests where the *kernel* reads the caller's buffer directly (spawn
+paths, service-register descriptors) need no grant at all — the kernel resolves
+the caller-owned object by ownership (`pm_foreign_xfer_ptr`).
 
-For `FS_IPC_READ_APP` (used by the process manager during spawn), the process
-manager provides a pre-allocated spawn buffer and the filesystem backend fills
-it directly.
+`FS_IPC_STREAM (0x481)` is used for transfers that exceed a single message
+(directory listings): the backend sends stream messages then a final
+`FS_IPC_RESP`. (`FS_IPC_READ_APP` is retired along with spawn-by-name.)
 
 ---
 

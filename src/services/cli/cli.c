@@ -1160,31 +1160,51 @@ cli_show_mounts(void)
     int32_t req_id = 0;
     int32_t resp_type = 0;
     int32_t n = 0;
+    int32_t bid = -1;
+    int32_t b1 = -1;
     if (g_fs_endpoint < 0 || g_reply_endpoint < 0) {
         console_write("mount failed\n");
         return;
     }
+    /* Owner-push: acquire a buffer and GRANT fs-manager WRITE so it can write
+     * the mounts listing back into it; ship bid (arg2) + b1 (arg3). */
+    bid = wasmos_xfer_buffer_acquire((int32_t)sizeof(buf));
+    if (bid < 0) {
+        console_write("mount failed\n");
+        return;
+    }
+    b1 = wasmos_xfer_buffer_borrow(g_fs_endpoint, bid, WASMOS_BUFFER_GRANT_WRITE);
+    if (b1 < 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        console_write("mount failed\n");
+        return;
+    }
     req_id = g_request_id++;
-    if (wasmos_ipc_send(g_fs_endpoint, g_reply_endpoint, FSMGR_IPC_QUERY_MOUNTS_REQ, req_id, 0, 0, 0, 0) != 0 ||
+    if (wasmos_ipc_send(g_fs_endpoint, g_reply_endpoint, FSMGR_IPC_QUERY_MOUNTS_REQ, req_id, 0, 0, bid, b1) != 0 ||
         wasmos_ipc_select_one(g_reply_endpoint) < 0 ||
         wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req_id) {
+        (void)wasmos_xfer_buffer_release(bid);
         console_write("mount failed\n");
         return;
     }
     resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
     if (resp_type != FSMGR_IPC_QUERY_MOUNTS_RESP) {
+        (void)wasmos_xfer_buffer_release(bid);
         console_write("mount failed\n");
         return;
     }
     n = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
     if (n <= 0 || n >= (int32_t)sizeof(buf)) {
+        (void)wasmos_xfer_buffer_release(bid);
         console_write("mount failed\n");
         return;
     }
-    if (wasmos_xfer_buffer_read((int32_t)(uintptr_t)buf, n, 0) != 0) {
+    if (wasmos_xfer_buffer_read(bid, (int32_t)(uintptr_t)buf, n, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         console_write("mount failed\n");
         return;
     }
+    (void)wasmos_xfer_buffer_release(bid);
     buf[n] = '\0';
     console_write(buf);
 }
@@ -1392,6 +1412,7 @@ cli_spawn_exec_path(const char *input, int32_t *out_pid)
     uint32_t args_len = 0;
     uint32_t write_off = 0;
     int32_t fs_buf_size = 0;
+    int32_t bid = -1;
     uint32_t i = 0;
     if (!input || !out_pid) {
         return -1;
@@ -1412,7 +1433,7 @@ cli_spawn_exec_path(const char *input, int32_t *out_pid)
     }
     path_len = (uint32_t)wasmos_sys_strlen(resolved);
     fs_buf_size = wasmos_xfer_buffer_size();
-    if (path_len == 0u || fs_buf_size <= 0) {
+    if (path_len == 0u || path_len > 0xFFFu || fs_buf_size <= 0) {
         return -1;
     }
     write_off = path_len + 1u;
@@ -1421,19 +1442,30 @@ cli_spawn_exec_path(const char *input, int32_t *out_pid)
                            (int32_t)(write_off + args_len) > fs_buf_size))) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
+    /* Owner-push spawn: PM reads the caller's buffer via ownership (no grant). */
+    bid = wasmos_xfer_buffer_acquire((int32_t)(write_off + args_len + 1u));
+    if (bid < 0) {
+        return -1;
+    }
+    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
     if (args_len > 0u &&
-        wasmos_xfer_buffer_write((int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
+        wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    if (cli_send_proc(PROC_IPC_SPAWN_PATH, 0, path_len, args_len, 0) != 0) {
+    if (cli_send_proc(PROC_IPC_SPAWN_PATH, 0,
+                      ((uint32_t)bid << 12) | (path_len & 0xFFFu), args_len, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
     if (wasmos_ipc_select_one(g_reply_endpoint) < 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
+    (void)wasmos_xfer_buffer_release(bid);
     if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != g_pending_req) {
         return -1;
     }
@@ -1856,30 +1888,41 @@ cli_handle_line(void)
         path_len = (uint32_t)wasmos_sys_strlen(resolved);
         fs_buf_size = wasmos_xfer_buffer_size();
         write_off = path_len + 1u;
-        if (path_len == 0u || fs_buf_size <= 0 ||
+        if (path_len == 0u || path_len > 0xFFFu || fs_buf_size <= 0 ||
             (int32_t)path_len >= fs_buf_size ||
             (args_len > 0u && ((int32_t)write_off >= fs_buf_size ||
                                (int32_t)(write_off + args_len) > fs_buf_size))) {
             console_write("spawn failed\n");
             return 0;
         }
-        if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
+        /* Owner-push spawn: PM reads the caller's buffer via ownership. */
+        int32_t bid = wasmos_xfer_buffer_acquire((int32_t)(write_off + args_len + 1u));
+        if (bid < 0) {
+            console_write("spawn failed\n");
+            return 0;
+        }
+        if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
+            (void)wasmos_xfer_buffer_release(bid);
             console_write("spawn failed\n");
             return 0;
         }
         if (args_len > 0u &&
-            wasmos_xfer_buffer_write((int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
+            wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
+            (void)wasmos_xfer_buffer_release(bid);
             console_write("spawn failed\n");
             return 0;
         }
         if (cli_send_proc(PROC_IPC_SPAWN_PATH,
                           PROC_SPAWN_PATH_FLAG_DETACH,
-                          (int32_t)path_len,
+                          ((uint32_t)bid << 12) | (path_len & 0xFFFu),
                           (int32_t)args_len,
                           0) != 0) {
+            (void)wasmos_xfer_buffer_release(bid);
             console_write("spawn failed\n");
             return 0;
         }
+        /* PM has consumed the buffer by the time it replies; drop ownership now. */
+        (void)wasmos_xfer_buffer_release(bid);
         g_pending_kind = PENDING_SPAWN;
         return 1;
     }
@@ -1930,30 +1973,41 @@ cli_handle_line(void)
         path_len = (uint32_t)wasmos_sys_strlen(resolved);
         fs_buf_size = wasmos_xfer_buffer_size();
         write_off = path_len + 1u;
-        if (path_len == 0u || fs_buf_size <= 0 ||
+        if (path_len == 0u || path_len > 0xFFFu || fs_buf_size <= 0 ||
             (int32_t)path_len >= fs_buf_size ||
             (args_len > 0u && ((int32_t)write_off >= fs_buf_size ||
                                (int32_t)(write_off + args_len) > fs_buf_size))) {
             console_write("exec failed\n");
             return 0;
         }
-        if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
+        /* Owner-push spawn: PM reads the caller's buffer via ownership. */
+        int32_t bid = wasmos_xfer_buffer_acquire((int32_t)(write_off + args_len + 1u));
+        if (bid < 0) {
+            console_write("exec failed\n");
+            return 0;
+        }
+        if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)resolved, (int32_t)path_len, 0) != 0) {
+            (void)wasmos_xfer_buffer_release(bid);
             console_write("exec failed\n");
             return 0;
         }
         if (args_len > 0u &&
-            wasmos_xfer_buffer_write((int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
+            wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
+            (void)wasmos_xfer_buffer_release(bid);
             console_write("exec failed\n");
             return 0;
         }
         if (cli_send_proc(PROC_IPC_SPAWN_PATH,
                           0,
-                          (int32_t)path_len,
+                          ((uint32_t)bid << 12) | (path_len & 0xFFFu),
                           (int32_t)args_len,
                           0) != 0) {
+            (void)wasmos_xfer_buffer_release(bid);
             console_write("exec failed\n");
             return 0;
         }
+        /* PM has consumed the buffer by the time it replies; drop ownership now. */
+        (void)wasmos_xfer_buffer_release(bid);
         g_pending_kind = PENDING_EXEC;
         return 1;
     }

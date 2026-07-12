@@ -39,17 +39,33 @@ extern int32_t wasmos_ipc_send(int32_t destination_endpoint,
                                int32_t arg2,
                                int32_t arg3)
     WASMOS_WASM_IMPORT("wasmos", "ipc_send");
-/* Object/owner/borrow xfer-buffer ABI (stateless, id-based). Userspace holds
- * the buffer_id (owner) and borrow_id (borrower) like file descriptors and
- * passes them back; the kernel keeps no per-context buffer state. All of these
- * return a value >= 0 on success (buffer_id / borrow_id / device address / 0)
- * and a negative xfer_buffer_status_t code on failure. */
+/* Object/owner/borrow xfer-buffer ABI (stateless, id-based, capability-style).
+ *
+ * The OWNER acquires a buffer (buffer_id, held like an fd) and drives all
+ * access grants: it calls `borrow` to assign a named grantee endpoint specific
+ * rights, receiving a borrow_id that it hands to the grantee. A grantee may
+ * `reborrow` its own borrow to a further context with rights that are a subset
+ * of its own. `release` is owner-only and requires all borrows gone first;
+ * `unborrow` drops one (re)borrow and cascade-revokes anything reborrowed from
+ * it. read/write name the object by buffer_id (the kernel checks the caller is
+ * the owner or a grantee with the required right).
+ *
+ * All return >= 0 on success (buffer_id / borrow_id / device address / 0) and a
+ * negative xfer_buffer_status_t code on failure. */
 extern int32_t wasmos_xfer_buffer_acquire(int32_t minimum_size)
     WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_acquire");
-extern int32_t wasmos_xfer_buffer_borrow(int32_t source_endpoint,
+/* OWNER assigns `flags` rights over `buffer_id` to the context that owns
+ * `grantee_endpoint`; returns the grantee's borrow_id. */
+extern int32_t wasmos_xfer_buffer_borrow(int32_t grantee_endpoint,
                                          int32_t buffer_id,
                                          int32_t flags)
     WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_borrow");
+/* A grantee sub-grants its own `borrow_id` (rights ⊆ its own) to the context
+ * that owns `grantee_endpoint`; returns the downstream borrow_id. */
+extern int32_t wasmos_xfer_buffer_reborrow(int32_t grantee_endpoint,
+                                           int32_t borrow_id,
+                                           int32_t flags)
+    WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_reborrow");
 extern int32_t wasmos_xfer_buffer_release(int32_t buffer_id)
     WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_release");
 extern int32_t wasmos_xfer_buffer_unborrow(int32_t borrow_id)
@@ -57,10 +73,15 @@ extern int32_t wasmos_xfer_buffer_unborrow(int32_t borrow_id)
 extern int32_t wasmos_buffer_acquire(int32_t kind, int32_t minimum_size)
     WASMOS_WASM_IMPORT("wasmos", "buffer_acquire");
 extern int32_t wasmos_buffer_borrow(int32_t kind,
-                                    int32_t source_endpoint,
+                                    int32_t grantee_endpoint,
                                     int32_t buffer_id,
                                     int32_t flags)
     WASMOS_WASM_IMPORT("wasmos", "buffer_borrow");
+extern int32_t wasmos_buffer_reborrow(int32_t kind,
+                                      int32_t grantee_endpoint,
+                                      int32_t borrow_id,
+                                      int32_t flags)
+    WASMOS_WASM_IMPORT("wasmos", "buffer_reborrow");
 extern int32_t wasmos_buffer_release(int32_t kind, int32_t buffer_id)
     WASMOS_WASM_IMPORT("wasmos", "buffer_release");
 extern int32_t wasmos_buffer_unborrow(int32_t borrow_id)

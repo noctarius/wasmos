@@ -38,13 +38,28 @@ libc_fs_endpoint(void)
     return wasmos_fs_endpoint();
 }
 
-/* Write path (NUL-terminated) into the xfer buffer and return its length.
- * The xfer buffer is a shared kernel region; the borrow/release lifecycle is
- * managed by the FS manager, not by the caller. */
-static int
+/* Owner-push grant: the client owns `buffer_id` and grants the FS manager R|W
+ * over it for one request, returning the borrow_id to ship in arg3. fs-manager
+ * reborrows this to the backend and unborrows it before replying, so the
+ * client's release() afterwards finds no active borrows. Returns b1 (>0) or <0.
+ * TODO: narrow rights per op (READ needs W, WRITE needs R) once profiled. */
+static int32_t
+libc_fs_grant(int32_t buffer_id)
+{
+    return wasmos_xfer_buffer_borrow(libc_fs_endpoint(), buffer_id,
+                                     WASMOS_BUFFER_GRANT_READ | WASMOS_BUFFER_GRANT_WRITE);
+}
+
+/* Acquire a per-operation transfer buffer, write the NUL-terminated path into
+ * it, and return the buffer_id (or -1). The caller owns the buffer, passes the
+ * buffer_id in arg2 of the FS request (the FS side borrows it), and must release
+ * it with wasmos_xfer_buffer_release once the reply is received. *out_len is set
+ * to the path length (excluding the NUL) for the request's path_len arg. */
+static int32_t
 libc_fs_stage_path(const char *path, size_t *out_len)
 {
     size_t path_len;
+    int32_t bid;
 
     if (!path) {
         return -1;
@@ -54,13 +69,18 @@ libc_fs_stage_path(const char *path, size_t *out_len)
     if (path_len == 0 || path_len >= (size_t)wasmos_xfer_buffer_size()) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)path, (int32_t)(path_len + 1u), 0) != 0) {
+    bid = wasmos_xfer_buffer_acquire((int32_t)(path_len + 1u));
+    if (bid < 0) {
+        return -1;
+    }
+    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)path, (int32_t)(path_len + 1u), 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
     if (out_len) {
         *out_len = path_len;
     }
-    return 0;
+    return bid;
 }
 
 /* Send an FS IPC request and wait for FS_IPC_RESP; skips unmatched messages.
@@ -182,6 +202,9 @@ open(const char *path, int flags, ...)
 {
     size_t path_len;
     int32_t fd = -1;
+    int32_t bid;
+    int32_t b1;
+    int rc;
     int access_mode;
 
     access_mode = flags & (O_WRONLY | O_RDWR);
@@ -195,10 +218,18 @@ open(const char *path, int flags, ...)
         return -1;
     }
 
-    if (libc_fs_stage_path(path, &path_len) != 0) {
+    bid = libc_fs_stage_path(path, &path_len);
+    if (bid < 0) {
         return -1;
     }
-    if (libc_fs_request(FS_IPC_OPEN_REQ, (int32_t)path_len, flags, 0, 0, &fd, NULL) != 0) {
+    b1 = libc_fs_grant(bid);
+    if (b1 < 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    rc = libc_fs_request(FS_IPC_OPEN_REQ, (int32_t)path_len, flags, bid, b1, &fd, NULL);
+    (void)wasmos_xfer_buffer_release(bid);
+    if (rc != 0) {
         return -1;
     }
     return (int)fd;
@@ -210,6 +241,9 @@ read(int fd, void *buf, size_t count)
     uint8_t *dst = (uint8_t *)buf;
     size_t done = 0;
     size_t chunk_max;
+    int32_t bid;
+    int32_t b1;
+    int failed = 0;
 
     if (!buf) {
         return -1;
@@ -232,6 +266,18 @@ read(int fd, void *buf, size_t count)
     if (chunk_max == 0) {
         return -1;
     }
+    /* Own one buffer and grant the FS manager once; reuse both across the whole
+     * chunk loop (no re-grant per chunk). release() at the end cascade-revokes
+     * the grant — the client never unborrows. */
+    bid = wasmos_xfer_buffer_acquire((int32_t)chunk_max);
+    if (bid < 0) {
+        return -1;
+    }
+    b1 = libc_fs_grant(bid);
+    if (b1 < 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
 
     while (done < count) {
         size_t chunk = count - done;
@@ -239,17 +285,17 @@ read(int fd, void *buf, size_t count)
         if (chunk > chunk_max) {
             chunk = chunk_max;
         }
-        if (libc_fs_request(FS_IPC_READ_REQ, fd, (int32_t)chunk, 0, 0, &got, NULL) != 0) {
-            return done > 0 ? (ssize_t)done : -1;
-        }
-        if (got < 0 || (size_t)got > chunk) {
-            return done > 0 ? (ssize_t)done : -1;
+        if (libc_fs_request(FS_IPC_READ_REQ, fd, (int32_t)chunk, bid, b1, &got, NULL) != 0 ||
+            got < 0 || (size_t)got > chunk) {
+            failed = 1;
+            break;
         }
         if (got == 0) {
             break;
         }
-        if (wasmos_xfer_buffer_read((int32_t)(uintptr_t)(dst + done), got, 0) != 0) {
-            return done > 0 ? (ssize_t)done : -1;
+        if (wasmos_xfer_buffer_read(bid, (int32_t)(uintptr_t)(dst + done), got, 0) != 0) {
+            failed = 1;
+            break;
         }
         done += (size_t)got;
         if ((size_t)got < chunk) {
@@ -257,6 +303,10 @@ read(int fd, void *buf, size_t count)
         }
     }
 
+    (void)wasmos_xfer_buffer_release(bid);
+    if (failed && done == 0) {
+        return -1;
+    }
     return (ssize_t)done;
 }
 
@@ -266,6 +316,9 @@ write(int fd, const void *buf, size_t count)
     const uint8_t *src = (const uint8_t *)buf;
     size_t done = 0;
     size_t chunk_max;
+    int32_t bid;
+    int32_t b1;
+    int failed = 0;
 
     if (!buf) {
         return -1;
@@ -288,6 +341,17 @@ write(int fd, const void *buf, size_t count)
     if (chunk_max == 0) {
         return -1;
     }
+    /* Own one buffer and grant the FS manager once; reuse both across the whole
+     * chunk loop. release() at the end cascade-revokes the grant. */
+    bid = wasmos_xfer_buffer_acquire((int32_t)chunk_max);
+    if (bid < 0) {
+        return -1;
+    }
+    b1 = libc_fs_grant(bid);
+    if (b1 < 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
 
     while (done < count) {
         size_t chunk = count - done;
@@ -295,14 +359,14 @@ write(int fd, const void *buf, size_t count)
         if (chunk > chunk_max) {
             chunk = chunk_max;
         }
-        if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)(src + done), (int32_t)chunk, 0) != 0) {
-            return done > 0 ? (ssize_t)done : -1;
+        if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)(src + done), (int32_t)chunk, 0) != 0) {
+            failed = 1;
+            break;
         }
-        if (libc_fs_request(FS_IPC_WRITE_REQ, fd, (int32_t)chunk, 0, 0, &wrote, NULL) != 0) {
-            return done > 0 ? (ssize_t)done : -1;
-        }
-        if (wrote < 0 || (size_t)wrote > chunk) {
-            return done > 0 ? (ssize_t)done : -1;
+        if (libc_fs_request(FS_IPC_WRITE_REQ, fd, (int32_t)chunk, bid, b1, &wrote, NULL) != 0 ||
+            wrote < 0 || (size_t)wrote > chunk) {
+            failed = 1;
+            break;
         }
         if (wrote == 0) {
             break;
@@ -313,6 +377,10 @@ write(int fd, const void *buf, size_t count)
         }
     }
 
+    (void)wasmos_xfer_buffer_release(bid);
+    if (failed && done == 0) {
+        return -1;
+    }
     return (ssize_t)done;
 }
 
@@ -348,21 +416,32 @@ stat(const char *path, struct stat *st)
     size_t path_len;
     int32_t size = 0;
     int32_t mode = 0;
+    int32_t bid;
+    int32_t b1;
+    int rc;
 
     if (!path || !st) {
         return -1;
     }
 
-    if (libc_fs_stage_path(path, &path_len) != 0) {
+    bid = libc_fs_stage_path(path, &path_len);
+    if (bid < 0) {
         return -1;
     }
-    if (libc_fs_request(FS_IPC_STAT_REQ,
-                        (int32_t)path_len,
-                        0,
-                        0,
-                        0,
-                        &size,
-                        &mode) != 0) {
+    b1 = libc_fs_grant(bid);
+    if (b1 < 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    rc = libc_fs_request(FS_IPC_STAT_REQ,
+                         (int32_t)path_len,
+                         0,
+                         bid,
+                         b1,
+                         &size,
+                         &mode);
+    (void)wasmos_xfer_buffer_release(bid);
+    if (rc != 0) {
         return -1;
     }
 
@@ -371,40 +450,49 @@ stat(const char *path, struct stat *st)
     return 0;
 }
 
+/* Send a path-only FS request (unlink/mkdir/rmdir): stage the path into an owned
+ * buffer, pass its buffer_id in arg2, release after the reply. */
+static int
+libc_fs_path_op(int32_t type, const char *path)
+{
+    size_t path_len;
+    int32_t bid;
+    int32_t b1;
+    int rc;
+
+    bid = libc_fs_stage_path(path, &path_len);
+    if (bid < 0) {
+        return -1;
+    }
+    b1 = libc_fs_grant(bid);
+    if (b1 < 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    rc = libc_fs_request(type, (int32_t)path_len, 0, bid, b1, NULL, NULL);
+    (void)wasmos_xfer_buffer_release(bid);
+    return rc;
+}
+
 int
 unlink(const char *path)
 {
-    size_t path_len;
-
-    if (libc_fs_stage_path(path, &path_len) != 0) {
-        return -1;
-    }
-    return libc_fs_request(FS_IPC_UNLINK_REQ, (int32_t)path_len, 0, 0, 0, NULL, NULL);
+    return libc_fs_path_op(FS_IPC_UNLINK_REQ, path);
 }
 
 int
 mkdir(const char *path, mode_t mode)
 {
-    size_t path_len;
-
     /* TODO: Honor mode bits if WASMOS grows real permission semantics. */
     (void)mode;
 
-    if (libc_fs_stage_path(path, &path_len) != 0) {
-        return -1;
-    }
-    return libc_fs_request(FS_IPC_MKDIR_REQ, (int32_t)path_len, 0, 0, 0, NULL, NULL);
+    return libc_fs_path_op(FS_IPC_MKDIR_REQ, path);
 }
 
 int
 rmdir(const char *path)
 {
-    size_t path_len;
-
-    if (libc_fs_stage_path(path, &path_len) != 0) {
-        return -1;
-    }
-    return libc_fs_request(FS_IPC_RMDIR_REQ, (int32_t)path_len, 0, 0, 0, NULL, NULL);
+    return libc_fs_path_op(FS_IPC_RMDIR_REQ, path);
 }
 
 ssize_t

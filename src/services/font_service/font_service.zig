@@ -131,10 +131,17 @@ fn ipc_call(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u
     return 0;
 }
 
+// FIXME(owner-push): this native FS-client path predates the owner-push xfer ABI.
+// Under the new model font-service must own a buffer, grant fs-manager, and send
+// buffer_id/grant on the wire (like libc's unistd). Native ABI v6 buffer_borrow
+// is (kind, source_context_id, buffer_id, flags, size); source_context_id ==
+// own context routes native_driver.c to the owner-local path (buffer_id 0). This
+// keeps font-service compiling; its FS reads need the full owner-push rework.
 fn fs_borrow_rw() ?[*]u8 {
     const p = api().buffer_borrow.?(
         c.ND_BUFFER_KIND_XFER,
         ctxId(),
+        0,
         c.ND_BUFFER_BORROW_READ | c.ND_BUFFER_BORROW_WRITE,
         PM_XFER_BUFFER_SIZE,
     );
@@ -143,7 +150,7 @@ fn fs_borrow_rw() ?[*]u8 {
 }
 
 fn fs_release() void {
-    _ = api().buffer_release.?(c.ND_BUFFER_KIND_XFER);
+    _ = api().buffer_release.?(c.ND_BUFFER_KIND_XFER, 0);
 }
 
 fn parse_ttf_metrics(f: *loaded_font_t) bool {

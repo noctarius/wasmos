@@ -608,14 +608,23 @@ explorer_open_selected(ui_context_t *ctx, int32_t id, void *user)
         explorer_build_selected_path(full_path, sizeof(full_path), entry);
         if (explorer_str_ends_with(entry->name, ".wap")) {
             const size_t path_len = strlen(full_path);
-            const int32_t pid = (path_len > 0 && path_len <= 240 &&
-                                 wasmos_xfer_buffer_write((int32_t)(uintptr_t)full_path, (int32_t)path_len, 0) == 0)
-                                    ? wasmos_sys_spawn_path_sync(g_proc_endpoint,
-                                                                 g_proc_reply_endpoint,
-                                                                 (int32_t)path_len,
-                                                                 2000,
-                                                                 g_ctx.req_id++)
-                                    : -1;
+            int32_t pid = -1;
+            /* Owner-push spawn: acquire a buffer, write the path, and pack
+             * (buffer_id << 12 | path_len) into the spawn's path arg; PM reads
+             * it via ownership.  Release after the sync call returns. */
+            if (path_len > 0 && path_len <= 0xFFFu) {
+                int32_t bid = wasmos_xfer_buffer_acquire((int32_t)path_len);
+                if (bid >= 0) {
+                    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)full_path, (int32_t)path_len, 0) == 0) {
+                        pid = wasmos_sys_spawn_path_sync(g_proc_endpoint,
+                                                         g_proc_reply_endpoint,
+                                                         (int32_t)(((uint32_t)bid << 12) | ((uint32_t)path_len & 0xFFFu)),
+                                                         2000,
+                                                         g_ctx.req_id++);
+                    }
+                    (void)wasmos_xfer_buffer_release(bid);
+                }
+            }
             if (pid > 0) {
                 snprintf(status, sizeof(status), "Spawned %s (pid %d)", entry->name, (int)pid);
             } else {

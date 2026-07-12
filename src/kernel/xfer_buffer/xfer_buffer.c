@@ -218,6 +218,29 @@ object_has_active_borrow(uint32_t buffer_id)
     return 0;
 }
 
+/* Deactivate every active borrow of an object (top-level borrows and all their
+ * reborrows share the object's buffer_id). Used by owner-side release as a
+ * "transient unborrow": the owner tears the whole borrow tree down when it
+ * destroys the object. DMA state on each revoked borrow is cleared. */
+static void
+object_revoke_all_borrows(uint32_t buffer_id)
+{
+    list_iter_t it;
+    borrow_slot_t *slot = 0;
+
+    if (registry_init_once() != 0) {
+        return;
+    }
+    slot = (borrow_slot_t *)list_first(&g_borrows, &it);
+    while (slot) {
+        if (slot->active && slot->buffer_id == buffer_id) {
+            slot->active = 0u;
+            slot->dma_active = 0u;
+        }
+        slot = (borrow_slot_t *)list_next(&it);
+    }
+}
+
 /* Deactivate a borrow and cascade-revoke every downstream reborrow rooted in
  * it. DMA state attached to any revoked borrow is cleared. */
 static void
@@ -546,12 +569,15 @@ xfer_buffer_release_owned(const xfer_buffer_owner_t *owner)
     if (slot->owner_context_id != owner->owner_context_id) {
         return XFER_BUFFER_ERR_NOT_OWNER;
     }
-    if (object_has_active_borrow(slot->buffer_id)) {
-        return XFER_BUFFER_ERR_ACTIVE_BORROWS;
-    }
     if (slot->dma_active) {
+        /* Owner-side DMA must be unmapped first (a device may still be reading
+         * the object). Borrow-side DMA is force-cleared by the cascade below. */
         return XFER_BUFFER_ERR_DMA_MAPPED;
     }
+    /* Transient unborrow: destroying the object cascade-revokes every borrow of
+     * it. The owner holds the lifecycle (owner-push), so release alone tears the
+     * whole borrow tree down; borrowers need not have unborrowed first. */
+    object_revoke_all_borrows(slot->buffer_id);
     object_free_backing(slot);
     slot->active = 0u;
     return XFER_BUFFER_OK;
@@ -729,10 +755,57 @@ xfer_buffer_unborrow(const xfer_buffer_borrow_t *borrow)
     if (!slot) {
         return XFER_BUFFER_ERR_INACTIVE_BORROW;
     }
+    /* The DMA window is the mapper's transient, operational concern (scoped to
+     * the device access); a borrow can't be torn down while its DMA is still
+     * mapped — the mapper must unmap it first. Buffer/borrow lifecycle (this
+     * unborrow) is separate and the lender's. */
     if (slot->dma_active) {
         return XFER_BUFFER_ERR_DMA_MAPPED;
     }
     borrow_revoke_tree(slot->borrow_id);
+    return XFER_BUFFER_OK;
+}
+
+/* Resolve a borrow binding for its GRANTOR (owner-push): authorizes the context
+ * that created the borrow — its lender (the owner for a top-level borrow, or the
+ * upstream borrower for a reborrow). Sibling of xfer_buffer_get_borrowed (which
+ * authorizes the borrower, e.g. for DMA); feed the result to
+ * xfer_buffer_unborrow so the grantor — and only the grantor — may drop it. */
+int
+xfer_buffer_get_lent(uint32_t borrow_id,
+                     uint32_t lender_context_id,
+                     xfer_buffer_borrow_t *out_borrow)
+{
+    borrow_slot_t *slot = 0;
+    object_slot_t *object = 0;
+
+    if (!out_borrow) {
+        return XFER_BUFFER_ERR_NULL_ARG;
+    }
+    if (lender_context_id == 0u) {
+        return XFER_BUFFER_ERR_INVALID_CONTEXT;
+    }
+    if (borrow_id == 0u) {
+        return XFER_BUFFER_ERR_INACTIVE_BORROW;
+    }
+    slot = borrow_find(borrow_id);
+    if (!slot) {
+        return XFER_BUFFER_ERR_INACTIVE_BORROW;
+    }
+    if (slot->lender_context_id != lender_context_id) {
+        return XFER_BUFFER_ERR_NO_ACCESS;
+    }
+    object = object_find_by_id(slot->buffer_id);
+    if (!object) {
+        return XFER_BUFFER_ERR_NOT_FOUND;
+    }
+    out_borrow->buffer.kind = slot->kind;
+    out_borrow->buffer.buffer_id = slot->buffer_id;
+    out_borrow->buffer.size_bytes = object->size_bytes;
+    out_borrow->lender_context_id = slot->lender_context_id;
+    out_borrow->borrower_context_id = slot->borrower_context_id;
+    out_borrow->flags = slot->flags;
+    out_borrow->borrow_id = slot->borrow_id;
     return XFER_BUFFER_OK;
 }
 

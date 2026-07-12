@@ -1080,7 +1080,7 @@ fat_handle_open(void)
     if (path_len + 1u > (uint32_t)wasmos_xfer_buffer_size()) {
         return -1;
     }
-    if (wasmos_xfer_buffer_read((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_sys_buffer_read(g_fs_req.arg2, path, (int32_t)path_len, 0) != 0) {
         fat_log("open copy path failed\n");
         return -1;
     }
@@ -2071,6 +2071,8 @@ fat_handle_read_open_file(void)
         requested = remaining;
     }
 
+    /* The client owns the buffer (arg2) and granted this backend WRITE via
+     * fs-manager's reborrow; write the copy-out directly by buffer_id. */
     while (done < requested) {
         uint32_t sector_offset = file->offset % g_bytes_per_sector;
         uint32_t chunk = g_bytes_per_sector - sector_offset;
@@ -2085,7 +2087,8 @@ fat_handle_read_open_file(void)
         if (fat_sync_block_read(file->file_lba + file->current_sector) != 0) {
             return -1;
         }
-        if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)(g_sector_buf + sector_offset),
+        if (wasmos_xfer_buffer_write(g_fs_req.arg2,
+                                   (int32_t)(uintptr_t)(g_sector_buf + sector_offset),
                                    (int32_t)chunk,
                                    (int32_t)done) != 0) {
             return -1;
@@ -2148,6 +2151,8 @@ fat_handle_write_open_file(void)
         return -1;
     }
 
+    /* The client owns the buffer (arg2) and granted this backend READ via
+     * fs-manager's reborrow; read the copy-in directly by buffer_id. */
     while (done < requested) {
         uint32_t sector_offset = file->offset % g_bytes_per_sector;
         uint32_t chunk = g_bytes_per_sector - sector_offset;
@@ -2181,7 +2186,8 @@ fat_handle_write_open_file(void)
         /* Stage through a separate buffer before merging into the sector so
          * partial writes do not depend on host-call copies into a shifted
          * destination pointer inside linear memory. */
-        if (wasmos_xfer_buffer_read((int32_t)(uintptr_t)g_fs_stage_buf,
+        if (wasmos_xfer_buffer_read(g_fs_req.arg2,
+                                  (int32_t)(uintptr_t)g_fs_stage_buf,
                                   (int32_t)chunk,
                                   (int32_t)done) != 0) {
             return -1;
@@ -2231,7 +2237,7 @@ fat_handle_stat(void)
     if (path_len + 1u > (uint32_t)wasmos_xfer_buffer_size()) {
         return -1;
     }
-    if (wasmos_xfer_buffer_read((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_sys_buffer_read(g_fs_req.arg2, path, (int32_t)path_len, 0) != 0) {
         return -1;
     }
     path[path_len] = '\0';
@@ -2263,7 +2269,7 @@ fat_handle_unlink(void)
     if (path_len + 1u > (uint32_t)wasmos_xfer_buffer_size()) {
         return -1;
     }
-    if (wasmos_xfer_buffer_read((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_sys_buffer_read(g_fs_req.arg2, path, (int32_t)path_len, 0) != 0) {
         return -1;
     }
     path[path_len] = '\0';
@@ -2294,7 +2300,7 @@ fat_handle_mkdir(void)
     if (path_len + 1u > (uint32_t)wasmos_xfer_buffer_size()) {
         return -1;
     }
-    if (wasmos_xfer_buffer_read((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_sys_buffer_read(g_fs_req.arg2, path, (int32_t)path_len, 0) != 0) {
         return -1;
     }
     path[path_len] = '\0';
@@ -2325,7 +2331,7 @@ fat_handle_rmdir(void)
     if (path_len + 1u > (uint32_t)wasmos_xfer_buffer_size()) {
         return -1;
     }
-    if (wasmos_xfer_buffer_read((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    if (wasmos_sys_buffer_read(g_fs_req.arg2, path, (int32_t)path_len, 0) != 0) {
         return -1;
     }
     path[path_len] = '\0';
@@ -3338,7 +3344,11 @@ fat_handle_read_app(void)
             g_op = FAT_OP_NONE;
             return -1;
         }
-        if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)g_sector_buf,
+        /* FIXME: READ_APP is dead (spawn-by-name was removed) and has no sender;
+         * this path is unreachable and should be deleted along with the
+         * FAT_OP_READ_APP state machine. g_fs_req.arg2 keeps it arity-correct. */
+        if (wasmos_xfer_buffer_write(g_fs_req.arg2,
+                                   (int32_t)(uintptr_t)g_sector_buf,
                                    (int32_t)bytes,
                                    (int32_t)g_read_offset) != 0) {
             g_op = FAT_OP_NONE;
@@ -4067,8 +4077,20 @@ initialize(int32_t proc_endpoint,
         fat_stall();
     }
     mount_alias_len = (int32_t)strlen(mount_alias);
-    if (mount_alias_len <= 0 || mount_alias_len >= wasmos_xfer_buffer_size() ||
-        wasmos_xfer_buffer_write((int32_t)(uintptr_t)mount_alias, mount_alias_len, 0) != 0) {
+    int32_t mount_bid = -1;
+    if (mount_alias_len <= 0 || mount_alias_len >= 0xFFF ||
+        mount_alias_len >= wasmos_xfer_buffer_size()) {
+        fat_log("mount alias buffer write failed\n");
+        fat_stall();
+    }
+    /* Owner-push registration: own a one-shot buffer holding the mount name,
+     * grant fs-manager READ over it, and pass buffer_id packed with the length
+     * in arg2. This is a one-time registration, so the buffer and grant are
+     * intentionally not released. */
+    mount_bid = wasmos_xfer_buffer_acquire(mount_alias_len);
+    if (mount_bid < 0 ||
+        wasmos_xfer_buffer_write(mount_bid, (int32_t)(uintptr_t)mount_alias, mount_alias_len, 0) != 0 ||
+        wasmos_xfer_buffer_borrow(fsmgr_endpoint, mount_bid, WASMOS_BUFFER_GRANT_READ) < 0) {
         fat_log("mount alias buffer write failed\n");
         fat_stall();
     }
@@ -4078,7 +4100,7 @@ initialize(int32_t proc_endpoint,
                         1,
                         FSMGR_BACKEND_BOOT,
                         g_fs_endpoint,
-                        mount_alias_len,
+                        (int32_t)(((uint32_t)mount_bid << 12) | ((uint32_t)mount_alias_len & 0xFFFu)),
                         (int32_t)mount_unit) != 0) {
         fat_log("fs-manager register send failed\n");
         fat_stall();

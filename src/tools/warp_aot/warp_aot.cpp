@@ -95,11 +95,13 @@ static vb::Span<vb::NativeSymbol const> aot_symbols()
         DYNAMIC_LINK("wasmos", "xfer_buffer_write",     stub_i4),
         DYNAMIC_LINK("wasmos", "xfer_buffer_acquire",   stub_i1),
         DYNAMIC_LINK("wasmos", "xfer_buffer_borrow",    stub_i3),
+        DYNAMIC_LINK("wasmos", "xfer_buffer_reborrow",  stub_i3),
         DYNAMIC_LINK("wasmos", "xfer_buffer_release",   stub_i1),
         DYNAMIC_LINK("wasmos", "xfer_buffer_unborrow",  stub_i1),
         /* Generic buffer acquire/borrow/release/unborrow */
         DYNAMIC_LINK("wasmos", "buffer_acquire",      stub_i2),
         DYNAMIC_LINK("wasmos", "buffer_borrow",       stub_i4),
+        DYNAMIC_LINK("wasmos", "buffer_reborrow",     stub_i4),
         DYNAMIC_LINK("wasmos", "buffer_release",      stub_i2),
         DYNAMIC_LINK("wasmos", "buffer_unborrow",     stub_i1),
         /* Block DMA buffer */

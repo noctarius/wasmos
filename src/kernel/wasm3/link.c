@@ -701,16 +701,16 @@ process_name_eq(const char *a, const char *b)
     return *a == '\0' && *b == '\0';
 }
 
-/* Whether the calling context may own/lend transfer buffers. Kept as the
- * historical role/capability proxy until a dedicated buffer capability lands.
- * FIXME: Replace with an explicit buffer-ownership capability once non-FS DMA
- * users are fully profiled. */
+/* Whether the calling context may own/lend transfer buffers. Owning a transfer
+ * buffer is like opening a file descriptor: any real process may acquire, borrow
+ * and release one so it can move IPC payloads. The DMA capability is enforced
+ * separately at dma_map_borrow (require_dma_capability), so this no longer gates
+ * on CAP_DMA_BUFFER or the fs-manager name. */
 static int
 wasm_buffer_role_allowed(uint32_t context_id, const process_t *proc)
 {
-    return proc &&
-           (process_name_eq(proc->name, "fs-manager") ||
-            capability_has(context_id, CAP_DMA_BUFFER));
+    (void)context_id;
+    return proc != NULL;
 }
 
 /* acquire: create a buffer object owned by the caller; returns the buffer_id
@@ -745,10 +745,10 @@ wasm_buffer_acquire_impl(int32_t kind, int32_t minimum_size)
 /* borrow: caller borrows object buffer_id owned by the context that owns
  * source_endpoint; returns the borrow_id, or a negative object status. */
 static int32_t
-wasm_buffer_borrow_impl(int32_t kind, int32_t source_endpoint, int32_t buffer_id, int32_t flags)
+wasm_buffer_borrow_impl(int32_t kind, int32_t grantee_endpoint, int32_t buffer_id, int32_t flags)
 {
-    uint32_t context_id = 0;
-    uint32_t source_owner = 0;
+    uint32_t context_id = 0;        /* caller == the OWNER assigning the grant */
+    uint32_t grantee_context = 0;
     process_t *proc = process_get(process_current_pid());
     xfer_buffer_t key;
     xfer_buffer_owner_t owner;
@@ -770,19 +770,61 @@ wasm_buffer_borrow_impl(int32_t kind, int32_t source_endpoint, int32_t buffer_id
     if (!wasm_buffer_role_allowed(context_id, proc)) {
         return XFER_BUFFER_ERR_NO_ACCESS;
     }
-    if (ipc_endpoint_owner((uint32_t)source_endpoint, &source_owner) != IPC_OK ||
-        source_owner == 0 || source_owner == context_id) {
-        return XFER_BUFFER_ERR_NOT_OWNER;
+    /* Owner-driven grant: the caller must own buffer_id and names the grantee by
+     * an endpoint it owns. This is where access rights are assigned. */
+    if (ipc_endpoint_owner((uint32_t)grantee_endpoint, &grantee_context) != IPC_OK ||
+        grantee_context == 0) {
+        return XFER_BUFFER_ERR_INVALID_CONTEXT;
     }
-    /* Recover the lender's owner binding for the named object, then lend it. */
     key.kind = (uint32_t)kind;
     key.buffer_id = (uint32_t)buffer_id;
     key.size_bytes = 0u;
-    rc = xfer_buffer_get_owned(&key, source_owner, &owner);
+    rc = xfer_buffer_get_owned(&key, context_id, &owner);   /* caller must be owner */
     if (rc != XFER_BUFFER_OK) {
         return rc;
     }
-    rc = xfer_buffer_borrow(&owner, context_id, (uint32_t)flags, &out);
+    rc = xfer_buffer_borrow(&owner, grantee_context, (uint32_t)flags, &out);
+    if (rc != XFER_BUFFER_OK) {
+        return rc;
+    }
+    return (int32_t)out.borrow_id;
+}
+
+/* reborrow: a current borrower extends a (rights-narrowed) sub-grant of its own
+ * borrow to the context that owns grantee_endpoint. The caller must hold the
+ * borrow named by borrow_id; requested flags must be a subset of that borrow's
+ * rights. Returns the new borrow_id (the downstream grantee's handle). */
+static int32_t
+wasm_buffer_reborrow_impl(int32_t kind, int32_t grantee_endpoint, int32_t borrow_id, int32_t flags)
+{
+    uint32_t context_id = 0;        /* caller == an existing borrower */
+    uint32_t grantee_context = 0;
+    xfer_buffer_borrow_t upstream;
+    xfer_buffer_borrow_t out;
+    int rc = 0;
+
+    if (kind != (int32_t)BUFFER_KIND_TRANSFER) {
+        return XFER_BUFFER_ERR_INVALID_KIND;
+    }
+    if (borrow_id <= 0) {
+        return XFER_BUFFER_ERR_INACTIVE_BORROW;
+    }
+    if (flags <= 0 || (flags & ~0x3) != 0) {
+        return XFER_BUFFER_ERR_INVALID_FLAGS;
+    }
+    if (current_process_context(&context_id) != 0) {
+        return XFER_BUFFER_ERR_INVALID_CONTEXT;
+    }
+    if (ipc_endpoint_owner((uint32_t)grantee_endpoint, &grantee_context) != IPC_OK ||
+        grantee_context == 0) {
+        return XFER_BUFFER_ERR_INVALID_CONTEXT;
+    }
+    /* Resolve the caller's own upstream borrow, then sub-grant it. */
+    rc = xfer_buffer_get_borrowed((uint32_t)borrow_id, context_id, &upstream, 0);
+    if (rc != XFER_BUFFER_OK) {
+        return rc;
+    }
+    rc = xfer_buffer_reborrow(&upstream, grantee_context, (uint32_t)flags, &out);
     if (rc != XFER_BUFFER_OK) {
         return rc;
     }
@@ -821,7 +863,9 @@ wasm_buffer_release_impl(int32_t kind, int32_t buffer_id)
     return xfer_buffer_release_owned(&owner);
 }
 
-/* unborrow: the borrower relinquishes the borrow named by borrow_id. */
+/* unborrow: the GRANTOR (lender) of a (re)borrow drops it, cascading downstream.
+ * Owner-push: only whoever created the borrow (its lender) may unborrow it —
+ * resolved via get_lent, not get_borrowed. */
 static int32_t
 wasm_buffer_unborrow_impl(int32_t borrow_id)
 {
@@ -835,7 +879,7 @@ wasm_buffer_unborrow_impl(int32_t borrow_id)
     if (current_process_context(&context_id) != 0) {
         return XFER_BUFFER_ERR_INVALID_CONTEXT;
     }
-    rc = xfer_buffer_get_borrowed((uint32_t)borrow_id, context_id, &borrow, 0);
+    rc = xfer_buffer_get_lent((uint32_t)borrow_id, context_id, &borrow);
     if (rc != XFER_BUFFER_OK) {
         return rc;
     }
@@ -956,10 +1000,19 @@ m3ApiRawFunction(wasmos_xfer_buffer_acquire)
 m3ApiRawFunction(wasmos_xfer_buffer_borrow)
 {
     m3ApiReturnType(int32_t)
-    m3ApiGetArg(int32_t, source_endpoint)
+    m3ApiGetArg(int32_t, grantee_endpoint)
     m3ApiGetArg(int32_t, buffer_id)
     m3ApiGetArg(int32_t, flags)
-    m3ApiReturn(wasm_buffer_borrow_impl((int32_t)BUFFER_KIND_TRANSFER, source_endpoint, buffer_id, flags));
+    m3ApiReturn(wasm_buffer_borrow_impl((int32_t)BUFFER_KIND_TRANSFER, grantee_endpoint, buffer_id, flags));
+}
+
+m3ApiRawFunction(wasmos_xfer_buffer_reborrow)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, grantee_endpoint)
+    m3ApiGetArg(int32_t, borrow_id)
+    m3ApiGetArg(int32_t, flags)
+    m3ApiReturn(wasm_buffer_reborrow_impl((int32_t)BUFFER_KIND_TRANSFER, grantee_endpoint, borrow_id, flags));
 }
 
 m3ApiRawFunction(wasmos_xfer_buffer_release)
@@ -988,10 +1041,20 @@ m3ApiRawFunction(wasmos_buffer_borrow)
 {
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, kind)
-    m3ApiGetArg(int32_t, source_endpoint)
+    m3ApiGetArg(int32_t, grantee_endpoint)
     m3ApiGetArg(int32_t, buffer_id)
     m3ApiGetArg(int32_t, flags)
-    m3ApiReturn(wasm_buffer_borrow_impl(kind, source_endpoint, buffer_id, flags));
+    m3ApiReturn(wasm_buffer_borrow_impl(kind, grantee_endpoint, buffer_id, flags));
+}
+
+m3ApiRawFunction(wasmos_buffer_reborrow)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiGetArg(int32_t, kind)
+    m3ApiGetArg(int32_t, grantee_endpoint)
+    m3ApiGetArg(int32_t, borrow_id)
+    m3ApiGetArg(int32_t, flags)
+    m3ApiReturn(wasm_buffer_reborrow_impl(kind, grantee_endpoint, borrow_id, flags));
 }
 
 m3ApiRawFunction(wasmos_buffer_release)
@@ -3828,10 +3891,12 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "ipc_send", "i(iiiiiiii)", wasmos_ipc_send);
     rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_acquire", "i(i)", wasmos_xfer_buffer_acquire);
     rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_borrow", "i(iii)", wasmos_xfer_buffer_borrow);
+    rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_reborrow", "i(iii)", wasmos_xfer_buffer_reborrow);
     rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_release", "i(i)", wasmos_xfer_buffer_release);
     rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_unborrow", "i(i)", wasmos_xfer_buffer_unborrow);
     rc |= wasm3_link_raw(module, "wasmos", "buffer_acquire", "i(ii)", wasmos_buffer_acquire);
     rc |= wasm3_link_raw(module, "wasmos", "buffer_borrow", "i(iiii)", wasmos_buffer_borrow);
+    rc |= wasm3_link_raw(module, "wasmos", "buffer_reborrow", "i(iiii)", wasmos_buffer_reborrow);
     rc |= wasm3_link_raw(module, "wasmos", "buffer_release", "i(ii)", wasmos_buffer_release);
     rc |= wasm3_link_raw(module, "wasmos", "buffer_unborrow", "i(i)", wasmos_buffer_unborrow);
     rc |= wasm3_link_raw(module, "wasmos", "dma_map_borrow", "i(iiii)", wasmos_dma_map_borrow);
@@ -3884,8 +3949,8 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "block_buffer_write", "i(i*ii)", wasmos_block_buffer_write);
     rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_size", "i()", wasmos_xfer_buffer_size);
     rc |= wasm3_link_raw(module, "wasmos", "fs_endpoint", "i()", wasmos_fs_endpoint);
-    rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_read", "i(*ii)", wasmos_xfer_buffer_read);
-    rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_write", "i(*ii)", wasmos_xfer_buffer_write);
+    rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_read", "i(i*ii)", wasmos_xfer_buffer_read);
+    rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_write", "i(i*ii)", wasmos_xfer_buffer_write);
     rc |= wasm3_link_raw(module, "wasmos", "early_log_size", "i()", wasmos_early_log_size);
     rc |= wasm3_link_raw(module, "wasmos", "early_log_copy", "i(*ii)", wasmos_early_log_copy);
     rc |= wasm3_link_raw(module, "wasmos", "boot_config_size", "i()", wasmos_boot_config_size);

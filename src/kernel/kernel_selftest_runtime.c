@@ -36,9 +36,91 @@ typedef struct {
     uint32_t request_id;
     uint32_t attempts;
     uint8_t phase;
+    /* Per-spawn caller buffer owned by this self-test context: it stages the
+     * path for PM to read and must stay live until PM has consumed it. Released
+     * before the next acquire and finally reclaimed on process exit. */
+    xfer_buffer_owner_t caller_buf;
 } broker_spawn_request_state_t;
 
+/* Acquire a self-test-owned transfer buffer, write `path` into it at offset 0,
+ * and return the (buffer_id<<12)|path_len arg1 encoding the spawn-path IPC
+ * protocol expects. Releases any previously-held buffer first. Returns 0 on
+ * failure. */
+static uint32_t
+broker_selftest_stage_path(broker_spawn_request_state_t *state,
+                           uint32_t context_id,
+                           const char *path,
+                           uint32_t path_len)
+{
+    uint64_t phys = 0u;
+    uint8_t *buf = 0;
+
+    if (state->caller_buf.buffer.buffer_id != 0u) {
+        (void)xfer_buffer_release_owned(&state->caller_buf);
+        state->caller_buf.buffer.buffer_id = 0u;
+    }
+    if (path_len == 0u || path_len > 0xFFFu) {
+        return 0u;
+    }
+    if (xfer_buffer_acquire(BUFFER_KIND_TRANSFER, context_id, path_len, &state->caller_buf)
+            != XFER_BUFFER_OK) {
+        return 0u;
+    }
+    phys = xfer_buffer_object_phys(&state->caller_buf.buffer);
+    if (phys == 0u) {
+        return 0u;
+    }
+    buf = (uint8_t *)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
+    memcpy(buf, path, path_len);
+    return (state->caller_buf.buffer.buffer_id << 12) | (path_len & 0xFFFu);
+}
+
 static broker_spawn_request_state_t g_broker_spawn_request_state;
+
+static const char *
+kernel_selftest_spawn_error_name(int32_t err)
+{
+    switch (err) {
+    case PROC_SPAWN_ERR_BAD_ENDPOINT: return "PROC_SPAWN_ERR_BAD_ENDPOINT";
+    case PROC_SPAWN_ERR_NO_CALLER: return "PROC_SPAWN_ERR_NO_CALLER";
+    case PROC_SPAWN_ERR_BAD_PATH: return "PROC_SPAWN_ERR_BAD_PATH";
+    case PROC_SPAWN_ERR_CALLER_FSBUF: return "PROC_SPAWN_ERR_CALLER_FSBUF";
+    case PROC_SPAWN_ERR_ARGS_TOOBIG: return "PROC_SPAWN_ERR_ARGS_TOOBIG";
+    case PROC_SPAWN_ERR_NO_PM_FSBUF: return "PROC_SPAWN_ERR_NO_PM_FSBUF";
+    case PROC_SPAWN_ERR_FS_READ: return "PROC_SPAWN_ERR_FS_READ";
+    case PROC_SPAWN_ERR_SPAWN_FAILED: return "PROC_SPAWN_ERR_SPAWN_FAILED";
+    case PROC_SPAWN_ERR_BROKER_IPC: return "PROC_SPAWN_ERR_BROKER_IPC";
+    case PROC_SPAWN_ERR_BROKER_PLAN: return "PROC_SPAWN_ERR_BROKER_PLAN";
+    case PROC_SPAWN_ERR_BROKER_DEFERRED: return "PROC_SPAWN_ERR_BROKER_DEFERRED";
+    case PROC_PM_ERR_BUSY: return "PROC_PM_ERR_BUSY";
+    case PROC_PM_ERR_BAD_ENDPOINT: return "PROC_PM_ERR_BAD_ENDPOINT";
+    case PROC_PM_ERR_NO_CALLER: return "PROC_PM_ERR_NO_CALLER";
+    case PROC_PM_ERR_INVALID_NAME: return "PROC_PM_ERR_INVALID_NAME";
+    case PROC_PM_ERR_INVALID_MODULE: return "PROC_PM_ERR_INVALID_MODULE";
+    case PROC_PM_ERR_FS_UNAVAILABLE: return "PROC_PM_ERR_FS_UNAVAILABLE";
+    case PROC_PM_ERR_FS_REQUEST: return "PROC_PM_ERR_FS_REQUEST";
+    case PROC_PM_ERR_BAD_PATH: return "PROC_PM_ERR_BAD_PATH";
+    case PROC_PM_ERR_PATH_RESOLVE: return "PROC_PM_ERR_PATH_RESOLVE";
+    case PROC_PM_ERR_SPAWN_FAILED: return "PROC_PM_ERR_SPAWN_FAILED";
+    case PROC_PM_ERR_CAPS_APPLY: return "PROC_PM_ERR_CAPS_APPLY";
+    case PROC_PM_ERR_BAD_CAPS: return "PROC_PM_ERR_BAD_CAPS";
+    case PROC_PM_ERR_BAD_USER_PTR: return "PROC_PM_ERR_BAD_USER_PTR";
+    case PROC_PM_ERR_USER_COPY: return "PROC_PM_ERR_USER_COPY";
+    case PROC_PM_ERR_META_LOOKUP: return "PROC_PM_ERR_META_LOOKUP";
+    case PROC_PM_ERR_META_NOT_DRIVER: return "PROC_PM_ERR_META_NOT_DRIVER";
+    case PROC_PM_ERR_META_BAD_INDEX: return "PROC_PM_ERR_META_BAD_INDEX";
+    case PROC_PM_ERR_META_BAD_SOURCE: return "PROC_PM_ERR_META_BAD_SOURCE";
+    case PROC_PM_ERR_CALLER_FSBUF: return "PROC_PM_ERR_CALLER_FSBUF";
+    case PROC_PM_ERR_REPLY_SEND: return "PROC_PM_ERR_REPLY_SEND";
+    case PROC_PM_ERR_FS_REPLY: return "PROC_PM_ERR_FS_REPLY";
+    case PROC_PM_ERR_BAD_BROKER: return "PROC_PM_ERR_BAD_BROKER";
+    case PROC_PM_ERR_BAD_HANDLER: return "PROC_PM_ERR_BAD_HANDLER";
+    case PROC_PM_ERR_SUBSYSTEM_REG: return "PROC_PM_ERR_SUBSYSTEM_REG";
+    case PROC_PM_ERR_HANDLER_REG: return "PROC_PM_ERR_HANDLER_REG";
+    case PROC_PM_ERR_NOT_AUTHORIZED: return "PROC_PM_ERR_NOT_AUTHORIZED";
+    default: return "UNKNOWN";
+    }
+}
 
 /* The wamos-script broker realises a delegated `#!` guest script through the
  * standalone wamos-script executor; the requester spawns the broker service,
@@ -228,7 +310,6 @@ broker_spawn_request_entry(process_t *process, void *arg)
 {
     broker_spawn_request_state_t *state = (broker_spawn_request_state_t *)arg;
     ipc_message_t msg;
-    uint8_t *fs_buf = 0;
     uint32_t proc_ep = IPC_ENDPOINT_NONE;
 
     if (!process || !state) {
@@ -253,19 +334,21 @@ broker_spawn_request_entry(process_t *process, void *arg)
     }
 
     if (state->phase == 0u) {
-        fs_buf = (uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, process->context_id);
-        if (!fs_buf) {
-            klog_write("[test] broker spawn fs buffer missing\n");
+        uint32_t arg1 = broker_selftest_stage_path(state,
+                                                   process->context_id,
+                                                   BROKER_TEST_SERVICE_PATH,
+                                                   (uint32_t)sizeof(BROKER_TEST_SERVICE_PATH) - 1u);
+        if (arg1 == 0u) {
+            klog_write("[test] broker spawn xfer buffer missing\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
-        memcpy(fs_buf, BROKER_TEST_SERVICE_PATH, sizeof(BROKER_TEST_SERVICE_PATH) - 1u);
         msg.type = PROC_IPC_SPAWN_PATH_SYNC;
         msg.source = state->reply_endpoint;
         msg.destination = proc_ep;
         msg.request_id = state->request_id;
         msg.arg0 = 0u;
-        msg.arg1 = (uint32_t)sizeof(BROKER_TEST_SERVICE_PATH) - 1u;
+        msg.arg1 = arg1;
         msg.arg2 = 0u;
         msg.arg3 = 5000u;
         if (ipc_send_from(process->context_id, proc_ep, &msg) != IPC_OK) {
@@ -276,19 +359,21 @@ broker_spawn_request_entry(process_t *process, void *arg)
     }
 
     if (state->phase == 2u) {
-        fs_buf = (uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, process->context_id);
-        if (!fs_buf) {
-            klog_write("[test] broker spawn fs buffer missing\n");
+        uint32_t arg1 = broker_selftest_stage_path(state,
+                                                   process->context_id,
+                                                   BROKER_TEST_PATH,
+                                                   (uint32_t)sizeof(BROKER_TEST_PATH) - 1u);
+        if (arg1 == 0u) {
+            klog_write("[test] broker spawn xf buffer missing\n");
             process_set_exit_status(process, -1);
             return PROCESS_RUN_EXITED;
         }
-        memcpy(fs_buf, BROKER_TEST_PATH, sizeof(BROKER_TEST_PATH) - 1u);
         msg.type = PROC_IPC_SPAWN_PATH;
         msg.source = state->reply_endpoint;
         msg.destination = proc_ep;
         msg.request_id = state->request_id;
         msg.arg0 = PROC_SPAWN_PATH_FLAG_AUTOREAP;
-        msg.arg1 = (uint32_t)sizeof(BROKER_TEST_PATH) - 1u;
+        msg.arg1 = arg1;
         msg.arg2 = 0u;
         msg.arg3 = 0u;
         if (ipc_send_from(process->context_id, proc_ep, &msg) != IPC_OK) {
@@ -331,8 +416,9 @@ broker_spawn_request_entry(process_t *process, void *arg)
         return PROCESS_RUN_YIELDED;
     }
 
-    klog_printf("[test] broker spawn delegation failed err=%016llx\n",
-                (unsigned long long)msg.arg1);
+    klog_printf("[test] broker spawn delegation failed err=%016llx (%s)\n",
+                (unsigned long long)msg.arg1,
+                kernel_selftest_spawn_error_name((int32_t)msg.arg1));
     process_set_exit_status(process, -1);
     return PROCESS_RUN_EXITED;
 }

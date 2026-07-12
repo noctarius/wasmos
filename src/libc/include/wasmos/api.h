@@ -10,7 +10,7 @@
 extern "C" {
 #endif
 
-#define WASMOS_BUFFER_KIND_FS 1
+#define WASMOS_BUFFER_KIND_XFER 1
 #define WASMOS_BUFFER_GRANT_READ 0x1
 #define WASMOS_BUFFER_GRANT_WRITE 0x2
 
@@ -39,26 +39,43 @@ extern int32_t wasmos_ipc_send(int32_t destination_endpoint,
                                int32_t arg2,
                                int32_t arg3)
     WASMOS_WASM_IMPORT("wasmos", "ipc_send");
-extern int32_t wasmos_xfer_buffer_borrow(int32_t source_endpoint, int32_t flags)
+/* Object/owner/borrow xfer-buffer ABI (stateless, id-based). Userspace holds
+ * the buffer_id (owner) and borrow_id (borrower) like file descriptors and
+ * passes them back; the kernel keeps no per-context buffer state. All of these
+ * return a value >= 0 on success (buffer_id / borrow_id / device address / 0)
+ * and a negative xfer_buffer_status_t code on failure. */
+extern int32_t wasmos_xfer_buffer_acquire(int32_t minimum_size)
+    WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_acquire");
+extern int32_t wasmos_xfer_buffer_borrow(int32_t source_endpoint,
+                                         int32_t buffer_id,
+                                         int32_t flags)
     WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_borrow");
-extern int32_t wasmos_xfer_buffer_release(void)
+extern int32_t wasmos_xfer_buffer_release(int32_t buffer_id)
     WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_release");
-extern int32_t wasmos_buffer_borrow(int32_t kind, int32_t source_endpoint, int32_t flags)
+extern int32_t wasmos_xfer_buffer_unborrow(int32_t borrow_id)
+    WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_unborrow");
+extern int32_t wasmos_buffer_acquire(int32_t kind, int32_t minimum_size)
+    WASMOS_WASM_IMPORT("wasmos", "buffer_acquire");
+extern int32_t wasmos_buffer_borrow(int32_t kind,
+                                    int32_t source_endpoint,
+                                    int32_t buffer_id,
+                                    int32_t flags)
     WASMOS_WASM_IMPORT("wasmos", "buffer_borrow");
-extern int32_t wasmos_buffer_release(int32_t kind)
+extern int32_t wasmos_buffer_release(int32_t kind, int32_t buffer_id)
     WASMOS_WASM_IMPORT("wasmos", "buffer_release");
-extern int32_t wasmos_dma_map_borrow(int32_t borrow_kind,
-                                     int32_t source_endpoint,
+extern int32_t wasmos_buffer_unborrow(int32_t borrow_id)
+    WASMOS_WASM_IMPORT("wasmos", "buffer_unborrow");
+extern int32_t wasmos_dma_map_borrow(int32_t borrow_id,
                                      int32_t offset,
                                      int32_t length,
                                      int32_t direction_flags)
     WASMOS_WASM_IMPORT("wasmos", "dma_map_borrow");
-extern int32_t wasmos_dma_sync_borrow(int32_t borrow_kind,
+extern int32_t wasmos_dma_sync_borrow(int32_t borrow_id,
                                       int32_t offset,
                                       int32_t length,
                                       int32_t sync_op)
     WASMOS_WASM_IMPORT("wasmos", "dma_sync_borrow");
-extern int32_t wasmos_dma_unmap_borrow(int32_t borrow_kind, int32_t source_endpoint)
+extern int32_t wasmos_dma_unmap_borrow(int32_t borrow_id)
     WASMOS_WASM_IMPORT("wasmos", "dma_unmap_borrow");
 extern int32_t wasmos_ipc_select_one(int32_t endpoint)
     WASMOS_WASM_IMPORT("wasmos", "ipc_select_one");
@@ -195,9 +212,9 @@ extern int32_t wasmos_xfer_buffer_size(void)
     WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_size");
 extern int32_t wasmos_fs_endpoint(void)
     WASMOS_WASM_IMPORT("wasmos", "fs_endpoint");
-extern int32_t wasmos_xfer_buffer_read(int32_t ptr, int32_t len, int32_t offset)
+extern int32_t wasmos_xfer_buffer_read(int32_t buffer_id, int32_t ptr, int32_t len, int32_t offset)
     WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_read");
-extern int32_t wasmos_xfer_buffer_write(int32_t ptr, int32_t len, int32_t offset)
+extern int32_t wasmos_xfer_buffer_write(int32_t buffer_id, int32_t ptr, int32_t len, int32_t offset)
     WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_write");
 extern int32_t wasmos_early_log_size(void)
     WASMOS_WASM_IMPORT("wasmos", "early_log_size");

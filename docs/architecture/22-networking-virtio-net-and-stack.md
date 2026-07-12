@@ -207,7 +207,7 @@ Allocate ring memory from a **driver-owned pinned DMA region**, not the borrow
 path. The borrow path (`wasmos_buffer_borrow` + `dma_map_borrow`) maps a peer's
 transient buffer and refuses the caller's own memory, so it cannot back a
 persistent ring; and there is no `WASMOS_BUFFER_KIND_NET_QUEUE_*` buffer kind
-(only `WASMOS_BUFFER_KIND_FS` exists today). Instead use the planned region
+(only `WASMOS_BUFFER_KIND_XFER` exists today). Instead use the planned region
 allocator (see [DMA Transfers → Driver-Owned DMA Regions](12-dma-transfers.md)):
 ```c
 /* planned: contiguous, page-aligned, pinned, low-2GB, mapped into linmem */
@@ -354,9 +354,9 @@ static void process_rx_completions(void)
         uint8_t *frame = g_rx_buf_virt + slot * NET_RX_BUF_SIZE
                          + sizeof(virtio_net_hdr_t);
 
-        /* Forward frame to net-stack via FS buffer + IPC */
-        wasmos_sys_fs_buffer_write_to_endpoint(g_stack_endpoint,
-                                               frame, (int32_t)frame_len, 0);
+        /* Forward frame to net-stack via xfer buffer + IPC */
+        wasmos_sys_xfer_buffer_write_to_endpoint(g_stack_endpoint,
+                                                 frame, (int32_t)frame_len, 0);
         wasmos_ipc_send(g_stack_endpoint, g_endpoint,
                         NETDRV_IPC_RX_FRAME_NOTIFY, g_next_req_id++,
                         (int32_t)frame_len, 0, 0, 0);
@@ -407,10 +407,10 @@ static void handle_tx_frame(int32_t source, int32_t request_id, int32_t frame_le
     virtio_net_hdr_t *hdr = (virtio_net_hdr_t *)tx_buf;
     memset(hdr, 0, sizeof(*hdr));
 
-    /* Copy frame from caller's FS buffer */
-    wasmos_sys_fs_buffer_copy_from_endpoint(source,
-                                             tx_buf + sizeof(*hdr),
-                                             frame_len, 0);
+    /* Copy frame from caller's xfer buffer */
+    wasmos_sys_xfer_buffer_copy_from_endpoint(source,
+                                              tx_buf + sizeof(*hdr),
+                                              frame_len, 0);
 
     g_vq_desc_tx[slot].addr  = g_tx_buf_phys[slot];
     g_vq_desc_tx[slot].len   = (uint32_t)sizeof(*hdr) + (uint32_t)frame_len;
@@ -474,11 +474,11 @@ All networking opcodes occupy the 0xA00–0xBFF range in `wasmos_driver_abi.h`.
 ```c
 enum {
     /* virtio-net driver: 0xA00–0xAFF */
-    NETDRV_IPC_LINK_GET          = 0xA00, /* req: –; resp: arg0=link arg2=mtu; MAC in FS buf */
-    NETDRV_IPC_TX_FRAME          = 0xA01, /* req: arg0=frame_len; frame in FS buf */
-    NETDRV_IPC_RX_POLL           = 0xA02, /* req: –; resp: arg0=frame_len (0=empty); frame in FS buf */
-    NETDRV_IPC_STATS_GET         = 0xA03, /* req: –; resp: stats struct in FS buf */
-    NETDRV_IPC_RX_FRAME_NOTIFY   = 0xA04, /* push driver→stack: arg0=frame_len; frame in FS buf */
+    NETDRV_IPC_LINK_GET          = 0xA00, /* req: –; resp: arg0=link arg2=mtu; MAC in xfer buf */
+    NETDRV_IPC_TX_FRAME          = 0xA01, /* req: arg0=frame_len; frame in xfer buf */
+    NETDRV_IPC_RX_POLL           = 0xA02, /* req: –; resp: arg0=frame_len (0=empty); frame in xfer buf */
+    NETDRV_IPC_STATS_GET         = 0xA03, /* req: –; resp: stats struct in xfer buf */
+    NETDRV_IPC_RX_FRAME_NOTIFY   = 0xA04, /* push driver→stack: arg0=frame_len; frame in xfer buf */
     NETDRV_IPC_LINK_NOTIFY       = 0xA05, /* planned; push driver→stack: arg0=link up/down */
     NETDRV_IPC_RESP              = 0xA80,
     NETDRV_IPC_ERROR             = 0xAFF,
@@ -487,13 +487,13 @@ enum {
     NET_IPC_SOCKET_OPEN          = 0xB00, /* arg0=family arg1=type arg2=stack_id arg3=0 */
     NET_IPC_BIND                 = 0xB01, /* arg0=sock_id arg1=port arg2=addr_v4_nbo arg3=0 */
     NET_IPC_CONNECT              = 0xB02, /* arg0=sock_id arg1=port arg2=addr_v4_nbo arg3=0 */
-    NET_IPC_SEND                 = 0xB03, /* arg0=sock_id arg1=data_len arg2=flags arg3=0; data in FS buf */
+    NET_IPC_SEND                 = 0xB03, /* arg0=sock_id arg1=data_len arg2=flags arg3=0; data in xfer buf */
     NET_IPC_RECV                 = 0xB04, /* arg0=sock_id arg1=max_len arg2=flags arg3=0 */
     NET_IPC_CLOSE                = 0xB05, /* arg0=sock_id */
     NET_IPC_POLL                 = 0xB06, /* arg0=sock_id; resp: arg0=readable|writable flags */
-    NET_IPC_IFADDR_ADD           = 0xB07, /* arg0=if_idx arg1=pfx_len arg2=origin arg3=state; addr in FS buf */
+    NET_IPC_IFADDR_ADD           = 0xB07, /* arg0=if_idx arg1=pfx_len arg2=origin arg3=state; addr in xfer buf */
     NET_IPC_IFADDR_DEL           = 0xB08, /* arg0=addr_handle */
-    NET_IPC_IFADDR_LIST          = 0xB09, /* arg0=if_idx; resp: addr list in FS buf */
+    NET_IPC_IFADDR_LIST          = 0xB09, /* arg0=if_idx; resp: addr list in xfer buf */
     NET_IPC_STACK_CREATE         = 0xB0A, /* arg0=flags; resp: arg0=stack_id */
     NET_IPC_STACK_DESTROY        = 0xB0B, /* arg0=stack_id */
     NET_IPC_STACK_SELECT         = 0xB0C, /* arg0=stack_id (sets default for this client endpoint) */
@@ -524,7 +524,7 @@ enum {
 ### Concrete IPC Field Layouts
 
 All arg fields are `int32_t`. Addresses and lengths that exceed 32 bits go
-through the FS buffer.
+through the xfer buffer.
 
 #### NETDRV_IPC_LINK_GET response
 ```
@@ -533,14 +533,14 @@ arg0 = link_state  (0=down, 1=up)
 arg1 = status_word (raw device status reg, for diagnostics)
 arg2 = mtu         (1500 for baseline)
 arg3 = reserved(0)
-FS buf[0..5] = MAC address (6 bytes, network byte order)
+xfer buf[0..5] = MAC address (6 bytes, network byte order)
 ```
 
 #### NETDRV_IPC_STATS_GET response
 ```
 type=NETDRV_IPC_RESP
 arg0 = 0 (ok)
-FS buf = netdrv_stats_t:
+xfer buf = netdrv_stats_t:
   uint32_t rx_packets
   uint32_t tx_packets
   uint32_t rx_drops
@@ -566,7 +566,7 @@ Request:
   arg0 = socket_id
   arg1 = port (host byte order; 0=any)
   arg2 = IPv4 address in network byte order (0=INADDR_ANY)
-         For IPv6: arg2=0, address (16 bytes) in FS buf[0..15]
+         For IPv6: arg2=0, address (16 bytes) in xfer buf[0..15]
   arg3 = reserved(0)
 Response (NET_IPC_RESP): arg0=0
 ```
@@ -577,7 +577,7 @@ Request:
   arg0 = socket_id
   arg1 = remote port (host byte order)
   arg2 = remote IPv4 addr (network byte order)
-         For IPv6: arg2=0, addr in FS buf[0..15]
+         For IPv6: arg2=0, addr in xfer buf[0..15]
   arg3 = reserved(0)
 Response (NET_IPC_RESP): arg0=0
   For TCP: sent after SYN-ACK exchange completes (blocking from client view)
@@ -590,7 +590,7 @@ Request:
   arg1 = data_len (bytes)
   arg2 = flags (0=default, 1=MSG_DONTWAIT)
   arg3 = reserved(0)
-  FS buf[0..data_len-1] = payload
+  xfer buf[0..data_len-1] = payload
 Response (NET_IPC_RESP): arg0=bytes_sent
 Error (NET_IPC_ERROR): arg0=NET_STATUS_WOULD_BLOCK | NET_STATUS_IO_ERROR
 ```
@@ -604,7 +604,7 @@ Request:
   arg3 = reserved(0)
 Response (NET_IPC_RESP):
   arg0 = bytes_received (0 means no data, caller retries)
-  FS buf[0..bytes_received-1] = payload
+  xfer buf[0..bytes_received-1] = payload
 ```
 
 #### NET_IPC_IFADDR_ADD
@@ -614,8 +614,8 @@ Request:
   arg1 = prefix_len
   arg2 = origin (0=static, 1=dhcp, 2=slaac)
   arg3 = state  (0=preferred, 1=tentative, 2=deprecated)
-  FS buf[0..3]   = IPv4 address (network byte order), or
-  FS buf[0..15]  = IPv6 address (network byte order)
+  xfer buf[0..3]   = IPv4 address (network byte order), or
+  xfer buf[0..15]  = IPv6 address (network byte order)
 Response (NET_IPC_RESP): arg0=addr_handle (opaque, used for IFADDR_DEL)
 ```
 
@@ -725,10 +725,10 @@ no RTOS integration). The netif glue:
 /* Called by lwIP to send a frame on the wire */
 static err_t lwip_linkoutput(struct netif *nif, struct pbuf *p)
 {
-    /* Flatten pbuf chain into contiguous FS buffer */
+    /* Flatten pbuf chain into contiguous xfer buffer */
     uint32_t total = 0;
-    /* borrow FS buffer, write pbuf payload */
-    wasmos_sys_fs_buffer_write_to_endpoint(g_driver_ep, frame_buf, total, 0);
+    /* borrow xfer buffer, write pbuf payload */
+    wasmos_sys_xfer_buffer_write_to_endpoint(g_driver_ep, frame_buf, total, 0);
     wasmos_ipc_send(g_driver_ep, g_ep, NETDRV_IPC_TX_FRAME,
                     g_req_id++, (int32_t)total, 0, 0, 0);
     /* wait for NETDRV_IPC_RESP (or poll loop handles it) */
@@ -739,7 +739,7 @@ static err_t lwip_linkoutput(struct netif *nif, struct pbuf *p)
 static void on_rx_frame(int32_t frame_len)
 {
     struct pbuf *p = pbuf_alloc(PBUF_RAW, (uint16_t)frame_len, PBUF_POOL);
-    wasmos_sys_fs_buffer_copy_from_endpoint(g_driver_ep, p->payload, frame_len, 0);
+    wasmos_sys_xfer_buffer_copy_from_endpoint(g_driver_ep, p->payload, frame_len, 0);
     g_netif.input(p, &g_netif);  /* lwIP ethernet_input / ip_input */
 }
 ```
@@ -777,7 +777,7 @@ Phase A/B (phases 1–3):
   Physical address written to QUEUE_ADDRESS register.
 - Packet data: pre-allocated pool of DMA-mapped borrow buffers (one per RX
   slot, one per TX slot). Physical addresses stored in `g_rx_buf_phys[]` and
-  `g_tx_buf_phys[]`. Data copied through FS buffer on the IPC path.
+  `g_tx_buf_phys[]`. Data copied through the xfer buffer on the IPC path.
 - `dma_sync_borrow` with `WASMOS_DMA_SYNC_FROM_DEVICE` called after each RX
   completion before reading frame data; `WASMOS_DMA_SYNC_TO_DEVICE` called
   before writing TX descriptor.
@@ -785,7 +785,7 @@ Phase A/B (phases 1–3):
 Phase C+ (post-baseline optimization):
 - Replace per-slot pool with dynamic borrow-per-frame; use
   `dma_map_borrow`/`dma_unmap_borrow` in the TX completion path.
-- Eliminate the copy through the FS buffer on the RX path by forwarding the
+- Eliminate the copy through the xfer buffer on the RX path by forwarding the
   borrow handle directly to the stack and unlocking the descriptor only after
   the stack releases the borrow.
 
@@ -1013,7 +1013,7 @@ Done gate:
 Phase 4: IPv6 + multi-address + multi-instance enablement
 - Set `LWIP_IPV6 1` in `lwipopts.h`; add NDP + ICMPv6 + SLAAC/static v6 config.
 - Enable dual-stack sockets (`AF_INET` + `AF_INET6`) and family-aware
-  bind/connect (IPv6 address in FS buffer path).
+  bind/connect (IPv6 address in xfer-buffer path).
 - Enable multiple addresses per interface with explicit preferred-source rules.
 - Enable multiple stack instances with `NET_IPC_STACK_CREATE/SELECT`.
 
@@ -1026,7 +1026,7 @@ Phase 5: hardening + performance
   restart).
 - Add counters/diagnostics (`netstat`-style endpoint later).
 - Optional DMA-backed fast path rollout: forward RX borrow handle to stack,
-  eliminate FS-buffer copy on RX path.
+  eliminate xfer-buffer copy on RX path.
 
 Done gate:
 - regression matrix passes and no startup chain liveness regressions.
@@ -1063,7 +1063,7 @@ Done gate:
 - Risk: lwIP periodic timer not fired, causing TCP retransmit / ARP expiry stall.
   - Mitigation: wire periodic wakeup via RTC service in phase 3; document as
     known gap until then.
-- Risk: FS buffer contention between concurrent TX requests from multiple clients.
+- Risk: xfer-buffer contention between concurrent TX requests from multiple clients.
   - Mitigation: net-stack serializes all driver TX calls; one outstanding TX
     frame at a time in phase 1/2 baseline.
 
@@ -1088,4 +1088,4 @@ Done gate:
 6. Add `net-stack` service with lwIP, ARP/IPv4/ICMP/UDP, socket IPC.
 7. Add TCP baseline and timer tick wiring.
 8. Add IPv6 + multi-address + multi-stack instance support (phase 4).
-9. Evaluate DMA fast path (eliminate FS-buffer copy on RX) in phase 5.
+9. Evaluate DMA fast path (eliminate xfer-buffer copy on RX) in phase 5.

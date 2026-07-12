@@ -12,7 +12,7 @@
 #include "paging.h"
 #include "serial.h"
 #include "user_mutex.h"
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
 #include "warp_ring3.h"
 #include "arch/x86_64/smp.h"
 extern uint64_t warp_r3_memory_helper(uint64_t min_linmem_len,
@@ -350,7 +350,7 @@ x86_syscall_handler(syscall_frame_t *frame)
     syscall_trace_ring3_stress(frame);
     syscall_trace_ring3_once(frame);
 
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
     /* WARP ring-3 return: the return trampoline fires this after the JIT
      * wrapper executes its final `ret`. RDI contains the raw RAX that the
      * JIT wrapper had on exit (trap code or return value). */

@@ -219,7 +219,7 @@ typedef struct {
 } nd_framebuffer_info_t;
 
 // Buffer borrow (native driver side)
-ND_BUFFER_KIND_FS          = 1u
+ND_BUFFER_KIND_XFER        = 1u
 ND_BUFFER_KIND_FRAMEBUFFER = 2u
 ND_BUFFER_BORROW_READ      = 0x1u
 ND_BUFFER_BORROW_WRITE     = 0x2u

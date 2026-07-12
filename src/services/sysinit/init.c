@@ -41,12 +41,52 @@ fatal_stall(const char *msg)
     wasmos_sys_ipc_recv_loop();
 }
 
-/* Fire-and-forget spawn: writes path into the FS buffer and sends
+static const char *
+sysinit_spawn_error_reason(int32_t rc)
+{
+    switch (rc) {
+    case PROC_SPAWN_ERR_BAD_ENDPOINT: return "bad request endpoint";
+    case PROC_SPAWN_ERR_NO_CALLER: return "caller not found";
+    case PROC_SPAWN_ERR_BAD_PATH: return "bad path";
+    case PROC_SPAWN_ERR_CALLER_FSBUF: return "caller transfer buffer unavailable";
+    case PROC_SPAWN_ERR_ARGS_TOOBIG: return "args too long";
+    case PROC_SPAWN_ERR_NO_PM_FSBUF: return "pm transfer buffer unavailable";
+    case PROC_SPAWN_ERR_FS_READ: return "cannot read executable";
+    case PROC_SPAWN_ERR_SPAWN_FAILED: return "process create/start failed";
+    case PROC_SPAWN_ERR_BROKER_IPC: return "broker plan IPC failed";
+    case PROC_SPAWN_ERR_BROKER_PLAN: return "broker returned an invalid spawn plan";
+    case PROC_SPAWN_ERR_BROKER_DEFERRED: return "broker plan deferred";
+    case PROC_PM_ERR_BUSY: return "process manager busy";
+    default: return 0;
+    }
+}
+
+static void
+sysinit_log_spawn_failure(const char *op, const char *path, int32_t rc)
+{
+    const char *reason = sysinit_spawn_error_reason(rc);
+
+    log_line("[sysinit] ");
+    log_line(op ? op : "spawn");
+    log_line(" failed");
+    if (path && path[0] != '\0') {
+        log_line(" for ");
+        log_line(path);
+    }
+    if (reason) {
+        log_line(": ");
+        log_line(reason);
+    }
+    log_line("\n");
+}
+
+/* Fire-and-forget spawn: writes path into the xfer buffer and sends
  * PROC_IPC_SPAWN_PATH.  Retries up to SYSINIT_MAX_SPAWN_ATTEMPTS on
- * PROC_IPC_ERROR with arg1==-2 (loader busy). */
+ * PROC_IPC_ERROR with arg1==PROC_PM_ERR_BUSY. */
 static int
 spawn_path(const char *path)
 {
+    wasmos_ipc_message_t reply;
     uint32_t path_len = 0;
     if (!path || path[0] == '\0') {
         return -1;
@@ -61,36 +101,32 @@ spawn_path(const char *path)
         return -1;
     }
     for (uint32_t attempt = 0; attempt < SYSINIT_MAX_SPAWN_ATTEMPTS; ++attempt) {
-        if (wasmos_ipc_send(g_state.proc_endpoint,
+        if (wasmos_ipc_call(g_state.proc_endpoint,
                             g_state.reply_endpoint,
                             PROC_IPC_SPAWN_PATH,
                             g_state.spawn_request_id,
                             PROC_SPAWN_PATH_FLAG_AUTOREAP, /* fire-and-forget: reap the child on exit */
                             (int32_t)path_len,
                             0,
-                            0) != 0) {
+                            0,
+                            &reply) != 0) {
             return -1;
         }
-        int32_t recv_rc = wasmos_ipc_select_one(g_state.reply_endpoint);
-        if (recv_rc < 0) {
-            return -1;
-        }
-        int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
-        int32_t resp_req = wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID);
-        if (resp_req != g_state.spawn_request_id) {
-            return -1;
-        }
-        if (resp_type == PROC_IPC_RESP) {
+        if (reply.type == PROC_IPC_RESP) {
             g_state.spawn_request_id++;
             return 0;
         }
-        if (resp_type == PROC_IPC_ERROR &&
-            wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1) == -2) {
+        if (reply.type == PROC_IPC_ERROR &&
+            (int32_t)reply.arg1 == PROC_PM_ERR_BUSY) {
             wasmos_sched_yield();
             continue;
         }
+        if (reply.type == PROC_IPC_ERROR) {
+            sysinit_log_spawn_failure("spawn", path, (int32_t)reply.arg1);
+        }
         return -1;
     }
+    sysinit_log_spawn_failure("spawn", path, PROC_PM_ERR_BUSY);
     return -1;
 }
 
@@ -99,6 +135,7 @@ spawn_path(const char *path)
 static int
 sysinit_on_start(void *user, const char *path)
 {
+    wasmos_ipc_message_t reply;
     (void)user;
     uint32_t path_len = 0;
     while (path[path_len]) {
@@ -110,12 +147,24 @@ sysinit_on_start(void *user, const char *path)
     if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
         return -1;
     }
-    int32_t pid = wasmos_sys_spawn_path_sync(g_state.proc_endpoint,
-                                             g_state.reply_endpoint,
-                                             (int32_t)path_len,
-                                             SYSINIT_START_TIMEOUT_MS,
-                                             g_state.spawn_request_id);
-    if (pid < 0) {
+    if (wasmos_ipc_call(g_state.proc_endpoint,
+                        g_state.reply_endpoint,
+                        PROC_IPC_SPAWN_PATH_SYNC,
+                        g_state.spawn_request_id,
+                        0,
+                        (int32_t)path_len,
+                        0,
+                        SYSINIT_START_TIMEOUT_MS,
+                        &reply) != 0) {
+        sysinit_log_spawn_failure("start", path, -1);
+        return -1;
+    }
+    if (reply.type != PROC_IPC_RESP || (int32_t)reply.arg0 < 0) {
+        if (reply.type == PROC_IPC_ERROR) {
+            sysinit_log_spawn_failure("start", path, (int32_t)reply.arg1);
+        } else {
+            sysinit_log_spawn_failure("start", path, -1);
+        }
         return -1;
     }
     g_state.spawn_request_id++;
@@ -129,7 +178,7 @@ sysinit_on_spawn(void *user, const char *path)
     return spawn_path(path);
 }
 
-/* Script 'exec' callback: spawns path with args in the FS buffer (path at
+/* Script 'exec' callback: spawns path with args in the xfer buffer (path at
  * offset 0, args at offset path_len+1), then sends PROC_IPC_WAIT and blocks
  * until the child exits; sets *out_exit_code to the exit status. */
 static int
@@ -185,6 +234,9 @@ sysinit_on_exec(void *user, const char *path, const char *args, int32_t *out_exi
         return -1;
     }
     if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) != PROC_IPC_RESP) {
+        if (wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE) == PROC_IPC_ERROR) {
+            sysinit_log_spawn_failure("exec", path, wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG1));
+        }
         return -1;
     }
     int32_t pid = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);

@@ -156,7 +156,7 @@ order; the first match wins.
 | Command     | Implementation               | Notes                                             |
 |-------------|------------------------------|---------------------------------------------------|
 | `help`      | inline `console_write`       | Lists all commands on one line                    |
-| `mount`     | `FSMGR_IPC_QUERY_MOUNTS_REQ` | Receives mount table as a text blob via FS buffer |
+| `mount`     | `FSMGR_IPC_QUERY_MOUNTS_REQ` | Receives mount table as a text blob via the xfer buffer |
 | `kmaps`     | `wasmos_kmap_dump()`         | Dumps active kernel memory mappings               |
 | `kmaps all` | `wasmos_kmap_dump_all()`     | Includes all process address spaces               |
 | `ps`        | see below                    | Flat table                                        |
@@ -302,8 +302,8 @@ Any command that is not a built-in falls through to foreground execution:
 
 ```
 1. cli_resolve_exec_path()
-2. Write resolved path to FS buffer at offset 0 (path_len bytes)
-3. Write args string to FS buffer at offset path_len+1 (args_len bytes)
+2. Write resolved path to the xfer buffer at offset 0 (path_len bytes)
+3. Write args string to the xfer buffer at offset path_len+1 (args_len bytes)
 4. Send PROC_IPC_SPAWN_PATH(path_len=arg1, args_len=arg2)
 5. Wait for PROC_IPC_RESP → get spawned pid (arg0) + spawn_flags (arg1)
    → if service/driver flag set: PM already waited for NOTIFY_READY
@@ -317,12 +317,12 @@ The CLI blocks in `WAIT_IPC` during step 5 and again during step 6.
 
 #### Background Execution (`spawn`)
 
-`spawn <cmd>` uses the same path resolution and FS buffer write as foreground,
+`spawn <cmd>` uses the same path resolution and xfer-buffer write as foreground,
 but sets `PROC_SPAWN_PATH_FLAG_DETACH` in the IPC flags:
 
 ```
 1. cli_resolve_exec_path()
-2. Write path + args to FS buffer
+2. Write path + args to the xfer buffer
 3. Send PROC_IPC_SPAWN_PATH with FLAG_DETACH set → PENDING_SPAWN
 4. Wait for PROC_IPC_RESP (pm confirms process started)
 5. $? is not modified; back to CLI_PHASE_PROMPT

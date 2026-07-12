@@ -2,8 +2,8 @@
 
 This document describes the filesystem stack: the `fs_manager` VFS router,
 the backend registration model, the client state allocator, the FS IPC opcode
-table, the `fs_fat` and `fs_init` backends, and the buffer borrow semantics
-used for data transfers.
+table, the `fs_fat` and `fs_init` backends, and the transfer-buffer borrow
+semantics used for data transfers.
 
 **Sources**: `src/services/fs_manager/`,
 `src/services/fs_fat/`,
@@ -109,11 +109,17 @@ All filesystem operations use opcodes in the range `0x400–0x4FF`.
 
 ---
 
-### Buffer Borrow Semantics
+### Transfer-Buffer Borrow Semantics
 
 Large data transfers (file reads, application blob loads) use the kernel's
-DMA-buffer borrow mechanism rather than packing data into IPC message
-arguments:
+transfer-buffer borrow mechanism rather than packing data into IPC message
+arguments.
+
+The important abstraction is a **borrowed transfer buffer**, not a
+"filesystem-only buffer." The filesystem stack happens to use the generic
+xfer-buffer channel, but the abstraction is not specific to filesystems.
+
+For a normal file read:
 
 1. The client allocates or designates a shared buffer region.
 2. The client sends a request with a buffer descriptor (address, length) in
@@ -121,6 +127,10 @@ arguments:
 3. The backend writes directly into the client's buffer via the borrow handle.
 4. The response message carries the number of bytes written; no copy through
    `fs_manager` is needed.
+
+The buffer object remains caller-owned for the duration of the operation; the
+backend is writing into the caller's borrowed buffer, not into a separate
+backend-local staging area.
 
 `FS_IPC_STREAM (0x481)` is used for transfers that exceed a single message:
 the backend sends multiple stream messages followed by a final `FS_IPC_RESP`

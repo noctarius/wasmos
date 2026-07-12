@@ -19,6 +19,7 @@
 #include "wasmos_driver_abi.h"
 #include "capability.h"
 #include "timer.h"
+#include "xfer_buffer.h"
 #include <string.h>
 #include <stddef.h>
 
@@ -77,9 +78,6 @@ typedef struct {
 #define PAGE_SIZE 0x1000ULL
 #define ND_HEAP_SLOTS PROCESS_MAX_COUNT
 
-static uint8_t g_fb_dma_active_logged = 0;
-static uint8_t g_fb_dma_fallback_logged = 0;
-static uint8_t g_fb_dma_phase4_logged = 0;
 static uint32_t g_nd_heap_pid[ND_HEAP_SLOTS];
 static uint64_t g_nd_heap_bytes[ND_HEAP_SLOTS];
 
@@ -201,204 +199,236 @@ nd_sched_ticks(void)
     return (uint32_t)timer_ticks();
 }
 
+/* Per-driver borrow bookkeeping so buffer_release can reverse the exact
+ * borrow and page mapping established by buffer_borrow. Native drivers borrow
+ * at most a few buffers at a time (a framebuffer driver holds one for its
+ * lifetime), so a small fixed table suffices. */
+#define ND_BORROW_SLOTS 16
+
+typedef struct {
+    uint32_t driver_ctx;    /* 0 => free slot */
+    uint32_t kind;
+    uint32_t key_buffer_id; /* caller-supplied lookup key (0 for owner-local) */
+    uint8_t  owner_local;   /* 1 => object was acquired here (framebuffer) */
+    xfer_buffer_owner_t  owner;
+    xfer_buffer_borrow_t borrow;
+    uint64_t virt;
+    uint64_t pages;
+} nd_borrow_slot_t;
+
+static nd_borrow_slot_t g_nd_borrows[ND_BORROW_SLOTS];
+
+static nd_borrow_slot_t *
+nd_borrow_find(uint32_t driver_ctx, uint32_t kind, uint32_t key_buffer_id)
+{
+    for (uint32_t i = 0; i < ND_BORROW_SLOTS; ++i) {
+        if (g_nd_borrows[i].driver_ctx == driver_ctx &&
+            g_nd_borrows[i].kind == kind &&
+            g_nd_borrows[i].key_buffer_id == key_buffer_id) {
+            return &g_nd_borrows[i];
+        }
+    }
+    return (nd_borrow_slot_t *)0;
+}
+
+static nd_borrow_slot_t *
+nd_borrow_alloc(void)
+{
+    for (uint32_t i = 0; i < ND_BORROW_SLOTS; ++i) {
+        if (g_nd_borrows[i].driver_ctx == 0) {
+            return &g_nd_borrows[i];
+        }
+    }
+    return (nd_borrow_slot_t *)0;
+}
+
+static void
+nd_borrow_slot_clear(nd_borrow_slot_t *slot)
+{
+    memset(slot, 0, sizeof(*slot));
+}
+
 static void
 nd_log_invalid_buffer_borrow(uint32_t kind,
                              uint32_t source_context_id,
+                             uint32_t buffer_id,
                              uint32_t flags,
                              uint32_t size)
 {
-    klog_printf("[native-driver] buffer_borrow invalid kind=%016llx src=%016llx flags=%016llx size=%016llx (size must be non-zero and page-aligned)\n",
+    klog_printf("[native-driver] buffer_borrow invalid kind=%016llx src=%016llx buffer_id=%016llx flags=%016llx size=%016llx (size must be non-zero and page-aligned)\n",
                 (unsigned long long)kind,
                 (unsigned long long)source_context_id,
+                (unsigned long long)buffer_id,
                 (unsigned long long)flags,
                 (unsigned long long)size);
 }
 
+static int
+nd_map_pages(mm_context_t *ctx, uint64_t virt, uint64_t phys_base,
+             uint64_t pages, uint32_t borrow_flags)
+{
+    uint32_t map_flags = MEM_REGION_FLAG_READ | MEM_REGION_FLAG_USER;
+    if (borrow_flags & BUFFER_BORROW_WRITE) {
+        map_flags |= MEM_REGION_FLAG_WRITE;
+    }
+    for (uint64_t i = 0; i < pages; ++i) {
+        (void)paging_unmap_4k_in_root(ctx->root_table, virt + i * PAGE_SIZE);
+        if (paging_map_4k_in_root(ctx->root_table,
+                                  virt + i * PAGE_SIZE,
+                                  phys_base + i * PAGE_SIZE,
+                                  map_flags) < 0) {
+            for (uint64_t j = 0; j < i; ++j) {
+                (void)paging_unmap_4k_in_root(ctx->root_table, virt + j * PAGE_SIZE);
+            }
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static void
+nd_unmap_pages(mm_context_t *ctx, uint64_t virt, uint64_t pages)
+{
+    for (uint64_t i = 0; i < pages; ++i) {
+        (void)paging_unmap_4k_in_root(ctx->root_table, virt + i * PAGE_SIZE);
+    }
+}
+
 /*
- * Borrow a process-manager buffer kind and map it into the driver's address
- * space at ND_DEVICE_VIRT_BASE. Low-level ABI contract: size must be non-zero
- * and page-aligned because the kernel maps whole-page windows for native
- * drivers. Higher-level helpers may round byte-sized requests up before
- * calling this hook.
+ * Borrow a buffer object and map it into the driver's address space at
+ * ND_DEVICE_VIRT_BASE. Owner-local borrows (framebuffer, or source_context_id
+ * of 0/self) acquire the object here and borrow it from ourselves; foreign
+ * borrows resolve buffer_id against source_context_id's owned objects. Low-level
+ * ABI contract: size must be non-zero and page-aligned because the kernel maps
+ * whole-page windows for native drivers.
  */
 static void *
 nd_buffer_borrow(uint32_t kind, uint32_t source_context_id,
-                 uint32_t flags, uint32_t size)
+                 uint32_t buffer_id, uint32_t flags, uint32_t size)
 {
-    uint8_t borrowed = 0;
     if (size == 0 || (size & (uint32_t)(PAGE_SIZE - 1)) != 0) {
-        nd_log_invalid_buffer_borrow(kind, source_context_id, flags, size);
+        nd_log_invalid_buffer_borrow(kind, source_context_id, buffer_id, flags, size);
         return (void *)0;
     }
-    if (flags == 0) {
+    if (flags == 0 ||
+        (flags & ~(uint32_t)(BUFFER_BORROW_READ | BUFFER_BORROW_WRITE)) != 0) {
         return (void *)0;
     }
 
     process_t *proc = process_get(process_current_pid());
-    if (!proc) {
+    if (!proc || proc->context_id == 0) {
         return (void *)0;
     }
     mm_context_t *ctx = mm_context_get(proc->context_id);
     if (!ctx || ctx->root_table == 0) {
         return (void *)0;
     }
-    if (source_context_id != proc->context_id) {
-        if (process_manager_buffer_borrow_context(kind, proc->context_id,
-                                                  source_context_id, flags) != 0) {
-            return (void *)0;
-        }
-        borrowed = 1;
+    uint32_t driver_ctx = proc->context_id;
+
+    if (nd_borrow_find(driver_ctx, kind, buffer_id)) {
+        /* A borrow under this key is already active; release it first. */
+        return (void *)0;
+    }
+    nd_borrow_slot_t *slot = nd_borrow_alloc();
+    if (!slot) {
+        return (void *)0;
     }
 
-    uint64_t phys_base = process_manager_buffer_phys_for_context(kind, proc->context_id);
-    uint32_t max_size = process_manager_buffer_size(kind);
-    if (phys_base == 0 || max_size == 0 || size > max_size) {
-        if (borrowed) {
-            (void)process_manager_buffer_release_context(kind, proc->context_id);
+    xfer_buffer_owner_t owner = {0};
+    xfer_buffer_borrow_t borrow = {0};
+    uint8_t owner_local = 0;
+
+    if (kind == BUFFER_KIND_FRAMEBUFFER ||
+        source_context_id == 0 || source_context_id == driver_ctx) {
+        /* Owner-local: acquire the object here and borrow it from ourselves.
+         * Framebuffers are always local-only (backed by the hardware fb). */
+        if (xfer_buffer_acquire(kind, driver_ctx, size, &owner) != XFER_BUFFER_OK) {
+            return (void *)0;
+        }
+        owner_local = 1;
+    } else {
+        /* Borrow a buffer object owned by a foreign context by its id. */
+        xfer_buffer_t desc = {0};
+        if (xfer_buffer_describe(buffer_id, kind, source_context_id, &desc) != XFER_BUFFER_OK) {
+            return (void *)0;
+        }
+        if (xfer_buffer_get_owned(&desc, source_context_id, &owner) != XFER_BUFFER_OK) {
+            return (void *)0;
+        }
+    }
+
+    if (size > owner.buffer.size_bytes) {
+        if (owner_local) {
+            (void)xfer_buffer_release_owned(&owner);
         }
         return (void *)0;
     }
 
-    if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
-        if (!g_fb_dma_phase4_logged) {
-            uint8_t deny_ok = 0;
-            uint8_t range_ok = 0;
-            uint8_t window_ok = 0;
-            uint8_t churn_ok = 1;
-            uint8_t stale_unmap_ok = 0;
-            uint64_t test_addr = 0;
-            /* Phase-4 coverage: wrong-source mapping must be denied. */
-            if (process_manager_buffer_dma_map(kind,
-                                               proc->context_id,
-                                               source_context_id + 1u,
-                                               0u,
-                                               size,
-                                               WASMOS_DMA_DIR_BIDIR,
-                                               &test_addr) != 0) {
-                deny_ok = 1;
-            }
-            /* Phase-4 coverage: oversize/out-of-range mapping must be denied. */
-            if (process_manager_buffer_dma_map(kind,
-                                               proc->context_id,
-                                               source_context_id,
-                                               max_size,
-                                               1u,
-                                               WASMOS_DMA_DIR_BIDIR,
-                                               &test_addr) != 0 &&
-                process_manager_buffer_dma_map(kind,
-                                               proc->context_id,
-                                               source_context_id,
-                                               0u,
-                                               max_size + 1u,
-                                               WASMOS_DMA_DIR_BIDIR,
-                                               &test_addr) != 0) {
-                range_ok = 1;
-            }
-            /* Phase-4 coverage: window policy helper must reject out-of-window range. */
-            if (capability_dma_range_allowed(proc->context_id, 0x0000000100000000ULL, 4096u) == 0) {
-                window_ok = 1;
-            }
-            /* Phase-4 coverage: repeated map/sync/unmap cycles remain stable. */
-            for (uint32_t i = 0; i < 4u; ++i) {
-                if (process_manager_buffer_dma_map(kind,
-                                                   proc->context_id,
-                                                   source_context_id,
-                                                   0u,
-                                                   size,
-                                                   WASMOS_DMA_DIR_BIDIR,
-                                                   &test_addr) != 0 ||
-                    process_manager_buffer_dma_sync(kind,
-                                                    proc->context_id,
-                                                    0u,
-                                                    size,
-                                                    WASMOS_DMA_SYNC_BIDIR) != 0 ||
-                    process_manager_buffer_dma_unmap(kind,
-                                                     proc->context_id,
-                                                     source_context_id) != 0) {
-                    churn_ok = 0;
-                    break;
-                }
-            }
-            /* Phase-4 coverage: stale unmap must be denied when not mapped. */
-            if (process_manager_buffer_dma_unmap(kind,
-                                                 proc->context_id,
-                                                 source_context_id) != 0) {
-                stale_unmap_ok = 1;
-            }
-            if (deny_ok && range_ok && window_ok && churn_ok && stale_unmap_ok) {
-                klog_write("[test] framebuffer dma phase4 matrix ok\n");
-            } else {
-                klog_write("[test] framebuffer dma phase4 matrix mismatch\n");
-            }
-            g_fb_dma_phase4_logged = 1;
+    if (xfer_buffer_borrow(&owner, driver_ctx, flags, &borrow) != XFER_BUFFER_OK) {
+        if (owner_local) {
+            (void)xfer_buffer_release_owned(&owner);
         }
+        return (void *)0;
+    }
 
-        uint64_t device_addr = 0;
-        if (process_manager_buffer_dma_map(kind,
-                                           proc->context_id,
-                                           source_context_id,
-                                           0u,
-                                           size,
-                                           WASMOS_DMA_DIR_BIDIR,
-                                           &device_addr) == 0 &&
-            process_manager_buffer_dma_sync(kind,
-                                            proc->context_id,
-                                            0u,
-                                            size,
-                                            WASMOS_DMA_SYNC_BIDIR) == 0) {
-            (void)device_addr;
-            if (!g_fb_dma_active_logged) {
-                g_fb_dma_active_logged = 1;
-                klog_write("[framebuffer] dma path active\n");
-            }
-        } else if (!g_fb_dma_fallback_logged) {
-            g_fb_dma_fallback_logged = 1;
-            klog_write("[framebuffer] dma fallback active\n");
+    uint64_t phys_base = xfer_buffer_object_phys(&borrow.buffer);
+    if (phys_base == 0) {
+        (void)xfer_buffer_unborrow(&borrow);
+        if (owner_local) {
+            (void)xfer_buffer_release_owned(&owner);
         }
+        return (void *)0;
     }
 
     uint64_t virt = ND_DEVICE_VIRT_BASE;
     uint64_t pages = (uint64_t)size / PAGE_SIZE;
-
-    for (uint64_t i = 0; i < pages; ++i) {
-        (void)paging_unmap_4k_in_root(ctx->root_table, virt + i * PAGE_SIZE);
-        /* TODO: enforce PM_BUFFER_BORROW_READ/WRITE mapping permissions instead
-         * of always mapping RW for borrowed native buffers. */
-        if (paging_map_4k_in_root(ctx->root_table,
-                                  virt + i * PAGE_SIZE,
-                                  phys_base + i * PAGE_SIZE,
-                                  MEM_REGION_FLAG_READ |
-                                      MEM_REGION_FLAG_WRITE |
-                                      MEM_REGION_FLAG_USER) < 0) {
-            (void)process_manager_buffer_release_context(kind, proc->context_id);
-            return (void *)0;
+    if (nd_map_pages(ctx, virt, phys_base, pages, flags) != 0) {
+        (void)xfer_buffer_unborrow(&borrow);
+        if (owner_local) {
+            (void)xfer_buffer_release_owned(&owner);
         }
+        return (void *)0;
     }
+
+    slot->driver_ctx = driver_ctx;
+    slot->kind = kind;
+    slot->key_buffer_id = buffer_id;
+    slot->owner_local = owner_local;
+    slot->owner = owner;
+    slot->borrow = borrow;
+    slot->virt = virt;
+    slot->pages = pages;
     return (void *)(uintptr_t)virt;
 }
 
 static int
-nd_buffer_release(uint32_t kind)
+nd_buffer_release(uint32_t kind, uint32_t buffer_id)
 {
     process_t *proc = process_get(process_current_pid());
-    if (!proc) {
+    if (!proc || proc->context_id == 0) {
         return -1;
     }
-    if (kind == PM_BUFFER_KIND_FRAMEBUFFER) {
-        uint32_t source_context_id =
-            process_manager_buffer_borrow_source_context(kind, proc->context_id);
-        if (source_context_id != 0) {
-            (void)process_manager_buffer_dma_sync(kind,
-                                                  proc->context_id,
-                                                  0u,
-                                                  process_manager_buffer_size(kind),
-                                                  WASMOS_DMA_SYNC_BIDIR);
-            (void)process_manager_buffer_dma_unmap(kind,
-                                                   proc->context_id,
-                                                   source_context_id);
-        }
+    uint32_t driver_ctx = proc->context_id;
+    nd_borrow_slot_t *slot = nd_borrow_find(driver_ctx, kind, buffer_id);
+    if (!slot) {
+        return -1;
     }
-    return process_manager_buffer_release_context(kind, proc->context_id);
+
+    mm_context_t *ctx = mm_context_get(driver_ctx);
+    if (ctx && ctx->root_table != 0) {
+        nd_unmap_pages(ctx, slot->virt, slot->pages);
+    }
+
+    int rc = 0;
+    if (xfer_buffer_unborrow(&slot->borrow) != XFER_BUFFER_OK) {
+        rc = -1;
+    }
+    if (slot->owner_local &&
+        xfer_buffer_release_owned(&slot->owner) != XFER_BUFFER_OK) {
+        rc = -1;
+    }
+    nd_borrow_slot_clear(slot);
+    return rc;
 }
 
 static int

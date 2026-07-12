@@ -91,13 +91,17 @@ static vb::Span<vb::NativeSymbol const> aot_symbols()
         /* FS shared buffer */
         DYNAMIC_LINK("wasmos", "xfer_buffer_size",      stub_i0),
         DYNAMIC_LINK("wasmos", "fs_endpoint",         stub_i0),
-        DYNAMIC_LINK("wasmos", "xfer_buffer_read",      stub_i3),
-        DYNAMIC_LINK("wasmos", "xfer_buffer_write",     stub_i3),
-        DYNAMIC_LINK("wasmos", "xfer_buffer_borrow",    stub_i2),
-        DYNAMIC_LINK("wasmos", "xfer_buffer_release",   stub_i0),
-        /* Generic buffer borrow/release */
-        DYNAMIC_LINK("wasmos", "buffer_borrow",       stub_i3),
-        DYNAMIC_LINK("wasmos", "buffer_release",      stub_i1),
+        DYNAMIC_LINK("wasmos", "xfer_buffer_read",      stub_i4),
+        DYNAMIC_LINK("wasmos", "xfer_buffer_write",     stub_i4),
+        DYNAMIC_LINK("wasmos", "xfer_buffer_acquire",   stub_i1),
+        DYNAMIC_LINK("wasmos", "xfer_buffer_borrow",    stub_i3),
+        DYNAMIC_LINK("wasmos", "xfer_buffer_release",   stub_i1),
+        DYNAMIC_LINK("wasmos", "xfer_buffer_unborrow",  stub_i1),
+        /* Generic buffer acquire/borrow/release/unborrow */
+        DYNAMIC_LINK("wasmos", "buffer_acquire",      stub_i2),
+        DYNAMIC_LINK("wasmos", "buffer_borrow",       stub_i4),
+        DYNAMIC_LINK("wasmos", "buffer_release",      stub_i2),
+        DYNAMIC_LINK("wasmos", "buffer_unborrow",     stub_i1),
         /* Block DMA buffer */
         DYNAMIC_LINK("wasmos", "block_buffer_phys",   stub_i0),
         DYNAMIC_LINK("wasmos", "block_buffer_copy",   stub_i4),
@@ -135,9 +139,9 @@ static vb::Span<vb::NativeSymbol const> aot_symbols()
         DYNAMIC_LINK("wasmos", "initfs_entry_copy",   stub_i4),
         DYNAMIC_LINK("wasmos", "initfs_find_path",    stub_i2),
         /* DMA */
-        DYNAMIC_LINK("wasmos", "dma_map_borrow",      stub_i5),
+        DYNAMIC_LINK("wasmos", "dma_map_borrow",      stub_i4),
         DYNAMIC_LINK("wasmos", "dma_sync_borrow",     stub_i4),
-        DYNAMIC_LINK("wasmos", "dma_unmap_borrow",    stub_i2),
+        DYNAMIC_LINK("wasmos", "dma_unmap_borrow",    stub_i1),
         /* Physical memory */
         DYNAMIC_LINK("wasmos", "phys_map",            stub_i4),
         DYNAMIC_LINK("wasmos", "region_alloc",        stub_i3),

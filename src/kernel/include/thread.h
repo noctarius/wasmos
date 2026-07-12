@@ -48,7 +48,7 @@ typedef struct thread {
     uint8_t detached;
     int32_t exit_status;
     uint32_t wasm3_heap_bound_pid;
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
     /* Per-thread WARP ring-3 call state.  A ring-3 export call can block in a
      * hostcall (e.g. blocking IPC), yield, and later resume/migrate to a
      * different CPU, so this state must travel with the thread rather than live

@@ -25,7 +25,7 @@ extern "C" {
 #include "string.h"
 #include "paging.h"
 #include "warp_driver_ring3_call_policy.h"
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
 #include "warp_ring3.h"
 #include "arch/x86_64/smp.h"
 #endif
@@ -40,7 +40,7 @@ extern "C" {
 #include "warp/shim.h"
 #include "warp/link.h"
 
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
 extern "C" {
 /* from mem_utils_kernel.cpp */
 int      warp_mem_ring3_map_jit(uint64_t user_root,
@@ -191,7 +191,7 @@ warp_driver_start_module(vb::WasmModule *mod, uint64_t user_root)
         ckpt->active = 0;
         return -1;
     }
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
     /* Switch to the WARP user CR3 so ring-0 JIT code can reach trampoline VAs
      * (DYNAMIC_LINK) when start() calls any imported functions. */
     uint64_t old_cr3 = 0;
@@ -203,7 +203,7 @@ warp_driver_start_module(vb::WasmModule *mod, uint64_t user_root)
     (void)user_root;
 #endif
     mod->start(k_stack_fence);
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
     if (old_cr3) paging_switch_root(old_cr3);
 #endif
     ckpt->active = 0;
@@ -223,7 +223,7 @@ warp_driver_ensure_started(wasm_driver_t *driver, uint64_t user_root, uint64_t s
         return -1;
     }
     driver->started = 1;
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
     if (user_root) {
         vb::WasmModule *mod = module_of(driver);
         vb::Span<uint8_t const> compiled = mod->getCompiledBinary();
@@ -258,7 +258,7 @@ call_export_mod(vb::WasmModule *mod, const char *name,
                 uint32_t argc, const uint32_t *argv,
                 uint64_t user_root = 0, uint64_t stack_phys = 0)
 {
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
     if (user_root)
         return warp_r3_call_export(mod, name, argc, argv, user_root, stack_phys,
                                    WARP_R3_LINMEM_BASE + (reinterpret_cast<uint64_t>(
@@ -289,7 +289,7 @@ static int
 call_export(wasm_driver_t *driver, const char *name,
             uint32_t argc, const uint32_t *argv)
 {
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
     return call_export_mod(module_of(driver), name, argc, argv,
                            driver->r3_user_root, driver->r3_stack_phys);
 #else
@@ -297,7 +297,7 @@ call_export(wasm_driver_t *driver, const char *name,
 #endif
 }
 
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
 // ---------------------------------------------------------------------------
 // Ring-3 execution helpers
 // ---------------------------------------------------------------------------
@@ -587,7 +587,7 @@ warp_r3_memory_helper(uint64_t min_linmem_len,
     *reinterpret_cast<uint64_t *>(WARP_R3_STACK_BASE) = new_memory_base_user_va;
     return new_memory_base_user_va;
 }
-#endif /* WASMOS_WARP_RING3 */
+#endif /* WASMOS_WASM_RUNTIME_WARP */
 
 /* Arm the one-shot linmem over-reservation for a module about to initialize.
  * The hint is consumed by the first warp_krealloc growth of the job-memory
@@ -635,7 +635,7 @@ wasm_driver_start(wasm_driver_t *driver,
     driver->active           = 0;
     driver->started          = 0;
     ksync_spinlock_init(&driver->lock);
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
     driver->r3_user_root  = 0;
     driver->r3_stack_phys = 0;
     driver->r3_linmem_base = 0;
@@ -683,7 +683,7 @@ wasm_driver_start(wasm_driver_t *driver,
             vb::Span<uint8_t const> compiled(manifest->compiled_bytes, manifest->compiled_size);
             vb::Span<uint8_t const> empty_debug(nullptr, 0);
             /* initFromCompiledBinary requires DYNAMIC_LINK symbols. */
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
             mod->initFromCompiledBinary(compiled, warp_wasmos_symbols_ring3(), empty_debug);
 #else
             mod->initFromCompiledBinary(compiled, warp_wasmos_symbols_for_aot_load(), empty_debug);
@@ -714,7 +714,7 @@ wasm_driver_start(wasm_driver_t *driver,
         mod = new vb::WasmModule(UINT64_MAX, g_logger, false, warp_ctx, 10U);
         warp_linmem_reserve_hint_for(driver->owner_pid, manifest->heap_size);
         vb::Span<uint8_t const> bc(manifest->module_bytes, manifest->module_size);
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
         mod->initFromBytecode(bc, warp_wasmos_symbols_ring3(), true);
 #else
         mod->initFromBytecode(bc, warp_wasmos_symbols(), true);
@@ -724,7 +724,7 @@ wasm_driver_start(wasm_driver_t *driver,
 
     warp_bind_module(mod, driver->owner_pid);
 
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
     /* Set up per-module ring-3 user address space and dual-map JIT+linmem. */
     {
         uint64_t user_root = 0;
@@ -778,7 +778,7 @@ wasm_driver_stop(wasm_driver_t *driver)
     warp_runtime_leave(prev);
     driver->active = 0;
     driver->started = 0;
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
     if (driver->r3_user_root) {
         warp_r3_teardown(driver->r3_user_root, driver->r3_stack_phys);
         driver->r3_user_root  = 0;
@@ -800,7 +800,7 @@ int
 wasm_driver_call_entry(wasm_driver_t *driver)
 {
     if (!driver || !driver->active || !driver->wasm_module) return -1;
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
     /* Use the noirq variant (no preempt_disable) so that:
      *  - the timer can still fire and advance process_tick during the
      *    ring-0 ensure_started / mod->start() phase, and
@@ -818,14 +818,14 @@ wasm_driver_call_entry(wasm_driver_t *driver)
     uint32_t prev = warp_runtime_enter(driver->owner_pid);
     if (warp_driver_ensure_started(driver, r3_root, r3_stack) != 0) {
         warp_runtime_leave(prev);
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
         ksync_spinlock_unlock_noirq(&driver->lock);
 #else
         ksync_spinlock_unlock(&driver->lock);
 #endif
         return -1;
     }
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
     warp_driver_ring3_call_policy_t policy =
         warp_driver_ring3_call_policy_resolve(r3_root);
     if (policy.release_before_call) {
@@ -868,7 +868,7 @@ wasm_driver_call(wasm_driver_t *driver, const char *name,
                  uint32_t argc, uint32_t *argv)
 {
     if (!driver || !driver->active || !driver->wasm_module) return -1;
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
     ksync_spinlock_lock_noirq(&driver->lock);
     uint64_t r3_root  = driver->r3_user_root;
     uint64_t r3_stack = driver->r3_stack_phys;
@@ -880,14 +880,14 @@ wasm_driver_call(wasm_driver_t *driver, const char *name,
     uint32_t prev = warp_runtime_enter(driver->owner_pid);
     if (warp_driver_ensure_started(driver, r3_root, r3_stack) != 0) {
         warp_runtime_leave(prev);
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
         ksync_spinlock_unlock_noirq(&driver->lock);
 #else
         ksync_spinlock_unlock(&driver->lock);
 #endif
         return -1;
     }
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
     warp_driver_ring3_call_policy_t policy =
         warp_driver_ring3_call_policy_resolve(r3_root);
     if (policy.release_before_call) {
@@ -916,7 +916,7 @@ wasm_driver_call_unlocked(wasm_driver_t *driver, const char *name,
 {
     if (!driver || !driver->active || !driver->wasm_module) return -1;
     uint32_t prev = warp_runtime_enter(driver->owner_pid);
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
     uint64_t r3_root  = driver->r3_user_root;
     uint64_t r3_stack = driver->r3_stack_phys;
     if (r3_root) {

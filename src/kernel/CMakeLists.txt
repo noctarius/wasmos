@@ -152,10 +152,8 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/smp.o
   ${BUILD_DIR}/timer.o
   ${BUILD_DIR}/process_manager.o
-  ${BUILD_DIR}/xfer_buffer_policy.o
-  ${BUILD_DIR}/xfer_buffer_state.o
+  ${BUILD_DIR}/xfer_buffer.o
   ${BUILD_DIR}/warp_driver_ring3_call_policy.o
-  ${BUILD_DIR}/xfer_buffer_store.o
   ${BUILD_DIR}/process_manager_services.o
   ${BUILD_DIR}/process_manager_spawn.o
   ${BUILD_DIR}/wasmos_app.o
@@ -287,9 +285,8 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/arch/x86_64/smp.c
   ${KERNEL_DIR}/timer.c
   ${KERNEL_DIR}/process_manager.cpp
-  ${KERNEL_DIR}/xfer_buffer/policy.c
-  ${KERNEL_DIR}/xfer_buffer/state.c ${KERNEL_DIR}/warp_driver_ring3_call_policy.c
-  ${KERNEL_DIR}/xfer_buffer/store.c
+  ${KERNEL_DIR}/xfer_buffer/xfer_buffer.c
+  ${KERNEL_DIR}/warp_driver_ring3_call_policy.c
   ${KERNEL_DIR}/process_manager_services.c
   ${KERNEL_DIR}/process_manager_spawn.c
   ${KERNEL_DIR}/wasmos_app.c
@@ -563,10 +560,8 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/smp.c -o ${BUILD_DIR}/smp.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/timer.c -o ${BUILD_DIR}/timer.o
   COMMAND ${CMAKE_CXX_COMPILER} ${CXXFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager.cpp -o ${BUILD_DIR}/process_manager.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/xfer_buffer/policy.c -o ${BUILD_DIR}/xfer_buffer_policy.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/xfer_buffer/state.c -o ${BUILD_DIR}/xfer_buffer_state.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/xfer_buffer/xfer_buffer.c -o ${BUILD_DIR}/xfer_buffer.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/warp_driver_ring3_call_policy.c -o ${BUILD_DIR}/warp_driver_ring3_call_policy.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/xfer_buffer/store.c -o ${BUILD_DIR}/xfer_buffer_store.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_services.c -o ${BUILD_DIR}/process_manager_services.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_spawn.c -o ${BUILD_DIR}/process_manager_spawn.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_app.c -o ${BUILD_DIR}/wasmos_app.o

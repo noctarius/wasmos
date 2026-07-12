@@ -96,14 +96,25 @@ typedef struct wasmos_driver_api {
     /* Publish framebuffer control endpoint for VT/control-plane clients. */
     int      (*console_register_fb)(uint32_t context_id, uint32_t endpoint);
 
-    /* Generic borrowed-buffer path.
+    /* Generic borrowed-buffer path (object/owner/borrow model).
+     * Borrows a buffer object and maps it into the driver's address space.
+     *  - kind: ND_BUFFER_KIND_* (transfer or framebuffer).
+     *  - source_context_id: the owner context to borrow from. 0 (or the
+     *    driver's own context) means owner-local: the driver acquires the
+     *    object itself and borrows it from itself. Framebuffers are always
+     *    owner-local (backed by the hardware framebuffer).
+     *  - buffer_id: id of the object owned by source_context_id to borrow;
+     *    ignored (pass 0) for owner-local borrows.
+     *  - flags: ND_BUFFER_BORROW_READ / _WRITE (both required for RW mappings).
      * Low-level contract: size must be non-zero and page-aligned because the
      * kernel maps whole borrowed windows into the native driver's address
      * space. Higher-level helper APIs may accept byte ranges and round their
-     * internal borrow size up before calling this hook. */
+     * internal borrow size up before calling this hook.
+     * buffer_release reverses a prior borrow identified by the same
+     * (kind, buffer_id) key. */
     void    *(*buffer_borrow)(uint32_t kind, uint32_t source_context_id,
-                              uint32_t flags, uint32_t size);
-    int      (*buffer_release)(uint32_t kind);
+                              uint32_t buffer_id, uint32_t flags, uint32_t size);
+    int      (*buffer_release)(uint32_t kind, uint32_t buffer_id);
 
     /* ABI contract for strict kernel/driver compatibility checks. */
     uint32_t abi_magic;
@@ -113,13 +124,13 @@ typedef struct wasmos_driver_api {
     int      (*shmem_flush)(uint32_t id, const void *ptr, uint32_t size);
 } wasmos_driver_api_t;
 
-#define ND_BUFFER_KIND_FS          1u
+#define ND_BUFFER_KIND_XFER        1u
 #define ND_BUFFER_KIND_FRAMEBUFFER 2u
 #define ND_BUFFER_BORROW_READ      0x1u
 #define ND_BUFFER_BORROW_WRITE     0x2u
 
 #define WASMOS_NATIVE_ABI_MAGIC   0x574E4150u /* 'WNAP' */
-#define WASMOS_NATIVE_ABI_VERSION 5u
+#define WASMOS_NATIVE_ABI_VERSION 6u
 
 /* Entry point that every native driver must provide via ELF e_entry. */
 typedef int (*native_driver_entry_fn_t)(wasmos_driver_api_t *api,

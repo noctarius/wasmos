@@ -133,7 +133,7 @@ fn ipc_call(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u
 
 fn fs_borrow_rw() ?[*]u8 {
     const p = api().buffer_borrow.?(
-        c.ND_BUFFER_KIND_FS,
+        c.ND_BUFFER_KIND_XFER,
         ctxId(),
         c.ND_BUFFER_BORROW_READ | c.ND_BUFFER_BORROW_WRITE,
         PM_XFER_BUFFER_SIZE,
@@ -143,7 +143,7 @@ fn fs_borrow_rw() ?[*]u8 {
 }
 
 fn fs_release() void {
-    _ = api().buffer_release.?(c.ND_BUFFER_KIND_FS);
+    _ = api().buffer_release.?(c.ND_BUFFER_KIND_XFER);
 }
 
 fn parse_ttf_metrics(f: *loaded_font_t) bool {
@@ -174,7 +174,7 @@ fn log_path_issue(prefix: []const u8, path: []const u8) void {
 
 fn stage_path_in_xfer_buffer(path: []const u8) bool {
     const fs_buf_path = fs_borrow_rw() orelse {
-        logMsg("[font] fs buffer borrow failed\n");
+        logMsg("[font] xfer buffer borrow failed\n");
         return false;
     };
     defer fs_release();

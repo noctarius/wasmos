@@ -745,7 +745,7 @@ wasmos_sys_subsystem_register_broker_native(wasmos_driver_api_t *api,
         }
     }
     if (wasmos_sys_buffer_write_to_native(api,
-                                          ND_BUFFER_KIND_FS,
+                                          ND_BUFFER_KIND_XFER,
                                           source_endpoint,
                                           ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE,
                                           &desc,
@@ -807,14 +807,14 @@ wasmos_sys_exec_handler_register_native(wasmos_driver_api_t *api,
     }
     node_bytes = node_count * (uint32_t)sizeof(wasmos_exec_match_node_t);
     if (wasmos_sys_buffer_write_to_native(api,
-                                          ND_BUFFER_KIND_FS,
+                                          ND_BUFFER_KIND_XFER,
                                           source_endpoint,
                                           ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE,
                                           &desc,
                                           (int32_t)sizeof(desc),
                                           0) != 0 ||
         wasmos_sys_buffer_write_to_native(api,
-                                          ND_BUFFER_KIND_FS,
+                                          ND_BUFFER_KIND_XFER,
                                           source_endpoint,
                                           ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE,
                                           nodes,
@@ -857,12 +857,15 @@ wasmos_sys_buffer_copy_from_native(wasmos_driver_api_t *api,
     if (buffer_borrow_size(len, offset, &size) != 0) {
         return -1;
     }
-    borrowed = (uint8_t *)api->buffer_borrow(kind, source_endpoint, borrow_flags, size);
+    /* FIXME(xfer-buffer stage 3/4): thread the owner's buffer_id from the wire
+     * instead of 0. No native driver currently uses this copy helper, so the
+     * foreign-borrow path is unreachable until the wire carries buffer_id. */
+    borrowed = (uint8_t *)api->buffer_borrow(kind, source_endpoint, 0, borrow_flags, size);
     if (!borrowed) {
         return -1;
     }
     byte_copy((uint8_t *)dst, borrowed + (uint32_t)offset, (uint32_t)len);
-    if (api->buffer_release(kind) != 0) {
+    if (api->buffer_release(kind, 0) != 0) {
         return -1;
     }
     return 0;
@@ -888,12 +891,15 @@ wasmos_sys_buffer_write_to_native(wasmos_driver_api_t *api,
     if (buffer_borrow_size(len, offset, &size) != 0) {
         return -1;
     }
-    borrowed = (uint8_t *)api->buffer_borrow(kind, source_endpoint, borrow_flags, size);
+    /* FIXME(xfer-buffer stage 3/4): thread the owner's buffer_id from the wire
+     * instead of 0. No native driver currently uses this copy helper, so the
+     * foreign-borrow path is unreachable until the wire carries buffer_id. */
+    borrowed = (uint8_t *)api->buffer_borrow(kind, source_endpoint, 0, borrow_flags, size);
     if (!borrowed) {
         return -1;
     }
     byte_copy(borrowed + (uint32_t)offset, (const uint8_t *)src, (uint32_t)len);
-    if (api->buffer_release(kind) != 0) {
+    if (api->buffer_release(kind, 0) != 0) {
         return -1;
     }
     return 0;
@@ -907,7 +913,7 @@ wasmos_sys_xfer_buffer_copy_from_endpoint_native(wasmos_driver_api_t *api,
                                                int32_t offset)
 {
     return wasmos_sys_buffer_copy_from_native(api,
-                                              ND_BUFFER_KIND_FS,
+                                              ND_BUFFER_KIND_XFER,
                                               source_endpoint,
                                               ND_BUFFER_BORROW_READ,
                                               dst,
@@ -923,7 +929,7 @@ wasmos_sys_xfer_buffer_write_to_endpoint_native(wasmos_driver_api_t *api,
                                               int32_t offset)
 {
     return wasmos_sys_buffer_write_to_native(api,
-                                             ND_BUFFER_KIND_FS,
+                                             ND_BUFFER_KIND_XFER,
                                              source_endpoint,
                                              ND_BUFFER_BORROW_WRITE,
                                              src,
@@ -950,7 +956,7 @@ wasmos_sys_fs_read_path_native(wasmos_driver_api_t *api,
         return -1;
     }
     if (wasmos_sys_buffer_write_to_native(api,
-                                          ND_BUFFER_KIND_FS,
+                                          ND_BUFFER_KIND_XFER,
                                           api->sched_current_pid ? api->sched_current_pid() : 0u,
                                           ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE,
                                           path,
@@ -985,7 +991,7 @@ wasmos_sys_fs_read_path_native(wasmos_driver_api_t *api,
     }
     if (read_len > 0 &&
         wasmos_sys_buffer_copy_from_native(api,
-                                           ND_BUFFER_KIND_FS,
+                                           ND_BUFFER_KIND_XFER,
                                            api->sched_current_pid ? api->sched_current_pid() : 0u,
                                            ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE,
                                            out_text,

@@ -323,6 +323,74 @@ xfer_buffer_describe(uint32_t buffer_id,
     return XFER_BUFFER_OK;
 }
 
+int
+xfer_buffer_get_borrowed(uint32_t borrow_id,
+                         uint32_t context_id,
+                         xfer_buffer_borrow_t *out_borrow,
+                         xfer_buffer_dma_mapping_t *out_mapping)
+{
+    borrow_slot_t *slot = 0;
+    object_slot_t *object = 0;
+
+    if (!out_borrow) {
+        return XFER_BUFFER_ERR_NULL_ARG;
+    }
+    if (context_id == 0u) {
+        return XFER_BUFFER_ERR_INVALID_CONTEXT;
+    }
+    if (borrow_id == 0u) {
+        return XFER_BUFFER_ERR_INACTIVE_BORROW;
+    }
+    slot = borrow_find(borrow_id);
+    if (!slot) {
+        return XFER_BUFFER_ERR_INACTIVE_BORROW;
+    }
+    if (slot->borrower_context_id != context_id) {
+        return XFER_BUFFER_ERR_NO_ACCESS;
+    }
+    object = object_find_by_id(slot->buffer_id);
+    if (!object) {
+        return XFER_BUFFER_ERR_NOT_FOUND;
+    }
+
+    out_borrow->buffer.kind = slot->kind;
+    out_borrow->buffer.buffer_id = slot->buffer_id;
+    out_borrow->buffer.size_bytes = object->size_bytes;
+    out_borrow->lender_context_id = slot->lender_context_id;
+    out_borrow->borrower_context_id = slot->borrower_context_id;
+    out_borrow->flags = slot->flags;
+    out_borrow->borrow_id = slot->borrow_id;
+
+    if (out_mapping) {
+        if (slot->dma_active) {
+            out_mapping->buffer.kind = object->kind;
+            out_mapping->buffer.buffer_id = object->buffer_id;
+            out_mapping->buffer.size_bytes = object->size_bytes;
+            out_mapping->owner_context_id = 0u;
+            out_mapping->borrow_id = slot->borrow_id;
+            out_mapping->offset = slot->dma_offset;
+            out_mapping->length = slot->dma_length;
+            out_mapping->direction_flags = slot->dma_direction_flags;
+            out_mapping->device_addr = object->phys_base + (uint64_t)slot->dma_offset;
+            out_mapping->attached_via_borrow = 1u;
+            out_mapping->active = 1u;
+        } else {
+            out_mapping->buffer.kind = 0u;
+            out_mapping->buffer.buffer_id = 0u;
+            out_mapping->buffer.size_bytes = 0u;
+            out_mapping->owner_context_id = 0u;
+            out_mapping->borrow_id = 0u;
+            out_mapping->offset = 0u;
+            out_mapping->length = 0u;
+            out_mapping->direction_flags = 0u;
+            out_mapping->device_addr = 0u;
+            out_mapping->attached_via_borrow = 0u;
+            out_mapping->active = 0u;
+        }
+    }
+    return XFER_BUFFER_OK;
+}
+
 static uint64_t
 object_alloc_backing(uint32_t kind, uint32_t size_bytes)
 {

@@ -465,18 +465,33 @@ PM-facing classification now exists as a separate helper:
 PM now has the first broker handoff contract as well:
 
 - PM writes a `wasmos_broker_spawn_plan_request_t` into the tail of its loaded
-  FS buffer view
-- the guest blob stays at offset 0 in that same borrowed view
-- PM lends that buffer to the broker read-only and sends
+  xfer buffer
+- the guest blob stays at offset 0 in that same caller-owned xfer buffer
+- PM currently lends that buffer to the broker read-only and sends
   `PROC_BROKER_IPC_SPAWN_PLAN_REQ`
-- the broker replies with `PROC_BROKER_IPC_SPAWN_PLAN_RESP` pointing at a
-  `wasmos_broker_spawn_plan_response_t` inside the broker's own FS buffer
+- the broker currently replies with `PROC_BROKER_IPC_SPAWN_PLAN_RESP` pointing
+  at a `wasmos_broker_spawn_plan_response_t` inside the broker's own xfer
+  buffer
 - PM borrows the broker buffer read-only, validates the returned plan against
   the matched handler identity, and only accepts a built-in `.wap` host-path
   plan kind for the current contract shape
 - for that accepted plan kind, PM then reloads the returned host path through
   the ordinary path-spawn `.wap` flow and uses the broker-supplied host arg
   string as the final argv payload for the host workload
+
+Architecturally, broker delegation should be understood in generic transfer-
+buffer terms:
+
+- request payloads are caller-owned transfer buffers lent to the broker with
+  the required read access
+- reply plans are transfer buffers lent to the broker with the required write
+  access
+- these are logically distinct borrows, even if an implementation chooses to
+  optimize or stage them differently
+
+The current PM/broker implementation still carries a narrower single-active-
+borrow assumption in parts of the kernel path. That is an implementation
+constraint under active correction, not the intended broker contract.
 
 This is still a bounded delegation step. PM now classifies executable inputs,
 validates a broker-owned spawn plan, and can execute the returned `.wap`
@@ -504,7 +519,7 @@ Broker/handler registration is now capability-gated and owner-scoped:
   that exits leaves no stale endpoint or matcher behind.
 
 Runtime status: on wasm3 the delegated script runs end to end; on WARP ring-3 the
-executor's first FS-buffer read of the delegated argv is not yet coherent with
+executor's first xfer-buffer read of the delegated argv is not yet coherent with
 the module's user-VA view (see `docs/STATUS.md`).
 
 #### Target Subsystem Delegation Model
@@ -609,7 +624,7 @@ layer in `src/kernel/warp/`:
 |------------------------|------------------------------------------------------------------------------------------------------------------|
 | `compat/`              | 30+ freestanding C++14 standard-library headers (type_traits, tuple, array, mutex, atomic, exception, …)         |
 | `cxx_abi.cpp`          | Exception ABI: `__cxa_throw` longjmps to a per-CPU `__builtin_setjmp` checkpoint — no Dwarf/SJLJ unwinder needed |
-| `link.cpp`             | ~50 `wasmos.*` V1 host-call wrappers (IPC, FS buffers, block DMA, initfs, I/O ports, ACPI, scheduler, …)         |
+| `link.cpp`             | ~50 `wasmos.*` V1 host-call wrappers (IPC, xfer buffers, block DMA, initfs, I/O ports, ACPI, scheduler, …)       |
 | `shim.cpp`             | Two-tier kernel allocator (slab ≤ 112 bytes, page allocator for larger blocks), `operator new/delete`            |
 | `mem_utils_kernel.cpp` | `vb::MemUtils` + `ExecutableMemory` backed by `pfa_alloc_pages` — no `<iostream>` or pthreads                    |
 | `posix_kernel.c`       | `mmap`/`mprotect`/`munmap` → `pfa_alloc_pages` + higher-half mapping                                             |

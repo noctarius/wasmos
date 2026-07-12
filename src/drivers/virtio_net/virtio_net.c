@@ -418,7 +418,7 @@ tx_send(int32_t source, int32_t frame_len)
     for (uint32_t i = 0; i < VIRTIO_NET_HDR_LEN; ++i) {
         buf[i] = 0;
     }
-    if (wasmos_sys_buffer_copy_from(WASMOS_BUFFER_KIND_FS, source,
+    if (wasmos_sys_buffer_copy_from(WASMOS_BUFFER_KIND_XFER, source,
                                     WASMOS_BUFFER_GRANT_READ,
                                     buf + VIRTIO_NET_HDR_LEN, frame_len, 0) != 0) {
         g_tx_buf_free[g_tx_buf_top++] = (uint16_t)b;  /* return the buffer */
@@ -670,7 +670,7 @@ handle_link_get(int32_t source, int32_t request_id)
         send_error(source, request_id, NET_STATUS_NOT_READY);
         return;
     }
-    if (wasmos_sys_buffer_write_to(WASMOS_BUFFER_KIND_FS,
+    if (wasmos_sys_buffer_write_to(WASMOS_BUFFER_KIND_XFER,
                                    source,
                                    WASMOS_BUFFER_GRANT_WRITE,
                                    g_dev.mac,
@@ -697,7 +697,7 @@ handle_stats_get(int32_t source, int32_t request_id)
         send_error(source, request_id, NET_STATUS_NOT_READY);
         return;
     }
-    if (wasmos_sys_buffer_write_to(WASMOS_BUFFER_KIND_FS,
+    if (wasmos_sys_buffer_write_to(WASMOS_BUFFER_KIND_XFER,
                                    source,
                                    WASMOS_BUFFER_GRANT_WRITE,
                                    &g_stats,
@@ -725,7 +725,7 @@ handle_rx_poll(int32_t source, int32_t request_id)
     uint8_t frame[VIRTIO_NET_MAX_FRAME];
     uint16_t len = rx_queue_pop(frame, sizeof frame);
     if (len > 0u) {
-        if (wasmos_sys_buffer_write_to(WASMOS_BUFFER_KIND_FS, source,
+        if (wasmos_sys_buffer_write_to(WASMOS_BUFFER_KIND_XFER, source,
                                        WASMOS_BUFFER_GRANT_WRITE,
                                        frame, (int32_t)len, 0) != 0) {
             send_error(source, request_id, NET_STATUS_IO_ERROR);

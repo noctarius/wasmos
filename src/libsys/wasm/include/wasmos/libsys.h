@@ -385,7 +385,7 @@ wasmos_sys_spawn_sync(int32_t proc_endpoint,
 
 /* Spawn by path and block until the child first blocks on IPC (implicit ready
  * signal) or until timeout_ms milliseconds have elapsed (0 = wait forever).
- * The caller must write the path bytes to the FS buffer before calling.
+ * The caller must write the path bytes to the xfer buffer before calling.
  * Returns the child PID on success or a negative error code on failure or
  * timeout. */
 static inline int32_t
@@ -575,7 +575,7 @@ wasmos_sys_xfer_buffer_copy_from_endpoint(int32_t source_endpoint,
                                         int32_t len,
                                         int32_t offset)
 {
-    return wasmos_sys_buffer_copy_from(WASMOS_BUFFER_KIND_FS,
+    return wasmos_sys_buffer_copy_from(WASMOS_BUFFER_KIND_XFER,
                                        source_endpoint,
                                        WASMOS_BUFFER_GRANT_READ,
                                        dst,
@@ -589,7 +589,7 @@ wasmos_sys_xfer_buffer_write_to_endpoint(int32_t source_endpoint,
                                        int32_t len,
                                        int32_t offset)
 {
-    return wasmos_sys_buffer_write_to(WASMOS_BUFFER_KIND_FS,
+    return wasmos_sys_buffer_write_to(WASMOS_BUFFER_KIND_XFER,
                                       source_endpoint,
                                       WASMOS_BUFFER_GRANT_WRITE,
                                       src,

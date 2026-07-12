@@ -153,7 +153,11 @@ typedef enum {
     HC_REGION_ALLOC        = 101,
     HC_IRQ_CONFIGURE       = 102,
     HC_IPC_SELECT_WAIT_TIMEOUT = 103,
-    HC_COUNT               = 104,
+    HC_XFER_BUFFER_ACQUIRE   = 104,
+    HC_XFER_BUFFER_UNBORROW  = 105,
+    HC_BUFFER_ACQUIRE        = 106,
+    HC_BUFFER_UNBORROW       = 107,
+    HC_COUNT               = 108,
 } warp_hostcall_id_t;
 
 /* ring3_trampolines.c

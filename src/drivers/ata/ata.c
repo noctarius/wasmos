@@ -291,30 +291,30 @@ ata_dma_prepare(int32_t source_endpoint,
     if (!out_device_addr || source_endpoint < 0 || length == 0) {
         return WASMOS_DMA_STATUS_INVALID;
     }
-    rc = wasmos_buffer_borrow(WASMOS_BUFFER_KIND_FS,
+    rc = wasmos_buffer_borrow(WASMOS_BUFFER_KIND_XFER,
                               source_endpoint,
                               (direction_flags & WASMOS_DMA_DIR_FROM_DEVICE) ? WASMOS_BUFFER_GRANT_WRITE : WASMOS_BUFFER_GRANT_READ);
     if (rc != 0) {
         return 100 + rc;
     }
-    rc = wasmos_dma_map_borrow(WASMOS_BUFFER_KIND_FS,
+    rc = wasmos_dma_map_borrow(WASMOS_BUFFER_KIND_XFER,
                                source_endpoint,
                                (int32_t)offset,
                                (int32_t)length,
                                (int32_t)direction_flags);
     if (rc < 0) {
-        (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_FS);
+        (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_XFER);
         return 200 + rc;
     }
     *out_device_addr = rc;
     if ((direction_flags & WASMOS_DMA_DIR_TO_DEVICE) != 0) {
-        rc = wasmos_dma_sync_borrow(WASMOS_BUFFER_KIND_FS,
+        rc = wasmos_dma_sync_borrow(WASMOS_BUFFER_KIND_XFER,
                                     (int32_t)offset,
                                     (int32_t)length,
                                     WASMOS_DMA_SYNC_TO_DEVICE);
         if (rc != WASMOS_DMA_STATUS_OK) {
-            (void)wasmos_dma_unmap_borrow(WASMOS_BUFFER_KIND_FS, source_endpoint);
-            (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_FS);
+            (void)wasmos_dma_unmap_borrow(WASMOS_BUFFER_KIND_XFER, source_endpoint);
+            (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_XFER);
             return 300 + rc;
         }
     }
@@ -329,21 +329,21 @@ ata_dma_finish(int32_t source_endpoint,
 {
     int rc = WASMOS_DMA_STATUS_OK;
     if ((direction_flags & WASMOS_DMA_DIR_FROM_DEVICE) != 0) {
-        rc = wasmos_dma_sync_borrow(WASMOS_BUFFER_KIND_FS,
+        rc = wasmos_dma_sync_borrow(WASMOS_BUFFER_KIND_XFER,
                                     (int32_t)offset,
                                     (int32_t)length,
                                     WASMOS_DMA_SYNC_FROM_DEVICE);
         if (rc != WASMOS_DMA_STATUS_OK) {
-            (void)wasmos_dma_unmap_borrow(WASMOS_BUFFER_KIND_FS, source_endpoint);
-            (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_FS);
+            (void)wasmos_dma_unmap_borrow(WASMOS_BUFFER_KIND_XFER, source_endpoint);
+            (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_XFER);
             return -1;
         }
     }
-    if (wasmos_dma_unmap_borrow(WASMOS_BUFFER_KIND_FS, source_endpoint) != WASMOS_DMA_STATUS_OK) {
-        (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_FS);
+    if (wasmos_dma_unmap_borrow(WASMOS_BUFFER_KIND_XFER, source_endpoint) != WASMOS_DMA_STATUS_OK) {
+        (void)wasmos_buffer_release(WASMOS_BUFFER_KIND_XFER);
         return -1;
     }
-    if (wasmos_buffer_release(WASMOS_BUFFER_KIND_FS) != 0) {
+    if (wasmos_buffer_release(WASMOS_BUFFER_KIND_XFER) != 0) {
         return -1;
     }
     return 0;

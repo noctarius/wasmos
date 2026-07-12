@@ -1824,6 +1824,95 @@ test_describe(test_stats_t *stats)
           "describe rejects a released object");
 }
 
+static void
+test_get_borrowed(test_stats_t *stats)
+{
+    xfer_buffer_owner_t owner = {0};
+    xfer_buffer_borrow_t borrow = {0};
+    xfer_buffer_borrow_t fetched = {0};
+    xfer_buffer_dma_mapping_t map_from_map = {0};
+    xfer_buffer_dma_mapping_t map_from_get = {0};
+
+    check(stats,
+          xfer_buffer_acquire(BUFFER_KIND_TRANSFER, 800u, 4096u, &owner) == 0,
+          "setup owner for get_borrowed");
+    check(stats,
+          xfer_buffer_borrow(&owner, 801u, BUFFER_BORROW_READ | BUFFER_BORROW_WRITE, &borrow) == 0,
+          "setup borrow for get_borrowed");
+
+    check(stats,
+          xfer_buffer_get_borrowed(borrow.borrow_id, 801u, 0, 0) != 0,
+          "get_borrowed rejects null out_borrow");
+    check(stats,
+          xfer_buffer_get_borrowed(borrow.borrow_id, 0u, &fetched, 0) != 0,
+          "get_borrowed rejects zero context");
+    check(stats,
+          xfer_buffer_get_borrowed(0u, 801u, &fetched, 0) != 0,
+          "get_borrowed rejects zero borrow id");
+    check(stats,
+          xfer_buffer_get_borrowed(borrow.borrow_id + 9000u, 801u, &fetched, 0) != 0,
+          "get_borrowed rejects a forged borrow id");
+    check(stats,
+          xfer_buffer_get_borrowed(borrow.borrow_id, 802u, &fetched, 0) != 0,
+          "get_borrowed denies a context that is not the borrower");
+
+    check(stats,
+          xfer_buffer_get_borrowed(borrow.borrow_id, 801u, &fetched, &map_from_get) == 0,
+          "borrower can get its borrow binding by id");
+    check(stats,
+          fetched.borrow_id == borrow.borrow_id &&
+          fetched.buffer.buffer_id == owner.buffer.buffer_id &&
+          fetched.borrower_context_id == 801u &&
+          fetched.lender_context_id == 800u &&
+          fetched.flags == (BUFFER_BORROW_READ | BUFFER_BORROW_WRITE) &&
+          fetched.buffer.size_bytes == owner.buffer.size_bytes,
+          "get_borrowed reconstructs the full borrow binding");
+    check(stats,
+          map_from_get.active == 0u,
+          "get_borrowed reports no active mapping before DMA");
+
+    check(stats,
+          xfer_buffer_dma_map_borrow(&borrow, 128u, 256u, WASMOS_DMA_DIR_BIDIR, &map_from_map) == 0,
+          "map DMA on the borrow for get_borrowed round-trip");
+    check(stats,
+          xfer_buffer_get_borrowed(borrow.borrow_id, 801u, &fetched, &map_from_get) == 0,
+          "get_borrowed after DMA map succeeds");
+    check(stats,
+          map_from_get.active == 1u &&
+          map_from_get.attached_via_borrow == 1u &&
+          map_from_get.borrow_id == borrow.borrow_id &&
+          map_from_get.offset == 128u &&
+          map_from_get.length == 256u &&
+          map_from_get.direction_flags == WASMOS_DMA_DIR_BIDIR &&
+          map_from_get.device_addr == map_from_map.device_addr,
+          "get_borrowed reconstructs the active mapping matching dma_map_borrow");
+
+    /* The reconstructed mapping drives the existing sync/unmap ops. */
+    check(stats,
+          xfer_buffer_dma_sync(&map_from_get, 0u, 256u) == 0,
+          "reconstructed mapping syncs a valid subrange");
+    check(stats,
+          xfer_buffer_dma_sync(&map_from_get, 0u, 257u) != 0,
+          "reconstructed mapping rejects an out-of-range sync");
+    check(stats,
+          xfer_buffer_dma_unmap(&map_from_get) == 0,
+          "reconstructed mapping unmaps the borrow DMA");
+    check(stats,
+          xfer_buffer_get_borrowed(borrow.borrow_id, 801u, &fetched, &map_from_get) == 0 &&
+          map_from_get.active == 0u,
+          "get_borrowed reports no active mapping after unmap");
+
+    check(stats,
+          xfer_buffer_unborrow(&borrow) == 0,
+          "unborrow the get_borrowed test borrow");
+    check(stats,
+          xfer_buffer_get_borrowed(borrow.borrow_id, 801u, &fetched, 0) != 0,
+          "get_borrowed rejects a released borrow id");
+    check(stats,
+          xfer_buffer_release_owned(&owner) == 0,
+          "get_borrowed cleanup releases the owner object");
+}
+
 int
 main(void)
 {
@@ -1833,6 +1922,7 @@ main(void)
     test_acquire_capacity_semantics(&stats);
     test_object_phys(&stats);
     test_describe(&stats);
+    test_get_borrowed(&stats);
     test_get_owned_and_release_owned_validation(&stats);
     test_get_release_extended(&stats);
     test_transfer_ownership_lifecycle(&stats);

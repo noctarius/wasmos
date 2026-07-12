@@ -26,7 +26,7 @@ extern "C" {
 #include "arch/x86_64/smp.h"
 }
 
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
 /* Forward declarations: implemented in mem_utils_kernel.cpp.
  * Track large warp_kmalloc allocations so ring-3 phys-range queries work. */
 extern "C" void warp_mem_kmalloc_register(uint64_t phys, uint64_t pages, uint64_t data_offset);
@@ -153,7 +153,7 @@ static void *warp_kmalloc(size_t const size)
             pfa_free_pages(phys, pages);
             return nullptr;
         }
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
         warp_mem_kmalloc_register(phys, pages, sizeof(AllocHeader));
 #endif
         auto *hdr = reinterpret_cast<AllocHeader *>(phys | kHalfBase);
@@ -190,7 +190,7 @@ static void *warp_krealloc(void *const ptr, size_t const size)
     if (!size) {
         /* Free only (contiguous page block or slab). */
         if (old_hdr->is_pages) {
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
             warp_mem_kmalloc_unregister(phys_of_pages_ptr(old_hdr));
 #endif
             pfa_free_pages(phys_of_pages_ptr(old_hdr), old_hdr->pages);
@@ -237,7 +237,7 @@ static void *warp_krealloc(void *const ptr, size_t const size)
     __builtin_memcpy(n, ptr, copy);
 
     if (old_hdr->is_pages) {
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
             warp_mem_kmalloc_unregister(phys_of_pages_ptr(old_hdr));
 #endif
         pfa_free_pages(phys_of_pages_ptr(old_hdr), old_hdr->pages);
@@ -258,7 +258,7 @@ static void warp_kfree(void *const ptr)
         return;
     }
     if (hdr->is_pages) {
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
         warp_mem_kmalloc_unregister(phys_of_pages_ptr(hdr));
 #endif
         pfa_free_pages(phys_of_pages_ptr(hdr), hdr->pages);
@@ -429,7 +429,7 @@ warp_linmem_move(uint32_t pid, void *old_ptr, size_t old_bytes, size_t size)
 
     /* Free the old contiguous direct-map block. */
     AllocHeader *old_hdr = header_of(old_ptr);
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
     warp_mem_kmalloc_unregister(phys_of_pages_ptr(old_hdr));
 #endif
     pfa_free_pages(phys_of_pages_ptr(old_hdr), old_hdr->pages);

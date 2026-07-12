@@ -10,7 +10,7 @@
 
 **DONE:** Implemented §5 path (1). Consumer fix committed to canonical as `8993096a`
 (`src/utils/ps/ps.zig`): `show_table = args.len == 0 or args[0] != "tree"`. Build tree verified
-**clean of all §3 kernel changes** (no zero-on-alloc in `process_manager_buffers.c`, no `[r3-*]`
+**clean of all §3 kernel changes** (no zero-on-alloc in `xfer_buffer/store.c`, no `[r3-*]`
 diagnostics, no `paging.c`/`cpu_x86_64.c` diffs) — `src/utils/ps/ps.zig` is the **only** source delta
 vs `main` HEAD `1ee22821`. So the §4 entry fault is **not** reintroduced.
 
@@ -36,10 +36,10 @@ macOS cross-check of the lottery requested (is it a TCG artifact or a real leak?
 **CONFIRMED + ROOT-CAUSED (cross-host):** macOS qemu (TCG, smp=1) lottery = `ok=11 silent=19 fault=0`,
 **identical** split and identical cliff at spawn 11. Two independent TCG hosts, exact same boundary →
 host-independent, NOT a TCG artifact. (No non-TCG sample: macOS hvf won't boot to prompt.)
-Root cause (read-only trace of `src/kernel/process_manager_buffers.c`):
+Root cause (read-only trace of `src/kernel/xfer_buffer/store.c`):
 - Each spawn allocates a **2 MB** FS xfer buffer (`PM_XFER_BUFFER_SIZE`, `process_manager_internal.h:14`)
   via `pfa_alloc_pages` in `pm_fs_slot_for_context`. Slots are a linked list (`g_pm_fs_slots`), no fixed cap.
-- `process_manager_buffer_release_context()` (which `pfa_free_pages` + unlinks the slot) is only invoked
+- `xfer_buffer_release()` (which `pfa_free_pages` + unlinks the slot) is only invoked
   from **guest-initiated** link calls (`warp/link.cpp:719,1366`, `wasm3/link.c:761`, `native_driver.c`).
   There is **no process-exit/destroy hook** that releases it — grep for exit/destroy/terminate wiring in
   `process_manager.c` finds none. `ps` never explicitly releases, so its 2 MB slot **leaks on exit**.
@@ -54,7 +54,7 @@ Root cause (read-only trace of `src/kernel/process_manager_buffers.c`):
   klog is `[wasmos-app] start failed` rather than a buffer message. The leak is upstream (the 2 MB
   `pm_fs_slot`); WARP start is just the first allocation to come up empty.
 **Recommended follow-up (out of scope here, kernel change):** call
-`process_manager_buffer_release_context(PM_BUFFER_KIND_FILESYSTEM, ctx)` from the process reap/destroy
+`xfer_buffer_release(PM_BUFFER_KIND_FILESYSTEM, ctx)` from the process reap/destroy
 path so a process's FS slot is freed on exit. Verify it doesn't disturb the borrow lifecycle or re-trigger
 the §4 WARP entry fault (it's a free-on-exit, not a write-at-alloc, so it should not — but A/B with the
 lottery to be sure).
@@ -79,7 +79,7 @@ Both were chased to root causes. Fixing (a) the obvious way (zeroing the recycle
 - `ps` reads its CLI args from the per-context **xfer buffer** (`src/libc/zig/wasmos.zig::parseCliArgs`
   → `xfer_buffer_read(FILESYSTEM, off 0)`).
 - For a no-arg spawn the buffer is **never written**, and `pm_fs_slot_for_context`
-  (`src/kernel/process_manager_buffers.c`) allocates the 2 MB buffer with `pfa_alloc_pages` but
+  (`src/kernel/xfer_buffer/store.c`) allocates the 2 MB buffer with `pfa_alloc_pages` but
   **does not zero it** → `ps` parses **stale recycled bytes** as args → `args.len>0` →
   `show_table=false` → table dropped. ~99% reproducible on the VM.
 
@@ -99,7 +99,7 @@ Both were chased to root causes. Fixing (a) the obvious way (zeroing the recycle
 | `src/kernel/include/warp_ring3.h` | Remove singleton `g_warp_r3_state`; `warp_r3_setup`/`teardown` take per-driver root/stack params | **KEEP** — valid correctness fix (per-driver, not global). User confirmed keep. |
 | `src/kernel/warp/ring3_trampolines.c` | Same refactor + **`[r3-setup]`/`[r3-tdn]` klog diagnostics** | KEEP refactor; **REMOVE the two `klog_printf` diagnostics**. |
 | `src/kernel/warp_driver.cpp` | Same refactor + **`[r3-iret]` klog diagnostic** before `r3_do_iretq` | KEEP refactor; **REMOVE the `[r3-iret]` klog**. |
-| `src/kernel/process_manager_buffers.c` | **zero-on-alloc**: `memset(buffer_phys|KBASE, 0, page_size)` in `pm_fs_slot_for_context` after `pfa_alloc_pages` | **DECISION PENDING.** Fixes (a) but **triggers the §4 fault**. See §5. |
+| `src/kernel/xfer_buffer/store.c` | **zero-on-alloc**: `memset(buffer_phys|KBASE, 0, page_size)` in `pm_fs_slot_for_context` after `pfa_alloc_pages` | **DECISION PENDING.** Fixes (a) but **triggers the §4 fault**. See §5. |
 | `src/kernel/paging.c` | **DIAG only**: PML4 leak — `pfa_free_pages(root_table,1)` commented out (`DIAG(option2)`) | **REVERT** — it was dead code (teardown path not exercised; see §4). |
 | `src/kernel/arch/x86_64/cpu_x86_64.c` | `pf_translation_permits()` + spurious-retry block (added during Codex collab, **not mine**); my **CR3-toggle** swapped in for `invlpg`; `[r3-term]` klog | Decide on the retry mechanism (it does **not** fix the fault — 4096 futile retries). **REMOVE `[r3-term]` + the CR3-toggle diag**; restore/remove the retry per decision. |
 | `scripts/ps_lottery_repro.py` | Repro harness (boot once, send `ps` N times, classify OK/SILENT/FAULT) | KEEP as a tool (or move to scratch). |

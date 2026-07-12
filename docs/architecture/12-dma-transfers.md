@@ -62,18 +62,18 @@ PROC_IPC_DMA_BORROW_ERROR     = 0x2BF
 Buffer kind and grant constants, defined in `src/libc/include/wasmos/api.h`:
 
 ```c
-WASMOS_BUFFER_KIND_FS    = 1
+WASMOS_BUFFER_KIND_XFER   = 1
 WASMOS_BUFFER_GRANT_READ  = 0x1
 WASMOS_BUFFER_GRANT_WRITE = 0x2
 ```
 
-Kernel-side buffer kind constants, defined in `src/kernel/include/process_manager.h`:
+Architectural buffer-kind constants:
 
 ```c
-PM_BUFFER_KIND_FILESYSTEM = 1u
-PM_BUFFER_KIND_FRAMEBUFFER = 2u
-PM_BUFFER_BORROW_READ  = 0x1u
-PM_BUFFER_BORROW_WRITE = 0x2u
+TRANSFER_BUFFER_KIND    = 1u
+FRAMEBUFFER_BUFFER_KIND = 2u
+BUFFER_BORROW_READ  = 0x1u
+BUFFER_BORROW_WRITE = 0x2u
 PM_FS_BUFFER_SIZE = 2 MiB (2u * 1024u * 1024u)
 ```
 
@@ -144,7 +144,7 @@ typedef struct {
 } pm_spawn_caps_t;
 ```
 
-#### `pm_fs_buffer_slot_t` (`process_manager_buffers.c`)
+#### Per-context Transfer-Buffer Slot
 
 Per-context buffer slot tracking active borrow and any attached DMA mapping:
 
@@ -154,17 +154,17 @@ typedef struct {
     uint32_t context_id;
     uint64_t buffer_phys;              // physical base of the slot's buffer
     uint8_t  borrow_active;            // nonzero when a borrow is in progress
-    uint8_t  borrow_flags;             // PM_BUFFER_BORROW_READ / WRITE
+    uint8_t  borrow_flags;             // BUFFER_BORROW_READ / WRITE
     uint32_t borrow_source_context_id; // context that issued the borrow
     uint8_t  dma_mapped;               // nonzero when dma_map_borrow has succeeded
     uint32_t dma_direction_flags;
     uint32_t dma_offset;
     uint32_t dma_length;
-} pm_fs_buffer_slot_t;
+} transfer_buffer_slot_t;
 ```
 
-Two separate lists exist: `g_pm_fs_slots` (filesystem kind) and
-`g_pm_fb_slots` (framebuffer kind). Each list is a chunked array of 16
+Two separate lists exist: the xfer-buffer list and the framebuffer-buffer
+list. Each list is a chunked array of 16
 initial entries.
 
 ---
@@ -229,12 +229,12 @@ Validation sequence (in order):
 4. Endpoint owner matches `borrow_source_context` on the slot →
    `WASMOS_DMA_STATUS_INVALID` (cross-context borrow forbidden).
 5. Borrow direction flags: `WASMOS_DMA_DIR_TO_DEVICE` requires
-   `PM_BUFFER_BORROW_READ` on the slot; `WASMOS_DMA_DIR_FROM_DEVICE`
-   requires `PM_BUFFER_BORROW_WRITE` →
+   `BUFFER_BORROW_READ` on the slot; `WASMOS_DMA_DIR_FROM_DEVICE`
+   requires `BUFFER_BORROW_WRITE` →
    `WASMOS_DMA_STATUS_DENY` on mismatch.
 6. `capability_dma_direction_allowed` → `WASMOS_DMA_STATUS_DENY`.
 7. `length <= dma_max_bytes` → `WASMOS_DMA_STATUS_RANGE`.
-8. `process_manager_buffer_dma_map` (slot state/range validation + phys
+8. `xfer_buffer_dma_map` (slot state/range validation + phys
    address computation) → `WASMOS_DMA_STATUS_UNAVAILABLE` on failure.
 9. `capability_dma_range_allowed(ctx, device_addr, length)` → `WASMOS_DMA_STATUS_RANGE`.
 10. `device_addr <= 0x7FFFFFFF` (must fit in positive signed 32-bit) →
@@ -254,7 +254,7 @@ extern int32_t wasmos_dma_sync_borrow(
 Valid `sync_op` values: `WASMOS_DMA_SYNC_TO_DEVICE`, `FROM_DEVICE`,
 `BIDIR`. Returns `WASMOS_DMA_STATUS_OK` or an error code.
 
-The kernel calls `process_manager_buffer_dma_sync`. On x86, cache
+The kernel calls `xfer_buffer_dma_sync`. On x86, cache
 maintenance is a no-op; the call still enforces that a mapping is
 active and that the requested range falls within `dma_length`.
 
@@ -274,12 +274,12 @@ and all DMA metadata on the slot without releasing the borrow itself.
 
 ### Kernel PM Buffer DMA Layer
 
-Implemented in `src/kernel/process_manager_buffers.c`.
+Implemented in `src/kernel/xfer_buffer/store.c`.
 
-#### `process_manager_buffer_dma_map`
+#### `xfer_buffer_dma_map`
 
 ```c
-int process_manager_buffer_dma_map(
+int xfer_buffer_dma_map(
     uint32_t kind,
     uint32_t borrower_context_id,
     uint32_t source_context_id,
@@ -298,13 +298,13 @@ Preconditions (returns -1 on any failure):
 On success: sets `dma_mapped = 1`, records direction/offset/length, and
 computes `*out_device_addr = buffer_phys + offset`.
 
-#### `process_manager_buffer_dma_sync`
+#### `xfer_buffer_dma_sync`
 
 Validates the slot is mapped and the requested offset+length falls
 within the originally mapped range. The sync operation itself is a
 no-op on x86 (no explicit cache flush required).
 
-#### `process_manager_buffer_dma_unmap`
+#### `xfer_buffer_dma_unmap`
 
 Validates slot is mapped and `borrow_source_context_id` matches.
 Clears `dma_mapped`, `dma_direction_flags`, `dma_offset`, `dma_length`.
@@ -422,11 +422,11 @@ on every read and write request.
 **`ata_dma_prepare(source_endpoint, offset, length, direction_flags, *out_device_addr)`**
 
 ```
-wasmos_buffer_borrow(WASMOS_BUFFER_KIND_FS, source_endpoint,
+wasmos_buffer_borrow(WASMOS_BUFFER_KIND_XFER, source_endpoint,
     direction == FROM_DEVICE ? GRANT_WRITE : GRANT_READ)
-→ wasmos_dma_map_borrow(WASMOS_BUFFER_KIND_FS, source_endpoint,
+→ wasmos_dma_map_borrow(WASMOS_BUFFER_KIND_XFER, source_endpoint,
     offset, length, direction_flags)
-→ [if TO_DEVICE] wasmos_dma_sync_borrow(WASMOS_BUFFER_KIND_FS,
+→ [if TO_DEVICE] wasmos_dma_sync_borrow(WASMOS_BUFFER_KIND_XFER,
     offset, length, WASMOS_DMA_SYNC_TO_DEVICE)
 ```
 
@@ -436,10 +436,10 @@ the buffer borrow before returning the error code.
 **`ata_dma_finish(source_endpoint, offset, length, direction_flags)`**
 
 ```
-[if FROM_DEVICE] wasmos_dma_sync_borrow(WASMOS_BUFFER_KIND_FS,
+[if FROM_DEVICE] wasmos_dma_sync_borrow(WASMOS_BUFFER_KIND_XFER,
     offset, length, WASMOS_DMA_SYNC_FROM_DEVICE)
-→ wasmos_dma_unmap_borrow(WASMOS_BUFFER_KIND_FS, source_endpoint)
-→ wasmos_buffer_release(WASMOS_BUFFER_KIND_FS)
+→ wasmos_dma_unmap_borrow(WASMOS_BUFFER_KIND_XFER, source_endpoint)
+→ wasmos_buffer_release(WASMOS_BUFFER_KIND_XFER)
 ```
 
 #### Read Path (`BLOCK_IPC_READ_REQ`)
@@ -483,7 +483,7 @@ from `ata_dma_prepare`.
    capability before any other state. A driver spawned without it always
    gets `WASMOS_DMA_STATUS_DENY` regardless of borrow state.
 
-2. **One mapping per slot at a time.** `process_manager_buffer_dma_map`
+2. **One mapping per slot at a time.** `xfer_buffer_dma_map`
    rejects a second map call while `dma_mapped` is set. The driver must
    call `dma_unmap_borrow` before re-mapping the same borrow.
 
@@ -492,7 +492,7 @@ from `ata_dma_prepare`.
    `dma_map_borrow`. Subsequent sync calls verify only that the range
    falls within the already-mapped `dma_length`.
 
-4. **Sync is a no-op on x86.** `process_manager_buffer_dma_sync` enforces
+4. **Sync is a no-op on x86.** `xfer_buffer_dma_sync` enforces
    state/range semantics but does not issue cache maintenance instructions.
    This is correct for x86 coherent DMA. Non-coherent architectures
    would need explicit flushes here.
@@ -506,6 +506,6 @@ from `ata_dma_prepare`.
    or IOVA support is added.
 
 6. **No framebuffer DMA integration.** The framebuffer buffer kind
-   (`PM_BUFFER_KIND_FRAMEBUFFER = 2`) has PM-layer DMA map/unmap support
-   wired through the same `pm_fs_buffer_slot_t` path, but no driver
+   (`FRAMEBUFFER_BUFFER_KIND = 2`) has PM-layer DMA map/unmap support
+   wired through the same transfer-buffer slot path, but no driver
    currently calls the DMA hostcalls for framebuffer transfers.

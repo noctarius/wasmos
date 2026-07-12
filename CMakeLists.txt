@@ -1805,20 +1805,6 @@ add_custom_target(run-kernel-unit-tests
   COMMAND ${BUILD_DIR}/test_fs_manager_path
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
-          -I${KERNEL_DIR}
-          ${CMAKE_SOURCE_DIR}/tests/unit/test_xfer_buffer/policy.c
-          ${KERNEL_DIR}/xfer_buffer/policy.c
-          -o ${BUILD_DIR}/test_xfer_buffer_policy
-  COMMAND ${BUILD_DIR}/test_xfer_buffer_policy
-  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
-          -I${KERNEL_DIR}/include
-          -I${KERNEL_DIR}
-          ${CMAKE_SOURCE_DIR}/tests/unit/test_xfer_buffer/state.c
-          ${KERNEL_DIR}/xfer_buffer/state.c
-          -o ${BUILD_DIR}/test_xfer_buffer_state
-  COMMAND ${BUILD_DIR}/test_xfer_buffer_state
-  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
-          -I${KERNEL_DIR}/include
           -I${DRIVER_WASM_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_xfer_buffer/xfer_buffer.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_xfer_buffer_platform.c

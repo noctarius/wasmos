@@ -513,14 +513,69 @@ The PM resolves spawn argument bindings from WASMOS-APP metadata:
 
 ### Buffer-Borrow Mechanism
 
-Bulk data between processes uses the buffer-borrow model.
+Bulk data between processes uses the buffer-borrow model. The architectural
+object is a **transfer buffer** owned by one context and lent to another
+context with explicit read and/or write grants. The same model is reused for
+file data, spawn payloads, broker plans, packet payloads, and other non-message
+bulk transfers.
 
 **Buffer kinds:**
 
-| Kind                         | Value | Used for                                |
-|------------------------------|-------|-----------------------------------------|
-| `PM_BUFFER_KIND_FILESYSTEM`  | 1     | FS read buffers (file content delivery) |
-| `PM_BUFFER_KIND_FRAMEBUFFER` | 2     | Framebuffer pixel data                  |
+| Kind                    | Value | Used for                 |
+|-------------------------|-------|--------------------------|
+| transfer/xfer buffer    | 1     | Generic transfer buffer  |
+| framebuffer buffer      | 2     | Framebuffer pixel data   |
+
+**Semantics:**
+
+1. A context owns a transfer buffer object for a given kind.
+2. A borrower is granted access to that same buffer object with explicit
+   read/write flags.
+3. The borrower reads or writes through the granted borrow.
+4. Releasing the borrow drops access to that shared buffer object; it does not
+   imply "switch to a second reply buffer" or "upgrade the same borrow."
+
+**Code-facing contract matrix:**
+
+| Area | Intended rule |
+|------|---------------|
+| Ownership | One owner context owns one buffer object per kind |
+| Owner access | The owner always retains implicit read/write access to its own object |
+| Borrow grant | A borrow creates one grant from one owner object to one borrower context with explicit flags |
+| Object identity | Borrower access is to the same underlying owner object, not a copied or shadow reply buffer |
+| Concurrent grants | One owner may lend to multiple borrowers, and one borrower may hold multiple grants to distinct owners at once |
+| Release | Release is grant-specific; releasing one grant must not affect other live grants |
+| Revocation | Dropping one owner revokes only grants sourced from that owner |
+| Transfer policy | Transfer borrows require a nonzero external owner distinct from the borrower |
+| Framebuffer policy | Framebuffer borrows are local-only and do not name an external owner |
+| DMA attach point | DMA mapping attaches to one grant, not to the borrower context as a whole |
+| DMA directions | `TO_DEVICE` requires read access; `FROM_DEVICE` requires write access; bidirectional DMA requires both |
+| DMA teardown | Release while mapped is invalid; unmap clears DMA state but preserves the grant |
+
+**Current implementation limitation:**
+
+The current kernel implementation tracks at most one active borrow state per
+borrower context and buffer kind. That is an implementation limit of the
+present xfer-buffer machinery, not the architectural meaning of borrowing.
+When a workflow needs simultaneous request-read and reply-write access, the
+design must model those as distinct buffer objects or equivalent explicit
+handles rather than pretending one active-view slot can express both at once.
+
+#### Broker Contract Clarification
+
+Brokered executable-plan delegation is the canonical example of the intended
+borrow contract:
+
+1. The caller owns a transfer buffer containing the request payload.
+2. The broker is granted read access to that request buffer.
+3. The plan reply is written through a separate write-capable transfer-buffer
+   borrow.
+4. Releasing one borrow only removes access to that one borrowed buffer
+   object; it does not "flip" the process onto some implicit alternate buffer.
+
+If an implementation only tracks one active borrow per borrower context, that
+implementation is narrower than the broker contract and must be treated as a
+known limitation to remove, not as the architectural rule.
 
 **DMA Buffer Borrow** — three-phase lifecycle:
 
@@ -600,9 +655,9 @@ cause response stealing.
    endpoint.  The select-set mechanism (`sched_event_t.wait_list`) supports
    multiple concurrent waiters per endpoint, but the service model uses one.
 
-2. **Bulk data through borrows, not messages.** File content, pixel buffers,
-   and packet data flow through kernel-managed shared memory.  IPC messages
-   carry only metadata.
+2. **Bulk data through borrows, not messages.** File content, spawn payloads,
+   executable plans, pixel buffers, and packet data flow through borrowed
+   kernel-managed transfer buffers. IPC messages carry only metadata.
 
 3. **Source endpoint ownership verified at send.** Non-kernel senders must own
    `message->source`.

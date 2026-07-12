@@ -535,9 +535,10 @@ compiler. Current suites:
 - `test_list` — kernel list data-structure correctness
 - `test_device_manager_rules` — device manager rule matching
 - `test_fs_manager_path` — VFS path resolution
-- `test_process_manager_buffer_routing` — FS buffer owner/relay routing invariants
-- `test_process_manager_buffer_policy` — PM kind-specific borrow request rules
-- `test_process_manager_buffer_state` — PM borrow/release/DMA state-transition invariants
+- `test_xfer_buffer_access` — xfer-buffer owner/relay routing invariants
+- `test_xfer_buffer_policy` — kind-specific xfer-buffer borrow request rules
+- `test_xfer_buffer_state` — xfer-buffer borrow/release/DMA state-transition invariants
+- `test_xfer_buffer_contract` — intended multi-grant borrow contract and DMA semantics against the current subsystem
 - `test_kernel_sync_primitives` — kernel mutex/semaphore primitive behavior with host scheduler/thread stubs
 
 These tests run on the host (no QEMU) and do not depend on `bootloader` or

@@ -498,6 +498,38 @@ int xfer_buffer_describe(uint32_t buffer_id,
                          uint32_t context_id,
                          xfer_buffer_t *out);
 
+/**
+ * Materialize the borrow binding a context holds, from its {@code borrow_id},
+ * together with that borrow's active DMA mapping if any.
+ *
+ * <p>Symmetric to {@code xfer_buffer_get_owned}: userspace holds the
+ * {@code borrow_id} (like a file descriptor) and passes it back, so a stateless
+ * syscall handler recovers the {@code xfer_buffer_borrow_t} (to feed
+ * {@code xfer_buffer_unborrow} / {@code xfer_buffer_dma_map_borrow}) and, via
+ * {@code out_mapping}, the {@code xfer_buffer_dma_mapping_t} needed to feed
+ * {@code xfer_buffer_dma_sync} / {@code xfer_buffer_dma_unmap}.
+ *
+ * <p>{@code out_mapping} may be NULL. When non-NULL it is filled with the
+ * borrow's active mapping ({@code active == 1}) if DMA is attached, otherwise
+ * it is cleared to {@code active == 0}.
+ *
+ * @return {@code XFER_BUFFER_OK} on success. On failure, one of:
+ *
+ * <ul>
+ * <li>{@code XFER_BUFFER_ERR_NULL_ARG} - {@code out_borrow} is NULL.</li>
+ * <li>{@code XFER_BUFFER_ERR_INVALID_CONTEXT} - {@code context_id} is zero.</li>
+ * <li>{@code XFER_BUFFER_ERR_INACTIVE_BORROW} - no active borrow has that id.</li>
+ * <li>{@code XFER_BUFFER_ERR_NO_ACCESS} - the caller is not that borrow's
+ *     borrower.</li>
+ * <li>{@code XFER_BUFFER_ERR_NOT_FOUND} - the underlying object no longer
+ *     exists.</li>
+ * </ul>
+ */
+int xfer_buffer_get_borrowed(uint32_t borrow_id,
+                             uint32_t context_id,
+                             xfer_buffer_borrow_t *out_borrow,
+                             xfer_buffer_dma_mapping_t *out_mapping);
+
 #ifdef __cplusplus
 }
 #endif

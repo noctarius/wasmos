@@ -1,16 +1,11 @@
 build/
-build-*/
 cmake-build-debug/
 .idea/
 __pycache__/
 .zig-cache/
 .zig-cache-global/
-.codex/
+.codex/local-paths.md
 .config
 .venv/
 build-off/
 .cache/
-.avairy/
-.avairy.bkp/
-.claude/worktrees/
-node_modules/

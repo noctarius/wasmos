@@ -10,6 +10,7 @@
 #include "process.h"
 #include "wasmos_app.h"
 #include "wasmos_driver_abi.h"
+#include "xfer_buffer.h"
 
 #define PM_XFER_BUFFER_SIZE (2u * 1024u * 1024u)
 #define PM_DMA_WINDOW_LIMIT 16u
@@ -121,6 +122,12 @@ void pm_unpack_name_args(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t a
 void pm_pack_name_args(const char *name, uint32_t out[4]);
 uint32_t pm_alloc_cli_tty(void);
 
+/* Kernel VA of a transfer buffer owned by `owner_context` and named by
+ * `buffer_id` (as carried over IPC), or 0 if no such object is owned by that
+ * context. Fills *out_size (intrinsic capacity) when non-NULL. Used to read a
+ * caller-owned buffer that PM does not own. */
+const uint8_t *pm_foreign_xfer_ptr(uint32_t buffer_id, uint32_t owner_context, uint32_t *out_size);
+
 int pm_service_set(const char *name, uint32_t endpoint, uint32_t owner_context_id);
 uint32_t pm_service_lookup(const char *name);
 void pm_update_well_known_service_endpoint(const char *name, uint32_t endpoint);
@@ -133,7 +140,6 @@ int pm_handle_exec_handler_register(uint32_t pm_context_id, const ipc_message_t 
 int pm_handle_spawn(uint32_t pm_context_id, const ipc_message_t *msg);
 int pm_handle_spawn_caps(uint32_t pm_context_id, const ipc_message_t *msg);
 int pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t *msg);
-int pm_handle_spawn_name(uint32_t pm_context_id, const ipc_message_t *msg);
 int pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg);
 int pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t *msg);
 int pm_handle_spawn_sync(uint32_t pm_context_id, const ipc_message_t *msg);

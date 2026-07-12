@@ -1,6 +1,6 @@
 /* unistd.c - POSIX file I/O over FS IPC: open/read/write/close/stat/fopen etc.
  * All operations funnel through libc_fs_request or libc_fs_request_stream,
- * which communicate with the FS manager service via the kernel FS buffer. */
+ * which communicate with the FS manager service via the kernel xfer buffer. */
 #include "fcntl.h"
 #include "stdio.h"
 #include "string.h"
@@ -38,8 +38,8 @@ libc_fs_endpoint(void)
     return wasmos_fs_endpoint();
 }
 
-/* Write path (NUL-terminated) into the FS buffer and return its length.
- * The FS buffer is a shared kernel region; the borrow/release lifecycle is
+/* Write path (NUL-terminated) into the xfer buffer and return its length.
+ * The xfer buffer is a shared kernel region; the borrow/release lifecycle is
  * managed by the FS manager, not by the caller. */
 static int
 libc_fs_stage_path(const char *path, size_t *out_len)

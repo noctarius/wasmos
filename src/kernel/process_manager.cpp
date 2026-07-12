@@ -381,9 +381,6 @@ public:
             case PROC_IPC_SPAWN_CAPS_V2:
                 rc = pm_handle_spawn_caps_v2(process->context_id, &msg);
                 break;
-            case PROC_IPC_SPAWN_NAME:
-                rc = pm_handle_spawn_name(process->context_id, &msg);
-                break;
             case PROC_IPC_SPAWN_PATH:
                 rc = pm_handle_spawn_path(process->context_id, &msg);
                 break;

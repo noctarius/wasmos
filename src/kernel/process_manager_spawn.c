@@ -36,6 +36,77 @@ typedef enum {
     PM_SPAWN_INTERNAL_ERR_EMPTY_PATH = -1013
 } pm_spawn_internal_error_t;
 
+/* --- PM's per-operation transfer buffers ----------------------------------
+ * PM does NOT keep a single shared buffer. Each operation (one spawn, one FS
+ * read) acquires its own BUFFER_KIND_TRANSFER object owned by PM, uses it, and
+ * releases it when the operation completes. Concurrent operations therefore get
+ * distinct objects and buffer_ids, matching the object model (a context owns as
+ * many live buffers as it has live operations). PM hands an operation's
+ * buffer_id to a provider (e.g. fs-manager) which borrows it to fill it; PM
+ * reads the result out of the object it owns and then releases it. */
+static int
+pm_xfer_acquire(uint32_t pm_context_id, uint32_t minimum_size, xfer_buffer_owner_t *out)
+{
+    if (!out || pm_context_id == 0u) {
+        return -1;
+    }
+    if (minimum_size == 0u) {
+        minimum_size = 1u;
+    }
+    return xfer_buffer_acquire(BUFFER_KIND_TRANSFER, pm_context_id, minimum_size, out)
+               == XFER_BUFFER_OK ? 0 : -1;
+}
+
+/* Kernel VA of the backing of a PM-owned buffer, or 0 if it is not live. */
+static uint8_t *
+pm_xfer_owner_ptr(const xfer_buffer_owner_t *owner)
+{
+    uint64_t phys = 0u;
+
+    if (!owner) {
+        return 0;
+    }
+    phys = xfer_buffer_object_phys(&owner->buffer);
+    if (phys == 0u) {
+        return 0;
+    }
+    return (uint8_t *)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
+}
+
+/* Release a PM-owned per-operation buffer and mark the binding empty so a
+ * double release is a no-op. */
+static void
+pm_xfer_release(xfer_buffer_owner_t *owner)
+{
+    if (owner && owner->buffer.buffer_id != 0u) {
+        (void)xfer_buffer_release_owned(owner);
+        owner->buffer.buffer_id = 0u;
+    }
+}
+
+/* Kernel VA of a transfer buffer owned by `owner_context` and named by
+ * `buffer_id` (as carried over IPC). PM reads a caller-owned buffer directly
+ * (it is kernel); describe validates the object exists and is owned by that
+ * context. Returns 0 on any failure; fills *out_size when non-NULL. */
+const uint8_t *
+pm_foreign_xfer_ptr(uint32_t buffer_id, uint32_t owner_context, uint32_t *out_size)
+{
+    xfer_buffer_t desc = {0};
+    uint64_t phys = 0u;
+
+    if (xfer_buffer_describe(buffer_id, BUFFER_KIND_TRANSFER, owner_context, &desc) != XFER_BUFFER_OK) {
+        return 0;
+    }
+    phys = xfer_buffer_object_phys(&desc);
+    if (phys == 0u) {
+        return 0;
+    }
+    if (out_size) {
+        *out_size = desc.size_bytes;
+    }
+    return (const uint8_t *)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
+}
+
 static void
 pm_slot_release_owned_blob(pm_app_state_t *slot)
 {
@@ -295,11 +366,22 @@ pm_app_entry(process_t *process, void *arg)
         }
         state->flags = desc.flags;
         if (state->spawn_cli_args_len > 0u) {
-            int32_t fs_buf_size = process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM);
-            uint8_t *proc_fs_buf = (uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM,
-                                                                                  process->context_id);
-            if (!proc_fs_buf || fs_buf_size <= 0 ||
-                state->spawn_cli_args_len >= (uint32_t)fs_buf_size) {
+            /* TODO(xfer-stage4): argv delivery needs a child-OWNED args buffer
+             * whose buffer_id is handed to the child at startup so libc can read
+             * argv via wasmos_xfer_buffer_read. PM acquires it on the child's
+             * behalf (child owns it, so child exit reclaims it via
+             * xfer_buffer_drop_context) and writes the args; the child-side read
+             * + buffer_id handoff lands with the libc/service migration. Not
+             * exercised at boot (sysinit takes no args). */
+            xfer_buffer_owner_t child_xfer = {0};
+            uint32_t args_need = state->spawn_cli_args_len + 1u;
+            uint64_t args_phys = 0;
+            uint8_t *proc_fs_buf = 0;
+            if (xfer_buffer_acquire(BUFFER_KIND_TRANSFER,
+                                    process->context_id,
+                                    args_need,
+                                    &child_xfer) != XFER_BUFFER_OK ||
+                (args_phys = xfer_buffer_object_phys(&child_xfer.buffer)) == 0u) {
                 klog_write("[pm] spawn args copy failed\n");
                 process_set_exit_status(process, -1);
                 pm_slot_reset(state);
@@ -308,6 +390,7 @@ pm_app_entry(process_t *process, void *arg)
 #endif
                 return PROCESS_RUN_EXITED;
             }
+            proc_fs_buf = (uint8_t *)(uintptr_t)(args_phys | KERNEL_HIGHER_HALF_BASE);
             for (uint32_t i = 0; i < state->spawn_cli_args_len; ++i) {
                 proc_fs_buf[i] = (uint8_t)state->spawn_cli_args[i];
             }
@@ -610,31 +693,6 @@ pm_spawn_from_buffer(uint32_t parent_pid,
 }
 
 static int
-pm_send_fs_read(uint32_t pm_context_id, const char *name, uint32_t *out_req_id)
-{
-    if (!name || !out_req_id || g_pm.fs_endpoint == IPC_ENDPOINT_NONE) {
-        return PM_SPAWN_INTERNAL_ERR_BAD_ARGS;
-    }
-    uint32_t args[4];
-    pm_pack_name_args(name, args);
-
-    ipc_message_t req;
-    req.type = FS_IPC_READ_APP_REQ;
-    req.source = g_pm.fs_reply_endpoint;
-    req.destination = g_pm.fs_endpoint;
-    req.request_id = g_pm.fs_request_id++;
-    req.arg0 = args[0];
-    req.arg1 = args[1];
-    req.arg2 = args[2];
-    req.arg3 = args[3];
-    if (ipc_send_from(pm_context_id, g_pm.fs_endpoint, &req) != IPC_OK) {
-        return PM_SPAWN_INTERNAL_ERR_SEND;
-    }
-    *out_req_id = req.request_id;
-    return 0;
-}
-
-static int
 pm_recv_fs_reply(uint32_t source_context_id,
                  uint32_t source_endpoint,
                  uint32_t request_id,
@@ -728,6 +786,7 @@ pm_exec_tail_write(uint8_t *buffer,
 
 static int
 pm_request_broker_spawn_plan(uint32_t pm_context_id,
+                             const xfer_buffer_owner_t *pmbuf,
                              const wasmos_exec_handler_registry_entry_t *handler,
                              const char *path,
                              uint32_t path_len,
@@ -748,8 +807,8 @@ pm_request_broker_spawn_plan(uint32_t pm_context_id,
     uint32_t args_offset = 0u;
     uint32_t request_id = 0u;
     int send_ok = 0;
-    int pm_borrowed_broker = 0;
-    int broker_borrowed_pm = 0;
+    int broker_has_borrow = 0;
+    xfer_buffer_borrow_t broker_borrow = {0};
     ipc_message_t req;
     ipc_message_t reply;
     wasmos_broker_spawn_plan_request_t request;
@@ -764,8 +823,8 @@ pm_request_broker_spawn_plan(uint32_t pm_context_id,
         broker_context_id == 0u) {
         return PROC_SPAWN_ERR_BROKER_IPC;
     }
-    pm_fs_buf = (uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
-    pm_fs_buf_size = process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM);
+    pm_fs_buf = pm_xfer_owner_ptr(pmbuf);
+    pm_fs_buf_size = xfer_buffer_size(BUFFER_KIND_TRANSFER);
     if (!pm_fs_buf || blob_size > pm_fs_buf_size || request_size > (pm_fs_buf_size - blob_size)) {
         return PROC_SPAWN_ERR_BROKER_PLAN;
     }
@@ -811,14 +870,19 @@ pm_request_broker_spawn_plan(uint32_t pm_context_id,
     memcpy(request.runtime_tag, handler->runtime_tag, sizeof(request.runtime_tag));
     memcpy(request.broker_name, handler->broker_name, sizeof(request.broker_name));
     memcpy(pm_fs_buf + request_offset, &request, sizeof(request));
-
-    if (process_manager_buffer_borrow_context(PM_BUFFER_KIND_FILESYSTEM,
-                                              broker_context_id,
-                                              pm_context_id,
-                                              PM_BUFFER_BORROW_READ) != 0) {
+    /* Object-model broker contract: PM defines the buffer's lifecycle (it is
+     * the consumer of the plan and the only side that can know when the buffer
+     * is free), so PM owns it and lends the broker one R|W borrow: READ for the
+     * request payload PM staged, WRITE for the plan the broker returns into the
+     * same buffer. buffer_id is carried in arg2 so the broker can resolve it.
+     * PM revokes the borrow once it has read the plan. */
+    if (xfer_buffer_borrow(pmbuf,
+                           broker_context_id,
+                           BUFFER_BORROW_READ | BUFFER_BORROW_WRITE,
+                           &broker_borrow) != XFER_BUFFER_OK) {
         return PROC_SPAWN_ERR_BROKER_IPC;
     }
-    broker_borrowed_pm = 1;
+    broker_has_borrow = 1;
 
     request_id = g_pm.fs_request_id++;
     req.type = PROC_BROKER_IPC_SPAWN_PLAN_REQ;
@@ -827,9 +891,10 @@ pm_request_broker_spawn_plan(uint32_t pm_context_id,
     req.request_id = request_id;
     req.arg0 = request_offset;
     req.arg1 = tail_offset - request_offset;
-    req.arg2 = 0u;
+    req.arg2 = pmbuf->buffer.buffer_id;
     req.arg3 = 0u;
     if (ipc_send_from(pm_context_id, handler->broker_endpoint, &req) != IPC_OK) {
+        klog_write("[dbg-pm-broker] send failed\n");
         goto broker_ipc_fail;
     }
     send_ok = 1;
@@ -838,58 +903,58 @@ pm_request_broker_spawn_plan(uint32_t pm_context_id,
                                request_id,
                                handler->broker_endpoint,
                                &reply) != 0) {
+        klog_write("[dbg-pm-broker] recv failed\n");
         goto broker_ipc_fail;
+    }
+    if (reply.type != PROC_BROKER_IPC_SPAWN_PLAN_RESP) {
+        klog_write("[dbg-pm-broker] unexpected reply type=");
+        serial_write_hex64((uint64_t)reply.type);
+        klog_write(" arg0=");
+        serial_write_hex64((uint64_t)reply.arg0);
+        klog_write(" arg1=");
+        serial_write_hex64((uint64_t)reply.arg1);
+        klog_write("\n");
     }
     if (reply.type != PROC_BROKER_IPC_SPAWN_PLAN_RESP ||
         reply.arg1 == 0u ||
         reply.arg0 >= pm_fs_buf_size ||
         reply.arg1 > (pm_fs_buf_size - reply.arg0)) {
+        klog_write("[dbg-pm-broker] reply envelope invalid\n");
         goto broker_plan_fail;
     }
-    if (process_manager_buffer_borrow_context(PM_BUFFER_KIND_FILESYSTEM,
-                                              pm_context_id,
-                                              broker_context_id,
-                                              PM_BUFFER_BORROW_READ) != 0) {
-        goto broker_ipc_fail;
-    }
-    pm_borrowed_broker = 1;
-    broker_fs_buf = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
+    /* The broker wrote its plan into PM's owned buffer (reply.arg0 = offset,
+     * reply.arg1 = size); PM reads it back out of the buffer it owns. */
+    broker_fs_buf = (const uint8_t *)pm_xfer_owner_ptr(pmbuf);
     if (!broker_fs_buf ||
         wasmos_exec_broker_plan_validate(broker_fs_buf + reply.arg0,
                                          reply.arg1,
                                          handler,
                                          out_plan) != 0) {
+        klog_write("[dbg-pm-broker] plan validate failed\n");
         goto broker_plan_fail;
     }
 
-    (void)process_manager_buffer_release_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
-    (void)process_manager_buffer_release_context(PM_BUFFER_KIND_FILESYSTEM, broker_context_id);
+    if (broker_has_borrow) {
+        (void)xfer_buffer_unborrow(&broker_borrow);
+    }
     return 0;
 
 broker_ipc_fail:
-    if (pm_borrowed_broker) {
-        (void)process_manager_buffer_release_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
-    }
-    if (broker_borrowed_pm) {
-        (void)process_manager_buffer_release_context(PM_BUFFER_KIND_FILESYSTEM, broker_context_id);
-    }
-    if (!send_ok) {
-        return PROC_SPAWN_ERR_BROKER_IPC;
+    if (broker_has_borrow) {
+        (void)xfer_buffer_unborrow(&broker_borrow);
     }
     return PROC_SPAWN_ERR_BROKER_IPC;
 
 broker_plan_fail:
-    if (pm_borrowed_broker) {
-        (void)process_manager_buffer_release_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
-    }
-    if (broker_borrowed_pm) {
-        (void)process_manager_buffer_release_context(PM_BUFFER_KIND_FILESYSTEM, broker_context_id);
+    if (broker_has_borrow) {
+        (void)xfer_buffer_unborrow(&broker_borrow);
     }
     return PROC_SPAWN_ERR_BROKER_PLAN;
 }
 
 static int
 pm_fs_read_blob_for_spawn(uint32_t pm_context_id,
+                          const xfer_buffer_owner_t *pmbuf,
                           const char *path,
                           uint32_t path_len,
                           uint32_t *out_blob_size);
@@ -902,8 +967,12 @@ typedef struct {
     uint32_t blob_size;
 } pm_resolved_spawn_path_t;
 
+/* Resolves a spawn path into a ready-to-parse blob in the caller-provided,
+ * PM-owned per-operation buffer `pmbuf` (acquired and released by the handler).
+ * The blob stays live in *pmbuf on success for the handler to spawn from. */
 static int
 pm_resolve_spawn_path(uint32_t pm_context_id,
+                      const xfer_buffer_owner_t *pmbuf,
                       const char *path,
                       uint32_t path_len,
                       const char *cli_args,
@@ -932,11 +1001,12 @@ pm_resolve_spawn_path(uint32_t pm_context_id,
         out_resolved->args_len = args_len;
     }
 
-    pm_fs_buf = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
+    pm_fs_buf = (const uint8_t *)pm_xfer_owner_ptr(pmbuf);
     if (!pm_fs_buf) {
         return PROC_SPAWN_ERR_NO_PM_FSBUF;
     }
     if (pm_fs_read_blob_for_spawn(pm_context_id,
+                                  pmbuf,
                                   out_resolved->path,
                                   out_resolved->path_len,
                                   &out_resolved->blob_size) != 0) {
@@ -952,6 +1022,7 @@ pm_resolve_spawn_path(uint32_t pm_context_id,
         return 0;
     }
     broker_rc = pm_request_broker_spawn_plan(pm_context_id,
+                                             pmbuf,
                                              format_match.handler,
                                              out_resolved->path,
                                              out_resolved->path_len,
@@ -984,6 +1055,7 @@ pm_resolve_spawn_path(uint32_t pm_context_id,
     out_resolved->args_len = broker_plan.host_args_len;
 
     if (pm_fs_read_blob_for_spawn(pm_context_id,
+                                  pmbuf,
                                   out_resolved->path,
                                   out_resolved->path_len,
                                   &out_resolved->blob_size) != 0) {
@@ -1034,6 +1106,7 @@ pm_inherit_child_cwd(uint32_t pm_context_id, uint32_t parent_context_id, uint32_
 
 static int
 pm_fs_read_blob_for_spawn(uint32_t pm_context_id,
+                          const xfer_buffer_owner_t *pmbuf,
                           const char *path,
                           uint32_t path_len,
                           uint32_t *out_blob_size)
@@ -1046,8 +1119,8 @@ pm_fs_read_blob_for_spawn(uint32_t pm_context_id,
     if (!path || path_len == 0 || !out_blob_size) {
         return PM_SPAWN_INTERNAL_ERR_BAD_ARGS;
     }
-    pm_fs_buf = (uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
-    max = process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM);
+    pm_fs_buf = pm_xfer_owner_ptr(pmbuf);
+    max = xfer_buffer_size(BUFFER_KIND_TRANSFER);
     if (!pm_fs_buf || max == 0 || path_len >= max) {
         return PM_SPAWN_INTERNAL_ERR_BOUNDS;
     }
@@ -1059,6 +1132,9 @@ pm_fs_read_blob_for_spawn(uint32_t pm_context_id,
         return PM_SPAWN_INTERNAL_ERR_EMPTY_PATH;
     }
 
+    /* READ_PATH request: arg0 = path length (path bytes are already at offset 0
+     * of PM's buffer), arg1 = PM's buffer_id so fs-manager can borrow it (R to
+     * read the path, W to write the blob back). PM owns and releases it. */
     req_id = g_pm.fs_request_id++;
     ipc_message_t req = {
         .type = FS_IPC_READ_PATH_REQ,
@@ -1066,7 +1142,7 @@ pm_fs_read_blob_for_spawn(uint32_t pm_context_id,
         .destination = g_pm.fs_endpoint,
         .request_id = req_id,
         .arg0 = (int32_t)path_len,
-        .arg1 = 0,
+        .arg1 = (int32_t)pmbuf->buffer.buffer_id,
         .arg2 = 0,
         .arg3 = 0
     };
@@ -1206,12 +1282,14 @@ pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     process_t *caller = 0;
     uint32_t parent_pid = 0;
     uint32_t spawn_req_flags = (uint32_t)msg->arg0;
-    uint32_t path_len = (uint32_t)msg->arg1;
+    uint32_t path_len = (uint32_t)msg->arg1 & 0xFFFu;
+    uint32_t caller_buffer_id = (uint32_t)msg->arg1 >> 12;
     uint32_t timeout_ms = (uint32_t)msg->arg3;
     const uint8_t *caller_fs_buf = 0;
     char path[256];
     pm_resolved_spawn_path_t resolved;
     uint32_t child_pid = 0;
+    xfer_buffer_owner_t pmbuf = {0};
 
     if (g_pm.spawn.in_use) {
         return PROC_PM_ERR_BUSY;
@@ -1227,31 +1305,38 @@ pm_handle_spawn_path_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE || path_len == 0 || path_len >= sizeof(path)) {
         return PROC_PM_ERR_BAD_PATH;
     }
-    caller_fs_buf = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, owner_context);
-    if (!caller_fs_buf || path_len >= process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM)) {
+    caller_fs_buf = pm_foreign_xfer_ptr(caller_buffer_id, owner_context, 0);
+    if (!caller_fs_buf || path_len >= xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
         return PROC_PM_ERR_CALLER_FSBUF;
     }
     for (uint32_t i = 0; i < path_len; ++i) {
         path[i] = (char)caller_fs_buf[i];
     }
     path[path_len] = '\0';
+    if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) != 0) {
+        return PROC_PM_ERR_NO_PM_FSBUF;
+    }
     if (pm_resolve_spawn_path(pm_context_id,
+                              &pmbuf,
                               path,
                               path_len,
                               0,
                               0,
                               spawn_req_flags,
                               &resolved) != 0) {
+        pm_xfer_release(&pmbuf);
         return PROC_PM_ERR_PATH_RESOLVE;
     }
     if (pm_spawn_from_buffer(parent_pid,
-                             (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id),
+                             (const uint8_t *)pm_xfer_owner_ptr(&pmbuf),
                              resolved.blob_size,
                              resolved.args_len > 0u ? resolved.args : 0,
                              resolved.args_len,
                              &child_pid) != 0) {
+        pm_xfer_release(&pmbuf);
         return PROC_PM_ERR_SPAWN_FAILED;
     }
+    pm_xfer_release(&pmbuf);
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, child_pid);
     /* Sync spawns complete on the child's READY, not its exit; a one-shot child
      * (e.g. pci-bus/acpi-bus enumerators) exits afterwards.  If the caller asked
@@ -1280,7 +1365,8 @@ pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
 {
     uint32_t caps_arg0 = (uint32_t)msg->arg0;
     uint32_t caps_arg2 = (uint32_t)msg->arg2;
-    uint32_t path_len = (uint32_t)msg->arg1;
+    uint32_t path_len = (uint32_t)msg->arg1 & 0xFFFu;
+    uint32_t caller_buffer_id = (uint32_t)msg->arg1 >> 12;
     uint32_t timeout_ms = (uint32_t)msg->arg3;
     pm_spawn_caps_t caps = {0};
     uint32_t owner_context = 0;
@@ -1290,6 +1376,7 @@ pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     char path[256];
     pm_resolved_spawn_path_t resolved;
     uint32_t child_pid = 0;
+    xfer_buffer_owner_t pmbuf = {0};
 
     caps.valid = 1;
     caps.cap_flags   = caps_arg0 & 0xFFFFu;
@@ -1311,31 +1398,38 @@ pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE || path_len == 0 || path_len >= sizeof(path)) {
         return PROC_PM_ERR_BAD_PATH;
     }
-    caller_fs_buf = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, owner_context);
-    if (!caller_fs_buf || path_len >= process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM)) {
+    caller_fs_buf = pm_foreign_xfer_ptr(caller_buffer_id, owner_context, 0);
+    if (!caller_fs_buf || path_len >= xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
         return PROC_PM_ERR_CALLER_FSBUF;
     }
     for (uint32_t i = 0; i < path_len; ++i) {
         path[i] = (char)caller_fs_buf[i];
     }
     path[path_len] = '\0';
+    if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) != 0) {
+        return PROC_PM_ERR_NO_PM_FSBUF;
+    }
     if (pm_resolve_spawn_path(pm_context_id,
+                              &pmbuf,
                               path,
                               path_len,
                               0,
                               0,
                               0,
                               &resolved) != 0) {
+        pm_xfer_release(&pmbuf);
         return PROC_PM_ERR_PATH_RESOLVE;
     }
     if (pm_spawn_from_buffer(parent_pid,
-                             (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id),
+                             (const uint8_t *)pm_xfer_owner_ptr(&pmbuf),
                              resolved.blob_size,
                              resolved.args_len > 0u ? resolved.args : 0,
                              resolved.args_len,
                              &child_pid) != 0) {
+        pm_xfer_release(&pmbuf);
         return PROC_PM_ERR_SPAWN_FAILED;
     }
+    pm_xfer_release(&pmbuf);
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, child_pid);
     if (pm_apply_spawn_caps(child_pid, &caps) != 0) {
         (void)process_kill(child_pid, -1);
@@ -1428,92 +1522,19 @@ pm_poll_sync_spawn(uint32_t pm_context_id)
     ipc_send_from(pm_context_id, g_pm.spawn.reply_endpoint, &resp);
 }
 
-/* Poll for completion of an in-flight async spawn request.
- *
- * Async spawn state machine (called from PM's IPC dispatch loop each tick):
- *
- *   Idle (in_use == 0): return immediately — nothing pending.
- *
- *   Sync path (is_sync == 1): delegate to pm_poll_sync_spawn, which drives
- *     a synchronous FS-read + inline spawn without waiting for an IPC reply.
- *
- *   Async path: PM previously sent an FS_IPC_READ_REQ to the FS service and
- *     is waiting for the FS_IPC_RESP reply on fs_reply_endpoint.
- *     ipc_recv_for() returns IPC_EMPTY if the reply hasn't arrived yet —
- *     the caller will re-invoke on the next dispatch loop iteration.
- *     On success the blob is in PM_BUFFER_KIND_FILESYSTEM; pm_spawn_from_buffer
- *     parses it and spawns the process as parked, then process_unpark_pid()
- *     releases it.  On any error (wrong request_id, wrong type, zero size,
- *     spawn failure) PM sends PROC_IPC_ERROR back to the original requester
- *     and clears in_use. */
+/* Poll for completion of an in-flight spawn request (called from PM's IPC
+ * dispatch loop each tick). Idle (in_use == 0): nothing pending. Otherwise the
+ * only in-flight spawns are synchronous (FS read + inline spawn), driven by
+ * pm_poll_sync_spawn. The former name-based async path (FS_IPC_READ_APP round
+ * trip) was removed with spawn-by-name; spawns now read blobs inline in the
+ * path handlers using a PM-owned per-operation buffer. */
 void
 pm_poll_spawn(uint32_t pm_context_id)
 {
     if (!g_pm.spawn.in_use) {
         return;
     }
-
-    if (g_pm.spawn.is_sync) {
-        pm_poll_sync_spawn(pm_context_id);
-        return;
-    }
-
-    if (g_pm.fs_reply_endpoint == IPC_ENDPOINT_NONE) {
-        return;
-    }
-
-    ipc_message_t msg;
-    int recv_rc = ipc_recv_for(pm_context_id, g_pm.fs_reply_endpoint, &msg);
-    if (recv_rc == IPC_EMPTY) {
-        return; /* FS reply not yet available; will retry next dispatch tick */
-    }
-    g_pm.spawn.in_use = 0;
-    if (recv_rc != IPC_OK ||
-        msg.request_id != g_pm.spawn.fs_request_id ||
-        msg.type != FS_IPC_RESP) {
-        ipc_message_t resp;
-        resp.type = PROC_IPC_ERROR;
-        resp.source = g_pm.proc_endpoint;
-        resp.destination = g_pm.spawn.reply_endpoint;
-        resp.request_id = g_pm.spawn.request_id;
-        resp.arg0 = PROC_IPC_SPAWN_NAME;
-        resp.arg1 = PROC_PM_ERR_FS_REPLY;
-        resp.arg2 = 0;
-        resp.arg3 = 0;
-        ipc_send_from(pm_context_id, g_pm.spawn.reply_endpoint, &resp);
-        return;
-    }
-
-    uint32_t pid = 0;
-    uint32_t size = (uint32_t)msg.arg0;
-    const uint8_t *fs_blob = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id);
-    if (size == 0 || size > process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM) || !fs_blob ||
-        pm_spawn_from_buffer(g_pm.spawn.parent_pid, fs_blob, size, 0, 0, &pid) != 0) {
-        ipc_message_t resp;
-        resp.type = PROC_IPC_ERROR;
-        resp.source = g_pm.proc_endpoint;
-        resp.destination = g_pm.spawn.reply_endpoint;
-        resp.request_id = g_pm.spawn.request_id;
-        resp.arg0 = PROC_IPC_SPAWN_NAME;
-        resp.arg1 = PROC_PM_ERR_SPAWN_FAILED;
-        resp.arg2 = 0;
-        resp.arg3 = 0;
-        ipc_send_from(pm_context_id, g_pm.spawn.reply_endpoint, &resp);
-        return;
-    }
-    (void)pm_inherit_child_cwd(pm_context_id, g_pm.spawn.parent_context_id, pid);
-    process_unpark_pid(pid);
-
-    ipc_message_t resp;
-    resp.type = PROC_IPC_RESP;
-    resp.source = g_pm.proc_endpoint;
-    resp.destination = g_pm.spawn.reply_endpoint;
-    resp.request_id = g_pm.spawn.request_id;
-    resp.arg0 = pid;
-    resp.arg1 = 0;
-    resp.arg2 = 0;
-    resp.arg3 = 0;
-    ipc_send_from(pm_context_id, g_pm.spawn.reply_endpoint, &resp);
+    pm_poll_sync_spawn(pm_context_id);
 }
 
 int
@@ -1863,65 +1884,13 @@ pm_handle_spawn_caps_v2(uint32_t pm_context_id, const ipc_message_t *msg)
 }
 
 int
-pm_handle_spawn_name(uint32_t pm_context_id, const ipc_message_t *msg)
-{
-    char name[32];
-    uint32_t owner_context = 0;
-    process_t *caller = 0;
-    uint32_t parent_pid = 0;
-
-    pm_unpack_name_args((uint32_t)msg->arg0,
-                        (uint32_t)msg->arg1,
-                        (uint32_t)msg->arg2,
-                        (uint32_t)msg->arg3,
-                        name,
-                        sizeof(name));
-    if (name[0] == '\0') {
-        return PROC_PM_ERR_INVALID_NAME;
-    }
-    if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
-        return PROC_PM_ERR_BAD_ENDPOINT;
-    }
-    caller = process_find_by_context(owner_context);
-    if (!caller) {
-        return PROC_PM_ERR_NO_CALLER;
-    }
-    parent_pid = caller->pid;
-
-    if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE || g_pm.fs_reply_endpoint == IPC_ENDPOINT_NONE) {
-        return PROC_PM_ERR_FS_UNAVAILABLE;
-    }
-    if (g_pm.spawn.in_use) {
-        return PROC_PM_ERR_BUSY;
-    }
-    uint32_t fs_req_id = 0;
-    if (pm_send_fs_read(pm_context_id, name, &fs_req_id) != 0) {
-        return PROC_PM_ERR_FS_REQUEST;
-    }
-
-    g_pm.spawn.in_use = 1;
-    g_pm.spawn.is_sync = 0;
-    g_pm.spawn.reply_endpoint = msg->source;
-    g_pm.spawn.request_id = msg->request_id;
-    g_pm.spawn.parent_pid = parent_pid;
-    g_pm.spawn.parent_context_id = owner_context;
-    g_pm.spawn.fs_request_id = fs_req_id;
-    for (uint32_t i = 0; i < sizeof(g_pm.spawn.name); ++i) {
-        g_pm.spawn.name[i] = name[i];
-        if (!name[i]) {
-            break;
-        }
-    }
-    return 0;
-}
-
-int
 pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
 {
     uint32_t owner_context = 0;
     process_t *caller = 0;
     uint32_t parent_pid = 0;
-    uint32_t path_len = (uint32_t)msg->arg1;
+    uint32_t path_len = (uint32_t)msg->arg1 & 0xFFFu;
+    uint32_t caller_buffer_id = (uint32_t)msg->arg1 >> 12;
     uint32_t args_len = (uint32_t)msg->arg2;
     const uint8_t *caller_fs_buf = 0;
     char path[256];
@@ -1929,6 +1898,7 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
     pm_resolved_spawn_path_t resolved;
     uint32_t pid = 0;
     uint32_t spawn_req_flags = (uint32_t)msg->arg0;
+    xfer_buffer_owner_t pmbuf = {0};
 
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
         return PROC_SPAWN_ERR_BAD_ENDPOINT;
@@ -1941,8 +1911,8 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
     if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE || path_len == 0 || path_len >= sizeof(path)) {
         return PROC_SPAWN_ERR_BAD_PATH;
     }
-    caller_fs_buf = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, owner_context);
-    if (!caller_fs_buf || path_len >= process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM)) {
+    caller_fs_buf = pm_foreign_xfer_ptr(caller_buffer_id, owner_context, 0);
+    if (!caller_fs_buf || path_len >= xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
         return PROC_SPAWN_ERR_CALLER_FSBUF;
     }
     for (uint32_t i = 0; i < path_len; ++i) {
@@ -1950,7 +1920,7 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
     }
     path[path_len] = '\0';
     if (args_len > 0u) {
-        uint32_t fs_buf_size = process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM);
+        uint32_t fs_buf_size = xfer_buffer_size(BUFFER_KIND_TRANSFER);
         uint32_t args_off = path_len + 1u;
         if (args_len >= sizeof(cli_args) || args_off >= fs_buf_size || args_len > (fs_buf_size - args_off)) {
             return PROC_SPAWN_ERR_ARGS_TOOBIG;
@@ -1962,8 +1932,12 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
     } else {
         cli_args[0] = '\0';
     }
+    if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) != 0) {
+        return PROC_SPAWN_ERR_NO_PM_FSBUF;
+    }
     {
         int resolve_rc = pm_resolve_spawn_path(pm_context_id,
+                                               &pmbuf,
                                                path,
                                                path_len,
                                                args_len > 0u ? cli_args : 0,
@@ -1971,12 +1945,13 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
                                                spawn_req_flags,
                                                &resolved);
         if (resolve_rc != 0) {
+            pm_xfer_release(&pmbuf);
             return resolve_rc;
         }
     }
     wasmos_app_desc_t desc;
     uint32_t app_flags = 0;
-    int parse_rc = wasmos_app_parse((const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id),
+    int parse_rc = wasmos_app_parse((const uint8_t *)pm_xfer_owner_ptr(&pmbuf),
                                     resolved.blob_size,
                                     &desc);
     if (parse_rc == 0) {
@@ -1986,21 +1961,25 @@ pm_handle_spawn_path(uint32_t pm_context_id, const ipc_message_t *msg)
     if (parse_rc == 0) {
         ready_policy = wasmos_app_requires_explicit_ready(&desc);
         if (ready_policy < 0) {
+            pm_xfer_release(&pmbuf);
             return PROC_SPAWN_ERR_SPAWN_FAILED;
         }
     }
     int needs_ready = ready_policy != 0 && !(spawn_req_flags & PROC_SPAWN_PATH_FLAG_DETACH);
     if (needs_ready && g_pm.spawn.in_use) {
+        pm_xfer_release(&pmbuf);
         return PROC_PM_ERR_BUSY;
     }
     if (pm_spawn_from_buffer(parent_pid,
-                             (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id),
+                             (const uint8_t *)pm_xfer_owner_ptr(&pmbuf),
                              resolved.blob_size,
                              resolved.args_len > 0u ? resolved.args : 0,
                              resolved.args_len,
                              &pid) != 0) {
+        pm_xfer_release(&pmbuf);
         return PROC_SPAWN_ERR_SPAWN_FAILED;
     }
+    pm_xfer_release(&pmbuf);
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);
 
     /* Auto-reap fire-and-forget one-shots on exit so their g_processes[] slot is
@@ -2046,12 +2025,14 @@ pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t *msg)
     uint32_t owner_context = 0;
     process_t *caller = 0;
     uint32_t parent_pid = 0;
-    uint32_t path_len = (uint32_t)msg->arg1;
+    uint32_t path_len = (uint32_t)msg->arg1 & 0xFFFu;
+    uint32_t caller_buffer_id = (uint32_t)msg->arg1 >> 12;
     const uint8_t *caller_fs_buf = 0;
     char path[256];
     uint32_t pid = 0;
     pm_spawn_caps_t caps = {0};
     pm_resolved_spawn_path_t resolved;
+    xfer_buffer_owner_t pmbuf = {0};
 
     /* Unpack caps from IPC args:
      * arg0 = (irq_mask<<16) | (cap_flags & 0xFFFF)
@@ -2078,31 +2059,38 @@ pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t *msg)
     if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE || path_len == 0 || path_len >= sizeof(path)) {
         return PROC_PM_ERR_BAD_PATH;
     }
-    caller_fs_buf = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, owner_context);
-    if (!caller_fs_buf || path_len >= process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM)) {
+    caller_fs_buf = pm_foreign_xfer_ptr(caller_buffer_id, owner_context, 0);
+    if (!caller_fs_buf || path_len >= xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
         return PROC_PM_ERR_CALLER_FSBUF;
     }
     for (uint32_t i = 0; i < path_len; ++i) {
         path[i] = (char)caller_fs_buf[i];
     }
     path[path_len] = '\0';
+    if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) != 0) {
+        return PROC_PM_ERR_NO_PM_FSBUF;
+    }
     if (pm_resolve_spawn_path(pm_context_id,
+                              &pmbuf,
                               path,
                               path_len,
                               0,
                               0,
                               0,
                               &resolved) != 0) {
+        pm_xfer_release(&pmbuf);
         return PROC_PM_ERR_PATH_RESOLVE;
     }
     if (pm_spawn_from_buffer(parent_pid,
-                             (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM, pm_context_id),
+                             (const uint8_t *)pm_xfer_owner_ptr(&pmbuf),
                              resolved.blob_size,
                              resolved.args_len > 0u ? resolved.args : 0,
                              resolved.args_len,
                              &pid) != 0) {
+        pm_xfer_release(&pmbuf);
         return PROC_PM_ERR_SPAWN_FAILED;
     }
+    pm_xfer_release(&pmbuf);
     (void)pm_inherit_child_cwd(pm_context_id, owner_context, pid);
     if (pm_apply_spawn_caps(pid, &caps) != 0) {
         (void)process_kill(pid, -1);
@@ -2188,7 +2176,8 @@ pm_handle_module_meta_path(uint32_t pm_context_id, const ipc_message_t *msg)
     const uint8_t *caller_fs_buf = 0;
     char path[96];
     uint32_t path_ptr = (uint32_t)msg->arg0;
-    uint32_t path_len = (uint32_t)msg->arg1;
+    uint32_t path_len = (uint32_t)msg->arg1 & 0xFFFu;
+    uint32_t caller_buffer_id = (uint32_t)msg->arg1 >> 12;
     uint32_t source = (uint32_t)msg->arg2;
     wasmos_app_desc_t desc;
     uint32_t module_index = 0xFFFFFFFFu;
@@ -2206,9 +2195,8 @@ pm_handle_module_meta_path(uint32_t pm_context_id, const ipc_message_t *msg)
         return PROC_PM_ERR_BAD_PATH;
     }
     if (path_ptr == 0) {
-        caller_fs_buf = (const uint8_t *)process_manager_buffer_for_context(PM_BUFFER_KIND_FILESYSTEM,
-                                                                            owner_context);
-        if (!caller_fs_buf || path_len >= process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM)) {
+        caller_fs_buf = pm_foreign_xfer_ptr(caller_buffer_id, owner_context, 0);
+        if (!caller_fs_buf || path_len >= xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
             return PROC_PM_ERR_CALLER_FSBUF;
         }
         for (uint32_t i = 0; i < path_len; ++i) {

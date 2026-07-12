@@ -2,6 +2,8 @@
 
 #include "ipc.h"
 #include "klog.h"
+#include "memory.h"
+#include "paging.h"
 #include "process_manager.h"
 #include "serial.h"
 #include "wasmos_app.h"
@@ -61,26 +63,6 @@ boot_module_index_by_app_name(const boot_info_t *info, const char *name)
     return 0xFFFFFFFFu;
 }
 
-static void
-pack_name_args(const char *name, uint32_t out[4])
-{
-    if (!out) {
-        return;
-    }
-    for (uint32_t i = 0; i < 4; ++i) {
-        out[i] = 0;
-    }
-    if (!name) {
-        return;
-    }
-    uint32_t idx = 0;
-    for (uint32_t i = 0; name[i] && idx < 16; ++i, ++idx) {
-        uint32_t slot = idx / 4;
-        uint32_t shift = (idx % 4) * 8;
-        out[slot] |= ((uint32_t)(uint8_t)name[i]) << shift;
-    }
-}
-
 static int
 init_send_spawn_index(process_t *process, init_state_t *state, uint32_t module_index, uint8_t pending_kind)
 {
@@ -115,34 +97,59 @@ init_send_spawn_index(process_t *process, init_state_t *state, uint32_t module_i
     return 0;
 }
 
+/* Spawn a process by filesystem path. init owns a transfer buffer holding the
+ * path (staged at offset 0) that PM borrows/reads while handling the message;
+ * the spawn-path protocol carries arg1 = (buffer_id<<12)|path_len. */
 static int
-init_send_spawn_name(process_t *process, init_state_t *state, const char *name)
+init_send_spawn_path(process_t *process, init_state_t *state, const char *path)
 {
     uint32_t proc_ep;
-    uint32_t packed[4];
     ipc_message_t msg;
     int send_rc;
+    xfer_buffer_owner_t buf = {0};
+    uint64_t phys = 0u;
+    uint8_t *p = 0;
+    uint32_t path_len;
 
-    if (!process || !state || !name) {
+    if (!process || !state || !path) {
         return -1;
     }
     proc_ep = process_manager_endpoint();
     if (proc_ep == IPC_ENDPOINT_NONE) {
         return 1;
     }
-    pack_name_args(name, packed);
-    msg.type = PROC_IPC_SPAWN_NAME;
+    path_len = (uint32_t)strlen(path);
+    if (path_len == 0u || path_len > 0xFFFu) {
+        return -1;
+    }
+    if (xfer_buffer_acquire(BUFFER_KIND_TRANSFER, process->context_id, path_len, &buf)
+            != XFER_BUFFER_OK) {
+        return -1;
+    }
+    phys = xfer_buffer_object_phys(&buf.buffer);
+    if (phys == 0u) {
+        (void)xfer_buffer_release_owned(&buf);
+        return -1;
+    }
+    p = (uint8_t *)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
+    memcpy(p, path, path_len);
+    msg.type = PROC_IPC_SPAWN_PATH;
     msg.source = state->reply_endpoint;
     msg.destination = proc_ep;
     msg.request_id = state->request_id;
-    msg.arg0 = packed[0];
-    msg.arg1 = packed[1];
-    msg.arg2 = packed[2];
-    msg.arg3 = packed[3];
+    msg.arg0 = 0;                                              /* no spawn flags */
+    msg.arg1 = (buf.buffer.buffer_id << 12) | (path_len & 0xFFFu);
+    msg.arg2 = 0;                                             /* args_len */
+    msg.arg3 = 0;
     send_rc = ipc_send_from(process->context_id, proc_ep, &msg);
     if (send_rc != IPC_OK) {
+        (void)xfer_buffer_release_owned(&buf);
         return -1;
     }
+    /* PM reads the path synchronously while handling this message, so the buffer
+     * is safe to drop once the spawn reply is observed. TODO(xfer-stage2): track
+     * `buf` in init_state and release it on the reply; for now init owns it and
+     * it is reclaimed by xfer_buffer_drop_context on init exit. */
     state->pending_kind = 5;
     state->phase = 4;
     return 0;
@@ -381,7 +388,10 @@ kernel_init_entry(process_t *process, void *arg)
             return PROCESS_RUN_YIELDED;
         }
         trace_write("[init] device-manager ready\n");
-        if (init_send_spawn_name(process, state, "sysinit") != 0) {
+        /* TODO(xfer-stage2): verify sysinit's resolvable FS path at boot; the
+         * initfs is mounted at /init and sysinit.wap ships to both apps/ and
+         * system/services/. */
+        if (init_send_spawn_path(process, state, "/init/system/services/sysinit.wap") != 0) {
             return PROCESS_RUN_YIELDED;
         }
         return PROCESS_RUN_YIELDED;

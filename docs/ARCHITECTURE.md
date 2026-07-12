@@ -10,6 +10,12 @@ IMPORTANT: Create a git commit after each prompt iteration.
 
 Status snapshot has been moved to [STATUS.md](STATUS.md).
 
+Transfer-buffer terminology note: the architectural abstraction is a generic
+**transfer buffer**. It is used for file payloads, spawn payloads, broker
+plans, packet data, and other bulk transfers; feature docs should describe the
+generic transfer-buffer contract unless a filesystem-specific behavior is
+actually meant.
+
 Ring3 smoke validation note: `run-qemu-ring3-test` configures process-manager
 test injection hooks so owner-deny marker checks (`wait`/`kill`/`status`/`spawn`)
 remain deterministic in strict ring3 runs.

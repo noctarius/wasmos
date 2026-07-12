@@ -73,11 +73,11 @@ After copying the initfs at line 954 and advancing `cursor += initfs_size` at li
 
 ## Medium Severity Bugs
 
-### N-M-1 — `src/kernel/process_manager_buffers.c:145-166` — Double-borrow clobbers active borrow state in `pm_fs_buffer_borrow_context`
+### N-M-1 — `src/kernel/xfer_buffer/store.c:145-166` — Double-borrow clobbers active borrow state in `pm_fs_buffer_borrow_context`
 
 `pm_fs_buffer_borrow_context` does not check whether `borrower->borrow_active` is already set before overwriting `borrow_source_context_id` and `borrow_flags`. A second concurrent borrow silently replaces the first, orphaning the original source context and breaking its release path.
 
-### N-M-2 — `src/kernel/process_manager_buffers.c:438-447` — Framebuffer slot table iterated without lock in `process_manager_buffer_drop_context`
+### N-M-2 — `src/kernel/xfer_buffer/store.c:438-447` — Framebuffer slot table iterated without lock in `xfer_buffer_drop_context`
 
 `g_pm_fb_slots` is walked and modified without holding any lock. A concurrent `pm_fb_slot_for_context` or `pm_fb_buffer_for_context` call on another CPU can race with the removal, corrupting the iteration or producing use-after-free.
 

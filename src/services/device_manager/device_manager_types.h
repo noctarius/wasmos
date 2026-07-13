@@ -172,6 +172,7 @@ typedef struct {
     uint16_t rules_boot_retry_delay;
     uint8_t rules_boot_failures;
     int32_t rules_boot_request_id;
+    int32_t rules_boot_bid;    /* owner-push xfer buffer_id in flight for boot rules read */
     uint16_t rules_init_active;
     uint16_t rules_boot_active;
     uint8_t rule_spawn_pending;

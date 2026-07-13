@@ -25,7 +25,7 @@ extern "C" {
 #include "klog.h"
 #include "memory.h"
 #include "serial.h"
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
 #include "warp_ring3.h"
 #endif
 }
@@ -46,7 +46,7 @@ constexpr uint64_t kPhysLimit  = 512ULL * 1024ULL * 1024ULL;
 
 inline uint64_t round_up_page(uint64_t n)  { return (n + kPageSize - 1) & ~(kPageSize - 1); }
 
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
 extern "C" int warp_linmem_kernel_window_query(const uint8_t *linmem_kernel_ptr,
                                                uint64_t *out_slot_va_base,
                                                uint64_t *out_basedata_length,
@@ -119,7 +119,7 @@ static void clear_entry(MmapEntry *e)
 }
 
 /* Find the entry that contains the given physical address. */
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
 static MmapEntry *find_entry_by_phys(uint64_t phys)
 {
     for (auto &e : g_mmap_table)
@@ -152,7 +152,7 @@ static Ring3LinmemMapState *find_ring3_linmem_map(uint64_t user_root)
     }
     return free_slot != nullptr ? free_slot : &g_ring3_linmem_maps[0];
 }
-#endif /* WASMOS_WARP_RING3 */
+#endif /* WASMOS_WASM_RUNTIME_WARP */
 
 } // namespace
 
@@ -185,7 +185,7 @@ warp_mem_alias_phys(uint64_t virt)
     return virt - kHalfBase;
 }
 
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
 /* Return basedataLength = byte offset from memoryBase (warp_kmalloc result or
  * allocPagedMemory result) to the first linmem byte.
  * data_offset accounts for the AllocHeader prepended by warp_kmalloc. */
@@ -371,7 +371,7 @@ warp_mem_ring3_map_linmem(uint64_t user_root, uint8_t const *linmem_kernel_ptr)
     }
     return 0;
 }
-#endif /* WASMOS_WARP_RING3 */
+#endif /* WASMOS_WASM_RUNTIME_WARP */
 
 /* -----------------------------------------------------------------------
  * vb::MemUtils implementation
@@ -402,7 +402,7 @@ MmapMemory allocPagedMemory(size_t size)
      * from WASMOS_SHMEM_PHYS_LIMIT) cannot overlap with JIT pages.  This
      * prevents commitVirtualMemory's zero-fill from clobbering JIT code. */
     MmapType typ = g_next_alloc_type;
-#ifdef WASMOS_WARP_RING3
+#ifdef WASMOS_WASM_RUNTIME_WARP
     uint64_t phys_min = (typ == MMAP_JIT)
                         ? WARP_JIT_PHYS_MIN
                         : WASMOS_SHMEM_PHYS_LIMIT;

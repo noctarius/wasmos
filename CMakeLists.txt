@@ -399,6 +399,7 @@ set(WASMOS_LIBC_C_SOURCES
   ${LIBC_DIR}/src/string.c
   ${LIBC_DIR}/src/stdio.c
   ${LIBC_DIR}/src/unistd.c
+  ${LIBC_DIR}/src/spawn_info.c
 )
 
 set(WASMOS_LIBC_INCLUDE_DEPS
@@ -647,15 +648,9 @@ if (WASMOS_RING3_SHADOW)
   set(WASMOS_WASM_RUNTIME_WASM3 ON  CACHE BOOL "Use wasm3 interpreter" FORCE)
 endif ()
 
-# WARP now always executes through the ring-3 path. Keep a derived internal
-# gate so the kernel sources can still use WASMOS_WARP_RING3 for build-time
-# inclusion, but remove the user-facing runtime-mode toggle.
+# WARP now always executes through the ring-3 path; remove the old user-facing
+# runtime-mode toggle and gate the code directly on the WARP runtime choice.
 unset(WASMOS_RING3 CACHE)
-if (WASMOS_WASM_RUNTIME_WARP)
-  set(WASMOS_WARP_RING3 ON CACHE INTERNAL "WARP ring-3 execution is mandatory")
-else ()
-  set(WASMOS_WARP_RING3 OFF CACHE INTERNAL "WARP ring-3 execution is mandatory")
-endif ()
 
 # WASM runtime selection must run AFTER the Kconfig import so that on a fresh
 # cmake cache (e.g. the ring3 shadow build) the kconfig-selected runtime wins
@@ -1759,6 +1754,7 @@ add_custom_target(run-kernel-unit-tests
           ${KERNEL_DIR}/list_linked.c
           ${KERNEL_DIR}/list_array_chunk.c
           ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
           -o ${BUILD_DIR}/test_list
   COMMAND ${BUILD_DIR}/test_list
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -1766,6 +1762,7 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/test_hashmap.c
           ${KERNEL_DIR}/hashmap.c
           ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
           -o ${BUILD_DIR}/test_hashmap
   COMMAND ${BUILD_DIR}/test_hashmap
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -1776,6 +1773,7 @@ add_custom_target(run-kernel-unit-tests
           ${KERNEL_DIR}/subsystem_registry.c
           ${KERNEL_DIR}/hashmap.c
           ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
           -o ${BUILD_DIR}/test_subsystem_registry
   COMMAND ${BUILD_DIR}/test_subsystem_registry
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -1788,6 +1786,7 @@ add_custom_target(run-kernel-unit-tests
           ${KERNEL_DIR}/subsystem_registry.c
           ${KERNEL_DIR}/hashmap.c
           ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
           -o ${BUILD_DIR}/test_wasmos_exec_format
   COMMAND ${BUILD_DIR}/test_wasmos_exec_format
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -1811,22 +1810,18 @@ add_custom_target(run-kernel-unit-tests
   COMMAND ${BUILD_DIR}/test_fs_manager_path
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
-          ${CMAKE_SOURCE_DIR}/tests/unit/test_process_manager_buffer_routing.c
-          ${KERNEL_DIR}/process_manager_buffer_routing.c
-          -o ${BUILD_DIR}/test_process_manager_buffer_routing
-  COMMAND ${BUILD_DIR}/test_process_manager_buffer_routing
-  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
-          -I${KERNEL_DIR}/include
-          ${CMAKE_SOURCE_DIR}/tests/unit/test_process_manager_buffer_policy.c
-          ${KERNEL_DIR}/process_manager_buffer_policy.c
-          -o ${BUILD_DIR}/test_process_manager_buffer_policy
-  COMMAND ${BUILD_DIR}/test_process_manager_buffer_policy
-  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
-          -I${KERNEL_DIR}/include
-          ${CMAKE_SOURCE_DIR}/tests/unit/test_process_manager_buffer_state.c
-          ${KERNEL_DIR}/process_manager_buffer_state.c
-          -o ${BUILD_DIR}/test_process_manager_buffer_state
-  COMMAND ${BUILD_DIR}/test_process_manager_buffer_state
+          -I${DRIVER_WASM_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_xfer_buffer/xfer_buffer.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_xfer_buffer_platform.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
+          ${KERNEL_DIR}/xfer_buffer/xfer_buffer.c
+          ${KERNEL_DIR}/list.c
+          ${KERNEL_DIR}/list_linked.c
+          ${KERNEL_DIR}/list_array_chunk.c
+          ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          -o ${BUILD_DIR}/test_xfer_buffer_object
+  COMMAND ${BUILD_DIR}/test_xfer_buffer_object
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
           -I${KERNEL_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_warp_driver_ring3_call_policy.c

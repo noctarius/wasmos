@@ -1,4 +1,4 @@
-import { std } from "./wasmos";
+import { std, startup } from "./wasmos";
 
 /* TODO(mouse-startup): wire mouse driver into device-manager startup policy
  * once compositor pointer-event routing is implemented end-to-end. */
@@ -260,6 +260,8 @@ function handleAuxByte(byte: i32): void {
 
 export function initialize(proc_endpoint: i32, _arg1: i32,
                             _arg2: i32, _arg3: i32): i32 {
+  // proc.endpoint now comes from the spawn-info contract, not an entry arg.
+  proc_endpoint = startup.procEndpoint();
   g_mouse_ep = ipc_create_endpoint();
   if (g_mouse_ep >= 0) {
     let mouse_name = 0x73756F6D; /* "mous" */

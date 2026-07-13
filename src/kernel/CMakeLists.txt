@@ -22,15 +22,15 @@ set(CFLAGS_WARP_CXX ${CFLAGS_KERNEL}
     -isystem ${_WARP_CLANG_RSRC}/include
     -Wno-macro-redefined -Wno-c++20-extensions -Wno-deprecated-copy
     "-Wno-#pragma-messages")
-if (WASMOS_WARP_RING3)
+if (WASMOS_WASM_RUNTIME_WARP)
   # ENABLE_ADVANCED_APIS=1 exposes getFunctionSignatureByName (needed to
-  # locate JIT wrapper entry for IRET).  WASMOS_WARP_RING3 gates ring-3
+  # locate JIT wrapper entry for IRET).  WASMOS_WASM_RUNTIME_WARP gates ring-3
   # execution code in the kernel wrapper layer.
-  list(APPEND CFLAGS_WARP_CXX -DENABLE_ADVANCED_APIS=1 -DWASMOS_WARP_RING3)
-  list(APPEND CFLAGS_WARP_C   -DWASMOS_WARP_RING3)
+  list(APPEND CFLAGS_WARP_CXX -DENABLE_ADVANCED_APIS=1 -DWASMOS_WASM_RUNTIME_WARP)
+  list(APPEND CFLAGS_WARP_C   -DWASMOS_WASM_RUNTIME_WARP)
   # CFLAGS_KERNEL propagation is deferred to inside if(WASMOS_WASM_RUNTIME_WARP)
   # below so the wasm3-only build (WASMOS_WASM_RUNTIME_WARP=OFF) does not pick
-  # up -DWASMOS_WARP_RING3 and reference WARP ring-3 symbols that are only
+  # up -DWASMOS_WASM_RUNTIME_WARP and reference WARP ring-3 symbols that are only
   # compiled as part of warp_driver.o / warp_link.o.
 endif ()
 
@@ -152,11 +152,8 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/smp.o
   ${BUILD_DIR}/timer.o
   ${BUILD_DIR}/process_manager.o
-  ${BUILD_DIR}/process_manager_buffer_policy.o
-  ${BUILD_DIR}/process_manager_buffer_state.o
-  ${BUILD_DIR}/process_manager_buffer_routing.o
+  ${BUILD_DIR}/xfer_buffer.o
   ${BUILD_DIR}/warp_driver_ring3_call_policy.o
-  ${BUILD_DIR}/process_manager_buffers.o
   ${BUILD_DIR}/process_manager_services.o
   ${BUILD_DIR}/process_manager_spawn.o
   ${BUILD_DIR}/wasmos_app.o
@@ -176,15 +173,13 @@ if (WASMOS_WASM_RUNTIME_WARP)
     ${BUILD_DIR}/warp_mem_utils.o
     ${BUILD_DIR}/warp_os_api_checker.o
     ${BUILD_DIR}/warp_iostream_stubs.o
+    ${BUILD_DIR}/warp_ring3_trampolines.o
   )
-  if (WASMOS_WARP_RING3)
-    list(APPEND KERNEL_OBJS ${BUILD_DIR}/warp_ring3_trampolines.o)
-    # Propagate ring-3 define to kernel C files (syscall.c, smp.h, wasm_driver.h).
-    # Placed here so it only takes effect when WARP is actually the runtime:
-    # the ring-3 dispatch symbols (warp_r3_memory_helper, warp_ring3_dispatch)
-    # live in warp_driver.o and warp_link.o which are only compiled above.
-    set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -DWASMOS_WARP_RING3)
-  endif ()
+  # Propagate the WARP runtime define to kernel C files (syscall.c, smp.h,
+  # wasm_driver.h). The ring-3 dispatch symbols
+  # (warp_r3_memory_helper, warp_ring3_dispatch) live in warp_driver.o and
+  # warp_link.o, which are only compiled in this WARP-runtime block.
+  set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -DWASMOS_WASM_RUNTIME_WARP)
   list(APPEND KERNEL_OBJS
     ${BUILD_DIR}/warp_linker_stubs.o
     ${BUILD_DIR}/warp_sjlj_unwind.o
@@ -290,11 +285,8 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/arch/x86_64/smp.c
   ${KERNEL_DIR}/timer.c
   ${KERNEL_DIR}/process_manager.cpp
-  ${KERNEL_DIR}/process_manager_buffer_policy.c
-  ${KERNEL_DIR}/process_manager_buffer_state.c
-  ${KERNEL_DIR}/process_manager_buffer_routing.c
+  ${KERNEL_DIR}/xfer_buffer/xfer_buffer.c
   ${KERNEL_DIR}/warp_driver_ring3_call_policy.c
-  ${KERNEL_DIR}/process_manager_buffers.c
   ${KERNEL_DIR}/process_manager_services.c
   ${KERNEL_DIR}/process_manager_spawn.c
   ${KERNEL_DIR}/wasmos_app.c
@@ -312,12 +304,8 @@ if (WASMOS_WASM_RUNTIME_WARP)
     ${KERNEL_DIR}/warp/cxx_abi.cpp
     ${KERNEL_DIR}/warp/posix_kernel.c
     ${KERNEL_DIR}/warp/mem_utils_kernel.cpp
+    ${KERNEL_DIR}/warp/ring3_trampolines.c
   )
-  if (WASMOS_WARP_RING3)
-    list(APPEND KERNEL_SOURCES
-      ${KERNEL_DIR}/warp/ring3_trampolines.c
-    )
-  endif ()
   list(APPEND KERNEL_SOURCES
     ${KERNEL_DIR}/warp/os_api_checker_kernel.cpp
     ${KERNEL_DIR}/warp/iostream_stubs.cpp
@@ -496,12 +484,8 @@ if (WASMOS_WASM_RUNTIME_WARP)
     COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/compiler/frontend/BytecodeReader.cpp  -o ${BUILD_DIR}/warp_BytecodeReader.o
     COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/compiler/frontend/Frontend.cpp        -o ${BUILD_DIR}/warp_Frontend.o
     COMMAND ${CMAKE_CXX_COMPILER} ${CFLAGS_WARP_CXX} -c ${WARP_DIR}/src/core/compiler/frontend/ValidationStack.cpp -o ${BUILD_DIR}/warp_ValidationStack.o
+    COMMAND ${CLANG} ${CFLAGS_WARP_C} -c ${KERNEL_DIR}/warp/ring3_trampolines.c -o ${BUILD_DIR}/warp_ring3_trampolines.o
   )
-  if (WASMOS_WARP_RING3)
-    list(APPEND WASM_RUNTIME_COMPILE_CMDS
-      COMMAND ${CLANG} ${CFLAGS_WARP_C} -c ${KERNEL_DIR}/warp/ring3_trampolines.c -o ${BUILD_DIR}/warp_ring3_trampolines.o
-    )
-  endif ()
 else ()
   set(WASM_RUNTIME_COMPILE_CMDS
     COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasm_driver.c    -o ${BUILD_DIR}/wasm_driver.o
@@ -576,11 +560,8 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/smp.c -o ${BUILD_DIR}/smp.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/timer.c -o ${BUILD_DIR}/timer.o
   COMMAND ${CMAKE_CXX_COMPILER} ${CXXFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager.cpp -o ${BUILD_DIR}/process_manager.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_buffer_policy.c -o ${BUILD_DIR}/process_manager_buffer_policy.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_buffer_state.c -o ${BUILD_DIR}/process_manager_buffer_state.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_buffer_routing.c -o ${BUILD_DIR}/process_manager_buffer_routing.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/xfer_buffer/xfer_buffer.c -o ${BUILD_DIR}/xfer_buffer.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/warp_driver_ring3_call_policy.c -o ${BUILD_DIR}/warp_driver_ring3_call_policy.o
-  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_buffers.c -o ${BUILD_DIR}/process_manager_buffers.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_services.c -o ${BUILD_DIR}/process_manager_services.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/process_manager_spawn.c -o ${BUILD_DIR}/process_manager_spawn.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_app.c -o ${BUILD_DIR}/wasmos_app.o

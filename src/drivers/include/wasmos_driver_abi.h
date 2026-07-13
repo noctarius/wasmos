@@ -56,7 +56,7 @@ enum {
      * arg2=payload_size_bytes arg3=reserved(0). */
     PROC_IPC_SPAWN_CAPS_V2 = 0x208,
     /* Spawn from explicit app path:
-     * caller must place path bytes at FS buffer offset 0.
+     * caller must place path bytes at xfer buffer offset 0.
      * optional raw command argument text is placed at offset (path_len + 1).
      * arg0=reserved(0) arg1=path_len arg2=args_len arg3=reserved.
      * On success (app kind): PROC_IPC_RESP, arg0=child_pid, arg1=app_flags.
@@ -64,7 +64,7 @@ enum {
      * calls PROC_IPC_NOTIFY_READY (behaves like SPAWN_PATH_SYNC internally). */
     PROC_IPC_SPAWN_PATH = 0x209,
     /* Spawn from explicit app path with I/O-port + IRQ capabilities:
-     * caller must place path bytes at FS buffer offset 0.
+     * caller must place path bytes at xfer buffer offset 0.
      * arg0=((irq_mask<<16)|(cap_flags&0xFFFF)) arg1=path_len
      * arg2=((io_port_max<<16)|io_port_min)     arg3=reserved. */
     PROC_IPC_SPAWN_PATH_CAPS = 0x20A,
@@ -108,12 +108,12 @@ enum {
 
 enum {
     /* Broker spawn-plan handoff:
-     * PM lends its FS buffer to the broker read-only, writes a
+     * PM lends its xfer buffer to the broker read-only, writes a
      * wasmos_broker_spawn_plan_request_t into that borrowed view, then sends
      * this request with arg0=request_offset and arg1=request_size.
      *
      * The broker replies on msg->source with the same request_id. On success
-     * arg0=plan_offset and arg1=plan_size in the broker's own FS buffer. */
+     * arg0=plan_offset and arg1=plan_size in the broker's own xfer buffer. */
     PROC_BROKER_IPC_SPAWN_PLAN_REQ  = 0x223,
     PROC_BROKER_IPC_SPAWN_PLAN_RESP = 0x2A3,
     PROC_BROKER_IPC_SPAWN_PLAN_ERROR = 0x2E3
@@ -179,7 +179,8 @@ enum {
     PROC_PM_ERR_BAD_HANDLER = -62,     /* exec-handler registration payload was invalid */
     PROC_PM_ERR_SUBSYSTEM_REG = -63,   /* subsystem broker registration failed */
     PROC_PM_ERR_HANDLER_REG = -64,     /* exec-handler registration failed */
-    PROC_PM_ERR_NOT_AUTHORIZED = -65   /* caller lacks the subsystem.register capability */
+    PROC_PM_ERR_NOT_AUTHORIZED = -65,  /* caller lacks the subsystem.register capability */
+    PROC_PM_ERR_NO_PM_FSBUF = -66      /* PM could not acquire its own xfer buffer */
 };
 
 /* Distinct shmem map/map_auto failure reasons, returned (as a negative int) by
@@ -312,7 +313,7 @@ enum {
 #define WASMOS_SVC_REGISTER_DESC_VERSION 1u
 #define WASMOS_SVC_NAME_MAX 36u
 
-/* Register descriptor written to the FS buffer for SVC_IPC_REGISTER_DESC_REQ.
+/* Register descriptor written to the xfer buffer for SVC_IPC_REGISTER_DESC_REQ.
  * Extensible: bump WASMOS_SVC_REGISTER_DESC_VERSION and append fields.  Mirror
  * this layout in any non-C binding that registers services. */
 typedef struct {

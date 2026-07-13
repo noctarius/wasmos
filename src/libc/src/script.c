@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include "wasmos/api.h"
 #include "wasmos/script.h"
 
@@ -498,6 +499,7 @@ script_eval_condition(wasmos_script_state_t *state, const char *cond_str)
 
     if (cond[0] == '-' && cond[1] == 'f' && (cond[2] == ' ' || cond[2] == '\t')) {
         const char *path = &cond[3];
+        struct stat st;
         while (*path == ' ' || *path == '\t') {
             path++;
         }
@@ -505,12 +507,7 @@ script_eval_condition(wasmos_script_state_t *state, const char *cond_str)
         if (script_expand(state, path, expanded, (int)sizeof(expanded)) != 0) {
             return negate ? 1 : 0;
         }
-        FILE *f = fopen(expanded, "r");
-        int result = 0;
-        if (f) {
-            fclose(f);
-            result = 1;
-        }
+        int result = (stat(expanded, &st) == 0) && ((st.st_mode & S_IFDIR) == 0);
         return negate ? !result : result;
     }
 

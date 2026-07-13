@@ -35,35 +35,51 @@ enum {
     WAMOS_SCRIPT_ERR_RUN = -5          /* the script engine reported a run failure */
 };
 
-/* Stage "<path>\0[<args>\0]" into the FS transfer buffer for a path spawn and
- * return the path length (or -1).  args may be NULL. */
+/* Owner-push: acquire an xfer buffer, stage "<path>\0[<args>\0]" into it for a
+ * path spawn (PM reads it via ownership), and return the path length (or -1).
+ * The acquired buffer_id is returned via *out_bid so the caller can pack it into
+ * the spawn arg1 and release it after the reply.  args may be NULL. */
 static int32_t
-wamos_script_write_spawn_buf(const char *path, const char *args, uint32_t *out_args_len)
+wamos_script_write_spawn_buf(const char *path, const char *args,
+                             uint32_t *out_args_len, int32_t *out_bid)
 {
     uint32_t path_len = path ? (uint32_t)strlen(path) : 0u;
     uint32_t args_len = args ? (uint32_t)strlen(args) : 0u;
     int32_t buf_size = wasmos_xfer_buffer_size();
     uint32_t write_off = path_len + 1u;
+    int32_t bid = -1;
 
     if (out_args_len) {
         *out_args_len = 0u;
     }
-    if (path_len == 0u || buf_size <= 0 || path_len >= (uint32_t)buf_size) {
+    if (out_bid) {
+        *out_bid = -1;
+    }
+    if (path_len == 0u || path_len > 0xFFFu || buf_size <= 0 || path_len >= (uint32_t)buf_size) {
         return -1;
     }
     if (args_len > 0u &&
         (write_off >= (uint32_t)buf_size || args_len > ((uint32_t)buf_size - write_off))) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    bid = wasmos_xfer_buffer_acquire((int32_t)(write_off + args_len + 1u));
+    if (bid < 0) {
+        return -1;
+    }
+    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
     if (args_len > 0u &&
-        wasmos_xfer_buffer_write((int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
+        wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)args, (int32_t)args_len, (int32_t)write_off) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
     if (out_args_len) {
         *out_args_len = args_len;
+    }
+    if (out_bid) {
+        *out_bid = bid;
     }
     return (int32_t)path_len;
 }
@@ -72,7 +88,8 @@ static int32_t
 wamos_script_spawn(wamos_script_ctx_t *ctx, const char *path, const char *args, int32_t *out_pid)
 {
     uint32_t args_len = 0u;
-    int32_t path_len = wamos_script_write_spawn_buf(path, args, &args_len);
+    int32_t bid = -1;
+    int32_t path_len = wamos_script_write_spawn_buf(path, args, &args_len, &bid);
     wasmos_ipc_message_t reply;
 
     if (out_pid) {
@@ -86,12 +103,14 @@ wamos_script_spawn(wamos_script_ctx_t *ctx, const char *path, const char *args, 
                         PROC_IPC_SPAWN_PATH,
                         (int32_t)ctx->request_id++,
                         0,
-                        path_len,
+                        (int32_t)(((uint32_t)bid << 12) | ((uint32_t)path_len & 0xFFFu)),
                         (int32_t)args_len,
                         0,
                         &reply) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
+    (void)wasmos_xfer_buffer_release(bid);
     if (reply.type != PROC_IPC_RESP || (int32_t)reply.arg0 <= 0) {
         return -1;
     }
@@ -217,20 +236,15 @@ main(int argc, char **argv)
     static char script_path[128];
     wamos_script_ctx_t ctx;
     wasmos_script_state_t state;
-    wasmos_script_ops_t ops;
+    wasmos_script_ops_t ops = { 0 };
 
     (void)argc;
     (void)argv;
 
-    /* PM placed the broker-supplied argv (the guest script path) at FS-buffer
-     * offset 0, NUL-terminated.  Read it out before the script engine's fopen
-     * reuses the FS transfer buffer.  xfer_buffer_read returns 0 on success. */
-    if (wasmos_xfer_buffer_read((int32_t)(uintptr_t)script_path,
-                                (int32_t)sizeof(script_path) - 1, 0) != 0) {
-        puts("[wamos-script] script path read failed");
-        return WAMOS_SCRIPT_ERR_PATH_READ;
-    }
-    script_path[sizeof(script_path) - 1] = '\0';
+    /* The guest script path is this process's argv, delivered in the spawn-info
+     * buffer. wasmos_startup_args copies it out of libc's cached copy, so it is
+     * safe against the FS transfer buffer being reused later by fopen. */
+    (void)wasmos_startup_args(script_path, (uint32_t)sizeof(script_path));
     if (script_path[0] == '\0') {
         puts("[wamos-script] no script path");
         return WAMOS_SCRIPT_ERR_NO_PATH;

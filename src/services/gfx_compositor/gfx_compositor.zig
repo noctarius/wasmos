@@ -131,8 +131,9 @@ var g_fb_info: c.nd_framebuffer_info_t = .{
 };
 var g_fb_info_valid: bool = false;
 var g_fb_pixels: ?[*]volatile u32 = null;
+var g_fb_buffer_id: u32 = 0;
 var g_backbuffer_pixels: ?[*]u32 = null;
-var g_backbuffer_shmem_id: u32 = 0;
+var g_backbuffer_buffer_id: u32 = 0;
 var g_backbuffer_capacity_bytes: u32 = 0;
 
 const GFX_WINDOW_TITLE_MAX: usize = 47;
@@ -701,10 +702,14 @@ fn refresh_framebuffer_mapping() i32 {
         return c.GFX_STATUS_IO;
     }
     if (g_fb_pixels != null) {
-        _ = api().buffer_release.?(c.ND_BUFFER_KIND_FRAMEBUFFER);
+        _ = api().xfer_buffer_release.?(g_fb_buffer_id);
         g_fb_pixels = null;
+        g_fb_buffer_id = 0;
     }
-    const fb_ptr = api().buffer_borrow.?(c.ND_BUFFER_KIND_FRAMEBUFFER, 0, c.ND_BUFFER_BORROW_READ | c.ND_BUFFER_BORROW_WRITE, @intCast(fb_size_u64));
+    // The framebuffer is an owned xfer_buffer of kind=framebuffer (backed by the
+    // hardware framebuffer); acquire + map it, never borrowed. The buffer_id is
+    // retained so a later mode change can release + re-acquire.
+    const fb_ptr = api().xfer_buffer_acquire.?(c.ND_BUFFER_KIND_FRAMEBUFFER, @intCast(fb_size_u64), &g_fb_buffer_id);
     if (fb_ptr == null) {
         return c.GFX_STATUS_IO;
     }
@@ -719,20 +724,27 @@ fn ensure_backbuffer_capacity(required_bytes: u32) i32 {
     if (required_bytes == 0) return c.GFX_STATUS_IO;
     if (g_backbuffer_pixels != null and g_backbuffer_capacity_bytes >= required_bytes) return c.GFX_STATUS_OK;
 
-    const required_pages: u64 = (@as(u64, required_bytes) + (PAGE_SIZE - 1)) / PAGE_SIZE;
-    if (required_pages == 0) return c.GFX_STATUS_IO;
-
-    var shmem_id: u32 = 0;
-    var mapped_ptr: ?*anyopaque = null;
-    if (api().shmem_create.?(required_pages, 0, &shmem_id, @ptrCast(&mapped_ptr)) != 0 or shmem_id == 0 or mapped_ptr == null) {
-        logMsg("[gfx] backbuffer shmem_create failed\n");
-        return c.GFX_STATUS_IO;
+    // Release any previous backbuffer first (xfer_buffer_release destroys +
+    // unmaps), so a resize reclaims the old one instead of leaking it.
+    if (g_backbuffer_buffer_id != 0) {
+        _ = api().xfer_buffer_release.?(g_backbuffer_buffer_id);
+        g_backbuffer_buffer_id = 0;
+        g_backbuffer_pixels = null;
+        g_backbuffer_capacity_bytes = 0;
     }
 
-    // TODO(gfx-backbuffer-lifetime): native driver ABI does not expose
-    // shmem-destroy yet, so replaced backbuffers cannot be reclaimed.
-    g_backbuffer_shmem_id = shmem_id;
-    g_backbuffer_pixels = @ptrCast(@alignCast(mapped_ptr.?));
+    // The backbuffer is a private owned xfer buffer (kind=transfer): composited
+    // into, then blitted to the framebuffer, never shared. Unlike shmem it draws
+    // from the general physical pool rather than the constrained sub-64 MiB WARP
+    // shmem zone.
+    var buffer_id: u32 = 0;
+    const raw = api().xfer_buffer_acquire.?(c.ND_BUFFER_KIND_XFER, required_bytes, &buffer_id);
+    if (raw == null or buffer_id == 0) {
+        logMsg("[gfx] backbuffer acquire failed\n");
+        return c.GFX_STATUS_IO;
+    }
+    g_backbuffer_buffer_id = buffer_id;
+    g_backbuffer_pixels = @ptrCast(@alignCast(raw.?));
     g_backbuffer_capacity_bytes = required_bytes;
     return c.GFX_STATUS_OK;
 }
@@ -2970,6 +2982,7 @@ fn register_ipc_handlers() i32 {
 }
 
 pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int, arg2: c_int, arg3: c_int) c_int {
+    _ = module_count; // entry-arg convention retired; use the spawn-info contract
     _ = arg2;
     _ = arg3;
 
@@ -2980,7 +2993,9 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
         return -2;
     }
 
-    g_proc_endpoint = @bitCast(module_count);
+    var si: c.wasmos_spawn_info_t = undefined;
+    if (driver_api.spawn_info.?(&si, null, 0) != 0) return -1;
+    g_proc_endpoint = si.proc_endpoint;
     if (g_proc_endpoint == IPC_ENDPOINT_NONE) return -1;
 
     g_rng_state ^= g_proc_endpoint ^ @as(u32, @intCast(@intFromPtr(driver_api)));

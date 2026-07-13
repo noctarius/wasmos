@@ -110,7 +110,9 @@
       "Bash(cp src/kernel/warp/ring3_trampolines.c /tmp/save_ring3_trampolines.c)",
       "Bash(cp src/kernel/warp_driver.cpp /tmp/save_warp_driver.cpp)",
       "Bash(grep -aE \"BUILD|BOOT|counts|OK$|SILENT|FAULT|start-failed|RESULT|[0-9]+ \\(OK|SILENT|FAULT\\)\")",
-      "Bash(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new root@10.96.1.78 'echo CONNECTED; uname -a; nproc; echo \"--- existing tools ---\"; for t in clang clang-20 zig rustc tinygo qemu-system-x86_64 gdb make cmake node npm rsync git; do printf \"%s: \" \"$t\"; \\(command -v \"$t\" || echo MISSING\\); done; echo \"--- ovmf ---\"; ls /usr/share/OVMF/ 2>/dev/null | head; echo \"--- repo? ---\"; ls -d /root/wasmos 2>/dev/null || echo \"no repo yet\"')"
+      "Bash(ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new root@10.96.1.78 'echo CONNECTED; uname -a; nproc; echo \"--- existing tools ---\"; for t in clang clang-20 zig rustc tinygo qemu-system-x86_64 gdb make cmake node npm rsync git; do printf \"%s: \" \"$t\"; \\(command -v \"$t\" || echo MISSING\\); done; echo \"--- ovmf ---\"; ls /usr/share/OVMF/ 2>/dev/null | head; echo \"--- repo? ---\"; ls -d /root/wasmos 2>/dev/null || echo \"no repo yet\"')",
+      "Bash(awk '{print $6,$7}')",
+      "Bash(awk '{print $5, $9}')"
     ]
   }
 }

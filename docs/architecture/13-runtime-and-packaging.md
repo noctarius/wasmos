@@ -226,14 +226,36 @@ typedef struct __attribute__((packed)) {
 The kernel converts page counts to byte sizes: `pages * 4096`. A zero
 `min_pages` for stack or heap causes the runtime to fall back to 64 KB.
 
-#### Entry Arg Bindings
+#### Startup Contract (spawn-info)
 
-Up to 4 string names that map to runtime-supplied values at spawn time. The
-process manager resolves each binding name to a `uint32_t` and passes the
-resolved values as the four `wasmos_main` arguments. Common binding names:
+Startup values are **no longer** passed through entry-arg registers. At spawn
+time the process manager builds one `wasmos_spawn_info_t`
+(`src/drivers/include/wasmos_spawn_info.h`) — a versioned header followed by the
+argv blob — into a child-owned transfer buffer and records its `buffer_id` on
+the process. The child retrieves it by execution model:
 
-- `proc.endpoint` — the process-manager's IPC endpoint ID
-- `module.count` — number of WASMOS-APP modules loaded by the bootloader
+- **WASM** processes call the `wasmos_spawn_info_buffer()` hostcall to get the
+  `buffer_id` (0 if none), then read the header + args with `xfer_buffer_read`.
+- **Native** drivers/services call `api->spawn_info(&hdr, args_buf, args_cap)`
+  (native ABI v8), which fills the header and copies the args directly.
+
+The header carries `proc_endpoint`, `tty`, `module_count`, `module_index`, and
+the argv offset/length; it is versioned (`magic`/`version`/`header_size`) so new
+fields append without breaking older binaries. Service endpoints are **not**
+carried here — a child resolves them with `svc_lookup` (e.g. `fs-fat` looks up
+`"block"`). TTY allocation is requested with the `wants_tty` manifest key
+(`WASMOS_APP_FLAG_WANTS_TTY`), which makes PM allocate a TTY and fill
+`spawn_info.tty`.
+
+The libc shims expose the header through `wasmos_startup_proc_endpoint()`,
+`wasmos_startup_tty()`, `wasmos_startup_module_count()`,
+`wasmos_startup_module_index()`, and `wasmos_startup_args()` (C; equivalent
+`startup.*` accessors in Zig/AssemblyScript). `wasmos_startup_arg(0)` remains as
+a compatibility alias for `proc.endpoint`.
+
+> The legacy `entry_arg_bindings` manifest key is deprecated and ignored by the
+> kernel; it is retained in the `.wap` format only for backward compatibility
+> and will be removed.
 
 #### Capability Names (fail-closed at pack time)
 
@@ -323,11 +345,11 @@ The kernel's entry convention for WASM processes is a single export:
 wasmos_main(arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> i32
 ```
 
-Each language shim exports `wasmos_main` and translates the four raw
-`int32_t` arguments into the language's native call convention. The four
-arguments are the resolved entry-arg binding values (endpoint IDs, module
-counts, etc.); their meaning depends on the binding names declared in the
-manifest.
+Each language shim exports `wasmos_main` and translates it into the language's
+native call convention. The four `int32_t` arguments are **unused (always
+zero)** — startup values are no longer passed through entry-arg registers.
+Applications read them from the spawn-info buffer via the `wasmos_startup_*()`
+accessors instead (see *Startup Contract (spawn-info)* above).
 
 | Language                                          | Export mechanism                                 | Native entry called  |
 |---------------------------------------------------|--------------------------------------------------|----------------------|
@@ -337,10 +359,10 @@ manifest.
 | Zig (`libc/zig/wasmos.zig`)                       | `pub export fn wasmos_main(...) callconv(.c)`    | `root.main()`        |
 | AssemblyScript (`libc/assemblyscript/runtime.ts`) | `export function wasmos_main(...)`               | `runMain(main, ...)` |
 
-All shims store the four arguments in a process-local array accessible through
-`wasmos_startup_arg(index)` so the application can retrieve them after `main`
-starts. The kernel ABI is stable; the language surface is what the developer
-sees.
+The `wasmos_startup_*()` accessors read from the process's spawn-info buffer
+(lazily loaded on first use), so the application can retrieve its startup values
+after `main` starts. The kernel ABI is stable; the language surface is what the
+developer sees.
 
 #### Driver and Service Entries
 
@@ -353,11 +375,13 @@ initialize(arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> i32
 Native ELF drivers use the ELF `e_entry` address pointing at:
 
 ```c
-int initialize(wasmos_driver_api_t *api, int arg1, int arg2, int arg3);
+int initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3);
 ```
 
 The `wasmos_driver_api_t` pointer is set to the kernel's native driver
-function table; it is the only way native code reaches kernel internals.
+function table; it is the only way native code reaches kernel internals. The
+trailing int arguments are always passed as zero (the entry-arg convention is
+retired) — native drivers read their startup values via `api->spawn_info()`.
 
 ---
 
@@ -465,18 +489,33 @@ PM-facing classification now exists as a separate helper:
 PM now has the first broker handoff contract as well:
 
 - PM writes a `wasmos_broker_spawn_plan_request_t` into the tail of its loaded
-  FS buffer view
-- the guest blob stays at offset 0 in that same borrowed view
-- PM lends that buffer to the broker read-only and sends
+  xfer buffer
+- the guest blob stays at offset 0 in that same caller-owned xfer buffer
+- PM currently lends that buffer to the broker read-only and sends
   `PROC_BROKER_IPC_SPAWN_PLAN_REQ`
-- the broker replies with `PROC_BROKER_IPC_SPAWN_PLAN_RESP` pointing at a
-  `wasmos_broker_spawn_plan_response_t` inside the broker's own FS buffer
+- the broker currently replies with `PROC_BROKER_IPC_SPAWN_PLAN_RESP` pointing
+  at a `wasmos_broker_spawn_plan_response_t` inside the broker's own xfer
+  buffer
 - PM borrows the broker buffer read-only, validates the returned plan against
   the matched handler identity, and only accepts a built-in `.wap` host-path
   plan kind for the current contract shape
 - for that accepted plan kind, PM then reloads the returned host path through
   the ordinary path-spawn `.wap` flow and uses the broker-supplied host arg
   string as the final argv payload for the host workload
+
+Architecturally, broker delegation should be understood in generic transfer-
+buffer terms:
+
+- request payloads are caller-owned transfer buffers lent to the broker with
+  the required read access
+- reply plans are transfer buffers lent to the broker with the required write
+  access
+- these are logically distinct borrows, even if an implementation chooses to
+  optimize or stage them differently
+
+The current PM/broker implementation still carries a narrower single-active-
+borrow assumption in parts of the kernel path. That is an implementation
+constraint under active correction, not the intended broker contract.
 
 This is still a bounded delegation step. PM now classifies executable inputs,
 validates a broker-owned spawn plan, and can execute the returned `.wap`
@@ -504,7 +543,7 @@ Broker/handler registration is now capability-gated and owner-scoped:
   that exits leaves no stale endpoint or matcher behind.
 
 Runtime status: on wasm3 the delegated script runs end to end; on WARP ring-3 the
-executor's first FS-buffer read of the delegated argv is not yet coherent with
+executor's first xfer-buffer read of the delegated argv is not yet coherent with
 the module's user-VA view (see `docs/STATUS.md`).
 
 #### Target Subsystem Delegation Model
@@ -609,7 +648,7 @@ layer in `src/kernel/warp/`:
 |------------------------|------------------------------------------------------------------------------------------------------------------|
 | `compat/`              | 30+ freestanding C++14 standard-library headers (type_traits, tuple, array, mutex, atomic, exception, …)         |
 | `cxx_abi.cpp`          | Exception ABI: `__cxa_throw` longjmps to a per-CPU `__builtin_setjmp` checkpoint — no Dwarf/SJLJ unwinder needed |
-| `link.cpp`             | ~50 `wasmos.*` V1 host-call wrappers (IPC, FS buffers, block DMA, initfs, I/O ports, ACPI, scheduler, …)         |
+| `link.cpp`             | ~50 `wasmos.*` V1 host-call wrappers (IPC, xfer buffers, block DMA, initfs, I/O ports, ACPI, scheduler, …)       |
 | `shim.cpp`             | Two-tier kernel allocator (slab ≤ 112 bytes, page allocator for larger blocks), `operator new/delete`            |
 | `mem_utils_kernel.cpp` | `vb::MemUtils` + `ExecutableMemory` backed by `pfa_alloc_pages` — no `<iostream>` or pthreads                    |
 | `posix_kernel.c`       | `mmap`/`mprotect`/`munmap` → `pfa_alloc_pages` + higher-half mapping                                             |

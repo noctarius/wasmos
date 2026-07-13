@@ -58,10 +58,23 @@ declare function ipc_last_field(field: i32): i32;
 declare function fs_endpoint(): i32;
 @external("wasmos", "xfer_buffer_size")
 declare function xfer_buffer_size(): i32;
+// Object/owner/borrow xfer ABI (owner-push): read/write name the object by
+// buffer_id (arg 1). acquire creates an owned buffer; borrow grants a named
+// endpoint's context rights over it; release destroys it. See src/libc/src/unistd.c.
 @external("wasmos", "xfer_buffer_write")
-declare function xfer_buffer_write(ptr: i32, len: i32, offset: i32): i32;
+declare function xfer_buffer_write(bufferId: i32, ptr: i32, len: i32, offset: i32): i32;
 @external("wasmos", "xfer_buffer_read")
-declare function xfer_buffer_read(ptr: i32, len: i32, offset: i32): i32;
+declare function xfer_buffer_read(bufferId: i32, ptr: i32, len: i32, offset: i32): i32;
+@external("wasmos", "xfer_buffer_acquire")
+declare function xfer_buffer_acquire(minimumSize: i32): i32;
+@external("wasmos", "xfer_buffer_borrow")
+declare function xfer_buffer_borrow(granteeEndpoint: i32, bufferId: i32, flags: i32): i32;
+@external("wasmos", "xfer_buffer_release")
+declare function xfer_buffer_release(bufferId: i32): i32;
+// GRANT flags mirror WASMOS_BUFFER_GRANT_READ|WRITE.
+const XFER_GRANT_RW: i32 = 0x3;
+@external("wasmos", "spawn_info_buffer")
+declare function spawn_info_buffer(): i32;
 @external("wasmos", "thread_gettid")
 declare function thread_gettid(): i32;
 @external("wasmos", "thread_yield")
@@ -77,13 +90,49 @@ let g_ipcReplyEndpoint: i32 = -1;
 let g_ipcRequestId: i32 = 1;
 let g_startupArgs = new StaticArray<i32>(4);
 
+// Startup contract (mirrors wasmos_spawn_info_t in wasmos_spawn_info.h).
+const SPAWN_INFO_MAGIC: u32 = 0x57535049; // 'WSPI'
+let g_spawnValid: bool = false;
+let g_spawnLoaded: bool = false;
+let g_spawnProcEndpoint: i32 = 0;
+let g_spawnTty: i32 = 0;
+let g_spawnModuleCount: u32 = 0;
+let g_spawnModuleIndex: u32 = 0;
+let g_spawnArgsOff: u32 = 0;
+let g_spawnArgsLen: u32 = 0;
+
+// Lazy + idempotent: works for both wasmos_main apps and initialize-entry
+// services/drivers (which never call runMain).
+function loadSpawnInfo(): void {
+  if (g_spawnLoaded) return;
+  g_spawnLoaded = true;
+  g_spawnValid = false;
+  const bid = spawn_info_buffer();
+  if (bid <= 0) return;
+  const hdr = new Uint8Array(36);
+  if (xfer_buffer_read(bid, hdr.dataStart as i32, 36, 0) != 0) return;
+  if (load<u32>(hdr.dataStart) != SPAWN_INFO_MAGIC) return;
+  g_spawnProcEndpoint = load<i32>(hdr.dataStart, 12);
+  g_spawnTty = load<i32>(hdr.dataStart, 16);
+  g_spawnModuleCount = load<u32>(hdr.dataStart, 20);
+  g_spawnModuleIndex = load<u32>(hdr.dataStart, 24);
+  g_spawnArgsOff = load<u32>(hdr.dataStart, 28);
+  g_spawnArgsLen = load<u32>(hdr.dataStart, 32);
+  g_spawnValid = true;
+}
+
 export namespace startup {
+  // Legacy accessor: index 0 == proc.endpoint (from spawn-info); 1..3 == 0.
   export function arg(index: i32): i32 {
     if (index < 0 || index >= 4) {
       return 0;
     }
     return unchecked(g_startupArgs[index]);
   }
+  export function procEndpoint(): i32 { loadSpawnInfo(); return g_spawnProcEndpoint; }
+  export function tty(): i32 { loadSpawnInfo(); return g_spawnTty; }
+  export function moduleCount(): u32 { loadSpawnInfo(); return g_spawnModuleCount; }
+  export function moduleIndex(): u32 { loadSpawnInfo(); return g_spawnModuleIndex; }
 }
 
 @unmanaged
@@ -121,13 +170,19 @@ export class Mutex {
 }
 
 function readSpawnArgs(): Array<string> {
-  const buf = new Uint8Array(128);
-  if (xfer_buffer_read(buf.dataStart as i32, buf.length - 1, 0) != 0) {
+  // Argv is the args blob in the spawn-info buffer (loaded by loadSpawnInfo).
+  if (!g_spawnValid || g_spawnArgsLen == 0) {
     return new Array<string>();
   }
-  let n: i32 = 0;
-  while (n < buf.length && buf[n] != 0) {
-    n++;
+  const bid = spawn_info_buffer();
+  if (bid <= 0) {
+    return new Array<string>();
+  }
+  let n: i32 = <i32>g_spawnArgsLen;
+  if (n > 127) n = 127;
+  const buf = new Uint8Array(n + 1);
+  if (xfer_buffer_read(bid, buf.dataStart as i32, n, <i32>g_spawnArgsOff) != 0) {
+    return new Array<string>();
   }
   if (n == 0) {
     return new Array<string>();
@@ -151,10 +206,13 @@ export function runMain(
   arg2: i32,
   arg3: i32
 ): i32 {
-  unchecked(g_startupArgs[0] = arg0);
-  unchecked(g_startupArgs[1] = arg1);
-  unchecked(g_startupArgs[2] = arg2);
-  unchecked(g_startupArgs[3] = arg3);
+  // The entry-arg registers (arg0..arg3) are retired; startup values now come
+  // from the spawn-info buffer.
+  loadSpawnInfo();
+  unchecked(g_startupArgs[0] = g_spawnProcEndpoint);
+  unchecked(g_startupArgs[1] = 0);
+  unchecked(g_startupArgs[2] = 0);
+  unchecked(g_startupArgs[3] = 0);
   const rc = entry(readSpawnArgs());
   proc_exit(rc);
   return rc;
@@ -349,20 +407,35 @@ export class File {
       requested = bufferLimit;
     }
 
-    const response = fsRequest(FS_IPC_READ_REQ, this.fd, requested, 0, 0);
+    // Own a buffer and grant the FS manager WRITE so the backend can fill it.
+    const bid = xfer_buffer_acquire(requested);
+    if (bid < 0) {
+      return null;
+    }
+    const b1 = xfer_buffer_borrow(fs_endpoint(), bid, XFER_GRANT_RW);
+    if (b1 < 0) {
+      xfer_buffer_release(bid);
+      return null;
+    }
+    const response = fsRequest(FS_IPC_READ_REQ, this.fd, requested, bid, b1);
     if (response == null) {
+      xfer_buffer_release(bid);
       return null;
     }
     const readLen = response.arg0;
     if (readLen < 0 || readLen > requested) {
+      xfer_buffer_release(bid);
       return null;
     }
     if (readLen == 0) {
+      xfer_buffer_release(bid);
       return new Uint8Array(0);
     }
 
     const buffer = new Uint8Array(readLen);
-    if (xfer_buffer_read(buffer.dataStart as i32, readLen, 0) != 0) {
+    const rc = xfer_buffer_read(bid, buffer.dataStart as i32, readLen, 0);
+    xfer_buffer_release(bid);
+    if (rc != 0) {
       return null;
     }
     return buffer;
@@ -379,23 +452,42 @@ export class File {
       return -1;
     }
 
+    // Own one buffer and grant the FS manager once; reuse both across the whole
+    // chunk loop (a per-chunk re-grant would fail ALREADY_BORROWED). release()
+    // cascade-revokes the grant.
+    const bid = xfer_buffer_acquire(bufferLimit);
+    if (bid < 0) {
+      return -1;
+    }
+    const b1 = xfer_buffer_borrow(fs_endpoint(), bid, XFER_GRANT_RW);
+    if (b1 < 0) {
+      xfer_buffer_release(bid);
+      return -1;
+    }
     let done = 0;
+    let failed = false;
     while (done < buffer.length) {
       let chunkLen = buffer.length - done;
       if (chunkLen > bufferLimit) {
         chunkLen = bufferLimit;
       }
-      if (xfer_buffer_write(buffer.dataStart as i32 + done, chunkLen, 0) != 0) {
-        return -1;
+      if (xfer_buffer_write(bid, buffer.dataStart as i32 + done, chunkLen, 0) != 0) {
+        failed = true;
+        break;
       }
-      const response = fsRequest(FS_IPC_WRITE_REQ, this.fd, chunkLen, 0, 0);
+      const response = fsRequest(FS_IPC_WRITE_REQ, this.fd, chunkLen, bid, b1);
       if (response == null || response.arg0 < 0 || response.arg0 > chunkLen) {
-        return -1;
+        failed = true;
+        break;
       }
       done += response.arg0;
       if (response.arg0 == 0 || response.arg0 != chunkLen) {
         break;
       }
+    }
+    xfer_buffer_release(bid);
+    if (failed && done == 0) {
+      return -1;
     }
     return done;
   }
@@ -498,25 +590,43 @@ export namespace ipc {
 }
 
 export namespace fs {
-  function stagePath(path: string): Uint8Array | null {
+  // Owner-push staging: own a buffer holding the NUL-terminated path, grant the
+  // FS manager R|W over it, and return the handles + path length (excluding NUL).
+  // The caller passes pathLen (arg0), bid (arg2) and b1 (arg3) to fsRequest, and
+  // releases bid afterward; fs-manager unborrows b1 before replying.
+  class StagedPath {
+    constructor(public bid: i32, public b1: i32, public pathLen: i32) {}
+  }
+
+  function stagePath(path: string): StagedPath | null {
     const pathBytes = Uint8Array.wrap(String.UTF8.encode(path, true));
     const bufferLimit = xfer_buffer_size();
     if (bufferLimit <= 0 || pathBytes.length > bufferLimit) {
       return null;
     }
-    if (xfer_buffer_write(pathBytes.dataStart as i32, pathBytes.length, 0) != 0) {
+    const bid = xfer_buffer_acquire(pathBytes.length);
+    if (bid < 0) {
       return null;
     }
-    return pathBytes;
+    if (xfer_buffer_write(bid, pathBytes.dataStart as i32, pathBytes.length, 0) != 0) {
+      xfer_buffer_release(bid);
+      return null;
+    }
+    const b1 = xfer_buffer_borrow(fs_endpoint(), bid, XFER_GRANT_RW);
+    if (b1 < 0) {
+      xfer_buffer_release(bid);
+      return null;
+    }
+    return new StagedPath(bid, b1, pathBytes.length - 1);
   }
 
   function openWithFlags(path: string, flags: i32): File | null {
-    const pathBytes = stagePath(path);
-    if (pathBytes == null) {
+    const s = stagePath(path);
+    if (s == null) {
       return null;
     }
-
-    const response = fsRequest(FS_IPC_OPEN_REQ, pathBytes.length - 1, flags, 0, 0);
+    const response = fsRequest(FS_IPC_OPEN_REQ, s.pathLen, flags, s.bid, s.b1);
+    xfer_buffer_release(s.bid);
     if (response == null || response.arg0 < 0) {
       return null;
     }
@@ -540,12 +650,12 @@ export namespace fs {
   }
 
   export function stat(path: string): FileStat | null {
-    const pathBytes = stagePath(path);
-    if (pathBytes == null) {
+    const s = stagePath(path);
+    if (s == null) {
       return null;
     }
-
-    const response = fsRequest(FS_IPC_STAT_REQ, pathBytes.length - 1, 0, 0, 0);
+    const response = fsRequest(FS_IPC_STAT_REQ, s.pathLen, 0, s.bid, s.b1);
+    xfer_buffer_release(s.bid);
     if (response == null || response.arg0 < 0) {
       return null;
     }
@@ -553,32 +663,32 @@ export namespace fs {
   }
 
   export function unlink(path: string): bool {
-    const pathBytes = stagePath(path);
-    if (pathBytes == null) {
+    const s = stagePath(path);
+    if (s == null) {
       return false;
     }
-
-    const response = fsRequest(FS_IPC_UNLINK_REQ, pathBytes.length - 1, 0, 0, 0);
+    const response = fsRequest(FS_IPC_UNLINK_REQ, s.pathLen, 0, s.bid, s.b1);
+    xfer_buffer_release(s.bid);
     return response != null && response.arg0 == 0;
   }
 
   export function mkdir(path: string): bool {
-    const pathBytes = stagePath(path);
-    if (pathBytes == null) {
+    const s = stagePath(path);
+    if (s == null) {
       return false;
     }
-
-    const response = fsRequest(FS_IPC_MKDIR_REQ, pathBytes.length - 1, 0, 0, 0);
+    const response = fsRequest(FS_IPC_MKDIR_REQ, s.pathLen, 0, s.bid, s.b1);
+    xfer_buffer_release(s.bid);
     return response != null && response.arg0 == 0;
   }
 
   export function rmdir(path: string): bool {
-    const pathBytes = stagePath(path);
-    if (pathBytes == null) {
+    const s = stagePath(path);
+    if (s == null) {
       return false;
     }
-
-    const response = fsRequest(FS_IPC_RMDIR_REQ, pathBytes.length - 1, 0, 0, 0);
+    const response = fsRequest(FS_IPC_RMDIR_REQ, s.pathLen, 0, s.bid, s.b1);
+    xfer_buffer_release(s.bid);
     return response != null && response.arg0 == 0;
   }
 

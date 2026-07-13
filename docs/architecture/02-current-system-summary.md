@@ -67,8 +67,9 @@ showing exception registers, process identity, and crash metadata.
 Fixed-layout 8-field messages (`type`, `source`, `destination`, `request_id`,
 `arg0`–`arg3`). Bounded queues protected by spinlocks; endpoint lifecycle is
 tied to process reaping. Small control traffic stays in-message; bulk payloads
-use buffer-borrow shared handles (`WASMOS_BUFFER_KIND_FS`, etc.) with explicit
-grant/release semantics and DMA-mapping extensions.
+use borrowed transfer buffers (`WASMOS_BUFFER_KIND_XFEr`, etc.; historical
+kernel names retained in code) with explicit grant/release semantics and
+DMA-mapping extensions.
 
 **Scheduler**
 Cooperative with preemption via IRQ0 (PIT or LAPIC timer). Single-core. A ring3-safe timer
@@ -135,7 +136,7 @@ single-endpoint event loop without response-stealing or duplicated receive
 patterns.
 
 Processes run in states `READY`, `RUNNING`, `BLOCKED`, `ZOMBIE`. Per-context
-buffer borrow/release provides bulk data transfer across processes.
+transfer-buffer borrow/release provides bulk data transfer across processes.
 
 ---
 

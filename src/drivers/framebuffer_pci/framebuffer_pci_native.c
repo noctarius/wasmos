@@ -274,7 +274,7 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
         api->abi_magic != WASMOS_NATIVE_ABI_MAGIC ||
         api->abi_version != WASMOS_NATIVE_ABI_VERSION ||
         !api->console_write ||
-        !api->buffer_borrow) {
+        !api->xfer_buffer_acquire) {
         return -2;
     }
 
@@ -310,9 +310,10 @@ initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3)
     size = (size + 0xFFFu) & ~0xFFFu;
 
     write_str(api, "[framebuffer] mapping\n");
-    void *fb = api->buffer_borrow(ND_BUFFER_KIND_FRAMEBUFFER, 0,
-                                  ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE,
-                                  size);
+    /* Owned xfer_buffer of kind=framebuffer (hardware fb backing); acquire+map,
+     * held for the driver's lifetime. */
+    uint32_t fb_buffer_id = 0;
+    void *fb = api->xfer_buffer_acquire(ND_BUFFER_KIND_FRAMEBUFFER, size, &fb_buffer_id);
     if (!fb) {
         write_str(api, "[framebuffer] map failed\n");
         return -1;

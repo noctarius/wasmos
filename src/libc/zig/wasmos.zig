@@ -52,8 +52,44 @@ extern "wasmos" fn ipc_select_one(endpoint: i32) callconv(.c) i32;
 extern "wasmos" fn ipc_last_field(field: i32) callconv(.c) i32;
 extern "wasmos" fn fs_endpoint() callconv(.c) i32;
 extern "wasmos" fn xfer_buffer_size() callconv(.c) i32;
-extern "wasmos" fn xfer_buffer_write(ptr: i32, len: i32, offset: i32) callconv(.c) i32;
-extern "wasmos" fn xfer_buffer_read(ptr: i32, len: i32, offset: i32) callconv(.c) i32;
+// Object/owner/borrow xfer ABI (owner-push): read/write name the object by
+// buffer_id; acquire owns; borrow grants a named endpoint's context rights.
+extern "wasmos" fn xfer_buffer_write(buffer_id: i32, ptr: i32, len: i32, offset: i32) callconv(.c) i32;
+extern "wasmos" fn xfer_buffer_read(buffer_id: i32, ptr: i32, len: i32, offset: i32) callconv(.c) i32;
+extern "wasmos" fn xfer_buffer_acquire(minimum_size: i32) callconv(.c) i32;
+extern "wasmos" fn xfer_buffer_borrow(grantee_endpoint: i32, buffer_id: i32, flags: i32) callconv(.c) i32;
+extern "wasmos" fn xfer_buffer_release(buffer_id: i32) callconv(.c) i32;
+extern "wasmos" fn spawn_info_buffer() callconv(.c) i32;
+const XFER_GRANT_RW: i32 = 0x3;
+
+// Startup contract (mirrors wasmos_spawn_info_t in wasmos_spawn_info.h).
+const SPAWN_INFO_MAGIC: u32 = 0x57535049; // 'WSPI'
+const SpawnInfo = extern struct {
+    magic: u32 = 0,
+    version: u32 = 0,
+    header_size: u32 = 0,
+    proc_endpoint: u32 = 0,
+    tty: u32 = 0,
+    module_count: u32 = 0,
+    module_index: u32 = 0,
+    args_off: u32 = 0,
+    args_len: u32 = 0,
+};
+var g_spawn_info: SpawnInfo = .{};
+
+fn loadSpawnInfo() void {
+    g_spawn_info = .{};
+    const bid = spawn_info_buffer();
+    if (bid <= 0) return;
+    if (xfer_buffer_read(
+        bid,
+        @intCast(@intFromPtr(&g_spawn_info)),
+        @intCast(@sizeOf(SpawnInfo)),
+        0,
+    ) != 0 or g_spawn_info.magic != SPAWN_INFO_MAGIC) {
+        g_spawn_info = .{};
+    }
+}
 extern "wasmos" fn thread_gettid() callconv(.c) i32;
 extern "wasmos" fn thread_yield() callconv(.c) i32;
 extern "wasmos" fn mutex_try_lock(ptr: i32) callconv(.c) i32;
@@ -83,12 +119,19 @@ var g_cli_argc: usize = 0;
 
 fn parseCliArgs() void {
     g_cli_argc = 0;
+    // Argv is the args blob in the spawn-info buffer (loaded by loadSpawnInfo).
+    if (g_spawn_info.magic != SPAWN_INFO_MAGIC or g_spawn_info.args_len == 0) return;
+    const bid = spawn_info_buffer();
+    if (bid <= 0) return;
+    var n: usize = g_spawn_info.args_len;
+    if (n > CLI_ARGS_BUF_LEN - 1) n = CLI_ARGS_BUF_LEN - 1;
     if (xfer_buffer_read(
+        bid,
         @intCast(@intFromPtr(&g_cli_args_raw[0])),
-        CLI_ARGS_BUF_LEN - 1,
-        0,
+        @intCast(n),
+        @intCast(g_spawn_info.args_off),
     ) != 0) return;
-    g_cli_args_raw[CLI_ARGS_BUF_LEN - 1] = 0;
+    g_cli_args_raw[n] = 0;
 
     var pos: usize = 0;
     while (pos < CLI_ARGS_BUF_LEN - 1 and g_cli_args_raw[pos] != 0 and g_cli_argc < CLI_ARGS_MAX) {
@@ -147,19 +190,38 @@ pub const Mutex = extern struct {
 };
 
 pub const startup = struct {
+    /// Legacy accessor: index 0 == proc.endpoint (from spawn-info); 1..3 == 0.
     pub fn arg(index: usize) i32 {
         if (index >= g_startup_args.len) {
             return 0;
         }
         return g_startup_args[index];
     }
+    pub fn procEndpoint() i32 {
+        return @bitCast(g_spawn_info.proc_endpoint);
+    }
+    pub fn tty() i32 {
+        return @bitCast(g_spawn_info.tty);
+    }
+    pub fn moduleCount() u32 {
+        return g_spawn_info.module_count;
+    }
+    pub fn moduleIndex() u32 {
+        return g_spawn_info.module_index;
+    }
 };
 
 pub export fn wasmos_main(arg0: i32, arg1: i32, arg2: i32, arg3: i32) callconv(.c) i32 {
-    g_startup_args[0] = arg0;
-    g_startup_args[1] = arg1;
-    g_startup_args[2] = arg2;
-    g_startup_args[3] = arg3;
+    // The entry-arg registers are retired; startup values come from spawn-info.
+    _ = arg0;
+    _ = arg1;
+    _ = arg2;
+    _ = arg3;
+    loadSpawnInfo();
+    g_startup_args[0] = @bitCast(g_spawn_info.proc_endpoint);
+    g_startup_args[1] = 0;
+    g_startup_args[2] = 0;
+    g_startup_args[3] = 0;
     parseCliArgs();
     const rc: i32 = @intCast(root.main());
     _ = proc_exit(rc);
@@ -438,6 +500,19 @@ pub const fs = struct {
                 return Error.NotAvailable;
             }
 
+            // Own one buffer and grant the FS manager once; reuse both across the
+            // whole call (a per-chunk re-grant would fail ALREADY_BORROWED). defer
+            // release cascade-revokes the grant on every path.
+            const bid = xfer_buffer_acquire(max_buffer);
+            if (bid < 0) {
+                return Error.NotAvailable;
+            }
+            defer _ = xfer_buffer_release(bid);
+            const b1 = xfer_buffer_borrow(fs_endpoint(), bid, XFER_GRANT_RW);
+            if (b1 < 0) {
+                return Error.HostCallFailed;
+            }
+
             var done: usize = 0;
             while (done < buffer.len) {
                 const remaining = buffer.len - done;
@@ -445,7 +520,7 @@ pub const fs = struct {
                     @intCast(max_buffer)
                 else
                     remaining;
-                const response = try fsRequest(FS_IPC_READ_REQ, self.fd, @intCast(chunk_len), 0, 0);
+                const response = try fsRequest(FS_IPC_READ_REQ, self.fd, @intCast(chunk_len), bid, b1);
                 const chunk_read = response.arg0;
                 if (chunk_read < 0) {
                     return Error.BadResponse;
@@ -456,7 +531,7 @@ pub const fs = struct {
                 if (chunk_read > max_buffer or @as(usize, @intCast(chunk_read)) > chunk_len) {
                     return Error.BadResponse;
                 }
-                if (xfer_buffer_read(@intCast(@intFromPtr(buffer.ptr + done)), chunk_read, 0) != 0) {
+                if (xfer_buffer_read(bid, @intCast(@intFromPtr(buffer.ptr + done)), chunk_read, 0) != 0) {
                     return Error.HostCallFailed;
                 }
                 done += @intCast(chunk_read);
@@ -480,6 +555,16 @@ pub const fs = struct {
                 return Error.NotAvailable;
             }
 
+            const bid = xfer_buffer_acquire(max_buffer);
+            if (bid < 0) {
+                return Error.NotAvailable;
+            }
+            defer _ = xfer_buffer_release(bid);
+            const b1 = xfer_buffer_borrow(fs_endpoint(), bid, XFER_GRANT_RW);
+            if (b1 < 0) {
+                return Error.HostCallFailed;
+            }
+
             var done: usize = 0;
             while (done < buffer.len) {
                 const remaining = buffer.len - done;
@@ -487,10 +572,10 @@ pub const fs = struct {
                     @intCast(max_buffer)
                 else
                     remaining;
-                if (xfer_buffer_write(@intCast(@intFromPtr(buffer.ptr + done)), @intCast(chunk_len), 0) != 0) {
+                if (xfer_buffer_write(bid, @intCast(@intFromPtr(buffer.ptr + done)), @intCast(chunk_len), 0) != 0) {
                     return Error.HostCallFailed;
                 }
-                const response = try fsRequest(FS_IPC_WRITE_REQ, self.fd, @intCast(chunk_len), 0, 0);
+                const response = try fsRequest(FS_IPC_WRITE_REQ, self.fd, @intCast(chunk_len), bid, b1);
                 if (response.arg0 < 0 or @as(usize, @intCast(response.arg0)) > chunk_len) {
                     return Error.BadResponse;
                 }
@@ -511,7 +596,13 @@ pub const fs = struct {
         }
     };
 
-    fn stagePath(path: []const u8) Error!usize {
+    // Owner-push staging: own a buffer holding the NUL-terminated path, grant the
+    // FS manager R|W over it, and return the handles + path length (excluding
+    // NUL). The caller passes path_len (arg0), bid (arg2) and b1 (arg3) to
+    // fsRequest and releases bid afterward (cascade-revokes b1).
+    const StagedPath = struct { bid: i32, b1: i32, path_len: usize };
+
+    fn stagePath(path: []const u8) Error!StagedPath {
         var path_buf: [256]u8 = undefined;
         const max_buffer = xfer_buffer_size();
 
@@ -531,15 +622,26 @@ pub const fs = struct {
         @memcpy(path_buf[0..path.len], path);
         path_buf[path.len] = 0;
 
-        if (xfer_buffer_write(@intCast(@intFromPtr(&path_buf[0])), @intCast(path.len + 1), 0) != 0) {
+        const bid = xfer_buffer_acquire(@intCast(path.len + 1));
+        if (bid < 0) {
+            return Error.NotAvailable;
+        }
+        if (xfer_buffer_write(bid, @intCast(@intFromPtr(&path_buf[0])), @intCast(path.len + 1), 0) != 0) {
+            _ = xfer_buffer_release(bid);
             return Error.HostCallFailed;
         }
-        return path.len;
+        const b1 = xfer_buffer_borrow(fs_endpoint(), bid, XFER_GRANT_RW);
+        if (b1 < 0) {
+            _ = xfer_buffer_release(bid);
+            return Error.HostCallFailed;
+        }
+        return StagedPath{ .bid = bid, .b1 = b1, .path_len = path.len };
     }
 
     fn openWithFlags(path: []const u8, flags: i32) Error!File {
-        const path_len = try stagePath(path);
-        const response = try fsRequest(FS_IPC_OPEN_REQ, @intCast(path_len), flags, 0, 0);
+        const s = try stagePath(path);
+        defer _ = xfer_buffer_release(s.bid);
+        const response = try fsRequest(FS_IPC_OPEN_REQ, @intCast(s.path_len), flags, s.bid, s.b1);
         if (response.arg0 < 0) {
             return Error.BadResponse;
         }
@@ -563,8 +665,9 @@ pub const fs = struct {
     }
 
     pub fn stat(path: []const u8) Error!Stat {
-        const path_len = try stagePath(path);
-        const response = try fsRequest(FS_IPC_STAT_REQ, @intCast(path_len), 0, 0, 0);
+        const s = try stagePath(path);
+        defer _ = xfer_buffer_release(s.bid);
+        const response = try fsRequest(FS_IPC_STAT_REQ, @intCast(s.path_len), 0, s.bid, s.b1);
         if (response.arg0 < 0) {
             return Error.BadResponse;
         }
@@ -575,18 +678,21 @@ pub const fs = struct {
     }
 
     pub fn unlink(path: []const u8) Error!void {
-        const path_len = try stagePath(path);
-        _ = try fsRequest(FS_IPC_UNLINK_REQ, @intCast(path_len), 0, 0, 0);
+        const s = try stagePath(path);
+        defer _ = xfer_buffer_release(s.bid);
+        _ = try fsRequest(FS_IPC_UNLINK_REQ, @intCast(s.path_len), 0, s.bid, s.b1);
     }
 
     pub fn mkdir(path: []const u8) Error!void {
-        const path_len = try stagePath(path);
-        _ = try fsRequest(FS_IPC_MKDIR_REQ, @intCast(path_len), 0, 0, 0);
+        const s = try stagePath(path);
+        defer _ = xfer_buffer_release(s.bid);
+        _ = try fsRequest(FS_IPC_MKDIR_REQ, @intCast(s.path_len), 0, s.bid, s.b1);
     }
 
     pub fn rmdir(path: []const u8) Error!void {
-        const path_len = try stagePath(path);
-        _ = try fsRequest(FS_IPC_RMDIR_REQ, @intCast(path_len), 0, 0, 0);
+        const s = try stagePath(path);
+        defer _ = xfer_buffer_release(s.bid);
+        _ = try fsRequest(FS_IPC_RMDIR_REQ, @intCast(s.path_len), 0, s.bid, s.b1);
     }
 
     pub fn readDir(buffer: []u8) Error!usize {

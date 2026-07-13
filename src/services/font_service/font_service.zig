@@ -23,7 +23,7 @@ const font_handle_t = struct {
 const loaded_font_t = struct {
     available: bool = false,
     font_id: u32 = 0,
-    shmem_id: u32 = 0,
+    buffer_id: u32 = 0,
     ptr: ?[*]const u8 = null,
     len: usize = 0,
     font_info: c.stbtt_fontinfo = undefined,
@@ -131,19 +131,52 @@ fn ipc_call(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u
     return 0;
 }
 
-fn fs_borrow_rw() ?[*]u8 {
-    const p = api().buffer_borrow.?(
-        c.ND_BUFFER_KIND_FS,
-        ctxId(),
-        c.ND_BUFFER_BORROW_READ | c.ND_BUFFER_BORROW_WRITE,
-        PM_XFER_BUFFER_SIZE,
-    );
-    if (p == null) return null;
-    return @ptrCast(@alignCast(p.?));
-}
+const FS_GRANT_RW: u32 = c.ND_BUFFER_BORROW_READ | c.ND_BUFFER_BORROW_WRITE;
 
-fn fs_release() void {
-    _ = api().buffer_release.?(c.ND_BUFFER_KIND_FS);
+// Owner-push FS path op (native ABI v8): own a transfer buffer sized `cap`,
+// write the NUL-terminated `path` at offset 0, grant fs-manager `flags` over it,
+// and send `msg_type` with arg0=path_len, arg2=buffer_id, arg3=grant. fs-manager
+// reads the path via its grant, reborrows to the backend; for reads the backend
+// writes the reply payload into the same buffer. `flags` is least-privilege per
+// op: READ for path-only ops (STAT), R|W for reads (path in + blob out). On
+// FS_IPC_RESP the payload (if any) is copied into `out_blob` before the buffer
+// is released (release cascade-revokes the grant). Returns reply.arg0 (>=0) or -1.
+fn fs_path_op(msg_type: u32, path: []const u8, cap: usize, flags: u32, out_blob: ?[]u8) i32 {
+    if (g_fs_endpoint == IPC_ENDPOINT_NONE or path.len == 0 or path.len + 1 > cap) {
+        return -1;
+    }
+    var bid: u32 = 0;
+    const raw = api().xfer_buffer_acquire.?(c.ND_BUFFER_KIND_XFER, @intCast(cap), &bid);
+    if (raw == null or bid == 0) {
+        return -1;
+    }
+    const buf: [*]u8 = @ptrCast(@alignCast(raw.?));
+    sys.byteCopy(buf, path.ptr, path.len);
+    buf[path.len] = 0;
+
+    const b1 = api().xfer_buffer_borrow.?(g_fs_endpoint, bid, flags);
+    if (b1 < 0) {
+        _ = api().xfer_buffer_release.?(bid);
+        return -1;
+    }
+
+    var reply: c.nd_ipc_message_t = undefined;
+    const req = g_req_id;
+    g_req_id +%= 1;
+    const rc = ipc_call(g_fs_endpoint, req, msg_type, @intCast(path.len), 0, bid, @bitCast(b1), &reply);
+    var result: i32 = -1;
+    if (rc == 0 and reply.type == c.FS_IPC_RESP) {
+        result = @bitCast(reply.arg0);
+        if (out_blob) |dst| {
+            if (result > 0) {
+                var n: usize = @intCast(result);
+                if (n > dst.len) n = dst.len;
+                sys.byteCopy(dst.ptr, buf, n);
+            }
+        }
+    }
+    _ = api().xfer_buffer_release.?(bid);
+    return result;
 }
 
 fn parse_ttf_metrics(f: *loaded_font_t) bool {
@@ -172,79 +205,68 @@ fn log_path_issue(prefix: []const u8, path: []const u8) void {
     logMsg("\n");
 }
 
-fn stage_path_in_xfer_buffer(path: []const u8) bool {
-    const fs_buf_path = fs_borrow_rw() orelse {
-        logMsg("[font] fs buffer borrow failed\n");
-        return false;
-    };
-    defer fs_release();
-    if (path.len == 0 or path.len + 1 >= PM_XFER_BUFFER_SIZE) {
-        return false;
-    }
-    sys.byteCopy(fs_buf_path, path.ptr, path.len);
-    fs_buf_path[path.len] = 0;
-    return true;
-}
-
 fn stat_path_size(path: []const u8, out_size: *usize) bool {
-    var reply: c.nd_ipc_message_t = undefined;
-    if (!stage_path_in_xfer_buffer(path)) {
-        return false;
-    }
-    const req_stat = g_req_id;
-    g_req_id +%= 1;
-    if (ipc_call(g_fs_endpoint, req_stat, c.FS_IPC_STAT_REQ, @intCast(path.len), 0, 0, 0, &reply) != 0) {
-        log_path_issue("[font] stat call failed: ", path);
-        return false;
-    }
-    if (reply.type != c.FS_IPC_RESP) {
-        log_path_issue("[font] stat failed: ", path);
-        return false;
-    }
-    const size_i32: i32 = @bitCast(reply.arg0);
+    // R|W required even for STAT: fs-manager rewrites the mount-stripped path back
+    // into the client buffer in place (route_root_path_request), so the grantee
+    // needs WRITE. (A cleaner fs-manager that used its own scratch would let STAT
+    // be READ-only; that's a separate fs-manager cleanup.)
+    const size_i32 = fs_path_op(c.FS_IPC_STAT_REQ, path, path.len + 1, FS_GRANT_RW, null);
     if (size_i32 <= 0) {
-        log_path_issue("[font] stat empty: ", path);
+        log_path_issue("[font] stat failed: ", path);
         return false;
     }
     out_size.* = @intCast(size_i32);
     return true;
 }
 
-fn read_file_into_shmem(path: []const u8, out_shmem_id: *u32, out_ptr: *[*]u8, out_len: *usize) i32 {
-    if (g_fs_endpoint == IPC_ENDPOINT_NONE) return -1;
+// Load a font file into an OWNED xfer buffer that doubles as the READ_PATH
+// transfer buffer: write the path in, grant fs-manager R|W, and the backend
+// writes the file blob back into the same buffer. No shmem and no bounce copy —
+// the font is parsed in place from the mapped buffer, which is held owned for
+// the font's lifetime (general physical pool, not the sub-64 MiB WARP shmem
+// zone). Returns the owned buffer_id + mapped pointer + length.
+fn read_font_file(path: []const u8, out_buffer_id: *u32, out_ptr: *[*]u8, out_len: *usize) i32 {
+    if (g_fs_endpoint == IPC_ENDPOINT_NONE or path.len == 0) return -1;
     var file_size: usize = 0;
     if (!stat_path_size(path, &file_size)) {
         return -1;
     }
-    if (file_size > PM_XFER_BUFFER_SIZE) {
+    if (file_size == 0 or file_size > PM_XFER_BUFFER_SIZE) {
         log_path_issue("[font] file too large: ", path);
         return -1;
     }
 
-    const pages: u32 = @intCast((file_size + 4095) / 4096);
-    var shmem_id: u32 = 0;
-    var mapped_ptr: ?*anyopaque = null;
-    if (api().shmem_create.?(pages, 0, &shmem_id, @ptrCast(&mapped_ptr)) != 0 or shmem_id == 0 or mapped_ptr == null) {
+    var buffer_id: u32 = 0;
+    const raw = api().xfer_buffer_acquire.?(c.ND_BUFFER_KIND_XFER, @intCast(file_size), &buffer_id);
+    if (raw == null or buffer_id == 0) {
         return -1;
     }
-    const dst: [*]u8 = @ptrCast(@alignCast(mapped_ptr.?));
-    const dst_cap = @as(usize, pages) * 4096;
-    const req_read = g_req_id;
+    const buf: [*]u8 = @ptrCast(@alignCast(raw.?));
+    sys.byteCopy(buf, path.ptr, path.len);
+    buf[path.len] = 0;
+
+    const b1 = api().xfer_buffer_borrow.?(g_fs_endpoint, buffer_id, FS_GRANT_RW);
+    if (b1 < 0) {
+        _ = api().xfer_buffer_release.?(buffer_id);
+        return -1;
+    }
+    var reply: c.nd_ipc_message_t = undefined;
+    const req = g_req_id;
     g_req_id +%= 1;
-    const total_i32 = sys.fsReadPath(api(), g_fs_endpoint, g_font_endpoint, req_read, path, dst[0..dst_cap]);
-    if (total_i32 <= 0) {
-        log_path_issue("[font] read empty: ", path);
-        return -1;
+    const rc = ipc_call(g_fs_endpoint, req, c.FS_IPC_READ_PATH_REQ, @intCast(path.len), 0, buffer_id, @bitCast(b1), &reply);
+    var total: i32 = -1;
+    if (rc == 0 and reply.type == c.FS_IPC_RESP) {
+        total = @bitCast(reply.arg0);
     }
-    const total: usize = @intCast(total_i32);
-    if (total != file_size) {
-        log_path_issue("[font] read incomplete: ", path);
+    if (total <= 0 or @as(usize, @intCast(total)) != file_size) {
+        _ = api().xfer_buffer_release.?(buffer_id);
+        log_path_issue("[font] read failed: ", path);
         return -1;
     }
 
-    out_shmem_id.* = shmem_id;
-    out_ptr.* = dst;
-    out_len.* = total;
+    out_buffer_id.* = buffer_id;
+    out_ptr.* = buf;
+    out_len.* = @intCast(total);
     return 0;
 }
 
@@ -769,6 +791,12 @@ fn handle_font_ipc_message(msg: *const c.nd_ipc_message_t) void {
         c.FONT_IPC_RASTER_GLYPH_REQ => handle_raster_glyph(msg),
         c.FONT_IPC_MEASURE_GLYPH_REQ => handle_measure_text(msg),
         c.FONT_IPC_RASTER_GLYPH_INTO_REQ => handle_raster_text_into(msg),
+        // font-service is itself an FS client; stray FS reply/error/stream
+        // messages (e.g. a late or unmatched fs-manager reply) can land on this
+        // endpoint out-of-band. Drop them silently — they are not requests, so
+        // warning + replying UNSUPPORTED only spams the log and can feed a reply
+        // loop back to fs-manager.
+        c.FS_IPC_RESP, c.FS_IPC_STREAM, c.FS_IPC_ERROR => {},
         else => {
             logHex32("[font] warning: unhandled event type ", msg.type);
             reply_with_status(msg, c.FONT_STATUS_UNSUPPORTED, 0, 0, 0);
@@ -809,10 +837,10 @@ fn load_builtin_fonts() void {
         logMsg("[font] loading ");
         logMsg(labels[i]);
         logMsg("\n");
-        var sid: u32 = 0;
+        var bid: u32 = 0;
         var ptr: [*]u8 = undefined;
         var len: usize = 0;
-        if (read_file_into_shmem(primary_paths[i], &sid, &ptr, &len) != 0)
+        if (read_font_file(primary_paths[i], &bid, &ptr, &len) != 0)
         {
             logMsg("[font] load failed\n");
             continue;
@@ -820,7 +848,7 @@ fn load_builtin_fonts() void {
         g_fonts[i] = .{
             .available = true,
             .font_id = ids[i],
-            .shmem_id = sid,
+            .buffer_id = bid,
             .ptr = @ptrCast(ptr),
             .len = len,
             .font_info = undefined,
@@ -850,12 +878,15 @@ pub export fn initialize(driver_api: *c.wasmos_driver_api_t, module_count: c_int
     _ = arg2;
     _ = arg3;
 
+    _ = module_count; // entry-arg convention retired; use the spawn-info contract
     g_api = driver_api;
     if (driver_api.abi_magic != c.WASMOS_NATIVE_ABI_MAGIC or driver_api.abi_version != c.WASMOS_NATIVE_ABI_VERSION) {
         return -2;
     }
 
-    g_proc_endpoint = @bitCast(module_count);
+    var si: c.wasmos_spawn_info_t = undefined;
+    if (driver_api.spawn_info.?(&si, null, 0) != 0) return -1;
+    g_proc_endpoint = si.proc_endpoint;
     if (g_proc_endpoint == IPC_ENDPOINT_NONE) return -1;
 
     g_font_endpoint = api().ipc_create_endpoint.?();

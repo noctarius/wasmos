@@ -6,6 +6,7 @@
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
 #include "wasmos/libsys.h"
+#include "wasmos/startup.h"
 #include "wasmos_driver_abi.h"
 #include "pci_bus_types.h"
 
@@ -89,6 +90,8 @@ initialize(int32_t proc_endpoint,
            int32_t ignored_arg2,
            int32_t ignored_arg3)
 {
+    /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
+    proc_endpoint = wasmos_startup_proc_endpoint();
     (void)ignored_arg1;
     (void)ignored_arg2;
     (void)ignored_arg3;

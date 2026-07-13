@@ -223,6 +223,24 @@ wasmos_ipc_pack_name16(const char *name, int32_t out_args[4])
     }
 }
 
+/* Acquire a transfer buffer sized for `len` bytes and copy `len` bytes from
+ * `src` into it at offset 0. Returns the owned buffer_id (>= 0) or -1. The
+ * caller sends the id to the kernel (arg2 by convention) and releases it with
+ * wasmos_xfer_buffer_release once the synchronous request completes. */
+static inline int32_t
+wasmos_xfer_stage(const void *src, int32_t len)
+{
+    int32_t bid = wasmos_xfer_buffer_acquire(len);
+    if (bid < 0) {
+        return -1;
+    }
+    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)src, len, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    return bid;
+}
+
 /* Register service_endpoint under service_name with the process manager.
  * Returns the assigned service handle on success, -1 on failure.
  *
@@ -258,7 +276,8 @@ wasmos_svc_register(int32_t proc_endpoint,
         desc.name[i] = service_name[i];
     }
     desc.name[i] = '\0';
-    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)&desc, (int32_t)sizeof(desc), 0) != 0) {
+    int32_t bid = wasmos_xfer_stage(&desc, (int32_t)sizeof(desc));
+    if (bid < 0) {
         return -1;
     }
     if (wasmos_ipc_call(proc_endpoint,
@@ -267,11 +286,13 @@ wasmos_svc_register(int32_t proc_endpoint,
                         request_id,
                         0,
                         (int32_t)sizeof(desc),
-                        0,
+                        bid,
                         0,
                         &resp) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
+    (void)wasmos_xfer_buffer_release(bid);
     return (resp.type == SVC_IPC_REGISTER_RESP) ? resp.arg0 : -1;
 }
 
@@ -347,18 +368,21 @@ wasmos_subsystem_register_broker(int32_t proc_endpoint,
         }
         desc.broker_name[i] = '\0';
     }
-    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)&desc, (int32_t)sizeof(desc), 0) != 0) {
+    int32_t bid = wasmos_xfer_stage(&desc, (int32_t)sizeof(desc));
+    if (bid < 0) {
         return -1;
     }
     if (wasmos_ipc_call_managed(proc_endpoint,
                                 PROC_IPC_SUBSYSTEM_REGISTER_BROKER,
                                 0,
                                 (int32_t)sizeof(desc),
-                                0,
+                                bid,
                                 0,
                                 &resp) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
+    (void)wasmos_xfer_buffer_release(bid);
     (void)request_id;
     return (resp.type == PROC_IPC_RESP) ? 0 : resp.arg1;
 }
@@ -401,21 +425,28 @@ wasmos_exec_handler_register(int32_t proc_endpoint,
         desc.handler_name[i] = '\0';
     }
     total_size = (int32_t)sizeof(desc) + (int32_t)(sizeof(wasmos_exec_match_node_t) * (uint32_t)node_count);
-    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)&desc, (int32_t)sizeof(desc), 0) != 0 ||
-        wasmos_xfer_buffer_write((int32_t)(uintptr_t)nodes,
+    int32_t bid = wasmos_xfer_buffer_acquire(total_size);
+    if (bid < 0) {
+        return -1;
+    }
+    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)&desc, (int32_t)sizeof(desc), 0) != 0 ||
+        wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)nodes,
                                  (int32_t)(sizeof(wasmos_exec_match_node_t) * (uint32_t)node_count),
                                  (int32_t)sizeof(desc)) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
     if (wasmos_ipc_call_managed(proc_endpoint,
                                 PROC_IPC_EXEC_HANDLER_REGISTER,
                                 0,
                                 total_size,
-                                0,
+                                bid,
                                 0,
                                 &resp) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
+    (void)wasmos_xfer_buffer_release(bid);
     (void)request_id;
     return (resp.type == PROC_IPC_RESP) ? 0 : resp.arg1;
 }

@@ -21,6 +21,10 @@
 #include "futex.h"
 #include "arch/x86_64/smp.h"
 
+#ifdef WASMOS_WASM_RUNTIME_WARP
+extern int warp_sync_linmem_for_pid(uint32_t pid, uint64_t user_root);
+#endif
+
 /*
  * process.c contains the single-core scheduler, process table, run queue, and
  * context-switch glue. The implementation is intentionally simple: fixed-size
@@ -912,7 +916,7 @@ static void process_reap(process_t *proc) {
     if (proc->context_id != 0) {
         wasmos_subsystem_registry_drop_owner(proc->context_id);
         ipc_endpoints_release_owner(proc->context_id);
-        process_manager_buffer_drop_context(proc->context_id);
+        xfer_buffer_drop_context(proc->context_id);
         (void)mm_context_destroy(proc->context_id);
     }
     if (proc->pid != 0) {
@@ -1886,6 +1890,17 @@ static int process_schedule_once_impl(void) {
         thread->ctx.rsp = 0;
         cpu_local()->last_run_result = process_run_worker_on_stack(proc, thread);
     } else {
+#ifdef WASMOS_WASM_RUNTIME_WARP
+        if (proc->runtime_tag[0] == 'W' &&
+            proc->runtime_tag[1] == 'A' &&
+            proc->runtime_tag[2] == 'R' &&
+            proc->runtime_tag[3] == 'P' &&
+            proc->runtime_tag[4] == '\0' &&
+            run_ctx->root_table != 0 &&
+            run_ctx->root_table != paging_get_root_table()) {
+            (void)warp_sync_linmem_for_pid(proc->pid, run_ctx->root_table);
+        }
+#endif
         context_switch_high(&cpu_local()->sched_ctx, run_ctx);
     }
     g_sched_switch_count++;

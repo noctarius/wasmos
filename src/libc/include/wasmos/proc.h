@@ -73,7 +73,7 @@ wasmos_proc_module_meta(int32_t proc_endpoint,
     return 0;
 }
 
-/* Query PM for module metadata by FS path; writes path into the FS buffer
+/* Query PM for module metadata by xfer path; writes path into the xfer buffer
  * before sending.  Uses a separate static counter starting at 0x40000000
  * to avoid clashing with wasmos_proc_module_meta's counter. */
 static inline int32_t
@@ -88,10 +88,16 @@ wasmos_proc_module_meta_path(int32_t proc_endpoint,
     static uint32_t request_id = 0x40000000u;
     uint32_t req = request_id++;
     size_t path_len = path ? strlen(path) : 0u;
-    if (path_len == 0 || path_len >= (size_t)wasmos_xfer_buffer_size()) {
+    if (path_len == 0 || path_len > 0xFFFu ||
+        path_len >= (size_t)wasmos_xfer_buffer_size()) {
         return -1;
     }
-    if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+    int32_t bid = wasmos_xfer_buffer_acquire((int32_t)path_len);
+    if (bid < 0) {
+        return -1;
+    }
+    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
     if (wasmos_ipc_send(proc_endpoint,
@@ -99,12 +105,15 @@ wasmos_proc_module_meta_path(int32_t proc_endpoint,
                         PROC_IPC_MODULE_META_PATH,
                         (int32_t)req,
                         0,
-                        (int32_t)path_len,
+                        (int32_t)(((uint32_t)bid << 12) | ((uint32_t)path_len & 0xFFFu)),
                         source_kind,
                         0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
-    if (wasmos_ipc_select_one(reply_endpoint) < 0) {
+    int32_t sel = wasmos_ipc_select_one(reply_endpoint);
+    (void)wasmos_xfer_buffer_release(bid);
+    if (sel < 0) {
         return -1;
     }
     if ((uint32_t)wasmos_ipc_last_field(WASMOS_IPC_FIELD_REQUEST_ID) != req ||

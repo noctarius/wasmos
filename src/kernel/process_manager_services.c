@@ -206,11 +206,13 @@ pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t *msg
         return -1;
     }
     if (len < sizeof(svc_register_desc_t) ||
-        len > process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM)) {
+        len > xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
         return -1;
     }
-    desc = (const svc_register_desc_t *)process_manager_buffer_for_context(
-        PM_BUFFER_KIND_FILESYSTEM, reply_owner);
+    /* The descriptor lives in the caller's own transfer buffer; arg2 carries its
+     * buffer_id (the caller owns it). PM reads it directly (kernel). */
+    desc = (const svc_register_desc_t *)pm_foreign_xfer_ptr(
+        (uint32_t)msg->arg2, reply_owner, 0);
     if (!desc || desc->version != WASMOS_SVC_REGISTER_DESC_VERSION) {
         return -1;
     }
@@ -290,11 +292,11 @@ pm_handle_subsystem_register_broker(uint32_t pm_context_id, const ipc_message_t 
         return PROC_PM_ERR_NOT_AUTHORIZED;
     }
     if (len != sizeof(*desc) ||
-        len > process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM)) {
+        len > xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
         return PROC_PM_ERR_BAD_BROKER;
     }
-    desc = (const wasmos_subsystem_broker_register_desc_t *)process_manager_buffer_for_context(
-        PM_BUFFER_KIND_FILESYSTEM, owner_context);
+    desc = (const wasmos_subsystem_broker_register_desc_t *)pm_foreign_xfer_ptr(
+        (uint32_t)msg->arg2, owner_context, 0);
     if (!desc ||
         desc->version != WASMOS_SUBSYSTEM_REGISTER_BROKER_DESC_VERSION ||
         desc->broker_endpoint == IPC_ENDPOINT_NONE) {
@@ -344,11 +346,11 @@ pm_handle_exec_handler_register(uint32_t pm_context_id, const ipc_message_t *msg
         return PROC_PM_ERR_NOT_AUTHORIZED;
     }
     if (len < sizeof(*desc) ||
-        len > process_manager_buffer_size(PM_BUFFER_KIND_FILESYSTEM)) {
+        len > xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
         return PROC_PM_ERR_BAD_HANDLER;
     }
-    desc = (const wasmos_exec_handler_register_desc_t *)process_manager_buffer_for_context(
-        PM_BUFFER_KIND_FILESYSTEM, owner_context);
+    desc = (const wasmos_exec_handler_register_desc_t *)pm_foreign_xfer_ptr(
+        (uint32_t)msg->arg2, owner_context, 0);
     if (!desc ||
         desc->version != WASMOS_EXEC_HANDLER_REGISTER_DESC_VERSION ||
         desc->node_count == 0u ||

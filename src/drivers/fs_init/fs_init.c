@@ -8,6 +8,7 @@
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
 #include "wasmos/libsys.h"
+#include "wasmos/startup.h"
 #include "wasmos_driver_abi.h"
 
 #define INITFS_MAX_OPEN_FILES 16
@@ -104,12 +105,14 @@ unpack_name(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char *ou
 }
 
 static int
-copy_path_from_xfer_buffer(int32_t path_len, char *out, uint32_t out_len)
+copy_path_from_xfer_buffer(int32_t buffer_id, int32_t path_len, char *out, uint32_t out_len)
 {
-    if (!out || out_len == 0 || path_len <= 0 || path_len >= (int32_t)out_len) {
+    if (!out || out_len == 0 || path_len <= 0 || path_len >= (int32_t)out_len || buffer_id <= 0) {
         return -1;
     }
-    if (wasmos_xfer_buffer_read((int32_t)(uintptr_t)out, path_len, 0) != 0) {
+    /* Owner-push: the client owns buffer_id and granted this backend READ (via
+     * fs-manager's reborrow); read the path directly by buffer_id. */
+    if (wasmos_xfer_buffer_read(buffer_id, (int32_t)(uintptr_t)out, path_len, 0) != 0) {
         return -1;
     }
     if (wasmos_sync_user_read((int32_t)(uintptr_t)out, path_len) != 0) {
@@ -480,6 +483,8 @@ initialize(int32_t proc_endpoint,
            int32_t ignored_arg2,
            int32_t ignored_arg3)
 {
+    /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
+    proc_endpoint = wasmos_startup_proc_endpoint();
     (void)ignored_arg1;
     (void)ignored_arg2;
     (void)ignored_arg3;
@@ -552,14 +557,14 @@ initialize(int32_t proc_endpoint,
 
         if (type == FS_IPC_OPEN_REQ) {
             char path[INITFS_PATH_MAX];
-            if (arg1 == 0 && arg2 == 0 && arg3 == 0 && copy_path_from_xfer_buffer(arg0, path, sizeof(path)) == 0) {
-                /* path copied from FS buffer */
-            } else {
-                unpack_name((uint32_t)arg0, (uint32_t)arg1, (uint32_t)arg2, (uint32_t)arg3, path, sizeof(path));
-            }
-            int32_t file_index = initfs_find_file_record(*cwd_dir, path);
-            if (file_index >= 0) {
-                status = initfs_fd_alloc(file_index);
+            /* OPEN always carries the path in the client buffer (arg2 = buffer_id,
+             * arg0 = path_len); the old name-packed variant is gone with
+             * spawn-by-name. */
+            if (copy_path_from_xfer_buffer(arg2, arg0, path, sizeof(path)) == 0) {
+                int32_t file_index = initfs_find_file_record(*cwd_dir, path);
+                if (file_index >= 0) {
+                    status = initfs_fd_alloc(file_index);
+                }
             }
         } else if (type == FS_IPC_READ_REQ) {
             initfs_fd_t *fd = initfs_fd_lookup(arg0);
@@ -595,7 +600,7 @@ initialize(int32_t proc_endpoint,
                         if (copied == 0) {
                             break;
                         }
-                        if (wasmos_xfer_buffer_write((int32_t)(uintptr_t)tmp, copied, total) != 0) {
+                        if (wasmos_xfer_buffer_write(arg2, (int32_t)(uintptr_t)tmp, copied, total) != 0) {
                             total = -1;
                             break;
                         }

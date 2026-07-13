@@ -35,6 +35,9 @@
 /* Native ELF payload; valid for privileged service/driver payloads. */
 #define WASMOS_APP_FLAG_NATIVE     (1u << 4)
 #define WASMOS_APP_FLAG_STORAGE_BOOTSTRAP (1u << 5)
+/* Process wants a controlling TTY allocated at spawn; PM fills spawn_info.tty.
+ * Replaces the old "cli.tty.alloc" entry-arg binding. */
+#define WASMOS_APP_FLAG_WANTS_TTY (1u << 6)
 
 #define WASMOS_DRIVER_MATCH_ANY_U8 0xFFu
 #define WASMOS_DRIVER_MATCH_ANY_U16 0xFFFFu

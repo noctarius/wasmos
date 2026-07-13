@@ -1,31 +1,155 @@
-## DMA Transfer Support
+## Transfer Buffers & DMA
 
-This document describes the DMA transfer model: its constants, data structures,
-capability enforcement, hostcall API, kernel buffer-layer implementation, and
-the ATA storage integration that exercises the full lifecycle.
+This document is the authoritative contract for the transfer-buffer subsystem:
+the object/owner/borrow capability model, the roles (grantor, borrower/grantee,
+mapper), the stateless id-based ABI, the lifecycle rules, and the DMA transfer
+model layered on top. The kernel core lives in
+`src/kernel/xfer_buffer/xfer_buffer.c` (`src/kernel/include/xfer_buffer.h`); the
+wasm ABI is wired in `src/kernel/wasm3/link.c` and `src/kernel/warp/link.cpp`.
+
+---
+
+### The object / owner / borrow model (READ THIS FIRST)
+
+A **transfer buffer is a first-class kernel object** with a stable `buffer_id`.
+Userspace holds ids like file descriptors and passes them back over IPC; the
+kernel keeps **no per-context "current buffer" state** — every call names its
+object/handle by id and is re-resolved. There is exactly one model; the old
+"one borrow slot per (kind, context)" singleton is gone.
+
+**Roles** (a single context can be several of these at once, for different objects):
+
+- **Owner** — the context that `acquire`d the object. It holds the object's
+  *lifecycle*: it alone `release`s it. Ownership is the answer to "who knows when
+  this buffer is truly done?" — for FS reads that's the **application** (it reads
+  the result out after the syscall returns), so the app owns.
+- **Grantor / lender** — the context that created a particular *(re)borrow*. For a
+  top-level `borrow`, the grantor is the owner. For a `reborrow`, the grantor is
+  the upstream borrower. **The grantor is the only context that may `unborrow`
+  that (re)borrow.**
+- **Borrower / grantee** — the context a (re)borrow grants access *to*. It may
+  read/write the object (subject to its rights) and may itself `reborrow`
+  downstream, but it **never** unborrows a grant it did not create.
+- **Mapper** — a driver context that maps a DMA window on a borrow it holds. See
+  DMA below; the mapper is always a borrower with `CAP_DMA_BUFFER`.
+
+**The one rule that generates everything else:** *whoever creates a thing is the
+only one who tears it down; teardown cascades downstream, never upstream.*
+
+- Owner creates the object → owner `release`s it. `release` is a **transient
+  teardown**: it cascade-revokes every outstanding borrow/reborrow (and clears
+  their DMA) in one sweep. The owner need not wait for borrowers to unborrow.
+- Grantor creates a (re)borrow → grantor `unborrow`s it (authorized by
+  `xfer_buffer_get_lent`, which checks the caller is the borrow's *lender*). An
+  `unborrow` cascade-revokes only the reborrows **downstream** of it — never the
+  grant it came from.
+- Mapper creates a DMA window → mapper `dma_unmap`s it (authorized by
+  `xfer_buffer_get_borrowed`, which checks the caller is the *borrower*).
+
+**Rights** are `BUFFER_BORROW_READ (0x1)` / `BUFFER_BORROW_WRITE (0x2)`. A
+`reborrow`'s rights must be a subset of the upstream borrow's
+(`RIGHTS_AMPLIFICATION` otherwise). A borrower holds at most one active borrow
+per object (`ALREADY_BORROWED` otherwise) — so a relay that reborrows to the
+same backend across many requests must unborrow each reborrow before the next.
+
+**Kinds:** `BUFFER_KIND_TRANSFER (1)` is generic transferable bulk data;
+`BUFFER_KIND_FRAMEBUFFER (2)` is local-only backing (owner-self-borrow only, not
+transferable, not reborrowable).
 
 ---
 
 ### Design Principles
 
-- **Deny by default.** No DMA operation succeeds without explicit
-  `CAP_DMA_BUFFER` capability and a matching window profile.
-- **Reuse borrow objects for transient, peer-owned buffers.** For a device that
-  DMAs into a *client's* buffer for the duration of a single request (the ATA
-  read/write path), DMA state is attached to existing PM buffer-borrow slots;
-  no allocation is needed. This model is intentionally transient
-  (map → sync → unmap per operation) and, by design, refuses to map the
-  caller's *own* memory (`source_owner == context_id` is denied). It therefore
-  does **not** cover memory a device reads continuously for the driver's whole
-  lifetime — see *Driver-Owned DMA Regions (planned)* below.
-- **Least privilege.** Each grant is bounded by direction flags, maximum byte
-  count, and an approved physical-address window list.
-- **Deterministic teardown.** On driver crash or kill, all mapped DMA borrows
-  are force-unmapped by the process exit path.
-- **No IOMMU required.** The current baseline uses physical addresses directly.
-  A future IOMMU backend would replace `out_device_addr` with an IOVA while
-  keeping the driver-facing hostcall ABI unchanged.
+- **Owning a transfer buffer is fd-like; DMA is privileged.** Any real process
+  may `acquire`/`borrow`/`reborrow`/`release`/`unborrow` a transfer buffer (moving
+  IPC payloads is ordinary). **DMA** — mapping a buffer for a device — is the only
+  privileged step and is gated by `CAP_DMA_BUFFER` (`require_dma_capability` in
+  the shim). Because only a capability-holding driver can `dma_map`, DMA lives
+  **only in drivers**, never in the app or the fs-manager.
+- **DMA window ≠ buffer lifecycle.** A DMA mapping is a *transient, operational*
+  attachment scoped to a single device access: the driver maps it right before
+  programming the device and unmaps it right after the transfer, inside its
+  handling of one request. It is the mapper's concern, not the owner's/lender's.
+  A borrow **cannot be unborrowed while its DMA is still mapped** — the mapper
+  unmaps first.
+- **Least privilege / deny by default (DMA).** Each DMA grant is bounded by
+  direction flags, a maximum byte count, and an approved physical-address window
+  list; no DMA without `CAP_DMA_BUFFER` and a matching window.
+- **Deterministic teardown.** On process exit, `xfer_buffer_drop_context`
+  force-revokes every borrow the context issued or holds (and their DMA), and
+  destroys objects it owned.
+- **No IOMMU required.** The baseline uses physical addresses directly; a future
+  IOMMU backend would return an IOVA from the DMA-map path while keeping the
+  driver-facing ABI unchanged.
   TODO: introduce IOVA domain model when VT-d/AMD-Vi support is added.
+
+---
+
+### Stateless id-based ABI (wasm imports, `wasmos` module)
+
+Declared in `src/libc/include/wasmos/api.h`. All return `>= 0` on success
+(buffer_id / borrow_id / device address / 0) and a negative
+`xfer_buffer_status_t` on failure.
+
+```c
+xfer_buffer_acquire(min_size)                 -> buffer_id   // OWNER creates an object
+xfer_buffer_borrow(grantee_endpoint, buffer_id, flags) -> borrow_id
+                                              // OWNER grants the context owning grantee_endpoint
+xfer_buffer_reborrow(grantee_endpoint, borrow_id, flags) -> borrow_id
+                                              // a BORROWER sub-grants (rights ⊆ its own)
+xfer_buffer_read(buffer_id, ptr, len, off)    // owner OR any grantee with READ
+xfer_buffer_write(buffer_id, ptr, len, off)   // owner OR any grantee with WRITE
+xfer_buffer_unborrow(borrow_id)               // the (re)borrow's GRANTOR only (get_lent)
+xfer_buffer_release(buffer_id)                // OWNER only; cascade-revokes all borrows
+// DMA (driver-only, CAP_DMA_BUFFER):
+dma_map_borrow(borrow_id, off, len, dir) -> device_addr   // MAPPER (borrower) maps
+dma_sync_borrow(borrow_id, off, len, sync_op)
+dma_unmap_borrow(borrow_id)                               // MAPPER unmaps its own window
+```
+
+The generic `buffer_*` variants take a leading `kind` arg; the `xfer_buffer_*`
+forms above are `BUFFER_KIND_TRANSFER` shorthands. Kernel authority resolvers:
+`xfer_buffer_get_owned` (owner), `xfer_buffer_get_lent` (grantor/lender — used by
+`unborrow`), `xfer_buffer_get_borrowed` (borrower — used by DMA), `describe`
+(owner-or-borrower, used by read/write).
+
+### Usage examples
+
+**FS read/write relay (app → fs-manager → backend).** The app owns and holds the
+lifecycle; fs-manager is a transient borrower that reborrows to the backend.
+
+```
+app         acquire(sz)=buf ; borrow(fs.vfs_ep, buf, R|W)=b1
+            send FS_IPC_READ_REQ(fd, len, arg2=buf, arg3=b1)   // reuse buf+b1 across chunks
+fs-manager  reborrow(backend_ep, b1, R|W)=b2                    // grantor of b2
+            forward to backend (arg2=buf, arg3=b2)
+backend     read/write(buf, ...)                                // grantee; no borrow, no unborrow
+fs-manager  unborrow(b2)                                        // its own reborrow, per request
+app         (repeat...) release(buf)                            // cascade-revokes b1 (and any b2)
+```
+
+Rules exercised: app owns + reuses one grant (never re-grants per chunk — that
+would hit `ALREADY_BORROWED`); fs-manager only unborrows the reborrow it created;
+the app's `release` is the whole-tree teardown; the backend never unborrows.
+
+**Path ops (open/stat/unlink/…), owner + kernel-read.** For spawn paths and
+service-register descriptors the *kernel* (PM) reads the caller's buffer directly
+by ownership (`pm_foreign_xfer_ptr`) — no grant needed. The owner just
+`acquire` → write path → send `buffer_id` → `release`.
+
+**Disk DMA (driver, transient window).** Only the driver may map:
+
+```
+backend(fat_fs/ata)  b2 already granted (R|W) by fs-manager
+                     dma_map_borrow(b2, off, len, dir)=device_addr   // CAP_DMA_BUFFER
+                     program device ; wait for completion
+                     dma_sync_borrow / dma_unmap_borrow(b2)          // mapper unmaps its window
+                     reply
+fs-manager           unborrow(b2)                                    // DMA already gone
+```
+
+A borrow can't be unborrowed while its DMA is mapped, so the mapper must unmap
+before its lender tears the borrow down.
 
 ---
 
@@ -62,18 +186,18 @@ PROC_IPC_DMA_BORROW_ERROR     = 0x2BF
 Buffer kind and grant constants, defined in `src/libc/include/wasmos/api.h`:
 
 ```c
-WASMOS_BUFFER_KIND_FS    = 1
+WASMOS_BUFFER_KIND_XFER   = 1
 WASMOS_BUFFER_GRANT_READ  = 0x1
 WASMOS_BUFFER_GRANT_WRITE = 0x2
 ```
 
-Kernel-side buffer kind constants, defined in `src/kernel/include/process_manager.h`:
+Architectural buffer-kind constants:
 
 ```c
-PM_BUFFER_KIND_FILESYSTEM = 1u
-PM_BUFFER_KIND_FRAMEBUFFER = 2u
-PM_BUFFER_BORROW_READ  = 0x1u
-PM_BUFFER_BORROW_WRITE = 0x2u
+TRANSFER_BUFFER_KIND    = 1u
+FRAMEBUFFER_BUFFER_KIND = 2u
+BUFFER_BORROW_READ  = 0x1u
+BUFFER_BORROW_WRITE = 0x2u
 PM_FS_BUFFER_SIZE = 2 MiB (2u * 1024u * 1024u)
 ```
 
@@ -144,28 +268,25 @@ typedef struct {
 } pm_spawn_caps_t;
 ```
 
-#### `pm_fs_buffer_slot_t` (`process_manager_buffers.c`)
+#### xfer-buffer Registry Objects
 
-Per-context buffer slot tracking active borrow and any attached DMA mapping:
+The xfer-buffer registry (`src/kernel/xfer_buffer/xfer_buffer.c`) is a single,
+spinlock-guarded (`g_xfer_lock`) store of buffer objects. There is no
+per-context "slot" and no one-borrow-per-context limit; objects and borrows are
+independent handles keyed by stateless ids. The relevant descriptors
+(`src/kernel/include/xfer_buffer.h`) are:
 
 ```c
-typedef struct {
-    uint8_t  in_use;
-    uint32_t context_id;
-    uint64_t buffer_phys;              // physical base of the slot's buffer
-    uint8_t  borrow_active;            // nonzero when a borrow is in progress
-    uint8_t  borrow_flags;             // PM_BUFFER_BORROW_READ / WRITE
-    uint32_t borrow_source_context_id; // context that issued the borrow
-    uint8_t  dma_mapped;               // nonzero when dma_map_borrow has succeeded
-    uint32_t dma_direction_flags;
-    uint32_t dma_offset;
-    uint32_t dma_length;
-} pm_fs_buffer_slot_t;
+typedef struct { ... } xfer_buffer_t;             // kind, buffer_id, size_bytes
+typedef struct { ... } xfer_buffer_owner_t;       // owner_context_id + buffer
+typedef struct { ... } xfer_buffer_borrow_t;      // lender, borrower, flags, borrow_id
+typedef struct { ... } xfer_buffer_dma_mapping_t; // offset, length, direction, dev addr, active
 ```
 
-Two separate lists exist: `g_pm_fs_slots` (filesystem kind) and
-`g_pm_fb_slots` (framebuffer kind). Each list is a chunked array of 16
-initial entries.
+Each object is owned by one context (identified by `buffer_id`); borrow edges
+form a directed acyclic graph (a borrower may `reborrow` downstream). DMA state
+lives on an `xfer_buffer_dma_mapping_t` attached to an owner or a borrow, not on
+a context slot.
 
 ---
 
@@ -205,14 +326,13 @@ the `"wasmos"` module namespace.
 #### `wasmos_dma_map_borrow`
 
 ```c
-// api.h declaration
+// api.h declaration — id-based: the MAPPER names its own borrow by borrow_id.
 extern int32_t wasmos_dma_map_borrow(
-    int32_t borrow_kind,
-    int32_t source_endpoint,
+    int32_t borrow_id,
     int32_t offset,
     int32_t length,
     int32_t direction_flags)
-    WASMOS_WASM_IMPORT("wasmos", "dma_map_borrow");  // wasm3 sig: "i(iiiii)"
+    WASMOS_WASM_IMPORT("wasmos", "dma_map_borrow");  // wasm3 sig: "i(iiii)"
 ```
 
 Returns the physical device address (a non-negative `int32_t`) on
@@ -220,31 +340,26 @@ success, or a `WASMOS_DMA_STATUS_*` error on failure.
 
 Validation sequence (in order):
 
-1. `kind >= 0`, `offset >= 0`, `length > 0`, `direction_flags > 0` →
+1. `borrow_id > 0`, `offset >= 0`, `length > 0`, `direction_flags > 0` →
    `WASMOS_DMA_STATUS_INVALID` if any fail.
-2. Caller has `CAP_DMA_BUFFER` capability →
+2. Caller has `CAP_DMA_BUFFER` capability (`require_dma_capability`) →
    `WASMOS_DMA_STATUS_DENY` if absent.
-3. Resolved endpoint owner is not 0 and not the calling context →
-   `WASMOS_DMA_STATUS_INVALID`.
-4. Endpoint owner matches `borrow_source_context` on the slot →
-   `WASMOS_DMA_STATUS_INVALID` (cross-context borrow forbidden).
-5. Borrow direction flags: `WASMOS_DMA_DIR_TO_DEVICE` requires
-   `PM_BUFFER_BORROW_READ` on the slot; `WASMOS_DMA_DIR_FROM_DEVICE`
-   requires `PM_BUFFER_BORROW_WRITE` →
-   `WASMOS_DMA_STATUS_DENY` on mismatch.
-6. `capability_dma_direction_allowed` → `WASMOS_DMA_STATUS_DENY`.
-7. `length <= dma_max_bytes` → `WASMOS_DMA_STATUS_RANGE`.
-8. `process_manager_buffer_dma_map` (slot state/range validation + phys
-   address computation) → `WASMOS_DMA_STATUS_UNAVAILABLE` on failure.
-9. `capability_dma_range_allowed(ctx, device_addr, length)` → `WASMOS_DMA_STATUS_RANGE`.
-10. `device_addr <= 0x7FFFFFFF` (must fit in positive signed 32-bit) →
-    `WASMOS_DMA_STATUS_RANGE`.
+3. `xfer_buffer_get_borrowed(borrow_id, caller_ctx, &borrow, &mapping)` — the
+   caller must be the borrow's **borrower** (mapper) → `DENY` otherwise.
+4. `capability_dma_direction_allowed` (direction ⊆ the borrow's rights via
+   `dma_map_borrow`) → `WASMOS_DMA_STATUS_DENY`.
+5. `length <= dma_max_bytes` → `WASMOS_DMA_STATUS_RANGE`.
+6. `xfer_buffer_dma_map_borrow` (range validation + phys computation) →
+   `WASMOS_DMA_STATUS_DENY` on failure.
+7. `capability_dma_range_allowed(ctx, device_addr, length)` → `WASMOS_DMA_STATUS_RANGE`.
+8. `device_addr <= 0x7FFFFFFF` (must fit in positive signed 32-bit) →
+   `WASMOS_DMA_STATUS_RANGE`.
 
 #### `wasmos_dma_sync_borrow`
 
 ```c
 extern int32_t wasmos_dma_sync_borrow(
-    int32_t borrow_kind,
+    int32_t borrow_id,
     int32_t offset,
     int32_t length,
     int32_t sync_op)
@@ -254,87 +369,83 @@ extern int32_t wasmos_dma_sync_borrow(
 Valid `sync_op` values: `WASMOS_DMA_SYNC_TO_DEVICE`, `FROM_DEVICE`,
 `BIDIR`. Returns `WASMOS_DMA_STATUS_OK` or an error code.
 
-The kernel calls `process_manager_buffer_dma_sync`. On x86, cache
+The kernel calls `xfer_buffer_dma_sync`. On x86, cache
 maintenance is a no-op; the call still enforces that a mapping is
 active and that the requested range falls within `dma_length`.
 
 #### `wasmos_dma_unmap_borrow`
 
 ```c
-extern int32_t wasmos_dma_unmap_borrow(
-    int32_t borrow_kind,
-    int32_t source_endpoint)
-    WASMOS_WASM_IMPORT("wasmos", "dma_unmap_borrow");  // wasm3 sig: "i(ii)"
+extern int32_t wasmos_dma_unmap_borrow(int32_t borrow_id)
+    WASMOS_WASM_IMPORT("wasmos", "dma_unmap_borrow");  // wasm3 sig: "i(i)"
 ```
 
-Returns `WASMOS_DMA_STATUS_OK` or an error code. Clears `dma_mapped`
-and all DMA metadata on the slot without releasing the borrow itself.
+Returns `WASMOS_DMA_STATUS_OK` or an error code. Clears all DMA metadata on the
+borrow's mapping without releasing the borrow itself.
 
 ---
 
-### Kernel PM Buffer DMA Layer
+### Kernel xfer-buffer DMA Layer
 
-Implemented in `src/kernel/process_manager_buffers.c`.
+Implemented in `src/kernel/xfer_buffer/xfer_buffer.c`; declared in
+`src/kernel/include/xfer_buffer.h`. All calls run under the registry
+spinlock (`g_xfer_lock`).
 
-#### `process_manager_buffer_dma_map`
+#### `xfer_buffer_dma_map_owned` / `xfer_buffer_dma_map_borrow`
 
 ```c
-int process_manager_buffer_dma_map(
-    uint32_t kind,
-    uint32_t borrower_context_id,
-    uint32_t source_context_id,
-    uint32_t offset,
-    uint32_t length,
-    uint32_t direction_flags,
-    uint64_t *out_device_addr);
+int xfer_buffer_dma_map_owned(const xfer_buffer_owner_t *owner,  ...,
+                              xfer_buffer_dma_mapping_t *out_mapping);
+int xfer_buffer_dma_map_borrow(const xfer_buffer_borrow_t *borrow, ...,
+                               xfer_buffer_dma_mapping_t *out_mapping);
 ```
 
-Preconditions (returns -1 on any failure):
-- slot found for `(kind, borrower_context_id)`, borrow is active
-- `borrow_source_context_id == source_context_id`
-- slot not already mapped (`dma_mapped == 0`)
-- `offset + length <= buffer_size(kind)` (FS: 2 MiB; FB: framebuffer_size from boot-info)
+DMA is attached to a resolved handle — an owner (owner-initiated) or a borrow
+(borrower-initiated, resolved by `borrow_id` via `xfer_buffer_get_borrowed`) —
+not to a `(kind, context)` slot. Preconditions: the handle is valid, no mapping
+is already active on it, and `offset + length <= object size`
+(page-rounded at acquire; framebuffer size from boot-info). On success the
+mapping records direction/offset/length and the device address
+(`object phys + offset`).
 
-On success: sets `dma_mapped = 1`, records direction/offset/length, and
-computes `*out_device_addr = buffer_phys + offset`.
+#### `xfer_buffer_dma_sync`
 
-#### `process_manager_buffer_dma_sync`
+Validates the mapping is active and the requested offset+length falls within the
+originally mapped range. The sync operation itself is a no-op on x86 (no
+explicit cache flush required).
 
-Validates the slot is mapped and the requested offset+length falls
-within the originally mapped range. The sync operation itself is a
-no-op on x86 (no explicit cache flush required).
+#### `xfer_buffer_dma_unmap`
 
-#### `process_manager_buffer_dma_unmap`
-
-Validates slot is mapped and `borrow_source_context_id` matches.
-Clears `dma_mapped`, `dma_direction_flags`, `dma_offset`, `dma_length`.
-Does not release the borrow; the caller must call `wasmos_buffer_release`
-separately.
+Clears the DMA metadata on the mapping. It does not release the borrow or
+object; those are released via `xfer_buffer_unborrow` / `xfer_buffer_release`.
+Releasing an object or unborrowing a handle with a still-active mapping
+cascade-revokes the mapping.
 
 ---
 
 ### DMA Lifecycle State Machine
 
-A buffer slot progresses through these states:
+A borrow held by the mapper progresses through these DMA states (the borrow
+itself is created owner-side via `xfer_buffer_borrow`, which hands the mapper a
+`borrow_id`):
 
 ```
-IDLE ──[wasmos_buffer_borrow]──► BORROWED
-  └────────────────────────────────────────────────────────┐
-BORROWED ──[wasmos_dma_map_borrow]──► DMA_MAPPED           │ 
-  │                                                        │
-DMA_MAPPED ──[wasmos_dma_sync_borrow]──► DMA_MAPPED        │
-  │          (TO_DEVICE before hardware, FROM_DEVICE after)│
-  │                                                        │
-DMA_MAPPED ──[wasmos_dma_unmap_borrow]──► BORROWED         │
-  │                                                        │
-BORROWED ──[wasmos_buffer_release]──────────────────────► IDLE
+BORROWED ──[wasmos_dma_map_borrow]──► DMA_MAPPED
+  │                                       │
+  │   DMA_MAPPED ──[wasmos_dma_sync_borrow]──► DMA_MAPPED
+  │              (TO_DEVICE before hardware, FROM_DEVICE after)
+  │                                       │
+  │   DMA_MAPPED ──[wasmos_dma_unmap_borrow]──► BORROWED
+  │
+BORROWED ──[owner xfer_buffer_release / mapper xfer_buffer_unborrow]──► gone
 ```
 
 Constraints:
-- `buffer_release` while `dma_mapped` is set fails with an error.
-- On process exit, the cleanup path force-unmaps all DMA-mapped slots
-  before releasing the borrow records.
-- A new spawn receives new context/slot state with no residual mappings
+- Releasing an object or unborrowing a handle with an active mapping
+  cascade-revokes the mapping (see the DMA layer above).
+- On process exit, `xfer_buffer_drop_context` force-revokes all of the
+  context's mappings, borrows, and owned objects.
+- A new spawn receives fresh registry state with no residual mappings
   from a previous driver instance.
 
 ---
@@ -422,11 +533,11 @@ on every read and write request.
 **`ata_dma_prepare(source_endpoint, offset, length, direction_flags, *out_device_addr)`**
 
 ```
-wasmos_buffer_borrow(WASMOS_BUFFER_KIND_FS, source_endpoint,
+wasmos_buffer_borrow(WASMOS_BUFFER_KIND_XFER, source_endpoint,
     direction == FROM_DEVICE ? GRANT_WRITE : GRANT_READ)
-→ wasmos_dma_map_borrow(WASMOS_BUFFER_KIND_FS, source_endpoint,
+→ wasmos_dma_map_borrow(WASMOS_BUFFER_KIND_XFER, source_endpoint,
     offset, length, direction_flags)
-→ [if TO_DEVICE] wasmos_dma_sync_borrow(WASMOS_BUFFER_KIND_FS,
+→ [if TO_DEVICE] wasmos_dma_sync_borrow(WASMOS_BUFFER_KIND_XFER,
     offset, length, WASMOS_DMA_SYNC_TO_DEVICE)
 ```
 
@@ -436,10 +547,10 @@ the buffer borrow before returning the error code.
 **`ata_dma_finish(source_endpoint, offset, length, direction_flags)`**
 
 ```
-[if FROM_DEVICE] wasmos_dma_sync_borrow(WASMOS_BUFFER_KIND_FS,
+[if FROM_DEVICE] wasmos_dma_sync_borrow(WASMOS_BUFFER_KIND_XFER,
     offset, length, WASMOS_DMA_SYNC_FROM_DEVICE)
-→ wasmos_dma_unmap_borrow(WASMOS_BUFFER_KIND_FS, source_endpoint)
-→ wasmos_buffer_release(WASMOS_BUFFER_KIND_FS)
+→ wasmos_dma_unmap_borrow(WASMOS_BUFFER_KIND_XFER, source_endpoint)
+→ wasmos_buffer_release(WASMOS_BUFFER_KIND_XFER)
 ```
 
 #### Read Path (`BLOCK_IPC_READ_REQ`)
@@ -483,7 +594,7 @@ from `ata_dma_prepare`.
    capability before any other state. A driver spawned without it always
    gets `WASMOS_DMA_STATUS_DENY` regardless of borrow state.
 
-2. **One mapping per slot at a time.** `process_manager_buffer_dma_map`
+2. **One mapping per slot at a time.** `xfer_buffer_dma_map`
    rejects a second map call while `dma_mapped` is set. The driver must
    call `dma_unmap_borrow` before re-mapping the same borrow.
 
@@ -492,7 +603,7 @@ from `ata_dma_prepare`.
    `dma_map_borrow`. Subsequent sync calls verify only that the range
    falls within the already-mapped `dma_length`.
 
-4. **Sync is a no-op on x86.** `process_manager_buffer_dma_sync` enforces
+4. **Sync is a no-op on x86.** `xfer_buffer_dma_sync` enforces
    state/range semantics but does not issue cache maintenance instructions.
    This is correct for x86 coherent DMA. Non-coherent architectures
    would need explicit flushes here.
@@ -506,6 +617,6 @@ from `ata_dma_prepare`.
    or IOVA support is added.
 
 6. **No framebuffer DMA integration.** The framebuffer buffer kind
-   (`PM_BUFFER_KIND_FRAMEBUFFER = 2`) has PM-layer DMA map/unmap support
-   wired through the same `pm_fs_buffer_slot_t` path, but no driver
+   (`FRAMEBUFFER_BUFFER_KIND = 2`) has PM-layer DMA map/unmap support
+   wired through the same transfer-buffer slot path, but no driver
    currently calls the DMA hostcalls for framebuffer transfers.

@@ -220,7 +220,7 @@ short-circuits to return 1).
 
 4. **DMA capability is presence-only at the policy layer.** Fine-grained
    DMA direction, range, and size constraints are enforced by the DMA hostcall
-   layer itself (`process_manager_buffer_dma_map`) using capability queries,
+   layer itself (`xfer_buffer_dma_map`) using capability queries,
    not by `policy_authorize`.
 
 5. **All capability state lives in the kernel.** WASM processes cannot read

@@ -88,24 +88,13 @@ static vb::Span<vb::NativeSymbol const> aot_symbols()
         /* Futex */
         DYNAMIC_LINK("wasmos", "futex_wait",          stub_i3),
         DYNAMIC_LINK("wasmos", "futex_wake",          stub_i2),
-        /* FS shared buffer */
-        DYNAMIC_LINK("wasmos", "xfer_buffer_size",      stub_i0),
+        /* Shared buffers */
+        DYNAMIC_LINK("wasmos", "xfer_buffer_size",    stub_i0),
         DYNAMIC_LINK("wasmos", "fs_endpoint",         stub_i0),
-        DYNAMIC_LINK("wasmos", "xfer_buffer_read",      stub_i4),
-        DYNAMIC_LINK("wasmos", "xfer_buffer_write",     stub_i4),
-        DYNAMIC_LINK("wasmos", "xfer_buffer_acquire",   stub_i1),
-        DYNAMIC_LINK("wasmos", "spawn_info_buffer",     stub_i0),
-        DYNAMIC_LINK("wasmos", "xfer_buffer_borrow",    stub_i3),
-        DYNAMIC_LINK("wasmos", "xfer_buffer_reborrow",  stub_i3),
-        DYNAMIC_LINK("wasmos", "xfer_buffer_release",   stub_i1),
-        DYNAMIC_LINK("wasmos", "xfer_buffer_unborrow",  stub_i1),
-        /* Generic buffer acquire/borrow/release/unborrow */
-        DYNAMIC_LINK("wasmos", "buffer_acquire",      stub_i2),
+        DYNAMIC_LINK("wasmos", "xfer_buffer_read",    stub_i4),
+        DYNAMIC_LINK("wasmos", "xfer_buffer_write",   stub_i4),
         DYNAMIC_LINK("wasmos", "buffer_borrow",       stub_i4),
-        DYNAMIC_LINK("wasmos", "buffer_reborrow",     stub_i4),
         DYNAMIC_LINK("wasmos", "buffer_release",      stub_i2),
-        DYNAMIC_LINK("wasmos", "buffer_unborrow",     stub_i1),
-        /* Block DMA buffer */
         DYNAMIC_LINK("wasmos", "block_buffer_phys",   stub_i0),
         DYNAMIC_LINK("wasmos", "block_buffer_copy",   stub_i4),
         DYNAMIC_LINK("wasmos", "block_buffer_write",  stub_i4),
@@ -129,8 +118,7 @@ static vb::Span<vb::NativeSymbol const> aot_symbols()
         DYNAMIC_LINK("wasmos", "proc_count",          stub_i0),
         DYNAMIC_LINK("wasmos", "sched_ready_count",   stub_i0),
         DYNAMIC_LINK("wasmos", "sched_cpu_count",     stub_i0),
-        DYNAMIC_LINK("wasmos", "sched_cpu_stats",     stub_i2),
-        DYNAMIC_LINK("wasmos", "physmem_stats",       stub_i1),  /* (out_off, ctx) */
+        DYNAMIC_LINK("wasmos", "physmem_stats",       stub_i1),
         DYNAMIC_LINK("wasmos", "kernel_runtime",      stub_i0),
         DYNAMIC_LINK("wasmos", "debug_mark",          stub_i1),
         DYNAMIC_LINK("wasmos", "kmap_dump",           stub_i0),
@@ -140,19 +128,18 @@ static vb::Span<vb::NativeSymbol const> aot_symbols()
         DYNAMIC_LINK("wasmos", "initfs_entry_name",   stub_i3),
         DYNAMIC_LINK("wasmos", "initfs_entry_size",   stub_i1),
         DYNAMIC_LINK("wasmos", "initfs_entry_copy",   stub_i4),
-        DYNAMIC_LINK("wasmos", "initfs_find_path",    stub_i2),
         /* DMA */
         DYNAMIC_LINK("wasmos", "dma_map_borrow",      stub_i4),
         DYNAMIC_LINK("wasmos", "dma_sync_borrow",     stub_i4),
         DYNAMIC_LINK("wasmos", "dma_unmap_borrow",    stub_i1),
-        /* Physical memory */
+        /* Physical memory / process info */
         DYNAMIC_LINK("wasmos", "phys_map",            stub_i4),
-        DYNAMIC_LINK("wasmos", "region_alloc",        stub_i3),
-        DYNAMIC_LINK("wasmos", "irq_configure",       stub_i2),
-        /* Process info */
         DYNAMIC_LINK("wasmos", "proc_info",           stub_i3),
         DYNAMIC_LINK("wasmos", "proc_info_ex",        stub_i4),
         DYNAMIC_LINK("wasmos", "proc_info_stats",     stub_i5),
+        DYNAMIC_LINK("wasmos", "xfer_buffer_borrow",  stub_i3),
+        DYNAMIC_LINK("wasmos", "xfer_buffer_release", stub_i1),
+        DYNAMIC_LINK("wasmos", "sched_cpu_stats",     stub_i2),
         /* Threads */
         DYNAMIC_LINK("wasmos", "thread_create",       stub_i4),
         DYNAMIC_LINK("wasmos", "thread_yield",        stub_i0),
@@ -168,30 +155,38 @@ static vb::Span<vb::NativeSymbol const> aot_symbols()
         DYNAMIC_LINK("wasmos", "shmem_flush",         stub_i3),
         DYNAMIC_LINK("wasmos", "shmem_refresh",       stub_i3),
         DYNAMIC_LINK("wasmos", "shmem_unmap",         stub_i1),
-        /* IRQ */
+        /* IRQ / serial / input */
         DYNAMIC_LINK("wasmos", "irq_route_ipc",       stub_i2),
         DYNAMIC_LINK("wasmos", "irq_ack",             stub_i1),
         DYNAMIC_LINK("wasmos", "irq_unroute",         stub_i1),
-        /* Serial / input */
         DYNAMIC_LINK("wasmos", "serial_register",     stub_i1),
         DYNAMIC_LINK("wasmos", "input_push",          stub_i1),
         DYNAMIC_LINK("wasmos", "input_read",          stub_i0),
-        /* Framebuffer */
+        /* Framebuffer / boot config / initfs lookup */
         DYNAMIC_LINK("wasmos", "framebuffer_info",    stub_i2),
         DYNAMIC_LINK("wasmos", "framebuffer_map",     stub_i2),
         DYNAMIC_LINK("wasmos", "framebuffer_pixel",   stub_i3),
-        /* Boot config */
         DYNAMIC_LINK("wasmos", "boot_config_size",    stub_i0),
         DYNAMIC_LINK("wasmos", "boot_config_copy",    stub_i3),
-        /* Early log */
+        DYNAMIC_LINK("wasmos", "initfs_find_path",    stub_i2),
+        /* Early log / environment */
         DYNAMIC_LINK("wasmos", "early_log_size",      stub_i0),
         DYNAMIC_LINK("wasmos", "early_log_copy",      stub_i3),
-        /* Environment */
         DYNAMIC_LINK("wasmos", "env_get",             stub_i4),
         DYNAMIC_LINK("wasmos", "env_set",             stub_i4),
         DYNAMIC_LINK("wasmos", "env_unset",           stub_i2),
-        /* AssemblyScript runtime */
         DYNAMIC_LINK("env",    "abort",               stub_v4),
+        DYNAMIC_LINK("wasmos", "region_alloc",        stub_i3),
+        DYNAMIC_LINK("wasmos", "irq_configure",       stub_i2),
+        DYNAMIC_LINK("wasmos", "ipc_select_wait_timeout", stub_i2),
+        /* Tail entries must stay in the kernel's HC_* order for AOT rebinding. */
+        DYNAMIC_LINK("wasmos", "xfer_buffer_acquire",   stub_i1),
+        DYNAMIC_LINK("wasmos", "xfer_buffer_unborrow",  stub_i1),
+        DYNAMIC_LINK("wasmos", "buffer_acquire",        stub_i2),
+        DYNAMIC_LINK("wasmos", "buffer_unborrow",       stub_i1),
+        DYNAMIC_LINK("wasmos", "xfer_buffer_reborrow",  stub_i3),
+        DYNAMIC_LINK("wasmos", "buffer_reborrow",       stub_i4),
+        DYNAMIC_LINK("wasmos", "spawn_info_buffer",     stub_i0),
     };
     return vb::Span<vb::NativeSymbol const>(syms, sizeof(syms) / sizeof(syms[0]));
 }

@@ -314,6 +314,8 @@ Any command that is not a built-in falls through to foreground execution:
 3. Write args string to the xfer buffer at offset path_len+1 (args_len bytes)
 4. Send PROC_IPC_SPAWN_PATH(path_len=arg1, args_len=arg2)
 5. Wait for PROC_IPC_RESP → get spawned pid (arg0) + spawn_flags (arg1)
+   The caller-owned xfer buffer stays live until this matching PM reply arrives;
+   PM reads it later by ownership rather than consuming it at send time.
    → if service/driver flag set: PM already waited for NOTIFY_READY
      → set $?="0", back to PROMPT
    → else: send PROC_IPC_WAIT(pid) → PENDING_WAIT

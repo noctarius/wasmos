@@ -36,6 +36,7 @@ static int32_t g_pending_req = -1;
 static char g_cwd[64] = "/";
 static int32_t g_pending_kind = 0;
 static int32_t g_pending_exec_pid = -1;
+static int32_t g_pending_spawn_bid = -1;
 static int32_t g_pending_cd_use_path = 0;
 static char g_pending_cd_path[32] = "/";
 static char g_history[CLI_HISTORY_MAX][sizeof(g_line)];
@@ -57,6 +58,15 @@ set_cwd_root(void)
 {
     g_cwd[0] = '/';
     g_cwd[1] = '\0';
+}
+
+static void
+cli_release_pending_spawn_bid(void)
+{
+    if (g_pending_spawn_bid >= 0) {
+        (void)wasmos_xfer_buffer_release(g_pending_spawn_bid);
+        g_pending_spawn_bid = -1;
+    }
 }
 
 static char
@@ -1922,8 +1932,7 @@ cli_handle_line(void)
             console_write("spawn failed\n");
             return 0;
         }
-        /* PM has consumed the buffer by the time it replies; drop ownership now. */
-        (void)wasmos_xfer_buffer_release(bid);
+        g_pending_spawn_bid = bid;
         g_pending_kind = PENDING_SPAWN;
         return 1;
     }
@@ -2007,8 +2016,7 @@ cli_handle_line(void)
             console_write("exec failed\n");
             return 0;
         }
-        /* PM has consumed the buffer by the time it replies; drop ownership now. */
-        (void)wasmos_xfer_buffer_release(bid);
+        g_pending_spawn_bid = bid;
         g_pending_kind = PENDING_EXEC;
         return 1;
     }
@@ -2191,6 +2199,7 @@ cli_phase_wait_ipc_step(void)
 {
     int32_t recv_rc = wasmos_ipc_select_one(g_reply_endpoint);
     if (recv_rc < 0) {
+        cli_release_pending_spawn_bid();
         cli_fail_and_stall("[cli] ipc recv failed\n");
     }
     int32_t resp_type = wasmos_ipc_last_field(WASMOS_IPC_FIELD_TYPE);
@@ -2221,7 +2230,13 @@ cli_phase_wait_ipc_step(void)
     }
     int32_t resp_status = wasmos_ipc_last_field(WASMOS_IPC_FIELD_ARG0);
     if (resp_req != g_pending_req) {
+        cli_release_pending_spawn_bid();
         cli_fail_and_stall("[cli] ipc response mismatch\n");
+    }
+    if ((g_pending_kind == PENDING_EXEC || g_pending_kind == PENDING_SPAWN) &&
+        g_pending_spawn_bid >= 0 &&
+        (resp_type == PROC_IPC_RESP || resp_type == PROC_IPC_ERROR)) {
+        cli_release_pending_spawn_bid();
     }
     if (resp_type == PROC_IPC_ERROR) {
         /* PM packs the real failure rc into arg1 — surface it instead of a
@@ -2309,6 +2324,7 @@ cli_phase_wait_ipc_step(void)
             set_cwd_root();
         }
     }
+    cli_release_pending_spawn_bid();
     g_pending_req = -1;
     g_pending_kind = PENDING_NONE;
     g_phase = CLI_PHASE_PROMPT;

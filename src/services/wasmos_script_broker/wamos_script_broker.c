@@ -184,9 +184,16 @@ script_register(int32_t proc_endpoint, int32_t broker_endpoint)
 }
 
 int32_t
-initialize(int32_t proc_endpoint)
+initialize(int32_t proc_endpoint,
+           int32_t ignored_arg1,
+           int32_t ignored_arg2,
+           int32_t ignored_arg3)
 {
-    /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
+    /* Keep the fixed 4-slot WASM service entry ABI; startup values now come
+     * from the spawn-info contract instead of entry args. */
+    (void)ignored_arg1;
+    (void)ignored_arg2;
+    (void)ignored_arg3;
     proc_endpoint = wasmos_startup_proc_endpoint();
     int32_t broker_endpoint = wasmos_ipc_create_endpoint();
     int32_t register_rc = 0;

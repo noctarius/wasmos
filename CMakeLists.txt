@@ -1088,6 +1088,8 @@ add_custom_command(
           ${WASM_INIT_SMOKE_APP}
           ${WASM_NATIVE_CALL_MIN_APP}
           ${WASM_NATIVE_CALL_SMOKE_APP}
+          ${WASM_WAMOS_SCRIPT_APP}
+          ${WASM_WAMOS_SCRIPT_BROKER_APP}
           ${WASM_SHMEM_OWNER_APP}
           ${WASM_SHMEM_TARGET_APP}
           ${WASM_NET_SMOKE_APP}

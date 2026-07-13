@@ -8,6 +8,7 @@ const IPC_EMPTY: i32 = 1;
 const IPC_ENDPOINT_NONE: u32 = 0xFFFF_FFFF;
 const REQ_BASE: u32 = 0xA000;
 const PM_XFER_BUFFER_SIZE: usize = 256 * 1024;
+const IPC_CALL_EMPTY_POLL_LIMIT: u32 = 32768;
 const MAX_FONTS: usize = 3;
 const MAX_HANDLES: usize = 16;
 const RASTER_SCRATCH_BYTES: usize = 4096;
@@ -119,7 +120,7 @@ fn ipc_call(destination: u32, request_id: u32, msg_type: u32, arg0: u32, arg1: u
             return -1;
         }
         if (handled == 0) {
-            if (empty_polls >= 1024) {
+            if (empty_polls >= IPC_CALL_EMPTY_POLL_LIMIT) {
                 sys.intentCancel(&g_ipc_loop, request_id);
                 return -1;
             }

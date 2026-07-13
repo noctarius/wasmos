@@ -38,6 +38,10 @@ typedef enum {
 #define MEM_REGION_FLAG_EXEC   (1u << 2)
 /* Region is intended to be user-accessible once ring3 mappings are active. */
 #define MEM_REGION_FLAG_USER   (1u << 3)
+/* Physical backing is owned by another subsystem and must not be freed by
+ * mm_context_destroy(). Used by wasm3 linear memory after rebinding the
+ * placeholder region to the runtime heap allocation. */
+#define MEM_REGION_FLAG_PHYS_EXTERNAL (1u << 31)
 
 /* IPC message types for the kernel memory-fault service. */
 typedef enum {
@@ -121,6 +125,7 @@ int mm_shared_release(uint32_t owner_context_id, uint32_t id);
 
 /* Map an arbitrary physical range into a context's virtual space (MMIO use). */
 int mm_context_map_physical(uint32_t context_id, uint64_t virt, uint64_t phys, uint64_t size, uint32_t flags);
+int mm_context_rebind_wasm_linear(uint32_t context_id, uint64_t phys_base, uint64_t size);
 
 /* Safe user-memory copy helpers — validate the user VA range before touching it. */
 int mm_copy_from_user(uint32_t context_id, void *dst, uint64_t user_src, uint64_t size);

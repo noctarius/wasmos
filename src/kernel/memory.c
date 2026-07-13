@@ -295,6 +295,15 @@ mm_region_flags_valid(uint32_t flags)
     return 1;
 }
 
+static uint64_t
+mm_page_align_up(uint64_t size)
+{
+    if (size == 0) {
+        return 0;
+    }
+    return (size + PAGE_SIZE - 1ULL) & ~(PAGE_SIZE - 1ULL);
+}
+
 static mem_region_t *
 mm_context_add_region_slot(mm_context_t *ctx, uint64_t base, uint64_t size, uint32_t flags, mem_region_type_t type)
 {
@@ -333,7 +342,7 @@ mm_context_release_regions(mm_context_t *ctx)
                  * acquired in mm_shared_map, then release the logical reference. */
                 pfa_free_pages(region->phys_base, pages);
                 (void)mm_shared_release(ctx->id, region->shared_id);
-            } else {
+            } else if (!(region->flags & MEM_REGION_FLAG_PHYS_EXTERNAL)) {
                 pfa_free_pages(region->phys_base, pages);
             }
         }
@@ -761,6 +770,69 @@ int mm_context_alloc_region(mm_context_t *ctx, uint64_t pages, uint32_t flags, m
         return -1;
     }
     added->phys_base = phys;
+    return 0;
+}
+
+int
+mm_context_rebind_wasm_linear(uint32_t context_id, uint64_t phys_base, uint64_t size)
+{
+    mm_context_t *ctx = 0;
+    mem_region_t *region = 0;
+    list_iter_t it;
+    uint64_t old_phys = 0;
+    uint64_t old_size = 0;
+    uint32_t old_flags = 0;
+    uint64_t unmap_bytes = 0;
+
+    if (context_id == 0 || phys_base == 0 || size == 0 || (phys_base & (PAGE_SIZE - 1ULL)) != 0) {
+        return -1;
+    }
+
+    ctx = mm_context_get(context_id);
+    if (!ctx) {
+        return -1;
+    }
+
+    region = (mem_region_t *)list_first(&ctx->regions, &it);
+    while (region) {
+        if (region->type == MEM_REGION_WASM_LINEAR) {
+            break;
+        }
+        region = (mem_region_t *)list_next(&it);
+    }
+    if (!region) {
+        return -1;
+    }
+
+    old_phys = region->phys_base;
+    old_size = region->size;
+    old_flags = region->flags;
+    if (old_phys == phys_base &&
+        old_size == size &&
+        (old_flags & MEM_REGION_FLAG_PHYS_EXTERNAL)) {
+        return 0;
+    }
+
+    unmap_bytes = mm_page_align_up(old_size);
+    if (mm_page_align_up(size) > unmap_bytes) {
+        unmap_bytes = mm_page_align_up(size);
+    }
+    for (uint64_t off = 0; off < unmap_bytes; off += PAGE_SIZE) {
+        (void)paging_unmap_4k_in_root(ctx->root_table, region->base + off);
+    }
+
+    if (old_phys != 0 &&
+        !(old_flags & MEM_REGION_FLAG_PHYS_EXTERNAL) &&
+        old_phys != phys_base) {
+        uint64_t old_pages = (old_size + PAGE_SIZE - 1ULL) / PAGE_SIZE;
+        if (old_pages != 0) {
+            pfa_free_pages(old_phys, old_pages);
+        }
+    }
+
+    region->phys_base = phys_base;
+    region->size = size;
+    region->flags |= MEM_REGION_FLAG_PHYS_EXTERNAL;
     return 0;
 }
 

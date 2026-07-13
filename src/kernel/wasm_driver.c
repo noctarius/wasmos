@@ -352,6 +352,21 @@ wasm_driver_start(wasm_driver_t *driver,
         wasm_driver_leave_runtime(previous_pid);
         return -1;
     }
+    /* Rebind the placeholder wasm-linear region to the runtime's actual heap
+     * backing before the first hostcall, so early startup-buffer reads can
+     * validate and fault-map large static/data addresses correctly. */
+    if (wasm3_sync_linear_memory_region(driver->owner_pid,
+                                        owner_context_id,
+                                        driver->runtime) != 0) {
+        klog_write("[wasm-driver] linear memory sync failed\n");
+        m3_FreeRuntime(driver->runtime);
+        m3_FreeEnvironment(driver->env);
+        driver->runtime = 0;
+        driver->env = 0;
+        driver->module = 0;
+        wasm_driver_leave_runtime(previous_pid);
+        return -1;
+    }
 
     if (wasm3_link_wasmos(driver->module) != 0 || wasm3_link_env(driver->module) != 0) {
         klog_write("[wasm-driver] link failed\n");

@@ -20,6 +20,7 @@
 #include "system_control.h"
 #include "thread.h"
 #include "wasm_driver.h"
+#include "wasm3/shim.h"
 #include "sync/spinlock.h"
 
 #include "futex.h"
@@ -443,24 +444,64 @@ wasm_user_va_from_offset(uint32_t context_id,
     return 0;
 }
 
-static void
-wasm_linear_region_sync_size(mm_context_t *ctx, uint64_t required_size)
+static int
+wasm3_sync_linear_memory_region_binding(uint32_t pid,
+                                        uint32_t context_id,
+                                        const uint8_t *mem_base,
+                                        uint64_t mem_size)
 {
-    if (!ctx || required_size == 0) {
-        return;
+    uint64_t phys_base = 0;
+
+    if (pid == 0 || context_id == 0 || !mem_base || mem_size == 0) {
+        return -1;
     }
-    list_iter_t it;
-    mem_region_t *region = (mem_region_t *)list_first(&ctx->regions, &it);
-    while (region) {
-        if (region->type != MEM_REGION_WASM_LINEAR) {
-            region = (mem_region_t *)list_next(&it);
-            continue;
-        }
-        if (required_size > region->size) {
-            region->size = required_size;
-        }
-        return;
+    if (((uintptr_t)mem_base & 0xFFFULL) != 0) {
+        return -1;
     }
+    if (wasm3_heap_query_phys(pid, mem_base, mem_size, &phys_base) != 0) {
+        return -1;
+    }
+    return mm_context_rebind_wasm_linear(context_id, phys_base, mem_size);
+}
+
+int
+wasm3_sync_linear_memory_region(uint32_t pid, uint32_t context_id, IM3Runtime runtime)
+{
+    uint32_t mem_size = 0;
+    uint8_t *mem_base = 0;
+
+    if (pid == 0 || context_id == 0 || !runtime) {
+        return -1;
+    }
+    mem_base = m3_GetMemory(runtime, &mem_size, 0);
+    if (!mem_base || mem_size == 0u) {
+        return -1;
+    }
+    return wasm3_sync_linear_memory_region_binding(pid, context_id, mem_base, (uint64_t)mem_size);
+}
+
+static int
+wasm3_sync_current_linear_memory(uint32_t context_id,
+                                 const uint8_t *mem_base,
+                                 uint64_t mem_size)
+{
+    uint32_t pid = process_current_pid();
+
+    if (pid == 0) {
+        return -1;
+    }
+    return wasm3_sync_linear_memory_region_binding(pid, context_id, mem_base, mem_size);
+}
+
+static int
+wasm3_sync_runtime_linear_memory(uint32_t context_id, IM3Runtime runtime)
+{
+    uint32_t pid = process_current_pid();
+
+    if (pid == 0) {
+        return -1;
+    }
+    return wasm3_sync_linear_memory_region(pid, context_id, runtime);
 }
 
 static int
@@ -482,6 +523,7 @@ wasm_user_va_from_host_ptr(uint32_t context_id,
     if (off > mem_size || (uint64_t)span > (mem_size - off)) {
         return -1;
     }
+    (void)wasm3_sync_current_linear_memory(context_id, mem_base, mem_size);
     return wasm_user_va_from_offset(context_id, (uint32_t)off, span, out_user_va);
 }
 
@@ -2142,6 +2184,7 @@ m3ApiRawFunction(wasmos_framebuffer_map)
     if ((uint64_t)off32 + (uint64_t)map_size32 > (uint64_t)m3_GetMemorySize(runtime)) {
         m3ApiReturn(-1);
     }
+    (void)wasm3_sync_runtime_linear_memory(proc->context_id, runtime);
     uint64_t virt = 0;
     int va_rc = wasm_user_va_from_offset(proc->context_id, off32, map_size32, &virt);
     int perm_rc = 0;
@@ -2312,6 +2355,7 @@ m3ApiRawFunction(wasmos_shmem_map)
     if ((uint64_t)off32 + (uint64_t)map_size32 > (uint64_t)m3_GetMemorySize(runtime)) {
         m3ApiReturn(-1);
     }
+    (void)wasm3_sync_runtime_linear_memory(proc->context_id, runtime);
     uint64_t virt = 0;
     if (wasm_user_va_from_offset(proc->context_id, off32, map_size32, &virt) != 0 ||
         mm_user_range_permitted(proc->context_id, virt, (uint64_t)map_size32, MEM_REGION_FLAG_WRITE) != 0) {
@@ -2372,7 +2416,7 @@ m3ApiRawFunction(wasmos_shmem_map_auto)
     }
 
     uint64_t mem_size = (uint64_t)m3_GetMemorySize(runtime);
-    wasm_linear_region_sync_size(ctx, mem_size);
+    (void)wasm3_sync_runtime_linear_memory(proc->context_id, runtime);
     uint64_t off64 = 0;
     uint8_t found = 0;
     /* Keep auto-mapped shared pages away from low linear-memory where
@@ -2410,7 +2454,7 @@ m3ApiRawFunction(wasmos_shmem_map_auto)
                 m3ApiReturn(SHMEM_ERR_NO_WINDOW);
             }
             mem_size = (uint64_t)m3_GetMemorySize(runtime);
-            wasm_linear_region_sync_size(ctx, mem_size);
+            (void)wasm3_sync_runtime_linear_memory(proc->context_id, runtime);
             if (required > mem_size) {
                 m3ApiReturn(SHMEM_ERR_NO_WINDOW);
             }

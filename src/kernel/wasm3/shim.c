@@ -492,6 +492,49 @@ wasm3_heap_committed_bytes(uint32_t pid)
     return committed;
 }
 
+int
+wasm3_heap_query_phys(uint32_t pid, const void *ptr, uint64_t size, uint64_t *out_phys_base)
+{
+    wasm3_heap_slot_t *slot = 0;
+    wasm3_heap_chunk_t *chunk = 0;
+    uintptr_t chunk_base = 0;
+    uintptr_t addr = 0;
+    uint64_t offset = 0;
+
+    if (pid == 0 || !ptr || size == 0 || !out_phys_base) {
+        return -1;
+    }
+
+    ksync_spinlock_lock(&g_wasm3_heap_lock);
+    slot = wasm3_heap_slot_for_pid(pid);
+    if (!slot || slot->chunk_count == 0) {
+        ksync_spinlock_unlock(&g_wasm3_heap_lock);
+        return -1;
+    }
+
+    chunk = wasm3_heap_chunk_for_ptr(slot, ptr, 0);
+    if (!chunk || !chunk->base || chunk->phys == 0) {
+        ksync_spinlock_unlock(&g_wasm3_heap_lock);
+        return -1;
+    }
+
+    chunk_base = (uintptr_t)chunk->base;
+    addr = (uintptr_t)ptr;
+    if (addr < chunk_base) {
+        ksync_spinlock_unlock(&g_wasm3_heap_lock);
+        return -1;
+    }
+    offset = (uint64_t)(addr - chunk_base);
+    if (offset > (uint64_t)chunk->size || size > ((uint64_t)chunk->size - offset)) {
+        ksync_spinlock_unlock(&g_wasm3_heap_lock);
+        return -1;
+    }
+
+    *out_phys_base = chunk->phys + offset;
+    ksync_spinlock_unlock(&g_wasm3_heap_lock);
+    return 0;
+}
+
 void *realloc(void *ptr, size_t size)
 {
     if (!ptr) {

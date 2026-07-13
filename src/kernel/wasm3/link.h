@@ -10,5 +10,6 @@
 void wasm3_link_init(const boot_info_t *boot_info);
 int wasm3_link_wasmos(IM3Module module);
 int wasm3_link_env(IM3Module module);
+int wasm3_sync_linear_memory_region(uint32_t pid, uint32_t context_id, IM3Runtime runtime);
 
 #endif

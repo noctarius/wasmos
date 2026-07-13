@@ -965,27 +965,15 @@ wasmos_script_run(wasmos_script_state_t *state,
                   const wasmos_script_ops_t *ops,
                   const char *path)
 {
-    int trace_sysinit = 0;
-    int trace_line = 0;
     FILE *f = fopen(path, "r");
     if (!f) {
         return -1;
-    }
-    if (path) {
-        int path_len = 0;
-        while (path[path_len]) {
-            path_len++;
-        }
-        if (path_len >= 10 && strcmp(&path[path_len - 10], "sysinit.rc") == 0) {
-            trace_sysinit = 1;
-        }
     }
     char line[WASMOS_SCRIPT_LINE_MAX];
     for (;;) {
         if (!fgets(line, (int)sizeof(line), f)) {
             break;
         }
-        trace_line++;
         /* Trim leading whitespace */
         int start = 0;
         while (line[start] == ' ' || line[start] == '\t') {
@@ -1003,15 +991,6 @@ wasmos_script_run(wasmos_script_state_t *state,
         /* Skip empty lines and comments */
         if (line[start] == '\0' || line[start] == '#') {
             continue;
-        }
-        if (trace_sysinit) {
-            char trace_buf[WASMOS_SCRIPT_LINE_MAX + 32];
-            (void)snprintf(trace_buf, sizeof(trace_buf), "[script-trace] %d %s", trace_line, &line[start]);
-            if (ops && ops->on_echo_ex) {
-                ops->on_echo_ex(ops->user, trace_buf, 1);
-            } else if (ops && ops->on_echo) {
-                ops->on_echo(ops->user, trace_buf);
-            }
         }
         int rc = script_exec_line(state, ops, &line[start]);
         if (rc == -1) {

@@ -81,18 +81,6 @@ sysinit_log_spawn_failure(const char *op, const char *path, int32_t rc)
     log_line("\n");
 }
 
-static void
-sysinit_trace_step(const char *op, const char *value)
-{
-    log_line("[sysinit-trace] ");
-    log_line(op);
-    if (value && value[0] != '\0') {
-        log_line(" ");
-        log_line(value);
-    }
-    log_line("\n");
-}
-
 /* Fire-and-forget spawn: writes path into the xfer buffer and sends
  * PROC_IPC_SPAWN_PATH.  Retries up to SYSINIT_MAX_SPAWN_ATTEMPTS on
  * PROC_IPC_ERROR with arg1==PROC_PM_ERR_BUSY. */
@@ -164,7 +152,6 @@ sysinit_on_start(void *user, const char *path)
     (void)user;
     uint32_t path_len = 0;
     int32_t bid;
-    sysinit_trace_step("start", path);
     while (path[path_len]) {
         path_len++;
     }
@@ -209,7 +196,6 @@ static int
 sysinit_on_spawn(void *user, const char *path)
 {
     (void)user;
-    sysinit_trace_step("spawn", path);
     return spawn_path(path);
 }
 
@@ -325,7 +311,6 @@ sysinit_on_wait_svc(void *user, const char *name)
 {
     (void)user;
     int32_t req_id = g_state.spawn_request_id;
-    sysinit_trace_step("wait-svc", name);
     for (;;) {
         int32_t endpoint = wasmos_svc_lookup(g_state.proc_endpoint,
                                              g_state.reply_endpoint,

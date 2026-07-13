@@ -4,8 +4,8 @@ This document covers the WASMOS kernel memory subsystem in full implementation
 detail: the physical frame allocator, the paging layer, memory contexts,
 the user virtual address space layout, shared memory, user-pointer copy,
 and the slab allocator. The authoritative sources are `src/kernel/physmem.c`,
-`src/kernel/paging.c`, `src/kernel/memory.c`, `src/kernel/slab.c`, and
-their headers.
+`src/kernel/paging.c`, `src/kernel/memory.c`, `src/kernel/slab.c`,
+`src/kernel/kmem.c`, and their headers.
 
 ---
 
@@ -316,7 +316,24 @@ list is empty or if no class fits.
 
 `kfree_small(ptr)` validates the magic and class index before pushing the
 chunk back to its free list. Invalid magic or out-of-range class index is
-silently dropped.
+silently dropped. The slab is guarded by `g_slab_lock`, so `kalloc_small` /
+`kfree_small` are SMP-safe and process-independent.
+
+#### kmem: kernel container allocator
+
+`src/kernel/kmem.c` is the allocator for generic kernel container metadata —
+the nodes of `list.c` and `hashmap.c` (e.g. the xfer-buffer registry's object
+and borrow lists). It allocates from the global slab (`kalloc_small` /
+`kfree_small`) with a fixed early-boot arena as a fallback for allocations that
+happen before `slab_init()` or when a class is exhausted.
+
+kmem must **not** use the plain libc `malloc`/`free`: on the wasm3 backend the
+kernel `malloc` (`wasm3/shim.c`) is *per-process* (routed by the CPU-local bound
+pid via `g_wasm3_heaps[]`) and is reclaimed when that process is reaped, so
+kernel-global container nodes allocated from it would dangle. The slab and arena
+are process-independent, matching the WARP backend where `malloc` already
+forwards to `kalloc_small`. (This was the cause of a wasm3 SMP triple fault
+during process reap; see `docs/STATUS.md`.)
 
 ---
 

@@ -12,6 +12,7 @@ new lock site must be checked against this hierarchy before merging.
 |-------------------------------|------------------|-----------------------------------------|
 | `g_pfa_lock`                  | `physmem.c`      | Physical page frame allocator free-list |
 | `g_slab_lock`                 | `slab.c`         | Kernel slab/heap allocator              |
+| `g_xfer_lock`                 | `xfer_buffer/xfer_buffer.c` | xfer-buffer registry (objects/borrows)  |
 | `g_endpoint_table_lock`       | `ipc.c`          | IPC endpoint table scan/alloc           |
 | `ep->lock`                    | `ipc_endpoint_t` | Per-endpoint queue and waiter state     |
 | `g_process_table_lock`        | `process.c`      | Process slot array reads and writes     |
@@ -56,6 +57,12 @@ neither is acquired while holding the other.
 ### Physical memory group
 
 ```
+g_xfer_lock                    (outer — xfer-buffer registry)
+  ├─ g_slab_lock               (inner — registry list nodes via
+  |                                      list_alloc → kmem_alloc → kalloc_small)
+  └─ g_pfa_lock                (inner — object backing via pfa_alloc/free_pages
+                                         in xfer_buffer_*_locked)
+
 g_shared_lock                  (outer — shared-region table)
   └─ g_pfa_lock                (inner — pfa_alloc/free_pages called under
                                          g_shared_lock in mm_shared_create)
@@ -65,7 +72,10 @@ g_slab_lock                    (leaf — may call pfa internally; verified
 ```
 
 `g_pfa_lock` is the innermost physical-memory lock.  Nothing that holds
-`g_pfa_lock` may acquire `g_shared_lock` or `g_slab_lock`.
+`g_pfa_lock` may acquire `g_shared_lock`, `g_slab_lock`, or `g_xfer_lock`.
+`g_xfer_lock` is the outermost physical-memory lock: all xfer-buffer registry
+mutation runs under it, and it nests both `g_slab_lock` and `g_pfa_lock`.
+Nothing that holds `g_slab_lock` or `g_pfa_lock` may acquire `g_xfer_lock`.
 
 ### Independent / leaf locks
 

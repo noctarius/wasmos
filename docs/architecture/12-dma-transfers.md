@@ -268,28 +268,25 @@ typedef struct {
 } pm_spawn_caps_t;
 ```
 
-#### Per-context Transfer-Buffer Slot
+#### xfer-buffer Registry Objects
 
-Per-context buffer slot tracking active borrow and any attached DMA mapping:
+The xfer-buffer registry (`src/kernel/xfer_buffer/xfer_buffer.c`) is a single,
+spinlock-guarded (`g_xfer_lock`) store of buffer objects. There is no
+per-context "slot" and no one-borrow-per-context limit; objects and borrows are
+independent handles keyed by stateless ids. The relevant descriptors
+(`src/kernel/include/xfer_buffer.h`) are:
 
 ```c
-typedef struct {
-    uint8_t  in_use;
-    uint32_t context_id;
-    uint64_t buffer_phys;              // physical base of the slot's buffer
-    uint8_t  borrow_active;            // nonzero when a borrow is in progress
-    uint8_t  borrow_flags;             // BUFFER_BORROW_READ / WRITE
-    uint32_t borrow_source_context_id; // context that issued the borrow
-    uint8_t  dma_mapped;               // nonzero when dma_map_borrow has succeeded
-    uint32_t dma_direction_flags;
-    uint32_t dma_offset;
-    uint32_t dma_length;
-} transfer_buffer_slot_t;
+typedef struct { ... } xfer_buffer_t;             // kind, buffer_id, size_bytes
+typedef struct { ... } xfer_buffer_owner_t;       // owner_context_id + buffer
+typedef struct { ... } xfer_buffer_borrow_t;      // lender, borrower, flags, borrow_id
+typedef struct { ... } xfer_buffer_dma_mapping_t; // offset, length, direction, dev addr, active
 ```
 
-Two separate lists exist: the xfer-buffer list and the framebuffer-buffer
-list. Each list is a chunked array of 16
-initial entries.
+Each object is owned by one context (identified by `buffer_id`); borrow edges
+form a directed acyclic graph (a borrower may `reborrow` downstream). DMA state
+lives on an `xfer_buffer_dma_mapping_t` attached to an owner or a borrow, not on
+a context slot.
 
 ---
 
@@ -362,7 +359,7 @@ Validation sequence (in order):
 
 ```c
 extern int32_t wasmos_dma_sync_borrow(
-    int32_t borrow_kind,
+    int32_t borrow_id,
     int32_t offset,
     int32_t length,
     int32_t sync_op)
@@ -379,80 +376,76 @@ active and that the requested range falls within `dma_length`.
 #### `wasmos_dma_unmap_borrow`
 
 ```c
-extern int32_t wasmos_dma_unmap_borrow(
-    int32_t borrow_kind,
-    int32_t source_endpoint)
-    WASMOS_WASM_IMPORT("wasmos", "dma_unmap_borrow");  // wasm3 sig: "i(ii)"
+extern int32_t wasmos_dma_unmap_borrow(int32_t borrow_id)
+    WASMOS_WASM_IMPORT("wasmos", "dma_unmap_borrow");  // wasm3 sig: "i(i)"
 ```
 
-Returns `WASMOS_DMA_STATUS_OK` or an error code. Clears `dma_mapped`
-and all DMA metadata on the slot without releasing the borrow itself.
+Returns `WASMOS_DMA_STATUS_OK` or an error code. Clears all DMA metadata on the
+borrow's mapping without releasing the borrow itself.
 
 ---
 
-### Kernel PM Buffer DMA Layer
+### Kernel xfer-buffer DMA Layer
 
-Implemented in `src/kernel/xfer_buffer/store.c`.
+Implemented in `src/kernel/xfer_buffer/xfer_buffer.c`; declared in
+`src/kernel/include/xfer_buffer.h`. All calls run under the registry
+spinlock (`g_xfer_lock`).
 
-#### `xfer_buffer_dma_map`
+#### `xfer_buffer_dma_map_owned` / `xfer_buffer_dma_map_borrow`
 
 ```c
-int xfer_buffer_dma_map(
-    uint32_t kind,
-    uint32_t borrower_context_id,
-    uint32_t source_context_id,
-    uint32_t offset,
-    uint32_t length,
-    uint32_t direction_flags,
-    uint64_t *out_device_addr);
+int xfer_buffer_dma_map_owned(const xfer_buffer_owner_t *owner,  ...,
+                              xfer_buffer_dma_mapping_t *out_mapping);
+int xfer_buffer_dma_map_borrow(const xfer_buffer_borrow_t *borrow, ...,
+                               xfer_buffer_dma_mapping_t *out_mapping);
 ```
 
-Preconditions (returns -1 on any failure):
-- slot found for `(kind, borrower_context_id)`, borrow is active
-- `borrow_source_context_id == source_context_id`
-- slot not already mapped (`dma_mapped == 0`)
-- `offset + length <= buffer_size(kind)` (FS: 2 MiB; FB: framebuffer_size from boot-info)
-
-On success: sets `dma_mapped = 1`, records direction/offset/length, and
-computes `*out_device_addr = buffer_phys + offset`.
+DMA is attached to a resolved handle — an owner (owner-initiated) or a borrow
+(borrower-initiated, resolved by `borrow_id` via `xfer_buffer_get_borrowed`) —
+not to a `(kind, context)` slot. Preconditions: the handle is valid, no mapping
+is already active on it, and `offset + length <= object size`
+(page-rounded at acquire; framebuffer size from boot-info). On success the
+mapping records direction/offset/length and the device address
+(`object phys + offset`).
 
 #### `xfer_buffer_dma_sync`
 
-Validates the slot is mapped and the requested offset+length falls
-within the originally mapped range. The sync operation itself is a
-no-op on x86 (no explicit cache flush required).
+Validates the mapping is active and the requested offset+length falls within the
+originally mapped range. The sync operation itself is a no-op on x86 (no
+explicit cache flush required).
 
 #### `xfer_buffer_dma_unmap`
 
-Validates slot is mapped and `borrow_source_context_id` matches.
-Clears `dma_mapped`, `dma_direction_flags`, `dma_offset`, `dma_length`.
-Does not release the borrow; the caller must call `wasmos_buffer_release`
-separately.
+Clears the DMA metadata on the mapping. It does not release the borrow or
+object; those are released via `xfer_buffer_unborrow` / `xfer_buffer_release`.
+Releasing an object or unborrowing a handle with a still-active mapping
+cascade-revokes the mapping.
 
 ---
 
 ### DMA Lifecycle State Machine
 
-A buffer slot progresses through these states:
+A borrow held by the mapper progresses through these DMA states (the borrow
+itself is created owner-side via `xfer_buffer_borrow`, which hands the mapper a
+`borrow_id`):
 
 ```
-IDLE ──[wasmos_buffer_borrow]──► BORROWED
-  └────────────────────────────────────────────────────────┐
-BORROWED ──[wasmos_dma_map_borrow]──► DMA_MAPPED           │ 
-  │                                                        │
-DMA_MAPPED ──[wasmos_dma_sync_borrow]──► DMA_MAPPED        │
-  │          (TO_DEVICE before hardware, FROM_DEVICE after)│
-  │                                                        │
-DMA_MAPPED ──[wasmos_dma_unmap_borrow]──► BORROWED         │
-  │                                                        │
-BORROWED ──[wasmos_buffer_release]──────────────────────► IDLE
+BORROWED ──[wasmos_dma_map_borrow]──► DMA_MAPPED
+  │                                       │
+  │   DMA_MAPPED ──[wasmos_dma_sync_borrow]──► DMA_MAPPED
+  │              (TO_DEVICE before hardware, FROM_DEVICE after)
+  │                                       │
+  │   DMA_MAPPED ──[wasmos_dma_unmap_borrow]──► BORROWED
+  │
+BORROWED ──[owner xfer_buffer_release / mapper xfer_buffer_unborrow]──► gone
 ```
 
 Constraints:
-- `buffer_release` while `dma_mapped` is set fails with an error.
-- On process exit, the cleanup path force-unmaps all DMA-mapped slots
-  before releasing the borrow records.
-- A new spawn receives new context/slot state with no residual mappings
+- Releasing an object or unborrowing a handle with an active mapping
+  cascade-revokes the mapping (see the DMA layer above).
+- On process exit, `xfer_buffer_drop_context` force-revokes all of the
+  context's mappings, borrows, and owned objects.
+- A new spawn receives fresh registry state with no residual mappings
   from a previous driver instance.
 
 ---

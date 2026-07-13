@@ -218,20 +218,23 @@ typedef struct {
     uint32_t framebuffer_gop_pixel_format;  // from UEFI GOP; 0=BGRA
 } nd_framebuffer_info_t;
 
-// Buffer borrow (native driver side)
+// xfer-buffer object model (native driver side)
 ND_BUFFER_KIND_XFER        = 1u
 ND_BUFFER_KIND_FRAMEBUFFER = 2u
 ND_BUFFER_BORROW_READ      = 0x1u
 ND_BUFFER_BORROW_WRITE     = 0x2u
+// void *xfer_buffer_acquire(kind, size, &out_buffer_id)
+// int   xfer_buffer_borrow(grantee_endpoint, buffer_id, flags) -> borrow_id
+// int   xfer_buffer_unborrow(borrow_id)  /  int xfer_buffer_release(buffer_id)
 
 // ABI versioning
 WASMOS_NATIVE_ABI_MAGIC   = 0x574E4150u  /* 'WNAP' */
-WASMOS_NATIVE_ABI_VERSION = 5u
+WASMOS_NATIVE_ABI_VERSION = 8u
 ```
 
-The compositor calls `api().buffer_borrow(ND_BUFFER_KIND_FRAMEBUFFER, 0,
-ND_BUFFER_BORROW_READ | ND_BUFFER_BORROW_WRITE, fb_size)` to get a direct
-pointer to the linear scanout surface.
+The compositor acquires the framebuffer as an owned xfer buffer via
+`api().xfer_buffer_acquire(ND_BUFFER_KIND_FRAMEBUFFER, fb_size, &g_fb_buffer_id)`,
+which returns a direct pointer to the linear scanout surface.
 It also uses `api().sched_ticks()` to time shared pointer gestures such as
 double-click detection.
 
@@ -311,18 +314,19 @@ const glyph_cache_entry_t = struct {
 
 `initialize()` performs these steps in order:
 
-1. Validate `abi_magic`/`abi_version` against `WASMOS_NATIVE_ABI_MAGIC` / version 3.
+1. Validate `abi_magic`/`abi_version` against `WASMOS_NATIVE_ABI_MAGIC` / version 8.
 2. Create `g_gfx_endpoint`, initialize `NativeEventLoop`, register IPC handlers.
 3. `svc_register("gfx", 1)` — publish endpoint name.
 4. `lookup_fb_endpoint()` via proc IPC; if found:
    - `lookup_vt_endpoint()`, subscribe keyboard and mouse.
    - Probe geometry (`FBTEXT_IPC_GEOMETRY_REQ`) and capabilities (`FBTEXT_IPC_QUERY_CAPS_REQ`).
    - Emit `[test] gfx compositor handshake ok`.
-5. `refresh_framebuffer_mapping()` — query `framebuffer_info`, borrow
-   `ND_BUFFER_KIND_FRAMEBUFFER` read+write into `g_fb_pixels`.
-6. `ensure_backbuffer_capacity(fb_stride * fb_height * 4)` — allocate
-   shmem-backed backbuffer at `g_backbuffer_pixels`.
-   TODO: backbuffer shmem is not reclaimed on mode change (shmem-destroy not yet exposed).
+5. `refresh_framebuffer_mapping()` — query `framebuffer_info`, acquire
+   `ND_BUFFER_KIND_FRAMEBUFFER` via `xfer_buffer_acquire()` into `g_fb_pixels`,
+   retaining `g_fb_buffer_id` for release/re-acquire on mode change.
+6. `ensure_backbuffer_capacity(fb_stride * fb_height * 4)` — acquire an owned
+   xfer buffer of `ND_BUFFER_KIND_XFER` for the private backbuffer at
+   `g_backbuffer_pixels` (variable-size, released and re-acquired on resize).
 7. Initialize pointer to screen center.
 8. `proc_notify_ready()`, enter event loop.
 
@@ -409,7 +413,7 @@ region is written to the scanout buffer on each compose cycle.
 const loaded_font_t = struct {
     available: bool,
     font_id: u32,
-    shmem_id: u32,
+    buffer_id: u32,          // owned xfer buffer holding the TTF font data
     ptr: ?[*]const u8,
     len: usize,
     font_info: stbtt_fontinfo,   // stb_truetype parsed state
@@ -436,12 +440,13 @@ Limits: `MAX_FONTS = 3`, `MAX_HANDLES = 16`, `RASTER_SCRATCH_BYTES = 4096`.
 1. Create `g_font_endpoint`, initialize `NativeEventLoop`, register handlers.
 2. `svc_register("font", 1)`.
 3. `svcLookupRetry("fs.vfs", ...)` up to 64 retries → `g_fs_endpoint`.
-4. If fs found: `load_builtin_fonts()` — reads each TTF from
-   `/boot/system/fonts/{roboto,roboto_mono,roboto_serif}.ttf` into right-sized
-   shmem after an `FS_IPC_STAT_REQ` size probe, then loads the file through
-   the shared native `fsReadPath()` helper (`FS_IPC_READ_PATH_REQ` via
-   `fs.vfs`) before calling `stbtt_InitFont` + `parse_ttf_metrics`. Emits
-   `[font] loaded ok` per font or `[font] load failed` / `[font] stb init failed`.
+4. If fs found: `load_builtin_fonts()` — after an `FS_IPC_STAT_REQ` size probe,
+   acquires a right-sized owned xfer buffer per TTF and reads
+   `/boot/system/fonts/{roboto,roboto_mono,roboto_serif}.ttf` into it via an
+   owner-push `FS_IPC_READ_PATH_REQ` (the font-data buffer *is* the READ_PATH
+   transfer buffer, borrowed to `fs.vfs`), then calls `stbtt_InitFont` +
+   `parse_ttf_metrics`. Emits `[font] loaded ok` per font or
+   `[font] load failed` / `[font] stb init failed`.
 5. Emit `[font] service ready`.
 6. `proc_notify_ready()`, enter event loop.
 

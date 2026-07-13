@@ -17,21 +17,29 @@ declares:
 | Name                  | `cli`                                  |
 | Entry export          | `initialize`                           |
 | Kind                  | `service`                              |
-| Capabilities          | none (service-tier IPC only)           |
-| Entry arg binding 0   | `proc.endpoint`                        |
+| Capabilities          | `system.control`                       |
+| `wants_tty`           | `true` (PM allocates a controlling TTY)|
 
-At runtime the process manager resolves `proc.endpoint` to a live IPC endpoint
-ID and passes it as `arg0` to:
+The `initialize` entry args are unused (the entry-arg binding mechanism is
+retired; the manifest's `entry_arg_bindings` key is kept only for backward
+compatibility and ignored by the kernel). At runtime the CLI reads its startup
+values from the spawn-info buffer:
 
 ```c
 WASMOS_WASM_EXPORT int32_t
 initialize(int32_t proc_endpoint,
            int32_t home_tty_arg,
            int32_t ignored_arg2,
-           int32_t ignored_arg3);
+           int32_t ignored_arg3)
+{
+    proc_endpoint = wasmos_startup_proc_endpoint();  // from spawn-info
+    home_tty_arg  = wasmos_startup_tty();            // TTY from wants_tty alloc
+    /* ... */
+}
 ```
 
-`home_tty_arg` is the VT TTY number the CLI should attach to (normally 1).
+`home_tty_arg` is the VT TTY number the CLI attaches to (allocated by PM because
+`wants_tty` is set; normally 1).
 
 The entry function never returns; it drives an infinite dispatch loop over the
 phase state machine.

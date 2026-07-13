@@ -237,7 +237,7 @@ the process. The child retrieves it by execution model:
 - **WASM** processes call the `wasmos_spawn_info_buffer()` hostcall to get the
   `buffer_id` (0 if none), then read the header + args with `xfer_buffer_read`.
 - **Native** drivers/services call `api->spawn_info(&hdr, args_buf, args_cap)`
-  (native ABI v7), which fills the header and copies the args directly.
+  (native ABI v8), which fills the header and copies the args directly.
 
 The header carries `proc_endpoint`, `tty`, `module_count`, `module_index`, and
 the argv offset/length; it is versioned (`magic`/`version`/`header_size`) so new
@@ -345,11 +345,11 @@ The kernel's entry convention for WASM processes is a single export:
 wasmos_main(arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> i32
 ```
 
-Each language shim exports `wasmos_main` and translates the four raw
-`int32_t` arguments into the language's native call convention. The four
-arguments are the resolved entry-arg binding values (endpoint IDs, module
-counts, etc.); their meaning depends on the binding names declared in the
-manifest.
+Each language shim exports `wasmos_main` and translates it into the language's
+native call convention. The four `int32_t` arguments are **unused (always
+zero)** — startup values are no longer passed through entry-arg registers.
+Applications read them from the spawn-info buffer via the `wasmos_startup_*()`
+accessors instead (see *Startup Contract (spawn-info)* above).
 
 | Language                                          | Export mechanism                                 | Native entry called  |
 |---------------------------------------------------|--------------------------------------------------|----------------------|
@@ -359,10 +359,10 @@ manifest.
 | Zig (`libc/zig/wasmos.zig`)                       | `pub export fn wasmos_main(...) callconv(.c)`    | `root.main()`        |
 | AssemblyScript (`libc/assemblyscript/runtime.ts`) | `export function wasmos_main(...)`               | `runMain(main, ...)` |
 
-All shims store the four arguments in a process-local array accessible through
-`wasmos_startup_arg(index)` so the application can retrieve them after `main`
-starts. The kernel ABI is stable; the language surface is what the developer
-sees.
+The `wasmos_startup_*()` accessors read from the process's spawn-info buffer
+(lazily loaded on first use), so the application can retrieve its startup values
+after `main` starts. The kernel ABI is stable; the language surface is what the
+developer sees.
 
 #### Driver and Service Entries
 
@@ -375,11 +375,13 @@ initialize(arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> i32
 Native ELF drivers use the ELF `e_entry` address pointing at:
 
 ```c
-int initialize(wasmos_driver_api_t *api, int arg1, int arg2, int arg3);
+int initialize(wasmos_driver_api_t *api, int module_count, int arg2, int arg3);
 ```
 
 The `wasmos_driver_api_t` pointer is set to the kernel's native driver
-function table; it is the only way native code reaches kernel internals.
+function table; it is the only way native code reaches kernel internals. The
+trailing int arguments are always passed as zero (the entry-arg convention is
+retired) — native drivers read their startup values via `api->spawn_info()`.
 
 ---
 

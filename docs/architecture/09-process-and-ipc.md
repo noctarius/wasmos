@@ -497,17 +497,17 @@ address assignment, routing, provider selection — lives in the consuming servi
 [Networking](22-networking-virtio-net-and-stack.md)).  This keeps the registry a
 small primitive rather than a framework in the kernel.
 
-#### Entry Bindings
+#### Startup (spawn-info)
 
-The PM resolves spawn argument bindings from WASMOS-APP metadata:
-
-| Binding name        | Resolved value                   |
-|---------------------|----------------------------------|
-| `none`              | 0                                |
-| `proc.endpoint`     | PM's `proc` endpoint ID          |
-| `chardev.endpoint`  | chardev endpoint                 |
-| `block.endpoint`    | ATA block endpoint               |
-| `cli.tty.alloc`     | next available VT tty slot       |
+The legacy per-app entry-arg binding mechanism has been retired (the four entry
+args are always zero). The child now retrieves all startup values from its
+**spawn-info buffer** — a child-owned xfer buffer holding a versioned
+`wasmos_spawn_info_t` header (`proc_endpoint`, `tty`, `module_count`,
+`module_index`, args blob). WASM apps read it via the `spawn_info_buffer`
+hostcall (`wasmos_startup_proc_endpoint()` / `_tty()` / `_module_count()` /
+`_arg()` accessors); native drivers/services via `api->spawn_info(&hdr, buf, cap)`.
+Service endpoints are resolved dynamically via `svc_lookup()` rather than bound
+statically at spawn. See [Runtime and Packaging](13-runtime-and-packaging.md).
 
 ---
 
@@ -539,7 +539,7 @@ bulk transfers.
 
 | Area | Intended rule |
 |------|---------------|
-| Ownership | One owner context owns one buffer object per kind |
+| Ownership | A context may own multiple distinct buffer objects (each a stable `buffer_id`), including several of the same kind — one per live operation |
 | Owner access | The owner always retains implicit read/write access to its own object |
 | Borrow grant | A borrow creates one grant from one owner object to one borrower context with explicit flags |
 | Object identity | Borrower access is to the same underlying owner object, not a copied or shadow reply buffer |
@@ -552,14 +552,13 @@ bulk transfers.
 | DMA directions | `TO_DEVICE` requires read access; `FROM_DEVICE` requires write access; bidirectional DMA requires both |
 | DMA teardown | Release while mapped is invalid; unmap clears DMA state but preserves the grant |
 
-**Current implementation limitation:**
+**Borrow constraint:**
 
-The current kernel implementation tracks at most one active borrow state per
-borrower context and buffer kind. That is an implementation limit of the
-present xfer-buffer machinery, not the architectural meaning of borrowing.
-When a workflow needs simultaneous request-read and reply-write access, the
-design must model those as distinct buffer objects or equivalent explicit
-handles rather than pretending one active-view slot can express both at once.
+The registry allows at most one active borrow **per object** (to keep borrow
+lifecycle sequencing clean), but a borrower may hold multiple simultaneous
+borrows to *distinct* objects. A relay reading from one buffer and writing to
+another simply holds two independent borrows (`borrow_id`s). `buffer_id` and
+`borrow_id` are stateless integer handles passed on the IPC wire.
 
 #### Broker Contract Clarification
 

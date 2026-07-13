@@ -236,7 +236,7 @@ main(int argc, char **argv)
     static char script_path[128];
     wamos_script_ctx_t ctx;
     wasmos_script_state_t state;
-    wasmos_script_ops_t ops;
+    wasmos_script_ops_t ops = { 0 };
 
     (void)argc;
     (void)argv;

@@ -241,6 +241,7 @@ read(int fd, void *buf, size_t count)
     uint8_t *dst = (uint8_t *)buf;
     size_t done = 0;
     size_t chunk_max;
+    size_t buffer_cap;
     int32_t bid;
     int32_t b1;
     int failed = 0;
@@ -266,10 +267,11 @@ read(int fd, void *buf, size_t count)
     if (chunk_max == 0) {
         return -1;
     }
+    buffer_cap = count < chunk_max ? count : chunk_max;
     /* Own one buffer and grant the FS manager once; reuse both across the whole
      * chunk loop (no re-grant per chunk). release() at the end cascade-revokes
      * the grant — the client never unborrows. */
-    bid = wasmos_xfer_buffer_acquire((int32_t)chunk_max);
+    bid = wasmos_xfer_buffer_acquire((int32_t)buffer_cap);
     if (bid < 0) {
         return -1;
     }
@@ -316,6 +318,7 @@ write(int fd, const void *buf, size_t count)
     const uint8_t *src = (const uint8_t *)buf;
     size_t done = 0;
     size_t chunk_max;
+    size_t buffer_cap;
     int32_t bid;
     int32_t b1;
     int failed = 0;
@@ -341,9 +344,10 @@ write(int fd, const void *buf, size_t count)
     if (chunk_max == 0) {
         return -1;
     }
+    buffer_cap = count < chunk_max ? count : chunk_max;
     /* Own one buffer and grant the FS manager once; reuse both across the whole
      * chunk loop. release() at the end cascade-revokes the grant. */
-    bid = wasmos_xfer_buffer_acquire((int32_t)chunk_max);
+    bid = wasmos_xfer_buffer_acquire((int32_t)buffer_cap);
     if (bid < 0) {
         return -1;
     }

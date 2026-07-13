@@ -1668,7 +1668,7 @@ cli_run_script(const char *script_path, int source_mode)
         return -1;
     }
     cli_scope_to_script(&g_cli_script_state, source_mode ? 1 : 0);
-    wasmos_script_ops_t ops;
+    wasmos_script_ops_t ops = { 0 };
     ops.on_start    = cli_script_on_start;
     ops.on_spawn    = cli_script_on_spawn;
     ops.on_exec     = cli_script_on_exec;

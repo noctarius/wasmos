@@ -46,7 +46,7 @@ typedef struct {
  * and return the (buffer_id<<12)|path_len arg1 encoding the spawn-path IPC
  * protocol expects. Releases any previously-held buffer first. Returns 0 on
  * failure. */
-static __attribute__((unused)) uint32_t
+static uint32_t
 broker_selftest_stage_path(broker_spawn_request_state_t *state,
                            uint32_t context_id,
                            const char *path,
@@ -75,9 +75,9 @@ broker_selftest_stage_path(broker_spawn_request_state_t *state,
     return (state->caller_buf.buffer.buffer_id << 12) | (path_len & 0xFFFu);
 }
 
-static __attribute__((unused)) broker_spawn_request_state_t g_broker_spawn_request_state;
+static broker_spawn_request_state_t g_broker_spawn_request_state;
 
-static __attribute__((unused)) const char *
+static const char *
 kernel_selftest_spawn_error_name(int32_t err)
 {
     switch (err) {
@@ -130,7 +130,7 @@ kernel_selftest_spawn_error_name(int32_t err)
 #define BROKER_TEST_PATH "/init/apps/hello.rc"
 #define BROKER_TEST_MAX_ATTEMPTS 64u
 
-static __attribute__((unused)) int
+static int
 kernel_selftest_process_ready_named(const char *name)
 {
     uint32_t active = 0u;
@@ -305,7 +305,7 @@ preempt_observer_entry(process_t *process, void *arg)
     return PROCESS_RUN_YIELDED;
 }
 
-static __attribute__((unused)) process_run_result_t
+static process_run_result_t
 broker_spawn_request_entry(process_t *process, void *arg)
 {
     broker_spawn_request_state_t *state = (broker_spawn_request_state_t *)arg;
@@ -472,9 +472,25 @@ kernel_selftest_spawn_baseline(uint32_t init_pid, uint8_t preempt_test_enabled)
         return -1;
     }
 
-    /* TODO: Re-enable the broker spawn self-test after the sysinit/fontsvc
-     * post-start stall is resolved; it currently adds a second script executor
-     * that obscures the boot-path regression under investigation. */
+    /* Broker spawn self-test: spawn the wamos-script broker and drive a `#!`
+     * guest script through it (delegated spawn plan -> standalone executor).
+     * Re-enabled now that the sysinit/fontsvc/gfx post-start path is green. */
+    g_broker_spawn_request_state.reply_endpoint = IPC_ENDPOINT_NONE;
+    g_broker_spawn_request_state.request_id = 1u;
+    g_broker_spawn_request_state.attempts = 0u;
+    g_broker_spawn_request_state.phase = 0u;
+    {
+        uint32_t broker_request_pid = 0;
+        if (process_spawn_as(init_pid,
+                             "broker-spawn-test",
+                             broker_spawn_request_entry,
+                             &g_broker_spawn_request_state,
+                             &broker_request_pid) != 0) {
+            klog_write("[kernel] broker spawn request failed\n");
+            return -1;
+        }
+        (void)process_set_auto_reap(broker_request_pid, 1);
+    }
 
     if (preempt_test_enabled) {
         g_preempt_test_state.observer_runs = 0;

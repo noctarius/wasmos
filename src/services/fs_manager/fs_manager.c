@@ -144,6 +144,15 @@ client_state_lookup(int32_t context_id)
     return 0;
 }
 
+static void
+client_state_reset_fds(fs_client_state_t *state)
+{
+    if (!state) {
+        return;
+    }
+    memset(state->fds, 0, sizeof(state->fds));
+}
+
 /* Find or create per-context state for context_id; allocates a new chunk if
  * the current one is full.  Returns NULL only if heap is exhausted. */
 static fs_client_state_t *
@@ -163,6 +172,7 @@ client_state(int32_t context_id)
             slot->mount = FS_MOUNT_ROOT;
             slot->backend_endpoint = -1;
             slot->mount_depth = 0;
+            client_state_reset_fds(slot);
             return slot;
         }
         last = chunk;
@@ -183,7 +193,63 @@ client_state(int32_t context_id)
     chunk->slots[0].mount = FS_MOUNT_ROOT;
     chunk->slots[0].backend_endpoint = -1;
     chunk->slots[0].mount_depth = 0;
+    client_state_reset_fds(&chunk->slots[0]);
     return &chunk->slots[0];
+}
+
+static int
+fsmgr_is_fd_op_type(int32_t type)
+{
+    return type == FS_IPC_READ_REQ ||
+           type == FS_IPC_WRITE_REQ ||
+           type == FS_IPC_CLOSE_REQ ||
+           type == FS_IPC_SEEK_REQ;
+}
+
+static fsmgr_client_fd_t *
+fsmgr_fd_entry(fs_client_state_t *state, int32_t client_fd)
+{
+    int32_t index = client_fd - 3;
+
+    if (!state || index < 0 || index >= FSMGR_CLIENT_FD_CAP) {
+        return 0;
+    }
+    if (!state->fds[index].in_use) {
+        return 0;
+    }
+    return &state->fds[index];
+}
+
+static int
+fsmgr_fd_alloc(fs_client_state_t *state, int32_t backend_endpoint, int32_t backend_fd, int32_t *out_client_fd)
+{
+    if (!state || !out_client_fd || backend_endpoint < 0 || backend_fd < 0) {
+        return -1;
+    }
+    for (int32_t i = 0; i < FSMGR_CLIENT_FD_CAP; ++i) {
+        if (state->fds[i].in_use) {
+            continue;
+        }
+        state->fds[i].in_use = 1;
+        state->fds[i].backend_endpoint = backend_endpoint;
+        state->fds[i].backend_fd = backend_fd;
+        *out_client_fd = i + 3;
+        return 0;
+    }
+    return -1;
+}
+
+static void
+fsmgr_fd_release(fs_client_state_t *state, int32_t client_fd)
+{
+    fsmgr_client_fd_t *entry = fsmgr_fd_entry(state, client_fd);
+
+    if (!entry) {
+        return;
+    }
+    entry->in_use = 0;
+    entry->backend_endpoint = -1;
+    entry->backend_fd = -1;
 }
 
 static fs_backend_t *
@@ -906,6 +972,7 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
         int32_t backend = resolve_backend_for_state(state);
         int32_t resp_type = FS_IPC_ERROR;
         int32_t r0 = -1, r1 = 0, r2 = 0, r3 = 0;
+        int32_t client_fd = -1;
         /* Buffer-carrying ops arrive as arg2 = client buffer_id, arg3 = the
          * client's grant to fs-manager (client_borrow; fs-manager is its
          * BORROWER, so it never unborrows it — the client tears it down on
@@ -922,6 +989,16 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
                 send_fs_error(source, request_id);
                 continue;
             }
+        }
+        if (fsmgr_is_fd_op_type(type)) {
+            fsmgr_client_fd_t *fd_entry = fsmgr_fd_entry(state, arg0);
+            if (!fd_entry) {
+                send_fs_error(source, request_id);
+                continue;
+            }
+            client_fd = arg0;
+            req_arg0 = fd_entry->backend_fd;
+            backend = fd_entry->backend_endpoint;
         }
         if (uses_buf) {
             backend_borrow = wasmos_xfer_buffer_reborrow(
@@ -948,6 +1025,21 @@ WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32
             }
             send_fs_error(source, request_id);
             continue;
+        }
+        if (type == FS_IPC_OPEN_REQ && resp_type == FS_IPC_RESP && r0 >= 0) {
+            int32_t backend_fd = r0;
+            if (fsmgr_fd_alloc(state, backend, backend_fd, &r0) != 0) {
+                int32_t close_t = FS_IPC_ERROR;
+                int32_t close0 = -1, close1 = 0, close2 = 0, close3 = 0;
+                (void)forward_request(backend, FS_IPC_CLOSE_REQ, request_id, backend_fd, 0, 0, 0,
+                                      source, &close_t, &close0, &close1, &close2, &close3);
+                if (backend_borrow >= 0) { (void)wasmos_xfer_buffer_unborrow(backend_borrow); }
+                send_fs_error(source, request_id);
+                continue;
+            }
+        }
+        if (type == FS_IPC_CLOSE_REQ && resp_type == FS_IPC_RESP && r0 == 0 && client_fd >= 0) {
+            fsmgr_fd_release(state, client_fd);
         }
         if (backend_borrow >= 0) { (void)wasmos_xfer_buffer_unborrow(backend_borrow); }
         if (type == FS_IPC_CHDIR_REQ && resp_type == FS_IPC_ERROR) {

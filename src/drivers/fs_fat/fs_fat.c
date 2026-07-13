@@ -2071,7 +2071,6 @@ fat_handle_read_open_file(void)
     if (requested > remaining) {
         requested = remaining;
     }
-
     /* The client owns the buffer (arg2) and granted this backend WRITE via
      * fs-manager's reborrow; write the copy-out directly by buffer_id. */
     while (done < requested) {

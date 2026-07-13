@@ -389,7 +389,7 @@ initialize(int32_t proc_endpoint,
 
     wasmos_script_state_init(&g_script_state);
 
-    wasmos_script_ops_t ops;
+    wasmos_script_ops_t ops = { 0 };
     ops.on_start    = sysinit_on_start;
     ops.on_spawn    = sysinit_on_spawn;
     ops.on_exec     = sysinit_on_exec;

@@ -6,12 +6,19 @@
 
 #define FS_CLIENT_CHUNK_CAP 32  /* max concurrent per-context client state slots */
 #define FS_BACKEND_CAP 8        /* max registered FS backend instances */
+#define FSMGR_CLIENT_FD_CAP 32  /* max forwarded open files per client context */
 
 /* Whether a request is being handled at the VFS root or forwarded to a backend. */
 typedef enum {
     FS_MOUNT_ROOT = 0,
     FS_MOUNT_BACKEND = 1
 } fs_mount_t;
+
+typedef struct {
+    uint8_t in_use;
+    int32_t backend_endpoint;
+    int32_t backend_fd;
+} fsmgr_client_fd_t;
 
 /* One registered FS backend (e.g. a FAT driver instance).
  * has_meta: non-zero if PCI metadata has been queried for this backend.
@@ -42,6 +49,7 @@ typedef struct {
     fs_mount_t mount;
     int32_t backend_endpoint; /* -1 when request is at the VFS root */
     uint16_t mount_depth;
+    fsmgr_client_fd_t fds[FSMGR_CLIENT_FD_CAP];
 } fs_client_state_t;
 
 #endif

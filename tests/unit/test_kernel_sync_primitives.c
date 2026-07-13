@@ -1,13 +1,15 @@
-/* sched_yield() is POSIX; under -std=c11 (strict ANSI) glibc hides it behind a
- * feature-test macro, unlike macOS which declares it unconditionally. Request
- * the POSIX surface before any include so CI (Linux) and local (macOS) agree. */
-#define _POSIX_C_SOURCE 200809L
-
 #include <assert.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdint.h>
 #include <stdio.h>
+
+/* <sched.h> on the -I path resolves to the kernel's own sched.h (which has no
+ * libc prototype), and sched_yield() is not reliably declared by the other
+ * system headers across platforms (it happens to be on macOS but not under
+ * glibc -std=c11). Declare the libc symbol explicitly; it is provided at link
+ * time. */
+extern int sched_yield(void);
 
 #include "sync/mutex.h"
 #include "sync/semaphore.h"

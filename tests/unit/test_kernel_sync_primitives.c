@@ -1,3 +1,8 @@
+/* sched_yield() is POSIX; under -std=c11 (strict ANSI) glibc hides it behind a
+ * feature-test macro, unlike macOS which declares it unconditionally. Request
+ * the POSIX surface before any include so CI (Linux) and local (macOS) agree. */
+#define _POSIX_C_SOURCE 200809L
+
 #include <assert.h>
 #include <pthread.h>
 #include <sched.h>

@@ -685,22 +685,6 @@ m3ApiRawFunction(wasmos_ipc_send)
     m3ApiReturn(rc);
 }
 
-static int
-process_name_eq(const char *a, const char *b)
-{
-    if (!a || !b) {
-        return 0;
-    }
-    while (*a && *b) {
-        if (*a != *b) {
-            return 0;
-        }
-        a++;
-        b++;
-    }
-    return *a == '\0' && *b == '\0';
-}
-
 /* Whether the calling context may own/lend transfer buffers. Owning a transfer
  * buffer is like opening a file descriptor: any real process may acquire, borrow
  * and release one so it can move IPC payloads. The DMA capability is enforced

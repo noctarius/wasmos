@@ -1,9 +1,16 @@
 /* kmem.c - Small shared allocator for kernel container metadata.
- * malloc-backed, with a fixed early-boot arena fallback for allocations that
- * happen before the heap allocator is fully available.  Shared by the generic
- * containers (list.c, hashmap.c). */
+ * Slab-backed (kalloc_small/kfree_small is a single GLOBAL kernel heap), with a
+ * fixed early-boot arena fallback for allocations that happen before the slab
+ * allocator is initialised or when it is exhausted.  Shared by the generic
+ * containers (list.c, hashmap.c).
+ *
+ * kmem MUST NOT use the plain libc malloc/free: on the wasm3 backend that heap
+ * is per-process (bound to the CPU-local wasm3 pid), so kernel-global container
+ * nodes allocated from it dangle the moment that process is reaped.  The slab
+ * (and the arena fallback) are process-independent, matching the WARP backend
+ * where malloc already forwards to kalloc_small. */
 #include "kmem.h"
-#include "stdlib.h"
+#include "slab.h"
 
 /* Early-boot fallback arena, used when malloc is not yet available. */
 #define KMEM_EARLY_ARENA_BYTES (256u * 1024u)
@@ -40,7 +47,7 @@ kmem_alloc(size_t size)
     if (size == 0) {
         return 0;
     }
-    ptr = malloc(size);
+    ptr = kalloc_small(size);
     if (ptr) {
         return ptr;
     }
@@ -61,5 +68,5 @@ kmem_free(void *ptr)
          * early remove/destroy paths become hot. */
         return;
     }
-    free(ptr);
+    kfree_small(ptr);
 }

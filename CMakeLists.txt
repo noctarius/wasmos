@@ -1754,6 +1754,7 @@ add_custom_target(run-kernel-unit-tests
           ${KERNEL_DIR}/list_linked.c
           ${KERNEL_DIR}/list_array_chunk.c
           ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
           -o ${BUILD_DIR}/test_list
   COMMAND ${BUILD_DIR}/test_list
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -1761,6 +1762,7 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/test_hashmap.c
           ${KERNEL_DIR}/hashmap.c
           ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
           -o ${BUILD_DIR}/test_hashmap
   COMMAND ${BUILD_DIR}/test_hashmap
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -1771,6 +1773,7 @@ add_custom_target(run-kernel-unit-tests
           ${KERNEL_DIR}/subsystem_registry.c
           ${KERNEL_DIR}/hashmap.c
           ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
           -o ${BUILD_DIR}/test_subsystem_registry
   COMMAND ${BUILD_DIR}/test_subsystem_registry
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -1783,6 +1786,7 @@ add_custom_target(run-kernel-unit-tests
           ${KERNEL_DIR}/subsystem_registry.c
           ${KERNEL_DIR}/hashmap.c
           ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
           -o ${BUILD_DIR}/test_wasmos_exec_format
   COMMAND ${BUILD_DIR}/test_wasmos_exec_format
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
@@ -1809,11 +1813,13 @@ add_custom_target(run-kernel-unit-tests
           -I${DRIVER_WASM_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_xfer_buffer/xfer_buffer.c
           ${CMAKE_SOURCE_DIR}/tests/unit/stubs_xfer_buffer_platform.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_spinlock.c
           ${KERNEL_DIR}/xfer_buffer/xfer_buffer.c
           ${KERNEL_DIR}/list.c
           ${KERNEL_DIR}/list_linked.c
           ${KERNEL_DIR}/list_array_chunk.c
           ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
           -o ${BUILD_DIR}/test_xfer_buffer_object
   COMMAND ${BUILD_DIR}/test_xfer_buffer_object
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions

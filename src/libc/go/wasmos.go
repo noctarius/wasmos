@@ -29,16 +29,17 @@ const (
 )
 
 const (
-	SeekSet  int32 = 0
-	SeekCur  int32 = 1
-	SeekEnd  int32 = 2
-	SIFREG   int32 = 0x8000
-	SIFDIR   int32 = 0x4000
-	O_RDONLY int32 = 0
-	O_WRONLY int32 = 1
-	O_APPEND int32 = 0x0008
-	O_CREAT  int32 = 0x0040
-	O_TRUNC  int32 = 0x0200
+	SeekSet     int32 = 0
+	SeekCur     int32 = 1
+	SeekEnd     int32 = 2
+	SIFREG      int32 = 0x8000
+	SIFDIR      int32 = 0x4000
+	O_RDONLY    int32 = 0
+	O_WRONLY    int32 = 1
+	O_APPEND    int32 = 0x0008
+	O_CREAT     int32 = 0x0040
+	O_TRUNC     int32 = 0x0200
+	xferGrantRW int32 = 0x3
 )
 
 type Error int32
@@ -80,11 +81,20 @@ func fsEndpoint() int32
 //go:wasmimport wasmos xfer_buffer_size
 func fsBufferSize() int32
 
+//go:wasmimport wasmos xfer_buffer_acquire
+func xferBufferAcquire(minimumSize int32) int32
+
+//go:wasmimport wasmos xfer_buffer_borrow
+func xferBufferBorrow(granteeEndpoint int32, bufferID int32, flags int32) int32
+
+//go:wasmimport wasmos xfer_buffer_release
+func xferBufferRelease(bufferID int32) int32
+
 //go:wasmimport wasmos xfer_buffer_write
-func fsBufferWrite(ptr uint32, len uint32, offset uint32) int32
+func fsBufferWrite(bufferID int32, ptr uint32, len uint32, offset uint32) int32
 
 //go:wasmimport wasmos xfer_buffer_read
-func fsBufferCopy(ptr uint32, len uint32, offset uint32) int32
+func fsBufferCopy(bufferID int32, ptr uint32, len uint32, offset uint32) int32
 
 //go:wasmimport wasmos thread_gettid
 func threadGetTid() int32
@@ -259,31 +269,60 @@ type fsAPI struct{}
 
 var fs = fsAPI{}
 
-func stagePath(path string) (int, Error) {
+type stagedPath struct {
+	bid     int32
+	b1      int32
+	pathLen int
+}
+
+type borrowedBuffer struct {
+	bid int32
+	b1  int32
+}
+
+func borrowFSBuffer(size int32) (borrowedBuffer, Error) {
+	bid := xferBufferAcquire(size)
+	if bid < 0 {
+		return borrowedBuffer{}, ErrNotAvailable
+	}
+	b1 := xferBufferBorrow(fsEndpoint(), bid, xferGrantRW)
+	if b1 < 0 {
+		_ = xferBufferRelease(bid)
+		return borrowedBuffer{}, ErrHostCallFailed
+	}
+	return borrowedBuffer{bid: bid, b1: b1}, ErrOK
+}
+
+func stagePath(path string) (stagedPath, Error) {
 	pathLen := len(path)
 	maxBuffer := fsBufferSize()
 	var pathBuf [256]byte
 
 	if pathLen == 0 {
-		return 0, ErrInvalidArgument
+		return stagedPath{}, ErrInvalidArgument
 	}
 	if maxBuffer <= 0 {
-		return 0, ErrNotAvailable
+		return stagedPath{}, ErrNotAvailable
 	}
 	if pathLen+1 > len(pathBuf) {
-		return 0, ErrNameTooLong
+		return stagedPath{}, ErrNameTooLong
 	}
 	if pathLen+1 > int(maxBuffer) {
-		return 0, ErrBufferTooSmall
+		return stagedPath{}, ErrBufferTooSmall
 	}
 
 	copy(pathBuf[:], path)
 	pathBuf[pathLen] = 0
 
-	if fsBufferWrite(uint32(uintptr(unsafe.Pointer(&pathBuf[0]))), uint32(pathLen+1), 0) != 0 {
-		return 0, ErrHostCallFailed
+	xfer, err := borrowFSBuffer(int32(pathLen + 1))
+	if err != ErrOK {
+		return stagedPath{}, err
 	}
-	return pathLen, ErrOK
+	if fsBufferWrite(xfer.bid, uint32(uintptr(unsafe.Pointer(&pathBuf[0]))), uint32(pathLen+1), 0) != 0 {
+		_ = xferBufferRelease(xfer.bid)
+		return stagedPath{}, ErrHostCallFailed
+	}
+	return stagedPath{bid: xfer.bid, b1: xfer.b1, pathLen: pathLen}, ErrOK
 }
 
 type startupAPI struct{}
@@ -485,6 +524,11 @@ func (f File) Read(buffer []byte) (int, Error) {
 	if maxBuffer <= 0 {
 		return 0, ErrNotAvailable
 	}
+	xfer, err := borrowFSBuffer(maxBuffer)
+	if err != ErrOK {
+		return 0, err
+	}
+	defer xferBufferRelease(xfer.bid)
 
 	done := 0
 	for done < len(buffer) {
@@ -494,7 +538,7 @@ func (f File) Read(buffer []byte) (int, Error) {
 			chunkLen = int(maxBuffer)
 		}
 
-		chunkRead, _, err := fsRequest(fsIPCReadReq, f.fd, int32(chunkLen), 0, 0)
+		chunkRead, _, err := fsRequest(fsIPCReadReq, f.fd, int32(chunkLen), xfer.bid, xfer.b1)
 		if err != ErrOK {
 			return done, err
 		}
@@ -507,7 +551,7 @@ func (f File) Read(buffer []byte) (int, Error) {
 		if chunkRead > maxBuffer || int(chunkRead) > chunkLen {
 			return done, ErrBadResponse
 		}
-		if fsBufferCopy(uint32(uintptr(unsafe.Pointer(&buffer[done]))), uint32(chunkRead), 0) != 0 {
+		if fsBufferCopy(xfer.bid, uint32(uintptr(unsafe.Pointer(&buffer[done]))), uint32(chunkRead), 0) != 0 {
 			return done, ErrHostCallFailed
 		}
 		done += int(chunkRead)
@@ -533,6 +577,11 @@ func (f File) Write(buffer []byte) (int, Error) {
 	if maxBuffer <= 0 {
 		return 0, ErrNotAvailable
 	}
+	xfer, err := borrowFSBuffer(maxBuffer)
+	if err != ErrOK {
+		return 0, err
+	}
+	defer xferBufferRelease(xfer.bid)
 
 	done := 0
 	for done < len(buffer) {
@@ -540,10 +589,10 @@ func (f File) Write(buffer []byte) (int, Error) {
 		if chunkLen > int(maxBuffer) {
 			chunkLen = int(maxBuffer)
 		}
-		if fsBufferWrite(uint32(uintptr(unsafe.Pointer(&buffer[done]))), uint32(chunkLen), 0) != 0 {
+		if fsBufferWrite(xfer.bid, uint32(uintptr(unsafe.Pointer(&buffer[done]))), uint32(chunkLen), 0) != 0 {
 			return done, ErrHostCallFailed
 		}
-		chunkWritten, _, err := fsRequest(fsIPCWriteReq, f.fd, int32(chunkLen), 0, 0)
+		chunkWritten, _, err := fsRequest(fsIPCWriteReq, f.fd, int32(chunkLen), xfer.bid, xfer.b1)
 		if err != ErrOK {
 			return done, err
 		}
@@ -571,12 +620,13 @@ func (f File) Seek(offset int32, whence int32) (int32, Error) {
 }
 
 func (fsAPI) openWithFlags(path string, flags int32) (File, Error) {
-	pathLen, err := stagePath(path)
+	staged, err := stagePath(path)
 	if err != ErrOK {
 		return File{fd: -1}, err
 	}
+	defer xferBufferRelease(staged.bid)
 
-	fd, _, err := fsRequest(fsIPCOpenReq, int32(pathLen), flags, 0, 0)
+	fd, _, err := fsRequest(fsIPCOpenReq, int32(staged.pathLen), flags, staged.bid, staged.b1)
 	if err != ErrOK {
 		return File{fd: -1}, err
 	}
@@ -603,12 +653,13 @@ func (api fsAPI) OpenAppend(path string) (File, Error) {
 }
 
 func (fsAPI) Stat(path string) (FileStat, Error) {
-	pathLen, err := stagePath(path)
+	staged, err := stagePath(path)
 	if err != ErrOK {
 		return FileStat{}, err
 	}
+	defer xferBufferRelease(staged.bid)
 
-	size, mode, err := fsRequest(fsIPCStatReq, int32(pathLen), 0, 0, 0)
+	size, mode, err := fsRequest(fsIPCStatReq, int32(staged.pathLen), 0, staged.bid, staged.b1)
 	if err != ErrOK {
 		return FileStat{}, err
 	}
@@ -619,29 +670,32 @@ func (fsAPI) Stat(path string) (FileStat, Error) {
 }
 
 func (fsAPI) Unlink(path string) Error {
-	pathLen, err := stagePath(path)
+	staged, err := stagePath(path)
 	if err != ErrOK {
 		return err
 	}
-	_, _, err = fsRequest(fsIPCUnlinkReq, int32(pathLen), 0, 0, 0)
+	defer xferBufferRelease(staged.bid)
+	_, _, err = fsRequest(fsIPCUnlinkReq, int32(staged.pathLen), 0, staged.bid, staged.b1)
 	return err
 }
 
 func (fsAPI) Mkdir(path string) Error {
-	pathLen, err := stagePath(path)
+	staged, err := stagePath(path)
 	if err != ErrOK {
 		return err
 	}
-	_, _, err = fsRequest(fsIPCMkdirReq, int32(pathLen), 0, 0, 0)
+	defer xferBufferRelease(staged.bid)
+	_, _, err = fsRequest(fsIPCMkdirReq, int32(staged.pathLen), 0, staged.bid, staged.b1)
 	return err
 }
 
 func (fsAPI) Rmdir(path string) Error {
-	pathLen, err := stagePath(path)
+	staged, err := stagePath(path)
 	if err != ErrOK {
 		return err
 	}
-	_, _, err = fsRequest(fsIPCRmdirReq, int32(pathLen), 0, 0, 0)
+	defer xferBufferRelease(staged.bid)
+	_, _, err = fsRequest(fsIPCRmdirReq, int32(staged.pathLen), 0, staged.bid, staged.b1)
 	return err
 }
 

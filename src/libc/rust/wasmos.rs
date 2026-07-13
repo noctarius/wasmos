@@ -34,6 +34,7 @@ pub const O_WRONLY: i32 = 1;
 pub const O_APPEND: i32 = 0x0008;
 pub const O_CREAT: i32 = 0x0040;
 pub const O_TRUNC: i32 = 0x0200;
+const XFER_GRANT_RW: i32 = 0x3;
 
 #[link(wasm_import_module = "wasmos")]
 unsafe extern "C" {
@@ -55,8 +56,11 @@ unsafe extern "C" {
     fn ipc_last_field(field: i32) -> i32;
     fn fs_endpoint() -> i32;
     fn xfer_buffer_size() -> i32;
-    fn xfer_buffer_write(ptr: i32, len: i32, offset: i32) -> i32;
-    fn xfer_buffer_read(ptr: i32, len: i32, offset: i32) -> i32;
+    fn xfer_buffer_acquire(minimum_size: i32) -> i32;
+    fn xfer_buffer_borrow(grantee_endpoint: i32, buffer_id: i32, flags: i32) -> i32;
+    fn xfer_buffer_release(buffer_id: i32) -> i32;
+    fn xfer_buffer_write(buffer_id: i32, ptr: i32, len: i32, offset: i32) -> i32;
+    fn xfer_buffer_read(buffer_id: i32, ptr: i32, len: i32, offset: i32) -> i32;
     fn thread_gettid() -> i32;
     fn thread_yield() -> i32;
     fn mutex_try_lock(ptr: i32) -> i32;
@@ -427,10 +431,11 @@ pub mod ipc {
 
 pub mod fs {
     use super::{
-        xfer_buffer_read, xfer_buffer_size, xfer_buffer_write, fs_request, Error, FS_IPC_CLOSE_REQ,
+        xfer_buffer_acquire, xfer_buffer_borrow, xfer_buffer_read, xfer_buffer_release,
+        xfer_buffer_size, xfer_buffer_write, fs_endpoint, fs_request, Error, FS_IPC_CLOSE_REQ,
         FS_IPC_MKDIR_REQ, FS_IPC_OPEN_REQ, FS_IPC_READ_REQ, FS_IPC_RMDIR_REQ, FS_IPC_SEEK_REQ,
         FS_IPC_STAT_REQ, FS_IPC_UNLINK_REQ, FS_IPC_WRITE_REQ, FS_IPC_READDIR_REQ, fs_request_stream,
-        O_APPEND, O_CREAT, O_RDONLY, O_TRUNC, O_WRONLY, S_IFDIR, S_IFREG,
+        O_APPEND, O_CREAT, O_RDONLY, O_TRUNC, O_WRONLY, S_IFDIR, S_IFREG, XFER_GRANT_RW,
     };
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -443,6 +448,48 @@ pub mod fs {
         fd: i32,
     }
 
+    struct BorrowedBuffer {
+        bid: i32,
+        b1: i32,
+    }
+
+    impl Drop for BorrowedBuffer {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = xfer_buffer_release(self.bid);
+            }
+        }
+    }
+
+    struct StagedPath {
+        bid: i32,
+        b1: i32,
+        path_len: usize,
+    }
+
+    impl Drop for StagedPath {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = xfer_buffer_release(self.bid);
+            }
+        }
+    }
+
+    fn borrow_fs_buffer(size: i32) -> Result<BorrowedBuffer, Error> {
+        let bid = unsafe { xfer_buffer_acquire(size) };
+        if bid < 0 {
+            return Err(Error::NotAvailable);
+        }
+        let b1 = unsafe { xfer_buffer_borrow(fs_endpoint(), bid, XFER_GRANT_RW) };
+        if b1 < 0 {
+            unsafe {
+                let _ = xfer_buffer_release(bid);
+            }
+            return Err(Error::HostCallFailed);
+        }
+        Ok(BorrowedBuffer { bid, b1 })
+    }
+
     impl File {
         pub fn read(&self, buffer: &mut [u8]) -> Result<usize, Error> {
             if buffer.is_empty() {
@@ -453,12 +500,13 @@ pub mod fs {
             if max_buffer <= 0 {
                 return Err(Error::NotAvailable);
             }
+            let xfer = borrow_fs_buffer(max_buffer)?;
 
             let mut done = 0usize;
             while done < buffer.len() {
                 let remaining = buffer.len() - done;
                 let chunk_len = remaining.min(max_buffer as usize);
-                let (chunk_read, _) = fs_request(FS_IPC_READ_REQ, self.fd, chunk_len as i32, 0, 0)?;
+                let (chunk_read, _) = fs_request(FS_IPC_READ_REQ, self.fd, chunk_len as i32, xfer.bid, xfer.b1)?;
                 if chunk_read < 0 {
                     return Err(Error::BadResponse);
                 }
@@ -469,7 +517,7 @@ pub mod fs {
                     return Err(Error::BadResponse);
                 }
                 let dst_ptr = unsafe { buffer.as_mut_ptr().add(done) } as i32;
-                if unsafe { xfer_buffer_read(dst_ptr, chunk_read, 0) } != 0 {
+                if unsafe { xfer_buffer_read(xfer.bid, dst_ptr, chunk_read, 0) } != 0 {
                     return Err(Error::HostCallFailed);
                 }
                 done += chunk_read as usize;
@@ -495,15 +543,17 @@ pub mod fs {
             if max_buffer <= 0 {
                 return Err(Error::NotAvailable);
             }
+            let xfer = borrow_fs_buffer(max_buffer)?;
 
             let mut done = 0usize;
             while done < buffer.len() {
                 let remaining = buffer.len() - done;
                 let chunk_len = remaining.min(max_buffer as usize);
-                if unsafe { xfer_buffer_write(buffer.as_ptr().add(done) as i32, chunk_len as i32, 0) } != 0 {
+                if unsafe { xfer_buffer_write(xfer.bid, buffer.as_ptr().add(done) as i32, chunk_len as i32, 0) } != 0 {
                     return Err(Error::HostCallFailed);
                 }
-                let (chunk_written, _) = fs_request(FS_IPC_WRITE_REQ, self.fd, chunk_len as i32, 0, 0)?;
+                let (chunk_written, _) =
+                    fs_request(FS_IPC_WRITE_REQ, self.fd, chunk_len as i32, xfer.bid, xfer.b1)?;
                 if chunk_written < 0 {
                     return Err(Error::BadResponse);
                 }
@@ -528,7 +578,7 @@ pub mod fs {
         }
     }
 
-    fn stage_path(path: &str) -> Result<usize, Error> {
+    fn stage_path(path: &str) -> Result<StagedPath, Error> {
         let path_bytes = path.as_bytes();
         let max_buffer = unsafe { xfer_buffer_size() };
         let mut path_buf = [0u8; 256];
@@ -549,17 +599,21 @@ pub mod fs {
         path_buf[..path_bytes.len()].copy_from_slice(path_bytes);
         path_buf[path_bytes.len()] = 0;
 
-        if unsafe { xfer_buffer_write(path_buf.as_ptr() as i32, (path_bytes.len() + 1) as i32, 0) } != 0 {
+        let xfer = borrow_fs_buffer((path_bytes.len() + 1) as i32)?;
+        if unsafe { xfer_buffer_write(xfer.bid, path_buf.as_ptr() as i32, (path_bytes.len() + 1) as i32, 0) } != 0 {
             return Err(Error::HostCallFailed);
         }
-
-        Ok(path_bytes.len())
+        Ok(StagedPath {
+            bid: xfer.bid,
+            b1: xfer.b1,
+            path_len: path_bytes.len(),
+        })
     }
 
     fn open_with_flags(path: &str, flags: i32) -> Result<File, Error> {
-        let path_len = stage_path(path)?;
+        let staged = stage_path(path)?;
 
-        let (fd, _) = fs_request(FS_IPC_OPEN_REQ, path_len as i32, flags, 0, 0)?;
+        let (fd, _) = fs_request(FS_IPC_OPEN_REQ, staged.path_len as i32, flags, staged.bid, staged.b1)?;
         if fd < 0 {
             return Err(Error::BadResponse);
         }
@@ -584,8 +638,8 @@ pub mod fs {
     }
 
     pub fn stat(path: &str) -> Result<Stat, Error> {
-        let path_len = stage_path(path)?;
-        let (size, mode) = fs_request(FS_IPC_STAT_REQ, path_len as i32, 0, 0, 0)?;
+        let staged = stage_path(path)?;
+        let (size, mode) = fs_request(FS_IPC_STAT_REQ, staged.path_len as i32, 0, staged.bid, staged.b1)?;
         if size < 0 {
             return Err(Error::BadResponse);
         }
@@ -597,20 +651,20 @@ pub mod fs {
     }
 
     pub fn unlink(path: &str) -> Result<(), Error> {
-        let path_len = stage_path(path)?;
-        let _ = fs_request(FS_IPC_UNLINK_REQ, path_len as i32, 0, 0, 0)?;
+        let staged = stage_path(path)?;
+        let _ = fs_request(FS_IPC_UNLINK_REQ, staged.path_len as i32, 0, staged.bid, staged.b1)?;
         Ok(())
     }
 
     pub fn mkdir(path: &str) -> Result<(), Error> {
-        let path_len = stage_path(path)?;
-        let _ = fs_request(FS_IPC_MKDIR_REQ, path_len as i32, 0, 0, 0)?;
+        let staged = stage_path(path)?;
+        let _ = fs_request(FS_IPC_MKDIR_REQ, staged.path_len as i32, 0, staged.bid, staged.b1)?;
         Ok(())
     }
 
     pub fn rmdir(path: &str) -> Result<(), Error> {
-        let path_len = stage_path(path)?;
-        let _ = fs_request(FS_IPC_RMDIR_REQ, path_len as i32, 0, 0, 0)?;
+        let staged = stage_path(path)?;
+        let _ = fs_request(FS_IPC_RMDIR_REQ, staged.path_len as i32, 0, staged.bid, staged.b1)?;
         Ok(())
     }
 

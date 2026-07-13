@@ -122,12 +122,6 @@ warp_mem(WarpCallContext *ctx, uint32_t offset, uint32_t size)
     return ctx->module->getLinearMemoryRegion(offset, size);
 }
 
-static inline uint8_t
-warp_dbg_xfer_trace_pid(uint32_t pid)
-{
-    return pid == 29u || pid == 34u;
-}
-
 static inline uint8_t *
 warp_linear_mem_window(WarpCallContext *ctx, uint32_t offset, uint32_t size)
 {
@@ -659,7 +653,6 @@ warp_xfer_buffer_read(uint32_t buffer_id, uint32_t ptr_off, uint32_t len, uint32
     auto *ctx = warp_call_ctx(ctx_);
     if (!len) return 0;
     uint32_t context_id = 0;
-    uint32_t pid = process_current_pid();
     if ((int32_t)buffer_id <= 0) return (uint32_t)XFER_BUFFER_ERR_NOT_FOUND;
     if (warp_current_context_id(&context_id) != 0) return (uint32_t)XFER_BUFFER_ERR_INVALID_CONTEXT;
     /* Look up the object the caller named; describe confirms owner-or-borrower
@@ -674,17 +667,6 @@ warp_xfer_buffer_read(uint32_t buffer_id, uint32_t ptr_off, uint32_t len, uint32
     if (!wasm_ptr) return (uint32_t)XFER_BUFFER_ERR_RANGE;
     uint64_t phys = xfer_buffer_object_phys(&desc);
     if (!phys) return (uint32_t)XFER_BUFFER_ERR_NOT_FOUND;
-    if (warp_dbg_xfer_trace_pid(pid)) {
-        klog_printf("[dbg-warp-xfer] read pid=%u ctx=%u bid=%u off=%u len=%u wasm=%llx wasm_phys=%llx src_phys=%llx\n",
-                    (unsigned)pid,
-                    (unsigned)context_id,
-                    (unsigned)buffer_id,
-                    (unsigned)ptr_off,
-                    (unsigned)len,
-                    (unsigned long long)(uintptr_t)wasm_ptr,
-                    (unsigned long long)warp_mem_alias_phys((uint64_t)(uintptr_t)wasm_ptr),
-                    (unsigned long long)phys);
-    }
     const uint8_t *src = reinterpret_cast<const uint8_t *>(uintptr_t(phys | KERNEL_HIGHER_HALF_BASE));
     __builtin_memcpy(wasm_ptr, src + offset, len);
 #ifdef WASMOS_WASM_RUNTIME_WARP
@@ -1448,7 +1430,6 @@ warp_ring3_sync_linmem_user_window(uint8_t *linmem_base)
 static int
 warp_ring3_sync_user_range(WarpCallContext *ctx, uint32_t wasm_off, uint32_t size)
 {
-    uint32_t pid = process_current_pid();
     if (!ctx || !ctx->module || size == 0) {
         klog_write("[dbg-warp-xfer] bad ctx/range\n");
         return -1;
@@ -1472,32 +1453,11 @@ warp_ring3_sync_user_range(WarpCallContext *ctx, uint32_t wasm_off, uint32_t siz
     uint64_t page_count =
         ((user_range_base & 0xFFFULL) + (uint64_t)size + 0xFFFULL) >> 12;
 
-    if (warp_dbg_xfer_trace_pid(pid)) {
-        klog_printf("[dbg-warp-xfer] sync pid=%u ctx_pid=%u off=%u size=%u linmem=%llx range=%llx root=%llx user_page=%llx kernel_page=%llx pages=%llx\n",
-                    (unsigned)pid,
-                    (unsigned)(ctx ? ctx->pid : 0u),
-                    (unsigned)wasm_off,
-                    (unsigned)size,
-                    (unsigned long long)(uintptr_t)linmem_base,
-                    (unsigned long long)(uintptr_t)range_base,
-                    (unsigned long long)current_root,
-                    (unsigned long long)user_page_base,
-                    (unsigned long long)kernel_page_base,
-                    (unsigned long long)page_count);
-    }
     for (uint64_t i = 0; i < page_count; ++i) {
         uint64_t phys_page = warp_mem_alias_phys(kernel_page_base + i * 0x1000ULL) & ~0xFFFULL;
         if (!phys_page) {
             klog_write("[dbg-warp-xfer] phys lookup failed\n");
             return -1;
-        }
-        if (warp_dbg_xfer_trace_pid(pid)) {
-            klog_printf("[dbg-warp-xfer] page pid=%u idx=%u user=%llx kernel=%llx phys=%llx\n",
-                        (unsigned)pid,
-                        (unsigned)i,
-                        (unsigned long long)(user_page_base + i * 0x1000ULL),
-                        (unsigned long long)(kernel_page_base + i * 0x1000ULL),
-                        (unsigned long long)phys_page);
         }
         if (paging_map_4k_in_root(current_root,
                                   user_page_base + i * 0x1000ULL,

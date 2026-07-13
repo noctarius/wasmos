@@ -59,7 +59,37 @@ extern "wasmos" fn xfer_buffer_read(buffer_id: i32, ptr: i32, len: i32, offset: 
 extern "wasmos" fn xfer_buffer_acquire(minimum_size: i32) callconv(.c) i32;
 extern "wasmos" fn xfer_buffer_borrow(grantee_endpoint: i32, buffer_id: i32, flags: i32) callconv(.c) i32;
 extern "wasmos" fn xfer_buffer_release(buffer_id: i32) callconv(.c) i32;
+extern "wasmos" fn spawn_info_buffer() callconv(.c) i32;
 const XFER_GRANT_RW: i32 = 0x3;
+
+// Startup contract (mirrors wasmos_spawn_info_t in wasmos_spawn_info.h).
+const SPAWN_INFO_MAGIC: u32 = 0x57535049; // 'WSPI'
+const SpawnInfo = extern struct {
+    magic: u32 = 0,
+    version: u32 = 0,
+    header_size: u32 = 0,
+    proc_endpoint: u32 = 0,
+    tty: u32 = 0,
+    module_count: u32 = 0,
+    module_index: u32 = 0,
+    args_off: u32 = 0,
+    args_len: u32 = 0,
+};
+var g_spawn_info: SpawnInfo = .{};
+
+fn loadSpawnInfo() void {
+    g_spawn_info = .{};
+    const bid = spawn_info_buffer();
+    if (bid <= 0) return;
+    if (xfer_buffer_read(
+        bid,
+        @intCast(@intFromPtr(&g_spawn_info)),
+        @intCast(@sizeOf(SpawnInfo)),
+        0,
+    ) != 0 or g_spawn_info.magic != SPAWN_INFO_MAGIC) {
+        g_spawn_info = .{};
+    }
+}
 extern "wasmos" fn thread_gettid() callconv(.c) i32;
 extern "wasmos" fn thread_yield() callconv(.c) i32;
 extern "wasmos" fn mutex_try_lock(ptr: i32) callconv(.c) i32;
@@ -89,15 +119,19 @@ var g_cli_argc: usize = 0;
 
 fn parseCliArgs() void {
     g_cli_argc = 0;
-    // FIXME(owner-push): child argv buffer_id handoff is unfinished (stage 4);
-    // PM must pass the child's argv buffer_id. Placeholder 1 keeps this compiling.
+    // Argv is the args blob in the spawn-info buffer (loaded by loadSpawnInfo).
+    if (g_spawn_info.magic != SPAWN_INFO_MAGIC or g_spawn_info.args_len == 0) return;
+    const bid = spawn_info_buffer();
+    if (bid <= 0) return;
+    var n: usize = g_spawn_info.args_len;
+    if (n > CLI_ARGS_BUF_LEN - 1) n = CLI_ARGS_BUF_LEN - 1;
     if (xfer_buffer_read(
-        1,
+        bid,
         @intCast(@intFromPtr(&g_cli_args_raw[0])),
-        CLI_ARGS_BUF_LEN - 1,
-        0,
+        @intCast(n),
+        @intCast(g_spawn_info.args_off),
     ) != 0) return;
-    g_cli_args_raw[CLI_ARGS_BUF_LEN - 1] = 0;
+    g_cli_args_raw[n] = 0;
 
     var pos: usize = 0;
     while (pos < CLI_ARGS_BUF_LEN - 1 and g_cli_args_raw[pos] != 0 and g_cli_argc < CLI_ARGS_MAX) {
@@ -156,19 +190,38 @@ pub const Mutex = extern struct {
 };
 
 pub const startup = struct {
+    /// Legacy accessor: index 0 == proc.endpoint (from spawn-info); 1..3 == 0.
     pub fn arg(index: usize) i32 {
         if (index >= g_startup_args.len) {
             return 0;
         }
         return g_startup_args[index];
     }
+    pub fn procEndpoint() i32 {
+        return @bitCast(g_spawn_info.proc_endpoint);
+    }
+    pub fn tty() i32 {
+        return @bitCast(g_spawn_info.tty);
+    }
+    pub fn moduleCount() u32 {
+        return g_spawn_info.module_count;
+    }
+    pub fn moduleIndex() u32 {
+        return g_spawn_info.module_index;
+    }
 };
 
 pub export fn wasmos_main(arg0: i32, arg1: i32, arg2: i32, arg3: i32) callconv(.c) i32 {
-    g_startup_args[0] = arg0;
-    g_startup_args[1] = arg1;
-    g_startup_args[2] = arg2;
-    g_startup_args[3] = arg3;
+    // The entry-arg registers are retired; startup values come from spawn-info.
+    _ = arg0;
+    _ = arg1;
+    _ = arg2;
+    _ = arg3;
+    loadSpawnInfo();
+    g_startup_args[0] = @bitCast(g_spawn_info.proc_endpoint);
+    g_startup_args[1] = 0;
+    g_startup_args[2] = 0;
+    g_startup_args[3] = 0;
     parseCliArgs();
     const rc: i32 = @intCast(root.main());
     _ = proc_exit(rc);

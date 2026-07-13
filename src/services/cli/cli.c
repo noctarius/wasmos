@@ -9,6 +9,7 @@
 #include "wasmos/ipc.h"
 #include "wasmos/libsys.h"
 #include "wasmos/script.h"
+#include "wasmos/startup.h"
 #include "wasmos_driver_abi.h"
 #include "cli_types.h"
 
@@ -2324,6 +2325,10 @@ initialize(int32_t proc_endpoint,
 {
     (void)ignored_arg2;
     (void)ignored_arg3;
+    /* proc.endpoint and the controlling TTY now come from the spawn-info
+     * contract, not entry args. */
+    proc_endpoint = wasmos_startup_proc_endpoint();
+    home_tty_arg = wasmos_startup_tty();
     g_phase = CLI_PHASE_INIT;
 
     for (;;) {

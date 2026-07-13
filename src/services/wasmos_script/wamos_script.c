@@ -241,16 +241,10 @@ main(int argc, char **argv)
     (void)argc;
     (void)argv;
 
-    /* PM placed the broker-supplied argv (the guest script path) at FS-buffer
-     * offset 0, NUL-terminated.  Read it out before the script engine's fopen
-     * reuses the FS transfer buffer.  xfer_buffer_read returns 0 on success. */
-    if (wasmos_xfer_buffer_read(/* FIXME(owner-push): child argv buffer_id handoff is unfinished (stage 4); PM must pass the child's argv buffer_id via a syscall or entry arg. Using 1 as a placeholder to compile. */ 1,
-                                (int32_t)(uintptr_t)script_path,
-                                (int32_t)sizeof(script_path) - 1, 0) != 0) {
-        puts("[wamos-script] script path read failed");
-        return WAMOS_SCRIPT_ERR_PATH_READ;
-    }
-    script_path[sizeof(script_path) - 1] = '\0';
+    /* The guest script path is this process's argv, delivered in the spawn-info
+     * buffer. wasmos_startup_args copies it out of libc's cached copy, so it is
+     * safe against the FS transfer buffer being reused later by fopen. */
+    (void)wasmos_startup_args(script_path, (uint32_t)sizeof(script_path));
     if (script_path[0] == '\0') {
         puts("[wamos-script] no script path");
         return WAMOS_SCRIPT_ERR_NO_PATH;

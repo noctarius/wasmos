@@ -47,8 +47,15 @@ test_acquire_validation(test_stats_t *stats)
           xfer_buffer_acquire(BUFFER_KIND_TRANSFER, 10u, 1u, 0) != 0,
           "acquire rejects null out_owner");
     check(stats,
-          xfer_buffer_acquire(BUFFER_KIND_TRANSFER, 10u, transfer_size + 1u, &owner) != 0,
-          "acquire rejects request larger than transfer capacity");
+          xfer_buffer_acquire(BUFFER_KIND_TRANSFER, 10u, transfer_size + 1u, &owner) == 0,
+          "acquire accepts a request above the default transfer size (variable-size)");
+    check(stats,
+          owner.buffer.size_bytes >= transfer_size + 1u &&
+          (owner.buffer.size_bytes % 4096u) == 0u,
+          "above-default transfer request is right-sized and page-aligned");
+    check(stats,
+          xfer_buffer_release_owned(&owner) == 0,
+          "release above-default transfer object");
     check(stats,
           xfer_buffer_acquire(BUFFER_KIND_TRANSFER, 10u, UINT32_MAX, &owner) != 0,
           "acquire rejects absurd transfer minimum size");
@@ -791,6 +798,40 @@ test_stale_handle_and_identity_cases(test_stats_t *stats)
 }
 
 static void
+test_acquire_variable_size(test_stats_t *stats)
+{
+    /* TRANSFER buffers are right-sized to the requested minimum_size, rounded up
+     * to a whole number of pages. Verify the rounding, that distinct requests
+     * yield distinct sizes (not a fixed slab), and that a large request (e.g. a
+     * 4 MiB compositor backbuffer, formerly rejected by the fixed 2 MiB cap) now
+     * succeeds. */
+    uint32_t requests[] = {
+        1u,                       /* -> 1 page  */
+        4096u,                    /* -> 1 page  (exact) */
+        4097u,                    /* -> 2 pages */
+        100u * 1024u,             /* -> 25 pages */
+        4u * 1024u * 1024u,       /* 4 MiB backbuffer, formerly rejected by the 2 MiB cap */
+    };
+    uint32_t ctx = 300u;
+    for (uint32_t i = 0; i < sizeof(requests) / sizeof(requests[0]); ++i) {
+        xfer_buffer_owner_t owner = {0};
+        uint32_t expect_bytes = ((requests[i] + 4095u) / 4096u) * 4096u;
+        int ok = xfer_buffer_acquire(BUFFER_KIND_TRANSFER, ctx + i, requests[i], &owner) == 0;
+        check(stats, ok, "variable-size acquire succeeds");
+        check(stats,
+              ok && owner.buffer.size_bytes == expect_bytes,
+              "transfer size is minimum_size rounded up to whole pages");
+        check(stats,
+              ok && (owner.buffer.size_bytes % 4096u) == 0u,
+              "transfer size is page-aligned");
+        if (ok) {
+            check(stats, xfer_buffer_release_owned(&owner) == 0,
+                  "variable-size acquire cleanup");
+        }
+    }
+}
+
+static void
 test_acquire_capacity_semantics(test_stats_t *stats)
 {
     xfer_buffer_owner_t owner = {0};
@@ -798,12 +839,13 @@ test_acquire_capacity_semantics(test_stats_t *stats)
     uint32_t transfer_size = xfer_buffer_size(BUFFER_KIND_TRANSFER);
     uint32_t framebuffer_size = xfer_buffer_size(BUFFER_KIND_FRAMEBUFFER);
 
+    (void)transfer_size;
     check(stats,
           xfer_buffer_acquire(BUFFER_KIND_TRANSFER, 200u, 1u, &owner) == 0,
           "acquire accepts a tiny minimum size");
     check(stats,
-          owner.buffer.size_bytes == transfer_size,
-          "small transfer request still yields full intrinsic capacity");
+          owner.buffer.size_bytes == 4096u,
+          "tiny transfer request is right-sized to a single page");
     check(stats,
           xfer_buffer_acquire(BUFFER_KIND_FRAMEBUFFER, 201u, framebuffer_size,
                                        &framebuffer_owner) == 0,
@@ -1994,6 +2036,7 @@ main(void)
     test_stats_t stats = {0};
 
     test_acquire_validation(&stats);
+    test_acquire_variable_size(&stats);
     test_acquire_capacity_semantics(&stats);
     test_object_phys(&stats);
     test_describe(&stats);

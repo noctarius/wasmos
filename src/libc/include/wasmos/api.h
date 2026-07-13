@@ -54,6 +54,10 @@ extern int32_t wasmos_ipc_send(int32_t destination_endpoint,
  * negative xfer_buffer_status_t code on failure. */
 extern int32_t wasmos_xfer_buffer_acquire(int32_t minimum_size)
     WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_acquire");
+/* Returns this process's spawn-info buffer_id (holding its wasmos_spawn_info_t
+ * header + args blob), or 0 if none. The buffer is owned by this process. */
+extern int32_t wasmos_spawn_info_buffer(void)
+    WASMOS_WASM_IMPORT("wasmos", "spawn_info_buffer");
 /* OWNER assigns `flags` rights over `buffer_id` to the context that owns
  * `grantee_endpoint`; returns the grantee's borrow_id. */
 extern int32_t wasmos_xfer_buffer_borrow(int32_t grantee_endpoint,

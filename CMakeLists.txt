@@ -399,6 +399,7 @@ set(WASMOS_LIBC_C_SOURCES
   ${LIBC_DIR}/src/string.c
   ${LIBC_DIR}/src/stdio.c
   ${LIBC_DIR}/src/unistd.c
+  ${LIBC_DIR}/src/spawn_info.c
 )
 
 set(WASMOS_LIBC_INCLUDE_DEPS

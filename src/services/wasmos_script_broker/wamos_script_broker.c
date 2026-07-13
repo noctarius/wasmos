@@ -12,6 +12,7 @@
 #include "string.h"
 #include "wasmos/ipc.h"
 #include "wasmos/libsys.h"
+#include "wasmos/startup.h"
 
 #define SCRIPT_REQUEST_TAG   "WSCRIPT"
 #define SCRIPT_RUNTIME_TAG   "WSCRIPT"
@@ -185,6 +186,8 @@ script_register(int32_t proc_endpoint, int32_t broker_endpoint)
 int32_t
 initialize(int32_t proc_endpoint)
 {
+    /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
+    proc_endpoint = wasmos_startup_proc_endpoint();
     int32_t broker_endpoint = wasmos_ipc_create_endpoint();
     int32_t register_rc = 0;
 

@@ -1,4 +1,4 @@
-import { std } from "./wasmos";
+import { std, startup } from "./wasmos";
 
 const CMOS_INDEX_PORT: i32 = 0x70;
 const CMOS_DATA_PORT: i32 = 0x71;
@@ -261,6 +261,8 @@ function handleMessage(): void {
 }
 
 export function initialize(procEndpoint: i32, _arg1: i32, _arg2: i32, _arg3: i32): i32 {
+  // proc.endpoint now comes from the spawn-info contract, not an entry arg.
+  procEndpoint = startup.procEndpoint();
   g_rtc_ep = ipc_create_endpoint();
   if (g_rtc_ep < 0) {
     std.printf("[rtc] endpoint failure\n");

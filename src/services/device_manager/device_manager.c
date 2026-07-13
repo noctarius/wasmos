@@ -7,6 +7,7 @@
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
 #include "wasmos/libsys.h"
+#include "wasmos/startup.h"
 #include "wasmos_driver_abi.h"
 #include "device_manager_types.h"
 #include "device_manager_rules.h"
@@ -1741,6 +1742,9 @@ initialize(int32_t proc_endpoint,
 {
     (void)ignored_arg2;
     (void)ignored_arg3;
+    /* proc.endpoint and module.count now come from the spawn-info contract. */
+    proc_endpoint = wasmos_startup_proc_endpoint();
+    module_count = (int32_t)wasmos_startup_module_count();
 
     g_dm.reply_endpoint = wasmos_ipc_create_endpoint();
     if (g_dm.reply_endpoint < 0) {

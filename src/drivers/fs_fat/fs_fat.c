@@ -9,6 +9,7 @@
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
 #include "wasmos/libsys.h"
+#include "wasmos/startup.h"
 #include "wasmos_driver_abi.h"
 
 #ifndef WASMOS_TRACE
@@ -4003,18 +4004,29 @@ initialize(int32_t proc_endpoint,
            int32_t ignored_arg2,
            int32_t ignored_arg3)
 {
+    (void)block_endpoint;
     (void)ignored_arg3;
+    /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
+    proc_endpoint = wasmos_startup_proc_endpoint();
 
     g_fs_endpoint = wasmos_ipc_create_endpoint();
     if (g_fs_endpoint < 0) {
         fat_log("failed to create fs endpoint\n");
         fat_stall();
     }
-    g_block_endpoint = block_endpoint;
     g_reply_endpoint = wasmos_ipc_create_endpoint();
     if (g_reply_endpoint < 0) {
         fat_log("failed to create reply endpoint\n");
         fat_stall();
+    }
+    /* The block device endpoint is resolved via service lookup (registered by
+     * the ata driver as "block"), not passed as an entry arg. */
+    for (;;) {
+        g_block_endpoint = wasmos_svc_lookup(proc_endpoint, g_reply_endpoint, "block", 1);
+        if (g_block_endpoint >= 0) {
+            break;
+        }
+        (void)wasmos_sched_yield();
     }
     g_block_buf_phys = wasmos_block_buffer_phys();
     if (g_block_buf_phys < 0) {

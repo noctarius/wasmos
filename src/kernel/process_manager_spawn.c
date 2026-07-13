@@ -16,6 +16,7 @@
 #include "wasm_chardev.h"
 #include "wasmos_app_meta.h"
 #include "wasmos_exec_format.h"
+#include "wasmos_spawn_info.h"
 #include "string.h"
 #include "serial.h"
 
@@ -240,72 +241,12 @@ pm_find_app_slot(void)
     return (pm_app_state_t *)list_alloc(&g_pm.apps);
 }
 
-typedef enum {
-    PM_ARG_NONE = 0,
-    PM_ARG_PROC_ENDPOINT,
-    PM_ARG_MODULE_COUNT,
-    PM_ARG_INIT_MODULE_INDEX,
-    PM_ARG_BLOCK_ENDPOINT,
-    PM_ARG_CLI_TTY_ALLOC,
-    PM_ARG_CHARDEV_ENDPOINT,
-    PM_ARG_CONST_NEG1
-} pm_arg_kind_t;
-
-static pm_arg_kind_t
-pm_arg_kind_from_binding(const uint8_t *name, uint32_t name_len)
-{
-    if (str_eq_bytes(name, name_len, "none")) return PM_ARG_NONE;
-    if (str_eq_bytes(name, name_len, "proc.endpoint")) return PM_ARG_PROC_ENDPOINT;
-    if (str_eq_bytes(name, name_len, "module.count")) return PM_ARG_MODULE_COUNT;
-    if (str_eq_bytes(name, name_len, "init.module.index")) return PM_ARG_INIT_MODULE_INDEX;
-    if (str_eq_bytes(name, name_len, "block.endpoint")) return PM_ARG_BLOCK_ENDPOINT;
-    if (str_eq_bytes(name, name_len, "cli.tty.alloc")) return PM_ARG_CLI_TTY_ALLOC;
-    if (str_eq_bytes(name, name_len, "chardev.endpoint")) return PM_ARG_CHARDEV_ENDPOINT;
-    if (str_eq_bytes(name, name_len, "const.neg1")) return PM_ARG_CONST_NEG1;
-    return PM_ARG_NONE;
-}
-
-static int
-pm_resolve_pre_spawn_arg(pm_arg_kind_t kind, uint32_t *out_value)
-{
-    if (!out_value) {
-        return PM_SPAWN_INTERNAL_ERR_BAD_ARGS;
-    }
-    switch (kind) {
-    case PM_ARG_NONE:
-        *out_value = 0;
-        return 0;
-    case PM_ARG_PROC_ENDPOINT:
-        if (g_pm.proc_endpoint == IPC_ENDPOINT_NONE) return PM_SPAWN_INTERNAL_ERR_MISSING_ENDPOINT;
-        *out_value = g_pm.proc_endpoint;
-        return 0;
-    case PM_ARG_MODULE_COUNT:
-        *out_value = g_pm.module_count;
-        return 0;
-    case PM_ARG_INIT_MODULE_INDEX:
-        *out_value = g_pm.init_module_index;
-        return 0;
-    case PM_ARG_BLOCK_ENDPOINT:
-        if (g_pm.block_endpoint == IPC_ENDPOINT_NONE) return PM_SPAWN_INTERNAL_ERR_MISSING_ENDPOINT;
-        *out_value = g_pm.block_endpoint;
-        return 0;
-    case PM_ARG_CLI_TTY_ALLOC:
-        *out_value = pm_alloc_cli_tty();
-        return 0;
-    case PM_ARG_CHARDEV_ENDPOINT: {
-        uint32_t ep = IPC_ENDPOINT_NONE;
-        if (wasm_chardev_endpoint(&ep) != 0 || ep == IPC_ENDPOINT_NONE) return PM_SPAWN_INTERNAL_ERR_MISSING_ENDPOINT;
-        *out_value = ep;
-        return 0;
-    }
-    case PM_ARG_CONST_NEG1:
-        *out_value = (uint32_t)-1;
-        return 0;
-    default:
-        return PM_SPAWN_INTERNAL_ERR_UNSUPPORTED_KIND;
-    }
-}
-
+/* The legacy per-app entry-arg binding mechanism (proc.endpoint / module.count /
+ * cli.tty.alloc / block.endpoint / ...) has been retired in favour of the
+ * spawn-info contract (see wasmos_spawn_info.h + pm_app_entry). Every startup
+ * value the child needs now travels in its spawn-info buffer, and service
+ * endpoints are resolved via svc_lookup. The 4-slot wasm entry signature is
+ * kept but always receives zeros. */
 static int
 pm_apply_entry_bindings(pm_app_state_t *slot, const wasmos_app_desc_t *desc)
 {
@@ -317,18 +258,6 @@ pm_apply_entry_bindings(pm_app_state_t *slot, const wasmos_app_desc_t *desc)
     slot->entry_arg1 = 0;
     slot->entry_arg2 = 0;
     slot->entry_arg3 = 0;
-    for (uint32_t i = 0; i < desc->entry_arg_binding_count && i < 4; ++i) {
-        pm_arg_kind_t kind = pm_arg_kind_from_binding(desc->entry_arg_bindings[i].name,
-                                                      desc->entry_arg_bindings[i].name_len);
-        uint32_t value = 0;
-        if (pm_resolve_pre_spawn_arg(kind, &value) != 0) {
-            return PM_SPAWN_INTERNAL_ERR_BINDING;
-        }
-        if (i == 0) slot->entry_arg0 = value;
-        else if (i == 1) slot->entry_arg1 = value;
-        else if (i == 2) slot->entry_arg2 = value;
-        else slot->entry_arg3 = value;
-    }
     return 0;
 }
 
@@ -365,24 +294,27 @@ pm_app_entry(process_t *process, void *arg)
             return PROCESS_RUN_EXITED;
         }
         state->flags = desc.flags;
-        if (state->spawn_cli_args_len > 0u) {
-            /* TODO(xfer-stage4): argv delivery needs a child-OWNED args buffer
-             * whose buffer_id is handed to the child at startup so libc can read
-             * argv via wasmos_xfer_buffer_read. PM acquires it on the child's
-             * behalf (child owns it, so child exit reclaims it via
-             * xfer_buffer_drop_context) and writes the args; the child-side read
-             * + buffer_id handoff lands with the libc/service migration. Not
-             * exercised at boot (sysinit takes no args). */
-            xfer_buffer_owner_t child_xfer = {0};
-            uint32_t args_need = state->spawn_cli_args_len + 1u;
-            uint64_t args_phys = 0;
-            uint8_t *proc_fs_buf = 0;
+        /* Build the spawn-info contract buffer (child-owned): a
+         * wasmos_spawn_info_t header immediately followed by the args blob. The
+         * child retrieves its buffer_id via the wasmos_spawn_info_buffer()
+         * hostcall (WASM) or api->spawn_info() (native) and reads proc.endpoint,
+         * its controlling TTY, boot-module info, and argv from it. The buffer is
+         * owned by the child context, so child exit reclaims it via
+         * xfer_buffer_drop_context. */
+        {
+            xfer_buffer_owner_t si_xfer = {0};
+            uint32_t args_len = state->spawn_cli_args_len;
+            uint32_t need = (uint32_t)sizeof(wasmos_spawn_info_t) + args_len + 1u;
+            uint64_t si_phys = 0;
+            uint8_t *si_buf = 0;
+            wasmos_spawn_info_t *si = 0;
+            uint8_t *args_dst = 0;
             if (xfer_buffer_acquire(BUFFER_KIND_TRANSFER,
                                     process->context_id,
-                                    args_need,
-                                    &child_xfer) != XFER_BUFFER_OK ||
-                (args_phys = xfer_buffer_object_phys(&child_xfer.buffer)) == 0u) {
-                klog_write("[pm] spawn args copy failed\n");
+                                    need,
+                                    &si_xfer) != XFER_BUFFER_OK ||
+                (si_phys = xfer_buffer_object_phys(&si_xfer.buffer)) == 0u) {
+                klog_write("[pm] spawn info alloc failed\n");
                 process_set_exit_status(process, -1);
                 pm_slot_reset(state);
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD)
@@ -390,18 +322,28 @@ pm_app_entry(process_t *process, void *arg)
 #endif
                 return PROCESS_RUN_EXITED;
             }
-            proc_fs_buf = (uint8_t *)(uintptr_t)(args_phys | KERNEL_HIGHER_HALF_BASE);
-            for (uint32_t i = 0; i < state->spawn_cli_args_len; ++i) {
-                proc_fs_buf[i] = (uint8_t)state->spawn_cli_args[i];
+            si_buf = (uint8_t *)(uintptr_t)(si_phys | KERNEL_HIGHER_HALF_BASE);
+            si = (wasmos_spawn_info_t *)si_buf;
+            si->magic = WASMOS_SPAWN_INFO_MAGIC;
+            si->version = WASMOS_SPAWN_INFO_VERSION;
+            si->header_size = (uint32_t)sizeof(wasmos_spawn_info_t);
+            si->proc_endpoint = g_pm.proc_endpoint;
+            si->tty = (desc.flags & WASMOS_APP_FLAG_WANTS_TTY) ? pm_alloc_cli_tty() : 0u;
+            si->module_count = g_pm.module_count;
+            si->module_index = g_pm.init_module_index;
+            si->args_off = (uint32_t)sizeof(wasmos_spawn_info_t);
+            si->args_len = args_len;
+            args_dst = si_buf + sizeof(wasmos_spawn_info_t);
+            for (uint32_t i = 0; i < args_len; ++i) {
+                args_dst[i] = (uint8_t)state->spawn_cli_args[i];
             }
-            proc_fs_buf[state->spawn_cli_args_len] = '\0';
+            args_dst[args_len] = '\0';
+            process->spawn_info_buffer_id = si_xfer.buffer.buffer_id;
         }
-        uint32_t init_args[4] = {
-            state->entry_arg0,
-            state->entry_arg1,
-            state->entry_arg2,
-            state->entry_arg3
-        };
+        /* The 4-slot entry-arg calling convention is retired: the child pulls
+         * everything from its spawn-info buffer. Pass zeros to satisfy the
+         * (unchanged) wasm entry signature. */
+        uint32_t init_args[4] = { 0u, 0u, 0u, 0u };
 
 #if defined(WASMOS_ENABLE_PREEMPT_GUARD)
         /* Drain pdc to 0 before any long-running module start (native driver

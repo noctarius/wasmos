@@ -7,6 +7,7 @@
 #include "wasmos/api.h"
 #include "wasmos/ipc.h"
 #include "wasmos/libsys.h"
+#include "wasmos/startup.h"
 #include "wasmos_driver_abi.h"
 #include "fs_manager_types.h"
 #include "fs_manager_path.h"
@@ -819,6 +820,8 @@ handle_chdir_mount(fs_client_state_t *state,
 }
 
 WASMOS_WASM_EXPORT int32_t initialize(int32_t proc_endpoint, int32_t arg1, int32_t arg2, int32_t arg3) {
+    /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
+    proc_endpoint = wasmos_startup_proc_endpoint();
     (void)arg1;
     (void)arg2;
     (void)arg3;

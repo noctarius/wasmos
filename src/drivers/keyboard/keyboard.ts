@@ -1,4 +1,4 @@
-import { std } from "./wasmos";
+import { std, startup } from "./wasmos";
 
 const KEYBOARD_STATUS_PORT: i32 = 0x64;
 const KEYBOARD_DATA_PORT: i32 = 0x60;
@@ -110,6 +110,8 @@ function drainIpc(): void {
 
 export function initialize(_proc_endpoint: i32, _arg1: i32,
                             _arg2: i32, _arg3: i32): i32 {
+  // proc.endpoint now comes from the spawn-info contract, not an entry arg.
+  _proc_endpoint = startup.procEndpoint();
   g_kbd_ep = ipc_create_endpoint();
   if (g_kbd_ep >= 0) {
     let kbd_name = 0x0064626B; /* "kbd\0" */

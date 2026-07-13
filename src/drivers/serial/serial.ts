@@ -1,4 +1,4 @@
-import { std } from "./wasmos";
+import { std, startup } from "./wasmos";
 
 const COM1_PORT: i32 = 0x3F8;
 const COM1_STATUS: i32 = COM1_PORT + 5;
@@ -114,6 +114,8 @@ function handle_message(): void {
 }
 
 export function initialize(_proc_endpoint: i32, _module_count: i32, _arg2: i32, _arg3: i32): i32 {
+  // proc.endpoint now comes from the spawn-info contract, not an entry arg.
+  _proc_endpoint = startup.procEndpoint();
 
   g_endpoint = ipc_create_endpoint();
   if (g_endpoint < 0) {

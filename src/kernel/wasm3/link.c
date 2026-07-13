@@ -742,6 +742,18 @@ wasm_buffer_acquire_impl(int32_t kind, int32_t minimum_size)
     return (int32_t)owner.buffer.buffer_id;
 }
 
+/* spawn_info_buffer: return the calling process's spawn-info buffer_id (0 if
+ * none). The child reads its wasmos_spawn_info_t header + args blob from it. */
+static int32_t
+wasm_spawn_info_buffer_impl(void)
+{
+    process_t *proc = process_get(process_current_pid());
+    if (!proc) {
+        return 0;
+    }
+    return (int32_t)proc->spawn_info_buffer_id;
+}
+
 /* borrow: caller borrows object buffer_id owned by the context that owns
  * source_endpoint; returns the borrow_id, or a negative object status. */
 static int32_t
@@ -995,6 +1007,12 @@ m3ApiRawFunction(wasmos_xfer_buffer_acquire)
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, minimum_size)
     m3ApiReturn(wasm_buffer_acquire_impl((int32_t)BUFFER_KIND_TRANSFER, minimum_size));
+}
+
+m3ApiRawFunction(wasmos_spawn_info_buffer)
+{
+    m3ApiReturnType(int32_t)
+    m3ApiReturn(wasm_spawn_info_buffer_impl());
 }
 
 m3ApiRawFunction(wasmos_xfer_buffer_borrow)
@@ -3890,6 +3908,7 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "ipc_endpoint_owner", "i(i)", wasmos_ipc_endpoint_owner);
     rc |= wasm3_link_raw(module, "wasmos", "ipc_send", "i(iiiiiiii)", wasmos_ipc_send);
     rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_acquire", "i(i)", wasmos_xfer_buffer_acquire);
+    rc |= wasm3_link_raw(module, "wasmos", "spawn_info_buffer", "i()", wasmos_spawn_info_buffer);
     rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_borrow", "i(iii)", wasmos_xfer_buffer_borrow);
     rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_reborrow", "i(iii)", wasmos_xfer_buffer_reborrow);
     rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_release", "i(i)", wasmos_xfer_buffer_release);

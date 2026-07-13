@@ -219,19 +219,6 @@ typedef struct {
 static nd_borrow_slot_t g_nd_borrows[ND_BORROW_SLOTS];
 
 static nd_borrow_slot_t *
-nd_borrow_find(uint32_t driver_ctx, uint32_t kind, uint32_t key_buffer_id)
-{
-    for (uint32_t i = 0; i < ND_BORROW_SLOTS; ++i) {
-        if (g_nd_borrows[i].driver_ctx == driver_ctx &&
-            g_nd_borrows[i].kind == kind &&
-            g_nd_borrows[i].key_buffer_id == key_buffer_id) {
-            return &g_nd_borrows[i];
-        }
-    }
-    return (nd_borrow_slot_t *)0;
-}
-
-static nd_borrow_slot_t *
 nd_borrow_alloc(void)
 {
     for (uint32_t i = 0; i < ND_BORROW_SLOTS; ++i) {
@@ -248,20 +235,9 @@ nd_borrow_slot_clear(nd_borrow_slot_t *slot)
     memset(slot, 0, sizeof(*slot));
 }
 
-static void
-nd_log_invalid_buffer_borrow(uint32_t kind,
-                             uint32_t source_context_id,
-                             uint32_t buffer_id,
-                             uint32_t flags,
-                             uint32_t size)
-{
-    klog_printf("[native-driver] buffer_borrow invalid kind=%016llx src=%016llx buffer_id=%016llx flags=%016llx size=%016llx (size must be non-zero and page-aligned)\n",
-                (unsigned long long)kind,
-                (unsigned long long)source_context_id,
-                (unsigned long long)buffer_id,
-                (unsigned long long)flags,
-                (unsigned long long)size);
-}
+/* Distinct VA window per mapped buffer in a driver's address space, so a driver
+ * can hold several owned buffers mapped at once without overlap. */
+#define ND_MAP_STRIDE 0x01000000ULL /* 16 MiB */
 
 static int
 nd_map_pages(mm_context_t *ctx, uint64_t virt, uint64_t phys_base,
@@ -294,24 +270,25 @@ nd_unmap_pages(mm_context_t *ctx, uint64_t virt, uint64_t pages)
     }
 }
 
-/*
- * Borrow a buffer object and map it into the driver's address space at
- * ND_DEVICE_VIRT_BASE. Owner-local borrows (framebuffer, or source_context_id
- * of 0/self) acquire the object here and borrow it from ourselves; foreign
- * borrows resolve buffer_id against source_context_id's owned objects. Low-level
- * ABI contract: size must be non-zero and page-aligned because the kernel maps
- * whole-page windows for native drivers.
- */
+/* Owner-push transfer-buffer object API for native drivers (ABI v8), mirroring
+ * the WASM xfer_buffer_* hostcalls. Native drivers access buffer bytes through a
+ * mapping, so acquire maps the owned object into the driver's address space and
+ * returns the pointer; borrow grants a peer (returns a borrow_id for the wire)
+ * without mapping; release unmaps + destroys (cascade-revoking borrows). The
+ * per-driver slot table tracks the owned+mapped objects. */
+
+/* Acquire an owned object of `kind`, map it R/W, return the mapped pointer and
+ * (via out_buffer_id) the object's buffer_id for the IPC wire. NULL on failure. */
 static void *
-nd_buffer_borrow(uint32_t kind, uint32_t source_context_id,
-                 uint32_t buffer_id, uint32_t flags, uint32_t size)
+nd_xfer_buffer_acquire(uint32_t kind, uint32_t size, uint32_t *out_buffer_id)
 {
-    if (size == 0 || (size & (uint32_t)(PAGE_SIZE - 1)) != 0) {
-        nd_log_invalid_buffer_borrow(kind, source_context_id, buffer_id, flags, size);
+    if (out_buffer_id) {
+        *out_buffer_id = 0;
+    }
+    if (size == 0u) {
         return (void *)0;
     }
-    if (flags == 0 ||
-        (flags & ~(uint32_t)(BUFFER_BORROW_READ | BUFFER_BORROW_WRITE)) != 0) {
+    if (kind != BUFFER_KIND_TRANSFER && kind != BUFFER_KIND_FRAMEBUFFER) {
         return (void *)0;
     }
 
@@ -325,91 +302,110 @@ nd_buffer_borrow(uint32_t kind, uint32_t source_context_id,
     }
     uint32_t driver_ctx = proc->context_id;
 
-    if (nd_borrow_find(driver_ctx, kind, buffer_id)) {
-        /* A borrow under this key is already active; release it first. */
-        return (void *)0;
-    }
     nd_borrow_slot_t *slot = nd_borrow_alloc();
     if (!slot) {
         return (void *)0;
     }
 
     xfer_buffer_owner_t owner = {0};
-    xfer_buffer_borrow_t borrow = {0};
-    uint8_t owner_local = 0;
-
-    if (kind == BUFFER_KIND_FRAMEBUFFER ||
-        source_context_id == 0 || source_context_id == driver_ctx) {
-        /* Owner-local: acquire the object here and borrow it from ourselves.
-         * Framebuffers are always local-only (backed by the hardware fb). */
-        if (xfer_buffer_acquire(kind, driver_ctx, size, &owner) != XFER_BUFFER_OK) {
-            return (void *)0;
-        }
-        owner_local = 1;
-    } else {
-        /* Borrow a buffer object owned by a foreign context by its id. */
-        xfer_buffer_t desc = {0};
-        if (xfer_buffer_describe(buffer_id, kind, source_context_id, &desc) != XFER_BUFFER_OK) {
-            return (void *)0;
-        }
-        if (xfer_buffer_get_owned(&desc, source_context_id, &owner) != XFER_BUFFER_OK) {
-            return (void *)0;
-        }
+    if (xfer_buffer_acquire(kind, driver_ctx, size, &owner) != XFER_BUFFER_OK) {
+        return (void *)0;
     }
-
-    if (size > owner.buffer.size_bytes) {
-        if (owner_local) {
-            (void)xfer_buffer_release_owned(&owner);
-        }
+    uint64_t phys_base = xfer_buffer_object_phys(&owner.buffer);
+    if (phys_base == 0u) {
+        (void)xfer_buffer_release_owned(&owner);
         return (void *)0;
     }
 
-    if (xfer_buffer_borrow(&owner, driver_ctx, flags, &borrow) != XFER_BUFFER_OK) {
-        if (owner_local) {
-            (void)xfer_buffer_release_owned(&owner);
-        }
-        return (void *)0;
-    }
-
-    uint64_t phys_base = xfer_buffer_object_phys(&borrow.buffer);
-    if (phys_base == 0) {
-        (void)xfer_buffer_unborrow(&borrow);
-        if (owner_local) {
-            (void)xfer_buffer_release_owned(&owner);
-        }
-        return (void *)0;
-    }
-
-    uint64_t virt = ND_DEVICE_VIRT_BASE;
-    uint64_t pages = (uint64_t)size / PAGE_SIZE;
-    if (nd_map_pages(ctx, virt, phys_base, pages, flags) != 0) {
-        (void)xfer_buffer_unborrow(&borrow);
-        if (owner_local) {
-            (void)xfer_buffer_release_owned(&owner);
-        }
+    uint32_t slot_index = (uint32_t)(slot - g_nd_borrows);
+    uint64_t virt = ND_DEVICE_VIRT_BASE + (uint64_t)slot_index * ND_MAP_STRIDE;
+    uint64_t pages = ((uint64_t)owner.buffer.size_bytes + PAGE_SIZE - 1u) / PAGE_SIZE;
+    if (nd_map_pages(ctx, virt, phys_base, pages,
+                     BUFFER_BORROW_READ | BUFFER_BORROW_WRITE) != 0) {
+        (void)xfer_buffer_release_owned(&owner);
         return (void *)0;
     }
 
     slot->driver_ctx = driver_ctx;
     slot->kind = kind;
-    slot->key_buffer_id = buffer_id;
-    slot->owner_local = owner_local;
+    slot->key_buffer_id = owner.buffer.buffer_id;
+    slot->owner_local = 1;
     slot->owner = owner;
-    slot->borrow = borrow;
+    memset(&slot->borrow, 0, sizeof(slot->borrow));
     slot->virt = virt;
     slot->pages = pages;
+    if (out_buffer_id) {
+        *out_buffer_id = owner.buffer.buffer_id;
+    }
     return (void *)(uintptr_t)virt;
 }
 
+/* Owner-push grant: the calling driver owns `buffer_id`; grant the context that
+ * owns `grantee_endpoint` the given `flags` rights. Returns the grantee's
+ * borrow_id (>0) to ship on the wire, or -1. Transfer-kind only. */
 static int
-nd_buffer_release(uint32_t kind, uint32_t buffer_id)
+nd_xfer_buffer_borrow(uint32_t grantee_endpoint, uint32_t buffer_id, uint32_t flags)
+{
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        return -1;
+    }
+    if (flags == 0u ||
+        (flags & ~(uint32_t)(BUFFER_BORROW_READ | BUFFER_BORROW_WRITE)) != 0u) {
+        return -1;
+    }
+
+    uint32_t grantee_ctx = 0;
+    if (ipc_endpoint_owner(grantee_endpoint, &grantee_ctx) != IPC_OK || grantee_ctx == 0) {
+        return -1;
+    }
+
+    xfer_buffer_t key = { BUFFER_KIND_TRANSFER, buffer_id, 0u };
+    xfer_buffer_owner_t owner = {0};
+    if (xfer_buffer_get_owned(&key, proc->context_id, &owner) != XFER_BUFFER_OK) {
+        return -1;
+    }
+    xfer_buffer_borrow_t borrow = {0};
+    if (xfer_buffer_borrow(&owner, grantee_ctx, flags, &borrow) != XFER_BUFFER_OK) {
+        return -1;
+    }
+    return (int)borrow.borrow_id;
+}
+
+/* The grantor revokes a borrow it created (cascades downstream). */
+static int
+nd_xfer_buffer_unborrow(uint32_t borrow_id)
+{
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        return -1;
+    }
+    xfer_buffer_borrow_t borrow = {0};
+    if (xfer_buffer_get_lent(borrow_id, proc->context_id, &borrow) != XFER_BUFFER_OK) {
+        return -1;
+    }
+    return xfer_buffer_unborrow(&borrow) == XFER_BUFFER_OK ? 0 : -1;
+}
+
+/* The owner destroys `buffer_id`: unmap it and release the object (which
+ * cascade-revokes every borrow of it). */
+static int
+nd_xfer_buffer_release(uint32_t buffer_id)
 {
     process_t *proc = process_get(process_current_pid());
     if (!proc || proc->context_id == 0) {
         return -1;
     }
     uint32_t driver_ctx = proc->context_id;
-    nd_borrow_slot_t *slot = nd_borrow_find(driver_ctx, kind, buffer_id);
+
+    nd_borrow_slot_t *slot = (nd_borrow_slot_t *)0;
+    for (uint32_t i = 0; i < ND_BORROW_SLOTS; ++i) {
+        if (g_nd_borrows[i].driver_ctx == driver_ctx &&
+            g_nd_borrows[i].key_buffer_id == buffer_id) {
+            slot = &g_nd_borrows[i];
+            break;
+        }
+    }
     if (!slot) {
         return -1;
     }
@@ -418,15 +414,7 @@ nd_buffer_release(uint32_t kind, uint32_t buffer_id)
     if (ctx && ctx->root_table != 0) {
         nd_unmap_pages(ctx, slot->virt, slot->pages);
     }
-
-    int rc = 0;
-    if (xfer_buffer_unborrow(&slot->borrow) != XFER_BUFFER_OK) {
-        rc = -1;
-    }
-    if (slot->owner_local &&
-        xfer_buffer_release_owned(&slot->owner) != XFER_BUFFER_OK) {
-        rc = -1;
-    }
+    int rc = xfer_buffer_release_owned(&slot->owner) == XFER_BUFFER_OK ? 0 : -1;
     nd_borrow_slot_clear(slot);
     return rc;
 }
@@ -881,6 +869,52 @@ fail:
     return -1;
 }
 
+/* Startup contract getter (native ABI v7). Resolves the calling driver's
+ * child-owned spawn-info buffer, validates it, copies the header into *out and
+ * the NUL-terminated args blob into args_buf. Mirrors the WASM
+ * wasmos_spawn_info_buffer() hostcall path. */
+static int
+nd_spawn_info(wasmos_spawn_info_t *out, char *args_buf, uint32_t args_cap)
+{
+    process_t *proc = process_get(process_current_pid());
+    xfer_buffer_t key;
+    xfer_buffer_owner_t owner;
+    uint64_t phys = 0;
+    const uint8_t *kva = 0;
+    const wasmos_spawn_info_t *si = 0;
+
+    if (!out || !proc || proc->context_id == 0 || proc->spawn_info_buffer_id == 0) {
+        return -1;
+    }
+    key.kind = BUFFER_KIND_TRANSFER;
+    key.buffer_id = proc->spawn_info_buffer_id;
+    key.size_bytes = 0;
+    if (xfer_buffer_get_owned(&key, proc->context_id, &owner) != XFER_BUFFER_OK) {
+        return -1;
+    }
+    phys = xfer_buffer_object_phys(&owner.buffer);
+    if (phys == 0u) {
+        return -1;
+    }
+    kva = (const uint8_t *)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
+    si = (const wasmos_spawn_info_t *)kva;
+    if (si->magic != WASMOS_SPAWN_INFO_MAGIC) {
+        return -1;
+    }
+    *out = *si;
+    if (args_buf && args_cap > 0u) {
+        uint32_t n = si->args_len;
+        if (n > args_cap - 1u) {
+            n = args_cap - 1u;
+        }
+        for (uint32_t i = 0; i < n; ++i) {
+            args_buf[i] = (char)kva[si->args_off + i];
+        }
+        args_buf[n] = '\0';
+    }
+    return 0;
+}
+
 /* -------------------------------------------------------------------------
  * Public entry point
  * ---------------------------------------------------------------------- */
@@ -952,11 +986,14 @@ native_driver_start(uint32_t context_id,
     api.ipc_endpoint_owner  = nd_ipc_endpoint_owner;
     api.console_ring_id     = nd_console_ring_id;
     api.console_register_fb = nd_console_register_fb;
-    api.buffer_borrow       = nd_buffer_borrow;
-    api.buffer_release      = nd_buffer_release;
     api.abi_magic           = WASMOS_NATIVE_ABI_MAGIC;
     api.abi_version         = WASMOS_NATIVE_ABI_VERSION;
     api.shmem_flush         = nd_shmem_flush;
+    api.spawn_info          = nd_spawn_info;
+    api.xfer_buffer_acquire  = nd_xfer_buffer_acquire;
+    api.xfer_buffer_borrow   = nd_xfer_buffer_borrow;
+    api.xfer_buffer_unborrow = nd_xfer_buffer_unborrow;
+    api.xfer_buffer_release  = nd_xfer_buffer_release;
 
     klog_write("[native-driver] calling initialize\n");
     /* The ELF is mapped only in the driver's address space (low VA, e.g.
@@ -971,10 +1008,12 @@ native_driver_start(uint32_t context_id,
         klog_write("[native-driver] CR3 switch to driver failed\n");
         return -1;
     }
-    int rc = entry(&api,
-                   (int)(init_argc > 0 ? init_argv[0] : 0),
-                   (int)(init_argc > 1 ? init_argv[1] : 0),
-                   (int)(init_argc > 2 ? init_argv[2] : 0));
+    /* The entry-arg calling convention is retired: native drivers read their
+     * startup values from api->spawn_info() (the spawn-info contract). The
+     * legacy (module_count, arg2, arg3) params are always zero now. */
+    (void)init_argv;
+    (void)init_argc;
+    int rc = entry(&api, 0, 0, 0);
     /* Restore kernel CR3 if entry() returned (error path or graceful exit
      * that did not go through process_yield(PROCESS_RUN_EXITED)). */
     (void)paging_switch_root(kernel_cr3);

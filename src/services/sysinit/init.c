@@ -6,6 +6,7 @@
 #include "wasmos/api.h"
 #include "wasmos/libsys.h"
 #include "wasmos/script.h"
+#include "wasmos/startup.h"
 #include "wasmos_driver_abi.h"
 #include "sysinit_types.h"
 
@@ -76,6 +77,18 @@ sysinit_log_spawn_failure(const char *op, const char *path, int32_t rc)
     if (reason) {
         log_line(": ");
         log_line(reason);
+    }
+    log_line("\n");
+}
+
+static void
+sysinit_trace_step(const char *op, const char *value)
+{
+    log_line("[sysinit-trace] ");
+    log_line(op);
+    if (value && value[0] != '\0') {
+        log_line(" ");
+        log_line(value);
     }
     log_line("\n");
 }
@@ -151,6 +164,7 @@ sysinit_on_start(void *user, const char *path)
     (void)user;
     uint32_t path_len = 0;
     int32_t bid;
+    sysinit_trace_step("start", path);
     while (path[path_len]) {
         path_len++;
     }
@@ -195,6 +209,7 @@ static int
 sysinit_on_spawn(void *user, const char *path)
 {
     (void)user;
+    sysinit_trace_step("spawn", path);
     return spawn_path(path);
 }
 
@@ -310,6 +325,7 @@ sysinit_on_wait_svc(void *user, const char *name)
 {
     (void)user;
     int32_t req_id = g_state.spawn_request_id;
+    sysinit_trace_step("wait-svc", name);
     for (;;) {
         int32_t endpoint = wasmos_svc_lookup(g_state.proc_endpoint,
                                              g_state.reply_endpoint,
@@ -353,6 +369,8 @@ initialize(int32_t proc_endpoint,
     (void)ignored_arg1;
     (void)ignored_arg2;
     (void)ignored_arg3;
+    /* proc.endpoint now comes from the spawn-info contract, not an entry arg. */
+    proc_endpoint = wasmos_startup_proc_endpoint();
 
     g_console_write = wasmos_console_write;
     g_debug_mark = wasmos_debug_mark;

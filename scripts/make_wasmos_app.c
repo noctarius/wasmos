@@ -191,6 +191,7 @@ typedef struct {
     char subsystem[SUBSYSTEM_TAG_LEN + 1];
     uint8_t native;
     uint8_t storage_bootstrap;
+    uint8_t wants_tty;
     uint32_t stack_pages;
     uint32_t heap_pages;
     char req_ep_name[64];
@@ -309,6 +310,8 @@ parse_linker_manifest(const char *path, linker_manifest_t *out)
                 if (manifest_parse_bool(val, &out->native) != 0) { fclose(f); return -1; }
             } else if (strcmp(key, "storage_bootstrap") == 0) {
                 if (manifest_parse_bool(val, &out->storage_bootstrap) != 0) { fclose(f); return -1; }
+            } else if (strcmp(key, "wants_tty") == 0) {
+                if (manifest_parse_bool(val, &out->wants_tty) != 0) { fclose(f); return -1; }
             }
         } else if (sec == SEC_RESOURCES) {
             if (strcmp(key, "stack_pages") == 0) {
@@ -429,6 +432,7 @@ int main(int argc, char **argv) {
         else flags |= FLAG_APP;
         if (lm.native) flags |= (1u << 4);
         if (lm.storage_bootstrap) flags |= (1u << 5);
+        if (lm.wants_tty) flags |= (1u << 6);
 
         uint32_t cap_count = lm.cap_count;
         const char *cap_names[8];

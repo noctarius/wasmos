@@ -73,6 +73,8 @@ declare function xfer_buffer_borrow(granteeEndpoint: i32, bufferId: i32, flags: 
 declare function xfer_buffer_release(bufferId: i32): i32;
 // GRANT flags mirror WASMOS_BUFFER_GRANT_READ|WRITE.
 const XFER_GRANT_RW: i32 = 0x3;
+@external("wasmos", "spawn_info_buffer")
+declare function spawn_info_buffer(): i32;
 @external("wasmos", "thread_gettid")
 declare function thread_gettid(): i32;
 @external("wasmos", "thread_yield")
@@ -88,13 +90,49 @@ let g_ipcReplyEndpoint: i32 = -1;
 let g_ipcRequestId: i32 = 1;
 let g_startupArgs = new StaticArray<i32>(4);
 
+// Startup contract (mirrors wasmos_spawn_info_t in wasmos_spawn_info.h).
+const SPAWN_INFO_MAGIC: u32 = 0x57535049; // 'WSPI'
+let g_spawnValid: bool = false;
+let g_spawnLoaded: bool = false;
+let g_spawnProcEndpoint: i32 = 0;
+let g_spawnTty: i32 = 0;
+let g_spawnModuleCount: u32 = 0;
+let g_spawnModuleIndex: u32 = 0;
+let g_spawnArgsOff: u32 = 0;
+let g_spawnArgsLen: u32 = 0;
+
+// Lazy + idempotent: works for both wasmos_main apps and initialize-entry
+// services/drivers (which never call runMain).
+function loadSpawnInfo(): void {
+  if (g_spawnLoaded) return;
+  g_spawnLoaded = true;
+  g_spawnValid = false;
+  const bid = spawn_info_buffer();
+  if (bid <= 0) return;
+  const hdr = new Uint8Array(36);
+  if (xfer_buffer_read(bid, hdr.dataStart as i32, 36, 0) != 0) return;
+  if (load<u32>(hdr.dataStart) != SPAWN_INFO_MAGIC) return;
+  g_spawnProcEndpoint = load<i32>(hdr.dataStart, 12);
+  g_spawnTty = load<i32>(hdr.dataStart, 16);
+  g_spawnModuleCount = load<u32>(hdr.dataStart, 20);
+  g_spawnModuleIndex = load<u32>(hdr.dataStart, 24);
+  g_spawnArgsOff = load<u32>(hdr.dataStart, 28);
+  g_spawnArgsLen = load<u32>(hdr.dataStart, 32);
+  g_spawnValid = true;
+}
+
 export namespace startup {
+  // Legacy accessor: index 0 == proc.endpoint (from spawn-info); 1..3 == 0.
   export function arg(index: i32): i32 {
     if (index < 0 || index >= 4) {
       return 0;
     }
     return unchecked(g_startupArgs[index]);
   }
+  export function procEndpoint(): i32 { loadSpawnInfo(); return g_spawnProcEndpoint; }
+  export function tty(): i32 { loadSpawnInfo(); return g_spawnTty; }
+  export function moduleCount(): u32 { loadSpawnInfo(); return g_spawnModuleCount; }
+  export function moduleIndex(): u32 { loadSpawnInfo(); return g_spawnModuleIndex; }
 }
 
 @unmanaged
@@ -132,16 +170,19 @@ export class Mutex {
 }
 
 function readSpawnArgs(): Array<string> {
-  const buf = new Uint8Array(128);
-  // FIXME(owner-push): child argv buffer_id handoff is unfinished (stage 4); PM
-  // must pass the child's argv buffer_id via a syscall or entry arg. Placeholder
-  // buffer_id 1 keeps this compiling; argv-on-spawn is not yet functional.
-  if (xfer_buffer_read(1, buf.dataStart as i32, buf.length - 1, 0) != 0) {
+  // Argv is the args blob in the spawn-info buffer (loaded by loadSpawnInfo).
+  if (!g_spawnValid || g_spawnArgsLen == 0) {
     return new Array<string>();
   }
-  let n: i32 = 0;
-  while (n < buf.length && buf[n] != 0) {
-    n++;
+  const bid = spawn_info_buffer();
+  if (bid <= 0) {
+    return new Array<string>();
+  }
+  let n: i32 = <i32>g_spawnArgsLen;
+  if (n > 127) n = 127;
+  const buf = new Uint8Array(n + 1);
+  if (xfer_buffer_read(bid, buf.dataStart as i32, n, <i32>g_spawnArgsOff) != 0) {
+    return new Array<string>();
   }
   if (n == 0) {
     return new Array<string>();
@@ -165,10 +206,13 @@ export function runMain(
   arg2: i32,
   arg3: i32
 ): i32 {
-  unchecked(g_startupArgs[0] = arg0);
-  unchecked(g_startupArgs[1] = arg1);
-  unchecked(g_startupArgs[2] = arg2);
-  unchecked(g_startupArgs[3] = arg3);
+  // The entry-arg registers (arg0..arg3) are retired; startup values now come
+  // from the spawn-info buffer.
+  loadSpawnInfo();
+  unchecked(g_startupArgs[0] = g_spawnProcEndpoint);
+  unchecked(g_startupArgs[1] = 0);
+  unchecked(g_startupArgs[2] = 0);
+  unchecked(g_startupArgs[3] = 0);
   const rc = entry(readSpawnArgs());
   proc_exit(rc);
   return rc;

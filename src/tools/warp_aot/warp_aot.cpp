@@ -94,6 +94,7 @@ static vb::Span<vb::NativeSymbol const> aot_symbols()
         DYNAMIC_LINK("wasmos", "xfer_buffer_read",      stub_i4),
         DYNAMIC_LINK("wasmos", "xfer_buffer_write",     stub_i4),
         DYNAMIC_LINK("wasmos", "xfer_buffer_acquire",   stub_i1),
+        DYNAMIC_LINK("wasmos", "spawn_info_buffer",     stub_i0),
         DYNAMIC_LINK("wasmos", "xfer_buffer_borrow",    stub_i3),
         DYNAMIC_LINK("wasmos", "xfer_buffer_reborrow",  stub_i3),
         DYNAMIC_LINK("wasmos", "xfer_buffer_release",   stub_i1),

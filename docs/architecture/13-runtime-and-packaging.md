@@ -226,14 +226,36 @@ typedef struct __attribute__((packed)) {
 The kernel converts page counts to byte sizes: `pages * 4096`. A zero
 `min_pages` for stack or heap causes the runtime to fall back to 64 KB.
 
-#### Entry Arg Bindings
+#### Startup Contract (spawn-info)
 
-Up to 4 string names that map to runtime-supplied values at spawn time. The
-process manager resolves each binding name to a `uint32_t` and passes the
-resolved values as the four `wasmos_main` arguments. Common binding names:
+Startup values are **no longer** passed through entry-arg registers. At spawn
+time the process manager builds one `wasmos_spawn_info_t`
+(`src/drivers/include/wasmos_spawn_info.h`) — a versioned header followed by the
+argv blob — into a child-owned transfer buffer and records its `buffer_id` on
+the process. The child retrieves it by execution model:
 
-- `proc.endpoint` — the process-manager's IPC endpoint ID
-- `module.count` — number of WASMOS-APP modules loaded by the bootloader
+- **WASM** processes call the `wasmos_spawn_info_buffer()` hostcall to get the
+  `buffer_id` (0 if none), then read the header + args with `xfer_buffer_read`.
+- **Native** drivers/services call `api->spawn_info(&hdr, args_buf, args_cap)`
+  (native ABI v7), which fills the header and copies the args directly.
+
+The header carries `proc_endpoint`, `tty`, `module_count`, `module_index`, and
+the argv offset/length; it is versioned (`magic`/`version`/`header_size`) so new
+fields append without breaking older binaries. Service endpoints are **not**
+carried here — a child resolves them with `svc_lookup` (e.g. `fs-fat` looks up
+`"block"`). TTY allocation is requested with the `wants_tty` manifest key
+(`WASMOS_APP_FLAG_WANTS_TTY`), which makes PM allocate a TTY and fill
+`spawn_info.tty`.
+
+The libc shims expose the header through `wasmos_startup_proc_endpoint()`,
+`wasmos_startup_tty()`, `wasmos_startup_module_count()`,
+`wasmos_startup_module_index()`, and `wasmos_startup_args()` (C; equivalent
+`startup.*` accessors in Zig/AssemblyScript). `wasmos_startup_arg(0)` remains as
+a compatibility alias for `proc.endpoint`.
+
+> The legacy `entry_arg_bindings` manifest key is deprecated and ignored by the
+> kernel; it is retained in the `.wap` format only for backward compatibility
+> and will be removed.
 
 #### Capability Names (fail-closed at pack time)
 

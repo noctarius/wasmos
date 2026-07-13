@@ -1512,6 +1512,17 @@ warp_xfer_buffer_acquire(uint32_t minimum_size, void *ctx_)
     return warp_buffer_acquire((uint32_t)BUFFER_KIND_TRANSFER, minimum_size, ctx_);
 }
 
+/* spawn_info_buffer: return the calling process's spawn-info buffer_id (0 if
+ * none). Mirrors wasm3's wasm_spawn_info_buffer_impl. */
+static uint32_t
+warp_spawn_info_buffer(void *ctx_)
+{
+    (void)ctx_;
+    process_t *proc = process_get(process_current_pid());
+    if (!proc) return 0u;
+    return proc->spawn_info_buffer_id;
+}
+
 static uint32_t
 warp_xfer_buffer_borrow(uint32_t grantee_endpoint, uint32_t buffer_id, uint32_t flags, void *ctx_)
 {
@@ -2441,13 +2452,15 @@ warp_env_abort(uint32_t msg, uint32_t file, uint32_t line, uint32_t column, void
      * (WASMOS_SYMBOLS order defines the ring-3 hostcall index). Keep in exact
      * enum order: HC_XFER_BUFFER_ACQUIRE(104), _UNBORROW(105),
      * HC_BUFFER_ACQUIRE(106), _UNBORROW(107),
-     * HC_XFER_BUFFER_REBORROW(108), HC_BUFFER_REBORROW(109). */ \
+     * HC_XFER_BUFFER_REBORROW(108), HC_BUFFER_REBORROW(109),
+     * HC_SPAWN_INFO_BUFFER(110). */ \
     LINK("wasmos", "xfer_buffer_acquire",  warp_xfer_buffer_acquire), \
     LINK("wasmos", "xfer_buffer_unborrow", warp_xfer_buffer_unborrow), \
     LINK("wasmos", "buffer_acquire",       warp_buffer_acquire), \
     LINK("wasmos", "buffer_unborrow",      warp_buffer_unborrow), \
     LINK("wasmos", "xfer_buffer_reborrow", warp_xfer_buffer_reborrow), \
-    LINK("wasmos", "buffer_reborrow",      warp_buffer_reborrow)
+    LINK("wasmos", "buffer_reborrow",      warp_buffer_reborrow), \
+    LINK("wasmos", "spawn_info_buffer",    warp_spawn_info_buffer)
 
 
 vb::Span<vb::NativeSymbol const>
@@ -2598,23 +2611,6 @@ warp_ring3_dispatch(uint32_t hc_id, void *frame_ptr)
     uint64_t a3 = frame->rcx;
     uint64_t a4 = frame->r8;
     uint64_t a5 = frame->r9;
-    if (dispatch_proc &&
-        dispatch_proc->name &&
-        warp_process_name_eq(dispatch_proc->name, "script-broker")) {
-        klog_write("[dbg-warp-dispatch] pid=");
-        serial_write_hex64((uint64_t)dispatch_pid);
-        klog_write(" hc=");
-        serial_write_hex64((uint64_t)hc_id);
-        klog_write(" a0=");
-        serial_write_hex64(a0);
-        klog_write(" a1=");
-        serial_write_hex64(a1);
-        klog_write(" a2=");
-        serial_write_hex64(a2);
-        klog_write(" a3=");
-        serial_write_hex64(a3);
-        klog_write("\n");
-    }
     /* Stack args (past return address at [user_rsp+0]). */
     auto stack_u64 = [user_rsp](uint32_t n) -> uint64_t {
         return *reinterpret_cast<uint64_t *>(user_rsp + 8 + (uint64_t)n * 8);
@@ -2704,6 +2700,8 @@ warp_ring3_dispatch(uint32_t hc_id, void *frame_ptr)
         return warp_buffer_unborrow((uint32_t)a0, ctx2);
     /* 109 */ case HC_BUFFER_REBORROW:
         return warp_buffer_reborrow((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, (uint32_t)a3, ctx5);
+    /* 110 */ case HC_SPAWN_INFO_BUFFER:
+        return warp_spawn_info_buffer(reinterpret_cast<void *>(a0));
     /* 32 */ case HC_BLOCK_BUFFER_PHYS:
         return warp_block_buffer_phys(reinterpret_cast<void *>(a0));
     /* 33 */ case HC_BLOCK_BUFFER_COPY:

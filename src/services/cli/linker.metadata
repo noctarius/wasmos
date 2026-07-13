@@ -6,6 +6,7 @@ name = "cli"
 entry = "initialize"
 kind = "service"
 native = false
+wants_tty = true
 
 [resources]
 stack_pages = 16

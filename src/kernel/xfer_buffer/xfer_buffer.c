@@ -17,7 +17,15 @@
 /* Intrinsic capacity of the generic transfer buffer kind. Mirrors the kernel's
  * PM_XFER_BUFFER_SIZE; reconciled to a single source of truth when the object
  * model is wired into the process manager. */
+/* Standard TRANSFER buffer size reported by xfer_buffer_size()/the
+ * wasmos_xfer_buffer_size() hostcall. Callers use it as the chunk size for FS
+ * transfers, so it is kept stable. Individual buffers are right-sized to the
+ * requested minimum_size (page-rounded) at acquire time; this is just the
+ * conventional/default size. */
 #define XFER_TRANSFER_CAPACITY (2u * 1024u * 1024u)
+/* Hard upper bound a single TRANSFER buffer may request. Sized to admit a
+ * full-resolution compositor backbuffer (e.g. 1280x800x4 = 4 MiB) with headroom. */
+#define XFER_TRANSFER_MAX_SIZE (16u * 1024u * 1024u)
 #define XFER_PAGE_SIZE 4096u
 
 typedef struct {
@@ -492,12 +500,23 @@ xfer_buffer_acquire(uint32_t kind,
     if (registry_init_once() != 0) {
         return XFER_BUFFER_ERR_INTERNAL;
     }
-    size = xfer_buffer_size(kind);
-    if (size == 0u) {
-        return XFER_BUFFER_ERR_NO_BACKING;
-    }
-    if (minimum_size > size) {
-        return XFER_BUFFER_ERR_CAPACITY_EXCEEDED;
+    if (kind == BUFFER_KIND_FRAMEBUFFER) {
+        /* The FRAMEBUFFER object always spans the whole hardware framebuffer. */
+        size = framebuffer_capacity();
+        if (size == 0u) {
+            return XFER_BUFFER_ERR_NO_BACKING;
+        }
+        if (minimum_size > size) {
+            return XFER_BUFFER_ERR_CAPACITY_EXCEEDED;
+        }
+    } else {
+        /* TRANSFER buffers are right-sized to the request, rounded up to a whole
+         * number of pages (backing is always mapped page-by-page), bounded by
+         * XFER_TRANSFER_MAX_SIZE. */
+        if (minimum_size > XFER_TRANSFER_MAX_SIZE) {
+            return XFER_BUFFER_ERR_CAPACITY_EXCEEDED;
+        }
+        size = (minimum_size + (XFER_PAGE_SIZE - 1u)) & ~(XFER_PAGE_SIZE - 1u);
     }
     phys_base = object_alloc_backing(kind, size);
     /* Object backing is mapped as whole pages by callers, so the base must be

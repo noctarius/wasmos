@@ -155,6 +155,10 @@ typedef struct process {
     uint32_t    runtime_lock_owner;   /* TID of current runtime-lock occupant; 0 = free */
     /* Process-level wait event (replaces wait_target_pid polling). */
     sched_event_t wait_event;
+    /* Transfer-buffer id (child-owned) holding this process's wasmos_spawn_info_t
+     * header + args blob, or 0 if none. Returned by the wasmos_spawn_info_buffer()
+     * hostcall so the child can read its startup contract. */
+    uint32_t spawn_info_buffer_id;
 } process_t;
 
 typedef struct {

@@ -95,9 +95,15 @@ We carve four sub-regions within it (all offsets from `USER_VA_MIN`):
 | Offset from USER_VA_MIN | Size    | Content                    | Flags         |
 |-------------------------|---------|----------------------------|---------------|
 | `+0x0000_0000_0000`     | 512 MB  | JIT executable code        | R-X user      |
-| `+0x0020_0000_0000`     | 2 GB    | WASM linear memory         | RW- user      |
+| `+0x0020_0000_0000`     | 4 GB    | WASM linear memory         | RW- user      |
 | `+0x00A0_0000_0000`     | 4 KB    | Hostcall trampoline page   | R-X user      |
 | `+0x00A0_0000_1000`     | 4 KB    | Return trampoline page     | R-X user      |
+
+> The linear-memory window is the **full WASM32 4 GiB reservation** and is
+> demand-committed with a non-relocating backing (see
+> [§15 Linear Memory: Reserve-and-Commit](#15--linear-memory-reserve-and-commit-no-relocation)).
+> The top of this window is further reserved as a general pinned-VA arena for
+> shmem objects, network rings, and any mapping needing a stable VA.
 
 Define constants in `src/kernel/include/warp_ring3.h` (new file):
 
@@ -521,3 +527,74 @@ hostcalls via INT 0x80) on top of this already-proven infrastructure.  The
 first milestone (per-process CR3 with dual-mapped JIT) can be tested using
 the existing halt test (`[calculator] ready` gate) without touching the
 syscall layer at all.
+
+---
+
+## 15  Linear Memory: Reserve-and-Commit (no relocation)
+
+**Status: planned.** This reworks how WARP linear memory is backed. It is a
+prerequisite for the cross-process shared-memory ring transport (see
+[Networking → Socket Data Plane](22-networking-virtio-net-and-stack.md#socket-data-plane--shared-memory-ring-transport-planned-canonical)).
+
+### 15.1  The problem it removes
+
+Today WARP grows linear memory by **reallocating and copying** the backing
+block (`reallocAlignedMemory` beyond its usable slack), after which the ring-3
+mapper remaps the user window to the new physical pages. That relocation is the
+root of an entire bug class: any party holding a physical address (or a mapping)
+into linear memory — a peer that shares a region, the JIT code dual-mapped in
+the same higher-half window (§1 aliasing class 3) — is silently left pointing at
+the *old* pages after a grow. Memory barriers do not help; it is a
+wrong-physical-page problem, not a stale-cache problem.
+
+Relocation is a property of the current backing allocator, not a hardware
+requirement. The fix is to make the backing **non-relocating**.
+
+### 15.2  The model
+
+Reserve the **full WASM32 4 GiB** linear-memory VA window per module up front
+(VA only — no physical pages committed until touched), then **demand-commit**
+pages as the module grows, exactly like the generic `mm_context` demand-mapping
+model ([Memory Management → Demand Mapping](06-memory-management.md#demand-mapping-and-page-fault-handling)).
+`memory.grow` becomes "commit N more pages at the current tail" — it allocates
+physical frames and maps them at the already-reserved higher offsets. The
+physical page backing any given linear-memory offset is then **stable for the
+module's lifetime**:
+
+- offset → physical mapping never changes → no holder is ever left stale;
+- `commitVirtualMemory`'s zero-fill only ever touches genuinely new pages;
+- aliasing class 3 (JIT vs linmem, same process) cannot recur, because JIT code
+  lives in its own reserved sub-region and linmem pages are committed, never
+  moved over it.
+
+### 15.3  Pinned-VA arena sub-range
+
+The **top** of the 4 GiB window is reserved as a general **pinned-VA arena**.
+Every mapping that must hold a stable VA for its lifetime lands here: all shmem
+objects (framebuffer, compositor backbuffer, font data, GFX surfaces), the
+per-socket network rings, and any future pinned mapping. Its
+PTEs are established once (at map time) and owned solely by the shmem/xfer-buffer
+mapper; the linear-memory grow path is not permitted to touch them, and the app
+heap only ever commits from the **bottom** of the window upward. This is what
+makes any persistent shared mapping safe: the overlay never moves and has a
+single PTE owner, so the app and its native peer always reference the same
+physical pages. The one real constraint driving this design is that a WASM app
+can only dereference addresses inside its own linear memory, so the arena must
+live *within* the 4 GiB offset space (native peers have a normal address space
+and are unconstrained). See
+[Memory Management → Pinned VA Arena](06-memory-management.md#pinned-va-arena-shmem-rings-and-any-stable-mapping).
+
+### 15.4  Accounting impact (ps)
+
+Reserving 4 GiB of VA decouples **reserved** from **resident**: `process_stats_t`
+must report *committed* pages, not the reserved window size, or `ps` shows 4 GiB
+per WARP process. See
+[Memory Management → Open Design Decisions (RSS)](06-memory-management.md#open-design-decisions).
+
+### 15.5  wasm3 parity
+
+The same invariant must hold on wasm3, which backs its linear region differently
+(a heap-backed block the kernel rebinds; see `docs/STATUS.md`). The shared-window
+overlay contract is runtime-neutral even though the linear-memory mechanics
+differ, so the mapping proof (slice 0) must pass on **both** backends before ring
+code is layered on top.

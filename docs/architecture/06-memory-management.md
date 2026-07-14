@@ -259,6 +259,54 @@ release the pin before decrementing the shared region's logical refcount.
 
 ---
 
+### Pinned VA Arena (shmem, rings, and any stable mapping)
+
+The **top of a WASM process's linear-memory VA window is a general-purpose
+pinned-VA arena**: every mapping that must keep a stable virtual address for its
+lifetime lands here. Consumers include all shmem objects (compositor framebuffer
+and backbuffer, font-service font data, GFX window surfaces), the per-socket
+network ring buffers
+([Networking → Socket Data Plane](architecture/22-networking-virtio-net-and-stack.md)),
+and any future pinned mapping. The common requirement is that **both endpoints
+reference the same physical pages for the whole lifetime of the mapping**: a
+one-shot copy tolerates a mapping that moves between calls; a persistent shared
+mapping does not. This invariant makes that safe:
+
+> Any pinned mapping exposed to a WASM process lives in a **reserved arena at the
+> top of that process's linear-memory VA**, backed by dedicated physical pages,
+> with PTEs **established once and owned solely by the shmem/xfer-buffer mapper**
+> — never touched by the linear-memory grow/relocation path. The process heap
+> only ever commits *below* the arena.
+
+Three failure modes this rules out, each a consequence of a mapping that changes
+underneath a holder while the physical pages it referenced stay live elsewhere:
+
+1. **Relocation.** If the runtime grows linear memory by realloc-and-copy, the
+   physical pages behind a given offset change and any holder of the old pages
+   is silently stale. Fixed by a **non-relocating, demand-committed** backing
+   (reserve VA up front, commit pages in place). For WARP this is the 4 GiB
+   reserve-and-commit rework
+   ([WARP Ring3 → §15](architecture/31-warp-ring3-implementation.md#15--linear-memory-reserve-and-commit-no-relocation));
+   wasm3 must satisfy the same invariant through its own linear-region backing.
+2. **Zone overlap.** Two logically distinct regions sharing a physical window
+   (the historical shmem-vs-linmem aliasing). Avoided by disjoint VA *and* PA
+   ranges — trivially affordable in the 48-bit user VA space.
+3. **Multi-alias desync.** The same page mapped twice, with one alias repointed
+   while the other is still used. Avoided by giving the shared window a **single
+   PTE owner** (the shmem mapper), never co-managed with the grow path.
+
+The one genuine constraint — not self-inflicted — is that a WASM process can
+only dereference addresses inside its own linear memory, so the shared window
+must live *within* that offset space. The invariant is one-sided: a **native**
+peer (e.g. `net-stack`) has a normal address space and maps the same physical
+pages at any stable VA, so all mapping volatility is on the WASM side.
+
+Correct memory ordering (release/acquire on the ring indices) is a *separate*
+requirement layered on top; it governs visibility ordering of accesses to a
+correctly mapped page and does nothing if the page itself moved.
+
+---
+
 ### User-Pointer Copy
 
 `mm_copy_from_user` and `mm_copy_to_user` are the only safe paths for reading
@@ -418,3 +466,7 @@ Deliverable: kernel can operate on arbitrary physical pages without any
 - **RSS tracking**: `process_stats_t` currently returns `vm_total_bytes` as
   the RSS estimate. Real per-page presence tracking requires per-context page
   walk or dirty-bit accounting, deferred until the paging model stabilizes.
+  This becomes **mandatory** with the WARP 4 GiB reserve-and-commit linear
+  memory ([WARP Ring3 → §15.4](architecture/31-warp-ring3-implementation.md#154--accounting-impact-ps)):
+  reserved VA (4 GiB) diverges from committed/resident pages, so `ps` must
+  report committed pages or every WARP process appears to use 4 GiB.

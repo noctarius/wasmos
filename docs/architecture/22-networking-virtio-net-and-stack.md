@@ -469,6 +469,108 @@ apps ──NET_IPC_* sockets──▶ net-stack ──netdrv IPC──▶ virtio
   address assignment (`NET_IPC_IFADDR_*`), routing, and which interface a flow
   egresses. Drivers expose only a frame in/out path plus link state.
 
+---
+
+### Socket Data Plane — Shared-Memory Ring Transport (planned, canonical)
+
+The app↔net-stack **data plane** is a pair of shared-memory SPSC ring buffers
+per socket. Socket payload never travels in an IPC message: IPC carries only the
+**control plane** (open/bind/connect/close) and lightweight **doorbells**.
+
+**Rationale.** A persistent per-socket ring avoids per-datagram borrow/release
+churn, generalizes to TCP byte streaming without an ABI change, and keeps the
+app-facing contract stable across the UDP→TCP progression. The ring indices
+double as flow control, so the producer cannot overrun the consumer regardless
+of relative rate.
+
+#### Ownership and direction
+
+- The **app owns both rings** (TX and RX) as xfer-buffer objects and borrows
+  both to net-stack at socket setup. net-stack is a pure grantee: it reads TX,
+  writes RX. This mirrors, one layer up, how net-stack relates to the driver
+  (the *client* owns the buffers; the *server* is a grantee). It also means a
+  dead app cascade-revokes net-stack's borrows automatically — net-stack leaks
+  nothing.
+- **Push, both directions, no polling.** Producer writes payload into its ring
+  and rings a doorbell only on an empty→non-empty edge:
+  - TX ring: app is producer → doorbell `app → net-stack`.
+  - RX ring: net-stack is producer → doorbell `net-stack → app` (the app
+    wakeup).
+  Because each producer respects the consumer's read index and only writes free
+  space, push has **no overwrite hazard** — the ring indices *are* the flow
+  control (TCP window backpressure / UDP drop fall out of "ring full").
+
+#### Ring layout
+
+Each ring is one xfer-buffer object sized explicitly (**~128 KiB**, not the
+2 MiB `XFER_TRANSFER_CAPACITY` default; two rings/socket → ~256 KiB/socket, and
+the shmem zone is `[0, 64 MiB)`, so ~256 sockets is the budget). Layout:
+
+```
++0            64-byte header (see below)
++64           data region (capacity bytes, power-of-two)
+```
+
+Header (fixed 64 bytes, room reserved deliberately so the ABI is not re-cut for
+close/reset/stats later):
+
+```c
+typedef struct __attribute__((packed, aligned(64))) {
+    uint32_t magic;        /* 'NRNG' */
+    uint16_t version;
+    uint16_t hdr_bytes;    /* = 64 */
+    uint32_t capacity;     /* data-region bytes; power of two */
+    uint32_t flags;        /* state: PEER_CLOSED, RESET, OVERFLOW_DROPPED, ... */
+    /* producer-owned, on its own cache line to avoid false sharing */
+    uint32_t write;        /* free-running; NOT stored modulo */
+    uint8_t  _pad_w[28];
+    /* consumer-owned, separate cache line */
+    uint32_t read;         /* free-running; NOT stored modulo */
+    uint8_t  _pad_r[/* to 64 */];
+} net_ring_hdr_t;
+```
+
+#### Index and framing rules
+
+- **Free-running u32 counters.** `write`/`read` are monotonic and never stored
+  modulo; index into the data region with `pos & (capacity - 1)`. `empty =
+  (write == read)`; `full = (write - read == capacity)`. Unsigned wrap at 2³² is
+  harmless with power-of-two capacity. This removes the read==write full/empty
+  ambiguity.
+- **Ordering is directional acquire/release, not "a barrier".** Producer:
+  write payload → *release*-store `write`. Consumer: *acquire*-load `write` →
+  read payload; then *release*-store `read`. Symmetric on the other index. On
+  x86 aligned u32 loads/stores are atomic and TSO supplies most ordering, so in
+  practice this is compiler barriers plus doing the ops in that order — but the
+  ordering discipline is what makes it correct, not the atomicity alone.
+- **Framing:** a **byte-oriented ring**, not fixed slots. TCP is a raw byte
+  stream (no framing). UDP/datagram sockets prefix each record with a small
+  length header inside the ring. Fixed equal-size slots are rejected: they waste
+  space and cannot hold a datagram larger than one slot.
+
+#### Doorbells and wakeups
+
+- Two doorbell directions (control-plane IPC messages carrying no payload).
+- Edge-triggered with the standard lost-wakeup discipline: the producer
+  publishes its index **then** checks was-empty-and-signals; the consumer
+  re-checks the index **after** arming its wait. (This codebase has a history
+  of IPC lost-wakeup stalls — see `docs/STATUS.md` — so this must be explicit.)
+
+#### Mapping requirement (hard dependency)
+
+Both endpoints must read/write the **same physical pages** for the life of the
+socket. net-stack is a native service with a stable address space, so its
+mapping never moves; all the volatility is on the WASM-app side, where the ring
+must be overlaid into the app's linear memory. That overlay must satisfy the
+**pinned shared-window invariant** and therefore depends on the WARP linear
+address-space rework — see
+[WARP Ring3 Implementation → Linear Memory: Reserve-and-Commit](31-warp-ring3-implementation.md#15--linear-memory-reserve-and-commit-no-relocation)
+and [Memory Management → Pinned VA Arena](06-memory-management.md#pinned-va-arena-shmem-rings-and-any-stable-mapping).
+The rings are one consumer of that arena, alongside shmem surfaces.
+This mapping contract must be proven on both wasm3 and WARP (buffer stays
+coherent across aggressive app-heap growth) **before** ring/socket code is
+built on top of it.
+
 ### IPC Opcode Allocation
 
 All networking opcodes occupy the 0xA00–0xBFF range in `wasmos_driver_abi.h`.
@@ -527,6 +629,15 @@ enum {
 
 All arg fields are `int32_t`. Addresses and lengths that exceed 32 bits go
 through the xfer buffer.
+
+> **Note:** the socket *data-plane* opcodes below (`NET_IPC_SEND`,
+> `NET_IPC_RECV`, and their xfer-buffer payload path) are **superseded** by the
+> [Socket Data Plane — Shared-Memory Ring Transport](#socket-data-plane--shared-memory-ring-transport-planned-canonical)
+> above: payload moves through the per-socket rings, not through these
+> messages. The control-plane opcodes (`SOCKET_OPEN`, `BIND`, `CONNECT`,
+> `CLOSE`, `IFADDR_*`, `STACK_*`) remain as specified, with `SOCKET_OPEN`
+> extended to carry the app-owned TX/RX ring `buffer_id`s. The driver-facing
+> `NETDRV_IPC_*` layouts are unaffected.
 
 #### NETDRV_IPC_LINK_GET response
 ```

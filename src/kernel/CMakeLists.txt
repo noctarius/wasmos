@@ -256,6 +256,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/slab.c
   ${KERNEL_DIR}/syscall.c
   ${KERNEL_DIR}/paging.c
+  ${KERNEL_DIR}/linmem_slots.c
   ${KERNEL_DIR}/klog.c
   ${KERNEL_DIR}/kmem.c
   ${KERNEL_DIR}/list.c

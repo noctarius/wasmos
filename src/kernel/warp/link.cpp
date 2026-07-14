@@ -508,6 +508,30 @@ warp_proc_exit(uint32_t code, void *ctx_)
     return 0;
 }
 
+static void
+warp_wasi_proc_exit(uint32_t code, void *ctx_)
+{
+    (void)warp_proc_exit(code, ctx_);
+}
+
+static uint32_t
+warp_wasi_random_get(uint32_t buf_offset, uint32_t len, void *ctx_)
+{
+    auto *ctx = warp_call_ctx(ctx_);
+    if (len == 0) {
+        return 0;
+    }
+    uint8_t *buf = warp_mem(ctx, buf_offset, len);
+    if (!buf) {
+        return (uint32_t)-1;
+    }
+    /* Minimal WASI compatibility for guest runtimes that probe randomness
+     * during startup. Deterministic zero-fill is sufficient for current WASMOS
+     * guests, which only require the call not to trap. */
+    __builtin_memset(buf, 0, len);
+    return 0;
+}
+
 static uint32_t
 warp_proc_notify_ready(void *ctx_)
 {
@@ -2460,7 +2484,9 @@ warp_env_abort(uint32_t msg, uint32_t file, uint32_t line, uint32_t column, void
     LINK("wasmos", "buffer_unborrow",      warp_buffer_unborrow), \
     LINK("wasmos", "xfer_buffer_reborrow", warp_xfer_buffer_reborrow), \
     LINK("wasmos", "buffer_reborrow",      warp_buffer_reborrow), \
-    LINK("wasmos", "spawn_info_buffer",    warp_spawn_info_buffer)
+    LINK("wasmos", "spawn_info_buffer",    warp_spawn_info_buffer), \
+    LINK("wasi_snapshot_preview1", "proc_exit",  warp_wasi_proc_exit), \
+    LINK("wasi_snapshot_preview1", "random_get", warp_wasi_random_get)
 
 
 vb::Span<vb::NativeSymbol const>
@@ -2702,6 +2728,11 @@ warp_ring3_dispatch(uint32_t hc_id, void *frame_ptr)
         return warp_buffer_reborrow((uint32_t)a0, (uint32_t)a1, (uint32_t)a2, (uint32_t)a3, ctx5);
     /* 110 */ case HC_SPAWN_INFO_BUFFER:
         return warp_spawn_info_buffer(reinterpret_cast<void *>(a0));
+    /* 111 */ case HC_WASI_PROC_EXIT:
+        warp_wasi_proc_exit((uint32_t)a0, ctx2);
+        return 0;
+    /* 112 */ case HC_WASI_RANDOM_GET:
+        return warp_wasi_random_get((uint32_t)a0, (uint32_t)a1, ctx3);
     /* 32 */ case HC_BLOCK_BUFFER_PHYS:
         return warp_block_buffer_phys(reinterpret_cast<void *>(a0));
     /* 33 */ case HC_BLOCK_BUFFER_COPY:

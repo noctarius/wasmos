@@ -462,17 +462,8 @@ pub mod fs {
     }
 
     struct StagedPath {
-        bid: i32,
-        b1: i32,
+        xfer: BorrowedBuffer,
         path_len: usize,
-    }
-
-    impl Drop for StagedPath {
-        fn drop(&mut self) {
-            unsafe {
-                let _ = xfer_buffer_release(self.bid);
-            }
-        }
     }
 
     fn borrow_fs_buffer(size: i32) -> Result<BorrowedBuffer, Error> {
@@ -604,8 +595,7 @@ pub mod fs {
             return Err(Error::HostCallFailed);
         }
         Ok(StagedPath {
-            bid: xfer.bid,
-            b1: xfer.b1,
+            xfer,
             path_len: path_bytes.len(),
         })
     }
@@ -613,7 +603,13 @@ pub mod fs {
     fn open_with_flags(path: &str, flags: i32) -> Result<File, Error> {
         let staged = stage_path(path)?;
 
-        let (fd, _) = fs_request(FS_IPC_OPEN_REQ, staged.path_len as i32, flags, staged.bid, staged.b1)?;
+        let (fd, _) = fs_request(
+            FS_IPC_OPEN_REQ,
+            staged.path_len as i32,
+            flags,
+            staged.xfer.bid,
+            staged.xfer.b1,
+        )?;
         if fd < 0 {
             return Err(Error::BadResponse);
         }
@@ -639,7 +635,13 @@ pub mod fs {
 
     pub fn stat(path: &str) -> Result<Stat, Error> {
         let staged = stage_path(path)?;
-        let (size, mode) = fs_request(FS_IPC_STAT_REQ, staged.path_len as i32, 0, staged.bid, staged.b1)?;
+        let (size, mode) = fs_request(
+            FS_IPC_STAT_REQ,
+            staged.path_len as i32,
+            0,
+            staged.xfer.bid,
+            staged.xfer.b1,
+        )?;
         if size < 0 {
             return Err(Error::BadResponse);
         }
@@ -652,19 +654,37 @@ pub mod fs {
 
     pub fn unlink(path: &str) -> Result<(), Error> {
         let staged = stage_path(path)?;
-        let _ = fs_request(FS_IPC_UNLINK_REQ, staged.path_len as i32, 0, staged.bid, staged.b1)?;
+        let _ = fs_request(
+            FS_IPC_UNLINK_REQ,
+            staged.path_len as i32,
+            0,
+            staged.xfer.bid,
+            staged.xfer.b1,
+        )?;
         Ok(())
     }
 
     pub fn mkdir(path: &str) -> Result<(), Error> {
         let staged = stage_path(path)?;
-        let _ = fs_request(FS_IPC_MKDIR_REQ, staged.path_len as i32, 0, staged.bid, staged.b1)?;
+        let _ = fs_request(
+            FS_IPC_MKDIR_REQ,
+            staged.path_len as i32,
+            0,
+            staged.xfer.bid,
+            staged.xfer.b1,
+        )?;
         Ok(())
     }
 
     pub fn rmdir(path: &str) -> Result<(), Error> {
         let staged = stage_path(path)?;
-        let _ = fs_request(FS_IPC_RMDIR_REQ, staged.path_len as i32, 0, staged.bid, staged.b1)?;
+        let _ = fs_request(
+            FS_IPC_RMDIR_REQ,
+            staged.path_len as i32,
+            0,
+            staged.xfer.bid,
+            staged.xfer.b1,
+        )?;
         Ok(())
     }
 

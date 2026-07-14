@@ -47,6 +47,9 @@ class HelloGoTest(unittest.TestCase):
             "hello_go",
             [
                 b"Hello from Go on WASMOS!",
+                b"startup.nsh readable: true",
+                b"long filename write: true",
+                b"long filename unlink: true",
             ],
         )
 

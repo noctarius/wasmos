@@ -32,6 +32,7 @@
 
 /* void return, 0 args  (+ void *ctx) */
 static void     stub_v0(void *) {}
+static void     stub_v1(uint32_t, void *) {}
 /* void return, 4 args  (+ void *ctx) — env.abort */
 static void     stub_v4(uint32_t, uint32_t, uint32_t, uint32_t, void *) {}
 
@@ -187,6 +188,8 @@ static vb::Span<vb::NativeSymbol const> aot_symbols()
         DYNAMIC_LINK("wasmos", "xfer_buffer_reborrow",  stub_i3),
         DYNAMIC_LINK("wasmos", "buffer_reborrow",       stub_i4),
         DYNAMIC_LINK("wasmos", "spawn_info_buffer",     stub_i0),
+        DYNAMIC_LINK("wasi_snapshot_preview1", "proc_exit",  stub_v1),
+        DYNAMIC_LINK("wasi_snapshot_preview1", "random_get", stub_i2),
     };
     return vb::Span<vb::NativeSymbol const>(syms, sizeof(syms) / sizeof(syms[0]));
 }

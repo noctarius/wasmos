@@ -341,6 +341,47 @@ the virtual range fits within the existing linear region.
 
 ---
 
+### WASM Linear Memory: Unified Ownership (planned)
+
+A WASM module's linear memory is currently represented in more than one place
+per runtime, and those representations can back the same offset with different
+physical pages:
+
+- **wasm3.** The interpreter executes loads and stores against its own
+  heap-backed block (the *host view*), while the process
+  `MEM_REGION_WASM_LINEAR` mapping (the *user view*, validated by
+  `mm_copy_*_user`) is a separate description of the same address range. Startup
+  layout and `m3_ResizeMemory()` growth can leave the two describing different
+  physical backings.
+- **WARP.** Growth reallocates and copies the backing (see
+  [WARP Ring3 → §15](architecture/31-warp-ring3-implementation.md#15--linear-memory-reserve-and-commit-no-relocation)),
+  after which the ring-3 mapper remaps the user window to the new pages.
+
+The wasm3 divergence is the sole reason
+`wasm_copy_to_user_sync_views` / `wasm_copy_from_user_sync_views`
+(`src/kernel/wasm3/link.c`) exist: a write copies the bytes into both views, and
+a read compares them and treats the interpreter's host block as authoritative
+(`memcmp`, then prefer host). This is defensive reconciliation of two views that
+are not guaranteed identical, not an intended design.
+
+**Redesign.** Each module gets a single **non-relocating** backing that every
+view references:
+
+- Reserve the full WASM32 4 GiB linear-memory VA up front; demand-commit pages
+  in place; never relocate (the reserve-and-commit model shared with WARP).
+- The interpreter's block and `MEM_REGION_WASM_LINEAR` describe the **same
+  physical pages** for the module's lifetime, so `mm_copy_*_user` is the single
+  source of truth.
+- The pinned-VA arena (above) occupies the top of the window; heap and data
+  commit from the bottom.
+
+**wasm3 done-signal.** With ownership unified,
+`wasm_copy_to_user_sync_views` / `wasm_copy_from_user_sync_views` reduce to a
+plain `mm_copy_*_user` — the second host-view write and the read-side
+reconciliation are removed — and boot plus the gfx-smoke path still pass.
+
+---
+
 ### Slab Allocator
 
 `src/kernel/slab.c` provides a minimal fixed-size slab for small kernel

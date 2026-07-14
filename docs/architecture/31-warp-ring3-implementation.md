@@ -593,8 +593,10 @@ per WARP process. See
 
 ### 15.5  wasm3 parity
 
-The same invariant must hold on wasm3, which backs its linear region differently
-(a heap-backed block the kernel rebinds; see `docs/STATUS.md`). The shared-window
-overlay contract is runtime-neutral even though the linear-memory mechanics
+The same invariant must hold on wasm3, whose linear-memory ownership redesign —
+how the dual host/user views are unified, and the resulting removal of
+`wasm_copy_*_sync_views` — is specified in
+[Memory Management → WASM Linear Memory: Unified Ownership](06-memory-management.md#wasm-linear-memory-unified-ownership-planned).
+The pinned-VA arena contract is runtime-neutral even though the backing mechanics
 differ, so the mapping proof (slice 0) must pass on **both** backends before ring
 code is layered on top.

@@ -332,6 +332,13 @@ M3Result  EvaluateExpression  (IM3Module i_module, void * o_expressed, u8 i_type
 }
 
 
+/* WASMOS: linear memory is backed by a reserved-VA, non-relocating slot managed
+ * by the kernel wasm3 shim (src/kernel/wasm3/shim.c) instead of a relocating
+ * m3_Realloc block, so its base is pinned for the process lifetime and growth
+ * only commits tail pages.  These are the only WASMOS-local edits to this file. */
+extern void *wasm3_linmem_reserve (size_t total_bytes, size_t max_bytes, size_t data_offset);
+extern void *wasm3_linmem_grow (void *block, size_t new_total_bytes);
+
 M3Result  InitMemory  (IM3Runtime io_runtime, IM3Module i_module)
 {
     M3Result result = m3Err_none;                                     //d_m3Assert (not io_runtime->memory.wasmPages);
@@ -383,11 +390,15 @@ M3Result  ResizeMemory  (IM3Runtime io_runtime, u32 i_numPages)
 
         size_t numBytes = numPageBytes + sizeof (M3MemoryHeader);
 
-        size_t numPreviousBytes = memory->numPages * io_runtime->memory.pageSize;
-        if (numPreviousBytes)
-            numPreviousBytes += sizeof (M3MemoryHeader);
-
-        void* newMem = m3_Realloc ("Wasm Linear Memory", memory->mallocated, numBytes, numPreviousBytes);
+        /* WASMOS: reserve on first use, grow in place afterwards.  The slot base
+         * is pinned, so mallocated never moves (no realloc/copy). */
+        void* newMem;
+        if (memory->mallocated)
+            newMem = wasm3_linmem_grow (memory->mallocated, numBytes);
+        else
+            newMem = wasm3_linmem_reserve (numBytes,
+                        (size_t) memory->maxPages * (size_t) io_runtime->memory.pageSize,
+                        sizeof (M3MemoryHeader));
         _throwifnull(newMem);
 
         memory->mallocated = (M3MemoryHeader*)newMem;

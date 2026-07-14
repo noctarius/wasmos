@@ -561,18 +561,18 @@ wasm3_sync_linear_memory_region_binding(uint32_t pid,
                                         const uint8_t *mem_base,
                                         uint64_t mem_size)
 {
-    uint64_t phys_base = 0;
-
     if (pid == 0 || context_id == 0 || !mem_base || mem_size == 0) {
         return -1;
     }
     if (((uintptr_t)mem_base & 0xFFFULL) != 0) {
         return -1;
     }
-    if (wasm3_heap_query_phys(pid, mem_base, mem_size, &phys_base) != 0) {
-        return -1;
-    }
-    return mm_context_rebind_wasm_linear(context_id, phys_base, mem_size);
+    /* Linear memory lives in a reserved-VA linmem slot with scattered physical
+     * backing (src/kernel/wasm3/shim.c), so bind the user-region alias per page
+     * to the slot's frames rather than to a single contiguous phys_base. */
+    return mm_context_bind_wasm_linear_scattered(context_id,
+                                                 (uint64_t)(uintptr_t)mem_base,
+                                                 mem_size);
 }
 
 int

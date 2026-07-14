@@ -131,6 +131,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/subsystem_registry.o
   ${BUILD_DIR}/wasmos_exec_format.o
   ${BUILD_DIR}/paging.o
+  ${BUILD_DIR}/linmem_slots.o
   ${BUILD_DIR}/physmem.o
   ${BUILD_DIR}/runtime_context.o
   ${BUILD_DIR}/ipc.o
@@ -540,6 +541,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/wasmos_exec_format.c -o ${BUILD_DIR}/wasmos_exec_format.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/memory.c -o ${BUILD_DIR}/memory.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/paging.c -o ${BUILD_DIR}/paging.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/linmem_slots.c -o ${BUILD_DIR}/linmem_slots.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/physmem.c -o ${BUILD_DIR}/physmem.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/runtime_context.c -o ${BUILD_DIR}/runtime_context.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/ipc.c -o ${BUILD_DIR}/ipc.o

@@ -836,6 +836,81 @@ mm_context_rebind_wasm_linear(uint32_t context_id, uint64_t phys_base, uint64_t 
     return 0;
 }
 
+/* Bind the WASM_LINEAR user-region VA to a SCATTERED kernel backing (a
+ * reserved-VA linmem slot, whose pages are not physically contiguous).  Maps
+ * each region page to the physical frame backing kernel_base + off, so the
+ * user-region alias tracks the interpreter's slot-VA view page for page.  Used
+ * by wasm3 once linear memory lives in a linmem slot (the single-phys_base
+ * mm_context_rebind_wasm_linear can't describe scattered backing).  The slot
+ * owns the physical pages, so the region is marked PHYS_EXTERNAL (phys_base=0)
+ * and mm_context_destroy will not free them. */
+int
+mm_context_bind_wasm_linear_scattered(uint32_t context_id, uint64_t kernel_base, uint64_t size)
+{
+    mm_context_t *ctx = 0;
+    mem_region_t *region = 0;
+    list_iter_t it;
+    uint64_t new_size = 0;
+    uint64_t old_map_bytes = 0;
+
+    if (context_id == 0 || kernel_base == 0 || size == 0 ||
+        (kernel_base & (PAGE_SIZE - 1ULL)) != 0) {
+        return -1;
+    }
+    ctx = mm_context_get(context_id);
+    if (!ctx) {
+        return -1;
+    }
+    region = (mem_region_t *)list_first(&ctx->regions, &it);
+    while (region) {
+        if (region->type == MEM_REGION_WASM_LINEAR) {
+            break;
+        }
+        region = (mem_region_t *)list_next(&it);
+    }
+    if (!region) {
+        return -1;
+    }
+
+    new_size = mm_page_align_up(size);
+
+    /* Unmap the current coverage before remapping (covers both the old size and
+     * the new size). */
+    old_map_bytes = mm_page_align_up(region->size);
+    if (new_size > old_map_bytes) {
+        old_map_bytes = new_size;
+    }
+    for (uint64_t off = 0; off < old_map_bytes; off += PAGE_SIZE) {
+        (void)paging_unmap_4k_in_root(ctx->root_table, region->base + off);
+    }
+
+    /* Free the original contiguous placeholder backing the first time we take
+     * over (subsequent binds are already PHYS_EXTERNAL/scattered). */
+    if (region->phys_base != 0 && !(region->flags & MEM_REGION_FLAG_PHYS_EXTERNAL)) {
+        uint64_t old_pages = (region->size + PAGE_SIZE - 1ULL) / PAGE_SIZE;
+        if (old_pages != 0) {
+            pfa_free_pages(region->phys_base, old_pages);
+        }
+    }
+
+    for (uint64_t off = 0; off < new_size; off += PAGE_SIZE) {
+        uint64_t phys = paging_virt_to_phys(kernel_base + off) & ~(PAGE_SIZE - 1ULL);
+        if (phys == 0) {
+            return -1;
+        }
+        if (paging_map_4k_in_root(ctx->root_table, region->base + off, phys,
+                                  MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
+                                      MEM_REGION_FLAG_USER) != 0) {
+            return -1;
+        }
+    }
+
+    region->phys_base = 0; /* scattered: no single contiguous base */
+    region->size = new_size;
+    region->flags |= MEM_REGION_FLAG_PHYS_EXTERNAL;
+    return 0;
+}
+
 static mm_context_t *mm_context_get_locked(uint32_t id) {
     if (id == g_root_ctx.id) {
         return &g_root_ctx;

@@ -11,6 +11,7 @@
 #include "physmem.h"
 #include "paging.h"
 #include "shim.h"
+#include "linmem_slots.h"
 #include "sync/spinlock.h"
 #include "arch/x86_64/smp.h"
 
@@ -33,6 +34,15 @@ typedef struct {
     size_t max_size;
     size_t committed_size;
     uint32_t chunk_count;
+    /* Dedicated-VA linear-memory slot (Step 3a).  WASM linear memory lives in a
+     * reserved-VA slot (linmem_slots), not the direct-map chunk arena, so its
+     * base is pinned for the process lifetime and it grows by committing tail
+     * pages (never relocates).  linmem_slot == LINMEM_SLOT_NONE until reserved. */
+    uint32_t linmem_slot;
+    uint64_t linmem_va_base;         /* slot VA base */
+    uint64_t linmem_block;           /* returned block ptr (== M3MemoryHeader*) */
+    uint64_t linmem_committed_pages; /* pages committed into the slot so far */
+    uint64_t linmem_max_pages;       /* commit ceiling (reservation cap) */
     /* The allocator grows by appending chunks. Allocation only advances the
      * tail chunk, which keeps the implementation simple and deterministic while
      * still allowing large heaps without one giant contiguous reservation. */
@@ -75,6 +85,11 @@ wasm3_heap_slot_init(wasm3_heap_slot_t *slot, uint32_t pid)
     slot->max_size = (size_t)WASM3_HEAP_MAX_BYTES;
     slot->committed_size = 0;
     slot->chunk_count = 0;
+    slot->linmem_slot = LINMEM_SLOT_NONE;
+    slot->linmem_va_base = 0;
+    slot->linmem_block = 0;
+    slot->linmem_committed_pages = 0;
+    slot->linmem_max_pages = 0;
     for (uint32_t i = 0; i < WASM3_HEAP_MAX_CHUNKS; ++i) {
         slot->chunks[i].phys = 0;
         slot->chunks[i].base = 0;
@@ -419,9 +434,24 @@ void *calloc(size_t nmemb, size_t size)
     return wasm3_alloc(total, 1);
 }
 
+/* Forward declarations: dedicated-VA linmem helpers defined below (near
+ * realloc); referenced here by free() and by wasm3_heap_release(). */
+static int  wasm3_ptr_in_linmem_slot(const void *p);
+static void wasm3_linmem_free_slot_locked(wasm3_heap_slot_t *slot);
+
 void free(void *ptr)
 {
     if (!ptr) {
+        return;
+    }
+    /* Slot-backed linear memory: release the whole slot (decommit + free). */
+    if (wasm3_ptr_in_linmem_slot(ptr)) {
+        ksync_spinlock_lock(&g_wasm3_heap_lock);
+        wasm3_heap_slot_t *lslot = wasm3_heap_slot();
+        if (lslot && (uint64_t)(uintptr_t)ptr == lslot->linmem_block) {
+            wasm3_linmem_free_slot_locked(lslot);
+        }
+        ksync_spinlock_unlock(&g_wasm3_heap_lock);
         return;
     }
     ksync_spinlock_lock(&g_wasm3_heap_lock);
@@ -459,6 +489,9 @@ void wasm3_heap_release(uint32_t pid)
         if (slot->pid != pid) {
             continue;
         }
+        /* Release the dedicated-VA linear-memory slot before init clears the
+         * bookkeeping (idempotent if the runtime already freed it). */
+        wasm3_linmem_free_slot_locked(slot);
         for (uint32_t chunk_index = 0; chunk_index < slot->chunk_count; ++chunk_index) {
             wasm3_heap_chunk_t *chunk = &slot->chunks[chunk_index];
             if (!chunk->base || chunk->size == 0) {
@@ -535,6 +568,121 @@ wasm3_heap_query_phys(uint32_t pid, const void *ptr, uint64_t size, uint64_t *ou
     return 0;
 }
 
+/* ---- Dedicated-VA linear-memory slot (Step 3a) --------------------------- *
+ * WASM linear memory is backed by a reserved-VA slot (linmem_slots) instead of
+ * the direct-map chunk arena: the base is pinned for the process lifetime and
+ * growth commits scattered tail pages in place (never relocates).  The block is
+ * positioned so m3MemData (block + data_offset) is page-aligned within the
+ * slot, so each guest page maps 1:1 to a slot page.  Reserve/grow/free are
+ * driven from the vendored wasm3 InitMemory/ResizeMemory/Runtime_Release path;
+ * the free routing below + wasm3_heap_release make teardown idempotent. */
+
+static int
+wasm3_ptr_in_linmem_slot(const void *p)
+{
+    uint64_t v = (uint64_t)(uintptr_t)p;
+    uint64_t lo = WARP_LINMEM_VA_BASE;
+    uint64_t hi = WARP_LINMEM_VA_BASE +
+                  (uint64_t)linmem_slot_count() * WARP_LINMEM_VA_STRIDE;
+    return v >= lo && v < hi;
+}
+
+/* Release the pid's linmem slot (decommit + free); lock held; idempotent. */
+static void
+wasm3_linmem_free_slot_locked(wasm3_heap_slot_t *slot)
+{
+    if (!slot || slot->linmem_slot == LINMEM_SLOT_NONE) {
+        return;
+    }
+    linmem_slot_decommit(slot->linmem_va_base, slot->linmem_committed_pages);
+    linmem_slot_release(slot->linmem_slot);
+    slot->linmem_slot            = LINMEM_SLOT_NONE;
+    slot->linmem_va_base         = 0;
+    slot->linmem_block           = 0;
+    slot->linmem_committed_pages = 0;
+    slot->linmem_max_pages       = 0;
+}
+
+/* Reserve a slot-backed linear-memory block for the current process, committing
+ * enough pages for `total_bytes` and positioning the block so that
+ * `block + data_offset` (i.e. m3MemData) is page-aligned.  `max_bytes` caps
+ * growth (also bounded by the slot's VA capacity).  Returns the block pointer
+ * (used as M3MemoryHeader*) or 0 on failure. */
+void *
+wasm3_linmem_reserve(size_t total_bytes, size_t max_bytes, size_t data_offset)
+{
+    if (total_bytes == 0 || data_offset >= 4096u) {
+        return 0;
+    }
+    ksync_spinlock_lock(&g_wasm3_heap_lock);
+    wasm3_heap_slot_t *slot = wasm3_heap_slot();
+    if (!slot || slot->linmem_slot != LINMEM_SLOT_NONE) {
+        ksync_spinlock_unlock(&g_wasm3_heap_lock);
+        return 0;
+    }
+    int s = linmem_slot_alloc();
+    if (s < 0) {
+        ksync_spinlock_unlock(&g_wasm3_heap_lock);
+        return 0;
+    }
+    uint64_t va_base = linmem_slot_va((uint32_t)s);
+    /* Place the block so m3MemData (block + data_offset) starts at slot page 1;
+     * the header occupies the tail of page 0. */
+    uint64_t block     = va_base + 4096u - (uint64_t)data_offset;
+    uint64_t need_pages = ((block + total_bytes) - va_base + 4095u) / 4096u;
+    uint64_t slot_pages = WARP_LINMEM_VA_STRIDE / 4096u;
+    uint64_t max_pages  = ((uint64_t)max_bytes + 4095u) / 4096u + 1u; /* +header page */
+    if (max_pages > slot_pages) {
+        max_pages = slot_pages;
+    }
+    if (need_pages > max_pages ||
+        linmem_slot_commit(va_base, 0, need_pages) != 0) {
+        linmem_slot_release((uint32_t)s);
+        ksync_spinlock_unlock(&g_wasm3_heap_lock);
+        return 0;
+    }
+    slot->linmem_slot            = (uint32_t)s;
+    slot->linmem_va_base         = va_base;
+    slot->linmem_block           = block;
+    slot->linmem_committed_pages = need_pages;
+    slot->linmem_max_pages       = max_pages;
+    ksync_spinlock_unlock(&g_wasm3_heap_lock);
+    return (void *)(uintptr_t)block;
+}
+
+/* Grow the slot-backed block in place to `new_total_bytes` (commit tail pages).
+ * The base never moves; returns the same block pointer, or 0 on failure. */
+void *
+wasm3_linmem_grow(void *blockp, size_t new_total_bytes)
+{
+    if (!blockp) {
+        return 0;
+    }
+    ksync_spinlock_lock(&g_wasm3_heap_lock);
+    wasm3_heap_slot_t *slot = wasm3_heap_slot();
+    if (!slot || slot->linmem_slot == LINMEM_SLOT_NONE ||
+        (uint64_t)(uintptr_t)blockp != slot->linmem_block) {
+        ksync_spinlock_unlock(&g_wasm3_heap_lock);
+        return 0;
+    }
+    uint64_t need_pages =
+        ((slot->linmem_block + new_total_bytes) - slot->linmem_va_base + 4095u) / 4096u;
+    if (need_pages > slot->linmem_max_pages) {
+        ksync_spinlock_unlock(&g_wasm3_heap_lock);
+        return 0;
+    }
+    if (need_pages > slot->linmem_committed_pages) {
+        if (linmem_slot_commit(slot->linmem_va_base,
+                               slot->linmem_committed_pages, need_pages) != 0) {
+            ksync_spinlock_unlock(&g_wasm3_heap_lock);
+            return 0;
+        }
+        slot->linmem_committed_pages = need_pages;
+    }
+    ksync_spinlock_unlock(&g_wasm3_heap_lock);
+    return blockp;
+}
+
 void *realloc(void *ptr, size_t size)
 {
     if (!ptr) {
@@ -542,6 +690,10 @@ void *realloc(void *ptr, size_t size)
     }
     if (size == 0) {
         return 0;
+    }
+    /* Slot-backed linear memory grows in place (base pinned). */
+    if (wasm3_ptr_in_linmem_slot(ptr)) {
+        return wasm3_linmem_grow(ptr, size);
     }
     wasm3_heap_block_t *block = (wasm3_heap_block_t *)((uint8_t *)ptr - sizeof(wasm3_heap_block_t));
     size_t old_size = block->size;

@@ -22,6 +22,11 @@ extern "C" {
 #endif
 
 __attribute__((noreturn)) void kpanic(const char *reason, uint64_t a, uint64_t b);
+void kpanic_capture_origin(uint64_t rip,
+                           uint64_t rsp,
+                           uint64_t rbp,
+                           uint64_t rflags,
+                           uint64_t cs);
 
 /* Called from isr_nmi with a pointer to the pushed register frame (PUSH_REGS
  * order followed by the CPU-pushed iret frame). */

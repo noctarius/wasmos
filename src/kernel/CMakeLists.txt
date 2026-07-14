@@ -1,4 +1,12 @@
 set(LDFLAGS_KERNEL -nostdlib -T ${KERNEL_DIR}/arch/x86_64/linker.ld)
+set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -fno-omit-frame-pointer)
+find_program(LLVM_NM_PATH llvm-nm HINTS ${CLANG_BIN_DIR} /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin /opt/homebrew/bin /usr/local/bin)
+if (NOT LLVM_NM_PATH)
+  message(FATAL_ERROR "llvm-nm not found. Install LLVM and ensure llvm-nm is available.")
+endif ()
+set(KERNEL_BASE_ELF ${BUILD_DIR}/kernel.base.elf)
+set(KERNEL_KALLSYMS_C ${BUILD_DIR}/kernel_kallsyms_data.c)
+set(KERNEL_KALLSYMS_OBJ ${BUILD_DIR}/kernel_kallsyms_data.o)
 if (WASMOS_WASM_RUNTIME_WARP)
   set(CFLAGS_KERNEL ${CFLAGS_KERNEL} -mcmodel=kernel ${WASMOS_TRACE_DEFINE} ${WASMOS_RING3_SMOKE_DEFINE} ${WASMOS_RING3_THREAD_LIFECYCLE_SMOKE_DEFINE} ${WASMOS_PM_TEST_HOOKS_DEFINE} ${WASMOS_PM_LIST_DEFINE} ${WASMOS_PM_LIST_CAP_DEFINE} ${WASMOS_IRQ_MODE_DEFINE} ${WASMOS_SMP_DEFINE} ${WASMOS_SCHED_CALLER_CPU_BIAS_DEFINE} ${WASMOS_SCHED_SMP_STRESS_DEFINE} -Wno-unused-parameter)
 else ()
@@ -104,6 +112,7 @@ set(KERNEL_OBJS
   ${BUILD_DIR}/smp_trampoline.o
   ${BUILD_DIR}/kernel.o
   ${BUILD_DIR}/kpanic.o
+  ${BUILD_DIR}/kallsyms.o
   ${BUILD_DIR}/kernel_boot_runtime.o
   ${BUILD_DIR}/kernel_init_runtime.o
   ${BUILD_DIR}/kernel_selftest_runtime.o
@@ -237,6 +246,7 @@ set(KERNEL_SOURCES
   ${KERNEL_DIR}/arch/x86_64/smp_trampoline.S
   ${KERNEL_DIR}/kernel.c
   ${KERNEL_DIR}/kpanic.c
+  ${KERNEL_DIR}/kallsyms.c
   ${KERNEL_DIR}/kernel_boot_runtime.c
   ${KERNEL_DIR}/kernel_init_runtime.c
   ${KERNEL_DIR}/kernel_selftest_runtime.c
@@ -444,6 +454,7 @@ get_property(WASMOS_KERNEL_BLOBS GLOBAL PROPERTY WASMOS_KERNEL_BLOBS)
 if (WASMOS_KERNEL_BLOBS)
   list(APPEND KERNEL_OBJS ${WASMOS_KERNEL_BLOBS})
 endif ()
+set(KERNEL_FINAL_OBJS ${KERNEL_OBJS} ${KERNEL_KALLSYMS_OBJ})
 
 # Build the runtime-specific compile command list that is spliced into the
 # kernel.elf custom command below.  CMake expands lists within COMMAND args
@@ -512,6 +523,7 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/arch/x86_64/smp_trampoline.S -o ${BUILD_DIR}/smp_trampoline.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel.c -o ${BUILD_DIR}/kernel.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kpanic.c -o ${BUILD_DIR}/kpanic.o
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kallsyms.c -o ${BUILD_DIR}/kallsyms.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel_boot_runtime.c -o ${BUILD_DIR}/kernel_boot_runtime.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel_init_runtime.c -o ${BUILD_DIR}/kernel_init_runtime.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/kernel_selftest_runtime.c -o ${BUILD_DIR}/kernel_selftest_runtime.o
@@ -571,7 +583,13 @@ add_custom_command(
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/serial.c -o ${BUILD_DIR}/serial.o
   COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_DIR}/framebuffer.c -o ${BUILD_DIR}/framebuffer.o
   ${WASM_RUNTIME_COMPILE_CMDS}
-  COMMAND ${LLD_PATH} ${LDFLAGS_KERNEL} -o ${BUILD_DIR}/kernel.elf ${KERNEL_OBJS} ${KERNEL_LINK_LIBS}
+  COMMAND ${LLD_PATH} ${LDFLAGS_KERNEL} -o ${KERNEL_BASE_ELF} ${KERNEL_OBJS} ${KERNEL_LINK_LIBS}
+  COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/gen_kernel_kallsyms.py
+          --nm ${LLVM_NM_PATH}
+          --input ${KERNEL_BASE_ELF}
+          --output ${KERNEL_KALLSYMS_C}
+  COMMAND ${CLANG} ${CFLAGS_KERNEL} -c ${KERNEL_KALLSYMS_C} -o ${KERNEL_KALLSYMS_OBJ}
+  COMMAND ${LLD_PATH} ${LDFLAGS_KERNEL} -o ${BUILD_DIR}/kernel.elf ${KERNEL_FINAL_OBJS} ${KERNEL_LINK_LIBS}
   DEPENDS ${KERNEL_SOURCES} ${KERNEL_DIR}/arch/x86_64/smp_trampoline.S
   ${KERNEL_DIR}/include/boot.h ${KERNEL_DIR}/include/cpu.h
   ${KERNEL_DIR}/include/kernel_init_runtime.h
@@ -600,10 +618,12 @@ add_custom_command(
           ${KERNEL_DIR}/include/wasmos_app_meta.h
           ${KERNEL_DIR}/include/native_driver.h ${KERNEL_DIR}/include/arch/x86_64/spinlock.h
           ${KERNEL_DIR}/include/user_mutex.h
+          ${KERNEL_DIR}/include/kallsyms.h
           ${KERNEL_DIR}/include/wasm_driver.h ${KERNEL_DIR}/include/wasm_chardev.h
           ${KERNEL_DIR}/include/framebuffer.h
           ${KERNEL_DIR}/include/io.h
           ${DRIVER_WASM_DIR}/include/wasmos_driver_abi.h
+          ${CMAKE_SOURCE_DIR}/scripts/gen_kernel_kallsyms.py
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Building kernel"
   VERBATIM

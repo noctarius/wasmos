@@ -193,10 +193,32 @@ Two functions in `src/kernel/arch/x86_64/cpu_x86_64.c` handle fatal exceptions:
 Captures `RIP`, `CS`, `RFLAGS`, `CR3`, and optionally `CR2` (for vector 14)
 via inline assembly. Reports to serial and renders the framebuffer panic screen.
 
-#### `x86_exception_panic_frame(vector, frame)`
+#### `x86_exception_panic_frame(vector, regs)`
 
-Used when the IDT stub provides a full exception frame. The frame layout is
-`[err, rip, cs, rflags, ...]`. Produces unlocked serial output in this format:
+Used when the IDT stub provides the saved GPR block plus the exception frame.
+The register block is laid out as `PUSH_REGS` (`rax..r15`, with `rbp` at slot
+10 from the saved-stack base), followed by the exception frame
+`[err, rip, cs, rflags, ...]`. The panic path snapshots the fault-time `rbp`
+before entering `kpanic()`, so the panicking CPU now reports the interrupted
+call chain rather than a later `kpanic()`-internal one.
+
+The fatal panic dump now prints per-CPU backtraces in this style, resolving
+kernel return addresses through a build-generated symbol table:
+
+```
+================= KERNEL PANIC =================
+reason : cpu_exception
+a=000000000000000e b=ffffffff80001234
+cpus=4  panicking_cpu=1
+--- CPU 1 captured=1 pid=24 tid=33 ---
+    rip=ffffffff8021df7d rsp=ffffffff803d84c0 rbp=ffffffff803d85b0 rflags=0000000000010092
+    backtrace:
+    [0] ret=ffffffff8021d8e1 (symbol_name)
+    [1] ret=ffffffff8020245e (symbol_name)
+```
+
+The richer exception-specific serial preamble still prints unlocked output in
+this format:
 
 ```
 [cpu] exception vector=<hex16>

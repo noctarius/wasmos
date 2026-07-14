@@ -2,6 +2,7 @@
  * See kpanic.h for the flow. */
 
 #include "kpanic.h"
+#include "kallsyms.h"
 #include "serial.h"
 #include "paging.h"
 #include "arch/x86_64/smp.h"
@@ -30,6 +31,16 @@ typedef struct {
 static panic_cpu_ctx_t g_panic_ctx[WASMOS_MAX_CPUS];
 static volatile uint32_t g_panicking;  /* 0 until the first CPU wins the panic  */
 
+static void
+panic_print_symbol(uint64_t addr)
+{
+    const char *name = 0;
+    uint64_t sym_addr = 0;
+    if (kpanic_symbolize(addr, &name, &sym_addr) != 0 && name && *name) {
+        serial_printf_unlocked(" (%s)", name);
+    }
+}
+
 /* Conservative "could this be a readable high-half kernel pointer?" check so the
  * frame-pointer walk cannot fault (a nested fault mid-panic would be fatal). */
 static int
@@ -57,12 +68,37 @@ panic_backtrace(uint64_t rbp)
         const uint64_t *frame = (const uint64_t *)(uintptr_t)rbp;
         uint64_t next = frame[0];
         uint64_t ret  = frame[1];
-        serial_printf_unlocked("    [%d] ret=%016llx\n", i, (unsigned long long)ret);
+        serial_printf_unlocked("    [%d] ret=%016llx", i, (unsigned long long)ret);
+        panic_print_symbol(ret);
+        serial_printf_unlocked("\n");
         if (next <= rbp) {
             break;             /* frame chain must climb toward the stack base   */
         }
         rbp = next;
     }
+}
+
+void
+kpanic_capture_origin(uint64_t rip,
+                      uint64_t rsp,
+                      uint64_t rbp,
+                      uint64_t rflags,
+                      uint64_t cs)
+{
+    uint32_t self = cpu_local()->cpu_id;
+    if (self >= WASMOS_MAX_CPUS) {
+        return;
+    }
+
+    panic_cpu_ctx_t *c = &g_panic_ctx[self];
+    c->rip = rip;
+    c->rsp = rsp;
+    c->rbp = rbp;
+    c->rflags = rflags;
+    c->cs = cs;
+    c->pid = cpu_local()->current_process ? cpu_local()->current_process->pid : 0u;
+    c->tid = cpu_local()->current_thread ? cpu_local()->current_thread->tid : 0u;
+    __atomic_store_n(&c->captured, 1u, __ATOMIC_RELEASE);
 }
 
 void
@@ -111,18 +147,20 @@ kpanic(const char *reason, uint64_t a, uint64_t b)
     /* Capture our own context directly. */
     if (self < WASMOS_MAX_CPUS) {
         panic_cpu_ctx_t *c = &g_panic_ctx[self];
-        uint64_t rbp = 0, rsp = 0, rflags = 0;
-        __asm__ volatile("mov %%rbp, %0" : "=r"(rbp));
-        __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
-        __asm__ volatile("pushfq; pop %0" : "=r"(rflags));
-        c->rip    = (uint64_t)(uintptr_t)__builtin_return_address(0);
-        c->rbp    = rbp;
-        c->rsp    = rsp;
-        c->rflags = rflags;
-        c->cs     = 0;
-        c->pid    = cpu_local()->current_process ? cpu_local()->current_process->pid : 0u;
-        c->tid    = cpu_local()->current_thread ? cpu_local()->current_thread->tid : 0u;
-        __atomic_store_n(&c->captured, 1u, __ATOMIC_RELEASE);
+        if (!__atomic_load_n(&c->captured, __ATOMIC_ACQUIRE)) {
+            uint64_t rbp = 0, rsp = 0, rflags = 0;
+            __asm__ volatile("mov %%rbp, %0" : "=r"(rbp));
+            __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
+            __asm__ volatile("pushfq; pop %0" : "=r"(rflags));
+            c->rip    = (uint64_t)(uintptr_t)__builtin_return_address(0);
+            c->rbp    = rbp;
+            c->rsp    = rsp;
+            c->rflags = rflags;
+            c->cs     = 0;
+            c->pid    = cpu_local()->current_process ? cpu_local()->current_process->pid : 0u;
+            c->tid    = cpu_local()->current_thread ? cpu_local()->current_thread->tid : 0u;
+            __atomic_store_n(&c->captured, 1u, __ATOMIC_RELEASE);
+        }
     }
 
 #if WASMOS_SMP
@@ -158,8 +196,8 @@ kpanic(const char *reason, uint64_t a, uint64_t b)
 
     for (uint32_t i = 0; i < g_cpu_count && i < WASMOS_MAX_CPUS; ++i) {
         panic_cpu_ctx_t *c = &g_panic_ctx[i];
-        serial_printf_unlocked("--- CPU %u%s captured=%u pid=%u tid=%u ---\n",
-                               (unsigned)i, (i == self) ? " (panic origin)" : "",
+        serial_printf_unlocked("--- CPU %u captured=%u pid=%u tid=%u ---\n",
+                               (unsigned)i,
                                (unsigned)c->captured, (unsigned)c->pid, (unsigned)c->tid);
         if (!c->captured) {
             serial_printf_unlocked("    <no NMI capture (offline or stuck with NMIs masked)>\n");

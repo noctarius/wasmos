@@ -37,6 +37,7 @@ It defines repository workflow and documentation/update conventions.
 - WASM-first userspace (`wasm3`) that runs apps, services, and drivers from multiple languages (C, Zig, Go, Rust, AssemblyScript), plus optional native drivers where hardware access needs it.
 - Custom WASMOS-APP package format (`.wap`) for both WebAssembly and native app/service/driver payloads, including an 8-byte subsystem tag for runtime dispatch plus broker-registered executable handler plumbing for future non-`.wap` executable formats.
 - Explicit microkernel primitives: paging, scheduler, IPC, process lifecycle, capabilities with binary policy enforcement (kill on violation), and full ring-3 isolation enabled by default.
+- Kernel panic diagnostics with per-CPU backtraces that now resolve return addresses to in-kernel symbol names.
 - Preemptive multitasking in the kernel scheduler with runtime validation coverage.
 - Symmetric Multi-Processing (SMP) with AP trampoline bring-up, per-CPU state (`cpu_local_t`), Kconfig-selectable interrupt controller (PIC/LAPIC/IOAPIC), and per-CPU ready queues with work stealing; gated by `WASMOS_SMP` Kconfig (requires IOAPIC mode, default off).
 - Service-driven system bring-up (`init` -> `fs-manager`/`fs-init` -> `device-manager` -> `sysinit`) with discovery/registration and policy-driven driver spawning.

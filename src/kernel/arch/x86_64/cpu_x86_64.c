@@ -438,9 +438,14 @@ idt_install(void)
  * for THIS CPU, then calls kpanic() to stop every other CPU via NMI, dump their
  * contexts, and halt the machine. */
 static __attribute__((noreturn)) void
-x86_exception_panic_common(uint64_t vector, const uint64_t *frame)
+x86_exception_panic_common(uint64_t vector, const uint64_t *regs)
 {
+    enum {
+        EXC_REG_RBP = 10,
+        EXC_REG_FRAME = 15,
+    };
     uint64_t err = 0, rip = 0, cs = 0, rflags = 0, cr2 = 0, cr3 = 0;
+    uint64_t rbp = 0, rsp = 0;
     uint64_t kernel_start = (uint64_t)(uintptr_t)&__kernel_start;
     uint64_t kernel_end = (uint64_t)(uintptr_t)&__kernel_end;
     uint32_t pid = process_current_pid();
@@ -449,20 +454,25 @@ x86_exception_panic_common(uint64_t vector, const uint64_t *frame)
     uint64_t stack_base = proc ? (uint64_t)proc->stack_base : 0;
     uint64_t stack_top = proc ? (uint64_t)proc->stack_top : 0;
     int has_cr2 = (vector == 14);
+    const uint64_t *frame = regs ? regs + EXC_REG_FRAME : 0;
 
     __asm__ volatile("mov %%cr3, %0" : "=r"(cr3));
     if (has_cr2) {
         __asm__ volatile("mov %%cr2, %0" : "=r"(cr2));
     }
-    if (frame) {
+    if (regs) {
         err    = frame[0];
         rip    = frame[1];
         cs     = frame[2];
         rflags = frame[3];
+        rbp    = regs[EXC_REG_RBP];
+        rsp    = ((cs & 0x3u) == 0x3u) ? frame[4] : (uint64_t)(uintptr_t)frame;
     } else {
         __asm__ volatile("lea (%%rip), %0" : "=r"(rip));
         __asm__ volatile("mov %%cs, %0" : "=r"(cs));
         __asm__ volatile("pushfq; pop %0" : "=r"(rflags));
+        __asm__ volatile("mov %%rbp, %0" : "=r"(rbp));
+        __asm__ volatile("mov %%rsp, %0" : "=r"(rsp));
     }
 
     serial_printf_unlocked(
@@ -516,6 +526,7 @@ x86_exception_panic_common(uint64_t vector, const uint64_t *frame)
 
     /* Stop the world, dump every CPU, and halt. a=vector; b=cr2 for a page
      * fault, else the faulting rip. */
+    kpanic_capture_origin(rip, rsp, rbp, rflags, cs);
     kpanic("cpu_exception", vector, has_cr2 ? cr2 : rip);
 }
 
@@ -526,9 +537,9 @@ x86_exception_panic(uint64_t vector)
 }
 
 __attribute__((noreturn)) void
-x86_exception_panic_frame(uint64_t vector, const uint64_t *frame)
+x86_exception_panic_frame(uint64_t vector, const uint64_t *regs)
 {
-    x86_exception_panic_common(vector, frame);
+    x86_exception_panic_common(vector, regs);
 }
 
 

@@ -7,17 +7,21 @@
 #include "physmem.h"
 #include "paging.h"
 #include "memory.h"
+#include "sync/spinlock.h"
 
 #define LINMEM_PAGE_SIZE 4096ULL
 
 /* One 2 GiB slot per bit.  WARP_LINMEM_PDPT_COUNT/2 slots fit the VA window.
- * TODO(linmem-pool): the bitmap width (64) is the current hard ceiling on
- * concurrent slots, and this pool is unsynchronized — it relies on the WARP
- * single-CPU-at-a-time invariant.  Both must be addressed (wider bitmap/window
- * and a lock) before wasm3 also draws from this pool concurrently. */
+ * TODO(linmem-pool): the bitmap width (64) is the hard ceiling on concurrent
+ * slots (bounds concurrent WASM apps, not total spawned).  If a boot ever needs
+ * more than LINMEM_SLOT_COUNT concurrent WASM processes, widen the VA window
+ * (WARP_LINMEM_PDPT_COUNT) and make the bitmap an array. */
 #define LINMEM_SLOT_COUNT (WARP_LINMEM_PDPT_COUNT / 2u)
 
 static uint64_t g_linmem_slot_bitmap = 0;
+/* Guards the slot bitmap.  WARP runs one CPU at a time inside the runtime, but
+ * wasm3 executes concurrently across CPUs, so the pool must be SMP-safe. */
+static ksync_spinlock_t g_linmem_slot_lock;
 
 uint32_t
 linmem_slot_count(void)
@@ -28,12 +32,15 @@ linmem_slot_count(void)
 int
 linmem_slot_alloc(void)
 {
+    ksync_spinlock_lock(&g_linmem_slot_lock);
     for (uint32_t i = 0; i < LINMEM_SLOT_COUNT; ++i) {
         if (!(g_linmem_slot_bitmap & (1ULL << i))) {
             g_linmem_slot_bitmap |= (1ULL << i);
+            ksync_spinlock_unlock(&g_linmem_slot_lock);
             return (int)i;
         }
     }
+    ksync_spinlock_unlock(&g_linmem_slot_lock);
     return -1;
 }
 
@@ -43,7 +50,9 @@ linmem_slot_release(uint32_t slot)
     if (slot >= LINMEM_SLOT_COUNT) {
         return;
     }
+    ksync_spinlock_lock(&g_linmem_slot_lock);
     g_linmem_slot_bitmap &= ~(1ULL << slot);
+    ksync_spinlock_unlock(&g_linmem_slot_lock);
 }
 
 uint64_t

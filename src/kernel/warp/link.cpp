@@ -157,6 +157,8 @@ warp_call_ctx(void *ctx_)
     return static_cast<WarpCallContext *>(module->getContext());
 }
 
+static int warp_require_io_capability(uint32_t context_id, uint16_t port);
+
 // ---------------------------------------------------------------------------
 // Per-PID IPC last-message slots (mirrors wasm3/link.c state)
 // ---------------------------------------------------------------------------
@@ -927,19 +929,79 @@ warp_block_buffer_write(uint32_t phys, uint32_t ptr_off, uint32_t len, uint32_t 
 // ---------------------------------------------------------------------------
 
 static uint32_t warp_io_in8(uint32_t port, void *ctx_)
-    { (void)ctx_; return (port > 0xFFFF) ? (uint32_t)-1 : (uint32_t)inb((uint16_t)port); }
+{
+    (void)ctx_;
+    uint32_t context_id = 0;
+    if (port > 0xFFFF || warp_current_context_id(&context_id) != 0 ||
+        warp_require_io_capability(context_id, (uint16_t)port) != 0) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)inb((uint16_t)port);
+}
 static uint32_t warp_io_in16(uint32_t port, void *ctx_)
-    { (void)ctx_; return (port > 0xFFFF) ? (uint32_t)-1 : (uint32_t)inw((uint16_t)port); }
+{
+    (void)ctx_;
+    uint32_t context_id = 0;
+    if (port > 0xFFFF || warp_current_context_id(&context_id) != 0 ||
+        warp_require_io_capability(context_id, (uint16_t)port) != 0) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)inw((uint16_t)port);
+}
 static uint32_t warp_io_in32(uint32_t port, void *ctx_)
-    { (void)ctx_; return (port > 0xFFFF) ? (uint32_t)-1 : (uint32_t)inl((uint16_t)port); }
+{
+    (void)ctx_;
+    uint32_t context_id = 0;
+    if (port > 0xFFFF || warp_current_context_id(&context_id) != 0 ||
+        warp_require_io_capability(context_id, (uint16_t)port) != 0) {
+        return (uint32_t)-1;
+    }
+    return (uint32_t)inl((uint16_t)port);
+}
 static uint32_t warp_io_out8(uint32_t port, uint32_t val, void *ctx_)
-    { (void)ctx_; if (port > 0xFFFF) return (uint32_t)-1; outb((uint16_t)port,(uint8_t)val); return 0; }
+{
+    (void)ctx_;
+    uint32_t context_id = 0;
+    if (port > 0xFFFF || warp_current_context_id(&context_id) != 0 ||
+        warp_require_io_capability(context_id, (uint16_t)port) != 0) {
+        return (uint32_t)-1;
+    }
+    outb((uint16_t)port, (uint8_t)val);
+    return 0;
+}
 static uint32_t warp_io_out16(uint32_t port, uint32_t val, void *ctx_)
-    { (void)ctx_; if (port > 0xFFFF) return (uint32_t)-1; outw((uint16_t)port,(uint16_t)val); return 0; }
+{
+    (void)ctx_;
+    uint32_t context_id = 0;
+    if (port > 0xFFFF || warp_current_context_id(&context_id) != 0 ||
+        warp_require_io_capability(context_id, (uint16_t)port) != 0) {
+        return (uint32_t)-1;
+    }
+    outw((uint16_t)port, (uint16_t)val);
+    return 0;
+}
 static uint32_t warp_io_out32(uint32_t port, uint32_t val, void *ctx_)
-    { (void)ctx_; if (port > 0xFFFF) return (uint32_t)-1; outl((uint16_t)port,(uint32_t)val); return 0; }
+{
+    (void)ctx_;
+    uint32_t context_id = 0;
+    if (port > 0xFFFF || warp_current_context_id(&context_id) != 0 ||
+        warp_require_io_capability(context_id, (uint16_t)port) != 0) {
+        return (uint32_t)-1;
+    }
+    outl((uint16_t)port, (uint32_t)val);
+    return 0;
+}
 static uint32_t warp_io_wait(void *ctx_)
-    { (void)ctx_; io_wait(); return 0; }
+{
+    (void)ctx_;
+    uint32_t context_id = 0;
+    if (warp_current_context_id(&context_id) != 0 ||
+        warp_require_io_capability(context_id, 0x80u) != 0) {
+        return (uint32_t)-1;
+    }
+    io_wait();
+    return 0;
+}
 
 // ---------------------------------------------------------------------------
 // ACPI / boot info
@@ -1330,6 +1392,8 @@ warp_env_unset(uint32_t name_off, uint32_t name_len, void *ctx_)
 
 static int warp_require_dma_capability(uint32_t context_id)
     { return policy_authorize(context_id, POLICY_ACTION_DMA_BUFFER, 0); }
+static int warp_require_io_capability(uint32_t context_id, uint16_t port)
+    { return policy_authorize(context_id, POLICY_ACTION_IO_PORT, port); }
 static int warp_require_mmio_capability(uint32_t context_id)
     { return policy_authorize(context_id, POLICY_ACTION_MMIO_MAP, 0); }
 static int warp_require_irq_capability(uint32_t context_id)

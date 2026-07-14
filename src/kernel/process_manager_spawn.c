@@ -1336,6 +1336,8 @@ pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     uint32_t parent_pid = 0;
     const uint8_t *caller_fs_buf = 0;
     char path[256];
+    char cli_args[256];
+    uint32_t cli_args_len = 0;
     pm_resolved_spawn_path_t resolved;
     uint32_t child_pid = 0;
     xfer_buffer_owner_t pmbuf = {0};
@@ -1368,6 +1370,22 @@ pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
         path[i] = (char)caller_fs_buf[i];
     }
     path[path_len] = '\0';
+    if (path_len < xfer_buffer_size(BUFFER_KIND_TRANSFER) && caller_fs_buf[path_len] != 0u) {
+        for (; path_len + cli_args_len < xfer_buffer_size(BUFFER_KIND_TRANSFER); ++cli_args_len) {
+            uint8_t ch = caller_fs_buf[path_len + cli_args_len];
+            if (ch == 0u) {
+                break;
+            }
+            if (cli_args_len + 1u >= sizeof(cli_args)) {
+                return PROC_PM_ERR_BAD_PATH;
+            }
+            cli_args[cli_args_len] = (char)ch;
+        }
+        if (path_len + cli_args_len >= xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
+            return PROC_PM_ERR_BAD_PATH;
+        }
+    }
+    cli_args[cli_args_len] = '\0';
     if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) != 0) {
         return PROC_PM_ERR_NO_PM_FSBUF;
     }
@@ -1375,8 +1393,8 @@ pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
                               &pmbuf,
                               path,
                               path_len,
-                              0,
-                              0,
+                              cli_args_len > 0u ? cli_args : 0,
+                              cli_args_len,
                               0,
                               &resolved) != 0) {
         pm_xfer_release(&pmbuf);
@@ -1991,6 +2009,8 @@ pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t *msg)
     uint32_t caller_buffer_id = (uint32_t)msg->arg1 >> 12;
     const uint8_t *caller_fs_buf = 0;
     char path[256];
+    char cli_args[256];
+    uint32_t cli_args_len = 0;
     uint32_t pid = 0;
     pm_spawn_caps_t caps = {0};
     pm_resolved_spawn_path_t resolved;
@@ -2029,6 +2049,22 @@ pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t *msg)
         path[i] = (char)caller_fs_buf[i];
     }
     path[path_len] = '\0';
+    if (path_len < xfer_buffer_size(BUFFER_KIND_TRANSFER) && caller_fs_buf[path_len] != 0u) {
+        for (; path_len + cli_args_len < xfer_buffer_size(BUFFER_KIND_TRANSFER); ++cli_args_len) {
+            uint8_t ch = caller_fs_buf[path_len + cli_args_len];
+            if (ch == 0u) {
+                break;
+            }
+            if (cli_args_len + 1u >= sizeof(cli_args)) {
+                return PROC_PM_ERR_BAD_PATH;
+            }
+            cli_args[cli_args_len] = (char)ch;
+        }
+        if (path_len + cli_args_len >= xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
+            return PROC_PM_ERR_BAD_PATH;
+        }
+    }
+    cli_args[cli_args_len] = '\0';
     if (pm_xfer_acquire(pm_context_id, xfer_buffer_size(BUFFER_KIND_TRANSFER), &pmbuf) != 0) {
         return PROC_PM_ERR_NO_PM_FSBUF;
     }
@@ -2036,8 +2072,8 @@ pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t *msg)
                               &pmbuf,
                               path,
                               path_len,
-                              0,
-                              0,
+                              cli_args_len > 0u ? cli_args : 0,
+                              cli_args_len,
                               0,
                               &resolved) != 0) {
         pm_xfer_release(&pmbuf);

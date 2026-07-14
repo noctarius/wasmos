@@ -77,6 +77,7 @@ static int32_t g_dm_call_select_id = -1;
 /* Sync spawns rely on PM's own DM_SPAWN_TIMEOUT_MS deadline for termination;
  * the DM-side poll cap must not fire first. */
 #define DM_SPAWN_SYNC_POLL_MAX 0x7FFFFFFF
+#define DM_RULE_SPAWN_ARGS_MAX 128u
 static uint8_t g_dm_pci_scan_done = 0;
 static uint8_t g_dm_acpi_scan_done = 0;
 
@@ -797,9 +798,12 @@ hw_spawn_driver_path(const char *path)
 }
 
 static int
-hw_spawn_driver_path_caps(const char *path, const spawn_caps_t *caps)
+hw_spawn_driver_path_caps_args(const char *path,
+                               const spawn_caps_t *caps,
+                               const char *args)
 {
     uint32_t path_len = 0;
+    uint32_t args_len = 0;
     uint32_t caps_arg0 = 0;
     uint32_t caps_arg2 = 0;
     if (!path || path[0] == '\0' || !caps) {
@@ -811,12 +815,36 @@ hw_spawn_driver_path_caps(const char *path, const spawn_caps_t *caps)
     if (path_len == 0 || path_len > 95u) {
         return -1;
     }
+    if (args) {
+        while (args[args_len]) {
+            args_len++;
+        }
+        if (args_len + 1u >= DM_RULE_SPAWN_ARGS_MAX) {
+            return -1;
+        }
+    }
     /* Owner-push spawn: PM reads the caller's buffer via ownership. */
-    int32_t bid = wasmos_xfer_buffer_acquire((int32_t)path_len);
+    int32_t bid = wasmos_xfer_buffer_acquire((int32_t)(path_len + args_len + 1u));
     if (bid < 0) {
         return -1;
     }
     if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)path, (int32_t)path_len, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    if (args_len > 0u &&
+        wasmos_xfer_buffer_write(bid,
+                                 (int32_t)(uintptr_t)args,
+                                 (int32_t)(args_len + 1u),
+                                 (int32_t)path_len) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    if (args_len == 0u &&
+        wasmos_xfer_buffer_write(bid,
+                                 (int32_t)(uintptr_t)"",
+                                 1,
+                                 (int32_t)path_len) != 0) {
         (void)wasmos_xfer_buffer_release(bid);
         return -1;
     }
@@ -829,6 +857,28 @@ hw_spawn_driver_path_caps(const char *path, const spawn_caps_t *caps)
                                 DM_SPAWN_TIMEOUT_MS);
     (void)wasmos_xfer_buffer_release(bid);
     return rc;
+}
+
+static int
+build_pci_spawn_args(const pci_device_record_t *rec, char *out, uint32_t out_cap)
+{
+    int n = 0;
+    if (!rec || !out || out_cap == 0u) {
+        return -1;
+    }
+    n = snprintf(out, out_cap,
+                 "pci=%02X:%02X.%02X vendor=%04X device=%04X io=%04X irq=%02X",
+                 (unsigned)rec->bus,
+                 (unsigned)rec->device,
+                 (unsigned)rec->function,
+                 (unsigned)rec->vendor_id,
+                 (unsigned)rec->device_id,
+                 (unsigned)rec->io_port_base,
+                 (unsigned)rec->irq_hint);
+    if (n <= 0 || (uint32_t)n >= out_cap) {
+        return -1;
+    }
+    return n;
 }
 
 static int
@@ -1901,10 +1951,20 @@ initialize(int32_t proc_endpoint,
                      g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_PCI_MATCH) &&
                     g_dm.active_rule_spawn_caps.cap_flags != 0) {
                     char boot_path[104];
+                    char spawn_args[DM_RULE_SPAWN_ARGS_MAX];
+                    const char *args = 0;
                     boot_path[0] = '\0';
                     wasmos_sys_strcpy(boot_path, sizeof(boot_path), "/boot/");
                     wasmos_sys_str_append(boot_path, sizeof(boot_path), g_dm.rule_spawn_path);
-                    rc = hw_spawn_driver_path_caps(boot_path, &g_dm.active_rule_spawn_caps);
+                    if (g_dm.active_rule_spawn_kind == RULE_SPAWN_KIND_PCI_MATCH &&
+                        g_dm.active_rule_spawn_device_index >= 0 &&
+                        g_dm.active_rule_spawn_device_index < (int32_t)g_dm.registry_count &&
+                        build_pci_spawn_args(&g_dm.registry[g_dm.active_rule_spawn_device_index],
+                                             spawn_args,
+                                             sizeof(spawn_args)) > 0) {
+                        args = spawn_args;
+                    }
+                    rc = hw_spawn_driver_path_caps_args(boot_path, &g_dm.active_rule_spawn_caps, args);
                 } else {
                     rc = hw_spawn_rule_target(g_dm.rule_spawn_path);
                 }

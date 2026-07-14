@@ -176,6 +176,112 @@ is_virtio_net_device(uint16_t vendor_id, uint16_t device_id)
 }
 
 static int
+parse_hex_n(const char *s, uint32_t digits, uint32_t *out)
+{
+    uint32_t value = 0;
+    if (!s || !out || digits == 0u) {
+        return -1;
+    }
+    for (uint32_t i = 0; i < digits; ++i) {
+        char ch = s[i];
+        uint32_t nibble = 0;
+        if (ch >= '0' && ch <= '9') {
+            nibble = (uint32_t)(ch - '0');
+        } else if (ch >= 'A' && ch <= 'F') {
+            nibble = 10u + (uint32_t)(ch - 'A');
+        } else if (ch >= 'a' && ch <= 'f') {
+            nibble = 10u + (uint32_t)(ch - 'a');
+        } else {
+            return -1;
+        }
+        value = (value << 4) | nibble;
+    }
+    *out = value;
+    return 0;
+}
+
+static const char *
+find_token_value(const char *args, const char *key)
+{
+    uint32_t i = 0;
+    uint32_t key_len = 0;
+    if (!args || !key || key[0] == '\0') {
+        return 0;
+    }
+    while (key[key_len] != '\0') {
+        key_len++;
+    }
+    for (;;) {
+        uint32_t j = 0;
+        while (args[i] == ' ') {
+            i++;
+        }
+        if (args[i] == '\0') {
+            return 0;
+        }
+        while (key[j] != '\0' && args[i + j] == key[j]) {
+            j++;
+        }
+        if (j == key_len) {
+            return &args[i + key_len];
+        }
+        while (args[i] != '\0' && args[i] != ' ') {
+            i++;
+        }
+    }
+}
+
+/* PCI rule spawns pass the matched BAR/IRQ identity through startup args
+ * because the driver's io.port grant is scoped to the device BAR, not the PCI
+ * config ports needed for a fresh scan. When no startup identity is present,
+ * keep the direct config-space probe as a fallback for manual launches. */
+static int
+probe_virtio_net_from_startup_args(void)
+{
+    char args[128];
+    const char *pci = 0;
+    const char *vendor = 0;
+    const char *device = 0;
+    const char *io = 0;
+    const char *irq = 0;
+    uint32_t bus = 0, slot = 0, function = 0;
+    uint32_t vendor_id = 0, device_id = 0, io_base = 0, irq_line = 0;
+
+    if (wasmos_startup_args(args, sizeof(args)) == 0u) {
+        return -1;
+    }
+    pci = find_token_value(args, "pci=");
+    vendor = find_token_value(args, "vendor=");
+    device = find_token_value(args, "device=");
+    io = find_token_value(args, "io=");
+    irq = find_token_value(args, "irq=");
+    if (!pci || !vendor || !device || !io || !irq) {
+        return -1;
+    }
+    if (parse_hex_n(pci, 2u, &bus) != 0 || pci[2] != ':' ||
+        parse_hex_n(pci + 3, 2u, &slot) != 0 || pci[5] != '.' ||
+        parse_hex_n(pci + 6, 2u, &function) != 0 ||
+        parse_hex_n(vendor, 4u, &vendor_id) != 0 ||
+        parse_hex_n(device, 4u, &device_id) != 0 ||
+        parse_hex_n(io, 4u, &io_base) != 0 ||
+        parse_hex_n(irq, 2u, &irq_line) != 0) {
+        return -1;
+    }
+    if (!is_virtio_net_device((uint16_t)vendor_id, (uint16_t)device_id) || io_base == 0u) {
+        return -1;
+    }
+    g_dev.present = 1u;
+    g_dev.bus = (uint8_t)bus;
+    g_dev.slot = (uint8_t)slot;
+    g_dev.function = (uint8_t)function;
+    g_dev.io_base = (uint16_t)io_base;
+    g_dev.irq = (uint8_t)irq_line;
+    g_dev.vendor_id = (uint16_t)vendor_id;
+    g_dev.device_id = (uint16_t)device_id;
+    return 0;
+}
+
+static int
 probe_virtio_net(void)
 {
     for (uint16_t bus = 0; bus < 256; ++bus) {
@@ -773,7 +879,9 @@ initialize(int32_t proc_endpoint, int32_t ignored_arg1, int32_t ignored_arg2, in
     g_dev.present = 0u;
     g_dev.ready = 0u;
     g_dev.status_word = 0u;
-    (void)probe_virtio_net();
+    if (probe_virtio_net_from_startup_args() != 0) {
+        (void)probe_virtio_net();
+    }
     if (g_dev.present) {
         if (initialize_device() != 0) {
             (void)printf("[virtio-net] init failed io=0x%04X dev=0x%04X\n",

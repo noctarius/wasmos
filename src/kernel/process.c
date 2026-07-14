@@ -921,6 +921,7 @@ static void process_reap(process_t *proc) {
     }
     if (proc->pid != 0) {
         warp_release_pid(proc->pid);
+        wasm3_release_pid(proc->pid);
         wasm3_heap_release(proc->pid);
         native_driver_heap_release(proc->pid);
     }

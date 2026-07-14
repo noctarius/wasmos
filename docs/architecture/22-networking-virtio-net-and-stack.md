@@ -72,15 +72,17 @@ The rule matches by PCI class 0x02 (Network controller), subclass 0x00
 (0x1000) and modern transitional IDs (0x1041).
 
 Capability profile supplied at spawn (using `PROC_IPC_SPAWN_PATH_CAPS` /
-`PROC_IPC_SPAWN_CAPS_V2`):
+`PROC_IPC_SPAWN_PATH_CAPS_SYNC` / `PROC_IPC_SPAWN_CAPS_V2`):
 - `DEVMGR_CAP_IO_PORT`: I/O port range covering PCI config access (0xCF8–0xCFF)
   and BAR0 I/O register window (io_port_min=BAR0_base, io_port_max=BAR0_base+0x1F)
 - `DEVMGR_CAP_IRQ`: IRQ line from PCI config 0x3C (typically 11 under QEMU)
 - `DEVMGR_CAP_DMA`: BIDIR, covers low memory window for virtqueue and packet
   buffers (initial: 0x100000–0x4000000, i.e., 1 MB–64 MB)
 
-The device manager reads BAR0 and the IRQ line from the PCI device record (already
-populated during PCI scan) and includes them in the spawn capability descriptor.
+The device manager reads BAR0 and the IRQ line from the PCI device record
+(already populated during PCI scan), preserves the driver's declared
+`dma.buffer` capability for the rule spawn, and includes the resulting
+I/O/IRQ/DMA profile in the spawn capability descriptor.
 
 ---
 

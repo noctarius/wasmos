@@ -2098,7 +2098,7 @@ warp_region_alloc(uint32_t pages, uint32_t cache_policy, uint32_t out_phys_off, 
     /* Enforce the driver's approved DMA window on allocated regions exactly as on
      * borrow mappings — a general "give me physical memory" primitive without
      * this check would be a DMA-anywhere hole. */
-    if (capability_dma_range_allowed(context_id, phys_base, region_bytes) != 0) {
+    if (capability_dma_range_allowed(context_id, phys_base, region_bytes) == 0) {
         pfa_free_pages(phys_base, pages);
         return (uint32_t)WASMOS_DMA_STATUS_RANGE;
     }
@@ -2632,6 +2632,12 @@ warp_release_pid(uint32_t pid)
     (void)hashmap_remove(&g_block_map, pid);
     /* Per-pid WARP heap config (warp/shim.cpp). */
     warp_heap_release(pid);
+}
+
+extern "C" void
+wasm3_release_pid(uint32_t pid)
+{
+    (void)pid;
 }
 
 #ifdef WASMOS_WASM_RUNTIME_WARP

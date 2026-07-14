@@ -458,11 +458,14 @@ which the device DMAs to/from continuously. The canonical case is **virtqueue
 rings** (see [Networking](22-networking-virtio-net-and-stack.md)), but the same
 primitive generalizes to block-DMA staging and framebuffer/scanout regions.
 
-This is implemented as the `region_alloc` hostcall in the WARP runtime
-(`warp_region_alloc`, `src/kernel/warp/link.cpp`); the wasm3 interpreter carries
-the symbol for ABI parity but returns `UNAVAILABLE` (WARP is the supported
-runtime for driver-owned DMA regions). The remaining design context below is
-retained as rationale.
+This is implemented as the `region_alloc` hostcall in both runtimes
+(`warp_region_alloc` in `src/kernel/warp/link.cpp`,
+`wasmos_region_alloc` in `src/kernel/wasm3/link.c`). WARP performs a real
+linear-memory page remap onto the allocated physical run; wasm3 allocates the
+same low-physical run, maps it into the process's linear-memory VA window, and
+reclaims those driver-owned regions on process reap. In both cases the
+allocation is gated by `CAP_DMA_BUFFER` plus the caller's approved DMA window.
+The remaining design context below is retained as rationale.
 
 Such memory cannot come from the driver's WASM linear memory: linmem pages are
 not guaranteed physically contiguous, the WARP linmem base is not page-aligned,

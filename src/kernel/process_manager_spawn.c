@@ -1347,6 +1347,9 @@ pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
     caps.irq_mask    = (uint16_t)(caps_arg0 >> 16);
     caps.io_port_min = (uint16_t)(caps_arg2 & 0xFFFFu);
     caps.io_port_max = (uint16_t)(caps_arg2 >> 16);
+    caps.dma_direction_flags = 0;
+    caps.dma_max_bytes = 0;
+    caps.dma_window_count = 0;
 
     if (g_pm.spawn.in_use) {
         return PROC_PM_ERR_BUSY;
@@ -1359,6 +1362,22 @@ pm_handle_spawn_path_caps_sync(uint32_t pm_context_id, const ipc_message_t *msg)
         return PROC_PM_ERR_NO_CALLER;
     }
     parent_pid = caller->pid;
+    if ((caps.cap_flags & DEVMGR_CAP_IO_PORT) == 0) {
+        caps.io_port_min = 0;
+        caps.io_port_max = 0;
+    } else if (caps.io_port_min > caps.io_port_max) {
+        return PROC_PM_ERR_BAD_CAPS;
+    }
+    if ((caps.cap_flags & DEVMGR_CAP_DMA) != 0) {
+        /* Keep the path+caps sync ABI aligned with the compact spawn-caps
+         * handlers: callers that only set the DMA bit still get the default
+         * low-memory BIDIR window expected by existing in-tree drivers. */
+        caps.dma_direction_flags = WASMOS_DMA_DIR_BIDIR;
+        caps.dma_max_bytes = 4096u;
+        caps.dma_window_count = 1;
+        caps.dma_windows[0].base = 0;
+        caps.dma_windows[0].length = 0x80000000ull;
+    }
     if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE || path_len == 0 || path_len >= sizeof(path)) {
         return PROC_PM_ERR_BAD_PATH;
     }
@@ -2026,6 +2045,9 @@ pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t *msg)
     caps.irq_mask   = (uint16_t)(caps_arg0 >> 16);
     caps.io_port_min = (uint16_t)(caps_arg2 & 0xFFFFu);
     caps.io_port_max = (uint16_t)(caps_arg2 >> 16);
+    caps.dma_direction_flags = 0;
+    caps.dma_max_bytes = 0;
+    caps.dma_window_count = 0;
 
     if (ipc_endpoint_owner(msg->source, &owner_context) != IPC_OK) {
         return PROC_PM_ERR_BAD_ENDPOINT;
@@ -2035,8 +2057,18 @@ pm_handle_spawn_path_caps(uint32_t pm_context_id, const ipc_message_t *msg)
         return PROC_PM_ERR_NO_CALLER;
     }
     parent_pid = caller->pid;
-    if ((caps.cap_flags & DEVMGR_CAP_IO_PORT) != 0 && caps.io_port_min > caps.io_port_max) {
+    if ((caps.cap_flags & DEVMGR_CAP_IO_PORT) == 0) {
+        caps.io_port_min = 0;
+        caps.io_port_max = 0;
+    } else if (caps.io_port_min > caps.io_port_max) {
         return PROC_PM_ERR_BAD_CAPS;
+    }
+    if ((caps.cap_flags & DEVMGR_CAP_DMA) != 0) {
+        caps.dma_direction_flags = WASMOS_DMA_DIR_BIDIR;
+        caps.dma_max_bytes = 4096u;
+        caps.dma_window_count = 1;
+        caps.dma_windows[0].base = 0;
+        caps.dma_windows[0].length = 0x80000000ull;
     }
     if (g_pm.fs_endpoint == IPC_ENDPOINT_NONE || path_len == 0 || path_len >= sizeof(path)) {
         return PROC_PM_ERR_BAD_PATH;

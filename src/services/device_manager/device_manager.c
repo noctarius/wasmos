@@ -1058,6 +1058,9 @@ queue_pci_match_rule_spawns(void)
                 g_dm.active_rule_spawn_caps.irq_mask =
                     (rec->irq_hint < 16u) ? (uint16_t)(1u << rec->irq_hint) : 0u;
             }
+            if (strcmp(rule->spawn_path, "system/drivers/virtio_net.wap") == 0) {
+                g_dm.active_rule_spawn_caps.cap_flags |= DEVMGR_CAP_DMA;
+            }
             wasmos_sys_strcpy(g_dm.rule_spawn_path, sizeof(g_dm.rule_spawn_path), rule->spawn_path);
             g_dm.rule_spawn_pending = 1;
             g_dm.rule_spawn_retries = 0;

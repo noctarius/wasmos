@@ -55,6 +55,15 @@ typedef struct {
     uint8_t valid;
 } wasm_shmem_linear_map_t;
 
+typedef struct {
+    uint32_t pid;
+    uint32_t offset;
+    uint32_t size;
+    uint32_t pages;
+    uint64_t phys_base;
+    uint8_t valid;
+} wasm_dma_region_map_t;
+
 static wasm_ipc_last_slot_t g_wasm_last_slots[PROCESS_MAX_COUNT];
 static wasm_block_slot_t g_wasm_block_slots[PROCESS_MAX_COUNT];
 static wasm_fs_peer_slot_t g_wasm_fs_peer_slots[PROCESS_MAX_COUNT];
@@ -62,6 +71,10 @@ static ksync_spinlock_t g_wasm_side_table_lock;
 /* Allow several SHMEM mappings per process (UI + multiple window buffers + aux buffers). */
 #define WASM_SHMEM_MAP_SLOTS (PROCESS_MAX_COUNT * 32)
 static wasm_shmem_linear_map_t g_wasm_shmem_maps[WASM_SHMEM_MAP_SLOTS];
+/* Driver-owned DMA regions (virtqueues, packet pools) also occupy linear-memory
+ * windows and therefore must participate in overlap tracking / teardown. */
+#define WASM_DMA_REGION_MAP_SLOTS (PROCESS_MAX_COUNT * 16)
+static wasm_dma_region_map_t g_wasm_dma_region_maps[WASM_DMA_REGION_MAP_SLOTS];
 static const boot_info_t *g_wasm_boot_info;
 
 #define KENV_MAX_ENTRIES 64
@@ -284,6 +297,14 @@ wasm_ipc_slots_init(void)
         g_wasm_shmem_maps[i].size = 0;
         g_wasm_shmem_maps[i].valid = 0;
     }
+    for (uint32_t i = 0; i < WASM_DMA_REGION_MAP_SLOTS; ++i) {
+        g_wasm_dma_region_maps[i].pid = 0;
+        g_wasm_dma_region_maps[i].offset = 0;
+        g_wasm_dma_region_maps[i].size = 0;
+        g_wasm_dma_region_maps[i].pages = 0;
+        g_wasm_dma_region_maps[i].phys_base = 0;
+        g_wasm_dma_region_maps[i].valid = 0;
+    }
 }
 
 static void
@@ -342,6 +363,96 @@ wasm_shmem_map_overlaps(uint32_t pid, uint32_t offset, uint32_t size)
         }
     }
     return 0;
+}
+
+static void
+wasm_dma_region_map_track(uint32_t pid,
+                          uint32_t offset,
+                          uint32_t size,
+                          uint64_t phys_base,
+                          uint32_t pages)
+{
+    wasm_dma_region_map_t *empty = 0;
+    for (uint32_t i = 0; i < WASM_DMA_REGION_MAP_SLOTS; ++i) {
+        wasm_dma_region_map_t *slot = &g_wasm_dma_region_maps[i];
+        if (slot->valid &&
+            slot->pid == pid &&
+            slot->offset == offset) {
+            slot->size = size;
+            slot->pages = pages;
+            slot->phys_base = phys_base;
+            return;
+        }
+        if (!empty && !slot->valid) {
+            empty = slot;
+        }
+    }
+    if (empty) {
+        empty->pid = pid;
+        empty->offset = offset;
+        empty->size = size;
+        empty->pages = pages;
+        empty->phys_base = phys_base;
+        empty->valid = 1;
+    }
+}
+
+static uint8_t
+wasm_dma_region_map_overlaps(uint32_t pid, uint32_t offset, uint32_t size)
+{
+    uint64_t a0 = (uint64_t)offset;
+    uint64_t a1 = a0 + (uint64_t)size;
+    for (uint32_t i = 0; i < WASM_DMA_REGION_MAP_SLOTS; ++i) {
+        const wasm_dma_region_map_t *slot = &g_wasm_dma_region_maps[i];
+        if (!slot->valid || slot->pid != pid || slot->size == 0) {
+            continue;
+        }
+        uint64_t b0 = (uint64_t)slot->offset;
+        uint64_t b1 = b0 + (uint64_t)slot->size;
+        if (a0 < b1 && b0 < a1) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static uint8_t
+wasm_linear_window_overlaps(uint32_t pid, uint32_t offset, uint32_t size)
+{
+    return wasm_shmem_map_overlaps(pid, offset, size) ||
+           wasm_dma_region_map_overlaps(pid, offset, size);
+}
+
+void
+wasm3_release_pid(uint32_t pid)
+{
+    if (pid == 0) {
+        return;
+    }
+    for (uint32_t i = 0; i < WASM_DMA_REGION_MAP_SLOTS; ++i) {
+        wasm_dma_region_map_t *slot = &g_wasm_dma_region_maps[i];
+        if (!slot->valid || slot->pid != pid) {
+            continue;
+        }
+        if (slot->phys_base != 0 && slot->pages != 0) {
+            pfa_free_pages(slot->phys_base, (uint64_t)slot->pages);
+        }
+        slot->pid = 0;
+        slot->offset = 0;
+        slot->size = 0;
+        slot->pages = 0;
+        slot->phys_base = 0;
+        slot->valid = 0;
+    }
+    for (uint32_t i = 0; i < WASM_SHMEM_MAP_SLOTS; ++i) {
+        if (g_wasm_shmem_maps[i].pid == pid) {
+            g_wasm_shmem_maps[i].pid = 0;
+            g_wasm_shmem_maps[i].shmem_id = 0;
+            g_wasm_shmem_maps[i].offset = 0;
+            g_wasm_shmem_maps[i].size = 0;
+            g_wasm_shmem_maps[i].valid = 0;
+        }
+    }
 }
 
 static wasm_ipc_last_slot_t *
@@ -2225,21 +2336,132 @@ m3ApiRawFunction(wasmos_framebuffer_map)
  * phys_lo/phys_hi form a 64-bit physical address (hi=0 for 32-bit addresses).
  * wasm_offset must be page-aligned; size must be a multiple of 4096.
  * Requires the mmio.map capability. */
-/* Driver-owned pinned DMA region allocation (see wasmos_region_alloc in
- * src/kernel/warp/link.cpp and docs/architecture/12-dma-transfers.md).
- * The real remap-into-linmem implementation lives in the WARP runtime, which is
- * the supported runtime for driver-owned DMA regions (virtqueue rings). Under
- * the wasm3 interpreter the symbol exists for ABI parity but is not implemented.
- * TODO(region-alloc-wasm3): implement contiguous phys alloc + pin + linmem remap
- * for wasm3 if a wasm3-hosted driver ever needs driver-owned DMA regions. */
+/* Driver-owned DMA region allocation. The region is allocated from low
+ * physical memory, mapped into a non-overlapping window in the caller's linear
+ * memory, and reclaimed on process reap via wasm3_release_pid(). */
 m3ApiRawFunction(wasmos_region_alloc)
 {
     m3ApiReturnType(int32_t)
     m3ApiGetArg(int32_t, pages)
     m3ApiGetArg(int32_t, cache_policy)
     m3ApiGetArg(int32_t, out_phys_off)
-    (void)pages; (void)cache_policy; (void)out_phys_off;
-    m3ApiReturn(WASMOS_DMA_STATUS_UNAVAILABLE);
+
+    if (pages <= 0 || pages > 1024 || out_phys_off < 0) {
+        m3ApiReturn(WASMOS_DMA_STATUS_INVALID);
+    }
+    if (cache_policy != WASMOS_REGION_CACHE_WB) {
+        m3ApiReturn(WASMOS_DMA_STATUS_INVALID);
+    }
+
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0 ||
+        require_dma_capability(proc->context_id) != 0) {
+        m3ApiReturn(WASMOS_DMA_STATUS_DENY);
+    }
+
+    uint32_t mem_size = 0;
+    uint8_t *mem_base = m3_GetMemory(runtime, &mem_size, 0);
+    if (!mem_base || mem_size == 0 ||
+        (uint64_t)(uint32_t)out_phys_off + sizeof(uint64_t) > (uint64_t)mem_size) {
+        m3ApiReturn(WASMOS_DMA_STATUS_INVALID);
+    }
+
+    uint64_t region_bytes = (uint64_t)(uint32_t)pages * 0x1000ULL;
+    uint64_t phys_base = pfa_alloc_pages_below((uint64_t)(uint32_t)pages, 0x80000000ULL);
+    if (!phys_base) {
+        m3ApiReturn(WASMOS_DMA_STATUS_UNAVAILABLE);
+    }
+    if (!capability_dma_range_allowed(proc->context_id, phys_base, region_bytes)) {
+        pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
+        m3ApiReturn(WASMOS_DMA_STATUS_RANGE);
+    }
+
+    uint64_t mem_size64 = (uint64_t)mem_size;
+    const uint64_t map_auto_min_off = 0x200000ULL;
+    uint64_t scan_off = (map_auto_min_off + 0xFFFULL) & ~0xFFFULL;
+    uint64_t off64 = 0;
+    uint8_t found = 0;
+    (void)wasm3_sync_runtime_linear_memory(proc->context_id, runtime);
+
+    for (off64 = scan_off; off64 + region_bytes <= mem_size64; off64 += 0x1000ULL) {
+        uint64_t probe_virt = 0;
+        if (wasm_linear_window_overlaps(proc->pid, (uint32_t)off64, (uint32_t)region_bytes)) {
+            continue;
+        }
+        if (wasm_user_va_from_offset(proc->context_id,
+                                     (uint32_t)off64,
+                                     (uint32_t)region_bytes,
+                                     &probe_virt) != 0) {
+            continue;
+        }
+        if (mm_user_range_permitted(proc->context_id,
+                                    probe_virt,
+                                    region_bytes,
+                                    MEM_REGION_FLAG_WRITE) != 0) {
+            continue;
+        }
+        if ((probe_virt & 0xFFFULL) != 0) {
+            continue;
+        }
+        found = 1;
+        break;
+    }
+
+    if (!found) {
+        off64 = (mem_size64 + 0xFFFULL) & ~0xFFFULL;
+        uint64_t required = off64 + region_bytes;
+        if (required > mem_size64) {
+            uint32_t target_pages = (uint32_t)((required + 0xFFFFULL) >> 16);
+            if (ResizeMemory(runtime, target_pages) != m3Err_none) {
+                pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
+                m3ApiReturn(WASMOS_DMA_STATUS_UNAVAILABLE);
+            }
+            mem_base = m3_GetMemory(runtime, &mem_size, 0);
+            if (!mem_base || mem_size == 0) {
+                pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
+                m3ApiReturn(WASMOS_DMA_STATUS_UNAVAILABLE);
+            }
+            mem_size64 = (uint64_t)m3_GetMemorySize(runtime);
+            (void)wasm3_sync_runtime_linear_memory(proc->context_id, runtime);
+            if (required > mem_size64) {
+                pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
+                m3ApiReturn(WASMOS_DMA_STATUS_UNAVAILABLE);
+            }
+        }
+    }
+
+    uint32_t off32 = (uint32_t)off64;
+    uint64_t virt = 0;
+    if (wasm_user_va_from_offset(proc->context_id, off32, (uint32_t)region_bytes, &virt) != 0 ||
+        mm_user_range_permitted(proc->context_id,
+                                virt,
+                                region_bytes,
+                                MEM_REGION_FLAG_WRITE) != 0 ||
+        (virt & 0xFFFULL) != 0) {
+        pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
+        m3ApiReturn(WASMOS_DMA_STATUS_INVALID);
+    }
+    if (mm_context_map_physical(proc->context_id,
+                                virt,
+                                phys_base,
+                                region_bytes,
+                                MEM_REGION_FLAG_READ |
+                                    MEM_REGION_FLAG_WRITE |
+                                    MEM_REGION_FLAG_USER) != 0) {
+        pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
+        m3ApiReturn(WASMOS_DMA_STATUS_UNAVAILABLE);
+    }
+
+    /* The pages are already exclusively allocated from the PFA, so unlike
+     * shared mappings they remain stable for the process lifetime without an
+     * extra pin reference; wasm3_release_pid() returns them on reap. */
+    wasm_dma_region_map_track(proc->pid,
+                              off32,
+                              (uint32_t)region_bytes,
+                              phys_base,
+                              (uint32_t)pages);
+    __builtin_memcpy(mem_base + (uint32_t)out_phys_off, &phys_base, sizeof(uint64_t));
+    m3ApiReturn(off32);
 }
 
 m3ApiRawFunction(wasmos_phys_map)
@@ -2429,7 +2651,7 @@ m3ApiRawFunction(wasmos_shmem_map_auto)
     scan_off = (scan_off + 0xFFFULL) & ~0xFFFULL;
 
     for (off64 = scan_off; off64 + map_size <= mem_size; off64 += 0x1000ULL) {
-        if (wasm_shmem_map_overlaps(proc->pid, (uint32_t)off64, (uint32_t)map_size)) {
+        if (wasm_linear_window_overlaps(proc->pid, (uint32_t)off64, (uint32_t)map_size)) {
             continue;
         }
         uint64_t probe_virt = 0;

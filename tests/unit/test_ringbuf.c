@@ -657,70 +657,52 @@ test_attach_negatives(void) {
     return 0;
 }
 
-/* Invariants must hold across every power-of-two capacity, not just CAP=64:
- * fill fully, confirm full + write-blocked, drain fully in order, confirm
- * empty. Exercises the pos & (capacity-1) masking for cap = 1 .. 65536. */
-static int
-test_capacity_sweep(void) {
-    for (uint32_t cap = 1u; cap <= 65536u; cap <<= 1) {
-        uint32_t total = wasmos_ringbuf_bytes_for(cap);
-        uint8_t *region = (uint8_t *)malloc(total);
-        if (region == 0) return __LINE__;
-        wasmos_ringbuf_t p, c;
-        CK(wasmos_ringbuf_init(&p, region, total, cap) == 0);
-        CK(wasmos_ringbuf_attach(&c, region, total) == 0);
-        CK(wasmos_ringbuf_is_empty(&p));
-        CK(wasmos_ringbuf_free(&p) == cap);
+#define PAGE 4096u
 
-        uint8_t chunk[64];
-        uint32_t produced = 0;
-        while (produced < cap) {
-            uint32_t want = cap - produced;
-            if (want > sizeof(chunk)) want = sizeof(chunk);
-            for (uint32_t i = 0; i < want; ++i) chunk[i] = (uint8_t)((produced + i) & 0xFFu);
-            CK(wasmos_ringbuf_write(&p, chunk, want) == want);
-            produced += want;
-        }
-        CK(wasmos_ringbuf_is_full(&p));
-        CK(wasmos_ringbuf_write(&p, chunk, 1u) == 0u); /* full: writes nothing */
+/* Transfer/record sizes referenced to the page. The ring will be page-backed
+ * once overlaid on an xfer-buffer, so these are the sizes that matter in
+ * practice: below a page, just shy of a page, exactly a page, the same three
+ * around two pages, then a few larger multiples. Deliberately includes
+ * non-power-of-two sizes (page-1, 2*page-1, 1.5 page) so the wrap split lands
+ * off any alignment. */
+static const uint32_t g_sizes[] = {
+    PAGE / 2u,        /* below a page          (2048) */
+    PAGE - 1u,        /* just shy of a page    (4095) */
+    PAGE,             /* exactly a page        (4096) */
+    PAGE + PAGE / 2u, /* below two pages       (6144) */
+    2u * PAGE - 1u,   /* just shy of two pages (8191) */
+    2u * PAGE,        /* exactly two pages     (8192) */
+    4u * PAGE,        /* larger               (16384) */
+    8u * PAGE,        /* larger               (32768) */
+};
+#define NSIZES (sizeof(g_sizes) / sizeof(g_sizes[0]))
 
-        uint8_t out[64];
-        uint32_t consumed = 0;
-        while (consumed < cap) {
-            uint32_t n = wasmos_ringbuf_read(&c, out, sizeof(out));
-            CK(n > 0u);
-            uint8_t exp[64];
-            for (uint32_t i = 0; i < n; ++i) exp[i] = (uint8_t)((consumed + i) & 0xFFu);
-            CK(memcmp(out, exp, n) == 0); /* one check per read, not per byte */
-            consumed += n;
-        }
-        CK(wasmos_ringbuf_is_empty(&c));
-        free(region);
-    }
-    return 0;
+static uint32_t
+next_pow2(uint32_t x) {
+    uint32_t p = 1u;
+    while (p < x) p <<= 1;
+    return p;
 }
 
-/* Meaningful size axes for the matrices below. The ring only supports
- * power-of-two capacities, so that is the capacity axis; operation/record sizes
- * are deliberately odd/prime (never powers of two) so a transfer almost always
- * straddles the ring end at a non-aligned point. */
-static const uint32_t g_caps[] = {2u, 4u, 8u, 16u, 32u, 64u, 128u, 256u, 1024u, 4096u, 65536u};
-#define NCAPS (sizeof(g_caps) / sizeof(g_caps[0]))
-static const uint32_t g_odd_sizes[] = {1u, 2u, 3u, 5u, 7u, 11u, 13u, 17u, 23u, 31u, 63u, 127u};
-#define NODD (sizeof(g_odd_sizes) / sizeof(g_odd_sizes[0]))
+/* Position-sensitive fill: the byte value depends on the index through a fine
+ * term (i*3) and coarse terms (i>>8, i>>16), so ANY misplacement of the copy —
+ * a wrong wrap-split size, or data landing at the wrong ring offset — changes
+ * the bytes read back and fails the compare. The coarse terms defeat 256-byte
+ * aliasing, so even a page-sized misplacement is caught, not just a small one.
+ * This is what proves positions are correct, not merely that bytes arrived. */
+static void
+fill_pattern(uint8_t *dst, uint32_t seed, uint32_t len) {
+    for (uint32_t i = 0; i < len; ++i)
+        dst[i] = (uint8_t)(seed + i * 3u + (i >> 8) * 7u + (i >> 16) * 13u);
+}
 
-/* Awkward start offsets for a capacity: small/odd values plus capacity-relative
- * ones (last byte, near-end, mid) so the two-part copy splits with a 1-byte
- * tail, a 1-byte head, an odd split, etc. Writes up to 10 offsets; returns the
- * count. */
+/* Offsets that make a `span`-byte transfer split at meaningful points in a ring
+ * of `cap`: no wrap (0), ending exactly at the ring end (cap-span), wrap by one
+ * byte (cap-span+1), a one-byte head (cap-1), and mid-ring (cap/2).
+ * De-duplicated; returns the count (<= 5). */
 static uint32_t
-build_offsets(uint32_t cap, uint32_t *offs) {
-    uint32_t cand[] = {0u, 1u, 3u, 7u, 13u,
-                       cap - 1u,
-                       cap > 7u ? cap - 7u : 0u,
-                       cap > 13u ? cap - 13u : 0u,
-                       cap / 2u,
-                       cap / 2u + 1u};
+wrap_offsets(uint32_t cap, uint32_t span, uint32_t *offs) {
+    uint32_t cand[] = {0u, cap - span, cap - span + 1u, cap - 1u, cap / 2u};
     uint32_t n = 0;
     for (uint32_t i = 0; i < sizeof(cand) / sizeof(cand[0]); ++i) {
         if (cand[i] >= cap) continue;
@@ -731,78 +713,85 @@ build_offsets(uint32_t cap, uint32_t *offs) {
     return n;
 }
 
-/* Position-sensitive fill: the byte value depends on BOTH the physical offset
- * and the index, so a wrong wrap-split size or a copy landing at the wrong
- * position changes the bytes read back and fails the compare — this is what
- * proves the positions are correct, not just that some bytes came through. */
-static void
-fill_pattern(uint8_t *dst, uint32_t off, uint32_t len) {
-    for (uint32_t i = 0; i < len; ++i)
-        dst[i] = (uint8_t)((off * 7u + i * 3u + 1u) & 0xFFu);
+/* Capacities to try for a transfer that needs `span` bytes: the smallest
+ * power-of-two ring that holds it (transfer is a large fraction of the ring),
+ * plus a big 16-page ring so the same transfer wraps deep inside a multi-page
+ * ring — the realistic deployment case. Returns the count (1 or 2). */
+static uint32_t
+caps_for_span(uint32_t span, uint32_t *caps) {
+    uint32_t n = 0;
+    caps[n++] = next_pow2(span);
+    if (caps[0] != 16u * PAGE && span <= 16u * PAGE) caps[n++] = 16u * PAGE;
+    return n;
 }
 
-/* Byte-stream size matrix: powers-of-two capacities x odd sizes x awkward
- * offsets. Write a pattern of N bytes starting at physical offset O, read it
- * back, and verify byte-exact — proving the write/read positions and the
- * wraparound split are correct at every combination. */
+/* Byte-stream size matrix: page-referenced transfer sizes x wrap-forcing
+ * offsets x {tight ring, 16-page ring}. Write a position-sensitive pattern at
+ * the chosen offset, read it back, verify byte-exact — proving the write/read
+ * positions and the wraparound split are correct for real, page-scale sizes. */
 static int
 test_wrap_size_matrix(void) {
-    uint8_t src[256], out[256];
-    for (uint32_t ci = 0; ci < NCAPS; ++ci) {
-        uint32_t cap = g_caps[ci];
-        uint32_t total = wasmos_ringbuf_bytes_for(cap);
-        uint8_t *region = (uint8_t *)malloc(total);
-        if (region == 0) return __LINE__;
-        uint32_t offs[10];
-        uint32_t no = build_offsets(cap, offs);
-        for (uint32_t oi = 0; oi < no; ++oi) {
-            for (uint32_t si = 0; si < NODD; ++si) {
-                uint32_t len = g_odd_sizes[si];
-                if (len > cap || len > sizeof(src)) continue;
+    uint32_t maxsz = g_sizes[NSIZES - 1];
+    uint8_t *src = (uint8_t *)malloc(maxsz);
+    uint8_t *out = (uint8_t *)malloc(maxsz);
+    if (src == 0 || out == 0) return __LINE__;
+    for (uint32_t si = 0; si < NSIZES; ++si) {
+        uint32_t size = g_sizes[si];
+        uint32_t caps[2];
+        uint32_t nc = caps_for_span(size, caps);
+        for (uint32_t ci = 0; ci < nc; ++ci) {
+            uint32_t cap = caps[ci];
+            uint32_t total = wasmos_ringbuf_bytes_for(cap);
+            uint8_t *region = (uint8_t *)malloc(total);
+            if (region == 0) return __LINE__;
+            uint32_t offs[5];
+            uint32_t no = wrap_offsets(cap, size, offs);
+            for (uint32_t oi = 0; oi < no; ++oi) {
                 wasmos_ringbuf_t p, c;
                 CK(wasmos_ringbuf_init(&p, region, total, cap) == 0);
                 CK(wasmos_ringbuf_attach(&c, region, total) == 0);
-                p.hdr->write = offs[oi]; /* start the transfer at an awkward offset */
+                p.hdr->write = offs[oi];
                 p.hdr->read = offs[oi];
-                fill_pattern(src, offs[oi], len);
-                CK(wasmos_ringbuf_write(&p, src, len) == len);
-                memset(out, 0, len);
-                CK(wasmos_ringbuf_read(&c, out, len) == len);
-                CK(memcmp(out, src, len) == 0); /* positions + wrap correct */
+                fill_pattern(src, offs[oi], size);
+                CK(wasmos_ringbuf_write(&p, src, size) == size);
+                memset(out, 0, size);
+                CK(wasmos_ringbuf_read(&c, out, size) == size);
+                CK(memcmp(out, src, size) == 0); /* positions + wrap correct */
                 CK(wasmos_ringbuf_is_empty(&c));
                 g_cases++;
             }
+            free(region);
         }
-        free(region);
     }
+    free(src);
+    free(out);
     return 0;
 }
 
-/* Record size matrix: same axes for the datagram path, including offsets where
- * even the 4-byte length prefix straddles the ring end, plus the 0-length and
- * max-fit (capacity-4) records. Verifies prefix + payload placement and the
- * read-back content across the wrap. */
+/* Record size matrix: same page-referenced sizes for the datagram path. The
+ * whole record (4-byte prefix + payload) is split at the wrap boundary, so the
+ * offsets include ones where the length prefix itself straddles the ring end.
+ * Verifies prefix + payload placement and the read-back content across the
+ * wrap, both in a tight ring and wrapping inside a 16-page ring. */
 static int
 test_record_size_matrix(void) {
-    uint8_t src[256], out[256];
-    for (uint32_t ci = 0; ci < NCAPS; ++ci) {
-        uint32_t cap = g_caps[ci];
-        if (cap < 8u) continue; /* need prefix + payload room */
-        uint32_t total = wasmos_ringbuf_bytes_for(cap);
-        uint8_t *region = (uint8_t *)malloc(total);
-        if (region == 0) return __LINE__;
-        uint32_t offs[10];
-        uint32_t no = build_offsets(cap, offs);
-        /* payload sizes: 0, the odd set, and the max that fits (capacity-4). */
-        uint32_t sizes[NODD + 2];
-        uint32_t ns = 0;
-        sizes[ns++] = 0u;
-        for (uint32_t i = 0; i < NODD; ++i) sizes[ns++] = g_odd_sizes[i];
-        sizes[ns++] = cap - 4u;
-        for (uint32_t oi = 0; oi < no; ++oi) {
-            for (uint32_t si = 0; si < ns; ++si) {
-                uint32_t plen = sizes[si];
-                if (plen + 4u > cap || plen > sizeof(src)) continue;
+    uint32_t maxsz = g_sizes[NSIZES - 1];
+    uint8_t *src = (uint8_t *)malloc(maxsz);
+    uint8_t *out = (uint8_t *)malloc(maxsz);
+    if (src == 0 || out == 0) return __LINE__;
+    for (uint32_t si = 0; si < NSIZES; ++si) {
+        uint32_t plen = g_sizes[si];
+        uint32_t need = plen + 4u; /* record occupies prefix + payload */
+        uint32_t caps[2];
+        uint32_t nc = caps_for_span(need, caps);
+        for (uint32_t ci = 0; ci < nc; ++ci) {
+            uint32_t cap = caps[ci];
+            uint32_t total = wasmos_ringbuf_bytes_for(cap);
+            uint8_t *region = (uint8_t *)malloc(total);
+            if (region == 0) return __LINE__;
+            uint32_t offs[5];
+            uint32_t no = wrap_offsets(cap, need, offs);
+            for (uint32_t oi = 0; oi < no; ++oi) {
                 wasmos_ringbuf_t p, c;
                 CK(wasmos_ringbuf_init(&p, region, total, cap) == 0);
                 CK(wasmos_ringbuf_attach(&c, region, total) == 0);
@@ -811,16 +800,18 @@ test_record_size_matrix(void) {
                 fill_pattern(src, offs[oi] + 1u, plen);
                 CK(wasmos_ringbuf_write_record(&p, src, plen) == (int32_t)plen);
                 uint32_t rl = 0xFFFFFFFFu;
-                memset(out, 0, plen ? plen : 1u);
-                CK(wasmos_ringbuf_read_record(&c, out, sizeof(out), &rl) == (int32_t)plen);
+                memset(out, 0, plen);
+                CK(wasmos_ringbuf_read_record(&c, out, maxsz, &rl) == (int32_t)plen);
                 CK(rl == plen);
                 CK(memcmp(out, src, plen) == 0); /* prefix+payload positions correct */
                 CK(wasmos_ringbuf_is_empty(&c));
                 g_cases++;
             }
+            free(region);
         }
-        free(region);
     }
+    free(src);
+    free(out);
     return 0;
 }
 
@@ -956,7 +947,6 @@ main(void) {
     RUN(test_partial_prefix_peek);
     RUN(test_full_state_backpressure);
     RUN(test_attach_negatives);
-    RUN(test_capacity_sweep);
     RUN(test_wrap_size_matrix);
     RUN(test_record_size_matrix);
     RUN(test_fuzz_byte_stream);

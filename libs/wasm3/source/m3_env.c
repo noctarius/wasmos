@@ -347,7 +347,15 @@ M3Result  InitMemory  (IM3Runtime io_runtime, IM3Module i_module)
     {
         u32 maxPages = i_module->memoryInfo.maxPages;
         u32 pageSize = i_module->memoryInfo.pageSize;
-        io_runtime->memory.maxPages = maxPages ? maxPages : 65536;
+        /* ln: linear memory is backed by a reserved-VA slot (see the WASMOS
+         * reserve/grow edits in ResizeMemory below) that commits physical pages
+         * on demand.  The 2 GiB slot is the real ceiling, so ignore the module's
+         * compile-time --max-memory (drivers bake in tiny values that would
+         * block on-demand growth and zero-copy overlays) and let every module
+         * grow up to the slot.  32768 * 64 KiB = 2 GiB = WARP_LINMEM_VA_STRIDE,
+         * safely under d_m3MaxLinearMemoryPages (65536). */
+        (void) maxPages;
+        io_runtime->memory.maxPages = 32768;
         io_runtime->memory.pageSize = pageSize ? pageSize : d_m3DefaultMemPageSize;
 
         result = ResizeMemory (io_runtime, i_module->memoryInfo.initPages);

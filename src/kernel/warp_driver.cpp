@@ -307,11 +307,6 @@ static constexpr uint64_t kUserCS = 0x1Bu;
 static constexpr uint64_t kUserSS = 0x23u;
 /* Kernel higher-half base for physical → virtual alias translation */
 static constexpr uint64_t kHalfBase = 0xFFFFFFFF80000000ULL;
-/* roundUpToPow2: rounds v up to the next multiple of 2^n. Used for
- * FunctionInfo binary layout parsing (same formula as WARP's util.hpp). */
-static inline uint32_t r3_rup2(uint32_t v, uint32_t n) {
-    return (v + n - 1u) & ~(n - 1u);
-}
 
 /* Patch the basedata so ring-3 JIT code can reload linMem correctly after
  * any hostcall (LINEAR_MEMORY_BOUNDS_CHECKS=1 caches/restores linMem base
@@ -429,30 +424,19 @@ static uint64_t
 warp_r3_resolve_export(vb::WasmModule *mod, const char *name)
 {
     vb::Span<char const> name_span(name, __builtin_strlen(name));
-    vb::Span<char const> sig;
+    uint8_t const *kernel_fn = nullptr;
     WarpExceptionCheckpoint *ckpt = warp_exception_get_checkpoint();
     ckpt->active = 1;
     if (__builtin_setjmp(ckpt->jbuf)) {
         ckpt->active = 0;
         return 0;
     }
-    sig = mod->getFunctionSignatureByName(name_span);
+    {
+        auto const raw_fn = mod->runtime_.getRawExportedFunctionByName(name_span,
+                                                                       vb::Span<char const>{});
+        kernel_fn = raw_fn.info().fncPtr();
+    }
     ckpt->active = 0;
-
-    if (!sig.data() || sig.size() == 0) return 0;
-
-    /* FunctionInfo binary layout (from end of compiled binary, backwards):
-     *   [binaryEnd - binaryOffset]:
-     *     SignatureLength (uint32_t) → stepPtr -= 4
-     *     Signature[roundUp2(SigLen)] (bytes) → stepPtr -= roundUp2(SigLen)
-     *     WrapperSize (uint32_t) → stepPtr -= 4
-     *     Wrapper[roundUp2(WrapperSize)] (bytes) ← fncPtr = stepPtr */
-    char const *sig_data = sig.data();
-    uint32_t wrapper_size =
-        *reinterpret_cast<uint32_t const *>(sig_data - 4);
-    uint8_t const *kernel_fn =
-        reinterpret_cast<uint8_t const *>(sig_data) - 4 -
-        static_cast<ptrdiff_t>(r3_rup2(wrapper_size, 2u));
 
     vb::Span<uint8_t const> compiled = mod->getCompiledBinary();
     if (kernel_fn < compiled.data() ||
@@ -599,10 +583,15 @@ warp_r3_memory_helper(uint64_t min_linmem_len,
 static void
 warp_linmem_reserve_hint_for(uint32_t pid, uint64_t initial_linmem)
 {
-    /* Any nonzero value arms the hint; use the declared initial size so a
-     * zero-heap module (unusual) does not falsely arm it. */
-    if (initial_linmem == 0) {
-        initial_linmem = 0x10000; /* 64 KiB floor: still just a "linmem pending" flag */
+    /* Generous default: back every WARP app with a large reserved window so it
+     * can grow on demand and host zero-copy overlays, rather than the tiny
+     * per-driver heap declared in the manifest.  This only sizes the reserved-VA
+     * placement/scan window inside the fixed WARP_LINMEM_VA_STRIDE slot; physical
+     * pages are still committed lazily and bounded by kPhysLimit.  Mirrors the
+     * wasm3 side, where InitMemory floors maxPages to the 2 GiB slot. */
+    const uint64_t floor = 512ULL * 1024ULL * 1024ULL; /* 512 MiB */
+    if (initial_linmem < floor) {
+        initial_linmem = floor;
     }
     warp_linmem_reserve_hint(pid, initial_linmem);
 }

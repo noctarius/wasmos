@@ -181,6 +181,12 @@ invlpg(uint64_t virt)
     __asm__ volatile("invlpg (%0)" : : "r"(virt) : "memory");
 }
 
+void
+paging_invalidate(uint64_t virt)
+{
+    invlpg(virt);
+}
+
 static uint64_t
 entry_phys(uint64_t entry)
 {

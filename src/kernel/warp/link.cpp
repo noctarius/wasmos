@@ -844,7 +844,7 @@ warp_buffer_unborrow(uint32_t borrow_id, void *ctx_)
 
 #define WARP_BLOCK_BUF_PAGES 2u  /* 8 KB block buffer per process */
 
-struct WarpBlockSlot { uint32_t pid; uint64_t phys; };
+struct WarpBlockSlot { uint32_t pid; uint64_t phys; uint32_t map_off; };
 
 /* Per-pid block DMA slots, keyed by pid in a growable hashmap (no fixed
  * process-count bound).  Created on first use and removed on exit via
@@ -1161,14 +1161,20 @@ static uint32_t
 warp_initfs_entry_copy(uint32_t index, uint32_t out_off, uint32_t len, uint32_t offset, void *ctx_)
 {
     auto *ctx = warp_call_ctx(ctx_);
+    if ((int32_t)index < 0 || (int32_t)len <= 0 || (int32_t)offset < 0) return (uint32_t)-1;
     wasmos_initfs_entry_t e;
     if (warp_initfs_entry_at(index, &e) != 0) return (uint32_t)-1;
-    if (offset + len > e.size) return (uint32_t)-1;
-    uint8_t *out = warp_mem(ctx, out_off, len);
+    /* Match wasm3: at/after EOF returns 0, and a trailing chunk longer than the
+     * remainder is clamped and the short count returned (not rejected). */
+    if (offset >= e.size) return 0;
+    uint32_t copy_len = len;
+    uint32_t available = e.size - offset;
+    if (copy_len > available) copy_len = available;
+    uint8_t *out = warp_mem(ctx, out_off, copy_len);
     if (!out) return (uint32_t)-1;
     const uint8_t *src = static_cast<const uint8_t *>(g_warp_boot_info->initfs) + e.offset + offset;
-    __builtin_memcpy(out, src, len);
-    return len;   /* bytes copied, matches wasm3 which returns (int32_t)len */
+    __builtin_memcpy(out, src, copy_len);
+    return copy_len;   /* bytes copied, matches wasm3 which returns (int32_t)copy_len */
 }
 
 // ---------------------------------------------------------------------------
@@ -1519,7 +1525,6 @@ static int
 warp_ring3_sync_user_range(WarpCallContext *ctx, uint32_t wasm_off, uint32_t size)
 {
     if (!ctx || !ctx->module || size == 0) {
-        klog_write("[dbg-warp-xfer] bad ctx/range\n");
         return -1;
     }
     uint64_t current_root = paging_get_current_root_table();
@@ -1530,7 +1535,6 @@ warp_ring3_sync_user_range(WarpCallContext *ctx, uint32_t wasm_off, uint32_t siz
     uint8_t *linmem_base = ctx->module->getLinearMemoryRegion(0, 0);
     uint8_t *range_base = warp_linear_mem_window(ctx, wasm_off, size);
     if (!linmem_base || !range_base) {
-        klog_write("[dbg-warp-xfer] linmem/range missing\n");
         return -1;
     }
 
@@ -1544,7 +1548,6 @@ warp_ring3_sync_user_range(WarpCallContext *ctx, uint32_t wasm_off, uint32_t siz
     for (uint64_t i = 0; i < page_count; ++i) {
         uint64_t phys_page = warp_mem_alias_phys(kernel_page_base + i * 0x1000ULL) & ~0xFFFULL;
         if (!phys_page) {
-            klog_write("[dbg-warp-xfer] phys lookup failed\n");
             return -1;
         }
         if (paging_map_4k_in_root(current_root,
@@ -1553,7 +1556,6 @@ warp_ring3_sync_user_range(WarpCallContext *ctx, uint32_t wasm_off, uint32_t siz
                                   MEM_REGION_FLAG_READ |
                                       MEM_REGION_FLAG_WRITE |
                                       MEM_REGION_FLAG_USER) != 0) {
-            klog_write("[dbg-warp-xfer] user remap failed\n");
             return -1;
         }
     }
@@ -2118,6 +2120,33 @@ warp_region_alloc(uint32_t pages, uint32_t cache_policy, uint32_t out_phys_off, 
     return found_off;
 }
 
+/* Overlay the caller's own 8 KiB block buffer into its linear-memory window so
+ * the owner reads/writes block data in place instead of copying through
+ * block_buffer_copy/write.  Idempotent.  Unlike warp_region_alloc the pages are
+ * NOT pinned: they are owned by the block slot and freed by warp_release_pid on
+ * reap, which also untracks this window. */
+static uint32_t
+warp_block_buffer_map(void *ctx_)
+{
+    auto *ctx = warp_call_ctx(ctx_);
+    if (!ctx) return (uint32_t)-1;
+    auto *slot = warp_block_slot(ctx->pid);
+    if (!slot) return (uint32_t)-1;
+    if (!slot->phys) {
+        slot->phys = pfa_alloc_pages_below(WARP_BLOCK_BUF_PAGES, 512ULL * 1024 * 1024);
+        if (!slot->phys) return (uint32_t)-1;
+    }
+    if (slot->map_off) return slot->map_off;
+
+    const uint32_t window = (uint32_t)(WARP_BLOCK_BUF_PAGES * 0x1000ULL);
+    int64_t placed = warp_linmem_place_phys(ctx, slot->phys, WARP_BLOCK_BUF_PAGES, window);
+    if (placed < 0) return (uint32_t)-1;
+    uint32_t off = (uint32_t)placed;
+    warp_shmem_map_track(ctx->pid, WARP_REGION_TRACK_ID(off), off, window);
+    slot->map_off = off;
+    return off;
+}
+
 static uint32_t
 warp_shmem_unmap(uint32_t id, void *ctx_)
 {
@@ -2325,6 +2354,20 @@ warp_boot_config_copy(uint32_t buf_off, uint32_t len, uint32_t offset, void *ctx
 // initfs_find_path
 // ---------------------------------------------------------------------------
 
+/* ASCII case-insensitive string equality — matches wasm3's strcasecmp-based
+ * initfs path matching so both runtimes resolve the same names. */
+static bool
+warp_path_ieq(const char *a, const char *b)
+{
+    for (;; ++a, ++b) {
+        char ca = *a, cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca = (char)(ca + 32);
+        if (cb >= 'A' && cb <= 'Z') cb = (char)(cb + 32);
+        if (ca != cb) return false;
+        if (ca == '\0') return true;
+    }
+}
+
 static uint32_t
 warp_initfs_find_path(uint32_t path_off, uint32_t path_len, void *ctx_)
 {
@@ -2349,11 +2392,11 @@ warp_initfs_find_path(uint32_t path_off, uint32_t path_len, void *ctx_)
     for (uint32_t i = 0; i < hdr->entry_count; ++i) {
         wasmos_initfs_entry_t e;
         if (warp_initfs_entry_at(i, &e) != 0) continue;
-        if (__builtin_strcmp(e.path, &local_path[ri]) == 0) return i;
+        if (warp_path_ieq(e.path, &local_path[ri])) return i;
         const char *bn = e.path;
         for (uint32_t j = 0; e.path[j]; ++j)
             if (e.path[j] == '/') bn = &e.path[j+1];
-        if (__builtin_strcmp(bn, &local_path[ri]) == 0) return i;
+        if (warp_path_ieq(bn, &local_path[ri])) return i;
     }
     return (uint32_t)-1;
 }
@@ -2541,7 +2584,8 @@ warp_env_abort(uint32_t msg, uint32_t file, uint32_t line, uint32_t column, void
      * enum order: HC_XFER_BUFFER_ACQUIRE(104), _UNBORROW(105),
      * HC_BUFFER_ACQUIRE(106), _UNBORROW(107),
      * HC_XFER_BUFFER_REBORROW(108), HC_BUFFER_REBORROW(109),
-     * HC_SPAWN_INFO_BUFFER(110). */ \
+     * HC_SPAWN_INFO_BUFFER(110), HC_WASI_PROC_EXIT(111),
+     * HC_WASI_RANDOM_GET(112), HC_BLOCK_BUFFER_MAP(113). */ \
     LINK("wasmos", "xfer_buffer_acquire",  warp_xfer_buffer_acquire), \
     LINK("wasmos", "xfer_buffer_unborrow", warp_xfer_buffer_unborrow), \
     LINK("wasmos", "buffer_acquire",       warp_buffer_acquire), \
@@ -2550,7 +2594,8 @@ warp_env_abort(uint32_t msg, uint32_t file, uint32_t line, uint32_t column, void
     LINK("wasmos", "buffer_reborrow",      warp_buffer_reborrow), \
     LINK("wasmos", "spawn_info_buffer",    warp_spawn_info_buffer), \
     LINK("wasi_snapshot_preview1", "proc_exit",  warp_wasi_proc_exit), \
-    LINK("wasi_snapshot_preview1", "random_get", warp_wasi_random_get)
+    LINK("wasi_snapshot_preview1", "random_get", warp_wasi_random_get), \
+    LINK("wasmos", "block_buffer_map",     warp_block_buffer_map)
 
 
 vb::Span<vb::NativeSymbol const>
@@ -2629,6 +2674,16 @@ warp_release_pid(uint32_t pid)
     (void)hashmap_remove(&g_ctx_map, pid);
     (void)hashmap_remove(&g_ipc_last_map, pid);
     (void)hashmap_remove(&g_fs_peer_map, pid);
+    /* Reclaim the per-pid block buffer pages before dropping the slot, else the
+     * 2 pages leak on every process exit. */
+    if (auto *bslot = static_cast<WarpBlockSlot *>(hashmap_get(&g_block_map, pid))) {
+        if (bslot->map_off) {
+            warp_shmem_map_untrack(pid, WARP_REGION_TRACK_ID(bslot->map_off));
+        }
+        if (bslot->phys) {
+            pfa_free_pages(bslot->phys, WARP_BLOCK_BUF_PAGES);
+        }
+    }
     (void)hashmap_remove(&g_block_map, pid);
     /* Per-pid WARP heap config (warp/shim.cpp). */
     warp_heap_release(pid);
@@ -2811,6 +2866,8 @@ warp_ring3_dispatch(uint32_t hc_id, void *frame_ptr)
     /* 34 */ case HC_BLOCK_BUFFER_WRITE:
         return warp_block_buffer_write((uint32_t)a0, (uint32_t)a1, (uint32_t)a2,
                                        (uint32_t)a3, ctx5);
+    /* 113 */ case HC_BLOCK_BUFFER_MAP:
+        return warp_block_buffer_map(reinterpret_cast<void *>(a0));
     /* 35 */ case HC_IO_IN8:
         return warp_io_in8((uint32_t)a0, ctx2);
     /* 36 */ case HC_IO_IN16:

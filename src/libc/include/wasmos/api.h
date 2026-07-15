@@ -233,6 +233,12 @@ extern int32_t wasmos_block_buffer_copy(int32_t phys, int32_t ptr, int32_t len, 
     WASMOS_WASM_IMPORT("wasmos", "block_buffer_copy");
 extern int32_t wasmos_block_buffer_write(int32_t phys, int32_t ptr, int32_t len, int32_t offset)
     WASMOS_WASM_IMPORT("wasmos", "block_buffer_write");
+/* Zero-copy: overlay the caller's own 8 KiB block buffer into linear memory and
+ * return its wasm offset (or -1).  Idempotent.  The mapped bytes alias the same
+ * physical pages named by wasmos_block_buffer_phys(), so a peer block server
+ * filling the buffer by phys is visible here without a block_buffer_copy. */
+extern int32_t wasmos_block_buffer_map(void)
+    WASMOS_WASM_IMPORT("wasmos", "block_buffer_map");
 extern int32_t wasmos_xfer_buffer_size(void)
     WASMOS_WASM_IMPORT("wasmos", "xfer_buffer_size");
 extern int32_t wasmos_fs_endpoint(void)

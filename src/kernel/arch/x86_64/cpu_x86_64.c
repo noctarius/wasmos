@@ -615,6 +615,23 @@ x86_page_fault_handler(uint64_t error_code, const uint64_t *frame)
     uint8_t from_user = (uint8_t)((cs & 0x3u) == 0x3u);
     pf_reason_t reason = pf_classify_reason(error_code, cr2, from_user);
 
+    if (!from_user &&
+        !(error_code & (1ULL << 0)) &&
+        cr2 >= WARP_LINMEM_VA_BASE &&
+        cr2 < WARP_LINMEM_VA_BASE +
+                  (uint64_t)(WARP_LINMEM_PDPT_COUNT / 2u) * WARP_LINMEM_VA_STRIDE &&
+        paging_virt_to_phys(cr2) != 0) {
+        /* The shared higher-half linmem slot window is updated in one CPU's
+         * page tables and reaches every CR3 via PML4[511], but the mapping CPU
+         * only invalidates its local TLB. A second CPU can therefore fault on
+         * a stale non-present TLB entry even though the backing PTE is already
+         * live. Retry once after a local invalidation instead of panicking.
+         * TODO(smp-tlb): replace this recovery path with a real cross-CPU TLB
+         * shootdown for linmem slot commit/decommit updates. */
+        paging_invalidate(cr2);
+        return 0;
+    }
+
     if (memory_service_handle_fault_ipc(proc->context_id, cr2, error_code) != 0) {
         if (from_user) {
             serial_printf("[fault] user-pf pid=%u reason=%s err=%016llx cr2=%016llx rip=%016llx\n",

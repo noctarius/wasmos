@@ -36,6 +36,7 @@ int paging_unmap_4k_in_root(uint64_t root_table, uint64_t virt);
 int paging_strip_low_slot_in_root(uint64_t root_table);
 int paging_map_4k(uint64_t virt, uint64_t phys, uint64_t flags);
 int paging_unmap_4k(uint64_t virt);
+void paging_invalidate(uint64_t virt);
 
 /* Read-only page-table walk: physical address backing `virt` (root_table 0 =
  * current root), including in-page offset, or 0 if unmapped.  Handles large

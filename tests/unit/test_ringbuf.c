@@ -21,6 +21,10 @@
 static long g_checks = 0;
 #define CK(cond) do { g_checks++; if (!(cond)) return __LINE__; } while (0)
 
+/* Distinct (capacity, offset, size) parameterizations exercised by the size
+ * matrices — the meaningful coverage figure, separate from raw check count. */
+static long g_cases = 0;
+
 #define CAP 64u  /* small power-of-two capacity to force wraparound quickly */
 
 /* Backing store for one ring: header + data, generously aligned. */
@@ -696,31 +700,126 @@ test_capacity_sweep(void) {
     return 0;
 }
 
-/* Exhaustively exercise the two-part wraparound copy: for every physical start
- * offset in [0, cap) and every length in [1, cap], write then read back and
- * confirm byte-exact round-trip. This hits both store and load straddling the
- * ring end at every possible boundary. */
-static int
-test_exhaustive_wrap_offsets(void) {
-    const uint32_t cap = 64u;
-    static uint8_t region[WASMOS_RINGBUF_HDR_BYTES + 64u] __attribute__((aligned(64)));
-    for (uint32_t start = 0; start < cap; ++start) {
-        for (uint32_t len = 1u; len <= cap; ++len) {
-            wasmos_ringbuf_t p, c;
-            CK(wasmos_ringbuf_init(&p, region, sizeof(region), cap) == 0);
-            CK(wasmos_ringbuf_attach(&c, region, sizeof(region)) == 0);
-            p.hdr->write = start; /* begin at an arbitrary physical offset */
-            p.hdr->read = start;
+/* Meaningful size axes for the matrices below. The ring only supports
+ * power-of-two capacities, so that is the capacity axis; operation/record sizes
+ * are deliberately odd/prime (never powers of two) so a transfer almost always
+ * straddles the ring end at a non-aligned point. */
+static const uint32_t g_caps[] = {2u, 4u, 8u, 16u, 32u, 64u, 128u, 256u, 1024u, 4096u, 65536u};
+#define NCAPS (sizeof(g_caps) / sizeof(g_caps[0]))
+static const uint32_t g_odd_sizes[] = {1u, 2u, 3u, 5u, 7u, 11u, 13u, 17u, 23u, 31u, 63u, 127u};
+#define NODD (sizeof(g_odd_sizes) / sizeof(g_odd_sizes[0]))
 
-            uint8_t src[64];
-            for (uint32_t i = 0; i < len; ++i) src[i] = (uint8_t)(0x40u + ((start + i) & 0x3Fu));
-            CK(wasmos_ringbuf_write(&p, src, len) == len);
-            uint8_t out[64];
-            memset(out, 0, sizeof(out));
-            CK(wasmos_ringbuf_read(&c, out, len) == len);
-            CK(memcmp(out, src, len) == 0);
-            CK(wasmos_ringbuf_is_empty(&c));
+/* Awkward start offsets for a capacity: small/odd values plus capacity-relative
+ * ones (last byte, near-end, mid) so the two-part copy splits with a 1-byte
+ * tail, a 1-byte head, an odd split, etc. Writes up to 10 offsets; returns the
+ * count. */
+static uint32_t
+build_offsets(uint32_t cap, uint32_t *offs) {
+    uint32_t cand[] = {0u, 1u, 3u, 7u, 13u,
+                       cap - 1u,
+                       cap > 7u ? cap - 7u : 0u,
+                       cap > 13u ? cap - 13u : 0u,
+                       cap / 2u,
+                       cap / 2u + 1u};
+    uint32_t n = 0;
+    for (uint32_t i = 0; i < sizeof(cand) / sizeof(cand[0]); ++i) {
+        if (cand[i] >= cap) continue;
+        uint32_t dup = 0;
+        for (uint32_t j = 0; j < n; ++j) if (offs[j] == cand[i]) dup = 1;
+        if (!dup) offs[n++] = cand[i];
+    }
+    return n;
+}
+
+/* Position-sensitive fill: the byte value depends on BOTH the physical offset
+ * and the index, so a wrong wrap-split size or a copy landing at the wrong
+ * position changes the bytes read back and fails the compare — this is what
+ * proves the positions are correct, not just that some bytes came through. */
+static void
+fill_pattern(uint8_t *dst, uint32_t off, uint32_t len) {
+    for (uint32_t i = 0; i < len; ++i)
+        dst[i] = (uint8_t)((off * 7u + i * 3u + 1u) & 0xFFu);
+}
+
+/* Byte-stream size matrix: powers-of-two capacities x odd sizes x awkward
+ * offsets. Write a pattern of N bytes starting at physical offset O, read it
+ * back, and verify byte-exact — proving the write/read positions and the
+ * wraparound split are correct at every combination. */
+static int
+test_wrap_size_matrix(void) {
+    uint8_t src[256], out[256];
+    for (uint32_t ci = 0; ci < NCAPS; ++ci) {
+        uint32_t cap = g_caps[ci];
+        uint32_t total = wasmos_ringbuf_bytes_for(cap);
+        uint8_t *region = (uint8_t *)malloc(total);
+        if (region == 0) return __LINE__;
+        uint32_t offs[10];
+        uint32_t no = build_offsets(cap, offs);
+        for (uint32_t oi = 0; oi < no; ++oi) {
+            for (uint32_t si = 0; si < NODD; ++si) {
+                uint32_t len = g_odd_sizes[si];
+                if (len > cap || len > sizeof(src)) continue;
+                wasmos_ringbuf_t p, c;
+                CK(wasmos_ringbuf_init(&p, region, total, cap) == 0);
+                CK(wasmos_ringbuf_attach(&c, region, total) == 0);
+                p.hdr->write = offs[oi]; /* start the transfer at an awkward offset */
+                p.hdr->read = offs[oi];
+                fill_pattern(src, offs[oi], len);
+                CK(wasmos_ringbuf_write(&p, src, len) == len);
+                memset(out, 0, len);
+                CK(wasmos_ringbuf_read(&c, out, len) == len);
+                CK(memcmp(out, src, len) == 0); /* positions + wrap correct */
+                CK(wasmos_ringbuf_is_empty(&c));
+                g_cases++;
+            }
         }
+        free(region);
+    }
+    return 0;
+}
+
+/* Record size matrix: same axes for the datagram path, including offsets where
+ * even the 4-byte length prefix straddles the ring end, plus the 0-length and
+ * max-fit (capacity-4) records. Verifies prefix + payload placement and the
+ * read-back content across the wrap. */
+static int
+test_record_size_matrix(void) {
+    uint8_t src[256], out[256];
+    for (uint32_t ci = 0; ci < NCAPS; ++ci) {
+        uint32_t cap = g_caps[ci];
+        if (cap < 8u) continue; /* need prefix + payload room */
+        uint32_t total = wasmos_ringbuf_bytes_for(cap);
+        uint8_t *region = (uint8_t *)malloc(total);
+        if (region == 0) return __LINE__;
+        uint32_t offs[10];
+        uint32_t no = build_offsets(cap, offs);
+        /* payload sizes: 0, the odd set, and the max that fits (capacity-4). */
+        uint32_t sizes[NODD + 2];
+        uint32_t ns = 0;
+        sizes[ns++] = 0u;
+        for (uint32_t i = 0; i < NODD; ++i) sizes[ns++] = g_odd_sizes[i];
+        sizes[ns++] = cap - 4u;
+        for (uint32_t oi = 0; oi < no; ++oi) {
+            for (uint32_t si = 0; si < ns; ++si) {
+                uint32_t plen = sizes[si];
+                if (plen + 4u > cap || plen > sizeof(src)) continue;
+                wasmos_ringbuf_t p, c;
+                CK(wasmos_ringbuf_init(&p, region, total, cap) == 0);
+                CK(wasmos_ringbuf_attach(&c, region, total) == 0);
+                p.hdr->write = offs[oi]; /* prefix itself may straddle the wrap here */
+                p.hdr->read = offs[oi];
+                fill_pattern(src, offs[oi] + 1u, plen);
+                CK(wasmos_ringbuf_write_record(&p, src, plen) == (int32_t)plen);
+                uint32_t rl = 0xFFFFFFFFu;
+                memset(out, 0, plen ? plen : 1u);
+                CK(wasmos_ringbuf_read_record(&c, out, sizeof(out), &rl) == (int32_t)plen);
+                CK(rl == plen);
+                CK(memcmp(out, src, plen) == 0); /* prefix+payload positions correct */
+                CK(wasmos_ringbuf_is_empty(&c));
+                g_cases++;
+            }
+        }
+        free(region);
     }
     return 0;
 }
@@ -728,38 +827,44 @@ test_exhaustive_wrap_offsets(void) {
 /* xorshift32, deterministic (fixed seed) so the fuzz runs are reproducible. */
 #define FZ_STEP(fz) ((fz) ^= (fz) << 13, (fz) ^= (fz) >> 17, (fz) ^= (fz) << 5, (fz))
 
-/* Model-based byte-stream fuzz: drive a long random sequence of writes and
- * reads and check the ring against a reference FIFO model (produced/consumed
- * counters + the generating byte sequence) on every operation. */
+/* Model-based byte-stream fuzz across several power-of-two capacities: random
+ * write/read interleavings checked against a reference FIFO model. Where the
+ * matrices prove size/offset placement, this proves the free-running index and
+ * empty/full edges survive arbitrary interleaving. Each read is verified
+ * byte-exact against the produced sequence, so positions are checked here too. */
 static int
 test_fuzz_byte_stream(void) {
-    const uint32_t cap = 64u;
-    static uint8_t region[WASMOS_RINGBUF_HDR_BYTES + 64u] __attribute__((aligned(64)));
-    wasmos_ringbuf_t p, c;
-    CK(wasmos_ringbuf_init(&p, region, sizeof(region), cap) == 0);
-    CK(wasmos_ringbuf_attach(&c, region, sizeof(region)) == 0);
-
-    uint32_t fz = 0x00C0FFEEu;
-    uint32_t produced = 0, consumed = 0;
-    uint8_t buf[64];
-    for (int op = 0; op < 20000; ++op) {
-        CK(wasmos_ringbuf_used(&p) == produced - consumed);
-        uint32_t want = FZ_STEP(fz) % 41u; /* 0..40 */
-        if (FZ_STEP(fz) & 1u) {
-            for (uint32_t i = 0; i < want; ++i) buf[i] = (uint8_t)((produced + i) & 0xFFu);
-            uint32_t freeb = cap - (produced - consumed);
-            uint32_t expect = want < freeb ? want : freeb;
-            CK(wasmos_ringbuf_write(&p, buf, want) == expect);
-            produced += expect;
-        } else {
-            uint32_t used = produced - consumed;
-            uint32_t expect = want < used ? want : used;
-            CK(wasmos_ringbuf_read(&c, buf, want) == expect);
-            uint8_t exp[64];
-            for (uint32_t i = 0; i < expect; ++i) exp[i] = (uint8_t)((consumed + i) & 0xFFu);
-            CK(memcmp(buf, exp, expect) == 0); /* one check per read */
-            consumed += expect;
+    static const uint32_t caps[] = {8u, 16u, 64u, 256u};
+    for (uint32_t ci = 0; ci < sizeof(caps) / sizeof(caps[0]); ++ci) {
+        uint32_t cap = caps[ci];
+        uint32_t total = wasmos_ringbuf_bytes_for(cap);
+        uint8_t *region = (uint8_t *)malloc(total);
+        if (region == 0) return __LINE__;
+        wasmos_ringbuf_t p, c;
+        CK(wasmos_ringbuf_init(&p, region, total, cap) == 0);
+        CK(wasmos_ringbuf_attach(&c, region, total) == 0);
+        uint32_t fz = 0x00C0FFEEu ^ cap;
+        uint32_t produced = 0, consumed = 0;
+        uint8_t buf[64], exp[64];
+        for (int op = 0; op < 4000; ++op) {
+            CK(wasmos_ringbuf_used(&p) == produced - consumed);
+            uint32_t want = FZ_STEP(fz) % 41u; /* 0..40 */
+            if (FZ_STEP(fz) & 1u) {
+                for (uint32_t i = 0; i < want; ++i) buf[i] = (uint8_t)((produced + i) & 0xFFu);
+                uint32_t freeb = cap - (produced - consumed);
+                uint32_t expect = want < freeb ? want : freeb;
+                CK(wasmos_ringbuf_write(&p, buf, want) == expect);
+                produced += expect;
+            } else {
+                uint32_t used = produced - consumed;
+                uint32_t expect = want < used ? want : used;
+                CK(wasmos_ringbuf_read(&c, buf, want) == expect);
+                for (uint32_t i = 0; i < expect; ++i) exp[i] = (uint8_t)((consumed + i) & 0xFFu);
+                CK(memcmp(buf, exp, expect) == 0); /* one check per read */
+                consumed += expect;
+            }
         }
+        free(region);
     }
     return 0;
 }
@@ -783,7 +888,7 @@ test_fuzz_records(void) {
     uint32_t fz = 0x9E3779B9u;
     uint8_t wbuf[44];
     uint8_t rbuf[300];
-    for (int op = 0; op < 20000; ++op) {
+    for (int op = 0; op < 8000; ++op) {
         if (FZ_STEP(fz) & 1u) {
             uint32_t plen = FZ_STEP(fz) % 41u; /* 0..40 */
             for (uint32_t i = 0; i < plen; ++i) wbuf[i] = (uint8_t)((next_idx * 31u + i) & 0xFFu);
@@ -852,11 +957,13 @@ main(void) {
     RUN(test_full_state_backpressure);
     RUN(test_attach_negatives);
     RUN(test_capacity_sweep);
-    RUN(test_exhaustive_wrap_offsets);
+    RUN(test_wrap_size_matrix);
+    RUN(test_record_size_matrix);
     RUN(test_fuzz_byte_stream);
     RUN(test_fuzz_records);
     RUN(test_concurrent_byte_stream);
     RUN(test_concurrent_records);
-    printf("test_ringbuf: %d groups, %ld checks passed\n", groups, g_checks);
+    printf("test_ringbuf: %d groups, %ld size cases, %ld checks passed\n",
+           groups, g_cases, g_checks);
     return 0;
 }

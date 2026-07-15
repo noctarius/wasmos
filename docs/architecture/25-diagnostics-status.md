@@ -252,6 +252,31 @@ names, but a developer wants source file and line information. The helper:
 This keeps the in-kernel panic path limited to frame-pointer walking plus a
 small symbol table, while leaving DWARF-backed file/line lookup on the host.
 
+Typical usage:
+
+```sh
+python3 scripts/decode_kernel_panic.py /path/to/panic.log
+cat /path/to/panic.log | python3 scripts/decode_kernel_panic.py
+python3 scripts/decode_kernel_panic.py --kernel /path/to/kernel.elf /path/to/panic.log
+python3 scripts/decode_kernel_panic.py --addr2line /path/to/llvm-addr2line /path/to/panic.log
+LLVM_ADDR2LINE=/path/to/llvm-addr2line python3 scripts/decode_kernel_panic.py /path/to/panic.log
+```
+
+Options and defaults:
+
+- `input` is optional and defaults to `-`, which means read the panic log from
+  stdin.
+- `--kernel` overrides the ELF used for symbol and DWARF lookup. The default is
+  `build/kernel.elf`.
+- `--addr2line` overrides the host-side decoder binary. If it is not provided,
+  the script first checks `LLVM_ADDR2LINE`, then tries to infer
+  `llvm-addr2line` from the `CLANG` entry in `build/CMakeCache.txt`, and then
+  falls back to common local LLVM install paths such as Homebrew locations.
+
+This is intended for post-mortem decoding after either the single-CPU panic
+screen or the full multi-CPU serial panic dump has already captured return
+addresses.
+
 #### Framebuffer Panic Screen
 
 `panic_render_screen()` renders a text-mode panic display via `framebuffer_panic_begin()` /

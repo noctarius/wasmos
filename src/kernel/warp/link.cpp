@@ -844,7 +844,7 @@ warp_buffer_unborrow(uint32_t borrow_id, void *ctx_)
 
 #define WARP_BLOCK_BUF_PAGES 2u  /* 8 KB block buffer per process */
 
-struct WarpBlockSlot { uint32_t pid; uint64_t phys; };
+struct WarpBlockSlot { uint32_t pid; uint64_t phys; uint32_t map_off; };
 
 /* Per-pid block DMA slots, keyed by pid in a growable hashmap (no fixed
  * process-count bound).  Created on first use and removed on exit via
@@ -2124,6 +2124,33 @@ warp_region_alloc(uint32_t pages, uint32_t cache_policy, uint32_t out_phys_off, 
     return found_off;
 }
 
+/* Overlay the caller's own 8 KiB block buffer into its linear-memory window so
+ * the owner reads/writes block data in place instead of copying through
+ * block_buffer_copy/write.  Idempotent.  Unlike warp_region_alloc the pages are
+ * NOT pinned: they are owned by the block slot and freed by warp_release_pid on
+ * reap, which also untracks this window. */
+static uint32_t
+warp_block_buffer_map(void *ctx_)
+{
+    auto *ctx = warp_call_ctx(ctx_);
+    if (!ctx) return (uint32_t)-1;
+    auto *slot = warp_block_slot(ctx->pid);
+    if (!slot) return (uint32_t)-1;
+    if (!slot->phys) {
+        slot->phys = pfa_alloc_pages_below(WARP_BLOCK_BUF_PAGES, 512ULL * 1024 * 1024);
+        if (!slot->phys) return (uint32_t)-1;
+    }
+    if (slot->map_off) return slot->map_off;
+
+    const uint32_t window = (uint32_t)(WARP_BLOCK_BUF_PAGES * 0x1000ULL);
+    int64_t placed = warp_linmem_place_phys(ctx, slot->phys, WARP_BLOCK_BUF_PAGES, window);
+    if (placed < 0) return (uint32_t)-1;
+    uint32_t off = (uint32_t)placed;
+    warp_shmem_map_track(ctx->pid, WARP_REGION_TRACK_ID(off), off, window);
+    slot->map_off = off;
+    return off;
+}
+
 static uint32_t
 warp_shmem_unmap(uint32_t id, void *ctx_)
 {
@@ -2487,6 +2514,7 @@ warp_env_abort(uint32_t msg, uint32_t file, uint32_t line, uint32_t column, void
     LINK("wasmos", "block_buffer_phys",    warp_block_buffer_phys), \
     LINK("wasmos", "block_buffer_copy",    warp_block_buffer_copy), \
     LINK("wasmos", "block_buffer_write",   warp_block_buffer_write), \
+    LINK("wasmos", "block_buffer_map",     warp_block_buffer_map), \
     LINK("wasmos", "io_in8",               warp_io_in8), \
     LINK("wasmos", "io_in16",              warp_io_in16), \
     LINK("wasmos", "io_in32",              warp_io_in32), \
@@ -2652,6 +2680,9 @@ warp_release_pid(uint32_t pid)
     /* Reclaim the per-pid block buffer pages before dropping the slot, else the
      * 2 pages leak on every process exit. */
     if (auto *bslot = static_cast<WarpBlockSlot *>(hashmap_get(&g_block_map, pid))) {
+        if (bslot->map_off) {
+            warp_shmem_map_untrack(pid, WARP_REGION_TRACK_ID(bslot->map_off));
+        }
         if (bslot->phys) {
             pfa_free_pages(bslot->phys, WARP_BLOCK_BUF_PAGES);
         }
@@ -2838,6 +2869,8 @@ warp_ring3_dispatch(uint32_t hc_id, void *frame_ptr)
     /* 34 */ case HC_BLOCK_BUFFER_WRITE:
         return warp_block_buffer_write((uint32_t)a0, (uint32_t)a1, (uint32_t)a2,
                                        (uint32_t)a3, ctx5);
+    /* 113 */ case HC_BLOCK_BUFFER_MAP:
+        return warp_block_buffer_map(reinterpret_cast<void *>(a0));
     /* 35 */ case HC_IO_IN8:
         return warp_io_in8((uint32_t)a0, ctx2);
     /* 36 */ case HC_IO_IN16:

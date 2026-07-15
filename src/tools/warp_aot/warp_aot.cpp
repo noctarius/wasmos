@@ -99,6 +99,7 @@ static vb::Span<vb::NativeSymbol const> aot_symbols()
         DYNAMIC_LINK("wasmos", "block_buffer_phys",   stub_i0),
         DYNAMIC_LINK("wasmos", "block_buffer_copy",   stub_i4),
         DYNAMIC_LINK("wasmos", "block_buffer_write",  stub_i4),
+        DYNAMIC_LINK("wasmos", "block_buffer_map",    stub_i0),
         /* I/O ports */
         DYNAMIC_LINK("wasmos", "io_in8",              stub_i1),
         DYNAMIC_LINK("wasmos", "io_in16",             stub_i1),

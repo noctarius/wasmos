@@ -79,7 +79,15 @@ static int32_t g_fs_endpoint = -1;
 static int32_t g_reply_endpoint = -1;
 static int32_t g_block_req_id = 1;
 static int32_t g_block_buf_phys = -1;
-static uint8_t g_sector_buf[FAT_MAX_SECTOR_BYTES];
+static uint8_t g_sector_buf_storage[FAT_MAX_SECTOR_BYTES];
+/* Normally points at g_sector_buf_storage.  Once wasmos_block_buffer_map()
+ * succeeds it points at the block-buffer overlay, which aliases the very
+ * physical pages named by g_block_buf_phys — so the block server fills/drains
+ * them by phys and we read/write them here with no staging copy.  All uses are
+ * array-decay (indexing, pointer arithmetic, casts), so a pointer is a drop-in
+ * for the former array. */
+static uint8_t *g_sector_buf = g_sector_buf_storage;
+static int g_block_buf_mapped = 0;
 
 static fat_boot_phase_t g_boot_phase = FAT_BOOT_INIT;
 static uint32_t g_boot_lba = 0;
@@ -461,7 +469,10 @@ fat_poll_block_io(void)
             g_waiting = 0;
             return -1;
         }
-        if (wasmos_block_buffer_copy(g_block_buf_phys,
+        /* When the buffer is mapped, g_sector_buf already aliases the pages the
+         * block server just filled; the staging copy is only needed otherwise. */
+        if (!g_block_buf_mapped &&
+            wasmos_block_buffer_copy(g_block_buf_phys,
                                      (int32_t)(uintptr_t)g_sector_buf,
                                      (int32_t)bytes,
                                      0) != 0) {
@@ -792,7 +803,10 @@ fat_sync_block_read(uint32_t lba)
 static int
 fat_sync_block_write(uint32_t lba)
 {
-    if (wasmos_block_buffer_write(g_block_buf_phys,
+    /* When mapped, we already wrote directly into the shared pages via
+     * g_sector_buf; the block server reads them by phys, so no staging write. */
+    if (!g_block_buf_mapped &&
+        wasmos_block_buffer_write(g_block_buf_phys,
                                   (int32_t)(uintptr_t)g_sector_buf,
                                   FAT_SECTOR_SIZE,
                                   0) != 0) {
@@ -4031,6 +4045,14 @@ initialize(int32_t proc_endpoint,
     if (g_block_buf_phys < 0) {
         fat_log("block buffer missing\n");
         fat_stall();
+    }
+    /* Overlay the same block buffer into linear memory for zero-copy block IO.
+     * The overlay aliases g_block_buf_phys, so falling back to the staging copies
+     * (map unsupported / no window) stays correct. */
+    int32_t block_buf_win = wasmos_block_buffer_map();
+    if (block_buf_win >= 0) {
+        g_sector_buf = (uint8_t *)(uintptr_t)block_buf_win;
+        g_block_buf_mapped = 1;
     }
     g_boot_phase = FAT_BOOT_INIT;
     g_op = FAT_OP_NONE;

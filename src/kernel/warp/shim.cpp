@@ -409,7 +409,7 @@ warp_linmem_grow(void *ptr, size_t size)
         }
         hdr->pages = need_pages;
         WarpPidConfig *cfg = pid_config_get(hdr->owner_pid);
-        if (cfg) {
+    if (cfg) {
             cfg->linmem_committed_pages = need_pages;
         }
     }

@@ -1525,7 +1525,6 @@ static int
 warp_ring3_sync_user_range(WarpCallContext *ctx, uint32_t wasm_off, uint32_t size)
 {
     if (!ctx || !ctx->module || size == 0) {
-        klog_write("[dbg-warp-xfer] bad ctx/range\n");
         return -1;
     }
     uint64_t current_root = paging_get_current_root_table();
@@ -1536,7 +1535,6 @@ warp_ring3_sync_user_range(WarpCallContext *ctx, uint32_t wasm_off, uint32_t siz
     uint8_t *linmem_base = ctx->module->getLinearMemoryRegion(0, 0);
     uint8_t *range_base = warp_linear_mem_window(ctx, wasm_off, size);
     if (!linmem_base || !range_base) {
-        klog_write("[dbg-warp-xfer] linmem/range missing\n");
         return -1;
     }
 
@@ -1550,7 +1548,6 @@ warp_ring3_sync_user_range(WarpCallContext *ctx, uint32_t wasm_off, uint32_t siz
     for (uint64_t i = 0; i < page_count; ++i) {
         uint64_t phys_page = warp_mem_alias_phys(kernel_page_base + i * 0x1000ULL) & ~0xFFFULL;
         if (!phys_page) {
-            klog_write("[dbg-warp-xfer] phys lookup failed\n");
             return -1;
         }
         if (paging_map_4k_in_root(current_root,
@@ -1559,7 +1556,6 @@ warp_ring3_sync_user_range(WarpCallContext *ctx, uint32_t wasm_off, uint32_t siz
                                   MEM_REGION_FLAG_READ |
                                       MEM_REGION_FLAG_WRITE |
                                       MEM_REGION_FLAG_USER) != 0) {
-            klog_write("[dbg-warp-xfer] user remap failed\n");
             return -1;
         }
     }
@@ -2514,7 +2510,6 @@ warp_env_abort(uint32_t msg, uint32_t file, uint32_t line, uint32_t column, void
     LINK("wasmos", "block_buffer_phys",    warp_block_buffer_phys), \
     LINK("wasmos", "block_buffer_copy",    warp_block_buffer_copy), \
     LINK("wasmos", "block_buffer_write",   warp_block_buffer_write), \
-    LINK("wasmos", "block_buffer_map",     warp_block_buffer_map), \
     LINK("wasmos", "io_in8",               warp_io_in8), \
     LINK("wasmos", "io_in16",              warp_io_in16), \
     LINK("wasmos", "io_in32",              warp_io_in32), \
@@ -2589,7 +2584,8 @@ warp_env_abort(uint32_t msg, uint32_t file, uint32_t line, uint32_t column, void
      * enum order: HC_XFER_BUFFER_ACQUIRE(104), _UNBORROW(105),
      * HC_BUFFER_ACQUIRE(106), _UNBORROW(107),
      * HC_XFER_BUFFER_REBORROW(108), HC_BUFFER_REBORROW(109),
-     * HC_SPAWN_INFO_BUFFER(110). */ \
+     * HC_SPAWN_INFO_BUFFER(110), HC_WASI_PROC_EXIT(111),
+     * HC_WASI_RANDOM_GET(112), HC_BLOCK_BUFFER_MAP(113). */ \
     LINK("wasmos", "xfer_buffer_acquire",  warp_xfer_buffer_acquire), \
     LINK("wasmos", "xfer_buffer_unborrow", warp_xfer_buffer_unborrow), \
     LINK("wasmos", "buffer_acquire",       warp_buffer_acquire), \
@@ -2598,7 +2594,8 @@ warp_env_abort(uint32_t msg, uint32_t file, uint32_t line, uint32_t column, void
     LINK("wasmos", "buffer_reborrow",      warp_buffer_reborrow), \
     LINK("wasmos", "spawn_info_buffer",    warp_spawn_info_buffer), \
     LINK("wasi_snapshot_preview1", "proc_exit",  warp_wasi_proc_exit), \
-    LINK("wasi_snapshot_preview1", "random_get", warp_wasi_random_get)
+    LINK("wasi_snapshot_preview1", "random_get", warp_wasi_random_get), \
+    LINK("wasmos", "block_buffer_map",     warp_block_buffer_map)
 
 
 vb::Span<vb::NativeSymbol const>

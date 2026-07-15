@@ -55,6 +55,12 @@ typedef struct {
     uint64_t base;
     uint64_t phys_base;
     uint64_t size;
+    /* Owned physical backing size (pages) freed at teardown.  Usually size/PAGE,
+     * but decoupled for WASM_LINEAR under the slot model: the region's VA `size`
+     * grows with the guest's linear memory, while the freeable backing stays the
+     * original placeholder (the real backing is the linmem slot, freed by its
+     * own owner).  0 = nothing to free here. */
+    uint64_t backing_pages;
     uint32_t flags;
     mem_region_type_t type;
     uint32_t shared_id;  /* valid only when type == MEM_REGION_SHARED */

@@ -336,14 +336,19 @@ mm_context_release_regions(mm_context_t *ctx)
     region = (mem_region_t *)list_first(&ctx->regions, &it);
     while (region) {
         if (region->phys_base != 0 && region->size != 0) {
-            uint64_t pages = (region->size + PAGE_SIZE - 1ULL) / PAGE_SIZE;
             if (region->type == MEM_REGION_SHARED) {
                 /* Physical pages owned by mm_shared_region_t; decrement the pin
                  * acquired in mm_shared_map, then release the logical reference. */
+                uint64_t pages = (region->size + PAGE_SIZE - 1ULL) / PAGE_SIZE;
                 pfa_free_pages(region->phys_base, pages);
                 (void)mm_shared_release(ctx->id, region->shared_id);
-            } else if (!(region->flags & MEM_REGION_FLAG_PHYS_EXTERNAL)) {
-                pfa_free_pages(region->phys_base, pages);
+            } else if (!(region->flags & MEM_REGION_FLAG_PHYS_EXTERNAL) &&
+                       region->backing_pages != 0) {
+                /* Free only the owned backing (backing_pages), which for a
+                 * WASM_LINEAR region under the slot model is the original
+                 * placeholder — NOT region->size, which tracks the (grown)
+                 * guest VA extent whose real backing the linmem slot owns. */
+                pfa_free_pages(region->phys_base, region->backing_pages);
             }
         }
         region = (mem_region_t *)list_next(&it);
@@ -770,6 +775,7 @@ int mm_context_alloc_region(mm_context_t *ctx, uint64_t pages, uint32_t flags, m
         return -1;
     }
     added->phys_base = phys;
+    added->backing_pages = pages;
     return 0;
 }
 
@@ -851,7 +857,6 @@ mm_context_bind_wasm_linear_scattered(uint32_t context_id, uint64_t kernel_base,
     mem_region_t *region = 0;
     list_iter_t it;
     uint64_t new_size = 0;
-    uint64_t old_map_bytes = 0;
 
     if (context_id == 0 || kernel_base == 0 || size == 0 ||
         (kernel_base & (PAGE_SIZE - 1ULL)) != 0) {
@@ -874,30 +879,23 @@ mm_context_bind_wasm_linear_scattered(uint32_t context_id, uint64_t kernel_base,
 
     new_size = mm_page_align_up(size);
 
-    /* Unmap the current coverage before remapping (covers both the old size and
-     * the new size). */
-    old_map_bytes = mm_page_align_up(region->size);
-    if (new_size > old_map_bytes) {
-        old_map_bytes = new_size;
-    }
-    for (uint64_t off = 0; off < old_map_bytes; off += PAGE_SIZE) {
-        (void)paging_unmap_4k_in_root(ctx->root_table, region->base + off);
-    }
-
-    /* Free the original contiguous placeholder backing the first time we take
-     * over (subsequent binds are already PHYS_EXTERNAL/scattered). */
-    if (region->phys_base != 0 && !(region->flags & MEM_REGION_FLAG_PHYS_EXTERNAL)) {
-        uint64_t old_pages = (region->size + PAGE_SIZE - 1ULL) / PAGE_SIZE;
-        if (old_pages != 0) {
-            pfa_free_pages(region->phys_base, old_pages);
-        }
-    }
-
+    /* Point the WASM_LINEAR user-VA alias at the linmem slot's scattered frames,
+     * one page at a time (unmap any prior mapping first).  The slot OWNS these
+     * frames and frees them via its own decommit at reap; this region must never
+     * free them.
+     *
+     * We deliberately do NOT free the region's original placeholder here, and do
+     * NOT mark the region PHYS_EXTERNAL.  The placeholder (phys_base /
+     * backing_pages) stays owned by the region and is freed exactly once by
+     * mm_context_release_regions at teardown.  Freeing it here mid-life returned
+     * its pages to the allocator, where a later linmem slot commit reused them,
+     * and the slot's decommit then double-freed them (a wasm3+SMP reap panic). */
     for (uint64_t off = 0; off < new_size; off += PAGE_SIZE) {
         uint64_t phys = paging_virt_to_phys(kernel_base + off) & ~(PAGE_SIZE - 1ULL);
         if (phys == 0) {
             return -1;
         }
+        (void)paging_unmap_4k_in_root(ctx->root_table, region->base + off);
         if (paging_map_4k_in_root(ctx->root_table, region->base + off, phys,
                                   MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
                                       MEM_REGION_FLAG_USER) != 0) {
@@ -905,9 +903,11 @@ mm_context_bind_wasm_linear_scattered(uint32_t context_id, uint64_t kernel_base,
         }
     }
 
-    region->phys_base = 0; /* scattered: no single contiguous base */
-    region->size = new_size;
-    region->flags |= MEM_REGION_FLAG_PHYS_EXTERNAL;
+    /* Grow the VA extent for bounds checks; backing_pages stays the placeholder
+     * count so release frees only that, never the slot-owned live pages. */
+    if (new_size > region->size) {
+        region->size = new_size;
+    }
     return 0;
 }
 

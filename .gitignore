@@ -9,3 +9,4 @@ __pycache__/
 .venv/
 build-off/
 .cache/
+others/

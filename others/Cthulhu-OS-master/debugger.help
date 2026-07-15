@@ -1,3 +1,0 @@
-main info bfds
-remove-symbol-file /usr2/fast/projects/pikokernel/cthulhuos/build/init
-add-symbol-file /usr2/fast/projects/pikokernel/cthulhuos/build/framebuffer 0x400100

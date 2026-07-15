@@ -1,6 +1,0 @@
-{
-    "$schema": "https://schemas.cute.engineering/stable/cutekit.manifest.component.v1",
-    "type": "lib",
-    "id": "arch-x86",
-    "description": "X86 generic low level library"
-}

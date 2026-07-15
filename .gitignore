@@ -6,6 +6,7 @@ __pycache__/
 .zig-cache-global/
 .codex/local-paths.md
 .config
+.config.old
 .venv/
 build-off/
 .cache/

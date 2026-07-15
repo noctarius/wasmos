@@ -84,8 +84,10 @@ isr_nmi:
 isr_exception_\num:
     # Simple exceptions currently panic immediately; richer recovery is only
     # implemented for the faults that already have kernel-side handlers.
+    PUSH_REGS
+    movq %rsp, %rsi
     mov $\num, %rdi
-    call x86_exception_panic
+    call x86_exception_panic_frame
 1:
     cli
     hlt
@@ -100,6 +102,7 @@ isr_exception_0:
     call x86_user_exception_handler
     test %eax, %eax
     jz 2f
+    PUSH_REGS
     mov %rsp, %rsi
     mov $0, %rdi
     call x86_exception_panic_frame
@@ -135,6 +138,7 @@ DECL_EXC 2
 .global isr_exception_3
 isr_exception_3:
     pushq $0
+    PUSH_REGS
     mov %rsp, %rsi
     mov $3, %rdi
     call x86_exception_panic_frame
@@ -151,6 +155,7 @@ isr_exception_4:
     call x86_user_exception_handler
     test %eax, %eax
     jz 2f
+    PUSH_REGS
     mov %rsp, %rsi
     mov $4, %rdi
     call x86_exception_panic_frame
@@ -171,6 +176,7 @@ isr_exception_6:
     call x86_user_exception_handler
     test %eax, %eax
     jz 2f
+    PUSH_REGS
     mov %rsp, %rsi
     mov $6, %rdi
     call x86_exception_panic_frame
@@ -190,6 +196,7 @@ isr_exception_7:
     call x86_user_exception_handler
     test %eax, %eax
     jz 2f
+    PUSH_REGS
     mov %rsp, %rsi
     mov $7, %rdi
     call x86_exception_panic_frame
@@ -211,6 +218,7 @@ isr_exception_12:
     call x86_user_exception_handler
     test %eax, %eax
     jz 2f
+    PUSH_REGS
     mov %rsp, %rsi
     mov $12, %rdi
     call x86_exception_panic_frame
@@ -229,6 +237,7 @@ isr_exception_13:
     call x86_user_exception_handler
     test %eax, %eax
     jz 2f
+    PUSH_REGS
     mov %rsp, %rsi
     mov $13, %rdi
     call x86_exception_panic_frame
@@ -252,7 +261,7 @@ isr_exception_14:
     addq $8, %rsp
     test %eax, %eax
     jz 2f
-    leaq 120(%rsp), %rsi
+    movq %rsp, %rsi
     mov $14, %rdi
     call x86_exception_panic_frame
 2:
@@ -269,6 +278,7 @@ isr_exception_17:
     call x86_user_exception_handler
     test %eax, %eax
     jz 2f
+    PUSH_REGS
     mov %rsp, %rsi
     mov $17, %rdi
     call x86_exception_panic_frame

@@ -6,9 +6,11 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable
 
 
@@ -107,6 +109,56 @@ def default_kernel_path() -> str:
     return os.path.join("build", "kernel.elf")
 
 
+def read_cmake_cache(cache_path: Path) -> dict[str, str]:
+    data: dict[str, str] = {}
+    if not cache_path.exists():
+        return data
+
+    for raw_line in cache_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("//") or line.startswith("#"):
+            continue
+        if ":" not in line or "=" not in line:
+            continue
+        key, rest = line.split(":", 1)
+        _kind, value = rest.split("=", 1)
+        data[key] = value
+    return data
+
+
+def discover_addr2line(requested: str, kernel: str) -> str | None:
+    if requested:
+        if os.path.isabs(requested) or os.path.dirname(requested):
+            return requested if os.path.exists(requested) else None
+        found = shutil.which(requested)
+        if found:
+            return found
+
+    kernel_path = Path(kernel).resolve()
+    build_dir = kernel_path.parent
+    cache = read_cmake_cache(build_dir / "CMakeCache.txt")
+    clang_path = cache.get("CLANG", "")
+
+    candidates: list[Path] = []
+    if clang_path:
+        candidates.append(Path(clang_path).resolve().parent / "llvm-addr2line")
+        candidates.append(Path(clang_path).resolve().parent / "addr2line")
+    candidates.extend(
+        [
+            Path("/opt/homebrew/opt/llvm/bin/llvm-addr2line"),
+            Path("/usr/local/opt/llvm/bin/llvm-addr2line"),
+            Path("/opt/homebrew/bin/llvm-addr2line"),
+            Path("/usr/local/bin/llvm-addr2line"),
+        ]
+    )
+
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+
+    return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Resolve WASMOS kernel panic RIP/backtrace addresses to file:line."
@@ -124,8 +176,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--addr2line",
-        default=os.environ.get("LLVM_ADDR2LINE", "llvm-addr2line"),
-        help="addr2line-compatible tool to use (default: llvm-addr2line or $LLVM_ADDR2LINE)",
+        default=os.environ.get("LLVM_ADDR2LINE", ""),
+        help="addr2line-compatible tool to use (default: auto-discover from CMakeCache/LLVM install)",
     )
     args = parser.parse_args()
 
@@ -139,8 +191,16 @@ def main() -> int:
         print("no panic addresses found", file=sys.stderr)
         return 1
 
+    addr2line = discover_addr2line(args.addr2line, args.kernel)
+    if not addr2line:
+        print(
+            "failed to locate llvm-addr2line; pass --addr2line or set LLVM_ADDR2LINE",
+            file=sys.stderr,
+        )
+        return 1
+
     try:
-        resolved = resolve_addresses(args.addr2line, args.kernel, unique_addresses(entries))
+        resolved = resolve_addresses(addr2line, args.kernel, unique_addresses(entries))
     except (OSError, subprocess.CalledProcessError, RuntimeError) as exc:
         print(f"failed to resolve addresses: {exc}", file=sys.stderr)
         return 1

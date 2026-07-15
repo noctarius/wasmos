@@ -87,6 +87,60 @@ class DecodeKernelPanicScriptTest(unittest.TestCase):
                 result.stdout,
             )
 
+    def test_discovers_addr2line_from_cmake_cache(self):
+        script = Path("scripts/decode_kernel_panic.py")
+        self.assertTrue(script.exists(), "decode_kernel_panic.py must exist")
+
+        panic_log = "rip=ffffffff80201bb4\n"
+
+        with tempfile.TemporaryDirectory() as td:
+            td_path = Path(td)
+            llvm_bin = td_path / "llvm-bin"
+            llvm_bin.mkdir()
+
+            kernel = td_path / "build" / "kernel.elf"
+            kernel.parent.mkdir()
+            kernel.write_bytes(b"present")
+            (kernel.parent / "CMakeCache.txt").write_text(
+                f"CLANG:STRING={llvm_bin / 'clang'}\n",
+                encoding="utf-8",
+            )
+            (llvm_bin / "clang").write_text("", encoding="utf-8")
+
+            fake_addr2line = llvm_bin / "llvm-addr2line"
+            fake_addr2line.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/bin/sh
+                    echo "panic_verify_level3 at src/kernel/kernel.c:45"
+                    """
+                ),
+                encoding="utf-8",
+            )
+            fake_addr2line.chmod(
+                fake_addr2line.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH
+            )
+
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--kernel",
+                    str(kernel),
+                ],
+                input=panic_log,
+                text=True,
+                capture_output=True,
+                check=False,
+                env={**os.environ, "PATH": "", "PYTHONDONTWRITEBYTECODE": "1"},
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(
+                "cpu? rip 0xffffffff80201bb4 -> panic_verify_level3 at src/kernel/kernel.c:45",
+                result.stdout,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

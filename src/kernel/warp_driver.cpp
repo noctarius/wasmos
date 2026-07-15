@@ -599,10 +599,15 @@ warp_r3_memory_helper(uint64_t min_linmem_len,
 static void
 warp_linmem_reserve_hint_for(uint32_t pid, uint64_t initial_linmem)
 {
-    /* Any nonzero value arms the hint; use the declared initial size so a
-     * zero-heap module (unusual) does not falsely arm it. */
-    if (initial_linmem == 0) {
-        initial_linmem = 0x10000; /* 64 KiB floor: still just a "linmem pending" flag */
+    /* Generous default: back every WARP app with a large reserved window so it
+     * can grow on demand and host zero-copy overlays, rather than the tiny
+     * per-driver heap declared in the manifest.  This only sizes the reserved-VA
+     * placement/scan window inside the fixed WARP_LINMEM_VA_STRIDE slot; physical
+     * pages are still committed lazily and bounded by kPhysLimit.  Mirrors the
+     * wasm3 side, where InitMemory floors maxPages to the 2 GiB slot. */
+    const uint64_t floor = 512ULL * 1024ULL * 1024ULL; /* 512 MiB */
+    if (initial_linmem < floor) {
+        initial_linmem = floor;
     }
     warp_linmem_reserve_hint(pid, initial_linmem);
 }

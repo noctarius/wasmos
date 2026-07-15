@@ -411,6 +411,17 @@ mm_ensure_user_range_mapped(mm_context_t *ctx, uint64_t user_addr, uint64_t size
             return -1;
         }
         uint64_t page_base = cur & ~(PAGE_SIZE - 1ULL);
+        /* Idempotent: leave any page that is already mapped alone.  For a
+         * WASM_LINEAR region under the unified linmem model the live backing is
+         * the scattered linmem slot (and any overlay physical frames), not the
+         * region's contiguous placeholder phys_base; remapping to the
+         * placeholder here would silently detach the interpreter's window from
+         * its real pages.  Only genuinely unmapped pages fall back to the
+         * placeholder (lazy backing for stack/heap/IPC regions). */
+        if (paging_virt_to_phys_in_root(ctx->root_table, page_base) != 0) {
+            cur = page_base + PAGE_SIZE;
+            continue;
+        }
         uint64_t phys_page = region->phys_base + (page_base - region->base);
         if (paging_map_4k_in_root(ctx->root_table, page_base, phys_page, region->flags) < 0) {
             return -1;
@@ -851,15 +862,16 @@ mm_context_rebind_wasm_linear(uint32_t context_id, uint64_t phys_base, uint64_t 
  * owns the physical pages, so the region is marked PHYS_EXTERNAL (phys_base=0)
  * and mm_context_destroy will not free them. */
 int
-mm_context_bind_wasm_linear_scattered(uint32_t context_id, uint64_t kernel_base, uint64_t size)
+mm_context_bind_wasm_linear_scattered(uint32_t context_id, uint64_t slot_va_base,
+                                      uint64_t from_page, uint64_t to_page)
 {
     mm_context_t *ctx = 0;
     mem_region_t *region = 0;
     list_iter_t it;
     uint64_t new_size = 0;
 
-    if (context_id == 0 || kernel_base == 0 || size == 0 ||
-        (kernel_base & (PAGE_SIZE - 1ULL)) != 0) {
+    if (context_id == 0 || slot_va_base == 0 || to_page <= from_page ||
+        (slot_va_base & (PAGE_SIZE - 1ULL)) != 0) {
         return -1;
     }
     ctx = mm_context_get(context_id);
@@ -877,12 +889,14 @@ mm_context_bind_wasm_linear_scattered(uint32_t context_id, uint64_t kernel_base,
         return -1;
     }
 
-    new_size = mm_page_align_up(size);
+    new_size = to_page * PAGE_SIZE;
 
-    /* Point the WASM_LINEAR user-VA alias at the linmem slot's scattered frames,
-     * one page at a time (unmap any prior mapping first).  The slot OWNS these
-     * frames and frees them via its own decommit at reap; this region must never
-     * free them.
+    /* Point the WASM_LINEAR user-VA window at the linmem slot's scattered frames,
+     * page for page (region page P -> slot frame P), for the [from_page, to_page)
+     * tail only.  Binding just the freshly committed tail keeps a grow from
+     * clobbering overlays (shmem / framebuffer / DMA / net ring) that earlier
+     * hostcalls mapped over lower pages.  The slot OWNS these frames and frees
+     * them via its own decommit at reap; this region must never free them.
      *
      * We deliberately do NOT free the region's original placeholder here, and do
      * NOT mark the region PHYS_EXTERNAL.  The placeholder (phys_base /
@@ -890,8 +904,9 @@ mm_context_bind_wasm_linear_scattered(uint32_t context_id, uint64_t kernel_base,
      * mm_context_release_regions at teardown.  Freeing it here mid-life returned
      * its pages to the allocator, where a later linmem slot commit reused them,
      * and the slot's decommit then double-freed them (a wasm3+SMP reap panic). */
-    for (uint64_t off = 0; off < new_size; off += PAGE_SIZE) {
-        uint64_t phys = paging_virt_to_phys(kernel_base + off) & ~(PAGE_SIZE - 1ULL);
+    for (uint64_t p = from_page; p < to_page; ++p) {
+        uint64_t off = p * PAGE_SIZE;
+        uint64_t phys = paging_virt_to_phys(slot_va_base + off) & ~(PAGE_SIZE - 1ULL);
         if (phys == 0) {
             return -1;
         }
@@ -909,6 +924,12 @@ mm_context_bind_wasm_linear_scattered(uint32_t context_id, uint64_t kernel_base,
         region->size = new_size;
     }
     return 0;
+}
+
+uint64_t
+mm_user_wasm_linear_base(void)
+{
+    return MM_USER_LINEAR_BASE;
 }
 
 static mm_context_t *mm_context_get_locked(uint32_t id) {

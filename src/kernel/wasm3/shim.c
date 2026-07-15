@@ -10,6 +10,7 @@
 #include "process.h"
 #include "physmem.h"
 #include "paging.h"
+#include "memory.h"
 #include "shim.h"
 #include "linmem_slots.h"
 #include "sync/spinlock.h"
@@ -577,13 +578,29 @@ wasm3_heap_query_phys(uint32_t pid, const void *ptr, uint64_t size, uint64_t *ou
  * driven from the vendored wasm3 InitMemory/ResizeMemory/Runtime_Release path;
  * the free routing below + wasm3_heap_release make teardown idempotent. */
 
+/* Resolve the context that owns this heap slot's process (needed to bind the
+ * user-VA linear-memory window). */
+static uint32_t
+wasm3_slot_context_id(const wasm3_heap_slot_t *slot)
+{
+    if (!slot || slot->pid == 0) {
+        return 0;
+    }
+    process_t *proc = process_get(slot->pid);
+    return proc ? proc->context_id : 0;
+}
+
+/* Under the unified linmem model the block pointer handed to the interpreter is
+ * a USER VA in the PML4[1] linear window (mm_user_wasm_linear_base()), not the
+ * kernel slot alias.  A block never spans more than one slot's worth of VA, so
+ * the window range is a cheap pre-filter; free()/realloc() then exact-match the
+ * per-process slot->linmem_block. */
 static int
 wasm3_ptr_in_linmem_slot(const void *p)
 {
     uint64_t v = (uint64_t)(uintptr_t)p;
-    uint64_t lo = WARP_LINMEM_VA_BASE;
-    uint64_t hi = WARP_LINMEM_VA_BASE +
-                  (uint64_t)linmem_slot_count() * WARP_LINMEM_VA_STRIDE;
+    uint64_t lo = mm_user_wasm_linear_base();
+    uint64_t hi = lo + WARP_LINMEM_VA_STRIDE;
     return v >= lo && v < hi;
 }
 
@@ -620,16 +637,22 @@ wasm3_linmem_reserve(size_t total_bytes, size_t max_bytes, size_t data_offset)
         ksync_spinlock_unlock(&g_wasm3_heap_lock);
         return 0;
     }
+    uint32_t context_id = wasm3_slot_context_id(slot);
+    if (context_id == 0) {
+        ksync_spinlock_unlock(&g_wasm3_heap_lock);
+        return 0;
+    }
     int s = linmem_slot_alloc();
     if (s < 0) {
         ksync_spinlock_unlock(&g_wasm3_heap_lock);
         return 0;
     }
     uint64_t va_base = linmem_slot_va((uint32_t)s);
-    /* Place the block so m3MemData (block + data_offset) starts at slot page 1;
-     * the header occupies the tail of page 0. */
-    uint64_t block     = va_base + 4096u - (uint64_t)data_offset;
-    uint64_t need_pages = ((block + total_bytes) - va_base + 4095u) / 4096u;
+    /* Place the block so m3MemData (block + data_offset) starts at page 1; the
+     * header occupies the tail of page 0.  Guest offset 0 is therefore at region
+     * page 1, and the header page (page 0) is part of the committed range. */
+    uint64_t block_off  = 4096u - (uint64_t)data_offset;
+    uint64_t need_pages = (block_off + (uint64_t)total_bytes + 4095u) / 4096u;
     uint64_t slot_pages = WARP_LINMEM_VA_STRIDE / 4096u;
     uint64_t max_pages  = ((uint64_t)max_bytes + 4095u) / 4096u + 1u; /* +header page */
     if (max_pages > slot_pages) {
@@ -641,13 +664,24 @@ wasm3_linmem_reserve(size_t total_bytes, size_t max_bytes, size_t data_offset)
         ksync_spinlock_unlock(&g_wasm3_heap_lock);
         return 0;
     }
+    /* Dual-map: the interpreter reads the USER-VA window (PML4[1]); bind it to
+     * the slot's freshly committed frames (region page P -> slot frame P) so the
+     * interpreter, hostcall copies and zero-copy overlays all share one view.
+     * The kernel slot alias stays live for cross-process / hostcall access. */
+    if (mm_context_bind_wasm_linear_scattered(context_id, va_base, 0, need_pages) != 0) {
+        linmem_slot_decommit(va_base, need_pages);
+        linmem_slot_release((uint32_t)s);
+        ksync_spinlock_unlock(&g_wasm3_heap_lock);
+        return 0;
+    }
+    uint64_t user_block = mm_user_wasm_linear_base() + block_off;
     slot->linmem_slot            = (uint32_t)s;
-    slot->linmem_va_base         = va_base;
-    slot->linmem_block           = block;
+    slot->linmem_va_base         = va_base;      /* slot VA: decommit + bind source */
+    slot->linmem_block           = user_block;   /* user VA: interpreter's mem_base */
     slot->linmem_committed_pages = need_pages;
     slot->linmem_max_pages       = max_pages;
     ksync_spinlock_unlock(&g_wasm3_heap_lock);
-    return (void *)(uintptr_t)block;
+    return (void *)(uintptr_t)user_block;
 }
 
 /* Grow the slot-backed block in place to `new_total_bytes` (commit tail pages).
@@ -665,19 +699,35 @@ wasm3_linmem_grow(void *blockp, size_t new_total_bytes)
         ksync_spinlock_unlock(&g_wasm3_heap_lock);
         return 0;
     }
-    uint64_t need_pages =
-        ((slot->linmem_block + new_total_bytes) - slot->linmem_va_base + 4095u) / 4096u;
+    uint32_t context_id = wasm3_slot_context_id(slot);
+    if (context_id == 0) {
+        ksync_spinlock_unlock(&g_wasm3_heap_lock);
+        return 0;
+    }
+    /* block_off (header tail of page 0) is measured against the USER window base
+     * now that linmem_block is the user VA. */
+    uint64_t block_off = slot->linmem_block - mm_user_wasm_linear_base();
+    uint64_t need_pages = (block_off + (uint64_t)new_total_bytes + 4095u) / 4096u;
     if (need_pages > slot->linmem_max_pages) {
         ksync_spinlock_unlock(&g_wasm3_heap_lock);
         return 0;
     }
     if (need_pages > slot->linmem_committed_pages) {
-        if (linmem_slot_commit(slot->linmem_va_base,
-                               slot->linmem_committed_pages, need_pages) != 0) {
+        uint64_t from_page = slot->linmem_committed_pages;
+        if (linmem_slot_commit(slot->linmem_va_base, from_page, need_pages) != 0) {
             ksync_spinlock_unlock(&g_wasm3_heap_lock);
             return 0;
         }
+        /* Advance committed before binding so a bind failure still frees the
+         * just-committed frames at teardown (decommit covers all committed). */
         slot->linmem_committed_pages = need_pages;
+        /* Bind ONLY the freshly committed tail into the user window; lower pages
+         * keep their bindings and any overlays mapped over them. */
+        if (mm_context_bind_wasm_linear_scattered(context_id, slot->linmem_va_base,
+                                                  from_page, need_pages) != 0) {
+            ksync_spinlock_unlock(&g_wasm3_heap_lock);
+            return 0;
+        }
     }
     ksync_spinlock_unlock(&g_wasm3_heap_lock);
     return blockp;

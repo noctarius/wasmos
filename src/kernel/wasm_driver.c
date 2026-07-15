@@ -6,6 +6,8 @@
 #include "klog.h"
 #include "process.h"
 #include "serial.h"
+#include "memory.h"
+#include "paging.h"
 #include "wasm3/link.h"
 #include "wasm3/shim.h"
 #include "thread.h"
@@ -340,7 +342,24 @@ wasm_driver_start(wasm_driver_t *driver,
         return -1;
     }
 
+    /* Linear memory now executes from the owner's user-VA window (PML4[1]):
+     * m3_LoadModule -> InitMemory reserves it and writes the M3MemoryHeader and
+     * data segments through that VA, so the owner address space must be ACTIVE
+     * for the load.  Kernel-hosted drivers (e.g. chardev) run wasm_driver_start
+     * from the kernel CR3, where PML4[1] is unmapped, so switch to the owner
+     * root for the load and restore afterward.  No save/restore race: the
+     * enclosing wasm_driver_enter_runtime disabled preemption and the load path
+     * does not block. */
+    uint64_t prev_root = paging_get_current_root_table();
+    uint64_t owner_root = mm_context_root_table(owner_context_id);
+    int switched_root = (owner_root != 0 && owner_root != prev_root);
+    if (switched_root) {
+        paging_switch_root(owner_root);
+    }
     res = m3_LoadModule(driver->runtime, driver->module);
+    if (switched_root) {
+        paging_switch_root(prev_root);
+    }
     if (res) {
         log_wasm3_error("[wasm-driver] load failed: ", res, driver->runtime);
         m3_FreeModule(driver->module);
@@ -352,21 +371,11 @@ wasm_driver_start(wasm_driver_t *driver,
         wasm_driver_leave_runtime(previous_pid);
         return -1;
     }
-    /* Rebind the placeholder wasm-linear region to the runtime's actual heap
-     * backing before the first hostcall, so early startup-buffer reads can
-     * validate and fault-map large static/data addresses correctly. */
-    if (wasm3_sync_linear_memory_region(driver->owner_pid,
-                                        owner_context_id,
-                                        driver->runtime) != 0) {
-        klog_write("[wasm-driver] linear memory sync failed\n");
-        m3_FreeRuntime(driver->runtime);
-        m3_FreeEnvironment(driver->env);
-        driver->runtime = 0;
-        driver->env = 0;
-        driver->module = 0;
-        wasm_driver_leave_runtime(previous_pid);
-        return -1;
-    }
+    /* Linear memory is bound to the owner's user-VA window when the block is
+     * reserved during m3_LoadModule (wasm3_linmem_reserve) and re-bound per
+     * committed tail on grow, so no post-load rebind is needed here.  A rebind
+     * would also fault: m3_GetMemory dereferences the header through the user VA,
+     * which is only mapped under the owner CR3 (this runs under the caller's). */
 
     if (wasm3_link_wasmos(driver->module) != 0 || wasm3_link_env(driver->module) != 0) {
         klog_write("[wasm-driver] link failed\n");

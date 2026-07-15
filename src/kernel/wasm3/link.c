@@ -548,10 +548,18 @@ wasm_user_va_from_offset(uint32_t context_id,
     }
     uint64_t off = (uint64_t)offset;
     uint64_t len = (uint64_t)span;
-    if (off > linear.size || len > (linear.size - off)) {
+    /* Guest offset 0 lives at region page 1: page 0 holds the M3MemoryHeader
+     * (the interpreter's `mallocated`).  Shift the user VA by one page and bound
+     * against the data area (region size minus the header page) so overlays,
+     * copy helpers and the interpreter all resolve the same address. */
+    if (linear.size < 0x1000ULL) {
         return -1;
     }
-    *out_user_va = linear.base + off;
+    uint64_t data_size = linear.size - 0x1000ULL;
+    if (off > data_size || len > (data_size - off)) {
+        return -1;
+    }
+    *out_user_va = linear.base + 0x1000ULL + off;
     return 0;
 }
 
@@ -561,18 +569,19 @@ wasm3_sync_linear_memory_region_binding(uint32_t pid,
                                         const uint8_t *mem_base,
                                         uint64_t mem_size)
 {
-    if (pid == 0 || context_id == 0 || !mem_base || mem_size == 0) {
+    (void)mem_base;
+    (void)mem_size;
+    if (pid == 0 || context_id == 0) {
         return -1;
     }
-    if (((uintptr_t)mem_base & 0xFFFULL) != 0) {
-        return -1;
-    }
-    /* Linear memory lives in a reserved-VA linmem slot with scattered physical
-     * backing (src/kernel/wasm3/shim.c), so bind the user-region alias per page
-     * to the slot's frames rather than to a single contiguous phys_base. */
-    return mm_context_bind_wasm_linear_scattered(context_id,
-                                                 (uint64_t)(uintptr_t)mem_base,
-                                                 mem_size);
+    /* The user-VA linear window is bound to the linmem slot's scattered frames
+     * when the block is reserved, and again for each freshly committed tail on
+     * grow (wasm3_linmem_reserve/_grow in shim.c).  Every linear-memory size
+     * change routes through those, so the binding is always current.  Re-binding
+     * the whole window here per hostcall would clobber overlays (shmem /
+     * framebuffer / DMA / net ring) mapped into it, so this is now a no-op kept
+     * for the existing call sites. */
+    return 0;
 }
 
 int

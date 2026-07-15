@@ -132,7 +132,19 @@ int mm_shared_release(uint32_t owner_context_id, uint32_t id);
 /* Map an arbitrary physical range into a context's virtual space (MMIO use). */
 int mm_context_map_physical(uint32_t context_id, uint64_t virt, uint64_t phys, uint64_t size, uint32_t flags);
 int mm_context_rebind_wasm_linear(uint32_t context_id, uint64_t phys_base, uint64_t size);
-int mm_context_bind_wasm_linear_scattered(uint32_t context_id, uint64_t kernel_base, uint64_t size);
+/* Bind the WASM_LINEAR user-region page range [from_page, to_page) to the
+ * physical frames backing the linmem slot at slot_va_base (region page P maps
+ * the frame under slot_va_base + P*PAGE, header page 0 included).  from_page/
+ * to_page let a grow bind only the freshly committed tail so pre-existing
+ * overlays (shmem / framebuffer / DMA / net ring) mapped into lower pages are
+ * never clobbered.  Grows region->size to cover to_page. */
+int mm_context_bind_wasm_linear_scattered(uint32_t context_id, uint64_t slot_va_base,
+                                          uint64_t from_page, uint64_t to_page);
+
+/* VA base of the per-process WASM linear-memory execution window (PML4[1]).
+ * This is the user-VA view the interpreter reads under the unified linmem
+ * model; it is dual-mapped with the linmem slot's kernel alias. */
+uint64_t mm_user_wasm_linear_base(void);
 
 /* Safe user-memory copy helpers — validate the user VA range before touching it. */
 int mm_copy_from_user(uint32_t context_id, void *dst, uint64_t user_src, uint64_t size);

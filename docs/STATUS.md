@@ -586,6 +586,34 @@
   ARP/ICMP round-trip over SLIRP, then `NET_IPC_*` sockets; multi-driver
   discovery via `svc_lookup_class("net.ifc")`.
 
+- Socket data-plane ring transport, foundation landed: a general
+  single-producer/single-consumer byte-ring core, header-only libsys library
+  `src/libsys/wasm/include/wasmos/ringbuf.h`, modeled structurally on the vring
+  core. It is the base for the per-socket shared-memory rings in docs/22 (socket
+  payload travels through app-owned rings, not IPC messages), but is
+  deliberately general and networking-agnostic: pure ring logic over a
+  caller-provided region + a notify callback, no IPC/buffer-object/transport
+  knowledge. It is NOT unified with vring by design — vring is the virtio
+  split-virtqueue (a spec-fixed descriptor ring whose elements point at separate
+  DMA buffers, consumed by a device), whereas ringbuf is a data ring whose
+  payload lives inside the ring and whose two ends are both our own software.
+  Fixed 64-byte header (magic `WRNG`, capacity, flags, producer/consumer indices
+  kept apart) + a power-of-two data region; free-running u32 indices (index with
+  `pos & (capacity-1)`, 2^32 wrap harmless, no read==write ambiguity); directional
+  acquire/release ordering. API: init/attach + `bytes_for()` sizing; byte stream
+  write/read/peek/skip with wraparound and free/used flow control; length-prefixed
+  datagram records published all-or-nothing; doorbell empty→non-empty edge helpers
+  (lost-wakeup re-check left to the IPC/wait layer); flags word. Covered by
+  `tests/unit/test_ringbuf.c` (init/attach validation, flow control/overrun,
+  wraparound payload, 2^32 index wrap, datagram framing incl. undersized-dst and
+  too-big-record, doorbell edges, flags), wired into `run-kernel-unit-tests`. No
+  boot-image target includes the header yet, so boot behavior is unchanged.
+  Verified: `run-kernel-unit-tests` green; `run-qemu-test` green (WARP, boots to
+  CLI). Next: acquire two xfer-buffer-backed rings on the app side and overlay
+  them into linmem (the pinned shared-window overlay proven by the zero-copy
+  linmem work), borrow both to net-stack, then wire the net-stack control plane
+  (`SOCKET_OPEN` carrying ring `buffer_id`s) + doorbells.
+
 - Two scheduler bugs affecting kernel worker threads are fixed:
   (1) `proc->ctx.rsp` was initialized to the process stack top at spawn time,
   causing the scheduler to treat every fresh worker as "has blocked context to

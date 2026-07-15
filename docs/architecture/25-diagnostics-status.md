@@ -238,6 +238,20 @@ this format:
 If `RIP` falls within `__kernel_start..__kernel_end`, 16 bytes at `RIP` are
 also dumped via `serial_dump_bytes_unlocked`.
 
+#### Host-side File/Line Decoding
+
+`scripts/decode_kernel_panic.py` is the intended lightweight follow-up step
+when the kernel panic already includes `rip=` / `ret=` addresses and symbol
+names, but a developer wants source file and line information. The helper:
+
+- reads a panic log from stdin or a file
+- extracts panic `rip=` and backtrace `ret=` addresses
+- runs `llvm-addr2line -e build/kernel.elf -f -C -p ...`
+- prints a compact `cpuN frame[M] <addr> -> function at file:line` summary
+
+This keeps the in-kernel panic path limited to frame-pointer walking plus a
+small symbol table, while leaving DWARF-backed file/line lookup on the host.
+
 #### Framebuffer Panic Screen
 
 `panic_render_screen()` renders a text-mode panic display via `framebuffer_panic_begin()` /

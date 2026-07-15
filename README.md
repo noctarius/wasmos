@@ -156,6 +156,14 @@ cmake --build build --target run-qemu-ring3-test
 cmake --build build --target run-qemu-ring3-threading-test
 ```
 
+Kernel panic address decoding:
+```sh
+python3 scripts/decode_kernel_panic.py /path/to/panic.log
+```
+It resolves `rip=` and `ret=` addresses against `build/kernel.elf` with
+`llvm-addr2line`, so panic logs can be mapped back to source locations without
+embedding DWARF readers in the kernel.
+
 Target summary:
 - `run-qemu`: normal boot in QEMU
 - `run-qemu-debug`: paused boot for GDB attach

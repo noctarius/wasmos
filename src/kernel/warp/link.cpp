@@ -1161,14 +1161,20 @@ static uint32_t
 warp_initfs_entry_copy(uint32_t index, uint32_t out_off, uint32_t len, uint32_t offset, void *ctx_)
 {
     auto *ctx = warp_call_ctx(ctx_);
+    if ((int32_t)index < 0 || (int32_t)len <= 0 || (int32_t)offset < 0) return (uint32_t)-1;
     wasmos_initfs_entry_t e;
     if (warp_initfs_entry_at(index, &e) != 0) return (uint32_t)-1;
-    if (offset + len > e.size) return (uint32_t)-1;
-    uint8_t *out = warp_mem(ctx, out_off, len);
+    /* Match wasm3: at/after EOF returns 0, and a trailing chunk longer than the
+     * remainder is clamped and the short count returned (not rejected). */
+    if (offset >= e.size) return 0;
+    uint32_t copy_len = len;
+    uint32_t available = e.size - offset;
+    if (copy_len > available) copy_len = available;
+    uint8_t *out = warp_mem(ctx, out_off, copy_len);
     if (!out) return (uint32_t)-1;
     const uint8_t *src = static_cast<const uint8_t *>(g_warp_boot_info->initfs) + e.offset + offset;
-    __builtin_memcpy(out, src, len);
-    return len;   /* bytes copied, matches wasm3 which returns (int32_t)len */
+    __builtin_memcpy(out, src, copy_len);
+    return copy_len;   /* bytes copied, matches wasm3 which returns (int32_t)copy_len */
 }
 
 // ---------------------------------------------------------------------------
@@ -2325,6 +2331,20 @@ warp_boot_config_copy(uint32_t buf_off, uint32_t len, uint32_t offset, void *ctx
 // initfs_find_path
 // ---------------------------------------------------------------------------
 
+/* ASCII case-insensitive string equality — matches wasm3's strcasecmp-based
+ * initfs path matching so both runtimes resolve the same names. */
+static bool
+warp_path_ieq(const char *a, const char *b)
+{
+    for (;; ++a, ++b) {
+        char ca = *a, cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca = (char)(ca + 32);
+        if (cb >= 'A' && cb <= 'Z') cb = (char)(cb + 32);
+        if (ca != cb) return false;
+        if (ca == '\0') return true;
+    }
+}
+
 static uint32_t
 warp_initfs_find_path(uint32_t path_off, uint32_t path_len, void *ctx_)
 {
@@ -2349,11 +2369,11 @@ warp_initfs_find_path(uint32_t path_off, uint32_t path_len, void *ctx_)
     for (uint32_t i = 0; i < hdr->entry_count; ++i) {
         wasmos_initfs_entry_t e;
         if (warp_initfs_entry_at(i, &e) != 0) continue;
-        if (__builtin_strcmp(e.path, &local_path[ri]) == 0) return i;
+        if (warp_path_ieq(e.path, &local_path[ri])) return i;
         const char *bn = e.path;
         for (uint32_t j = 0; e.path[j]; ++j)
             if (e.path[j] == '/') bn = &e.path[j+1];
-        if (__builtin_strcmp(bn, &local_path[ri]) == 0) return i;
+        if (warp_path_ieq(bn, &local_path[ri])) return i;
     }
     return (uint32_t)-1;
 }
@@ -2629,6 +2649,13 @@ warp_release_pid(uint32_t pid)
     (void)hashmap_remove(&g_ctx_map, pid);
     (void)hashmap_remove(&g_ipc_last_map, pid);
     (void)hashmap_remove(&g_fs_peer_map, pid);
+    /* Reclaim the per-pid block buffer pages before dropping the slot, else the
+     * 2 pages leak on every process exit. */
+    if (auto *bslot = static_cast<WarpBlockSlot *>(hashmap_get(&g_block_map, pid))) {
+        if (bslot->phys) {
+            pfa_free_pages(bslot->phys, WARP_BLOCK_BUF_PAGES);
+        }
+    }
     (void)hashmap_remove(&g_block_map, pid);
     /* Per-pid WARP heap config (warp/shim.cpp). */
     warp_heap_release(pid);

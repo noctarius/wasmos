@@ -39,7 +39,11 @@ typedef struct {
 typedef struct {
     uint32_t pid;
     uint64_t buffer_phys;
+    uint32_t map_offset;   /* linmem offset of the zero-copy overlay, 0 if unmapped */
 } wasm_block_slot_t;
+
+#define WASM_BLOCK_BUFFER_PAGES 2u
+#define WASM_BLOCK_BUFFER_SIZE_BYTES (WASM_BLOCK_BUFFER_PAGES * 4096u)
 
 typedef struct {
     uint32_t pid;
@@ -129,35 +133,12 @@ wasm_copy_to_user_bytes(uint32_t context_id,
 }
 
 static int
-wasm_copy_to_user_sync_views(uint32_t context_id,
-                             uint64_t user_dst,
-                             void *host_dst,
-                             const void *src,
-                             uint32_t len)
+wasm_copy_from_user_bytes(uint32_t context_id,
+                          uint64_t user_src,
+                          void *dst,
+                          uint32_t len)
 {
-    if (!host_dst || !src) {
-        return -1;
-    }
-    if (wasm_copy_to_user_bytes(context_id, user_dst, src, len) != 0) {
-        return -1;
-    }
-    /* TODO: Remove host-view sync once linear-memory ownership converges.
-     * Ring3 migration note:
-     * wasm3 host pointers can diverge from validated user mappings in some
-     * early-output paths; keep both views synchronized until linear-memory
-     * ownership is fully unified. */
-    memcpy(host_dst, src, (size_t)len);
-    return 0;
-}
-
-static int
-wasm_copy_from_user_sync_views(uint32_t context_id,
-                               uint64_t user_src,
-                               const void *host_src,
-                               void *dst,
-                               uint32_t len)
-{
-    if (!host_src || !dst) {
+    if (!dst) {
         return -1;
     }
     if (len == 0) {
@@ -165,14 +146,6 @@ wasm_copy_from_user_sync_views(uint32_t context_id,
     }
     if (mm_copy_from_user(context_id, dst, user_src, (uint64_t)len) != 0) {
         return -1;
-    }
-    /* TODO: Remove host-view reconciliation once linear-memory ownership
-     * converges and user copy helpers are the single source of truth. */
-    if (memcmp(dst, host_src, (size_t)len) != 0) {
-        memcpy(dst, host_src, (size_t)len);
-        if (mm_copy_to_user(context_id, user_src, host_src, (uint64_t)len) != 0) {
-            return -1;
-        }
     }
     return 0;
 }
@@ -286,6 +259,7 @@ wasm_ipc_slots_init(void)
         g_wasm_last_slots[i].valid = 0;
         g_wasm_block_slots[i].pid = 0;
         g_wasm_block_slots[i].buffer_phys = 0;
+        g_wasm_block_slots[i].map_offset = 0;
         g_wasm_fs_peer_slots[i].pid = 0;
         g_wasm_fs_peer_slots[i].valid = 0;
         g_wasm_fs_peer_slots[i].peer_context_id = 0;
@@ -453,6 +427,23 @@ wasm3_release_pid(uint32_t pid)
             g_wasm_shmem_maps[i].valid = 0;
         }
     }
+    /* Reclaim the per-pid block buffer.  Capture the phys under the side-table
+     * lock and free outside it so the PFA lock never nests under it. */
+    uint64_t block_phys = 0;
+    ksync_spinlock_lock(&g_wasm_side_table_lock);
+    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        if (g_wasm_block_slots[i].pid == pid) {
+            block_phys = g_wasm_block_slots[i].buffer_phys;
+            g_wasm_block_slots[i].pid = 0;
+            g_wasm_block_slots[i].buffer_phys = 0;
+            g_wasm_block_slots[i].map_offset = 0;
+            break;
+        }
+    }
+    ksync_spinlock_unlock(&g_wasm_side_table_lock);
+    if (block_phys != 0) {
+        pfa_free_pages(block_phys, WASM_BLOCK_BUFFER_PAGES);
+    }
 }
 
 static wasm_ipc_last_slot_t *
@@ -509,10 +500,36 @@ wasm_block_slot_for_pid(uint32_t pid)
     if (!slot && empty) {
         empty->pid = pid;
         empty->buffer_phys = 0;
+        empty->map_offset = 0;
         slot = empty;
     }
     ksync_spinlock_unlock(&g_wasm_side_table_lock);
     return slot;
+}
+
+/* Report whether phys names the base of a live block buffer owned by ANY pid.
+ * copy/write are called cross-process: a block server accesses a client's
+ * buffer by the physical address the client handed over via IPC, so the owning
+ * slot is usually not the caller's.  Matching phys against a live slot is what
+ * bounds the hostcall to real 8 KiB block buffers instead of arbitrary physical
+ * memory.  Returns 1 if a live slot matches, 0 otherwise. */
+static int
+wasm_block_slot_phys_is_live(uint64_t phys)
+{
+    int found = 0;
+    if (phys == 0) {
+        return 0;
+    }
+    ksync_spinlock_lock(&g_wasm_side_table_lock);
+    for (uint32_t i = 0; i < PROCESS_MAX_COUNT; ++i) {
+        if (g_wasm_block_slots[i].pid != 0 &&
+            g_wasm_block_slots[i].buffer_phys == phys) {
+            found = 1;
+            break;
+        }
+    }
+    ksync_spinlock_unlock(&g_wasm_side_table_lock);
+    return found;
 }
 
 static int
@@ -564,67 +581,6 @@ wasm_user_va_from_offset(uint32_t context_id,
 }
 
 static int
-wasm3_sync_linear_memory_region_binding(uint32_t pid,
-                                        uint32_t context_id,
-                                        const uint8_t *mem_base,
-                                        uint64_t mem_size)
-{
-    (void)mem_base;
-    (void)mem_size;
-    if (pid == 0 || context_id == 0) {
-        return -1;
-    }
-    /* The user-VA linear window is bound to the linmem slot's scattered frames
-     * when the block is reserved, and again for each freshly committed tail on
-     * grow (wasm3_linmem_reserve/_grow in shim.c).  Every linear-memory size
-     * change routes through those, so the binding is always current.  Re-binding
-     * the whole window here per hostcall would clobber overlays (shmem /
-     * framebuffer / DMA / net ring) mapped into it, so this is now a no-op kept
-     * for the existing call sites. */
-    return 0;
-}
-
-int
-wasm3_sync_linear_memory_region(uint32_t pid, uint32_t context_id, IM3Runtime runtime)
-{
-    uint32_t mem_size = 0;
-    uint8_t *mem_base = 0;
-
-    if (pid == 0 || context_id == 0 || !runtime) {
-        return -1;
-    }
-    mem_base = m3_GetMemory(runtime, &mem_size, 0);
-    if (!mem_base || mem_size == 0u) {
-        return -1;
-    }
-    return wasm3_sync_linear_memory_region_binding(pid, context_id, mem_base, (uint64_t)mem_size);
-}
-
-static int
-wasm3_sync_current_linear_memory(uint32_t context_id,
-                                 const uint8_t *mem_base,
-                                 uint64_t mem_size)
-{
-    uint32_t pid = process_current_pid();
-
-    if (pid == 0) {
-        return -1;
-    }
-    return wasm3_sync_linear_memory_region_binding(pid, context_id, mem_base, mem_size);
-}
-
-static int
-wasm3_sync_runtime_linear_memory(uint32_t context_id, IM3Runtime runtime)
-{
-    uint32_t pid = process_current_pid();
-
-    if (pid == 0) {
-        return -1;
-    }
-    return wasm3_sync_linear_memory_region(pid, context_id, runtime);
-}
-
-static int
 wasm_user_va_from_host_ptr(uint32_t context_id,
                            const uint8_t *mem_base,
                            uint64_t mem_size,
@@ -643,7 +599,6 @@ wasm_user_va_from_host_ptr(uint32_t context_id,
     if (off > mem_size || (uint64_t)span > (mem_size - off)) {
         return -1;
     }
-    (void)wasm3_sync_current_linear_memory(context_id, mem_base, mem_size);
     return wasm_user_va_from_offset(context_id, (uint32_t)off, span, out_user_va);
 }
 
@@ -1475,28 +1430,25 @@ m3ApiRawFunction(wasmos_ipc_last_field)
     }
 }
 
-#define WASM_BLOCK_BUFFER_PAGES 2u
-#define WASM_BLOCK_BUFFER_SIZE_BYTES (WASM_BLOCK_BUFFER_PAGES * 4096u)
-
 static int
-wasm_block_buffer_validate_args(wasm_block_slot_t *slot,
-                                int32_t phys,
+wasm_block_buffer_validate_args(int32_t phys,
                                 int32_t len,
                                 int32_t offset)
 {
-    (void)slot;
-    uint64_t start = 0;
     uint64_t end = 0;
 
     if (phys <= 0 || len <= 0 || offset < 0) {
         return -1;
     }
-    start = (uint64_t)(uint32_t)phys + (uint64_t)(uint32_t)offset;
-    end = start + (uint64_t)(uint32_t)len;
-    if (end < start) {
+    /* phys must name a live block buffer, and the access must stay within that
+     * buffer's fixed 8 KiB window.  Without this a guest could pass an arbitrary
+     * phys and read/write any physical address below 4 GiB. */
+    if (!wasm_block_slot_phys_is_live((uint64_t)(uint32_t)phys)) {
         return -1;
     }
-    if (end > 0x100000000ULL) {
+    end = (uint64_t)(uint32_t)offset + (uint64_t)(uint32_t)len;
+    if (end < (uint64_t)(uint32_t)offset ||
+        end > (uint64_t)WASM_BLOCK_BUFFER_SIZE_BYTES) {
         return -1;
     }
     return 0;
@@ -1532,10 +1484,8 @@ m3ApiRawFunction(wasmos_block_buffer_copy)
     m3ApiGetArgMem(uint8_t *, ptr)
     m3ApiGetArg(int32_t, len)
     m3ApiGetArg(int32_t, offset)
-    uint32_t pid = process_current_pid();
-    wasm_block_slot_t *slot = wasm_block_slot_for_pid(pid);
 
-    if (wasm_block_buffer_validate_args(slot, phys, len, offset) != 0) {
+    if (wasm_block_buffer_validate_args(phys, len, offset) != 0) {
         m3ApiReturn(-1);
     }
     m3ApiCheckMem(ptr, (uint32_t)len);
@@ -1558,11 +1508,10 @@ m3ApiRawFunction(wasmos_block_buffer_copy)
     }
 
     const uint8_t *src = (const uint8_t *)(uintptr_t)((uint32_t)phys + (uint32_t)offset);
-    if (wasm_copy_to_user_sync_views(proc->context_id,
-                                     ptr_user,
-                                     ptr,
-                                     src,
-                                     (uint32_t)len) != 0) {
+    if (wasm_copy_to_user_bytes(proc->context_id,
+                                ptr_user,
+                                src,
+                                (uint32_t)len) != 0) {
         m3ApiReturn(-1);
     }
     m3ApiReturn(0);
@@ -1575,10 +1524,8 @@ m3ApiRawFunction(wasmos_block_buffer_write)
     m3ApiGetArgMem(const uint8_t *, ptr)
     m3ApiGetArg(int32_t, len)
     m3ApiGetArg(int32_t, offset)
-    uint32_t pid = process_current_pid();
-    wasm_block_slot_t *slot = wasm_block_slot_for_pid(pid);
 
-    if (wasm_block_buffer_validate_args(slot, phys, len, offset) != 0) {
+    if (wasm_block_buffer_validate_args(phys, len, offset) != 0) {
         m3ApiReturn(-1);
     }
     m3ApiCheckMem(ptr, (uint32_t)len);
@@ -1608,11 +1555,10 @@ m3ApiRawFunction(wasmos_block_buffer_write)
         if (chunk > (uint32_t)sizeof(bounce)) {
             chunk = (uint32_t)sizeof(bounce);
         }
-        if (wasm_copy_from_user_sync_views(proc->context_id,
-                                           ptr_user + (uint64_t)copied,
-                                           ptr + copied,
-                                           bounce,
-                                           chunk) != 0) {
+        if (wasm_copy_from_user_bytes(proc->context_id,
+                                      ptr_user + (uint64_t)copied,
+                                      bounce,
+                                      chunk) != 0) {
             m3ApiReturn(-1);
         }
         for (uint32_t i = 0; i < chunk; ++i) {
@@ -1621,6 +1567,103 @@ m3ApiRawFunction(wasmos_block_buffer_write)
         copied += chunk;
     }
     m3ApiReturn(0);
+}
+
+/* Overlay the caller's own 8 KiB block buffer into its linear-memory window so
+ * the owner reads/writes block data in place instead of copying through
+ * block_buffer_copy/write.  Idempotent: repeated calls return the same offset.
+ * The physical pages are owned by the block slot and freed by wasm3_release_pid;
+ * the overlay itself is torn down with the address space, so it is tracked with
+ * a zero phys_base/pages to reserve the linmem window without a second free. */
+m3ApiRawFunction(wasmos_block_buffer_map)
+{
+    m3ApiReturnType(int32_t)
+
+    process_t *proc = process_get(process_current_pid());
+    if (!proc || proc->context_id == 0) {
+        m3ApiReturn(-1);
+    }
+    wasm_block_slot_t *slot = wasm_block_slot_for_pid(proc->pid);
+    if (!slot) {
+        m3ApiReturn(-1);
+    }
+    if (slot->buffer_phys == 0) {
+        uint64_t phys = pfa_alloc_pages_below(WASM_BLOCK_BUFFER_PAGES, 0x100000000ULL);
+        if (!phys || phys > 0xFFFFFFFFULL) {
+            if (phys) {
+                pfa_free_pages(phys, WASM_BLOCK_BUFFER_PAGES);
+            }
+            m3ApiReturn(-1);
+        }
+        slot->buffer_phys = phys;
+    }
+    if (slot->map_offset != 0) {
+        m3ApiReturn((int32_t)slot->map_offset);
+    }
+
+    uint32_t mem_size = 0;
+    uint8_t *mem_base = m3_GetMemory(runtime, &mem_size, 0);
+    if (!mem_base || mem_size == 0) {
+        m3ApiReturn(-1);
+    }
+
+    const uint64_t region_bytes = (uint64_t)WASM_BLOCK_BUFFER_SIZE_BYTES;
+    uint64_t mem_size64 = (uint64_t)mem_size;
+    uint64_t off64 = 0;
+    uint8_t found = 0;
+
+    for (off64 = 0x200000ULL; off64 + region_bytes <= mem_size64; off64 += 0x1000ULL) {
+        uint64_t probe_virt = 0;
+        if (wasm_linear_window_overlaps(proc->pid, (uint32_t)off64, (uint32_t)region_bytes)) {
+            continue;
+        }
+        if (wasm_user_va_from_offset(proc->context_id, (uint32_t)off64,
+                                     (uint32_t)region_bytes, &probe_virt) != 0) {
+            continue;
+        }
+        if (mm_user_range_permitted(proc->context_id, probe_virt, region_bytes,
+                                    MEM_REGION_FLAG_WRITE) != 0) {
+            continue;
+        }
+        if ((probe_virt & 0xFFFULL) != 0) {
+            continue;
+        }
+        found = 1;
+        break;
+    }
+
+    if (!found) {
+        off64 = (mem_size64 + 0xFFFULL) & ~0xFFFULL;
+        uint64_t required = off64 + region_bytes;
+        if (required > mem_size64) {
+            uint32_t target_pages = (uint32_t)((required + 0xFFFFULL) >> 16);
+            if (ResizeMemory(runtime, target_pages) != m3Err_none) {
+                m3ApiReturn(-1);
+            }
+            mem_size64 = (uint64_t)m3_GetMemorySize(runtime);
+            if (required > mem_size64) {
+                m3ApiReturn(-1);
+            }
+        }
+    }
+
+    uint32_t off32 = (uint32_t)off64;
+    uint64_t virt = 0;
+    if (wasm_user_va_from_offset(proc->context_id, off32, (uint32_t)region_bytes, &virt) != 0 ||
+        mm_user_range_permitted(proc->context_id, virt, region_bytes,
+                                MEM_REGION_FLAG_WRITE) != 0 ||
+        (virt & 0xFFFULL) != 0) {
+        m3ApiReturn(-1);
+    }
+    if (mm_context_map_physical(proc->context_id, virt, slot->buffer_phys, region_bytes,
+                                MEM_REGION_FLAG_READ | MEM_REGION_FLAG_WRITE |
+                                    MEM_REGION_FLAG_USER) != 0) {
+        m3ApiReturn(-1);
+    }
+
+    wasm_dma_region_map_track(proc->pid, off32, (uint32_t)region_bytes, 0, 0);
+    slot->map_offset = off32;
+    m3ApiReturn((int32_t)off32);
 }
 
 m3ApiRawFunction(wasmos_xfer_buffer_size)
@@ -1699,11 +1742,10 @@ m3ApiRawFunction(wasmos_xfer_buffer_read)
         m3ApiReturn(XFER_BUFFER_ERR_NOT_FOUND);
     }
     const uint8_t *src = (const uint8_t *)(uintptr_t)(phys | KERNEL_HIGHER_HALF_BASE);
-    if (wasm_copy_to_user_sync_views(proc->context_id,
-                                     ptr_user,
-                                     ptr,
-                                     src + offset,
-                                     (uint32_t)len) != 0) {
+    if (wasm_copy_to_user_bytes(proc->context_id,
+                                ptr_user,
+                                src + offset,
+                                (uint32_t)len) != 0) {
         m3ApiReturn(XFER_BUFFER_ERR_RANGE);
     }
     m3ApiReturn(XFER_BUFFER_OK);
@@ -1774,11 +1816,10 @@ m3ApiRawFunction(wasmos_xfer_buffer_write)
         if (chunk > (uint32_t)sizeof(bounce)) {
             chunk = (uint32_t)sizeof(bounce);
         }
-        if (wasm_copy_from_user_sync_views(proc->context_id,
-                                           ptr_user + (uint64_t)copied,
-                                           ptr + copied,
-                                           bounce,
-                                           chunk) != 0) {
+        if (wasm_copy_from_user_bytes(proc->context_id,
+                                      ptr_user + (uint64_t)copied,
+                                      bounce,
+                                      chunk) != 0) {
             m3ApiReturn(XFER_BUFFER_ERR_RANGE);
         }
         for (uint32_t i = 0; i < chunk; ++i) {
@@ -2304,7 +2345,6 @@ m3ApiRawFunction(wasmos_framebuffer_map)
     if ((uint64_t)off32 + (uint64_t)map_size32 > (uint64_t)m3_GetMemorySize(runtime)) {
         m3ApiReturn(-1);
     }
-    (void)wasm3_sync_runtime_linear_memory(proc->context_id, runtime);
     uint64_t virt = 0;
     int va_rc = wasm_user_va_from_offset(proc->context_id, off32, map_size32, &virt);
     int perm_rc = 0;
@@ -2390,7 +2430,6 @@ m3ApiRawFunction(wasmos_region_alloc)
     uint64_t scan_off = (map_auto_min_off + 0xFFFULL) & ~0xFFFULL;
     uint64_t off64 = 0;
     uint8_t found = 0;
-    (void)wasm3_sync_runtime_linear_memory(proc->context_id, runtime);
 
     for (off64 = scan_off; off64 + region_bytes <= mem_size64; off64 += 0x1000ULL) {
         uint64_t probe_virt = 0;
@@ -2431,7 +2470,6 @@ m3ApiRawFunction(wasmos_region_alloc)
                 m3ApiReturn(WASMOS_DMA_STATUS_UNAVAILABLE);
             }
             mem_size64 = (uint64_t)m3_GetMemorySize(runtime);
-            (void)wasm3_sync_runtime_linear_memory(proc->context_id, runtime);
             if (required > mem_size64) {
                 pfa_free_pages(phys_base, (uint64_t)(uint32_t)pages);
                 m3ApiReturn(WASMOS_DMA_STATUS_UNAVAILABLE);
@@ -2586,7 +2624,6 @@ m3ApiRawFunction(wasmos_shmem_map)
     if ((uint64_t)off32 + (uint64_t)map_size32 > (uint64_t)m3_GetMemorySize(runtime)) {
         m3ApiReturn(-1);
     }
-    (void)wasm3_sync_runtime_linear_memory(proc->context_id, runtime);
     uint64_t virt = 0;
     if (wasm_user_va_from_offset(proc->context_id, off32, map_size32, &virt) != 0 ||
         mm_user_range_permitted(proc->context_id, virt, (uint64_t)map_size32, MEM_REGION_FLAG_WRITE) != 0) {
@@ -2647,7 +2684,6 @@ m3ApiRawFunction(wasmos_shmem_map_auto)
     }
 
     uint64_t mem_size = (uint64_t)m3_GetMemorySize(runtime);
-    (void)wasm3_sync_runtime_linear_memory(proc->context_id, runtime);
     uint64_t off64 = 0;
     uint8_t found = 0;
     /* Keep auto-mapped shared pages away from low linear-memory where
@@ -2685,7 +2721,6 @@ m3ApiRawFunction(wasmos_shmem_map_auto)
                 m3ApiReturn(SHMEM_ERR_NO_WINDOW);
             }
             mem_size = (uint64_t)m3_GetMemorySize(runtime);
-            (void)wasm3_sync_runtime_linear_memory(proc->context_id, runtime);
             if (required > mem_size) {
                 m3ApiReturn(SHMEM_ERR_NO_WINDOW);
             }
@@ -3208,7 +3243,7 @@ m3ApiRawFunction(wasmos_initfs_entry_copy)
         copy_len = available;
     }
     const uint8_t *src = (const uint8_t *)g_wasm_boot_info->initfs + entry.offset + (uint32_t)offset;
-    if (wasm_copy_to_user_sync_views(proc->context_id, out_user, out_ptr, src, copy_len) != 0) {
+    if (wasm_copy_to_user_bytes(proc->context_id, out_user, src, copy_len) != 0) {
         m3ApiReturn(-1);
     }
     m3ApiReturn((int32_t)copy_len);
@@ -3427,11 +3462,10 @@ m3ApiRawFunction(wasmos_console_read)
         m3ApiReturn(rc);
     }
     char out = (char)ch;
-    if (wasm_copy_to_user_sync_views(proc->context_id,
-                                     ptr_user,
-                                     ptr,
-                                     &out,
-                                     1) != 0) {
+    if (wasm_copy_to_user_bytes(proc->context_id,
+                                ptr_user,
+                                &out,
+                                1) != 0) {
         m3ApiReturn(-1);
     }
     m3ApiReturn(1);
@@ -4064,11 +4098,10 @@ m3ApiRawFunction(wasmos_strlen)
     uint64_t max_len = (uint64_t)(end - start);
     for (uint64_t i = 0; i < max_len; ++i) {
         char ch = 0;
-        if (wasm_copy_from_user_sync_views(proc->context_id,
-                                           ptr_user + i,
-                                           start + i,
-                                           &ch,
-                                           1) != 0) {
+        if (wasm_copy_from_user_bytes(proc->context_id,
+                                      ptr_user + i,
+                                      &ch,
+                                      1) != 0) {
             m3ApiReturn(0);
         }
         if (ch == '\0') {
@@ -4225,6 +4258,7 @@ wasm3_link_wasmos(IM3Module module)
     rc |= wasm3_link_raw(module, "wasmos", "block_buffer_phys", "i()", wasmos_block_buffer_phys);
     rc |= wasm3_link_raw(module, "wasmos", "block_buffer_copy", "i(i*ii)", wasmos_block_buffer_copy);
     rc |= wasm3_link_raw(module, "wasmos", "block_buffer_write", "i(i*ii)", wasmos_block_buffer_write);
+    rc |= wasm3_link_raw(module, "wasmos", "block_buffer_map", "i()", wasmos_block_buffer_map);
     rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_size", "i()", wasmos_xfer_buffer_size);
     rc |= wasm3_link_raw(module, "wasmos", "fs_endpoint", "i()", wasmos_fs_endpoint);
     rc |= wasm3_link_raw(module, "wasmos", "xfer_buffer_read", "i(i*ii)", wasmos_xfer_buffer_read);

@@ -327,7 +327,8 @@ wasmos_ringbuf_peek_record_len(const wasmos_ringbuf_t *rb, uint32_t *out_len) {
 /* Read one record into dst (capacity `max`). On success consumes the whole
  * record (prefix + payload), sets *out_len to the record length, and returns
  * the number of payload bytes copied. Returns:
- *   -1 : no complete record queued yet (nothing consumed),
+ *   -1 : no complete record at the front, or a corrupt length prefix (nothing
+ *        consumed; *out_len untouched),
  *   -2 : record does not fit in `max` (nothing consumed; *out_len is set to the
  *        record length so the caller can grow its buffer and retry). */
 static inline int32_t
@@ -335,9 +336,17 @@ wasmos_ringbuf_read_record(wasmos_ringbuf_t *rb, void *dst, uint32_t max,
                            uint32_t *out_len) {
     uint32_t len = 0u;
     if (!wasmos_ringbuf_peek_record_len(rb, &len)) return -1;
+    /* Reject a corrupt/oversized length prefix WITHOUT over-reading (mutual
+     * distrust: the peer owns its side of a shared ring). `need` overflowing
+     * (len near UINT32_MAX) or exceeding capacity means no legitimate producer
+     * could have published this record — write_record caps need at free <=
+     * capacity. Do not report the bogus length to the caller. */
+    uint32_t need = len + 4u;
+    if (need < 4u || need > rb->capacity) return -1;
+    /* Whole record must be present (a correct producer publishes it atomically,
+     * so this only trips on a truncated/forged stream). */
+    if (wasmos_ringbuf_used(rb) < need) return -1;
     if (out_len) *out_len = len;
-    /* Whole record must be present (it was published atomically). */
-    if (wasmos_ringbuf_used(rb) < len + 4u) return -1;
     if (len > max) return -2;
 
     (void)wasmos_ringbuf_skip(rb, 4u);

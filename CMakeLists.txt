@@ -1871,6 +1871,7 @@ add_custom_target(run-kernel-unit-tests
           -o ${BUILD_DIR}/test_vring
   COMMAND ${BUILD_DIR}/test_vring
   COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -pthread
           -I${LIBSYS_WASM_DIR}/include
           ${CMAKE_SOURCE_DIR}/tests/unit/test_ringbuf.c
           -o ${BUILD_DIR}/test_ringbuf

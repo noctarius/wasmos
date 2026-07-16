@@ -134,6 +134,9 @@ void pm_update_well_known_service_endpoint(const char *name, uint32_t endpoint);
 int pm_handle_service_register(uint32_t pm_context_id, const ipc_message_t *msg);
 int pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t *msg);
 int pm_handle_service_lookup(uint32_t pm_context_id, const ipc_message_t *msg);
+int pm_handle_service_lookup_class(uint32_t pm_context_id, const ipc_message_t *msg);
+int pm_handle_class_subscribe(uint32_t pm_context_id, const ipc_message_t *msg);
+void pm_services_class_reap(uint32_t pm_context_id);
 int pm_handle_subsystem_register_broker(uint32_t pm_context_id, const ipc_message_t *msg);
 int pm_handle_exec_handler_register(uint32_t pm_context_id, const ipc_message_t *msg);
 

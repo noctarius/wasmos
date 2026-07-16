@@ -1876,6 +1876,17 @@ add_custom_target(run-kernel-unit-tests
           ${CMAKE_SOURCE_DIR}/tests/unit/test_ringbuf.c
           -o ${BUILD_DIR}/test_ringbuf
   COMMAND ${BUILD_DIR}/test_ringbuf
+  COMMAND ${CLANG} -std=c11 -Wall -Wextra -Werror -Wno-error=c23-extensions
+          -I${KERNEL_DIR}/include
+          ${CMAKE_SOURCE_DIR}/tests/unit/test_service_class_registry.c
+          ${KERNEL_DIR}/service_class_registry.c
+          ${KERNEL_DIR}/list.c
+          ${KERNEL_DIR}/list_linked.c
+          ${KERNEL_DIR}/list_array_chunk.c
+          ${KERNEL_DIR}/kmem.c
+          ${CMAKE_SOURCE_DIR}/tests/unit/stubs_slab.c
+          -o ${BUILD_DIR}/test_service_class_registry
+  COMMAND ${BUILD_DIR}/test_service_class_registry
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   COMMENT "Running host kernel unit tests"
   VERBATIM

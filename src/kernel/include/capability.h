@@ -20,7 +20,8 @@ typedef enum {
     CAP_MMIO_MAP = 2,       /* map MMIO regions into the process address space */
     CAP_DMA_BUFFER = 3,     /* allocate and share DMA-coherent buffers */
     CAP_SYSTEM_CONTROL = 4, /* privileged kernel control (reboot, power off, etc.) */
-    CAP_SUBSYSTEM_REGISTER = 5 /* register broker subsystems + executable-format handlers */
+    CAP_SUBSYSTEM_REGISTER = 5, /* register broker subsystems + executable-format handlers */
+    CAP_SVC_CLASS_REGISTER = 6  /* register a service under a virtual class (anti-spoof) */
 } capability_kind_t;
 
 /* Initialize the capability table; called once during kernel startup. */

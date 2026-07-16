@@ -4,9 +4,81 @@
 #include "process_manager_internal.h"
 #include "capability.h"
 #include "klog.h"
+#include "process.h"
 #include "process_manager.h"
+#include "service_class_registry.h"
 #include "string.h"
 #include "subsystem_registry.h"
+
+/* PM context that owns the endpoints class-event pushes are sent from, plus a
+ * one-time event-sink install. Set lazily by any class handler / the reap tick,
+ * all of which carry the PM context id. */
+static uint32_t g_svc_class_ctx;
+static uint8_t g_svc_class_sink_set;
+
+/* Push an SVC_IPC_CLASS_EVENT to a subscriber's notify endpoint. */
+static void
+pm_service_class_event_sink(void *user, uint32_t notify_endpoint, uint32_t event,
+                            const char *class_name, uint32_t instance,
+                            uint32_t endpoint, uint32_t pid)
+{
+    ipc_message_t ev;
+    (void)user;
+    (void)class_name;
+    ev.type = SVC_IPC_CLASS_EVENT;
+    ev.source = g_pm.proc_endpoint;
+    ev.destination = notify_endpoint;
+    ev.request_id = 0;
+    ev.arg0 = event;
+    ev.arg1 = instance;
+    ev.arg2 = endpoint;
+    ev.arg3 = pid;
+    (void)ipc_send_from(g_svc_class_ctx, notify_endpoint, &ev);
+}
+
+/* A provider/subscriber owner is alive while its process exists and has not
+ * exited (process_get_exit_status returns 0 only once a status is available). */
+static int
+pm_service_class_alive(void *user, uint32_t owner_ctx)
+{
+    process_t *p = process_find_by_context(owner_ctx);
+    int32_t status = 0;
+    (void)user;
+    if (!p) {
+        return 0;
+    }
+    return process_get_exit_status(p->pid, &status) != 0;
+}
+
+static void
+pm_service_class_ensure(uint32_t pm_context_id)
+{
+    g_svc_class_ctx = pm_context_id;
+    if (!g_svc_class_sink_set) {
+        service_class_registry_set_event_sink(pm_service_class_event_sink, 0);
+        g_svc_class_sink_set = 1;
+    }
+}
+
+/* Periodic exit-driven sweep: purge class providers/subscribers whose owner has
+ * died, firing REMOVE events. Called from the PM run loop's reap path. */
+void
+pm_services_class_reap(uint32_t pm_context_id)
+{
+    pm_service_class_ensure(pm_context_id);
+    service_class_registry_reap_dead(pm_service_class_alive, 0);
+}
+
+/* Copy a NUL-terminated class name out of a shared buffer, bounded. */
+static void
+pm_copy_class_name(const char *src, char *dst)
+{
+    uint32_t i = 0;
+    for (; i + 1u < WASMOS_SVC_CLASS_MAX && src[i] != '\0'; ++i) {
+        dst[i] = src[i];
+    }
+    dst[i] = '\0';
+}
 
 void
 pm_unpack_name_args(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, char *out, uint32_t out_len)
@@ -205,7 +277,7 @@ pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t *msg
     if (ipc_endpoint_owner(msg->source, &reply_owner) != IPC_OK) {
         return -1;
     }
-    if (len < sizeof(svc_register_desc_t) ||
+    if (len < WASMOS_SVC_REGISTER_DESC_V1_BYTES ||
         len > xfer_buffer_size(BUFFER_KIND_TRANSFER)) {
         return -1;
     }
@@ -213,7 +285,8 @@ pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t *msg
      * buffer_id (the caller owns it). PM reads it directly (kernel). */
     desc = (const svc_register_desc_t *)pm_foreign_xfer_ptr(
         (uint32_t)msg->arg2, reply_owner, 0);
-    if (!desc || desc->version != WASMOS_SVC_REGISTER_DESC_VERSION) {
+    if (!desc || desc->version < 1u ||
+        desc->version > WASMOS_SVC_REGISTER_DESC_VERSION) {
         return -1;
     }
     /* Copy the name out of the shared buffer and force NUL termination. */
@@ -238,6 +311,25 @@ pm_handle_service_register_desc(uint32_t pm_context_id, const ipc_message_t *msg
         return -1;
     }
     pm_update_well_known_service_endpoint(name, service_ep);
+    /* v2+ descriptors may additionally register the service under a virtual
+     * class; only holders of CAP_SVC_CLASS_REGISTER may claim a class. */
+    if (desc->version >= 2u && len >= sizeof(svc_register_desc_t) &&
+        desc->class_name[0] != '\0') {
+        char class_name[WASMOS_SVC_CLASS_MAX];
+        process_t *provider;
+        uint32_t provider_pid;
+        if (!capability_has(reply_owner, CAP_SVC_CLASS_REGISTER)) {
+            return -1;
+        }
+        pm_copy_class_name(desc->class_name, class_name);
+        pm_service_class_ensure(pm_context_id);
+        provider = process_find_by_context(reply_owner);
+        provider_pid = provider ? provider->pid : 0;
+        if (service_class_registry_add(class_name, desc->instance, service_ep,
+                                       reply_owner, provider_pid) != 0) {
+            return -1;
+        }
+    }
     resp.type = SVC_IPC_REGISTER_RESP;
     resp.source = g_pm.proc_endpoint;
     resp.destination = msg->source;
@@ -270,6 +362,91 @@ pm_handle_service_lookup(uint32_t pm_context_id, const ipc_message_t *msg)
     resp.destination = msg->source;
     resp.request_id = msg->request_id;
     resp.arg0 = (endpoint == IPC_ENDPOINT_NONE) ? (uint32_t)-1 : endpoint;
+    resp.arg1 = 0;
+    resp.arg2 = 0;
+    resp.arg3 = 0;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
+}
+
+/* Enumerate providers of a virtual class. The caller's transfer buffer (arg0)
+ * carries the class name NUL-terminated at offset 0 on input; PM overwrites it
+ * with a svc_class_entry_t[] and replies with the total match count (arg1 caps
+ * how many entries the buffer holds). */
+int
+pm_handle_service_lookup_class(uint32_t pm_context_id, const ipc_message_t *msg)
+{
+    uint32_t owner = 0;
+    uint32_t buffer_id = (uint32_t)msg->arg0;
+    uint32_t max_entries = (uint32_t)msg->arg1;
+    char class_name[WASMOS_SVC_CLASS_MAX];
+    uint32_t cap_entries;
+    uint32_t count;
+    uint8_t *buf;
+    ipc_message_t resp;
+
+    if (ipc_endpoint_owner(msg->source, &owner) != IPC_OK) {
+        return -1;
+    }
+    /* Cast away const: the caller owns this transfer buffer and hands it in for
+     * PM to fill with the result array (same write pattern as FS-read replies). */
+    buf = (uint8_t *)(uintptr_t)pm_foreign_xfer_ptr(buffer_id, owner, 0);
+    if (!buf) {
+        return -1;
+    }
+    pm_copy_class_name((const char *)buf, class_name);
+    cap_entries = xfer_buffer_size(BUFFER_KIND_TRANSFER) /
+                  (uint32_t)sizeof(svc_class_entry_t);
+    if (max_entries > cap_entries) {
+        max_entries = cap_entries;
+    }
+    count = service_class_registry_lookup(class_name,
+                (service_class_provider_t *)buf, max_entries);
+    resp.type = SVC_IPC_LOOKUP_CLASS_RESP;
+    resp.source = g_pm.proc_endpoint;
+    resp.destination = msg->source;
+    resp.request_id = msg->request_id;
+    resp.arg0 = count;
+    resp.arg1 = 0;
+    resp.arg2 = 0;
+    resp.arg3 = 0;
+    return ipc_send_from(pm_context_id, msg->source, &resp) == IPC_OK ? 0 : -1;
+}
+
+/* Subscribe to existence events for a class. arg0 is the caller's notify
+ * endpoint (must belong to the caller); arg1 is a transfer buffer holding the
+ * class name NUL-terminated at offset 0. */
+int
+pm_handle_class_subscribe(uint32_t pm_context_id, const ipc_message_t *msg)
+{
+    uint32_t owner = 0;
+    uint32_t notify_endpoint = (uint32_t)msg->arg0;
+    uint32_t buffer_id = (uint32_t)msg->arg1;
+    uint32_t ne_owner = 0;
+    char class_name[WASMOS_SVC_CLASS_MAX];
+    const uint8_t *buf;
+    ipc_message_t resp;
+
+    if (ipc_endpoint_owner(msg->source, &owner) != IPC_OK) {
+        return -1;
+    }
+    if (ipc_endpoint_owner(notify_endpoint, &ne_owner) != IPC_OK ||
+        ne_owner != owner) {
+        return -1;
+    }
+    buf = pm_foreign_xfer_ptr(buffer_id, owner, 0);
+    if (!buf) {
+        return -1;
+    }
+    pm_copy_class_name((const char *)buf, class_name);
+    pm_service_class_ensure(pm_context_id);
+    if (service_class_registry_subscribe(class_name, notify_endpoint, owner) != 0) {
+        return -1;
+    }
+    resp.type = SVC_IPC_SUBSCRIBE_CLASS_RESP;
+    resp.source = g_pm.proc_endpoint;
+    resp.destination = msg->source;
+    resp.request_id = msg->request_id;
+    resp.arg0 = 0;
     resp.arg1 = 0;
     resp.arg2 = 0;
     resp.arg3 = 0;

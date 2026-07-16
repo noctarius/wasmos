@@ -305,23 +305,64 @@ enum {
      * name consumed all four args and forced the reply onto the serve endpoint
      * (a latent races that deadlocked boot once PM stopped busy-polling). */
     SVC_IPC_REGISTER_DESC_REQ = 0x222,
+    /* Class-based discovery (see docs/architecture/09-process-and-ipc.md).
+     * LOOKUP_CLASS: enumerate every provider registered under a virtual class.
+     *   req  arg0=buffer_id (class name NUL-terminated at offset 0 on input;
+     *        PM overwrites it with a svc_class_entry_t[] on output),
+     *        arg1=max_entries the buffer can hold;
+     *   resp SVC_IPC_LOOKUP_CLASS_RESP arg0=provider count (may exceed
+     *        max_entries; only min(count,max_entries) entries are written).
+     * SUBSCRIBE_CLASS: receive existence events for a class.
+     *   req  arg0=notify_endpoint (where SVC_IPC_CLASS_EVENT is delivered),
+     *        arg1=buffer_id (class name NUL-terminated at offset 0);
+     *   resp SVC_IPC_SUBSCRIBE_CLASS_RESP arg0=0.
+     * CLASS_EVENT is pushed to a subscriber's notify_endpoint on add/remove/die:
+     *        arg0=SVC_CLASS_EVENT_* arg1=instance arg2=endpoint arg3=pid. */
+    SVC_IPC_LOOKUP_CLASS_REQ = 0x223,
+    SVC_IPC_SUBSCRIBE_CLASS_REQ = 0x224,
     SVC_IPC_REGISTER_RESP = 0x2A0,
     SVC_IPC_LOOKUP_RESP = 0x2A1,
+    SVC_IPC_LOOKUP_CLASS_RESP = 0x2A2,
+    SVC_IPC_SUBSCRIBE_CLASS_RESP = 0x2A3,
+    SVC_IPC_CLASS_EVENT = 0x2A4,
     SVC_IPC_ERROR = 0x2AF
 };
 
-#define WASMOS_SVC_REGISTER_DESC_VERSION 1u
+#define WASMOS_SVC_REGISTER_DESC_VERSION 2u
 #define WASMOS_SVC_NAME_MAX 36u
+#define WASMOS_SVC_CLASS_MAX 16u /* incl. NUL; keep == SVC_CLASS_NAME_MAX */
+
+/* Existence-event kinds carried in SVC_IPC_CLASS_EVENT arg0. Keep in sync with
+ * SVC_CLASS_EVENT_* in src/kernel/include/service_class_registry.h. */
+#define SVC_CLASS_EVENT_ADD    1u
+#define SVC_CLASS_EVENT_REMOVE 2u
 
 /* Register descriptor written to the xfer buffer for SVC_IPC_REGISTER_DESC_REQ.
  * Extensible: bump WASMOS_SVC_REGISTER_DESC_VERSION and append fields.  Mirror
- * this layout in any non-C binding that registers services. */
+ * this layout in any non-C binding that registers services.  v2 appended the
+ * class/instance fields; PM accepts a v1-length descriptor (no class) for
+ * back-compat by checking the byte length, not just the version. */
 typedef struct {
     uint32_t version;          /* = WASMOS_SVC_REGISTER_DESC_VERSION */
     uint32_t service_endpoint; /* endpoint clients send requests to */
     uint32_t flags;            /* reserved, 0 */
     char     name[WASMOS_SVC_NAME_MAX]; /* NUL-terminated service name */
+    /* v2+ (present iff the descriptor byte length covers these fields): */
+    uint32_t instance;         /* provider instance index within the class */
+    char     class_name[WASMOS_SVC_CLASS_MAX]; /* NUL-term; "" = no class */
 } svc_register_desc_t;
+
+/* v1 descriptor length: fields up to and including name[], no class/instance. */
+#define WASMOS_SVC_REGISTER_DESC_V1_BYTES \
+    (3u * (uint32_t)sizeof(uint32_t) + WASMOS_SVC_NAME_MAX)
+
+/* One resolved provider returned by SVC_IPC_LOOKUP_CLASS_REQ (wire layout;
+ * matches service_class_provider_t). */
+typedef struct {
+    uint32_t instance;
+    uint32_t endpoint;
+    uint32_t pid;
+} svc_class_entry_t;
 
 enum {
     PROC_STATUS_UNKNOWN = 0,

@@ -345,6 +345,7 @@ public:
 
         pm_check_waits(process->context_id);
         pm_reap_apps(process);
+        pm_services_class_reap(process->context_id);
         pm_poll_spawn(process->context_id);
         uint32_t fs_ctrl_endpoint = pm_atomic_load_u32(&g_pm.fs_ctrl_endpoint);
         if (fs_ctrl_endpoint != IPC_ENDPOINT_NONE) {
@@ -432,6 +433,12 @@ public:
             case SVC_IPC_LOOKUP_REQ:
                 rc = pm_handle_service_lookup(process->context_id, &msg);
                 break;
+            case SVC_IPC_LOOKUP_CLASS_REQ:
+                rc = pm_handle_service_lookup_class(process->context_id, &msg);
+                break;
+            case SVC_IPC_SUBSCRIBE_CLASS_REQ:
+                rc = pm_handle_class_subscribe(process->context_id, &msg);
+                break;
             default:
                 rc = -1;
                 break;
@@ -441,7 +448,9 @@ public:
             ipc_message_t resp;
             if (msg.type == SVC_IPC_REGISTER_REQ ||
                 msg.type == SVC_IPC_REGISTER_DESC_REQ ||
-                msg.type == SVC_IPC_LOOKUP_REQ) {
+                msg.type == SVC_IPC_LOOKUP_REQ ||
+                msg.type == SVC_IPC_LOOKUP_CLASS_REQ ||
+                msg.type == SVC_IPC_SUBSCRIBE_CLASS_REQ) {
                 resp.type = SVC_IPC_ERROR;
             } else {
                 resp.type = PROC_IPC_ERROR;

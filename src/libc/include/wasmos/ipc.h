@@ -253,21 +253,27 @@ wasmos_xfer_stage(const void *src, int32_t len)
  * created here rather than via the startup.c managed endpoint so the helper
  * works in drivers that do not link the full libc startup unit. */
 static inline int32_t
-wasmos_svc_register(int32_t proc_endpoint,
-                    int32_t service_endpoint,
-                    const char *service_name,
-                    int32_t request_id)
+wasmos_svc_register_class(int32_t proc_endpoint,
+                          int32_t service_endpoint,
+                          const char *service_name,
+                          const char *class_name,
+                          uint32_t instance,
+                          int32_t request_id)
 {
     static int32_t s_reg_reply_ep = -1;
     svc_register_desc_t desc;
     wasmos_ipc_message_t resp;
     uint32_t i;
+    uint8_t *raw = (uint8_t *)&desc;
     if (s_reg_reply_ep < 0) {
         s_reg_reply_ep = wasmos_ipc_create_endpoint();
     }
     int32_t reply_ep = s_reg_reply_ep;
     if (reply_ep < 0) {
         return -1;
+    }
+    for (i = 0; i < sizeof(desc); ++i) {
+        raw[i] = 0; /* empty class_name / zero instance by default */
     }
     desc.version = WASMOS_SVC_REGISTER_DESC_VERSION;
     desc.service_endpoint = (uint32_t)service_endpoint;
@@ -276,6 +282,13 @@ wasmos_svc_register(int32_t proc_endpoint,
         desc.name[i] = service_name[i];
     }
     desc.name[i] = '\0';
+    desc.instance = instance;
+    if (class_name != 0) {
+        for (i = 0; i + 1u < WASMOS_SVC_CLASS_MAX && class_name[i] != '\0'; ++i) {
+            desc.class_name[i] = class_name[i];
+        }
+        desc.class_name[i] = '\0';
+    }
     int32_t bid = wasmos_xfer_stage(&desc, (int32_t)sizeof(desc));
     if (bid < 0) {
         return -1;
@@ -294,6 +307,17 @@ wasmos_svc_register(int32_t proc_endpoint,
     }
     (void)wasmos_xfer_buffer_release(bid);
     return (resp.type == SVC_IPC_REGISTER_RESP) ? resp.arg0 : -1;
+}
+
+/* Register a service by name only (no virtual class). */
+static inline int32_t
+wasmos_svc_register(int32_t proc_endpoint,
+                    int32_t service_endpoint,
+                    const char *service_name,
+                    int32_t request_id)
+{
+    return wasmos_svc_register_class(proc_endpoint, service_endpoint,
+                                     service_name, 0, 0, request_id);
 }
 
 /* Look up a service by name; returns its endpoint or -1 if not registered.

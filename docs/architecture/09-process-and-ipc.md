@@ -648,6 +648,32 @@ cause response stealing.
 
 ---
 
+### Synchronous request/response IPC — deadlock hazard (planned direction: futures)
+
+The prevailing service pattern issues a request and then **blocks** on a reply
+(`wasmos_ipc_send` + `wasmos_ipc_select_one`, or `wasmos_ipc_call`). When two
+services each block on the other, they deadlock. This is a structural hazard,
+not an incidental bug:
+
+- Concrete instance: `fs-manager`, while handling a class-discovery event for a
+  newly discovered FS backend, synchronously queried `device-manager`
+  (`DEVMGR_QUERY_MOUNT_REQ`) for boot metadata — while `device-manager` was
+  itself blocked waiting for `fs-manager` to answer its `/boot` rules read.
+  Mutual wait → boot hang.
+- Even without a hard deadlock, blocking round-trips serialize otherwise
+  independent work and make boot ordering timing-sensitive (a caller that
+  blocks cannot service unrelated requests that arrive meanwhile).
+
+**Planned direction: remove blocking request/response entirely.** A request
+returns a future/promise; the caller keeps pumping its single generic
+`wasmos_sys_event_loop` (one receiver per endpoint), and the reply is delivered
+as an event that resolves the future and runs its continuation. No service ever
+parks inside a nested receive, so cross-service call cycles cannot deadlock and
+a service always keeps serving. Until that lands, avoid synchronous
+service→service calls inside a handler for another service's request.
+
+---
+
 ### Invariants
 
 1. **One endpoint, one receiver.** A single receive pump owns each service

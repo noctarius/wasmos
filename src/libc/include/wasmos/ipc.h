@@ -353,6 +353,90 @@ wasmos_svc_lookup(int32_t proc_endpoint,
     return (int32_t)endpoint_raw;
 }
 
+/* Enumerate providers of a virtual class into out[0..max_entries). Returns the
+ * total match count (may exceed max_entries; only min(count,max_entries) entries
+ * are written), or -1 on error. */
+static inline int32_t
+wasmos_svc_lookup_class(int32_t proc_endpoint,
+                        int32_t reply_endpoint,
+                        const char *class_name,
+                        svc_class_entry_t *out,
+                        int32_t max_entries,
+                        int32_t request_id)
+{
+    wasmos_ipc_message_t resp;
+    char cn[WASMOS_SVC_CLASS_MAX];
+    uint32_t i;
+    int32_t sz;
+    int32_t bid;
+    int32_t count;
+    int32_t got;
+    if (max_entries < 0) {
+        max_entries = 0;
+    }
+    for (i = 0; i + 1u < WASMOS_SVC_CLASS_MAX && class_name[i] != '\0'; ++i) {
+        cn[i] = class_name[i];
+    }
+    cn[i] = '\0';
+    sz = max_entries * (int32_t)sizeof(svc_class_entry_t);
+    if (sz < (int32_t)sizeof(cn)) {
+        sz = (int32_t)sizeof(cn); /* room for the class name on input */
+    }
+    bid = wasmos_xfer_buffer_acquire(sz);
+    if (bid < 0) {
+        return -1;
+    }
+    if (wasmos_xfer_buffer_write(bid, (int32_t)(uintptr_t)cn, (int32_t)i + 1, 0) != 0) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    if (wasmos_ipc_call(proc_endpoint, reply_endpoint, SVC_IPC_LOOKUP_CLASS_REQ,
+                        request_id, bid, max_entries, 0, 0, &resp) != 0 ||
+        resp.type != SVC_IPC_LOOKUP_CLASS_RESP) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    count = (int32_t)resp.arg0;
+    got = (count < max_entries) ? count : max_entries;
+    if (out != 0 && got > 0) {
+        (void)wasmos_xfer_buffer_read(bid, (int32_t)(uintptr_t)out,
+                                      got * (int32_t)sizeof(svc_class_entry_t), 0);
+    }
+    (void)wasmos_xfer_buffer_release(bid);
+    return count;
+}
+
+/* Subscribe notify_endpoint to existence events (SVC_IPC_CLASS_EVENT) for a
+ * class. Returns 0 on success, -1 on error. */
+static inline int32_t
+wasmos_svc_subscribe_class(int32_t proc_endpoint,
+                           int32_t reply_endpoint,
+                           int32_t notify_endpoint,
+                           const char *class_name,
+                           int32_t request_id)
+{
+    wasmos_ipc_message_t resp;
+    char cn[WASMOS_SVC_CLASS_MAX];
+    uint32_t i;
+    int32_t bid;
+    for (i = 0; i + 1u < WASMOS_SVC_CLASS_MAX && class_name[i] != '\0'; ++i) {
+        cn[i] = class_name[i];
+    }
+    cn[i] = '\0';
+    bid = wasmos_xfer_stage(cn, (int32_t)i + 1);
+    if (bid < 0) {
+        return -1;
+    }
+    if (wasmos_ipc_call(proc_endpoint, reply_endpoint, SVC_IPC_SUBSCRIBE_CLASS_REQ,
+                        request_id, notify_endpoint, bid, 0, 0, &resp) != 0 ||
+        resp.type != SVC_IPC_SUBSCRIBE_CLASS_RESP) {
+        (void)wasmos_xfer_buffer_release(bid);
+        return -1;
+    }
+    (void)wasmos_xfer_buffer_release(bid);
+    return 0;
+}
+
 static inline int32_t
 wasmos_subsystem_register_broker(int32_t proc_endpoint,
                                  int32_t broker_endpoint,

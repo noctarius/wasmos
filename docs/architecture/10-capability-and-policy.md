@@ -55,8 +55,13 @@ these kinds via `capability_grant_name`:
 | `"mmio.map"`       | `CAP_MMIO_MAP`       |
 | `"dma.buffer"`     | `CAP_DMA_BUFFER`     |
 | `"system.control"` | `CAP_SYSTEM_CONTROL` |
+| `"subsystem.register"` | `CAP_SUBSYSTEM_REGISTER` |
+| `"svc.class"`      | `CAP_SVC_CLASS_REGISTER` |
 
-Any unrecognized name returns -1 and grants nothing.
+Any unrecognized name returns -1 and grants nothing. `CAP_SVC_CLASS_REGISTER`
+gates registering a service under a virtual class (class-based discovery,
+[Process and IPC](09-process-and-ipc.md)); the plain name registration path is
+ungated.
 
 ---
 

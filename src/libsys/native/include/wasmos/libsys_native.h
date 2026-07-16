@@ -60,6 +60,17 @@ int32_t wasmos_sys_ipc_send_retry_native(wasmos_driver_api_t *api, uint32_t dest
 int32_t wasmos_sys_ipc_call_native(wasmos_driver_api_t *api, uint32_t source_endpoint, uint32_t destination, uint32_t request_id, uint32_t msg_type, uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, nd_ipc_message_t *out_message);
 int32_t wasmos_sys_svc_register_native(wasmos_driver_api_t *api, uint32_t proc_endpoint, uint32_t source_endpoint, const uint8_t *name, uint32_t name_len, uint32_t request_id);
 int32_t wasmos_sys_svc_lookup_native(wasmos_driver_api_t *api, uint32_t proc_endpoint, uint32_t source_endpoint, const uint8_t *name, uint32_t name_len, uint32_t request_id);
+
+/* Class-based service discovery for native drivers — mirrors the WASM/libc
+ * wrappers (wasmos_svc_register_class / _lookup_class / _subscribe_class in
+ * src/libc/include/wasmos/ipc.h) and the SVC_IPC_*_CLASS_* wire ABI in
+ * wasmos_driver_abi.h. Unlike the WASM path these do not use read/write
+ * hostcalls: xfer_buffer_acquire hands back a mapped pointer, so the descriptor
+ * and returned entries are read/written in place. source_endpoint is the
+ * caller's reply/control endpoint (distinct from a live service endpoint). */
+int32_t wasmos_sys_svc_register_class_native(wasmos_driver_api_t *api, uint32_t proc_endpoint, uint32_t source_endpoint, uint32_t service_endpoint, const uint8_t *name, uint32_t name_len, const uint8_t *class_name, uint32_t class_len, uint32_t instance, uint32_t request_id);
+int32_t wasmos_sys_svc_lookup_class_native(wasmos_driver_api_t *api, uint32_t proc_endpoint, uint32_t source_endpoint, const uint8_t *class_name, uint32_t class_len, svc_class_entry_t *out, uint32_t max_entries, uint32_t request_id);
+int32_t wasmos_sys_svc_subscribe_class_native(wasmos_driver_api_t *api, uint32_t proc_endpoint, uint32_t source_endpoint, uint32_t notify_endpoint, const uint8_t *class_name, uint32_t class_len, uint32_t request_id);
 void wasmos_sys_byte_copy_native(uint8_t *dst, const uint8_t *src, uint32_t len);
 int32_t wasmos_sys_be_u16_native(const uint8_t *data, uint32_t data_len, uint32_t off, uint16_t *out);
 int32_t wasmos_sys_be_i16_native(const uint8_t *data, uint32_t data_len, uint32_t off, int16_t *out);

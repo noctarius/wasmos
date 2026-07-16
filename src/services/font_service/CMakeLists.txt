@@ -65,6 +65,7 @@ add_custom_command(
           -nostdlib
           -O2
           -I ${DRIVER_WASM_DIR}/include
+          -I ${LIBC_DIR}/include
           -I ${LIBSYS_NATIVE_DIR}/include
           -c ${LIBSYS_NATIVE_DIR}/zig/libsys_native.c
           -o ${FONT_SERVICE_LIBSYS_EXPORTS_OBJ}

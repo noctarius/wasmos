@@ -145,6 +145,7 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E make_directory ${BUILD_DIR}
   COMMAND ${CLANG} ${NET_STACK_CFLAGS_BASE}
           -I${DRIVER_WASM_DIR}/include
+          -I${LIBC_DIR}/include
           -I${LIBSYS_NATIVE_DIR}/include
           -c ${LIBSYS_NATIVE_DIR}/zig/libsys_native.c
           -o ${NET_STACK_LIBSYS_EXPORTS_OBJ}

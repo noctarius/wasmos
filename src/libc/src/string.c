@@ -147,6 +147,21 @@ strncpy(char *dest, const char *src, size_t count)
     return dest;
 }
 
+int
+str_copy_bytes(char *dst, size_t dst_len, const uint8_t *src, size_t src_len)
+{
+    size_t i = 0;
+
+    if (!dst || !src || dst_len == 0 || src_len == 0 || src_len >= dst_len) {
+        return -1;
+    }
+    for (i = 0; i < src_len; ++i) {
+        dst[i] = (char)src[i];
+    }
+    dst[src_len] = '\0';
+    return 0;
+}
+
 char *
 strchr(const char *s, int ch)
 {

@@ -2,6 +2,7 @@
  * Thin wrappers around the wasmos_native_driver.h hostcall ABI; compiled
  * as C so both Zig and C native drivers can link against a single object. */
 #include "wasmos/libsys_native.h"
+#include <string.h> /* libc str_copy_bytes (native drivers link libc string.c) */
 
 static void
 byte_copy(uint8_t *dst, const uint8_t *src, uint32_t len)
@@ -674,6 +675,138 @@ wasmos_sys_svc_lookup_retry_native(wasmos_driver_api_t *api,
         }
     }
     return -1;
+}
+
+/* Register service_endpoint under a name and (optionally) a virtual class +
+ * instance, using the descriptor-based SVC_IPC_REGISTER_DESC_REQ. Pass
+ * class_name=NULL/class_len=0 to register with no class. Returns the assigned
+ * service handle, or -1 on failure. */
+int32_t
+wasmos_sys_svc_register_class_native(wasmos_driver_api_t *api,
+                                     uint32_t proc_endpoint,
+                                     uint32_t source_endpoint,
+                                     uint32_t service_endpoint,
+                                     const uint8_t *name,
+                                     uint32_t name_len,
+                                     const uint8_t *class_name,
+                                     uint32_t class_len,
+                                     uint32_t instance,
+                                     uint32_t request_id)
+{
+    svc_register_desc_t *desc;
+    nd_ipc_message_t resp;
+    uint32_t buffer_id = 0;
+    int32_t rc;
+    if (!api || !api->xfer_buffer_acquire || !api->xfer_buffer_release) {
+        return -1;
+    }
+    desc = (svc_register_desc_t *)api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER,
+                                                           (uint32_t)sizeof(*desc),
+                                                           &buffer_id);
+    if (!desc) {
+        return -1;
+    }
+    byte_zero((uint8_t *)desc, (uint32_t)sizeof(*desc));
+    desc->version = WASMOS_SVC_REGISTER_DESC_VERSION;
+    desc->service_endpoint = service_endpoint;
+    desc->flags = 0u;
+    /* desc is zeroed above, so name/class_name default to "" if the source is
+     * over-long (str_copy_bytes refuses rather than truncating) or absent. */
+    (void)str_copy_bytes(desc->name, WASMOS_SVC_NAME_MAX, name, name_len);
+    desc->instance = instance;
+    (void)str_copy_bytes(desc->class_name, WASMOS_SVC_CLASS_MAX, class_name, class_len);
+    rc = wasmos_sys_ipc_call_native(api, source_endpoint, proc_endpoint, request_id,
+                                    SVC_IPC_REGISTER_DESC_REQ,
+                                    0u, (uint32_t)sizeof(*desc), buffer_id, 0u, &resp);
+    (void)api->xfer_buffer_release(buffer_id);
+    if (rc != 0 || resp.type != SVC_IPC_REGISTER_RESP) {
+        return -1;
+    }
+    return (int32_t)resp.arg0;
+}
+
+/* Enumerate providers of a virtual class into out[0..max_entries). Returns the
+ * total match count (may exceed max_entries; only min(count,max_entries) entries
+ * are written), or -1 on error. */
+int32_t
+wasmos_sys_svc_lookup_class_native(wasmos_driver_api_t *api,
+                                   uint32_t proc_endpoint,
+                                   uint32_t source_endpoint,
+                                   const uint8_t *class_name,
+                                   uint32_t class_len,
+                                   svc_class_entry_t *out,
+                                   uint32_t max_entries,
+                                   uint32_t request_id)
+{
+    nd_ipc_message_t resp;
+    uint8_t *buf;
+    uint32_t buffer_id = 0;
+    uint32_t sz;
+    int32_t count;
+    uint32_t got;
+    if (!api || !api->xfer_buffer_acquire || !api->xfer_buffer_release) {
+        return -1;
+    }
+    sz = max_entries * (uint32_t)sizeof(svc_class_entry_t);
+    if (sz < WASMOS_SVC_CLASS_MAX) {
+        sz = WASMOS_SVC_CLASS_MAX; /* room for the class name on input */
+    }
+    buf = (uint8_t *)api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER, sz, &buffer_id);
+    if (!buf) {
+        return -1;
+    }
+    if (str_copy_bytes((char *)buf, WASMOS_SVC_CLASS_MAX, class_name, class_len) != 0) {
+        buf[0] = '\0';
+    }
+    if (wasmos_sys_ipc_call_native(api, source_endpoint, proc_endpoint, request_id,
+                                   SVC_IPC_LOOKUP_CLASS_REQ,
+                                   buffer_id, max_entries, 0u, 0u, &resp) != 0 ||
+        resp.type != SVC_IPC_LOOKUP_CLASS_RESP) {
+        (void)api->xfer_buffer_release(buffer_id);
+        return -1;
+    }
+    count = (int32_t)resp.arg0;
+    got = ((uint32_t)count < max_entries) ? (uint32_t)count : max_entries;
+    if (out && count > 0 && got > 0u) {
+        byte_copy((uint8_t *)out, buf, got * (uint32_t)sizeof(svc_class_entry_t));
+    }
+    (void)api->xfer_buffer_release(buffer_id);
+    return count;
+}
+
+/* Subscribe notify_endpoint to existence events (SVC_IPC_CLASS_EVENT) for a
+ * class. Returns 0 on success, -1 on error. */
+int32_t
+wasmos_sys_svc_subscribe_class_native(wasmos_driver_api_t *api,
+                                      uint32_t proc_endpoint,
+                                      uint32_t source_endpoint,
+                                      uint32_t notify_endpoint,
+                                      const uint8_t *class_name,
+                                      uint32_t class_len,
+                                      uint32_t request_id)
+{
+    nd_ipc_message_t resp;
+    uint8_t *buf;
+    uint32_t buffer_id = 0;
+    if (!api || !api->xfer_buffer_acquire || !api->xfer_buffer_release) {
+        return -1;
+    }
+    buf = (uint8_t *)api->xfer_buffer_acquire(ND_BUFFER_KIND_XFER, WASMOS_SVC_CLASS_MAX, &buffer_id);
+    if (!buf) {
+        return -1;
+    }
+    if (str_copy_bytes((char *)buf, WASMOS_SVC_CLASS_MAX, class_name, class_len) != 0) {
+        buf[0] = '\0';
+    }
+    if (wasmos_sys_ipc_call_native(api, source_endpoint, proc_endpoint, request_id,
+                                   SVC_IPC_SUBSCRIBE_CLASS_REQ,
+                                   notify_endpoint, buffer_id, 0u, 0u, &resp) != 0 ||
+        resp.type != SVC_IPC_SUBSCRIBE_CLASS_RESP) {
+        (void)api->xfer_buffer_release(buffer_id);
+        return -1;
+    }
+    (void)api->xfer_buffer_release(buffer_id);
+    return 0;
 }
 
 

@@ -3,6 +3,7 @@
 #define WASMOS_LIBC_STRING_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -15,6 +16,11 @@ int strncmp(const char *lhs, const char *rhs, size_t count);
 int strcasecmp(const char *lhs, const char *rhs);
 char *strcpy(char *dest, const char *src);
 char *strncpy(char *dest, const char *src, size_t count);
+/* Copy src_len raw bytes into dst[] and NUL-terminate. All-or-nothing: returns
+ * -1 (leaving dst untouched) if the result would not fit, i.e. src_len >=
+ * dst_len; 0 on success. Same contract as the kernel's str_copy_bytes — keep
+ * the two in sync. */
+int str_copy_bytes(char *dst, size_t dst_len, const uint8_t *src, size_t src_len);
 char *strchr(const char *s, int ch);
 char *strrchr(const char *s, int ch);
 void *memcpy(void *dest, const void *src, size_t count);
